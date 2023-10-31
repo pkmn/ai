@@ -1,0 +1,208 @@
+- name: Technical Machine
+  site: http://doublewise.net/pokemon/
+  active: 2010 # September 6
+  license: BSL-1.0
+  source: https://github.com/davidstone/technical-machine
+  engine: Custom
+  language: C++
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+    - name: Pokémon Online
+      url: https://github.com/po-devs/pokemon-online
+    - name: Pokémon Lab
+      url: https://pokemonlab.com/downloads
+    - name: Shoddy Battle
+      url: https://pokemonlab.com/downloads
+    - name: Pokémon NetBattle
+      url: https://pokemon-netbattle.en.softonic.com/
+- name: shanai
+  active: [2011, 2011] # March 21
+  source: https://github.com/nixeagle/shanai
+  engine: Custom
+  language: Common Lisp
+  platform:
+    - name: Pokémon Online
+      url: https://github.com/po-devs/pokemon-online
+- active: [2014, 2016] # October 20
+  license: MIT
+  source: https://github.com/vasumv/pokemon_ai
+  engine: Custom
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  release:
+    name: v0.0.1
+    url: https://github.com/vasumv/pokemon_ai/releases/tag/0.0.1
+- name: Percymon
+  active: [2014, 2017] # October 21
+  paper:
+    name: "Percymon: A Pokemon Showdown Artifical Intelligence"
+    url: https://varunramesh.net/content/documents/cs221-final-report.pdf
+  source: https://github.com/rameshvarun/showdownbot
+  engine:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  language: JavaScript
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Deep Red
+  active: [2016, 2016] # April 2
+  source: https://github.com/TwitchPlaysPokemon/deepred
+  engine: Custom
+  language: Python
+  platform:
+    - name: Pokémon Anniversary Crystal
+      url: https://rainbowdevs.com/title/crystal/
+- active: [2016, 2016] # December 8
+  license: MIT
+  source: https://github.com/Synedh/showdown-battle-bot
+  engine:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: PokéAI
+  active: [2017, 2022] # March 14
+  license: MIT
+  source: https://github.com/select766/pokeai
+  engine:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  release:
+    name: September 2020 (Technical Book Encyclopedia 9)
+    url: https://github.com/select766/pokeai/releases/tag/book-202009
+- active: 2018 # August 21
+  license: MIT
+  source: https://github.com/taylorhansen/pokemonshowdown-ai
+  engine:
+    - name: Pokémon Showdown!
+      url: https://github.com/pkmn/ps/tree/main/sim
+  language: [Python, TypeScript]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- active: [2019, 2019] # February 10
+  source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
+  engine:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Metagrok
+  active: [2019, 2019] # June 16
+  paper:
+    name: "A Self-Play Policy Optimization Approach To Battling Pokémon"
+    url: https://www.yuzeh.com/assets/CoG-2019-Pkmn.pdf
+  license: MIT
+  source: https://github.com/yuzeh/metagrok
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- active: 2019 # March 24
+  license: GPL-3.0
+  source: https://github.com/pmariglia/showdown
+  engine:
+    - name: Custom
+      url: https://github.com/pmariglia/showdown/blob/master/ENGINE.md
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: 0 ERROR # April 20
+  site: https://pkmn.cc/0-ERROR
+  active: 2019
+  license: CC BY-NC-ND
+  source: https://github.com/pkmn/0-ERROR
+  engine:
+    - name: pkmn
+      url: https://github.com/pkmn/engine
+  language: [Zig, TypeScript]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Athena
+  active: [2020, 2023]
+  paper:
+    name: "Teamwork under extreme uncertainty: AI for Pokemon ranks 33rd in the world"
+    url: https://arxiv.org/pdf/2212.13338.pdf
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- active: [2020, 2020] # June 13
+  source: https://github.com/anthonykrivonos/pokemon-ai
+  engine: Custom
+- name: Future Sight
+  site: https://www.pokemonbattlepredictor.com/FSAI
+  active: 2020 # August 16
+  engine:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+    - name: PokeSim
+      url: https://github.com/aed3/poke-sim
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- active: [2021, 2022] # June 2019
+  source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master
+  engine:
+    - name: Pokemon-Python
+      url: https://github.com/DanielAlcocerSoto/Pokemon-Python
+  language: Python
+- active: 0 # TODO
+  paper:
+    name: "Optimal Battle Strategy in Pokemon using Reinforcement Learning"
+    url: https://web.stanford.edu/class/aa228/reports/2018/final151.pdf
+- active: 0 # TODO
+  paper:
+    name: "Gotta Train 'Em All: Learning to Play Pokémon Shwodown with Reinforcement Learning"
+    url: https://cs230.stanford.edu/projects_fall_2018/reports/12447633.pdf
+- active: 0 # TODO
+  paper:
+    name: "VGC AI Competition - A New Model of Meta-Game Balance AI Competition"
+    url: https://ludii.games/citations/COG2021-2.pdf
+- active: 0 # TODO
+  paper:
+    name: "Learning complex games through self play - Pokémon battles"
+    url: https://upcommons.upc.edu/bitstream/handle/2117/121655/134419.pdf
+- active: 0 # TODO
+  paper:
+    name: "Competitive Deep Reinforcement Learning over a Pokémon Battling Simulator"
+    url: https://www.researchgate.net/publication/341497785_Competitive_Deep_Reinforcement_Learning_over_a_Pokemon_Battling_Simulator
+- active: 0 # TODO
+  paper:
+    name: "Learning Competitive Pokemon through Neural Network and Reinforcement Learning"
+    url: https://cs230.stanford.edu/projects_spring_2022/reports/127608668.pdf
+- active: 0 # TODO
+  paper:
+    name: "Showdown AI competition"
+    url: http://julian.togelius.com/Lee2017Showdown.pdf
+- active: 0 # TODO
+  paper:
+    name: "Comparison of Artificial Intelligence Algorithms for Pokémon Battles"
+    url: https://odr.chalmers.se/server/api/core/bitstreams/b5fac289-1328-41b8-ad78-f89eb39fce30/content
+- active: 0 # TODO
+  paper:
+    name: "Developing Pokemon AI for Finding Comfortable Settings"
+    url: https://www.researchgate.net/publication/309465632_Developing_Pokemon_AI_for_Finding_Comfortable_Settings
+- active: 0 # TODO
+  source: https://github.com/leolellisr/poke_RL
+- name: Poke2Vec
+  site: https://aliturfah.com/poke2vec/
+  active: 0 # TODO
+  source: https://github.com/aturfah/poke2vec
+- active: 0 # TODO
+  paper:
+    name: "Implementation and Evaluation of Information Set Monte Carlo Tree Search for Pokemon"
+    url: https://eprints.lib.hokudai.ac.jp/dspace/bitstream/2115/72345/1/ihara-smc2018.pdf
