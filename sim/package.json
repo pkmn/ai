@@ -2,8 +2,8 @@
   "name": "sim",
   "license": "MIT",
   "scripts": {
-    "lint": "eslint --cache --ext ts,js",
-    "fix": "eslint --fix --ext ts,js",
+    "lint": "eslint . --cache --ext ts,js",
+    "fix": "eslint . --fix --ext ts,js",
     "compile": "tsc -p .",
     "build": "npm run compile",
     "test": "npm run compile && npm run lint"
