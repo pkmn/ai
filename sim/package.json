@@ -1,12 +1,6 @@
 {
-  "name": "site",
+  "name": "sim",
   "license": "MIT",
-  "devDependencies": {
-    "@types/html-minifier": "^4.0.3",
-    "html-minifier": "^4.0.0",
-    "marked": "^9.1.4",
-    "yaml": "^2.3.3"
-  },
   "scripts": {
     "lint": "eslint --cache --ext ts,js",
     "fix": "eslint --fix --ext ts,js",

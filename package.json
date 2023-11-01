@@ -10,12 +10,13 @@
     "subpkg": "^4.1.0",
     "typescript": "^5.2.2"
   },
-  "subPackages": ["site"],
+  "subPackages": ["sim", "site"],
   "scripts": {
     "lint": "subpkg run lint",
     "fix": "subpkg run fix",
     "compile": "subpkg run compile",
     "build": "subpkg run build",
+    "test": "subpkg run test",
     "postinstall": "subpkg install"
   }
 }
