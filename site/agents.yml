@@ -42,7 +42,7 @@
     url: https://varunramesh.net/content/documents/cs221-final-report.pdf
   source: https://github.com/rameshvarun/showdownbot
   engine:
-    - name: Pokémon Showdown!
+    - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
   language: JavaScript
   platform:
@@ -60,7 +60,7 @@
   license: MIT
   source: https://github.com/Synedh/showdown-battle-bot
   engine:
-    - name: Pokémon Showdown!
+    - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
   language: Python
   platform:
@@ -71,7 +71,7 @@
   license: MIT
   source: https://github.com/select766/pokeai
   engine:
-    - name: Pokémon Showdown!
+    - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
   language: Python
   platform:
@@ -84,7 +84,7 @@
   license: MIT
   source: https://github.com/taylorhansen/pokemonshowdown-ai
   engine:
-    - name: Pokémon Showdown!
+    - name: pokemon-showdown
       url: https://github.com/pkmn/ps/tree/main/sim
   language: [Python, TypeScript]
   platform:
@@ -93,7 +93,7 @@
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:
-    - name: Pokémon Showdown!
+    - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
   language: Python
   platform:
@@ -128,6 +128,8 @@
   engine:
     - name: pkmn
       url: https://github.com/pkmn/engine
+    - name: EPOké
+      url: https://github.com/pkmn/EPOke
   language: [Zig, TypeScript]
   platform:
     - name: Pokémon Showdown!
@@ -147,7 +149,7 @@
   site: https://www.pokemonbattlepredictor.com/FSAI
   active: 2020 # August 16
   engine:
-    - name: Pokémon Showdown!
+    - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
     - name: PokeSim
       url: https://github.com/aed3/poke-sim
@@ -206,3 +208,49 @@
   paper:
     name: "Implementation and Evaluation of Information Set Monte Carlo Tree Search for Pokemon"
     url: https://eprints.lib.hokudai.ac.jp/dspace/bitstream/2115/72345/1/ihara-smc2018.pdf
+- name: Poke-env
+  site: https://poke-env.readthedocs.io/en/latest/
+  active: 2019 # August 6
+  license: MIT
+  source: https://github.com/hsahovic/poke-env
+  language: Python
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+- name: Pinyon
+  active: 2022 # May 20
+  license: GPL-2.0
+  source: https://github.com/baskuit/pinyon
+  language: C++
+- name: Meloetta
+  active: [2022, 2023] # December 21
+  source: https://github.com/spktrm/meloetta
+  language: Python
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- active: [2015, 2021] # September 1
+  source: https://github.com/dramamine/leftovers-again
+  language: JavaScript
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  release:
+    name: Froslass
+    url: https://github.com/dramamine/leftovers-again/releases/tag/v0.9.6
+- name: Pokesim
+  active: 2023 # October 2
+  source: https://github.com/spktrm/pokesim
+  language: Python
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/pkmn/ps/tree/main/sim
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
