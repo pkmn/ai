@@ -1,20 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import {minify} from 'html-minifier';
 import * as yaml from 'yaml';
-import { minify } from 'html-minifier';
 
 interface Agent {
   name?: string;
   site?: string;
-  paper?: { name: string, url: string };
+  paper?: { name: string; url: string };
   active: number | [number, number];
   license?: string;
   source?: string;
-  engine?: string | { name: string, url: string };
+  engine?: string | { name: string; url: string };
   language?: string | string[];
-  platform?: { name: string, url: string }[];
-  release?: { name: string, url: string };
+  platform?: { name: string; url: string }[];
+  release?: { name: string; url: string };
 }
 
 const pre = `<!doctype html>
@@ -147,10 +147,12 @@ for (const agent of agents) {
   const identifier = agent.source && agent.source.startsWith('https://github.com/')
     ? agent.source.slice(19)
     : undefined;
-  const name = agent.name ?? (identifier ? `<em>${identifier}</em>` : '');
-  buf.push(agent.site
-    ? `<h2><a href="${agent.site}" class="unlink">${name}</a></h2>`
-    : `<h2>${name}</h2>`);
+  {
+    const name = agent.name ?? (identifier ? `<em>${identifier}</em>` : '');
+    buf.push(agent.site
+      ? `<h2><a href="${agent.site}" class="unlink">${name}</a></h2>`
+      : `<h2>${name}</h2>`);
+  }
   buf.push('<table>');
   if (agent.paper) {
     const paper = `<a href="${agent.paper.url}" class="unlink"><em>${agent.paper.name}</em></a>`;
@@ -168,9 +170,9 @@ for (const agent of agents) {
   }
   if (agent.engine) {
     const engine = Array.isArray(agent.engine)
-      ? agent.engine.map(({ name, url }) =>
+      ? agent.engine.map(({name, url}) =>
         `<a href="${url}" class="unlink">${name}</a>`).join(', ')
-      : agent.engine;
+      : agent.engine as string;
     buf.push(`<tr><td><strong>Engine</strong></td><td>${engine}</td></tr>`);
   }
   if (agent.language) {
@@ -179,17 +181,17 @@ for (const agent of agents) {
   }
   if (agent.platform) {
     const platform = Array.isArray(agent.platform)
-      ? agent.platform.map(({ name, url }) =>
+      ? agent.platform.map(({name, url}) =>
         `<a href="${url}" class="unlink">${name}</a>`).join(', ')
       : agent.platform;
     buf.push(`<tr><td><strong>Platform</strong></td><td>${platform}</td></tr>`);
   }
   if (agent.release) {
-    const release = `<a href="${agent.release.url}">${agent.release.name}</a>`
+    const release = `<a href="${agent.release.url}">${agent.release.name}</a>`;
     buf.push(`<tr><td><strong>Latest Release</strong></td><td>${release}</td></tr>`);
   }
   buf.push('</table>');
-  buf.push("</div>");
+  buf.push('</div>');
 }
 buf.push(post);
-console.log(minify(buf.join(''), { minifyCSS: true, minifyJS: true, }));
+console.log(minify(buf.join(''), {minifyCSS: true, minifyJS: true}));
