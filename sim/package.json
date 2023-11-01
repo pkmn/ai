@@ -9,6 +9,7 @@
     "test": "npm run compile && npm run lint"
   },
   "eslintConfig": {
-    "extends": "@pkmn"
+    "extends": "@pkmn",
+    "ignorePatterns": ["build"]
   }
 }
