@@ -91,10 +91,6 @@ const pre = `<!doctype html>
         width: 20%;
       }
 
-      .inactive {
-        opacity: 60%;
-      }
-
       a, a:visited {
         text-decoration: none;
       }
