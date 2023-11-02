@@ -223,7 +223,8 @@
   engine:
     - name: PokemonBattleEngine
       url: https://github.com/Kermalis/PokemonBattleEngine
-- active: [2019, 2020] # October 31
+- name: Simplified Pokemon Environment
+  active: [2019, 2020] # October 31
   paper:
     name: "Competitive Deep Reinforcement Learning over a Pokémon Battling Simulator"
     url: https://www.researchgate.net/publication/341497785_Competitive_Deep_Reinforcement_Learning_over_a_Pokemon_Battling_Simulator
