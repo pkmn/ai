@@ -184,7 +184,7 @@ for (const agent of agents) {
   if (agent.license) {
     buf.push(`<tr><td><strong>License</strong></td><td><tt>${agent.license}</tt></td></tr>`);
   } else if (agent.source) {
-    buf.push('<tr><td><strong>License</strong></td><td><strong>None</strong></td></tr>');
+    buf.push('<tr><td><strong>License</strong></td><td>None</td></tr>');
   }
   if (agent.source) {
     const source = `<a href="${agent.source}">${identifier ?? agent.source}</a>`;
