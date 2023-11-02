@@ -283,12 +283,12 @@ const post = `
   </body>
 </html>`;
 
-const file = path.join(__dirname, '..', 'research.yml');
+const file = path.join(__dirname, '..', '..', 'pages', 'research.yml');
 const projects = yaml.parse(fs.readFileSync(file, 'utf8')) as Project[];
-const score = (a: Project) => {
-  const id = a.name ?? (a.source && a.source.startsWith('https://github.com/')
-    ? a.source.slice(19)
-    : a.identifier!);
+const score = (p: Project) => {
+  const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
+    ? p.source.slice(19)
+    : p.identifier!);
   // TODO: sort by live ranking > static ranking > date
   const index = RANKING.indexOf(id);
   return index >= 0 ? index : Infinity;
@@ -305,7 +305,7 @@ for (const project of projects) {
       ? `${project.active[0]}`
       : `${project.active[0]} - ${project.active[1]}`)
     : `${project.active} - <em>present</em>`;
-  const identifier = project.source && project.source.startsWith('https://github.com/')
+  const identifier = project.source && /^https:\/\/git(hub|lab).com/.test(project.source)
     ? project.source.slice(19)
     : undefined;
   {
