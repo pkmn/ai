@@ -4,7 +4,7 @@ import * as path from 'path';
 import {minify} from 'html-minifier';
 import * as yaml from 'yaml';
 
-interface Agent {
+interface Project {
   name?: string;
   identifier?: string;
   framework?: true;
@@ -283,9 +283,9 @@ const post = `
   </body>
 </html>`;
 
-const file = path.join(__dirname, '..', 'agents.yml');
-const agents = yaml.parse(fs.readFileSync(file, 'utf8')) as Agent[];
-const score = (a: Agent) => {
+const file = path.join(__dirname, '..', 'research.yml');
+const projects = yaml.parse(fs.readFileSync(file, 'utf8')) as Project[];
+const score = (a: Project) => {
   const id = a.name ?? (a.source && a.source.startsWith('https://github.com/')
     ? a.source.slice(19)
     : a.identifier!);
@@ -293,62 +293,62 @@ const score = (a: Agent) => {
   const index = RANKING.indexOf(id);
   return index >= 0 ? index : Infinity;
 };
-agents.sort((a, b) => score(a) - score(b));
+projects.sort((a, b) => score(a) - score(b));
 
 const buf: string[] = [];
 buf.push(pre);
-for (const agent of agents) {
-  const inactive = Array.isArray(agent.active);
+for (const project of projects) {
+  const inactive = Array.isArray(project.active);
   buf.push(`<div class="project"${inactive ? '' : ' data-active="true"'}>`);
-  const active = Array.isArray(agent.active)
-    ? (agent.active[0] === agent.active[1]
-      ? `${agent.active[0]}`
-      : `${agent.active[0]} - ${agent.active[1]}`)
-    : `${agent.active} - <em>present</em>`;
-  const identifier = agent.source && agent.source.startsWith('https://github.com/')
-    ? agent.source.slice(19)
+  const active = Array.isArray(project.active)
+    ? (project.active[0] === project.active[1]
+      ? `${project.active[0]}`
+      : `${project.active[0]} - ${project.active[1]}`)
+    : `${project.active} - <em>present</em>`;
+  const identifier = project.source && project.source.startsWith('https://github.com/')
+    ? project.source.slice(19)
     : undefined;
   {
-    const name = agent.name ?? `<em>${identifier ?? agent.identifier}</em>`;
-    buf.push(agent.site
-      ? `<h3><a href="${agent.site}">${name}</a></h3>`
+    const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
+    buf.push(project.site
+      ? `<h3><a href="${project.site}">${name}</a></h3>`
       : `<h3>${name}</h3>`);
   }
   buf.push('<table>');
-  if (agent.paper) {
-    const paper = `<a href="${agent.paper.url}"><em>${agent.paper.name}</em></a>`;
+  if (project.paper) {
+    const paper = `<a href="${project.paper.url}"><em>${project.paper.name}</em></a>`;
     buf.push(`<tr><td><strong>Paper</strong></td><td>${paper}</td></tr>`);
   }
   buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);
-  if (agent.license) {
-    buf.push(`<tr><td><strong>License</strong></td><td><tt>${agent.license}</tt></td></tr>`);
-  } else if (agent.source) {
+  if (project.license) {
+    buf.push(`<tr><td><strong>License</strong></td><td><tt>${project.license}</tt></td></tr>`);
+  } else if (project.source) {
     buf.push('<tr><td><strong>License</strong></td><td>None</td></tr>');
   }
-  if (agent.source) {
-    const source = `<a href="${agent.source}" class="default">${identifier ?? agent.source}</a>`;
-    buf.push(`<tr><td><strong>Source</strong></td><td>${source}</td></tr>`);
+  if (project.source) {
+    const src = `<a href="${project.source}" class="default">${identifier ?? project.source}</a>`;
+    buf.push(`<tr><td><strong>Source</strong></td><td>${src}</td></tr>`);
   }
-  if (agent.engine) {
-    const engine = Array.isArray(agent.engine)
-      ? agent.engine.map(({name, url}) =>
+  if (project.engine) {
+    const engine = Array.isArray(project.engine)
+      ? project.engine.map(({name, url}) =>
         `<a href="${url}">${name}</a>`).join(', ')
-      : agent.engine as string;
+      : project.engine as string;
     buf.push(`<tr><td><strong>Engine</strong></td><td>${engine}</td></tr>`);
   }
-  if (agent.language) {
-    const language = Array.isArray(agent.language) ? agent.language.join(', ') : agent.language;
-    buf.push(`<tr><td><strong>Language</strong></td><td>${language}</td></tr>`);
+  if (project.language) {
+    const lang = Array.isArray(project.language) ? project.language.join(', ') : project.language;
+    buf.push(`<tr><td><strong>Language</strong></td><td>${lang}</td></tr>`);
   }
-  if (agent.platform) {
-    const platform = Array.isArray(agent.platform)
-      ? agent.platform.map(({name, url}) =>
+  if (project.platform) {
+    const platform = Array.isArray(project.platform)
+      ? project.platform.map(({name, url}) =>
         `<a href="${url}">${name}</a>`).join(', ')
-      : agent.platform;
+      : project.platform;
     buf.push(`<tr><td><strong>Platform</strong></td><td>${platform}</td></tr>`);
   }
-  if (agent.release) {
-    const release = `<a href="${agent.release.url}">${agent.release.name}</a>`;
+  if (project.release) {
+    const release = `<a href="${project.release.url}">${project.release.name}</a>`;
     buf.push(`<tr><td><strong>Latest Release</strong></td><td>${release}</td></tr>`);
   }
   buf.push('</table>');
