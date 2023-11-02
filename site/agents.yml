@@ -49,6 +49,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - name: Leftovers Again
+  framework: true
   active: [2015, 2021] # September 1
   source: https://github.com/dramamine/leftovers-again
   engine:
@@ -97,6 +98,25 @@
   release:
     name: book-202009
     url: https://github.com/select766/pokeai/releases/tag/book-202009
+- name: Showdown AI competition
+  framework: true
+  active: [2017, 2017] # August 22
+  paper:
+    name: "Showdown AI competition"
+    url: http://julian.togelius.com/Lee2017Showdown.pdf
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- identifier: Kalose, Kaya, Kim
+  active: [2018, 2018]
+  paper:
+    name: "Optimal Battle Strategy in Pokemon using Reinforcement Learning"
+    url: https://web.stanford.edu/class/aa228/reports/2018/final151.pdf
+  engine: Custom
+  language: Python
 - active: 2018 # August 21
   license: MIT
   source: https://github.com/taylorhansen/pokemonshowdown-ai
@@ -107,6 +127,24 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- active: [2018, 2018]
+  paper:
+    name: "Gotta Train 'Em All: Learning to Play Pokémon Showdown with Reinforcement Learning"
+    url: https://cs230.stanford.edu/projects_fall_2018/reports/12447633.pdf
+  license: MIT
+  source: https://github.com/kvchen/showdown-rl
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- identifier: Ihara, Imai, Oyama, Kurihara
+  active: [2018, 2018]
+  paper:
+    name: "Implementation and Evaluation of Information Set Monte Carlo Tree Search for Pokemon"
+    url: https://eprints.lib.hokudai.ac.jp/dspace/bitstream/2115/72345/1/ihara-smc2018.pdf
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:
@@ -151,7 +189,14 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- identifier: Norström
+  active: [2019, 2019]
+  paper:
+    name: "Comparison of Artificial Intelligence Algorithms for Pokémon Battles"
+    url: https://odr.chalmers.se/server/api/core/bitstreams/b5fac289-1328-41b8-ad78-f89eb39fce30/content
+  language: Python
 - name: Poke-env
+  framework: true
   site: https://poke-env.readthedocs.io/en/latest/
   active: 2019 # August 6
   license: MIT
@@ -166,6 +211,23 @@
   release:
     name: "0.7.0"
     url: https://github.com/hsahovic/poke-env/releases/tag/0.7.0
+- name: VGC AI Framework
+  framework: true
+  active: 2019 # October 31
+  paper:
+    name: "VGC AI Competition - A New Model of Meta-Game Balance AI Competition"
+    url: https://ludii.games/citations/COG2021-2.pdf
+  license: MIT
+  source: https://gitlab.com/DracoStriker/pokemon-vgc-engine
+  engine:
+    - name: PokemonBattleEngine
+      url: https://github.com/Kermalis/PokemonBattleEngine
+- active: [2019, 2020] # October 31
+  paper:
+    name: "Competitive Deep Reinforcement Learning over a Pokémon Battling Simulator"
+    url: https://www.researchgate.net/publication/341497785_Competitive_Deep_Reinforcement_Learning_over_a_Pokemon_Battling_Simulator
+  source: https://gitlab.com/DracoStriker/simplified-pokemon-environment
+  engine: Custom
 - name: Athena
   active: [2020, 2023]
   paper:
@@ -188,18 +250,41 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- active: [2021, 2022] # June 2019
+- active: [2021, 2022] # June 19
   source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master
   engine:
     - name: Pokemon-Python
       url: https://github.com/DanielAlcocerSoto/Pokemon-Python
   language: Python
+- active: [2021, 2021] # October 15
+  source: https://github.com/leolellisr/poke_RL
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- identifier: Chun Him Tse
+  active: [2022, 2022]
+  paper:
+    name: "Learning Competitive Pokemon through Neural Network and Reinforcement Learning"
+    url: https://cs230.stanford.edu/projects_spring_2022/reports/127608668.pdf
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: Pinyon
+  framework: true
   active: 2022 # May 20
   license: GPL-2.0
   source: https://github.com/baskuit/pinyon
   language: C++
 - name: Meloetta
+  framework: true
   active: [2022, 2023] # December 21
   source: https://github.com/spktrm/meloetta
   engine:
@@ -212,6 +297,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - name: Pokesim
+  framework: true
   active: 2023 # October 2
   source: https://github.com/spktrm/pokesim
   engine:
@@ -223,49 +309,3 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- active: 0 # TODO
-  paper:
-    name: "Optimal Battle Strategy in Pokemon using Reinforcement Learning"
-    url: https://web.stanford.edu/class/aa228/reports/2018/final151.pdf
-- active: 0 # TODO
-  paper:
-    name: "Gotta Train 'Em All: Learning to Play Pokémon Shwodown with Reinforcement Learning"
-    url: https://cs230.stanford.edu/projects_fall_2018/reports/12447633.pdf
-- active: 0 # TODO
-  paper:
-    name: "VGC AI Competition - A New Model of Meta-Game Balance AI Competition"
-    url: https://ludii.games/citations/COG2021-2.pdf
-- active: 0 # TODO
-  paper:
-    name: "Learning complex games through self play - Pokémon battles"
-    url: https://upcommons.upc.edu/bitstream/handle/2117/121655/134419.pdf
-- active: 0 # TODO
-  paper:
-    name: "Competitive Deep Reinforcement Learning over a Pokémon Battling Simulator"
-    url: https://www.researchgate.net/publication/341497785_Competitive_Deep_Reinforcement_Learning_over_a_Pokemon_Battling_Simulator
-- active: 0 # TODO
-  paper:
-    name: "Learning Competitive Pokemon through Neural Network and Reinforcement Learning"
-    url: https://cs230.stanford.edu/projects_spring_2022/reports/127608668.pdf
-- active: 0 # TODO
-  paper:
-    name: "Showdown AI competition"
-    url: http://julian.togelius.com/Lee2017Showdown.pdf
-- active: 0 # TODO
-  paper:
-    name: "Comparison of Artificial Intelligence Algorithms for Pokémon Battles"
-    url: https://odr.chalmers.se/server/api/core/bitstreams/b5fac289-1328-41b8-ad78-f89eb39fce30/content
-- active: 0 # TODO
-  paper:
-    name: "Developing Pokemon AI for Finding Comfortable Settings"
-    url: https://www.researchgate.net/publication/309465632_Developing_Pokemon_AI_for_Finding_Comfortable_Settings
-- active: 0 # TODO
-  source: https://github.com/leolellisr/poke_RL
-- name: Poke2Vec
-  site: https://aliturfah.com/poke2vec/
-  active: 0 # TODO
-  source: https://github.com/aturfah/poke2vec
-- active: 0 # TODO
-  paper:
-    name: "Implementation and Evaluation of Information Set Monte Carlo Tree Search for Pokemon"
-    url: https://eprints.lib.hokudai.ac.jp/dspace/bitstream/2115/72345/1/ihara-smc2018.pdf

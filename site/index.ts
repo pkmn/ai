@@ -6,6 +6,8 @@ import * as yaml from 'yaml';
 
 interface Agent {
   name?: string;
+  identifier?: string;
+  framework?: true;
   site?: string;
   paper?: { name: string; url: string };
   active: number | [number, number];
@@ -16,6 +18,22 @@ interface Agent {
   platform?: { name: string; url: string }[];
   release?: { name: string; url: string };
 }
+
+// eslint-disable-next-line
+const RANKING = [
+  'Athena', // Athena - reached #33 in gen7randombattle, ~1800 Elo
+  'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo
+  'Metagrok', // beat pmariglia 61.2% of the time in gen7randombattle
+  'pmariglia/showdown', // ~1610 Elo in gen7randombattle (~1450 Elo in standard)
+  'Technical Machine', // ??? (1300-1400 Elo?), even record against weaker version of pmariglia
+  'leolellisr/poke_RL', // 99.5% vs. RandomPlayer, 60-85% vs MaxDamage
+  'Chun Him Tse', // 96.6% vs. RandomPlayer, 78.2% vs. MaxDamage. ~1350 Elo (VGC)
+  'Percymon', // 1270 Elo in gen6randombattle
+  'hsahovic/reinforcement-learning-pokemon-bot', // "~90% vs. RandomPlayer"
+  'Chen, Lin', //  "~85% vs. RandomPlayer
+  'Showdown AI Competition', // 85% vs. RandomPlayer = *equivalent* to MaxDamage
+  'Kalose, Kaya, Kim', // ~60-65% vs. RandomPlayer (Gen 1)
+];
 
 const pre = `<!doctype html>
 <html lang=en>
@@ -148,7 +166,7 @@ for (const agent of agents) {
     ? agent.source.slice(19)
     : undefined;
   {
-    const name = agent.name ?? (identifier ? `<em>${identifier}</em>` : '');
+    const name = agent.name ?? (identifier ? `<em>${identifier}</em>` : agent.identifier);
     buf.push(agent.site
       ? `<h2><a href="${agent.site}" class="unlink">${name}</a></h2>`
       : `<h2>${name}</h2>`);
