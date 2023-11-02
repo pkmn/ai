@@ -71,14 +71,17 @@ const pre = `<!doctype html>
       }
 
       header {
+        font-weight: 900;
         text-align: center;
       }
 
-      h1 {
-        font-weight: 900;
-        text-align: center;
+      h1, h2 {
         margin-bottom: 0.33em;
+      }
+
+      h2 {
         text-transform: uppercase;
+        margin-top: 0;
       }
 
       #container {
@@ -122,6 +125,10 @@ const pre = `<!doctype html>
 
       a:hover, a:focus, a:active  {
         text-decoration: underline;
+      }
+
+      h1 a:hover, h1 a:focus, h1 a:active  {
+        text-decoration: none;
       }
 
       a, a:hover, a:visited, a:focus, a:active {
@@ -174,12 +181,16 @@ const pre = `<!doctype html>
       /* Mobile - Small */
       table, p { font-size: 10px; }
       h1 { font-size: 24px; }
+      h2 { font-size: 18px; }
+      h3 { font-size: 15px; }
       nav { font-size: 12px; }
 
       /* Mobile - Medium */
       @media(min-width: 375px) {
         table, p { font-size: 12px; }
         h1 { font-size: 32px; }
+        h2 { font-size: 24px; }
+        h3 { font-size: 20px; }
         nav { font-size: 13px; }
         #container { max-width: 400px; }
       }
@@ -188,6 +199,8 @@ const pre = `<!doctype html>
       @media(min-width: 425px) {
         table, p { font-size: 13px; }
         h1 { font-size: 36px; }
+        h2 { font-size: 27px; }
+        h3 { font-size: 23px; }
         nav { font-size: 14px; }
         #container { max-width: 500px; }
       }
@@ -196,6 +209,8 @@ const pre = `<!doctype html>
       @media(min-width: 768px) {
         table, p { font-size: 15px; }
         h1 { font-size: 40px; }
+        h2 { font-size: 30px; }
+        h3 { font-size: 25px; }
         nav { font-size: 15px; }
         #container { max-width: 600px; }
       }
@@ -204,13 +219,18 @@ const pre = `<!doctype html>
       @media(min-width: 1024px) {
         table, p { font-size: 16px; }
         h1 { font-size: 44px; }
+        h2 { font-size: 33px; }
+        h3 { font-size: 28px; }
         nav { font-size: 18px; }
         #container { max-width: 700px; }
       }
     </style>
   </head>
   <body>
-    <h1>Research</h1>
+    <header>
+      <h1><a href="/">pkmn.ai</a></h1>
+      <h2>Research</h2>
+    </header>
     <div id="container">
     <div class="description">
       <p>${FILLER.replace('\n\n', '</p><p>')}</p>
@@ -291,8 +311,8 @@ for (const agent of agents) {
   {
     const name = agent.name ?? `<em>${identifier ?? agent.identifier}</em>`;
     buf.push(agent.site
-      ? `<h2><a href="${agent.site}">${name}</a></h2>`
-      : `<h2>${name}</h2>`);
+      ? `<h3><a href="${agent.site}">${name}</a></h3>`
+      : `<h3>${name}</h3>`);
   }
   buf.push('<table>');
   if (agent.paper) {
