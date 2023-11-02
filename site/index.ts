@@ -40,7 +40,7 @@ const pre = `<!doctype html>
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" href="https://pkmn.ai/favicon.ico">
+    <link rel="icon" href="https://pkmn.cc/ai.svg">
     <title>pkmn.ai</title>
     <style>
       body {
