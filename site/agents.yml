@@ -84,6 +84,19 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Showdown AI competition
+  framework: true
+  active: [2017, 2018] # Feb 28
+  paper:
+    name: "Showdown AI competition"
+    url: http://julian.togelius.com/Lee2017Showdown.pdf
+  source: https://github.com/scotchkorean27/showdownaiclient
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: PokéAI
   active: [2017, 2022] # March 14
   license: MIT
@@ -98,18 +111,6 @@
   release:
     name: book-202009
     url: https://github.com/select766/pokeai/releases/tag/book-202009
-- name: Showdown AI competition
-  framework: true
-  active: [2017, 2017] # August 22
-  paper:
-    name: "Showdown AI competition"
-    url: http://julian.togelius.com/Lee2017Showdown.pdf
-  engine:
-    - name: pokemon-showdown
-      url: https://github.com/smogon/pokemon-showdown
-  platform:
-    - name: Pokémon Showdown!
-      url: https://github.com/smogon/pokemon-showdown
 - identifier: Kalose, Kaya, Kim
   active: [2018, 2018]
   paper:
