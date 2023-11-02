@@ -19,7 +19,6 @@ interface Agent {
   release?: { name: string; url: string };
 }
 
-// eslint-disable-next-line
 const RANKING = [
   'Athena', // Athena - reached #33 in gen7randombattle, ~1800 Elo
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo
@@ -146,6 +145,15 @@ const post = `
 
 const file = path.join(__dirname, '..', 'agents.yml');
 const agents = yaml.parse(fs.readFileSync(file, 'utf8')) as Agent[];
+const score = (a: Agent) => {
+  const id = a.name ?? (a.source && a.source.startsWith('https://github.com/')
+    ? a.source.slice(19)
+    : a.identifier!);
+  // TODO: sort by live ranking > static ranking > date
+  const index = RANKING.indexOf(id);
+  return index >= 0 ? index : Infinity;
+};
+agents.sort((a, b) => score(a) - score(b));
 
 const buf: string[] = [];
 buf.push(pre);
