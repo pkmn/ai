@@ -197,7 +197,7 @@
     name: "Comparison of Artificial Intelligence Algorithms for Pokémon Battles"
     url: https://odr.chalmers.se/server/api/core/bitstreams/b5fac289-1328-41b8-ad78-f89eb39fce30/content
   language: Python
-- name: Poke-env
+- name: poke-env
   framework: true
   site: https://poke-env.readthedocs.io/en/latest/
   active: 2019 # August 6
