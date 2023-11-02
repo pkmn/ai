@@ -166,7 +166,7 @@ for (const agent of agents) {
     ? agent.source.slice(19)
     : undefined;
   {
-    const name = agent.name ?? (identifier ? `<em>${identifier}</em>` : agent.identifier);
+    const name = agent.name ?? `<em>${identifier ?? agent.identifier}</em>`;
     buf.push(agent.site
       ? `<h2><a href="${agent.site}" class="unlink">${name}</a></h2>`
       : `<h2>${name}</h2>`);
