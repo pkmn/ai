@@ -4,6 +4,7 @@ import * as path from 'path';
 import {minify} from 'html-minifier';
 import * as mustache from 'mustache';
 import * as yaml from 'yaml';
+import {marked} from 'marked';
 
 interface Project {
   name?: string;
@@ -73,9 +74,9 @@ massa non leo scelerisque ultrices iaculis ut eros.`;
 
 const SPLIT = FILLER.replaceAll('\n', '').split('.');
 
-const pre = `<div class="description">
-      <p>${FILLER.replace('\n\n', '</p><p>')}</p>
-    </div>
+const markdown =
+  marked.parse(fs.readFileSync(path.join(root, 'src', 'pages', 'projects.md'), 'utf8'));
+const pre = `<div class="description">${markdown}</div>
     <nav>
       <ul>
         <li>
