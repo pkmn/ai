@@ -180,7 +180,7 @@
 - name: 0 ERROR # April 20
   site: https://pkmn.cc/0-ERROR
   active: 2019
-  license: CC BY-NC-ND
+  license: CC-BY-NC-ND-4.0
   source: https://github.com/pkmn/0-ERROR
   engine:
     - name: pkmn
