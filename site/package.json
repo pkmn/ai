@@ -5,6 +5,7 @@
     "@types/html-minifier": "^4.0.3",
     "html-minifier": "^4.0.0",
     "marked": "^9.1.4",
+    "mustache": "^4.2.0",
     "yaml": "^2.3.3"
   },
   "scripts": {
