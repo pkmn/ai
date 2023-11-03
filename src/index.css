@@ -1,5 +1,5 @@
 body {
-  font-family: "Roboto", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+  font-family: Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
   display: flex;
   height: calc(100vh - 1em);
   flex-direction: column;
@@ -8,17 +8,21 @@ body {
 h1 {
   font-size: round(nearest, calc(var(--header-size) * 2), 1);
 }
+
 h2 {
   font-size: round(nearest, calc(var(--header-size) * 1.5), 1);
   text-transform: uppercase;
   margin-top: 0;
 }
+
 h3 {
   font-size: round(nearest, calc(var(--header-size) * 1.25), 1);
 }
+
 table, p {
   font-size: var(--body-size);
 }
+
 nav, footer {
   font-size: round(nearest, calc(var(--body-size) * 1.1), 1);
 }
@@ -34,16 +38,16 @@ h1, h2 {
 
 #content {
   padding-top: 0.5em;
-  margin: 0px auto;
+  margin: 0 auto;
   max-width: var(--max-width);
 }
 
 table {
   border-collapse: collapse;
   min-width: 100%;
-  margin: 0px auto;
+  margin: 0 auto;
   text-align: left;
-  border-spacing: 0px;
+  border-spacing: 0;
   line-height: 1.15em;
 }
 
@@ -55,10 +59,6 @@ td {
   border-top: 1px solid #CDCDCD;
 }
 
-tr:first-child td {
-  border: none;
-}
-
 tr:first-child {
   border-top: 1px solid black;
 }
@@ -67,20 +67,34 @@ td:first-child {
   width: 15%;
 }
 
-a, a:visited {
+tr:first-child td {
+  border: none;
+}
+
+a {
   text-decoration: none;
+  color: unset;
+}
+
+footer a {
+  display: inline-flex;
+  vertical-align: top;
+  padding: 1em 0;
+  gap: 5px;
+}
+
+a:visited {
+  text-decoration: none;
+  color: unset;
 }
 
 a:hover, a:focus, a:active  {
   text-decoration: underline;
+  color: unset;
 }
 
 h1 a:hover, h1 a:focus, h1 a:active  {
   text-decoration: none;
-}
-
-a, a:hover, a:visited, a:focus, a:active {
-  color: unset;
 }
 
 a.default,
@@ -102,14 +116,17 @@ p {
 nav {
   text-align: center;
 }
+
 nav ul {
   margin: 0;
   padding: 0;
   list-style: none;
 }
+
 nav li {
   display: inline-block;
 }
+
 nav input {
   clip: rect(0 0 0 0);
   clip-path: inset(100%);
@@ -119,9 +136,11 @@ nav input {
   white-space: nowrap;
   width: 1px;
 }
+
 nav label {
   cursor: pointer;
 }
+
 nav input:checked + label {
   font-weight: bold;
 }
@@ -131,12 +150,7 @@ footer {
   text-align: center;
   line-height: var(--svg);
 }
-footer a {
-  display: inline-flex;
-  vertical-align: top;
-  padding: 1em 0;
-  gap: 5px;
-}
+
 footer img {
   height: var(--svg);
   width: var(--svg);
@@ -155,7 +169,7 @@ footer img {
 }
 
 /* Mobile - Medium */
-@media(min-width: 375px) {
+@media(width >= 375px) {
   :root {
     --max-width: 400px;
     --body-size: 12px;
@@ -164,7 +178,7 @@ footer img {
 }
 
 /* Mobile - Large */
-@media(min-width: 425px) {
+@media(width >= 425px) {
   :root {
     --max-width: 500px;
     --svg: 20px;
@@ -174,7 +188,7 @@ footer img {
 }
 
 /* Tablet */
-@media(min-width: 768px) {
+@media(width >= 768px) {
   :root {
     --max-width: 600px;
     --body-size: 15px;
@@ -183,7 +197,7 @@ footer img {
 }
 
 /* Laptop */
-@media(min-width: 1024px) {
+@media(width >= 1024px) {
   :root {
     --max-width: 700px;
     --svg: 24px;

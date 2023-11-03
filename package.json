@@ -10,22 +10,27 @@
     "@types/node": "^20.8.9",
     "clean-css": "^5.3.2",
     "eslint": "^8.52.0",
+    "favicons": "^7.1.4",
     "html-minifier": "^4.0.0",
     "marked": "^9.1.4",
     "mustache": "^4.2.0",
-    "favicons": "^7.1.4",
     "source-map-support": "^0.5.21",
+    "stylelint": "^15.11.0",
+    "stylelint-config-standard": "^34.0.0",
     "typescript": "^5.2.2",
     "yaml": "^2.3.3"
   },
   "scripts": {
-    "lint": "eslint src --cache --ext ts",
-    "fix": "eslint src --fix --ext ts",
+    "lint": "eslint src --cache --ext ts && stylelint src/**/*.css",
+    "fix": "eslint src --fix --ext ts && stylelint --fix src/**/*.css",
     "compile": "tsc -p .",
     "build": "npm run compile && node build",
     "test": "npm run build && npm run lint"
   },
   "eslintConfig": {
     "extends": "@pkmn"
+  },
+  "stylelint": {
+    "extends": "stylelint-config-standard"
   }
 }
