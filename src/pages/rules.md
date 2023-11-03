@@ -1,0 +1,1 @@
+TODO competition rules, have Regulated — Open link here too. also explains how to enter
