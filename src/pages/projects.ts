@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {minify} from 'html-minifier';
+import * as mustache from 'mustache';
 import * as yaml from 'yaml';
 
 interface Project {
@@ -34,6 +35,20 @@ const RANKING = [
   'Kalose, Kaya, Kim', // ~60-65% vs. RandomPlayer (Gen 1)
 ];
 
+const root = path.join(__dirname, '..', '..');
+const file = path.join(root, 'src', 'pages', 'projects.yml');
+
+const LAYOUT = fs.readFileSync(path.join(root, 'src', 'pages', 'layout.html.tmpl'), 'utf8');
+
+interface Config {
+  header?: string;
+  content: string;
+  edit: string;
+}
+
+const render = (config: Config) =>
+  minify(mustache.render(LAYOUT, config), {minifyCSS: true, minifyJS: true});
+
 const FILLER =
 `Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque ultrices,
 tortor sed iaculis mollis, odio ex porta ante, ac malesuada est elit eu elit.
@@ -58,22 +73,7 @@ massa non leo scelerisque ultrices iaculis ut eros.`;
 
 const SPLIT = FILLER.replaceAll('\n', '').split('.');
 
-const pre = `<!doctype html>
-<html lang=en>
-  <head>
-    <title>Projects | pkmn.ai</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" href="/logo.svg">
-    <link rel="stylesheet" href="/index.css" />
-  </head>
-  <body>
-    <header>
-      <h1><a href="/">pkmn.ai</a></h1>
-      <h2>Projects</h2>
-    </header>
-    <div id="content">
-    <div class="description">
+const pre = `<div class="description">
       <p>${FILLER.replace('\n\n', '</p><p>')}</p>
     </div>
     <nav>
@@ -95,12 +95,6 @@ const pre = `<!doctype html>
       </ul>
     </nav>`;
 const post = `
-    </div>
-    <footer>
-      <a href="https://github.com/pkmn/ai/edit/main/src/pages/projects.yml">
-        <img src= "/github.svg" alt="GitHub" /> pkmn/ai
-      </a>
-    </footer>
     <script>
       document.addEventListener('DOMContentLoaded', () => {
         const projects = document.getElementsByClassName("project");
@@ -129,8 +123,6 @@ const post = `
   </body>
 </html>`;
 
-const root = path.join(__dirname, '..', '..');
-const file = path.join(root, 'src', 'pages', 'projects.yml');
 const projects = yaml.parse(fs.readFileSync(file, 'utf8')) as Project[];
 const score = (p: Project) => {
   const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
@@ -204,4 +196,9 @@ for (const project of projects) {
   buf.push('</div>');
 }
 buf.push(post);
-console.log(minify(buf.join(''), {minifyCSS: true, minifyJS: true}));
+
+console.log(render({
+  header: '<h2>Projects</h2>',
+  content: buf.join(''),
+  edit: 'https://github.com/pkmn/ai/edit/main/src/pages/projects.yml',
+}));
