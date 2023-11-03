@@ -213,6 +213,13 @@
   release:
     name: "0.7.0"
     url: https://github.com/hsahovic/poke-env/releases/tag/0.7.0
+- name: Simplified Pokemon Environment
+  active: [2019, 2020] # October 31
+  paper:
+    name: "Competitive Deep Reinforcement Learning over a Pokémon Battling Simulator"
+    url: https://www.researchgate.net/publication/341497785_Competitive_Deep_Reinforcement_Learning_over_a_Pokemon_Battling_Simulator
+  source: https://gitlab.com/DracoStriker/simplified-pokemon-environment
+  engine: Custom
 - name: VGC AI Framework
   framework: true
   active: 2019 # October 31
@@ -224,13 +231,6 @@
   engine:
     - name: PokemonBattleEngine
       url: https://github.com/Kermalis/PokemonBattleEngine
-- name: Simplified Pokemon Environment
-  active: [2019, 2020] # October 31
-  paper:
-    name: "Competitive Deep Reinforcement Learning over a Pokémon Battling Simulator"
-    url: https://www.researchgate.net/publication/341497785_Competitive_Deep_Reinforcement_Learning_over_a_Pokemon_Battling_Simulator
-  source: https://gitlab.com/DracoStriker/simplified-pokemon-environment
-  engine: Custom
 - name: Athena
   active: [2020, 2023]
   paper:
@@ -268,7 +268,7 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- identifier: Chun Him Tse
+- identifier: Tse
   active: [2022, 2022]
   paper:
     name: "Learning Competitive Pokemon through Neural Network and Reinforcement Learning"
