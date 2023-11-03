@@ -169,6 +169,7 @@ for (const project of projects) {
 }
 
 console.log(render({
+  title: 'Projects | pkmn.ai',
   header: '<h2>Projects</h2>',
   content: buf.join(''),
   edit: 'https://github.com/pkmn/ai/edit/main/src/pages/projects.yml',
