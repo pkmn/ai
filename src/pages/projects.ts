@@ -64,7 +64,7 @@ const pre = `<!doctype html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="https://pkmn.cc/ai.svg">
-    <title>Research | pkmn.ai</title>
+    <title>Projects | pkmn.ai</title>
     <style>
       body {
         font-family: "Roboto", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
@@ -229,7 +229,7 @@ const pre = `<!doctype html>
   <body>
     <header>
       <h1><a href="/">pkmn.ai</a></h1>
-      <h2>Research</h2>
+      <h2>Projects</h2>
     </header>
     <div id="container">
     <div class="description">
@@ -284,7 +284,7 @@ const post = `
 </html>`;
 
 const root = path.join(__dirname, '..', '..');
-const file = path.join(root, 'src', 'pages', 'research.yml');
+const file = path.join(root, 'src', 'pages', 'projects.yml');
 const projects = yaml.parse(fs.readFileSync(file, 'utf8')) as Project[];
 const score = (p: Project) => {
   const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
