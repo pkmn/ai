@@ -45,6 +45,7 @@ interface Config {
   header?: string;
   content: string;
   edit: string;
+  script?: string;
 }
 
 const render = (config: Config) =>
@@ -95,34 +96,6 @@ const pre = `<div class="description">${markdown}</div>
         </li>
       </ul>
     </nav>`;
-const post = `
-    <script>
-      document.addEventListener('DOMContentLoaded', () => {
-        const projects = document.getElementsByClassName("project");
-        const radios = document.querySelectorAll('input[name="radio"]');
-
-        for (let i = 0; i < radios.length; i++) {
-          radios[i].addEventListener('click', () => {
-            for (let j = 0; j < projects.length; j++) {
-              if (radios[i].id === 'all') {
-                projects[j].classList.remove('hide');
-              } else {
-                const hide = radios[i].id === 'active'
-                  ? !projects[j].dataset.active
-                  : projects[j].dataset.active;
-                if (hide) {
-                  projects[j].classList.add('hide');
-                } else {
-                  projects[j].classList.remove('hide');
-                }
-              }
-            }
-          });
-        }
-      });
-    </script>
-  </body>
-</html>`;
 
 const projects = yaml.parse(fs.readFileSync(file, 'utf8')) as Project[];
 const score = (p: Project) => {
@@ -196,10 +169,34 @@ for (const project of projects) {
   buf.push(`<div class="description"><p>${description}.</p></div>`);
   buf.push('</div>');
 }
-buf.push(post);
 
 console.log(render({
   header: '<h2>Projects</h2>',
   content: buf.join(''),
   edit: 'https://github.com/pkmn/ai/edit/main/src/pages/projects.yml',
+  script: `<script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const projects = document.getElementsByClassName("project");
+      const radios = document.querySelectorAll('input[name="radio"]');
+
+      for (let i = 0; i < radios.length; i++) {
+        radios[i].addEventListener('click', () => {
+          for (let j = 0; j < projects.length; j++) {
+            if (radios[i].id === 'all') {
+              projects[j].classList.remove('hide');
+            } else {
+              const hide = radios[i].id === 'active'
+                ? !projects[j].dataset.active
+                : projects[j].dataset.active;
+              if (hide) {
+                projects[j].classList.add('hide');
+              } else {
+                projects[j].classList.remove('hide');
+              }
+            }
+          }
+        });
+      }
+    });
+  </script>`,
 }));
