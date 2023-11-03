@@ -13,6 +13,7 @@
     "html-minifier": "^4.0.0",
     "marked": "^9.1.4",
     "mustache": "^4.2.0",
+    "favicons": "^7.1.4",
     "source-map-support": "^0.5.21",
     "typescript": "^5.2.2",
     "yaml": "^2.3.3"

@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import CleanCSS from 'clean-css';
+import favicons from 'favicons';
 import html from 'html-minifier';
 import * as template from 'mustache';
 
@@ -31,8 +32,19 @@ const render = (name: string, page: Page) => {
 };
 
 if (require.main === module) {
-  const index = fs.readFileSync(path.join(ROOT, 'src', 'index.css'), 'utf8');
-  fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+  (async () => {
+    const icons = await favicons(path.join(PUBLIC, 'favicon.svg'), {path: PUBLIC});
+    for (const icon of icons.images) {
+      if (/(yandex|startup-image)/.test(icon.name)) continue;
+      fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
+    }
 
-  render('projects', projects.page(PAGES));
+    const index = fs.readFileSync(path.join(ROOT, 'src', 'index.css'), 'utf8');
+    fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+
+    render('projects', projects.page(PAGES));
+  })().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
 }
