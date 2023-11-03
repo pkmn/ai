@@ -2,9 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {minify} from 'html-minifier';
+import {marked} from 'marked';
 import * as mustache from 'mustache';
 import * as yaml from 'yaml';
-import {marked} from 'marked';
 
 interface Project {
   name?: string;
@@ -75,28 +75,6 @@ massa non leo scelerisque ultrices iaculis ut eros.`;
 
 const SPLIT = FILLER.replaceAll('\n', '').split('.');
 
-const markdown =
-  marked.parse(fs.readFileSync(path.join(root, 'src', 'pages', 'projects.md'), 'utf8'));
-const pre = `<div class="description">${markdown}</div>
-    <nav>
-      <ul>
-        <li>
-          <input type="radio" value="active" name="radio" id="active" />
-          <label for="active">Active</label>
-        </li>
-        -
-        <li>
-          <input type="radio" value="all" name="radio" id="all" checked="checked" />
-          <label for="all">All</label>
-        </li>
-        -
-        <li>
-          <input type="radio" value="inactive" name="radio" id="inactive" />
-          <label for="inactive">Inactive</label>
-        </li>
-      </ul>
-    </nav>`;
-
 const projects = yaml.parse(fs.readFileSync(file, 'utf8')) as Project[];
 const score = (p: Project) => {
   const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
@@ -109,7 +87,27 @@ const score = (p: Project) => {
 projects.sort((a, b) => score(a) - score(b));
 
 const buf: string[] = [];
-buf.push(pre);
+const markdown =
+  marked.parse(fs.readFileSync(path.join(root, 'src', 'pages', 'projects.md'), 'utf8'));
+buf.push(`<div class="description">${markdown}</div>`);
+buf.push(`<nav>
+<ul>
+  <li>
+    <input type="radio" value="active" name="radio" id="active" />
+    <label for="active">Active</label>
+  </li>
+  —
+  <li>
+    <input type="radio" value="all" name="radio" id="all" checked="checked" />
+    <label for="all">All</label>
+  </li>
+  —
+  <li>
+    <input type="radio" value="inactive" name="radio" id="inactive" />
+    <label for="inactive">Inactive</label>
+  </li>
+</ul>
+</nav>`);
 for (const project of projects) {
   const inactive = Array.isArray(project.active);
   buf.push(`<div class="project"${inactive ? '' : ' data-active="true"'}>`);
