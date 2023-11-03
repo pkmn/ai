@@ -37,9 +37,7 @@
     url: https://github.com/vasumv/pokemon_ai/releases/tag/0.0.1
 - name: Percymon
   active: [2014, 2017] # October 21
-  paper:
-    id: ramesh2014percymon
-    url: https://varunramesh.net/content/documents/cs221-final-report.pdf
+  paper: ramesh2014percymon
   source: https://github.com/rameshvarun/showdownbot
   engine:
     - name: pokemon-showdown
@@ -87,9 +85,7 @@
 - name: Showdown AI competition
   framework: true
   active: [2017, 2018] # Feb 28
-  paper:
-    id: lee2017competition
-    url: http://julian.togelius.com/Lee2017Showdown.pdf
+  paper: lee2017competition
   source: https://github.com/scotchkorean27/showdownaiclient
   engine:
     - name: pokemon-showdown
@@ -113,9 +109,7 @@
     url: https://github.com/select766/pokeai/releases/tag/book-202009
 - identifier: Kalose, Kaya, Kim
   active: [2018, 2018]
-  paper:
-    id: kalose2018optimal
-    url: https://web.stanford.edu/class/aa228/reports/2018/final151.pdf
+  paper: kalose2018optimal
   engine: Custom
   language: Python
 - active: 2018 # August 21
@@ -129,9 +123,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - active: [2018, 2018]
-  paper:
-    id: chen2018train
-    url: https://cs230.stanford.edu/projects_fall_2018/reports/12447633.pdf
+  paper: chen2018train
   license: MIT
   source: https://github.com/kvchen/showdown-rl
   engine:
@@ -143,9 +135,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - identifier: Ihara, Imai, Oyama, Kurihara
   active: [2018, 2018]
-  paper:
-    id: ihara2018ismcts
-    url: https://eprints.lib.hokudai.ac.jp/dspace/bitstream/2115/72345/1/ihara-smc2018.pdf
+  paper: ihara2018ismcts
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:
@@ -157,9 +147,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - name: Metagrok
   active: [2019, 2019] # June 16
-  paper:
-    id: huang2019metagrok
-    url: https://www.yuzeh.com/assets/CoG-2019-Pkmn.pdf
+  paper: huang2019metagrok
   license: MIT
   source: https://github.com/yuzeh/metagrok
   language: Python
@@ -193,9 +181,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - identifier: Norström
   active: [2019, 2019]
-  id:
-    name: norstrom2020comparison
-    url: https://odr.chalmers.se/server/api/core/bitstreams/b5fac289-1328-41b8-ad78-f89eb39fce30/content
+  paper: norstrom2020comparison
   language: Python
 - name: poke-env
   framework: true
@@ -215,17 +201,13 @@
     url: https://github.com/hsahovic/poke-env/releases/tag/0.7.0
 - name: Simplified Pokemon Environment
   active: [2019, 2020] # October 31
-  paper:
-    id: reis2021deeprl
-    url: https://www.researchgate.net/publication/341497785_Competitive_Deep_Reinforcement_Learning_over_a_Pokemon_Battling_Simulator
+  paper: reis2021deeprl
   source: https://gitlab.com/DracoStriker/simplified-pokemon-environment
   engine: Custom
 - name: VGC AI Framework
   framework: true
   active: 2019 # October 31
-  paper:
-    id: reis2021vgc
-    url: https://ludii.games/citations/COG2021-2.pdf
+  paper: reis2021vgc
   license: MIT
   source: https://gitlab.com/DracoStriker/pokemon-vgc-engine
   engine:
@@ -233,9 +215,7 @@
       url: https://github.com/Kermalis/PokemonBattleEngine
 - name: Athena
   active: [2020, 2023]
-  paper:
-    id: sarantinos2023athena
-    url: https://arxiv.org/pdf/2212.13338.pdf
+  paper: sarantinos2023athena
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
@@ -270,9 +250,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - identifier: Tse
   active: [2022, 2022]
-  paper:
-    id: tse2022nnrl
-    url: https://cs230.stanford.edu/projects_spring_2022/reports/127608668.pdf
+  paper: tse2022nnrl
   engine:
     - name: pokemon-showdown
       url: https://github.com/hsahovic/poke-env

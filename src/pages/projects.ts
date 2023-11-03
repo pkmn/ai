@@ -10,7 +10,7 @@ interface Project {
   identifier?: string;
   framework?: true;
   site?: string;
-  paper?: { id: string; url: string };
+  paper?: string;
   active: number | [number, number];
   license?: string;
   source?: string;
@@ -98,8 +98,8 @@ export function page(dir: string) {
     }
     buf.push('<table>');
     if (project.paper) {
-      const name = bibliography[project.paper.id].fields.title[0];
-      const paper = `<a href="${project.paper.url}"><em>${name}</em></a>`;
+      const p = bibliography[project.paper];
+      const paper = `<a href="${p.fields.url[0]}"><em>${p.fields.title[0]}</em></a>`;
       buf.push(`<tr><td><strong>Paper</strong></td><td>${paper}</td></tr>`);
     }
     buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);
