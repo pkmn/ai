@@ -63,11 +63,14 @@ const pre = `<!doctype html>
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" href="https://pkmn.cc/ai.svg">
+    <link rel="icon" href="/logo.svg">
     <title>Projects | pkmn.ai</title>
     <style>
       body {
         font-family: "Roboto", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+        display: flex;
+        height: calc(100vh - 1em);
+        flex-direction: column;
       }
 
       header {
@@ -84,7 +87,7 @@ const pre = `<!doctype html>
         margin-top: 0;
       }
 
-      #container {
+      #content {
         padding-top: 0.5em;
         margin: 0px auto;
         max-width: 800px;
@@ -178,12 +181,29 @@ const pre = `<!doctype html>
         display: none;
       }
 
+      footer {
+        margin-top: auto;
+        text-align: center;
+        line-height: var(--svg);
+      }
+      footer a {
+        display: inline-flex;
+        vertical-align: top;
+        padding: 1em 0;
+        gap: 5px;
+      }
+      footer img {
+        height: var(--svg);
+        width: var(--svg);;
+      }
+
       /* Mobile - Small */
       table, p { font-size: 10px; }
       h1 { font-size: 24px; }
       h2 { font-size: 18px; }
       h3 { font-size: 15px; }
-      nav { font-size: 12px; }
+      nav, footer { font-size: 12px; }
+      :root { --svg: 16px; }
 
       /* Mobile - Medium */
       @media(min-width: 375px) {
@@ -191,8 +211,8 @@ const pre = `<!doctype html>
         h1 { font-size: 32px; }
         h2 { font-size: 24px; }
         h3 { font-size: 20px; }
-        nav { font-size: 13px; }
-        #container { max-width: 400px; }
+        nav, footer { font-size: 13px; }
+        #content { max-width: 400px; }
       }
 
       /* Mobile - Large */
@@ -201,8 +221,9 @@ const pre = `<!doctype html>
         h1 { font-size: 36px; }
         h2 { font-size: 27px; }
         h3 { font-size: 23px; }
-        nav { font-size: 14px; }
-        #container { max-width: 500px; }
+        nav, footer { font-size: 14px; }
+        :root { --svg: 20px; }
+        #content { max-width: 500px; }
       }
 
       /* Tablet */
@@ -211,8 +232,8 @@ const pre = `<!doctype html>
         h1 { font-size: 40px; }
         h2 { font-size: 30px; }
         h3 { font-size: 25px; }
-        nav { font-size: 15px; }
-        #container { max-width: 600px; }
+        nav, footer { font-size: 15px; }
+        #content { max-width: 600px; }
       }
 
       /* Laptop */
@@ -221,8 +242,9 @@ const pre = `<!doctype html>
         h1 { font-size: 44px; }
         h2 { font-size: 33px; }
         h3 { font-size: 28px; }
-        nav { font-size: 18px; }
-        #container { max-width: 700px; }
+        nav, footer { font-size: 18px; }
+        :root { --svg: 24px; }
+        #content { max-width: 700px; }
       }
     </style>
   </head>
@@ -231,7 +253,7 @@ const pre = `<!doctype html>
       <h1><a href="/">pkmn.ai</a></h1>
       <h2>Projects</h2>
     </header>
-    <div id="container">
+    <div id="content">
     <div class="description">
       <p>${FILLER.replace('\n\n', '</p><p>')}</p>
     </div>
@@ -255,6 +277,11 @@ const pre = `<!doctype html>
     </nav>`;
 const post = `
     </div>
+    <footer>
+      <a href="https://github.com/pkmn/ai/edit/main/src/pages/projects.yml">
+        <img src= "/github.svg" alt="GitHub" /> pkmn/ai
+      </a>
+    </footer>
     <script>
       document.addEventListener('DOMContentLoaded', () => {
         const projects = document.getElementsByClassName("project");
