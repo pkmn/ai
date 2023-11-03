@@ -4,6 +4,7 @@
   "license": "MIT",
   "devDependencies": {
     "@pkmn/eslint-config": "^6.0.0",
+    "@retorquere/bibtex-parser": "^7.0.7",
     "@types/html-minifier": "^4.0.3",
     "@types/mustache": "^4.2.4",
     "@types/node": "^20.8.9",

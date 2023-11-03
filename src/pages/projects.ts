@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import * as bibtex from '@retorquere/bibtex-parser';
 import {marked} from 'marked';
 import * as yaml from 'yaml';
 
@@ -9,7 +10,7 @@ interface Project {
   identifier?: string;
   framework?: true;
   site?: string;
-  paper?: { name: string; url: string };
+  paper?: { id: string; url: string };
   active: number | [number, number];
   license?: string;
   source?: string;
@@ -36,6 +37,11 @@ const RANKING = [
 
 export function page(dir: string) {
   const buf: string[] = [];
+
+  const bib = bibtex.parse(fs.readFileSync(path.join(dir, 'projects.bib'), 'utf8'));
+  if (bib.errors.length) throw new Error(`Error parsing projects.bib: ${bib.errors.join(', ')}`);
+  const bibliography: {[id: string]: bibtex.Entry} = {};
+  for (const entry of bib.entries) bibliography[entry.key] = entry;
 
   const projects: Project[] = yaml.parse(fs.readFileSync(path.join(dir, 'projects.yml'), 'utf8'));
   const score = (p: Project) => {
@@ -92,7 +98,8 @@ export function page(dir: string) {
     }
     buf.push('<table>');
     if (project.paper) {
-      const paper = `<a href="${project.paper.url}"><em>${project.paper.name}</em></a>`;
+      const name = bibliography[project.paper.id].fields.title[0];
+      const paper = `<a href="${project.paper.url}"><em>${name}</em></a>`;
       buf.push(`<tr><td><strong>Paper</strong></td><td>${paper}</td></tr>`);
     }
     buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);
