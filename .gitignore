@@ -12,3 +12,6 @@ build/
 *npm-debug.log
 .eslintcache
 .tsbuildinfo
+
+# Project
+public/
