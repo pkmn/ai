@@ -283,7 +283,8 @@ const post = `
   </body>
 </html>`;
 
-const file = path.join(__dirname, '..', '..', 'pages', 'research.yml');
+const root = path.join(__dirname, '..', '..');
+const file = path.join(root, 'src', 'pages', 'research.yml');
 const projects = yaml.parse(fs.readFileSync(file, 'utf8')) as Project[];
 const score = (p: Project) => {
   const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)

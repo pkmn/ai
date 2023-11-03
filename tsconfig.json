@@ -1,4 +1,5 @@
 {
+  "include": ["src"],
   "compilerOptions": {
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
@@ -11,6 +12,7 @@
     "noEmitOnError": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
+    "outDir": "build",
     "sourceMap": true,
     "strict": true,
     "target": "esnext",

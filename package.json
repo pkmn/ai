@@ -8,15 +8,21 @@
     "eslint": "^8.52.0",
     "source-map-support": "^0.5.21",
     "subpkg": "^4.1.0",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "@types/html-minifier": "^4.0.3",
+    "html-minifier": "^4.0.0",
+    "marked": "^9.1.4",
+    "mustache": "^4.2.0",
+    "yaml": "^2.3.3"
   },
-  "subPackages": ["sim", "site"],
   "scripts": {
-    "lint": "subpkg run lint",
-    "fix": "subpkg run fix",
-    "compile": "subpkg run compile",
-    "build": "subpkg run build",
-    "test": "subpkg run test",
-    "postinstall": "subpkg install"
+    "lint": "eslint src --cache --ext ts",
+    "fix": "eslint src --fix --ext ts",
+    "compile": "tsc -p .",
+    "build": "npm run compile",
+    "test": "npm run compile && npm run lint"
+  },
+  "eslintConfig": {
+    "extends": "@pkmn"
   }
 }
