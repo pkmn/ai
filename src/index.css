@@ -70,7 +70,11 @@ a, a:hover, a:visited, a:focus, a:active {
   color: unset;
 }
 
-a.default, a.default:hover, a.default:visited, a.default:focus, a.default:active {
+a.default,
+a.default:hover,
+a.default:visited,
+a.default:focus,
+a.default:active {
   color: revert;
 }
 
