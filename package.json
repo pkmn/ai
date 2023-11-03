@@ -4,15 +4,14 @@
   "license": "MIT",
   "devDependencies": {
     "@pkmn/eslint-config": "^6.0.0",
+    "@types/html-minifier": "^4.0.3",
     "@types/node": "^20.8.9",
     "eslint": "^8.52.0",
-    "source-map-support": "^0.5.21",
-    "subpkg": "^4.1.0",
-    "typescript": "^5.2.2",
-    "@types/html-minifier": "^4.0.3",
     "html-minifier": "^4.0.0",
     "marked": "^9.1.4",
     "mustache": "^4.2.0",
+    "source-map-support": "^0.5.21",
+    "typescript": "^5.2.2",
     "yaml": "^2.3.3"
   },
   "scripts": {
