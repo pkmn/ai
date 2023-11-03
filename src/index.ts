@@ -8,15 +8,15 @@ import favicons from 'favicons';
 import html from 'html-minifier';
 import * as template from 'mustache';
 
-import * as projects from './pages/projects';
+import * as projects from './site/projects';
 
 const css = new CleanCSS();
 
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
-const PAGES = path.join(ROOT, 'src', 'pages');
+const SITE = path.join(ROOT, 'src', 'site');
 
-const LAYOUT = fs.readFileSync(path.join(PAGES, 'layout.html.tmpl'), 'utf8');
+const LAYOUT = fs.readFileSync(path.join(SITE, 'layout.html.tmpl'), 'utf8');
 
 interface Page {
   header?: string;
@@ -39,10 +39,10 @@ if (require.main === module) {
       fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
     }
 
-    const index = fs.readFileSync(path.join(ROOT, 'src', 'index.css'), 'utf8');
+    const index = fs.readFileSync(path.join(SITE, 'index.css'), 'utf8');
     fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
 
-    render('projects', projects.page(PAGES));
+    render('projects', projects.page(SITE));
   })().catch(err => {
     console.error(err);
     process.exit(1);
