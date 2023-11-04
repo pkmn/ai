@@ -37,7 +37,7 @@
     url: https://github.com/vasumv/pokemon_ai/releases/tag/0.0.1
 - name: Percymon
   active: [2014, 2017] # October 21
-  paper: ramesh2014percymon
+  paper: Ramesh:2014
   source: https://github.com/rameshvarun/showdownbot
   engine:
     - name: pokemon-showdown
@@ -85,7 +85,7 @@
 - name: Showdown AI competition
   framework: true
   active: [2017, 2018] # Feb 28
-  paper: lee2017competition
+  paper: Lee:2017
   source: https://github.com/scotchkorean27/showdownaiclient
   engine:
     - name: pokemon-showdown
@@ -109,7 +109,7 @@
     url: https://github.com/select766/pokeai/releases/tag/book-202009
 - identifier: Kalose, Kaya, Kim
   active: [2018, 2018]
-  paper: kalose2018optimal
+  paper: Kalose:2018
   engine: Custom
   language: Python
 - active: 2018 # August 21
@@ -123,7 +123,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - active: [2018, 2018]
-  paper: chen2018train
+  paper: Chen:2018
   license: MIT
   source: https://github.com/kvchen/showdown-rl
   engine:
@@ -135,7 +135,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - identifier: Ihara, Imai, Oyama, Kurihara
   active: [2018, 2018]
-  paper: ihara2018ismcts
+  paper: Ihara:2018
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:
@@ -147,7 +147,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - name: Metagrok
   active: [2019, 2019] # June 16
-  paper: huang2019metagrok
+  paper: Huang:2019
   license: MIT
   source: https://github.com/yuzeh/metagrok
   language: Python
@@ -181,7 +181,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - identifier: Norström
   active: [2019, 2019]
-  paper: norstrom2020comparison
+  paper: Norström:2020
   language: Python
 - name: poke-env
   framework: true
@@ -201,13 +201,13 @@
     url: https://github.com/hsahovic/poke-env/releases/tag/0.7.0
 - name: Simplified Pokemon Environment
   active: [2019, 2020] # October 31
-  paper: reis2021deeprl
+  paper: Simoes:2021
   source: https://gitlab.com/DracoStriker/simplified-pokemon-environment
   engine: Custom
 - name: VGC AI Framework
   framework: true
   active: 2019 # October 31
-  paper: reis2021vgc
+  paper: Reis:2021
   license: MIT
   source: https://gitlab.com/DracoStriker/pokemon-vgc-engine
   engine:
@@ -215,7 +215,7 @@
       url: https://github.com/Kermalis/PokemonBattleEngine
 - name: Athena
   active: [2020, 2023]
-  paper: sarantinos2023athena
+  paper: Sarantinos:2023
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
@@ -250,7 +250,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - identifier: Tse
   active: [2022, 2022]
-  paper: tse2022nnrl
+  paper: Tse:2022
   engine:
     - name: pokemon-showdown
       url: https://github.com/hsahovic/poke-env
