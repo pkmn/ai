@@ -144,7 +144,7 @@ export function page(dir: string) {
     title: 'Projects | pkmn.ai',
     header: '<h2>Projects</h2>',
     content: buf.join(''),
-    edit: 'https://github.com/pkmn/ai/edit/main/src/pages/projects.yml',
+    edit: 'https://github.com/pkmn/ai/edit/main/src/site/projects.yml',
     script: `<script>
       document.addEventListener('DOMContentLoaded', () => {
         const projects = document.getElementsByClassName("project");

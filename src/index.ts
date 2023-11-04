@@ -6,6 +6,7 @@ import * as path from 'path';
 import CleanCSS from 'clean-css';
 import favicons from 'favicons';
 import html from 'html-minifier';
+import {marked} from 'marked';
 import * as template from 'mustache';
 
 import * as projects from './site/projects';
@@ -41,6 +42,20 @@ if (require.main === module) {
 
     const index = fs.readFileSync(path.join(SITE, 'index.css'), 'utf8');
     fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+
+    const content = marked.parse(fs.readFileSync(path.join(SITE, 'index.md'), 'utf8'));
+    let first = true;
+    fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
+      title: 'pkmn.ai',
+      content: `<div id="home">${content.replaceAll('<a', m => {
+        if (first) {
+          first = false;
+          return m;
+        }
+        return '<a class="default"';
+      })}</div>`,
+      edit: 'https://github.com/pkmn/ai/edit/main/src/site/index.md',
+    }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
     render('projects', projects.page(SITE));
   })().catch(err => {
