@@ -1,5 +1,3 @@
-<img alt="pkmn.ai" src="/favicon.svg" />
-
 **pkmn.ai** [is](https://www.merriam-webster.com/dictionary/work%20in%20progress) the home of
 **competitive Pokémon artificial intelligence**. This site serves as the definitive reference for
 existing competitive Pokémon AI [projects and papers](/projects), relevant [research](/research),

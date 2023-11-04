@@ -156,12 +156,6 @@ footer img {
   width: var(--svg);
 }
 
-#home img {
-  margin-bottom: 2em;
-  height: calc((var(--svg) + 4px) * 8);
-  width: calc((var(--svg) + 4px) * 8);
-}
-
 #home {
   display: flex;
   flex-direction: column;
