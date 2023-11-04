@@ -162,6 +162,10 @@ footer img {
   align-items: center;
 }
 
+#research li {
+  margin-bottom: 0.5em;
+}
+
 .hide {
   display: none;
 }
