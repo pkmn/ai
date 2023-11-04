@@ -10,6 +10,7 @@ import {marked} from 'marked';
 import * as template from 'mustache';
 
 import * as projects from './site/projects';
+import * as research from './site/research';
 
 const css = new CleanCSS();
 
@@ -18,8 +19,10 @@ const PUBLIC = path.join(ROOT, 'public');
 const SITE = path.join(ROOT, 'src', 'site');
 
 const LAYOUT = fs.readFileSync(path.join(SITE, 'layout.html.tmpl'), 'utf8');
+const edit = 'https://github.com/pkmn/ai/edit/main/src';
 
 interface Page {
+  title: string;
   header?: string;
   content: string;
   edit: string;
@@ -54,10 +57,37 @@ if (require.main === module) {
         }
         return '<a class="default"';
       })}</div>`,
-      edit: 'https://github.com/pkmn/ai/edit/main/src/site/index.md',
+      edit: `${edit}/site/index.md`,
     }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
     render('projects', projects.page(SITE));
+    render('research', research.page(SITE));
+
+    render('concepts', {
+      title: 'Concepts | pkmn.ai',
+      header: '<h2>Concepts</h2>',
+      content: marked.parse(fs.readFileSync(path.join(SITE, 'concepts', 'index.md'), 'utf8')),
+      edit: `${edit}/site/concepts/index.md`,
+    });
+    for (const title of ['Engines', 'Variations']) {
+      const page = title.toLowerCase();
+      render(`concepts/${page}`, {
+        title: `Concepts — ${title} | pkmn.ai`,
+        header: `<h2>${title}</h2>`,
+        content: marked.parse(fs.readFileSync(path.join(SITE, 'concepts', `${page}.md`), 'utf8')),
+        edit: `${edit}/site/concepts/${page}.md`,
+      });
+    }
+
+    for (const title of ['Glossary', 'Rules']) {
+      const page = title.toLowerCase();
+      render(page, {
+        title: `${title} | pkmn.ai`,
+        header: `<h2>${title}</h2>`,
+        content: marked.parse(fs.readFileSync(path.join(SITE, `${page}.md`), 'utf8')),
+        edit: `${edit}/site/${page}.md`,
+      });
+    }
   })().catch(err => {
     console.error(err);
     process.exit(1);
