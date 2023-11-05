@@ -4,7 +4,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import * as djot from '@djot/djot';
-import * as bibtex from '@retorquere/bibtex-parser';
 import CSS from 'clean-css';
 import favicons from 'favicons';
 import html from 'html-minifier';
