@@ -1,3 +1,4 @@
+
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Proin imperdiet elementum nisi, eget
 fermentum nisi vehicula vel. Vivamus aliquam ac justo vel mattis. Proin at arcu ut sapien porta
 facilisis. Nunc sit amet feugiat quam. Quisque et ante in risus varius euismod. Fusce faucibus,
@@ -81,22 +82,3 @@ Maecenas id libero mauris. Aliquam erat volutpat. Quisque quis bibendum purus. N
 maximus congue suscipit. Donec sed mollis nunc, et placerat dui. Duis a tempus turpis. Ut id
 volutpat erat. Aliquam tempus ut felis et varius. Quisque efficitur id urna vitae venenatis. Nam eu
 quam diam. Nam eu sem id ex dictum ullamcorper et imperdiet velit.
-
-<!--
-options 
-
-- PokemonBattleEngine
-- pkmn/engine
-- aed3/poke-sim
-- pokemon-shwodown
-- custom
-- ...
-
-tradeoffs/features
-
-- completeness
-- correctness
-- "transformations"
-- transitions function
-- ...
--->
