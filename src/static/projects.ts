@@ -94,10 +94,11 @@ export function page(dir: string) {
       : undefined;
     {
       const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
-      const id = project.paper ? ` id="${project.paper}"` : '';
+      const id =
+        project.paper ?? (project.name ?? identifier ?? project.identifier)!.replaceAll(' ', '');
       buf.push(project.site
-        ? `<h3${id}><a href="${project.site}">${name}</a></h3>`
-        : `<h3${id}>${name}</h3>`);
+        ? `<h3 id="${id}"><a href="${project.site}">${name}</a></h3>`
+        : `<h3 id="${id}">${name}</h3>`);
     }
     buf.push('<table>');
     if (project.paper) {
