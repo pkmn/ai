@@ -22,6 +22,6 @@ export function page(dir: string) {
     title: 'Research | pkmn.ai',
     header: '<h2>Research</h2>',
     content: `<div id="research">${buf.join('')}</div>`,
-    edit: 'https://github.com/pkmn/ai/edit/main/src/site/research.bib',
+    edit: 'https://github.com/pkmn/ai/edit/main/src/static/research.bib',
   };
 }

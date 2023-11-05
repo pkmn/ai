@@ -9,16 +9,16 @@ import html from 'html-minifier';
 import {marked} from 'marked';
 import * as template from 'mustache';
 
-import * as projects from './site/projects';
-import * as research from './site/research';
+import * as projects from './static/projects';
+import * as research from './static/research';
 
 const css = new CleanCSS();
 
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
-const SITE = path.join(ROOT, 'src', 'site');
+const STATIC = path.join(ROOT, 'src', 'static');
 
-const LAYOUT = fs.readFileSync(path.join(SITE, 'layout.html.tmpl'), 'utf8');
+const LAYOUT = fs.readFileSync(path.join(STATIC, 'layout.html.tmpl'), 'utf8');
 const edit = 'https://github.com/pkmn/ai/edit/main/src';
 
 interface Page {
@@ -43,10 +43,10 @@ if (require.main === module) {
       fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
     }
 
-    const index = fs.readFileSync(path.join(SITE, 'index.css'), 'utf8');
+    const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
     fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
 
-    const content = marked.parse(fs.readFileSync(path.join(SITE, 'index.md'), 'utf8'));
+    const content = marked.parse(fs.readFileSync(path.join(STATIC, 'index.md'), 'utf8'));
     let first = true;
     fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
       title: 'pkmn.ai',
@@ -57,25 +57,25 @@ if (require.main === module) {
         }
         return '<a class="default"';
       })}</div>`,
-      edit: `${edit}/site/index.md`,
+      edit: `${edit}/static/index.md`,
     }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
-    render('projects', projects.page(SITE));
-    render('research', research.page(SITE));
+    render('projects', projects.page(STATIC));
+    render('research', research.page(STATIC));
 
     render('concepts', {
       title: 'Concepts | pkmn.ai',
       header: '<h2>Concepts</h2>',
-      content: marked.parse(fs.readFileSync(path.join(SITE, 'concepts', 'index.md'), 'utf8')),
-      edit: `${edit}/site/concepts/index.md`,
+      content: marked.parse(fs.readFileSync(path.join(STATIC, 'concepts', 'index.md'), 'utf8')),
+      edit: `${edit}/static/concepts/index.md`,
     });
     for (const title of ['Engines', 'Variations']) {
       const page = title.toLowerCase();
       render(`concepts/${page}`, {
         title: `Concepts — ${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: marked.parse(fs.readFileSync(path.join(SITE, 'concepts', `${page}.md`), 'utf8')),
-        edit: `${edit}/site/concepts/${page}.md`,
+        content: marked.parse(fs.readFileSync(path.join(STATIC, 'concepts', `${page}.md`), 'utf8')),
+        edit: `${edit}/static/concepts/${page}.md`,
       });
     }
 
@@ -84,8 +84,8 @@ if (require.main === module) {
       render(page, {
         title: `${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: marked.parse(fs.readFileSync(path.join(SITE, `${page}.md`), 'utf8')),
-        edit: `${edit}/site/${page}.md`,
+        content: marked.parse(fs.readFileSync(path.join(STATIC, `${page}.md`), 'utf8')),
+        edit: `${edit}/static/${page}.md`,
       });
     }
   })().catch(err => {
