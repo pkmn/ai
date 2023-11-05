@@ -75,7 +75,7 @@ export function page(dir: string) {
   return {
     title: 'Research | pkmn.ai',
     header: '<h2>Research</h2>',
-    content: `<div id="research">${buf.join('')}</div>`,
+    content: `<section>${buf.join('')}</section>`,
     edit: 'https://github.com/pkmn/ai/edit/main/src/static/research.bib',
   };
 }

@@ -169,8 +169,17 @@ footer img {
   width: var(--svg);
 }
 
-#concepts li, #research li {
+#concepts li {
   margin-bottom: 0.5em;
+}
+
+#research #content {
+  max-width: min(900px, 90%);
+}
+
+#research dl {
+  display: flex;
+  flex-wrap: wrap;
 }
 
 .hide {
@@ -183,6 +192,20 @@ footer img {
   --body-size: 10px;
   --header-size: 12px;
   --svg: var(--header-size);
+}
+
+#research dt {
+  display: none;
+}
+
+#research dd {
+  width: 100%;
+  margin-bottom: 1em;
+  margin-left: auto;
+}
+
+#research header {
+  margin-bottom: 1em;
 }
 
 /* Mobile - Medium */
@@ -219,5 +242,14 @@ footer img {
     --body-size: 16px;
     --header-size: 22px;
     --svg: 24px;
+  }
+
+  #research dt {
+    width: 20%;
+    display: block;
+  }
+
+  #research  dd {
+    width: 80%;
   }
 }
