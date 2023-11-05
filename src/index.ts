@@ -55,16 +55,6 @@ class References {
     }
   }
 
-  links() {
-    const buf: string[] = [];
-    for (const source of ['projects', 'research'] as const) {
-      for (const entry of Object.values(this[source])) {
-        buf.push(`[${entry.key}]: /${source}#${entry.key}`);
-      }
-    }
-    return buf.join('\n');
-  }
-
   static compare(a: bibtex.Entry, b: bibtex.Entry) {
     const as = a.key.split(':');
     const bs = b.key.split(':');
@@ -81,8 +71,7 @@ class References {
   }
 }
 
-const toHTML = (file: string, refs: References) =>
-  djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8') + '\n\n' + refs.links()));
+const toHTML = (file: string) => djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')));
 
 const render = (name: string, page: Page) => {
   fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
@@ -98,15 +87,13 @@ if (require.main === module) {
       fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
     }
 
-    const refs = new References();
-
     const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
     fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
 
     let first = true;
     fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
       title: 'pkmn.ai',
-      content: `<div id="home">${toHTML(path.join(STATIC, 'index.dj'), refs).replaceAll('<a', m => {
+      content: `<div id="home">${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
         if (first) {
           first = false;
           return m;
@@ -116,13 +103,14 @@ if (require.main === module) {
       edit: `${edit}/static/index.dj`,
     }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
+    const refs = new References();
     render('projects', projects.page(refs.projects, STATIC));
     render('research', research.page(refs.research));
 
     render('concepts', {
       title: 'Concepts | pkmn.ai',
       header: '<h2>Concepts</h2>',
-      content: toHTML(path.join(STATIC, 'concepts', 'index.dj'), refs),
+      content: toHTML(path.join(STATIC, 'concepts', 'index.dj')),
       edit: `${edit}/static/concepts/index.dj`,
     });
     for (const title of ['Engines', 'Variations']) {
@@ -130,7 +118,7 @@ if (require.main === module) {
       render(`concepts/${page}`, {
         title: `Concepts — ${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: toHTML(path.join(STATIC, 'concepts', `${page}.dj`), refs),
+        content: toHTML(path.join(STATIC, 'concepts', `${page}.dj`)),
         edit: `${edit}/static/concepts/${page}.dj`,
       });
     }
@@ -140,7 +128,7 @@ if (require.main === module) {
       render(page, {
         title: `${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: toHTML(path.join(STATIC, `${page}.dj`), refs),
+        content: toHTML(path.join(STATIC, `${page}.dj`)),
         edit: `${edit}/static/${page}.dj`,
       });
     }
