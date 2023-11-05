@@ -204,8 +204,12 @@ footer img {
   margin-left: auto;
 }
 
-#research header {
+#research header, #glossary header {
   margin-bottom: 1em;
+}
+
+#glossary dt {
+  font-weight: bold;
 }
 
 /* Mobile - Medium */
