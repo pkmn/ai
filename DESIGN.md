@@ -109,3 +109,21 @@ TESTING LEVELS
 1. server itself populates leaderboard from random procedure
 2. watchdog randomly decides W/L/T result, doesnt bother launching bots
 3. watchdog starts up RandomPlayer(N) for various N to get lots of quick battles
+
+“tables”
+- users (read in config with agents/names/IPs etc)
+- matchmaking (matrix of name-version vs. name-version num battles)
+- ratings table of everyones ratings and total battles?
+
+---
+
+start needs to start websocket server (which also periodically builds files) as well so remove http-server
+
+static src/tools/seed (simulate - flag to determine at what level to prosuce) produce leaderboaed info after every battle
+- run job to preseed https://github.com/pkmn/PKMN/blob/main/src/db/seed.ts
+
+need to render replays on the fly
+- strip data
+- provide option of html/json/.log txt
+
+use polka for this (and static if NODE-ENV is not prod = add node env is development to bashrc)
