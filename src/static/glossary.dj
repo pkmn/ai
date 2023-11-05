@@ -1,1 +1,16 @@
-TODO relevant terminology
+TODO [relevant terminology](https://gist.github.com/scheibo/b9c817ca3e2d0ae973634c79295177a9)
+
+: client
+  TODO
+: server
+  TODO (also "sim")
+: engine
+  TODO also driver, binding
+: RandomPlayer
+  TODO includes switching or not, RandomPlayer(`N`) can mean how often consider switches vs. how often ONLY consider switching when option
+: MaxDamagePlayer
+  TODO also "MaxDamage", "MostDamage", OTL
+: roll
+  TODO
+: input
+  TODO [raw vs. abstract vs. with context (and how much context)](https://gist.github.com/scheibo/6d1473952f4c2b3852339f6f35301b93)
