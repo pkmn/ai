@@ -1,17 +1,16 @@
 [Unit]
-Description=pkmn.ai server
-Requires=network.target
-After=network.target
+Description=Archive and cleanup old battle logs and tables
+Requires=TODO
+After=TODO
 
 [Service]
-Type=simple
-Restart=always
-RestartSec=5s
+Type=oneshot
 ExecStart=TODO
+Environment=TODOKEY=TODOvalue
 WorkingDirectory=TODO
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=pkmn.ai.server
+SyslogIdentifier=pkmn.ai.archive
 User=www-data
 Group=www-data
 

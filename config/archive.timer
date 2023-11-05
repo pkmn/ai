@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily archive and cleanup old battle logs and tables
+
+[Timer]
+OnCalendar=*-*-* 00:15:00
+
+[Install]
+WantedBy=timers.target

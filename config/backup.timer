@@ -1,0 +1,8 @@
+[Unit]
+Description=Monthly archive, upload, and cleanup of old battle logs
+
+[Timer]
+OnCalendar=*-*-01 01:00:00
+
+[Install]
+WantedBy=timers.target
