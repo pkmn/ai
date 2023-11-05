@@ -77,7 +77,7 @@ class References {
 
   static fromKey(key: string) {
     const [author, date] = key.split(':');
-    return `${author.replace('-', '')} ${date}`;
+    return `${author.replaceAll('-', ',').replaceAll(/[A-Z]/g, m => ` ${m}`).trimStart()} ${date}`;
   }
 }
 
