@@ -31,9 +31,9 @@ interface Page {
   script?: string;
 }
 
-const toHTML = (file: string) => djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')));
+const render = (file: string) => djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')));
 
-const render = (name: string, page: Page) => {
+const build = (name: string, page: Page) => {
   fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
   const rendered = template.render(LAYOUT, {id: path.basename(name), ...page});
   const minified = html.minify(rendered, {minifyCSS: true, minifyJS: true});
@@ -55,7 +55,7 @@ if (require.main === module) {
     fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
       id: 'home',
       title: 'pkmn.ai',
-      content: `<section>${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
+      content: `<section>${render(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
         if (first) {
           first = false;
           return m;
@@ -67,34 +67,34 @@ if (require.main === module) {
 
     const topbar =
       '<div class="topbar">Under Construction: planned completion date January 2024</div>';
-    render('projects', {...projects.page(STATIC), topbar});
-    render('research', research.page(STATIC));
+    build('projects', {...projects.page(STATIC), topbar});
+    build('research', research.page(STATIC));
 
-    render('concepts', {
+    build('concepts', {
       topbar,
       title: 'Concepts | pkmn.ai',
       header: '<h2>Concepts</h2>',
-      content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
+      content: `<section>${render(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
       edit: `${edit}/static/concepts/index.dj`,
     });
     for (const title of ['Complexity', 'Engines', 'Variations']) {
       const page = title.toLowerCase();
-      render(`concepts/${page}`, {
+      build(`concepts/${page}`, {
         topbar,
         title: `Concepts — ${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
+        content: `<section>${render(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
         edit: `${edit}/static/concepts/${page}.dj`,
       });
     }
 
     for (const title of ['Glossary', 'Rules']) {
       const page = title.toLowerCase();
-      render(page, {
+      build(page, {
         topbar,
         title: `${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: `<section>${toHTML(path.join(STATIC, `${page}.dj`))}</section>`,
+        content: `<section>${render(path.join(STATIC, `${page}.dj`))}</section>`,
         edit: `${edit}/static/${page}.dj`,
       });
     }
