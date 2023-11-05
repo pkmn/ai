@@ -73,7 +73,7 @@ if (require.main === module) {
       content: toHTML(path.join(STATIC, 'concepts', 'index.dj')),
       edit: `${edit}/static/concepts/index.dj`,
     });
-    for (const title of ['Engines', 'Variations']) {
+    for (const title of ['Complexity', 'Engines', 'Variations']) {
       const page = title.toLowerCase();
       render(`concepts/${page}`, {
         title: `Concepts — ${title} | pkmn.ai`,
