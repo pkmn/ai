@@ -30,47 +30,6 @@ interface Page {
   script?: string;
 }
 
-class References {
-  readonly projects!: {[id: string]: bibtex.Entry};
-  readonly research!: {[id: string]: bibtex.Entry};
-
-  constructor() {
-    for (const source of ['projects', 'research'] as const) {
-      const file = fs.readFileSync(path.join(STATIC, `${source}.bib`), 'utf8');
-      const parsed = bibtex.parse(file, {sentenceCase: false});
-      if (parsed.errors.length) {
-        throw new Error(`Error parsing ${source}.bib: ${parsed.errors.join(', ')}`);
-      }
-      parsed.entries.sort(References.compare);
-
-      const references: {[id: string]: bibtex.Entry} = {};
-      for (const entry of parsed.entries) {
-        if (!entry.fields.author[0].includes(',')) {
-          throw new Error(`Improperly formatted author field in citation: '${entry.key}'`);
-        }
-        references[References.fromKey(entry.key)] = entry;
-      }
-
-      this[source] = references;
-    }
-  }
-
-  static compare(a: bibtex.Entry, b: bibtex.Entry) {
-    const as = a.key.split(':');
-    const bs = b.key.split(':');
-
-    const date = +bs[1] - +as[1];
-    if (date) return date;
-
-    return as[0].localeCompare(bs[0]);
-  }
-
-  static fromKey(key: string) {
-    const [author, date] = key.split(':');
-    return `${author.replaceAll('-', ',').replaceAll(/[A-Z]/g, m => ` ${m}`).trimStart()} ${date}`;
-  }
-}
-
 const toHTML = (file: string) => djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')));
 
 const render = (name: string, page: Page) => {
@@ -103,9 +62,8 @@ if (require.main === module) {
       edit: `${edit}/static/index.dj`,
     }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
-    const refs = new References();
-    render('projects', projects.page(refs.projects, STATIC));
-    render('research', research.page(refs.research));
+    render('projects', projects.page(STATIC));
+    render('research', research.page(STATIC));
 
     render('concepts', {
       title: 'Concepts | pkmn.ai',
