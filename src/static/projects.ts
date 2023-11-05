@@ -35,13 +35,11 @@ const RANKING = [
   'Kalose, Kaya, Kim', // ~60-65% vs. RandomPlayer (Gen 1)
 ];
 
-export function page(dir: string) {
+export function page(bib: {[id: string]: bibtex.Entry}, dir: string) {
   const buf: string[] = [];
 
-  const bib = bibtex.parse(fs.readFileSync(path.join(dir, 'projects.bib'), 'utf8'));
-  if (bib.errors.length) throw new Error(`Error parsing projects.bib: ${bib.errors.join(', ')}`);
-  const bibliography: {[id: string]: bibtex.Entry} = {};
-  for (const entry of bib.entries) bibliography[entry.key] = entry;
+  const bibliography: {[key: string]: bibtex.Entry} = {};
+  for (const id in bib) bibliography[bib[id].key] = bib[id];
 
   const projects: Project[] = yaml.parse(fs.readFileSync(path.join(dir, 'projects.yml'), 'utf8'));
   const score = (p: Project) => {
