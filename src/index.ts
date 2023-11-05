@@ -22,6 +22,7 @@ const LAYOUT = fs.readFileSync(path.join(STATIC, 'layout.html.tmpl'), 'utf8');
 const edit = 'https://github.com/pkmn/ai/edit/main/src';
 
 interface Page {
+  id?: string;
   title: string;
   header?: string;
   content: string;
@@ -33,8 +34,9 @@ const toHTML = (file: string) => djot.renderHTML(djot.parse(fs.readFileSync(file
 
 const render = (name: string, page: Page) => {
   fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
-  const rendered = html.minify(template.render(LAYOUT, page), {minifyCSS: true, minifyJS: true});
-  fs.writeFileSync(path.join(PUBLIC, name, 'index.html'), rendered);
+  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page});
+  const minified = html.minify(rendered, {minifyCSS: true, minifyJS: true});
+  fs.writeFileSync(path.join(PUBLIC, name, 'index.html'), minified);
 };
 
 if (require.main === module) {
@@ -50,14 +52,15 @@ if (require.main === module) {
 
     let first = true;
     fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
+      id: 'home',
       title: 'pkmn.ai',
-      content: `<div id="home">${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
+      content: `${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
         if (first) {
           first = false;
           return m;
         }
         return '<a class="default"';
-      })}</div>`,
+      })}`,
       edit: `${edit}/static/index.dj`,
     }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
