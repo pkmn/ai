@@ -83,22 +83,22 @@ export function page(dir: string) {
   );
   for (const project of projects) {
     const inactive = Array.isArray(project.active);
-    buf.push(`<div class="project"${inactive ? '' : ' data-active="true"'}>`);
+    const identifier = project.source && /^https:\/\/git(hub|lab).com/.test(project.source)
+      ? project.source.slice(19)
+      : undefined;
+    const id =
+      project.paper ?? (project.name ?? identifier ?? project.identifier)!.replaceAll(' ', '');
+    buf.push(`<section id="${id}" class="project"${inactive ? '' : ' data-active="true"'}>`);
     const active = Array.isArray(project.active)
       ? (project.active[0] === project.active[1]
         ? `${project.active[0]}`
         : `${project.active[0]} - ${project.active[1]}`)
       : `${project.active} - <em>present</em>`;
-    const identifier = project.source && /^https:\/\/git(hub|lab).com/.test(project.source)
-      ? project.source.slice(19)
-      : undefined;
     {
       const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
-      const id =
-        project.paper ?? (project.name ?? identifier ?? project.identifier)!.replaceAll(' ', '');
       buf.push(project.site
-        ? `<h3 id="${id}"><a href="${project.site}">${name}</a></h3>`
-        : `<h3 id="${id}">${name}</h3>`);
+        ? `<h3 ><a href="${project.site}">${name}</a></h3>`
+        : `<h3>${name}</h3>`);
     }
     buf.push('<table>');
     if (project.paper) {
@@ -141,7 +141,7 @@ export function page(dir: string) {
     buf.push('</table>');
     const description = split.slice(0, 8 + Math.random() * 12).join('.');
     buf.push(`<div class="description"><p>${description}.</p></div>`);
-    buf.push('</div>');
+    buf.push('</section>');
   }
 
   return {
