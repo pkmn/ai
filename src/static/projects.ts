@@ -60,7 +60,7 @@ export function page(dir: string) {
   const split = filler.replaceAll('\n', '').split('.');
 
   const markdown = djot.renderHTML(djot.parse(filler));
-  buf.push(`<div class="description">${markdown}</div>`);
+  buf.push(`<section><div class="description">${markdown}</div></section>`);
   buf.push(
     `<nav>
       <ul>

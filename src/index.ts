@@ -24,6 +24,7 @@ const edit = 'https://github.com/pkmn/ai/edit/main/src';
 interface Page {
   id?: string;
   title: string;
+  topbar?: string;
   header?: string;
   content: string;
   edit: string;
@@ -54,31 +55,35 @@ if (require.main === module) {
     fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
       id: 'home',
       title: 'pkmn.ai',
-      content: `${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
+      content: `<section>${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
         if (first) {
           first = false;
           return m;
         }
         return '<a class="default"';
-      })}`,
+      })}</section>`,
       edit: `${edit}/static/index.dj`,
     }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
-    render('projects', projects.page(STATIC));
+    const topbar =
+      '<div class="topbar">Under Construction: planned completion date January 2024</div>';
+    render('projects', {...projects.page(STATIC), topbar});
     render('research', research.page(STATIC));
 
     render('concepts', {
+      topbar,
       title: 'Concepts | pkmn.ai',
       header: '<h2>Concepts</h2>',
-      content: toHTML(path.join(STATIC, 'concepts', 'index.dj')),
+      content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
       edit: `${edit}/static/concepts/index.dj`,
     });
     for (const title of ['Complexity', 'Engines', 'Variations']) {
       const page = title.toLowerCase();
       render(`concepts/${page}`, {
+        topbar,
         title: `Concepts — ${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: toHTML(path.join(STATIC, 'concepts', `${page}.dj`)),
+        content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
         edit: `${edit}/static/concepts/${page}.dj`,
       });
     }
@@ -86,9 +91,10 @@ if (require.main === module) {
     for (const title of ['Glossary', 'Rules']) {
       const page = title.toLowerCase();
       render(page, {
+        topbar,
         title: `${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: toHTML(path.join(STATIC, `${page}.dj`)),
+        content: `<section>${toHTML(path.join(STATIC, `${page}.dj`))}</section>`,
         edit: `${edit}/static/${page}.dj`,
       });
     }
