@@ -162,7 +162,7 @@ footer img {
   align-items: center;
 }
 
-#research li {
+#concepts li, #research li {
   margin-bottom: 0.5em;
 }
 
