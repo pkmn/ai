@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import * as djot from '@djot/djot';
 import * as bibtex from '@retorquere/bibtex-parser';
-import {marked} from 'marked';
 import * as yaml from 'yaml';
 
 interface Project {
@@ -54,10 +54,10 @@ export function page(dir: string) {
   };
   projects.sort((a, b) => score(a) - score(b));
 
-  const filler = fs.readFileSync(path.join(dir, 'projects.md'), 'utf8');
+  const filler = fs.readFileSync(path.join(dir, 'projects.dj'), 'utf8');
   const split = filler.replaceAll('\n', '').split('.');
 
-  const markdown = marked.parse(filler);
+  const markdown = djot.renderHTML(djot.parse(filler));
   buf.push(`<div class="description">${markdown}</div>`);
   buf.push(
     `<nav>

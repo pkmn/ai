@@ -3,16 +3,16 @@ import 'source-map-support/register';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import CleanCSS from 'clean-css';
+import * as djot from '@djot/djot';
+import CSS from 'clean-css';
 import favicons from 'favicons';
 import html from 'html-minifier';
-import {marked} from 'marked';
 import * as template from 'mustache';
 
 import * as projects from './static/projects';
 import * as research from './static/research';
 
-const css = new CleanCSS();
+const css = new CSS();
 
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
@@ -28,6 +28,8 @@ interface Page {
   edit: string;
   script?: string;
 }
+
+const toHTML = (file: string) => djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')));
 
 const render = (name: string, page: Page) => {
   fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
@@ -46,18 +48,17 @@ if (require.main === module) {
     const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
     fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
 
-    const content = marked.parse(fs.readFileSync(path.join(STATIC, 'index.md'), 'utf8'));
     let first = true;
     fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
       title: 'pkmn.ai',
-      content: `<div id="home">${content.replaceAll('<a', m => {
+      content: `<div id="home">${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
         if (first) {
           first = false;
           return m;
         }
         return '<a class="default"';
       })}</div>`,
-      edit: `${edit}/static/index.md`,
+      edit: `${edit}/static/index.dj`,
     }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
 
     render('projects', projects.page(STATIC));
@@ -66,16 +67,16 @@ if (require.main === module) {
     render('concepts', {
       title: 'Concepts | pkmn.ai',
       header: '<h2>Concepts</h2>',
-      content: marked.parse(fs.readFileSync(path.join(STATIC, 'concepts', 'index.md'), 'utf8')),
-      edit: `${edit}/static/concepts/index.md`,
+      content: toHTML(path.join(STATIC, 'concepts', 'index.dj')),
+      edit: `${edit}/static/concepts/index.dj`,
     });
     for (const title of ['Engines', 'Variations']) {
       const page = title.toLowerCase();
       render(`concepts/${page}`, {
         title: `Concepts — ${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: marked.parse(fs.readFileSync(path.join(STATIC, 'concepts', `${page}.md`), 'utf8')),
-        edit: `${edit}/static/concepts/${page}.md`,
+        content: toHTML(path.join(STATIC, 'concepts', `${page}.dj`)),
+        edit: `${edit}/static/concepts/${page}.dj`,
       });
     }
 
@@ -84,8 +85,8 @@ if (require.main === module) {
       render(page, {
         title: `${title} | pkmn.ai`,
         header: `<h2>${title}</h2>`,
-        content: marked.parse(fs.readFileSync(path.join(STATIC, `${page}.md`), 'utf8')),
-        edit: `${edit}/static/${page}.md`,
+        content: toHTML(path.join(STATIC, `${page}.dj`)),
+        edit: `${edit}/static/${page}.dj`,
       });
     }
   })().catch(err => {
