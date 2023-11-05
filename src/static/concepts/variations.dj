@@ -5,7 +5,7 @@ Competitive Pokémon is a two-player
 information](https://en.wikipedia.org/wiki/Perfect_information),
 [constant-sum](https://en.wikipedia.org/wiki/Zero-sum_game),
 [stochastic](https://en.wikipedia.org/wiki/Stochastic_game) game with both an [offline and
-online](#offline-vs-online) component with a extremely [high branching
+online](#Offline-vs-Online) component with a extremely [high branching
 factor](https://en.wikipedia.org/wiki/Branching_factor). In order to simplify things and make the
 game more tractable to solve, various relaxations can be made.
 
@@ -41,7 +41,7 @@ have during team-building:
   it removes the aspect of information gathering/hiding and provides a significant advantage to the
   player, but as the battle progresses well developed team prediction will eventually determine this
   information anyway. This is the most common simplication and [many different options
-  exist](#team-restrictions) in this area
+  exist](#Team-Restrictions) in this area
 - knowledge of further **hidden information** known only to the engine (e.g. remaining sleep turns)
   beyond what is covered above but while still retaining some stochastic aspects without revealing
   the RNG seed is difficult to pin down, as exactly what information should be revealed is rather

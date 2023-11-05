@@ -18,6 +18,7 @@
   },
   "devDependencies": {
     "@pkmn/eslint-config": "^6.0.0",
+    "@untitaker/hyperlink": "^0.1.31",
     "eslint": "^8.52.0",
     "http-server": "^14.1.1",
     "stylelint": "^15.11.0",
@@ -29,7 +30,7 @@
     "compile": "tsc -p .",
     "build": "npm run compile && node build",
     "start": "npm run build && http-server public",
-    "test": "npm run build && npm run lint"
+    "test": "npm run build && npm run lint && hyperlink public --check-anchors"
   },
   "eslintConfig": {
     "extends": "@pkmn"
