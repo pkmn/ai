@@ -68,8 +68,8 @@ class References {
     const as = a.key.split(':');
     const bs = b.key.split(':');
 
-    const date = +as[1] - +bs[1];
-    if (!date) return date;
+    const date = +bs[1] - +as[1];
+    if (date) return date;
 
     return as[0].localeCompare(bs[0]);
   }
