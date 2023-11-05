@@ -3,16 +3,51 @@ import * as path from 'path';
 
 import * as bibtex from '@retorquere/bibtex-parser';
 
-// TODO: improve citation format
-function format(entry: bibtex.Entry) {
-  const title = `<em>${entry.fields.title[0]}</em>`;
-  const date = entry.fields.year[0];
-  const definition = `<a href="${entry.fields.url[0]}">${title}</a> — ${date}`;
-  const [author, d] = entry.key.split(':');
-  if (d !== date) throw new Error(`Date mismatch for ${entry.key}: '${d}' vs. ${date}`);
+const names = (e: bibtex.Entry) => {
+  const buf: string[] = [];
+  const authors = e.creators.author;
+  for (let i = 0; i < authors.length; i++) {
+    const author = authors[i];
+    const initials = author.firstName!.split(' ').map(n => n.endsWith('.') ? n : `${n[0]}.`);
+    const name = `${author.lastName}, ${initials.join(' ')}`;
+    buf.push(name);
+    if (authors.length - 1 === i) break;
+    buf.push(i === authors.length - 2 ? ' and ' : ', ');
+  }
+  return buf.join('');
+};
+
+const TYPES: {[type: string]: (entry: bibtex.Entry) => string } = {
+  'article': e => {
+    const volume = e.fields.number
+      ? `${e.fields.volume[0]}(${e.fields.number[0]})`
+      : e.fields.volume[0];
+    return (e.fields.pages
+      ? `${e.fields.journal[0]}, ${volume}:${e.fields.pages[0]}.`
+      : `${e.fields.journal[0]}, ${volume}.`);
+  },
+  'inproceedings': e => e.fields.pages
+    ? `${e.fields.booktitle[0]}, pages ${e.fields.pages[0]}.`
+    : `${e.fields.booktitle[0]}.`,
+  'mastersthesis': e => `Master's thesis, ${e.fields.school[0]}, ${e.fields.address[0]}.`,
+  'phdthesis': e => `PdH thesis, ${e.fields.school[0]}, ${e.fields.address[0]}.`,
+  'misc': e => e.fields.archiveprefix
+    ? `${e.fields.archiveprefix[0]}:${e.fields.eprint[0]}.` : '',
+};
+
+function format(e: bibtex.Entry) {
+  const [author, date] = e.key.split(':');
   const name = author.replaceAll('-', ',').replaceAll(/[A-Z]/g, m => ` ${m}`).trimStart();
   const id = `${name} ${date}`;
-  return `<dt id="${entry.key}">[${id}]</dt><dd>${definition}</dd>`;
+
+  const parts: string[] = [];
+  parts.push(`<em>${e.fields.title[0]}</em>. `);
+  parts.push(names(e));
+  parts.push(` (${e.fields.year[0]}) `);
+  parts.push(TYPES[e.type](e));
+
+  const definition = `<a href="${e.fields.url[0]}">${parts.join('')}</a>`;
+  return `<dt id="${e.key}">[${id}]</dt><dd>${definition}</dd>`;
 }
 
 export function page(dir: string) {
