@@ -90,9 +90,10 @@ export function page(bib: {[id: string]: bibtex.Entry}, dir: string) {
       : undefined;
     {
       const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
+      const id = project.paper ? ` id="${project.paper}"` : '';
       buf.push(project.site
-        ? `<h3><a href="${project.site}">${name}</a></h3>`
-        : `<h3>${name}</h3>`);
+        ? `<h3${id}><a href="${project.site}">${name}</a></h3>`
+        : `<h3${id}>${name}</h3>`);
     }
     buf.push('<table>');
     if (project.paper) {
