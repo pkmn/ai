@@ -36,7 +36,8 @@ class References {
 
   constructor() {
     for (const source of ['projects', 'research'] as const) {
-      const parsed = bibtex.parse(fs.readFileSync(path.join(STATIC, `${source}.bib`), 'utf8'));
+      const file = fs.readFileSync(path.join(STATIC, `${source}.bib`), 'utf8');
+      const parsed = bibtex.parse(file, {sentenceCase: false});
       if (parsed.errors.length) {
         throw new Error(`Error parsing ${source}.bib: ${parsed.errors.join(', ')}`);
       }
