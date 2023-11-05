@@ -25,7 +25,7 @@ also providing authoritative [rankings](https://pkmn.ai/leaderboard) of existing
 continually tested within a controlled environment.
 
 Researchers, developers, and interested onlookers are encouraged to join the **pkmn.ai** community
-on [Discord](https://pkmn.ai/cabal), and new agents are welcome to [apply](https://pkmn.ai/rules)
-for inclusion on the leaderboard.
+on [Discord](https://pkmn.ai/cabal), and all are welcome to [request](https://pkmn.ai/rules)
+the inclusion of new agents on the leaderboard.
 
 All of the code in this repository is distributed under the terms of the [MIT License](LICENSE).
