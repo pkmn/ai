@@ -69,3 +69,43 @@ alternatively, matchmake based on (a) most uncertainity of rating (want balanced
 dont want glicko because decay doesnt make sense
 
 **NEED BAYESELO WRAPPER**
+
+### `/leaderboard`
+
+Leaderboard/Tournament
+Open/Controlled
+Generation N
+
+History
+= games per month (links to github) = 7z each days worth of logs and tar the formats and months
+
+
+click bot = has same summary info from projects.md (need to share rendering logic… in server! = prerender snippet)
+show matchup vs other bots
+show matchups vs past versions
+links to all replays
+
+only show dominant version of each bot (might not be most recent)
+keep dominant and most recent in the pool, other bots retired
+
+append to csv file with a record from each game, can use this to compute bots rating after each day as well. looks a lot like a database…
+= technically an index, can also use to figure out next battle ID. can be restored from battles (pre write tool to do this)
+
+need to prerender rating graphs?? how much of tables can be prerendered?
+
+problem = replays need to be obfsucated into spectator replays because otherwise leaks teams (teams effectively get leaked anyway because k anonymity cant be enforced over so many battles) = can only share replays between “seasons” (and still want pruned version)
+- log @pkmn/sim version so recreatable
+
+want everyone to play at least a round with the same team, = need to then track who used what from teams DB. instead can just assure each team gets used twice then moved on (limits data and lets us upload spectator replays more quickly. need large team pool to remove possibility of dupes)
+
+OPTION = just always generate all tables statically (what happens if fuck up?) = uses disk space, but if need to precompute anyway also uses disk.
+- index needs updating, pages for both bots needs updating
+nginx does all serving (and set up aliases there), no need for polka
+
+  <script async src="https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+
+TESTING LEVELS
+
+1. server itself populates leaderboard from random procedure
+2. watchdog randomly decides W/L/T result, doesnt bother launching bots
+3. watchdog starts up RandomPlayer(N) for various N to get lots of quick battles
