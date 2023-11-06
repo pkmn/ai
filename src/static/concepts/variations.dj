@@ -9,7 +9,7 @@ online](#Offline-vs-Online) component with a extremely [high branching
 factor](https://en.wikipedia.org/wiki/Branching_factor). In order to simplify things and make the
 game more tractable to solve, various relaxations can be made.
 
-## "Offline" vs. "Online"
+### "Offline" vs. "Online"
 
 The game of Pokémon involves a **team-building** component and a **piloting** (or "playing", though
 this second name is somewhat confusing as it involves only playing one aspect of the broader game)
@@ -20,7 +20,7 @@ real-time/online. While the success of a Competitive Pokémon player depends on 
 components can also be treated as orthogonal without loss of generality and so developers most often
 focus on only the piloting part.
 
-## Information
+### Information
 
 Outside of more general modifications that can be made to almost any game to decrease the difficulty
 (e.g. increasing the amount of time available per decision), most of the remaining simplifications
@@ -58,7 +58,7 @@ have during team-building:
 Note that the options above are not necessarily always mutually exclusive - modifications can be
 combined to produce different potentially interesting gameplay variants.
 
-## Team Restrictions
+### Team Restrictions
 
 Some of the biggest reductions in [information
 set](https://en.wikipedia.org/wiki/Information_set_(game_theory)) size can be obtained through
