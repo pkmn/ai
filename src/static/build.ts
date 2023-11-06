@@ -10,12 +10,12 @@ import html from 'html-minifier';
 import katex from 'katex';
 import * as template from 'mustache';
 
-import * as projects from './static/projects';
-import * as research from './static/research';
+import * as projects from './projects';
+import * as research from './research';
 
 const css = new CSS();
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'src', 'static');
 

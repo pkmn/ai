@@ -7,7 +7,7 @@ import morgan from 'morgan';
 import polka from 'polka';
 import serve from 'serve-static';
 
-import {render, topbar} from '..';
+import {render, topbar} from '../static/build';
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');

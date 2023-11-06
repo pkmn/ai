@@ -34,7 +34,7 @@
     "lint": "eslint src --cache --ext ts && stylelint src/**/*.css",
     "fix": "eslint src --fix --ext ts && stylelint --fix src/**/*.css",
     "compile": "tsc -p .",
-    "build": "npm run compile && node build",
+    "build": "npm run compile && node build/static/build",
     "start": "npm run build && node build/server",
     "test": "npm run build && npm run lint && hyperlink public --check-anchors"
   },
