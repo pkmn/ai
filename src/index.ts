@@ -7,6 +7,7 @@ import * as djot from '@djot/djot';
 import CSS from 'clean-css';
 import favicons from 'favicons';
 import html from 'html-minifier';
+import katex from 'katex';
 import * as template from 'mustache';
 
 import * as projects from './static/projects';
@@ -31,7 +32,13 @@ interface Page {
   script?: string;
 }
 
-const render = (file: string) => djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')));
+const render = (file: string) =>
+  djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')), {
+    overrides: {
+      inline_math: node => katex.renderToString(node.text, {output: 'mathml'}),
+      display_math: node => katex.renderToString(node.text, {output: 'mathml'}),
+    },
+  });
 
 const build = (name: string, page: Page) => {
   fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});

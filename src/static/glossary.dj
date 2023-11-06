@@ -37,7 +37,7 @@ tellus, sagittis interdum nisl egestas a. Nulla eu tortor quis diam efficitur eu
 diam. Phasellus consequat ligula in risus imperdiet, sit amet volutpat nibh aliquet. TODO also
 driver, binding
 
-: RandomPlayer
+: $`RandomPlayer`
 
   Phasellus sed aliquet mi. Donec sed purus convallis sapien aliquam laoreet. Mauris dignissim
 tellus id nulla hendrerit, at condimentum elit faucibus. Proin euismod facilisis massa a
