@@ -47,8 +47,8 @@ app.get('/leaderboard', (_, res) => {
 
 app.listen(PORT, () => {
   if (process.env.NODE_ENV !== 'development') return;
-  console.log('\x1b[33mAvailable on:\x1b[0m');
 
+  console.log('\x1b[33mAvailable on:\x1b[0m');
   const interfaces = os.networkInterfaces();
   for (const dev in interfaces) {
     for (const details of interfaces[dev]!) {
