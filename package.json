@@ -33,6 +33,7 @@
   "scripts": {
     "lint": "eslint src --cache --ext ts && stylelint src/**/*.css",
     "fix": "eslint src --fix --ext ts && stylelint --fix src/**/*.css",
+    "clean": "rm -rf public build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
     "build": "npm run compile && node build/static/build",
     "start": "npm run build && node build/server",

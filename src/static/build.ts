@@ -55,7 +55,9 @@ const toHTML = (file: string) =>
   });
 
 export const build = async () => {
-  const icons = await favicons(path.join(PUBLIC, 'favicon.svg'), {path: PUBLIC});
+  fs.mkdirSync(path.join(PUBLIC), {recursive: true});
+
+  const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
   for (const icon of icons.images) {
     if (/(yandex|startup-image)/.test(icon.name)) continue;
     fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
@@ -63,6 +65,9 @@ export const build = async () => {
 
   const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
   fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+
+  fs.copyFileSync(path.join(STATIC, 'favicon.svg'), path.join(PUBLIC, 'favicon.svg'));
+  fs.copyFileSync(path.join(STATIC, 'github.svg'), path.join(PUBLIC, 'github.svg'));
 
   let first = true;
   fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
