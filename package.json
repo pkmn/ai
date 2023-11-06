@@ -36,7 +36,8 @@
     "compile": "tsc -p .",
     "build": "npm run compile && node build/static/build",
     "start": "npm run build && node build/server",
-    "test": "npm run build && npm run lint && hyperlink public --check-anchors"
+    "test": "npm run build && npm run lint && hyperlink public --check-anchors",
+    "deploy": "ssh deploy@pkmn.ai \"/home/pkmn/ai/deploy\""
   },
   "eslintConfig": {
     "extends": "@pkmn"

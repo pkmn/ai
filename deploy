@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Pull down latest code
+git pull origin main
+# Update dependencies in case they've changed
+npm install --production
+# Ensure any changes to unit files in config/ get picked up
+systemctl daemon-reload
+# Build and run the server
+systemctl restart pkmn.ai.server
+# Reload NGINX to pick up any changes to
+systemctl reload nginx

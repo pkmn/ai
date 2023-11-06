@@ -1,3 +1,5 @@
+# ln -s pkmn/ai/config/ratings.timer /etc/systemd/system/pkmn.ai.ratings.timer
+
 [Unit]
 Description=Daily generation of ratings history graphs
 

@@ -1,3 +1,5 @@
+# ln -s pkmn/ai/config/backup.service /etc/systemd/system/pkmn.ai.backup.service
+
 [Unit]
 Description=Archives, uploads, and cleans up old battle logs
 Requires=TODO

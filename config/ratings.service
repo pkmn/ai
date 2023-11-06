@@ -1,3 +1,5 @@
+# ln -s pkmn/ai/config/ratings.service /etc/systemd/system/pkmn.ai.ratings.service
+
 [Unit]
 Description=Generates ratings history graphs
 Requires=TODO
