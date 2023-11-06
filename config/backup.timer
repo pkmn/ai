@@ -1,4 +1,4 @@
-# ln -s pkmn/ai/config/backup.timer /etc/systemd/system/pkmn.ai.backup.timer
+# ln -s /home/pkmn/ai/config/backup.timer /etc/systemd/system/pkmn.ai.backup.timer
 
 [Unit]
 Description=Monthly archive, upload, and cleanup of old battle logs

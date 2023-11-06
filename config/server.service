@@ -1,4 +1,4 @@
-# ln -s pkmn/ai/config/server.service /etc/systemd/system/pkmn.ai.server.server
+# ln -s /home/pkmn/ai/config/server.service /etc/systemd/system/pkmn.ai.server.server
 
 [Unit]
 Description=pkmn.ai server

@@ -1,4 +1,4 @@
-# ln -s pkmn/ai/config/archive.service /etc/systemd/system/pkmn.ai.archive.service
+# ln -s /home/pkmn/ai/config/archive.service /etc/systemd/system/pkmn.ai.archive.service
 
 [Unit]
 Description=Archive and cleanup old battle logs and tables
