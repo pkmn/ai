@@ -212,6 +212,10 @@ footer img {
   font-weight: bold;
 }
 
+#glossary dd {
+  margin: 0;
+}
+
 /* Mobile - Medium */
 @media(width >= 375px) {
   :root {
@@ -253,7 +257,7 @@ footer img {
     display: block;
   }
 
-  #research  dd {
+  #research dd {
     width: 80%;
   }
 }
