@@ -22,7 +22,7 @@ const STATIC = path.join(ROOT, 'src', 'static');
 const LAYOUT = fs.readFileSync(path.join(STATIC, 'layout.html.tmpl'), 'utf8');
 const edit = 'https://github.com/pkmn/ai/edit/main/src';
 
-interface Page {
+export interface Page {
   id?: string;
   title: string;
   topbar?: string;
@@ -32,7 +32,21 @@ interface Page {
   script?: string;
 }
 
-const render = (file: string) =>
+export const render = (name: string, page: Page) => {
+  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page});
+  const minified = html.minify(rendered, {minifyCSS: true, minifyJS: true});
+  return minified;
+};
+
+export const write = (name: string, page: Page) => {
+  fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
+  fs.writeFileSync(path.join(PUBLIC, name, 'index.html'), render(name, page));
+};
+
+export const topbar =
+  '<div class="topbar">Under Construction: planned completion date January 2024</div>';
+
+const toHTML = (file: string) =>
   djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')), {
     overrides: {
       inline_math: node => katex.renderToString(node.text, {output: 'mathml'}),
@@ -40,71 +54,67 @@ const render = (file: string) =>
     },
   });
 
-const build = (name: string, page: Page) => {
-  fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
-  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page});
-  const minified = html.minify(rendered, {minifyCSS: true, minifyJS: true});
-  fs.writeFileSync(path.join(PUBLIC, name, 'index.html'), minified);
+export const build = async () => {
+  const icons = await favicons(path.join(PUBLIC, 'favicon.svg'), {path: PUBLIC});
+  for (const icon of icons.images) {
+    if (/(yandex|startup-image)/.test(icon.name)) continue;
+    fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
+  }
+
+  const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
+  fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+
+  let first = true;
+  fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
+    id: 'home',
+    title: 'pkmn.ai',
+    content: `<section>${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
+      if (first) {
+        first = false;
+        return m;
+      }
+      return '<a class="default"';
+    })}</section>`,
+    edit: `${edit}/static/index.dj`,
+  }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
+
+  write('projects', {...projects.page(STATIC), topbar});
+  write('research', research.page(STATIC));
+
+  write('concepts', {
+    topbar,
+    title: 'Concepts | pkmn.ai',
+    header: '<h2>Concepts</h2>',
+    content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
+    edit: `${edit}/static/concepts/index.dj`,
+
+  });
+  for (const title of ['Complexity', 'Engines', 'Variations']) {
+    const page = title.toLowerCase();
+    write(`concepts/${page}`, {
+      topbar,
+      title: `Concepts — ${title} | pkmn.ai`,
+      header: `<h2>${title}</h2>`,
+      content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
+      edit: `${edit}/static/concepts/${page}.dj`,
+    });
+  }
+
+  for (const title of ['Glossary', 'Rules']) {
+    const page = title.toLowerCase();
+    write(page, {
+      topbar,
+      title: `${title} | pkmn.ai`,
+      header: `<h2>${title}</h2>`,
+      content: `<section>${toHTML(path.join(STATIC, `${page}.dj`))}</section>`,
+      edit: `${edit}/static/${page}.dj`,
+    });
+  }
 };
 
 if (require.main === module) {
   (async () => {
-    const icons = await favicons(path.join(PUBLIC, 'favicon.svg'), {path: PUBLIC});
-    for (const icon of icons.images) {
-      if (/(yandex|startup-image)/.test(icon.name)) continue;
-      fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
-    }
-
-    const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
-    fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
-
-    let first = true;
-    fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
-      id: 'home',
-      title: 'pkmn.ai',
-      content: `<section>${render(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
-        if (first) {
-          first = false;
-          return m;
-        }
-        return '<a class="default"';
-      })}</section>`,
-      edit: `${edit}/static/index.dj`,
-    }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
-
-    const topbar =
-      '<div class="topbar">Under Construction: planned completion date January 2024</div>';
-    build('projects', {...projects.page(STATIC), topbar});
-    build('research', research.page(STATIC));
-
-    build('concepts', {
-      topbar,
-      title: 'Concepts | pkmn.ai',
-      header: '<h2>Concepts</h2>',
-      content: `<section>${render(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
-      edit: `${edit}/static/concepts/index.dj`,
-    });
-    for (const title of ['Complexity', 'Engines', 'Variations']) {
-      const page = title.toLowerCase();
-      build(`concepts/${page}`, {
-        topbar,
-        title: `Concepts — ${title} | pkmn.ai`,
-        header: `<h2>${title}</h2>`,
-        content: `<section>${render(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
-        edit: `${edit}/static/concepts/${page}.dj`,
-      });
-    }
-
-    for (const title of ['Glossary', 'Rules']) {
-      const page = title.toLowerCase();
-      build(page, {
-        topbar,
-        title: `${title} | pkmn.ai`,
-        header: `<h2>${title}</h2>`,
-        content: `<section>${render(path.join(STATIC, `${page}.dj`))}</section>`,
-        edit: `${edit}/static/${page}.dj`,
-      });
-    }
+    await build();
   })().catch(err => {
     console.error(err);
     process.exit(1);

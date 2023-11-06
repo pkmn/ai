@@ -7,13 +7,18 @@
     "@retorquere/bibtex-parser": "^7.0.7",
     "@types/html-minifier": "^4.0.3",
     "@types/katex": "^0.16.5",
+    "@types/morgan": "^1.9.7",
     "@types/mustache": "^4.2.4",
     "@types/node": "^20.8.9",
+    "@types/polka": "^0.5.6",
     "clean-css": "^5.3.2",
     "favicons": "^7.1.4",
     "html-minifier": "^4.0.0",
     "katex": "^0.16.9",
+    "morgan": "^1.10.0",
     "mustache": "^4.2.0",
+    "polka": "^0.5.2",
+    "serve-static": "^1.15.0",
     "source-map-support": "^0.5.21",
     "typescript": "^5.2.2",
     "yaml": "^2.3.3"
@@ -22,7 +27,6 @@
     "@pkmn/eslint-config": "^6.0.0",
     "@untitaker/hyperlink": "^0.1.31",
     "eslint": "^8.52.0",
-    "http-server": "^14.1.1",
     "stylelint": "^15.11.0",
     "stylelint-config-standard": "^34.0.0"
   },
@@ -31,7 +35,7 @@
     "fix": "eslint src --fix --ext ts && stylelint --fix src/**/*.css",
     "compile": "tsc -p .",
     "build": "npm run compile && node build",
-    "start": "npm run build && http-server public",
+    "start": "npm run build && node build/server",
     "test": "npm run build && npm run lint && hyperlink public --check-anchors"
   },
   "eslintConfig": {
