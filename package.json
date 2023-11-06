@@ -37,6 +37,9 @@
     "build": "npm run compile && node build/static/build",
     "start": "npm run build && node build/server",
     "test": "npm run build && npm run lint && hyperlink public --check-anchors",
+    "tools:archive": "npm run compile && node build/tools/archive",
+    "tools:backup": "npm run compile && node build/tools/backup",
+    "tools:ratings": "npm run compile && node build/tools/ratings",
     "deploy": "ssh deploy@pkmn.ai \"/home/pkmn/ai/deploy\""
   },
   "eslintConfig": {

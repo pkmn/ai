@@ -7,9 +7,8 @@ After=TODO
 
 [Service]
 Type=oneshot
-ExecStart=TODO
-Environment=TODOKEY=TODOvalue
-WorkingDirectory=TODO
+ExecStart=/usr/bin/npm run tools:ratings
+WorkingDirectory=/home/pkmn/ai
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=pkmn.ai.ratings
