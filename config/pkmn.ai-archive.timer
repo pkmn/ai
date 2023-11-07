@@ -1,4 +1,4 @@
-# ln -s /home/pkmn/ai/config/archive.timer /etc/systemd/system/pkmn.ai.archive.timer
+# systemctl enable /home/pkmn/ai/config/pkmn.ai-archive.timer
 
 [Unit]
 Description=Daily archive and cleanup old battle logs and tables

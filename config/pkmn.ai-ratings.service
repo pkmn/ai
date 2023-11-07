@@ -1,4 +1,4 @@
-# ln -s /home/pkmn/ai/config/ratings.service /etc/systemd/system/pkmn.ai.ratings.service
+# systemctl enable /home/pkmn/ai/config/pkmn.ai-ratings.service
 
 [Unit]
 Description=Generates ratings history graphs

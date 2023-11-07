@@ -1,4 +1,4 @@
-# ln -s /home/pkmn/ai/config/archive.service /etc/systemd/system/pkmn.ai.archive.service
+# systemctl enable /home/pkmn/ai/config/pkmn.ai-archive.service
 
 [Unit]
 Description=Archive and cleanup old battle logs and tables
@@ -9,7 +9,7 @@ ExecStart=/usr/bin/npm run tools:archive
 WorkingDirectory=/home/pkmn/ai
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=pkmn.ai.archive
+SyslogIdentifier=pkmn.ai-archive
 User=pkmn
 Group=pkmn
 

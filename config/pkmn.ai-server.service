@@ -1,4 +1,4 @@
-# ln -s /home/pkmn/ai/config/server.service /etc/systemd/system/pkmn.ai.server.server
+# systemctl enable /home/pkmn/ai/config/pkmn.ai-server.service
 
 [Unit]
 Description=pkmn.ai server

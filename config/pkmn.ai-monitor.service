@@ -1,4 +1,4 @@
-# ln -s pkmn/ai/config/monitor.service /lib/systemd/user/pkmn.ai.monitor.service
+# systemctl --user pkmn/ai/config/pkmn.ai.monitor.service
 
 [Unit]
 Description=pkmn.ai monitor service
