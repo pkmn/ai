@@ -32,7 +32,7 @@ const TYPES: {[type: string]: (entry: bibtex.Entry) => string } = {
   'mastersthesis': e => `Master's thesis, ${e.fields.school[0]}, ${e.fields.address[0]}.`,
   'phdthesis': e => `PhD thesis, ${e.fields.school[0]}, ${e.fields.address[0]}.`,
   'misc': e => e.fields.archiveprefix
-    ? `${e.fields.archiveprefix[0]}:${e.fields.eprint[0]}.` : '',
+    ? `${e.fields.archiveprefix[0]}:${e.fields.eprint[0]} [${e.fields.primaryclass[0]}].` : '',
 };
 
 function format(e: bibtex.Entry) {
