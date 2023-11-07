@@ -29,11 +29,18 @@ if (process.env.NODE_ENV === 'development') {
     wait = setTimeout(() => {
       wait = false;
     }, 1000);
+
     console.log('\x1b[2mRebuilding static...\x1b[0m');
     const begin = process.hrtime.bigint();
-    execFileSync('npm', ['run', 'build'], {encoding: 'utf8'});
-    const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
-    console.log(`\x1b[2mRebuilt static in ${duration} s\x1b[0m`);
+    try {
+      execFileSync('npm', ['run', 'build'], {encoding: 'utf8', stdio: 'pipe'});
+      const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
+      console.log(`\x1b[2mRebuilt static in ${duration} s\x1b[0m`);
+    } catch (err: any) {
+      const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
+      console.error(`\x1b[31m${err.message.split('\n').slice(1, -1).join('\n')}\x1b[0m`);
+      console.log(`\x1b[2mFailed build after ${duration} s\x1b[0m`);
+    }
   });
 }
 
