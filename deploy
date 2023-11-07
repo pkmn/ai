@@ -1,12 +1,19 @@
 #!/bin/bash
 
+# Save our current commit to use for comparison later
+HEAD=$(git rev-parse HEAD)
+
 # Pull down latest code
 git pull origin main
-# Update dependencies in case they've changed
-npm install --production
-# Ensure any changes to unit files in config/ get picked up
-systemctl daemon-reload
-# Build and run the server
+
+# Update dependencies if package.json has changed
+git diff --quiet $HEAD package.json >/dev/null || npm install --production
+
+# Reload unit files if any changes have been made to them
+git diff --quiet $HEAD config/*.{service,timer} || sudo systemctl daemon-reload
+
+# Restart the server which will trigger a rebuild
 systemctl restart pkmn.ai.server
-# Reload NGINX to pick up any changes to
-systemctl reload nginx
+
+# Reload NGINX if the config has changed
+git diff --quiet $HEAD config/nginx.conf || sudo systemctl daemon-reload
