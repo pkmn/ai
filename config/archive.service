@@ -10,8 +10,8 @@ WorkingDirectory=/home/pkmn/ai
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=pkmn.ai.archive
-User=www-data
-Group=www-data
+User=pkmn
+Group=pkmn
 
 [Install]
 WantedBy=multi-user.target
