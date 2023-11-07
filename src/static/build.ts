@@ -109,7 +109,6 @@ export const build = async () => {
     header: '<h2>Concepts</h2>',
     content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
     edit: `${EDIT}/static/concepts/index.dj`,
-
   });
   for (const title of ['Complexity', 'Engines', 'Variants']) {
     const page = title.toLowerCase();

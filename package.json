@@ -26,6 +26,7 @@
     "@pkmn/eslint-config": "^6.0.0",
     "@untitaker/hyperlink": "^0.1.31",
     "chokidar": "^3.5.3",
+    "esbuild": "^0.19.5",
     "eslint": "^8.52.0",
     "morgan": "^1.10.0",
     "stylelint": "^15.11.0",
@@ -46,7 +47,13 @@
     "deploy": "ssh pkmn@pkmn.ai \"cd /home/pkmn/ai && ./deploy\""
   },
   "eslintConfig": {
-    "extends": "@pkmn"
+    "extends": "@pkmn",
+    "overrides": [{
+      "files": ["src/server/index.ts"],
+      "rules": {
+        "@typescript-eslint/no-var-requires": "off"
+      }
+    }]
   },
   "stylelint": {
     "extends": [
