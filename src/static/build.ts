@@ -24,7 +24,9 @@ const STATIC = path.join(ROOT, 'src', 'static');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-'));
 process.on('exit', () => fs.rmSync(TMP, {recursive: true, force: true}));
 
+export const list = (dir: string) => fs.readdirSync(dir);
 export const mkdir = (dir: string) => fs.mkdirSync(dir, {recursive: true});
+export const remove = (file: string) => fs.rmSync(file, {recursive: true, force: true});
 export const exists = (file: string) => fs.existsSync(file);
 export const read = (file: string) => fs.readFileSync(file, 'utf8');
 export const write = (file: string, data: string | NodeJS.ArrayBufferView) => {
@@ -33,7 +35,7 @@ export const write = (file: string, data: string | NodeJS.ArrayBufferView) => {
     fs.writeFileSync(tmp, data, {flag: 'wx'});
     fs.renameSync(tmp, file);
   } finally {
-    fs.rmSync(tmp, {force: true});
+    remove(tmp);
   }
 };
 export const copy = (src: string, dst: string) => {
@@ -42,9 +44,10 @@ export const copy = (src: string, dst: string) => {
     fs.copyFileSync(src, tmp, fs.constants.COPYFILE_EXCL);
     fs.renameSync(tmp, dst);
   } finally {
-    fs.rmSync(tmp, {force: true});
+    remove(tmp);
   }
 };
+
 const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
 const EDIT = 'https://github.com/pkmn/ai/edit/main/src';
 
@@ -100,11 +103,17 @@ const toHTML = (file: string) =>
 const build = async (rebuild?: boolean) => {
   mkdir(path.join(PUBLIC));
 
+  let actual = list(PUBLIC);
+  let expected = new Set([
+    'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard',
+    'index.css', 'favicon.svg', 'github.svg', 'index.html', 'projects.bib', 'research.bib',
+  ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
     for (const icon of icons.images) {
       if (/(yandex|apple)/.test(icon.name)) continue;
       write(path.join(PUBLIC, icon.name), icon.contents);
+      expected.add(icon.name);
     }
   }
 
@@ -139,24 +148,6 @@ const build = async (rebuild?: boolean) => {
   make('projects', {...projects.page(STATIC), topbar});
   make('research', research.page(STATIC));
 
-  make('concepts', {
-    topbar,
-    title: 'Concepts | pkmn.ai',
-    header: '<h2>Concepts</h2>',
-    content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
-    edit: `${EDIT}/static/concepts/index.dj`,
-  });
-  for (const title of ['Complexity', 'Engines', 'Variants']) {
-    const page = title.toLowerCase();
-    make(`concepts/${page}`, {
-      topbar,
-      title: `Concepts — ${title} | pkmn.ai`,
-      header: `<h2>${title}</h2>`,
-      content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
-      edit: `${EDIT}/static/concepts/${page}.dj`,
-    });
-  }
-
   for (const title of ['Glossary', 'Rules']) {
     const page = title.toLowerCase();
     make(page, {
@@ -166,6 +157,39 @@ const build = async (rebuild?: boolean) => {
       content: `<section>${toHTML(path.join(STATIC, `${page}.dj`))}</section>`,
       edit: `${EDIT}/static/${page}.dj`,
     });
+  }
+
+  make('concepts', {
+    topbar,
+    title: 'Concepts | pkmn.ai',
+    header: '<h2>Concepts</h2>',
+    content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
+    edit: `${EDIT}/static/concepts/index.dj`,
+  });
+
+  if (!rebuild) {
+    for (const file of actual) {
+      if (!expected.has(file)) remove(path.join(PUBLIC, file));
+    }
+  }
+
+  actual = list(path.join(PUBLIC, 'concepts'));
+  expected = new Set(['index.html']);
+
+  for (const title of ['Complexity', 'Engines', 'Variants']) {
+    const page = title.toLowerCase();
+    expected.add(page);
+    make(`concepts/${page}`, {
+      topbar,
+      title: `Concepts — ${title} | pkmn.ai`,
+      header: `<h2>${title}</h2>`,
+      content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
+      edit: `${EDIT}/static/concepts/${page}.dj`,
+    });
+  }
+
+  for (const file of actual) {
+    if (!expected.has(file)) remove(path.join(PUBLIC, 'concepts', file));
   }
 };
 
