@@ -32,9 +32,26 @@ export interface Page {
   script?: string;
 }
 
+const OPTIONS = {
+  collapseBooleanAttributes: true,
+  collapseWhitespace: true,
+  conservativeCollapse: true,
+  decodeEntities: true,
+  minifyCSS: true,
+  quoteCharacter: '"',
+  removeEmptyAttributes: true,
+  removeEmptyElements: true,
+  removeRedundantAttributes: true,
+  removeScriptTypeAttributes: true,
+  removeStyleLinkTypeAttributes: true,
+  minifyJS: true,
+  sortAttributes: true,
+  sortClassName: true,
+};
+
 export const render = (name: string, page: Page) => {
   const rendered = template.render(LAYOUT, {id: path.basename(name), ...page});
-  const minified = html.minify(rendered, {minifyCSS: true, minifyJS: true});
+  const minified = html.minify(rendered, OPTIONS);
   return minified;
 };
 
@@ -81,7 +98,7 @@ export const build = async () => {
       return '<a class="default"';
     })}</section>`,
     edit: `${edit}/static/index.dj`,
-  }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai')));
+  }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
   write('projects', {...projects.page(STATIC), topbar});
   write('research', research.page(STATIC));
