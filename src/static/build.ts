@@ -19,7 +19,15 @@ const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'src', 'static');
 
-const LAYOUT = fs.readFileSync(path.join(STATIC, 'layout.html.tmpl'), 'utf8');
+export const mkdir = (dir: string) => fs.mkdirSync(dir, {recursive: true});
+export const exists = (file: string) => fs.existsSync(file);
+export const read = (file: string) => fs.readFileSync(file, 'utf8');
+export const write = (file: string, data: string | NodeJS.ArrayBufferView) =>
+  fs.writeFileSync(file, data);
+export const copy = (src: string, dst: string) =>
+  fs.copyFileSync(src, dst);
+
+const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
 const EDIT = 'https://github.com/pkmn/ai/edit/main/src';
 
 export interface Page {
@@ -55,18 +63,16 @@ export const render = (name: string, page: Page) => {
   return minified;
 };
 
-const mkdir = (dir: string) => fs.mkdirSync(dir, {recursive: true});
-
-const write = (name: string, page: Page) => {
-  mkdir(path.join(PUBLIC));
-  fs.writeFileSync(path.join(PUBLIC, name, 'index.html'), render(name, page));
+const make = (name: string, page: Page) => {
+  mkdir(path.join(PUBLIC, name));
+  write(path.join(PUBLIC, name, 'index.html'), render(name, page));
 };
 
 export const topbar =
   '<div class="topbar">Under Construction: planned completion date January 2024</div>';
 
 const toHTML = (file: string) =>
-  djot.renderHTML(djot.parse(fs.readFileSync(file, 'utf8')), {
+  djot.renderHTML(djot.parse(read(file)), {
     overrides: {
       inline_math: node => katex.renderToString(node.text, {output: 'mathml'}),
       display_math: node => katex.renderToString(node.text, {output: 'mathml'}),
@@ -80,26 +86,26 @@ const build = async (rebuild?: boolean) => {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
     for (const icon of icons.images) {
       if (/(yandex|apple)/.test(icon.name)) continue;
-      fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
+      write(path.join(PUBLIC, icon.name), icon.contents);
     }
   }
 
-  const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
-  fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+  const index = read(path.join(STATIC, 'index.css'));
+  write(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
 
   for (const placeholder of ['chat', 'leaderboard']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
-    if (!fs.existsSync(file)) {
+    if (!exists(file)) {
       mkdir(path.dirname(file));
-      fs.writeFileSync(file, '');
+      write(file, '');
     }
   }
 
-  fs.copyFileSync(path.join(STATIC, 'favicon.svg'), path.join(PUBLIC, 'favicon.svg'));
-  fs.copyFileSync(path.join(STATIC, 'github.svg'), path.join(PUBLIC, 'github.svg'));
+  copy(path.join(STATIC, 'favicon.svg'), path.join(PUBLIC, 'favicon.svg'));
+  copy(path.join(STATIC, 'github.svg'), path.join(PUBLIC, 'github.svg'));
 
   let first = true;
-  fs.writeFileSync(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
+  write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
     content: `<section>${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
@@ -112,10 +118,10 @@ const build = async (rebuild?: boolean) => {
     edit: `${EDIT}/static/index.dj`,
   }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
-  write('projects', {...projects.page(STATIC), topbar});
-  write('research', research.page(STATIC));
+  make('projects', {...projects.page(STATIC), topbar});
+  make('research', research.page(STATIC));
 
-  write('concepts', {
+  make('concepts', {
     topbar,
     title: 'Concepts | pkmn.ai',
     header: '<h2>Concepts</h2>',
@@ -124,7 +130,7 @@ const build = async (rebuild?: boolean) => {
   });
   for (const title of ['Complexity', 'Engines', 'Variants']) {
     const page = title.toLowerCase();
-    write(`concepts/${page}`, {
+    make(`concepts/${page}`, {
       topbar,
       title: `Concepts — ${title} | pkmn.ai`,
       header: `<h2>${title}</h2>`,
@@ -135,7 +141,7 @@ const build = async (rebuild?: boolean) => {
 
   for (const title of ['Glossary', 'Rules']) {
     const page = title.toLowerCase();
-    write(page, {
+    make(page, {
       topbar,
       title: `${title} | pkmn.ai`,
       header: `<h2>${title}</h2>`,
