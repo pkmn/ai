@@ -1,5 +1,7 @@
 import 'source-map-support/register';
 
+import {execFileSync} from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -11,6 +13,7 @@ import {render, topbar} from '../static/build';
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
+const STATIC = path.join(ROOT, 'src', 'static');
 
 const PORT = process.env.PORT || 1234;
 
@@ -19,6 +22,19 @@ const app = polka();
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
   app.use(serve(PUBLIC));
+
+  let wait: NodeJS.Timeout | false = false;
+  fs.watch(STATIC, () => {
+    if (wait) return;
+    wait = setTimeout(() => {
+      wait = false;
+    }, 1000);
+    console.log('\x1b[2mRebuilding static...\x1b[0m');
+    const begin = process.hrtime.bigint();
+    execFileSync('npm', ['run', 'build'], {encoding: 'utf8'});
+    const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
+    console.log(`\x1b[2mRebuilt static in ${duration} s\x1b[0m`);
+  });
 }
 
 // TODO: this should be pre-rendered
