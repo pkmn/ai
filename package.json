@@ -40,6 +40,7 @@
     "compile": "tsc -p .",
     "build": "npm run compile && node build/static/build",
     "start": "npm run build && node build/server",
+    "monitor": "npm run build && false",
     "test": "npm run build && npm run lint && hyperlink public --check-anchors",
     "tools:archive": "npm run compile && node build/tools/archive",
     "tools:backup": "npm run compile && node build/tools/backup",

@@ -2,8 +2,6 @@
 
 [Unit]
 Description=Generates ratings history graphs
-Requires=TODO
-After=TODO
 
 [Service]
 Type=oneshot

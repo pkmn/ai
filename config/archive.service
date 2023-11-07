@@ -2,8 +2,6 @@
 
 [Unit]
 Description=Archive and cleanup old battle logs and tables
-Requires=TODO
-After=TODO
 
 [Service]
 Type=oneshot

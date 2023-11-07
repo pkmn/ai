@@ -1,4 +1,4 @@
-# ln -s /home/pkmn/ai/config/monitor.service /etc/systemd/system/pkmn.ai.monitor.service
+# ln -s pkmn/ai/config/monitor.service /lib/systemd/user/pkmn.ai.monitor.service
 
 [Unit]
 Description=pkmn.ai monitor service
@@ -9,13 +9,11 @@ After=network.target
 Type=simple
 Restart=always
 RestartSec=5s
-ExecStart=TODO
-WorkingDirectory=TODO
+ExecStart=npm run monitor
+StartLimitInterval=0
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=pkmn.ai.monitor
-User=TODO
-Group=TODO
 
 [Install]
 WantedBy=multi-user.target
