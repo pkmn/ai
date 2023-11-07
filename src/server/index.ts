@@ -1,10 +1,10 @@
 import 'source-map-support/register';
 
 import {execFileSync} from 'child_process';
-import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import chokidar from 'chokidar';
 import morgan from 'morgan';
 import polka from 'polka';
 import serve from 'serve-static';
@@ -23,13 +23,7 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
   app.use(serve(PUBLIC));
 
-  let wait: NodeJS.Timeout | false = false;
-  fs.watch(STATIC, () => {
-    if (wait) return;
-    wait = setTimeout(() => {
-      wait = false;
-    }, 1000);
-
+  chokidar.watch(STATIC).on('change', () => {
     console.log('\x1b[2mRebuilding static...\x1b[0m');
     const begin = process.hrtime.bigint();
     try {

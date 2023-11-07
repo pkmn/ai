@@ -15,7 +15,6 @@
     "favicons": "^7.1.4",
     "html-minifier": "^4.0.0",
     "katex": "^0.16.9",
-    "morgan": "^1.10.0",
     "mustache": "^4.2.0",
     "polka": "^0.5.2",
     "serve-static": "^1.15.0",
@@ -26,7 +25,9 @@
   "devDependencies": {
     "@pkmn/eslint-config": "^6.0.0",
     "@untitaker/hyperlink": "^0.1.31",
+    "chokidar": "^3.5.3",
     "eslint": "^8.52.0",
+    "morgan": "^1.10.0",
     "stylelint": "^15.11.0",
     "stylelint-config-clean-order": "^5.2.0",
     "stylelint-config-standard": "^34.0.0"
