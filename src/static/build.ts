@@ -55,7 +55,7 @@ export const render = (name: string, page: Page) => {
   return minified;
 };
 
-export const write = (name: string, page: Page) => {
+const write = (name: string, page: Page) => {
   fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
   fs.writeFileSync(path.join(PUBLIC, name, 'index.html'), render(name, page));
 };
@@ -71,13 +71,15 @@ const toHTML = (file: string) =>
     },
   });
 
-export const build = async () => {
+const build = async (rebuild?: boolean) => {
   fs.mkdirSync(path.join(PUBLIC), {recursive: true});
 
-  const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
-  for (const icon of icons.images) {
-    if (/(yandex|apple)/.test(icon.name)) continue;
-    fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
+  if (!rebuild) {
+    const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
+    for (const icon of icons.images) {
+      if (/(yandex|apple)/.test(icon.name)) continue;
+      fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
+    }
   }
 
   const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
@@ -135,7 +137,7 @@ export const build = async () => {
 
 if (require.main === module) {
   (async () => {
-    await build();
+    await build(process.argv[2] === '--rebuild');
   })().catch(err => {
     console.error(err);
     process.exit(1);

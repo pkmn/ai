@@ -37,7 +37,7 @@ if (process.env.NODE_ENV === 'development') {
         format: 'cjs',
       });
       const compile = `${(Math.round(Number(process.hrtime.bigint() - begin) / 1e6))} ms`;
-      execFileSync('node', ['build/static/build.js'], {
+      execFileSync('node', ['build/static/build.js', '--rebuild'], {
         encoding: 'utf8',
         stdio: 'pipe',
         cwd: ROOT,
