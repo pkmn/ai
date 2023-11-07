@@ -42,7 +42,7 @@
     "tools:archive": "npm run compile && node build/tools/archive",
     "tools:backup": "npm run compile && node build/tools/backup",
     "tools:ratings": "npm run compile && node build/tools/ratings",
-    "deploy": "ssh deploy@pkmn.ai \"/home/pkmn/ai/deploy\""
+    "deploy": "ssh pkmn@pkmn.ai \"/home/pkmn/ai/deploy\""
   },
   "eslintConfig": {
     "extends": "@pkmn"
