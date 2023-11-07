@@ -76,7 +76,7 @@ export const build = async () => {
 
   const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
   for (const icon of icons.images) {
-    if (/(yandex|startup-image)/.test(icon.name)) continue;
+    if (/(yandex|apple)/.test(icon.name)) continue;
     fs.writeFileSync(path.join(PUBLIC, icon.name), icon.contents);
   }
 
