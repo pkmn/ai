@@ -20,7 +20,7 @@ const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'src', 'static');
 
 const LAYOUT = fs.readFileSync(path.join(STATIC, 'layout.html.tmpl'), 'utf8');
-const edit = 'https://github.com/pkmn/ai/edit/main/src';
+const EDIT = 'https://github.com/pkmn/ai/edit/main/src';
 
 export interface Page {
   id?: string;
@@ -97,7 +97,7 @@ export const build = async () => {
       }
       return '<a class="default"';
     })}</section>`,
-    edit: `${edit}/static/index.dj`,
+    edit: `${EDIT}/static/index.dj`,
   }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
   write('projects', {...projects.page(STATIC), topbar});
@@ -108,7 +108,7 @@ export const build = async () => {
     title: 'Concepts | pkmn.ai',
     header: '<h2>Concepts</h2>',
     content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
-    edit: `${edit}/static/concepts/index.dj`,
+    edit: `${EDIT}/static/concepts/index.dj`,
 
   });
   for (const title of ['Complexity', 'Engines', 'Variants']) {
@@ -118,7 +118,7 @@ export const build = async () => {
       title: `Concepts — ${title} | pkmn.ai`,
       header: `<h2>${title}</h2>`,
       content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
-      edit: `${edit}/static/concepts/${page}.dj`,
+      edit: `${EDIT}/static/concepts/${page}.dj`,
     });
   }
 
@@ -129,7 +129,7 @@ export const build = async () => {
       title: `${title} | pkmn.ai`,
       header: `<h2>${title}</h2>`,
       content: `<section>${toHTML(path.join(STATIC, `${page}.dj`))}</section>`,
-      edit: `${edit}/static/${page}.dj`,
+      edit: `${EDIT}/static/${page}.dj`,
     });
   }
 };
