@@ -46,7 +46,7 @@ header, header h1 {
 }
 
 #content {
-  padding-top: 0.5em;
+  padding: 0.5em 8px 0;
   margin: 0 auto;
   max-width: var(--max-width);
 }
@@ -112,10 +112,6 @@ a.default:visited,
 a.default:focus,
 a.default:active {
   color: revert;
-}
-
-section {
-  margin: 0 8px;
 }
 
 .description {
