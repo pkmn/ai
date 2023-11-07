@@ -8,7 +8,7 @@
   <a href="https://github.com/pkmn/ai/blob/main/LICENSE">
     <img alt="License" src="https://img.shields.io/badge/License-MIT-blue.svg" />
   </a>
-  <a href="https://pkmn.ai/discord">
+  <a href="https://pkmn.ai/chat">
     <img alt="Discord Chat" src="https://img.shields.io/discord/689316505560809576" />
   </a>
 </p>
@@ -25,7 +25,7 @@ also providing authoritative [rankings](https://pkmn.ai/leaderboard) of existing
 continually tested within a controlled environment.
 
 Researchers, developers, and interested onlookers are encouraged to join the **pkmn.ai** community
-on [Discord](https://pkmn.ai/discord), and all are welcome to [request](https://pkmn.ai/rules)
-the inclusion of new agents on the leaderboard.
+on [Discord](https://pkmn.ai/chat), and all are welcome to [request](https://pkmn.ai/rules) the
+inclusion of new agents on the leaderboard.
 
 All of the code in this repository is distributed under the terms of the [MIT License](LICENSE).

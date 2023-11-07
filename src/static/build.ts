@@ -55,8 +55,10 @@ export const render = (name: string, page: Page) => {
   return minified;
 };
 
+const mkdir = (dir: string) => fs.mkdirSync(dir, {recursive: true});
+
 const write = (name: string, page: Page) => {
-  fs.mkdirSync(path.join(PUBLIC, name), {recursive: true});
+  mkdir(path.join(PUBLIC));
   fs.writeFileSync(path.join(PUBLIC, name, 'index.html'), render(name, page));
 };
 
@@ -72,7 +74,7 @@ const toHTML = (file: string) =>
   });
 
 const build = async (rebuild?: boolean) => {
-  fs.mkdirSync(path.join(PUBLIC), {recursive: true});
+  mkdir(path.join(PUBLIC));
 
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -84,6 +86,14 @@ const build = async (rebuild?: boolean) => {
 
   const index = fs.readFileSync(path.join(STATIC, 'index.css'), 'utf8');
   fs.writeFileSync(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+
+  for (const placeholder of ['chat', 'leaderboard']) {
+    const file = path.join(PUBLIC, placeholder, 'index.html');
+    if (!fs.existsSync(file)) {
+      mkdir(path.dirname(file));
+      fs.writeFileSync(file, '');
+    }
+  }
 
   fs.copyFileSync(path.join(STATIC, 'favicon.svg'), path.join(PUBLIC, 'favicon.svg'));
   fs.copyFileSync(path.join(STATIC, 'github.svg'), path.join(PUBLIC, 'github.svg'));
