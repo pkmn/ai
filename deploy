@@ -7,7 +7,7 @@ HEAD=$(git rev-parse HEAD)
 git pull origin main
 
 # Update dependencies if package.json has changed
-git diff --quiet $HEAD package.json >/dev/null || npm install --omit=dev
+git diff --quiet $HEAD package.json >/dev/null || npm install --omit=dev --silent
 
 # Reload unit files if any changes have been made to them
 git diff --quiet $HEAD config/*.{service,timer} || sudo systemctl daemon-reload
