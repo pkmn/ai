@@ -1,6 +1,8 @@
 import 'source-map-support/register';
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import * as djot from '@djot/djot';
@@ -19,14 +21,30 @@ const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'src', 'static');
 
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-'));
+process.on('exit', () => fs.rmSync(TMP, {recursive: true, force: true}));
+
 export const mkdir = (dir: string) => fs.mkdirSync(dir, {recursive: true});
 export const exists = (file: string) => fs.existsSync(file);
 export const read = (file: string) => fs.readFileSync(file, 'utf8');
-export const write = (file: string, data: string | NodeJS.ArrayBufferView) =>
-  fs.writeFileSync(file, data);
-export const copy = (src: string, dst: string) =>
-  fs.copyFileSync(src, dst);
-
+export const write = (file: string, data: string | NodeJS.ArrayBufferView) => {
+  const tmp = path.join(TMP, crypto.randomBytes(16).toString('hex'));
+  try {
+    fs.writeFileSync(tmp, data, {flag: 'wx'});
+    fs.renameSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, {force: true});
+  }
+};
+export const copy = (src: string, dst: string) => {
+  const tmp = path.join(TMP, crypto.randomBytes(16).toString('hex'));
+  try {
+    fs.copyFileSync(src, tmp, fs.constants.COPYFILE_EXCL);
+    fs.renameSync(tmp, dst);
+  } finally {
+    fs.rmSync(tmp, {force: true});
+  }
+};
 const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
 const EDIT = 'https://github.com/pkmn/ai/edit/main/src';
 
