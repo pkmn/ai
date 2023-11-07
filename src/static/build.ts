@@ -111,7 +111,7 @@ export const build = async () => {
     edit: `${edit}/static/concepts/index.dj`,
 
   });
-  for (const title of ['Complexity', 'Engines', 'Variations']) {
+  for (const title of ['Complexity', 'Engines', 'Variants']) {
     const page = title.toLowerCase();
     write(`concepts/${page}`, {
       topbar,
