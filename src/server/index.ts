@@ -52,13 +52,13 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
-// TODO: this should be pre-rendered
-app.get('/leaderboard', (_, res) => {
+// TODO: this should be partly pre-rendered
+app.get('/battles', (_, res) => {
   res.end(render('leaderboard', {
     topbar,
-    title: 'Leaderboard | pkmn.ai',
-    header: '<h2>Leaderboard</h2>',
-    // TODO: links to rules, history, battles, etc
+    title: 'Battles | pkmn.ai',
+    header: '<h2>Battles</h2>',
+    // TODO: this nav is from /leaderboard and links to rules, history, battles, etc
     content: `<nav>
     <ul>
       <li>
