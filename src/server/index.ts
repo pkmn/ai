@@ -57,7 +57,7 @@ app.get('/battles', (_, res) => {
   res.end(render('leaderboard', {
     topbar,
     title: 'Battles | pkmn.ai',
-    header: '<h2>Battles TODO</h2>',
+    header: '<h2>Battles</h2>',
     // TODO: this nav is from /leaderboard and links to rules, history, battles, etc
     content: `<nav>
     <ul>
