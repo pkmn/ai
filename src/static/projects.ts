@@ -92,8 +92,8 @@ export function page(dir: string) {
     const active = Array.isArray(project.active)
       ? (project.active[0] === project.active[1]
         ? `${project.active[0]}`
-        : `${project.active[0]} - ${project.active[1]}`)
-      : `${project.active} - <em>present</em>`;
+        : `${project.active[0]} – ${project.active[1]}`)
+      : `${project.active} – <em>present</em>`;
     {
       const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
       buf.push(project.site
