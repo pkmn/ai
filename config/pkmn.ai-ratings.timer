@@ -1,4 +1,4 @@
-# ln -s /home/pkmn/ai/config/ratings.timer /etc/systemd/system/pkmn.ai.ratings.timer
+# systemctl enable /home/pkmn/ai/config/pkmn.ai-timer.service
 
 [Unit]
 Description=Daily generation of ratings history graphs
