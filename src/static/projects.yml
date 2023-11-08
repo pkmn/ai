@@ -118,6 +118,9 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  release:
+    name: "0.2.5"
+    url: https://www.npmjs.com/package/pokemon-env
 - identifier: Kalose, Kaya, Kim
   active: [2018, 2018]
   paper: Kalose:2018
@@ -288,6 +291,9 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  release:
+    name: "1.1.0"
+    url: https://pypi.org/project/meloetta/
 - name: Pokesim
   framework: true
   active: 2023 # October 2
