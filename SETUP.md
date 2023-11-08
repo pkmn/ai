@@ -16,8 +16,6 @@ cat ~/.ssh/authorized_keys > ~pkmn/.ssh/authorized_keys
 chmod 600 ~pkmn/.ssh/authorized_keys
 ```
 
-<details><summary>Troubleshooting</summary>
-
 If unable to login as `pkmn` after the above steps, edit `/etc/ssh/sshd_config` and restart the SSH
 daemon:
 
@@ -29,12 +27,11 @@ service ssh restart
 
 Make sure the following fields are set in `/etc/ssh/sshd_config`:
 
-```txt
-PasswordAuthentication no
-PubkeyAuthenticationyes	yes
-AuthorizedKeysFile .ssh/authorized_keys
+```diff
++PasswordAuthentication no
++PubkeyAuthentication yes
++AuthorizedKeysFile .ssh/authorized_keys
 ```
-</details>
 
 Allow SSH traffic through the firewall and then enable the firewall:
 
@@ -91,7 +88,7 @@ Switch to the `pkmn` user (`su pkmn`) and set up the repository in the `/home/pk
 
 ```sh
 cd /home/pkmn
-git clone git@github.com:pkmn/ai.git
+git clone https://github.com/pkmn/ai.git
 ```
 
 As the `root` user, select an editor for `visudo` and then edit `/etc/sudoers.d/pkmn` to give the
@@ -104,8 +101,8 @@ visudo -f /etc/sudoers.d/pkmn
 
 Allow `pkmn` to reload Nginx, reload the systemd unit files and to manager any `pkmn.*` service.
 
-```txt
-pkmn ALL=(ALL) NOPASSWD: /usr/sbin/service nginx reload,/usr/bin/systemctl daemon-reload,/usr/sbin/service pkmn.* *
+```diff
++pkmn ALL=(ALL) NOPASSWD: /usr/sbin/service nginx reload,/usr/bin/systemctl daemon-reload,/usr/sbin/service pkmn.* *
 ```
 
 Configure and enable all of the systemd services and timers:
@@ -120,8 +117,6 @@ for config in config/*.{service,timer}; do
 done
 ```
 
-<details><summary>Troubleshooting</summary>
-
 The following commands can be used to troubleshoot issues with the units:
 
 ```sh
@@ -129,7 +124,6 @@ systemctl list-units
 systemctl daemon-reload
 systemctl reset-failed
 ```
-</details>
 
 Logs for the `pkmn.ai` services can be viewed through `journalctl`:
 
@@ -175,7 +169,7 @@ service nginx restart
 Logs for the Nginx service can be viewed via `journalctl`, and the logrotated access logs can be
 found in `/var/log/nginx`:
 
-```
+```sh
 journalctl -xeu nginx
 tail -f /var/log/nginx/access.log
 ```
