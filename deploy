@@ -12,8 +12,11 @@ git diff --quiet $HEAD package.json >/dev/null || npm install --omit=dev --silen
 # Reload unit files if any changes have been made to them
 git diff --quiet $HEAD config/*.{service,timer} || sudo systemctl daemon-reload
 
-# Restart the server which will trigger a rebuild
-sudo service pkmn.ai-server restart
+# Always do a rebuild to regenerate the static pages
+npm run build
+
+# Restart the server if there have been changes
+git diff --quiet $HEAD src/server || sudo service pkmn.ai-server restart
 
 # Reload NGINX if the config has changed
 git diff --quiet $HEAD config/nginx.conf || sudo service nginx reload
