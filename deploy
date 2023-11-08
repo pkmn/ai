@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -euxo pipefail
 
 # Save our current commit to use for comparison later
 HEAD=$(git rev-parse HEAD)
