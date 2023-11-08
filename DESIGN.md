@@ -13,7 +13,7 @@ TODO
 
 TODO need some way to let users register releases AND link log fetching data
 
-monitor = component on the docker server, sends heartbeat requests to sim and if disconnected for 15
+controller = component on the docker server, sends heartbeat requests to sim and if disconnected for 15
 minutes sim and/or helper sends message to discord server
 
 ```
@@ -53,17 +53,17 @@ watcher
 helper
 scheduler
 manager
-controller
+controller ——— best because environemnt is called "Controlled"
 referee
 judge
 watchdog
 launcher
-monitor ——— best?
+monitor 
 matchmaker
 ```
 
 sim decides next round (always play 1 then kill then play swapped)
-tells monitor to kill old participants and start next round with new pairing
+tells controller to kill old participants and start next round with new pairing
 round robins participants attempting to ensure balanced number of battles = naive
 alternatively, matchmake based on (a) most uncertainity of rating (want balanced) and then number of battles (cant have one person have too many battles)
 dont want glicko because decay doesnt make sense

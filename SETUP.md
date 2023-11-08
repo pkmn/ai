@@ -110,7 +110,7 @@ Configure and enable all of the systemd services and timers:
 ```sh
 for config in config/*.{service,timer}; do
   name=$(basename $config)
-  if [ $name != "pkmn.ai-monitor.service" ]; then
+  if [ $name != "pkmn.ai-controller.service" ]; then
     systemctl enable /home/pkmn/ai/$config
     systemctl start $name
   fi
