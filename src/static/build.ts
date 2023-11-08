@@ -128,8 +128,9 @@ const build = async (rebuild?: boolean) => {
     }
   }
 
-  copy(path.join(STATIC, 'favicon.svg'), path.join(PUBLIC, 'favicon.svg'));
-  copy(path.join(STATIC, 'github.svg'), path.join(PUBLIC, 'github.svg'));
+  for (const file of ['favicon.svg', 'github.svg', 'projects.bib', 'research.bib']) {
+    copy(path.join(STATIC, file), path.join(PUBLIC, file));
+  }
 
   let first = true;
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
