@@ -127,3 +127,29 @@ need to render replays on the fly
 - provide option of html/json/.log txt
 
 use polka for this (and static if NODE-ENV is not prod = add node env is development to bashrc)
+
+---
+
+takes N battles, runs N battles and writes the log files (need socket server setup?)
+- after each battle in background queue / threadpool or process write for update (dont block normal serving) HOWEVER need to avoid starting new battle until previous battle is fully written to minimize dataloss? alternatively queue and make sure each gets writte n sequentially, though unglamour shutdown could lose data
+- 
+
+make something which generates data for leaderboard/games (tools:seed?)
+= npm test:integration, do not run init if not CI/development?/make sure to delete data in posttest!
+
+u16 bot u16 version ? start at byte for each. need one for each player, their rating at the the time and then result? = INDEX file
+
+- needs some datastructure that stores history of ratings
+Chart: https://css-tricks.com/how-to-make-charts-with-svg
+
+
+battle logs = source of truth
+ID = next battle id
+RESULTS history = index used for building various things (battles page is full list of battles), also used for all battles by particular person = requires looking in either p1 or p2
+RATINGS = most recent rating for everyone
+RATINGS HISTORY = every day a snapsot of the ratings file gets added per row, used for building chart
+PLAYERS = login details. avatar, name, id etc. just a config JSON file
+
+problem, what about efficient scan?
+
+taylorhansen/pokemonshowdown-ai #353 #354 #357 #362 #363 #364 #176 #326 #323
