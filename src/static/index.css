@@ -48,7 +48,7 @@ header, header h1 {
   text-align: center;
 }
 
-#content {
+main {
   max-width: var(--max-width);
   margin: 0 auto;
   padding: 0.5em 8px 0;
@@ -178,7 +178,7 @@ footer img {
   margin-bottom: 0.5em;
 }
 
-#research #content {
+#research main {
   max-width: min(900px, 90%);
 }
 

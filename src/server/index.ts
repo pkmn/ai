@@ -55,8 +55,9 @@ if (process.env.NODE_ENV === 'development') {
 // TODO: this should be partly pre-rendered
 app.get('/battles', (_, res) => {
   res.end(render('leaderboard', {
-    topbar,
+    path: '/leaderboard/',
     title: 'Battles | pkmn.ai',
+    topbar,
     header: '<h2>Battles</h2>',
     // TODO: this nav is from /leaderboard and links to rules, history, battles, etc
     content: `<nav>

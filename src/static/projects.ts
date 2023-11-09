@@ -145,6 +145,7 @@ export function page(dir: string) {
   }
 
   return {
+    path: '/projects/',
     title: 'Projects | pkmn.ai',
     header: '<h2>Projects</h2>',
     content: buf.join(''),

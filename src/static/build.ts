@@ -53,6 +53,7 @@ const EDIT = 'https://github.com/pkmn/ai/edit/main/src';
 
 export interface Page {
   id?: string;
+  path: string;
   title: string;
   topbar?: string;
   header?: string;
@@ -152,6 +153,7 @@ const build = async (rebuild?: boolean) => {
   for (const title of ['Glossary', 'Rules']) {
     const page = title.toLowerCase();
     make(page, {
+      path: `/${page}/`,
       topbar,
       title: `${title} | pkmn.ai`,
       header: `<h2>${title}</h2>`,
@@ -161,8 +163,9 @@ const build = async (rebuild?: boolean) => {
   }
 
   make('concepts', {
-    topbar,
+    path: '/concepts/',
     title: 'Concepts | pkmn.ai',
+    topbar,
     header: '<h2>Concepts</h2>',
     content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
     edit: `${EDIT}/static/concepts/index.dj`,
@@ -181,8 +184,9 @@ const build = async (rebuild?: boolean) => {
     const page = title.toLowerCase();
     expected.add(page);
     make(`concepts/${page}`, {
-      topbar,
+      path: `/concepts/${page}/`,
       title: `Concepts — ${title} | pkmn.ai`,
+      topbar,
       header: `<h2>${title}</h2>`,
       content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
       edit: `${EDIT}/static/concepts/${page}.dj`,

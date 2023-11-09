@@ -75,6 +75,7 @@ export function page(dir: string) {
   buf.push('</dl>');
 
   return {
+    path: '/research/',
     title: 'Research | pkmn.ai',
     header: '<h2>Research</h2>',
     content: `<section>${buf.join('')}</section>`,
