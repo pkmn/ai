@@ -10,18 +10,15 @@ img, picture, video, canvas, svg {
 }
 
 html {
-  font-family: Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-size: 16px;
+  font-family: Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 body {
   display: flex;
   flex-direction: column;
-
   height: 100dvh;
-
   line-height: 1.5;
-
   -webkit-font-smoothing: antialiased;
 }
 
@@ -47,14 +44,11 @@ ul {
 #topbar {
   position: fixed;
   top: 0;
-
   width: 100%;
-
+  color: white;
   font-weight: normal;
   font-style: italic;
   line-height: 2;
-  color: white;
-
   background-color: black;
 }
 
@@ -70,8 +64,8 @@ header {
   text-align: center;
 }
 h1 {
-  font-size: 4em;
   font-weight: 900;
+  font-size: 4em;
 }
 h2 {
   margin: 0.33em 0;
@@ -102,14 +96,10 @@ nav label { cursor: pointer; }
 nav input:checked + label { font-weight: bold; }
 nav input {
   position: absolute;
-
-  overflow: hidden;
-
   width: 1px;
   height: 1px;
-
+  overflow: hidden;
   white-space: nowrap;
-
   clip: rect(0 0 0 0);
   clip-path: inset(100%);
 }
@@ -135,14 +125,12 @@ footer > *:first-child {
 }
 
 table {
-  border-spacing: 0;
-  border-collapse: collapse;
-
   min-width: 100%;
   margin: 0 auto;
-
   line-height: 1.15;
   text-align: left;
+  border-collapse: collapse;
+  border-spacing: 0;
 }
 td, th { padding: 0.33rem; }
 td { border-top: 1px solid #CDCDCD; }
