@@ -17,7 +17,7 @@
     gtag('js', new Date());
     gtag('config', 'G-LQ8TW28Z7Q');
   </script>
-  <link rel="stylesheet" href="/index.css?v1">
+  <link rel="stylesheet" href="/index.css?v2">
 </head>
 
 <body id="{{ id }}">
@@ -38,6 +38,10 @@
 </body>
 
 <script>
+const pref = window.matchMedia('(prefers-color-scheme: dark)');
+pref.addEventListener('change', e => setTheme(e.matches ? 'dark' : 'light'));
+document.documentElement.setAttribute('data-theme', pref.matches ? 'dark' : 'light');
+
 {{{ script }}}
 </script>
 

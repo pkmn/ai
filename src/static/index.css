@@ -9,6 +9,19 @@ img, picture, video, canvas, svg {
   height: auto;
 }
 
+:root {
+  --bg-color: #fff;
+  --fg-color: #000;
+  --link-color: #0969DA;
+  --filter: invert(0%);
+}
+[data-theme="dark"] {
+  --bg-color: #121212;
+  --fg-color: #ddd;
+  --link-color: #2F81F9;
+  --filter: invert(87.5%);
+}
+
 html {
   font-size: 16px;
   font-family: Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -18,19 +31,33 @@ body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  color: var(--fg-color);
   line-height: 1.5;
+  background-color: var(--bg-color);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 p {
   margin: 1rem 0;
 }
 
-a { text-decoration: none; }
-a.subtle, a.subtle:visited { color: unset; }
-a.subtle:hover, a.subtle:focus, a.subtle:active  {
+a {
+  color: var(--link-color);
+  text-decoration: none;
+}
+a.subtle, h1 > a, h3 > a { color: unset; }
+a:visited {
+  color: var(--link-color);
+  text-decoration: none;
+}
+a:hover, a:focus, a:active  { text-decoration: underline; }
+a.subtle:hover, h1 > a:hover, h3 > a:hover,
+a.subtle:focus, h1 > a:focus, h3 > a:focus,
+a.subtle:active, h1 > a:active, h3 > a:active,
+a.subtle:visited, h1 > a:visited, h3 > a:visited {
   color: unset;
-  text-decoration: underline;
+  text-decoration: none;
 }
 
 dt {
@@ -77,15 +104,6 @@ h3 {
   font-size: 1.75em;
 }
 
-h1 > a, h3 > a,
-h1 > a:hover, h3 > a:hover,
-h1 > a:focus, h3 > a:focus,
-h1 > a:active, h3 > a:active,
-h1 > a:visited, h3 > a:visited {
-  color: unset;
-  text-decoration: none;
-}
-
 nav ul {
   padding: 0;
   list-style: none;
@@ -116,6 +134,7 @@ footer img {
   display: inline-block;
   width: 1.5rem;
   height: 1.5rem;
+  filter: var(--filter);
 }
 footer > *:first-child {
   display: inline-flex;
