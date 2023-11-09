@@ -214,17 +214,10 @@ const build = async (rebuild?: boolean) => {
     copy(path.join(STATIC, file), path.join(PUBLIC, file));
   }
 
-  let first = true;
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
-    content: `${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
-      if (first) {
-        first = false;
-        return m;
-      }
-      return '<a class="default"';
-    })}`,
+    content: `${toHTML(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"')}`,
     edit: `${EDIT}/static/index.dj`,
   }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 

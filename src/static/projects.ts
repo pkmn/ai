@@ -113,7 +113,7 @@ export function page(dir: string) {
       buf.push('<tr><td><strong>License</strong></td><td>None</td></tr>');
     }
     if (project.source) {
-      const src = `<a href="${project.source}" class="default">${identifier ?? project.source}</a>`;
+      const src = `<a href="${project.source}">${identifier ?? project.source}</a>`;
       buf.push(`<tr><td><strong>Source</strong></td><td>${src}</td></tr>`);
     }
     if (project.engine) {
