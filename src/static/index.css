@@ -17,8 +17,12 @@ html {
 body {
   display: flex;
   flex-direction: column;
+
   height: 100dvh;
+
   line-height: 1.5;
+
+  -webkit-font-smoothing: antialiased;
 }
 
 p {
