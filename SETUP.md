@@ -1,12 +1,30 @@
 # Setup
 
-**pkmn.ai** runs on virtual machine imaged with the current [Ubuntu](#Ubuntu) [LTS
-release](https://wiki.ubuntu.com/Releases) and the stack is built on [Nginx](#Nginx) proxying to
-[Node](#Node).
+**pkmn.ai** runs on virtual machine imaged with the current [Ubuntu](#Ubuntu)
+[LTS release](https://wiki.ubuntu.com/Releases) and the stack is built on
+[Nginx](#Nginx) proxying to [Node](#Node) behind [Cloudflare](#Cloudflare).
+
+## Cloudflare
+
+Set up a `pkmn.ai` website in the [Cloudflare](https://dash.cloudflare.com/)
+dashboard and configure your hosting provider's DNS settings to use the custom
+nameservers Cloudflare provides. The DNS records should look like:
+
+| Type | Name      | Content       | Proxy status | TTL    |
+| ---- | --------- | ------------- | ------------ | ------ |
+| `A`  | `*`       | *`127.0.0.1`* | `Prozied`    | `Auto` |
+| `A`  | `pkmn.ai` | *`127.0.0.1`* | `Prozied`    | `Auto` |
+| `A`  | `www`     | *`127.0.0.1`* | `Prozied`    | `Auto` |
+
+In the **SSL/TLS** section of the dashboard, set SSL/TLS encryption mode to
+"Full". If [`certbot`](#Nginx) encounters error on renewal follow the
+[troubleshooting
+steps](https://omicx.cc/posts/2020-08-04-enable-certbot-automatic-renewal-for-cloudflare-cdn/).
 
 ## Ubuntu
 
-As `root`, create a `pkmn` user and set up the authorized SSH keys for passwordless remote login:
+As `root`, create a `pkmn` user and set up the authorized SSH keys for
+passwordless remote login:
 
 ```sh
 adduser pkmn
@@ -16,8 +34,8 @@ cat ~/.ssh/authorized_keys > ~pkmn/.ssh/authorized_keys
 chmod 600 ~pkmn/.ssh/authorized_keys
 ```
 
-If unable to login as `pkmn` after the above steps, edit `/etc/ssh/sshd_config` and restart the SSH
-daemon:
+If unable to login as `pkmn` after the above steps, edit `/etc/ssh/sshd_config`
+and restart the SSH daemon:
 
 ```sh
 vim /etc/ssh/sshd_config
@@ -50,8 +68,8 @@ reboot
 apt --purge autoremove
 ```
 
-If not already, update to the latest LTS release, verifying through inspection of `cat
-/etc/lsb-release` that the update was successful:
+If not already, update to the latest LTS release, verifying through inspection
+of `cat /etc/lsb-release` that the update was successful:
 
 ```sh
 cat /etc/lsb-release
@@ -84,22 +102,24 @@ vim ~/.bashrc
 
 ## pkmn.ai
 
-Switch to the `pkmn` user (`su pkmn`) and set up the repository in the `/home/pkmn` directory:
+Switch to the `pkmn` user (`su pkmn`) and set up the repository in the
+`/home/pkmn` directory:
 
 ```sh
 cd /home/pkmn
 git clone https://github.com/pkmn/ai.git
 ```
 
-As the `root` user, select an editor for `visudo` and then edit `/etc/sudoers.d/pkmn` to give the
-`pkmn` user the necessary permissions:
+As the `root` user, select an editor for `visudo` and then edit
+`/etc/sudoers.d/pkmn` to give the `pkmn` user the necessary permissions:
 
 ```sh
 update-alternatives --config editor
 visudo -f /etc/sudoers.d/pkmn
 ```
 
-Allow `pkmn` to reload Nginx, reload the systemd unit files and to manager any `pkmn.*` service.
+Allow `pkmn` to reload Nginx, reload the systemd unit files and to manager any
+`pkmn.*` service.
 
 ```diff
 +pkmn ALL=(ALL) NOPASSWD: /usr/sbin/service nginx reload,/usr/bin/systemctl daemon-reload,/usr/sbin/service pkmn.* *
@@ -133,8 +153,8 @@ journalctl -xeu pkmn.ai*
 
 ## Nginx
 
-Install Nginx, add `www-data` to the `pkmn` group so that Nginx can serve the static files in
-`/home/pkmn/ai/public`, and then link the `nginx.conf`:
+Install Nginx, add `www-data` to the `pkmn` group so that Nginx can serve the
+static files in `/home/pkmn/ai/public`, and then link the `nginx.conf`:
 
 ```sh
 apt-get install nginx
@@ -151,8 +171,9 @@ ufw delete allow 'Nginx HTTP'
 ufw status
 ```
 
-Use `snap` to install [`certbot`](https://certbot.eff.org/) and get certificates for the domains
-(*you may need to remove the relevant SSL sections from the `nginx.conf` to boostrap*):
+Use `snap` to install [`certbot`](https://certbot.eff.org/) and get certificates
+for the domains (*you may need to remove the relevant SSL sections from the
+`nginx.conf` to boostrap*):
 
 ```sh
 snap install --classic certbot
@@ -166,8 +187,8 @@ Restart the Nginx server:
 service nginx restart
 ```
 
-Logs for the Nginx service can be viewed via `journalctl`, and the logrotated access logs can be
-found in `/var/log/nginx`:
+Logs for the Nginx service can be viewed via `journalctl`, and the logrotated
+access logs can be found in `/var/log/nginx`:
 
 ```sh
 journalctl -xeu nginx
