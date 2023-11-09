@@ -23,20 +23,22 @@
 <body id="{{ id }}">
 
   <header>
-    {{{ topbar }}}
+    <div id="topbar">{{{ topbar }}}</div>
     <h1><a href="/">pkmn.ai</a></h1>
-    {{{ header }}}
+    <h2>{{{ header }}}</h2>
   </header>
 
   <main>
     {{{ content }}}
   </main>
-
   <footer>
-    <p><a href="{{{ edit }}}"><img src="/github.svg" alt="GitHub" /> pkmn/ai</a></p>
+    <a href="{{{ edit }}}" class="subtle"><img src="/github.svg" alt="GitHub" /> pkmn/ai</a>
   </footer>
 
 </body>
+
+<script>
 {{{ script }}}
+</script>
 
 </html>

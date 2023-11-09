@@ -48,7 +48,7 @@ function format(e: bibtex.Entry) {
   parts.push(` (${e.fields.year[0]}) `);
   parts.push(TYPES[e.type](e));
 
-  const definition = `<a href="${e.fields.url[0]}">${parts.join('')}</a>`;
+  const definition = `<a href="${e.fields.url[0]}" class="subtle">${parts.join('')}</a>`;
   return `<dt id="${e.key}">[${id}]</dt><dd>${definition}</dd>`;
 }
 
@@ -77,8 +77,8 @@ export function page(dir: string) {
   return {
     path: '/research/',
     title: 'Research | pkmn.ai',
-    header: '<h2>Research</h2>',
-    content: `<section>${buf.join('')}</section>`,
+    header: 'Research',
+    content: buf.join(''),
     edit: 'https://github.com/pkmn/ai/edit/main/src/static/research.bib',
   };
 }

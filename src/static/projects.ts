@@ -97,13 +97,13 @@ export function page(dir: string) {
     {
       const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
       buf.push(project.site
-        ? `<h3 ><a href="${project.site}">${name}</a></h3>`
+        ? `<h3><a href="${project.site}">${name}</a></h3>`
         : `<h3>${name}</h3>`);
     }
     buf.push('<table>');
     if (project.paper) {
       const p = bibliography[project.paper];
-      const paper = `<a href="${p.fields.url[0]}"><em>${p.fields.title[0]}</em></a>`;
+      const paper = `<a href="${p.fields.url[0]}" class="subtle"><em>${p.fields.title[0]}</em></a>`;
       buf.push(`<tr><td><strong>Paper</strong></td><td>${paper}</td></tr>`);
     }
     buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);
@@ -119,7 +119,7 @@ export function page(dir: string) {
     if (project.engine) {
       const engine = Array.isArray(project.engine)
         ? project.engine.map(({name, url}) =>
-          `<a href="${url}">${name}</a>`).join(', ')
+          `<a href="${url}" class="subtle">${name}</a>`).join(', ')
         : project.engine as string;
       buf.push(`<tr><td><strong>Engine</strong></td><td>${engine}</td></tr>`);
     }
@@ -130,12 +130,12 @@ export function page(dir: string) {
     if (project.platform) {
       const platform = Array.isArray(project.platform)
         ? project.platform.map(({name, url}) =>
-          `<a href="${url}">${name}</a>`).join(', ')
+          `<a href="${url}" class="subtle">${name}</a>`).join(', ')
         : project.platform;
       buf.push(`<tr><td><strong>Platform</strong></td><td>${platform}</td></tr>`);
     }
     if (project.release) {
-      const release = `<a href="${project.release.url}">${project.release.name}</a>`;
+      const release = `<a href="${project.release.url}" class="subtle">${project.release.name}</a>`;
       buf.push(`<tr><td><strong>Latest Release</strong></td><td>${release}</td></tr>`);
     }
     buf.push('</table>');
@@ -147,11 +147,11 @@ export function page(dir: string) {
   return {
     path: '/projects/',
     title: 'Projects | pkmn.ai',
-    header: '<h2>Projects</h2>',
+    header: 'Projects',
     content: buf.join(''),
     edit: 'https://github.com/pkmn/ai/edit/main/src/static/projects.yml',
-    script: `<script>
-      document.addEventListener('DOMContentLoaded', () => {
+    script:
+    `document.addEventListener('DOMContentLoaded', () => {
         const projects = document.getElementsByClassName("project");
         const radios = document.querySelectorAll('input[name="radio"]');
 
@@ -173,7 +173,6 @@ export function page(dir: string) {
             }
           });
         }
-      });
-    </script>`,
+      });`,
   };
 }

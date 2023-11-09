@@ -63,6 +63,9 @@
     "extends": [
       "stylelint-config-standard",
       "stylelint-config-clean-order"
-    ]
+    ],
+    "rules": {
+      "rule-empty-line-before": null
+    }
   }
 }

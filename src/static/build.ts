@@ -90,8 +90,7 @@ const make = (name: string, page: Page) => {
   write(path.join(PUBLIC, name, 'index.html'), render(name, page));
 };
 
-export const topbar =
-  '<div class="topbar">Under Construction: planned completion date January 2024</div>';
+export const topbar = 'Under Construction: planned completion date January 2024';
 
 interface AstNode {attributes?: {[key: string]: string}}
 
@@ -230,7 +229,7 @@ const build = async (rebuild?: boolean) => {
       path: `/${page}/`,
       topbar,
       title: `${title} | pkmn.ai`,
-      header: `<h2>${title}</h2>`,
+      header: title,
       content: `${toHTML(path.join(STATIC, `${page}.dj`))}`,
       edit: `${EDIT}/static/${page}.dj`,
     });
@@ -240,7 +239,7 @@ const build = async (rebuild?: boolean) => {
     path: '/concepts/',
     title: 'Concepts | pkmn.ai',
     topbar,
-    header: '<h2>Concepts</h2>',
+    header: 'Concepts',
     content: `${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}`,
     edit: `${EDIT}/static/concepts/index.dj`,
   });
@@ -261,7 +260,7 @@ const build = async (rebuild?: boolean) => {
       path: `/concepts/${page}/`,
       title: `Concepts — ${title} | pkmn.ai`,
       topbar,
-      header: `<h2>${title}</h2>`,
+      header: title,
       content: toHTML(path.join(STATIC, 'concepts', `${page}.dj`)),
       edit: `${EDIT}/static/concepts/${page}.dj`,
     });
