@@ -136,7 +136,7 @@ export function page(dir: string) {
     }
     if (project.release) {
       const release = `<a href="${project.release.url}" class="subtle">${project.release.name}</a>`;
-      buf.push(`<tr><td><strong>Latest Release</strong></td><td>${release}</td></tr>`);
+      buf.push(`<tr><td><strong>Release</strong></td><td>${release}</td></tr>`);
     }
     buf.push('</table>');
     const description = split.slice(0, 8 + Math.random() * 12).join('.');
