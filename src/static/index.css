@@ -31,7 +31,7 @@ h3 {
   font-size: calc(var(--header-size) * 1.25);
 }
 
-section, table, p, .topbar {
+table, p, .topbar {
   font-size: var(--body-size);
 }
 

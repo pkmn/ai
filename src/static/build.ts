@@ -137,13 +137,13 @@ const build = async (rebuild?: boolean) => {
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
-    content: `<section>${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
+    content: `${toHTML(path.join(STATIC, 'index.dj')).replaceAll('<a', m => {
       if (first) {
         first = false;
         return m;
       }
       return '<a class="default"';
-    })}</section>`,
+    })}`,
     edit: `${EDIT}/static/index.dj`,
   }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
@@ -157,7 +157,7 @@ const build = async (rebuild?: boolean) => {
       topbar,
       title: `${title} | pkmn.ai`,
       header: `<h2>${title}</h2>`,
-      content: `<section>${toHTML(path.join(STATIC, `${page}.dj`))}</section>`,
+      content: `${toHTML(path.join(STATIC, `${page}.dj`))}`,
       edit: `${EDIT}/static/${page}.dj`,
     });
   }
@@ -167,7 +167,7 @@ const build = async (rebuild?: boolean) => {
     title: 'Concepts | pkmn.ai',
     topbar,
     header: '<h2>Concepts</h2>',
-    content: `<section>${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}</section>`,
+    content: `${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}`,
     edit: `${EDIT}/static/concepts/index.dj`,
   });
 
@@ -188,7 +188,7 @@ const build = async (rebuild?: boolean) => {
       title: `Concepts — ${title} | pkmn.ai`,
       topbar,
       header: `<h2>${title}</h2>`,
-      content: `<section>${toHTML(path.join(STATIC, 'concepts', `${page}.dj`))}</section>`,
+      content: toHTML(path.join(STATIC, 'concepts', `${page}.dj`)),
       edit: `${EDIT}/static/concepts/${page}.dj`,
     });
   }
