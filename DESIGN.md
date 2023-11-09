@@ -153,3 +153,11 @@ PLAYERS = login details. avatar, name, id etc. just a config JSON file
 problem, what about efficient scan?
 
 taylorhansen/pokemonshowdown-ai #353 #354 #357 #362 #363 #364 #176 #326 #323
+
+How to keep up to date on "Latest Release" in projects.yml? needs test = write something which queries GH/pip/npm for latest?
+
+Open comp = regular ladder, can have multiple battles at once, matchmaker is different than PS though (try to get N battles which each bot etc) Also needs to be unversioned.
+
+Server can restart between decisions = save state and timers and reinit on startup then clients reconnect (ensure reconnect to correct battle) = max 5-10 minutes for a restart. Still would prefer to be able to restart without killing sockets though?
+
+protocol - port of relevant bits of PS doc + much stricter
