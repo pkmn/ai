@@ -12,9 +12,9 @@ nameservers Cloudflare provides. The DNS records should look like:
 
 | Type | Name      | Content       | Proxy status | TTL    |
 | ---- | --------- | ------------- | ------------ | ------ |
-| `A`  | `*`       | *`127.0.0.1`* | `Prozied`    | `Auto` |
-| `A`  | `pkmn.ai` | *`127.0.0.1`* | `Prozied`    | `Auto` |
-| `A`  | `www`     | *`127.0.0.1`* | `Prozied`    | `Auto` |
+| `A`  | `*`       | *`127.0.0.1`* | `Proxied`    | `Auto` |
+| `A`  | `pkmn.ai` | *`127.0.0.1`* | `Proxied`    | `Auto` |
+| `A`  | `www`     | *`127.0.0.1`* | `Proxied`    | `Auto` |
 
 In the **SSL/TLS** section of the dashboard, set SSL/TLS encryption mode to
 "Full". If [`certbot`](#Nginx) encounters error on renewal follow the
