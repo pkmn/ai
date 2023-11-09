@@ -93,11 +93,92 @@ const make = (name: string, page: Page) => {
 export const topbar =
   '<div class="topbar">Under Construction: planned completion date January 2024</div>';
 
+interface AstNode {attributes?: {[key: string]: string}}
+
+const hasClass = (node: AstNode, cls: string) => {
+  node.attributes = node.attributes || {};
+  const attr = node.attributes?.['class'] || '';
+  return attr.split(' ').includes(cls);
+};
+
+const addClass = (node: AstNode, cls: string) => {
+  node.attributes = node.attributes || {};
+  const attr = node.attributes['class'];
+  node.attributes['class'] = attr ? `${attr} ${cls}` : cls;
+};
+
+const extractCaption = (node: AstNode) => {
+  if (!node.attributes?.cap) return undefined;
+  const result = node.attributes.cap;
+  delete node.attributes.cap;
+  return result;
+};
+
 const toHTML = (file: string) =>
   djot.renderHTML(djot.parse(read(file)), {
     overrides: {
       inline_math: node => katex.renderToString(node.text, {output: 'mathml'}),
       display_math: node => katex.renderToString(node.text, {output: 'mathml'}),
+      div: (node, r): string => {
+        if (hasClass(node, 'block')) {
+          let cap = extractCaption(node);
+          if (cap) {
+            cap = `<div class="title">${cap}</div>`;
+          } else {
+            cap = '';
+          }
+          return [
+            `<aside${r.renderAttributes(node)}>`, cap, r.renderChildren(node), '</aside>',
+          ].join('\n');
+        }
+
+        if (hasClass(node, 'details')) {
+          return [
+            '<details>', `<summary>${extractCaption(node)}</summary>`,
+            r.renderChildren(node), '</details>'].join('\n');
+        }
+
+        return r.renderAstNodeDefault(node);
+      },
+      code_block: (node) => {
+        let cap = extractCaption(node);
+        if (cap) {
+          cap = `<figcaption class="title">${cap}</figcaption>\n`;
+        } else {
+          cap = '';
+        }
+        // const pre = highlight(node.text, node.lang, node.attributes?.highlight).value;
+        const pre = node.text;
+        return `<figure class="code">\n${cap}\n${pre}\n</figure>`;
+      },
+      span: (node, r) => {
+        if (hasClass(node, 'code')) {
+          const children = r.renderChildren(node);
+          return `<code>${children}</code>`;
+        }
+        if (hasClass(node, 'dfn')) {
+          const children = r.renderChildren(node);
+          return `<dfn>${children}</dfn>`;
+        }
+        if (hasClass(node, 'kbd')) {
+          const children = r.renderChildren(node)
+            .split('+')
+            .map((it) => `<kbd>${it}</kbd>`)
+            .join('+');
+          return `<kbd>${children}</kbd>`;
+        }
+        return r.renderAstNodeDefault(node);
+      },
+      str: (node, r) => {
+        if (hasClass(node, 'dfn')) {
+          return `<dfn>${node.text}</dfn>`;
+        }
+        return r.renderAstNodeDefault(node);
+      },
+      url: (node, r) => {
+        addClass(node, 'url');
+        return r.renderAstNodeDefault(node);
+      },
     },
   });
 
