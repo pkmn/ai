@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@pkmn/eslint-config": "^6.0.0",
+    "@types/jest": "^29.5.8",
     "@untitaker/hyperlink": "^0.1.31",
     "chokidar": "^3.5.3",
     "esbuild": "^0.19.5",
@@ -31,10 +32,11 @@
     "morgan": "^1.10.0",
     "stylelint": "^15.11.0",
     "stylelint-config-rational-order": "^0.1.2",
-    "stylelint-config-standard": "^34.0.0"
+    "stylelint-config-standard": "^34.0.0",
+    "vitest": "^0.34.6"
   },
   "scripts": {
-    "lint": "eslint src --cache --ext ts && stylelint src/**/*.css",
+    "lint": "eslint src --cache --ext ts && stylelint src/**/*.css && hyperlink public --check-anchors",
     "fix": "eslint src --fix --ext ts && stylelint --fix src/**/*.css",
     "clean": "rm -rf public build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
@@ -42,7 +44,8 @@
     "start:controller": "npm run build && false",
     "start:server": "node build/server",
     "start": "npm run start:server",
-    "test": "npm run build && npm run lint && hyperlink public --check-anchors",
+    "test": "npm run build && npm run lint",
+    "test:integration": "npm run test && vitest src/test",
     "tools:archive": "npm run compile && node build/tools/archive",
     "tools:backup": "npm run compile && node build/tools/backup",
     "tools:ratings": "npm run compile && node build/tools/ratings",
