@@ -57,9 +57,10 @@
     "extends": "@pkmn",
     "overrides": [{
       "files": ["src/server/index.ts"],
-      "rules": {
-        "@typescript-eslint/no-var-requires": "off"
-      }
+      "rules": {"@typescript-eslint/no-var-requires": "off"}
+    },{
+      "files": ["src/test/projects.test.ts"],
+      "rules": {"jest/no-conditional-expect": "off"}
     }]
   },
   "stylelint": {

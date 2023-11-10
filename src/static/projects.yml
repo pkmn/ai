@@ -120,7 +120,7 @@
       url: https://github.com/smogon/pokemon-showdown
   release:
     name: "0.2.5"
-    url: https://www.npmjs.com/package/pokemon-env
+    url: https://www.npmjs.com/package/pokemon-env/v/0.2.5
 - identifier: Kalose, Kaya, Kim
   active: [2018, 2018]
   paper: Kalose:2018
@@ -211,8 +211,8 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   release:
-    name: "0.7.0"
-    url: https://github.com/hsahovic/poke-env/releases/tag/0.7.0
+    name: "0.7.1"
+    url: https://github.com/hsahovic/poke-env/releases/tag/0.7.1
 - name: Simplified Pokemon Environment
   active: [2019, 2020] # October 31
   paper: Simoes:2021
@@ -293,7 +293,7 @@
       url: https://github.com/smogon/pokemon-showdown
   release:
     name: "1.1.0"
-    url: https://pypi.org/project/meloetta/
+    url: https://pypi.org/project/meloetta/1.1.0/
 - name: Pokesim
   framework: true
   active: 2023 # October 2
