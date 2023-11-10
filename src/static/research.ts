@@ -39,7 +39,7 @@ function format(e: bibtex.Entry) {
   const [author, date] = e.key.split(':');
   const name = /[A-Z][a-z]+[A-Z]/.test(author)
     ? author.replaceAll(/[A-Z]/g, m => ` ${m}`).trimStart()
-    : author.replaceAll('/', ', ');
+    : author;
   const id = `${name} ${date}`;
 
   const parts: string[] = [];
