@@ -270,7 +270,7 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- name: Younger Joey
+- name: Youngster Joey
   active: [2021, 2021] # November 10
   paper: Kyler-Wank:2021
   source: https://github.com/alex-shen1/Youngster-Joey
