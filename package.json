@@ -6,6 +6,7 @@
     "@djot/djot": "^0.2.5",
     "@retorquere/bibtex-parser": "^7.0.7",
     "@types/html-minifier": "^4.0.3",
+    "@types/jest": "^29.5.8",
     "@types/katex": "^0.16.5",
     "@types/morgan": "^1.9.7",
     "@types/mustache": "^4.2.4",
@@ -24,7 +25,6 @@
   },
   "devDependencies": {
     "@pkmn/eslint-config": "^6.0.0",
-    "@types/jest": "^29.5.8",
     "@untitaker/hyperlink": "^0.1.31",
     "chokidar": "^3.5.3",
     "esbuild": "^0.19.5",
