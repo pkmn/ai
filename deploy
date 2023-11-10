@@ -8,16 +8,21 @@ HEAD=$(git rev-parse HEAD)
 git pull origin main
 
 # Update dependencies if package.json has changed
-git diff --quiet $HEAD package.json >/dev/null || npm install --omit=dev --silent
+git diff --quiet $HEAD package.json >/dev/null ||
+    npm install --omit=dev --silent
 
 # Reload unit files if any changes have been made to them
-git diff --quiet $HEAD config/*.{service,timer} || sudo systemctl daemon-reload
+git diff --quiet $HEAD config/*.{service,timer} ||
+    sudo systemctl daemon-reload
 
 # Always do a rebuild to regenerate the static pages
 npm run build
 
 # Reload or restart the server if there have been changes
-git diff --quiet $HEAD src/server || sudo service pkmn.ai-server ${1:-reload}
+command=${1:-reload}
+[ "${command}" = "restart" ] || git diff --quiet $HEAD src/server ||
+    sudo service pkmn.ai-server $command
 
 # Reload NGINX if the config has changed
-git diff --quiet $HEAD config/nginx.conf || sudo service nginx reload
+git diff --quiet $HEAD config/nginx.conf ||
+    sudo service nginx reload
