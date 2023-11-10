@@ -10,16 +10,23 @@ Set up a `pkmn.ai` website in the [Cloudflare](https://dash.cloudflare.com/)
 dashboard and configure your hosting provider's DNS settings to use the custom
 nameservers Cloudflare provides. The DNS records should look like:
 
-| Type | Name      | Content       | Proxy status | TTL    |
-| ---- | --------- | ------------- | ------------ | ------ |
-| `A`  | `*`       | *`127.0.0.1`* | `Proxied`    | `Auto` |
-| `A`  | `pkmn.ai` | *`127.0.0.1`* | `Proxied`    | `Auto` |
-| `A`  | `www`     | *`127.0.0.1`* | `Proxied`    | `Auto` |
+| Type | Name      | Content          | Proxy status | TTL    |
+| ---- | --------- | ---------------- | ------------ | ------ |
+| `A`  | `*`       | *`123.45.67.89`* | `Proxied`    | `Auto` |
+| `A`  | `pkmn.ai` | *`123.45.67.89`* | `Proxied`    | `Auto` |
+| `A`  | `www`     | *`123.45.67.89`* | `Proxied`    | `Auto` |
 
 In the **SSL/TLS** section of the dashboard, set SSL/TLS encryption mode to
 "Full". If [`certbot`](#Nginx) encounters error on renewal follow the
 [troubleshooting
 steps](https://omicx.cc/posts/2020-08-04-enable-certbot-automatic-renewal-for-cloudflare-cdn/).
+
+Cloudflare doesn't proxy SSH connections so to get `ssh pkmn@pkmn.ai` to work,
+set up a local DNS record in `/etc/hosts`:
+
+```diff
++123.45.67.89    pkmn.ai
+```
 
 ## Ubuntu
 
