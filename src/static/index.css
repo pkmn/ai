@@ -12,14 +12,14 @@ img, picture, video, canvas, svg {
 :root {
   --bg-color: #fff;
   --fg-color: #000;
-  --h1-color: #000;
+  --fg-accent-color: #000;
   --link-color: #0969DA;
   --filter: invert(0%);
 }
 [data-theme="dark"] {
   --bg-color: #121212;
   --fg-color: #ddd;
-  --h1-color: #fff;
+  --fg-accent-color: #fff;
   --link-color: #2F81F9;
   --filter: invert(87.5%);
 }
@@ -93,7 +93,7 @@ header {
   text-align: center;
 }
 h1 {
-  color: var(--h1-color);
+  color: var(--fg-accent-color);
   font-weight: 900;
   font-size: 4em;
 }
@@ -156,7 +156,7 @@ table {
 }
 td, th { padding: 0.33rem; }
 td { border-top: 1px solid #CDCDCD; }
-tr:first-child { border-top: 1px solid black; }
+tr:first-child { border-top: 1px solid var(--fg-accent-color); }
 td:first-child { width: 15%; }
 tr:first-child td { border: none; }
 
