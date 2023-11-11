@@ -21,7 +21,7 @@ const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'src', 'static');
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-'));
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmna.ai-'));
 process.on('exit', () => fs.rmSync(TMP, {recursive: true, force: true}));
 
 export const list = (dir: string) => fs.readdirSync(dir);
