@@ -46,8 +46,12 @@ sapien in dictum. Nullam aliquam sapien ut viverra ultricies. Vestibulum eget au
 pellentesque neque ex, in auctor dolor tempus quis. Mauris lacinia nisl vitae justo dignissim, et
 pulvinar tellus euismod. Sed feugiat vulputate quam, auctor tempor neque congue a. Praesent nec
 erat bibendum, tincidunt tellus et, imperdiet odio. Vestibulum rhoncus aliquam orci, vitae sodales
-metus hendrerit vitae.
-TODO includes switching or not, RandomPlayer(`N`) can mean how often consider switches vs. how often ONLY consider switching when option
+metus hendrerit vitae. TODO includes switching or not, RandomPlayer(`N`) can mean how often consider
+switches vs. how often ONLY consider switching when option prefer what % actually chooses switch as
+opposed to % actually considers switch. also extend to RP(M, N) where second value is *gimmick* (use
+mega/z move/dynamax/tera). **choose** vs. **consider** (add some icon like an icon on top of number to indicate consider?)
+$`RP(\widetilde{20\%}, 90\%)` means *consider* switch 20% of the time and use zmove when available 90% of the time.
+
 
 : MaxDamagePlayer
 
@@ -80,3 +84,29 @@ rhoncus faucibus mauris placerat. Maecenas finibus tincidunt massa, ac lacinia f
 Interdum et malesuada fames ac ante ipsum primis in faucibus. Vivamus accumsan suscipit erat,
 mollis tincidunt augue pellentesque eget.
 TODO [raw vs. abstract vs. with context (and how much context)](https://gist.github.com/scheibo/6d1473952f4c2b3852339f6f35301b93)
+
+- https://en.wikipedia.org/wiki/Glossary_of_artificial_intelligence
+- https://en.wikipedia.org/wiki/Glossary_of_game_theory
+- https://www.chessprogramming.org/Dictionary
+- https://www.smogon.com/dp/articles/pokemon_dictionary
+- https://victoryroadvgc.com/resources/glossary/
+- https://bulbapedia.bulbagarden.net/wiki/Appendix:Metagame_terminology
+- TODO pinyon terminology
+- https://discord.com/channels/689316505560809576/689316506265321535/1101256695197466745
+
+
+TODO Additional terms
+
+- FOSG
+- matrix node
+- operations
+- chance node
+- transitions
+- subgame
+- information set (IS)
+- public belieft state (PBS)
+- pondering
+- EFG extensive form game
+- bandit
+- perspective (spectator/omniscient/player)
+- https://www.chessprogramming.org/Match_Statistics#Likelihood_of_superiority
