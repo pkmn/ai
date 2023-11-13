@@ -186,7 +186,7 @@ const build = async (rebuild?: boolean) => {
 
   let actual = list(PUBLIC);
   let expected = new Set([
-    'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard',
+    'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard', 'problem',
     'index.css', 'favicon.svg', 'github.svg', 'index.html', 'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
@@ -223,7 +223,7 @@ const build = async (rebuild?: boolean) => {
   make('projects', {...projects.page(STATIC), topbar});
   make('research', research.page(STATIC));
 
-  for (const title of ['Glossary', 'Rules']) {
+  for (const title of ['Glossary', 'Problem', 'Rules']) {
     const page = title.toLowerCase();
     make(page, {
       path: `/${page}/`,
