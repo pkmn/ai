@@ -110,3 +110,11 @@ TODO Additional terms
 - bandit
 - perspective (spectator/omniscient/player)
 - https://www.chessprogramming.org/Match_Statistics#Likelihood_of_superiority
+- exploitability
+- regret
+- MCTS/UCT
+- alpha beta
+- pruning
+- transpositions / symmetry
+- damage calculator
+- bucketting (link to abstraction)
