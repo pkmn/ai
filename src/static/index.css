@@ -164,7 +164,7 @@ tr:first-child td { border: none; }
 }
 
 #research main {
-  max-width: min(105ch, 90%);
+  max-width: min(105ch, calc(100% - 4vh));
   margin: 1rem auto;
   line-height: 1.15;
 }
@@ -207,7 +207,6 @@ tr:first-child td { border: none; }
   #research dt {
     display: none;
   }
-
   #research dd {
     width: 100%;
   }
