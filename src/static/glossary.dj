@@ -97,24 +97,27 @@ TODO [raw vs. abstract vs. with context (and how much context)](https://gist.git
 
 TODO Additional terms
 
-- FOSG
 - matrix node
 - operations
 - chance node
 - transitions
 - subgame
 - information set (IS)
-- public belieft state (PBS)
+- public belief state (PBS)
 - pondering
-- EFG extensive form game
+- EFG extensive form game / FOSG
 - bandit
 - perspective (spectator/omniscient/player)
 - https://www.chessprogramming.org/Match_Statistics#Likelihood_of_superiority
 - exploitability
 - regret
-- MCTS/UCT
+- MCTS/UCT/UCB
 - alpha beta
 - pruning
 - transpositions / symmetry
 - damage calculator
 - bucketting (link to abstraction)
+- NNUE
+- matchup
+- serialization/sequentialization
+- determinization
