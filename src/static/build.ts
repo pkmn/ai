@@ -253,7 +253,10 @@ const build = async (rebuild?: boolean) => {
   actual = list(path.join(PUBLIC, 'concepts'));
   expected = new Set(['index.html']);
 
-  for (const title of ['Abstraction', 'Complexity', 'Engines', 'Protocol', 'Variants']) {
+  const titles = [
+    'Abstraction', 'Complexity', 'Engines', 'Learning', 'Protocol', 'Search', 'Variants',
+  ];
+  for (const title of titles) {
     const page = title.toLowerCase();
     expected.add(page);
     make(`concepts/${page}`, {
