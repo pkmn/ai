@@ -104,7 +104,9 @@ export abstract class Player {
   accept(chunk: string) {
     for (const line of chunk.split('\n')) {
       if (!line.startsWith('|')) continue;
-      const [cmd, rest] = splitFirst(line.slice(1), '|');
+      const index = line.indexOf('|', 1);
+      const cmd = line.slice(1, index);
+      const rest = line.slice(index + 1);
       if (cmd === 'request') return this.onRequest(JSON.parse(rest));
       if (cmd === 'error') return this.onError(new Error(rest));
     }
@@ -121,20 +123,4 @@ export abstract class Player {
   }
 
   abstract choose(choices: Choice[][]): Choice[];
-}
-
-function splitFirst(str: string, delimiter: string, limit = 1) {
-  const splitStr: string[] = [];
-  while (splitStr.length < limit) {
-    const delimiterIndex = str.indexOf(delimiter);
-    if (delimiterIndex >= 0) {
-      splitStr.push(str.slice(0, delimiterIndex));
-      str = str.slice(delimiterIndex + delimiter.length);
-    } else {
-      splitStr.push(str);
-      str = '';
-    }
-  }
-  splitStr.push(str);
-  return splitStr;
 }
