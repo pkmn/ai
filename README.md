@@ -19,10 +19,9 @@ the home of [**competitive Pokémon artificial intelligence**](https://pkmn.ai/b
 serves as the definitive reference for existing competitive Pokémon AI [projects and
 papers](https://pkmn.ai/projects), relevant [research](https://pkmn.ai/research), and explanations
 of important [concepts](https://pkmn.ai/concepts) and [terms](https://pkmn.ai/glossary) related to
-the intersection of [competitive Pokémon
-battling](https://www.smogon.com/dp/articles/intro_comp_pokemon) and artificial intelligence while
-also providing authoritative [rankings](https://pkmn.ai/leaderboard) of existing agents which are
-continually tested within a controlled environment.
+the intersection of [competitive Pokémon battling](https://www.pkmn.cc/overview) and artificial
+intelligence while also providing authoritative [rankings](https://pkmn.ai/leaderboard) of existing
+agents which are continually tested within a controlled environment.
 
 Researchers, developers, and interested onlookers are encouraged to join the **pkmn.ai** community
 on [Discord](https://pkmn.ai/chat), and all are welcome to [request](https://pkmn.ai/rules) the
