@@ -184,9 +184,14 @@ tr:first-child td { border: none; }
   margin-left: auto;
 }
 
+#concepts ul {
+  padding: 0;
+  text-align: center;
+}
 #concepts li {
   margin-bottom: 0.5rem;
   line-height: 1.15;
+  list-style: none;
 }
 
 .hide {
