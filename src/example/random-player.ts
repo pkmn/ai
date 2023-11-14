@@ -4,7 +4,7 @@ export type Random = (min?: number, max?: number) => number;
 
 export namespace RandomPlayer {
   export interface Config {
-    'switch'?: {choose: number} | {consider: number};
+    switch?: {choose: number} | {consider: number};
     mega?: {choose: number} | {consider: number};
     zmove?: {choose: number} | {consider: number};
     dynamax?: {choose: number} | {consider: number};
@@ -22,8 +22,55 @@ export class RandomPlayer extends Player {
     this.config = config ?? {};
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  choose(choices: Choice[][]): Choice[] {
-    throw new Error('Method not implemented.');
+  choose(choices: Choice[]): Choice {
+    const partitioned = {
+      team: [] as Choice[],
+      switch: [] as Choice[],
+      move: [] as Choice[],
+      mega: [] as Choice[],
+      zmove: [] as Choice[],
+      dynamax: [] as Choice[],
+      terastallize: [] as Choice[],
+    };
+
+    let moves = false;
+    for (const choice of choices) {
+      if (choice.type !== 'move') {
+        partitioned[choice.type].push(choice);
+      } else if (choice.extra) {
+        moves = true;
+        partitioned[choice.extra].push(choice);
+      } else {
+        moves = true;
+        partitioned.move.push(choice);
+      }
+    }
+
+    if (partitioned.team.length) {
+      return partitioned.team[this.random(partitioned.team.length)];
+    } else if (!moves) {
+      return partitioned.switch[this.random(partitioned.switch.length)];
+    }
+
+    const consider: Choice[] = partitioned.move;
+    for (const option of ['switch', 'mega', 'zmove', 'dynamax', 'terastallize'] as const) {
+      if (partitioned[option].length) continue;
+      const config = this.config[option];
+      if (config) {
+        if ('consider' in config) {
+          if (this.random() < config.consider) {
+            consider.push(...partitioned[option]);
+          }
+        } else {
+          if (this.random() < config.choose) {
+            return partitioned[option][this.random(partitioned[option].length)];
+          }
+        }
+      } else if (option !== 'switch') {
+        consider.push(...partitioned[option]);
+      }
+    }
+
+    return consider[this.random(consider.length)];
   }
 }

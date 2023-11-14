@@ -87,7 +87,7 @@ export type Choice = MoveChoice | SwitchChoice | TeamChoice;
 interface MoveChoice {
   type: 'move';
   choice: string;
-  extra?: boolean;
+  extra?: 'mega' | 'zmove' | 'dynamax' | 'terastallize';
 }
 
 interface SwitchChoice {
@@ -114,7 +114,7 @@ export abstract class Player {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onRequest(request: Request) {
-    throw new Error('Method not implemented.');
+    throw new Error('Method not implemented');
   }
 
   onError(error: Error) {
@@ -122,5 +122,5 @@ export abstract class Player {
     throw error;
   }
 
-  abstract choose(choices: Choice[][]): Choice[];
+  abstract choose(choices: Choice[]): Choice;
 }
