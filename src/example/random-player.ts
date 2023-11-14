@@ -13,13 +13,20 @@ export namespace RandomPlayer {
 }
 
 export class RandomPlayer extends Player {
+  static CONFIG: RandomPlayer.Config = {
+    mega: {choose: 1},
+    zmove: {choose: 1},
+    dynamax: {choose: 1},
+    terastallize: {choose: 1},
+  };
+
   private readonly random: Random;
   private readonly config: RandomPlayer.Config;
 
   constructor(random: Random, config?: RandomPlayer.Config) {
     super();
     this.random = random;
-    this.config = config ?? {};
+    this.config = {...RandomPlayer.CONFIG, ...(config ?? {})};
   }
 
   choose(choices: Choice[]): Choice {
@@ -58,16 +65,14 @@ export class RandomPlayer extends Player {
       const config = this.config[option];
       if (config) {
         if ('consider' in config) {
-          if (this.random() < config.consider) {
+          if (config.consider && (config.consider === 1 || this.random() < config.consider)) {
             consider.push(...partitioned[option]);
           }
         } else {
-          if (this.random() < config.choose) {
+          if (config.choose && (config.choose === 1 || this.random() < config.choose)) {
             return partitioned[option][this.random(partitioned[option].length)];
           }
         }
-      } else if (option !== 'switch') {
-        consider.push(...partitioned[option]);
       }
     }
 
