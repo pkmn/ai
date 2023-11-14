@@ -1,16 +1,13 @@
 import {Choice, Player} from './player';
 
-export type Random = (min?: number, max?: number) => number;
+type Option = {choose: number} | {consider: number};
+const options = ['switch', 'mega', 'zmove', 'dynamax', 'terastallize'] as const;
 
 export namespace RandomPlayer {
-  export interface Config {
-    switch: {choose: number} | {consider: number};
-    mega: {choose: number} | {consider: number};
-    zmove: {choose: number} | {consider: number};
-    dynamax: {choose: number} | {consider: number};
-    terastallize: {choose: number} | {consider: number};
-  }
+  export type Config = {[option in typeof options[number]]: Option};
 }
+
+export type Random = (min?: number, max?: number) => number;
 
 export class RandomPlayer extends Player {
   private readonly random: Random;
@@ -61,7 +58,7 @@ export class RandomPlayer extends Player {
     }
 
     const consider: Choice[] = partitioned.move;
-    for (const option of ['switch', 'mega', 'zmove', 'dynamax', 'terastallize'] as const) {
+    for (const option of options) {
       if (partitioned[option].length) continue;
       const config = this.config[option];
       if ('consider' in config) {
