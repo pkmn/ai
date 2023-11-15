@@ -47,16 +47,13 @@ a {
   color: var(--link-color);
   text-decoration: none;
 }
-a.subtle, h1 > a, h3 > a { color: unset; }
+a.subtle { color: unset; }
 a:visited {
   color: var(--link-color);
   text-decoration: none;
 }
 a:hover, a:focus, a:active  { text-decoration: underline; }
-a.subtle:hover, h1 > a:hover, h3 > a:hover,
-a.subtle:focus, h1 > a:focus, h3 > a:focus,
-a.subtle:active, h1 > a:active, h3 > a:active,
-a.subtle:visited, h1 > a:visited, h3 > a:visited {
+a.subtle:hover, a.subtle:focus, a.subtle:active, a.subtle:visited {
   color: unset;
   text-decoration: none;
 }

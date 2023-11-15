@@ -218,7 +218,7 @@ const build = async (rebuild?: boolean) => {
     title: 'pkmn.ai',
     content: `${toHTML(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"')}`,
     edit: `${EDIT}/static/index.dj`,
-  }).replace('<a href="/">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
+  }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
   make('projects', {...projects.page(STATIC), topbar});
   make('research', research.page(STATIC));

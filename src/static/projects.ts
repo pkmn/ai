@@ -97,7 +97,7 @@ export function page(dir: string) {
     {
       const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
       buf.push(project.site
-        ? `<h3><a href="${project.site}">${name}</a></h3>`
+        ? `<h3><a href="${project.site}" class="subtle">${name}</a></h3>`
         : `<h3>${name}</h3>`);
     }
     buf.push('<table>');
