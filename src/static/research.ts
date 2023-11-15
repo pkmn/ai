@@ -48,7 +48,11 @@ function format(e: bibtex.Entry) {
   parts.push(` (${e.fields.year[0]}) `);
   parts.push(TYPES[e.type](e));
 
-  const definition = `<a href="${e.fields.url[0]}" class="subtle">${parts.join('')}</a>`;
+  const urls = e.fields.url[0].split(',');
+  const sm = urls.length > 1
+    ? ` <a href="${urls[1]}" class="subtle"><em>(Includes supplementary text).</em></a>`
+    : '';
+  const definition = `<a href="${urls[0]}" class="subtle">${parts.join('')}</a>${sm}`;
   return `<dt id="${e.key}">[${id}]</dt><dd>${definition}</dd>`;
 }
 
@@ -57,7 +61,10 @@ export function page(dir: string) {
 
   const file = fs.readFileSync(path.join(dir, 'research.bib'), 'utf8');
   const bib = bibtex.parse(file, {sentenceCase: false});
-  if (bib.errors.length) throw new Error(`Error parsing research.bib: ${bib.errors.join(', ')}`);
+  if (bib.errors.length) {
+    console.error(bib.errors);
+    throw new Error('Error parsing research.bib');
+  }
   bib.entries.sort((a: bibtex.Entry, b: bibtex.Entry) => {
     const as = a.key.split(':');
     const bs = b.key.split(':');
