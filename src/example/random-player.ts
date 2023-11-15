@@ -1,7 +1,7 @@
 import {Choice, Player} from './player';
 
 type Option = {choose: number} | {consider: number};
-const options = ['switch', 'mega', 'zmove', 'dynamax', 'terastallize'] as const;
+const options = ['switch', 'mega', 'ultra', 'zmove', 'dynamax', 'terastallize'] as const;
 
 export namespace RandomPlayer {
   export type Config = {[option in typeof options[number]]: Option};
@@ -16,6 +16,7 @@ export class RandomPlayer extends Player {
   static CONFIG: RandomPlayer.Config = {
     switch: {consider: 0},
     mega: {choose: 1},
+    ultra: {choose: 1},
     zmove: {consider: 1},
     dynamax: {consider: 1},
     terastallize: {consider: 1},
@@ -27,24 +28,25 @@ export class RandomPlayer extends Player {
     this.config = {...RandomPlayer.CONFIG, ...config};
   }
 
-  choose(choices: Choice[]): Choice {
+  choose<C extends Choice>(choices: C[]): C {
     const partitioned = {
-      team: [] as Choice[],
-      switch: [] as Choice[],
-      move: [] as Choice[],
-      mega: [] as Choice[],
-      zmove: [] as Choice[],
-      dynamax: [] as Choice[],
-      terastallize: [] as Choice[],
+      team: [] as Choice.Team[],
+      switch: [] as Choice.Switch[],
+      move: [] as Choice.Move[],
+      mega: [] as Choice.Move[],
+      ultra: [] as Choice.Move[],
+      zmove: [] as Choice.Move[],
+      dynamax: [] as Choice.Move[],
+      terastallize: [] as Choice.Move[],
     };
 
     let moves = false;
     for (const choice of choices) {
       if (choice.type !== 'move') {
-        partitioned[choice.type].push(choice);
-      } else if (choice.extra) {
+        (partitioned[choice.type] as (Choice.Team | Choice.Switch)[]).push(choice);
+      } else if (choice.event) {
         moves = true;
-        partitioned[choice.extra].push(choice);
+        partitioned[choice.event].push(choice);
       } else {
         moves = true;
         partitioned.move.push(choice);
@@ -52,9 +54,9 @@ export class RandomPlayer extends Player {
     }
 
     if (partitioned.team.length) {
-      return partitioned.team[this.random(partitioned.team.length)];
+      return partitioned.team[this.random(partitioned.team.length)] as C;
     } else if (!moves) {
-      return partitioned.switch[this.random(partitioned.switch.length)];
+      return partitioned.switch[this.random(partitioned.switch.length)] as C;
     }
 
     const consider: Choice[] = partitioned.move;
@@ -67,11 +69,11 @@ export class RandomPlayer extends Player {
         }
       } else {
         if (config.choose && (config.choose === 1 || this.random() < config.choose)) {
-          return partitioned[option][this.random(partitioned[option].length)];
+          return partitioned[option][this.random(partitioned[option].length)] as C;
         }
       }
     }
 
-    return consider[this.random(consider.length)];
+    return consider[this.random(consider.length)] as C;
   }
 }
