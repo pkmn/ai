@@ -241,8 +241,8 @@ const build = async (rebuild?: boolean) => {
     path: '/concepts/',
     title: 'Concepts | pkmn.ai',
     header: 'Concepts',
-    content: `${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}`,
-    edit: `${EDIT}/static/concepts/index.dj`,
+    content: `${toHTML(path.join(STATIC, 'concepts.dj'))}`,
+    edit: `${EDIT}/static/concepts.dj`,
   });
 
   if (!rebuild) {
