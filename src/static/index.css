@@ -96,7 +96,7 @@ h1 {
 h2 {
   margin: 0.33em 0;
   font-size: 2em;
-  text-transform: uppercase;
+  text-decoration: underline;
 }
 h3 {
   margin: 1em 0;
