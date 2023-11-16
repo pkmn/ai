@@ -25,8 +25,11 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
   app.use(serve(PUBLIC));
 
-  chokidar.watch(STATIC).on('change', (file: string) => {
-    console.log(`\x1b[2mRebuilding static after change to ${path.relative(ROOT, file)} ...\x1b[0m`);
+  const build = (file?: string) => {
+    if (file) {
+      const f = path.relative(ROOT, file);
+      console.log(`\x1b[2mRebuilding static after change to ${f} ...\x1b[0m`);
+    }
     const begin = process.hrtime.bigint();
     try {
       esbuild.buildSync({
@@ -43,13 +46,16 @@ if (process.env.NODE_ENV === 'development') {
         cwd: ROOT,
       });
       const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
-      console.log(`\x1b[2mRebuilt static in ${duration} s (${compile})\x1b[0m`);
+      if (file) console.log(`\x1b[2mRebuilt static in ${duration} s (${compile})\x1b[0m`);
     } catch (err: any) {
       const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
       console.error(`\x1b[31m${err.message.split('\n').slice(1, -1).join('\n')}\x1b[0m`);
-      console.log(`\x1b[2mFailed build after ${duration} s\x1b[0m`);
+      if (file) console.log(`\x1b[2mFailed build after ${duration} s\x1b[0m`);
     }
-  });
+  };
+
+  build();
+  chokidar.watch(STATIC).on('change', build);
 }
 
 // TODO: this should be partly pre-rendered
