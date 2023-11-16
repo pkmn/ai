@@ -182,6 +182,7 @@ tr:first-child td { border: none; }
 }
 
 #concepts ul {
+  margin-top: 3em;
   padding: 0;
   text-align: center;
 }

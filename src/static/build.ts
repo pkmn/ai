@@ -238,7 +238,6 @@ const build = async (rebuild?: boolean) => {
   make('concepts', {
     path: '/concepts/',
     title: 'Concepts | pkmn.ai',
-    topbar,
     header: 'Concepts',
     content: `${toHTML(path.join(STATIC, 'concepts', 'index.dj'))}`,
     edit: `${EDIT}/static/concepts/index.dj`,

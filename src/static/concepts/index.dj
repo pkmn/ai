@@ -1,9 +1,12 @@
-TODO landing page links to other pages
+Certain topics merit greater coverage than what may already be provided by the
+[glossary](/glossary). This list is expected to grow as the field develos and
+may contain placeholders for pages which are planned but which have yet to be
+completed.
 
-- [Abstraction](/concepts/abstraction)
+- _Abstraction_
 - [Complexity](/concepts/complexity)
 - [Engines](/concepts/engines)
-- [Learning](/concepts/learning)
+- _Learning_
 - [Protocol](/concepts/protocol)
-- [Search](/concepts/search)
+- _Search_
 - [Variants](/concepts/variants)
