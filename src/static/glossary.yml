@@ -1,0 +1,136 @@
+abstraction: TODO
+action: TODO
+agent: TODO
+Alpha-Beta: TODO
+AlphaGo: TODO AlphaZero, MuZero
+anytime: TODO
+bandit: TODO
+Bayes' theorem: TODO
+Bayeselo: TODO
+belief: TODO
+binding: TODO
+BoN: TODO
+bot: TODO
+brancing factor: TODO
+bucketing: TODO data binning
+CFR: TODO CFR+, MC-CFR
+chance: TODO chance node, Chance player, -Dchance
+client: TODO + representaiton
+conmeta: TODO shanai
+damage calculator: TODO
+depth: TODO
+determinization: TODO
+drafting: TODO
+driver: TODO
+EBC: TODO
+EFG: TODO
+Elo: TODO
+embedding: TODO
+endgame: TODO
+EPOké: TODO
+expectiminimax: TODO
+exploitability: TODO
+extreme equilibria: TODO
+format: TODO metagame
+FOSG: TODO
+game tree: TODO
+game: TODO
+generation: TODO RBY... etc
+genetic algorithm: TODO
+gimmick: TODO
+Glicko: TODO
+GXE: TODO
+HCE: TODO
+heuristic: TODO
+inference: TODO deduction
+information set: TODO IS
+information: TODO perfect vs. imperfect vs. hidden, complete vs. incomplete
+input log: TODO <https://gist.github.com/scheibo/6d1473952f4c2b3852339f6f35301b93>
+interior equilibra: TODO
+killer move: TODO
+knowledge: TODO
+Lc0: TODO Stockfish, Leela Chess Zero
+learning: TODO supervised vs. unsupervised
+Libratus: TODO Pluribus, Modicum, ReBeL
+linear programming: TODO
+lookahead: TODO
+LOS: TODO https://www.chessprogramming.org/Match_Statistics#Likelihood_of_superiority
+match-up: TODO MU
+matrix node: TODO
+MaxDamagePlayer: TODO MDP, MostDamage, OTL, base power
+MCTS: TODO
+metaheuristic: TODO <https://en.wikipedia.org/wiki/Metaheuristic>
+midgame: TODO
+minimax: TODO
+NE: TODO nash equilibrium
+NN: TODO neural network/net
+NNUE: TODO
+observation: TODO
+offline: TODO
+OLT: TODO
+online: TODO
+opponent modeling: TODO
+pathology: TODO
+payoff: TODO
+PBS: TODO public belief state
+perspective: TODO viewpoint (spectator/omniscient/player)
+piloting: TODO battling
+pkmn: TODO
+player: TODO
+PoG: TODO Player of Games
+policy: TODO policy network
+pondering: TODO
+prediction: TODO
+protocol: TODO
+pruning: TODO
+PS: TODO Pokémon Showdown
+Q-learning: TODO (DQN)
+RandomPlayer: |
+  TODO RPs includes switching or not, RandomPlayer(`N`) can mean how often
+  consider switches vs. how often ONLY consider switching when option prefer
+  what % actually chooses switch as opposed to % actually considers switch. also
+  extend to RP(M, N) where second value is *gimmick* (use mega/z
+  move/dynamax/tera). **choose** vs. **consider** (add some icon like an icon on
+  top of number to indicate consider?) $`RP(\widetilde{20\%}, 90\%)` means
+  *consider* switch 20% of the time and use zmove when available 90% of the
+  time.
+regret: TODO
+relaxation: TODO
+reverse damage calculaor: TODO
+RL: TODO reinforcement learning
+roll: TODO
+search: TODO
+self-play: TODO
+sequentialization: TODO serialization
+server: TODO + representation
+sim: TODO
+SIMD: TODO
+simplification: TODO
+simultaneous: TODO
+slot: TODO
+Smogon: TODO
+sparse: TODO
+STAB: TODO
+state: TODO
+stochastic: TODO probabilistic vs. non-deterministic
+strategy: TODO
+subgame: TODO
+symmetry: TODO
+TD-learning: TODO temporal difference learning
+Team Preview: TODO
+teambuilding: TODO building
+Thompson sampling: TODO
+Torch: TODO
+transformer: TODO
+transition: TODO
+transitions: TODO engine nomenclature
+transposition: TODO
+tree bandit seach: TODO
+tuning: TODO
+turn: TODO
+UCT: TODO
+usage stats: TODO
+USB: TODO
+value: TODO value network, evaluation function
+variant: TODO
+wincon: TODO

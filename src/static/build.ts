@@ -12,6 +12,7 @@ import html from 'html-minifier';
 import katex from 'katex';
 import * as template from 'mustache';
 
+import * as glossary from './glossary';
 import * as projects from './projects';
 import * as research from './research';
 
@@ -220,10 +221,11 @@ const build = async (rebuild?: boolean) => {
     edit: `${EDIT}/static/index.dj`,
   }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
+  make('glossary', {...glossary.page(STATIC), topbar});
   make('projects', {...projects.page(STATIC), topbar});
   make('research', research.page(STATIC));
 
-  for (const title of ['Glossary', 'Background', 'Rules']) {
+  for (const title of ['Background', 'Rules']) {
     const page = title.toLowerCase();
     make(page, {
       path: `/${page}/`,

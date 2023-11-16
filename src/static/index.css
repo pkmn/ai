@@ -58,9 +58,8 @@ a.subtle:hover, a.subtle:focus, a.subtle:active, a.subtle:visited {
   text-decoration: none;
 }
 
-dt {
-  font-weight: bold;
-}
+dt { font-weight: bold; }
+dd { margin-left: 3ch; }
 
 ul {
   margin: 1em 0;
