@@ -59,7 +59,7 @@ a.subtle:hover, a.subtle:focus, a.subtle:active, a.subtle:visited {
 }
 
 dt { font-weight: bold; }
-dd { margin-left: 3ch; }
+dd { margin-left: 2ch; }
 
 ul {
   margin: 1em 0;
@@ -206,6 +206,7 @@ tr:first-child td { border: none; }
 
 /* Mobile - Large */
 @media(width < 768px) {
+  dd { margin: 0; }
   #research dt {
     display: none;
   }
