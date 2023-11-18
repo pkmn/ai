@@ -16,20 +16,23 @@ bucketing: TODO data binning
 CFR: TODO CFR+, MC-CFR
 chance: TODO chance node, Chance player, -Dchance
 client: TODO + representaiton
-conmeta: TODO shanai
+conmeta: TODO shanai (conlang)
+contempt: TODO
 damage calculator: TODO
 depth: TODO
 determinization: TODO
 drafting: TODO
 driver: TODO
 EBC: TODO
+EE: TODO
+EEE: TODO
 EFG: TODO
 Elo: TODO
 embedding: TODO
 endgame: TODO
 EPOké: TODO
 expectiminimax: TODO
-exploitability: TODO
+exploitability: TODO ε-exploitability
 extreme equilibria: TODO
 format: TODO metagame
 FOSG: TODO
@@ -37,6 +40,7 @@ game tree: TODO
 game: TODO
 generation: TODO RBY... etc
 genetic algorithm: TODO
+GF: TODO
 gimmick: TODO
 Glicko: TODO
 GXE: TODO
@@ -49,9 +53,10 @@ input log: TODO <https://gist.github.com/scheibo/6d1473952f4c2b3852339f6f35301b9
 interior equilibra: TODO
 killer move: TODO
 knowledge: TODO
-Lc0: TODO Stockfish, Leela Chess Zero
+lc0: TODO Stockfish, Leela Chess Zero
 learning: TODO supervised vs. unsupervised
 Libratus: TODO Pluribus, Modicum, ReBeL
+lrsnash: TODO
 linear programming: TODO
 lookahead: TODO
 LOS: TODO <https://www.chessprogramming.org/Match_Statistics#Likelihood_of_superiority>
@@ -99,6 +104,8 @@ relaxation: TODO
 reverse damage calculaor: TODO
 RL: TODO reinforcement learning
 roll: TODO
+rule-based: TODO
+rule: TODO PS custom "rule" vs. rules-ased
 search: TODO
 self-play: TODO
 sequentialization: TODO serialization
@@ -108,6 +115,7 @@ SIMD: TODO
 simplification: TODO
 simultaneous: TODO
 slot: TODO
+SM: TODO AM
 Smogon: TODO
 sparse: TODO
 STAB: TODO
@@ -117,6 +125,7 @@ strategy: TODO
 subgame: TODO
 symmetry: TODO
 TD-learning: TODO temporal difference learning
+TPCi: TODO
 Team Preview: TODO
 teambuilding: TODO building
 Thompson sampling: TODO
