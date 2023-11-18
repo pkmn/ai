@@ -1,9 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import * as djot from '@djot/djot';
 import * as bibtex from '@retorquere/bibtex-parser';
 import * as yaml from 'yaml';
+
+import {toHTML} from './build';
 
 interface Project {
   name?: string;
@@ -59,7 +60,7 @@ export function page(dir: string) {
   const filler = fs.readFileSync(path.join(dir, 'projects.dj'), 'utf8');
   const split = filler.replaceAll('\n', '').split('.');
 
-  const markdown = djot.renderHTML(djot.parse(filler));
+  const markdown = toHTML(filler);
   buf.push(`<section><div class="description">${markdown}</div></section>`);
   buf.push(
     `<nav>

@@ -114,8 +114,8 @@ const extractCaption = (node: AstNode) => {
   return result;
 };
 
-const toHTML = (file: string) =>
-  djot.renderHTML(djot.parse(read(file)), {
+export const toHTML = (s: string) =>
+  djot.renderHTML(djot.parse(s), {
     overrides: {
       inline_math: node => katex.renderToString(node.text, {output: 'mathml'}),
       display_math: node => katex.renderToString(node.text, {output: 'mathml'}),
@@ -217,7 +217,7 @@ const build = async (rebuild?: boolean) => {
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
-    content: `${toHTML(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"')}`,
+    content: `${toHTML(read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))}`,
     edit: `${EDIT}/static/index.dj`,
   }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
@@ -232,7 +232,7 @@ const build = async (rebuild?: boolean) => {
       topbar,
       title: `${title} | pkmn.ai`,
       header: title,
-      content: `${toHTML(path.join(STATIC, `${page}.dj`))}`,
+      content: `${toHTML(read(path.join(STATIC, `${page}.dj`)))}`,
       edit: `${EDIT}/static/${page}.dj`,
     });
   }
@@ -241,7 +241,7 @@ const build = async (rebuild?: boolean) => {
     path: '/concepts/',
     title: 'Concepts | pkmn.ai',
     header: 'Concepts',
-    content: `${toHTML(path.join(STATIC, 'concepts.dj'))}`,
+    content: `${toHTML(read(path.join(STATIC, 'concepts.dj')))}`,
     edit: `${EDIT}/static/concepts.dj`,
   });
 
@@ -265,7 +265,7 @@ const build = async (rebuild?: boolean) => {
       title: `Concepts — ${title} | pkmn.ai`,
       topbar,
       header: title,
-      content: toHTML(path.join(STATIC, 'concepts', `${page}.dj`)),
+      content: toHTML(read(path.join(STATIC, 'concepts', `${page}.dj`))),
       edit: `${EDIT}/static/concepts/${page}.dj`,
     });
   }

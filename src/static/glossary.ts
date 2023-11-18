@@ -1,8 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import * as djot from '@djot/djot';
 import * as yaml from 'yaml';
+
+import {toHTML} from './build';
 
 const slugify = (s: string) =>
   s.replace(/\s+/g, '-') // Replace spaces with -
@@ -23,7 +24,7 @@ export function page(dir: string) {
   buf.push('<dl>');
   for (const term of terms) {
     buf.push(`<dt id="${slugify(term)}">${term}</dt>`);
-    buf.push(`<dd>${djot.renderHTML(djot.parse(glossary[term]))}</dd>`);
+    buf.push(`<dd>${toHTML(glossary[term])}</dd>`);
   }
   buf.push('</dl>');
 
