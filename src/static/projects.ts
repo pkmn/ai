@@ -63,7 +63,7 @@ export function page(dir: string) {
   const markdown = toHTML(filler);
   buf.push(`<section><div class="description">${markdown}</div></section>`);
   buf.push(
-    `<nav>
+    `<nav class="hide">
       <ul>
         <li>
           <input type="radio" value="active" name="radio" id="active" />
@@ -153,7 +153,8 @@ export function page(dir: string) {
     edit: 'https://github.com/pkmn/ai/edit/main/src/static/projects.yml',
     script:
     `document.addEventListener('DOMContentLoaded', () => {
-        const projects = document.getElementsByClassName("project");
+        document.getElementsByTagName('nav')[0].classList.remove('hide');
+        const projects = document.getElementsByClassName('project');
         const radios = document.querySelectorAll('input[name="radio"]');
 
         for (let i = 0; i < radios.length; i++) {
