@@ -15,6 +15,8 @@ const slugify = (s: string) =>
 export function page(dir: string) {
   const buf: string[] = [];
 
+  buf.push(toHTML(fs.readFileSync(path.join(dir, 'glossary.dj'), 'utf8')));
+
   const glossary: {[term: string]: string} =
     yaml.parse(fs.readFileSync(path.join(dir, 'glossary.yml'), 'utf8'));
 
