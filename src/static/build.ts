@@ -117,8 +117,8 @@ const extractCaption = (node: AstNode) => {
 export const toHTML = (s: string) =>
   djot.renderHTML(djot.parse(s), {
     overrides: {
-      inline_math: node => katex.renderToString(node.text, {output: 'mathml'}),
-      display_math: node => katex.renderToString(node.text, {output: 'mathml'}),
+      inline_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: false}),
+      display_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: true}),
       div: (node, r): string => {
         if (hasClass(node, 'block')) {
           let cap = extractCaption(node);
