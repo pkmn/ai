@@ -219,8 +219,8 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   release:
-    name: "0.7.1"
-    url: https://github.com/hsahovic/poke-env/releases/tag/0.7.1
+    name: "0.8.0"
+    url: https://github.com/hsahovic/poke-env/releases/tag/0.8.0
 - name: Simplified Pokemon Environment
   active: [2019, 2020] # October 31
   paper: Simoes:2021
