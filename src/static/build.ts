@@ -169,12 +169,6 @@ export const toHTML = (s: string) =>
         }
         return r.renderAstNodeDefault(node);
       },
-      str: (node, r) => {
-        if (hasClass(node, 'dfn')) {
-          return `<dfn>${node.text}</dfn>`;
-        }
-        return r.renderAstNodeDefault(node);
-      },
       url: (node, r) => {
         addClass(node, 'url');
         return r.renderAstNodeDefault(node);
