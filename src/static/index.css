@@ -33,7 +33,7 @@ body {
   height: 100dvh;
   color: var(--fg-color);
   line-height: 1.5;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   background-color: var(--bg-color);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -193,6 +193,10 @@ tr:first-child td { border: none; }
 
 .hide {
   display: none;
+}
+
+.url {
+  overflow-wrap: anywhere;
 }
 
 /* Mobile - Small @media(width < 375px) {} */
