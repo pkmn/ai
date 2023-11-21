@@ -13,12 +13,14 @@ BoN: TODO
 bot: TODO
 brancing factor: TODO
 bucketing: TODO data binning
+cartridge: TODO
 CFR: TODO CFR+, MC-CFR
 chance: TODO chance node, Chance player, -Dchance
 client: TODO + representaiton
 conmeta: TODO shanai (conlang)
 contempt: TODO
 damage calculator: TODO
+damage coalition: TODO (action consolidation)
 depth: TODO
 determinization: TODO
 drafting: TODO
@@ -29,8 +31,10 @@ EEE: TODO
 EFG: TODO
 Elo: TODO
 embedding: TODO
+emulator: TODO
 endgame: TODO
 EPOké: TODO
+exp3: TODO
 expectiminimax: TODO
 exploitability: TODO ε-exploitability
 extreme equilibria: TODO
@@ -46,20 +50,22 @@ Glicko: TODO
 GXE: TODO
 HCE: TODO
 heuristic: TODO
+hyperparamter: TODO
 inference: TODO deduction
 information set: TODO IS
 information: TODO perfect vs. imperfect vs. hidden, complete vs. incomplete
 input log: TODO <https://gist.github.com/scheibo/6d1473952f4c2b3852339f6f35301b93>
 interior equilibra: TODO
+joint actions: TODO
 killer move: TODO
 knowledge: TODO
-lc0: TODO Stockfish, Leela Chess Zero
+Lc0: TODO Stockfish, Leela Chess Zero, lc0
 learning: TODO supervised vs. unsupervised
 Libratus: TODO Pluribus, Modicum, ReBeL
-lrsnash: TODO
 linear programming: TODO
 lookahead: TODO
 LOS: TODO <https://www.chessprogramming.org/Match_Statistics#Likelihood_of_superiority>
+lrsnash: TODO
 match-up: TODO MU
 matrix node: TODO
 MaxDamagePlayer: TODO MDP, MostDamage, OTL, base power
@@ -67,6 +73,7 @@ MCTS: TODO
 metaheuristic: TODO <https://en.wikipedia.org/wiki/Metaheuristic>
 midgame: TODO
 minimax: TODO
+MVP: TODO
 NE: TODO nash equilibrium
 NN: TODO neural network/net
 NNUE: TODO
@@ -82,6 +89,7 @@ perspective: TODO viewpoint (spectator/omniscient/player)
 piloting: TODO battling
 pkmn: TODO
 player: TODO
+playout: TODO
 PoG: TODO Player of Games
 policy: TODO policy network
 pondering: TODO
@@ -104,6 +112,7 @@ relaxation: TODO
 reverse damage calculaor: TODO
 RL: TODO reinforcement learning
 roll: TODO
+rollout: TODO
 rule-based: TODO
 rule: TODO PS custom "rule" vs. rules-ased
 search: TODO
@@ -113,6 +122,7 @@ server: TODO + representation
 sim: TODO
 SIMD: TODO
 simplification: TODO
+simulator: TODO
 simultaneous: TODO
 slot: TODO
 SM: TODO AM
@@ -125,11 +135,11 @@ strategy: TODO
 subgame: TODO
 symmetry: TODO
 TD-learning: TODO temporal difference learning
-TPCi: TODO
 Team Preview: TODO
 teambuilding: TODO building
 Thompson sampling: TODO
 Torch: TODO
+TPCi: TODO
 transformer: TODO
 transition: TODO
 transitions: TODO engine nomenclature
@@ -138,8 +148,10 @@ tree bandit seach: TODO
 tuning: TODO
 turn: TODO
 UCT: TODO
+uniform policy: TODO
 usage stats: TODO
 USB: TODO
 value: TODO value network, evaluation function
+vaporware: TODO
 variant: TODO
 wincon: TODO
