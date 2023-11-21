@@ -86,6 +86,5 @@ export function page(dir: string) {
     title: 'Research | pkmn.ai',
     header: 'Research',
     content: buf.join(''),
-    edit: 'https://github.com/pkmn/ai/edit/main/src/static/research.bib',
   };
 }

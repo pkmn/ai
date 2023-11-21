@@ -35,6 +35,5 @@ export function page(dir: string) {
     title: 'Glossary | pkmn.ai',
     header: 'Glossary',
     content: buf.join(''),
-    edit: 'https://github.com/pkmn/ai/edit/main/src/static/glossary.yml',
   };
 }

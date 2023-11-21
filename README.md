@@ -27,4 +27,6 @@ Researchers, developers, and interested onlookers are encouraged to join the **p
 on [Discord](https://pkmn.ai/chat), and all are welcome to [request](https://pkmn.ai/rules) the
 inclusion of new agents on the leaderboard.
 
-All of the code in this repository is distributed under the terms of the [MIT License](LICENSE).
+All of the code in this repository is distributed under the terms of the [MIT License](LICENSE) and
+all of the content is made available under [CC BY-SA
+4.0](https://creativecommons.org/licenses/by-sa/4.0/).

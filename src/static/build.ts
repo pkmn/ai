@@ -50,7 +50,6 @@ export const copy = (src: string, dst: string) => {
 };
 
 const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
-const EDIT = 'https://github.com/pkmn/ai/edit/main/src';
 
 export interface Page {
   id?: string;
@@ -59,7 +58,6 @@ export interface Page {
   topbar?: string;
   header?: string;
   content: string;
-  edit: string;
   script?: string;
 }
 
@@ -182,7 +180,8 @@ const build = async (rebuild?: boolean) => {
   let actual = list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard', 'background',
-    'index.css', 'favicon.svg', 'github.svg', 'index.html', 'projects.bib', 'research.bib',
+    'index.html', 'index.css', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg',
+    'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -204,7 +203,8 @@ const build = async (rebuild?: boolean) => {
     }
   }
 
-  for (const file of ['favicon.svg', 'github.svg', 'projects.bib', 'research.bib']) {
+  const files = ['favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib'];
+  for (const file of files) {
     copy(path.join(STATIC, file), path.join(PUBLIC, file));
   }
 
@@ -212,7 +212,6 @@ const build = async (rebuild?: boolean) => {
     id: 'home',
     title: 'pkmn.ai',
     content: `${toHTML(read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))}`,
-    edit: `${EDIT}/static/index.dj`,
   }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
   make('glossary', {...glossary.page(STATIC), topbar});
@@ -227,7 +226,6 @@ const build = async (rebuild?: boolean) => {
       title: `${title} | pkmn.ai`,
       header: title,
       content: `${toHTML(read(path.join(STATIC, `${page}.dj`)))}`,
-      edit: `${EDIT}/static/${page}.dj`,
     });
   }
 
@@ -236,7 +234,6 @@ const build = async (rebuild?: boolean) => {
     title: 'Concepts | pkmn.ai',
     header: 'Concepts',
     content: `${toHTML(read(path.join(STATIC, 'concepts.dj')))}`,
-    edit: `${EDIT}/static/concepts.dj`,
   });
 
   if (!rebuild) {
@@ -260,7 +257,6 @@ const build = async (rebuild?: boolean) => {
       topbar,
       header: title,
       content: toHTML(read(path.join(STATIC, 'concepts', `${page}.dj`))),
-      edit: `${EDIT}/static/concepts/${page}.dj`,
     });
   }
 

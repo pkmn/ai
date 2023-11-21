@@ -150,7 +150,6 @@ export function page(dir: string) {
     title: 'Projects | pkmn.ai',
     header: 'Projects',
     content: buf.join(''),
-    edit: 'https://github.com/pkmn/ai/edit/main/src/static/projects.yml',
     script:
     `document.addEventListener('DOMContentLoaded', () => {
         document.getElementsByTagName('nav')[0].classList.remove('hide');

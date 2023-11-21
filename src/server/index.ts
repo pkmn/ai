@@ -79,7 +79,6 @@ app.get('/battles', (_, res) => {
       </li>
     </ul>
    </nav>`,
-    edit: 'https://github.com/pkmn/ai',
   }));
 });
 
