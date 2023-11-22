@@ -199,6 +199,16 @@ tr:first-child td { border: none; }
   overflow-wrap: anywhere;
 }
 
+.column > h4 {text-align: center; }
+.columns {
+  display: table;
+  margin: 0 auto;
+}
+.column {
+  display: table-cell;
+  padding: 1rem;
+}
+
 /* Mobile - Small @media(width < 375px) {} */
 
 /* Mobile - Medium */

@@ -1,12 +1,29 @@
 
-TODO
+This is a glossary of containing specific definitons to terms that often come up in discussion of
+competitive Pokémon artificial intelligence. This list is not comprehensive --- terms which are less
+frequently used/more basic/generally well-defined elsewhere are not included. If a term is missing
+from this page it may be covered by one of the following glossaries:
 
-- <https://gist.github.com/scheibo/b9c817ca3e2d0ae973634c79295177a9>
-- <https://en.wikipedia.org/wiki/Glossary_of_artificial_intelligence>
-- <https://en.wikipedia.org/wiki/Glossary_of_game_theory>
-- <https://www.chessprogramming.org/Dictionary>
-- <https://www.smogon.com/dp/articles/pokemon_dictionary>
-- <https://victoryroadvgc.com/resources/glossary/>
-- <https://bulbapedia.bulbagarden.net/wiki/Appendix:Metagame_terminology>
-- pinyon terminology
-- <https://discord.com/channels/689316505560809576/689316506265321535/1101256695197466745>
+:::: columns
+
+::: column
+
+#### Pokémon
+
+- [Bulbapedia](https://bulbapedia.bulbagarden.net/wiki/Appendix:Metagame_terminology)
+- [Smogon](https://www.smogon.com/dp/articles/pokemon_dictionary)
+- [Victory Road](https://victoryroadvgc.com/resources/glossary/)
+
+:::
+
+::: column
+
+#### Artificial Intelligence
+
+- [Artificial Intelligence](https://en.wikipedia.org/wiki/Glossary_of_artificial_intelligence)
+- [Game Theory](https://en.wikipedia.org/wiki/Glossary_of_game_theory)
+- [Chess Programming](https://www.chessprogramming.org/Dictionary)
+
+:::
+
+::::

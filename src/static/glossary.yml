@@ -1,40 +1,95 @@
 abstraction: TODO
 action: TODO
-agent: TODO
-Alpha-Beta: TODO
-AlphaGo: TODO AlphaZero, MuZero
-anytime: TODO
+agent: |
+  An intelligent agent ([IA]{.dfn}) is an entity that autonomously acts upon an environment to
+  achieve its goals. In computer Chess the individual agents are usually referred to as "engines",
+  but in competitive Pokémon artificial intelligence circles "agent" or "[bot](#bot)" is prefered as
+  [engine](#engine) is used to refer to the piece code responsible for the simuluation of core
+  Pokémon battle mechanics.
+Alpha-Beta: |
+  Alpha-beta pruning is a search algorithm that seeks to decrease the number of nodes that are
+  evaluated by the [minimax](#minimax) algorithm in its search tree. When applied to a standard
+  minimax tree, it returns the same move as minimax would, but [prunes](#pruning) away branches that
+  cannot possibly influence the final decision. Alpha-beta has been shown to also work by
+  [simultaneous move](#SM) games in [(Bošanský 2013)](/research#Bošanský:2013){.subtle} and
+  [(Saffidine 2021)](/research#Saffidine:2021){.subtle}.
+AlphaGo: |
+  An influential artificial intelligence agent which achieved superhuman
+  [Go](https://en.wikipedia.org/wiki/Go_(game)){.subtle} performance using a combination of
+  Monte-carlo tree search and neural networks [(Silver 2016)](/research#Silver:2016){.subtle}. Along
+  with AlphaZero [(Silver 2017)](/research#Silver:2017){.subtle} and MuZero [(Silver
+  2018)](/research#Silver:2018){.subtle}, the AlphaGo architecture serves as the modern foundation
+  for many perfect information game-playing agents (_e.g._, [Lc0](#Lc0)).
+anytime: |
+  An anytime algorithm is an algorithm that can return a valid solution to a problem even if it is
+  interrupted before it ends.
 bandit: TODO
-Bayes' theorem: TODO
-Bayeselo: TODO
+Bayes' rule: TODO
+Bayeselo: |
+  [Bayesian Elo Rating](https://www.remi-coulom.fr/Bayesian-Elo/){.subtle}, a commonly used tool for
+  estimating the [Elo](#Elo) rating based on matches between computerized agents.
 belief: TODO
-binding: TODO
-BoN: TODO
-bot: TODO
-brancing factor: TODO
+bimatrix game: |
+  A [simultaneous game](#SM) for two players in which each player has a finite set of actions. Such
+  a game can be fully described by two matrices, each describing the payoffs of one of the players.
+binding: |
+  Either refers to a [language binding]{.dfn}, the application programming interface that provides
+  glue code specifically made to allow a programming language to use a foreign library or operating
+  system service, or a [specific class of moves in Pokémon known as [binding
+  moves]{.dfn}](https://bulbapedia.bulbagarden.net/wiki/Bound){.subtle} which prevent their target
+  from switching and cause damage for multiple turns (also known as "wrapping" or "partial-trapping"
+  moves).
+BoN: |
+  Abbreviation for Best-of-$`N`, where $`N` refers to the number of games used to decide the winner
+  of a set of battles between two players (usually 1 or 3, _e.g._, "BO3").
+bot: |
+  Slang term for [agent](#agent) derived from the word "robot". Alternatively, may be used to
+  characterize the parts of the [client](#client) code responsible for connecting and communicating
+  with the [server](#server) and distinguishing it from the core search/knowledge components of the
+  agent.
+branching factor: TODO
 bucketing: TODO data binning
-cartridge: TODO
+cartridge: |
+  The game of Pokémon as it exists on the original Nintendo console hardware (due to the earliest
+  [generations](#generation) of Pokémon being played on Game Boy ROM cartridges).
 CFR: TODO CFR+, MC-CFR
 chance: TODO chance node, Chance player, -Dchance
 client: TODO + representaiton
-conmeta: TODO shanai (conlang)
-contempt: TODO
+conmeta: |
+  A constructed [metagame](#metagame) where the artificially created rules have been arbitrarily
+  tailored to simplify things for artificial intelligence agents, _e.g._, the [Shanai
+  Cup](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273){.subtle}.
+contempt: |
+  The contempt factor reflects the estimated superiority/inferiority of the program over its
+  opponent. Programs incorporating contempt may choose to follow different strategies against
+  opponents of varying perceived skill level.
 damage calculator: TODO
 damage coalition: TODO (action consolidation)
 depth: TODO
 determinization: TODO
 drafting: TODO
 driver: TODO
-EBC: TODO
-EE: TODO
-EEE: TODO
+EBC: |
+  [Endless Battle Clause](https://dex.pokemonshowdown.com/articles/battlerules){.subtle}, a rule
+  that exists in [Smogon](#Smogon) [formats](#format) to guarantee that all battles will terminate
+  in 1000 turns or fewer, while also seeking to curtail certain specific degenerate strategies.
+EE: |
+  Extreme equilbrium, a Nash equilibrium where for both players' mixed strategies cannot be
+  described as convex combinations of other mixed strategies that form equilibria.
+EEE: |
+  Enumeration of extreme equilbria, a linear programming algorithm for determining all of the
+  possible [Nash equilibrium](#NE) solutions in a [bimatrix game](#bimatrix-game).
 EFG: TODO
 Elo: TODO
 embedding: TODO
 emulator: TODO
 endgame: TODO
-EPOké: TODO
-exp3: TODO
+engine: TODO
+EPOké: |
+  A [pkmn](#pkmn) [client](#client) library TODO
+Exp3: |
+  Exponential-weight algorithm for Exploration and Exploitation, a [bandit](#bandit) algorithm
+  commonly used in [tree bandit search](#TBS).
 expectiminimax: TODO
 exploitability: TODO ε-exploitability
 extreme equilibria: TODO
@@ -42,12 +97,31 @@ format: TODO metagame
 FOSG: TODO
 game tree: TODO
 game: TODO
-generation: TODO RBY... etc
+generation: |
+  A grouping of Pokemon game releases that seperates them based on the Pokémon and mechanics they
+  include. Generations are typically referred to by acronyms based on their release titles:
+
+    - _Generation I_: RBY, RB
+    - _Generation II_: GSC, GS
+    - _Generation III_: ADV, RSE, RS, RSEFRLG
+    - _Generation IV_: DPP, DPPt, HGSS, DPPtHGSS, DP
+    - _Generation V_: BW, B2W2
+    - _Generation VI_: XY, ORAS
+    - _Generation VII_: SM, USUM
+    - _Generation VIII_: SS, SwSh
+    - _Generation IX_: SV
 genetic algorithm: TODO
-GF: TODO
+GF: |
+  [Game Freak](https://www.gamefreak.co.jp/){.subtle}, primary developer and co-owner of Pokémon,
+  responsible for the [cartridge](#cartridge) implementation.
 gimmick: TODO
-Glicko: TODO
-GXE: TODO
+Glicko: |
+  The Glicko rating system, a method used by [Pokémon Showdown!](#PS){.subtle} to assess a player's
+  strength. Used primarily for [usage stats](#usage-stats).
+GXE: |
+  [Glicko X-Act Estimate or "GLIXARE"](https://www.smogon.com/forums/threads/51169/){.subtle}, an
+  estimate used by [Pokémon Showdown!](#PS){.subtle} of a player's win chance against an "average"
+  player.
 HCE: TODO
 heuristic: TODO
 hyperparamter: TODO
@@ -59,17 +133,28 @@ interior equilibra: TODO
 joint actions: TODO
 killer move: TODO
 knowledge: TODO
-Lc0: TODO Stockfish, Leela Chess Zero, lc0
+Lc0: |
+  [Leela Chess Zero (lc0)](https://lczero.org/){.subtle}, an open source computer chess agent based
+  on the design behind [AlphaGo](#AlphaGo). Regularly competes with
+  [Stockfish](https://stockfishchess.org/){.subtle} for the title of strongest computer chess agent.
 learning: TODO supervised vs. unsupervised
 Libratus: TODO Pluribus, Modicum, ReBeL
 linear programming: TODO
 lookahead: TODO
-LOS: TODO <https://www.chessprogramming.org/Match_Statistics#Likelihood_of_superiority>
-lrsnash: TODO
+LOS: |
+  The likelihood of superiority denotes how likely it would be for two players of the same strength
+  to reach a certain result --- in other fields called a p-value, a measure of statistical
+  significance of a departure from the null hypothesis.
+lrsnash: |
+  A linear programming algorithm for determining all of the possible [Nash equilibrium](#NE)
+  solutions in a [bimatrix game](#bimatrix-game) published in [(Avis
+  2010)](/research#Avis:2010){.subtle} and available in the
+  [`lrslib`](https://cgm.cs.mcgill.ca/~avis/C/lrs.html){.subtle}.
 match-up: TODO MU
 matrix node: TODO
 MaxDamagePlayer: TODO MDP, MostDamage, OTL, base power
 MCTS: TODO
+metagame: TODO
 metaheuristic: TODO <https://en.wikipedia.org/wiki/Metaheuristic>
 midgame: TODO
 minimax: TODO
@@ -87,16 +172,30 @@ payoff: TODO
 PBS: TODO public belief state
 perspective: TODO viewpoint (spectator/omniscient/player)
 piloting: TODO battling
-pkmn: TODO
+pkmn: |
+  A common abbreviation of Pokémon dating back to the earliest releases where the stylized
+  ^P^~K~^M^~N~ was included in the [cartridge](#cartridge) character set. However, this abbreviation
+  has since been adopted as the name for the [pkmn](https://pkmn.cc){.subtle} collection of projects
+  (notably the pkmn [engine](#engine), [`libpkmn`](https://pkmn.cc/engine){.subtle}) and is often
+  what is being referenced (and is always what is being referred to when prefixed with an "@", as
+  @pkmn is the name of the [organization](https://github.com/pkmn){.subtle}).
 player: TODO
 playout: TODO
-PoG: TODO Player of Games
+PoG:
+  Player of Games, the original name of the general game-playing agent from [(Schmid
+  2021)](/research#Schmid:2021){.subtle} which utilizes improved counterfactual regret minimizaton
+  to acheive superhuman performance in a variety of games.
 policy: TODO policy network
-pondering: TODO
+pondering: |
+  The act of thinking during an opponent's turn. Given that Pokémon is a [simultaneous move](#SM)
+  game, pondering occurs after a player has submitted their action (or been asked to wait) while
+  they are waiting for their next opportunity to input an action.
 prediction: TODO
 protocol: TODO
 pruning: TODO
-PS: TODO Pokémon Showdown
+PS: |
+  [Pokémon Showdown!](https://pokemonshowdown.com){.subtle}, the most popular and influential
+  Pokemon battle [simulator](#sim).
 Q-learning: TODO (DQN)
 RandomPlayer: |
   TODO RPs includes switching or not, RandomPlayer(`N`) can mean how often
@@ -109,7 +208,7 @@ RandomPlayer: |
   time.
 regret: TODO
 relaxation: TODO
-reverse damage calculaor: TODO
+reverse damage calculator: TODO
 RL: TODO reinforcement learning
 roll: TODO
 rollout: TODO
@@ -119,16 +218,22 @@ search: TODO
 self-play: TODO
 sequentialization: TODO serialization
 server: TODO + representation
-sim: TODO
-SIMD: TODO
+sim: TODO simulator
+SIMD: |
+  SIMD is short for *S*ingle *I*nstruction on *M*ultiple *D*ata, which are a type of CPU instruction
+  which allows for computing operations in parallel on a vector of numbers.
 simplification: TODO
-simulator: TODO
 simultaneous: TODO
 slot: TODO
-SM: TODO AM
-Smogon: TODO
+SM: TODO AM, sun moon (generation)
+Smogon: |
+  [Smogon University](https://smogon.com), home of competitive Pokémon battling and curator of rules
+  and restrictions for the most popular competitive [formats](#format) outside of those supported by
+  Nintendo.
 sparse: TODO
-STAB: TODO
+STAB: |
+  An abbreviation for same-type attack bonus, a mechanic where a damage boost that is applied to
+  moves used by a Pokémon of the same type.
 state: TODO
 stochastic: TODO probabilistic vs. non-deterministic
 strategy: TODO
@@ -138,20 +243,38 @@ TD-learning: TODO temporal difference learning
 Team Preview: TODO
 teambuilding: TODO building
 Thompson sampling: TODO
-Torch: TODO
-TPCi: TODO
+Torch: |
+  The defacto standard open source machine learning and scientific computing framework, most often
+  used in Python via [PyTorch](https://en.wikipedia.org/wiki/PyTorch){.subtle}.
+TPCi: |
+  [The Pokémon Company International](https://corporate.pokemon.com/){.subtle}, co-owners of the
+  Pokémon franchise along with the publisher and trademark-holder, Nintendo, and the developers,
+  [Game Freak](#GF).
 transformer: TODO
 transition: TODO
 transitions: TODO engine nomenclature
 transposition: TODO
-tree bandit seach: TODO
+TBS: |
+  Tree-bandit search, the name for the family of search algorithms which are roughly based around
+  [Monte-carlo tree search](#MCTS) but which make use of various [bandit](#bandit) algorithms to
+  greatly improve performance and convergence.
 tuning: TODO
 turn: TODO
-UCT: TODO
+UCB: |
+  Upper Confidence Bound, a [bandit](#bandit) algorithm commonly used in [tree
+  bandit search](#TBS).
+UCT: |
+  Upper Confidence bounds applied to Trees, the contemporary standard
+  implementation of [Monte-carlo tree search](#MCTS) which uses the [UCB](#UCB)
+  algorithm to select promising child nodes to expand. See also [tree
+  bandit search](#TBS).
 uniform policy: TODO
 usage stats: TODO
-USB: TODO
 value: TODO value network, evaluation function
-vaporware: TODO
+vaporware: |
+  Software that has been advertised but is not yet available to use/buy, either because it is only a
+  concept or because it is still being written or designed. See also [pkmn](#pkmn).
 variant: TODO
-wincon: TODO
+wincon: |
+  A [win condition]{.dfn} is a Pokémon or scenario that a player needs in order to secure that they
+  win the game.
