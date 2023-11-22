@@ -102,7 +102,7 @@ h3 {
   font-size: 1.75em;
 }
 
-nav ul {
+nav > ul, .column > ul {
   padding: 0;
   list-style: none;
 }
@@ -199,14 +199,13 @@ tr:first-child td { border: none; }
   overflow-wrap: anywhere;
 }
 
-.column > h4 {text-align: center; }
+.column { flex: 1; }
 .columns {
-  display: table;
-  margin: 0 auto;
-}
-.column {
-  display: table-cell;
-  padding: 1rem;
+  display: flex;
+  justify-content: center;
+  width: 75%;
+  margin: 1.25em auto;
+  text-align: center;
 }
 
 /* Mobile - Small @media(width < 375px) {} */
