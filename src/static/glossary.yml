@@ -15,9 +15,9 @@ Alpha-Beta: |
   [(Saffidine 2021)](/research#Saffidine:2021){.subtle}.
 AlphaGo: |
   An influential artificial intelligence agent which achieved superhuman
-  [Go](https://en.wikipedia.org/wiki/Go_(game)){.subtle} performance using a combination of
-  Monte-carlo tree search and neural networks [(Silver 2016)](/research#Silver:2016){.subtle}. Along
-  with AlphaZero [(Silver 2017)](/research#Silver:2017){.subtle} and MuZero [(Silver
+  [Go](https://en.wikipedia.org/wiki/Go_(game)) performance using a combination of Monte-carlo tree
+  search and neural networks [(Silver 2016)](/research#Silver:2016){.subtle}. Along with AlphaZero
+  [(Silver 2017)](/research#Silver:2017){.subtle} and MuZero [(Silver
   2018)](/research#Silver:2018){.subtle}, the AlphaGo architecture serves as the modern foundation
   for many perfect information game-playing agents (_e.g._, [Lc0](#Lc0)).
 anytime: |
@@ -26,7 +26,7 @@ anytime: |
 bandit: TODO
 Bayes' rule: TODO
 Bayeselo: |
-  [Bayesian Elo Rating](https://www.remi-coulom.fr/Bayesian-Elo/){.subtle}, a commonly used tool for
+  [Bayesian Elo Rating](https://www.remi-coulom.fr/Bayesian-Elo/), a commonly used tool for
   estimating the [Elo](#Elo) rating based on matches between computerized agents.
 belief: TODO
 bimatrix game: |
@@ -36,8 +36,8 @@ binding: |
   Either refers to a [language binding]{.dfn}, the application programming interface that provides
   glue code specifically made to allow a programming language to use a foreign library or operating
   system service, or a [specific class of moves in Pokémon known as [binding
-  moves]{.dfn}](https://bulbapedia.bulbagarden.net/wiki/Bound){.subtle} which prevent their target
-  from switching and cause damage for multiple turns (also known as "wrapping" or "partial-trapping"
+  moves]{.dfn}](https://bulbapedia.bulbagarden.net/wiki/Bound) which prevent their target from
+  switching and cause damage for multiple turns (also known as "wrapping" or "partial-trapping"
   moves).
 BoN: |
   Abbreviation for Best-of-$`N`, where $`N` refers to the number of games used to decide the winner
@@ -58,7 +58,7 @@ client: TODO + representaiton
 conmeta: |
   A constructed [metagame](#metagame) where the artificially created rules have been arbitrarily
   tailored to simplify things for artificial intelligence agents, _e.g._, the [Shanai
-  Cup](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273){.subtle}.
+  Cup](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273).
 contempt: |
   The contempt factor reflects the estimated superiority/inferiority of the program over its
   opponent. Programs incorporating contempt may choose to follow different strategies against
@@ -70,9 +70,9 @@ determinization: TODO
 drafting: TODO
 driver: TODO
 EBC: |
-  [Endless Battle Clause](https://dex.pokemonshowdown.com/articles/battlerules){.subtle}, a rule
-  that exists in [Smogon](#Smogon) [formats](#format) to guarantee that all battles will terminate
-  in 1000 turns or fewer, while also seeking to curtail certain specific degenerate strategies.
+  [Endless Battle Clause](https://dex.pokemonshowdown.com/articles/battlerules), a rule that exists
+  in [Smogon](#Smogon) [formats](#format) to guarantee that all battles will terminate in 1000 turns
+  or fewer, while also seeking to curtail certain specific degenerate strategies.
 EE: |
   Extreme equilbrium, a Nash equilibrium where for both players' mixed strategies cannot be
   described as convex combinations of other mixed strategies that form equilibria.
@@ -112,16 +112,15 @@ generation: |
     - _Generation IX_: SV
 genetic algorithm: TODO
 GF: |
-  [Game Freak](https://www.gamefreak.co.jp/){.subtle}, primary developer and co-owner of Pokémon,
-  responsible for the [cartridge](#cartridge) implementation.
+  [Game Freak](https://www.gamefreak.co.jp/), primary developer and co-owner of Pokémon, responsible
+  for the [cartridge](#cartridge) implementation.
 gimmick: TODO
 Glicko: |
-  The Glicko rating system, a method used by [Pokémon Showdown!](#PS){.subtle} to assess a player's
-  strength. Used primarily for [usage stats](#usage-stats).
+  The Glicko rating system, a method used by [Pokémon Showdown!](#PS) to assess a player's strength.
+  Used primarily for [usage stats](#usage-stats).
 GXE: |
-  [Glicko X-Act Estimate or "GLIXARE"](https://www.smogon.com/forums/threads/51169/){.subtle}, an
-  estimate used by [Pokémon Showdown!](#PS){.subtle} of a player's win chance against an "average"
-  player.
+  [Glicko X-Act Estimate or "GLIXARE"](https://www.smogon.com/forums/threads/51169/), an estimate
+  used by [Pokémon Showdown!](#PS) of a player's win chance against an "average" player.
 HCE: TODO
 heuristic: TODO
 hyperparamter: TODO
@@ -134,9 +133,9 @@ joint actions: TODO
 killer move: TODO
 knowledge: TODO
 Lc0: |
-  [Leela Chess Zero (lc0)](https://lczero.org/){.subtle}, an open source computer chess agent based
-  on the design behind [AlphaGo](#AlphaGo). Regularly competes with
-  [Stockfish](https://stockfishchess.org/){.subtle} for the title of strongest computer chess agent.
+  [Leela Chess Zero (lc0)](https://lczero.org/), an open source computer chess agent based on the
+  design behind [AlphaGo](#AlphaGo). Regularly competes with
+  [Stockfish](https://stockfishchess.org/) for the title of strongest computer chess agent.
 learning: TODO supervised vs. unsupervised
 Libratus: TODO Pluribus, Modicum, ReBeL
 linear programming: TODO
@@ -149,7 +148,7 @@ lrsnash: |
   A linear programming algorithm for determining all of the possible [Nash equilibrium](#NE)
   solutions in a [bimatrix game](#bimatrix-game) published in [(Avis
   2010)](/research#Avis:2010){.subtle} and available in the
-  [`lrslib`](https://cgm.cs.mcgill.ca/~avis/C/lrs.html){.subtle}.
+  [`lrslib`](https://cgm.cs.mcgill.ca/~avis/C/lrs.html).
 match-up: TODO MU
 matrix node: TODO
 MaxDamagePlayer: TODO MDP, MostDamage, OTL, base power
@@ -175,10 +174,10 @@ piloting: TODO battling
 pkmn: |
   A common abbreviation of Pokémon dating back to the earliest releases where the stylized
   ^P^~K~^M^~N~ was included in the [cartridge](#cartridge) character set. However, this abbreviation
-  has since been adopted as the name for the [pkmn](https://pkmn.cc){.subtle} collection of projects
-  (notably the pkmn [engine](#engine), [`libpkmn`](https://pkmn.cc/engine){.subtle}) and is often
-  what is being referenced (and is always what is being referred to when prefixed with an "@", as
-  @pkmn is the name of the [organization](https://github.com/pkmn){.subtle}).
+  has since been adopted as the name for the [pkmn](https://pkmn.cc) collection of projects (notably
+  the pkmn [engine](#engine), [`libpkmn`](https://pkmn.cc/engine)) and is often what is being
+  referenced (and is always what is being referred to when prefixed with an "@", as @pkmn is the
+  name of the [organization](https://github.com/pkmn)).
 player: TODO
 playout: TODO
 PoG:
@@ -194,8 +193,8 @@ prediction: TODO
 protocol: TODO
 pruning: TODO
 PS: |
-  [Pokémon Showdown!](https://pokemonshowdown.com){.subtle}, the most popular and influential
-  Pokemon battle [simulator](#sim).
+  [Pokémon Showdown!](https://pokemonshowdown.com), the most popular and influential Pokemon battle
+  [simulator](#sim).
 Q-learning: TODO (DQN)
 RandomPlayer: |
   TODO RPs includes switching or not, RandomPlayer(`N`) can mean how often
@@ -245,11 +244,11 @@ teambuilding: TODO building
 Thompson sampling: TODO
 Torch: |
   The defacto standard open source machine learning and scientific computing framework, most often
-  used in Python via [PyTorch](https://en.wikipedia.org/wiki/PyTorch){.subtle}.
+  used in Python via [PyTorch](https://en.wikipedia.org/wiki/PyTorch).
 TPCi: |
-  [The Pokémon Company International](https://corporate.pokemon.com/){.subtle}, co-owners of the
-  Pokémon franchise along with the publisher and trademark-holder, Nintendo, and the developers,
-  [Game Freak](#GF).
+  [The Pokémon Company International](https://corporate.pokemon.com/), co-owners of the Pokémon
+  franchise along with the publisher and trademark-holder, Nintendo, and the developers, [Game
+  Freak](#GF).
 transformer: TODO
 transition: TODO
 transitions: TODO engine nomenclature
