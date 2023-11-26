@@ -4,8 +4,9 @@
   "license": "MIT",
   "dependencies": {
     "@djot/djot": "^0.2.5",
+    "@pkmn/client": "^0.6.16",
+    "@pkmn/data": "^0.7.58",
     "@pkmn/protocol": "^0.6.16",
-    "@pkmn/types": "^3.0.0",
     "@retorquere/bibtex-parser": "^7.0.7",
     "@smogon/calc": "^0.8.1",
     "@types/html-minifier": "^4.0.3",

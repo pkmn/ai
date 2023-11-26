@@ -1,86 +1,7 @@
-import {MoveName, PokemonDetails, PokemonHPStatus, PokemonIdent} from '@pkmn/protocol';
-import {ID, MoveTarget, SideID, StatsTable, TypeName} from '@pkmn/types';
 
-export type Request = MoveRequest | SwitchRequest | TeamRequest | WaitRequest;
-
-export interface MoveRequest {
-  side: Request.SideInfo;
-  active: Array<Request.ActivePokemon | null>;
-  noCancel?: boolean;
-}
-
-export interface SwitchRequest {
-  side: Request.SideInfo;
-  forceSwitch: [true] & boolean[];
-  noCancel?: boolean;
-}
-
-export interface TeamRequest {
-  teamPreview: true;
-  side: Request.SideInfo;
-  maxTeamSize?: number;
-  noCancel?: boolean;
-}
-
-export interface WaitRequest {
-  wait: true;
-  side: undefined;
-  noCancel?: boolean;
-}
-
-export namespace Request {
-  export interface SideInfo {
-    name: string;
-    id: SideID;
-    pokemon: Pokemon[];
-  }
-
-  export interface ActivePokemon {
-    moves: Array<{
-      move: MoveName;
-      pp: number;
-      maxpp: number;
-      target: MoveTarget;
-      disabled?: boolean;
-    }>;
-    maxMoves?: {
-      gigantamax?: boolean;
-      maxMoves: Array<{
-        move: string;
-        target: MoveTarget;
-        disabled?: boolean;
-      }>;
-    };
-    canZMove?: Array<{
-      move: MoveName;
-      target: MoveTarget;
-    } | null>;
-    canDynamax?: boolean;
-    canMegaEvo?: boolean;
-    canUltraBurst?: boolean;
-    canTerastallize?: string;
-    trapped?: boolean;
-    maybeTrapped?: boolean;
-    maybeDisabled?: boolean;
-    fainted?: boolean;
-  }
-
-  export interface Pokemon {
-    active?: boolean;
-    details: PokemonDetails;
-    ident: PokemonIdent;
-    pokeball: ID;
-    ability?: ID;
-    baseAbility?: ID;
-    condition: PokemonHPStatus;
-    item: ID;
-    moves: ID[];
-    stats: Omit<StatsTable, 'hp'>;
-    commanding?: boolean;
-    reviving?: boolean;
-    teraType?: TypeName;
-  }
-}
+import {Battle} from '@pkmn/client';
+import {Generations} from '@pkmn/data';
+import {Request} from '@pkmn/protocol';
 
 export namespace Choice {
   export interface Team{
@@ -102,23 +23,31 @@ export namespace Choice {
 export type Choice = Choice.Move | Choice.Switch| Choice.Team;
 
 export abstract class Player {
+  battle: Battle;
+
+  constructor(gens: Generations) {
+    this.battle = new Battle(gens);
+  }
+
   accept(chunk: string) {
     for (const line of chunk.split('\n')) {
       if (!line.startsWith('|')) continue;
       const index = line.indexOf('|', 1);
       const cmd = line.slice(1, index);
       const rest = line.slice(index + 1);
-      if (cmd === 'request') return this.onRequest(JSON.parse(rest));
-      if (cmd === 'error') return this.onError(new Error(rest));
+      if (cmd === 'error') return this.onError(new Error(rest)); // FIXME
+      this.battle.add(line);
     }
+    this.battle.update();
+    // FIXME onRequest?
   }
 
   onRequest(request: Request) {
     // WaitRequest
-    if ('wait' in request) return [];
+    if (request.requestType === 'wait') return [];
 
     // TeamRequest
-    if ('teamPreview' in request) {
+    if (request.requestType === 'team') {
     // BUG: technically more permutations are relevant for Illusion
       const choices: Choice.Team[] = [];
       for (let slot = 1; slot < request.side.pokemon.length; slot++) {
@@ -130,7 +59,7 @@ export abstract class Player {
     const pokemon = request.side.pokemon;
 
     // SwitchRequest
-    if ('forceSwitch' in request) {
+    if (request.requestType === 'switch') {
       const choices: Choice.Switch[] = [];
       for (let slot = 2; slot <= pokemon.length; slot++) {
         if (!pokemon[slot - 1]) continue;
@@ -168,13 +97,13 @@ export abstract class Player {
         if (event) choices.push({type: 'move', slot, event});
       }
     }
-    if (active.canZMove) {
-      for (let slot = 1; slot <= active.canZMove.length; slot++) {
+    if (active.zMoves) {
+      for (let slot = 1; slot <= active.zMoves.length; slot++) {
         choices.push({type: 'move', slot, event: 'zmove'});
       }
     }
     if (active.maxMoves) {
-      for (let slot = 1; slot <= active.maxMoves.maxMoves.length; slot++) {
+      for (let slot = 1; slot <= active.maxMoves.length; slot++) {
         choices.push({type: 'move', slot});
         if (event) choices.push({type: 'move', slot, event});
       }
