@@ -53,27 +53,28 @@ export class RandomPlayer extends Player {
       }
     }
 
-    if (partitioned.team.length) {
-      return partitioned.team[this.random(partitioned.team.length)] as C;
-    } else if (!moves) {
-      return partitioned.switch[this.random(partitioned.switch.length)] as C;
-    }
+    if (partitioned.team.length) return this.sample(partitioned.team) as C;
+    if (!moves) return this.sample(partitioned.switch) as C;
 
     const consider: Choice[] = partitioned.move;
     for (const option of options) {
       if (partitioned[option].length) continue;
       const config = this.config[option];
       if ('consider' in config) {
-        if (config.consider && (config.consider === 1 || this.random() < config.consider)) {
-          consider.push(...partitioned[option]);
-        }
+        if (this.select(config.consider)) consider.push(...partitioned[option]);
       } else {
-        if (config.choose && (config.choose === 1 || this.random() < config.choose)) {
-          return partitioned[option][this.random(partitioned[option].length)] as C;
-        }
+        if (this.select(config.choose)) return this.sample(partitioned[option] as C[]);
       }
     }
 
-    return consider[this.random(consider.length)] as C;
+    return this.sample(consider) as C;
+  }
+
+  select(n: number) {
+    return n === 0 ? false : n === 1 ? true : this.random() < n;
+  }
+
+  sample<T>(xs: T[]) {
+    return xs[this.random(xs.length)];
   }
 }
