@@ -9,7 +9,7 @@ TODO
   - stats
 - reasoning behind rules
 - link to alternative tournament software (leftovers, pokeenv, vgc, showdown ai)
-  + CCRL & TCEC & CPW
+  + CCRL & TCEC & CPW https://aipokertutorial.com/
 
 TODO need some way to let users register releases AND link log fetching data
 
@@ -161,3 +161,20 @@ Open comp = regular ladder, can have multiple battles at once, matchmaker is dif
 Server can restart between decisions = save state and timers and reinit on startup then clients reconnect (ensure reconnect to correct battle) = max 5-10 minutes for a restart. Still would prefer to be able to restart without killing sockets though?
 
 protocol - port of relevant bits of PS doc + much stricter
+
+```
+TCEC is CPU: 2x Xeon 6230R (52 cores/104 threads)
+GPU: 2xA100-PCIE-40GB
+RAM: 256GiB (~96GiB/engine)
+Storage: 2TiB SSD + Starting from S23 VVLTC: 12TiB (4 drives) NVMe SSD for Syzygy3-7 (total 14TB) + 15TiB (2 drives raid1 (30TiB)) HDD for Syzygy7 DTZ
+
+CCC is CPUs | 2 x AMD EPYC 7H12
+GPU | 2x A100 (40 GB GPU memory)
+Cores | 256 cores (128 physical)
+RAM | 512GB DIMM DDR4 2933 MHz (0.3 ns)
+SSD | 2x Micron 5210 MTFD (2TB) in RAID1
+```
+
+3. add comments to player/MDP/RP
+4. write tests for all
+5. add code to let it login

@@ -197,7 +197,7 @@
       url: https://github.com/pkmn/engine
     - name: EPOké
       url: https://github.com/pkmn/EPOke
-  language: [Zig, TypeScript]
+  language: Zig
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
@@ -238,6 +238,7 @@
 - name: Athena
   active: [2020, 2023]
   paper: Sarantinos:2023
+  language: [TypeScript, C++]
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
@@ -330,6 +331,15 @@
     - name: pokemon-showdown-client
       url: https://github.com/pkmn/ps/tree/main/client
   language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- active: [2023, 2023] # Nov 23
+  source: https://github.com/cRz-Shadows/Pokemon_Trainer_Tournament_Simulator
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  language: TypeScript
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
