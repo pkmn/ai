@@ -13,8 +13,8 @@ TODO
 
 TODO need some way to let users register releases AND link log fetching data
 
-controller = component on the docker server, sends heartbeat requests to sim and if disconnected for 15
-minutes sim and/or helper sends message to discord server
+controller = component on the docker server, sends heartbeat requests to sim and if disconnected for
+15 minutes sim and/or helper sends message to discord server
 
 ```
 docker run
@@ -62,45 +62,47 @@ monitor
 matchmaker
 ```
 
-sim decides next round (always play 1 then kill then play swapped)
-tells controller to kill old participants and start next round with new pairing
-round robins participants attempting to ensure balanced number of battles = naive
-alternatively, matchmake based on (a) most uncertainity of rating (want balanced) and then number of battles (cant have one person have too many battles)
-dont want glicko because decay doesnt make sense
+sim decides next round (always play 1 then kill then play swapped) tells controller to kill old
+participants and start next round with new pairing round robins participants attempting to ensure
+balanced number of battles = naive alternatively, matchmake based on (a) most uncertainity of rating
+(want balanced) and then number of battles (cant have one person have too many battles) dont want
+glicko because decay doesnt make sense
 
 **NEED BAYESELO WRAPPER**
 
 ### `/leaderboard`
 
-Leaderboard/Tournament
-Open/Controlled
-Generation N
+Leaderboard/Tournament Open/Controlled Generation N
 
-History
-= games per month (links to github) = 7z each days worth of logs and tar the formats and months
+History = games per month (links to github) = 7z each days worth of logs and tar the formats and
+months
 
 
-click bot = has same summary info from projects.md (need to share rendering logic… in server! = prerender snippet)
-show matchup vs other bots
-show matchups vs past versions
-links to all replays
+click bot = has same summary info from projects.md (need to share rendering logic… in server! =
+prerender snippet) show matchup vs other bots show matchups vs past versions links to all replays
 
-only show dominant version of each bot (might not be most recent)
-keep dominant and most recent in the pool, other bots retired
+only show dominant version of each bot (might not be most recent) keep dominant and most recent in
+the pool, other bots retired
 
-append to csv file with a record from each game, can use this to compute bots rating after each day as well. looks a lot like a database…
-= technically an index, can also use to figure out next battle ID. can be restored from battles (pre write tool to do this)
+append to csv file with a record from each game, can use this to compute bots rating after each day
+as well. looks a lot like a database… = technically an index, can also use to figure out next battle
+ID. can be restored from battles (pre write tool to do this)
 
 need to prerender rating graphs?? how much of tables can be prerendered?
 
-problem = replays need to be obfsucated into spectator replays because otherwise leaks teams (teams effectively get leaked anyway because k anonymity cant be enforced over so many battles) = can only share replays between “seasons” (and still want pruned version)
+problem = replays need to be obfsucated into spectator replays because otherwise leaks teams (teams
+effectively get leaked anyway because k anonymity cant be enforced over so many battles) = can only
+share replays between “seasons” (and still want pruned version)
 - log @pkmn/sim version so recreatable
 
-want everyone to play at least a round with the same team, = need to then track who used what from teams DB. instead can just assure each team gets used twice then moved on (limits data and lets us upload spectator replays more quickly. need large team pool to remove possibility of dupes)
+want everyone to play at least a round with the same team, = need to then track who used what from
+teams DB. instead can just assure each team gets used twice then moved on (limits data and lets us
+upload spectator replays more quickly. need large team pool to remove possibility of dupes)
 
-OPTION = just always generate all tables statically (what happens if fuck up?) = uses disk space, but if need to precompute anyway also uses disk.
-- index needs updating, pages for both bots needs updating
-nginx does all serving (and set up aliases there), no need for polka
+OPTION = just always generate all tables statically (what happens if fuck up?) = uses disk space,
+but if need to precompute anyway also uses disk.
+- index needs updating, pages for both bots needs updating nginx does all serving (and set up
+aliases there), no need for polka
 
   <script async src="https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
 
@@ -110,16 +112,18 @@ TESTING LEVELS
 2. watchdog randomly decides W/L/T result, doesnt bother launching bots
 3. watchdog starts up RandomPlayer(N) for various N to get lots of quick battles
 
-“tables”
+"tables"
 - users (read in config with agents/names/IPs etc)
 - matchmaking (matrix of name-version vs. name-version num battles)
 - ratings table of everyones ratings and total battles?
 
 ---
 
-start needs to start websocket server (which also periodically builds files) as well so remove http-server
+start needs to start websocket server (which also periodically builds files) as well so remove
+http-server
 
-static src/tools/seed (simulate - flag to determine at what level to prosuce) produce leaderboaed info after every battle
+static src/tools/seed (simulate - flag to determine at what level to prosuce) produce leaderboaed
+info after every battle
 - run job to preseed https://github.com/pkmn/PKMN/blob/main/src/db/seed.ts
 
 need to render replays on the fly
@@ -131,34 +135,41 @@ use polka for this (and static if NODE-ENV is not prod = add node env is develop
 ---
 
 takes N battles, runs N battles and writes the log files (need socket server setup?)
-- after each battle in background queue / threadpool or process write for update (dont block normal serving) HOWEVER need to avoid starting new battle until previous battle is fully written to minimize dataloss? alternatively queue and make sure each gets writte n sequentially, though unglamour shutdown could lose data
+- after each battle in background queue / threadpool or process write for update (dont block normal
+  serving) HOWEVER need to avoid starting new battle until previous battle is fully written to
+  minimize dataloss? alternatively queue and make sure each gets writte n sequentially, though
+  unglamour shutdown could lose data
 - 
 
-make something which generates data for leaderboard/games (tools:seed?)
-= npm test:integration, do not run init if not CI/development?/make sure to delete data in posttest!
+make something which generates data for leaderboard/games (tools:seed?) = npm test:integration, do
+not run init if not CI/development?/make sure to delete data in posttest!
 
-u16 bot u16 version ? start at byte for each. need one for each player, their rating at the the time and then result? = INDEX file
+u16 bot u16 version ? start at byte for each. need one for each player, their rating at the the time
+and then result? = INDEX file
 
-- needs some datastructure that stores history of ratings
-Chart: https://css-tricks.com/how-to-make-charts-with-svg
+- needs some datastructure that stores history of ratings Chart:
+https://css-tricks.com/how-to-make-charts-with-svg
 
 
-battle logs = source of truth
-ID = next battle id
-RESULTS history = index used for building various things (battles page is full list of battles), also used for all battles by particular person = requires looking in either p1 or p2
-RATINGS = most recent rating for everyone
-RATINGS HISTORY = every day a snapsot of the ratings file gets added per row, used for building chart
-PLAYERS = login details. avatar, name, id etc. just a config JSON file
+battle logs = source of truth ID = next battle id RESULTS history = index used for building various
+things (battles page is full list of battles), also used for all battles by particular person =
+requires looking in either p1 or p2 RATINGS = most recent rating for everyone RATINGS HISTORY =
+every day a snapsot of the ratings file gets added per row, used for building chart PLAYERS = login
+details. avatar, name, id etc. just a config JSON file
 
 problem, what about efficient scan?
 
 taylorhansen/pokemonshowdown-ai #353 #354 #357 #362 #363 #364 #176 #326 #323
 
-How to keep up to date on "Latest Release" in projects.yml? needs test = write something which queries GH/pip/npm for latest?
+How to keep up to date on "Latest Release" in projects.yml? needs test = write something which
+queries GH/pip/npm for latest?
 
-Open comp = regular ladder, can have multiple battles at once, matchmaker is different than PS though (try to get N battles which each bot etc) Also needs to be unversioned.
+Open comp = regular ladder, can have multiple battles at once, matchmaker is different than PS
+though (try to get N battles which each bot etc) Also needs to be unversioned.
 
-Server can restart between decisions = save state and timers and reinit on startup then clients reconnect (ensure reconnect to correct battle) = max 5-10 minutes for a restart. Still would prefer to be able to restart without killing sockets though?
+Server can restart between decisions = save state and timers and reinit on startup then clients
+reconnect (ensure reconnect to correct battle) = max 5-10 minutes for a restart. Still would prefer
+to be able to restart without killing sockets though?
 
 protocol - port of relevant bits of PS doc + much stricter
 
@@ -178,3 +189,46 @@ SSD | 2x Micron 5210 MTFD (2TB) in RAID1
 3. add comments to player/MDP/RP
 4. write tests for all
 5. add code to let it login
+
+
+```sql
+CREATE TABLE IF NOT EXISTS agents (
+  id INTEGER PRIMARY KEY,
+
+  name TEXT NOT NULL,
+  ip TEXT
+);
+
+CREATE TABLE IF NOT EXISTS versions (
+  id INTEGER PRIMARY KEY,
+
+  agent, INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY(agent) REFERENCES agents(id)
+);
+
+CREATE TABLE IF NOT EXISTS formats (
+  id INTEGER PRIMARY KEY,
+
+  name TEXT NOT NULL,
+);
+
+-- FIXME result w/l/t
+-- FIXME match (battle 1 vs. battle 2)?
+-- FIXME team id?
+-- FIXME ratings?
+CREATE TABLE IF NOT EXISTS battles (
+  id INTEGER PRIMARY KEY,
+
+  controlled BOOLEAN NOT NULL,
+  format INTEGER NOT NULL,
+  p1 INTEGER NOT NULL,
+  p2 INTEGER NOT NULL,
+
+  FOREIGN KEY(p1) REFERENCES versions(id),
+  FOREIGN KEY(p2) REFERENCES versions(id),
+  FOREIGN KEY(format) REFERENCES formats(id),
+);
+```
