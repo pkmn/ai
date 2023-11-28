@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE TABLE IF NOT EXISTS versions (
   id INTEGER PRIMARY KEY,
 
-  agent, INTEGER NOT NULL,
+  agent INTEGER NOT NULL,
   name TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
@@ -215,9 +215,6 @@ CREATE TABLE IF NOT EXISTS formats (
   name TEXT NOT NULL,
 );
 
--- FIXME result w/l/t
--- FIXME match (battle 1 vs. battle 2)?
--- FIXME team id?
 -- FIXME ratings?
 CREATE TABLE IF NOT EXISTS battles (
   id INTEGER PRIMARY KEY,
@@ -226,9 +223,50 @@ CREATE TABLE IF NOT EXISTS battles (
   format INTEGER NOT NULL,
   p1 INTEGER NOT NULL,
   p2 INTEGER NOT NULL,
+  seed INTEGER NOT NULL,
+  result INTEGER NOT NULL, -- -1 0 1
+  rating BLOB NOT NULL, -- TODO ???
 
   FOREIGN KEY(p1) REFERENCES versions(id),
   FOREIGN KEY(p2) REFERENCES versions(id),
   FOREIGN KEY(format) REFERENCES formats(id),
 );
+
+-- TODO does # of games vs. each even matter, as opposed to determining what
+-- will reduce deviation in rating? 
+CREATE TABLE IF NOT EXISTS matchmaking (
+  -- NB: guaranteee p1 < p2
+  p1 INTEGER NOT NULL,
+  p2 INTEGER NOT NULL,
+
+  battles INTEGER NOT NULL,
+
+  PRIMARY KEY (p1, p2),
+  FOREIGN KEY(p1) REFERENCES versions(id),
+  FOREIGN KEY(p2) REFERENCES versions(id)
+);
+
+-- historical ratings
+CREATE TABLE IF NOT EXISTS ratings (
+  date DATETIME NOT NULL,
+  version INTEGER NOT NULL,
+  rating BLOB NOT NULL, -- TODO
+
+  PRIMARY KEY (date, version),
+  FOREIGN KEY(version) REFERENCES versions(id),
+);
 ```
+
+CSPRNG random number stored in battles table = links games in a match, also determines team
+selection (used to index into teams DB file stored on the controller box). Number given to agents
+who can use it to consistently seed their PRNG if desired (how to get reproducible results - need to
+make sure they can't infer battle seed from CSPRNG number)
+
+P1 P2 in a match always initially determined by sort order of version id = if P1 < P2 then you know
+it's game one as opposed to game 2
+
+Game 2 uses exact same seed as game 1, so in theory if the players play identical it will be a draw
+for the match
+
+can run sim in controller for controlled (but not open) games = reduced load on server, but then
+need to send logs etc so simpler to just do on server
