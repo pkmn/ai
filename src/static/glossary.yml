@@ -17,7 +17,7 @@ agent: |
   but in competitive Pokémon artificial intelligence circles "agent" or "[bot](#bot)" is prefered as
   [engine](#engine) is used to refer to the piece code responsible for the simulation of core
   Pokémon battle mechanics.
-Alpha-Beta: |
+Alpha-beta: |
   Alpha-beta pruning is a search algorithm that seeks to decrease the number of nodes that are
   evaluated by the [minimax](#minimax) algorithm in its search tree. When applied to a standard
   minimax tree, it returns the same move as minimax would, but [prunes](#pruning) away branches that
@@ -68,7 +68,12 @@ bot: |
   agent.
 branching factor: |
   The number of children at each node in a [game tree](#game-tree), the outdegree.
-bucketing: TODO data binning
+bucketing: |
+  Also known as [data binning]{.dfn}, a generalization of rounding data where the original data that
+  falls within a small interval ("bin"/"bucket") gets replaced by a value representative of that
+  interval. This is a form of [abstraction](#abstraction), the canonical examples of bucketing in
+  competitive Pokémon AI research are reducing the range of possible hit point values or shrinking
+  the number of damage [rolls](#roll).
 cartridge: |
   The game of Pokémon as it exists on the original Nintendo console hardware (due to the earliest
   [generations](#generation) of Pokémon being played on Game Boy ROM cartridges).
@@ -84,15 +89,24 @@ conmeta: |
   A constructed [metagame](#metagame) where the artificially created rules have been arbitrarily
   tailored to simplify things for artificial intelligence agents, _e.g._, the [Shanai
   Cup](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273).
+consolidation: TODO
 contempt: |
   The contempt factor reflects the estimated superiority/inferiority of the program over its
   opponent. Programs incorporating contempt may choose to follow different strategies against
   opponents of varying perceived skill level.
 damage calculator: TODO
 damage coalition: TODO (action consolidation)
-depth: TODO
-determinization: TODO
-drafting: TODO
+depth: |
+  The depth of a node is the number of edges from the node to the [tree's](#game-tree) root node. A
+  root node will have a depth of 0.
+determinization: |
+  The technique of sampling different perfect information states from the set of possibile imperfect
+  information states so that methods for solving perfect information games can be applied to games
+  with imperfect information.
+drafting: |
+  A component of certain Pokémon [variants](#variant) where players take turns choosing the Pokémon
+  species which will form their pool of available choices during a later
+  [team-building](#team-building) component.
 driver: |
   Code which operates/controls the [engine](#engine), perhaps to provide additional features or to
   allow for integration within a broader application.
@@ -102,7 +116,7 @@ EBC: |
   or fewer, while also seeking to curtail certain specific degenerate strategies.
 EE: |
   Extreme equilbrium, a Nash equilibrium where for both players' mixed strategies cannot be
-  described as convex combinations of other mixed strategies that form equiliEPObria.
+  described as convex combinations of other mixed strategies that form equilibria.
 EEE: |
   Enumeration of extreme equilbria, a linear programming algorithm for determining all of the
   possible [Nash equilibrium](#NE) solutions in a [bimatrix game](#bimatrix-game).
@@ -127,7 +141,7 @@ engine: |
 EPOké: |
   A [pkmn](#pkmn) [client](#client) library that parses [protocol](#protocol) and builds up a
   representation of the perceived battle state ([information set](#information-set)) using
-  inference.
+  [inference](#inference).
 Exp3: |
   Exponential-weight algorithm for Exploration and Exploitation, a [bandit](#bandit) algorithm
   commonly used in [tree bandit search](#TBS).
@@ -138,7 +152,13 @@ format: TODO metagame
 FOSG: |
   A [factored-observation stochastic game]{.dfn} TODO
 FP: TODO ficitious play/focus punch
-game: TODO
+game: |
+  Any set of circumstances that has a result dependent on the actions of two or more decision-makers
+  ([players](#player)). In the context of competitive Pokémon battling, the "game" or "battle" can
+  either be viewed as the combination of the [team-building](#piloting) _and_ [piloting](#piloting)
+  components (and sometimes even featuring an initial [drafting](#drafting) component) or simply the
+  piloting aspect. In most cases, without additional qualifiers the "game" can usually be understood
+  to exclusively refer to the piloting component.
 game tree: |
   A graph representing all possible game [states](#state) within a [game](#game). The [complete game
   tree]{.dfn} for a game is the game tree starting at the initial state and containing all possible
@@ -159,7 +179,13 @@ generation: |
     - _Generation VII_: SM, USUM
     - _Generation VIII_: SS, SwSh
     - _Generation IX_: SV
-genetic algorithm: TODO
+genetic algorithm: |
+  Genetic algorithms ([GA]{.dfn}) are a method for solving both constrained and unconstrained
+  optimization problems that is based on [natural
+  selection](https://en.wikipedia.org/wiki/Natural_selection). Genetic algorithms are typically
+  useful when the objective function is discontinuous, nondifferentiable, [stochastic](#stochastic),
+  or highly nonlinear, and are often used to determine the values of
+  [hyperparameters](#hyperparameter).
 GF: |
   [Game Freak](https://www.gamefreak.co.jp/), primary developer and co-owner of Pokémon, responsible
   for the [cartridge](#cartridge) implementation.
@@ -170,9 +196,16 @@ Glicko: |
 GXE: |
   [Glicko X-Act Estimate or "GLIXARE"](https://www.smogon.com/forums/threads/51169/), an estimate
   used by [Pokémon Showdown!](#PS) of a player's win chance against an "average" player.
-HCE: TODO
-heuristic: TODO
-hyperparamter: TODO
+HCE: |
+  Hand-crafted evaluation --- a [evaluation function](#value) written manually (as opposed to
+  learned), often leveraging [heuristics](#heuristic) or other [rule-based](#rule-based) approaches.
+heuristic: |
+  An approach for arriving at a solution by trial and error or by [rules](#rule) that are only
+  loosely defined via methods which are not optimal, perfect, or rational, but is nevertheless
+  sufficient for reaching an immediate, short-term goal or approximation.
+hyperparameter: |
+  A hyperparameter is a parameter whose value is used to control the learning process. By contrast,
+  the values of other parameters (typically node weights) are derived via training.
 inference: TODO deduction
 information set: TODO ([IS]{.dfn})
 information: TODO perfect vs. imperfect vs. hidden, complete vs. incomplete
@@ -185,10 +218,30 @@ Lc0: |
   [Leela Chess Zero (lc0)](https://lczero.org/), an open source computer chess agent based on the
   design behind [AlphaGo](#AlphaGo). Regularly competes with
   [Stockfish](https://stockfishchess.org/) for the title of strongest computer chess agent.
-learning: TODO supervised vs. unsupervised
-Libratus: TODO Pluribus, Modicum, ReBeL
-linear programming: TODO
-lookahead: TODO
+learning: |
+  Learning refers to machine learning ([ML]{.dfn}), where statistical algorithms are leveraged to
+  generalize and perform tasks without explicit instructions. There three main categories of
+  machine learning are:
+
+  1. Supervised learning, where both example inputs and their desired outputs are provided
+  2. Unsupervised learning, only the inputs are provided, and
+  3. [Reinforcement learning](#RL), where an agent aims to perform a certain goal and is given
+  feedback along the way that it attempts to maximize
+Libratus:
+  The first computer agent to acheive superhuman performance in [no-limit Texas hold 'em
+  poker](https://en.wikipedia.org/wiki/Go_(game)), using a new variant of [counterfactual regret
+  minimization](#CFR) dubbed CFR+ [(Brown 2017)](/research#Brown:2017){.subtle}. Libratus was later
+  followed by Modicum [(Brown 2018)](/research#Brown:2018){.subtle}, Pluribus [(Brown
+  2019)](/research#Brown:2019){.subtle}, and ReBeL [(Brown 2020)](/research#Brown:2020){.subtle} ---
+  state of the art agents which are similarly foundational as [AlphaGo](#AlphaGo) but for imperfect
+  information games.
+linear programming: |
+  Linear programming ([LP]{.dfn}), also called linear optimization, is a method to achieve the best
+  outcome (such as maximum profit or lowest cost) in a mathematical model whose requirements are
+  represented by linear relationships. Typically used in competitive Pokémon AI research to solve
+  for the [Nash equilbrium](#NE).
+look ahead: |
+  The [depth] that a search algorithm searches to.
 LOS: |
   The likelihood of superiority denotes how likely it would be for two players of the same strength
   to reach a certain result --- in other fields called a p-value, a measure of statistical
@@ -200,6 +253,12 @@ lrsnash: |
   [`lrslib`](https://cgm.cs.mcgill.ca/~avis/C/lrs.html).
 match-up: TODO MU
 matrix node: TODO
+MDP: |
+  A [Markov decision process]{.dfn} is as a [stochastic](#stochastic) decision-making process that
+  uses a mathematical framework to model the decision-making of a dynamic system in scenarios where
+  the results are either random or controlled by a decision maker, which makes sequential decisions
+  over time. In competitive Pokémon AI reseach, "MDP" may also refer to the [MaxDamagePlayer] in
+  certain contexts.
 MaxDamagePlayer: TODO MDP, MostDamage, OTL, base power
 MCTS: TODO
 metagame: TODO
@@ -209,19 +268,43 @@ minimax: TODO
 move: TODO
 MVP: TODO
 NE: TODO nash equilibrium
-NN: TODO neural network/net
-NNUE: TODO
+NN: |
+  A [neural network]{.dfn}, is a computer system modeled on the human brain and nervous system,
+  comprised of multiple layers of "nodes", containing an input layer, one or more hidden layer, and
+  an output layer. Each node, or artificial neuron, connects to another and has an associated weight
+  and threshold. If the output of any individual node is above the specified threshold value, that
+  node is activated, sending data to the next layer of the network. Otherwise, no data is passed
+  along to the next layer of the network.
+NNUE: |
+  An [efficiently updatable [neural network](#NN)]{.dfn}, stylized "ƎUИИ", an architecture intended
+  to replace the [evaluation function](#value) of [alpha-beta](#Alpha-beta) searches running on a
+  CPU via [SIMD](#SIMD) instructions. [Originally developed for Computer
+  Shogi](https://github.com/asdfjkl/nnue/blob/main/nnue_en.pdf), NNUE has been used successfully in
+  chess engines such as [Stockfish](https://stockfishchess.org/) to acheive high ratings.
 observation: |
   Information produced when the [state](#state) [transitions](#transition). In Pokémon this may
   include a result which can be used to determine [payoff](#payoff) and possibile legal
   [actions](#action), "logs" which detail various events that may have occured, an account of the
   [chance](#chance) actions, or a multitude of other possibilities depending on the
   [engine](#engine).
-offline: TODO
-OLT: TODO
-online: TODO
+offline: |
+  An offline algorithm is given the whole problem data from the beginning and is required to output
+  an answer which solves the problem at hand. If something can be done "offline" that usually means
+  that it can be precomputed ahead-of-time, as opposed to in the middle of a game (contrast to
+  [online](#online)).
+online: |
+   An online algorithm is one that can process its input piece-by-piece in a serial fashion, _i.e._,
+   in the order that the input is fed to the algorithm, without having the entire input available
+   from the start (in contrast to [offline](#offline)).
 opponent modeling: TODO
-pathology: TODO
+OTL: |
+  One-[turn](#turn) [look ahead](#look-ahead). The [MaxDamagePlayer] is the conventional name for an
+  agent which leverages only a single turn of look ahead.  "$`N`TL" can be used to generalize this
+  shorthand for describing the depth an agent searches to, _e.g._, "3TL" for three turns worth of
+  look ahead.
+pathology: |
+  Game-tree pathology is a phenomenon where searching a game-tree deeper gives results in worse
+  decision.
 payoff: |
   The reward a player receives from arriving at a particular outcome. In Pokémon, only terminal
   states give rewards, where the reward is determined based on the result of the battle (winning,
@@ -232,7 +315,9 @@ payoff: |
   latter being more common).
 PBS: TODO public belief state
 perspective: TODO viewpoint (spectator/omniscient/player)
-piloting: TODO battling
+piloting: |
+  The component of competitive Pokémon that involves playing out a battle [online](#online) _after_
+  each players' teams have already been chosen.
 pkmn: |
   A common abbreviation of Pokémon dating back to the earliest releases where the stylized
   ^P^~K~^M^~N~ was included in the [cartridge](#cartridge) character set. However, this abbreviation
@@ -259,6 +344,11 @@ policy: |
   given state, a policy returns the probability of taking the action. Ultimately, the objective of a
   competitive Pokémon AI is to determine the optimal policy for any given state. [Reinforcement
   learning](#RL) aims to accomplish this by learning a [policy network]{.dfn}.
+POMDP: |
+  Partially observable Markov decision process, a generalization of a [Markov decision
+  process](#MDP) which models an agent decision process in which it is assumed that the system
+  dynamics are determined by an MDP, but the agent cannot directly observe the underlying
+  [state](#state).
 pondering: |
   The act of thinking during an opponent's turn. Given that Pokémon is a [simultaneous move](#SM)
   game, pondering occurs after a player has submitted their action (or been asked to wait) while
@@ -269,7 +359,13 @@ pruning: TODO
 PS: |
   [Pokémon Showdown!](https://pokemonshowdown.com), the most popular and influential Pokemon battle
   [simulator](#sim).
-Q-learning: TODO (DQN)
+Q-learning: |
+  A model-free [reinforcement learning](#RL) algorithm to learn the value of an [action](#action) in
+  a particular [state](#state) that can handle problems with [stochastic](#stochastic)
+  [transitions](#transition) and [rewards](#payoff) without requiring adaptations. Q-learning was
+  used by DeepMind in their Deep Q-Network ([DQN]{.dfn}) algorithm  along with a technique called
+  experience replay to solve a wide-range of Atari games [(Mnih
+  2015)](/research#Mnih:2015){.subtle}.
 RandomPlayer: |
   TODO RPs includes switching or not, RandomPlayer(`N`) can mean how often
   consider switches vs. how often ONLY consider switching when option prefer
@@ -282,10 +378,15 @@ RandomPlayer: |
 regret: TODO
 relaxation: TODO
 reverse damage calculator: TODO
-RL: TODO reinforcement learning
+RL: |
+  Reinforcement learning is form of [machine learning](#learning) where an [agent](#agent) learns
+  to take actions to maximize a cumulative reward.
 roll: TODO
 rollout: TODO
-rule-based: TODO
+rule-based: |
+  A system that applies human-made [rules](#rule) to store, sort and manipulate data as opposed to
+  rules discovered via machine [learning](#learning). These systems typically take the forum of
+  `if-then` statements and involve [hand-crafted evaluation](#HCE) functions.
 rule: TODO PS custom "rule" vs. rules-ased
 search: TODO
 self-play: TODO
@@ -296,8 +397,8 @@ server: |
   the [client](#client).
 sim: TODO simulator
 SIMD: |
-  SIMD is short for *S*ingle *I*nstruction on *M*ultiple *D*ata, which are a type of CPU instruction
-  which allows for computing operations in parallel on a vector of numbers.
+  SIMD is short for Single Instruction on Multiple Data, which are a type of CPU instruction which
+  allows for computing operations in parallel on a vector of numbers.
 simplification: TODO
 simultaneous: TODO
 slot: TODO
@@ -320,9 +421,19 @@ stochastic: TODO probabilistic vs. non-deterministic
 strategy: TODO
 subgame: TODO
 symmetry: TODO
-TD-learning: TODO temporal difference learning
-Team Preview: TODO
-teambuilding: TODO building
+TD-learning: |
+  [Temporal difference learning]{.dfn} refers to a class of model-free [reinforcement learning](#RL)
+  methods which learn by bootstrapping from the current estimate of the [value function](#value).
+  These methods sample from the environment and perform updates based on current estimates,
+  adjusting predictions to match later, more accurate, predictions about the future before the final
+  outcome is known.
+Team Preview: |
+  A pre-battle phase introduced in [Generation V](#generation) in which players get to see each of
+  the Pokémon on their opponent's team and choose which Pokémon get brought to battle and in which
+  order.
+team-building: |
+  The component of competitive Pokémon that involves constructing a team [offline](#offline) before
+  a battle, usually with the aim of being able to beat the entire [metagame](#metagame).
 Thompson sampling: TODO
 Torch: |
   The defacto standard open source machine learning and scientific computing framework, most often
@@ -392,7 +503,7 @@ variant: |
   considered variants, the term "variant" is reserved to describe simplifications to the game that
   go beyond the rule changes typical between formats.
 WLT: |
-  WLT or W/L/T refers to *w*in, *l*oss and *t*ie (draw) record of a particular [player](#player) or
+  WLT or W/L/T refers to win, loss and tie (draw) record of a particular [player](#player) or
   [agent](#agent).
 wincon: |
   A [win condition]{.dfn} is a Pokémon or scenario that a player needs in order to secure that they
