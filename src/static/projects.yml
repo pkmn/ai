@@ -334,7 +334,8 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- active: [2023, 2023] # Nov 23
+- name: Pokémon Simulator Environment
+  active: [2023, 2023] # Nov 23
   source: https://github.com/cRz-Shadows/Pokemon_Trainer_Tournament_Simulator
   engine:
     - name: pokemon-showdown
