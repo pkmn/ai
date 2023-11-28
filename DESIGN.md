@@ -1,26 +1,139 @@
-TODO
+# Design
 
-- motivation/goals
+Despite competitive Pokémon artificial intelligence projects having existed for close to 15 years,
+no AI has yet acheived superhuman performance, and the field as a whole is still incredibly
+undeveloped compared to those of computer chess or poker. The complexity of Pokémon and lack of
+sufficient infrastructure/resources/guidance means that most developers are unable to explore ideas
+in depth as everyone ends up continually reinventing the wheel and then fizzling out. 
+
+**pkmn.ai** aims to solve this problem and advance the field by becoming the **home of competitive
+Pokémon artificial intelligence**. Ultimately, pkmn.ai aims to provide:
+
+  - an authorative ranking of all active competitive Pokémon battling agents
+  - a hub for any and all Pokémon AI research, articles, tournaments/events
+  - a community of loosely coupled collaborating researchers and developers
+
+pkmn.ai ambitiously hopes to fulfill the same role the [Chess Programming
+Wiki](https://www.chessprogramming.org/Main_Page), the [Computer Chess Rating
+Lists](https://www.computerchess.org.uk/ccrl/), and the [Top Chess Engine
+Championship](https://tcec-chess.com/) do for computer chess, or [AI Poker
+Tutorial](https://aipokertutorial.com/) and the [Annual Computer Poker
+Competition](http://www.computerpokercompetition.org/) do for computer poker.
+
+Others have attempted to create platforms for hosting Pokémon AI competitions and streamlining the
+creation of agents:
+
+  - [poke-env ](https://github.com/hsahovic/poke-env)
+  - [dramamine/leftovers-again](https://github.com/dramamine/leftovers-again)
+  - [pokemon-env](https://github.com/pokeml/pokemon-env)
+  - [Simplified Pokemon Environment](https://gitlab.com/DracoStriker/simplified-pokemon-environment)
+  - [VGC AI Framework](https://gitlab.com/DracoStriker/pokemon-vgc-engine)
+
+While these seem valuable for getting developers up and running quickly and certainly provide value,
+ultimately they do not seem to have captured the mindshare of the broader community - most of the
+strongest agents have not been built utilizing these frameworks. pkmn.ai does not seek to supplant
+these efforts - ideally agents built for these platforms would also be able to compete in the 
+pkmn.ai leaderboards and the respective communities will be able to help each other improve.
+
+## Competition
+
+### Resources
+
 - isolation/system details (gpu, cpu, readonly etc)
-- design of sim server
-- design of site
+
+```
+TCEC is CPU: 2x Xeon 6230R (52 cores/104 threads)
+GPU: 2xA100-PCIE-40GB
+RAM: 256GiB (~96GiB/engine)
+Storage: 2TiB SSD + Starting from S23 VVLTC: 12TiB (4 drives) NVMe SSD for Syzygy3-7 (total 14TB) + 15TiB (2 drives raid1 (30TiB)) HDD for Syzygy7 DTZ
+
+CCC is CPUs | 2 x AMD EPYC 7H12
+GPU | 2x A100 (40 GB GPU memory)
+Cores | 256 cores (128 physical)
+RAM | 512GB DIMM DDR4 2933 MHz (0.3 ns)
+SSD | 2x Micron 5210 MTFD (2TB) in RAID1
+```
+
+### Data 
+
 - access to grabbing data
   - teams (test data as opposed to training data)
   - stats
-- reasoning behind rules
-- link to alternative tournament software (leftovers, pokeenv, vgc, showdown ai)
-  + CCRL & TCEC & CPW https://aipokertutorial.com/
 
 TODO need some way to let users register releases AND link log fetching data
 
-controller = component on the docker server, sends heartbeat requests to sim and if disconnected for
-15 minutes sim and/or helper sends message to discord server
+---
+
+Accurately ranking competitive Pokémon AIs comes with several challenges:
+
+  - Developers often target a small number of formats which do not overlap with competitors
+  - Team-building is a difficult orthogonal problem to piloting that has a large influence on an AIs
+    ultimate performance
+  - Pokémon is stochastic and matchup dependent, making concrete ratings difficult
+
+### Isolation
+
+Controlling the environment that agents run on is crucial for obtaining fair and consistent results.
+Furthermore, each agent would ideally have sufficient resources to be able to perform at a
+reasonable level. However, 
+
+For optimal isolation the individual agents should run on separate identical machines, however, due
+to resource contraints it is more cost effective to have the agents share the same larger server (an
+`n2d-standard-48` Google Cloud Compute Engine machine with 192 GB of memory and an AMD EPYC 7B12 CPU
+running 64-bit x86 Linux).
+
+<details><summary>CPU Details</summary><pre>
+Architecture:            x86_64
+  CPU op-mode(s):        32-bit, 64-bit
+  Address sizes:         48 bits physical, 48 bits virtual
+  Byte Order:            Little Endian
+CPU(s):                  48
+  On-line CPU(s) list:   0-47
+Vendor ID:               AuthenticAMD
+  Model name:            AMD EPYC 7B12
+    CPU family:          23
+    Model:               49
+    Thread(s) per core:  2
+    Core(s) per socket:  12
+    Socket(s):           2
+    Stepping:            0◊
+    BogoMIPS:            4499.99
+    Flags:               fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cp
+                         uid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefet
+                         ch osvw topoext ssbd ibrs ibpb stibp vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr arat npt nrip_save um
+                         ip rdpid
+Virtualization features:
+  Hypervisor vendor:     KVM
+  Virtualization type:   full
+Caches (sum of all):
+  L1d:                   768 KiB (24 instances)
+  L1i:                   768 KiB (24 instances)
+  L2:                    12 MiB (24 instances)
+  L3:                    96 MiB (6 instances)
+NUMA:
+  NUMA node(s):          2
+  NUMA node0 CPU(s):     0-11,24-35
+  NUMA node1 CPU(s):     12-23,36-47
+Vulnerabilities:
+  Itlb multihit:         Not affected
+  L1tf:                  Not affected
+  Mds:                   Not affected
+  Meltdown:              Not affected
+  Spec store bypass:     Mitigation; Speculative Store Bypass disabled via prctl
+  Spectre v1:            Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+  Spectre v2:            Mitigation; Retpolines, IBPB conditional, IBRS_FW, STIBP conditional, RSB filling
+  Srbds:                 Not affected
+  Tsx async abort:       Not affected
+</pre></details>
+
+2/3 of the system can be used to run battles, and splitting up these resources 4 ways means that we
+can run two battles simultaneously, with each agent being given 32 GB of RAM and 8 cores. 
 
 ```
 docker run
 —expose 8000
 —read-only
-—memory 8 —memory-swap 8
+—memory 32 —memory-swap 32
 —cpuset-cpus 
 
 0,1,2,3,24,25,26,27
@@ -31,6 +144,43 @@ docker run
 16,17,18,19,40,41,42,43
 20,21,22,23,44,45,46,47
 ```
+### Rules
+
+TODO reasoning behind rules
+
+
+## Architecture
+
+pkmn.ai is built around two servers - one minimally provisioned (1CPU/2GB) Digital Ocean droplet
+which exists to serve the https://pkmn.ai [site](#site), run the [sim server](#sim), handle
+[matchmaking](#matchmaking) and coordinate with the [controller](#controller) on the [competition
+server](#competition). The competition server is a donated `n2d-standard-48` Google Cloud Compute
+Engine machine with 192 GB of memory and an AMD EPYC 7B12 CPU running 64-bit x86 Linux, though is on
+a virtual network and cannot serve public traffic, necessitating this hybrid design.
+
+### Sim
+
+pkmn.ai does not need to run a full blown Pokémon Showdown sim and login server due to its unique
+requirements (most importantly, a fixed pool of predefined users) which is helpful, as running the
+entire Pokémon Showdown stack usually has higher resource demands than pkmn.ai would like to incur.
+Instead, a small socket server will be built around the
+[`@pkmn/sim`](https://www.npmjs.com/package/@pkmn/sim) package. TODO
+
+### Site
+
+In order to scale in spite of the resource constraints, https://pkmn.ai is designed to be served
+statically by Nginx and cached by Cloudflare wherever possible - the vast majority of content is
+written in [Djot](https://djot.net/) and built into minimized HTML at compile time by a
+[build](src/static/build.ts) tool, with the leaderboard pages being rewritten after each battle
+completes. Replays of individual battles are the only content that gets served dynamically (though
+access to these should be rate-limited), as it is expected that most will not ever be retrieved and
+the battles are already stored as JSON that simply needs to be wrapped with a bit of boilerplate to
+render as a replay.
+
+---
+
+controller = component on the docker server, sends heartbeat requests to sim and if disconnected for
+15 minutes sim and/or helper sends message to discord server
 
 Battle logs are source of truth, need backup + archive service (upload archives to GitHub) + restore
 ~~Can have custom ID~~ PS approach is more flexible/future proof
@@ -47,20 +197,6 @@ TODO how to update watchdog? needs to be manual
 TODO `/motivation`` (/challenge? - what makes Pokemon an interesting research problem. link to intro
 to competitive Pokemon which covers base mechanics required)
 
-```
-arena
-watcher
-helper
-scheduler
-manager
-controller ——— best because environemnt is called "Controlled"
-referee
-judge
-watchdog
-launcher
-monitor 
-matchmaker
-```
 
 sim decides next round (always play 1 then kill then play swapped) tells controller to kill old
 participants and start next round with new pairing round robins participants attempting to ensure
@@ -173,18 +309,7 @@ to be able to restart without killing sockets though?
 
 protocol - port of relevant bits of PS doc + much stricter
 
-```
-TCEC is CPU: 2x Xeon 6230R (52 cores/104 threads)
-GPU: 2xA100-PCIE-40GB
-RAM: 256GiB (~96GiB/engine)
-Storage: 2TiB SSD + Starting from S23 VVLTC: 12TiB (4 drives) NVMe SSD for Syzygy3-7 (total 14TB) + 15TiB (2 drives raid1 (30TiB)) HDD for Syzygy7 DTZ
 
-CCC is CPUs | 2 x AMD EPYC 7H12
-GPU | 2x A100 (40 GB GPU memory)
-Cores | 256 cores (128 physical)
-RAM | 512GB DIMM DDR4 2933 MHz (0.3 ns)
-SSD | 2x Micron 5210 MTFD (2TB) in RAID1
-```
 
 3. add comments to player/MDP/RP
 4. write tests for all
