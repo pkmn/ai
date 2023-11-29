@@ -1,4 +1,10 @@
-abstraction: TODO
+abstraction: |
+  A method for solving incomplete information games that are too large to be solved in their
+  original form. The original game is abstracted to create a smaller game that is strategically
+  similar, such that the new abstract game can be solved and the solution can be mapped back to the
+  original to serve as an approximation to the true solution to the original game. In Pokémon,
+  techniques such as [bucketing](#bucketing) can be used to reduce the state space, or the original
+  game may be mapped to a [variant](#variant) which is more tractable.
 action: |
   A feasible operation on the [state](#state) ---  _i.e._, a move a [player](#player) can make at a
   stage in the [game](#game). "move" is ambiguous in Pokémon, as Pokémon have
@@ -43,11 +49,18 @@ bandit: |
   of competitive Pokémon AIs bandit problems arise when determining which parts of the [search tree
   to explore](#TBS), and "bandit" usually refers to the particular type of algorithm being used to
   solve the bandit problem (_e.g._, [UCB](#UCB) or [Exp3](#Exp3)).
-Bayes' rule: TODO
+Bayes' rule: |
+  The mathematical rule that describes how to update a [belief](#belief), given some evidence.
+  Fundamental to Bayesian [inference](#inference) used by Pokémon AI in addition to the [usage
+  statistics](#usage-stats) to reason about what [state](#state) they may be in.
 Bayeselo: |
   [Bayesian Elo Rating](https://www.remi-coulom.fr/Bayesian-Elo/), a commonly used tool for
   estimating the [Elo](#Elo) rating based on matches between computerized agents.
-belief: TODO
+belief: |
+  Describes the probability of an event or information. The belief of a player in a given
+  [information set](#information-set) determines what node in that information set he believes the
+  game has reached. The belief may be a probability distribution over the nodes in the information
+  set, and is typically a probability distribution over the possible types of the other players.
 bimatrix game: |
   A [simultaneous game](#SM) for two players in which each player has a finite set of actions. Such
   a game can be fully described by two matrices, each describing the payoffs of one of the players.
@@ -77,7 +90,8 @@ bucketing: |
 cartridge: |
   The game of Pokémon as it exists on the original Nintendo console hardware (due to the earliest
   [generations](#generation) of Pokémon being played on Game Boy ROM cartridges).
-CFR: TODO CFR+, MC-CFR
+CFR: |
+  Counterfactual regret minimization TODO CFR+, MC-CFR
 chance: TODO chance node, Chance player, -Dchance
 client: |
   Code that communicates with the game [engine](#engine) and enables a player to play the game. In
@@ -89,13 +103,22 @@ conmeta: |
   A constructed [metagame](#metagame) where the artificially created rules have been arbitrarily
   tailored to simplify things for artificial intelligence agents, _e.g._, the [Shanai
   Cup](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273).
-consolidation: TODO
+consolidation: |
+  Action consolidation is a technique for combining the results of actions with identical outcomes.
+  Consolidation is similar to [transpositions](#transposition) in that they both involve
+  [symmetry](#symmetry), with the difference being that consolidation allows for skipping similar
+  work by leveraging past results whereas [transposition tables](#TT) allow for skipping work that
+  has already been done. [Damage coalition](#damage-coalition) is a common form of consolidation in
+  competitive Pokémon AI.
 contempt: |
   The contempt factor reflects the estimated superiority/inferiority of the program over its
   opponent. Programs incorporating contempt may choose to follow different strategies against
   opponents of varying perceived skill level.
 damage calculator: TODO
-damage coalition: TODO (action consolidation)
+damage coalition: |
+  A common form of [action consolidation](#consolidation) where damage [rolls](#roll) which produce
+  the same results get combined. Damage rolls often result in the same outcome due to rounding or
+  if the damage gets "capped" due to causing a target to faint or breaking a Substitute.
 depth: |
   The depth of a node is the number of edges from the node to the [tree's](#game-tree) root node. A
   root node will have a depth of 0.
@@ -132,7 +155,10 @@ EFG: |
   [FOSG](#FOSG) representation.
 Elo: TODO
 embedding: TODO
-emulator: TODO
+emulator: |
+  Code that is designed to mimic the outwardly observable behavior of both the hardware and software
+  features of a real device, to allow for playing a Pokémon [cartridge](#cartridge) on arbitrary
+  platforms.
 endgame: TODO
 engine: |
   The core code responsible for implementing Pokémon battle mechanics. While multiple
@@ -375,7 +401,10 @@ RandomPlayer: |
   top of number to indicate consider?) $`RP(\widetilde{20\%}, 90\%)` means
   *consider* switch 20% of the time and use zmove when available 90% of the
   time.
-regret: TODO
+regret: |
+  The [value](#value) of difference between a possible (usually optimal) [action](#action) and of
+  the action that has actually been chosen. Key concept underpinning [counterfactual regret
+  minimization](#CFR).
 relaxation: TODO
 reverse damage calculator: TODO
 RL: |
@@ -395,8 +424,14 @@ server: |
   Where the game [engine](#engine) is being run and where the actual, complete battle
   [state](#state) is stored. The server is responsible for keeping relevant information hidden from
   the [client](#client).
-sim: TODO simulator
-SIMD: |
+sim: |
+  A [simulator]{.dfn} that mimics the behavior of something by modelling the underlying state of the
+  target, though doesn't necessarily attempt to do so through [emulation](#emulator) of an external
+  device. In the context of Pokémon, "simulator" more often describes a particular platform that
+  provides a venue for online Pokémon battling, and usually involves a game server being built
+  around a Pokémon [engine](#engine). [Pokémon Showdown!](#PS) is the most comprehensive and most
+  populator Pokémon simulator.
+SIMD:
   SIMD is short for Single Instruction on Multiple Data, which are a type of CPU instruction which
   allows for computing operations in parallel on a vector of numbers.
 simplification: TODO
@@ -418,9 +453,14 @@ state: |
   the management of state, so "state" needs to be qualified as "battle state" or "game state" to be
   unambigious) despite it being a useful term in papers dealing purely with theory.
 stochastic: TODO probabilistic vs. non-deterministic
-strategy: TODO
+strategy: |
+  Used interchangeably used with [policy](#policy), refers to generically to a plan to acheive an
+  overall goal.
 subgame: TODO
-symmetry: TODO
+symmetry: |
+  Similarity or exact correspondence between different things. In the context of games, symmetry can
+  result certain [states](#state) occuring more than once in the [game tree](#game-tree), meaning
+  techniques such as [transposition tables](#TT) a can be leveraged to speed up search.
 TD-learning: |
   [Temporal difference learning]{.dfn} refers to a class of model-free [reinforcement learning](#RL)
   methods which learn by bootstrapping from the current estimate of the [value function](#value).
@@ -434,7 +474,9 @@ Team Preview: |
 team-building: |
   The component of competitive Pokémon that involves constructing a team [offline](#offline) before
   a battle, usually with the aim of being able to beat the entire [metagame](#metagame).
-Thompson sampling: TODO
+Thompson sampling: |
+  A [bandit](#bandit) algorithm which chooses the [action](#action) that maximizes the [expected
+  reward](#value) with respect to a randomly drawn [belief](#belief).
 Torch: |
   The defacto standard open source machine learning and scientific computing framework, most often
   used in Python via [PyTorch](https://en.wikipedia.org/wiki/PyTorch).
@@ -442,19 +484,37 @@ TPCi: |
   [The Pokémon Company International](https://corporate.pokemon.com/), co-owners of the Pokémon
   franchise along with the publisher and trademark-holder, Nintendo, and the developers, [Game
   Freak](#GF).
-transformer: TODO
+transformer: |
+  A [neural network](#NN) that learns context and thus meaning by tracking relationships in
+  sequential data.
 transition: |
   The change that a [state](#state) undergoes due to an [action](#action). In the [pkmn](#pkmn)
-  engine, this is implemented by a a battle's `update` function. In game theory, "turns" are
+  engine, this is implemented by a a battle's `update` function. In game theory, "turns"
   typically count transitions (though [not in Pokémon](#turn)), and a transition may produce a
   [payoff](#payoff) or some sort of [observation](#observation).
-transitions: TODO engine nomenclature
-transposition: TODO
+transitions: |
+  The entire set of possible [transitions](#transition) from any given [state](#state). While every
+  Pokémon game engine must allow for performing a single transition, performing _all_ transitions at
+  once and returning the set of states is a less common feature, and almost always when
+  "transitions" or `transitions` is used in conversation as a noun it is referring to this
+  functionality.
+transposition: |
+  A sequence of moves that results in a position that may also be reached by another, more common
+  sequence of moves. Transpositions are a type of [symmetry](#symmetry) and are often handled via
+  [transposition table](#TT). True transpositions are uncommon in Pokémon unless some level of
+  [abstraction](#abstraction) has been applied.
+TT:
+  A [transposition table]{.dfn} is a cache of previously seen positions, and associated evaluations,
+  in a [game tree](#game-tree) generated by a computer game playing program. If a position recurs
+  via a different sequence of moves, the value of the position is retrieved from the table, avoiding
+  re-searching the game tree below that position.
 TBS: |
   [Tree-bandit search]{.dfn}, the name for the family of search algorithms which are roughly based
   around [Monte-carlo tree search](#MCTS) but which make use of various [bandit](#bandit) algorithms
   to greatly improve performance and convergence.
-tuning: TODO
+tuning: |
+  The process of maximizing a [machine learning](#learning) model's performance without overfitting
+  or creating too high of a variance, usually via [hyperparameters](#hyperparameter).
 turn: |
   Game theory uses the term [ply]{.dfn} to refer to one turn taken by one player in a
   [sequential](#SM) game which doesn't apply to Pokémon given that Pokémon is a [simultaneous](#SM)
@@ -508,4 +568,10 @@ WLT: |
 wincon: |
   A [win condition]{.dfn} is a Pokémon or scenario that a player needs in order to secure that they
   win the game.
-zero-sum: TODO constant-sum
+zero-sum: |
+  A [zero-sum game]{.dfn} is a mathematical representation in game theory of a situation that
+  involves two sides, where the result is an advantage for one side and an equivalent loss for the
+  other, such that the net improvement in benefit of the game is zero. Zero-sum games are a specific
+  example of a [constant-sum game]{.dfn}, a concept when the sum of the players' gains and losses is
+  a fixed constant $`C`. Constant-sum games can be trivially transformed into a zero-sum game by
+  subtracting $`C` from every [payoff](#payoff).
