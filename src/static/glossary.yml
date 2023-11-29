@@ -196,11 +196,11 @@ generation: |
   A grouping of Pokemon game releases that seperates them based on the Pokémon and mechanics they
   include. Generations are typically referred to by acronyms based on their release titles:
 
-    - _Generation I_: RBY, RB
+    - _Generation I_: RBY, RB, RBG
     - _Generation II_: GSC, GS
     - _Generation III_: ADV, RSE, RS, RSEFRLG
-    - _Generation IV_: DPP, DPPt, HGSS, DPPtHGSS, DP
-    - _Generation V_: BW, B2W2
+    - _Generation IV_: DPP, DPPt, DP, HGSS, DPPtHGSS
+    - _Generation V_: BW, BW2, B2W2
     - _Generation VI_: XY, ORAS
     - _Generation VII_: SM, USUM
     - _Generation VIII_: SS, SwSh
