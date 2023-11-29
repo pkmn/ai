@@ -2,10 +2,13 @@
 
 Please read through the [DESIGN](../DESIGN.md) document for a high-level overview of the project.
 
+> [!TIP]
+> Pull requests for copy editing (especially to fix typos) are very welcome!
+
 ## Concepts
 
 If you wish to write an article about a specific concept, please first [open an
-issue](https://github.com/pkmn/.github/issues/new/choose) with an outline of what you wish to cover
+issue](https://github.com/pkmn/ai/issues/new) with an outline of what you wish to cover
 or [discuss it in chat](https://pkmn.ai/chat) to ensure the content will be approriate for the site
 and that there isn't wasted effort on pages which might not be a good fit.
 
@@ -57,4 +60,8 @@ included. Furthermore, because of this goal the glossary aims to include the tra
 terms which are useful and thus terms that are used in the definition of other terms are usually
 included. Wherever possible, the glossary should attempt to define terms with respect to their use
 in competitive Pokémon AI - general definitions should always try to tie things back to Pokémon with
-specific examples.
+specific examples. Some other guidelines:
+
+  - use `[TERM]{.dfn}` to call out definitions/expansions of abbreviations in the text that don't have
+    there own top level entry and avoid using bold styling for things which aren't definitions
+  - prefer italics to quotations when talking about literal terms
