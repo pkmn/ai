@@ -39,7 +39,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-p {
+p, ul, ol, dl {
   margin: 1rem 0;
 }
 
@@ -61,8 +61,8 @@ a.subtle:hover, a.subtle:focus, a.subtle:active, a.subtle:visited {
 dt { font-weight: bold; }
 dd { margin-left: 2ch; }
 
-ul {
-  margin: 1em 0;
+ol > li::marker {
+  font-weight: bold;
 }
 
 #topbar {

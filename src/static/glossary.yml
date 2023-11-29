@@ -195,15 +195,15 @@ generation: |
   A grouping of Pokemon game releases that seperates them based on the Pokémon and mechanics they
   include. Generations are typically referred to by acronyms based on their release titles:
 
-    - _Generation I_: RBY, RB, RBG
-    - _Generation II_: GSC, GS
-    - _Generation III_: ADV, RSE, RS, RSEFRLG
-    - _Generation IV_: DPP, DPPt, DP, HGSS, DPPtHGSS
-    - _Generation V_: BW, BW2, B2W2
-    - _Generation VI_: XY, ORAS
-    - _Generation VII_: SM, USUM
-    - _Generation VIII_: SS, SwSh
-    - _Generation IX_: SV
+    1. _Generation I_: RBY, RB, RBG
+    2. _Generation II_: GSC, GS
+    3. _Generation III_: ADV, RSE, RS, RSEFRLG
+    4. _Generation IV_: DPP, DPPt, DP, HGSS, DPPtHGSS
+    5. _Generation V_: BW, BW2, B2W2
+    6. _Generation VI_: XY, ORAS
+    7. _Generation VII_: SM, USUM
+    8. _Generation VIII_: SS, SwSh
+    9. _Generation IX_: SV
 genetic algorithm: |
   Genetic algorithms ([GA]{.dfn}) are a method for solving both constrained and unconstrained
   optimization problems that is based on [natural
@@ -234,7 +234,12 @@ hyperparameter: |
 inference: TODO deduction
 information set: TODO ([IS]{.dfn})
 information: TODO perfect vs. imperfect vs. hidden, complete vs. incomplete
-input log: TODO <https://gist.github.com/scheibo/6d1473952f4c2b3852339f6f35301b93>
+input log: |
+  <https://gist.github.com/scheibo/6d1473952f4c2b3852339f6f35301b93> [input]{.dfn} TODO
+
+    - [raw input]{.dfn} TODO
+    - [logical input]{.dfn} TODO
+    - [contextual input]{.dfn} TODO
 interior equilibra: TODO
 joint actions: TODO
 killer move: TODO
@@ -248,10 +253,10 @@ learning: |
   generalize and perform tasks without explicit instructions. There three main categories of
   machine learning are:
 
-  1. Supervised learning, where both example inputs and their desired outputs are provided
-  2. Unsupervised learning, only the inputs are provided, and
-  3. [Reinforcement learning](#RL), where an agent aims to perform a certain goal and is given
-  feedback along the way that it attempts to maximize
+    1. [supervised learning]{.dfn}, where both example inputs and their desired outputs are provided
+    2. [unsupervised learning]{.dfn}, only the inputs are provided, and
+    3. [[reinforcement learning](#RL)]{.dfn}, where an agent aims to perform a certain goal and is
+    given feedback along the way that it attempts to maximize
 Libratus:
   The first computer agent to acheive superhuman performance in [no-limit Texas hold 'em
   poker](https://en.wikipedia.org/wiki/Go_(game)), using a new variant of [counterfactual regret
