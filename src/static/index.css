@@ -199,6 +199,11 @@ tr:first-child td { border: none; }
   overflow-wrap: anywhere;
 }
 
+dfn {
+  font-style: normal;
+  font-weight: bold;
+}
+
 .column { flex: 1; }
 .columns {
   display: flex;
