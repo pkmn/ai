@@ -13,6 +13,20 @@ tradeoffs/features
 
 - completeness
 - correctness
-- "transformations"
+- "transformations" / "reversible functors" / "instructions" / `-Dpatch` delta/diff
+
+  - <https://keep.google.com/u/0/?q=zz80#NOTE/1DdpveTpUpYHSs_SG27G1UeeoAe0eie4Y3H0x3SXoozJrCi4w2DeFjs6WK_ENvb8_h3X6gCqs>
+  - <https://discord.com/channels/@me/728386575230304329/1115467802103521401>
+  - <https://discord.com/channels/689316505560809576/689316506265321535/1118307563054842006>
+
 - transitions function
+  - brute force
+  - bring-you-own
+  - provided
 - ...
+
+board representation
+
+  - <https://www.chessprogramming.org/Make_Move>
+  - <https://www.chessprogramming.org/Unmake_Move>
+  - <https://www.chessprogramming.org/Copy-Make>
