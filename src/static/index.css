@@ -200,8 +200,8 @@ tr:first-child td { border: none; }
 }
 
 dfn {
-  font-style: normal;
   font-weight: bold;
+  font-style: normal;
 }
 
 .column { flex: 1; }
