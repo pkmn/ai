@@ -50,6 +50,13 @@ export const copy = (src: string, dst: string) => {
 };
 
 const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
+let style = '';
+
+const EXPIRY = process.env.NODE_ENV === 'development' ? 0 : 14 * (24 * 60 * 60 * 1000);
+const retain = (file: string, now: number) =>
+  /index\..*\.css/.test(file) &&
+  file !== style &&
+  now - fs.statSync(path.join(PUBLIC, file)).ctimeMs < EXPIRY;
 
 export interface Page {
   id?: string;
@@ -79,7 +86,8 @@ const OPTIONS = {
 };
 
 export const render = (name: string, page: Page) => {
-  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page});
+  if (!style) throw new Error('call to render before assets have been built');
+  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page, style});
   const minified = html.minify(rendered, OPTIONS);
   return minified;
 };
@@ -180,8 +188,7 @@ const build = async (rebuild?: boolean) => {
   let actual = list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard', 'background',
-    'index.html', 'index.css', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg',
-    'projects.bib', 'research.bib',
+    'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -192,8 +199,10 @@ const build = async (rebuild?: boolean) => {
     }
   }
 
-  const index = read(path.join(STATIC, 'index.css'));
-  write(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+  const index = css.minify(read(path.join(STATIC, 'index.css'))).styles;
+  const hash = crypto.createHash('sha256').update(index).digest('hex').slice(0, 8);
+  style = `index.${hash}.css`;
+  write(path.join(PUBLIC, style), index);
 
   for (const placeholder of ['chat', 'leaderboard']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
@@ -211,6 +220,7 @@ const build = async (rebuild?: boolean) => {
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
+    style,
     content: `${toHTML(read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))}`,
   }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
@@ -237,8 +247,11 @@ const build = async (rebuild?: boolean) => {
   });
 
   if (!rebuild) {
+    const now = Date.now();
     for (const file of actual) {
-      if (!expected.has(file)) remove(path.join(PUBLIC, file));
+      if (!expected.has(file) && !retain(file, now)) {
+        remove(path.join(PUBLIC, file));
+      }
     }
   }
 
