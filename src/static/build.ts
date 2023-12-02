@@ -54,9 +54,8 @@ let style = '';
 
 const EXPIRY = process.env.NODE_ENV === 'development' ? 0 : 14 * (24 * 60 * 60 * 1000);
 const retain = (file: string, now: number) =>
-  /index\..*\.css/.test(file) &&
-  file !== style &&
-  now - fs.statSync(path.join(PUBLIC, file)).ctimeMs < EXPIRY;
+  file === style || (/index\..*\.css/.test(file) &&
+  now - fs.statSync(path.join(PUBLIC, file)).ctimeMs < EXPIRY);
 
 export interface Page {
   id?: string;
@@ -145,6 +144,52 @@ export const toHTML = (s: string) =>
         }
 
         return r.renderAstNodeDefault(node);
+      },
+      para: (node, r) => {
+        if (node.children.length === 1 && node.children[0].tag === 'image') {
+          node.attributes = node.attributes || {};
+          let cap = extractCaption(node);
+          if (cap) {
+            cap =
+              `<figcaption class="title">${cap}</figcaption>\n`;
+          } else {
+            cap = '';
+          }
+
+          return `
+  <figure${r.renderAttributes(node)}>
+  ${cap}
+  ${r.renderChildren(node)}
+  </figure>
+  `;
+        }
+        const result = r.renderAstNodeDefault(node);
+        return result;
+      },
+      block_quote: (node, r) => {
+        let source = undefined;
+        if (node.children.length > 0) {
+          const last_child: { tag: string; children?: AstNode[] } =
+            node.children[node.children.length - 1];
+          if (
+            last_child.tag !== 'thematic_break' &&
+            last_child?.children?.length === 1 &&
+            (last_child?.children[0] as any).tag === 'link'
+          ) {
+            source = last_child.children[0];
+            node.children.pop();
+          }
+        }
+        const cite = source
+          ? `<figcaption><cite>${r.renderAstNode(source as any)}</cite></figcaption>`
+          : '';
+
+        return `
+  <figure class="blockquote">
+  <blockquote>${r.renderChildren(node)}</blockquote>
+  ${cite}
+  </figure>
+  `;
       },
       code_block: (node) => {
         let cap = extractCaption(node);
