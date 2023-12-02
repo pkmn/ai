@@ -1,9 +1,17 @@
 # Contributing
 
-Please read through the [DESIGN](../DESIGN.md) document for a high-level overview of the project.
-
 > [!TIP]
 > Pull requests for copy editing (especially to fix typos) are very welcome!
+
+Please read through the [DESIGN](../DESIGN.md) document for a high-level overview of the project.
+You can get started quickly by installing dependencies and then experimenting on
+the [local server](http://localhost:1234):
+
+```sh
+$ npm install
+$ npm run compile
+$ npm start
+```
 
 ## Concepts
 
