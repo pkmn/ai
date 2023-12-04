@@ -92,7 +92,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - name: Showdown AI competition
   framework: true
-  active: [2017, 2018] # Feb 28
+  active: [2017, 2018] # February 28
   paper: Lee:2017
   source: https://github.com/scotchkorean27/showdownaiclient
   engine:
@@ -115,8 +115,18 @@
   release:
     name: book-202009
     url: https://github.com/select766/pokeai/releases/tag/book-202009
+- name: CynthiAI
+  active: [2017, 2017] # May 23
+  source: https://github.com/Sisyphus25/CynthiAI
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  language: JavaScript
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: PokeML
-  active: [2018, 2019] # Jul 13
+  active: [2018, 2019] # July 13
   license: MIT
   source: https://github.com/pokeml
   engine:
@@ -256,6 +266,16 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: BigBoy
+  active: [2021, 2022] # April 21
+  source: https://github.com/attraylor/poke-env
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - active: [2021, 2022] # June 19
   source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master
   engine:
@@ -335,7 +355,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - name: Pokémon Simulator Environment
-  active: [2023, 2023] # Nov 23
+  active: [2023, 2023] # November 23
   source: https://github.com/cRz-Shadows/Pokemon_Trainer_Tournament_Simulator
   engine:
     - name: pokemon-showdown
