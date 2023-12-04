@@ -395,3 +395,86 @@ for the match
 
 can run sim in controller for controlled (but not open) games = reduced load on server, but then
 need to send logs etc so simpler to just do on server
+
+---
+
+goals of pokemon ai 
+- present to smart person not involved in pokemon/ai why its interesting
+- make it easy for players to be able to play against existing bots (all nicely packaged etc)
+- make ranking bots easier/possible
+- make people focus on specific problems
+
+—-
+
+disable pondering (time slicing = faux sequentializing the game = just takes twice as long)
+
+only evaluate glicko period after both games in match accounted for glicko-2 with 10 games per
+rating period to each
+- need a table of just ratings period results, every day not long enough problem = ratings periods
+then grow too large, ideal = ratings period after each each match (2 games for 2 players), problem =
+all other players “decay”. worst case table is O(10*N versions), still pretty small, just do naive
+solution. elo with fixed k = 20, no decary
+
+Ratings period = when AVERAGE games for each player >= 10?
+
+games (Not matches)
+
+P1 P2 Result Seed = dont need ratings at all, link to replays
+
+——
+
+Leaderboard
+
+Rank Name Elo Glicko-2 W L T (only ever updated after matches so will always be multiple of 2)
+
+-> drill into agent = for each version show wlt against each opponent
+
+**dual level table**
+
+Rank NameANDVersion Elo Glicko-2 W L T
+  - Opponent W L T + can click link to see games filtered to all though between this version and
+    opponent
+
+Chart Rank for each version over time (or over matches?) Rating for each version over time (or over
+matches)
+
+CAP at N = 30? 50? games per pair in order to not over test and heavily weight on early starting
+conditions. when new bot gets added, round robin with each existing bot until has enough games (ie.
+10) to be considered rated, then try to get another bot to N games, BUT want to avoid making others
+decay from not being played!
+
+bot with least games does round robin with other bots… BUT favor better bots. what is tradeoff
+between exploitation and exploration?
+
+goal = trending towards AVERAGE N (account for earlier versions having more games), also want min N.
+two numbers = N0 is total number of games vs each and N1 is minimum number of games vs. any given
+opponent, favor improving these numbers for the highest rated opponent first.
+
+
+100 games A vs B C comes in, average games is (100+100+0)/3 = 66.6 min games is (100+0)/2 = 50 and 0
+
+C needs games to improve its average N, should first play against stronger of A and B since theyre
+tied on matchmaking metrics.
+
+next = 204/3 = 68 is average but 102, 100, 2 so match up 2 and 100
+
+***how to balance averages and min?***
+
+Prioritize min first, so new bot will always play against best bot. Need some weighting of rating
+and how far away from min (make exponentially bigger the further away from min), then just
+prioritize less battles than average (but also weight by rating)
+- at this point will be playing highest elo THAT IS STILL UNDER AVERAGE
+
+——
+
+Open = N games round robin for each player, top WLT record determines final tour winner
+
+Rank Name (Version) W L T
+
+how big should N (number of games between each player) be? 10? (aim for X <= 1 week, 24 hours? CPU
+hours)
+
+"generation 8"
+- not guaranteed OU
+- guaranteed = singles, species clause, 1000 turn limit, tours timer, sleep/freeze/desync/switch
+  priority , evasion OHKO invulnerability
