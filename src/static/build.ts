@@ -310,7 +310,7 @@ const build = async (rebuild?: boolean) => {
     make(`concepts/${page}`, {
       path: `/concepts/${page}/`,
       title: `Concepts — ${title} | pkmn.ai`,
-      topbar,
+      topbar: title === 'Variants' ? '' : topbar,
       header: title,
       content: toHTML(read(path.join(STATIC, 'concepts', `${page}.dj`))),
     });

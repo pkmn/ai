@@ -180,10 +180,10 @@ FP: TODO ficitious play/focus punch
 game: |
   Any set of circumstances that has a result dependent on the actions of two or more decision-makers
   ([players](#player)). In the context of competitive Pokémon battling, the _game_ or _battle_ can
-  either be viewed as the combination of the [team-building](#piloting) and [piloting](#piloting)
-  components (and sometimes even featuring an initial [drafting](#drafting) component) or simply the
-  piloting aspect. In most cases, without additional qualifiers the _game_ can usually be understood
-  to exclusively refer to the piloting component.
+  either be viewed as the combination of the [team-building](#team-building) and
+  [piloting](#piloting) components (and sometimes even featuring an initial [drafting](#drafting)
+  component) or simply the piloting aspect. In most cases, without additional qualifiers the _game_
+  can usually be understood to exclusively refer to the piloting component.
 game tree: |
   A graph representing all possible game [states](#state) within a [game](#game). The [complete game
   tree]{.dfn} for a game is the game tree starting at the initial state and containing all possible
@@ -411,6 +411,7 @@ regret: |
   minimization](#CFR).
 relaxation: TODO
 reverse damage calculator: TODO
+RNG: TODO PRNG, seed
 RL: |
   Reinforcement learning is form of [machine learning](#learning) where an [agent](#agent) learns
   to take actions to maximize a cumulative reward.
