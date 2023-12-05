@@ -102,6 +102,28 @@ h3 {
   font-size: 1.75em;
 }
 
+img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+figure > img {
+  display: block;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+figure.blockquote {
+  padding-left: 1em;
+  color: rgb(0 0 0 / 50%);
+  border-left: 5px solid rgb(0 0 0 / 10%);
+}
+figure.blockquote > figcaption {
+  text-align: right;
+}
+
+
 nav > ul, .column > ul {
   padding: 0;
   list-style: none;
@@ -139,27 +161,6 @@ footer > *:first-child {
   gap: 5px;
   padding: 2rem 0;
   vertical-align: top;
-}
-
-img {
-  display: inline-block;
-  max-width: 100%;
-  height: auto;
-  vertical-align: middle;
-}
-figure > img {
-  display: block;
-  margin-right: auto;
-  margin-left: auto;
-}
-
-figure.blockquote {
-  padding-left: 1em;
-  color: rgb(0 0 0 / 50%);
-  border-left: 5px solid rgb(0 0 0 / 10%);
-}
-figure.blockquote > figcaption {
-  text-align: right;
 }
 
 table {
