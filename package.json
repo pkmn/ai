@@ -60,7 +60,7 @@
   "eslintConfig": {
     "extends": "@pkmn",
     "overrides": [{
-      "files": ["src/server/index.ts"],
+      "files": ["src/server/index.ts", "src/static/build.ts"],
       "rules": {"@typescript-eslint/no-var-requires": "off"}
     },{
       "files": ["src/test/projects.test.ts"],

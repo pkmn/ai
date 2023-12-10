@@ -1,4 +1,4 @@
-import 'source-map-support/register';
+require('source-map-support').install();
 
 import {execFileSync} from 'child_process';
 import * as os from 'os';
@@ -38,6 +38,7 @@ if (process.env.NODE_ENV === 'development') {
         bundle: false,
         platform: 'node',
         format: 'cjs',
+        sourcemap: true,
       });
       const compile = `${(Math.round(Number(process.hrtime.bigint() - begin) / 1e6))} ms`;
       execFileSync('node', ['build/static/build.js', '--rebuild'], {

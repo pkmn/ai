@@ -1,4 +1,4 @@
-import 'source-map-support/register';
+require('source-map-support').install();
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
