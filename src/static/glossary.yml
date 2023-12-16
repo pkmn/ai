@@ -10,7 +10,7 @@ action: |
   stage in the [game](#game). [move]{.dfn} is ambiguous in Pokémon, as Pokémon have
   [moves](https://bulbapedia.bulbagarden.net/wiki/Move) and thus some of the game theoretical moves
   of a player in a Pokémon battle includes the action of literally using one of their Pokémon's
-  moves. [Pokémon Showdown!](#PS) and [pkmn](#pkmn) instead use the terms _choice_ and _choices_
+  moves. [Pokémon Showdown](#PS) and [pkmn](#pkmn) instead use the terms _choice_ and _choices_
   instead of _action_ and _actions_, and [poke-sim](https://github.com/aed3/poke-sim/) refers to
   this as a [_decision_](https://github.com/aed3/poke-sim/blob/main/DESIGN_SPEC.md#decision) - all
   of these should be interchangeable, though using move to refer to an action/choice/decision should
@@ -236,11 +236,11 @@ gimmick:
   [Dynamax](https://bulbapedia.bulbagarden.net/wiki/Dynamax), and
   [Terastallization](https://bulbapedia.bulbagarden.net/wiki/Terastal_phenomenon).
 Glicko: |
-  The Glicko rating system, a method used by [Pokémon Showdown!](#PS) to assess a player's strength.
+  The Glicko rating system, a method used by [Pokémon Showdown](#PS) to assess a player's strength.
   Used primarily for [usage stats](#usage-stats).
 GXE: |
   [Glicko X-Act Estimate or _GLIXARE_](https://www.smogon.com/forums/threads/51169/), an estimate
-  used by [Pokémon Showdown!](#PS) of a player's win chance against an average player.
+  used by [Pokémon Showdown](#PS) of a player's win chance against an average player.
 HCE: |
   Hand-crafted evaluation --- a [evaluation function](#value) written manually (as opposed to
   learned), often leveraging [heuristics](#heuristic) or other [rule-based](#rule-based) approaches.
@@ -472,7 +472,7 @@ prediction: TODO
 protocol: TODO
 pruning: TODO
 PS: |
-  [Pokémon Showdown!](https://pokemonshowdown.com), the most popular and influential Pokemon battle
+  [Pokémon Showdown](https://pokemonshowdown.com), the most popular and influential Pokemon battle
   [simulator](#sim).
 Q-learning: |
   A model-free [reinforcement learning](#RL) algorithm to learn the value of an [action](#action) in
@@ -532,7 +532,7 @@ sim: |
   target, though doesn't necessarily attempt to do so through [emulation](#emulator) of an external
   device. In the context of Pokémon, _simulator_ more often describes a particular platform that
   provides a venue for online Pokémon battling, and usually involves a game server being built
-  around a Pokémon [engine](#engine). [Pokémon Showdown!](#PS) is the most comprehensive and most
+  around a Pokémon [engine](#engine). [Pokémon Showdown](#PS) is the most comprehensive and most
   populator Pokémon simulator.
 SIMD:
   SIMD is short for Single Instruction on Multiple Data, which are a type of CPU instruction which
@@ -633,7 +633,7 @@ turn: |
   Instead, it is more useful to in terms of [decision point]{.dfn} that occur between _updates_ to
   the battle state (which may happen multiple times in a single turn, _e.g._, due to a Pokémon using
   Baton Pass or fainting) --- places where the game requires input from players to proceed. In
-  [Pokémon Showdown!](#PS) and the [pkmn](#pkmn) engine, a decision point always requires a [joint
+  [Pokémon Showdown](#PS) and the [pkmn](#pkmn) engine, a decision point always requires a [joint
   action](#action), introducing the concept of _passing_/_waiting_ to account for situations where
   on a console one of the players is forced to do nothing while input is collected from their
   opponent.
@@ -652,7 +652,7 @@ usage stats: |
   Statistics processed from a corpus of battle logs that detail the usage of various Pokémon and
   their attributes for a given format. [Smogon University](#Smogon) produces [public
   statistics](https://www.smogon.com/stats/) calculated from all rated battles on [Pokémon
-  Showdown!](#PS) each month which they use to influence the tiering decisions for the
+  Showdown](#PS) each month which they use to influence the tiering decisions for the
   [formats](#format) they maintain, though alternative usage statistics can also be produced for
   specific use cases.
 value: |
