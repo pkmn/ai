@@ -12,6 +12,7 @@ img, picture, video, canvas, svg {
   --bg-color: #fff;
   --fg-color: #000;
   --fg-accent-color: #000;
+  --fg-val: 0;
   --link-color: #0969DA;
   --filter: invert(0%);
 }
@@ -19,6 +20,7 @@ img, picture, video, canvas, svg {
   --bg-color: #121212;
   --fg-color: #ddd;
   --fg-accent-color: #fff;
+  --fg-val: 255;
   --link-color: #2F81F9;
   --filter: invert(87.5%);
 }
@@ -116,8 +118,8 @@ figure > img {
 
 figure.blockquote {
   padding-left: 1em;
-  color: rgb(0 0 0 / 50%);
-  border-left: 5px solid rgb(0 0 0 / 10%);
+  color: rgb(var(--fg-val) var(--fg-val) var(--fg-val) / 50%);
+  border-left: 5px solid rgb(var(--fg-val) var(--fg-val) var(--fg-val) / 10%);
 }
 figure.blockquote > figcaption {
   text-align: right;
