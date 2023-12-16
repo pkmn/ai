@@ -129,6 +129,12 @@ figcaption::before {
   content: '— ';
 }
 
+section[role='doc-endnotes'] {
+  font-size: smaller;
+}
+section[role='doc-endnotes'] ol {
+  padding-inline-start: 2ch;
+}
 
 nav > ul, .column > ul {
   padding: 0;
