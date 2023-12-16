@@ -122,7 +122,11 @@ figure.blockquote {
   border-left: 5px solid rgb(var(--fg-val) var(--fg-val) var(--fg-val) / 10%);
 }
 figure.blockquote > figcaption {
-  text-align: right;
+  margin-top: -0.5rem;
+  font-size: smaller;
+}
+figcaption::before {
+  content: '— ';
 }
 
 
