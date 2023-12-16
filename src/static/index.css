@@ -189,42 +189,6 @@ tr:first-child { border-top: 1px solid var(--fg-accent-color); }
 td:first-child { width: 15%; }
 tr:first-child td { border: none; }
 
-.description {
-  margin: 2em 0;
-}
-
-#research main {
-  max-width: min(105ch, calc(100% - 4vh));
-  margin: 1rem auto;
-  line-height: 1.15;
-}
-#research dl {
-  display: flex;
-  flex-wrap: wrap;
-}
-#research dt {
-  display: block;
-  width: 20%;
-  padding-right: 2ch;
-  font-weight: normal;
-}
-#research dd {
-  width: 80%;
-  margin-bottom: 1rem;
-  margin-left: auto;
-}
-
-#concepts ul {
-  margin-top: 3em;
-  padding: 0;
-  text-align: center;
-}
-#concepts li {
-  margin-bottom: 0.5rem;
-  line-height: 1.15;
-  list-style: none;
-}
-
 .hide {
   display: none;
 }
@@ -251,20 +215,12 @@ dfn {
 
 /* Mobile - Medium */
 @media(width < 425px) {
-  html {
-    font-size: 0.75em;
-  }
+  html { font-size: 0.75em; }
 }
 
 /* Mobile - Large */
 @media(width < 768px) {
   dd { margin: 0; }
-  #research dt {
-    display: none;
-  }
-  #research dd {
-    width: 100%;
-  }
 }
 
 /* Tablet @media(width < 1024px) {} */

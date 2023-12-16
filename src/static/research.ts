@@ -84,6 +84,31 @@ export function page(dir: string) {
   return {
     path: '/research/',
     title: 'Research | pkmn.ai',
+    style: `
+    main {
+      max-width: min(105ch, calc(100% - 4vh));
+      margin: 1rem auto;
+      line-height: 1.15;
+    }
+    dl {
+      display: flex;
+      flex-wrap: wrap;
+    }
+    dt {
+      display: block;
+      width: 20%;
+      padding-right: 2ch;
+      font-weight: normal;
+    }
+    dd {
+      width: 80%;
+      margin-bottom: 1rem;
+      margin-left: auto;
+    }
+    @media(width < 768px) {
+      dt { display: none; }
+      dd { width: 100%; }
+    }`,
     header: 'Research',
     content: buf.join(''),
   };

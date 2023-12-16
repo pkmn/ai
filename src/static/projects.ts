@@ -148,6 +148,7 @@ export function page(dir: string) {
   return {
     path: '/projects/',
     title: 'Projects | pkmn.ai',
+    style: '.description { margin: 2em 0; }',
     header: 'Projects',
     content: buf.join(''),
     script:

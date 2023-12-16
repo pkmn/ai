@@ -50,17 +50,18 @@ export const copy = (src: string, dst: string) => {
 };
 
 const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
-let style = '';
+let stylesheet = '';
 
 const EXPIRY = process.env.NODE_ENV === 'development' ? 0 : 14 * (24 * 60 * 60 * 1000);
 const retain = (file: string, now: number) =>
-  file === style || (/index\..*\.css/.test(file) &&
+  file === stylesheet || (/index\..*\.css/.test(file) &&
   now - fs.statSync(path.join(PUBLIC, file)).ctimeMs < EXPIRY);
 
 export interface Page {
   id?: string;
   path: string;
   title: string;
+  style?: string;
   topbar?: string;
   header?: string;
   content: string;
@@ -85,8 +86,8 @@ const OPTIONS = {
 };
 
 export const render = (name: string, page: Page) => {
-  if (!style) throw new Error('call to render before assets have been built');
-  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page, style});
+  if (!stylesheet) throw new Error('call to render before assets have been built');
+  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page, stylesheet});
   const minified = html.minify(rendered, OPTIONS);
   return minified;
 };
@@ -246,8 +247,8 @@ const build = async (rebuild?: boolean) => {
 
   const index = css.minify(read(path.join(STATIC, 'index.css'))).styles;
   const hash = crypto.createHash('sha256').update(index).digest('hex').slice(0, 8);
-  style = `index.${hash}.css`;
-  write(path.join(PUBLIC, style), index);
+  stylesheet = `index.${hash}.css`;
+  write(path.join(PUBLIC, stylesheet), index);
 
   for (const placeholder of ['chat', 'leaderboard']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
@@ -265,7 +266,7 @@ const build = async (rebuild?: boolean) => {
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
-    style,
+    stylesheet,
     content: `${toHTML(read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))}`,
   }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
@@ -287,6 +288,17 @@ const build = async (rebuild?: boolean) => {
   make('concepts', {
     path: '/concepts/',
     title: 'Concepts | pkmn.ai',
+    style: `
+    ul {
+      margin-top: 3em;
+      padding: 0;
+      text-align: center;
+    }
+    li {
+      margin-bottom: 0.5rem;
+      line-height: 1.15;
+      list-style: none;
+    }`,
     header: 'Concepts',
     content: `${toHTML(read(path.join(STATIC, 'concepts.dj')))}`,
   });
