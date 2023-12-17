@@ -1,3 +1,6 @@
+// Based on the MIT licensed matklad/matklad.github.io:
+// https://github.com/matklad/matklad.github.io/blob/master/LICENSE-MIT
+
 require('source-map-support').install();
 
 import * as crypto from 'crypto';
