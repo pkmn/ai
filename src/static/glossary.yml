@@ -170,7 +170,7 @@ endgame:
   competitive Pokémon, this stage of the game is far more tractable to solve given enough
   [information](#information) is usually revealed to effectively turn the game into one of
   perfect-information, and certain common scenarios may have been exhaustively solved and encoded in
-  a [precomputed](#offline) [endgame tablebase]{.dfn}.
+  a [precomputed](#offline) [endgame tablebase]{.dfn} ([EGTB]{.dfn}).
 engine: |
   The core code responsible for implementing Pokémon battle mechanics. While multiple
   [engines](/concepts/engines) exist, without any other context the term _engine_ may also refer
