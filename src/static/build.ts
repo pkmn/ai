@@ -100,7 +100,7 @@ const make = (name: string, page: Page) => {
   write(path.join(PUBLIC, name, 'index.html'), render(name, page));
 };
 
-export const topbar = 'Under Construction: planned completion date January 2024';
+export const topbar = 'Under Construction: planned completion date February 2024';
 
 interface AstNode {attributes?: {[key: string]: string}}
 
