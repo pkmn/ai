@@ -116,111 +116,101 @@ const addClass = (node: AstNode, cls: string) => {
   node.attributes['class'] = attr ? `${attr} ${cls}` : cls;
 };
 
-const extractCaption = (node: AstNode) => {
-  if (!node.attributes?.cap) return undefined;
-  const result = node.attributes.cap;
-  delete node.attributes.cap;
+const extract = (node: AstNode, r: djot.HTMLRenderer, attr: string) => {
+  if (!node.attributes?.[attr]) return '';
+  const result = r.renderAstNodeDefault(djot.parse(node.attributes[attr])).slice(3, -5);
+  delete node.attributes[attr];
   return result;
 };
 
-export const toHTML = (s: string) =>
-  djot.renderHTML(djot.parse(s), {
+export const toHTML = (str: string) =>
+  djot.renderHTML(djot.parse(str), {
     overrides: {
       inline_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: false}),
       display_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: true}),
       div: (node, r): string => {
-        if (hasClass(node, 'block')) {
-          let cap = extractCaption(node);
-          if (cap) {
-            cap = `<div class="title">${cap}</div>`;
-          } else {
-            cap = '';
-          }
-          return [
-            `<aside${r.renderAttributes(node)}>`, cap, r.renderChildren(node), '</aside>',
-          ].join('\n');
+        if (hasClass(node, 'aside')) {
+          node.attributes = node.attributes || {};
+          const title = extract(node, r, 'title');
+          return `
+            <aside${r.renderAttributes(node)}>
+              <div class="title">${title}</div>
+              ${r.renderChildren(node)}
+            </aside>
+          `;
         }
-
         if (hasClass(node, 'details')) {
-          return [
-            '<details>', `<summary>${extractCaption(node)}</summary>`,
-            r.renderChildren(node), '</details>'].join('\n');
+          return `
+            <details><summary>${extract(node, r, 'summary')}</summary>
+              ${r.renderChildren(node)}
+            </details>
+          `;
         }
-
         return r.renderAstNodeDefault(node);
+      },
+      code_block: (node, r) => {
+        const title = extract(node, r, 'title');
+        const cite = extract(node, r, 'cite');
+        const caption =
+          title ? `<figcaption class="title">${title}</figcaption>`
+          : cite ? `<figcaption class="cite"><cite>${cite}</cite></figcaption>` : '';
+        // const code = highlight(node.text, node.lang).trimEnd();
+        const code = node.text;
+        return `
+          <figure class="code">
+            ${caption}
+            <pre><code>${code}</code></pre>
+          </figure>
+        `;
       },
       para: (node, r) => {
         if (node.children.length === 1 && node.children[0].tag === 'image') {
           node.attributes = node.attributes || {};
-          let cap = extractCaption(node);
-          if (cap) {
-            cap =
-              `<figcaption class="title">${cap}</figcaption>\n`;
-          } else {
-            cap = '';
-          }
-
+          const caption = extract(node, r, 'caption');
           return `
-  <figure${r.renderAttributes(node)}>
-  ${cap}
-  ${r.renderChildren(node)}
-  </figure>
-  `;
+            <figure${r.renderAttributes(node)}>
+              <figcaption class="title">${caption}</figcaption>
+              ${r.renderChildren(node)}
+            </figure>
+          `;
         }
-        const result = r.renderAstNodeDefault(node);
-        return result;
+        return r.renderAstNodeDefault(node);
       },
       block_quote: (node, r) => {
-        let source = undefined;
+        let caption = '';
         if (node.children.length > 0) {
           const last_child: { tag: string; children?: AstNode[] } =
             node.children[node.children.length - 1];
-          if (
+          const cite =
             last_child.tag !== 'thematic_break' &&
             last_child?.children?.length === 1 &&
-            (last_child?.children[0] as any).tag === 'link'
-          ) {
-            source = last_child.children[0];
+            (last_child?.children[0] as any).tag === 'link';
+          if (cite) {
+            caption = `
+              <figcaption class="cite">
+               <cite>${r.renderAstNode(last_child.children![0] as any)}</cite>
+              </figcaption>
+            `;
             node.children.pop();
           }
         }
-        const cite = source
-          ? `<figcaption><cite>${r.renderAstNode(source as any)}</cite></figcaption>`
-          : '';
-
         return `
-  <figure class="blockquote">
-  <blockquote>${r.renderChildren(node)}</blockquote>
-  ${cite}
-  </figure>
-  `;
-      },
-      code_block: (node) => {
-        let cap = extractCaption(node);
-        if (cap) {
-          cap = `<figcaption class="title">${cap}</figcaption>\n`;
-        } else {
-          cap = '';
-        }
-        // const pre = highlight(node.text, node.lang, node.attributes?.highlight).value;
-        const pre = node.text;
-        return `<figure class="code">\n${cap}\n${pre}\n</figure>`;
+          <figure class="blockquote">
+            <blockquote>${r.renderChildren(node)}</blockquote>
+            ${caption}
+          </figure>
+        `;
       },
       span: (node, r) => {
-        if (hasClass(node, 'code')) {
-          const children = r.renderChildren(node);
-          return `<code>${children}</code>`;
-        }
-        if (hasClass(node, 'dfn')) {
-          const children = r.renderChildren(node);
-          return `<dfn>${children}</dfn>`;
-        }
+        if (hasClass(node, 'code')) return `<code>${r.renderChildren(node)}</code>`;
+        if (hasClass(node, 'dfn')) return `<dfn>${r.renderChildren(node)}</dfn>`;
         if (hasClass(node, 'kbd')) {
-          const children = r.renderChildren(node)
-            .split('+')
-            .map((it) => `<kbd>${it}</kbd>`)
-            .join('+');
+          const children = r.renderChildren(node).split('+').map(s => `<kbd>${s}</kbd>`).join('+');
           return `<kbd>${children}</kbd>`;
+        }
+        if (hasClass(node, 'email')) {
+          const obfuscated = r.renderChildren(node).split('.').join('<b>.spam</b>.');
+          return `<span class="email">${obfuscated}</span>`;
         }
         return r.renderAstNodeDefault(node);
       },
