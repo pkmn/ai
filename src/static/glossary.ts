@@ -25,7 +25,8 @@ export function page(dir: string) {
 
   buf.push('<dl>');
   for (const term of terms) {
-    buf.push(`<dt id="${slugify(term)}">${term}</dt>`);
+    const id = slugify(term);
+    buf.push(`<dt id="${id}"><a href="#${id}" class="subtle">${term}</a></dt>`);
     buf.push(`<dd>${toHTML(glossary[term])}</dd>`);
   }
   buf.push('</dl>');
@@ -35,5 +36,15 @@ export function page(dir: string) {
     title: 'Glossary | pkmn.ai',
     header: 'Glossary',
     content: buf.join(''),
+    script:
+    `document.addEventListener('DOMContentLoaded', () => {
+      console.log('hello');
+        const dts = document.getElementsByTagName('dt');
+        for (let i = 0; i < dts.length; i++) {
+          dts[i].addEventListener('click', () => {
+            navigator.clipboard.writeText('https://pkmn.ai/glossary/#' + dts[i].id);
+          });
+        }
+      });`,
   };
 }
