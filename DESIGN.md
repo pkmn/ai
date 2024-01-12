@@ -478,3 +478,11 @@ hours)
 - not guaranteed OU
 - guaranteed = singles, species clause, 1000 turn limit, tours timer, sleep/freeze/desync/switch
   priority , evasion OHKO invulnerability
+
+---
+
+ai = offer minimal docker files for node and python from scratch
+musl (jemalloc? mimalloc?)
+
+firecracker vm
+https://hocus.dev/blog/qemu-vs-firecracker/
