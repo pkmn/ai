@@ -52,8 +52,9 @@ function format(e: bibtex.Entry) {
   const sm = urls.length > 1
     ? ` <a href="${urls[1]}" class="subtle"><em>(Includes supplementary text).</em></a>`
     : '';
-  const definition = `<a href="${urls[0]}" class="subtle">${parts.join('')}</a>${sm}`;
-  return `<dt id="${e.key}">[${id}]</dt><dd>${definition}</dd>`;
+  const dt = `<dt id="${e.key}"><a href="#${e.key}" class="subtle">[${id}]</a></dt>`;
+  const dd = `<dd><a href="${urls[0]}" class="subtle">${parts.join('')}</a>${sm}</dd>`;
+  return `${dt}${dd}`;
 }
 
 export function page(dir: string) {
@@ -111,5 +112,15 @@ export function page(dir: string) {
     }`,
     header: 'Research',
     content: buf.join(''),
+    script:
+    `document.addEventListener('DOMContentLoaded', () => {
+      console.log('hello');
+        const dts = document.getElementsByTagName('dt');
+        for (let i = 0; i < dts.length; i++) {
+          dts[i].addEventListener('click', () => {
+            navigator.clipboard.writeText('https://pkmn.ai/research/#' + dts[i].id);
+          });
+        }
+      });`,
   };
 }
