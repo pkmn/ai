@@ -53,6 +53,7 @@ body {
 p, ul, ol, dl, hr, blockquote {
   margin: 1rem 0;
 }
+ul, ol { padding-inline-start: 2rem; }
 
 a {
   color: var(--link-color);
@@ -258,16 +259,17 @@ dfn {
   text-align: center;
 }
 
-/* Mobile - Small @media(width < 375px) {} */
-
-/* Mobile - Medium */
-@media(width < 425px) {
-  html { font-size: 0.75em; }
-}
+/* Tablet @media(width < 1024px) {} */
 
 /* Mobile - Large */
 @media(width < 768px) {
   dd { margin: 0; }
 }
 
-/* Tablet @media(width < 1024px) {} */
+/* Mobile - Medium */
+@media(width < 425px) {
+  html { font-size: 0.75em; }
+  ul, ol { padding-inline-start: 1.5rem; }
+}
+
+/* Mobile - Small @media(width < 375px) {} */
