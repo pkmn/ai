@@ -95,12 +95,8 @@ export function page(dir: string) {
         ? `${project.active[0]}`
         : `${project.active[0]} – ${project.active[1]}`)
       : `${project.active} – <em>present</em>`;
-    {
-      const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
-      buf.push(project.site
-        ? `<h3><a href="${project.site}" class="subtle">${name}</a></h3>`
-        : `<h3>${name}</h3>`);
-    }
+    const title = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
+    buf.push(`<h3><a href="#${id}" class="subtle">${title}</a></h3>`);
     buf.push('<table>');
     if (project.paper) {
       const p = bibliography[project.paper];
@@ -141,7 +137,8 @@ export function page(dir: string) {
     }
     buf.push('</table>');
     const description = split.slice(0, 8 + Math.random() * 12).join('.');
-    buf.push(`<div class="description"><p>${description}.</p></div>`);
+    const site = project.site ? `<a href="${project.site}">${title}</a>. ` : '';
+    buf.push(`<div class="description"><p>${site}${description}.</p></div>`);
     buf.push('</section>');
   }
 
@@ -173,6 +170,12 @@ export function page(dir: string) {
                 }
               }
             }
+          });
+        }
+
+        for (let i = 0; i < projects.length; i++) {
+          projects[i].firstChild.addEventListener('click', () => {
+            navigator.clipboard.writeText('https://pkmn.ai/projects/#' + projects[i].id);
           });
         }
       });`,
