@@ -114,7 +114,6 @@ export function page(dir: string) {
     content: buf.join(''),
     script:
     `document.addEventListener('DOMContentLoaded', () => {
-      console.log('hello');
         const dts = document.getElementsByTagName('dt');
         for (let i = 0; i < dts.length; i++) {
           dts[i].addEventListener('click', () => {
