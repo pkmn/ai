@@ -1,6 +1,6 @@
 abstraction: |
   A method for solving incomplete information games that are too large to be solved in their
-  original form. The original game is abstracted to create a smaller game that is strategically
+  original form. The original game is abstracted to create a smaller game that's strategically
   similar, such that the new abstract game can be solved and the solution can be mapped back to the
   original to serve as an approximation to the true solution to the original game. In Pokémon,
   techniques such as [bucketing](#bucketing) can be used to reduce the state space, or the original
@@ -19,14 +19,14 @@ action: |
 agent: |
   An intelligent agent ([IA]{.dfn}) is an entity that autonomously acts upon an environment to
   achieve its goals. In computer chess the individual agents are usually referred to as _engines_,
-  but in competitive Pokémon artificial intelligence circles agent or [bot](#bot) is prefered as
+  but in competitive Pokémon artificial intelligence circles agent or [bot](#bot) is preferred as
   [engine](#engine) is used to refer to the code responsible for the simulation of core Pokémon
   battle mechanics.
 Alpha-beta: |
   Alpha-beta pruning is a search algorithm that seeks to decrease the number of nodes that are
   evaluated by the [minimax](#minimax) algorithm in its search tree. When applied to a standard
   minimax tree, it returns the same move as minimax would, but [prunes](#pruning) away branches that
-  cannot possibly influence the final decision. Alpha-beta has been shown to also work by
+  can't possibly influence the final decision. Alpha-beta has been shown to also work by
   [simultaneous move](#SM) games in [(Bošanský 2013)](/research#Bošanský:2013){.subtle} and
   [(Saffidine 2021)](/research#Saffidine:2021){.subtle}.
 AlphaGo: |
@@ -37,7 +37,7 @@ AlphaGo: |
   2018)](/research#Silver:2018){.subtle}, the AlphaGo architecture serves as the modern foundation
   for many perfect information game-playing agents (_e.g._, [Lc0](#Lc0)).
 anytime: |
-  An anytime algorithm is an algorithm that can return a valid solution to a problem even if it is
+  An anytime algorithm is an algorithm that can return a valid solution to a problem even if it's
   interrupted before it ends.
 bandit: |
   The [multi-armed bandit problem]{.dfn} is a classic [reinforcement learning](#RL) problem that
@@ -96,7 +96,7 @@ client: |
   Code that communicates with the game [engine](#engine) and enables a player to play the game. In
   the standard case of Pokémon the client only has a partial representation of one perspective of
   the actual battle state stored on the [server](#server). Clients connect to the server and
-  communicate with the server via a [protocol](#protocol), and by default this protocol does not
+  communicate with the server via a [protocol](#protocol), and by default this protocol doesn't
   share hidden [information](#information).
 conmeta: |
   A constructed [metagame](#metagame) where the artificially created rules have been arbitrarily
@@ -122,25 +122,25 @@ depth: |
   The depth of a node is the number of edges from the node to the [tree's](#game-tree) root node. A
   root node will have a depth of 0.
 determinization: |
-  The technique of sampling different perfect information states from the set of possibile imperfect
+  The technique of sampling different perfect information states from the set of possible imperfect
   information states so that methods for solving perfect information games can be applied to games
   with imperfect information.
 drafting: |
   A component of certain Pokémon [variants](#variant) where players take turns choosing the Pokémon
-  species which will form their pool of available choices during a later
-  [team-building](#team-building) component.
+  species which form their pool of available choices during a later [team-building](#team-building)
+  component.
 driver: |
   Code which operates/controls the [engine](#engine), perhaps to provide additional features or to
   allow for integration within a broader application.
 EBC: |
   [Endless Battle Clause](https://dex.pokemonshowdown.com/articles/battlerules), a rule that exists
-  in [Smogon](#Smogon) [formats](#format) to guarantee that all battles will terminate in 1000 turns
-  or fewer, while also seeking to curtail certain specific degenerate strategies.
+  in [Smogon](#Smogon) [formats](#format) to guarantee that all battles end in 1000 turns or fewer,
+  while also seeking to curtail certain specific degenerate strategies.
 EE: |
-  Extreme equilbrium, a Nash equilibrium where for both players' mixed strategies cannot be
-  described as convex combinations of other mixed strategies that form equilibria.
+  Extreme equilibrium, a Nash equilibrium where both players' mixed strategies can't be described as
+  convex combinations of other mixed strategies that form equilibria.
 EEE: |
-  Enumeration of extreme equilbria, a linear programming algorithm for determining all of the
+  Enumeration of extreme equilibria, a linear programming algorithm for determining all of the
   possible [Nash equilibrium](#NE) solutions in a [bimatrix game](#bimatrix-game).
 EFG: |
   An [extensive-form game]{.dfn} is a specification of a [game](#game) allowing for the explicit
@@ -149,7 +149,7 @@ EFG: |
   each player has about the other player's moves when they make a decision, and their
   [payoffs](#payoff) for all possible game outcomes. Extensive-form games also allow for the
   representation of incomplete information in the form of [chance events](#chance) modeled as _moves
-  by nature_. Alternatives to the extensive-form game respresentation is the [normal-form]{.dfn}
+  by nature_. Alternatives to the extensive-form game representation is the [normal-form]{.dfn}
   representation that simply boils the game down to a payoff [matrix](#bimatrix-game), for the
   [FOSG](#FOSG) representation.
 Elo: |
@@ -162,7 +162,7 @@ embedding: |
   network](#NN), examples of embeddings in Pokémon include
   [`poke2vec`](https://aliturfah.com/poke2vec/) and [`pokemb`](https://github.com/spktrm/pokemb).
 emulator: |
-  Code that is designed to mimic the outwardly observable behavior of both the hardware and software
+  Code that's designed to mimic the outwardly observable behavior of both the hardware and software
   features of a real device, to allow for playing a Pokémon [cartridge](#cartridge) on arbitrary
   platforms.
 endgame:
@@ -188,7 +188,7 @@ extreme equilibria: TODO
 format: TODO metagame
 FOSG: |
   A [factored-observation stochastic game]{.dfn} TODO
-FP: TODO ficitious play/focus punch
+FP: TODO fictitious play/focus punch
 game: |
   Any set of circumstances that has a result dependent on the actions of two or more decision-makers
   ([players](#player)). In the context of competitive Pokémon battling, the _game_ or _battle_ can
@@ -200,11 +200,11 @@ game tree: |
   A graph representing all possible game [states](#state) within a [game](#game). The [complete game
   tree]{.dfn} for a game is the game tree starting at the initial state and containing all possible
   [moves](#action) from each state and is equivalent to the tree obtained from the [extensive-form
-  game](#EFG) representation). Given that is usually intractable to enumerate the entire game tree
+  game](#EFG) representation). Given that's usually intractable to enumerate the entire game tree
   in Pokémon, AI agents usually search over a [partial game tree]{.dfn} which contains a subset of
   the nodes from the complete game tree.
 generation: |
-  A grouping of Pokemon game releases that seperates them based on the Pokémon and mechanics they
+  A grouping of Pokemon game releases that separates them based on the Pokémon and mechanics they
   include. Generations are typically referred to by acronyms based on their release titles:
 
     1. _Generation I_: RBY, RB, RBG
@@ -218,9 +218,9 @@ generation: |
     9. _Generation IX_: SV
 genetic algorithm: |
   Genetic algorithms ([GA]{.dfn}) are a method for solving both constrained and unconstrained
-  optimization problems that is based on [natural
+  optimization problems that's based on [natural
   selection](https://en.wikipedia.org/wiki/Natural_selection). Genetic algorithms are typically
-  useful when the objective function is discontinuous, nondifferentiable, [stochastic](#stochastic),
+  useful when the objective function is discontinuous, non-differentiable, [stochastic](#stochastic),
   or highly nonlinear, and are often used to determine the values of
   [hyperparameters](#hyperparameter).
 GF: |
@@ -246,7 +246,7 @@ HCE: |
   learned), often leveraging [heuristics](#heuristic) or other [rule-based](#rule-based) approaches.
 heuristic: |
   An approach for arriving at a solution by trial and error or by [rules](#rule) that are only
-  loosely defined via methods which are not optimal, perfect, or rational, but is nevertheless
+  loosely defined via methods which aren't optimal, perfect, or rational, but is nevertheless
   sufficient for reaching an immediate, short-term goal or approximation.
 hyperparameter: |
   A hyperparameter is a parameter whose value is used to control the learning process. By contrast,
@@ -264,19 +264,19 @@ input log: |
     [engine](#engine) to unambiguously implement the battle mechanics of Pokémon.
     - [logical input]{.dfn} is an encoding  where move or species names are used in lieu of slots,
     _e.g._, `switch zapdos` or `move thunderbolt`. This encoding is more intuitive and often more
-    useful to work with when utilizing [machine learning](#learning) techniques, though is not
+    useful to work with when utilizing [machine learning](#learning) techniques, though isn't
     accepted by all engines and can be ambiguous (_e.g._, in [formats](#format) without the
     [Species Clause](https://www.smogon.com/xy/articles/clauses))
     - [contextual input]{.dfn} is a class of inputs which add additional context to a logical input
     about the scenario the input was made in to provide necessary information for
     [learning](#learning) algorithms, _e.g._, `Zapdos Thunderbolt vs. Starmie` or `Zapdos ->
-    Starmine vs. Rhydon`
+    Starmie vs. Rhydon`
 
   Applying anchored subsets of the input log to the initial battle state can be used to recompute
   past battle states, and competitive Pokémon developers may choose to improve memory overhead by
   storing the game tree in terms of an initial state and inputs as opposed to storing copies of
   battle state at each node.
-interior equilibra: TODO
+interior equilibria: TODO
 joint actions: TODO
 killer move: |
   A move ordering [heuristic](#heuristic) that optimizing search by prioritizing evaluating highly
@@ -288,7 +288,7 @@ Lc0: |
   design behind [AlphaGo](#AlphaGo). Regularly competes with
   [Stockfish](https://stockfishchess.org/) for the title of strongest computer chess agent.
 lead: |
-  The Pokémon on a player's team that is sent out first at the beginning of the battle (sometimes
+  The Pokémon on a player's team that's sent out first at the beginning of the battle (sometimes
   predetermined during [team-building](#team-building) though otherwise determined in [Team
   Preview](#Team-Preview)).
 learning: |
@@ -301,7 +301,7 @@ learning: |
     3. [[reinforcement learning](#RL)]{.dfn}, where an agent aims to perform a certain goal and is
     given feedback along the way that it attempts to maximize
 Libratus:
-  The first computer agent to acheive superhuman performance in [no-limit Texas hold 'em
+  The first computer agent to achieve superhuman performance in [no-limit Texas hold 'em
   poker](https://en.wikipedia.org/wiki/Go_(game)), using a new variant of [counterfactual regret
   minimization](#CFR) dubbed CFR+ [(Brown 2017)](/research#Brown:2017){.subtle}. Libratus was later
   followed by Modicum [(Brown 2018)](/research#Brown:2018){.subtle}, Pluribus [(Brown
@@ -312,7 +312,7 @@ linear programming: |
   Linear programming ([LP]{.dfn}), also called linear optimization, is a method to achieve the best
   outcome (such as maximum profit or lowest cost) in a mathematical model whose requirements are
   represented by linear relationships. Typically used in competitive Pokémon AI research to solve
-  for the [Nash equilbrium](#NE).
+  for the [Nash equilibrium](#NE).
 look ahead: |
   The [depth](#depth) that a search algorithm searches to.
 LOS: |
@@ -325,7 +325,7 @@ lrsnash: |
   2010)](/research#Avis:2010){.subtle} and available in the
   [`lrslib`](https://cgm.cs.mcgill.ca/~avis/C/lrs.html).
 match-up: |
-  Match-up (or [MU]{.dfn}) decribes the advantage (or disadvantage) of a given team or Pokémon
+  Match-up (or [MU]{.dfn}) describes the advantage (or disadvantage) of a given team or Pokémon
   against another team or Pokémon. In the context of teams or the battle as a whole, match-up
   determines which team is favored to win after [team-building], and often the advantage may be
   strongly in the favor of one side.
@@ -334,14 +334,14 @@ MDP: |
   A [Markov decision process]{.dfn} is as a [stochastic](#stochastic) decision-making process that
   uses a mathematical framework to model the decision-making of a dynamic system in scenarios where
   the results are either random or controlled by a decision maker, which makes sequential decisions
-  over time. In competitive Pokémon AI reseach, _MDP_ may also refer to the
+  over time. In competitive Pokémon AI research, _MDP_ may also refer to the
   [MaxDamagePlayer](#MaxDamagePlayer) in certain contexts.
 MaxDamagePlayer:
   A simple competitive Pokémon playing [agent](#agent) that chooses to use whichever `move` action
-  will do the most damage the [next turn](#OTL) to the opponent, commonly seen in the
+  in expected to do the most damage the [next turn](#OTL) to the opponent, commonly seen in the
   [literature](/projects) alongside the [RandomPlayer](#RandomPlayer) when benchmarking/testing
-  agents due to its simplicity of implementation. Certain variants of this will exist depending on
-  how much of the [damage formula](#damage-calculator) is implemented, with the simplest versions of
+  agents due to its simplicity of implementation. Certain variants of this exist depending on how
+  much of the [damage formula](#damage-calculator) is implemented, with the simplest versions of
   MaxDamagePlayer perhaps only considering each move's effective base power after [STAB](#STAB) and
   type effectiveness. A fully featured MaxDamagePlayer can achieve a much higher level of play than
   a RandomPlayer, though is extremely [exploitable](#exploitability) (this can be somewhat mitigated
@@ -356,22 +356,22 @@ minimax:
   Also known as [maximin]{.dfn}, describes the concept of minimizing the possible loss for a worst
   case (maximum loss) scenario. Usually refers to the minimax [search](#search) algorithm, a
   recursive algorithm for choosing the next move in an n-player game such that each player makes the
-  move maximizes the mininum [value](#value) of the position resulting from the opponent's possible
+  move maximizes the minimum [value](#value) of the position resulting from the opponent's possible
   moves. Furthermore, due to competitive Pokémon being a [stochastic](#stochastic) game, minimax is
-  often actually refering to the [expectiminimax](#expectiminimax) algorithm.
+  often actually referring to the [expectiminimax](#expectiminimax) algorithm.
 move: |
   See [action](#action).
 MVP: |
   The [minimal viable product]{.dfn}, a version with the bare-mininum number of features to be
   usable/demonstrate enough of a solution that feedback becomes relevant.
 NE: |
-   The [Nash equilbrium]{.dfn}, a stable state of a system involving the interaction of different
+   The [Nash equilibrium]{.dfn}, a stable state of a system involving the interaction of different
    participants, in which no participant can gain by a unilateral change of [strategy](#strategy) if
-   the strategies of the others remain unchanged. A mixed strategy Nash equilbrium or mixed Nash
-   equilbrium ([MNE]{.dfn}) is a Nash equilbrium which requires a mixed strategy (a probability
+   the strategies of the others remain unchanged. A mixed strategy Nash equilibrium or mixed Nash
+   equilibrium ([MNE]{.dfn}) is a Nash equilibrium which requires a mixed strategy (a probability
    distribution over pure strategies), and every n-player game has at least one mixed Nash
-   equilbrium. In competitive Pokémon, Nash equilbrium is used interchangeably with mixed Nash
-   equilbrium.
+   equilibrium. In competitive Pokémon, Nash equilibrium is used interchangeably with mixed Nash
+   equilibrium.
 NN: |
   A [neural network]{.dfn}, is a computer system modeled on the human brain and nervous system,
   comprised of multiple layers of _nodes_, containing an input layer, one or more hidden layer, and
@@ -384,11 +384,11 @@ NNUE: |
   to replace the [evaluation function](#value) of [alpha-beta](#Alpha-beta) searches running on a
   CPU via [SIMD](#SIMD) instructions. [Originally developed for Computer
   Shogi](https://github.com/asdfjkl/nnue/blob/main/nnue_en.pdf), NNUE has been used successfully in
-  chess engines such as [Stockfish](https://stockfishchess.org/) to acheive high ratings.
+  chess engines such as [Stockfish](https://stockfishchess.org/) to achieve high ratings.
 observation: |
   Information produced when the [state](#state) [transitions](#transition). In Pokémon this may
-  include a result which can be used to determine [payoff](#payoff) and possibile legal
-  [actions](#action), _logs_ which detail various events that may have occured, an account of the
+  include a result which can be used to determine [payoff](#payoff) and possible legal
+  [actions](#action), _logs_ which detail various events that may have occurred, an account of the
   [chance](#chance) actions, or a multitude of other possibilities depending on the
   [engine](#engine).
 offline: |
@@ -420,7 +420,7 @@ payoff: |
   states give rewards, where the reward is determined based on the result of the battle (winning,
   losing or drawing --- though pedantically, Pokémon glitches mean that one also needs to support
   the notion of a battle ending in _error_ which can usually be mapped to a draw) and the
-  utility/reward function (which will usually map [W/L/T](#WLT) to `1/-1/0` making Pokémon a
+  utility/reward function (which usually maps [W/L/T](#WLT) to `1/-1/0` making Pokémon a
   [zero-sum](#zero-sum) game or `1/0/0.5` making Pokémon a [constant-sum](#zero-sum) game, the
   latter being more common).
 PBS: TODO public belief state
@@ -437,8 +437,8 @@ pkmn: |
   A common abbreviation of Pokémon dating back to the earliest releases where the stylized
   ^P^~K~^M^~N~ was included in the [cartridge](#cartridge) character set. However, this abbreviation
   has since been adopted as the name for the [pkmn](https://pkmn.cc) collection of projects (notably
-  the pkmn [engine](#engine), [`libpkmn`](https://pkmn.cc/engine)) and is often what is being
-  referenced (and is always what is being referred to when prefixed with an _@_, as @pkmn is the
+  the pkmn [engine](#engine), [`libpkmn`](https://pkmn.cc/engine)) and is often what's being
+  referenced (and is always what's being referred to when prefixed with an _@_, as @pkmn is the
   name of the [organization](https://github.com/pkmn)).
 player: |
   A strategic decision-maker within the context of the game. In Pokémon these are usually referred
@@ -452,8 +452,8 @@ player: |
 playout: TODO
 PoG:
   Player of Games, the original name of the general game-playing agent from [(Schmid
-  2021)](/research#Schmid:2021){.subtle} which utilizes improved counterfactual regret minimizaton
-  to acheive superhuman performance in a variety of games.
+  2021)](/research#Schmid:2021){.subtle} which utilizes improved counterfactual regret minimization
+  to achieve superhuman performance in a variety of games.
 policy: |
   A policy is a [state](#state) to [action](#action) mapping --- for each action possible from a
   given state, a policy returns the probability of taking the action. Ultimately, the objective of a
@@ -461,13 +461,13 @@ policy: |
   learning](#RL) aims to accomplish this by learning a [policy network]{.dfn}.
 POMDP: |
   Partially observable Markov decision process, a generalization of a [Markov decision
-  process](#MDP) which models an agent decision process in which it is assumed that the system
-  dynamics are determined by an MDP, but the agent cannot directly observe the underlying
+  process](#MDP) which models an agent decision process in which it's assumed that the system
+  dynamics are determined by an MDP, but the agent can't directly observe the underlying
   [state](#state).
 pondering: |
   The act of thinking during an opponent's turn. Given that Pokémon is a [simultaneous move](#SM)
   game, pondering occurs after a player has submitted their action (or been asked to wait) while
-  they are waiting for their next opportunity to input an action.
+  they're waiting for their next opportunity to input an action.
 prediction: TODO
 protocol: TODO
 pruning: TODO
@@ -491,10 +491,10 @@ RandomPlayer: |
   [heuristics](#heuristic) for decided how to treat generational [gimmicks](#gimmick).
 
   Formally, the notation $`RandomPlayer(N\%)` should be used to refer to an agent which $`N\%` of
-  the time uniformly chooses to make a `switch` action whem available, otherwise choosing uniformly
-  between possible `move` actions. $`RandomPlayer(\widetilde{N\%})` will instead only consider
-  `switch` actions $`N\%` of the time when they're available, otherwise will choose a `move` action.
-  This distinction of choosing uniformly between a minimal subset of the action space or considering
+  the time uniformly chooses to make a `switch` action when available, otherwise choosing uniformly
+  between possible `move` actions. $`RandomPlayer(\widetilde{N\%})` instead only considers `switch`
+  actions $`N\%` of the time when they're available, otherwise chooses a `move` action. This
+  distinction of choosing uniformly between a minimal subset of the action space or considering
   potentially multiple subsets of the space can be extended  to gimmicks such as `mega`, `zmove`,
   `dynamax` or `terastallize`, though in those cases a more explicit notation is preferred, _e.g._,
   $`RandomPlayer(switch=\widetilde{20\%}, zmove=90\%)` would consider `switch` 20% of the time and
@@ -550,17 +550,17 @@ Smogon: |
   Nintendo.
 sparse: TODO
 STAB: |
-  An abbreviation for same-type attack bonus, a mechanic where a damage boost that is applied to
+  An abbreviation for same-type attack bonus, a mechanic where a damage boost that's applied to
   moves used by a Pokémon of the same type.
 state: |
   The information required to determine which [actions](#action) are available to each
   [player](#player). In Pokémon, this is the *battle*, and the term _battle_ is used as opposed to
   _state_ as _state_ is a loaded term in programming (programming in general is arguably all about
   the management of state, so _state_ needs to be qualified as _battle state_ or _game state_ to be
-  unambigious) despite it being a useful term in papers dealing purely with theory.
+  unambiguous) despite it being a useful term in papers dealing purely with theory.
 stochastic: TODO probabilistic vs. non-deterministic
 strategy: |
-  Used interchangeably used with [policy](#policy), refers to generically to a plan to acheive an
+  Used interchangeably used with [policy](#policy), refers to generically to a plan to achieve an
   overall goal.
 subgame: |
   A notion used in the solution concept of subgame perfect [Nash equilibrium](#NE), a refinement of
@@ -569,7 +569,7 @@ subgame: |
   isolation constitutes a game in its own right.
 symmetry: |
   Similarity or exact correspondence between different things. In the context of games, symmetry can
-  result certain [states](#state) occuring more than once in the [game tree](#game-tree), meaning
+  result certain [states](#state) occurring more than once in the [game tree](#game-tree), meaning
   techniques such as [transposition tables](#TT) a can be leveraged to speed up search.
 TD-learning: |
   [Temporal difference learning]{.dfn} refers to a class of model-free [reinforcement learning](#RL)
@@ -588,7 +588,7 @@ Thompson sampling: |
   A [bandit](#bandit) algorithm which chooses the [action](#action) that maximizes the [expected
   reward](#value) with respect to a randomly drawn [belief](#belief).
 Torch: |
-  The defacto standard open source machine learning and scientific computing framework, most often
+  The de facto standard open source machine learning and scientific computing framework, most often
   used in Python via [PyTorch](https://en.wikipedia.org/wiki/PyTorch).
 TPCi: |
   [The Pokémon Company International](https://corporate.pokemon.com/), co-owners of the Pokémon
@@ -599,14 +599,14 @@ transformer: |
   sequential data.
 transition: |
   The change that a [state](#state) undergoes due to an [action](#action). In the [pkmn](#pkmn)
-  engine, this is implemented by a a battle's `update` function. In game theory, _turns_
+  engine, this is implemented by a battle's `update` function. In game theory, _turns_
   typically count transitions (though [not in Pokémon](#turn)), and a transition may produce a
   [payoff](#payoff) or some sort of [observation](#observation).
 transitions: |
   The entire set of possible [transitions](#transition) from any given [state](#state). While every
   Pokémon game engine must allow for performing a single transition, performing _all_ transitions at
   once and returning the set of states is a less common feature, and almost always when
-  _transitions_ or `transitions` is used in conversation as a noun it is referring to this
+  _transitions_ or `transitions` is used in conversation as a noun it's referring to this
   functionality.
 transposition: |
   A sequence of moves that results in a position that may also be reached by another, more common
@@ -630,7 +630,7 @@ turn: |
   [sequential](#SM) game which doesn't apply to Pokémon given that Pokémon is a [simultaneous](#SM)
   game. A _turn_ in Pokémon is a well-defined concept as certain game mechanics depend on its
   definition (_e.g._, residual damage happens at the end of a turn in Pokémon in later generations).
-  Instead, it is more useful to in terms of [decision point]{.dfn} that occur between _updates_ to
+  Instead, it's more useful to in terms of [decision point]{.dfn} that occur between _updates_ to
   the battle state (which may happen multiple times in a single turn, _e.g._, due to a Pokémon using
   Baton Pass or fainting) --- places where the game requires input from players to proceed. In
   [Pokémon Showdown](#PS) and the [pkmn](#pkmn) engine, a decision point always requires a [joint
@@ -661,14 +661,14 @@ value: |
   are often approximated with [reinforcement learning](#RL) via  a [value network]{.dfn} in that
   assigns a value to each state of the game by calculating an expected cumulative score.
 vaporware: |
-  Software that has been advertised but is not yet available to use/buy, either because it is only a
-  concept or because it is still being written or designed. See also [pkmn](#pkmn).
+  Software that has been advertised but isn't yet available to use/buy, either because it's only a
+  concept or because it's still being written or designed. See also [pkmn](#pkmn).
 variant: |
   A variation from the standard rules of competitive Pokémon which usually simplifies/relaxes
   certain properties/rules of the game to make it more tractable for AI, with the expectation that
-  solutions to a variant will usually be useful for generalizing to the original ruleset. In
-  computer poker, [Kuhn poker](https://en.wikipedia.org/wiki/Kuhn_poker) is the most common
-  simplification studied, whereas in Pokémon there are [numerous potential options of
+  solutions to a variant usually are useful for generalizing to the original ruleset. In computer
+  poker, [Kuhn poker](https://en.wikipedia.org/wiki/Kuhn_poker) is the most common simplification
+  studied, whereas in Pokémon there are [numerous potential options of
   variants](/concepts/variants). Note that while the various Pokémon [formats](#format) can be
   considered variants, the term _variant_ is reserved to describe simplifications to the game that
   go beyond the rule changes typical between formats.

@@ -1,6 +1,6 @@
 Given the vast [complexity](/concepts/complexity) of competitive Pokémon, there exist numerous
-possibilties for [abstractions](/glossary#abstraction) which can simplify the problem space. Outside
-of more general modifications that can be made to almost any game to decrease the difficulty
+possibilities for [abstractions](/glossary#abstraction) which can simplify the problem space.
+Outside of more general modifications that can be made to almost any game to decrease the difficulty
 (_e.g._, increasing the amount of time available per decision), these relaxations can be grouped
 into three broad categories --- those which reduce the [scope of the game](#Game) as a whole, those
 which [increase the amount of information](#Information) revealed, and those which pare down the
@@ -32,24 +32,24 @@ nature of the game:
   standard play in Smogon University's metagames between human players already leverages this)
 - knowledge of an **opponent's team** makeup and configuration is significantly more artificial as
   it removes the aspect of information gathering/hiding and provides a significant advantage to the
-  player, but as the battle progresses well developed team prediction will eventually determine this
-  information anyway. This is the most common simplication and [many different options
-  exist](#Restrictions) in this area
+  player, but as the battle progresses team prediction eventually determines this information
+  anyway. This is the most common simplication and [many different options exist](#Restrictions) in
+  this area
 - knowledge of further **hidden information** known only to the engine (_e.g._, remaining sleep
-  turns) beyond what is covered above but while still retaining some stochastic aspects without
+  turns) beyond what's covered above but while still retaining some stochastic aspects without
   revealing the [RNG](/glossary#RNG) seed is difficult to pin down, as exactly what information
   should be revealed is rather arbitrary
 - knowledge of the  **RNG seed** (which both provides full information on existing unknown
   information such as duration of various statuses and limited knowledge of immediate future
-  outcomes) helps [*determinize*](/glossary#determinization) the game tree by effectively removing
+  outcomes) helps [**determinize**](/glossary#determinization) the game tree by effectively removing
   [stochasticity](/glossary#stochastic), though the amount of unknowns revealed means that game play
   starts to get too artificial
 - knowledge of the **opponent's upcoming move** during the current turn is interesting in that it
-  [*sequentializes*](/glossary#sequentialization) the game (thus removing the complications of
+  [**sequentializes**](/glossary#sequentialization) the game (thus removing the complications of
   dealing with [simultaneity](/glossary/#SM)), but obviously dramatically changes how the game is
   played
 
-Note that the preceding options are not necessarily always mutually exclusive --- modifications can
+Note that the preceding options aren't necessarily always mutually exclusive --- modifications can
 be combined to produce different potentially interesting gameplay variants.
 
 ### Restrictions
@@ -66,7 +66,7 @@ through restrictions on the rules involved with team-building:
   Cup"](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273))
 - players can be forced build teams only from a pool of specific Pokémon species that were
   previously selected in a **draft** phase by the player with knowledge of their opponent's pool of
-  allowed Pokémon species (_e.g._, Smogon Unversity's [Draft
+  allowed Pokémon species (_e.g._, Smogon University's [Draft
   Leagues](https://www.smogon.com/articles/beginners-guide-draft)). This change reduces the number
   of possible movesets for both players, but also changes team-building due to being able to cater
   one's team through exploiting knowledge of an opponent's options (it also introduces a "drafting"
@@ -82,8 +82,8 @@ through restrictions on the rules involved with team-building:
   possible choices for each field. _e.g._, [Pokémon Showdown's Random
   Battle](https://www.smogon.com/articles/random-formats-overview) formats
 - providing a [**preview**](/glossary#Team-Preview) of the opponent's team before the battle and
-  introducing a phase before the battle takes place where players can select their team order (eg.
-  most formats post Generation V).
+  introducing a phase before the battle takes place where players can select their team order
+  (_e.g._, most formats post Generation V).
 - reducing a team's maximum size from the standard default of 6 vs.6 to either a strict **$`N` _vs._
   $`N`** before the battle, or through a **bring $`M` choose $`N`** mechanic where players must
   select a subset of their original team to actually battle with (_e.g._, [Battle Stadium

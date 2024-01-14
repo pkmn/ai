@@ -1,6 +1,6 @@
 TODO
 
-options 
+options
 
 - PokemonBattleEngine
 - pkmn/engine
@@ -27,6 +27,6 @@ tradeoffs/features
 
 board representation
 
-  - <https://www.chessprogramming.org/Make_Move>
-  - <https://www.chessprogramming.org/Unmake_Move>
-  - <https://www.chessprogramming.org/Copy-Make>
+- <https://www.chessprogramming.org/Make_Move>
+- <https://www.chessprogramming.org/Unmake_Move>
+- <https://www.chessprogramming.org/Copy-Make>
