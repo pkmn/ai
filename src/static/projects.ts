@@ -28,13 +28,18 @@ const RANKING = [
   'pmariglia/showdown', // ~1610 Elo in gen7randombattle (~1450 Elo in standard)
   'Technical Machine', // ??? (1300-1400 Elo?), even record against weaker version of pmariglia
   'leolellisr/poke_RL', // 99.5% vs. RandomPlayer, 60-85% vs MaxDamage
-  'Chun Him Tse', // 96.6% vs. RandomPlayer, 78.2% vs. MaxDamage. ~1350 Elo (VGC)
+  'Tse', // 96.6% vs. RandomPlayer, 78.2% vs. MaxDamage. ~1350 Elo (VGC)
   'Percymon', // 1270 Elo in gen6randombattle
   'hsahovic/reinforcement-learning-pokemon-bot', // "~90% vs. RandomPlayer"
-  'Chen, Lin', //  "~85% vs. RandomPlayer
+  'alphaPoke', // "87-88% vs. RandomPlayer = ~1150 Elo"
+  'kvchen/showdown-rl', //  "~85% vs. RandomPlayer
   'Showdown AI Competition', // 85% vs. RandomPlayer = *equivalent* to MaxDamage
   'Kalose, Kaya, Kim', // ~60-65% vs. RandomPlayer (Gen 1)
 ];
+
+// https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
+// eslint-disable-next-line max-len
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 export function page(dir: string) {
   const buf: string[] = [];
@@ -132,7 +137,10 @@ export function page(dir: string) {
       buf.push(`<tr><td><strong>Platform</strong></td><td>${platform}</td></tr>`);
     }
     if (project.release) {
-      const release = `<a href="${project.release.url}" class="subtle">${project.release.name}</a>`;
+      const name = SEMVER.test(project.release.name)
+        ? `<code>${project.release.name}</code>`
+        : `<i>${project.release.name}</i>`;
+      const release = `<a href="${project.release.url}" class="subtle">${name}</a>`;
       buf.push(`<tr><td><strong>Release</strong></td><td>${release}</td></tr>`);
     }
     buf.push('</table>');

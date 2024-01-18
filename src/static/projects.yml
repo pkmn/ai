@@ -62,7 +62,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   release:
-    name: "0.9.6"
+    name: Froslass
     url: https://github.com/dramamine/leftovers-again/releases/tag/v0.9.6
 - name: Bill's PC
   active: [2015, 2016] # September 8
@@ -113,7 +113,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   release:
-    name: book-202009
+    name: 2020年9月(技術書典9)
     url: https://github.com/select766/pokeai/releases/tag/book-202009
 - name: CynthiAI
   active: [2017, 2017] # May 23
@@ -177,6 +177,18 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Showdown-AI-Bot
+  active: [2019, 2019] # March 8
+  license: MIT
+  source: https://github.com/JJonahJson/Showdown-AI-Bot
+  engine: Custom
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  release:
+    name: "PSB: Gennaro's Revenge"
+    url: https://github.com/JJonahJson/Showdown-AI-Bot/releases/tag/v1.0
 - name: Metagrok
   active: [2019, 2019] # June 16
   paper: Huang:2019
@@ -304,6 +316,22 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: alphaPoke
+  site: https://matteoh2o1999.github.io/en-us/projects/alphaPoke-project-delivery
+  active: 2021 # November 22
+  paper: Dell’Acqua:2022
+  license: GPL-3.0
+  source: https://github.com/MatteoH2O1999/alphaPoke
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  release:
+      name: Project Delivery
+      url: https://github.com/MatteoH2O1999/alphaPoke/releases/tag/delivery
 - identifier: Tse
   active: [2022, 2022]
   paper: Tse:2022
