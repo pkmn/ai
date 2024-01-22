@@ -53,6 +53,14 @@ export const copy = (src: string, dst: string) => {
 };
 
 const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
+const analytics = process.env.NODE_ENV === 'development' ? '' : `
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-LQ8TW28Z7Q"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+    gtag('config', 'G-LQ8TW28Z7Q');
+  </script>`;
 let stylesheet = '';
 
 const EXPIRY = process.env.NODE_ENV === 'development' ? 0 : 14 * (24 * 60 * 60 * 1000);
@@ -90,7 +98,8 @@ const OPTIONS = {
 
 export const render = (name: string, page: Page) => {
   if (!stylesheet) throw new Error('call to render before assets have been built');
-  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page, stylesheet});
+  const rendered =
+    template.render(LAYOUT, {id: path.basename(name), ...page, analytics, stylesheet});
   const minified = html.minify(rendered, OPTIONS);
   return minified;
 };
@@ -259,6 +268,7 @@ const build = async (rebuild?: boolean) => {
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
+    analytics,
     stylesheet,
     content: `${toHTML(read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))}`,
   }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
