@@ -112,14 +112,5 @@ export function page(dir: string) {
     }`,
     header: 'Research',
     content: buf.join(''),
-    script:
-    `document.addEventListener('DOMContentLoaded', () => {
-        const dts = document.getElementsByTagName('dt');
-        for (let i = 0; i < dts.length; i++) {
-          dts[i].addEventListener('click', () => {
-            navigator.clipboard.writeText('https://pkmn.ai/research/#' + dts[i].id);
-          });
-        }
-      });`,
   };
 }

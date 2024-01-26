@@ -36,14 +36,5 @@ export function page(dir: string) {
     title: 'Glossary | pkmn.ai',
     header: 'Glossary',
     content: buf.join(''),
-    script:
-    `document.addEventListener('DOMContentLoaded', () => {
-        const dts = document.getElementsByTagName('dt');
-        for (let i = 0; i < dts.length; i++) {
-          dts[i].addEventListener('click', () => {
-            navigator.clipboard.writeText('https://pkmn.ai/glossary/#' + dts[i].id);
-          });
-        }
-      });`,
   };
 }

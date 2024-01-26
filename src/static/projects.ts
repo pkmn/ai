@@ -180,12 +180,6 @@ export function page(dir: string) {
             }
           });
         }
-
-        for (let i = 0; i < projects.length; i++) {
-          projects[i].firstChild.addEventListener('click', () => {
-            navigator.clipboard.writeText('https://pkmn.ai/projects/#' + projects[i].id);
-          });
-        }
       });`,
   };
 }
