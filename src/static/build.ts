@@ -98,6 +98,7 @@ const OPTIONS = {
 
 export const render = (name: string, page: Page) => {
   if (!stylesheet) throw new Error('call to render before assets have been built');
+  if (page.topbar) page.style = `${page.style || ''} [id] { scroll-margin-top: 2rem; }`;
   const rendered =
     template.render(LAYOUT, {id: path.basename(name), ...page, analytics, stylesheet});
   const minified = html.minify(rendered, OPTIONS);
