@@ -112,7 +112,20 @@ const make = (name: string, page: Page) => {
 
 export const topbar = 'Under Construction: planned completion date April 2024';
 
-interface AstNode {attributes?: {[key: string]: string}}
+interface AstNode {
+  attributes?: {[key: string]: string};
+  tag?: string;
+  children?: AstNode[];
+  level?: number;
+}
+
+const getChild = (node: AstNode, tag: string) => {
+  if (!node.children) return undefined;
+  for (const child of node.children) {
+    if (child.tag === tag) return child;
+  }
+  return undefined;
+};
 
 const hasClass = (node: AstNode, cls: string) => {
   node.attributes = node.attributes || {};
@@ -126,22 +139,42 @@ const addClass = (node: AstNode, cls: string) => {
   node.attributes['class'] = attr ? `${attr} ${cls}` : cls;
 };
 
-const extract = (node: AstNode, r: djot.HTMLRenderer, attr: string) => {
+const extract = (node: AstNode, attr: string, raw?: boolean) => {
   if (!node.attributes?.[attr]) return '';
-  const result = r.renderAstNodeDefault(djot.parse(node.attributes[attr])).slice(3, -5);
+  const result = raw
+    ? node.attributes[attr]
+    : djot.renderHTML(djot.parse(node.attributes[attr])).slice(3, -5);
   delete node.attributes[attr];
   return result;
 };
 
-export const toHTML = (str: string) =>
-  djot.renderHTML(djot.parse(str), {
+export const toHTML = (str: string) => {
+  let section: AstNode | undefined = undefined;
+  return djot.renderHTML(djot.parse(str), {
     overrides: {
-      inline_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: false}),
-      display_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: true}),
+      section: (node, r) => {
+        const previous = section;
+        section = node;
+        const result = getChild(node, 'heading')?.level === 1
+          ? r.renderChildren(node)
+          : r.renderAstNodeDefault(node);
+        section = previous;
+        return result;
+      },
+      heading: (node, r) => {
+        if (node.level === 1) return r.renderAstNodeDefault(node);
+        const tag = `h${node.level}`;
+        const id = section?.attributes?.id;
+        const children = r.renderChildren(node);
+        const attrs = r.renderAttributes(node);
+        return (id
+          ? `<${tag}${attrs}><a href="#${id}" class="subtle">${children}</a></${tag}>\n`
+          : `<${tag}${attrs}>${children}</${tag}>\n`);
+      },
       div: (node, r): string => {
         if (hasClass(node, 'aside')) {
           node.attributes = node.attributes || {};
-          const title = extract(node, r, 'title');
+          const title = extract(node, 'title');
           return `
             <aside${r.renderAttributes(node)}>
               <div class="title">${title}</div>
@@ -151,16 +184,16 @@ export const toHTML = (str: string) =>
         }
         if (hasClass(node, 'details')) {
           return `
-            <details><summary>${extract(node, r, 'summary')}</summary>
+            <details><summary>${extract(node, 'summary')}</summary>
               ${r.renderChildren(node)}
             </details>
           `;
         }
         return r.renderAstNodeDefault(node);
       },
-      code_block: (node, r) => {
-        const title = extract(node, r, 'title');
-        const cite = extract(node, r, 'cite');
+      code_block: (node) => {
+        const title = extract(node, 'title');
+        const cite = extract(node, 'cite');
         const caption =
           title ? `<figcaption class="title">${title}</figcaption>`
           : cite ? `<figcaption class="cite"><cite>${cite}</cite></figcaption>` : '';
@@ -176,7 +209,7 @@ export const toHTML = (str: string) =>
       para: (node, r) => {
         if (node.children.length === 1 && node.children[0].tag === 'image') {
           node.attributes = node.attributes || {};
-          const caption = extract(node, r, 'caption');
+          const caption = extract(node, 'caption');
           return `
             <figure${r.renderAttributes(node)}>
               <figcaption class="title">${caption}</figcaption>
@@ -187,23 +220,8 @@ export const toHTML = (str: string) =>
         return r.renderAstNodeDefault(node);
       },
       block_quote: (node, r) => {
-        let caption = '';
-        if (node.children.length > 0) {
-          const last_child: { tag: string; children?: AstNode[] } =
-            node.children[node.children.length - 1];
-          const cite =
-            last_child.tag !== 'thematic_break' &&
-            last_child?.children?.length === 1 &&
-            (last_child?.children[0] as any).tag === 'link';
-          if (cite) {
-            caption = `
-              <figcaption class="cite">
-               <cite>${r.renderAstNode(last_child.children![0] as any)}</cite>
-              </figcaption>
-            `;
-            node.children.pop();
-          }
-        }
+        const cite = extract(node, 'cite');
+        const caption = cite ? `<figcaption class="cite"><cite>${cite}</cite></figcaption>` : '';
         return `
           <figure class="blockquote">
             <blockquote>${r.renderChildren(node)}</blockquote>
@@ -228,8 +246,11 @@ export const toHTML = (str: string) =>
         addClass(node, 'url');
         return r.renderAstNodeDefault(node);
       },
+      inline_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: false}),
+      display_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: true}),
     },
   });
+};
 
 const build = async (rebuild?: boolean) => {
   mkdir(path.join(PUBLIC));

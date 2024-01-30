@@ -50,10 +50,18 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-p, ul, ol, dl, hr, blockquote {
+p, ul, ol, dl, blockquote, aside {
   margin: 1rem 0;
 }
+hr { margin: 2rem 0; }
 ul, ol { padding-inline-start: 2rem; }
+ul ul { margin: 0; }
+section[role="doc-endnotes"] p {
+  margin: 0.25rem 0;
+}
+section[role="doc-endnotes"] hr {
+  margin-bottom: 1rem;
+}
 
 a {
   color: var(--link-color);
