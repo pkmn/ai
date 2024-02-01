@@ -11,11 +11,11 @@ action: |
   [moves](https://bulbapedia.bulbagarden.net/wiki/Move) and thus some of the game theoretical moves
   of a player in a Pokémon battle includes the action of literally using one of their Pokémon's
   moves. [Pokémon Showdown](#PS) and [pkmn](#pkmn) instead use the terms _choice_ and _choices_
-  instead of _action_ and _actions_, and [poke-sim](https://github.com/aed3/poke-sim/) refers to
-  this as a [_decision_](https://github.com/aed3/poke-sim/blob/main/DESIGN_SPEC.md#decision) - all
-  of these should be interchangeable, though using move to refer to an action/choice/decision should
-  be avoided. Both player's choices considered together are called the [joint action]{.dfn}, and
-  applying the join action to the battle state causes a [transition](#transition).
+  instead of _action_ and _actions_, and [PokeSim](https://github.com/aed3/poke-sim/) refers to this
+  as a [_decision_](https://github.com/aed3/poke-sim/blob/main/DESIGN_SPEC.md#decision) - all of
+  these should be interchangeable, though using move to refer to an action/choice/decision should be
+  avoided. Both player's choices considered together are called the [joint action](#joint-action),
+  and applying the joint action to the battle state causes a [transition](#transition).
 agent: |
   An intelligent agent ([IA]{.dfn}) is an entity that autonomously acts upon an environment to
   achieve its goals. In computer chess the individual agents are usually referred to as _engines_,
@@ -26,7 +26,7 @@ Alpha-beta: |
   Alpha-beta pruning is a search algorithm that seeks to decrease the number of nodes that are
   evaluated by the [minimax](#minimax) algorithm in its search tree. When applied to a standard
   minimax tree, it returns the same move as minimax would, but [prunes](#pruning) away branches that
-  can't possibly influence the final decision. Alpha-beta has been shown to also work by
+  can't possibly influence the final decision. Alpha-beta has been shown to also work in
   [simultaneous move](#SM) games in [(Bošanský 2013)](/research#Bošanský:2013){.subtle} and
   [(Saffidine 2021)](/research#Saffidine:2021){.subtle}.
 AlphaGo: |
@@ -37,36 +37,38 @@ AlphaGo: |
   2018)](/research#Silver:2018){.subtle}, the AlphaGo architecture serves as the modern foundation
   for many perfect information game-playing agents (_e.g._, [Lc0](#Lc0)).
 anytime: |
-  An anytime algorithm is an algorithm that can return a valid solution to a problem even if it's
-  interrupted before it ends.
+  An algorithm that can return a valid solution to a problem even if it's interrupted before it
+  ends.
 bandit: |
   The [multi-armed bandit problem]{.dfn} is a classic [reinforcement learning](#RL) problem that
-  exemplifies the exploration--exploitation tradeoff dilemma. In the problem a fixed limited set of
+  exemplifies the exploration--exploitation tradeoff dilemma. In the problem, a fixed limited set of
   resources must be allocated between competing (alternative) choices in a way that maximizes their
   expected gain, when each choice's properties are only partially known at the time of allocation,
   and may become better understood as time passes or by allocating resources to the choice. In terms
-  of competitive Pokémon AIs bandit problems arise when determining which parts of the [search tree
+  of competitive Pokémon AIs, bandit problems arise when determining which parts of the [search tree
   to explore](#TBS), and _bandit_ usually refers to the particular type of algorithm being used to
   solve the bandit problem (_e.g._, [UCB](#UCB) or [Exp3](#Exp3)).
 Bayes' rule: |
   The mathematical rule that describes how to update a [belief](#belief), given some evidence.
-  Fundamental to Bayesian [inference](#inference) used by Pokémon AI in addition to the [usage
+  Fundamental to Bayesian [inference](#inference) used by Pokémon AI in combination with [usage
   statistics](#usage-stats) to reason about what [state](#state) they may be in.
 Bayeselo: |
   [Bayesian Elo Rating](https://www.remi-coulom.fr/Bayesian-Elo/), a commonly used tool for
   estimating the [Elo](#Elo) rating based on matches between computerized agents.
 belief: |
-  Describes the probability of an event or information. The belief of a player in a given
-  [information set](#information-set) determines what node in that information set he believes the
-  game has reached. The belief may be a probability distribution over the nodes in the information
-  set, and is typically a probability distribution over the possible types of the other players.
+  A player's probabilistic assessment of the current state of the game, particularly when they have
+  imperfect [information](#information), often represented as probability distributions over possible
+  hidden [states](#state). Players update their beliefs based on available observations and the
+  [actions](#action) of others, and these beliefs crucially influence their decision-making process,
+  as they attempt to choose actions that maximize their expected [payoff](#payoff) given their
+  understanding of the game's true state.
 bimatrix game: |
   A [simultaneous game](#SM) for two players in which each player has a finite set of actions. Such
   a game can be fully described by two matrices, each describing the payoffs of one of the players.
 binding: |
   Either refers to a [language binding]{.dfn}, the application programming interface that provides
   glue code specifically made to allow a programming language to use a foreign library or operating
-  system service, or a [specific class of moves in Pokémon known as [binding
+  system service, or a specific class of moves in Pokémon known as [[binding
   moves]{.dfn}](https://bulbapedia.bulbagarden.net/wiki/Bound) which prevent their target from
   switching and cause damage for multiple turns (also known as _wrapping_ or _partial-trapping_
   moves).
@@ -76,49 +78,49 @@ BoN: |
 bot: |
   Slang term for [agent](#agent) derived from the word _robot_. Alternatively, may be used to
   characterize the parts of the [client](#client) code responsible for connecting and communicating
-  with the [server](#server) and distinguishing it from the core search/knowledge components of the
-  agent.
+  with the [server](#server) and distinguishing it from the core
+  [search](#search)/[knowledge](#knowledge) components of the agent.
 branching factor: |
-  The number of children at each node in a [game tree](#game-tree), the outdegree.
+  The number of children at each node in a [game tree](#game-tree); the outdegree.
 bucketing: |
   Also known as [data binning]{.dfn}, a generalization of rounding data where the original data that
   falls within a small interval (known as a _bin_ or _bucket_) gets replaced by a value
   representative of that interval. This is a form of [abstraction](#abstraction), the canonical
-  examples of bucketing in competitive Pokémon AI research are reducing the range of possible hit
-  point values or shrinking the number of damage [rolls](#roll).
+  examples of bucketing in competitive Pokémon AI research are reducing the range of possible HP
+  values or shrinking the number of damage [rolls](#roll).
 cartridge: |
   The game of Pokémon as it exists on the original Nintendo console hardware (due to the earliest
   [generations](#generation) of Pokémon being played on Game Boy ROM cartridges).
 CFR: |
-  [Counterfactual Regret Minimization]{.dfn} is an iterative algorithm in game theory designed to
-  find approximate [Nash equilibria](#NE) in [extensive-form games](#EFG) with imperfect
-  information, such as poker. It works by calculating the [counterfactual regret](#regret) at each
-  decision point, which measures how much a player would regret not having taken a different action,
-  given the information available at that point. CFR then updates its strategy over multiple
-  iterations, minimizing these regrets over time. This process leads to strategies that converge
-  towards a Nash equilibrium, where no player can benefit by unilaterally changing their strategy.
-  Variants include:
+  [Counterfactual Regret Minimization]{.dfn} is an iterative algorithm designed to find approximate
+  [Nash equilibria](#NE) in [extensive-form games](#EFG) with [imperfect information](#information).
+  It works by calculating the [counterfactual regret](#regret) at each decision point, which
+  measures how much a player would regret not having taken a different action, given the information
+  available at that point. CFR then updates its strategy over multiple iterations, minimizing these
+  regrets over time. This process leads to strategies that converge towards a Nash equilibrium,
+  where no player can benefit by unilaterally changing their strategy. Variants include:
 
-    - [CFR+]{.dfn} which aims to speed up convergence by preventing negative regrets
-    - [MC-CFG]{.dfn} which samples a subset of actions or trajectories through the game tree instead
-    of updating all actions
+    - [CFR+]{.dfn} which aims to speed up convergence by preventing negative regrets [(Brown
+    2017)](/research#Brown:2017){.subtle}
+    - [MCCFR]{.dfn} which samples a subset of actions or trajectories through the game tree instead
+    of updating all actions [(Lanctot 2009)](/research#Lanctot:2009){.subtle}
 chance: |
   Elements within a game that are governed by random events outside the direct control of the
-  players. In game theory, the [Chance player]{.dfn} is a conceptual [player](#player) used to model
-  these elements of uncertainty within the game and allows for the analysis of games where the
-  outcomes depend not only on the choices of the players but also on elements of randomness. The
-  [pkmn](#pkmn) [engine](https://pkmn.cc/engine) exposes APIs for inspecting or influencing chance
-  when compiled with certain flags (`-Dchance` and `-Dcalc`, respectively).
+  players. The [Chance player]{.dfn} is a conceptual [player](#player) used to model these elements
+  of uncertainty within the game and allows for the analysis of games where the outcomes depend not
+  only on the choices of the players but also on elements of randomness. The [pkmn](#pkmn)
+  [engine](https://pkmn.cc/engine) exposes APIs for inspecting or influencing chance when built with
+  certain compile-time flags (`-Dchance` and `-Dcalc`, respectively).
 client: |
-  Code that communicates with the game [engine](#engine) and enables a player to play the game. In
-  the standard case of Pokémon the client only has a partial representation of one perspective of
-  the actual battle state stored on the [server](#server). Clients connect to the server and
-  communicate with the server via a [protocol](#protocol), and by default this protocol doesn't
-  share hidden [information](#information).
+  The code that communicates with the [server](#server) to enable a player to play the game. In
+  standard Pokémon formats the client only has a partial representation of one perspective of the
+  actual battle state stored on the server. Clients connect to the server and exchange [public
+  information](#information) with the server via a [protocol](#protocol).
 conmeta: |
-  A constructed [metagame](#metagame) where the artificially created rules have been arbitrarily
-  tailored to simplify things for artificial intelligence agents, _e.g._, the [Shanai
-  Cup](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273).
+  A constructed [metagame](#metagame) (technically [format](#format)) where the artificially created
+  rules have been arbitrarily tailored to simplify things for artificial intelligence agents
+  (_e.g._, the [Shanai
+  Cup](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273)).
 consolidation: |
   Action consolidation is a technique for combining the results of actions with identical outcomes.
   Consolidation is similar to [transpositions](#transposition) in that they both involve
@@ -134,23 +136,23 @@ damage calculator: |
   A program that determines the amount of HP a Pokémon will lose as a result of an opponent's
   damaging attack. The damage calculator or [calc]{.dfn} usually takes the form of a stripped down
   [engine](#engine) that focuses entirely on the [damage
-  formula](https://bulbapedia.bulbagarden.net/wiki/Damage#Damage_calculation), though general
-  purpose engines can also be leveraged to provide the same information.
+  formula](https://bulbapedia.bulbagarden.net/wiki/Damage#Damage_calculation).
 damage coalition: |
   A common form of [action consolidation](#consolidation) where damage [rolls](#roll) which produce
   the same results get combined. Damage rolls often result in the same outcome due to rounding or if
-  the damage gets _capped_ due to causing a target to faint or breaking a Substitute.
+  the damage gets _capped_ due to causing a target to faint or breaking a
+  [Substitute](https://bulbapedia.bulbagarden.net/wiki/Substitute_(move)).
 depth: |
   The depth of a node is the number of edges from the node to the [tree's](#game-tree) root node. A
   root node will have a depth of 0.
 determinization: |
-  The technique of sampling different perfect information states from the set of possible imperfect
-  information states so that methods for solving perfect information games can be applied to games
-  with imperfect information.
+  The technique of sampling different [perfect information](#information) states from the set of
+  possible imperfect information states so that methods for solving perfect information games can be
+  applied to games with imperfect information.
 drafting: |
-  A component of certain Pokémon [variants](#variant) where players take turns choosing the Pokémon
-  species which form their pool of available choices during a later [team-building](#team-building)
-  component.
+  A component of certain Pokémon [variants](#variant) where players take turns
+  choosing which Pokémon species which form their pool of available choices
+  during a later [team-building](#team-building) component.
 driver: |
   Code which operates/controls the [engine](#engine), perhaps to provide additional features or to
   allow for integration within a broader application.
@@ -160,10 +162,12 @@ EBC: |
   while also seeking to curtail certain specific degenerate strategies.
 EE: |
   Extreme equilibrium, a Nash equilibrium where both players' mixed strategies can't be described as
-  convex combinations of other mixed strategies that form equilibria.
+  convex combinations (weighted averages where the weights are non-negative and add up to 1) of
+  other mixed strategies that form equilibria.
 EEE: |
   Enumeration of [extreme equilibria](#EE), a linear programming algorithm for determining all of
-  the possible [Nash equilibrium](#NE) solutions in a [bimatrix game](#bimatrix-game).
+  the possible [Nash equilibrium](#NE) solutions in a [bimatrix game](#bimatrix-game) [(Avis
+  2010)](/research#Avis:2010){.subtle}.
 EFG: |
   An [extensive-form game]{.dfn} is a specification of a [game](#game) allowing for the explicit
   representation of a number of key aspects, like the sequencing of players' possible moves, their
@@ -171,7 +175,7 @@ EFG: |
   each player has about the other player's moves when they make a decision, and their
   [payoffs](#payoff) for all possible game outcomes. Extensive-form games also allow for the
   representation of incomplete information in the form of [chance events](#chance) modeled as _moves
-  by nature_. Alternatives to the extensive-form game representation is the [normal-form]{.dfn}
+  by nature_. Alternatives to the extensive-form game representation include the [normal-form]{.dfn}
   representation that simply boils the game down to a payoff [matrix](#bimatrix-game), or the
   [FOSG](#FOSG) representation.
 Elo: |
@@ -225,12 +229,12 @@ format: |
   strategies arise under those constraints).
 FOSG: |
   A [factored-observation stochastic game]{.dfn} is a specification of a [game](#game) proposed in
-  [Kovařík 2022](/research#Kovařík:2022) that builds on the concept of a partially observable
-  stochastic game ([POSG]{.dfn}) from multi-agent [reinforcement learning](#RL) by dividing each
-  agent's observations based on whether they represent public or private
+  [(Kovařík 2022)](/research#Kovařík:2022){.subtle} that builds on the concept of a partially
+  observable stochastic game ([POSG]{.dfn}) from multi-agent [reinforcement learning](#RL) by
+  dividing each agent's observations based on whether they represent public or private
   [information](#information). Whereas an [information set](#information-set) representation is
   concerned with grouping indistinguishable game histories regardless of whether the hidden
-  information is directly related to the environment or another player's knowledge, FOSGseExplicitly
+  information is directly related to the environment or another player's knowledge, FOSGs explicitly
   factor observations into public and private components allowing for analysis specifically focused
   on how shared knowledge and private information shape an agent's perception of the game state.
 FP: |
@@ -342,17 +346,17 @@ input log: |
   potential ways this input can be encoded:
 
     - [raw input]{.dfn} simply encodes the action type and [slot](#slot) (and optionally the
-    target), _e.g._, `switch 4` or `move 1 2 mega`. This form is ultimately required by an
+    target) (_e.g._, `switch 4` or `move 1 2 mega`). This form is ultimately required by an
     [engine](#engine) to unambiguously implement the battle mechanics of Pokémon.
     - [logical input]{.dfn} is an encoding  where move or species names are used in lieu of slots,
-    _e.g._, `switch zapdos` or `move thunderbolt`. This encoding is more intuitive and often more
+    (_e.g._, `switch zapdos` or `move thunderbolt`). This encoding is more intuitive and often more
     useful to work with when utilizing [machine learning](#learning) techniques, though isn't
     accepted by all engines and can be ambiguous (_e.g._, in [formats](#format) without the [Species
-    Clause](https://www.smogon.com/xy/articles/clauses))
+    Clause](https://www.smogon.com/xy/articles/clauses)).
     - [contextual input]{.dfn} is a class of inputs which add additional context to a logical input
     about the scenario the input was made in to provide necessary information for
-    [learning](#learning) algorithms, _e.g._, `Zapdos Thunderbolt vs. Starmie` or `Zapdos -> Starmie
-    vs. Rhydon`
+    [learning](#learning) algorithms (_e.g._, `Zapdos Thunderbolt vs. Starmie` or `Zapdos -> Starmie
+    vs. Rhydon`).
 
   Applying anchored subsets of the input log to the initial battle state can be used to recompute
   past battle states, and competitive Pokémon developers may choose to improve memory overhead by
@@ -365,7 +369,7 @@ interior equilibria: |
   disrupted by small changes in the game's [payoffs](#payoff). This is because if one player
   deviates from an interior equilibrium by playing a different strategy with a small probability,
   the other player won't have a strong incentive to change their strategy in response.
-joint actions: |
+joint action: |
   The combination of [actions](#action) chosen by all players in a [simultaneous move](#SM)
   [game](#game). An individual player's action is not sufficient to determine an outcome in a
   simultaneous move game --- all players' actions are required and each possible combination of
@@ -530,8 +534,8 @@ opponent modeling: |
 OTL: |
   One-[turn](#turn) [look ahead](#look-ahead). The [MaxDamagePlayer](#MaxDamagePlayer) is the
   conventional name for an agent which leverages only a single turn of look ahead.  _$`N`TL_ can be
-  used to generalize this shorthand for describing the depth an agent searches to, _e.g._, _3TL_ for
-  three turns worth of look ahead.
+  used to generalize this shorthand for describing the depth an agent searches to (_e.g._, _3TL_ for
+  three turns worth of look ahead).
 pathology: |
   Game-tree pathology is a phenomenon where searching a game-tree deeper gives results in worse
   decision.
@@ -629,9 +633,9 @@ RandomPlayer: |
   some version of a [uniform policy](#uniform-policy), commonly seen in the [literature](/projects)
   alongside the [MaxDamagePlayer](#MaxDamagePlayer) when benchmarking/testing agents due to its
   simplicity of implementation. However, despite this seemingly simple definition, multiple subtly
-  different versions of the RandomPlayer exist --- _e.g._, many implementations decide to _choose_
+  different versions of the RandomPlayer exist (_e.g._, many implementations decide to _choose_
   only `move` actions unless forced to _consider_ `switch` actions, and may have similar
-  [heuristics](#heuristic) for decided how to treat generational [gimmicks](#gimmick).
+  [heuristics](#heuristic) for decided how to treat generational [gimmicks](#gimmick)).
 
   Formally, the notation $`RandomPlayer(N\%)` should be used to refer to an agent which $`N\%` of
   the time uniformly chooses to make a `switch` action when available, otherwise choosing uniformly
@@ -639,9 +643,9 @@ RandomPlayer: |
   actions $`N\%` of the time when they're available, otherwise chooses a `move` action. This
   distinction of choosing uniformly between a minimal subset of the action space or considering
   potentially multiple subsets of the space can be extended to gimmicks such as `mega`, `zmove`,
-  `dynamax` or `terastallize`, though in those cases a more explicit notation is preferred, _e.g._,
+  `dynamax` or `terastallize`, though in those cases a more explicit notation is preferred (_e.g._,
   $`RandomPlayer(switch=\widetilde{20\%}, zmove=90\%)` would consider `switch` 20% of the time and
-  use `zmove` when available 90% of the time.
+  use `zmove` when available 90% of the time).
 reduction: |
   A class of search heuristics that decrease the depth to which a certain branch of the tree is
   searched. Compare to [pruning](#pruning).
