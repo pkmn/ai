@@ -234,6 +234,22 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    0 ERROR exists as the theoretical motivating use case behind the [pkmn](https://pkmn.cc)
+    project. While the actual agent is currently vaporware, pkmn has been building foundational
+    Pokémon infrastructure that has been used within multiple other Pokémon AI projects:
+
+      - [pkmn/ps](https://github.com/pkmn/ps): Pokémon Showdown's simulator and client broken up
+      into composable libraries.
+      - [data.pkmn.cc](https://data.pkmn.cc): An aggregated source exposing all of Smogon
+      University's data in machine-readable form.
+      - [pkmn/stats](https://github.com/pkmn/stats): A framework for efficient Pokémon Showdown
+      battle log processing and usage stats generation.
+      - [pkmn/engine](https://github.com/pkmn/engine): A minimal, complete, battle simulation engine
+      optimized for performance.
+      - [EPOKé](https://github.com/pkmn/EPOke): An enhanced client library which tracks not only the
+      observed state of the battle, but also uses the mechanics of the game, reverse damage
+      calculation, and usage statistics to infer as much as possible about the state of play.
 - identifier: Norström
   active: [2019, 2019]
   paper: Norström:2020
