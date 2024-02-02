@@ -105,6 +105,11 @@ export const render = (name: string, page: Page) => {
   return minified;
 };
 
+const trailing = (url: string) => {
+  const [p, f] = url.split('#');
+  return (p.endsWith('/') ? p : p + '/') + (f ? '#' + f : '');
+};
+
 const make = (name: string, page: Page) => {
   mkdir(path.join(PUBLIC, name));
   write(path.join(PUBLIC, name, 'index.html'), render(name, page));
@@ -152,6 +157,10 @@ export const toHTML = (str: string) => {
   let section: AstNode | undefined = undefined;
   return djot.renderHTML(djot.parse(str), {
     overrides: {
+      link: (node, r) => {
+        if (node.destination?.startsWith('/')) node.destination = trailing(node.destination);
+        return r.renderAstNodeDefault(node);
+      },
       section: (node, r) => {
         const previous = section;
         section = node;
