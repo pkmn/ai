@@ -42,7 +42,7 @@ anytime: |
   ends.
 bandit: |
   The [multi-armed bandit problem]{.dfn} is a classic [reinforcement learning](#RL) problem that
-  exemplifies the exploration--exploitation tradeoff dilemma. In the problem, a fixed limited set of
+  codifies the exploration--exploitation tradeoff dilemma. In the problem, a fixed limited set of
   resources must be allocated between competing (alternative) choices in a way that maximizes their
   expected gain, when each choice's properties are only partially known at the time of allocation,
   and may become better understood as time passes or by allocating resources to the choice. In terms
@@ -66,6 +66,7 @@ belief: |
 bimatrix game: |
   A [simultaneous game](#SM) for two players in which each player has a finite set of actions. Such
   a game can be fully described by two matrices, each describing the payoffs of one of the players.
+  In an adversarial game, the two matrices will sum to a constant matrix. 
 binding: |
   Either refers to a [language binding]{.dfn}, the application programming interface that provides
   glue code specifically made to allow a programming language to use a foreign library or operating
@@ -162,7 +163,7 @@ EBC: |
   in [Smogon University's](#Smogon) [formats](#format) to guarantee that all battles end in 1000
   turns or fewer, while also seeking to curtail certain specific degenerate strategies.
 EE: |
-  Extreme equilibrium, a Nash equilibrium where both players' mixed strategies can't be described as
+  Extreme equilibrium, a Nash equilibrium where both players' strategies can't be described as
   convex combinations (weighted averages where the weights are non-negative and add up to 1) of
   other mixed strategies that form equilibria.
 EEE: |
