@@ -16,7 +16,7 @@
       url: https://pokemonlab.com/downloads
     - name: Pokémon NetBattle
       url: https://pokemon-netbattle.en.softonic.com/
-- name: shanai
+- name: Shanai
   active: [2011, 2011] # March 21
   source: https://github.com/nixeagle/shanai
   engine: Custom
@@ -24,6 +24,17 @@
   platform:
     - name: Pokémon Online
       url: https://github.com/po-devs/pokemon-online
+  description: |
+    One of the earliest known examples of a competitive Pokémon AI, Shanai is most notable for the
+    creation of the ["Shanai
+    Cup"](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273),
+    a simplified variant of Pokémon that hoped to serve as the testbed for AI development. Shanai
+    only supported this restricted Generation V variant and its [core
+    algorithm](https://github.com/nixeagle/shanai/blob/20f11841/PO/Client/client.lisp#L370) can be
+    recognized as an extension of the rudimentary [MaxDamagePlayer](/glossary#MaxDamagePlayer)
+    benchmark. The project also contains the [beginnings of a reverse damage
+    calculator](https://github.com/nixeagle/shanai/blob/20f11841/Pokemon/formulas.lisp), though
+    ultimately the project was abandoned before this feature was incorporated.
 - active: [2014, 2016] # October 20
   license: MIT
   source: https://github.com/vasumv/pokemon_ai

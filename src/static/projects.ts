@@ -19,6 +19,7 @@ interface Project {
   language?: string | string[];
   platform?: { name: string; url: string }[];
   release?: { name: string; url: string };
+  description?: string;
 }
 
 const RANKING = [
@@ -144,9 +145,11 @@ export function page(dir: string) {
       buf.push(`<tr><td><strong>Release</strong></td><td>${release}</td></tr>`);
     }
     buf.push('</table>');
-    const description = split.slice(0, 8 + Math.random() * 12).join('.');
     const site = project.site ? `<a href="${project.site}">${title}</a>. ` : '';
-    buf.push(`<div class="description"><p>${site}${description}.</p></div>`);
+    const description = project.description
+      ? toHTML(project.description)
+      : `${site}${split.slice(0, 8 + Math.random() * 12).join('.')}.`;
+    buf.push(`<div class="description"><p>${description}</p></div>`);
     buf.push('</section>');
   }
 
