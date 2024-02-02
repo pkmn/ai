@@ -1,82 +1,75 @@
-TODO polish
+Given the vast [complexity](/concepts/complexity) of competitive Pokémon, there exist numerous
+possibilities for [abstractions](/glossary#abstraction) which can simplify the problem space.
+Outside of more general modifications that can be made to almost any game to decrease the difficulty
+(_e.g._, increasing the amount of time available per decision), these relaxations can be grouped
+into three broad categories --- those which reduce the [scope of the game](#Game) as a whole, those
+which [increase the amount of information](#Information) revealed, and those which pare down the
+state space through arbitrary [restrictions](#Restrictions).
 
-Competitive Pokémon is a two-player
-[simulataneous](https://en.wikipedia.org/wiki/Simultaneous_game), [imperfect
-information](https://en.wikipedia.org/wiki/Perfect_information),
-[constant-sum](https://en.wikipedia.org/wiki/Zero-sum_game),
-[stochastic](https://en.wikipedia.org/wiki/Stochastic_game) game with both an [offline and
-online](#Offline-vs-Online) component with a extremely [high branching
-factor](https://en.wikipedia.org/wiki/Branching_factor). In order to simplify things and make the
-game more tractable to solve, various relaxations can be made.
+### Game
 
-### "Offline" vs. "Online"
-
-The game of Pokémon involves a **team-building** component and a **piloting** (or "playing", though
-this second name is somewhat confusing as it involves only playing one aspect of the broader game)
-component. The team-building component can be done ahead-of-time/completely offline and usually
-involves constructing a team to beat an entire [metagame](https://en.wikipedia.org/wiki/Metagame),
-whereas the piloting of the team by the player against a specific opponent takes place in
-real-time/online. While the success of a Competitive Pokémon player depends on both components, the
-components can also be treated as orthogonal without loss of generality and so developers most often
-focus on only the piloting part.
+As [detailed in the glossary](/glossary#game), the _game_ of competitive Pokémon is made up of a
+couple mostly orthogonal components --- _i.e._, [team-building](/glossary#team-building) and
+[piloting](/glossary#piloting) (and optionally [drafting](/glossary/#drafting)). Most often these
+components are treated separately, as attempting to solve competitive Pokémon as a whole approaches
+[general-game playing](https://en.wikipedia.org/wiki/General_game_playing) in terms of difficulty.
 
 ### Information
 
-Outside of more general modifications that can be made to almost any game to decrease the difficulty
-(e.g. increasing the amount of time available per decision), most of the remaining simplifications
-made to Pokémon involve reducing the number of "unknowns", either by tweaking the amount of
-information that is revealed to players or by restricting the amount of possible options players'
-have during team-building:
+Revealing information which is usually hidden or unknown can prove quite effective at making solving
+competitive Pokémon tractable, though care must be taken as doing so can dramatically impact the
+nature of the game:
 
-- knowledge of **available choices** (e.g. whether the player's active Pokémon is trapped or
+- knowledge of **available choices** (_e.g._, whether the player's active Pokémon is trapped or
   disabled) is one of the most minimal modifications that can be made to the game, and mostly exists
   as a development convenience (allows you to be fully aware of the available choices without having
   to deal with uncertainty) and has relatively minor implications to actual playing strength or
   realism
 - knowledge of an **opponent's HP** (either exact HP or increased accuracy via the `HP Percentage
-  Clause Mod`) is helpful for being able to perform reverse damage calculation and more quickly
-  infer the opponent's sets, but is still minor enough to not have dramatic gameplay implication
-  (most standard play in Smogon University's metagames between human players already leverages this)
+  Clause Mod`) is helpful for being able to perform [reverse damage
+  calculation](/glossary/#reverse-damage-calculator) and more quickly [infer](/glossary/#inference)
+  the opponent's sets, but is still minor enough to not have dramatic gameplay implication (most
+  standard play in Smogon University's metagames between human players already leverages this)
 - knowledge of an **opponent's team** makeup and configuration is significantly more artificial as
   it removes the aspect of information gathering/hiding and provides a significant advantage to the
-  player, but as the battle progresses well developed team prediction will eventually determine this
-  information anyway. This is the most common simplication and [many different options
-  exist](#Team-Restrictions) in this area
-- knowledge of further **hidden information** known only to the engine (e.g. remaining sleep turns)
-  beyond what is covered above but while still retaining some stochastic aspects without revealing
-  the RNG seed is difficult to pin down, as exactly what information should be revealed is rather
-  arbitrary
+  player, but as the battle progresses team prediction eventually determines this information
+  anyway. This is the most common simplication and [many different options exist](#Restrictions) in
+  this area
+- knowledge of further **hidden information** known only to the engine (_e.g._, remaining sleep
+  turns) beyond what's covered above but while still retaining some stochastic aspects without
+  revealing the [RNG](/glossary#RNG) seed is difficult to pin down, as exactly what information
+  should be revealed is rather arbitrary
 - knowledge of the  **RNG seed** (which both provides full information on existing unknown
   information such as duration of various statuses and limited knowledge of immediate future
-  outcomes) helps *determinize* the game tree by effectively removing stochasticity, though the
-  amount of unknowns revealed means that game play starts to get too artificial
+  outcomes) helps [**determinize**](/glossary#determinization) the game tree by effectively removing
+  [stochasticity](/glossary#stochastic), though the amount of unknowns revealed means that game play
+  starts to get too artificial
 - knowledge of the **opponent's upcoming move** during the current turn is interesting in that it
-  [*sequentializes*](https://en.wikipedia.org/wiki/Sequential_game) the game (thus removing the
-  complications of dealing with simultaneity), but obviously dramatically changes how the game is
+  [**sequentializes**](/glossary#sequentialization) the game (thus removing the complications of
+  dealing with [simultaneity](/glossary/#SM)), but obviously dramatically changes how the game is
   played
 
-Note that the options above are not necessarily always mutually exclusive - modifications can be
-combined to produce different potentially interesting gameplay variants.
+Note that the preceding options aren't necessarily always mutually exclusive --- modifications can
+be combined to produce different potentially interesting gameplay variants.
 
-### Team Restrictions
+### Restrictions
 
-Some of the biggest reductions in [information
-set](https://en.wikipedia.org/wiki/Information_set_(game_theory)) size can be obtained through
-restrictions on the rules involved with team-building:
+Some of the biggest reductions in [information set](/glossary#information-set) size can be obtained
+through restrictions on the rules involved with team-building:
 
 - game options can be restricted to a **predefined subset** of Pokémon
-  Species/Moves/Abilities/Items. Almost all Competitive Pokémon formats restrict options to some
-  extent (e.g. from banning "mythical" Pokémon in Nintendo formats or Pokémon which are highly used
-  in Smogon University's to a combination of limitations such as those found in [Little
-  Cup](https://www.smogon.com/dex/ss/formats/lc/)), though this can be taken to extremes (e.g. the
-  ["Shanai
+  Species/Moves/Abilities/Items. Almost all competitive Pokémon formats restrict options to some
+  extent (_e.g._, from banning "mythical" Pokémon in Nintendo formats or Pokémon which are highly
+  used in Smogon University's to a combination of limitations such as those found in [Little
+  Cup](https://www.smogon.com/dex/ss/formats/lc/)), though this can be taken to extremes (_e.g._, a
+  [*conmeta*](/glossary#conmeta) like the ["Shanai
   Cup"](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273))
 - players can be forced build teams only from a pool of specific Pokémon species that were
   previously selected in a **draft** phase by the player with knowledge of their opponent's pool of
-  allowed Pokémon species (e.g. Smogon Unversity's [Draft
+  allowed Pokémon species (_e.g._, Smogon University's [Draft
   Leagues](https://www.smogon.com/articles/beginners-guide-draft)). This change reduces the number
   of possible movesets for both players, but also changes team-building due to being able to cater
-  one's team through exploiting knowledge of an opponent's options (it also introduces as "drafting"
+  one's team through exploiting knowledge of an opponent's options (it also introduces a "drafting"
   component to "team-building" and "piloting")
 - allowing players to only choose teams from a fixed pool of **sample teams** as opposed to building
   ones from scratch. This simplifies the team-building component (rendering it a "team-selection"
@@ -84,23 +77,23 @@ restrictions on the rules involved with team-building:
   consists of a limited number of teams
 - requiring Pokémon on teams be drawn from a specific pool of possible sets, similar to how
   [**Battle Factory**](https://bulbapedia.bulbagarden.net/wiki/Battle_Factory_(Generation_IV))
-  rental Pokémon work on the cartridge games
+  rental Pokémon work on the [cartridge](/glossary#cartridge) games
 - allowing for Pokémon sets to vary, but **restricting set variation** by limiting the pool of
-  possible choices for each field. e.g. [Pokémon Showdown's Random
+  possible choices for each field. _e.g._, [Pokémon Showdown's Random
   Battle](https://www.smogon.com/articles/random-formats-overview) formats
-- providing a **preview** of the opponent's team before the battle and introducing a phase before
-  the battle takes place where players can select their team order (eg. most formats post Generation
-  V).
+- providing a [**preview**](/glossary#Team-Preview) of the opponent's team before the battle and
+  introducing a phase before the battle takes place where players can select their team order
+  (_e.g._, most formats post Generation V).
 - reducing a team's maximum size from the standard default of 6 vs.6 to either a strict **$`N` _vs._
-  $`N`** before the battle, or through a **bring $`M` choose $`N`** mechanic where players must select a
-  subset of their original team to actually battle with (e.g. [Battle Stadium
+  $`N`** before the battle, or through a **bring $`M` choose $`N`** mechanic where players must
+  select a subset of their original team to actually battle with (_e.g._, [Battle Stadium
   Singles](https://www.smogon.com/dex/ss/formats/battle-stadium-singles/) or Smogon University's
   [1v1](https://www.smogon.com/dex/ss/formats/1v1/) format)
 - requiring players to share information about their team with their opponent before the match via
-  **open team sheets** (e.g. [Nintendo's Pokémon Video Game Championship ruleset in
+  **open team sheets** (_e.g._, [Nintendo's Pokémon Video Game Championship ruleset in
   2023](https://www.pokemon.com/static-assets/content-assets/cms2/pdf/play-pokemon/rules/play-pokemon-vg-team-list-2023.pdf))
 
-Similar to above, some of these restrictions can be combined to arbitrarily bound the size of the
-information set (e.g. [obi's 1v1 thought
-experiment](https://www.smogon.com/forums/threads/pokemon-rankings-wobbuffet-is-503.61246/) which
-combines maximum team size restrictions and aspects of drafting).
+As with [information](#Information), some of these restrictions can be combined to arbitrarily bound
+the size of the information set (_e.g._, [obi's 1v1 thought
+experiment](https://www.smogon.com/forums/threads/61246/) which combines maximum team size
+restrictions and aspects of drafting).

@@ -10,14 +10,9 @@
   <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
   <link rel="canonical" href="https://pkmn.ai{{{ path }}}">
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-LQ8TW28Z7Q"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag() { dataLayer.push(arguments); }
-    gtag('js', new Date());
-    gtag('config', 'G-LQ8TW28Z7Q');
-  </script>
-  <link rel="stylesheet" href="/index.css?v9">
+  {{{ analytics }}}
+  <link rel="stylesheet" href="/{{{ stylesheet }}}">
+  <style>{{{ style }}}</style>
 </head>
 
 <body id="{{ id }}">
@@ -31,6 +26,7 @@
   <main>
     {{{ content }}}
   </main>
+
   <footer>
     <a href="https://creativecommons.org/licenses/by-sa/4.0/">
       <img src="/cc.svg" alt="CC" />

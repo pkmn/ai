@@ -28,13 +28,18 @@ const RANKING = [
   'pmariglia/showdown', // ~1610 Elo in gen7randombattle (~1450 Elo in standard)
   'Technical Machine', // ??? (1300-1400 Elo?), even record against weaker version of pmariglia
   'leolellisr/poke_RL', // 99.5% vs. RandomPlayer, 60-85% vs MaxDamage
-  'Chun Him Tse', // 96.6% vs. RandomPlayer, 78.2% vs. MaxDamage. ~1350 Elo (VGC)
+  'Tse', // 96.6% vs. RandomPlayer, 78.2% vs. MaxDamage. ~1350 Elo (VGC)
   'Percymon', // 1270 Elo in gen6randombattle
   'hsahovic/reinforcement-learning-pokemon-bot', // "~90% vs. RandomPlayer"
-  'Chen, Lin', //  "~85% vs. RandomPlayer
+  'alphaPoke', // "87-88% vs. RandomPlayer = ~1150 Elo"
+  'kvchen/showdown-rl', //  "~85% vs. RandomPlayer
   'Showdown AI Competition', // 85% vs. RandomPlayer = *equivalent* to MaxDamage
   'Kalose, Kaya, Kim', // ~60-65% vs. RandomPlayer (Gen 1)
 ];
+
+// https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
+// eslint-disable-next-line max-len
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 export function page(dir: string) {
   const buf: string[] = [];
@@ -88,19 +93,15 @@ export function page(dir: string) {
       ? project.source.slice(19)
       : undefined;
     const id =
-      project.paper ?? (project.name ?? identifier ?? project.identifier)!.replaceAll(' ', '');
+      (project.name ?? project.paper ?? identifier ?? project.identifier)!.replaceAll(' ', '');
     buf.push(`<section id="${id}" class="project"${inactive ? '' : ' data-active="true"'}>`);
     const active = Array.isArray(project.active)
       ? (project.active[0] === project.active[1]
         ? `${project.active[0]}`
         : `${project.active[0]} – ${project.active[1]}`)
       : `${project.active} – <em>present</em>`;
-    {
-      const name = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
-      buf.push(project.site
-        ? `<h3><a href="${project.site}" class="subtle">${name}</a></h3>`
-        : `<h3>${name}</h3>`);
-    }
+    const title = project.name ?? `<em>${identifier ?? project.identifier}</em>`;
+    buf.push(`<h3><a href="#${id}" class="subtle">${title}</a></h3>`);
     buf.push('<table>');
     if (project.paper) {
       const p = bibliography[project.paper];
@@ -136,18 +137,23 @@ export function page(dir: string) {
       buf.push(`<tr><td><strong>Platform</strong></td><td>${platform}</td></tr>`);
     }
     if (project.release) {
-      const release = `<a href="${project.release.url}" class="subtle">${project.release.name}</a>`;
+      const name = SEMVER.test(project.release.name)
+        ? `<code>${project.release.name}</code>`
+        : `<i>${project.release.name}</i>`;
+      const release = `<a href="${project.release.url}" class="subtle">${name}</a>`;
       buf.push(`<tr><td><strong>Release</strong></td><td>${release}</td></tr>`);
     }
     buf.push('</table>');
     const description = split.slice(0, 8 + Math.random() * 12).join('.');
-    buf.push(`<div class="description"><p>${description}.</p></div>`);
+    const site = project.site ? `<a href="${project.site}">${title}</a>. ` : '';
+    buf.push(`<div class="description"><p>${site}${description}.</p></div>`);
     buf.push('</section>');
   }
 
   return {
     path: '/projects/',
     title: 'Projects | pkmn.ai',
+    style: '.description { margin: 2em 0; }',
     header: 'Projects',
     content: buf.join(''),
     script:

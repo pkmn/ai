@@ -3,10 +3,14 @@ Certain topics merit greater coverage than what may already be provided by the
 may contain placeholders for pages which are planned but which have yet to be
 completed.
 
-- _Abstraction_
+- [_Abstraction_](https://github.com/pkmn/ai/issues/3)
 - [Complexity](/concepts/complexity)
 - [Engines](/concepts/engines)
-- _Learning_
+- [_Evaluation_](https://github.com/pkmn/ai/issues/7)
+- [_Inference_](https://github.com/pkmn/ai/issues/6)
+- [_Learning_](https://github.com/pkmn/ai/issues/8)
 - [Protocol](/concepts/protocol)
-- _Search_
+- [_Regret_](https://github.com/pkmn/ai/issues/5)
+- [_Search_](https://github.com/pkmn/ai/issues/4)
+- [_Time_](https://github.com/pkmn/ai/issues/9)
 - [Variants](/concepts/variants)

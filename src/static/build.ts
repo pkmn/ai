@@ -1,4 +1,7 @@
-import 'source-map-support/register';
+// Based on the MIT licensed matklad/matklad.github.io:
+// https://github.com/matklad/matklad.github.io/blob/master/LICENSE-MIT
+
+require('source-map-support').install();
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -50,11 +53,26 @@ export const copy = (src: string, dst: string) => {
 };
 
 const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
+const analytics = process.env.NODE_ENV === 'development' ? '' : `
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-LQ8TW28Z7Q"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+    gtag('config', 'G-LQ8TW28Z7Q');
+  </script>`;
+let stylesheet = '';
+
+const EXPIRY = process.env.NODE_ENV === 'development' ? 0 : 14 * (24 * 60 * 60 * 1000);
+const retain = (file: string, now: number) =>
+  file === stylesheet || (/index\..*\.css/.test(file) &&
+  now - fs.statSync(path.join(PUBLIC, file)).ctimeMs < EXPIRY);
 
 export interface Page {
   id?: string;
   path: string;
   title: string;
+  style?: string;
   topbar?: string;
   header?: string;
   content: string;
@@ -79,9 +97,17 @@ const OPTIONS = {
 };
 
 export const render = (name: string, page: Page) => {
-  const rendered = template.render(LAYOUT, {id: path.basename(name), ...page});
+  if (!stylesheet) throw new Error('call to render before assets have been built');
+  if (page.topbar) page.style = `${page.style || ''} [id] { scroll-margin-top: 2rem; }`;
+  const rendered =
+    template.render(LAYOUT, {id: path.basename(name), ...page, analytics, stylesheet});
   const minified = html.minify(rendered, OPTIONS);
   return minified;
+};
+
+const trailing = (url: string) => {
+  const [p, f] = url.split('#');
+  return (p.endsWith('/') ? p : p + '/') + (f ? '#' + f : '');
 };
 
 const make = (name: string, page: Page) => {
@@ -89,9 +115,22 @@ const make = (name: string, page: Page) => {
   write(path.join(PUBLIC, name, 'index.html'), render(name, page));
 };
 
-export const topbar = 'Under Construction: planned completion date January 2024';
+export const topbar = 'Under Construction: planned completion date April 2024';
 
-interface AstNode {attributes?: {[key: string]: string}}
+interface AstNode {
+  attributes?: {[key: string]: string};
+  tag?: string;
+  children?: AstNode[];
+  level?: number;
+}
+
+const getChild = (node: AstNode, tag: string) => {
+  if (!node.children) return undefined;
+  for (const child of node.children) {
+    if (child.tag === tag) return child;
+  }
+  return undefined;
+};
 
 const hasClass = (node: AstNode, cls: string) => {
   node.attributes = node.attributes || {};
@@ -105,65 +144,110 @@ const addClass = (node: AstNode, cls: string) => {
   node.attributes['class'] = attr ? `${attr} ${cls}` : cls;
 };
 
-const extractCaption = (node: AstNode) => {
-  if (!node.attributes?.cap) return undefined;
-  const result = node.attributes.cap;
-  delete node.attributes.cap;
+const extract = (node: AstNode, attr: string, raw?: boolean) => {
+  if (!node.attributes?.[attr]) return '';
+  const result = raw
+    ? node.attributes[attr]
+    : djot.renderHTML(djot.parse(node.attributes[attr])).slice(3, -5);
+  delete node.attributes[attr];
   return result;
 };
 
-export const toHTML = (s: string) =>
-  djot.renderHTML(djot.parse(s), {
+export const toHTML = (str: string) => {
+  let section: AstNode | undefined = undefined;
+  return djot.renderHTML(djot.parse(str), {
     overrides: {
-      inline_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: false}),
-      display_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: true}),
+      link: (node, r) => {
+        if (node.destination?.startsWith('/')) node.destination = trailing(node.destination);
+        return r.renderAstNodeDefault(node);
+      },
+      section: (node, r) => {
+        const previous = section;
+        section = node;
+        const result = getChild(node, 'heading')?.level === 1
+          ? r.renderChildren(node)
+          : r.renderAstNodeDefault(node);
+        section = previous;
+        return result;
+      },
+      heading: (node, r) => {
+        if (node.level === 1) return r.renderAstNodeDefault(node);
+        const tag = `h${node.level}`;
+        const id = section?.attributes?.id;
+        const children = r.renderChildren(node);
+        const attrs = r.renderAttributes(node);
+        return (id
+          ? `<${tag}${attrs}><a href="#${id}" class="subtle">${children}</a></${tag}>\n`
+          : `<${tag}${attrs}>${children}</${tag}>\n`);
+      },
       div: (node, r): string => {
-        if (hasClass(node, 'block')) {
-          let cap = extractCaption(node);
-          if (cap) {
-            cap = `<div class="title">${cap}</div>`;
-          } else {
-            cap = '';
-          }
-          return [
-            `<aside${r.renderAttributes(node)}>`, cap, r.renderChildren(node), '</aside>',
-          ].join('\n');
+        if (hasClass(node, 'aside')) {
+          node.attributes = node.attributes || {};
+          const title = extract(node, 'title');
+          return `
+            <aside${r.renderAttributes(node)}>
+              <div class="title">${title}</div>
+              ${r.renderChildren(node)}
+            </aside>
+          `;
         }
-
         if (hasClass(node, 'details')) {
-          return [
-            '<details>', `<summary>${extractCaption(node)}</summary>`,
-            r.renderChildren(node), '</details>'].join('\n');
+          return `
+            <details><summary>${extract(node, 'summary')}</summary>
+              ${r.renderChildren(node)}
+            </details>
+          `;
         }
-
         return r.renderAstNodeDefault(node);
       },
       code_block: (node) => {
-        let cap = extractCaption(node);
-        if (cap) {
-          cap = `<figcaption class="title">${cap}</figcaption>\n`;
-        } else {
-          cap = '';
+        const title = extract(node, 'title');
+        const cite = extract(node, 'cite');
+        const caption =
+          title ? `<figcaption class="title">${title}</figcaption>`
+          : cite ? `<figcaption class="cite"><cite>${cite}</cite></figcaption>` : '';
+        // const code = highlight(node.text, node.lang).trimEnd();
+        const code = node.text;
+        return `
+          <figure class="code">
+            ${caption}
+            <pre><code>${code}</code></pre>
+          </figure>
+        `;
+      },
+      para: (node, r) => {
+        if (node.children.length === 1 && node.children[0].tag === 'image') {
+          node.attributes = node.attributes || {};
+          const caption = extract(node, 'caption');
+          return `
+            <figure${r.renderAttributes(node)}>
+              <figcaption class="title">${caption}</figcaption>
+              ${r.renderChildren(node)}
+            </figure>
+          `;
         }
-        // const pre = highlight(node.text, node.lang, node.attributes?.highlight).value;
-        const pre = node.text;
-        return `<figure class="code">\n${cap}\n${pre}\n</figure>`;
+        return r.renderAstNodeDefault(node);
+      },
+      block_quote: (node, r) => {
+        const cite = extract(node, 'cite');
+        const caption = cite ? `<figcaption class="cite"><cite>${cite}</cite></figcaption>` : '';
+        return `
+          <figure class="blockquote">
+            <blockquote>${r.renderChildren(node)}</blockquote>
+            ${caption}
+          </figure>
+        `;
       },
       span: (node, r) => {
-        if (hasClass(node, 'code')) {
-          const children = r.renderChildren(node);
-          return `<code>${children}</code>`;
-        }
-        if (hasClass(node, 'dfn')) {
-          const children = r.renderChildren(node);
-          return `<dfn>${children}</dfn>`;
-        }
+        if (hasClass(node, 'code')) return `<code>${r.renderChildren(node)}</code>`;
+        if (hasClass(node, 'dfn')) return `<dfn>${r.renderChildren(node)}</dfn>`;
         if (hasClass(node, 'kbd')) {
-          const children = r.renderChildren(node)
-            .split('+')
-            .map((it) => `<kbd>${it}</kbd>`)
-            .join('+');
+          const children = r.renderChildren(node).split('+').map(s => `<kbd>${s}</kbd>`).join('+');
           return `<kbd>${children}</kbd>`;
+        }
+        if (hasClass(node, 'email')) {
+          const obfuscated = r.renderChildren(node).split('.').join('<b>.spam</b>.');
+          return `<span class="email">${obfuscated}</span>`;
         }
         return r.renderAstNodeDefault(node);
       },
@@ -171,8 +255,11 @@ export const toHTML = (s: string) =>
         addClass(node, 'url');
         return r.renderAstNodeDefault(node);
       },
+      inline_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: false}),
+      display_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: true}),
     },
   });
+};
 
 const build = async (rebuild?: boolean) => {
   mkdir(path.join(PUBLIC));
@@ -180,8 +267,7 @@ const build = async (rebuild?: boolean) => {
   let actual = list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard', 'background',
-    'index.html', 'index.css', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg',
-    'projects.bib', 'research.bib',
+    'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -192,8 +278,10 @@ const build = async (rebuild?: boolean) => {
     }
   }
 
-  const index = read(path.join(STATIC, 'index.css'));
-  write(path.join(PUBLIC, 'index.css'), css.minify(index).styles);
+  const index = css.minify(read(path.join(STATIC, 'index.css'))).styles;
+  const hash = crypto.createHash('sha256').update(index).digest('hex').slice(0, 8);
+  stylesheet = `index.${hash}.css`;
+  write(path.join(PUBLIC, stylesheet), index);
 
   for (const placeholder of ['chat', 'leaderboard']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
@@ -211,10 +299,12 @@ const build = async (rebuild?: boolean) => {
   write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
     id: 'home',
     title: 'pkmn.ai',
+    analytics,
+    stylesheet,
     content: `${toHTML(read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))}`,
   }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
 
-  make('glossary', {...glossary.page(STATIC), topbar});
+  make('glossary', {...glossary.page(STATIC)});
   make('projects', {...projects.page(STATIC), topbar});
   make('research', research.page(STATIC));
 
@@ -232,29 +322,41 @@ const build = async (rebuild?: boolean) => {
   make('concepts', {
     path: '/concepts/',
     title: 'Concepts | pkmn.ai',
+    style: `
+    ul {
+      margin-top: 3em;
+      padding: 0;
+      text-align: center;
+    }
+    li {
+      margin-bottom: 0.5rem;
+      line-height: 1.15;
+      list-style: none;
+    }`,
     header: 'Concepts',
     content: `${toHTML(read(path.join(STATIC, 'concepts.dj')))}`,
   });
 
   if (!rebuild) {
+    const now = Date.now();
     for (const file of actual) {
-      if (!expected.has(file)) remove(path.join(PUBLIC, file));
+      if (!expected.has(file) && !retain(file, now)) {
+        remove(path.join(PUBLIC, file));
+      }
     }
   }
 
   actual = list(path.join(PUBLIC, 'concepts'));
   expected = new Set(['index.html']);
 
-  const titles = [
-    'Abstraction', 'Complexity', 'Engines', 'Learning', 'Protocol', 'Search', 'Variants',
-  ];
+  const titles = ['Complexity', 'Engines', 'Protocol', 'Variants'];
   for (const title of titles) {
     const page = title.toLowerCase();
     expected.add(page);
     make(`concepts/${page}`, {
       path: `/concepts/${page}/`,
       title: `Concepts — ${title} | pkmn.ai`,
-      topbar,
+      topbar: title === 'Variants' ? '' : topbar,
       header: title,
       content: toHTML(read(path.join(STATIC, 'concepts', `${page}.dj`))),
     });
