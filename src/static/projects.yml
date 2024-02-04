@@ -391,8 +391,19 @@
   release:
     name: "1.1.0"
     url: https://pypi.org/project/meloetta/1.1.0/
+- name: Dolly
+  active: [2023, 2023] # January 8
+  license: Apache-2.0
+  source: https://github.com/baskuit/dolly
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: Pokemon Trainer AI
-  active: 2023 # March 28
+  active: [2023, 2023] # March 28
   engine: Custom
   source: https://github.com/FredodaFred/pokemon-battle-ai
   language: Python
@@ -416,17 +427,6 @@
     - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
   language: TypeScript
-  platform:
-    - name: Pokémon Showdown!
-      url: https://github.com/smogon/pokemon-showdown
-- name: Dolly
-  active: 2023
-  license: Apache-2.0
-  source: https://github.com/baskuit/dolly
-  engine:
-    - name: pokemon-showdown
-      url: https://github.com/smogon/pokemon-showdown
-  language: Python
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
