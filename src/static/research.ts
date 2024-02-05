@@ -3,6 +3,8 @@ import * as path from 'path';
 
 import * as bibtex from '@retorquere/bibtex-parser';
 
+import {header} from './build';
+
 const names = (e: bibtex.Entry) => {
   const buf: string[] = [];
   const authors = e.creators.author;
@@ -110,7 +112,7 @@ export function page(dir: string) {
       dt { display: none; }
       dd { width: 100%; }
     }`,
-    header: 'Research',
+    header: header('Research'),
     content: buf.join(''),
   };
 }

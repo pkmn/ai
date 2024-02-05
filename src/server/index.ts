@@ -1,99 +1,38 @@
 require('source-map-support').install();
 
-import {execFileSync} from 'child_process';
-import * as os from 'os';
 import * as path from 'path';
 
-import polka from 'polka';
+import {serve} from 'site';
 
-import {render, topbar} from '../static/build';
+import {header, renderer, style} from '../static/build';
 
-const ROOT = path.join(__dirname, '..', '..');
-const PUBLIC = path.join(ROOT, 'public');
-const STATIC = path.join(ROOT, 'src', 'static');
-
-const PORT = process.env.PORT || 1234;
-
-const app = polka();
-
-if (process.env.NODE_ENV === 'development') {
-  const chokidar = require('chokidar');
-  const esbuild = require('esbuild');
-  const morgan = require('morgan');
-  const serve = require('serve-static');
-
-  app.use(morgan('dev'));
-  app.use(serve(PUBLIC));
-
-  const build = (file?: string) => {
-    if (file) {
-      const f = path.relative(ROOT, file);
-      console.log(`\x1b[2mRebuilding static after change to ${f} ...\x1b[0m`);
-    }
-    const begin = process.hrtime.bigint();
-    try {
-      esbuild.buildSync({
-        entryPoints: [path.join(STATIC, '*.ts')],
-        outdir: path.join(ROOT, 'build', 'static'),
-        bundle: false,
-        platform: 'node',
-        format: 'cjs',
-        sourcemap: true,
-      });
-      const compile = `${(Math.round(Number(process.hrtime.bigint() - begin) / 1e6))} ms`;
-      execFileSync('node', ['build/static/build.js', '--rebuild'], {
-        encoding: 'utf8',
-        stdio: 'pipe',
-        cwd: ROOT,
-      });
-      const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
-      if (file) console.log(`\x1b[2mRebuilt static in ${duration} s (${compile})\x1b[0m`);
-    } catch (err: any) {
-      const duration = (Number(process.hrtime.bigint() - begin) / 1e9).toFixed(2);
-      console.error(`\x1b[31m${err.message.split('\n').slice(1, -1).join('\n')}\x1b[0m`);
-      if (file) console.log(`\x1b[2mFailed build after ${duration} s\x1b[0m`);
-    }
-  };
-
-  build();
-  chokidar.watch(STATIC).on('change', build);
-}
-
-// TODO: this should be partly pre-rendered
-app.get('/battles', (_, res) => {
-  res.end(render('leaderboard', {
-    path: '/leaderboard/',
-    title: 'Battles | pkmn.ai',
-    topbar,
-    header: '<h2>Battles</h2>',
-    // TODO: this nav is from /leaderboard and links to rules, history, battles, etc
-    content: `<nav>
-    <ul>
-      <li>
-        <input type="radio" value="controlled" name="radio" id="controlled" checked="checked" />
-        <label for="controlled">Controlled</label>
-      </li>
-      —
-      <li>
-        <input type="radio" value="open" name="radio" id="open" />
-        <label for="open">Open</label>
-      </li>
-    </ul>
-   </nav>`,
-  }));
+const root = path.join(__dirname, '..', '..');
+const dirs =
+  {root, out: path.join(root, 'build', 'static'), static: path.join(root, 'src', 'static')};
+serve(Number(process.env.PORT) || 1234, dirs, app => {
+  // TODO: this should be partly pre-rendered
+  app.get('/battles', (_, res) => {
+    res.end(renderer.render({
+      id: 'leaderboard',
+      path: '/leaderboard/',
+      title: 'Battles | pkmn.ai',
+      style,
+      header: header('<h2>Battles</h2>', true),
+      // TODO: this nav is from /leaderboard and links to rules, history, battles, etc
+      content: `<nav>
+      <ul>
+        <li>
+          <input type="radio" value="controlled" name="radio" id="controlled" checked="checked" />
+          <label for="controlled">Controlled</label>
+        </li>
+        —
+        <li>
+          <input type="radio" value="open" name="radio" id="open" />
+          <label for="open">Open</label>
+        </li>
+      </ul>
+    </nav>`,
+    }));
+  });
 });
 
-app.listen(PORT, () => {
-  if (process.env.NODE_ENV !== 'development') return;
-
-  console.log('\x1b[33mAvailable on:\x1b[0m');
-  const interfaces = os.networkInterfaces();
-  for (const dev in interfaces) {
-    for (const details of interfaces[dev]!) {
-      if (details.family === 'IPv4') {
-        console.log(`  http://${details.address}:\x1b[32m${PORT}\x1b[0m`);
-      }
-    }
-  }
-  console.log();
-});

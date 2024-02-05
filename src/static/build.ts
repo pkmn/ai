@@ -3,268 +3,40 @@
 
 require('source-map-support').install();
 
-import * as crypto from 'crypto';
-import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 
-import * as djot from '@djot/djot';
-import CSS from 'clean-css';
 import favicons from 'favicons';
-import html from 'html-minifier';
-import katex from 'katex';
-import * as template from 'mustache';
+import * as site from 'site';
 
 import * as glossary from './glossary';
 import * as projects from './projects';
 import * as research from './research';
 
-const css = new CSS();
+const fs = site.fs;
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'src', 'static');
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmna.ai-'));
-process.on('exit', () => fs.rmSync(TMP, {recursive: true, force: true}));
+export const renderer = new site.page.Renderer({
+  public: PUBLIC,
+  analytics: 'G-LQ8TW28Z7Q',
+  description: 'The home of competitive Pokémon artificial intelligence',
+  url: 'https://pkmn.ai',
+  stylesheet: path.join(STATIC, 'index.css'),
+});
 
-export const list = (dir: string) => fs.readdirSync(dir);
-export const mkdir = (dir: string) => fs.mkdirSync(dir, {recursive: true});
-export const remove = (file: string) => fs.rmSync(file, {recursive: true, force: true});
-export const exists = (file: string) => fs.existsSync(file);
-export const read = (file: string) => fs.readFileSync(file, 'utf8');
-export const write = (file: string, data: string | NodeJS.ArrayBufferView) => {
-  const tmp = path.join(TMP, crypto.randomBytes(16).toString('hex'));
-  try {
-    fs.writeFileSync(tmp, data, {flag: 'wx'});
-    fs.renameSync(tmp, file);
-  } finally {
-    remove(tmp);
-  }
-};
-export const copy = (src: string, dst: string) => {
-  const tmp = path.join(TMP, crypto.randomBytes(16).toString('hex'));
-  try {
-    fs.copyFileSync(src, tmp, fs.constants.COPYFILE_EXCL);
-    fs.renameSync(tmp, dst);
-  } finally {
-    remove(tmp);
-  }
-};
+export const header = (title: string, wip = false) =>
+  `${wip ? '<div id="topbar">Under Construction: planned completion date April 2024</div>' : ''}
+  <h1><a href="/" class="subtle">pkmn.ai</a></h1>
+  <h2>${title}</h2>`;
 
-const LAYOUT = read(path.join(STATIC, 'layout.html.tmpl'));
-const analytics = process.env.NODE_ENV === 'development' ? '' : `
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-LQ8TW28Z7Q"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag() { dataLayer.push(arguments); }
-    gtag('js', new Date());
-    gtag('config', 'G-LQ8TW28Z7Q');
-  </script>`;
-let stylesheet = '';
-
-const EXPIRY = process.env.NODE_ENV === 'development' ? 0 : 14 * (24 * 60 * 60 * 1000);
-const retain = (file: string, now: number) =>
-  file === stylesheet || (/index\..*\.css/.test(file) &&
-  now - fs.statSync(path.join(PUBLIC, file)).ctimeMs < EXPIRY);
-
-export interface Page {
-  id?: string;
-  path: string;
-  title: string;
-  style?: string;
-  topbar?: string;
-  header?: string;
-  content: string;
-  script?: string;
-}
-
-const OPTIONS = {
-  collapseBooleanAttributes: true,
-  collapseWhitespace: true,
-  conservativeCollapse: true,
-  decodeEntities: true,
-  minifyCSS: true,
-  quoteCharacter: '"',
-  removeEmptyAttributes: true,
-  removeEmptyElements: true,
-  removeRedundantAttributes: true,
-  removeScriptTypeAttributes: true,
-  removeStyleLinkTypeAttributes: true,
-  minifyJS: true,
-  sortAttributes: true,
-  sortClassName: true,
-};
-
-export const render = (name: string, page: Page) => {
-  if (!stylesheet) throw new Error('call to render before assets have been built');
-  if (page.topbar) page.style = `${page.style || ''} [id] { scroll-margin-top: 2rem; }`;
-  const rendered =
-    template.render(LAYOUT, {id: path.basename(name), ...page, analytics, stylesheet});
-  const minified = html.minify(rendered, OPTIONS);
-  return minified;
-};
-
-const trailing = (url: string) => {
-  const [p, f] = url.split('#');
-  return (p.endsWith('/') ? p : p + '/') + (f ? '#' + f : '');
-};
-
-const make = (name: string, page: Page) => {
-  mkdir(path.join(PUBLIC, name));
-  write(path.join(PUBLIC, name, 'index.html'), render(name, page));
-};
-
-export const topbar = 'Under Construction: planned completion date April 2024';
-
-interface AstNode {
-  attributes?: {[key: string]: string};
-  tag?: string;
-  children?: AstNode[];
-  level?: number;
-}
-
-const getChild = (node: AstNode, tag: string) => {
-  if (!node.children) return undefined;
-  for (const child of node.children) {
-    if (child.tag === tag) return child;
-  }
-  return undefined;
-};
-
-const hasClass = (node: AstNode, cls: string) => {
-  node.attributes = node.attributes || {};
-  const attr = node.attributes?.['class'] || '';
-  return attr.split(' ').includes(cls);
-};
-
-const addClass = (node: AstNode, cls: string) => {
-  node.attributes = node.attributes || {};
-  const attr = node.attributes['class'];
-  node.attributes['class'] = attr ? `${attr} ${cls}` : cls;
-};
-
-const extract = (node: AstNode, attr: string, raw?: boolean) => {
-  if (!node.attributes?.[attr]) return '';
-  const result = raw
-    ? node.attributes[attr]
-    : djot.renderHTML(djot.parse(node.attributes[attr])).slice(3, -5);
-  delete node.attributes[attr];
-  return result;
-};
-
-export const toHTML = (str: string) => {
-  let section: AstNode | undefined = undefined;
-  return djot.renderHTML(djot.parse(str), {
-    overrides: {
-      link: (node, r) => {
-        if (node.destination?.startsWith('/')) node.destination = trailing(node.destination);
-        return r.renderAstNodeDefault(node);
-      },
-      section: (node, r) => {
-        const previous = section;
-        section = node;
-        const result = getChild(node, 'heading')?.level === 1
-          ? r.renderChildren(node)
-          : r.renderAstNodeDefault(node);
-        section = previous;
-        return result;
-      },
-      heading: (node, r) => {
-        if (node.level === 1) return r.renderAstNodeDefault(node);
-        const tag = `h${node.level}`;
-        const id = section?.attributes?.id;
-        const children = r.renderChildren(node);
-        const attrs = r.renderAttributes(node);
-        return (id
-          ? `<${tag}${attrs}><a href="#${id}" class="subtle">${children}</a></${tag}>\n`
-          : `<${tag}${attrs}>${children}</${tag}>\n`);
-      },
-      div: (node, r): string => {
-        if (hasClass(node, 'aside')) {
-          node.attributes = node.attributes || {};
-          const title = extract(node, 'title');
-          return `
-            <aside${r.renderAttributes(node)}>
-              <div class="title">${title}</div>
-              ${r.renderChildren(node)}
-            </aside>
-          `;
-        }
-        if (hasClass(node, 'details')) {
-          return `
-            <details><summary>${extract(node, 'summary')}</summary>
-              ${r.renderChildren(node)}
-            </details>
-          `;
-        }
-        return r.renderAstNodeDefault(node);
-      },
-      code_block: (node) => {
-        const title = extract(node, 'title');
-        const cite = extract(node, 'cite');
-        const caption =
-          title ? `<figcaption class="title">${title}</figcaption>`
-          : cite ? `<figcaption class="cite"><cite>${cite}</cite></figcaption>` : '';
-        // const code = highlight(node.text, node.lang).trimEnd();
-        const code = node.text;
-        return `
-          <figure class="code">
-            ${caption}
-            <pre><code>${code}</code></pre>
-          </figure>
-        `;
-      },
-      para: (node, r) => {
-        if (node.children.length === 1 && node.children[0].tag === 'image') {
-          node.attributes = node.attributes || {};
-          const caption = extract(node, 'caption');
-          return `
-            <figure${r.renderAttributes(node)}>
-              <figcaption class="title">${caption}</figcaption>
-              ${r.renderChildren(node)}
-            </figure>
-          `;
-        }
-        return r.renderAstNodeDefault(node);
-      },
-      block_quote: (node, r) => {
-        const cite = extract(node, 'cite');
-        const caption = cite ? `<figcaption class="cite"><cite>${cite}</cite></figcaption>` : '';
-        return `
-          <figure class="blockquote">
-            <blockquote>${r.renderChildren(node)}</blockquote>
-            ${caption}
-          </figure>
-        `;
-      },
-      span: (node, r) => {
-        if (hasClass(node, 'code')) return `<code>${r.renderChildren(node)}</code>`;
-        if (hasClass(node, 'dfn')) return `<dfn>${r.renderChildren(node)}</dfn>`;
-        if (hasClass(node, 'kbd')) {
-          const children = r.renderChildren(node).split('+').map(s => `<kbd>${s}</kbd>`).join('+');
-          return `<kbd>${children}</kbd>`;
-        }
-        if (hasClass(node, 'email')) {
-          const obfuscated = r.renderChildren(node).split('.').join('<b>.spam</b>.');
-          return `<span class="email">${obfuscated}</span>`;
-        }
-        return r.renderAstNodeDefault(node);
-      },
-      url: (node, r) => {
-        addClass(node, 'url');
-        return r.renderAstNodeDefault(node);
-      },
-      inline_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: false}),
-      display_math: node => katex.renderToString(node.text, {output: 'mathml', displayMode: true}),
-    },
-  });
-};
+export const style = ' [id] { scroll-margin-top: 2rem; }';
 
 const build = async (rebuild?: boolean) => {
-  mkdir(path.join(PUBLIC));
+  fs.mkdir(path.join(PUBLIC));
 
-  let actual = list(PUBLIC);
+  let actual = fs.list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard', 'background',
     'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib',
@@ -273,53 +45,48 @@ const build = async (rebuild?: boolean) => {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
     for (const icon of icons.images) {
       if (/(yandex|apple)/.test(icon.name)) continue;
-      write(path.join(PUBLIC, icon.name), icon.contents);
+      fs.write(path.join(PUBLIC, icon.name), icon.contents);
       expected.add(icon.name);
     }
   }
 
-  const index = css.minify(read(path.join(STATIC, 'index.css'))).styles;
-  const hash = crypto.createHash('sha256').update(index).digest('hex').slice(0, 8);
-  stylesheet = `index.${hash}.css`;
-  write(path.join(PUBLIC, stylesheet), index);
-
   for (const placeholder of ['chat', 'leaderboard']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
-    if (!exists(file)) {
-      mkdir(path.dirname(file));
-      write(file, '');
+    if (!fs.exists(file)) {
+      fs.mkdir(path.dirname(file));
+      fs.write(file, '');
     }
   }
 
   const files = ['favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib'];
   for (const file of files) {
-    copy(path.join(STATIC, file), path.join(PUBLIC, file));
+    fs.copy(path.join(STATIC, file), path.join(PUBLIC, file));
   }
-
-  write(path.join(PUBLIC, 'index.html'), html.minify(template.render(LAYOUT, {
+  fs.write(path.join(PUBLIC, 'index.html'), renderer.render({
     id: 'home',
     title: 'pkmn.ai',
-    analytics,
-    stylesheet,
-    content: `${toHTML(read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))}`,
-  }).replace('<a href="/" class="subtle">pkmn.ai</a>', 'pkmn.ai'), OPTIONS));
+    header: '<h1>pkmn.ai</h1>',
+    path: '',
+    content: `${site.html.render(fs.read(path.join(STATIC, 'index.dj'))
+      .replace('<a', '<a class="subtle"'))}`,
+  }));
 
-  make('glossary', {...glossary.page(STATIC)});
-  make('projects', {...projects.page(STATIC), topbar});
-  make('research', research.page(STATIC));
+  renderer.create('glossary', glossary.page(STATIC));
+  renderer.create('projects', projects.page(STATIC));
+  renderer.create('research', research.page(STATIC));
 
   for (const title of ['Background', 'Rules']) {
     const page = title.toLowerCase();
-    make(page, {
+    renderer.create(page, {
       path: `/${page}/`,
-      topbar,
+      style,
       title: `${title} | pkmn.ai`,
-      header: title,
-      content: `${toHTML(read(path.join(STATIC, `${page}.dj`)))}`,
+      header: header(title, true),
+      content: `${site.html.render(fs.read(path.join(STATIC, `${page}.dj`)))}`,
     });
   }
 
-  make('concepts', {
+  renderer.create('concepts', {
     path: '/concepts/',
     title: 'Concepts | pkmn.ai',
     style: `
@@ -333,37 +100,39 @@ const build = async (rebuild?: boolean) => {
       line-height: 1.15;
       list-style: none;
     }`,
-    header: 'Concepts',
-    content: `${toHTML(read(path.join(STATIC, 'concepts.dj')))}`,
+    header: header('Concepts'),
+    content: `${site.html.render(fs.read(path.join(STATIC, 'concepts.dj')))}`,
   });
 
   if (!rebuild) {
-    const now = Date.now();
+    const now = new Date();
     for (const file of actual) {
-      if (!expected.has(file) && !retain(file, now)) {
-        remove(path.join(PUBLIC, file));
+      const full = path.join(PUBLIC, file);
+      if (!expected.has(file) && !renderer.retain(full, now)) {
+        fs.remove(full);
       }
     }
   }
 
-  actual = list(path.join(PUBLIC, 'concepts'));
+  actual = fs.list(path.join(PUBLIC, 'concepts'));
   expected = new Set(['index.html']);
 
   const titles = ['Complexity', 'Engines', 'Protocol', 'Variants'];
   for (const title of titles) {
     const page = title.toLowerCase();
     expected.add(page);
-    make(`concepts/${page}`, {
+    const wip = title !== 'Variants';
+    renderer.create(`concepts/${page}`, {
       path: `/concepts/${page}/`,
       title: `Concepts — ${title} | pkmn.ai`,
-      topbar: title === 'Variants' ? '' : topbar,
-      header: title,
-      content: toHTML(read(path.join(STATIC, 'concepts', `${page}.dj`))),
+      style: wip ? style : '',
+      header: header(title, wip),
+      content: site.html.render(fs.read(path.join(STATIC, 'concepts', `${page}.dj`))),
     });
   }
 
   for (const file of actual) {
-    if (!expected.has(file)) remove(path.join(PUBLIC, 'concepts', file));
+    if (!expected.has(file)) fs.remove(path.join(PUBLIC, 'concepts', file));
   }
 };
 

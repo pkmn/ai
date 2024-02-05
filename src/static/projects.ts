@@ -2,9 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import * as bibtex from '@retorquere/bibtex-parser';
+import {html} from 'site';
 import * as yaml from 'yaml';
 
-import {toHTML} from './build';
+import {header, style} from './build';
 
 interface Project {
   name?: string;
@@ -66,7 +67,7 @@ export function page(dir: string) {
   const filler = fs.readFileSync(path.join(dir, 'projects.dj'), 'utf8');
   const split = filler.replaceAll('\n', '').split('.');
 
-  const markdown = toHTML(filler);
+  const markdown = html.render(filler);
   buf.push(`<section><div class="description">${markdown}</div></section>`);
   buf.push(
     `<nav class="hide">
@@ -147,7 +148,7 @@ export function page(dir: string) {
     buf.push('</table>');
     const site = project.site ? `<a href="${project.site}">${title}</a>. ` : '';
     const description = project.description
-      ? toHTML(project.description)
+      ? html.render(project.description)
       : `${site}${split.slice(0, 8 + Math.random() * 12).join('.')}.`;
     buf.push(`<div class="description"><p>${description}</p></div>`);
     buf.push('</section>');
@@ -156,8 +157,8 @@ export function page(dir: string) {
   return {
     path: '/projects/',
     title: 'Projects | pkmn.ai',
-    style: '.description { margin: 2em 0; }',
-    header: 'Projects',
+    style: `.description { margin: 2em 0; } ${style}`,
+    header: header('Projects', true),
     content: buf.join(''),
     script:
     `document.addEventListener('DOMContentLoaded', () => {
