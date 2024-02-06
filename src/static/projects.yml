@@ -46,6 +46,48 @@
   release:
     name: "0.0.1"
     url: https://github.com/vasumv/pokemon_ai/releases/tag/0.0.1
+  description: |
+    An early agent targeting the [Generation VI OU
+    format](https://www.smogon.com/dex/xy/formats/ou/) that leverages [depth
+    2](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/game.py#L25) [sequentialized
+    pure minimax search with Alpha-beta
+    pruning](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/agent.py) and a
+    [hand-crafted evaluation
+    function](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/gamestate.py#L46) to
+    play with [predefined teams](https://github.com/vasumv/pokemon_ai/tree/0adbf47d/teams). While
+    eschewing expectiminimax or a simultaneous-move minimax, the AI does experiment between both
+    optimistic and pessimistic sequentializations, seemingly preferring the latter.
+
+    The AI takes an unorthodox approach towards integrating with the Pokémon Showdown platform,
+    relying on a [scriptable headless browser](https://phantomjs.org/) instead of the more obvious
+    [WebSocket](https://en.wikipedia.org/wiki/WebSocket) API, complicating
+    [connection](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdown_ai/browser.py) and
+    [parsing](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/log.py), possibly due to
+    misunderstandings or platform limitations that are no longer relevant.
+
+    The agent relies on a custom engine for [simulating
+    actions](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/simulator.py#L228),
+    replete with simplified [move
+    handler](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/handlers.py) and [damage
+    calculator](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/moves.py#L63)
+    implementations. The AI's game state is
+    [patched](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/showdown.py#L149)
+    between actions to better keep it sync with the server state.
+
+    The AI features relatively sophisticated team prediction capabilities:
+    [movesets](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke3.json) are
+    [scraped](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/smogon/smogon.py) from Smogon
+    University, falling back on data from the prior generation where necessary. These serve as the
+    basis for an opponent's predicted set, though with the set's moves instead replaced with the
+    moves that occur most frequently as computed from a [replay
+    database](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/database.py) consisting
+    of logs from [top ladder
+    players](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/log_scraper.py). This
+    database is also used to produce [$`P(Move |
+    Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_move.json) and [$`P(Move |
+    Pokemon \land Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_poke3.json)
+    correlations that allow the agent to use Bayesian inference as further moves get revealed to
+    better predict an opponent's moveset.
 - name: Percymon
   active: [2014, 2017] # October 21
   paper: Ramesh:2014
