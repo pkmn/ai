@@ -67,15 +67,8 @@ export function page(dir: string) {
   const filler = fs.readFileSync(path.join(dir, 'projects.dj'), 'utf8');
   const split = filler.replaceAll('\n', '').split('.');
 
-  const preamble = html.render(`
-    _The following expects the reader to be well-versed in the [background](/background) of
-    competitive Pokémon artificial intelligence and to have a strong grasp of important
-    [concepts](/concepts) and [terms](/glossary). Corrections should be directed to
-    the site's [repository](https://github.com/pkmn/ai) which also contains directions for
-    [how to cite this work](https://github.com/pkmn/ai/blob/main/CITATION.cff)._
-  `);
   const markdown = html.render(filler);
-  buf.push(`<section><div class="description">${preamble}${markdown}</div></section>`);
+  buf.push(`<section><div class="description">${markdown}</div></section>`);
   buf.push(
     `<nav class="hide">
       <ul>
