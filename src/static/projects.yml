@@ -49,8 +49,8 @@
   description: |
     An early agent targeting the [Generation VI OU
     format](https://www.smogon.com/dex/xy/formats/ou/) that leverages [depth
-    2](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/game.py#L25) [sequentialized
-    pure minimax search with Alpha-beta
+    2](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/game.py#L25) [determinized and
+    sequentialized pure minimax search with Alpha-beta
     pruning](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/agent.py) and a
     [hand-crafted evaluation
     function](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/gamestate.py#L46) to
@@ -70,9 +70,10 @@
     replete with simplified [move
     handler](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/handlers.py) and [damage
     calculator](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/moves.py#L63)
-    implementations. The AI's game state is
+    implementations. The engine removes all stochastic elements (_e.g._, by ignoring accuracy checks
+    or the contribution of damage rolls) and as such the AI's game state is
     [patched](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/showdown.py#L149)
-    between actions to better keep it sync with the server state.
+    between actions to better keep it sync with the true server state.
 
     The AI features relatively sophisticated team prediction capabilities:
     [movesets](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke3.json) are
