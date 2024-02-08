@@ -148,9 +148,15 @@ depth: |
   The depth of a node is the number of edges from the node to the [tree's](#game-tree) root node. A
   root node will have a depth of 0.
 determinization: |
-  The technique of sampling different [perfect information](#information) states from the set of
-  possible imperfect information states so that methods for solving perfect information games can be
-  applied to games with imperfect information.
+  A [simplification](#relaxation) technique where either a [stochastic](#stochastic) game is
+  converted into a deterministic one or where various [perfect information](#information) states get
+  sampled from the set of possible imperfect information states so that methods for solving perfect
+  information games can be applied to games with imperfect information. The latter definition is
+  more common, but unfortunately this technique has several weakness: the computational budget must
+  be shared between the sampled perfect information games and various aspects of the search are
+  often duplicated; _strategy fusion_, which occurs due to playing different strategies in different
+  worlds when it has to find a unique strategy for all the worlds; and _non-locality_, which arises
+  is from choosing locally optimal moves that are globally inferior.
 drafting: |
   A component of certain Pokémon [variants](#variant) where players take turns
   choosing which Pokémon species which form their pool of available choices
