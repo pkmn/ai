@@ -63,10 +63,17 @@ belief: |
   [actions](#action) of others, and these beliefs crucially influence their decision-making process,
   as they attempt to choose actions that maximize their expected [payoff](#payoff) given their
   understanding of the game's true state.
+bigram: |
+  A sequence of two adjacent symbols in particular order. The concept can be generalized to an
+  arbitrary number of symbols ([n-gram]{.dfn}), though sometimes the term bigram is (incorrectly)
+  used for the general case as well. While bigrams can crop up in many different places within
+  competitive Pokémon artificial intelligence, when referenced in an unqualified manner they usually
+  refer to joint probabilities processed from [usage statistics](#usage-stats) such as $`P(Move \mid
+  Species \land Move)`. These can also sometimes be called [correlations]{.dfn}.
 bimatrix game: |
   A [simultaneous game](#SM) for two players in which each player has a finite set of actions. Such
   a game can be fully described by two matrices, each describing the payoffs of one of the players.
-  In an adversarial game, the two matrices will sum to a constant matrix. 
+  In an adversarial game, the two matrices will sum to a constant matrix.
 binding: |
   Either refers to a [language binding]{.dfn}, the application programming interface that provides
   glue code specifically made to allow a programming language to use a foreign library or operating
@@ -157,6 +164,16 @@ determinization: |
   often duplicated; _strategy fusion_, which occurs due to playing different strategies in different
   worlds when it has to find a unique strategy for all the worlds; and _non-locality_, which arises
   is from choosing locally optimal moves that are globally inferior.
+dimensionality: |
+   In the context of data analysis and [machine learning](#learning), dimensionality refers to the
+   number of features (variables or attributes) that describe a data point whereas the
+   [cardinality]{.dfn} refers to the number of values each feature can take on. High dimensionality
+   and/or cardinality can lead to problems such as [combinatorial
+   explosion](https://en.wikipedia.org/wiki/Combinatorial_explosion) and the [curse of
+   dimensionality](https://en.wikipedia.org/wiki/Curse_of_dimensionality) which renders certain
+   approaches intractable, necessitating techniques such as [dimensionality
+   reduction](https://en.wikipedia.org/wiki/Dimensionality_reduction), a form of
+   [simplification](#relaxation).
 drafting: |
   A component of certain Pokémon [variants](#variant) where players take turns
   choosing which Pokémon species which form their pool of available choices
