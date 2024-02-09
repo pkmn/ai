@@ -119,6 +119,27 @@
   release:
     name: Froslass
     url: https://github.com/dramamine/leftovers-again/releases/tag/v0.9.6
+  description: |
+    The first framework to be published for competitive Pokémon artificial intelligence, Leftovers
+    Again aims to lower the barrier of entry for beginners. Supporting Generation VII (both random
+    and team-based formats), Leftovers Again provides a
+    [client](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/model) and [damage
+    calculator](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/game) along with
+    instructions for getting started and infrastructure for running and debugging agents. Leftovers
+    Again features support for [round-robin
+    tournaments](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/roundrobin.js)
+    against the various (mostly rules-based) [sample
+    bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots) it bundles, including
+    RandomPlayer
+    ("[randumb](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/randumb/index.js)")
+    and MaxDamagePlayer
+    ("[stabby](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/stabby/stabby.js)")
+    implementations. Leftovers Again also includes [replay
+    scraping](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-saver.js)
+    and
+    [processing](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-processor.mongo.js)
+    functionality, the latter of which can be used to produce $`P(Move \mid Species \land Move)`
+    bigrams.
 - name: Bill's PC
   active: [2015, 2016] # September 8
   source: https://github.com/sobolews/BillsPC

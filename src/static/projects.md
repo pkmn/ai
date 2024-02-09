@@ -46,3 +46,21 @@
     - alternatively uses uniform distribution of moves
       [scraped](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/smogon/smogon_moves.py) from
       [learnset](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke_moves.json)
+
+## `dramamine/leftovers-again`
+
+- framework optimized for ease of use for beginners
+- RandomPlayer
+  [randumb](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/randumb/index.js)
+  and MaxDamagePlayer
+  [stabby](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/stabby/stabby.js)
+- Generation 7 (random or not)
+- replay [scraping from
+  index](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-saver.js) and
+  [processing](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-processor.mongo.js)
+  into bigrams `P(Move | Species & Move)`
+- contains [fork](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/game) of
+  `smogon/damage-calc`
+- supports [RR
+  tournament](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/roundrobin.js)
+- bundles various [sample bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots)
