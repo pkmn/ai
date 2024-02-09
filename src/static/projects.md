@@ -39,7 +39,7 @@
   them in [replay
   database](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/database.py)
 - uses [`P(Move | Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_move.json)
-  and [`P(Move | Pokemon,
+  and [`P(Move | Species &
   Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_poke3.json) correlations to
   [predict](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/move_predict.py) via
   Bayes' rule

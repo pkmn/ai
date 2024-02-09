@@ -86,7 +86,7 @@
     players](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/log_scraper.py). This
     database is also used to produce [$`P(Move \mid
     Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_move.json) and [$`P(Move
-    \mid Pokemon \land
+    \mid Species \land
     Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_poke3.json) correlations
     that allow the agent to use Bayesian inference as further moves get revealed to better predict
     an opponent's moveset.
