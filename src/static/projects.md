@@ -15,7 +15,7 @@
 ## `vasumv/pokemon_ai`
 
 - Generation 6 OU with [predefined teams](https://github.com/vasumv/pokemon_ai/tree/0adbf47d/teams)
-- core algorithm is [pessmistic sequentialized
+- core algorithm is pessimistic sequentialized
   minimax](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/agent.py) of [depth
   2](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/game.py#L25) with [hand crafted
   eval](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/gamestate.py#L46)
@@ -67,7 +67,7 @@
 
 ## Bill's PC
 
-- high quality code, extensive test coverage, contemporary techniques, mostly overlooked
+- high-quality code, extensive test coverage, contemporary techniques, mostly overlooked
 - initial version in Python targeting Gen 6 random battle eventual planned C++ rewrite and Gen 7
   support
 - [random battle statistic
@@ -80,12 +80,12 @@
    with learned valuation functions
 - [custom
    engine](/battle/battleengine.py),
-   clean implementation, does implement random for accuracy damage roll
+   clean implementation, does implement random for accuracy, damage roll
 - [RandomPlayer](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/randomagent.py)
   baseline
 - determines known and possible moves, [computes damage
   ranges](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battlecalculator.py)
-  (also [assumes avg damage, no
+  (also [assumes average damage, no
   crits](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/matrixtree.py#L54-L60))
   - reuses engine as damage calculator
 - [client
@@ -94,6 +94,6 @@
   representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/foeside.py)
   - [`deduce_hiddenpower`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py#L226)
   - [`fill_in_unrevealed_attrs`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L53)
-    uses maxes, doesnt sample
+    uses maxes, doesn't sample
   - [`get_balancing_pokemon`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L191)
-    tries to ensure balanced type distibution among team
+    tries to ensure balanced type distribution among team

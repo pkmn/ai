@@ -164,7 +164,7 @@
     were significantly richer than those offered by `pkmn/randbats`, approaching the depth of [those
     offered by Smogon University](https://www.smogon.com/stats/) for non-random formats.
 
-    Additionally, Bill's PC demonstrated the ability to reuse its own high quality [custom
+    Additionally, Bill's PC demonstrated the ability to reuse its own high-quality [custom
     engine](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/battle/battleengine.py) implementation
     for damage calculation, overriding certain functions to force specific damage rolls or critical
     hit outcomes in order to [compute damage
