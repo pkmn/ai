@@ -196,6 +196,25 @@
   platform:
     - name: Pokémon Anniversary Crystal
       url: https://rainbowdevs.com/title/crystal/
+  description: |
+    A competitive Pokémon battling AI that existed to serve as the in-game computer opponent for a
+    ROM-hack when run in a custom emulator, Deep Red is a typical rules-based agent with a
+    [hand-crafted evaluation
+    function](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L678). Due to
+    the unique platform it was built for it could leverage perfect information to simplify its
+    implementation, though targeting an in-game battle system also meant it had to support the
+    additional action of using items in battle, a game element not present in the multiplayer link
+    battle system online play is based around. Deep Red's algorithm was mostly deterministic,
+    primarily leveraging a [damage
+    calculator](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L283) that
+    computed _expected_ damage, though it also featured a notion of exploring
+    "[combos](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1201)"
+    computed via [limited
+    lookahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34) and
+    contained basic implementations of a [killer-move
+    heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
+    its inverse, [changing behavior of the AI when its own HP was
+    low](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1719).
 - active: [2016, 2016] # December 8
   license: MIT
   source: https://github.com/Synedh/showdown-battle-bot

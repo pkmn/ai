@@ -97,3 +97,19 @@
     uses maxes, doesn't sample
   - [`get_balancing_pokemon`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L191)
     tries to ensure balanced type distribution among team
+
+## Deep Red
+
+- perfect information, also handles in-game items
+- limited nondeterminism
+- some more advanced techniques
+  - [damage
+    calculator](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L283)
+    computes *expected* damage
+  - [rules based](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L678)
+  - "[combos](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1201)" with
+    [limited lookahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34)
+  - [killer-move
+    heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
+    [changes behavior when low
+    HP](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1733)
