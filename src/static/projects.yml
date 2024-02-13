@@ -66,7 +66,7 @@
     misunderstandings or platform limitations that are no longer relevant.
 
     The agent relied on a custom engine for [simulating
-    actions](https//github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/simulator.py#L228),
+    actions](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/simulator.py#L228),
     replete with simplified [move
     handler](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/handlers.py) and [damage
     calculator](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/moves.py#L63)
