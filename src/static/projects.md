@@ -1,6 +1,10 @@
 # Notes
 
-## shanai
+## Technical Machine
+
+TODO
+
+## Shanai
 
 - notable for the conmeta
 - leverages PO for data directly, not just a client
@@ -46,6 +50,10 @@
     - alternatively uses uniform distribution of moves
       [scraped](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/smogon/smogon_moves.py) from
       [learnset](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke_moves.json)
+
+## Percymon
+
+TODO
 
 ## `dramamine/leftovers-again`
 
@@ -113,3 +121,23 @@
     heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
     [changes behavior when low
     HP](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1733)
+
+## `Synedh/showdown-battle-bot`
+
+TODO
+
+## Showdown AI competition
+
+TODO
+
+## PokéAI
+
+TODO
+
+## CynthiAI
+
+TODO
+
+## PokeML
+
+TODO

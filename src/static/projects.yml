@@ -312,7 +312,7 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- name: Showdown-AI-Bot
+- name: Showdown AI Bot
   active: [2019, 2019] # March 8
   license: MIT
   source: https://github.com/JJonahJson/Showdown-AI-Bot
