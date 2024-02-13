@@ -25,7 +25,7 @@
     - name: Pokémon Online
       url: https://github.com/po-devs/pokemon-online
   description: |
-    One of the earliest known examples of a competitive Pokémon AI, Shanai is most notable for the
+    One of the earliest known examples of a competitive Pokémon AI, Shanai was most notable for the
     creation of the ["Shanai
     Cup"](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273),
     a simplified variant of Pokémon that hoped to serve as the testbed for AI development. Shanai
@@ -48,47 +48,47 @@
     url: https://github.com/vasumv/pokemon_ai/releases/tag/0.0.1
   description: |
     An early agent targeting the [Generation VI OU
-    format](https://www.smogon.com/dex/xy/formats/ou/) that leverages [depth
+    format](https://www.smogon.com/dex/xy/formats/ou/) that leveraged [depth
     2](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/game.py#L25) [determinized and
     sequentialized pure minimax search with Alpha-beta
     pruning](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/agent.py) and a
     [hand-crafted evaluation
     function](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/gamestate.py#L46) to
     play with [predefined teams](https://github.com/vasumv/pokemon_ai/tree/0adbf47d/teams). While
-    eschewing expectiminimax or a simultaneous-move minimax, the AI does experiment between both
+    eschewing expectiminimax or a simultaneous-move minimax, the AI experimented between both
     optimistic and pessimistic sequentializations, seemingly preferring the latter.
 
-    The AI takes an unorthodox approach towards integrating with the Pokémon Showdown platform,
+    The AI took an unorthodox approach towards integrating with the Pokémon Showdown platform,
     relying on a [scriptable headless browser](https://phantomjs.org/) instead of the more obvious
     [WebSocket](https://en.wikipedia.org/wiki/WebSocket) API, complicating
     [connection](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdown_ai/browser.py) and
     [parsing](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/log.py), possibly due to
     misunderstandings or platform limitations that are no longer relevant.
 
-    The agent relies on a custom engine for [simulating
-    actions](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/simulator.py#L228),
+    The agent relied on a custom engine for [simulating
+    actions](https//github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/simulator.py#L228),
     replete with simplified [move
     handler](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/handlers.py) and [damage
     calculator](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/moves.py#L63)
-    implementations. The engine removes all stochastic elements (_e.g._, by ignoring accuracy checks
-    or the contribution of damage rolls) and as such the AI's game state is
+    implementations. The engine removed all stochastic elements (_e.g._, by ignoring accuracy checks
+    or the contribution of damage rolls) and as such the AI's game state was
     [patched](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/showdown.py#L149)
     between actions to better keep it sync with the true server state.
 
-    The AI features relatively sophisticated team prediction capabilities:
-    [movesets](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke3.json) are
+    The AI featured relatively sophisticated team prediction capabilities:
+    [movesets](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke3.json) were
     [scraped](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/smogon/smogon.py) from Smogon
-    University, falling back on data from the prior generation where necessary. These serve as the
-    basis for an opponent's predicted set, though with the set's moves instead replaced with the
-    moves that occur most frequently as computed from a [replay
+    University, with the agent falling back on data from the prior generation where necessary. These
+    served as the basis for an opponent's predicted set, though with the set's moves instead
+    replaced with the moves that occur most frequently as computed from a [replay
     database](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/database.py) consisting
     of logs from [top ladder
     players](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/log_scraper.py). This
-    database is also used to produce [$`P(Move \mid
+    database was also used to produce [$`P(Move \mid
     Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_move.json) and [$`P(Move
     \mid Species \land
     Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_poke3.json) correlations
-    that allow the agent to use Bayesian inference as further moves get revealed to better predict
+    that allowed the agent to use Bayesian inference as further moves get revealed to better predict
     an opponent's moveset.
 - name: Percymon
   active: [2014, 2017] # October 21
@@ -121,24 +121,24 @@
     url: https://github.com/dramamine/leftovers-again/releases/tag/v0.9.6
   description: |
     The first framework to be published for competitive Pokémon artificial intelligence, Leftovers
-    Again aims to lower the barrier of entry for beginners. Supporting Generation VII (both random
-    and team-based formats), Leftovers Again provides a
+    Again aimed to lower the barrier of entry for beginners. Supporting Generation VII (both random
+    and team-based formats), Leftovers Again provided a
     [client](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/model) and [damage
     calculator](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/game) along with
     instructions for getting started and infrastructure for running and debugging agents. Leftovers
-    Again features support for [round-robin
+    Again featured support for [round-robin
     tournaments](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/roundrobin.js)
     against the various (mostly rules-based) [sample
-    bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots) it bundles, including
+    bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots) it bundled, including
     RandomPlayer
     ("[randumb](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/randumb/index.js)")
     and MaxDamagePlayer
     ("[stabby](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/stabby/stabby.js)")
-    implementations. Leftovers Again also includes [replay
+    implementations. Leftovers Again also included [replay
     scraping](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-saver.js)
     and
     [processing](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-processor.mongo.js)
-    functionality, the latter of which can be used to produce $`P(Move \mid Species \land Move)`
+    functionality, the latter of which could be used to produce $`P(Move \mid Species \land Move)`
     bigrams.
 - name: Bill's PC
   active: [2015, 2016] # September 8
@@ -148,6 +148,46 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    Bill's PC was a promising but ultimately unrealized and overlooked attempt at implementing a
+    competitive Pokémon AI based on more contemporary game theory techniques. Bill's PC was written
+    in Python and targeted the Generation VI Random Battle format, though hoped to eventually
+    support Generation VII and recognized a rewrite in C++ would likely be necessary to achieve the
+    performance required for a high level of play.
+
+    Bill's PC featured several novel ideas --- it was the first known example of producing usage
+    statistics for the Random Battle formats by [leveraging Pokémon Showdown's team generation
+    logic](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/showdowndata/js/getNRandomTeams.js), a
+    technique independently rediscovered and popularized by
+    [`pkmn/randbats`](https://github.com/pkmn/randbats) half a decade later. However, [Bill's PC's
+    processed statistics](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/showdowndata/miner.py)
+    were significantly richer than those offered by `pkmn/randbats`, approaching the depth of [those
+    offered by Smogon University](https://www.smogon.com/stats/) for non-random formats.
+
+    Additionally, Bill's PC demonstrated the ability to reuse its own high quality [custom
+    engine](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/battle/battleengine.py) implementation
+    for damage calculation, overriding certain functions to force specific damage rolls or critical
+    hit outcomes in order to [compute damage
+    ranges](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battlecalculator.py) --- a
+    primitive but powerful initial version of the functionality that later could be found in
+    [`libpkmn`](https://github.com/pkmn/engine).
+
+    Bill's PC's [client](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py)
+    included a distinct [opponent
+    representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/foeside.py) tracking known
+    and possible moves and attempted to [deduce an opponent's Hidden Power
+    type](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py#L226),
+    deterministically [filled in unknown
+    attributes](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L53) with their most
+    likely value based on the usage statistics, and also tried to leverage typing information to
+    determine which unknown [species of Pokémon might "balance" an opponent's team
+    composition](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L191).
+
+    Bill's PC's roadmap showed plans to implement "SM-MCTS for stacked matrix games ([Tak
+    2014](/research/#Tak:2014){.subtle}) and/or LP solutions for Nash equilibria with learned
+    valuation functions", but despite the solid foundational work on the client and engine, the
+    project appears to have been abandoned shortly after the initial skeletons of an agent were
+    implemented.
 - name: Deep Red
   active: [2016, 2016] # April 2
   source: https://github.com/TwitchPlaysPokemon/deepred

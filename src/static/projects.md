@@ -64,3 +64,36 @@
 - supports [RR
   tournament](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/roundrobin.js)
 - bundles various [sample bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots)
+
+## Bill's PC
+
+- high quality code, extensive test coverage, contemporary techniques, mostly overlooked
+- initial version in Python targeting Gen 6 random battle eventual planned C++ rewrite and Gen 7
+  support
+- [random battle statistic
+  miner](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/showdowndata/miner.py): produced
+  equivalent to regular usage stats but from [teams
+  generated](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/showdowndata/js/getNRandomTeams.js)
+  for random battles, offering more info than pkmn/smogon and 5+ years prior
+- planned algorithm: SM-MCTS for stacked matrix games ([Tak
+   2014](/research/#Tak:2014)) and/or LP solutions for Nash equilibria
+   with learned valuation functions
+- [custom
+   engine](/battle/battleengine.py),
+   clean implementation, does implement random for accuracy damage roll
+- [RandomPlayer](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/randomagent.py)
+  baseline
+- determines known and possible moves, [computes damage
+  ranges](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battlecalculator.py)
+  (also [assumes avg damage, no
+  crits](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/matrixtree.py#L54-L60))
+  - reuses engine as damage calculator
+- [client
+  representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py)
+  with distinct [opponent
+  representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/foeside.py)
+  - [`deduce_hiddenpower`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py#L226)
+  - [`fill_in_unrevealed_attrs`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L53)
+    uses maxes, doesnt sample
+  - [`get_balancing_pokemon`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L191)
+    tries to ensure balanced type distibution among team
