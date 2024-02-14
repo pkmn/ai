@@ -27,8 +27,8 @@ export function page(dir: string) {
   buf.push('<dl>');
   for (const term of terms) {
     const id = slugify(term);
-    buf.push(`<dt id="${id}"><a href="#${id}" class="subtle">${term}</a></dt>`);
-    buf.push(`<dd>${site.html.render(glossary[term])}</dd>`);
+    buf.push(`<div id="${id}"><dt><a href="#${id}" class="subtle">${term}</a></dt>`);
+    buf.push(`<dd>${site.html.render(glossary[term])}</dd></div>`);
   }
   buf.push('</dl>');
 

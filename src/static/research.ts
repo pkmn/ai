@@ -54,8 +54,8 @@ function format(e: bibtex.Entry) {
   const sm = urls.length > 1
     ? ` <a href="${urls[1]}" class="subtle"><em>(Includes supplementary text).</em></a>`
     : '';
-  const dt = `<dt id="${e.key}"><a href="#${e.key}" class="subtle">[${id}]</a></dt>`;
-  const dd = `<dd><a href="${urls[0]}" class="subtle">${parts.join('')}</a>${sm}</dd>`;
+  const dt = `<div id="${e.key}"><dt><a href="#${e.key}" class="subtle">[${id}]</a></dt>`;
+  const dd = `<dd><a href="${urls[0]}" class="subtle">${parts.join('')}</a>${sm}</dd></div>`;
   return `${dt}${dd}`;
 }
 
@@ -93,7 +93,7 @@ export function page(dir: string) {
       margin: 1rem auto;
       line-height: 1.15;
     }
-    dl {
+    dl > div {
       display: flex;
       flex-wrap: wrap;
     }
