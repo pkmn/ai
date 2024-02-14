@@ -4,7 +4,7 @@ Despite competitive Pokémon artificial intelligence projects having existed for
 no AI has yet acheived superhuman performance, and the field as a whole is still incredibly
 undeveloped compared to those of computer chess or poker. The complexity of Pokémon and lack of
 sufficient infrastructure/resources/guidance means that most developers are unable to explore ideas
-in depth as everyone ends up continually reinventing the wheel and then fizzling out. 
+in depth as everyone ends up continually reinventing the wheel and then fizzling out.
 
 **pkmn.ai** aims to solve this problem and advance the field by becoming the **home of competitive
 Pokémon artificial intelligence**. Ultimately, pkmn.ai aims to provide:
@@ -54,7 +54,7 @@ RAM | 512GB DIMM DDR4 2933 MHz (0.3 ns)
 SSD | 2x Micron 5210 MTFD (2TB) in RAID1
 ```
 
-### Data 
+### Data
 
 - access to grabbing data
   - teams (test data as opposed to training data)
@@ -75,7 +75,7 @@ Accurately ranking competitive Pokémon AIs comes with several challenges:
 
 Controlling the environment that agents run on is crucial for obtaining fair and consistent results.
 Furthermore, each agent would ideally have sufficient resources to be able to perform at a
-reasonable level. However, 
+reasonable level. However, TODO
 
 For optimal isolation the individual agents should run on separate identical machines, however, due
 to resource contraints it is more cost effective to have the agents share the same larger server (an
@@ -134,7 +134,7 @@ docker run
 —expose 8000
 —read-only
 —memory 32 —memory-swap 32
-—cpuset-cpus 
+—cpuset-cpus
 
 0,1,2,3,24,25,26,27
 4,5,6,7,28,29,30,31
@@ -275,7 +275,6 @@ takes N battles, runs N battles and writes the log files (need socket server set
   serving) HOWEVER need to avoid starting new battle until previous battle is fully written to
   minimize dataloss? alternatively queue and make sure each gets writte n sequentially, though
   unglamour shutdown could lose data
-- 
 
 make something which generates data for leaderboard/games (tools:seed?) = npm test:integration, do
 not run init if not CI/development?/make sure to delete data in posttest!
@@ -310,10 +309,9 @@ to be able to restart without killing sockets though?
 protocol - port of relevant bits of PS doc + much stricter
 
 
-
-3. add comments to player/MDP/RP
-4. write tests for all
-5. add code to let it login
+1. add comments to player/MDP/RP
+2. write tests for all
+3. add code to let it login
 
 
 ```sql
@@ -338,13 +336,13 @@ CREATE TABLE IF NOT EXISTS formats (
   id INTEGER PRIMARY KEY,
 
   name TEXT NOT NULL,
+  controlled BOOLEAN NOT NULL,
 );
 
 -- FIXME ratings?
 CREATE TABLE IF NOT EXISTS battles (
   id INTEGER PRIMARY KEY,
 
-  controlled BOOLEAN NOT NULL,
   format INTEGER NOT NULL,
   p1 INTEGER NOT NULL,
   p2 INTEGER NOT NULL,
@@ -398,7 +396,7 @@ need to send logs etc so simpler to just do on server
 
 ---
 
-goals of pokemon ai 
+goals of pokemon ai
 - present to smart person not involved in pokemon/ai why its interesting
 - make it easy for players to be able to play against existing bots (all nicely packaged etc)
 - make ranking bots easier/possible
@@ -486,3 +484,7 @@ musl (jemalloc? mimalloc?)
 
 firecracker vm
 https://hocus.dev/blog/qemu-vs-firecracker/
+
+// TODO: add new bot = add to table and restart, will naturally have lowest bots? problem
+// = restarting when have battles. alternatively can add() which does the insert
+// and populates the in memory table, cleaner because doesnt require restart...
