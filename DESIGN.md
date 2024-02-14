@@ -32,7 +32,7 @@ creation of agents:
 While these seem valuable for getting developers up and running quickly and certainly provide value,
 ultimately they do not seem to have captured the mindshare of the broader community - most of the
 strongest agents have not been built utilizing these frameworks. pkmn.ai does not seek to supplant
-these efforts - ideally agents built for these platforms would also be able to compete in the 
+these efforts - ideally agents built for these platforms would also be able to compete in the
 pkmn.ai leaderboards and the respective communities will be able to help each other improve.
 
 ## Competition
@@ -44,7 +44,7 @@ pkmn.ai leaderboards and the respective communities will be able to help each ot
 ```
 TCEC is CPU: 2x Xeon 6230R (52 cores/104 threads)
 GPU: 2xA100-PCIE-40GB
-RAM: 256GiB (~96GiB/engine)
+RAM: 256GiB (~96GiB/engine) 
 Storage: 2TiB SSD + Starting from S23 VVLTC: 12TiB (4 drives) NVMe SSD for Syzygy3-7 (total 14TB) + 15TiB (2 drives raid1 (30TiB)) HDD for Syzygy7 DTZ
 
 CCC is CPUs | 2 x AMD EPYC 7H12
