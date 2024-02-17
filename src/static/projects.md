@@ -55,8 +55,9 @@ TODO
 
 - Generation 6 Random Battle
 - pure [depth 2](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L286)
-  pessimistic [minimax](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js)
-  with alpha-beta pruning and [move
+  pessimistic sequentialized
+  [minimax](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js) with
+  alpha-beta pruning and [move
   ordering](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L339-343)
   with a [hand crafted
   eval](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L263) function
@@ -65,13 +66,15 @@ TODO
   [weights](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/weights.js)
   - simplifies action space by [always mega
     evolving](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L749) when
-    available
+    available as a form of forward pruning
   - [move order
     heuristics](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/greedybot.js) include
     eg. prefer super effective or status before not very effective
   - [hardcoded special cases for certain
     moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L352-366)
 - unable to use expectiminimax due to being built around an unmodified copy of Pokémon Showdown
+- mostly deterministic but simulations (`getDamage` etc) aren't fixed so can still exist
+  non-determinism
 - chose to simplify the question of imperfect information by [assuming an opponent has all possible
   moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L129) from their
   [random move pool](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/formats-data.js) until
@@ -120,21 +123,17 @@ TODO
   equivalent to regular usage stats but from [teams
   generated](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/showdowndata/js/getNRandomTeams.js)
   for random battles, offering more info than pkmn/smogon and 5+ years prior
-- planned algorithm: SM-MCTS for stacked matrix games ([Tak
-   2014](/research/#Tak:2014)) and/or LP solutions for Nash equilibria
-   with learned valuation functions
-- [custom
-   engine](/battle/battleengine.py),
-   clean implementation, does implement random for accuracy, damage roll
-- [RandomPlayer](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/randomagent.py)
-  baseline
+- planned algorithm: SM-MCTS for stacked matrix games ([Tak 2014](/research/#Tak:2014)) and/or LP
+   solutions for Nash equilibria with learned valuation functions
+- [custom engine](/battle/battleengine.py), clean implementation, does implement random for
+   accuracy, damage roll
+- [RandomPlayer](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/randomagent.py) baseline
 - determines known and possible moves, [computes damage
-  ranges](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battlecalculator.py)
-  (also [assumes average damage, no
+  ranges](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battlecalculator.py) (also [assumes
+  average damage, no
   crits](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/matrixtree.py#L54-L60))
   - reuses engine as damage calculator
-- [client
-  representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py)
+- [client representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py)
   with distinct [opponent
   representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/foeside.py)
   - [`deduce_hiddenpower`](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py#L226)
