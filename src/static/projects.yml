@@ -103,6 +103,53 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    The first competitive Pokémon AI agent to be described in a paper, Percymon targeted the
+    Generation VI Random Battle format. The bot relied on pure [depth
+    2](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L286) pessimistic
+    sequentialized
+    [minimax](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js) with
+    Alpha-beta pruning and [move
+    ordering](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L339-343)
+    (_e.g._, preferring to explore super effective or status moves before those which are not very
+    effective) with a [hand crafted evalutation
+    function](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L263)
+    based on an early verison of [Technical Machine](/projects/#TechnicalMachine)'s
+    [features](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#20-L57)
+    and [weights](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/weights.js). Percymon
+    also included several [hardcoded special cases for certain
+    moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L352-366)
+    which have intricate game mechanics that were hard for the agent to properly evaluate.
+
+    Due to Percymon being built around an unmodified copy of Pokémon Showdown it was unable to
+    easily make use of the expectiminimax algorithm. Furthermore, while the agent was mostly
+    deterministic, the damage and turn simulations its ran via Pokémon Showdown did not fix a random
+    seed and thus the bot's policies could exhibit a small amount of non-determinism. The Pokémon
+    Showdown engine was found to be a major performance bottleneck, with the
+    [cloning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/clone.js)  of the engine's
+    state between simulations cited as the major limiting factor on depth as even with pruning turns
+    could frequently take in excess of 40s to evaluate.
+
+    Percymon chose to simplify the action space by [always mega
+    evolving](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L749) when
+    available as a form of forward pruning. It also chose to simplify the question of imperfect
+    information by assuming that an [opponent's unrevealed Pokémon do not
+    exist](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L125)  and that
+    [an opponent has all possible
+    moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L129) from their
+    [random move pool](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/formats-data.js)
+    until [all of their moves have been
+    revealed](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L185-L204) (as
+    opposed to leveraging usage stats). In order to work around the increased move acion space
+    resulting from this approach, Percymon [only looked at the top
+    10](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#438) opponent
+    choices (_i.e_, forward pruning via beam search).
+
+    Percymon planned to use
+    [TD-learning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#60-L136)
+    for the evaluation function weights and considered supporting non-random formats by adding in a
+    usage statistics-backed Bayesian network for team prediction coupled with a CSP solver to build
+    robust teams.
 - name: Leftovers Again
   framework: true
   active: [2015, 2021] # September 1
