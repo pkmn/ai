@@ -97,6 +97,8 @@
   engine:
     - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
+    - name: pokemon-showdown-client
+      url: https://github.com/smogon/pokemon-showdown-client
   language: JavaScript
   platform:
     - name: Pokémon Showdown!
@@ -434,6 +436,8 @@
   source: https://github.com/attraylor/poke-env
   engine:
     - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
       url: https://github.com/hsahovic/poke-env
   language: Python
   platform:
@@ -449,6 +453,8 @@
   source: https://github.com/leolellisr/poke_RL
   engine:
     - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
       url: https://github.com/hsahovic/poke-env
   language: Python
   platform:
@@ -475,6 +481,8 @@
   source: https://github.com/MatteoH2O1999/alphaPoke
   engine:
     - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
       url: https://github.com/hsahovic/poke-env
   language: Python
   platform:
@@ -488,6 +496,8 @@
   paper: Tse:2022
   engine:
     - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
       url: https://github.com/hsahovic/poke-env
   language: Python
   platform:
@@ -521,6 +531,8 @@
   source: https://github.com/baskuit/dolly
   engine:
     - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
       url: https://github.com/hsahovic/poke-env
   language: Python
   platform:
