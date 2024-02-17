@@ -169,12 +169,28 @@ TODO
 
 ## PokéAI
 
-TODO
+TODO https://github.com/select766/pokeai/blob/f5b241de
 
 ## CynthiAI
 
-TODO
+- Generation 7 Random Battle
+- [depth 1](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L769) [pure
+  optimistic minimax](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L577-L742)
+  search with [hand crafted
+  eval](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L187-575)
+- checks [known moves](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L123) if
+  enough are known otherwise entire move pool
+- [deterministically uses highest accuracy move that
+  KOs](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L163-L182) (killer move
+  heuristic) otherwise most damaging move (ignoring accuracy)
+- [hardcoded
+  modifiers](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L777-L794) to the
+  minimax result to better account for game mechanics
+
 
 ## PokeML
 
 TODO
+
+https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d
+https://gihub.com/pokeml/pokemon-env/blob/7495f70e
