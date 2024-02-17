@@ -262,6 +262,23 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    CynthiAI targeted the Generation VII Random Battle format using a mixture of heuristics and
+    [depth 1](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L769) [pure
+    optimistic
+    minimax](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L577-L742) search
+    with a [hand-crafted evaluation
+    function](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L187-575).
+    CynthiAI [deterministically used the highest accuracy move that would knock out its
+    opponent](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L163-L182) (killer
+    move heuristic) otherwise selected the most damaging move (ignoring accuracy), finally falling
+    back on the result of its minimax search. Like [Percymon](/projects/#Percymon), to better
+    account for game mechanics and prevent suboptimal decisions, CynthiAI applied further [hardcoded
+    modifiers](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L777-L794) to the
+    minimax result. In lieu of team prediction via usage statistics, CynthiAI worked off of an
+    opponent's [known
+    moves](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L123) if enough were
+    known otherwise defaulted to random move pool for the species.
 - name: PokeML
   active: [2018, 2019] # July 13
   license: MIT

@@ -87,7 +87,7 @@ TODO
       10](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#438) opponent
       choices (forward pruning via beam search)
 - [cloning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/clone.js) Pokémon Showdown
-  state was a limiting factor on depth, as even with pruning turns could frequently take in access
+  state was a limiting factor on depth, as even with pruning turns could frequently take in excess
   of 40s
 - planned to use
   [TD-learning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#60-L136)
@@ -185,7 +185,6 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
 - [hardcoded
   modifiers](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L777-L794) to the
   minimax result to better account for game mechanics
-
 
 ## PokeML
 
