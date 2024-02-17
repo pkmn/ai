@@ -189,7 +189,25 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
 
 ## PokeML
 
-TODO
+TODO https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d
 
-https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d
-https://gihub.com/pokeml/pokemon-env/blob/7495f70e
+- several Generation 7 example agents
+
+https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/tracking - extraction of Pokémon Showdown client implementation for tracking client representation
+
+
+https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js - converts game states to fixed-size numeric vectors.
+
+
+[`ChecksSwitchAgent](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/checksswitch-agent.js) - chooses actions based on [hard coded checks](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/pokemon-agents/data/compTest.json) and typechart FIXME
+
+
+[`SimAgent`](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js)  OTL
+L91 - uses `lrsnash` on computed payoff matrix
+L129 - weighted random sample from policy computed by lrsnash
+ L311-L336 - eval function is purely the sum of % HP of pokemon on each side
+
+[`MaxBasePowerAgent`](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-base-power-agent.js), [`MaxDamageAgent`](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-damage-agent.js),
+[`RandomAgent`](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js), [`SemiRandomAgent`](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js) mega over moves over switches ($`RandomPlayer(switch=\widetilde{0\%}, mega=100\%)`),
+
+pokeml/pokemon-agents/src/agents/test-agent.js#L11-36 - conmeta reduced feature space, WIP agent for machine learning based on the features

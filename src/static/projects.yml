@@ -263,7 +263,7 @@
 - name: PokeML
   active: [2018, 2019] # July 13
   license: MIT
-  source: https://github.com/pokeml
+  source: https://github.com/pokeml/pokemon-agents
   engine:
     - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
