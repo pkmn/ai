@@ -53,7 +53,44 @@ TODO
 
 ## Percymon
 
-TODO
+- Generation 6 Random Battle
+- pure [depth 2](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L286)
+  pessimistic [minimax](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js)
+  with alpha-beta pruning and [move
+  ordering](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L339-343)
+  with a [hand crafted
+  eval](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L263) function
+  based on an early verison of [Technical Machine](/projects/#TechnicalMachine)'s
+  [features](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#20-L57) and
+  [weights](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/weights.js)
+  - simplifies action space by [always mega
+    evolving](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L749) when
+    available
+  - [move order
+    heuristics](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/greedybot.js) include
+    eg. prefer super effective or status before not very effective
+  - [hardcoded special cases for certain
+    moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L352-366)
+- unable to use expectiminimax due to being built around an unmodified copy of Pokémon Showdown
+- chose to simplify the question of imperfect information by [assuming an opponent has all possible
+  moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L129) from their
+  [random move pool](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/formats-data.js) until
+  [all of their moves have been
+  revealed](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L185-L204) and
+  that an [opponent's unrevealed Pokémon do not
+  exist](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L125) (as opposed to
+  leveraging usage stats)
+    - due to increased move action space the search [only looks at the top
+      10](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#438) opponent
+      choices (forward pruning via beam search)
+- [cloning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/clone.js) Pokémon Showdown
+  state was a limiting factor on depth, as even with pruning turns could frequently take in access
+  of 40s
+- planned to use
+  [TD-learning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#60-L136)
+  for the evaluation function weights and considered supporting non-random formats by adding in a
+  usage statistics-backed Bayesian network for team prediction and a CSP solver to build robust
+  teams
 
 ## `dramamine/leftovers-again`
 
