@@ -210,3 +210,15 @@ L129 - weighted random sample from policy computed by lrsnash
 [`RandomAgent`](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js), [`SemiRandomAgent`](https://gihub.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js) mega over moves over switches ($`RandomPlayer(switch=\widetilde{0\%}, mega=100\%)`),
 
 pokeml/pokemon-agents/src/agents/test-agent.js#L11-36 - conmeta reduced feature space, WIP agent for machine learning based on the features
+
+
+## Youngster Joey
+
+- Generation 1
+- perfect information
+- effectively a slightly more sophisticated MDP
+- explicitly eschewed minimax + expectiminax due to the expectation that they would play opponents
+  who would not play optimally and the large size of the game tree even with alpha-beta pruning
+- greedy policy deterministically chooses move maximizing
+  [heuristic](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310)
+- lookeahead considered as future work

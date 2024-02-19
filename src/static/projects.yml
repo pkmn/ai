@@ -537,6 +537,14 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    Youngster Joey targeted a perfect information variant of Generation I with a greedy policy that
+    determines its action by maximizing a set of hand-crafted
+    [heuristics](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310). A
+    slightly more sophisticated MaxDamagePlayer, Younger Joey deliberately eschewed minimax and
+    expectiminimax due to concerns over the game tree size even after pruning and the algorithms not
+    being able to play optimally against opponents who were also expected to play suboptimally. The
+    addition of some form of lookahead was considered for future work.
 - name: alphaPoke
   site: https://matteoh2o1999.github.io/en-us/projects/alphaPoke-project-delivery
   active: 2021 # November 22
