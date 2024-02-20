@@ -260,7 +260,7 @@
     "[combos](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1201)"
     computed via [limited
     lookahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34) and
-    contained basic implementations of a [killer-move
+    contained basic implementations of a [killer move
     heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
     its inverse, [changing behavior of the AI when its own HP was
     low](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1719).
