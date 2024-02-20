@@ -92,7 +92,7 @@
     an opponent's moveset.
 - name: Percymon
   active: [2014, 2017] # October 21
-  paper: Ramesh:2014
+  paper: Ho:2014
   source: https://github.com/rameshvarun/showdownbot
   engine:
     - name: pokemon-showdown
