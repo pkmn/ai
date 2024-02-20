@@ -642,7 +642,7 @@ pruning: |
   they have no bearing to the search result. Backward pruning where the decision on what to prune
   happens after finding a refutation while searching (_e.g._ [Alpha-beta](#Alpha-beta)) is sound and
   will never affect the search result --- forward pruning which preemptively eliminates branches
-  before searching comes with the risk of potentially overlooking somelrsthing. Compare to
+  before searching comes with the risk of potentially overlooking something. Compare to
   [reduction](#reduction).
 PS: |
   [Pokémon Showdown](https://pokemonshowdown.com), the most popular and influential Pokemon battle
