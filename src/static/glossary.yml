@@ -6,7 +6,7 @@ abstraction: |
   techniques such as [bucketing](#bucketing) can be used to reduce the state space, or the original
   game may be mapped to a [variant](#variant) which is more tractable.
 action: |
-  A feasible operation on the [state](#state) ---  _i.e._, a move a [player](#player) can make at a
+  A feasible operation on the [state](#state) --- _i.e._, a move a [player](#player) can make at a
   stage in the [game](#game). [move]{.dfn} is ambiguous in Pokémon, as Pokémon have
   [moves](https://bulbapedia.bulbagarden.net/wiki/Move) and thus some of the game theoretical moves
   of a player in a Pokémon battle includes the action of literally using one of their Pokémon's
@@ -376,7 +376,7 @@ input log: |
     - [raw input]{.dfn} simply encodes the action type and [slot](#slot) (and optionally the
     target) (_e.g._, `switch 4` or `move 1 2 mega`). This form is ultimately required by an
     [engine](#engine) to unambiguously implement the battle mechanics of Pokémon.
-    - [logical input]{.dfn} is an encoding  where move or species names are used in lieu of slots,
+    - [logical input]{.dfn} is an encoding where move or species names are used in lieu of slots,
     (_e.g._, `switch zapdos` or `move thunderbolt`). This encoding is more intuitive and often more
     useful to work with when utilizing [machine learning](#learning) techniques, though isn't
     accepted by all engines and can be ambiguous (_e.g._, in [formats](#format) without the [Species
@@ -559,7 +559,7 @@ opponent modeling: |
   an opponent's actions.
 OTL: |
   One-[turn](#turn) [look ahead](#look-ahead). The [$`MaxDamagePlayer`](#MaxDamagePlayer) is the
-  conventional name for an agent which leverages only a single turn of look ahead.  _$`N`TL_ can be
+  conventional name for an agent which leverages only a single turn of look ahead. _$`N`TL_ can be
   used to generalize this shorthand for describing the [depth](#depth) an agent searches to (_e.g._,
   _3TL_ for three turns worth of look ahead).
 pathology: |
@@ -651,7 +651,7 @@ Q-learning: |
   A model-free [reinforcement learning](#RL) algorithm to learn the value of an [action](#action) in
   a particular [state](#state) that can handle problems with [stochastic](#stochastic)
   [transitions](#transition) and [rewards](#payoff) without requiring adaptations. Q-learning was
-  used by DeepMind in their Deep Q-Network ([DQN]{.dfn}) algorithm  along with a technique called
+  used by DeepMind in their Deep Q-Network ([DQN]{.dfn}) algorithm along with a technique called
   experience replay to solve a wide-range of Atari games [(Mnih
   2015)](/research#Mnih:2015){.subtle}.
 RandomPlayer: |
@@ -895,7 +895,7 @@ usage stats: |
 value: |
   The expected [payoff](#payoff) from a given [state](#state), produced by an [evaluation
   function]{.dfn}. Evaluation functions are usually difficult to produce accurately in Pokémon and
-  are often approximated with [reinforcement learning](#RL) via  a [value network]{.dfn} that
+  are often approximated with [reinforcement learning](#RL) via a [value network]{.dfn} that
   assigns a value to each state of the game by calculating an expected cumulative score.
 vaporware: |
   Software that has been advertised but isn't yet available to use / buy, either because it's only a
