@@ -630,6 +630,30 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    Tse built a Generation VIII VGC agent that leveraged both supervised learning and deep
+    Q-learning with [poke-env](#poke-env) to achieve success against
+    [$`RandomPlayer`](/glossary#RandomPlayer) and [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
+    baselines.
+
+    Tse used a dataset of 700,000 Pokémon Showdown server battle logs gathered from the top 20% of
+    ranked VGC players on the site to train a 6-layer neural network with supervised learning. The
+    network's output layer consisted of two softmax units producing action and value estimates, with
+    a move selection and move target being considered separately. Despite using categorical
+    encodings for the input embedding (as opposed to a one-hot key embedding) the initial input size
+    of of 4186 features resulted in overfitting. As a result, Tse's used the supervised network to
+    learn a smaller embedding of 254 features based on the output of the first layer which was
+    designed to not be fully connected so as to be used for this purpose.
+
+    The learned embedding was used as input to a second RL network which used deep Q-learning and an
+    ε-greedy policy to learn action selection. The reward for this network was computed based on a
+    linear combination of the battle outcome, the current percentage HP for both sides' active
+    Pokémon, and the value output from the supervised learning network. The training of the RL
+    network was performed against the $`RandomPlayer` and $`MaxDamagePlayer` and this led to a
+    learned policy which proved to be fairly exploitable by less contrived opponents.
+
+    Battle simulation performance was cited as the main bottleneck, discouraging the addition of
+    Monte Carlo tree search and serving as a barrier to increased training time.
 - name: Pinyon
   framework: true
   active: 2022 # May 20

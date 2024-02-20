@@ -242,7 +242,23 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
   - deliberately avoided tracking number of pokemon left per side
   - large terminal reward + smaller intermediate reward for how much HP player
     and opponent had left
-  - softmax exploration strategy with information from previous games
+  - softmax exploration strategy with information from previous games (superior to ε-greedy)
 - limited training (20k games) = 70% win rate vs. random which is substantially
   lower than the 90% achieved by minimax
 - future work suggestions include eligibility traces and larger feature vector
+
+## _Tse_
+
+- uses poke-env, targets Generation VIII VGC
+- trained on 700k + 30k Pokémon Showdown battle logs acquired via data grant from top 20% of players
+  to learn embedding for battle states (supervised learning)
+  - used categorical encodings for embedding instead of one-hot key to shrink size, still had 4186
+    features
+  - SL network is 6-layer NN with two softmax output layer outpuing action and value
+- first layer of SL network not fully connected, idea is to use this layer to create an embedding to
+  reduce input feature size (4186 -> 254) and prevent overfitting
+- RL network is deep Q-learning with ε-greedy policy to learn action selection (on MCTS?) with the
+  SL network serving as a proxy for the true optimal Q-value
+  - reward based on outcome of simulated game, %HP of both sides, and value function from SL model
+    scaled by hyperparameters
+- cites battle simulation as the bottleneck
