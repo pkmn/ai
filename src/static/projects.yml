@@ -31,7 +31,7 @@
     a simplified variant of Pokémon that hoped to serve as the testbed for AI development. Shanai
     only supported this restricted Generation V variant and its [core
     algorithm](https://github.com/nixeagle/shanai/blob/20f11841/PO/Client/client.lisp#L370) can be
-    recognized as an extension of the rudimentary [MaxDamagePlayer](/glossary#MaxDamagePlayer)
+    recognized as an extension of the rudimentary [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
     benchmark. The project also contains the [beginnings of a reverse damage
     calculator](https://github.com/nixeagle/shanai/blob/20f11841/Pokemon/formulas.lisp), though
     ultimately the project was abandoned before this feature was incorporated.
@@ -179,9 +179,9 @@
     tournaments](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/roundrobin.js)
     against the various (mostly rules-based) [sample
     bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots) it bundled, including
-    RandomPlayer
+    [$`RandomPlayer`](/glossary#RandomPlayer)
     ("[randumb](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/randumb/index.js)")
-    and MaxDamagePlayer
+    and [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
     ("[stabby](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/stabby/stabby.js)")
     implementations. Leftovers Again also included [replay
     scraping](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-saver.js)
@@ -333,6 +333,8 @@
   engine:
     - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
+    - name: pokemon-showdown-client
+      url: https://github.com/smogon/pokemon-showdown-client
   language: JavaScript
   platform:
     - name: Pokémon Showdown!
@@ -340,6 +342,39 @@
   release:
     name: "0.2.5"
     url: https://www.npmjs.com/package/pokemon-env/v/0.2.5
+  description: |
+    The PokeML project contained a collection of several Generation VII Pokémon battle agents that
+    [simulated battles via Pokémon
+    Showdown](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/team-aware-simulation-agent.js#L42)
+    and whose client representations tracked state using an [extraction from its
+    client](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/tracking). PokeML's agents included:
+
+    - A basic [$`RandomPlayer`](/glossary#RandomPlayer)
+    ([`RandomAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js))
+    and a $`RandomPlayer(switch=\widetilde{0\%}, mega=100\%)` implementation
+    ([`SemiRandomAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js)).
+    - The classic  [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
+    ([`MaxDamageAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-damage-agent.js))
+    and a more simplified version that only considered a move's base power
+    ([`MaxBasePowerAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-base-power-agent.js)).
+    - [`SimAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js),
+    an agent which performed a one-turn lookahead by simulating each possible joint action,
+    [evaluating](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L311-L336)
+    the new state based purely on the sum of HP percentages of Pokémon on each side, using
+    [`lrsnash` to solve the computed payoff
+    matrix](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L91) and
+    making a decision based on a [weighted random sample from this
+    solution](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L129).
+    - [`ChecksSwitchAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/checksswitch-agent.js)
+    which chose actions based on hard-coded [checks and counters
+    table](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/pokemon-agents/data/compTest.json)
+    and the typechart, switching to whichever Pokémon on the team has the best matchup versus the
+    current opponent Pokémon (or attacking randomly if already out).
+    - [`TestAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/test-agent.js),
+    a work-in-progress agent utilizing machine learning which targeted a [reduced
+    conmeta](https://github.com/pokeml/pokemon-agents/src/agents/test-agent.js#L11-36) to make
+    [encoding](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) the game
+    states into fixed-size numeric vectors more tractable.
 - identifier: Kalose, Kaya, Kim
   active: [2018, 2018]
   paper: Kalose:2018
@@ -429,17 +464,17 @@
     project. While the actual agent is currently vaporware, pkmn has been building foundational
     Pokémon infrastructure that has been used within multiple other Pokémon AI projects:
 
-      - [pkmn/ps](https://github.com/pkmn/ps): Pokémon Showdown's simulator and client broken up
-      into composable libraries.
-      - [data.pkmn.cc](https://data.pkmn.cc): An aggregated source exposing all of Smogon
-      University's data in machine-readable form.
-      - [pkmn/stats](https://github.com/pkmn/stats): A framework for efficient Pokémon Showdown
-      battle log processing and usage stats generation.
-      - [pkmn/engine](https://github.com/pkmn/engine): A minimal, complete, battle simulation engine
-      optimized for performance.
-      - [EPOKé](https://github.com/pkmn/EPOke): An enhanced client library which tracks not only the
-      observed state of the battle, but also uses the mechanics of the game, reverse damage
-      calculation, and usage statistics to infer as much as possible about the state of play.
+    - [pkmn/ps](https://github.com/pkmn/ps): Pokémon Showdown's simulator and client broken up into
+    composable libraries.
+    - [data.pkmn.cc](https://data.pkmn.cc): An aggregated source exposing all of Smogon University's
+    data in machine-readable form.
+    - [pkmn/stats](https://github.com/pkmn/stats): A framework for efficient Pokémon Showdown battle
+    log processing and usage stats generation.
+    - [pkmn/engine](https://github.com/pkmn/engine): A minimal, complete, battle simulation engine
+    optimized for performance.
+    - [EPOKé](https://github.com/pkmn/EPOke): An enhanced client library which tracks not only the
+    observed state of the battle, but also uses the mechanics of the game, reverse damage
+    calculation, and usage statistics to infer as much as possible about the state of play.
 - identifier: Norström
   active: [2019, 2019]
   paper: Norström:2020
@@ -541,10 +576,11 @@
     Youngster Joey targeted a perfect information variant of Generation I with a greedy policy that
     determines its action by maximizing a set of hand-crafted
     [heuristics](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310). A
-    slightly more sophisticated MaxDamagePlayer, Younger Joey deliberately eschewed minimax and
-    expectiminimax due to concerns over the game tree size even after pruning and the algorithms not
-    being able to play optimally against opponents who were also expected to play suboptimally. The
-    addition of some form of lookahead was considered for future work.
+    slightly more sophisticated [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer), Younger Joey
+    deliberately eschewed minimax and expectiminimax due to concerns over the game tree size even
+    after pruning and the algorithms not being able to play optimally against opponents who were
+    also expected to play suboptimally. The addition of some form of lookahead was considered for
+    future work.
 - name: alphaPoke
   site: https://matteoh2o1999.github.io/en-us/projects/alphaPoke-project-delivery
   active: 2021 # November 22

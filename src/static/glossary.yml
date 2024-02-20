@@ -463,13 +463,13 @@ matrix node: |
 MaxDamagePlayer:
   A simple competitive Pokémon playing [agent](#agent) that chooses to use whichever `move` action
   is expected to do the most damage the [next turn](#OTL) to the opponent, commonly seen in the
-  [literature](/projects) alongside the [RandomPlayer](#RandomPlayer) when benchmarking / testing
+  [literature](/projects) alongside the [$`RandomPlayer`](#RandomPlayer) when benchmarking / testing
   agents due to its simplicity of implementation. Certain variants of this exist depending on how
   much of the [damage formula](#damage-calculator) is implemented, with the simplest versions of
-  MaxDamagePlayer perhaps only considering each move's effective base power after [STAB](#STAB) and
-  type effectiveness. A fully featured MaxDamagePlayer can achieve a much higher level of play than
-  a RandomPlayer, though is extremely [exploitable](#exploitability) (this can be somewhat mitigated
-  by the addition of some randomness or certain [heuristics](#heuristic)).
+  $`MaxDamagePlayer` perhaps only considering each move's effective base power after [STAB](#STAB)
+  and type effectiveness. A fully featured $`MaxDamagePlayer` can achieve a much higher level of
+  play than a $`RandomPlayer`, though is extremely [exploitable](#exploitability) (this can be
+  somewhat mitigated by the addition of some randomness or certain [heuristics](#heuristic)).
 MCTS: |
   [Monte Carlo tree search]{.dfn} is a [heuristic](#heuristic) search algorithm that combines tree
   search with the Monte Carlo method, a broad class of algorithms which rely on repeated random
@@ -485,7 +485,7 @@ MDP: |
   uses a mathematical framework to model the decision-making of a dynamic system in scenarios where
   the results are either random or controlled by a decision maker, which makes sequential decisions
   over time. In competitive Pokémon AI research, _MDP_ may also refer to the
-  [MaxDamagePlayer](#MaxDamagePlayer) in certain contexts.
+  [$`MaxDamagePlayer`](#MaxDamagePlayer) in certain contexts.
 metagame: |
   Also know as the [meta]{.dfn}, describes the most popular strategies and approaches to playing a
   game. In competitive Pokémon, [usage stats](#usage-stats) provide information to determine which
@@ -558,7 +558,7 @@ opponent modeling: |
   the opponent's tendencies and weaknesses and is an important factor in [predicting](#prediction)
   an opponent's actions.
 OTL: |
-  One-[turn](#turn) [look ahead](#look-ahead). The [MaxDamagePlayer](#MaxDamagePlayer) is the
+  One-[turn](#turn) [look ahead](#look-ahead). The [$`MaxDamagePlayer`](#MaxDamagePlayer) is the
   conventional name for an agent which leverages only a single turn of look ahead.  _$`N`TL_ can be
   used to generalize this shorthand for describing the [depth](#depth) an agent searches to (_e.g._,
   _3TL_ for three turns worth of look ahead).
@@ -642,7 +642,7 @@ pruning: |
   they have no bearing to the search result. Backward pruning where the decision on what to prune
   happens after finding a refutation while searching (_e.g._ [Alpha-beta](#Alpha-beta)) is sound and
   will never affect the search result --- forward pruning which preemptively eliminates branches
-  before searching comes with the risk of potentially overlooking something. Compare to
+  before searching comes with the risk of potentially overlooking somelrsthing. Compare to
   [reduction](#reduction).
 PS: |
   [Pokémon Showdown](https://pokemonshowdown.com), the most popular and influential Pokemon battle
@@ -657,9 +657,9 @@ Q-learning: |
 RandomPlayer: |
   Also known as [RP]{.dfn}, a trivial competitive Pokémon playing [agent](#agent) that leverages
   some version of a [uniform policy](#uniform-policy), commonly seen in the [literature](/projects)
-  alongside the [MaxDamagePlayer](#MaxDamagePlayer) when benchmarking/  testing agents due to its
+  alongside the [$`MaxDamagePlayer`](#MaxDamagePlayer) when benchmarking/ testing agents due to its
   simplicity of implementation. However, despite this seemingly simple definition, multiple subtly
-  different versions of the RandomPlayer exist (_e.g._, many implementations decide to _choose_
+  different versions of the $`RandomPlayer` exist (_e.g._, many implementations decide to _choose_
   only `move` actions unless forced to _consider_ `switch` actions, and may have similar
   [heuristics](#heuristic) for decided how to treat generational [gimmicks](#gimmick)).
 
