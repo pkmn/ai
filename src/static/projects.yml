@@ -479,6 +479,13 @@
   active: [2019, 2019]
   paper: Norström:2020
   language: Python
+  description: |
+    Norström compared the [$`RandomPlayer`](/glossary#RandomPlayer), learned linear combinations of
+    features, and Monte Carlo tree search across various scenarios in Generation I including a
+    limited version of the OU format implemented with a custom game engine. While MCTS proved to be
+    the strongest in relative terms across the scenarios tested, strength in absolute terms was
+    unimpressive. Combined approaches and increased engine and training performance were cited as
+    the most promising avenues for improvement for future work.
 - name: poke-env
   framework: true
   site: https://poke-env.readthedocs.io/en/latest/
