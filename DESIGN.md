@@ -380,6 +380,11 @@ CREATE TABLE IF NOT EXISTS ratings (
 );
 ```
 
+TRIGGERS
+
+1. trigger when new version of agent added
+2. trigger after battle to update rating in matchmaking table (and version history table?)
+
 CSPRNG random number stored in battles table = links games in a match, also determines team
 selection (used to index into teams DB file stored on the controller box). Number given to agents
 who can use it to consistently seed their PRNG if desired (how to get reproducible results - need to
@@ -479,8 +484,11 @@ hours)
 
 ---
 
-ai = offer minimal docker files for node and python from scratch
+ai = ~~offer minimal docker files for node and python from scratch~~
 musl (jemalloc? mimalloc?)
+
+document from scratch and distroless (and techniques for reducing size), but simply require anything < 500 MB (only need to keep around 2 versions tops per agent so not too problematic space wise)
+https://towardsdatascience.com/how-to-shrink-numpy-scipy-pandas-and-matplotlib-for-your-data-product-4ec8d7e86ee4
 
 firecracker vm
 https://hocus.dev/blog/qemu-vs-firecracker/
@@ -488,3 +496,25 @@ https://hocus.dev/blog/qemu-vs-firecracker/
 // TODO: add new bot = add to table and restart, will naturally have lowest bots? problem
 // = restarting when have battles. alternatively can add() which does the insert
 // and populates the in memory table, cleaner because doesnt require restart...
+
+---
+
+changes bots need to work with pkmn.ai
+
+1) docker image < 500 MB (can republish all under https://ghcr.io/pkmn?)
+2) accept team in `/challenge`
+3) read stats from `/stats/botname/format`` (sub 100? MB) - just `stats/format`
+
+---
+
+- ability to hold self tours
+- ability to battle all bots as a human locally
+
+### RBY Dataset
+
+1. process all `gen1ou` logs to correct ratings
+2. convert all PS logs into binary log format with team + inputs required - no output!
+3. ensure when team and inputs fed into pkmn/engine can produce same output, set up tests to guarantee this / name logs with version of pkmn/engine required
+   - 0 atk dvs? (non maxed in general)
+   - bugs in PS causing different results (even after massaging output?)
+4. publish as torrent pending approval from staff
