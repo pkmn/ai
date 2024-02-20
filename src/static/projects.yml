@@ -264,7 +264,7 @@
     heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
     its inverse, [changing behavior of the AI when its own HP was
     low](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1719).
-- active: [2016, 2016] # December 8
+- active: [2016, 2023] # December 8
   license: MIT
   source: https://github.com/Synedh/showdown-battle-bot
   engine:
