@@ -231,3 +231,18 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
 - greedy policy deterministically chooses move maximizing
   [heuristic](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310)
 - lookeahead considered as future work
+
+## _Kalose, Kaya, Kim_
+
+- Generation I Challenge Cup
+- custom determinstic simulator
+- Q-learning trained with self-play
+  - feature vector just active player and opponents types and "HP buckets" (10
+    buckets)
+  - deliberately avoided tracking number of pokemon left per side
+  - large terminal reward + smaller intermediate reward for how much HP player
+    and opponent had left
+  - softmax exploration strategy with information from previous games
+- limited training (20k games) = 70% win rate vs. random which is substantially
+  lower than the 90% achieved by minimax
+- future work suggestions include eligibility traces and larger feature vector

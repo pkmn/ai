@@ -380,6 +380,18 @@
   paper: Kalose:2018
   engine: Custom
   language: Python
+  description: |
+    Kalose _et al._ implemented a custom deterministic simulator for the Generation I Challenge Cup
+    format and evaluated the efficacy of an agent trained on self-play utilizing Q-learning. The
+    agent's feature vector was limited to just the active Pokémon from either side's types and
+    corresponding "HP bucket" (an abstraction of a Pokémon's remaining HP percentage into 10 evenly
+    distributed bins), deliberately avoiding any information about either side's inactive party due
+    to performance concerns. In addition to the large terminal reward based on the battle's final
+    result, smaller intermediate rewards were provided to the agent based on the remaining HP for
+    both sides. A softmax exploration strategy was seen to outperform an ε-greedy one versus
+    [$`RandomPlayer`](/glossary#RandomPlayer), though overall playing strength was poor compared to
+    a benchmark minimax solution. Suggestions for future work included introducing eligibility
+    traces and expanding the size of the feature vector.
 - active: 2018 # August 21
   license: MIT
   source: https://github.com/taylorhansen/pokemonshowdown-ai
