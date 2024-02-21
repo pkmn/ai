@@ -221,6 +221,38 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
     - [converts](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) game
       states to fixed-size numeric vectors.
 
+## poke-env
+
+- Generation 4-9 framework with
+  [documentation](https://poke-env.readthedocs.io/en/stable/index.html) and
+  [examples](https://github.com/hsahovic/poke-env/tree/46fa2b01/examples)
+- supports both singles & doubles battles and random & non-random battles
+- provides [team parsing and
+  packing](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/teambuilder/teambuilder.py)
+  logic
+- doesn't embed Pokémon Showdown so can't easily perform simulations, simply a client
+- [data](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/data/static)
+  [extracted](https://github.com/hsahovic/poke-env/tree/46fa2b01/scripts) from Pokémon Showdown
+- environment is [client
+  representation](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/environment)
+- main features are training agents
+  [concurrently](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/concurrency.py) and
+  [utilities for evaluating agent
+  performance](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/utils.py) eg.
+  cross evaluation
+- provides example agents for training:
+  [`MaxBasePowerPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L11),
+  [`SimpleHeuristicsPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L19)
+  crudely approximates a `MaxDamagePlayer` but no damage calculator or simulation available, working
+  to [add self-play
+  support](https://github.com/hsahovic/poke-env/blob/46fa2b01/examples/experimental-self-play.py)
+- [Open AI Gym](https://github.com/openai/gym) [environment
+  implementation](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/openai_api.py)
+  and
+  [helpers](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106)
+  including a [reward
+  helper](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106)
+
 ## Youngster Joey
 
 - Generation 1
