@@ -311,3 +311,18 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
   - reward based on outcome of simulated game, %HP of both sides, and value function from SL model
     scaled by hyperparameters
 - cites battle simulation as the bottleneck
+
+
+## Pokémon Simulator Environment
+
+- environment for running a large numbers of Pokémon Showdown battle simulations, though features a
+  [rules based heuristic
+  AI](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts)
+  for any generation of singles battles that depends on several
+  [modifications](https://github.com/cRz-Shadows/Pokemon_Trainer_Tournament_Simulator/blob/5932a450/README.md#modifications-to-pok%C3%A9mon-showdown)
+  to the simulator to reveal additional information
+- [matchups](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L263-L287)
+  depend on type advantage, speed, and HP percentage
+- considers [switching
+  out](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L373-L400)
+- contains hardcodes for specific game mechanics like Protect or Explosion or hazards

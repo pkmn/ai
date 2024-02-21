@@ -752,7 +752,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - name: Pokémon Simulator Environment
-  active: [2023, 2023] # November 23
+  active: 2023
   source: https://github.com/cRz-Shadows/Pokemon_Trainer_Tournament_Simulator
   engine:
     - name: pokemon-showdown
@@ -761,6 +761,20 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    The Pokémon Simulator Environment is an environment for running a large number of Pokémon
+    Showdown battle simulations. While not intended as a serious attempt at a competitive Pokémon
+    battling agent, the project features an elaborate [rules-based heuristic
+    agent](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts)
+    that can serve as a training baseline for other agents in singles formats. Supporting all
+    generations, the `HeuristicPlayerAI` goes beyond the
+    [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer), considering elements beyond just the potential
+    damage its moves may do. The agent evaluates
+    [matchups](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L263-L287)
+    based on type advantage, speed, and remaining HP percentage, considers [switching
+    out](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L373-L400),
+    and contains handwritten cases to handle specific game mechanics or to be able to use moves
+    which indirectly benefit the player.
 - identifier: Zhang, Parashar, Saha
   paper: Zhang:2024
   active: [2023, 2023] # November 29
