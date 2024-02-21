@@ -34,8 +34,8 @@ const RANKING = [
   'Percymon', // 1270 Elo in gen6randombattle
   'hsahovic/reinforcement-learning-pokemon-bot', // "~90% vs. RandomPlayer"
   'alphaPoke', // "87-88% vs. RandomPlayer = ~1150 Elo"
-  'kvchen/showdown-rl', //  "~85% vs. RandomPlayer
   'Showdown AI Competition', // 85% vs. RandomPlayer = *equivalent* to MaxDamage
+  'kvchen/showdown-rl', //  ~58% vs. RP(0), ~85% vs. RP(~100%), 10% vs. greedy
   'Kalose, Kaya, Kim', // ~60-65% vs. RandomPlayer (Gen 1)
 ];
 

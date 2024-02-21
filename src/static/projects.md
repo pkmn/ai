@@ -1,9 +1,5 @@
 # Notes
 
-## Technical Machine
-
-TODO
-
 ## Shanai
 
 - notable for the conmeta
@@ -160,15 +156,15 @@ TODO
 
 ## `Synedh/showdown-battle-bot`
 
-TODO
+TODO 52db93cb
 
 ## Showdown AI competition
 
-TODO
+TODO c6cb71a9
 
 ## PokéAI
 
-TODO https://github.com/select766/pokeai/blob/f5b241de
+TODO f5b241de
 
 ## CynthiAI
 
@@ -221,6 +217,52 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
     - [converts](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) game
       states to fixed-size numeric vectors.
 
+
+## `kvchen/showdown-rl`
+
+- agent using proximal policy optimization (PPO) which was expected to be superior to Q-learning for
+  scenarios with complex value functions like Pokémon because it operates directly in the policy
+  space
+- trained on Generation 1 Random Battle format, though approach generalizes to arbitrary formats
+- uses Tensorflow, the [PPO implementation from
+  OpenAI](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/ppo/ppo.py) and a custom [OpenAI
+  Gym](https://github.com/openai/gym) environment
+  [implementation](https://github.com/kvchen/gym-showdown/blob/c5cdcf84/gym_showdown/envs/showdown_env.py)
+  that works with a modified Pokémon Showdown server
+- server is relaxed to provide additional information about
+  [features](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/getFeatures.js)
+  and to [determine valid
+  actions](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/getValidActions.js#L19)
+  ahead of time which are used to mask off the output from the RL network to force the logits of
+  invalid actions to negative infinity before applying the softmax
+- the paper discusses using the `node2vec` algorithm to [create embeddings for various
+  species](https://github.com/kvchen/showdown-rl-notebooks/blob/85c266d4/embeddings/Pokemon%20Embeddings%20Using%20Node2Vec.ipynb),
+  though ultimately it seems that a basic one-hot encoding for each Pokémon's attributes was
+  [actually
+  used](https://github.com/kvchen/gym-showdown/blob/c5cdcf84/gym_showdown/envs/showdown_env.py#LL141-L179)
+- network architecture is 3 fully-connected layers each with 512 units and a ReLU activation and
+  only terminal states were rewarded
+- trained against $`RandomPlayer(\widetilde{100\%})`, $`RandomPlayer(0%)` and a depth 1 [minimax
+  agent](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/agents/minimax.py) with alpha-beta
+  pruning with an evaluation function which compares the difference in the sum HP percentages for
+  the full team of each side
+- agent learned a policy which preferentially chose the move in the 4th moveslot
+  - resulted in a winning record compared to the random agents but almost always lost vs. minimax.
+- largely bottlenecked by computational resources, in particular repeatedly
+  [cloning](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/clone.js) the
+  simualator state
+- ideas for future work include self-play and improved visualization to enhance tuning and debugging
+
+## `hsahovic/reinforcement-learning-pokemon-bot`
+
+TODO 25a04789
+
+- inspired by [`Synedh/showdown-battle-bot`](#Synedh/showdown-battle-bot`), inspired [poke-env](#poke-env)
+
+## Showdown AI Bot
+
+TODO 3038f927
+
 ## poke-env
 
 - Generation 4-9 framework with
@@ -252,6 +294,14 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
   [helpers](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106)
   including a [reward
   helper](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106)
+
+## Simplified Pokemon Environment
+
+TODO 028f4595
+
+## VGC AI Framework
+
+TODO aab68037
 
 ## Youngster Joey
 

@@ -50,7 +50,7 @@
     An early agent targeting the [Generation VI OU
     format](https://www.smogon.com/dex/xy/formats/ou/) that leveraged [depth
     2](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/game.py#L25) [determinized and
-    sequentialized pure minimax search with Alpha-beta
+    sequentialized pure minimax search with alpha-beta
     pruning](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/agent.py) and a
     [hand-crafted evaluation
     function](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/gamestate.py#L46) to
@@ -109,7 +109,7 @@
     2](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L286) pessimistic
     sequentialized
     [minimax](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js) with
-    Alpha-beta pruning and [move
+    alpha-beta pruning and [move
     ordering](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L339-343)
     (_e.g._, preferring to explore super effective or status moves before those which are not very
     effective) with a [hand crafted evalutation
@@ -551,7 +551,7 @@
     and
     [`SimpleHeuristicsPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L19)
     (both simplified versions of an actual [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)) for
-    training. Finally, poke-env contains an [Open AI Gym](https://github.com/openai/gym)
+    training. Finally, poke-env contains an [OpenAI Gym](https://github.com/openai/gym)
     [environment
     implementation](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/openai_api.py)
     and
