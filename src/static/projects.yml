@@ -738,6 +738,23 @@
   engine: Custom
   source: https://github.com/FredodaFred/pokemon-battle-ai
   language: Python
+  description: |
+    Pokemon Trainer AI used a [bespoke Generation I
+    engine](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/classes.py#L462) to
+    evaluate several different agents in a level 50 3v3 format:
+
+    - [RBES](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RBES.png), a rules-based
+    expert system that decided on actions based on its [hand-crafted evaluation
+    function](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/InferenceEngine.py)
+    that primarily focused on maximizing damage.
+    - [DT](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/DT.png), a decision tree
+    based approach
+    [produced](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/pokemon_DT_solution.ipynb)
+    for a specific team configuration.
+    - [RL](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RL.png), a state-based
+    Q-learning model also
+    [trained](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RL_train.py) for a
+    specific team configuration.
 - name: Pokesim
   framework: true
   active: 2023 # October 2

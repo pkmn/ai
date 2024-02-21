@@ -312,6 +312,20 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
     scaled by hyperparameters
 - cites battle simulation as the bottleneck
 
+## Pokemon Trainer AI
+
+- Generation 1 3v3 Lv50
+- [custom engine](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/classes.py#L462)
+  - not optimized for AI - also features UI elements
+  - quirks like Gen 2+ freeze mechanics and ignores accuracy but includes random factor in damage
+- evaluating 3 different models
+  - [rule based expert
+    system](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RBES.png)
+    [(code)](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/InferenceEngine.py)
+  - [decision tree](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/DT.png)
+    [(code)](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/pokemon_DT_solution.ipynb)
+  - [RL Q-Learning](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RL.png)
+    [(code)](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RL_train.py)
 
 ## Pokémon Simulator Environment
 
