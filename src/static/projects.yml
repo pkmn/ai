@@ -523,6 +523,41 @@
   release:
     name: "0.8.0"
     url: https://github.com/hsahovic/poke-env/releases/tag/0.8.0
+  description: |
+    The premier Python reinforcement learning framework for competitive Pokémon AIs, poke-env
+    supports both singles & doubles battles and random & non-random Generation IV-IX formats.
+    [Documentation](https://poke-env.readthedocs.io/en/stable/index.html) and
+    [examples](https://github.com/hsahovic/poke-env/tree/46fa2b01/examples) help make it easy for
+    beginners to get started, though poke-env's fully-featured [client
+    representation](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/environment) makes
+    it valuable to any Python project.
+
+    poke-env doesn't embed Pokémon Showdown so can't easily perform simulations (or leverage the
+    simulator for damage calculations), but handles connecting to a local Pokémon Showdown instance
+    and includes [data](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/data/static)
+    [extracted](https://github.com/hsahovic/poke-env/tree/46fa2b01/scripts) from the simulator as
+    well as [team parsing and
+    packing](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/teambuilder/teambuilder.py)
+    logic to  provide the foundation most agents need.
+
+    Beyond this, poke-env also offers support for training agents
+    [concurrently](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/concurrency.py)
+    and [utilities for evaluating agent
+    performance](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/utils.py)
+    (_e.g._, cross evaluation). While [self-play support is still
+    experimental](https://github.com/hsahovic/poke-env/blob/46fa2b01/examples/experimental-self-play.py),
+    poke-env provides a
+    [`MaxBasePowerPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L11)
+    and
+    [`SimpleHeuristicsPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L19)
+    (both simplified versions of an actual [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)) for
+    training. Finally, poke-env contains an [Open AI Gym](https://github.com/openai/gym)
+    [environment
+    implementation](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/openai_api.py)
+    and
+    [helpers](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106)
+    including a [reward
+    helper](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106).
 - name: Simplified Pokemon Environment
   active: [2019, 2020] # October 31
   paper: Simoes:2021

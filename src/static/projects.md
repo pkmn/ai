@@ -227,14 +227,14 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
   [documentation](https://poke-env.readthedocs.io/en/stable/index.html) and
   [examples](https://github.com/hsahovic/poke-env/tree/46fa2b01/examples)
 - supports both singles & doubles battles and random & non-random battles
-- provides [team parsing and
-  packing](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/teambuilder/teambuilder.py)
-  logic
+- environment is [client
+  representation](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/environment)
 - doesn't embed Pokémon Showdown so can't easily perform simulations, simply a client
 - [data](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/data/static)
   [extracted](https://github.com/hsahovic/poke-env/tree/46fa2b01/scripts) from Pokémon Showdown
-- environment is [client
-  representation](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/environment)
+- provides [team parsing and
+  packing](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/teambuilder/teambuilder.py)
+  logic
 - main features are training agents
   [concurrently](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/concurrency.py) and
   [utilities for evaluating agent
