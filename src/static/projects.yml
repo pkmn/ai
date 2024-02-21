@@ -416,6 +416,15 @@
 - identifier: Ihara, Imai, Oyama, Kurihara
   active: [2018, 2018]
   paper: Ihara:2018
+  description: |
+    Ihara _et al._ compared information set MCTS (ISMCTS) to determinized conventional MCTS in the
+    Generation VI Pokémon BSS format. Using a custom simulator and a fixed pool of six Pokémon
+    combined with a client representation that leveraged usage statistics from [Pokémon Global
+    Link](https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_Global_Link) and heuristics fill in
+    unknown information for an opponent's team, Ihara _et al._ found that ISMCTS was superior to
+    determinized MCTS when the number of iterations were fixed. Both approaches were significantly
+    weaker than agents leveraging MCTS with perfect information which were used as a control, though
+    the gap decreased in further experiments where the battle rules were simplified.
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:

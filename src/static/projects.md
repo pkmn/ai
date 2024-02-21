@@ -234,7 +234,7 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
 
 ## _Kalose, Kaya, Kim_
 
-- Generation I Challenge Cup
+- Generation 1 Challenge Cup
 - custom determinstic simulator
 - Q-learning trained with self-play
   - feature vector just active player and opponents types and "HP buckets" (10
@@ -247,9 +247,26 @@ TODO https://github.com/select766/pokeai/blob/f5b241de
   lower than the 90% achieved by minimax
 - future work suggestions include eligibility traces and larger feature vector
 
+## _Ihara, Imai, Oyama, Kurihara_
+
+- Generation 6 Pokémon BSS format
+- combined usage statistics from [Pokémon Global
+  Link](https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_Global_Link) and heuristics fill in
+  missing information
+- ISMCTS
+  - single observer (treats unobservable actions as observable), single observer w/ partially
+    observable moves (assumes opponent chooses their own actions randomly), multiple observer
+    (separate tree per player)
+  - modification to UCB `n` required to differentiate between total number of trials vs. total
+    number of times a node was available in an information set
+- compared to "cheating" (perfect-information) MCTS, a cheating ensemble variant, and determinized
+  MCTS with fixed the number of iterations
+    - used a fixed pool of 6 Pokémon = reduced conmeta
+    - potentially undervalues determinized MCTS because ISMCTS takes more resources
+
 ## _Tse_
 
-- uses poke-env, targets Generation VIII VGC
+- uses poke-env, targets Generation 7 VGC
 - trained on 700k + 30k Pokémon Showdown battle logs acquired via data grant from top 20% of players
   to learn embedding for battle states (supervised learning)
   - used categorical encodings for embedding instead of one-hot key to shrink size, still had 4186
