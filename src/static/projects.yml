@@ -434,6 +434,29 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    Inspired by [`Synedh/showdown-battle-bot`](#Synedh/showdown-battle-bot), the
+    `hsahovic/reinforcement-learning-pokemon-bot` is the precursor to [poke-env](#poke-env). Perhaps
+    most notable as the
+    [origin](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/tree/25a04789/showdown-improvements)
+    of various patches to Pokémon Showdown that were eventually
+    [upstreamed](https://github.com/smogon/pokemon-showdown/pull/7618) Pokémon Showdown to make it
+    more suitable for reinforcement learning training, the project uses [Keras](https://keras.io/)
+    and [Tensorflow](https://www.tensorflow.org/) to experiment with reinforcement learning
+    approaches. The project features a [client representation](
+    https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py)
+    that is used to produce a [description of the
+    state](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py#L445)
+    to be fed into models and contains support for
+    [self-play](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789master/src/players/base_classes/model_manager.py#L269)
+    and concurrent training. The project contains two models built with a fully-connected
+    multi-layer perceptron architecture - an incomplete [larger
+    model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/fully_connected_random_model.py)
+    that utilizes the full feature set and a functional model
+    [model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py)
+    that uses the Actor-Critic method with a pruned number of features. The latter agent's
+    [reward](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py#L238C8-L238C63)
+    depends on the difference in respective total party hit points.
 - name: Showdown AI Bot
   active: [2019, 2019] # March 8
   license: MIT

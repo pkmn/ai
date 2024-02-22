@@ -255,9 +255,30 @@ TODO f5b241de
 
 ## `hsahovic/reinforcement-learning-pokemon-bot`
 
-TODO 25a04789
-
-- inspired by [`Synedh/showdown-battle-bot`](#Synedh/showdown-battle-bot`), inspired [poke-env](#poke-env)
+- Generation 7 Random Battle
+- inspired by [`Synedh/showdown-battle-bot`](#Synedh/showdown-battle-bot`), precursor to
+  [poke-env](#poke-env)
+- [origin](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/tree/25a04789/showdown-improvements)
+  of [various patches](https://github.com/smogon/pokemon-showdown/pull/7618) to Pokémon Showdown to
+  make it more suitable for RL
+- Keras / Tensorflow
+- [client representation](
+https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py)
+used to produce a [description of the
+state](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py#L445)
+to be fed into models
+- features support for
+  [self-play](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789master/src/players/base_classes/model_manager.py#L269)
+  and concurrent training
+- two fully-connected MLPs:
+  - incomplete [larger
+    model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/fully_connected_random_model.py)
+    that utilizes the full feature set
+  - a [functional
+    model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py)
+    that uses the Actor-Critic method with a pruned number of features
+    - [reward](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py#L238C8-L238C63)
+      depends on difference in respective total party hit points
 
 ## Showdown AI Bot
 
