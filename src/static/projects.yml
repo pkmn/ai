@@ -784,7 +784,7 @@
     battling agent, the project features an elaborate [rules-based heuristic
     agent](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts)
     that can serve as a training baseline for other agents in singles formats. Supporting all
-    generations, the `HeuristicPlayerAI` goes beyond the
+    generations, the `HeuristicPlayerAI`'s extends past the
     [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer), considering elements beyond just the potential
     damage its moves may do. The agent evaluates
     [matchups](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L263-L287)
