@@ -792,8 +792,7 @@
     out](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L373-L400),
     and contains handwritten cases to handle specific game mechanics or to be able to use moves
     which indirectly benefit the player.
-- identifier: Zhang, Parashar, Saha
-  paper: Zhang:2024
+- paper: Zhang:2024
   active: [2023, 2023] # November 29
   source: https://github.com/alexzhang13/reward-shaping-rl
   engine:

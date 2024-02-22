@@ -56,7 +56,7 @@ export function page(dir: string) {
 
   const projects: Project[] = yaml.parse(fs.readFileSync(path.join(dir, 'projects.yml'), 'utf8'));
   const score = (p: Project) => {
-    const id = p.name ?? p.identifier ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
+    const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
       ? p.source.slice(19)
       : p.identifier!);
     // TODO: sort by live ranking > static ranking > date
@@ -96,7 +96,7 @@ export function page(dir: string) {
       ? project.source.slice(19)
       : undefined;
     const id =
-      (project.name ?? project.paper ?? project.identifier ?? identifier)!.replaceAll(' ', '');
+      (project.name ?? project.paper ?? identifier ?? project.identifier)!.replaceAll(' ', '');
     buf.push(`<section id="${id}" class="project"${inactive ? '' : ' data-active="true"'}>`);
     const active = Array.isArray(project.active)
       ? (project.active[0] === project.active[1]
