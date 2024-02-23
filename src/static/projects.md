@@ -244,13 +244,13 @@ TODO f5b241de
   only terminal states were rewarded
 - trained against $`RandomPlayer(\widetilde{100\%})`, $`RandomPlayer(0%)` and a depth 1 [minimax
   agent](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/agents/minimax.py) with alpha-beta
-  pruning with an evaluation function which compares the difference in the sum HP percentages for
+  pruning with an evaluation function which compares the difference in the sum of HP percentages for
   the full team of each side
 - agent learned a policy which preferentially chose the move in the 4th moveslot
   - resulted in a winning record compared to the random agents but almost always lost vs. minimax.
 - largely bottlenecked by computational resources, in particular repeatedly
   [cloning](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/clone.js) the
-  simualator state
+  simulator state
 - ideas for future work include self-play and improved visualization to enhance tuning and debugging
 
 ## `hsahovic/reinforcement-learning-pokemon-bot`

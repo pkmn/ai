@@ -429,6 +429,39 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    Chen _et al._ trained an agent using proximal policy optimization (PPO), anticipating an
+    approach using Q-learning would struggle to learn a value function for a game as complicated as
+    Pokémon. While their bot targeted the Generation I Random Battle format the agent was
+    generalized and could be trained on arbitrary formats.
+
+    The agent utilized [Tensorflow](https://www.tensorflow.org/), the [PPO implementation from
+    OpenAI](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/ppo/ppo.py) and a custom [OpenAI
+    Gym](https://github.com/openai/gym) environment that works with a modified Pokémon Showdown
+    server. The server was relaxed to provide additional information about
+    [features](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/getFeatures.js)
+    and to [determine valid
+    actions](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/getValidActions.js#L19)
+    ahead of time which are used to mask off the output from the RL network to force the logits of
+    invalid actions to negative infinity before applying the softmax.
+
+    While Chen _et al._ discussed using the `node2vec` algorithm to [create embeddings for various
+    species](https://github.com/kvchen/showdown-rl-notebooks/blob/85c266d4/embeddings/Pokemon%20Embeddings%20Using%20Node2Vec.ipynb),
+    it seems as though a basic one-hot encoding for each Pokémon's attributes was [ultimately
+    used](https://github.com/kvchen/gym-showdown/blob/c5cdcf84/gym_showdown/envs/showdown_env.py#LL141-L179).
+    The model's network architecture featured 3 fully-connected layers each with 512 units and a
+    ReLU activation with only terminal states being rewarded. The agent trained against
+    $`RandomPlayer(\widetilde{100\%})`, $`RandomPlayer(0\%)`, and a depth 1 [minimax
+    agent](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/agents/minimax.py) with alpha-beta
+    pruning with an evaluation function that compared the difference in the sum of HP percentages
+    for the full team of each side.
+
+    The agent eventually learned a policy which preferentially chose the move in the 4th moveslot,
+    calling into question the results. Chen _et al._ reveal they largely bottlenecked by
+    computational resources, in particular repeatedly
+    [cloning](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/clone.js) the
+    simulator state, and their ideas for future work included self-play and improved visualization
+    to enhance tuning and debugging.
 - identifier: Ihara, Imai, Oyama & Kurihara
   active: [2018, 2018]
   paper: Ihara:2018
