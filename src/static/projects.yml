@@ -342,6 +342,10 @@
   active: [2018, 2018]
   paper: Rill-García:2018
   language: Python
+- active: [2018, 2018] # Feb 9
+  source: https://github.com/DanielAlcocerSoto/Pokemon-Python
+  engine: Custom
+  language: Python
 - name: PokeML
   active: [2018, 2019] # July 13
   license: MIT
@@ -418,7 +422,7 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- active: [2018, 2018]
+- active: [2018, 2018] # December 3
   paper: Chen:2018
   license: MIT
   source: https://github.com/kvchen/showdown-rl
@@ -651,6 +655,13 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- active: [2020, 2022] # May 16
+  paper: Yu:2020
+  source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master
+  engine:
+    - name: Pokemon-Python
+      url: https://github.com/DanielAlcocerSoto/Pokemon-Python
+  language: Python
 - active: [2020, 2020] # June 13
   source: https://github.com/anthonykrivonos/pokemon-ai
   engine: Custom
@@ -677,12 +688,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- active: [2021, 2022] # June 19
-  source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master
-  engine:
-    - name: Pokemon-Python
-      url: https://github.com/DanielAlcocerSoto/Pokemon-Python
-  language: Python
 - active: [2021, 2021] # October 15
   source: https://github.com/leolellisr/poke_RL
   engine:
