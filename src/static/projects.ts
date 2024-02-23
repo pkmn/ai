@@ -36,8 +36,8 @@ const RANKING = [
   'alphaPoke', // "87-88% vs. RandomPlayer = ~1150 Elo"
   'Showdown AI Competition', // 85% vs. RandomPlayer = *equivalent* to MaxDamage
   'kvchen/showdown-rl', //  ~58% vs. RP(0), ~85% vs. RP(~100%), 10% vs. greedy
-  'Zhang, Parashar, Saha', // 95%+ vs. RP(~100%), 50-55% vs. RP(0),  <10% vs. MaxAttack
-  'Kalose, Kaya, Kim', // ~60-65% vs. RandomPlayer (Gen 1)
+  'alexzhang13/reward-shaping-rl', // 95%+ vs. RP(~100%), 50-55% vs. RP(0), <10% vs. MaxAttack
+  'Kalose, Kaya & Kim', // ~60-65% vs. RandomPlayer (Gen 1)
 ];
 
 // https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string

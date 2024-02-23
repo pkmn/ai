@@ -274,6 +274,9 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- identifier: Xu & Verbugge
+  active: [2016, 2016]
+  paper: Xu:2016
 - name: Showdown AI competition
   framework: true
   active: [2017, 2018] # February 28
@@ -326,6 +329,19 @@
     opponent's [known
     moves](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L123) if enough were
     known otherwise defaulted to random move pool for the species.
+- name: SutadasutoIA
+  active: [2017, 2018]
+  paper: Rill-García:2017
+  source: https://github.com/Sutadasuto/SutadasutoIA
+  license: MIT
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- identifier: Rill-García
+  active: [2018, 2018]
+  paper: Rill-García:2018
+  language: Python
 - name: PokeML
   active: [2018, 2019] # July 13
   license: MIT
@@ -375,7 +391,7 @@
     conmeta](https://github.com/pokeml/pokemon-agents/src/agents/test-agent.js#L11-36) to make
     [encoding](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) the game
     states into fixed-size numeric vectors more tractable.
-- identifier: Kalose, Kaya, Kim
+- identifier: Kalose, Kaya & Kim
   active: [2018, 2018]
   paper: Kalose:2018
   engine: Custom
@@ -413,7 +429,7 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- identifier: Ihara, Imai, Oyama, Kurihara
+- identifier: Ihara, Imai, Oyama & Kurihara
   active: [2018, 2018]
   paper: Ihara:2018
   description: |
