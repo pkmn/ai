@@ -412,7 +412,7 @@
   license: MIT
   source: https://github.com/taylorhansen/pokemonshowdown-ai
   engine:
-    - name: pokemon-showdown
+    - name: '@pkmn/sim'
       url: https://github.com/pkmn/ps/tree/main/sim
   language: [Python, TypeScript]
   platform:
@@ -799,9 +799,9 @@
   active: 2023 # October 2
   source: https://github.com/spktrm/pokesim
   engine:
-    - name: pokemon-showdown
+    - name: '@pkmn/sim'
       url: https://github.com/pkmn/ps/tree/main/sim
-    - name: pokemon-showdown-client
+    - name: '@pkmn/client'
       url: https://github.com/pkmn/ps/tree/main/client
   language: Python
   platform:
