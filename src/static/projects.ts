@@ -47,20 +47,15 @@ const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[
 export function page(dir: string) {
   const buf: string[] = [];
 
-  const file = {
-    bib: path.join(dir, 'projects.bib'),
-    ts: path.join(dir, 'projects.ts'),
-    dj: path.join(dir, 'projects.dj'),
-    yml: path.join(dir, 'projects.yml'),
-  };
+  const file = (ext: string) => path.join(dir, `projects.${ext}`);
 
-  const bib = bibtex.parse(fs.readFileSync(file.bib, 'utf8'), {sentenceCase: false});
+  const bib = bibtex.parse(fs.readFileSync(file('bib'), 'utf8'), {sentenceCase: false});
   if (bib.errors.length) throw new Error(`Error parsing projects.bib: ${bib.errors.join(', ')}`);
 
   const bibliography: {[key: string]: bibtex.Entry} = {};
   for (const entry of bib.entries) bibliography[entry.key] = entry;
 
-  const projects: Project[] = yaml.parse(fs.readFileSync(file.yml, 'utf8'));
+  const projects: Project[] = yaml.parse(fs.readFileSync(file('yml'), 'utf8'));
   const score = (p: Project) => {
     const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
       ? p.source.slice(19)
@@ -71,7 +66,7 @@ export function page(dir: string) {
   };
   projects.sort((a, b) => score(a) - score(b));
 
-  const filler = fs.readFileSync(file.dj, 'utf8');
+  const filler = fs.readFileSync(file('dj'), 'utf8');
   const split = filler.replaceAll('\n', '').split('.');
 
   const markdown = html.render(filler);
@@ -162,8 +157,8 @@ export function page(dir: string) {
   }
 
   let latest = new Date(0);
-  for (const extension in file) {
-    const date = fs.statSync(file[extension as keyof typeof file]).mtime;
+  for (const extension of ['bib', 'dj', 'ts', 'yml']) {
+    const date = fs.statSync(file(extension)).mtime;
     if (latest < date) latest = date;
   }
   buf.push(cite('Projects', latest));
