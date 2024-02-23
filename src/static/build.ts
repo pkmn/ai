@@ -149,7 +149,7 @@ const build = async (rebuild?: boolean) => {
       content: `${site.html.render(fs.read(file))}
         <section id="citation">
           ${cite(`Concepts — ${title}`, fs.stat(file).mtime, `concepts/${page}`)}
-        </section>}`,
+        </section>`,
     });
   }
 
