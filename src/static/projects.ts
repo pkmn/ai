@@ -166,7 +166,7 @@ export function page(dir: string) {
     const date = fs.statSync(file[extension as keyof typeof file]).mtime;
     if (latest < date) latest = date;
   }
-  buf.push(`<section id="citation">${cite('Projects', latest)}</section>`);
+  buf.push(cite('Projects', latest));
 
   return {
     path: '/projects/',

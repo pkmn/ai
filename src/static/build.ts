@@ -29,7 +29,7 @@ export const renderer = new site.page.Renderer({
 export const cite = (title: string, date: Date, p?: string) => {
   const t = title.slice(title.lastIndexOf(' ') + 1).toLowerCase();
   const year = date.getFullYear();
-  return `<figure class="code"><code><pre>
+  return `<section id="citation"><figure class="code"><code><pre>
 @online{pkmn${year}${t},
   title  = "Competitive Pokémon Artificial Intelligence ${title}",
   author = "pkmn.ai",
@@ -37,7 +37,7 @@ export const cite = (title: string, date: Date, p?: string) => {
   year   = "${year}",
   url    = "https://pkmn.ai/${p ?? t}/"
 }
-</pre></code></figure>`;
+</pre></code></figure></section>`;
 };
 
 export const header = (title: string, wip = false) =>
@@ -92,9 +92,7 @@ const build = async (rebuild?: boolean) => {
   for (const title of ['Background', 'Rules']) {
     const page = title.toLowerCase();
     const file = path.join(STATIC, `${page}.dj`);
-    const citation = title === 'Background'
-      ? `<section id="citation">${cite(title, fs.stat(file).mtime)}</section>`
-      : '';
+    const citation = title === 'Background' ? cite(title, fs.stat(file).mtime) : '';
     renderer.create(page, {
       path: `/${page}/`,
       style,
@@ -141,15 +139,13 @@ const build = async (rebuild?: boolean) => {
     expected.add(page);
     const wip = title !== 'Variants';
     const file = path.join(STATIC, 'concepts', `${page}.dj`);
+    const citation = cite(`Concepts — ${title}`, fs.stat(file).mtime, `concepts/${page}`);
     renderer.create(`concepts/${page}`, {
       path: `/concepts/${page}/`,
       title: `Concepts — ${title} | pkmn.ai`,
       style: wip ? style : '',
       header: header(title, wip),
-      content: `${site.html.render(fs.read(file))}
-        <section id="citation">
-          ${cite(`Concepts — ${title}`, fs.stat(file).mtime, `concepts/${page}`)}
-        </section>`,
+      content: `${site.html.render(fs.read(file))}${citation}`,
     });
   }
 
