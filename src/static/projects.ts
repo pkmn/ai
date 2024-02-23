@@ -5,7 +5,7 @@ import * as bibtex from '@retorquere/bibtex-parser';
 import {html} from 'site';
 import * as yaml from 'yaml';
 
-import {header, style} from './build';
+import {cite, header, style} from './build';
 
 interface Project {
   name?: string;
@@ -47,14 +47,20 @@ const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[
 export function page(dir: string) {
   const buf: string[] = [];
 
-  const file = fs.readFileSync(path.join(dir, 'projects.bib'), 'utf8');
-  const bib = bibtex.parse(file, {sentenceCase: false});
+  const file = {
+    bib: path.join(dir, 'projects.bib'),
+    ts: path.join(dir, 'projects.ts'),
+    dj: path.join(dir, 'projects.dj'),
+    yml: path.join(dir, 'projects.yml'),
+  };
+
+  const bib = bibtex.parse(fs.readFileSync(file.bib, 'utf8'), {sentenceCase: false});
   if (bib.errors.length) throw new Error(`Error parsing projects.bib: ${bib.errors.join(', ')}`);
 
   const bibliography: {[key: string]: bibtex.Entry} = {};
   for (const entry of bib.entries) bibliography[entry.key] = entry;
 
-  const projects: Project[] = yaml.parse(fs.readFileSync(path.join(dir, 'projects.yml'), 'utf8'));
+  const projects: Project[] = yaml.parse(fs.readFileSync(file.yml, 'utf8'));
   const score = (p: Project) => {
     const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
       ? p.source.slice(19)
@@ -65,7 +71,7 @@ export function page(dir: string) {
   };
   projects.sort((a, b) => score(a) - score(b));
 
-  const filler = fs.readFileSync(path.join(dir, 'projects.dj'), 'utf8');
+  const filler = fs.readFileSync(file.dj, 'utf8');
   const split = filler.replaceAll('\n', '').split('.');
 
   const markdown = html.render(filler);
@@ -154,6 +160,13 @@ export function page(dir: string) {
     buf.push(`<div class="description"><p>${description}</p></div>`);
     buf.push('</section>');
   }
+
+  let latest = new Date(0);
+  for (const extension in file) {
+    const date = fs.statSync(file[extension as keyof typeof file]).mtime;
+    if (latest < date) latest = date;
+  }
+  buf.push(`<section id="citation">${cite('Projects', latest)}</section>`);
 
   return {
     path: '/projects/',

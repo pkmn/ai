@@ -26,6 +26,20 @@ export const renderer = new site.page.Renderer({
   stylesheet: path.join(STATIC, 'index.css'),
 });
 
+export const cite = (title: string, date: Date, p?: string) => {
+  const t = title.slice(title.lastIndexOf(' ') + 1).toLowerCase();
+  const year = date.getFullYear();
+  return `<figure class="code"><code><pre>
+@online{pkmn${year}${t},
+  title  = "Competitive Pokémon Artificial Intelligence ${title}",
+  author = "pkmn.ai",
+  month  = "${date.toLocaleString('default', {month: 'long'})}",
+  year   = "${year}",
+  url    = "https://pkmn.ai/${p ?? t}/"
+}
+</pre></code></figure>`;
+};
+
 export const header = (title: string, wip = false) =>
   `${wip ? '<div id="topbar">Under Construction: planned completion date April 2024</div>' : ''}
   <h1><a href="/" class="subtle">pkmn.ai</a></h1>
@@ -77,12 +91,16 @@ const build = async (rebuild?: boolean) => {
 
   for (const title of ['Background', 'Rules']) {
     const page = title.toLowerCase();
+    const file = path.join(STATIC, `${page}.dj`);
+    const citation = title === 'Background'
+      ? `<section id="citation">${cite(title, fs.stat(file).mtime)}</section>`
+      : '';
     renderer.create(page, {
       path: `/${page}/`,
       style,
       title: `${title} | pkmn.ai`,
       header: header(title, true),
-      content: `${site.html.render(fs.read(path.join(STATIC, `${page}.dj`)))}`,
+      content: `${site.html.render(fs.read(file))}${citation}`,
     });
   }
 
@@ -122,12 +140,16 @@ const build = async (rebuild?: boolean) => {
     const page = title.toLowerCase();
     expected.add(page);
     const wip = title !== 'Variants';
+    const file = path.join(STATIC, 'concepts', `${page}.dj`);
     renderer.create(`concepts/${page}`, {
       path: `/concepts/${page}/`,
       title: `Concepts — ${title} | pkmn.ai`,
       style: wip ? style : '',
       header: header(title, wip),
-      content: site.html.render(fs.read(path.join(STATIC, 'concepts', `${page}.dj`))),
+      content: `${site.html.render(fs.read(file))}
+        <section id="citation">
+          ${cite(`Concepts — ${title}`, fs.stat(file).mtime, `concepts/${page}`)}
+        </section>}`,
     });
   }
 

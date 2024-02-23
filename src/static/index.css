@@ -9,6 +9,10 @@
   background-color: black;
 }
 
+#citation {
+  padding: 2rem 0;
+}
+
 nav > ul, .column > ul {
   padding: 0;
   list-style: none;
