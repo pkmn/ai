@@ -31,8 +31,8 @@
     a simplified variant of Pokémon that hoped to serve as the testbed for AI development. Shanai
     only supported this restricted Generation V variant and its [core
     algorithm](https://github.com/nixeagle/shanai/blob/20f11841/PO/Client/client.lisp#L370) can be
-    recognized as an extension of the rudimentary [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
-    benchmark. The project also contains the [beginnings of a reverse damage
+    recognized as an extension of the rudimentary $`MaxDamagePlayer` benchmark. The project also
+    contains the [beginnings of a reverse damage
     calculator](https://github.com/nixeagle/shanai/blob/20f11841/Pokemon/formulas.lisp), though
     ultimately the project was abandoned before this feature was incorporated.
 - active: [2014, 2016] # October 20
@@ -179,9 +179,9 @@
     tournaments](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/roundrobin.js)
     against the various (mostly rules-based) [sample
     bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots) it bundled, including
-    [$`RandomPlayer`](/glossary#RandomPlayer)
+    $`RandomPlayer`
     ("[randumb](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/randumb/index.js)")
-    and [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
+    and $`MaxDamagePlayer`
     ("[stabby](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/stabby/stabby.js)")
     implementations. Leftovers Again also included [replay
     scraping](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-saver.js)
@@ -388,11 +388,11 @@
     and whose client representations tracked state using an [extraction from its
     client](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/tracking). PokeML's agents included:
 
-    - A basic [$`RandomPlayer`](/glossary#RandomPlayer)
+    - A basic $`RandomPlayer`
     ([`RandomAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js))
     and a $`RandomPlayer(switch=\widetilde{0\%}, mega=100\%)` implementation
     ([`SemiRandomAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js)).
-    - The classic  [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
+    - The classic  $`MaxDamagePlayer`
     ([`MaxDamageAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-damage-agent.js))
     and a more simplified version that only considered a move's base power
     ([`MaxBasePowerAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-base-power-agent.js)).
@@ -428,9 +428,9 @@
     to performance concerns. In addition to the large terminal reward based on the battle's final
     result, smaller intermediate rewards were provided to the agent based on the remaining HP for
     both sides. A softmax exploration strategy was seen to outperform an ε-greedy one versus
-    [$`RandomPlayer`](/glossary#RandomPlayer), though overall playing strength was poor compared to
-    a benchmark minimax solution. Suggestions for future work included introducing eligibility
-    traces and expanding the size of the feature vector.
+    $`RandomPlayer`, though overall playing strength was poor compared to a benchmark minimax
+    solution. Suggestions for future work included introducing eligibility traces and expanding the
+    size of the feature vector.
 - active: 2018 # August 21
   license: MIT
   source: https://github.com/taylorhansen/pokemonshowdown-ai
@@ -596,12 +596,12 @@
   paper: Norström:2020
   language: Python
   description: |
-    Norström compared the [$`RandomPlayer`](/glossary#RandomPlayer), learned linear combinations of
-    features, and Monte Carlo tree search across various scenarios in Generation I including a
-    limited version of the OU format implemented with a custom game engine. While MCTS proved to be
-    the strongest in relative terms across the scenarios tested, strength in absolute terms was
-    unimpressive. Combined approaches and increased engine and training performance were cited as
-    the most promising avenues for improvement for future work.
+    Norström compared the $`RandomPlayer`, learned linear combinations of features, and Monte Carlo
+    tree search across various scenarios in Generation I including a limited version of the OU
+    format implemented with a custom game engine. While MCTS proved to be the strongest in relative
+    terms across the scenarios tested, strength in absolute terms was unimpressive. Combined
+    approaches and increased engine and training performance were cited as the most promising
+    avenues for improvement for future work.
 - name: poke-env
   framework: true
   site: https://poke-env.readthedocs.io/en/latest/
@@ -645,7 +645,7 @@
     [`MaxBasePowerPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L11)
     and
     [`SimpleHeuristicsPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L19)
-    (both simplified versions of an actual [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)) for
+    (both simplified versions of an actual $`MaxDamagePlayer`) for
     training. Finally, poke-env contains an [OpenAI Gym](https://github.com/openai/gym)
     [environment
     implementation](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/openai_api.py)
@@ -742,7 +742,7 @@
     Youngster Joey targeted a perfect information variant of Generation I with a greedy policy that
     determines its action by maximizing a set of hand-crafted
     [heuristics](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310). A
-    slightly more sophisticated [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer), Younger Joey
+    slightly more sophisticated $`MaxDamagePlayer`, Youngster Joey
     deliberately eschewed minimax and expectiminimax due to concerns over the game tree size even
     after pruning and the algorithms not being able to play optimally against opponents who were
     also expected to play suboptimally. The addition of some form of lookahead was considered for
@@ -779,9 +779,8 @@
       url: https://github.com/smogon/pokemon-showdown
   description: |
     Tse built a Generation VIII VGC agent that leveraged both supervised learning and deep
-    Q-learning with [poke-env](#poke-env) to achieve success against
-    [$`RandomPlayer`](/glossary#RandomPlayer) and [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer)
-    baselines.
+    Q-learning with [poke-env](#poke-env) to achieve success against $`RandomPlayer` and
+    $`MaxDamagePlayer` baselines.
 
     Tse used a dataset of 700,000 Pokémon Showdown server battle logs gathered from the top 20% of
     ranked VGC players on the site to train a 6-layer neural network with supervised learning. The
@@ -887,9 +886,8 @@
     battling agent, the project features an elaborate [rules-based heuristic
     agent](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts)
     that can serve as a training baseline for other agents in singles formats. Supporting all
-    generations, the `HeuristicPlayerAI`'s extends past the
-    [$`MaxDamagePlayer`](/glossary#MaxDamagePlayer), considering elements beyond just the potential
-    damage its moves may do. The agent evaluates
+    generations, the `HeuristicPlayerAI`'s extends past the $`MaxDamagePlayer`, considering elements
+    beyond just the potential damage its moves may do. The agent evaluates
     [matchups](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L263-L287)
     based on type advantage, speed, and remaining HP percentage, considers [switching
     out](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L373-L400),
