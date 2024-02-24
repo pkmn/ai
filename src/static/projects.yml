@@ -458,7 +458,7 @@
     Pokémon. While their bot targeted the Generation I Random Battle format the agent was
     generalized and could be trained on arbitrary formats.
 
-    The agent utilized [Tensorflow](https://www.tensorflow.org/), the [PPO implementation from
+    The agent utilized Tensorfloww, the [PPO implementation from
     OpenAI](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/ppo/ppo.py) and a custom [OpenAI
     Gym](https://github.com/openai/gym) environment that works with a modified Pokémon Showdown
     server. The server was relaxed to provide additional information about
@@ -513,9 +513,9 @@
     [origin](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/tree/25a04789/showdown-improvements)
     of various patches to Pokémon Showdown that were eventually
     [upstreamed](https://github.com/smogon/pokemon-showdown/pull/7618) Pokémon Showdown to make it
-    more suitable for reinforcement learning training, the project uses [Keras](https://keras.io/)
-    and [Tensorflow](https://www.tensorflow.org/) to experiment with reinforcement learning
-    approaches. The project features a [client representation](
+    more suitable for reinforcement learning training, the project uses Keras and Tensorflow to
+    experiment with reinforcement learning approaches. The project features a [client
+    representation](
     https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py)
     that is used to produce a [description of the
     state](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py#L445)
