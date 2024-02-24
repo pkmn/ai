@@ -274,9 +274,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- identifier: Xu & Verbugge
-  active: [2016, 2016]
-  paper: Xu:2016
 - name: Showdown AI competition
   framework: true
   active: [2017, 2018] # February 28
