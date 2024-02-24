@@ -241,7 +241,6 @@ TODO f5b241de
     - [converts](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) game
       states to fixed-size numeric vectors.
 
-
 ## `kvchen/showdown-rl`
 
 - agent using proximal policy optimization (PPO) which was expected to be superior to Q-learning for
@@ -350,7 +349,10 @@ TODO aab68037
 
 ## `blue-sky-sea/Pokemon-MCTS-AI-Master`
 
-TODO 4fb425e1
+- [UCT](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/AI/mcts.py) for Gen 4
+  Singles
+  ([adapted](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/Game/engine/single_battle.py)
+  from Pokemon-Python)
 
 ## Youngster Joey
 
