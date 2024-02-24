@@ -6,11 +6,14 @@ options
 - pkmn/engine
 - aed3/poke-sim
 - pokemon-shwodown
+- hiimvincent/poke-battle-sim
 - custom
 - ...
 
 tradeoffs/features
 
+- general purpose engine vs. ai engine
+- ui engine (and text) vs. standalone
 - completeness
 - correctness
 - "transformations" / "reversible functors" / "instructions" / `-Dpatch` delta/diff
