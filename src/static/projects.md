@@ -182,6 +182,30 @@ TODO f5b241de
   modifiers](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L777-L794) to the
   minimax result to better account for game mechanics
 
+## `DanielAlcocerSoto/Pokemon-Python`
+
+- [custom engine](https://github.com/DanielAlcocerSoto/Pokemon-Python/tree/aa9defc6/Game/engine) and
+  accompanying [`pygame`](www.pygame.org)-based
+  [UI](https://github.com/DanielAlcocerSoto/Pokemon-Python/tree/aa9defc6/Game/display) supporting
+  Generation 4 Double Battles
+  - engine is simplified, lacking support for switching, effects, or move accuracy
+- [RL model](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py) built
+  with Keras and Tensorflow
+- Q-learning to train a small neural network on a fairly [minimal
+  embedding](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/encoder.py#L48)
+  - architecture supports a MLP [layers of 24, 24, 8 with ReLU activation between layers and linear
+    output](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Configuration/RL_config.json#L6)
+  - trains against a [random
+    agent](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/run.py#L110-L113)
+    following [ε-greedy
+    policy](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/agent_to_train.py#L41)
+    using
+    [mini-batch](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py#L114-L134)
+    gradient descent
+  - [reward
+    function](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py#L80)
+    favors maximum damage
+
 ## PokeML
 
 - several Generation 7 example agents

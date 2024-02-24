@@ -343,6 +343,28 @@
   source: https://github.com/DanielAlcocerSoto/Pokemon-Python
   engine: Custom
   language: Python
+  description: |
+    `DanielAlcocerSoto/Pokemon-Python` experimented with a reinforcement learning
+    [model](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py)
+    written with Keras and Tensorflow as the opponent trainer featured in a [custom
+    engine](https://github.com/DanielAlcocerSoto/Pokemon-Python/tree/aa9defc6/Game/engine) and
+    accompanying [`pygame`](https://www.pygame.org)-based
+    [UI](https://github.com/DanielAlcocerSoto/Pokemon-Python/tree/aa9defc6/Game/display) supporting
+    Generation IV Double Battles. While this domain is quite ambitious, the engine was extremely
+    simple; lacking support for switching, effects, or move accuracy. A Q-learning approach was used
+    to train the agent's small neural network on a fairly [minimal
+    embedding](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/encoder.py#L48)
+    against a [random
+    agent](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/run.py#L110-L113)
+    following [ε-greedy
+    policy](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/agent_to_train.py#L41)
+    using
+    [mini-batch](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py#L114-L134)
+    gradient descent and a [reward function that favored maximum
+    damage](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py#L80).
+    The network's architecture was a straightforward multi-layer perceptron with [layers of 24, 24,
+    and 8 units with ReLU activation between layers and a linear
+    output](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Configuration/RL_config.json#L6).
 - name: PokeML
   active: [2018, 2019] # July 13
   license: MIT
