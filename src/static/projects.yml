@@ -934,6 +934,30 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    `alexzhang13/reward-shaping-rl` demonstrated the use of [large language models (LLMs) for reward
+    shaping](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/utils/reward.py),
+    offering three different methods for providing feedback:
+    [sequential](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L19-L83),
+    [tree-based](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L85-L210)
+    and [moving
+    target](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv_PPO.py#L155).
+    These methods were compared while training agents via proximal policy optimization ([PPO1 from
+    stable_baselines](https://stable-baselines.readthedocs.io/en/master/modules/ppo1.html)) and deep
+    Q-learning with experience replay (a
+    [handwritten](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/models/dqn.py)
+    sequential 512x512x256 network with ReLU activations between layers) and appeared to boost
+    sample efficiency. The model was trained on a [single Generation VIII Ubers
+    team](https://github.com/alexzhang13/reward-shaping-rl/tree/964ea1bc/data), allowing it to
+    ignore abilities and items and instead treat them as properties of the specific Pokémon. The
+    [input
+    embedding](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/pokegym.py#L84)
+    was limited due to resource constaints but included the active moves and (unboosted) stats, HP,
+    and status for both sides. Results indicated the final models were superior to
+    $`RandomPlayer(\widetilde{100\%})`, roughly on par with $`RandomPlayer(0\%)`, and significantly
+    worse than a [base-power
+    variant](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/max_damage.py#L8)
+    of $`MaxDamagePlayer`.
 - name: Battle Master
   active: 2023 # December 15
   license: MIT

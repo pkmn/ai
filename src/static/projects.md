@@ -473,4 +473,30 @@ TODO aab68037
 
 ## `alexzhang13/reward-shaping-rl`
 
-TODO 964ea1bc
+- Generation 8 Ubers, PyTorch and poke-env
+- [utilizes LLM for rewarding
+  shaping](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/utils/reward.py)
+  using 3 different methods: [sequential
+  feedback](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L19-L83),
+  [tree based
+  feedback](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L85-L210)
+  and [moving target
+  feedback](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv_PPO.py#L155)
+  to proximal policy optimization ([PPO1 from
+  stable_baselines](https://stable-baselines.readthedocs.io/en/master/modules/ppo1.html) and [deep
+  Q-learning with experience
+  replay](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/models/dqn.py)
+  - DQN is input, 512x512x256, output w/ ReLU activations
+- always uses the [same team](https://github.com/alexzhang13/reward-shaping-rl/tree/964ea1bc/data),
+  allows to ignore abilities and items because instead can simply be treated as properties of the
+  pokemon holding them
+- [embedding](
+  https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/pokegym.py#L84)
+  includes active moves and (unboosted) stats, HP and status for both sides
+  - contrained by resources otherwise would use larger input vector
+- 10k battles, experimented with changing the reward shaping function at different intervals over
+  the course of training
+- superior to $`RandomPlayer(\widetilde{100\%})`, roughly on par with $`RandomPlayer(0%)`,
+  significantly worse than [base-power
+  variant](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/max_damage.py#L8)
+  of $`MaxDamagePlayer`
