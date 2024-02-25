@@ -905,3 +905,16 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Battle Master
+  active: 2023 # December 15
+  license: MIT
+  source: https://github.com/SirSkaro/battle-master
+  engine:
+    - name: pmariglia/showdown
+      url: https://github.com/pmariglia/showdown
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
