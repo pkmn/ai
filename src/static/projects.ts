@@ -98,7 +98,7 @@ export function page(dir: string) {
       ? project.source.slice(19)
       : undefined;
     const id =
-      (project.name ?? project.paper ?? identifier ?? project.identifier)!.replaceAll(' ', '');
+      (project.name ?? identifier ?? project.paper ?? project.identifier)!.replaceAll(' ', '');
     buf.push(`<section id="${id}" class="project"${inactive ? '' : ' data-active="true"'}>`);
     const active = Array.isArray(project.active)
       ? (project.active[0] === project.active[1]
