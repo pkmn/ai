@@ -939,8 +939,19 @@
   license: MIT
   source: https://github.com/SirSkaro/battle-master
   engine:
-    - name: pmariglia/showdown
-      url: https://github.com/pmariglia/showdown
+    - name: poke-engine
+      url: https://github.com/SirSkaro/poke-engine
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: PokéLLMon
+  paper: Hu:2024
+  active: 2024
+  source: https://github.com/git-disl/PokeLLMon
+  engine:
     - name: poke-env
       url: https://github.com/hsahovic/poke-env
   language: Python
