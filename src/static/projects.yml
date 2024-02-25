@@ -335,10 +335,39 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    SutadasutoIA was a knowledge-based expert system designed to play a variant of Generation VI BSS
+    without status moves, EVs, or items. The agent was intended for repeated battles against the
+    same opponent akin to [Battle Maison](https://bulbapedia.bulbagarden.net/wiki/Battle_Maison) and
+    used a [hill-climbing
+    algorithm](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L298) to
+    optimize team selection from a [pool of
+    Pokémon](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/pool.txt) between battles.
+    Like [`vasumv/pokemon_ai`](#vasumv/pokemon_ai),  SutadasutoIA used a
+    [webdriver](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/webControl.py)
+    ([Selenium](https://www.selenium.dev/)) for play on Pokémon Showdown as opposed to communicating
+    directly via the [WebSocket](https://en.wikipedia.org/wiki/WebSocket) API. SutadasutoIA's
+    [hand-crafted
+    evaluation](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L4-L295)
+    function used a combination of rules and [a scoring
+    system](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L209-L254) to
+    determine actions, focusing on classifying pokemon by their role ("Special Sweeper") and
+    choosing suitable actions based off this designation.
 - identifier: Rill-García
   active: [2018, 2018]
   paper: Rill-García:2018
   language: Python
+  description: |
+    Rill-García followed up their work on SutadasutoIA with an agent developed via reinforcement
+    learning. Designed for the same contrained Generation VI BSS format and repeated battle
+    challenge as SutadasutoIA, the RL agent used data from 500 high-ranked human replays gathered
+    from Pokémon Showdown which were then also used to bootstrap the agent's learned evaluation
+    function. The bulk of training was conducted via a Q-learning approach with self-play and a
+    threshold-greedy policy. Actions were rewarded based on whether they resulted in an OHKO, KO,
+    the percentage damage they caused their opponent or whether they prevented the opponent from
+    acting. During evaluation matches with SutadasutoIA where agents were allowed to learn and adapt
+    to their opponent's team between battles, the RL agent did well when using a single team but did
+    poorly when forced to play with several teams.
 - active: [2018, 2018] # Feb 9
   source: https://github.com/DanielAlcocerSoto/Pokemon-Python
   engine: Custom

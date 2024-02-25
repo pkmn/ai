@@ -182,6 +182,39 @@ TODO f5b241de
   modifiers](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L777-L794) to the
   minimax result to better account for game mechanics
 
+## SutadasutoIA
+
+- Generation 6 BSS, simplified state space by eliminating status moves, EVs, and items
+- not a general purpose AI, intended for repeated battles against the same opponent akin to [Battle
+  Maison](https://bulbapedia.bulbagarden.net/wiki/Battle_Maison) and uses a [hill-climbing
+  algorithm](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L298) to
+  optimize team selection from a [pool of
+  Pokémon](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/pool.txt) between battles
+- like [`vasumv/pokemon_ai`](#vasumv/pokemon_ai) uses a
+  [webdriver](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/webControl.py)
+  ([Selenium](https://www.selenium.dev/)) as opposed to communicating directly via the
+  [WebSocket](https://en.wikipedia.org/wiki/WebSocket) API
+- [hand-crafted
+  evaluation](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L4-L295)
+  function uses a combination of rules and [a scoring
+  system](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L209-L254) to
+  determine actions
+  - focuses on classifying pokemon by their role ("Special Sweeper") and chosing suitable courses of
+    action based on this
+
+## _Rill-García_
+
+- Generation 6 BSS, same simplified format supported by [SutadasutoIA](#SutadasutoIA) which was the
+  baseline agent used for comparison
+- computed own usage stats from 500 high ranked replays
+- learning initially supervised based on replays then via a Q-learning approach with self-play and a
+  threshold-greedy policy
+- rewarded actions based on whether they resulted in an OHKO, KO, the percentage damage they caused
+  their opponent or whether their opponent was unable to act
+- experimental setup was matches of 10 battles with the same team where learning and adapting teams
+  between games is possible
+- online learning model did well with a single team but was worse when playing with different teams
+
 ## `DanielAlcocerSoto/Pokemon-Python`
 
 - [custom engine](https://github.com/DanielAlcocerSoto/Pokemon-Python/tree/aa9defc6/Game/engine) and
