@@ -162,10 +162,6 @@ TODO 52db93cb
 
 TODO c6cb71a9
 
-## PokéAI
-
-TODO f5b241de
-
 ## CynthiAI
 
 - Generation 7 Random Battle
@@ -474,3 +470,7 @@ TODO aab68037
 - considers [switching
   out](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L373-L400)
 - contains hardcodes for specific game mechanics like Protect or Explosion or hazards
+
+## `alexzhang13/reward-shaping-rl`
+
+TODO 964ea1bc
