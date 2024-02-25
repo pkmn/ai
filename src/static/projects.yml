@@ -274,6 +274,28 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    An early [rule-based
+    agent](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/ai.py) that variably
+    focused on the [then-current generation of random random
+    formats](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/io_process.py#L18-L23)
+    (Generation VI--VIII). `Synedh/showdown-battle-bot` featured limited state tracking, augmenting
+    Pokémon Showdown's [request
+    JSON](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/battle.py#L40) with
+    [simple battle log
+    parsing](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/battlelog_parsing.py#L26)
+    to form a more complete client representation. The agent's evaluation scored actions in terms of
+    speed and [expected
+    damage](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L204-L216)
+    computed by a [basic damage
+    calculator](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L136),
+    with special handling for [boosting
+    moves](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L157-L173)
+    and moves which inflict
+    [status](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L175-L201).
+    The AI prefered attacking but [would
+    switch](https://github.com/Synedh/showdown-battle-bot/blob/52db93cbd4aaca3bbc9f13399268b76785f23e5c/src/ai.py#L128-L133)
+    if it lacked sufficiently good options for moves.
 - name: Showdown AI competition
   framework: true
   active: [2017, 2018] # February 28

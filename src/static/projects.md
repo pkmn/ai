@@ -156,7 +156,24 @@
 
 ## `Synedh/showdown-battle-bot`
 
-TODO 52db93cb
+- [rule-based agent](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/ai.py) for
+  [Generation 6-8 random
+  formats](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/io_process.py#L18-L23)
+- limited state tracking, augments Pokémon Showdown's [request
+  JSON](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/battle.py#L40) with [simple
+  battle log
+  parsing](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/battlelog_parsing.py#L26)
+- evaluation scores actions in terms of speed and [expected
+damage](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L204-L216)
+computed by a [basic damage
+calculator](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L136),
+special handling for [boosting
+moves](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L157-L173)
+and moves which inflict
+[status](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L175-L201)
+- prefers attacking but [will
+  switch](https://github.com/Synedh/showdown-battle-bot/blob/52db93cbd4aaca3bbc9f13399268b76785f23e5c/src/ai.py#L128-L133)
+  if no sufficiently good options for moves
 
 ## Showdown AI competition
 
@@ -320,7 +337,7 @@ used to produce a [description of the
 state](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py#L445)
 to be fed into models
 - features support for
-  [self-play](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789master/src/players/base_classes/model_manager.py#L269)
+  [self-play](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/base_classes/model_manager.py#L269)
   and concurrent training
 - two fully-connected MLPs:
   - incomplete [larger
