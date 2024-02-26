@@ -175,9 +175,46 @@ and moves which inflict
   switch](https://github.com/Synedh/showdown-battle-bot/blob/52db93cbd4aaca3bbc9f13399268b76785f23e5c/src/ai.py#L128-L133)
   if no sufficiently good options for moves
 
-## Showdown AI competition
+## Showdown AI Competition
 
-TODO c6cb71a9
+- [variant of Generation 6 Random Battle with Ubers and Pokémon below NU
+  banned](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9ff8e484fb99e12670df7ffe2af2f3b04/zarel/data/scripts.js#L2097),
+  20 seconds per decision with 500 turn hard limit
+- [2xBO3 matches with team swap to reduce
+  variance](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/OfflineGame.js#L32-L75)
+- compared numerous agents
+  - non-adversarial [breadth-first
+    search](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/BFSAgent.js)
+    that greedily assumes an opponent does nothing and a
+    [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/PBFS.js)
+    that prunes evaluating moves which are resisted / switches into poor type
+    matchups and assumes the opponent is a one-turn lookahead agent instead
+  - [pure pessimistic
+    minimax](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js)
+    with an [evaluation
+    function](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js#L30-L34)
+    that favors dealing damage while rewarding survival and a depth penalty to
+    promote exploration and limit depth
+  - both
+    [single-layer](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/QLearner.js)
+    and
+    [multi-layer](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MLQLearner.js)
+    Q-learning networks
+  - [one-turn
+    lookahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
+    that computes [estimated
+    damage](https://github.com/scotchkorean27/showdownaiclient/blob/masc6cb71a9ter/agents/OTLAgent.js#L27)
+    and uses the max-damaging move or switches to the Pokémon that has the
+    max-damaging move and a
+    [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js)
+    that includes a [killer move
+    heuristic](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js#L42)
+    as well as additional rules and heuristics around type matchups and
+    switching
+- every agent beat $`RandomPlayer(switch=\widetilde{0\%})`, OTL ended up with
+  best results and minimax and pruned BFS also significantly outperformed
+  alternatives
+- cites high simulation cost of Pokémon Showdown as problematic
 
 ## CynthiAI
 
