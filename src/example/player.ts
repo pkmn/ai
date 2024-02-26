@@ -4,7 +4,7 @@ import {Generations} from '@pkmn/data';
 import {Request} from '@pkmn/protocol';
 
 export namespace Choice {
-  export interface Team{
+  export interface Team {
     type: 'team';
     slot: number;
   }
@@ -14,13 +14,13 @@ export namespace Choice {
     slot: number;
   }
 
-  export interface Move{
+  export interface Move {
     type: 'move';
     slot: number;
     event?: 'mega' | 'zmove' | 'ultra' | 'dynamax' | 'terastallize';
   }
 }
-export type Choice = Choice.Move | Choice.Switch| Choice.Team;
+export type Choice = Choice.Move | Choice.Switch | Choice.Team;
 
 export abstract class Player {
   battle: Battle;

@@ -19,7 +19,7 @@ const names = (e: bibtex.Entry) => {
   return buf.join('');
 };
 
-const TYPES: {[type: string]: (entry: bibtex.Entry) => string } = {
+const TYPES: {[type: string]: (entry: bibtex.Entry) => string} = {
   'article': e => {
     const volume = e.fields.number
       ? `${e.fields.volume[0]}(${e.fields.number[0]})`

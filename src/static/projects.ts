@@ -16,10 +16,10 @@ interface Project {
   active: number | [number, number];
   license?: string;
   source?: string;
-  engine?: string | { name: string; url: string };
+  engine?: string | {name: string; url: string};
   language?: string | string[];
-  platform?: { name: string; url: string }[];
-  release?: { name: string; url: string };
+  platform?: {name: string; url: string}[];
+  release?: {name: string; url: string};
   description?: string;
 }
 
