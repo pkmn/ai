@@ -450,7 +450,14 @@ to be fed into models
 
 ## Simplified Pokemon Environment
 
-TODO 028f4595
+- incredibly restricted toy [OpenAI Gym](https://github.com/openai/gym)
+  [environment](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Environment/SimplePkmEnv.py)
+  that reduces Pokémon to simply type matchups and damaging moves proposed as
+  baseline for evaluating agents
+- [GIGA-WolF](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Trainer/Deep/Learning/Distributed/DistributedDeepGIGAWoLF.py)
+  and
+  [DistributedDeepWPL](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Trainer/Deep/Learning/Distributed/DistributedDeepWPL.py)
+- 100% win rate against `RandomPlayer(\widetilde{100\%})`
 
 ## VGC AI Framework
 

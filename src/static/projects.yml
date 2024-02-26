@@ -785,6 +785,20 @@
   paper: Simoes:2021
   source: https://gitlab.com/DracoStriker/simplified-pokemon-environment
   engine: Custom
+  description: |
+    True to its name, the Simplified Pokemon Environment proposed an incredibly restricted toy
+    [OpenAI Gym](https://github.com/openai/gym)
+    [environment](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Environment/SimplePkmEnv.py)
+    that reduces competitive Pokémon to simply a question of type matchups and damaging moves as a
+    baseline for evaluating Pokémon agents. In addition to the environment, the project evaluates
+    the performance of two deep learning approaches both which use ε-greedy exploration policies -
+    Generalized Infinitesimal Gradient Ascent using the Win or Lose Fast principle (GIGA-WoLF)
+    [adapted to deep learning as
+    GIGAθ](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Trainer/Deep/Learning/Distributed/DistributedDeepGIGAWoLF.py)
+    and a [asynchonous deep version of a Weighted Policy Learner
+    (WPLθ)](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Trainer/Deep/Learning/Distributed/DistributedDeepWPL.py).
+    Both approaches converged to successful strategies, though in the limited environment GIGAθ
+    converges faster and ended up outperforming WPLθ.
 - name: VGC AI Framework
   framework: true
   active: 2019 # October 31
