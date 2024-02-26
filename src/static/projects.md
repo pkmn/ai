@@ -203,7 +203,7 @@ and moves which inflict
   - [one-turn
     lookahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
     that computes [estimated
-    damage](https://github.com/scotchkorean27/showdownaiclient/blob/masc6cb71a9ter/agents/OTLAgent.js#L27)
+    damage](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js#L27)
     and uses the max-damaging move or switches to the Pokémon that has the
     max-damaging move and a
     [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js)
@@ -315,12 +315,12 @@ and moves which inflict
       side](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L311-L336)
   - [`ChecksSwitchAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/checksswitch-agent.js)
     chooses actions based on hard-coded [checks and counters
-    table](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/pokemon-agents/data/compTest.json)
-    and the typechart
+    table](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/data/compTest.json) and the
+    typechart
   - [`TestAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/test-agent.js)
     WIP agent for machine learning based on the features
-    - [conmeta](https://github.com/pokeml/pokemon-agents/src/agents/test-agent.js#L11-36 ) reduced
-      feature space
+    - [conmeta](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/test-agent.js#L11-L37)
+      reduced feature space
     - [converts](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) game
       states to fixed-size numeric vectors.
 

@@ -335,12 +335,14 @@
     - [one-turn
     lookahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
     that computes [estimated
-    damage](https://github.com/scotchkorean27/showdownaiclient/blob/masc6cb71a9ter/agents/OTLAgent.js#L27)
-    and uses the max-damaging move or switches to the Pokémon that has the max-damaging move and a
+    damage](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js#L27)
+    and uses the max-damaging move or switches to the Pokémon that has the
+    max-damaging move and a
     [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js)
     that includes a [killer move
-    heuristic](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js#L42) as well as
-    additional rules and heuristics around type matchups and switching.
+    heuristic](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js#L42)
+    as well as additional rules and heuristics around type matchups and
+    switching.
 
     Every approach was an improvement over $`RandomPlayer(\widetilde{100\%})`, but the basic
     one-turn lookahead agent ended up with the best results followed minimax and pruned
@@ -496,12 +498,13 @@
     solution](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L129).
     - [`ChecksSwitchAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/checksswitch-agent.js)
     which chose actions based on hard-coded [checks and counters
-    table](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/pokemon-agents/data/compTest.json)
-    and the typechart, switching to whichever Pokémon on the team has the best matchup versus the
-    current opponent Pokémon (or attacking randomly if already out).
+    table](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/data/compTest.json)
+    and the typechart, switching to whichever Pokémon on the team has the best
+    matchup versus the current opponent Pokémon (or attacking randomly if
+    already out).
     - [`TestAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/test-agent.js),
     a work-in-progress agent utilizing machine learning which targeted a [reduced
-    conmeta](https://github.com/pokeml/pokemon-agents/src/agents/test-agent.js#L11-36) to make
+    conmeta](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/test-agent.js#L11-L37) to make
     [encoding](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) the game
     states into fixed-size numeric vectors more tractable.
 - identifier: Kalose, Kaya & Kim

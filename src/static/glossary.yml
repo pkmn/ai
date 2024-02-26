@@ -770,9 +770,10 @@ Smogon: |
   Nintendo.
 sparse: |
   Used to describe something with low [informational
-  entropy](https://en.wikipedia.org/wiki/Entropy_(information_theory) --- _i.e_, something which has
-  comparatively low information per element. A matrix that primarily consists of zeros or a [game
-  tree](#game-tree) where most of the branches can be [pruned](#pruning) is considered to sparse.
+  entropy](https://en.wikipedia.org/wiki/Entropy_(information_theory)) --- _i.e_, something which
+  has comparatively low information per element. A matrix that primarily consists of zeros or a
+  [game tree](#game-tree) where most of the branches can be [pruned](#pruning) is considered to
+  sparse.
 spread: |
   A spread or [EV spread]{.dfn} refers to the distribution of components which make up a Pokémon's
   [stats](https://bulbapedia.bulbagarden.net/wiki/Stat) --- primarily [EVs (effort
