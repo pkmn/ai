@@ -25,26 +25,31 @@ export type Choice = Choice.Move | Choice.Switch | Choice.Team;
 export abstract class Player {
   battle: Battle;
 
+  choice: string;
+
   constructor(gens: Generations) {
     this.battle = new Battle(gens);
+    this.choice = 'pass';
   }
 
   accept(chunk: string) {
+    let request = false;
     for (const line of chunk.split('\n')) {
       if (!line.startsWith('|')) continue;
       const index = line.indexOf('|', 1);
       const cmd = line.slice(1, index);
       const rest = line.slice(index + 1);
+      if (cmd === 'request') request = true;
       if (cmd === 'error') return this.onError(new Error(rest)); // FIXME
       this.battle.add(line);
     }
     this.battle.update();
-    // FIXME onRequest?
+    if (request) this.choice = this.onRequest(this.battle.request!);
   }
 
   onRequest(request: Request) {
     // WaitRequest
-    if (request.requestType === 'wait') return [];
+    if (request.requestType === 'wait') return '';
 
     // TeamRequest
     if (request.requestType === 'team') {

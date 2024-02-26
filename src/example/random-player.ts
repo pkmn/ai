@@ -68,7 +68,7 @@ export class RandomPlayer extends Player {
       const config = this.config[option];
       if ('consider' in config) {
         if (this.select(config.consider)) consider.push(...partitioned[option]);
-      } else {
+      } else if (partitioned[option].length) {
         if (this.select(config.choose)) return partitioned[option] as C[];
       }
     }
