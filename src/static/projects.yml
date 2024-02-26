@@ -571,7 +571,7 @@
     that is used to produce a [description of the
     state](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py#L445)
     to be fed into models and contains support for
-    [self-play](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789master/src/players/base_classes/model_manager.py#L269)
+    [self-play](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/base_classes/model_manager.py#L269)
     and concurrent training. The project contains two models built with a fully-connected
     multi-layer perceptron architecture - an incomplete [larger
     model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/fully_connected_random_model.py)
@@ -592,6 +592,43 @@
   release:
     name: "PSB: Gennaro's Revenge"
     url: https://github.com/JJonahJson/Showdown-AI-Bot/releases/tag/v1.0
+  description: |
+    Showdown AI Bot targeted random battle formats from Generation I-VII and featured policies for
+    varying difficulty levels. Backed by a [custom
+    engine](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/model) with a [basic
+    damage
+    calculator](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/model/damage_calculator.py),
+    the engine's [scraped
+    data](https://github.com/JJonahJson/Showdown-AI-Bot/tree/3038f927/src/scraper) was inserted into
+    a [MySQL
+    database](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/data_source.py)
+    that was then queried at runtime and included information about [random
+    movepools](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/scraper/randomsets.json).
+    The bot's [client
+    representation](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/game_control.py)
+    featured [request
+    parsing](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
+    and differentiated between an opponent's [possible and actual
+    moves](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/enemy_updater.py).
+    The bot was mostly rules-based but featured different heuristics for each difficulty:
+
+    - [Easy](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L44-L97):
+    a $`MaxDamagePlayer` that will only switch when forced, but when switching considers the species
+    type matchup of prospective switches.
+    - [Normal](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L100-L286):
+    still focused on maximizing damage, but moves decisions also relied on hardcoded logic for
+    status and more nuanced game mechanics as well as limited
+    [lookahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
+    to avoid being knocked out by an opponent, possibly switching to preserve a Pokémon. Switching
+    decisions considered both species and move type matchup.
+    - [Hard](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#244-L298):
+    depended on the same logic as "Normal" for switching but but move decisions were based on a [max
+    depth
+    2](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/iterative_search.py#L82)
+    [iterative deepening pure pessimistic minimax
+    search](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/iterative_search.py)
+    with a [complicated hand-crafted evaluation
+    function](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L305).
 - name: Metagrok
   active: [2019, 2019] # June 16
   paper: Huang:2019

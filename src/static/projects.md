@@ -351,7 +351,33 @@ to be fed into models
 
 ## Showdown AI Bot
 
-TODO 3038f927
+- [custom engine](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/model) with [basic
+  damage calculator](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/model/damage_calculator.py)
+- [scraped data](https://github.com/JJonahJson/Showdown-AI-Bot/tree/3038f927/src/scraper) inserted
+  into [MySQL
+  database](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/data_source.py)
+  - [random
+    sets](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/scraper/randomsets.json)
+- [client
+  representation](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/game_control.py)
+  features [request
+  parsing](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
+  and differentiates [possible vs. actual
+  moves](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/enemy_updater.py)
+- Generation 1-7 Random Battle, three different modes:
+  - [Easy](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L44-L97):
+    max damage for move, switches when forced considering type matchup
+  - [Normal](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L100-L286):
+    moves decisions also have hardcoded logic for status and more nuanced game mechanics and
+    [lookahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
+    to avoid being knocked out by an opponent, switches consider type matchup and move type matchup
+  - [Hard](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#244-L298):
+    uses Normal logic for switching but move decisions were based on a [max depth
+    2](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/iterative_search.py#L82)
+    [iterative deepening pure pessimistic
+    minimax search](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/iterative_search.py)
+    with a [complicated hand-crafted evaluation
+    function](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L305)
 
 ## poke-env
 
