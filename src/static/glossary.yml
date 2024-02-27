@@ -661,13 +661,16 @@ RandomPlayer: |
   simplicity of implementation. However, despite this seemingly simple definition, multiple subtly
   different versions of the $`RandomPlayer` exist (_e.g._, many implementations decide to _choose_
   only `move` actions unless forced to _consider_ `switch` actions, and may have similar
-  [heuristics](#heuristic) for decided how to treat generational [gimmicks](#gimmick)).
+  [heuristics](#heuristic) for decided how to treat generational [gimmicks](#gimmick)). While all
+  $`RandomPlayer` implementations are forced to choose `move` or `switch` actions when they're the
+  only option available, nuances between implemntations exist in the common scenario where either
+  type of action is possible.
 
   Formally, the notation $`RandomPlayer(N\%)` should be used to refer to an agent which $`N\%` of
   the time uniformly chooses to make a `switch` action when available, otherwise choosing uniformly
-  between possible `move` actions. $`RandomPlayer(\widetilde{N\%})` instead only considers `switch`
-  actions $`N\%` of the time when they're available, otherwise choosing a `move` action. This
-  distinction of choosing uniformly between a minimal subset of the action space or considering
+  between possible `move` actions. $`RandomPlayer(\widetilde{N\%})` instead always considers
+  available `move` actions but only considers `switch` actions $`N\%` of the time unless forced.
+  This distinction of choosing uniformly between a minimal subset of the action space or considering
   potentially multiple subsets of the space can be extended to gimmicks such as `mega`, `zmove`,
   `dynamax` or `terastallize`, though in those cases a more explicit notation is preferred (_e.g._,
   $`RandomPlayer(switch=\widetilde{20\%}, zmove=90\%)` would consider `switch` 20% of the time and
