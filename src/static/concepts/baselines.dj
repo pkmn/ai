@@ -1,0 +1,55 @@
+No state eval beyond reducing HP of opponent, best matchup implicitly considers
+own HP vs opponents and multiple turns even though incredibly limited. Beyond is
+actual search
+
+### Agents
+
+#### $`RandomPlayer`
+
+TODO
+
+##### $`RandomAttack`
+
+TODO
+
+#### $`MaxDamagePlayer`
+
+TODO (favors HO)
+
+##### $`MaxBasePower`
+
+TODO
+
+##### $`MaxSimplifiedDamage`
+
+TODO
+
+##### $`MaxEstimatedDamage`
+
+TODO
+
+#### $`BestMatchupPlayer`
+
+(favors Bulky Offense, can play HO)
+- switch if can take expected hit and KO faster than can be KOed
+- really needs some sort of opponent model
+
+### Enchancements
+
+(compare benefit)
+
+- Usage statistics / random movepool
+- Indifference window / episolon-comparable moves
+- Killer move heuristic (best combined with above)
+- early game heuristics (hazards)
+
+---
+
+Run competition against each other
+Compare performance on randbats ladders (N=100?) and respective Elo/GXE
+  - respectful laddering to not spam, N games over duration D window
+
+Issues
+- long term planning
+  - non damaging moves (boosting/hazards/recovery)
+  - switching

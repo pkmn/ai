@@ -133,7 +133,7 @@ const build = async (rebuild?: boolean) => {
   actual = fs.list(path.join(PUBLIC, 'concepts'));
   expected = new Set(['index.html']);
 
-  const titles = ['Complexity', 'Engines', 'Protocol', 'Variants'];
+  const titles = ['Baselines', 'Complexity', 'Engines', 'Protocol', 'Variants'];
   for (const title of titles) {
     const page = title.toLowerCase();
     expected.add(page);

@@ -4,6 +4,7 @@ may contain placeholders for pages which are planned but which have yet to be
 completed.
 
 - [_Abstraction_](https://github.com/pkmn/ai/issues/3)
+- [Baselines](/concepts/baselines)
 - [Complexity](/concepts/complexity)
 - [Engines](/concepts/engines)
 - [_Evaluation_](https://github.com/pkmn/ai/issues/7)
