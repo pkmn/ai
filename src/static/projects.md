@@ -1,5 +1,59 @@
 # Notes
 
+## `pmariglia/showdown`
+
+TODO 6102ea13
+
+- gen 3-9 singles random and non-random
+- bot mods "safest" depth-2 expectiminimax + weighted decision, experimental nash equilibrium, team datasets, and most damage
+
+moves (= https://github.com/pmariglia/showdown/blob/master/data/moves.json) and pokedex https://github.com/pmariglia/showdown/blob/master/data/scripts/update_pokedex.py (= https://github.com/pmariglia/showdown/blob/master/data/pokedex.json) from pokemon showdown https://github.com/pmariglia/showdown/blob/master/data/scripts/update_moves.py
+- get modified to work in bot engine
+- applies https://github.com/pmariglia/showdown/blob/master/data/mods/apply_mods.py  patches for past gens https://github.com/pmariglia/showdown/tree/master/data/mods
+
+tracks random battle sets and computers statistics
+https://github.com/pmariglia/showdown/blob/master/data/scripts/parse_random_battle_raw_sets.py = https://github.com/pmariglia/showdown/blob/master/data/random_battle_sets.json
+
+different heuristic https://github.com/pmariglia/showdown/blob/master/showdown/run_battle.py#L169
+
+usage stats parser https://github.com/pmariglia/showdown/blob/master/data/parse_smogon_stats.py
+"possible" spreads/items/abilities/moves https://github.com/pmariglia/showdown/blob/master/showdown/battle.py#L596-L658 from usage staff with cutoff plus knowlede applied
+effectiveness calculated from checks and counters https://github.com/pmariglia/showdown/blob/master/data/parse_smogon_stats.py#L76 used in eval fn
+
+team datasets = https://github.com/pmariglia/showdown/blob/master/data/team_datasets.json parsed by https://github.com/pmariglia/showdown/blob/master/data/team_datasets.py
+used by team datasets bot https://github.com/pmariglia/showdown/blob/master/showdown/battle_bots/team_datasets/main.py
+scraping walls and threads
+
+set parsing export -> json -> packed https://github.com/pmariglia/showdown/blob/master/teams/team_converter.py of pool of teams https://github.com/pmariglia/showdown/tree/master/teams/teams
+
+https://github.com/pmariglia/showdown/blob/master/showdown/engine/damage_calculator.py
+damage_calc_type - average, min, max, min_max, min_max_average, all https://github.com/pmariglia/showdown/blob/master/showdown/engine/damage_calculator.py#L194-L231
+
+
+https://github.com/pmariglia/showdown/blob/master/showdown/battle_modifier.py#L1175 = protocol parsing
+
+smart client:
+- makes use of log ordering to bound speed ranges https://github.com/pmariglia/showdown/blob/master/showdown/battle_modifier.py#L811
+- choch scarf https://github.com/pmariglia/showdown/blob/master/showdown/battle_modifier.py#L902, choice band/specs https://github.com/pmariglia/showdown/blob/master/showdown/battle_modifier.py#L978, Heavy Duty Boots https://github.com/pmariglia/showdown/blob/master/showdown/battle_modifier.py#L1063
+- lifeorb (as well as eliminates other) https://github.com/pmariglia/showdown/blob/master/showdown/battle_modifier.py#277-L262
+
+returns samples of battles with different determininzations for unknown https://github.com/pmariglia/showdown/blob/master/showdown/battle.py#L124-L197 (`prepare_battles`)
+
+
+doesnt account for unrevealed pokemon
+evaluate: https://github.com/pmariglia/showdown/blob/master/showdown/engine/evaluate.py
+- diminishing rturns for boosts
+- doesnt place value on hiding own information, though only revealed pokemon are evaluated so 
+
+engine
+StateMutator https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/objects.py#L348-L749
+all instructions = all transitions, but reversible https://github.com/pmariglia/showdown/blob/master/showdown/engine/find_state_instructions.py#L471-L497
+https://github.com/pmariglia/showdown/blob/master/showdown/engine/instruction_generator.py
+
+
+behaves better when cant see opponents killing moves https://github.com/pmariglia/showdown/blob/master/showdown/engine/select_best_move.py#L13-L41
+
+
 ## Shanai
 
 - notable for the conmeta

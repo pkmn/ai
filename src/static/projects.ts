@@ -25,9 +25,9 @@ interface Project {
 
 const RANKING = [
   'Athena', // Athena - reached #33 in gen7randombattle, ~1800 Elo
+  'pmariglia/showdown', // 1716 Elo in OU (~1550 average Elo)
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo
   'Metagrok', // beat pmariglia 61.2% of the time in gen7randombattle
-  'pmariglia/showdown', // ~1610 Elo in gen7randombattle (~1450 Elo in standard)
   'Technical Machine', // ??? (1300-1400 Elo?), even record against weaker version of pmariglia
   'leolellisr/poke_RL', // 99.5% vs. RandomPlayer, 60-85% vs MaxDamage
   'Tse', // 96.6% vs. RandomPlayer, 78.2% vs. MaxDamage. ~1350 Elo (VGC)
