@@ -843,6 +843,7 @@
       url: https://github.com/smogon/pokemon-showdown
     - name: PokeSim
       url: https://github.com/aed3/poke-sim
+  language: JavaScript, TypeScript
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown

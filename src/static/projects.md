@@ -573,6 +573,26 @@ TODO
 
 TODO
 
+- uses [Puppeteer](https://github.com/puppeteer/puppeteer) to leverage Pokémon Showdown's client
+  representation
+- double battles were not possible to support efficiently necessitating the creation of the
+  [PokeSim](https://github.com/aed3/poke-sim) engine
+- models' accuracy plateau after ~10,000 battles in the training set
+- AI depends on having a notion of the players skill and changes behavior based on whether battling
+  someone perceived to be good or bad
+  - builds ratings databse by scrapes all public replays and looks up ratings for each user in each
+    replay
+  - player psychology is different at different skill levels, and behaviours learned from top
+    players won't necessarily translate well to lower rank play
+- two stages of pruning - one before current's turns options are explored which covers  (i.e. move
+  accuracy simplification, squashing rolls, etc) and a second one that does the bulk of the work
+  which takes place before going tothe next level
+- "Basically, it looks at all the options both it and the opponent has, evaluates which options are
+best for it and the opponent, then uses Showdown simulator to see the result of those option
+combinations, then picks the move that usually produces the best outcome It will also do some tree
+search through future turns, but no more than three turns deep"
+- "I tend to agree with assuming your opponent has perfect info." in order to cut the amount of work=
+
 ## Youngster Joey
 
 - Generation 1
