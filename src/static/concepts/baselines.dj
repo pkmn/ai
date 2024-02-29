@@ -15,6 +15,9 @@ TODO
 #### $`MaxDamagePlayer`
 
 TODO (favors HO)
+- needs a model (full in stats for opponent, use randbats heuristic of 85 evs or
+252 evs depending on gen)
+- potentially need ability (Heatproof), item (AV)
 
 ##### $`MaxBasePower`
 
@@ -33,6 +36,7 @@ TODO
 (favors Bulky Offense, can play HO)
 - switch if can take expected hit and KO faster than can be KOed
 - really needs some sort of opponent model
+- needs to extend model further than MDP to include potential moves
 
 ### Enchancements
 
