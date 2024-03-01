@@ -4,12 +4,12 @@
   "license": "MIT",
   "dependencies": {
     "@pkmn/client": "^0.6.19",
-    "@pkmn/data": "^0.8.8",
+    "@pkmn/data": "^0.8.9",
     "@pkmn/protocol": "^0.6.19",
     "@retorquere/bibtex-parser": "^7.0.16",
     "@smogon/calc": "^0.9.0",
     "@types/jest": "^29.5.12",
-    "@types/node": "^20.11.20",
+    "@types/node": "^20.11.24",
     "favicons": "^7.1.5",
     "site": "github:scheibo/static",
     "source-map-support": "^0.5.21",
@@ -17,7 +17,7 @@
     "yaml": "^2.4.0"
   },
   "devDependencies": {
-    "@pkmn/eslint-config": "^7.0.0",
+    "@pkmn/eslint-config": "^7.1.0",
     "@untitaker/hyperlink": "^0.1.32",
     "stylelint": "^16.2.1",
     "stylelint-config-rational-order": "^0.1.2",
