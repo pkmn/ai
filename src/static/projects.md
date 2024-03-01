@@ -511,6 +511,41 @@ behaves better when cant see opponents killing moves https://github.com/pmarigli
 "nash equilibrium is the only non-deterministic one, and is by far the worst"
 "oh yeah closing out battles it can be quite bad at"
 
+https://github.com/pmariglia/showdown/compare/master...tera-consideration
+
+assault vest
+
+pessimistic         for j, opponent_move in enumerate(opponent_options[:]): https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/select_best_move.py#L98
+not pessimistic evaluates each pair
+
+prune and move ordering https://GitHub.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/select_best_move.py#L126
+_ assumption it will force pruning elsewhere
+= getpayoff is nash
+
+fail-hard
+
+doesnt look ab
+
+single engine just data differs
+
+https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/battle_modifier.py#L1023 damage calc for cb
+
+pure mdp https://github.com/pmariglia/showdown/blob/master/showdown/battle_bots/most_damage/main.py
+
+https://github.com/pmariglia/showdown/blob/master/showdown/battle_bots/team_datasets/main.py
+
+https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/battle_bots/helpers.py#L76
+dynamic search depth, unused, cites PyPy
+- 3 or 4 depth depending on number of options
+
+remove guaranteed is only for nash equilibrium, uses gambit via subprovess (why?)
+large number of determinizations for active pokemon
+
+https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/helpers.py#L121
+heuristic for makignsense
+
+bucketing for spreads https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/helpers.py#L127
+
 ## poke-env
 
 - Generation 4-9 framework with
