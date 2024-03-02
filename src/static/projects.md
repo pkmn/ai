@@ -422,129 +422,108 @@ to be fed into models
 
 ## `pmariglia/showdown`
 
-TODO 6102ea13
-
-- Generation 3-8 singles random and non-random formats. Partial support for Generation 9 (lacking support for Terastallization and missing _The Indigo Disk_ DLC)
-- bot mods "safest" depth-2 (FIXME optimistic/pessimistic/simulataneous)
-  expectiminimax + weighted decision, experimental nash equilibrium, team
-  datasets, and most damage
-- [move](https://github.com/pmariglia/showdown/blob/6102ea13/data/moves.json)
-  and
-  [species](https://github.com/pmariglia/showdown/blob/6102ea13/data/pokedex.jso)
-  data
+- Generation 3-8 singles random and non-random formats.
+  - partial support for Generation 9 (missing _The Indigo Disk_ DLC and Terastallization [is still
+  in progress](https://github.com/pmariglia/showdown/commit/1a6dfb7d))
+- [bespoke _reversible_ engine](https://github.com/pmariglia/showdown/blob/6102ea13/ENGINE.md)
+  optimized for the needs of the agent, explicitly trading off perfect fidelity
+  - [move](https://github.com/pmariglia/showdown/blob/6102ea13/data/moves.json) and
+  [species](https://github.com/pmariglia/showdown/blob/6102ea13/data/pokedex.json) data
   [generated](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/update_moves.py)
-  [from](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/update_pokedex.py)
-  Pokémon Showdown,
-  [modified](https://github.com/pmariglia/showdown/blob/6102ea13/data/mods/apply_mods.py)
+  [from](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/update_pokedex.py) Pokémon
+  Showdown, [modified](https://github.com/pmariglia/showdown/blob/6102ea13/data/mods/apply_mods.py)
   to then work in the custom engine and [patched for past
   generations](https://github.com/pmariglia/showdown/tree/6102ea13/data/mods)
-- tracks [random battle
-  sets](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/parse_random_battle_raw_sets.py)
-  and [computes
-  statistics](https://github.com/pmariglia/showdown/blob/6102ea13/data/random_battle_sets.json)
-  - random battles [slightly tweak the scoring of Pokémon which have not been
-    fainted](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/run_battle.py#L169)
-    during evauation
-- [usage stats
-  parser](https://github.com/pmariglia/showdown/blob/6102ea13/data/parse_smogon_stats.py)
-  which uniquely makes use of a notion of effectiveness [calculated from checks
-  and
-  counters](https://github.com/pmariglia/showdown/blob/6102ea13/data/parse_smogon_stats.py#L76)
-  used in evaluation function
-- the [`team-datasets` version of the
-  agent](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/team_datasets/main.py)
-  augments the `safest` expectiminimax agent with a team scouting
-  [dataset](https://github.com/pmariglia/showdown/blob/6102ea13/data/team_datasets.json)
-  gleaned from scraping Smogon University's forums. Given a comprehensive enough
-  database, [team
-  prediction](https://github.com/pmariglia/showdown/blob/6102ea13/data/team_datasets.py#L140)
-  and thus overall playing performance is improved considerably.
-- uses [preconfigured teams](https://github.com/pmariglia/showdown/tree/6102ea13/teams/teams)
-- [hand-crafted evaluation
-  function](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/evaluate.py)
-  features a dimishing return on boosts and does not place value on preserving
-  hidden information or scouting (agent does not consider hidden information at
-  all)
-    - future work includes explicitly identifying win-conditions and giving bonuses during evaluation to guide towards sweep
+  - mechanics reflect current generation and generational differences simply reflected in data =
+    "good enough"
+  - unlike almost all other engines that necessitate a Copy Make approach (used by earlier versions
+    of the `pmariglia/showdown`), the engine's
+    [`StateMutator`](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/objects.py#L482-L749)
+    allows for "applying" and "reversing" instructions that get
+    [generated](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/instruction_generator.py)
+    by handlers
+  - speed is still a concern, undergoing rewrite in Rust
+  - has an [$`transitions` function that is
+    reversible](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/find_state_instructions.py#L471-L497)
 - standard Pokémon Showdown
   [protocol](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L1175)
-  and [team](
-  https://github.com/pmariglia/showdown/blob/6102ea13/teams/team_converter.py)
-  parsing
-- sophisticated client representaiton [makes use of log ordering to bound speed
-  ranges](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L811),
-  and attempts to deduce not just the presence but also _absence_ of [Choice
+  and [team]( https://github.com/pmariglia/showdown/blob/6102ea13/teams/team_converter.py) parsing
+- sophisticated client representation [makes use of log ordering to bound speed
+  ranges](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L811), and
+  attempts to deduce not just the presence but also the _absence_ of [Choice
   Scarf](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L902),
   [Choice Band or Choice
   Specs](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L978),
   [Heavy Duty
   Boots](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L1063),
-  and [Life Orb](
-  https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L353-L357)
-
-----
-
-FOR REVEALED POKEMON ONLY "possible" spreads/items/abilities/moves https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle.py#L596-L678 from usage staff with cutoff plus knowlede applied
-
-https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/damage_calculator.py
-damage_calc_type - average, min, max, min_max, min_max_average, all https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/damage_calculator.py#L194-L231
-
-returns samples of battles with different determininzations for unknown https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle.py#L124-L197 (`prepare_battles`)
-
-- [bespoke _reversible_
-  engine](https://github.com/pmariglia/showdown/blob/6102ea13/ENGINE.md)
-  optimized for the needs of the agent, explicitly trading off perfect fidelity
-  - unlike almost all other engines which necessitate a Copy-Make approach (used
-    by earlier versions of the `pmariglia/showdown`), the engine's
-    [`StateMutator`](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/objects.py#L482-L749)
-    allows for "applying" and "reversing" instructions that get
-    [generated](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/instruction_generator.py)
-    by handlers
-  - speed still a concern = "I am however re-writing my engine in Rust in my
-    spare time"
-
-all instructions = all transitions, but reversible https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/find_state_instructions.py#L471-L497
-
-behaves better when cant see opponents killing moves https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/select_best_move.py#L13-L41
-
-"there is never a search that compares across different information states" => "the bot treats it as though the opponent only has as many pokemon remaining as has been revealed to it." "Also the engine isn't fast enough for the (probably) many other potential battle states [filling in unrevealed pokemon] would generate"
-"nash equilibrium is the only non-deterministic one, and is by far the worst"
-"oh yeah closing out battles it can be quite bad at"
-
-https://github.com/pmariglia/showdown/compare/master...tera-consideration
-
-assault vest
-
-pessimistic         for j, opponent_move in enumerate(opponent_options[:]): https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/select_best_move.py#L98
-not pessimistic evaluates each pair
-
-prune and move ordering https://GitHub.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/select_best_move.py#L126
-_ assumption it will force pruning elsewhere
-= getpayoff is nash
-
-fail-hard
-
-doesnt look ab
-
-single engine just data differs
-
-https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/battle_modifier.py#L1023 damage calc for cb
-
-pure mdp https://github.com/pmariglia/showdown/blob/master/showdown/battle_bots/most_damage/main.py
-
-https://github.com/pmariglia/showdown/blob/master/showdown/battle_bots/team_datasets/main.py
-
-https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/battle_bots/helpers.py#L76
-dynamic search depth, unused, cites PyPy
-- 3 or 4 depth depending on number of options
-
-remove guaranteed is only for nash equilibrium, uses gambit via subprovess (why?)
-large number of determinizations for active pokemon
-
-https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/helpers.py#L121
-heuristic for makignsense
-
-bucketing for spreads https://github.com/pmariglia/showdown/blob/6102ea134f27756391c06937093649930828cd70/showdown/engine/helpers.py#L127
+  [Assault
+  Vest](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L333), and
+  [Life Orb](
+  https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L353-L357).
+    - Choice Band and Choice Specs inference also leverages [damage
+      calculation](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L1023)
+- true [$`MaxDamagePlayer`
+  baseline](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/most_damage/main.py)
+  which uses the [damage
+  calculator](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/damage_calculator.py)
+  - damage calculator supports [different
+types](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/damage_calculator.py#L194-L231)
+of roll abstraction
+- bot mods "safest" depth-2 [simultaneous
+  expectiminimax](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/select_best_move.py#L98)
+  with [pruning and move
+  ordering](https://GitHub.com/pmariglia/showdown/blob/6102ea13/showdown/engine/select_best_move.py#L126)
+  & weighted decision, experimental Nash equilibrium, team datasets, and most damage
+    - [experimented with a dynamic search
+      depth](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/helpers.py#L76)
+      of 3 or 4 depending on the number of joint actions which requires
+      [PyPy](https://www.pypy.org/) for performance
+    - shows a weakness for closing out battles
+- [nash
+  equilibrium](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/nash_equilibrium/main.py)
+  is the only non-deterministic mode and is the weakest
+  - does better when [can't see opponents killing
+    moves](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/select_best_move.py#L13-L41)
+  - uses [Gambit](http://www.gambit-project.org/) in a
+    [subprocess](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/nash_equilibrium/main.py#L88)
+- [evaluation](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/evaluate.py)
+  works off of [many different determinizations for unknowns of opponent's active
+  Pokémon](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle.py#L124-L197)
+  - [possible
+    spreads/items/abilities/moves](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle.py#L596-L678
+    ) for _revealed_ Pokémon only based on usage staff with cutoff plus knowledge applied (not fast
+    enough to also work with possible team determinization)
+  - sets produced need to ["make
+    sense"](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/helpers.py#L121) =
+    heuristic
+  - [bucketing applied to
+    spreads](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/helpers.py#L127)
+- [usage stats
+  parser](https://github.com/pmariglia/showdown/blob/6102ea13/data/parse_smogon_stats.py) which
+  uniquely makes use of a notion of effectiveness [calculated from checks and
+  counters](https://github.com/pmariglia/showdown/blob/6102ea13/data/parse_smogon_stats.py#L76) used
+  in the evaluation function
+- [hand-crafted evaluation
+  function](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/evaluate.py)
+  features a diminishing return on boosts and does not place value on preserving hidden information
+  or scouting (the agent does not consider hidden information at all)
+    - future work includes explicitly identifying win conditions and giving bonuses during
+      evaluation to guide towards a sweep
+- uses [preconfigured teams](https://github.com/pmariglia/showdown/tree/6102ea13/teams/teams)
+- [parse random
+  sets](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/parse_random_battle_raw_sets.py)
+  and [computes
+  statistics](https://github.com/pmariglia/showdown/blob/6102ea13/data/random_battle_sets.json)
+  - random battles [slightly tweak the scoring of Pokémon that have not been
+    fainted](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/run_battle.py#L169) during
+    evaluation
+- the [`team-datasets` version of the
+  agent](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/team_datasets/main.py)
+  augments the `safest` expectiminimax agent with a team scouting
+  [dataset](https://github.com/pmariglia/showdown/blob/6102ea13/data/team_datasets.json) gleaned
+  from scraping Smogon University's forums. Given a comprehensive enough database, [team
+  prediction](https://github.com/pmariglia/showdown/blob/6102ea13/data/team_datasets.py#L140) and
+  thus overall playing performance is improved considerably.
 
 ## poke-env
 
