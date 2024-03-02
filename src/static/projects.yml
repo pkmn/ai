@@ -73,7 +73,7 @@
     implementations. The engine removed all stochastic elements (_e.g._, by ignoring accuracy checks
     or the contribution of damage rolls) and as such the AI's game state was
     [patched](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/showdown.py#L149)
-    between actions to better keep it sync with the true server state.
+    between actions to better keep it synchronized with the true server state.
 
     The AI featured relatively sophisticated team prediction capabilities:
     [movesets](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke3.json) were
@@ -112,9 +112,9 @@
     alpha-beta pruning and [move
     ordering](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L339-343)
     (_e.g._, preferring to explore super effective or status moves before those which are not very
-    effective) with a [hand crafted evalutation
+    effective) with a [hand-crafted evaluation
     function](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L263)
-    based on an early verison of [Technical Machine](/projects/#TechnicalMachine)'s
+    based on an early version of [Technical Machine](/projects/#TechnicalMachine)'s
     [features](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#20-L57)
     and [weights](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/weights.js). Percymon
     also included several [hardcoded special cases for certain
@@ -123,12 +123,12 @@
 
     Due to Percymon being built around an unmodified copy of Pokémon Showdown it was unable to
     easily make use of the expectiminimax algorithm. Furthermore, while the agent was mostly
-    deterministic, the damage and turn simulations its ran via Pokémon Showdown did not fix a random
+    deterministic, the damage and turn simulations it ran via Pokémon Showdown did not fix a random
     seed and thus the bot's policies could exhibit a small amount of non-determinism. The Pokémon
     Showdown engine was found to be a major performance bottleneck, with the
-    [cloning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/clone.js)  of the engine's
+    [cloning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/clone.js) of the engine's
     state between simulations cited as the major limiting factor on depth as even with pruning turns
-    could frequently take in excess of 40s to evaluate.
+    could frequently take in excess of 40 seconds to evaluate.
 
     Percymon chose to simplify the action space by [always mega
     evolving](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L749) when
@@ -293,7 +293,7 @@
     moves](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L157-L173)
     and moves which inflict
     [status](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L175-L201).
-    The AI prefered attacking but [would
+    The AI preferred attacking but [would
     switch](https://github.com/Synedh/showdown-battle-bot/blob/52db93cbd4aaca3bbc9f13399268b76785f23e5c/src/ai.py#L128-L133)
     if it lacked sufficiently good options for moves.
 - name: Showdown AI Competition
@@ -311,9 +311,10 @@
     The Showdown AI Competition pitted a wide variety of agents against each other within a custom
     Generation VII Random Battle format with [Zoroark, Ubers, and Pokémon below NU
     banned](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9ff8e484fb99e12670df7ffe2af2f3b04/zarel/data/scripts.js#L2097),
-    20 seconds allotted time per decision and a hard 500 turn limit. The competition involved
+    20 seconds allotted time per decision and a hard 500-turn limit. The competition involved
     multiple rounds of [two best-of-3 matches with team swap to reduce
-    variance](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/OfflineGame.js#L32-L75). The following approaches were compared:
+    variance](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/OfflineGame.js#L32-L75).
+    The following approaches were compared:
 
     - non-adversarial [breadth-first
     search](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/BFSAgent.js)
@@ -414,15 +415,15 @@
     evaluation](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L4-L295)
     function used a combination of rules and [a scoring
     system](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L209-L254) to
-    determine actions, focusing on classifying pokemon by their role ("Special Sweeper") and
-    choosing suitable actions based off this designation.
+    determine actions, focusing on classifying Pokémon by their role ("Special Sweeper") and
+    choosing suitable actions based on this designation.
 - identifier: Rill-García
   active: [2018, 2018]
   paper: Rill-García:2018
   language: Python
   description: |
     Rill-García followed up their work on SutadasutoIA with an agent developed via reinforcement
-    learning. Designed for the same contrained Generation VI BSS format and repeated battle
+    learning. Designed for the same constrained Generation VI BSS format and repeated battle
     challenge as SutadasutoIA, the RL agent used data from 500 high-ranked human replays gathered
     from Pokémon Showdown which were then also used to bootstrap the agent's learned evaluation
     function. The bulk of training was conducted via a Q-learning approach with self-play and a
@@ -489,7 +490,7 @@
     and a more simplified version that only considered a move's base power
     ([`MaxBasePowerAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-base-power-agent.js)).
     - [`SimAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js),
-    an agent which performed a one-turn lookahead by simulating each possible joint action,
+    an agent that performed a one-turn lookahead by simulating each possible joint action,
     [evaluating](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L311-L336)
     the new state based purely on the sum of HP percentages of Pokémon on each side, using
     [`lrsnash` to solve the computed payoff
@@ -572,8 +573,8 @@
     pruning with an evaluation function that compared the difference in the sum of HP percentages
     for the full team of each side.
 
-    The agent eventually learned a policy which preferentially chose the move in the 4th moveslot,
-    calling into question the results. Chen _et al._ reveal they largely bottlenecked by
+    The agent eventually learned a policy that preferentially chose the move in the 4th moveslot,
+    calling into question the results. Chen _et al._ reveal they were largely bottlenecked by
     computational resources, in particular repeatedly
     [cloning](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/clone.js) the
     simulator state, and their ideas for future work included self-play and improved visualization
@@ -587,7 +588,7 @@
     combined with a client representation that leveraged usage statistics from [Pokémon Global
     Link](https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_Global_Link) and heuristics fill in
     unknown information for an opponent's team, Ihara _et al._ found that ISMCTS was superior to
-    determinized MCTS when the number of iterations were fixed. Both approaches were significantly
+    determinized MCTS when the number of iterations was fixed. Both approaches were significantly
     weaker than agents leveraging MCTS with perfect information which were used as a control, though
     the gap decreased in further experiments where the battle rules were simplified.
 - active: [2019, 2019] # February 10
@@ -658,13 +659,13 @@
     a $`MaxDamagePlayer` that will only switch when forced, but when switching considers the species
     type matchup of prospective switches.
     - [Normal](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L100-L286):
-    still focused on maximizing damage, but moves decisions also relied on hardcoded logic for
+    still focused on maximizing damage, but move decisions also relied on hardcoded logic for
     status and more nuanced game mechanics as well as limited
     [lookahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
     to avoid being knocked out by an opponent, possibly switching to preserve a Pokémon. Switching
-    decisions considered both species and move type matchup.
+    decisions considered both species and move type matchups.
     - [Hard](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#244-L298):
-    depended on the same logic as "Normal" for switching but but move decisions were based on a [max
+    depended on the same logic as "Normal" for switching but move decisions were based on a [max
     depth
     2](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/iterative_search.py#L82)
     [iterative deepening pure pessimistic minimax
@@ -693,7 +694,7 @@
       url: https://github.com/smogon/pokemon-showdown
   description: |
     The `pmariglia/showdown` project features a bespoke engine, a sophisticated client, and several
-    agents that can achieve a high-level of play across numerous generations. The project primarily
+    agents that can achieve a high level of play across numerous generations. The project primarily
     supports both random and non-random Generation III-VIII singles formats, though also contains
     partial support for Generation XI --- data and mechanics save for those added by _The Indigo
     Disk_ DLC are present but [support for Terastallization is still in
@@ -876,7 +877,7 @@
     [extracted](https://github.com/hsahovic/poke-env/tree/46fa2b01/scripts) from the simulator as
     well as [team parsing and
     packing](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/teambuilder/teambuilder.py)
-    logic to  provide the foundation most agents need.
+    logic to provide the foundation most agents need.
 
     Beyond this, poke-env also offers support for training agents
     [concurrently](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/concurrency.py)
@@ -942,7 +943,7 @@
     Having adapted the toy engine from
     [`DanielAlcocerSoto/Pokemon-Python`](#DanielAlcocerSoto/Pokemon-Python) to
     [singles](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/Game/engine/single_battle.py),
-    `blue-sky-sea/Pokemon-MCTS-AI-Master` implemented an an [agent based on
+    `blue-sky-sea/Pokemon-MCTS-AI-Master` implemented an [agent based on
     UCT](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/AI/mcts.py) that
     reported positive results versus $`RandomPlayer` and $`MaxDamagePlayer`.`
 - active: [2020, 2020] # June 13
@@ -1000,11 +1001,10 @@
     Youngster Joey targeted a perfect information variant of Generation I with a greedy policy that
     determines its action by maximizing a set of hand-crafted
     [heuristics](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310). A
-    slightly more sophisticated $`MaxDamagePlayer`, Youngster Joey
-    deliberately eschewed minimax and expectiminimax due to concerns over the game tree size even
-    after pruning and the algorithms not being able to play optimally against opponents who were
-    also expected to play suboptimally. The addition of some form of lookahead was considered for
-    future work.
+    slightly more sophisticated $`MaxDamagePlayer`, Youngster Joey deliberately eschewed minimax and
+    expectiminimax due to concerns over the game tree size even after pruning and the algorithms not
+    being able to play optimally against opponents who were also expected to play sub-optimally. The
+    addition of some form of lookahead was considered for future work.
 - name: alphaPoke
   site: https://matteoh2o1999.github.io/en-us/projects/alphaPoke-project-delivery
   active: 2021 # November 22
@@ -1045,16 +1045,16 @@
     network's output layer consisted of two softmax units producing action and value estimates, with
     a move selection and move target being considered separately. Despite using categorical
     encodings for the input embedding (as opposed to a one-hot key embedding) the initial input size
-    of of 4186 features resulted in overfitting. As a result, Tse's used the supervised network to
-    learn a smaller embedding of 254 features based on the output of the first layer which was
-    designed to not be fully connected so as to be used for this purpose.
+    of 4186 features resulted in overfitting. As a result, Tse used the supervised network to learn
+    a smaller embedding of 254 features based on the output of the first layer which was designed to
+    not be fully connected so as to be used for this purpose.
 
     The learned embedding was used as input to a second RL network which used deep Q-learning and an
     ε-greedy policy to learn action selection. The reward for this network was computed based on a
     linear combination of the battle outcome, the current percentage HP for both sides' active
     Pokémon, and the value output from the supervised learning network. The training of the RL
     network was performed against the $`RandomPlayer` and $`MaxDamagePlayer` and this led to a
-    learned policy which proved to be fairly exploitable by less contrived opponents.
+    learned policy that proved to be fairly exploitable by less contrived opponents.
 
     Battle simulation performance was cited as the main bottleneck, discouraging the addition of
     Monte Carlo tree search and serving as a barrier to increased training time.
@@ -1181,7 +1181,7 @@
     ignore abilities and items and instead treat them as properties of the specific Pokémon. The
     [input
     embedding](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/pokegym.py#L84)
-    was limited due to resource constaints but included the active moves and (unboosted) stats, HP,
+    was limited due to resource constraints but included the active moves and (unboosted) stats, HP,
     and status for both sides. Results indicated the final models were superior to
     $`RandomPlayer(\widetilde{100\%})`, roughly on par with $`RandomPlayer(0\%)`, and significantly
     worse than a [base-power

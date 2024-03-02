@@ -38,7 +38,7 @@ TODO e0315af7
   data](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke3.json), falling back to
   Generation 5 data if missing
 - defaults to Smogon set data but overwrites moves with predicted moves
-- gets replays for [all names on top of
+- gets replays for [all names on top of the
   ladder](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/log_scraper.py) and puts
   them in [replay
   database](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/database.py)
@@ -59,9 +59,9 @@ TODO e0315af7
   [minimax](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js) with
   alpha-beta pruning and [move
   ordering](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L339-343)
-  with a [hand crafted
+  with a [hand-crafted
   eval](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L263) function
-  based on an early verison of [Technical Machine](/projects/#TechnicalMachine)'s
+  based on an early version of [Technical Machine](/projects/#TechnicalMachine)'s
   [features](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#20-L57) and
   [weights](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/weights.js)
   - simplifies action space by [always mega
@@ -150,7 +150,7 @@ TODO e0315af7
   - [damage
     calculator](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L283)
     computes *expected* damage
-  - [rules based](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L678)
+  - [rules-based](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L678)
   - "[combos](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1201)" with
     [limited lookahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34)
   - [killer-move
@@ -168,13 +168,13 @@ TODO e0315af7
   battle log
   parsing](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/battlelog_parsing.py#L26)
 - evaluation scores actions in terms of speed and [expected
-damage](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L204-L216)
-computed by a [basic damage
-calculator](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L136),
-special handling for [boosting
-moves](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L157-L173)
-and moves which inflict
-[status](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L175-L201)
+  damage](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L204-L216)
+  computed by a [basic damage
+  calculator](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L136),
+  special handling for [boosting
+  moves](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L157-L173)
+  and moves which inflict
+  [status](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L175-L201)
 - prefers attacking but [will
   switch](https://github.com/Synedh/showdown-battle-bot/blob/52db93cbd4aaca3bbc9f13399268b76785f23e5c/src/ai.py#L128-L133)
   if no sufficiently good options for moves
@@ -190,15 +190,15 @@ and moves which inflict
   - non-adversarial [breadth-first
     search](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/BFSAgent.js)
     that greedily assumes an opponent does nothing and a
-    [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/PBFS.js)
-    that prunes evaluating moves which are resisted / switches into poor type
-    matchups and assumes the opponent is a one-turn lookahead agent instead
+    [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/PBFS.js) that
+    prunes evaluating moves that are resisted / switches into poor type matchups and assumes the
+    opponent is a one-turn lookahead agent instead
   - [pure pessimistic
     minimax](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js)
     with an [evaluation
     function](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js#L30-L34)
-    that favors dealing damage while rewarding survival and a depth penalty to
-    promote exploration and limit depth
+    that favors dealing damage while rewarding survival and a depth penalty to promote exploration
+    and limit depth
   - both
     [single-layer](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/QLearner.js)
     and
@@ -208,16 +208,13 @@ and moves which inflict
     lookahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
     that computes [estimated
     damage](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js#L27)
-    and uses the max-damaging move or switches to the Pokémon that has the
-    max-damaging move and a
+    and uses the max-damaging move or switches to the Pokémon that has the max-damaging move and a
     [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js)
     that includes a [killer move
     heuristic](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js#L42)
-    as well as additional rules and heuristics around type matchups and
-    switching
-- every agent beat $`RandomPlayer(switch=\widetilde{0\%})`, OTL ended up with
-  best results and minimax and pruned BFS also significantly outperformed
-  alternatives
+    as well as additional rules and heuristics around type matchups and switching
+- every agent beat $`RandomPlayer(switch=\widetilde{0\%})`, OTL ended up with best results and
+  minimax and pruned BFS also significantly outperformed alternatives
 - cites high simulation cost of Pokémon Showdown as problematic
 
 ## CynthiAI
@@ -225,11 +222,11 @@ and moves which inflict
 - Generation 7 Random Battle
 - [depth 1](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L769) [pure
   optimistic minimax](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L577-L742)
-  search with [hand crafted
+  search with [hand-crafted
   eval](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L187-575)
 - checks [known moves](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L123) if
   enough are known otherwise entire move pool
-- [deterministically uses highest accuracy move that
+- [deterministically uses the highest accuracy move that
   KOs](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L163-L182) (killer move
   heuristic) otherwise most damaging move (ignoring accuracy)
 - [hardcoded
@@ -239,7 +236,7 @@ and moves which inflict
 ## SutadasutoIA
 
 - Generation 6 BSS, simplified state space by eliminating status moves, EVs, and items
-- not a general purpose AI, intended for repeated battles against the same opponent akin to [Battle
+- not a general-purpose AI, intended for repeated battles against the same opponent akin to [Battle
   Maison](https://bulbapedia.bulbagarden.net/wiki/Battle_Maison) and uses a [hill-climbing
   algorithm](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L298) to
   optimize team selection from a [pool of
@@ -253,14 +250,14 @@ and moves which inflict
   function uses a combination of rules and [a scoring
   system](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L209-L254) to
   determine actions
-  - focuses on classifying pokemon by their role ("Special Sweeper") and chosing suitable courses of
+  - focuses on classifying Pokémon by their role ("Special Sweeper") and choosing suitable courses of
     action based on this
 
 ## _Rill-García_
 
 - Generation 6 BSS, same simplified format supported by [SutadasutoIA](#SutadasutoIA) which was the
   baseline agent used for comparison
-- computed own usage stats from 500 high ranked replays
+- computed own usage stats from 500 high-ranked replays
 - learning initially supervised based on replays then via a Q-learning approach with self-play and a
   threshold-greedy policy
 - rewarded actions based on whether they resulted in an OHKO, KO, the percentage damage they caused
@@ -280,7 +277,7 @@ and moves which inflict
   with Keras and Tensorflow
 - Q-learning to train a small neural network on a fairly [minimal
   embedding](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/encoder.py#L48)
-  - architecture supports a MLP [layers of 24, 24, 8 with ReLU activation between layers and linear
+  - architecture supports an MLP [layers of 24, 24, 8 with ReLU activation between layers and linear
     output](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Configuration/RL_config.json#L6)
   - trains against a [random
     agent](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/run.py#L110-L113)
@@ -315,7 +312,7 @@ and moves which inflict
       matrix](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L91)
     - [weighted random sample from
       policy](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L129)
-    - [ eval function is purely the sum of % HP of pokemon on each
+    - [eval function is purely the sum of % HP of Pokémon on each
       side](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L311-L336)
   - [`ChecksSwitchAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/checksswitch-agent.js)
     chooses actions based on hard-coded [checks and counters
@@ -333,7 +330,7 @@ and moves which inflict
 - agent using proximal policy optimization (PPO) which was expected to be superior to Q-learning for
   scenarios with complex value functions like Pokémon because it operates directly in the policy
   space
-- trained on Generation 1 Random Battle format, though approach generalizes to arbitrary formats
+- trained on Generation 1 Random Battle format, though the approach generalizes to arbitrary formats
 - uses Tensorflow, the [PPO implementation from
   OpenAI](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/ppo/ppo.py) and a custom [OpenAI
   Gym](https://github.com/openai/gym) environment
@@ -354,7 +351,7 @@ and moves which inflict
   only terminal states were rewarded
 - trained against $`RandomPlayer(\widetilde{100\%})`, $`RandomPlayer(0%)` and a depth 1 [minimax
   agent](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/agents/minimax.py) with alpha-beta
-  pruning with an evaluation function which compares the difference in the sum of HP percentages for
+  pruning with an evaluation function that compares the difference in the sum of HP percentages for
   the full team of each side
 - agent learned a policy which preferentially chose the move in the 4th moveslot
   - resulted in a winning record compared to the random agents but almost always lost vs. minimax.
@@ -388,7 +385,7 @@ to be fed into models
     model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py)
     that uses the Actor-Critic method with a pruned number of features
     - [reward](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py#L238C8-L238C63)
-      depends on difference in respective total party hit points
+      depends on the difference in respective total party hit points
 
 ## Showdown AI Bot
 
@@ -561,7 +558,7 @@ of roll abstraction
 
 - incredibly restricted toy [OpenAI Gym](https://github.com/openai/gym)
   [environment](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Environment/SimplePkmEnv.py)
-  that reduces Pokémon to simply type matchups and damaging moves proposed as
+  that reduces Pokémon to simply type matchups and damaging moves proposed as a
   baseline for evaluating agents
 - [GIGA-WolF](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Trainer/Deep/Learning/Distributed/DistributedDeepGIGAWoLF.py)
   and
@@ -592,20 +589,20 @@ TODO
 - double battles were not possible to support efficiently necessitating the creation of the
   [PokeSim](https://github.com/aed3/poke-sim) engine
 - models' accuracy plateau after ~10,000 battles in the training set
-- AI depends on having a notion of the players skill and changes behavior based on whether battling
+- AI depends on having a notion of the player's skill and changes behavior based on whether battling
   someone perceived to be good or bad
-  - builds ratings databse by scrapes all public replays and looks up ratings for each user in each
+  - builds ratings database by scrapes all public replays and looks up ratings for each user in each
     replay
-  - player psychology is different at different skill levels, and behaviours learned from top
-    players won't necessarily translate well to lower rank play
+  - player psychology is different at different skill levels, and behaviors learned from top players
+    won't necessarily translate well to lower-rank play
 - two stages of pruning - one before current's turns options are explored which covers  (i.e. move
   accuracy simplification, squashing rolls, etc) and a second one that does the bulk of the work
-  which takes place before going tothe next level
+  which takes place before going to the next level
 - "Basically, it looks at all the options both it and the opponent has, evaluates which options are
-best for it and the opponent, then uses Showdown simulator to see the result of those option
-combinations, then picks the move that usually produces the best outcome It will also do some tree
-search through future turns, but no more than three turns deep"
-- "I tend to agree with assuming your opponent has perfect info." in order to cut the amount of work=
+  best for it and the opponent, then uses Showdown simulator to see the result of those option
+  combinations, then picks the move that usually produces the best outcome It will also do some tree
+  search through future turns, but no more than three turns deep"
+- "I tend to agree with assuming your opponent has perfect info." to cut the amount of work
 
 ## Youngster Joey
 
@@ -621,11 +618,11 @@ search through future turns, but no more than three turns deep"
 ## _Kalose, Kaya, Kim_
 
 - Generation 1 Challenge Cup
-- custom determinstic simulator
+- custom deterministic simulator
 - Q-learning trained with self-play
-  - feature vector just active player and opponents types and "HP buckets" (10
+  - feature vector just active player and opponent's types and "HP buckets" (10
     buckets)
-  - deliberately avoided tracking number of pokemon left per side
+  - deliberately avoided tracking number of Pokémon left per side
   - large terminal reward + smaller intermediate reward for how much HP player
     and opponent had left
   - softmax exploration strategy with information from previous games (superior to ε-greedy)
@@ -646,7 +643,7 @@ search through future turns, but no more than three turns deep"
   - modification to UCB `n` required to differentiate between total number of trials vs. total
     number of times a node was available in an information set
 - compared to "cheating" (perfect-information) MCTS, a cheating ensemble variant, and determinized
-  MCTS with fixed the number of iterations
+  MCTS with fixed number of iterations
     - used a fixed pool of 6 Pokémon = reduced conmeta
     - potentially undervalues determinized MCTS because ISMCTS takes more resources
 
@@ -673,7 +670,7 @@ search through future turns, but no more than three turns deep"
   - not optimized for AI - also features UI elements
   - quirks like Gen 2+ freeze mechanics and ignores accuracy but includes random factor in damage
 - evaluating 3 different models
-  - [rule based expert
+  - [rule-based expert
     system](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RBES.png)
     [(code)](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/InferenceEngine.py)
   - [decision tree](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/DT.png)
@@ -683,8 +680,8 @@ search through future turns, but no more than three turns deep"
 
 ## Pokémon Simulator Environment
 
-- environment for running a large numbers of Pokémon Showdown battle simulations, though features a
-  [rules based heuristic
+- environment for running a large number of Pokémon Showdown battle simulations, though features a
+  [rules-based heuristic
   AI](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts)
   for any generation of singles battles that depends on several
   [modifications](https://github.com/cRz-Shadows/Pokemon_Trainer_Tournament_Simulator/blob/5932a450/README.md#modifications-to-pok%C3%A9mon-showdown)
@@ -702,7 +699,7 @@ search through future turns, but no more than three turns deep"
   shaping](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/utils/reward.py)
   using 3 different methods: [sequential
   feedback](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L19-L83),
-  [tree based
+  [tree-based
   feedback](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L85-L210)
   and [moving target
   feedback](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv_PPO.py#L155)
@@ -713,7 +710,7 @@ search through future turns, but no more than three turns deep"
   - DQN is input, 512x512x256, output w/ ReLU activations
 - always uses the [same team](https://github.com/alexzhang13/reward-shaping-rl/tree/964ea1bc/data),
   allows to ignore abilities and items because instead can simply be treated as properties of the
-  pokemon holding them
+  Pokémon holding them
 - [embedding](
   https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/pokegym.py#L84)
   includes active moves and (unboosted) stats, HP and status for both sides
