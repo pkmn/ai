@@ -3,6 +3,7 @@
 
 require('source-map-support').install();
 
+import * as http from 'http';
 import * as path from 'path';
 
 import favicons from 'favicons';
@@ -62,6 +63,29 @@ const build = async (rebuild?: boolean) => {
       fs.write(path.join(PUBLIC, icon.name), icon.contents);
       expected.add(icon.name);
     }
+  }
+
+  for (const code of [404, 500, 502, 503, 504]) {
+    const page = `${code}.html`;
+    fs.write(path.join(PUBLIC, page), renderer.render({
+      title: `${code} | pkmn.ai`,
+      header: header(`${code}`),
+      path: '',
+      id: 'error',
+      content: `<p>${http.STATUS_CODES[code]}</p>`,
+      style: `
+        #error h2 {
+          text-decoration: none;
+          font-size: 20vh;
+          margin: 0;
+        }
+        #error main {
+          font-size: 1.5em;
+          position: relative;
+          top: -6vh;
+        }`,
+    }).replace('<link href="https://pkmn.ai" rel="canonical">', ''));
+    expected.add(page);
   }
 
   for (const placeholder of ['chat', 'leaderboard']) {
