@@ -1058,12 +1058,6 @@
 
     Battle simulation performance was cited as the main bottleneck, discouraging the addition of
     Monte Carlo tree search and serving as a barrier to increased training time.
-- name: Pinyon
-  framework: true
-  active: 2022 # May 20
-  license: GPL-2.0
-  source: https://github.com/baskuit/pinyon
-  language: C++
 - name: Meloetta
   framework: true
   active: [2022, 2023] # December 21
