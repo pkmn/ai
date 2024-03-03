@@ -571,7 +571,46 @@ TODO aab68037
 
 ## Athena
 
-TODO
+- Generation 7 Random Battle (author considers "more challenging than OU")
+- Pokémon requires a different approach than Go or chess and isn't solvable with an off-the-shelf
+  approach
+- "keeping a balanced team" key insight = = at every point players need to be sure that they have at
+  least one way of beating all of an opponent's Pokémon without losing all of their own Pokémon
+  - contends that MCTS and minimax cannot achieve this
+- identifies speed statistic, ability, and move as most important Pokémon properties
+- three different types of uncertainty: simultaneity, hidden information, stochasticity
+- considers for ML:
+  - complicated game mechanics and massive state space mean hard for NNs to infer patterns unlike in
+    Chess/Go where rules are comparatively much simpler
+  - every Pokémon battle is almost a unique environment = likely to have zero samples in training.
+    _Important to train on past turns of ongoing battle and possibly weight these higher_
+  - high variance in Pokémon means RL agent can get rewards from playing poorly - need to account
+    for matchup and hax
+- game tree pathology present in _all_ game trees due to hidden info/stochasiticy yet not looking
+  ahead is not an option
+- Athena agent uses distributed transposition table, 2 turn lookahead, then attempts to determine
+  which side's team is stronger by doing pairwise comparisons between the matchups using 1-2 turn
+  look-head in the individual 1v1s and score based on the different in HP with a bonus for not
+  fainting and then combines by looking at the average (weighting scores by probability thr matchup
+  would actually occur), then constructs a payoff matrix
+- dominated strategies are removed iteratively using heuristic rules
+- ML used to predict opponents policy based on current payoff matrix and full history of opponent
+  moves and payoff matrices
+  - while best move doesnt actually depend on history, history is a workaround for imperfect info -
+    implicitly demonstrates opponents decision making with respect to what they know and what they
+    think about the player
+- fills in most probable values for revealed Pokémon from usage statistics otherwise uses the [IBM®
+  ILOG® CPLEX®
+  Optimizer](https://www.ibm.com/products/ilog-cplex-optimization-studio/cplex-optimizer) to solve a
+  mixed integer linear programming problem that figure out which Pokémon will best approximate the
+  possibilities
+    - relies on precomputed Species vs. Species 2-turn matchup matrix, similar to the evaluation
+      function
+- doesn't use determinization due too too many states and doesn't use Monte Carlo sampling due to
+  performance so instead overrides the RNG for the first turn of lookahead to only a single number
+  per side from a reduced random and to alwaus return an average value for further turns of
+  lookahead
+- proposes an approach to teambuilding via self-play and a genetic algorithm
 
 ## `blue-sky-sea/Pokemon-MCTS-AI-Master`
 
