@@ -1205,3 +1205,36 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    PokéLLMon explores using large language models (LLMs) to make decisions in the Generation 8
+    Random Battle format. [The
+    agent](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py)
+    translates its interpretation of the battle state from [poke-env](#poke-env) into a [text
+    description](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L224-L551)
+    that is then provided as a prompt to an LLM to generate the next action. A small amount of
+    heuristics are involved: the [decision to
+    Dynamax](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L197-L221)
+    depends on hardcoded rules and if the LLM is unable to produce an action the agent [falls back
+    on the policy of choosing the move with the highest base
+    power](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L958-L962).
+    PokéLLMon leverages In-Context Reinforcement Learning (ICRL) by including information about
+    [historical
+    turns](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L228-L241)
+    and feedback on changes in HP, effectiveness of attacking moves, priority of move execution, and
+    the effects of executed moves to allow the LLM learn from its past actions. The [expected type
+    effectiveness of
+    moves](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L18-L97)
+    and possible [effects of its
+    moves](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L463)
+    are also provided to the LLM for the current turn as a form of Knowledge-Augmented Generation
+    (KAG).
+    [One-shot](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L709),
+    [Self-consistency
+    (SC)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L737),
+    [Chain-of-thought
+    (COT)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L810),
+    [Tree-of-thought
+    (TOT)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L838)
+    prompting approaches are all evaluated, with self-consistency proving to be the most effective.
+    Overall the agent struggles with long-term planning, acting mostly greedily and performing
+    poorly against stall strategies.

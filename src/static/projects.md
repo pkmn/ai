@@ -760,3 +760,39 @@ TODO
   significantly worse than [base-power
   variant](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/max_damage.py#L8)
   of $`MaxDamagePlayer`
+
+## PokéLLMon
+
+- Generation 8 Random Battle
+- implement environment to translate and parse [battle state into
+  text](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L224-L551)
+  description
+- combats halluciniation with in-context reinforcement learning to allow it to
+  refine its policy as well as a knowledge base
+  - ICRL uses change in HP, effectiveness of attacking moves, priority of move
+    execution, and actual effecs of executed moves
+  - knowledge augmented generation (KAG) by providing [expected type
+    effectiveness](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L18-L97)
+    and explaination of move effect ahead of time
+- supports
+  [One-shot](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L709),
+  [Self-consistency
+  (SC)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L737),
+  [Chain-of-thought
+  (COT)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L810),
+  [Tree-of-thought
+  (TOT)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L838)
+  prompting approaches
+- combats "panic switching" that happens with chain-of-thought agents with
+  voting to ensure consistent action generation
+  - self-consistency generates 3 answers and relies on most popular
+  - chain-of-thought and tree-of-thought not as effective
+- description to LLM includes battle state and [historical turn log including
+  actions taken by both
+  side](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L228-L241)
+- training against poke-env's `SimpleHeuristicsPlayer`
+- weakeness: tends to act greedily
+- [falls back on being max base power
+  player](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L958-L962)
+- [rule-based decision to
+  Dynamax](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L197-L221)
