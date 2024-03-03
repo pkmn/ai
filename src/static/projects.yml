@@ -696,7 +696,7 @@
     The `pmariglia/showdown` project features a bespoke engine, a sophisticated client, and several
     agents that can achieve a high level of play across numerous generations. The project primarily
     supports both random and non-random Generation III-VIII singles formats, though also contains
-    partial support for Generation XI --- data and mechanics save for those added by _The Indigo
+    partial support for Generation IX --- data and mechanics save for those added by _The Indigo
     Disk_ DLC are present but [support for Terastallization is still in
     progress](https://github.com/pmariglia/showdown/commit/1a6dfb7d).
 
@@ -763,10 +763,9 @@
     [subprocess](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/nash_equilibrium/main.py#L88)
     in [game states where most information has been
     revealed](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/nash_equilibrium/main.py#L175-L193).
-    Despite hopes that this enhancement might improve the weaknesses closing out games exhibited by
-    the safe agent the nondeterministic Nash equilibrium bot proves much weaker overall than the
-    vanilla approach. An alternative experiment attempts to enhance the default agent with [dynamic
-    search
+    While this experiment into nondeterminism might help with exploitability, ultimately the Nash
+    equilibrium bot proves much weaker overall than the vanilla approach. An alternative experiment
+    attempts to enhance the default agent with [dynamic search
     depths](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/helpers.py#L76),
     possibly doubling search depth when run via [PyPy](https://www.pypy.org/) in scenarios where the
     number of joint actions is small.
@@ -788,7 +787,8 @@
     are included in the scoring function. The scoring does not place value on preserving hidden
     information or scouting, though in the future hopes to explicitly consider the notion of win
     conditions and give bonuses in attempts to better improve chances of particular Pokémon
-    sweeping.
+    sweeping. Tweaks to evaluation may also be necessary to address the agents' exhibited issues
+    around closing out games.
 
     The agents can be configured to play with [fixed
     teams](https://github.com/pmariglia/showdown/tree/6102ea13/teams/teams) in non-random formats,
