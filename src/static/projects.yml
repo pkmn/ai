@@ -710,7 +710,9 @@
     work in the custom engine and [patched for past
     generations](https://github.com/pmariglia/showdown/tree/6102ea13/data/mods). The engine is
     simplified by only reflecting generational differences via its data files and sharing a single
-    control flow across generations though this reduced fidelity is unlikely to matter for its
+    control flow across generations though this
+    [reduced](https://github.com/pmariglia/showdown/issues/76)
+    [fidelity](https://github.com/pmariglia/showdown/issues/80) is unlikely to matter for its
     agents. Performance is a concern (to the point where the engine is undergoing a rewrite in
     Rust), but this is mitigated by the engine's decision to migrate away from a traditional
     copy-based approach to an approach that is currently unique among Pokémon engines: the engine's
