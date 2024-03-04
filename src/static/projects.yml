@@ -934,6 +934,30 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    An innovative and successful Generation 7 Random Battle agent, Athena's core thesis was that
+    competitive Pokémon AI requires an approach uniquely tailored to the domain as opposed to being
+    something that can be achieved through the naive repurposing off-the-shelf solutions used for
+    computer chess or Go. The paper introducing Athena argued that the machine learning approaches
+    attempted by other projects are mostly dismissed for the following reasons:
+
+    - Pokémon's complicated game mechanics and massive state space make it hard for neural networks
+    to infer patterns.
+    - Pokémon's high variance means reinforcement learning agents are suboptimal as they can
+    possibly get rewards for playing poorly.
+    - Every Pokémon battle is almost a unique environment likely to have zero samples in the
+    training set, necessitating an approach that properly accounts for this by training on past
+    turns of ongoing battles.
+
+    Furthermore, the paper claimed that traditional search method are insufficient in Pokémon as
+    game tree pathology is present in _all_ game trees due to hidden information and stochasticity,
+    yet strong play in Pokémon requires the ability to lookahead meaning determining the correct
+    amount of lookahead is crucial. Finally, the paper contended that "keeping a balanced team" is
+    of central importance --- at every point players need to be sure that they have at least one way
+    of beating all of an opponent's Pokémon without losing all of their own Pokémon --- and that
+    lookahead with minimax and Monte Carlo tree search are insufficient to achieve that.
+
+    To resolve these issues, Athena TODO
 - active: [2020, 2022] # May 16
   paper: Yu:2020
   source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master

@@ -574,11 +574,7 @@ TODO aab68037
 - Generation 7 Random Battle (author considers "more challenging than OU")
 - Pokémon requires a different approach than Go or chess and isn't solvable with an off-the-shelf
   approach
-- "keeping a balanced team" key insight = = at every point players need to be sure that they have at
-  least one way of beating all of an opponent's Pokémon without losing all of their own Pokémon
-  - contends that MCTS and minimax cannot achieve this
 - identifies speed statistic, ability, and move as most important Pokémon properties
-- three different types of uncertainty: simultaneity, hidden information, stochasticity
 - considers for ML:
   - complicated game mechanics and massive state space mean hard for NNs to infer patterns unlike in
     Chess/Go where rules are comparatively much simpler
@@ -588,12 +584,19 @@ TODO aab68037
     for matchup and hax
 - game tree pathology present in _all_ game trees due to hidden info/stochasiticy yet not looking
   ahead is not an option
+- "keeping a balanced team" key insight = at every point players need to be sure that they have at
+  least one way of beating all of an opponent's Pokémon without losing all of their own Pokémon
+  - contends that MCTS and minimax cannot achieve this
+
+TODO
+
 - Athena agent uses distributed transposition table, 2 turn lookahead, then attempts to determine
   which side's team is stronger by doing pairwise comparisons between the matchups using 1-2 turn
   look-head in the individual 1v1s and score based on the different in HP with a bonus for not
   fainting and then combines by looking at the average (weighting scores by probability thr matchup
   would actually occur), then constructs a payoff matrix
 - dominated strategies are removed iteratively using heuristic rules
+- three different types of uncertainty: simultaneity, hidden information, stochasticity
 - ML used to predict opponents policy based on current payoff matrix and full history of opponent
   moves and payoff matrices
   - while best move doesnt actually depend on history, history is a workaround for imperfect info -
