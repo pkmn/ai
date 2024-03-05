@@ -997,6 +997,58 @@
     `blue-sky-sea/Pokemon-MCTS-AI-Master` implemented an [agent based on
     UCT](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/AI/mcts.py) that
     reported positive results versus $`RandomPlayer` and $`MaxDamagePlayer`.
+- name: Pokemon Battle Predictor
+  site: https://www.pokemonbattlepredictor.com/battle-predictor
+  active: [2020, 2021] # June 3
+  engine:
+    - name: pokemon-showdown-client
+      url: https://github.com/smogon/pokemon-showdown-client
+  language: JavaScript
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  release:
+    name: 0.21.0
+    url: https://chromewebstore.google.com/detail/pokemon-battle-predictor/efpcljpklgonmgjeiacfbfbpcecklfni
+  description: |
+    [Pokemon Battle Predictor](https://www.pokemonbattlepredictor.com/battle-predictor) was a
+    browser extension that surfaced predictions at the start of every turn about the current battle
+    state to Pokémon Showdown players inferred from a collection of models built with supervised
+    learning techniques and battle logs data. These models (which would eventually be used to power
+    initial versions of the [Future Sight](#FutureSight) AI) included a value network which would
+    predict winning percentage as well as a decomposed policy network made up of three components: a
+    network that predicted the chance of a player choosing to switch or move and then separate
+    networks that would determine which move the player might choose or Pokémon the player might
+    switch to if they chose to do so.
+
+    [Initially](https://www.smogon.com/forums/threads/3666009/) trained on approximately 10,000
+    Generation VIII OU Pokémon Showdown replay logs scraped from players with an Elo rating of at
+    least 1250, the models' accuracies were greatly improved after Pokémon Showdown staff [provided
+    the project with a corpus of around 2 million server
+    logs](https://www.smogon.com/forums/posts/8577932). This additional data also allowed for the
+    creation of models for the majority of non-random Smogon University singles formats. The project
+    originally performed model inference client-side with
+    [TensorFlow.js](https://www.tensorflow.org/js), though later on
+    [anonymized](https://github.com/pkmn/stats/tree/main/anon) data from extension users was sent to
+    a server and inference was moved server-side in order to [support larger
+    models](https://www.smogon.com/forums/posts/8776635). These server-side models could then be
+    tuned with regularly scraped replay data to respond to shifts in the various supported
+    metagames.
+
+    The original [neural network](https://www.smogon.com/forums/posts/8578872) model implementation
+    involved an input vector of 6815 features extracted from the battle state, with seemingly
+    important features like abilities, items, or types being absent, justified by the observation
+    that these could instead be learned as innate characteristics summarized purely by a Pokémon's
+    species. A unique feature included was a "Switch Coefficient" that aimed to capture how often
+    one Pokémon species switches out when faced off against an opposing Pokémon. These inputs were
+    used to train the value network and high-level policy network while the finer-grained networks
+    relied on a slightly different approach. The switch choice model involved a layer to detect
+    which Pokémon would switch in as well as a layer that uses that output to learn which Pokémon
+    were commonly brought in under similar situations. The move choice model was trained to output a
+    probability distribution across all moves which then got masked off by observed probabilities of
+    each Pokémon having said move derived from moveset usage statistics. Updated versions of the
+    model were also trained to predict based on a player's Elo rating, allowing it to account for
+    players of different skill levels exhibiting different behaviors.
 - active: [2020, 2020] # June 13
   source: https://github.com/anthonykrivonos/pokemon-ai
   engine: Custom

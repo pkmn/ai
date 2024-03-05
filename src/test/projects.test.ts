@@ -9,6 +9,7 @@ const projects = yaml.parse(fs.readFileSync(path.join(STATIC, 'projects.yml'), '
 const GITHUB = /^https:\/\/github\.com\/([^\s/]+\/[^\s/]+)\/releases\/tag\/([^\s/]+)$/;
 const NPM = /^https:\/\/www\.npmjs\.(?:org|com)\/package\/(\S+)\/v\/([^\s/]+)$/;
 const PYPI = /^https:\/\/pypi\.org\/project\/([^\s/]+)\/([^\s/]+)\/$/;
+const CHROME = /^https:\/\/chromewebstore.google.com/;
 
 const json = async (url: string, init?: RequestInit) => (await fetch(url, init)).json();
 const TOKEN = process.env.GITHUB_TOKEN
@@ -32,7 +33,7 @@ describe('projects', () => {
         const releases = Object.keys(data.releases);
         const latest = releases[releases.length - 1];
         expect(m[2]).toBe(latest);
-      } else {
+      } else if (!CHROME.test(project.release.url)) {
         throw new Error(`Invalid URL: '${project.release.url}'`);
       }
     }

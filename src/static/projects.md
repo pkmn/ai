@@ -685,6 +685,41 @@ TODO aab68037
   ([adapted](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/Game/engine/single_battle.py)
   from Pokemon-Python)
 
+## Pokemon Battle Predictor
+
+- model-free (supervised learning), impressive accuracy
+- [Pokemon Battle Predictor](https://www.smogon.com/forums/threads/3666009/) browser extension
+  trained on 10,000 battles (10 days of `gen8ou` replay data 1250 Elo or greater) predicting value
+  - 4 prediction models: win%, opponent switch%, opponent move policy, opponent switch policy
+    (learned separately as opposed to one policy)
+    - switch policy applies mask to account for Pokémon that cant be switched to
+- runs at the start of every turn
+- extension can leverage Pokémon Showdown's client representation
+- [neural networks](https://www.smogon.com/forums/posts/8578872)
+- input feature vector is 6815 features derived from the battle state as well as a "switch
+  coefficient" tracking "How often one Pokemon switches out when then the opposing Pokemon is also
+  in"
+  - notably doesn't track item, ability, type = those can be treated as innate to a specific Pokémon
+    in the metagame
+- chance of move/switch trained on an equal number of samples of both outcomes
+  -  switch % requires another model that outputs the list of all Pokémon where the Pokémon that
+    switched in, then passed through another layer that can learn similar Pokémon that can fulfill
+    the same role
+  -  move learning is just about learning the chance of moves occuring at any point and applying a
+    mask for each Pokémon derived from moveset usage statistics to determine which are actually
+    possible
+- winning chance also trained on an even sample though only for turns more than 20% of the way
+  through the battle
+- [updated](https://www.smogon.com/forums/threads/posts/8577932) to support most other non-random
+  formats after receiving a data grant
+- [second large update](https://www.smogon.com/forums/posts/8776635)
+  - overhaul to the models which made them much larger, moved to cloud housing and anonymizing the
+    battles using `pkmn/anon` and sending them to the server
+  - tuned with replay data automatically every two weeks
+-  "Those battles are then split into groups to represent different segments of player ratings as to
+  accommodate for players of different skill levels playing differently." = considers player skill
+  level
+
 ## Future Sight
 
 TODO
