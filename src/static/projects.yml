@@ -884,13 +884,12 @@
     and
     [`SimpleHeuristicsPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L19)
     (both simplified versions of an actual $`MaxDamagePlayer`) for
-    training. Finally, poke-env contains an [OpenAI Gym](https://github.com/openai/gym)
-    [environment
+    training. Finally, poke-env contains an [OpenAI Gym](https://github.com/openai/gym) [environment
     implementation](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/openai_api.py)
     and
     [helpers](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106)
-    including a [reward
-    helper](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106).
+    including one for
+    [rewards](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106).
 - name: Simplified Pokemon Environment
   active: [2019, 2020] # October 31
   paper: Simoes:2021
@@ -927,7 +926,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   description: |
-    An innovative and successful Generation 7 Random Battle agent, Athena's core thesis was that
+    An innovative and successful Generation VII Random Battle agent, Athena's core thesis was that
     competitive Pokémon artificial intelligence requires an approach uniquely tailored to the domain
     as opposed to being something that can be achieved through the naive repurposing of
     off-the-shelf solutions used for computer chess or Go. The paper introducing Athena dismissed
@@ -1258,7 +1257,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   description: |
-    PokéLLMon explores using large language models (LLMs) to make decisions in the Generation 8
+    PokéLLMon explores using large language models (LLMs) to make decisions in the Generation VIII
     Random Battle format. [The
     agent](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py)
     translates its interpretation of the battle state from [poke-env](#poke-env) into a [text
