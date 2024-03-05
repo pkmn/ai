@@ -2,7 +2,73 @@
 
 ## Technical Machine
 
-TODO e0315af7
+- supports Generation 1-9 non-random formats
+- [fixed teams](https://github.com/davidstone/technical-machine/tree/e0315af7/teams), though can
+  also [generate
+  teams](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/get_team_impl.cpp#L32)
+  using its team prediction algorithm
+- supports [parsing
+  teams](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/load_team_from_file.cpp)
+  from a past suported simulators [Pokémon
+  Online](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/pokemon_online/read_team_file.cpp),
+  [Pokémon
+  Lab](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/pokemon_lab/read_team_file_impl.cppb),
+  [Shoddy
+  Battle](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/shoddy_battle/read_team_file_impl.cpp),
+  and [Pokémon
+  NetBattle](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/netbattle/read_team_file.cpp)
+- [damage
+  calculator](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/move/calculate_damage.cpp)
+- [parses](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/pokemon_showdown/battle_manager.cpp)
+  [Pokémon
+  Showdown](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/pokemon_showdown/battle_message_handler_impl.cpp)
+  messages, [handling
+  events](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/pokemon_showdown/event_block.cpp)
+  and producinga [client battle
+  representation](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/make_client_battle_impl.cpp)
+- differentiates [known vs. seen
+  Pokémon](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/pokemon/seen_pokemon.cpp)
+- reverse stats
+  - [stat to
+    ev](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/stat/stat_to_ev.cpp)
+  - [reverse ivs and evs from
+    stat](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/stat/calculate_ivs_and_evs.cpp)
+    - [possible dvs/ivs based on hidden
+      power](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/stat/possible_dvs_or_ivs.cpp)
+- [team
+  predictor](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/team_predictor/team_predictor_impl.cpp)
+  - uses [usage
+    stat](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/team_predictor/usage_stats.cpp)
+  - can do [random or most
+    likely](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/team_predictor/estimate.cpp)
+  - [optimizes
+    spreads](https://github.com/davidstone/technical-machine/tree/e0315af7/source/tm/team_predictor/ev_optimizer)
+- [custom usage
+  stats](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/ps_usage_stats/usage_stats.cpp)
+  - [binary
+    format](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/ps_usage_stats/serialize.cpp)
+  - derivative [speed
+    distribution](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/ps_usage_stats/usage_stats.cpp#L115)
+  - ["correlations"](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/ps_usage_stats/usage_stats.cpp#L200)
+- [make
+  decision](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/determine_selection.cpp)
+  - base on [most likely opponent's
+    team](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/clients/determine_selection.cpp#L89)
+    (single determinization)
+- [expectimimax](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/evaluate/expectiminimax.cpp)
+- [evaluation](https://github.com/davidstone/technical-machine/tree/e0315af7/source/tm/evaluate)
+  - [predict
+    selection](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/evaluate/predict_selection_impl.cpp)
+  - [transposition
+    table](https:`//github.com/davidstone/technical-machine/blob/e0315af7/source/tm/evaluate/transposition.cpp)
+- [general vs. single
+  depth](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/evaluate/depth.cpp)
+  - default [depth (2,
+    0)](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/ai/parse_args.cpp#L16)
+- [HCE](https://github.com/davidstone/technical-machine/blob/e0315af7/source/tm/evaluate/evaluate.cpp)
+  is weighted linear combination with [per-generation
+  weighted](https://github.com/davidstone/technical-machine/tree/e0315af7/settings) considering HP,
+  hidden pokemon, and hazards
 
 ## Shanai
 

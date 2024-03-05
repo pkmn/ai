@@ -8,14 +8,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-    - name: Pokémon Online
-      url: https://github.com/po-devs/pokemon-online
-    - name: Pokémon Lab
-      url: https://pokemonlab.com/downloads
-    - name: Shoddy Battle
-      url: https://pokemonlab.com/downloads
-    - name: Pokémon NetBattle
-      url: https://pokemon-netbattle.en.softonic.com/
 - name: Shanai
   active: [2011, 2011] # March 21
   source: https://github.com/nixeagle/shanai
