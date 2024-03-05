@@ -251,7 +251,7 @@
     computed _expected_ damage, though it also featured a notion of exploring
     "[combos](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1201)"
     computed via [limited
-    lookahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34) and
+    look-ahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34) and
     contained basic implementations of a [killer move
     heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
     its inverse, [changing behavior of the AI when its own HP was
@@ -313,7 +313,7 @@
     that greedily assumes an opponent does nothing and a
     [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/PBFS.js) that
     prunes moves which are resisted / switches into poor type matchups and assumes the opponent is a
-    one-turn lookahead agent instead.
+    one-turn look-ahead agent instead.
     - [pure pessimistic
     minimax](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js)
     with an [evaluation
@@ -326,7 +326,7 @@
     [multi-layer](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MLQLearner.js)
     Q-learning networks.
     - [one-turn
-    lookahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
+    look-ahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
     that computes [estimated
     damage](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js#L27)
     and uses the max-damaging move or switches to the Pokémon that has the
@@ -338,7 +338,7 @@
     switching.
 
     Every approach was an improvement over $`RandomPlayer(\widetilde{100\%})`, but the basic
-    one-turn lookahead agent ended up with the best results followed minimax and pruned
+    one-turn look-ahead agent ended up with the best results followed minimax and pruned
     breadth-first-search which both also significantly outperformed alternatives. High simulation
     cost was deemed a major limiting factor to agent performance.
 - name: PokéAI
@@ -482,7 +482,7 @@
     and a more simplified version that only considered a move's base power
     ([`MaxBasePowerAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-base-power-agent.js)).
     - [`SimAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js),
-    an agent that performed a one-turn lookahead by simulating each possible joint action,
+    an agent that performed a one-turn look-ahead by simulating each possible joint action,
     [evaluating](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L311-L336)
     the new state based purely on the sum of HP percentages of Pokémon on each side, using
     [`lrsnash` to solve the computed payoff
@@ -653,7 +653,7 @@
     - [Normal](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L100-L286):
     still focused on maximizing damage, but move decisions also relied on hardcoded logic for
     status and more nuanced game mechanics as well as limited
-    [lookahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
+    [look-ahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
     to avoid being knocked out by an opponent, possibly switching to preserve a Pokémon. Switching
     decisions considered both species and move type matchups.
     - [Hard](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#244-L298):
@@ -928,28 +928,62 @@
       url: https://github.com/smogon/pokemon-showdown
   description: |
     An innovative and successful Generation 7 Random Battle agent, Athena's core thesis was that
-    competitive Pokémon AI requires an approach uniquely tailored to the domain as opposed to being
-    something that can be achieved through the naive repurposing off-the-shelf solutions used for
-    computer chess or Go. The paper introducing Athena argued that the machine learning approaches
-    attempted by other projects are mostly dismissed for the following reasons:
+    competitive Pokémon artificial intelligence requires an approach uniquely tailored to the domain
+    as opposed to being something that can be achieved through the naive repurposing of
+    off-the-shelf solutions used for computer chess or Go. The paper introducing Athena dismissed
+    the machine learning approaches attempted by other projects for the following reasons:
 
     - Pokémon's complicated game mechanics and massive state space make it hard for neural networks
     to infer patterns.
-    - Pokémon's high variance means reinforcement learning agents are suboptimal as they can
-    possibly get rewards for playing poorly.
+    - Pokémon's high variance means reinforcement learning agents are suboptimal as they can get
+    rewards while playing poorly.
     - Every Pokémon battle is almost a unique environment likely to have zero samples in the
     training set, necessitating an approach that properly accounts for this by training on past
     turns of ongoing battles.
 
-    Furthermore, the paper claimed that traditional search method are insufficient in Pokémon as
+    Furthermore, the paper claimed that traditional search methods are insufficient in Pokémon as
     game tree pathology is present in _all_ game trees due to hidden information and stochasticity,
-    yet strong play in Pokémon requires the ability to lookahead meaning determining the correct
-    amount of lookahead is crucial. Finally, the paper contended that "keeping a balanced team" is
-    of central importance --- at every point players need to be sure that they have at least one way
-    of beating all of an opponent's Pokémon without losing all of their own Pokémon --- and that
-    lookahead with minimax and Monte Carlo tree search are insufficient to achieve that.
+    yet strong play in Pokémon requires the ability to look ahead meaning determining the correct
+    amount of look-ahead is crucial. Finally, the paper contended that "keeping a balanced team" is
+    of central importance --- at every point, players need to be sure that they have at least one
+    way of beating all of an opponent's Pokémon without losing all of their own Pokémon --- and that
+    look-ahead with minimax and Monte Carlo tree search are insufficient to achieve that.
 
-    To resolve these issues, Athena TODO
+    Maintaining team balance was at the core of Athena's algorithm --- its process for making
+    decisions involved using two turns of look-ahead before calculating the probability of it
+    winning from each state, relying on a distributed transposition table and hand-crafted forward
+    pruning heuristics to greatly reduce the number of states explored. To compute its probability
+    of winning, Athena performed pairwise Pokémon matchup comparisons using a further 1-2 turns
+    look-ahead in each of the individual 1v1s after which it computed a score based on the
+    difference in HP and a bonus for not fainting. These scores were then combined into a single
+    value that could be added to a payoff matrix by looking at the average of scores weighted by an
+    estimated probability of each individual matchup actually occurring.
+
+    Athena fed the computed payoff matrix along with a history of its opponent's moves and their
+    corresponding payoff matrices into an unspecified machine learning algorithm that returned the
+    probability of their opponent making each of their available moves, multiplied these
+    probabilities by their respective payoffs, assumed their opponent would greedily choose the move
+    with the lowest payoff for the player, and then chose whatever move was the best response to
+    their opponent's choice.
+
+    In cases where an opponent's Pokémon's species were known Athena adopted the usual practice of
+    relying on usage statistics to deduce the most likely values of its other unknown attributes.
+    Given that Athena's domain was a random format it could not rely on teammate statistics to fill
+    in unknown species and it instead took a more involved but novel approach: Athena used the [IBM®
+    ILOG® CPLEX®
+    Optimizer](https://www.ibm.com/products/ilog-cplex-optimization-studio/cplex-optimizer) and a
+    precomputed table of 1v1 matchup scores for each species with every other species to solve a
+    mixed integer linear programming problem that determined which species of Pokémon would best
+    approximate the battle between the agent's team and any particular possible values for the
+    opponent's unrevealed Pokémon.
+
+    Finally, Athena heavily abstracted the random number generator to pare down the state space
+    explosion that would otherwise result from attempting to account for stochasticity. Eschewing
+    determinizations due to their high branching factor and Monte Carlo sampling due to the Pokémon
+    Showdown engine's slow simulation speed, Athena instead modified Pokémon Showdown's PRNG to
+    return _one_ of 8 different preconfigured values constantly for each side when called during the
+    first turn of look-ahead followed by a constant value in the middle of the range for subsequent
+    turns, dramatically reducing the number of possible states that the agent would need to explore.
 - active: [2020, 2022] # May 16
   paper: Yu:2020
   source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master
@@ -1022,7 +1056,7 @@
     slightly more sophisticated $`MaxDamagePlayer`, Youngster Joey deliberately eschewed minimax and
     expectiminimax due to concerns over the game tree size even after pruning and the algorithms not
     being able to play optimally against opponents who were also expected to play sub-optimally. The
-    addition of some form of lookahead was considered for future work.
+    addition of some form of look-ahead was considered for future work.
 - name: alphaPoke
   site: https://matteoh2o1999.github.io/en-us/projects/alphaPoke-project-delivery
   active: 2021 # November 22

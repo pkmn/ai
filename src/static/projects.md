@@ -218,7 +218,7 @@
     computes *expected* damage
   - [rules-based](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L678)
   - "[combos](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1201)" with
-    [limited lookahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34)
+    [limited look-ahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34)
   - [killer-move
     heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
     [changes behavior when low
@@ -258,7 +258,7 @@
     that greedily assumes an opponent does nothing and a
     [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/PBFS.js) that
     prunes evaluating moves that are resisted / switches into poor type matchups and assumes the
-    opponent is a one-turn lookahead agent instead
+    opponent is a one-turn look-ahead agent instead
   - [pure pessimistic
     minimax](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js)
     with an [evaluation
@@ -271,7 +271,7 @@
     [multi-layer](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MLQLearner.js)
     Q-learning networks
   - [one-turn
-    lookahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
+    look-ahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
     that computes [estimated
     damage](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js#L27)
     and uses the max-damaging move or switches to the Pokémon that has the max-damaging move and a
@@ -473,7 +473,7 @@ to be fed into models
     max damage for move, switches when forced considering type matchup
   - [Normal](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L100-L286):
     moves decisions also have hardcoded logic for status and more nuanced game mechanics and
-    [lookahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
+    [look-ahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
     to avoid being knocked out by an opponent, switches consider type matchup and move type matchup
   - [Hard](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#244-L298):
     uses Normal logic for switching but move decisions were based on a [max depth
@@ -653,12 +653,9 @@ TODO aab68037
 - "keeping a balanced team" key insight = at every point players need to be sure that they have at
   least one way of beating all of an opponent's Pokémon without losing all of their own Pokémon
   - contends that MCTS and minimax cannot achieve this
-
-TODO
-
-- Athena agent uses distributed transposition table, 2 turn lookahead, then attempts to determine
+- Athena agent uses distributed transposition table, 2 turn look-ahead, then attempts to determine
   which side's team is stronger by doing pairwise comparisons between the matchups using 1-2 turn
-  look-head in the individual 1v1s and score based on the different in HP with a bonus for not
+  look-ahead in the individual 1v1s and score based on the difference in HP with a bonus for not
   fainting and then combines by looking at the average (weighting scores by probability thr matchup
   would actually occur), then constructs a payoff matrix
 - dominated strategies are removed iteratively using heuristic rules
@@ -676,9 +673,9 @@ TODO
     - relies on precomputed Species vs. Species 2-turn matchup matrix, similar to the evaluation
       function
 - doesn't use determinization due too too many states and doesn't use Monte Carlo sampling due to
-  performance so instead overrides the RNG for the first turn of lookahead to only a single number
+  performance so instead overrides the RNG for the first turn of look-ahead to only a single number
   per side from a reduced random and to alwaus return an average value for further turns of
-  lookahead
+  look-ahead
 - proposes an approach to teambuilding via self-play and a genetic algorithm
 
 ## `blue-sky-sea/Pokemon-MCTS-AI-Master`

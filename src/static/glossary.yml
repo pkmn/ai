@@ -566,7 +566,7 @@ LMR: |
   [depth](#depth) of moves that have been [ordered](#move-ordering) closer to the end of possible
   moves for a given state (as opposed to [pruning](#pruning) such moves). Search on these late moves
   can be re-run with the full depth if they end up proving promising.
-look ahead: |
+look-ahead: |
   The [depth](#depth) that a search algorithm searches to.
 LOS: |
   The likelihood of superiority denotes how likely it would be for two players of the same strength
@@ -739,10 +739,10 @@ oracle: |
   The [double-oracle]{.dfn} method refers to a particular algorithm for solving [simultaneous move
   alpha-beta search](#alpha-beta) [(Bošanský 2013)](/research#Bošanský:2013){.subtle}.
 OTL: |
-  One-[turn](#turn) [look ahead](#look-ahead). The [$`MaxDamagePlayer`](#MaxDamagePlayer) is the
-  conventional name for an agent that leverages only a single turn of look ahead. _$`N`TL_ can be
+  One-[turn](#turn) [look-ahead](#look-ahead). The [$`MaxDamagePlayer`](#MaxDamagePlayer) is the
+  conventional name for an agent that leverages only a single turn of look-ahead. _$`N`TL_ can be
   used to generalize this shorthand for describing the [depth](#depth) an agent searches to (_e.g._,
-  _3TL_ for three turns worth of lookahead).
+  _3TL_ for three turns worth of look-ahead).
 pathology: |
   Game tree pathology is a phenomenon where searching a [game tree](#game-tree) [deeper](#depth)
   results in worse decisions.
