@@ -997,7 +997,7 @@
     [singles](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/Game/engine/single_battle.py),
     `blue-sky-sea/Pokemon-MCTS-AI-Master` implemented an [agent based on
     UCT](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/AI/mcts.py) that
-    reported positive results versus $`RandomPlayer` and $`MaxDamagePlayer`.`
+    reported positive results versus $`RandomPlayer` and $`MaxDamagePlayer`.
 - active: [2020, 2020] # June 13
   source: https://github.com/anthonykrivonos/pokemon-ai
   engine: Custom
