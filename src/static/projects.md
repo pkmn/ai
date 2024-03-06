@@ -722,6 +722,9 @@ TODO aab68037
 
 ## Future Sight
 
+TODO videos most well known
+<https://www.youtube.com/playlist?list=PLB0vn_hHVow95XwF37k_Puymw0dTjRjA5>
+
 - <https://www.smogon.com/forums/threads/3668916>
   - "chooses it's next move by looking at the possible outcomes several turns after choosing those
   moves and selecting the one that leads to the highest chance to win" = includes lookahead
@@ -747,7 +750,8 @@ TODO aab68037
     - starts with Smogon sets and makes adjustments to improve team symmetry
   - deduces unknown stats using reverse damage calculator, deduced unvealed items and abilities like
     pmariglia
-  - noted weakness: very risk adverse
+  - noted weakness: very risk adverse, [choking in last few
+    turns]<https://www.youtube.com/watch?v=RbBJ_J89wso>
 
 TODO website
 
@@ -794,7 +798,13 @@ TODO PokeSim
 - double battles were not possible to support efficiently necessitating the creation of the
   [PokeSim](https://github.com/aed3/poke-sim) engine
   - general purpose engine for modern generations optimized for performance
+  - <https://github.com/aed3/poke-sim/blob/main/DESIGN_SPEC.md>
   - APIs offer insight into what FSAI uses or will plan to use
+    - <https://github.com/aed3/poke-sim/blob/main/designs/Features/RandomChance.md>
+    - efficiently produce many states for possible RNG outcomes
+    - pruning states based on how likely they are to occur
+      <https://github.com/aed3/poke-sim/blob/main/DESIGN_SPEC.md#options-either-set-globally--or-for-each-simulation>
+    - [optimiztions](https://github.com/aed3/poke-sim/blob/main/designs/EXTRA_OPTIMIIZATIONS.md)
 
 ## Youngster Joey
 
