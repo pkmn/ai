@@ -722,12 +722,57 @@ TODO aab68037
 
 ## Future Sight
 
-TODO
+- <https://www.smogon.com/forums/threads/3668916>
+  - "chooses it's next move by looking at the possible outcomes several turns after choosing those
+  moves and selecting the one that leads to the highest chance to win" = includes lookahead
+  - uses ML model from Pokemon Battle Predictor to predict opponents moves and evaluate results of
+    possible moves
+  - originally Generation VII OU, though plays most Team Preview singles formats, primarily modern
+    generations
+  - predicts hidden information by matching revealed information to Smogon Sets that most closely
+    agree with them
+  - uses modified version of Pokémon Showdown to allow for forcing particular RNG outcomes to allow
+    to explore multiple possibilities across multiple threads
+  - aggregates win chance across all explored states and deterministically chooses the one with the
+    highest chance of winning
+  - bottlenecked by inference (running on CPU) and resource generally = only able to go 3 turns deep
+- <https://www.smogon.com/forums/threads/future-sight-ai.3668916/post-8922457>
+  - update removed ML policy and value networks
+  - can team build
+    - "It first looks at all the battles at its disposal, finds what Pokémon win more together and
+    lose more together, and puts that information to use when deciding who are good team members."
+    - picks randomly selected generally viable pokemon and iteratively adds Pokémon to the team
+      based on how each member does against the weighted average of Pokémon in the format and adds
+      members that do better against Pokémon the already selected team member do worse against.
+    - starts with Smogon sets and makes adjustments to improve team symmetry
+  - deduces unknown stats using reverse damage calculator, deduced unvealed items and abilities like
+    pmariglia
+  - noted weakness: very risk adverse
+
+TODO website
+
+- prunes moves that are less likely (opponent) or have much worse outcomes (player)
+- MC based approach?
+- plays Generation 8 non-random formats
+- trained such that every turn of a battle was a separate training example with the question of
+  whether player 1 ended up winning (after training had 81% accuracy), then trained it to ask "what
+  will player 1 do the next turn"
+- is actually running MCTS (using the simulator to "explore the battle's future") = basically using
+  ML-trained policy to evaluate the board position and using Monte Carlo search tree for exploration
+  like AlphaZero?
+  - tries to enumerate all possible chance nodes to evaluate each outcome = large branching factor
+    resulting in slow playouts?
+- on 16 cores the AI can look ahead just shy of 3 turns in 15s
+- using multiple processes instead of workers because JS Worker API deemed too slow
+- acheived ELO of 1547 (1630 max) in `gen8ou` (just outside of top 500), 100% win rate against
+  random AI
+- relies on approximate inverse damage formula to determine opponent's stats
+- eventually removed the ML part
+
+TODO discord
 
 - uses [Puppeteer](https://github.com/puppeteer/puppeteer) to leverage Pokémon Showdown's client
   representation
-- double battles were not possible to support efficiently necessitating the creation of the
-  [PokeSim](https://github.com/aed3/poke-sim) engine
 - models' accuracy plateau after ~10,000 battles in the training set
 - AI depends on having a notion of the player's skill and changes behavior based on whether battling
   someone perceived to be good or bad
@@ -743,6 +788,13 @@ TODO
   combinations, then picks the move that usually produces the best outcome It will also do some tree
   search through future turns, but no more than three turns deep"
 - "I tend to agree with assuming your opponent has perfect info." to cut the amount of work
+
+TODO PokeSim
+
+- double battles were not possible to support efficiently necessitating the creation of the
+  [PokeSim](https://github.com/aed3/poke-sim) engine
+  - general purpose engine for modern generations optimized for performance
+  - APIs offer insight into what FSAI uses or will plan to use
 
 ## Youngster Joey
 
