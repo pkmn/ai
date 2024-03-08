@@ -35,6 +35,7 @@ const RANKING = [
   'hsahovic/reinforcement-learning-pokemon-bot', // "~90% vs. RandomPlayer"
   'alphaPoke', // "87-88% vs. RandomPlayer = ~1150 Elo"
   'Showdown AI Competition', // 85% vs. RandomPlayer = *equivalent* to MaxDamage
+  'taylorhansen/pokemonshowdown-ai', // beats MaxDamage "a bit under half of its matches"
   'kvchen/showdown-rl', //  ~58% vs. RP(0), ~85% vs. RP(~100%), 10% vs. greedy
   'alexzhang13/reward-shaping-rl', // 95%+ vs. RP(~100%), 50-55% vs. RP(0), <10% vs. MaxAttack
   'blue-sky-sea/Pokemon-MCTS-AI-Master', // 68% vs. RandomPlayer (Gen 4 Doubles)

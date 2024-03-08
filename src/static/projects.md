@@ -406,6 +406,44 @@
   lower than the 90% achieved by minimax
 - future work suggestions include eligibility traces and larger feature vector
 
+## `taylorhansen/pokemonshowdown-ai`
+
+TODO ec3939b7
+
+tensorflow
+
+Q learning https://github.com/taylorhansen/pokemonshowdown-ai/commit/4ca9d59694e475a8da222898b88d915ed64ae22c
+reward https://github.com/taylorhansen/pokemonshowdown-ai/commit/468427a2c30c0a5a94c2ea9b3e7df4ef1d62b2e3
+slight negative https://github.com/taylorhansen/pokemonshowdown-ai/commit/0e58a456dc0d6fe0029bb974850958cf330422b1
+mass training https://github.com/taylorhansen/pokemonshowdown-ai/commit/0e58a456dc0d6fe0029bb974850958cf330422b1
+can deduce trapped https://github.com/taylorhansen/pokemonshowdown-ai/commit/664ef9abee1170bc8afe1e46cf8a67c9de504794
+experience replay buffer https://github.com/taylorhansen/pokemonshowdown-ai/commit/9a882846efb997ce403bc936a12a9e252cee11c5
+Q learning to policy gradient https://github.com/taylorhansen/pokemonshowdown-ai/commit/2fac25b9af1e48bbbba597b8ac0822b0edc962be
+randomized mini batches https://github.com/taylorhansen/pokemonshowdown-ai/commit/a6c6e2c7c33e6a9ca12b66d754f2ba394c194cfc
+gpu support https://github.com/taylorhansen/pokemonshowdown-ai/commit/83bcf7d725bc69d0907a9cdc4afa6970f023fdfd
+REINFORCE -> generatlized advantage estimator https://github.com/taylorhansen/pokemonshowdown-ai/commit/2d53efa70bcd21a1a531b80ab1e358e8df46a6dc
+PPO -> epsilon-greedy DQN https://github.com/taylorhansen/pokemonshowdown-ai/commit/a775d53953843067687a8257c300c14c0224656e
+attention model
+https://github.com/taylorhansen/pokemonshowdown-ai/commit/19acbb185b1554e289b84f3af474c538e9f0e7e8
+multi step learning https://github.com/taylorhansen/pokemonshowdown-ai/commit/
+TD learning https://github.com/taylorhansen/pokemonshowdown-ai/commit/c5df424c1f82aade356a89bfabe000db2564b6cf019ede1bc2d9193f909d5ffd1e744b9c7e2a23d2 => mix betwen TD and MC
+Pooling via Multi-head Attention (PMA). https://github.com/taylorhansen/pokemonshowdown-ai/commit/9e7211c7a913431dac288a5c8917e49a8d640132
+distributional RL https://github.com/taylorhansen/pokemonshowdown-ai/commit/b1f1e515fe802188f86d7bdc31732b5c71e9c22e
+RandomPlayer https://github.com/taylorhansen/pokemonshowdown-ai/commit/ceca0f7ba69cec09f89ef5684048bba20dede4b9
+MaxDamage https://github.com/taylorhansen/pokemonshowdown-ai/commit/bd2708b87c2ca43a40800a2b8098f953786e8b9b
+rewritten in python https://github.com/taylorhansen/pokemonshowdown-ai/commit/bd2708b87c2ca43a40800a2b8098f953786e8b9b
+recurrent DQN https://github.com/taylorhansen/pokemonshowdown-ai/commit/b713f26e1cd58993addf5915d529cd4a809d3a08 (https://github.com/taylorhansen/pokemonshowdown-ai/issues/362)
+prioritized replay https://github.com/taylorhansen/pokemonshowdown-ai/commit/ed45033d39a05b5bf3800aa665b1b710857826a7 https://arxiv.org/abs/1511.05952
+pkmn/randbats stats https://github.com/taylorhansen/pokemonshowdown-ai/commit/dbf530eaaf358b28b4b5fcc16a0287deb830da83
+noisy networks https://github.com/taylorhansen/pokemonshowdown-ai/commit/e556acb9977d70e827143a6f8c48e1999e697bfc https://arxiv.org/abs/1706.10295
+
+model overhaul https://github.com/taylorhansen/pokemonshowdown-ai/commit/7ce98e35c5d9f9a1c91eec9126f9417a54370de0
+
+---
+
+src/model/README https://github.com/taylorhansen/pokemonshowdown-ai/commits/353d9035b55bdd2da151bbad27246ac2cd6f9008/src/model/README.md
+README https://github.com/taylorhansen/pokemonshowdown-ai/blob/main/src/ts/battle/README.md
+
 ## `kvchen/showdown-rl`
 
 - agent using proximal policy optimization (PPO) which was expected to be superior to Q-learning for
