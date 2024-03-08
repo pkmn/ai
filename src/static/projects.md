@@ -391,6 +391,21 @@
     - [converts](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) game
       states to fixed-size numeric vectors.
 
+## _Kalose, Kaya, Kim_
+
+- Generation 1 Challenge Cup
+- custom deterministic simulator
+- Q-learning trained with self-play
+  - feature vector just active player and opponent's types and "HP buckets" (10
+    buckets)
+  - deliberately avoided tracking number of Pokémon left per side
+  - large terminal reward + smaller intermediate reward for how much HP player
+    and opponent had left
+  - softmax exploration strategy with information from previous games (superior to ε-greedy)
+- limited training (20k games) = 70% win rate vs. random which is substantially
+  lower than the 90% achieved by minimax
+- future work suggestions include eligibility traces and larger feature vector
+
 ## `kvchen/showdown-rl`
 
 - agent using proximal policy optimization (PPO) which was expected to be superior to Q-learning for
@@ -816,21 +831,6 @@ TODO PokeSim
 - greedy policy deterministically chooses move maximizing
   [heuristic](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310)
 - lookeahead considered as future work
-
-## _Kalose, Kaya, Kim_
-
-- Generation 1 Challenge Cup
-- custom deterministic simulator
-- Q-learning trained with self-play
-  - feature vector just active player and opponent's types and "HP buckets" (10
-    buckets)
-  - deliberately avoided tracking number of Pokémon left per side
-  - large terminal reward + smaller intermediate reward for how much HP player
-    and opponent had left
-  - softmax exploration strategy with information from previous games (superior to ε-greedy)
-- limited training (20k games) = 70% win rate vs. random which is substantially
-  lower than the 90% achieved by minimax
-- future work suggestions include eligibility traces and larger feature vector
 
 ## _Ihara, Imai, Oyama, Kurihara_
 
