@@ -586,6 +586,9 @@
 - active: [2018, 2019] # October 2018
   source: https://github.com/samhippie/shallow-red
   license: MIT
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
   language: Python
   platform:
     - name: Pokémon Showdown!
