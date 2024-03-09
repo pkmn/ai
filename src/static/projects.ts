@@ -29,13 +29,14 @@ const RANKING = [
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo
   'Metagrok', // beat pmariglia 61.2% of the time in gen7randombattle
   'Technical Machine', // ??? (1300-1400 Elo?), even record against weaker version of pmariglia
-  'leolellisr/poke_RL', // 99.5% vs. RandomPlayer, 60-85% vs MaxDamage
+  'reuniclusVGC', // "like 98% vs RandomPlayer and 90% against MaxDamage"
   'Tse', // 96.6% vs. RandomPlayer, 78.2% vs. MaxDamage. ~1350 Elo (VGC)
+  'leolellisr/poke_RL', // 99.5%* vs. RandomPlayer, 60-85%* vs MaxDamage
   'Percymon', // 1270 Elo in gen6randombattle
+  'taylorhansen/pokemonshowdown-ai', // beats MaxExpectedDamage "a bit under half of its matches"
   'hsahovic/reinforcement-learning-pokemon-bot', // "~90% vs. RandomPlayer"
   'alphaPoke', // "87-88% vs. RandomPlayer = ~1150 Elo"
   'Showdown AI Competition', // 85% vs. RandomPlayer = *equivalent* to MaxDamage
-  'taylorhansen/pokemonshowdown-ai', // beats MaxDamage "a bit under half of its matches"
   'kvchen/showdown-rl', //  ~58% vs. RP(0), ~85% vs. RP(~100%), 10% vs. greedy
   'alexzhang13/reward-shaping-rl', // 95%+ vs. RP(~100%), 50-55% vs. RP(0), <10% vs. MaxAttack
   'blue-sky-sea/Pokemon-MCTS-AI-Master', // 68% vs. RandomPlayer (Gen 4 Doubles)
