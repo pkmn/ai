@@ -583,6 +583,13 @@
     determinized MCTS when the number of iterations was fixed. Both approaches were significantly
     weaker than agents leveraging MCTS with perfect information which were used as a control, though
     the gap decreased in further experiments where the battle rules were simplified.
+- active: [2018, 2019] # October 2018
+  source: https://github.com/samhippie/shallow-red
+  license: MIT
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:
@@ -1066,6 +1073,7 @@
       url: https://github.com/smogon/pokemon-showdown
 - name: reuniclusVGC
   active: 2020 # November 23
+  license: MIT
   source: https://github.com/caymansimpson/reuniclusVGC
   engine:
     - name: pokemon-showdown
