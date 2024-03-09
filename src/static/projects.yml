@@ -1064,6 +1064,18 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: reuniclusVGC
+  active: 2020 # November 23
+  source: https://github.com/caymansimpson/reuniclusVGC
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: BigBoy
   active: [2021, 2022] # April 21
   source: https://github.com/attraylor/poke-env
