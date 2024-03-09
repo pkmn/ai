@@ -410,7 +410,53 @@
 
 TODO ec3939b7
 
+hybrid JS + python (started JS, moved to python for models)
+complex config https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/config/train_example.yml
+- dqn, noisynet, Adam optimizer
+- trains against previous versions of itself or random, randommove, and maxdamage agents
+
+js sends state to python model over a socket
+https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/model/serve.ts,
+served by python
+https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/serve.py
+
+
+experience https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/worker/ExperienceBattleParser.ts
+
+max damage++ https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts
+  - expected damage accounting for average roll https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts#L1164 crit and accuracy https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts#L1208
+custom parser https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/parser/events.ts -> client representation https://github.com/taylorhansen/pokemonshowdown-ai/tree/ec3939b7/src/ts/battle/state
+
+comprehensive embedding https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/state/encoder/encoders.ts where usage stats gets applied
+usage stats from pkmn/randbats https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/usage.ts
+size of input state = 42618  https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/gen/shapes.py#L80
+
+state encoder https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/utils/state_encoder.py#L17 using attention
+
+
 tensorflow
+
+training https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/train.py
+
+attention https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/utils/attention.py
+noisynet https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/utils/noisy_dense.py
+recurrent networks https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/utils/recurrent.py
+
+DQN https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/dqn_model.py
+DRQN https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/drqn_model.py
+
+
+experience https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/utils/typing.py#L8
+trajectory https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/utils/typing.py#L50
+
+e-greegy https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/agents/utils/epsilon_greedy.py
+
+replay buffer of experiences https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/agents/utils/replay_buffer.py#L39
+sum tree for proprotional sampling https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/agents/utils/segment_tree.py#L87
+
+
+multiple battles at once https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/environments/utils/battle_pool.py#L93
+
 
 Q learning https://github.com/taylorhansen/pokemonshowdown-ai/commit/4ca9d59694e475a8da222898b88d915ed64ae22c
 reward https://github.com/taylorhansen/pokemonshowdown-ai/commit/468427a2c30c0a5a94c2ea9b3e7df4ef1d62b2e3
@@ -442,7 +488,7 @@ model overhaul https://github.com/taylorhansen/pokemonshowdown-ai/commit/7ce98e3
 ---
 
 src/model/README https://github.com/taylorhansen/pokemonshowdown-ai/commits/353d9035b55bdd2da151bbad27246ac2cd6f9008/src/model/README.md
-README https://github.com/taylorhansen/pokemonshowdown-ai/blob/main/src/ts/battle/README.md
+README https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/README.md
 
 ## `kvchen/showdown-rl`
 
