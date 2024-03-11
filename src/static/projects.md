@@ -408,31 +408,36 @@
 
 ## `taylorhansen/pokemonshowdown-ai`
 
+- Generation 4 Random Battles
+- client written in TypeScript
+  [parses](https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/parser/events.ts)
+  the protocol into a [client
+  representation](https://github.com/taylorhansen/pokemonshowdown-ai/tree/ec3939b7/src/ts/battle/state),
+  [sends](https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/model/serve.ts) it
+  to the Python code which
+  [serves](https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/serve.py) the TensorFlow
+  model over a socket
+- trained against an
+  [MaxDamagePlayer](https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts)
+  that computes expected damage assuming an [average damage
+  roll](https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts#L1164)
+  and accounting for [accuracy and critical
+  hits](https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts#L1208)
+
+---
+
 hybrid JS + python (started JS, moved to python for models)
 complex config https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/config/train_example.yml
 - dqn, noisynet, Adam optimizer
 - trains against previous versions of itself or random, randommove, and maxdamage agents
 
-js sends state to python model over a socket
-https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/model/serve.ts,
-served by python
-https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/serve.py
-
-
 experience https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/worker/ExperienceBattleParser.ts
-
-max damage++ https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts
-  - expected damage accounting for average roll https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts#L1164 crit and accuracy https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/agent/maxDamage.ts#L1208
-custom parser https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/parser/events.ts -> client representation https://github.com/taylorhansen/pokemonshowdown-ai/tree/ec3939b7/src/ts/battle/state
 
 comprehensive embedding https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/state/encoder/encoders.ts where usage stats gets applied
 usage stats from pkmn/randbats https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/ts/battle/usage.ts
 size of input state = 42618  https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/gen/shapes.py#L80
 
 state encoder https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/utils/state_encoder.py#L17 using attention
-
-
-tensorflow
 
 training https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/train.py
 
@@ -443,18 +448,15 @@ recurrent networks https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec393
 DQN https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/dqn_model.py
 DRQN https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/models/drqn_model.py
 
-
 experience https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/utils/typing.py#L8
 trajectory https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/utils/typing.py#L50
 
-e-greegy https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/agents/utils/epsilon_greedy.py
+e-greedy https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/agents/utils/epsilon_greedy.py
 
 replay buffer of experiences https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/agents/utils/replay_buffer.py#L39
 sum tree for proprotional sampling https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/agents/utils/segment_tree.py#L87
 
-
 multiple battles at once https://github.com/taylorhansen/pokemonshowdown-ai/blob/ec3939b7/src/py/environments/utils/battle_pool.py#L93
-
 
 Q learning https://github.com/taylorhansen/pokemonshowdown-ai/commit/4ca9d59694e475a8da222898b88d915ed64ae22c
 reward https://github.com/taylorhansen/pokemonshowdown-ai/commit/468427a2c30c0a5a94c2ea9b3e7df4ef1d62b2e3
@@ -905,36 +907,23 @@ TODO PokeSim
 
 ## reuniclusVGC
 
-gen8vgc2021
-
-https://docs.google.com/document/d/14menCHw8z06KJWZ5F_K-MjgWVo_b7PESR7RlG-em4ic/preview
-
-tensorflow + keras
-
-MDP for double battles https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/max_damage_player.py
-- still pokeenvs weeak calulcator but smarter switching and team preview treatment
-
-dqn agent https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/simple_dqn_player.py
-- small model
-- includes memory of 10000 battles = experience replay
-
-able to beat opponents after https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/simulators/train_and_evaluate_dqn.py#L20
-
-changes for double battles https://github.com/hsahovic/poke-env/compare/46fa2b01...caymansimpson:poke-env:3de07d85
-
-DQN trained via self play with one team https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/helpers/team_repo.py vs. a random smattering of teams
-
-https://github.com/caymansimpson/reuniclusVGC/blob/main/simulators/train_and_evaluate_dqn.py#L20
-
-Baselines are different and worse in VGC
-
-smarter random https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/smarter_random_player.py
-
-
-The bot itself when I played it learned to be slighty better than maxdamage in that it learned to be max damage with two differences:
-switch in an obviously bad position
-dynamax immediately to reap the most rewards from dynamax
-But that was about the extent of it after self-playing for ~3 days on my local machine; also it seemed the bot generalized poorly when I introduced new teams for it to play against (which is the main critique against Q-learning). All in all - I still consider it a failure
+- targets Generation 8 VGC extended `poke-env` by [adding support for double battles](
+  https://github.com/hsahovic/poke-env/compare/46fa2b01...caymansimpson:poke-env:3de07d85)
+- [small DQN
+  model](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/simple_dqn_player.py)
+  build using TensorFlow and Keras trained to [play a fixed
+  team](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/simulators/train_and_evaluate_dqn.py#L20)
+  against baseline agents.
+    - mostly approximated MaxDamagePlayer but additionally learned to switching when in an obviously
+      bad position and to dynamax immediately
+- identified singles baselines as being substantially weaker in doubles, augmented
+  [MaxDamagePlayer](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/max_damage_player.py)
+  and
+  [RandomPlayer](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/smarter_random_player.py)
+  with heuristics to attempt to solve this
+- did not generalize well to new opponents
+- initial foray deemed a failure though lay the foundation for a [new
+  approach](https://docs.google.com/document/d/14menCHw8z06KJWZ5F_K-MjgWVo_b7PESR7RlG-em4ic/preview)
 
 ## Youngster Joey
 
