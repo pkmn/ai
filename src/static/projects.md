@@ -907,6 +907,8 @@ TODO PokeSim
 
 gen8vgc2021
 
+https://docs.google.com/document/d/14menCHw8z06KJWZ5F_K-MjgWVo_b7PESR7RlG-em4ic/preview
+
 tensorflow + keras
 
 MDP for double battles https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/max_damage_player.py
@@ -964,36 +966,36 @@ But that was about the extent of it after self-playing for ~3 days on my local m
 
 ## `samhippie/shallow-red`
 
-perfect info, gen 7 anything goes, 2v2 doubles and vgc2019sunseries
-
-extracted moves and species data data https://github.com/samhippie/shallow-red/tree/5690cdf3/games/dataPokemon
-ps for simulation via stdout https://github.com/samhippie/shallow-red/blob/5690cdf3/games/pokemon.py#L15, no client rep
-hash embedding https://github.com/samhippie/shallow-red/blob/5690cdf3/hashembed/embedding.py
-
-
-mc-cfr https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/cfr.py
-Decoupled UCT (DUCT) https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/duct.py
-Exp3 https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/exp3.py
-online outcome sampling https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/oos.py
-MC Regret Matching https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/rm.py
-deep mccfr https://github.com/samhippie/shallow-red/blob/5690cdf3/old/deep/deepcfr.py
--> https://github.com/samhippie/shallow-red/blob/5690cdf3/deepcfr.py
-
-parallel https://github.com/samhippie/shallow-red/blob/5690cdf3/old/parallelRunner.py
-
-ACTUAL model https://github.com/samhippie/shallow-red/blob/5690cdf3/model.py
-configuraiton https://github.com/samhippie/shallow-red/blob/5690cdf3/config.py#L143
-
-start with MCTS https://github.com/samhippie/shallow-red/commit/973d2567a2676b289bf9c1e5b3fabc00ee073205
-exp3 MCTS https://github.com/samhippie/shallow-red/commit/65755760683eb14882339d9bbc7fb08413336b15
-regret matching https://github.com/samhippie/shallow-red/commit/b152f6fbd3f6dcb78ffe759d65c0096a6fb5af93
-  - shared memory parallism https://github.com/samhippie/shallow-red/commit/be16a44670c1bcfa90e3aeb2bdbc55438ad29150
-add model https://github.com/samhippie/shallow-red/commit/cb994d97a142cae7045f5a483165fae6478305f9
-online outcome sampling https://github.com/samhippie/shallow-red/commit/6c5e9f1f50a1a99a849e00559f32dbe52c8f0a91
-CFR https://github.com/samhippie/shallow-red/commit/a1432055905f16b05bebd3ee96f053e5432030a3
-deep cfr https://github.com/samhippie/shallow-red/commit/f13db22d05a1bac3e619416665420c004fcd5769
-lstm https://github.com/samhippie/shallow-red/commit/1336adcdde4c077b5249c750b4fefb98ebbf90a1
-attention https://github.com/samhippie/shallow-red/commit/eb97121b048cd9ffe0a7dc383c9c30f3b30d80b6
+- perfect info, assorted Generation 7 singles and doubles formats
+- experimented with [Decoupled
+  UCT](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/duct.py),
+  [Monte Carlo tree search with
+  Exp3](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/exp3.py),
+  [Monte Carlo Regret
+  Matching](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/rm.py),
+  [Online Outcome Sampling
+  (OOS)](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/oos.py),
+  and
+  [MC-CFR](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/cfr.py)
+  before settling on [Deep
+  MC-CFR](https://github.com/samhippie/shallow-red/blob/5690cdf3/deepcfr.py)
+  ([Brown 2018b](/research/#Brown:2018b))
+- PyTorch, a [Deep Monte Carlo CFR
+  model](https://github.com/samhippie/shallow-red/blob/5690cdf3/model.py#L328)
+  featuring a [LSTM
+  network](https://github.com/samhippie/shallow-red/blob/5690cdf3/model.py#L73)
+  using [hash
+  embedding](https://github.com/samhippie/shallow-red/blob/5690cdf3/hashembed/embedding.py)
+  with that can be
+  [configured](https://github.com/samhippie/shallow-red/blob/5690cdf3/config.py#L143)
+  to enable convolutions and attention
+- no client represenation, works instead on a series of
+  [tokens](https://github.com/samhippie/shallow-red/blob/5690cdf380c6e138e25d88e85093738951438298/games/pokemon.py#L67)
+  produced from from the protocol and augmented with information
+  [extracted](https://github.com/samhippie/shallow-red/tree/5690cdf3/games/dataPokemon)
+  from Pokémon Showdown's data files
+- uses Pokémon Showdown's [CLI for
+  simultations](https://github.com/samhippie/shallow-red/blob/5690cdf3/games/pokemon.py#L15)
 
 ## _Tse_
 
