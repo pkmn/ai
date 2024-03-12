@@ -1,6 +1,6 @@
 import {Generations} from '@pkmn/data';
 
-import {Choice, Player} from './player';
+import {Choice, Player, Random} from './player';
 
 export type Option = {choose: number} | {consider: number};
 const options = ['switch', 'mega', 'ultra', 'zmove', 'dynamax', 'terastallize'] as const;
@@ -8,8 +8,6 @@ const options = ['switch', 'mega', 'ultra', 'zmove', 'dynamax', 'terastallize'] 
 export namespace RandomPlayer {
   export type Config = {[option in typeof options[number]]: Option};
 }
-
-export type Random = (min?: number, max?: number) => number;
 
 export class RandomPlayer extends Player {
   private readonly random: Random;

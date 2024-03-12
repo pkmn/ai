@@ -20,7 +20,10 @@ export namespace Choice {
     event?: 'mega' | 'zmove' | 'ultra' | 'dynamax' | 'terastallize';
   }
 }
+
 export type Choice = Choice.Move | Choice.Switch | Choice.Team;
+
+export type Random = (min?: number, max?: number) => number;
 
 export abstract class Player {
   battle: Battle;
