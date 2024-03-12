@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     watch: false,
     globals: true,
-    exclude: ['node_modules', 'build', 'public'],
+    exclude: ['**/node_modules', 'build', 'public'],
   }
 });

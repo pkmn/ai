@@ -1,0 +1,27 @@
+{
+  "name": "@pkmn/baselines",
+  "version": "0.0.1",
+  "description": "Competitive Pokémon Artificial Intelligence baseline agents",
+  "repository": "github:pkmn/ai",
+  "license": "MIT",
+  "dependencies": {
+    "@pkmn/client": "^0.6.19",
+    "@pkmn/data": "^0.9.0",
+    "@pkmn/sim": "^0.9.0",
+    "@pkmn/protocol": "^0.6.19",
+    "@smogon/calc": "^0.9.0"
+  },
+  "scripts": {
+    "lint": "eslint . --cache --ext ts",
+    "fix": "eslint . --fix --ext ts",
+    "clean": "rm -rf build .tsbuildinfo .eslintcache",
+    "compile": "tsc -p .",
+    "vitest": "vitest",
+    "test": "npm run compile && npm run lint"
+  },
+  "eslintConfig": {
+    "root": true,
+    "extends": "@pkmn",
+    "ignorePatterns": ["build"]
+  }
+}

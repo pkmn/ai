@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="pkmn.ai" width="192" height="192" src="src/static/favicon.svg" />
+  <img alt="pkmn.ai" width="192" height="192" src="static/favicon.svg" />
   <br />
   <br />
   <a href="https://github.com/pkmn/ai/actions/workflows/test.yml">

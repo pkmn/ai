@@ -3,7 +3,7 @@ import * as path from 'path';
 
 import * as yaml from 'yaml';
 
-const STATIC = path.join(__dirname, '..', '..', 'src', 'static');
+const STATIC = path.join(__dirname, '..', 'static');
 const projects = yaml.parse(fs.readFileSync(path.join(STATIC, 'projects.yml'), 'utf8'));
 
 const GITHUB = /^https:\/\/github\.com\/([^\s/]+\/[^\s/]+)\/releases\/tag\/([^\s/]+)$/;

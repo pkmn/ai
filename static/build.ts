@@ -17,7 +17,7 @@ const fs = site.fs;
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
-const STATIC = path.join(ROOT, 'src', 'static');
+const STATIC = path.join(ROOT, 'static');
 
 export const renderer = new site.page.Renderer({
   public: PUBLIC,

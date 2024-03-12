@@ -1,5 +1,5 @@
 {
-  "include": ["server", "static", "test", "tools"],
+  "include": ["*.ts"],
   "compilerOptions": {
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
