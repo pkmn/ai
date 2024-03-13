@@ -57,12 +57,19 @@ export abstract class Player {
     if (request.requestType === 'team') {
       let illusion = false;
       for (const pokemon of request.side.pokemon) {
-        if (pokemon.ability === 'Illusion') {
+        if (pokemon.ability === 'illusion') {
           illusion = true;
           break;
         }
       }
-      const choices = illusion ? ILLUSION : this.battle.gameType === 'doubles' ? DOUBLES : SINGLES;
+
+      // Optimize the standard case, otherwise fall back on slow permutation logic
+      const choices: Choice.Team[] = request.side.pokemon.length === 6
+        ? illusion ? ILLUSION : this.battle.teamPreviewCount === 4 ? DOUBLES : SINGLES
+        : shrink(
+          permutations(SLOTS.slice(0, request.side.pokemon.length)),
+          this.battle.teamPreviewCount
+        );
       return `team ${this.choose(choices).slots.join('')}`;
     }
 
@@ -132,13 +139,11 @@ export abstract class Player {
   abstract choose<C extends Choice>(choices: C[]): C;
 }
 
-const PERMUTATIONS = permutations([1, 2, 3, 4, 5, 6]);
-const ILLUSION: Choice.Team[] =
-  PERMUTATIONS.map(slots => ({type: 'team', slots}));
-const DOUBLES: Choice.Team[] =
-  PERMUTATIONS.map(slots => ({type: 'team', slots: slots.slice(0, 4)}));
-const SINGLES: Choice.Team[] =
-  [1, 2, 3, 4, 5, 6].map(order => ({type: 'team', slots: [order]}));
+const SLOTS = [1, 2, 3, 4, 5, 6];
+const PERMUTATIONS = permutations(SLOTS.slice());
+const ILLUSION: Choice.Team[] = PERMUTATIONS.map(slots => ({type: 'team', slots}));
+const DOUBLES: Choice.Team[] = shrink(PERMUTATIONS, 4);
+const SINGLES: Choice.Team[] = SLOTS.map(order => ({type: 'team', slots: [order]}));
 
 function permutations<T>(xs: T[]) {
   const length = xs.length;
@@ -161,4 +166,14 @@ function permutations<T>(xs: T[]) {
     }
   }
   return result;
+}
+
+// Terrible approach, but not worth optimizing
+function shrink(ps: number[][], n: number) {
+  const m = new Map<string, Choice.Team>();
+  for (const p of ps) {
+    const slots = p.slice(0, n);
+    m.set(slots.join(), {type: 'team', slots});
+  }
+  return Array.from(m.values());
 }

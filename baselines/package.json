@@ -22,6 +22,10 @@
   "eslintConfig": {
     "root": true,
     "extends": "@pkmn",
-    "ignorePatterns": ["build"]
+    "ignorePatterns": ["build"],
+    "overrides": [{
+      "files": ["player.test.ts"],
+      "rules": {"jest/expect-expect": "off"}
+    }]
   }
 }
