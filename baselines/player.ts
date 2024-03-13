@@ -1,4 +1,3 @@
-
 import {Battle} from '@pkmn/client';
 import {Generations} from '@pkmn/data';
 import {Request} from '@pkmn/protocol';

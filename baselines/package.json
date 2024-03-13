@@ -17,7 +17,7 @@
     "clean": "rm -rf build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
     "vitest": "vitest",
-    "test": "npm run compile && npm run lint"
+    "test": "npm run compile && vitest && npm run lint"
   },
   "eslintConfig": {
     "root": true,
