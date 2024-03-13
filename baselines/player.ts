@@ -5,7 +5,7 @@ import {Request} from '@pkmn/protocol';
 export namespace Choice {
   export interface Team {
     type: 'team';
-    slot: number;
+    slots: number[];
   }
 
   export interface Switch {
@@ -55,12 +55,15 @@ export abstract class Player {
 
     // TeamRequest
     if (request.requestType === 'team') {
-    // BUG: technically more permutations are relevant for Illusion
-      const choices: Choice.Team[] = [];
-      for (let slot = 1; slot < request.side.pokemon.length; slot++) {
-        choices.push({type: 'team', slot});
+      let illusion = false;
+      for (const pokemon of request.side.pokemon) {
+        if (pokemon.ability === 'Illusion') {
+          illusion = true;
+          break;
+        }
       }
-      return `team ${this.choose(choices).slot}`;
+      const choices = illusion ? ILLUSION : this.battle.gameType === 'doubles' ? DOUBLES : SINGLES;
+      return `team ${this.choose(choices).slots.join('')}`;
     }
 
     const pokemon = request.side.pokemon;
@@ -127,4 +130,35 @@ export abstract class Player {
   }
 
   abstract choose<C extends Choice>(choices: C[]): C;
+}
+
+const PERMUTATIONS = permutations([1, 2, 3, 4, 5, 6]);
+const ILLUSION: Choice.Team[] =
+  PERMUTATIONS.map(slots => ({type: 'team', slots}));
+const DOUBLES: Choice.Team[] =
+  PERMUTATIONS.map(slots => ({type: 'team', slots: slots.slice(0, 4)}));
+const SINGLES: Choice.Team[] =
+  [1, 2, 3, 4, 5, 6].map(order => ({type: 'team', slots: [order]}));
+
+function permutations<T>(xs: T[]) {
+  const length = xs.length;
+  const result = [xs.slice()];
+  const c: number[] = new Array(length).fill(0);
+
+  let i = 1, k: number, p: T;
+  while (i < length) {
+    if (c[i] < i) {
+      k = i % 2 && c[i];
+      p = xs[i];
+      xs[i] = xs[k];
+      xs[k] = p;
+      ++c[i];
+      i = 1;
+      result.push(xs.slice());
+    } else {
+      c[i] = 0;
+      ++i;
+    }
+  }
+  return result;
 }
