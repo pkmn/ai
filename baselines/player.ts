@@ -66,10 +66,10 @@ export abstract class Player {
       // Optimize the standard case, otherwise fall back on slow permutation logic
       const choices: Choice.Team[] = request.side.pokemon.length === 6
         ? illusion ? ILLUSION : this.battle.teamPreviewCount === 4 ? DOUBLES : SINGLES
-        : shrink(
-          permutations(SLOTS.slice(0, request.side.pokemon.length)),
-          this.battle.teamPreviewCount
-        );
+        : kSubsets(
+          SLOTS.slice(0, request.side.pokemon.length),
+          Math.min(request.side.pokemon.length, this.battle.teamPreviewCount),
+        ).flatMap(slots => permutations(slots)).map(slots => ({type: 'team', slots}));
       return `team ${this.choose(choices).slots.join('')}`;
     }
 
@@ -142,24 +142,31 @@ export abstract class Player {
 const SLOTS = [1, 2, 3, 4, 5, 6];
 const PERMUTATIONS = permutations(SLOTS.slice());
 const ILLUSION: Choice.Team[] = PERMUTATIONS.map(slots => ({type: 'team', slots}));
-const DOUBLES: Choice.Team[] = shrink(PERMUTATIONS, 4);
-const SINGLES: Choice.Team[] = SLOTS.map(order => ({type: 'team', slots: [order]}));
+const SINGLES: Choice.Team[] = SLOTS.map(slot => {
+  const slots = [slot, ...SLOTS];
+  slots.splice(slot, 1);
+  return {type: 'team', slots};
+});
+const DOUBLES: Choice.Team[] = kSubsets(SLOTS, 4)
+  .flatMap(slots => permutations(slots))
+  .map(slots => ({type: 'team', slots}));
 
-function permutations<T>(xs: T[]) {
-  const length = xs.length;
-  const result = [xs.slice()];
+// Heap's algorithm
+function permutations<T>(data: T[]) {
+  const length = data.length;
+  const result = [data.slice()];
   const c: number[] = new Array(length).fill(0);
 
   let i = 1, k: number, p: T;
   while (i < length) {
     if (c[i] < i) {
       k = i % 2 && c[i];
-      p = xs[i];
-      xs[i] = xs[k];
-      xs[k] = p;
+      p = data[i];
+      data[i] = data[k];
+      data[k] = p;
       ++c[i];
       i = 1;
-      result.push(xs.slice());
+      result.push(data.slice());
     } else {
       c[i] = 0;
       ++i;
@@ -168,12 +175,28 @@ function permutations<T>(xs: T[]) {
   return result;
 }
 
-// Terrible approach, but not worth optimizing
-function shrink(ps: number[][], n: number) {
-  const m = new Map<string, Choice.Team>();
-  for (const p of ps) {
-    const slots = p.slice(0, n);
-    m.set(slots.join(), {type: 'team', slots});
+// Knuth's Revolving-Door combinations
+function kSubsets<T>(data: T[], k: number) {
+  const subsets = [];
+  const n = data.length;
+
+  const subset = [];
+  for (let i = 0; i < k; i++) {
+    subset.push(data[i]);
   }
-  return Array.from(m.values());
+  subsets.push(subset.slice());
+
+  while (true) {
+    let i = k - 1;
+    while (i >= 0 && subset[i] === data[n - k + i]) i--;
+    if (i < 0) break;
+
+    subset[i] = data[data.indexOf(subset[i]) + 1];
+    for (let j = i + 1; j < k; j++) {
+      subset[j] = data[data.indexOf(subset[j - 1]) + 1];
+    }
+    subsets.push(subset.slice());
+  }
+
+  return subsets;
 }
