@@ -978,7 +978,7 @@ TODO PokeSim
   with that can be
   [configured](https://github.com/samhippie/shallow-red/blob/5690cdf3/config.py#L143)
   to enable convolutions and attention
-- no client represenation, works instead on a series of
+- no client representation, works instead on a series of
   [tokens](https://github.com/samhippie/shallow-red/blob/5690cdf380c6e138e25d88e85093738951438298/games/pokemon.py#L67)
   produced from from the protocol and augmented with information
   [extracted](https://github.com/samhippie/shallow-red/tree/5690cdf3/games/dataPokemon)

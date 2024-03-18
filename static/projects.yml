@@ -593,6 +593,30 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    Supporting perfect information variants of assorted Generation VII singles and doubles formats,
+    `samhippie/shallow-red` experimented with [Decoupled UCT
+    (DUCT)](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/duct.py), [Monte
+    Carlo tree search with
+    Exp3](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/exp3.py), [Monte
+    Carlo Regret
+    Matching](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/rm.py), [Online
+    Outcome Sampling
+    (OOS)](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/oos.py), and
+    [MC-CFR](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/cfr.py) before
+    settling on an approach using [Deep
+    MC-CFR](https://github.com/samhippie/shallow-red/blob/5690cdf3/deepcfr.py). Built with PyTorch,
+    the agent contained no client respresentation, working instead off of the
+    [tokenized](https://github.com/samhippie/shallow-red/blob/5690cdf380c6e138e25d88e85093738951438298/games/pokemon.py#L67)
+    protocol augmented with information
+    [extracted](https://github.com/samhippie/shallow-red/tree/5690cdf3/games/dataPokemon) from
+    Pokémon Showdown's data files and leveraging Pokémon Showdown's [CLI for
+    simultations](https://github.com/samhippie/shallow-red/blob/5690cdf3/games/pokemon.py#L15). The
+    [model](https://github.com/samhippie/shallow-red/blob/5690cdf3/model.py#L328) featured a [LSTM
+    network](https://github.com/samhippie/shallow-red/blob/5690cdf3/model.py#L73), used a [hash
+    embedding](https://github.com/samhippie/shallow-red/blob/5690cdf3/hashembed/embedding.py), and
+    could be [configured](https://github.com/samhippie/shallow-red/blob/5690cdf3/config.py#L143) to
+    enable convolutions and attention.
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:
