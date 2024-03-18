@@ -914,7 +914,7 @@ TODO PokeSim
   build using TensorFlow and Keras trained to [play a fixed
   team](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/simulators/train_and_evaluate_dqn.py#L20)
   against baseline agents.
-    - mostly approximated MaxDamagePlayer but additionally learned to switching when in an obviously
+    - mostly approximated MaxDamagePlayer but additionally learned to switch when in an obviously
       bad position and to dynamax immediately
 - identified singles baselines as being substantially weaker in doubles, augmented
   [MaxDamagePlayer](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/max_damage_player.py)
@@ -985,6 +985,17 @@ TODO PokeSim
   from Pokémon Showdown's data files
 - uses Pokémon Showdown's [CLI for
   simultations](https://github.com/samhippie/shallow-red/blob/5690cdf3/games/pokemon.py#L15)
+
+##  alphaPoke
+
+- Generation 8 random battles
+- Q-learning using state-action table and a DQN, trained on a low-end machine on
+  a _very_ minimal embedding (stats, damage multiplier, boosts, dynaaxed, forced
+  switch, move "value")
+- DQN uses OHE with a single 1024 Node hidden layer, Double Q-learning
+- DQN can beat MaxBPAgent, QLearning close to Random Baselines, simple
+  heuristics does much better
+- more evidence that naive Q-learning approaches do not work
 
 ## _Tse_
 
