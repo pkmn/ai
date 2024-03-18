@@ -1111,6 +1111,28 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  description: |
+    reuniclusVGC extends [poke-env](#poke-env)'s [double battles
+    support](https://github.com/hsahovic/poke-env/compare/46fa2b01...caymansimpson:poke-env:3de07d85)
+    to target Generation VIII VGC formats. An experimental agent was built using TensorFlow and
+    Keras and featured a [small DQN
+    model](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/simple_dqn_player.py)
+    that was trained to [play a fixed
+    team](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/simulators/train_and_evaluate_dqn.py#L20)
+    against baseline agents. While this agent eventually learned to roughly approximate
+    $`MaxDamagePlayer` (though with the ability to switch when in an obviously disadvantageous
+    position and to Dynamax immediately), the agent did not generalize well to new teams or
+    opponents. This initial foray into the field helped motivate [a new
+    approach](https://docs.google.com/document/d/14menCHw8z06KJWZ5F_K-MjgWVo_b7PESR7RlG-em4ic/preview)
+    based on a "model-based search algorithm with depth-limited and heavily pruned search, not
+    assuming unobservable information, and a Nash Equilibrium solver" that will serve as the
+    direction for future work. Furthermore, the initial reuniclusVGC training revealed limitations
+    in the standard singles baseline agents leading to the versions of
+    [$`RandomPlayer`](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/smarter_random_player.py)
+    and
+    [$`MaxDamagePlayer`](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/max_damage_player.py)
+    which were augmented with heuristics to allow for more realistic training in the doubles formats
+    being targeted.
 - name: BigBoy
   active: [2021, 2022] # April 21
   source: https://github.com/attraylor/poke-env
