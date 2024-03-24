@@ -1072,6 +1072,24 @@ TODO PokeSim
   variant](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/max_damage.py#L8)
   of $`MaxDamagePlayer`
 
+## Battle Master
+
+> Battle Master is an experimental AI built on top of a cognitive architecture. A
+cognitive architecture is essentially an implementation/model of how the mind
+works (what are the internal representations and processes of the mind?). Thus,
+the goal of the Battle Master project is not to create the best AI, but to
+create an AI that exhibits human-like behavior. In particular, Battle Master is
+built on top of the CLARION: a hybrid connectionist and symbolic cognitive
+architecture that models implicit and explicit processes, cognition and
+psychological processes, metacognition, emotion, and motivation.
+
+> Currently, Battle Master will first perceive the current state of a battle and
+decide what its logical position is. It will then decide how it should think
+about the next move (reason over its own reasoning, or metacognition), use the
+determined mode of reasoning to employ relevant processes to create a normalized
+distribution over possible actions (declarative knowledge + processes), and
+select an action from the distribution (procedural knowledge + processes).
+
 ## PokéLLMon
 
 - Generation 8 Random Battle
