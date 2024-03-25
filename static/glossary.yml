@@ -339,7 +339,7 @@ FOSG: |
 FP: |
   An overloaded abbreviation that may refer to one of three things depending on context:
 
-  -[Fictitious play]{.dfn}, a learning process where each player assumes their opponents are
+  - [Fictitious play]{.dfn}, a learning process where each player assumes their opponents are
   playing stationary (unchanging) strategies. During each round, a player calculates the best
   response to the historically observed actions of their opponents, believing those actions
   represent fixed strategies. This iterative process can lead players towards converging on a [Nash
