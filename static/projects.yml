@@ -1230,6 +1230,18 @@
 
     Battle simulation performance was cited as the main bottleneck, discouraging the addition of
     Monte Carlo tree search and serving as a barrier to increased training time.
+- paper: Wang:2024
+  active: 2022 # December 9
+  source: https://github.com/quadraticmuffin/pkmn
+  engine:
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: Meloetta
   framework: true
   active: [2022, 2023] # December 21
