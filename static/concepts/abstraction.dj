@@ -1,0 +1,106 @@
+variant - abstraction of entire game bucketing/data binning
+- hp values (Kalose = 10%). ihtfp_abra = 0 + 6 even bins (16.6667%). consider 16
+  bins for leftovers/toxic
+- ihtfp_abra = pp binning by floor(x^1/3)/4
+- damage rolls (high/mid/low)
+  https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/damage_calculator.py#L194-L231
+- "similar" spreads
+  https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/helpers.py#L127
+- log10(weight) + log10(height)
+- Athena RNG bucketing quantization (quantization (eg. storing usage stats as
+"q8" 1/256 probabilities at rest)
+- abstraction hash
+- simplificaton of state
+- competitive Pokémon has non symmetries without abstraction input logs (raw vs.
+logical vs. contextual) = adds information?
+
+- ignoring complicated mechanics (simplified code = faster because less
+  branching but less accurate)
+
+like with eval, this is effectively heuristic, and what gets abstracted vs. not
+impacts what the results are
+
+abstraction goes hand in hand with feature selection
+
+abstration from usage stats = low used moves/items/abilities become "Other" -
+can reduce dimensionality of infrequent options (only consider 10 items instead
+of 700 because only 10 see 90% of usage etc)
+
+consider "gestalt" pokemon = combine multiple *mostly* invariant things
+(consider item part of the pokemon)
+
+---
+
+Zobrist hashing = table of random numbers that get XORed together (if table is
+too large = wastes memory that could be used for other things + is slower
+because cant fit into caches and results in lots of expensive memory lookups to
+produce. Chess needs 12x64 = 768 random numbers) Produces good hash (similar
+states are very different) Can easily make+unmake move (undo previous move by
+XORing then XOR in new move)
+
+Some games throw away state, but probably not safe to do with number of
+collisions possible? Maybe want a fuzzy compare to know whether to combine
+states anyway? ie/ illusion ignored so hashes the same but then can fuzzy
+compare to know whether actually safe to reuse
+
+Note: Tree might be in array but then TT is just Hash -> array index (or pointer
+to node in tree)
+
+Hashes used by TT (tree) to avoid duplicate work. How common is duplicate work?
+Technically with EBC, *every* state is unique - turn count matters and always
+advances, even if PP doesn’t or double switch. Want some level of abstraction
+over turn count at the very least because otherwise can never make use of
+similar situations
+
+Can reduce state space further by just assuming each Pokemon on each side is
+unique! Don’t track all 1000+ species, just track 12 different Pokemon = “local”
+game piece! Game “piece” has 4 moves (stuff like Transform, Mimic, and running
+out of PP cause problems) = problem, what if unrevealed? = actually do 12+1 = 13
+different “pieces” where 1 piece is an unknown mon?
+
+Even if eg same RBY Tauros on each side, OK to represent as different “piece” bc
+For most of the battles we’re unaware if they are actually the exact same vs.
+might have one move different or slightly different EVs etc Missed opportunity
+to exploit this rare symmetry (much more rare in later gens) isn’t a big loss
+
+Quality of a piece changes over time (status, volatiles, HP, PP) Position of a
+piece other than active vs. inactive doesn’t really matter at all - shouldnt
+really say
+
+A BCDEF is *not* meaningfully different than A FEDCB provided all mons are same
+healths Technically matters for things like which mon gets dragged in via Roar
+etc but thats dependent on RNG. Beat Up message order also matters ILLUSION
+BREAKS THIS!!!!
+
+(12+1) “pieces” * N, 2 “squares” (active vs. inactive)
+
+PROBLEM = abstraction is necessary but means that SIMILAR POSITIONS WILL RESULT
+IN SAME HASH INSTEAD OF VASTLY DIFFERENT HASH.
+
+Turn = ignore fully or bucket to 100s or just “early” vs. “late” game Last
+damage / last moves (index/counterable) = probably unnecessary bc unused except
+for Counter/Mirror Move etc These changing will usually change something else as
+well RNG = non-observable, need to ignore last_selected_move/last_used_move =
+see comments on last damage/moves Active vs. Stored pokemon species/types-
+relevant for Transform but stats also for eg order of operations of
+boosts/paralysis/burn being applied. Same for moves - ignore mimic. Types get
+bucketed into species as well. JUST HAVE Mimiced, Transformed, and Converted
+modifiers? Can get lazy and not disambiguate actual mon transformed into etc -
+if over the course of the battle there are multiple transforms we can just deal
+with the collisions HP, BOOSTS, VOLATILES, PP (just a number for whether
+completely out of one move), STATUS Level, types = unchanging, get rolled into
+species
+
+ie/ you have the zobrist hash as the key (which is reversible etc) but then to
+disambiguate store a generic hash (like CLHASH or CityHash or whatever) of the
+true state bc the universal hash will reduce the true state to 64 or 128 or
+whatever bytes which is not so painful to store, but still will probably not
+have the same collisions as the zobrist hash so you can more or less still
+detect inequalities
+
+
+12*4 = pp masks (cant PP mask unknown pieces bc then wouldn’t be unknown)
+
+HP = “buckets” (10 or 16), percentages (100), full HP (714) Run into problems
+due to things like being at the inflection of an OHKO vs. 2HKO, being in range
+of pinch berries/triggering effects like Defeatist
