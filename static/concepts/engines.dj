@@ -8,6 +8,7 @@ options
 - pokemon-shwodown
 - hiimvincent/poke-battle-sim
 - custom
+- pmariglia/poke-engine
 - ...
 
 tradeoffs/features
@@ -33,3 +34,8 @@ board representation
 - <https://www.chessprogramming.org/Make_Move>
 - <https://www.chessprogramming.org/Unmake_Move>
 - <https://www.chessprogramming.org/Copy-Make>
+
+internal vs. external
+
+  - <https://journal.stuffwithstuff.com/2013/01/13/iteration-inside-and-out/>
+  - <https://stackoverflow.com/questions/5004162/what-does-it-mean-for-a-data-structure-to-be-intrusive>
