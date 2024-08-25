@@ -1423,3 +1423,15 @@
     prompting approaches are all evaluated, with self-consistency proving to be the most effective.
     Overall the agent struggles with long-term planning, acting mostly greedily and performing
     poorly against stall strategies.
+- name: EliteFurretAI
+  site: https://docs.google.com/document/d/14menCHw8z06KJWZ5F_K-MjgWVo_b7PESR7RlG-em4ic/preview
+  active: 2024 # March 30
+  license: MIT
+  source: https://github.com/caymansimpson/EliteFurretAI
+  engine:
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
