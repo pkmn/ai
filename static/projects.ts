@@ -24,7 +24,7 @@ interface Project {
 }
 
 const RANKING = [
-  'quadraticmuffin/pkmn', // reached #8 in gen8randombattle, ~1693 Elo
+  'IHTFP Abra', // reached #8 in gen8randombattle, ~1693 Elo
   'Athena', // reached #33 in gen7randombattle, ~1800 Elo
   'pmariglia/showdown', // 1716 Elo in OU (~1550 average Elo)
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo

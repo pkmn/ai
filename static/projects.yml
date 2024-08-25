@@ -1230,7 +1230,8 @@
 
     Battle simulation performance was cited as the main bottleneck, discouraging the addition of
     Monte Carlo tree search and serving as a barrier to increased training time.
-- paper: Wang:2024
+- name: IHTFP Abra
+  paper: Wang:2024
   active: 2022 # December 9
   source: https://github.com/quadraticmuffin/pkmn
   engine:
