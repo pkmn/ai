@@ -27,6 +27,14 @@ record in `/etc/hosts`:
 +123.45.67.89    pkmn.ai
 ```
 
+If this doesn't work, update `~/.ssh/config` instead:
+
+```diff
++Host pkmn.ai
++  HostName 123.45.67.89
++  ForwardAgent yes
+```
+
 ## Ubuntu
 
 As `root`, create a `pkmn` user and set up the authorized SSH keys for passwordless remote login:
