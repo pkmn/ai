@@ -720,11 +720,11 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   description: |
-    The `pmariglia/showdown` project features a bespoke engine, a sophisticated client, and several
-    agents that can achieve a high level of play across numerous generations. The project primarily
-    supports both random and non-random Generation III-VIII singles formats, though also contains
-    partial support for Generation IX --- data and mechanics save for those added by _The Indigo
-    Disk_ DLC are present but [support for Terastallization is still in
+    Foul Play features a bespoke engine, a sophisticated client, and several agents that can achieve
+    a high level of play across numerous generations. The project primarily supports both random and
+    non-random Generation III-VIII singles formats, though also contains partial support for
+    Generation IX --- data and mechanics save for those added by _The Indigo Disk_ DLC are present
+    but [support for Terastallization is still in
     progress](https://github.com/pmariglia/showdown/commit/1a6dfb7d).
 
     The project's [engine](https://github.com/pmariglia/showdown/blob/6102ea13/ENGINE.md) relies on
