@@ -707,13 +707,14 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- site: https://www.smogon.com/forums/threads/3648979/
+- name: Foul Play
+  site: https://www.smogon.com/forums/threads/3648979/
   active: 2019 # March 24
   license: GPL-3.0
   source: https://github.com/pmariglia/showdown
   engine:
-    - name: Custom
-      url: https://github.com/pmariglia/showdown/blob/master/ENGINE.md
+    - name: poke-engine
+      url: https://github.com/pmariglia/poke-engine
   language: Python
   platform:
     - name: Pokémon Showdown!

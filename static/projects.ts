@@ -24,9 +24,9 @@ interface Project {
 }
 
 const RANKING = [
-  'IHTFP Abra', // reached #8 in gen8randombattle, ~1693 Elo
+  'Foul Play', // reached #7 in gen4 (~1687 Elo/81.6% GXE) & #12 gen5 randoms, 1716 Elo in CG OU
+  'IHTFP Abra', // reached #8 in gen4randombattle, ~1693 Elo
   'Athena', // reached #33 in gen7randombattle, ~1800 Elo
-  'pmariglia/showdown', // 1716 Elo in OU (~1550 average Elo)
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo
   'Metagrok', // beat pmariglia 61.2% of the time in gen7randombattle
   'Technical Machine', // ??? (1300-1400 Elo?), even record against weaker version of pmariglia
