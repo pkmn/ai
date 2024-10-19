@@ -7,7 +7,7 @@ import {header} from './build';
 
 const names = (e: bibtex.Entry) => {
   const buf: string[] = [];
-  const authors = e.creators.author;
+  const authors = e.fields.author!;
   for (let i = 0; i < authors.length; i++) {
     const author = authors[i];
     const initials = author.firstName!.split(' ').map(n => n.endsWith('.') ? n : `${n[0]}.`);
@@ -22,19 +22,19 @@ const names = (e: bibtex.Entry) => {
 const TYPES: {[type: string]: (entry: bibtex.Entry) => string} = {
   'article': e => {
     const volume = e.fields.number
-      ? `${e.fields.volume[0]}(${e.fields.number[0]})`
-      : e.fields.volume[0];
+      ? `${e.fields.volume}(${e.fields.number})`
+      : e.fields.volume;
     return (e.fields.pages
-      ? `${e.fields.journal[0]}, ${volume}:${e.fields.pages[0]}.`
-      : `${e.fields.journal[0]}, ${volume}.`);
+      ? `${e.fields.journal}, ${volume}:${e.fields.pages}.`
+      : `${e.fields.journal}, ${volume}.`);
   },
   'inproceedings': e => e.fields.pages
-    ? `${e.fields.booktitle[0]}, pages ${e.fields.pages[0]}.`
-    : `${e.fields.booktitle[0]}.`,
-  'mastersthesis': e => `Master's thesis, ${e.fields.school[0]}, ${e.fields.address[0]}.`,
-  'phdthesis': e => `PhD thesis, ${e.fields.school[0]}, ${e.fields.address[0]}.`,
+    ? `${e.fields.booktitle}, pages ${e.fields.pages}.`
+    : `${e.fields.booktitle}.`,
+  'mastersthesis': e => `Master's thesis, ${e.fields.school}, ${e.fields.address}.`,
+  'phdthesis': e => `PhD thesis, ${e.fields.school}, ${e.fields.address}.`,
   'misc': e => e.fields.archiveprefix
-    ? `${e.fields.archiveprefix[0]}:${e.fields.eprint[0]} [${e.fields.primaryclass[0]}].` : '',
+    ? `${e.fields.archiveprefix}:${e.fields.eprint} [${e.fields.primaryclass}].` : '',
 };
 
 function format(e: bibtex.Entry) {
@@ -45,12 +45,12 @@ function format(e: bibtex.Entry) {
   const id = `${name} ${date}`;
 
   const parts: string[] = [];
-  parts.push(`<em>${e.fields.title[0]}</em>. `);
+  parts.push(`<em>${e.fields.title}</em>. `);
   parts.push(names(e));
-  parts.push(` (${e.fields.year[0]}) `);
+  parts.push(` (${e.fields.year}) `);
   parts.push(TYPES[e.type](e));
 
-  const urls = e.fields.url[0].split(',');
+  const urls = e.fields.url.split(',');
   const sm = urls.length > 1
     ? ` <a href="${urls[1]}" class="subtle"><em>(Includes supplementary text).</em></a>`
     : '';

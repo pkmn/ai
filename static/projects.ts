@@ -57,7 +57,12 @@ export function page(dir: string) {
   if (bib.errors.length) throw new Error(`Error parsing projects.bib: ${bib.errors.join(', ')}`);
 
   const bibliography: {[key: string]: bibtex.Entry} = {};
-  for (const entry of bib.entries) bibliography[entry.key] = entry;
+  for (const entry of bib.entries) {
+    const key = entry.key === 'DellAcqua:2022'
+      ? 'Dell’Acqua:2022'
+      : entry.key;
+    bibliography[key] = entry;
+  }
 
   const projects: Project[] = yaml.parse(fs.readFileSync(file('yml'), 'utf8'));
   const score = (p: Project) => {
@@ -113,7 +118,7 @@ export function page(dir: string) {
     buf.push('<table>');
     if (project.paper) {
       const p = bibliography[project.paper];
-      const paper = `<a href="${p.fields.url[0]}" class="subtle"><em>${p.fields.title[0]}</em></a>`;
+      const paper = `<a href="${p.fields.url}" class="subtle"><em>${p.fields.title}</em></a>`;
       buf.push(`<tr><td><strong>Paper</strong></td><td>${paper}</td></tr>`);
     }
     buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);

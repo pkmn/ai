@@ -3,9 +3,9 @@
   "repository": "github:pkmn/ai",
   "license": "MIT",
   "dependencies": {
-    "@retorquere/bibtex-parser": "<=7",
+    "@retorquere/bibtex-parser": "^9.0.17",
     "@types/jest": "^29.5.13",
-    "@types/node": "^22.7.6",
+    "@types/node": "^22.7.7",
     "favicons": "^7.2.0",
     "site": "github:scheibo/static",
     "source-map-support": "^0.5.21",
