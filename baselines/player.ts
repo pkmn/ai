@@ -109,7 +109,7 @@ export abstract class Player {
     const dynamaxed = !active.canDynamax && active.maxMoves;
     if (!dynamaxed) {
       for (let slot = 1; slot <= active.moves.length; slot++) {
-        if (active.moves[slot - 1].disabled) continue;
+        if ((active.moves[slot - 1] as any).disabled) continue;
         choices.push({type: 'move', slot});
         if (event) choices.push({type: 'move', slot, event});
       }

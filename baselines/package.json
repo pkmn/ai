@@ -5,27 +5,18 @@
   "repository": "github:pkmn/ai",
   "license": "MIT",
   "dependencies": {
-    "@pkmn/client": "^0.6.21",
-    "@pkmn/data": "^0.9.0",
-    "@pkmn/sim": "^0.9.0",
-    "@pkmn/protocol": "^0.6.21",
-    "@smogon/calc": "^0.9.0"
+    "@pkmn/client": "^0.6.28",
+    "@pkmn/data": "^0.9.21",
+    "@pkmn/sim": "^0.9.21",
+    "@pkmn/protocol": "^0.6.28",
+    "@smogon/calc": "^0.10.0"
   },
   "scripts": {
-    "lint": "eslint . --cache --ext ts",
-    "fix": "eslint . --fix --ext ts",
+    "lint": "eslint --cache",
+    "fix": "eslint --fix",
     "clean": "rm -rf build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
     "vitest": "vitest",
     "test": "npm run compile && vitest && npm run lint"
-  },
-  "eslintConfig": {
-    "root": true,
-    "extends": "@pkmn",
-    "ignorePatterns": ["build"],
-    "overrides": [{
-      "files": ["player.test.ts"],
-      "rules": {"jest/expect-expect": "off"}
-    }]
   }
 }
