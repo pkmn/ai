@@ -656,7 +656,7 @@ NE: |
    The [Nash equilibrium]{.dfn}, a stable state of a system involving the interaction of different
    participants, in which no participant can gain by a unilateral change of [strategy](#strategy) if
    the strategies of the others remain unchanged. A mixed strategy Nash equilibrium or mixed Nash
-   equilibrium ([MNE]{.dfn}) is a Nash equilibrium tgat requires a mixed strategy (a probability
+   equilibrium ([MNE]{.dfn}) is a Nash equilibrium that requires a mixed strategy (a probability
    distribution over pure strategies), and every n-player game has at least one mixed Nash
    equilibrium. In competitive Pokémon, Nash equilibrium is used interchangeably with mixed Nash
    equilibrium.
