@@ -1,8 +1,8 @@
 # Design
 
 Despite competitive Pokémon artificial intelligence projects having existed for close to 15 years,
-no AI has yet acheived superhuman performance, and the field as a whole is still incredibly
-undeveloped compared to those of computer chess or poker. The complexity of Pokémon and lack of
+no AI has yet achieved superhuman performance, and the field as a whole is still incredibly
+underdeveloped compared to those of computer chess or poker. The complexity of Pokémon and lack of
 sufficient infrastructure/resources/guidance means that most developers are unable to explore ideas
 in depth as everyone ends up continually reinventing the wheel and then fizzling out.
 
