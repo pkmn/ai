@@ -54,7 +54,9 @@ export function page(dir: string) {
   const file = (ext: string) => path.join(dir, `projects.${ext}`);
 
   const bib = bibtex.parse(fs.readFileSync(file('bib'), 'utf8'), {sentenceCase: false});
-  if (bib.errors.length) throw new Error(`Error parsing projects.bib: ${bib.errors.join(', ')}`);
+  if (bib.errors.length) {
+    throw new Error(`Error parsing projects.bib: ${bib.errors.map(e => e.error).join(', ')}`);
+  }
 
   const bibliography: {[key: string]: bibtex.Entry} = {};
   for (const entry of bib.entries) {

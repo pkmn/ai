@@ -4,22 +4,22 @@
   "license": "MIT",
   "dependencies": {
     "@retorquere/bibtex-parser": "^9.0.17",
-    "@types/jest": "^29.5.13",
-    "@types/node": "^22.7.7",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.0",
     "favicons": "^7.2.0",
     "site": "github:scheibo/static",
     "source-map-support": "^0.5.21",
     "subpkg": "^4.1.0",
-    "typescript": "^5.6.3",
-    "yaml": "^2.6.0"
+    "typescript": "^5.7.2",
+    "yaml": "^2.6.1"
   },
   "devDependencies": {
-    "@pkmn/eslint-config": "^9.0.0",
-    "@untitaker/hyperlink": "^0.1.32",
+    "@pkmn/eslint-config": "^9.3.0",
+    "@untitaker/hyperlink": "^0.1.43",
     "stylelint": "16.10",
     "stylelint-config-rational-order": "^0.1.2",
     "stylelint-config-standard": "^36.0.1",
-    "vitest": "^2.1.3"
+    "vitest": "^2.1.5"
   },
   "scripts": {
     "lint": "subpkg run lint && eslint --cache && stylelint static/*.css && hyperlink public --check-anchors",
