@@ -1234,7 +1234,6 @@
 - name: IHTFP Abra
   paper: Wang:2024
   active: 2022 # December 9
-  source: https://github.com/quadraticmuffin/pkmn
   engine:
     - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
