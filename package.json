@@ -5,21 +5,21 @@
   "dependencies": {
     "@retorquere/bibtex-parser": "^9.0.17",
     "@types/jest": "^29.5.14",
-    "@types/node": "^22.10.0",
+    "@types/node": "^22.13.1",
     "favicons": "^7.2.0",
     "site": "github:scheibo/static",
     "source-map-support": "^0.5.21",
     "subpkg": "^4.1.0",
-    "typescript": "^5.7.2",
-    "yaml": "^2.6.1"
+    "typescript": "^5.7.3",
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
-    "@pkmn/eslint-config": "^9.3.0",
-    "@untitaker/hyperlink": "^0.1.43",
-    "stylelint": "16.10",
+    "@pkmn/eslint-config": "^9.6.0",
+    "@untitaker/hyperlink": "^0.1.44",
+    "stylelint": "16.14",
     "stylelint-config-rational-order": "^0.1.2",
-    "stylelint-config-standard": "^36.0.1",
-    "vitest": "^2.1.5"
+    "stylelint-config-standard": "^37.0.0",
+    "vitest": "^3.0.5"
   },
   "scripts": {
     "lint": "subpkg run lint && eslint --cache && stylelint static/*.css && hyperlink public --check-anchors",

@@ -33,7 +33,7 @@ const battle = (gen: number, gameType: 'singles' | 'doubles' = 'singles') =>
     formatid: (gameType === 'doubles'
       ? `gen${gen}doublescustomgame@@@Flat Rules`
       : `gen${gen}customgame`) as ID,
-    seed: [1, 2, 3, 4],
+    seed: '1,2,3,4',
     strictChoices: false,
   });
 
