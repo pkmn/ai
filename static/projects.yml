@@ -1435,3 +1435,15 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: PokéChamp
+  site: https://sites.google.com/view/pokechamp-llm
+  active: 2025 # March 6
+  license: MIT
+  source: https://github.com/sethkarten/pokechamp
+  engine:
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
