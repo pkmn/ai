@@ -26,6 +26,7 @@ interface Project {
 const RANKING = [
   'Foul Play', // reached #4 in gen4 (~1743 Elo/82.4% GXE) & #12 gen5 randoms, 1716 Elo in CG OU
   'IHTFP Abra', // reached #8 in gen4randombattle, ~1693 Elo
+  'Metamon', // TODO 64-77 GXE, #31 gen1ou
   'Athena', // reached #33 in gen7randombattle, ~1800 Elo
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo
   'Metagrok', // beat pmariglia 61.2% of the time in gen7randombattle

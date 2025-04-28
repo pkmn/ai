@@ -521,7 +521,7 @@
   license: MIT
   source: https://github.com/taylorhansen/pokemonshowdown-ai
   engine:
-    - name: '@pkmn/sim'
+    - name: "@pkmn/sim"
       url: https://github.com/pkmn/ps/tree/main/sim
   language: [Python, TypeScript]
   platform:
@@ -1194,8 +1194,8 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   release:
-      name: Project Delivery
-      url: https://github.com/MatteoH2O1999/alphaPoke/releases/tag/delivery
+    name: Project Delivery
+    url: https://github.com/MatteoH2O1999/alphaPoke/releases/tag/delivery
 - identifier: Tse
   active: [2022, 2022]
   paper: Tse:2022
@@ -1299,9 +1299,9 @@
   active: 2023 # October 2
   source: https://github.com/spktrm/pokesim
   engine:
-    - name: '@pkmn/sim'
+    - name: "@pkmn/sim"
       url: https://github.com/pkmn/ps/tree/main/sim
-    - name: '@pkmn/client'
+    - name: "@pkmn/client"
       url: https://github.com/pkmn/ps/tree/main/client
   language: Python
   platform:
@@ -1440,10 +1440,23 @@
   license: MIT
   source: https://github.com/spktrm/porygon2
   engine:
-    - name: '@pkmn/sim'
+    - name: "@pkmn/sim"
       url: https://github.com/pkmn/ps/tree/main/sim
-    - name: '@pkmn/client'
+    - name: "@pkmn/client"
       url: https://github.com/pkmn/ps/tree/main/client
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Metamon
+  site: https://metamon.tech/
+  paper: Grigsby:2025
+  active: 2024 # September ??
+  license: MIT
+  source: https://github.com/UT-Austin-RPL/metamon
+  engine:
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
   language: Python
   platform:
     - name: Pokémon Showdown!
