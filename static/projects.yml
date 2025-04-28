@@ -889,8 +889,8 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   release:
-    name: "0.8.3"
-    url: https://github.com/hsahovic/poke-env/releases/tag/0.8.3
+    name: "0.9.0"
+    url: https://github.com/hsahovic/poke-env/releases/tag/0.9.0
   description: |
     The premier Python reinforcement learning framework for competitive Pokémon AIs, poke-env
     supports both singles & doubles battles and random & non-random Generation IV-IX formats.
