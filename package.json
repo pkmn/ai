@@ -3,24 +3,24 @@
   "repository": "github:pkmn/ai",
   "license": "MIT",
   "dependencies": {
-    "@retorquere/bibtex-parser": "^9.0.17",
-    "@types/jest": "^29.5.14",
-    "@types/node": "^22.15.3",
+    "@retorquere/bibtex-parser": "^9.0.19",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.3",
     "favicons": "^7.2.0",
     "site": "github:scheibo/static",
     "source-map-support": "^0.5.21",
     "subpkg": "^4.1.0",
     "tslib": "^2.8.1",
     "typescript": "^5.8.3",
-    "yaml": "^2.7.1"
+    "yaml": "^2.8.0"
   },
   "devDependencies": {
-    "@pkmn/eslint-config": "^9.8.0",
+    "@pkmn/eslint-config": "^9.11.0",
     "@untitaker/hyperlink": "^0.1.44",
-    "stylelint": "16.19",
+    "stylelint": "16.21",
     "stylelint-config-rational-order": "^0.1.2",
     "stylelint-config-standard": "^38.0.0",
-    "vitest": "^3.1.2"
+    "vitest": "^3.2.4"
   },
   "scripts": {
     "lint": "subpkg run lint && eslint --cache && stylelint static/*.css && hyperlink public --check-anchors",
