@@ -354,7 +354,7 @@
       url: https://github.com/smogon/pokemon-showdown
   release:
     name: 2020年9月(技術書典9)
-    url: https://github.com/select766/pokeai/releases/tag/book-202009
+    url: https://github.com/select766/pokeai/releases/tag/book-202505
 - name: CynthiAI
   active: [2017, 2017] # May 23
   source: https://github.com/Sisyphus25/CynthiAI
