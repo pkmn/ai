@@ -45,7 +45,6 @@ export abstract class Player {
       if (cmd === 'error') return this.onError(new Error(rest)); // FIXME
       this.battle.add(line);
     }
-    this.battle.update();
     if (request) this.choice = this.onRequest(this.battle.request!);
   }
 

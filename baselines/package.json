@@ -5,10 +5,10 @@
   "repository": "github:pkmn/ai",
   "license": "MIT",
   "dependencies": {
-    "@pkmn/client": "^0.6.33",
-    "@pkmn/data": "^0.9.35",
-    "@pkmn/sim": "^0.9.35",
-    "@pkmn/protocol": "^0.6.33",
+    "@pkmn/client": "^0.7.2",
+    "@pkmn/data": "^0.10.4",
+    "@pkmn/sim": "^0.10.4",
+    "@pkmn/protocol": "^0.7.2",
     "@smogon/calc": "^0.10.0"
   },
   "scripts": {
