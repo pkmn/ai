@@ -42,7 +42,9 @@ export const cite = (title: string, date: Date, p?: string) => {
 };
 
 export const header = (title: string, wip = false) =>
-  `${wip ? '<div id="topbar">Under Construction: planned completion date September 2025</div>' : ''}
+  `${wip
+    ? '<div id="topbar">Under Construction: please excuse any temporary placeholders</div>'
+    : ''}
   <h1><a href="/" class="subtle">pkmn.ai</a></h1>
   <h2>${title}</h2>`;
 
