@@ -948,6 +948,7 @@
   framework: true
   active: 2019 # October 31
   paper: Reis:2021
+  # paper: Reis:2025
   license: MIT
   source: https://gitlab.com/DracoStriker/pokemon-vgc-engine
   engine:
@@ -1435,6 +1436,18 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: VGC-Bench
+  active: 2024 # June 11
+  paper: Angliss:2025
+  license: MIT
+  source: https://github.com/cameronangliss/vgc-bench
+  language: Python
+  engine:
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: Porygon2
   active: 2024 # July 3
   license: MIT
@@ -1468,8 +1481,14 @@
     - name: pkmn
       url: https://github.com/pkmn/engine
   language: Zig
+- name: PokeHit
+  active: [2024, 2024] # November 27
+  paper: Ferrero:2025
+  source: https://github.com/Alfedi/PokeHit
+  language: Python
 - name: PokéChamp
   site: https://sites.google.com/view/pokechamp-llm
+  paper: Karten:2025
   active: 2025 # March 6
   license: MIT
   source: https://github.com/sethkarten/pokechamp
