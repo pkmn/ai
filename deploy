@@ -20,7 +20,7 @@ npm run build
 
 # Reload or restart the server if there have been changes
 command=${1:-reload}
-[ "${command}" = "restart" ] || git diff --quiet $HEAD src/server ||
+[ "${command}" = "restart" ] || git diff --quiet $HEAD server ||
     sudo service pkmn.ai-server $command
 
 # Reload NGINX if the config has changed
