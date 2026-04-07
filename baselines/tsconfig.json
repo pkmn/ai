@@ -18,6 +18,7 @@
     "sourceMap": true,
     "strict": true,
     "target": "esnext",
-    "tsBuildInfoFile": ".tsbuildinfo"
+    "tsBuildInfoFile": ".tsbuildinfo",
+    "types": ["jest", "node"]
   }
 }

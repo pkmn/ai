@@ -3,7 +3,7 @@
   "repository": "github:pkmn/ai",
   "license": "MIT",
   "dependencies": {
-    "@retorquere/bibtex-parser": "^9.0.29",
+    "@retorquere/bibtex-parser": "<=9.0.21",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.2",
     "favicons": "^7.2.0",
