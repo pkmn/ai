@@ -1499,3 +1499,23 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: PokéAgent
+  site: https://pokeagentchallenge.com/
+  paper: Karten:2025b
+  active: 2025 # April
+- name: Algorithmic Pokémon Teambuilding
+  paper: Sahovic:2025
+  active: [2025, 2025] # August 19
+  source: https://github.com/hsahovic/algorithmic-pokemon-teambuilding
+  language: Python
+- identifier: PokeJAX
+  paper: Karten:2026
+  active: 2026 # March 12
+  framework: true
+  language: Python
+- identifier: Xia
+  paper: Xia:2026
+  active: 2026 # Feb 8
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
