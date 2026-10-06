@@ -1,5 +1,5 @@
 {
-  "include": ["server", "static", "test", "tools"],
+  "include": ["server", "static", "test"],
   "compilerOptions": {
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,

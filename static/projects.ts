@@ -20,7 +20,6 @@ interface Project {
   language?: string | string[];
   platform?: {name: string; url: string}[];
   release?: {name: string; url: string};
-  description?: string;
 }
 
 const RANKING = [
@@ -79,8 +78,6 @@ export function page(dir: string) {
   projects.sort((a, b) => score(a) - score(b));
 
   const filler = fs.readFileSync(file('dj'), 'utf8');
-  const split = filler.replaceAll('\n', '').split('.');
-
   const markdown = html.render(filler);
   buf.push(`<section><div class="description">${markdown}</div></section>`);
   buf.push(
@@ -160,11 +157,6 @@ export function page(dir: string) {
       buf.push(`<tr><td><strong>Release</strong></td><td>${release}</td></tr>`);
     }
     buf.push('</table>');
-    const site = project.site ? `<a href="${project.site}">${title}</a>. ` : '';
-    const description = project.description
-      ? html.render(project.description)
-      : `${site}${split.slice(0, 8 + Math.random() * 12).join('.')}.`;
-    buf.push(`<div class="description"><p>${description}</p></div>`);
     buf.push('</section>');
   }
 
@@ -178,8 +170,8 @@ export function page(dir: string) {
   return {
     path: '/projects/',
     title: 'Projects | pkmn.ai',
-    style: `.description { margin: 2em 0; } td:first-child { width: 8ch; } ${style}`,
-    header: header('Projects', true),
+    style: `.description { text-align: center; } td:first-child { width: 8ch; } ${style}`,
+    header: header('Projects'),
     content: buf.join(''),
     script:
     `document.addEventListener('DOMContentLoaded', () => {

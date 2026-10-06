@@ -16,17 +16,6 @@
   platform:
     - name: Pokémon Online
       url: https://github.com/po-devs/pokemon-online
-  description: |
-    One of the earliest known examples of a competitive Pokémon AI, Shanai was most notable for the
-    creation of the ["Shanai
-    Cup"](https://web.archive.org/web/20110706011535/http://pokemon-online.eu/forums/showthread.php?6273),
-    a simplified variant of Pokémon that hoped to serve as the testbed for AI development. Shanai
-    only supported this restricted Generation V variant and its [core
-    algorithm](https://github.com/nixeagle/shanai/blob/20f11841/PO/Client/client.lisp#L370) can be
-    recognized as an extension of the rudimentary $`MaxDamagePlayer` benchmark. The project also
-    contains the [beginnings of a reverse damage
-    calculator](https://github.com/nixeagle/shanai/blob/20f11841/Pokemon/formulas.lisp), though
-    ultimately the project was abandoned before this feature was incorporated.
 - active: [2014, 2016] # October 20
   license: MIT
   source: https://github.com/vasumv/pokemon_ai
@@ -38,50 +27,6 @@
   release:
     name: "0.0.1"
     url: https://github.com/vasumv/pokemon_ai/releases/tag/0.0.1
-  description: |
-    An early agent targeting the [Generation VI OU
-    format](https://www.smogon.com/dex/xy/formats/ou/) that leveraged [depth
-    2](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/game.py#L25) [determinized and
-    sequentialized pure minimax search with alpha-beta
-    pruning](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/agent.py) and a
-    [hand-crafted evaluation
-    function](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/gamestate.py#L46) to
-    play with [predefined teams](https://github.com/vasumv/pokemon_ai/tree/0adbf47d/teams). While
-    eschewing expectiminimax or a simultaneous-move minimax, the AI experimented between both
-    optimistic and pessimistic sequentializations, seemingly preferring the latter.
-
-    The AI took an unorthodox approach towards integrating with the Pokémon Showdown platform,
-    relying on a [scriptable headless browser](https://phantomjs.org/) instead of the more obvious
-    [WebSocket](https://en.wikipedia.org/wiki/WebSocket) API, complicating
-    [connection](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdown_ai/browser.py) and
-    [parsing](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/log.py), possibly due to
-    misunderstandings or platform limitations that are no longer relevant.
-
-    The agent relied on a custom engine for [simulating
-    actions](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/simulator.py#L228),
-    replete with simplified [move
-    handler](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/handlers.py) and [damage
-    calculator](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/moves.py#L63)
-    implementations. The engine removed all stochastic elements (_e.g._, by ignoring accuracy checks
-    or the contribution of damage rolls) and as such the AI's game state was
-    [patched](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/showdownai/showdown.py#L149)
-    between actions to better keep it synchronized with the true server state.
-
-    The AI featured relatively sophisticated team prediction capabilities:
-    [movesets](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/poke3.json) were
-    [scraped](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/smogon/smogon.py) from Smogon
-    University, with the agent falling back on data from the prior generation where necessary. These
-    served as the basis for an opponent's predicted set, though with the set's moves instead
-    replaced with the moves that occur most frequently as computed from a [replay
-    database](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/database.py) consisting
-    of logs from [top ladder
-    players](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/log_scraper/log_scraper.py). This
-    database was also used to produce [$`P(Move \mid
-    Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_move.json) and [$`P(Move
-    \mid Species \land
-    Move)`](https://github.com/vasumv/pokemon_ai/blob/0adbf47d/data/graph_poke3.json) correlations
-    that allowed the agent to use Bayesian inference as further moves get revealed to better predict
-    an opponent's moveset.
 - name: Percymon
   active: [2014, 2017] # October 21
   paper: Ho:2014
@@ -95,53 +40,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    The first competitive Pokémon AI agent to be described in a paper, Percymon targeted the
-    Generation VI Random Battle format. The bot relied on pure [depth
-    2](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L286) pessimistic
-    sequentialized
-    [minimax](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js) with
-    alpha-beta pruning and [move
-    ordering](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L339-343)
-    (_e.g._, preferring to explore super effective or status moves before those which are not very
-    effective) with a [hand-crafted evaluation
-    function](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L263)
-    based on an early version of [Technical Machine](/projects/#TechnicalMachine)'s
-    [features](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#20-L57)
-    and [weights](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/weights.js). Percymon
-    also included several [hardcoded special cases for certain
-    moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#L352-366)
-    which have intricate game mechanics that were hard for the agent to properly evaluate.
-
-    Due to Percymon being built around an unmodified copy of Pokémon Showdown it was unable to
-    easily make use of the expectiminimax algorithm. Furthermore, while the agent was mostly
-    deterministic, the damage and turn simulations it ran via Pokémon Showdown did not fix a random
-    seed and thus the bot's policies could exhibit a small amount of non-determinism. The Pokémon
-    Showdown engine was found to be a major performance bottleneck, with the
-    [cloning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/clone.js) of the engine's
-    state between simulations cited as the major limiting factor on depth as even with pruning turns
-    could frequently take in excess of 40 seconds to evaluate.
-
-    Percymon chose to simplify the action space by [always mega
-    evolving](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L749) when
-    available as a form of forward pruning. It also chose to simplify the question of imperfect
-    information by assuming that an [opponent's unrevealed Pokémon do not
-    exist](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L125)  and that
-    [an opponent has all possible
-    moves](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L129) from their
-    [random move pool](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/formats-data.js)
-    until [all of their moves have been
-    revealed](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/battleroom.js#L185-L204) (as
-    opposed to leveraging usage stats). In order to work around the increased move acion space
-    resulting from this approach, Percymon [only looked at the top
-    10](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#438) opponent
-    choices (_i.e_, forward pruning via beam search).
-
-    Percymon planned to use
-    [TD-learning](https://github.com/rameshvarun/showdownbot/blob/00dcfcca/bots/minimaxbot.js#60-L136)
-    for the evaluation function weights and considered supporting non-random formats by adding in a
-    usage statistics-backed Bayesian network for team prediction coupled with a CSP solver to build
-    robust teams.
 - name: Leftovers Again
   framework: true
   active: [2015, 2021] # September 1
@@ -160,27 +58,6 @@
   release:
     name: Froslass
     url: https://github.com/dramamine/leftovers-again/releases/tag/v0.9.6
-  description: |
-    The first framework to be published for competitive Pokémon artificial intelligence, Leftovers
-    Again aimed to lower the barrier of entry for beginners. Supporting Generation VII (both random
-    and team-based formats), Leftovers Again provided a
-    [client](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/model) and [damage
-    calculator](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/game) along with
-    instructions for getting started and infrastructure for running and debugging agents. Leftovers
-    Again featured support for [round-robin
-    tournaments](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/roundrobin.js)
-    against the various (mostly rules-based) [sample
-    bots](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots) it bundled, including
-    $`RandomPlayer`
-    ("[randumb](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/randumb/index.js)")
-    and $`MaxDamagePlayer`
-    ("[stabby](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/src/bots/stabby/stabby.js)")
-    implementations. Leftovers Again also included [replay
-    scraping](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-saver.js)
-    and
-    [processing](https://github.com/dramamine/leftovers-again/blob/ddcbdbaa/scripts/replay-processor.mongo.js)
-    functionality, the latter of which could be used to produce $`P(Move \mid Species \land Move)`
-    bigrams.
 - name: Bill's PC
   active: [2015, 2016] # September 8
   source: https://github.com/sobolews/BillsPC
@@ -189,46 +66,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    Bill's PC was a promising but ultimately unrealized and overlooked attempt at implementing a
-    competitive Pokémon AI based on more contemporary game theory techniques. Bill's PC was written
-    in Python and targeted the Generation VI Random Battle format, though hoped to eventually
-    support Generation VII and recognized a rewrite in C++ would likely be necessary to achieve the
-    performance required for a high level of play.
-
-    Bill's PC featured several novel ideas --- it was the first known example of producing usage
-    statistics for the Random Battle formats by [leveraging Pokémon Showdown's team generation
-    logic](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/showdowndata/js/getNRandomTeams.js), a
-    technique independently rediscovered and popularized by
-    [`pkmn/randbats`](https://github.com/pkmn/randbats) half a decade later. However, [Bill's PC's
-    processed statistics](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/showdowndata/miner.py)
-    were significantly richer than those offered by `pkmn/randbats`, approaching the depth of [those
-    offered by Smogon University](https://www.smogon.com/stats/) for non-random formats.
-
-    Additionally, Bill's PC demonstrated the ability to reuse its own high-quality [custom
-    engine](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/battle/battleengine.py) implementation
-    for damage calculation, overriding certain functions to force specific damage rolls or critical
-    hit outcomes in order to [compute damage
-    ranges](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battlecalculator.py) --- a
-    primitive but powerful initial version of the functionality that later could be found in
-    [`libpkmn`](https://github.com/pkmn/engine).
-
-    Bill's PC's [client](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py)
-    included a distinct [opponent
-    representation](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/foeside.py) tracking known
-    and possible moves and attempted to [deduce an opponent's Hidden Power
-    type](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/bot/battleclient.py#L226),
-    deterministically [filled in unknown
-    attributes](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L53) with their most
-    likely value based on the usage statistics, and also tried to leverage typing information to
-    determine which unknown [species of Pokémon might "balance" an opponent's team
-    composition](https://github.com/sobolews/BillsPC/blob/d1e2fd8c/AI/rollout.py#L191).
-
-    Bill's PC's roadmap showed plans to implement "SM-MCTS for stacked matrix games ([Tak
-    2014](/research/#Tak:2014){.subtle}) and/or LP solutions for Nash equilibria with learned
-    valuation functions", but despite the solid foundational work on the client and engine, the
-    project appears to have been abandoned shortly after the initial skeletons of an agent were
-    implemented.
 - name: Deep Red
   active: [2016, 2016] # April 2
   source: https://github.com/TwitchPlaysPokemon/deepred
@@ -237,25 +74,6 @@
   platform:
     - name: Pokémon Anniversary Crystal
       url: https://rainbowdevs.com/title/crystal/
-  description: |
-    A competitive Pokémon battling AI that existed to serve as the in-game computer opponent for a
-    ROM-hack when run in a custom emulator, Deep Red is a typical rules-based agent with a
-    [hand-crafted evaluation
-    function](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L678). Due to
-    the unique platform it was built for it could leverage perfect information to simplify its
-    implementation, though targeting an in-game battle system also meant it had to support the
-    additional action of using items in battle, a game element not present in the multiplayer link
-    battle system online play is based around. Deep Red's algorithm was mostly deterministic,
-    primarily leveraging a [damage
-    calculator](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L283) that
-    computed _expected_ damage, though it also featured a notion of exploring
-    "[combos](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1201)"
-    computed via [limited
-    look-ahead](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L34) and
-    contained basic implementations of a [killer move
-    heuristic](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1921) and
-    its inverse, [changing behavior of the AI when its own HP was
-    low](https://github.com/TwitchPlaysPokemon/deepred/blob/350fe081/oldai/AI.py#L1719).
 - active: [2016, 2023] # December 8
   license: MIT
   source: https://github.com/Synedh/showdown-battle-bot
@@ -266,28 +84,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    An early [rule-based
-    agent](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/ai.py) that variably
-    focused on the [then-current generation of random random
-    formats](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/io_process.py#L18-L23)
-    (Generation VI--VIII). `Synedh/showdown-battle-bot` featured limited state tracking, augmenting
-    Pokémon Showdown's [request
-    JSON](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/battle.py#L40) with
-    [simple battle log
-    parsing](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/battlelog_parsing.py#L26)
-    to form a more complete client representation. The agent's evaluation scored actions in terms of
-    speed and [expected
-    damage](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L204-L216)
-    computed by a [basic damage
-    calculator](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L136),
-    with special handling for [boosting
-    moves](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L157-L173)
-    and moves which inflict
-    [status](https://github.com/Synedh/showdown-battle-bot/blob/52db93cb/src/move_efficiency.py#L175-L201).
-    The AI preferred attacking but [would
-    switch](https://github.com/Synedh/showdown-battle-bot/blob/52db93cbd4aaca3bbc9f13399268b76785f23e5c/src/ai.py#L128-L133)
-    if it lacked sufficiently good options for moves.
 - name: Showdown AI Competition
   framework: true
   active: [2017, 2018] # February 28
@@ -299,48 +95,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    The Showdown AI Competition pitted a wide variety of agents against each other within a custom
-    Generation VII Random Battle format with [Zoroark, Ubers, and Pokémon below NU
-    banned](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9ff8e484fb99e12670df7ffe2af2f3b04/zarel/data/scripts.js#L2097),
-    20 seconds allotted time per decision and a hard 500-turn limit. The competition involved
-    multiple rounds of [two best-of-3 matches with team swap to reduce
-    variance](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/OfflineGame.js#L32-L75).
-    The following approaches were compared:
-
-    - non-adversarial [breadth-first
-    search](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/BFSAgent.js)
-    that greedily assumes an opponent does nothing and a
-    [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/PBFS.js) that
-    prunes moves which are resisted / switches into poor type matchups and assumes the opponent is a
-    one-turn look-ahead agent instead.
-    - [pure pessimistic
-    minimax](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js)
-    with an [evaluation
-    function](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MinimaxAgent.js#L30-L34)
-    that favors dealing damage while rewarding survival and a depth penalty to promote exploration
-    and limit deep searches.
-    - both
-    [single-layer](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/QLearner.js)
-    and
-    [multi-layer](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/MLQLearner.js)
-    Q-learning networks.
-    - [one-turn
-    look-ahead](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js)
-    that computes [estimated
-    damage](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/OTLAgent.js#L27)
-    and uses the max-damaging move or switches to the Pokémon that has the
-    max-damaging move and a
-    [variant](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js)
-    that includes a [killer move
-    heuristic](https://github.com/scotchkorean27/showdownaiclient/blob/c6cb71a9/agents/TypeSelector.js#L42)
-    as well as additional rules and heuristics around type matchups and
-    switching.
-
-    Every approach was an improvement over $`RandomPlayer(\widetilde{100\%})`, but the basic
-    one-turn look-ahead agent ended up with the best results followed minimax and pruned
-    breadth-first-search which both also significantly outperformed alternatives. High simulation
-    cost was deemed a major limiting factor to agent performance.
 - name: PokéAI
   active: [2017, 2022] # March 14
   license: MIT
@@ -365,23 +119,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    CynthiAI targeted the Generation VII Random Battle format using a mixture of heuristics and
-    [depth 1](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L769) [pure
-    optimistic
-    minimax](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L577-L742) search
-    with a [hand-crafted evaluation
-    function](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L187-575).
-    CynthiAI [deterministically used the highest accuracy move that would knock out its
-    opponent](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L163-L182) (killer
-    move heuristic) otherwise selected the most damaging move (ignoring accuracy), finally falling
-    back on the result of its minimax search. Like [Percymon](/projects/#Percymon), to better
-    account for game mechanics and prevent suboptimal decisions, CynthiAI applied further [hardcoded
-    modifiers](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L777-L794) to the
-    minimax result. In lieu of team prediction via usage statistics, CynthiAI worked off of an
-    opponent's [known
-    moves](https://github.com/Sisyphus25/CynthiAI/blob/37dd2e41/CynthiAgent.js#L123) if enough were
-    known otherwise defaulted to random move pool for the species.
 - name: SutadasutoIA
   active: [2017, 2018]
   paper: Rill-García:2017
@@ -391,65 +128,14 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    SutadasutoIA was a knowledge-based expert system designed to play a variant of Generation VI BSS
-    without status moves, EVs, or items. The agent was intended for repeated battles against the
-    same opponent akin to [Battle Maison](https://bulbapedia.bulbagarden.net/wiki/Battle_Maison) and
-    used a [hill-climbing
-    algorithm](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L298) to
-    optimize team selection from a [pool of
-    Pokémon](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/pool.txt) between battles.
-    Like [`vasumv/pokemon_ai`](#vasumv/pokemon_ai),  SutadasutoIA used a
-    [webdriver](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/webControl.py)
-    ([Selenium](https://www.selenium.dev/)) for play on Pokémon Showdown as opposed to communicating
-    directly via the [WebSocket](https://en.wikipedia.org/wiki/WebSocket) API. SutadasutoIA's
-    [hand-crafted
-    evaluation](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L4-L295)
-    function used a combination of rules and [a scoring
-    system](https://github.com/Sutadasuto/SutadasutoIA/blob/b8a5dfd2/battleControl.py#L209-L254) to
-    determine actions, focusing on classifying Pokémon by their role ("Special Sweeper") and
-    choosing suitable actions based on this designation.
 - identifier: Rill-García
   active: [2018, 2018]
   paper: Rill-García:2018
   language: Python
-  description: |
-    Rill-García followed up their work on SutadasutoIA with an agent developed via reinforcement
-    learning. Designed for the same constrained Generation VI BSS format and repeated battle
-    challenge as SutadasutoIA, the RL agent used data from 500 high-ranked human replays gathered
-    from Pokémon Showdown which were then also used to bootstrap the agent's learned evaluation
-    function. The bulk of training was conducted via a Q-learning approach with self-play and a
-    threshold-greedy policy. Actions were rewarded based on whether they resulted in an OHKO, KO,
-    the percentage damage they caused their opponent or whether they prevented the opponent from
-    acting. During evaluation matches with SutadasutoIA where agents were allowed to learn and adapt
-    to their opponent's team between battles, the RL agent did well when using a single team but did
-    poorly when forced to play with several teams.
 - active: [2018, 2018] # Feb 9
   source: https://github.com/DanielAlcocerSoto/Pokemon-Python
   engine: Custom
   language: Python
-  description: |
-    `DanielAlcocerSoto/Pokemon-Python` experimented with a reinforcement learning
-    [model](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py)
-    written with Keras and Tensorflow as the opponent trainer featured in a [custom
-    engine](https://github.com/DanielAlcocerSoto/Pokemon-Python/tree/aa9defc6/Game/engine) and
-    accompanying [`pygame`](https://www.pygame.org)-based
-    [UI](https://github.com/DanielAlcocerSoto/Pokemon-Python/tree/aa9defc6/Game/display) supporting
-    Generation IV Double Battles. While this domain is quite ambitious, the engine was extremely
-    simple; lacking support for switching, effects, or move accuracy. A Q-learning approach was used
-    to train the agent's small neural network on a fairly [minimal
-    embedding](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/encoder.py#L48)
-    against a [random
-    agent](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/run.py#L110-L113)
-    following [ε-greedy
-    policy](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/agent_to_train.py#L41)
-    using
-    [mini-batch](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py#L114-L134)
-    gradient descent and a [reward function that favored maximum
-    damage](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Agent/model.py#L80).
-    The network's architecture was a straightforward multi-layer perceptron with [layers of 24, 24,
-    and 8 units with ReLU activation between layers and a linear
-    output](https://github.com/DanielAlcocerSoto/Pokemon-Python/blob/aa9defc6/Configuration/RL_config.json#L6).
 - name: PokeML
   active: [2018, 2019] # July 13
   license: MIT
@@ -466,57 +152,11 @@
   release:
     name: "0.2.5"
     url: https://www.npmjs.com/package/pokemon-env/v/0.2.5
-  description: |
-    The PokeML project contained a collection of several Generation VII Pokémon battle agents that
-    [simulated battles via Pokémon
-    Showdown](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/team-aware-simulation-agent.js#L42)
-    and whose client representations tracked state using an [extraction from its
-    client](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/tracking). PokeML's agents included:
-
-    - A basic $`RandomPlayer`
-    ([`RandomAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js))
-    and a $`RandomPlayer(switch=\widetilde{0\%}, mega=100\%)` implementation
-    ([`SemiRandomAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/random-agent.js)).
-    - The classic  $`MaxDamagePlayer`
-    ([`MaxDamageAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-damage-agent.js))
-    and a more simplified version that only considered a move's base power
-    ([`MaxBasePowerAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/max-base-power-agent.js)).
-    - [`SimAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js),
-    an agent that performed a one-turn look-ahead by simulating each possible joint action,
-    [evaluating](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L311-L336)
-    the new state based purely on the sum of HP percentages of Pokémon on each side, using
-    [`lrsnash` to solve the computed payoff
-    matrix](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L91) and
-    making a decision based on a [weighted random sample from this
-    solution](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/sim-agent.js#L129).
-    - [`ChecksSwitchAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/checksswitch-agent.js)
-    which chose actions based on hard-coded [checks and counters
-    table](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/data/compTest.json)
-    and the typechart, switching to whichever Pokémon on the team has the best
-    matchup versus the current opponent Pokémon (or attacking randomly if
-    already out).
-    - [`TestAgent`](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/test-agent.js),
-    a work-in-progress agent utilizing machine learning which targeted a [reduced
-    conmeta](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/agents/test-agent.js#L11-L37) to make
-    [encoding](https://github.com/pokeml/pokemon-agents/blob/318b7d3d/src/core/encoder.js) the game
-    states into fixed-size numeric vectors more tractable.
 - identifier: Kalose, Kaya & Kim
   active: [2018, 2018]
   paper: Kalose:2018
   engine: Custom
   language: Python
-  description: |
-    Kalose _et al._ implemented a custom deterministic simulator for the Generation I Challenge Cup
-    format and evaluated the efficacy of an agent trained on self-play utilizing Q-learning. The
-    agent's feature vector was limited to just the active Pokémon from either side's types and
-    corresponding "HP bucket" (an abstraction of a Pokémon's remaining HP percentage into 10 evenly
-    distributed bins), deliberately avoiding any information about either side's inactive party due
-    to performance concerns. In addition to the large terminal reward based on the battle's final
-    result, smaller intermediate rewards were provided to the agent based on the remaining HP for
-    both sides. A softmax exploration strategy was seen to outperform an ε-greedy one versus
-    $`RandomPlayer`, though overall playing strength was poor compared to a benchmark minimax
-    solution. Suggestions for future work included introducing eligibility traces and expanding the
-    size of the feature vector.
 - active: 2018 # August 21
   license: MIT
   source: https://github.com/taylorhansen/pokemonshowdown-ai
@@ -538,51 +178,9 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    Chen _et al._ trained an agent using proximal policy optimization (PPO), anticipating an
-    approach using Q-learning would struggle to learn a value function for a game as complicated as
-    Pokémon. While their bot targeted the Generation I Random Battle format the agent was
-    generalized and could be trained on arbitrary formats.
-
-    The agent utilized Tensorfloww, the [PPO implementation from
-    OpenAI](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/ppo/ppo.py) and a custom [OpenAI
-    Gym](https://github.com/openai/gym) environment that works with a modified Pokémon Showdown
-    server. The server was relaxed to provide additional information about
-    [features](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/getFeatures.js)
-    and to [determine valid
-    actions](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/getValidActions.js#L19)
-    ahead of time which are used to mask off the output from the RL network to force the logits of
-    invalid actions to negative infinity before applying the softmax.
-
-    While Chen _et al._ discussed using the `node2vec` algorithm to [create embeddings for various
-    species](https://github.com/kvchen/showdown-rl-notebooks/blob/85c266d4/embeddings/Pokemon%20Embeddings%20Using%20Node2Vec.ipynb),
-    it seems as though a basic one-hot encoding for each Pokémon's attributes was [ultimately
-    used](https://github.com/kvchen/gym-showdown/blob/c5cdcf84/gym_showdown/envs/showdown_env.py#LL141-L179).
-    The model's network architecture featured 3 fully-connected layers each with 512 units and a
-    ReLU activation with only terminal states being rewarded. The agent trained against
-    $`RandomPlayer(\widetilde{100\%})`, $`RandomPlayer(0\%)`, and a depth 1 [minimax
-    agent](https://github.com/kvchen/showdown-rl/blob/8cb4fd90/agents/minimax.py) with alpha-beta
-    pruning with an evaluation function that compared the difference in the sum of HP percentages
-    for the full team of each side.
-
-    The agent eventually learned a policy that preferentially chose the move in the 4th moveslot,
-    calling into question the results. Chen _et al._ reveal they were largely bottlenecked by
-    computational resources, in particular repeatedly
-    [cloning](https://github.com/kvchen/showdown-rl-server/blob/f31875ee/src/battle/clone.js) the
-    simulator state, and their ideas for future work included self-play and improved visualization
-    to enhance tuning and debugging.
 - identifier: Ihara, Imai, Oyama & Kurihara
   active: [2018, 2018]
   paper: Ihara:2018
-  description: |
-    Ihara _et al._ compared information set MCTS (ISMCTS) to determinized conventional MCTS in the
-    Generation VI Pokémon BSS format. Using a custom simulator and a fixed pool of six Pokémon
-    combined with a client representation that leveraged usage statistics from [Pokémon Global
-    Link](https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_Global_Link) and heuristics fill in
-    unknown information for an opponent's team, Ihara _et al._ found that ISMCTS was superior to
-    determinized MCTS when the number of iterations was fixed. Both approaches were significantly
-    weaker than agents leveraging MCTS with perfect information which were used as a control, though
-    the gap decreased in further experiments where the battle rules were simplified.
 - active: [2018, 2019] # October 2018
   source: https://github.com/samhippie/shallow-red
   license: MIT
@@ -593,30 +191,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    Supporting perfect information variants of assorted Generation VII singles and doubles formats,
-    `samhippie/shallow-red` experimented with [Decoupled UCT
-    (DUCT)](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/duct.py), [Monte
-    Carlo tree search with
-    Exp3](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/exp3.py), [Monte
-    Carlo Regret
-    Matching](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/rm.py), [Online
-    Outcome Sampling
-    (OOS)](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/oos.py), and
-    [MC-CFR](https://github.com/samhippie/shallow-red/blob/5690cdf3/old/montecarlo/cfr.py) before
-    settling on an approach using [Deep
-    MC-CFR](https://github.com/samhippie/shallow-red/blob/5690cdf3/deepcfr.py). Built with PyTorch,
-    the agent contained no client respresentation, working instead off of the
-    [tokenized](https://github.com/samhippie/shallow-red/blob/5690cdf380c6e138e25d88e85093738951438298/games/pokemon.py#L67)
-    protocol augmented with information
-    [extracted](https://github.com/samhippie/shallow-red/tree/5690cdf3/games/dataPokemon) from
-    Pokémon Showdown's data files and leveraging Pokémon Showdown's [CLI for
-    simultations](https://github.com/samhippie/shallow-red/blob/5690cdf3/games/pokemon.py#L15). The
-    [model](https://github.com/samhippie/shallow-red/blob/5690cdf3/model.py#L328) featured a [LSTM
-    network](https://github.com/samhippie/shallow-red/blob/5690cdf3/model.py#L73), used a [hash
-    embedding](https://github.com/samhippie/shallow-red/blob/5690cdf3/hashembed/embedding.py), and
-    could be [configured](https://github.com/samhippie/shallow-red/blob/5690cdf3/config.py#L143) to
-    enable convolutions and attention.
 - active: [2019, 2019] # February 10
   source: https://github.com/hsahovic/reinforcement-learning-pokemon-bot
   engine:
@@ -626,29 +200,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    Inspired by [`Synedh/showdown-battle-bot`](#Synedh/showdown-battle-bot), the
-    `hsahovic/reinforcement-learning-pokemon-bot` is the precursor to [poke-env](#poke-env). Perhaps
-    most notable as the
-    [origin](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/tree/25a04789/showdown-improvements)
-    of various patches to Pokémon Showdown that were eventually
-    [upstreamed](https://github.com/smogon/pokemon-showdown/pull/7618) Pokémon Showdown to make it
-    more suitable for reinforcement learning training, the project uses Keras and Tensorflow to
-    experiment with reinforcement learning approaches. The project features a [client
-    representation](
-    https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py)
-    that is used to produce a [description of the
-    state](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/environment/battle.py#L445)
-    to be fed into models and contains support for
-    [self-play](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/base_classes/model_manager.py#L269)
-    and concurrent training. The project contains two models built with a fully-connected
-    multi-layer perceptron architecture - an incomplete [larger
-    model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/fully_connected_random_model.py)
-    that utilizes the full feature set and a functional model
-    [model](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py)
-    that uses the Actor-Critic method with a pruned number of features. The latter agent's
-    [reward](https://github.com/hsahovic/reinforcement-learning-pokemon-bot/blob/25a04789/src/players/policy_network.py#L238C8-L238C63)
-    depends on the difference in respective total party hit points.
 - name: Showdown AI Bot
   active: [2019, 2019] # March 8
   license: MIT
@@ -661,43 +212,6 @@
   release:
     name: "PSB: Gennaro's Revenge"
     url: https://github.com/JJonahJson/Showdown-AI-Bot/releases/tag/v1.0
-  description: |
-    Showdown AI Bot targeted random battle formats from Generation I-VII and featured policies for
-    varying difficulty levels. Backed by a [custom
-    engine](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/model) with a [basic
-    damage
-    calculator](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/model/damage_calculator.py),
-    the engine's [scraped
-    data](https://github.com/JJonahJson/Showdown-AI-Bot/tree/3038f927/src/scraper) was inserted into
-    a [MySQL
-    database](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/data_source.py)
-    that was then queried at runtime and included information about [random
-    movepools](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/scraper/randomsets.json).
-    The bot's [client
-    representation](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/game_control.py)
-    featured [request
-    parsing](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
-    and differentiated between an opponent's [possible and actual
-    moves](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/protocol/enemy_updater.py).
-    The bot was mostly rules-based but featured different heuristics for each difficulty:
-
-    - [Easy](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L44-L97):
-    a $`MaxDamagePlayer` that will only switch when forced, but when switching considers the species
-    type matchup of prospective switches.
-    - [Normal](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L100-L286):
-    still focused on maximizing damage, but move decisions also relied on hardcoded logic for
-    status and more nuanced game mechanics as well as limited
-    [look-ahead](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L199-230)
-    to avoid being knocked out by an opponent, possibly switching to preserve a Pokémon. Switching
-    decisions considered both species and move type matchups.
-    - [Hard](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#244-L298):
-    depended on the same logic as "Normal" for switching but move decisions were based on a [max
-    depth
-    2](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/iterative_search.py#L82)
-    [iterative deepening pure pessimistic minimax
-    search](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/iterative_search.py)
-    with a [complicated hand-crafted evaluation
-    function](https://github.com/JJonahJson/Showdown-AI-Bot/blob/3038f927/src/ai/chooser.py#L305).
 - name: Metagrok
   active: [2019, 2019] # June 16
   paper: Huang:2019
@@ -719,121 +233,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    Foul Play features a bespoke engine, a sophisticated client, and several agents that can achieve
-    a high level of play across numerous generations. The project primarily supports both random and
-    non-random Generation III-VIII singles formats, though also contains partial support for
-    Generation IX --- data and mechanics save for those added by _The Indigo Disk_ DLC are present
-    but [support for Terastallization is still in
-    progress](https://github.com/pmariglia/showdown/commit/1a6dfb7d).
-
-    The project's [engine](https://github.com/pmariglia/showdown/blob/6102ea13/ENGINE.md) relies on
-    [move](https://github.com/pmariglia/showdown/blob/6102ea13/data/moves.json) and
-    [species](https://github.com/pmariglia/showdown/blob/6102ea13/data/pokedex.json) data
-    [generated](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/update_moves.py)
-    [from](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/update_pokedex.py)
-    Pokémon Showdown,
-    [modified](https://github.com/pmariglia/showdown/blob/6102ea13/data/mods/apply_mods.py) to then
-    work in the custom engine and [patched for past
-    generations](https://github.com/pmariglia/showdown/tree/6102ea13/data/mods). The engine is
-    simplified by only reflecting generational differences via its data files and sharing a single
-    control flow across generations though this
-    [reduced](https://github.com/pmariglia/showdown/issues/76)
-    [fidelity](https://github.com/pmariglia/showdown/issues/80) is unlikely to matter for its
-    agents. Performance is a concern (to the point where the engine is undergoing a rewrite in
-    Rust), but this is mitigated by the engine's decision to migrate away from a traditional
-    copy-based approach to an approach that is currently unique among Pokémon engines: the engine's
-    [`StateMutator`](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/objects.py#L482-L749)
-    allows for applying and reversing "instructions" that get
-    [generated](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/instruction_generator.py)
-    by handlers. This architecture allows the project's agents to very efficiently update the battle
-    during search based on the actions generated by its [$`transitions`
-    function](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/find_state_instructions.py#L471-L497),
-    reversing each of them before exploring other branches.
-
-    The project's client contains the usual support for  Pokémon Showdown
-    [protocol](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L1175)
-    and [team]( https://github.com/pmariglia/showdown/blob/6102ea13/teams/team_converter.py)
-    parsing, though goes far beyond others by [making use of log ordering to bound speed
-    ranges](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L811)
-    and by deducing not just the presence but also the _absence_ of [Choice
-    Scarf](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L902),
-    [Choice Band or Choice
-    Specs](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L978),
-    [Heavy Duty
-    Boots](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L1063),
-    [Assault
-    Vest](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L333), and
-    [Life Orb](
-    https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L353-L357).
-    Choice Band and Choice Specs inference also [relies
-    on](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_modifier.py#L1023) the
-    engine's [damage
-    calculator](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/damage_calculator.py)
-    which uniquely supports [several different
-    approaches](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/damage_calculator.py#L194-L231)
-    for bucketing the damage rolls.
-
-    The project includes a baseline
-    [$`MaxDamagePlayer`](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/most_damage/main.py)
-    which relies on this same damage calculator, though the project's primary agents are based on
-    [depth 2 simultaneous move expectiminimax
-    search](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/select_best_move.py#L67)
-    with [pruning and move
-    ordering](https://GitHub.com/pmariglia/showdown/blob/6102ea13/showdown/engine/select_best_move.py#L126)
-    utilizing a [hand-crafted evaluation
-    function](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/evaluate.py) and
-    differ primarily in how they choose to select an action based on the results of the search ---
-    [one](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/safest/main.py)
-    deterministically elects to pick the 'safest' option whereas [the
-    other](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/nash_equilibrium/main.py)
-    explicitly attempts to play the mixed Nash equilibrium solution it computes by calling
-    [Gambit](http://www.gambit-project.org/) in a
-    [subprocess](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/nash_equilibrium/main.py#L88)
-    in [game states where most information has been
-    revealed](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/nash_equilibrium/main.py#L175-L193).
-    While this experiment into nondeterminism might help with exploitability, ultimately the Nash
-    equilibrium bot proves much weaker overall than the vanilla approach. An alternative experiment
-    attempts to enhance the default agent with [dynamic search
-    depths](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/helpers.py#L76),
-    possibly doubling search depth when run via [PyPy](https://www.pypy.org/) in scenarios where the
-    number of joint actions is small.
-
-    For each decision, many [different
-    determinizations](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle.py#L124-L197)
-    for unknowns of the opponent's active Pokémon are searched. Usage statistics are
-    [parsed](https://github.com/pmariglia/showdown/blob/6102ea13/data/parse_smogon_stats.py) ahead
-    of time are used to produce [possible
-    combinations](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle.py#L596-L678)
-    of spreads, items, abilities, and moves. Cutoffs and
-    [bucketing](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/helpers.py#L127)
-    in addition to
-    [heuristics](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/engine/helpers.py#L121)
-    are used to pare down the number of possible states to only those with are logical and most
-    likely. During the expectiminimax search the usage statistics also factor in as the
-    "effectiveness" of each matchup as [computed from the Checks and Counters
-    statistics](https://github.com/pmariglia/showdown/blob/6102ea13/data/parse_smogon_stats.py#L76)
-    are included in the scoring function. The scoring does not place value on preserving hidden
-    information or scouting, though in the future hopes to explicitly consider the notion of win
-    conditions and give bonuses in attempts to better improve chances of particular Pokémon
-    sweeping. Tweaks to evaluation may also be necessary to address the agents' exhibited issues
-    around closing out games.
-
-    The agents can be configured to play with [fixed
-    teams](https://github.com/pmariglia/showdown/tree/6102ea13/teams/teams) in non-random formats,
-    but also include special support for Random Battle formats, tracking [random battle
-    sets](https://github.com/pmariglia/showdown/blob/6102ea13/data/scripts/parse_random_battle_raw_sets.py)
-    and
-    [statistics](https://github.com/pmariglia/showdown/blob/6102ea13/data/random_battle_sets.json)
-    in addition to [slightly tweaking the
-    scoring](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/run_battle.py#L169) of
-    healthy Pokémon during evaluation in random formats. In non-random formats, an augmented
-    [version](https://github.com/pmariglia/showdown/blob/6102ea13/showdown/battle_bots/team_datasets/main.py)
-    of the safe expectiminimax agent that is configured with a [team scouting
-    dataset](https://github.com/pmariglia/showdown/blob/6102ea13/data/team_datasets.json) gleaned
-    from scraping Smogon University's forums can utilize [team
-    prediction](https://github.com/pmariglia/showdown/blob/6102ea13/data/team_datasets.py#L140) to
-    considerably improve playing performance.
 - name: 0 ERROR # April 20
   site: https://pkmn.cc/0-ERROR
   active: 2019
@@ -848,33 +247,10 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    0 ERROR exists as the theoretical motivating use case behind the [pkmn](https://pkmn.cc)
-    project. While the actual agent is currently vaporware, pkmn has been building foundational
-    Pokémon infrastructure that has been used within multiple other Pokémon AI projects:
-
-    - [pkmn/ps](https://github.com/pkmn/ps): Pokémon Showdown's simulator and client broken up into
-    composable libraries.
-    - [data.pkmn.cc](https://data.pkmn.cc): An aggregated source exposing all of Smogon University's
-    data in machine-readable form.
-    - [pkmn/stats](https://github.com/pkmn/stats): A framework for efficient Pokémon Showdown battle
-    log processing and usage stats generation.
-    - [pkmn/engine](https://github.com/pkmn/engine): A minimal, complete, battle simulation engine
-    optimized for performance.
-    - [EPOKé](https://github.com/pkmn/EPOke): An enhanced client library which tracks not only the
-    observed state of the battle, but also uses the mechanics of the game, reverse damage
-    calculation, and usage statistics to infer as much as possible about the state of play.
 - identifier: Norström
   active: [2019, 2019]
   paper: Norström:2020
   language: Python
-  description: |
-    Norström compared the $`RandomPlayer`, learned linear combinations of features, and Monte Carlo
-    tree search across various scenarios in Generation I including a limited version of the OU
-    format implemented with a custom game engine. While MCTS proved to be the strongest in relative
-    terms across the scenarios tested, strength in absolute terms was unimpressive. Combined
-    approaches and increased engine and training performance were cited as the most promising
-    avenues for improvement for future work.
 - name: poke-env
   framework: true
   site: https://poke-env.readthedocs.io/en/latest/
@@ -891,59 +267,11 @@
   release:
     name: "0.15.0"
     url: https://github.com/hsahovic/poke-env/releases/tag/0.15.0
-  description: |
-    The premier Python reinforcement learning framework for competitive Pokémon AIs, poke-env
-    supports both singles & doubles battles and random & non-random Generation IV-IX formats.
-    [Documentation](https://poke-env.readthedocs.io/en/stable/index.html) and
-    [examples](https://github.com/hsahovic/poke-env/tree/46fa2b01/examples) help make it easy for
-    beginners to get started, though poke-env's fully-featured [client
-    representation](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/environment) makes
-    it valuable to any Python project.
-
-    poke-env doesn't embed Pokémon Showdown so can't easily perform simulations (or leverage the
-    simulator for damage calculations), but handles connecting to a local Pokémon Showdown instance
-    and includes [data](https://github.com/hsahovic/poke-env/tree/46fa2b01/src/poke_env/data/static)
-    [extracted](https://github.com/hsahovic/poke-env/tree/46fa2b01/scripts) from the simulator as
-    well as [team parsing and
-    packing](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/teambuilder/teambuilder.py)
-    logic to provide the foundation most agents need.
-
-    Beyond this, poke-env also offers support for training agents
-    [concurrently](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/concurrency.py)
-    and [utilities for evaluating agent
-    performance](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/utils.py)
-    (_e.g._, cross evaluation). While [self-play support is still
-    experimental](https://github.com/hsahovic/poke-env/blob/46fa2b01/examples/experimental-self-play.py),
-    poke-env provides a
-    [`MaxBasePowerPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L11)
-    and
-    [`SimpleHeuristicsPlayer`](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/baselines.py#L19)
-    (both simplified versions of an actual $`MaxDamagePlayer`) for
-    training. Finally, poke-env contains an [OpenAI Gym](https://github.com/openai/gym) [environment
-    implementation](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/openai_api.py)
-    and
-    [helpers](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106)
-    including one for
-    [rewards](https://github.com/hsahovic/poke-env/blob/46fa2b01/src/poke_env/player/env_player.py#L106).
 - name: Simplified Pokemon Environment
   active: [2019, 2020] # October 31
   paper: Simoes:2021
   source: https://gitlab.com/DracoStriker/simplified-pokemon-environment
   engine: Custom
-  description: |
-    True to its name, the Simplified Pokemon Environment proposed an incredibly restricted toy
-    [OpenAI Gym](https://github.com/openai/gym)
-    [environment](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Environment/SimplePkmEnv.py)
-    that reduces competitive Pokémon to simply a question of type matchups and damaging moves as a
-    baseline for evaluating Pokémon agents. In addition to the environment, the project evaluates
-    the performance of two deep learning approaches both which use ε-greedy exploration policies -
-    Generalized Infinitesimal Gradient Ascent using the Win or Lose Fast principle (GIGA-WoLF)
-    [adapted to deep learning as
-    GIGAθ](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Trainer/Deep/Learning/Distributed/DistributedDeepGIGAWoLF.py)
-    and a [asynchonous deep version of a Weighted Policy Learner
-    (WPLθ)](https://gitlab.com/DracoStriker/simplified-pokemon-environment/-/blob/028f4595/Trainer/Deep/Learning/Distributed/DistributedDeepWPL.py).
-    Both approaches converged to successful strategies, though in the limited environment GIGAθ
-    converges faster and ended up outperforming WPLθ.
 - name: VGC AI Framework
   framework: true
   active: 2019 # October 31
@@ -961,64 +289,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    An innovative and successful Generation VII Random Battle agent, Athena's core thesis was that
-    competitive Pokémon artificial intelligence requires an approach uniquely tailored to the domain
-    as opposed to being something that can be achieved through the naive repurposing of
-    off-the-shelf solutions used for computer chess or Go. The paper introducing Athena dismissed
-    the machine learning approaches attempted by other projects for the following reasons:
-
-    - Pokémon's complicated game mechanics and massive state space make it hard for neural networks
-    to infer patterns.
-    - Pokémon's high variance means reinforcement learning agents are suboptimal as they can get
-    rewards while playing poorly.
-    - Every Pokémon battle is almost a unique environment likely to have zero samples in the
-    training set, necessitating an approach that properly accounts for this by training on past
-    turns of ongoing battles.
-
-    Furthermore, the paper claimed that traditional search methods are insufficient in Pokémon as
-    game tree pathology is present in _all_ game trees due to hidden information and stochasticity,
-    yet strong play in Pokémon requires the ability to look ahead meaning determining the correct
-    amount of look-ahead is crucial. Finally, the paper contended that "keeping a balanced team" is
-    of central importance --- at every point, players need to be sure that they have at least one
-    way of beating all of an opponent's Pokémon without losing all of their own Pokémon --- and that
-    look-ahead with minimax and Monte Carlo tree search are insufficient to achieve that.
-
-    Maintaining team balance was at the core of Athena's algorithm --- its process for making
-    decisions involved using two turns of look-ahead before calculating the probability of it
-    winning from each state, relying on a distributed transposition table and hand-crafted forward
-    pruning heuristics to greatly reduce the number of states explored. To compute its probability
-    of winning, Athena performed pairwise Pokémon matchup comparisons using a further 1-2 turns
-    look-ahead in each of the individual 1v1s after which it computed a score based on the
-    difference in HP and a bonus for not fainting. These scores were then combined into a single
-    value that could be added to a payoff matrix by looking at the average of scores weighted by an
-    estimated probability of each individual matchup actually occurring.
-
-    Athena fed the computed payoff matrix along with a history of its opponent's moves and their
-    corresponding payoff matrices into an unspecified machine learning algorithm that returned the
-    probability of their opponent making each of their available moves, multiplied these
-    probabilities by their respective payoffs, assumed their opponent would greedily choose the move
-    with the lowest payoff for the player, and then chose whatever move was the best response to
-    their opponent's choice.
-
-    In cases where an opponent's Pokémon's species were known Athena adopted the usual practice of
-    relying on usage statistics to deduce the most likely values of its other unknown attributes.
-    Given that Athena's domain was a random format it could not rely on teammate statistics to fill
-    in unknown species and it instead took a more involved but novel approach: Athena used the [IBM®
-    ILOG® CPLEX®
-    Optimizer](https://www.ibm.com/products/ilog-cplex-optimization-studio/cplex-optimizer) and a
-    precomputed table of 1v1 matchup scores for each species with every other species to solve a
-    mixed integer linear programming problem that determined which species of Pokémon would best
-    approximate the battle between the agent's team and any particular possible values for the
-    opponent's unrevealed Pokémon.
-
-    Finally, Athena heavily abstracted the random number generator to pare down the state space
-    explosion that would otherwise result from attempting to account for stochasticity. Eschewing
-    determinizations due to their high branching factor and Monte Carlo sampling due to the Pokémon
-    Showdown engine's slow simulation speed, Athena instead modified Pokémon Showdown's PRNG to
-    return _one_ of 8 different preconfigured values constantly for each side when called during the
-    first turn of look-ahead followed by a constant value in the middle of the range for subsequent
-    turns, dramatically reducing the number of possible states that the agent would need to explore.
 - active: [2020, 2022] # May 16
   paper: Yu:2020
   source: https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master
@@ -1026,13 +296,6 @@
     - name: Pokemon-Python
       url: https://github.com/DanielAlcocerSoto/Pokemon-Python
   language: Python
-  description: |
-    Having adapted the toy engine from
-    [`DanielAlcocerSoto/Pokemon-Python`](#DanielAlcocerSoto/Pokemon-Python) to
-    [singles](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/Game/engine/single_battle.py),
-    `blue-sky-sea/Pokemon-MCTS-AI-Master` implemented an [agent based on
-    UCT](https://github.com/blue-sky-sea/Pokemon-MCTS-AI-Master/blob/4fb425e1/AI/mcts.py) that
-    reported positive results versus $`RandomPlayer` and $`MaxDamagePlayer`.
 - name: Pokemon Battle Predictor
   site: https://www.pokemonbattlepredictor.com/battle-predictor
   active: [2020, 2021] # June 3
@@ -1046,45 +309,6 @@
   release:
     name: 0.21.0
     url: https://chromewebstore.google.com/detail/pokemon-battle-predictor/efpcljpklgonmgjeiacfbfbpcecklfni
-  description: |
-    [Pokemon Battle Predictor](https://www.pokemonbattlepredictor.com/battle-predictor) was a
-    browser extension that surfaced predictions at the start of every turn about the current battle
-    state to Pokémon Showdown players inferred from a collection of models built with supervised
-    learning techniques and battle logs data. These models (which would eventually be used to power
-    initial versions of the [Future Sight](#FutureSight) AI) included a value network which would
-    predict winning percentage as well as a decomposed policy network made up of three components: a
-    network that predicted the chance of a player choosing to switch or move and then separate
-    networks that would determine which move the player might choose or Pokémon the player might
-    switch to if they chose to do so.
-
-    [Initially](https://www.smogon.com/forums/threads/3666009/) trained on approximately 10,000
-    Generation VIII OU Pokémon Showdown replay logs scraped from players with an Elo rating of at
-    least 1250, the models' accuracies were greatly improved after Pokémon Showdown staff [provided
-    the project with a corpus of around 2 million server
-    logs](https://www.smogon.com/forums/posts/8577932). This additional data also allowed for the
-    creation of models for the majority of non-random Smogon University singles formats. The project
-    originally performed model inference client-side with
-    [TensorFlow.js](https://www.tensorflow.org/js), though later on
-    [anonymized](https://github.com/pkmn/stats/tree/main/anon) data from extension users was sent to
-    a server and inference was moved server-side in order to [support larger
-    models](https://www.smogon.com/forums/posts/8776635). These server-side models could then be
-    tuned with regularly scraped replay data to respond to shifts in the various supported
-    metagames.
-
-    The original [neural network](https://www.smogon.com/forums/posts/8578872) model implementation
-    involved an input vector of 6815 features extracted from the battle state, with seemingly
-    important features like abilities, items, or types being absent, justified by the observation
-    that these could instead be learned as innate characteristics summarized purely by a Pokémon's
-    species. A unique feature included was a "Switch Coefficient" that aimed to capture how often
-    one Pokémon species switches out when faced off against an opposing Pokémon. These inputs were
-    used to train the value network and high-level policy network while the finer-grained networks
-    relied on a slightly different approach. The switch choice model involved a layer to detect
-    which Pokémon would switch in as well as a layer that uses that output to learn which Pokémon
-    were commonly brought in under similar situations. The move choice model was trained to output a
-    probability distribution across all moves which then got masked off by observed probabilities of
-    each Pokémon having said move derived from moveset usage statistics. Updated versions of the
-    model were also trained to predict based on a player's Elo rating, allowing it to account for
-    players of different skill levels exhibiting different behaviors.
 - active: [2020, 2020] # June 13
   source: https://github.com/anthonykrivonos/pokemon-ai
   engine: Custom
@@ -1113,28 +337,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    reuniclusVGC extends [poke-env](#poke-env)'s [double battles
-    support](https://github.com/hsahovic/poke-env/compare/46fa2b01...caymansimpson:poke-env:3de07d85)
-    to target Generation VIII VGC formats. An experimental agent was built using TensorFlow and
-    Keras and featured a [small DQN
-    model](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/simple_dqn_player.py)
-    that was trained to [play a fixed
-    team](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/simulators/train_and_evaluate_dqn.py#L20)
-    against baseline agents. While this agent eventually learned to roughly approximate
-    $`MaxDamagePlayer` (though with the ability to switch when in an obviously disadvantageous
-    position and to Dynamax immediately), the agent did not generalize well to new teams or
-    opponents. This initial foray into the field helped motivate [a new
-    approach](https://docs.google.com/document/d/14menCHw8z06KJWZ5F_K-MjgWVo_b7PESR7RlG-em4ic/preview)
-    based on a "model-based search algorithm with depth-limited and heavily pruned search, not
-    assuming unobservable information, and a Nash Equilibrium solver" that will serve as the
-    direction for future work. Furthermore, the initial reuniclusVGC training revealed limitations
-    in the standard singles baseline agents leading to the versions of
-    [$`RandomPlayer`](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/smarter_random_player.py)
-    and
-    [$`MaxDamagePlayer`](https://github.com/caymansimpson/reuniclusVGC/blob/b372ec5f/bots/max_damage_player.py)
-    which were augmented with heuristics to allow for more realistic training in the doubles formats
-    being targeted.
 - name: BigBoy
   active: [2021, 2022] # April 21
   source: https://github.com/attraylor/poke-env
@@ -1171,14 +373,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    Youngster Joey targeted a perfect information variant of Generation I with a greedy policy that
-    determines its action by maximizing a set of hand-crafted
-    [heuristics](https://github.com/alex-shen1/Youngster-Joey/blob/85e7f63d/bot.js#L226-310). A
-    slightly more sophisticated $`MaxDamagePlayer`, Youngster Joey deliberately eschewed minimax and
-    expectiminimax due to concerns over the game tree size even after pruning and the algorithms not
-    being able to play optimally against opponents who were also expected to play sub-optimally. The
-    addition of some form of look-ahead was considered for future work.
 - name: alphaPoke
   site: https://matteoh2o1999.github.io/en-us/projects/alphaPoke-project-delivery
   active: 2021 # November 22
@@ -1209,29 +403,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    Tse built a Generation VIII VGC agent that leveraged both supervised learning and deep
-    Q-learning with [poke-env](#poke-env) to achieve success against $`RandomPlayer` and
-    $`MaxDamagePlayer` baselines.
-
-    Tse used a dataset of 700,000 Pokémon Showdown server battle logs gathered from the top 20% of
-    ranked VGC players on the site to train a 6-layer neural network with supervised learning. The
-    network's output layer consisted of two softmax units producing action and value estimates, with
-    a move selection and move target being considered separately. Despite using categorical
-    encodings for the input embedding (as opposed to a one-hot key embedding) the initial input size
-    of 4186 features resulted in overfitting. As a result, Tse used the supervised network to learn
-    a smaller embedding of 254 features based on the output of the first layer which was designed to
-    not be fully connected so as to be used for this purpose.
-
-    The learned embedding was used as input to a second RL network which used deep Q-learning and an
-    ε-greedy policy to learn action selection. The reward for this network was computed based on a
-    linear combination of the battle outcome, the current percentage HP for both sides' active
-    Pokémon, and the value output from the supervised learning network. The training of the RL
-    network was performed against the $`RandomPlayer` and $`MaxDamagePlayer` and this led to a
-    learned policy that proved to be fairly exploitable by less contrived opponents.
-
-    Battle simulation performance was cited as the main bottleneck, discouraging the addition of
-    Monte Carlo tree search and serving as a barrier to increased training time.
 - name: IHTFP Abra
   paper: Wang:2024
   active: 2022 # December 9
@@ -1278,23 +449,6 @@
   engine: Custom
   source: https://github.com/FredodaFred/pokemon-battle-ai
   language: Python
-  description: |
-    Pokemon Trainer AI used a [bespoke Generation I
-    engine](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/classes.py#L462) to
-    evaluate several different agents in a level 50 3v3 format:
-
-    - [RBES](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RBES.png), a rules-based
-    expert system that decided on actions based on its [hand-crafted evaluation
-    function](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/InferenceEngine.py)
-    that primarily focused on maximizing damage.
-    - [DT](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/DT.png), a decision tree
-    based approach
-    [produced](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/pokemon_DT_solution.ipynb)
-    for a specific team configuration.
-    - [RL](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RL.png), a state-based
-    Q-learning model also
-    [trained](https://github.com/FredodaFred/pokemon-battle-ai/blob/af1446df/RL_train.py) for a
-    specific team configuration.
 - name: Pokesim
   framework: true
   active: 2023 # October 2
@@ -1318,19 +472,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    The Pokémon Simulator Environment is an environment for running a large number of Pokémon
-    Showdown battle simulations. While not intended as a serious attempt at a competitive Pokémon
-    battling agent, the project features an elaborate [rules-based heuristic
-    agent](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts)
-    that can serve as a training baseline for other agents in singles formats. Supporting all
-    generations, the `HeuristicPlayerAI`'s extends past the $`MaxDamagePlayer`, considering elements
-    beyond just the potential damage its moves may do. The agent evaluates
-    [matchups](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L263-L287)
-    based on type advantage, speed, and remaining HP percentage, considers [switching
-    out](https://github.com/cRz-Shadows/pokemon-showdown/blob/5932a450/sim/examples/Simulation-test-1.ts#L373-L400),
-    and contains handwritten cases to handle specific game mechanics or to be able to use moves
-    which indirectly benefit the player.
 - paper: Zhang:2024
   active: [2023, 2023] # November 29
   source: https://github.com/alexzhang13/reward-shaping-rl
@@ -1343,30 +484,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    `alexzhang13/reward-shaping-rl` demonstrated the use of [large language models (LLMs) for reward
-    shaping](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/utils/reward.py),
-    offering three different methods for providing feedback:
-    [sequential](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L19-L83),
-    [tree-based](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv.py#L85-L210)
-    and [moving
-    target](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/environments/pokeenv_PPO.py#L155).
-    These methods were compared while training agents via proximal policy optimization ([PPO1 from
-    stable_baselines](https://stable-baselines.readthedocs.io/en/master/modules/ppo1.html)) and deep
-    Q-learning with experience replay (a
-    [handwritten](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/models/dqn.py)
-    sequential 512x512x256 network with ReLU activations between layers) and appeared to boost
-    sample efficiency. The model was trained on a [single Generation VIII Ubers
-    team](https://github.com/alexzhang13/reward-shaping-rl/tree/964ea1bc/data), allowing it to
-    ignore abilities and items and instead treat them as properties of the specific Pokémon. The
-    [input
-    embedding](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/pokegym.py#L84)
-    was limited due to resource constraints but included the active moves and (unboosted) stats, HP,
-    and status for both sides. Results indicated the final models were superior to
-    $`RandomPlayer(\widetilde{100\%})`, roughly on par with $`RandomPlayer(0\%)`, and significantly
-    worse than a [base-power
-    variant](https://github.com/alexzhang13/reward-shaping-rl/blob/964ea1bc/pokeagent/agents/max_damage.py#L8)
-    of $`MaxDamagePlayer`.
 - name: Battle Master
   active: 2023 # December 15
   license: MIT
@@ -1391,39 +508,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-  description: |
-    PokéLLMon explores using large language models (LLMs) to make decisions in the Generation VIII
-    Random Battle format. [The
-    agent](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py)
-    translates its interpretation of the battle state from [poke-env](#poke-env) into a [text
-    description](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L224-L551)
-    that is then provided as a prompt to an LLM to generate the next action. A small amount of
-    heuristics are involved: the [decision to
-    Dynamax](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L197-L221)
-    depends on hardcoded rules and if the LLM is unable to produce an action the agent [falls back
-    on the policy of choosing the move with the highest base
-    power](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L958-L962).
-    PokéLLMon leverages In-Context Reinforcement Learning (ICRL) by including information about
-    [historical
-    turns](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L228-L241)
-    and feedback on changes in HP, effectiveness of attacking moves, priority of move execution, and
-    the effects of executed moves to allow the LLM learn from its past actions. The [expected type
-    effectiveness of
-    moves](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L18-L97)
-    and possible [effects of its
-    moves](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L463)
-    are also provided to the LLM for the current turn as a form of Knowledge-Augmented Generation
-    (KAG).
-    [One-shot](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L709),
-    [Self-consistency
-    (SC)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L737),
-    [Chain-of-thought
-    (COT)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L810),
-    [Tree-of-thought
-    (TOT)](https://github.com/git-disl/PokeLLMon/blob/bf3fa25c/poke_env/player/gpt_player.py#L838)
-    prompting approaches are all evaluated, with self-consistency proving to be the most effective.
-    Overall the agent struggles with long-term planning, acting mostly greedily and performing
-    poorly against stall strategies.
 - name: EliteFurretAI
   site: https://docs.google.com/document/d/14menCHw8z06KJWZ5F_K-MjgWVo_b7PESR7RlG-em4ic/preview
   active: 2024 # March 30
