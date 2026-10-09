@@ -23,8 +23,13 @@ interface Project {
 }
 
 const RANKING = [
+  'Jaxcalibur', // top gen9randbats (94.6% GXE) & beat MDB Bo9
+  'mikumiku', // top VGC (1857 Elo/81.2% GXE/ 1775 Glicko)
+  'nessie', // top VGC Bo3 (1639 Elo/75.7% GXE/1714 Glicko)
   'Foul Play', // reached #2 in gen9randbats (~92% GXE) & #10 CG OU (~83% GXE)
-  'Metamon', // reached #1 gen1ou, 83.6% GXE1743 Elo/82.4%
+  'Metamon', // reached #1 gen1ou, 83.6% GXE/1743 Elo/82.4%
+  'PokeCHAD', // 2000+ gen9randbats Elo, ~par with Foul Play
+  'Incinference', // 46th on VGC , 1583 Elo/77% GXE/1730 Glicko
   'IHTFP Abra', // reached #8 in gen4randombattle, ~1693 Elo
   'Athena', // reached #33 in gen7randombattle, ~1800 Elo
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo
