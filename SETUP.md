@@ -72,13 +72,16 @@ ufw enable
 ufw status
 ```
 
-Upgrade/clean up the system packages:
+Upgrade/clean up the system packages (and `snap` packages):
 
 ```sh
 apt-get update
-apt-get update upgrade -y
+apt-get upgrade -y
+apt-get dist-upgrade -y
+apt --purge autoremove -y
+apt-get autoclean
+snap refresh
 reboot
-apt --purge autoremove
 ```
 
 If not already, update to the latest LTS release, verifying through inspection of `cat
@@ -111,6 +114,16 @@ Remove the aliases `n` sets up in the `root` user's `.bashrc`:
 
 ```sh
 vim ~/.bashrc
+```
+
+Periodically update `n`, Node, and `npm`, and prune old Node versions:
+
+```sh
+N_PREFIX=/opt/n /opt/n/bin/n-update -y
+N_PREFIX=/opt/n /opt/n/bin/n lts
+N_PREFIX=/opt/n /opt/n/bin/n prune
+N_PREFIX=/opt/n npm install -g npm@latest
+service pkmn.ai-server restart
 ```
 
 ## pkmn.ai
@@ -156,10 +169,19 @@ systemctl daemon-reload
 systemctl reset-failed
 ```
 
-Logs for the `pkmn.ai` services can be viewed through `journalctl`:
+Logs for the `pkmn.ai` services can be viewed and cleaned up through `journalctl`:
 
 ```sh
 journalctl -xeu pkmn.ai*
+journalctl --vacuum-time=7d
+```
+
+To pull the latest changes, update dependencies, rebuild, and restart the server as `pkmn` (or run
+`npm run deploy` locally):
+
+```sh
+cd /home/pkmn/ai
+./deploy restart
 ```
 
 ## nginx
@@ -195,6 +217,16 @@ Restart the nginx server:
 
 ```sh
 service nginx restart
+```
+
+`certbot` automatically renews certificates via a systemd timer (`snap.certbot.renew.timer`), which
+can be checked or manually triggered with:
+
+```sh
+systemctl list-timers snap.certbot.renew*
+certbot renew --dry-run
+certbot renew
+service nginx reload
 ```
 
 Logs for the nginx service can be viewed via `journalctl`, and the logrotate-d access logs can be
@@ -242,4 +274,12 @@ be restarted to get the actual client IPs:
 	real_ip_header X-Forwarded-For;
 ```
 
-This list needs to be kept up to date to reflect changes to Cloudflare's service.
+This list needs to be kept up to date to reflect changes to Cloudflare's service, after which the
+configuration should be tested and reloaded:
+
+```sh
+curl -sL https://www.cloudflare.com/ips-v4 | sed 's/.*/\tset_real_ip_from &;/'
+curl -sL https://www.cloudflare.com/ips-v6 | sed 's/.*/\tset_real_ip_from &;/'
+nginx -t
+service nginx reload
+```
