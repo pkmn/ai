@@ -72,7 +72,7 @@ export function page(dir: string) {
     const as = a.key.split(':');
     const bs = b.key.split(':');
 
-    const date = parseInt(bs[1]) - parseInt(as[1]);
+    const date = parseInt(bs[1], 10) - parseInt(as[1], 10);
     if (date) return date;
 
     return as[0].localeCompare(bs[0]);

@@ -21,7 +21,7 @@ describe('projects', () => {
     for (const project of projects) {
       if (!project.release) continue;
 
-      let m: RegExpExecArray | null = null;
+      let m: RegExpExecArray | null;
       if ((m = GITHUB.exec(project.release.url))) {
         const latest = await json(`https://api.github.com/repos/${m[1]}/releases`, TOKEN);
         expect(m[2]).toBe(latest[0].tag_name);
