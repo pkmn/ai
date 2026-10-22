@@ -23,6 +23,10 @@ command=${1:-reload}
 [ "${command}" = "restart" ] || git diff --quiet $HEAD server ||
     sudo service pkmn.ai-server $command
 
+if [ -x private/deploy ]; then
+    ./private/deploy
+fi
+
 # Reload NGINX if the config has changed
 git diff --quiet $HEAD config/nginx.conf ||
     sudo service nginx reload

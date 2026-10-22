@@ -25,6 +25,7 @@ export const renderer = new site.page.Renderer({
   description: 'The home of competitive Pokémon artificial intelligence',
   url: 'https://pkmn.ai',
   stylesheet: path.join(STATIC, 'index.css'),
+  highlight: true,
 });
 
 export const cite = (title: string, date: Date, p?: string) => {
@@ -55,8 +56,9 @@ const build = async (rebuild?: boolean) => {
 
   let actual = fs.list(PUBLIC);
   let expected = new Set([
-    'projects', 'research', 'concepts', 'glossary', 'rules', 'chat', 'leaderboard', 'background',
-    'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib',
+    'projects', 'research', 'concepts', 'glossary', 'rules', 'release', 'chat', 'leaderboard',
+    'background', 'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib',
+    'research.bib',
   ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -67,7 +69,7 @@ const build = async (rebuild?: boolean) => {
     }
   }
 
-  for (const code of [404, 500, 502, 503, 504]) {
+  for (const code of [400, 401, 403, 404, 500, 502, 503, 504]) {
     const page = `${code}.html`;
     fs.write(path.join(PUBLIC, page), renderer.render({
       title: `${code} | pkmn.ai`,
@@ -115,10 +117,14 @@ const build = async (rebuild?: boolean) => {
   renderer.create('projects', projects.page(STATIC));
   renderer.create('research', research.page(STATIC));
 
-  for (const title of ['Background', 'Rules']) {
-    const page = title.toLowerCase();
+  const pages: {[page: string]: string} = {
+    background: 'Background',
+    rules: 'Rules',
+    release: 'Responsible Release',
+  };
+  for (const [page, title] of Object.entries(pages)) {
     const file = path.join(STATIC, `${page}.dj`);
-    const citation = title === 'Background' ? cite(title, fs.stat(file).mtime) : '';
+    const citation = page === 'background' ? cite(title, fs.stat(file).mtime) : '';
     renderer.create(page, {
       path: `/${page}/`,
       style,
@@ -127,6 +133,9 @@ const build = async (rebuild?: boolean) => {
       content: `${site.html.render(fs.read(file))}${citation}`,
     });
   }
+
+  const priv = path.join(ROOT, 'private', 'build.js');
+  if (fs.exists(priv)) require(priv)(renderer, expected);
 
   renderer.create('concepts', {
     path: '/concepts/',
