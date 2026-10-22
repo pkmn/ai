@@ -127,9 +127,12 @@ const build = async (rebuild?: boolean) => {
     const citation = page === 'background' ? cite(title, fs.stat(file).mtime) : '';
     renderer.create(page, {
       path: `/${page}/`,
-      style,
+      style: page === 'release' ? `
+        span.email b { display: none; }
+        span.email { font-family: monospace; }
+    ` : page === 'background' ? style : '',
       title: `${title} | pkmn.ai`,
-      header: header(title, true),
+      header: header(title, page === 'background'),
       content: `${site.html.render(fs.read(file))}${citation}`,
     });
   }

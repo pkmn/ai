@@ -1,1 +1,35 @@
-TODO
+In order to minimize the potential negative impacts of releasing frontier
+Pokémon AI models on the broader competitive Pokémon landscape, **pkmn.ai** has
+worked with [Smogon](https://smogon.com) and [Pokémon
+Showdown](https://pokemonshowdown.com) to produce the following guidelines
+related to publishing work product responsibly.
+
+::: aside
+
+Academic papers, technical writeups, game engines, network\ /\ search
+infrastructure, human replay\ /\ team databases, and hosted post-game analysis
+tools are all broadly considered to be reasonable artifacts to share openly.
+
+Turnkey solutions, model weights, training harnesses, self-play trajectories or
+training datasets, live-game analysis tools, and Pokémon Showdown integration
+are discouraged --- avoid sharing them outside of trusted collaborators and
+researchers.
+
+:::
+
+This policy is expected to change based on how AI and competitive Pokémon evolve
+over time. For the time being, you might consider including a line in your
+`README.md` as follows:
+
+> Certain aspects of this project have been redacted before release to preserve
+> competitive integrity in accordance with the community's [Responsible
+> Release](https://pkmn.ai/release) policy.
+
+When redacting your project, please ensure that these artifacts cannot be
+recovered from the version control history --- creating a clean repository may
+be a safer and easier way to prevent these artifacts from leaking.
+
+
+If you have any questions about whether what you want to release is considered
+safe, please ask in the [chat](https://pkmn.ai/chat) or contact
+[pre@pkmn.cc]{.email}.
