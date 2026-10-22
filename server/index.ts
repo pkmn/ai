@@ -7,8 +7,12 @@ import {serve} from 'site';
 import {header, renderer, style} from '../static/build';
 
 const root = path.join(__dirname, '..', '..');
-const dirs =
-  {root, out: path.join(root, 'build', 'static'), static: path.join(root, 'static')};
+const dirs = {
+  root,
+  out: path.join(root, 'build', 'static'),
+  static: path.join(root, 'static'),
+  extra: path.join(root, 'private'),
+};
 serve(Number(process.env.PORT) || 1234, dirs, app => {
   // TODO: this should be partly pre-rendered
   app.get('/battles', (_, res) => {
