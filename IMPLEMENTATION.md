@@ -1,5 +1,8 @@
 # pkmn.ai Arena & Server Implementation Specification
 
+> [!WARNING]
+> While written in concert with and reviewed by human, do not take this document as gospel as it was 100% written by an LLM and thus is at _best_ 98% accurate.
+
 This document is the complete, self-contained technical specification for **pkmn.ai**'s automated Pokémon AI battling arena. It contains every architectural decision, hardware sandbox script, protocol rule, mathematical formula, TypeScript algorithm, SQLite schema, and API contract required to implement both machines from scratch.
 
 ---
@@ -108,9 +111,6 @@ flowchart LR
 | **`arena` Mac mini** | `ai.pkmn.arena` | `/Library/LaunchDaemons/ai.pkmn.arena.plist` | Runs the Arena coordinator as user `pkmn` on the 2 E-cores (`taskpolicy -b`). |
 | **`arena` Mac mini** | `ai.pkmn.pf` | `/Library/LaunchDaemons/ai.pkmn.pf.plist` | Loads `/etc/pf.anchors/ai.pkmn.arena` at boot to block all network packets from `p1` and `p2`. |
 | **`arena` Mac mini** | Podman VM `arena` | `podman machine inspect arena` | `libkrun` micro-VM (10 vCPUs, 28 GiB ceiling, 500 MB overlay cap) running `linux/arm64` OCI bots. |
-
-> [!IMPORTANT]
-> The existing `DESIGN.md` in the repository root is an older draft from a previous design iteration. Never override any requirement in this `DETAILS.md` document with `DESIGN.md`.
 
 ---
 

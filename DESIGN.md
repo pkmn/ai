@@ -1,170 +1,392 @@
 # Design
 
-Despite competitive Pokémon artificial intelligence projects having existed for close to 15 years,
-no AI has yet achieved superhuman performance, and the field as a whole is still incredibly
-underdeveloped compared to those of computer chess or poker. The complexity of Pokémon and lack of
-sufficient infrastructure/resources/guidance means that most developers are unable to explore ideas
-in depth as everyone ends up continually reinventing the wheel and then fizzling out.
+Despite competitive Pokémon artificial intelligence projects having existed for
+close to 15 years, AI is only just now beginning to achieve superhuman
+performance, and the field as a whole is still incredibly underdeveloped
+compared to those of computer chess or poker. The complexity of Pokémon and lack
+of sufficient infrastructure / resources / guidance means that most developers
+are unable to explore ideas in depth as everyone ends up continually reinventing
+the wheel and then fizzling out.
 
-**pkmn.ai** aims to solve this problem and advance the field by becoming the **home of competitive
-Pokémon artificial intelligence**. Ultimately, pkmn.ai aims to provide:
+**pkmn.ai** aims to solve this problem and advance the field by becoming the
+**home of competitive Pokémon artificial intelligence**. Ultimately, pkmn.ai
+aims to provide:
 
   - an authorative ranking of all active competitive Pokémon battling agents
-  - a hub for any and all Pokémon AI research, articles, tournaments/events
+  - a hub for any and all Pokémon AI research, articles, tournaments / events
   - a community of loosely coupled collaborating researchers and developers
 
 pkmn.ai ambitiously hopes to fulfill the same role the [Chess Programming
 Wiki](https://www.chessprogramming.org/Main_Page), the [Computer Chess Rating
-Lists](https://www.computerchess.org.uk/ccrl/), and the [Top Chess Engine
-Championship](https://tcec-chess.com/) do for computer chess, or [AI Poker
-Tutorial](https://aipokertutorial.com/) and the [Annual Computer Poker
+Lists](https://www.computerchess.org.uk/ccrl/) (CCRL), and the [Top Chess Engine
+Championship](https://tcec-chess.com/) (TCEC) do for computer chess, or [AI
+Poker Tutorial](https://aipokertutorial.com/) and the [Annual Computer Poker
 Competition](http://www.computerpokercompetition.org/) do for computer poker.
 
-Others have attempted to create platforms for hosting Pokémon AI competitions and streamlining the
-creation of agents:
+Others have attempted to create platforms for hosting Pokémon AI competitions
+and streamlining the creation of agents:
 
   - [poke-env ](https://github.com/hsahovic/poke-env)
   - [dramamine/leftovers-again](https://github.com/dramamine/leftovers-again)
   - [pokemon-env](https://github.com/pokeml/pokemon-env)
-  - [Simplified Pokemon Environment](https://gitlab.com/DracoStriker/simplified-pokemon-environment)
+  - [Simplified Pokemon
+    Environment](https://gitlab.com/DracoStriker/simplified-pokemon-environment)
   - [VGC AI Framework](https://gitlab.com/DracoStriker/pokemon-vgc-engine)
 
-While these seem valuable for getting developers up and running quickly and certainly provide value,
-ultimately they do not seem to have captured the mindshare of the broader community - most of the
-strongest agents have not been built utilizing these frameworks. pkmn.ai does not seek to supplant
-these efforts - ideally agents built for these platforms would also be able to compete in the
-pkmn.ai leaderboards and the respective communities will be able to help each other improve.
+While these seem valuable for getting developers up and running quickly and
+certainly provide value, ultimately they do not seem to have captured the
+mindshare of the broader community - most of the strongest agents have not been
+built utilizing these frameworks. pkmn.ai does not seek to supplant these
+efforts - ideally agents built for these platforms would also be able to compete
+in the pkmn.ai leaderboards and the respective communities will be able to help
+each other improve.
 
 ## Competition
 
-### Resources
+Historically, developers have measured their agent's strength via [Pokémon
+Showdown's ladder](https://pokemonshowdown.com/ladder). This has always been a
+relatively poor way of measuring performance between various projects (projects
+target different formats, run at different times where the quality of a ladder
+for a format may vary widely, possibly are using weak teams or experiencing poor
+team matchups, often only report the strongest of their ladder runs) and is no
+longer a realistic option due to [policy
+changes](https://www.smogon.com/forums/threads/initial-policy-on-bots.3789528/)
+following community backlash around the influx of bots. Furthermore, given that
+AI is quickly overtaking humans at competitive Pokémon battling, evaluating
+against humans is ultimately not going to be a useful measure of performance
+going forward.
 
-- isolation/system details (gpu, cpu, readonly etc)
+Projects like the [PokéAgent Challenge](https://pokeagent.github.io/) or
+[vgc.bot](https://vgc.bot) are better attempts at hosting arenas for AI agents
+to battle, though pkmn.ai aims to go further and provide **hosted sandboxes for
+stable long-term evaluation of Pokémon agents**.
 
-```
-TCEC is CPU: 2x Xeon 6230R (52 cores/104 threads)
+### Hardware
+
+All current ladders require developers to run their models on their own hardware
+and queue to play against other competitors. There are several issues that arise
+from this approach:
+
+- competitors are potentialy handicapped by access to hardware to run their
+  agent: some are only able to run on a single thread on their laptop and may be
+  asked to compete against something like
+  [Athena](https://pkmn.ai/projects#Athena) which was able to leverage multiple
+  large servers
+- agents may be taken offline arbitrarily (or because the author needs the
+  hardware for other means / has lost interest). Many bots only exist on the
+  ladder for the short period of time its owner is attempting to quantify its
+  performance before being taken offline
+- versioning is muddied: developers are likely to find it easier to simply
+  update their agent in place which makes it more difficult to track the exact
+  performance delta of their changes
+- team-building is a difficult orthogonal problem to piloting that has a large
+  influence on an AIs ultimate performance and variance-elimination approaches
+  such as blind-pair matches are impossible to enforce
+
+Two issues related to providing a hosted solution are:
+
+1. cost
+2. competitors must be willing to trust the organizer with their code & weights
+
+pkmn.ai plans to tackle the cost aspect similar to how computer chess handles
+things with a hybrid approach:
+
+- a **ladder** for a restricted set of formats will hosted continuously on more
+  modest hardware (like CCRL)
+- regular **tournaments** will be hosted over the course of a weekend on more
+  expensive hardware for select formats (like TCEC or CCC)
+
+pkmn.ai has close ties with Smogon and Pokémon Showdown and has hopefully helped
+establish a patten of competence and good faith that will ease concerns of
+competitors regarding sharing their agents for the purposes of evaluation.
+
+#### Specifications
+
+##### Ladder
+
+CCRL currently runs chess engines on the [equivalent of a Intel Core i7-4770K on
+either 4 or 8 cores](https://computerchess.org.uk/4040/about.html). While
+attractive for cost purposes, such constrained hardware for competitive Pokémon
+would ultimately limit the utility of this ladder. In 2026, multithreaded
+systems are the norm and large neural networks that require GPU access for
+inference are an important component of game playing agents.
+
+pkmn.ai has chosen an **Apple M6 Mac mini** with 32 GB of unified memory,
+12-core CPU (8 Performance + 4 Efficiency), 12-core Apple Silicon GPU, Dual
+16-core Neural Engine as the hardware for the ladder sandbox (roughly 3x better
+single-threaded and 5x better multi-threaded performance than the baseline used
+by CCRL, plus access to a GPU). A system running Linux and with an NVIDIA GPU
+would be preferable, but the M6 Mac mini has excellent single-threaded speed, a
+functional GPU, and excellent energy efficiency which makes it a good value
+choice. By serializing play and implementing time slicing (at the cost of
+eliminating pondering), agents will get to use almost the entirety of the
+hardware, allowing for ample hardware resources compared to what most projects
+run on today.
+
+If the ladder proves popular, additional hardware can be added to improve
+throughput - if the hardware pool becomes heterogenous pkmn.ai will take the
+same approach CCRL does and will modify the game timer to match the hardware the
+games are taking place on to attempt to balance hardware differences (matches
+between agents will always take place on the same hardware; accounting for
+hardware differences is mostly relevant to eliminately skew compared to
+historical models).
+
+##### Tournaments
+
+The large computer chess tournaments (TCEC & CCC) use substantially larger boxes to host engines:
+
+<details><summary>TCEC Details</summary><pre>
+CPU: 2x Xeon 6230R (52 cores/104 threads)
 GPU: 2xA100-PCIE-40GB
-RAM: 256GiB (~96GiB/engine) 
+RAM: 256GiB (~96GiB/engine)
 Storage: 2TiB SSD + Starting from S23 VVLTC: 12TiB (4 drives) NVMe SSD for Syzygy3-7 (total 14TB) + 15TiB (2 drives raid1 (30TiB)) HDD for Syzygy7 DTZ
-
-CCC is CPUs | 2 x AMD EPYC 7H12
+</pre></details>
+<details><summary>CCC Details</summary><pre>
+CPUs | 2 x AMD EPYC 7H12
 GPU | 2x A100 (40 GB GPU memory)
 Cores | 256 cores (128 physical)
 RAM | 512GB DIMM DDR4 2933 MHz (0.3 ns)
 SSD | 2x Micron 5210 MTFD (2TB) in RAID1
-```
+</pre></details>
 
-### Data
-
-- access to grabbing data
-  - teams (test data as opposed to training data)
-  - stats
-
-TODO need some way to let users register releases AND link log fetching data
-
----
-
-Accurately ranking competitive Pokémon AIs comes with several challenges:
-
-  - Developers often target a small number of formats which do not overlap with competitors
-  - Team-building is a difficult orthogonal problem to piloting that has a large influence on an AIs
-    ultimate performance
-  - Pokémon is stochastic and matchup dependent, making concrete ratings difficult
+These are almost certainly overkill for today's Pokémomn agents, but since
+pkmn.ai plans to host these tournaments as one-off events, the hardware for the
+event can be decided upon in the leadup to the event. For a tournament hosted at
+the time of writing (October 2026), a fleet of Google Cloud `g2-custom-24-49152`
+VM spot instances could be rented (1 NVIDIA L4, 24 vCPUs, 48 GB RAM) to run the
+a full round robin (50 games for each head-to-head pairing) tournament for ~$50.
 
 ### Isolation
 
-Controlling the environment that agents run on is crucial for obtaining fair and consistent results.
-Furthermore, each agent would ideally have sufficient resources to be able to perform at a
-reasonable level. However, TODO
+Players during a game will always run on the same hardware (either on the same
+machine for the ladder or two identical VMs for tournaments). Competitors will
+be given restricted read-only file system access and ephemeral read-write temp
+space and will be unable to access the broader internet. When sharing a machine,
+competitors will be paused after making their choices each turn to allow their
+opponent to run ("time-slicing"). This approach provides the best isolation and
+works around macOS not allowing partitioned access to the GPU/ANEa t the cost of
+eliminating [pondering](https://pkmn.ai/terms#pondering) and less throughput
+(games take longer and less games can take place simultaneously). CCRL also
+disables pondering, and given that pondering is even less relevant in
+competitive Pokémon and can also be enabled in the hosted tournaments, disabling
+it for ladder play feels acceptable.
 
-For optimal isolation the individual agents should run on separate identical machines, however, due
-to resource contraints it is more cost effective to have the agents share the same larger server (an
-`n2d-standard-48` Google Cloud Compute Engine machine with 192 GB of memory and an AMD EPYC 7B12 CPU
-running 64-bit x86 Linux).
+The need for isolation also contributes to the format of submitted entries into
+the arena: the simplest format is to require an OCI container and to manage
+these with Podman, however, this approach doesn't allow full native access to
+the GPU/ANE. To workaround this, pkmn.ai will allow for competitors to either
+submit OCI containers _or_ a native "bundle" (`.tar.{gz,xz,zst}`) which has its
+isolation handled manually to allow it native access to the Apple Silicon.
 
-<details><summary>CPU Details</summary><pre>
-Architecture:            x86_64
-  CPU op-mode(s):        32-bit, 64-bit
-  Address sizes:         48 bits physical, 48 bits virtual
-  Byte Order:            Little Endian
-CPU(s):                  48
-  On-line CPU(s) list:   0-47
-Vendor ID:               AuthenticAMD
-  Model name:            AMD EPYC 7B12
-    CPU family:          23
-    Model:               49
-    Thread(s) per core:  2
-    Core(s) per socket:  12
-    Socket(s):           2
-    Stepping:            0◊
-    BogoMIPS:            4499.99
-    Flags:               fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cp
-                         uid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefet
-                         ch osvw topoext ssbd ibrs ibpb stibp vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr arat npt nrip_save um
-                         ip rdpid
-Virtualization features:
-  Hypervisor vendor:     KVM
-  Virtualization type:   full
-Caches (sum of all):
-  L1d:                   768 KiB (24 instances)
-  L1i:                   768 KiB (24 instances)
-  L2:                    12 MiB (24 instances)
-  L3:                    96 MiB (6 instances)
-NUMA:
-  NUMA node(s):          2
-  NUMA node0 CPU(s):     0-11,24-35
-  NUMA node1 CPU(s):     12-23,36-47
-Vulnerabilities:
-  Itlb multihit:         Not affected
-  L1tf:                  Not affected
-  Mds:                   Not affected
-  Meltdown:              Not affected
-  Spec store bypass:     Mitigation; Speculative Store Bypass disabled via prctl
-  Spectre v1:            Mitigation; usercopy/swapgs barriers and __user pointer sanitization
-  Spectre v2:            Mitigation; Retpolines, IBPB conditional, IBRS_FW, STIBP conditional, RSB filling
-  Srbds:                 Not affected
-  Tsx async abort:       Not affected
-</pre></details>
+### Formats
 
-2/3 of the system can be used to run battles, and splitting up these resources 4 ways means that we
-can run two battles simultaneously, with each agent being given 32 GB of RAM and 8 cores. 
+The format considerations for the sandbox are perhaps the most important
+component - the "blessed" formats that are chosen will necessarily factor in to
+what developers target and will have a large impact on the success of the arena
+and the direction of the field.
 
-```
-docker run
-—expose 8000
-—read-only
-—memory 32 —memory-swap 32
-—cpuset-cpus
+The first decision regarding formats/rules is
+that we should support **the minimum number of formats necessary** - supporting
+too many formats splits the field (too few competitors playing in the same
+format) and takes away from the more popular formats (everyone is competing for
+the same hardware resources, and games played in less popular formats pins
+resources that could be being used by popular ones).
 
-0,1,2,3,24,25,26,27
-4,5,6,7,28,29,30,31
-—-
-8,9,10,11,32,33,34,35
-12,13,14,15,36,37,38,39
-16,17,18,19,40,41,42,43
-20,21,22,23,44,45,46,47
-```
-### Rules
+Ladder formats should also be **stable and long-lived** - pkmn.ai's arena aims
+to be able to compare bots over time throughout history, and flash-in-the-pan
+formats which are only around for a few months and don't get played a year later
+are not a great fit for the timelines of building and training a model and
+iteratively trying to improve it. Furthermore, a constantly changing format
+makes it impossible to run directly against past models / versions - the older
+versions will not be aware of format shifts or mechanics changes and would be
+artifically much weaker than updated models. These sorts of formats are much
+better suited for the one-off tournament model proposed by pkmn.ai.
 
-TODO reasoning behind rules
+It is important to note that competitive Pokémon as a game is always somewhat of
+a moving target (c.f. [pkmn.cc/changes](https://pkmn.cc/changes)) - bans and
+simulator fixes or mods occur even to historical generations. However, these
+shifts are (generally) much smaller than those that occur with the short-lived
+VGC formats or changes due to DLC or early-Generation ban waves. An agent
+trained on a historical meta from a few years ago will likely be relatively
+straightforward to make similarly strong on the meta as it is today compared to
+agents trained for more volatile formats which might not generalize as well.
 
+Formats should also be **as close to those that human's play as possible** -
+while we expect agents to be much better than humans in the future, we still
+ultimately want to stay connected to what the competitive scene is today and
+stay away from agents targeting something dramatically different than what is
+player on human ladders.
+
+pkmn.ai would like to **eventually host formats that feature teambuilding and
+drafting**, but for the time being is focused on only the piloting aspects of
+competitive Pokémon battling. Evaluating teambuilding and drafting is
+signficantly more costly (presumably requires a lengthy and expensive pre-match
+drafting / building phase) and the field currently appears to be too nascent to
+really tackle these aspects of competitive Pokémon. The proposed periodic
+tournament structure also seems well suited to trialing this in a year or so.
+
+#### Teams
+
+In order to eliminate team matchup variance, pkmn.ai will run all ladder games
+as paired matches - competitors will face off twice in a row with their teams
+swapped and their ratings will be calculated based on the match results, not
+individual games. If player's bring their own teams this makes the second game
+artificial as the player would then have full knowledge of their opponent's
+team. As such, on the ladder, teams should be provided for the agents from a
+fixed pool of preharvested strong teams. Matches of this sort will be
+**blind-pairs**, where neither player has special knowledge of what their
+opponent is playing, nor do they have particular experience of their own team
+(papers like [Metagrok](https://pkmn.ai/papers#Metagrok) demonstrate training on
+a specific team results in stronger play) which will force developers to make
+their bots more general.
+
+Blind-pair matches constrain formats to be historical - a format needs to be
+well-established enough that there exists a strong set of teams to draw from.
+This sort of evaluation also removes the teambuilding aspect of Pokémon - to
+counter this, pkmn.ai's tournaments will be bring-your-own-team (BYOT), meaning
+that while ladder play is solely focused on piloting, developers that feel they
+can get an edge through teambuilding or training on specific teams can still
+express themselves and have an opportunity to succeed.
+
+#### Proposal
+
+> [!NOTE]
+> This section is a proposal and subject to change based on feedback
+> from the Pokémon AI community.
+
+At launch, pkmn.ai's ladder will support:
+
+- `gen1singles`: effectively what Pokémon Showdown's `gen1ou` was, fixed to
+  specific recent TBD era. The [PokéAgent
+  Challenge](https://pokeagent.github.io/leaderboard.html) already featured a
+  number of Generation I agents demonstrating a reasonably large base of
+  potential competitors. Additionally, RBY is the simplest and most "solvable"
+  format which makes it an interesting area of research.
+- `gen3singles`: similar to above, Pokémon Showdown's `gen3ou`, fixed to a
+  specific TBD era. Generation III has the advantage of being a bridge between
+  modern formats and the older generations, serving as the simplest environment
+  that is a stepping stone to the recent game.
+- `gen9singles`: Pokémon Showdown's `gen9ou` fixed to a recent era. While still
+  a contemporary and technically more volatile format, Generation IX has both a
+  significant base of developers targeting it and is effectively stable after
+  such a long duration as the most-recent Generation.
+- `gen9randoms`: Pokémon Showdown's Random Battles formats have been
+  historically targeted by developers due to the large playerbase and the
+  simplification of not having to provide teams. While this latter constraint is
+  obviated for the other formats already under this proposal (see above), Random
+  Battles also has a more simplified information set for an opponent's Pokémon
+  which is attractive. Like the others, this format's rules will be fixed to a
+  recent era (likely Nov 2026).
+
+All formats will use the exact same timer rules as Pokémon Showdown (with the
+except of pondering being disabled) - while many bots currently rely strictly on
+policy and can move in <1s, pkmn.ai wishes to enable the possibility for models
+to search during play and explore timer management strategies.
+
+#### Doubles
+
+Double Battles are an important category of competitive Pokémon battling, yet
+the most popular variant of doubles, VGC, presents a challenge for pkmn.ai's
+ladder needs. VGC's constantly shifting ruleset (and mechanics changes, with the
+advent of Pokémon Champions) means permanent ladders for these ephemeral formats
+are misguided. pkmn.ai's tournament option is an excellent match for VGC, and
+provided sufficient interest and sign-ups, **pkmn.ai plans to host a standrd VGC
+OTS Bo3 tournament at the conclusion of every VGC season**.
+
+While guaranteed tournaments are nice, not offering a permanent ladder for
+doubles feels inadequate given the demonstrated interest of the community.
+pkmn.ai could provide a ladder for a frozen `gen9doublesou` or
+`gen9randomdoubles` format, but these formats differ from VGC (different timer,
+bring-6-pick-6, not Champions, not level 50, etc) perhaps too substantially for
+a VGC model to translate well to this style of gameplay. The community could
+decide on a specific VGC format to freeze and target for a ladder, but this also
+feels unlikely to be sufficient as the VGC rulesets are large shakeups which
+limits the applicability of old models to new VGC formats.
+
+Some sort of **"seasonal" ladder** concept could be explored where the pkmn.ai
+VGC ladder only lives for a shorter period of time (the VGC season plus however
+long it takes for the ratings of the submitted agents to settle post-season) and
+then gets archived to make way for a new season. While this is the most logical
+in practice, a different structure would need to be explored for teams as it
+would not be possible to acquire the historical highly rated team data in the
+same way it would be for other formats. The best option would be to require bots
+to submit X (= 20?) teams along with their container/bundle that can be added to
+the team pool to faciliate "semi-blind" team pairing (players should only have
+full knowledge of their opponent's teams 1/Nth of the time, where N is the
+number of competitors on the ladder).
+
+##### Zoroark
+
+Zoroark's Illusion ability and other complicated Pokémon mechanics (e.g., Dragon
+Darts, Ditto/Imposter, Trace, Unburden, Dancer) are worth considering for a ban
+in the formats where they feature. In many cases the mechanic is niche and not
+fundamental to the format yet adds substantial complexity and development
+overhead. The main argument for keeping them is that they are a part of the game
+and provide a way for models to eke out an advantage over their competitors by
+handling these better, though depending on community sentiment it would be
+reasonable to exclude a subset of these mechanics / effects from a format.
+
+##### Expansion
+
+While pkmn.ai hopes to help focus the field, proven demand for additional
+formats for other ladders will result in expanding offerings. As a general rule,
+a stable format which has some minimum number of participants (e.g. 5 different
+developers with completed agents) or more prospective participants than the
+current least popular ladder will be eligible.
+
+If ladders prove to be unpopular, matchmaking parameters can be modified to
+further deemphasize ladders to save resources for the more popular ones, though
+this should already happen automatically as matchmaking (see below) is set up in
+a way which will already favor the ladder that has the most activity in the form
+of developer submissions.
+
+### Ranking / Matchmaking
+
+TODO
+
+
+### Participation
+
+TODO
+
+#### Registration
+
+github form, required naming + pictures + contats, fill out projects.yml
+responsible release, access to models for moderation + laddering (consent)
+
+#### Rules
+
+no cirumvention
+
+#### Submissions
+
+packaing
+models
+quarantine
+
+#### Data
+
+access to randbats data, access to usage stats
+
+---
 
 ## Architecture
 
 pkmn.ai is built around two servers - one minimally provisioned (1CPU/2GB) Digital Ocean droplet
 which exists to serve the https://pkmn.ai [site](#site), run the [sim server](#sim), handle
 [matchmaking](#matchmaking) and coordinate with the [controller](#controller) on the [competition
-server](#competition). The competition server is a donated `n2d-standard-48` Google Cloud Compute
+server](#competition). The competition/area server is a donated `n2d-standard-48` Google Cloud Compute
 Engine machine with 192 GB of memory and an AMD EPYC 7B12 CPU running 64-bit x86 Linux, though is on
 a virtual network and cannot serve public traffic, necessitating this hybrid design.
 
 ### Sim
 
-pkmn.ai does not need to run a full blown Pokémon Showdown sim and login server due to its unique
-requirements (most importantly, a fixed pool of predefined users) which is helpful, as running the
-entire Pokémon Showdown stack usually has higher resource demands than pkmn.ai would like to incur.
-Instead, a small socket server will be built around the
-[`@pkmn/sim`](https://www.npmjs.com/package/@pkmn/sim) package. TODO
+pkmn.ai does not need to run a full blown Pokémon Showdown sim and login server
+due to its unique requirements (most importantly, a fixed pool of predefined
+users) which is helpful, as running the entire Pokémon Showdown stack usually
+has higher resource demands than pkmn.ai would like to incur. Instead, the arena
+will simply call the `@pkmn/sim` directly and competitors will interface with it
+over stdin/stdout.
 
 ### Site
 
@@ -172,349 +394,9 @@ In order to scale in spite of the resource constraints, https://pkmn.ai is desig
 statically by Nginx and cached by Cloudflare wherever possible - the vast majority of content is
 written in [Djot](https://djot.net/) and built into minimized HTML at compile time by a
 [build](src/static/build.ts) tool, with the leaderboard pages being rewritten after each battle
-completes. Replays of individual battles are the only content that gets served dynamically (though
-access to these should be rate-limited), as it is expected that most will not ever be retrieved and
-the battles are already stored as JSON that simply needs to be wrapped with a bit of boilerplate to
-render as a replay.
+completes.
 
----
 
-controller = component on the docker server, sends heartbeat requests to sim and if disconnected for
-15 minutes sim and/or helper sends message to discord server
 
-Battle logs are source of truth, need backup + archive service (upload archives to GitHub) + restore
-~~Can have custom ID~~ PS approach is more flexible/future proof
 
-```
-gen1ou-20231104175601 # datetime
-/1/Athena-TechnicalMachine-5
-Athena-vs-TechnicalMachine
-/gen1ou/FutureSight-vs-0ERROR/10
-``````
 
-TODO how to update watchdog? needs to be manual
-
-TODO `/motivation`` (/challenge? - what makes Pokemon an interesting research problem. link to intro
-to competitive Pokemon which covers base mechanics required)
-
-
-sim decides next round (always play 1 then kill then play swapped) tells controller to kill old
-participants and start next round with new pairing round robins participants attempting to ensure
-balanced number of battles = naive alternatively, matchmake based on (a) most uncertainity of rating
-(want balanced) and then number of battles (cant have one person have too many battles) dont want
-glicko because decay doesnt make sense
-
-**NEED BAYESELO WRAPPER**
-
-### `/leaderboard`
-
-Leaderboard/Tournament Open/Controlled Generation N
-
-History = games per month (links to github) = 7z each days worth of logs and tar the formats and
-months
-
-
-click bot = has same summary info from projects.md (need to share rendering logic… in server! =
-prerender snippet) show matchup vs other bots show matchups vs past versions links to all replays
-
-only show dominant version of each bot (might not be most recent) keep dominant and most recent in
-the pool, other bots retired
-
-append to csv file with a record from each game, can use this to compute bots rating after each day
-as well. looks a lot like a database… = technically an index, can also use to figure out next battle
-ID. can be restored from battles (pre write tool to do this)
-
-need to prerender rating graphs?? how much of tables can be prerendered?
-
-problem = replays need to be obfsucated into spectator replays because otherwise leaks teams (teams
-effectively get leaked anyway because k anonymity cant be enforced over so many battles) = can only
-share replays between “seasons” (and still want pruned version)
-- log @pkmn/sim version so recreatable
-
-want everyone to play at least a round with the same team, = need to then track who used what from
-teams DB. instead can just assure each team gets used twice then moved on (limits data and lets us
-upload spectator replays more quickly. need large team pool to remove possibility of dupes)
-
-OPTION = just always generate all tables statically (what happens if fuck up?) = uses disk space,
-but if need to precompute anyway also uses disk.
-- index needs updating, pages for both bots needs updating nginx does all serving (and set up
-aliases there), no need for polka
-
-  <script async src="https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
-
-TESTING LEVELS
-
-1. server itself populates leaderboard from random procedure
-2. watchdog randomly decides W/L/T result, doesnt bother launching bots
-3. watchdog starts up RandomPlayer(N) for various N to get lots of quick battles
-
-"tables"
-- users (read in config with agents/names/IPs etc)
-- matchmaking (matrix of name-version vs. name-version num battles)
-- ratings table of everyones ratings and total battles?
-
----
-
-start needs to start websocket server (which also periodically builds files) as well so remove
-http-server
-
-static src/tools/seed (simulate - flag to determine at what level to prosuce) produce leaderboaed
-info after every battle
-- run job to preseed https://github.com/pkmn/PKMN/blob/main/src/db/seed.ts
-
-need to render replays on the fly
-- strip data
-- provide option of html/json/.log txt
-
-use polka for this (and static if NODE-ENV is not prod = add node env is development to bashrc)
-
----
-
-takes N battles, runs N battles and writes the log files (need socket server setup?)
-- after each battle in background queue / threadpool or process write for update (dont block normal
-  serving) HOWEVER need to avoid starting new battle until previous battle is fully written to
-  minimize dataloss? alternatively queue and make sure each gets writte n sequentially, though
-  unglamour shutdown could lose data
-
-make something which generates data for leaderboard/games (tools:seed?) = npm test:integration, do
-not run init if not CI/development?/make sure to delete data in posttest!
-
-u16 bot u16 version ? start at byte for each. need one for each player, their rating at the the time
-and then result? = INDEX file
-
-- needs some datastructure that stores history of ratings Chart:
-https://css-tricks.com/how-to-make-charts-with-svg
-
-
-battle logs = source of truth ID = next battle id RESULTS history = index used for building various
-things (battles page is full list of battles), also used for all battles by particular person =
-requires looking in either p1 or p2 RATINGS = most recent rating for everyone RATINGS HISTORY =
-every day a snapsot of the ratings file gets added per row, used for building chart PLAYERS = login
-details. avatar, name, id etc. just a config JSON file
-
-problem, what about efficient scan?
-
-taylorhansen/pokemonshowdown-ai #353 #354 #357 #362 #363 #364 #176 #326 #323
-
-How to keep up to date on "Latest Release" in projects.yml? needs test = write something which
-queries GH/pip/npm for latest?
-
-Open comp = regular ladder, can have multiple battles at once, matchmaker is different than PS
-though (try to get N battles which each bot etc) Also needs to be unversioned.
-
-Server can restart between decisions = save state and timers and reinit on startup then clients
-reconnect (ensure reconnect to correct battle) = max 5-10 minutes for a restart. Still would prefer
-to be able to restart without killing sockets though?
-
-protocol - port of relevant bits of PS doc + much stricter
-
-
-1. add comments to player/MDP/RP
-2. write tests for all
-3. add code to let it login
-
-
-```sql
-CREATE TABLE IF NOT EXISTS agents (
-  id INTEGER PRIMARY KEY,
-
-  name TEXT NOT NULL,
-  ip TEXT
-);
-
-CREATE TABLE IF NOT EXISTS versions (
-  id INTEGER PRIMARY KEY,
-
-  agent INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-
-  FOREIGN KEY(agent) REFERENCES agents(id)
-);
-
-CREATE TABLE IF NOT EXISTS formats (
-  id INTEGER PRIMARY KEY,
-
-  name TEXT NOT NULL,
-  controlled BOOLEAN NOT NULL,
-);
-
--- FIXME ratings?
-CREATE TABLE IF NOT EXISTS battles (
-  id INTEGER PRIMARY KEY,
-
-  format INTEGER NOT NULL,
-  p1 INTEGER NOT NULL,
-  p2 INTEGER NOT NULL,
-  seed INTEGER NOT NULL,
-  result INTEGER NOT NULL, -- -1 0 1
-  rating BLOB NOT NULL, -- TODO ???
-
-  FOREIGN KEY(p1) REFERENCES versions(id),
-  FOREIGN KEY(p2) REFERENCES versions(id),
-  FOREIGN KEY(format) REFERENCES formats(id),
-);
-
--- TODO does # of games vs. each even matter, as opposed to determining what
--- will reduce deviation in rating? 
-CREATE TABLE IF NOT EXISTS matchmaking (
-  -- NB: guaranteee p1 < p2
-  p1 INTEGER NOT NULL,
-  p2 INTEGER NOT NULL,
-
-  battles INTEGER NOT NULL,
-
-  PRIMARY KEY (p1, p2),
-  FOREIGN KEY(p1) REFERENCES versions(id),
-  FOREIGN KEY(p2) REFERENCES versions(id)
-);
-
--- historical ratings
-CREATE TABLE IF NOT EXISTS ratings (
-  date DATETIME NOT NULL,
-  version INTEGER NOT NULL,
-  rating BLOB NOT NULL, -- TODO
-
-  PRIMARY KEY (date, version),
-  FOREIGN KEY(version) REFERENCES versions(id),
-);
-```
-
-TRIGGERS
-
-1. trigger when new version of agent added
-2. trigger after battle to update rating in matchmaking table (and version history table?)
-
-CSPRNG random number stored in battles table = links games in a match, also determines team
-selection (used to index into teams DB file stored on the controller box). Number given to agents
-who can use it to consistently seed their PRNG if desired (how to get reproducible results - need to
-make sure they can't infer battle seed from CSPRNG number)
-
-P1 P2 in a match always initially determined by sort order of version id = if P1 < P2 then you know
-it's game one as opposed to game 2
-
-Game 2 uses exact same seed as game 1, so in theory if the players play identical it will be a draw
-for the match
-
-can run sim in controller for controlled (but not open) games = reduced load on server, but then
-need to send logs etc so simpler to just do on server
-
----
-
-goals of pokemon ai
-- present to smart person not involved in pokemon/ai why its interesting
-- make it easy for players to be able to play against existing bots (all nicely packaged etc)
-- make ranking bots easier/possible
-- make people focus on specific problems
-
-—-
-
-disable pondering (time slicing = faux sequentializing the game = just takes twice as long)
-
-only evaluate glicko period after both games in match accounted for glicko-2 with 10 games per
-rating period to each
-- need a table of just ratings period results, every day not long enough problem = ratings periods
-then grow too large, ideal = ratings period after each each match (2 games for 2 players), problem =
-all other players “decay”. worst case table is O(10*N versions), still pretty small, just do naive
-solution. elo with fixed k = 20, no decary
-
-Ratings period = when AVERAGE games for each player >= 10?
-
-games (Not matches)
-
-P1 P2 Result Seed = dont need ratings at all, link to replays
-
-——
-
-Leaderboard
-
-Rank Name Elo Glicko-2 W L T (only ever updated after matches so will always be multiple of 2)
-
--> drill into agent = for each version show wlt against each opponent
-
-**dual level table**
-
-Rank NameANDVersion Elo Glicko-2 W L T
-  - Opponent W L T + can click link to see games filtered to all though between this version and
-    opponent
-
-Chart Rank for each version over time (or over matches?) Rating for each version over time (or over
-matches)
-
-CAP at N = 30? 50? games per pair in order to not over test and heavily weight on early starting
-conditions. when new bot gets added, round robin with each existing bot until has enough games (ie.
-10) to be considered rated, then try to get another bot to N games, BUT want to avoid making others
-decay from not being played!
-
-bot with least games does round robin with other bots… BUT favor better bots. what is tradeoff
-between exploitation and exploration?
-
-goal = trending towards AVERAGE N (account for earlier versions having more games), also want min N.
-two numbers = N0 is total number of games vs each and N1 is minimum number of games vs. any given
-opponent, favor improving these numbers for the highest rated opponent first.
-
-
-100 games A vs B C comes in, average games is (100+100+0)/3 = 66.6 min games is (100+0)/2 = 50 and 0
-
-C needs games to improve its average N, should first play against stronger of A and B since theyre
-tied on matchmaking metrics.
-
-next = 204/3 = 68 is average but 102, 100, 2 so match up 2 and 100
-
-***how to balance averages and min?***
-
-Prioritize min first, so new bot will always play against best bot. Need some weighting of rating
-and how far away from min (make exponentially bigger the further away from min), then just
-prioritize less battles than average (but also weight by rating)
-- at this point will be playing highest elo THAT IS STILL UNDER AVERAGE
-
-——
-
-Open = N games round robin for each player, top WLT record determines final tour winner
-
-Rank Name (Version) W L T
-
-how big should N (number of games between each player) be? 10? (aim for X <= 1 week, 24 hours? CPU
-hours)
-
-"generation 8"
-- not guaranteed OU
-- guaranteed = singles, species clause, 1000 turn limit, tours timer, sleep/freeze/desync/switch
-  priority , evasion OHKO invulnerability
-
----
-
-ai = ~~offer minimal docker files for node and python from scratch~~
-musl (jemalloc? mimalloc?)
-
-document from scratch and distroless (and techniques for reducing size), but simply require anything < 500 MB (only need to keep around 2 versions tops per agent so not too problematic space wise)
-https://towardsdatascience.com/how-to-shrink-numpy-scipy-pandas-and-matplotlib-for-your-data-product-4ec8d7e86ee4
-
-firecracker vm
-https://hocus.dev/blog/qemu-vs-firecracker/
-
-// TODO: add new bot = add to table and restart, will naturally have lowest bots? problem
-// = restarting when have battles. alternatively can add() which does the insert
-// and populates the in memory table, cleaner because doesnt require restart...
-
----
-
-changes bots need to work with pkmn.ai
-
-1) docker image < 500 MB (can republish all under https://ghcr.io/pkmn?)
-2) accept team in `/challenge`
-3) read stats from `/stats/botname/format`` (sub 100? MB) - just `stats/format`
-
----
-
-- ability to hold self tours
-- ability to battle all bots as a human locally
-
-### RBY Dataset
-
-1. process all `gen1ou` logs to correct ratings
-2. convert all PS logs into binary log format with team + inputs required - no output!
-3. ensure when team and inputs fed into pkmn/engine can produce same output, set up tests to guarantee this / name logs with version of pkmn/engine required
-   - 0 atk dvs? (non maxed in general)
-   - bugs in PS causing different results (even after massaging output?)
-4. publish as torrent pending approval from staff
