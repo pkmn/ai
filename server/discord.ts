@@ -8,8 +8,7 @@ import * as yaml from 'yaml';
 const root = path.join(__dirname, '..', '..');
 
 const DISCORD_API = 'https://discord.com/api/v10';
-const VGC_API = 'https://vgc.bot/api/leaderboard';
-const MAX_DEVIATION = 80;
+const VGC_API = 'https://vgc.bot/api/partner/leaders';
 const CYCLE_MS = 60_000;
 
 interface Config {
@@ -19,18 +18,14 @@ interface Config {
   authors?: {[author: string]: string};
 }
 
-interface VGCBot {
-  id: string;
-  name: string;
-  ladders: string[];
-  author?: string;
-  rating: number;
-  deviation: number;
-  wins: number;
-  losses: number;
-  ties: number;
-  retired: boolean;
+export interface Leader {
+  ladder: string;
+  bot: {id: string; name: string} | null;
+  owner: {name: string; discordId: string | null} | null;
 }
+
+// A member id, or a name to look a member up by.
+export type Owner = {id: string} | {name: string};
 
 interface GuildMember {
   user: {
@@ -46,27 +41,19 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
 }
 
-function getLeader(bots: VGCBot[]): VGCBot | undefined {
-  for (const bot of bots) {
-    if (bot.wins + bot.losses + bot.ties > 0 && bot.deviation <= MAX_DEVIATION) {
-      return bot;
-    }
-  }
-  return undefined;
+export function ownerOf(leader: Leader, config: Config): Owner | undefined {
+  const override = leader.bot && (config.bots?.[leader.bot.id] ?? config.bots?.[leader.bot.name]);
+  if (override) return {name: override};
+  if (!leader.owner) return undefined;
+  if (leader.owner.discordId) return {id: leader.owner.discordId};
+  return {name: config.authors?.[leader.owner.name] ?? leader.owner.name};
 }
 
-export function resolveOwner(bot: VGCBot | undefined, config: Config): string | undefined {
-  if (!bot) return undefined;
-  if (config.bots?.[bot.name]) return config.bots[bot.name];
-  if (!bot.author) return undefined;
-  return config.authors?.[bot.author] ?? bot.author;
-}
-
-export function findMember(members: GuildMember[], owner?: string): GuildMember | undefined {
-  if (!owner) return undefined;
-  const lower = owner.toLowerCase();
+export function findMember(members: GuildMember[], owner: Owner): GuildMember | undefined {
+  if ('id' in owner) return members.find(m => m.user.id === owner.id);
+  const lower = owner.name.toLowerCase();
   return (
-    members.find(m => m.user.id === owner) ??
+    members.find(m => m.user.id === owner.name) ??
     members.find(m => m.user.username.toLowerCase() === lower) ??
     members.find(m => m.user.global_name?.toLowerCase() === lower) ??
     members.find(m => m.nick?.toLowerCase() === lower)
@@ -111,91 +98,91 @@ export async function fetchGuildMembers(token: string, guild: string): Promise<G
   return all;
 }
 
-export async function fetchLadderBots(ladder: string): Promise<VGCBot[]> {
-  const res = await fetch(`${VGC_API}?ladder=${encodeURIComponent(ladder)}`);
+export async function fetchLeaders(vgcToken: string): Promise<Leader[]> {
+  const res = await fetch(VGC_API, {headers: {Authorization: `Bearer ${vgcToken}`}});
   if (!res.ok) {
-    throw new Error(`vgc.bot API failed for ${ladder} (${res.status})`);
+    throw new Error(`vgc.bot API failed (${res.status})`);
   }
-  const data = await res.json() as {bots: VGCBot[]};
-  return data.bots;
+  const data = await res.json() as {leaders: Leader[]};
+  return data.leaders;
 }
 
-export async function syncLadderRole(
+// Fetches the members only when some ladder's owner changed since the last cycle.
+export async function syncRoles(
   token: string,
+  vgcToken: string,
   config: Config,
-  ladder: string,
-  roleId: string,
   state: Map<string, string | undefined>
 ) {
-  const bots = await fetchLadderBots(ladder);
-  const leader = getLeader(bots);
-  const owner = resolveOwner(leader, config);
+  const leaders = await fetchLeaders(vgcToken);
+  let members: GuildMember[] | undefined;
+  for (const leader of leaders) {
+    const roleId = config.ladders[leader.ladder];
+    if (!roleId) continue;
+    const owner = ownerOf(leader, config);
+    const key = owner && JSON.stringify(owner);
+    if (state.has(leader.ladder) && state.get(leader.ladder) === key) continue;
 
-  if (state.has(ladder) && state.get(ladder) === owner) return;
+    try {
+      members ??= await fetchGuildMembers(token, config.guild);
+      const target = owner && findMember(members, owner);
 
-  const members = await fetchGuildMembers(token, config.guild);
-  const target = findMember(members, owner);
+      for (const member of members) {
+        if (member.roles.includes(roleId) && member.user.id !== target?.user.id) {
+          await discordRequest(
+            token,
+            `/guilds/${config.guild}/members/${member.user.id}/roles/${roleId}`,
+            {method: 'DELETE'}
+          );
+          console.log(`[${leader.ladder}] Removed role ${roleId} from ${member.user.username}`);
+        }
+      }
 
-  for (const member of members) {
-    if (member.roles.includes(roleId) && member.user.id !== target?.user.id) {
-      await discordRequest(
-        token,
-        `/guilds/${config.guild}/members/${member.user.id}/roles/${roleId}`,
-        {method: 'DELETE'}
-      );
-      console.log(`[${ladder}] Removed role ${roleId} from ${member.user.username}`);
+      if (target && !target.roles.includes(roleId)) {
+        await discordRequest(
+          token,
+          `/guilds/${config.guild}/members/${target.user.id}/roles/${roleId}`,
+          {method: 'PUT'}
+        );
+        const who = `${target.user.username} (${leader.bot?.name})`;
+        console.log(`[${leader.ladder}] Assigned role ${roleId} to ${who}`);
+      } else if (owner && !target) {
+        const who = 'id' in owner ? owner.id : owner.name;
+        console.log(`[${leader.ladder}] ${who} is not in the server`);
+      }
+
+      if (!owner || target) {
+        state.set(leader.ladder, key);
+      } else {
+        state.delete(leader.ladder);
+      }
+    } catch (err) {
+      console.error(`[${leader.ladder}] Error syncing role:`, err);
     }
-  }
-
-  if (target && !target.roles.includes(roleId)) {
-    await discordRequest(
-      token,
-      `/guilds/${config.guild}/members/${target.user.id}/roles/${roleId}`,
-      {method: 'PUT'}
-    );
-    console.log(
-      `[${ladder}] Assigned role ${roleId} to ${target.user.username} (${leader?.name})`
-    );
-  }
-
-  if (!owner || target) {
-    state.set(ladder, owner);
-  } else {
-    state.delete(ladder);
   }
 }
 
-export async function run(token: string, once = false) {
+export async function run(token: string, vgcToken: string, once = false) {
   const state = new Map<string, string | undefined>();
   while (true) {
-    const config = loadConfig();
-    const entries = Object.entries(config.ladders);
-    const delayMs = entries.length > 0 ? Math.floor(CYCLE_MS / entries.length) : CYCLE_MS;
-
-    for (let i = 0; i < entries.length; i++) {
-      const [ladder, roleId] = entries[i];
-      try {
-        await syncLadderRole(token, config, ladder, roleId, state);
-      } catch (err) {
-        console.error(`[${ladder}] Error syncing role:`, err);
-      }
-      if (!once && i < entries.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
+    try {
+      await syncRoles(token, vgcToken, loadConfig(), state);
+    } catch (err) {
+      console.error('Error syncing roles:', err);
     }
-
     if (once) break;
-    await new Promise(resolve => setTimeout(resolve, delayMs));
+    await new Promise(resolve => setTimeout(resolve, CYCLE_MS));
   }
 }
 
 if (require.main === module) {
   const token = process.env.DISCORD_BOT_TOKEN;
-  if (!token) {
-    console.error('Missing DISCORD_BOT_TOKEN environment variable');
+  const vgcToken = process.env.VGC_BOT_TOKEN;
+  if (!token || !vgcToken) {
+    console.error(`Missing ${token ? 'VGC_BOT_TOKEN' : 'DISCORD_BOT_TOKEN'} environment variable`);
     process.exit(1);
   }
-  run(token, process.argv.includes('--once')).catch(err => {
+  run(token, vgcToken, process.argv.includes('--once')).catch(err => {
     console.error(err);
     process.exit(1);
   });
