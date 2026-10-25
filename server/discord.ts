@@ -32,11 +32,6 @@ export interface Delivery {
   }[];
 }
 
-export type Verified =
-  {kind: 'apply'; delivery: Delivery; sent: number} |
-  {kind: 'ignore'; reason: string} |
-  {kind: 'reject'; status: 400 | 401; reason: string};
-
 interface GuildMember {
   user: {
     id: string;
@@ -50,46 +45,34 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
 }
 
 // vgc.bot signs HMAC-SHA256 over `<timestamp>.<raw body>`, timestamp in ms.
+// Returns the delivery to apply, or why it is not applied.
 export function verify(
   body: Buffer,
   headers: http.IncomingHttpHeaders,
   secret: string,
   lastAccepted: number,
   now = Date.now()
-): Verified {
+): {delivery: Delivery; sent: number} | string {
   const timestamp = headers['x-arena-timestamp'];
   const signature = headers['x-arena-signature'];
-  if (typeof timestamp !== 'string' || typeof signature !== 'string') {
-    return {kind: 'reject', status: 401, reason: 'unsigned'};
-  }
-
-  if (!/^sha256=[0-9a-f]{64}$/.test(signature)) {
-    return {kind: 'reject', status: 401, reason: 'bad signature'};
-  }
-
+  if (typeof timestamp !== 'string' || typeof signature !== 'string') return 'unsigned';
+  if (!/^sha256=[0-9a-f]{64}$/.test(signature)) return 'bad signature';
   const expected = Buffer.from('sha256=' + crypto.createHmac('sha256', secret)
     .update(`${timestamp}.`).update(body).digest('hex'));
-  if (!crypto.timingSafeEqual(Buffer.from(signature), expected)) {
-    return {kind: 'reject', status: 401, reason: 'bad signature'};
-  }
+  if (!crypto.timingSafeEqual(Buffer.from(signature), expected)) return 'bad signature';
 
   const sent = Number(timestamp);
-  if (!Number.isFinite(sent)) return {kind: 'reject', status: 400, reason: 'bad timestamp'};
-  if (Math.abs(now - sent) > MAX_AGE_MS) {
-    return {kind: 'reject', status: 400, reason: 'stale'};
-  }
-  if (sent <= lastAccepted) return {kind: 'ignore', reason: 'already applied'};
+  if (!Number.isFinite(sent)) return 'bad timestamp';
+  if (Math.abs(now - sent) > MAX_AGE_MS) return 'stale';
+  if (sent <= lastAccepted) return 'already applied';
 
   let delivery: unknown;
   try {
     delivery = JSON.parse(body.toString('utf8'));
   } catch {
-    return {kind: 'reject', status: 400, reason: 'not JSON'};
+    return 'not JSON';
   }
-  if (!isDelivery(delivery)) {
-    return {kind: 'reject', status: 400, reason: 'unknown version or shape'};
-  }
-  return {kind: 'apply', delivery, sent};
+  return isDelivery(delivery) ? {delivery, sent} : 'unknown version or shape';
 }
 
 function isDelivery(value: unknown): value is Delivery {
@@ -198,24 +181,17 @@ export function serve(token: string, secret: string, port: number) {
     req.on('end', () => {
       try {
         const verified = verify(Buffer.concat(chunks), req.headers, secret, lastAccepted);
-        switch (verified.kind) {
-          case 'ignore':
-            console.log(`Ignored a delivery: ${verified.reason}`);
-            res.writeHead(204).end();
-            return;
-          case 'reject':
-            console.log(`Turned away a delivery: ${verified.reason}`);
-            res.writeHead(verified.status).end();
-            return;
-          case 'apply':
-            lastAccepted = verified.sent;
-            // vgc.bot does not wait for the roles: answer first, then apply.
-            res.writeHead(204).end();
-            applyLeaders(token, loadConfig(), verified.delivery).catch(err => {
-              console.error('Could not apply the ladder leaders:', err);
-            });
-            return;
+        if (typeof verified === 'string') {
+          console.log(`Did not apply a delivery: ${verified}`);
+          res.writeHead(400).end();
+          return;
         }
+        lastAccepted = verified.sent;
+        // vgc.bot does not wait for the roles: answer first, then apply.
+        res.writeHead(204).end();
+        applyLeaders(token, loadConfig(), verified.delivery).catch(err => {
+          console.error('Could not apply the ladder leaders:', err);
+        });
       } catch (err) {
         // Nothing on this unauthenticated path may take the process down.
         console.error('Could not handle a delivery:', err);

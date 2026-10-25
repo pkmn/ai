@@ -20,8 +20,8 @@ function delivery(...leaders: Delivery['leaders']): Delivery {
 
 interface VerifyCase {
   name: string;
-  kind: 'apply' | 'ignore' | 'reject';
-  status?: number;
+  // Why the delivery is not applied; left out where it is.
+  reason?: string;
   body?: string;
   timestamp?: number;
   signature?: string;
@@ -30,26 +30,25 @@ interface VerifyCase {
 
 describe('verify', () => {
   test.each<VerifyCase>([
-    {name: 'valid', kind: 'apply', signature: sign(NOW, BODY)},
-    {name: 'wrong secret', kind: 'reject', status: 401, signature: sign(NOW, BODY, 'other')},
-    {name: 'non-ASCII signature', kind: 'reject', status: 401, signature: NON_ASCII},
-    {name: 'unsigned', kind: 'reject', status: 401},
-    {name: 'stale', kind: 'reject', status: 400, timestamp: NOW - 300_001,
+    {name: 'valid', signature: sign(NOW, BODY)},
+    {name: 'wrong secret', reason: 'bad signature', signature: sign(NOW, BODY, 'other')},
+    {name: 'non-ASCII signature', reason: 'bad signature', signature: NON_ASCII},
+    {name: 'unsigned', reason: 'unsigned'},
+    {name: 'stale', reason: 'stale', timestamp: NOW - 300_001,
       signature: sign(NOW - 300_001, BODY)},
-    {name: 'future', kind: 'reject', status: 400, timestamp: NOW + 300_001,
+    {name: 'future', reason: 'stale', timestamp: NOW + 300_001,
       signature: sign(NOW + 300_001, BODY)},
-    {name: 'applied', kind: 'ignore', signature: sign(NOW, BODY), lastAccepted: NOW},
-    {name: 'unknown version', kind: 'reject', status: 400, body: VERSION2,
+    {name: 'applied', reason: 'already applied', signature: sign(NOW, BODY), lastAccepted: NOW},
+    {name: 'unknown version', reason: 'unknown version or shape', body: VERSION2,
       signature: sign(NOW, VERSION2)},
-    {name: 'malformed leaders', kind: 'reject', status: 400, body: MALFORMED,
+    {name: 'malformed leaders', reason: 'unknown version or shape', body: MALFORMED,
       signature: sign(NOW, MALFORMED)},
-  ])('$name', ({kind, status, body = BODY, timestamp = NOW, signature, lastAccepted = 0}) => {
+  ])('$name', ({reason, body = BODY, timestamp = NOW, signature, lastAccepted = 0}) => {
     const headers = signature
       ? {'x-arena-timestamp': String(timestamp), 'x-arena-signature': signature}
       : {};
-    const verified = verify(Buffer.from(body), headers, SECRET, lastAccepted, NOW);
-    const expected = status === undefined ? {kind} : {kind, status};
-    expect(verified).toMatchObject(expected);
+    expect(verify(Buffer.from(body), headers, SECRET, lastAccepted, NOW))
+      .toEqual(reason ?? {delivery: JSON.parse(body), sent: timestamp});
   });
 
   test('pins the signature of a known body', () => {
