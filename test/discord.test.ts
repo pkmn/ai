@@ -1,133 +1,128 @@
-import * as crypto from 'crypto';
+import {type Leader, findMember, ownerOf, syncRoles} from '../server/discord';
 
-import {type Delivery, applyLeaders, verify} from '../server/discord';
+const CONFIG = {
+  guild: 'guild',
+  ladders: {a: 'role-a', b: 'role-b'},
+  bots: {Bot: 'sauce'},
+  authors: {pelle: 'pll'},
+};
 
-const SECRET = Buffer.from('d2ViaG9vay1zZWNyZXQ=', 'base64');
-const NOW = 1700000000000;
-const BODY = '{"version":1,"leaders":[]}';
-const VERSION2 = '{"version":2,"leaders":[]}';
-const MALFORMED = '{"version":1,"leaders":{}}';
-
-function sign(id: string, timestamp: number, body: string, secret: Buffer = SECRET) {
-  return 'v1,' + crypto.createHmac('sha256', secret)
-    .update(`${id}.${timestamp}.${body}`).digest('base64');
+function leader(ladder: string, bot: Leader['bot'], owner: Leader['owner']): Leader {
+  return {ladder, bot, owner};
 }
 
-function signed(body: string, at: number, secret: Buffer = SECRET) {
-  const id = String(at);
-  const timestamp = Math.floor(at / 1000);
-  return {'webhook-id': id, 'webhook-timestamp': String(timestamp),
-    'webhook-signature': sign(id, timestamp, body, secret)};
-}
+describe('ownerOf', () => {
+  const bot = {id: 'b1', name: 'Other'};
+  test.each<[string, Leader, ReturnType<typeof ownerOf>]>([
+    ['the config override by bot name',
+      leader('a', {id: 'b2', name: 'Bot'}, {name: 'x', discordId: '1'}), {name: 'sauce'}],
+    ['the shared Discord account', leader('a', bot, {name: 'x', discordId: '1'}), {id: '1'}],
+    ['the mapped author name', leader('a', bot, {name: 'pelle', discordId: null}), {name: 'pll'}],
+    ['the author name', leader('a', bot, {name: 'x', discordId: null}), {name: 'x'}],
+    ['nobody while the owner is private', leader('a', bot, null), undefined],
+    ['nobody without a leader', leader('a', null, null), undefined],
+  ])('is %s', (_, l, expected) => {
+    expect(ownerOf(l, CONFIG)).toEqual(expected);
+  });
+});
 
-function delivery(...leaders: Delivery['leaders']): Delivery {
-  return {version: 1, leaders};
-}
+describe('findMember', () => {
+  const members = [
+    {user: {id: '1', username: 'nessiedev'}, roles: []},
+    {user: {id: '2', username: 'other', global_name: '9'}, nick: '9', roles: []},
+  ];
 
-interface Rejection {
-  name: string;
-  reason: string;
-  body?: string;
-  at?: number;
-  secret?: Buffer;
-  headers?: Record<string, string>;
-  lastAccepted?: number;
-}
-
-describe('verify', () => {
-  test('returns the delivery and when it was sent', () => {
-    expect(verify(Buffer.from(BODY), signed(BODY, NOW), SECRET, 0, NOW))
-      .toEqual({delivery: JSON.parse(BODY), sent: NOW / 1000});
+  test('an id matches the member id and nothing else', () => {
+    expect(findMember(members, {id: '1'})?.user.username).toBe('nessiedev');
+    expect(findMember(members, {id: '9'})).toBeUndefined();
   });
 
-  test.each<Rejection>([
-    {name: 'wrong secret', reason: 'bad signature', secret: Buffer.from('other')},
-    {name: 'unsigned', reason: 'unsigned', headers: {}},
-    {name: 'stale', reason: 'stale', at: NOW - 301_000},
-    {name: 'future', reason: 'stale', at: NOW + 301_000},
-    {name: 'applied', reason: 'already applied', lastAccepted: NOW / 1000},
-    {name: 'unknown version', reason: 'unknown version or shape', body: VERSION2},
-    {name: 'malformed leaders', reason: 'unknown version or shape', body: MALFORMED},
-  ])('throws on $name', ({
-    reason, body = BODY, at = NOW, secret = SECRET, headers = signed(body, at, secret),
-    lastAccepted = 0,
-  }) => {
-    expect(() => verify(Buffer.from(body), headers, SECRET, lastAccepted, NOW)).toThrow(reason);
-  });
-
-  test('pins the signature of a known body', () => {
-    expect(sign('1700000000000', 1700000000, BODY))
-      .toBe('v1,2QBVDD/rCh2YNefjsl0i9mAgfPPEHQ43EDhGAe12PAs=');
+  test('a name matches the id, username, global name or nickname', () => {
+    expect(findMember(members, {name: 'NESSIEDEV'})?.user.id).toBe('1');
+    expect(findMember(members, {name: '9'})?.user.id).toBe('2');
   });
 });
 
 interface Call {
   method: string;
   url: string;
+  authorization?: string;
 }
 
 const realFetch = globalThis.fetch;
 
-function stubFetch(members: object[], fail: (call: Call) => boolean = () => false) {
+function stubFetch(
+  leaders: Leader[], members: object[], fail: (call: Call) => boolean = () => false
+) {
   const calls: Call[] = [];
   globalThis.fetch = ((url: string, init?: RequestInit) => {
-    const call = {method: init?.method ?? 'GET', url: String(url)};
+    const headers = init?.headers as Record<string, string> | undefined;
+    const call = {method: init?.method ?? 'GET', url: String(url),
+      authorization: headers?.Authorization};
     calls.push(call);
     const status = fail(call) ? 500 : call.method === 'GET' ? 200 : 204;
-    const body = status === 200 ? members : 'boom';
+    const body = call.url.includes('vgc.bot') ? {leaders} : members;
     return Promise.resolve({status, ok: status < 300, text: () => Promise.resolve(''),
-      json: () => Promise.resolve(body)});
+      json: () => Promise.resolve(status === 200 ? body : 'boom')});
   }) as unknown as typeof fetch;
   return calls;
 }
 
-const CONFIG = {guild: 'guild', ladders: {a: 'role-a', b: 'role-b'}};
 const MEMBERS = [{user: {id: 'old', username: 'old'}, roles: ['role-a', 'role-b']},
   {user: {id: 'new', username: 'new'}, roles: []}];
+const LEADERS = [
+  leader('a', {id: 'b1', name: 'Leader'}, {name: 'x', discordId: 'new'}),
+  leader('b', null, null),
+];
+const memberFetches = (calls: Call[]) => calls.filter(c => c.url.includes('/members?')).length;
 
-describe('applyLeaders', () => {
+describe('syncRoles', () => {
   afterEach(() => {
     globalThis.fetch = realFetch;
   });
 
-  test("matches vgc.bot's discordId only against a member id", async () => {
-    const calls = stubFetch([{user: {id: '9', username: 'imp', global_name: '1'}, nick: '1',
-      roles: []}]);
-    await applyLeaders('token', CONFIG,
-      delivery({ladder: 'a', bot: null, owner: {discordId: '1'}}));
-    expect(calls.filter(call => call.method !== 'GET')).toEqual([]);
-  });
-
-  test('moves the role and takes it from one who no longer has it', async () => {
-    const calls = stubFetch(MEMBERS);
-    await applyLeaders('token', CONFIG, delivery(
-      {ladder: 'a', bot: null, owner: {discordId: 'new'}},
-      {ladder: 'b', bot: {id: 'b1', name: 'Bot'}, owner: null}
-    ));
-    expect(calls.slice(1)).toEqual([
+  test('asks vgc.bot with the token, then moves each role, fetching the members once', async () => {
+    const calls = stubFetch(LEADERS, MEMBERS);
+    await syncRoles('token', 'vgc', CONFIG, new Map());
+    expect(calls[0]).toEqual({method: 'GET', url: expect.stringContaining('vgc.bot'),
+      authorization: 'Bearer vgc'});
+    expect(memberFetches(calls)).toBe(1);
+    expect(calls.filter(c => c.method !== 'GET').map(({method, url}) => ({method, url}))).toEqual([
       {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-a')},
       {method: 'PUT', url: expect.stringContaining('/members/new/roles/role-a')},
       {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-b')},
     ]);
   });
 
-  test('gives the role to an override over what vgc.bot sends', async () => {
-    const calls = stubFetch([{user: {id: '111', username: 'nessiedev'}, roles: []}]);
-    await applyLeaders('token', {...CONFIG, bots: {b1: 'NessieDev'}}, delivery(
-      {ladder: 'a', bot: {id: 'b1', name: 'Bot'}, owner: {discordId: '999'}}
-    ));
-    expect(calls).toContainEqual({method: 'PUT',
-      url: expect.stringContaining('/members/111/roles/role-a')});
+  test('leaves ladders alone whose owner did not change', async () => {
+    const calls = stubFetch(LEADERS, MEMBERS);
+    const state = new Map();
+    await syncRoles('token', 'vgc', CONFIG, state);
+    const before = calls.length;
+    await syncRoles('token', 'vgc', CONFIG, state);
+    expect(calls.slice(before).map(c => c.url)).toEqual([expect.stringContaining('vgc.bot')]);
+  });
+
+  test('tries again next cycle while the owner is not in the server', async () => {
+    const gone = leader('a', {id: 'b1', name: 'Leader'}, {name: 'x', discordId: 'gone'});
+    const calls = stubFetch([gone], MEMBERS);
+    const state = new Map();
+    await syncRoles('token', 'vgc', CONFIG, state);
+    await syncRoles('token', 'vgc', CONFIG, state);
+    expect(memberFetches(calls)).toBe(2);
+    expect(calls.filter(c => c.method === 'PUT')).toEqual([]);
   });
 
   test('a failing ladder does not stop the next one', async () => {
-    const calls = stubFetch(MEMBERS,
-      call => call.method === 'DELETE' && call.url.includes('role-a'));
-    await applyLeaders('token', CONFIG, delivery(
-      {ladder: 'a', bot: null, owner: {discordId: 'new'}},
-      {ladder: 'b', bot: null, owner: {discordId: 'new'}}
-    ));
-    expect(calls).toContainEqual({method: 'PUT',
-      url: expect.stringContaining('/members/new/roles/role-b')});
+    const calls = stubFetch([
+      leader('a', null, {name: 'x', discordId: 'new'}),
+      leader('b', null, {name: 'x', discordId: 'new'}),
+    ], MEMBERS, call => call.method === 'DELETE' && call.url.includes('role-a'));
+    const error = console.error;
+    console.error = () => undefined;
+    await syncRoles('token', 'vgc', CONFIG, new Map());
+    console.error = error;
+    expect(calls).toContainEqual(expect.objectContaining({method: 'PUT',
+      url: expect.stringContaining('/members/new/roles/role-b')}));
   });
 });

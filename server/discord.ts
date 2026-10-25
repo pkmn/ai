@@ -1,8 +1,6 @@
 require('source-map-support').install();
 
-import * as crypto from 'crypto';
 import * as fs from 'fs';
-import * as http from 'http';
 import * as path from 'path';
 
 import * as yaml from 'yaml';
@@ -10,29 +8,32 @@ import * as yaml from 'yaml';
 const root = path.join(__dirname, '..', '..');
 
 const DISCORD_API = 'https://discord.com/api/v10';
-const HOOK_PATH = '/hooks/vgc';
-const MAX_AGE_S = 5 * 60;
+const VGC_API = 'https://vgc.bot/api/partner/leaders';
+const CYCLE_MS = 60_000;
 
 interface Config {
   guild: string;
   ladders: {[ladder: string]: string};
   bots?: {[bot: string]: string};
+  authors?: {[author: string]: string};
 }
 
-export interface Delivery {
-  version: 1;
-  leaders: {
-    ladder: string;
-    bot: {id: string; name: string} | null;
-    owner: {discordId: string} | null;
-  }[];
+export interface Leader {
+  ladder: string;
+  bot: {id: string; name: string} | null;
+  owner: {name: string; discordId: string | null} | null;
 }
+
+// A member id, or a name to look a member up by.
+export type Owner = {id: string} | {name: string};
 
 interface GuildMember {
   user: {
     id: string;
     username: string;
+    global_name?: string;
   };
+  nick?: string;
   roles: string[];
 }
 
@@ -40,53 +41,23 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
 }
 
-// Standard Webhooks: HMAC-SHA256 over `<id>.<timestamp>.<body>`, timestamp in seconds.
-export function verify(
-  body: Buffer,
-  headers: http.IncomingHttpHeaders,
-  secret: Buffer,
-  lastAccepted: number,
-  now = Date.now()
-) {
-  const id = headers['webhook-id'];
-  const timestamp = headers['webhook-timestamp'];
-  const signature = headers['webhook-signature'];
-  if (typeof id !== 'string' || typeof timestamp !== 'string' || typeof signature !== 'string') {
-    throw new Error('unsigned');
-  }
-  const expected = Buffer.from('v1,' + crypto.createHmac('sha256', secret)
-    .update(`${id}.${timestamp}.`).update(body).digest('base64'));
-  if (!signature.split(' ').some(s => safeEqual(Buffer.from(s), expected))) {
-    throw new Error('bad signature');
-  }
-
-  const sent = Number(timestamp);
-  if (!Number.isInteger(sent)) throw new Error('bad timestamp');
-  if (Math.abs(now / 1000 - sent) > MAX_AGE_S) throw new Error('stale');
-  if (sent <= lastAccepted) throw new Error('already applied');
-
-  const delivery: unknown = JSON.parse(body.toString('utf8'));
-  if (!isDelivery(delivery)) throw new Error('unknown version or shape');
-  return {delivery, sent};
+export function ownerOf(leader: Leader, config: Config): Owner | undefined {
+  const override = leader.bot && (config.bots?.[leader.bot.id] ?? config.bots?.[leader.bot.name]);
+  if (override) return {name: override};
+  if (!leader.owner) return undefined;
+  if (leader.owner.discordId) return {id: leader.owner.discordId};
+  return {name: config.authors?.[leader.owner.name] ?? leader.owner.name};
 }
 
-function safeEqual(a: Buffer, b: Buffer) {
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
-function isDelivery(value: unknown): value is Delivery {
-  const delivery = value as Delivery | null;
-  return delivery?.version === 1 &&
-    Array.isArray(delivery.leaders) &&
-    delivery.leaders.every(isLeader);
-}
-
-function isLeader(value: unknown): value is Delivery['leaders'][number] {
-  const leader = value as Delivery['leaders'][number] | null;
-  if (typeof leader?.ladder !== 'string') return false;
-  if (leader.bot !== null && typeof leader.bot?.id !== 'string') return false;
-  if (leader.bot !== null && typeof leader.bot.name !== 'string') return false;
-  return leader.owner === null || typeof leader.owner?.discordId === 'string';
+export function findMember(members: GuildMember[], owner: Owner): GuildMember | undefined {
+  if ('id' in owner) return members.find(m => m.user.id === owner.id);
+  const lower = owner.name.toLowerCase();
+  return (
+    members.find(m => m.user.id === owner.name) ??
+    members.find(m => m.user.username.toLowerCase() === lower) ??
+    members.find(m => m.user.global_name?.toLowerCase() === lower) ??
+    members.find(m => m.nick?.toLowerCase() === lower)
+  );
 }
 
 async function discordRequest(token: string, endpoint: string, init?: RequestInit): Promise<any> {
@@ -112,7 +83,7 @@ async function discordRequest(token: string, endpoint: string, init?: RequestIni
   return res.json();
 }
 
-async function fetchGuildMembers(token: string, guild: string): Promise<GuildMember[]> {
+export async function fetchGuildMembers(token: string, guild: string): Promise<GuildMember[]> {
   const all: GuildMember[] = [];
   let after = '0';
   while (true) {
@@ -127,89 +98,91 @@ async function fetchGuildMembers(token: string, guild: string): Promise<GuildMem
   return all;
 }
 
-function findMember(members: GuildMember[], idOrUsername: string) {
-  const lower = idOrUsername.toLowerCase();
-  return members.find(m => m.user.id === idOrUsername || m.user.username.toLowerCase() === lower);
+export async function fetchLeaders(vgcToken: string): Promise<Leader[]> {
+  const res = await fetch(VGC_API, {headers: {Authorization: `Bearer ${vgcToken}`}});
+  if (!res.ok) {
+    throw new Error(`vgc.bot API failed (${res.status})`);
+  }
+  const data = await res.json() as {leaders: Leader[]};
+  return data.leaders;
 }
 
-export async function applyLeaders(token: string, config: Config, delivery: Delivery) {
-  const members = await fetchGuildMembers(token, config.guild);
-  for (const leader of delivery.leaders) {
+// Fetches the members only for a ladder whose owner changed since the last cycle.
+export async function syncRoles(
+  token: string,
+  vgcToken: string,
+  config: Config,
+  state: Map<string, string | undefined>
+) {
+  const leaders = await fetchLeaders(vgcToken);
+  let members: GuildMember[] | undefined;
+  for (const leader of leaders) {
     const roleId = config.ladders[leader.ladder];
-    if (!roleId) {
-      console.log(`[${leader.ladder}] Not a configured ladder, ignored`);
-      continue;
-    }
+    if (!roleId) continue;
+    const owner = ownerOf(leader, config);
+    const key = owner && JSON.stringify(owner);
+    if (state.has(leader.ladder) && state.get(leader.ladder) === key) continue;
+
     try {
-      const override = leader.bot &&
-        (config.bots?.[leader.bot.id] ?? config.bots?.[leader.bot.name]);
-      const ownerId = override ?? leader.owner?.discordId;
-      const owner = override
-        ? findMember(members, override)
-        : members.find(m => m.user.id === leader.owner?.discordId);
-      if (ownerId && !owner) console.log(`[${leader.ladder}] ${ownerId} is not in the server`);
+      members ??= await fetchGuildMembers(token, config.guild);
+      const target = owner && findMember(members, owner);
 
       for (const member of members) {
-        if (member.roles.includes(roleId) && member.user.id !== owner?.user.id) {
+        if (member.roles.includes(roleId) && member.user.id !== target?.user.id) {
           await discordRequest(
             token,
             `/guilds/${config.guild}/members/${member.user.id}/roles/${roleId}`,
             {method: 'DELETE'}
           );
-          console.log(`[${leader.ladder}] Removed role from ${member.user.username}`);
+          console.log(`[${leader.ladder}] Removed role ${roleId} from ${member.user.username}`);
         }
       }
-      if (owner && !owner.roles.includes(roleId)) {
+
+      if (target && !target.roles.includes(roleId)) {
         await discordRequest(
           token,
-          `/guilds/${config.guild}/members/${owner.user.id}/roles/${roleId}`,
+          `/guilds/${config.guild}/members/${target.user.id}/roles/${roleId}`,
           {method: 'PUT'}
         );
-        console.log(`[${leader.ladder}] Gave role to ${owner.user.username} (${leader.bot?.name})`);
+        const who = `${target.user.username} (${leader.bot?.name})`;
+        console.log(`[${leader.ladder}] Assigned role ${roleId} to ${who}`);
+      } else if (owner && !target) {
+        console.log(`[${leader.ladder}] ${key} is not in the server`);
+      }
+
+      if (!owner || target) {
+        state.set(leader.ladder, key);
+      } else {
+        state.delete(leader.ladder);
       }
     } catch (err) {
-      console.error(`[${leader.ladder}] Could not apply the leader:`, err);
+      console.error(`[${leader.ladder}] Error syncing role:`, err);
     }
   }
 }
 
-export function serve(token: string, secret: Buffer, port: number) {
-  let lastAccepted = 0;
-
-  const server = http.createServer((req, res) => {
-    if (req.method !== 'POST' || req.url !== HOOK_PATH) {
-      res.writeHead(404).end();
-      return;
+export async function run(token: string, vgcToken: string, once = false) {
+  const state = new Map<string, string | undefined>();
+  while (true) {
+    try {
+      await syncRoles(token, vgcToken, loadConfig(), state);
+    } catch (err) {
+      console.error('Error syncing roles:', err);
     }
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => {
-      try {
-        const {delivery, sent} = verify(Buffer.concat(chunks), req.headers, secret, lastAccepted);
-        lastAccepted = sent;
-        res.writeHead(204).end();
-        applyLeaders(token, loadConfig(), delivery).catch(err => {
-          console.error('Could not apply the ladder leaders:', err);
-        });
-      } catch (err) {
-        console.log(`Did not apply a delivery: ${(err as Error).message}`);
-        if (!res.headersSent) res.writeHead(400).end();
-      }
-    });
-  });
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`Listening for vgc.bot's ladder leaders on 127.0.0.1:${port}${HOOK_PATH}`);
-  });
-  return server;
+    if (once) break;
+    await new Promise(resolve => setTimeout(resolve, CYCLE_MS));
+  }
 }
 
 if (require.main === module) {
   const token = process.env.DISCORD_BOT_TOKEN;
-  const secret = process.env.VGC_BOT_WEBHOOK_SECRET;
-  if (!token || !secret) {
-    const name = token ? 'VGC_BOT_WEBHOOK_SECRET' : 'DISCORD_BOT_TOKEN';
-    console.error(`Missing ${name} environment variable`);
+  const vgcToken = process.env.VGC_BOT_TOKEN;
+  if (!token || !vgcToken) {
+    console.error(`Missing ${token ? 'VGC_BOT_TOKEN' : 'DISCORD_BOT_TOKEN'} environment variable`);
     process.exit(1);
   }
-  serve(token, Buffer.from(secret, 'base64'), Number(process.env.HOOK_PORT) || 1235);
+  run(token, vgcToken, process.argv.includes('--once')).catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
 }
