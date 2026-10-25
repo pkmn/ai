@@ -41,26 +41,27 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
 
 export function verify(
   body: Buffer, headers: http.IncomingHttpHeaders, webhook: Webhook, lastAccepted: number
-): {delivery: Delivery; sent: number} | string {
-  let delivery: unknown;
-  try {
-    delivery = webhook.verify(body, headers as Record<string, string>);
-  } catch (err) {
-    return (err as Error).message;
-  }
+) {
+  const delivery = webhook.verify(body, headers as Record<string, string>);
   const sent = Number(headers['webhook-timestamp']);
-  if (sent <= lastAccepted) return 'already applied';
-  return isDelivery(delivery) ? {delivery, sent} : 'unknown version or shape';
+  if (sent <= lastAccepted) throw new Error('already applied');
+  if (!isDelivery(delivery)) throw new Error('unknown version or shape');
+  return {delivery, sent};
 }
 
 function isDelivery(value: unknown): value is Delivery {
   const delivery = value as Delivery | null;
-  if (typeof value !== 'object' || delivery?.version !== 1) return false;
-  if (!Array.isArray(delivery.leaders)) return false;
-  return delivery.leaders.every(leader => typeof leader?.ladder === 'string' &&
-    (leader.bot === null ||
-      (typeof leader.bot?.id === 'string' && typeof leader.bot?.name === 'string')) &&
-    (leader.owner === null || typeof leader.owner?.discordId === 'string'));
+  return delivery?.version === 1 &&
+    Array.isArray(delivery.leaders) &&
+    delivery.leaders.every(isLeader);
+}
+
+function isLeader(value: unknown): value is Delivery['leaders'][number] {
+  const leader = value as Delivery['leaders'][number] | null;
+  if (typeof leader?.ladder !== 'string') return false;
+  if (leader.bot !== null && typeof leader.bot?.id !== 'string') return false;
+  if (leader.bot !== null && typeof leader.bot.name !== 'string') return false;
+  return leader.owner === null || typeof leader.owner?.discordId === 'string';
 }
 
 async function discordRequest(token: string, endpoint: string, init?: RequestInit): Promise<any> {
@@ -153,20 +154,15 @@ export function serve(token: string, secret: string, port: number) {
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       try {
-        const verified = verify(Buffer.concat(chunks), req.headers, webhook, lastAccepted);
-        if (typeof verified === 'string') {
-          console.log(`Did not apply a delivery: ${verified}`);
-          res.writeHead(400).end();
-          return;
-        }
-        lastAccepted = verified.sent;
+        const {delivery, sent} = verify(Buffer.concat(chunks), req.headers, webhook, lastAccepted);
+        lastAccepted = sent;
         res.writeHead(204).end();
-        applyLeaders(token, loadConfig(), verified.delivery).catch(err => {
+        applyLeaders(token, loadConfig(), delivery).catch(err => {
           console.error('Could not apply the ladder leaders:', err);
         });
       } catch (err) {
-        console.error('Could not handle a delivery:', err);
-        if (!res.headersSent) res.writeHead(500).end();
+        console.log(`Did not apply a delivery: ${(err as Error).message}`);
+        if (!res.headersSent) res.writeHead(400).end();
       }
     });
   });

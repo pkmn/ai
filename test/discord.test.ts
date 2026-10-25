@@ -19,9 +19,9 @@ function delivery(...leaders: Delivery['leaders']): Delivery {
   return {version: 1, leaders};
 }
 
-interface VerifyCase {
+interface Rejection {
   name: string;
-  reason?: string;
+  reason: string;
   body?: string;
   at?: Date;
   webhook?: Webhook;
@@ -31,8 +31,13 @@ interface VerifyCase {
 
 describe('verify', () => {
   const now = new Date();
-  test.each<VerifyCase>([
-    {name: 'valid'},
+
+  test('returns the delivery and when it was sent', () => {
+    expect(verify(Buffer.from(BODY), signed(BODY, now), WEBHOOK, 0))
+      .toEqual({delivery: JSON.parse(BODY), sent: seconds(now)});
+  });
+
+  test.each<Rejection>([
     {name: 'wrong secret', reason: 'No matching signature found', webhook: new Webhook('b3RoZXI=')},
     {name: 'unsigned', reason: 'Missing required headers', headers: {}},
     {name: 'stale', reason: 'Message timestamp too old', at: new Date(now.getTime() - 301_000)},
@@ -40,12 +45,11 @@ describe('verify', () => {
     {name: 'applied', reason: 'already applied', lastAccepted: seconds(now)},
     {name: 'unknown version', reason: 'unknown version or shape', body: VERSION2},
     {name: 'malformed leaders', reason: 'unknown version or shape', body: MALFORMED},
-  ])('$name', ({
+  ])('throws on $name', ({
     reason, body = BODY, at = now, webhook = WEBHOOK, headers = signed(body, at, webhook),
     lastAccepted = 0,
   }) => {
-    expect(verify(Buffer.from(body), headers, WEBHOOK, lastAccepted))
-      .toEqual(reason ?? {delivery: JSON.parse(body), sent: seconds(at)});
+    expect(() => verify(Buffer.from(body), headers, WEBHOOK, lastAccepted)).toThrow(reason);
   });
 
   test('pins the signature of a known body', () => {
