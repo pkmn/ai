@@ -15,19 +15,16 @@ const MAX_AGE_MS = 5 * 60_000;
 
 interface Config {
   guild: string;
-  // vgc.bot ladder id -> Discord role id.
   ladders: {[ladder: string]: string};
-  // vgc.bot bot id or name -> Discord user id, only with the owner's agreement.
   bots?: {[bot: string]: string};
 }
 
-// Mirrors LeadersDelivery in vgc.bot's shared/api.ts (lucaspellegrinelli/pkmn-arena).
+// Mirrors LeadersDelivery in vgc.bot's shared/api.ts.
 export interface Delivery {
   version: 1;
   leaders: {
     ladder: string;
     bot: {id: string; name: string} | null;
-    // Null unless the owner shared their Discord account.
     owner: {discordId: string} | null;
   }[];
 }
@@ -45,7 +42,6 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
 }
 
 // vgc.bot signs HMAC-SHA256 over `<timestamp>.<raw body>`, timestamp in ms.
-// Returns the delivery to apply, or why it is not applied.
 export function verify(
   body: Buffer,
   headers: http.IncomingHttpHeaders,
@@ -187,13 +183,11 @@ export function serve(token: string, secret: string, port: number) {
           return;
         }
         lastAccepted = verified.sent;
-        // vgc.bot does not wait for the roles: answer first, then apply.
         res.writeHead(204).end();
         applyLeaders(token, loadConfig(), verified.delivery).catch(err => {
           console.error('Could not apply the ladder leaders:', err);
         });
       } catch (err) {
-        // Nothing on this unauthenticated path may take the process down.
         console.error('Could not handle a delivery:', err);
         if (!res.headersSent) res.writeHead(500).end();
       }

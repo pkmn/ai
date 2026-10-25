@@ -20,7 +20,6 @@ function delivery(...leaders: Delivery['leaders']): Delivery {
 
 interface VerifyCase {
   name: string;
-  // Why the delivery is not applied; left out where it is.
   reason?: string;
   body?: string;
   timestamp?: number;
