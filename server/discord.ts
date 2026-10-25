@@ -15,8 +15,9 @@ const HOOK_PATH = '/hooks/vgc';
 // Deliveries signed longer ago than this are turned away as replays.
 const MAX_AGE_MS = 5 * 60_000;
 const MAX_BODY_BYTES = 16 * 1024;
-// A failed apply is retried once, unless a newer delivery supersedes it.
-const RETRY_MS = 60_000;
+// A delivery that failed to apply is tried again this often until it succeeds or a
+// newer one replaces it.
+const RECONCILE_MS = 60_000;
 
 interface Config {
   guild: string;
@@ -29,7 +30,7 @@ interface Config {
 
 // What vgc.bot posts when a ladder's leader changes, and hourly. Applies idempotently.
 // Mirrors LeadersDelivery in vgc.bot's shared/api.ts (lucaspellegrinelli/pkmn-arena).
-interface Delivery {
+export interface Delivery {
   version: 1;
   leaders: {
     ladder: string;
@@ -39,11 +40,11 @@ interface Delivery {
   }[];
 }
 
-// A delivery to apply, one already applied, or a rejection with the status to answer.
+// A delivery to apply, one to ignore, or a rejection with the status to answer.
 export type Verified =
-  {ok: true; delivery: Delivery; sent: number} |
-  {ok: false; status: 204; reason: string} |
-  {ok: false; status: 400 | 401; reason: string};
+  {kind: 'apply'; delivery: Delivery; sent: number} |
+  {kind: 'ignore'; reason: string} |
+  {kind: 'reject'; status: 400 | 401; reason: string};
 
 interface GuildMember {
   user: {
@@ -69,7 +70,7 @@ export function verify(
   const timestamp = headers['x-arena-timestamp'];
   const signature = headers['x-arena-signature'];
   if (typeof timestamp !== 'string' || typeof signature !== 'string') {
-    return {ok: false, status: 401, reason: 'unsigned'};
+    return {kind: 'reject', status: 401, reason: 'unsigned'};
   }
 
   const expected = Buffer.from('sha256=' + crypto.createHmac('sha256', secret)
@@ -78,25 +79,27 @@ export function verify(
   // same-length signature can still be longer, which makes timingSafeEqual throw.
   const actual = Buffer.from(signature);
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
-    return {ok: false, status: 401, reason: 'bad signature'};
+    return {kind: 'reject', status: 401, reason: 'bad signature'};
   }
 
   const sent = Number(timestamp);
-  if (!Number.isFinite(sent)) return {ok: false, status: 400, reason: 'bad timestamp'};
-  if (Math.abs(now - sent) > MAX_AGE_MS) return {ok: false, status: 400, reason: 'stale'};
+  if (!Number.isFinite(sent)) return {kind: 'reject', status: 400, reason: 'bad timestamp'};
+  if (Math.abs(now - sent) > MAX_AGE_MS) {
+    return {kind: 'reject', status: 400, reason: 'stale'};
+  }
   // Already applied: idempotent, so acknowledge it without applying it again.
-  if (sent <= lastAccepted) return {ok: false, status: 204, reason: 'already applied'};
+  if (sent <= lastAccepted) return {kind: 'ignore', reason: 'already applied'};
 
   let delivery: unknown;
   try {
     delivery = JSON.parse(body.toString('utf8'));
   } catch {
-    return {ok: false, status: 400, reason: 'not JSON'};
+    return {kind: 'reject', status: 400, reason: 'not JSON'};
   }
   if (!isDelivery(delivery)) {
-    return {ok: false, status: 400, reason: 'unknown version or shape'};
+    return {kind: 'reject', status: 400, reason: 'unknown version or shape'};
   }
-  return {ok: true, delivery, sent};
+  return {kind: 'apply', delivery, sent};
 }
 
 function isDelivery(value: unknown): value is Delivery {
@@ -211,46 +214,49 @@ export async function applyLeaders(
   return !failed;
 }
 
-export function serve(token: string, secret: string, port: number) {
-  let lastAccepted = 0;
-  // Deliveries are applied one at a time; while one is, only the latest waits.
-  let waiting: Delivery | undefined;
-  // The newest delivery accepted, so a retry never applies over a later one.
-  let latest: Delivery | undefined;
+// Applies the newest delivery it is offered, trying a failed one again on every tick.
+export function reconciler(
+  apply: (delivery: Delivery) => Promise<boolean>, everyMs: number
+) {
+  let pending: Delivery | undefined;
   let applying = false;
-  // The delivery that already used its one retry.
-  let retried: Delivery | undefined;
-  let retry: NodeJS.Timeout | undefined;
-  const drain = async () => {
+  const tick = async () => {
+    if (applying || !pending) return;
+    const delivery = pending;
     applying = true;
-    while (waiting) {
-      const delivery = waiting;
-      waiting = undefined;
-      // A newer delivery supersedes any pending retry.
-      if (retry) {
-        clearTimeout(retry);
-        retry = undefined;
-      }
-      let failed: boolean;
-      try {
-        failed = !await applyLeaders(token, loadConfig(), delivery);
-      } catch (err) {
-        failed = true;
-        console.error('Could not apply the ladder leaders:', err);
-      }
-      // Retry once, unless a newer delivery has already superseded this one.
-      if (failed && !waiting && !retry && retried !== delivery && latest === delivery) {
-        retried = delivery;
-        retry = setTimeout(() => {
-          retry = undefined;
-          if (latest !== delivery) return;
-          waiting = delivery;
-          if (!applying) drain().catch(error => console.error(error));
-        }, RETRY_MS);
-      }
+    let ok: boolean;
+    try {
+      ok = await apply(delivery);
+    } catch (err) {
+      console.error('Could not apply the ladder leaders:', err);
+      ok = false;
     }
     applying = false;
+    if (ok && pending === delivery) pending = undefined;
+    // A newer delivery that arrived while applying goes right away.
+    if (pending !== delivery) await tick();
   };
+  const interval = setInterval(() => {
+    tick().catch(err => console.error(err));
+  }, everyMs);
+  interval.unref();
+  return {
+    offer(delivery: Delivery) {
+      pending = delivery;
+      tick().catch(err => console.error(err));
+    },
+    stop() {
+      clearInterval(interval);
+    },
+  };
+}
+
+export function serve(token: string, secret: string, port: number) {
+  let lastAccepted = 0;
+  const queue = reconciler(
+    delivery => applyLeaders(token, loadConfig(), delivery),
+    RECONCILE_MS
+  );
 
   const server = http.createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== HOOK_PATH) {
@@ -275,18 +281,22 @@ export function serve(token: string, secret: string, port: number) {
       try {
         if (oversized || res.writableEnded) return;
         const verified = verify(Buffer.concat(chunks), req.headers, secret, lastAccepted);
-        if (!verified.ok) {
-          const outcome = verified.status === 204 ? 'Ignored' : 'Turned away';
-          console.log(`${outcome} a delivery: ${verified.reason}`);
-          res.writeHead(verified.status).end();
-          return;
+        switch (verified.kind) {
+          case 'ignore':
+            console.log(`Ignored a delivery: ${verified.reason}`);
+            res.writeHead(204).end();
+            return;
+          case 'reject':
+            console.log(`Turned away a delivery: ${verified.reason}`);
+            res.writeHead(verified.status).end();
+            return;
+          case 'apply':
+            lastAccepted = verified.sent;
+            // vgc.bot does not wait for the roles: answer first, then apply.
+            res.writeHead(204).end();
+            queue.offer(verified.delivery);
+            return;
         }
-        lastAccepted = verified.sent;
-        latest = verified.delivery;
-        // vgc.bot does not wait for the roles: answer first, then apply.
-        res.writeHead(204).end();
-        waiting = verified.delivery;
-        if (!applying) drain().catch(err => console.error(err));
       } catch (err) {
         // Nothing on this unauthenticated path may take the process down.
         console.error('Could not handle a delivery:', err);
@@ -294,6 +304,7 @@ export function serve(token: string, secret: string, port: number) {
       }
     });
   });
+  server.on('close', () => queue.stop());
   server.listen(port, '127.0.0.1', () => {
     console.log(`Listening for vgc.bot's ladder leaders on 127.0.0.1:${port}${HOOK_PATH}`);
   });
