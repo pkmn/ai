@@ -27,6 +27,7 @@
     "clean": "rm -rf public build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
     "build": "npm run compile && node build/static/build",
+    "start:discord": "node build/server/discord",
     "start:server": "node build/server",
     "start": "npm run start:server",
     "test": "npm run build && npm run lint",
