@@ -207,9 +207,9 @@ export function serve(token: string, secret: string, port: number) {
 
 if (require.main === module) {
   const token = process.env.DISCORD_BOT_TOKEN;
-  const secret = process.env.VGC_WEBHOOK_SECRET;
+  const secret = process.env.VGC_BOT_WEBHOOK_SECRET;
   if (!token || !secret) {
-    console.error('Missing DISCORD_BOT_TOKEN or VGC_WEBHOOK_SECRET environment variable');
+    console.error('Missing DISCORD_BOT_TOKEN or VGC_BOT_WEBHOOK_SECRET environment variable');
     process.exit(1);
   }
   serve(token, secret, Number(process.env.HOOK_PORT) || 1235);
