@@ -1,3 +1,245 @@
-TODO competition rules, have Regulated —-- Open link here too. also explains how to enter
+### Registration
 
-TODO [release](/release)
+Competitors interested in participating in **pkmn.ai**'s ladders or tournaments
+can request inclusion [via GitHub](TODO). You will be required to provide:
+
+    - your project's **name** (subject to staff discretion, prefer regex `^[A-Za-Z
+    ]$`, must not include the tokens `poke` / `mon` / `pkmn` / `AI` / `bot` /
+    `agent` / `showdown` / `smogon`, bare English Pokémon species names, or
+    known player's names)
+    - **GitHub and Smogon usernames** for each team member associated with your
+    project. All authorized team members must be Smogon account holders in good
+    standing.
+    - descriptive fields on **project details** for the [projects](/projects)
+    page - agreement to follow [Responsible Release](/release) guidelines and to
+    grant **pkmn.ai** permission to run your code in its arena for the purpose
+    of evaluation against other agents and for evaluating suspected cheating
+    cases in Smogon & Pokémon Showdown competitions
+    - **Discord user IDs** (_optional_) of the team members, to be used for
+    notifications about your submissions and for roles within the
+    [chat](/chat) room
+    - A PNG image (_optional_) with your project's **logo** to be displayed on
+    your project's statistics page
+
+
+This will open up an issue on the [pkmn/ai](https://github.com/pkmn/ai)
+repository. Staff will review this issue, fill in the approriate information in
+the [`projects.yml`](https://github.com/pkmn/ai/blob/main/static/projects.yml),
+and approve your project for submissions.
+
+### Submission
+
+Approved competitors may submit new versions of their agent via the
+[submissions](/submit) page which requires GitHub OAuth credentials to
+authenticate. On this page you will be required to fill in:
+
+  - **`version`**: Version string (e.g., `1.0.0` or `v2`, regex
+  `^[A-Za-z0-9._-]{1,24}$`).
+  - **`download_url`**: Direct HTTPS URL to a `.tar.gz`/`tar.xz`/`.tar.zst` bundle
+  _or_ an OCI container image reference (`ghcr.io/...`, `docker.io/...`).
+  - **`sha256`**: 64-character hex SHA-256 checksum of the archive or OCI manifest
+  digest.
+  - (_optional_) **`auth_token`**: Read-only bearer token / header used once by the
+  arena to pull private artifacts
+  - **`ladders`**: / **`tournaments`**: non-empty subsets of the ladders or tournaments
+  to enter your agent in
+
+Ladder submissions will run on a **Mac M6 Mini** with access to **10 cores** (8
+Performance & 2 Efficiency), **14 GiB** of dedicated RAM and 4 GiB of scratch
+`/tmp` storage wiped between games. The **network will be disabled** for all
+competitors. Ladder submissions may either take the form of an OCI `linux/arm64`
+Container which can access the GPU virtually via Vulkan passthrough or a native
+bundle that has full native access to the GPU/ANE Metal/CoreML. Tournament
+hardware will be outlined in the tournament-specific rules and will only support
+OCI containers.
+
+{summary="**OCI Container**"}
+::: details
+```dockerfile
+FROM --platform=linux/arm64 rust:1.85-slim AS builder
+WORKDIR /src
+COPY . .
+RUN cargo build --release && strip --strip-unneeded target/release/my-bot
+
+FROM --platform=linux/arm64 debian:bookworm-slim
+COPY --from=builder /src/target/release/my-bot /usr/local/bin/my-bot
+ENTRYPOINT ["/usr/local/bin/my-bot"]
+```
+:::
+
+{summary="**Native Bundle**"}
+::: details
+```bash
+mkdir -p dist/src dist/weights
+uv python install 3.12
+uv venv --python 3.12 --relocatable --no-cache dist/.venv
+uv pip install --no-cache --python dist/.venv/bin/python mlx numpy
+find dist/.venv -name '__pycache__' -type d -exec rm -rf {} +
+
+cp src/*.py dist/src/
+cp weights/*.safetensors dist/weights/
+
+cat << 'EOF' > dist/run
+#!/usr/bin/env bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "${DIR}/.venv/bin/python" -u "${DIR}/src/main.py" --weights "${DIR}/weights"
+EOF
+chmod +x dist/run
+tar -czf bot-bundle.tar.gz -C dist .
+```
+:::
+
+Every bot submission must occupy at most **500 MB of uncompressed resident
+space** on disk once unpacked. Native bundles must contain less than 25,000
+files/directories/symlinks and contain an executable `./run` at the archive
+root. OCI Containers must contain less than 32 OCI layers and the container
+`ENTRYPOINT` / `CMD` must run the agent.
+
+Tournaments will accept only the first successful entry for a project. Ladder
+competitors may have up to 2 versions of their project competing concurrently
+though may only submit a new version of their bot after both of the following
+conditions are true:
+
+  - 14 days has elapsed since their last successful ladder submission
+  - all of their previous submissions have settled to $`\text{SE}(R) \le
+  30\text{ Elo}` ($`\hat{\sigma} \le 0.173` nats, 95% CI $`\approx \pm 59\text{
+  Elo}`) and at least 25 blind-pair matches (50 games)
+
+A submission is determined to be successful if the the arena can successfully
+unpack and play through the first turn of a battle in the format(s) it is
+entered in. For ladder submissions, if there are already 2 versions of a project
+on the same ladder the weaker of the two versions for that format's ladder will
+be automatically retired, leaving the strongest version of the agent and the
+latest submission.
+
+### Protocol
+
+TODO
+
+- `|utm|`
+- stdout/stdin
+- choices + invalid choices
+- quarantine
+- no canceling
+
+
+### Formats
+
+TODO ladder formats
+
+regular timer but no pondering
+
+2026-04,2026-05,2026-06,2026-07,2026-08,2026-09
+
+- `gen1singles` = format unchanged since ~2015 except meta wise. prefer most recent 3-4 months
+- `gen3singles` = since sept 2025, manually filter out Quick Claw teams pre 2026-06
+- `gen9singles`
+- `gen9randoms`
+
+
+
+
+---
+
+
+TODO format rules - Pokemon Showdown timer, isolation, 
+
+[smogon/pokemon-showdown@1511b8c](https://github.com/smogon/pokemon-showdown/commit/1511b8c) ([@pkmn/sim@0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0))
+
+
+randbats: data.json, full.json, sets.json
+pkmn/stats: stats.json
+
+
+
+
+
+### Recommendations
+
+
+- Strip debug symbols from compiled binaries and shared libraries (`strip -x` on macOS, `strip --strip-unneeded` on Linux).
+- Quantize neural network weights (`float16`, `bfloat16`, or `int8` `.safetensors` / `.gguf`).
+- Pre-compile CoreML `.mlpackage` models to `.mlmodelc` (`xcrun coremlcompiler compile Model.mlpackage ./weights/`) and exclude intermediate build files.
+- Exclude `__pycache__`, `.git`, test suites, `pip`/`uv` caches, C++ header files (`include/`), and static archives (`.a`).
+
+---
+
+
+- **How Competitors Share Privately Without Leaking Weights**:
+  - **Presigned Object Storage URL (Recommended)**: Upload `.tar.gz` to a private Cloudflare R2 (10 GB/mo free tier, zero egress), AWS S3, Backblaze B2, or GCS bucket and generate a 24-hour presigned `GET` URL (`rclone link` or `aws s3 presign --expires-in 86400`).
+  - **Private GitHub Release + Fine-Grained Read-Only PAT**: Host the `.tar.gz` on a private GitHub repository release and pass a fine-grained PAT scoped strictly to that single repo with `Contents: Read-only` (expiring in 7 days).
+  - **Private HuggingFace Repo + Read Token**: Host the bundle in a private HuggingFace repo and provide a read-only token (`hf_...`) scoped to that repo.
+  - **Private `ghcr.io` / Docker Hub Image**: Push to a private registry and provide a temporary `read:packages` pull token.
+- **Dual Rate-Limit Rule**: A new version can be submitted only when **both** conditions hold:
+  1. **Time Cooldown**: At least **14 days (`1,209,600` seconds)** have passed since that bot's last accepted submission (`smoke_status = 'passed'`). Failed smoke tests automatically refund the cooldown.
+  2. **Rating Settlement**: All currently active versions of that bot across every ladder it entered have settled to **$\text{SE}(R) \le 30\text{ Elo}$** ($\hat{\sigma} \le 0.173$ nats, 95% CI $\approx \pm 59\text{ Elo}$) **and at least $25$ blind-pair matches** ($50$ games).
+
+
+
+
+## 8. Competitor Integration Guide & Gotchas
+
+This section consolidates every technical requirement, protocol change, and runtime gotcha that bot authors need to know when adapting an existing Pokémon Showdown bot to compete in the `pkmn.ai` Arena.
+
+### 1. Communication Over `stdin` / `stdout` (No WebSockets or Login)
+- Standard Pokémon Showdown bots connect to `ws://sim.smogon.com:8000/showdown/websocket`, handle `|challstr|`, authenticate via `https://play.pokemonshowdown.com/action.php`, issue `/utm` and `/search`, and multiplex multiple battle room IDs (`>battle-gen9ou-12345`).
+- **In the Arena**, your bot is launched as a local subprocess for **one single game** and communicates strictly over **standard input (`stdin`)** and **standard output (`stdout`)** with no room-ID prefix lines:
+  - Read newline-delimited Showdown protocol lines from `stdin`.
+  - Write a single newline-terminated choice string (e.g. `move 1\n`, `move 2 terastallize\n`, `switch 3\n`, `team 123456\n`, or Doubles `move 1 +2, switch 3\n`) to `stdout` whenever you receive an active `|request|<json>` (where `request.wait` is falsy).
+  - Write any debug logging to `stderr` (never `stdout`, as any line written to `stdout` is parsed as your move choice!).
+
+### 2. Handling Assigned Teams via `|utm|<packed_team>`
+- On Pokémon Showdown's ladder, constructed-format bots choose their own team via `/utm <packed_team>` before queueing.
+- **In the Arena**, bots do **not** bring their own teams. Before `|init|battle`, the very first line sent to your bot's `stdin` (in both constructed formats and `gen9randbats`) is:
+  ```text
+  |utm|<packed_team>
+  ```
+- **Gotcha — Do NOT use `line.split('|')[2]`**: A packed team string contains pipe (`|`) characters separating each Pokémon's 12 fields (`NICK|SPECIES|ITEM|ABILITY|MOVES|NATURE|EVS|GENDER|IVS|SHINY|LEVEL|...`) and `]` separating Pokémon. Always slice after the 5-character `|utm|` prefix:
+  ```typescript
+  if (line.startsWith('|utm|')) {
+    const packedTeam = line.slice(5);
+    const myTeam = Teams.unpack(packedTeam);
+  }
+  ```
+- **Why you should parse `|utm|`**: Standard Showdown `|request|` JSON omits your Pokémon's `evs`, `ivs`, and `nature` (giving only computed `stats`, `moves`, `baseAbility`, `item`, `teraType`). Parsing `|utm|` gives your forward simulator (`@pkmn/engine`, `poke-engine`, `@pkmn/sim`) your exact EV spreads, IVs, Natures, and Hidden Power types before Turn 1.
+
+### 3. Time-Slicing & Why Wall-Clock Timers (`Date.now()` / `clock_gettime`) Will Mislead Your Bot
+- Because both bots share one M6 Mac mini, the Arena pauses your entire process group (`SIGSTOP` or `podman pause`) the instant your choice newline arrives on `stdout`, and only resumes your process (`SIGCONT` or `podman unpause`) when it is your turn to act again.
+- **Gotcha — Wall-clock time jumps while you are paused**: If your bot records `t0 = Date.now()` (or `std::chrono::steady_clock::now()` / `time.monotonic()`) on Turn 1 and compares it to `Date.now()` on Turn 2, the difference will include **all of your opponent's thinking time** while your process was frozen!
+- **Best Practice**:
+  - **Within a single turn**, measuring elapsed time from the moment your bot reads `|inactive|Time left: ...` on `stdin` is completely accurate (because your bot runs uninterrupted while unpaused).
+  - **Across turns**, never track your remaining bank by subtracting wall-clock deltas. Always parse the authoritative clock line sent on `stdin` immediately after every `|request|<json>`:
+    ```text
+    |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 60.0 sec grace
+    ```
+
+### 4. Finish State Updates *Before* Writing `\n` to `stdout` (and Flush Immediately!)
+- **Gotcha — Instant freeze on newline**: The Arbiter calls `SIGSTOP` / `podman pause` within microseconds of reading your choice newline on `stdout`.
+  - If your bot writes `move 1\n` to `stdout` and *then* tries to do post-turn tree pruning or transposition table cleanup before blocking on `stdin`, that cleanup will be frozen mid-execution until your next turn and **will count against your next turn's thinking clock**. Do any fast state bookkeeping *before* printing your move, or expect it to run at the start of your next turn.
+  - Conversely, always **flush `stdout` explicitly** (`sys.stdout.flush()`, `fflush(stdout)`, ` println!`) right after writing your choice. If your language runtime buffers `stdout` when connected to a pipe, your bot will sit idle until its turn timer expires!
+
+### 5. No Pondering
+- You cannot think during your opponent's turn (`SIGSTOP` / `podman pause` freezes all threads and GPU queues). Design your search budget controller assuming zero pondering time.
+
+### 6. Handling `|error|[Invalid choice]` (3-Strike Forfeit Rule)
+- If your bot outputs an illegal move or switch (e.g., trying to click a disabled move, switching to a fainted slot, or malformed Doubles target syntax), `@pkmn/sim` will **not** advance the turn. Instead, your bot remains unpaused with its turn clock still ticking and receives:
+  ```text
+  |error|[Invalid choice] Can't move: ...
+  |inactive|Time left: ...
+  ```
+- Your bot must listen for `|error|[Invalid choice]` lines and immediately emit a legal fallback choice. Emitting **3 consecutive invalid choices** on the same request forfeits the game (`invalid_choice_3x`).
+
+### 7. Statelessness Between Games & Read-Only Filesystem
+- Your bot process is freshly spawned for Game 1 and killed afterward; a brand-new process is spawned for Game 2.
+- Your bundle directory (or container rootfs) is mounted **strictly read-only**.
+- A 4 GB writable scratch directory is mounted at `/tmp` (`$TMPDIR` and `$XDG_CACHE_HOME`) for CoreML/Metal shader caches and runtime temp files, and is **completely wiped** before and after every single game. Do not attempt to save opponent models or logs across games.
+
+### 8. Format Subscription & Smoke Testing
+- When you submit a new version, the Arena runs an automatic 10-second offline smoke test in **every ladder you checked** (`gen1ou`, `gen3ou`, `gen9ou`, `gen9doublesou`, `gen9randbats`).
+- Only select ladders your bot actually implements! If a Gen 1–only bot checks `gen9ou`, it will fail the `gen9ou` smoke test and the submission will be rejected (with your 14-day cooldown automatically refunded).
+- Check the pinned `@pkmn/sim` commit and custom `modRules` in Section 2 (e.g., `Zoroark` and `Zoroark-Hisui` are banned in `gen9ou`, `gen9doublesou`, and `gen9randbats`).
+
+### 9. Hardware Limits, Thread Caps & Native `mmap()` Weight Trick
+- **CPU Threads (`10`)**: The Arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`, and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads.
+- **Unified Memory (`14 GiB` / `14,336 MB`)**: Enforced across CPU RAM + Metal GPU buffers + ANE buffers (`ARENA_MEMORY_LIMIT_MB=14336`). Size MCTS transposition tables to $\le 8\text{–}10\text{ GiB}$ so runtime overhead stays safely below 14 GiB.
+- **Zero-Footprint Model Weights via Read-Only `mmap()` (Native Bundles)**: On macOS, `/opt/arena/bin/limit` enforces the 14 GiB limit using XNU's `ri_phys_footprint`. Clean, read-only memory-mapped file pages (`mmap` with `PROT_READ` and `MAP_PRIVATE` or `MAP_SHARED`, such as `safetensors` or `gguf` memory mapping) are backed by the read-only bundle file on disk and **count as 0 bytes toward `ri_phys_footprint`**! Native bots that `mmap` their weights rather than `malloc`+`read`ing them into dirty heap save up to 500 MB of RAM budget and start in $< 5\text{ ms}$ once cached in the macOS unified buffer cache.
