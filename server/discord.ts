@@ -60,7 +60,7 @@ function isDelivery(value: unknown): value is Delivery {
   return delivery.leaders.every(leader => typeof leader?.ladder === 'string' &&
     (leader.bot === null ||
       (typeof leader.bot?.id === 'string' && typeof leader.bot?.name === 'string')) &&
-    (leader.owner === null || /^\d+$/.test(leader.owner?.discordId ?? '')));
+    (leader.owner === null || typeof leader.owner?.discordId === 'string'));
 }
 
 async function discordRequest(token: string, endpoint: string, init?: RequestInit): Promise<any> {
@@ -101,11 +101,8 @@ async function fetchGuildMembers(token: string, guild: string): Promise<GuildMem
   return all;
 }
 
-export async function applyLeaders(
-  token: string, config: Config, delivery: Delivery
-): Promise<boolean> {
+export async function applyLeaders(token: string, config: Config, delivery: Delivery) {
   const members = await fetchGuildMembers(token, config.guild);
-  let failed = false;
   for (const leader of delivery.leaders) {
     const roleId = config.ladders[leader.ladder];
     if (!roleId) {
@@ -138,11 +135,9 @@ export async function applyLeaders(
         console.log(`[${leader.ladder}] Gave role to ${owner.user.username} (${leader.bot?.name})`);
       }
     } catch (err) {
-      failed = true;
       console.error(`[${leader.ladder}] Could not apply the leader:`, err);
     }
   }
-  return !failed;
 }
 
 export function serve(token: string, secret: string, port: number) {

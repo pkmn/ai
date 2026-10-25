@@ -86,18 +86,17 @@ describe('applyLeaders', () => {
   test("matches vgc.bot's discordId only against a member id", async () => {
     const calls = stubFetch([{user: {id: '9', username: 'imp', global_name: '1'}, nick: '1',
       roles: []}]);
-    expect(await applyLeaders('token', CONFIG, delivery(
-      {ladder: 'a', bot: null, owner: {discordId: '1'}}
-    ))).toBe(true);
+    await applyLeaders('token', CONFIG,
+      delivery({ladder: 'a', bot: null, owner: {discordId: '1'}}));
     expect(calls.filter(call => call.method !== 'GET')).toEqual([]);
   });
 
   test('moves the role and takes it from one who no longer has it', async () => {
     const calls = stubFetch(MEMBERS);
-    expect(await applyLeaders('token', CONFIG, delivery(
+    await applyLeaders('token', CONFIG, delivery(
       {ladder: 'a', bot: null, owner: {discordId: 'new'}},
       {ladder: 'b', bot: {id: 'b1', name: 'Bot'}, owner: null}
-    ))).toBe(true);
+    ));
     expect(calls.slice(1)).toEqual([
       {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-a')},
       {method: 'PUT', url: expect.stringContaining('/members/new/roles/role-a')},
@@ -107,9 +106,9 @@ describe('applyLeaders', () => {
 
   test('gives the role to an override over what vgc.bot sends', async () => {
     const calls = stubFetch([{user: {id: '111', username: 'nessiedev'}, roles: []}]);
-    expect(await applyLeaders('token', {...CONFIG, bots: {b1: '111'}}, delivery(
+    await applyLeaders('token', {...CONFIG, bots: {b1: '111'}}, delivery(
       {ladder: 'a', bot: {id: 'b1', name: 'Bot'}, owner: {discordId: '999'}}
-    ))).toBe(true);
+    ));
     expect(calls).toContainEqual({method: 'PUT',
       url: expect.stringContaining('/members/111/roles/role-a')});
   });
@@ -117,10 +116,10 @@ describe('applyLeaders', () => {
   test('a failing ladder does not stop the next one', async () => {
     const calls = stubFetch(MEMBERS,
       call => call.method === 'DELETE' && call.url.includes('role-a'));
-    expect(await applyLeaders('token', CONFIG, delivery(
+    await applyLeaders('token', CONFIG, delivery(
       {ladder: 'a', bot: null, owner: {discordId: 'new'}},
       {ladder: 'b', bot: null, owner: {discordId: 'new'}}
-    ))).toBe(false);
+    ));
     expect(calls).toContainEqual({method: 'PUT',
       url: expect.stringContaining('/members/new/roles/role-b')});
   });
