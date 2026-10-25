@@ -19,7 +19,6 @@ interface Config {
   bots?: {[bot: string]: string};
 }
 
-// Mirrors LeadersDelivery in vgc.bot's shared/api.ts.
 export interface Delivery {
   version: 1;
   leaders: {
@@ -104,7 +103,6 @@ async function discordRequest(token: string, endpoint: string, init?: RequestIni
   return res.json();
 }
 
-// Needs the Server Members privileged intent.
 async function fetchGuildMembers(token: string, guild: string): Promise<GuildMember[]> {
   const all: GuildMember[] = [];
   let after = '0';
