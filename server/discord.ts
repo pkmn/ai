@@ -10,25 +10,19 @@ import * as yaml from 'yaml';
 const root = path.join(__dirname, '..', '..');
 
 const DISCORD_API = 'https://discord.com/api/v10';
-// Where vgc.bot posts the ladder leaders.
 const HOOK_PATH = '/hooks/vgc';
-// Deliveries signed longer ago than this are turned away as replays.
 const MAX_AGE_MS = 5 * 60_000;
 const MAX_BODY_BYTES = 16 * 1024;
-// A delivery that failed to apply is tried again this often until it succeeds or a
-// newer one replaces it.
 const RECONCILE_MS = 60_000;
 
 interface Config {
   guild: string;
   // vgc.bot ladder id -> Discord role id.
   ladders: {[ladder: string]: string};
-  // vgc.bot bot id or name -> owner's Discord id or username, for a bot someone
-  // else registered, with the owner's agreement.
+  // vgc.bot bot id or name -> Discord id or username, only with the owner's agreement.
   bots?: {[bot: string]: string};
 }
 
-// What vgc.bot posts when a ladder's leader changes, and hourly. Applies idempotently.
 // Mirrors LeadersDelivery in vgc.bot's shared/api.ts (lucaspellegrinelli/pkmn-arena).
 export interface Delivery {
   version: 1;
@@ -40,7 +34,6 @@ export interface Delivery {
   }[];
 }
 
-// A delivery to apply, one to ignore, or a rejection with the status to answer.
 export type Verified =
   {kind: 'apply'; delivery: Delivery; sent: number} |
   {kind: 'ignore'; reason: string} |
@@ -58,8 +51,7 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
 }
 
-// Checks a delivery as vgc.bot signs it: HMAC-SHA256 over `<timestamp>.<raw body>`,
-// the timestamp in milliseconds.
+// vgc.bot signs HMAC-SHA256 over `<timestamp>.<raw body>`, timestamp in ms.
 export function verify(
   body: Buffer,
   headers: http.IncomingHttpHeaders,
@@ -75,8 +67,7 @@ export function verify(
 
   const expected = Buffer.from('sha256=' + crypto.createHmac('sha256', secret)
     .update(`${timestamp}.`).update(body).digest('hex'));
-  // Compare bytes, not characters: Node decodes header bytes as latin1, so a
-  // same-length signature can still be longer, which makes timingSafeEqual throw.
+  // Header bytes decode as latin1: equal string lengths can still differ in bytes.
   const actual = Buffer.from(signature);
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
     return {kind: 'reject', status: 401, reason: 'bad signature'};
@@ -87,7 +78,6 @@ export function verify(
   if (Math.abs(now - sent) > MAX_AGE_MS) {
     return {kind: 'reject', status: 400, reason: 'stale'};
   }
-  // Already applied: idempotent, so acknowledge it without applying it again.
   if (sent <= lastAccepted) return {kind: 'ignore', reason: 'already applied'};
 
   let delivery: unknown;
@@ -151,7 +141,6 @@ async function fetchGuildMembers(token: string, guild: string): Promise<GuildMem
   return all;
 }
 
-// An override names its owner by Discord id or username.
 export function findMember(members: GuildMember[], owner?: string): GuildMember | undefined {
   if (!owner) return undefined;
   const lower = owner.toLowerCase();
@@ -159,9 +148,6 @@ export function findMember(members: GuildMember[], owner?: string): GuildMember 
     members.find(m => m.user.username.toLowerCase() === lower);
 }
 
-// Makes each configured ladder's role held by its leader's owner and nobody else.
-// Ladders the delivery leaves out keep their role as it is. Returns false if any
-// ladder failed, so the caller can retry.
 export async function applyLeaders(
   token: string, config: Config, delivery: Delivery
 ): Promise<boolean> {
@@ -181,8 +167,7 @@ export async function applyLeaders(
       if (override) {
         owner = findMember(members, override);
       } else if (leader.owner) {
-        // vgc.bot's id must match the member's id: a nickname or username is
-        // neither unique nor controlled by the owner.
+        // vgc.bot's id must match the member's id, never a username or nickname.
         const discordId = leader.owner.discordId;
         owner = members.find(m => m.user.id === discordId);
       }
@@ -214,7 +199,7 @@ export async function applyLeaders(
   return !failed;
 }
 
-// Applies the newest delivery it is offered, trying a failed one again on every tick.
+// Applies the newest delivery, retrying each tick until it succeeds, one at a time.
 export function reconciler(
   apply: (delivery: Delivery) => Promise<boolean>, everyMs: number
 ) {
@@ -233,7 +218,6 @@ export function reconciler(
     }
     applying = false;
     if (ok && pending === delivery) pending = undefined;
-    // A newer delivery that arrived while applying goes right away.
     if (pending !== delivery) await tick();
   };
   const interval = setInterval(() => {
@@ -270,7 +254,7 @@ export function serve(token: string, secret: string, port: number) {
       if (oversized) return;
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        // Stop buffering, but do not destroy the socket: that can drop the 413.
+        // Do not destroy the socket, or the 413 can be lost.
         oversized = true;
         res.writeHead(413, {Connection: 'close'}).end();
         return;
