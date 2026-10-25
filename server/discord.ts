@@ -107,7 +107,7 @@ export async function fetchLeaders(vgcToken: string): Promise<Leader[]> {
   return data.leaders;
 }
 
-// Fetches the members only for a ladder whose owner changed since the last cycle.
+// Fetches the members only when some ladder's owner changed since the last cycle.
 export async function syncRoles(
   token: string,
   vgcToken: string,
@@ -147,7 +147,8 @@ export async function syncRoles(
         const who = `${target.user.username} (${leader.bot?.name})`;
         console.log(`[${leader.ladder}] Assigned role ${roleId} to ${who}`);
       } else if (owner && !target) {
-        console.log(`[${leader.ladder}] ${key} is not in the server`);
+        const who = 'id' in owner ? owner.id : owner.name;
+        console.log(`[${leader.ladder}] ${who} is not in the server`);
       }
 
       if (!owner || target) {

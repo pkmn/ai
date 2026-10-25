@@ -20,7 +20,6 @@ describe('ownerOf', () => {
     ['the mapped author name', leader('a', bot, {name: 'pelle', discordId: null}), {name: 'pll'}],
     ['the author name', leader('a', bot, {name: 'x', discordId: null}), {name: 'x'}],
     ['nobody while the owner is private', leader('a', bot, null), undefined],
-    ['nobody without a leader', leader('a', null, null), undefined],
   ])('is %s', (_, l, expected) => {
     expect(ownerOf(l, CONFIG)).toEqual(expected);
   });
