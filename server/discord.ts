@@ -1,17 +1,16 @@
 require('source-map-support').install();
 
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
+import {Webhook} from 'standardwebhooks';
 import * as yaml from 'yaml';
 
 const root = path.join(__dirname, '..', '..');
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const HOOK_PATH = '/hooks/vgc';
-const MAX_AGE_MS = 5 * 60_000;
 
 interface Config {
   guild: string;
@@ -40,33 +39,17 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
 }
 
-// vgc.bot signs HMAC-SHA256 over `<timestamp>.<raw body>`, timestamp in ms.
 export function verify(
-  body: Buffer,
-  headers: http.IncomingHttpHeaders,
-  secret: string,
-  lastAccepted: number,
-  now = Date.now()
+  body: Buffer, headers: http.IncomingHttpHeaders, webhook: Webhook, lastAccepted: number
 ): {delivery: Delivery; sent: number} | string {
-  const timestamp = headers['x-arena-timestamp'];
-  const signature = headers['x-arena-signature'];
-  if (typeof timestamp !== 'string' || typeof signature !== 'string') return 'unsigned';
-  if (!/^sha256=[0-9a-f]{64}$/.test(signature)) return 'bad signature';
-  const expected = Buffer.from('sha256=' + crypto.createHmac('sha256', secret)
-    .update(`${timestamp}.`).update(body).digest('hex'));
-  if (!crypto.timingSafeEqual(Buffer.from(signature), expected)) return 'bad signature';
-
-  const sent = Number(timestamp);
-  if (!Number.isFinite(sent)) return 'bad timestamp';
-  if (Math.abs(now - sent) > MAX_AGE_MS) return 'stale';
-  if (sent <= lastAccepted) return 'already applied';
-
   let delivery: unknown;
   try {
-    delivery = JSON.parse(body.toString('utf8'));
-  } catch {
-    return 'not JSON';
+    delivery = webhook.verify(body, headers as Record<string, string>);
+  } catch (err) {
+    return (err as Error).message;
   }
+  const sent = Number(headers['webhook-timestamp']);
+  if (sent <= lastAccepted) return 'already applied';
   return isDelivery(delivery) ? {delivery, sent} : 'unknown version or shape';
 }
 
@@ -163,6 +146,7 @@ export async function applyLeaders(
 }
 
 export function serve(token: string, secret: string, port: number) {
+  const webhook = new Webhook(secret);
   let lastAccepted = 0;
 
   const server = http.createServer((req, res) => {
@@ -174,7 +158,7 @@ export function serve(token: string, secret: string, port: number) {
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       try {
-        const verified = verify(Buffer.concat(chunks), req.headers, secret, lastAccepted);
+        const verified = verify(Buffer.concat(chunks), req.headers, webhook, lastAccepted);
         if (typeof verified === 'string') {
           console.log(`Did not apply a delivery: ${verified}`);
           res.writeHead(400).end();

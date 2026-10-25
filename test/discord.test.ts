@@ -1,17 +1,18 @@
-import * as crypto from 'crypto';
+import {Webhook} from 'standardwebhooks';
 
 import {type Delivery, applyLeaders, verify} from '../server/discord';
 
-const SECRET = 'webhook-secret';
-const NOW = 1700000000000;
+const WEBHOOK = new Webhook('d2ViaG9vay1zZWNyZXQ=');
 const BODY = '{"version":1,"leaders":[]}';
 const VERSION2 = '{"version":2,"leaders":[]}';
 const MALFORMED = '{"version":1,"leaders":{}}';
-const NON_ASCII = 'sha256=' + 'é'.repeat(64);
 
-function sign(timestamp: number, body: string, secret = SECRET) {
-  return 'sha256=' + crypto.createHmac('sha256', secret)
-    .update(`${timestamp}.${body}`).digest('hex');
+const seconds = (at: Date) => Math.floor(at.getTime() / 1000);
+
+function signed(body: string, at: Date, webhook = WEBHOOK) {
+  const id = String(at.getTime());
+  return {'webhook-id': id, 'webhook-timestamp': String(seconds(at)),
+    'webhook-signature': webhook.sign(id, at, body)};
 }
 
 function delivery(...leaders: Delivery['leaders']): Delivery {
@@ -22,38 +23,34 @@ interface VerifyCase {
   name: string;
   reason?: string;
   body?: string;
-  timestamp?: number;
-  signature?: string;
+  at?: Date;
+  webhook?: Webhook;
+  headers?: Record<string, string>;
   lastAccepted?: number;
 }
 
 describe('verify', () => {
+  const now = new Date();
   test.each<VerifyCase>([
-    {name: 'valid', signature: sign(NOW, BODY)},
-    {name: 'wrong secret', reason: 'bad signature', signature: sign(NOW, BODY, 'other')},
-    {name: 'non-ASCII signature', reason: 'bad signature', signature: NON_ASCII},
-    {name: 'unsigned', reason: 'unsigned'},
-    {name: 'stale', reason: 'stale', timestamp: NOW - 300_001,
-      signature: sign(NOW - 300_001, BODY)},
-    {name: 'future', reason: 'stale', timestamp: NOW + 300_001,
-      signature: sign(NOW + 300_001, BODY)},
-    {name: 'applied', reason: 'already applied', signature: sign(NOW, BODY), lastAccepted: NOW},
-    {name: 'unknown version', reason: 'unknown version or shape', body: VERSION2,
-      signature: sign(NOW, VERSION2)},
-    {name: 'malformed leaders', reason: 'unknown version or shape', body: MALFORMED,
-      signature: sign(NOW, MALFORMED)},
-  ])('$name', ({reason, body = BODY, timestamp = NOW, signature, lastAccepted = 0}) => {
-    const headers = signature
-      ? {'x-arena-timestamp': String(timestamp), 'x-arena-signature': signature}
-      : {};
-    expect(verify(Buffer.from(body), headers, SECRET, lastAccepted, NOW))
-      .toEqual(reason ?? {delivery: JSON.parse(body), sent: timestamp});
+    {name: 'valid'},
+    {name: 'wrong secret', reason: 'No matching signature found', webhook: new Webhook('b3RoZXI=')},
+    {name: 'unsigned', reason: 'Missing required headers', headers: {}},
+    {name: 'stale', reason: 'Message timestamp too old', at: new Date(now.getTime() - 301_000)},
+    {name: 'future', reason: 'Message timestamp too new', at: new Date(now.getTime() + 301_000)},
+    {name: 'applied', reason: 'already applied', lastAccepted: seconds(now)},
+    {name: 'unknown version', reason: 'unknown version or shape', body: VERSION2},
+    {name: 'malformed leaders', reason: 'unknown version or shape', body: MALFORMED},
+  ])('$name', ({
+    reason, body = BODY, at = now, webhook = WEBHOOK, headers = signed(body, at, webhook),
+    lastAccepted = 0,
+  }) => {
+    expect(verify(Buffer.from(body), headers, WEBHOOK, lastAccepted))
+      .toEqual(reason ?? {delivery: JSON.parse(body), sent: seconds(at)});
   });
 
   test('pins the signature of a known body', () => {
-    expect(sign(NOW, BODY)).toBe(
-      'sha256=603e03acb67a8aaf164bda2b4d39baf3465564530c9c9f54c8d13a3c67ca19e2'
-    );
+    expect(WEBHOOK.sign('1700000000000', new Date(1700000000000), BODY))
+      .toBe('v1,2QBVDD/rCh2YNefjsl0i9mAgfPPEHQ43EDhGAe12PAs=');
   });
 });
 
