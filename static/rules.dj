@@ -3,13 +3,17 @@
 Competitors interested in participating in **pkmn.ai**'s ladders or tournaments
 can request inclusion [via GitHub](TODO). You will be required to provide:
 
-    - your project's **name** (subject to staff discretion, prefer regex `^[A-Za-Z
+    - your **project's name** (subject to staff discretion, prefer regex `^[A-Za-Z
     ]$`, must not include the tokens `poke` / `mon` / `pkmn` / `AI` / `bot` /
     `agent` / `showdown` / `smogon`, bare English Pokémon species names, or
     known player's names)
     - **GitHub and Smogon usernames** for each team member associated with your
     project. All authorized team members must be Smogon account holders in good
     standing.
+    - **Qualifying criteria** to justify participation in the hosted environment
+    (_e.g._, [Pokémon Showdown](https://pokemonshowdown.com/ladder) /
+    [vgc.bot](https://vgc.bot/leaderboard) /
+    [pkmn.bot](https://pkmn.bot/leaderboard) rankings)
     - descriptive fields on **project details** for the [projects](/projects)
     page - agreement to follow [Responsible Release](/release) guidelines and to
     grant **pkmn.ai** permission to run your code in its arena for the purpose
@@ -18,7 +22,7 @@ can request inclusion [via GitHub](TODO). You will be required to provide:
     - **Discord user IDs** (_optional_) of the team members, to be used for
     notifications about your submissions and for roles within the
     [chat](/chat) room
-    - A PNG image (_optional_) with your project's **logo** to be displayed on
+    - A PNG image (_optional_) with your **project's logo** to be displayed on
     your project's statistics page
 
 
@@ -33,13 +37,13 @@ Approved competitors may submit new versions of their agent via the
 [submissions](/submit) page which requires GitHub OAuth credentials to
 authenticate. On this page you will be required to fill in:
 
-  - **`version`**: Version string (e.g., `1.0.0` or `v2`, regex
+  - **`version`**: Version string (_e.g._, `1.0.0` or `v2`, regex
   `^[A-Za-z0-9._-]{1,24}$`).
   - **`download_url`**: Direct HTTPS URL to a `.tar.gz`/`tar.xz`/`.tar.zst` bundle
-  _or_ an OCI container image reference (`ghcr.io/...`, `docker.io/...`).
+  _or_ an OCI container image reference (_e.g._, `ghcr.io/...`, `docker.io/...`).
   - **`sha256`**: 64-character hex SHA-256 checksum of the archive or OCI manifest
   digest.
-  - (_optional_) **`auth_token`**: Read-only bearer token / header used once by the
+  - **`auth_token`** (_optional_): Read-only bearer token / header used once by the
   arena to pull private artifacts
   - **`ladders`**: / **`tournaments`**: non-empty subsets of the ladders or tournaments
   to enter your agent in
@@ -48,10 +52,10 @@ Ladder submissions will run on a **Mac M6 Mini** with access to **10 cores** (8
 Performance & 2 Efficiency), **14 GiB** of dedicated RAM and 4 GiB of scratch
 `/tmp` storage wiped between games. The **network will be disabled** for all
 competitors. Ladder submissions may either take the form of an OCI `linux/arm64`
-Container which can access the GPU virtually via Vulkan passthrough or a native
-bundle that has full native access to the GPU/ANE Metal/CoreML. Tournament
-hardware will be outlined in the tournament-specific rules and will only support
-OCI containers.
+Container which can access the **GPU** virtually via Vulkan passthrough or a
+native bundle that has full native access to the GPU/ANE Metal/CoreML.
+Tournament hardware will be outlined in the tournament-specific rules and will
+only support OCI containers.
 
 {summary="**OCI Container**"}
 ::: details
@@ -121,7 +125,7 @@ TODO
 - choices + invalid choices
 - quarantine
 - no canceling
-
+usage stats access
 
 ### Formats
 
@@ -133,8 +137,8 @@ regular timer but no pondering
 
 - `gen1singles` = format unchanged since ~2015 except meta wise. prefer most recent 3-4 months
 - `gen3singles` = since sept 2025, manually filter out Quick Claw teams pre 2026-06
-- `gen9singles`
-- `gen9randoms`
+- `gen9singles` - 2025-05 and later (post Terablast ban)
+- `gen9randoms` = Nov 2026
 
 
 
@@ -157,24 +161,27 @@ pkmn/stats: stats.json
 ### Recommendations
 
 
+TODO rewrite 
+{summary="**Packaging**"}
+::: details
 - Strip debug symbols from compiled binaries and shared libraries (`strip -x` on macOS, `strip --strip-unneeded` on Linux).
 - Quantize neural network weights (`float16`, `bfloat16`, or `int8` `.safetensors` / `.gguf`).
 - Pre-compile CoreML `.mlpackage` models to `.mlmodelc` (`xcrun coremlcompiler compile Model.mlpackage ./weights/`) and exclude intermediate build files.
 - Exclude `__pycache__`, `.git`, test suites, `pip`/`uv` caches, C++ header files (`include/`), and static archives (`.a`).
+:::
+
+{summary="**Uploading**"}
+::: details
+- Upload `.tar.gz` to a private Cloudflare R2 (10 GB/mo free tier, zero egress), AWS S3, Backblaze B2, or GCS bucket and generate a 24-hour presigned `GET` URL (`rclone link` or `aws s3 presign --expires-in 86400`).
+-  Host the `.tar.gz` on a private GitHub repository release and pass a fine-grained PAT scoped strictly to that single repo with `Contents: Read-only` (expiring in 7 days).
+- Host the bundle in a private HuggingFace repo and provide a read-only token (`hf_...`) scoped to that repo.
+- Push to a private registry and provide a temporary `read:packages` pull token.
+:::
+
+
+
 
 ---
-
-
-- **How Competitors Share Privately Without Leaking Weights**:
-  - **Presigned Object Storage URL (Recommended)**: Upload `.tar.gz` to a private Cloudflare R2 (10 GB/mo free tier, zero egress), AWS S3, Backblaze B2, or GCS bucket and generate a 24-hour presigned `GET` URL (`rclone link` or `aws s3 presign --expires-in 86400`).
-  - **Private GitHub Release + Fine-Grained Read-Only PAT**: Host the `.tar.gz` on a private GitHub repository release and pass a fine-grained PAT scoped strictly to that single repo with `Contents: Read-only` (expiring in 7 days).
-  - **Private HuggingFace Repo + Read Token**: Host the bundle in a private HuggingFace repo and provide a read-only token (`hf_...`) scoped to that repo.
-  - **Private `ghcr.io` / Docker Hub Image**: Push to a private registry and provide a temporary `read:packages` pull token.
-- **Dual Rate-Limit Rule**: A new version can be submitted only when **both** conditions hold:
-  1. **Time Cooldown**: At least **14 days (`1,209,600` seconds)** have passed since that bot's last accepted submission (`smoke_status = 'passed'`). Failed smoke tests automatically refund the cooldown.
-  2. **Rating Settlement**: All currently active versions of that bot across every ladder it entered have settled to **$\text{SE}(R) \le 30\text{ Elo}$** ($\hat{\sigma} \le 0.173$ nats, 95% CI $\approx \pm 59\text{ Elo}$) **and at least $25$ blind-pair matches** ($50$ games).
-
-
 
 
 ## 8. Competitor Integration Guide & Gotchas
