@@ -1804,9 +1804,11 @@ export interface PairMatchCounts {
 
 export interface RatingResult {
   theta: Float64Array;      // Natural log-odds skill (shifted so theta[anchorIndex] === 0)
-  elo: Float64Array;        // Display Elo: 1500 + ELO_SCALE * theta[i]
+  elo: Float64Array;        // Display Elo point estimate: 1500 + ELO_SCALE * theta[i]
   eloStd: Float64Array;     // Posterior standard error SE(R_i) in Elo points
   ci95: Float64Array;       // 95% confidence half-width: 1.96 * eloStd[i]
+  eloLcb: Float64Array;     // Conservative Rating (95% Lower Confidence Bound): elo[i] - ci95[i]
+  eloUcb: Float64Array;     // Optimistic Rating (95% Upper Confidence Bound): elo[i] + ci95[i]
   gxe: Float64Array;        // Expected win % (0..100) against a prior opponent N(1500, 350^2)
   covariance: Float64Array; // Flat M x M inverse negative Hessian matrix Sigma = H^{-1}
   nu0: number;              // Empirical 1-1 split density parameter
@@ -1946,6 +1948,8 @@ export function computeDavidsonRatings(
   const elo = new Float64Array(M);
   const eloStd = new Float64Array(M);
   const ci95 = new Float64Array(M);
+  const eloLcb = new Float64Array(M);
+  const eloUcb = new Float64Array(M);
   const gxe = new Float64Array(M);
 
   for (let i = 0; i < M; i++) {
@@ -1954,11 +1958,13 @@ export function computeDavidsonRatings(
     elo[i] = anchorElo + ELO_SCALE * centeredTheta;
     eloStd[i] = ELO_SCALE * Math.sqrt(Math.max(0, covariance[i * M + i]));
     ci95[i] = 1.96 * eloStd[i];
+    eloLcb[i] = elo[i] - ci95[i];
+    eloUcb[i] = elo[i] + ci95[i];
     const denom = 400 * Math.sqrt(1 + GXE_C * (eloStd[i] * eloStd[i] + priorEloStd * priorEloStd));
     gxe[i] = 100 / (1 + Math.pow(10, -(elo[i] - anchorElo) / denom));
   }
 
-  return { theta, elo, eloStd, ci95, gxe, covariance, nu0, nu1 };
+  return { theta, elo, eloStd, ci95, eloLcb, eloUcb, gxe, covariance, nu0, nu1 };
 }
 
 /**
@@ -2013,6 +2019,48 @@ export function normalCdf(z: number): number {
 export function computeLOS(theta: Float64Array, cov: Float64Array, M: number, i: number, j: number): number {
   const varDiff = Math.max(1e-12, cov[i * M + i] + cov[j * M + j] - 2 * cov[i * M + j]);
   return normalCdf((theta[i] - theta[j]) / Math.sqrt(varDiff));
+}
+
+/**
+ * Compute each representative bot family's 95% Plausible Rank Interval [rankMin, rankMax]:
+ *  - `rankMin[b]`: 1 + number of rival bot families `r` that beat `b` with >= 95% LOS (LOS(r > b) >= 0.95).
+ *  - `rankMax[b]`: 1 + number of rival bot families `r` that `b` does NOT beat with >= 95% LOS (LOS(b > r) < 0.95)
+ *                  AND whose 95% Upper Confidence Bound exceeds `b`'s 95% Lower Confidence Bound (eloUcb[r] > eloLcb[b]).
+ * If `rankMax[b] <= K` (for K in {1, 10, 100}), bot `b` is guaranteed with high confidence to be in the Top K
+ * even if its exact position within 1..K is still uncertain (`rankMin[b] < rankMax[b]`).
+ */
+export function computeGuaranteedRankBounds(
+  repIndices: number[], // Matrix index (0..M-1) of the highest-LCB active version per bot family
+  theta: Float64Array,
+  cov: Float64Array,
+  eloLcb: Float64Array,
+  eloUcb: Float64Array,
+  M: number,
+  losThreshold = 0.95,
+): { rankMin: Int32Array; rankMax: Int32Array } {
+  const B = repIndices.length;
+  const rankMin = new Int32Array(B);
+  const rankMax = new Int32Array(B);
+
+  for (let a = 0; a < B; a++) {
+    const i = repIndices[a];
+    let definitelyAbove = 0;
+    let plausiblyAbove = 0;
+    for (let b = 0; b < B; b++) {
+      if (a === b) continue;
+      const j = repIndices[b];
+      const losIJ = computeLOS(theta, cov, M, i, j);
+      if (1 - losIJ >= losThreshold && eloLcb[j] > eloUcb[i]) {
+        definitelyAbove++;
+      }
+      if (losIJ < losThreshold && eloUcb[j] > eloLcb[i]) {
+        plausiblyAbove++;
+      }
+    }
+    rankMin[a] = 1 + definitelyAbove;
+    rankMax[a] = 1 + plausiblyAbove;
+  }
+  return { rankMin, rankMax };
 }
 ```
 
@@ -2509,25 +2557,73 @@ CREATE TABLE ladder_entries (
   ladder_id TEXT NOT NULL,
   version_id INTEGER NOT NULL REFERENCES bot_versions(id),
   role TEXT NOT NULL, -- 'anchor' | 'champion' | 'challenger' | 'retired' | 'quarantined'
-  rating_elo REAL NOT NULL DEFAULT 1500,
-  rating_se REAL NOT NULL DEFAULT 350,
-  gxe REAL NOT NULL DEFAULT 50,
+  rating_elo REAL NOT NULL DEFAULT 1500,        -- MAP Elo point estimate: 1500 + 173.72 * theta
+  rating_se REAL NOT NULL DEFAULT 350,          -- Posterior standard error SE(R) in Elo
+  rating_lcb REAL NOT NULL DEFAULT 814,         -- Conservative Rating (95% LCB): rating_elo - 1.96 * rating_se
+  gxe REAL NOT NULL DEFAULT 50,                 -- Expected win % against N(1500, 350^2) prior
+  rank_current INTEGER,                         -- Numerical rank (1, 2, ...) if family leader & settled; NULL if provisional/secondary
+  rank_min INTEGER,                             -- Best plausible rank at 95% confidence (1 + count of rivals with LOS(r > i) >= 0.95)
+  rank_max INTEGER,                             -- Worst plausible rank at 95% confidence (guaranteed Top-K when rank_max <= K)
   matches_played INTEGER NOT NULL DEFAULT 0,
-  ww INTEGER NOT NULL DEFAULT 0,
-  wt INTEGER NOT NULL DEFAULT 0,
-  split INTEGER NOT NULL DEFAULT 0,
-  tl INTEGER NOT NULL DEFAULT 0,
-  ll INTEGER NOT NULL DEFAULT 0,
-  game_wins INTEGER NOT NULL DEFAULT 0,
-  game_losses INTEGER NOT NULL DEFAULT 0,
-  game_ties INTEGER NOT NULL DEFAULT 0,
+  ww INTEGER NOT NULL DEFAULT 0,                -- 2.0-0.0 sweeps won (Match W = ww + wt)
+  wt INTEGER NOT NULL DEFAULT 0,                -- 1.5-0.5 wins (WT + TW)
+  split INTEGER NOT NULL DEFAULT 0,             -- 1.0-1.0 splits (WL + LW + TT; Match T = split)
+  tl INTEGER NOT NULL DEFAULT 0,                -- 0.5-1.5 losses (TL + LT)
+  ll INTEGER NOT NULL DEFAULT 0,                -- 0.0-2.0 sweeps lost (Match L = ll + tl)
+  cur_win_streak INTEGER NOT NULL DEFAULT 0,    -- Consecutive match wins (W = WW | WT | TW); reset to 0 on T or L
+  cur_loss_streak INTEGER NOT NULL DEFAULT 0,   -- Consecutive match losses (L = LL | LT | TL); reset to 0 on T or W
+  max_win_streak INTEGER NOT NULL DEFAULT 0,    -- Longest consecutive match win streak
+  max_loss_streak INTEGER NOT NULL DEFAULT 0,   -- Longest consecutive match loss streak
+  best_rank INTEGER,                            -- Highest (numerically smallest) official rank achieved once settled
+  best_rank_at INTEGER,                         -- Unix timestamp when best_rank was first achieved
+  max_rating_lcb REAL,                          -- All-time peak Conservative Rating (rating_elo - 1.96 * rating_se)
+  max_elo REAL,                                 -- All-time peak MAP Elo recorded AFTER settlement (settled_at IS NOT NULL)
+  max_elo_se REAL,                              -- Posterior SE(R) at the moment max_elo was achieved
+  max_gxe REAL,                                 -- All-time peak GXE recorded AFTER settlement
+  max_elo_at INTEGER,                           -- Unix timestamp when max_elo was achieved
+  top1_entered_at INTEGER,                      -- Non-null Unix timestamp while guaranteed Rank #1 (rank_max == 1 & settled)
+  top1_max_streak_s INTEGER NOT NULL DEFAULT 0, -- Longest unbroken stint at guaranteed #1 (seconds)
+  top1_total_s INTEGER NOT NULL DEFAULT 0,      -- Cumulative total time spent at guaranteed #1 (seconds)
+  top10_entered_at INTEGER,                     -- Non-null Unix timestamp while guaranteed Top 10 (rank_max <= 10)
+  top10_max_streak_s INTEGER NOT NULL DEFAULT 0,-- Longest unbroken stint in guaranteed Top 10 (seconds)
+  top10_total_s INTEGER NOT NULL DEFAULT 0,     -- Cumulative total time spent in guaranteed Top 10 (seconds)
+  top100_entered_at INTEGER,                    -- Non-null Unix timestamp while guaranteed Top 100 (rank_max <= 100)
+  top100_max_streak_s INTEGER NOT NULL DEFAULT 0,
+  top100_total_s INTEGER NOT NULL DEFAULT 0,
   crashes INTEGER NOT NULL DEFAULT 0,
   timeouts INTEGER NOT NULL DEFAULT 0,
   ooms INTEGER NOT NULL DEFAULT 0,
   avg_turn_ms REAL NOT NULL DEFAULT 0,
   peak_ram_mb INTEGER NOT NULL DEFAULT 0,
-  settled_at INTEGER, -- non-null once rating_se <= 30 and matches_played >= 25
+  settled_at INTEGER,                           -- Non-null once rating_se <= 30 and matches_played >= 25
   PRIMARY KEY (ladder_id, version_id)
+);
+
+-- Per-bot-family aggregated statistics on each ladder (persists Top 1/10/100 reigns and peaks across version upgrades)
+CREATE TABLE bot_ladder_stats (
+  ladder_id TEXT NOT NULL,
+  bot_id INTEGER NOT NULL REFERENCES bots(id),
+  best_rank INTEGER,
+  best_rank_at INTEGER,
+  max_rating_lcb REAL,
+  max_elo REAL,
+  max_elo_se REAL,
+  max_gxe REAL,
+  max_elo_version_id INTEGER REFERENCES bot_versions(id),
+  cur_win_streak INTEGER NOT NULL DEFAULT 0,
+  cur_loss_streak INTEGER NOT NULL DEFAULT 0,
+  max_win_streak INTEGER NOT NULL DEFAULT 0,
+  max_loss_streak INTEGER NOT NULL DEFAULT 0,
+  top1_entered_at INTEGER,
+  top1_max_streak_s INTEGER NOT NULL DEFAULT 0,
+  top1_total_s INTEGER NOT NULL DEFAULT 0,
+  top10_entered_at INTEGER,
+  top10_max_streak_s INTEGER NOT NULL DEFAULT 0,
+  top10_total_s INTEGER NOT NULL DEFAULT 0,
+  top100_entered_at INTEGER,
+  top100_max_streak_s INTEGER NOT NULL DEFAULT 0,
+  top100_total_s INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (ladder_id, bot_id)
 );
 
 CREATE TABLE matches (
@@ -2558,11 +2654,14 @@ CREATE TABLE pair_aggregates (
   ladder_id TEXT NOT NULL,
   v_low_id INTEGER NOT NULL REFERENCES bot_versions(id),
   v_high_id INTEGER NOT NULL REFERENCES bot_versions(id),
-  ww INTEGER NOT NULL DEFAULT 0,    -- sweeps won by v_low
-  wt INTEGER NOT NULL DEFAULT 0,    -- 1.5-0.5 won by v_low
-  split INTEGER NOT NULL DEFAULT 0, -- 1.0-1.0 splits
-  tl INTEGER NOT NULL DEFAULT 0,    -- 0.5-1.5 lost by v_low
-  ll INTEGER NOT NULL DEFAULT 0,    -- sweeps lost by v_low
+  ww INTEGER NOT NULL DEFAULT 0,                    -- 2.0-0.0 sweeps won by v_low (v_low Match W = ww + wt)
+  wt INTEGER NOT NULL DEFAULT 0,                    -- 1.5-0.5 won by v_low
+  split INTEGER NOT NULL DEFAULT 0,                 -- 1.0-1.0 splits (Match T = split)
+  tl INTEGER NOT NULL DEFAULT 0,                    -- 0.5-1.5 lost by v_low
+  ll INTEGER NOT NULL DEFAULT 0,                    -- 0.0-2.0 sweeps lost by v_low (v_low Match L = ll + tl)
+  cur_streak INTEGER NOT NULL DEFAULT 0,            -- >0: v_low consecutive match wins; <0: -v_high consecutive match wins; 0: last match was T
+  v_low_max_win_streak INTEGER NOT NULL DEFAULT 0,  -- Longest consecutive match win streak by v_low vs v_high
+  v_high_max_win_streak INTEGER NOT NULL DEFAULT 0, -- Longest consecutive match win streak by v_high vs v_low
   PRIMARY KEY (ladder_id, v_low_id, v_high_id),
   CHECK (v_low_id < v_high_id)
 );
@@ -2574,7 +2673,11 @@ CREATE TABLE rating_snapshots (
   matches_played INTEGER NOT NULL DEFAULT 0,
   rating_elo REAL NOT NULL,
   rating_se REAL NOT NULL,
+  rating_lcb REAL NOT NULL,
   gxe REAL NOT NULL,
+  rank_current INTEGER,
+  rank_min INTEGER,
+  rank_max INTEGER,
   rank_best INTEGER,
   PRIMARY KEY (ladder_id, version_id, day_utc)
 );
@@ -2711,7 +2814,11 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
         "role": "challenger",
         "rating_elo": 1612.4,
         "rating_se": 28.4,
+        "rating_lcb": 1556.7,
         "gxe": 67.8,
+        "rank_current": 4,
+        "rank_min": 3,
+        "rank_max": 6,
         "matches_played": 26,
         "settled_at": 1760650000
       }
@@ -2721,7 +2828,7 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
     ]
   }
   ```
-- **Side Effect on `pkmn.ai`**: Commits match + updated `ladder_entries` + `pair_aggregates` + daily `rating_snapshots` in one SQLite transaction, updates Discord roles if #1 changed, and atomically regenerates static leaderboard HTML/JSON files.
+- **Side Effect on `pkmn.ai`**: Commits match + updated `ladder_entries` + `bot_ladder_stats` + `pair_aggregates` + daily `rating_snapshots` in one SQLite transaction, updates $O(1)$ match streaks, peak ratings, and Top-1/10/100 duration counters, updates Discord roles if guaranteed #1 changed, and atomically regenerates static leaderboard HTML/JSON files.
 
 ### Nginx Configuration Additions (`config/nginx.conf`)
 - Keep `root /home/pkmn/ai/public;` so `/leaderboard/*` and `/api/live.json` are served directly from disk by Nginx with zero Node.js overhead.
@@ -2738,20 +2845,385 @@ Whenever `POST /api/arena/match-complete` finishes its SQLite transaction on `pk
 - `/leaderboard/<ladder>/<bot-slug>/index.html` (per-bot profile page)
 - `/leaderboard/<ladder>/standings.json` (machine-readable static JSON)
 
+### Adapting Bo1 Game Statistics to 2-Game Blind-Pair (`Bo2`) Matches
+
+#### 1. Why All Displayed Records & Streaks Are Match-Based (`W–L–T`) Rather Than Game-Based or `WW–Split–LL`
+In a 2-game blind-pair match where Bot $A$ and Bot $B$ play Game 1 (`A` with $T_1$, `B` with $T_2$) and Game 2 (`B` with $T_1$, `A` with $T_2$) under the identical PRNG seed $s$, a single game is not an independent competitive unit (since $T_1$ may have an `80–20` team matchup advantage over $T_2$). At the same time, exposing raw 5-category (`WW–WT–Split–TL–LL`) or 3-category (`WW–Split–LL`) labels in the UI is unnecessarily cryptic, and single-game ties (`T` from the 1000-turn limit or simultaneous faint) are exceedingly rare in Pokémon.
+
+Therefore, **while the SQLite database (`ladder_entries` and `pair_aggregates`) retains the exact 5 sufficient-statistic match categories (`ww`, `wt`, `split`, `tl`, `ll`) for exact Davidson MAP rating estimation**, every user-facing table, profile card, and streak counter collapses the 9 ordered 2-game outcomes into standard ternary **Match `W / L / T` (`Total Matches`)**:
+
+| Displayed Match Outcome | Underlying 2-Game Outcomes | Match Points ($S_{ij}$) | Davidson Category ($y_{ij}$) | Exact Formula from SQLite Columns |
+| :--- | :--- | :---: | :---: | :--- |
+| **Match Win (`W`)** | `WW`, `WT`, `TW` | $2.0$ or $1.5$ | $+1.0$ or $+0.5$ | `W = ww + wt` |
+| **Match Tie (`T`)** | `WL`, `LW`, `TT` | $1.0$ | $0.0$ | `T = split` |
+| **Match Loss (`L`)** | `LL`, `LT`, `TL` | $0.0$ or $0.5$ | $-1.0$ or $-0.5$ | `L = ll + tl` |
+| **Total Matches** | All 9 outcomes | — | — | `Matches = matches_played = W + L + T` |
+
+- **Zero Loss of Generality**: Because single-game ties occur in $< 0.05\%$ of Pokémon battles, `W` is almost exclusively `2–0` sweeps (`WW`), `T` is `1–1` splits (`WL`/`LW`), and `L` is `0–2` sweeps (`LL`), while the rare `1.5–0.5` (`WT`/`TW`) and `0.5–1.5` (`TL`/`LT`) matches naturally group into `W` and `L`.
+- **Single Unified Record**: Individual game records (`Game W–L–T`) are omitted from the UI so every statistic (`W–L–T`, win/loss streaks, head-to-head matrix cells) speaks solely in terms of **Matches**.
+
+---
+
+#### 2. Solving the "Unsettled Challenger Usurpation" Problem (`Conservative Rating / LCB` & Guaranteed Rank Ranges)
+
+A common failure mode on naive rating leaderboards (such as `vgc.bot`) occurs when bots are sorted by their raw point-estimate rating $R_i$ regardless of confidence interval width:
+- **Concrete Example (`vgc.bot` Failure Mode)**: Suppose an established champion `wolfe` sits at **`1679 ± 37`** over 600 games ($\text{SE} \approx 18.9\text{ Elo}$, 95% CI $[1642, 1716]$), while a new challenger `AsterAI` sits at **`1720 ± 79`** after 30 games / 15 matches ($\text{SE} \approx 40.3\text{ Elo}$, 95% CI $[1641, 1799]$).
+- Sorting by raw point estimate ($1720 > 1679$) places `AsterAI` at `#1` ahead of `wolfe` even though:
+  1. Pairwise Likelihood of Superiority is only $\text{LOS}(\text{AsterAI} > \text{wolfe}) = \Phi\!\left(\frac{1720 - 1679}{\sqrt{40.3^2 + 18.9^2}}\right) \approx 82\%$ (falling well short of a 95% confidence standard), and
+  2. `AsterAI`'s 95% lower confidence bound ($1720 - 79 = \mathbf{1641}$) is actually **lower** than `wolfe`'s 95% lower confidence bound ($1679 - 37 = \mathbf{1642}$)!
+- Furthermore, if `Max Rank`, `Max Elo`, and `Max GXE` are tracked from Match 1 on raw point estimates, nearly every bot's all-time "peak" rank and rating will be an early small-sample fluke (e.g., going `4–0` in matches 1–4 with `1760 ± 160`) before its rating settles.
+
+We prevent both failure modes using three rules:
+
+1. **Conservative Rating (`rating_lcb`) as the Canonical Leaderboard Sort Key**:
+   - Define each version's **Conservative Rating** as the **95% Lower Confidence Bound (`LCB`)** of its posterior skill distribution (analogous to Pokémon Showdown's `ACRE` and Microsoft TrueSkill's $\mu - k\sigma$):
+     $$R_{\text{LCB}, i} = R_i - 1.96 \cdot \text{SE}(R_i) = \text{rating\_elo}_i - \text{ci95}_i$$
+   - A challenger $C$ with wider uncertainty $\text{SE}_C$ can only overtake an incumbent rank holder $H$ with tighter uncertainty $\text{SE}_H$ on the leaderboard when:
+     $$R_C - 1.96\,\text{SE}_C > R_H - 1.96\,\text{SE}_H \iff R_C - R_H > 1.96\,\bigl(\text{SE}_C - \text{SE}_H\bigr)$$
+   - In the `wolfe` (`1679 ± 37`, $R_{\text{LCB}} = 1642$) vs. `AsterAI` (`1720 ± 79`, $R_{\text{LCB}} = 1641$) example, `wolfe` automatically remains ranked ahead of `AsterAI` until `AsterAI` plays enough matches to shrink its confidence interval and raise its lower bound above `1642`. Meanwhile, once two bots are both well-settled ($\text{SE}_C \approx \text{SE}_H$), the penalty difference $1.96(\text{SE}_C - \text{SE}_H) \to 0$ and the ordering smoothly converges to pure Elo $R_i$.
+
+2. **Two-Stage Provisional & Settlement Gates (`Provisional` vs. `Settled`)**:
+   - **Provisional Calibration Gate (`matches_played < 10` or `rating_se > 60` Elo)**:
+     - Newly submitted versions with fewer than 10 matches (20 games) or $\text{SE}(R_i) > 60\text{ Elo}$ ($\text{CI}_{95} > \pm 118\text{ Elo}$) are badged **`[Provisional]`** with Rank = `—` (`NULL`) and are listed in a collapsible Provisional section below ranked bots.
+   - **Full Settlement Gate (`settled_at IS NOT NULL`, i.e., `matches_played >= 25` AND `rating_se <= 30` Elo / `ci95 <= ±58.8` Elo)**:
+     - Peak point-estimate records (**`Max Elo`**, **`Max GXE`**, **`Best Rank`**) and **`#1` Leaderboard / Discord Role usurpation** are **only recorded once a version is Settled (`settled_at IS NOT NULL`)**. Early calibration spikes before 25 matches / $\pm 58.8\text{ Elo}$ never pollute all-time peak statistics.
+
+3. **Guaranteed Plausible Rank Bounds (`[rank_min, rank_max]`) for Top-1 / Top-10 / Top-100 Streaks**:
+   - Even when a strong challenger still has moderate variance (for example, `1800 ± 75` after 15 matches, so $R_{\text{LCB}} = 1725$ and $R_{\text{UCB}} = 1875$) and we do **not** yet know whether its true rank is `#1`, `#2`, or `#3`, its 95% lower bound ($1725$) may already be **far above** the `#10` bot's 95% upper bound ($1610 \pm 25 \implies R_{\text{UCB}, 10} = 1635$)!
+   - Using `computeGuaranteedRankBounds` from Section 6 (which uses exact pairwise $\text{LOS}(i > j) = \Phi\!\left(\frac{\theta_i - \theta_j}{\sqrt{\Sigma_{ii} + \Sigma_{jj} - 2\Sigma_{ij}}}\right) \ge 0.95$ and 95% confidence intervals across all active bot families), every bot family has a **95% Plausible Rank Interval**:
+     $$\bigl[\text{rank\_min}(b),\; \text{rank\_max}(b)\bigr]$$
+   - **Guaranteed Top-$K$ Rule (`rank_max <= K`)**:
+     - **Guaranteed Top 100 (`rank_max <= 100`)**: At most 99 other bot families could plausibly outrank $b$ at 95% confidence.
+     - **Guaranteed Top 10 (`rank_max <= 10`)**: At most 9 other bot families could plausibly outrank $b$ at 95% confidence. Thus, a high-variance powerhouse with plausible rank range `[1, 4]` **immediately accrues Guaranteed Top-10 Streak & Duration** (since its worst-case plausible rank is $4 \le 10$), even before we know which exact slot in `1..4` it occupies!
+     - **Guaranteed Top 1 (`rank_current == 1` AND `settled_at IS NOT NULL` AND `LCB_1 >= LCB_2`)**: Requires the bot to be settled and hold the `#1` Conservative Rating ($R_{\text{LCB}}$) on the ladder (with pairwise $\text{LOS}(1 > 2)$ displayed alongside).
+
+---
+
+### Complete Inventory of Arena Statistics (Leaderboard & Bot Profile Pages)
+
+Every statistic below is adapted for 2-game blind-pair (`Bo2`) matches and tracked at both the **Individual Version level** (`ladder_entries`) and the **Bot Family level** (`bot_ladder_stats`):
+
+| Statistic Category | Displayed Metrics & Format | Exact Definition & Qualification Rules |
+| :--- | :--- | :--- |
+| **1. `W / L / T (Total Matches)`** | `142W – 68L – 40T (250 Matches)`<br>+ Win Rate / Score % (`64.8%`) | Match-level record where **`W = ww + wt`** (`WW, WT, TW`), **`L = ll + tl`** (`LL, LT, TL`), **`T = split`** (`WL, LW, TT`), and **`Total = matches_played`**. Score % is $\frac{W + 0.5\,T}{\text{Matches}} \times 100\%$. |
+| **2. `Current Standing`** | - **Rank**: `#1` *(or `#2 [1–3]` showing plausible range)*<br>- **Conservative Rating (`LCB`)**: `1642`<br>- **Elo ± 95% CI**: `1679 ± 37` *(SE: `18.9`)*<br>- **GXE**: `78.4%` | - `Rank`: Ordered by descending **Conservative Rating** $R_{\text{LCB}} = R - 1.96\,\text{SE}(R)$ among non-provisional bot families (`matches_played >= 10` and `rating_se <= 60`).<br>- Plausible rank badge `[rank_min–rank_max]` shown whenever `rank_min < rank_max`. |
+| **3. `Maximum / Peak Standing`** | - **Best Rank**: `#1` *(achieved `2026-11-04`)*<br>- **Peak Rating (`LCB`)**: `1668`<br>- **Peak Elo ± CI**: `1704 ± 36`<br>- **Peak GXE**: `81.2%` | - **`Peak Rating (LCB)`**: $\max_t \bigl(R_i(t) - 1.96\,\text{SE}_i(t)\bigr)$, which is naturally immune to early high-variance spikes.<br>- **`Best Rank`, `Peak Elo ± CI`, `Peak GXE`**: Updated **only after the version is Settled** (`settled_at IS NOT NULL`, i.e. $\ge 25$ matches and $\text{SE} \le 30\text{ Elo}$). |
+| **4. `Top 1 / 10 / 100 Streak & Duration`** | For each tier **`Top 1`**, **`Top 10`**, **`Top 100`**:<br>- **Current Streak**: `14.2 d` (`341 h`)<br>- **Longest Streak**: `28.5 d` (`684 h`)<br>- **Total Duration**: `62.0 d` (`1,488 h`) | - Accrues wall-clock time $\Delta t$ whenever the bot's **worst-case 95% plausible rank** satisfies **`rank_max <= K`** ($K \in \{10, 100\}$) or settled `#1` ($K = 1$).<br>- Stored in integer seconds (`topK_entered_at`, `topK_max_streak_s`, `topK_total_s`) and formatted in **Consecutive Days (`s / 86400`)** and **Absolute Hours (`s / 3600`)**. |
+| **5. `Longest & Current Win / Loss Streak`** | - **Current Streak**: `W6` *(or `L2`, `T1`)*<br>- **Longest Win Streak**: `14 W`<br>- **Longest Loss Streak**: `5 L` | - Computed over ternary Match outcomes (`W`, `L`, `T`).<br>- Outright Match Win (`W`) increments `cur_win_streak` and resets `cur_loss_streak = 0`.<br>- Outright Match Loss (`L`) increments `cur_loss_streak` and resets `cur_win_streak = 0`.<br>- Match Tie (`T`, i.e., `1–1` split) resets both `cur_win_streak = 0` and `cur_loss_streak = 0`. |
+| **6. `Head-to-Head vs. Opponent` (Matchup Matrix & Rivals)** | - **Pairwise `W–L–T` & Score %** vs. every opponent<br>- **Current & Max Streak vs. Opponent** (`W4`, max `W7 / L3`)<br>- **Matchup Residual ($\Delta S_{ij}$)**: `+14.2% vs. Expected` *(Best Counter / Nemesis)* | - **Why raw "Most Wins / Most Losses vs. Opponent" is NOT highlighted**: Because `selectNextArenaMatch` concentrates matches between adjacent-ranked bots ($\text{overlap}$ factor), raw win/loss volume against an opponent simply reflects who was closest in rating.<br>- Instead, the Per-Bot Profile H2H table displays exact **`W–L–T`**, **`Current Streak`**, **`Max W/L Streak`**, and **Davidson Score Residual** $\Delta S_{ij} = \text{Actual Score \%} - \mathbb{E}[\text{Score \%} \mid \Delta_{ij}]$ (identifying true stylistic **Best Matchups** and **Nemeses** for pairs with $\ge 10$ matches), and is sortable by any column. |
+| **7. `Rating History`** | - **Daily `rating_snapshots`** (`Elo`, `SE`, `LCB`, `GXE`, `Rank`)<br>- **Global Top-10 Race Chart** (`SVG`)<br>- **Per-Bot Version Lineage & Convergence Charts** (`SVG`) | - Stored once per UTC day (`PRIMARY KEY (ladder_id, version_id, day_utc)`) and updated in-place as matches complete on that day. |
+
+---
+
 ### Leaderboard Views & Columns (CCRL + `vgc.bot` Style)
 - **Version Filter Toggle**:
   - **Active Versions (Default)**: Displays all currently active versions competing in the ladder pool (each bot family's `Champion` and `Challenger`—up to 2 versions per bot).
   - **All Versions (Complete History)**: Displays all active **and retired** versions ever tested on the ladder.
-  - **Rank Numbering Rule**: In **both** views, **only the single highest-rated version of each bot family receives a numerical Rank (`1`, `2`, `3`...)**; a bot's secondary active version (or any retired historical version) has a blank Rank cell (`—`) so a single bot family never occupies multiple numerical rank slots.
-- **Columns**:
-  - `Rank`, `Bot` (avatar icon + Name + Version badge + open-source badge), `Elo` ($\pm$ 95% CI, anchored to `1500`), `GXE` (%), `Match Record` (`WW–Split–LL`), `Game Record` (`W–L–T`), `Avg Opponent Elo`, `Matches`, and `LOS` (probability of superiority over the next-ranked bot).
-- **Head-to-Head Matrix & Bot Profile Pages**:
-  - Cross-table showing pairwise match score % and `WW–Split–LL` counts between every pair of bots.
-  - Per-bot profile page showing metadata from `projects.yml`, multi-version rating progression charts, head-to-head breakdown, crash/timeout/OOM rates, average decision time, peak RAM, and recent match summaries.
+  - **Rank Numbering & Provisional Rule**: In **both** views, **only the single highest-rated settled/non-provisional version of each bot family receives a numerical Rank (`1`, `2`, `3`...)** ordered by **Conservative Rating (`rating_lcb = rating_elo - 1.96 * rating_se`)**. A bot's secondary active version (or any retired historical version) has a blank Rank cell (`—`), and versions with `< 10` matches or `rating_se > 60` display `Prov.`.
+- **Leaderboard Table Columns**:
+  - `Rank` (`#1`, plus `[rank_min–rank_max]` tooltip/badge), `Bot` (avatar icon + Name + Version badge + open-source badge), `Rating` (Conservative Rating `LCB`), `Elo` ($\pm$ 95% CI, anchored to `1500`), `GXE` (%), `W–L–T` (`Matches`), `Streak` (`W4` / `L2`), `Peak` (`Best Rank` / `Max Elo`), and `LOS` (probability of superiority over the next-ranked bot).
+- **Head-to-Head Matrix (`/leaderboard/<ladder>/matrix.html`) & Bot Profile Pages (`/leaderboard/<ladder>/<bot-slug>/index.html`)**:
+  - **Matrix**: Cross-table showing pairwise match score %, `W–L–T` match counts, and pairwise `LOS` between every pair of bots.
+  - **Bot Profile Page**:
+    1. **Overview & Project Metadata** (from `static/projects.yml`).
+    2. **Current vs. Maximum Standing Card** (`Rank`, `Rating [LCB]`, `Elo ± 95% CI`, `GXE`).
+    3. **Top 1 / Top 10 / Top 100 Reign & Duration Card** (`Current Streak`, `Longest Streak`, and `Total Cumulative Duration` formatted in both **Days** and **Hours**, e.g. `18.4 d (442 h)`).
+    4. **Match Record & Streaks Card** (`W–L–T`, `Total Matches`, `Current Streak`, `Longest Win Streak`, `Longest Loss Streak`, plus hardware reliability telemetry: crash/timeout/OOM rates, average decision time `ms`, peak RAM `MiB`).
+    5. **Multi-Version Rating History Charts** (Lineage Step Chart + Daily Time-Series & Convergence Curves).
+    6. **Sortable Head-to-Head Breakdown Table** against every opponent (`W–L–T`, `Matches`, `Score %`, `Expected Score %`, `Residual Δ%` [highlighting stylistic **Nemesis** / **Best Matchup**], `Current Streak vs. Opponent`, `Max Win/Loss Streak vs. Opponent`, and `LOS`).
+    7. **Recent Match Summaries**.
 - **Zero Team Leaks & Sanitized Crash Telemetry**:
   - Replays, team sets, and species lists are never shown on `pkmn.ai`.
   - Offline smoke tests (run on non-secret dummy teams) show full `stderr` and protocol traces to the submitting developer.
   - Real ladder matches suppress `stderr` and show only timestamp, opponent version, Game 1 & 2 outcomes, turn counts, peak RAM, bank time remaining, optional opaque team provenance labels (`"Bot A Team #5"` in Bring-$T$-to-the-Pot ladders), and end reason (`normal`, `tie_1000_turns`, `timeout`, `oom`, `crash`, `invalid_choice_3x`).
+
+---
+
+### Post-Match Incremental Computation & Performance Architecture (`< 1.5 ms` Total Budget)
+
+To guarantee that post-match processing never degrades as the Arena accumulates hundreds of thousands of matches over years of operation, **no post-match step ever queries or scans the historical `matches` table**. Every statistic is maintained as an incremental state machine over fixed-size tables (`ladder_entries`, `bot_ladder_stats`, and `pair_aggregates`):
+
+#### 1. Complexity & Wall-Clock Latency Breakdown per Completed Match
+
+| Post-Match Step | Target Tables / Data Structures | Asymptotic Complexity | Wall-Clock Time ($M = 150$ versions) | Why It Never Scales with Total Historical Matches ($N_{\text{matches}}$) |
+| :--- | :--- | :---: | :---: | :--- |
+| **1. Match `W/L/T` & Streak Update** | 2 rows in `ladder_entries`, 2 rows in `bot_ladder_stats`, 1 row in `pair_aggregates` | **$O(1)$** | **`< 0.03 ms`** | Updates `ww/wt/split/tl/ll` and `cur/max_win_streak`, `cur/max_loss_streak`, and H2H `cur_streak` in-place on the 2 participating bots. |
+| **2. Warm-Started Davidson MAP & Cholesky Covariance** | In-memory `PairMatchCounts[]` ($\le \binom{M}{2}$ pairs) + $M \times M$ `Float64Array` Hessian | **$O(M^2 + \tfrac{1}{6}M^3)$** | **`~0.75 ms`** | Warm-starting `theta` from the previous solve converges in **3–5 Newton steps** (`~0.15 ms`); Cholesky inversion of $150 \times 150$ `Float64Array` takes `~0.60 ms`. |
+| **3. Conservative Ranking & Guaranteed Rank Bounds (`[rank_min, rank_max]`)** | $B$ active bot families ($B \le 85$) | **$O(B^2)$** | **`~0.04 ms`** | $85 \times 85 = 7,225$ fast inline `normalCdf` checks over the already-inverted covariance matrix $\boldsymbol{\Sigma}$. |
+| **4. Peak Milestones & Top-1/10/100 Duration Clocks** | $M$ rows in `ladder_entries` + $B$ rows in `bot_ladder_stats` | **$O(M)$** | **`~0.02 ms`** | Compares current values against stored `max_*` fields and adds $\Delta t = t_{\text{now}} - t_{\text{prev}}$ to `top{1,10,100}_total_s` for bots with `rank_max <= K`. |
+| **5. SQLite WAL Transaction & Atomic Static HTML Write** | Single `BEGIN IMMEDIATE ... COMMIT` + template string render | **$O(M)$** | **`~1.5–4.0 ms`** | Batch-updates the $M$ rows of ladder $L$ in one WAL commit and atomically renames pre-rendered static `.html` / `.json` files. |
+| **Total Post-Match Pipeline** | — | **$O(M^3)$** *(independent of $N_{\text{matches}}$)* | **`~2.3–4.8 ms` total** | **0.00% CPU overhead** relative to a 1–25 minute 2-game Pokémon match. |
+
+#### 2. Reference Incremental Statistics Updater (`arena/src/stats-updater.ts`)
+
+```typescript
+import { computeDavidsonRatings, computeGuaranteedRankBounds, computeLOS, type PairMatchCounts } from './ratings';
+
+export type TernaryMatchOutcome = 'W' | 'L' | 'T';
+
+export interface VersionStatsRow {
+  versionId: number;
+  botId: number;
+  role: 'anchor' | 'champion' | 'challenger' | 'retired' | 'quarantined';
+  ratingElo: number;
+  ratingSe: number;
+  ratingLcb: number;
+  gxe: number;
+  rankCurrent: number | null;
+  rankMin: number | null;
+  rankMax: number | null;
+  matchesPlayed: number;
+  ww: number;
+  wt: number;
+  split: number;
+  tl: number;
+  ll: number;
+  curWinStreak: number;
+  curLossStreak: number;
+  maxWinStreak: number;
+  maxLossStreak: number;
+  bestRank: number | null;
+  bestRankAt: number | null;
+  maxRatingLcb: number | null;
+  maxElo: number | null;
+  maxEloSe: number | null;
+  maxGxe: number | null;
+  maxEloAt: number | null;
+  top1EnteredAt: number | null;
+  top1MaxStreakS: number;
+  top1TotalS: number;
+  top10EnteredAt: number | null;
+  top10MaxStreakS: number;
+  top10TotalS: number;
+  top100EnteredAt: number | null;
+  top100MaxStreakS: number;
+  top100TotalS: number;
+  settledAt: number | null;
+}
+
+/**
+ * Convert a 9-category 2-game blind-pair outcome ('WW'..'LL', from v1's perspective)
+ * into a ternary Match W/L/T outcome for v1 and v2.
+ */
+export function toTernaryMatchOutcome(
+  matchCategory: 'WW' | 'WT' | 'TW' | 'WL' | 'LW' | 'TT' | 'TL' | 'LT' | 'LL',
+): { v1: TernaryMatchOutcome; v2: TernaryMatchOutcome } {
+  if (matchCategory === 'WW' || matchCategory === 'WT' || matchCategory === 'TW') {
+    return { v1: 'W', v2: 'L' };
+  }
+  if (matchCategory === 'LL' || matchCategory === 'LT' || matchCategory === 'TL') {
+    return { v1: 'L', v2: 'W' };
+  }
+  return { v1: 'T', v2: 'T' };
+}
+
+/**
+ * O(1) in-place update of a bot version's (or bot family's) consecutive Match Win / Loss streaks.
+ */
+export function applyMatchOutcomeToStreaks(
+  row: { curWinStreak: number; curLossStreak: number; maxWinStreak: number; maxLossStreak: number },
+  outcome: TernaryMatchOutcome,
+): void {
+  if (outcome === 'W') {
+    row.curWinStreak += 1;
+    row.curLossStreak = 0;
+    if (row.curWinStreak > row.maxWinStreak) row.maxWinStreak = row.curWinStreak;
+  } else if (outcome === 'L') {
+    row.curLossStreak += 1;
+    row.curWinStreak = 0;
+    if (row.curLossStreak > row.maxLossStreak) row.maxLossStreak = row.curLossStreak;
+  } else {
+    // A 1-1 split ('T') ends both consecutive outright win streaks and consecutive outright loss streaks.
+    row.curWinStreak = 0;
+    row.curLossStreak = 0;
+  }
+}
+
+/**
+ * O(1) in-place update of head-to-head streaks on the single `pair_aggregates` row (v_low_id < v_high_id).
+ */
+export function applyPairwiseStreakUpdate(
+  pairRow: { curStreak: number; vLowMaxWinStreak: number; vHighMaxWinStreak: number },
+  vLowOutcome: TernaryMatchOutcome,
+): void {
+  if (vLowOutcome === 'W') {
+    pairRow.curStreak = pairRow.curStreak > 0 ? pairRow.curStreak + 1 : 1;
+    if (pairRow.curStreak > pairRow.vLowMaxWinStreak) pairRow.vLowMaxWinStreak = pairRow.curStreak;
+  } else if (vLowOutcome === 'L') {
+    pairRow.curStreak = pairRow.curStreak < 0 ? pairRow.curStreak - 1 : -1;
+    const highStreak = -pairRow.curStreak;
+    if (highStreak > pairRow.vHighMaxWinStreak) pairRow.vHighMaxWinStreak = highStreak;
+  } else {
+    pairRow.curStreak = 0;
+  }
+}
+
+/**
+ * O(1) in-place update of Top-K (K = 1, 10, 100) consecutive streak and cumulative duration clocks.
+ * `deltaSec` is capped at 3600s (1 hour) per match interval so scheduled Arena maintenance windows
+ * never artificially inflate a bot's active streak duration.
+ */
+function advanceTopKClock(
+  enteredAt: number | null,
+  maxStreakS: number,
+  totalS: number,
+  qualifiesNow: boolean,
+  nowSec: number,
+  deltaSec: number,
+): { enteredAt: number | null; maxStreakS: number; totalS: number } {
+  let nextEntered = enteredAt;
+  let nextMax = maxStreakS;
+  let nextTotal = totalS;
+
+  if (enteredAt !== null) {
+    // Bot was already in Guaranteed Top-K during the interval leading up to `nowSec`.
+    nextTotal += deltaSec;
+    const currentRunS = Math.max(0, nowSec - enteredAt);
+    if (currentRunS > nextMax) nextMax = currentRunS;
+    if (!qualifiesNow) nextEntered = null; // Dropped out of Guaranteed Top-K
+  } else if (qualifiesNow) {
+    // Newly entered Guaranteed Top-K on this match.
+    nextEntered = nowSec;
+  }
+
+  return { enteredAt: nextEntered, maxStreakS: nextMax, totalS: nextTotal };
+}
+
+/**
+ * Complete post-match statistics update for ladder L:
+ *  - Re-solves Davidson MAP ratings with warm start (< 0.8 ms)
+ *  - Ranks bot families by Conservative Rating (LCB = Elo - 1.96 * SE)
+ *  - Computes 95% Guaranteed Plausible Rank Bounds [rankMin, rankMax]
+ *  - Updates settled Peak Milestones (Best Rank, Max LCB, Max Settled Elo, Max Settled GXE)
+ *  - Advances Guaranteed Top-1, Top-10, and Top-100 Streak/Duration clocks in O(M)
+ */
+export function updatePostMatchStatsAndStandings(
+  versions: VersionStatsRow[],
+  pairs: PairMatchCounts[],
+  anchorIndex: number,
+  nowSec: number,
+  prevMatchSec: number | null,
+  warmStartTheta?: Float64Array,
+): Float64Array {
+  const M = versions.length;
+  const deltaSec = prevMatchSec !== null ? Math.min(3600, Math.max(0, nowSec - prevMatchSec)) : 0;
+
+  // 1. Solve batch MAP Generalized Davidson model + Laplace posterior covariance
+  const res = computeDavidsonRatings(M, pairs, anchorIndex, 1500, warmStartTheta);
+
+  // 2. Update raw rating fields and check the Settlement Gate (>= 25 matches AND SE <= 30 Elo)
+  for (let i = 0; i < M; i++) {
+    const v = versions[i];
+    v.ratingElo = res.elo[i];
+    v.ratingSe = res.eloStd[i];
+    v.ratingLcb = res.eloLcb[i];
+    v.gxe = res.gxe[i];
+    if (v.settledAt === null && v.matchesPlayed >= 25 && v.ratingSe <= 30.0) {
+      v.settledAt = nowSec;
+    }
+  }
+
+  // 3. Select the single representative active version (highest Conservative Rating `ratingLcb`)
+  //    for each bot family that passes the Provisional Display Gate (>= 10 matches & SE <= 60 Elo).
+  const repByBot = new Map<number, number>(); // botId -> index in `versions`
+  for (let i = 0; i < M; i++) {
+    const v = versions[i];
+    const isActive = v.role === 'anchor' || v.role === 'champion' || v.role === 'challenger';
+    const passesProvisionalGate = v.matchesPlayed >= 10 && v.ratingSe <= 60.0;
+    if (!isActive || !passesProvisionalGate) {
+      v.rankCurrent = null;
+      v.rankMin = null;
+      v.rankMax = null;
+      continue;
+    }
+    const prevIdx = repByBot.get(v.botId);
+    if (prevIdx === undefined || v.ratingLcb > versions[prevIdx].ratingLcb) {
+      if (prevIdx !== undefined) {
+        versions[prevIdx].rankCurrent = null;
+        versions[prevIdx].rankMin = null;
+        versions[prevIdx].rankMax = null;
+      }
+      repByBot.set(v.botId, i);
+    } else {
+      v.rankCurrent = null;
+      v.rankMin = null;
+      v.rankMax = null;
+    }
+  }
+
+  // 4. Order representative bot families by descending Conservative Rating (`ratingLcb`)
+  //    and compute their 95% Guaranteed Rank Bounds [rankMin, rankMax].
+  const repIndices = [...repByBot.values()].sort((a, b) => versions[b].ratingLcb - versions[a].ratingLcb);
+  const { rankMin, rankMax } = computeGuaranteedRankBounds(
+    repIndices,
+    res.theta,
+    res.covariance,
+    res.eloLcb,
+    res.eloUcb,
+    M,
+    0.95,
+  );
+
+  for (let r = 0; r < repIndices.length; r++) {
+    const idx = repIndices[r];
+    versions[idx].rankCurrent = r + 1;
+    versions[idx].rankMin = rankMin[r];
+    versions[idx].rankMax = rankMax[r];
+  }
+
+  // 5. Update Peak / Maximum Records and Guaranteed Top-1 / Top-10 / Top-100 Clocks in O(M)
+  for (let i = 0; i < M; i++) {
+    const v = versions[i];
+
+    // Conservative Rating (LCB) naturally penalizes uncertainty and can be tracked once non-provisional
+    if (v.matchesPlayed >= 10 && (v.maxRatingLcb === null || v.ratingLcb > v.maxRatingLcb)) {
+      v.maxRatingLcb = v.ratingLcb;
+    }
+
+    // Peak point estimates (Max Elo, Max GXE, Best Rank) require full Settlement (settledAt !== null)
+    // so early small-sample volatility never creates fake all-time peaks.
+    if (v.settledAt !== null) {
+      if (v.maxElo === null || v.ratingElo > v.maxElo) {
+        v.maxElo = v.ratingElo;
+        v.maxEloSe = v.ratingSe;
+        v.maxEloAt = nowSec;
+      }
+      if (v.maxGxe === null || v.gxe > v.maxGxe) {
+        v.maxGxe = v.gxe;
+      }
+      if (v.rankCurrent !== null && (v.bestRank === null || v.rankCurrent < v.bestRank)) {
+        v.bestRank = v.rankCurrent;
+        v.bestRankAt = nowSec;
+      }
+    }
+
+    // Guaranteed Top-K qualification:
+    // - Top 1 requires being settled AND holding #1 by Conservative Rating (LCB)
+    // - Top 10 / Top 100 require worst-case 95% plausible rank `rankMax <= K` (so even a high-variance
+    //   bot whose LCB already clears the #10/#100 bar accrues Top-10/Top-100 time immediately!)
+    const inTop1 = v.settledAt !== null && v.rankCurrent === 1;
+    const inTop10 = v.rankMax !== null && v.rankMax <= 10;
+    const inTop100 = v.rankMax !== null && v.rankMax <= 100;
+
+    const c1 = advanceTopKClock(v.top1EnteredAt, v.top1MaxStreakS, v.top1TotalS, inTop1, nowSec, deltaSec);
+    v.top1EnteredAt = c1.enteredAt;
+    v.top1MaxStreakS = c1.maxStreakS;
+    v.top1TotalS = c1.totalS;
+
+    const c10 = advanceTopKClock(v.top10EnteredAt, v.top10MaxStreakS, v.top10TotalS, inTop10, nowSec, deltaSec);
+    v.top10EnteredAt = c10.enteredAt;
+    v.top10MaxStreakS = c10.maxStreakS;
+    v.top10TotalS = c10.totalS;
+
+    const c100 = advanceTopKClock(v.top100EnteredAt, v.top100MaxStreakS, v.top100TotalS, inTop100, nowSec, deltaSec);
+    v.top100EnteredAt = c100.enteredAt;
+    v.top100MaxStreakS = c100.maxStreakS;
+    v.top100TotalS = c100.totalS;
+  }
+
+  return res.theta;
+}
+```
 
 ### Time-Series Rating Charts (Global Top-10 Race & Per-Bot Version Lineage)
 
