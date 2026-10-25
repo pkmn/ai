@@ -3,7 +3,7 @@ import pkmn from "@pkmn/eslint-config";
 export default [...pkmn, {
   ignores: ["eslint.config.mjs", "build/", "private/"]
 }, {
-  files: ["server/index.ts", "static/build.ts"],
+  files: ["server/*.ts", "static/build.ts"],
   rules: {
     "@typescript-eslint/no-require-imports": "off",
     "@typescript-eslint/no-var-requires": "off",
