@@ -1,18 +1,23 @@
-import {Webhook} from 'standardwebhooks';
+import * as crypto from 'crypto';
 
 import {type Delivery, applyLeaders, verify} from '../server/discord';
 
-const WEBHOOK = new Webhook('d2ViaG9vay1zZWNyZXQ=');
+const SECRET = Buffer.from('d2ViaG9vay1zZWNyZXQ=', 'base64');
+const NOW = 1700000000000;
 const BODY = '{"version":1,"leaders":[]}';
 const VERSION2 = '{"version":2,"leaders":[]}';
 const MALFORMED = '{"version":1,"leaders":{}}';
 
-const seconds = (at: Date) => Math.floor(at.getTime() / 1000);
+function sign(id: string, timestamp: number, body: string, secret: Buffer = SECRET) {
+  return 'v1,' + crypto.createHmac('sha256', secret)
+    .update(`${id}.${timestamp}.${body}`).digest('base64');
+}
 
-function signed(body: string, at: Date, webhook = WEBHOOK) {
-  const id = String(at.getTime());
-  return {'webhook-id': id, 'webhook-timestamp': String(seconds(at)),
-    'webhook-signature': webhook.sign(id, at, body)};
+function signed(body: string, at: number, secret: Buffer = SECRET) {
+  const id = String(at);
+  const timestamp = Math.floor(at / 1000);
+  return {'webhook-id': id, 'webhook-timestamp': String(timestamp),
+    'webhook-signature': sign(id, timestamp, body, secret)};
 }
 
 function delivery(...leaders: Delivery['leaders']): Delivery {
@@ -23,37 +28,35 @@ interface Rejection {
   name: string;
   reason: string;
   body?: string;
-  at?: Date;
-  webhook?: Webhook;
+  at?: number;
+  secret?: Buffer;
   headers?: Record<string, string>;
   lastAccepted?: number;
 }
 
 describe('verify', () => {
-  const now = new Date();
-
   test('returns the delivery and when it was sent', () => {
-    expect(verify(Buffer.from(BODY), signed(BODY, now), WEBHOOK, 0))
-      .toEqual({delivery: JSON.parse(BODY), sent: seconds(now)});
+    expect(verify(Buffer.from(BODY), signed(BODY, NOW), SECRET, 0, NOW))
+      .toEqual({delivery: JSON.parse(BODY), sent: NOW / 1000});
   });
 
   test.each<Rejection>([
-    {name: 'wrong secret', reason: 'No matching signature found', webhook: new Webhook('b3RoZXI=')},
-    {name: 'unsigned', reason: 'Missing required headers', headers: {}},
-    {name: 'stale', reason: 'Message timestamp too old', at: new Date(now.getTime() - 301_000)},
-    {name: 'future', reason: 'Message timestamp too new', at: new Date(now.getTime() + 301_000)},
-    {name: 'applied', reason: 'already applied', lastAccepted: seconds(now)},
+    {name: 'wrong secret', reason: 'bad signature', secret: Buffer.from('other')},
+    {name: 'unsigned', reason: 'unsigned', headers: {}},
+    {name: 'stale', reason: 'stale', at: NOW - 301_000},
+    {name: 'future', reason: 'stale', at: NOW + 301_000},
+    {name: 'applied', reason: 'already applied', lastAccepted: NOW / 1000},
     {name: 'unknown version', reason: 'unknown version or shape', body: VERSION2},
     {name: 'malformed leaders', reason: 'unknown version or shape', body: MALFORMED},
   ])('throws on $name', ({
-    reason, body = BODY, at = now, webhook = WEBHOOK, headers = signed(body, at, webhook),
+    reason, body = BODY, at = NOW, secret = SECRET, headers = signed(body, at, secret),
     lastAccepted = 0,
   }) => {
-    expect(() => verify(Buffer.from(body), headers, WEBHOOK, lastAccepted)).toThrow(reason);
+    expect(() => verify(Buffer.from(body), headers, SECRET, lastAccepted, NOW)).toThrow(reason);
   });
 
   test('pins the signature of a known body', () => {
-    expect(WEBHOOK.sign('1700000000000', new Date(1700000000000), BODY))
+    expect(sign('1700000000000', 1700000000, BODY))
       .toBe('v1,2QBVDD/rCh2YNefjsl0i9mAgfPPEHQ43EDhGAe12PAs=');
   });
 });
@@ -110,7 +113,7 @@ describe('applyLeaders', () => {
 
   test('gives the role to an override over what vgc.bot sends', async () => {
     const calls = stubFetch([{user: {id: '111', username: 'nessiedev'}, roles: []}]);
-    await applyLeaders('token', {...CONFIG, bots: {b1: '111'}}, delivery(
+    await applyLeaders('token', {...CONFIG, bots: {b1: 'NessieDev'}}, delivery(
       {ladder: 'a', bot: {id: 'b1', name: 'Bot'}, owner: {discordId: '999'}}
     ));
     expect(calls).toContainEqual({method: 'PUT',
