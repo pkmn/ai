@@ -12,14 +12,12 @@ const root = path.join(__dirname, '..', '..');
 const DISCORD_API = 'https://discord.com/api/v10';
 const HOOK_PATH = '/hooks/vgc';
 const MAX_AGE_MS = 5 * 60_000;
-const MAX_BODY_BYTES = 16 * 1024;
-const RECONCILE_MS = 60_000;
 
 interface Config {
   guild: string;
   // vgc.bot ladder id -> Discord role id.
   ladders: {[ladder: string]: string};
-  // vgc.bot bot id or name -> Discord id or username, only with the owner's agreement.
+  // vgc.bot bot id or name -> Discord user id, only with the owner's agreement.
   bots?: {[bot: string]: string};
 }
 
@@ -65,11 +63,13 @@ export function verify(
     return {kind: 'reject', status: 401, reason: 'unsigned'};
   }
 
+  if (!/^sha256=[0-9a-f]{64}$/.test(signature)) {
+    return {kind: 'reject', status: 401, reason: 'bad signature'};
+  }
+
   const expected = Buffer.from('sha256=' + crypto.createHmac('sha256', secret)
     .update(`${timestamp}.`).update(body).digest('hex'));
-  // Header bytes decode as latin1: equal string lengths can still differ in bytes.
-  const actual = Buffer.from(signature);
-  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
+  if (!crypto.timingSafeEqual(Buffer.from(signature), expected)) {
     return {kind: 'reject', status: 401, reason: 'bad signature'};
   }
 
@@ -141,13 +141,6 @@ async function fetchGuildMembers(token: string, guild: string): Promise<GuildMem
   return all;
 }
 
-export function findMember(members: GuildMember[], owner?: string): GuildMember | undefined {
-  if (!owner) return undefined;
-  const lower = owner.toLowerCase();
-  return members.find(m => m.user.id === owner) ??
-    members.find(m => m.user.username.toLowerCase() === lower);
-}
-
 export async function applyLeaders(
   token: string, config: Config, delivery: Delivery
 ): Promise<boolean> {
@@ -163,14 +156,7 @@ export async function applyLeaders(
       const override = leader.bot &&
         (config.bots?.[leader.bot.id] ?? config.bots?.[leader.bot.name]);
       const ownerId = override ?? leader.owner?.discordId;
-      let owner: GuildMember | undefined;
-      if (override) {
-        owner = findMember(members, override);
-      } else if (leader.owner) {
-        // vgc.bot's id must match the member's id, never a username or nickname.
-        const discordId = leader.owner.discordId;
-        owner = members.find(m => m.user.id === discordId);
-      }
+      const owner = ownerId ? members.find(m => m.user.id === ownerId) : undefined;
       if (ownerId && !owner) console.log(`[${leader.ladder}] ${ownerId} is not in the server`);
 
       for (const member of members) {
@@ -199,48 +185,8 @@ export async function applyLeaders(
   return !failed;
 }
 
-// Applies the newest delivery, retrying each tick until it succeeds, one at a time.
-export function reconciler(
-  apply: (delivery: Delivery) => Promise<boolean>, everyMs: number
-) {
-  let pending: Delivery | undefined;
-  let applying = false;
-  const tick = async () => {
-    if (applying || !pending) return;
-    const delivery = pending;
-    applying = true;
-    let ok: boolean;
-    try {
-      ok = await apply(delivery);
-    } catch (err) {
-      console.error('Could not apply the ladder leaders:', err);
-      ok = false;
-    }
-    applying = false;
-    if (ok && pending === delivery) pending = undefined;
-    if (pending !== delivery) await tick();
-  };
-  const interval = setInterval(() => {
-    tick().catch(err => console.error(err));
-  }, everyMs);
-  interval.unref();
-  return {
-    offer(delivery: Delivery) {
-      pending = delivery;
-      tick().catch(err => console.error(err));
-    },
-    stop() {
-      clearInterval(interval);
-    },
-  };
-}
-
 export function serve(token: string, secret: string, port: number) {
   let lastAccepted = 0;
-  const queue = reconciler(
-    delivery => applyLeaders(token, loadConfig(), delivery),
-    RECONCILE_MS
-  );
 
   const server = http.createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== HOOK_PATH) {
@@ -248,22 +194,9 @@ export function serve(token: string, secret: string, port: number) {
       return;
     }
     const chunks: Buffer[] = [];
-    let size = 0;
-    let oversized = false;
-    req.on('data', (chunk: Buffer) => {
-      if (oversized) return;
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        // Do not destroy the socket, or the 413 can be lost.
-        oversized = true;
-        res.writeHead(413, {Connection: 'close'}).end();
-        return;
-      }
-      chunks.push(chunk);
-    });
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       try {
-        if (oversized || res.writableEnded) return;
         const verified = verify(Buffer.concat(chunks), req.headers, secret, lastAccepted);
         switch (verified.kind) {
           case 'ignore':
@@ -278,7 +211,9 @@ export function serve(token: string, secret: string, port: number) {
             lastAccepted = verified.sent;
             // vgc.bot does not wait for the roles: answer first, then apply.
             res.writeHead(204).end();
-            queue.offer(verified.delivery);
+            applyLeaders(token, loadConfig(), verified.delivery).catch(err => {
+              console.error('Could not apply the ladder leaders:', err);
+            });
             return;
         }
       } catch (err) {
@@ -288,7 +223,6 @@ export function serve(token: string, secret: string, port: number) {
       }
     });
   });
-  server.on('close', () => queue.stop());
   server.listen(port, '127.0.0.1', () => {
     console.log(`Listening for vgc.bot's ladder leaders on 127.0.0.1:${port}${HOOK_PATH}`);
   });
