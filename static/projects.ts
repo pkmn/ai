@@ -53,6 +53,10 @@ const RANKING = [
 // eslint-disable-next-line max-len
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
+const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
+  'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>';
+
 export function page(dir: string) {
   const buf: string[] = [];
 
@@ -119,7 +123,8 @@ export function page(dir: string) {
         : `${project.active[0]} – ${project.active[1]}`)
       : `${project.active} – <em>present</em>`;
     const title = project.name ?? `<em>${project.identifier ?? identifier}</em>`;
-    buf.push(`<h3><a href="#${id}" class="subtle">${title}</a></h3>`);
+    const site = project.site ? `<a href="${project.site}" class="subtle">${ICON}</a>` : '';
+    buf.push(`<h3><a href="#${id}" class="subtle">${title}</a>${site}</h3>`);
     buf.push('<table>');
     if (project.paper) {
       const p = bibliography[project.paper];
@@ -175,7 +180,17 @@ export function page(dir: string) {
   return {
     path: '/projects/',
     title: 'Projects | pkmn.ai',
-    style: `.description { text-align: center; } td:first-child { width: 8ch; } ${style}`,
+    style: `
+      .description { text-align: center; }
+      td:first-child { width: 8ch; }
+      h3 svg {
+        display: inline-block;
+        width: 0.7em;
+        height: 0.7em;
+        margin-left: 0.25em;
+        vertical-align: middle;
+      }
+      ${style}`,
     header: header('Projects'),
     content: buf.join(''),
     script:
