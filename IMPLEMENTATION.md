@@ -3717,6 +3717,8 @@ In constructed Live Tournaments (`gen1ou`, `gen3ou`, `gen9ou`, `gen9doublesou`),
 
 > [!IMPORTANT]
 > **Blind Pre-Game Team Lock (No Counter-Picking by Opponent Name)**: Because both bots lock in their teams *before* `@pkmn/sim` emits `|player|p1|...` and `|player|p2|...` and because `/tmp` is wiped after every single game, a bot cannot inspect its opponent's identity or adapt across games to counter-team a specific rival mid-series. Any mixed-strategy team variety must come from the bot's own randomized policy or pre-built repertoire.
+>
+> *(For tournaments run in **Blind-Pair / Arena-Assigned Team Mode** instead of BYOT—where every head-to-head matchup plays $M$ paired team-swap matches over a shared book of $2M$ teams—see [Section 13.5.2](#2-blind-pair-tournament-mode-fixed-2m-team-books-tcec-opening-suite--stratified-sampling) below.)*
 
 #### 2. How Concurrent Execution & Pondering Work in Pokémon
 Unlike chess (where White and Black strictly alternate moves), Pokémon is primarily a **simultaneous-action game** with occasional **asymmetric mid-turn switches** (faints and pivot moves like *U-turn*, *Volt Switch*, *Flip Turn*, and *Teleport*). Removing `SIGSTOP`/`SIGCONT` and running both bots concurrently unlocks three distinct performance and latency advantages:
@@ -4167,7 +4169,32 @@ In a GCP Live Tournament, **there are no 2-game paired matches—every game is a
 
 $$G_{\text{total}} = \frac{E(E-1)}{2} \times G \quad\text{total tournament games}, \qquad G_{\text{bot}} = (E - 1) \times G \quad\text{individual games per bot}$$
 
-#### 2. Balancing Anti-Starvation vs. Bot-Loading Churn (`selectNextTournamentBatch`)
+#### 2. Blind-Pair Tournament Mode: Fixed $2M$-Team Books ("TCEC Opening Suite") & Stratified Sampling
+When a tournament is instead run in **Blind-Pair (Arena-Assigned Team Pool) Mode**—testing pure piloting over $M$ paired matches ($G = 2M$ games, e.g., $M = 20$ matches = $40$ games per head-to-head matchup) where opponents play $(T_{2m-1}, T_{2m})$ in Game 1 and swap to $(T_{2m}, T_{2m-1})$ in Game 2—how teams are selected becomes critical because $M = 20$ is much smaller than the thousands of matches played over time in the continuous CCRL sandbox:
+
+1. **Why Blind-Pair Swapping Alone Does *Not* Eliminate Team-Draw Variance over $M = 20$ Matches**:
+   - Swapping teams within a single blind-pair match $(T_1, T_2) + (T_2, T_1)$ **only cancels first-order matchup asymmetry between $T_1$ and $T_2$** (i.e., if $T_1$ has a 70–30 advantage over $T_2$, neither bot gets a free win simply for holding $T_1$).
+   - It does **not** eliminate two major sources of short-series variance:
+     - **Bot $\times$ Team Affinity ("Preferred Teams" / Archetype Specialization)**: Even though both bots pilot both $T_1$ and $T_2$ across the 2-game match, **both games exclusively test who is better at piloting (and playing against) $T_1$ and $T_2$**. If Bot $A$ excels at piloting Stall/Balance and Bot $B$ excels at Hyper Offense, drawing two Balance teams $(T_1, T_2)$ favors Bot $A$ in *both* games of the pair—swapping $T_1$ and $T_2$ does not help Bot $B$. Even if only *one* team in the pair is a specialized archetype (e.g., $T_1$ is a Rain or Trick Room team that Bot $A$ pilots at a 55% win rate while Bot $B$ blunders with it at a 20% win rate), Bot $A$ gains a large expected-score edge across the pair simply because $T_1$ was drawn.
+     - **Matchup Polarization ("Forced 1–1 Splits" vs. "2–0 Sweepable" Pairs)**: If $(T_1, T_2)$ is a 90–10 hard-counter matchup, almost any two competent bots will split the pair 1–1 (each winning the game where they hold $T_1$), turning the match into a "dead draw" that compresses skill differences. Conversely, if $(T_1, T_2)$ is an interactive 50–50 matchup, the stronger pilot has a high probability of sweeping 2–0. If team pairs are drawn independently for each pairing in a round-robin, Contender $A$ might randomly draw many 90–10 auto-split pairs against weaker bots (dropping half-points in forced 1–1 ties), while Contender $B$ draws interactive 50–50 pairs against those same weaker bots and farms 2–0 sweeps.
+2. **Common Random Numbers (CRN): Reusing a Fixed Sequence of $M$ Team Pairs ($2M$ Teams) Across All Matchups**:
+   - Directly analogous to how **TCEC** and **CCC** run round-robin divisions over a fixed book of $M$ chess openings (where every pair of engines plays White and Black on Opening $1 \dots M$ in the same order), a Blind-Pair Tournament with $M$ matches per pairing uses a **fixed ordered book of $2M$ teams ($M$ pairs)**:
+
+$$\mathcal{B}_{\text{tourney}} = \bigl((T_1, T_2),\; (T_3, T_4),\; \dots,\; (T_{2M-1}, T_{2M})\bigr)$$
+
+   - For **every** head-to-head pairing $(A, B)$, $(A, C)$, $(B, C)$, etc., Match $1$ is played with $(T_1, T_2) + (T_2, T_1)$, Match $2$ with $(T_3, T_4) + (T_4, T_3)$, $\dots$, and Match $M$ with $(T_{2M-1}, T_{2M}) + (T_{2M}, T_{2M-1})$.
+   - This eliminates **100% of inter-pairing team-draw luck**: when comparing $A$'s score against $C$ with $B$'s score against $C$, both faced $C$ with the exact same teams in the exact same matchups. If Pair 4 is a 90–10 forced split, it is a forced split for the entire field.
+3. **The Statistical Trade-Off: Per-Pairing Fairness vs. Whole-Tournament Effective Sample Size**:
+   - Reusing the exact same $2M = 40$ teams across all $E - 1$ opponents of an $E$-entrant round-robin introduces one subtle trade-off:
+     - With $E = 10$ entrants ($9$ opponents $\times$ $20$ matches = $180$ matches per bot), *independent* team draws per matchup would evaluate each bot across $9 \times 40 = 360$ random team draws over the tournament, so 1 or 2 unrepresentative teams in the pool average out by the Law of Large Numbers.
+     - With a *fixed 40-team book* reused against all 9 opponents, each bot only sees those **40 teams** for the entire tournament, **playing each of the 40 teams $E - 1 = 9$ times** (once against every opponent). If those 40 teams were drawn purely at random from the master pool and happened by chance to over-represent Stall (or included 2 quirky teams that Bot $A$ specifically bugs out on), that 40-team sample skew gets **amplified $(E - 1)\times$** across every round of the tournament.
+4. **The "Best of Both Worlds" Solution: Stratified, Low-Polarization $2M$-Team Book Construction**:
+   - We capture the zero cross-pairing variance of the fixed $2M$-team book **without** suffering from random $2M$-team sample skew by constructing $\mathcal{B}_{\text{tourney}}$ from the master harvested pool **after submission freeze** using **Stratified & Polarization-Filtered Sampling**:
+     - **Post-Freeze Secret Generation**: The $2M = 40$ tournament teams are sampled *after* all entrant containers/bundles are locked on the tournament image so no competitor can pre-train or overfit to the 40 teams.
+     - **Strict 6-Species Core Uniqueness & Archetype Stratification**: Across all $2M = 40$ teams in the tournament book, enforce **at most 1 team per 6-species core** (`maxTeamsPerSpeciesCore = 1`) and stratify across metagame archetype buckets (Offense, Bulky Offense, Balance, Stall/Weather) in exact proportion to the master high-ladder pool so the 40-team book is guaranteed to mirror the true metagame distribution.
+     - **Anti-Mirror & Low-Polarization Pair Pairing**: Pair the $2M = 40$ selected teams into $M = 20$ match pairs $(T_{2m-1}, T_{2m})$ such that no pair shares $\ge 4$ species and no pair has an extreme prior matchup skew (rejecting pairs with estimated baseline win rate outside $[0.30, 0.70]$), ensuring all $M = 20$ pairs reward piloting skill rather than forcing automatic 1–1 splits.
+
+#### 3. Balancing Anti-Starvation vs. Bot-Loading Churn (`selectNextTournamentBatch`)
 In a GPU tournament where bots carry 1–10+ GB of neural network weights, ONNX/TensorRT engines, and large lookup tables, switching which bot is loaded on a VM incurs **cold-start churn** (reading weights from `pd-ssd` / `gs://pkmn-arena` into the VM's 48 GB DDR5 Linux page cache and warming JIT caches). Just like the Mac mini's Section 12 **Two-Tier LRU Hot Cache & Residency Bonus ($\rho_{ij}$)**, the Tournament Coordinator must balance two competing extremes:
 - **Extreme A — 1-Game Cycles (Zero Starvation, Maximum Churn)**: Playing 1 game of $(A, B)$ and immediately loading two new bots $(C, D)$ for the next game forces **$2 \times G_{\text{total}}$ bot loads** (e.g., **`6,600` bot loads** in an $E=12, G=50$ tournament of $3,300$ games), wasting 15–25% of weekend GPU time on disk/page-cache/CUDA cold starts.
 - **Extreme B — Full $G$-Game Blocks + Greedy Pivot (Minimum Churn, Severe Starvation)**: Playing all $G = 50$ games of `(Bot 1, Bot 2)` at once, then keeping `Bot 1` resident on `vm-01` while cycling `Bot 3 .. Bot E` through `vm-02` for $50$ games each, achieves the theoretical minimum number of bot loads ($\approx \binom{E}{2}$) but **completely starves the rest of the field**: `Bot 1` finishes all $550$ of its games early on Saturday while `Bot 11` and `Bot 12` sit at nearly $0$ games until Sunday afternoon.
@@ -4276,7 +4303,7 @@ export function selectNextTournamentBatch(
 }
 ```
 
-#### 3. How Many Individual Games per Head-to-Head Matchup ($G$) Should We Choose?
+#### 4. How Many Individual Games per Head-to-Head Matchup ($G$) Should We Choose?
 In an $E$-entrant Round-Robin where every pair plays $G$ individual games across $C = G / B$ mini-batch waves, statistical precision improves along **two axes**:
 1. **Direct Head-to-Head Crosstable Precision**: Standard error of a single cell $(i, j)$ in the crosstable is $\text{SE}(\hat{p}_{ij}) = \frac{50\%}{\sqrt{G}}$ (95% CI $= \pm \frac{98\%}{\sqrt{G}}$).
 2. **Overall Tournament Rating Precision ($\text{SE}(R_i)$)**: Because each bot plays $G_{\text{bot}} = (E - 1)G$ total games across the complete graph $K_E$, the Laplace posterior standard error of a bot's tournament rating $R_i$ (relative to the tournament field mean) is:
