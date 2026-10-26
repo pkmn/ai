@@ -100,12 +100,12 @@ root. OCI Containers must contain less than 32 OCI layers and the container
 `ENTRYPOINT` / `CMD` must run the agent.
 
 Tournaments will accept only the first successful entry for a project. Ladder
-competitors may have up to 2 versions of their project competing concurrently
-though may only submit a new version of their bot after both of the following
-conditions are true:
+competitors may have **up to 2 versions** of their project competing
+concurrently though may only submit a new version of their bot after both of the
+following conditions are true:
 
-  - 14 days has elapsed since their last successful ladder submission
-  - all of their previous submissions have settled to $`\text{SE}(R) \le
+  - **14 days** has elapsed since their last successful ladder submission
+  - all of their **previous submissions have settled** to $`\text{SE}(R) \le
   30\text{ Elo}` ($`\hat{\sigma} \le 0.173` nats, 95% CI $`\approx \pm 59\text{
   Elo}`) and at least 25 blind-pair matches (50 games)
 
@@ -113,8 +113,25 @@ A submission is determined to be successful if the the arena can successfully
 unpack and play through the first turn of a battle in the format(s) it is
 entered in. For ladder submissions, if there are already 2 versions of a project
 on the same ladder the weaker of the two versions for that format's ladder will
-be automatically retired, leaving the strongest version of the agent and the
-latest submission.
+be automatically retired, leaving the **strongest version of the agent and the
+latest submission**.
+
+### Format
+
+1. ps rules **frozen** Nov 2026 ([1511b8c](https://github.com/smogon/pokemon-showdown/commit/1511b8c)/ [v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0))
+2. regular timer but no pondering (see below)
+
+
+- **RBY**: `gen1singles`
+- **ADV**: `gen3singles`
+- **SV**: `gen9singles`
+
+rotational 
+
+- **RAND**: `gen9randoms`
+- **VGC**: `gen9championsvgc2026regmc`
+
+usage and random stats files will be provided for the period the teams are drawn from
 
 ### Protocol
 
@@ -127,26 +144,15 @@ TODO
 - no canceling
 usage stats access
 
-### Formats
 
-TODO ladder formats
+### Matchmaking
 
-regular timer but no pondering
-
-2026-04,2026-05,2026-06,2026-07,2026-08,2026-09
-
-- `gen1singles` = format unchanged since ~2015 except meta wise. prefer most recent 3-4 months
-- `gen3singles` = since sept 2025, manually filter out Quick Claw teams pre 2026-06
-- `gen9singles` - 2025-05 and later (post Terablast ban)
-- `gen9randoms` = Nov 2026
-
-
+rankings, pairs
 
 
 ---
 
 
-TODO format rules - Pokemon Showdown timer, isolation, 
 
 [smogon/pokemon-showdown@1511b8c](https://github.com/smogon/pokemon-showdown/commit/1511b8c) ([@pkmn/sim@0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0))
 
@@ -162,6 +168,7 @@ pkmn/stats: stats.json
 
 
 TODO rewrite 
+
 {summary="**Packaging**"}
 ::: details
 - Strip debug symbols from compiled binaries and shared libraries (`strip -x` on macOS, `strip --strip-unneeded` on Linux).
