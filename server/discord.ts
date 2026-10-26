@@ -8,7 +8,7 @@ import * as yaml from 'yaml';
 const root = path.join(__dirname, '..', '..');
 
 const DISCORD_API = 'https://discord.com/api/v10';
-const VGC_API = 'https://vgc.bot/api/partner/leaders';
+const SITES = ['vgc.bot', 'pkmn.bot'];
 const CYCLE_MS = 60_000;
 
 interface Config {
@@ -98,10 +98,12 @@ export async function fetchGuildMembers(token: string, guild: string): Promise<G
   return all;
 }
 
-export async function fetchLeaders(vgcToken: string): Promise<Leader[]> {
-  const res = await fetch(VGC_API, {headers: {Authorization: `Bearer ${vgcToken}`}});
+export async function fetchLeaders(site: string, vgcToken: string): Promise<Leader[]> {
+  const res = await fetch(`https://${site}/api/partner/leaders`, {
+    headers: {Authorization: `Bearer ${vgcToken}`},
+  });
   if (!res.ok) {
-    throw new Error(`vgc.bot API failed (${res.status})`);
+    throw new Error(`${site} API failed (${res.status})`);
   }
   const data = await res.json() as {leaders: Leader[]};
   return data.leaders;
@@ -114,7 +116,14 @@ export async function syncRoles(
   config: Config,
   state: Map<string, string | undefined>
 ) {
-  const leaders = await fetchLeaders(vgcToken);
+  const leaders: Leader[] = [];
+  for (const site of SITES) {
+    try {
+      leaders.push(...await fetchLeaders(site, vgcToken));
+    } catch (err) {
+      console.error(`Error fetching leaders from ${site}:`, err);
+    }
+  }
   let members: GuildMember[] | undefined;
   for (const leader of leaders) {
     const roleId = config.ladders[leader.ladder];
