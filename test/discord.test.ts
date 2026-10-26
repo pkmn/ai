@@ -60,7 +60,11 @@ function stubFetch(
       authorization: headers?.Authorization};
     calls.push(call);
     const status = fail(call) ? 500 : call.method === 'GET' ? 200 : 204;
-    const body = call.url.includes('vgc.bot') ? {leaders} : members;
+    const body = call.url.includes('vgc.bot')
+      ? {leaders: leaders.filter(l => l.ladder === 'a')}
+      : call.url.includes('pkmn.bot')
+        ? {leaders: leaders.filter(l => l.ladder !== 'a')}
+        : members;
     return Promise.resolve({status, ok: status < 300, text: () => Promise.resolve(''),
       json: () => Promise.resolve(status === 200 ? body : 'boom')});
   }) as unknown as typeof fetch;
@@ -80,18 +84,23 @@ describe('syncRoles', () => {
     globalThis.fetch = realFetch;
   });
 
-  test('asks vgc.bot with the token, then moves each role, fetching the members once', async () => {
-    const calls = stubFetch(LEADERS, MEMBERS);
-    await syncRoles('token', 'vgc', CONFIG, new Map());
-    expect(calls[0]).toEqual({method: 'GET', url: expect.stringContaining('vgc.bot'),
-      authorization: 'Bearer vgc'});
-    expect(memberFetches(calls)).toBe(1);
-    expect(calls.filter(c => c.method !== 'GET').map(({method, url}) => ({method, url}))).toEqual([
-      {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-a')},
-      {method: 'PUT', url: expect.stringContaining('/members/new/roles/role-a')},
-      {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-b')},
-    ]);
-  });
+  test('asks both sites with the token, then moves each role, fetching the members once',
+    async () => {
+      const calls = stubFetch(LEADERS, MEMBERS);
+      await syncRoles('token', 'vgc', CONFIG, new Map());
+      expect(calls.slice(0, 2)).toEqual([
+        {method: 'GET', url: expect.stringContaining('vgc.bot'), authorization: 'Bearer vgc'},
+        {method: 'GET', url: expect.stringContaining('pkmn.bot'), authorization: 'Bearer vgc'},
+      ]);
+      expect(memberFetches(calls)).toBe(1);
+      expect(
+        calls.filter(c => c.method !== 'GET').map(({method, url}) => ({method, url}))
+      ).toEqual([
+        {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-a')},
+        {method: 'PUT', url: expect.stringContaining('/members/new/roles/role-a')},
+        {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-b')},
+      ]);
+    });
 
   test('leaves ladders alone whose owner did not change', async () => {
     const calls = stubFetch(LEADERS, MEMBERS);
@@ -99,7 +108,10 @@ describe('syncRoles', () => {
     await syncRoles('token', 'vgc', CONFIG, state);
     const before = calls.length;
     await syncRoles('token', 'vgc', CONFIG, state);
-    expect(calls.slice(before).map(c => c.url)).toEqual([expect.stringContaining('vgc.bot')]);
+    expect(calls.slice(before).map(c => c.url)).toEqual([
+      expect.stringContaining('vgc.bot'),
+      expect.stringContaining('pkmn.bot'),
+    ]);
   });
 
   test('tries again next cycle while the owner is not in the server', async () => {
@@ -110,6 +122,19 @@ describe('syncRoles', () => {
     await syncRoles('token', 'vgc', CONFIG, state);
     expect(memberFetches(calls)).toBe(2);
     expect(calls.filter(c => c.method === 'PUT')).toEqual([]);
+  });
+
+  test('a failing site does not stop the next one', async () => {
+    const calls = stubFetch([
+      leader('a', null, {name: 'x', discordId: 'new'}),
+      leader('b', null, {name: 'x', discordId: 'new'}),
+    ], MEMBERS, call => call.url.includes('vgc.bot'));
+    const error = console.error;
+    console.error = () => undefined;
+    await syncRoles('token', 'vgc', CONFIG, new Map());
+    console.error = error;
+    expect(calls).toContainEqual(expect.objectContaining({method: 'PUT',
+      url: expect.stringContaining('/members/new/roles/role-b')}));
   });
 
   test('a failing ladder does not stop the next one', async () => {
