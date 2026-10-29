@@ -118,13 +118,25 @@ latest submission**.
 
 ### Format
 
-1. ps rules **frozen** Nov 2026 ([1511b8c](https://github.com/smogon/pokemon-showdown/commit/1511b8c)/ [v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0))
-2. regular timer but no pondering (see below)
-
+The competitive Pokémon formats permanently eligible for ladder submissions are currently:
 
 - **RBY**: `gen1singles`
 - **ADV**: `gen3singles`
 - **SV**: `gen9singles`
+
+These formats are defined to have the rules and mechanics from Pokémon Showdown as of Nov 2026
+([1511b8c](https://github.com/smogon/pokemon-showdown/commit/1511b8c)/
+[v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)). They will not be updated if the
+community later decides to [change](https://pkmn.cc/changes) the rules. The timer will be the same
+as on Pokémon Showdown however both **cancelling and pondering is disabled** --- your agent will not
+be able to cancel choices or run after making a decision while your opponent's choice is still
+pending.
+
+
+1. ps rules **frozen** Nov 2026 
+2. regular timer but no pondering (see below)
+
+
 
 rotational 
 
@@ -132,6 +144,9 @@ rotational
 - **VGC**: `gen9championsvgc2026regmc`
 
 usage and random stats files will be provided for the period the teams are drawn from
+
+Tournament's hosted on **pkmn.ai** will potentially feature different formats and will allow for
+pondering.
 
 ### Protocol
 
