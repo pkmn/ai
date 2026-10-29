@@ -26,6 +26,9 @@ const RANKING = [
   'Jaxcalibur', // top gen9randbats (94.6% GXE) & beat MDB Bo9
   'mikumiku', // top VGC (1857 Elo/81.2% GXE/ 1775 Glicko)
   'nessie', // top VGC Bo3 (1639 Elo/75.7% GXE/1714 Glicko)
+  'Mew\'s Truck', // top VGC (1942 Elo/81.0% GXE/1774 Glicko)
+  'openvgc', // top VGC (1929 Elo/80.8% GXE/1771 Glicko)
+  'Numbrion', // top gen9randomdoublesbattle (2136 Elo/88.5% GXE/1829 Glicko)
   'Foul Play', // reached #2 in gen9randbats (~92% GXE) & #10 CG OU (~83% GXE)
   'Metamon', // reached #1 gen1ou, 83.6% GXE/1743 Elo/82.4%
   'PokeCHAD', // 2000+ gen9randbats Elo, ~par with Foul Play
