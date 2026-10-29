@@ -691,3 +691,25 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Mew's Truck
+  site: https://www.smogon.com/forums/threads/3789554/
+  active: 2026 # October 10
+  engine: Custom
+  language: Rust
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: openvgc
+  site: https://www.smogon.com/forums/threads/3789558/
+  active: 2026 # October 10
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Numbrion
+  site: https://www.smogon.com/forums/threads/3790146/
+  active: 2026 # October 22
+  engine: Custom
+  language: Rust
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
