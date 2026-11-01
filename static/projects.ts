@@ -32,6 +32,7 @@ const RANKING = [
   'Foul Play', // reached #2 in gen9randbats (~92% GXE) & #10 CG OU (~83% GXE)
   'Metamon', // reached #1 gen1ou, 83.6% GXE/1743 Elo/82.4%
   'PokeCHAD', // 2000+ gen9randbats Elo, ~par with Foul Play
+  'Springtime Haze', // VGC Bo3 (1645 Elo/80.2% GXE/1763 Glicko)
   'Incinference', // 46th on VGC , 1583 Elo/77% GXE/1730 Glicko
   'IHTFP Abra', // reached #8 in gen4randombattle, ~1693 Elo
   'Athena', // reached #33 in gen7randombattle, ~1800 Elo
