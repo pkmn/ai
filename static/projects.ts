@@ -20,6 +20,14 @@ interface Project {
   language?: string | string[];
   platform?: {name: string; url: string}[];
   release?: {name: string; url: string};
+  arena?: {
+    slug?: string;
+    author?: string;
+    github?: string | string[];
+    discord_id?: string;
+    smogon?: string;
+    avatar?: string;
+  };
 }
 
 const RANKING = [

@@ -15,7 +15,9 @@ import * as research from './research';
 
 const fs = site.fs;
 
-const ROOT = path.join(__dirname, '..', '..');
+const ROOT = path.basename(path.dirname(__dirname)) === 'build'
+  ? path.join(__dirname, '..', '..')
+  : path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'static');
 

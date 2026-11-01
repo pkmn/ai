@@ -6,6 +6,8 @@ import {serve} from 'site';
 
 import {header, renderer, style} from '../static/build';
 
+import {registerWiki} from './wiki';
+
 const root = path.join(__dirname, '..', '..');
 const dirs =
   {root, out: path.join(root, 'build', 'static'), static: path.join(root, 'static')};
@@ -34,5 +36,7 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
     </nav>`,
     }));
   });
+
+  registerWiki(app);
 });
 
