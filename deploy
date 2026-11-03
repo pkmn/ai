@@ -23,6 +23,12 @@ command=${1:-reload}
 [ "${command}" = "restart" ] || git diff --quiet $HEAD server ||
     sudo service pkmn.ai-server $command
 
+[ "${command}" != "restart" ] && git diff --quiet $HEAD config/vouch.yml ||
+    sudo service pkmn.ai-vouch restart
+
+[ "${command}" != "restart" ] && git diff --quiet $HEAD server/discord.ts config/discord.yml ||
+    sudo service pkmn.ai-discord restart
+
 if [ -x private/deploy ]; then
     ./private/deploy
 fi

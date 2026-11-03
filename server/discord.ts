@@ -1,6 +1,7 @@
 require('source-map-support').install();
 
 import * as fs from 'fs';
+import * as http from 'http';
 import * as path from 'path';
 
 import * as yaml from 'yaml';
@@ -8,11 +9,14 @@ import * as yaml from 'yaml';
 const root = path.join(__dirname, '..', '..');
 
 const DISCORD_API = 'https://discord.com/api/v10';
+const VOUCH_VALIDATE = 'http://127.0.0.1:9090/vouch/validate';
+const AUTH_PORT = 9091;
 const SITES = ['vgc.bot', 'pkmn.bot'];
 const CYCLE_MS = 60_000;
 
 interface Config {
   guild: string;
+  channel?: string;
   ladders: {[ladder: string]: string};
   bots?: {[bot: string]: string};
   authors?: {[author: string]: string};
@@ -27,7 +31,7 @@ export interface Leader {
 // A member id, or a name to look a member up by.
 export type Owner = {id: string} | {name: string};
 
-interface GuildMember {
+export interface GuildMember {
   user: {
     id: string;
     username: string;
@@ -35,6 +39,22 @@ interface GuildMember {
   };
   nick?: string;
   roles: string[];
+}
+
+export interface DiscordMessage {
+  id: string;
+  type?: number;
+  timestamp: string;
+  content: string;
+  author: {
+    id: string;
+    username: string;
+  };
+  mentions?: Array<{
+    id: string;
+    username: string;
+  }>;
+  referenced_message?: DiscordMessage | null;
 }
 
 function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
@@ -114,7 +134,8 @@ export async function syncRoles(
   token: string,
   vgcToken: string,
   config: Config,
-  state: Map<string, string | undefined>
+  state: Map<string, string | undefined>,
+  members?: GuildMember[]
 ) {
   const leaders: Leader[] = [];
   for (const site of SITES) {
@@ -124,7 +145,6 @@ export async function syncRoles(
       console.error(`Error fetching leaders from ${site}:`, err);
     }
   }
-  let members: GuildMember[] | undefined;
   for (const leader of leaders) {
     const roleId = config.ladders[leader.ladder];
     if (!roleId) continue;
@@ -171,16 +191,162 @@ export async function syncRoles(
   }
 }
 
+export function formatMessage(
+  message: DiscordMessage,
+  members?: GuildMember[]
+): {date: string; line: string} | undefined {
+  // 0 = DEFAULT, 19 = REPLY
+  if (message.type !== undefined && message.type !== 0 && message.type !== 19) return undefined;
+  const content = message.content
+    .replace(/\r\n/g, '\n')
+    .replace(/<@!?(\d+)>/g, (match, id: string) => {
+      const name =
+        message.mentions?.find(u => u.id === id)?.username ??
+        members?.find(m => m.user.id === id)?.user.username;
+      return name ? `@${name}` : match;
+    })
+    .trim();
+  if (!content) return undefined;
+
+  const iso = new Date(message.timestamp).toISOString();
+  const date = iso.slice(0, 10);
+  const time = iso.slice(11, 19);
+
+  let prefix = '';
+  const ref = message.referenced_message;
+  if (ref) {
+    const refIso = new Date(ref.timestamp).toISOString();
+    const refDate = refIso.slice(0, 10);
+    const refTime = refIso.slice(11, 19);
+    const stamp = refDate === date ? refTime : `${refDate} ${refTime}`;
+    prefix = `@${ref.author.username}[${stamp}] `;
+  }
+
+  return {date, line: `[${time}] ${message.author.username}: ${prefix}${content}`};
+}
+
+export async function syncMessages(
+  token: string,
+  channel: string,
+  dir = path.join(root, 'logs'),
+  members?: GuildMember[]
+) {
+  fs.mkdirSync(dir, {recursive: true});
+  const cursorFile = path.join(dir, '.cursor');
+  let after = fs.existsSync(cursorFile)
+    ? fs.readFileSync(cursorFile, 'utf8').trim() || '0'
+    : '0';
+
+  while (true) {
+    const page = await discordRequest(
+      token,
+      `/channels/${channel}/messages?limit=100&after=${after}`
+    ) as DiscordMessage[];
+    if (!page.length) break;
+
+    const byDate = new Map<string, string[]>();
+    for (let i = page.length - 1; i >= 0; i--) {
+      const formatted = formatMessage(page[i], members);
+      if (!formatted) continue;
+      let lines = byDate.get(formatted.date);
+      if (!lines) {
+        lines = [];
+        byDate.set(formatted.date, lines);
+      }
+      lines.push(formatted.line);
+    }
+
+    for (const [date, lines] of byDate) {
+      fs.appendFileSync(path.join(dir, `${date}.txt`), `${lines.join('\n')}\n`);
+    }
+
+    after = page[0].id;
+    fs.writeFileSync(cursorFile, `${after}\n`);
+    if (page.length < 100) break;
+  }
+}
+
+export async function validateAuth(
+  url: string | undefined,
+  reqHeaders: http.IncomingHttpHeaders,
+  members: Set<string>
+): Promise<{status: number; headers: Record<string, string>}> {
+  if (url !== '/vouch/validate') {
+    return {status: 404, headers: {}};
+  }
+
+  const forwarded: Record<string, string> = {};
+  for (const key of ['cookie', 'authorization', 'x-vouch-token', 'host']) {
+    const val = reqHeaders[key];
+    if (typeof val === 'string') forwarded[key] = val;
+  }
+
+  const res = await fetch(VOUCH_VALIDATE, {headers: forwarded});
+  const headers: Record<string, string> = {};
+  res.headers.forEach((value, key) => {
+    if (key.toLowerCase().startsWith('x-vouch-')) {
+      headers[key] = value;
+    }
+  });
+
+  if (res.status !== 200) {
+    return {status: res.status, headers};
+  }
+
+  const user = res.headers.get('x-vouch-user');
+  return {status: user && members.has(user) ? 200 : 403, headers};
+}
+
 export async function run(token: string, vgcToken: string, once = false) {
   const state = new Map<string, string | undefined>();
-  while (true) {
-    try {
-      await syncRoles(token, vgcToken, loadConfig(), state);
-    } catch (err) {
-      console.error('Error syncing roles:', err);
+  let memberIds = new Set<string>();
+
+  const server = once
+    ? undefined
+    : http.createServer((req, res) => {
+      validateAuth(req.url, req.headers, memberIds)
+        .then(({status, headers}) => {
+          res.writeHead(status, headers);
+          res.end();
+        })
+        .catch(err => {
+          console.error('Error validating auth:', err);
+          res.writeHead(500);
+          res.end();
+        });
+    }).listen(AUTH_PORT, '127.0.0.1');
+
+  try {
+    while (true) {
+      const config = loadConfig();
+
+      let members: GuildMember[] | undefined;
+      try {
+        members = await fetchGuildMembers(token, config.guild);
+        memberIds = new Set(members.map(m => m.user.id));
+      } catch (err) {
+        console.error('Error fetching guild members:', err);
+      }
+
+      try {
+        await syncRoles(token, vgcToken, config, state, members);
+      } catch (err) {
+        console.error('Error syncing roles:', err);
+      }
+
+      if (config.channel) {
+        try {
+          await syncMessages(token, config.channel, undefined, members);
+        } catch (err) {
+          console.error('Error syncing messages:', err);
+        }
+      }
+
+      if (once) break;
+      await new Promise(resolve => setTimeout(resolve, CYCLE_MS));
     }
-    if (once) break;
-    await new Promise(resolve => setTimeout(resolve, CYCLE_MS));
+  } finally {
+    server?.close();
   }
 }
 

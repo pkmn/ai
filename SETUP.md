@@ -126,6 +126,40 @@ N_PREFIX=/opt/n npm install -g npm@latest
 service pkmn.ai-server restart
 ```
 
+## Go & Vouch Proxy
+
+As `root`, [download the latest Go binary](https://go.dev/dl/) and extract it to `/usr/local` and
+set up symlinks in `/usr/bin` so that it's on the `$PATH` (if not already installed):
+
+```sh
+cd /tmp
+wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz
+tar -C /usr/local -xvf go1.21.6.linux-amd64.tar.gz
+for binary in $(ls /usr/local/go/bin); do ln -s /usr/local/go/bin/$binary /usr/bin/$binary; done
+```
+
+As `pkmn`, install [`vouch-proxy`](https://github.com/vouch/vouch-proxy) and set `VOUCH_JWT_SECRET=...` and `VOUCH_SESSION_KEY=...` in `private/.env`:
+
+```sh
+GOPATH=/home/pkmn/ai/build go install github.com/vouch/vouch-proxy@v0.50.0
+```
+
+## Discord
+
+1. Update the Redirect URI in the [Discord Developer Portal — OAuth2](https://discord.com/developers/applications/689315793569447954/oauth2) to `https://pkmn.ai/vouch/auth` and copy the **Client Secret** into `OAUTH_CLIENT_SECRET=...` in `private/.env`.
+2. In the [Discord Developer Portal — Bot](https://discord.com/developers/applications/689315793569447954/bot) settings for `pkmn`:
+   - Toggle **OFF** **Public Bot**.
+   - Toggle **ON** **Server Members Intent** and **Message Content Intent** under **Privileged Gateway Intents**.
+   - Copy the **Bot Token** into `DISCORD_BOT_TOKEN=...` in `private/.env` (alongside `VGC_BOT_TOKEN=...`).
+3. In [Discord Developer Portal — Installation](https://discord.com/developers/applications/689315793569447954/installation), disable **User Install** and set **Install Link** to `None`.
+4. Invite the `pkmn` bot to the server (`689316505560809576`) with `Manage Roles`, `View Channels`, and `Read Message History` (`268502016`) permissions:
+
+```text
+https://discord.com/oauth2/authorize?client_id=689315793569447954&scope=bot&permissions=268502016&guild_id=689316505560809576&disable_guild_select=true
+```
+
+5. In [Discord Server Settings -> Roles](https://discord.com/channels/689316505560809576), ensure the `pkmn` role is positioned above all leaderboard roles configured in `config/discord.yml`.
+
 ## pkmn.ai
 
 Switch to the `pkmn` user (`su pkmn`) and set up the repository in the `/home/pkmn` directory:

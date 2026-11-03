@@ -1,0 +1,17 @@
+vouch:
+  listen: 127.0.0.1
+  port: 9090
+  document_root: /vouch
+  allowAllUsers: true
+  cookie:
+    domain: pkmn.ai
+    secure: true
+    httpOnly: true
+
+oauth:
+  provider: discord
+  client_id: '689315793569447954'
+  callback_url: https://pkmn.ai/vouch/auth
+  discord_use_ids: true
+  scopes:
+    - identify

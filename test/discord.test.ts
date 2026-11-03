@@ -1,4 +1,17 @@
-import {type Leader, findMember, ownerOf, syncRoles} from '../server/discord';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+import {
+  type DiscordMessage,
+  type Leader,
+  findMember,
+  formatMessage,
+  ownerOf,
+  syncMessages,
+  syncRoles,
+  validateAuth,
+} from '../server/discord';
 
 const CONFIG = {
   guild: 'guild',
@@ -148,5 +161,172 @@ describe('syncRoles', () => {
     console.error = error;
     expect(calls).toContainEqual(expect.objectContaining({method: 'PUT',
       url: expect.stringContaining('/members/new/roles/role-b')}));
+  });
+});
+
+describe('formatMessage', () => {
+  const base: DiscordMessage = {
+    id: '10',
+    type: 0,
+    timestamp: '2026-11-02T14:18:30.000Z',
+    content: 'should we use PUCT or plain UCB?',
+    author: {id: 'u1', username: 'bob'},
+  };
+
+  test('formats a standard message in IRC style', () => {
+    expect(formatMessage(base)).toEqual({
+      date: '2026-11-02',
+      line: '[14:18:30] bob: should we use PUCT or plain UCB?',
+    });
+  });
+
+  test('formats a same-day reply with @author[HH:MM:SS]', () => {
+    const reply: DiscordMessage = {
+      id: '11',
+      type: 19,
+      timestamp: '2026-11-02T14:22:05.000Z',
+      content: 'PUCT works much better once you have a policy net',
+      author: {id: 'u2', username: 'alice'},
+      referenced_message: base,
+    };
+    expect(formatMessage(reply)).toEqual({
+      date: '2026-11-02',
+      line: '[14:22:05] alice: @bob[14:18:30] PUCT works much better once you have a policy net',
+    });
+  });
+
+  test('formats a cross-day reply with @author[YYYY-MM-DD HH:MM:SS]', () => {
+    const reply: DiscordMessage = {
+      id: '12',
+      type: 19,
+      timestamp: '2026-11-03T00:05:10.000Z',
+      content: 'agreed with alice',
+      author: {id: 'u3', username: 'charlie'},
+      referenced_message: base,
+    };
+    expect(formatMessage(reply)).toEqual({
+      date: '2026-11-03',
+      line: '[00:05:10] charlie: @bob[2026-11-02 14:18:30] agreed with alice',
+    });
+  });
+
+  test('resolves user mentions from message.mentions or guild members', () => {
+    const msg: DiscordMessage = {
+      ...base,
+      content: 'hey <@1> and <@!2> and <@999>',
+      mentions: [{id: '1', username: 'nessiedev'}],
+    };
+    const members = [{user: {id: '2', username: 'sauce'}, roles: []}];
+    expect(formatMessage(msg, members)?.line).toBe(
+      '[14:18:30] bob: hey @nessiedev and @sauce and <@999>'
+    );
+  });
+
+  test('skips empty messages and system message types', () => {
+    expect(formatMessage({...base, content: '   '})).toBeUndefined();
+    expect(formatMessage({...base, type: 7, content: 'joined'})).toBeUndefined();
+  });
+});
+
+describe('syncMessages', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-test-'));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
+
+  test('writes chronological daily logs and resumes from cursor', async () => {
+    const urls: string[] = [];
+    const batch1: DiscordMessage[] = [
+      {
+        id: '102',
+        timestamp: '2026-11-02T14:22:05.000Z',
+        content: 'second message',
+        author: {id: 'u2', username: 'alice'},
+        referenced_message: {
+          id: '101',
+          timestamp: '2026-11-02T14:18:30.000Z',
+          content: 'first message',
+          author: {id: 'u1', username: 'bob'},
+        },
+      },
+      {
+        id: '101',
+        timestamp: '2026-11-02T14:18:30.000Z',
+        content: 'first message',
+        author: {id: 'u1', username: 'bob'},
+      },
+    ];
+    const batch2: DiscordMessage[] = [
+      {
+        id: '103',
+        timestamp: '2026-11-03T01:02:03.000Z',
+        content: 'next day message',
+        author: {id: 'u1', username: 'bob'},
+      },
+    ];
+
+    globalThis.fetch = ((url: string) => {
+      urls.push(String(url));
+      const body = String(url).endsWith('after=0') ? batch1 : batch2;
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve(body),
+      });
+    }) as unknown as typeof fetch;
+
+    await syncMessages('token', 'chan', tmpDir);
+    expect(urls).toEqual([expect.stringContaining('/channels/chan/messages?limit=100&after=0')]);
+    expect(fs.readFileSync(path.join(tmpDir, '2026-11-02.txt'), 'utf8')).toBe(
+      '[14:18:30] bob: first message\n' +
+      '[14:22:05] alice: @bob[14:18:30] second message\n'
+    );
+    expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe('102\n');
+
+    await syncMessages('token', 'chan', tmpDir);
+    expect(urls[1]).toContain('/channels/chan/messages?limit=100&after=102');
+    expect(fs.readFileSync(path.join(tmpDir, '2026-11-03.txt'), 'utf8')).toBe(
+      '[01:02:03] bob: next day message\n'
+    );
+    expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe('103\n');
+  });
+});
+
+describe('validateAuth', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  function stubVouch(status: number, headers: Record<string, string>) {
+    globalThis.fetch = (() => Promise.resolve({
+      status,
+      ok: status === 200,
+      headers: new Headers(headers),
+    })) as unknown as typeof fetch;
+  }
+
+  test('forwards 401 and x-vouch-* headers when unauthenticated', async () => {
+    stubVouch(401, {'x-vouch-err': 'no jwt', 'x-vouch-failcount': '1'});
+    const res = await validateAuth('/vouch/validate', {}, new Set(['1']));
+    expect(res).toEqual({
+      status: 401,
+      headers: {'x-vouch-err': 'no jwt', 'x-vouch-failcount': '1'},
+    });
+  });
+
+  test('checks guild membership for /vouch/validate', async () => {
+    const members = new Set(['member']);
+
+    stubVouch(200, {'x-vouch-user': 'member'});
+    expect((await validateAuth('/vouch/validate', {}, members)).status).toBe(200);
+
+    stubVouch(200, {'x-vouch-user': 'outsider'});
+    expect((await validateAuth('/vouch/validate', {}, members)).status).toBe(403);
   });
 });

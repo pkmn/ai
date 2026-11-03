@@ -1,0 +1,22 @@
+# systemctl enable /home/pkmn/ai/config/pkmn.ai-vouch.service
+
+[Unit]
+Description=Vouch Proxy (pkmn.ai)
+Requires=network.target
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5s
+EnvironmentFile=/home/pkmn/ai/private/.env
+ExecStart=/home/pkmn/ai/build/bin/vouch-proxy -config /home/pkmn/ai/config/vouch.yml
+WorkingDirectory=/home/pkmn/ai
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=vouch.pkmn.ai
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target

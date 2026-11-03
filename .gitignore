@@ -16,3 +16,4 @@ build/
 # Project
 public/
 private/
+logs/
