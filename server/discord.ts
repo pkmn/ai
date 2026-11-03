@@ -512,7 +512,7 @@ export async function validateAuth(
         'content-type': 'text/plain; charset=utf-8',
         'cache-control': 'private, no-store',
       },
-      body: `${token ?? ''}\n\ncurl -H "Authorization: Bearer ${token ?? ''}" https://pkmn.ai/logs/\n`,
+      body: `${token ?? ''}\n`,
     };
   }
 

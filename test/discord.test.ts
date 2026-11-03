@@ -490,7 +490,6 @@ describe('validateAuth', () => {
       members
     );
     expect(tokenRes.status).toBe(200);
-    expect(tokenRes.body).toContain('cookie-jwt');
-    expect(tokenRes.body).toContain('curl -H "Authorization: Bearer cookie-jwt"');
+    expect(tokenRes.body).toBe('cookie-jwt\n');
   });
 });
