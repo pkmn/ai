@@ -31,12 +31,14 @@ export interface Leader {
 // A member id, or a name to look a member up by.
 export type Owner = {id: string} | {name: string};
 
+export interface DiscordUser {
+  id: string;
+  username: string;
+  global_name?: string;
+}
+
 export interface GuildMember {
-  user: {
-    id: string;
-    username: string;
-    global_name?: string;
-  };
+  user: DiscordUser;
   nick?: string;
   roles: string[];
 }
@@ -46,14 +48,8 @@ export interface DiscordMessage {
   type?: number;
   timestamp: string;
   content: string;
-  author: {
-    id: string;
-    username: string;
-  };
-  mentions?: Array<{
-    id: string;
-    username: string;
-  }>;
+  author: DiscordUser;
+  mentions?: DiscordUser[];
   referenced_message?: DiscordMessage | null;
 }
 
@@ -191,6 +187,11 @@ export async function syncRoles(
   }
 }
 
+function displayName(user: DiscordUser, members?: GuildMember[]): string {
+  const member = members?.find(m => m.user.id === user.id);
+  return member?.nick ?? member?.user.global_name ?? user.global_name ?? user.username;
+}
+
 export function formatMessage(
   message: DiscordMessage,
   members?: GuildMember[]
@@ -200,10 +201,10 @@ export function formatMessage(
   const content = message.content
     .replace(/\r\n/g, '\n')
     .replace(/<@!?(\d+)>/g, (match, id: string) => {
-      const name =
-        message.mentions?.find(u => u.id === id)?.username ??
-        members?.find(m => m.user.id === id)?.user.username;
-      return name ? `@${name}` : match;
+      const user =
+        message.mentions?.find(u => u.id === id) ??
+        members?.find(m => m.user.id === id)?.user;
+      return user ? `@${displayName(user, members)}` : match;
     })
     .trim();
   if (!content) return undefined;
@@ -219,10 +220,10 @@ export function formatMessage(
     const refDate = refIso.slice(0, 10);
     const refTime = refIso.slice(11, 19);
     const stamp = refDate === date ? refTime : `${refDate} ${refTime}`;
-    prefix = `@${ref.author.username}[${stamp}] `;
+    prefix = `@${displayName(ref.author, members)}[${stamp}] `;
   }
 
-  return {date, line: `[${time}] ${message.author.username}: ${prefix}${content}`};
+  return {date, line: `[${time}] ${displayName(message.author, members)}: ${prefix}${content}`};
 }
 
 export async function syncMessages(

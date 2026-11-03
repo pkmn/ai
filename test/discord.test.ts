@@ -210,15 +210,26 @@ describe('formatMessage', () => {
     });
   });
 
-  test('resolves user mentions from message.mentions or guild members', () => {
+  test('resolves user mentions and display names (nick > global_name > username)', () => {
     const msg: DiscordMessage = {
       ...base,
-      content: 'hey <@1> and <@!2> and <@999>',
-      mentions: [{id: '1', username: 'nessiedev'}],
+      author: {id: 'u1', username: 'scheibo', global_name: 'pre'},
+      content: 'hey <@1> and <@!2> and <@3> and <@999>',
+      mentions: [
+        {id: '1', username: 'nessiedev', global_name: 'nessie'},
+        {id: '3', username: 'bob_user', global_name: 'Bob Global'},
+      ],
+      referenced_message: {
+        ...base,
+        author: {id: '3', username: 'bob_user', global_name: 'Bob Global'},
+      },
     };
-    const members = [{user: {id: '2', username: 'sauce'}, roles: []}];
+    const members = [
+      {user: {id: '2', username: 'sauce_user', global_name: 'sauce'}, roles: []},
+      {user: {id: '3', username: 'bob_user', global_name: 'Bob Global'}, nick: 'bobby', roles: []},
+    ];
     expect(formatMessage(msg, members)?.line).toBe(
-      '[14:18:30] bob: hey @nessiedev and @sauce and <@999>'
+      '[14:18:30] pre: @bobby[14:18:30] hey @nessie and @sauce and @bobby and <@999>'
     );
   });
 
