@@ -233,6 +233,94 @@ describe('formatMessage', () => {
     );
   });
 
+  test('includes clean attachment URLs for messages with or without text', () => {
+    const url =
+      'https://cdn.discordapp.com/attachments/689316506265321535/775113930074882068/img.jpg' +
+      '?ex=6aea5619&is=6ae90499&hm=0563e093';
+    expect(formatMessage({...base, content: 'look:', attachments: [{url}]})?.line).toBe(
+      '[14:18:30] bob: look: https://cdn.discordapp.com/attachments/689316506265321535/775113930074882068/img.jpg'
+    );
+    expect(formatMessage({...base, content: '', attachments: [{url}]})?.line).toBe(
+      '[14:18:30] bob: https://cdn.discordapp.com/attachments/689316506265321535/775113930074882068/img.jpg'
+    );
+  });
+
+  test('resolves channels, roles, custom emojis, and timestamps', () => {
+    const msg: DiscordMessage = {
+      ...base,
+      content: 'in <#10> ping <@&20> <:pokeball:99> at <t:1762093110:F>',
+    };
+    const channels = [{id: '10', name: 'general'}];
+    const roles = [{id: '20', name: 'Gen 9 OU'}];
+    expect(formatMessage(msg, undefined, channels, roles)?.line).toBe(
+      '[14:18:30] bob: in #general ping @Gen 9 OU :pokeball: at 2025-11-02 14:18:30 UTC'
+    );
+  });
+
+  test('formats polls, forwarded messages, embeds, stickers, and deleted replies', () => {
+    const pollMsg: DiscordMessage = {
+      ...base,
+      content: '',
+      poll: {
+        question: {text: 'Best search?'},
+        answers: [
+          {answer_id: 1, poll_media: {text: 'PUCT', emoji: {name: '🌲'}}},
+          {answer_id: 2, poll_media: {text: 'CFR'}},
+        ],
+        results: {answer_counts: [{id: 1, count: 5}, {id: 2, count: 3}]},
+      },
+    };
+    expect(formatMessage(pollMsg)?.line).toBe(
+      '[14:18:30] bob: [Poll: Best search?] 1. 🌲 PUCT (5) | 2. CFR (3)'
+    );
+
+    const forwarded: DiscordMessage = {
+      ...base,
+      content: 'thoughts?',
+      message_snapshots: [{
+        message: {
+          content: 'new result in <#10>',
+          attachments: [{url: 'https://cdn.discordapp.com/attachments/1/2/a.png?ex=1'}],
+        },
+      }],
+    };
+    expect(formatMessage(forwarded, undefined, [{id: '10', name: 'papers'}])?.line).toBe(
+      '[14:18:30] bob: thoughts? [Forwarded] new result in #papers https://cdn.discordapp.com/attachments/1/2/a.png'
+    );
+
+    const richEmbed: DiscordMessage = {
+      ...base,
+      content: '',
+      embeds: [{
+        type: 'rich',
+        title: 'Tournament Result',
+        description: '0-ERROR won',
+        fields: [{name: 'Score', value: '3-1'}],
+        url: 'https://pkmn.ai/leaderboard',
+      }],
+      sticker_items: [{name: 'pikachu'}],
+    };
+    expect(formatMessage(richEmbed)?.line).toBe(
+      '[14:18:30] bob: [Embed: Tournament Result — 0-ERROR won — Score: 3-1 — https://pkmn.ai/leaderboard] [Sticker: pikachu]'
+    );
+
+    // Link preview embeds on normal text messages should not be duplicated
+    const linkPreview: DiscordMessage = {
+      ...base,
+      content: 'see https://pkmn.ai',
+      embeds: [{type: 'link', title: 'pkmn.ai', url: 'https://pkmn.ai'}],
+    };
+    expect(formatMessage(linkPreview)?.line).toBe('[14:18:30] bob: see https://pkmn.ai');
+
+    const deletedReply: DiscordMessage = {
+      ...base,
+      type: 19,
+      referenced_message: null,
+      content: 'agree with that',
+    };
+    expect(formatMessage(deletedReply)?.line).toBe('[14:18:30] bob: @[deleted] agree with that');
+  });
+
   test('skips empty messages and system message types', () => {
     expect(formatMessage({...base, content: '   '})).toBeUndefined();
     expect(formatMessage({...base, type: 7, content: 'joined'})).toBeUndefined();

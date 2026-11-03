@@ -43,14 +43,52 @@ export interface GuildMember {
   roles: string[];
 }
 
-export interface DiscordMessage {
+export interface GuildChannel {
+  id: string;
+  name: string;
+}
+
+export interface GuildRole {
+  id: string;
+  name: string;
+}
+
+export interface DiscordEmbed {
+  type?: string;
+  title?: string;
+  description?: string;
+  url?: string;
+  fields?: Array<{name: string; value: string}>;
+}
+
+export interface DiscordPoll {
+  question: {text?: string};
+  answers: Array<{
+    answer_id: number;
+    poll_media: {text?: string; emoji?: {name?: string}};
+  }>;
+  results?: {
+    answer_counts: Array<{id: number; count: number}>;
+  };
+}
+
+export interface DiscordMessageBody {
+  content?: string;
+  mentions?: DiscordUser[];
+  attachments?: Array<{url: string}>;
+  embeds?: DiscordEmbed[];
+  sticker_items?: Array<{name: string}>;
+  poll?: DiscordPoll;
+}
+
+export interface DiscordMessage extends DiscordMessageBody {
   id: string;
   type?: number;
   timestamp: string;
   content: string;
   author: DiscordUser;
-  mentions?: DiscordUser[];
   referenced_message?: DiscordMessage | null;
+  message_snapshots?: Array<{message: DiscordMessageBody}>;
 }
 
 function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
@@ -112,6 +150,14 @@ export async function fetchGuildMembers(token: string, guild: string): Promise<G
     after = page[page.length - 1].user.id;
   }
   return all;
+}
+
+export async function fetchGuildChannels(token: string, guild: string): Promise<GuildChannel[]> {
+  return await discordRequest(token, `/guilds/${guild}/channels`) as GuildChannel[];
+}
+
+export async function fetchGuildRoles(token: string, guild: string): Promise<GuildRole[]> {
+  return await discordRequest(token, `/guilds/${guild}/roles`) as GuildRole[];
 }
 
 export async function fetchLeaders(site: string, vgcToken: string): Promise<Leader[]> {
@@ -192,21 +238,101 @@ function displayName(user: DiscordUser, members?: GuildMember[]): string {
   return member?.nick ?? member?.user.global_name ?? user.global_name ?? user.username;
 }
 
-export function formatMessage(
-  message: DiscordMessage,
-  members?: GuildMember[]
-): {date: string; line: string} | undefined {
-  // 0 = DEFAULT, 19 = REPLY
-  if (message.type !== undefined && message.type !== 0 && message.type !== 19) return undefined;
-  const content = message.content
+function resolveText(
+  raw: string,
+  mentions?: DiscordUser[],
+  members?: GuildMember[],
+  channels?: GuildChannel[],
+  roles?: GuildRole[]
+): string {
+  return raw
     .replace(/\r\n/g, '\n')
     .replace(/<@!?(\d+)>/g, (match, id: string) => {
       const user =
-        message.mentions?.find(u => u.id === id) ??
+        mentions?.find(u => u.id === id) ??
         members?.find(m => m.user.id === id)?.user;
       return user ? `@${displayName(user, members)}` : match;
     })
+    .replace(/<#(\d+)>/g, (match, id: string) => {
+      const name = channels?.find(c => c.id === id)?.name;
+      return name ? `#${name}` : match;
+    })
+    .replace(/<@&(\d+)>/g, (match, id: string) => {
+      const name = roles?.find(r => r.id === id)?.name;
+      return name ? `@${name}` : match;
+    })
+    .replace(/<a?:(\w+):\d+>/g, ':$1:')
+    .replace(/<t:(\d+)(?::[tTdDfFR])?>/g, (_, sec: string) => {
+      const d = new Date(Number(sec) * 1000);
+      return isNaN(d.getTime()) ? _ : `${d.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+    })
     .trim();
+}
+
+function formatPoll(poll: DiscordPoll): string {
+  const q = poll.question.text?.trim() ?? 'Poll';
+  const counts = new Map(poll.results?.answer_counts.map(c => [c.id, c.count]));
+  const answers = poll.answers.map((a, i) => {
+    const emoji = a.poll_media.emoji?.name ? `${a.poll_media.emoji.name} ` : '';
+    const label = `${emoji}${a.poll_media.text ?? ''}`.trim();
+    const count = counts.get(a.answer_id);
+    return `${i + 1}. ${label}${count !== undefined ? ` (${count})` : ''}`;
+  });
+  return `[Poll: ${q}]${answers.length ? ` ${answers.join(' | ')}` : ''}`;
+}
+
+function formatBody(
+  body: DiscordMessageBody,
+  members?: GuildMember[],
+  channels?: GuildChannel[],
+  roles?: GuildRole[]
+): string {
+  const text = resolveText(body.content ?? '', body.mentions, members, channels, roles);
+  const poll = body.poll ? formatPoll(body.poll) : '';
+  const attachments = body.attachments?.map(a => a.url.split('?')[0]) ?? [];
+  const embeds: string[] = [];
+  for (const embed of body.embeds ?? []) {
+    if (text && embed.type !== 'rich') continue;
+    const parts: string[] = [];
+    if (embed.title) parts.push(resolveText(embed.title, body.mentions, members, channels, roles));
+    if (embed.description) {
+      parts.push(resolveText(embed.description, body.mentions, members, channels, roles));
+    }
+    for (const f of embed.fields ?? []) {
+      const name = resolveText(f.name, body.mentions, members, channels, roles);
+      const val = resolveText(f.value, body.mentions, members, channels, roles);
+      parts.push(`${name}: ${val}`);
+    }
+    if (embed.url && !text.includes(embed.url)) parts.push(embed.url);
+    if (parts.length) embeds.push(`[Embed: ${parts.join(' — ')}]`);
+  }
+  const stickers = body.sticker_items?.map(s => `[Sticker: ${s.name}]`) ?? [];
+  return [text, poll, ...attachments, ...embeds, ...stickers].filter(Boolean).join(' ');
+}
+
+export function formatMessage(
+  message: DiscordMessage,
+  members?: GuildMember[],
+  channels?: GuildChannel[],
+  roles?: GuildRole[]
+): {date: string; line: string} | undefined {
+  // 0 = DEFAULT, 19 = REPLY, 20 = CHAT_INPUT_COMMAND, 21 = THREAD_STARTER_MESSAGE
+  if (
+    message.type !== undefined &&
+    message.type !== 0 &&
+    message.type !== 19 &&
+    message.type !== 20 &&
+    message.type !== 21
+  ) {
+    return undefined;
+  }
+
+  const main = formatBody(message, members, channels, roles);
+  const snapshots = (message.message_snapshots ?? [])
+    .map(s => formatBody(s.message, members, channels, roles))
+    .filter(Boolean)
+    .map(s => `[Forwarded] ${s}`);
+  const content = [main, ...snapshots].filter(Boolean).join(' ');
   if (!content) return undefined;
 
   const iso = new Date(message.timestamp).toISOString();
@@ -221,6 +347,8 @@ export function formatMessage(
     const refTime = refIso.slice(11, 19);
     const stamp = refDate === date ? refTime : `${refDate} ${refTime}`;
     prefix = `@${displayName(ref.author, members)}[${stamp}] `;
+  } else if (message.type === 19) {
+    prefix = '@[deleted] ';
   }
 
   return {date, line: `[${time}] ${displayName(message.author, members)}: ${prefix}${content}`};
@@ -230,7 +358,9 @@ export async function syncMessages(
   token: string,
   channel: string,
   dir = path.join(root, 'logs'),
-  members?: GuildMember[]
+  members?: GuildMember[],
+  channels?: GuildChannel[],
+  roles?: GuildRole[]
 ) {
   fs.mkdirSync(dir, {recursive: true});
   const cursorFile = path.join(dir, '.cursor');
@@ -247,7 +377,7 @@ export async function syncMessages(
 
     const byDate = new Map<string, string[]>();
     for (let i = page.length - 1; i >= 0; i--) {
-      const formatted = formatMessage(page[i], members);
+      const formatted = formatMessage(page[i], members, channels, roles);
       if (!formatted) continue;
       let lines = byDate.get(formatted.date);
       if (!lines) {
@@ -336,8 +466,19 @@ export async function run(token: string, vgcToken: string, once = false) {
       }
 
       if (config.channel) {
+        let channels: GuildChannel[] | undefined;
+        let roles: GuildRole[] | undefined;
         try {
-          await syncMessages(token, config.channel, undefined, members);
+          [channels, roles] = await Promise.all([
+            fetchGuildChannels(token, config.guild),
+            fetchGuildRoles(token, config.guild),
+          ]);
+        } catch (err) {
+          console.error('Error fetching guild channels/roles:', err);
+        }
+
+        try {
+          await syncMessages(token, config.channel, undefined, members, channels, roles);
         } catch (err) {
           console.error('Error syncing messages:', err);
         }
