@@ -24,15 +24,29 @@ interface Project {
 
 const RANKING = [
   'Jaxcalibur', // top gen9randbats (94.6% GXE) & beat MDB Bo9
+  'eevenator', // top gen9randbats (2594 Elo/94.0% GXE/2019 Glicko)
+  'AWRorus', // top gen9ag & #2 gen9randbats (2432 Elo/93.9% GXE/2015 Glicko)
+  'MissingNo.Zero', // #1 in 5 randbats gens & #5 gen9randbats (2453 Elo/93.4% GXE/1999 Glicko)
+  'Xatu Zero', // top gen9ou (2002 Elo/88.0% GXE/1876 Glicko), gen9uu & gen9monotype
+  'MysteriousWind', // top VGC Bo1 & Bo3 (1889 Elo/91.0% GXE/1937 Glicko) & #1 vgc.bot OTS/CTS
   'mikumiku', // top VGC (1857 Elo/81.2% GXE/ 1775 Glicko)
   'nessie', // top VGC Bo3 (1639 Elo/75.7% GXE/1714 Glicko)
   'Mew\'s Truck', // top VGC (1942 Elo/81.0% GXE/1774 Glicko)
   'openvgc', // top VGC (1929 Elo/80.8% GXE/1771 Glicko)
+  'Porygoned', // top VGC (1986 Elo/72.4% GXE/1682 Glicko) & #1 vgc.bot CTS
+  'Mocca', // #1 vgc.bot OTS, CTS & CTS Random
+  'AsterAI', // #1 vgc.bot CTS (1700+ Glicko)
   'Numbrion', // top gen9randomdoublesbattle (2136 Elo/88.5% GXE/1829 Glicko)
   'Foul Play', // reached #2 in gen9randbats (~92% GXE) & #10 CG OU (~83% GXE)
   'Metamon', // reached #1 gen1ou, 83.6% GXE/1743 Elo/82.4%
   'PokeCHAD', // 2000+ gen9randbats Elo, ~par with Foul Play
+  'pokerus', // reached #5 in gen9ubers, 1749 Elo/80.7% GXE/1769 Glicko
+  'RotomDotExe', // 16th on VGC, 1833 Elo/75.6% GXE/1713 Glicko
+  'Springtime Haze', // 27th on VGC Bo3, 1639 Elo/75.9% GXE/1716 Glicko & #5 vgc.bot OTS
   'Incinference', // 46th on VGC , 1583 Elo/77% GXE/1730 Glicko
+  'Chimera3', // #6 vgc.bot OTS Random & #10 OTS
+  'hotpot01', // #4 vgc.bot CTS Random & #12 CTS
+  'CalmMindAI', // VGC 1627 Elo/70.5% GXE/1664 Glicko & #8 vgc.bot CTS
   'IHTFP Abra', // reached #8 in gen4randombattle, ~1693 Elo
   'Athena', // reached #33 in gen7randombattle, ~1800 Elo
   'Future Sight', // reached top 1000 in gen8ou, ~1550-1650 Elo

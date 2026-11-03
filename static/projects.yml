@@ -691,6 +691,36 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Xatu Zero
+  active: 2026 # October 6
+  engine: Custom
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Springtime Haze
+  active: 2026 # October 7
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Porygoned
+  active: 2026 # October 8
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: RotomDotExe
+  site: https://www.smogon.com/forums/threads/3789518/
+  active: 2026 # October 9
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: eevenator
+  site: https://www.smogon.com/forums/threads/3789524/
+  active: 2026 # October 9
+  engine: Custom
+  language: Rust
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: Mew's Truck
   site: https://www.smogon.com/forums/threads/3789554/
   active: 2026 # October 10
@@ -705,11 +735,65 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Mocca
+  active: 2026 # October 11
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: MysteriousWind
+  active: 2026 # October 11
+  engine: Custom
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: CalmMindAI
+  active: 2026 # October 17
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: AWRorus
+  active: 2026 # October 18
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: AsterAI
+  active: 2026 # October 21
+  engine: Custom
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
 - name: Numbrion
   site: https://www.smogon.com/forums/threads/3790146/
   active: 2026 # October 22
   engine: Custom
   language: Rust
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: hotpot01
+  active: 2026 # October 24
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: Chimera3
+  active: 2026 # October 28
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+- name: MissingNo.Zero
+  paper: Greenquist:2026
+  site: https://www.smogon.com/forums/threads/3790707/
+  active: 2026 # November 1
+  engine:
+    - name: pkmn
+      url: https://github.com/pkmn/engine
+    - name: poke-engine
+      url: https://github.com/pmariglia/poke-engine
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
