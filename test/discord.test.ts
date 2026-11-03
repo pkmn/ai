@@ -462,4 +462,35 @@ describe('validateAuth', () => {
     stubVouch(200, {'x-vouch-user': 'outsider'});
     expect((await validateAuth('/vouch/validate', {}, members)).status).toBe(403);
   });
+
+  test('supports Bearer token auth and serves /logs/token for guild members', async () => {
+    let forwardedHeaders: Record<string, string> = {};
+    globalThis.fetch = ((_: string, init?: {headers?: Record<string, string>}) => {
+      forwardedHeaders = init?.headers ?? {};
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        headers: new Headers({'x-vouch-user': 'member'}),
+      });
+    }) as unknown as typeof fetch;
+
+    const members = new Set(['member']);
+    const authRes = await validateAuth(
+      '/vouch/validate',
+      {authorization: 'Bearer my-jwt'},
+      members
+    );
+    expect(authRes.status).toBe(200);
+    expect(forwardedHeaders['x-vouch-token']).toBe('my-jwt');
+    expect(forwardedHeaders.cookie).toContain('VouchCookie=my-jwt');
+
+    const tokenRes = await validateAuth(
+      '/logs/token',
+      {cookie: 'VouchCookie=cookie-jwt'},
+      members
+    );
+    expect(tokenRes.status).toBe(200);
+    expect(tokenRes.body).toContain('cookie-jwt');
+    expect(tokenRes.body).toContain('curl -H "Authorization: Bearer cookie-jwt"');
+  });
 });

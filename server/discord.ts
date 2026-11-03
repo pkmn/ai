@@ -446,12 +446,30 @@ export async function syncMessages(
   saveCursor();
 }
 
+function extractToken(reqHeaders: http.IncomingHttpHeaders): string | undefined {
+  const auth = reqHeaders.authorization;
+  if (typeof auth === 'string') {
+    const m = /^Bearer\s+(\S+)$/i.exec(auth.trim());
+    if (m) return m[1];
+  }
+  const vouchToken = reqHeaders['x-vouch-token'];
+  if (typeof vouchToken === 'string' && vouchToken.trim()) {
+    return vouchToken.trim();
+  }
+  const cookie = reqHeaders.cookie;
+  if (typeof cookie === 'string') {
+    const m = /\bVouchCookie=([^;]+)/.exec(cookie);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
 export async function validateAuth(
   url: string | undefined,
   reqHeaders: http.IncomingHttpHeaders,
   members: Set<string>
-): Promise<{status: number; headers: Record<string, string>}> {
-  if (url !== '/vouch/validate') {
+): Promise<{status: number; headers: Record<string, string>; body?: string}> {
+  if (url !== '/vouch/validate' && url !== '/logs/token') {
     return {status: 404, headers: {}};
   }
 
@@ -459,6 +477,15 @@ export async function validateAuth(
   for (const key of ['cookie', 'authorization', 'x-vouch-token', 'host']) {
     const val = reqHeaders[key];
     if (typeof val === 'string') forwarded[key] = val;
+  }
+  const token = extractToken(reqHeaders);
+  if (token) {
+    forwarded['x-vouch-token'] ??= token;
+    if (!forwarded.cookie?.includes('VouchCookie=')) {
+      forwarded.cookie = forwarded.cookie
+        ? `${forwarded.cookie}; VouchCookie=${token}`
+        : `VouchCookie=${token}`;
+    }
   }
 
   const res = await fetch(VOUCH_VALIDATE, {headers: forwarded});
@@ -474,7 +501,22 @@ export async function validateAuth(
   }
 
   const user = res.headers.get('x-vouch-user');
-  return {status: user && members.has(user) ? 200 : 403, headers};
+  if (!user || !members.has(user)) {
+    return {status: 403, headers};
+  }
+
+  if (url === '/logs/token') {
+    return {
+      status: 200,
+      headers: {
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'private, no-store',
+      },
+      body: `${token ?? ''}\n\ncurl -H "Authorization: Bearer ${token ?? ''}" https://pkmn.ai/logs/\n`,
+    };
+  }
+
+  return {status: 200, headers};
 }
 
 export async function run(token: string, vgcToken: string, once = false) {
@@ -485,9 +527,9 @@ export async function run(token: string, vgcToken: string, once = false) {
     ? undefined
     : http.createServer((req, res) => {
       validateAuth(req.url, req.headers, memberIds)
-        .then(({status, headers}) => {
+        .then(({status, headers, body}) => {
           res.writeHead(status, headers);
-          res.end();
+          res.end(body);
         })
         .catch(err => {
           console.error('Error validating auth:', err);

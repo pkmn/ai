@@ -3,10 +3,13 @@ vouch:
   port: 9090
   document_root: /vouch
   allowAllUsers: true
+  jwt:
+    maxAge: 525600
   cookie:
     domain: pkmn.ai
     secure: true
     httpOnly: true
+    maxAge: 43200
 
 oauth:
   provider: discord
