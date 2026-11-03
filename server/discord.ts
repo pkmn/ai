@@ -364,20 +364,34 @@ export async function syncMessages(
 ) {
   fs.mkdirSync(dir, {recursive: true});
   const cursorFile = path.join(dir, '.cursor');
-  let after = fs.existsSync(cursorFile)
-    ? fs.readFileSync(cursorFile, 'utf8').trim() || '0'
-    : '0';
+  let after = '0';
+  const tailOffsets = new Map<string, number>();
+  if (fs.existsSync(cursorFile)) {
+    const lines = fs.readFileSync(cursorFile, 'utf8').trim().split('\n');
+    after = lines[0]?.trim() || '0';
+    for (let i = 1; i < lines.length; i++) {
+      const [file, sizeStr] = lines[i].trim().split(' ');
+      const size = Number(sizeStr);
+      if (file && !isNaN(size)) tailOffsets.set(file, size);
+    }
+  }
 
-  while (true) {
-    const page = await discordRequest(
-      token,
-      `/channels/${channel}/messages?limit=100&after=${after}`
-    ) as DiscordMessage[];
-    if (!page.length) break;
+  function restoreTail() {
+    for (const [file, size] of tailOffsets) {
+      const full = path.join(dir, file);
+      if (size === 0) {
+        fs.rmSync(full, {force: true});
+      } else if (fs.existsSync(full)) {
+        fs.truncateSync(full, size);
+      }
+    }
+    tailOffsets.clear();
+  }
 
+  function writeSlice(slice: DiscordMessage[], recordOffsets: boolean) {
     const byDate = new Map<string, string[]>();
-    for (let i = page.length - 1; i >= 0; i--) {
-      const formatted = formatMessage(page[i], members, channels, roles);
+    for (let i = slice.length - 1; i >= 0; i--) {
+      const formatted = formatMessage(slice[i], members, channels, roles);
       if (!formatted) continue;
       let lines = byDate.get(formatted.date);
       if (!lines) {
@@ -388,13 +402,48 @@ export async function syncMessages(
     }
 
     for (const [date, lines] of byDate) {
-      fs.appendFileSync(path.join(dir, `${date}.txt`), `${lines.join('\n')}\n`);
+      const file = `${date}.txt`;
+      const full = path.join(dir, file);
+      if (recordOffsets && !tailOffsets.has(file)) {
+        tailOffsets.set(file, fs.existsSync(full) ? fs.statSync(full).size : 0);
+      }
+      fs.appendFileSync(full, `${lines.join('\n')}\n`);
     }
-
-    after = page[0].id;
-    fs.writeFileSync(cursorFile, `${after}\n`);
-    if (page.length < 100) break;
   }
+
+  function saveCursor() {
+    const offsetLines = Array.from(tailOffsets.entries()).map(([f, s]) => `${f} ${s}`);
+    fs.writeFileSync(cursorFile, `${[after, ...offsetLines].join('\n')}\n`);
+  }
+
+  let page = await discordRequest(
+    token,
+    `/channels/${channel}/messages?limit=100&after=${after}`
+  ) as DiscordMessage[];
+  restoreTail();
+
+  while (page.length === 100) {
+    const next = await discordRequest(
+      token,
+      `/channels/${channel}/messages?limit=100&after=${page[0].id}`
+    ) as DiscordMessage[];
+    if (next.length > 0) {
+      writeSlice(page, false);
+      after = page[0].id;
+      saveCursor();
+      page = next;
+    } else {
+      writeSlice(page.slice(50), false);
+      after = page[50].id;
+      page = page.slice(0, 50);
+      break;
+    }
+  }
+
+  if (page.length > 0) {
+    writeSlice(page, true);
+  }
+  saveCursor();
 }
 
 export async function validateAuth(

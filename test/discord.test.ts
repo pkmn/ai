@@ -339,13 +339,13 @@ describe('syncMessages', () => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  test('writes chronological daily logs and resumes from cursor', async () => {
+  test('writes daily logs, rewrites rolling tail on edits, and graduates at 100', async () => {
     const urls: string[] = [];
     const batch1: DiscordMessage[] = [
       {
         id: '102',
         timestamp: '2026-11-02T14:22:05.000Z',
-        content: 'second message',
+        content: 'second message (typo)',
         author: {id: 'u2', username: 'alice'},
         referenced_message: {
           id: '101',
@@ -368,11 +368,17 @@ describe('syncMessages', () => {
         content: 'next day message',
         author: {id: 'u1', username: 'bob'},
       },
+      {
+        ...batch1[0],
+        content: 'second message (fixed)',
+      },
+      batch1[1],
     ];
 
+    let call = 0;
     globalThis.fetch = ((url: string) => {
       urls.push(String(url));
-      const body = String(url).endsWith('after=0') ? batch1 : batch2;
+      const body = call++ === 0 ? batch1 : batch2;
       return Promise.resolve({
         status: 200,
         ok: true,
@@ -384,16 +390,44 @@ describe('syncMessages', () => {
     expect(urls).toEqual([expect.stringContaining('/channels/chan/messages?limit=100&after=0')]);
     expect(fs.readFileSync(path.join(tmpDir, '2026-11-02.txt'), 'utf8')).toBe(
       '[14:18:30] bob: first message\n' +
-      '[14:22:05] alice: @bob[14:18:30] second message\n'
+      '[14:22:05] alice: @bob[14:18:30] second message (typo)\n'
     );
-    expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe('102\n');
+    expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe('0\n2026-11-02.txt 0\n');
 
     await syncMessages('token', 'chan', tmpDir);
-    expect(urls[1]).toContain('/channels/chan/messages?limit=100&after=102');
+    expect(urls[1]).toContain('/channels/chan/messages?limit=100&after=0');
+    expect(fs.readFileSync(path.join(tmpDir, '2026-11-02.txt'), 'utf8')).toBe(
+      '[14:18:30] bob: first message\n' +
+      '[14:22:05] alice: @bob[14:18:30] second message (fixed)\n'
+    );
     expect(fs.readFileSync(path.join(tmpDir, '2026-11-03.txt'), 'utf8')).toBe(
       '[01:02:03] bob: next day message\n'
     );
-    expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe('103\n');
+    expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe(
+      '0\n2026-11-02.txt 0\n2026-11-03.txt 0\n'
+    );
+
+    // When a page hits 100 messages at the head, the older 50 graduate and `after` advances
+    const fullPage: DiscordMessage[] = Array.from({length: 100}, (_, i) => ({
+      id: String(200 - i),
+      timestamp: '2026-11-03T02:00:00.000Z',
+      content: `msg ${200 - i}`,
+      author: {id: 'u1', username: 'bob'},
+    }));
+    globalThis.fetch = ((url: string) => {
+      urls.push(String(url));
+      const body = String(url).endsWith('after=0') ? fullPage : [];
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve(body),
+      });
+    }) as unknown as typeof fetch;
+
+    await syncMessages('token', 'chan', tmpDir);
+    // Older 50 are ids 101..150, so after advances to page[50].id === '150'
+    const cursor = fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8');
+    expect(cursor).toMatch(/^150\n2026-11-03\.txt \d+\n$/);
   });
 });
 
