@@ -70,7 +70,8 @@ flowchart LR
 | **`pkmn.ai` (Ubuntu Droplet)** | Hostname | `pkmn.ai` | Public web server and control plane (`ssh pkmn@pkmn.ai`). |
 | **`pkmn.ai` (Ubuntu Droplet)** | Admin / App User | `pkmn` | Owns `/home/pkmn/ai` and runs `pkmn.ai-server.service`. |
 | **`pkmn.ai` (Ubuntu Droplet)** | Web User | `www-data` (in group `pkmn`) | Runs Nginx serving `/home/pkmn/ai/public`. |
-| **`arena` (M6 Mac mini)** | Hostname | `arena` | Dedicated headless M6 Mac mini (`ssh pkmn@arena`). |
+| **`pkmn.ai` (Ubuntu Droplet)** | Reverse SSH Tunnel User | `tunnel` (`/usr/sbin/nologin`) | Locked-down role user accepting only `-R 127.0.0.1:2222` from `arena`. |
+| **`arena` (M6 Mac mini)** | Hostname | `arena` | Dedicated headless M6 Mac mini (`ssh pkmn@arena` or `ssh arena` via `ProxyJump`). |
 | **`arena` (M6 Mac mini)** | Admin / Coordinator User | `pkmn` | Owns `/opt/arena` and runs `ai.pkmn.arena` coordinator on E-cores. |
 | **`arena` (M6 Mac mini)** | Bot Slot 1 User | `p1` (UID `591`, GID `590`) | Unprivileged user executing native Player 1 bot inside Seatbelt. |
 | **`arena` (M6 Mac mini)** | Bot Slot 2 User | `p2` (UID `592`, GID `590`) | Unprivileged user executing native Player 2 bot inside Seatbelt. |
@@ -84,6 +85,8 @@ flowchart LR
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/avatars/<slug>.png` | Droplet SSD | $96 \times 96$ bot avatars committed via registration PRs. |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/public/` | Droplet SSD | Pre-rendered static HTML/JSON served directly by Nginx (`leaderboard/`, `api/live.json`). |
 | **`pkmn.ai` Droplet** | `/var/lib/pkmn/arena.sqlite` | Droplet SSD | Control-plane SQLite DB (`developers`, `bots`, `bot_versions`, `ladder_entries`, `matches`, `pair_aggregates`, `rating_snapshots`). |
+| **`pkmn.ai` Droplet** | `/etc/ssh/sshd_config.d/arena-tunnel.conf` | Droplet SSD | Hardened `sshd` `Match User tunnel` block (`AllowTcpForwarding remote`, `ForceCommand /usr/sbin/nologin`). |
+| **`pkmn.ai` Droplet** | `/home/tunnel/.ssh/authorized_keys` | Droplet SSD | Tunnel public key locked to `restrict,port-forwarding,permitlisten="127.0.0.1:2222",permitopen="none"`. |
 | **`arena` Internal SSD** | `/opt/arena/app/` | 256 GB Internal SSD | Deployed Arena coordinator & `@pkmn/sim` code. |
 | **`arena` Internal SSD** | `/opt/arena/bin/arena` | 256 GB Internal SSD | Unified lifecycle controller (`arena run|pause|resume|cleanup p1|p2 ...`). |
 | **`arena` Internal SSD** | `/opt/arena/bin/limit` | 256 GB Internal SSD | Compiled C supervisor (`limit.c`) enforcing 14 GiB XNU `ri_phys_footprint` cap. |
@@ -94,7 +97,8 @@ flowchart LR
 | **`arena` Internal SSD** | `/opt/arena/teams/<ladder>.txt` | 256 GB Internal SSD | Harvested, validated, and canonicalized packed team pools. |
 | **`arena` Internal SSD** | `/opt/arena/bots/<slug>-<ver>/` | 256 GB Internal SSD | Unpacked active native bundles ($\le 500\text{ MB}$ each, `root:wheel` read-only). |
 | **`arena` Internal SSD** | `/opt/arena/cas/<xx>/<sha256>` | 256 GB Internal SSD | Content-addressed store for APFS `clonefile(2)` block deduplication across bundles. |
-| **`arena` Internal SSD** | `/opt/arena/logs/` | 256 GB Internal SSD | Coordinator daemon stdout/stderr logs (`arena.out.log`, `arena.err.log`). |
+| **`arena` Internal SSD** | `/opt/arena/logs/` | 256 GB Internal SSD | Coordinator and tunnel daemon logs (`arena.out.log`, `arena.err.log`, `tunnel.err.log`). |
+| **`arena` Internal SSD** | `/Users/pkmn/.ssh/id_ed25519_tunnel` | 256 GB Internal SSD | Dedicated Ed25519 key used exclusively by `ai.pkmn.tunnel` to bind `127.0.0.1:2222` on `pkmn.ai`. |
 | **`arena` APFS Volume** | `/Volumes/P1` | **4 GB APFS quota** | Ephemeral `/tmp` & `$XDG_CACHE_HOME` for Player 1; wiped before and after every game. |
 | **`arena` APFS Volume** | `/Volumes/P2` | **4 GB APFS quota** | Ephemeral `/tmp` & `$XDG_CACHE_HOME` for Player 2; wiped before and after every game. |
 | **`arena` APFS Volume** | `/Volumes/Staging` | **1 GB APFS quota** | Ephemeral staging volume for safe bundle/image downloads and unpacking. |
@@ -110,6 +114,7 @@ flowchart LR
 | **`pkmn.ai` Droplet** | `pkmn.ai-backup.timer` | `/home/pkmn/ai/config/pkmn.ai-backup.timer` | Nightly SQLite backup synced to `gs://pkmn-arena/db/`. |
 | **`arena` Mac mini** | `ai.pkmn.arena` | `/Library/LaunchDaemons/ai.pkmn.arena.plist` | Runs the Arena coordinator as user `pkmn` on the 2 E-cores (`taskpolicy -b`). |
 | **`arena` Mac mini** | `ai.pkmn.pf` | `/Library/LaunchDaemons/ai.pkmn.pf.plist` | Loads `/etc/pf.anchors/ai.pkmn.arena` at boot to block all network packets from `p1` and `p2`. |
+| **`arena` Mac mini** | `ai.pkmn.tunnel` | `/Library/LaunchDaemons/ai.pkmn.tunnel.plist` | Maintains outbound reverse SSH tunnel (`pkmn.ai:2222` $\rightarrow$ `arena:22`) on E-cores (`taskpolicy -b`). |
 | **`arena` Mac mini** | Podman VM `arena` | `podman machine inspect arena` | `libkrun` micro-VM (10 vCPUs, 28 GiB ceiling, 500 MB overlay cap) running `linux/arm64` OCI bots. |
 
 ---
@@ -318,11 +323,11 @@ Before running `setup-arena.sh`, perform these four one-time steps on the new Ma
 2. **Disable Automatic GUI Login (Saves ~1.5 GB RAM)**:
    - Open `System Settings -> Users & Groups -> Automatically log in` and set it to **Off**.
    - When the Mac mini reboots headless (no monitor plugged in), it stops at the lightweight login window without launching `WindowServer` / Finder / Dock for a logged-in Aqua session, keeping headless macOS RAM usage around ~1.8–2.2 GB.
-3. **Enable SSH**:
+3. **Enable SSH & Harden `sshd_config`**:
    ```bash
    sudo systemsetup -setremotelogin on
    ```
-   Copy your SSH public key to `~pkmn/.ssh/authorized_keys` and disable password SSH authentication in `/etc/ssh/sshd_config`.
+   Copy your SSH public key to `~pkmn/.ssh/authorized_keys`, disable password/interactive SSH authentication, and disable SSH agent forwarding (`AllowAgentForwarding no`) in `/etc/ssh/sshd_config` (also enforced automatically by `setup-arena.sh`).
 4. **Mount External 1 TB SSD Archive Drive**:
    - Plug in the external 1 TB SSD and format it as APFS named `Archive` so it mounts automatically at `/Volumes/Archive`:
      ```bash
@@ -331,6 +336,84 @@ Before running `setup-arena.sh`, perform these four one-time steps on the new Ma
      sudo mkdir -p /Volumes/Archive/bots /Volumes/Archive/logs /Volumes/Archive/db
      sudo chown -R pkmn:staff /Volumes/Archive
      ```
+
+### Remote Sysadmin Access via Hardened Reverse SSH Tunnel (`pkmn.ai` Bridge)
+
+Because the `arena` M6 Mac mini runs behind local NAT/firewall with no inbound internet port forwards, remote sysadmin access from anywhere is provided by an outbound **Reverse SSH Tunnel** (`ai.pkmn.tunnel.plist`) from `pkmn@arena` to a locked-down `tunnel` role account on the `pkmn.ai` droplet, paired with OpenSSH `ProxyJump` on the admin laptop:
+
+```mermaid
+flowchart LR
+    Laptop["Admin Laptop (Anywhere)"] -->|"1. ssh arena (ProxyJump pkmn.ai, ForwardAgent no)"| DO["pkmn.ai Droplet (sshd :22)"]
+    Arena["M6 Mac mini (pkmn@arena :22)"] ===|"2. Outbound -R 127.0.0.1:2222:127.0.0.1:22 (tunnel@pkmn.ai)"| DO
+    DO -.->|"3. Loopback hop (127.0.0.1:2222)"| Arena
+```
+
+#### Security & Threat Model: Why a Rogue Bot Cannot Pivot to `pkmn.ai`
+
+1. **Normal Sandbox Containment (Zero Access across 4 Independent Layers)**:
+   - **Tunnel Directionality (`-R`)**: `-R 127.0.0.1:2222:127.0.0.1:22` opens a listening socket strictly on the **droplet** (`127.0.0.1:2222`) that forwards *inbound* to the Mac mini (`127.0.0.1:22`). No listening socket is opened on the Mac mini that forwards into the droplet.
+   - **Filesystem Isolation**: Native Seatbelt (`(deny default)` in `/opt/arena/etc/sandbox.sb`) and POSIX `0700` permissions block `p1`/`p2` from reading `/Users/pkmn/.ssh/id_ed25519_tunnel`; OCI containers run inside the `libkrun` Linux micro-VM where `/Users/pkmn` is never mounted.
+   - **Process & Socket Isolation**: `(allow signal (target same-sandbox))` and `(deny network*)` prevent signaling `pkmn` processes or opening TCP/UDP/Unix sockets outside `/Volumes/P{1,2}`.
+   - **Kernel Packet Filter (`pf`) & `--network=none`**: `/etc/pf.anchors/ai.pkmn.arena` drops all packets from UIDs `591` (`p1`) and `592` (`p2`) at the XNU kernel layer, and containers have no virtual NIC.
+2. **Worst-Case 0-Day Kernel/Hypervisor Escape (Attacker Gains `pkmn` or `root` on `arena`)**:
+   - Even if a submission exploits a macOS kernel/GPU/ANE 0-day to become `root` on the Mac mini and steals `/Users/pkmn/.ssh/id_ed25519_tunnel`, it **cannot** execute commands or pivot into internal services on `pkmn.ai` because two subtle OpenSSH attack paths are explicitly closed:
+     - **Closing Loophole 1 — Blocking `-L` / SOCKS Forwarding (`permitopen="none"`)**: In OpenSSH, the `port-forwarding` flag in `authorized_keys` enables *both* remote forwarding (`-R`) and local/SOCKS forwarding (`-L` / `-D`). Without restricting local forwarding, a stolen key could run `ssh -L 8080:127.0.0.1:<port> tunnel@pkmn.ai` to probe loopback-only services on the droplet. Setting **`permitopen="none"`** in `authorized_keys` alongside **`AllowTcpForwarding remote`**, **`AllowStreamLocalForwarding no`**, and **`ForceCommand /usr/sbin/nologin`** in `sshd_config` ensures `id_ed25519_tunnel` can literally do only one thing: bind `127.0.0.1:2222` on `pkmn.ai` to receive connections from `pkmn.ai`.
+     - **Closing Loophole 2 — Blocking SSH Agent Hijacking (`ForwardAgent no` & `AllowAgentForwarding no`)**: If an admin SSHed into a root-compromised Mac mini with `ForwardAgent yes`, `root` on `arena` could hijack the forwarded `$SSH_AUTH_SOCK` Unix socket during the session to authenticate back to `pkmn@pkmn.ai`. Because `ProxyJump` performs the jump locally on the admin laptop, `ForwardAgent` is never needed and is explicitly disabled on both the laptop (`ForwardAgent no`) and the Mac mini (`AllowAgentForwarding no`).
+
+#### 1. `pkmn.ai` Droplet Configuration (One-Time Setup)
+
+On the `pkmn.ai` Ubuntu droplet, create the shell-less `tunnel` user, configure `sshd` to drop dead NAT sessions within ~45 seconds (so port `2222` is never wedged after an ISP reconnect), and lock `authorized_keys` to `127.0.0.1:2222`:
+
+```bash
+# 1. Create a locked-down system user with no login shell
+sudo useradd -r -m -d /home/tunnel -s /usr/sbin/nologin tunnel
+sudo mkdir -p /home/tunnel/.ssh
+sudo chmod 700 /home/tunnel/.ssh
+
+# 2. Harden sshd for the tunnel user and enable fast dead-peer cleanup
+sudo tee /etc/ssh/sshd_config.d/arena-tunnel.conf >/dev/null <<'EOF'
+ClientAliveInterval 15
+ClientAliveCountMax 3
+
+Match User tunnel
+    AllowTcpForwarding remote
+    AllowStreamLocalForwarding no
+    AllowAgentForwarding no
+    GatewayPorts no
+    X11Forwarding no
+    PermitTTY no
+    PermitUserRC no
+    ForceCommand /usr/sbin/nologin
+EOF
+
+# 3. Authorize the Mac mini's ~/.ssh/id_ed25519_tunnel.pub with strict forwarding locks
+sudo tee /home/tunnel/.ssh/authorized_keys >/dev/null <<'EOF'
+restrict,port-forwarding,permitlisten="127.0.0.1:2222",permitopen="none" ssh-ed25519 <ARENA_TUNNEL_PUBKEY> arena-tunnel
+EOF
+sudo chown -R tunnel:tunnel /home/tunnel/.ssh
+sudo chmod 600 /home/tunnel/.ssh/authorized_keys
+
+sudo sshd -t && sudo service ssh reload
+```
+
+#### 2. Admin Laptop `~/.ssh/config`
+
+Configure your laptop to hop through the droplet's raw IP (since Cloudflare orange-cloud DNS drops port 22) with `ForwardAgent no`:
+
+```ssh-config
+Host pkmn.ai
+  HostName <PKMN_AI_DROPLET_IP>
+  User pkmn
+
+Host arena
+  HostName 127.0.0.1
+  Port 2222
+  User pkmn
+  ProxyJump pkmn.ai
+  ForwardAgent no
+```
+
+From anywhere in the world, `ssh arena` opens an end-to-end authenticated shell on `pkmn@arena` (and one-off commands like `ssh arena '/opt/arena/bin/arena cleanup p1'` or `rsync -avz ./ arena:/opt/arena/app/` work transparently).
 
 ### Complete Mac mini Setup Script (`arena/scripts/setup-arena.sh`)
 
@@ -1089,7 +1172,74 @@ if __name__ == "__main__":
 EOF
 chmod +x "${ARENA_ROOT}/bin/unpack"
 
-echo "==> [9/9] Writing Arena Coordinator LaunchDaemon (/Library/LaunchDaemons/ai.pkmn.arena.plist)..."
+echo "==> [9/9] Hardening sshd and writing Coordinator & Reverse Tunnel LaunchDaemons..."
+# Disable password auth and SSH agent forwarding on the Mac mini so an admin connecting
+# via ProxyJump never exposes a forwarded $SSH_AUTH_SOCK socket on the arena host.
+sudo mkdir -p /etc/ssh/sshd_config.d
+cat << 'EOF' | sudo tee /etc/ssh/sshd_config.d/100-arena-hardening.conf >/dev/null
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+AllowAgentForwarding no
+X11Forwarding no
+EOF
+sudo launchctl kickstart -k system/com.openssh.sshd 2>/dev/null || true
+
+# Generate a dedicated Ed25519 keypair for the outbound reverse SSH tunnel (if not already present).
+TUNNEL_KEY="/Users/${ARBITER_USER}/.ssh/id_ed25519_tunnel"
+sudo -u "${ARBITER_USER}" mkdir -p "/Users/${ARBITER_USER}/.ssh"
+sudo -u "${ARBITER_USER}" chmod 700 "/Users/${ARBITER_USER}/.ssh"
+if [[ ! -f "${TUNNEL_KEY}" ]]; then
+  sudo -u "${ARBITER_USER}" ssh-keygen -t ed25519 -N "" -C "arena-tunnel" -f "${TUNNEL_KEY}"
+fi
+
+# Write the persistent Reverse SSH Tunnel LaunchDaemon (/Library/LaunchDaemons/ai.pkmn.tunnel.plist),
+# pinned to the Efficiency cores (`taskpolicy -b`). Replace <PKMN_AI_DROPLET_IP> with the droplet IP
+# and add `${TUNNEL_KEY}.pub` to `/home/tunnel/.ssh/authorized_keys` on pkmn.ai before loading.
+cat << EOF | sudo tee /Library/LaunchDaemons/ai.pkmn.tunnel.plist >/dev/null
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.pkmn.tunnel</string>
+  <key>UserName</key>
+  <string>${ARBITER_USER}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/sbin/taskpolicy</string>
+    <string>-b</string>
+    <string>/usr/bin/ssh</string>
+    <string>-N</string>
+    <string>-T</string>
+    <string>-o</string>
+    <string>ServerAliveInterval=15</string>
+    <string>-o</string>
+    <string>ServerAliveCountMax=3</string>
+    <string>-o</string>
+    <string>ExitOnForwardFailure=yes</string>
+    <string>-o</string>
+    <string>BatchMode=yes</string>
+    <string>-o</string>
+    <string>StrictHostKeyChecking=accept-new</string>
+    <string>-i</string>
+    <string>${TUNNEL_KEY}</string>
+    <string>-R</string>
+    <string>127.0.0.1:2222:127.0.0.1:22</string>
+    <string>tunnel@&lt;PKMN_AI_DROPLET_IP&gt;</string>
+  </array>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardErrorPath</key>
+  <string>${ARENA_ROOT}/logs/tunnel.err.log</string>
+</dict>
+</plist>
+EOF
+
 # Launch the Node.js Arena coordinator under `/usr/sbin/taskpolicy -b`, which pins the
 # coordinator and `@pkmn/sim` to the M6's Efficiency cores so all 8 Performance cores
 # remain 100% free for the active bot.
@@ -1130,7 +1280,7 @@ cat << EOF | sudo tee /Library/LaunchDaemons/ai.pkmn.arena.plist >/dev/null
 </plist>
 EOF
 
-echo "==> Setup complete! Deploy the arena code to ${ARENA_ROOT}/app and load ai.pkmn.arena.plist."
+echo "==> Setup complete! Authorize ${TUNNEL_KEY}.pub on pkmn.ai, deploy the arena code to ${ARENA_ROOT}/app, and load ai.pkmn.{tunnel,arena}.plist."
 ```
 
 ---
