@@ -1418,8 +1418,9 @@ Bots communicate strictly over `stdin` and `stdout` using Pokémon Showdown's pl
       const myTeam = Teams.unpack(packedTeam);
     }
     ```
-- **How Team Enforcement Works in `@pkmn/sim`**:
-  - The coordinator initializes `@pkmn/sim` directly on `streams.omniscient` with `>player p1 {"name":"...","team":"<packed_team>"}`.
+- **How Team Enforcement & Opponent Anonymity Work in `@pkmn/sim`**:
+  - The coordinator initializes `@pkmn/sim` directly on `streams.omniscient` with generic player names **`"Bot A"`** (`p1`) and **`"Bot B"`** (`p2`): `>player p1 {"name":"Bot A","team":"<packed_team>"}` and `>player p2 {"name":"Bot B","team":"<packed_team>"}`.
+  - **Anonymous Opponent Identities in Blind-Pair Matches (`"Bot A"` and `"Bot B"`)**: In all blind-pair matches (both on the continuous CCRL Arena ladders and in Blind-Pair Tournament Mode), bots only ever see `|player|p1|Bot A||`, `|player|p2|Bot B||`, and `"name":"Bot A"` / `"name":"Bot B"` inside `|request|` JSON (`request.side.name`). Hiding opponent identities during blind-pair gameplay prevents bots from hardcoding opponent-specific counter-strategies or adjusting their risk/aggression based on an opponent's known identity or rating. *(By contrast, in Bring-Your-Own-Team (`BYOT`) Live Tournaments in Section 13.4, bots see their opponent's real display name just like in real-life tournament play.)*
   - In `@pkmn/sim`'s `getPlayerStreams(stream)`, `streams.p1.write(choice)` automatically rewrites every line to `>p1 <choice>`, which routes strictly to `battle.choose('p1', choice)`. A bot's `stdout` can never invoke `/utm`, `>player`, `>forcewin`, or `>eval`.
 
 ### Choices, Retries & Auto-Quarantine
@@ -1739,11 +1740,11 @@ export class TimeSlicedArenaGame {
 
     try {
       // Start the battle in @pkmn/sim with the fixed format ID, deterministic PRNG seed,
-      // and the two pre-assigned teams.
+      // generic player names ("Bot A" and "Bot B" to hide opponent identities), and the two pre-assigned teams.
       await streams.omniscient.write(
         `>start ${JSON.stringify({ formatid: this.formatId, seed: this.seed })}\n` +
-        `>player p1 ${JSON.stringify({ name: 'p1', team: Teams.unpack(this.p1TeamPacked) })}\n` +
-        `>player p2 ${JSON.stringify({ name: 'p2', team: Teams.unpack(this.p2TeamPacked) })}`
+        `>player p1 ${JSON.stringify({ name: 'Bot A', team: Teams.unpack(this.p1TeamPacked) })}\n` +
+        `>player p2 ${JSON.stringify({ name: 'Bot B', team: Teams.unpack(this.p2TeamPacked) })}`
       );
 
       for await (const chunk of streams.omniscient) {
@@ -1753,7 +1754,7 @@ export class TimeSlicedArenaGame {
           if (line.startsWith('|turn|')) {
             this.turn = parseInt(line.split('|')[2], 10);
           } else if (line.startsWith('|win|')) {
-            winner = line.split('|')[2] === 'p1' ? 'p1' : 'p2';
+            winner = line.split('|')[2] === 'Bot A' ? 'p1' : 'p2';
             return this.finish(rawStream, omniscientLog, winner, endReason);
           } else if (line.startsWith('|tie')) {
             if (this.turn >= 1000) endReason = 'tie_1000_turns';
@@ -2598,6 +2599,7 @@ This section consolidates every technical requirement, protocol change, and runt
   - Read newline-delimited Showdown protocol lines from `stdin`.
   - Write a single newline-terminated choice string (e.g. `move 1\n`, `move 2 terastallize\n`, `switch 3\n`, `team 123456\n`, or Doubles `move 1 +2, switch 3\n`) to `stdout` whenever you receive an active `|request|<json>` (where `request.wait` is falsy).
   - Write any debug logging to `stderr` (never `stdout`, as any line written to `stdout` is parsed as your move choice!).
+  - **Opponent Names (`"Bot A"` / `"Bot B"` in Blind-Pair vs. Real Names in BYOT Tournaments)**: In blind-pair matches on the CCRL Arena ladder (and Blind-Pair Tournament Mode), `@pkmn/sim` initializes `p1`'s name as `"Bot A"` and `p2`'s name as `"Bot B"` (`|player|p1|Bot A||` and `|player|p2|Bot B||`). In Bring-Your-Own-Team (`BYOT`) Live Tournaments, bots see their opponent's actual display name (mirroring real-life tournament play). Never determine your side (`p1` vs. `p2`) by matching `|player|` against your bot's registered display name—instead, check `request.side.id` (`"p1"` or `"p2"`) inside `|request|<json>`.
 
 ### 2. Handling Assigned Teams via `|utm|<packed_team>`
 - On Pokémon Showdown's ladder, constructed-format bots choose their own team via `/utm <packed_team>` before queueing.
@@ -3855,10 +3857,10 @@ In constructed Live Tournaments (`gen1ou`, `gen3ou`, `gen9ou`, `gen9doublesou`),
 1. **Static Bundled Team Repertoire (`teams/<format>.txt` inside the OCI Image — Zero Code Changes)**:
    - A competitor packages one or more legal teams in `/teams/<format>.txt` (one packed team per line, or standard Showdown exportable paste blocks) inside their container image (or uploads their encrypted team list when registering for the tournament).
    - Before each game, the Arbiter extracts the bot's `/teams/<format>.txt`, selects a team for that game (deterministically cycling through the bot's repertoire across games $1 \dots G$ or sampling via the game seed), validates it with `new TeamValidator(customFormat).validateTeam(team)`, canonicalizes it via `Team.canonicalize(team, gen)`, and sends `|utm|<packed_team>` to the bot's `stdin` as the very first line—**identical to the CCRL Arena**.
-2. **Dynamic Per-Game Team Generation (`|tournament|byot|<format>` $\to$ `/utm <packed_team>`)**:
-   - Advanced bots that dynamically construct or sample a team at runtime (e.g., mixed-strategy Nash teambuilders) can omit `/teams/<format>.txt` (or override it) by responding to the pre-game handshake line:
+2. **Dynamic Per-Game Team Generation (`|tournament|byot|<format>|<opponent_name>` $\to$ `/utm <packed_team>`)**:
+   - Advanced bots that dynamically construct or sample a team at runtime (e.g., mixed-strategy Nash teambuilders or opponent-aware tournament prep) can omit `/teams/<format>.txt` (or override it) by responding to the pre-game handshake line:
      ```text
-     |tournament|byot|gen9ou
+     |tournament|byot|gen9ou|Foul Play (v1.0.0)
      ```
    - Within a `5.0s` pre-game handshake window, the bot writes `/utm <packed_team>` (or `|utm|<packed_team>`) to `stdout`.
    - The Arbiter validates the submitted team against `new TeamValidator(customFormat).validateTeam(team)`:
@@ -3866,9 +3868,9 @@ In constructed Live Tournaments (`gen1ou`, `gen3ou`, `gen9ou`, `gen9doublesou`),
      - If invalid (e.g., banned species like `Zoroark`, illegal move combination, or >510 EVs), the Arbiter sends `|error|[Invalid team] <reasons>` and allows **1 fallback retry** (within the remaining 5s handshake window) before recording a game forfeit (`invalid_team`).
 
 > [!IMPORTANT]
-> **Blind Pre-Game Team Lock (No Counter-Picking by Opponent Name)**: Because both bots lock in their teams *before* `@pkmn/sim` emits `|player|p1|...` and `|player|p2|...` and because `/tmp` is wiped after every single game, a bot cannot inspect its opponent's identity or adapt across games to counter-team a specific rival mid-series. Any mixed-strategy team variety must come from the bot's own randomized policy or pre-built repertoire.
->
-> *(For tournaments run in **Blind-Pair / Arena-Assigned Team Mode** instead of BYOT—where every head-to-head matchup plays $M$ paired team-swap matches over a shared book of $2M$ teams—see [Section 13.5.2](#2-blind-pair-tournament-mode-fixed-2m-team-books-tcec-opening-suite--stratified-sampling) below.)*
+> **Opponent Visibility: Real Names in BYOT Tournaments vs. `"Bot A"` / `"Bot B"` in Blind-Pair Mode**:
+> - **BYOT Tournaments (Default)**: Mirroring real-life tournament play, bots are shown their opponent's real `displayName` both during the pre-game `|tournament|byot|<format>|<opponent_name>` team-selection handshake and in `@pkmn/sim`'s `|player|p1|<displayName>|...` / `|player|p2|<displayName>|...` battle stream. (`/tmp` is still wiped after every game so the sandbox remains clean.)
+> - **Blind-Pair Tournament Mode ([Section 13.5.2](#2-blind-pair-tournament-mode-fixed-2m-team-books-tcec-opening-suite--stratified-sampling))**: When a tournament is instead run with Arena-assigned blind-pair teams (`blindPairTeams`), `@pkmn/sim` is initialized with generic names `"Bot A"` (`p1`) and `"Bot B"` (`p2`)—identical to the CCRL ladder—so bots only see `"Bot A"` and `"Bot B"` on `stdin`, while the Tournament Arbiter rewrites `"Bot A"` and `"Bot B"` on the omniscient spectator stream (`onLiveEvent` for `pkmn.ai/live` and saved `omniscientLog` / `inputLog` for `/tournaments/<id>/` replays) to display the real competitors and avatars.
 
 #### 2. How Concurrent Execution & Pondering Work in Pokémon
 Unlike chess (where White and Black strictly alternate moves), Pokémon is primarily a **simultaneous-action game** with occasional **asymmetric mid-turn switches** (faints and pivot moves like *U-turn*, *Volt Switch*, *Flip Turn*, and *Teleport*). Removing `SIGSTOP`/`SIGCONT` and running both bots concurrently unlocks three distinct performance and latency advantages:
@@ -3898,6 +3900,8 @@ export type TourneyEndReason = EndReason | 'spot_preempted';
 
 export interface TourneyBotSpec {
   botDirId: string;              // e.g. '0-error-1.0.0' in /opt/arena/bots/ on the pre-baked VM image
+  displayName: string;           // Real bot name shown to spectators/replays, e.g. '0-ERROR (v1.0.0)'
+  avatar?: string;               // Optional avatar URL/path for replays, e.g. '/avatars/0-error.png'
   workerHost: string;            // Spot VM IP/host, e.g. 'pkmn@10.138.0.21'
   fallbackTeamsPacked: string[]; // Pre-validated teams from /teams/<format>.txt (if any)
   args?: string[];
@@ -3940,6 +3944,7 @@ export class ConcurrentTournamentGame {
     private readonly p1Spec: TourneyBotSpec,
     private readonly p2Spec: TourneyBotSpec,
     private readonly onLiveEvent?: (lines: string[], p1Sec: number, p2Sec: number) => void,
+    private readonly blindPairTeams?: { p1TeamPacked: string; p2TeamPacked: string },
   ) {
     this.addPerTurnSec = formatId.includes('doubles') ? 25 : 10;
   }
@@ -4049,6 +4054,12 @@ export class ConcurrentTournamentGame {
 
   private async resolveBotTeam(side: SideID, spec: TourneyBotSpec): Promise<string | null> {
     const bot = this.bots[side];
+    if (this.blindPairTeams) {
+      const assigned = side === 'p1' ? this.blindPairTeams.p1TeamPacked : this.blindPairTeams.p2TeamPacked;
+      bot.proc.stdin.write(`|utm|${assigned}\n`);
+      return assigned;
+    }
+
     const validator = new TeamValidator(this.customRules.join(','));
 
     if (spec.fallbackTeamsPacked.length > 0) {
@@ -4057,7 +4068,8 @@ export class ConcurrentTournamentGame {
       return chosenPacked;
     }
 
-    bot.proc.stdin.write(`|tournament|byot|${this.formatId}\n`);
+    const oppName = side === 'p1' ? this.p2Spec.displayName : this.p1Spec.displayName;
+    bot.proc.stdin.write(`|tournament|byot|${this.formatId}|${oppName}\n`);
     for (let attempt = 0; attempt < 2; attempt++) {
       const { line } = await this.waitForLine(bot, 5000);
       if (!line) return null;
@@ -4178,22 +4190,30 @@ export class ConcurrentTournamentGame {
       void pumpSide('p1');
       void pumpSide('p2');
 
+      // In BYOT tournaments, bots see their opponent's real displayName (like real-life tour play);
+      // in Blind-Pair tournament mode (`this.blindPairTeams`), @pkmn/sim uses generic "Bot A" / "Bot B"
+      // and `rewriteSpectatorLine` restores the real names on the omniscient spectator/replay stream.
+      const isBlindPair = Boolean(this.blindPairTeams);
+      const p1InGameName = isBlindPair ? 'Bot A' : this.p1Spec.displayName;
+      const p2InGameName = isBlindPair ? 'Bot B' : this.p2Spec.displayName;
+
       await streams.omniscient.write(
         `>start ${JSON.stringify({ formatid: this.formatId, seed: this.seed })}\n` +
-        `>player p1 ${JSON.stringify({ name: 'p1', team: Teams.unpack(p1Team) })}\n` +
-        `>player p2 ${JSON.stringify({ name: 'p2', team: Teams.unpack(p2Team) })}`
+        `>player p1 ${JSON.stringify({ name: p1InGameName, avatar: isBlindPair ? undefined : this.p1Spec.avatar, team: Teams.unpack(p1Team) })}\n` +
+        `>player p2 ${JSON.stringify({ name: p2InGameName, avatar: isBlindPair ? undefined : this.p2Spec.avatar, team: Teams.unpack(p2Team) })}`
       );
 
       for await (const chunk of streams.omniscient) {
         const newChunkLines: string[] = [];
         for (const line of chunk.split('\n')) {
           if (!line) continue;
-          omniscientLog.push(line);
-          newChunkLines.push(line);
+          const spectatorLine = isBlindPair ? this.rewriteSpectatorLine(line) : line;
+          omniscientLog.push(spectatorLine);
+          newChunkLines.push(spectatorLine);
           if (line.startsWith('|turn|')) {
             this.turn = parseInt(line.split('|')[2], 10);
           } else if (line.startsWith('|win|')) {
-            const winner: SideID = line.split('|')[2] === 'p1' ? 'p1' : 'p2';
+            const winner: SideID = line.split('|')[2] === p1InGameName ? 'p1' : 'p2';
             this.onLiveEvent?.(newChunkLines, this.bots.p1.secondsLeft, this.bots.p2.secondsLeft);
             return this.finish(rawStream, omniscientLog, winner, 'normal');
           } else if (line.startsWith('|tie')) {
@@ -4273,6 +4293,24 @@ export class ConcurrentTournamentGame {
     }
   }
 
+  /**
+   * Rewrite the generic in-game `"Bot A"` / `"Bot B"` identities on the omniscient stream
+   * to the entrants' real display names and avatars for live broadcasts and saved replays.
+   */
+  private rewriteSpectatorLine(line: string): string {
+    if (line.startsWith('|player|p1|Bot A|')) {
+      const ratingPart = line.split('|')[4] ?? '';
+      return `|player|p1|${this.p1Spec.displayName}|${this.p1Spec.avatar ?? ''}|${ratingPart}`;
+    }
+    if (line.startsWith('|player|p2|Bot B|')) {
+      const ratingPart = line.split('|')[4] ?? '';
+      return `|player|p2|${this.p2Spec.displayName}|${this.p2Spec.avatar ?? ''}|${ratingPart}`;
+    }
+    if (line === '|win|Bot A') return `|win|${this.p1Spec.displayName}`;
+    if (line === '|win|Bot B') return `|win|${this.p2Spec.displayName}`;
+    return line;
+  }
+
   private killRemoteSlot(side: SideID): void {
     const proc = this.bots?.[side]?.proc;
     if (proc && !proc.killed) {
@@ -4289,12 +4327,23 @@ export class ConcurrentTournamentGame {
   ): Omit<GameTelemetry, 'endReason'> & { endReason: TourneyEndReason } {
     this.killRemoteSlot('p1');
     this.killRemoteSlot('p2');
+    const inputLog = (rawStream.battle?.inputLog ?? []).map((entry) => {
+      if (entry.startsWith('>player p1 ')) {
+        const spec = JSON.parse(entry.slice('>player p1 '.length));
+        return `>player p1 ${JSON.stringify({ ...spec, name: this.p1Spec.displayName, avatar: this.p1Spec.avatar })}`;
+      }
+      if (entry.startsWith('>player p2 ')) {
+        const spec = JSON.parse(entry.slice('>player p2 '.length));
+        return `>player p2 ${JSON.stringify({ ...spec, name: this.p2Spec.displayName, avatar: this.p2Spec.avatar })}`;
+      }
+      return entry;
+    });
     return {
       winner,
       turns: this.turn,
       endReason,
       omniscientLog,
-      inputLog: rawStream.battle?.inputLog ?? [],
+      inputLog,
       p1PeakRamMb: 0,
       p2PeakRamMb: 0,
       p1BankLeftSec: Number(this.bots.p1.secondsLeft.toFixed(2)),
@@ -4632,9 +4681,9 @@ Unlike the continuous CCRL Arena (which suppresses battle logs and teams so bots
 - **Featured Table Live Stream (`/api/tourney/live.json` + Server-Sent Events)**:
   - Because `ConcurrentTournamentGame` runs directly inside the Node.js Coordinator on `pkmn.ai`, there is zero webhook delay between the arbiter and the web server.
   - When $K > 1$ tables run in parallel, the Tournament Coordinator assigns the highest-rated / highest-leverage individual game to **Table 1 (Featured Broadcast Table)**, while spectators can also switch between Tables $1 \dots K$ in a multi-table tab bar.
-  - Every time a turn resolves in `ConcurrentTournamentGame`, `onLiveEvent` broadcasts the omniscient `@pkmn/protocol` lines and both bots' remaining clock banks (`p1_clock_s`, `p2_clock_s`) over in-memory Server-Sent Events (`GET /api/tourney/stream?table=1`) to embedded `@pkmn/view` / Showdown replay clients on `pkmn.ai/live`.
+  - Every time a turn resolves in `ConcurrentTournamentGame`, `onLiveEvent` broadcasts the rewritten omniscient `@pkmn/protocol` lines (with `"Bot A"` and `"Bot B"` replaced by the real bot display names and avatars via `rewriteSpectatorLine`) and both bots' remaining clock banks (`p1_clock_s`, `p2_clock_s`) over in-memory Server-Sent Events (`GET /api/tourney/stream?table=1`) to embedded `@pkmn/view` / Showdown replay clients on `pkmn.ai/live`.
 - **Permanent Tournament Archive (`/tournaments/<id>/`)**:
-  - At the conclusion of the tournament, `pkmn.ai` tears down all GCP VMs (`gcloud compute instances delete`) so post-tournament cloud cost drops to `$0.00/hr`, and renders a permanent static tournament page (`/tournaments/2026-11-gen9ou/index.html`) containing the final standings, Davidson Elo ratings, full head-to-head crosstable, downloadable `.7z` replay pack, and click-to-watch links for every individual game.
+  - At the conclusion of the tournament, `pkmn.ai` tears down all GCP VMs (`gcloud compute instances delete`) so post-tournament cloud cost drops to `$0.00/hr`, and renders a permanent static tournament page (`/tournaments/2026-11-gen9ou/index.html`) containing the final standings, Davidson Elo ratings, full head-to-head crosstable, downloadable `.7z` replay pack (with real bot names and avatars rewritten in `omniscientLog` and `inputLog`), and click-to-watch links for every individual game.
 
 #### 3. SQLite Schema Additions for Live Tournaments (`/var/lib/pkmn/arena.sqlite`)
 
