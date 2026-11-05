@@ -463,7 +463,7 @@ describe('validateAuth', () => {
     expect((await validateAuth('/vouch/validate', {}, members)).status).toBe(403);
   });
 
-  test('supports Bearer token auth and serves /logs/token for guild members', async () => {
+  test('supports Bearer token auth and serves /chat/logs/token for guild members', async () => {
     let forwardedHeaders: Record<string, string> = {};
     globalThis.fetch = ((_: string, init?: {headers?: Record<string, string>}) => {
       forwardedHeaders = init?.headers ?? {};
@@ -485,7 +485,7 @@ describe('validateAuth', () => {
     expect(forwardedHeaders.cookie).toContain('VouchCookie=my-jwt');
 
     const tokenRes = await validateAuth(
-      '/logs/token',
+      '/chat/logs/token',
       {cookie: 'VouchCookie=cookie-jwt'},
       members
     );

@@ -357,7 +357,7 @@ export function formatMessage(
 export async function syncMessages(
   token: string,
   channel: string,
-  dir = path.join(root, 'logs'),
+  dir = path.join(root, 'chat', 'logs'),
   members?: GuildMember[],
   channels?: GuildChannel[],
   roles?: GuildRole[]
@@ -469,7 +469,7 @@ export async function validateAuth(
   reqHeaders: http.IncomingHttpHeaders,
   members: Set<string>
 ): Promise<{status: number; headers: Record<string, string>; body?: string}> {
-  if (url !== '/vouch/validate' && url !== '/logs/token') {
+  if (url !== '/vouch/validate' && url !== '/chat/logs/token') {
     return {status: 404, headers: {}};
   }
 
@@ -505,7 +505,7 @@ export async function validateAuth(
     return {status: 403, headers};
   }
 
-  if (url === '/logs/token') {
+  if (url === '/chat/logs/token') {
     return {
       status: 200,
       headers: {

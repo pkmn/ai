@@ -16,4 +16,4 @@ build/
 # Project
 public/
 private/
-logs/
+chat/logs/
