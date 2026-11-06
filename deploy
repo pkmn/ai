@@ -7,6 +7,16 @@ HEAD=$(git rev-parse HEAD)
 # Pull down latest code
 git pull origin main
 
+# Initialize/update teams submodule with only the required format directories
+if [ ! -e teams/teams/.git ]; then
+    mkdir -p .git/modules/teams
+    git submodule init teams/teams
+    git clone --depth 1 --filter=blob:none --sparse --separate-git-dir=.git/modules/teams/teams \
+        "$(git config submodule.teams/teams.url)" teams/teams
+fi
+git -C teams/teams sparse-checkout set gen9championsvgc2026regmc
+git submodule update --depth 1 teams/teams
+
 # Update dependencies if package.json has changed
 git diff --quiet $HEAD package.json teams/package.json >/dev/null ||
     npm install --omit=dev --silent

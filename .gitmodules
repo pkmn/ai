@@ -1,3 +1,4 @@
 [submodule "teams/teams"]
 	path = teams/teams
 	url = https://github.com/pkmn/teams.git
+	shallow = true
