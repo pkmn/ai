@@ -123,10 +123,7 @@ export function getMegaSpeciesId(
   const item = dex.items.get(itemId);
   if (!item.exists || !item.megaStone) return undefined;
   const sp = dex.species.get(speciesId);
-  if (typeof item.megaStone === 'string') {
-    return toID(item.megaEvolves) === sp.id ? toID(item.megaStone) : undefined;
-  }
-  const target = (item.megaStone as unknown as Record<string, string>)[sp.name];
+  const target = item.megaStone[sp.name];
   return target ? toID(target) : undefined;
 }
 

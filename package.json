@@ -2,6 +2,9 @@
   "private": true,
   "repository": "github:pkmn/ai",
   "license": "MIT",
+  "workspaces": [
+    "teams"
+  ],
   "dependencies": {
     "@retorquere/bibtex-parser": "<=9.0.21",
     "@types/jest": "^30.0.0",
