@@ -24,10 +24,61 @@ import {type PokemonSet, Team} from '@pkmn/sets';
 // Minimum required 1-NN distance D(A, B) in [0, 6] to every team in the blocklist pool.
 export const THRESHOLD = 1.3;
 
-// Maximum distance contributed by two sets of the same canonical species.
-// Kept strictly below 1.0 so changing a Pokemon species (1.0) always outweighs
-// completely overhauling the moves/item/ability/EVs of the same species (0.80).
-const SAME_SPECIES_CAP = 0.8;
+// Maximum distance contributed by two sets of the same canonical species (default/Champions).
+// Kept strictly below 1.0 in modern gens so changing a Pokemon species (1.0) outweighs
+// overhauling the moves/item/ability/EVs of the same species, while scaling up in early
+// gens (Gen 1-2) where small viable pools ("Big 4") mean teams differentiate via movesets,
+// and scaling down in high-diversity gens (Gen 6-9 OU) to force greater species creativity.
+export const SAME_SPECIES_CAP = 0.8;
+
+const GEN_SPECIES_CAPS: Record<number, number> = {
+  1: 1.8, // 1 move = 0.45 -> 3 move diffs across the Big 4 (1.35) passes 1.30
+  2: 1.2, // 1 move = 0.25, 1 item = 0.20 (with wItem = 0.10)
+  3: 0.9,
+  4: 0.8,
+  5: 0.75,
+  6: 0.65,
+  7: 0.6,
+  8: 0.65,
+  9: 0.65,
+};
+
+// Dedicated lead distance in pre-Team-Preview generations (Gen 1-4), where slot 0
+// is fixed on Turn 1.
+const GEN_LEAD_BONUS: Record<number, number> = {
+  1: 0.45,
+  2: 0.25,
+  3: 0.2,
+  4: 0.2,
+};
+
+export function sameSpeciesCap(dex: ModdedDex): number {
+  const isChamp = Boolean((dex as {modid?: string}).modid?.startsWith('champions'));
+  return isChamp ? SAME_SPECIES_CAP : (GEN_SPECIES_CAPS[dex.gen] ?? SAME_SPECIES_CAP);
+}
+
+/**
+ * Collapses cosmetic and mechanically identical formes (e.g. Gastrodon-East -> Gastrodon,
+ * Keldeo-Resolute -> Keldeo, Sinistcha-Masterpiece -> Sinistcha, Maushold-Four -> Maushold,
+ * Greninja-Bond -> Greninja, Toxtricity-Low-Key -> Toxtricity) to their base species ID.
+ */
+export function canonSpecies(dex: ModdedDex, speciesId?: string): ID {
+  if (!speciesId) return toID(speciesId);
+  const sp = dex.species.get(speciesId);
+  const base = dex.species.get(sp.baseSpecies);
+  if (
+    base.cosmeticFormes?.includes(sp.name) ||
+    sp.id === 'greninjabond' ||
+    sp.id === 'toxtricitylowkey' ||
+    (STATS.every(st => sp.baseStats[st] === base.baseStats[st]) &&
+      sp.types.length === base.types.length &&
+      sp.types.every((t, i) => t === base.types[i]) &&
+      Object.values(sp.abilities).join('|') === Object.values(base.abilities).join('|'))
+  ) {
+    return base.id;
+  }
+  return sp.id;
+}
 
 export const STATS: readonly StatID[] = ['hp', 'atk', 'def', 'spa', 'spd', 'spe'];
 
@@ -150,11 +201,11 @@ function canonMove(dex: ModdedDex, m: string): ID {
 }
 
 /**
- * Computes the distance in [0, 0.80] between two sets of the same canonical species:
- *   - Moves:   weight 0.50 (0.40 effective; 0.10 per move on a 4-move set)
- *   - Item:    weight 0.25 (0.20 effective; active in Gen 2+)
- *   - Ability: weight 0.10 (0.08 effective; active in Gen 3+, ignores non-entry pre-Mega abilities)
- *   - Stats:   weight 0.15 (0.12 effective; active in Gen 3+, with two-tier deadband)
+ * Computes the distance in [0, sameSpeciesCap(dex)] between two sets of the same canonical species:
+ *   - Moves:   weight 0.50
+ *   - Item:    weight 0.10 in Gen 2 (Leftovers ubiquity), 0.25 in Gen 3+
+ *   - Ability: weight 0.10 (active in Gen 3+, ignores non-entry pre-Mega abilities)
+ *   - Stats:   weight 0.15 (active in Gen 3+, with two-tier deadband)
  *   - Tera:    weight 0.10 (active only in standard Gen 9 formats with Terastallization)
  * If a feature does not exist in `dex.gen`, its weight is 0 and the remaining weights renormalize.
  */
@@ -168,7 +219,7 @@ export function setDistance(
   const isChamp = Boolean((dex as {modid?: string}).modid?.startsWith('champions'));
 
   const wMoves = 0.50;
-  const wItem = dex.gen >= 2 ? 0.25 : 0;
+  const wItem = dex.gen === 2 ? 0.10 : dex.gen >= 3 ? 0.25 : 0;
   const wAbil = dex.gen >= 3 ? 0.10 : 0;
   const wStats = dex.gen >= 3 ? 0.15 : 0;
   const wTera = dex.gen === 9 && !isChamp ? 0.10 : 0;
@@ -219,13 +270,14 @@ export function setDistance(
 
   const weighted =
     wMoves * dMoves + wItem * dItem + wAbil * dAbil + wStats * dStats + wTera * dTera;
-  return (weighted / totalW) * SAME_SPECIES_CAP;
+  return (weighted / totalW) * sameSpeciesCap(dex);
 }
 
 /**
- * Computes the total team distance D(A, B) in [0, 6] between two canonicalized teams.
+ * Computes the total team distance D(A, B) between two canonicalized teams.
  * Every unshared species contributes 1.0; each shared species contributes
- * setDistance(sA, sB) in [0, 0.80].
+ * setDistance(sA, sB) in [0, sameSpeciesCap(dex)]. In pre-Team-Preview generations
+ * (Gen 1-4), differing dedicated leads (slot 0) contribute an additional lead distance.
  */
 export function teamDistance(
   dex: ModdedDex,
@@ -240,16 +292,24 @@ export function teamDistance(
     const sB = mapB.get(sp);
     dist += !sB ? 1.0 : setDistance(dex, sA, sB, defaultLevel);
   }
+  const leadBonus = GEN_LEAD_BONUS[dex.gen] || 0;
+  const leadA = teamA[0]?.species;
+  const leadB = teamB[0]?.species;
+  if (leadBonus > 0 && leadA && leadB && leadA !== leadB && (mapB.has(leadA) || mapA.has(leadB))) {
+    dist += leadBonus;
+  }
   return dist;
 }
 
 /**
  * Parses a single team (Pokepaste / Showdown export / packed format) from `text`
- * and canonicalizes it via `@pkmn/sets`.
+ * and canonicalizes it via `@pkmn/sets` plus `canonSpecies`.
  */
 export function parseTeam(dex: ModdedDex, text: string): Partial<PokemonSet>[] {
   const t = Team.import(text.trim(), dex);
-  return Team.canonicalize((t?.team || []).filter(s => s?.moves?.length), dex);
+  const sets = Team.canonicalize((t?.team || []).filter(s => s?.moves?.length), dex);
+  for (const s of sets) s.species = canonSpecies(dex, s.species);
+  return sets;
 }
 
 if (require.main === module) {
