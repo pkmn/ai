@@ -1,5 +1,5 @@
 - [smogon/pokemon-showdown](https://github.com/smogon/pokemon-showdown)
-- [pmariglia/poke-engine](https://github.com/pmariglia/poke-engine) - Generation I-IX
+- [pmariglia/poke-engine](https://github.com/pmariglia/poke-engine) - Generation III-IX
 - [pkmn/engine](https://github.com/pkmn/engine) - Generation I
 - [pokemon-labs/hoenn](https://github.com/pokemon-labs/hoenn) - Generation III
 - [hiimvincent/poke-battle-sim](https://github.com/hiimvincent/poke-battle-sim) - Generation IV
@@ -7,7 +7,7 @@
 - [pkmnbotguy/just_a_simulator](https://github.com/pkmnbotguy/just_a_simulator) - Champions VGC Reg M-C
 - [dcabatin/Ninjask](https://github.com/dcabatin/Ninjask) - Champions VGC Reg M-C
 - [colefoster/vgc-engine](https://github.com/colefoster/vgc-engine) - Gen IX & Champions VGC
-- [HibikiDev/openVGCengine](https://github.com/HibikiDev/openVGCengine/) - VGC 2013 onward
+{%- [HibikiDev/openVGCengine](https://github.com/HibikiDev/openVGCengine/) - VGC 2013 onward %}
 
 ```=comment
 
