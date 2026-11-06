@@ -1,15 +1,17 @@
-TODO
+- [smogon/pokemon-showdown](https://github.com/smogon/pokemon-showdown)
+- [pmariglia/poke-engine](https://github.com/pmariglia/poke-engine) - Generation I-IX
+- [pkmn/engine](https://github.com/pkmn/engine) - Generation I
+- [pokemon-labs/hoenn](https://github.com/pokemon-labs/hoenn) - Generation III
+- [hiimvincent/poke-battle-sim](https://github.com/hiimvincent/poke-battle-sim) - Generation IV
+- [sethkarten/pokepy-engine](https://github.com/sethkarten/pokepy-engine) - Generation IX
+- [pkmnbotguy/just_a_simulator](https://github.com/pkmnbotguy/just_a_simulator) - Champions VGC Reg M-C
+- [dcabatin/Ninjask](https://github.com/dcabatin/Ninjask) - Champions VGC Reg M-C
+- [colefoster/vgc-engine](https://github.com/colefoster/vgc-engine) - Gen IX & Champions VGC
+- [HibikiDev/openVGCengine](https://github.com/HibikiDev/openVGCengine/) - VGC 2013 onward
+
+```=comment
 
 options
-
-- PokemonBattleEngine
-- pkmn/engine
-- aed3/poke-sim
-- pokemon-shwodown
-- hiimvincent/poke-battle-sim
-- custom
-- pmariglia/poke-engine
-- ...
 
 tradeoffs/features
 
@@ -39,3 +41,4 @@ internal vs. external
 
   - <https://journal.stuffwithstuff.com/2013/01/13/iteration-inside-and-out/>
   - <https://stackoverflow.com/questions/5004162/what-does-it-mean-for-a-data-structure-to-be-intrusive>
+```
