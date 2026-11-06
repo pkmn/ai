@@ -10,7 +10,8 @@
  * directory, and repeat iteratively for each subsequent team.
  *
  * Usage:
- *   bun index.ts <team-file> [pool-dir] [--format=gen9championsvgc2026regmc]
+ *   bun index.ts <team-file> --format=<format> [pool-dir...]
+ *   bun index.ts <team-file> <pool-dir...> [--format=<format>]
  */
 
 import * as fs from 'fs';
@@ -97,9 +98,9 @@ const ENTRY_ABILITIES = new Set([
 ]);
 
 /**
- * Initializes the Dex instance for a given format string (defaults to Gen 9 Champions).
+ * Initializes the Dex instance for a given format string.
  */
-export function getDex(format = 'gen9championsvgc2026regmc'): ModdedDex {
+export function getDex(format: string): ModdedDex {
   const id = toID(format);
   if (id.includes('champions')) {
     return id.includes('regmb')
@@ -315,35 +316,48 @@ if (require.main === module) {
   const positional = args.filter(a => !a.startsWith('--'));
 
   const formatFlag = flags.find(f => f.startsWith('--format='))?.slice('--format='.length);
-  const defaultPool = path.resolve(__dirname, 'teams/gen9championsvgc2026regmc');
-  const fallbackPool = fs.existsSync(defaultPool) ? defaultPool : 'gen9championsvgc2026regmc';
-  const [teamFile, blocklistDir = fallbackPool] = positional;
+  const [teamFile, ...explicitPools] = positional;
 
-  if (!teamFile) {
-    console.error(
-      'Usage: bun index.ts <team-file> [pool-dir] [--format=gen9championsvgc2026regmc]'
-    );
+  const format = toID(
+    formatFlag || (explicitPools[0] ? path.basename(path.resolve(explicitPools[0])) : '')
+  );
+
+  if (!teamFile || !format) {
+    console.error('Usage: bun index.ts <team-file> --format=<format> [pool-dir...]');
     process.exit(1);
   }
 
-  const format = toID(formatFlag || path.basename(path.resolve(blocklistDir)));
+  const defaultPools = fs
+    .readdirSync(__dirname, {withFileTypes: true})
+    .filter(d => d.isDirectory() && !d.name.startsWith('.') && d.name !== 'node_modules')
+    .map(d => path.join(__dirname, d.name, format))
+    .filter(p => fs.existsSync(p));
+  const blocklistDirs =
+    explicitPools.length > 0
+      ? explicitPools
+      : defaultPools.length > 0
+        ? defaultPools
+        : [format];
+
   const dex = getDex(format);
   const defaultLevel =
     format.includes('vgc') || format.includes('bss') || format.includes('champions') ? 50 : 100;
 
   const candidate = parseTeam(dex, fs.readFileSync(teamFile, 'utf8'));
-  const blocklistFiles = fs
-    .readdirSync(blocklistDir)
-    .filter(f => !f.startsWith('.') && f !== 'README.md');
 
   let minD = Infinity;
   let closestId = '';
-  for (const id of blocklistFiles) {
-    const poolTeam = parseTeam(dex, fs.readFileSync(path.join(blocklistDir, id), 'utf8'));
-    const d = teamDistance(dex, candidate, poolTeam, defaultLevel);
-    if (d < minD) {
-      minD = d;
-      closestId = id;
+  for (const blocklistDir of blocklistDirs) {
+    const blocklistFiles = fs
+      .readdirSync(blocklistDir)
+      .filter(f => !f.startsWith('.') && f !== 'README.md');
+    for (const id of blocklistFiles) {
+      const poolTeam = parseTeam(dex, fs.readFileSync(path.join(blocklistDir, id), 'utf8'));
+      const d = teamDistance(dex, candidate, poolTeam, defaultLevel);
+      if (d < minD) {
+        minD = d;
+        closestId = id;
+      }
     }
   }
 
