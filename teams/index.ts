@@ -1,0 +1,303 @@
+/**
+ * Tournament Team Uniqueness Checker
+ *
+ * Given a single candidate team file and a directory of blocklist teams, computes
+ * the 1-Nearest-Neighbor (1-NN) distance d_1NN(T, P) = min_{B in P} D(T, B) in [0, 6]
+ * against the pool and checks whether it meets the tournament threshold (D >= 1.30).
+ *
+ * Competitors building a multi-team submission (e.g. 20 teams) can check a
+ * candidate team against the pool, add the passing team file into their pool
+ * directory, and repeat iteratively for each subsequent team.
+ *
+ * Usage:
+ *   bun index.ts <team-file> [pool-dir] [--format=gen9championsvgc2026regmc]
+ */
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+import {Dex, type ID, type ModdedDex, type Nature, type StatID, toID} from '@pkmn/dex';
+import * as champions from '@pkmn/mods/champions';
+import * as championsregmb from '@pkmn/mods/championsregmb';
+import {type PokemonSet, Team} from '@pkmn/sets';
+
+// Minimum required 1-NN distance D(A, B) in [0, 6] to every team in the blocklist pool.
+export const THRESHOLD = 1.3;
+
+// Maximum distance contributed by two sets of the same canonical species.
+// Kept strictly below 1.0 so changing a Pokemon species (1.0) always outweighs
+// completely overhauling the moves/item/ability/EVs of the same species (0.80).
+const SAME_SPECIES_CAP = 0.8;
+
+export const STATS: readonly StatID[] = ['hp', 'atk', 'def', 'spa', 'spd', 'spe'];
+
+// Abilities that trigger on switch-in / prior to Mega Evolution. If two sets share
+// the same species and Mega Stone, differing base abilities only count toward set
+// distance when at least one of the two abilities is in this set.
+const ENTRY_ABILITIES = new Set([
+  'airlock', 'anticipation', 'asoneglastrier', 'asonespectrier', 'cloudnine',
+  'curiousmedicine', 'dauntlessshield', 'download', 'drizzle', 'drought',
+  'electricterrain', 'electricsurge', 'forewarn', 'frisk', 'grassysurge',
+  'hadronengine', 'hospitality', 'imposter', 'intimidate', 'intrepidsword',
+  'mistysurge', 'moldbreaker', 'neutralizinggas', 'orichalcumpulse', 'pressure',
+  'protosynthesis', 'psychicsurge', 'quarkdrive', 'sandstream', 'screencleaner',
+  'snowwarning', 'supersweetsyrup', 'supremeoverlord', 'teravolt', 'trace',
+  'turboblaze', 'unnerve',
+]);
+
+/**
+ * Initializes the Dex instance for a given format string (defaults to Gen 9 Champions).
+ */
+export function getDex(format = 'gen9championsvgc2026regmc'): ModdedDex {
+  const id = toID(format);
+  if (id.includes('champions')) {
+    return id.includes('regmb')
+      ? Dex.mod('championsregmb' as ID, championsregmb)
+      : Dex.mod('champions' as ID, champions);
+  }
+  const genMatch = /^gen(\d)/.exec(id);
+  return genMatch ? Dex.forGen(Number(genMatch[1])) : Dex;
+}
+
+/**
+ * Returns the Mega forme ID if `itemId` is a Mega Stone that Mega Evolves `speciesId`,
+ * or `undefined` otherwise.
+ */
+export function getMegaSpeciesId(
+  dex: ModdedDex,
+  speciesId?: string,
+  itemId?: string
+): ID | undefined {
+  if (!speciesId || !itemId) return undefined;
+  const item = dex.items.get(itemId);
+  if (!item.exists || !item.megaStone) return undefined;
+  const sp = dex.species.get(speciesId);
+  if (typeof item.megaStone === 'string') {
+    return toID(item.megaEvolves) === sp.id ? toID(item.megaStone) : undefined;
+  }
+  const target = (item.megaStone as unknown as Record<string, string>)[sp.name];
+  return target ? toID(target) : undefined;
+}
+
+/**
+ * Computes a single real stat at `level` (50 for VGC/Champions, 100 otherwise),
+ * accounting for Champions EV scaling (`2 * ev - 1`) vs standard (`floor(ev / 4)`).
+ */
+function calcStat(
+  gen: number,
+  stat: StatID,
+  base: number,
+  iv = 31,
+  ev = 0,
+  level = 50,
+  nature: Nature | undefined = undefined,
+  isChamp = true
+): number {
+  const tr = (n: number, b = 0) => (b ? (n >>> 0) % (2 ** b) : n >>> 0);
+  if (gen < 3) {
+    iv = Math.floor(iv / 2) * 2;
+    nature = undefined;
+  }
+  const e = isChamp ? Math.max(2 * ev - 1, 0) : tr(ev / 4);
+  if (stat === 'hp') {
+    return base === 1 ? base : tr((tr(2 * base + iv + e + 100) * level) / 100 + 10);
+  }
+  const val = tr((tr(2 * base + iv + e) * level) / 100 + 5);
+  if (nature?.plus === stat) return tr(tr(val * 110, 16) / 100);
+  if (nature?.minus === stat) return tr(tr(val * 90, 16) / 100);
+  return val;
+}
+
+/**
+ * Computes the 6-element relative stat investment vector for `set`:
+ *   vec[stat] = (actualStat - uninvestedNeutralStat) / uninvestedNeutralStat
+ * Comparing actual computed stats (rather than raw EVs) ensures that 4-EV tweaks,
+ * IV + EV compensation tricks, and nature swaps with matching stats are measured
+ * by their true mechanical effect.
+ */
+function getStatVector(
+  dex: ModdedDex,
+  set: Partial<PokemonSet>,
+  defaultLevel = 50
+): Record<StatID, number> {
+  const sp = dex.species.get(set.species!);
+  const nat = dex.gen >= 3 ? dex.natures.get(set.nature || 'serious') : undefined;
+  const isChamp = Boolean((dex as {modid?: string}).modid?.startsWith('champions'));
+  const level = set.level || defaultLevel;
+  const defaultEv = dex.gen < 3 ? 252 : 0;
+  const vec = {} as Record<StatID, number>;
+  for (const st of STATS) {
+    const iv = set.ivs?.[st] ?? 31;
+    const ev = set.evs?.[st] ?? defaultEv;
+    const actual = calcStat(dex.gen, st, sp.baseStats[st], iv, ev, level, nat, isChamp);
+    const base = calcStat(dex.gen, st, sp.baseStats[st], 31, defaultEv, level, undefined, isChamp);
+    vec[st] = (actual - base) / base;
+  }
+  return vec;
+}
+
+/**
+ * Normalizes functionally equivalent moves so trivial swaps cannot game uniqueness:
+ * - Return <-> Frustration -> 'return' as ID
+ * - All stalling Protect variants (Protect, Detect, Spiky Shield, Baneful Bunker,
+ *   Burning Bulwark, Silk Trap, King's Shield, Obstruct, Max Guard) -> 'protect' as ID
+ */
+function canonMove(dex: ModdedDex, m: string): ID {
+  const id = toID(m);
+  if (id === 'frustration') return 'return' as ID;
+  const mv = dex.moves.get(id);
+  return mv.exists && mv.stallingMove ? ('protect' as ID) : id;
+}
+
+/**
+ * Computes the distance in [0, 0.80] between two sets of the same canonical species:
+ *   - Moves:   weight 0.50 (0.40 effective; 0.10 per move on a 4-move set)
+ *   - Item:    weight 0.25 (0.20 effective; active in Gen 2+)
+ *   - Ability: weight 0.10 (0.08 effective; active in Gen 3+, ignores non-entry pre-Mega abilities)
+ *   - Stats:   weight 0.15 (0.12 effective; active in Gen 3+, with two-tier deadband)
+ *   - Tera:    weight 0.10 (active only in standard Gen 9 formats with Terastallization)
+ * If a feature does not exist in `dex.gen`, its weight is 0 and the remaining weights renormalize.
+ */
+export function setDistance(
+  dex: ModdedDex,
+  a: Partial<PokemonSet>,
+  b: Partial<PokemonSet>,
+  defaultLevel = 50
+): number {
+  if (a.species !== b.species) return 1.0;
+  const isChamp = Boolean((dex as {modid?: string}).modid?.startsWith('champions'));
+
+  const wMoves = 0.50;
+  const wItem = dex.gen >= 2 ? 0.25 : 0;
+  const wAbil = dex.gen >= 3 ? 0.10 : 0;
+  const wStats = dex.gen >= 3 ? 0.15 : 0;
+  const wTera = dex.gen === 9 && !isChamp ? 0.10 : 0;
+  const totalW = wMoves + wItem + wAbil + wStats + wTera;
+
+  // 1. Moveset distance: fraction of unshared canonicalized moves
+  const movesA = new Set((a.moves || []).map(m => canonMove(dex, m)));
+  const movesB = new Set((b.moves || []).map(m => canonMove(dex, m)));
+  let sharedMoves = 0;
+  for (const m of movesA) if (movesB.has(m)) sharedMoves++;
+  const dMoves = 1 - sharedMoves / Math.max(movesA.size, movesB.size, 1);
+
+  // 2. Held item distance
+  const itemA = toID(a.item);
+  const itemB = toID(b.item);
+  const dItem = wItem > 0 ? (itemA === itemB ? 0 : 1.0) : 0;
+
+  // 3. Ability distance (ignoring non-entry base abilities when both hold the same Mega Stone)
+  let dAbil = 0;
+  if (wAbil > 0 && a.ability !== b.ability) {
+    const abilA = toID(a.ability);
+    const abilB = toID(b.ability);
+    const ignoreMegaAbil =
+      itemA === itemB &&
+      Boolean(getMegaSpeciesId(dex, a.species, itemA)) &&
+      !ENTRY_ABILITIES.has(abilA) &&
+      !ENTRY_ABILITIES.has(abilB);
+    dAbil = ignoreMegaAbil ? 0 : 1.0;
+  }
+
+  // 4. Tera Type distance (only for non-Champions Gen 9 formats)
+  const dTera = wTera > 0 ? (toID(a.teraType) === toID(b.teraType) ? 0 : 1.0) : 0;
+
+  // 5. Stat distance with two-tier anti-EV-gaming deadband:
+  //    - If moves, item, ability, and Tera are all identical, require L1 > 0.30 (a full
+  //      role/nature overhaul) before stats contribute any distance.
+  //    - Otherwise use a minor-creep deadband of L1 <= 0.08, scaling linearly to 1.0 at L1 = 0.50.
+  let dStats = 0;
+  if (wStats > 0) {
+    const vecA = getStatVector(dex, a, defaultLevel);
+    const vecB = getStatVector(dex, b, defaultLevel);
+    let statL1 = 0;
+    for (const st of STATS) statL1 += Math.abs(vecA[st] - vecB[st]);
+    const nonStatDiff = dMoves + dItem + dAbil + dTera;
+    const deadband = nonStatDiff === 0 ? 0.30 : 0.08;
+    dStats = statL1 <= deadband ? 0 : Math.min(1.0, (statL1 - deadband) / (0.50 - deadband));
+  }
+
+  const weighted =
+    wMoves * dMoves + wItem * dItem + wAbil * dAbil + wStats * dStats + wTera * dTera;
+  return (weighted / totalW) * SAME_SPECIES_CAP;
+}
+
+/**
+ * Computes the total team distance D(A, B) in [0, 6] between two canonicalized teams.
+ * Every unshared species contributes 1.0; each shared species contributes
+ * setDistance(sA, sB) in [0, 0.80].
+ */
+export function teamDistance(
+  dex: ModdedDex,
+  teamA: Partial<PokemonSet>[],
+  teamB: Partial<PokemonSet>[],
+  defaultLevel = 50
+): number {
+  const mapA = new Map(teamA.map(s => [s.species, s]));
+  const mapB = new Map(teamB.map(s => [s.species, s]));
+  let dist = 0;
+  for (const [sp, sA] of mapA) {
+    const sB = mapB.get(sp);
+    dist += !sB ? 1.0 : setDistance(dex, sA, sB, defaultLevel);
+  }
+  return dist;
+}
+
+/**
+ * Parses a single team (Pokepaste / Showdown export / packed format) from `text`
+ * and canonicalizes it via `@pkmn/sets`.
+ */
+export function parseTeam(dex: ModdedDex, text: string): Partial<PokemonSet>[] {
+  const t = Team.import(text.trim(), dex);
+  return Team.canonicalize((t?.team || []).filter(s => s?.moves?.length), dex);
+}
+
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const flags = args.filter(a => a.startsWith('--'));
+  const positional = args.filter(a => !a.startsWith('--'));
+
+  const formatFlag = flags.find(f => f.startsWith('--format='))?.slice('--format='.length);
+  const defaultPool = path.resolve(__dirname, 'teams/gen9championsvgc2026regmc');
+  const fallbackPool = fs.existsSync(defaultPool) ? defaultPool : 'gen9championsvgc2026regmc';
+  const [teamFile, blocklistDir = fallbackPool] = positional;
+
+  if (!teamFile) {
+    console.error(
+      'Usage: bun index.ts <team-file> [pool-dir] [--format=gen9championsvgc2026regmc]'
+    );
+    process.exit(1);
+  }
+
+  const format = toID(formatFlag || path.basename(path.resolve(blocklistDir)));
+  const dex = getDex(format);
+  const defaultLevel =
+    format.includes('vgc') || format.includes('bss') || format.includes('champions') ? 50 : 100;
+
+  const candidate = parseTeam(dex, fs.readFileSync(teamFile, 'utf8'));
+  const blocklistFiles = fs
+    .readdirSync(blocklistDir)
+    .filter(f => !f.startsWith('.') && f !== 'README.md');
+
+  let minD = Infinity;
+  let closestId = '';
+  for (const id of blocklistFiles) {
+    const poolTeam = parseTeam(dex, fs.readFileSync(path.join(blocklistDir, id), 'utf8'));
+    const d = teamDistance(dex, candidate, poolTeam, defaultLevel);
+    if (d < minD) {
+      minD = d;
+      closestId = id;
+    }
+  }
+
+  const pass = minD >= THRESHOLD;
+  const status = pass ? 'PASS' : 'FAIL';
+  const name = path.basename(teamFile);
+  const dStr = `distance=${minD.toFixed(3)}`;
+  console.log(
+    `${status} ${name}: ${dStr} (threshold=${THRESHOLD.toFixed(2)}, closest=${closestId})`
+  );
+  process.exit(pass ? 0 : 1);
+}
+
+export {toID};

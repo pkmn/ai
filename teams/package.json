@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "dependencies": {
+    "@pkmn/dex": "^0.10.15",
+    "@pkmn/mods": "^0.10.15",
+    "@pkmn/sets": "^7.0.0"
+  }
+}

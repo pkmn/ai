@@ -1,7 +1,7 @@
 import pkmn from "@pkmn/eslint-config";
 
 export default [...pkmn, {
-  ignores: ["eslint.config.mjs", "build/", "private/"]
+  ignores: ["eslint.config.mjs", "build/", "private/", "teams/teams/"]
 }, {
   files: ["server/*.ts", "static/build.ts"],
   rules: {
