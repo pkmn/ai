@@ -10,8 +10,7 @@
  * directory, and repeat iteratively for each subsequent team.
  *
  * Usage:
- *   bun index.ts <team-file> --format=<format> [pool-dir...]
- *   bun index.ts <team-file> <pool-dir...> [--format=<format>]
+ *   bun index.ts <team-file> <pool-dir...> --format=<format>
  */
 
 import * as fs from 'fs';
@@ -316,28 +315,14 @@ if (require.main === module) {
   const positional = args.filter(a => !a.startsWith('--'));
 
   const formatFlag = flags.find(f => f.startsWith('--format='))?.slice('--format='.length);
-  const [teamFile, ...explicitPools] = positional;
+  const [teamFile, ...blocklistDirs] = positional;
 
-  const format = toID(
-    formatFlag || (explicitPools[0] ? path.basename(path.resolve(explicitPools[0])) : '')
-  );
+  const format = toID(formatFlag);
 
-  if (!teamFile || !format) {
-    console.error('Usage: bun index.ts <team-file> --format=<format> [pool-dir...]');
+  if (!teamFile || !blocklistDirs.length || !format) {
+    console.error('Usage: bun index.ts <team-file> <pool-dir...> --format=<format>');
     process.exit(1);
   }
-
-  const defaultPools = fs
-    .readdirSync(__dirname, {withFileTypes: true})
-    .filter(d => d.isDirectory() && !d.name.startsWith('.') && d.name !== 'node_modules')
-    .map(d => path.join(__dirname, d.name, format))
-    .filter(p => fs.existsSync(p));
-  const blocklistDirs =
-    explicitPools.length > 0
-      ? explicitPools
-      : defaultPools.length > 0
-        ? defaultPools
-        : [format];
 
   const dex = getDex(format);
   const defaultLevel =

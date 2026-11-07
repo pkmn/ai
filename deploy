@@ -7,15 +7,18 @@ HEAD=$(git rev-parse HEAD)
 # Pull down latest code
 git pull origin main
 
-# Initialize/update teams submodule with only the required format directories
-if [ ! -e teams/teams/.git ]; then
-    mkdir -p .git/modules/teams
-    git submodule init teams/teams
-    git clone --depth 1 --filter=blob:none --sparse --separate-git-dir=.git/modules/teams/teams \
-        "$(git config submodule.teams/teams.url)" teams/teams
-fi
+# Initialize/update teams submodules with only the required directories
+for sub in teams/teams teams/pkmn_stuff; do
+    if [ ! -e "$sub/.git" ]; then
+        mkdir -p .git/modules/teams
+        git submodule init "$sub"
+        git clone --depth 1 --filter=blob:none --sparse --separate-git-dir=".git/modules/$sub" \
+            "$(git config "submodule.$sub.url")" "$sub"
+    fi
+done
 git -C teams/teams sparse-checkout set gen9championsvgc2026regmc
-git submodule update --depth 1 teams/teams
+git -C teams/pkmn_stuff sparse-checkout set teams/Teams_real
+git submodule update --depth 1 teams/teams teams/pkmn_stuff
 
 # Update dependencies if package.json has changed
 git diff --quiet $HEAD package.json teams/package.json >/dev/null ||

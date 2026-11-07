@@ -724,8 +724,14 @@
 - name: Mew's Truck
   site: https://www.smogon.com/forums/threads/3789554/
   active: 2026 # October 10
-  engine: Custom
-  language: Rust
+  license: MIT-0
+  source: https://github.com/pkmnbotguy/pkmn_stuff
+  engine:
+    - name: just_a_simulator
+      url: https://github.com/pkmnbotguy/just_a_simulator
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: [Rust, Python]
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown

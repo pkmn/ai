@@ -2,3 +2,7 @@
 	path = teams/teams
 	url = https://github.com/pkmn/teams.git
 	shallow = true
+[submodule "teams/pkmn_stuff"]
+	path = teams/pkmn_stuff
+	url = https://github.com/pkmnbotguy/pkmn_stuff.git
+	shallow = true
