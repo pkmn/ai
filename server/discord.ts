@@ -95,8 +95,25 @@ function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
 }
 
+function toID(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function botOverride(
+  bot: NonNullable<Leader['bot']>,
+  bots?: {[bot: string]: string}
+): string | undefined {
+  if (!bots) return undefined;
+  if (bots[bot.id]) return bots[bot.id];
+  const id = toID(bot.name);
+  for (const [k, v] of Object.entries(bots)) {
+    if (id.startsWith(toID(k))) return v;
+  }
+  return undefined;
+}
+
 export function ownerOf(leader: Leader, config: Config): Owner | undefined {
-  const override = leader.bot && (config.bots?.[leader.bot.id] ?? config.bots?.[leader.bot.name]);
+  const override = leader.bot && botOverride(leader.bot, config.bots);
   if (override) return {name: override};
   if (!leader.owner) return undefined;
   if (leader.owner.discordId) return {id: leader.owner.discordId};

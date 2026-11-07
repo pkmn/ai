@@ -29,6 +29,8 @@ describe('ownerOf', () => {
   test.each<[string, Leader, ReturnType<typeof ownerOf>]>([
     ['the config override by bot name',
       leader('a', {id: 'b2', name: 'Bot'}, {name: 'x', discordId: '1'}), {name: 'sauce'}],
+    ['the config override by bot family name for a version',
+      leader('a', {id: 'b2', name: 'Bot v2'}, null), {name: 'sauce'}],
     ['the shared Discord account', leader('a', bot, {name: 'x', discordId: '1'}), {id: '1'}],
     ['the mapped author name', leader('a', bot, {name: 'pelle', discordId: null}), {name: 'pll'}],
     ['the author name', leader('a', bot, {name: 'x', discordId: null}), {name: 'x'}],
