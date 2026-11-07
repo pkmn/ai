@@ -16,10 +16,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {Dex, type ID, type ModdedDex, type Nature, type StatID, toID} from '@pkmn/dex';
+import {Dex, ID, ModdedDex, Nature, StatID, toID} from '@pkmn/dex';
 import * as champions from '@pkmn/mods/champions';
 import * as championsregmb from '@pkmn/mods/championsregmb';
-import {type PokemonSet, Team} from '@pkmn/sets';
+import {PokemonSet, Team} from '@pkmn/sets';
 
 // Minimum required 1-NN distance D(A, B) in [0, 6] to every team in the blocklist pool.
 export const THRESHOLD = 1.3;
@@ -32,7 +32,7 @@ export const THRESHOLD = 1.3;
 export const SAME_SPECIES_CAP = 0.8;
 
 const GEN_SPECIES_CAPS: Record<number, number> = {
-  1: 1.8, // 1 move = 0.45 -> 3 move diffs across the Big 4 (1.35) passes 1.30
+  1: 1.8, // 1 move = 0.45 -> 3 move diffs across the Big 4 (1.35) passes 1.30 threshold
   2: 1.2, // 1 move = 0.25, 1 item = 0.20 (with wItem = 0.10)
   3: 0.9,
   4: 0.8,
