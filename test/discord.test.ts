@@ -9,6 +9,7 @@ import {
   formatMessage,
   ownerOf,
   syncMessages,
+  syncPins,
   syncRoles,
   validateAuth,
 } from '../server/discord';
@@ -430,6 +431,156 @@ describe('syncMessages', () => {
     // Older 50 are ids 101..150, so after advances to page[50].id === '150'
     const cursor = fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8');
     expect(cursor).toMatch(/^150\n2026-11-03\.txt \d+\n$/);
+  });
+});
+
+describe('syncPins', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test('replaces user pins with bot pins in reverse order and deletes system messages',
+    async () => {
+      const actions: Array<{method: string; url: string; body?: string}> = [];
+      let nextId = 100;
+      const userPins: DiscordMessage[] = [
+        {id: '1', timestamp: '2026-11-02T00:00:00Z', content: 'first',
+          author: {id: 'u1', username: 'pre'}},
+        {id: '2', timestamp: '2026-11-02T00:00:00Z', content: 'second',
+          author: {id: 'u1', username: 'pre'}},
+        {id: '3', timestamp: '2026-11-02T00:00:00Z', content: 'third',
+          author: {id: 'u1', username: 'pre'}},
+      ];
+
+      globalThis.fetch = ((url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        const u = String(url);
+        const body = typeof init?.body === 'string' ? init.body : undefined;
+        actions.push({method, url: u, ...(body ? {body} : {})});
+
+        if (method === 'GET' && u.endsWith('/messages/pins')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () => Promise.resolve({items: userPins.map(message => ({message}))}),
+          });
+        }
+        if (method === 'POST' && u.endsWith('/messages')) {
+          const {content} = JSON.parse(body!) as {content: string};
+          const created: DiscordMessage = {
+            id: String(++nextId),
+            timestamp: '2026-11-07T00:00:00Z',
+            content,
+            author: {id: 'bot', username: 'pkmn', bot: true},
+          };
+          return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(created)});
+        }
+        if (method === 'GET' && u.includes('/messages?limit=')) {
+          const recent: DiscordMessage[] = [
+            {id: '201', type: 6, timestamp: '2026-11-07T00:00:00Z', content: '',
+              author: {id: 'bot', username: 'pkmn', bot: true}},
+            {id: '202', type: 6, timestamp: '2026-11-07T00:00:00Z', content: '',
+              author: {id: 'u1', username: 'pre'}},
+            {id: '103', type: 0, timestamp: '2026-11-07T00:00:00Z', content: 'first',
+              author: {id: 'bot', username: 'pkmn', bot: true}},
+          ];
+          return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(recent)});
+        }
+        return Promise.resolve({status: 204, ok: true});
+      }) as unknown as typeof fetch;
+
+      const state = new Map<string, string | undefined>();
+      await syncPins('token', 'chan', ['first', 'second', 'third'], state);
+
+      expect(actions).toEqual([
+        {method: 'GET', url: expect.stringContaining('/channels/chan/messages/pins')},
+        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/1')},
+        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/2')},
+        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/3')},
+        {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
+          body: JSON.stringify({content: 'third'})},
+        {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
+          body: JSON.stringify({content: 'second'})},
+        {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
+          body: JSON.stringify({content: 'first'})},
+        {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/101')},
+        {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/102')},
+        {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/103')},
+        {method: 'GET', url: expect.stringContaining('/channels/chan/messages?limit=16')},
+        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/201')},
+      ]);
+
+      // Cached state skips subsequent cycles when config is unchanged
+      actions.length = 0;
+      await syncPins('token', 'chan', ['first', 'second', 'third'], state);
+      expect(actions).toEqual([]);
+    });
+
+  test('reuses unchanged bot pins, replaces changed ones, and deletes stale bot pins', async () => {
+    const actions: Array<{method: string; url: string; body?: string}> = [];
+    const botPins: DiscordMessage[] = [
+      {id: '103', timestamp: '2026-11-07T00:00:00Z', content: 'first',
+        author: {id: 'bot', username: 'pkmn', bot: true}},
+      {id: '102', timestamp: '2026-11-07T00:00:00Z', content: 'second',
+        author: {id: 'bot', username: 'pkmn', bot: true}},
+      {id: '101', timestamp: '2026-11-07T00:00:00Z', content: 'third',
+        author: {id: 'bot', username: 'pkmn', bot: true}},
+    ];
+
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const u = String(url);
+      const body = typeof init?.body === 'string' ? init.body : undefined;
+      actions.push({method, url: u, ...(body ? {body} : {})});
+
+      if (method === 'GET' && u.endsWith('/messages/pins')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({items: botPins.map(message => ({message}))}),
+        });
+      }
+      if (method === 'POST' && u.endsWith('/messages')) {
+        const {content} = JSON.parse(body!) as {content: string};
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({
+            id: '104',
+            timestamp: '2026-11-07T00:01:00Z',
+            content,
+            author: {id: 'bot', username: 'pkmn', bot: true},
+          }),
+        });
+      }
+      if (method === 'GET' && u.includes('/messages?limit=')) {
+        return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve([])});
+      }
+      return Promise.resolve({status: 204, ok: true});
+    }) as unknown as typeof fetch;
+
+    // Already in sync -> no mutations
+    await syncPins('token', 'chan', ['first', 'second', 'third']);
+    expect(actions).toEqual([
+      {method: 'GET', url: expect.stringContaining('/channels/chan/messages/pins')},
+    ]);
+
+    // Update the 3rd pin -> unpins all, posts only 'third v2', deletes old bot msg 101, repins
+    actions.length = 0;
+    await syncPins('token', 'chan', ['first', 'second', 'third v2']);
+    expect(actions).toEqual([
+      {method: 'GET', url: expect.stringContaining('/channels/chan/messages/pins')},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/103')},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/102')},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/101')},
+      {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
+        body: JSON.stringify({content: 'third v2'})},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/101')},
+      {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/104')},
+      {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/102')},
+      {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/103')},
+      {method: 'GET', url: expect.stringContaining('/channels/chan/messages?limit=16')},
+    ]);
   });
 });
 

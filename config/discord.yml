@@ -1,6 +1,15 @@
 guild: '689316505560809576'
 channel: '689316506265321535'
 
+pins:
+  - This server is a place to discuss competitive Pokémon development projects and ideas. While affiliated with [pkmn.cc](<https://pkmn.cc>) & [pkmn.ai](<https://pkmn.ai>), any projects from the community that center around the competitive aspect of Pokémon are welcome (_e.g._, AI, calculators, team builders, extensions, engines, UIs, tooling, etc).
+  - There is one channel by design.
+  - |-
+    1. Do not post AI-generated text.
+    2. Do not ask people to share their code or work.
+    3. Do not discuss plans or methods for breaking TPCi, Smogon, or Pokémon Showdown rules, or openly admit to doing so.
+    4. Every rule that applies in similar servers also applies here; when in doubt, lurk before chatting to get a sense of how things work.
+
 ladders:
   gen9championsvgc2026regmcots: '1563706041223352363'
   gen9championsvgc2026regmcotsrandom: '1563707260398608425'

@@ -17,6 +17,7 @@ const CYCLE_MS = 60_000;
 interface Config {
   guild: string;
   channel?: string;
+  pins?: string[];
   ladders: {[ladder: string]: string};
   bots?: {[bot: string]: string};
   authors?: {[author: string]: string};
@@ -35,6 +36,7 @@ export interface DiscordUser {
   id: string;
   username: string;
   global_name?: string;
+  bot?: boolean;
 }
 
 export interface GuildMember {
@@ -85,6 +87,7 @@ export interface DiscordMessage extends DiscordMessageBody {
   id: string;
   type?: number;
   timestamp: string;
+  edited_timestamp?: string | null;
   content: string;
   author: DiscordUser;
   referenced_message?: DiscordMessage | null;
@@ -463,6 +466,98 @@ export async function syncMessages(
   saveCursor();
 }
 
+export async function syncPins(
+  token: string,
+  channel: string,
+  pins: string[],
+  state?: Map<string, string | undefined>
+) {
+  const key = JSON.stringify(pins);
+  if (state?.has(channel) && state.get(channel) === key) return;
+
+  const data = await discordRequest(
+    token,
+    `/channels/${channel}/messages/pins`
+  ) as {items: Array<{message: DiscordMessage}>};
+  const current = data.items.map(i => i.message);
+
+  if (
+    current.length === pins.length &&
+    current.every((m, i) => m.author.bot && !m.edited_timestamp && m.content === pins[i])
+  ) {
+    state?.set(channel, key);
+    return;
+  }
+
+  for (const m of current) {
+    await discordRequest(
+      token,
+      `/channels/${channel}/messages/pins/${m.id}`,
+      {method: 'DELETE'}
+    );
+  }
+
+  const used = new Set<string>();
+  const toPin: DiscordMessage[] = [];
+  for (let i = pins.length - 1; i >= 0; i--) {
+    const content = pins[i];
+    const existing = current.find(
+      m => !used.has(m.id) && m.author.bot && !m.edited_timestamp && m.content === content
+    );
+    if (existing) {
+      used.add(existing.id);
+      toPin.push(existing);
+    } else {
+      const created = await discordRequest(
+        token,
+        `/channels/${channel}/messages`,
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({content}),
+        }
+      ) as DiscordMessage;
+      toPin.push(created);
+    }
+  }
+
+  for (const m of current) {
+    if (m.author.bot && !used.has(m.id)) {
+      await discordRequest(
+        token,
+        `/channels/${channel}/messages/${m.id}`,
+        {method: 'DELETE'}
+      );
+    }
+  }
+
+  for (const m of toPin) {
+    await discordRequest(
+      token,
+      `/channels/${channel}/messages/pins/${m.id}`,
+      {method: 'PUT'}
+    );
+  }
+
+  if (toPin.length > 0) {
+    const recent = await discordRequest(
+      token,
+      `/channels/${channel}/messages?limit=${Math.min(100, toPin.length * 2 + 10)}`
+    ) as DiscordMessage[];
+    for (const m of recent) {
+      if (m.type === 6 && m.author.bot) {
+        await discordRequest(
+          token,
+          `/channels/${channel}/messages/${m.id}`,
+          {method: 'DELETE'}
+        );
+      }
+    }
+  }
+
+  state?.set(channel, key);
+}
+
 function extractToken(reqHeaders: http.IncomingHttpHeaders): string | undefined {
   const auth = reqHeaders.authorization;
   if (typeof auth === 'string') {
@@ -574,6 +669,14 @@ export async function run(token: string, vgcToken: string, once = false) {
       }
 
       if (config.channel) {
+        if (config.pins) {
+          try {
+            await syncPins(token, config.channel, config.pins, state);
+          } catch (err) {
+            console.error('Error syncing pins:', err);
+          }
+        }
+
         let channels: GuildChannel[] | undefined;
         let roles: GuildRole[] | undefined;
         try {
