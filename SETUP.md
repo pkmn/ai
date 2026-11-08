@@ -152,10 +152,10 @@ GOPATH=/home/pkmn/ai/build go install github.com/vouch/vouch-proxy@v0.50.0
    - Toggle **ON** **Server Members Intent** and **Message Content Intent** under **Privileged Gateway Intents**.
    - Copy the **Bot Token** into `DISCORD_BOT_TOKEN=...` in `private/.env` (alongside `VGC_BOT_TOKEN=...`).
 3. In [Discord Developer Portal — Installation](https://discord.com/developers/applications/689315793569447954/installation), disable **User Install** and set **Install Link** to `None`.
-4. Invite the `pkmn` bot to the server (`689316505560809576`) with `Manage Roles`, `View Channels`, `Send Messages`, `Manage Messages`, `Read Message History`, and `Pin Messages` (`2251799813963504`) permissions:
+4. Invite the `pkmn` bot to the server (`689316505560809576`) with `Manage Roles`, `View Channels`, `Send Messages`, `Manage Messages`, `Read Message History`, and `Pin Messages` (`2251800082197504`) permissions:
 
 ```text
-https://discord.com/oauth2/authorize?client_id=689315793569447954&scope=bot&permissions=2251799813963504&guild_id=689316505560809576&disable_guild_select=true
+https://discord.com/oauth2/authorize?client_id=689315793569447954&scope=bot&permissions=2251800082197504&guild_id=689316505560809576&disable_guild_select=true
 ```
 
 5. In [Discord Server Settings -> Roles](https://discord.com/channels/689316505560809576), ensure the `pkmn` role is positioned above all leaderboard roles configured in `config/discord.yml`.
