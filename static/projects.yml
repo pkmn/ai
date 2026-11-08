@@ -626,6 +626,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - name: pokerus
+  site: https://www.smogon.com/forums/threads/3790884/
   active: 2026 # ???
   platform:
     - name: Pokémon Showdown!

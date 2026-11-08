@@ -28,6 +28,7 @@ const RANKING = [
   'AWRorus', // top gen9ag & #2 gen9randbats (2432 Elo/93.9% GXE/2015 Glicko)
   'MissingNo.Zero', // #1 in 5 randbats gens & #5 gen9randbats (2453 Elo/93.4% GXE/1999 Glicko)
   'Xatu Zero', // top gen9ou (2002 Elo/88.0% GXE/1876 Glicko), gen9uu & gen9monotype
+  'pokerus', // top gen9ou (1955 Elo/82.4% GXE/1791 Glicko) & #5 gen9ubers
   'MysteriousWind', // top VGC Bo1 & Bo3 (1889 Elo/91.0% GXE/1937 Glicko) & #1 vgc.bot OTS/CTS
   'mikumiku', // top VGC (1857 Elo/81.2% GXE/ 1775 Glicko)
   'nessie', // top VGC Bo3 (1639 Elo/75.7% GXE/1714 Glicko)
@@ -40,7 +41,6 @@ const RANKING = [
   'Foul Play', // reached #2 in gen9randbats (~92% GXE) & #10 CG OU (~83% GXE)
   'Metamon', // reached #1 gen1ou, 83.6% GXE/1743 Elo/82.4%
   'PokeCHAD', // 2000+ gen9randbats Elo, ~par with Foul Play
-  'pokerus', // reached #5 in gen9ubers, 1749 Elo/80.7% GXE/1769 Glicko
   'RotomDotExe', // 16th on VGC, 1833 Elo/75.6% GXE/1713 Glicko
   'Springtime Haze', // 27th on VGC Bo3, 1639 Elo/75.9% GXE/1716 Glicko & #5 vgc.bot OTS
   'Incinference', // 46th on VGC , 1583 Elo/77% GXE/1730 Glicko
