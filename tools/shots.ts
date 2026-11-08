@@ -17,6 +17,7 @@ const VIEWPORTS = {
   phone: {width: 390, height: 844},
   desktop: {width: 1280, height: 900},
 };
+const THEMES = ['light', 'dark'] as const;
 const SETTLE_MS = 200;
 
 interface Scenario {
@@ -137,7 +138,6 @@ async function shoot(context: BrowserContext, scenario: Scenario, file: string):
 async function run(): Promise<void> {
   const {values} = parseArgs({
     options: {
-      dark: {type: 'boolean', default: false},
       only: {type: 'string'},
     },
   });
@@ -147,7 +147,6 @@ async function run(): Promise<void> {
     process.exit(1);
   }
 
-  const themes = values.dark ? (['light', 'dark'] as const) : (['light'] as const);
   const newDir = `${SHOTS_DIR}.new`;
   const scenarios = SCENARIOS.filter(scenario => scenario.name.includes(values.only ?? ''));
   const browser = await launch();
@@ -158,7 +157,7 @@ async function run(): Promise<void> {
   const errors: string[] = [];
   for (const scenario of scenarios) {
     const shots = Object.entries(VIEWPORTS).flatMap(([device, viewport]) =>
-      themes.map(async theme => {
+      THEMES.map(async theme => {
         const context = await browser.newContext({
           viewport,
           colorScheme: theme,
