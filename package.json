@@ -19,6 +19,7 @@
   "devDependencies": {
     "@pkmn/eslint-config": "^10.0.0",
     "@untitaker/hyperlink": "^0.3.2",
+    "playwright-core": "1.63.0",
     "stylelint": "17.15",
     "stylelint-config-rational-order": "^0.1.2",
     "stylelint-config-standard": "^40.0.0",
@@ -30,6 +31,7 @@
     "clean": "rm -rf public build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
     "build": "npm run compile && node build/static/build",
+    "shots": "npm run compile && node build/tools/shots",
     "start:discord": "node build/server/discord",
     "start:server": "node build/server",
     "start": "npm run start:server",
