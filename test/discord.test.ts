@@ -710,7 +710,7 @@ describe('glossary slash commands', () => {
     expect(cfr[0]).toEqual({name: 'CFR', value: 'CFR'});
   });
 
-  test('verifies Ed25519 signatures and handles PING, /def, and autocomplete', () => {
+  test('verifies Ed25519 signatures and handles PING, /define, and autocomplete', () => {
     const bad = handleInteraction('{"type":1}', {}, verifyKey, glossary);
     expect(bad.status).toBe(401);
 
@@ -721,7 +721,7 @@ describe('glossary slash commands', () => {
 
     const cmd = signedInteraction({
       type: 2,
-      data: {name: 'def', options: [{name: 'term', value: 'NE'}]},
+      data: {name: 'define', options: [{name: 'term', value: 'NE'}]},
     });
     const res = handleInteraction(cmd.body, cmd.headers, verifyKey, glossary);
     expect(res.status).toBe(200);
@@ -737,7 +737,7 @@ describe('glossary slash commands', () => {
 
     const unknown = signedInteraction({
       type: 2,
-      data: {name: 'def', options: [{name: 'term', value: 'not-a-term'}]},
+      data: {name: 'define', options: [{name: 'term', value: 'not-a-term'}]},
     });
     const unknownRes = handleInteraction(unknown.body, unknown.headers, verifyKey, glossary);
     expect(unknownRes.status).toBe(200);
@@ -751,7 +751,7 @@ describe('glossary slash commands', () => {
 
     const auto = signedInteraction({
       type: 4,
-      data: {name: 'def', options: [{name: 'term', value: 'NE', focused: true}]},
+      data: {name: 'define', options: [{name: 'term', value: 'NE', focused: true}]},
     });
     const autoRes = handleInteraction(auto.body, auto.headers, verifyKey, glossary);
     expect(autoRes.status).toBe(200);
@@ -763,7 +763,7 @@ describe('glossary slash commands', () => {
     expect(autoData.data.choices[0]).toEqual({name: 'NE', value: 'NE'});
   });
 
-  test('syncCommands registers /def when missing and skips PUT when in sync', async () => {
+  test('syncCommands registers /define when missing and skips PUT when in sync', async () => {
     const calls: Array<{method: string; url: string; body?: string}> = [];
     let currentCmds: object[] = [];
     globalThis.fetch = ((url: string, init?: RequestInit) => {

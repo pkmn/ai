@@ -21,7 +21,7 @@ const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 export const COMMANDS = [
   {
     type: 1,
-    name: 'def',
+    name: 'define',
     description: 'Look up a competitive Pokémon AI glossary term',
     options: [
       {
@@ -852,7 +852,7 @@ export function handleInteraction(
   const cmd = interaction.data?.name;
   const termOpt = interaction.data?.options?.find(o => o.name === 'term')?.value ?? '';
 
-  if (interaction.type === 4 && cmd === 'def') {
+  if (interaction.type === 4 && cmd === 'define') {
     const choices = autocompleteGlossary(termOpt, glossary);
     return {
       status: 200,
@@ -861,7 +861,7 @@ export function handleInteraction(
     };
   }
 
-  if (interaction.type === 2 && cmd === 'def') {
+  if (interaction.type === 2 && cmd === 'define') {
     const found = lookupGlossary(termOpt, glossary);
     if (found) {
       return {
