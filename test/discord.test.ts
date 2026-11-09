@@ -1,13 +1,21 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
 import {
+  COMMANDS,
   type DiscordMessage,
   type Leader,
+  autocompleteGlossary,
   findMember,
+  formatGlossaryReply,
   formatMessage,
+  handleInteraction,
+  loadGlossary,
+  lookupGlossary,
   ownerOf,
+  syncCommands,
   syncMessages,
   syncPins,
   syncRoles,
@@ -645,4 +653,153 @@ describe('validateAuth', () => {
     expect(tokenRes.status).toBe(200);
     expect(tokenRes.body).toBe('cookie-jwt\n');
   });
+});
+
+describe('glossary slash commands', () => {
+  const glossary = loadGlossary();
+  const {publicKey, privateKey} = crypto.generateKeyPairSync('ed25519');
+  const verifyKey = publicKey.export({type: 'spki', format: 'der'}).subarray(12).toString('hex');
+
+  function signedInteraction(payload: object, timestamp = '1700000000') {
+    const body = JSON.stringify(payload);
+    const sig = crypto.sign(null, Buffer.from(`${timestamp}${body}`), privateKey).toString('hex');
+    return {
+      body,
+      headers: {
+        'x-signature-ed25519': sig,
+        'x-signature-timestamp': timestamp,
+      },
+    };
+  }
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test('formats all static/glossary.yml entries cleanly within Discord limits', () => {
+    for (const [term, raw] of Object.entries(glossary)) {
+      const reply = formatGlossaryReply(term, raw);
+      expect(reply.startsWith(`**[${term}](https://pkmn.ai/glossary/#`)).toBe(true);
+      expect(reply.length).toBeLessThanOrEqual(2000);
+      expect(reply).not.toMatch(/\{[^}]+\}/);
+      expect(reply).not.toMatch(/\$`/);
+    }
+  });
+
+  test('looks up exact keys, slugs/IDs, and {.dfn} aliases', () => {
+    expect(lookupGlossary('NE', glossary)?.term).toBe('NE');
+    expect(lookupGlossary('ne', glossary)?.term).toBe('NE');
+    expect(lookupGlossary('nash', glossary)?.term).toBe('NE');
+    expect(lookupGlossary('Nash', glossary)?.term).toBe('NE');
+    expect(lookupGlossary('Nash equilibrium', glossary)?.term).toBe('NE');
+    expect(lookupGlossary('MNE', glossary)?.term).toBe('NE');
+    expect(lookupGlossary('alpha-beta', glossary)?.term).toBe('alpha-beta');
+    expect(lookupGlossary('alphabeta', glossary)?.term).toBe('alpha-beta');
+    expect(lookupGlossary('reinforcement learning', glossary)?.term).toBe('RL');
+    expect(lookupGlossary('nonexistentterm123', glossary)).toBeUndefined();
+  });
+
+  test('autocompletes matching terms and aliases up to 25 choices', () => {
+    const empty = autocompleteGlossary('', glossary);
+    expect(empty).toHaveLength(25);
+
+    const ne = autocompleteGlossary('Nash', glossary);
+    expect(ne[0]).toEqual({name: 'Nash equilibrium (NE)', value: 'NE'});
+
+    const cfr = autocompleteGlossary('CFR', glossary);
+    expect(cfr[0]).toEqual({name: 'CFR', value: 'CFR'});
+  });
+
+  test('verifies Ed25519 signatures and handles PING, /def, /define, and autocomplete', () => {
+    const bad = handleInteraction('{"type":1}', {}, verifyKey, glossary);
+    expect(bad.status).toBe(401);
+
+    const ping = signedInteraction({type: 1});
+    const pingRes = handleInteraction(ping.body, ping.headers, verifyKey, glossary);
+    expect(pingRes.status).toBe(200);
+    expect(JSON.parse(pingRes.body!)).toEqual({type: 1});
+
+    for (const name of ['def', 'define']) {
+      const cmd = signedInteraction({
+        type: 2,
+        data: {name, options: [{name: 'term', value: 'NE'}]},
+      });
+      const res = handleInteraction(cmd.body, cmd.headers, verifyKey, glossary);
+      expect(res.status).toBe(200);
+      const parsed = JSON.parse(res.body!) as {
+        type: number;
+        data: {content: string; flags: number};
+      };
+      expect(parsed.type).toBe(4);
+      expect(parsed.data.flags).toBe(4);
+      expect(parsed.data.content).toContain('**[NE](https://pkmn.ai/glossary/#NE)**:');
+      expect(parsed.data.content).toContain('The **Nash equilibrium**');
+      expect(parsed.data.content).toContain('[strategy](https://pkmn.ai/glossary/#strategy)');
+    }
+
+    const unknown = signedInteraction({
+      type: 2,
+      data: {name: 'def', options: [{name: 'term', value: 'not-a-term'}]},
+    });
+    const unknownRes = handleInteraction(unknown.body, unknown.headers, verifyKey, glossary);
+    expect(unknownRes.status).toBe(200);
+    expect(JSON.parse(unknownRes.body!)).toEqual({
+      type: 4,
+      data: {
+        content: 'Unknown glossary term: `not-a-term`. See <https://pkmn.ai/glossary/>.',
+        flags: 68,
+      },
+    });
+
+    const auto = signedInteraction({
+      type: 4,
+      data: {name: 'define', options: [{name: 'term', value: 'NE', focused: true}]},
+    });
+    const autoRes = handleInteraction(auto.body, auto.headers, verifyKey, glossary);
+    expect(autoRes.status).toBe(200);
+    const autoData = JSON.parse(autoRes.body!) as {
+      type: number;
+      data: {choices: Array<{name: string; value: string}>};
+    };
+    expect(autoData.type).toBe(8);
+    expect(autoData.data.choices[0]).toEqual({name: 'NE', value: 'NE'});
+  });
+
+  test('syncCommands registers /def and /define when missing and skips PUT when in sync',
+    async () => {
+      const calls: Array<{method: string; url: string; body?: string}> = [];
+      let currentCmds: object[] = [];
+      globalThis.fetch = ((url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        calls.push({method, url: String(url), body: init?.body as string | undefined});
+        if (String(url).endsWith('/oauth2/applications/@me')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () => Promise.resolve({id: 'app1', verify_key: verifyKey}),
+          });
+        }
+        if (method === 'PUT') {
+          currentCmds = JSON.parse(init?.body as string) as object[];
+        }
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve(currentCmds),
+        });
+      }) as unknown as typeof fetch;
+
+      const state = new Map<string, string | undefined>();
+      const app = await syncCommands('token', 'guild1', state);
+      expect(app).toEqual({id: 'app1', verify_key: verifyKey});
+      expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT']);
+      expect(JSON.parse(calls[2].body!)).toEqual(COMMANDS);
+
+      await syncCommands('token', 'guild1', state);
+      expect(calls).toHaveLength(3);
+
+      const freshState = new Map<string, string | undefined>();
+      await syncCommands('token', 'guild1', freshState);
+      expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT', 'GET', 'GET']);
+    });
 });

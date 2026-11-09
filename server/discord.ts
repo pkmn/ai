@@ -1,18 +1,47 @@
 require('source-map-support').install();
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
 import * as yaml from 'yaml';
 
-const root = path.join(__dirname, '..', '..');
+const root = path.basename(path.dirname(__dirname)) === 'build'
+  ? path.join(__dirname, '..', '..')
+  : path.join(__dirname, '..');
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const VOUCH_VALIDATE = 'http://127.0.0.1:9090/vouch/validate';
 const AUTH_PORT = 9091;
 const SITES = ['vgc.bot', 'pkmn.bot'];
 const CYCLE_MS = 60_000;
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+
+const COMMAND_OPTIONS = [
+  {
+    type: 3,
+    name: 'term',
+    description: 'Glossary term to define',
+    required: true,
+    autocomplete: true,
+  },
+];
+
+export const COMMANDS = [
+  {
+    type: 1,
+    name: 'def',
+    description: 'Look up a competitive Pokémon AI glossary term',
+    options: COMMAND_OPTIONS,
+  },
+  {
+    type: 1,
+    name: 'define',
+    description: 'Look up a competitive Pokémon AI glossary term',
+    options: COMMAND_OPTIONS,
+  },
+];
 
 interface Config {
   guild: string;
@@ -94,8 +123,57 @@ export interface DiscordMessage extends DiscordMessageBody {
   message_snapshots?: Array<{message: DiscordMessageBody}>;
 }
 
+export interface DiscordApplication {
+  id: string;
+  verify_key: string;
+}
+
+export interface DiscordCommandOption {
+  type: number;
+  name: string;
+  description: string;
+  required?: boolean;
+  autocomplete?: boolean;
+}
+
+export interface DiscordCommand {
+  id?: string;
+  type: number;
+  name: string;
+  description: string;
+  options?: DiscordCommandOption[];
+}
+
+export interface DiscordInteraction {
+  type: number;
+  data?: {
+    name?: string;
+    options?: Array<{
+      name: string;
+      type?: number;
+      value?: string;
+      focused?: boolean;
+    }>;
+  };
+}
+
 function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
+}
+
+export function loadGlossary(
+  file = path.join(root, 'static', 'glossary.yml')
+): Record<string, string> {
+  return yaml.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
+}
+
+function slugify(s: string): string {
+  return s
+    .replace(/\s+/g, '-')
+    .replace(/[^\w-]+/g, '')
+    .replace(/--+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
 }
 
 function toID(text: string): string {
@@ -558,6 +636,322 @@ export async function syncPins(
   state?.set(channel, key);
 }
 
+export function formatGlossary(raw: string): string {
+  const blocks = raw.trim().split(/\n\s*\n/).map(block => {
+    if (/^\s*(?:-\s+|\d+\.\s+)/.test(block)) {
+      return block
+        .trim()
+        .split(/\n(?=\s*(?:-\s+|\d+\.\s+))/)
+        .map(item => item.trim().replace(/^(-|\d+\.)\s+/, '$1 ').replace(/\s*\n\s*/g, ' '))
+        .join('\n');
+    }
+    return block.trim().replace(/\s*\n\s*/g, ' ');
+  });
+  let text = blocks.join('\n\n');
+  text = text.replace(/\$`([^`]+)`/g, (_, m: string) => {
+    const clean = m
+      .replace(/\\widetilde\{([^}]+)\}/g, '~$1')
+      .replace(/\\mid\b/g, '|')
+      .replace(/\\land\b/g, '∧')
+      .replace(/\\alpha\b/g, 'α')
+      .replace(/\\beta\b/g, 'β')
+      .replace(/\\%/g, '%')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `\`${clean}\``;
+  });
+  text = text.replace(/\[([^\][]+)\]\{\.(?:dfn|seed)\}/g, '**$1**');
+  text = text.replace(
+    /\[([^\][]+)\]\(([^)]+)\)(?:\{\.subtle\})?/g,
+    (_, label: string, url: string) => {
+      const full = url.startsWith('#')
+        ? `https://pkmn.ai/glossary/${url}`
+        : url.startsWith('/')
+          ? `https://pkmn.ai${url}`
+          : url;
+      return `[${label}](${full})`;
+    }
+  );
+  text = text.replace(/\[((?:[^\][]|\[[^\][]*\]\([^)]+\))+)\]\{\.(?:dfn|seed)\}/g, '**$1**');
+  return text.replace(/---/g, '—').replace(/--/g, '–');
+}
+
+export function formatGlossaryReply(term: string, raw: string): string {
+  const url = `https://pkmn.ai/glossary/#${slugify(term)}`;
+  return `**[${term}](${url})**: ${formatGlossary(raw)}`;
+}
+
+function extractGlossaryAliases(
+  glossary: Record<string, string>
+): Array<{alias: string; term: string}> {
+  const terms = Object.keys(glossary);
+  const topIds = new Set(terms.map(toID));
+  const bySlug = new Map(terms.map(t => [slugify(t).toLowerCase(), t]));
+  const aliases: Array<{alias: string; term: string}> = [];
+
+  for (const [term, raw] of Object.entries(glossary)) {
+    const flat = raw.replace(/\s+/g, ' ');
+    for (const m of flat.matchAll(/\[\[([^\][]+)\]\(#([^)]+)\)\]\{\.dfn\}/g)) {
+      const alias = m[1].trim();
+      const target = bySlug.get(m[2].toLowerCase()) ?? term;
+      if (!topIds.has(toID(alias))) {
+        aliases.push({alias, term: target});
+      }
+    }
+    const stripped = flat.replace(/\[([^\][]+)\]\([^)]+\)(?:\{\.subtle\})?/g, '$1');
+    for (const m of stripped.matchAll(/\[([^\][]+)\]\{\.dfn\}/g)) {
+      const alias = m[1].trim();
+      if (!topIds.has(toID(alias)) && !aliases.some(a => toID(a.alias) === toID(alias))) {
+        aliases.push({alias, term});
+      }
+    }
+  }
+  return aliases;
+}
+
+export function lookupGlossary(
+  query: string,
+  glossary: Record<string, string>
+): {term: string; definition: string} | undefined {
+  const q = query.trim();
+  if (!q) return undefined;
+  if (Object.prototype.hasOwnProperty.call(glossary, q)) {
+    return {term: q, definition: glossary[q]};
+  }
+  const terms = Object.keys(glossary);
+  const lower = q.toLowerCase();
+  const slug = slugify(q).toLowerCase();
+  const id = toID(q);
+
+  const match =
+    terms.find(t => t.toLowerCase() === lower) ??
+    (slug ? terms.find(t => slugify(t).toLowerCase() === slug) : undefined) ??
+    (id ? terms.find(t => toID(t) === id) : undefined);
+  if (match) return {term: match, definition: glossary[match]};
+
+  const aliases = extractGlossaryAliases(glossary);
+  const aliasMatch =
+    aliases.find(a => a.alias.toLowerCase() === lower) ??
+    (id ? aliases.find(a => toID(a.alias) === id) : undefined);
+  if (aliasMatch) {
+    return {term: aliasMatch.term, definition: glossary[aliasMatch.term]};
+  }
+
+  const prefixTerm = terms.find(
+    t => t.toLowerCase().startsWith(lower) || Boolean(id && toID(t).startsWith(id))
+  );
+  if (prefixTerm) return {term: prefixTerm, definition: glossary[prefixTerm]};
+
+  const prefixAlias = aliases.find(
+    a => a.alias.toLowerCase().startsWith(lower) || Boolean(id && toID(a.alias).startsWith(id))
+  );
+  if (prefixAlias) {
+    return {term: prefixAlias.term, definition: glossary[prefixAlias.term]};
+  }
+  return undefined;
+}
+
+export function autocompleteGlossary(
+  query: string,
+  glossary: Record<string, string>
+): Array<{name: string; value: string}> {
+  const terms = Object.keys(glossary).sort((a, b) =>
+    a.toLocaleLowerCase().localeCompare(b.toLocaleLowerCase()));
+  const q = query.trim();
+  if (!q) {
+    return terms.slice(0, 25).map(t => ({name: t, value: t}));
+  }
+
+  const lower = q.toLowerCase();
+  const id = toID(q);
+  const aliases = extractGlossaryAliases(glossary);
+  const choices: Array<{name: string; value: string}> = [];
+  const seen = new Set<string>();
+
+  const add = (name: string, value: string) => {
+    if (seen.has(value) || choices.length >= 25) return;
+    seen.add(value);
+    choices.push({name: name.slice(0, 100), value});
+  };
+
+  for (const t of terms) {
+    if (t.toLowerCase().startsWith(lower) || (id && toID(t).startsWith(id))) {
+      add(t, t);
+    }
+  }
+  for (const a of aliases) {
+    if (a.alias.toLowerCase().startsWith(lower) || (id && toID(a.alias).startsWith(id))) {
+      add(`${a.alias} (${a.term})`, a.term);
+    }
+  }
+  for (const t of terms) {
+    if (t.toLowerCase().includes(lower) || (id && toID(t).includes(id))) {
+      add(t, t);
+    }
+  }
+  for (const a of aliases) {
+    if (a.alias.toLowerCase().includes(lower) || (id && toID(a.alias).includes(id))) {
+      add(`${a.alias} (${a.term})`, a.term);
+    }
+  }
+  for (const t of terms) {
+    if (glossary[t].toLowerCase().includes(lower)) {
+      add(t, t);
+    }
+  }
+
+  return choices;
+}
+
+export function verifySignature(
+  body: string,
+  signature: string | undefined,
+  timestamp: string | undefined,
+  verifyKey: string
+): boolean {
+  if (!signature || !timestamp || !/^[0-9a-f]{128}$/i.test(signature)) return false;
+  if (!/^[0-9a-f]{64}$/i.test(verifyKey)) return false;
+  try {
+    const key = crypto.createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(verifyKey, 'hex')]),
+      format: 'der',
+      type: 'spki',
+    });
+    return crypto.verify(
+      null,
+      Buffer.from(`${timestamp}${body}`),
+      key,
+      Buffer.from(signature, 'hex')
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function handleInteraction(
+  body: string,
+  reqHeaders: http.IncomingHttpHeaders,
+  verifyKey: string | undefined,
+  glossary: Record<string, string>
+): {status: number; headers: Record<string, string>; body?: string} {
+  const sig = reqHeaders['x-signature-ed25519'];
+  const ts = reqHeaders['x-signature-timestamp'];
+  if (
+    !verifyKey ||
+    typeof sig !== 'string' ||
+    typeof ts !== 'string' ||
+    !verifySignature(body, sig, ts, verifyKey)
+  ) {
+    return {status: 401, headers: {}};
+  }
+
+  let interaction: DiscordInteraction;
+  try {
+    interaction = JSON.parse(body) as DiscordInteraction;
+  } catch {
+    return {status: 400, headers: {}};
+  }
+
+  const jsonHeaders = {'content-type': 'application/json; charset=utf-8'};
+  if (interaction.type === 1) {
+    return {status: 200, headers: jsonHeaders, body: JSON.stringify({type: 1})};
+  }
+
+  const cmd = interaction.data?.name;
+  const termOpt = interaction.data?.options?.find(o => o.name === 'term')?.value ?? '';
+
+  if (interaction.type === 4 && (cmd === 'def' || cmd === 'define')) {
+    const choices = autocompleteGlossary(termOpt, glossary);
+    return {
+      status: 200,
+      headers: jsonHeaders,
+      body: JSON.stringify({type: 8, data: {choices}}),
+    };
+  }
+
+  if (interaction.type === 2 && (cmd === 'def' || cmd === 'define')) {
+    const found = lookupGlossary(termOpt, glossary);
+    if (found) {
+      return {
+        status: 200,
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          type: 4,
+          data: {
+            content: formatGlossaryReply(found.term, found.definition),
+            flags: 4,
+          },
+        }),
+      };
+    }
+    return {
+      status: 200,
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        type: 4,
+        data: {
+          content: `Unknown glossary term: \`${termOpt}\`. See <https://pkmn.ai/glossary/>.`,
+          flags: 68,
+        },
+      }),
+    };
+  }
+
+  return {status: 400, headers: {}};
+}
+
+export async function syncCommands(
+  token: string,
+  guild: string,
+  state?: Map<string, string | undefined>,
+  commands: DiscordCommand[] = COMMANDS
+): Promise<DiscordApplication> {
+  const key = JSON.stringify(commands);
+  const cachedApp = state?.get('app');
+  const app = cachedApp
+    ? JSON.parse(cachedApp) as DiscordApplication
+    : await discordRequest(token, '/oauth2/applications/@me') as DiscordApplication;
+  state?.set('app', JSON.stringify({id: app.id, verify_key: app.verify_key}));
+
+  if (state?.get('commands') === key) return app;
+
+  const current = await discordRequest(
+    token,
+    `/applications/${app.id}/guilds/${guild}/commands`
+  ) as DiscordCommand[];
+
+  const normalize = (cmds: DiscordCommand[]) =>
+    cmds
+      .map(c => ({
+        type: c.type ?? 1,
+        name: c.name,
+        description: c.description,
+        options: (c.options ?? []).map(o => ({
+          type: o.type,
+          name: o.name,
+          description: o.description,
+          required: Boolean(o.required),
+          autocomplete: Boolean(o.autocomplete),
+        })),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (JSON.stringify(normalize(current)) !== JSON.stringify(normalize(commands))) {
+    await discordRequest(
+      token,
+      `/applications/${app.id}/guilds/${guild}/commands`,
+      {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(commands),
+      }
+    );
+  }
+
+  state?.set('commands', key);
+  return app;
+}
+
 function extractToken(reqHeaders: http.IncomingHttpHeaders): string | undefined {
   const auth = reqHeaders.authorization;
   if (typeof auth === 'string') {
@@ -634,10 +1028,42 @@ export async function validateAuth(
 export async function run(token: string, vgcToken: string, once = false) {
   const state = new Map<string, string | undefined>();
   let memberIds = new Set<string>();
+  let verifyKey: string | undefined;
+  let glossary = loadGlossary();
+  let ready = Promise.resolve();
 
   const server = once
     ? undefined
     : http.createServer((req, res) => {
+      if (req.url === '/discord/interactions' && req.method === 'POST') {
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          ready
+            .then(() => {
+              const rawBody = Buffer.concat(chunks).toString('utf8');
+              const {status, headers, body} = handleInteraction(
+                rawBody,
+                req.headers,
+                verifyKey,
+                glossary
+              );
+              res.writeHead(status, headers);
+              res.end(body);
+            })
+            .catch(err => {
+              console.error('Error handling interaction:', err);
+              res.writeHead(500);
+              res.end();
+            });
+        });
+        req.on('error', err => {
+          console.error('Error reading interaction request:', err);
+          res.writeHead(500);
+          res.end();
+        });
+        return;
+      }
       validateAuth(req.url, req.headers, memberIds)
         .then(({status, headers, body}) => {
           res.writeHead(status, headers);
@@ -653,6 +1079,16 @@ export async function run(token: string, vgcToken: string, once = false) {
   try {
     while (true) {
       const config = loadConfig();
+      glossary = loadGlossary();
+
+      ready = syncCommands(token, config.guild, state)
+        .then(app => {
+          verifyKey = app.verify_key;
+        })
+        .catch(err => {
+          console.error('Error syncing commands:', err);
+        });
+      await ready;
 
       let members: GuildMember[] | undefined;
       try {
