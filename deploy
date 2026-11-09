@@ -17,7 +17,7 @@ for sub in teams/teams teams/pkmn_stuff; do
     fi
 done
 git -C teams/teams sparse-checkout set gen9championsvgc2026regmc
-git -C teams/pkmn_stuff sparse-checkout set teams/Teams_real
+git -C teams/pkmn_stuff sparse-checkout set --no-cone --stdin < teams/pkmn_stuff.txt
 git submodule update --depth 1 teams/teams teams/pkmn_stuff
 
 # Update dependencies if package.json has changed

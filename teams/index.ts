@@ -22,6 +22,11 @@ import * as championsregmb from '@pkmn/mods/championsregmb';
 import {PokemonSet, Team} from '@pkmn/sets';
 
 // Minimum required 1-NN distance D(A, B) in [0, 6] to every team in the blocklist pool.
+// Chosen just above the bottom of the IQR (Q1 = 1.20, ~28th percentile) on the initial
+// deduplicated 592-team Reg M-C pool (~41st percentile across the expanded 10,108-team
+// pool), and sized so that against a 5/6-shared-species neighbor (+1.00), a candidate
+// team cannot pass by changing only 1 item (+0.20) or 2 moves (+0.20), requiring at
+// least +0.30 in set changes across the shared Pokemon (e.g. 3 moves, or 1 item + 1 move).
 export const THRESHOLD = 1.3;
 
 // Maximum distance contributed by two sets of the same canonical species (default/Champions).
