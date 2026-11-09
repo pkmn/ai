@@ -710,7 +710,7 @@ describe('glossary slash commands', () => {
     expect(cfr[0]).toEqual({name: 'CFR', value: 'CFR'});
   });
 
-  test('verifies Ed25519 signatures and handles PING, /def, /define, and autocomplete', () => {
+  test('verifies Ed25519 signatures and handles PING, /def, and autocomplete', () => {
     const bad = handleInteraction('{"type":1}', {}, verifyKey, glossary);
     expect(bad.status).toBe(401);
 
@@ -719,23 +719,21 @@ describe('glossary slash commands', () => {
     expect(pingRes.status).toBe(200);
     expect(JSON.parse(pingRes.body!)).toEqual({type: 1});
 
-    for (const name of ['def', 'define']) {
-      const cmd = signedInteraction({
-        type: 2,
-        data: {name, options: [{name: 'term', value: 'NE'}]},
-      });
-      const res = handleInteraction(cmd.body, cmd.headers, verifyKey, glossary);
-      expect(res.status).toBe(200);
-      const parsed = JSON.parse(res.body!) as {
-        type: number;
-        data: {content: string; flags: number};
-      };
-      expect(parsed.type).toBe(4);
-      expect(parsed.data.flags).toBe(4);
-      expect(parsed.data.content).toContain('**[NE](https://pkmn.ai/glossary/#NE)**:');
-      expect(parsed.data.content).toContain('The **Nash equilibrium**');
-      expect(parsed.data.content).toContain('[strategy](https://pkmn.ai/glossary/#strategy)');
-    }
+    const cmd = signedInteraction({
+      type: 2,
+      data: {name: 'def', options: [{name: 'term', value: 'NE'}]},
+    });
+    const res = handleInteraction(cmd.body, cmd.headers, verifyKey, glossary);
+    expect(res.status).toBe(200);
+    const parsed = JSON.parse(res.body!) as {
+      type: number;
+      data: {content: string; flags: number};
+    };
+    expect(parsed.type).toBe(4);
+    expect(parsed.data.flags).toBe(4);
+    expect(parsed.data.content).toContain('**[NE](https://pkmn.ai/glossary/#NE)**:');
+    expect(parsed.data.content).toContain('The **Nash equilibrium**');
+    expect(parsed.data.content).toContain('[strategy](https://pkmn.ai/glossary/#strategy)');
 
     const unknown = signedInteraction({
       type: 2,
@@ -753,7 +751,7 @@ describe('glossary slash commands', () => {
 
     const auto = signedInteraction({
       type: 4,
-      data: {name: 'define', options: [{name: 'term', value: 'NE', focused: true}]},
+      data: {name: 'def', options: [{name: 'term', value: 'NE', focused: true}]},
     });
     const autoRes = handleInteraction(auto.body, auto.headers, verifyKey, glossary);
     expect(autoRes.status).toBe(200);
@@ -765,41 +763,40 @@ describe('glossary slash commands', () => {
     expect(autoData.data.choices[0]).toEqual({name: 'NE', value: 'NE'});
   });
 
-  test('syncCommands registers /def and /define when missing and skips PUT when in sync',
-    async () => {
-      const calls: Array<{method: string; url: string; body?: string}> = [];
-      let currentCmds: object[] = [];
-      globalThis.fetch = ((url: string, init?: RequestInit) => {
-        const method = init?.method ?? 'GET';
-        calls.push({method, url: String(url), body: init?.body as string | undefined});
-        if (String(url).endsWith('/oauth2/applications/@me')) {
-          return Promise.resolve({
-            status: 200,
-            ok: true,
-            json: () => Promise.resolve({id: 'app1', verify_key: verifyKey}),
-          });
-        }
-        if (method === 'PUT') {
-          currentCmds = JSON.parse(init?.body as string) as object[];
-        }
+  test('syncCommands registers /def when missing and skips PUT when in sync', async () => {
+    const calls: Array<{method: string; url: string; body?: string}> = [];
+    let currentCmds: object[] = [];
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      calls.push({method, url: String(url), body: init?.body as string | undefined});
+      if (String(url).endsWith('/oauth2/applications/@me')) {
         return Promise.resolve({
           status: 200,
           ok: true,
-          json: () => Promise.resolve(currentCmds),
+          json: () => Promise.resolve({id: 'app1', verify_key: verifyKey}),
         });
-      }) as unknown as typeof fetch;
+      }
+      if (method === 'PUT') {
+        currentCmds = JSON.parse(init?.body as string) as object[];
+      }
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve(currentCmds),
+      });
+    }) as unknown as typeof fetch;
 
-      const state = new Map<string, string | undefined>();
-      const app = await syncCommands('token', 'guild1', state);
-      expect(app).toEqual({id: 'app1', verify_key: verifyKey});
-      expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT']);
-      expect(JSON.parse(calls[2].body!)).toEqual(COMMANDS);
+    const state = new Map<string, string | undefined>();
+    const app = await syncCommands('token', 'guild1', state);
+    expect(app).toEqual({id: 'app1', verify_key: verifyKey});
+    expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT']);
+    expect(JSON.parse(calls[2].body!)).toEqual(COMMANDS);
 
-      await syncCommands('token', 'guild1', state);
-      expect(calls).toHaveLength(3);
+    await syncCommands('token', 'guild1', state);
+    expect(calls).toHaveLength(3);
 
-      const freshState = new Map<string, string | undefined>();
-      await syncCommands('token', 'guild1', freshState);
-      expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT', 'GET', 'GET']);
-    });
+    const freshState = new Map<string, string | undefined>();
+    await syncCommands('token', 'guild1', freshState);
+    expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT', 'GET', 'GET']);
+  });
 });

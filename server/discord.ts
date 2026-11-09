@@ -18,28 +18,20 @@ const SITES = ['vgc.bot', 'pkmn.bot'];
 const CYCLE_MS = 60_000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
-const COMMAND_OPTIONS = [
-  {
-    type: 3,
-    name: 'term',
-    description: 'Glossary term to define',
-    required: true,
-    autocomplete: true,
-  },
-];
-
 export const COMMANDS = [
   {
     type: 1,
     name: 'def',
     description: 'Look up a competitive Pokémon AI glossary term',
-    options: COMMAND_OPTIONS,
-  },
-  {
-    type: 1,
-    name: 'define',
-    description: 'Look up a competitive Pokémon AI glossary term',
-    options: COMMAND_OPTIONS,
+    options: [
+      {
+        type: 3,
+        name: 'term',
+        description: 'Glossary term to define',
+        required: true,
+        autocomplete: true,
+      },
+    ],
   },
 ];
 
@@ -860,7 +852,7 @@ export function handleInteraction(
   const cmd = interaction.data?.name;
   const termOpt = interaction.data?.options?.find(o => o.name === 'term')?.value ?? '';
 
-  if (interaction.type === 4 && (cmd === 'def' || cmd === 'define')) {
+  if (interaction.type === 4 && cmd === 'def') {
     const choices = autocompleteGlossary(termOpt, glossary);
     return {
       status: 200,
@@ -869,7 +861,7 @@ export function handleInteraction(
     };
   }
 
-  if (interaction.type === 2 && (cmd === 'def' || cmd === 'define')) {
+  if (interaction.type === 2 && cmd === 'def') {
     const found = lookupGlossary(termOpt, glossary);
     if (found) {
       return {
