@@ -1,19 +1,17 @@
 require('source-map-support').install();
 
-import * as path from 'path';
-
 import {serve} from 'site';
 
 import {header, renderer, style} from '../static/build';
+import {ROOT, root} from '../static/util';
 
 import * as wiki from './wiki';
 
-const root = path.join(__dirname, '..', '..');
 const dirs = {
-  root,
-  out: path.join(root, 'build', 'static'),
-  static: path.join(root, 'static'),
-  extra: path.join(root, 'private'),
+  root: ROOT,
+  out: root('build', 'static'),
+  static: root('static'),
+  extra: root('private'),
 };
 serve(Number(process.env.PORT) || 1234, dirs, app => {
   // TODO: this should be partly pre-rendered

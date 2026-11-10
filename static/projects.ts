@@ -21,7 +21,8 @@ export interface Project {
   platform?: {name: string; url: string}[];
   release?: {name: string; url: string};
   arena?: {
-    github?: string | string[];
+    owners: {[github: string]: string | number};
+    logo?: string;
   };
 }
 

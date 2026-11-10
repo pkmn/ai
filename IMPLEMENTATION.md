@@ -2410,11 +2410,11 @@ Evaluated across 20 Monte Carlo trials of 52 bots using [Kendall rank correlatio
 ## 7. Competitor Registration, Unified Auth, `/account` & Version Lifecycle
 
 ### Bot Registration via GitHub Issue Template & `projects.yml`
-Competitors register new projects by opening a structured GitHub Issue on `pkmn/ai` (using `.github/ISSUE_TEMPLATE/register-bot.yml`), which staff review and close with a commit/PR to `static/projects.yml`. This eliminates any `/register` web form, GitHub App PR bot, or webhook endpoint on `pkmn.ai`.
+Competitors register new projects by opening a structured GitHub Issue on `pkmn/ai` (using `.github/ISSUE_TEMPLATE/register.yml`), which staff review and close with a commit/PR to `static/projects.yml`. This eliminates any `/register` web form, GitHub App PR bot, or webhook endpoint on `pkmn.ai`.
 
 - **Registration Rules (`static/rules.dj`)**:
   - **Project Name & Auto-Slug**: Subject to staff discretion, prefer alphabetic + space (`^[A-Za-z ]+$`), distinct from other projects, and must **not** include the tokens `poke` / `mon` / `pkmn` / `ai` / `bot` / `agent` / `showdown` / `smogon`, bare English Pokémon species names, or known players' names. `server` computes the URL slug automatically via `slugify(name).toLowerCase()` (using `slugify` in `static/build.ts`, e.g., `"Foul Play"` $\rightarrow$ `"foul-play"`).
-  - **Team Members & One-Project-Per-Developer Rule**: Registration must list both the **GitHub username and Smogon account** (username or XenForo `<username>.<id>` slug) for **every** team member associated with the project. All authorized team members must be Smogon account holders in good standing, and **each developer (by GitHub login and Smogon account) may belong to at most one Arena project** across `pkmn.ai`.
+  - **Team Members, Smogon ID Resolution & One-Project-Per-Developer Rule**: Registration must list both the **GitHub username and Smogon account** for **every** team member associated with the project. All authorized team members must be Smogon account holders in good standing, and **each developer (keyed by immutable numerical `smogon_id` and `github_login`) may belong to at most one Arena project** across `pkmn.ai`. Because Smogon forum usernames can change via name-change requests, `server/smogon.ts` (`lookupSmogonUser`) resolves Smogon usernames/URLs (`https://www.smogon.com/forums/members/?username=<name>` $\rightarrow$ `303 /forums/members/<slug>.<id>/` + `/forums/members/<id>/?tooltip=true&_xfResponseType=json` via `SMOGON_TOKEN`) to persist the immutable numerical **`smogon_id`** alongside the current display `smogon_username`.
   - **Qualifying Criteria & Mandatory Consents**: Registrants must provide qualifying evidence justifying hosted Arena resources (e.g., Pokémon Showdown / `vgc.bot` / `pkmn.bot` rankings) and explicitly agree to:
     1. Adhere to the latest community guidance on [Responsible Releases](/release).
     2. Grant **pkmn.ai** permission to run their model in its Arena for evaluation against other agents.
@@ -2422,7 +2422,7 @@ Competitors register new projects by opening a structured GitHub Issue on `pkmn/
   - **Optional Project Logo**: Optional PNG image committed to `static/avatars/<slug>.png` (copied to `public/leaderboard/<slug>.png` at build/render time and displayed exclusively on `/leaderboard/<slug>/`).
   - **Zero Private PII & Self-Service Discord Linking**: No email addresses are collected. Discord accounts are **not** stored in `static/projects.yml`; instead, each approved developer links their own Discord account via 1-click Discord OAuth on `/account/`.
 
-#### GitHub Issue Form Template (`.github/ISSUE_TEMPLATE/register-bot.yml`)
+#### GitHub Issue Form Template (`.github/ISSUE_TEMPLATE/register.yml`)
 ```yaml
 name: Register Arena Project
 description: Request inclusion of a competitive Pokémon AI project in pkmn.ai
@@ -2442,9 +2442,9 @@ body:
     validations:
       required: true
   - type: textarea
-    id: developers
+    id: owners
     attributes:
-      label: Team Members (GitHub & Smogon Accounts)
+      label: Owners (GitHub & Smogon Accounts)
       description: List `github_username: smogon_username` (one per line) for every team member. Each member must hold a Smogon account in good standing and may belong to at most one Arena project.
       placeholder: |
         pmariglia: pmariglia
@@ -2522,13 +2522,13 @@ Existing historical projects in `static/projects.yml` remain unchanged. Any proj
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    developers:
-      pmariglia: pmariglia
+    owners:
+      pmariglia: pmariglia.535629 # accepts <slug>.<id>, numeric <id>, profile URL, or <username>
 ```
 
 - **How `projects.yml` Syncs to `pkmn.ai`**:
   - Staff review the registration issue, commit the `arena:` block to `static/projects.yml` (plus optional `static/avatars/<slug>.png`), and run `npm run deploy`.
-  - On startup and file `mtime` change, `server` validates that no GitHub login or Smogon identifier appears under more than one `arena:` project, then syncs `bots` and `developers` (`github_login`, `smogon`, `bot_id`) in `/var/lib/pkmn/arena.sqlite`.
+  - On startup and file `mtime` change, `server` resolves any bare Smogon usernames (and refreshes display usernames for existing numerical `smogon_id`s) via `lookupSmogonUser` (`SMOGON_TOKEN`), verifies accounts are not banned, enforces that no GitHub login or numerical `smogon_id` appears under more than one `arena:` project, and syncs `bots` and `developers` (`github_login`, `smogon_id`, `smogon_username`, `bot_id`) in `/var/lib/pkmn/arena.sqlite`.
 
 ### Unified Authentication Architecture (`server/auth.ts` — Replacing Vouch Proxy)
 All GitHub OAuth2 and Discord OAuth2 flows are centralized in `server/auth.ts` inside `pkmn.ai-server` (`127.0.0.1:1234`), completely retiring Go `vouch-proxy` (`:9090`):
@@ -2551,7 +2551,7 @@ All GitHub OAuth2 and Discord OAuth2 flows are centralized in `server/auth.ts` i
      - **Shared Project Dashboard**: Multiple developers on the same project each manage their own Discord link in `.account-bar`, while viewing the identical shared `Active` versions table, `Submission` form, and `History` table for their team's project.
   2. **Git-Backed Djot Wiki (`/wiki`, `server/wiki.ts`)**:
      - Delegates all session and membership checks to `server/auth.ts`:
-       - **Edit Ownership**: Reserved bot pages (`/wiki/<Bot_Name>`) are editable only by that project's `arena.developers` (and `config/wiki.yml` `admins`); general wiki pages are editable by any registered Arena developer or admin.
+       - **Edit Ownership**: Reserved bot pages (`/wiki/<Bot_Name>`) are editable only by that project's `arena.owners` (and `config/wiki.yml` `admins`); general wiki pages are editable by any registered Arena developer or admin.
        - **Read Visibility (`{% visibility: developers|discord|public %}`)**: `developers` (default for bot pages) requires `isDeveloper(session.github?.login)`; `discord` allows any Arena developer/admin **or** any `pkmn.ai` Discord guild member (`session.discord?.id`, redirecting unauthenticated visitors to `/auth/discord?return_to=...`); `public` is open to everyone.
   3. **Discord Chat Logs (`/chat/logs` & `/chat/logs/token`)**:
      - Gated by Nginx `auth_request /auth/discord/validate`, which verifies `pkmn_session` (or `Authorization: Bearer <token>` from `/chat/logs/token`) and checks that `discord.id` is in the `discord_members` SQLite table synced by `pkmn.ai-discord.service`. Unauthenticated browser requests redirect to `/auth/discord?return_to=$request_uri`.
@@ -2702,12 +2702,22 @@ This section consolidates every technical requirement, protocol change, and runt
 
 ## 9. Database Schemas & API Specifications
 
-### SQLite Schema on `pkmn.ai` (`/var/lib/pkmn/arena.sqlite`)
+### SQLite Schema & Migration Layout on `pkmn.ai` (`db/schema/` & `db/migration/`)
+
+Each table in `/var/lib/pkmn/arena.sqlite` is defined in its own standalone `.sql` file under `db/schema/<table_name>.sql` (`ladders.sql`, `bots.sql`, `developers.sql`, `discord_members.sql`, `bot_ladder_teams.sql`, `bot_versions.sql`, `ladder_entries.sql`, `bot_ladder_stats.sql`, `matches.sql`, `pair_aggregates.sql`, `rating_snapshots.sql`, `tournaments.sql`, `tournament_entrants.sql`, `tournament_games.sql`, `schema_migrations.sql`), paired with sequential numbered SQL migrations in `db/migration/NNNN_<description>.sql`:
+
+- **Fresh Databases (`:memory:` in tests or first boot)**: `ArenaDB` executes every `db/schema/*.sql` file in a single transaction and marks all existing `db/migration/NNNN_*.sql` versions as applied in `schema_migrations`.
+- **Existing Production Databases (`/var/lib/pkmn/arena.sqlite` on `deploy`)**: When unapplied `db/migration/NNNN_*.sql` files exist, `ArenaDB` automatically writes an atomic pre-migration snapshot (`VACUUM INTO '<db>.pre-<NNNN_name>.bak'`), then runs each unapplied migration in strict numerical order inside `BEGIN IMMEDIATE ... COMMIT` (with `PRAGMA foreign_keys = OFF` outside the transaction and `PRAGMA foreign_key_check` verified before `COMMIT` so both `ALTER TABLE ADD COLUMN` and 12-step SQLite table rebuilds are 100% atomic and roll back cleanly on error). Any schema change updates both the canonical `db/schema/<table>.sql` file and adds a corresponding `db/migration/NNNN_*.sql` script.
 
 ```sql
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE schema_migrations (
+  version TEXT PRIMARY KEY,                     -- e.g. '0001_add_example.sql'
+  applied_at INTEGER NOT NULL
+);
 
 CREATE TABLE ladders (
   id TEXT PRIMARY KEY,                          -- immutable internal epoch/season ID, e.g. 'gen1ou20261109', 'gen9championsvgc2026regmc'
@@ -2734,9 +2744,10 @@ CREATE TABLE bots (
 CREATE TABLE developers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   bot_id INTEGER NOT NULL REFERENCES bots(id),  -- 1 project per developer enforced via UNIQUE constraints below
-  github_login TEXT NOT NULL UNIQUE,            -- lowercase GitHub username from projects.yml arena.developers
+  github_login TEXT NOT NULL UNIQUE,            -- lowercase GitHub username from projects.yml arena.owners
   github_id INTEGER UNIQUE,                     -- immutable numeric GitHub user ID recorded on first OAuth login
-  smogon TEXT NOT NULL UNIQUE,                  -- Smogon username or XenForo slug from projects.yml arena.developers
+  smogon_id INTEGER NOT NULL UNIQUE,            -- immutable XenForo numeric member ID (e.g. 10544 for pre.10544)
+  smogon_username TEXT NOT NULL,                -- resolved Smogon forum display username (refreshed by smogon_id)
   discord_id TEXT UNIQUE,                       -- immutable Discord Snowflake ID linked via /auth/discord?intent=link
   discord_username TEXT,                        -- @handle displayed in /account/ .account-bar
   updated_at INTEGER NOT NULL

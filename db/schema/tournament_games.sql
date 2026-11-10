@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS tournament_games (
+  id TEXT PRIMARY KEY,
+  tournament_id TEXT NOT NULL REFERENCES tournaments(id),
+  stage TEXT NOT NULL DEFAULT 'rr',
+  macro_cycle INTEGER NOT NULL,
+  h2h_game_num INTEGER NOT NULL,
+  p1_version_id INTEGER NOT NULL REFERENCES bot_versions(id),
+  p2_version_id INTEGER NOT NULL REFERENCES bot_versions(id),
+  seed TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  preempt_count INTEGER NOT NULL DEFAULT 0,
+  p1_team_packed TEXT,
+  p2_team_packed TEXT,
+  outcome TEXT,
+  turns INTEGER,
+  end_reason TEXT,
+  p1_bank_left_s REAL,
+  p2_bank_left_s REAL,
+  completed_at INTEGER
+);

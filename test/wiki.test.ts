@@ -19,7 +19,7 @@ import {
   signToken,
   verifyToken,
 } from '../server/wiki';
-import {slugify} from '../static/build';
+import {slugify} from '../static/util';
 
 const OAUTH: OAuthConfig = {
   clientId: 'client-id',
@@ -34,17 +34,20 @@ const PROJECTS_YAML = `
 - name: 0 ERROR
   active: 2026
   arena:
-    github: [pre, PairDev]
+    owners:
+      pre: pre
+      PairDev: pairdev
 - name: Foul Play
   active: 2026
   arena:
-    github: pmariglia
+    owners:
+      pmariglia: pmariglia
 - name: Inactive Bot
   active: [2020, 2021]
 `;
 
 describe('wiki helpers', () => {
-  test('extractAuthorizedGitHubUsers normalizes string, array, and admin entries', () => {
+  test('extractAuthorizedGitHubUsers normalizes owners and admin entries', () => {
     const users = extractAuthorizedGitHubUsers(PROJECTS_YAML, ['Scheibo']);
     expect([...users].sort()).toEqual(['pairdev', 'pmariglia', 'pre', 'scheibo']);
   });

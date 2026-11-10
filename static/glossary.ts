@@ -4,7 +4,8 @@ import * as path from 'path';
 import * as site from 'site';
 import * as yaml from 'yaml';
 
-import {header, slugify} from './build';
+import {header} from './build';
+import {slugify} from './util';
 
 export function page(dir: string) {
   const buf: string[] = [];

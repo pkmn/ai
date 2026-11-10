@@ -1,0 +1,79 @@
+name: Arena Registration
+description: Request inclusion of a competitive Pokémon AI project in the pkmn.ai arena
+title: "[Arena] "
+labels: ["registration"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Submit this issue to request inclusion in the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions.
+  - type: input
+    id: name
+    attributes:
+      label: Project Name
+      description: Distinct project name (prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare English Pokémon species names, or known players' names).
+      placeholder: "Foul Play"
+    validations:
+      required: true
+  - type: textarea
+    id: owners
+    attributes:
+      label: Owners (GitHub & Smogon Accounts)
+      description: List `github_username: smogon_username` (one per line) for every team member. All authorized team members must be Smogon account holders in good standing and may belong to at most one Arena project.
+      placeholder: |
+        pmariglia: pmariglia
+        scheibo: pre
+    validations:
+      required: true
+  - type: textarea
+    id: qualifying
+    attributes:
+      label: Qualifying Criteria
+      description: Evidence justifying participation in the hosted environment (e.g., Pokémon Showdown, vgc.bot, or pkmn.bot rankings, published papers, or prior results).
+    validations:
+      required: true
+  - type: input
+    id: language
+    attributes:
+      label: Programming Language(s)
+      placeholder: "Rust, Python"
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Engine(s) / Framework(s)
+      description: Engine(s) or framework(s) used (e.g., `@pkmn/engine`, `poke-engine`, `@pkmn/sim`, `poke-env`, or `Custom`).
+      placeholder: "poke-env"
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source Repository URL (Optional)
+      description: Public repository URL if open-source; leave blank if closed-source.
+  - type: input
+    id: license
+    attributes:
+      label: SPDX License (Optional)
+      placeholder: "MIT"
+  - type: input
+    id: site
+    attributes:
+      label: Website / Forum Thread / Paper Citation (Optional)
+  - type: textarea
+    id: logo
+    attributes:
+      label: Project Logo (Optional PNG)
+      description: Optional PNG logo to display on your project's statistics page (`/leaderboard/<slug>/`). Drag and drop here if providing one.
+  - type: checkboxes
+    id: agreements
+    attributes:
+      label: Required Agreements
+      options:
+        - label: We agree to adhere to the latest community guidance on Responsible Releases (https://pkmn.ai/release).
+          required: true
+        - label: We grant pkmn.ai permission to run our model in its Arena for the purpose of evaluation against other agents.
+          required: true
+        - label: We grant pkmn.ai permission to run our model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
+          required: true

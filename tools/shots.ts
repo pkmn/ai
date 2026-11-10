@@ -10,12 +10,10 @@ import {Browser, BrowserContext, Route, chromium} from 'playwright-core';
 import polka from 'polka';
 
 import {OAuthConfig, register, signToken} from '../server/wiki';
+import {ROOT, root} from '../static/util';
 
-const ROOT = path.basename(path.dirname(__dirname)) === 'build'
-  ? path.join(__dirname, '..', '..')
-  : path.join(__dirname, '..');
-const PUBLIC = path.join(ROOT, 'public');
-const SHOTS_DIR = path.join(ROOT, '.shots');
+const PUBLIC = root('public');
+const SHOTS_DIR = root('.shots');
 
 const ORIGIN = 'http://pkmn.test';
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -45,11 +43,13 @@ const WIKI_PROJECTS_YAML = `
 - name: 0 ERROR
   active: 2026
   arena:
-    github: scheibo
+    owners:
+      scheibo: pre.10544
 - name: Foul Play
   active: 2026
   arena:
-    github: pmariglia
+    owners:
+      pmariglia: pmariglia.535629
 `;
 
 const WIKI_INDEX_DJ = `# Wiki

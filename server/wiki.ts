@@ -10,18 +10,16 @@ import type polka from 'polka';
 import * as site from 'site';
 import * as yaml from 'yaml';
 
-import {header, renderer, slugify} from '../static/build';
+import {header, renderer} from '../static/build';
 import type {Project} from '../static/projects';
+import {escapeHtml, root, slugify} from '../static/util';
 
 const execFileAsync = promisify(execFile);
 
-const ROOT = path.basename(path.dirname(__dirname)) === 'build'
-  ? path.join(__dirname, '..', '..')
-  : path.join(__dirname, '..');
-const WIKI_DIR = path.join(ROOT, 'wiki');
-const PROJECTS = path.join(ROOT, 'static', 'projects.yml');
-const CONFIG = path.join(ROOT, 'config', 'wiki.yml');
-const OAUTH = path.join(ROOT, 'private', 'github.yml');
+const WIKI_DIR = root('wiki');
+const PROJECTS = root('static', 'projects.yml');
+const CONFIG = root('config', 'wiki.yml');
+const OAUTH = root('private', 'github.yml');
 const VOUCH_VALIDATE_URL = 'http://127.0.0.1:9091/vouch/validate';
 
 const SESSION_COOKIE = 'pkmn_wiki_session';
@@ -89,15 +87,6 @@ export function isValidSlug(slug: string): boolean {
   // eslint-disable-next-line no-control-regex
   if (/[/\\<>:"|?*\x00-\x1f\x7f]/.test(slug)) return false;
   return !RESERVED_SLUGS.has(slug.toLowerCase());
-}
-
-export function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 export function formatTitle(slug: string): string {
@@ -183,13 +172,11 @@ export function extractAuthorizedGitHubUsers(
   const entries = (yaml.parse(projectsYaml) ?? []) as Project[];
   if (!Array.isArray(entries)) return users;
   for (const entry of entries) {
-    const gh = entry?.arena?.github;
-    if (!gh) continue;
-    const list = Array.isArray(gh) ? gh : [gh];
-    for (const u of list) {
-      if (typeof u === 'string' && u.trim()) {
-        users.add(u.trim().toLowerCase());
-      }
+    const owners = entry?.arena?.owners;
+    if (!owners || typeof owners !== 'object') continue;
+    for (const u of Object.keys(owners)) {
+      const clean = u.trim().toLowerCase();
+      if (clean) users.add(clean);
     }
   }
   return users;
@@ -209,11 +196,10 @@ export function extractBotPages(projectsYaml: string): {
     const slug = normalizeSlug(name);
     if (!isValidSlug(slug)) continue;
     const owners = new Set<string>();
-    const gh = entry.arena.github;
-    const list = Array.isArray(gh) ? gh : gh ? [gh] : [];
-    for (const u of list) {
-      if (typeof u === 'string' && u.trim()) {
-        owners.add(u.trim().toLowerCase());
+    if (entry.arena.owners && typeof entry.arena.owners === 'object') {
+      for (const u of Object.keys(entry.arena.owners)) {
+        const clean = u.trim().toLowerCase();
+        if (clean) owners.add(clean);
       }
     }
     bots.set(slug, {slug, name, owners});
@@ -255,7 +241,7 @@ export function loadOAuthConfig(file = OAUTH): OAuthConfig | undefined {
   };
 }
 
-const STYLE = fs.readFileSync(path.join(ROOT, 'static', 'wiki.css'), 'utf8');
+const STYLE = fs.readFileSync(root('static', 'wiki.css'), 'utf8');
 
 function renderPage(opts: {
   id?: string;

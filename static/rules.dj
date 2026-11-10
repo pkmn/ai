@@ -1,7 +1,9 @@
 ### Registration
 
 Competitors interested in participating in **pkmn.ai**'s ladders or tournaments
-can request inclusion [via GitHub](TODO). You will be required to provide:
+can request inclusion [via
+GitHub](https://github.com/pkmn/ai/issues/new?template=register.yml). You will
+be required to provide:
 
   - your **project's name** (subject to staff discretion, prefer regex `^[A-Za-Z
   ]$`, distinct from other projects, must not include the tokens `poke` / `mon`

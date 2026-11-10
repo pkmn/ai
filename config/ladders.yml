@@ -1,0 +1,39 @@
+- id: gen1ou20261109
+  slot: rby
+  display_name: RBY
+  format_id: gen1ou
+  team_mode: harvested
+  min_bots: 2
+  status: active
+
+- id: gen3ou20261109
+  slot: adv
+  display_name: ADV
+  format_id: gen3ou
+  team_mode: harvested
+  min_bots: 2
+  status: active
+
+- id: gen9ou20261109
+  slot: sv
+  display_name: SV
+  format_id: gen9ou
+  team_mode: harvested
+  min_bots: 2
+  status: active
+
+- id: gen9randombattle20261109
+  slot: rand
+  display_name: RAND
+  format_id: gen9randombattle
+  team_mode: random
+  min_bots: 2
+  status: active
+
+- id: gen9championsvgc2026regmc
+  slot: vgc
+  display_name: VGC
+  format_id: gen9championsvgc2026regmc
+  team_mode: competitor_pool
+  min_bots: 3
+  status: active

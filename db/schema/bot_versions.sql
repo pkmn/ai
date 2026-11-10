@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS bot_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_id INTEGER NOT NULL REFERENCES bots(id),
+  submitted_by_dev_id INTEGER REFERENCES developers(id) ON DELETE SET NULL,
+  version_str TEXT NOT NULL,
+  format_type TEXT NOT NULL,
+  download_url TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  auth_token_enc TEXT,
+  ladders_json TEXT NOT NULL,
+  unpacked_bytes INTEGER,
+  smoke_status TEXT NOT NULL DEFAULT 'pending_pull',
+  smoke_duration_ms INTEGER,
+  smoke_turn_ms INTEGER,
+  smoke_peak_ram_mb INTEGER,
+  smoke_error_log TEXT,
+  dm_sent INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE(bot_id, version_str)
+);

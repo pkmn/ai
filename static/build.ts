@@ -12,14 +12,12 @@ import * as site from 'site';
 import * as glossary from './glossary';
 import * as projects from './projects';
 import * as research from './research';
+import {root} from './util';
 
 const fs = site.fs;
 
-const ROOT = path.basename(path.dirname(__dirname)) === 'build'
-  ? path.join(__dirname, '..', '..')
-  : path.join(__dirname, '..');
-const PUBLIC = path.join(ROOT, 'public');
-const STATIC = path.join(ROOT, 'static');
+const PUBLIC = root('public');
+const STATIC = root('static');
 
 export const renderer = new site.page.Renderer({
   public: PUBLIC,
@@ -53,21 +51,14 @@ export const header = (title: string, wip = false) =>
 
 export const style = ' [id] { scroll-margin-top: 2rem; }';
 
-export const slugify = (s: string) =>
-  s.replace(/\s+/g, '-') // Replace spaces with -
-    .replace(/[^\w-]+/g, '') // Remove all non-word chars
-    .replace(/--+/g, '-') // Replace multiple - with single -
-    .replace(/^-+/, '') // Trim - from start of text
-    .replace(/-+$/, ''); // Trim - from end of text
-
 const build = async (rebuild?: boolean) => {
   fs.mkdir(path.join(PUBLIC));
 
   let actual = fs.list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'release', 'chat', 'leaderboard',
-    'background', 'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib',
-    'research.bib',
+    'account', 'background', 'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg',
+    'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -101,7 +92,7 @@ const build = async (rebuild?: boolean) => {
     expected.add(page);
   }
 
-  for (const placeholder of ['chat', 'leaderboard']) {
+  for (const placeholder of ['chat', 'leaderboard', 'account']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
     if (!fs.exists(file)) {
       fs.mkdir(path.dirname(file));
@@ -146,7 +137,7 @@ const build = async (rebuild?: boolean) => {
     });
   }
 
-  const priv = path.join(ROOT, 'private', 'build.js');
+  const priv = root('private', 'build.js');
   if (fs.exists(priv)) require(priv)(renderer, expected);
 
   renderer.create('concepts', {

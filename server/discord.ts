@@ -7,11 +7,7 @@ import * as path from 'path';
 
 import * as yaml from 'yaml';
 
-import {slugify} from '../static/build';
-
-const root = path.basename(path.dirname(__dirname)) === 'build'
-  ? path.join(__dirname, '..', '..')
-  : path.join(__dirname, '..');
+import {root, slugify, toID} from '../static/util';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const VOUCH_VALIDATE = 'http://127.0.0.1:9090/vouch/validate';
@@ -151,18 +147,14 @@ export interface DiscordInteraction {
   };
 }
 
-function loadConfig(file = path.join(root, 'config', 'discord.yml')): Config {
+function loadConfig(file = root('config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
 }
 
 export function loadGlossary(
-  file = path.join(root, 'static', 'glossary.yml')
+  file = root('static', 'glossary.yml')
 ): Record<string, string> {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
-}
-
-function toID(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 function botOverride(
@@ -440,7 +432,7 @@ export function formatMessage(
 export async function syncMessages(
   token: string,
   channel: string,
-  dir = path.join(root, 'chat', 'logs'),
+  dir = root('chat', 'logs'),
   members?: GuildMember[],
   channels?: GuildChannel[],
   roles?: GuildRole[]
