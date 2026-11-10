@@ -13,12 +13,12 @@ This document is the complete, self-contained technical specification for **pkmn
 3. [Arena Hardware, Sandbox & Full Setup Script](#3-arena-hardware-sandbox--full-setup-script)
 4. [Packaging Rules, 500 MB Uncompressed Cap & OCI Inspection](#4-packaging-rules-500-mb-uncompressed-cap--oci-inspection)
 5. [Battle Loop, `|utm|` Protocol & Time-Sliced Arbiter](#5-battle-loop-utm-protocol--time-sliced-arbiter)
-6. [Rating System, Matchmaking & Model Augmentations](#6-rating-system-matchmaking--model-augmentations)
-7. [Competitor Registration, Submissions & Version Lifecycle](#7-competitor-registration-submissions--version-lifecycle)
+6. [Rating System & Matchmaking Algorithms](#6-rating-system--matchmaking-algorithms)
+7. [Competitor Registration, Unified Auth, `/account` & Version Lifecycle](#7-competitor-registration-unified-auth-account--version-lifecycle)
 8. [Competitor Integration Guide & Gotchas](#8-competitor-integration-guide--gotchas)
 9. [Database Schemas & API Specifications](#9-database-schemas--api-specifications)
-10. [Static Page Generation, Leaderboard UI & Log Archival](#10-static-page-generation-leaderboard-ui--log-archival)
-11. [Local Laptop End-to-End Testing & Pre-Launch Checklist](#11-local-laptop-end-to-end-testing--pre-launch-checklist)
+10. [Static Page Generation, Arena UI Views & Log Archival](#10-static-page-generation-arena-ui-views--log-archival)
+11. [Server-Only Integration Harness (`tools/mock-arena.ts`), Laptop Dev Mode & Checklist](#11-server-only-integration-harness-toolsmock-arenats-laptop-dev-mode--checklist)
 12. [Appendices: Cold-Storage Bot Swapping & Competitor-Supplied Team Pools](#12-appendices-cold-storage-bot-swapping--competitor-supplied-team-pools)
 13. [Live Cloud GPU Tournaments (TCEC / CCC Mode)](#13-live-cloud-gpu-tournaments-tcec--ccc-mode)
 
@@ -28,14 +28,15 @@ This document is the complete, self-contained technical specification for **pkmn
 
 **pkmn.ai** runs across two dedicated machines with a strict separation between public web serving and isolated battle execution:
 
-- **`pkmn.ai` Server (DigitalOcean Droplet, Ubuntu LTS)**: Serves the static website via Nginx behind Cloudflare, hosts the Git-backed Djot wiki at `/wiki` (`github.com/pkmn/wiki`), handles developer GitHub OAuth2 login for version submissions and wiki editing, syncs registered bots from `static/projects.yml`, mirrors match summaries and ratings in SQLite, runs a Discord role and log bot, and pre-generates static leaderboard HTML/JSON after each match. Zero battle logs and zero bot archives ever touch the droplet's disk.
-- **`arena` Worker (Apple M6 Mac mini, headless macOS)**: Owns canonical matchmaking and Davidson MAP rating computation, pulls approved bot artifacts, isolates them in either Linux ARM64 OCI containers or native macOS ARM64 Seatbelt sandboxes, runs 2-game blind-pair matches using [`@pkmn/sim`](https://github.com/pkmn/ps/tree/main/sim) over `stdin`/`stdout`, wipes memory and `/tmp` scratch volumes between games, writes uncompressed daily logs and bot archives to an external 1 TB SSD (`/Volumes/Archive`), compresses monthly `.tar` archives to Google Cloud Storage (`gs://pkmn-arena`), and pushes match summaries and ratings outbound to `pkmn.ai`.
+- **`pkmn.ai` Server (DigitalOcean Droplet, Ubuntu LTS)**: Serves the static website via Nginx behind Cloudflare, hosts the Git-backed Djot wiki at `/wiki` (`github.com/pkmn/wiki`), centralizes developer GitHub OAuth2 and Discord OAuth2 in `server/auth.ts` (powering `/account`, `/wiki`, `/chat/logs`, and `/private` without Vouch Proxy), syncs registered projects and team members from `static/projects.yml`, validates first-time seasonal VGC 20-team lists via `teams/index.ts`, mirrors match summaries and ratings in SQLite, runs the `pkmn.ai-discord` daemon (`server/discord.ts`) for slash commands, chat log archival, Discord roles, and submission/quarantine DMs, and atomically pre-generates static leaderboard/battles/profile HTML and JSON after each match. Zero battle logs and zero bot archives ever touch the droplet's disk.
+- **`arena` Worker (Apple M6 Mac mini, headless macOS)**: Owns canonical matchmaking and Davidson MAP rating computation, pulls approved bot artifacts, isolates them in either Linux ARM64 OCI containers or native macOS ARM64 Seatbelt sandboxes (with read-only mounts for era-matched `pkmn/stats` and `randbats` JSON files), runs 2-game blind-pair (or VGC pseudo-blind-pair) matches using [`@pkmn/sim`](https://github.com/pkmn/ps/tree/main/sim) over `stdin`/`stdout`, wipes memory and `/tmp` scratch volumes between games, writes uncompressed daily logs and bot archives to an external 1 TB SSD (`/Volumes/Archive`), compresses monthly `.tar` archives to Google Cloud Storage (`gs://pkmn-arena`), and pushes match summaries and ratings outbound to `pkmn.ai`.
 
 ```mermaid
 flowchart LR
     subgraph DO["pkmn.ai Server (DigitalOcean)"]
         Nginx["Nginx + Static HTML/JSON"]
-        API["Node.js Control API + Discord Bot"]
+        API["pkmn.ai-server (Auth + Account + Control API)"]
+        Disc["pkmn.ai-discord (Roles + DMs + Logs)"]
         DB[("SQLite Metadata & Ratings")]
     end
 
@@ -49,10 +50,11 @@ flowchart LR
 
     GCS[("GCS Archive (gs://pkmn-arena)")]
 
-    Dev["Competitor"] -->|"GitHub OAuth + Submit URL"| API
-    API --> DB
+    Dev["Competitor"] -->|"GitHub/Discord OAuth + /account"| API
+    API <--> DB
+    Disc <--> DB
     API -->|"Atomic pre-render"| Nginx
-    Loop -->|"1. Poll pending bots"| API
+    Loop -->|"1. Poll pending bots + VGC teams"| API
     Loop <--> ArenaDB
     Loop <-->|"stdin / stdout"| P1
     Loop <-->|"stdin / stdout"| P2
@@ -68,8 +70,8 @@ flowchart LR
 | Machine | Entity Type | Name / ID | Purpose |
 | :--- | :--- | :--- | :--- |
 | **`pkmn.ai` (Ubuntu Droplet)** | Hostname | `pkmn.ai` | Public web server and control plane (`ssh pkmn@pkmn.ai`). |
-| **`pkmn.ai` (Ubuntu Droplet)** | Admin / App User | `pkmn` | Owns `/home/pkmn/ai` and runs `pkmn.ai-server.service`. |
-| **`pkmn.ai` (Ubuntu Droplet)** | Web User | `www-data` (in group `pkmn`) | Runs Nginx serving `/home/pkmn/ai/public`. |
+| **`pkmn.ai` (Ubuntu Droplet)** | Admin / App User | `pkmn` | Owns `/home/pkmn/ai` and runs `pkmn.ai-server.service` and `pkmn.ai-discord.service`. |
+| **`pkmn.ai` (Ubuntu Droplet)** | Web User | `www-data` (in group `pkmn`) | Runs Nginx serving `/home/pkmn/ai/public` and `/home/pkmn/ai/chat/logs`. |
 | **`pkmn.ai` (Ubuntu Droplet)** | Reverse SSH Tunnel User | `tunnel` (`/usr/sbin/nologin`) | Locked-down role user accepting only `-R 127.0.0.1:2222` from `arena`. |
 | **`arena` (M6 Mac mini)** | Hostname | `arena` | Dedicated headless M6 Mac mini (`ssh pkmn@arena` or `ssh arena` via `ProxyJump`). |
 | **`arena` (M6 Mac mini)** | Admin / Coordinator User | `pkmn` | Owns `/opt/arena` and runs `ai.pkmn.arena` coordinator on E-cores. |
@@ -80,24 +82,26 @@ flowchart LR
 #### B. File Paths, Volumes, Databases & Cloud Storage
 | Location | Path / URI | Medium / Quota | Contents & Lifecycle |
 | :--- | :--- | :--- | :--- |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/` | Droplet SSD | Git checkout of `pkmn/ai` (`static/`, `server/`, `config/`, `deploy`). |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/projects.yml` | Droplet SSD | Canonical registry of all Pokémon AI projects and registered `arena:` bots. |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/` | Droplet SSD | Git checkout of `pkmn/ai` (`static/`, `server/`, `config/`, `teams/`, `deploy`). |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/projects.yml` | Droplet SSD | Canonical registry of all Pokémon AI projects and registered `arena:` bots/developers. |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/config/ladders.yml` | Droplet SSD | Canonical ladder definitions (immutable `ladder_id`, UI slot/display name, format, lifecycle status). |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/wiki/` | Droplet SSD | Git checkout of `github.com/pkmn/wiki` containing `.dj` wiki pages and revision history. |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/config/wiki.yml` | Droplet SSD | Public wiki configuration (`admins` and GitHub-to-author display name mappings). |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/private/github.yml` | Droplet SSD | Gitignored GitHub OAuth credentials (`client_id`, `client_secret`, `callback_url`, `session_secret`). |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/avatars/<slug>.png` | Droplet SSD | $96 \times 96$ bot avatars committed via registration PRs. |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/public/` | Droplet SSD | Pre-rendered static HTML/JSON served directly by Nginx (`leaderboard/`, `api/live.json`). |
-| **`pkmn.ai` Droplet** | `/var/lib/pkmn/arena.sqlite` | Droplet SSD | Control-plane SQLite DB (`developers`, `bots`, `bot_versions`, `ladder_entries`, `matches`, `pair_aggregates`, `rating_snapshots`). |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/private/auth.yml` | Droplet SSD | Gitignored GitHub + Discord OAuth credentials, `session_secret`, and `arena_secret`. |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/avatars/<slug>.png` | Droplet SSD | Optional project PNG logos committed via registration PRs (rendered on `/leaderboard/<slug>/`). |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/public/` | Droplet SSD | Pre-rendered static HTML/JSON served directly by Nginx (`leaderboard/`, `battles/`, `api/live.json`). |
+| **`pkmn.ai` Droplet** | `/var/lib/pkmn/arena.sqlite` | Droplet SSD | Control-plane SQLite DB (`ladders`, `developers`, `bots`, `bot_versions`, `bot_ladder_teams`, `ladder_entries`, `bot_ladder_stats`, `matches`, `pair_aggregates`, `rating_snapshots`, `discord_members`). |
 | **`pkmn.ai` Droplet** | `/etc/ssh/sshd_config.d/arena-tunnel.conf` | Droplet SSD | Hardened `sshd` `Match User tunnel` block (`AllowTcpForwarding remote`, `ForceCommand /usr/sbin/nologin`). |
 | **`pkmn.ai` Droplet** | `/home/tunnel/.ssh/authorized_keys` | Droplet SSD | Tunnel public key locked to `restrict,port-forwarding,permitlisten="127.0.0.1:2222",permitopen="none"`. |
 | **`arena` Internal SSD** | `/opt/arena/app/` | 256 GB Internal SSD | Deployed Arena coordinator & `@pkmn/sim` code. |
 | **`arena` Internal SSD** | `/opt/arena/bin/arena` | 256 GB Internal SSD | Unified lifecycle controller (`arena run|pause|resume|cleanup p1|p2 ...`). |
 | **`arena` Internal SSD** | `/opt/arena/bin/limit` | 256 GB Internal SSD | Compiled C supervisor (`limit.c`) enforcing 14 GiB XNU `ri_phys_footprint` cap. |
-| **`arena` Internal SSD** | `/opt/arena/bin/unpack` | 256 GB Internal SSD | Python stream unpacker enforcing 500 MB resident cap + APFS `cp -c` CAS deduplication. |
+| **`arena` Internal SSD** | `/opt/arena/bin/unpack` | 256 GB Internal SSD | Python stream unpacker (`.tar.gz`/`.tar.xz`/`.tar.zst`) enforcing 500 MB resident cap + APFS `cp -c` CAS deduplication. |
 | **`arena` Internal SSD** | `/opt/arena/etc/sandbox.sb` | 256 GB Internal SSD | macOS Seatbelt MAC profile for native `darwin/arm64` bundles. |
 | **`arena` Internal SSD** | `/opt/arena/state/arena.sqlite` | 256 GB Internal SSD | Operational SQLite DB (active rosters, match states, Davidson ratings, `outbox`). |
 | **`arena` Internal SSD** | `/opt/arena/state/p{1,2}.{mode,pgid,peak}` | 256 GB Internal SSD | Per-slot runtime mode, process group ID, and peak RAM telemetry files. |
-| **`arena` Internal SSD** | `/opt/arena/teams/<ladder>.txt` | 256 GB Internal SSD | Harvested, validated, and canonicalized packed team pools. |
+| **`arena` Internal SSD** | `/opt/arena/teams/<ladder_id>.txt` | 256 GB Internal SSD | Harvested, validated, and canonicalized packed team pools (for harvested ladders). |
+| **`arena` Internal SSD** | `/opt/arena/stats/<ladder_id>/` | 256 GB Internal SSD | Read-only era-matched stats files (`stats.json` or `data.json`, `full.json`, `sets.json`) mounted into bot sandboxes. |
 | **`arena` Internal SSD** | `/opt/arena/bots/<slug>-<ver>/` | 256 GB Internal SSD | Unpacked active native bundles ($\le 500\text{ MB}$ each, `root:wheel` read-only). |
 | **`arena` Internal SSD** | `/opt/arena/cas/<xx>/<sha256>` | 256 GB Internal SSD | Content-addressed store for APFS `clonefile(2)` block deduplication across bundles. |
 | **`arena` Internal SSD** | `/opt/arena/logs/` | 256 GB Internal SSD | Coordinator and tunnel daemon logs (`arena.out.log`, `arena.err.log`, `tunnel.err.log`). |
@@ -105,15 +109,16 @@ flowchart LR
 | **`arena` APFS Volume** | `/Volumes/P1` | **4 GB APFS quota** | Ephemeral `/tmp` & `$XDG_CACHE_HOME` for Player 1; wiped before and after every game. |
 | **`arena` APFS Volume** | `/Volumes/P2` | **4 GB APFS quota** | Ephemeral `/tmp` & `$XDG_CACHE_HOME` for Player 2; wiped before and after every game. |
 | **`arena` APFS Volume** | `/Volumes/Staging` | **1 GB APFS quota** | Ephemeral staging volume for safe bundle/image downloads and unpacking. |
-| **`arena` External SSD** | `/Volumes/Archive/bots/<slug>/<ver>/` | **1 TB External SSD** | Permanent cold archive of every submitted bot bundle (`.tar.gz`/`.tar.zst`) or OCI image (`.oci.tar`). |
-| **`arena` External SSD** | `/Volumes/Archive/logs/YYYY-MM/<format>/<YYYY-MM-DD>/` | **1 TB External SSD** | Uncompressed daily battle logs (`battle-<format>-<N>.log.json`), compressed daily to `.7z` and monthly to `/Volumes/Archive/logs/YYYY-MM.tar`. |
+| **`arena` External SSD** | `/Volumes/Archive/bots/<slug>/<ver>/` | **1 TB External SSD** | Permanent cold archive of every submitted bot bundle (`.tar.gz`/`.tar.xz`/`.tar.zst`) or OCI image (`.oci.tar`). |
+| **`arena` External SSD** | `/Volumes/Archive/logs/YYYY-MM/<ladder_id>/<YYYY-MM-DD>/` | **1 TB External SSD** | Uncompressed daily battle logs (`battle-<ladder_id>-<N>.log.json`), compressed daily to `.7z` and monthly to `/Volumes/Archive/logs/YYYY-MM.tar`. |
 | **`arena` External SSD** | `/Volumes/Archive/db/` | **1 TB External SSD** | Daily snapshots of `/opt/arena/state/arena.sqlite`. |
 | **Google Cloud Storage** | `gs://pkmn-arena` | GCS `ARCHIVE` (`us-west1`) | Long-term off-site backup (`gs://pkmn-arena/bots/`, `gs://pkmn-arena/logs/YYYY-MM.tar`, `gs://pkmn-arena/db/`). |
 
 #### C. Services, Daemons & Virtual Machines
 | Machine | Unit / Daemon Name | Path | Purpose |
 | :--- | :--- | :--- | :--- |
-| **`pkmn.ai` Droplet** | `pkmn.ai-server.service` | `/home/pkmn/ai/config/pkmn.ai-server.service` | Runs the Node.js control API and static page builder. |
+| **`pkmn.ai` Droplet** | `pkmn.ai-server.service` | `/home/pkmn/ai/config/pkmn.ai-server.service` | Runs the Node.js HTTP server (`:1234`): unified GitHub/Discord OAuth, `/account`, `/wiki`, `/api/arena/*`, and static page renderer. |
+| **`pkmn.ai` Droplet** | `pkmn.ai-discord.service` | `/home/pkmn/ai/config/pkmn.ai-discord.service` | Runs the Discord daemon (`:9091`): `/define` interactions, chat log/pin sync, guild member sync, leaderboard/competitor role sync, and submission/quarantine DMs. |
 | **`pkmn.ai` Droplet** | `pkmn.ai-backup.timer` | `/home/pkmn/ai/config/pkmn.ai-backup.timer` | Nightly SQLite backup synced to `gs://pkmn-arena/db/`. |
 | **`arena` Mac mini** | `ai.pkmn.arena` | `/Library/LaunchDaemons/ai.pkmn.arena.plist` | Runs the Arena coordinator as user `pkmn` on the 2 E-cores (`taskpolicy -b`). |
 | **`arena` Mac mini** | `ai.pkmn.pf` | `/Library/LaunchDaemons/ai.pkmn.pf.plist` | Loads `/etc/pf.anchors/ai.pkmn.arena` at boot to block all network packets from `p1` and `p2`. |
@@ -124,24 +129,32 @@ flowchart LR
 
 ## 2. Ladders, Rulesets & Team Pool Harvesting
 
-### Supported Ladders, Display Names & `1500` Elo Scale Anchors
+### Supported Ladders, Internal `ladder_id` Epochs & Seasonal Lifecycle
 
-Each ladder has an isolated rating pool, uses a concise display name on `pkmn.ai`, and anchors its rating scale (`1500` Elo) to `v1` of a known strong open-source bot for that format:
+Every ladder has an **immutable internal `ladder_id`** (representing a frozen ruleset + team-pool epoch) that is decoupled from its **UI slot / display label** (`RBY`, `ADV`, `SV`, `RAND`, `VGC`). Each ladder anchors its rating scale (`1500` Elo) to `v1` of a designated open-source anchor bot (or the `1500` prior mean until an anchor enters):
 
-| Ladder ID | Display Name | Underlying PS Format | Team Preview | Team Source | `1500` Elo Anchor Bot (`v1`) |
-| :--- | :--- | :--- | :---: | :--- | :--- |
-| `gen1ou` | **`RBY`** | `[Gen 1] OU` | No | Harvested PS high-ladder logs | `Metamon` (`v1`) |
-| `gen3ou` | **`ADV`** | `[Gen 3] OU` | No | Harvested PS high-ladder logs | `Foul Play` (`v1`) |
-| `gen9ou` | **`SINGLES`** | `[Gen 9] OU` | Yes | Harvested PS high-ladder logs | `Foul Play` (`v1`) |
-| `gen9doublesou` | **`DOUBLES`** | `[Gen 9] Doubles OU` | Yes | Harvested PS high-ladder logs | `nessie` or `mikumiku` (`v1`) |
-| `gen9randbats` | **`RANDOM`** | `[Gen 9] Random Battle` | No | `@pkmn/sim` `Teams.generate()` | `Foul Play` (`v1`) |
+| Active Slot / Label | Internal `ladder_id` (Example) | Underlying PS Format | Kind | Team Preview | Team Source (`min_bots`) | `1500` Elo Anchor Bot (`v1`) |
+| :--- | :--- | :--- | :---: | :---: | :--- | :--- |
+| **`RBY`** | `gen1ou20261109` | `[Gen 1] OU` | Permanent | No | Harvested PS high-ladder logs (`2`) | `Metamon` (`v1`) |
+| **`ADV`** | `gen3ou20261109` | `[Gen 3] OU` | Permanent | No | Harvested PS high-ladder logs (`2`) | `Foul Play` (`v1`) |
+| **`SV`** | `gen9ou20261109` | `[Gen 9] OU` | Permanent | Yes | Harvested PS high-ladder logs (`2`) | `Foul Play` (`v1`) |
+| **`RAND`** | `gen9randombattle20261109` | `[Gen 9] Random Battle` | Permanent | No | `@pkmn/sim` `Teams.generate()` (`2`) | `Foul Play` (`v1`) |
+| **`VGC`** | `gen9championsvgc2026regmc` | `[Gen 9 Champions] VGC 2026 Reg M-C` | Seasonal | Yes (Pick 4) | Competitor 20-team pot (`3`) | Designated `v1` / `1500` prior |
 
-### Fixed Format Snapshots & Custom Rule Modifications
-- **Pinned Simulator Version**: All 5 ladders are pinned to a fixed `@pkmn/sim` package version / Pokémon Showdown commit so mechanics, base stats, and learnsets never shift underneath frozen bot binaries.
-- **Custom Format Rules**: Each ladder's format definition can apply explicit custom rule modifications on top of the base Showdown format (for example, banning Illusion species via `['[Gen 9] OU', '-Zoroark', '-Zoroark-Hisui']` via `Dex.formats.get()`).
-- **Strict Validation**: Every harvested team is validated against the Arena's exact custom format ruleset (`new TeamValidator(customFormat).validateTeam(team)`) before entering the team pool, guaranteeing that banned Pokémon, items, moves, or abilities (such as Zoroark) never appear in any match.
+- **Decoupled `ladder_id` & Epoch Rotation (`active` $\rightarrow$ `settling` $\rightarrow$ `archived`)**:
+  - **`active`**: Shown under its primary short slot code (`RBY`, `ADV`, `SV`, `RAND`, `VGC`) on `/leaderboard/`, `/battles/`, and `/account/`, accepting new bot submissions and playing matches continuously. Permanent ladders use the `<format><YYYYMMDD>` identifier convention (e.g., `gen1ou20261109`, `gen9ou20261109`, `gen9randombattle20261109`).
+  - **`settling`**: When a new VGC seasonal regulation drops (or if any permanent format `RBY`/`ADV`/`SV`/`RAND` ever undergoes a major breaking ban/epoch refresh), the outgoing `ladder_id` transitions to `settling`: new submissions to it are closed, while the Arena continues scheduling matches until all active versions on that `ladder_id` reach settlement ($\text{SE}(R) \le 30\text{ Elo}$ and $\ge 25$ matches).
+  - **`archived`**: Once settled, the outgoing ladder's leaderboard is frozen permanently, its active bot versions transition to `retired` (freeing internal SSD cache space on `arena`), and its `display_name` changes from the short slot code (`VGC`) to its full historical epoch title (e.g., `"VGC 2026 Reg M-C"` or `"SV (2026-11-09)"`) in archived views—while the active slot seamlessly points to the new `ladder_id` (e.g., `gen9championsvgc2026regmd` or `gen9ou20270601`).
 
-### Harvesting & Canonicalizing Teams from Pokémon Showdown Logs
+### Vanilla Format Snapshots & Read-Only Stats Mounts
+- **Pinned Vanilla Simulator (`@pkmn/sim@0.11.0`)**: All ladder formats use **100% vanilla Pokémon Showdown rules and mechanics** as of Nov 9th, 2026 (`@pkmn/sim@0.11.0` / `@pkmn/mods`), with **no custom Pokémon/ability bans** (Zoroark, Ditto, etc. remain legal wherever Showdown's standard format allows them) and **both choice cancelling and pondering disabled** on ladders.
+- **Strict Validation**: Every harvested or competitor-submitted team is validated against the exact format (`new TeamValidator(formatId).validateTeam(team)`) before entering the pool.
+- **Read-Only Era-Matched Stats Mounts (`/opt/arena/stats/<ladder_id>/`)**:
+  - For every ladder, the Arena provides read-only data files matching the exact period the teams are drawn from (mounted inside both native Seatbelt and OCI container sandboxes and pointed to by `PKMN_STATS_DIR`, consuming 0 bytes of a bot's 500 MB bundle quota):
+    - Constructed formats (`RBY`, `ADV`, `SV`, `VGC`): `@pkmn/stats` `stats.json`.
+    - Random Battles (`RAND`): `data.json`, `full.json`, and `sets.json`.
+
+### Harvesting & Canonicalizing Teams from Pokémon Showdown Logs (`RBY`, `ADV`, `SV`)
 
 - **Archive Format**:
   - Monthly archives (`YYYY-MM.tar` or `YYYY-MM.tar.xz`) live locally at `/Volumes/SSD2/battles/main/days` (`2017-10.tar` through `2023-06.tar`) and from Pokémon Showdown staff (`2024-05.tar.xz` through `2025-04.tar.xz` and newer).
@@ -149,7 +162,7 @@ Each ladder has an isolated rating pool, uses a concise display name on `pkmn.ai
   - Each `.7z` archive contains one JSON file per battle (`<format>-<battle_id>.log.json`) with keys:
     `winner`, `seed`, `turns`, `p1`, `p2`, `p1team`, `p2team`, `score`, `inputLog`, `log`, `p1rating`, `p2rating`, `endType`, `timestamp`, `roomid`, `format`.
 - **Snapshot Window Selection**:
-  - For each constructed ladder (`RBY`, `ADV`, `SINGLES`, `DOUBLES`), select a multi-month period free of major tier shifts or DLC drops so the pool represents a coherent metagame snapshot.
+  - For each harvested constructed ladder (`RBY`, `ADV`, `SV`), select a multi-month period free of major tier shifts or DLC drops so the pool represents a coherent metagame snapshot (and export the matching `@pkmn/stats` `stats.json` for that exact period).
 - **Why Naive Single-Battle Rating Filtering Fails**:
   - Simply collecting `(pilot_elo, team)` from every battle, sorting by `pilot_elo`, and keeping the top 10–20% lets **bad or meme teams piloted by elite players** pollute the pool: a 1900-Elo player who tests an unviable gimmick team and goes `0–4` still has a 1840–1900 rating during those losses, so naive filtering harvests their losing experiment.
   - Conversely, each format has a completely different rating distribution (`gen9ou` active peaks exceed `2000+` Elo while `gen1ou` or `gen3ou` have much tighter distributions and different `gxe` curves), so fixed Elo cutoffs cannot be reused across ladders.
@@ -164,9 +177,9 @@ Each ladder has an isolated rating pool, uses a concise display name on `pkmn.ai
   - **Pass 2 — Early `@pkmn/sets` Canonicalization & Trajectory Tracking in $\ge P_{X-10}$ Battles**:
     1. Stream the window a second time, filtering to battle sides where the pilot $u \in \mathcal{U}_{\text{proven}}$ and the battle takes place at or above the $(X - 10)$-th percentile ($\text{elo}_{u} \ge E_{X-10}$ and opponent $\text{elo}_{\text{opp}} \ge E_{X-15}$).
     2. **Validate & Canonicalize *Before* Aggregating Wins (`@pkmn/sets`)**:
-       - Validate the raw `p1team` / `p2team` against the Arena's pinned format ruleset (including custom bans like `-Zoroark`) via `new TeamValidator(customFormat).validateTeam(team)`.
+       - Validate the raw `p1team` / `p2team` against the Arena's pinned format ruleset via `new TeamValidator(formatId).validateTeam(team)`.
        - Immediately pass the validated team through [`Team.canonicalize(team, gen)`](file:///Users/kjs/Code/src/github.com/pkmn/ps/sets/src/teams.ts#L78-L90) from `@pkmn/sets` (which calls `Sets.canonicalize(set, gen)` on each Pokémon to strip cosmetic nicknames/shiny flags, normalize IVs/DVs/Hidden Power, sort moves alphabetically, and **reverse-calculate the minimal EVs needed to produce the exact same in-game stats at that level/nature**).
-       - For non-Team-Preview formats (`RBY`, `ADV`), preserve slot 1 (lead) and sort slots 2–6 by species ID; for Team-Preview formats (`SINGLES`, `DOUBLES`), sort all 6 canonicalized sets by species ID to produce a deterministic `canonicalKey`.
+       - For non-Team-Preview formats (`RBY`, `ADV`), preserve slot 1 (lead) and sort slots 2–6 by species ID; for Team-Preview formats (`SV`), sort all 6 canonicalized sets by species ID to produce a deterministic `canonicalKey`.
        - **Why canonicalizing before aggregation matters**: High-ladder players frequently change nicknames, reorder slots in Team Preview, or shift 2 wasted EVs mid-climb. Canonicalizing first ensures all battles with the same functional 6-Pokémon team merge into a single `(pilot, canonicalKey)` trajectory.
     3. For each `(pilot u, canonicalKey H)` trajectory in the $\ge E_{X-10}$ bracket, accumulate:
        - `wins`, `losses`, `ties`
@@ -266,13 +279,16 @@ export function filterAndRankHarvestedTeams(
 
 ### Team Sampling, Mirror Prevention & Seat Swapping
 
-For each 2-game blind-pair match between Bot $A$ and Bot $B$ on ladder $L$:
+For each 2-game paired match between Bot $A$ (project $P_A$) and Bot $B$ (project $P_B$) on ladder $L$:
 - **PRNG Seed**: Generate one 64-bit battle seed `seed = PRNG.generateSeed()` (e.g., `'sodium,0123456789abcdef...'`) via `@pkmn/sim`'s `PRNG`.
-- **Constructed Ladders (`gen1ou`, `gen3ou`, `gen9ou`, `gen9doublesou`)**:
+- **Harvested Constructed Ladders (`RBY`, `ADV`, `SV`)**:
   - Sample Team 1 ($T_1$) and Team 2 ($T_2$) uniformly at random from `/opt/arena/teams/<L>.txt`.
   - **Mirror Check**: Unpack both teams and compare their 6 species IDs. If $T_1$ and $T_2$ are identical or share all 6 species IDs, re-roll $T_2$ (up to 50 attempts).
-- **Random Battles (`gen9randbats`)**:
-  - Generate $T_1 = \text{Teams.pack}(\text{Teams.generate}(\text{'gen9randombattle'}, \{ \text{seed}: s_{\text{team1}} \}))$ and $T_2 = \text{Teams.pack}(\text{Teams.generate}(\text{'gen9randombattle'}, \{ \text{seed}: s_{\text{team2}} \}))$ upfront (checking the custom format validator) so both games use the exact same two random teams.
+- **Random Battles (`RAND` / `gen9randombattle`)**:
+  - Generate $T_1 = \text{Teams.pack}(\text{Teams.generate}(\text{'gen9randombattle'}, \{ \text{seed}: s_{\text{team1}} \}))$ and $T_2 = \text{Teams.pack}(\text{Teams.generate}(\text{'gen9randombattle'}, \{ \text{seed}: s_{\text{team2}} \}))$ upfront so both games use the exact same two random teams.
+- **Seasonal Competitor-Pool Ladder (`VGC` / `gen9championsvgc2026regmc`)**:
+  - Requires at least **3 active projects (`min_bots = 3`)** on the ladder ($\ge 60$ submitted teams in the pot; see Appendix B for `teams/index.ts` $d_{\text{1-NN}} \ge 1.30$ sequential validation on each project's first submission to the ladder).
+  - Sample $(T_1, T_2)$ as a **pseudo-blind-pair** from the combined seasonal pot $\mathcal{T}_{\text{all}} = \bigcup_P \mathcal{T}_P$ (re-rolling 6-species mirrors) subject to the constraint that **at most 1 of $\{T_1, T_2\}$ belongs to the 40 teams $\mathcal{T}_{P_A} \cup \mathcal{T}_{P_B}$ submitted by the two participating projects combined** ($\bigl|\{T_1, T_2\} \cap (\mathcal{T}_{P_A} \cup \mathcal{T}_{P_B})\bigr| \le 1$, accounting for canonical owner sets $\mathcal{O}(H)$).
 - **Game 1 vs. Game 2 Assignment**:
   - **Game 1**: `p1` = Bot $A$ with $T_1$; `p2` = Bot $B$ with $T_2$; battle seed = $s$.
   - **Game 2**: `p1` = Bot $B$ with $T_1$; `p2` = Bot $A$ with $T_2$; battle seed = $s$.
@@ -518,11 +534,12 @@ echo "==> [3/9] Creating /opt/arena directories and quota-capped APFS volumes (P
 #   cas/   - Content-addressable APFS clonefile store for deduplicating shared files
 #   src/   - C source code for limit.c
 #   state/ - arena.sqlite database + per-slot runtime PID/PGID/peak files
-#   teams/ - Harvested packed team pools (<format>.txt)
+#   teams/ - Harvested packed team pools (<ladder_id>.txt)
+#   stats/ - Read-only era-matched usage/randbats JSON files (<ladder_id>/)
 #   logs/  - Coordinator stdout/stderr logs
 sudo mkdir -p "${ARENA_ROOT}/bin" "${ARENA_ROOT}/etc" "${ARENA_ROOT}/bots" \
               "${ARENA_ROOT}/cas" "${ARENA_ROOT}/src" "${ARENA_ROOT}/state" \
-              "${ARENA_ROOT}/teams" "${ARENA_ROOT}/logs"
+              "${ARENA_ROOT}/teams" "${ARENA_ROOT}/stats" "${ARENA_ROOT}/logs"
 sudo chown -R "${ARBITER_USER}:staff" "${ARENA_ROOT}"
 
 # Look up the root APFS container reference (e.g., disk3) so we can add instant,
@@ -763,8 +780,8 @@ cat << 'EOF' > "${ARENA_ROOT}/etc/sandbox.sb"
   (iokit-user-client-class "H11ANEInDirectPathClient")
   (iokit-user-client-class "AppleNeuralEngineUserClient"))
 
-;; Allow read-only access to macOS system libraries, Homebrew runtimes, and this bot's
-;; specific unpacked bundle directory (passed via `-D BOT_RO_DIR=...`).
+;; Allow read-only access to macOS system libraries, Homebrew runtimes, era-matched
+;; stats files (`/opt/arena/stats`), and this bot's specific unpacked bundle directory (`BOT_RO_DIR`).
 ;; Notice `/opt/arena/bots` as a whole is NOT readable, so Player 1 cannot inspect
 ;; Player 2's code or weights, nor can it read `/opt/arena/teams` or `/opt/arena/state`.
 (allow file-read*
@@ -775,6 +792,7 @@ cat << 'EOF' > "${ARENA_ROOT}/etc/sandbox.sb"
   (subpath "/opt/homebrew")
   (subpath "/private/var/db/timezone")
   (subpath "/dev")
+  (subpath "/opt/arena/stats")
   (subpath (param "BOT_RO_DIR")))
 
 ;; Allow read/write access ONLY inside this bot's dedicated 4 GB APFS scratch volume
@@ -907,8 +925,10 @@ case "${ACTION}" in
         --network=none \
         --read-only \
         --volume "${SCRATCH_VOL}/tmp:/tmp:rw" \
+        --volume "/opt/arena/stats:/opt/arena/stats:ro" \
         --env TMPDIR=/tmp \
         --env XDG_CACHE_HOME=/tmp \
+        --env PKMN_STATS_DIR=/opt/arena/stats \
         --env ARENA_MEMORY_LIMIT_MB="${MAX_RAM_MB}" \
         --env OMP_NUM_THREADS="${CPUS}" \
         --env MKL_NUM_THREADS="${CPUS}" \
@@ -946,6 +966,7 @@ case "${ACTION}" in
           HOME="${SCRATCH_VOL}" \
           TMPDIR="${SCRATCH_VOL}/tmp" \
           XDG_CACHE_HOME="${SCRATCH_VOL}/cache" \
+          PKMN_STATS_DIR="/opt/arena/stats" \
           PATH="/opt/homebrew/bin:/usr/bin:/bin" \
           ARENA_MEMORY_LIMIT_MB="${MAX_RAM_MB}" \
           PYTORCH_MPS_HIGH_WATERMARK_RATIO="0.40" \
@@ -1026,7 +1047,7 @@ cat << 'EOF' > "${ARENA_ROOT}/bin/unpack"
 #!/usr/bin/env python3
 """
 /opt/arena/bin/unpack:
-Validates and extracts a native macOS .tar.gz or .tar.zst bundle safely in streaming mode,
+Validates and extracts a native macOS .tar.gz, .tar.xz, or .tar.zst bundle safely in streaming mode,
 enforcing a hard 500 MB uncompressed resident cap and APFS clonefile CAS deduplication.
 """
 import hashlib
@@ -1044,11 +1065,13 @@ CAS_ROOT             = "/opt/arena/cas"   # Content-addressable store for APFS c
 MIN_CAS_FILE_BYTES   = 4096               # Only deduplicate regular files >= 4 KB
 
 def open_tar_stream(archive_path: str):
-    """Open a .tar.gz or .tar.zst archive as a forward-only stream (`r|`) so tarfile
+    """Open a .tar.gz, .tar.xz, or .tar.zst archive as a forward-only stream (`r|`) so tarfile
     never seeks or buffers the entire uncompressed archive in memory."""
     if archive_path.endswith(".tar.zst") or archive_path.endswith(".tzst"):
         proc = subprocess.Popen(["/opt/homebrew/bin/zstd", "-dc", archive_path], stdout=subprocess.PIPE)
         return tarfile.open(fileobj=proc.stdout, mode="r|"), proc
+    if archive_path.endswith(".tar.xz") or archive_path.endswith(".txz"):
+        return tarfile.open(archive_path, mode="r|xz"), None
     return tarfile.open(archive_path, mode="r|gz"), None
 
 def deduplicate_apfs_cas(dest_real: str) -> None:
@@ -1294,7 +1317,7 @@ echo "==> Setup complete! Authorize ${TUNNEL_KEY}.pub on pkmn.ai, deploy the are
 
 Every bot submission—whether an OCI container or a native macOS bundle—must occupy **at most 500 MB ($524,288,000$ bytes) of uncompressed resident space on disk** once unpacked.
 
-| Property | Native Bundle (`.tar.gz` / `.tar.zst`) | OCI Container (`linux/arm64`) |
+| Property | Native Bundle (`.tar.gz` / `.tar.xz` / `.tar.zst`) | OCI Container (`linux/arm64`) |
 | :--- | :--- | :--- |
 | **Compressed Transit Size** | Must be $\le 500\text{ MB}$ | Sum of compressed layer blobs in manifest must be $\le 500\text{ MB}$ |
 | **Uncompressed Resident Limit** | **$\le 500\text{ MB}$** (`524,288,000` bytes) in `/opt/arena/bots/<slug>-<id>/` | **$\le 500\text{ MB}$** (`524,288,000` bytes) total image size (`podman image inspect --format '{{.Size}}'`) |
@@ -1379,11 +1402,11 @@ The Arena coordinator runs a single-threaded loop on the M6 Mac mini's 2 Efficie
      - If `status == 'g1_complete'` (Game 1 already finished and its telemetry/log were committed to SQLite before power loss or restart), skip Game 1 and **resume directly at Game 2** using the saved `seed`, `team1_packed`, and `team2_packed`.
 2. **Sync Outbox & Pending Submissions**: Flush any unsent match results from the local `outbox` table to `pkmn.ai`, then call `GET /api/arena/pending-submissions`.
 3. **Ingest New Submissions & Format-Scoped Smoke Tests**:
-   - For each pending submission, download into `/Volumes/Staging`, verify SHA-256, copy the raw archive to `/Volumes/Archive/bots/<slug>/<ver>/`, and unpack/load onto the internal SSD (`/opt/arena/bots/<slug>-<id>/` or Podman VM `arena`).
-   - **Smoke Test in Subscribed Ladders Only**: Because a bot may only support specific generations or formats (e.g., a `gen1ou`-only bot will fail if sent a `gen9ou` battle), run a 10-second offline smoke test (1 turn against a built-in dummy bot) in **every ladder listed in the submission's `ladders` array and nothing else**.
-   - **Retire Eligible Weaker Version on New Submission**: For each ladder $L$ in the new submission's `ladders`, if the bot already has 2 active versions on ladder $L$ (which are guaranteed to be settled because `pkmn.ai` enforces that both active versions are settled before accepting a 3rd submission), mark the lower-rated of those two versions as `retired` on ladder $L$. If a retired version's active ladder count across all 5 ladders reaches `0`, remove its unpacked directory from `/opt/arena/bots/<slug>-<id>/` (or `podman rmi` its OCI image) while keeping its cold archive on `/Volumes/Archive/bots/<slug>/<ver>/` and `gs://pkmn-arena/bots/<slug>/<ver>/`.
-   - Report `POST /api/arena/submission-status` (`active` or `failed_smoke_test`).
-4. **Select Match**: Run `selectNextArenaMatch` locally across all ladders with $\ge 2$ active versions to pick ladder $L$ and bot pair $(A, B)$.
+   - For each pending submission, download into `/Volumes/Staging`, verify SHA-256, copy the raw archive to `/Volumes/Archive/bots/<slug>/<ver>/`, unpack/load onto the internal SSD (`/opt/arena/bots/<slug>-<id>/` or Podman VM `arena`), and store any accompanying first-time VGC 20-team list into `bot_ladder_teams`.
+   - **Smoke Test Through Turn 1 in Subscribed Ladders Only**: Because a bot may only support specific generations or formats, run an offline smoke test (`60s` budget to allow first-run CoreML/Metal shader JIT) against a built-in dummy bot in **every ladder listed in the submission's `ladders` array and nothing else**. A smoke test passes only when the bot unpacks cleanly and plays **all the way through Turn 1** (including both Team Preview `team ...` and Turn 1 `|turn|1` $\rightarrow$ `|turn|2` or battle end in Team Preview formats like `SV` and `VGC`).
+   - **Retire Eligible Weaker Version on New Submission**: For each ladder $L$ in the new submission's `ladders`, if the bot already has 2 active versions on ladder $L$ (which are guaranteed to be settled because `pkmn.ai` enforces that both active versions are settled before accepting a 3rd submission), mark the lower-rated of those two versions as `retired` on ladder $L$ (leaving the strongest version + the latest submission). Note that `is_anchor` is an orthogonal boolean flag on `ladder_entries`: if an anchor `v1` is retired because `v2` and `v3` are stronger, its historical `pair_aggregates` remain in the batch Davidson Hessian to pin `1500` Elo without keeping `v1` in active matchmaking. If a retired version's active ladder count across all ladders reaches `0`, remove its unpacked directory from `/opt/arena/bots/<slug>-<id>/` (or `podman rmi` its OCI image) while keeping its cold archive on `/Volumes/Archive/bots/<slug>/<ver>/` and `gs://pkmn-arena/bots/<slug>/<ver>/`.
+   - Report `POST /api/arena/submission-status` (`passed` or `failed_smoke_test`, along with smoke test duration, turn latency, and peak RAM).
+4. **Select Match**: Run `selectNextArenaMatch` locally across all ladders in `status IN ('active', 'settling')` that meet their minimum active project threshold (`min_bots >= 2` for `RBY`/`ADV`/`SV`/`RAND`; `min_bots >= 3` for `VGC`) to pick ladder $L$ and bot pair $(A, B)$.
 5. **Sample Teams, Seed & Persist Match Header**:
    - Generate one PRNG seed $s$ and sample distinct teams $(T_1, T_2)$ from ladder $L$'s pool (re-rolling mirrors).
    - Insert a row into `matches` with `status = 'in_progress'`, `seed = s`, `team1_packed = T_1`, and `team2_packed = T_2` before launching Game 1.
@@ -1399,8 +1422,8 @@ The Arena coordinator runs a single-threaded loop on the M6 Mac mini's 2 Efficie
    - Run `/opt/arena/bin/arena cleanup p1` and `/opt/arena/bin/arena cleanup p2`.
    - Write Game 2's raw JSON battle log to `/Volumes/Archive/logs/YYYY-MM/<L>/<YYYY-MM-DD>/battle-<L>-<g2_id>.log.json`.
 8. **Rate, Check Settlement & Publish**:
-   - Mark the `matches` row `status = 'completed'`, update `pair_counts`, and re-solve Davidson MAP ratings for ladder $L$ in local SQLite.
-   - Update `is_settled = 1` on any version on ladder $L$ that now satisfies $\text{SE}(R) \le 30\text{ Elo}$ and $\ge 25$ matches. *(Note: Both the Champion and Challenger remain active and continue playing on ladder $L$ in the steady state; settlement simply marks the weaker version as **eligible to be retired** the next time the developer submits a new version.)*
+   - Mark the `matches` row `status = 'completed'`, update `pair_aggregates`, and re-solve Davidson MAP ratings for ladder $L$ in local SQLite.
+   - Update `is_settled = 1` on any version on ladder $L$ that now satisfies $\text{SE}(R) \le 30\text{ Elo}$ and $\ge 25$ matches. *(Note: Both the Champion and Challenger remain active and continue playing on ladder $L$ in the steady state; settlement simply marks the weaker version as **eligible to be retired** the next time the developer submits a new version. If ladder $L$ is in `status = 'settling'` and all active versions on $L$ are now settled, transition ladder $L$ to `status = 'archived'` and retire its versions.)*
    - `POST /api/arena/match-complete` to `pkmn.ai` (or save to `outbox` if `pkmn.ai` is unreachable).
 
 ### Bot `stdin` / `stdout` Protocol & Assigned Teams (`|utm|`)
@@ -1437,9 +1460,10 @@ Bots communicate strictly over `stdin` and `stdout` using Pokémon Showdown's pl
 
 ### Timer Rules & Reference TypeScript Arbiter (`arena/src/arbiter.ts`)
 
-The Arena enforces Pokémon Showdown's exact ladder/tournament timer (`RoomBattleTimer`) with **pondering disabled**:
+The Arena enforces Pokémon Showdown's exact ladder/tournament timer (`RoomBattleTimer`) with **both choice cancelling and pondering disabled**:
+- **No Choice Cancelling**: Once a bot emits a valid newline-terminated choice for its active request, the choice is final (`cancel` commands are rejected, and any unsolicited trailing lines emitted when no active request is pending are discarded rather than queued for future turns).
 - **Starting Bank**: `150s` + `60s` initial grace = **`210s`** (`maxFirstTurn = 150s`, `maxPerTurn = 150s`).
-- **Per-Turn Increment**: **`+10s`** in Singles (`gen1ou`, `gen3ou`, `gen9ou`, `gen9randbats`) and **`+25s`** in Doubles (`gen9doublesou`), capped at `150s`.
+- **Per-Turn Increment**: **`+10s`** in Singles (`gen1ou`, `gen3ou`, `gen9ou`, `gen9randombattle`) and **`+25s`** in Doubles (`gen9championsvgc2026regmc`), capped at `150s`.
 - **Mid-Turn Switch Increment**: **`+5s`** when `newTurn <= this.turn` and at most one player has an active request (faint switch, U-turn, Volt Switch, Flip Turn, Teleport).
 - **Timer Decay (`accelerate = true`)**: After Turn 100, `addPerTurn` drops by `5s`. After Turn 200, `addPerTurn` alternates between its decayed value and `0s` every turn.
 - **Turn Limit**: Automatic tie at **Turn 1000** (`@pkmn/sim` built-in rule + arbiter guard).
@@ -1532,7 +1556,7 @@ export class TimeSlicedArenaGame {
     private readonly p2TeamPacked: string,
     private readonly onHeartbeat?: (turn: number, p1Sec: number, p2Sec: number) => void,
   ) {
-    this.addPerTurnSec = formatId.includes('doubles') ? 25 : 10;
+    this.addPerTurnSec = (formatId.includes('doubles') || formatId.includes('vgc')) ? 25 : 10;
   }
 
   /**
@@ -1595,6 +1619,7 @@ export class TimeSlicedArenaGame {
     };
 
     // Read newline-delimited move choices from the bot's stdout.
+    // Choice cancelling is disabled: ignore unsolicited lines emitted when no request is pending.
     const rl = readline.createInterface({ input: proc.stdout });
     rl.on('line', (raw) => {
       const line = raw.trim();
@@ -1603,8 +1628,6 @@ export class TimeSlicedArenaGame {
         const resolve = bot.lineWaiter;
         bot.lineWaiter = null;
         resolve(line);
-      } else {
-        bot.lineQueue.push(line);
       }
     });
 
@@ -1902,8 +1925,8 @@ From scanning all `2023-06` Showdown logs (`11,200,943` games), typical and wors
 | :--- | ---: | :--- | :--- | :--- |
 | `gen1ou` (`RBY`) | 22,274 | 35.5 / **33** / 77 / 120 | **5:18** / 12:18 | **17:40** / 32:20 / 43:20 |
 | `gen3ou` (`ADV`) | 61,084 | 24.0 / **22** / 51 / 81 | **3:58** / 10:09 | **14:00** / 23:40 / 33:40 |
-| `gen9ou` (`SINGLES`) | 2,110,279 | 18.2 / **18** / 36 / 52 | **4:05** / 8:53 | **13:00** / 19:00 / 24:20 |
-| `gen9randbats` (`RANDOM`) | 7,216,636 | 17.1 / **17** / 35 / 47 | **4:16** / 9:06 | **12:20** / 18:20 / 22:20 |
+| `gen9ou` (`SV`) | 2,110,279 | 18.2 / **18** / 36 / 52 | **4:05** / 8:53 | **13:00** / 19:00 / 24:20 |
+| `gen9randombattle` (`RAND`) | 7,216,636 | 17.1 / **17** / 35 / 47 | **4:16** / 9:06 | **12:20** / 18:20 / 22:20 |
 
 In practice, bots moving in 0.5–3 seconds per turn finish a 2-game match in **1–6 minutes**, while two slow search bots burning their entire Showdown banks sequentially take **~25 minutes** per 2-game match on average (~37 minutes p95).
 
@@ -2220,7 +2243,7 @@ export function computeGuaranteedRankBounds(
 
 ### Model Augmentations (Bounded-Luck $\beta$ & 2D Cyclic Styles) & Empirical Validation
 
-In competitive Pokémon (especially `gen9randbats` and `gen1ou`), two structural deviations from a 1D transitive skill model can arise:
+In competitive Pokémon (especially `gen9randombattle` and `gen1ou`), two structural deviations from a 1D transitive skill model can arise:
 1. **Unavoidable Luck Floor ($\beta$, BlaTMMR)**: Even an infinitely stronger bot cannot win 100% of games against a competent opponent due to team matchup auto-losses, critical hits, full paralysis, and 1-turn wakes. In the Bounded-Luck model, outcome probabilities are damped by a format-specific ceiling $\beta \in (0, 1]$ (where $\beta = 1$ is the standard Davidson model and $1 - \beta$ is the irreducible luck floor). Without $\beta$, a top bot that drops a single unlucky game to a weak bot suffers an artificially large rating penalty.
 2. **Intransitive / Cyclic Matchup Styles ($\mathbf{u}_i, \mathbf{v}_i \in \mathbb{R}^2$, Balduzzi et al. `mElo-2`)**: If Bot $A$'s playstyle systematically beats Bot $B$, Bot $B$ beats Bot $C$, and Bot $C$ beats Bot $A$, a 1D scalar rating $\theta_i$ treats those cyclic losses as noise. Augmenting the pairwise log-odds with a rank-2 skew-symmetric interaction term
 
@@ -2229,11 +2252,11 @@ $$\Delta_{ij} = (\theta_i - \theta_j) + \mathbf{u}_i^\top \mathbf{J} \mathbf{u}_
 captures rock-paper-scissors strategy cycles while keeping $\theta_i$ as each bot's scalar transitively-averaged skill.
 
 #### Why Both Augmentations Can Be Enabled Retroactively at Any Time
-Because the Arena stores every individual `matches` row (`g1_winner`, `g2_winner`, `seed`, `team1_packed`, `team2_packed`) and the exact 5-category sufficient statistics (`ww`, `wt`, `split`, `tl`, `ll`) in `pair_counts`, **no historical data is ever lost**. Unlike online Elo/Glicko, `computeDavidsonRatings` solves a batch objective from scratch over `pair_counts`. Adding $\beta$ or $\mathbf{u}_i \in \mathbb{R}^2$ later simply re-optimizes the batch objective over the existing `pair_counts` table and retroactively updates all ratings in $< 5\text{ ms}$.
+Because the Arena stores every individual `matches` row (`g1_outcome`, `g2_outcome`, `seed`, `team1_packed`, `team2_packed`) and the exact 5-category sufficient statistics (`ww`, `wt`, `split`, `tl`, `ll`) in `pair_aggregates`, **no historical data is ever lost**. Unlike online Elo/Glicko, `computeDavidsonRatings` solves a batch objective from scratch over `pair_aggregates`. Adding $\beta$ or $\mathbf{u}_i \in \mathbb{R}^2$ later simply re-optimizes the batch objective over the existing `pair_aggregates` table and retroactively updates all ratings in $< 5\text{ ms}$.
 
 #### How to Validate & Decide Whether an Augmentation Improves the Model
 Once a ladder accumulates $\ge 1,000$ matches, run **5-fold held-out cross-validation** over the `matches` table comparing the baseline 1D Davidson model ($\beta = 1, d = 0$) against candidate augmentations ($\beta < 1$ or $d = 2$):
-1. Partition the completed matches on ladder $L$ into 5 random folds (or evaluate sequentially via prequential one-step-ahead prediction on each new match before adding it to `pair_counts`).
+1. Partition the completed matches on ladder $L$ into 5 random folds (or evaluate sequentially via prequential one-step-ahead prediction on each new match before adding it to `pair_aggregates`).
 2. Fit each model on the training folds and compute two proper scoring rules on the held-out matches' 5-category probability distribution $\hat{\mathbf{p}}_{ij} = (\hat{p}_{+1}, \hat{p}_{+0.5}, \hat{p}_0, \hat{p}_{-0.5}, \hat{p}_{-1})$:
    - **Multi-class [Logarithmic Loss (Cross-Entropy)](https://en.wikipedia.org/wiki/Cross-entropy)**:
      $$\text{LogLoss} = -\frac{1}{|Test|} \sum_{m \in Test} \ln \hat{p}_{m}(y_m)$$
@@ -2384,73 +2407,61 @@ Evaluated across 20 Monte Carlo trials of 52 bots using [Kendall rank correlatio
 
 ---
 
-## 7. Competitor Registration, Submissions & Version Lifecycle
+## 7. Competitor Registration, Unified Auth, `/account` & Version Lifecycle
 
 ### Bot Registration via GitHub Issue Template & `projects.yml`
-Competitors register new bots by opening a structured GitHub Issue on `pkmn/ai` (using `.github/ISSUE_TEMPLATE/register-bot.yml`), which staff close with a commit/PR to `static/projects.yml`. This eliminates any `/register` web form, GitHub App PR bot, or webhook endpoint on `pkmn.ai`.
+Competitors register new projects by opening a structured GitHub Issue on `pkmn/ai` (using `.github/ISSUE_TEMPLATE/register-bot.yml`), which staff review and close with a commit/PR to `static/projects.yml`. This eliminates any `/register` web form, GitHub App PR bot, or webhook endpoint on `pkmn.ai`.
 
-- **Registration Rules**:
-  - **Bot Name & Auto-Slug**: Unique display name (`2..32` chars). Must not use generic substrings (`poke`, `pkmn`, `ai`, `bot`, `agent`, `showdown`, `smogon`) or bare Pokémon species names. Competitors do **not** need to type a slug in the registration issue; `server` computes the URL slug automatically via `slugify(name).toLowerCase()` (using the shared `slugify` helper in `static/build.ts`, e.g., `"0 ERROR"` -> `"0-error"`, `"Foul Play"` -> `"foul-play"`).
-  - **Bot Avatar**: $96 \times 96$ PNG or WebP image ($\le 64\text{ KB}$) attached directly to the GitHub issue and committed to `static/avatars/<slug>.png`.
-  - **Public Contacts Only (Zero Private PII)**: Only public contact identifiers are collected: **GitHub username(s)** (required, used for GitHub OAuth sign-in on `/submit`), **Discord username / numeric User ID** (optional, strongly encouraged for automatic Discord roles and quarantine notifications), and **Smogon username** (optional, strongly encouraged). No private email addresses are collected or stored anywhere.
+- **Registration Rules (`static/rules.dj`)**:
+  - **Project Name & Auto-Slug**: Subject to staff discretion, prefer alphabetic + space (`^[A-Za-z ]+$`), distinct from other projects, and must **not** include the tokens `poke` / `mon` / `pkmn` / `ai` / `bot` / `agent` / `showdown` / `smogon`, bare English Pokémon species names, or known players' names. `server` computes the URL slug automatically via `slugify(name).toLowerCase()` (using `slugify` in `static/build.ts`, e.g., `"Foul Play"` $\rightarrow$ `"foul-play"`).
+  - **Team Members & One-Project-Per-Developer Rule**: Registration must list both the **GitHub username and Smogon account** (username or XenForo `<username>.<id>` slug) for **every** team member associated with the project. All authorized team members must be Smogon account holders in good standing, and **each developer (by GitHub login and Smogon account) may belong to at most one Arena project** across `pkmn.ai`.
+  - **Qualifying Criteria & Mandatory Consents**: Registrants must provide qualifying evidence justifying hosted Arena resources (e.g., Pokémon Showdown / `vgc.bot` / `pkmn.bot` rankings) and explicitly agree to:
+    1. Adhere to the latest community guidance on [Responsible Releases](/release).
+    2. Grant **pkmn.ai** permission to run their model in its Arena for evaluation against other agents.
+    3. Grant **pkmn.ai** permission to run their model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
+  - **Optional Project Logo**: Optional PNG image committed to `static/avatars/<slug>.png` (copied to `public/leaderboard/<slug>.png` at build/render time and displayed exclusively on `/leaderboard/<slug>/`).
+  - **Zero Private PII & Self-Service Discord Linking**: No email addresses are collected. Discord accounts are **not** stored in `static/projects.yml`; instead, each approved developer links their own Discord account via 1-click Discord OAuth on `/account/`.
 
 #### GitHub Issue Form Template (`.github/ISSUE_TEMPLATE/register-bot.yml`)
 ```yaml
-name: Register Arena Bot
-description: Register a new Pokémon AI bot to compete on pkmn.ai leaderboards
-title: "[Bot] "
+name: Register Arena Project
+description: Request inclusion of a competitive Pokémon AI project in pkmn.ai
+title: "[Arena] "
 labels: ["registration"]
 body:
   - type: markdown
     attributes:
       value: |
-        Submit this issue to register a new bot for the **pkmn.ai** Arena. Staff will review your entry and close this issue via a PR adding your bot to `static/projects.yml`.
+        Submit this issue to request inclusion in the **pkmn.ai** Arena. Staff will review your entry and close this issue via a PR updating `static/projects.yml`.
   - type: input
     id: name
     attributes:
-      label: Bot Name
-      description: Unique display name (no generic words like poke/pkmn/ai/bot/agent/showdown/smogon or bare Pokémon species names).
-      placeholder: "0 ERROR"
-    validations:
-      required: true
-  - type: input
-    id: author
-    attributes:
-      label: Author Name
-      description: Your display name, handle, or team name.
-      placeholder: "pre"
-    validations:
-      required: true
-  - type: input
-    id: github
-    attributes:
-      label: Authorized GitHub Username(s)
-      description: Comma-separated GitHub usernames permitted to sign in via GitHub OAuth and submit versions for this bot.
-      placeholder: "pre"
+      label: Project Name
+      description: Distinct project name (prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare Pokémon species names, or known players' names).
+      placeholder: "Foul Play"
     validations:
       required: true
   - type: textarea
-    id: avatar
+    id: developers
     attributes:
-      label: Bot Avatar (96x96 PNG or WebP)
-      description: Drag and drop your 96x96 PNG or WebP avatar image here (<= 64 KB; avoid bare official Pokémon sprites).
+      label: Team Members (GitHub & Smogon Accounts)
+      description: List `github_username: smogon_username` (one per line) for every team member. Each member must hold a Smogon account in good standing and may belong to at most one Arena project.
+      placeholder: |
+        pmariglia: pmariglia
     validations:
       required: true
-  - type: checkboxes
-    id: ladders
+  - type: textarea
+    id: qualifying
     attributes:
-      label: Target Ladders
-      options:
-        - label: "`gen1ou` (RBY)"
-        - label: "`gen3ou` (ADV)"
-        - label: "`gen9ou` (SINGLES)"
-        - label: "`gen9doublesou` (DOUBLES)"
-        - label: "`gen9randbats` (RANDOM)"
+      label: Qualifying Criteria
+      description: Links or evidence justifying participation in the hosted environment (e.g., Pokémon Showdown, vgc.bot, or pkmn.bot rankings, published papers, or prior results).
+    validations:
+      required: true
   - type: input
     id: language
     attributes:
       label: Programming Language(s)
-      placeholder: "TypeScript, Zig"
+      placeholder: "Rust, Python"
     validations:
       required: true
   - type: input
@@ -2458,7 +2469,7 @@ body:
     attributes:
       label: Engine / Framework
       description: Simulator or framework used (e.g., `@pkmn/engine`, `poke-engine`, `@pkmn/sim`, `poke-env`, or `Custom`).
-      placeholder: "@pkmn/engine"
+      placeholder: "poke-engine"
     validations:
       required: true
   - type: input
@@ -2475,120 +2486,146 @@ body:
     id: site
     attributes:
       label: Website / Forum Thread / Paper Citation (Optional)
-  - type: input
-    id: discord
+  - type: textarea
+    id: logo
     attributes:
-      label: Discord Username & Numeric User ID (Optional, Strongly Encouraged)
-      description: Used by the pkmn.ai Discord bot to grant Competitor and #1 Leaderboard roles and send quarantine alerts.
-  - type: input
-    id: smogon
+      label: Project Logo (Optional PNG)
+      description: Optional PNG logo to display on your project's statistics page (`/leaderboard/<slug>/`). Drag and drop here if providing one.
+  - type: checkboxes
+    id: agreements
     attributes:
-      label: Smogon Username (Optional, Strongly Encouraged)
-      placeholder: "pre"
+      label: Required Agreements
+      options:
+        - label: We agree to adhere to the latest community guidance on Responsible Releases (https://pkmn.ai/release).
+          required: true
+        - label: We grant pkmn.ai permission to run our model in its Arena for evaluation against other agents.
+          required: true
+        - label: We grant pkmn.ai permission to run our model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
+          required: true
 ```
 
 #### Augmented `static/projects.yml` Entry Schema
-Existing historical projects in `static/projects.yml` remain unchanged. Any project competing in the Arena adds an `arena` block (`slug` is auto-derived via `slugify(name).toLowerCase()`):
+Existing historical projects in `static/projects.yml` remain unchanged. Any project approved for the Arena adds an `arena:` block mapping each team member's GitHub login to their Smogon username/slug (`slug` is auto-derived via `slugify(name).toLowerCase()`, and optional logo defaults to `static/avatars/<slug>.png` if present):
 
 ```yaml
-- name: 0 ERROR
-  site: https://pkmn.ai
-  active: 2026
-  license: MIT
-  source: https://github.com/pkmn/0-error
+- name: Foul Play
+  active: 2021
+  license: GPL-3.0
+  source: https://github.com/pmariglia/foul-play
   engine:
-    - name: '@pkmn/engine'
-      url: https://github.com/pkmn/engine
-  language: TypeScript
+    - name: poke-engine
+      url: https://github.com/pmariglia/poke-engine
+  language:
+    - Python
+    - Rust
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    github: [pre]
-    discord_id: "123456789012345678"
-    smogon: pre
-    avatar: 0-error.png
+    developers:
+      pmariglia: pmariglia
 ```
 
 - **How `projects.yml` Syncs to `pkmn.ai`**:
-  - Staff review the registration issue, commit the `arena:` block to `static/projects.yml` + `static/avatars/<slug>.png` (closing the issue), and run `npm run deploy`.
-  - During `./deploy`, `server` parses `static/projects.yml` on startup/reload and upserts every entry with an `arena:` block into SQLite's `bots` table.
-  - Developers listed in `arena.github` can immediately sign into `https://pkmn.ai/submit` and `https://pkmn.ai/wiki` via GitHub OAuth (`GET /auth/github` $\rightarrow$ `GET /auth/github/callback`, stored in an `HttpOnly`, `Secure`, `SameSite=Lax` HMAC-signed cookie) to submit versions and edit wiki pages.
+  - Staff review the registration issue, commit the `arena:` block to `static/projects.yml` (plus optional `static/avatars/<slug>.png`), and run `npm run deploy`.
+  - On startup and file `mtime` change, `server` validates that no GitHub login or Smogon identifier appears under more than one `arena:` project, then syncs `bots` and `developers` (`github_login`, `smogon`, `bot_id`) in `/var/lib/pkmn/arena.sqlite`.
 
-### Bot Wiki Pages & `/wiki` Access Control
-`pkmn.ai/wiki` (`server/wiki.ts`) is a Git-backed Djot wiki rendered with `scheibo/static` and stored in a dedicated repository (`github.com/pkmn/wiki`, checked out at `/home/pkmn/ai/wiki`):
-- **Reserved Bot Wiki Pages**:
-  - Every bot registered in `static/projects.yml` with an `arena:` block automatically gets a reserved wiki page at `/wiki/<Bot_Name>` using Wikipedia-style underscore normalization (`normalizeSlug(name)`, e.g. `/wiki/0_ERROR`, `/wiki/Foul_Play`, `/wiki/Mew's_Truck`), with automatic `302` redirects from `slugify(name).toLowerCase()` aliases (e.g. `/wiki/0-error` $\rightarrow$ `/wiki/0_ERROR`, `/wiki/mews-truck` $\rightarrow$ `/wiki/Mew's_Truck`).
-  - No `.dj` file is created on disk until a bot owner first saves the page, but ownership and visibility rules are enforced on the reserved slug immediately:
-    1. **Edit Ownership**: Only the developers listed in that bot's `arena.github` (and wiki `admins` in `config/wiki.yml`) can create or edit the bot's wiki page. Other registered Arena participants receive `403 Forbidden` on `/edit` or `POST`, and `404 Not Found` if the bot page has not been created yet.
-    2. **Configurable Visibility (`developers` / `discord` / `public`)**: In `/wiki/<Bot_Name>/edit`, bot owners (and admins) can choose who is allowed to view their bot's wiki page via the `Developers — Discord — Public` selector, persisted at the top of `<Bot_Name>.dj` as `{% visibility: developers|discord|public %}`:
-       - **`developers` (default)**: Visible only to registered developers of `pkmn.ai` Arena bots (`arena.github` across `static/projects.yml`) and wiki `admins` via GitHub OAuth (`/auth/github`).
-       - **`discord`**: Visible to anyone in the `pkmn.ai` Discord server (verified via Discord Vouch Proxy at `http://127.0.0.1:9091/vouch/validate`, redirecting unauthenticated visitors to `/vouch/login`), as well as registered bot developers and `admins`.
-       - **`public`**: Visible to the public without authentication.
-- **General Wiki Pages**:
-  - All other wiki pages (such as `/wiki` (`index.dj`), format guides, and research notes) can be created and edited by any registered `pkmn.ai` Arena participant (`arena.github`) or admin, and are **publicly visible (`public`)** by default.
-  - `/wiki/pages` is publicly accessible and filters the page index to only those pages the current viewer is authorized to read.
+### Unified Authentication Architecture (`server/auth.ts` — Replacing Vouch Proxy)
+All GitHub OAuth2 and Discord OAuth2 flows are centralized in `server/auth.ts` inside `pkmn.ai-server` (`127.0.0.1:1234`), completely retiring Go `vouch-proxy` (`:9090`):
 
-### Discord Role Bot Integration
-- Runs inside the `pkmn.ai` Node.js server using the Discord REST API / Gateway.
-- **On `projects.yml` Sync**: Grants the `Competitor` role in the `pkmn.ai` Discord server to any approved bot's `discord_id`.
-- **On #1 Leaderboard Change**: Grants the `#1 <Display Name>` role (`#1 RBY`, `#1 ADV`, `#1 SINGLES`, `#1 DOUBLES`, `#1 RANDOM`) to the new leader's author and removes it from the previous holder.
-- **On Auto-Quarantine or Watchdog Alert**: Posts an alert in the staff Discord channel (and pings/DMs the author on quarantine).
-
-### Version Submission, Auto-Deduced Packaging Format & Private Self-Hosted Downloads
-Approved developers submit new versions via `POST /api/submissions`. Competitors host their own files so `pkmn.ai` never receives 500 MB uploads.
-- **Submission Fields**:
-  - `version`: Version string (e.g., `1.0.0` or `v2`, regex `^[A-Za-z0-9._-]{1,24}$`).
-  - `download_url`: Direct HTTPS URL to a `.tar.gz`/`.tar.zst` bundle **or** an OCI container image reference (`ghcr.io/...`, `docker.io/...`).
-  - `sha256`: 64-character hex SHA-256 checksum of the archive or OCI manifest digest.
-  - `auth_token` (optional, single-use): Optional read-only bearer token / header used once by the Arena to pull private artifacts, then wiped (`NULL`) from `pkmn.ai` SQLite as soon as the Arena reports unpack status.
-  - `ladders`: Non-empty subset of `["gen1ou", "gen3ou", "gen9ou", "gen9doublesou", "gen9randbats"]`.
-- **Auto-Deducing `format_type` (`bundle` vs. `container`)**:
-  - Competitors do **not** select `bundle` vs. `container` manually. The server deduces `format_type` directly from `download_url`:
-    ```typescript
-    // Automatically classify a submission URL as a native bundle archive or an OCI container image.
-    export function deduceFormatType(downloadUrl: string): 'bundle' | 'container' {
-      const cleanPath = downloadUrl.split('?')[0].toLowerCase();
-      if (
-        cleanPath.endsWith('.tar.gz') ||
-        cleanPath.endsWith('.tgz') ||
-        cleanPath.endsWith('.tar.zst') ||
-        cleanPath.endsWith('.tzst')
-      ) {
-        return 'bundle';
-      }
-      return 'container';
+- **Single Signed Session Cookie (`pkmn_session`)**:
+  - Configured via `private/auth.yml` (`session_secret`, `arena_secret`, `github: { client_id, client_secret, callback_url }`, `discord: { client_id, client_secret, callback_url }`).
+  - Stores an HMAC-SHA256 signed payload (`HttpOnly; Path=/; SameSite=Lax; Secure`, 30-day TTL):
+    ```ts
+    export interface Session {
+      github?: { id: number; login: string };
+      discord?: { id: string; username: string };
+      exp: number;
     }
     ```
+  - Completing GitHub OAuth (`GET /auth/github` $\rightarrow$ `GET /auth/github/callback`) preserves any existing `discord` claim in `pkmn_session` and records immutable `github_id` on the developer's SQLite row; completing Discord OAuth (`GET /auth/discord` $\rightarrow$ `GET /auth/discord/callback`) preserves any existing `github` claim. `POST /auth/logout` clears `pkmn_session`.
+- **Four Protected Surfaces Powered by `server/auth.ts`**:
+  1. **Developer Account & Submission Portal (`/account/`, `/submit` $\rightarrow$ `302 /account/`)**:
+     - Requires `session.github`. Unauthenticated requests redirect to `/auth/github?return_to=/account/`.
+     - **Personalized Per-Developer Header (`.account-bar`)**: Displays `Developer: <github_login> · Discord: @<discord_username> (link / change / unlink) · Project: <Bot Name> · Status: <Qualified|Pending|Eligible|Ineligible>`. Clicking `link` / `change` initiates `/auth/discord?intent=link&return_to=/account/`, verifying ownership via Discord OAuth (`scope=identify`) and persisting both the immutable Snowflake `discord_id` and `@discord_username` on **that individual developer's** row in `developers`.
+     - **Shared Project Dashboard**: Multiple developers on the same project each manage their own Discord link in `.account-bar`, while viewing the identical shared `Active` versions table, `Submission` form, and `History` table for their team's project.
+  2. **Git-Backed Djot Wiki (`/wiki`, `server/wiki.ts`)**:
+     - Delegates all session and membership checks to `server/auth.ts`:
+       - **Edit Ownership**: Reserved bot pages (`/wiki/<Bot_Name>`) are editable only by that project's `arena.developers` (and `config/wiki.yml` `admins`); general wiki pages are editable by any registered Arena developer or admin.
+       - **Read Visibility (`{% visibility: developers|discord|public %}`)**: `developers` (default for bot pages) requires `isDeveloper(session.github?.login)`; `discord` allows any Arena developer/admin **or** any `pkmn.ai` Discord guild member (`session.discord?.id`, redirecting unauthenticated visitors to `/auth/discord?return_to=...`); `public` is open to everyone.
+  3. **Discord Chat Logs (`/chat/logs` & `/chat/logs/token`)**:
+     - Gated by Nginx `auth_request /auth/discord/validate`, which verifies `pkmn_session` (or `Authorization: Bearer <token>` from `/chat/logs/token`) and checks that `discord.id` is in the `discord_members` SQLite table synced by `pkmn.ai-discord.service`. Unauthenticated browser requests redirect to `/auth/discord?return_to=$request_uri`.
+  4. **Private Staff / Watermarking Resources (`/private/*`)**:
+     - Gated by `private/nginx.conf` via `auth_request /auth/discord/validate?guild=0`, which sets `X-Auth-User: <discord_id>` for Nginx's Discord Snowflake ID allowlist.
+
+### Discord Daemon Integration (`pkmn.ai-discord.service`, `server/discord.ts`)
+- Runs as a dedicated daemon (`127.0.0.1:9091`) sharing `/var/lib/pkmn/arena.sqlite` (WAL mode):
+  - **Guild Member Sync**: Syncs current `pkmn.ai` Discord server member IDs (`689316505560809576`) into SQLite `discord_members` every 60s so `server/auth.ts` validates guild membership with zero network latency.
+  - **Competitor & `#1` Leaderboard Roles**: Grants the `Competitor` role to all approved developers with a linked `discord_id`, and grants each active ladder's `#1` role (`config/discord.yml` role IDs for `RBY`, `ADV`, `SV`, `RAND`, `VGC`) to all linked developers of the settled `#1` project on that ladder.
+  - **Submission & Quarantine DMs**: Sends Discord DMs to the submitting/project developers' linked `discord_id`s (and alerts staff) when a submission fails its smoke test (`DM sent` indicator on `/account/`) or is auto-quarantined.
+
+### Version Submission, Packaging & VGC 20-Team Validation
+Approved developers submit new ladder versions via `POST /api/submissions` on `/account/`. Competitors host their own artifacts so `pkmn.ai` never receives 500 MB uploads.
+- **Submission Fields**:
+  - `version`: Version string (e.g., `1.0.0` or `v2`, regex **`^[A-Za-z0-9._-]{1,12}$`**).
+  - `format_type`: `'bundle'` (`darwin/arm64` `.tar.gz`/`.tar.xz`/`.tar.zst`) or `'oci'` (`linux/arm64` OCI image reference, e.g., `ghcr.io/...`, `docker.io/...`), selectable via `#sub-type` on `/account/` and cross-checked with `deduceFormatType(download_url)`.
+  - `download_url`: Direct HTTPS URL to a `.tar.{gz,xz,zst}` bundle **or** an OCI image reference.
+  - `sha256`: 64-character hex SHA-256 checksum of the archive or OCI manifest digest.
+  - `auth_token` (optional, single-use): Read-only bearer token / header used once by the Arena to pull private artifacts, then wiped (`NULL`) from `pkmn.ai` SQLite immediately after unpack.
+  - `ladders`: Non-empty subset of currently `active` ladders (`RBY`, `ADV`, `SV`, `RAND`, `VGC`, mapped to their current internal `ladder_id`).
+  - `teams` (conditional — **first submission to a seasonal `VGC` `ladder_id` only**):
+    - When a project checks `VGC` for the **first time** on that seasonal `ladder_id` (no accepted rows in `bot_ladder_teams` for `(ladder_id, bot_id)`), `/account/` displays a 20-team input/upload and `POST /api/submissions` validates all 20 teams synchronously:
+      1. Format legality via `@pkmn/sim` `TeamValidator(format_id)`.
+      2. Sequential 1-NN uniqueness via `teams/index.ts` (`THRESHOLD = 1.30`): starts with the public reference pools (`teams/teams/<format>`, `teams/pkmn_stuff/...`, `teams/vgc.bot/...`—never other competitors' private submissions), checks Team 1 ($d_{\text{1-NN}} \ge 1.30$), appends Team 1 to the working pool, and repeats through Team 20.
+    - Subsequent version submissions by the same project to that `ladder_id` reuse its 20 locked teams (no `teams` field shown or accepted).
+- **Auto-Deducing / Validating `format_type` (`bundle` vs. `oci`)**:
+  ```typescript
+  export function deduceFormatType(downloadUrl: string): 'bundle' | 'oci' {
+    const cleanPath = downloadUrl.split('?')[0].toLowerCase();
+    if (
+      cleanPath.endsWith('.tar.gz') ||
+      cleanPath.endsWith('.tgz') ||
+      cleanPath.endsWith('.tar.xz') ||
+      cleanPath.endsWith('.txz') ||
+      cleanPath.endsWith('.tar.zst') ||
+      cleanPath.endsWith('.tzst')
+    ) {
+      return 'bundle';
+    }
+    return 'oci';
+  }
+  ```
 - **How Competitors Share Privately Without Leaking Weights**:
-  - **Presigned Object Storage URL (Recommended)**: Upload `.tar.gz` to a private Cloudflare R2 (10 GB/mo free tier, zero egress), AWS S3, Backblaze B2, or GCS bucket and generate a 24-hour presigned `GET` URL (`rclone link` or `aws s3 presign --expires-in 86400`).
-  - **Private GitHub Release + Fine-Grained Read-Only PAT**: Host the `.tar.gz` on a private GitHub repository release and pass a fine-grained PAT scoped strictly to that single repo with `Contents: Read-only` (expiring in 7 days).
+  - **Presigned Object Storage URL (Recommended)**: Upload `.tar.{gz,xz,zst}` to a private Cloudflare R2 (10 GB/mo free tier, zero egress), AWS S3, Backblaze B2, or GCS bucket and generate a 24-hour presigned `GET` URL (`rclone link` or `aws s3 presign --expires-in 86400`).
+  - **Private GitHub Release + Fine-Grained Read-Only PAT**: Host the archive on a private GitHub repository release and pass a fine-grained PAT scoped strictly to that single repo with `Contents: Read-only` (expiring in 7 days).
   - **Private HuggingFace Repo + Read Token**: Host the bundle in a private HuggingFace repo and provide a read-only token (`hf_...`) scoped to that repo.
   - **Private `ghcr.io` / Docker Hub Image**: Push to a private registry and provide a temporary `read:packages` pull token.
-- **Dual Rate-Limit Rule**: A new version can be submitted only when **both** conditions hold:
-  1. **Time Cooldown**: At least **14 days (`1,209,600` seconds)** have passed since that bot's last accepted submission (`smoke_status = 'passed'`). Failed smoke tests automatically refund the cooldown.
-  2. **Rating Settlement**: All currently active versions of that bot across every ladder it entered have settled to **$\text{SE}(R) \le 30\text{ Elo}$** ($\hat{\sigma} \le 0.173$ nats, 95% CI $\approx \pm 59\text{ Elo}$) **and at least $25$ blind-pair matches** ($50$ games).
+- **Dual Rate-Limit Rule & Account Status (`Qualified` / `Pending` / `Eligible` / `Ineligible`)**:
+  - A project is eligible to submit a new version only when **both** conditions hold:
+    1. **Time Cooldown**: At least **14 days (`1,209,600` seconds)** have elapsed since that project's last successful ladder submission (`smoke_status = 'passed'`). Failed smoke tests automatically refund the cooldown.
+    2. **Rating Settlement**: No submission is currently `pending_pull`, and all active (non-quarantined) versions of that project across every ladder have settled to **$\text{SE}(R) \le 30\text{ Elo}$** ($\hat{\sigma} \le 0.173$ nats, 95% CI $\approx \pm 59\text{ Elo}$) **and at least $25$ blind-pair matches** ($50$ games).
 
 ### Per-Ladder 2-Version Rule & Retirement Upon New Submission
-- **Per-Ladder Roster (2 Active Versions in Steady State)**: On any individual ladder $L$, up to **2 versions** of a bot family remain active and play matches in the steady state:
-  - **Champion**: The stronger of the bot's two active versions on ladder $L$.
-  - **Challenger**: The second active version of that bot on ladder $L$.
+- **Per-Ladder Roster (2 Active Versions in Steady State)**: On any individual ladder $L$, up to **2 versions** of a project remain active and play matches in the steady state:
+  - **Champion**: The stronger of the project's two active versions on ladder $L$.
+  - **Challenger**: The second active version of that project on ladder $L$.
 - **Why Both Stay Active After Settling**:
   - When a Challenger finishes settling ($\text{SE}(R) \le 30\text{ Elo}$ and $\ge 25$ matches), the weaker of `(Champion, Challenger)` is **not** immediately removed from the ladder. Both versions remain active in the matchmaking pool so the ladder maintains a rich, diverse population of opponents and continuous cross-version calibration.
   - Instead, once both active versions on ladder $L$ are settled, the lower-rated of the two becomes **eligible to be retired**.
 - **When Retirement & Disk Cleanup Actually Occur**:
-  - Retirement happens **only when the developer submits a new version (`v3`) that passes smoke tests** on ladder $L$:
-    1. Immediately upon `v3` passing its smoke test on ladder $L$, the lower-rated of the two previously settled active versions (`v1` or `v2`) transitions from active (`champion`/`challenger`) to `retired` on ladder $L$, while the higher-rated survivor remains `champion` and `v3` enters as the new `challenger`.
-    2. Because retirement is tracked independently per ladder, `gen1ou` may retain `(v1, v3)` while `gen9ou` retains `(v2, v3)` if `v2` beat `v1` in `gen9ou` but lost to `v1` in `gen1ou`.
-    3. The Arena counts how many ladders still list each version as active (`anchor`, `champion`, or `challenger`). Only when a retired version's active ladder count across all 5 ladders drops to `0` does the Arena delete `/opt/arena/bots/<slug>-<id>/` (or `podman rmi` its OCI image) from the internal 256 GB SSD.
+  - Retirement happens **only when a developer of the project submits a new version (`v3`) that passes smoke tests** on ladder $L$:
+    1. Immediately upon `v3` passing its smoke test on ladder $L$, the lower-rated of the two previously settled active versions (`v1` or `v2`) transitions from active (`champion`/`challenger`) to `retired` on ladder $L$, leaving **the strongest version of the agent and the latest submission**.
+    2. Because retirement is tracked independently per `ladder_id`, `RBY` may retain `(v1, v3)` while `SV` retains `(v2, v3)` if `v2` beat `v1` in `SV` but lost to `v1` in `RBY`.
+    3. The Arena counts how many ladders still list each version as active (`champion` or `challenger`). Only when a retired version's active ladder count across all ladders drops to `0` does the Arena delete `/opt/arena/bots/<slug>-<id>/` (or `podman rmi` its OCI image) from the internal 256 GB SSD.
     4. Cold archives remain permanently on `/Volumes/Archive/bots/<slug>/<ver>/` and `gs://pkmn-arena/bots/<slug>/<ver>/`.
 
 ### CLI Administration (`pkmn-admin`)
 All staff actions beyond merging `projects.yml` PRs run via a small CLI (`node build/server/cli.js` on `pkmn.ai`):
 - `pkmn-admin quarantine <bot-slug> <version> --reason "..."`: Marks version `quarantined` and queues removal from active matchmaking.
 - `pkmn-admin unquarantine <bot-slug> <version>`: Resets crash streak and re-enables matchmaking.
-- `pkmn-admin refund-cooldown <bot-slug>`: Clears the 14-day submission timer for a bot.
-- `pkmn-admin set-anchor <ladder> <bot-slug> <version>`: Sets the `1500` Elo anchor version for a ladder during bootstrap.
+- `pkmn-admin refund-cooldown <bot-slug>`: Clears the 14-day submission timer for a project.
+- `pkmn-admin set-anchor <ladder_id> <bot-slug> <version>`: Marks `is_anchor = 1` for the `1500` Elo anchor version on a ladder.
+- `pkmn-admin rotate-ladder <old_ladder_id> --display-name "VGC 2026 Reg M-C" [--new <new_ladder_id>]`: Transitions `old_ladder_id` to `settling` (or `archived` if already settled) and activates the replacement seasonal/epoch ladder.
 
 ---
 
@@ -2606,7 +2643,7 @@ This section consolidates every technical requirement, protocol change, and runt
 
 ### 2. Handling Assigned Teams via `|utm|<packed_team>`
 - On Pokémon Showdown's ladder, constructed-format bots choose their own team via `/utm <packed_team>` before queueing.
-- **In the Arena**, bots do **not** bring their own teams. Before `|init|battle`, the very first line sent to your bot's `stdin` (in both constructed formats and `gen9randbats`) is:
+- **In the Arena**, bots do **not** select their own team at runtime. Before `|init|battle`, the very first line sent to your bot's `stdin` (across `RBY`, `ADV`, `SV`, `RAND`, and `VGC`) is:
   ```text
   |utm|<packed_team>
   ```
@@ -2634,8 +2671,8 @@ This section consolidates every technical requirement, protocol change, and runt
   - If your bot writes `move 1\n` to `stdout` and *then* tries to do post-turn tree pruning or transposition table cleanup before blocking on `stdin`, that cleanup will be frozen mid-execution until your next turn and **will count against your next turn's thinking clock**. Do any fast state bookkeeping *before* printing your move, or expect it to run at the start of your next turn.
   - Conversely, always **flush `stdout` explicitly** (`sys.stdout.flush()`, `fflush(stdout)`, ` println!`) right after writing your choice. If your language runtime buffers `stdout` when connected to a pipe, your bot will sit idle until its turn timer expires!
 
-### 5. No Pondering
-- You cannot think during your opponent's turn (`SIGSTOP` / `podman pause` freezes all threads and GPU queues). Design your search budget controller assuming zero pondering time.
+### 5. No Pondering & No Choice Cancelling
+- You cannot think during your opponent's turn (`SIGSTOP` / `podman pause` freezes all threads and GPU queues), and once you emit a valid choice newline on `stdout`, it cannot be cancelled (`cancel` is rejected). Design your search budget controller assuming zero pondering time.
 
 ### 6. Handling `|error|[Invalid choice]` (3-Strike Forfeit Rule)
 - If your bot outputs an illegal move or switch (e.g., trying to click a disabled move, switching to a fainted slot, or malformed Doubles target syntax), `@pkmn/sim` will **not** advance the turn. Instead, your bot remains unpaused with its turn clock still ticking and receives:
@@ -2645,15 +2682,16 @@ This section consolidates every technical requirement, protocol change, and runt
   ```
 - Your bot must listen for `|error|[Invalid choice]` lines and immediately emit a legal fallback choice. Emitting **3 consecutive invalid choices** on the same request forfeits the game (`invalid_choice_3x`).
 
-### 7. Statelessness Between Games & Read-Only Filesystem
+### 7. Statelessness Between Games, Read-Only Stats Mounts & `/tmp`
 - Your bot process is freshly spawned for Game 1 and killed afterward; a brand-new process is spawned for Game 2.
 - Your bundle directory (or container rootfs) is mounted **strictly read-only**.
+- Era-matched usage and random battle statistics (`stats.json` for constructed formats; `data.json`, `full.json`, `sets.json` for `RAND`) are mounted read-only at `$PKMN_STATS_DIR/<ladder_id>/` (`/opt/arena/stats/<ladder_id>/`) so they do not count against your 500 MB bundle quota.
 - A 4 GB writable scratch directory is mounted at `/tmp` (`$TMPDIR` and `$XDG_CACHE_HOME`) for CoreML/Metal shader caches and runtime temp files, and is **completely wiped** before and after every single game. Do not attempt to save opponent models or logs across games.
 
 ### 8. Format Subscription & Smoke Testing
-- When you submit a new version, the Arena runs an automatic 10-second offline smoke test in **every ladder you checked** (`gen1ou`, `gen3ou`, `gen9ou`, `gen9doublesou`, `gen9randbats`).
-- Only select ladders your bot actually implements! If a Gen 1–only bot checks `gen9ou`, it will fail the `gen9ou` smoke test and the submission will be rejected (with your 14-day cooldown automatically refunded).
-- Check the pinned `@pkmn/sim` commit and custom `modRules` in Section 2 (e.g., `Zoroark` and `Zoroark-Hisui` are banned in `gen9ou`, `gen9doublesou`, and `gen9randbats`).
+- When you submit a new version, the Arena runs an automatic offline smoke test (`60s` budget) playing **through the end of Turn 1** (including Team Preview + Turn 1 in `SV` and `VGC`) in **every ladder you checked** (`RBY`, `ADV`, `SV`, `RAND`, `VGC`).
+- Only select ladders your bot actually implements! If a Gen 1–only bot checks `SV`, it will fail the `SV` smoke test and the submission will be rejected (with your 14-day cooldown automatically refunded).
+- All formats use vanilla Pokémon Showdown rules as of Nov 9th, 2026 (`@pkmn/sim@0.11.0`).
 
 ### 9. Hardware Limits, Thread Caps & Native `mmap()` Weight Trick
 - **CPU Threads (`10`)**: The Arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`, and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads.
@@ -2671,51 +2709,87 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE developers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  github_id INTEGER NOT NULL UNIQUE,
-  github_login TEXT NOT NULL UNIQUE,
-  discord_id TEXT,
-  created_at INTEGER NOT NULL
+CREATE TABLE ladders (
+  id TEXT PRIMARY KEY,                          -- immutable internal epoch/season ID, e.g. 'gen1ou20261109', 'gen9championsvgc2026regmc'
+  slot TEXT NOT NULL,                           -- UI slot key: 'rby' | 'adv' | 'sv' | 'rand' | 'vgc'
+  display_name TEXT NOT NULL,                   -- active short label ('VGC') or archived epoch label ('VGC 2026 Reg M-C')
+  format_id TEXT NOT NULL,                      -- @pkmn/sim format ID, e.g. 'gen1ou', 'gen9ou', 'gen9randombattle', 'gen9championsvgc2026regmc'
+  team_mode TEXT NOT NULL,                      -- 'harvested' | 'random' | 'competitor_pool'
+  min_bots INTEGER NOT NULL DEFAULT 2,          -- minimum active projects before matchmaking begins (2 default, 3 for VGC)
+  status TEXT NOT NULL DEFAULT 'active',        -- 'active' | 'settling' | 'archived'
+  created_at INTEGER NOT NULL,
+  archived_at INTEGER
 );
 
 CREATE TABLE bots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  slug TEXT NOT NULL UNIQUE,                   -- auto-computed via slugify(name).toLowerCase()
-  name TEXT NOT NULL UNIQUE,                   -- from static/projects.yml name (e.g. '0 ERROR')
-  authorized_github_json TEXT NOT NULL,        -- JSON array of lowercase GitHub logins from arena.github
-  avatar_file TEXT NOT NULL,                   -- e.g. '0-error.png' in static/avatars/
-  discord_id TEXT,                             -- from arena.discord_id
-  smogon_username TEXT,                        -- from arena.smogon
-  status TEXT NOT NULL DEFAULT 'approved',     -- 'approved' | 'disabled'
+  slug TEXT NOT NULL UNIQUE,                    -- auto-computed via slugify(name).toLowerCase()
+  name TEXT NOT NULL UNIQUE,                    -- from static/projects.yml name (e.g. 'Foul Play')
+  logo_file TEXT,                               -- optional PNG in static/avatars/<slug>.png
+  status TEXT NOT NULL DEFAULT 'approved',      -- 'approved' | 'disabled'
+  cooldown_refunded_at INTEGER,                 -- optional override timestamp from pkmn-admin refund-cooldown
   updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE developers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_id INTEGER NOT NULL REFERENCES bots(id),  -- 1 project per developer enforced via UNIQUE constraints below
+  github_login TEXT NOT NULL UNIQUE,            -- lowercase GitHub username from projects.yml arena.developers
+  github_id INTEGER UNIQUE,                     -- immutable numeric GitHub user ID recorded on first OAuth login
+  smogon TEXT NOT NULL UNIQUE,                  -- Smogon username or XenForo slug from projects.yml arena.developers
+  discord_id TEXT UNIQUE,                       -- immutable Discord Snowflake ID linked via /auth/discord?intent=link
+  discord_username TEXT,                        -- @handle displayed in /account/ .account-bar
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE discord_members (
+  discord_id TEXT PRIMARY KEY,                  -- synced every 60s from guild 689316505560809576 by pkmn.ai-discord
+  username TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE bot_ladder_teams (
+  ladder_id TEXT NOT NULL REFERENCES ladders(id),
+  bot_id INTEGER NOT NULL REFERENCES bots(id),
+  slot_index INTEGER NOT NULL,                  -- 1 .. 20
+  canonical_packed TEXT NOT NULL,               -- validated via TeamValidator + sequential teams/index.ts (1-NN >= 1.30)
+  status TEXT NOT NULL DEFAULT 'pending',       -- 'pending' -> 'active' once project's 1st version on ladder_id passes smoke test
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (ladder_id, bot_id, slot_index)
 );
 
 CREATE TABLE bot_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   bot_id INTEGER NOT NULL REFERENCES bots(id),
-  version_str TEXT NOT NULL,
-  format_type TEXT NOT NULL, -- 'container' | 'bundle' (auto-deduced from download_url)
+  submitted_by_dev_id INTEGER REFERENCES developers(id),
+  version_str TEXT NOT NULL,                    -- regex ^[A-Za-z0-9._-]{1,12}$
+  format_type TEXT NOT NULL,                    -- 'bundle' | 'oci'
   download_url TEXT NOT NULL,
   sha256 TEXT NOT NULL,
-  auth_token_enc TEXT,       -- wiped to NULL once Arena pulls artifact
-  ladders_json TEXT NOT NULL,
+  auth_token_enc TEXT,                          -- wiped to NULL once Arena pulls artifact
+  ladders_json TEXT NOT NULL,                   -- JSON array of internal ladder_ids
   unpacked_bytes INTEGER,
   smoke_status TEXT NOT NULL DEFAULT 'pending_pull', -- 'pending_pull' | 'passed' | 'failed_smoke_test' | 'quarantined'
+  smoke_duration_ms INTEGER,
+  smoke_turn_ms INTEGER,
+  smoke_peak_ram_mb INTEGER,
   smoke_error_log TEXT,
+  dm_sent INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   UNIQUE(bot_id, version_str)
 );
 
 CREATE TABLE ladder_entries (
-  ladder_id TEXT NOT NULL,
+  ladder_id TEXT NOT NULL REFERENCES ladders(id),
   version_id INTEGER NOT NULL REFERENCES bot_versions(id),
-  role TEXT NOT NULL, -- 'anchor' | 'champion' | 'challenger' | 'retired' | 'quarantined'
+  role TEXT NOT NULL,                           -- 'champion' | 'challenger' | 'retired' | 'quarantined'
+  is_anchor INTEGER NOT NULL DEFAULT 0,         -- 1 if designated 1500 Elo anchor version for this ladder
+  retired_at INTEGER,                           -- Unix timestamp when transitioned to 'retired'
   rating_elo REAL NOT NULL DEFAULT 1500,        -- MAP Elo point estimate: 1500 + 173.72 * theta
   rating_se REAL NOT NULL DEFAULT 350,          -- Posterior standard error SE(R) in Elo
   rating_lcb REAL NOT NULL DEFAULT 814,         -- Conservative Rating (95% LCB): rating_elo - 1.96 * rating_se
   gxe REAL NOT NULL DEFAULT 50,                 -- Expected win % against N(1500, 350^2) prior
-  rank_current INTEGER,                         -- Numerical rank (1, 2, ...) if family leader & settled; NULL if provisional/secondary
+  rank_current INTEGER,                         -- Numerical rank (1, 2, ...) if family leader & non-provisional; NULL otherwise
   rank_min INTEGER,                             -- Best plausible rank at 95% confidence (1 + count of rivals with LOS(r > i) >= 0.95)
   rank_max INTEGER,                             -- Worst plausible rank at 95% confidence (guaranteed Top-K when rank_max <= K)
   matches_played INTEGER NOT NULL DEFAULT 0,
@@ -2755,7 +2829,7 @@ CREATE TABLE ladder_entries (
 
 -- Per-bot-family aggregated statistics on each ladder (persists Top 1/10/100 reigns and peaks across version upgrades)
 CREATE TABLE bot_ladder_stats (
-  ladder_id TEXT NOT NULL,
+  ladder_id TEXT NOT NULL REFERENCES ladders(id),
   bot_id INTEGER NOT NULL REFERENCES bots(id),
   best_rank INTEGER,
   best_rank_at INTEGER,
@@ -2781,13 +2855,13 @@ CREATE TABLE bot_ladder_stats (
 );
 
 CREATE TABLE matches (
-  id TEXT PRIMARY KEY, -- e.g. '20261019-gen9ou-00042'
-  ladder_id TEXT NOT NULL,
+  id TEXT PRIMARY KEY, -- e.g. 'gen1ou-0000000971'
+  ladder_id TEXT NOT NULL REFERENCES ladders(id),
   v1_id INTEGER NOT NULL REFERENCES bot_versions(id),
   v2_id INTEGER NOT NULL REFERENCES bot_versions(id),
   seed TEXT NOT NULL,
-  team1_label TEXT,             -- optional provenance label (e.g. '0-ERROR Team #5') in Bring-T-to-the-Pot mode
-  team2_label TEXT,             -- optional provenance label (e.g. 'Foul Play Team #12') in Bring-T-to-the-Pot mode
+  team1_label TEXT,             -- optional provenance label in competitor_pool ladders
+  team2_label TEXT,
   g1_outcome TEXT NOT NULL,     -- 'W' | 'L' | 'T' from v1's perspective (v1 is P1 with T1 in G1)
   g2_outcome TEXT NOT NULL,     -- 'W' | 'L' | 'T' from v1's perspective (v1 is P2 with T2 in G2)
   match_category TEXT NOT NULL, -- 'WW' | 'WT' | 'TW' | 'WL' | 'LW' | 'TT' | 'TL' | 'LT' | 'LL'
@@ -2797,15 +2871,17 @@ CREATE TABLE matches (
   g2_end_reason TEXT NOT NULL,
   v1_peak_ram_mb INTEGER NOT NULL,
   v2_peak_ram_mb INTEGER NOT NULL,
-  v1_bank_left_s REAL NOT NULL,
-  v2_bank_left_s REAL NOT NULL,
+  v1_g1_bank_s REAL NOT NULL,
+  v1_g2_bank_s REAL NOT NULL,
+  v2_g1_bank_s REAL NOT NULL,
+  v2_g2_bank_s REAL NOT NULL,
   v1_avg_turn_ms INTEGER NOT NULL,
   v2_avg_turn_ms INTEGER NOT NULL,
   completed_at INTEGER NOT NULL
 );
 
 CREATE TABLE pair_aggregates (
-  ladder_id TEXT NOT NULL,
+  ladder_id TEXT NOT NULL REFERENCES ladders(id),
   v_low_id INTEGER NOT NULL REFERENCES bot_versions(id),
   v_high_id INTEGER NOT NULL REFERENCES bot_versions(id),
   ww INTEGER NOT NULL DEFAULT 0,                    -- 2.0-0.0 sweeps won by v_low (v_low Match W = ww + wt)
@@ -2816,12 +2892,13 @@ CREATE TABLE pair_aggregates (
   cur_streak INTEGER NOT NULL DEFAULT 0,            -- >0: v_low consecutive match wins; <0: -v_high consecutive match wins; 0: last match was T
   v_low_max_win_streak INTEGER NOT NULL DEFAULT 0,  -- Longest consecutive match win streak by v_low vs v_high
   v_high_max_win_streak INTEGER NOT NULL DEFAULT 0, -- Longest consecutive match win streak by v_high vs v_low
+  los_low REAL,                                     -- Cached posterior P(theta_low > theta_high); los_high = 1 - los_low
   PRIMARY KEY (ladder_id, v_low_id, v_high_id),
   CHECK (v_low_id < v_high_id)
 );
 
 CREATE TABLE rating_snapshots (
-  ladder_id TEXT NOT NULL,
+  ladder_id TEXT NOT NULL REFERENCES ladders(id),
   version_id INTEGER NOT NULL REFERENCES bot_versions(id),
   day_utc TEXT NOT NULL, -- 'YYYY-MM-DD'
   matches_played INTEGER NOT NULL DEFAULT 0,
@@ -2839,7 +2916,7 @@ CREATE TABLE rating_snapshots (
 
 ### SQLite Schema on Arena Mac mini (`/opt/arena/state/arena.sqlite`)
 
-The Arena Mac mini stores `bot_versions`, `ladder_entries`, `pair_aggregates`, an `outbox` queue (so zero updates are lost if `pkmn.ai` is briefly restarting), and an extended `matches` table that checkpoints Game 1 state (`status`, `team1_packed`, `team2_packed`) so any power loss or restart between Game 1 and Game 2 resumes cleanly at Game 2:
+The Arena Mac mini stores `ladders`, `bot_versions`, `bot_ladder_teams`, `ladder_entries`, `pair_aggregates`, an `outbox` queue (so zero updates are lost if `pkmn.ai` is briefly restarting), and an extended `matches` table that checkpoints Game 1 state (`status`, `team1_packed`, `team2_packed`) so any power loss or restart between Game 1 and Game 2 resumes cleanly at Game 2:
 
 ```sql
 CREATE TABLE matches (
@@ -2862,8 +2939,10 @@ CREATE TABLE matches (
   g2_end_reason TEXT,
   v1_peak_ram_mb INTEGER DEFAULT 0,
   v2_peak_ram_mb INTEGER DEFAULT 0,
-  v1_bank_left_s REAL DEFAULT 0,
-  v2_bank_left_s REAL DEFAULT 0,
+  v1_g1_bank_s REAL DEFAULT 0,
+  v1_g2_bank_s REAL DEFAULT 0,
+  v2_g1_bank_s REAL DEFAULT 0,
+  v2_g2_bank_s REAL DEFAULT 0,
   v1_avg_turn_ms INTEGER DEFAULT 0,
   v2_avg_turn_ms INTEGER DEFAULT 0,
   started_at INTEGER NOT NULL,
@@ -2883,20 +2962,31 @@ CREATE TABLE outbox (
 All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SECRET>`.
 
 #### 1. `GET /api/arena/pending-submissions`
-- **Response (`200 OK`)**:
+- **Response (`200 OK`)**: Returns pending submissions, active/settling ladder metadata, and any newly submitted 20-team VGC sets:
   ```json
   {
+    "ladders": [
+      {
+        "id": "gen1ou20261109",
+        "slot": "rby",
+        "format_id": "gen1ou",
+        "team_mode": "harvested",
+        "min_bots": 2,
+        "status": "active"
+      }
+    ],
     "submissions": [
       {
         "version_id": 42,
         "bot_id": 7,
-        "bot_slug": "0-error",
-        "version_str": "1.0.0",
+        "bot_slug": "foul-play",
+        "version_str": "1.2.0",
         "format_type": "bundle",
-        "download_url": "https://r2.example.com/0-error-1.0.0.tar.gz?X-Amz-Signature=...",
+        "download_url": "https://r2.example.com/foul-play-1.2.0.tar.zst?X-Amz-Signature=...",
         "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
         "auth_token": null,
-        "ladders": ["gen1ou", "gen3ou", "gen9ou"]
+        "ladders": ["gen1ou20261109", "gen3ou20261109", "gen9ou20261109"],
+        "teams_by_ladder": {}
       }
     ]
   }
@@ -2908,96 +2998,126 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
   {
     "version_id": 42,
     "smoke_status": "passed",
-    "unpacked_bytes": 384192512,
+    "unpacked_bytes": 327155712,
+    "smoke_duration_ms": 4100,
+    "smoke_turn_ms": 402,
+    "smoke_peak_ram_mb": 1140,
     "smoke_error_log": null,
     "retired_version_ids_by_ladder": {
-      "gen1ou": 12,
-      "gen9ou": 18
+      "gen1ou20261109": 12,
+      "gen9ou20261109": 18
     }
   }
   ```
-- **Side Effect on `pkmn.ai`**: Sets `auth_token_enc = NULL`, updates `smoke_status` and `unpacked_bytes`, transitions any replaced weaker settled versions in `retired_version_ids_by_ladder` to `role = 'retired'`, and if `smoke_status == 'failed_smoke_test'`, refunds the bot's 14-day cooldown and notifies the author.
+- **Side Effect on `pkmn.ai`**: Sets `auth_token_enc = NULL`, updates `smoke_status`, `unpacked_bytes`, and smoke telemetry, promotes any `pending` `bot_ladder_teams` rows to `active` (or deletes them if `failed_smoke_test` so the project can resubmit 20 teams), transitions replaced weaker settled versions in `retired_version_ids_by_ladder` to `role = 'retired'` (`retired_at = now`), and on `failed_smoke_test` or `quarantined`, refunds the 14-day cooldown (for smoke test failures) and triggers Discord DM notifications via `pkmn.ai-discord`.
 
 #### 3. `POST /api/arena/heartbeat`
-- **Trigger**: Sent between turns (while both bots are paused) at most once every 5 seconds.
+- **Trigger**: Sent between turns at most once every 5 seconds to power the live execution monitor on `/battles/`.
 - **Request**:
   ```json
   {
-    "match_id": "20261019-gen9ou-00042",
-    "ladder_id": "gen9ou",
-    "p1_slug": "0-error",
-    "p1_version": "1.0.0",
-    "p2_slug": "foul-play",
-    "p2_version": "1.0.0",
-    "game_num": 1,
-    "turn": 14,
-    "p1_clock_s": 142.5,
-    "p2_clock_s": 118.0
+    "heartbeat_seq": 142,
+    "match_id": "gen1ou-0000000972",
+    "ladder_id": "gen1ou20261109",
+    "format_id": "gen1ou",
+    "game_num": 2,
+    "turn": 27,
+    "active_slot": "p2",
+    "turn_budget_s": 135,
+    "increment_s": 10,
+    "g1_summary": { "winner_slot": "p1", "turns": 31 },
+    "p1": {
+      "slug": "foul-play",
+      "name": "Foul Play",
+      "version": "1.2.0",
+      "bank_s": 142,
+      "last_turn_ms": 410,
+      "mean_turn_ms": 405,
+      "ram_mb": 1180
+    },
+    "p2": {
+      "slug": "metamon",
+      "name": "Metamon",
+      "version": "1.0.0",
+      "bank_s": 132,
+      "last_turn_ms": 520,
+      "mean_turn_ms": 495,
+      "ram_mb": 1420
+    }
   }
   ```
-- **Side Effect on `pkmn.ai`**: Atomically writes `/home/pkmn/ai/public/api/live.json` and resets the 15-minute Arena disconnect watchdog timer.
+- **Side Effect on `pkmn.ai`**: Stamps `updated_at`, atomically writes `/home/pkmn/ai/public/api/live.json`, and resets the 15-minute Arena disconnect watchdog timer.
 
 #### 4. `POST /api/arena/match-complete`
 - **Request**:
   ```json
   {
     "match": {
-      "id": "20261019-gen9ou-00042",
-      "ladder_id": "gen9ou",
+      "id": "gen1ou-0000000971",
+      "ladder_id": "gen1ou20261109",
       "v1_id": 42,
       "v2_id": 1,
       "seed": "sodium,0123456789abcdef0123456789abcdef",
+      "team1_label": null,
+      "team2_label": null,
       "g1_outcome": "W",
       "g2_outcome": "W",
       "match_category": "WW",
-      "g1_turns": 24,
-      "g2_turns": 31,
+      "g1_turns": 31,
+      "g2_turns": 28,
       "g1_end_reason": "normal",
       "g2_end_reason": "normal",
       "v1_peak_ram_mb": 1180,
-      "v2_peak_ram_mb": 9420,
-      "v1_bank_left_s": 165.2,
-      "v2_bank_left_s": 94.8,
-      "v1_avg_turn_ms": 620,
-      "v2_avg_turn_ms": 1840,
+      "v2_peak_ram_mb": 2340,
+      "v1_g1_bank_s": 142.0,
+      "v1_g2_bank_s": 150.0,
+      "v2_g1_bank_s": 118.0,
+      "v2_g2_bank_s": 94.8,
+      "v1_avg_turn_ms": 410,
+      "v2_avg_turn_ms": 290,
       "completed_at": 1760650000
     },
+    "ladder_status": "active",
     "ladder_standings": [
       {
         "version_id": 42,
-        "role": "challenger",
-        "rating_elo": 1612.4,
-        "rating_se": 28.4,
-        "rating_lcb": 1556.7,
-        "gxe": 67.8,
-        "rank_current": 4,
-        "rank_min": 3,
-        "rank_max": 6,
-        "matches_played": 26,
-        "settled_at": 1760650000
+        "role": "champion",
+        "is_anchor": 0,
+        "rating_elo": 1748.0,
+        "rating_se": 14.3,
+        "rating_lcb": 1720.0,
+        "gxe": 84.2,
+        "rank_current": 1,
+        "rank_min": 1,
+        "rank_max": 1,
+        "matches_played": 180,
+        "settled_at": 1760500000
       }
     ],
     "los_matrix": [
-      { "v_i": 42, "v_j": 1, "los": 0.964 }
+      { "v_i": 42, "v_j": 1, "los": 0.991 }
     ]
   }
   ```
-- **Side Effect on `pkmn.ai`**: Commits match + updated `ladder_entries` + `bot_ladder_stats` + `pair_aggregates` + daily `rating_snapshots` in one SQLite transaction, updates $O(1)$ match streaks, peak ratings, and Top-1/10/100 duration counters, updates Discord roles if guaranteed #1 changed, and atomically regenerates static leaderboard HTML/JSON files.
+- **Side Effect on `pkmn.ai`**: Commits match + updated `ladder_entries` + `bot_ladder_stats` + `pair_aggregates` (including pairwise `los_low`) + daily `rating_snapshots` (and optional `settling` $\rightarrow$ `archived` transition) in one SQLite transaction, updates $O(1)$ match streaks, peak ratings, and Top-1/10/100 duration counters, and atomically regenerates static HTML/JSON files.
 
-### Nginx Configuration Additions (`config/nginx.conf`)
-- Keep `root /home/pkmn/ai/public;` so `/leaderboard/*` and `/api/live.json` are served directly from disk by Nginx with zero Node.js overhead.
-- Add proxy blocks for `/wiki`, `/auth/github`, `/auth/`, `/submit`, `/api/submissions`, and `/api/arena/` forwarding to `http://127.0.0.1:1234` with `client_max_body_size 1m;`.
+### Nginx Configuration (`config/nginx.conf` & `private/nginx.conf`)
+- Keep `root /home/pkmn/ai/public;` so pre-rendered `/leaderboard/*`, `/battles/index.html`, `/projects/index.html`, and `/api/live.json` are served directly from disk by Nginx with zero Node.js overhead.
+- Proxy `/wiki`, `/auth/`, `/account`, `/submit` (`302` $\rightarrow$ `/account/`), `/api/submissions`, `/api/account/`, `/api/arena/`, and `/chat/logs/token` to `http://127.0.0.1:1234` (`client_max_body_size 1m;`).
+- Replace `/vouch/validate` with internal `auth_request /auth/discord/validate` (`http://127.0.0.1:1234`) for `/chat/logs` and `/private/*` (`?guild=0`), removing all `127.0.0.1:9090` Vouch blocks.
 
 ---
 
-## 10. Static Page Generation, Leaderboard UI & Log Archival
+## 10. Static Page Generation, Arena UI Views & Log Archival
 
-### Atomic Static Page Generation
-Whenever `POST /api/arena/match-complete` finishes its SQLite transaction on `pkmn.ai`, the Node.js server renders the updated pages for that ladder to `.tmp` files and renames them into `/home/pkmn/ai/public/leaderboard/<ladder>/`:
-- `/leaderboard/index.html` and `/leaderboard/<ladder>/index.html` (with tabs labeled **`RBY`**, **`ADV`**, **`SINGLES`**, **`DOUBLES`**, **`RANDOM`**)
-- `/leaderboard/<ladder>/matrix.html` (head-to-head cross-table)
-- `/leaderboard/<ladder>/<bot-slug>/index.html` (per-bot profile page)
-- `/leaderboard/<ladder>/standings.json` (machine-readable static JSON)
+### Atomic Static Page Generation (`server/render.ts`)
+Whenever `POST /api/arena/match-complete`, `POST /api/arena/submission-status`, or `projects.yml` sync finishes its SQLite transaction on `pkmn.ai`, the server atomically renders `.tmp` files and renames them into `/home/pkmn/ai/public/`:
+- **`/leaderboard/index.html` (+ `/leaderboard/standings.json`)**: Unified single-page Leaderboard with format radio nav (`RBY — ADV — SV — RAND — VGC`), version filter subnav (`Active — Best — All`), 7-column `Standings` table (`#`, `Bot`, `Elo` [`±CI`], `GXE`, `W–L–T`, `Streak`, `LOS`), inline `History` SVG chart, and `Matchups` heatmap matrix.
+- **`/leaderboard/<bot-slug>/index.html` (+ optional `/leaderboard/<bot-slug>.png`)**: Per-project statistics profile with optional pixelated logo, subscribed-ladder radio nav + `#ver-select` version picker, 2-column `.kv` `Overview` + Top 1/10/100 `Reign` table, `Versions` lineage SVG + table (`Version, Elo, Δ Elo, GXE, W–L–T, Turn, Peak RAM, Submitted`), client-sortable 8-column `Head-to-Head` table (`Opponent, Elo, W–L–T, Score, Expected, Δ, Streak, LOS`), and 8-column `Recent Matches` table (`Match, Ver., Opponent, Result, Turns, Bank, RAM, Completed`).
+- **`/leaderboard/tournaments/index.html`**: Championships & archive page with `#event-select`, `#live` 640×360 Showdown `#battle` viewer + `.ps-log`, 6-column `Standings` (`#, Bot, Elo, W–L–T, Points, S–B`), `Crosstable`, and 6-column `Games` table (`Game, Player 1, Player 2, Result, Turns, Bank` with 6-Pokémon Smogon party minisprites).
+- **`/battles/index.html`**: Live execution monitor (`All — RBY — ADV — SV — RAND — VGC` filter, `#live` `PAUSED` / `● RUNNING` slot cards polling `/api/live.json` with 1-second integer clock ticks, and 6-column `History` table `Battle, Player 1, Player 2, Result, Turns, Completed` with zero team sprites).
+- **`/projects/index.html`**: Re-renders `static/projects.ts` with the `Active — Arena — All — Inactive` filter, `Arena` rank badges (`RBY #1`, `SV (provisional)`), and live Arena rank priority sort order.
+- *(Note: `/account/` is rendered dynamically via SSR per authenticated GitHub developer.)*
 
 ### Adapting Bo1 Game Statistics to 2-Game Blind-Pair (`Bo2`) Matches
 
@@ -3069,27 +3189,19 @@ Every statistic below is adapted for 2-game blind-pair (`Bo2`) matches and track
 
 ---
 
-### Leaderboard Views & Columns (CCRL + `vgc.bot` Style)
-- **Version Filter Toggle**:
-  - **Active Versions (Default)**: Displays all currently active versions competing in the ladder pool (each bot family's `Champion` and `Challenger`—up to 2 versions per bot).
-  - **All Versions (Complete History)**: Displays all active **and retired** versions ever tested on the ladder.
-  - **Rank Numbering & Provisional Rule**: In **both** views, **only the single highest-rated settled/non-provisional version of each bot family receives a numerical Rank (`1`, `2`, `3`...)** ordered by **Conservative Rating (`rating_lcb = rating_elo - 1.96 * rating_se`)**. A bot's secondary active version (or any retired historical version) has a blank Rank cell (`—`), and versions with `< 10` matches or `rating_se > 60` display `Prov.`.
-- **Leaderboard Table Columns**:
-  - `Rank` (`#1`, plus `[rank_min–rank_max]` tooltip/badge), `Bot` (avatar icon + Name + Version badge + open-source badge), `Rating` (Conservative Rating `LCB`), `Elo` ($\pm$ 95% CI, anchored to `1500`), `GXE` (%), `W–L–T` (`Matches`), `Streak` (`W4` / `L2`), `Peak` (`Best Rank` / `Max Elo`), and `LOS` (probability of superiority over the next-ranked bot).
-- **Head-to-Head Matrix (`/leaderboard/<ladder>/matrix.html`) & Bot Profile Pages (`/leaderboard/<ladder>/<bot-slug>/index.html`)**:
-  - **Matrix**: Cross-table showing pairwise match score %, `W–L–T` match counts, and pairwise `LOS` between every pair of bots.
-  - **Bot Profile Page**:
-    1. **Overview & Project Metadata** (from `static/projects.yml`).
-    2. **Current vs. Maximum Standing Card** (`Rank`, `Rating [LCB]`, `Elo ± 95% CI`, `GXE`).
-    3. **Top 1 / Top 10 / Top 100 Reign & Duration Card** (`Current Streak`, `Longest Streak`, and `Total Cumulative Duration` formatted in both **Days** and **Hours**, e.g. `18.4 d (442 h)`).
-    4. **Match Record & Streaks Card** (`W–L–T`, `Total Matches`, `Current Streak`, `Longest Win Streak`, `Longest Loss Streak`, plus hardware reliability telemetry: crash/timeout/OOM rates, average decision time `ms`, peak RAM `MiB`).
-    5. **Multi-Version Rating History Charts** (Lineage Step Chart + Daily Time-Series & Convergence Curves).
-    6. **Sortable Head-to-Head Breakdown Table** against every opponent (`W–L–T`, `Matches`, `Score %`, `Expected Score %`, `Residual Δ%` [highlighting stylistic **Nemesis** / **Best Matchup**], `Current Streak vs. Opponent`, `Max Win/Loss Streak vs. Opponent`, and `LOS`).
-    7. **Recent Match Summaries**.
-- **Zero Team Leaks & Sanitized Crash Telemetry**:
-  - Replays, team sets, and species lists are never shown on `pkmn.ai`.
-  - Offline smoke tests (run on non-secret dummy teams) show full `stderr` and protocol traces to the submitting developer.
-  - Real ladder matches suppress `stderr` and show only timestamp, opponent version, Game 1 & 2 outcomes, turn counts, peak RAM, bank time remaining, optional opaque team provenance labels (`"Bot A Team #5"` in Bring-$T$-to-the-Pot ladders), and end reason (`normal`, `tie_1000_turns`, `timeout`, `oom`, `crash`, `invalid_choice_3x`).
+### Arena UI Views & Column Layouts (`pkmn-ai-ui-mocks` Specification)
+All public Arena pages use `site.page.Renderer` (`main { width: 100%; max-width: min(105ch, calc(100% - 4vh)); }` so filtering rows never shrinks page width, zero horizontal overflow down to `375×667`, and `site` semantic CSS tokens `--hl-string`, `--hl-name`, `--hl-symbol`, etc.):
+- **Unified Leaderboard (`/leaderboard/index.html`)**:
+  - **Format Nav**: `RBY — ADV — SV — RAND — VGC` (hash-addressable `#rby`, `#adv`, `#sv`, `#rand`, `#vgc`).
+  - **Version Subnav**: `Active` (default; shows up to 2 active versions per project: `Champion` + `Challenger`) — `Best` (highest-rated active version per project) — `All` (includes `Retired` versions).
+  - **7-Column `#standings-table`**: `#`, `Bot` (link to `/leaderboard/<slug>/` + `<code>ver</code>` + `.ext` repo icon; no avatars), `Elo` (`<strong>1748</strong> <span class="muted">±28</span>`), `GXE`, `W–L–T`, `Streak` (`W >= 3` `.yes`, `L >= 3` `.no`), `LOS` (vs. next-ranked settled bot). Sorted inline by **Conservative Rating (`rating_lcb = rating_elo - 1.96 * rating_se`)**; secondary active, provisional (`< 10` matches or `SE > 60`), and retired rows show Rank = `—` and `LOS` = `—`.
+  - **`#history` Inline SVG (`760×245`) & `#matchups` `table.matrix`**: Daily MAP Elo trajectories of top active bot families + `oklab` `.hm-w1..4` / `.hm-l1..4` pairwise cross-table (`Score%` + `W–L–T`).
+- **Bot Profile (`/leaderboard/<slug>/index.html`)**:
+  - Optional pixelated project logo (`/leaderboard/<slug>.png`), subscribed-ladder radio nav + `#ver-select` (`All (N)`, `1.2.0 (active)`, `1.0.0 (retired)`), 2-column `.kv` `Overview` + Top 1/10/100 `Reign` table, `Versions` lineage SVG (`760×220`) + table, client-sortable 8-column `Head-to-Head` table (`Opponent, Elo, W–L–T, Score, Expected, Δ, Streak, LOS`), and 8-column `Recent Matches` table (`Match, Ver., Opponent, Result, Turns, Bank, RAM, Completed`).
+- **Zero Ladder Team Leaks & Sanitized Crash Telemetry**:
+  - Ladder battle replays, team sets, and species lists are never shown on `pkmn.ai` (`/battles/` and `/leaderboard/<slug>/` omit team minisprites and replay links).
+  - Offline smoke tests (run on non-secret dummy teams) show full `stderr` traces on `/account/` to the project's developers.
+  - Real ladder matches suppress `stderr` and show only match ID, timestamp, opponent version, Game 1 & 2 outcomes, turn counts, peak RAM, per-game bank time remaining, and end reason (`normal`, `tie_1000_turns`, `timeout`, `oom`, `crash`, `invalid_choice_3x`).
 
 ---
 
@@ -3434,10 +3546,20 @@ Compressing each battle log individually immediately after a match prevents LZMA
 
 ---
 
-## 11. Local Laptop End-to-End Testing Mode & Pre-Launch Checklist
+## 11. Server-Only Integration Harness (`tools/mock-arena.ts`), Laptop Dev Mode & Checklist
 
-### Running the Full System Locally on a Laptop (`ARENA_DEV=1`)
-You can develop and test the entire stack—including `static/projects.yml` syncing, fake bot submissions, smoke testing, active matchmaking, G1$\to$G2 crash recovery, Davidson rating updates, and static leaderboard HTML generation—on any macOS or Linux laptop **without** running `setup-arena.sh`, creating `/Volumes/P1` APFS volumes, or spinning up Podman/Seatbelt:
+### Server-Only Integration Testing Without the Mac mini (`tools/mock-arena.ts`)
+To develop, verify, and visually test the entire `pkmn.ai` VPS control plane **without** the M6 Mac mini sandbox, `tools/mock-arena.ts` implements a deterministic Arena simulator and database seeder that speaks the exact `/api/arena/*` HTTP protocol (`Bearer <ARENA_HMAC_SECRET>`) and runs the real `computeDavidsonRatings` solver:
+
+1. **Deterministic Seed Mode (`node build/tools/mock-arena.js seed`)**:
+   - Seeds `/var/lib/pkmn/arena.sqlite` (or a test SQLite file) with multi-developer `projects.yml` fixtures, active/provisional/settled/retired/rejected/quarantined versions across `RBY`, `ADV`, `SV`, `RAND`, and `VGC` (including validated 20-team VGC pools), daily `rating_snapshots`, `pair_aggregates`, `matches`, `/api/live.json`, and a tournament archive (`Autumn ’26 — [Gen 9] OU`), then runs `server/render.ts` so all 6 UI views (`/projects/`, `/leaderboard/`, `/leaderboard/<slug>/`, `/leaderboard/tournaments/`, `/battles/`, `/account/`) can be inspected in a browser and verified via `npm run shots` (`tools/shots.ts`).
+2. **Live Fake-Arena Simulator Daemon (`node build/tools/mock-arena.js run --server http://127.0.0.1:1234`)**:
+   - Continuously polls `GET /api/arena/pending-submissions`, simulates unpacking and smoke testing (`--smoke=pass|fail`, computing 3rd-version `retired_version_ids_by_ladder`) via `POST /api/arena/submission-status`, streams realistic between-turn `POST /api/arena/heartbeat` updates (ticking Game 1 & Game 2 `PAUSED` / `RUNNING` slots on `/battles/`), samples matches (enforcing `min_bots = 3` and `<= 1 of 40` team sampling on `VGC`), solves exact Davidson MAP ratings + `LOS`, and posts `POST /api/arena/match-complete`.
+3. **Automated Vitest E2E Suite (`test/arena.test.ts` via `npm run test:integration`)**:
+   - Exercises the full lifecycle end-to-end in CI: GitHub + Discord OAuth login/linking, multi-member `/account/` isolation, VGC 20-team `1-NN >= 1.30` validation, cooldown & settlement gating, fake-arena smoke pass/fail + retirement + quarantine, Discord role/DM sync, seasonal `settling` $\rightarrow$ `archived` ladder rotation, and `hyperlink` + Playwright responsive checks.
+
+### Running Both Server & Coordinator Locally on a Laptop (`ARENA_DEV=1`)
+You can also run the full coordinator + `@pkmn/sim` loop locally on any macOS or Linux laptop **without** running `setup-arena.sh`, creating `/Volumes/P1` APFS volumes, or spinning up Podman/Seatbelt:
 
 1. **Create a Local Dummy Bot Bundle**:
    ```bash
@@ -3486,12 +3608,12 @@ You can develop and test the entire stack—including `static/projects.yml` sync
 
 ### Pre-Launch Implementation Checklist
 
-1. **Harvest Team Pools**: Run `arena/scripts/harvest-teams.ts` over the `2024-05` to `2025-04` (or newer) PS logs to build `/opt/arena/teams/{gen1ou,gen3ou,gen9ou,gen9doublesou}.txt` from the top 10–20% pilot-rated games, validated against each format's pinned ruleset and deduplicated via `Team.canonicalize(team, gen)` from `@pkmn/sets`.
+1. **Harvest Team Pools & Era Stats**: Run `arena/scripts/harvest-teams.ts` to build `/opt/arena/teams/{gen1ou20261109,gen3ou20261109,gen9ou20261109}.txt` validated against `@pkmn/sim@0.11.0` and deduplicated via `@pkmn/sets`, and populate `/opt/arena/stats/<ladder_id>/` (`stats.json` and `randbats` `data.json`/`full.json`/`sets.json`).
 2. **Provision M6 Mac mini (`pkmn@arena`)**: Complete the 4 pre-script OS steps (create admin user `pkmn` on hostname `arena`, disable auto-login, enable SSH, mount `/Volumes/Archive`), then run `arena/scripts/setup-arena.sh`.
-3. **Package Anchor Bots (`1500` Elo)**: Package `v1` bundles/containers for each ladder's `1500` Elo anchor bot (`Metamon` in `gen1ou`, `Foul Play` in `gen3ou`, `gen9ou`, and `gen9randbats`, and `nessie` or `mikumiku` in `gen9doublesou`) plus at least one additional seed bot per ladder.
-4. **Implement `arena/` Coordinator**: Build `coordinator.ts`, `arbiter.ts`, `ratings.ts`, and `matchmaker.ts` using the code and SQLite schema in Sections 5, 6, and 9, and verify end-to-end with `ARENA_DEV=1`.
-5. **Implement `server/` Control Plane**: Add `.github/ISSUE_TEMPLATE/register-bot.yml`, startup syncing of `static/projects.yml` (`arena:` entries) into `/var/lib/pkmn/arena.sqlite`, GitHub OAuth2, `/api/submissions`, `/api/arena/*`, Discord role bot, and atomic static leaderboard rendering to `server/index.ts`.
-6. **Publish Competitor Guide**: Publish the competitor rules and integration gotchas from Section 8 on `pkmn.ai/leaderboard/rules/`.
+3. **Package Anchor Bots (`1500` Elo)**: Package `v1` bundles/containers for each ladder's `1500` Elo anchor bot (`Metamon` in `RBY`, `Foul Play` in `ADV`, `SV`, and `RAND`) plus initial seed bots.
+4. **Implement `server/` Control Plane & Verify with `tools/mock-arena.ts`**: Build `server/auth.ts` (retiring Vouch), `server/db.ts`, `/account/`, `/api/submissions` (including `teams/index.ts` VGC 20-team validation), `/api/arena/*`, `server/render.ts`, `server/discord.ts` role/DM sync, and `tools/mock-arena.ts`, verifying all 6 UI views via `npm run test:integration` and `npm run shots`.
+5. **Implement `arena/` Coordinator**: Build `coordinator.ts`, `arbiter.ts`, `ratings.ts`, and `matchmaker.ts` using Sections 5, 6, and 9, and verify end-to-end with `ARENA_DEV=1`.
+6. **Publish Competitor Rules**: Finalize and publish `static/rules.dj` at `https://pkmn.ai/rules/`.
 
 ---
 
@@ -3517,59 +3639,45 @@ If the number of active versions across all 5 ladders ever exceeds the internal 
 
 ---
 
-### Appendix B: Competitor-Supplied Shared Team Pools ("Bring-$T$-to-the-Pot" Without Battle Logs)
+### Appendix B: Seasonal Competitor-Supplied 20-Team Pools (`VGC` Pseudo-Blind-Pair Mode)
 
-When launching a constructed ladder where high-ladder Pokémon Showdown battle logs are unavailable or undesirable (for example, a newly announced VGC regulation, a custom metagame ruleset, or a clean-slate benchmark where we still want general-purpose bots playing 2-game blind-pair `|utm|` matches rather than hardcoding a single team), the Arena replaces log harvesting with a **Competitor-Supplied Shared Team Pool ("Bring-$T$-to-the-Pot")**.
+When launching a seasonal ladder where historical high-ladder Pokémon Showdown battle logs do not yet exist—specifically **`VGC` (`gen9championsvgc2026regmc`, rotated each VGC regulation)**—the Arena replaces log harvesting with a **Competitor-Supplied 20-Team Seasonal Pool** playing **pseudo-blind-pair 2-game matches**.
 
-#### 1. Submission Contract & Opaque Provenance Labels
-- **Separate $T = 20$ Team Bundle**:
-  - To enter a constructed ladder using this mode, each competitor submits **$T = 20$ valid teams** (as a 20-line packed team list or Pokepaste bundle) **separately** from their OCI container image or native macOS bundle.
-  - Combined across $n$ registered bot families on that ladder, the shared pool contains up to $n \times T$ teams (e.g., $25 \times 20 = 500$ teams).
-  - Each submitted team is assigned an immutable, opaque **Provenance Label** tied to its author and 1-based slot index: e.g., `"0-ERROR Team #5"` or `"Foul Play Team #12"`.
-- **Post-Match Provenance Display on `pkmn.ai`**:
-  - After a 2-game blind-pair match between Bot $A$ and Bot $B$ completes, the `pkmn.ai` match summary displays the provenance labels of the two teams drawn for that match (e.g., `T1: "Bot A Team #5"` vs. `T2: "Bot G Team #6"`).
-  - Because $T_1$ and $T_2$ are swapped between Game 1 (`A` plays $T_1$, `B` plays $T_2$) and Game 2 (`B` plays $T_1$, `A` plays $T_2$), showing `T1: "Bot A Team #5"` informs spectators and developers that Bot $A$ had a **home-team familiarity advantage** in that match (knowing the exact EVs/items/moves of $T_1$, which it piloted in Game 1 and faced in Game 2) **without ever leaking the Pokémon species or sets on `pkmn.ai`**.
+#### 1. First-Submission-Only $T = 20$ Team Contract
+- **Submitted Once Per Project Per Seasonal `ladder_id`**:
+  - On a project's **first submission** to a seasonal `competitor_pool` ladder (`VGC`), the developer provides **$T = 20$ valid teams** alongside their submission on `/account/`.
+  - Once that first submission passes its Arena smoke test, those 20 teams are locked into `bot_ladder_teams` for that `(ladder_id, bot_id)` for the duration of the season. **Subsequent version submissions by the same project to that `ladder_id` do not submit new teams**—they inherit the project's 20 locked seasonal teams.
+  - Because the pseudo-blind-pair sampling rule (below) requires drawing at least one team from outside the two playing projects' combined 40 teams whenever one of their teams is drawn, **a minimum of 3 active projects (`min_bots = 3`, $\ge 60$ teams)** is required before matchmaking begins on `VGC`.
 
 #### 2. The Uniqueness vs. Probing Dilemma (Why Cross-Competitor Overlap Rejection Is Always Gameable)
-A subtle security and fairness dilemma arises when two competitors submit identical or heavily overlapping teams (such as a popular tournament-winning rental team like Wolfe Glick's latest regulation team):
+A subtle security and fairness dilemma arises when two competitors submit identical or heavily overlapping teams (such as a popular tournament-winning rental team):
 
 1. **Why Rejecting Duplicate Submissions Across Competitors Fails (The Probing Oracle Attack)**:
-   - Suppose `pkmn.ai` rejects Bot $B$'s team submission because one or more of its 20 teams already exist in an earlier competitor's submission pool. That rejection acts as a **membership oracle**: a late submitter can systematically probe candidate teams during submission to discover the exact teams earlier competitors submitted, then train their bot specifically against those known teams before locking in their final submission.
-   - **Why an $M / T$ Overlap Threshold (e.g., Reject Only If $\ge 5$ of $20$ Teams Overlap) Is Still Gameable**:
-     - Even if the server hides *which* teams overlapped and only rejects when $\ge M$ of $T$ teams match the existing pool (e.g., $M = 5, T = 20$), an attacker only needs to find (or guess) $M - 1 = 4$ popular staple teams that are already in the pool.
-     - Once the attacker holds those $4$ known overlapping teams fixed in slots $1\dots 4$, places $1$ target team $X$ in slot $5$, and fills slots $6\dots 20$ with $15$ obscure but legal teams (guaranteed not to be in the pool), **the $M = 5$ threshold reduces back to an exact 1-bit oracle on team $X$**: the submission is rejected if and only if team $X$ is in the pool!
-     - Furthermore, rejecting late entrants who honestly built 5 standard meta archetypes punishes competitors simply for registering later and leaks that the pool is concentrated around those archetypes.
+   - Suppose `pkmn.ai` rejects Bot $B$'s team submission because one or more of its 20 teams are too close to an earlier competitor's private submission. That rejection acts as a **membership oracle**: a late submitter can probe candidate teams during submission to discover the archetypes earlier competitors submitted.
+   - Even an $M / T$ overlap threshold (e.g., rejecting only when $\ge 5$ of $20$ teams overlap) reduces to a 1-bit oracle once an attacker fixes $M - 1$ known staple teams in slots $1 \dots M-1$, puts target team $X$ in slot $M$, and fills slots $M+1 \dots 20$ with obscure teams.
 2. **Why Naive Silent Overlap Acceptance Also Fails**:
-   - If the server silently accepts all overlaps and treats them as independent entries in the $n \times T$ list:
-     - **Popular-Team Bloat**: If 8 competitors submit the exact same popular tournament team $H_{\text{popular}}$, that single team becomes $8\times$ more likely to be drawn than an original team.
-     - **Hidden Double-Knowledge Violation**: Suppose Bot $A$ submitted $H_{\text{popular}}$ as `"Bot A Team #1"` and Bot $G$ submitted the exact same canonical team $H_{\text{popular}}$ as `"Bot G Team #6"`. In a match between Bot $A$ and Bot $B$, a naive sampler that only checks string labels might pick `"Bot A Team #5"` as $T_1$ and `"Bot G Team #6"` ($= H_{\text{popular}}$) as $T_2$. **Bot $A$ would then know the exact 6-Pokémon sets of BOTH $T_1$ and $T_2$**, breaking the core fairness invariant while the UI misleadingly labels $T_2$ as `"Bot G Team #6"`!
+   - Treating identical submissions as independent entries bloats popular teams and breaks the knowledge invariant if Bot $A$ submitted $H$ as `"Bot A Team #1"` and Bot $G$ submitted the exact same canonical team $H$ as `"Bot G Team #6"`.
 
-#### 3. Complete Solution: Zero-Oracle Intra-Submission Diversity + Canonical Owner-Set Sampling ($\mathcal{O}(H)$)
+#### 3. Complete Solution: Sequential `teams/index.ts` ($d_{\text{1-NN}} \ge 1.30$) Validation + At-Most-1-of-40 Sampling
 
-To eliminate **both** the probing oracle and the duplicate-team exploit simultaneously, the Arena decouples **Submission-Time Validation** (which must be a pure function of the submitter's own 20 teams + public data) from **Sampling-Time Deduplication & Exclusion** (which tracks the complete set of authors $\mathcal{O}(H)$ for every canonical team $H$):
+To eliminate both the probing oracle and trivial team clones, `pkmn.ai` decouples **Zero-Oracle Submission Validation** (pure function of the submitter's 20 teams + public reference pools) from **Pseudo-Blind-Pair Sampling**:
 
-1. **Zero-Oracle Submission Validation (Leaks Zero Bits About Other Competitors)**:
-   - When Bot $A$ submits its $T = 20$ teams, `pkmn.ai` validates them **without ever querying any other competitor's submitted teams**:
-     - **Rule 1 (Format Legality & Canonical Self-Uniqueness)**: Every team must pass `new TeamValidator(customFormat).validateTeam(team)` and produce 20 distinct canonical keys under `Team.canonicalize(team, gen)`.
-     - **Rule 2 (Intra-Bundle Archetype Diversity — Max 4 Shared Species)**: No two teams *within Bot $A$'s own 20-team bundle* may share more than **4 of 6 species** ($\text{sharedSpecies}(T_i, T_j) \le 4$ for all $1 \le i < j \le 20$). This prevents a competitor from submitting 20 minor EV/move tweaks or 1-slot variations of the same core.
-     - **Rule 3 (Public Sample / Rental Blocklist)**: `pkmn.ai` checks each canonical team (and its 6-species + 6-items signature) against a **public, git-committed blocklist** (`static/public-sample-teams/<ladder_id>.txt`) containing official Smogon sample teams and publicized tournament-winning rental pastes (e.g., Wolfe's published tournament teams). Because this blocklist is 100% public on GitHub, rejecting a team on it leaks zero private information about other competitors while blocking low-effort copy-pastes of famous teams.
+1. **Sequential `teams/index.ts` 1-NN Validation on `pkmn.ai` (Zero Private Oracle)**:
+   - When Project $A$ submits its 20 teams on `/account/`, `POST /api/submissions` validates them synchronously **without querying any other competitor's private `bot_ladder_teams` rows**:
+     - **Step 1 (Format Legality)**: Every team $T_1 \dots T_{20}$ must pass `new TeamValidator(formatId).validateTeam(team)` under `@pkmn/sim` + `@pkmn/mods` and canonicalize cleanly via `parseTeam(dex, text)` in `teams/index.ts`.
+     - **Step 2 (Sequential $1\text{-NN} \ge 1.30$ Uniqueness Walk)**: Initialize the working blocklist $\mathcal{P}_0$ from the public reference pool directories on disk (`teams/teams/<format>`, `teams/pkmn_stuff/...`, `teams/vgc.bot/...`). For $k = 1, 2, \dots, 20$:
+       1. Compute $d_{\text{1-NN}}(T_k, \mathcal{P}_{k-1}) = \min_{B \in \mathcal{P}_{k-1}} \text{teamDistance}(\text{dex}, T_k, B, 50)$ using `teams/index.ts` (unshared species $= 1.00$; shared species set distance $\le 0.80$ across moves, item, ability, and two-tier deadbanded level-50 stat $L_1$, with Protect-variant and Frustration/Return normalization).
+       2. Require **`d_1NN >= 1.30`** (`THRESHOLD = 1.3`). If $d_{\text{1-NN}} < 1.30$, reject the submission immediately naming team #$k$ and its closest public/intra-bundle neighbor.
+       3. Append $T_k$ to the working blocklist ($\mathcal{P}_k = \mathcal{P}_{k-1} \cup \{T_k\}$) before testing $T_{k+1}$, guaranteeing every submitted team is at least $1.30$ away from **both** the public metagame pool and the submitter's own other 19 teams!
 2. **Canonical Pool Deduplication & Owner-Set Tracking ($\mathcal{O}(H)$)**:
-   - Across all $n$ competitors, the Arena groups all submitted teams by their `@pkmn/sets` canonical key `H = Teams.pack(Team.canonicalize(team, gen))` and records the **Owner Set** $\mathcal{O}(H)$ of every bot that submitted $H$:
-     $$\mathcal{O}(H) = \bigl\{\, (\text{botId},\; \text{botName},\; \text{slotIndex}) \;\big|\; \text{bot submitted canonical team } H \,\bigr\}$$
-   - **Inverse-Popularity Weighting ($w = 1$)**: Each unique canonical team $H$ appears **once** in the active sampling pool (equivalently, each raw submission of $H$ receives sampling weight $1 / |\mathcal{O}(H)|$). Even if 4 competitors independently submit the exact same canonical team $H$, $H$ is drawn no more often than a unique team submitted by a single competitor.
-3. **Disjoint Owner-Set Sampling (Strict "At-Most-One-Known-Team" Guarantee)**:
-   - Define $\text{Owners}(H) \subseteq \{1 \dots n\}$ as the set of `botId`s in $\mathcal{O}(H)$. A bot $X$ knows the exact sets of canonical team $H$ if and only if $X \in \text{Owners}(H)$.
-   - For a 2-game blind-pair match between Bot $A$ and Bot $B$:
-     1. **Draw $T_1$**: Sample $T_1$ uniformly from all unique canonical teams $H$ in the pool.
-     2. **Determine Restricted Bots for $T_2$**:
-        - Always exclude $\text{Owners}(T_1)$ from $\text{Owners}(T_2)$ so the two teams in a match never share an author ($\text{Owners}(T_1) \cap \text{Owners}(T_2) = \emptyset$).
-        - **Active-Player Knowledge Lock**: If **either Bot $A$ or Bot $B$ is an owner of $T_1$** ($\text{Owners}(T_1) \cap \{A, B\} \neq \emptyset$), then:
-          - If $\{A, B\} \subseteq \text{Owners}(T_1)$ (both Bot $A$ and Bot $B$ independently submitted $T_1$), **both** Bot $A$ and Bot $B$ already know $T_1$, so **both** $A$ and $B$ are excluded from owning $T_2$ ($\text{Owners}(T_2) \cap \{A, B\} = \emptyset$).
-          - If $A \in \text{Owners}(T_1)$ and $B \notin \text{Owners}(T_1)$, then Bot $A$'s entire submission pool is excluded from $T_2$ ($A \notin \text{Owners}(T_2)$)—meaning Bot $A$ knows $T_1$ (its G1 team and G2 opponent team) but is **guaranteed never to know $T_2$**.
-          - Optionally (for strict single-advantage symmetry), whenever $\text{Owners}(T_1) \cap \{A, B\} \neq \emptyset$, require $\text{Owners}(T_2) \cap \{A, B\} = \emptyset$ so at most one team in the match belongs to either active competitor, or allow $B \in \text{Owners}(T_2)$ (symmetric home-team split where $A$ knows $T_1$ and $B$ knows $T_2$, while neither knows both). Excluding $\text{Owners}(T_1)$ from $\text{Owners}(T_2)$ while forbidding $\{A, B\} \subseteq \text{Owners}(T_2)$ strictly guarantees that **no bot ever knows both $T_1$ and $T_2$**:
-            $$\forall X \in \{A, B\}:\quad \bigl|\{T_1, T_2\} \cap \{H \mid X \in \text{Owners}(H)\}\bigr| \le 1$$
-     3. **Truthful Active-Player UI Label Attribution**:
-        - When rendering the provenance label for $T_i$ (`i = 1, 2`) on `pkmn.ai`, if $A \in \text{Owners}(T_i)$ or $B \in \text{Owners}(T_i)$, **always display the active participant's provenance label** (e.g., `"Bot A Team #5"`, or `"Bot A Team #5 / Bot B Team #2"` if both submitted it) rather than a third-party co-owner `"Bot G Team #6"`. If neither $A$ nor $B$ owns $T_i$, pick one co-owner label deterministically using the match PRNG seed.
+   - Across all $n \ge 3$ active projects on the ladder, the Arena groups submitted teams by canonical packed key $H$ and tracks $\text{Owners}(H) \subseteq \{1 \dots n\}$, giving each unique canonical team equal base weight.
+3. **Pseudo-Blind-Pair Sampling ("At Most 1 Team from the Combined 40")**:
+   - In a 2-game match between Bot $A$ (project $P_A$) and Bot $B$ (project $P_B$), let $\mathcal{U}_{AB} = \{P_A, P_B\}$.
+   - Sample distinct non-mirror $(T_1, T_2)$ from the seasonal pool subject to:
+     1. **Disjoint Authors**: $\text{Owners}(T_1) \cap \text{Owners}(T_2) = \emptyset$.
+     2. **At Most 1 Team from the 40 Submitted by $P_A$ and $P_B$ Combined**:
+        $$\mathbb{I}\bigl[\text{Owners}(T_1) \cap \mathcal{U}_{AB} \neq \emptyset\bigr] + \mathbb{I}\bigl[\text{Owners}(T_2) \cap \mathcal{U}_{AB} \neq \emptyset\bigr] \le 1$$
+        *(And neither $T_1$ nor $T_2$ may be jointly owned by both $P_A$ and $P_B$ simultaneously.)* Thus, if $T_1$ comes from either $P_A$'s 20 teams or $P_B$'s 20 teams, $T_2$ **must** come from a third project $P_C \notin \{P_A, P_B\}$—which is always satisfiable because `min_bots = 3` guarantees at least 20 third-party teams in the pot.
 
 ```ts
 export interface CanonicalPoolEntry {
@@ -3579,12 +3687,8 @@ export interface CanonicalPoolEntry {
 }
 
 /**
- * Samples (T1, T2) from a competitor-supplied canonical team pool for a match between botA and botB.
- * Guarantees:
- *  1. Every unique canonical team has equal weight regardless of how many bots submitted it.
- *  2. Neither botA nor botB can EVER own both T1 and T2 (at most 1 known team per bot).
- *  3. T1 and T2 never come from the same author pool and never share all 6 species.
- *  4. Provenance labels on pkmn.ai always surface if botA or botB is an owner of T1 or T2.
+ * Samples (T1, T2) from a seasonal VGC 20-team pool for a match between botA and botB (requires >= 3 bots).
+ * Enforces that at most 1 of {T1, T2} belongs to the 40 teams submitted by botA and botB combined.
  */
 export function sampleCompetitorPoolPair(
   pool: CanonicalPoolEntry[],
@@ -3592,20 +3696,16 @@ export function sampleCompetitorPoolPair(
   botBId: number,
   rngNextInt: (max: number) => number,
 ): { t1Packed: string; t2Packed: string; t1Label: string; t2Label: string } {
-  const t1 = pool[rngNextInt(pool.length)];
-  const aOwnsT1 = t1.owners.has(botAId);
-  const bOwnsT1 = t1.owners.has(botBId);
+  const eligibleT1 = pool.filter((e) => !(e.owners.has(botAId) && e.owners.has(botBId)));
+  const t1 = eligibleT1[rngNextInt(eligibleT1.length)];
+  const activeOwnsT1 = t1.owners.has(botAId) || t1.owners.has(botBId);
 
   const candidatesT2 = pool.filter((cand) => {
     if (cand.canonicalPacked === t1.canonicalPacked) return false;
-    // Never pick a 6-species mirror match
     if (cand.speciesIds.every((s, idx) => s === t1.speciesIds[idx])) return false;
-    // Rule 1: If botA owns T1 (assigned to botA in G1 and botB in G2), botA's pool is excluded from T2
-    if (aOwnsT1 && cand.owners.has(botAId)) return false;
-    // Rule 2: If botB owns T1, botB's pool is excluded from T2
-    if (bOwnsT1 && cand.owners.has(botBId)) return false;
-    // Rule 3: Even if neither botA nor botB owns T1, T2 cannot be jointly owned by BOTH botA and botB
-    // if we also want to avoid a single pick giving both players knowledge, and T1/T2 must have disjoint authors:
+    if (cand.owners.has(botAId) && cand.owners.has(botBId)) return false;
+    // At most 1 of {T1, T2} may come from the 40 teams submitted by botA and botB combined:
+    if (activeOwnsT1 && (cand.owners.has(botAId) || cand.owners.has(botBId))) return false;
     for (const ownerId of t1.owners.keys()) {
       if (cand.owners.has(ownerId)) return false;
     }
@@ -3613,7 +3713,7 @@ export function sampleCompetitorPoolPair(
   });
 
   if (candidatesT2.length === 0) {
-    throw new Error('Insufficient disjoint teams in pool to satisfy owner-exclusion constraints');
+    throw new Error('Insufficient third-party teams in pool (VGC requires min_bots >= 3)');
   }
   const t2 = candidatesT2[rngNextInt(candidatesT2.length)];
 
@@ -3735,14 +3835,11 @@ On GCP, multi-GPU `G2` instances provide **zero per-GPU or per-vCPU price discou
 
 Because each `g2-custom-24-49152` Spot VM executes **only 1 bot at a time**, the GCP KVM hypervisor itself enforces the hardware ceiling (`24 vCPUs`, `48 GB DDR5 RAM`, `1× NVIDIA L4 24 GB`). Both `p1` and `p2` run on separate identical VMs and symmetrically share their box only with a minimal headless Ubuntu kernel, `sshd`, and the local stdio timer relay (`< 250 MB` RAM, `< 0.1%` of 1 vCPU). We therefore need **no container daemon (`dockerd`, `containerd`, `podman`) and no artificial CPU/RAM cgroup carving**—only rootless `bubblewrap` (`bwrap --unshare-all`) for filesystem, network, and PID namespace isolation in **< 1 millisecond**.
 
-#### 1. How Both `.tar.gz` Bundles and OCI Container Images Run Without Docker/Podman
-During pre-tournament preparation on Friday afternoon, a build script on a single staging VM pulls and unpacks all $E$ entrants onto `/opt/arena/bots/<slug>-<ver>/` and snapshots the disk into a **GCP Custom Machine Image (`pkmn-tourney-YYYY-MM-DD`)**:
-- **If the entrant submitted a Linux `.tar.gz` / `.tar.zst` bundle (`./run`)**:
-  - Extracted directly to `/opt/arena/bots/<slug>-<ver>/bundle/` (`chmod -R a-w,a+rX`).
-  - Runs inside `bwrap` with the VM's pre-installed Ubuntu 24.04 + CUDA 12.6 + cuDNN 9 + TensorRT + Python/uv/Node/Rust `/usr` and `/lib` mounted read-only.
-- **If the entrant submitted an OCI Container Image (`docker://ghcr.io/...`)**:
+#### 1. OCI-Only Tournament Packaging & First-Entry-Per-Project Rule (`umoci` Without Docker/Podman)
+Per `static/rules.dj`, **tournaments only support OCI container images** (no native `.tar.*` bundles) and **accept only the first successful entry for each project**. During pre-tournament preparation on Friday afternoon, a build script on a single staging VM pulls and unpacks all $E$ OCI entrants onto `/opt/arena/bots/<slug>-<ver>/` and snapshots the disk into a **GCP Custom Machine Image (`pkmn-tourney-YYYY-MM-DD`)**:
+- **OCI Container Image (`docker://ghcr.io/...`, `linux/amd64`)**:
   - Pulled with `skopeo copy` and unpacked into a flat read-only root directory `/opt/arena/bots/<slug>-<ver>/rootfs/` using `umoci unpack --rootless` (zero Docker/Podman daemon required!).
-  - Runs inside `bwrap` with `--ro-bind /opt/arena/bots/<slug>-<ver>/rootfs /` plus the host's `/dev/nvidia*` device nodes and NVIDIA user-space driver `.so` libraries bind-mounted read-only.
+  - Runs inside `bwrap` with `--ro-bind /opt/arena/bots/<slug>-<ver>/rootfs /` plus the host's `/dev/nvidia*` device nodes, NVIDIA user-space driver `.so` libraries, and `/opt/arena/stats` bind-mounted read-only.
 - **Instant `< 25s` Spot VM Boot**: Because all $E$ entrants are pre-baked onto the read-only GCP Machine Image, newly spawned or replacement `g2-custom-24-49152` Spot VMs boot ready to play in **< 25 seconds** with **zero per-VM image downloads or unpacking**.
 
 #### 2. Rootless `bubblewrap` Sandbox & Local Turn-Timer Wrapper (`/opt/arena/bin/tourney-bot`)
@@ -3794,32 +3891,15 @@ watch_spot_preemption &
 WATCHER_PID=$!
 trap 'kill ${WATCHER_PID} 2>/dev/null || true' EXIT
 
-# Build the bubblewrap (bwrap) namespace command for either an unpacked OCI rootfs
-# (/opt/arena/bots/<id>/rootfs) or a native Linux bundle (/opt/arena/bots/<id>/bundle).
-if [[ -d "${BOT_DIR}/rootfs" ]]; then
-  BWRAP_FS_ARGS=(
-    --ro-bind "${BOT_DIR}/rootfs" /
-    --dev-bind /dev /dev
-    --proc /proc
-    --tmpfs /tmp
-  )
-  ENTRYPOINT=("/init-entrypoint") # Extracted from OCI image ENTRYPOINT/CMD during umoci unpack
-else
-  BWRAP_FS_ARGS=(
-    --ro-bind /usr /usr
-    --ro-bind /lib /lib
-    --ro-bind /lib64 /lib64
-    --ro-bind /bin /bin
-    --ro-bind /etc/alternatives /etc/alternatives
-    --ro-bind /etc/ld.so.cache /etc/ld.so.cache
-    --ro-bind "${BOT_DIR}/bundle" /bot
-    --dev-bind /dev /dev
-    --proc /proc
-    --tmpfs /tmp
-    --chdir /bot
-  )
-  ENTRYPOINT=("/bot/run")
-fi
+# Build the bubblewrap (bwrap) namespace command for the unpacked OCI rootfs (/opt/arena/bots/<id>/rootfs).
+BWRAP_FS_ARGS=(
+  --ro-bind "${BOT_DIR}/rootfs" /
+  --ro-bind /opt/arena/stats /opt/arena/stats
+  --dev-bind /dev /dev
+  --proc /proc
+  --tmpfs /tmp
+)
+ENTRYPOINT=("/init-entrypoint") # Extracted from OCI image ENTRYPOINT/CMD during umoci unpack
 
 # Execute the bot inside:
 #   1. `/opt/arena/bin/tourney-relay` (measures exact local stdin->stdout turn ms on the VM)
@@ -3854,20 +3934,20 @@ exec /opt/arena/bin/tourney-relay \
 ### 13.4 Concurrent Pondering Arbiter & Bring-Your-Own-Team (BYOT) Protocol
 
 #### 1. Bring-Your-Own-Team (BYOT) Rules & Backward-Compatible Handshake
-In constructed Live Tournaments (`gen1ou`, `gen3ou`, `gen9ou`, `gen9doublesou`), **no teams are provided by the Arena**—each entrant brings its own team(s). To remain 100% backward-compatible with bots built for the continuous CCRL Arena (which expect to read `|utm|<packed_team>` from `stdin` before `|init|battle`), the Tournament Arbiter supports two team-supply mechanisms:
+In constructed Live Tournaments (`gen1ou`, `gen3ou`, `gen9ou`, `gen9championsvgc2026regmc`), **no teams are provided by the Arena**—each entrant brings its own team(s). Pondering is enabled, while **choice cancelling remains disabled**. To remain 100% backward-compatible with bots built for the continuous CCRL Arena (which expect to read `|utm|<packed_team>` from `stdin` before `|init|battle`), the Tournament Arbiter supports two team-supply mechanisms:
 
 1. **Static Bundled Team Repertoire (`teams/<format>.txt` inside the OCI Image — Zero Code Changes)**:
    - A competitor packages one or more legal teams in `/teams/<format>.txt` (one packed team per line, or standard Showdown exportable paste blocks) inside their container image (or uploads their encrypted team list when registering for the tournament).
-   - Before each game, the Arbiter extracts the bot's `/teams/<format>.txt`, selects a team for that game (deterministically cycling through the bot's repertoire across games $1 \dots G$ or sampling via the game seed), validates it with `new TeamValidator(customFormat).validateTeam(team)`, canonicalizes it via `Team.canonicalize(team, gen)`, and sends `|utm|<packed_team>` to the bot's `stdin` as the very first line—**identical to the CCRL Arena**.
+   - Before each game, the Arbiter extracts the bot's `/teams/<format>.txt`, selects a team for that game (deterministically cycling through the bot's repertoire across games $1 \dots G$ or sampling via the game seed), validates it with `new TeamValidator(formatId).validateTeam(team)`, canonicalizes it via `Team.canonicalize(team, gen)`, and sends `|utm|<packed_team>` to the bot's `stdin` as the very first line—**identical to the CCRL Arena**.
 2. **Dynamic Per-Game Team Generation (`|tournament|byot|<format>|<opponent_name>` $\to$ `/utm <packed_team>`)**:
    - Advanced bots that dynamically construct or sample a team at runtime (e.g., mixed-strategy Nash teambuilders or opponent-aware tournament prep) can omit `/teams/<format>.txt` (or override it) by responding to the pre-game handshake line:
      ```text
      |tournament|byot|gen9ou|Foul Play (v1.0.0)
      ```
    - Within a `5.0s` pre-game handshake window, the bot writes `/utm <packed_team>` (or `|utm|<packed_team>`) to `stdout`.
-   - The Arbiter validates the submitted team against `new TeamValidator(customFormat).validateTeam(team)`:
+   - The Arbiter validates the submitted team against `new TeamValidator(formatId).validateTeam(team)`:
      - If valid, the Arbiter echoes `|utm|<canonical_packed_team>` to the bot's `stdin` and starts the `@pkmn/sim` battle.
-     - If invalid (e.g., banned species like `Zoroark`, illegal move combination, or >510 EVs), the Arbiter sends `|error|[Invalid team] <reasons>` and allows **1 fallback retry** (within the remaining 5s handshake window) before recording a game forfeit (`invalid_team`).
+     - If invalid (e.g., banned species, illegal move combination, or >510 EVs), the Arbiter sends `|error|[Invalid team] <reasons>` and allows **1 fallback retry** (within the remaining 5s handshake window) before recording a game forfeit (`invalid_team`).
 
 > [!IMPORTANT]
 > **Opponent Visibility: Real Names in BYOT Tournaments vs. `"Bot A"` / `"Bot B"` in Blind-Pair Mode**:
@@ -3948,7 +4028,7 @@ export class ConcurrentTournamentGame {
     private readonly onLiveEvent?: (lines: string[], p1Sec: number, p2Sec: number) => void,
     private readonly blindPairTeams?: { p1TeamPacked: string; p2TeamPacked: string },
   ) {
-    this.addPerTurnSec = formatId.includes('doubles') ? 25 : 10;
+    this.addPerTurnSec = (formatId.includes('doubles') || formatId.includes('vgc')) ? 25 : 10;
   }
 
   private spawnSlot(side: SideID, spec: TourneyBotSpec): ConcurrentSlotState {
@@ -3989,6 +4069,8 @@ export class ConcurrentTournamentGame {
       turnTimesMs: [],
     };
 
+    // Choice cancelling is disabled even while pondering: discard unsolicited stdout lines
+    // emitted while no request is actively awaiting a choice from this bot.
     const rlOut = readline.createInterface({ input: proc.stdout });
     rlOut.on('line', (raw) => {
       const line = raw.trim();
@@ -3997,8 +4079,6 @@ export class ConcurrentTournamentGame {
         const resolve = bot.lineWaiter;
         bot.lineWaiter = null;
         resolve(line);
-      } else {
-        bot.lineQueue.push(line);
       }
     });
 
@@ -4678,27 +4758,27 @@ export async function provisionSpotWorkerVM(
 }
 ```
 
-#### 2. Live Broadcast UI (`pkmn.ai/live` & `/tournaments/<slug>/`)
-Unlike the continuous CCRL Arena (which suppresses battle logs and teams so bots cannot overfit to the static harvested pool), Live Tournaments are designed for live spectator viewing right from the existing `pkmn.ai` VPS:
+#### 2. Live Broadcast & Archive UI (`/leaderboard/tournaments/`)
+Unlike the continuous CCRL Arena (which suppresses battle logs and teams so bots cannot overfit to the static harvested pool), Live Tournaments are designed for live spectator viewing right from the existing `pkmn.ai` VPS at `/leaderboard/tournaments/`:
 - **Featured Table Live Stream (`/api/tourney/live.json` + Server-Sent Events)**:
   - Because `ConcurrentTournamentGame` runs directly inside the Node.js Coordinator on `pkmn.ai`, there is zero webhook delay between the arbiter and the web server.
-  - When $K > 1$ tables run in parallel, the Tournament Coordinator assigns the highest-rated / highest-leverage individual game to **Table 1 (Featured Broadcast Table)**, while spectators can also switch between Tables $1 \dots K$ in a multi-table tab bar.
-  - Every time a turn resolves in `ConcurrentTournamentGame`, `onLiveEvent` broadcasts the rewritten omniscient `@pkmn/protocol` lines (with `"Bot A"` and `"Bot B"` replaced by the real bot display names and avatars via `rewriteSpectatorLine`) and both bots' remaining clock banks (`p1_clock_s`, `p2_clock_s`) over in-memory Server-Sent Events (`GET /api/tourney/stream?table=1`) to embedded `@pkmn/view` / Showdown replay clients on `pkmn.ai/live`.
-- **Permanent Tournament Archive (`/tournaments/<id>/`)**:
-  - At the conclusion of the tournament, `pkmn.ai` tears down all GCP VMs (`gcloud compute instances delete`) so post-tournament cloud cost drops to `$0.00/hr`, and renders a permanent static tournament page (`/tournaments/2026-11-gen9ou/index.html`) containing the final standings, Davidson Elo ratings, full head-to-head crosstable, downloadable `.7z` replay pack (with real bot names and avatars rewritten in `omniscientLog` and `inputLog`), and click-to-watch links for every individual game.
+  - When $K > 1$ tables run in parallel, the Tournament Coordinator assigns the highest-rated / highest-leverage individual game to **Table 1 (Featured Broadcast Table)**, while spectators can switch between Tables $1 \dots K$ in the subnav radio bar (`Table 1 (Superfinal) — Table 2 — ...`).
+  - Every time a turn resolves in `ConcurrentTournamentGame`, `onLiveEvent` broadcasts the rewritten omniscient `@pkmn/protocol` lines and both bots' remaining clock banks (`p1_clock_s`, `p2_clock_s`) over in-memory Server-Sent Events (`GET /api/tourney/stream?table=1`) to the embedded 640×360 Showdown `#battle` stage and `.ps-log` on `/leaderboard/tournaments/`.
+- **Permanent Tournament Archive (`/leaderboard/tournaments/`)**:
+  - At the conclusion of the tournament, `pkmn.ai` tears down all GCP VMs (`gcloud compute instances delete`) so post-tournament cloud cost drops to `$0.00/hr`, and renders `/leaderboard/tournaments/index.html` containing the event selector (`#event-select`), final 6-column `Standings` (`#, Bot, Elo, W–L–T, Points, S–B` Sonneborn–Berger), `Crosstable`, 6-column `Games` table (`Game` shorthand `SF63`/`RR280`, `Player 1` + 6 Smogon minisprites, `Player 2` + 6 Smogon minisprites, `Result`, `Turns`, `Bank`), and downloadable `.7z` replay archive + `standings.json`.
 
 #### 3. SQLite Schema Additions for Live Tournaments (`/var/lib/pkmn/arena.sqlite`)
 
 ```sql
 CREATE TABLE tournaments (
   id TEXT PRIMARY KEY,                  -- e.g. '2026-11-gen9ou'
-  name TEXT NOT NULL,                   -- e.g. 'pkmn.ai Gen 9 OU Autumn Championship'
+  name TEXT NOT NULL,                   -- e.g. 'Autumn ’26 — [Gen 9] OU (BYOT)'
   format_id TEXT NOT NULL,              -- e.g. 'gen9ou'
-  custom_rules_json TEXT NOT NULL,      -- e.g. '["[Gen 9] OU","-Zoroark","-Zoroark-Hisui"]'
+  custom_rules_json TEXT NOT NULL DEFAULT '[]',
   games_per_matchup INTEGER NOT NULL,   -- G individual games per H2H matchup (e.g. 20, 30, 50, or 100)
   batch_size INTEGER NOT NULL DEFAULT 10, -- B consecutive games per matchup visit (e.g. 5 or 10)
   parallel_tables INTEGER NOT NULL,     -- K (number of 2-VM match tables, e.g. 4 or 8)
-  hardware_desc TEXT NOT NULL,          -- 'GCP g2-custom-24-49152 Spot (1x NVIDIA L4 24GB + 24 vCPUs + 48GB RAM per bot)'
+  hardware_desc TEXT NOT NULL,          -- 'Isolated GCP g2-custom-24-49152 VMs (1× NVIDIA L4 24GB, 24 vCPUs, 48GB RAM)'
   status TEXT NOT NULL DEFAULT 'scheduled', -- 'scheduled' | 'live' | 'superfinal' | 'completed'
   starts_at INTEGER NOT NULL,
   completed_at INTEGER
@@ -4706,16 +4786,19 @@ CREATE TABLE tournaments (
 
 CREATE TABLE tournament_entrants (
   tournament_id TEXT NOT NULL REFERENCES tournaments(id),
+  bot_id INTEGER NOT NULL REFERENCES bots(id), -- enforces at most 1 accepted entry per project per tournament
   version_id INTEGER NOT NULL REFERENCES bot_versions(id),
   seed_number INTEGER NOT NULL,         -- 1 .. E (used for Berger circle pairing generation)
   points REAL NOT NULL DEFAULT 0,       -- +1.0 per game win, +0.5 per game tie
+  sb_score REAL NOT NULL DEFAULT 0,     -- Sonneborn-Berger tiebreak score
   game_wins INTEGER NOT NULL DEFAULT 0,
   game_losses INTEGER NOT NULL DEFAULT 0,
   game_ties INTEGER NOT NULL DEFAULT 0,
   tourney_elo REAL NOT NULL DEFAULT 1500,
   tourney_se REAL NOT NULL DEFAULT 350,
   final_rank INTEGER,
-  PRIMARY KEY (tournament_id, version_id)
+  PRIMARY KEY (tournament_id, version_id),
+  UNIQUE (tournament_id, bot_id)
 );
 
 CREATE TABLE tournament_games (
