@@ -7,6 +7,8 @@ import * as path from 'path';
 
 import * as yaml from 'yaml';
 
+import {slugify} from '../static/build';
+
 const root = path.basename(path.dirname(__dirname)) === 'build'
   ? path.join(__dirname, '..', '..')
   : path.join(__dirname, '..');
@@ -157,15 +159,6 @@ export function loadGlossary(
   file = path.join(root, 'static', 'glossary.yml')
 ): Record<string, string> {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
-}
-
-function slugify(s: string): string {
-  return s
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]+/g, '')
-    .replace(/--+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
 }
 
 function toID(text: string): string {

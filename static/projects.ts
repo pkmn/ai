@@ -7,7 +7,7 @@ import * as yaml from 'yaml';
 
 import {cite, header, style} from './build';
 
-interface Project {
+export interface Project {
   name?: string;
   identifier?: string;
   framework?: true;
@@ -20,6 +20,9 @@ interface Project {
   language?: string | string[];
   platform?: {name: string; url: string}[];
   release?: {name: string; url: string};
+  arena?: {
+    github?: string | string[];
+  };
 }
 
 const RANKING = [

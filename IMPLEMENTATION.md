@@ -28,7 +28,7 @@ This document is the complete, self-contained technical specification for **pkmn
 
 **pkmn.ai** runs across two dedicated machines with a strict separation between public web serving and isolated battle execution:
 
-- **`pkmn.ai` Server (DigitalOcean Droplet, Ubuntu LTS)**: Serves the static website via Nginx behind Cloudflare, handles developer GitHub OAuth2 login for version submissions, syncs registered bots from `static/projects.yml`, mirrors match summaries and ratings in SQLite, runs a Discord role bot, and pre-generates static leaderboard HTML/JSON after each match. Zero battle logs and zero bot archives ever touch the droplet's disk.
+- **`pkmn.ai` Server (DigitalOcean Droplet, Ubuntu LTS)**: Serves the static website via Nginx behind Cloudflare, hosts the Git-backed Djot wiki at `/wiki` (`github.com/pkmn/wiki`), handles developer GitHub OAuth2 login for version submissions and wiki editing, syncs registered bots from `static/projects.yml`, mirrors match summaries and ratings in SQLite, runs a Discord role and log bot, and pre-generates static leaderboard HTML/JSON after each match. Zero battle logs and zero bot archives ever touch the droplet's disk.
 - **`arena` Worker (Apple M6 Mac mini, headless macOS)**: Owns canonical matchmaking and Davidson MAP rating computation, pulls approved bot artifacts, isolates them in either Linux ARM64 OCI containers or native macOS ARM64 Seatbelt sandboxes, runs 2-game blind-pair matches using [`@pkmn/sim`](https://github.com/pkmn/ps/tree/main/sim) over `stdin`/`stdout`, wipes memory and `/tmp` scratch volumes between games, writes uncompressed daily logs and bot archives to an external 1 TB SSD (`/Volumes/Archive`), compresses monthly `.tar` archives to Google Cloud Storage (`gs://pkmn-arena`), and pushes match summaries and ratings outbound to `pkmn.ai`.
 
 ```mermaid
@@ -82,6 +82,9 @@ flowchart LR
 | :--- | :--- | :--- | :--- |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/` | Droplet SSD | Git checkout of `pkmn/ai` (`static/`, `server/`, `config/`, `deploy`). |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/projects.yml` | Droplet SSD | Canonical registry of all Pokémon AI projects and registered `arena:` bots. |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/wiki/` | Droplet SSD | Git checkout of `github.com/pkmn/wiki` containing `.dj` wiki pages and revision history. |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/config/wiki.yml` | Droplet SSD | Public wiki configuration (`admins` and GitHub-to-author display name mappings). |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/private/github.yml` | Droplet SSD | Gitignored GitHub OAuth credentials (`client_id`, `client_secret`, `callback_url`, `session_secret`). |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/avatars/<slug>.png` | Droplet SSD | $96 \times 96$ bot avatars committed via registration PRs. |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/public/` | Droplet SSD | Pre-rendered static HTML/JSON served directly by Nginx (`leaderboard/`, `api/live.json`). |
 | **`pkmn.ai` Droplet** | `/var/lib/pkmn/arena.sqlite` | Droplet SSD | Control-plane SQLite DB (`developers`, `bots`, `bot_versions`, `ladder_entries`, `matches`, `pair_aggregates`, `rating_snapshots`). |
@@ -2387,20 +2390,7 @@ Evaluated across 20 Monte Carlo trials of 52 bots using [Kendall rank correlatio
 Competitors register new bots by opening a structured GitHub Issue on `pkmn/ai` (using `.github/ISSUE_TEMPLATE/register-bot.yml`), which staff close with a commit/PR to `static/projects.yml`. This eliminates any `/register` web form, GitHub App PR bot, or webhook endpoint on `pkmn.ai`.
 
 - **Registration Rules**:
-  - **Bot Name & Auto-Slug**: Unique display name (`2..32` chars). Must not use generic substrings (`poke`, `pkmn`, `ai`, `bot`, `agent`, `showdown`, `smogon`) or bare Pokémon species names. Competitors do **not** need to type a slug in the registration issue; `server` computes the URL slug automatically via `slugify(name)`:
-    ```typescript
-    // Deterministically derive a URL-safe slug from the bot's display name
-    // (e.g., "0 ERROR" -> "0-error", "Foul Play" -> "foul-play").
-    // Can be overridden via an optional `arena.slug` field in `static/projects.yml`.
-    export function slugify(name: string): string {
-      return name
-        .normalize('NFKD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-    }
-    ```
+  - **Bot Name & Auto-Slug**: Unique display name (`2..32` chars). Must not use generic substrings (`poke`, `pkmn`, `ai`, `bot`, `agent`, `showdown`, `smogon`) or bare Pokémon species names. Competitors do **not** need to type a slug in the registration issue; `server` computes the URL slug automatically via `slugify(name).toLowerCase()` (using the shared `slugify` helper in `static/build.ts`, e.g., `"0 ERROR"` -> `"0-error"`, `"Foul Play"` -> `"foul-play"`).
   - **Bot Avatar**: $96 \times 96$ PNG or WebP image ($\le 64\text{ KB}$) attached directly to the GitHub issue and committed to `static/avatars/<slug>.png`.
   - **Public Contacts Only (Zero Private PII)**: Only public contact identifiers are collected: **GitHub username(s)** (required, used for GitHub OAuth sign-in on `/submit`), **Discord username / numeric User ID** (optional, strongly encouraged for automatic Discord roles and quarantine notifications), and **Smogon username** (optional, strongly encouraged). No private email addresses are collected or stored anywhere.
 
@@ -2498,7 +2488,7 @@ body:
 ```
 
 #### Augmented `static/projects.yml` Entry Schema
-Existing historical projects in `static/projects.yml` remain unchanged. Any project competing in the Arena adds an `arena` block (`slug` is auto-derived via `slugify(name)` unless explicitly overridden):
+Existing historical projects in `static/projects.yml` remain unchanged. Any project competing in the Arena adds an `arena` block (`slug` is auto-derived via `slugify(name).toLowerCase()`):
 
 ```yaml
 - name: 0 ERROR
@@ -2514,7 +2504,6 @@ Existing historical projects in `static/projects.yml` remain unchanged. Any proj
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    author: pre
     github: [pre]
     discord_id: "123456789012345678"
     smogon: pre
@@ -2524,7 +2513,21 @@ Existing historical projects in `static/projects.yml` remain unchanged. Any proj
 - **How `projects.yml` Syncs to `pkmn.ai`**:
   - Staff review the registration issue, commit the `arena:` block to `static/projects.yml` + `static/avatars/<slug>.png` (closing the issue), and run `npm run deploy`.
   - During `./deploy`, `server` parses `static/projects.yml` on startup/reload and upserts every entry with an `arena:` block into SQLite's `bots` table.
-  - Developers listed in `arena.github` can immediately sign into `https://pkmn.ai/submit` via GitHub OAuth (`GET /auth/github` $\rightarrow$ `GET /auth/github/callback`, stored in an `HttpOnly`, `Secure`, `SameSite=Lax` HMAC-signed cookie) to submit versions.
+  - Developers listed in `arena.github` can immediately sign into `https://pkmn.ai/submit` and `https://pkmn.ai/wiki` via GitHub OAuth (`GET /auth/github` $\rightarrow$ `GET /auth/github/callback`, stored in an `HttpOnly`, `Secure`, `SameSite=Lax` HMAC-signed cookie) to submit versions and edit wiki pages.
+
+### Bot Wiki Pages & `/wiki` Access Control
+`pkmn.ai/wiki` (`server/wiki.ts`) is a Git-backed Djot wiki rendered with `scheibo/static` and stored in a dedicated repository (`github.com/pkmn/wiki`, checked out at `/home/pkmn/ai/wiki`):
+- **Reserved Bot Wiki Pages**:
+  - Every bot registered in `static/projects.yml` with an `arena:` block automatically gets a reserved wiki page at `/wiki/<Bot_Name>` using Wikipedia-style underscore normalization (`normalizeSlug(name)`, e.g. `/wiki/0_ERROR`, `/wiki/Foul_Play`, `/wiki/Mew's_Truck`), with automatic `302` redirects from `slugify(name).toLowerCase()` aliases (e.g. `/wiki/0-error` $\rightarrow$ `/wiki/0_ERROR`, `/wiki/mews-truck` $\rightarrow$ `/wiki/Mew's_Truck`).
+  - No `.dj` file is created on disk until a bot owner first saves the page, but ownership and visibility rules are enforced on the reserved slug immediately:
+    1. **Edit Ownership**: Only the developers listed in that bot's `arena.github` (and wiki `admins` in `config/wiki.yml`) can create or edit the bot's wiki page. Other registered Arena participants receive `403 Forbidden` on `/edit` or `POST`, and `404 Not Found` if the bot page has not been created yet.
+    2. **Configurable Visibility (`developers` / `discord` / `public`)**: In `/wiki/<Bot_Name>/edit`, bot owners (and admins) can choose who is allowed to view their bot's wiki page via the `Developers — Discord — Public` selector, persisted at the top of `<Bot_Name>.dj` as `{% visibility: developers|discord|public %}`:
+       - **`developers` (default)**: Visible only to registered developers of `pkmn.ai` Arena bots (`arena.github` across `static/projects.yml`) and wiki `admins` via GitHub OAuth (`/auth/github`).
+       - **`discord`**: Visible to anyone in the `pkmn.ai` Discord server (verified via Discord Vouch Proxy at `http://127.0.0.1:9091/vouch/validate`, redirecting unauthenticated visitors to `/vouch/login`), as well as registered bot developers and `admins`.
+       - **`public`**: Visible to the public without authentication.
+- **General Wiki Pages**:
+  - All other wiki pages (such as `/wiki` (`index.dj`), format guides, and research notes) can be created and edited by any registered `pkmn.ai` Arena participant (`arena.github`) or admin, and are **publicly visible (`public`)** by default.
+  - `/wiki/pages` is publicly accessible and filters the page index to only those pages the current viewer is authorized to read.
 
 ### Discord Role Bot Integration
 - Runs inside the `pkmn.ai` Node.js server using the Discord REST API / Gateway.
@@ -2678,9 +2681,8 @@ CREATE TABLE developers (
 
 CREATE TABLE bots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  slug TEXT NOT NULL UNIQUE,                   -- auto-computed via slugify(name) or overridden by arena.slug
+  slug TEXT NOT NULL UNIQUE,                   -- auto-computed via slugify(name).toLowerCase()
   name TEXT NOT NULL UNIQUE,                   -- from static/projects.yml name (e.g. '0 ERROR')
-  author TEXT NOT NULL,                        -- from static/projects.yml arena.author (e.g. 'pre')
   authorized_github_json TEXT NOT NULL,        -- JSON array of lowercase GitHub logins from arena.github
   avatar_file TEXT NOT NULL,                   -- e.g. '0-error.png' in static/avatars/
   discord_id TEXT,                             -- from arena.discord_id
@@ -2984,7 +2986,7 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
 
 ### Nginx Configuration Additions (`config/nginx.conf`)
 - Keep `root /home/pkmn/ai/public;` so `/leaderboard/*` and `/api/live.json` are served directly from disk by Nginx with zero Node.js overhead.
-- Add proxy blocks for `/auth/`, `/submit`, `/api/submissions`, and `/api/arena/` forwarding to `http://127.0.0.1:1234` with `client_max_body_size 1m;`.
+- Add proxy blocks for `/wiki`, `/auth/github`, `/auth/`, `/submit`, `/api/submissions`, and `/api/arena/` forwarding to `http://127.0.0.1:1234` with `client_max_body_size 1m;`.
 
 ---
 

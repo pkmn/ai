@@ -1,0 +1,89 @@
+main {
+  width: 100%;
+}
+
+#wiki-nav {
+  margin-top: auto;
+  padding-top: 2rem;
+  text-align: center;
+}
+
+#wiki-nav + footer {
+  margin-top: 0;
+}
+
+#wiki-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 24rem;
+  padding: 1.5ch;
+  color: var(--fg-color);
+  font-size: 0.95em;
+  font-family: monospace;
+  line-height: 1.45;
+  background-color: var(--code-bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+  resize: vertical;
+}
+
+#wiki-editor > input {
+  display: block;
+  width: 100%;
+  margin: 0.75rem 0;
+  padding: 0.5rem 1.5ch;
+  color: var(--fg-color);
+  background-color: var(--code-bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+}
+
+#wiki-visibility ul {
+  margin: 0.5rem 0;
+}
+
+#wiki-actions {
+  margin-top: 0.5rem;
+  font-size: 1.1em;
+  text-align: center;
+}
+
+#wiki-actions button {
+  padding: 0;
+  color: var(--link-color);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+#wiki-actions button:hover,
+#wiki-actions button:focus,
+#wiki-actions button:active {
+  text-decoration: underline;
+}
+
+#wiki-preview {
+  margin-bottom: 2rem;
+  padding: 1rem 2ch;
+  border: 1px dashed var(--aside-border-color);
+  border-radius: var(--border-radius);
+}
+
+#wiki-pages {
+  margin-top: 3em;
+  padding: 0;
+  text-align: center;
+}
+
+#wiki-pages li {
+  margin-bottom: 0.5rem;
+  line-height: 1.15;
+  list-style: none;
+}
+
+.wiki-meta {
+  color: rgb(var(--fg-base) / 60%);
+  font-size: 0.9em;
+}
+
+[id] { scroll-margin-top: 2rem; }

@@ -4,14 +4,7 @@ import * as path from 'path';
 import * as site from 'site';
 import * as yaml from 'yaml';
 
-import {header} from './build';
-
-const slugify = (s: string) =>
-  s.replace(/\s+/g, '-') // Replace spaces with -
-    .replace(/[^\w-]+/g, '') // Remove all non-word chars
-    .replace(/--+/g, '-') // Replace multiple - with single -
-    .replace(/^-+/, '') // Trim - from start of text
-    .replace(/-+$/, ''); // Trim - from end of text
+import {header, slugify} from './build';
 
 export function page(dir: string) {
   const buf: string[] = [];

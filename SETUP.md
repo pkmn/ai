@@ -146,20 +146,47 @@ GOPATH=/home/pkmn/ai/build go install github.com/vouch/vouch-proxy@v0.50.0
 
 ## Discord
 
-1. In [Discord Developer Portal — General Information](https://discord.com/developers/applications/689315793569447954/information), set **Interactions Endpoint URL** to `https://pkmn.ai/discord/interactions` (after `pkmn.ai-discord` is running).
-2. Update the Redirect URI in the [Discord Developer Portal — OAuth2](https://discord.com/developers/applications/689315793569447954/oauth2) to `https://pkmn.ai/vouch/auth` and copy the **Client Secret** into `OAUTH_CLIENT_SECRET=...` in `private/.env`.
-3. In the [Discord Developer Portal — Bot](https://discord.com/developers/applications/689315793569447954/bot) settings for `pkmn`:
+1. In [Discord Developer Portal — General
+   Information](https://discord.com/developers/applications/689315793569447954/information), set
+   **Interactions Endpoint URL** to `https://pkmn.ai/discord/interactions` (after `pkmn.ai-discord`
+   is running).
+2. Update the Redirect URI in the [Discord Developer Portal —
+   OAuth2](https://discord.com/developers/applications/689315793569447954/oauth2) to
+   `https://pkmn.ai/vouch/auth` and copy the **Client Secret** into `OAUTH_CLIENT_SECRET=...` in
+   `private/.env`.
+3. In the [Discord Developer Portal —
+   Bot](https://discord.com/developers/applications/689315793569447954/bot) settings for `pkmn`:
    - Toggle **OFF** **Public Bot**.
-   - Toggle **ON** **Server Members Intent** and **Message Content Intent** under **Privileged Gateway Intents**.
-   - Copy the **Bot Token** into `DISCORD_BOT_TOKEN=...` in `private/.env` (alongside `VGC_BOT_TOKEN=...`).
-4. In [Discord Developer Portal — Installation](https://discord.com/developers/applications/689315793569447954/installation), disable **User Install** and set **Install Link** to `None`.
-5. Invite the `pkmn` bot to the server (`689316505560809576`) with `Manage Roles`, `View Channels`, `Send Messages`, `Manage Messages`, `Read Message History`, and `Pin Messages` (`2251800082197504`) permissions:
+   - Toggle **ON** **Server Members Intent** and **Message Content Intent** under **Privileged
+     Gateway Intents**.
+   - Copy the **Bot Token** into `DISCORD_BOT_TOKEN=...` in `private/.env` (alongside
+     `VGC_BOT_TOKEN=...`).
+4. In [Discord Developer Portal —
+   Installation](https://discord.com/developers/applications/689315793569447954/installation),
+   disable **User Install** and set **Install Link** to `None`.
+5. Invite the `pkmn` bot to the server (`689316505560809576`) with `Manage Roles`, `View Channels`,
+   `Send Messages`, `Manage Messages`, `Read Message History`, and `Pin Messages`
+   (`2251800082197504`) permissions:
 
 ```text
 https://discord.com/oauth2/authorize?client_id=689315793569447954&scope=bot+applications.commands&permissions=2251800082197504&guild_id=689316505560809576&disable_guild_select=true
 ```
 
-6. In [Discord Server Settings -> Roles](https://discord.com/channels/689316505560809576), ensure the `pkmn` role is positioned above all leaderboard roles configured in `config/discord.yml`.
+6. In [Discord Server Settings -> Roles](https://discord.com/channels/689316505560809576), ensure
+   the `pkmn` role is positioned above all leaderboard roles configured in `config/discord.yml`.
+
+## Wiki
+
+1. Create a [GitHub OAuth App](https://github.com/settings/developers) with **Homepage URL**
+   `https://pkmn.ai/wiki` and **Authorization callback URL** `https://pkmn.ai/auth/github/callback`.
+2. Populate `private/github.yml` with `client_id`, `client_secret`, `callback_url`, and a 32-byte
+   hex `session_secret` (`openssl rand -hex 32`).
+3. As `pkmn`, clone the private `pkmn/wiki` repository into `/home/pkmn/ai/wiki` using a deploy key
+   with write access:
+
+```sh
+git clone git@github.com:pkmn/wiki.git /home/pkmn/ai/wiki
+```
 
 ## pkmn.ai
 

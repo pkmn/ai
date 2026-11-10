@@ -15,7 +15,9 @@ import * as research from './research';
 
 const fs = site.fs;
 
-const ROOT = path.join(__dirname, '..', '..');
+const ROOT = path.basename(path.dirname(__dirname)) === 'build'
+  ? path.join(__dirname, '..', '..')
+  : path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
 const STATIC = path.join(ROOT, 'static');
 
@@ -50,6 +52,13 @@ export const header = (title: string, wip = false) =>
   <h2>${title}</h2>`;
 
 export const style = ' [id] { scroll-margin-top: 2rem; }';
+
+export const slugify = (s: string) =>
+  s.replace(/\s+/g, '-') // Replace spaces with -
+    .replace(/[^\w-]+/g, '') // Remove all non-word chars
+    .replace(/--+/g, '-') // Replace multiple - with single -
+    .replace(/^-+/, '') // Trim - from start of text
+    .replace(/-+$/, ''); // Trim - from end of text
 
 const build = async (rebuild?: boolean) => {
   fs.mkdir(path.join(PUBLIC));
