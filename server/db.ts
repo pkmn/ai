@@ -13,7 +13,11 @@ import {
   parseSmogonIdentifier,
 } from './smogon';
 
-export const DB_PATH = process.env.ARENA_DB_PATH ?? '/var/lib/pkmn/arena.sqlite';
+export const DB_PATH = process.env.ARENA_DB_PATH ?? (
+  process.env.NODE_ENV === 'production' || fs.existsSync('/var/lib/pkmn')
+    ? '/var/lib/pkmn/arena.sqlite'
+    : root('private', 'arena.sqlite')
+);
 export const SCHEMA_DIR = root('db', 'schema');
 export const MIGRATION_DIR = root('db', 'migration');
 export const LADDERS_FILE = root('config', 'ladders.yml');
@@ -765,6 +769,11 @@ export class ArenaDB {
       .get(githubLogin.trim().toLowerCase()) as unknown as DeveloperRow | undefined;
   }
 
+  getDeveloperByDiscordId(discordId: string): DeveloperRow | undefined {
+    return this.db.prepare('SELECT * FROM developers WHERE discord_id = ?')
+      .get(discordId.trim()) as unknown as DeveloperRow | undefined;
+  }
+
   getDevelopersForBot(botId: number): DeveloperRow[] {
     return this.db.prepare(
       'SELECT * FROM developers WHERE bot_id = ? ORDER BY github_login ASC'
@@ -788,18 +797,20 @@ export class ArenaDB {
     now = Math.floor(Date.now() / 1000)
   ) {
     const cleanLogin = githubLogin.trim().toLowerCase();
+    const cleanDiscordId = discordId.trim();
     this.inTransaction(() => {
-      this.db.prepare(
-        `UPDATE developers
-         SET discord_id = NULL, discord_username = NULL, updated_at = ?
-         WHERE discord_id = ? AND github_login != ?`
-      ).run(now, discordId, cleanLogin);
+      const existing = this.getDeveloperByDiscordId(cleanDiscordId);
+      if (existing && existing.github_login !== cleanLogin) {
+        throw new Error(
+          `Discord account @${discordUsername} is already linked to another developer`
+        );
+      }
 
       this.db.prepare(
         `UPDATE developers
          SET discord_id = ?, discord_username = ?, updated_at = ?
          WHERE github_login = ?`
-      ).run(discordId, discordUsername, now, cleanLogin);
+      ).run(cleanDiscordId, discordUsername, now, cleanLogin);
     });
   }
 

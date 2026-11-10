@@ -1,5 +1,4 @@
 import {execFile} from 'child_process';
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -14,18 +13,14 @@ import {header, renderer} from '../static/build';
 import type {Project} from '../static/projects';
 import {escapeHtml, root, slugify} from '../static/util';
 
+import {Auth, type AuthConfig} from './auth';
+import type {ArenaDB} from './db';
+
 const execFileAsync = promisify(execFile);
 
 const WIKI_DIR = root('wiki');
 const PROJECTS = root('static', 'projects.yml');
 const CONFIG = root('config', 'wiki.yml');
-const OAUTH = root('private', 'github.yml');
-const VOUCH_VALIDATE_URL = 'http://127.0.0.1:9091/vouch/validate';
-
-const SESSION_COOKIE = 'pkmn_wiki_session';
-const STATE_COOKIE = 'pkmn_wiki_state';
-const SESSION_TTL_S = 30 * 24 * 60 * 60;
-const STATE_TTL_S = 10 * 60;
 const MAX_BODY_BYTES = 256 * 1024;
 
 const SHA_RE = /^[0-9a-f]{7,40}$/;
@@ -41,15 +36,6 @@ export interface BotPage {
   owners: Set<string>;
 }
 
-export interface OAuthConfig {
-  clientId: string;
-  clientSecret: string;
-  sessionSecret: string;
-  callbackUrl?: string;
-  admins?: string[];
-  authors?: {[github: string]: string};
-}
-
 export interface Config {
   admins?: string[];
   authors?: {[github: string]: string};
@@ -59,9 +45,10 @@ export interface Options {
   wikiDir?: string;
   projectsFile?: string;
   configFile?: string;
-  oauthFile?: string;
-  oauth?: OAuthConfig;
-  vouchValidateUrl?: string;
+  auth?: Auth;
+  authConfig?: AuthConfig;
+  db?: ArenaDB;
+  isDiscordMember?: (discordId: string) => boolean;
   push?: boolean;
 }
 
@@ -112,52 +99,6 @@ export function serializePageContent(rawContent: string, visibility?: PageVisibi
   const stripped = parsePageContent(rawContent.replace(/\r\n/g, '\n')).content;
   const body = stripped.endsWith('\n') ? stripped : `${stripped}\n`;
   return visibility ? `{% visibility: ${visibility} %}\n${body}` : body;
-}
-
-export function signToken(payload: object, secret: string): string {
-  const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = crypto.createHmac('sha256', secret).update(data).digest('base64url');
-  return `${data}.${sig}`;
-}
-
-export function verifyToken<T extends {exp?: number}>(
-  token: string | undefined,
-  secret: string,
-  now = Math.floor(Date.now() / 1000)
-): T | undefined {
-  if (!token || !secret) return undefined;
-  const dot = token.indexOf('.');
-  if (dot <= 0) return undefined;
-  const data = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const expected = crypto.createHmac('sha256', secret).update(data).digest('base64url');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return undefined;
-  try {
-    const parsed = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')) as T;
-    if (typeof parsed.exp === 'number' && parsed.exp < now) return undefined;
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-export function parseCookies(cookieHeader: string | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!cookieHeader) return out;
-  for (const part of cookieHeader.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq <= 0) continue;
-    const key = part.slice(0, eq).trim();
-    const val = part.slice(eq + 1).trim();
-    try {
-      out[key] = decodeURIComponent(val);
-    } catch {
-      out[key] = val;
-    }
-  }
-  return out;
 }
 
 export function extractAuthorizedGitHubUsers(
@@ -211,34 +152,6 @@ export function extractBotPages(projectsYaml: string): {
     }
   }
   return {bots, aliases};
-}
-
-export function loadOAuthConfig(file = OAUTH): OAuthConfig | undefined {
-  let fileCfg: Partial<Record<string, any>> = {};
-  if (fs.existsSync(file)) {
-    fileCfg = (yaml.parse(fs.readFileSync(file, 'utf8')) ?? {}) as Record<string, any>;
-  }
-  const clientId = process.env.GITHUB_CLIENT_ID ?? fileCfg.client_id ?? fileCfg.clientId;
-  const clientSecret =
-    process.env.GITHUB_CLIENT_SECRET ?? fileCfg.client_secret ?? fileCfg.clientSecret;
-  const sessionSecret =
-    process.env.SESSION_SECRET ?? fileCfg.session_secret ?? fileCfg.sessionSecret;
-  const callbackUrl =
-    process.env.GITHUB_CALLBACK_URL ?? fileCfg.callback_url ?? fileCfg.callbackUrl;
-  const envAdmins = process.env.GITHUB_ADMINS
-    ? process.env.GITHUB_ADMINS.split(',').map(s => s.trim()).filter(Boolean)
-    : undefined;
-  const admins: string[] | undefined = envAdmins ?? fileCfg.admins;
-  const authors: {[github: string]: string} | undefined = fileCfg.authors;
-  if (!clientId || !clientSecret || !sessionSecret) return undefined;
-  return {
-    clientId: String(clientId),
-    clientSecret: String(clientSecret),
-    sessionSecret: String(sessionSecret),
-    callbackUrl: callbackUrl ? String(callbackUrl) : undefined,
-    admins: Array.isArray(admins) ? admins.map(String) : undefined,
-    authors: authors && typeof authors === 'object' ? authors : undefined,
-  };
 }
 
 const STYLE = fs.readFileSync(root('static', 'wiki.css'), 'utf8');
@@ -341,21 +254,11 @@ function redirect(res: http.ServerResponse, location: string, status = 302, cook
   res.end();
 }
 
-function hasVouchToken(headers: http.IncomingHttpHeaders): boolean {
-  const auth = headers.authorization;
-  if (typeof auth === 'string' && /^Bearer\s+\S+/i.test(auth.trim())) return true;
-  const vouchToken = headers['x-vouch-token'];
-  if (typeof vouchToken === 'string' && vouchToken.trim()) return true;
-  return Boolean(parseCookies(headers.cookie).VouchCookie);
-}
-
 export class Wiki {
   readonly wikiDir: string;
   readonly projectsFile: string;
   readonly configFile: string;
-  readonly oauthFile: string;
-  readonly vouchValidateUrl: string;
-  private readonly explicitOAuth?: OAuthConfig;
+  readonly auth: Auth;
   private readonly shouldPush: boolean;
   private projectsMtime = -1;
   private configMtime = -1;
@@ -370,16 +273,15 @@ export class Wiki {
     this.wikiDir = options.wikiDir ?? WIKI_DIR;
     this.projectsFile = options.projectsFile ?? PROJECTS;
     this.configFile = options.configFile ?? CONFIG;
-    this.oauthFile = options.oauthFile ?? OAUTH;
-    this.vouchValidateUrl = options.vouchValidateUrl ?? VOUCH_VALIDATE_URL;
-    this.explicitOAuth = options.oauth;
+    this.auth = options.auth ?? new Auth({
+      config: options.authConfig,
+      db: options.db,
+      isDiscordMember: options.isDiscordMember,
+      isAuthorizedGitHub: login => this.isDeveloper(login),
+    });
     this.shouldPush = options.push ?? (
       process.env.WIKI_PUSH === '1' || process.env.NODE_ENV === 'production'
     );
-  }
-
-  getOAuthConfig(): OAuthConfig | undefined {
-    return this.explicitOAuth ?? loadOAuthConfig(this.oauthFile);
   }
 
   private refreshMetadata() {
@@ -410,9 +312,8 @@ export class Wiki {
       } catch {}
     }
 
-    const oauth = this.getOAuthConfig();
-    const admins = [...(wikiCfg.admins ?? []), ...(oauth?.admins ?? [])];
-    const authors = {...(wikiCfg.authors ?? {}), ...(oauth?.authors ?? {})};
+    const admins = wikiCfg.admins ?? [];
+    const authors = wikiCfg.authors ?? {};
 
     this.adminUsers = new Set(admins.map(a => a.trim().toLowerCase()).filter(Boolean));
     this.authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, admins);
@@ -486,34 +387,12 @@ export class Wiki {
     return this.authorizedUsers.has(lower);
   }
 
-  async verifyDiscordAuth(
-    req: http.IncomingMessage
-  ): Promise<'authorized' | 'unauthenticated' | 'forbidden'> {
-    if (!hasVouchToken(req.headers)) return 'unauthenticated';
-    const forwarded: Record<string, string> = {};
-    for (const key of ['cookie', 'authorization', 'x-vouch-token', 'host']) {
-      const val = req.headers[key];
-      if (typeof val === 'string') forwarded[key] = val;
-    }
-    try {
-      const res = await fetch(this.vouchValidateUrl, {headers: forwarded});
-      if (res.status === 200) return 'authorized';
-      if (res.status === 403) return 'forbidden';
-      return 'unauthenticated';
-    } catch {
-      return 'unauthenticated';
-    }
+  verifyDiscordAuth(req: http.IncomingMessage): 'authorized' | 'unauthenticated' | 'forbidden' {
+    return this.auth.verifyDiscordAuth(req);
   }
 
   getSessionUser(req: http.IncomingMessage): string | undefined {
-    const oauth = this.getOAuthConfig();
-    if (!oauth) return undefined;
-    const cookies = parseCookies(req.headers.cookie);
-    const verified = verifyToken<{login: string; exp: number}>(
-      cookies[SESSION_COOKIE],
-      oauth.sessionSecret
-    );
-    return verified?.login;
+    return this.auth.getSession(req)?.github?.login;
   }
 
   pagePath(slug: string): string {
@@ -674,18 +553,13 @@ export class Wiki {
 
 export function register(app: polka.Polka, options: Options = {}): Wiki {
   const wiki = new Wiki(options);
+  wiki.auth.register(app);
+
   const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
   const slugParam = (v: string | string[] | undefined) => normalizeSlug(param(v));
 
-  const getEffectiveUser = (req: http.IncomingMessage): string | undefined => {
-    const oauth = wiki.getOAuthConfig();
-    if (!oauth) {
-      return process.env.NODE_ENV === 'development'
-        ? process.env.WIKI_DEV_USER || 'scheibo'
-        : undefined;
-    }
-    return wiki.getSessionUser(req);
-  };
+  const getEffectiveUser = (req: http.IncomingMessage): string | undefined =>
+    wiki.auth.getGitHubUser(req);
 
   const resolveOrRedirect = (
     res: http.ServerResponse,
@@ -704,22 +578,22 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     return canonical;
   };
 
-  const requireReadAuth = async (
+  const requireReadAuth = (
     req: http.IncomingMessage & {originalUrl?: string},
     res: http.ServerResponse,
     slug = 'index'
-  ): Promise<boolean> => {
+  ): boolean => {
     const visibility = wiki.getPageVisibility(slug);
     if (visibility === 'public') return true;
 
-    const oauth = wiki.getOAuthConfig();
-    if (!oauth && process.env.NODE_ENV === 'development') return true;
+    const authCfg = wiki.auth.getConfig();
+    if (!authCfg?.github && process.env.NODE_ENV === 'development') return true;
 
     const login = wiki.getSessionUser(req);
     if (wiki.isDeveloper(login)) return true;
 
     if (visibility === 'discord') {
-      const status = await wiki.verifyDiscordAuth(req);
+      const status = wiki.verifyDiscordAuth(req);
       if (status === 'authorized') return true;
       if (status === 'forbidden') {
         sendError(
@@ -730,11 +604,11 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
         return false;
       }
       const returnTo = encodeURIComponent(req.originalUrl || req.url || '/wiki');
-      redirect(res, `/vouch/login?url=${returnTo}`);
+      redirect(res, `/auth/discord?return_to=${returnTo}`);
       return false;
     }
 
-    if (!oauth) {
+    if (!authCfg?.github) {
       sendError(res, 503, '<p>GitHub OAuth is not configured on this server.</p>');
       return false;
     }
@@ -757,9 +631,9 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     res: http.ServerResponse,
     slug?: string
   ): string | undefined => {
-    const oauth = wiki.getOAuthConfig();
+    const authCfg = wiki.auth.getConfig();
     let login: string | undefined;
-    if (!oauth) {
+    if (!authCfg?.github) {
       if (process.env.NODE_ENV === 'development') {
         login = process.env.WIKI_DEV_USER || 'scheibo';
       } else {
@@ -800,111 +674,14 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     return login;
   };
 
-  app.get('/auth/github', (req, res) => {
-    const oauth = wiki.getOAuthConfig();
-    if (!oauth) {
-      sendHtml(res, 503, '<p>GitHub OAuth is not configured.</p>');
-      return;
-    }
-    const rawReturn = typeof req.query.return_to === 'string' ? req.query.return_to : '/wiki';
-    const returnTo = rawReturn.startsWith('/') && !rawReturn.startsWith('//') ? rawReturn : '/wiki';
-    const nonce = crypto.randomBytes(16).toString('hex');
-    const exp = Math.floor(Date.now() / 1000) + STATE_TTL_S;
-    const stateToken = signToken({nonce, returnTo, exp}, oauth.sessionSecret);
-    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-    const cookie =
-      `${STATE_COOKIE}=${encodeURIComponent(stateToken)}; ` +
-      `HttpOnly; Path=/; Max-Age=${STATE_TTL_S}; SameSite=Lax${secure}`;
-
-    const params = new URLSearchParams({
-      client_id: oauth.clientId,
-      scope: 'read:user',
-      state: nonce,
-    });
-    if (oauth.callbackUrl) params.set('redirect_uri', oauth.callbackUrl);
-    redirect(res, `https://github.com/login/oauth/authorize?${params.toString()}`, 302, [cookie]);
-  });
-
-  app.get('/auth/github/callback', async (req, res) => {
-    const oauth = wiki.getOAuthConfig();
-    if (!oauth) {
-      sendHtml(res, 503, '<p>GitHub OAuth is not configured.</p>');
-      return;
-    }
-    const code = typeof req.query.code === 'string' ? req.query.code : '';
-    const state = typeof req.query.state === 'string' ? req.query.state : '';
-    const cookies = parseCookies(req.headers.cookie);
-    const saved = verifyToken<{nonce: string; returnTo: string; exp: number}>(
-      cookies[STATE_COOKIE],
-      oauth.sessionSecret
-    );
-    if (!code || !state || saved?.nonce !== state) {
-      sendError(res, 400, '<p>Invalid or expired OAuth state.</p>');
-      return;
-    }
-
-    try {
-      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({
-          client_id: oauth.clientId,
-          client_secret: oauth.clientSecret,
-          code,
-        }),
-      });
-      if (!tokenRes.ok) throw new Error(`GitHub token exchange failed (${tokenRes.status})`);
-      const tokenData = await tokenRes.json() as {access_token?: string};
-      if (!tokenData.access_token) throw new Error('Missing access_token from GitHub');
-
-      const userRes = await fetch('https://api.github.com/user', {
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-          Accept: 'application/vnd.github+json',
-          'User-Agent': 'pkmn.ai',
-        },
-      });
-      if (!userRes.ok) throw new Error(`GitHub user fetch failed (${userRes.status})`);
-      const userData = await userRes.json() as {login?: string};
-      if (!userData.login) throw new Error('Missing login from GitHub user API');
-
-      const login = userData.login;
-      if (!wiki.isDeveloper(login)) {
-        sendError(
-          res,
-          403,
-          `<p>GitHub account <code>${escapeHtml(login)}</code> ` +
-            'is not registered for pkmn.ai competitions.</p>'
-        );
-        return;
-      }
-
-      const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_S;
-      const sessionToken = signToken({login, exp}, oauth.sessionSecret);
-      const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-      const setCookies = [
-        `${SESSION_COOKIE}=${encodeURIComponent(sessionToken)}; ` +
-          `HttpOnly; Path=/; Max-Age=${SESSION_TTL_S}; SameSite=Lax${secure}`,
-        `${STATE_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secure}`,
-      ];
-      redirect(res, saved.returnTo || '/wiki', 302, setCookies);
-    } catch (err) {
-      console.error('GitHub OAuth error:', err);
-      sendError(res, 502, '<p>Failed to authenticate with GitHub.</p>');
-    }
-  });
-
-  const renderPageSlug = async (
+  const renderPageSlug = (
     req: http.IncomingMessage & {originalUrl?: string},
     res: http.ServerResponse,
     rawSlug: string
   ) => {
     const slug = resolveOrRedirect(res, rawSlug);
     if (!slug) return;
-    if (!(await requireReadAuth(req, res, slug))) return;
+    if (!requireReadAuth(req, res, slug)) return;
 
     const raw = wiki.readPage(slug);
     const encoded = encodeSlug(slug);
@@ -930,12 +707,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
   app.get('/wiki', (req, res) => renderPageSlug(req, res, 'index'));
 
-  app.get('/wiki/pages', async (req, res) => {
+  app.get('/wiki/pages', (req, res) => {
     const allPages = wiki.listPages();
     const login = getEffectiveUser(req);
     const needsDiscordCheck = !wiki.isDeveloper(login) &&
       allPages.some(p => wiki.getPageVisibility(p) === 'discord');
-    const isDiscord = needsDiscordCheck && (await wiki.verifyDiscordAuth(req)) === 'authorized';
+    const isDiscord = needsDiscordCheck && wiki.verifyDiscordAuth(req) === 'authorized';
     const pages = allPages.filter(p => wiki.canRead(login, p, isDiscord));
 
     const items = pages.map(p => {
@@ -1054,7 +831,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   app.get('/wiki/:page/history', async (req, res) => {
     const slug = resolveOrRedirect(res, slugParam(req.params.page), '/history');
     if (!slug) return;
-    if (!(await requireReadAuth(req, res, slug))) return;
+    if (!requireReadAuth(req, res, slug)) return;
     const encoded = encodeSlug(slug);
     const revisions = await wiki.getHistory(slug);
     const rows = revisions.map(rev => {
@@ -1096,7 +873,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     const showDiff = req.query.diff === '1';
     const slug = resolveOrRedirect(res, rawSlug, `/${sha}${showDiff ? '?diff=1' : ''}`);
     if (!slug) return;
-    if (!(await requireReadAuth(req, res, slug))) return;
+    if (!requireReadAuth(req, res, slug)) return;
 
     const encoded = encodeSlug(slug);
     const displayTitle = wiki.getBotPage(slug)?.name ?? formatTitle(slug);

@@ -126,41 +126,23 @@ N_PREFIX=/opt/n npm install -g npm@latest
 service pkmn.ai-server restart
 ```
 
-## Go & Vouch Proxy
-
-As `root`, [download the latest Go binary](https://go.dev/dl/) and extract it to `/usr/local` and
-set up symlinks in `/usr/bin` so that it's on the `$PATH` (if not already installed):
-
-```sh
-cd /tmp
-wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz
-tar -C /usr/local -xvf go1.21.6.linux-amd64.tar.gz
-for binary in $(ls /usr/local/go/bin); do ln -s /usr/local/go/bin/$binary /usr/bin/$binary; done
-```
-
-As `pkmn`, install [`vouch-proxy`](https://github.com/vouch/vouch-proxy) and set `VOUCH_JWT_SECRET=...` and `VOUCH_SESSION_KEY=...` in `private/.env`:
-
-```sh
-GOPATH=/home/pkmn/ai/build go install github.com/vouch/vouch-proxy@v0.50.0
-```
-
 ## Discord
 
 1. In [Discord Developer Portal — General
    Information](https://discord.com/developers/applications/689315793569447954/information), set
-   **Interactions Endpoint URL** to `https://pkmn.ai/discord/interactions` (after `pkmn.ai-discord`
+   **Interactions Endpoint URL** to `https://pkmn.ai/discord/interactions` (after `pkmn.ai-server`
    is running).
 2. Update the Redirect URI in the [Discord Developer Portal —
    OAuth2](https://discord.com/developers/applications/689315793569447954/oauth2) to
-   `https://pkmn.ai/vouch/auth` and copy the **Client Secret** into `OAUTH_CLIENT_SECRET=...` in
-   `private/.env`.
+   `https://pkmn.ai/auth/discord/callback` and set `DISCORD_CLIENT_ID=689315793569447954` and
+   `DISCORD_CLIENT_SECRET=...` in `private/.env`.
 3. In the [Discord Developer Portal —
    Bot](https://discord.com/developers/applications/689315793569447954/bot) settings for `pkmn`:
    - Toggle **OFF** **Public Bot**.
    - Toggle **ON** **Server Members Intent** and **Message Content Intent** under **Privileged
      Gateway Intents**.
    - Copy the **Bot Token** into `DISCORD_BOT_TOKEN=...` in `private/.env` (alongside
-     `VGC_BOT_TOKEN=...`).
+     `VGC_BOT_TOKEN=...` and `SMOGON_TOKEN=...`).
 4. In [Discord Developer Portal —
    Installation](https://discord.com/developers/applications/689315793569447954/installation),
    disable **User Install** and set **Install Link** to `None`.
@@ -175,13 +157,20 @@ https://discord.com/oauth2/authorize?client_id=689315793569447954&scope=bot+appl
 6. In [Discord Server Settings -> Roles](https://discord.com/channels/689316505560809576), ensure
    the `pkmn` role is positioned above all leaderboard roles configured in `config/discord.yml`.
 
-## Wiki
+## Authentication & Wiki
 
 1. Create a [GitHub OAuth App](https://github.com/settings/developers) with **Homepage URL**
-   `https://pkmn.ai/wiki` and **Authorization callback URL** `https://pkmn.ai/auth/github/callback`.
-2. Populate `private/github.yml` with `client_id`, `client_secret`, `callback_url`, and a 32-byte
-   hex `session_secret` (`openssl rand -hex 32`).
-3. As `pkmn`, clone the private `pkmn/wiki` repository into `/home/pkmn/ai/wiki` using a deploy key
+   `https://pkmn.ai` and **Authorization callback URL** `https://pkmn.ai/auth/github/callback`.
+2. Populate `private/.env` with `GITHUB_CLIENT_ID=...`, `GITHUB_CLIENT_SECRET=...`, a 32-byte hex
+   `SESSION_SECRET=...` (`openssl rand -hex 32`), and a 32-byte hex `ARENA_SECRET=...`.
+3. Create the SQLite directory `/var/lib/pkmn` owned by `pkmn:pkmn`:
+
+```sh
+mkdir -p /var/lib/pkmn
+chown pkmn:pkmn /var/lib/pkmn
+```
+
+4. As `pkmn`, clone the private `pkmn/wiki` repository into `/home/pkmn/ai/wiki` using a deploy key
    with write access:
 
 ```sh

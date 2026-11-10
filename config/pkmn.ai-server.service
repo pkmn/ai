@@ -9,6 +9,7 @@ After=network.target
 Type=simple
 Restart=always
 RestartSec=5s
+EnvironmentFile=/home/pkmn/ai/private/.env
 ExecStart=/usr/bin/npm start
 WorkingDirectory=/home/pkmn/ai
 StartLimitInterval=0

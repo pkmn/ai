@@ -1,8 +1,12 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 
+import polka from 'polka';
+
+import {ArenaDB} from '../server/db';
 import {
   COMMANDS,
   type DiscordMessage,
@@ -15,11 +19,12 @@ import {
   loadGlossary,
   lookupGlossary,
   ownerOf,
+  register,
   syncCommands,
+  syncGuildMembers,
   syncMessages,
   syncPins,
   syncRoles,
-  validateAuth,
 } from '../server/discord';
 
 const CONFIG = {
@@ -592,66 +597,27 @@ describe('syncPins', () => {
   });
 });
 
-describe('validateAuth', () => {
-  afterEach(() => {
-    globalThis.fetch = realFetch;
-  });
+describe('syncGuildMembers', () => {
+  test('syncs current Discord guild member IDs and usernames into ArenaDB', () => {
+    const db = new ArenaDB(':memory:');
+    try {
+      syncGuildMembers(db, [
+        {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
+        {user: {id: '283674461268344832', username: 'pmariglia'}, roles: []},
+      ], 1_760_000_000);
+      expect(db.isDiscordMember('513513270670262284')).toBe(true);
+      expect(db.isDiscordMember('283674461268344832')).toBe(true);
+      expect(db.isDiscordMember('999999999999999999')).toBe(false);
 
-  function stubVouch(status: number, headers: Record<string, string>) {
-    globalThis.fetch = (() => Promise.resolve({
-      status,
-      ok: status === 200,
-      headers: new Headers(headers),
-    })) as unknown as typeof fetch;
-  }
-
-  test('forwards 401 and x-vouch-* headers when unauthenticated', async () => {
-    stubVouch(401, {'x-vouch-err': 'no jwt', 'x-vouch-failcount': '1'});
-    const res = await validateAuth('/vouch/validate', {}, new Set(['1']));
-    expect(res).toEqual({
-      status: 401,
-      headers: {'x-vouch-err': 'no jwt', 'x-vouch-failcount': '1'},
-    });
-  });
-
-  test('checks guild membership for /vouch/validate', async () => {
-    const members = new Set(['member']);
-
-    stubVouch(200, {'x-vouch-user': 'member'});
-    expect((await validateAuth('/vouch/validate', {}, members)).status).toBe(200);
-
-    stubVouch(200, {'x-vouch-user': 'outsider'});
-    expect((await validateAuth('/vouch/validate', {}, members)).status).toBe(403);
-  });
-
-  test('supports Bearer token auth and serves /chat/logs/token for guild members', async () => {
-    let forwardedHeaders: Record<string, string> = {};
-    globalThis.fetch = ((_: string, init?: {headers?: Record<string, string>}) => {
-      forwardedHeaders = init?.headers ?? {};
-      return Promise.resolve({
-        status: 200,
-        ok: true,
-        headers: new Headers({'x-vouch-user': 'member'}),
-      });
-    }) as unknown as typeof fetch;
-
-    const members = new Set(['member']);
-    const authRes = await validateAuth(
-      '/vouch/validate',
-      {authorization: 'Bearer my-jwt'},
-      members
-    );
-    expect(authRes.status).toBe(200);
-    expect(forwardedHeaders['x-vouch-token']).toBe('my-jwt');
-    expect(forwardedHeaders.cookie).toContain('VouchCookie=my-jwt');
-
-    const tokenRes = await validateAuth(
-      '/chat/logs/token',
-      {cookie: 'VouchCookie=cookie-jwt'},
-      members
-    );
-    expect(tokenRes.status).toBe(200);
-    expect(tokenRes.body).toBe('cookie-jwt\n');
+      // Re-sync after a member leaves removes stale membership
+      syncGuildMembers(db, [
+        {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
+      ], 1_760_000_060);
+      expect(db.isDiscordMember('513513270670262284')).toBe(true);
+      expect(db.isDiscordMember('283674461268344832')).toBe(false);
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -798,5 +764,31 @@ describe('glossary slash commands', () => {
     const freshState = new Map<string, string | undefined>();
     await syncCommands('token', 'guild1', freshState);
     expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT', 'GET', 'GET']);
+  });
+
+  test('register mounts POST /discord/interactions on Polka sharing ArenaDB', async () => {
+    const db = new ArenaDB(':memory:');
+    const app = polka();
+    const handle = register(app, {db, token: '', vgcToken: '', verifyKey});
+    const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as {port: number};
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    try {
+      const ping = signedInteraction({type: 1});
+      const res = await realFetch(`${baseUrl}/discord/interactions`, {
+        method: 'POST',
+        headers: ping.headers,
+        body: ping.body,
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({type: 1});
+    } finally {
+      handle.stop();
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      db.close();
+    }
   });
 });

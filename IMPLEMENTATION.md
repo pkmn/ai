@@ -28,7 +28,7 @@ This document is the complete, self-contained technical specification for **pkmn
 
 **pkmn.ai** runs across two dedicated machines with a strict separation between public web serving and isolated battle execution:
 
-- **`pkmn.ai` Server (DigitalOcean Droplet, Ubuntu LTS)**: Serves the static website via Nginx behind Cloudflare, hosts the Git-backed Djot wiki at `/wiki` (`github.com/pkmn/wiki`), centralizes developer GitHub OAuth2 and Discord OAuth2 in `server/auth.ts` (powering `/account`, `/wiki`, `/chat/logs`, and `/private` without Vouch Proxy), syncs registered projects and team members from `static/projects.yml`, validates first-time seasonal VGC 20-team lists via `teams/index.ts`, mirrors match summaries and ratings in SQLite, runs the `pkmn.ai-discord` daemon (`server/discord.ts`) for slash commands, chat log archival, Discord roles, and submission/quarantine DMs, and atomically pre-generates static leaderboard/battles/profile HTML and JSON after each match. Zero battle logs and zero bot archives ever touch the droplet's disk.
+- **`pkmn.ai` Server (DigitalOcean Droplet, Ubuntu LTS)**: Serves the static website via Nginx behind Cloudflare, hosts the Git-backed Djot wiki at `/wiki` (`github.com/pkmn/wiki`), centralizes developer GitHub OAuth2 and Discord OAuth2 in `server/auth.ts` (powering `/account`, `/wiki`, `/chat/logs`, and `/private` without Vouch Proxy), syncs registered projects and team members from `static/projects.yml`, validates first-time seasonal VGC 20-team lists via `teams/index.ts`, mirrors match summaries and ratings in SQLite, runs the in-process Discord module (`server/discord.ts`) for slash commands, chat log archival, Discord roles, and submission/quarantine DMs, and atomically pre-generates static leaderboard/battles/profile HTML and JSON after each match. Zero battle logs and zero bot archives ever touch the droplet's disk.
 - **`arena` Worker (Apple M6 Mac mini, headless macOS)**: Owns canonical matchmaking and Davidson MAP rating computation, pulls approved bot artifacts, isolates them in either Linux ARM64 OCI containers or native macOS ARM64 Seatbelt sandboxes (with read-only mounts for era-matched `pkmn/stats` and `randbats` JSON files), runs 2-game blind-pair (or VGC pseudo-blind-pair) matches using [`@pkmn/sim`](https://github.com/pkmn/ps/tree/main/sim) over `stdin`/`stdout`, wipes memory and `/tmp` scratch volumes between games, writes uncompressed daily logs and bot archives to an external 1 TB SSD (`/Volumes/Archive`), compresses monthly `.tar` archives to Google Cloud Storage (`gs://pkmn-arena`), and pushes match summaries and ratings outbound to `pkmn.ai`.
 
 ```mermaid
@@ -36,7 +36,7 @@ flowchart LR
     subgraph DO["pkmn.ai Server (DigitalOcean)"]
         Nginx["Nginx + Static HTML/JSON"]
         API["pkmn.ai-server (Auth + Account + Control API)"]
-        Disc["pkmn.ai-discord (Roles + DMs + Logs)"]
+        Disc["server/discord.ts (Roles + DMs + Logs)"]
         DB[("SQLite Metadata & Ratings")]
     end
 
@@ -70,7 +70,7 @@ flowchart LR
 | Machine | Entity Type | Name / ID | Purpose |
 | :--- | :--- | :--- | :--- |
 | **`pkmn.ai` (Ubuntu Droplet)** | Hostname | `pkmn.ai` | Public web server and control plane (`ssh pkmn@pkmn.ai`). |
-| **`pkmn.ai` (Ubuntu Droplet)** | Admin / App User | `pkmn` | Owns `/home/pkmn/ai` and runs `pkmn.ai-server.service` and `pkmn.ai-discord.service`. |
+| **`pkmn.ai` (Ubuntu Droplet)** | Admin / App User | `pkmn` | Owns `/home/pkmn/ai` and runs `pkmn.ai-server.service`. |
 | **`pkmn.ai` (Ubuntu Droplet)** | Web User | `www-data` (in group `pkmn`) | Runs Nginx serving `/home/pkmn/ai/public` and `/home/pkmn/ai/chat/logs`. |
 | **`pkmn.ai` (Ubuntu Droplet)** | Reverse SSH Tunnel User | `tunnel` (`/usr/sbin/nologin`) | Locked-down role user accepting only `-R 127.0.0.1:2222` from `arena`. |
 | **`arena` (M6 Mac mini)** | Hostname | `arena` | Dedicated headless M6 Mac mini (`ssh pkmn@arena` or `ssh arena` via `ProxyJump`). |
@@ -87,7 +87,7 @@ flowchart LR
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/config/ladders.yml` | Droplet SSD | Canonical ladder definitions (immutable `ladder_id`, UI slot/display name, format, lifecycle status). |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/wiki/` | Droplet SSD | Git checkout of `github.com/pkmn/wiki` containing `.dj` wiki pages and revision history. |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/config/wiki.yml` | Droplet SSD | Public wiki configuration (`admins` and GitHub-to-author display name mappings). |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/private/auth.yml` | Droplet SSD | Gitignored GitHub + Discord OAuth credentials, `session_secret`, and `arena_secret`. |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/private/.env` | Droplet SSD | Gitignored server secrets (`DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `SESSION_SECRET`, `ARENA_SECRET`, `SMOGON_TOKEN`, `VGC_BOT_TOKEN`). |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/avatars/<slug>.png` | Droplet SSD | Optional project PNG logos committed via registration PRs (rendered on `/leaderboard/<slug>/`). |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/public/` | Droplet SSD | Pre-rendered static HTML/JSON served directly by Nginx (`leaderboard/`, `battles/`, `api/live.json`). |
 | **`pkmn.ai` Droplet** | `/var/lib/pkmn/arena.sqlite` | Droplet SSD | Control-plane SQLite DB (`ladders`, `developers`, `bots`, `bot_versions`, `bot_ladder_teams`, `ladder_entries`, `bot_ladder_stats`, `matches`, `pair_aggregates`, `rating_snapshots`, `discord_members`). |
@@ -117,8 +117,7 @@ flowchart LR
 #### C. Services, Daemons & Virtual Machines
 | Machine | Unit / Daemon Name | Path | Purpose |
 | :--- | :--- | :--- | :--- |
-| **`pkmn.ai` Droplet** | `pkmn.ai-server.service` | `/home/pkmn/ai/config/pkmn.ai-server.service` | Runs the Node.js HTTP server (`:1234`): unified GitHub/Discord OAuth, `/account`, `/wiki`, `/api/arena/*`, and static page renderer. |
-| **`pkmn.ai` Droplet** | `pkmn.ai-discord.service` | `/home/pkmn/ai/config/pkmn.ai-discord.service` | Runs the Discord daemon (`:9091`): `/define` interactions, chat log/pin sync, guild member sync, leaderboard/competitor role sync, and submission/quarantine DMs. |
+| **`pkmn.ai` Droplet** | `pkmn.ai-server.service` | `/home/pkmn/ai/config/pkmn.ai-server.service` | Runs the unified Node.js server (`:1234`): GitHub/Discord OAuth (`server/auth.ts`), `/account`, `/wiki`, `/discord/interactions` + 60s Discord sync (`server/discord.ts`), `/api/arena/*`, and static page renderer. |
 | **`pkmn.ai` Droplet** | `pkmn.ai-backup.timer` | `/home/pkmn/ai/config/pkmn.ai-backup.timer` | Nightly SQLite backup synced to `gs://pkmn-arena/db/`. |
 | **`arena` Mac mini** | `ai.pkmn.arena` | `/Library/LaunchDaemons/ai.pkmn.arena.plist` | Runs the Arena coordinator as user `pkmn` on the 2 E-cores (`taskpolicy -b`). |
 | **`arena` Mac mini** | `ai.pkmn.pf` | `/Library/LaunchDaemons/ai.pkmn.pf.plist` | Loads `/etc/pf.anchors/ai.pkmn.arena` at boot to block all network packets from `p1` and `p2`. |
@@ -2534,7 +2533,7 @@ Existing historical projects in `static/projects.yml` remain unchanged. Any proj
 All GitHub OAuth2 and Discord OAuth2 flows are centralized in `server/auth.ts` inside `pkmn.ai-server` (`127.0.0.1:1234`), completely retiring Go `vouch-proxy` (`:9090`):
 
 - **Single Signed Session Cookie (`pkmn_session`)**:
-  - Configured via `private/auth.yml` (`session_secret`, `arena_secret`, `github: { client_id, client_secret, callback_url }`, `discord: { client_id, client_secret, callback_url }`).
+  - Configured via `private/.env` (`SESSION_SECRET`, `ARENA_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `SMOGON_TOKEN`, `DISCORD_BOT_TOKEN`, `VGC_BOT_TOKEN`).
   - Stores an HMAC-SHA256 signed payload (`HttpOnly; Path=/; SameSite=Lax; Secure`, 30-day TTL):
     ```ts
     export interface Session {
@@ -2554,12 +2553,12 @@ All GitHub OAuth2 and Discord OAuth2 flows are centralized in `server/auth.ts` i
        - **Edit Ownership**: Reserved bot pages (`/wiki/<Bot_Name>`) are editable only by that project's `arena.owners` (and `config/wiki.yml` `admins`); general wiki pages are editable by any registered Arena developer or admin.
        - **Read Visibility (`{% visibility: developers|discord|public %}`)**: `developers` (default for bot pages) requires `isDeveloper(session.github?.login)`; `discord` allows any Arena developer/admin **or** any `pkmn.ai` Discord guild member (`session.discord?.id`, redirecting unauthenticated visitors to `/auth/discord?return_to=...`); `public` is open to everyone.
   3. **Discord Chat Logs (`/chat/logs` & `/chat/logs/token`)**:
-     - Gated by Nginx `auth_request /auth/discord/validate`, which verifies `pkmn_session` (or `Authorization: Bearer <token>` from `/chat/logs/token`) and checks that `discord.id` is in the `discord_members` SQLite table synced by `pkmn.ai-discord.service`. Unauthenticated browser requests redirect to `/auth/discord?return_to=$request_uri`.
+     - Gated by Nginx `auth_request /auth/discord/validate`, which verifies `pkmn_session` (or `Authorization: Bearer <token>` from `/chat/logs/token`) and checks that `discord.id` is in the `discord_members` SQLite table synced by `server/discord.ts`. Unauthenticated browser requests redirect to `/auth/discord?return_to=$request_uri`.
   4. **Private Staff / Watermarking Resources (`/private/*`)**:
      - Gated by `private/nginx.conf` via `auth_request /auth/discord/validate?guild=0`, which sets `X-Auth-User: <discord_id>` for Nginx's Discord Snowflake ID allowlist.
 
-### Discord Daemon Integration (`pkmn.ai-discord.service`, `server/discord.ts`)
-- Runs as a dedicated daemon (`127.0.0.1:9091`) sharing `/var/lib/pkmn/arena.sqlite` (WAL mode):
+### Discord Integration (`server/discord.ts` inside `pkmn.ai-server.service`)
+- Registered on the single `pkmn.ai-server` Polka app (`127.0.0.1:1234`, `discord.register(app, { db })`), sharing the server's `ArenaDB` instance in-process (and executable standalone via `node --env-file-if-exists=private/.env build/server/discord --once` for one-off syncs):
   - **Guild Member Sync**: Syncs current `pkmn.ai` Discord server member IDs (`689316505560809576`) into SQLite `discord_members` every 60s so `server/auth.ts` validates guild membership with zero network latency.
   - **Competitor & `#1` Leaderboard Roles**: Grants the `Competitor` role to all approved developers with a linked `discord_id`, and grants each active ladder's `#1` role (`config/discord.yml` role IDs for `RBY`, `ADV`, `SV`, `RAND`, `VGC`) to all linked developers of the settled `#1` project on that ladder.
   - **Submission & Quarantine DMs**: Sends Discord DMs to the submitting/project developers' linked `discord_id`s (and alerts staff) when a submission fails its smoke test (`DM sent` indicator on `/account/`) or is auto-quarantined.
@@ -2754,7 +2753,7 @@ CREATE TABLE developers (
 );
 
 CREATE TABLE discord_members (
-  discord_id TEXT PRIMARY KEY,                  -- synced every 60s from guild 689316505560809576 by pkmn.ai-discord
+  discord_id TEXT PRIMARY KEY,                  -- synced every 60s from guild 689316505560809576 by server/discord.ts
   username TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -3020,7 +3019,7 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
     }
   }
   ```
-- **Side Effect on `pkmn.ai`**: Sets `auth_token_enc = NULL`, updates `smoke_status`, `unpacked_bytes`, and smoke telemetry, promotes any `pending` `bot_ladder_teams` rows to `active` (or deletes them if `failed_smoke_test` so the project can resubmit 20 teams), transitions replaced weaker settled versions in `retired_version_ids_by_ladder` to `role = 'retired'` (`retired_at = now`), and on `failed_smoke_test` or `quarantined`, refunds the 14-day cooldown (for smoke test failures) and triggers Discord DM notifications via `pkmn.ai-discord`.
+- **Side Effect on `pkmn.ai`**: Sets `auth_token_enc = NULL`, updates `smoke_status`, `unpacked_bytes`, and smoke telemetry, promotes any `pending` `bot_ladder_teams` rows to `active` (or deletes them if `failed_smoke_test` so the project can resubmit 20 teams), transitions replaced weaker settled versions in `retired_version_ids_by_ladder` to `role = 'retired'` (`retired_at = now`), and on `failed_smoke_test` or `quarantined`, refunds the 14-day cooldown (for smoke test failures) and triggers Discord DM notifications via `server/discord.ts`.
 
 #### 3. `POST /api/arena/heartbeat`
 - **Trigger**: Sent between turns at most once every 5 seconds to power the live execution monitor on `/battles/`.
@@ -3057,7 +3056,7 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
     }
   }
   ```
-- **Side Effect on `pkmn.ai`**: Stamps `updated_at`, atomically writes `/home/pkmn/ai/public/api/live.json`, and resets the 15-minute Arena disconnect watchdog timer.
+- **Side Effect on `pkmn.ai`**: Stamps `updated_at`, atomically writes `/home/pkmn/ai/public/api/live.json` (bundling both the active `#live` slot telemetry with `turn_started_at` and the latest `recent_matches` rows), and resets the 15-minute Arena disconnect watchdog timer.
 
 #### 4. `POST /api/arena/match-complete`
 - **Request**:
@@ -3126,7 +3125,7 @@ Whenever `POST /api/arena/match-complete`, `POST /api/arena/submission-status`, 
 - **`/leaderboard/index.html` (+ `/leaderboard/standings.json`)**: Unified single-page Leaderboard with format radio nav (`RBY — ADV — SV — RAND — VGC`), version filter subnav (`Active — Best — All`), 7-column `Standings` table (`#`, `Bot`, `Elo` [`±CI`], `GXE`, `W–L–T`, `Streak`, `LOS`), inline `History` SVG chart, and `Matchups` heatmap matrix.
 - **`/leaderboard/<bot-slug>/index.html` (+ optional `/leaderboard/<bot-slug>.png`)**: Per-project statistics profile with optional pixelated logo, subscribed-ladder radio nav + `#ver-select` version picker, 2-column `.kv` `Overview` + Top 1/10/100 `Reign` table, `Versions` lineage SVG + table (`Version, Elo, Δ Elo, GXE, W–L–T, Turn, Peak RAM, Submitted`), client-sortable 8-column `Head-to-Head` table (`Opponent, Elo, W–L–T, Score, Expected, Δ, Streak, LOS`), and 8-column `Recent Matches` table (`Match, Ver., Opponent, Result, Turns, Bank, RAM, Completed`).
 - **`/leaderboard/tournaments/index.html`**: Championships & archive page with `#event-select`, `#live` 640×360 Showdown `#battle` viewer + `.ps-log`, 6-column `Standings` (`#, Bot, Elo, W–L–T, Points, S–B`), `Crosstable`, and 6-column `Games` table (`Game, Player 1, Player 2, Result, Turns, Bank` with 6-Pokémon Smogon party minisprites).
-- **`/battles/index.html`**: Live execution monitor (`All — RBY — ADV — SV — RAND — VGC` filter, `#live` `PAUSED` / `● RUNNING` slot cards polling `/api/live.json` with 1-second integer clock ticks, and 6-column `History` table `Battle, Player 1, Player 2, Result, Turns, Completed` with zero team sprites).
+- **`/battles/index.html`**: Live execution monitor (`All — RBY — ADV — SV — RAND — VGC` filter, `#live` `PAUSED` / `● RUNNING` slot cards, and 6-column `History` table `Battle, Player 1, Player 2, Result, Turns, Completed` with zero team sprites). Pre-rendered statically for instant first paint, while client JS runs a 1-second local `setInterval` interpolating `Turn` / `Bank` / heartbeat age on the `● RUNNING` slot and polls Nginx-served `/api/live.json` every 2–3s (`Cache-Control: no-cache` + `ETag` `304 Not Modified`) to update turns, `PAUSED`/`● RUNNING` transitions, Game 1 $\rightarrow$ Game 2 score, and newly finished `#battles-table` rows without refreshing the page.
 - **`/projects/index.html`**: Re-renders `static/projects.ts` with the `Active — Arena — All — Inactive` filter, `Arena` rank badges (`RBY #1`, `SV (provisional)`), and live Arena rank priority sort order.
 - *(Note: `/account/` is rendered dynamically via SSR per authenticated GitHub developer.)*
 

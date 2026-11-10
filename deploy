@@ -31,16 +31,10 @@ git diff --quiet $HEAD config/*.{service,timer} ||
 # Always do a rebuild to regenerate the static pages
 npm run build
 
-# Restart services if there have been changes
+# Restart server if there have been changes
 command=${1:-reload}
-[ "${command}" != "restart" ] && git diff --quiet $HEAD server/index.ts ||
+[ "${command}" != "restart" ] && git diff --quiet $HEAD server/ db/ config/ static/projects.yml static/glossary.yml static/util.ts ||
     sudo service pkmn.ai-server restart
-
-[ "${command}" != "restart" ] && git diff --quiet $HEAD config/vouch.yml ||
-    sudo service pkmn.ai-vouch restart
-
-[ "${command}" != "restart" ] && git diff --quiet $HEAD server/discord.ts config/discord.yml ||
-    sudo service pkmn.ai-discord restart
 
 if [ -x private/deploy ]; then
     ./private/deploy

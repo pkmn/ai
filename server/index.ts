@@ -5,7 +5,21 @@ import {serve} from 'site';
 import {header, renderer, style} from '../static/build';
 import {ROOT, root} from '../static/util';
 
+import {Auth} from './auth';
+import {ArenaDB} from './db';
+import * as discord from './discord';
 import * as wiki from './wiki';
+
+const db = new ArenaDB();
+db.syncLadders();
+db.syncProjectsWithSmogon().catch(err => {
+  console.error('Error syncing projects with Smogon:', err);
+  try {
+    db.syncProjects();
+  } catch (fallbackErr) {
+    console.error('Offline project sync failed:', fallbackErr);
+  }
+});
 
 const dirs = {
   root: ROOT,
@@ -14,6 +28,15 @@ const dirs = {
   extra: root('private'),
 };
 serve(Number(process.env.PORT) || 1234, dirs, app => {
+  const wikiInstance = new wiki.Wiki({
+    db,
+    auth: new Auth({
+      db,
+      isAuthorizedGitHub: (login): boolean => wikiInstance.isDeveloper(login),
+    }),
+  });
+  wikiInstance.auth.register(app);
+
   // TODO: this should be partly pre-rendered
   app.get('/battles', (_, res) => {
     res.end(renderer.render({
@@ -32,13 +55,14 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
         —
         <li>
           <input type="radio" value="open" name="radio" id="open" />
-          <label for="open">Open</label>
+        <label for="open">Open</label>
         </li>
       </ul>
     </nav>`,
     }));
   });
 
-  wiki.register(app);
+  wiki.register(app, {auth: wikiInstance.auth, db});
+  discord.register(app, {db});
 });
 

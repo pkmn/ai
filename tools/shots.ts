@@ -9,7 +9,8 @@ import {parseArgs} from 'util';
 import {Browser, BrowserContext, Route, chromium} from 'playwright-core';
 import polka from 'polka';
 
-import {OAuthConfig, register, signToken} from '../server/wiki';
+import {type AuthConfig, SESSION_COOKIE, signToken} from '../server/auth';
+import {register} from '../server/wiki';
 import {ROOT, root} from '../static/util';
 
 const PUBLIC = root('public');
@@ -31,12 +32,12 @@ interface Scenario {
   click?: string;
 }
 
-const WIKI_OAUTH: OAuthConfig = {
-  clientId: 'shots-client-id',
-  clientSecret: 'shots-client-secret',
+const WIKI_AUTH: AuthConfig = {
   sessionSecret: 'shots-session-secret',
-  admins: ['scheibo'],
-  authors: {scheibo: 'pre'},
+  github: {
+    clientId: 'shots-client-id',
+    clientSecret: 'shots-client-secret',
+  },
 };
 
 const WIKI_PROJECTS_YAML = `
@@ -193,7 +194,7 @@ async function startWiki(): Promise<WikiFixture> {
   register(app, {
     wikiDir,
     projectsFile,
-    oauth: WIKI_OAUTH,
+    authConfig: WIKI_AUTH,
     push: false,
   });
 
@@ -201,11 +202,11 @@ async function startWiki(): Promise<WikiFixture> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address() as {port: number};
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const token = signToken({login: 'scheibo', exp}, WIKI_OAUTH.sessionSecret);
+  const token = signToken({github: {id: 1, login: 'scheibo'}, exp}, WIKI_AUTH.sessionSecret);
 
   return {
     origin: `http://127.0.0.1:${addr.port}`,
-    cookie: `pkmn_wiki_session=${encodeURIComponent(token)}`,
+    cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
     sha,
     close: async () => {
       server.closeAllConnections();

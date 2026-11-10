@@ -5,13 +5,15 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
+import type polka from 'polka';
 import * as yaml from 'yaml';
 
 import {root, slugify, toID} from '../static/util';
 
+import {ArenaDB} from './db';
+
 const DISCORD_API = 'https://discord.com/api/v10';
-const VOUCH_VALIDATE = 'http://127.0.0.1:9090/vouch/validate';
-const AUTH_PORT = 9091;
+const MAX_INTERACTION_BYTES = 64 * 1024;
 const SITES = ['vgc.bot', 'pkmn.bot'];
 const CYCLE_MS = 60_000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
@@ -929,191 +931,152 @@ export async function syncCommands(
   return app;
 }
 
-function extractToken(reqHeaders: http.IncomingHttpHeaders): string | undefined {
-  const auth = reqHeaders.authorization;
-  if (typeof auth === 'string') {
-    const m = /^Bearer\s+(\S+)$/i.exec(auth.trim());
-    if (m) return m[1];
-  }
-  const vouchToken = reqHeaders['x-vouch-token'];
-  if (typeof vouchToken === 'string' && vouchToken.trim()) {
-    return vouchToken.trim();
-  }
-  const cookie = reqHeaders.cookie;
-  if (typeof cookie === 'string') {
-    const m = /\bVouchCookie=([^;]+)/.exec(cookie);
-    if (m) return m[1];
-  }
-  return undefined;
+export function syncGuildMembers(
+  db: ArenaDB,
+  members: GuildMember[],
+  now = Math.floor(Date.now() / 1000)
+) {
+  db.syncDiscordMembers(
+    members.map(m => ({id: m.user.id, username: m.user.username})),
+    now
+  );
 }
 
-export async function validateAuth(
-  url: string | undefined,
-  reqHeaders: http.IncomingHttpHeaders,
-  members: Set<string>
-): Promise<{status: number; headers: Record<string, string>; body?: string}> {
-  if (url !== '/vouch/validate' && url !== '/chat/logs/token') {
-    return {status: 404, headers: {}};
-  }
-
-  const forwarded: Record<string, string> = {};
-  for (const key of ['cookie', 'authorization', 'x-vouch-token', 'host']) {
-    const val = reqHeaders[key];
-    if (typeof val === 'string') forwarded[key] = val;
-  }
-  const token = extractToken(reqHeaders);
-  if (token) {
-    forwarded['x-vouch-token'] ??= token;
-    if (!forwarded.cookie?.includes('VouchCookie=')) {
-      forwarded.cookie = forwarded.cookie
-        ? `${forwarded.cookie}; VouchCookie=${token}`
-        : `VouchCookie=${token}`;
-    }
-  }
-
-  const res = await fetch(VOUCH_VALIDATE, {headers: forwarded});
-  const headers: Record<string, string> = {};
-  res.headers.forEach((value, key) => {
-    if (key.toLowerCase().startsWith('x-vouch-')) {
-      headers[key] = value;
-    }
-  });
-
-  if (res.status !== 200) {
-    return {status: res.status, headers};
-  }
-
-  const user = res.headers.get('x-vouch-user');
-  if (!user || !members.has(user)) {
-    return {status: 403, headers};
-  }
-
-  if (url === '/chat/logs/token') {
-    return {
-      status: 200,
-      headers: {
-        'content-type': 'text/plain; charset=utf-8',
-        'cache-control': 'private, no-store',
-      },
-      body: `${token ?? ''}\n`,
-    };
-  }
-
-  return {status: 200, headers};
+export interface Options {
+  db: ArenaDB;
+  token?: string;
+  vgcToken?: string;
+  verifyKey?: string;
+  cycleMs?: number;
 }
 
-export async function run(token: string, vgcToken: string, once = false) {
-  const state = new Map<string, string | undefined>();
-  let memberIds = new Set<string>();
-  let verifyKey: string | undefined;
-  let glossary = loadGlossary();
-  let ready = Promise.resolve();
-
-  const server = once
-    ? undefined
-    : http.createServer((req, res) => {
-      if (req.url === '/discord/interactions' && req.method === 'POST') {
-        const chunks: Buffer[] = [];
-        req.on('data', (chunk: Buffer) => chunks.push(chunk));
-        req.on('end', () => {
-          ready
-            .then(() => {
-              const rawBody = Buffer.concat(chunks).toString('utf8');
-              const {status, headers, body} = handleInteraction(
-                rawBody,
-                req.headers,
-                verifyKey,
-                glossary
-              );
-              res.writeHead(status, headers);
-              res.end(body);
-            })
-            .catch(err => {
-              console.error('Error handling interaction:', err);
-              res.writeHead(500);
-              res.end();
-            });
-        });
-        req.on('error', err => {
-          console.error('Error reading interaction request:', err);
-          res.writeHead(500);
-          res.end();
-        });
-        return;
-      }
-      validateAuth(req.url, req.headers, memberIds)
-        .then(({status, headers, body}) => {
-          res.writeHead(status, headers);
-          res.end(body);
-        })
-        .catch(err => {
-          console.error('Error validating auth:', err);
-          res.writeHead(500);
-          res.end();
-        });
-    }).listen(AUTH_PORT, '127.0.0.1');
+export async function syncOnce(
+  db: ArenaDB,
+  token: string,
+  vgcToken: string,
+  state = new Map<string, string | undefined>(),
+  onVerifyKey?: (key: string) => void
+) {
+  const config = loadConfig();
 
   try {
-    while (true) {
-      const config = loadConfig();
-      glossary = loadGlossary();
+    const app = await syncCommands(token, config.guild, state);
+    onVerifyKey?.(app.verify_key);
+  } catch (err) {
+    console.error('Error syncing commands:', err);
+  }
 
-      ready = syncCommands(token, config.guild, state)
-        .then(app => {
-          verifyKey = app.verify_key;
+  let members: GuildMember[] | undefined;
+  try {
+    members = await fetchGuildMembers(token, config.guild);
+    syncGuildMembers(db, members);
+  } catch (err) {
+    console.error('Error fetching guild members:', err);
+  }
+
+  try {
+    await syncRoles(token, vgcToken, config, state, members);
+  } catch (err) {
+    console.error('Error syncing roles:', err);
+  }
+
+  if (config.channel) {
+    if (config.pins) {
+      try {
+        await syncPins(token, config.channel, config.pins, state);
+      } catch (err) {
+        console.error('Error syncing pins:', err);
+      }
+    }
+
+    let channels: GuildChannel[] | undefined;
+    let roles: GuildRole[] | undefined;
+    try {
+      [channels, roles] = await Promise.all([
+        fetchGuildChannels(token, config.guild),
+        fetchGuildRoles(token, config.guild),
+      ]);
+    } catch (err) {
+      console.error('Error fetching guild channels/roles:', err);
+    }
+
+    try {
+      await syncMessages(token, config.channel, undefined, members, channels, roles);
+    } catch (err) {
+      console.error('Error syncing messages:', err);
+    }
+  }
+}
+
+export function register(app: polka.Polka, options: Options): {stop: () => void} {
+  const token = options.token ?? process.env.DISCORD_BOT_TOKEN;
+  const vgcToken = options.vgcToken ?? process.env.VGC_BOT_TOKEN;
+  const cycleMs = options.cycleMs ?? CYCLE_MS;
+  const state = new Map<string, string | undefined>();
+  let verifyKey = options.verifyKey;
+  let glossary = loadGlossary();
+  let stopped = false;
+  let timer: NodeJS.Timeout | undefined;
+  let ready = Promise.resolve();
+
+  const scheduleNext = () => {
+    if (stopped || !token || !vgcToken) return;
+    timer = setTimeout(() => {
+      if (stopped) return;
+      glossary = loadGlossary();
+      ready = syncOnce(options.db, token, vgcToken, state, k => {
+        verifyKey = k;
+      }).finally(scheduleNext);
+    }, cycleMs);
+    timer.unref();
+  };
+
+  if (token && vgcToken) {
+    ready = syncOnce(options.db, token, vgcToken, state, k => {
+      verifyKey = k;
+    }).finally(scheduleNext);
+  }
+
+  app.post('/discord/interactions', (req, res) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX_INTERACTION_BYTES) {
+        req.destroy();
+        res.writeHead(413);
+        res.end();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      ready
+        .then(() => {
+          const rawBody = Buffer.concat(chunks).toString('utf8');
+          const result = handleInteraction(rawBody, req.headers, verifyKey, glossary);
+          res.writeHead(result.status, result.headers);
+          res.end(result.body);
         })
         .catch(err => {
-          console.error('Error syncing commands:', err);
+          console.error('Error handling interaction:', err);
+          res.writeHead(500);
+          res.end();
         });
-      await ready;
+    });
+    req.on('error', err => {
+      console.error('Error reading interaction request:', err);
+      res.writeHead(500);
+      res.end();
+    });
+  });
 
-      let members: GuildMember[] | undefined;
-      try {
-        members = await fetchGuildMembers(token, config.guild);
-        memberIds = new Set(members.map(m => m.user.id));
-      } catch (err) {
-        console.error('Error fetching guild members:', err);
-      }
-
-      try {
-        await syncRoles(token, vgcToken, config, state, members);
-      } catch (err) {
-        console.error('Error syncing roles:', err);
-      }
-
-      if (config.channel) {
-        if (config.pins) {
-          try {
-            await syncPins(token, config.channel, config.pins, state);
-          } catch (err) {
-            console.error('Error syncing pins:', err);
-          }
-        }
-
-        let channels: GuildChannel[] | undefined;
-        let roles: GuildRole[] | undefined;
-        try {
-          [channels, roles] = await Promise.all([
-            fetchGuildChannels(token, config.guild),
-            fetchGuildRoles(token, config.guild),
-          ]);
-        } catch (err) {
-          console.error('Error fetching guild channels/roles:', err);
-        }
-
-        try {
-          await syncMessages(token, config.channel, undefined, members, channels, roles);
-        } catch (err) {
-          console.error('Error syncing messages:', err);
-        }
-      }
-
-      if (once) break;
-      await new Promise(resolve => setTimeout(resolve, CYCLE_MS));
-    }
-  } finally {
-    server?.close();
-  }
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
 }
 
 if (require.main === module) {
@@ -1123,8 +1086,13 @@ if (require.main === module) {
     console.error(`Missing ${token ? 'VGC_BOT_TOKEN' : 'DISCORD_BOT_TOKEN'} environment variable`);
     process.exit(1);
   }
-  run(token, vgcToken, process.argv.includes('--once')).catch(err => {
-    console.error(err);
-    process.exit(1);
-  });
+  const db = new ArenaDB();
+  syncOnce(db, token, vgcToken)
+    .catch(err => {
+      console.error(err);
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      db.close();
+    });
 }

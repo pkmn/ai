@@ -7,7 +7,12 @@ import * as path from 'path';
 import polka from 'polka';
 
 import {
-  type OAuthConfig,
+  type AuthConfig,
+  SESSION_COOKIE,
+  signToken,
+  verifyToken,
+} from '../server/auth';
+import {
   extractAuthorizedGitHubUsers,
   extractBotPages,
   formatTitle,
@@ -16,18 +21,19 @@ import {
   parsePageContent,
   register,
   serializePageContent,
-  signToken,
-  verifyToken,
 } from '../server/wiki';
 import {slugify} from '../static/util';
 
-const OAUTH: OAuthConfig = {
-  clientId: 'client-id',
-  clientSecret: 'client-secret',
+const AUTH_CFG: AuthConfig = {
   sessionSecret: 'test-session-secret',
-  callbackUrl: 'https://pkmn.ai/auth/github/callback',
-  admins: ['scheibo'],
-  authors: {scheibo: 'pre'},
+  github: {
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+  },
+  discord: {
+    clientId: 'discord-client-id',
+    clientSecret: 'discord-client-secret',
+  },
 };
 
 const PROJECTS_YAML = `
@@ -106,12 +112,14 @@ describe('wiki server routes & git history', () => {
   let projectsFile: string;
   let server: http.Server;
   let baseUrl: string;
+  let discordMembers: Set<string>;
   const realFetch = globalThis.fetch;
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-wiki-test-'));
     wikiDir = path.join(tmpDir, 'wiki');
     projectsFile = path.join(tmpDir, 'projects.yml');
+    discordMembers = new Set(['513513270670262284']);
     fs.mkdirSync(wikiDir, {recursive: true});
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
 
@@ -126,7 +134,8 @@ describe('wiki server routes & git history', () => {
     register(app, {
       wikiDir,
       projectsFile,
-      oauth: OAUTH,
+      authConfig: AUTH_CFG,
+      isDiscordMember: id => discordMembers.has(id),
       push: false,
     });
 
@@ -145,8 +154,14 @@ describe('wiki server routes & git history', () => {
 
   const sessionCookie = (login: string) => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const token = signToken({login, exp}, OAUTH.sessionSecret);
-    return `pkmn_wiki_session=${encodeURIComponent(token)}`;
+    const token = signToken({github: {id: 1, login}, exp}, AUTH_CFG.sessionSecret);
+    return `${SESSION_COOKIE}=${encodeURIComponent(token)}`;
+  };
+
+  const discordCookie = (id: string, username = 'member') => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const token = signToken({discord: {id, username}, exp}, AUTH_CFG.sessionSecret);
+    return `${SESSION_COOKIE}=${encodeURIComponent(token)}`;
   };
 
   test('allows public reading of general pages and requires registered auth to edit', async () => {
@@ -205,7 +220,7 @@ describe('wiki server routes & git history', () => {
     );
     expect(cb.status).toBe(302);
     expect(cb.headers.get('location')).toBe('/wiki/gen9ou');
-    expect(cb.headers.get('set-cookie')).toContain('pkmn_wiki_session=');
+    expect(cb.headers.get('set-cookie')).toContain('pkmn_session=');
   });
 
   test('renders pages, redirects missing pages, previews, saves, and tracks history', async () => {
@@ -422,44 +437,29 @@ describe('wiki server routes & git history', () => {
       redirect: 'manual',
     });
 
-    // Unauthenticated visitor without VouchCookie redirects to /vouch/login
-    const noVouch = await realFetch(`${baseUrl}/wiki/0_ERROR`, {redirect: 'manual'});
-    expect(noVouch.status).toBe(302);
-    expect(noVouch.headers.get('location')).toBe('/vouch/login?url=%2Fwiki%2F0_ERROR');
-
-    // Stub Vouch validation endpoint
-    let vouchStatus = 200;
-    globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string'
-        ? input
-        : input instanceof URL ? input.toString() : input.url;
-      if (url === 'http://127.0.0.1:9091/vouch/validate') {
-        return new Response(null, {status: vouchStatus});
-      }
-      return realFetch(input, init);
-    };
+    // Unauthenticated visitor redirects to /auth/discord
+    const noDiscord = await realFetch(`${baseUrl}/wiki/0_ERROR`, {redirect: 'manual'});
+    expect(noDiscord.status).toBe(302);
+    expect(noDiscord.headers.get('location')).toBe('/auth/discord?return_to=%2Fwiki%2F0_ERROR');
 
     // Verified Discord guild member can read the page and see it in /wiki/pages
     const discordOk = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
-      headers: {Cookie: 'VouchCookie=valid-jwt'},
+      headers: {Cookie: discordCookie('513513270670262284')},
     });
     expect(discordOk.status).toBe(200);
     expect(await discordOk.text()).toContain('Discord-shared notes.');
 
     const discordPages = await (await realFetch(`${baseUrl}/wiki/pages`, {
-      headers: {Cookie: 'VouchCookie=valid-jwt'},
+      headers: {Cookie: discordCookie('513513270670262284')},
     })).text();
     expect(discordPages).toContain('0 ERROR');
 
     // Non-guild Discord user gets 403
-    vouchStatus = 403;
     const discordForbidden = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
-      headers: {Cookie: 'VouchCookie=outsider-jwt'},
+      headers: {Cookie: discordCookie('999999999999999999', 'outsider')},
     });
     expect(discordForbidden.status).toBe(403);
     expect(await discordForbidden.text()).toContain('not a member of the pkmn.ai Discord');
-
-    globalThis.fetch = realFetch;
 
     // 6. Admin (scheibo) updates visibility to 'public'
     await realFetch(`${baseUrl}/wiki/0_ERROR`, {
