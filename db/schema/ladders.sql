@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS ladders (
   format_id TEXT NOT NULL,
   team_mode TEXT NOT NULL,
   min_bots INTEGER NOT NULL DEFAULT 2,
+  team_count INTEGER,
   status TEXT NOT NULL DEFAULT 'active',
   created_at INTEGER NOT NULL,
   archived_at INTEGER

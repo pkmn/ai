@@ -1,0 +1,156 @@
+<div class="account-bar" id="account">
+  <span><span class="muted">Developer:</span> <a href="{{ghHref}}" class="subtle"><strong>{{ghLogin}}</strong></a></span>
+  <span class="muted">·</span>
+  <span><span class="muted">Discord:</span> {{{discordHtml}}}</span>
+  <span class="muted">·</span>
+  <span><span class="muted">Project:</span> <a href="{{projectHref}}" class="subtle"><strong>{{botName}}</strong></a></span>
+  <span class="muted">·</span>
+  <span><span class="muted">Status:</span> <span class="{{statusClass}}" title="{{statusTitle}}">{{statusLabel}}</span></span>
+</div>
+
+{{{activeSection}}}
+
+<section id="submission">
+  <h3><a href="#submission" class="subtle">Submission</a></h3>
+  <form id="submission-form" class="form-box{{formDisabledClass}}" method="POST" action="/api/submissions">
+    <fieldset class="form-fieldset"{{{fieldsetDisabled}}}>
+      <div class="form-grid">
+        <label for="sub-ver">Version</label>
+        <div class="form-row-inline">
+          <input id="sub-ver" name="version" class="input-text input-short" type="text" maxlength="12" placeholder="e.g. 1.0.0" required>
+          <label for="sub-type">Package</label>
+          <select id="sub-type" name="format_type" class="min-select">
+            <option value="bundle" selected>darwin/arm64 (.tar.zst)</option>
+            <option value="oci">OCI image (linux/arm64)</option>
+          </select>
+        </div>
+
+        <label for="sub-url">Artifact URL</label>
+        <input id="sub-url" name="download_url" class="input-text" type="text" spellcheck="false" placeholder="https://.../bot-darwin-arm64.tar.zst or ghcr.io/org/bot:1.0.0" required>
+
+        <label for="sub-sha">SHA-256</label>
+        <input id="sub-sha" name="sha256" class="input-text" type="text" spellcheck="false" placeholder="64-character hex archive or OCI manifest digest" required>
+
+        <label for="sub-auth">Auth Header</label>
+        <input id="sub-auth" name="auth_token" class="input-text" type="password" autocomplete="off" placeholder="Optional one-time header for private releases (scrubbed immediately after fetch)">
+
+        {{{vgcTeamsRowHtml}}}
+
+        <label>Ladders</label>
+        <div class="ladders-submit-row">
+          <div class="check-group">
+            {{{checkboxesHtml}}}
+          </div>
+          <button id="sub-btn" type="submit" class="btn"{{{submitDisabled}}}{{{submitTitleAttr}}}>Submit</button>
+        </div>
+      </div>
+    </fieldset>
+    {{{statusNotice}}}
+  </form>
+</section>
+
+{{{historySection}}}
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const unlinkBtn = document.getElementById('discord-unlink-btn');
+    if (unlinkBtn) {
+      unlinkBtn.addEventListener('click', async e => {
+        e.preventDefault();
+        const res = await fetch('/api/account/discord/unlink', {
+          method: 'POST',
+          headers: {Accept: 'application/json'},
+        });
+        if (res.ok) window.location.reload();
+      });
+    }
+
+    const urlInput = document.getElementById('sub-url');
+    const typeSelect = document.getElementById('sub-type');
+    if (urlInput && typeSelect) {
+      urlInput.addEventListener('input', () => {
+        const v = urlInput.value.trim().split('?')[0].toLowerCase();
+        if (!v) return;
+        const isArchive = /\.(tar\.gz|tgz|tar\.xz|txz|tar\.zst|tzst)$/.test(v);
+        if (isArchive) {
+          typeSelect.value = 'bundle';
+        } else if (!v.startsWith('http://') && !v.startsWith('https://') && v.includes('/')) {
+          typeSelect.value = 'oci';
+        }
+      });
+    }
+
+    const teamFields = document.querySelectorAll('.vgc-teams-field');
+    const ladderChecks = document.querySelectorAll('input[name="ladders"]');
+    const syncTeamsVisibility = () => {
+      if (!teamFields.length) return;
+      let show = false;
+      ladderChecks.forEach(cb => {
+        if (cb.checked && cb.dataset.needsTeams === 'true') show = true;
+      });
+      teamFields.forEach(el => el.classList.toggle('hide', !show));
+    };
+    ladderChecks.forEach(cb => cb.addEventListener('change', syncTeamsVisibility));
+    syncTeamsVisibility();
+
+    const fileInput = document.getElementById('sub-teams-file');
+    const teamsArea = document.getElementById('sub-teams');
+    if (fileInput && teamsArea) {
+      fileInput.addEventListener('change', () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          teamsArea.value = String(reader.result || '');
+        };
+        reader.readAsText(f);
+      });
+    }
+
+    const form = document.getElementById('submission-form');
+    const statusEl = document.getElementById('sub-status');
+    const submitBtn = document.getElementById('sub-btn');
+    if (form && statusEl && submitBtn) {
+      form.addEventListener('submit', async e => {
+        e.preventDefault();
+        const ladders = [];
+        ladderChecks.forEach(cb => {
+          if (cb.checked) ladders.push(cb.value);
+        });
+        const payload = {
+          version: document.getElementById('sub-ver').value.trim(),
+          format_type: typeSelect.value,
+          download_url: urlInput.value.trim(),
+          sha256: document.getElementById('sub-sha').value.trim(),
+          auth_token: document.getElementById('sub-auth').value.trim(),
+          ladders,
+        };
+        if (teamsArea && !teamsArea.closest('.hide')) {
+          payload.teams = teamsArea.value;
+        }
+        submitBtn.disabled = true;
+        statusEl.className = 'muted';
+        statusEl.textContent = 'Validating submission...';
+        try {
+          const res = await fetch('/api/submissions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', Accept: 'application/json'},
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            statusEl.className = 'no';
+            statusEl.textContent = data.error || ('Submission failed (' + res.status + ')');
+            submitBtn.disabled = false;
+            return;
+          }
+          window.location.reload();
+        } catch {
+          statusEl.className = 'no';
+          statusEl.textContent = 'Network error submitting version.';
+          submitBtn.disabled = false;
+        }
+      });
+    }
+  });
+</script>

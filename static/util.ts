@@ -21,3 +21,11 @@ export const escapeHtml = (str: string) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+export const renderTemplate = (
+  template: string,
+  vars: Record<string, string | number | undefined>
+) =>
+  template
+    .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => String(vars[k] ?? ''))
+    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => escapeHtml(String(vars[k] ?? '')));

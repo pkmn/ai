@@ -33,7 +33,7 @@ npm run build
 
 # Restart server if there have been changes
 command=${1:-reload}
-[ "${command}" != "restart" ] && git diff --quiet $HEAD server/ db/ config/ static/projects.yml static/glossary.yml static/util.ts ||
+[ "${command}" != "restart" ] && git diff --quiet $HEAD server/ db/ config/ static/projects.yml static/glossary.yml static/util.ts static/*.css static/*.html ||
     sudo service pkmn.ai-server restart
 
 if [ -x private/deploy ]; then

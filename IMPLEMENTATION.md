@@ -2544,9 +2544,12 @@ All GitHub OAuth2 and Discord OAuth2 flows are centralized in `server/auth.ts` i
     ```
   - Completing GitHub OAuth (`GET /auth/github` $\rightarrow$ `GET /auth/github/callback`) preserves any existing `discord` claim in `pkmn_session` and records immutable `github_id` on the developer's SQLite row; completing Discord OAuth (`GET /auth/discord` $\rightarrow$ `GET /auth/discord/callback`) preserves any existing `github` claim. `POST /auth/logout` clears `pkmn_session`.
 - **Four Protected Surfaces Powered by `server/auth.ts`**:
-  1. **Developer Account & Submission Portal (`/account/`, `/submit` $\rightarrow$ `302 /account/`)**:
+  1. **Developer Account & Submission Portal (`/account/`)**:
      - Requires `session.github`. Unauthenticated requests redirect to `/auth/github?return_to=/account/`.
-     - **Personalized Per-Developer Header (`.account-bar`)**: Displays `Developer: <github_login> · Discord: @<discord_username> (link / change / unlink) · Project: <Bot Name> · Status: <Qualified|Pending|Eligible|Ineligible>`. Clicking `link` / `change` initiates `/auth/discord?intent=link&return_to=/account/`, verifying ownership via Discord OAuth (`scope=identify`) and persisting both the immutable Snowflake `discord_id` and `@discord_username` on **that individual developer's** row in `developers`.
+     - **Personalized Per-Developer Header (`.account-bar`)**: Displays `Developer: <github_login> · Discord: @<discord_username> (link / change / unlink) · Project: <Bot Name> · Status: <Pending|Qualified|Eligible|Ineligible>`. Clicking `link` / `change` initiates `/auth/discord?intent=link&return_to=/account/`, verifying ownership via Discord OAuth (`scope=identify`) and persisting both the immutable Snowflake `discord_id` and `@discord_username` on **that individual developer's** row in `developers`.
+     - **Account Lifecycle (`Pending` $\rightarrow$ `Qualified` $\rightarrow$ `Eligible` $\leftrightarrow$ `Ineligible`)**:
+       - Projects in `static/projects.yml` (`arena:`) start as `Pending` (`qualified` omitted/`false`) or `Qualified` (`qualified: true`). `Pending` owners can log in to `/account/`, link Discord, and edit `/wiki`, while `#submission` is greyed out/disabled (`<fieldset disabled>`).
+       - `Qualified` accounts remain `Qualified` (with `#submission` disabled) while all ladders in `config/ladders.yml` have `status: upcoming`, and automatically become `Eligible` (`#submission` enabled; any still-`upcoming` ladder checkboxes disabled) once at least one ladder has `status: active`—transitioning to `Ineligible` while a submission is `pending_pull`, on 14-day cooldown, or unsettled.
      - **Shared Project Dashboard**: Multiple developers on the same project each manage their own Discord link in `.account-bar`, while viewing the identical shared `Active` versions table, `Submission` form, and `History` table for their team's project.
   2. **Git-Backed Djot Wiki (`/wiki`, `server/wiki.ts`)**:
      - Delegates all session and membership checks to `server/auth.ts`:
@@ -3113,7 +3116,7 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
 
 ### Nginx Configuration (`config/nginx.conf` & `private/nginx.conf`)
 - Keep `root /home/pkmn/ai/public;` so pre-rendered `/leaderboard/*`, `/battles/index.html`, `/projects/index.html`, and `/api/live.json` are served directly from disk by Nginx with zero Node.js overhead.
-- Proxy `/wiki`, `/auth/`, `/account`, `/submit` (`302` $\rightarrow$ `/account/`), `/api/submissions`, `/api/account/`, `/api/arena/`, and `/chat/logs/token` to `http://127.0.0.1:1234` (`client_max_body_size 1m;`).
+- Proxy `/wiki`, `/auth/`, `/account`, `/api/submissions`, `/api/account/`, `/api/arena/`, and `/chat/logs/token` to `http://127.0.0.1:1234` (`client_max_body_size 1m;`).
 - Replace `/vouch/validate` with internal `auth_request /auth/discord/validate` (`http://127.0.0.1:1234`) for `/chat/logs` and `/private/*` (`?guild=0`), removing all `127.0.0.1:9090` Vouch blocks.
 
 ---

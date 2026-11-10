@@ -23,6 +23,7 @@ export interface Project {
   arena?: {
     owners: {[github: string]: string | number};
     logo?: string;
+    qualified?: boolean;
   };
 }
 

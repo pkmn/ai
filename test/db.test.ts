@@ -148,7 +148,8 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
     const db = new ArenaDB(':memory:');
     try {
       db.syncLadders(LADDERS_FILE, 1_760_000_000);
-      const ladders = db.getActiveLadders();
+      expect(db.getActiveLadders()).toEqual([]);
+      const ladders = db.getCurrentLadders();
       expect(ladders.map(l => ({
         id: l.id,
         slot: l.slot,
@@ -156,6 +157,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
         format_id: l.format_id,
         team_mode: l.team_mode,
         min_bots: l.min_bots,
+        status: l.status,
       }))).toEqual([
         {
           id: 'gen1ou20261109',
@@ -164,6 +166,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen1ou',
           team_mode: 'harvested',
           min_bots: 2,
+          status: 'upcoming',
         },
         {
           id: 'gen3ou20261109',
@@ -172,6 +175,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen3ou',
           team_mode: 'harvested',
           min_bots: 2,
+          status: 'upcoming',
         },
         {
           id: 'gen9ou20261109',
@@ -180,6 +184,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen9ou',
           team_mode: 'harvested',
           min_bots: 2,
+          status: 'upcoming',
         },
         {
           id: 'gen9randombattle20261109',
@@ -188,6 +193,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen9randombattle',
           team_mode: 'random',
           min_bots: 2,
+          status: 'upcoming',
         },
         {
           id: 'gen9championsvgc2026regmc',
@@ -196,9 +202,9 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen9championsvgc2026regmc',
           team_mode: 'competitor_pool',
           min_bots: 3,
+          status: 'upcoming',
         },
       ]);
-      expect(db.getActiveLadderBySlot('vgc')?.id).toBe('gen9championsvgc2026regmc');
     } finally {
       db.close();
     }
@@ -212,13 +218,24 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
   format_id: gen9championsvgc2026regmc
   team_mode: competitor_pool
   status: active
+`)).toThrow(/must specify a positive team_count/);
+
+    expect(() => parseLaddersYaml(`
+- id: gen9championsvgc2026regmc
+  slot: vgc
+  display_name: VGC
+  format_id: gen9championsvgc2026regmc
+  team_mode: competitor_pool
+  team_count: 20
+  status: active
 - id: gen9championsvgc2026regmd
   slot: vgc
   display_name: VGC
   format_id: gen9championsvgc2026regmd
   team_mode: competitor_pool
+  team_count: 20
   status: active
-`)).toThrow(/Multiple active ladders configured for slot "vgc"/);
+`)).toThrow(/Multiple current ladders configured for slot "vgc"/);
 
     const db = new ArenaDB(':memory:');
     try {
@@ -228,16 +245,20 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
   display_name: VGC 2026 Reg M-C
   format_id: gen9championsvgc2026regmc
   team_mode: competitor_pool
+  team_count: 20
   status: archived
 - id: gen9championsvgc2026regmd
   slot: vgc
   display_name: VGC
   format_id: gen9championsvgc2026regmd
   team_mode: competitor_pool
+  team_count: 20
   status: active
 `, 1_765_000_000);
 
-      expect(db.getActiveLadderBySlot('vgc')?.id).toBe('gen9championsvgc2026regmd');
+      const currentVgc = db.getActiveLadderBySlot('vgc')!;
+      expect(currentVgc.id).toBe('gen9championsvgc2026regmd');
+      expect(currentVgc.team_count).toBe(20);
       const old = db.getLadder('gen9championsvgc2026regmc')!;
       expect(old.status).toBe('archived');
       expect(old.display_name).toBe('VGC 2026 Reg M-C');
@@ -486,6 +507,7 @@ describe('Smogon lookup & projects.yml arena sync', () => {
 - name: Foul Play
   active: 2021
   arena:
+    qualified: true
     owners:
       PMariglia: pmariglia.535629
       CoAuthor: coauthor.1002
@@ -501,10 +523,11 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       const fp = db.getBotBySlug('foul-play')!;
       expect(fp.name).toBe('Foul Play');
       expect(fp.logo_file).toBe('foul-play.png');
-      expect(fp.status).toBe('approved');
+      expect(fp.status).toBe('qualified');
 
       const mm = db.getBotBySlug('metamon')!;
       expect(mm.logo_file).toBeNull();
+      expect(mm.status).toBe('pending');
       expect(db.getBotBySlug('historical-only')).toBeUndefined();
 
       db.linkDeveloperGitHubId('PMariglia', 4242, 1_760_000_100);

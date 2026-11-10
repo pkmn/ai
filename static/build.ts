@@ -92,6 +92,11 @@ const build = async (rebuild?: boolean) => {
     expected.add(page);
   }
 
+  // `@untitaker/hyperlink` (`hyperlink public --check-anchors`) has no CLI flag or config option
+  // to ignore non-static routes (`--help` only exposes `--check-anchors`, `--sources`, `-j`, and
+  // `--github-actions`). Routes linked from `.dj` content that are actually Nginx redirects
+  // (`/chat`) or dynamic SSR routes (`/account`, plus `/leaderboard` until pre-rendered) therefore
+  // need 0-byte `index.html` stubs on disk so `npm run lint` does not report broken links.
   for (const placeholder of ['chat', 'leaderboard', 'account']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
     if (!fs.exists(file)) {

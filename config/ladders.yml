@@ -4,7 +4,7 @@
   format_id: gen1ou
   team_mode: harvested
   min_bots: 2
-  status: active
+  status: upcoming
 
 - id: gen3ou20261109
   slot: adv
@@ -12,7 +12,7 @@
   format_id: gen3ou
   team_mode: harvested
   min_bots: 2
-  status: active
+  status: upcoming
 
 - id: gen9ou20261109
   slot: sv
@@ -20,7 +20,7 @@
   format_id: gen9ou
   team_mode: harvested
   min_bots: 2
-  status: active
+  status: upcoming
 
 - id: gen9randombattle20261109
   slot: rand
@@ -28,7 +28,7 @@
   format_id: gen9randombattle
   team_mode: random
   min_bots: 2
-  status: active
+  status: upcoming
 
 - id: gen9championsvgc2026regmc
   slot: vgc
@@ -36,4 +36,9 @@
   format_id: gen9championsvgc2026regmc
   team_mode: competitor_pool
   min_bots: 3
-  status: active
+  team_count: 20
+  status: upcoming
+  pool_dirs:
+    - teams/teams/gen9championsvgc2026regmc
+    - teams/pkmn_stuff/teams/Teams_real
+    - teams/vgc.bot/gen9championsvgc2026regmc

@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import {DatabaseSync} from 'node:sqlite';
 import * as path from 'path';
@@ -26,12 +27,19 @@ export const AVATARS_DIR = root('static', 'avatars');
 
 export type LadderSlot = 'rby' | 'adv' | 'sv' | 'rand' | 'vgc';
 export type TeamMode = 'harvested' | 'random' | 'competitor_pool';
-export type LadderStatus = 'active' | 'settling' | 'archived';
-export type BotStatus = 'approved' | 'disabled';
+export type LadderStatus = 'upcoming' | 'active' | 'settling' | 'archived';
+export type BotStatus = 'pending' | 'qualified' | 'disabled';
+export type FormatType = 'bundle' | 'oci';
+export type SmokeStatus = 'pending_pull' | 'passed' | 'failed_smoke_test' | 'quarantined';
+export type AccountStatusLabel = 'Pending' | 'Qualified' | 'Eligible' | 'Ineligible';
+
+export const COOLDOWN_S = 14 * 24 * 60 * 60;
+export const SETTLED_MAX_SE = 30;
+export const SETTLED_MIN_MATCHES = 25;
 
 const SLOTS = new Set<LadderSlot>(['rby', 'adv', 'sv', 'rand', 'vgc']);
 const TEAM_MODES = new Set<TeamMode>(['harvested', 'random', 'competitor_pool']);
-const LADDER_STATUSES = new Set<LadderStatus>(['active', 'settling', 'archived']);
+const LADDER_STATUSES = new Set<LadderStatus>(['upcoming', 'active', 'settling', 'archived']);
 const MIGRATION_FILE_RE = /^\d{4}_[a-z0-9_]+\.sql$/;
 
 export interface ArenaDBOptions {
@@ -56,7 +64,9 @@ export interface LadderConfig {
   format_id: string;
   team_mode: TeamMode;
   min_bots?: number;
+  team_count?: number;
   status?: LadderStatus;
+  pool_dirs?: string[];
 }
 
 export interface LadderRow {
@@ -66,6 +76,7 @@ export interface LadderRow {
   format_id: string;
   team_mode: TeamMode;
   min_bots: number;
+  team_count: number | null;
   status: LadderStatus;
   created_at: number;
   archived_at: number | null;
@@ -93,6 +104,69 @@ export interface DeveloperRow {
   updated_at: number;
 }
 
+export interface BotVersionRow {
+  id: number;
+  bot_id: number;
+  submitted_by_dev_id: number | null;
+  version_str: string;
+  format_type: FormatType;
+  download_url: string;
+  sha256: string;
+  auth_token_enc: string | null;
+  ladders_json: string;
+  unpacked_bytes: number | null;
+  smoke_status: SmokeStatus;
+  smoke_duration_ms: number | null;
+  smoke_turn_ms: number | null;
+  smoke_peak_ram_mb: number | null;
+  smoke_error_log: string | null;
+  dm_sent: number;
+  created_at: number;
+}
+
+export interface ActiveEntryView {
+  ladder_id: string;
+  slot: LadderSlot;
+  display_name: string;
+  version_id: number;
+  version_str: string;
+  role: 'champion' | 'challenger';
+  rating_elo: number;
+  rating_se: number;
+  rank_current: number | null;
+  matches_played: number;
+  ww: number;
+  wt: number;
+  split: number;
+  tl: number;
+  ll: number;
+  settled_at: number | null;
+}
+
+export interface VersionHistoryView extends BotVersionRow {
+  active_ladder_names: string[];
+}
+
+export interface SubmissionStatus {
+  label: AccountStatusLabel;
+  canSubmit: boolean;
+  reason?: string;
+  nextEligibleAt?: number;
+}
+
+export interface CreateSubmissionInput {
+  botId: number;
+  submittedByDevId: number | null;
+  versionStr: string;
+  formatType: FormatType;
+  downloadUrl: string;
+  sha256: string;
+  authTokenEnc: string | null;
+  ladderIds: string[];
+  teamsByLadder?: Record<string, string[]>;
+  now?: number;
+}
+
 export interface RawProjectOwner {
   github: string;
   rawSmogon: string | number;
@@ -110,6 +184,7 @@ export interface ParsedArenaProject<Owner = RawProjectOwner> {
   slug: string;
   name: string;
   logoFile: string | null;
+  qualified: boolean;
   owners: Owner[];
 }
 
@@ -212,7 +287,13 @@ export function parseArenaProjects(
       logoFile = `${slug}.png`;
     }
 
-    parsed.push({slug, name, logoFile, owners});
+    parsed.push({
+      slug,
+      name,
+      logoFile,
+      qualified: Boolean(entry.arena.qualified),
+      owners,
+    });
   }
 
   return parsed;
@@ -267,16 +348,23 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     if (!Number.isInteger(minBots) || minBots < 2) {
       throw new Error(`Invalid min_bots "${String(minBots)}" for "${id}"`);
     }
+    if (teamMode === 'competitor_pool') {
+      if (!Number.isInteger(entry.team_count) || entry.team_count! < 1) {
+        throw new Error(`competitor_pool ladder "${id}" must specify a positive team_count`);
+      }
+    } else if (entry.team_count !== undefined) {
+      throw new Error(`team_count is only valid on competitor_pool ladders ("${id}")`);
+    }
     if (seenIds.has(id)) {
       throw new Error(`Duplicate ladder id "${id}" in ladders.yml`);
     }
     seenIds.add(id);
 
-    if (status === 'active') {
+    if (status === 'active' || status === 'upcoming') {
       const prev = activeSlots.get(slot);
       if (prev) {
         throw new Error(
-          `Multiple active ladders configured for slot "${slot}": "${prev}" and "${id}"`
+          `Multiple current ladders configured for slot "${slot}": "${prev}" and "${id}"`
         );
       }
       activeSlots.set(slot, id);
@@ -284,6 +372,64 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
   }
 
   return entries;
+}
+
+export function loadLadderPoolDirs(file = LADDERS_FILE): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (!fs.existsSync(file)) return out;
+  const entries = parseLaddersYaml(fs.readFileSync(file, 'utf8'));
+  for (const entry of entries) {
+    if (Array.isArray(entry.pool_dirs) && entry.pool_dirs.length) {
+      out.set(entry.id, entry.pool_dirs.map(p => root(p)));
+    }
+  }
+  return out;
+}
+
+export function deduceFormatType(downloadUrl: string): FormatType {
+  const cleanPath = downloadUrl.split('?')[0].toLowerCase();
+  if (
+    cleanPath.endsWith('.tar.gz') ||
+    cleanPath.endsWith('.tgz') ||
+    cleanPath.endsWith('.tar.xz') ||
+    cleanPath.endsWith('.txz') ||
+    cleanPath.endsWith('.tar.zst') ||
+    cleanPath.endsWith('.tzst')
+  ) {
+    return 'bundle';
+  }
+  return 'oci';
+}
+
+function deriveSecretKey(secret: string): Buffer {
+  return Buffer.from(
+    crypto.hkdfSync('sha256', secret, '', 'pkmn-arena-auth-token-v1', 32)
+  );
+}
+
+export function encryptSecret(plaintext: string, secret: string): string {
+  const key = deriveSecretKey(secret);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [
+    iv.toString('base64url'),
+    tag.toString('base64url'),
+    encrypted.toString('base64url'),
+  ].join('.');
+}
+
+export function decryptSecret(encoded: string, secret: string): string {
+  const parts = encoded.split('.');
+  if (parts.length !== 3) throw new Error('Invalid encrypted secret format');
+  const key = deriveSecretKey(secret);
+  const iv = Buffer.from(parts[0], 'base64url');
+  const tag = Buffer.from(parts[1], 'base64url');
+  const data = Buffer.from(parts[2], 'base64url');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
 
 function listSqlFiles(dir: string): string[] {
@@ -448,15 +594,17 @@ export class ArenaDB {
     );
     const upsert = this.db.prepare(`
       INSERT INTO ladders (
-        id, slot, display_name, format_id, team_mode, min_bots, status, created_at, archived_at
+        id, slot, display_name, format_id, team_mode, min_bots,
+        team_count, status, created_at, archived_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         slot = excluded.slot,
         display_name = excluded.display_name,
         format_id = excluded.format_id,
         team_mode = excluded.team_mode,
         min_bots = excluded.min_bots,
+        team_count = excluded.team_count,
         status = excluded.status,
         archived_at = excluded.archived_at
     `);
@@ -472,6 +620,7 @@ export class ArenaDB {
           status = 'archived';
         }
         const minBots = cfg.min_bots ?? (cfg.team_mode === 'competitor_pool' ? 3 : 2);
+        const teamCount = cfg.team_count ?? null;
         const archivedAt = status === 'archived'
           ? (existing?.archived_at ?? now)
           : null;
@@ -482,6 +631,7 @@ export class ArenaDB {
           cfg.format_id.trim(),
           cfg.team_mode,
           minBots,
+          teamCount,
           status,
           now,
           archivedAt
@@ -503,11 +653,11 @@ export class ArenaDB {
 
     const upsertBot = this.db.prepare(`
       INSERT INTO bots (slug, name, logo_file, status, updated_at)
-      VALUES (?, ?, ?, 'approved', ?)
+      VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(slug) DO UPDATE SET
         name = excluded.name,
         logo_file = excluded.logo_file,
-        status = 'approved',
+        status = excluded.status,
         updated_at = excluded.updated_at
     `);
     const selectBotId = this.db.prepare('SELECT id FROM bots WHERE slug = ?');
@@ -550,7 +700,8 @@ export class ArenaDB {
       }
 
       for (const proj of projects) {
-        upsertBot.run(proj.slug, proj.name, proj.logoFile, now);
+        const botStatus: BotStatus = proj.qualified ? 'qualified' : 'pending';
+        upsertBot.run(proj.slug, proj.name, proj.logoFile, botStatus, now);
         const bot = selectBotId.get(proj.slug) as {id: number};
 
         for (const owner of proj.owners) {
@@ -595,6 +746,7 @@ export class ArenaDB {
       slug: proj.slug,
       name: proj.name,
       logoFile: proj.logoFile,
+      qualified: proj.qualified,
       owners: proj.owners.map(owner => {
         if (owner.smogonId !== undefined) {
           const existing = this.getDeveloperByGitHub(owner.github);
@@ -715,6 +867,7 @@ export class ArenaDB {
         slug: proj.slug,
         name: proj.name,
         logoFile: proj.logoFile,
+        qualified: proj.qualified,
         owners,
       });
     }
@@ -733,6 +886,14 @@ export class ArenaDB {
   getLadders(): LadderRow[] {
     return this.db.prepare(
       `SELECT * FROM ladders ORDER BY ${SLOT_ORDER_SQL} ASC, created_at ASC, id ASC`
+    ).all() as unknown as LadderRow[];
+  }
+
+  getCurrentLadders(): LadderRow[] {
+    return this.db.prepare(
+      `SELECT * FROM ladders
+       WHERE status IN ('upcoming', 'active')
+       ORDER BY ${SLOT_ORDER_SQL} ASC, created_at ASC, id ASC`
     ).all() as unknown as LadderRow[];
   }
 
@@ -843,5 +1004,275 @@ export class ArenaDB {
     const row = this.db.prepare('SELECT 1 FROM discord_members WHERE discord_id = ?')
       .get(discordId);
     return row !== undefined;
+  }
+
+  hasActiveLadderTeams(ladderId: string, botId: number): boolean {
+    const row = this.db.prepare(
+      `SELECT 1 FROM bot_ladder_teams
+       WHERE ladder_id = ? AND bot_id = ? AND status = 'active'
+       LIMIT 1`
+    ).get(ladderId, botId);
+    return row !== undefined;
+  }
+
+  getTeamsForBotLadder(
+    ladderId: string,
+    botId: number,
+    status?: 'pending' | 'active'
+  ): string[] {
+    const rows = status
+      ? this.db.prepare(
+        `SELECT canonical_packed FROM bot_ladder_teams
+         WHERE ladder_id = ? AND bot_id = ? AND status = ?
+         ORDER BY slot_index ASC`
+      ).all(ladderId, botId, status)
+      : this.db.prepare(
+        `SELECT canonical_packed FROM bot_ladder_teams
+         WHERE ladder_id = ? AND bot_id = ?
+         ORDER BY slot_index ASC`
+      ).all(ladderId, botId);
+    return (rows as Array<{canonical_packed: string}>).map(r => r.canonical_packed);
+  }
+
+  getActiveEntriesForBot(botId: number): ActiveEntryView[] {
+    return this.db.prepare(`
+      SELECT
+        le.ladder_id,
+        l.slot,
+        l.display_name,
+        le.version_id,
+        bv.version_str,
+        le.role,
+        le.rating_elo,
+        le.rating_se,
+        le.rank_current,
+        le.matches_played,
+        le.ww,
+        le.wt,
+        le.split,
+        le.tl,
+        le.ll,
+        le.settled_at
+      FROM ladder_entries le
+      JOIN bot_versions bv ON bv.id = le.version_id
+      JOIN ladders l ON l.id = le.ladder_id
+      WHERE bv.bot_id = ?
+        AND bv.smoke_status = 'passed'
+        AND le.role IN ('champion', 'challenger')
+        AND l.status IN ('active', 'settling')
+      ORDER BY
+        CASE l.slot
+          WHEN 'rby' THEN 0
+          WHEN 'adv' THEN 1
+          WHEN 'sv' THEN 2
+          WHEN 'rand' THEN 3
+          WHEN 'vgc' THEN 4
+          ELSE 5
+        END ASC,
+        CASE le.role WHEN 'champion' THEN 0 ELSE 1 END ASC,
+        le.rating_elo DESC
+    `).all(botId) as unknown as ActiveEntryView[];
+  }
+
+  getVersionsForBot(botId: number): VersionHistoryView[] {
+    const versions = this.db.prepare(
+      'SELECT * FROM bot_versions WHERE bot_id = ? ORDER BY created_at DESC, id DESC'
+    ).all(botId) as unknown as BotVersionRow[];
+
+    const activeRows = this.db.prepare(`
+      SELECT le.version_id, l.display_name
+      FROM ladder_entries le
+      JOIN bot_versions bv ON bv.id = le.version_id
+      JOIN ladders l ON l.id = le.ladder_id
+      WHERE bv.bot_id = ?
+        AND le.role IN ('champion', 'challenger')
+        AND l.status IN ('active', 'settling')
+      ORDER BY
+        CASE l.slot
+          WHEN 'rby' THEN 0
+          WHEN 'adv' THEN 1
+          WHEN 'sv' THEN 2
+          WHEN 'rand' THEN 3
+          WHEN 'vgc' THEN 4
+          ELSE 5
+        END ASC
+    `).all(botId) as Array<{version_id: number; display_name: string}>;
+
+    const activeByVersion = new Map<number, string[]>();
+    for (const r of activeRows) {
+      const list = activeByVersion.get(r.version_id) ?? [];
+      list.push(r.display_name);
+      activeByVersion.set(r.version_id, list);
+    }
+
+    return versions.map(v => ({
+      ...v,
+      active_ladder_names: activeByVersion.get(v.id) ?? [],
+    }));
+  }
+
+  hasAnyLeaderboardEntry(botId: number): boolean {
+    const row = this.db.prepare(`
+      SELECT 1
+      FROM ladder_entries le
+      JOIN bot_versions bv ON bv.id = le.version_id
+      WHERE bv.bot_id = ?
+      LIMIT 1
+    `).get(botId);
+    return row !== undefined;
+  }
+
+  computeBotSubmissionStatus(
+    botId: number,
+    now = Math.floor(Date.now() / 1000)
+  ): SubmissionStatus {
+    const bot = this.getBotById(botId);
+    if (!bot || bot.status === 'disabled') {
+      return {
+        label: 'Ineligible',
+        canSubmit: false,
+        reason: 'Project is disabled.',
+      };
+    }
+
+    if (bot.status === 'pending') {
+      return {
+        label: 'Pending',
+        canSubmit: false,
+        reason: 'Project qualification is pending staff review.',
+      };
+    }
+
+    const openLadders = this.getActiveLadders();
+    if (!openLadders.length) {
+      return {
+        label: 'Qualified',
+        canSubmit: false,
+        reason: 'Ladders are not open for submissions yet.',
+      };
+    }
+
+    const pendingRow = this.db.prepare(
+      `SELECT version_str FROM bot_versions
+       WHERE bot_id = ? AND smoke_status = 'pending_pull'
+       LIMIT 1`
+    ).get(botId) as {version_str: string} | undefined;
+    if (pendingRow) {
+      return {
+        label: 'Ineligible',
+        canSubmit: false,
+        reason: `Version ${pendingRow.version_str} is currently awaiting Arena smoke testing.`,
+      };
+    }
+
+    const refundedAt = bot.cooldown_refunded_at ?? 0;
+    const latestPassed = this.db.prepare(
+      `SELECT created_at, version_str FROM bot_versions
+       WHERE bot_id = ? AND smoke_status = 'passed' AND created_at > ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`
+    ).get(botId, refundedAt) as {created_at: number; version_str: string} | undefined;
+
+    if (latestPassed) {
+      const nextEligibleAt = latestPassed.created_at + COOLDOWN_S;
+      if (now < nextEligibleAt) {
+        const daysLeft = Math.ceil((nextEligibleAt - now) / 86400);
+        return {
+          label: 'Ineligible',
+          canSubmit: false,
+          reason:
+            `14-day cooldown active (${daysLeft}d remaining after ${latestPassed.version_str}).`,
+          nextEligibleAt,
+        };
+      }
+    }
+
+    const activeEntries = this.getActiveEntriesForBot(botId);
+    for (const entry of activeEntries) {
+      const settled = entry.settled_at !== null || (
+        entry.rating_se <= SETTLED_MAX_SE && entry.matches_played >= SETTLED_MIN_MATCHES
+      );
+      if (!settled) {
+        return {
+          label: 'Ineligible',
+          canSubmit: false,
+          reason:
+            `Active version ${entry.version_str} on ${entry.display_name} has not settled ` +
+            `(SE=${entry.rating_se.toFixed(1)}, ` +
+            `matches=${entry.matches_played}/${SETTLED_MIN_MATCHES}).`,
+        };
+      }
+    }
+
+    return {
+      label: 'Eligible',
+      canSubmit: true,
+    };
+  }
+
+  createSubmission(input: CreateSubmissionInput): BotVersionRow {
+    const now = input.now ?? Math.floor(Date.now() / 1000);
+    return this.inTransaction(() => {
+      const existing = this.db.prepare(
+        'SELECT id FROM bot_versions WHERE bot_id = ? AND version_str = ?'
+      ).get(input.botId, input.versionStr) as {id: number} | undefined;
+      if (existing) {
+        throw Object.assign(
+          new Error(`Version "${input.versionStr}" already exists for this project.`),
+          {status: 409}
+        );
+      }
+
+      const status = this.computeBotSubmissionStatus(input.botId, now);
+      if (!status.canSubmit) {
+        const code = status.label === 'Pending' || status.label === 'Qualified' ? 403 : 429;
+        throw Object.assign(
+          new Error(status.reason ?? 'Project is not currently eligible to submit.'),
+          {status: code}
+        );
+      }
+
+      const insertVersion = this.db.prepare(`
+        INSERT INTO bot_versions (
+          bot_id, submitted_by_dev_id, version_str, format_type, download_url,
+          sha256, auth_token_enc, ladders_json, smoke_status, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_pull', ?)
+      `);
+      const res = insertVersion.run(
+        input.botId,
+        input.submittedByDevId,
+        input.versionStr,
+        input.formatType,
+        input.downloadUrl,
+        input.sha256,
+        input.authTokenEnc,
+        JSON.stringify(input.ladderIds),
+        now
+      );
+      const versionId = Number(res.lastInsertRowid);
+
+      if (input.teamsByLadder) {
+        const clearPending = this.db.prepare(
+          `DELETE FROM bot_ladder_teams
+           WHERE ladder_id = ? AND bot_id = ? AND status = 'pending'`
+        );
+        const insertTeam = this.db.prepare(`
+          INSERT INTO bot_ladder_teams (
+            ladder_id, bot_id, slot_index, canonical_packed, status, created_at
+          )
+          VALUES (?, ?, ?, ?, 'pending', ?)
+        `);
+        for (const [ladderId, packedTeams] of Object.entries(input.teamsByLadder)) {
+          clearPending.run(ladderId, input.botId);
+          for (let i = 0; i < packedTeams.length; i++) {
+            insertTeam.run(ladderId, input.botId, i, packedTeams[i], now);
+          }
+        }
+      }
+
+      return this.db.prepare('SELECT * FROM bot_versions WHERE id = ?')
+        .get(versionId) as unknown as BotVersionRow;
+    });
   }
 }

@@ -5,6 +5,7 @@ import {serve} from 'site';
 import {header, renderer, style} from '../static/build';
 import {ROOT, root} from '../static/util';
 
+import * as account from './account';
 import {Auth} from './auth';
 import {ArenaDB} from './db';
 import * as discord from './discord';
@@ -28,6 +29,22 @@ const dirs = {
   extra: root('private'),
 };
 serve(Number(process.env.PORT) || 1234, dirs, app => {
+  // `static/build.ts` writes a 0-byte `public/account/index.html` stub because `static/rules.dj`
+  // links to `/account` and `@untitaker/hyperlink` has no ignore option. Meanwhile, `site.serve()`
+  // registers `morgan` (`wares[0]`) and `serve-static(public)` (`wares[1]`) *before* invoking this
+  // callback (`fn(app)`). Unlike `/chat` (handled by an Nginx redirect) or `/wiki` (not linked from
+  // static `.dj` pages, so no stub exists in `public/`), `/account` is proxied by Nginx to Polka
+  // for authenticated SSR. Without skipping `wares[1]` for `/account`, `serve-static` intercepts
+  // `GET /account` / `GET /account/` and serves the empty 0-byte stub before `account.register`
+  // can run.
+  type Middleware = (req: {url: string}, res: unknown, next: () => void) => void;
+  const wares = (app as unknown as {wares?: Middleware[]}).wares;
+  const staticWare = wares?.[1];
+  if (wares && staticWare) {
+    wares[1] = (req, res, next) =>
+      /^\/account(?:\/|$|\?)/.test(req.url) ? next() : staticWare(req, res, next);
+  }
+
   const wikiInstance = new wiki.Wiki({
     db,
     auth: new Auth({
@@ -36,6 +53,7 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
     }),
   });
   wikiInstance.auth.register(app);
+  account.register(app, {db, auth: wikiInstance.auth});
 
   // TODO: this should be partly pre-rendered
   app.get('/battles', (_, res) => {
