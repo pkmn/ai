@@ -1,0 +1,315 @@
+:root {
+  --monospace: monospace;
+}
+
+[id] {
+  scroll-margin-top: 2rem;
+}
+
+main {
+  width: 100%;
+  max-width: min(105ch, calc(100% - 4vh));
+  margin: 0 auto;
+  padding: 2ch;
+}
+
+h3 {
+  margin: 1.75rem 0 0.6rem;
+  font-size: 1.15em;
+}
+
+.subnav {
+  margin: -0.5rem 0 1.25rem;
+  font-size: 0.95em;
+}
+
+.muted {
+  color: rgb(var(--fg-base) / 50%);
+}
+
+.yes {
+  color: var(--hl-string);
+  font-weight: bold;
+}
+
+.no {
+  color: var(--hl-name);
+  font-weight: bold;
+}
+
+.num,
+th.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.center,
+th.center {
+  text-align: center;
+}
+
+table {
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+}
+
+th {
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+td {
+  white-space: nowrap;
+  border-top: 1px solid rgb(var(--fg-base) / 15%);
+}
+
+tr.secondary td {
+  color: rgb(var(--fg-base) / 55%);
+}
+
+tr.provisional td {
+  font-style: italic;
+}
+
+.ext svg {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 0.25em;
+  vertical-align: middle;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.empty-state {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+figure.chart {
+  margin: 0.75rem 0 1.5rem;
+}
+
+figure.chart svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  font-family: inherit;
+}
+
+table.matrix {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table.matrix th,
+table.matrix td {
+  padding: 0.4rem 0.65rem;
+  text-align: center;
+  border-top: 1px solid rgb(var(--fg-base) / 12%);
+  border-right: 1px solid rgb(var(--fg-base) / 8%);
+}
+
+table.matrix thead th {
+  color: rgb(var(--fg-base) / 75%);
+  font-weight: 600;
+  font-size: 0.8em;
+  border-top: none;
+  border-bottom: 1px solid rgb(var(--fg-base) / 20%);
+}
+
+table.matrix th:first-child,
+table.matrix td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  background-color: var(--bg-color);
+  border-right: 1px solid rgb(var(--fg-base) / 20%);
+}
+
+table.matrix tbody td:first-child {
+  font-size: 0.95em;
+}
+
+table.matrix td.diag {
+  color: rgb(var(--fg-base) / 25%);
+  background-color: rgb(var(--fg-base) / 4%);
+}
+
+.sub {
+  display: block;
+  color: rgb(var(--fg-base) / 55%);
+  font-size: 0.78em;
+  line-height: 1.15;
+}
+
+.hm-w1 {
+  background-color: color-mix(in oklab, var(--hl-string) 7%, var(--bg-color));
+}
+
+.hm-w2 {
+  background-color: color-mix(in oklab, var(--hl-string) 13%, var(--bg-color));
+}
+
+.hm-w3 {
+  background-color: color-mix(in oklab, var(--hl-string) 19%, var(--bg-color));
+}
+
+.hm-w4 {
+  background-color: color-mix(in oklab, var(--hl-string) 25%, var(--bg-color));
+}
+
+.hm-l1 {
+  background-color: color-mix(in oklab, var(--hl-name) 7%, var(--bg-color));
+}
+
+.hm-l2 {
+  background-color: color-mix(in oklab, var(--hl-name) 13%, var(--bg-color));
+}
+
+.hm-l3 {
+  background-color: color-mix(in oklab, var(--hl-name) 19%, var(--bg-color));
+}
+
+.hm-l4 {
+  background-color: color-mix(in oklab, var(--hl-name) 25%, var(--bg-color));
+}
+
+.live-panel {
+  margin: 0.75rem 0 1.5rem;
+  padding: 1.5ch 2ch;
+  font-variant-numeric: tabular-nums;
+  background-color: var(--aside-bg-color);
+  border: 1px solid var(--aside-border-color);
+  border-radius: var(--border-radius);
+}
+
+.live-idle {
+  padding: 0.35rem 0;
+  text-align: center;
+}
+
+.live-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1ch;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: 0.55rem;
+  font-size: 0.92em;
+  border-bottom: 1px solid rgb(var(--fg-base) / 15%);
+}
+
+.slots-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2ch;
+  margin-top: 0.75rem;
+}
+
+.slot-card {
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+}
+
+.slot-card.running {
+  border-color: color-mix(in oklab, var(--hl-string) 55%, var(--code-border-color));
+}
+
+.slot-card.paused {
+  opacity: 0.82;
+}
+
+.slot-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75ch;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.45rem;
+}
+
+.state-running {
+  display: inline-block;
+  padding: 0.08rem 0.45rem;
+  color: var(--hl-string);
+  font-weight: bold;
+  font-size: 0.8em;
+  font-family: var(--monospace);
+  background-color: color-mix(in oklab, var(--hl-string) 12%, var(--bg-color));
+  border: 1px solid color-mix(in oklab, var(--hl-string) 40%, transparent);
+  border-radius: 3px;
+}
+
+.state-paused {
+  display: inline-block;
+  padding: 0.08rem 0.45rem;
+  color: rgb(var(--fg-base) / 55%);
+  font-size: 0.8em;
+  font-family: var(--monospace);
+  background-color: var(--aside-bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: 3px;
+}
+
+.slot-timers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75ch;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+  font-size: 0.92em;
+  border-top: 1px solid rgb(var(--fg-base) / 12%);
+  border-bottom: 1px solid rgb(var(--fg-base) / 12%);
+}
+
+.slot-telemetry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1ch;
+  justify-content: space-between;
+  margin-top: 0.45rem;
+  color: rgb(var(--fg-base) / 65%);
+  font-size: 0.82em;
+}
+
+@media (width < 768px) {
+  .slots-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (width < 480px) {
+  main {
+    max-width: 100%;
+    padding: 1ch;
+  }
+
+  .live-panel {
+    padding: 1.1ch 1.25ch;
+  }
+
+  .standings-table th,
+  .standings-table td {
+    padding: 0.28rem 0.24rem;
+    font-size: 0.8em;
+  }
+
+  table.matrix th,
+  table.matrix td {
+    padding: 0.3rem 0.45rem;
+    font-size: 0.84em;
+  }
+
+  #battles-table th,
+  #battles-table td {
+    padding: 0.3rem 0.38rem;
+    font-size: 0.84em;
+  }
+}

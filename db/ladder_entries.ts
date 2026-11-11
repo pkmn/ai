@@ -42,6 +42,53 @@ export interface ActiveEntryView {
   settled_at: number | null;
 }
 
+export interface LeaderboardEntryView {
+  ladder_id: string;
+  version_id: number;
+  version_str: string;
+  bot_id: number;
+  bot_slug: string;
+  bot_name: string;
+  role: 'champion' | 'challenger' | 'retired';
+  is_anchor: number;
+  retired_at: number | null;
+  rating_elo: number;
+  rating_se: number;
+  rating_lcb: number;
+  gxe: number;
+  rank_current: number | null;
+  rank_min: number | null;
+  rank_max: number | null;
+  matches_played: number;
+  ww: number;
+  wt: number;
+  split: number;
+  tl: number;
+  ll: number;
+  cur_win_streak: number;
+  cur_loss_streak: number;
+  settled_at: number | null;
+}
+
+export interface ProjectArenaLadderBadge {
+  ladder_id: string;
+  slot: LadderSlot;
+  display_name: string;
+  rank: number | null;
+  rating_lcb: number;
+  provisional: boolean;
+}
+
+export interface ProjectArenaSummary {
+  bot_id: number;
+  slug: string;
+  name: string;
+  status: 'pending' | 'qualified' | 'disabled';
+  best_rank: number | null;
+  best_lcb: number | null;
+  ladders: ProjectArenaLadderBadge[];
+}
+
 export interface LadderStandingOverride {
   version_id: number;
   role?: EntryRole;
@@ -129,6 +176,166 @@ export function hasAnyLeaderboardEntry(db: DatabaseSync, botId: number): boolean
     LIMIT 1
   `).get(botId);
   return row !== undefined;
+}
+
+const SLOT_ORDER: Record<LadderSlot, number> = {
+  rby: 0,
+  adv: 1,
+  sv: 2,
+  rand: 3,
+  vgc: 4,
+};
+
+export function getLeaderboardEntries(
+  db: DatabaseSync,
+  ladderId: string
+): LeaderboardEntryView[] {
+  return db.prepare(`
+    SELECT
+      le.ladder_id,
+      le.version_id,
+      bv.version_str,
+      bv.bot_id,
+      b.slug AS bot_slug,
+      b.name AS bot_name,
+      le.role,
+      le.is_anchor,
+      le.retired_at,
+      le.rating_elo,
+      le.rating_se,
+      le.rating_lcb,
+      le.gxe,
+      le.rank_current,
+      le.rank_min,
+      le.rank_max,
+      le.matches_played,
+      le.ww,
+      le.wt,
+      le.split,
+      le.tl,
+      le.ll,
+      le.cur_win_streak,
+      le.cur_loss_streak,
+      le.settled_at
+    FROM ladder_entries le
+    JOIN bot_versions bv ON bv.id = le.version_id
+    JOIN bots b ON b.id = bv.bot_id
+    WHERE le.ladder_id = ?
+      AND bv.smoke_status = 'passed'
+      AND le.role IN ('champion', 'challenger', 'retired')
+    ORDER BY
+      le.rating_lcb DESC,
+      le.rating_elo DESC,
+      le.version_id ASC
+  `).all(ladderId) as unknown as LeaderboardEntryView[];
+}
+
+export function getProjectArenaSummaries(db: DatabaseSync): ProjectArenaSummary[] {
+  const botRows = db.prepare(`
+    SELECT id, slug, name, status
+    FROM bots
+    WHERE status != 'disabled'
+    ORDER BY id ASC
+  `).all() as Array<{
+    id: number;
+    slug: string;
+    name: string;
+    status: 'pending' | 'qualified' | 'disabled';
+  }>;
+
+  const activeRows = db.prepare(`
+    SELECT
+      bv.bot_id,
+      le.ladder_id,
+      l.slot,
+      l.display_name,
+      le.rank_current,
+      le.rating_lcb,
+      le.rating_elo,
+      le.rating_se,
+      le.matches_played
+    FROM ladder_entries le
+    JOIN bot_versions bv ON bv.id = le.version_id
+    JOIN ladders l ON l.id = le.ladder_id
+    JOIN bots b ON b.id = bv.bot_id
+    WHERE b.status != 'disabled'
+      AND bv.smoke_status = 'passed'
+      AND le.role IN ('champion', 'challenger')
+      AND l.status IN ('active', 'settling')
+    ORDER BY
+      le.rating_lcb DESC,
+      le.rating_elo DESC,
+      le.version_id ASC
+  `).all() as Array<{
+    bot_id: number;
+    ladder_id: string;
+    slot: LadderSlot;
+    display_name: string;
+    rank_current: number | null;
+    rating_lcb: number;
+    rating_elo: number;
+    rating_se: number;
+    matches_played: number;
+  }>;
+
+  const seenBotLadder = new Set<string>();
+  const badgesByBot = new Map<number, ProjectArenaLadderBadge[]>();
+  for (const r of activeRows) {
+    const key = `${r.bot_id}:${r.ladder_id}`;
+    if (seenBotLadder.has(key)) continue;
+    seenBotLadder.add(key);
+
+    const provisional = r.rank_current === null || r.matches_played < 10 || r.rating_se > 60;
+    const list = badgesByBot.get(r.bot_id) ?? [];
+    list.push({
+      ladder_id: r.ladder_id,
+      slot: r.slot,
+      display_name: r.display_name,
+      rank: provisional ? null : r.rank_current,
+      rating_lcb: r.rating_lcb,
+      provisional,
+    });
+    badgesByBot.set(r.bot_id, list);
+  }
+
+  return botRows.map(b => {
+    const ladders = badgesByBot.get(b.id) ?? [];
+    ladders.sort((x, y) => {
+      if (x.rank !== null && y.rank !== null) {
+        return x.rank - y.rank || (SLOT_ORDER[x.slot] ?? 99) - (SLOT_ORDER[y.slot] ?? 99);
+      }
+      if (x.rank !== null) return -1;
+      if (y.rank !== null) return 1;
+      return (SLOT_ORDER[x.slot] ?? 99) - (SLOT_ORDER[y.slot] ?? 99);
+    });
+
+    let bestRank: number | null = null;
+    let bestRankedLcb: number | null = null;
+    let bestAnyLcb: number | null = null;
+    for (const item of ladders) {
+      if (bestAnyLcb === null || item.rating_lcb > bestAnyLcb) {
+        bestAnyLcb = item.rating_lcb;
+      }
+      if (item.rank !== null) {
+        if (bestRank === null || item.rank < bestRank) {
+          bestRank = item.rank;
+        }
+        if (bestRankedLcb === null || item.rating_lcb > bestRankedLcb) {
+          bestRankedLcb = item.rating_lcb;
+        }
+      }
+    }
+
+    return {
+      bot_id: b.id,
+      slug: b.slug,
+      name: b.name,
+      status: b.status,
+      best_rank: bestRank,
+      best_lcb: bestRankedLcb ?? bestAnyLcb,
+      ladders,
+    };
+  });
 }
 
 export function promoteRemainingActiveToChampion(

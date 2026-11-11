@@ -134,3 +134,27 @@ export function updatePairAggregateLos(
     updatePairLos.run(losLow, ladderId, pk.vLowId, pk.vHighId);
   }
 }
+
+export function getPairAggregatesForLadder(
+  db: DatabaseSync,
+  ladderId: string
+): PairAggregateRow[] {
+  return db.prepare(`
+    SELECT
+      ladder_id,
+      v_low_id,
+      v_high_id,
+      ww,
+      wt,
+      split,
+      tl,
+      ll,
+      cur_streak,
+      v_low_max_win_streak,
+      v_high_max_win_streak,
+      los_low
+    FROM pair_aggregates
+    WHERE ladder_id = ?
+    ORDER BY v_low_id ASC, v_high_id ASC
+  `).all(ladderId) as unknown as PairAggregateRow[];
+}

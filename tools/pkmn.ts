@@ -1,16 +1,21 @@
 require('source-map-support').install();
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 import {
   ArenaDB,
   DB_PATH,
   type LadderStatus,
   type TeamMode,
 } from '../db';
+import {PUBLIC_DIR, renderArenaPages} from '../server/render';
 import {type SmogonUser, lookupSmogonUser} from '../server/smogon';
 
 export interface PkmnCliOptions {
   db?: ArenaDB;
   dbPath?: string;
+  publicDir?: string;
   now?: number;
   smogonToken?: string;
   lookupSmogon?: (raw: string | number, token?: string) => Promise<SmogonUser>;
@@ -29,6 +34,7 @@ const USAGE = [
   '  rotate-ladder <old_ladder_id> --display-name "..." [--new <new_ladder_id>] ' +
     '[--new-display-name "..."] [--format <format_id>] [--team-mode <mode>] ' +
     '[--min-bots <n>] [--team-count <n>]',
+  '  render',
   '  lookup-smogon <username|slug.id|id|url>',
 ].join('\n');
 
@@ -89,6 +95,12 @@ export async function runPkmnCli(
   const ownsDb = !options.db;
   const db = options.db ?? new ArenaDB(options.dbPath ?? DB_PATH);
   const now = options.now ?? Math.floor(Date.now() / 1000);
+  const maybeRender = () => {
+    const pub = options.publicDir ?? (ownsDb && !options.dbPath ? PUBLIC_DIR : undefined);
+    if (pub && fs.existsSync(path.join(pub, 'index.html'))) {
+      renderArenaPages({db, publicDir: pub, now});
+    }
+  };
 
   try {
     switch (cmd) {
@@ -99,6 +111,7 @@ export async function runPkmnCli(
         }
         const reason = flags.get('reason');
         const res = db.quarantineVersion(slug, version, reason, now);
+        maybeRender();
         log(
           `Quarantined ${res.bot.name} (${res.bot.slug}) version ${res.version.version_str}` +
           (reason ? `: ${reason}` : '')
@@ -111,6 +124,7 @@ export async function runPkmnCli(
           throw new Error('Usage: pkmn unquarantine <bot-slug> <version>');
         }
         const ver = db.unquarantineVersion(slug, version, now);
+        maybeRender();
         log(`Unquarantined ${slug} version ${ver.version_str}`);
         return;
       }
@@ -129,6 +143,7 @@ export async function runPkmnCli(
           throw new Error('Usage: pkmn set-anchor <ladder_id> <bot-slug> <version>');
         }
         db.setLadderAnchor(ladderId, slug, version, now);
+        maybeRender();
         log(`Set 1500 Elo anchor on ${ladderId} to ${slug} ${version}`);
         return;
       }
@@ -140,6 +155,7 @@ export async function runPkmnCli(
           );
         }
         const updated = db.setLadderStatus(ladderId, status as LadderStatus, now);
+        maybeRender();
         log(`Ladder ${updated.id} (${updated.display_name}) -> status=${updated.status}`);
         return;
       }
@@ -173,6 +189,7 @@ export async function runPkmnCli(
           newTeamCount: teamCount,
           now,
         });
+        maybeRender();
         log(
           `Rotated ${rotated.oldLadder.id} ("${rotated.oldLadder.display_name}", ` +
         `status=${rotated.oldLadder.status})` +
@@ -180,6 +197,12 @@ export async function runPkmnCli(
           ? ` -> activated ${rotated.newLadder.id} ("${rotated.newLadder.display_name}")`
           : '')
         );
+        return;
+      }
+      case 'render': {
+        const pub = options.publicDir ?? PUBLIC_DIR;
+        renderArenaPages({db, publicDir: pub, now});
+        log(`Rendered static Arena pages into ${pub}`);
         return;
       }
       default:

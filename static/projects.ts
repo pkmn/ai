@@ -6,6 +6,23 @@ import {html} from 'site';
 import * as yaml from 'yaml';
 
 import {cite, header, style} from './build';
+import {escapeHtml} from './util';
+
+export interface ProjectArenaBadge {
+  slot: string;
+  displayName: string;
+  rank: number | null;
+  provisional: boolean;
+}
+
+export interface ProjectArenaInfo {
+  slug: string;
+  name: string;
+  profileHref?: string;
+  bestRank: number | null;
+  bestLcb: number | null;
+  ladders: ProjectArenaBadge[];
+}
 
 export interface Project {
   name?: string;
@@ -79,7 +96,10 @@ const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="
   'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>';
 
-export function page(dir: string) {
+export function page(
+  dir: string,
+  arenaByName?: ReadonlyMap<string, ProjectArenaInfo>
+) {
   const buf: string[] = [];
 
   const file = (ext: string) => path.join(dir, `projects.${ext}`);
@@ -98,15 +118,36 @@ export function page(dir: string) {
   }
 
   const projects: Project[] = yaml.parse(fs.readFileSync(file('yml'), 'utf8'));
-  const score = (p: Project) => {
+  const rankIndex = (p: Project) => {
     const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
       ? p.source.slice(19)
       : p.identifier!);
-    // TODO: sort by live ranking > static ranking > date
     const index = RANKING.indexOf(id);
     return index >= 0 ? index : Infinity;
   };
-  projects.sort((a, b) => score(a) - score(b));
+  const startYear = (p: Project) => Array.isArray(p.active) ? p.active[0] : p.active;
+  projects.sort((a, b) => {
+    const aArena = a.name ? arenaByName?.get(a.name) : undefined;
+    const bArena = b.name ? arenaByName?.get(b.name) : undefined;
+    const aLiveRank = aArena?.bestRank ?? null;
+    const bLiveRank = bArena?.bestRank ?? null;
+
+    if (aLiveRank !== null && bLiveRank !== null) {
+      if (aLiveRank !== bLiveRank) return aLiveRank - bLiveRank;
+      const lcbDiff = (bArena?.bestLcb ?? 0) - (aArena?.bestLcb ?? 0);
+      if (lcbDiff !== 0) return lcbDiff;
+    } else if (aLiveRank !== null) {
+      return -1;
+    } else if (bLiveRank !== null) {
+      return 1;
+    }
+
+    const aIdx = rankIndex(a);
+    const bIdx = rankIndex(b);
+    if (aIdx !== bIdx) return aIdx - bIdx;
+
+    return startYear(a) - startYear(b);
+  });
 
   const filler = fs.readFileSync(file('dj'), 'utf8');
   const markdown = html.render(filler);
@@ -117,6 +158,11 @@ export function page(dir: string) {
         <li>
           <input type="radio" value="active" name="radio" id="active" />
           <label for="active">Active</label>
+        </li>
+        —
+        <li>
+          <input type="radio" value="arena" name="radio" id="arena" />
+          <label for="arena">Arena</label>
         </li>
         —
         <li>
@@ -138,7 +184,11 @@ export function page(dir: string) {
       : undefined;
     const id =
       (project.name ?? identifier ?? project.paper ?? project.identifier)!.replaceAll(' ', '');
-    buf.push(`<section id="${id}" class="project"${inactive ? '' : ' data-active="true"'}>`);
+    const arenaInfo = project.name ? arenaByName?.get(project.name) : undefined;
+    const isArena = Boolean(project.arena || arenaInfo);
+    const dataAttrs = `${inactive ? '' : ' data-active="true"'}` +
+      `${isArena ? ' data-arena="true"' : ''}`;
+    buf.push(`<section id="${id}" class="project"${dataAttrs}>`);
     const active = Array.isArray(project.active)
       ? (project.active[0] === project.active[1]
         ? `${project.active[0]}`
@@ -154,6 +204,22 @@ export function page(dir: string) {
       buf.push(`<tr><td><strong>Paper</strong></td><td>${paper}</td></tr>`);
     }
     buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);
+    if (isArena) {
+      const displayName = project.name ?? arenaInfo?.name ?? (project.identifier ?? identifier)!;
+      const profileHref = arenaInfo?.profileHref ?? `#${id}`;
+      const badgesHtml = arenaInfo && arenaInfo.ladders.length > 0
+        ? ' · ' + arenaInfo.ladders.map(b => (
+          b.provisional || b.rank === null
+            ? `<a href="/leaderboard/#${escapeHtml(b.slot)}" class="subtle">` +
+              `<tt>${escapeHtml(b.displayName)}</tt> <em>(provisional)</em></a>`
+            : `<a href="/leaderboard/#${escapeHtml(b.slot)}" class="subtle">` +
+              `<tt>${escapeHtml(b.displayName)}</tt> #${b.rank}</a>`
+        )).join(', ')
+        : '';
+      const nameLink = `<a href="${escapeHtml(profileHref)}" class="arena-bot">` +
+        `<strong>${escapeHtml(displayName)}</strong></a>`;
+      buf.push(`<tr><td><strong>Arena</strong></td><td>${nameLink}${badgesHtml}</td></tr>`);
+    }
     if (project.license) {
       buf.push(`<tr><td><strong>License</strong></td><td><tt>${project.license}</tt></td></tr>`);
     } else if (project.source) {
@@ -203,7 +269,9 @@ export function page(dir: string) {
     path: '/projects/',
     title: 'Projects | pkmn.ai',
     style: `
+      main { width: 100%; }
       .description { text-align: center; }
+      .arena-bot { white-space: nowrap; }
       td:first-child { width: 8ch; }
       h3 svg {
         display: inline-block;
@@ -216,29 +284,36 @@ export function page(dir: string) {
     header: header('Projects'),
     content: buf.join(''),
     script:
-    `document.addEventListener('DOMContentLoaded', () => {
+    `const setTheme = t => document.documentElement.setAttribute('data-theme', t);
+      document.addEventListener('DOMContentLoaded', () => {
         document.getElementsByTagName('nav')[0].classList.remove('hide');
         const projects = document.getElementsByClassName('project');
         const radios = document.querySelectorAll('input[name="radio"]');
+        const applyFilter = mode => {
+          for (let j = 0; j < projects.length; j++) {
+            let hide = false;
+            if (mode === 'active') hide = !projects[j].dataset.active;
+            else if (mode === 'arena') hide = !projects[j].dataset.arena;
+            else if (mode === 'inactive') hide = Boolean(projects[j].dataset.active);
+            projects[j].classList.toggle('hide', hide);
+          }
+        };
 
         for (let i = 0; i < radios.length; i++) {
-          radios[i].addEventListener('click', () => {
-            for (let j = 0; j < projects.length; j++) {
-              if (radios[i].id === 'all') {
-                projects[j].classList.remove('hide');
-              } else {
-                const hide = radios[i].id === 'active'
-                  ? !projects[j].dataset.active
-                  : projects[j].dataset.active;
-                if (hide) {
-                  projects[j].classList.add('hide');
-                } else {
-                  projects[j].classList.remove('hide');
-                }
-              }
-            }
-          });
+          radios[i].addEventListener('click', () => applyFilter(radios[i].id));
         }
+
+        const checkHash = () => {
+          if (!location.hash) return;
+          const id = decodeURIComponent(location.hash.slice(1));
+          const el = document.getElementById(id);
+          if (el && el.classList.contains('project')) {
+            el.classList.remove('hide');
+            el.scrollIntoView();
+          }
+        };
+        window.addEventListener('hashchange', checkHash);
+        checkHash();
       });`,
   };
 }

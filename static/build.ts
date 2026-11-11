@@ -3,14 +3,17 @@
 
 require('source-map-support').install();
 
+import * as nodeFs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
 import favicons from 'favicons';
 import * as site from 'site';
 
+import {ArenaDB, DB_PATH} from '../db';
+import {renderArenaPages} from '../server/render';
+
 import * as glossary from './glossary';
-import * as projects from './projects';
 import * as research from './research';
 import {root} from './util';
 
@@ -57,8 +60,8 @@ const build = async (rebuild?: boolean) => {
   let actual = fs.list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'release', 'chat', 'leaderboard',
-    'account', 'api', 'background', 'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg',
-    'projects.bib', 'research.bib',
+    'battles', 'account', 'api', 'background', 'index.html', 'favicon.svg', 'cc.svg', 'by.svg',
+    'sa.svg', 'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -95,9 +98,9 @@ const build = async (rebuild?: boolean) => {
   // `@untitaker/hyperlink` (`hyperlink public --check-anchors`) has no CLI flag or config option
   // to ignore non-static routes (`--help` only exposes `--check-anchors`, `--sources`, `-j`, and
   // `--github-actions`). Routes linked from `.dj` content that are actually Nginx redirects
-  // (`/chat`) or dynamic SSR routes (`/account`, plus `/leaderboard` until pre-rendered) therefore
-  // need 0-byte `index.html` stubs on disk so `npm run lint` does not report broken links.
-  for (const placeholder of ['chat', 'leaderboard', 'account']) {
+  // (`/chat`) or dynamic SSR routes (`/account`) therefore need 0-byte `index.html` stubs on disk
+  // so `npm run lint` does not report broken links.
+  for (const placeholder of ['chat', 'account']) {
     const file = path.join(PUBLIC, placeholder, 'index.html');
     if (!fs.exists(file)) {
       fs.mkdir(path.dirname(file));
@@ -119,8 +122,24 @@ const build = async (rebuild?: boolean) => {
   }));
 
   renderer.create('glossary', glossary.page(STATIC));
-  renderer.create('projects', projects.page(STATIC));
   renderer.create('research', research.page(STATIC));
+
+  const hasExistingDb = nodeFs.existsSync(DB_PATH);
+  const arenaDb = new ArenaDB(hasExistingDb ? DB_PATH : ':memory:');
+  try {
+    arenaDb.syncLadders();
+    if (!hasExistingDb) {
+      arenaDb.syncProjects();
+    }
+    renderArenaPages({
+      db: arenaDb,
+      renderer,
+      publicDir: PUBLIC,
+      staticDir: STATIC,
+    });
+  } finally {
+    arenaDb.close();
+  }
 
   const pages: {[page: string]: string} = {
     background: 'Background',

@@ -28,6 +28,50 @@ export interface RatingSnapshotInput {
   bestRank: number | null;
 }
 
+export interface LadderSnapshotHistoryRow {
+  ladder_id: string;
+  version_id: number;
+  bot_id: number;
+  bot_slug: string;
+  bot_name: string;
+  version_str: string;
+  day_utc: string;
+  matches_played: number;
+  rating_elo: number;
+  rating_se: number;
+  rating_lcb: number;
+  gxe: number;
+  rank_current: number | null;
+}
+
+export function getRatingSnapshotsForLadder(
+  db: DatabaseSync,
+  ladderId: string
+): LadderSnapshotHistoryRow[] {
+  return db.prepare(`
+    SELECT
+      rs.ladder_id,
+      rs.version_id,
+      bv.bot_id,
+      b.slug AS bot_slug,
+      b.name AS bot_name,
+      bv.version_str,
+      rs.day_utc,
+      rs.matches_played,
+      rs.rating_elo,
+      rs.rating_se,
+      rs.rating_lcb,
+      rs.gxe,
+      rs.rank_current
+    FROM rating_snapshots rs
+    JOIN bot_versions bv ON bv.id = rs.version_id
+    JOIN bots b ON b.id = bv.bot_id
+    WHERE rs.ladder_id = ?
+      AND bv.smoke_status = 'passed'
+    ORDER BY rs.day_utc ASC, rs.version_id ASC
+  `).all(ladderId) as unknown as LadderSnapshotHistoryRow[];
+}
+
 export function upsertDailyRatingSnapshots(
   db: DatabaseSync,
   ladderId: string,

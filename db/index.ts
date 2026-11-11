@@ -68,7 +68,12 @@ import {
   type ActiveEntryView,
   type EntryRole,
   type LadderStandingOverride,
+  type LeaderboardEntryView,
+  type ProjectArenaLadderBadge,
+  type ProjectArenaSummary,
   getActiveEntriesForBot,
+  getLeaderboardEntries,
+  getProjectArenaSummaries,
   hasAnyLeaderboardEntry,
   recomputeLadderRatings,
   setLadderAnchor,
@@ -101,8 +106,12 @@ import {
   getRecentMatches,
   recordCompletedMatch,
 } from './matches';
-import type {PairAggregateRow} from './pair_aggregates';
-import type {RatingSnapshotRow} from './rating_snapshots';
+import {type PairAggregateRow, getPairAggregatesForLadder} from './pair_aggregates';
+import {
+  type LadderSnapshotHistoryRow,
+  type RatingSnapshotRow,
+  getRatingSnapshotsForLadder,
+} from './rating_snapshots';
 
 export type TransactionRunner = <T>(fn: () => T) => T;
 
@@ -134,12 +143,16 @@ export {
   type LadderConfig,
   type LadderRow,
   type LadderSlot,
+  type LadderSnapshotHistoryRow,
   type LadderStandingOverride,
   type LadderStatus,
+  type LeaderboardEntryView,
   PROJECTS_FILE,
   type PairAggregateRow,
   type ParsedArenaProject,
   type PendingSubmissionRow,
+  type ProjectArenaLadderBadge,
+  type ProjectArenaSummary,
   type RatingSnapshotRow,
   type RawProjectOwner,
   type RecentMatchView,
@@ -506,5 +519,21 @@ export class ArenaDB {
 
   getRecentMatches(limit?: number): RecentMatchView[] {
     return getRecentMatches(this.db, limit);
+  }
+
+  getLeaderboardEntries(ladderId: string): LeaderboardEntryView[] {
+    return getLeaderboardEntries(this.db, ladderId);
+  }
+
+  getProjectArenaSummaries(): ProjectArenaSummary[] {
+    return getProjectArenaSummaries(this.db);
+  }
+
+  getPairAggregatesForLadder(ladderId: string): PairAggregateRow[] {
+    return getPairAggregatesForLadder(this.db, ladderId);
+  }
+
+  getRatingSnapshotsForLadder(ladderId: string): LadderSnapshotHistoryRow[] {
+    return getRatingSnapshotsForLadder(this.db, ladderId);
   }
 }
