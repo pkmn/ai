@@ -9,9 +9,13 @@ import {parseArgs} from 'util';
 import {Browser, BrowserContext, Route, chromium} from 'playwright-core';
 import polka from 'polka';
 
-import {type AuthConfig, SESSION_COOKIE, signToken} from '../server/auth';
-import {register} from '../server/wiki';
+import {ArenaDB} from '../db';
+import * as account from '../server/account';
+import {Auth, type AuthConfig, SESSION_COOKIE, signToken} from '../server/auth';
+import * as wiki from '../server/wiki';
 import {ROOT, root} from '../static/util';
+
+import {prepareMockStaticDir, seedMockArena} from './mock-arena';
 
 const PUBLIC = root('public');
 const SHOTS_DIR = root('.shots');
@@ -32,26 +36,17 @@ interface Scenario {
   click?: string;
 }
 
-const WIKI_AUTH: AuthConfig = {
+const SHOTS_AUTH: AuthConfig = {
   sessionSecret: 'shots-session-secret',
   github: {
     clientId: 'shots-client-id',
     clientSecret: 'shots-client-secret',
   },
+  discord: {
+    clientId: '689315793569447954',
+    clientSecret: 'shots-discord-secret',
+  },
 };
-
-const WIKI_PROJECTS_YAML = `
-- name: 0 ERROR
-  active: 2026
-  arena:
-    owners:
-      scheibo: pre.10544
-- name: Foul Play
-  active: 2026
-  arena:
-    owners:
-      pmariglia: pmariglia.535629
-`;
 
 const WIKI_INDEX_DJ = `# Wiki
 
@@ -103,6 +98,13 @@ const WIKI_BOT_V2_DJ = `{% visibility: developers %}
 function buildScenarios(wikiSha: string): Scenario[] {
   return [
     {name: 'home', path: '/'},
+    {name: 'arena', path: '/arena/'},
+    {name: 'arena-ladder-rby', path: '/arena/ladders/rby/'},
+    {name: 'arena-ladder-vgc', path: '/arena/ladders/vgc/'},
+    {name: 'arena-tournament-1', path: '/arena/tournaments/1/'},
+    {name: 'arena-tournament-2', path: '/arena/tournaments/2/'},
+    {name: 'arena-battles', path: '/arena/battles/'},
+    {name: 'account', path: '/account/'},
     {name: 'background', path: '/background/'},
     {name: 'concepts', path: '/concepts/'},
     {name: 'concepts-baselines', path: '/concepts/baselines/'},
@@ -112,6 +114,8 @@ function buildScenarios(wikiSha: string): Scenario[] {
     {name: 'concepts-variants', path: '/concepts/variants/'},
     {name: 'glossary', path: '/glossary/'},
     {name: 'projects', path: '/projects/'},
+    {name: 'projects-arena', path: '/projects/', click: 'label[for="arena"]'},
+    {name: 'project-profile', path: '/projects/0-error/'},
     {name: 'release', path: '/release/'},
     {name: 'research', path: '/research/'},
     {name: 'rules', path: '/rules/'},
@@ -131,19 +135,34 @@ function buildScenarios(wikiSha: string): Scenario[] {
   ];
 }
 
-interface WikiFixture {
+interface ShotsFixture {
   origin: string;
   cookie: string;
   sha: string;
+  publicDir: string;
   close: () => Promise<void>;
 }
 
-async function startWiki(): Promise<WikiFixture> {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-shots-wiki-'));
+async function startFixture(): Promise<ShotsFixture> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-shots-'));
   const wikiDir = path.join(tmpDir, 'wiki');
-  const projectsFile = path.join(tmpDir, 'projects.yml');
+  const staticDir = path.join(tmpDir, 'static');
+  const avatarsDir = path.join(staticDir, 'avatars');
+  const publicDir = path.join(tmpDir, 'public');
   fs.mkdirSync(wikiDir, {recursive: true});
-  fs.writeFileSync(projectsFile, WIKI_PROJECTS_YAML, 'utf8');
+  fs.mkdirSync(publicDir, {recursive: true});
+
+  const projectsFile = prepareMockStaticDir(staticDir, avatarsDir);
+  const nowSec = Math.floor(NOW / 1000);
+  const db = new ArenaDB(':memory:', {now: nowSec});
+  seedMockArena({
+    db,
+    publicDir,
+    staticDir,
+    avatarsDir,
+    now: nowSec,
+    render: true,
+  });
 
   const git = (args: string[], date?: string) =>
     execFileSync('git', args, {
@@ -191,10 +210,28 @@ async function startWiki(): Promise<WikiFixture> {
   }).trim();
 
   const app = polka();
-  register(app, {
+  const wikiInstance = new wiki.Wiki({
     wikiDir,
     projectsFile,
-    authConfig: WIKI_AUTH,
+    db,
+    push: false,
+    auth: new Auth({
+      config: SHOTS_AUTH,
+      db,
+      isAuthorizedGitHub: (login): boolean => wikiInstance.isDeveloper(login),
+    }),
+  });
+  wikiInstance.auth.register(app);
+  account.register(app, {
+    db,
+    auth: wikiInstance.auth,
+    now: () => nowSec,
+  });
+  wiki.register(app, {
+    wikiDir,
+    projectsFile,
+    db,
+    auth: wikiInstance.auth,
     push: false,
   });
 
@@ -202,15 +239,24 @@ async function startWiki(): Promise<WikiFixture> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address() as {port: number};
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const token = signToken({github: {id: 1, login: 'scheibo'}, exp}, WIKI_AUTH.sessionSecret);
+  const token = signToken(
+    {
+      github: {id: 1, login: 'scheibo'},
+      discord: {id: '513513270670262284', username: 'scheibo'},
+      exp,
+    },
+    SHOTS_AUTH.sessionSecret
+  );
 
   return {
     origin: `http://127.0.0.1:${addr.port}`,
     cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
     sha,
+    publicDir,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>(resolve => server.close(() => resolve()));
+      db.close();
       fs.rmSync(tmpDir, {recursive: true, force: true});
     },
   };
@@ -236,15 +282,15 @@ async function launch(): Promise<Browser> {
   }
 }
 
-function resolvePublicFile(urlPath: string): string | undefined {
+function resolveFileInDir(baseDir: string, urlPath: string): string | undefined {
   let decoded: string;
   try {
     decoded = decodeURIComponent(urlPath);
   } catch {
     return undefined;
   }
-  const candidate = path.resolve(PUBLIC, `.${decoded}`);
-  if (candidate !== PUBLIC && !candidate.startsWith(`${PUBLIC}${path.sep}`)) {
+  const candidate = path.resolve(baseDir, `.${decoded}`);
+  if (candidate !== baseDir && !candidate.startsWith(`${baseDir}${path.sep}`)) {
     return undefined;
   }
   if (fs.existsSync(candidate)) {
@@ -258,20 +304,36 @@ function resolvePublicFile(urlPath: string): string | undefined {
   return undefined;
 }
 
-async function serve(route: Route, wiki: WikiFixture): Promise<void> {
+const TRANSPARENT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAYAAABe3VzdAAAAIElEQVR4nO3BAQ0AAADCoPdPbQ8HF' +
+  'AAAAAAAAAAAAADwZEC4AAFe72zRAAAAAElFTkSuQmCC',
+  'base64'
+);
+
+async function serve(route: Route, fixture: ShotsFixture): Promise<void> {
   const url = new URL(route.request().url());
   if (url.origin !== ORIGIN) {
+    if (url.pathname.endsWith('.png')) {
+      await route.fulfill({status: 200, contentType: 'image/png', body: TRANSPARENT_PNG});
+      return;
+    }
     await route.fulfill({status: 204, body: ''});
     return;
   }
-  if (url.pathname === '/wiki' || url.pathname.startsWith('/wiki/')) {
+  const isDynamic = (
+    url.pathname === '/wiki' ||
+    url.pathname.startsWith('/wiki/') ||
+    url.pathname === '/account' ||
+    url.pathname.startsWith('/account/')
+  );
+  if (isDynamic) {
     const req = route.request();
     const body = req.postDataBuffer();
-    const res = await fetch(`${wiki.origin}${url.pathname}${url.search}`, {
+    const res = await fetch(`${fixture.origin}${url.pathname}${url.search}`, {
       method: req.method(),
       headers: {
         ...req.headers(),
-        cookie: wiki.cookie,
+        cookie: fixture.cookie,
       },
       body: body ? new Uint8Array(body) : undefined,
     });
@@ -283,7 +345,10 @@ async function serve(route: Route, wiki: WikiFixture): Promise<void> {
     await route.fulfill({status: res.status, headers, body: buffer});
     return;
   }
-  const file = resolvePublicFile(url.pathname);
+  const file = (
+    resolveFileInDir(fixture.publicDir, url.pathname) ??
+    resolveFileInDir(PUBLIC, url.pathname)
+  );
   if (file) {
     await route.fulfill({path: file});
     return;
@@ -300,9 +365,9 @@ async function shoot(
   context: BrowserContext,
   scenario: Scenario,
   file: string,
-  wiki: WikiFixture
+  fixture: ShotsFixture
 ): Promise<string[]> {
-  await context.route('**/*', route => serve(route, wiki));
+  await context.route('**/*', route => serve(route, fixture));
   const page = await context.newPage();
   const problems: string[] = [];
   page.on('pageerror', error => problems.push(error.message));
@@ -329,6 +394,12 @@ async function shoot(
     );
   })()`);
   await page.waitForTimeout(SETTLE_MS / 2);
+  const overflow = await page.evaluate<number>(
+    'document.documentElement.scrollWidth - window.innerWidth'
+  );
+  if (overflow > 0) {
+    problems.push(`horizontal overflow: +${overflow}px`);
+  }
   await page.screenshot({path: file, fullPage: true, animations: 'disabled', caret: 'hide'});
   return problems;
 }
@@ -345,9 +416,9 @@ async function run(): Promise<void> {
     process.exit(1);
   }
 
-  const wiki = await startWiki();
+  const fixture = await startFixture();
   const newDir = `${SHOTS_DIR}.new`;
-  const scenarios = buildScenarios(wiki.sha).filter(
+  const scenarios = buildScenarios(fixture.sha).filter(
     scenario => scenario.name.includes(values.only ?? '')
   );
   const browser = await launch();
@@ -370,7 +441,7 @@ async function run(): Promise<void> {
           });
           try {
             const name = `${scenario.name}.${device}.${theme}.png`;
-            const problems = await shoot(context, scenario, path.join(newDir, name), wiki);
+            const problems = await shoot(context, scenario, path.join(newDir, name), fixture);
             shotNames.push(name);
             errors.push(...problems.map(problem => `${scenario.name} (${device}): ${problem}`));
           } finally {
@@ -382,7 +453,7 @@ async function run(): Promise<void> {
     }
   } finally {
     await browser.close();
-    await wiki.close();
+    await fixture.close();
   }
 
   if (values.only === undefined) await fsp.rm(SHOTS_DIR, {recursive: true, force: true});

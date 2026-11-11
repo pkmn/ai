@@ -365,6 +365,13 @@ function renderVersionsLineageSvg(
   xLabels.push(`<text x="${xRight}" y="212">Today</text>`);
 
   const seriesEls: string[] = [];
+  const pendingLabels: Array<{
+    x: number;
+    y: number;
+    text: string;
+    isPrimary: boolean;
+  }> = [];
+
   for (const e of entriesChron) {
     const pts = ptsByVer.get(e.version_id) ?? [];
     if (pts.length === 0) continue;
@@ -398,9 +405,7 @@ function renderVersionsLineageSvg(
           `stroke-width="1.25" stroke-dasharray="3,2" points="${lcbPts}" />`,
         '<polyline fill="none" stroke="var(--hl-symbol)" stroke-width="2.25" ' +
           `points="${linePts}" />`,
-        `<circle cx="${last.x}" cy="${last.y}" r="3" fill="var(--hl-symbol)" />`,
-        `<text x="${labelX}" y="${labelY}" fill="var(--hl-symbol)" font-size="11" ` +
-          `font-weight="bold">${escapeHtml(labelText)}</text>`
+        `<circle cx="${last.x}" cy="${last.y}" r="3" fill="var(--hl-symbol)" />`
       );
     } else {
       const op = e.role === 'retired' ? '0.45' : '0.65';
@@ -409,9 +414,32 @@ function renderVersionsLineageSvg(
         `<polyline fill="none" stroke="currentColor" stroke-opacity="${op}" ` +
           `stroke-width="1.6" points="${linePts}" />`,
         `<circle cx="${last.x}" cy="${last.y}" r="2.5" fill="currentColor" ` +
-          `fill-opacity="${op}" />`,
-        `<text x="${labelX}" y="${labelY}" fill="currentColor" fill-opacity="0.6" ` +
-          `font-size="11">${escapeHtml(labelText)}</text>`
+          `fill-opacity="${op}" />`
+      );
+    }
+    pendingLabels.push({x: labelX, y: labelY, text: labelText, isPrimary});
+  }
+
+  pendingLabels.sort((a, b) => a.y - b.y || Number(b.isPrimary) - Number(a.isPrimary));
+  for (let i = 1; i < pendingLabels.length; i++) {
+    const cur = pendingLabels[i];
+    for (let j = 0; j < i; j++) {
+      const prev = pendingLabels[j];
+      if (Math.abs(cur.x - prev.x) < 115 && cur.y - prev.y < 14) {
+        cur.y = Math.min(yBottom + 4, prev.y + 14);
+      }
+    }
+  }
+  for (const lbl of pendingLabels) {
+    if (lbl.isPrimary) {
+      seriesEls.push(
+        `<text x="${lbl.x}" y="${lbl.y}" fill="var(--hl-symbol)" font-size="11" ` +
+          `font-weight="bold">${escapeHtml(lbl.text)}</text>`
+      );
+    } else {
+      seriesEls.push(
+        `<text x="${lbl.x}" y="${lbl.y}" fill="currentColor" fill-opacity="0.6" ` +
+          `font-size="11">${escapeHtml(lbl.text)}</text>`
       );
     }
   }
