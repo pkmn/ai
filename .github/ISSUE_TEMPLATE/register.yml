@@ -19,7 +19,7 @@ body:
     id: owners
     attributes:
       label: Owners (GitHub & Smogon Accounts)
-      description: List `github_username: smogon_username` (one per line) for every team member. All authorized team members must be Smogon account holders in good standing and may belong to at most one Arena project.
+      description: "List `github_username: smogon_username` (one per line) for every team member. All authorized team members must be Smogon account holders in good standing and may belong to at most one Arena project."
       placeholder: |
         pmariglia: pmariglia
         scheibo: pre
