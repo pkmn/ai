@@ -8,7 +8,7 @@ import polka from 'polka';
 
 import {LADDERS_FILE, SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
 import type * as db from '../db';
-import {header, renderer} from '../static/build';
+import {header, injectLiveBanner, renderer} from '../static/build';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
 import {Auth} from './auth';
@@ -224,8 +224,12 @@ function renderHistorySection(
       const parsed = JSON.parse(v.laddersJson) as unknown;
       if (Array.isArray(parsed)) ladderIds = parsed.map(String);
     } catch {}
-    const ladderLabels = ladderIds.map(id => ladderNameById.get(id) ?? id);
-    const laddersStr = escapeHtml(ladderLabels.join(', '));
+    const ladderLabels = ladderIds.map(id => escapeHtml(ladderNameById.get(id) ?? id));
+    const tourneyLabels = (v.tournamentNames ?? []).map(name => {
+      const m = /^Tournament #(\d+)/.exec(name);
+      return m ? `<span title="${escapeHtml(name)}">T#${m[1]}</span>` : escapeHtml(name);
+    });
+    const laddersStr = [...ladderLabels, ...tourneyLabels].join(', ');
 
     const shortSha = `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`;
     const sizeMb = v.unpackedBytes !== undefined
@@ -234,13 +238,20 @@ function renderHistorySection(
     const sizeNote = sizeMb !== undefined ? ` <span class="muted">(${sizeMb} MB)</span>` : '';
     const artifactCell = `<tt>${escapeHtml(shortSha)}</tt>${sizeNote}`;
 
-    const isFullyActive = v.smokeStatus === 'passed' &&
-      v.activeLadderNames.length > 0 &&
-      v.activeLadderNames.length >= ladderLabels.length;
-    const isPartiallyActive = v.smokeStatus === 'passed' &&
+    const isTournamentOnly = ladderLabels.length === 0 && (v.tournamentNames?.length ?? 0) > 0;
+    const isFullyActive = v.smokeStatus === 'passed' && (
+      isTournamentOnly || (
+        v.activeLadderNames.length > 0 &&
+        v.activeLadderNames.length >= ladderLabels.length
+      )
+    );
+    const isPartiallyActive = !isTournamentOnly &&
+      v.smokeStatus === 'passed' &&
       v.activeLadderNames.length > 0 &&
       v.activeLadderNames.length < ladderLabels.length;
-    const isRetired = v.smokeStatus === 'passed' && v.activeLadderNames.length === 0;
+    const isRetired = !isTournamentOnly &&
+      v.smokeStatus === 'passed' &&
+      v.activeLadderNames.length === 0;
 
     let smokeCell: string;
     if (v.smokeStatus === 'pending') {
@@ -281,7 +292,9 @@ function renderHistorySection(
     } else if (v.smokeStatus === 'quarantined') {
       stateCell = '<span class="no">Quarantined</span>';
     } else if (isFullyActive) {
-      stateCell = '<span class="yes">Active</span>';
+      stateCell = isTournamentOnly
+        ? '<span class="yes">Entered</span>'
+        : '<span class="yes">Active</span>';
     } else if (isPartiallyActive) {
       const activeList = escapeHtml(v.activeLadderNames.join(', '));
       stateCell = `Active <span class="muted">(${activeList})</span>`;
@@ -328,21 +341,25 @@ export function renderAccountPage(opts: {
   developer: db.DeveloperRow;
   agent: db.AgentRow;
   status: db.SubmissionStatus;
+  tournamentStatuses?: db.TournamentSubmissionStatus[];
   currentLadders: db.LadderRow[];
   needsTeamsLadders: db.LadderRow[];
   activeEntries: db.ActiveEntryView[];
   versions: db.VersionHistoryView[];
   allLadders: db.LadderRow[];
+  liveTournament?: {id: string; name: string};
 }): string {
   const {
     developer,
     agent,
     status,
+    tournamentStatuses = [],
     currentLadders,
     needsTeamsLadders,
     activeEntries,
     versions,
     allLadders,
+    liveTournament,
   } = opts;
 
   const linkHref = '/auth/discord?intent=link&amp;return_to=%2Faccount%2F';
@@ -359,6 +376,9 @@ export function renderAccountPage(opts: {
 
   const projectHref = `/projects/${encodeURIComponent(agent.slug)}/`;
 
+  const canSubmitTourney = tournamentStatuses.some(t => t.canSubmit);
+  const canSubmitAny = status.canSubmit || canSubmitTourney;
+
   const statusClass = status.label === 'Eligible'
     ? 'yes'
     : status.label === 'Ineligible' ? 'no' : 'muted';
@@ -369,21 +389,54 @@ export function renderAccountPage(opts: {
   const activeLadderIdsWithAgent = new Set(activeEntries.map(e => e.ladderId));
   const checkboxesHtml = currentLadders.map(l => {
     const isOpen = l.status === 'active';
-    const checked = isOpen && activeLadderIdsWithAgent.has(l.id) ? ' checked' : '';
-    const disabled = isOpen ? '' : ' disabled';
-    const needsTeams = isOpen && needsTeamsIds.has(l.id) ? ' data-needs-teams="true"' : '';
+    const canCheck = isOpen && status.canSubmit;
+    const checked = canCheck && activeLadderIdsWithAgent.has(l.id) ? ' checked' : '';
+    const disabled = canCheck ? '' : ' disabled';
+    const needsTeams = canCheck && needsTeamsIds.has(l.id) ? ' data-needs-teams="true"' : '';
     const val = escapeHtml(l.id);
     const label = escapeHtml(l.name);
-    const labelAttrs = isOpen
-      ? ''
-      : ' class="upcoming" title="Upcoming — not open for submissions yet"';
+    let labelAttrs = '';
+    if (!isOpen) {
+      labelAttrs = ' class="upcoming" title="Upcoming — not open for submissions yet"';
+    } else if (!status.canSubmit) {
+      const reasonAttr = escapeHtml(status.reason ?? 'Not currently eligible for ladders');
+      labelAttrs = ` class="upcoming" title="${reasonAttr}"`;
+    }
     return `<label${labelAttrs}><input type="checkbox" name="ladders" value="${val}"` +
       `${checked}${disabled}${needsTeams}> ${label}</label>`;
   }).join('\n            ');
 
+  let tournamentsRowHtml = '';
+  if (tournamentStatuses.length) {
+    const tourneyChecksHtml = tournamentStatuses.map(t => {
+      const val = escapeHtml(t.tournamentId);
+      const name = escapeHtml(t.name);
+      if (t.canSubmit) {
+        const checked = !status.canSubmit && tournamentStatuses.length === 1 ? ' checked' : '';
+        const title =
+          'OCI image required (linux/arm64); bundle teams inside your container via /utm';
+        return `<label title="${title}"><input type="checkbox" name="tournaments" ` +
+          `value="${val}"${checked}> ${name} <span class="muted">(OCI)</span></label>`;
+      }
+      const badge = t.enteredVersion
+        ? `entered: ${escapeHtml(t.enteredVersion)}`
+        : t.pendingVersion
+          ? `pending: ${escapeHtml(t.pendingVersion)}`
+          : 'closed';
+      const titleAttr = t.reason ? ` title="${escapeHtml(t.reason)}"` : '';
+      return `<label class="upcoming"${titleAttr}><input type="checkbox" name="tournaments" ` +
+        `value="${val}" disabled> ${name} <span class="muted">(${badge})</span></label>`;
+    }).join('\n            ');
+    tournamentsRowHtml =
+      '<label>Tournaments</label>\n' +
+      '        <div class="check-group">\n' +
+      `          ${tourneyChecksHtml}\n` +
+      '        </div>';
+  }
+
   const firstPoolLadder = needsTeamsLadders[0];
   let poolTeamsRowHtml = '';
-  if (firstPoolLadder?.teams) {
+  if (firstPoolLadder?.teams && status.canSubmit) {
     const count = firstPoolLadder.teams;
     const placeholder =
       `Paste ${count} Showdown teams (=== [format] Team Name ===) ` +
@@ -402,6 +455,15 @@ export function renderAccountPage(opts: {
       '        </div>';
   }
 
+  let statusNotice = '<div id="sub-status" class="hide"></div>';
+  if (!canSubmitAny && status.reason) {
+    statusNotice = `<div id="sub-status" class="muted">${escapeHtml(status.reason)}</div>`;
+  } else if (!status.canSubmit && canSubmitTourney && status.reason) {
+    statusNotice =
+      `<div id="sub-status" class="muted">Ladders: ${escapeHtml(status.reason)} ` +
+      'Tournament registration remains open above (1 OCI entry per project).</div>';
+  }
+
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
   const content = renderTemplate(TEMPLATE, {
     ghHref: `https://github.com/${encodeURIComponent(developer.githubLogin)}`,
@@ -413,33 +475,35 @@ export function renderAccountPage(opts: {
     statusTitle,
     statusLabel: status.label,
     activeSection: renderActiveSection(activeEntries),
-    formDisabledClass: status.canSubmit ? '' : ' form-disabled',
-    fieldsetDisabled: status.canSubmit ? '' : ' disabled',
+    formDisabledClass: canSubmitAny ? '' : ' form-disabled',
+    fieldsetDisabled: canSubmitAny ? '' : ' disabled',
     poolTeamsRowHtml,
+    tournamentsRowHtml,
     checkboxesHtml,
-    submitDisabled: status.canSubmit ? '' : ' disabled',
-    submitTitleAttr: status.reason ? ` title="${escapeHtml(status.reason)}"` : '',
-    statusNotice: !status.canSubmit && status.reason
-      ? `<div id="sub-status" class="muted">${escapeHtml(status.reason)}</div>`
-      : '<div id="sub-status" class="hide"></div>',
+    submitDisabled: canSubmitAny ? '' : ' disabled',
+    submitTitleAttr: !canSubmitAny && status.reason ? ` title="${escapeHtml(status.reason)}"` : '',
+    statusNotice,
     historySection: renderHistorySection(versions, ladderNameById),
   });
 
   return renderer.render({
     id: 'account-page',
     title: 'Account | pkmn.ai',
-    header: header('Account'),
+    header: injectLiveBanner(header('Account'), liveTournament),
     path: '/account/',
     style: STYLE,
     content,
   }, s => s.replace('</title>', '</title><meta name="robots" content="noindex">'));
 }
 
-function renderNotRegisteredError(login: string): string {
+function renderNotRegisteredError(
+  login: string,
+  liveTournament?: {id: string; name: string}
+): string {
   return renderer.render({
     id: 'error',
     title: '403 | pkmn.ai',
-    header: header('403'),
+    header: injectLiveBanner(header('403'), liveTournament),
     path: '/account/',
     content:
       `<p>GitHub account <code>${escapeHtml(login)}</code> ` +
@@ -461,16 +525,18 @@ function parseSubmissionPayload(
   sha256: string;
   authToken: string;
   ladders: string[];
+  tournaments: string[];
   teams?: string | string[];
 } {
+  const parseList = (raw: unknown): string[] => {
+    if (Array.isArray(raw)) {
+      return raw.map(v => String(v ?? '').trim()).filter(Boolean);
+    }
+    return typeof raw === 'string' && raw.trim() ? [raw.trim()] : [];
+  };
+
   if (contentType?.includes('application/json')) {
     const json = JSON.parse(rawBody || '{}') as Record<string, unknown>;
-    const rawLadders = json.ladders;
-    const ladders = Array.isArray(rawLadders)
-      ? rawLadders.map(v => String(v ?? '').trim()).filter(Boolean)
-      : typeof rawLadders === 'string' && rawLadders.trim()
-        ? [rawLadders.trim()]
-        : [];
     const rawTeams = json.teams;
     const teams = Array.isArray(rawTeams)
       ? rawTeams.map(String)
@@ -481,7 +547,8 @@ function parseSubmissionPayload(
       url: typeof json.url === 'string' ? json.url.trim() : '',
       sha256: typeof json.sha256 === 'string' ? json.sha256.trim() : '',
       authToken: typeof json.authToken === 'string' ? json.authToken.trim() : '',
-      ladders,
+      ladders: parseList(json.ladders),
+      tournaments: parseList(json.tournaments),
       teams,
     };
   }
@@ -489,12 +556,6 @@ function parseSubmissionPayload(
   const parsed = querystring.parse(rawBody);
   const str = (v: string | string[] | undefined) =>
     (Array.isArray(v) ? v[0] : v ?? '').trim();
-  const rawLadders = parsed.ladders;
-  const ladders = Array.isArray(rawLadders)
-    ? rawLadders.map(s => s.trim()).filter(Boolean)
-    : typeof rawLadders === 'string' && rawLadders.trim()
-      ? [rawLadders.trim()]
-      : [];
 
   return {
     version: str(parsed.version),
@@ -502,7 +563,8 @@ function parseSubmissionPayload(
     url: str(parsed.url),
     sha256: str(parsed.sha256),
     authToken: str(parsed.authToken),
-    ladders,
+    ladders: parseList(parsed.ladders),
+    tournaments: parseList(parsed.tournaments),
     teams: parsed.teams !== undefined ? str(parsed.teams) : undefined,
   };
 }
@@ -626,8 +688,9 @@ export function register(app: polka.Polka, options: Options) {
 
     const developer = db.getDeveloperByGitHub(login);
     const agent = developer ? db.getAgentById(developer.agentId) : undefined;
+    const liveTournament = db.getRunningTournament();
     if (!developer || !agent || agent.status === 'disabled') {
-      sendHtml(res, 403, renderNotRegisteredError(login));
+      sendHtml(res, 403, renderNotRegisteredError(login, liveTournament));
       return;
     }
 
@@ -643,11 +706,13 @@ export function register(app: polka.Polka, options: Options) {
       developer,
       agent,
       status: db.computeAgentSubmissionStatus(agent.id, now),
+      tournamentStatuses: db.computeAgentTournamentStatuses(agent.id),
       currentLadders,
       needsTeamsLadders,
       activeEntries: db.getActiveEntriesForAgent(agent.id),
       versions: db.getVersionsForAgent(agent.id),
       allLadders: db.getLadders(),
+      liveTournament,
     });
     sendHtml(res, 200, html);
   });
@@ -668,7 +733,9 @@ export function register(app: polka.Polka, options: Options) {
 
     const now = getNow();
     const eligibility = db.computeAgentSubmissionStatus(agent.id, now);
-    if (!eligibility.canSubmit) {
+    const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id);
+    const canSubmitTourney = tournamentStatuses.some(t => t.canSubmit);
+    if (!eligibility.canSubmit && !canSubmitTourney) {
       const code = eligibility.label === 'Pending' || eligibility.label === 'Qualified'
         ? 403
         : 429;
@@ -728,8 +795,44 @@ export function register(app: polka.Polka, options: Options) {
     }
     const sha256 = payload.sha256.toLowerCase();
 
-    if (!payload.ladders.length) {
-      sendJson(res, 400, {error: 'Select at least one active ladder.'});
+    if (!payload.ladders.length && !payload.tournaments.length) {
+      sendJson(res, 400, {error: 'Select at least one active ladder or scheduled tournament.'});
+      return;
+    }
+
+    if (payload.ladders.length && !eligibility.canSubmit) {
+      const code = eligibility.label === 'Pending' || eligibility.label === 'Qualified'
+        ? 403
+        : 429;
+      sendJson(
+        res,
+        code,
+        {error: eligibility.reason ?? 'Not currently eligible for ladder submissions.'}
+      );
+      return;
+    }
+
+    const tourneyStatusById = new Map(tournamentStatuses.map(t => [t.tournamentId, t]));
+    const selectedTournamentIds: string[] = [];
+    for (const rawTid of payload.tournaments) {
+      const tStatus = tourneyStatusById.get(rawTid);
+      if (!tStatus) {
+        sendJson(res, 400, {error: `Unknown or closed tournament "${rawTid}".`});
+        return;
+      }
+      if (!tStatus.canSubmit) {
+        sendJson(res, 409, {error: tStatus.reason ?? `Cannot submit to "${tStatus.name}".`});
+        return;
+      }
+      if (!selectedTournamentIds.includes(tStatus.tournamentId)) {
+        selectedTournamentIds.push(tStatus.tournamentId);
+      }
+    }
+
+    if (selectedTournamentIds.length && packageFormat !== 'oci') {
+      sendJson(res, 400, {
+        error: 'Tournament submissions require an OCI image (package: "oci").',
+      });
       return;
     }
 
@@ -824,6 +927,7 @@ export function register(app: polka.Polka, options: Options) {
         sha256,
         authTokenEncoding,
         ladderIds: selectedLadders.map(l => l.id),
+        tournamentIds: selectedTournamentIds,
         teamsByLadder: Object.keys(teamsByLadder).length ? teamsByLadder : undefined,
         now,
       });

@@ -121,6 +121,16 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           (e1.owners.has(1) || e1.owners.has(2) ? 1 : 0) +
           (e2.owners.has(1) || e2.owners.has(2) ? 1 : 0);
         expect(activeCount).toBeLessThanOrEqual(1);
+
+        expect(pair.t1Label).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+        expect(pair.t2Label).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+        expect(pair.t1Label.startsWith('P1:')).toBe(e1.owners.has(1));
+        expect(pair.t1Label.startsWith('P2:')).toBe(e1.owners.has(2));
+        expect(pair.t2Label.startsWith('P1:')).toBe(e2.owners.has(1));
+        expect(pair.t2Label.startsWith('P2:')).toBe(e2.owners.has(2));
+        const prefixedCount =
+          (pair.t1Label.includes(':') ? 1 : 0) + (pair.t2Label.includes(':') ? 1 : 0);
+        expect(prefixedCount).toBe(activeCount);
       }
     });
 
@@ -178,7 +188,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       // Seed completed Tournament #1 + live Tournament #2 for static render coverage
       db.upsertTournament({
         id: '1',
-        name: 'Spring ’26',
+        name: 'Tournament #1: Gen 9 OU',
         format: 'gen9ou',
         gamesPerMatchup: 8,
         parallelTables: 2,
@@ -189,7 +199,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       });
       db.upsertTournament({
         id: '2',
-        name: 'Autumn ’26',
+        name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
         format: 'gen9championsvgc2026regmc',
         gamesPerMatchup: 8,
         parallelTables: 2,
@@ -402,8 +412,8 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
 
         const vgcStep = await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'});
         expect(vgcStep?.ladderId).toBe('gen9championsvgc2026regmc');
-        expect(vgcStep?.p1TeamLabel).toMatch(/Team #\d+/);
-        expect(vgcStep?.p2TeamLabel).toMatch(/Team #\d+/);
+        expect(vgcStep?.p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+        expect(vgcStep?.p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
 
         // 6. Set anchor on RBY & VGC, settle all entries, upgrade 0 ERROR -> 1.1.0 -> 1.2.0
         await runPkmnCli(
@@ -564,7 +574,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         const viewPublicDir = path.join(tmpDir, 'views-public');
         copyRootPublicAssets(PUBLIC_DIR, viewPublicDir);
         try {
-          mock.seedMockArena({
+          const seeded = mock.seedMockArena({
             db: seedDb,
             publicDir: viewPublicDir,
             staticDir,
@@ -591,7 +601,9 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
               '/arena/ladders/vgc/',
               '/arena/tournaments/1/',
               '/arena/tournaments/2/',
+              '/arena/tournaments/3/',
               '/arena/battles/',
+              `/arena/battles/${seeded.featuredBattleId}/`,
               '/projects/',
               '/projects/0-error/',
               '/account/',

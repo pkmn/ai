@@ -16,7 +16,7 @@ const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=regis
 const DISCORD_API = 'https://discord.com/api/v10';
 
 // Ephemeral fallback secret used only when `DEV_AUTH=1` in non-production so `npm run dev` can
-// mint and verify `pkmn_session` cookies out of the box with an unpopulated `private/.env`.
+// mint and verify `pkmn_session` cookies out of the box with an unpopulated `.env`.
 const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex');
 
 export interface OAuthProvider {
@@ -306,7 +306,7 @@ export class Auth {
     // Local-only persona switcher enabled strictly when `DEV_AUTH=1` (and never in production or
     // from non-loopback sockets, nor proxied by Nginx). Mints real HMAC-signed `pkmn_session`
     // cookies so developers can test admin, competitor, stranger, and logged-out states
-    // side-by-side in normal and incognito browser windows without touching `private/.env`.
+    // side-by-side in normal and incognito browser windows without touching `.env`.
     if (this.isDevAuthEnabled()) {
       app.get('/auth/dev', (req, res) => {
         if (!isLoopbackAddress(req.socket.remoteAddress) || req.headers['x-forwarded-for']) {

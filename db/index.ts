@@ -34,11 +34,15 @@ export interface AppliedMigration {
   appliedAt: number;
 }
 
-export const DB_PATH = process.env.ARENA_DB_PATH ?? (
-  process.env.NODE_ENV === 'production' || fs.existsSync('/var/lib/pkmn')
-    ? '/var/lib/pkmn/arena.sqlite'
-    : root('private', 'arena.sqlite')
-);
+function defaultDbPath(): string {
+  return process.env.ARENA_DB_PATH ?? (
+    process.env.NODE_ENV === 'production' || fs.existsSync('/var/lib/pkmn')
+      ? '/var/lib/pkmn/arena.sqlite'
+      : root('db', 'data', 'arena.sqlite')
+  );
+}
+
+export const DB_PATH = defaultDbPath();
 export const SCHEMA_DIR = root('db', 'schema');
 export const MIGRATION_DIR = root('db', 'migration');
 
@@ -56,7 +60,7 @@ export class Database {
   readonly dbPath: string;
   private readonly txRunner: TransactionRunner = fn => this.inTransaction(fn);
 
-  constructor(dbPath = DB_PATH, options: Options = {}) {
+  constructor(dbPath = defaultDbPath(), options: Options = {}) {
     this.dbPath = dbPath;
     if (dbPath !== ':memory:') {
       fs.mkdirSync(path.dirname(dbPath), {recursive: true});
@@ -359,6 +363,10 @@ export class Database {
     return versions.computeAgentSubmissionStatus(this.db, agentId, now);
   }
 
+  computeAgentTournamentStatuses(agentId: number): versions.TournamentSubmissionStatus[] {
+    return versions.computeAgentTournamentStatuses(this.db, agentId);
+  }
+
   createSubmission(input: versions.CreateSubmissionInput): versions.AgentVersionRow {
     return versions.createSubmission(this.db, this.txRunner, input);
   }
@@ -429,6 +437,14 @@ export class Database {
     return matches.getRecentMatches(this.db, limit);
   }
 
+  getMatch(id: string): matches.RecentMatchView | undefined {
+    return matches.getMatch(this.db, id);
+  }
+
+  getMatches(): matches.RecentMatchView[] {
+    return matches.getMatches(this.db);
+  }
+
   getLeaderboardEntries(ladderId: string): entries.LeaderboardEntryView[] {
     return entries.getLeaderboardEntries(this.db, ladderId);
   }
@@ -486,6 +502,26 @@ export class Database {
 
   getTournament(id: string): tournaments.TournamentRow | undefined {
     return tournaments.getTournament(this.db, id);
+  }
+
+  getRunningTournament(): tournaments.TournamentRow | undefined {
+    return tournaments.getRunningTournament(this.db);
+  }
+
+  getScheduledTournaments(): tournaments.TournamentRow[] {
+    return tournaments.getScheduledTournaments(this.db);
+  }
+
+  setTournamentStatus(
+    id: string,
+    status: tournaments.TournamentStatus,
+    now?: number
+  ): tournaments.TournamentRow {
+    return tournaments.setTournamentStatus(this.db, id, status, now);
+  }
+
+  seedTournamentEntrants(tournamentId: string): number {
+    return tournaments.seedTournamentEntrants(this.db, this.txRunner, tournamentId);
   }
 
   upsertTournamentEntrant(input: entrants.UpsertTournamentEntrantInput) {

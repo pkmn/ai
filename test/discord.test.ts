@@ -1252,4 +1252,49 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
     expect(sent[0].body).toContain('513513270670262284');
     expect(sent[1].body).toContain('gen1ou-0000000972');
   });
+
+  test('disables background Discord sync outside production unless DISCORD_SYNC=1', async () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevSync = process.env.DISCORD_SYNC;
+    const prevBotToken = process.env.DISCORD_BOT_TOKEN;
+    const calls: string[] = [];
+    globalThis.fetch = ((url: string) => {
+      calls.push(String(url));
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve([]),
+        text: () => Promise.resolve(''),
+      });
+    }) as unknown as typeof fetch;
+
+    const db = new Database(':memory:');
+    try {
+      process.env.NODE_ENV = 'development';
+      delete process.env.DISCORD_SYNC;
+      process.env.DISCORD_BOT_TOKEN = 'env-prod-bot-token';
+
+      const app1 = polka();
+      const h1 = discord.register(app1, {db, verifyKey: '00'.repeat(32)});
+      await new Promise(resolve => setTimeout(resolve, 25));
+      h1.stop();
+      expect(calls).toEqual([]);
+
+      // Opting in via DISCORD_SYNC=1 activates background sync using DISCORD_BOT_TOKEN
+      process.env.DISCORD_SYNC = '1';
+      const app2 = polka();
+      const h2 = discord.register(app2, {db, verifyKey: '00'.repeat(32)});
+      await new Promise(resolve => setTimeout(resolve, 25));
+      h2.stop();
+      expect(calls.some(u => u.startsWith('https://discord.com/api/v10'))).toBe(true);
+    } finally {
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
+      if (prevSync === undefined) delete process.env.DISCORD_SYNC;
+      else process.env.DISCORD_SYNC = prevSync;
+      if (prevBotToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevBotToken;
+      db.close();
+    }
+  });
 });

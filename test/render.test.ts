@@ -11,8 +11,10 @@ import {Database} from '../db';
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as render from '../server/render';
+import {formatPoolTeamLabel} from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import {root} from '../static/util';
+import {hashTeam} from '../teams';
 import {runPkmnCli} from '../tools/pkmn';
 
 const NOW = 1_762_800_000;
@@ -886,5 +888,168 @@ describe('Static Arena Views (/arena, ladders, tournaments, /projects/:agent)', 
       handle.close();
       await new Promise<void>(resolve => server.close(() => resolve()));
     }
+  });
+
+  it('renders /arena/battles/:id/ with pool team hashes & syncs #topbar live banner', async () => {
+    db.setLadderStatus('gen9championsvgc2026regmc', 'active', DAY_1);
+    const vFoul = createVersionAndPassSmoke(
+      db, 'foul-play', '1.4.0', ['gen9championsvgc2026regmc'], DAY_1
+    );
+    const vJax = createVersionAndPassSmoke(
+      db, 'jaxcalibur', '1.1.0', ['gen9championsvgc2026regmc'], DAY_1
+    );
+
+    const packedThird = '|Incineroar|Sitrus Berry]Rillaboom|Assault Vest';
+    const packedP1 = '|Archaludon|Power Herb]Pelipper|Focus Sash';
+    const unknownHash = hashTeam(packedThird);
+    const p1OwnedHash = formatPoolTeamLabel(packedP1, 'P1');
+    expect(unknownHash).toMatch(/^[0-9a-f]{12}$/);
+    expect(p1OwnedHash).toMatch(/^P1:[0-9a-f]{12}$/);
+
+    db.recordCompletedMatch({
+      match: {
+        id: 'vgc-0000001',
+        ladderId: 'gen9championsvgc2026regmc',
+        p1VersionId: vFoul,
+        p2VersionId: vJax,
+        seed: '99,88,77,66',
+        p1TeamLabel: unknownHash,
+        p2TeamLabel: p1OwnedHash,
+        game1Outcome: 'W',
+        game2Outcome: 'L',
+        category: 'WL',
+        game1Turns: 11,
+        game2Turns: 14,
+        game1EndReason: 'normal',
+        game2EndReason: 'timeout',
+        p1PeakRam: 1240,
+        p2PeakRam: 2150,
+        p1Game1BankSeconds: 132,
+        p1Game2BankSeconds: 118,
+        p2Game1BankSeconds: 104,
+        p2Game2BankSeconds: 0,
+        p1MeanTurnMillis: 310,
+        p2MeanTurnMillis: 640,
+        completedAt: NOW - 60,
+      },
+    });
+
+    db.upsertTournament({
+      id: '2',
+      name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
+      format: 'gen9championsvgc2026regmc',
+      gamesPerMatchup: 8,
+      parallelTables: 2,
+      hardware: 'GCP L4 Spot',
+      status: 'running',
+      startsAt: NOW - 1800,
+    });
+
+    const liveDoc: arena.LiveDocument = {
+      updatedAt: NOW,
+      stale: false,
+      live: {
+        heartbeatSeq: 9,
+        matchId: 'vgc-0000002',
+        ladderId: 'gen9championsvgc2026regmc',
+        slot: 'vgc',
+        format: 'gen9championsvgc2026regmc',
+        game: 1,
+        turn: 4,
+        activeSlot: 'p1',
+        turnStartedAt: NOW - 2,
+        turnBudgetSeconds: 148,
+        incrementSeconds: 25,
+        p1: {
+          slug: 'foul-play',
+          name: 'Foul Play',
+          version: '1.4.0',
+          bankSeconds: 148,
+          lastTurnMillis: 290,
+          meanTurnMillis: 300,
+          ram: 1200,
+          team: unknownHash,
+        },
+        p2: {
+          slug: 'jaxcalibur',
+          name: 'Jaxcalibur',
+          version: '1.1.0',
+          bankSeconds: 145,
+          lastTurnMillis: 410,
+          meanTurnMillis: 405,
+          ram: 2100,
+          team: p1OwnedHash,
+        },
+      },
+      recentMatches: db.getRecentMatches(50),
+    };
+
+    render.renderArenaPages({db, publicDir: tmpPublic, liveDoc, now: NOW});
+
+    // 1. Live tracker + battle history link on /arena/battles/ and /projects/foul-play/
+    const battlesIndex = fs.readFileSync(
+      path.join(tmpPublic, 'arena', 'battles', 'index.html'),
+      'utf8'
+    );
+    expect(battlesIndex).toContain(`Team: <code>${unknownHash}</code>`);
+    expect(battlesIndex).toContain(`Team: <code>${p1OwnedHash}</code>`);
+    expect(battlesIndex).toContain('href="/arena/battles/vgc-0000001/"');
+    expect(battlesIndex).toContain('End: normal/timeout');
+
+    const fpProfile = fs.readFileSync(
+      path.join(tmpPublic, 'projects', 'foul-play', 'index.html'),
+      'utf8'
+    );
+    expect(fpProfile).toContain('href="/arena/battles/vgc-0000001/"');
+
+    // 2. Per-battle detail page (/arena/battles/vgc-0000001/index.html)
+    const detailPath = path.join(tmpPublic, 'arena', 'battles', 'vgc-0000001', 'index.html');
+    expect(fs.existsSync(detailPath)).toBe(true);
+    const detailHtml = fs.readFileSync(detailPath, 'utf8');
+    expect(detailHtml).toContain('vgc-0000001');
+    expect(detailHtml).toContain('99,88,77,66');
+    expect(detailHtml).toContain(`>${unknownHash}</code>`);
+    expect(detailHtml).toContain(`>${p1OwnedHash}</code>`);
+    expect(detailHtml).toContain('1,240 MiB');
+    expect(detailHtml).toContain('2,150 MiB');
+    expect(detailHtml).toContain('310 ms');
+    expect(detailHtml).toContain('640 ms');
+    expect(detailHtml).toContain('Timeout');
+    expect(detailHtml).toContain(
+      '<div id="topbar"><a href="/arena/tournaments/2/" class="subtle">' +
+      '[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3</a></div>'
+    );
+
+    // Incremental .shell cache skips rewriting unchanged battle pages on repeat render
+    const mtimeBefore = fs.statSync(detailPath).mtimeMs;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    render.renderArenaPages({db, publicDir: tmpPublic, liveDoc, now: NOW + 5});
+    expect(fs.statSync(detailPath).mtimeMs).toBe(mtimeBefore);
+
+    // 3. Static pages get [LIVE] #topbar, EXCEPT pages with "Under Construction" (background)
+    const homeHtml = fs.readFileSync(path.join(tmpPublic, 'index.html'), 'utf8');
+    const rulesHtml = fs.readFileSync(path.join(tmpPublic, 'rules', 'index.html'), 'utf8');
+    const bgHtml = fs.readFileSync(path.join(tmpPublic, 'background', 'index.html'), 'utf8');
+    expect(homeHtml).toContain('[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3');
+    expect(rulesHtml).toContain('[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3');
+    expect(bgHtml).toContain('Under Construction');
+    expect(bgHtml).not.toContain('[LIVE]');
+
+    // Completing Tournament #2 strips [LIVE] #topbar from both static pages and battle pages!
+    await runPkmnCli(
+      ['set-tournament-status', '2', 'completed'],
+      {db, publicDir: tmpPublic, now: NOW + 60, log: () => undefined}
+    );
+    expect(fs.readFileSync(path.join(tmpPublic, 'index.html'), 'utf8')).not.toContain('[LIVE]');
+    expect(fs.readFileSync(detailPath, 'utf8')).not.toContain('[LIVE]');
+    expect(fs.readFileSync(path.join(tmpPublic, 'background', 'index.html'), 'utf8'))
+      .toContain('Under Construction');
+
+    const hyperlinkBin = root('node_modules', '.bin', 'hyperlink');
+    const hlOut = execFileSync(hyperlinkBin, [tmpPublic, '--check-anchors'], {
+      encoding: 'utf8',
+    });
+    expect(hlOut).toContain('Found 0 bad links');
+    expect(hlOut).toContain('Found 0 bad anchors');
   });
 });

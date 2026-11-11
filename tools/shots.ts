@@ -42,6 +42,7 @@ interface Scenario {
   path: string;
   waitFor?: string;
   click?: string;
+  githubUser?: string;
 }
 
 const SHOTS_AUTH: auth.Config = {
@@ -103,7 +104,7 @@ const WIKI_PROJECT_V2_DJ = `{% visibility: developers %}
 - Team preview policy conditioned on revealed opponent archetypes.
 `;
 
-function buildScenarios(wikiSha: string): Scenario[] {
+function buildScenarios(wikiSha: string, featuredBattleId: string): Scenario[] {
   return [
     {name: 'home', path: '/'},
     {name: 'arena', path: '/arena/'},
@@ -112,7 +113,9 @@ function buildScenarios(wikiSha: string): Scenario[] {
     {name: 'arena-tournament-1', path: '/arena/tournaments/1/'},
     {name: 'arena-tournament-2', path: '/arena/tournaments/2/'},
     {name: 'arena-battles', path: '/arena/battles/'},
+    {name: 'arena-battle', path: `/arena/battles/${featuredBattleId}/`},
     {name: 'account', path: '/account/'},
+    {name: 'account-tournament', path: '/account/', githubUser: 'pmariglia'},
     {name: 'background', path: '/background/'},
     {name: 'concepts', path: '/concepts/'},
     {name: 'concepts-baselines', path: '/concepts/baselines/'},
@@ -145,10 +148,31 @@ function buildScenarios(wikiSha: string): Scenario[] {
 
 interface Fixture {
   origin: string;
-  cookie: string;
+  cookies: Record<string, string>;
   sha: string;
+  featuredBattleId: string;
   publicDir: string;
   close: () => Promise<void>;
+}
+
+function copyStaticPublicHtml(srcPublic: string, dstPublic: string) {
+  const indexHtml = path.join(srcPublic, 'index.html');
+  if (fs.existsSync(indexHtml)) {
+    fs.copyFileSync(indexHtml, path.join(dstPublic, 'index.html'));
+  }
+  for (const dir of [
+    'background',
+    'concepts',
+    'glossary',
+    'release',
+    'research',
+    'rules',
+  ]) {
+    const srcDir = path.join(srcPublic, dir);
+    if (fs.existsSync(srcDir)) {
+      fs.cpSync(srcDir, path.join(dstPublic, dir), {recursive: true});
+    }
+  }
 }
 
 async function startFixture(): Promise<Fixture> {
@@ -159,11 +183,12 @@ async function startFixture(): Promise<Fixture> {
   const publicDir = path.join(tmpDir, 'public');
   fs.mkdirSync(wikiDir, {recursive: true});
   fs.mkdirSync(publicDir, {recursive: true});
+  copyStaticPublicHtml(PUBLIC, publicDir);
 
   const projectsFile = prepareMockStaticDir(staticDir, avatarsDir);
   const nowSeconds = Math.floor(NOW / 1000);
   const db = new Database(':memory:', {now: nowSeconds});
-  seedMockArena({
+  const seeded = seedMockArena({
     db,
     publicDir,
     staticDir,
@@ -247,19 +272,26 @@ async function startFixture(): Promise<Fixture> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address() as {port: number};
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const token = auth.signToken(
-    {
-      github: {id: 1, login: 'scheibo'},
-      discord: {id: '513513270670262284', username: 'scheibo'},
-      exp,
-    },
-    SHOTS_AUTH.sessionSecret
-  );
+  const mintCookie = (id: number, login: string, discordId: string, discordUser: string) => {
+    const token = auth.signToken(
+      {
+        github: {id, login},
+        discord: {id: discordId, username: discordUser},
+        exp,
+      },
+      SHOTS_AUTH.sessionSecret
+    );
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
+  };
 
   return {
     origin: `http://127.0.0.1:${addr.port}`,
-    cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    cookies: {
+      scheibo: mintCookie(1, 'scheibo', '513513270670262284', 'scheibo'),
+      pmariglia: mintCookie(2, 'pmariglia', '283674461268344832', 'pmariglia'),
+    },
     sha,
+    featuredBattleId: seeded.featuredBattleId,
     publicDir,
     close: async () => {
       server.closeAllConnections();
@@ -318,7 +350,7 @@ const TRANSPARENT_PNG = Buffer.from(
   'base64'
 );
 
-async function serve(route: Route, fixture: Fixture): Promise<void> {
+async function serve(route: Route, fixture: Fixture, cookie: string): Promise<void> {
   const url = new URL(route.request().url());
   if (url.origin !== ORIGIN) {
     if (url.pathname.endsWith('.png')) {
@@ -341,7 +373,7 @@ async function serve(route: Route, fixture: Fixture): Promise<void> {
       method: req.method(),
       headers: {
         ...req.headers(),
-        cookie: fixture.cookie,
+        cookie,
       },
       body: body ? new Uint8Array(body) : undefined,
     });
@@ -375,7 +407,8 @@ async function shoot(
   file: string,
   fixture: Fixture
 ): Promise<string[]> {
-  await context.route('**/*', route => serve(route, fixture));
+  const cookie = fixture.cookies[scenario.githubUser ?? 'scheibo'] ?? fixture.cookies.scheibo;
+  await context.route('**/*', route => serve(route, fixture, cookie));
   const page = await context.newPage();
   const problems: string[] = [];
   page.on('pageerror', error => problems.push(error.message));
@@ -426,7 +459,7 @@ async function run(): Promise<void> {
 
   const fixture = await startFixture();
   const newDir = `${SHOTS_DIR}.new`;
-  const scenarios = buildScenarios(fixture.sha).filter(
+  const scenarios = buildScenarios(fixture.sha, fixture.featuredBattleId).filter(
     scenario => scenario.name.includes(values.only ?? '')
   );
   const browser = await launch();

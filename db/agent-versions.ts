@@ -5,6 +5,8 @@ import * as teams from './agent-ladder-teams';
 import {AgentRow, getAgentById} from './agents';
 import * as entries from './ladder-entries';
 import {getActiveLadders, getLadder} from './ladders';
+import {upsertTournamentEntrant} from './tournament-entrants';
+import {getScheduledTournaments, getTournament} from './tournaments';
 
 import {TransactionRunner} from './index';
 
@@ -26,6 +28,7 @@ export interface AgentVersionRow {
   sha256: string;
   authTokenEncoding?: string;
   laddersJson: string;
+  tournamentsJson: string;
   unpackedBytes?: number;
   smokeStatus: SmokeStatus;
   smokeDurationMillis?: number;
@@ -39,6 +42,7 @@ export interface AgentVersionRow {
 
 export interface VersionHistoryView extends AgentVersionRow {
   activeLadderNames: string[];
+  tournamentNames: string[];
 }
 
 export interface SubmissionStatus {
@@ -46,6 +50,17 @@ export interface SubmissionStatus {
   canSubmit: boolean;
   reason?: string;
   nextEligibleAt?: number;
+}
+
+export interface TournamentSubmissionStatus {
+  tournamentId: string;
+  name: string;
+  format: string;
+  startsAt: number;
+  canSubmit: boolean;
+  enteredVersion?: string;
+  pendingVersion?: string;
+  reason?: string;
 }
 
 export interface CreateSubmissionInput {
@@ -57,6 +72,7 @@ export interface CreateSubmissionInput {
   sha256: string;
   authTokenEncoding?: string;
   ladderIds: string[];
+  tournamentIds?: string[];
   teamsByLadder?: Record<string, string[]>;
   now?: number;
 }
@@ -72,6 +88,7 @@ export interface PendingSubmissionRow {
   sha256: string;
   authTokenEncoding?: string;
   ladders: string[];
+  tournaments: string[];
   teamsByLadder: Record<string, string[]>;
 }
 
@@ -116,6 +133,7 @@ interface RawAgentVersionRow {
   sha256: string;
   auth_token_encoding: string | null;
   ladders_json: string;
+  tournaments_json: string;
   unpacked_bytes: number | null;
   smoke_status: SmokeStatus;
   smoke_duration_millis: number | null;
@@ -138,6 +156,7 @@ function mapVersionRow(raw: RawAgentVersionRow): AgentVersionRow {
     sha256: raw.sha256,
     authTokenEncoding: raw.auth_token_encoding ?? undefined,
     laddersJson: raw.ladders_json,
+    tournamentsJson: raw.tournaments_json ?? '[]',
     unpackedBytes: raw.unpacked_bytes ?? undefined,
     smokeStatus: raw.smoke_status,
     smokeDurationMillis: raw.smoke_duration_millis ?? undefined,
@@ -211,18 +230,133 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
     activeByVersion.set(r.version_id, list);
   }
 
-  return rawVersions.map(v => ({
-    ...mapVersionRow(v),
-    activeLadderNames: activeByVersion.get(v.id) ?? [],
-  }));
+  const entrantRows = db.prepare(`
+    SELECT te.version_id, t.name
+    FROM tournament_entrants te
+    JOIN tournaments t ON t.id = te.tournament_id
+    WHERE te.agent_id = ?
+    ORDER BY t.starts_at ASC, t.id ASC
+  `).all(agentId) as Array<{version_id: number; name: string}>;
+
+  const tourneysByVersion = new Map<number, string[]>();
+  for (const r of entrantRows) {
+    const list = tourneysByVersion.get(r.version_id) ?? [];
+    list.push(r.name);
+    tourneysByVersion.set(r.version_id, list);
+  }
+
+  return rawVersions.map(v => {
+    const mapped = mapVersionRow(v);
+    const enrolled = tourneysByVersion.get(v.id) ?? [];
+    let tournamentNames = enrolled;
+    if (!tournamentNames.length) {
+      const requested = JSON.parse(mapped.tournamentsJson) as string[];
+      tournamentNames = requested.map(tid => getTournament(db, tid)?.name ?? `Tournament #${tid}`);
+    }
+    return {
+      ...mapped,
+      activeLadderNames: activeByVersion.get(v.id) ?? [],
+      tournamentNames,
+    };
+  });
 }
 
-// Evaluates project-wide submission eligibility:
+// Evaluates per-tournament submission eligibility for `'scheduled'` events.
+// Unlike continuous ladders, tournaments accept at most 1 successful (or currently pending) OCI
+// entry per qualified project and are never blocked by 14-day ladder cooldowns or unsettled
+// ladder Challengers.
+export function computeAgentTournamentStatuses(
+  db: DatabaseSync,
+  agentId: number
+): TournamentSubmissionStatus[] {
+  const scheduled = getScheduledTournaments(db);
+  if (!scheduled.length) return [];
+
+  const agent = getAgentById(db, agentId);
+  if (agent?.status !== 'qualified') {
+    const reason = agent?.status === 'pending'
+      ? 'Project qualification is pending staff review.'
+      : 'Project is disabled.';
+    return scheduled.map(t => ({
+      tournamentId: t.id,
+      name: t.name,
+      format: t.format,
+      startsAt: t.startsAt,
+      canSubmit: false,
+      reason,
+    }));
+  }
+
+  const entrantRows = db.prepare(`
+    SELECT te.tournament_id, av.version
+    FROM tournament_entrants te
+    JOIN agent_versions av ON av.id = te.version_id
+    WHERE te.agent_id = ?
+  `).all(agentId) as Array<{tournament_id: string; version: string}>;
+  const enteredByTourney = new Map(entrantRows.map(r => [r.tournament_id, r.version]));
+
+  const versionRows = db.prepare(`
+    SELECT version, smoke_status, tournaments_json
+    FROM agent_versions
+    WHERE agent_id = ?
+      AND smoke_status IN ('pending', 'passed')
+      AND tournaments_json != '[]'
+    ORDER BY submitted_at DESC, id DESC
+  `).all(agentId) as Array<{version: string; smoke_status: SmokeStatus; tournaments_json: string}>;
+
+  const pendingByTourney = new Map<string, string>();
+  for (const row of versionRows) {
+    const tids = JSON.parse(row.tournaments_json) as string[];
+    for (const tid of tids) {
+      if (row.smoke_status === 'passed' && !enteredByTourney.has(tid)) {
+        enteredByTourney.set(tid, row.version);
+      } else if (row.smoke_status === 'pending' && !pendingByTourney.has(tid)) {
+        pendingByTourney.set(tid, row.version);
+      }
+    }
+  }
+
+  return scheduled.map(t => {
+    const enteredVersion = enteredByTourney.get(t.id);
+    if (enteredVersion) {
+      return {
+        tournamentId: t.id,
+        name: t.name,
+        format: t.format,
+        startsAt: t.startsAt,
+        canSubmit: false,
+        enteredVersion,
+        reason: `Already entered with version ${enteredVersion}.`,
+      };
+    }
+    const pendingVersion = pendingByTourney.get(t.id);
+    if (pendingVersion) {
+      return {
+        tournamentId: t.id,
+        name: t.name,
+        format: t.format,
+        startsAt: t.startsAt,
+        canSubmit: false,
+        pendingVersion,
+        reason: `Version ${pendingVersion} is awaiting smoke testing for this tournament.`,
+      };
+    }
+    return {
+      tournamentId: t.id,
+      name: t.name,
+      format: t.format,
+      startsAt: t.startsAt,
+      canSubmit: true,
+    };
+  });
+}
+
+// Evaluates project-wide ladder submission eligibility:
 //   1. Project must be `'qualified'` and at least one ladder must be `'active'`.
-//   2. No version may currently be queued in `'pending'` smoke testing.
-//   3. At least 14 days (`COOLDOWN_SECONDS`) must have elapsed since the latest `'passed'`
-//      submission (unless staff waived it via `cooldown_refunded_at`). Failed smoke tests never
-//      trigger the cooldown.
+//   2. No ladder version (`ladders_json != '[]'`) may currently be queued in `'pending'`.
+//   3. At least 14 days (`COOLDOWN_SECONDS`) must have elapsed since the latest `'passed'` ladder
+//      submission (unless staff waived it via `cooldown_refunded_at`). Tournament-only submissions
+//      and failed smoke tests never trigger the ladder cooldown.
 //   4. Every active ladder entry must have settled (`matches >= 25` and `se <= 30`) so projects
 //      cannot churn unsettled Challengers before the rating graph absorbs them.
 export function computeAgentSubmissionStatus(
@@ -258,7 +392,7 @@ export function computeAgentSubmissionStatus(
 
   const pendingRow = db.prepare(
     `SELECT version FROM agent_versions
-     WHERE agent_id = ? AND smoke_status = 'pending'
+     WHERE agent_id = ? AND smoke_status = 'pending' AND ladders_json != '[]'
      LIMIT 1`
   ).get(agentId) as {version: string} | undefined;
   if (pendingRow) {
@@ -272,7 +406,10 @@ export function computeAgentSubmissionStatus(
   const refundedAt = agent.cooldownRefundedAt ?? 0;
   const latestPassed = db.prepare(
     `SELECT submitted_at, version FROM agent_versions
-     WHERE agent_id = ? AND smoke_status = 'passed' AND submitted_at > ?
+     WHERE agent_id = ?
+       AND smoke_status = 'passed'
+       AND ladders_json != '[]'
+       AND submitted_at > ?
      ORDER BY submitted_at DESC, id DESC
      LIMIT 1`
   ).get(agentId, refundedAt) as {submitted_at: number; version: string} | undefined;
@@ -320,7 +457,25 @@ export function createSubmission(
   input: CreateSubmissionInput
 ): AgentVersionRow {
   const now = input.now ?? Math.floor(Date.now() / 1000);
+  const tournamentIds = input.tournamentIds ?? [];
   return inTransaction(() => {
+    const agent = getAgentById(db, input.agentId);
+    if (!agent || agent.status === 'disabled') {
+      throw Object.assign(new Error('Project is disabled.'), {status: 403});
+    }
+    if (agent.status === 'pending') {
+      throw Object.assign(
+        new Error('Project qualification is pending staff review.'),
+        {status: 403}
+      );
+    }
+    if (!input.ladderIds.length && !tournamentIds.length) {
+      throw Object.assign(
+        new Error('Select at least one active ladder or open tournament.'),
+        {status: 400}
+      );
+    }
+
     const existing = db.prepare(
       'SELECT id FROM agent_versions WHERE agent_id = ? AND version = ?'
     ).get(input.agentId, input.version) as {id: number} | undefined;
@@ -331,21 +486,50 @@ export function createSubmission(
       );
     }
 
-    const status = computeAgentSubmissionStatus(db, input.agentId, now);
-    if (!status.canSubmit) {
-      const code = status.label === 'Pending' || status.label === 'Qualified' ? 403 : 429;
-      throw Object.assign(
-        new Error(status.reason ?? 'Project is not currently eligible to submit.'),
-        {status: code}
+    if (input.ladderIds.length > 0) {
+      const status = computeAgentSubmissionStatus(db, input.agentId, now);
+      if (!status.canSubmit) {
+        const code = status.label === 'Pending' || status.label === 'Qualified' ? 403 : 429;
+        throw Object.assign(
+          new Error(status.reason ?? 'Project is not currently eligible to submit to ladders.'),
+          {status: code}
+        );
+      }
+    }
+
+    if (tournamentIds.length > 0) {
+      if (input.package !== 'oci') {
+        throw Object.assign(
+          new Error('Tournament submissions only support OCI container images.'),
+          {status: 400}
+        );
+      }
+      const tourneyStatuses = new Map(
+        computeAgentTournamentStatuses(db, input.agentId).map(s => [s.tournamentId, s])
       );
+      for (const tid of tournamentIds) {
+        const ts = tourneyStatuses.get(tid);
+        if (!ts) {
+          throw Object.assign(
+            new Error(`Tournament "${tid}" is not open for submissions.`),
+            {status: 400}
+          );
+        }
+        if (!ts.canSubmit) {
+          throw Object.assign(
+            new Error(ts.reason ?? `Already entered in ${ts.name}.`),
+            {status: 409}
+          );
+        }
+      }
     }
 
     const res = db.prepare(`
       INSERT INTO agent_versions (
         agent_id, developer_id, version, package, url,
-        sha256, auth_token_encoding, ladders_json, smoke_status, submitted_at
+        sha256, auth_token_encoding, ladders_json, tournaments_json, smoke_status, submitted_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
     `).run(
       input.agentId,
       input.developerId ?? null,
@@ -355,6 +539,7 @@ export function createSubmission(
       input.sha256,
       input.authTokenEncoding ?? null,
       JSON.stringify(input.ladderIds),
+      JSON.stringify(tournamentIds),
       now
     );
     const versionId = Number(res.lastInsertRowid);
@@ -378,6 +563,7 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
 
   return rows.map(row => {
     const ladders = JSON.parse(row.ladders_json) as string[];
+    const tournaments = JSON.parse(row.tournaments_json ?? '[]') as string[];
     const teamsByLadder: Record<string, string[]> = {};
     for (const ladderId of ladders) {
       const pendingTeams = teams.getTeamsForAgentLadder(db, ladderId, row.agent_id, 'pending');
@@ -396,6 +582,7 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
       sha256: row.sha256,
       authTokenEncoding: row.auth_token_encoding ?? undefined,
       ladders,
+      tournaments,
       teamsByLadder,
     };
   });
@@ -453,6 +640,7 @@ export function applySubmissionStatus(
     );
 
     const ladderIds = JSON.parse(prev.laddersJson) as string[];
+    const tournamentIds = JSON.parse(prev.tournamentsJson) as string[];
     const retiredByLadder: Record<string, number> = {};
 
     if (input.smokeStatus === 'passed') {
@@ -533,10 +721,36 @@ export function applySubmissionStatus(
         );
         ensureAgentLadderStats(db, ladderId, prev.agentId);
       }
+
+      for (const tournamentId of tournamentIds) {
+        const tournament = getTournament(db, tournamentId);
+        if (tournament?.status !== 'scheduled') continue;
+        const alreadyEntered = db.prepare(
+          'SELECT 1 FROM tournament_entrants WHERE tournament_id = ? AND agent_id = ?'
+        ).get(tournamentId, prev.agentId);
+        if (alreadyEntered) continue;
+        const maxRow = db.prepare(
+          `SELECT COALESCE(MAX(seed), 0) AS max_seed
+           FROM tournament_entrants WHERE tournament_id = ?`
+        ).get(tournamentId) as {max_seed: number};
+        upsertTournamentEntrant(db, {
+          tournamentId,
+          agentId: prev.agentId,
+          versionId: prev.id,
+          seed: maxRow.max_seed + 1,
+        });
+      }
     } else if (input.smokeStatus === 'failed') {
       teams.deletePendingTeams(db, ladderIds, prev.agentId);
     } else if (input.smokeStatus === 'quarantined') {
       teams.deletePendingTeams(db, ladderIds, prev.agentId);
+      if (tournamentIds.length > 0) {
+        db.prepare(`
+          DELETE FROM tournament_entrants
+          WHERE version_id = ?
+            AND tournament_id IN (SELECT id FROM tournaments WHERE status = 'scheduled')
+        `).run(prev.id);
+      }
       const affected = db.prepare(`
         SELECT ladder_id FROM ladder_entries
         WHERE version_id = ? AND role IN ('champion', 'challenger')

@@ -403,6 +403,37 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
       const doc3 = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
       expect(doc3.live?.turnStartedAt).toBe(1_760_001_009);
 
+      // LiveSlot accepts optional pool team short hashes and rejects >64-char team strings
+      const hbTeamOk = await apiJson(
+        srv.baseUrl,
+        'POST',
+        '/api/arena/heartbeat',
+        AUTH_CFG.arenaSecret,
+        {
+          ...hbPayload,
+          heartbeatSeq: 4,
+          p1: {...hbPayload.p1, team: 'b7b8bb1cbc73'},
+          p2: {...hbPayload.p2, team: 'P1:16d479804e3d'},
+        }
+      );
+      expect(hbTeamOk.status).toBe(200);
+      const docTeam = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
+      expect(docTeam.live?.p1.team).toBe('b7b8bb1cbc73');
+      expect(docTeam.live?.p2.team).toBe('P1:16d479804e3d');
+
+      const hbTeamBad = await apiJson(
+        srv.baseUrl,
+        'POST',
+        '/api/arena/heartbeat',
+        AUTH_CFG.arenaSecret,
+        {
+          ...hbPayload,
+          heartbeatSeq: 5,
+          p1: {...hbPayload.p1, team: 'x'.repeat(65)},
+        }
+      );
+      expect(hbTeamBad.status).toBe(400);
+
       // Play 45 blind-pair matches so SE <= 30 and matches >= 25 (settlement + Top-1 reign!)
       for (let mIdx = 1; mIdx <= 45; mIdx++) {
         fakeNow = 1_760_001_000 + mIdx * 300;
@@ -731,6 +762,65 @@ describe('pkmn CLI (tools/pkmn.ts)', () => {
           }),
         });
         expect(logs[logs.length - 1]).toContain('pre.10544');
+
+        // Tournament management CLI (`create-tournament`, `seed-tournament`,
+        // `set-tournament-status`) + pending-submissions `tournaments` enrollment
+        await runPkmnCli(
+          [
+            'create-tournament',
+            '3',
+            '--name',
+            'Tournament #3: Gen 1 OU',
+            '--format',
+            'gen1ou',
+            '--games',
+            '8',
+            '--tables',
+            '2',
+            '--starts',
+            '2026-12-01T00:00:00Z',
+          ],
+          {db, now: 1_760_000_620, log}
+        );
+        expect(db.getTournament('3')?.status).toBe('scheduled');
+
+        const tSub = db.createSubmission({
+          agentId: zeroAgent.id,
+          version: '1.0.0-t3',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:1.0.0-t3',
+          sha256: SHA,
+          ladderIds: [],
+          tournamentIds: ['3'],
+          now: 1_760_000_630,
+        });
+        expect(db.getPendingSubmissions().find(s => s.versionId === tSub.id)?.tournaments)
+          .toEqual(['3']);
+        db.applySubmissionStatus({
+          versionId: tSub.id,
+          smokeStatus: 'passed',
+          now: 1_760_000_635,
+        });
+        expect(db.getTournamentEntrants('3').map(e => e.agentSlug)).toEqual(['0-error']);
+
+        await runPkmnCli(
+          ['seed-tournament', '3', '--ladder', 'gen1ou20261109'],
+          {db, now: 1_760_000_640, log}
+        );
+        expect(db.getTournamentEntrants('3')[0].seed).toBe(1);
+
+        await runPkmnCli(
+          ['set-tournament-status', '3', 'running'],
+          {db, now: 1_760_000_650, log}
+        );
+        expect(db.getRunningTournament()?.id).toBe('3');
+
+        await runPkmnCli(
+          ['set-tournament-status', '3', 'completed'],
+          {db, now: 1_760_000_700, log}
+        );
+        expect(db.getRunningTournament()).toBeUndefined();
+        expect(db.getTournament('3')?.completedAt).toBe(1_760_000_700);
       } finally {
         db.close();
       }

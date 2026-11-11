@@ -1,11 +1,17 @@
 #topbar {
   position: fixed;
   top: 0;
+  z-index: 10;
+  box-sizing: border-box;
   width: 100%;
+  padding: 0 0.5rem;
+  overflow: hidden;
   color: white;
   font-weight: normal;
   font-style: italic;
   line-height: 2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   background-color: black;
 }
 

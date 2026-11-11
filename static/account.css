@@ -159,7 +159,8 @@ textarea.input-text {
 .check-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.75ch;
+  gap: 0.45rem 1.75ch;
+  min-width: 0;
   font-size: 0.92em;
   font-family: var(--monospace);
 }
@@ -167,9 +168,15 @@ textarea.input-text {
 .check-group label {
   display: inline-flex;
   gap: 0.4ch;
-  align-items: center;
+  align-items: baseline;
+  min-width: 0;
   font-weight: normal;
   cursor: pointer;
+}
+
+.check-group label input[type='checkbox'] {
+  flex-shrink: 0;
+  transform: translateY(1px);
 }
 
 .check-group label.upcoming {

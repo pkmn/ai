@@ -13,6 +13,7 @@
  *   bun index.ts <team-file> <pool-dir...> --format=<format>
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -100,6 +101,15 @@ const ENTRY_ABILITIES = new Set([
   'snowwarning', 'supersweetsyrup', 'supremeoverlord', 'teravolt', 'trace',
   'turboblaze', 'unnerve',
 ]);
+
+// Matches `pkmn/teams` content-addressed filenames (`[0-9a-f]{12}`, 48-bit SHA-256 prefix over the
+// canonical packed team string).
+export const TEAM_HASH_LEN = 12;
+
+export function hashTeam(packedCanonicalTeam: string): string {
+  return crypto.createHash('sha256').update(packedCanonicalTeam).digest('hex')
+    .slice(0, TEAM_HASH_LEN);
+}
 
 /**
  * Initializes the Dex instance for a given format string.

@@ -44,6 +44,7 @@ export interface LiveSlot {
   lastTurnMillis: number;
   meanTurnMillis: number;
   ram: number;
+  team?: string;
 }
 
 // Live telemetry intentionally enforces a strict zero-log anti-scouting policy: spectators see
@@ -208,6 +209,13 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
   if (!isFiniteNonNeg(obj.ram)) {
     throw Object.assign(new Error(`Invalid ${label}.ram.`), {status: 400});
   }
+  let team: string | undefined;
+  if (obj.team !== undefined) {
+    if (typeof obj.team !== 'string' || !obj.team.trim() || obj.team.trim().length > 32) {
+      throw Object.assign(new Error(`Invalid ${label}.team.`), {status: 400});
+    }
+    team = obj.team.trim();
+  }
   return {
     slug: obj.slug.trim(),
     name: obj.name.trim(),
@@ -216,6 +224,7 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
     lastTurnMillis: obj.lastTurnMillis,
     meanTurnMillis: obj.meanTurnMillis,
     ram: obj.ram,
+    team,
   };
 }
 
@@ -434,6 +443,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           sha256: sub.sha256,
           authToken,
           ladders: sub.ladders,
+          tournaments: sub.tournaments,
           teamsByLadder: sub.teamsByLadder,
         };
       });

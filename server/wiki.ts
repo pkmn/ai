@@ -10,7 +10,7 @@ import * as site from 'site';
 import * as yaml from 'yaml';
 
 import {Database} from '../db';
-import {header, renderer} from '../static/build';
+import {header, injectLiveBanner, renderer} from '../static/build';
 import {Project} from '../static/projects';
 import {escapeHtml, root, slugify} from '../static/util';
 
@@ -18,8 +18,10 @@ import * as auth from './auth';
 
 const execFileAsync = promisify(execFile);
 
-const WIKI_DIR = root('wiki');
-const PROJECTS = root('static', 'projects.yml');
+const WIKI_DIR = process.env.MOCK === '1' ? root('.mock', 'wiki') : root('wiki');
+const PROJECTS = process.env.MOCK === '1'
+  ? root('.mock', 'static', 'projects.yml')
+  : root('static', 'projects.yml');
 const MAX_BODY_BYTES = 256 * 1024;
 
 // Hardcoded site-wide wiki administrators and GitHub -> display-name overrides (replaces the
@@ -161,18 +163,19 @@ export function extractProjectPages(projectsYaml: string): {
 
 const STYLE = fs.readFileSync(root('static', 'wiki.css'), 'utf8');
 
-function renderPage(opts: {
+function renderPageHtml(opts: {
   id?: string;
   title: string;
   heading: string;
   path: string;
   nav?: string;
   content: string;
+  liveTournament?: {id: string; name: string};
 }) {
   return renderer.render({
     id: opts.id ?? 'wiki',
     title: `${opts.title} | pkmn.ai`,
-    header: header(opts.heading),
+    header: injectLiveBanner(header(opts.heading), opts.liveTournament),
     path: opts.path,
     style: STYLE,
     content: opts.content,
@@ -239,13 +242,20 @@ function sendHtml(res: http.ServerResponse, status: number, html: string) {
   res.end(html);
 }
 
-function sendError(res: http.ServerResponse, status: number, content: string, pagePath = '/wiki/') {
-  sendHtml(res, status, renderPage({
+function sendErrorHtml(
+  res: http.ServerResponse,
+  status: number,
+  content: string,
+  pagePath = '/wiki/',
+  liveTournament?: {id: string; name: string}
+) {
+  sendHtml(res, status, renderPageHtml({
     id: 'error',
     title: String(status),
     heading: String(status),
     path: pagePath,
     content,
+    liveTournament,
   }));
 }
 
@@ -549,6 +559,15 @@ export class Wiki {
 export function register(app: polka.Polka, options: Options = {}): Wiki {
   const wiki = new Wiki(options);
   wiki.auth.register(app);
+  const getLiveTournament = () => options.db?.getRunningTournament();
+  const renderPage = (opts: Omit<Parameters<typeof renderPageHtml>[0], 'liveTournament'>) =>
+    renderPageHtml({...opts, liveTournament: getLiveTournament()});
+  const sendError = (
+    res: http.ServerResponse,
+    status: number,
+    content: string,
+    pagePath = '/wiki/'
+  ) => sendErrorHtml(res, status, content, pagePath, getLiveTournament());
 
   const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
   const slugParam = (v: string | string[] | undefined) => normalizeSlug(param(v));

@@ -14,6 +14,9 @@ build/
 .tsbuildinfo
 
 # Project
+.env
+.mock/
+db/data/
 public/
 private/
 chat/logs/

@@ -145,29 +145,46 @@ export function unlinkDeveloperDiscord(
   ).run(now, githubLogin.trim().toLowerCase());
 }
 
-export function pruneInactiveDevelopers(db: DatabaseSync, activeGitHubs: Set<string>) {
-  const allDevs = db.prepare('SELECT id, github_login FROM developers')
-    .all() as Array<{id: number; github_login: string}>;
+export function getDeveloperBySmogonId(
+  db: DatabaseSync,
+  smogonId: number
+): DeveloperRow | undefined {
+  const raw = db.prepare('SELECT * FROM developers WHERE smogon_id = ?')
+    .get(smogonId) as unknown as RawDeveloperRow | undefined;
+  return raw ? mapDeveloperRow(raw) : undefined;
+}
+
+export function pruneInactiveDevelopers(
+  db: DatabaseSync,
+  activeGitHubs: Set<string>,
+  activeSmogonIds: Set<number> = new Set()
+) {
+  const allDevs = db.prepare('SELECT id, github_login, smogon_id FROM developers')
+    .all() as Array<{id: number; github_login: string; smogon_id: number}>;
   const deleteDevById = db.prepare('DELETE FROM developers WHERE id = ?');
   for (const dev of allDevs) {
-    if (!activeGitHubs.has(dev.github_login)) {
+    if (!activeGitHubs.has(dev.github_login.toLowerCase()) && !activeSmogonIds.has(dev.smogon_id)) {
       deleteDevById.run(dev.id);
     }
   }
 }
 
-// Updates project ownership from `projects.yml` while preserving OAuth-bound `github_id` and
-// `discord_id` columns on existing developer rows.
+// Updates project ownership from `projects.yml` in-place (matching by `github_login` or immutable
+// `smogon_id`) so reassigning a developer (`Project A -> Project B -> Project A`) or renaming a
+// GitHub handle preserves `developers.id`, OAuth-bound `github_id` / `discord_id`, and historical
+// `agent_versions.developer_id` audit pointers.
 export function upsertProjectDevelopers(
   db: DatabaseSync,
   agentId: number,
   owners: ResolvedProjectOwner[],
   now: number
 ) {
-  const selectExistingDev = db.prepare('SELECT id FROM developers WHERE github_login = ?');
+  const selectByGitHub = db.prepare('SELECT id FROM developers WHERE github_login = ?');
+  const selectBySmogon = db.prepare('SELECT id FROM developers WHERE smogon_id = ?');
   const updateDev = db.prepare(`
     UPDATE developers
     SET agent_id = ?,
+        github_login = ?,
         smogon_id = ?,
         smogon_username = ?,
         smogon_standing = COALESCE(?, smogon_standing),
@@ -182,10 +199,13 @@ export function upsertProjectDevelopers(
   `);
 
   for (const owner of owners) {
-    const existing = selectExistingDev.get(owner.github) as {id: number} | undefined;
+    const cleanGithub = owner.github.trim().toLowerCase();
+    const existing = (selectByGitHub.get(cleanGithub) as {id: number} | undefined) ??
+      (selectBySmogon.get(owner.smogonId) as {id: number} | undefined);
     if (existing) {
       updateDev.run(
         agentId,
+        cleanGithub,
         owner.smogonId,
         owner.smogonUsername,
         owner.smogonStanding ?? null,
@@ -196,7 +216,7 @@ export function upsertProjectDevelopers(
     } else {
       insertDev.run(
         agentId,
-        owner.github,
+        cleanGithub,
         owner.smogonId,
         owner.smogonUsername,
         owner.smogonStanding ?? 'unknown',

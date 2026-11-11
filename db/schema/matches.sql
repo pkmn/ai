@@ -22,8 +22,10 @@ CREATE TABLE IF NOT EXISTS matches (
   p2_version_id INTEGER NOT NULL REFERENCES agent_versions(id),
   -- Deterministic @pkmn/sim PRNG seed shared across both games of the blind pair.
   seed TEXT NOT NULL,
-  -- Optional anonymized team provenance labels (e.g. '0 ERROR Team #4' on VGC `pools` ladders, never
-  -- revealing species or movesets), or NULL on `random` / `harvested` ladders.
+  -- Optional anonymized team short-hash labels on `pools` ladders (e.g. 'b7b8bb1cbc73' when drawn
+  -- from a third-party competitor's pool, or 'P1:16d479804e3d' / 'P2:16d479804e3d' when drawn from
+  -- Match Player 1's or Match Player 2's submitted pool; at most one team in a match can belong to
+  -- either active player), or NULL on `random` / `harvested` ladders. Never reveals species/sets.
   p1_team_label TEXT,
   p2_team_label TEXT,
   -- Individual game outcomes from `p1_version_id`'s perspective ('W', 'L', or 'T').

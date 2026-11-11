@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -5,7 +6,13 @@ import * as site from 'site';
 import * as yaml from 'yaml';
 
 import type * as db from '../db';
-import {Renderer, header, renderer as siteRenderer} from '../static/build';
+import {
+  Renderer,
+  formatLiveTournamentBanner,
+  header,
+  renderer as siteRenderer,
+  syncStaticLiveBanner,
+} from '../static/build';
 import * as projects from '../static/projects';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
@@ -15,12 +22,23 @@ import * as ratings from './ratings';
 import * as tournaments from './tournaments';
 
 export const PUBLIC_DIR = root('public');
-export const STATIC_DIR = root('static');
+export const STATIC_DIR = process.env.MOCK === '1' ? root('.mock', 'static') : root('static');
 
 export const ARENA_STYLE = fs.readFileSync(root('static', 'arena.css'), 'utf8');
 const ARENA_TEMPLATE = fs.readFileSync(root('static', 'arena.html'), 'utf8');
 const LADDER_TEMPLATE = fs.readFileSync(root('static', 'ladder.html'), 'utf8');
 const BATTLES_TEMPLATE = fs.readFileSync(root('static', 'battles.html'), 'utf8');
+const BATTLE_TEMPLATE = fs.readFileSync(root('static', 'battle.html'), 'utf8');
+const BATTLE_SCRIPT_INDEX = BATTLE_TEMPLATE.indexOf('<script>');
+const BATTLE_BODY_TEMPLATE = BATTLE_SCRIPT_INDEX >= 0
+  ? BATTLE_TEMPLATE.slice(0, BATTLE_SCRIPT_INDEX).trim()
+  : BATTLE_TEMPLATE;
+const BATTLE_SCRIPT_HTML = BATTLE_SCRIPT_INDEX >= 0
+  ? BATTLE_TEMPLATE.slice(BATTLE_SCRIPT_INDEX)
+  : '';
+const BATTLE_TITLE_TOKEN = '__PKMN_BATTLE_TITLE__';
+const BATTLE_PATH_TOKEN = '__PKMN_BATTLE_PATH__';
+const BATTLE_BODY_MARKER = '__PKMN_BATTLE_BODY_TOKEN__';
 
 export const EXT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
   'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
@@ -1009,6 +1027,16 @@ function renderLiveSlotCard(
 
   const turnCls = isRunning ? 'yes' : 'muted';
   const ramText = `${Math.round(slotData.ram).toLocaleString('en-US')} MiB`;
+  let teamSpan = '';
+  if (slotData.team) {
+    const teamTip = slotData.team.startsWith('P1:')
+      ? 'Known to Match P1 (drawn from P1 seasonal pool)'
+      : slotData.team.startsWith('P2:')
+        ? 'Known to Match P2 (drawn from P2 seasonal pool)'
+        : 'Unknown to both players (drawn from a third-party competitor pool)';
+    teamSpan = `\n      <span title="${escapeHtml(teamTip)}">Team: ` +
+      `<code>${escapeHtml(slotData.team)}</code></span>`;
+  }
   return `<div class="slot-card ${isRunning ? 'running' : 'paused'}" id="slot-${key}">
     <div class="slot-top">
       <span><tt>${key}</tt> ${agentHtml}</span>
@@ -1024,7 +1052,7 @@ function renderLiveSlotCard(
       <span>Last: <tt>${Math.round(slotData.lastTurnMillis)} ms</tt></span>
       <span>Mean: <tt>${Math.round(slotData.meanTurnMillis)} ms/turn</tt></span>
       <span title="XNU ri_phys_footprint (14 GiB limit)">RAM: ` +
-        `<tt>${ramText}</tt> (${ramPct}%)</span>
+        `<tt>${ramText}</tt> (${ramPct}%)</span>${teamSpan}
     </div>
   </div>`;
 }
@@ -1086,6 +1114,247 @@ function renderMatchOutcomeDisplay(cat: db.RecentMatchView['category']): {
   return {p1Win: false, p2Win: false, html: '1–1'};
 }
 
+function isAbnormalEndReason(reason: string): boolean {
+  return Boolean(reason) &&
+    reason !== 'normal' &&
+    reason !== 'win' &&
+    reason !== 'tie' &&
+    reason !== 'turn_limit';
+}
+
+function formatEndReasonHtml(reason: string): {html: string; label: string; abnormal: boolean} {
+  const norm = reason.trim().toLowerCase();
+  if (!norm || norm === 'normal' || norm === 'win') {
+    return {html: '<span class="muted">Normal</span>', label: 'Normal', abnormal: false};
+  }
+  if (norm === 'tie') {
+    return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
+  }
+  if (norm === 'turn_limit') {
+    return {html: '<span class="muted">Turn limit</span>', label: 'Turn limit', abnormal: false};
+  }
+  if (norm === 'timeout') {
+    return {html: '<span class="no">Timeout</span>', label: 'Timeout', abnormal: true};
+  }
+  if (norm === 'crash') {
+    return {html: '<span class="no">Crash</span>', label: 'Crash', abnormal: true};
+  }
+  if (norm === 'oom') {
+    return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
+  }
+  if (norm === 'forfeit') {
+    return {html: '<span class="no">Forfeit</span>', label: 'Forfeit', abnormal: true};
+  }
+  if (norm === 'invalid_choice_3x') {
+    return {
+      html: '<span class="no">3&times; Invalid Choice</span>',
+      label: '3x Invalid Choice',
+      abnormal: true,
+    };
+  }
+  return {
+    html: `<span class="no">${escapeHtml(reason)}</span>`,
+    label: reason,
+    abnormal: true,
+  };
+}
+
+function formatPoolTeamCode(
+  label: string | undefined,
+  p1Name: string,
+  p2Name: string
+): string {
+  if (!label) return '<span class="muted">—</span>';
+  let tip: string;
+  if (label.startsWith('P1:')) {
+    tip = `Known to P1 (${p1Name}) — drawn from ${p1Name}'s submitted seasonal pool ` +
+      `(unknown to ${p2Name})`;
+  } else if (label.startsWith('P2:')) {
+    tip = `Known to P2 (${p2Name}) — drawn from ${p2Name}'s submitted seasonal pool ` +
+      `(unknown to ${p1Name})`;
+  } else {
+    tip = 'Unknown to both players — drawn from a third-party competitor seasonal pool';
+  }
+  return `<code title="${escapeHtml(tip)}">${escapeHtml(label)}</code>`;
+}
+
+// Pre-compiles the outer CSS + `<script>` shell via `site`'s `clean-css` + `html-minifier-terser`
+// pipeline once so stamping thousands of per-battle detail pages avoids per-file AST minification.
+function compileBattlePageShell(
+  renderer: Renderer
+): (matchId: string, bodyHtml: string) => string {
+  const shell = renderer.render({
+    id: 'battle-detail',
+    title: `Battle ${BATTLE_TITLE_TOKEN} | pkmn.ai`,
+    header: header('<a href="/arena/battles/" class="subtle">Battles</a>'),
+    path: `/arena/battles/${BATTLE_PATH_TOKEN}/`,
+    style: ARENA_STYLE,
+    content: `${BATTLE_BODY_MARKER}\n${BATTLE_SCRIPT_HTML}`,
+  });
+  return (matchId: string, bodyHtml: string) => {
+    const titleEsc = escapeHtml(matchId);
+    const pathEnc = encodeURIComponent(matchId);
+    return shell
+      .replaceAll(BATTLE_TITLE_TOKEN, () => titleEsc)
+      .replaceAll(BATTLE_PATH_TOKEN, () => pathEnc)
+      .replace(BATTLE_BODY_MARKER, () => bodyHtml);
+  };
+}
+
+function renderBattleDetailBody(opts: {
+  match: db.RecentMatchView;
+  agentLinks: Readonly<Record<string, string>>;
+  nowSec: number;
+}): string {
+  const {match: m, agentLinks, nowSec} = opts;
+  const r = renderMatchOutcomeDisplay(m.category);
+  const p1Href = agentLinks[m.p1.slug];
+  const p2Href = agentLinks[m.p2.slug];
+  const p1Html = `${formatAgentLink(m.p1.name, p1Href, r.p1Win)} ` +
+    `<code>${escapeHtml(m.p1.version)}</code>`;
+  const p2Html = `${formatAgentLink(m.p2.name, p2Href, r.p2Win)} ` +
+    `<code>${escapeHtml(m.p2.version)}</code>`;
+
+  const fmtTitle = FORMAT_TITLES[m.format] ?? m.format;
+  const ladderHref = `/arena/ladders/${encodeURIComponent(m.slot)}/`;
+  const completedIso = new Date(m.completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const completedUtc = `${completedIso} UTC`;
+  const completedRel = formatRelativeTime(nowSec, m.completedAt);
+
+  const end1 = formatEndReasonHtml(m.game1EndReason);
+  const end2 = formatEndReasonHtml(m.game2EndReason);
+  const faultLabels = [...new Set(
+    [end1, end2].filter(e => e.abnormal).map(e => e.label)
+  )];
+  const faultBadgeHtml = faultLabels.length > 0
+    ? ' <span class="no" title="Abnormal game termination">' +
+      `[${escapeHtml(faultLabels.join(', '))}]</span>`
+    : '';
+
+  const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
+  const t1Code = formatPoolTeamCode(m.p1TeamLabel, m.p1.name, m.p2.name);
+  const t2Code = formatPoolTeamCode(m.p2TeamLabel, m.p1.name, m.p2.name);
+
+  const poolSummaryHtml = showPools
+    ? '<span title="12-char pkmn/teams SHA-256 short hashes; P1:/P2: prefix indicates a team ' +
+      'submitted by that player in this match (at most one team per match can belong to either ' +
+      `player)">Player 1: ${t1Code} · Player 2: ${t2Code}</span>`
+    : '';
+
+  const g1Winner = m.game1Outcome === 'W'
+    ? `<strong>${escapeHtml(m.p1.name)}</strong> <span class="muted">(P1)</span>`
+    : m.game1Outcome === 'L'
+      ? `<strong>${escapeHtml(m.p2.name)}</strong> <span class="muted">(P2)</span>`
+      : '<span class="muted">Tie</span>';
+  const g2Winner = m.game2Outcome === 'W'
+    ? `<strong>${escapeHtml(m.p1.name)}</strong> <span class="muted">(P1)</span>`
+    : m.game2Outcome === 'L'
+      ? `<strong>${escapeHtml(m.p2.name)}</strong> <span class="muted">(P2)</span>`
+      : '<span class="muted">Tie</span>';
+
+  const p1PlainLink = `${formatAgentLink(m.p1.name, p1Href, false)} ` +
+    `<code>${escapeHtml(m.p1.version)}</code>`;
+  const p2PlainLink = `${formatAgentLink(m.p2.name, p2Href, false)} ` +
+    `<code>${escapeHtml(m.p2.version)}</code>`;
+
+  const g1BankStr = `${Math.round(m.p1Game1BankSeconds)}s / ${Math.round(m.p2Game1BankSeconds)}s`;
+  // In Game 2, Seat `p1` is Match P2 and Seat `p2` is Match P1.
+  const g2BankStr = `${Math.round(m.p2Game2BankSeconds)}s / ${Math.round(m.p1Game2BankSeconds)}s`;
+
+  const gameRowsHtml = [
+    '<tr>' +
+      '<td><strong>Game 1</strong></td>' +
+      `<td><span class="muted"><tt>P1</tt></span> ${p1PlainLink}</td>` +
+      `<td><span class="muted"><tt>P2</tt></span> ${p2PlainLink}</td>` +
+      `<td class="center">${g1Winner}</td>` +
+      `<td class="center">${end1.html}</td>` +
+      `<td class="num">${m.game1Turns}</td>` +
+      `<td class="num">${g1BankStr}</td>` +
+    '</tr>',
+    '<tr>' +
+      '<td><strong>Game 2</strong> <span class="muted">(swapped)</span></td>' +
+      `<td><span class="muted"><tt>P2</tt></span> ${p2PlainLink}</td>` +
+      `<td><span class="muted"><tt>P1</tt></span> ${p1PlainLink}</td>` +
+      `<td class="center">${g2Winner}</td>` +
+      `<td class="center">${end2.html}</td>` +
+      `<td class="num">${m.game2Turns}</td>` +
+      `<td class="num">${g2BankStr}</td>` +
+    '</tr>',
+  ].join('\n        ');
+
+  const p1RamPct = ((m.p1PeakRam / 14336) * 100).toFixed(1);
+  const p2RamPct = ((m.p2PeakRam / 14336) * 100).toFixed(1);
+  const p1RamStr = `${Math.round(m.p1PeakRam).toLocaleString('en-US')} MiB ` +
+    `<span class="muted">(${p1RamPct}%)</span>`;
+  const p2RamStr = `${Math.round(m.p2PeakRam).toLocaleString('en-US')} MiB ` +
+    `<span class="muted">(${p2RamPct}%)</span>`;
+
+  const poolPlayerHeaderTh = showPools
+    ? '<th title="Teams piloted by this player in Game 1 / Game 2">Teams (G1 / G2)</th>'
+    : '';
+  const p1PoolPlayerTd = showPools ? `<td>${t1Code} / ${t2Code}</td>` : '';
+  const p2PoolPlayerTd = showPools ? `<td>${t2Code} / ${t1Code}</td>` : '';
+
+  const telemetryRowsHtml = [
+    '<tr>' +
+      '<td><tt>P1</tt></td>' +
+      `<td>${p1Html}</td>` +
+      `<td class="num">${Math.round(m.p1MeanTurnMillis)} ms/turn</td>` +
+      `<td class="num">${p1RamStr}</td>` +
+      `<td class="num">${Math.round(m.p1Game1BankSeconds)}s</td>` +
+      `<td class="num">${Math.round(m.p1Game2BankSeconds)}s</td>` +
+      p1PoolPlayerTd +
+    '</tr>',
+    '<tr>' +
+      '<td><tt>P2</tt></td>' +
+      `<td>${p2Html}</td>` +
+      `<td class="num">${Math.round(m.p2MeanTurnMillis)} ms/turn</td>` +
+      `<td class="num">${p2RamStr}</td>` +
+      `<td class="num">${Math.round(m.p2Game1BankSeconds)}s</td>` +
+      `<td class="num">${Math.round(m.p2Game2BankSeconds)}s</td>` +
+      p2PoolPlayerTd +
+    '</tr>',
+  ].join('\n        ');
+
+  return renderTemplate(BATTLE_BODY_TEMPLATE, {
+    matchId: m.id,
+    ladderHref,
+    ladderName: m.ladderName,
+    formatTitle: fmtTitle,
+    completedUtc,
+    completedAt: String(m.completedAt),
+    completedRel,
+    p1Html,
+    p2Html,
+    scoreHtml: r.html,
+    category: m.category,
+    faultBadgeHtml,
+    seed: m.seed,
+    totalTurns: String(m.game1Turns + m.game2Turns),
+    game1Turns: String(m.game1Turns),
+    game2Turns: String(m.game2Turns),
+    poolSummaryHtml,
+    gameRowsHtml,
+    poolPlayerHeaderTh,
+    telemetryRowsHtml,
+  });
+}
+
+// Renders the per-battle detail page (`/arena/battles/:id/`).
+// Note on blind-pair seat swapping: in Game 1, Match P1 sits in Showdown slot `p1` with Team 1
+// (`p1TeamLabel`) and Match P2 sits in slot `p2` with Team 2 (`p2TeamLabel`); in Game 2, the two
+// agents swap seats (`p1` = Match P2 with Team 1, `p2` = Match P1 with Team 2) under the identical
+// `@pkmn/sim` PRNG seed so simultaneous residual/switch ordering and speed-tie PRNG consumption
+// stay coupled to the teams while canceling team matchup bias to first order.
+export function renderBattleDetailPage(opts: {
+  match: db.RecentMatchView;
+  renderer: Renderer;
+  agentLinks: Readonly<Record<string, string>>;
+  nowSec: number;
+}): string {
+  const stamp = compileBattlePageShell(opts.renderer);
+  return stamp(opts.match.id, renderBattleDetailBody(opts));
+}
 export function renderBattlesPage(opts: {
   db: db.Database;
   renderer: Renderer;
@@ -1144,16 +1413,21 @@ export function renderBattlesPage(opts: {
 
       const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
       const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
+      const reasonSuffix =
+        isAbnormalEndReason(m.game1EndReason) || isAbnormalEndReason(m.game2EndReason)
+          ? ` · End: ${m.game1EndReason}/${m.game2EndReason}`
+          : '';
       const tip =
         `${m.category} · ${Math.round(m.p1MeanTurnMillis)}ms/` +
         `${Math.round(m.p2MeanTurnMillis)}ms · Bank ${b1}s/${b2}s · RAM ` +
         `${Math.round(m.p1PeakRam).toLocaleString('en-US')}M/` +
-        `${Math.round(m.p2PeakRam).toLocaleString('en-US')}M`;
+        `${Math.round(m.p2PeakRam).toLocaleString('en-US')}M${reasonSuffix}`;
 
       const idEsc = escapeHtml(m.id);
+      const battleHref = `/arena/battles/${encodeURIComponent(m.id)}/`;
       const rel = formatRelativeTime(nowSec, m.completedAt);
       return `<tr id="${idEsc}" data-fmt="${escapeHtml(m.slot)}">
-        <td><a href="#${idEsc}" class="subtle"><code>${idEsc}</code></a></td>
+        <td><a href="${escapeHtml(battleHref)}" class="subtle"><code>${idEsc}</code></a></td>
         <td>${p1Cell}</td>
         <td>${p2Cell}</td>
         <td class="center" title="${escapeHtml(tip)}">${r.html}</td>
@@ -1226,109 +1500,178 @@ export function renderArenaPages(options: Options) {
   const profileAgents = options.db.getAllActiveAgents();
   const profileSlugs = new Set(profileAgents.map(a => a.slug));
   const recentBattles = options.db.getRecentMatches(recentMatchesLimit);
-  const renderedBattleIds = new Set(recentBattles.map(m => m.id));
+  const allMatches = options.db.getMatches();
+  const renderedBattleIds = new Set(allMatches.map(m => m.id));
+  const liveTournament = options.db.getRunningTournament();
+  const liveBanner = formatLiveTournamentBanner(liveTournament);
 
-  renderAgentProfiles({
-    db: options.db,
-    renderer,
-    publicDir,
-    avatarsDir: options.avatarsDir,
-    projectMeta,
-    profileAgents,
-    profileSlugs,
-    renderedBattleIds,
-    nowSec,
-  });
-
-  const summaries = options.db.getProjectArenaSummaries();
-  const arenaByName = new Map<string, projects.ArenaInfo>();
-  for (const s of summaries) {
-    const profileHref = `/projects/${encodeURIComponent(s.slug)}/`;
-    arenaByName.set(s.name, {
-      slug: s.slug,
-      name: s.name,
-      profileHref,
-      bestRank: s.bestRank,
-      bestLcb: s.bestLcb,
-      ladders: s.ladders.map(b => ({
-        slot: b.slot,
-        name: b.ladderName,
-        rank: b.rank,
-        provisional: b.provisional,
-      })),
+  const prevBannerProvider = renderer.liveBannerProvider;
+  renderer.liveBannerProvider = () => liveBanner;
+  try {
+    renderAgentProfiles({
+      db: options.db,
+      renderer,
+      publicDir,
+      avatarsDir: options.avatarsDir,
+      projectMeta,
+      profileAgents,
+      profileSlugs,
+      renderedBattleIds,
+      nowSec,
     });
-  }
 
-  const projectsPage = projects.page(staticDir, arenaByName);
-  const projectsHtml = renderer.render({id: 'projects', ...projectsPage});
-  writeFileAtomic(path.join(publicDir, 'projects', 'index.html'), projectsHtml);
-
-  const {arenaHtml, ladderHtmlBySlot, standingsJson} = renderArenaAndLadderArtifacts({
-    db: options.db,
-    renderer,
-    publicDir,
-    staticDir,
-    projectMeta,
-    profileSlugs,
-    nowSec,
-  });
-  writeFileAtomic(path.join(publicDir, 'arena', 'index.html'), arenaHtml);
-  writeFileAtomic(
-    path.join(publicDir, 'arena', 'index.json'),
-    `${JSON.stringify(standingsJson, undefined, 2)}\n`
-  );
-
-  const laddersDir = path.join(publicDir, 'arena', 'ladders');
-  fs.mkdirSync(laddersDir, {recursive: true});
-  const validSlots = new Set(Object.keys(ladderHtmlBySlot));
-  for (const entry of fs.readdirSync(laddersDir, {withFileTypes: true})) {
-    if (entry.isDirectory() && !validSlots.has(entry.name)) {
-      fs.rmSync(path.join(laddersDir, entry.name), {recursive: true, force: true});
+    const summaries = options.db.getProjectArenaSummaries();
+    const arenaByName = new Map<string, projects.ArenaInfo>();
+    for (const s of summaries) {
+      const profileHref = `/projects/${encodeURIComponent(s.slug)}/`;
+      arenaByName.set(s.name, {
+        slug: s.slug,
+        name: s.name,
+        profileHref,
+        bestRank: s.bestRank,
+        bestLcb: s.bestLcb,
+        ladders: s.ladders.map(b => ({
+          slot: b.slot,
+          name: b.ladderName,
+          rank: b.rank,
+          provisional: b.provisional,
+        })),
+      });
     }
-  }
-  for (const [slot, ladderHtml] of Object.entries(ladderHtmlBySlot)) {
-    writeFileAtomic(path.join(laddersDir, slot, 'index.html'), ladderHtml);
+
+    const projectsPage = projects.page(staticDir, arenaByName);
+    const projectsHtml = renderer.render({id: 'projects', ...projectsPage});
+    writeFileAtomic(path.join(publicDir, 'projects', 'index.html'), projectsHtml);
+
+    const {arenaHtml, ladderHtmlBySlot, standingsJson} = renderArenaAndLadderArtifacts({
+      db: options.db,
+      renderer,
+      publicDir,
+      staticDir,
+      projectMeta,
+      profileSlugs,
+      nowSec,
+    });
+    writeFileAtomic(path.join(publicDir, 'arena', 'index.html'), arenaHtml);
     writeFileAtomic(
-      path.join(laddersDir, slot, 'index.json'),
-      `${JSON.stringify(standingsJson.ladders[slot], undefined, 2)}\n`
+      path.join(publicDir, 'arena', 'index.json'),
+      `${JSON.stringify(standingsJson, undefined, 2)}\n`
     );
-  }
 
-  const liveJsonPath = path.join(publicDir, 'api', 'live.json');
-  const hasExplicitLiveDoc = Object.prototype.hasOwnProperty.call(options, 'liveDoc');
-  const liveDoc = hasExplicitLiveDoc
-    ? options.liveDoc
-    : readExistingLiveJson(publicDir);
-  if (hasExplicitLiveDoc || !fs.existsSync(liveJsonPath)) {
-    const docToWrite: arena.LiveDocument = liveDoc ?? {
-      updatedAt: nowSec,
-      stale: false,
-      recentMatches: recentBattles,
-    };
-    writeFileAtomic(liveJsonPath, `${JSON.stringify(docToWrite)}\n`);
-  }
-  const battlesHtml = renderBattlesPage({
-    db: options.db,
-    renderer,
-    publicDir,
-    projectMeta,
-    liveDoc,
-    recentMatchesLimit,
-    nowSec,
-  });
-  writeFileAtomic(path.join(publicDir, 'arena', 'battles', 'index.html'), battlesHtml);
+    const laddersDir = path.join(publicDir, 'arena', 'ladders');
+    fs.mkdirSync(laddersDir, {recursive: true});
+    const validSlots = new Set(Object.keys(ladderHtmlBySlot));
+    for (const entry of fs.readdirSync(laddersDir, {withFileTypes: true})) {
+      if (entry.isDirectory() && !validSlots.has(entry.name)) {
+        fs.rmSync(path.join(laddersDir, entry.name), {recursive: true, force: true});
+      }
+    }
+    for (const [slot, ladderHtml] of Object.entries(ladderHtmlBySlot)) {
+      writeFileAtomic(path.join(laddersDir, slot, 'index.html'), ladderHtml);
+      writeFileAtomic(
+        path.join(laddersDir, slot, 'index.json'),
+        `${JSON.stringify(standingsJson.ladders[slot], undefined, 2)}\n`
+      );
+    }
 
-  const hasExplicitBroadcast = Object.prototype.hasOwnProperty.call(
-    options,
-    'tournamentBroadcast'
-  );
-  tournaments.renderTournamentsPages({
-    db: options.db,
-    renderer,
-    publicDir,
-    projectMeta,
-    profileSlugs,
-    tournamentBroadcast: options.tournamentBroadcast,
-    includeDiskBroadcast: !hasExplicitBroadcast,
-  });
+    const liveJsonPath = path.join(publicDir, 'api', 'live.json');
+    const hasExplicitLiveDoc = Object.prototype.hasOwnProperty.call(options, 'liveDoc');
+    const liveDoc = hasExplicitLiveDoc
+      ? options.liveDoc
+      : readExistingLiveJson(publicDir);
+    if (hasExplicitLiveDoc || !fs.existsSync(liveJsonPath)) {
+      const docToWrite: arena.LiveDocument = liveDoc ?? {
+        updatedAt: nowSec,
+        stale: false,
+        recentMatches: recentBattles,
+      };
+      writeFileAtomic(liveJsonPath, `${JSON.stringify(docToWrite)}\n`);
+    }
+    const battlesDir = path.join(publicDir, 'arena', 'battles');
+    fs.mkdirSync(battlesDir, {recursive: true});
+    const battlesHtml = renderBattlesPage({
+      db: options.db,
+      renderer,
+      publicDir,
+      projectMeta,
+      liveDoc,
+      recentMatchesLimit,
+      nowSec,
+    });
+    writeFileAtomic(path.join(battlesDir, 'index.html'), battlesHtml);
+
+    // Render `/arena/battles/<id>/index.html` incrementally: when the outer shell (CSS, template,
+    // live tournament banner, and agent profile links) is unchanged, only newly completed matches
+    // are written to disk so `POST /api/arena/match-complete` stays O(1) as match count grows.
+    const agentLinks: Record<string, string> = {};
+    for (const a of profileAgents) {
+      agentLinks[a.slug] = `/projects/${encodeURIComponent(a.slug)}/`;
+    }
+    for (const m of allMatches) {
+      for (const side of [m.p1, m.p2]) {
+        if (!agentLinks[side.slug]) {
+          const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name, profileSlugs);
+          if (href) agentLinks[side.slug] = href;
+        }
+      }
+    }
+
+    const shellDigest = crypto
+      .createHash('sha256')
+      .update(ARENA_STYLE)
+      .update('\0')
+      .update(BATTLE_TEMPLATE)
+      .update('\0')
+      .update(liveBanner)
+      .update('\0')
+      .update(JSON.stringify(Object.entries(agentLinks).sort(([a], [b]) => a.localeCompare(b))))
+      .digest('hex');
+    const shellPath = path.join(battlesDir, '.shell');
+    const prevShell = fs.existsSync(shellPath)
+      ? fs.readFileSync(shellPath, 'utf8').trim()
+      : '';
+    const rebuildAllBattles = prevShell !== shellDigest;
+
+    for (const entry of fs.readdirSync(battlesDir, {withFileTypes: true})) {
+      if (entry.isDirectory() && !renderedBattleIds.has(entry.name)) {
+        fs.rmSync(path.join(battlesDir, entry.name), {recursive: true, force: true});
+      }
+    }
+    let stampBattlePage: ReturnType<typeof compileBattlePageShell> | undefined;
+    for (const m of allMatches) {
+      const dest = path.join(battlesDir, m.id, 'index.html');
+      if (!rebuildAllBattles && fs.existsSync(dest)) continue;
+      stampBattlePage ??= compileBattlePageShell(renderer);
+      const html = stampBattlePage(
+        m.id,
+        renderBattleDetailBody({
+          match: m,
+          agentLinks,
+          nowSec,
+        })
+      );
+      writeFileAtomic(dest, html);
+    }
+    if (rebuildAllBattles) {
+      writeFileAtomic(shellPath, `${shellDigest}\n`);
+    }
+
+    const hasExplicitBroadcast = Object.prototype.hasOwnProperty.call(
+      options,
+      'tournamentBroadcast'
+    );
+    tournaments.renderTournamentsPages({
+      db: options.db,
+      renderer,
+      publicDir,
+      projectMeta,
+      profileSlugs,
+      tournamentBroadcast: options.tournamentBroadcast,
+      includeDiskBroadcast: !hasExplicitBroadcast,
+    });
+
+    syncStaticLiveBanner(publicDir, liveTournament);
+  } finally {
+    renderer.liveBannerProvider = prevBannerProvider;
+  }
 }

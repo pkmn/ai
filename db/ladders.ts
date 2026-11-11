@@ -11,7 +11,9 @@ export type LadderSlot = 'rby' | 'adv' | 'sv' | 'rand' | 'vgc';
 export type TeamMode = 'harvested' | 'random' | 'pools';
 export type LadderStatus = 'upcoming' | 'active' | 'settling' | 'archived';
 
-export const LADDERS_FILE = root('config', 'ladders.yml');
+export const LADDERS_FILE = process.env.MOCK === '1'
+  ? root('.mock', 'ladders.yml')
+  : root('config', 'ladders.yml');
 
 export const SLOTS = new Set<LadderSlot>(['rby', 'adv', 'sv', 'rand', 'vgc']);
 export const TEAM_MODES = new Set<TeamMode>(['harvested', 'random', 'pools']);

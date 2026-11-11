@@ -1,0 +1,91 @@
+<div class="live-panel battle-summary" id="summary">
+  <div class="live-header">
+    <span>
+      <code>{{matchId}}</code> · <a href="{{ladderHref}}" class="subtle"><strong><tt>{{ladderName}}</tt></strong></a> <span class="muted">({{formatTitle}})</span>
+    </span>
+    <span class="muted">
+      <tt>{{completedUtc}}</tt> (<span id="battle-rel" data-ts="{{completedAt}}">{{completedRel}}</span>)
+    </span>
+  </div>
+  <div class="battle-matchup">
+    <div class="battle-side">
+      <span class="muted"><tt>P1</tt></span> {{{p1Html}}}
+    </div>
+    <div class="battle-score">
+      <span class="battle-score-nums">{{{scoreHtml}}}</span>
+      <span class="muted">(<tt>{{category}}</tt>)</span>{{{faultBadgeHtml}}}
+    </div>
+    <div class="battle-side battle-side-right">
+      <span class="muted"><tt>P2</tt></span> {{{p2Html}}}
+    </div>
+  </div>
+  <div class="battle-meta muted">
+    <span title="Deterministic @pkmn/sim PRNG seed shared across both games of the blind pair">Seed: <code>{{seed}}</code></span>
+    <span>Turns: <tt>{{totalTurns}}</tt> ({{game1Turns}} + {{game2Turns}})</span>
+    {{{poolSummaryHtml}}}
+  </div>
+</div>
+
+<section id="games">
+  <h3><a href="#games" class="subtle">Games</a></h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Game</th>
+          <th title="Agent occupying Showdown slot p1">Seat <tt>p1</tt></th>
+          <th title="Agent occupying Showdown slot p2">Seat <tt>p2</tt></th>
+          <th class="center">Winner</th>
+          <th class="center" title="Game termination condition reported by the Arena arbiter">Termination</th>
+          <th class="num">Turns</th>
+          <th class="num" title="Remaining Showdown chess-clock banks at game end (Seat p1 / Seat p2)">End Bank</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{{gameRowsHtml}}}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="telemetry">
+  <h3><a href="#telemetry" class="subtle">Telemetry</a></h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Agent</th>
+          <th class="num" title="Mean decision latency per turn across both games">Decision Mean</th>
+          <th class="num" title="Peak XNU ri_phys_footprint memory across the 2-game match (14,336 MiB limit)">Peak RAM</th>
+          <th class="num" title="Remaining 150s Showdown clock bank after Game 1">G1 Bank</th>
+          <th class="num" title="Remaining 150s Showdown clock bank after Game 2">G2 Bank</th>
+          {{{poolPlayerHeaderTh}}}
+        </tr>
+      </thead>
+      <tbody>
+        {{{telemetryRowsHtml}}}
+      </tbody>
+    </table>
+  </div>
+  <p class="battle-note muted">
+    Ladder matches enforce a zero-log anti-scouting policy (<a href="/rules/">Rules</a>): full Showdown battle logs and team sheets are never published for continuous ladders.
+  </p>
+</section>
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const el = document.getElementById('battle-rel');
+    if (!el) return;
+    const ts = Number(el.getAttribute('data-ts'));
+    if (!Number.isFinite(ts)) return;
+    const update = () => {
+      const diff = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+      if (diff < 60) el.textContent = diff + 's ago';
+      else if (diff < 3600) el.textContent = Math.floor(diff / 60) + 'm ago';
+      else if (diff < 86400) el.textContent = Math.floor(diff / 3600) + 'h ago';
+      else el.textContent = Math.floor(diff / 86400) + 'd ago';
+    };
+    update();
+  });
+</script>

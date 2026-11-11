@@ -14,8 +14,12 @@ import {TransactionRunner} from './index';
 
 export type AgentStatus = 'pending' | 'qualified' | 'disabled';
 
-export const PROJECTS_FILE = root('static', 'projects.yml');
-export const AVATARS_DIR = root('static', 'avatars');
+export const PROJECTS_FILE = process.env.MOCK === '1'
+  ? root('.mock', 'static', 'projects.yml')
+  : root('static', 'projects.yml');
+export const AVATARS_DIR = process.env.MOCK === '1'
+  ? root('.mock', 'static', 'avatars')
+  : root('static', 'avatars');
 
 export interface AgentRow {
   id: number;
@@ -131,10 +135,9 @@ export function parseArenaProjects(
     }
     seenSlugs.add(slug);
 
+    // `owners` may be empty (`owners: {}`) when all human developers retire from a project or
+    // transfer to another project while the project's existing versions remain active on ladders.
     const owners = extractProjectOwners(entry.arena);
-    if (!owners.length) {
-      throw new Error(`Arena project "${name}" must list at least one owner`);
-    }
 
     for (const owner of owners) {
       const prevGh = githubOwner.get(owner.github);
@@ -229,13 +232,17 @@ function applyResolvedProjects(
   inTransaction(() => {
     const activeSlugs = new Set<string>();
     const activeGitHubs = new Set<string>();
+    const activeSmogonIds = new Set<number>();
 
     for (const proj of projects) {
       activeSlugs.add(proj.slug);
-      for (const owner of proj.owners) activeGitHubs.add(owner.github);
+      for (const owner of proj.owners) {
+        activeGitHubs.add(owner.github.toLowerCase());
+        activeSmogonIds.add(owner.smogonId);
+      }
     }
 
-    developers.pruneInactiveDevelopers(db, activeGitHubs);
+    developers.pruneInactiveDevelopers(db, activeGitHubs, activeSmogonIds);
 
     for (const proj of projects) {
       const status: AgentStatus = proj.qualified ? 'qualified' : 'pending';
@@ -271,7 +278,10 @@ export function syncProjectsFromYaml(
       logo: proj.logo,
       qualified: proj.qualified,
       owners: proj.owners.map(owner => {
-        const existing = developers.getDeveloperByGitHub(db, owner.github);
+        const existing = developers.getDeveloperByGitHub(db, owner.github) ??
+          (owner.smogonId !== undefined
+            ? developers.getDeveloperBySmogonId(db, owner.smogonId)
+            : undefined);
         if (owner.smogonId !== undefined) {
           const smogonUsername = owner.smogonUsername ??
             (existing?.smogonId === owner.smogonId ? existing.smogonUsername : undefined) ??
@@ -330,7 +340,10 @@ export async function syncProjectsFromYamlWithSmogon(
   for (const proj of rawProjects) {
     const owners: developers.ResolvedProjectOwner[] = [];
     for (const owner of proj.owners) {
-      const existing = developers.getDeveloperByGitHub(db, owner.github);
+      const existing = developers.getDeveloperByGitHub(db, owner.github) ??
+        (owner.smogonId !== undefined
+          ? developers.getDeveloperBySmogonId(db, owner.smogonId)
+          : undefined);
 
       if (owner.smogonId !== undefined) {
         if (refreshNames && (smogonToken || options.lookupSmogon)) {
@@ -447,4 +460,110 @@ export function refundCooldown(
   db.prepare('UPDATE agents SET cooldown_refunded_at = ?, updated_at = ? WHERE id = ?')
     .run(now, now, agent.id);
   return getAgentById(db, agent.id)!;
+}
+
+export interface ReassignDeveloperResult {
+  yaml: string;
+  previousProject?: string;
+  targetProject?: string;
+}
+
+// Surgically edits `arena.owners` inside `projects.yml` via `yaml.parseDocument` so inline comments
+// (e.g. `# September 6`) and flow arrays (`[2011, 2011]`) across the catalog remain untouched.
+// Removing the sole owner of Project A leaves `owners: {}` rather than deleting `arena:`, keeping
+// Project A's existing versions active on ladders while blocking further code uploads to Project A.
+export function reassignDeveloperInProjectsYaml(
+  projectsYaml: string,
+  githubLogin: string,
+  targetSlug?: string,
+  smogonSpec?: string | number
+): ReassignDeveloperResult {
+  const cleanLogin = githubLogin.trim();
+  if (!cleanLogin) {
+    throw new Error('GitHub login is required');
+  }
+  const loginLower = cleanLogin.toLowerCase();
+  const doc = yaml.parseDocument(projectsYaml);
+  if (!yaml.isSeq(doc.contents)) {
+    throw new Error('projects.yml must parse to a YAML sequence');
+  }
+
+  let previousProject: string | undefined;
+  let capturedSmogon: string | number | undefined;
+  let preservedKey = cleanLogin;
+  let targetMap: yaml.YAMLMap | undefined;
+  let targetProject: string | undefined;
+  const cleanTargetSlug = targetSlug ? slugify(targetSlug.trim()).toLowerCase() : undefined;
+
+  for (const item of doc.contents.items) {
+    if (!yaml.isMap(item)) continue;
+    const arenaNode = item.get('arena', true);
+    if (!yaml.isMap(arenaNode)) continue;
+
+    const nameNode = item.get('name', true);
+    const nameVal = yaml.isScalar(nameNode) ? (nameNode.value as unknown) : undefined;
+    const name = typeof nameVal === 'string' ? nameVal.trim() : '';
+    const slug = slugify(name).toLowerCase();
+
+    if (cleanTargetSlug && slug === cleanTargetSlug) {
+      targetMap = arenaNode;
+      targetProject = name;
+    }
+
+    const ownersNode = arenaNode.get('owners', true);
+    if (yaml.isMap(ownersNode)) {
+      for (const pair of [...ownersNode.items]) {
+        const keyStr = yaml.isScalar(pair.key) && typeof pair.key.value === 'string'
+          ? pair.key.value
+          : '';
+        if (keyStr.trim().toLowerCase() === loginLower) {
+          preservedKey = keyStr.trim();
+          if (
+            yaml.isScalar(pair.value) &&
+            pair.value.value !== undefined &&
+            pair.value.value !== null
+          ) {
+            capturedSmogon = pair.value.value as string | number;
+          }
+          previousProject = name;
+          ownersNode.delete(pair.key);
+          if (ownersNode.items.length === 0) {
+            ownersNode.flow = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (cleanTargetSlug) {
+    if (!targetMap || !targetProject) {
+      throw new Error(`Target Arena project "${targetSlug}" not found in projects.yml`);
+    }
+    const resolvedSmogon = smogonSpec ?? capturedSmogon;
+    if (resolvedSmogon === undefined || String(resolvedSmogon).trim() === '') {
+      throw new Error(
+        `Smogon account is required when assigning new developer "${cleanLogin}" ` +
+        '(pass --smogon <username.id|id|username>)'
+      );
+    }
+    const existingOwners = targetMap.get('owners', true);
+    let ownersMap: yaml.YAMLMap;
+    if (yaml.isMap(existingOwners)) {
+      ownersMap = existingOwners;
+    } else {
+      ownersMap = new yaml.YAMLMap();
+      targetMap.set('owners', ownersMap);
+    }
+    ownersMap.flow = false;
+    ownersMap.set(
+      smogonSpec !== undefined ? cleanLogin : preservedKey,
+      resolvedSmogon
+    );
+  } else if (!previousProject) {
+    throw new Error(`Developer "${cleanLogin}" is not currently assigned to any Arena project`);
+  }
+
+  const outYaml = doc.toString();
+  parseArenaProjects(outYaml, '');
+  return {yaml: outYaml, previousProject, targetProject};
 }

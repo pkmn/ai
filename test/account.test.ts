@@ -12,6 +12,7 @@ import * as auth from '../server/auth';
 import {clearReferencePoolCache, splitSubmittedTeams} from '../server/teams';
 import * as wiki from '../server/wiki';
 import {generateValidVgcTeams} from '../tools/mock';
+import {runPkmnCli} from '../tools/pkmn';
 
 const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-account-session-secret',
@@ -619,5 +620,313 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     expect(reuseOk.status).toBe(201);
     expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'active'))
       .toHaveLength(20);
+  });
+
+  test('gates tournament OCI submissions independently of ladder cooldowns & injects #topbar',
+    async () => {
+      db.upsertTournament({
+        id: '2',
+        name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
+        format: 'gen9championsvgc2026regmc',
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot',
+        status: 'running',
+        startsAt: currentNow - 3600,
+      });
+      db.upsertTournament({
+        id: '3',
+        name: 'Tournament #3: VGC 2026 Reg M-D OTS BO3',
+        format: 'gen9championsvgc2026regmc',
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot',
+        status: 'scheduled',
+        startsAt: currentNow + 86400 * 7,
+      });
+
+      // Even with all ladders 'upcoming', Qualified agent ('pre') has #submission enabled for T#3,
+      // and both /account and /wiki display the site-wide [LIVE] Tournament #2 #topbar banner!
+      const acctHtml = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(acctHtml).toContain(
+        '<div id="topbar"><a href="/arena/tournaments/2/" class="subtle">' +
+        '[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3</a></div>'
+      );
+      expect(acctHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
+      expect(acctHtml).toContain('name="tournaments" type="checkbox" value="3"');
+
+      const wikiHtml = await (await realFetch(`${baseUrl}/wiki`)).text();
+      expect(wikiHtml).toContain(
+        '<div id="topbar"><a href="/arena/tournaments/2/" class="subtle">' +
+        '[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3</a></div>'
+      );
+
+      // Pending (unqualified) project STILL cannot submit to tournaments
+      const pendingBlocked = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('rookie'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '0.1.0-t3',
+          package: 'oci',
+          url: 'ghcr.io/rookie/newcomer:0.1.0-t3',
+          sha256: SHA_A,
+          tournaments: ['3'],
+        }),
+      });
+      expect(pendingBlocked.status).toBe(403);
+
+      // Archive bundle is rejected for tournament submissions (must be self-contained OCI image)
+      const bundleRejected = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.0-t3',
+          package: 'bundle',
+          url: 'https://example.com/0-error-t3.tar.zst',
+          sha256: SHA_A,
+          tournaments: ['3'],
+        }),
+      });
+      expect(bundleRejected.status).toBe(400);
+      expect((await bundleRejected.json() as {error: string}).error).toContain('OCI image');
+
+      // Valid OCI tournament submission succeeds
+      const tourneySub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.0-t3',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:1.0.0-t3',
+          sha256: SHA_A,
+          tournaments: ['3'],
+        }),
+      });
+      expect(tourneySub.status).toBe(201);
+      const {versionId} = await tourneySub.json() as {versionId: number};
+
+      // Duplicate submission to the same tournament is blocked (403/409)
+      openLadders(['gen1ou20261109']);
+      const dupTourneySub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.1-t3',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:1.0.1-t3',
+          sha256: SHA_B,
+          tournaments: ['3'],
+        }),
+      });
+      expect(dupTourneySub.status).toBe(409);
+
+      // Failed smoke test unlocks tournament slot immediately
+      db.applySubmissionStatus({versionId, smokeStatus: 'failed', now: currentNow + 5});
+      const retrySub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.2-t3',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:1.0.2-t3',
+          sha256: SHA_B,
+          tournaments: ['3'],
+        }),
+      });
+      expect(retrySub.status).toBe(201);
+      const retryData = await retrySub.json() as {versionId: number};
+
+      // Passing tournament smoke test enrolls entrant AND leaves ladder eligibility open!
+      db.applySubmissionStatus({
+        versionId: retryData.versionId,
+        smokeStatus: 'passed',
+        now: currentNow + 10,
+      });
+      expect(db.getTournamentEntrants('3').map(e => e.agentSlug)).toEqual(['0-error']);
+      const zeroAgent = db.getAgentBySlug('0-error')!;
+      expect(db.computeAgentSubmissionStatus(zeroAgent.id, currentNow + 20)).toEqual({
+        label: 'Eligible',
+        canSubmit: true,
+      });
+
+      const afterEnteredHtml = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(afterEnteredHtml).toContain('(entered: 1.0.2-t3)');
+      expect(afterEnteredHtml).toContain('>Entered<');
+      expect(afterEnteredHtml).toContain('>Eligible<');
+
+      // Submitting to RBY ladder still works right after tournament submission, then puts ladders
+      // on 14-day cooldown while STILL allowing Foul Play (on ladder cooldown) to enter T#3!
+      currentNow += 65;
+      const ladderSub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.1.0',
+          package: 'bundle',
+          url: 'https://example.com/0-error-1.1.0.tar.zst',
+          sha256: SHA_A,
+          ladders: ['RBY'],
+        }),
+      });
+      expect(ladderSub.status).toBe(201);
+      const ladderData = await ladderSub.json() as {versionId: number};
+      db.applySubmissionStatus({
+        versionId: ladderData.versionId,
+        smokeStatus: 'passed',
+        now: currentNow + 5,
+      });
+      expect(db.computeAgentSubmissionStatus(zeroAgent.id, currentNow + 10).canSubmit).toBe(false);
+
+      // Schedule Tournament #4: 0 ERROR is on 14-day ladder cooldown, yet CAN submit to T#4!
+      db.upsertTournament({
+        id: '4',
+        name: 'Tournament #4: Gen 9 OU',
+        format: 'gen9ou',
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot',
+        status: 'scheduled',
+        startsAt: currentNow + 86400 * 14,
+      });
+      const t4WhileOnCooldown = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.1.0-t4',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:1.1.0-t4',
+          sha256: SHA_B,
+          tournaments: ['4'],
+        }),
+      });
+      expect(t4WhileOnCooldown.status).toBe(201);
+    });
+
+  test('reassigns developer A -> B -> A with wiki ACL & comment preservation', async () => {
+    openLadders(['gen1ou20261109']);
+    const commentedYaml = `# Arena projects registry
+- name: 0 ERROR # flagship search agent
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pre: pre.10544
+- name: Foul Play
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pmariglia: pmariglia.535629
+`;
+    fs.writeFileSync(projectsFile, commentedYaml, 'utf8');
+    db.syncProjects(projectsFile, path.join(tmpDir, 'avatars'), currentNow);
+
+    // Seed an active ladder entry on 0 ERROR before pre leaves 0 ERROR
+    const zeroAgent = db.getAgentBySlug('0-error')!;
+    const vZero = db.createSubmission({
+      agentId: zeroAgent.id,
+      developerId: db.getDeveloperByGitHub('pre')!.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/0-error-1.0.0.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now: currentNow,
+    });
+    db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: currentNow + 5});
+
+    // Create private project wiki pages for both 0 ERROR and Foul Play
+    const postWiki = (slug: string, login: string, content: string) =>
+      realFetch(`${baseUrl}/wiki/${slug}`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor(login),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          content,
+          message: `Update ${slug}`,
+          action: 'save',
+        }).toString(),
+        redirect: 'manual',
+      });
+
+    expect((await postWiki('0_ERROR', 'pre', '{% visibility: project %}\n# 0 ERROR\n')).status)
+      .toBe(303);
+    expect(
+      (await postWiki('Foul_Play', 'pmariglia', '{% visibility: project %}\n# Foul Play\n')).status
+    ).toBe(303);
+
+    // 1. Reassign pre from 0 ERROR -> Foul Play via `pkmn reassign-developer`
+    await runPkmnCli(
+      ['reassign-developer', 'pre', 'Foul Play', '--projects', projectsFile],
+      {db, now: currentNow + 20, log: () => undefined}
+    );
+
+    const updatedYaml = fs.readFileSync(projectsFile, 'utf8');
+    expect(updatedYaml).toContain('# Arena projects registry');
+    expect(updatedYaml).toContain('# flagship search agent');
+
+    // 0 ERROR remains active on RBY with 0 owners
+    expect(db.getActiveEntriesForAgent(zeroAgent.id)).toHaveLength(1);
+    expect(db.getDevelopersForAgent(zeroAgent.id)).toEqual([]);
+
+    // /account for pre now manages Foul Play, can edit Foul_Play wiki, blocked from 0_ERROR wiki
+    const movedAccount = await (await realFetch(`${baseUrl}/account`, {
+      headers: {Cookie: cookieFor('pre')},
+    })).text();
+    expect(movedAccount).toContain('href="/projects/foul-play/"');
+
+    expect((await postWiki('0_ERROR', 'pre', '{% visibility: project %}\n# Nope\n')).status)
+      .toBe(403);
+    expect((await postWiki('Foul_Play', 'pre', '{% visibility: project %}\n# Joined!\n')).status)
+      .toBe(303);
+
+    // 2. Reassign pre back Foul Play -> 0 ERROR
+    await runPkmnCli(
+      ['reassign-developer', 'pre', '0 ERROR', '--projects', projectsFile],
+      {db, now: currentNow + 40, log: () => undefined}
+    );
+
+    const returnedAccount = await (await realFetch(`${baseUrl}/account`, {
+      headers: {Cookie: cookieFor('pre')},
+    })).text();
+    expect(returnedAccount).toContain('href="/projects/0-error/"');
+    expect((await postWiki('Foul_Play', 'pre', '{% visibility: project %}\n# Nope\n')).status)
+      .toBe(403);
+    expect((await postWiki('0_ERROR', 'pre', '{% visibility: project %}\n# Back!\n')).status)
+      .toBe(303);
   });
 });

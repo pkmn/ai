@@ -810,7 +810,7 @@ function renderRecentMatchesPane(opts: {
 
       const idEsc = escapeHtml(m.id);
       const battleHref = renderedBattleIds.has(m.id)
-        ? `/arena/battles/#${idEsc}`
+        ? `/arena/battles/${encodeURIComponent(m.id)}/`
         : '/arena/battles/';
       const tsTitle = formatIsoDateTimeUtc(m.completedAt);
       const rel = render.formatRelativeTime(nowSec, m.completedAt);

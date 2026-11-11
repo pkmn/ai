@@ -87,6 +87,16 @@
           '" title="Frozen by kernel SIGSTOP while ' + otherKey + ' computes">PAUSED</span>';
       const timerTitle = 'Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +' +
         inc + 's/turn';
+      let teamHtml = '';
+      if (slotData.team) {
+        const teamTip = slotData.team.startsWith('P1:')
+          ? 'Known to Match P1 (drawn from P1 seasonal pool)'
+          : slotData.team.startsWith('P2:')
+            ? 'Known to Match P2 (drawn from P2 seasonal pool)'
+            : 'Unknown to both players (drawn from a third-party competitor pool)';
+        teamHtml = '<span title="' + esc(teamTip) + '">Team: <code>' +
+          esc(slotData.team) + '</code></span>';
+      }
       return '<div class="slot-card ' + (isRunning ? 'running' : 'paused') + '" id="slot-' + key + '">' +
         '<div class="slot-top"><span><tt>' + key + '</tt> ' + renderAgent(slotData, true) + '</span>' +
         badge + '</div>' +
@@ -100,6 +110,7 @@
         '<span>Mean: <tt>' + Math.round(slotData.meanTurnMillis) + ' ms/turn</tt></span>' +
         '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
         Math.round(slotData.ram).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
+        teamHtml +
         '</div></div>';
     };
 
@@ -137,6 +148,9 @@
         '</div>';
     };
 
+    const isFaultReason = r => r && r !== 'normal' && r !== 'win' && r !== 'tie' &&
+      r !== 'turn_limit';
+
     const resultParts = cat => {
       if (cat === 'WW') return {p1Win: true, p2Win: false, html: '<strong>2</strong>–0'};
       if (cat === 'WT' || cat === 'TW') {
@@ -153,15 +167,19 @@
       const r = resultParts(m.category);
       const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
       const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
+      const reasons = (isFaultReason(m.game1EndReason) || isFaultReason(m.game2EndReason))
+        ? ' · End: ' + m.game1EndReason + '/' + m.game2EndReason
+        : '';
       const tip = m.category + ' · ' + Math.round(m.p1MeanTurnMillis) + 'ms/' +
         Math.round(m.p2MeanTurnMillis) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
         Math.round(m.p1PeakRam).toLocaleString('en-US') + 'M/' +
-        Math.round(m.p2PeakRam).toLocaleString('en-US') + 'M';
+        Math.round(m.p2PeakRam).toLocaleString('en-US') + 'M' + reasons;
+      const battleHref = '/arena/battles/' + encodeURIComponent(m.id) + '/';
       const tr = document.createElement('tr');
       tr.id = m.id;
       tr.dataset.fmt = m.slot;
       if (currentFmt !== 'all' && m.slot !== currentFmt) tr.classList.add('hide');
-      tr.innerHTML = '<td><a href="#' + esc(m.id) + '" class="subtle"><code>' + esc(m.id) +
+      tr.innerHTML = '<td><a href="' + esc(battleHref) + '" class="subtle"><code>' + esc(m.id) +
         '</code></a></td>' +
         '<td>' + renderAgent(m.p1, r.p1Win) + '</td>' +
         '<td>' + renderAgent(m.p2, r.p2Win) + '</td>' +

@@ -36,6 +36,8 @@
 
         {{{poolTeamsRowHtml}}}
 
+        {{{tournamentsRowHtml}}}
+
         <label>Ladders</label>
         <div class="ladders-submit-row">
           <div class="check-group">
@@ -67,12 +69,26 @@
 
     const urlInput = document.getElementById('sub-url');
     const typeSelect = document.getElementById('sub-type');
+    const tourneyChecks = document.querySelectorAll('input[name="tournaments"]');
+    const bundleOpt = typeSelect ? typeSelect.querySelector('option[value="bundle"]') : null;
+    const syncTourneyPackage = () => {
+      if (!typeSelect) return;
+      let anyTourney = false;
+      tourneyChecks.forEach(cb => {
+        if (cb.checked) anyTourney = true;
+      });
+      if (bundleOpt) bundleOpt.disabled = anyTourney;
+      if (anyTourney) typeSelect.value = 'oci';
+    };
+    tourneyChecks.forEach(cb => cb.addEventListener('change', syncTourneyPackage));
+    syncTourneyPackage();
+
     if (urlInput && typeSelect) {
       urlInput.addEventListener('input', () => {
         const v = urlInput.value.trim().split('?')[0].toLowerCase();
         if (!v) return;
         const isArchive = /\.(tar\.gz|tgz|tar\.xz|txz|tar\.zst|tzst)$/.test(v);
-        if (isArchive) {
+        if (isArchive && (!bundleOpt || !bundleOpt.disabled)) {
           typeSelect.value = 'bundle';
         } else if (!v.startsWith('http://') && !v.startsWith('https://') && v.includes('/')) {
           typeSelect.value = 'oci';
@@ -117,6 +133,10 @@
         ladderChecks.forEach(cb => {
           if (cb.checked) ladders.push(cb.value);
         });
+        const tournaments = [];
+        tourneyChecks.forEach(cb => {
+          if (cb.checked) tournaments.push(cb.value);
+        });
         const payload = {
           version: document.getElementById('sub-ver').value.trim(),
           package: typeSelect.value,
@@ -124,6 +144,7 @@
           sha256: document.getElementById('sub-sha').value.trim(),
           authToken: document.getElementById('sub-auth').value.trim(),
           ladders,
+          tournaments,
         };
         if (teamsArea && !teamsArea.closest('.hide')) {
           payload.teams = teamsArea.value;

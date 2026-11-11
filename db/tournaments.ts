@@ -1,5 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {TransactionRunner} from './index';
+
 export type TournamentStatus = 'scheduled' | 'running' | 'completed';
 
 export interface TournamentRow {
@@ -113,4 +115,89 @@ export function getTournament(db: DatabaseSync, id: string): TournamentRow | und
   const raw = db.prepare('SELECT * FROM tournaments WHERE id = ?')
     .get(id) as unknown as RawTournamentRow | undefined;
   return raw ? mapTournamentRow(raw) : undefined;
+}
+
+export function getRunningTournament(db: DatabaseSync): TournamentRow | undefined {
+  const raw = db.prepare(`
+    SELECT *
+    FROM tournaments
+    WHERE status = 'running'
+    ORDER BY starts_at DESC, id ASC
+    LIMIT 1
+  `).get() as unknown as RawTournamentRow | undefined;
+  return raw ? mapTournamentRow(raw) : undefined;
+}
+
+export function getScheduledTournaments(db: DatabaseSync): TournamentRow[] {
+  const rows = db.prepare(`
+    SELECT *
+    FROM tournaments
+    WHERE status = 'scheduled'
+    ORDER BY starts_at ASC, id ASC
+  `).all() as unknown as RawTournamentRow[];
+  return rows.map(mapTournamentRow);
+}
+
+export function setTournamentStatus(
+  db: DatabaseSync,
+  id: string,
+  status: TournamentStatus,
+  now = Math.floor(Date.now() / 1000)
+): TournamentRow {
+  const existing = getTournament(db, id);
+  if (!existing) {
+    throw new Error(`Unknown tournament "${id}"`);
+  }
+  if (status !== 'scheduled' && status !== 'running' && status !== 'completed') {
+    throw new Error(`Invalid tournament status "${String(status)}"`);
+  }
+  const completedAt = status === 'completed' ? (existing.completedAt ?? now) : null;
+  db.prepare('UPDATE tournaments SET status = ?, completed_at = ? WHERE id = ?')
+    .run(status, completedAt, id);
+  return getTournament(db, id)!;
+}
+
+// Re-assigns 1-based tournament seeds ordered by pre-tournament conservative ladder rating (`lcb`)
+// on the matching format (falling back to registration order when an entrant has not played that
+// format on the continuous ladder).
+export function seedTournamentEntrants(
+  db: DatabaseSync,
+  inTransaction: TransactionRunner,
+  tournamentId: string
+): number {
+  const tournament = getTournament(db, tournamentId);
+  if (!tournament) {
+    throw new Error(`Unknown tournament "${tournamentId}"`);
+  }
+  return inTransaction(() => {
+    const rows = db.prepare(`
+      SELECT
+        te.version_id,
+        te.seed,
+        (
+          SELECT MAX(le.lcb)
+          FROM ladder_entries le
+          JOIN agent_versions av ON av.id = le.version_id
+          JOIN ladders l ON l.id = le.ladder_id
+          WHERE av.agent_id = te.agent_id
+            AND l.format = ?
+            AND le.role IN ('champion', 'challenger')
+        ) AS best_lcb
+      FROM tournament_entrants te
+      WHERE te.tournament_id = ?
+      ORDER BY
+        CASE WHEN best_lcb IS NOT NULL THEN 0 ELSE 1 END ASC,
+        best_lcb DESC,
+        te.seed ASC,
+        te.version_id ASC
+    `).all(tournament.format, tournamentId) as Array<{version_id: number}>;
+
+    const update = db.prepare(
+      'UPDATE tournament_entrants SET seed = ? WHERE tournament_id = ? AND version_id = ?'
+    );
+    rows.forEach((row, idx) => {
+      update.run(idx + 1, tournamentId, row.version_id);
+    });
+    return rows.length;
+  });
 }

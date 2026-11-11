@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS agent_versions (
   version TEXT NOT NULL,
   -- Execution packaging format:
   --   'bundle': native darwin/arm64 tarball (.tar.gz / .tar.xz / .tar.zst) with executable ./run
-  --   'oci': linux/arm64 OCI container image reference
+  --   'oci': OCI container image reference (linux/arm64 on ladders; linux/amd64 on tournaments)
   package TEXT NOT NULL CHECK (package IN ('bundle', 'oci')),
   -- HTTPS archive URL or OCI image reference pulled once by the Arena worker.
   url TEXT NOT NULL,
@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS agent_versions (
   auth_token_encoding TEXT,
   -- JSON array of ladder IDs selected at submission time (e.g. '["gen1ou20261109","gen9ou20261109"]').
   ladders_json TEXT NOT NULL DEFAULT '[]',
+  -- JSON array of tournament IDs selected at submission time (e.g. '["3"]'). Gated independently of
+  -- the 14-day ladder cooldown and unsettled-challenger checks (max 1 entry per project per event).
+  tournaments_json TEXT NOT NULL DEFAULT '[]',
   -- Uncompressed resident size in bytes measured on unpack (enforced <= 500 MB), or NULL pre-pull.
   unpacked_bytes INTEGER,
   -- Smoke-test and runtime health state:

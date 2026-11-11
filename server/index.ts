@@ -1,5 +1,7 @@
 require('source-map-support').install();
 
+import * as fs from 'fs';
+
 import {serve} from 'site';
 
 import {Database} from '../db';
@@ -11,6 +13,12 @@ import {Auth} from './auth';
 import * as discord from './discord';
 import {renderArenaPages} from './render';
 import * as wiki from './wiki';
+
+const isMock = process.env.MOCK === '1';
+if (isMock && !fs.existsSync(root('.mock', 'ladders.yml'))) {
+  console.error('Missing .mock/ directory — run "npm run mock -- seed" before MOCK=1.');
+  process.exit(1);
+}
 
 const safeRender = () => {
   try {
@@ -25,18 +33,23 @@ const safeRender = () => {
 // unreachable) before writing fresh static Arena pages to `public/`.
 const db = new Database();
 db.syncLadders();
-db.syncProjectsWithSmogon()
-  .catch(err => {
-    console.error('Error syncing projects with Smogon:', err);
-    try {
-      db.syncProjects();
-    } catch (fallbackErr) {
-      console.error('Offline project sync failed:', fallbackErr);
-    }
-  })
-  .finally(() => {
-    safeRender();
-  });
+if (isMock) {
+  db.syncProjects();
+  safeRender();
+} else {
+  db.syncProjectsWithSmogon()
+    .catch(err => {
+      console.error('Error syncing projects with Smogon:', err);
+      try {
+        db.syncProjects();
+      } catch (fallbackErr) {
+        console.error('Offline project sync failed:', fallbackErr);
+      }
+    })
+    .finally(() => {
+      safeRender();
+    });
+}
 
 const dirs = {
   root: ROOT,
@@ -59,6 +72,29 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
   if (wares && staticWare) {
     wares[1] = (req, res, next) =>
       /^\/account(?:\/|$|\?)/.test(req.url) ? next() : staticWare(req, res, next);
+  }
+
+  const battleAliases = [
+    '/battles',
+    '/battle',
+    '/matches',
+    '/match',
+    '/games',
+    '/arena/battle',
+    '/arena/matches',
+    '/arena/match',
+    '/arena/games',
+  ];
+  for (const prefix of battleAliases) {
+    app.get(prefix, (_req, res) => {
+      res.writeHead(302, {Location: '/arena/battles/'});
+      res.end();
+    });
+    app.get(`${prefix}/:id`, (req, res) => {
+      const id = encodeURIComponent(String(req.params.id));
+      res.writeHead(302, {Location: `/arena/battles/${id}/`});
+      res.end();
+    });
   }
 
   const wikiInstance = new wiki.Wiki({

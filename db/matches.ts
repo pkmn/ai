@@ -5,7 +5,7 @@ import * as ratings from '../server/ratings';
 import {ensureAgentLadderStats, updateFamilyStreaksForMatch} from './agent-ladder-stats';
 import {getVersionById} from './agent-versions';
 import {LadderStandingOverride, recomputeLadderRatings} from './ladder-entries';
-import {LadderSlot, LadderStatus, getLadder} from './ladders';
+import {LadderSlot, LadderStatus, TeamMode, getLadder} from './ladders';
 import {upsertPairAggregateForMatch} from './pair-aggregates';
 
 import {TransactionRunner} from './index';
@@ -45,10 +45,17 @@ export interface RecordMatchInput {
 export interface RecentMatchView {
   id: string;
   ladderId: string;
+  ladderName: string;
   slot: LadderSlot;
   format: string;
+  teamMode: TeamMode;
+  seed: string;
+  p1TeamLabel?: string;
+  p2TeamLabel?: string;
   p1: {slug: string; name: string; version: string};
   p2: {slug: string; name: string; version: string};
+  game1Outcome: ratings.GameOutcome;
+  game2Outcome: ratings.GameOutcome;
   category: ratings.MatchCategory;
   game1Turns: number;
   game2Turns: number;
@@ -349,8 +356,13 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
   return {
     id: r.id as string,
     ladderId: r.ladder_id as string,
+    ladderName: r.ladder_name as string,
     slot: r.slot as LadderSlot,
     format: r.format as string,
+    teamMode: r.team_mode as TeamMode,
+    seed: r.seed as string,
+    p1TeamLabel: (r.p1_team_label as string | null) ?? undefined,
+    p2TeamLabel: (r.p2_team_label as string | null) ?? undefined,
     p1: {
       slug: r.p1_slug as string,
       name: r.p1_name as string,
@@ -361,6 +373,8 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
       name: r.p2_name as string,
       version: r.p2_version as string,
     },
+    game1Outcome: r.game1_outcome as ratings.GameOutcome,
+    game2Outcome: r.game2_outcome as ratings.GameOutcome,
     category: r.category as ratings.MatchCategory,
     game1Turns: r.game1_turns as number,
     game2Turns: r.game2_turns as number,
@@ -382,14 +396,21 @@ const RECENT_MATCH_SELECT_SQL = `
   SELECT
     m.id,
     m.ladder_id,
+    l.name AS ladder_name,
     l.slot,
     l.format,
+    l.team AS team_mode,
+    m.seed,
+    m.p1_team_label,
+    m.p2_team_label,
     a1.slug AS p1_slug,
     a1.name AS p1_name,
     v1.version AS p1_version,
     a2.slug AS p2_slug,
     a2.name AS p2_name,
     v2.version AS p2_version,
+    m.game1_outcome,
+    m.game2_outcome,
     m.category,
     m.game1_turns,
     m.game2_turns,
@@ -411,6 +432,20 @@ const RECENT_MATCH_SELECT_SQL = `
   JOIN agent_versions v2 ON v2.id = m.p2_version_id
   JOIN agents a2 ON a2.id = v2.agent_id
 `;
+
+export function getMatch(db: DatabaseSync, id: string): RecentMatchView | undefined {
+  const row = db.prepare(`${RECENT_MATCH_SELECT_SQL} WHERE m.id = ?`)
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? mapRecentMatchRow(row) : undefined;
+}
+
+export function getMatches(db: DatabaseSync): RecentMatchView[] {
+  const rows = db.prepare(`
+    ${RECENT_MATCH_SELECT_SQL}
+    ORDER BY m.completed_at DESC, m.id DESC
+  `).all() as Array<Record<string, unknown>>;
+  return rows.map(mapRecentMatchRow);
+}
 
 export function getRecentMatches(db: DatabaseSync, limit = 50): RecentMatchView[] {
   const rows = db.prepare(`

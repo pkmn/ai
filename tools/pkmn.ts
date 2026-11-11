@@ -7,7 +7,16 @@ require('source-map-support').install();
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {DB_PATH, Database, LadderStatus, TeamMode} from '../db';
+import {
+  AVATARS_DIR,
+  DB_PATH,
+  Database,
+  LadderStatus,
+  PROJECTS_FILE,
+  TeamMode,
+  TournamentStatus,
+  reassignDeveloperInProjectsYaml,
+} from '../db';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as smogon from '../server/smogon';
@@ -15,6 +24,8 @@ import * as smogon from '../server/smogon';
 export interface Options {
   db?: Database;
   dbPath?: string;
+  projectsFile?: string;
+  avatarsDir?: string;
   publicDir?: string;
   now?: number;
   smogonToken?: string;
@@ -34,6 +45,14 @@ const USAGE = [
   '  set-ladder-status <ladder_id> <upcoming|active|settling|archived>',
   '  rotate-ladder <old_ladder_id> --name "..." [--new <new_ladder_id>] ' +
     '[--new-name "..."] [--format <format>] [--team <mode>] [--min <n>] [--teams <n>]',
+  '  reassign-developer <github-login> <target-agent-slug|--none> ' +
+    '[--smogon <username.id|id|username>] [--projects <path>] [--offline]',
+  '  sync-projects [--projects <path>] [--offline]',
+  '  create-tournament <id> --name "..." --format <format> --starts <iso|unix> ' +
+    '[--games <n>] [--batch <n>] [--tables <n>] [--hardware "..."] [--rules \'<json>\'] ' +
+    '[--status <scheduled|running|completed>]',
+  '  set-tournament-status <id> <scheduled|running|completed>',
+  '  seed-tournament <id>',
   '  render',
   '  lookup-smogon <username|slug.id|id|url>',
   '  session [--github <login>] [--discord <id>:<username>] [--ttl <seconds>]',
@@ -236,6 +255,142 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         const pub = options.publicDir ?? render.PUBLIC_DIR;
         render.renderArenaPages({db, publicDir: pub, now});
         log(`Rendered static Arena pages into ${pub}`);
+        return;
+      }
+      case 'reassign-developer': {
+        const [githubLogin] = positional.slice(1);
+        const rawTarget = flags.has('none') ? undefined : positional[2];
+        if (!githubLogin || (!flags.has('none') && !rawTarget)) {
+          throw new Error(
+            'Usage: pkmn reassign-developer <github-login> <target-agent-slug|--none> ' +
+            '[--smogon <username.id|id|username>] [--projects <path>] [--offline]'
+          );
+        }
+        const projectsPath = flags.get('projects') ?? options.projectsFile ?? PROJECTS_FILE;
+        const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
+        const rawYaml = fs.readFileSync(projectsPath, 'utf8');
+        const smogonSpec = flags.get('smogon');
+        const updated = reassignDeveloperInProjectsYaml(
+          rawYaml,
+          githubLogin,
+          rawTarget,
+          smogonSpec
+        );
+        const tmpPath = `${projectsPath}.tmp.${process.pid}.${Date.now()}`;
+        fs.writeFileSync(tmpPath, updated.yaml, 'utf8');
+        fs.renameSync(tmpPath, projectsPath);
+
+        if (flags.has('offline')) {
+          db.syncProjects(projectsPath, avatarsDir, now);
+        } else {
+          await db.syncProjectsWithSmogon(projectsPath, {
+            avatarsDir,
+            smogonToken: options.smogonToken ?? process.env.SMOGON_TOKEN,
+            lookupSmogon: options.lookupSmogon,
+            now,
+          });
+        }
+        maybeRender();
+        const fromLabel = updated.previousProject ? `"${updated.previousProject}"` : 'unassigned';
+        const toLabel = updated.targetProject ? `"${updated.targetProject}"` : 'unassigned';
+        log(`Reassigned @${githubLogin}: ${fromLabel} -> ${toLabel}`);
+        return;
+      }
+      case 'sync-projects': {
+        const projectsPath = flags.get('projects') ?? options.projectsFile ?? PROJECTS_FILE;
+        const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
+        if (flags.has('offline')) {
+          db.syncProjects(projectsPath, avatarsDir, now);
+        } else {
+          await db.syncProjectsWithSmogon(projectsPath, {
+            avatarsDir,
+            smogonToken: options.smogonToken ?? process.env.SMOGON_TOKEN,
+            lookupSmogon: options.lookupSmogon,
+            now,
+          });
+        }
+        maybeRender();
+        log(`Synced Arena projects from ${projectsPath}`);
+        return;
+      }
+      case 'create-tournament': {
+        const [tourneyId] = positional.slice(1);
+        const name = flags.get('name');
+        const format = flags.get('format');
+        const startsRaw = flags.get('starts');
+        if (!tourneyId || !name || !format || !startsRaw) {
+          throw new Error(
+            'Usage: pkmn create-tournament <id> --name "..." --format <format> ' +
+            '--starts <iso|unix> [--games <n>] [--batch <n>] [--tables <n>] ' +
+            '[--hardware "..."] [--rules \'<json>\'] [--status <scheduled|running|completed>]'
+          );
+        }
+        const startsAt = /^\d+$/.test(startsRaw)
+          ? Number(startsRaw)
+          : Math.floor(Date.parse(startsRaw) / 1000);
+        if (!Number.isFinite(startsAt) || startsAt <= 0) {
+          throw new Error('--starts must be a valid ISO-8601 timestamp or positive Unix seconds');
+        }
+        const gamesPerMatchup = flags.has('games') ? Number(flags.get('games')) : 50;
+        const batchSize = flags.has('batch') ? Number(flags.get('batch')) : 10;
+        const parallelTables = flags.has('tables') ? Number(flags.get('tables')) : 4;
+        if (!Number.isInteger(gamesPerMatchup) || gamesPerMatchup < 1) {
+          throw new Error('--games must be a positive integer');
+        }
+        if (!Number.isInteger(batchSize) || batchSize < 1) {
+          throw new Error('--batch must be a positive integer');
+        }
+        if (!Number.isInteger(parallelTables) || parallelTables < 1) {
+          throw new Error('--tables must be a positive integer');
+        }
+        const rulesJson = flags.get('rules') ?? '[]';
+        const parsedRules = JSON.parse(rulesJson) as unknown;
+        if (!Array.isArray(parsedRules)) {
+          throw new Error('--rules must be a JSON array');
+        }
+        const status = (flags.get('status') ?? 'scheduled') as TournamentStatus;
+        if (status !== 'scheduled' && status !== 'running' && status !== 'completed') {
+          throw new Error('--status must be scheduled, running, or completed');
+        }
+        const hardware = flags.get('hardware') ??
+          'GCP g2-custom-24-49152 (NVIDIA L4 24 GB VRAM · 24 vCPUs + 48 GB RAM / agent)';
+        db.upsertTournament({
+          id: tourneyId,
+          name,
+          format,
+          rulesJson: JSON.stringify(parsedRules),
+          gamesPerMatchup,
+          batchSize,
+          parallelTables,
+          hardware,
+          status,
+          startsAt,
+          completedAt: status === 'completed' ? now : undefined,
+        });
+        maybeRender();
+        log(`Upserted tournament ${tourneyId} ("${name}", status=${status})`);
+        return;
+      }
+      case 'set-tournament-status': {
+        const [tourneyId, status] = positional.slice(1);
+        if (!tourneyId || !status) {
+          throw new Error(
+            'Usage: pkmn set-tournament-status <id> <scheduled|running|completed>'
+          );
+        }
+        const updated = db.setTournamentStatus(tourneyId, status as TournamentStatus, now);
+        maybeRender();
+        log(`Tournament ${updated.id} ("${updated.name}") -> status=${updated.status}`);
+        return;
+      }
+      case 'seed-tournament': {
+        const [tourneyId] = positional.slice(1);
+        if (!tourneyId) {
+          throw new Error('Usage: pkmn seed-tournament <id>');
+        }
+        const count = db.seedTournamentEntrants(tourneyId);
+        maybeRender();
+        log(`Seeded ${count} entrants for tournament ${tourneyId}`);
         return;
       }
       default:

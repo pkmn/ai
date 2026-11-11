@@ -7,12 +7,14 @@
 //     team-pool provenance sampling, 14-day cooldowns, version retirement, and ladder rotation.
 //   - Local operators (`npm run mock -- seed | step | run`) when developing without the Mac Mini.
 
+import {execFileSync} from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {parseArgs} from 'util';
 
 import * as champions from '@pkmn/mods/champions';
+import {Team} from '@pkmn/sets';
 import * as sim from '@pkmn/sim';
 import * as yaml from 'yaml';
 
@@ -20,11 +22,11 @@ import {DB_PATH, Database, LADDERS_FILE, LadderSlot, LadderStatus, TeamMode} fro
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as render from '../server/render';
-import {splitSubmittedTeams} from '../server/teams';
+import {formatPoolTeamLabel, splitSubmittedTeams} from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import {Project} from '../static/projects';
-import {toID} from '../static/util';
-import {getDex, parseTeam} from '../teams';
+import {root, toID} from '../static/util';
+import {getDex, hashTeam, parseTeam} from '../teams';
 
 const CHAMPIONS_SIM_DEX = sim.Dex.mod('champions', champions as unknown as sim.ModData);
 
@@ -81,6 +83,18 @@ function extractSpeciesIdsFromPacked(packed: string, format: string): string[] {
   return fallback;
 }
 
+function normalizeCanonicalPacked(rawTeam: string, format: string): string {
+  const trimmed = rawTeam.trim();
+  if (!trimmed.includes('\n')) return trimmed;
+  try {
+    const dex = getDex(format);
+    const imported = Team.import(trimmed, dex);
+    const sets = Team.canonicalize((imported?.team || []).filter(s => s?.moves?.length), dex);
+    if (sets.length > 0) return new Team(sets, dex).pack();
+  } catch {}
+  return trimmed;
+}
+
 export function buildCanonicalTeamPool(
   teamsByAgent: Iterable<{agentId: number; agentName: string; teams: string[]}>,
   format = 'gen9championsvgc2026regmc'
@@ -88,7 +102,7 @@ export function buildCanonicalTeamPool(
   const byPacked = new Map<string, CanonicalPoolEntry>();
   for (const {agentId, agentName, teams} of teamsByAgent) {
     for (let idx = 0; idx < teams.length; idx++) {
-      const canonicalPacked = teams[idx].trim();
+      const canonicalPacked = normalizeCanonicalPacked(teams[idx], format);
       if (!canonicalPacked) continue;
       let entry = byPacked.get(canonicalPacked);
       if (!entry) {
@@ -147,19 +161,12 @@ export function samplePoolsPair(
   const t2 = candidatesT2[rngNextInt(candidatesT2.length)];
 
   const formatProvenanceLabel = (entry: CanonicalPoolEntry): string => {
-    const activeLabels: string[] = [];
-    if (entry.owners.has(agentAId)) {
-      const o = entry.owners.get(agentAId)!;
-      activeLabels.push(`${o.agentName} Team #${o.slotIndex}`);
-    }
-    if (entry.owners.has(agentBId)) {
-      const o = entry.owners.get(agentBId)!;
-      activeLabels.push(`${o.agentName} Team #${o.slotIndex}`);
-    }
-    if (activeLabels.length > 0) return activeLabels.join(' / ');
-    const allOwners = [...entry.owners.values()];
-    const chosen = allOwners[rngNextInt(allOwners.length)];
-    return `${chosen.agentName} Team #${chosen.slotIndex}`;
+    const owner = entry.owners.has(agentAId)
+      ? 'P1'
+      : entry.owners.has(agentBId)
+        ? 'P2'
+        : undefined;
+    return formatPoolTeamLabel(entry.canonicalPacked, owner);
   };
 
   return {
@@ -316,6 +323,10 @@ export function prepareMockStaticDir(
       qualified: true,
       owners: {mikudev: 'mikudev.610011'},
     },
+    'CynthiAI': {
+      qualified: true,
+      owners: {sisyphus25: 'sisyphus25.610012'},
+    },
   };
 
   for (const proj of rawProjects) {
@@ -350,6 +361,103 @@ export function prepareMockStaticDir(
   return projectsFile;
 }
 
+const MOCK_WIKI_INDEX = `# Wiki
+
+Shared documentation, format notes, and project profiles for the \`pkmn.ai\` community.
+
+## Pages
+
+- [0 ERROR](0_ERROR) — Gen 9 OU search & evaluation agent by *pre*.
+- [Gen 9 OU](Gen_9_OU) — Metagame overview, team structures, and benchmark baselines.
+`;
+
+const MOCK_WIKI_GEN9OU = [
+  '# Gen 9 OU',
+  '',
+  'Standard Smogon Singles format used for the `pkmn.ai` ladder and tournament benchmarks.',
+  '',
+  '## Evaluation',
+  '',
+  'Agents are evaluated across 2-game blind-pair matches using Davidson MAP ratings:',
+  '',
+  '$$`P(i \\text{ beats } j) = ' +
+    '\\frac{\\gamma_i}{\\gamma_i + \\gamma_j + \\nu \\sqrt{\\gamma_i \\gamma_j}}`',
+  '',
+].join('\n');
+
+const MOCK_WIKI_PROJECT_V1 = `{% visibility: developers %}
+# 0 ERROR
+
+\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
+
+## Architecture
+
+- Depth-limited Nash equilibrium search over packed battle states.
+- Move ordering guided by damage calculator bounds.
+`;
+
+const MOCK_WIKI_PROJECT_V2 = `{% visibility: developers %}
+# 0 ERROR
+
+\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
+
+## Architecture
+
+- Depth-limited Nash equilibrium search over packed battle states.
+- Neural leaf evaluation network trained via self-play trajectories.
+- Team preview policy conditioned on revealed opponent archetypes.
+`;
+
+export function seedMockWiki(wikiDir: string): string {
+  fs.rmSync(wikiDir, {recursive: true, force: true});
+  fs.mkdirSync(wikiDir, {recursive: true});
+
+  const git = (args: string[], date?: string) =>
+    execFileSync('git', args, {
+      cwd: wikiDir,
+      env: date
+        ? {
+          ...process.env,
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_DATE: date,
+        }
+        : process.env,
+    });
+
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'pkmn.ai']);
+  git(['config', 'user.email', 'wiki@pkmn.ai']);
+
+  fs.writeFileSync(path.join(wikiDir, 'index.dj'), MOCK_WIKI_INDEX, 'utf8');
+  fs.writeFileSync(path.join(wikiDir, 'Gen_9_OU.dj'), MOCK_WIKI_GEN9OU, 'utf8');
+  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), MOCK_WIKI_PROJECT_V1, 'utf8');
+  git(['add', 'index.dj', 'Gen_9_OU.dj', '0_ERROR.dj']);
+  git(
+    [
+      'commit',
+      '--author=scheibo <scheibo@users.noreply.github.com>',
+      '-m', 'Create initial wiki pages',
+    ],
+    '2026-10-18T12:00:00Z'
+  );
+
+  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), MOCK_WIKI_PROJECT_V2, 'utf8');
+  git(['add', '0_ERROR.dj']);
+  git(
+    [
+      'commit',
+      '--author=pmariglia <pmariglia@users.noreply.github.com>',
+      '-m', 'Document neural value network',
+    ],
+    '2026-10-20T12:00:00Z'
+  );
+
+  return execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: wikiDir,
+    encoding: 'utf8',
+  }).trim();
+}
+
 export interface SeedOptions {
   db: Database;
   publicDir?: string;
@@ -363,6 +471,7 @@ export interface SeedOptions {
 export interface SeedResult {
   liveDoc: arena.LiveDocument;
   tournamentBroadcast: tournaments.LiveBroadcast;
+  featuredBattleId: string;
 }
 
 export function seedMockArena(options: SeedOptions): SeedResult {
@@ -416,6 +525,9 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     'gen9championsvgc2026regmc',
   ];
 
+  const vgcPoolInputs: Array<{agentId: number; agentName: string; teams: string[]}> = [];
+  const agentIdByVersion = new Map<number, number>();
+
   const submitAndPass = (input: {
     agentId: number;
     developerId?: number;
@@ -423,6 +535,7 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     pkg: 'bundle' | 'oci';
     url: string;
     ladders: string[];
+    tournaments?: string[];
     vgcOffset?: number;
     at: number;
     bytes: number;
@@ -431,14 +544,11 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     ram: number;
     retiredByLadder?: Record<string, number>;
   }) => {
-    const teamsByLadder =
+    const vgcTeams =
       input.vgcOffset !== undefined && input.ladders.includes('gen9championsvgc2026regmc')
-        ? {
-          gen9championsvgc2026regmc: splitSubmittedTeams(
-            generateValidVgcTeams(20, input.vgcOffset)
-          ),
-        }
+        ? splitSubmittedTeams(generateValidVgcTeams(20, input.vgcOffset))
         : undefined;
+    const teamsByLadder = vgcTeams ? {gen9championsvgc2026regmc: vgcTeams} : undefined;
     const v = db.createSubmission({
       agentId: input.agentId,
       developerId: input.developerId,
@@ -447,6 +557,7 @@ export function seedMockArena(options: SeedOptions): SeedResult {
       url: input.url,
       sha256: shaOf(`${input.agentId}-${input.version}`),
       ladderIds: input.ladders,
+      tournamentIds: input.tournaments,
       teamsByLadder,
       now: input.at,
     });
@@ -460,6 +571,15 @@ export function seedMockArena(options: SeedOptions): SeedResult {
       retiredVersionIdsByLadder: input.retiredByLadder,
       now: input.at + 5,
     });
+    agentIdByVersion.set(v.id, input.agentId);
+    if (vgcTeams) {
+      const agent = db.getAgentById(input.agentId);
+      vgcPoolInputs.push({
+        agentId: input.agentId,
+        agentName: agent?.name ?? String(input.agentId),
+        teams: vgcTeams,
+      });
+    }
     return v;
   };
 
@@ -653,6 +773,7 @@ export function seedMockArena(options: SeedOptions): SeedResult {
   db.setLadderAnchor('gen9randombattle20261109', 'foul-play', '1.4.0', now - 26 * 86400 + 10);
   db.setLadderAnchor('gen9championsvgc2026regmc', 'foul-play', '1.4.0', now - 26 * 86400 + 10);
 
+  const vgcPool = buildCanonicalTeamPool(vgcPoolInputs);
   const rng = createRng(20261110);
   let matchSeq = 0;
 
@@ -666,8 +787,11 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     completedAt: number;
     p1TeamLabel?: string;
     p2TeamLabel?: string;
-  }) => {
+    game1EndReason?: string;
+    game2EndReason?: string;
+  }): string => {
     matchSeq++;
+    const matchId = `${input.prefix}-${String(matchSeq).padStart(7, '0')}`;
     const sampleGame = (): {outcome: ratings.GameOutcome; reason: string; turns: number} => {
       const roll = rng(1000) / 1000;
       if (input.allowTies && roll > 0.965) {
@@ -684,22 +808,38 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     const g2 = sampleGame();
     const cat = `${g1.outcome}${g2.outcome}` as ratings.MatchCategory;
 
+    let p1TeamLabel = input.p1TeamLabel;
+    let p2TeamLabel = input.p2TeamLabel;
+    if (
+      input.ladderId === 'gen9championsvgc2026regmc' &&
+      p1TeamLabel === undefined &&
+      p2TeamLabel === undefined
+    ) {
+      const a1 = agentIdByVersion.get(input.p1VersionId);
+      const a2 = agentIdByVersion.get(input.p2VersionId);
+      if (a1 !== undefined && a2 !== undefined) {
+        const sampled = samplePoolsPair(vgcPool, a1, a2, rng);
+        p1TeamLabel = sampled.t1Label;
+        p2TeamLabel = sampled.t2Label;
+      }
+    }
+
     db.recordCompletedMatch({
       match: {
-        id: `${input.prefix}-${String(matchSeq).padStart(7, '0')}`,
+        id: matchId,
         ladderId: input.ladderId,
         p1VersionId: input.p1VersionId,
         p2VersionId: input.p2VersionId,
         seed: `100,200,300,${matchSeq}`,
-        p1TeamLabel: input.p1TeamLabel,
-        p2TeamLabel: input.p2TeamLabel,
+        p1TeamLabel,
+        p2TeamLabel,
         game1Outcome: g1.outcome,
         game2Outcome: g2.outcome,
         category: cat,
         game1Turns: g1.turns,
         game2Turns: g2.turns,
-        game1EndReason: g1.reason,
-        game2EndReason: g2.reason,
+        game1EndReason: input.game1EndReason ?? g1.reason,
+        game2EndReason: input.game2EndReason ?? g2.reason,
         p1PeakRam: 720 + (input.p1VersionId * 47) % 980,
         p2PeakRam: 720 + (input.p2VersionId * 53) % 980,
         p1Game1BankSeconds: 95 + rng(55),
@@ -711,6 +851,7 @@ export function seedMockArena(options: SeedOptions): SeedResult {
         completedAt: input.completedAt,
       },
     });
+    return matchId;
   };
 
   interface CompetitorSpec {
@@ -730,7 +871,6 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     startAt: number;
     endAt: number;
     allowTies?: boolean;
-    vgcLabels?: boolean;
     matchupTweaks?: Map<string, number>;
   }) => {
     const pairs: Array<[CompetitorSpec, CompetitorSpec]> = [];
@@ -751,7 +891,6 @@ export function seedMockArena(options: SeedOptions): SeedResult {
           -(config.matchupTweaks?.get(`${c2.versionId}:${c1.versionId}`) ?? 0);
         const diff = c1.skill - c2.skill + tweak;
         const pWin = 1 / (1 + Math.exp(-diff));
-        const third = config.competitors[(idx + 3) % config.competitors.length];
         playSimulatedMatch({
           ladderId: config.ladderId,
           prefix: config.prefix,
@@ -760,8 +899,6 @@ export function seedMockArena(options: SeedOptions): SeedResult {
           pWin,
           allowTies: config.allowTies,
           completedAt: at,
-          p1TeamLabel: config.vgcLabels ? `${c1.name} Team #${(r % 20) + 1}` : undefined,
-          p2TeamLabel: config.vgcLabels ? `${third.name} Team #${((r + 7) % 20) + 1}` : undefined,
         });
       }
     }
@@ -869,7 +1006,6 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     rounds: 10,
     startAt: now - 25 * 86400,
     endAt: now - 1 * 86400,
-    vgcLabels: true,
   });
 
   // 2. Upgrade 0 ERROR -> 1.1.0 (Day -12) -> 1.2.0 (Day -4, retiring 1.0.0 on RBY & SV)
@@ -1034,8 +1170,6 @@ export function seedMockArena(options: SeedOptions): SeedResult {
       p2VersionId: fpV1.id,
       pWin: 0.5,
       completedAt: now - 7200 + k * 300,
-      p1TeamLabel: `mikumiku Team #${k + 1}`,
-      p2TeamLabel: `0 ERROR Team #${k + 3}`,
     });
   }
 
@@ -1056,15 +1190,42 @@ export function seedMockArena(options: SeedOptions): SeedResult {
       p2VersionId: prV1.id,
       pWin: 1.0,
       completedAt: now - 1140 + k * 120,
-      p1TeamLabel: `Mew's Truck Team #${k + 1}`,
-      p2TeamLabel: `Jaxcalibur Team #${k + 5}`,
     });
   }
 
-  // 4. Tournaments: #1 Completed ("Spring ’26", 6 entrants) & #2 Running ("Autumn ’26", 6 entrants)
+  // Include recent abnormal-termination examples (`crash`, `timeout`) and a deterministic
+  // VGC pool-hash battle (`unknown` third-party team + `P1:`-owned team) at the top of `/battles/`.
+  playSimulatedMatch({
+    ladderId: 'gen9ou20261109',
+    prefix: 'gen9ou',
+    p1VersionId: eeveV1.id,
+    p2VersionId: awrV1.id,
+    pWin: 1.0,
+    completedAt: now - 300,
+    game2EndReason: 'crash',
+  });
+  const zeroTeamEntry = vgcPool.find(e => e.owners.has(zeroAgent.id))!;
+  const jaxTeamEntry = vgcPool.find(e => e.owners.has(jaxAgent.id))!;
+  const mtTeamEntry = vgcPool.find(e => e.owners.has(mtAgent.id))!;
+  const featuredBattleId = playSimulatedMatch({
+    ladderId: 'gen9championsvgc2026regmc',
+    prefix: 'vgc',
+    p1VersionId: jaxV1.id,
+    p2VersionId: mnV1.id,
+    pWin: 1.0,
+    completedAt: now - 180,
+    p1TeamLabel: hashTeam(zeroTeamEntry.canonicalPacked),
+    p2TeamLabel: formatPoolTeamLabel(jaxTeamEntry.canonicalPacked, 'P1'),
+    game2EndReason: 'timeout',
+  });
+
+  // 4. Tournaments:
+  //   #1 Completed ("Tournament #1: Gen 9 OU", 6 entrants)
+  //   #2 Running   ("Tournament #2: VGC 2026 Reg M-C OTS BO3", 6 entrants -> site-wide #topbar)
+  //   #3 Scheduled ("Tournament #3: VGC 2026 Reg M-D OTS BO3", open for /account OCI registration)
   db.upsertTournament({
     id: '1',
-    name: 'Spring ’26',
+    name: 'Tournament #1: Gen 9 OU',
     format: 'gen9ou',
     gamesPerMatchup: 8,
     parallelTables: 2,
@@ -1180,7 +1341,7 @@ export function seedMockArena(options: SeedOptions): SeedResult {
 
   db.upsertTournament({
     id: '2',
-    name: 'Autumn ’26',
+    name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
     format: 'gen9championsvgc2026regmc',
     gamesPerMatchup: 8,
     parallelTables: 2,
@@ -1244,27 +1405,54 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     }
   }
 
+  db.upsertTournament({
+    id: '3',
+    name: 'Tournament #3: VGC 2026 Reg M-D OTS BO3',
+    format: 'gen9championsvgc2026regmc',
+    gamesPerMatchup: 8,
+    parallelTables: 2,
+    hardware: 'GCP L4 Spot · 24 vCPU · 48 GB RAM',
+    status: 'scheduled',
+    startsAt: now + 14 * 86400,
+  });
+  const pmarigliaDev = db.getDeveloperByGitHub('pmariglia')!;
+  submitAndPass({
+    agentId: fpAgent.id,
+    developerId: pmarigliaDev.id,
+    version: '1.4.1-t3',
+    pkg: 'oci',
+    url: 'ghcr.io/pmariglia/foul-play:1.4.1-t3',
+    ladders: [],
+    tournaments: ['3'],
+    at: now - 3600,
+    bytes: 264 * 1024 * 1024,
+    durationMillis: 2300,
+    turnMillis: 270,
+    ram: 710,
+  });
+
   const liveMatch: arena.LiveMatch = {
     heartbeatSeq: 42,
-    matchId: 'gen1ou-0009999',
-    ladderId: 'gen1ou20261109',
-    slot: 'rby',
-    format: 'gen1ou',
+    matchId: 'vgc-0009999',
+    ladderId: 'gen9championsvgc2026regmc',
+    slot: 'vgc',
+    format: 'gen9championsvgc2026regmc',
     game: 2,
-    turn: 27,
+    turn: 9,
     activeSlot: 'p2',
     turnStartedAt: now - 4,
     turnBudgetSeconds: 138,
-    incrementSeconds: 10,
-    game1Summary: {winnerSlot: 'p1', turns: 31},
+    incrementSeconds: 25,
+    game1Summary: {winnerSlot: 'p1', turns: 11},
     p1: {
       slug: '0-error',
       name: '0 ERROR',
-      version: '1.2.0',
+      version: '1.0.0',
       bankSeconds: 142,
       lastTurnMillis: 290,
       meanTurnMillis: 280,
       ram: 890,
+      team: hashTeam(mtTeamEntry.canonicalPacked),
     },
     p2: {
       slug: 'jaxcalibur',
@@ -1274,6 +1462,7 @@ export function seedMockArena(options: SeedOptions): SeedResult {
       lastTurnMillis: 340,
       meanTurnMillis: 315,
       ram: 1920,
+      team: formatPoolTeamLabel(zeroTeamEntry.canonicalPacked, 'P1'),
     },
   };
 
@@ -1330,7 +1519,7 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     fs.writeFileSync(liveJsonPath, `${JSON.stringify(liveDoc)}\n`, 'utf8');
   }
 
-  return {liveDoc, tournamentBroadcast};
+  return {liveDoc, tournamentBroadcast, featuredBattleId};
 }
 
 interface RemotePendingLadder {
@@ -1355,6 +1544,7 @@ export interface RemotePendingSubmission {
   sha256: string;
   authToken?: string;
   ladders: string[];
+  tournaments?: string[];
   teamsByLadder: Record<string, string[]>;
 }
 
@@ -1721,6 +1911,7 @@ export class MockArenaClient {
           lastTurnMillis: 280,
           meanTurnMillis: 295,
           ram: 840,
+          ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
         },
         p2: {
           slug: opponent.agentSlug,
@@ -1730,6 +1921,7 @@ export class MockArenaClient {
           lastTurnMillis: 310,
           meanTurnMillis: 305,
           ram: 790,
+          ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
         },
       });
 
@@ -1754,6 +1946,7 @@ export class MockArenaClient {
           lastTurnMillis: 275,
           meanTurnMillis: 290,
           ram: 850,
+          ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
         },
         p2: {
           slug: opponent.agentSlug,
@@ -1763,6 +1956,7 @@ export class MockArenaClient {
           lastTurnMillis: 325,
           meanTurnMillis: 310,
           ram: 800,
+          ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
         },
       });
     }
@@ -1880,25 +2074,55 @@ export async function runMockCli(argv: string[]): Promise<void> {
     const dbPath = values.db ?? DB_PATH;
     const publicDir = values['public-dir'] ?? render.PUBLIC_DIR;
     const now = values.now ? Number(values.now) : Math.floor(Date.now() / 1000);
-    // Use `os.tmpdir()` rather than `private/` because `private/sync` two-way rsyncs `private/`
-    // with production.
-    const tmpStatic = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-static-'));
+    if (dbPath !== ':memory:') {
+      for (const suffix of ['', '-wal', '-shm']) {
+        fs.rmSync(`${dbPath}${suffix}`, {force: true});
+      }
+    }
+
+    const useMockDir = !values.db;
+    const mockRoot = useMockDir
+      ? root('.mock')
+      : fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-static-'));
+    if (useMockDir) {
+      fs.rmSync(mockRoot, {recursive: true, force: true});
+      fs.mkdirSync(mockRoot, {recursive: true});
+    }
+    const staticDir = useMockDir ? path.join(mockRoot, 'static') : mockRoot;
+    const avatarsDir = path.join(staticDir, 'avatars');
+    const laddersFile = root('config', 'ladders.yml');
     const db = new Database(dbPath);
     try {
-      const avatarsDir = path.join(tmpStatic, 'avatars');
-      prepareMockStaticDir(tmpStatic, avatarsDir);
+      prepareMockStaticDir(staticDir, avatarsDir);
+      if (useMockDir) {
+        const rawLadders = fs.readFileSync(laddersFile, 'utf8');
+        fs.writeFileSync(
+          path.join(mockRoot, 'ladders.yml'),
+          rawLadders.replace(/status:\s*upcoming/g, 'status: active'),
+          'utf8'
+        );
+        fs.writeFileSync(
+          path.join(mockRoot, 'vgc-teams.txt'),
+          `${generateValidVgcTeams(20, 42).join('\n\n')}\n`,
+          'utf8'
+        );
+        seedMockWiki(path.join(mockRoot, 'wiki'));
+      }
       seedMockArena({
         db,
         publicDir,
-        staticDir: tmpStatic,
+        staticDir,
         avatarsDir,
+        laddersFile,
         now,
         render: true,
       });
       console.log(`Seeded mock Arena DB at ${dbPath} and rendered pages into ${publicDir}`);
     } finally {
       db.close();
-      fs.rmSync(tmpStatic, {recursive: true, force: true});
+      if (!useMockDir) {
+        fs.rmSync(mockRoot, {recursive: true, force: true});
+      }
     }
     return;
   }
@@ -1906,7 +2130,7 @@ export async function runMockCli(argv: string[]): Promise<void> {
   const serverUrl = values.server ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
   const arenaSecret = values.secret ?? process.env.ARENA_SECRET ?? '';
   if (!arenaSecret) {
-    throw new Error('Missing ARENA_SECRET (pass --secret or set ARENA_SECRET in private/.env)');
+    throw new Error('Missing ARENA_SECRET (pass --secret or set ARENA_SECRET in .env)');
   }
   const smokeMode = values.smoke === 'fail' ? 'failed' : 'passed';
   const client = new MockArenaClient({

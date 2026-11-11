@@ -286,11 +286,76 @@ table.matrix td.diag {
 .slot-telemetry {
   display: flex;
   flex-wrap: wrap;
-  gap: 1ch;
+  gap: 0.35rem 1ch;
   justify-content: space-between;
   margin-top: 0.45rem;
   color: rgb(var(--fg-base) / 65%);
   font-size: 0.82em;
+}
+
+.battle-matchup {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.5rem 1.5ch;
+  align-items: baseline;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid rgb(var(--fg-base) / 12%);
+}
+
+.battle-side {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5ch;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 1.04em;
+}
+
+.battle-side-right {
+  justify-content: flex-end;
+}
+
+.battle-score {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5ch;
+  align-items: baseline;
+  justify-content: center;
+  text-align: center;
+}
+
+.battle-score-nums {
+  font-size: 1.2em;
+}
+
+.battle-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.75ch;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  font-size: 0.84em;
+}
+
+.battle-meta code {
+  overflow-wrap: anywhere;
+}
+
+.battle-note {
+  margin-top: 0.75rem;
+  font-size: 0.86em;
+}
+
+@media (width < 640px) {
+  .battle-matchup {
+    grid-template-columns: 1fr;
+  }
+
+  .battle-side,
+  .battle-side-right {
+    justify-content: center;
+  }
 }
 
 @media (width < 768px) {

@@ -15,7 +15,7 @@ import {renderArenaPages} from '../server/render';
 
 import * as glossary from './glossary';
 import * as research from './research';
-import {root} from './util';
+import {escapeHtml, root} from './util';
 
 const fs = site.fs;
 
@@ -29,10 +29,77 @@ const STATIC = root('static');
 export const SET_THEME =
   "const setTheme = t => document.documentElement.setAttribute('data-theme', t);";
 
+export function formatLiveTournamentBanner(tournament?: {id: string; name: string}): string {
+  if (!tournament) return '';
+  const href = `/arena/tournaments/${encodeURIComponent(tournament.id)}/`;
+  return '<div id="topbar">' +
+    `<a href="${escapeHtml(href)}" class="subtle">[LIVE] ${escapeHtml(tournament.name)}</a>` +
+    '</div>';
+}
+
+export function injectLiveBanner(
+  headerHtml: string | undefined,
+  tournament?: {id: string; name: string}
+): string | undefined {
+  const banner = formatLiveTournamentBanner(tournament);
+  if (!banner || headerHtml?.includes('id="topbar"')) return headerHtml;
+  return headerHtml ? `${banner}\n  ${headerHtml}` : banner;
+}
+
+const LIVE_TOPBAR_RE =
+  /<div id="topbar"><a [^>]*>\[LIVE\][\s\S]*?<\/a><\/div>\s*/g;
+
+// Keeps pre-built static `.dj` pages in `publicDir` (`index.html`, `rules/`, `glossary/`, etc.)
+// synchronized when a tournament transitions into or out of `status = 'running'` at runtime
+// without requiring a full `npm run build` — skipping pages with the permanent Under Construction
+// `#topbar` banner and 0-byte hyperlink stubs.
+export function syncStaticLiveBanner(
+  publicDir: string,
+  tournament?: {id: string; name: string}
+) {
+  if (!nodeFs.existsSync(publicDir)) return;
+  const banner = formatLiveTournamentBanner(tournament);
+
+  const visitDir = (dir: string, relDir: string) => {
+    for (const entry of nodeFs.readdirSync(dir, {withFileTypes: true})) {
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (rel === 'arena' || rel === 'api' || rel === 'chat' || rel === 'account') continue;
+        visitDir(full, rel);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.html')) continue;
+      if (rel.startsWith('projects/') && rel !== 'projects/index.html') continue;
+      const raw = nodeFs.readFileSync(full, 'utf8');
+      if (!raw || raw.includes('Under Construction:')) continue;
+      if (!raw.includes('<header>')) continue;
+
+      const stripped = raw.replace(LIVE_TOPBAR_RE, '');
+      const updated = banner
+        ? stripped.replace('<header>', `<header>${banner}\n  `)
+        : stripped;
+      if (updated !== raw) {
+        const tmp = `${full}.tmp.${process.pid}.${Date.now()}`;
+        nodeFs.writeFileSync(tmp, updated, 'utf8');
+        nodeFs.renameSync(tmp, full);
+      }
+    }
+  };
+
+  visitDir(publicDir, '');
+}
+
 export class Renderer extends site.page.Renderer {
+  liveBannerProvider?: () => string;
+
   override render(page: site.page.Page, replace?: (s: string) => string) {
     const script = page.script ? `${SET_THEME}\n${page.script}` : SET_THEME;
-    return super.render({...page, script}, replace);
+    const banner = this.liveBannerProvider?.() ?? '';
+    const headerHtml = banner && !page.header?.includes('id="topbar"')
+      ? (page.header ? `${banner}\n  ${page.header}` : banner)
+      : page.header;
+    return super.render({...page, header: headerHtml, script}, replace);
   }
 }
 
@@ -86,58 +153,6 @@ const build = async (rebuild?: boolean) => {
     }
   }
 
-  for (const code of [400, 401, 403, 404, 500, 502, 503, 504]) {
-    const page = `${code}.html`;
-    fs.write(path.join(PUBLIC, page), renderer.render({
-      title: `${code} | pkmn.ai`,
-      header: header(`${code}`),
-      path: '',
-      id: 'error',
-      content: `<p>${http.STATUS_CODES[code]}</p>`,
-      style: `
-        #error h2 {
-          text-decoration: none;
-          font-size: 20vh;
-          margin: 0;
-        }
-        #error main {
-          font-size: 1.5em;
-          position: relative;
-          top: -6vh;
-        }`,
-    }).replace('<link href="https://pkmn.ai" rel="canonical">', ''));
-    expected.add(page);
-  }
-
-  // `@untitaker/hyperlink` (`hyperlink public --check-anchors`) has no CLI flag or config option
-  // to ignore non-static routes (`--help` only exposes `--check-anchors`, `--sources`, `-j`, and
-  // `--github-actions`). Routes linked from `.dj` content that are actually Nginx redirects
-  // (`/chat`) or dynamic SSR routes (`/account`) therefore need 0-byte `index.html` stubs on disk
-  // so `npm run lint` does not report broken links.
-  for (const placeholder of ['chat', 'account']) {
-    const file = path.join(PUBLIC, placeholder, 'index.html');
-    if (!fs.exists(file)) {
-      fs.mkdir(path.dirname(file));
-      fs.write(file, '');
-    }
-  }
-
-  const files = ['favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib'];
-  for (const file of files) {
-    fs.copy(path.join(STATIC, file), path.join(PUBLIC, file));
-  }
-  fs.write(path.join(PUBLIC, 'index.html'), renderer.render({
-    id: 'home',
-    title: 'pkmn.ai',
-    header: '<h1>pkmn.ai</h1>',
-    path: '',
-    content: `${site.html.render(fs.read(path.join(STATIC, 'index.dj'))
-      .replace('<a', '<a class="subtle"'))}`,
-  }));
-
-  renderer.create('glossary', glossary.page(STATIC));
-  renderer.create('research', research.page(STATIC));
-
   const hasExistingDb = nodeFs.existsSync(DB_PATH);
   const db = new Database(hasExistingDb ? DB_PATH : ':memory:');
   try {
@@ -145,88 +160,143 @@ const build = async (rebuild?: boolean) => {
     if (!hasExistingDb) {
       db.syncProjects();
     }
+    renderer.liveBannerProvider = () => formatLiveTournamentBanner(db.getRunningTournament());
+
+    for (const code of [400, 401, 403, 404, 500, 502, 503, 504]) {
+      const page = `${code}.html`;
+      fs.write(path.join(PUBLIC, page), renderer.render({
+        title: `${code} | pkmn.ai`,
+        header: header(`${code}`),
+        path: '',
+        id: 'error',
+        content: `<p>${http.STATUS_CODES[code]}</p>`,
+        style: `
+          #error h2 {
+            text-decoration: none;
+            font-size: 20vh;
+            margin: 0;
+          }
+          #error main {
+            font-size: 1.5em;
+            position: relative;
+            top: -6vh;
+          }`,
+      }).replace('<link href="https://pkmn.ai" rel="canonical">', ''));
+      expected.add(page);
+    }
+
+    // `@untitaker/hyperlink` (`hyperlink public --check-anchors`) has no CLI flag or config option
+    // to ignore non-static routes (`--help` only exposes `--check-anchors`, `--sources`, `-j`, and
+    // `--github-actions`). Routes linked from `.dj` content that are actually Nginx redirects
+    // (`/chat`) or dynamic SSR routes (`/account`) therefore need 0-byte `index.html` stubs on disk
+    // so `npm run lint` does not report broken links.
+    for (const placeholder of ['chat', 'account']) {
+      const file = path.join(PUBLIC, placeholder, 'index.html');
+      if (!fs.exists(file)) {
+        fs.mkdir(path.dirname(file));
+        fs.write(file, '');
+      }
+    }
+
+    const files = ['favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib'];
+    for (const file of files) {
+      fs.copy(path.join(STATIC, file), path.join(PUBLIC, file));
+    }
+    fs.write(path.join(PUBLIC, 'index.html'), renderer.render({
+      id: 'home',
+      title: 'pkmn.ai',
+      header: '<h1>pkmn.ai</h1>',
+      path: '',
+      content: `${site.html.render(fs.read(path.join(STATIC, 'index.dj'))
+        .replace('<a', '<a class="subtle"'))}`,
+    }));
+
+    renderer.create('glossary', glossary.page(STATIC));
+    renderer.create('research', research.page(STATIC));
+
     renderArenaPages({
       db,
       renderer,
       publicDir: PUBLIC,
-      staticDir: STATIC,
+      staticDir: process.env.MOCK === '1' ? root('.mock', 'static') : STATIC,
     });
-  } finally {
-    db.close();
-  }
 
-  const pages: {[page: string]: string} = {
-    background: 'Background',
-    rules: 'Rules',
-    release: 'Responsible Release',
-  };
-  for (const [page, title] of Object.entries(pages)) {
-    const file = path.join(STATIC, `${page}.dj`);
-    const citation = page === 'background' ? cite(title, fs.stat(file).mtime) : '';
-    renderer.create(page, {
-      path: `/${page}/`,
-      style: page === 'release' ? `
-        span.email b { display: none; }
-        span.email { font-family: monospace; }
-    ` : page === 'background' ? style : '',
-      title: `${title} | pkmn.ai`,
-      header: header(title, page === 'background'),
-      content: `${site.html.render(fs.read(file))}${citation}`,
-    });
-  }
-
-  const priv = root('private', 'build.js');
-  if (fs.exists(priv)) require(priv)(renderer, expected);
-
-  renderer.create('concepts', {
-    path: '/concepts/',
-    title: 'Concepts | pkmn.ai',
-    style: `
-    ul {
-      margin-top: 3em;
-      padding: 0;
-      text-align: center;
+    const pages: {[page: string]: string} = {
+      background: 'Background',
+      rules: 'Rules',
+      release: 'Responsible Release',
+    };
+    for (const [page, title] of Object.entries(pages)) {
+      const file = path.join(STATIC, `${page}.dj`);
+      const citation = page === 'background' ? cite(title, fs.stat(file).mtime) : '';
+      renderer.create(page, {
+        path: `/${page}/`,
+        style: page === 'release' ? `
+          span.email b { display: none; }
+          span.email { font-family: monospace; }
+      ` : page === 'background' ? style : '',
+        title: `${title} | pkmn.ai`,
+        header: header(title, page === 'background'),
+        content: `${site.html.render(fs.read(file))}${citation}`,
+      });
     }
-    li {
-      margin-bottom: 0.5rem;
-      line-height: 1.15;
-      list-style: none;
-    }`,
-    header: header('Concepts'),
-    content: `${site.html.render(fs.read(path.join(STATIC, 'concepts.dj')))}`,
-  });
 
-  if (!rebuild) {
-    const now = new Date();
-    for (const file of actual) {
-      const full = path.join(PUBLIC, file);
-      if (!expected.has(file) && !renderer.retain(full, now)) {
-        fs.remove(full);
+    const priv = root('private', 'build.js');
+    if (fs.exists(priv)) require(priv)(renderer, expected);
+
+    renderer.create('concepts', {
+      path: '/concepts/',
+      title: 'Concepts | pkmn.ai',
+      style: `
+      ul {
+        margin-top: 3em;
+        padding: 0;
+        text-align: center;
+      }
+      li {
+        margin-bottom: 0.5rem;
+        line-height: 1.15;
+        list-style: none;
+      }`,
+      header: header('Concepts'),
+      content: `${site.html.render(fs.read(path.join(STATIC, 'concepts.dj')))}`,
+    });
+
+    if (!rebuild) {
+      const now = new Date();
+      for (const file of actual) {
+        const full = path.join(PUBLIC, file);
+        if (!expected.has(file) && !renderer.retain(full, now)) {
+          fs.remove(full);
+        }
       }
     }
-  }
 
-  actual = fs.list(path.join(PUBLIC, 'concepts'));
-  expected = new Set(['index.html']);
+    actual = fs.list(path.join(PUBLIC, 'concepts'));
+    expected = new Set(['index.html']);
 
-  const titles = ['Baselines', 'Complexity', 'Engines', 'Protocol', 'Variants'];
-  for (const title of titles) {
-    const page = title.toLowerCase();
-    expected.add(page);
-    const wip = title !== 'Variants';
-    const file = path.join(STATIC, 'concepts', `${page}.dj`);
-    const citation = cite(`Concepts — ${title}`, fs.stat(file).mtime, `concepts/${page}`);
-    renderer.create(`concepts/${page}`, {
-      path: `/concepts/${page}/`,
-      title: `Concepts — ${title} | pkmn.ai`,
-      style: wip ? style : '',
-      header: header(title, wip),
-      content: `${site.html.render(fs.read(file))}${citation}`,
-    });
-  }
+    const titles = ['Baselines', 'Complexity', 'Engines', 'Protocol', 'Variants'];
+    for (const title of titles) {
+      const page = title.toLowerCase();
+      expected.add(page);
+      const wip = title !== 'Variants';
+      const file = path.join(STATIC, 'concepts', `${page}.dj`);
+      const citation = cite(`Concepts — ${title}`, fs.stat(file).mtime, `concepts/${page}`);
+      renderer.create(`concepts/${page}`, {
+        path: `/concepts/${page}/`,
+        title: `Concepts — ${title} | pkmn.ai`,
+        style: wip ? style : '',
+        header: header(title, wip),
+        content: `${site.html.render(fs.read(file))}${citation}`,
+      });
+    }
 
-  for (const file of actual) {
-    if (!expected.has(file)) fs.remove(path.join(PUBLIC, 'concepts', file));
+    for (const file of actual) {
+      if (!expected.has(file)) fs.remove(path.join(PUBLIC, 'concepts', file));
+    }
+  } finally {
+    renderer.liveBannerProvider = undefined;
+    db.close();
   }
 };
 

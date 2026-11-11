@@ -584,4 +584,101 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       db.close();
     }
   });
+
+  test('supports developer reassignment (A -> B -> A) and unowned active projects', () => {
+    const db = new Database(':memory:');
+    try {
+      db.syncLadders(LADDERS_FILE, 1_760_000_000);
+      db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_010);
+
+      // Initial state: scheibo owns 0 ERROR (Project A), pmariglia owns Foul Play (Project B)
+      db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      scheibo: pre.10544
+- name: Foul Play
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pmariglia: pmariglia.535629
+`, undefined, 1_760_000_100);
+
+      db.linkDeveloperGitHubId('scheibo', 1001, 1_760_000_110);
+      db.linkDeveloperDiscord('scheibo', '513513270670262284', 'scheibo', 1_760_000_110);
+
+      const zeroAgent = db.getAgentBySlug('0-error')!;
+      const fpAgent = db.getAgentBySlug('foul-play')!;
+      const initialDev = db.getDeveloperByGitHub('scheibo')!;
+
+      const vZero = db.createSubmission({
+        agentId: zeroAgent.id,
+        developerId: initialDev.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/0-error-1.0.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_200,
+      });
+      db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: 1_760_000_210});
+
+      // Move scheibo A -> B while retiring 0 ERROR to owners: {} (unowned active project)
+      db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    qualified: true
+    owners: {}
+- name: Foul Play
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pmariglia: pmariglia.535629
+      scheibo: pre.10544
+`, undefined, 1_760_000_300);
+
+      // 0 ERROR stays qualified and keeps its active ladder entry, with 0 owners able to submit
+      expect(db.getAgentBySlug('0-error')!.status).toBe('qualified');
+      expect(db.getDevelopersForAgent(zeroAgent.id)).toEqual([]);
+      expect(db.getActiveEntriesForAgent(zeroAgent.id)).toHaveLength(1);
+
+      // scheibo keeps primary key, OAuth IDs, and past submission attribution, now on Foul Play
+      const movedDev = db.getDeveloperByGitHub('scheibo')!;
+      expect(movedDev.id).toBe(initialDev.id);
+      expect(movedDev.agentId).toBe(fpAgent.id);
+      expect(movedDev.githubId).toBe(1001);
+      expect(movedDev.discordId).toBe('513513270670262284');
+      expect(db.getVersionById(vZero.id)!.developerId).toBe(initialDev.id);
+
+      // Move scheibo B -> A (back to 0 ERROR)
+      db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      scheibo: pre.10544
+- name: Foul Play
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pmariglia: pmariglia.535629
+`, undefined, 1_760_000_400);
+
+      const returnedDev = db.getDeveloperByGitHub('scheibo')!;
+      expect(returnedDev.id).toBe(initialDev.id);
+      expect(returnedDev.agentId).toBe(zeroAgent.id);
+      expect(returnedDev.discordId).toBe('513513270670262284');
+      expect(db.getDevelopersForAgent(zeroAgent.id).map(d => d.githubLogin)).toEqual(['scheibo']);
+      expect(db.getDevelopersForAgent(fpAgent.id).map(d => d.githubLogin)).toEqual(['pmariglia']);
+    } finally {
+      db.close();
+    }
+  });
 });

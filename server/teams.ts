@@ -51,6 +51,14 @@ export function clearReferencePoolCache() {
   poolCache.clear();
 }
 
+export const TEAM_HASH_LEN = teams.TEAM_HASH_LEN;
+export const hashTeam = teams.hashTeam;
+
+export function formatPoolTeamLabel(packedCanonicalTeam: string, owner?: 'P1' | 'P2'): string {
+  const shortHash = teams.hashTeam(packedCanonicalTeam);
+  return owner ? `${owner}:${shortHash}` : shortHash;
+}
+
 export function loadReferencePool(format: string, pools: string[]): PoolEntry[] {
   const cleanFormat = toID(format);
   const resolvedDirs = pools.map(d => path.resolve(d));

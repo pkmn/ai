@@ -1,6 +1,6 @@
 # Database Schema (`db/schema/`)
 
-The **pkmn.ai** Arena server persists all account, ladder, rating, Discord, and tournament state in a single local SQLite database (`/var/lib/pkmn/arena.sqlite` in production, `private/arena.sqlite` in local development) accessed synchronously through Node's built-in `node:sqlite` (`DatabaseSync`) in WAL mode.
+The **pkmn.ai** Arena server persists all account, ladder, rating, Discord, and tournament state in a single local SQLite database (`/var/lib/pkmn/arena.sqlite` in production, `db/data/arena.sqlite` in local development) accessed synchronously through Node's built-in `node:sqlite` (`DatabaseSync`) in WAL mode.
 
 ## Design Invariants
 
