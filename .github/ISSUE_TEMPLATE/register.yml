@@ -1,5 +1,5 @@
 name: Arena Registration
-description: Request inclusion of a competitive Pokémon AI project in the pkmn.ai arena
+description: Request inclusion of a competitive Pokémon AI project in _Olympus Mons_, the pkmn.ai arena.
 title: "[Arena] "
 labels: ["registration"]
 body:
@@ -11,7 +11,7 @@ body:
     id: name
     attributes:
       label: Project Name
-      description: Distinct project name (prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare English Pokémon species names, or known players' names).
+      description: Distinct project name (prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare English Pokémon species names, or known players' names). Approval subject to staff discretion. 
       placeholder: "Foul Play"
     validations:
       required: true
@@ -19,7 +19,7 @@ body:
     id: owners
     attributes:
       label: Owners (GitHub & Smogon Accounts)
-      description: "List `github_username: smogon_username` (one per line) for every team member. All authorized team members must be Smogon account holders in good standing and may belong to at most one Arena project."
+      description: "List `github_username: smogon_username` (one per line) for every team member. All authorized team members must be Smogon account holders in good standing and may belong to at most one **pkmn.ai** Arena project."
       placeholder: |
         pmariglia: pmariglia
         scheibo: pre
@@ -36,6 +36,7 @@ body:
     id: language
     attributes:
       label: Programming Language(s)
+      description: Primary languages used to implement the project.
       placeholder: "Rust, Python"
     validations:
       required: true
@@ -43,7 +44,7 @@ body:
     id: engine
     attributes:
       label: Engine(s) / Framework(s)
-      description: Engine(s) or framework(s) used (e.g., `@pkmn/engine`, `poke-engine`, `@pkmn/sim`, `poke-env`, or `Custom`).
+      description: Engine(s) or framework(s) used (e.g., `@pkmn/engine`, `poke-engine`, `poke-env`, or `Custom`).
       placeholder: "poke-env"
     validations:
       required: true
@@ -71,9 +72,9 @@ body:
     attributes:
       label: Required Agreements
       options:
-        - label: We agree to adhere to the latest community guidance on Responsible Releases (https://pkmn.ai/release).
+        - label: We agree to adhere to the latest community guidance on [Responsible Releases](https://pkmn.ai/release).
           required: true
-        - label: We grant pkmn.ai permission to run our model in its Arena for the purpose of evaluation against other agents.
+        - label: We grant **pkmn.ai** permission to run our model in its Arena for the purpose of evaluation against other agents.
           required: true
-        - label: We grant pkmn.ai permission to run our model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
+        - label: We grant **pkmn.ai** permission to run our model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
           required: true
