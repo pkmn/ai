@@ -1,12 +1,12 @@
 name: Arena Registration
-description: Request inclusion of a competitive Pokémon AI project in _Olympus Mons_, the pkmn.ai arena.
+description: Request inclusion of a competitive Pokémon AI project in Olympus Mons, the pkmn.ai arena.
 title: "[Arena] "
 labels: ["registration"]
 body:
   - type: markdown
     attributes:
       value: |
-        Submit this issue to request inclusion in the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions.
+        Submit this issue to request inclusion in _Olympus Mons_, the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions.
   - type: input
     id: name
     attributes:
