@@ -1,5 +1,8 @@
 guild: '689316505560809576'
 channel: '689316506265321535'
+competitor: '1568629775122309210'
+staff:
+  - '513513270670262284'
 
 pins:
   - This server is a place to discuss competitive Pokémon development projects and ideas. While affiliated with [pkmn.cc](<https://pkmn.cc>) & [pkmn.ai](<https://pkmn.ai>), any projects from the community that center around the competitive aspect of Pokémon are welcome (_e.g._, AI, calculators, team builders, extensions, engines, UIs, tooling, etc).

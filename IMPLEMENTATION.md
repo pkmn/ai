@@ -2629,8 +2629,8 @@ All GitHub OAuth2 and Discord OAuth2 flows are centralized in `server/auth.ts` i
 ### Discord Integration (`server/discord.ts` inside `pkmn.ai-server.service`)
 - Registered on the single `pkmn.ai-server` Polka app (`127.0.0.1:1234`, `discord.register(app, { db })`), sharing the server's `ArenaDB` instance in-process (and executable standalone via `node --env-file-if-exists=private/.env build/server/discord --once` for one-off syncs):
   - **Guild Member Sync**: Syncs current `pkmn.ai` Discord server member IDs (`689316505560809576`) into SQLite `discord_members` every 60s so `server/auth.ts` validates guild membership with zero network latency.
-  - **Competitor & `#1` Leaderboard Roles**: Grants the `Competitor` role to all approved developers with a linked `discord_id`, and grants each active ladder's `#1` role (`config/discord.yml` role IDs for `RBY`, `ADV`, `SV`, `RAND`, `VGC`) to all linked developers of the settled `#1` project on that ladder.
-  - **Submission & Quarantine DMs**: Sends Discord DMs to the submitting/project developers' linked `discord_id`s (and alerts staff) when a submission fails its smoke test (`DM sent` indicator on `/account/`) or is auto-quarantined.
+  - **Competitor & `#1` Leaderboard Roles**: Grants the `Competitor` role (`competitor` in `config/discord.yml`) to all approved developers with a linked `discord_id`, and grants each active ladder's `#1` role (`discord_role` in `config/ladders.yml` for `RBY`, `ADV`, `SV`, `RAND`, `VGC`) to all linked developers of the settled `#1` project on that ladder (alongside legacy `vgc.bot` / `pkmn.bot` leader roles in `config/discord.yml`).
+  - **Submission, Quarantine & Watchdog DMs**: Sends Discord DMs directly to the project developers' linked `discord_id`s when a submission fails its smoke test (`DM sent` indicator on `/account/`) or is quarantined, and alerts `staff` (`config/discord.yml`) on auto-quarantine or 15-minute Arena heartbeat timeouts.
 
 ### Version Submission, Packaging & VGC 20-Team Validation
 Approved developers submit new ladder versions via `POST /api/submissions` on `/account/`. Competitors host their own artifacts so `pkmn.ai` never receives 500 MB uploads.
@@ -2796,7 +2796,9 @@ CREATE TABLE ladders (
   format_id TEXT NOT NULL,                      -- @pkmn/sim format ID, e.g. 'gen1ou', 'gen9ou', 'gen9randombattle', 'gen9championsvgc2026regmc'
   team_mode TEXT NOT NULL,                      -- 'harvested' | 'random' | 'competitor_pool'
   min_bots INTEGER NOT NULL DEFAULT 2,          -- minimum active projects before matchmaking begins (2 default, 3 for VGC)
-  status TEXT NOT NULL DEFAULT 'active',        -- 'active' | 'settling' | 'archived'
+  team_count INTEGER,                           -- required team pool size on competitor_pool ladders (20 for VGC)
+  discord_role TEXT,                            -- Discord role ID for the settled #1 project on this ladder
+  status TEXT NOT NULL DEFAULT 'active',        -- 'upcoming' | 'active' | 'settling' | 'archived'
   created_at INTEGER NOT NULL,
   archived_at INTEGER
 );

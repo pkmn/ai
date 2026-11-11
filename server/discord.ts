@@ -8,14 +8,22 @@ import * as path from 'path';
 import type polka from 'polka';
 import * as yaml from 'yaml';
 
-import {ArenaDB} from '../db';
+import {
+  type ApplySubmissionStatusResult,
+  ArenaDB,
+  type PendingVersionDmRow,
+} from '../db';
 import {root, slugify, toID} from '../static/util';
 
+import type {WatchdogAlert} from './arena';
+
 const DISCORD_API = 'https://discord.com/api/v10';
+const DISCORD_MAX_MESSAGE_LEN = 2000;
 const MAX_INTERACTION_BYTES = 64 * 1024;
 const SITES = ['vgc.bot', 'pkmn.bot'];
 const CYCLE_MS = 60_000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const inFlightVersionDms = new Set<number>();
 
 export const COMMANDS = [
   {
@@ -34,9 +42,11 @@ export const COMMANDS = [
   },
 ];
 
-interface Config {
+export interface Config {
   guild: string;
   channel?: string;
+  competitor?: string;
+  staff?: string[];
   pins?: string[];
   ladders: {[ladder: string]: string};
   bots?: {[bot: string]: string};
@@ -207,7 +217,10 @@ async function discordRequest(token: string, endpoint: string, init?: RequestIni
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     const method = init?.method ?? 'GET';
-    throw new Error(`Discord API ${method} ${endpoint} failed (${res.status}): ${text}`);
+    throw Object.assign(
+      new Error(`Discord API ${method} ${endpoint} failed (${res.status}): ${text}`),
+      {status: res.status}
+    );
   }
   if (res.status === 204) return undefined;
   return res.json();
@@ -307,6 +320,384 @@ export async function syncRoles(
       console.error(`[${leader.ladder}] Error syncing role:`, err);
     }
   }
+}
+
+export async function syncArenaRoles(
+  db: ArenaDB,
+  token: string,
+  config: Config,
+  state: Map<string, string | undefined>,
+  members?: GuildMember[]
+): Promise<GuildMember[] | undefined> {
+  const assignments: Array<{
+    stateKey: string;
+    label: string;
+    roleId: string;
+    targetIds: string[];
+    botName: string | null;
+  }> = [];
+
+  if (config.competitor) {
+    assignments.push({
+      stateKey: 'arena:competitor',
+      label: 'arena:competitor',
+      roleId: config.competitor,
+      targetIds: db.getCompetitorDiscordIds(),
+      botName: null,
+    });
+  }
+
+  for (const target of db.getArenaLadderRoleTargets()) {
+    assignments.push({
+      stateKey: `arena:ladder:${target.discord_role}`,
+      label: `arena:${target.slot}`,
+      roleId: target.discord_role,
+      targetIds: target.discord_ids,
+      botName: target.bot_name,
+    });
+  }
+
+  for (const item of assignments) {
+    const sortedIds = [...new Set(item.targetIds)].sort();
+    const key = JSON.stringify(sortedIds);
+    if (state.has(item.stateKey) && state.get(item.stateKey) === key) continue;
+
+    try {
+      members ??= await fetchGuildMembers(token, config.guild);
+      const memberById = new Map(members.map(m => [m.user.id, m]));
+      const presentIds = new Set(sortedIds.filter(id => memberById.has(id)));
+      const missingIds = sortedIds.filter(id => !memberById.has(id));
+
+      for (const member of members) {
+        if (member.roles.includes(item.roleId) && !presentIds.has(member.user.id)) {
+          await discordRequest(
+            token,
+            `/guilds/${config.guild}/members/${member.user.id}/roles/${item.roleId}`,
+            {method: 'DELETE'}
+          );
+          member.roles = member.roles.filter(r => r !== item.roleId);
+          console.log(`[${item.label}] Removed role ${item.roleId} from ${member.user.username}`);
+        }
+      }
+
+      for (const userId of presentIds) {
+        const target = memberById.get(userId)!;
+        if (!target.roles.includes(item.roleId)) {
+          await discordRequest(
+            token,
+            `/guilds/${config.guild}/members/${target.user.id}/roles/${item.roleId}`,
+            {method: 'PUT'}
+          );
+          target.roles.push(item.roleId);
+          const who = item.botName
+            ? `${target.user.username} (${item.botName})`
+            : target.user.username;
+          console.log(`[${item.label}] Assigned role ${item.roleId} to ${who}`);
+        }
+      }
+
+      if (missingIds.length === 0) {
+        state.set(item.stateKey, key);
+      } else {
+        for (const missingId of missingIds) {
+          console.log(`[${item.label}] ${missingId} is not in the server`);
+        }
+        state.delete(item.stateKey);
+      }
+    } catch (err) {
+      console.error(`[${item.label}] Error syncing role:`, err);
+    }
+  }
+
+  return members;
+}
+
+function appendCodeBlockWithinLimit(header: string, rawLog: string | null | undefined): string {
+  const trimmed = rawLog?.trim();
+  if (!trimmed) return header.slice(0, DISCORD_MAX_MESSAGE_LEN);
+  const safeLog = trimmed.replace(/```/g, "'''");
+  const prefix = '\n```text\n';
+  const suffix = '\n```';
+  const truncNote = '\n… (truncated)';
+  const budget = DISCORD_MAX_MESSAGE_LEN - header.length - prefix.length - suffix.length;
+  if (budget <= 0) return header.slice(0, DISCORD_MAX_MESSAGE_LEN);
+  if (safeLog.length <= budget) {
+    return `${header}${prefix}${safeLog}${suffix}`;
+  }
+  const sliceBudget = Math.max(0, budget - truncNote.length);
+  if (sliceBudget === 0) return header.slice(0, DISCORD_MAX_MESSAGE_LEN);
+  return `${header}${prefix}${safeLog.slice(0, sliceBudget)}${truncNote}${suffix}`;
+}
+
+export function formatSubmissionDm(input: {
+  botName: string;
+  versionStr: string;
+  smokeStatus: 'failed_smoke_test' | 'quarantined';
+  ladderLabels: string[];
+  smokeErrorLog?: string | null;
+}): string {
+  const laddersPart = input.ladderLabels.length
+    ? ` on \`${input.ladderLabels.join(', ')}\``
+    : '';
+  const header = input.smokeStatus === 'quarantined'
+    ? `**[pkmn.ai]** **${input.botName}** (\`${input.versionStr}\`) has been ` +
+      `**quarantined**${laddersPart} and paused from matchmaking. ` +
+      'See <https://pkmn.ai/account/> for details.'
+    : `**[pkmn.ai]** **${input.botName}** (\`${input.versionStr}\`) failed its smoke test` +
+      `${laddersPart}. Failed smoke tests do not trigger the 14-day cooldown — ` +
+      'see <https://pkmn.ai/account/> for full logs.';
+  return appendCodeBlockWithinLimit(header, input.smokeErrorLog);
+}
+
+export function formatStaffQuarantineDm(input: {
+  botName: string;
+  botSlug: string;
+  versionStr: string;
+  ladderLabels: string[];
+  ownersNotified: number;
+  ownersTotal: number;
+  smokeErrorLog?: string | null;
+}): string {
+  const laddersPart = input.ladderLabels.length
+    ? ` on \`${input.ladderLabels.join(', ')}\``
+    : '';
+  const header =
+    `**[pkmn.ai Staff]** **${input.botName}** (\`${input.botSlug}\` \`${input.versionStr}\`) ` +
+    `was **quarantined**${laddersPart} ` +
+    `(owners DM'd: ${input.ownersNotified}/${input.ownersTotal}).`;
+  return appendCodeBlockWithinLimit(header, input.smokeErrorLog);
+}
+
+export function formatWatchdogDm(alert: WatchdogAlert): string {
+  const seenIso = new Date(alert.lastSeenAt * 1000)
+    .toISOString()
+    .slice(0, 19)
+    .replace('T', ' ');
+  const matchNote = alert.lastMatchId ? `, last match \`${alert.lastMatchId}\`` : '';
+  return (
+    '**[pkmn.ai Watchdog]** Arena worker heartbeat timed out ' +
+    `(last seen \`${seenIso} UTC\`${matchNote}). \`/api/live.json\` has been marked stale.`
+  );
+}
+
+export async function sendDirectMessage(
+  token: string,
+  recipientId: string,
+  content: string,
+  state?: Map<string, string | undefined>
+): Promise<'sent' | 'blocked'> {
+  const cacheKey = `dm-channel:${recipientId}`;
+  let channelId = state?.get(cacheKey);
+  if (!channelId) {
+    try {
+      const ch = await discordRequest(token, '/users/@me/channels', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({recipient_id: recipientId}),
+      }) as {id: string};
+      channelId = ch.id;
+      state?.set(cacheKey, channelId);
+    } catch (err) {
+      const status = (err as {status?: number}).status;
+      if (status === 400 || status === 403 || status === 404) {
+        console.warn(`Cannot open Discord DM channel with ${recipientId}:`, err);
+        return 'blocked';
+      }
+      throw err;
+    }
+  }
+
+  try {
+    await discordRequest(token, `/channels/${channelId}/messages`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content, flags: 4}),
+    });
+    return 'sent';
+  } catch (err) {
+    const status = (err as {status?: number}).status;
+    if (status === 403 || status === 404) {
+      state?.delete(cacheKey);
+      console.warn(`Cannot send Discord DM to ${recipientId}:`, err);
+      return 'blocked';
+    }
+    throw err;
+  }
+}
+
+function resolveLadderLabels(db: ArenaDB, laddersJson: string): string[] {
+  try {
+    const ids = JSON.parse(laddersJson) as unknown;
+    if (!Array.isArray(ids)) return [];
+    return ids.map(raw => {
+      const id = String(raw);
+      return db.getLadder(id)?.display_name ?? id;
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function dispatchVersionDm(
+  db: ArenaDB,
+  token: string,
+  config: Config,
+  item: PendingVersionDmRow,
+  state: Map<string, string | undefined>,
+  notifyStaffIfNoOwners: boolean
+): Promise<boolean> {
+  if (inFlightVersionDms.has(item.version_id)) return false;
+  const latest = db.getVersionById(item.version_id);
+  if (!latest || latest.dm_sent === 1) return false;
+
+  inFlightVersionDms.add(item.version_id);
+  try {
+    const ladderLabels = resolveLadderLabels(db, item.ladders_json);
+    const notifiedOwners = new Set<string>();
+    let blockedCount = 0;
+    let errorCount = 0;
+
+    const blockedKey = `dm-blocked:${item.version_id}:${item.owner_discord_ids.join(',')}`;
+    if (item.owner_discord_ids.length > 0 && state.get(blockedKey) !== '1') {
+      const ownerMessage = formatSubmissionDm({
+        botName: item.bot_name,
+        versionStr: item.version_str,
+        smokeStatus: item.smoke_status,
+        ladderLabels,
+        smokeErrorLog: item.smoke_error_log,
+      });
+
+      for (const ownerId of item.owner_discord_ids) {
+        try {
+          const outcome = await sendDirectMessage(token, ownerId, ownerMessage, state);
+          if (outcome === 'sent') {
+            notifiedOwners.add(ownerId);
+          } else {
+            blockedCount++;
+          }
+        } catch (err) {
+          errorCount++;
+          console.error(
+            `Error sending submission DM to ${ownerId} for version ${item.version_id}:`,
+            err
+          );
+        }
+      }
+
+      if (notifiedOwners.size > 0) {
+        db.markVersionDmSent(item.version_id);
+        state.delete(blockedKey);
+      } else if (blockedCount === item.owner_discord_ids.length && errorCount === 0) {
+        state.set(blockedKey, '1');
+      }
+    }
+
+    const staffKey = `dm-staff:${item.version_id}`;
+    if (
+      item.smoke_status === 'quarantined' &&
+      config.staff?.length &&
+      state.get(staffKey) !== '1' &&
+      (notifiedOwners.size > 0 || notifyStaffIfNoOwners)
+    ) {
+      const staffMessage = formatStaffQuarantineDm({
+        botName: item.bot_name,
+        botSlug: item.bot_slug,
+        versionStr: item.version_str,
+        ladderLabels,
+        ownersNotified: notifiedOwners.size,
+        ownersTotal: item.owner_discord_ids.length,
+        smokeErrorLog: item.smoke_error_log,
+      });
+      let staffError = false;
+      for (const staffId of config.staff) {
+        if (notifiedOwners.has(staffId)) continue;
+        try {
+          await sendDirectMessage(token, staffId, staffMessage, state);
+        } catch (err) {
+          staffError = true;
+          console.error(`Error sending quarantine staff DM to ${staffId}:`, err);
+        }
+      }
+      if (!staffError) {
+        state.set(staffKey, '1');
+      }
+    }
+
+    return notifiedOwners.size > 0;
+  } finally {
+    inFlightVersionDms.delete(item.version_id);
+  }
+}
+
+export async function notifySubmissionStatus(
+  db: ArenaDB,
+  token: string,
+  config: Config,
+  result: ApplySubmissionStatusResult,
+  state = new Map<string, string | undefined>()
+): Promise<boolean> {
+  const status = result.version.smoke_status;
+  if (status !== 'failed_smoke_test' && status !== 'quarantined') return false;
+  if (result.version.dm_sent === 1) return false;
+
+  const ownerDiscordIds = db.getVersionOwnerDiscordIds(
+    result.bot.id,
+    result.version.submitted_by_dev_id
+  );
+  return dispatchVersionDm(
+    db,
+    token,
+    config,
+    {
+      version_id: result.version.id,
+      bot_id: result.bot.id,
+      bot_slug: result.bot.slug,
+      bot_name: result.bot.name,
+      version_str: result.version.version_str,
+      smoke_status: status,
+      smoke_error_log: result.version.smoke_error_log,
+      ladders_json: result.version.ladders_json,
+      created_at: result.version.created_at,
+      owner_discord_ids: ownerDiscordIds,
+    },
+    state,
+    true
+  );
+}
+
+export async function syncSubmissionDms(
+  db: ArenaDB,
+  token: string,
+  config: Config,
+  state = new Map<string, string | undefined>()
+): Promise<number> {
+  let deliveredVersions = 0;
+  for (const row of db.getPendingVersionDms()) {
+    if (row.owner_discord_ids.length === 0) continue;
+    const sent = await dispatchVersionDm(db, token, config, row, state, false);
+    if (sent) deliveredVersions++;
+  }
+  return deliveredVersions;
+}
+
+export async function notifyWatchdogAlert(
+  token: string,
+  config: Config,
+  alert: WatchdogAlert,
+  state = new Map<string, string | undefined>()
+): Promise<number> {
+  if (!config.staff?.length) return 0;
+  const content = formatWatchdogDm(alert);
+  let sent = 0;
+  for (const staffId of new Set(config.staff)) {
+    try {
+      const outcome = await sendDirectMessage(token, staffId, content, state);
+      if (outcome === 'sent') sent++;
+    } catch (err) {
+      console.error(`Error sending watchdog alert DM to ${staffId}:`, err);
+    }
+  }
+  return sent;
 }
 
 function displayName(user: DiscordUser, members?: GuildMember[]): string {
@@ -947,16 +1338,27 @@ export interface Options {
   vgcToken?: string;
   verifyKey?: string;
   cycleMs?: number;
+  config?: Config;
+  configFile?: string;
+}
+
+export interface DiscordHandle {
+  stop: () => void;
+  notifySubmissionStatus: (result: ApplySubmissionStatusResult) => Promise<boolean>;
+  notifyWatchdogTimeout: (alert: WatchdogAlert) => Promise<number>;
 }
 
 export async function syncOnce(
   db: ArenaDB,
   token: string,
-  vgcToken: string,
+  vgcToken = '',
   state = new Map<string, string | undefined>(),
-  onVerifyKey?: (key: string) => void
+  onVerifyKey?: (key: string) => void,
+  configOrFile?: Config | string
 ) {
-  const config = loadConfig();
+  const config = typeof configOrFile === 'object'
+    ? configOrFile
+    : loadConfig(configOrFile);
 
   try {
     const app = await syncCommands(token, config.guild, state);
@@ -973,10 +1375,24 @@ export async function syncOnce(
     console.error('Error fetching guild members:', err);
   }
 
+  if (vgcToken) {
+    try {
+      await syncRoles(token, vgcToken, config, state, members);
+    } catch (err) {
+      console.error('Error syncing partner roles:', err);
+    }
+  }
+
   try {
-    await syncRoles(token, vgcToken, config, state, members);
+    members = await syncArenaRoles(db, token, config, state, members);
   } catch (err) {
-    console.error('Error syncing roles:', err);
+    console.error('Error syncing Arena roles:', err);
+  }
+
+  try {
+    await syncSubmissionDms(db, token, config, state);
+  } catch (err) {
+    console.error('Error syncing submission DMs:', err);
   }
 
   if (config.channel) {
@@ -1007,10 +1423,11 @@ export async function syncOnce(
   }
 }
 
-export function register(app: polka.Polka, options: Options): {stop: () => void} {
+export function register(app: polka.Polka, options: Options): DiscordHandle {
   const token = options.token ?? process.env.DISCORD_BOT_TOKEN;
-  const vgcToken = options.vgcToken ?? process.env.VGC_BOT_TOKEN;
+  const vgcToken = options.vgcToken ?? process.env.VGC_BOT_TOKEN ?? '';
   const cycleMs = options.cycleMs ?? CYCLE_MS;
+  const resolveConfig = (): Config => options.config ?? loadConfig(options.configFile);
   const state = new Map<string, string | undefined>();
   let verifyKey = options.verifyKey;
   let glossary = loadGlossary();
@@ -1019,21 +1436,35 @@ export function register(app: polka.Polka, options: Options): {stop: () => void}
   let ready = Promise.resolve();
 
   const scheduleNext = () => {
-    if (stopped || !token || !vgcToken) return;
+    if (stopped || !token) return;
     timer = setTimeout(() => {
       if (stopped) return;
       glossary = loadGlossary();
-      ready = syncOnce(options.db, token, vgcToken, state, k => {
-        verifyKey = k;
-      }).finally(scheduleNext);
+      ready = syncOnce(
+        options.db,
+        token,
+        vgcToken,
+        state,
+        k => {
+          verifyKey = k;
+        },
+        options.config ?? options.configFile
+      ).finally(scheduleNext);
     }, cycleMs);
     timer.unref();
   };
 
-  if (token && vgcToken) {
-    ready = syncOnce(options.db, token, vgcToken, state, k => {
-      verifyKey = k;
-    }).finally(scheduleNext);
+  if (token) {
+    ready = syncOnce(
+      options.db,
+      token,
+      vgcToken,
+      state,
+      k => {
+        verifyKey = k;
+      },
+      options.config ?? options.configFile
+    ).finally(scheduleNext);
   }
 
   app.post('/discord/interactions', (req, res) => {
@@ -1075,17 +1506,26 @@ export function register(app: polka.Polka, options: Options): {stop: () => void}
       stopped = true;
       if (timer) clearTimeout(timer);
     },
+    notifySubmissionStatus: async result => {
+      if (stopped || !token) return false;
+      return notifySubmissionStatus(options.db, token, resolveConfig(), result, state);
+    },
+    notifyWatchdogTimeout: async alert => {
+      if (stopped || !token) return 0;
+      return notifyWatchdogAlert(token, resolveConfig(), alert, state);
+    },
   };
 }
 
 if (require.main === module) {
   const token = process.env.DISCORD_BOT_TOKEN;
-  const vgcToken = process.env.VGC_BOT_TOKEN;
-  if (!token || !vgcToken) {
-    console.error(`Missing ${token ? 'VGC_BOT_TOKEN' : 'DISCORD_BOT_TOKEN'} environment variable`);
+  const vgcToken = process.env.VGC_BOT_TOKEN ?? '';
+  if (!token) {
+    console.error('Missing DISCORD_BOT_TOKEN environment variable');
     process.exit(1);
   }
   const db = new ArenaDB();
+  db.syncLadders();
   syncOnce(db, token, vgcToken)
     .catch(err => {
       console.error(err);

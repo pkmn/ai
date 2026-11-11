@@ -38,6 +38,7 @@ export interface LadderConfig {
   team_mode: TeamMode;
   min_bots?: number;
   team_count?: number;
+  discord_role?: string;
   status?: LadderStatus;
   pool_dirs?: string[];
 }
@@ -50,6 +51,7 @@ export interface LadderRow {
   team_mode: TeamMode;
   min_bots: number;
   team_count: number | null;
+  discord_role: string | null;
   status: LadderStatus;
   created_at: number;
   archived_at: number | null;
@@ -64,6 +66,7 @@ export interface RotateLadderInput {
   newTeamMode?: TeamMode;
   newMinBots?: number;
   newTeamCount?: number | null;
+  newDiscordRole?: string | null;
   now?: number;
 }
 
@@ -107,6 +110,12 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     } else if (entry.team_count !== undefined) {
       throw new Error(`team_count is only valid on competitor_pool ladders ("${id}")`);
     }
+    if (
+      entry.discord_role !== undefined &&
+      (typeof entry.discord_role !== 'string' || !/^\d+$/.test(entry.discord_role.trim()))
+    ) {
+      throw new Error(`Invalid discord_role "${String(entry.discord_role)}" for "${id}"`);
+    }
     if (seenIds.has(id)) {
       throw new Error(`Duplicate ladder id "${id}" in ladders.yml`);
     }
@@ -149,9 +158,9 @@ export function syncLaddersFromYaml(
   const upsert = db.prepare(`
     INSERT INTO ladders (
       id, slot, display_name, format_id, team_mode, min_bots,
-      team_count, status, created_at, archived_at
+      team_count, discord_role, status, created_at, archived_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       slot = excluded.slot,
       display_name = excluded.display_name,
@@ -159,6 +168,7 @@ export function syncLaddersFromYaml(
       team_mode = excluded.team_mode,
       min_bots = excluded.min_bots,
       team_count = excluded.team_count,
+      discord_role = excluded.discord_role,
       status = excluded.status,
       archived_at = excluded.archived_at
   `);
@@ -175,6 +185,7 @@ export function syncLaddersFromYaml(
       }
       const minBots = cfg.min_bots ?? (cfg.team_mode === 'competitor_pool' ? 3 : 2);
       const teamCount = cfg.team_count ?? null;
+      const discordRole = cfg.discord_role?.trim() || null;
       const archivedAt = status === 'archived'
         ? (existing?.archived_at ?? now)
         : null;
@@ -186,6 +197,7 @@ export function syncLaddersFromYaml(
         cfg.team_mode,
         minBots,
         teamCount,
+        discordRole,
         status,
         now,
         archivedAt
@@ -334,15 +346,18 @@ export function rotateLadder(
         const teamCount = input.newTeamCount !== undefined
           ? input.newTeamCount
           : (teamMode === 'competitor_pool' ? (oldLadder.team_count ?? 20) : null);
+        const discordRole = input.newDiscordRole !== undefined
+          ? input.newDiscordRole
+          : oldLadder.discord_role;
         const displayName = input.newDisplayName?.trim() || oldLadder.slot.toUpperCase();
         const formatId = input.newFormatId?.trim() || oldLadder.format_id;
 
         db.prepare(`
           INSERT INTO ladders (
             id, slot, display_name, format_id, team_mode,
-            min_bots, team_count, status, created_at, archived_at
+            min_bots, team_count, discord_role, status, created_at, archived_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)
         `).run(
           newId,
           oldLadder.slot,
@@ -351,6 +366,7 @@ export function rotateLadder(
           teamMode,
           minBots,
           teamCount,
+          discordRole,
           now
         );
       }

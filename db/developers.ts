@@ -42,6 +42,18 @@ export function getDevelopersForBot(db: DatabaseSync, botId: number): DeveloperR
   ).all(botId) as unknown as DeveloperRow[];
 }
 
+export function getCompetitorDiscordIds(db: DatabaseSync): string[] {
+  const rows = db.prepare(`
+    SELECT DISTINCT d.discord_id
+    FROM developers d
+    JOIN bots b ON b.id = d.bot_id
+    WHERE b.status = 'qualified'
+      AND d.discord_id IS NOT NULL
+    ORDER BY d.discord_id ASC
+  `).all() as Array<{discord_id: string}>;
+  return rows.map(r => r.discord_id);
+}
+
 export function linkDeveloperGitHubId(
   db: DatabaseSync,
   githubLogin: string,

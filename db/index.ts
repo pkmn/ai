@@ -21,6 +21,7 @@ import {
   type CreateSubmissionInput,
   type FormatType,
   type PendingSubmissionRow,
+  type PendingVersionDmRow,
   SETTLED_MAX_SE,
   SETTLED_MIN_MATCHES,
   type SmokeStatus,
@@ -30,9 +31,12 @@ import {
   computeBotSubmissionStatus,
   createSubmission,
   getPendingSubmissions,
+  getPendingVersionDms,
   getVersionById,
   getVersionBySlugAndStr,
+  getVersionOwnerDiscordIds,
   getVersionsForBot,
+  markVersionDmSent,
   quarantineVersion,
   unquarantineVersion,
 } from './bot-versions';
@@ -58,6 +62,7 @@ import {
 import {
   type DeveloperRow,
   type ResolvedProjectOwner,
+  getCompetitorDiscordIds,
   getDeveloperByDiscordId,
   getDeveloperByGitHub,
   getDevelopersForBot,
@@ -68,6 +73,7 @@ import {
 import {type DiscordMemberRow, isDiscordMember, syncDiscordMembers} from './discord-members';
 import {
   type ActiveEntryView,
+  type ArenaLadderRoleTarget,
   type BotLadderProfileEntry,
   type EntryRole,
   type LadderStandingOverride,
@@ -75,6 +81,7 @@ import {
   type ProjectArenaLadderBadge,
   type ProjectArenaSummary,
   getActiveEntriesForBot,
+  getArenaLadderRoleTargets,
   getBotLadderProfileEntries,
   getBotParticipatedLadders,
   getLeaderboardEntries,
@@ -159,6 +166,7 @@ export {
   type ActiveEntryView,
   type ApplySubmissionStatusInput,
   type ApplySubmissionStatusResult,
+  type ArenaLadderRoleTarget,
   AVATARS_DIR,
   type BotLadderProfileEntry,
   type BotLadderStatsRow,
@@ -185,6 +193,7 @@ export {
   type PairAggregateRow,
   type ParsedArenaProject,
   type PendingSubmissionRow,
+  type PendingVersionDmRow,
   type ProjectArenaLadderBadge,
   type ProjectArenaSummary,
   type RatingSnapshotRow,
@@ -453,6 +462,10 @@ export class ArenaDB {
     return getDevelopersForBot(this.db, botId);
   }
 
+  getCompetitorDiscordIds(): string[] {
+    return getCompetitorDiscordIds(this.db);
+  }
+
   linkDeveloperGitHubId(githubLogin: string, githubId: number, now?: number) {
     linkDeveloperGitHubId(this.db, githubLogin, githubId, now);
   }
@@ -525,6 +538,18 @@ export class ArenaDB {
     return getPendingSubmissions(this.db);
   }
 
+  getVersionOwnerDiscordIds(botId: number, submittedByDevId?: number | null): string[] {
+    return getVersionOwnerDiscordIds(this.db, botId, submittedByDevId ?? null);
+  }
+
+  getPendingVersionDms(): PendingVersionDmRow[] {
+    return getPendingVersionDms(this.db);
+  }
+
+  markVersionDmSent(versionId: number) {
+    markVersionDmSent(this.db, versionId);
+  }
+
   applySubmissionStatus(input: ApplySubmissionStatusInput): ApplySubmissionStatusResult {
     return applySubmissionStatus(this.db, this.txRunner, input);
   }
@@ -573,6 +598,10 @@ export class ArenaDB {
 
   getProjectArenaSummaries(): ProjectArenaSummary[] {
     return getProjectArenaSummaries(this.db);
+  }
+
+  getArenaLadderRoleTargets(): ArenaLadderRoleTarget[] {
+    return getArenaLadderRoleTargets(this.db);
   }
 
   getPairAggregatesForLadder(ladderId: string): PairAggregateRow[] {

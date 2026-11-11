@@ -102,6 +102,19 @@ export interface ApplySubmissionStatusResult {
   retiredByLadder: Record<string, number>;
 }
 
+export interface PendingVersionDmRow {
+  version_id: number;
+  bot_id: number;
+  bot_slug: string;
+  bot_name: string;
+  version_str: string;
+  smoke_status: 'failed_smoke_test' | 'quarantined';
+  smoke_error_log: string | null;
+  ladders_json: string;
+  created_at: number;
+  owner_discord_ids: string[];
+}
+
 export function getVersionById(db: DatabaseSync, versionId: number): BotVersionRow | undefined {
   return db.prepare('SELECT * FROM bot_versions WHERE id = ?')
     .get(versionId) as unknown as BotVersionRow | undefined;
@@ -563,4 +576,57 @@ export function unquarantineVersion(
 
     return getVersionById(db, ver.id)!;
   });
+}
+
+export function getVersionOwnerDiscordIds(
+  db: DatabaseSync,
+  botId: number,
+  submittedByDevId: number | null = null
+): string[] {
+  const rows = db.prepare(`
+    SELECT discord_id
+    FROM developers
+    WHERE bot_id = ? AND discord_id IS NOT NULL
+    ORDER BY
+      CASE WHEN id = ? THEN 0 ELSE 1 END ASC,
+      github_login ASC
+  `).all(botId, submittedByDevId ?? -1) as Array<{discord_id: string}>;
+
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (!seen.has(row.discord_id)) {
+      seen.add(row.discord_id);
+      unique.push(row.discord_id);
+    }
+  }
+  return unique;
+}
+
+export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
+  const rows = db.prepare(`
+    SELECT bv.*, b.slug AS bot_slug, b.name AS bot_name
+    FROM bot_versions bv
+    JOIN bots b ON b.id = bv.bot_id
+    WHERE bv.smoke_status IN ('failed_smoke_test', 'quarantined')
+      AND bv.dm_sent = 0
+    ORDER BY bv.created_at ASC, bv.id ASC
+  `).all() as unknown as Array<BotVersionRow & {bot_slug: string; bot_name: string}>;
+
+  return rows.map(row => ({
+    version_id: row.id,
+    bot_id: row.bot_id,
+    bot_slug: row.bot_slug,
+    bot_name: row.bot_name,
+    version_str: row.version_str,
+    smoke_status: row.smoke_status as 'failed_smoke_test' | 'quarantined',
+    smoke_error_log: row.smoke_error_log,
+    ladders_json: row.ladders_json,
+    created_at: row.created_at,
+    owner_discord_ids: getVersionOwnerDiscordIds(db, row.bot_id, row.submitted_by_dev_id),
+  }));
+}
+
+export function markVersionDmSent(db: DatabaseSync, versionId: number) {
+  db.prepare('UPDATE bot_versions SET dm_sent = 1 WHERE id = ?').run(versionId);
 }

@@ -143,6 +143,17 @@ export interface LadderStandingOverride {
   is_anchor?: number;
 }
 
+export interface ArenaLadderRoleTarget {
+  ladder_id: string;
+  slot: LadderSlot;
+  display_name: string;
+  discord_role: string;
+  bot_id: number | null;
+  bot_slug: string | null;
+  bot_name: string | null;
+  discord_ids: string[];
+}
+
 interface EditableLadderEntry {
   versionId: number;
   botId: number;
@@ -903,4 +914,114 @@ export function setLadderAnchor(
     const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
     recomputeLadderRatings(db, ladderId, now, null, dayUtc);
   });
+}
+
+export function getArenaLadderRoleTargets(db: DatabaseSync): ArenaLadderRoleTarget[] {
+  const ladders = db.prepare(`
+    SELECT id, slot, display_name, discord_role, status
+    FROM ladders
+    WHERE discord_role IS NOT NULL
+    ORDER BY
+      CASE status
+        WHEN 'active' THEN 0
+        WHEN 'settling' THEN 1
+        WHEN 'upcoming' THEN 2
+        ELSE 3
+      END ASC,
+      CASE slot
+        WHEN 'rby' THEN 0
+        WHEN 'adv' THEN 1
+        WHEN 'sv' THEN 2
+        WHEN 'rand' THEN 3
+        WHEN 'vgc' THEN 4
+        ELSE 5
+      END ASC,
+      created_at DESC,
+      id ASC
+  `).all() as Array<{
+    id: string;
+    slot: LadderSlot;
+    display_name: string;
+    discord_role: string;
+    status: string;
+  }>;
+
+  const selectLeader = db.prepare(`
+    SELECT b.id AS bot_id, b.slug AS bot_slug, b.name AS bot_name
+    FROM ladder_entries le
+    JOIN bot_versions bv ON bv.id = le.version_id
+    JOIN bots b ON b.id = bv.bot_id
+    WHERE le.ladder_id = ?
+      AND le.rank_current = 1
+      AND le.settled_at IS NOT NULL
+      AND le.role IN ('champion', 'challenger')
+      AND bv.smoke_status = 'passed'
+      AND b.status != 'disabled'
+    ORDER BY le.rating_lcb DESC, le.rating_elo DESC, le.version_id ASC
+    LIMIT 1
+  `);
+  const selectOwnerDiscordIds = db.prepare(`
+    SELECT DISTINCT discord_id
+    FROM developers
+    WHERE bot_id = ? AND discord_id IS NOT NULL
+    ORDER BY discord_id ASC
+  `);
+
+  const seenRoles = new Set<string>();
+  const targets: ArenaLadderRoleTarget[] = [];
+
+  for (const l of ladders) {
+    if (seenRoles.has(l.discord_role)) continue;
+    seenRoles.add(l.discord_role);
+
+    if (l.status !== 'active') {
+      targets.push({
+        ladder_id: l.id,
+        slot: l.slot,
+        display_name: l.display_name,
+        discord_role: l.discord_role,
+        bot_id: null,
+        bot_slug: null,
+        bot_name: null,
+        discord_ids: [],
+      });
+      continue;
+    }
+
+    const leader = selectLeader.get(l.id) as {
+      bot_id: number;
+      bot_slug: string;
+      bot_name: string;
+    } | undefined;
+    if (!leader) {
+      targets.push({
+        ladder_id: l.id,
+        slot: l.slot,
+        display_name: l.display_name,
+        discord_role: l.discord_role,
+        bot_id: null,
+        bot_slug: null,
+        bot_name: null,
+        discord_ids: [],
+      });
+      continue;
+    }
+
+    const discordIds = (
+      selectOwnerDiscordIds.all(leader.bot_id) as Array<{discord_id: string}>
+    ).map(r => r.discord_id);
+    targets.push({
+      ladder_id: l.id,
+      slot: l.slot,
+      display_name: l.display_name,
+      discord_role: l.discord_role,
+      bot_id: leader.bot_id,
+      bot_slug: leader.bot_slug,
+      bot_name: leader.bot_name,
+      discord_ids: discordIds,
+    });
+  }
+
+  targets.sort((a, b) => (SLOT_ORDER[a.slot] ?? 99) - (SLOT_ORDER[b.slot] ?? 99));
+  return targets;
 }

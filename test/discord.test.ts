@@ -9,22 +9,31 @@ import polka from 'polka';
 import {ArenaDB} from '../db';
 import {
   COMMANDS,
+  type Config,
   type DiscordMessage,
+  type GuildMember,
   type Leader,
   autocompleteGlossary,
   findMember,
   formatGlossaryReply,
   formatMessage,
+  formatStaffQuarantineDm,
+  formatSubmissionDm,
+  formatWatchdogDm,
   handleInteraction,
   loadGlossary,
   lookupGlossary,
+  notifySubmissionStatus,
+  notifyWatchdogAlert,
   ownerOf,
   register,
+  syncArenaRoles,
   syncCommands,
   syncGuildMembers,
   syncMessages,
   syncPins,
   syncRoles,
+  syncSubmissionDms,
 } from '../server/discord';
 
 const CONFIG = {
@@ -790,5 +799,457 @@ describe('glossary slash commands', () => {
       await new Promise<void>(resolve => server.close(() => resolve()));
       db.close();
     }
+  });
+});
+
+describe('Arena roles & submission/quarantine/watchdog DMs', () => {
+  const ARENA_CONFIG: Config = {
+    guild: '689316505560809576',
+    competitor: '1568629775122309210',
+    staff: ['513513270670262284'],
+    ladders: {},
+  };
+
+  const LADDERS_YAML = `
+- id: gen1ou20261109
+  slot: rby
+  display_name: RBY
+  format_id: gen1ou
+  team_mode: harvested
+  min_bots: 2
+  discord_role: '1563716887131459685'
+  status: active
+
+- id: gen9ou20261109
+  slot: sv
+  display_name: SV
+  format_id: gen9ou
+  team_mode: harvested
+  min_bots: 2
+  discord_role: '1563717708720377977'
+  status: upcoming
+`;
+
+  const PROJECTS_YAML = `
+- name: Foul Play
+  authors:
+    - pmariglia
+    - coauthor
+  arena:
+    qualified: true
+    owners:
+      pmariglia: pmariglia.10001
+      coauthor: coauthor.10002
+
+- name: Metamon
+  authors:
+    - jakegrigsby
+  arena:
+    qualified: true
+    owners:
+      jakegrigsby: jakegrigsby.10003
+
+- name: Pending Bot
+  authors:
+    - newcomer
+  arena:
+    qualified: false
+    owners:
+      newcomer: newcomer.10004
+`;
+
+  const SHA = 'a'.repeat(64);
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test('syncArenaRoles assigns Competitor and multi-owner settled #1 ladder roles', async () => {
+    const db = new ArenaDB(':memory:');
+    try {
+      db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
+      db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
+
+      db.linkDeveloperDiscord('pmariglia', '1001', 'pmariglia', 1_760_000_010);
+      db.linkDeveloperDiscord('coauthor', '1002', 'coauthor', 1_760_000_010);
+      db.linkDeveloperDiscord('jakegrigsby', '1003', 'jake', 1_760_000_010);
+      db.linkDeveloperDiscord('newcomer', '1004', 'newcomer', 1_760_000_010);
+
+      const fpBot = db.getBotBySlug('foul-play')!;
+      const mmBot = db.getBotBySlug('metamon')!;
+
+      const v1 = db.createSubmission({
+        botId: fpBot.id,
+        submittedByDevId: null,
+        versionStr: '1.0.0',
+        formatType: 'bundle',
+        downloadUrl: 'https://example.com/fp.tar.zst',
+        sha256: SHA,
+        authTokenEnc: null,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_100,
+      });
+      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_760_000_110});
+
+      const v2 = db.createSubmission({
+        botId: mmBot.id,
+        submittedByDevId: null,
+        versionStr: '1.0.0',
+        formatType: 'bundle',
+        downloadUrl: 'https://example.com/mm.tar.zst',
+        sha256: SHA,
+        authTokenEnc: null,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_120,
+      });
+      db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: 1_760_000_130});
+      db.setLadderAnchor('gen1ou20261109', 'metamon', '1.0.0', 1_760_000_140);
+
+      const playMatch = (idx: number, g1: 'W' | 'L', g2: 'W' | 'L' | 'T') => {
+        const cat = `${g1}${g2}` as const;
+        db.recordCompletedMatch({
+          match: {
+            id: `gen1ou-${String(idx).padStart(6, '0')}`,
+            ladder_id: 'gen1ou20261109',
+            v1_id: v1.id,
+            v2_id: v2.id,
+            seed: `1,2,3,${idx}`,
+            team1_label: null,
+            team2_label: null,
+            g1_outcome: g1,
+            g2_outcome: g2,
+            match_category: cat,
+            g1_turns: 30,
+            g2_turns: 28,
+            g1_end_reason: 'win',
+            g2_end_reason: 'win',
+            v1_peak_ram_mb: 512,
+            v2_peak_ram_mb: 512,
+            v1_g1_bank_s: 140,
+            v1_g2_bank_s: 140,
+            v2_g1_bank_s: 120,
+            v2_g2_bank_s: 120,
+            v1_avg_turn_ms: 200,
+            v2_avg_turn_ms: 200,
+            completed_at: 1_760_001_000 + idx * 60,
+          },
+        });
+      };
+
+      // 20 competitive matches -> rank_current === 1 (provisional), settled_at === null (< 25)
+      for (let i = 1; i <= 20; i++) {
+        const g = i % 3 === 0 ? 'L' : 'W';
+        playMatch(i, g, g);
+      }
+      const provisionalTop = db.getLeaderboardEntries('gen1ou20261109')[0];
+      expect(provisionalTop.bot_slug).toBe('foul-play');
+      expect(provisionalTop.rank_current).toBe(1);
+      expect(provisionalTop.settled_at).toBeNull();
+
+      const actions: Array<{method: string; url: string}> = [];
+      globalThis.fetch = ((url: string, init?: RequestInit) => {
+        actions.push({method: init?.method ?? 'GET', url: String(url)});
+        return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
+      }) as unknown as typeof fetch;
+
+      // Initially: stale holder 9999 has Competitor + RBY + SV; 1002 is not in the guild yet
+      const members: GuildMember[] = [
+        {user: {id: '1001', username: 'pmariglia'}, roles: []},
+        {user: {id: '1003', username: 'jake'}, roles: []},
+        {user: {id: '1004', username: 'newcomer'}, roles: []},
+        {
+          user: {id: '9999', username: 'stale'},
+          roles: ['1568629775122309210', '1563716887131459685', '1563717708720377977'],
+        },
+      ];
+      const state = new Map<string, string | undefined>();
+
+      await syncArenaRoles(db, 'bot-token', ARENA_CONFIG, state, members);
+      expect(actions).toEqual([
+        // Competitor: remove from stale (9999), assign to 1001 & 1003 (NOT pending 1004!)
+        {
+          method: 'DELETE',
+          url: expect.stringContaining('/members/9999/roles/1568629775122309210'),
+        },
+        {
+          method: 'PUT',
+          url: expect.stringContaining('/members/1001/roles/1568629775122309210'),
+        },
+        {
+          method: 'PUT',
+          url: expect.stringContaining('/members/1003/roles/1568629775122309210'),
+        },
+        // RBY (active, provisional #1): remove from stale (9999), assign to nobody yet
+        {
+          method: 'DELETE',
+          url: expect.stringContaining('/members/9999/roles/1563716887131459685'),
+        },
+        // SV (upcoming): remove from stale (9999)
+        {
+          method: 'DELETE',
+          url: expect.stringContaining('/members/9999/roles/1563717708720377977'),
+        },
+      ]);
+
+      // Now coauthor '1002' joins the guild, and Foul Play naturally settles at #1
+      members.push({user: {id: '1002', username: 'coauthor'}, roles: []});
+      for (let i = 21; i <= 50; i++) {
+        const g = i % 3 === 0 ? 'L' : 'W';
+        playMatch(i, g, g);
+      }
+      const settledTop = db.getLeaderboardEntries('gen1ou20261109')[0];
+      expect(settledTop.bot_slug).toBe('foul-play');
+      expect(settledTop.rank_current).toBe(1);
+      expect(settledTop.settled_at).not.toBeNull();
+
+      actions.length = 0;
+      await syncArenaRoles(db, 'bot-token', ARENA_CONFIG, state, members);
+      expect(actions).toEqual([
+        // Missing coauthor 1002 now receives Competitor
+        {
+          method: 'PUT',
+          url: expect.stringContaining('/members/1002/roles/1568629775122309210'),
+        },
+        // Both Foul Play co-owners (1001 and 1002) receive settled RBY #1 role
+        {
+          method: 'PUT',
+          url: expect.stringContaining('/members/1001/roles/1563716887131459685'),
+        },
+        {
+          method: 'PUT',
+          url: expect.stringContaining('/members/1002/roles/1563716887131459685'),
+        },
+      ]);
+
+      // Steady-state cycle performs zero API mutations
+      actions.length = 0;
+      await syncArenaRoles(db, 'bot-token', ARENA_CONFIG, state, members);
+      expect(actions).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('formats submission, quarantine, and watchdog DMs safely within 2000 chars', () => {
+    const hugeStderr = `Traceback:\n\`\`\`\n${'RuntimeError: boom\n'.repeat(300)}`;
+    const failDm = formatSubmissionDm({
+      botName: 'Foul Play',
+      versionStr: '1.2.0',
+      smokeStatus: 'failed_smoke_test',
+      ladderLabels: ['RBY', 'SV'],
+      smokeErrorLog: hugeStderr,
+    });
+    expect(failDm.length).toBeLessThanOrEqual(2000);
+    expect(failDm).toContain('failed its smoke test on `RBY, SV`');
+    expect(failDm).toContain('… (truncated)\n```');
+    // Inner triple-backticks must be sanitized so code fence never breaks
+    expect(failDm.match(/```/g)).toHaveLength(2);
+
+    const staffDm = formatStaffQuarantineDm({
+      botName: 'Foul Play',
+      botSlug: 'foul-play',
+      versionStr: '1.2.0',
+      ladderLabels: ['RBY'],
+      ownersNotified: 2,
+      ownersTotal: 2,
+      smokeErrorLog: hugeStderr,
+    });
+    expect(staffDm.length).toBeLessThanOrEqual(2000);
+    expect(staffDm).toContain("owners DM'd: 2/2");
+
+    const watchdogDm = formatWatchdogDm({
+      lastSeenAt: 1_762_807_500,
+      lastMatchId: 'gen1ou-0000000972',
+    });
+    expect(watchdogDm).toContain('gen1ou-0000000972');
+    expect(watchdogDm.length).toBeLessThanOrEqual(2000);
+  });
+
+  test('delivers smoke-failure & quarantine DMs to owners, alerts staff, and marks dm_sent',
+    async () => {
+      const db = new ArenaDB(':memory:');
+      try {
+        db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
+        db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
+        db.linkDeveloperDiscord('pmariglia', '1001', 'pmariglia', 1_760_000_010);
+        db.linkDeveloperDiscord('coauthor', '1002', 'coauthor', 1_760_000_010);
+
+        const fpBot = db.getBotBySlug('foul-play')!;
+        const coauthorDev = db.getDeveloperByGitHub('coauthor')!;
+
+        const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+        const blockedUsers = new Set<string>();
+        globalThis.fetch = ((url: string, init?: RequestInit) => {
+          const u = String(url);
+          const rawBody = typeof init?.body === 'string' ? init.body : '{}';
+          const body = JSON.parse(rawBody) as {
+            recipient_id?: string;
+            content?: string;
+          };
+          if (u.endsWith('/users/@me/channels')) {
+            const recipient = body.recipient_id!;
+            return Promise.resolve({
+              status: 200,
+              ok: true,
+              json: () => Promise.resolve({id: `dm-${recipient}`}),
+            });
+          }
+          if (u.includes('/channels/dm-') && u.endsWith('/messages')) {
+            const channelId = u.split('/channels/')[1].split('/')[0];
+            const userId = channelId.slice(3);
+            if (blockedUsers.has(userId)) {
+              return Promise.resolve({
+                status: 403,
+                ok: false,
+                text: () => Promise.resolve('{"code":50007}'),
+              });
+            }
+            sentMessages.push({recipientOrChannel: channelId, content: body.content!});
+            return Promise.resolve({
+              status: 200,
+              ok: true,
+              json: () => Promise.resolve({id: 'msg-1'}),
+            });
+          }
+          return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
+        }) as unknown as typeof fetch;
+
+        const state = new Map<string, string | undefined>();
+
+        // 1. Smoke-test failure: DMs both owners (submitting dev first), does NOT spam staff
+        const vFail = db.createSubmission({
+          botId: fpBot.id,
+          submittedByDevId: coauthorDev.id,
+          versionStr: '1.0.0-bad',
+          formatType: 'bundle',
+          downloadUrl: 'https://example.com/bad.tar.zst',
+          sha256: SHA,
+          authTokenEnc: null,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_100,
+        });
+        const failRes = db.applySubmissionStatus({
+          versionId: vFail.id,
+          smokeStatus: 'failed_smoke_test',
+          smokeErrorLog: 'SyntaxError: invalid choice output',
+          now: 1_760_000_105,
+        });
+
+        const sentFail = await notifySubmissionStatus(
+          db, 'bot-token', ARENA_CONFIG, failRes, state
+        );
+        expect(sentFail).toBe(true);
+        expect(db.getVersionById(vFail.id)?.dm_sent).toBe(1);
+        expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-1002', 'dm-1001']);
+        expect(sentMessages[0].content).toContain('SyntaxError: invalid choice output');
+
+        // Idempotent across subsequent syncSubmissionDms cycles
+        sentMessages.length = 0;
+        expect(await syncSubmissionDms(db, 'bot-token', ARENA_CONFIG, state)).toBe(0);
+        expect(sentMessages).toEqual([]);
+
+        // 2. CLI-style quarantine (`dm_sent = 0` in DB): syncSubmissionDms DMs owners + staff
+        const vGood = db.createSubmission({
+          botId: fpBot.id,
+          submittedByDevId: coauthorDev.id,
+          versionStr: '1.0.1',
+          formatType: 'bundle',
+          downloadUrl: 'https://example.com/good.tar.zst',
+          sha256: SHA,
+          authTokenEnc: null,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_200,
+        });
+        db.applySubmissionStatus({versionId: vGood.id, smokeStatus: 'passed', now: 1_760_000_210});
+        db.quarantineVersion('foul-play', '1.0.1', 'Timed out in 5 consecutive matches');
+        expect(db.getVersionById(vGood.id)?.dm_sent).toBe(0);
+
+        expect(await syncSubmissionDms(db, 'bot-token', ARENA_CONFIG, state)).toBe(1);
+        expect(db.getVersionById(vGood.id)?.dm_sent).toBe(1);
+        expect(sentMessages.map(m => m.recipientOrChannel)).toEqual([
+          'dm-1002',
+          'dm-1001',
+          'dm-513513270670262284',
+        ]);
+        expect(sentMessages[2].content).toContain("owners DM'd: 2/2");
+
+        // 3. Blocked DMs (403 / 50007): leaves dm_sent = 0 and caches block so sync doesn't spam
+        const mmBot = db.getBotBySlug('metamon')!;
+        db.linkDeveloperDiscord('jakegrigsby', '1003', 'jake', 1_760_000_010);
+        blockedUsers.add('1003');
+        const warnSpy = console.warn;
+        console.warn = () => undefined;
+        try {
+          const vBlocked = db.createSubmission({
+            botId: mmBot.id,
+            submittedByDevId: null,
+            versionStr: '0.9.0',
+            formatType: 'bundle',
+            downloadUrl: 'https://example.com/mm.tar.zst',
+            sha256: SHA,
+            authTokenEnc: null,
+            ladderIds: ['gen1ou20261109'],
+            now: 1_760_000_300,
+          });
+          const blockedRes = db.applySubmissionStatus({
+            versionId: vBlocked.id,
+            smokeStatus: 'quarantined',
+            smokeErrorLog: 'OOM on turn 3',
+            now: 1_760_000_310,
+          });
+          sentMessages.length = 0;
+          const sentBlocked = await notifySubmissionStatus(
+            db, 'bot-token', ARENA_CONFIG, blockedRes, state
+          );
+          expect(sentBlocked).toBe(false);
+          expect(db.getVersionById(vBlocked.id)?.dm_sent).toBe(0);
+          // Staff STILL gets alerted on quarantine even when owner has DMs closed!
+          expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-513513270670262284']);
+          expect(sentMessages[0].content).toContain("owners DM'd: 0/1");
+
+          // Subsequent syncSubmissionDms skips blocked recipient without hitting Discord again
+          let fetchCount = 0;
+          globalThis.fetch = (() => {
+            fetchCount++;
+            return Promise.resolve({status: 500, ok: false, text: () => Promise.resolve('')});
+          }) as unknown as typeof fetch;
+          expect(await syncSubmissionDms(db, 'bot-token', ARENA_CONFIG, state)).toBe(0);
+          expect(fetchCount).toBe(0);
+        } finally {
+          console.warn = warnSpy;
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  test('notifyWatchdogAlert sends stalled-worker DM to configured staff', async () => {
+    const sent: Array<{url: string; body: string}> = [];
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const u = String(url);
+      const rawBody = typeof init?.body === 'string' ? init.body : '';
+      sent.push({url: u, body: rawBody});
+      if (u.endsWith('/users/@me/channels')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'dm-staff'}),
+        });
+      }
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve({id: 'msg-watchdog'}),
+      });
+    }) as unknown as typeof fetch;
+
+    const count = await notifyWatchdogAlert('bot-token', ARENA_CONFIG, {
+      lastSeenAt: 1_762_807_500,
+      lastMatchId: 'gen1ou-0000000972',
+    });
+    expect(count).toBe(1);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].body).toContain('513513270670262284');
+    expect(sent[1].body).toContain('gen1ou-0000000972');
   });
 });

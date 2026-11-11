@@ -160,6 +160,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
         format_id: l.format_id,
         team_mode: l.team_mode,
         min_bots: l.min_bots,
+        discord_role: l.discord_role,
         status: l.status,
       }))).toEqual([
         {
@@ -169,6 +170,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen1ou',
           team_mode: 'harvested',
           min_bots: 2,
+          discord_role: '1563716887131459685',
           status: 'upcoming',
         },
         {
@@ -178,6 +180,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen3ou',
           team_mode: 'harvested',
           min_bots: 2,
+          discord_role: '1563717163481825472',
           status: 'upcoming',
         },
         {
@@ -187,6 +190,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen9ou',
           team_mode: 'harvested',
           min_bots: 2,
+          discord_role: '1563717708720377977',
           status: 'upcoming',
         },
         {
@@ -196,6 +200,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen9randombattle',
           team_mode: 'random',
           min_bots: 2,
+          discord_role: '1563718027994992752',
           status: 'upcoming',
         },
         {
@@ -205,6 +210,7 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
           format_id: 'gen9championsvgc2026regmc',
           team_mode: 'competitor_pool',
           min_bots: 3,
+          discord_role: '1564121375558340768',
           status: 'upcoming',
         },
       ]);

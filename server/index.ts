@@ -66,16 +66,22 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
     }),
   });
   wikiInstance.auth.register(app);
+  const discordHandle = discord.register(app, {db});
   account.register(app, {db, auth: wikiInstance.auth});
   arena.register(app, {
     db,
     auth: wikiInstance.auth,
+    onSubmissionStatus: async result => {
+      await discordHandle.notifySubmissionStatus(result);
+    },
+    onWatchdogTimeout: async alert => {
+      await discordHandle.notifyWatchdogTimeout(alert);
+    },
     onUpdate: () => {
       safeRender();
     },
   });
 
   wiki.register(app, {auth: wikiInstance.auth, db});
-  discord.register(app, {db});
 });
 
