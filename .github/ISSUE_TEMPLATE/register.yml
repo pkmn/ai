@@ -1,17 +1,20 @@
 name: Arena Registration
 description: Request inclusion of a competitive Pokémon AI project in Olympus Mons, the pkmn.ai arena.
-title: "[Arena] "
+title: "[Arena] <PROJECT_NAME>"
+assignees: scheibo
 labels: ["registration"]
 body:
   - type: markdown
     attributes:
       value: |
         Submit this issue to request inclusion in _Olympus Mons_, the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions.
+
+        ## Arena Details
   - type: input
     id: name
     attributes:
       label: Project Name
-      description: Distinct project name (prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare English Pokémon species names, or known players' names). Approval subject to staff discretion. 
+      description: Distinct project name (prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare English Pokémon species names, or known players' names). Approval subject to staff discretion.
       placeholder: "Foul Play"
     validations:
       required: true
@@ -30,6 +33,30 @@ body:
     attributes:
       label: Qualifying Criteria
       description: Evidence justifying participation in the hosted environment (e.g., Pokémon Showdown, vgc.bot, or pkmn.bot rankings, published papers, or prior results).
+    validations:
+      required: true
+  - type: checkboxes
+    id: agreements
+    attributes:
+      label: Required Agreements
+      options:
+        - label: We agree to adhere to the latest community guidance on [Responsible Releases](https://pkmn.ai/release).
+          required: true
+        - label: We grant **pkmn.ai** permission to run our model in its Arena for the purpose of evaluation against other agents.
+          required: true
+        - label: We grant **pkmn.ai** permission to run our model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
+          required: true
+  - type: markdown
+    attributes:
+      value: |
+        <br/><br/>
+        ## Project Details
+  - type: input
+    id: date
+    attributes:
+      label: Date of Initial Commit
+      description: Date of first commit to the project.
+      placeholder: April 20, 2019
     validations:
       required: true
   - type: input
@@ -58,23 +85,12 @@ body:
     attributes:
       label: SPDX License (Optional)
       placeholder: "MIT"
-  - type: input
+  - type: textarea
     id: site
     attributes:
-      label: Website / Forum Thread / Paper Citation (Optional)
+      label: Website(s) / Forum Thread / Paper Citation(s) (Optional)
   - type: textarea
     id: logo
     attributes:
-      label: Project Logo (Optional PNG)
+      label: Project Logo (Optional)
       description: Optional PNG logo to display on your project's statistics page (`/projects/<slug>/`). Drag and drop here if providing one.
-  - type: checkboxes
-    id: agreements
-    attributes:
-      label: Required Agreements
-      options:
-        - label: We agree to adhere to the latest community guidance on [Responsible Releases](https://pkmn.ai/release).
-          required: true
-        - label: We grant **pkmn.ai** permission to run our model in its Arena for the purpose of evaluation against other agents.
-          required: true
-        - label: We grant **pkmn.ai** permission to run our model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
-          required: true
