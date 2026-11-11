@@ -32,6 +32,7 @@
     "compile": "tsc -p .",
     "build": "npm run compile && node build/static/build",
     "shots": "npm run compile && node build/tools/shots",
+    "pkmn": "node --env-file-if-exists=private/.env build/tools/pkmn",
     "start": "node --env-file-if-exists=private/.env build/server",
     "test": "npm run build && npm run lint",
     "test:integration": "npm run test && vitest test",

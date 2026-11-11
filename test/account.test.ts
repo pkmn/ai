@@ -6,15 +6,10 @@ import * as path from 'path';
 
 import polka from 'polka';
 
+import {ArenaDB, COOLDOWN_S} from '../db';
 import * as account from '../server/account';
+import {decryptSecret, deduceFormatType, encryptSecret} from '../server/account';
 import {Auth, type AuthConfig, SESSION_COOKIE, signToken} from '../server/auth';
-import {
-  ArenaDB,
-  COOLDOWN_S,
-  decryptSecret,
-  deduceFormatType,
-  encryptSecret,
-} from '../server/db';
 import {clearReferencePoolCache, splitSubmittedTeams} from '../server/teams';
 import * as wiki from '../server/wiki';
 import {getDex} from '../teams';

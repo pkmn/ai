@@ -3,10 +3,9 @@ import * as http from 'http';
 
 import type polka from 'polka';
 
+import type {ArenaDB} from '../db';
 import {header, renderer} from '../static/build';
 import {escapeHtml} from '../static/util';
-
-import type {ArenaDB} from './db';
 
 export const SESSION_COOKIE = 'pkmn_session';
 export const STATE_COOKIE = 'pkmn_oauth_state';

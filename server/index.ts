@@ -2,12 +2,13 @@ require('source-map-support').install();
 
 import {serve} from 'site';
 
+import {ArenaDB} from '../db';
 import {header, renderer, style} from '../static/build';
 import {ROOT, root} from '../static/util';
 
 import * as account from './account';
+import * as arena from './arena';
 import {Auth} from './auth';
-import {ArenaDB} from './db';
 import * as discord from './discord';
 import * as wiki from './wiki';
 
@@ -54,6 +55,7 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
   });
   wikiInstance.auth.register(app);
   account.register(app, {db, auth: wikiInstance.auth});
+  arena.register(app, {db, auth: wikiInstance.auth});
 
   // TODO: this should be partly pre-rendered
   app.get('/battles', (_, res) => {

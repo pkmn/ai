@@ -2035,16 +2035,39 @@ export function computeDavidsonRatings(
     pairY[k] = 1.0 * p.ww + 0.5 * p.wt - 0.5 * p.tl - 1.0 * p.ll;
   }
 
-  const grad = new Float64Array(M);
-  const hessDiag = new Float64Array(M);
+  const evalLogPosterior = (x: Float64Array): number => {
+    let val = 0;
+    for (let i = 0; i < M; i++) val -= 0.5 * priorPrecision * x[i] * x[i];
+    for (let k = 0; k < nPairs; k++) {
+      const N = pairN[k];
+      if (N === 0) continue;
+      const { i, j } = pairs[k];
+      const delta = x[i] - x[j];
+      const e1 = Math.exp(delta), em1 = 1 / e1;
+      const eh = Math.exp(0.5 * delta), emh = 1 / eh;
+      const Z = e1 + nu1 * eh + nu0 + nu1 * emh + em1;
+      val += pairY[k] * delta - N * Math.log(Z);
+    }
+    return val;
+  };
 
-  // Solve for the unique global maximum of J(theta) using coordinate/diagonal Newton updates.
-  // Because J(theta) is strictly concave under the Gaussian prior, this converges to
-  // machine precision (< 1e-9) in 10-18 iterations.
-  for (let iter = 0; iter < 20; iter++) {
+  const grad = new Float64Array(M);
+  const H = new Float64Array(M * M);
+  const L = new Float64Array(M * M);
+  const step = new Float64Array(M);
+  const scratch = new Float64Array(M);
+  const cand = new Float64Array(M);
+
+  // Solve for the unique global maximum of J(theta) using full-matrix Cholesky Newton updates
+  // with backtracking line search (converges quadratically to < 1e-12 in 4-6 iterations without
+  // bipartite Jacobi oscillation).
+  for (let iter = 0; iter < 25; iter++) {
+    H.fill(0);
+    let obj = 0;
     for (let i = 0; i < M; i++) {
       grad[i] = -priorPrecision * theta[i];
-      hessDiag[i] = priorPrecision;
+      H[i * M + i] = priorPrecision;
+      obj -= 0.5 * priorPrecision * theta[i] * theta[i];
     }
 
     for (let k = 0; k < nPairs; k++) {
@@ -2052,48 +2075,52 @@ export function computeDavidsonRatings(
       if (N === 0) continue;
       const { i, j } = pairs[k];
       const delta = theta[i] - theta[j];
-
-      // Partition function Z(delta) = e^{delta} + nu1*e^{delta/2} + nu0 + nu1*e^{-delta/2} + e^{-delta}
-      const e1 = Math.exp(delta);
-      const em1 = 1 / e1;
-      const eh = Math.exp(0.5 * delta);
-      const emh = 1 / eh;
+      const e1 = Math.exp(delta), em1 = 1 / e1;
+      const eh = Math.exp(0.5 * delta), emh = 1 / eh;
       const Z = e1 + nu1 * eh + nu0 + nu1 * emh + em1;
+      obj += pairY[k] * delta - N * Math.log(Z);
 
-      // Category probabilities for y in {+1, -1, +0.5, -0.5}
       const p1 = e1 / Z, pm1 = em1 / Z, ph = (nu1 * eh) / Z, pmh = (nu1 * emh) / Z;
-      // Expected score E[Y | delta] = d(ln Z)/d(delta)
       const mu = (p1 - pm1) + 0.5 * (ph - pmh);
-      // Score variance Var(Y | delta) = d^2(ln Z)/d(delta)^2 (Fisher information per match)
       const v = (p1 + pm1) + 0.25 * (ph + pmh) - mu * mu;
 
       const g = pairY[k] - N * mu;
       const w = N * v;
       grad[i] += g;
       grad[j] -= g;
-      hessDiag[i] += w;
-      hessDiag[j] += w;
+      H[i * M + i] += w;
+      H[j * M + j] += w;
+      H[i * M + j] -= w;
+      H[j * M + i] -= w;
+    }
+
+    let maxGrad = 0;
+    for (let i = 0; i < M; i++) if (Math.abs(grad[i]) > maxGrad) maxGrad = Math.abs(grad[i]);
+    if (maxGrad < 1e-12) break;
+
+    choleskyDecompose(H, M, L);
+    solveCholesky(L, grad, M, step, scratch);
+
+    let alpha = 1.0;
+    while (alpha > 1e-6) {
+      for (let i = 0; i < M; i++) cand[i] = theta[i] + alpha * step[i];
+      if (evalLogPosterior(cand) >= obj - 1e-12) break;
+      alpha *= 0.5;
     }
 
     let maxStep = 0;
-    let sumTheta = 0;
     for (let i = 0; i < M; i++) {
-      // Clamp single-iteration step size to [-1, +1] nats for numerical stability on iter 0.
-      const step = Math.max(-1.0, Math.min(1.0, grad[i] / hessDiag[i]));
-      theta[i] += step;
-      if (Math.abs(step) > maxStep) maxStep = Math.abs(step);
-      sumTheta += theta[i];
+      const d = alpha * step[i];
+      theta[i] += d;
+      if (Math.abs(d) > maxStep) maxStep = Math.abs(d);
     }
-    // Keep theta zero-mean during optimization before applying the final anchor shift.
-    const meanTheta = sumTheta / M;
-    for (let i = 0; i < M; i++) theta[i] -= meanTheta;
-    if (maxStep < 1e-9) break;
+    if (maxStep < 1e-12) break;
   }
 
-  // Construct the exact M x M negative Hessian matrix H = -nabla^2 J(theta_MAP):
-  //   H_{ii} = 1/sigma_0^2 + sum_{j != i} N_{ij} * Var(Y_{ij} | delta_{ij})
-  //   H_{ij} = -N_{ij} * Var(Y_{ij} | delta_{ij})  for i != j
-  const H = new Float64Array(M * M);
+  // Construct the exact M x M negative Hessian matrix H = -nabla^2 J(theta_MAP)
+  // and pin the global translation eigenvector `u` (`1/K` on the K played bots, 0 on unplayed).
+  H.fill(0);
+  const hasPlayed = new Uint8Array(M);
   for (let i = 0; i < M; i++) H[i * M + i] = priorPrecision;
 
   for (let k = 0; k < nPairs; k++) {
@@ -2112,6 +2139,21 @@ export function computeDavidsonRatings(
     H[j * M + j] += w;
     H[i * M + j] -= w;
     H[j * M + i] -= w;
+    hasPlayed[i] = 1;
+    hasPlayed[j] = 1;
+  }
+
+  let playedCount = 0;
+  for (let i = 0; i < M; i++) playedCount += hasPlayed[i];
+  if (playedCount > 0) {
+    const gaugeTerm = 1e6 / (playedCount * playedCount);
+    for (let i = 0; i < M; i++) {
+      if (!hasPlayed[i]) continue;
+      for (let j = 0; j < M; j++) {
+        if (!hasPlayed[j]) continue;
+        H[i * M + j] += gaugeTerm;
+      }
+    }
   }
 
   // Invert the symmetric positive-definite matrix H via Cholesky decomposition (H = L L^T)
@@ -2143,12 +2185,8 @@ export function computeDavidsonRatings(
   return { theta, elo, eloStd, ci95, eloLcb, eloUcb, gxe, covariance, nu0, nu1 };
 }
 
-/**
- * Invert an M x M Symmetric Positive-Definite (SPD) matrix A in-place using
- * Cholesky decomposition A = L * L^T, forward substitution for L^{-1}, and A^{-1} = (L^{-1})^T * L^{-1}.
- */
-function invertSPDMatrix(A: Float64Array, M: number): Float64Array {
-  const L = new Float64Array(M * M);
+function choleskyDecompose(A: Float64Array, M: number, L: Float64Array): void {
+  L.fill(0);
   for (let i = 0; i < M; i++) {
     for (let j = 0; j <= i; j++) {
       let sum = A[i * M + j];
@@ -2156,6 +2194,34 @@ function invertSPDMatrix(A: Float64Array, M: number): Float64Array {
       L[i * M + j] = i === j ? Math.sqrt(Math.max(sum, 1e-12)) : sum / L[j * M + j];
     }
   }
+}
+
+function solveCholesky(
+  L: Float64Array,
+  b: Float64Array,
+  M: number,
+  out: Float64Array,
+  scratch: Float64Array,
+): void {
+  for (let i = 0; i < M; i++) {
+    let sum = b[i];
+    for (let k = 0; k < i; k++) sum -= L[i * M + k] * scratch[k];
+    scratch[i] = sum / L[i * M + i];
+  }
+  for (let i = M - 1; i >= 0; i--) {
+    let sum = scratch[i];
+    for (let k = i + 1; k < M; k++) sum -= L[k * M + i] * out[k];
+    out[i] = sum / L[i * M + i];
+  }
+}
+
+/**
+ * Invert an M x M Symmetric Positive-Definite (SPD) matrix A in-place using
+ * Cholesky decomposition A = L * L^T, forward substitution for L^{-1}, and A^{-1} = (L^{-1})^T * L^{-1}.
+ */
+function invertSPDMatrix(A: Float64Array, M: number): Float64Array {
+  const L = new Float64Array(M * M);
+  choleskyDecompose(A, M, L);
   const Linv = new Float64Array(M * M);
   for (let i = 0; i < M; i++) {
     Linv[i * M + i] = 1 / L[i * M + i];
@@ -2621,13 +2687,15 @@ Approved developers submit new ladder versions via `POST /api/submissions` on `/
     3. The Arena counts how many ladders still list each version as active (`champion` or `challenger`). Only when a retired version's active ladder count across all ladders drops to `0` does the Arena delete `/opt/arena/bots/<slug>-<id>/` (or `podman rmi` its OCI image) from the internal 256 GB SSD.
     4. Cold archives remain permanently on `/Volumes/Archive/bots/<slug>/<ver>/` and `gs://pkmn-arena/bots/<slug>/<ver>/`.
 
-### CLI Administration (`pkmn-admin`)
-All staff actions beyond merging `projects.yml` PRs run via a small CLI (`node build/server/cli.js` on `pkmn.ai`):
-- `pkmn-admin quarantine <bot-slug> <version> --reason "..."`: Marks version `quarantined` and queues removal from active matchmaking.
-- `pkmn-admin unquarantine <bot-slug> <version>`: Resets crash streak and re-enables matchmaking.
-- `pkmn-admin refund-cooldown <bot-slug>`: Clears the 14-day submission timer for a project.
-- `pkmn-admin set-anchor <ladder_id> <bot-slug> <version>`: Marks `is_anchor = 1` for the `1500` Elo anchor version on a ladder.
-- `pkmn-admin rotate-ladder <old_ladder_id> --display-name "VGC 2026 Reg M-C" [--new <new_ladder_id>]`: Transitions `old_ladder_id` to `settling` (or `archived` if already settled) and activates the replacement seasonal/epoch ladder.
+### CLI Administration (`pkmn`)
+All staff actions beyond merging `projects.yml` PRs run via a small CLI (`npm run pkmn -- ...` / `node build/tools/pkmn.js` on `pkmn.ai`):
+- `pkmn quarantine <bot-slug> <version> --reason "..."`: Marks version `quarantined` and queues removal from active matchmaking.
+- `pkmn unquarantine <bot-slug> <version>`: Resets crash streak and re-enables matchmaking.
+- `pkmn refund-cooldown <bot-slug>`: Clears the 14-day submission timer for a project.
+- `pkmn set-anchor <ladder_id> <bot-slug> <version>`: Marks `is_anchor = 1` for the `1500` Elo anchor version on a ladder.
+- `pkmn set-ladder-status <ladder_id> <upcoming|active|settling|archived>`: Updates a ladder's lifecycle status directly.
+- `pkmn rotate-ladder <old_ladder_id> --display-name "VGC 2026 Reg M-C" [--new <new_ladder_id>]`: Transitions `old_ladder_id` to `settling` (or `archived` if already settled) and activates the replacement seasonal/epoch ladder.
+- `pkmn lookup-smogon <username|slug.id|id|url>`: Resolves a Smogon forum account's numerical ID and ban status.
 
 ---
 
@@ -2739,7 +2807,7 @@ CREATE TABLE bots (
   name TEXT NOT NULL UNIQUE,                    -- from static/projects.yml name (e.g. 'Foul Play')
   logo_file TEXT,                               -- optional PNG in static/avatars/<slug>.png
   status TEXT NOT NULL DEFAULT 'approved',      -- 'approved' | 'disabled'
-  cooldown_refunded_at INTEGER,                 -- optional override timestamp from pkmn-admin refund-cooldown
+  cooldown_refunded_at INTEGER,                 -- optional override timestamp from pkmn refund-cooldown
   updated_at INTEGER NOT NULL
 );
 

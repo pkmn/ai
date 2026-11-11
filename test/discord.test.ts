@@ -6,7 +6,7 @@ import * as path from 'path';
 
 import polka from 'polka';
 
-import {ArenaDB} from '../server/db';
+import {ArenaDB} from '../db';
 import {
   COMMANDS,
   type DiscordMessage,

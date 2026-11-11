@@ -9,12 +9,12 @@ import type polka from 'polka';
 import * as site from 'site';
 import * as yaml from 'yaml';
 
+import type {ArenaDB} from '../db';
 import {header, renderer} from '../static/build';
 import type {Project} from '../static/projects';
 import {escapeHtml, root, slugify} from '../static/util';
 
 import {Auth, type AuthConfig} from './auth';
-import type {ArenaDB} from './db';
 
 const execFileAsync = promisify(execFile);
 

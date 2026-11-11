@@ -57,7 +57,7 @@ const build = async (rebuild?: boolean) => {
   let actual = fs.list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'release', 'chat', 'leaderboard',
-    'account', 'background', 'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg',
+    'account', 'api', 'background', 'index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg',
     'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {

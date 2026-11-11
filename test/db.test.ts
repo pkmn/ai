@@ -8,7 +8,7 @@ import {
   SCHEMA_DIR,
   parseArenaProjects,
   parseLaddersYaml,
-} from '../server/db';
+} from '../db';
 import {lookupSmogonUser, parseSmogonIdentifier} from '../server/smogon';
 
 describe('db/schema/*.sql & db/migration/* lifecycle', () => {

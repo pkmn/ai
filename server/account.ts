@@ -1,13 +1,10 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as querystring from 'querystring';
 
 import type polka from 'polka';
 
-import {header, renderer} from '../static/build';
-import {escapeHtml, renderTemplate, root} from '../static/util';
-
-import {Auth} from './auth';
 import {
   type ActiveEntryView,
   type ArenaDB,
@@ -20,11 +17,59 @@ import {
   SETTLED_MIN_MATCHES,
   type SubmissionStatus,
   type VersionHistoryView,
-  deduceFormatType,
-  encryptSecret,
   loadLadderPoolDirs,
-} from './db';
+} from '../db';
+import {header, renderer} from '../static/build';
+import {escapeHtml, renderTemplate, root} from '../static/util';
+
+import {Auth} from './auth';
 import {validateCompetitorTeams} from './teams';
+
+export function deduceFormatType(downloadUrl: string): FormatType {
+  const cleanPath = downloadUrl.split('?')[0].toLowerCase();
+  if (
+    cleanPath.endsWith('.tar.gz') ||
+    cleanPath.endsWith('.tgz') ||
+    cleanPath.endsWith('.tar.xz') ||
+    cleanPath.endsWith('.txz') ||
+    cleanPath.endsWith('.tar.zst') ||
+    cleanPath.endsWith('.tzst')
+  ) {
+    return 'bundle';
+  }
+  return 'oci';
+}
+
+function deriveSecretKey(secret: string): Buffer {
+  return Buffer.from(
+    crypto.hkdfSync('sha256', secret, '', 'pkmn-arena-auth-token-v1', 32)
+  );
+}
+
+export function encryptSecret(plaintext: string, secret: string): string {
+  const key = deriveSecretKey(secret);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [
+    iv.toString('base64url'),
+    tag.toString('base64url'),
+    encrypted.toString('base64url'),
+  ].join('.');
+}
+
+export function decryptSecret(encoded: string, secret: string): string {
+  const parts = encoded.split('.');
+  if (parts.length !== 3) throw new Error('Invalid encrypted secret format');
+  const key = deriveSecretKey(secret);
+  const iv = Buffer.from(parts[0], 'base64url');
+  const tag = Buffer.from(parts[1], 'base64url');
+  const data = Buffer.from(parts[2], 'base64url');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+}
 
 const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
 const VERSION_RE = /^[A-Za-z0-9._-]{1,12}$/;

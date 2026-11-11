@@ -8,9 +8,8 @@ import * as path from 'path';
 import type polka from 'polka';
 import * as yaml from 'yaml';
 
+import {ArenaDB} from '../db';
 import {root, slugify, toID} from '../static/util';
-
-import {ArenaDB} from './db';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const MAX_INTERACTION_BYTES = 64 * 1024;

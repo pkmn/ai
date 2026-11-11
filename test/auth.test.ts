@@ -2,6 +2,7 @@ import * as http from 'http';
 
 import polka from 'polka';
 
+import {ArenaDB} from '../db';
 import {
   type AuthConfig,
   SESSION_COOKIE,
@@ -13,7 +14,6 @@ import {
   signToken,
   verifyToken,
 } from '../server/auth';
-import {ArenaDB} from '../server/db';
 
 const AUTH_CFG: AuthConfig = {
   sessionSecret: 'test-unified-session-secret',
