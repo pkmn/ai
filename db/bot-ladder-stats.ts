@@ -132,6 +132,14 @@ export function loadBotLadderStatsMap(
   return families;
 }
 
+export function getBotLadderStats(
+  db: DatabaseSync,
+  ladderId: string,
+  botId: number
+): BotLadderStatsRow | undefined {
+  return loadBotLadderStatsMap(db, ladderId).get(botId);
+}
+
 export function upsertBotLadderStatsMap(
   db: DatabaseSync,
   ladderId: string,

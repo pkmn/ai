@@ -1,0 +1,58 @@
+<nav aria-label="Format">
+  <ul>
+    {{{formatNavItems}}}
+  </ul>
+</nav>
+
+<nav class="subnav" aria-label="Version filter">
+  <ul>
+    <li>
+      <input type="radio" name="versions" id="ver-active" value="active" checked>
+      <label for="ver-active">Active</label>
+    </li>
+    —
+    <li>
+      <input type="radio" name="versions" id="ver-best" value="best">
+      <label for="ver-best">Best</label>
+    </li>
+    —
+    <li>
+      <input type="radio" name="versions" id="ver-all" value="all">
+      <label for="ver-all">All</label>
+    </li>
+  </ul>
+</nav>
+
+<section id="standings">
+  {{{standingsPane}}}
+</section>
+
+<section id="history"{{{historyInitialClass}}}>
+  <h3><a href="#history" class="subtle">History</a></h3>
+  {{{historyPane}}}
+</section>
+
+<section id="matchups"{{{matchupsInitialClass}}}>
+  <h3><a href="#matchups" class="subtle">Matchups</a></h3>
+  {{{matchupsPane}}}
+</section>
+
+<script>
+  const setTheme = t => document.documentElement.setAttribute('data-theme', t);
+  document.addEventListener('DOMContentLoaded', () => {
+    const verRadios = document.querySelectorAll('input[name="versions"]');
+    const rows = document.querySelectorAll('.standings-table tbody tr');
+    verRadios.forEach(r => r.addEventListener('change', () => {
+      const mode = r.value;
+      rows.forEach(row => {
+        if (mode === 'all') {
+          row.classList.remove('hide');
+        } else if (mode === 'best') {
+          row.classList.toggle('hide', !row.dataset.best);
+        } else {
+          row.classList.toggle('hide', !row.dataset.active);
+        }
+      });
+    }));
+  });
+</script>

@@ -6,7 +6,7 @@ import {html} from 'site';
 import * as yaml from 'yaml';
 
 import {cite, header, style} from './build';
-import {escapeHtml} from './util';
+import {escapeHtml, slugify} from './util';
 
 export interface ProjectArenaBadge {
   slot: string;
@@ -184,9 +184,12 @@ export function page(
       : undefined;
     const id =
       (project.name ?? identifier ?? project.paper ?? project.identifier)!.replaceAll(' ', '');
+    const rawLabel = project.name ?? identifier ?? project.paper ?? project.identifier ?? '';
+    const slug = slugify(rawLabel).toLowerCase();
     const arenaInfo = project.name ? arenaByName?.get(project.name) : undefined;
     const isArena = Boolean(project.arena || arenaInfo);
-    const dataAttrs = `${inactive ? '' : ' data-active="true"'}` +
+    const dataAttrs = ` data-slug="${escapeHtml(slug)}"` +
+      `${inactive ? '' : ' data-active="true"'}` +
       `${isArena ? ' data-arena="true"' : ''}`;
     buf.push(`<section id="${id}" class="project"${dataAttrs}>`);
     const active = Array.isArray(project.active)
@@ -206,13 +209,14 @@ export function page(
     buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);
     if (isArena) {
       const displayName = project.name ?? arenaInfo?.name ?? (project.identifier ?? identifier)!;
-      const profileHref = arenaInfo?.profileHref ?? `#${id}`;
+      const defaultProfileHref = slug ? `/projects/${encodeURIComponent(slug)}/` : `#${id}`;
+      const profileHref = arenaInfo?.profileHref ?? defaultProfileHref;
       const badgesHtml = arenaInfo && arenaInfo.ladders.length > 0
         ? ' · ' + arenaInfo.ladders.map(b => (
           b.provisional || b.rank === null
-            ? `<a href="/leaderboard/#${escapeHtml(b.slot)}" class="subtle">` +
+            ? `<a href="/arena/ladders/${escapeHtml(b.slot)}/" class="subtle">` +
               `<tt>${escapeHtml(b.displayName)}</tt> <em>(provisional)</em></a>`
-            : `<a href="/leaderboard/#${escapeHtml(b.slot)}" class="subtle">` +
+            : `<a href="/arena/ladders/${escapeHtml(b.slot)}/" class="subtle">` +
               `<tt>${escapeHtml(b.displayName)}</tt> #${b.rank}</a>`
         )).join(', ')
         : '';
@@ -305,8 +309,17 @@ export function page(
 
         const checkHash = () => {
           if (!location.hash) return;
-          const id = decodeURIComponent(location.hash.slice(1));
-          const el = document.getElementById(id);
+          const raw = decodeURIComponent(location.hash.slice(1));
+          let el = document.getElementById(raw);
+          if (!el) {
+            const slug = raw.toLowerCase();
+            for (let k = 0; k < projects.length; k++) {
+              if (projects[k].dataset.slug === slug) {
+                el = projects[k];
+                break;
+              }
+            }
+          }
           if (el && el.classList.contains('project')) {
             el.classList.remove('hide');
             el.scrollIntoView();

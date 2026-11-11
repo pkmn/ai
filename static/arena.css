@@ -18,6 +18,20 @@ h3 {
   font-size: 1.15em;
 }
 
+.arena-blurb {
+  max-width: 80ch;
+  margin: 0 auto 1.25rem;
+}
+
+.tour-ongoing {
+  margin: 0.5rem 0 1.15rem;
+  padding-inline-start: 1.5rem;
+}
+
+.tour-ongoing li {
+  margin: 0.25rem 0;
+}
+
 .subnav {
   margin: -0.5rem 0 1.25rem;
   font-size: 0.95em;

@@ -1,0 +1,101 @@
+h2 svg {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  margin-left: 0.25em;
+  vertical-align: middle;
+}
+
+.bot-logo {
+  display: block;
+  width: auto;
+  height: auto;
+  max-height: min(22dvh, 168px);
+  margin: 0.25rem auto 1.15rem;
+  border-radius: 4px;
+  image-rendering: pixelated;
+}
+
+.controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5ch;
+  align-items: center;
+  justify-content: center;
+  margin: 0.5rem 0 1.25rem;
+}
+
+.controls-bar nav {
+  margin: 0;
+}
+
+.ver-picker {
+  display: inline-flex;
+  gap: 0.6ch;
+  align-items: center;
+  font-size: 0.95em;
+}
+
+.min-select {
+  max-width: 100%;
+  padding: 0.15rem 1.65rem 0.15rem 0.55rem;
+  color: var(--fg-accent-color);
+  font: inherit;
+  font-size: 0.9em;
+  font-family: var(--monospace);
+  background-color: var(--code-bg-color);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.45rem center;
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  appearance: none;
+}
+
+.kv {
+  table-layout: fixed;
+}
+
+.kv td {
+  white-space: normal;
+}
+
+.kv td:first-child {
+  width: 11ch;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5ch;
+  margin: 1rem 0 1.25rem;
+}
+
+.reign {
+  margin-top: 1.25rem;
+}
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.sortable:hover {
+  text-decoration: underline;
+}
+
+@media (width < 768px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+}
+
+@media (width < 480px) {
+  table:not(.kv) th,
+  table:not(.kv) td {
+    padding: 0.3rem 0.38rem;
+    font-size: 0.84em;
+  }
+}

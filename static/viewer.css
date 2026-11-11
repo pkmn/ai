@@ -1,0 +1,270 @@
+:root {
+  --paper: #fff;
+  --field: #f3f3f2;
+  --rule: rgb(229 231 235);
+  --ink: #000;
+  --ink-soft: rgb(0 0 0 / 78%);
+  --ink-muted: rgb(0 0 0 / 52%);
+  --action: #0969da;
+  --live: #1a7f37;
+  --controls-height: 40px;
+  --log-width: 280px;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --paper: #121212;
+  --field: #181818;
+  --rule: #242429;
+  --ink: #eee;
+  --ink-soft: #ccc;
+  --ink-muted: rgb(255 255 255 / 52%);
+  --action: #2f81f9;
+  --live: #3fb950;
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+  font: 13px/1.45 Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background: var(--paper);
+}
+
+.arena-stage {
+  --scene-scale: 1;
+
+  position: relative;
+  flex: none;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--field);
+}
+
+.arena-stage .battle,
+.arena-stage .battle *,
+.arena-stage .battle *::before,
+.arena-stage .battle *::after {
+  box-sizing: content-box;
+}
+
+.arena-stage .battle {
+  top: 0;
+  left: 0;
+  border: 0;
+  transform: scale(var(--scene-scale));
+  transform-origin: 0 0;
+}
+
+/* Hide random Showdown trainer avatars; clocks are rendered above the viewer. */
+.arena-stage .battle .trainersprite,
+.playbutton {
+  display: none !important;
+}
+
+.arena-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 16px;
+  color: var(--ink-muted);
+  text-align: center;
+  background: var(--field);
+}
+
+.arena-start {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 16px;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+
+.arena-controls {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  height: var(--controls-height);
+  padding: 0 8px;
+  font-variant-numeric: tabular-nums;
+  background: var(--field);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.arena-group {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.arena-end {
+  margin-left: auto;
+}
+
+.arena-btn {
+  height: 28px;
+  padding: 0 8px;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  font-family: monospace;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.arena-speed {
+  height: 28px;
+  padding: 0 6px;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  font-family: monospace;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.arena-btn:disabled,
+.arena-speed:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.arena-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+
+.arena-turn {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.arena-live {
+  color: var(--live);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.arena-live[data-following="false"] {
+  color: var(--ink-muted);
+}
+
+.battle-log,
+.dark .battle-log {
+  position: static;
+  flex: 1 1 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  color: var(--ink-soft);
+  font: 12.5px/1.42 Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background: var(--paper);
+  border: 0;
+  scrollbar-color: var(--rule) transparent;
+  scrollbar-width: thin;
+}
+
+.battle-log .inner {
+  padding: 8px 10px;
+}
+
+.battle-log .battle-history,
+.battle-log strong,
+.dark .battle-log .battle-history,
+.dark .battle-log strong {
+  color: var(--ink);
+}
+
+.battle-log .battle-history em[style] {
+  color: var(--ink-soft) !important;
+}
+
+.battle-log h2.battle-history,
+.dark .battle-log h2.battle-history {
+  margin: 8px -10px 5px;
+  padding: 3px 10px;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 12px;
+  background: var(--field);
+  border: 0;
+}
+
+@media (width >= 896px) {
+  body {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) var(--controls-height);
+    grid-template-columns: minmax(0, 1fr) var(--log-width);
+  }
+
+  .arena-controls {
+    border-bottom: 0;
+  }
+
+  .battle-log,
+  .dark .battle-log {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+    border-left: 1px solid var(--rule);
+  }
+}
+
+@media (width < 420px) {
+  .arena-controls {
+    gap: 4px;
+    padding: 0 5px;
+  }
+
+  .arena-btn {
+    padding: 0 5px;
+  }
+
+  .arena-btn[data-action="start"],
+  .arena-turn {
+    display: none;
+  }
+}

@@ -1,19 +1,19 @@
 import type {DatabaseSync} from 'node:sqlite';
 
-import {ensureBotLadderStats} from './bot_ladder_stats';
+import {ensureBotLadderStats} from './bot-ladder-stats';
 import {
   deletePendingTeams,
   getTeamsForBotLadder,
   promotePendingTeams,
   replacePendingTeams,
-} from './bot_ladder_teams';
+} from './bot-ladder-teams';
 import {type BotRow, getBotById} from './bots';
 import {
   type EntryRole,
   getActiveEntriesForBot,
   promoteRemainingActiveToChampion,
   recomputeLadderRatings,
-} from './ladder_entries';
+} from './ladder-entries';
 import {getActiveLadders, getLadder} from './ladders';
 
 import type {TransactionRunner} from './index';

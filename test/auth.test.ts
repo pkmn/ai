@@ -314,12 +314,12 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     expect(db.getDeveloperByGitHub('pre')!.discord_username).toBeNull();
 
     // Logout clears pkmn_session
-    const logoutRes = await realFetch(`${baseUrl}/auth/logout?return_to=%2Fleaderboard%2F`, {
+    const logoutRes = await realFetch(`${baseUrl}/auth/logout?return_to=%2Farena%2F`, {
       method: 'POST',
       redirect: 'manual',
     });
     expect(logoutRes.status).toBe(303);
-    expect(logoutRes.headers.get('location')).toBe('/leaderboard/');
+    expect(logoutRes.headers.get('location')).toBe('/arena/');
     expect(logoutRes.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 

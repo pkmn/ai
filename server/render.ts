@@ -25,15 +25,24 @@ import {
   computeDavidsonRatings,
   computeLOS,
 } from './ratings';
+import {renderBotProfiles} from './render-profile';
+import {
+  type TournamentLiveBroadcast,
+  renderArenaTournamentsSummaryHtml,
+  renderTournamentsPages,
+} from './render-tournaments';
+
+export {type TournamentLiveBroadcast};
 
 export const PUBLIC_DIR = root('public');
 export const STATIC_DIR = root('static');
 
-const ARENA_STYLE = fs.readFileSync(root('static', 'arena.css'), 'utf8');
-const LEADERBOARD_TEMPLATE = fs.readFileSync(root('static', 'leaderboard.html'), 'utf8');
+export const ARENA_STYLE = fs.readFileSync(root('static', 'arena.css'), 'utf8');
+const ARENA_TEMPLATE = fs.readFileSync(root('static', 'arena.html'), 'utf8');
+const LADDER_TEMPLATE = fs.readFileSync(root('static', 'ladder.html'), 'utf8');
 const BATTLES_TEMPLATE = fs.readFileSync(root('static', 'battles.html'), 'utf8');
 
-const EXT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+export const EXT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
   'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>' +
   '</svg>';
@@ -100,24 +109,38 @@ export interface RenderArenaOptions {
   renderer?: Renderer;
   publicDir?: string;
   staticDir?: string;
+  avatarsDir?: string;
   liveDoc?: LiveJsonDocument | null;
+  tournamentBroadcast?: TournamentLiveBroadcast | null;
   recentMatchesLimit?: number;
   now?: number;
 }
 
-interface ProjectMeta {
+export interface ProjectMeta {
   id: string;
+  site?: string;
+  active?: number | [number, number];
+  license?: string;
   source?: string;
+  engine?: string | Array<{name: string; url: string}>;
+  language?: string | string[];
 }
 
-function writeFileAtomic(filePath: string, contents: string) {
+export function writeFileAtomic(filePath: string, contents: string) {
   fs.mkdirSync(path.dirname(filePath), {recursive: true});
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
   fs.writeFileSync(tmpPath, contents, 'utf8');
   fs.renameSync(tmpPath, filePath);
 }
 
-function safeInlineJson(value: unknown): string {
+export function copyFileAtomic(srcPath: string, destPath: string) {
+  fs.mkdirSync(path.dirname(destPath), {recursive: true});
+  const tmpPath = `${destPath}.tmp.${process.pid}.${Date.now()}`;
+  fs.copyFileSync(srcPath, tmpPath);
+  fs.renameSync(tmpPath, destPath);
+}
+
+export function safeInlineJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
@@ -130,19 +153,31 @@ function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
   for (const p of parsed) {
     if (!p.name) continue;
     const id = p.name.replaceAll(' ', '');
-    map.set(p.name, {id, source: p.source});
+    map.set(p.name, {
+      id,
+      site: p.site,
+      active: p.active,
+      license: p.license,
+      source: p.source,
+      engine: p.engine as ProjectMeta['engine'],
+      language: p.language,
+    });
   }
   return map;
 }
 
-function resolveBotHref(
+export function resolveBotHref(
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>,
   slug: string,
-  name: string
+  name: string,
+  profileSlugs?: ReadonlySet<string>
 ): string | undefined {
-  if (fs.existsSync(path.join(publicDir, 'leaderboard', slug, 'index.html'))) {
-    return `/leaderboard/${encodeURIComponent(slug)}/`;
+  if (
+    profileSlugs?.has(slug) ||
+    fs.existsSync(path.join(publicDir, 'projects', slug, 'index.html'))
+  ) {
+    return `/projects/${encodeURIComponent(slug)}/`;
   }
   const meta = projectMeta.get(name);
   if (meta) {
@@ -151,7 +186,7 @@ function resolveBotHref(
   return undefined;
 }
 
-function formatBotLink(
+export function formatBotLink(
   name: string,
   href: string | undefined,
   bold: boolean
@@ -161,7 +196,7 @@ function formatBotLink(
   return `<a href="${escapeHtml(href)}" class="subtle">${inner}</a>`;
 }
 
-function formatRelativeTime(nowSec: number, completedAt: number): string {
+export function formatRelativeTime(nowSec: number, completedAt: number): string {
   const diff = Math.max(0, nowSec - completedAt);
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -169,7 +204,7 @@ function formatRelativeTime(nowSec: number, completedAt: number): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function formatShortDay(dayUtc: string): string {
+export function formatShortDay(dayUtc: string): string {
   const parts = dayUtc.split('-');
   if (parts.length !== 3) return dayUtc;
   const monthIdx = Number(parts[1]) - 1;
@@ -205,7 +240,7 @@ function computeStreakLabel(entry: LeaderboardEntryView): {
   return {text: '—', html: '<span class="muted">—</span>'};
 }
 
-function computeAdjacentLosMap(
+export function computeAdjacentLosMap(
   entries: LeaderboardEntryView[],
   pairs: PairAggregateRow[]
 ): Map<number, number> {
@@ -285,7 +320,7 @@ function computeAdjacentLosMap(
   return result;
 }
 
-function heatmapClass(scorePct: number): string {
+export function heatmapClass(scorePct: number): string {
   if (scorePct > 80) return 'hm-w4';
   if (scorePct > 70) return 'hm-w3';
   if (scorePct > 60) return 'hm-w2';
@@ -297,14 +332,12 @@ function heatmapClass(scorePct: number): string {
   return '';
 }
 
-function renderHistoryPane(
+function renderHistorySectionHtml(
   ladder: LadderRow,
-  isDefault: boolean,
   entries: LeaderboardEntryView[],
   snapshots: LadderSnapshotHistoryRow[],
   nowSec: number
-): string {
-  const hideCls = isDefault ? '' : ' hide';
+): {html: string; isEmpty: boolean} {
   const bestActiveByBot = new Map<number, LeaderboardEntryView>();
   for (const e of entries) {
     if (e.role !== 'champion' && e.role !== 'challenger') continue;
@@ -326,8 +359,10 @@ function renderHistoryPane(
     .slice(0, SERIES_COLORS.length);
 
   if (topBots.length === 0) {
-    return `<div class="ladder-pane${hideCls}" data-ladder="${escapeHtml(ladder.slot)}" ` +
-      'data-empty="true"><p class="empty-state muted">No rating history yet.</p></div>';
+    return {
+      html: '<p class="empty-state muted">No rating history yet.</p>',
+      isEmpty: true,
+    };
   }
 
   const todayUtc = new Date(nowSec * 1000).toISOString().slice(0, 10);
@@ -535,8 +570,8 @@ function renderHistoryPane(
   ));
 
   const ariaLabel = `${escapeHtml(ladder.display_name)} Top Bot Rating History`;
-  return `<div class="ladder-pane${hideCls}" data-ladder="${escapeHtml(ladder.slot)}">
-    <figure class="chart">
+  return {
+    html: `<figure class="chart">
       <svg viewBox="0 0 760 245" role="img" aria-label="${ariaLabel}">
         <g stroke="currentColor" stroke-opacity="0.12" stroke-width="1">
           ${gridLines.join('\n          ')}
@@ -550,19 +585,18 @@ function renderHistoryPane(
         ${svgElements.join('\n        ')}
         ${labelEls.join('\n        ')}
       </svg>
-    </figure>
-  </div>`;
+    </figure>`,
+    isEmpty: false,
+  };
 }
 
-function renderMatchupsPane(
-  ladder: LadderRow,
-  isDefault: boolean,
+function renderMatchupsSectionHtml(
   entries: LeaderboardEntryView[],
   pairs: PairAggregateRow[],
   publicDir: string,
-  projectMeta: ReadonlyMap<string, ProjectMeta>
-): string {
-  const hideCls = isDefault ? '' : ' hide';
+  projectMeta: ReadonlyMap<string, ProjectMeta>,
+  profileSlugs: ReadonlySet<string>
+): {html: string; isEmpty: boolean} {
   const ranked = entries
     .filter(e => (e.role === 'champion' || e.role === 'challenger') && e.rank_current !== null)
     .sort((a, b) => a.rank_current! - b.rank_current!)
@@ -575,9 +609,10 @@ function renderMatchupsPane(
       .slice(0, 20);
 
   if (participants.length < 2) {
-    return `<div class="table-wrap ladder-pane${hideCls}" ` +
-      `data-ladder="${escapeHtml(ladder.slot)}" data-empty="true">` +
-      '<p class="empty-state muted">Not enough entrants for matchups yet.</p></div>';
+    return {
+      html: '<p class="empty-state muted">Not enough entrants for matchups yet.</p>',
+      isEmpty: true,
+    };
   }
 
   const pairMap = new Map<string, PairAggregateRow>();
@@ -592,7 +627,13 @@ function renderMatchupsPane(
     .join('');
 
   const bodyRows = participants.map(rowEntry => {
-    const rowHref = resolveBotHref(publicDir, projectMeta, rowEntry.bot_slug, rowEntry.bot_name);
+    const rowHref = resolveBotHref(
+      publicDir,
+      projectMeta,
+      rowEntry.bot_slug,
+      rowEntry.bot_name,
+      profileSlugs
+    );
     const rowLabel = `${formatBotLink(rowEntry.bot_name, rowHref, true)} ` +
       `<code>${escapeHtml(rowEntry.version_str)}</code>`;
 
@@ -630,7 +671,8 @@ function renderMatchupsPane(
     return `<tr><td>${rowLabel}</td>${cells}</tr>`;
   }).join('');
 
-  return `<div class="table-wrap ladder-pane${hideCls}" data-ladder="${escapeHtml(ladder.slot)}">
+  return {
+    html: `<div class="table-wrap">
     <table class="matrix">
       <thead>
         <tr>
@@ -642,67 +684,59 @@ function renderMatchupsPane(
         ${bodyRows}
       </tbody>
     </table>
-  </div>`;
+  </div>`,
+    isEmpty: false,
+  };
 }
 
-export function renderLeaderboardArtifacts(opts: {
+export function renderArenaAndLadderArtifacts(opts: {
   db: ArenaDB;
   renderer: Renderer;
   publicDir: string;
+  staticDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
+  profileSlugs: ReadonlySet<string>;
   nowSec: number;
-}): {html: string; standingsJson: StandingsJsonDocument} {
-  const {db, renderer, publicDir, projectMeta, nowSec} = opts;
+}): {
+  arenaHtml: string;
+  ladderHtmlBySlot: Record<string, string>;
+  standingsJson: StandingsJsonDocument;
+} {
+  const {db, renderer, publicDir, staticDir, projectMeta, profileSlugs, nowSec} = opts;
   const ladders = db.getCurrentLadders();
 
-  const entriesByLadder = new Map<string, LeaderboardEntryView[]>();
-  for (const l of ladders) {
-    entriesByLadder.set(l.id, db.getLeaderboardEntries(l.id));
-  }
-
-  let defaultLadder = ladders.find(l => (entriesByLadder.get(l.id)?.length ?? 0) > 0);
-  if (!defaultLadder) {
-    defaultLadder = ladders.find(l => l.status === 'active') ?? ladders[0];
-  }
-  const defaultSlot = defaultLadder?.slot ?? 'rby';
-
-  const formatNavItems = ladders.map((l, idx) => {
-    const sep = idx > 0 ? '\n    —\n    ' : '';
-    const checked = l.slot === defaultSlot ? ' checked' : '';
-    return `${sep}<li id="${escapeHtml(l.slot)}">
-      <input type="radio" name="ladder" id="lad-${escapeHtml(l.slot)}" ` +
-      `value="${escapeHtml(l.slot)}"${checked}>
-      <label for="lad-${escapeHtml(l.slot)}">${escapeHtml(l.display_name)}</label>
-    </li>`;
-  }).join('');
-
-  const standingsPanes: string[] = [];
-  const historyPanes: string[] = [];
-  const matchupsPanes: string[] = [];
+  const ladderHtmlBySlot: Record<string, string> = {};
   const jsonLadders: Record<string, StandingsJsonLadder> = {};
-
-  let defaultHistoryEmpty = true;
-  let defaultMatchupsEmpty = true;
+  const ladderSummaryRows: string[] = [];
 
   for (const l of ladders) {
-    const isDefault = l.slot === defaultSlot;
-    const hideCls = isDefault ? '' : ' hide';
-    const entries = entriesByLadder.get(l.id) ?? [];
+    const entries = db.getLeaderboardEntries(l.id);
     const pairs = db.getPairAggregatesForLadder(l.id);
     const snapshots = db.getRatingSnapshotsForLadder(l.id);
     const adjacentLos = computeAdjacentLosMap(entries, pairs);
 
+    const formatNavItems = ladders.map((other, idx) => {
+      const sep = idx > 0 ? '\n    —\n    ' : '';
+      const href = `/arena/ladders/${encodeURIComponent(other.slot)}/`;
+      const isCurrent = other.slot === l.slot;
+      const label = isCurrent
+        ? `<strong>${escapeHtml(other.display_name)}</strong>`
+        : escapeHtml(other.display_name);
+      const curAttr = isCurrent ? ' aria-current="page"' : '';
+      return `${sep}<li id="${escapeHtml(other.slot)}">` +
+        `<a href="${escapeHtml(href)}" class="subtle"${curAttr}>${label}</a></li>`;
+    }).join('');
+
     const seenBestActiveBot = new Set<number>();
     const jsonRows: StandingsJsonEntry[] = [];
+    let top1SummaryCells = null as string | null;
+    let standingsPane: string;
 
     if (entries.length === 0) {
       const msg = l.status === 'upcoming'
         ? `${escapeHtml(l.display_name)} ladder is upcoming — submissions are not open yet.`
         : `No active entries on ${escapeHtml(l.display_name)} yet.`;
-      standingsPanes.push(
-        `<div class="ladder-pane${hideCls}" data-ladder="${escapeHtml(l.slot)}">` +
-        `<p class="empty-state muted">${msg}</p></div>`
-      );
+      standingsPane = `<p class="empty-state muted">${msg}</p>`;
     } else {
       const rowsHtml = entries.map(e => {
         const isRetired = e.role === 'retired';
@@ -745,7 +779,7 @@ export function renderLeaderboardArtifacts(opts: {
           rankCell = '<td class="muted">—</td>';
         }
 
-        const href = resolveBotHref(publicDir, projectMeta, e.bot_slug, e.bot_name);
+        const href = resolveBotHref(publicDir, projectMeta, e.bot_slug, e.bot_name, profileSlugs);
         const nameHtml = formatBotLink(e.bot_name, href, isRankedPrimary);
         const meta = projectMeta.get(e.bot_name);
         const repoIcon = isBestActive && meta?.source
@@ -775,6 +809,10 @@ export function renderLeaderboardArtifacts(opts: {
         const losCell = adjLos !== undefined
           ? `<td class="num">${(adjLos * 100).toFixed(1)}%</td>`
           : '<td class="num muted">—</td>';
+
+        if (isRankedPrimary && e.rank_current === 1 && top1SummaryCells === null) {
+          top1SummaryCells = `${botCell}${eloCell}${gxeCell}${wltCell}${streakCell}${losCell}`;
+        }
 
         jsonRows.push({
           rank: isRankedPrimary ? e.rank_current : null,
@@ -810,35 +848,76 @@ export function renderLeaderboardArtifacts(opts: {
       const thWlt = '2-game blind-pair Match Wins – Losses – Ties (1-1 splits)';
       const thStreak = 'Current consecutive outright match win/loss streak';
       const thLos = 'Pairwise Likelihood of Superiority over the next-ranked settled bot';
-      standingsPanes.push(
-        `<div class="table-wrap ladder-pane${hideCls}" data-ladder="${escapeHtml(l.slot)}">
-          <table class="standings-table">
-            <thead>
-              <tr>
-                <th title="Official rank by Conservative Rating (Elo - 1.96 * SE)">#</th>
-                <th>Bot</th>
-                <th class="num" title="MAP Davidson Elo ± 95% Confidence Interval">Elo</th>
-                <th class="num" title="${thGxe}">GXE</th>
-                <th class="num" title="${thWlt}">W–L–T</th>
-                <th class="center" title="${thStreak}">Streak</th>
-                <th class="num" title="${thLos}">LOS</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-        </div>`
+      standingsPane = `<div class="table-wrap">
+        <table class="standings-table">
+          <thead>
+            <tr>
+              <th title="Official rank by Conservative Rating (Elo - 1.96 * SE)">#</th>
+              <th>Bot</th>
+              <th class="num" title="MAP Davidson Elo ± 95% Confidence Interval">Elo</th>
+              <th class="num" title="${thGxe}">GXE</th>
+              <th class="num" title="${thWlt}">W–L–T</th>
+              <th class="center" title="${thStreak}">Streak</th>
+              <th class="num" title="${thLos}">LOS</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`;
+    }
+
+    const fmtTitle = FORMAT_TITLES[l.format_id] ?? l.format_id;
+    const ladderHref = `/arena/ladders/${encodeURIComponent(l.slot)}/`;
+    const ladderCell =
+      `<td><a href="${escapeHtml(ladderHref)}" class="subtle" ` +
+      `title="${escapeHtml(fmtTitle)}"><strong><tt>${escapeHtml(l.display_name)}</tt></strong>` +
+      '</a></td>';
+
+    if (top1SummaryCells !== null) {
+      ladderSummaryRows.push(`<tr>${ladderCell}${top1SummaryCells}</tr>`);
+    } else {
+      const stateLabel = l.status === 'upcoming'
+        ? 'Upcoming'
+        : entries.some(e => e.role === 'champion' || e.role === 'challenger')
+          ? 'Provisional'
+          : 'No entries yet';
+      ladderSummaryRows.push(
+        `<tr>${ladderCell}` +
+        `<td class="muted">${stateLabel}</td>` +
+        '<td class="num muted">—</td>' +
+        '<td class="num muted">—</td>' +
+        '<td class="num muted">—</td>' +
+        '<td class="center muted">—</td>' +
+        '<td class="num muted">—</td></tr>'
       );
     }
 
-    const hPane = renderHistoryPane(l, isDefault, entries, snapshots, nowSec);
-    const mPane = renderMatchupsPane(l, isDefault, entries, pairs, publicDir, projectMeta);
-    historyPanes.push(hPane);
-    matchupsPanes.push(mPane);
+    const historyRes = renderHistorySectionHtml(l, entries, snapshots, nowSec);
+    const matchupsRes = renderMatchupsSectionHtml(
+      entries,
+      pairs,
+      publicDir,
+      projectMeta,
+      profileSlugs
+    );
 
-    if (isDefault) {
-      defaultHistoryEmpty = hPane.includes('data-empty="true"');
-      defaultMatchupsEmpty = mPane.includes('data-empty="true"');
-    }
+    const ladderContent = renderTemplate(LADDER_TEMPLATE, {
+      formatNavItems,
+      standingsPane,
+      historyInitialClass: historyRes.isEmpty ? ' class="hide"' : '',
+      historyPane: historyRes.html,
+      matchupsInitialClass: matchupsRes.isEmpty ? ' class="hide"' : '',
+      matchupsPane: matchupsRes.html,
+    });
+
+    ladderHtmlBySlot[l.slot] = renderer.render({
+      id: 'leaderboard',
+      title: `Arena — ${l.display_name} | pkmn.ai`,
+      header: header('<a href="/arena/" class="subtle">Ladders</a>'),
+      path: `/arena/ladders/${l.slot}/`,
+      style: ARENA_STYLE,
+      content: ladderContent,
+    });
 
     jsonLadders[l.slot] = {
       id: l.id,
@@ -850,26 +929,34 @@ export function renderLeaderboardArtifacts(opts: {
     };
   }
 
-  const content = renderTemplate(LEADERBOARD_TEMPLATE, {
-    formatNavItems,
-    standingsPanes: standingsPanes.join('\n  '),
-    historyInitialClass: defaultHistoryEmpty ? ' class="hide"' : '',
-    historyPanes: historyPanes.join('\n  '),
-    matchupsInitialClass: defaultMatchupsEmpty ? ' class="hide"' : '',
-    matchupsPanes: matchupsPanes.join('\n  '),
+  const arenaDjPath = path.join(staticDir, 'arena.dj');
+  const blurbDj = fs.existsSync(arenaDjPath) ? fs.readFileSync(arenaDjPath, 'utf8') : '';
+  const blurbHtml = site.html.render(blurbDj);
+  const tournamentsSummaryHtml = renderArenaTournamentsSummaryHtml({
+    db,
+    publicDir,
+    projectMeta,
+    profileSlugs,
   });
 
-  const html = renderer.render({
-    id: 'leaderboard',
-    title: 'Leaderboard | pkmn.ai',
-    header: header('Leaderboard'),
-    path: '/leaderboard/',
+  const arenaContent = renderTemplate(ARENA_TEMPLATE, {
+    blurbHtml,
+    ladderSummaryRows: ladderSummaryRows.join(''),
+    tournamentsSummaryHtml,
+  });
+
+  const arenaHtml = renderer.render({
+    id: 'arena',
+    title: 'Arena | pkmn.ai',
+    header: header('Arena'),
+    path: '/arena/',
     style: ARENA_STYLE,
-    content,
+    content: arenaContent,
   });
 
   return {
-    html,
+    arenaHtml,
+    ladderHtmlBySlot,
     standingsJson: {
       updated_at: nowSec,
       ladders: jsonLadders,
@@ -1080,9 +1167,9 @@ export function renderBattlesPage(opts: {
 
   return renderer.render({
     id: 'battles',
-    title: 'Battles | pkmn.ai',
-    header: header('Battles'),
-    path: '/battles/',
+    title: 'Arena — Battles | pkmn.ai',
+    header: header('<a href="/arena/" class="subtle">Battles</a>'),
+    path: '/arena/battles/',
     style: ARENA_STYLE,
     content,
   });
@@ -1120,19 +1207,27 @@ export function renderArenaPages(options: RenderArenaOptions) {
   );
 
   const projectMeta = loadProjectMetaMap(staticDir);
-  const summaries = options.db.getProjectArenaSummaries();
+  const profileBots = options.db.getAllActiveBots();
+  const profileSlugs = new Set(profileBots.map(b => b.slug));
+  const recentBattles = options.db.getRecentMatches(recentMatchesLimit);
+  const renderedBattleIds = new Set(recentBattles.map(m => m.id));
 
+  renderBotProfiles({
+    db: options.db,
+    renderer,
+    publicDir,
+    avatarsDir: options.avatarsDir,
+    projectMeta,
+    profileBots,
+    profileSlugs,
+    renderedBattleIds,
+    nowSec,
+  });
+
+  const summaries = options.db.getProjectArenaSummaries();
   const arenaByName = new Map<string, projects.ProjectArenaInfo>();
   for (const s of summaries) {
-    const hasProfile = fs.existsSync(
-      path.join(publicDir, 'leaderboard', s.slug, 'index.html')
-    );
-    const meta = projectMeta.get(s.name);
-    const profileHref = hasProfile
-      ? `/leaderboard/${encodeURIComponent(s.slug)}/`
-      : meta
-        ? `#${meta.id}`
-        : undefined;
+    const profileHref = `/projects/${encodeURIComponent(s.slug)}/`;
     arenaByName.set(s.name, {
       slug: s.slug,
       name: s.name,
@@ -1152,22 +1247,50 @@ export function renderArenaPages(options: RenderArenaOptions) {
   const projectsHtml = renderer.render({id: 'projects', ...projectsPage});
   writeFileAtomic(path.join(publicDir, 'projects', 'index.html'), projectsHtml);
 
-  const {html: leaderboardHtml, standingsJson} = renderLeaderboardArtifacts({
+  const {arenaHtml, ladderHtmlBySlot, standingsJson} = renderArenaAndLadderArtifacts({
     db: options.db,
     renderer,
     publicDir,
+    staticDir,
     projectMeta,
+    profileSlugs,
     nowSec,
   });
-  writeFileAtomic(path.join(publicDir, 'leaderboard', 'index.html'), leaderboardHtml);
+  writeFileAtomic(path.join(publicDir, 'arena', 'index.html'), arenaHtml);
   writeFileAtomic(
-    path.join(publicDir, 'leaderboard', 'standings.json'),
+    path.join(publicDir, 'arena', 'index.json'),
     `${JSON.stringify(standingsJson, null, 2)}\n`
   );
 
+  const laddersDir = path.join(publicDir, 'arena', 'ladders');
+  fs.mkdirSync(laddersDir, {recursive: true});
+  const validSlots = new Set(Object.keys(ladderHtmlBySlot));
+  for (const entry of fs.readdirSync(laddersDir, {withFileTypes: true})) {
+    if (entry.isDirectory() && !validSlots.has(entry.name)) {
+      fs.rmSync(path.join(laddersDir, entry.name), {recursive: true, force: true});
+    }
+  }
+  for (const [slot, ladderHtml] of Object.entries(ladderHtmlBySlot)) {
+    writeFileAtomic(path.join(laddersDir, slot, 'index.html'), ladderHtml);
+    writeFileAtomic(
+      path.join(laddersDir, slot, 'index.json'),
+      `${JSON.stringify(standingsJson.ladders[slot], null, 2)}\n`
+    );
+  }
+
+  const liveJsonPath = path.join(publicDir, 'api', 'live.json');
   const liveDoc = options.liveDoc !== undefined
     ? options.liveDoc
     : readExistingLiveJson(publicDir);
+  if (options.liveDoc !== undefined || !fs.existsSync(liveJsonPath)) {
+    const docToWrite: LiveJsonDocument = liveDoc ?? {
+      updated_at: nowSec,
+      stale: false,
+      live: null,
+      recent_matches: recentBattles,
+    };
+    writeFileAtomic(liveJsonPath, `${JSON.stringify(docToWrite)}\n`);
+  }
   const battlesHtml = renderBattlesPage({
     db: options.db,
     renderer,
@@ -1177,5 +1300,14 @@ export function renderArenaPages(options: RenderArenaOptions) {
     recentMatchesLimit,
     nowSec,
   });
-  writeFileAtomic(path.join(publicDir, 'battles', 'index.html'), battlesHtml);
+  writeFileAtomic(path.join(publicDir, 'arena', 'battles', 'index.html'), battlesHtml);
+
+  renderTournamentsPages({
+    db: options.db,
+    renderer,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+    tournamentBroadcast: options.tournamentBroadcast,
+  });
 }

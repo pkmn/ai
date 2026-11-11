@@ -7,11 +7,11 @@ import {
   toTernaryMatchOutcome,
 } from '../server/ratings';
 
-import {ensureBotLadderStats, updateFamilyStreaksForMatch} from './bot_ladder_stats';
-import {getVersionById} from './bot_versions';
-import {type LadderStandingOverride, recomputeLadderRatings} from './ladder_entries';
+import {ensureBotLadderStats, updateFamilyStreaksForMatch} from './bot-ladder-stats';
+import {getVersionById} from './bot-versions';
+import {type LadderStandingOverride, recomputeLadderRatings} from './ladder-entries';
 import {type LadderSlot, type LadderStatus, getLadder} from './ladders';
-import {upsertPairAggregateForMatch} from './pair_aggregates';
+import {upsertPairAggregateForMatch} from './pair-aggregates';
 
 import type {TransactionRunner} from './index';
 
@@ -374,6 +374,82 @@ export function getRecentMatches(db: DatabaseSync, limit = 50): RecentMatchView[
     ORDER BY m.completed_at DESC, m.id DESC
     LIMIT ?
   `).all(limit) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    id: r.id as string,
+    ladder_id: r.ladder_id as string,
+    slot: r.slot as LadderSlot,
+    format_id: r.format_id as string,
+    p1: {
+      slug: r.p1_slug as string,
+      name: r.p1_name as string,
+      version: r.p1_version as string,
+    },
+    p2: {
+      slug: r.p2_slug as string,
+      name: r.p2_name as string,
+      version: r.p2_version as string,
+    },
+    match_category: r.match_category as MatchCategory,
+    g1_turns: r.g1_turns as number,
+    g2_turns: r.g2_turns as number,
+    g1_end_reason: r.g1_end_reason as string,
+    g2_end_reason: r.g2_end_reason as string,
+    v1_avg_turn_ms: r.v1_avg_turn_ms as number,
+    v2_avg_turn_ms: r.v2_avg_turn_ms as number,
+    v1_g1_bank_s: r.v1_g1_bank_s as number,
+    v1_g2_bank_s: r.v1_g2_bank_s as number,
+    v2_g1_bank_s: r.v2_g1_bank_s as number,
+    v2_g2_bank_s: r.v2_g2_bank_s as number,
+    v1_peak_ram_mb: r.v1_peak_ram_mb as number,
+    v2_peak_ram_mb: r.v2_peak_ram_mb as number,
+    completed_at: r.completed_at as number,
+  }));
+}
+
+export function getRecentMatchesForBotOnLadder(
+  db: DatabaseSync,
+  botId: number,
+  ladderId: string,
+  limit = 30
+): RecentMatchView[] {
+  const rows = db.prepare(`
+    SELECT
+      m.id,
+      m.ladder_id,
+      l.slot,
+      l.format_id,
+      b1.slug AS p1_slug,
+      b1.name AS p1_name,
+      v1.version_str AS p1_version,
+      b2.slug AS p2_slug,
+      b2.name AS p2_name,
+      v2.version_str AS p2_version,
+      m.match_category,
+      m.g1_turns,
+      m.g2_turns,
+      m.g1_end_reason,
+      m.g2_end_reason,
+      m.v1_avg_turn_ms,
+      m.v2_avg_turn_ms,
+      m.v1_g1_bank_s,
+      m.v1_g2_bank_s,
+      m.v2_g1_bank_s,
+      m.v2_g2_bank_s,
+      m.v1_peak_ram_mb,
+      m.v2_peak_ram_mb,
+      m.completed_at
+    FROM matches m
+    JOIN ladders l ON l.id = m.ladder_id
+    JOIN bot_versions v1 ON v1.id = m.v1_id
+    JOIN bots b1 ON b1.id = v1.bot_id
+    JOIN bot_versions v2 ON v2.id = m.v2_id
+    JOIN bots b2 ON b2.id = v2.bot_id
+    WHERE m.ladder_id = ?
+      AND (v1.bot_id = ? OR v2.bot_id = ?)
+    ORDER BY m.completed_at DESC, m.id DESC
+    LIMIT ?
+  `).all(ladderId, botId, botId, limit) as Array<Record<string, unknown>>;
 
   return rows.map(r => ({
     id: r.id as string,

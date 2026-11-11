@@ -5,12 +5,13 @@ import * as path from 'path';
 import type {RatingResult} from '../server/ratings';
 import {root} from '../static/util';
 
+import {type BotLadderStatsRow, getBotLadderStats} from './bot-ladder-stats';
 import {
   type BotLadderTeamRow,
   type TeamPoolStatus,
   getTeamsForBotLadder,
   hasActiveLadderTeams,
-} from './bot_ladder_teams';
+} from './bot-ladder-teams';
 import {
   type AccountStatusLabel,
   type ApplySubmissionStatusInput,
@@ -34,7 +35,7 @@ import {
   getVersionsForBot,
   quarantineVersion,
   unquarantineVersion,
-} from './bot_versions';
+} from './bot-versions';
 import {
   AVATARS_DIR,
   type BotRow,
@@ -44,6 +45,7 @@ import {
   type RawProjectOwner,
   type SyncProjectsOptions,
   extractProjectOwners,
+  getAllActiveBots,
   getBotById,
   getBotBySlug,
   parseArenaProjects,
@@ -63,21 +65,24 @@ import {
   linkDeveloperGitHubId,
   unlinkDeveloperDiscord,
 } from './developers';
-import {type DiscordMemberRow, isDiscordMember, syncDiscordMembers} from './discord_members';
+import {type DiscordMemberRow, isDiscordMember, syncDiscordMembers} from './discord-members';
 import {
   type ActiveEntryView,
+  type BotLadderProfileEntry,
   type EntryRole,
   type LadderStandingOverride,
   type LeaderboardEntryView,
   type ProjectArenaLadderBadge,
   type ProjectArenaSummary,
   getActiveEntriesForBot,
+  getBotLadderProfileEntries,
+  getBotParticipatedLadders,
   getLeaderboardEntries,
   getProjectArenaSummaries,
   hasAnyLeaderboardEntry,
   recomputeLadderRatings,
   setLadderAnchor,
-} from './ladder_entries';
+} from './ladder-entries';
 import {
   LADDERS_FILE,
   type LadderConfig,
@@ -104,14 +109,41 @@ import {
   type RecentMatchView,
   type RecordMatchInput,
   getRecentMatches,
+  getRecentMatchesForBotOnLadder,
   recordCompletedMatch,
 } from './matches';
-import {type PairAggregateRow, getPairAggregatesForLadder} from './pair_aggregates';
+import {type PairAggregateRow, getPairAggregatesForLadder} from './pair-aggregates';
 import {
   type LadderSnapshotHistoryRow,
   type RatingSnapshotRow,
   getRatingSnapshotsForLadder,
-} from './rating_snapshots';
+} from './rating-snapshots';
+import {
+  type TournamentEntrantRow,
+  type TournamentEntrantView,
+  type UpsertTournamentEntrantInput,
+  getTournamentEntrants,
+  upsertTournamentEntrant,
+} from './tournament-entrants';
+import {
+  type TournamentGameRow,
+  type TournamentGameStage,
+  type TournamentGameStatus,
+  type TournamentGameView,
+  type TournamentPairRecord,
+  type UpsertTournamentGameInput,
+  getTournamentCrosstable,
+  getTournamentGames,
+  upsertTournamentGame,
+} from './tournament-games';
+import {
+  type TournamentRow,
+  type TournamentStatus,
+  type UpsertTournamentInput,
+  getTournament,
+  getTournaments,
+  upsertTournament,
+} from './tournaments';
 
 export type TransactionRunner = <T>(fn: () => T) => T;
 
@@ -128,6 +160,8 @@ export {
   type ApplySubmissionStatusInput,
   type ApplySubmissionStatusResult,
   AVATARS_DIR,
+  type BotLadderProfileEntry,
+  type BotLadderStatsRow,
   type BotLadderTeamRow,
   type BotRow,
   type BotStatus,
@@ -166,6 +200,18 @@ export {
   type SyncProjectsOptions,
   type TeamMode,
   type TeamPoolStatus,
+  type TournamentEntrantRow,
+  type TournamentEntrantView,
+  type TournamentGameRow,
+  type TournamentGameStage,
+  type TournamentGameStatus,
+  type TournamentGameView,
+  type TournamentPairRecord,
+  type TournamentRow,
+  type TournamentStatus,
+  type UpsertTournamentEntrantInput,
+  type UpsertTournamentGameInput,
+  type UpsertTournamentInput,
   type VersionHistoryView,
   extractProjectOwners,
   loadLadderPoolDirs,
@@ -181,7 +227,7 @@ export const DB_PATH = process.env.ARENA_DB_PATH ?? (
 export const SCHEMA_DIR = root('db', 'schema');
 export const MIGRATION_DIR = root('db', 'migration');
 
-const MIGRATION_FILE_RE = /^\d{4}_[a-z0-9_]+\.sql$/;
+const MIGRATION_FILE_RE = /^\d{4}-[a-z0-9-]+\.sql$/;
 
 function listSqlFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -231,7 +277,7 @@ export class ArenaDB {
     for (const file of migrationFiles) {
       if (!MIGRATION_FILE_RE.test(file)) {
         throw new Error(
-          `Invalid migration filename "${file}" (expected NNNN_description.sql)`
+          `Invalid migration filename "${file}" (expected NNNN-description.sql)`
         );
       }
       const prefix = file.slice(0, 4);
@@ -535,5 +581,64 @@ export class ArenaDB {
 
   getRatingSnapshotsForLadder(ladderId: string): LadderSnapshotHistoryRow[] {
     return getRatingSnapshotsForLadder(this.db, ladderId);
+  }
+
+  getAllActiveBots(): BotRow[] {
+    return getAllActiveBots(this.db);
+  }
+
+  getBotParticipatedLadders(botId: number): LadderRow[] {
+    return getBotParticipatedLadders(this.db, botId);
+  }
+
+  getBotLadderProfileEntries(botId: number, ladderId: string): BotLadderProfileEntry[] {
+    return getBotLadderProfileEntries(this.db, botId, ladderId);
+  }
+
+  getBotLadderStats(ladderId: string, botId: number): BotLadderStatsRow | undefined {
+    return getBotLadderStats(this.db, ladderId, botId);
+  }
+
+  getRecentMatchesForBotOnLadder(
+    botId: number,
+    ladderId: string,
+    limit?: number
+  ): RecentMatchView[] {
+    return getRecentMatchesForBotOnLadder(this.db, botId, ladderId, limit);
+  }
+
+  upsertTournament(input: UpsertTournamentInput) {
+    upsertTournament(this.db, input);
+  }
+
+  getTournaments(): TournamentRow[] {
+    return getTournaments(this.db);
+  }
+
+  getTournament(id: string): TournamentRow | undefined {
+    return getTournament(this.db, id);
+  }
+
+  upsertTournamentEntrant(input: UpsertTournamentEntrantInput) {
+    upsertTournamentEntrant(this.db, input);
+  }
+
+  getTournamentEntrants(tournamentId: string): TournamentEntrantView[] {
+    return getTournamentEntrants(this.db, tournamentId);
+  }
+
+  upsertTournamentGame(input: UpsertTournamentGameInput) {
+    upsertTournamentGame(this.db, input);
+  }
+
+  getTournamentGames(tournamentId: string, limit?: number): TournamentGameView[] {
+    return getTournamentGames(this.db, tournamentId, limit);
+  }
+
+  getTournamentCrosstable(
+    tournamentId: string,
+    stage?: TournamentGameStage
+  ): TournamentPairRecord[] {
+    return getTournamentCrosstable(this.db, tournamentId, stage);
   }
 }

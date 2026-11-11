@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://play.pokemonshowdown.com; style-src 'unsafe-inline' https://play.pokemonshowdown.com; img-src https://play.pokemonshowdown.com data:; media-src https://play.pokemonshowdown.com;">
+  <title>Battle Viewer | pkmn.ai</title>
+  <style id="viewer-style">{{{viewerStyle}}}</style>
+</head>
+<body>
+  <div class="arena-stage" id="stage">
+    <div class="battle" id="battle"></div>
+    <button class="arena-start" id="start" type="button" hidden>&#9654; Play replay</button>
+    <p class="arena-status" id="status" role="status">Loading battle viewer…</p>
+  </div>
+
+  <div class="arena-controls" id="controls" role="toolbar" aria-label="Playback controls">
+    <div class="arena-group">
+      <button type="button" class="arena-btn" data-action="start" title="First turn" disabled>|&#9664;</button>
+      <button type="button" class="arena-btn" data-action="previous" title="Previous turn" disabled>&#9664;</button>
+      <button type="button" class="arena-btn" data-action="toggle" id="toggle" title="Play" disabled>&#9654;</button>
+      <button type="button" class="arena-btn" data-action="next" title="Next turn" disabled>&#9654;</button>
+      <button type="button" class="arena-btn" data-action="end" title="Jump to end" disabled>&#9654;|</button>
+    </div>
+
+    <p class="arena-turn" id="turn"></p>
+    <span class="arena-live" id="live" hidden>&#9679; Live</span>
+
+    <div class="arena-group arena-end">
+      <button type="button" class="arena-btn" data-action="switch" title="Switch viewpoint" disabled>Switch</button>
+      <select class="arena-speed" id="speed" aria-label="Playback speed" disabled>
+        <option value="slow">Slow</option>
+        <option value="normal" selected>Normal</option>
+        <option value="fast">Fast</option>
+        <option value="hyperfast">Hyperfast</option>
+      </select>
+      <button type="button" class="arena-btn" data-action="sound" id="sound" aria-pressed="false" title="Toggle sound" disabled>Mute</button>
+    </div>
+  </div>
+
+  <div class="battle-log" id="log" aria-label="Battle log"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const ASSETS = 'https://play.pokemonshowdown.com';
+      const STYLES = ['/style/battle.css?a7', '/style/utilichart.css?a7'];
+      const SCRIPTS = [
+        '/js/lib/ps-polyfill.js',
+        '/config/config.js?a7',
+        '/js/lib/jquery-1.11.0.min.js',
+        '/js/lib/html-sanitizer-minified.js',
+        '/js/battle-sound.js',
+        '/js/battledata.js?a7',
+        '/data/pokedex-mini.js?a7',
+        '/data/pokedex-mini-bw.js?a7',
+        '/data/graphics.js?a7',
+        '/data/pokedex.js?a7',
+        '/data/moves.js?a7',
+        '/data/abilities.js?a7',
+        '/data/items.js?a7',
+        '/data/teambuilder-tables.js?a7',
+        '/js/battle-tooltips.js?a7',
+        '/js/battle.js?a7',
+      ];
+
+      const SPEEDS = {
+        slow: {fade: 500, shown: 1000},
+        normal: {fade: 300, shown: 1},
+        fast: {fade: 50, shown: 1},
+        hyperfast: {fade: 40, shown: 1},
+      };
+
+      const SCENE_WIDTH = 640;
+      const appOrigin = new URL(location.href).origin;
+
+      document.addEventListener('error', event => {
+        const image = event.target;
+        if (!(image instanceof HTMLImageElement) || image.dataset.arenaRetried) return;
+        const sprite = /^(.*\/sprites\/[^/]+\/)([a-z0-9]+)-[^/.]+(\.[a-z]+)$/.exec(image.src);
+        if (!sprite) return;
+        image.dataset.arenaRetried = 'true';
+        image.src = sprite[1] + sprite[2] + sprite[3];
+      }, true);
+
+      const el = {
+        stage: document.getElementById('stage'),
+        battle: document.getElementById('battle'),
+        log: document.getElementById('log'),
+        start: document.getElementById('start'),
+        status: document.getElementById('status'),
+        controls: document.getElementById('controls'),
+        toggle: document.getElementById('toggle'),
+        turn: document.getElementById('turn'),
+        live: document.getElementById('live'),
+        speed: document.getElementById('speed'),
+        sound: document.getElementById('sound'),
+      };
+
+      let battle = null;
+      let live = false;
+      let muted = true;
+      let controlsBound = false;
+
+      const notifyApp = msg => {
+        if (window.parent !== window) {
+          window.parent.postMessage(msg, appOrigin);
+        }
+      };
+
+      const showStatus = text => {
+        el.status.textContent = text;
+        el.status.hidden = text === '';
+      };
+
+      const applyTheme = dark => {
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.classList.toggle('dark', dark);
+      };
+
+      const fitScene = () => {
+        if (!el.stage.clientWidth) return;
+        el.stage.style.setProperty('--scene-scale', String(el.stage.clientWidth / SCENE_WIDTH));
+      };
+
+      const loadStyle = stylePath => {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = ASSETS + stylePath;
+        const styleAnchor = document.getElementById('viewer-style');
+        document.head.insertBefore(link, styleAnchor);
+      };
+
+      const loadScript = scriptPath => new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = ASSETS + scriptPath;
+        script.async = false;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Could not load ' + scriptPath));
+        document.head.appendChild(script);
+      });
+
+      const isPlaying = () => Boolean(battle && !battle.paused && !(battle.ended && battle.atQueueEnd));
+
+      const applySpeed = () => {
+        if (!battle) return;
+        const s = SPEEDS[el.speed.value] || SPEEDS.normal;
+        battle.messageFadeTime = s.fade;
+        battle.messageShownTime = s.shown;
+        battle.scene.updateAcceleration();
+      };
+
+      const applySound = () => {
+        if (!battle) return;
+        battle.setMute(muted);
+        el.sound.setAttribute('aria-pressed', String(!muted));
+        el.sound.textContent = muted ? 'Mute' : 'Sound';
+      };
+
+      const describeTurn = () => {
+        if (!battle) return '';
+        if (battle.ended && battle.atQueueEnd) return 'Finished';
+        if (battle.turn > 0) return 'Turn ' + battle.turn;
+        if (live) return 'Starting';
+        return battle.stepQueue.some(line => line.startsWith('|teampreview'))
+          ? 'Team preview'
+          : 'Start';
+      };
+
+      const render = () => {
+        if (!battle) return;
+        const playing = isPlaying();
+        el.toggle.innerHTML = playing ? '&#9208;' : '&#9654;';
+        el.toggle.title = playing ? 'Pause' : 'Play';
+        el.turn.textContent = describeTurn();
+        el.live.hidden = !live;
+        el.live.dataset.following = String(!battle.paused && battle.seeking === null);
+        if (battle.started) el.start.hidden = true;
+      };
+
+      const play = () => {
+        if (!battle) return;
+        if (battle.ended && battle.atQueueEnd) battle.reset();
+        battle.play();
+      };
+
+      const actions = {
+        start: () => battle && battle.reset(),
+        previous: () => battle && battle.seekBy(-1),
+        next: () => battle && battle.seekBy(1),
+        end: () => {
+          if (!battle) return;
+          battle.seekTurn(Infinity);
+          if (live && battle.paused) battle.play();
+        },
+        toggle: () => (isPlaying() ? battle.pause() : play()),
+        switch: () => battle && battle.switchViewpoint(),
+        sound: () => {
+          muted = !muted;
+          applySound();
+        },
+      };
+
+      const enableControls = () => {
+        for (const control of el.controls.querySelectorAll('button, select')) {
+          control.disabled = false;
+        }
+        if (controlsBound) return;
+        controlsBound = true;
+        el.controls.addEventListener('click', event => {
+          const btn = event.target instanceof Element ? event.target.closest('button') : null;
+          const act = btn ? actions[btn.dataset.action] : undefined;
+          if (!act) return;
+          act();
+          render();
+        });
+        el.speed.addEventListener('change', () => {
+          applySpeed();
+          notifyApp({type: 'speed', speed: el.speed.value});
+        });
+        el.start.addEventListener('click', () => {
+          play();
+          render();
+        });
+      };
+
+      const loadBattle = (lines, isLive, side) => {
+        if (battle) {
+          battle.destroy();
+          el.battle.innerHTML = '';
+          el.log.innerHTML = '';
+        }
+        live = Boolean(isLive);
+        window.BattleSound.setMute(muted);
+        battle = new window.Battle({
+          id: '',
+          $frame: window.$(el.battle),
+          $logFrame: window.$(el.log),
+          log: lines,
+          paused: !live,
+        });
+        battle.subscribe(render);
+        if (side === 'p2') battle.setViewpoint('p2');
+        applySound();
+        applySpeed();
+        enableControls();
+        showStatus('');
+        el.start.hidden = live;
+        if (live) battle.seekTurn(Infinity);
+        render();
+      };
+
+      const ownPokemon = requested => {
+        const mon = {...requested};
+        if (typeof mon.ident !== 'string' || typeof mon.details !== 'string') return mon;
+        const name = mon.ident.slice(mon.ident.indexOf(':') + 1).trim();
+        battle.parseDetails(name, mon.ident, mon.details, mon);
+        if (typeof mon.condition === 'string') battle.parseHealth(mon.condition, mon);
+        return mon;
+      };
+
+      const isLines = val => Array.isArray(val) && val.every(x => typeof x === 'string');
+
+      const onMessage = event => {
+        if (event.source !== window.parent || event.origin !== appOrigin) return;
+        const msg = event.data;
+        if (!msg || typeof msg !== 'object') return;
+        if (msg.type === 'load' && isLines(msg.lines)) {
+          loadBattle(msg.lines, msg.live, msg.side);
+        } else if (msg.type === 'append' && battle && live && isLines(msg.lines)) {
+          for (const line of msg.lines) battle.add(line);
+          render();
+        } else if (msg.type === 'end' && battle) {
+          live = false;
+          render();
+        } else if (msg.type === 'theme' && typeof msg.dark === 'boolean') {
+          applyTheme(msg.dark);
+        } else if (msg.type === 'speed' && Object.hasOwn(SPEEDS, msg.speed)) {
+          el.speed.value = msg.speed;
+          applySpeed();
+        } else if (msg.type === 'team' && battle && Array.isArray(msg.pokemon)) {
+          battle.myPokemon = msg.pokemon.map(ownPokemon);
+        }
+      };
+
+      const boot = async () => {
+        window.exports = window;
+        applyTheme(window.matchMedia('(prefers-color-scheme: dark)').matches);
+        STYLES.forEach(loadStyle);
+        new ResizeObserver(fitScene).observe(el.stage);
+        fitScene();
+        window.addEventListener('message', onMessage);
+
+        try {
+          await Promise.all(SCRIPTS.map(loadScript));
+        } catch {
+          showStatus('Battle viewer offline (play.pokemonshowdown.com unreachable).');
+          notifyApp({type: 'error', message: 'offline'});
+          return;
+        }
+        if (typeof window.Battle !== 'function' || typeof window.$ !== 'function') {
+          showStatus('Battle viewer unavailable offline.');
+          notifyApp({type: 'error', message: 'init'});
+          return;
+        }
+
+        showStatus('Waiting for battle…');
+        notifyApp({type: 'ready'});
+      };
+
+      void boot();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,169 @@
+{{{logoHtml}}}
+<div class="controls-bar{{{controlsInitialClass}}}">
+  <nav aria-label="Format">
+    <ul>
+      {{{formatNavItems}}}
+    </ul>
+  </nav>
+  <span class="muted">·</span>
+  <div class="ver-picker">
+    <label for="ver-select" class="muted">Version</label>
+    <select id="ver-select" class="min-select" aria-label="Version">
+      {{{initialVerOptions}}}
+    </select>
+  </div>
+</div>
+
+<section id="overview">
+  <div class="grid-2">
+    <table class="kv">
+      {{{projectMetaRows}}}
+    </table>
+
+    <table class="kv">
+      <tr><td><strong>Rank</strong></td><td id="stat-rank">{{{initialStatRank}}}</td></tr>
+      <tr><td><strong>Elo</strong></td><td id="stat-elo">{{{initialStatElo}}}</td></tr>
+      <tr><td><strong>GXE</strong></td><td id="stat-gxe">{{{initialStatGxe}}}</td></tr>
+      <tr><td><strong>Peak</strong></td><td id="stat-peak">{{{initialStatPeak}}}</td></tr>
+      <tr><td><strong>Matches</strong></td><td id="stat-record">{{{initialStatRecord}}}</td></tr>
+      <tr><td><strong>Streak</strong></td><td id="stat-streak">{{{initialStatStreak}}}</td></tr>
+      <tr><td><strong>Telemetry</strong></td><td id="stat-telemetry">{{{initialStatTelemetry}}}</td></tr>
+    </table>
+  </div>
+
+  <div class="table-wrap reign{{{reignInitialClass}}}">
+    <table>
+      <thead>
+        <tr>
+          <th>Reign</th>
+          <th class="num">Current Streak</th>
+          <th class="num">Longest Streak</th>
+          <th class="num">Total Duration</th>
+        </tr>
+      </thead>
+      <tbody id="reign-tbody">
+        {{{initialReignRows}}}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{{{emptyProfileNotice}}}
+
+<section id="versions"{{{versionsInitialClass}}}>
+  <h3><a href="#versions" class="subtle">Versions</a></h3>
+  {{{versionsPanes}}}
+</section>
+
+<section id="matchups"{{{matchupsInitialClass}}}>
+  <h3><a href="#matchups" class="subtle">Head-to-Head</a></h3>
+  {{{matchupsPanes}}}
+</section>
+
+<section id="matches"{{{matchesInitialClass}}}>
+  <h3><a href="#matches" class="subtle">Recent Matches</a></h3>
+  {{{matchesPanes}}}
+</section>
+
+<script>
+  const setTheme = t => document.documentElement.setAttribute('data-theme', t);
+  document.addEventListener('DOMContentLoaded', () => {
+    const profileData = {{{profileDataJson}}};
+    const ladderRadios = document.querySelectorAll('input[name="ladder"]');
+    const verSelect = document.getElementById('ver-select');
+    const reignTbody = document.getElementById('reign-tbody');
+    const matchupsSec = document.getElementById('matchups');
+    const panes = document.querySelectorAll('.profile-pane');
+    let curLad = {{{defaultLadderKeyJson}}};
+
+    const applyStats = ver => {
+      const ladData = profileData[curLad];
+      if (!ladData) return;
+      const s = ladData.vstats[ver] || ladData.vstats.all;
+      if (s) {
+        document.getElementById('stat-rank').innerHTML = s.rank;
+        document.getElementById('stat-elo').innerHTML = s.elo;
+        document.getElementById('stat-gxe').innerHTML = s.gxe;
+        document.getElementById('stat-peak').innerHTML = s.peak;
+        document.getElementById('stat-record').innerHTML = s.record;
+        document.getElementById('stat-streak').innerHTML = s.streak;
+        document.getElementById('stat-telemetry').innerHTML = s.telemetry;
+      }
+      const reignHtml = (ladData.reign && ladData.reign[ver]) || (ladData.reign && ladData.reign.all);
+      if (reignTbody && reignHtml) {
+        reignTbody.innerHTML = reignHtml;
+      }
+      const activeMatchPane = document.querySelector(
+        '#matches .profile-pane[data-ladder="' + curLad + '"]'
+      );
+      if (activeMatchPane) {
+        activeMatchPane.querySelectorAll('tbody tr[data-ver]').forEach(row => {
+          row.classList.toggle('hide', ver !== 'all' && row.dataset.ver !== ver);
+        });
+      }
+    };
+
+    const applyLadder = ladKey => {
+      const ladData = profileData[ladKey];
+      if (!ladData) return;
+      curLad = ladKey;
+      ladderRadios.forEach(r => {
+        if (r.value === ladKey) r.checked = true;
+      });
+      panes.forEach(p => {
+        p.classList.toggle('hide', p.dataset.ladder !== ladKey);
+      });
+      if (matchupsSec) {
+        const mp = matchupsSec.querySelector('.profile-pane[data-ladder="' + ladKey + '"]');
+        matchupsSec.classList.toggle('hide', !mp || mp.dataset.empty === 'true');
+      }
+      if (verSelect) {
+        verSelect.innerHTML = ladData.optionsHtml;
+        verSelect.value = 'all';
+      }
+      applyStats('all');
+    };
+
+    if (verSelect) {
+      verSelect.addEventListener('change', () => applyStats(verSelect.value));
+    }
+
+    ladderRadios.forEach(r => r.addEventListener('change', () => {
+      applyLadder(r.value);
+      if (history.replaceState) {
+        history.replaceState(null, '', '#' + r.value);
+      }
+    }));
+
+    const applyHash = () => {
+      if (!location.hash) return;
+      const h = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+      if (profileData[h]) {
+        applyLadder(h);
+      }
+    };
+    window.addEventListener('hashchange', applyHash);
+    applyHash();
+
+    document.querySelectorAll('.h2h-table').forEach(table => {
+      const headers = table.querySelectorAll('th.sortable');
+      let sortCol = -1;
+      let sortAsc = false;
+      headers.forEach(th => th.addEventListener('click', () => {
+        const col = Number(th.dataset.col);
+        const isNum = th.dataset.type === 'num';
+        sortAsc = sortCol === col ? !sortAsc : !isNum;
+        sortCol = col;
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort((a, b) => {
+          const av = a.children[col].dataset.val || '';
+          const bv = b.children[col].dataset.val || '';
+          const cmp = isNum ? Number(av) - Number(bv) : av.localeCompare(bv);
+          return sortAsc ? cmp : -cmp;
+        });
+        rows.forEach(row => tbody.appendChild(row));
+      }));
+    });
+  });
+</script>

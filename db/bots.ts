@@ -398,6 +398,15 @@ export function getBotById(db: DatabaseSync, id: number): BotRow | undefined {
     .get(id) as unknown as BotRow | undefined;
 }
 
+export function getAllActiveBots(db: DatabaseSync): BotRow[] {
+  return db.prepare(`
+    SELECT *
+    FROM bots
+    WHERE status != 'disabled'
+    ORDER BY slug ASC
+  `).all() as unknown as BotRow[];
+}
+
 export function refundCooldown(
   db: DatabaseSync,
   botSlug: string,

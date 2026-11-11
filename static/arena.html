@@ -1,0 +1,32 @@
+<section id="overview" class="arena-blurb">
+  {{{blurbHtml}}}
+</section>
+
+<section id="ladders">
+  <h3><a href="#ladders" class="subtle">Ladders</a></h3>
+  <div class="table-wrap">
+    <table class="standings-table">
+      <thead>
+        <tr>
+          <th>Ladder</th>
+          <th>Bot</th>
+          <th class="num" title="MAP Davidson Elo ± 95% Confidence Interval">Elo</th>
+          <th class="num" title="Expected win percentage against prior N(1500, 350^2)">GXE</th>
+          <th class="num" title="2-game blind-pair Match Wins – Losses – Ties (1-1 splits)">W–L–T</th>
+          <th class="center" title="Current consecutive outright match win/loss streak">Streak</th>
+          <th class="num" title="Pairwise Likelihood of Superiority over #2">LOS</th>
+        </tr>
+      </thead>
+      <tbody>{{{ladderSummaryRows}}}</tbody>
+    </table>
+  </div>
+</section>
+
+<section id="tournaments">
+  <h3><a href="#tournaments" class="subtle">Tournaments</a></h3>
+  {{{tournamentsSummaryHtml}}}
+</section>
+
+<script>
+  const setTheme = t => document.documentElement.setAttribute('data-theme', t);
+</script>

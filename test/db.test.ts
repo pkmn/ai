@@ -25,20 +25,20 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
   test('loads individual .sql table definitions from db/schema/', () => {
     const schemaFiles = fs.readdirSync(SCHEMA_DIR).filter(f => f.endsWith('.sql')).sort();
     expect(schemaFiles).toEqual([
-      'bot_ladder_stats.sql',
-      'bot_ladder_teams.sql',
-      'bot_versions.sql',
+      'bot-ladder-stats.sql',
+      'bot-ladder-teams.sql',
+      'bot-versions.sql',
       'bots.sql',
       'developers.sql',
-      'discord_members.sql',
-      'ladder_entries.sql',
+      'discord-members.sql',
+      'ladder-entries.sql',
       'ladders.sql',
       'matches.sql',
-      'pair_aggregates.sql',
-      'rating_snapshots.sql',
-      'schema_migrations.sql',
-      'tournament_entrants.sql',
-      'tournament_games.sql',
+      'pair-aggregates.sql',
+      'rating-snapshots.sql',
+      'schema-migrations.sql',
+      'tournament-entrants.sql',
+      'tournament-games.sql',
       'tournaments.sql',
     ]);
 
@@ -49,7 +49,10 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
          WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
          ORDER BY name ASC`
       ).all() as Array<{name: string}>;
-      expect(tables.map(t => t.name)).toEqual(schemaFiles.map(f => f.replace(/\.sql$/, '')));
+      const expectedTables = schemaFiles
+        .map(f => f.replace(/\.sql$/, '').replace(/-/g, '_'))
+        .sort();
+      expect(tables.map(t => t.name)).toEqual(expectedTables);
     } finally {
       db.close();
     }
@@ -83,11 +86,11 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
     db1.close();
 
     fs.writeFileSync(
-      path.join(migrationDir, '0001_add_tag.sql'),
+      path.join(migrationDir, '0001-add-tag.sql'),
       "ALTER TABLE items ADD COLUMN tag TEXT NOT NULL DEFAULT 'v1';"
     );
     fs.writeFileSync(
-      path.join(migrationDir, '0002_rebuild_items.sql'),
+      path.join(migrationDir, '0002-rebuild-items.sql'),
       `
       CREATE TABLE items_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,10 +111,10 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
     `);
 
     const db2 = new ArenaDB(dbFile, {schemaDir, migrationDir, now: 2000});
-    expect(fs.existsSync(`${dbFile}.pre-0001_add_tag.bak`)).toBe(true);
+    expect(fs.existsSync(`${dbFile}.pre-0001-add-tag.bak`)).toBe(true);
     expect(db2.getAppliedMigrations()).toEqual([
-      {version: '0001_add_tag.sql', applied_at: 2000},
-      {version: '0002_rebuild_items.sql', applied_at: 2000},
+      {version: '0001-add-tag.sql', applied_at: 2000},
+      {version: '0002-rebuild-items.sql', applied_at: 2000},
     ]);
     const row = db2.db.prepare('SELECT id, name, tag FROM items WHERE id = 1').get();
     expect(row).toEqual({id: 1, name: 'alpha', tag: 'v1'});
@@ -120,24 +123,24 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
     // Fresh DB fast-forwards schemaDir and marks migrations applied without re-running ALTER
     const freshDb = new ArenaDB(':memory:', {schemaDir, migrationDir, now: 3000});
     expect(freshDb.getAppliedMigrations()).toEqual([
-      {version: '0001_add_tag.sql', applied_at: 3000},
-      {version: '0002_rebuild_items.sql', applied_at: 3000},
+      {version: '0001-add-tag.sql', applied_at: 3000},
+      {version: '0002-rebuild-items.sql', applied_at: 3000},
     ]);
     freshDb.close();
 
     fs.writeFileSync(
-      path.join(migrationDir, '0003_break_fk.sql'),
+      path.join(migrationDir, '0003-break-fk.sql'),
       'DELETE FROM items WHERE id = 1;'
     );
     expect(() => new ArenaDB(dbFile, {schemaDir, migrationDir, now: 4000}))
-      .toThrow(/Foreign key check failed in migration "0003_break_fk.sql"/);
+      .toThrow(/Foreign key check failed in migration "0003-break-fk.sql"/);
 
-    fs.rmSync(path.join(migrationDir, '0003_break_fk.sql'));
+    fs.rmSync(path.join(migrationDir, '0003-break-fk.sql'));
     const db3 = new ArenaDB(dbFile, {schemaDir, migrationDir, now: 5000});
     expect(db3.db.prepare('SELECT name FROM items WHERE id = 1').get()).toEqual({name: 'alpha'});
     expect(db3.getAppliedMigrations().map(m => m.version)).toEqual([
-      '0001_add_tag.sql',
-      '0002_rebuild_items.sql',
+      '0001-add-tag.sql',
+      '0002-rebuild-items.sql',
     ]);
     db3.close();
   });

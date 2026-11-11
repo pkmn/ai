@@ -1,0 +1,121 @@
+<div class="event-bar">
+  <select id="event-select" class="min-select" aria-label="Tournament event">
+    {{{eventOptions}}}
+  </select>
+</div>
+
+{{{metaHtml}}}
+
+<section id="live"{{{liveInitialClass}}}>
+  {{{liveHtml}}}
+</section>
+
+<section id="standings">
+  <h3><a href="#standings" class="subtle">Standings</a></h3>
+  {{{standingsHtml}}}
+</section>
+
+<section id="crosstable"{{{crosstableInitialClass}}}>
+  <h3><a href="#crosstable" class="subtle">Crosstable</a></h3>
+  {{{crosstableHtml}}}
+</section>
+
+<section id="games">
+  <h3><a href="#games" class="subtle">Games</a></h3>
+  {{{gamesHtml}}}
+</section>
+
+<script>
+  const setTheme = t => {
+    document.documentElement.setAttribute('data-theme', t);
+    const vf = document.getElementById('ps-viewer-frame');
+    if (vf && vf.contentWindow) {
+      vf.contentWindow.postMessage({type: 'theme', dark: t === 'dark'}, '*');
+    }
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    const eventSelect = document.getElementById('event-select');
+    const liveSec = document.getElementById('live');
+    const frame = document.getElementById('ps-viewer-frame');
+    const initialViewer = {{{viewerInitJson}}};
+    let viewerReady = false;
+    let pendingPayload = initialViewer;
+
+    const sendToViewer = msg => {
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage(msg, '*');
+      }
+    };
+
+    const syncTheme = () => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      sendToViewer({type: 'theme', dark});
+    };
+
+    window.addEventListener('message', ev => {
+      if (!frame || ev.source !== frame.contentWindow) return;
+      const data = ev.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'ready') {
+        viewerReady = true;
+        syncTheme();
+        if (pendingPayload && Array.isArray(pendingPayload.lines) && pendingPayload.lines.length > 0) {
+          sendToViewer({
+            type: 'load',
+            lines: pendingPayload.lines,
+            live: Boolean(pendingPayload.live),
+            side: pendingPayload.side || 'p1',
+          });
+        }
+      }
+    });
+
+    document.querySelectorAll('a[data-replay-log]').forEach(link => {
+      link.addEventListener('click', async ev => {
+        const logUrl = link.getAttribute('data-replay-log');
+        if (!logUrl || !frame || !liveSec) return;
+        ev.preventDefault();
+        try {
+          const res = await fetch(logUrl);
+          if (!res.ok) return;
+          const text = await res.text();
+          const lines = text.split('\n');
+          liveSec.classList.remove('hide');
+          const seriesLeft = document.getElementById('series-left');
+          if (seriesLeft) {
+            seriesLeft.innerHTML = '<strong>Replay</strong> · <code>' +
+              (link.textContent || '') + '</code>';
+          }
+          pendingPayload = {lines, live: false, side: 'p1'};
+          if (viewerReady) {
+            sendToViewer({type: 'load', lines, live: false, side: 'p1'});
+          }
+          liveSec.scrollIntoView({behavior: 'smooth'});
+        } catch {}
+      });
+    });
+
+    if (initialViewer && initialViewer.live && initialViewer.thinkingSlot) {
+      const startMs = Date.now();
+      const baseBank = Number(initialViewer.thinkingBankSeconds) || 0;
+      const clockEl = document.getElementById('clock-' + initialViewer.thinkingSlot);
+      if (clockEl) {
+        setInterval(() => {
+          const elapsed = Math.floor((Date.now() - startMs) / 1000);
+          const rem = Math.max(0, Math.round(baseBank - elapsed));
+          const mm = String(Math.floor(rem / 60)).padStart(2, '0');
+          const ss = String(rem % 60).padStart(2, '0');
+          clockEl.textContent = mm + ':' + ss;
+        }, 1000);
+      }
+    }
+
+    if (eventSelect) {
+      eventSelect.addEventListener('change', () => {
+        if (eventSelect.value) {
+          window.location.href = eventSelect.value;
+        }
+      });
+    }
+  });
+</script>

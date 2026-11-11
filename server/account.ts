@@ -330,7 +330,6 @@ function renderHistorySection(
 export function renderAccountPage(opts: {
   developer: DeveloperRow;
   bot: BotRow;
-  hasProfilePage: boolean;
   status: SubmissionStatus;
   currentLadders: LadderRow[];
   needsTeamsLadders: LadderRow[];
@@ -341,7 +340,6 @@ export function renderAccountPage(opts: {
   const {
     developer,
     bot,
-    hasProfilePage,
     status,
     currentLadders,
     needsTeamsLadders,
@@ -362,9 +360,7 @@ export function renderAccountPage(opts: {
         <span class="muted">(<a href="${linkHref}" class="subtle">link</a>)</span>
       </span>`;
 
-  const projectHref = hasProfilePage
-    ? `/leaderboard/${encodeURIComponent(bot.slug)}/`
-    : `/projects/#${encodeURIComponent(bot.name.replaceAll(' ', ''))}`;
+  const projectHref = `/projects/${encodeURIComponent(bot.slug)}/`;
 
   const statusClass = status.label === 'Eligible'
     ? 'yes'
@@ -596,7 +592,6 @@ export function register(app: polka.Polka, options: AccountOptions) {
     const html = renderAccountPage({
       developer,
       bot,
-      hasProfilePage: db.hasAnyLeaderboardEntry(bot.id),
       status: db.computeBotSubmissionStatus(bot.id, now),
       currentLadders,
       needsTeamsLadders,

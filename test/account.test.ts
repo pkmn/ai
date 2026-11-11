@@ -409,6 +409,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       headers: {Cookie: cookieFor('pre')},
     })).text();
     expect(preHtml).toContain('<strong>pre</strong>');
+    expect(preHtml).toContain('href="/projects/0-error/"');
     expect(preHtml).toContain('@scheibo');
     expect(preHtml).toContain('>change<');
     expect(preHtml).toContain('>Eligible<');

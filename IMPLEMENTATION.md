@@ -88,8 +88,8 @@ flowchart LR
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/wiki/` | Droplet SSD | Git checkout of `github.com/pkmn/wiki` containing `.dj` wiki pages and revision history. |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/config/wiki.yml` | Droplet SSD | Public wiki configuration (`admins` and GitHub-to-author display name mappings). |
 | **`pkmn.ai` Droplet** | `/home/pkmn/ai/private/.env` | Droplet SSD | Gitignored server secrets (`DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `SESSION_SECRET`, `ARENA_SECRET`, `SMOGON_TOKEN`, `VGC_BOT_TOKEN`). |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/avatars/<slug>.png` | Droplet SSD | Optional project PNG logos committed via registration PRs (rendered on `/leaderboard/<slug>/`). |
-| **`pkmn.ai` Droplet** | `/home/pkmn/ai/public/` | Droplet SSD | Pre-rendered static HTML/JSON served directly by Nginx (`leaderboard/`, `battles/`, `api/live.json`). |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/static/avatars/<slug>.png` | Droplet SSD | Optional project PNG logos committed via registration PRs (rendered on `/projects/<slug>/`). |
+| **`pkmn.ai` Droplet** | `/home/pkmn/ai/public/` | Droplet SSD | Pre-rendered static HTML/JSON served directly by Nginx (`arena/`, `projects/<slug>/`, `api/live.json`). |
 | **`pkmn.ai` Droplet** | `/var/lib/pkmn/arena.sqlite` | Droplet SSD | Control-plane SQLite DB (`ladders`, `developers`, `bots`, `bot_versions`, `bot_ladder_teams`, `ladder_entries`, `bot_ladder_stats`, `matches`, `pair_aggregates`, `rating_snapshots`, `discord_members`). |
 | **`pkmn.ai` Droplet** | `/etc/ssh/sshd_config.d/arena-tunnel.conf` | Droplet SSD | Hardened `sshd` `Match User tunnel` block (`AllowTcpForwarding remote`, `ForceCommand /usr/sbin/nologin`). |
 | **`pkmn.ai` Droplet** | `/home/tunnel/.ssh/authorized_keys` | Droplet SSD | Tunnel public key locked to `restrict,port-forwarding,permitlisten="127.0.0.1:2222",permitopen="none"`. |
@@ -141,7 +141,7 @@ Every ladder has an **immutable internal `ladder_id`** (representing a frozen ru
 | **`VGC`** | `gen9championsvgc2026regmc` | `[Gen 9 Champions] VGC 2026 Reg M-C` | Seasonal | Yes (Pick 4) | Competitor 20-team pot (`3`) | Designated `v1` / `1500` prior |
 
 - **Decoupled `ladder_id` & Epoch Rotation (`active` $\rightarrow$ `settling` $\rightarrow$ `archived`)**:
-  - **`active`**: Shown under its primary short slot code (`RBY`, `ADV`, `SV`, `RAND`, `VGC`) on `/leaderboard/`, `/battles/`, and `/account/`, accepting new bot submissions and playing matches continuously. Permanent ladders use the `<format><YYYYMMDD>` identifier convention (e.g., `gen1ou20261109`, `gen9ou20261109`, `gen9randombattle20261109`).
+  - **`active`**: Shown under its primary short slot code (`RBY`, `ADV`, `SV`, `RAND`, `VGC`) on `/arena/`, `/arena/ladders/:name/`, `/arena/battles/`, and `/account/`, accepting new bot submissions and playing matches continuously. Permanent ladders use the `<format><YYYYMMDD>` identifier convention (e.g., `gen1ou20261109`, `gen9ou20261109`, `gen9randombattle20261109`).
   - **`settling`**: When a new VGC seasonal regulation drops (or if any permanent format `RBY`/`ADV`/`SV`/`RAND` ever undergoes a major breaking ban/epoch refresh), the outgoing `ladder_id` transitions to `settling`: new submissions to it are closed, while the Arena continues scheduling matches until all active versions on that `ladder_id` reach settlement ($\text{SE}(R) \le 30\text{ Elo}$ and $\ge 25$ matches).
   - **`archived`**: Once settled, the outgoing ladder's leaderboard is frozen permanently, its active bot versions transition to `retired` (freeing internal SSD cache space on `arena`), and its `display_name` changes from the short slot code (`VGC`) to its full historical epoch title (e.g., `"VGC 2026 Reg M-C"` or `"SV (2026-11-09)"`) in archived views—while the active slot seamlessly points to the new `ladder_id` (e.g., `gen9championsvgc2026regmd` or `gen9ou20270601`).
 
@@ -2484,7 +2484,7 @@ Competitors register new projects by opening a structured GitHub Issue on `pkmn/
     1. Adhere to the latest community guidance on [Responsible Releases](/release).
     2. Grant **pkmn.ai** permission to run their model in its Arena for evaluation against other agents.
     3. Grant **pkmn.ai** permission to run their model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
-  - **Optional Project Logo**: Optional PNG image committed to `static/avatars/<slug>.png` (copied to `public/leaderboard/<slug>.png` at build/render time and displayed exclusively on `/leaderboard/<slug>/`).
+  - **Optional Project Logo**: Optional PNG image committed to `static/avatars/<slug>.png` (copied to `public/projects/<slug>.png` at build/render time and displayed exclusively on `/projects/<slug>/`).
   - **Zero Private PII & Self-Service Discord Linking**: No email addresses are collected. Discord accounts are **not** stored in `static/projects.yml`; instead, each approved developer links their own Discord account via 1-click Discord OAuth on `/account/`.
 
 #### GitHub Issue Form Template (`.github/ISSUE_TEMPLATE/register.yml`)
@@ -2555,7 +2555,7 @@ body:
     id: logo
     attributes:
       label: Project Logo (Optional PNG)
-      description: Optional PNG logo to display on your project's statistics page (`/leaderboard/<slug>/`). Drag and drop here if providing one.
+      description: Optional PNG logo to display on your project's statistics page (`/projects/<slug>/`). Drag and drop here if providing one.
   - type: checkboxes
     id: agreements
     attributes:
@@ -3183,7 +3183,7 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
 - **Side Effect on `pkmn.ai`**: Commits match + updated `ladder_entries` + `bot_ladder_stats` + `pair_aggregates` (including pairwise `los_low`) + daily `rating_snapshots` (and optional `settling` $\rightarrow$ `archived` transition) in one SQLite transaction, updates $O(1)$ match streaks, peak ratings, and Top-1/10/100 duration counters, and atomically regenerates static HTML/JSON files.
 
 ### Nginx Configuration (`config/nginx.conf` & `private/nginx.conf`)
-- Keep `root /home/pkmn/ai/public;` so pre-rendered `/leaderboard/*`, `/battles/index.html`, `/projects/index.html`, and `/api/live.json` are served directly from disk by Nginx with zero Node.js overhead.
+- Keep `root /home/pkmn/ai/public;` so pre-rendered `/arena/*` (`index.html`, `index.json`, `ladders/*`, `tournaments/*`, `battles/index.html`), `/projects/<slug>/index.html`, `/projects/index.html`, and `/api/live.json` are served directly from disk by Nginx with zero Node.js overhead (while redirecting `/(ladder|leaderboard|ranking|rating|tournament|tour)s?` and index-less `/arena/(...)s?` to `/arena`, `/battles?` to `/arena/battles`, and non-Arena `/projects/<id>` paths to `/projects/#<id>` via `@anchor_redirects`).
 - Proxy `/wiki`, `/auth/`, `/account`, `/api/submissions`, `/api/account/`, `/api/arena/`, and `/chat/logs/token` to `http://127.0.0.1:1234` (`client_max_body_size 1m;`).
 - Replace `/vouch/validate` with internal `auth_request /auth/discord/validate` (`http://127.0.0.1:1234`) for `/chat/logs` and `/private/*` (`?guild=0`), removing all `127.0.0.1:9090` Vouch blocks.
 
@@ -3193,10 +3193,11 @@ All endpoints under `/api/arena/*` require `Authorization: Bearer <ARENA_HMAC_SE
 
 ### Atomic Static Page Generation (`server/render.ts`)
 Whenever `POST /api/arena/match-complete`, `POST /api/arena/submission-status`, or `projects.yml` sync finishes its SQLite transaction on `pkmn.ai`, the server atomically renders `.tmp` files and renames them into `/home/pkmn/ai/public/`:
-- **`/leaderboard/index.html` (+ `/leaderboard/standings.json`)**: Unified single-page Leaderboard with format radio nav (`RBY — ADV — SV — RAND — VGC`), version filter subnav (`Active — Best — All`), 7-column `Standings` table (`#`, `Bot`, `Elo` [`±CI`], `GXE`, `W–L–T`, `Streak`, `LOS`), inline `History` SVG chart, and `Matchups` heatmap matrix.
-- **`/leaderboard/<bot-slug>/index.html` (+ optional `/leaderboard/<bot-slug>.png`)**: Per-project statistics profile with optional pixelated logo, subscribed-ladder radio nav + `#ver-select` version picker, 2-column `.kv` `Overview` + Top 1/10/100 `Reign` table, `Versions` lineage SVG + table (`Version, Elo, Δ Elo, GXE, W–L–T, Turn, Peak RAM, Submitted`), client-sortable 8-column `Head-to-Head` table (`Opponent, Elo, W–L–T, Score, Expected, Δ, Streak, LOS`), and 8-column `Recent Matches` table (`Match, Ver., Opponent, Result, Turns, Bank, RAM, Completed`).
-- **`/leaderboard/tournaments/index.html`**: Championships & archive page with `#event-select`, `#live` 640×360 Showdown `#battle` viewer + `.ps-log`, 6-column `Standings` (`#, Bot, Elo, W–L–T, Points, S–B`), `Crosstable`, and 6-column `Games` table (`Game, Player 1, Player 2, Result, Turns, Bank` with 6-Pokémon Smogon party minisprites).
-- **`/battles/index.html`**: Live execution monitor (`All — RBY — ADV — SV — RAND — VGC` filter, `#live` `PAUSED` / `● RUNNING` slot cards, and 6-column `History` table `Battle, Player 1, Player 2, Result, Turns, Completed` with zero team sprites). Pre-rendered statically for instant first paint, while client JS runs a 1-second local `setInterval` interpolating `Turn` / `Bank` / heartbeat age on the `● RUNNING` slot and polls Nginx-served `/api/live.json` every 2–3s (`Cache-Control: no-cache` + `ETag` `304 Not Modified`) to update turns, `PAUSED`/`● RUNNING` transitions, Game 1 $\rightarrow$ Game 2 score, and newly finished `#battles-table` rows without refreshing the page.
+- **`/arena/index.html` (+ `/arena/index.json`)**: Central Arena hub with top overview blurb (`static/arena.dj` linking `/rules/` and `/arena/battles/`), `#ladders` summary table pulling out each ladder's `#1` ranked bot row (linking ladder names to `/arena/ladders/<slot>/` and bots to `/projects/<slug>/`), and `#tournaments` listing any ongoing (`running`/`scheduled`) events alongside the full completed tournament history (winner + record, linking to `/arena/tournaments/<num>/`).
+- **`/arena/ladders/<slot>/index.html` (+ `/arena/ladders/<slot>/index.json`)**: Per-ladder leaderboard (`RBY — ADV — SV — RAND — VGC` format nav linking between `/arena/ladders/<slot>/`, version filter subnav `Active — Best — All`, 7-column `Standings` table `#`, `Bot`, `Elo` [`±CI`], `GXE`, `W–L–T`, `Streak`, `LOS`, inline `History` SVG chart, and `Matchups` heatmap matrix).
+- **`/projects/<bot-slug>/index.html` (+ optional `/projects/<bot-slug>.png`)**: Per-project statistics profile under `/projects/:bot` with optional pixelated logo, subscribed-ladder radio nav + `#ver-select` version picker, 2-column `.kv` `Overview` + Top 1/10/100 `Reign` table, `Versions` lineage SVG + table (`Version, Elo, Δ Elo, GXE, W–L–T, Turn, Peak RAM, Submitted`), client-sortable 8-column `Head-to-Head` table (`Opponent, Elo, W–L–T, Score, Expected, Δ, Streak, LOS`), and 8-column `Recent Matches` table (`Match, Ver., Opponent, Result, Turns, Bank, RAM, Completed`).
+- **`/arena/tournaments/<num>/index.html` (+ `/arena/tournaments/<num>/index.json` + `/arena/viewer/index.html`)**: Per-tournament page with `#event-select` navigating across `/arena/tournaments/<num>/`, `#live` header + per-bot clock bar above a sandboxed `<iframe src="/arena/viewer/" sandbox="allow-scripts">` Showdown battle viewer (hiding `.trainersprite` and driven via `postMessage` for both live broadcasts and inline replays), 6-column `Standings` (`#, Bot, Elo, W–L–T, Points, S–B`), `Crosstable`, and 6-column `Games` table (`Game, Player 1, Player 2, Result, Turns, Bank` with 6-Pokémon Smogon party minisprites).
+- **`/arena/battles/index.html`**: Live execution monitor (`All — RBY — ADV — SV — RAND — VGC` filter, `#live` `PAUSED` / `● RUNNING` slot cards, and 6-column `History` table `Battle, Player 1, Player 2, Result, Turns, Completed` with zero team sprites). Pre-rendered statically for instant first paint, while client JS runs a 1-second local `setInterval` interpolating `Turn` / `Bank` / heartbeat age on the `● RUNNING` slot and polls Nginx-served `/api/live.json` every 2–3s (`Cache-Control: no-cache` + `ETag` `304 Not Modified`) to update turns, `PAUSED`/`● RUNNING` transitions, Game 1 $\rightarrow$ Game 2 score, and newly finished `#battles-table` rows without refreshing the page.
 - **`/projects/index.html`**: Re-renders `static/projects.ts` with the `Active — Arena — All — Inactive` filter, `Arena` rank badges (`RBY #1`, `SV (provisional)`), and live Arena rank priority sort order.
 - *(Note: `/account/` is rendered dynamically via SSR per authenticated GitHub developer.)*
 
@@ -3272,15 +3273,15 @@ Every statistic below is adapted for 2-game blind-pair (`Bo2`) matches and track
 
 ### Arena UI Views & Column Layouts (`pkmn-ai-ui-mocks` Specification)
 All public Arena pages use `site.page.Renderer` (`main { width: 100%; max-width: min(105ch, calc(100% - 4vh)); }` so filtering rows never shrinks page width, zero horizontal overflow down to `375×667`, and `site` semantic CSS tokens `--hl-string`, `--hl-name`, `--hl-symbol`, etc.):
-- **Unified Leaderboard (`/leaderboard/index.html`)**:
-  - **Format Nav**: `RBY — ADV — SV — RAND — VGC` (hash-addressable `#rby`, `#adv`, `#sv`, `#rand`, `#vgc`).
+- **Arena Hub (`/arena/index.html`) & Per-Ladder Pages (`/arena/ladders/<slot>/index.html`)**:
+  - **Format Nav**: `RBY — ADV — SV — RAND — VGC` linking across `/arena/ladders/<slot>/`.
   - **Version Subnav**: `Active` (default; shows up to 2 active versions per project: `Champion` + `Challenger`) — `Best` (highest-rated active version per project) — `All` (includes `Retired` versions).
-  - **7-Column `#standings-table`**: `#`, `Bot` (link to `/leaderboard/<slug>/` + `<code>ver</code>` + `.ext` repo icon; no avatars), `Elo` (`<strong>1748</strong> <span class="muted">±28</span>`), `GXE`, `W–L–T`, `Streak` (`W >= 3` `.yes`, `L >= 3` `.no`), `LOS` (vs. next-ranked settled bot). Sorted inline by **Conservative Rating (`rating_lcb = rating_elo - 1.96 * rating_se`)**; secondary active, provisional (`< 10` matches or `SE > 60`), and retired rows show Rank = `—` and `LOS` = `—`.
+  - **7-Column `#standings-table`**: `#`, `Bot` (link to `/projects/<slug>/` + `<code>ver</code>` + `.ext` repo icon; no avatars), `Elo` (`<strong>1748</strong> <span class="muted">±28</span>`), `GXE`, `W–L–T`, `Streak` (`W >= 3` `.yes`, `L >= 3` `.no`), `LOS` (vs. next-ranked settled bot). Sorted inline by **Conservative Rating (`rating_lcb = rating_elo - 1.96 * rating_se`)**; secondary active, provisional (`< 10` matches or `SE > 60`), and retired rows show Rank = `—` and `LOS` = `—`.
   - **`#history` Inline SVG (`760×245`) & `#matchups` `table.matrix`**: Daily MAP Elo trajectories of top active bot families + `oklab` `.hm-w1..4` / `.hm-l1..4` pairwise cross-table (`Score%` + `W–L–T`).
-- **Bot Profile (`/leaderboard/<slug>/index.html`)**:
-  - Optional pixelated project logo (`/leaderboard/<slug>.png`), subscribed-ladder radio nav + `#ver-select` (`All (N)`, `1.2.0 (active)`, `1.0.0 (retired)`), 2-column `.kv` `Overview` + Top 1/10/100 `Reign` table, `Versions` lineage SVG (`760×220`) + table, client-sortable 8-column `Head-to-Head` table (`Opponent, Elo, W–L–T, Score, Expected, Δ, Streak, LOS`), and 8-column `Recent Matches` table (`Match, Ver., Opponent, Result, Turns, Bank, RAM, Completed`).
+- **Bot Profile (`/projects/<slug>/index.html`)**:
+  - Optional pixelated project logo (`/projects/<slug>.png`), subscribed-ladder radio nav + `#ver-select` (`All (N)`, `1.2.0 (active)`, `1.0.0 (retired)`), 2-column `.kv` `Overview` + Top 1/10/100 `Reign` table, `Versions` lineage SVG (`760×220`) + table, client-sortable 8-column `Head-to-Head` table (`Opponent, Elo, W–L–T, Score, Expected, Δ, Streak, LOS`), and 8-column `Recent Matches` table (`Match, Ver., Opponent, Result, Turns, Bank, RAM, Completed`).
 - **Zero Ladder Team Leaks & Sanitized Crash Telemetry**:
-  - Ladder battle replays, team sets, and species lists are never shown on `pkmn.ai` (`/battles/` and `/leaderboard/<slug>/` omit team minisprites and replay links).
+  - Ladder battle replays, team sets, and species lists are never shown on `pkmn.ai` (`/arena/battles/` and `/projects/<slug>/` omit team minisprites and replay links).
   - Offline smoke tests (run on non-secret dummy teams) show full `stderr` traces on `/account/` to the project's developers.
   - Real ladder matches suppress `stderr` and show only match ID, timestamp, opponent version, Game 1 & 2 outcomes, turn counts, peak RAM, per-game bank time remaining, and end reason (`normal`, `tie_1000_turns`, `timeout`, `oom`, `crash`, `invalid_choice_3x`).
 
@@ -3576,7 +3577,7 @@ export function updatePostMatchStatsAndStandings(
 
 All charts on `pkmn.ai` are pre-rendered as lightweight inline `<svg>` elements with zero heavy client-side charting libraries (plus embedded `<title>` hover tooltips and CSS class toggles):
 
-1. **Global "Battle for the Top Spot" Timeline Chart (on `/leaderboard/<ladder>/index.html`)**:
+1. **Global "Battle for the Top Spot" Timeline Chart (on `/arena/ladders/<slot>/index.html`)**:
    - **What It Plots**: A multi-line time-series chart tracking the **Daily Effective Rating (`rating_elo`) of the Top 10 Bot Families** over calendar time (`day_utc` from `rating_snapshots`, with `30d` / `90d` / `All-Time` range tabs).
    - **Bot-Family Continuity Across Version Upgrades**:
      - Rather than plotting disconnected line segments every time a developer updates from `v1.1.0` to `v1.2.0`, each line on the global chart represents a **Bot Family (`bot_id`)**.
@@ -3584,7 +3585,7 @@ All charts on `pkmn.ai` are pre-rendered as lightweight inline `<svg>` elements 
      - Whenever a bot family's new `Challenger` version surpasses its prior `Champion` on the chart, a **Version Milestone Marker (`● v1.2.0`)** is drawn directly on that bot's line. Spectators can immediately see *when* a version upgrade launched a bot into #1 (or failed to close the gap).
    - **"King of the Hill" Reign Banner**: Below the global chart, a compact timeline bar displays every historical #1 reign on that ladder (Bot Name, `vX.Y.Z`, start/end dates, consecutive days at #1, and peak Elo achieved).
 
-2. **Per-Bot Multi-Version Progression Charts (on `/leaderboard/<ladder>/<bot-slug>/index.html`)**:
+2. **Per-Bot Multi-Version Progression Charts (on `/projects/<bot-slug>/index.html`)**:
    - Each bot profile page provides two complementary views of the bot's evolution across versions:
      - **View A — Version Lineage Step & $\Delta\text{Elo}$ Chart (Default Overview)**:
        - Plots every version of the bot ever submitted to that ladder (`v1.0.0`, `v1.1.0`, `v1.2.0`, `v2.0.0`...) in chronological order along the X-axis, with settled `rating_elo` and vertical $\pm 1.96\,\text{SE}$ (95% CI) error bars on the Y-axis.
@@ -3633,9 +3634,9 @@ Compressing each battle log individually immediately after a match prevents LZMA
 To develop, verify, and visually test the entire `pkmn.ai` VPS control plane **without** the M6 Mac mini sandbox, `tools/mock-arena.ts` implements a deterministic Arena simulator and database seeder that speaks the exact `/api/arena/*` HTTP protocol (`Bearer <ARENA_HMAC_SECRET>`) and runs the real `computeDavidsonRatings` solver:
 
 1. **Deterministic Seed Mode (`node build/tools/mock-arena.js seed`)**:
-   - Seeds `/var/lib/pkmn/arena.sqlite` (or a test SQLite file) with multi-developer `projects.yml` fixtures, active/provisional/settled/retired/rejected/quarantined versions across `RBY`, `ADV`, `SV`, `RAND`, and `VGC` (including validated 20-team VGC pools), daily `rating_snapshots`, `pair_aggregates`, `matches`, `/api/live.json`, and a tournament archive (`Autumn ’26 — [Gen 9] OU`), then runs `server/render.ts` so all 6 UI views (`/projects/`, `/leaderboard/`, `/leaderboard/<slug>/`, `/leaderboard/tournaments/`, `/battles/`, `/account/`) can be inspected in a browser and verified via `npm run shots` (`tools/shots.ts`).
+   - Seeds `/var/lib/pkmn/arena.sqlite` (or a test SQLite file) with multi-developer `projects.yml` fixtures, active/provisional/settled/retired/rejected/quarantined versions across `RBY`, `ADV`, `SV`, `RAND`, and `VGC` (including validated 20-team VGC pools), daily `rating_snapshots`, `pair_aggregates`, `matches`, `/api/live.json`, and tournament archives (`Spring ’26`, `Autumn ’26`), then runs `server/render.ts` so all Arena UI views (`/arena/`, `/arena/ladders/<slot>/`, `/arena/tournaments/<num>/`, `/arena/battles/`, `/projects/`, `/projects/<slug>/`, `/account/`) can be inspected in a browser and verified via `npm run shots` (`tools/shots.ts`).
 2. **Live Fake-Arena Simulator Daemon (`node build/tools/mock-arena.js run --server http://127.0.0.1:1234`)**:
-   - Continuously polls `GET /api/arena/pending-submissions`, simulates unpacking and smoke testing (`--smoke=pass|fail`, computing 3rd-version `retired_version_ids_by_ladder`) via `POST /api/arena/submission-status`, streams realistic between-turn `POST /api/arena/heartbeat` updates (ticking Game 1 & Game 2 `PAUSED` / `RUNNING` slots on `/battles/`), samples matches (enforcing `min_bots = 3` and `<= 1 of 40` team sampling on `VGC`), solves exact Davidson MAP ratings + `LOS`, and posts `POST /api/arena/match-complete`.
+   - Continuously polls `GET /api/arena/pending-submissions`, simulates unpacking and smoke testing (`--smoke=pass|fail`, computing 3rd-version `retired_version_ids_by_ladder`) via `POST /api/arena/submission-status`, streams realistic between-turn `POST /api/arena/heartbeat` updates (ticking Game 1 & Game 2 `PAUSED` / `RUNNING` slots on `/arena/battles/`), samples matches (enforcing `min_bots = 3` and `<= 1 of 40` team sampling on `VGC`), solves exact Davidson MAP ratings + `LOS`, and posts `POST /api/arena/match-complete`.
 3. **Automated Vitest E2E Suite (`test/arena.test.ts` via `npm run test:integration`)**:
    - Exercises the full lifecycle end-to-end in CI: GitHub + Discord OAuth login/linking, multi-member `/account/` isolation, VGC 20-team `1-NN >= 1.30` validation, cooldown & settlement gating, fake-arena smoke pass/fail + retirement + quarantine, Discord role/DM sync, seasonal `settling` $\rightarrow$ `archived` ladder rotation, and `hyperlink` + Playwright responsive checks.
 
@@ -4839,14 +4840,14 @@ export async function provisionSpotWorkerVM(
 }
 ```
 
-#### 2. Live Broadcast & Archive UI (`/leaderboard/tournaments/`)
-Unlike the continuous CCRL Arena (which suppresses battle logs and teams so bots cannot overfit to the static harvested pool), Live Tournaments are designed for live spectator viewing right from the existing `pkmn.ai` VPS at `/leaderboard/tournaments/`:
+#### 2. Live Broadcast & Archive UI (`/arena/tournaments/:num/`)
+Unlike the continuous CCRL Arena (which suppresses battle logs and teams so bots cannot overfit to the static harvested pool), Live Tournaments are designed for live spectator viewing right from the existing `pkmn.ai` VPS at `/arena/tournaments/:num/`:
 - **Featured Table Live Stream (`/api/tourney/live.json` + Server-Sent Events)**:
   - Because `ConcurrentTournamentGame` runs directly inside the Node.js Coordinator on `pkmn.ai`, there is zero webhook delay between the arbiter and the web server.
   - When $K > 1$ tables run in parallel, the Tournament Coordinator assigns the highest-rated / highest-leverage individual game to **Table 1 (Featured Broadcast Table)**, while spectators can switch between Tables $1 \dots K$ in the subnav radio bar (`Table 1 (Superfinal) — Table 2 — ...`).
-  - Every time a turn resolves in `ConcurrentTournamentGame`, `onLiveEvent` broadcasts the rewritten omniscient `@pkmn/protocol` lines and both bots' remaining clock banks (`p1_clock_s`, `p2_clock_s`) over in-memory Server-Sent Events (`GET /api/tourney/stream?table=1`) to the embedded 640×360 Showdown `#battle` stage and `.ps-log` on `/leaderboard/tournaments/`.
-- **Permanent Tournament Archive (`/leaderboard/tournaments/`)**:
-  - At the conclusion of the tournament, `pkmn.ai` tears down all GCP VMs (`gcloud compute instances delete`) so post-tournament cloud cost drops to `$0.00/hr`, and renders `/leaderboard/tournaments/index.html` containing the event selector (`#event-select`), final 6-column `Standings` (`#, Bot, Elo, W–L–T, Points, S–B` Sonneborn–Berger), `Crosstable`, 6-column `Games` table (`Game` shorthand `SF63`/`RR280`, `Player 1` + 6 Smogon minisprites, `Player 2` + 6 Smogon minisprites, `Result`, `Turns`, `Bank`), and downloadable `.7z` replay archive + `standings.json`.
+  - Every time a turn resolves in `ConcurrentTournamentGame`, `onLiveEvent` broadcasts the rewritten omniscient `@pkmn/protocol` lines and both bots' remaining clock banks (`p1_clock_s`, `p2_clock_s`) over in-memory Server-Sent Events (`GET /api/tourney/stream?table=1`) to the embedded 640×360 Showdown `#battle` stage and `.ps-log` on `/arena/tournaments/:num/`.
+- **Permanent Tournament Archive (`/arena/tournaments/:num/`)**:
+  - At the conclusion of the tournament, `pkmn.ai` tears down all GCP VMs (`gcloud compute instances delete`) so post-tournament cloud cost drops to `$0.00/hr`, and renders `/arena/tournaments/<num>/index.html` containing the event selector (`#event-select`), final 6-column `Standings` (`#, Bot, Elo, W–L–T, Points, S–B` Sonneborn–Berger), `Crosstable`, 6-column `Games` table (`Game` shorthand `SF63`/`RR280`, `Player 1` + 6 Smogon minisprites, `Player 2` + 6 Smogon minisprites, `Result`, `Turns`, `Bank`), and downloadable `.7z` replay archive + `index.json`.
 
 #### 3. SQLite Schema Additions for Live Tournaments (`/var/lib/pkmn/arena.sqlite`)
 

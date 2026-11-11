@@ -14,10 +14,10 @@ import {
   createEmptyBotLadderStats,
   loadBotLadderStatsMap,
   upsertBotLadderStatsMap,
-} from './bot_ladder_stats';
-import {type LadderSlot, getLadder} from './ladders';
-import {loadPairAggregates, updatePairAggregateLos} from './pair_aggregates';
-import {upsertDailyRatingSnapshots} from './rating_snapshots';
+} from './bot-ladder-stats';
+import {type LadderRow, type LadderSlot, getLadder} from './ladders';
+import {loadPairAggregates, updatePairAggregateLos} from './pair-aggregates';
+import {upsertDailyRatingSnapshots} from './rating-snapshots';
 
 import type {TransactionRunner} from './index';
 
@@ -87,6 +87,54 @@ export interface ProjectArenaSummary {
   best_rank: number | null;
   best_lcb: number | null;
   ladders: ProjectArenaLadderBadge[];
+}
+
+export interface BotLadderProfileEntry {
+  ladder_id: string;
+  version_id: number;
+  version_str: string;
+  format_type: 'bundle' | 'oci';
+  unpacked_bytes: number | null;
+  created_at: number;
+  role: 'champion' | 'challenger' | 'retired';
+  is_anchor: number;
+  retired_at: number | null;
+  rating_elo: number;
+  rating_se: number;
+  rating_lcb: number;
+  gxe: number;
+  rank_current: number | null;
+  rank_min: number | null;
+  rank_max: number | null;
+  matches_played: number;
+  ww: number;
+  wt: number;
+  split: number;
+  tl: number;
+  ll: number;
+  cur_win_streak: number;
+  cur_loss_streak: number;
+  max_win_streak: number;
+  max_loss_streak: number;
+  best_rank: number | null;
+  best_rank_at: number | null;
+  max_rating_lcb: number | null;
+  max_elo: number | null;
+  max_elo_se: number | null;
+  max_gxe: number | null;
+  max_elo_at: number | null;
+  top1_entered_at: number | null;
+  top1_max_streak_s: number;
+  top1_total_s: number;
+  top10_entered_at: number | null;
+  top10_max_streak_s: number;
+  top10_total_s: number;
+  top100_entered_at: number | null;
+  top100_max_streak_s: number;
+  top100_total_s: number;
+  avg_turn_ms: number;
+  peak_ram_mb: number;
+  settled_at: number | null;
 }
 
 export interface LadderStandingOverride {
@@ -173,9 +221,101 @@ export function hasAnyLeaderboardEntry(db: DatabaseSync, botId: number): boolean
     FROM ladder_entries le
     JOIN bot_versions bv ON bv.id = le.version_id
     WHERE bv.bot_id = ?
+      AND bv.smoke_status = 'passed'
+      AND le.role IN ('champion', 'challenger', 'retired')
     LIMIT 1
   `).get(botId);
   return row !== undefined;
+}
+
+export function getBotParticipatedLadders(db: DatabaseSync, botId: number): LadderRow[] {
+  return db.prepare(`
+    SELECT DISTINCT l.*
+    FROM ladders l
+    JOIN ladder_entries le ON le.ladder_id = l.id
+    JOIN bot_versions bv ON bv.id = le.version_id
+    WHERE bv.bot_id = ?
+      AND bv.smoke_status = 'passed'
+      AND le.role IN ('champion', 'challenger', 'retired')
+    ORDER BY
+      CASE l.status
+        WHEN 'active' THEN 0
+        WHEN 'settling' THEN 1
+        WHEN 'upcoming' THEN 2
+        ELSE 3
+      END ASC,
+      CASE l.slot
+        WHEN 'rby' THEN 0
+        WHEN 'adv' THEN 1
+        WHEN 'sv' THEN 2
+        WHEN 'rand' THEN 3
+        WHEN 'vgc' THEN 4
+        ELSE 5
+      END ASC,
+      l.created_at DESC
+  `).all(botId) as unknown as LadderRow[];
+}
+
+export function getBotLadderProfileEntries(
+  db: DatabaseSync,
+  botId: number,
+  ladderId: string
+): BotLadderProfileEntry[] {
+  return db.prepare(`
+    SELECT
+      le.ladder_id,
+      le.version_id,
+      bv.version_str,
+      bv.format_type,
+      bv.unpacked_bytes,
+      bv.created_at,
+      le.role,
+      le.is_anchor,
+      le.retired_at,
+      le.rating_elo,
+      le.rating_se,
+      le.rating_lcb,
+      le.gxe,
+      le.rank_current,
+      le.rank_min,
+      le.rank_max,
+      le.matches_played,
+      le.ww,
+      le.wt,
+      le.split,
+      le.tl,
+      le.ll,
+      le.cur_win_streak,
+      le.cur_loss_streak,
+      le.max_win_streak,
+      le.max_loss_streak,
+      le.best_rank,
+      le.best_rank_at,
+      le.max_rating_lcb,
+      le.max_elo,
+      le.max_elo_se,
+      le.max_gxe,
+      le.max_elo_at,
+      le.top1_entered_at,
+      le.top1_max_streak_s,
+      le.top1_total_s,
+      le.top10_entered_at,
+      le.top10_max_streak_s,
+      le.top10_total_s,
+      le.top100_entered_at,
+      le.top100_max_streak_s,
+      le.top100_total_s,
+      le.avg_turn_ms,
+      le.peak_ram_mb,
+      le.settled_at
+    FROM ladder_entries le
+    JOIN bot_versions bv ON bv.id = le.version_id
+    WHERE bv.bot_id = ?
+      AND le.ladder_id = ?
+      AND bv.smoke_status = 'passed'
+      AND le.role IN ('champion', 'challenger', 'retired')
+    ORDER BY bv.created_at DESC, bv.id DESC
+  `).all(botId, ladderId) as unknown as BotLadderProfileEntry[];
 }
 
 const SLOT_ORDER: Record<LadderSlot, number> = {
