@@ -1,0 +1,13 @@
+# systemctl enable /home/pkmn/ai/config/pkmn.ai-backup.service
+
+[Unit]
+Description=Nightly SQLite backup of /var/lib/pkmn/arena.sqlite
+
+[Service]
+Type=oneshot
+User=pkmn
+Group=pkmn
+ExecStart=/bin/bash -euo pipefail -c 'mkdir -p /var/lib/pkmn/backups && ts=$(date -u +%%Y%%m%%dT%%H%%M%%SZ) && sqlite3 /var/lib/pkmn/arena.sqlite ".backup /var/lib/pkmn/backups/arena-$ts.sqlite" && zstd -q --rm /var/lib/pkmn/backups/arena-$ts.sqlite && find /var/lib/pkmn/backups -name "arena-*.sqlite.zst" -mtime +30 -delete'
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=pkmn.ai.backup

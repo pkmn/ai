@@ -1,204 +1,202 @@
-import type {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from 'node:sqlite';
 
-import {
-  ELO_SCALE,
-  type PairMatchCounts,
-  type RatingResult,
-  advanceTopKClock,
-  computeDavidsonRatings,
-  computeGuaranteedRankBounds,
-} from '../server/ratings';
+import * as ratings from '../server/ratings';
 
-import {
-  type BotLadderStatsRow,
-  createEmptyBotLadderStats,
-  loadBotLadderStatsMap,
-  upsertBotLadderStatsMap,
-} from './bot-ladder-stats';
-import {type LadderRow, type LadderSlot, getLadder} from './ladders';
+import * as stats from './agent-ladder-stats';
+import {LadderRow, LadderSlot, getLadder} from './ladders';
 import {loadPairAggregates, updatePairAggregateLos} from './pair-aggregates';
 import {upsertDailyRatingSnapshots} from './rating-snapshots';
 
-import type {TransactionRunner} from './index';
+import {TransactionRunner} from './index';
 
 export type EntryRole = 'champion' | 'challenger' | 'retired' | 'quarantined';
 
 export interface ActiveEntryView {
-  ladder_id: string;
+  ladderId: string;
   slot: LadderSlot;
-  display_name: string;
-  version_id: number;
-  version_str: string;
+  ladderName: string;
+  versionId: number;
+  version: string;
   role: 'champion' | 'challenger';
-  rating_elo: number;
-  rating_se: number;
-  rank_current: number | null;
-  matches_played: number;
+  elo: number;
+  se: number;
+  rankCurrent?: number;
+  matches: number;
   ww: number;
   wt: number;
   split: number;
   tl: number;
   ll: number;
-  settled_at: number | null;
+  settledAt?: number;
 }
 
 export interface LeaderboardEntryView {
-  ladder_id: string;
-  version_id: number;
-  version_str: string;
-  bot_id: number;
-  bot_slug: string;
-  bot_name: string;
+  ladderId: string;
+  versionId: number;
+  version: string;
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
   role: 'champion' | 'challenger' | 'retired';
-  is_anchor: number;
-  retired_at: number | null;
-  rating_elo: number;
-  rating_se: number;
-  rating_lcb: number;
+  isAnchor: boolean;
+  retiredAt?: number;
+  elo: number;
+  se: number;
+  lcb: number;
   gxe: number;
-  rank_current: number | null;
-  rank_min: number | null;
-  rank_max: number | null;
-  matches_played: number;
+  rankCurrent?: number;
+  rankMin?: number;
+  rankMax?: number;
+  matches: number;
   ww: number;
   wt: number;
   split: number;
   tl: number;
   ll: number;
-  cur_win_streak: number;
-  cur_loss_streak: number;
-  settled_at: number | null;
+  currentWinStreak: number;
+  currentLossStreak: number;
+  settledAt?: number;
 }
 
 export interface ProjectArenaLadderBadge {
-  ladder_id: string;
+  ladderId: string;
   slot: LadderSlot;
-  display_name: string;
-  rank: number | null;
-  rating_lcb: number;
+  ladderName: string;
+  rank?: number;
+  lcb: number;
   provisional: boolean;
 }
 
 export interface ProjectArenaSummary {
-  bot_id: number;
+  agentId: number;
   slug: string;
   name: string;
   status: 'pending' | 'qualified' | 'disabled';
-  best_rank: number | null;
-  best_lcb: number | null;
+  bestRank?: number;
+  bestLcb?: number;
   ladders: ProjectArenaLadderBadge[];
 }
 
-export interface BotLadderProfileEntry {
-  ladder_id: string;
-  version_id: number;
-  version_str: string;
-  format_type: 'bundle' | 'oci';
-  unpacked_bytes: number | null;
-  created_at: number;
+export interface AgentLadderProfileEntry {
+  ladderId: string;
+  versionId: number;
+  version: string;
+  package: 'bundle' | 'oci';
+  unpackedBytes?: number;
+  submittedAt: number;
   role: 'champion' | 'challenger' | 'retired';
-  is_anchor: number;
-  retired_at: number | null;
-  rating_elo: number;
-  rating_se: number;
-  rating_lcb: number;
+  isAnchor: boolean;
+  retiredAt?: number;
+  elo: number;
+  se: number;
+  lcb: number;
   gxe: number;
-  rank_current: number | null;
-  rank_min: number | null;
-  rank_max: number | null;
-  matches_played: number;
+  rankCurrent?: number;
+  rankMin?: number;
+  rankMax?: number;
+  matches: number;
   ww: number;
   wt: number;
   split: number;
   tl: number;
   ll: number;
-  cur_win_streak: number;
-  cur_loss_streak: number;
-  max_win_streak: number;
-  max_loss_streak: number;
-  best_rank: number | null;
-  best_rank_at: number | null;
-  max_rating_lcb: number | null;
-  max_elo: number | null;
-  max_elo_se: number | null;
-  max_gxe: number | null;
-  max_elo_at: number | null;
-  top1_entered_at: number | null;
-  top1_max_streak_s: number;
-  top1_total_s: number;
-  top10_entered_at: number | null;
-  top10_max_streak_s: number;
-  top10_total_s: number;
-  top100_entered_at: number | null;
-  top100_max_streak_s: number;
-  top100_total_s: number;
-  avg_turn_ms: number;
-  peak_ram_mb: number;
-  settled_at: number | null;
+  currentWinStreak: number;
+  currentLossStreak: number;
+  maxWinStreak: number;
+  maxLossStreak: number;
+  bestRank?: number;
+  bestRankAt?: number;
+  maxLcb?: number;
+  maxElo?: number;
+  maxEloSe?: number;
+  maxEloAt?: number;
+  maxGxe?: number;
+  maxGxeAt?: number;
+  top1EnteredAt?: number;
+  top1MaxStreakSeconds: number;
+  top1TotalSeconds: number;
+  top10EnteredAt?: number;
+  top10MaxStreakSeconds: number;
+  top10TotalSeconds: number;
+  top100EnteredAt?: number;
+  top100MaxStreakSeconds: number;
+  top100TotalSeconds: number;
+  meanTurnMillis: number;
+  peakRam: number;
+  settledAt?: number;
 }
 
 export interface LadderStandingOverride {
-  version_id: number;
+  versionId: number;
   role?: EntryRole;
-  is_anchor?: number;
+  isAnchor?: number;
 }
 
 export interface ArenaLadderRoleTarget {
-  ladder_id: string;
+  ladderId: string;
   slot: LadderSlot;
-  display_name: string;
-  discord_role: string;
-  bot_id: number | null;
-  bot_slug: string | null;
-  bot_name: string | null;
-  discord_ids: string[];
+  ladderName: string;
+  discordRole: string;
+  agentId?: number;
+  agentSlug?: string;
+  agentName?: string;
+  discordIds: string[];
 }
 
 interface EditableLadderEntry {
   versionId: number;
-  botId: number;
+  agentId: number;
   role: EntryRole;
   isAnchor: number;
-  ratingElo: number;
-  ratingSe: number;
-  ratingLcb: number;
+  elo: number;
+  se: number;
+  lcb: number;
   gxe: number;
-  rankCurrent: number | null;
-  rankMin: number | null;
-  rankMax: number | null;
-  matchesPlayed: number;
-  bestRank: number | null;
-  bestRankAt: number | null;
-  maxRatingLcb: number | null;
-  maxElo: number | null;
-  maxEloSe: number | null;
-  maxGxe: number | null;
-  maxEloAt: number | null;
-  top1EnteredAt: number | null;
-  top1MaxStreakS: number;
-  top1TotalS: number;
-  top10EnteredAt: number | null;
-  top10MaxStreakS: number;
-  top10TotalS: number;
-  top100EnteredAt: number | null;
-  top100MaxStreakS: number;
-  top100TotalS: number;
-  settledAt: number | null;
+  rankCurrent?: number;
+  rankMin?: number;
+  rankMax?: number;
+  matches: number;
+  bestRank?: number;
+  bestRankAt?: number;
+  maxLcb?: number;
+  maxElo?: number;
+  maxEloSe?: number;
+  maxEloAt?: number;
+  maxGxe?: number;
+  maxGxeAt?: number;
+  top1EnteredAt?: number;
+  top1MaxStreakSeconds: number;
+  top1TotalSeconds: number;
+  top10EnteredAt?: number;
+  top10MaxStreakSeconds: number;
+  top10TotalSeconds: number;
+  top100EnteredAt?: number;
+  top100MaxStreakSeconds: number;
+  top100TotalSeconds: number;
+  settledAt?: number;
 }
 
-export function getActiveEntriesForBot(db: DatabaseSync, botId: number): ActiveEntryView[] {
-  return db.prepare(`
+const SLOT_ORDER: Record<LadderSlot, number> = {
+  rby: 0,
+  adv: 1,
+  sv: 2,
+  rand: 3,
+  vgc: 4,
+};
+
+export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): ActiveEntryView[] {
+  const rows = db.prepare(`
     SELECT
       le.ladder_id,
       l.slot,
-      l.display_name,
+      l.name AS ladder_name,
       le.version_id,
-      bv.version_str,
+      av.version,
       le.role,
-      le.rating_elo,
-      le.rating_se,
+      le.elo,
+      le.se,
       le.rank_current,
-      le.matches_played,
+      le.matches,
       le.ww,
       le.wt,
       le.split,
@@ -206,10 +204,10 @@ export function getActiveEntriesForBot(db: DatabaseSync, botId: number): ActiveE
       le.ll,
       le.settled_at
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
+    JOIN agent_versions av ON av.id = le.version_id
     JOIN ladders l ON l.id = le.ladder_id
-    WHERE bv.bot_id = ?
-      AND bv.smoke_status = 'passed'
+    WHERE av.agent_id = ?
+      AND av.smoke_status = 'passed'
       AND le.role IN ('champion', 'challenger')
       AND l.status IN ('active', 'settling')
     ORDER BY
@@ -222,31 +220,50 @@ export function getActiveEntriesForBot(db: DatabaseSync, botId: number): ActiveE
         ELSE 5
       END ASC,
       CASE le.role WHEN 'champion' THEN 0 ELSE 1 END ASC,
-      le.rating_elo DESC
-  `).all(botId) as unknown as ActiveEntryView[];
+      le.elo DESC
+  `).all(agentId) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    ladderId: r.ladder_id as string,
+    slot: r.slot as LadderSlot,
+    ladderName: r.ladder_name as string,
+    versionId: r.version_id as number,
+    version: r.version as string,
+    role: r.role as 'champion' | 'challenger',
+    elo: r.elo as number,
+    se: r.se as number,
+    rankCurrent: (r.rank_current as number | null) ?? undefined,
+    matches: r.matches as number,
+    ww: r.ww as number,
+    wt: r.wt as number,
+    split: r.split as number,
+    tl: r.tl as number,
+    ll: r.ll as number,
+    settledAt: (r.settled_at as number | null) ?? undefined,
+  }));
 }
 
-export function hasAnyLeaderboardEntry(db: DatabaseSync, botId: number): boolean {
+export function hasAnyLeaderboardEntry(db: DatabaseSync, agentId: number): boolean {
   const row = db.prepare(`
     SELECT 1
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
-    WHERE bv.bot_id = ?
-      AND bv.smoke_status = 'passed'
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE av.agent_id = ?
+      AND av.smoke_status = 'passed'
       AND le.role IN ('champion', 'challenger', 'retired')
     LIMIT 1
-  `).get(botId);
+  `).get(agentId);
   return row !== undefined;
 }
 
-export function getBotParticipatedLadders(db: DatabaseSync, botId: number): LadderRow[] {
-  return db.prepare(`
+export function getAgentParticipatedLadders(db: DatabaseSync, agentId: number): LadderRow[] {
+  const rows = db.prepare(`
     SELECT DISTINCT l.*
     FROM ladders l
     JOIN ladder_entries le ON le.ladder_id = l.id
-    JOIN bot_versions bv ON bv.id = le.version_id
-    WHERE bv.bot_id = ?
-      AND bv.smoke_status = 'passed'
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE av.agent_id = ?
+      AND av.smoke_status = 'passed'
       AND le.role IN ('champion', 'challenger', 'retired')
     ORDER BY
       CASE l.status
@@ -264,127 +281,211 @@ export function getBotParticipatedLadders(db: DatabaseSync, botId: number): Ladd
         ELSE 5
       END ASC,
       l.created_at DESC
-  `).all(botId) as unknown as LadderRow[];
+  `).all(agentId) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    id: r.id as string,
+    slot: r.slot as LadderSlot,
+    name: r.name as string,
+    format: r.format as string,
+    team: r.team as LadderRow['team'],
+    min: r.min as number,
+    teams: (r.teams as number | null) ?? undefined,
+    discord: (r.discord as string | null) ?? undefined,
+    status: r.status as LadderRow['status'],
+    createdAt: r.created_at as number,
+    archivedAt: (r.archived_at as number | null) ?? undefined,
+  }));
 }
 
-export function getBotLadderProfileEntries(
+export function getAgentLadderProfileEntries(
   db: DatabaseSync,
-  botId: number,
+  agentId: number,
   ladderId: string
-): BotLadderProfileEntry[] {
-  return db.prepare(`
+): AgentLadderProfileEntry[] {
+  const rows = db.prepare(`
     SELECT
       le.ladder_id,
       le.version_id,
-      bv.version_str,
-      bv.format_type,
-      bv.unpacked_bytes,
-      bv.created_at,
+      av.version,
+      av.package,
+      av.unpacked_bytes,
+      av.submitted_at,
       le.role,
       le.is_anchor,
       le.retired_at,
-      le.rating_elo,
-      le.rating_se,
-      le.rating_lcb,
+      le.elo,
+      le.se,
+      le.lcb,
       le.gxe,
       le.rank_current,
       le.rank_min,
       le.rank_max,
-      le.matches_played,
+      le.matches,
       le.ww,
       le.wt,
       le.split,
       le.tl,
       le.ll,
-      le.cur_win_streak,
-      le.cur_loss_streak,
+      le.current_win_streak,
+      le.current_loss_streak,
       le.max_win_streak,
       le.max_loss_streak,
       le.best_rank,
       le.best_rank_at,
-      le.max_rating_lcb,
+      le.max_lcb,
       le.max_elo,
       le.max_elo_se,
-      le.max_gxe,
       le.max_elo_at,
+      le.max_gxe,
+      le.max_gxe_at,
       le.top1_entered_at,
-      le.top1_max_streak_s,
-      le.top1_total_s,
+      le.top1_max_streak_seconds,
+      le.top1_total_seconds,
       le.top10_entered_at,
-      le.top10_max_streak_s,
-      le.top10_total_s,
+      le.top10_max_streak_seconds,
+      le.top10_total_seconds,
       le.top100_entered_at,
-      le.top100_max_streak_s,
-      le.top100_total_s,
-      le.avg_turn_ms,
-      le.peak_ram_mb,
+      le.top100_max_streak_seconds,
+      le.top100_total_seconds,
+      le.mean_turn_millis,
+      le.peak_ram,
       le.settled_at
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
-    WHERE bv.bot_id = ?
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE av.agent_id = ?
       AND le.ladder_id = ?
-      AND bv.smoke_status = 'passed'
+      AND av.smoke_status = 'passed'
       AND le.role IN ('champion', 'challenger', 'retired')
-    ORDER BY bv.created_at DESC, bv.id DESC
-  `).all(botId, ladderId) as unknown as BotLadderProfileEntry[];
-}
+    ORDER BY av.submitted_at DESC, av.id DESC
+  `).all(agentId, ladderId) as Array<Record<string, unknown>>;
 
-const SLOT_ORDER: Record<LadderSlot, number> = {
-  rby: 0,
-  adv: 1,
-  sv: 2,
-  rand: 3,
-  vgc: 4,
-};
+  return rows.map(r => ({
+    ladderId: r.ladder_id as string,
+    versionId: r.version_id as number,
+    version: r.version as string,
+    package: r.package as 'bundle' | 'oci',
+    unpackedBytes: (r.unpacked_bytes as number | null) ?? undefined,
+    submittedAt: r.submitted_at as number,
+    role: r.role as 'champion' | 'challenger' | 'retired',
+    isAnchor: (r.is_anchor as number) === 1,
+    retiredAt: (r.retired_at as number | null) ?? undefined,
+    elo: r.elo as number,
+    se: r.se as number,
+    lcb: r.lcb as number,
+    gxe: r.gxe as number,
+    rankCurrent: (r.rank_current as number | null) ?? undefined,
+    rankMin: (r.rank_min as number | null) ?? undefined,
+    rankMax: (r.rank_max as number | null) ?? undefined,
+    matches: r.matches as number,
+    ww: r.ww as number,
+    wt: r.wt as number,
+    split: r.split as number,
+    tl: r.tl as number,
+    ll: r.ll as number,
+    currentWinStreak: r.current_win_streak as number,
+    currentLossStreak: r.current_loss_streak as number,
+    maxWinStreak: r.max_win_streak as number,
+    maxLossStreak: r.max_loss_streak as number,
+    bestRank: (r.best_rank as number | null) ?? undefined,
+    bestRankAt: (r.best_rank_at as number | null) ?? undefined,
+    maxLcb: (r.max_lcb as number | null) ?? undefined,
+    maxElo: (r.max_elo as number | null) ?? undefined,
+    maxEloSe: (r.max_elo_se as number | null) ?? undefined,
+    maxEloAt: (r.max_elo_at as number | null) ?? undefined,
+    maxGxe: (r.max_gxe as number | null) ?? undefined,
+    maxGxeAt: (r.max_gxe_at as number | null) ?? undefined,
+    top1EnteredAt: (r.top1_entered_at as number | null) ?? undefined,
+    top1MaxStreakSeconds: r.top1_max_streak_seconds as number,
+    top1TotalSeconds: r.top1_total_seconds as number,
+    top10EnteredAt: (r.top10_entered_at as number | null) ?? undefined,
+    top10MaxStreakSeconds: r.top10_max_streak_seconds as number,
+    top10TotalSeconds: r.top10_total_seconds as number,
+    top100EnteredAt: (r.top100_entered_at as number | null) ?? undefined,
+    top100MaxStreakSeconds: r.top100_max_streak_seconds as number,
+    top100TotalSeconds: r.top100_total_seconds as number,
+    meanTurnMillis: r.mean_turn_millis as number,
+    peakRam: r.peak_ram as number,
+    settledAt: (r.settled_at as number | null) ?? undefined,
+  }));
+}
 
 export function getLeaderboardEntries(
   db: DatabaseSync,
   ladderId: string
 ): LeaderboardEntryView[] {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       le.ladder_id,
       le.version_id,
-      bv.version_str,
-      bv.bot_id,
-      b.slug AS bot_slug,
-      b.name AS bot_name,
+      av.version,
+      av.agent_id,
+      a.slug AS agent_slug,
+      a.name AS agent_name,
       le.role,
       le.is_anchor,
       le.retired_at,
-      le.rating_elo,
-      le.rating_se,
-      le.rating_lcb,
+      le.elo,
+      le.se,
+      le.lcb,
       le.gxe,
       le.rank_current,
       le.rank_min,
       le.rank_max,
-      le.matches_played,
+      le.matches,
       le.ww,
       le.wt,
       le.split,
       le.tl,
       le.ll,
-      le.cur_win_streak,
-      le.cur_loss_streak,
+      le.current_win_streak,
+      le.current_loss_streak,
       le.settled_at
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
-    JOIN bots b ON b.id = bv.bot_id
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
     WHERE le.ladder_id = ?
-      AND bv.smoke_status = 'passed'
+      AND av.smoke_status = 'passed'
       AND le.role IN ('champion', 'challenger', 'retired')
     ORDER BY
-      le.rating_lcb DESC,
-      le.rating_elo DESC,
+      le.lcb DESC,
+      le.elo DESC,
       le.version_id ASC
-  `).all(ladderId) as unknown as LeaderboardEntryView[];
+  `).all(ladderId) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    ladderId: r.ladder_id as string,
+    versionId: r.version_id as number,
+    version: r.version as string,
+    agentId: r.agent_id as number,
+    agentSlug: r.agent_slug as string,
+    agentName: r.agent_name as string,
+    role: r.role as 'champion' | 'challenger' | 'retired',
+    isAnchor: (r.is_anchor as number) === 1,
+    retiredAt: (r.retired_at as number | null) ?? undefined,
+    elo: r.elo as number,
+    se: r.se as number,
+    lcb: r.lcb as number,
+    gxe: r.gxe as number,
+    rankCurrent: (r.rank_current as number | null) ?? undefined,
+    rankMin: (r.rank_min as number | null) ?? undefined,
+    rankMax: (r.rank_max as number | null) ?? undefined,
+    matches: r.matches as number,
+    ww: r.ww as number,
+    wt: r.wt as number,
+    split: r.split as number,
+    tl: r.tl as number,
+    ll: r.ll as number,
+    currentWinStreak: r.current_win_streak as number,
+    currentLossStreak: r.current_loss_streak as number,
+    settledAt: (r.settled_at as number | null) ?? undefined,
+  }));
 }
 
 export function getProjectArenaSummaries(db: DatabaseSync): ProjectArenaSummary[] {
-  const botRows = db.prepare(`
+  const agentRows = db.prepare(`
     SELECT id, slug, name, status
-    FROM bots
+    FROM agents
     WHERE status != 'disabled'
     ORDER BY id ASC
   `).all() as Array<{
@@ -396,94 +497,94 @@ export function getProjectArenaSummaries(db: DatabaseSync): ProjectArenaSummary[
 
   const activeRows = db.prepare(`
     SELECT
-      bv.bot_id,
+      av.agent_id,
       le.ladder_id,
       l.slot,
-      l.display_name,
+      l.name AS ladder_name,
       le.rank_current,
-      le.rating_lcb,
-      le.rating_elo,
-      le.rating_se,
-      le.matches_played
+      le.lcb,
+      le.elo,
+      le.se,
+      le.matches
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
+    JOIN agent_versions av ON av.id = le.version_id
     JOIN ladders l ON l.id = le.ladder_id
-    JOIN bots b ON b.id = bv.bot_id
-    WHERE b.status != 'disabled'
-      AND bv.smoke_status = 'passed'
+    JOIN agents a ON a.id = av.agent_id
+    WHERE a.status != 'disabled'
+      AND av.smoke_status = 'passed'
       AND le.role IN ('champion', 'challenger')
       AND l.status IN ('active', 'settling')
     ORDER BY
-      le.rating_lcb DESC,
-      le.rating_elo DESC,
+      le.lcb DESC,
+      le.elo DESC,
       le.version_id ASC
   `).all() as Array<{
-    bot_id: number;
+    agent_id: number;
     ladder_id: string;
     slot: LadderSlot;
-    display_name: string;
+    ladder_name: string;
     rank_current: number | null;
-    rating_lcb: number;
-    rating_elo: number;
-    rating_se: number;
-    matches_played: number;
+    lcb: number;
+    elo: number;
+    se: number;
+    matches: number;
   }>;
 
-  const seenBotLadder = new Set<string>();
-  const badgesByBot = new Map<number, ProjectArenaLadderBadge[]>();
+  const seenAgentLadder = new Set<string>();
+  const badgesByAgent = new Map<number, ProjectArenaLadderBadge[]>();
   for (const r of activeRows) {
-    const key = `${r.bot_id}:${r.ladder_id}`;
-    if (seenBotLadder.has(key)) continue;
-    seenBotLadder.add(key);
+    const key = `${r.agent_id}:${r.ladder_id}`;
+    if (seenAgentLadder.has(key)) continue;
+    seenAgentLadder.add(key);
 
-    const provisional = r.rank_current === null || r.matches_played < 10 || r.rating_se > 60;
-    const list = badgesByBot.get(r.bot_id) ?? [];
+    const provisional = r.rank_current === null || r.matches < 10 || r.se > 60;
+    const list = badgesByAgent.get(r.agent_id) ?? [];
     list.push({
-      ladder_id: r.ladder_id,
+      ladderId: r.ladder_id,
       slot: r.slot,
-      display_name: r.display_name,
-      rank: provisional ? null : r.rank_current,
-      rating_lcb: r.rating_lcb,
+      ladderName: r.ladder_name,
+      rank: provisional ? undefined : (r.rank_current ?? undefined),
+      lcb: r.lcb,
       provisional,
     });
-    badgesByBot.set(r.bot_id, list);
+    badgesByAgent.set(r.agent_id, list);
   }
 
-  return botRows.map(b => {
-    const ladders = badgesByBot.get(b.id) ?? [];
+  return agentRows.map(a => {
+    const ladders = badgesByAgent.get(a.id) ?? [];
     ladders.sort((x, y) => {
-      if (x.rank !== null && y.rank !== null) {
+      if (x.rank !== undefined && y.rank !== undefined) {
         return x.rank - y.rank || (SLOT_ORDER[x.slot] ?? 99) - (SLOT_ORDER[y.slot] ?? 99);
       }
-      if (x.rank !== null) return -1;
-      if (y.rank !== null) return 1;
+      if (x.rank !== undefined) return -1;
+      if (y.rank !== undefined) return 1;
       return (SLOT_ORDER[x.slot] ?? 99) - (SLOT_ORDER[y.slot] ?? 99);
     });
 
-    let bestRank: number | null = null;
-    let bestRankedLcb: number | null = null;
-    let bestAnyLcb: number | null = null;
+    let bestRank: number | undefined;
+    let bestRankedLcb: number | undefined;
+    let bestAnyLcb: number | undefined;
     for (const item of ladders) {
-      if (bestAnyLcb === null || item.rating_lcb > bestAnyLcb) {
-        bestAnyLcb = item.rating_lcb;
+      if (bestAnyLcb === undefined || item.lcb > bestAnyLcb) {
+        bestAnyLcb = item.lcb;
       }
-      if (item.rank !== null) {
-        if (bestRank === null || item.rank < bestRank) {
+      if (item.rank !== undefined) {
+        if (bestRank === undefined || item.rank < bestRank) {
           bestRank = item.rank;
         }
-        if (bestRankedLcb === null || item.rating_lcb > bestRankedLcb) {
-          bestRankedLcb = item.rating_lcb;
+        if (bestRankedLcb === undefined || item.lcb > bestRankedLcb) {
+          bestRankedLcb = item.lcb;
         }
       }
     }
 
     return {
-      bot_id: b.id,
-      slug: b.slug,
-      name: b.name,
-      status: b.status,
-      best_rank: bestRank,
-      best_lcb: bestRankedLcb ?? bestAnyLcb,
+      agentId: a.id,
+      slug: a.slug,
+      name: a.name,
+      status: a.status,
+      bestRank,
+      bestLcb: bestRankedLcb ?? bestAnyLcb,
       ladders,
     };
   });
@@ -492,17 +593,17 @@ export function getProjectArenaSummaries(db: DatabaseSync): ProjectArenaSummary[
 export function promoteRemainingActiveToChampion(
   db: DatabaseSync,
   ladderId: string,
-  botId: number
+  agentId: number
 ) {
   const active = db.prepare(`
     SELECT le.version_id
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
+    JOIN agent_versions av ON av.id = le.version_id
     WHERE le.ladder_id = ?
-      AND bv.bot_id = ?
+      AND av.agent_id = ?
       AND le.role IN ('champion', 'challenger')
-    ORDER BY le.rating_lcb DESC, le.rating_elo DESC, le.version_id ASC
-  `).all(ladderId, botId) as Array<{version_id: number}>;
+    ORDER BY le.lcb DESC, le.elo DESC, le.version_id ASC
+  `).all(ladderId, agentId) as Array<{version_id: number}>;
 
   if (active.length >= 1) {
     db.prepare(
@@ -516,40 +617,48 @@ export function promoteRemainingActiveToChampion(
   }
 }
 
+// Applies a single Generalized Davidson MAP solve across all entries on a ladder (active AND
+// retired—retired entries remain in the graph so cross-version calibration and retired 1500-Elo
+// anchors never drift), then updates Champion/Challenger roles, official conservative LCB ranks,
+// 95% confidence rank intervals, peak stats, and Top-1 / Top-10 / Top-100 reign clocks.
 function applyRatingsToEntriesAndFamilies(
   entries: EditableLadderEntry[],
-  pairs: PairMatchCounts[],
+  pairs: ratings.PairMatchCounts[],
   anchorIndex: number,
   nowSec: number,
-  prevMatchSec: number | null,
-  families: Map<number, BotLadderStatsRow>,
+  prevMatchSec: number | undefined,
+  families: Map<number, stats.AgentLadderStatsRow>,
   warmStartTheta: Float64Array
-): RatingResult {
+): ratings.RatingResult {
   const M = entries.length;
-  const deltaSec = prevMatchSec !== null ? Math.min(3600, Math.max(0, nowSec - prevMatchSec)) : 0;
-  const res = computeDavidsonRatings(M, pairs, anchorIndex, 1500, warmStartTheta);
+  // Cap per-match wall-clock increments at 3600s so runner maintenance or downtime never inflates
+  // an incumbent's Top-K reign duration.
+  const deltaSeconds = prevMatchSec !== undefined
+    ? Math.min(3600, Math.max(0, nowSec - prevMatchSec))
+    : 0;
+  const res = ratings.computeDavidsonRatings(M, pairs, anchorIndex, 1500, warmStartTheta);
 
-  const activeIndicesByBot = new Map<number, number[]>();
+  const activeIndicesByAgent = new Map<number, number[]>();
   for (let i = 0; i < M; i++) {
     const v = entries[i];
-    v.ratingElo = res.elo[i];
-    v.ratingSe = res.eloStd[i];
-    v.ratingLcb = res.eloLcb[i];
+    v.elo = res.elo[i];
+    v.se = res.eloStd[i];
+    v.lcb = res.eloLcb[i];
     v.gxe = res.gxe[i];
-    if (v.settledAt === null && v.matchesPlayed >= 25 && v.ratingSe <= 30.0) {
+    if (v.settledAt === undefined && v.matches >= 25 && v.se <= 30.0) {
       v.settledAt = nowSec;
     }
     if (v.role === 'champion' || v.role === 'challenger') {
-      const list = activeIndicesByBot.get(v.botId) ?? [];
+      const list = activeIndicesByAgent.get(v.agentId) ?? [];
       list.push(i);
-      activeIndicesByBot.set(v.botId, list);
+      activeIndicesByAgent.set(v.agentId, list);
     }
   }
 
-  for (const indices of activeIndicesByBot.values()) {
+  for (const indices of activeIndicesByAgent.values()) {
     indices.sort((a, b) => (
-      entries[b].ratingLcb - entries[a].ratingLcb ||
-      entries[b].ratingElo - entries[a].ratingElo ||
+      entries[b].lcb - entries[a].lcb ||
+      entries[b].elo - entries[a].elo ||
       entries[a].versionId - entries[b].versionId
     ));
     entries[indices[0]].role = 'champion';
@@ -558,36 +667,39 @@ function applyRatingsToEntriesAndFamilies(
     }
   }
 
-  const repByBot = new Map<number, number>();
+  // Only one representative active version per agent (highest LCB meeting the 10-match / SE <= 60
+  // provisional gate) receives an official rank so an agent's Challenger cannot occupy a second
+  // leaderboard rank slot.
+  const repByAgent = new Map<number, number>();
   for (let i = 0; i < M; i++) {
     const v = entries[i];
     const isActive = v.role === 'champion' || v.role === 'challenger';
-    const passesProvisionalGate = v.matchesPlayed >= 10 && v.ratingSe <= 60.0;
+    const passesProvisionalGate = v.matches >= 10 && v.se <= 60.0;
     if (!isActive || !passesProvisionalGate) {
-      v.rankCurrent = null;
-      v.rankMin = null;
-      v.rankMax = null;
+      v.rankCurrent = undefined;
+      v.rankMin = undefined;
+      v.rankMax = undefined;
       continue;
     }
-    const prevIdx = repByBot.get(v.botId);
-    if (prevIdx === undefined || v.ratingLcb > entries[prevIdx].ratingLcb) {
+    const prevIdx = repByAgent.get(v.agentId);
+    if (prevIdx === undefined || v.lcb > entries[prevIdx].lcb) {
       if (prevIdx !== undefined) {
-        entries[prevIdx].rankCurrent = null;
-        entries[prevIdx].rankMin = null;
-        entries[prevIdx].rankMax = null;
+        entries[prevIdx].rankCurrent = undefined;
+        entries[prevIdx].rankMin = undefined;
+        entries[prevIdx].rankMax = undefined;
       }
-      repByBot.set(v.botId, i);
+      repByAgent.set(v.agentId, i);
     } else {
-      v.rankCurrent = null;
-      v.rankMin = null;
-      v.rankMax = null;
+      v.rankCurrent = undefined;
+      v.rankMin = undefined;
+      v.rankMax = undefined;
     }
   }
 
-  const repIndices = [...repByBot.values()].sort(
-    (a, b) => entries[b].ratingLcb - entries[a].ratingLcb
+  const repIndices = [...repByAgent.values()].sort(
+    (a, b) => entries[b].lcb - entries[a].lcb
   );
-  const {rankMin, rankMax} = computeGuaranteedRankBounds(
+  const {rankMin, rankMax} = ratings.computeGuaranteedRankBounds(
     repIndices,
     res.theta,
     res.covariance,
@@ -604,113 +716,143 @@ function applyRatingsToEntriesAndFamilies(
     entries[idx].rankMax = rankMax[r];
   }
 
-  const botIds = new Set<number>();
+  const agentIds = new Set<number>();
   for (const v of entries) {
-    botIds.add(v.botId);
+    agentIds.add(v.agentId);
 
-    if (v.matchesPlayed >= 10 && (v.maxRatingLcb === null || v.ratingLcb > v.maxRatingLcb)) {
-      v.maxRatingLcb = v.ratingLcb;
+    if (v.matches >= 10 && (v.maxLcb === undefined || v.lcb > v.maxLcb)) {
+      v.maxLcb = v.lcb;
     }
 
-    if (v.settledAt !== null) {
-      if (v.maxElo === null || v.ratingElo > v.maxElo) {
-        v.maxElo = v.ratingElo;
-        v.maxEloSe = v.ratingSe;
+    if (v.settledAt !== undefined) {
+      if (v.maxElo === undefined || v.elo > v.maxElo) {
+        v.maxElo = v.elo;
+        v.maxEloSe = v.se;
         v.maxEloAt = nowSec;
       }
-      if (v.maxGxe === null || v.gxe > v.maxGxe) {
+      if (v.maxGxe === undefined || v.gxe > v.maxGxe) {
         v.maxGxe = v.gxe;
+        v.maxGxeAt = nowSec;
       }
-      if (v.rankCurrent !== null && (v.bestRank === null || v.rankCurrent < v.bestRank)) {
+      if (v.rankCurrent !== undefined && (v.bestRank === undefined || v.rankCurrent < v.bestRank)) {
         v.bestRank = v.rankCurrent;
         v.bestRankAt = nowSec;
       }
     }
 
-    const inTop1 = v.settledAt !== null && v.rankCurrent === 1;
-    const inTop10 = v.rankMax !== null && v.rankMax <= 10;
-    const inTop100 = v.rankMax !== null && v.rankMax <= 100;
+    // Reign clock asymmetry: Top-1 requires `settledAt !== undefined && rankCurrent === 1`
+    // (otherwise two close contenders with overlapping 95% CIs would leave #1 permanently empty),
+    // whereas Top-10 and Top-100 require guaranteed 95% confidence (`rankMax <= K`).
+    const inTop1 = v.settledAt !== undefined && v.rankCurrent === 1;
+    const inTop10 = v.rankMax !== undefined && v.rankMax <= 10;
+    const inTop100 = v.rankMax !== undefined && v.rankMax <= 100;
 
-    const c1 = advanceTopKClock(
-      v.top1EnteredAt, v.top1MaxStreakS, v.top1TotalS, inTop1, nowSec, deltaSec
+    const c1 = ratings.advanceTopKClock(
+      v.top1EnteredAt,
+      v.top1MaxStreakSeconds,
+      v.top1TotalSeconds,
+      inTop1,
+      nowSec,
+      deltaSeconds
     );
     v.top1EnteredAt = c1.enteredAt;
-    v.top1MaxStreakS = c1.maxStreakS;
-    v.top1TotalS = c1.totalS;
+    v.top1MaxStreakSeconds = c1.maxStreakSeconds;
+    v.top1TotalSeconds = c1.totalSeconds;
 
-    const c10 = advanceTopKClock(
-      v.top10EnteredAt, v.top10MaxStreakS, v.top10TotalS, inTop10, nowSec, deltaSec
+    const c10 = ratings.advanceTopKClock(
+      v.top10EnteredAt,
+      v.top10MaxStreakSeconds,
+      v.top10TotalSeconds,
+      inTop10,
+      nowSec,
+      deltaSeconds
     );
     v.top10EnteredAt = c10.enteredAt;
-    v.top10MaxStreakS = c10.maxStreakS;
-    v.top10TotalS = c10.totalS;
+    v.top10MaxStreakSeconds = c10.maxStreakSeconds;
+    v.top10TotalSeconds = c10.totalSeconds;
 
-    const c100 = advanceTopKClock(
-      v.top100EnteredAt, v.top100MaxStreakS, v.top100TotalS, inTop100, nowSec, deltaSec
+    const c100 = ratings.advanceTopKClock(
+      v.top100EnteredAt,
+      v.top100MaxStreakSeconds,
+      v.top100TotalSeconds,
+      inTop100,
+      nowSec,
+      deltaSeconds
     );
     v.top100EnteredAt = c100.enteredAt;
-    v.top100MaxStreakS = c100.maxStreakS;
-    v.top100TotalS = c100.totalS;
+    v.top100MaxStreakSeconds = c100.maxStreakSeconds;
+    v.top100TotalSeconds = c100.totalSeconds;
   }
 
-  for (const botId of botIds) {
-    let fam = families.get(botId);
+  for (const agentId of agentIds) {
+    let fam = families.get(agentId);
     if (!fam) {
-      fam = createEmptyBotLadderStats(botId);
-      families.set(botId, fam);
+      fam = stats.createEmptyAgentLadderStats(agentId);
+      families.set(agentId, fam);
     }
 
     for (const v of entries) {
-      if (v.botId !== botId) continue;
-      if (v.maxRatingLcb !== null && (
-        fam.maxRatingLcb === null || v.maxRatingLcb > fam.maxRatingLcb
-      )) {
-        fam.maxRatingLcb = v.maxRatingLcb;
+      if (v.agentId !== agentId) continue;
+      if (v.maxLcb !== undefined && (fam.maxLcb === undefined || v.maxLcb > fam.maxLcb)) {
+        fam.maxLcb = v.maxLcb;
       }
-      if (v.settledAt !== null) {
-        if (fam.maxElo === null || v.ratingElo > fam.maxElo) {
-          fam.maxElo = v.ratingElo;
-          fam.maxEloSe = v.ratingSe;
-          fam.maxEloVersionId = v.versionId;
-        }
-        if (fam.maxGxe === null || v.gxe > fam.maxGxe) {
-          fam.maxGxe = v.gxe;
-        }
-        if (v.rankCurrent !== null && (
-          fam.bestRank === null || v.rankCurrent < fam.bestRank
-        )) {
-          fam.bestRank = v.rankCurrent;
-          fam.bestRankAt = nowSec;
-        }
+      if (v.maxElo !== undefined && (fam.maxElo === undefined || v.maxElo > fam.maxElo)) {
+        fam.maxElo = v.maxElo;
+        fam.maxEloSe = v.maxEloSe;
+        fam.maxEloAt = v.maxEloAt;
+        fam.maxEloVersionId = v.versionId;
+      }
+      if (v.maxGxe !== undefined && (fam.maxGxe === undefined || v.maxGxe > fam.maxGxe)) {
+        fam.maxGxe = v.maxGxe;
+        fam.maxGxeAt = v.maxGxeAt;
+      }
+      if (v.bestRank !== undefined && (fam.bestRank === undefined || v.bestRank < fam.bestRank)) {
+        fam.bestRank = v.bestRank;
+        fam.bestRankAt = v.bestRankAt;
       }
     }
 
-    const repIdx = repByBot.get(botId);
+    const repIdx = repByAgent.get(agentId);
     const rep = repIdx !== undefined ? entries[repIdx] : undefined;
-    const inTop1 = rep !== undefined && rep.settledAt !== null && rep.rankCurrent === 1;
-    const inTop10 = rep !== undefined && rep.rankMax !== null && rep.rankMax <= 10;
-    const inTop100 = rep !== undefined && rep.rankMax !== null && rep.rankMax <= 100;
+    const inTop1 = rep?.settledAt !== undefined && rep.rankCurrent === 1;
+    const inTop10 = rep?.rankMax !== undefined && rep.rankMax <= 10;
+    const inTop100 = rep?.rankMax !== undefined && rep.rankMax <= 100;
 
-    const c1 = advanceTopKClock(
-      fam.top1EnteredAt, fam.top1MaxStreakS, fam.top1TotalS, inTop1, nowSec, deltaSec
+    const c1 = ratings.advanceTopKClock(
+      fam.top1EnteredAt,
+      fam.top1MaxStreakSeconds,
+      fam.top1TotalSeconds,
+      inTop1,
+      nowSec,
+      deltaSeconds
     );
     fam.top1EnteredAt = c1.enteredAt;
-    fam.top1MaxStreakS = c1.maxStreakS;
-    fam.top1TotalS = c1.totalS;
+    fam.top1MaxStreakSeconds = c1.maxStreakSeconds;
+    fam.top1TotalSeconds = c1.totalSeconds;
 
-    const c10 = advanceTopKClock(
-      fam.top10EnteredAt, fam.top10MaxStreakS, fam.top10TotalS, inTop10, nowSec, deltaSec
+    const c10 = ratings.advanceTopKClock(
+      fam.top10EnteredAt,
+      fam.top10MaxStreakSeconds,
+      fam.top10TotalSeconds,
+      inTop10,
+      nowSec,
+      deltaSeconds
     );
     fam.top10EnteredAt = c10.enteredAt;
-    fam.top10MaxStreakS = c10.maxStreakS;
-    fam.top10TotalS = c10.totalS;
+    fam.top10MaxStreakSeconds = c10.maxStreakSeconds;
+    fam.top10TotalSeconds = c10.totalSeconds;
 
-    const c100 = advanceTopKClock(
-      fam.top100EnteredAt, fam.top100MaxStreakS, fam.top100TotalS, inTop100, nowSec, deltaSec
+    const c100 = ratings.advanceTopKClock(
+      fam.top100EnteredAt,
+      fam.top100MaxStreakSeconds,
+      fam.top100TotalSeconds,
+      inTop100,
+      nowSec,
+      deltaSeconds
     );
     fam.top100EnteredAt = c100.enteredAt;
-    fam.top100MaxStreakS = c100.maxStreakS;
-    fam.top100TotalS = c100.totalS;
+    fam.top100MaxStreakSeconds = c100.maxStreakSeconds;
+    fam.top100TotalSeconds = c100.totalSeconds;
   }
 
   return res;
@@ -720,42 +862,43 @@ export function recomputeLadderRatings(
   db: DatabaseSync,
   ladderId: string,
   nowSec = Math.floor(Date.now() / 1000),
-  prevMatchSec: number | null = null,
+  prevMatchSec?: number,
   dayUtc?: string
-): RatingResult {
+): ratings.RatingResult {
   const rawEntries = db.prepare(`
     SELECT
       le.version_id,
-      bv.bot_id,
+      av.agent_id,
       le.role,
       le.is_anchor,
-      le.rating_elo,
-      le.rating_se,
-      le.rating_lcb,
+      le.elo,
+      le.se,
+      le.lcb,
       le.gxe,
       le.rank_current,
       le.rank_min,
       le.rank_max,
-      le.matches_played,
+      le.matches,
       le.best_rank,
       le.best_rank_at,
-      le.max_rating_lcb,
+      le.max_lcb,
       le.max_elo,
       le.max_elo_se,
-      le.max_gxe,
       le.max_elo_at,
+      le.max_gxe,
+      le.max_gxe_at,
       le.top1_entered_at,
-      le.top1_max_streak_s,
-      le.top1_total_s,
+      le.top1_max_streak_seconds,
+      le.top1_total_seconds,
       le.top10_entered_at,
-      le.top10_max_streak_s,
-      le.top10_total_s,
+      le.top10_max_streak_seconds,
+      le.top10_total_seconds,
       le.top100_entered_at,
-      le.top100_max_streak_s,
-      le.top100_total_s,
+      le.top100_max_streak_seconds,
+      le.top100_total_seconds,
       le.settled_at
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
+    JOIN agent_versions av ON av.id = le.version_id
     WHERE le.ladder_id = ?
     ORDER BY le.version_id ASC
   `).all(ladderId) as Array<Record<string, unknown>>;
@@ -772,40 +915,41 @@ export function recomputeLadderRatings(
     if (isAnchor === 1 && anchorIndex === -1) anchorIndex = i;
     entries.push({
       versionId,
-      botId: r.bot_id as number,
+      agentId: r.agent_id as number,
       role: r.role as EntryRole,
       isAnchor,
-      ratingElo: r.rating_elo as number,
-      ratingSe: r.rating_se as number,
-      ratingLcb: r.rating_lcb as number,
+      elo: r.elo as number,
+      se: r.se as number,
+      lcb: r.lcb as number,
       gxe: r.gxe as number,
-      rankCurrent: (r.rank_current as number | null) ?? null,
-      rankMin: (r.rank_min as number | null) ?? null,
-      rankMax: (r.rank_max as number | null) ?? null,
-      matchesPlayed: r.matches_played as number,
-      bestRank: (r.best_rank as number | null) ?? null,
-      bestRankAt: (r.best_rank_at as number | null) ?? null,
-      maxRatingLcb: (r.max_rating_lcb as number | null) ?? null,
-      maxElo: (r.max_elo as number | null) ?? null,
-      maxEloSe: (r.max_elo_se as number | null) ?? null,
-      maxGxe: (r.max_gxe as number | null) ?? null,
-      maxEloAt: (r.max_elo_at as number | null) ?? null,
-      top1EnteredAt: (r.top1_entered_at as number | null) ?? null,
-      top1MaxStreakS: r.top1_max_streak_s as number,
-      top1TotalS: r.top1_total_s as number,
-      top10EnteredAt: (r.top10_entered_at as number | null) ?? null,
-      top10MaxStreakS: r.top10_max_streak_s as number,
-      top10TotalS: r.top10_total_s as number,
-      top100EnteredAt: (r.top100_entered_at as number | null) ?? null,
-      top100MaxStreakS: r.top100_max_streak_s as number,
-      top100TotalS: r.top100_total_s as number,
-      settledAt: (r.settled_at as number | null) ?? null,
+      rankCurrent: (r.rank_current as number | null) ?? undefined,
+      rankMin: (r.rank_min as number | null) ?? undefined,
+      rankMax: (r.rank_max as number | null) ?? undefined,
+      matches: r.matches as number,
+      bestRank: (r.best_rank as number | null) ?? undefined,
+      bestRankAt: (r.best_rank_at as number | null) ?? undefined,
+      maxLcb: (r.max_lcb as number | null) ?? undefined,
+      maxElo: (r.max_elo as number | null) ?? undefined,
+      maxEloSe: (r.max_elo_se as number | null) ?? undefined,
+      maxEloAt: (r.max_elo_at as number | null) ?? undefined,
+      maxGxe: (r.max_gxe as number | null) ?? undefined,
+      maxGxeAt: (r.max_gxe_at as number | null) ?? undefined,
+      top1EnteredAt: (r.top1_entered_at as number | null) ?? undefined,
+      top1MaxStreakSeconds: r.top1_max_streak_seconds as number,
+      top1TotalSeconds: r.top1_total_seconds as number,
+      top10EnteredAt: (r.top10_entered_at as number | null) ?? undefined,
+      top10MaxStreakSeconds: r.top10_max_streak_seconds as number,
+      top10TotalSeconds: r.top10_total_seconds as number,
+      top100EnteredAt: (r.top100_entered_at as number | null) ?? undefined,
+      top100MaxStreakSeconds: r.top100_max_streak_seconds as number,
+      top100TotalSeconds: r.top100_total_seconds as number,
+      settledAt: (r.settled_at as number | null) ?? undefined,
     });
   }
 
   const {pairs, pairKeys} = loadPairAggregates(db, ladderId, indexByVersionId);
-  const families = loadBotLadderStatsMap(db, ladderId);
-  const warmStart = new Float64Array(entries.map(v => (v.ratingElo - 1500) / ELO_SCALE));
+  const families = stats.loadAgentLadderStatsMap(db, ladderId);
+  const warmStart = new Float64Array(entries.map(v => (v.elo - 1500) / ratings.ELO_SCALE));
 
   const res = applyRatingsToEntriesAndFamilies(
     entries,
@@ -820,29 +964,30 @@ export function recomputeLadderRatings(
   const updateEntry = db.prepare(`
     UPDATE ladder_entries
     SET role = ?,
-        rating_elo = ?,
-        rating_se = ?,
-        rating_lcb = ?,
+        elo = ?,
+        se = ?,
+        lcb = ?,
         gxe = ?,
         rank_current = ?,
         rank_min = ?,
         rank_max = ?,
         best_rank = ?,
         best_rank_at = ?,
-        max_rating_lcb = ?,
+        max_lcb = ?,
         max_elo = ?,
         max_elo_se = ?,
-        max_gxe = ?,
         max_elo_at = ?,
+        max_gxe = ?,
+        max_gxe_at = ?,
         top1_entered_at = ?,
-        top1_max_streak_s = ?,
-        top1_total_s = ?,
+        top1_max_streak_seconds = ?,
+        top1_total_seconds = ?,
         top10_entered_at = ?,
-        top10_max_streak_s = ?,
-        top10_total_s = ?,
+        top10_max_streak_seconds = ?,
+        top10_total_seconds = ?,
         top100_entered_at = ?,
-        top100_max_streak_s = ?,
-        top100_total_s = ?,
+        top100_max_streak_seconds = ?,
+        top100_total_seconds = ?,
         settled_at = ?
     WHERE ladder_id = ? AND version_id = ?
   `);
@@ -850,37 +995,38 @@ export function recomputeLadderRatings(
   for (const v of entries) {
     updateEntry.run(
       v.role,
-      v.ratingElo,
-      v.ratingSe,
-      v.ratingLcb,
+      v.elo,
+      v.se,
+      v.lcb,
       v.gxe,
-      v.rankCurrent,
-      v.rankMin,
-      v.rankMax,
-      v.bestRank,
-      v.bestRankAt,
-      v.maxRatingLcb,
-      v.maxElo,
-      v.maxEloSe,
-      v.maxGxe,
-      v.maxEloAt,
-      v.top1EnteredAt,
-      v.top1MaxStreakS,
-      v.top1TotalS,
-      v.top10EnteredAt,
-      v.top10MaxStreakS,
-      v.top10TotalS,
-      v.top100EnteredAt,
-      v.top100MaxStreakS,
-      v.top100TotalS,
-      v.settledAt,
+      v.rankCurrent ?? null,
+      v.rankMin ?? null,
+      v.rankMax ?? null,
+      v.bestRank ?? null,
+      v.bestRankAt ?? null,
+      v.maxLcb ?? null,
+      v.maxElo ?? null,
+      v.maxEloSe ?? null,
+      v.maxEloAt ?? null,
+      v.maxGxe ?? null,
+      v.maxGxeAt ?? null,
+      v.top1EnteredAt ?? null,
+      v.top1MaxStreakSeconds,
+      v.top1TotalSeconds,
+      v.top10EnteredAt ?? null,
+      v.top10MaxStreakSeconds,
+      v.top10TotalSeconds,
+      v.top100EnteredAt ?? null,
+      v.top100MaxStreakSeconds,
+      v.top100TotalSeconds,
+      v.settledAt ?? null,
       ladderId,
       v.versionId
     );
   }
 
   updatePairAggregateLos(db, ladderId, pairKeys, res.theta, res.covariance, entries.length);
-  upsertBotLadderStatsMap(db, ladderId, families);
+  stats.upsertAgentLadderStatsMap(db, ladderId, families);
 
   if (dayUtc) {
     upsertDailyRatingSnapshots(db, ladderId, dayUtc, entries);
@@ -912,15 +1058,17 @@ export function setLadderAnchor(
     ).run(ladderId, versionId);
 
     const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
-    recomputeLadderRatings(db, ladderId, now, null, dayUtc);
+    recomputeLadderRatings(db, ladderId, now, undefined, dayUtc);
   });
 }
 
+// Resolves the settled #1-ranked active agent on each active ladder with a configured `discord`
+// role Snowflake so `server/discord.ts` can synchronize #1 crown roles automatically.
 export function getArenaLadderRoleTargets(db: DatabaseSync): ArenaLadderRoleTarget[] {
   const ladders = db.prepare(`
-    SELECT id, slot, display_name, discord_role, status
+    SELECT id, slot, name, discord, status
     FROM ladders
-    WHERE discord_role IS NOT NULL
+    WHERE discord IS NOT NULL
     ORDER BY
       CASE status
         WHEN 'active' THEN 0
@@ -941,29 +1089,29 @@ export function getArenaLadderRoleTargets(db: DatabaseSync): ArenaLadderRoleTarg
   `).all() as Array<{
     id: string;
     slot: LadderSlot;
-    display_name: string;
-    discord_role: string;
+    name: string;
+    discord: string;
     status: string;
   }>;
 
   const selectLeader = db.prepare(`
-    SELECT b.id AS bot_id, b.slug AS bot_slug, b.name AS bot_name
+    SELECT a.id AS agent_id, a.slug AS agent_slug, a.name AS agent_name
     FROM ladder_entries le
-    JOIN bot_versions bv ON bv.id = le.version_id
-    JOIN bots b ON b.id = bv.bot_id
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
     WHERE le.ladder_id = ?
       AND le.rank_current = 1
       AND le.settled_at IS NOT NULL
       AND le.role IN ('champion', 'challenger')
-      AND bv.smoke_status = 'passed'
-      AND b.status != 'disabled'
-    ORDER BY le.rating_lcb DESC, le.rating_elo DESC, le.version_id ASC
+      AND av.smoke_status = 'passed'
+      AND a.status != 'disabled'
+    ORDER BY le.lcb DESC, le.elo DESC, le.version_id ASC
     LIMIT 1
   `);
   const selectOwnerDiscordIds = db.prepare(`
     SELECT DISTINCT discord_id
     FROM developers
-    WHERE bot_id = ? AND discord_id IS NOT NULL
+    WHERE agent_id = ? AND discord_id IS NOT NULL
     ORDER BY discord_id ASC
   `);
 
@@ -971,54 +1119,48 @@ export function getArenaLadderRoleTargets(db: DatabaseSync): ArenaLadderRoleTarg
   const targets: ArenaLadderRoleTarget[] = [];
 
   for (const l of ladders) {
-    if (seenRoles.has(l.discord_role)) continue;
-    seenRoles.add(l.discord_role);
+    if (seenRoles.has(l.discord)) continue;
+    seenRoles.add(l.discord);
 
     if (l.status !== 'active') {
       targets.push({
-        ladder_id: l.id,
+        ladderId: l.id,
         slot: l.slot,
-        display_name: l.display_name,
-        discord_role: l.discord_role,
-        bot_id: null,
-        bot_slug: null,
-        bot_name: null,
-        discord_ids: [],
+        ladderName: l.name,
+        discordRole: l.discord,
+        discordIds: [],
       });
       continue;
     }
 
     const leader = selectLeader.get(l.id) as {
-      bot_id: number;
-      bot_slug: string;
-      bot_name: string;
+      agent_id: number;
+      agent_slug: string;
+      agent_name: string;
     } | undefined;
     if (!leader) {
       targets.push({
-        ladder_id: l.id,
+        ladderId: l.id,
         slot: l.slot,
-        display_name: l.display_name,
-        discord_role: l.discord_role,
-        bot_id: null,
-        bot_slug: null,
-        bot_name: null,
-        discord_ids: [],
+        ladderName: l.name,
+        discordRole: l.discord,
+        discordIds: [],
       });
       continue;
     }
 
     const discordIds = (
-      selectOwnerDiscordIds.all(leader.bot_id) as Array<{discord_id: string}>
+      selectOwnerDiscordIds.all(leader.agent_id) as Array<{discord_id: string}>
     ).map(r => r.discord_id);
     targets.push({
-      ladder_id: l.id,
+      ladderId: l.id,
       slot: l.slot,
-      display_name: l.display_name,
-      discord_role: l.discord_role,
-      bot_id: leader.bot_id,
-      bot_slug: leader.bot_slug,
-      bot_name: leader.bot_name,
-      discord_ids: discordIds,
+      ladderName: l.name,
+      discordRole: l.discord,
+      agentId: leader.agent_id,
+      agentSlug: leader.agent_slug,
+      agentName: leader.agent_name,
+      discordIds,
     });
   }
 

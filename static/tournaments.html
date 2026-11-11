@@ -26,13 +26,6 @@
 </section>
 
 <script>
-  const setTheme = t => {
-    document.documentElement.setAttribute('data-theme', t);
-    const vf = document.getElementById('ps-viewer-frame');
-    if (vf && vf.contentWindow) {
-      vf.contentWindow.postMessage({type: 'theme', dark: t === 'dark'}, '*');
-    }
-  };
   document.addEventListener('DOMContentLoaded', () => {
     const eventSelect = document.getElementById('event-select');
     const liveSec = document.getElementById('live');
@@ -51,6 +44,10 @@
       const dark = document.documentElement.getAttribute('data-theme') === 'dark';
       sendToViewer({type: 'theme', dark});
     };
+
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+      sendToViewer({type: 'theme', dark: e.matches});
+    });
 
     window.addEventListener('message', ev => {
       if (!frame || ev.source !== frame.contentWindow) return;

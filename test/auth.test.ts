@@ -2,20 +2,10 @@ import * as http from 'http';
 
 import polka from 'polka';
 
-import {ArenaDB} from '../db';
-import {
-  type AuthConfig,
-  SESSION_COOKIE,
-  type Session,
-  loadAuthConfig,
-  parseCookies,
-  register,
-  sanitizeReturnTo,
-  signToken,
-  verifyToken,
-} from '../server/auth';
+import {Database} from '../db';
+import * as auth from '../server/auth';
 
-const AUTH_CFG: AuthConfig = {
+const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-unified-session-secret',
   arenaSecret: 'test-arena-secret',
   github: {
@@ -60,18 +50,21 @@ function extractCookieMap(res: Response): Record<string, string> {
 
 describe('auth config & helpers', () => {
   test('sanitizeReturnTo allows local paths and blocks open redirects', () => {
-    expect(sanitizeReturnTo('/account/', '/')).toBe('/account/');
-    expect(sanitizeReturnTo('/wiki/0_ERROR?diff=1', '/')).toBe('/wiki/0_ERROR?diff=1');
-    expect(sanitizeReturnTo('//evil.example/phish', '/')).toBe('/');
-    expect(sanitizeReturnTo('https://evil.example', '/')).toBe('/');
-    expect(sanitizeReturnTo('/bad\r\nSet-Cookie: x=1', '/')).toBe('/');
-    expect(sanitizeReturnTo(undefined, '/fallback')).toBe('/fallback');
+    expect(auth.sanitizeReturnTo('/account/', '/')).toBe('/account/');
+    expect(auth.sanitizeReturnTo('/wiki/0_ERROR?diff=1', '/')).toBe('/wiki/0_ERROR?diff=1');
+    expect(auth.sanitizeReturnTo('//evil.example/phish', '/')).toBe('/');
+    expect(auth.sanitizeReturnTo('https://evil.example', '/')).toBe('/');
+    expect(auth.sanitizeReturnTo('/bad\r\nSet-Cookie: x=1', '/')).toBe('/');
+    expect(auth.sanitizeReturnTo(undefined, '/fallback')).toBe('/fallback');
   });
 
-  test('loadAuthConfig reads flat environment variables cleanly', () => {
-    expect(loadAuthConfig({})).toBeUndefined();
+  test('loadConfig reads flat environment variables cleanly and supports DEV_AUTH', () => {
+    expect(auth.loadConfig({})).toBeUndefined();
 
-    expect(loadAuthConfig({
+    const devCfg = auth.loadConfig({DEV_AUTH: '1'});
+    expect(devCfg?.sessionSecret).toBeTruthy();
+
+    expect(auth.loadConfig({
       SESSION_SECRET: 'sec-1',
       GITHUB_CLIENT_ID: 'gh-id',
     })).toEqual({
@@ -81,7 +74,7 @@ describe('auth config & helpers', () => {
       discord: undefined,
     });
 
-    expect(loadAuthConfig({
+    expect(auth.loadConfig({
       SESSION_SECRET: 'sec-2',
       ARENA_SECRET: 'arena-2',
       GITHUB_CLIENT_ID: 'gh-id',
@@ -97,14 +90,14 @@ describe('auth config & helpers', () => {
   });
 });
 
-describe('unified server/auth.ts OAuth, account linking, and Nginx validation', () => {
-  let db: ArenaDB;
+describe('unified server/auth.ts OAuth, linking, dev switcher, and Nginx validation', () => {
+  let db: Database;
   let server: http.Server;
   let baseUrl: string;
   const realFetch = globalThis.fetch;
 
   beforeEach(async () => {
-    db = new ArenaDB(':memory:');
+    db = new Database(':memory:');
     db.syncProjectsFromYaml(PROJECTS_YAML);
     db.syncDiscordMembers([
       {id: '513513270670262284', username: 'scheibo'},
@@ -112,7 +105,7 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     ]);
 
     const app = polka();
-    register(app, {config: AUTH_CFG, db});
+    auth.register(app, {config: AUTH_CFG, db, devAuth: true});
 
     server = http.createServer((req, res) => app.handler(req as polka.Request, res));
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -127,8 +120,8 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     db.close();
   });
 
-  test('GitHub OAuth records github_id, keeps Discord claim, and blocks strangers', async () => {
-    const existingDiscordToken = signToken(
+  test('GitHub OAuth records githubId, keeps Discord claim, and blocks strangers', async () => {
+    const existingDiscordToken = auth.signToken(
       {
         discord: {id: '513513270670262284', username: 'scheibo'},
         exp: Math.floor(Date.now() / 1000) + 3600,
@@ -182,7 +175,7 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     expect(strangerHtml).toContain('unregistered_user');
     expect(strangerHtml).toContain('template=register.yml');
 
-    // Registered developer logs in, records github_id, and keeps existing Discord session claim
+    // Registered developer logs in, records githubId, and keeps existing Discord session claim
     ghUser = {id: 105440, login: 'pre'};
     const okCb = await realFetch(
       `${baseUrl}/auth/github/callback?code=c2&state=${encodeURIComponent(state)}`,
@@ -190,7 +183,7 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
         headers: {
           Cookie: [
             `pkmn_oauth_state=${encodeURIComponent(startCookies.pkmn_oauth_state)}`,
-            `${SESSION_COOKIE}=${encodeURIComponent(existingDiscordToken)}`,
+            `${auth.SESSION_COOKIE}=${encodeURIComponent(existingDiscordToken)}`,
           ].join('; '),
         },
         redirect: 'manual',
@@ -200,10 +193,13 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     expect(okCb.headers.get('location')).toBe('/account/');
 
     const cbCookies = extractCookieMap(okCb);
-    const session = verifyToken<Session>(cbCookies[SESSION_COOKIE], AUTH_CFG.sessionSecret)!;
+    const session = auth.verifyToken<auth.Session>(
+      cbCookies[auth.SESSION_COOKIE],
+      AUTH_CFG.sessionSecret
+    )!;
     expect(session.github).toEqual({id: 105440, login: 'pre'});
     expect(session.discord).toEqual({id: '513513270670262284', username: 'scheibo'});
-    expect(db.getDeveloperByGitHub('pre')!.github_id).toBe(105440);
+    expect(db.getDeveloperByGitHub('pre')!.githubId).toBe(105440);
   });
 
   test('Discord OAuth links per-developer Discord ID, blocks collisions, and unlinks', async () => {
@@ -212,12 +208,12 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     expect(unauthLink.status).toBe(302);
     expect(unauthLink.headers.get('location')).toContain('/auth/github?return_to=');
 
-    const preGhToken = signToken(
+    const preGhToken = auth.signToken(
       {github: {id: 10, login: 'pre'}, exp: Math.floor(Date.now() / 1000) + 3600},
       AUTH_CFG.sessionSecret
     );
     const linkStart = await realFetch(`${baseUrl}/auth/discord?intent=link`, {
-      headers: {Cookie: `${SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`},
+      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`},
       redirect: 'manual',
     });
     expect(linkStart.status).toBe(302);
@@ -249,7 +245,7 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
         headers: {
           Cookie: [
             `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`,
-            `${SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+            `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
           ].join('; '),
         },
         redirect: 'manual',
@@ -257,29 +253,29 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     );
     expect(linkCb.status).toBe(302);
     expect(linkCb.headers.get('location')).toBe('/account/');
-    const tokenParams = parseCookies(lastTokenBody.replace(/&/g, ';'));
+    const tokenParams = auth.parseCookies(lastTokenBody.replace(/&/g, ';'));
     expect(tokenParams.redirect_uri).toBe(`${baseUrl}/auth/discord/callback`);
 
     // Linked strictly to 'pre', leaving 'coauthor' on the same project untouched
-    expect(db.getDeveloperByGitHub('pre')!.discord_id).toBe('513513270670262284');
-    expect(db.getDeveloperByGitHub('pre')!.discord_username).toBe('scheibo');
-    expect(db.getDeveloperByGitHub('coauthor')!.discord_id).toBeNull();
+    expect(db.getDeveloperByGitHub('pre')!.discordId).toBe('513513270670262284');
+    expect(db.getDeveloperByGitHub('pre')!.discordUsername).toBe('scheibo');
+    expect(db.getDeveloperByGitHub('coauthor')!.discordId).toBeUndefined();
 
     const mergedCookies = extractCookieMap(linkCb);
-    const mergedSession = verifyToken<Session>(
-      mergedCookies[SESSION_COOKIE],
+    const mergedSession = auth.verifyToken<auth.Session>(
+      mergedCookies[auth.SESSION_COOKIE],
       AUTH_CFG.sessionSecret
     )!;
     expect(mergedSession.github).toEqual({id: 10, login: 'pre'});
     expect(mergedSession.discord).toEqual({id: '513513270670262284', username: 'scheibo'});
 
     // Second developer ('pmariglia') attempting to link the same Discord ID gets 409 Conflict
-    const pmarToken = signToken(
+    const pmarToken = auth.signToken(
       {github: {id: 20, login: 'pmariglia'}, exp: Math.floor(Date.now() / 1000) + 3600},
       AUTH_CFG.sessionSecret
     );
     const dupStart = await realFetch(`${baseUrl}/auth/discord?intent=link`, {
-      headers: {Cookie: `${SESSION_COOKIE}=${encodeURIComponent(pmarToken)}`},
+      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(pmarToken)}`},
       redirect: 'manual',
     });
     const dupState = new URL(dupStart.headers.get('location')!).searchParams.get('state')!;
@@ -291,7 +287,7 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
         headers: {
           Cookie: [
             `pkmn_oauth_state=${encodeURIComponent(dupStateCookie)}`,
-            `${SESSION_COOKIE}=${encodeURIComponent(pmarToken)}`,
+            `${auth.SESSION_COOKIE}=${encodeURIComponent(pmarToken)}`,
           ].join('; '),
         },
         redirect: 'manual',
@@ -304,14 +300,14 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     const unlinkRes = await realFetch(`${baseUrl}/api/account/discord/unlink`, {
       method: 'POST',
       headers: {
-        Cookie: `${SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+        Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
         Accept: 'application/json',
       },
     });
     expect(unlinkRes.status).toBe(200);
     expect(await unlinkRes.json()).toEqual({ok: true});
-    expect(db.getDeveloperByGitHub('pre')!.discord_id).toBeNull();
-    expect(db.getDeveloperByGitHub('pre')!.discord_username).toBeNull();
+    expect(db.getDeveloperByGitHub('pre')!.discordId).toBeUndefined();
+    expect(db.getDeveloperByGitHub('pre')!.discordUsername).toBeUndefined();
 
     // Logout clears pkmn_session
     const logoutRes = await realFetch(`${baseUrl}/auth/logout?return_to=%2Farena%2F`, {
@@ -321,6 +317,33 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
     expect(logoutRes.status).toBe(303);
     expect(logoutRes.headers.get('location')).toBe('/arena/');
     expect(logoutRes.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
+
+  test('dev persona switcher mints cookies on loopback and rejects proxied requests', async () => {
+    const switcher = await realFetch(`${baseUrl}/auth/dev`);
+    expect(switcher.status).toBe(200);
+    expect(await switcher.text()).toContain('Sign in as admin (scheibo)');
+
+    const proxied = await realFetch(`${baseUrl}/auth/dev`, {
+      headers: {'X-Forwarded-For': '203.0.113.10'},
+    });
+    expect(proxied.status).toBe(403);
+
+    const mintRes = await realFetch(
+      `${baseUrl}/auth/dev?github=pmariglia&return_to=%2Faccount%2F`,
+      {redirect: 'manual'}
+    );
+    expect(mintRes.status).toBe(302);
+    expect(mintRes.headers.get('location')).toBe('/account/');
+    const minted = auth.verifyToken<auth.Session>(
+      extractCookieMap(mintRes)[auth.SESSION_COOKIE],
+      AUTH_CFG.sessionSecret
+    )!;
+    expect(minted.github?.login).toBe('pmariglia');
+
+    const clearRes = await realFetch(`${baseUrl}/auth/dev?clear=1`, {redirect: 'manual'});
+    expect(clearRes.status).toBe(302);
+    expect(clearRes.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 
   test('validates Discord sessions for /chat/logs and ?guild=0 /private routes', async () => {
@@ -342,28 +365,28 @@ describe('unified server/auth.ts OAuth, account linking, and Nginx validation', 
 
     // 2. Non-guild Discord user -> 403 for guild, 200 for ?guild=0 (/private)
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const outsiderToken = signToken(
+    const outsiderToken = auth.signToken(
       {discord: {id: '192823042433482752', username: 'chaos'}, exp},
       AUTH_CFG.sessionSecret
     );
     const guildDenied = await realFetch(`${baseUrl}/auth/discord/validate`, {
-      headers: {Cookie: `${SESSION_COOKIE}=${encodeURIComponent(outsiderToken)}`},
+      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(outsiderToken)}`},
     });
     expect(guildDenied.status).toBe(403);
 
     const privateAllowed = await realFetch(`${baseUrl}/auth/discord/validate?guild=0`, {
-      headers: {Cookie: `${SESSION_COOKIE}=${encodeURIComponent(outsiderToken)}`},
+      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(outsiderToken)}`},
     });
     expect(privateAllowed.status).toBe(200);
     expect(privateAllowed.headers.get('x-auth-user')).toBe('192823042433482752');
 
     // 3. Authenticated Discord guild member -> 200 + X-Auth-User + CLI Bearer token workflow
-    const memberToken = signToken(
+    const memberToken = auth.signToken(
       {discord: {id: '513513270670262284', username: 'scheibo'}, exp},
       AUTH_CFG.sessionSecret
     );
     const tokenEndpoint = await realFetch(`${baseUrl}/chat/logs/token`, {
-      headers: {Cookie: `${SESSION_COOKIE}=${encodeURIComponent(memberToken)}`},
+      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(memberToken)}`},
     });
     expect(tokenEndpoint.status).toBe(200);
     const cliToken = (await tokenEndpoint.text()).trim();

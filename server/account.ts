@@ -1,32 +1,21 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as net from 'net';
 import * as querystring from 'querystring';
 
-import type polka from 'polka';
+import polka from 'polka';
 
-import {
-  type ActiveEntryView,
-  type ArenaDB,
-  type BotRow,
-  type DeveloperRow,
-  type FormatType,
-  LADDERS_FILE,
-  type LadderRow,
-  SETTLED_MAX_SE,
-  SETTLED_MIN_MATCHES,
-  type SubmissionStatus,
-  type VersionHistoryView,
-  loadLadderPoolDirs,
-} from '../db';
+import {LADDERS_FILE, SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
+import type * as db from '../db';
 import {header, renderer} from '../static/build';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
 import {Auth} from './auth';
 import {validateCompetitorTeams} from './teams';
 
-export function deduceFormatType(downloadUrl: string): FormatType {
-  const cleanPath = downloadUrl.split('?')[0].toLowerCase();
+export function deducePackageFormat(url: string): db.PackageFormat {
+  const cleanPath = url.split('?')[0].toLowerCase();
   if (
     cleanPath.endsWith('.tar.gz') ||
     cleanPath.endsWith('.tgz') ||
@@ -40,6 +29,10 @@ export function deduceFormatType(downloadUrl: string): FormatType {
   return 'oci';
 }
 
+// One-time private artifact pull tokens (e.g. scoped GitHub Release / R2 / GHCR headers) are
+// encrypted at rest in SQLite with AES-256-GCM under an HKDF-derived subkey of `SESSION_SECRET`.
+// The Mac mini runner decrypts the header once via `/api/arena/pending-submissions` and the server
+// wipes `auth_token_encoding = NULL` as soon as `/api/arena/submission-status` reports back.
 function deriveSecretKey(secret: string): Buffer {
   return Buffer.from(
     crypto.hkdfSync('sha256', secret, '', 'pkmn-arena-auth-token-v1', 32)
@@ -74,21 +67,25 @@ export function decryptSecret(encoded: string, secret: string): string {
 const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
 const VERSION_RE = /^[A-Za-z0-9._-]{1,12}$/;
 const SHA256_RE = /^[0-9a-fA-F]{64}$/;
-const OCI_REF_RE = /^[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-fA-F]{64})?$/;
+const OCI_REF_RE = new RegExp(
+  '^[A-Za-z0-9._-]+(?::\\d{1,5})?/[A-Za-z0-9._/-]+' +
+  '(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-fA-F]{64})?$'
+);
 const MAX_SUBMISSION_BYTES = 512 * 1024;
-const RATE_LIMIT_WINDOW_S = 60;
+const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 
 const STYLE = fs.readFileSync(root('static', 'account.css'), 'utf8');
 const TEMPLATE = fs.readFileSync(root('static', 'account.html'), 'utf8');
 
-export interface AccountOptions {
-  db: ArenaDB;
+export interface Options {
+  db: db.Database;
   auth: Auth;
   laddersFile?: string;
-  poolDirsByLadder?: Map<string, string[]>;
+  poolsByLadder?: Map<string, string[]>;
   rateLimitMaxAttempts?: number;
   rateLimitWindowSeconds?: number;
+  allowPrivateUrls?: boolean;
   now?: () => number;
 }
 
@@ -144,7 +141,7 @@ function formatIsoDate(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
 }
 
-function renderActiveSection(entries: ActiveEntryView[]): string {
+function renderActiveSection(entries: db.ActiveEntryView[]): string {
   if (!entries.length) {
     return `<section id="active">
       <h3><a href="#active" class="subtle">Active</a></h3>
@@ -157,22 +154,22 @@ function renderActiveSection(entries: ActiveEntryView[]): string {
     const w = e.ww + e.wt;
     const l = e.ll + e.tl;
     const t = e.split;
-    const elo = Math.round(e.rating_elo);
-    const ci = Math.round(1.96 * e.rating_se);
-    const settled = e.settled_at !== null || (
-      e.rating_se <= SETTLED_MAX_SE && e.matches_played >= SETTLED_MIN_MATCHES
+    const elo = Math.round(e.elo);
+    const ci = Math.round(1.96 * e.se);
+    const settled = e.settledAt !== undefined || (
+      e.se <= SETTLED_MAX_SE && e.matches >= SETTLED_MIN_MATCHES
     );
 
     if (isChampion) {
-      const rankCell = e.rank_current !== null
-        ? `<strong>#${e.rank_current}</strong>`
+      const rankCell = e.rankCurrent !== undefined
+        ? `<strong>#${e.rankCurrent}</strong>`
         : '<span class="muted">—</span>';
       const statusCell = settled
         ? '<span class="yes">Settled</span>'
         : '<span class="muted">Provisional</span>';
       return `<tr>
-        <td><tt>${escapeHtml(e.display_name)}</tt></td>
-        <td><code><strong>${escapeHtml(e.version_str)}</strong></code></td>
+        <td><tt>${escapeHtml(e.ladderName)}</tt></td>
+        <td><code><strong>${escapeHtml(e.version)}</strong></code></td>
         <td class="num">${rankCell}</td>
         <td class="num"><strong>${elo}</strong> <span class="muted">±${ci}</span></td>
         <td class="num">${w}–${l}–${t}</td>
@@ -181,8 +178,8 @@ function renderActiveSection(entries: ActiveEntryView[]): string {
     }
 
     return `<tr class="secondary">
-      <td><tt>${escapeHtml(e.display_name)}</tt></td>
-      <td><code>${escapeHtml(e.version_str)}</code></td>
+      <td><tt>${escapeHtml(e.ladderName)}</tt></td>
+      <td><code>${escapeHtml(e.version)}</code></td>
       <td class="num muted">—</td>
       <td class="num">${elo} <span class="muted">±${ci}</span></td>
       <td class="num">${w}–${l}–${t}</td>
@@ -211,7 +208,7 @@ function renderActiveSection(entries: ActiveEntryView[]): string {
 }
 
 function renderHistorySection(
-  versions: VersionHistoryView[],
+  versions: db.VersionHistoryView[],
   ladderNameById: Map<string, string>
 ): string {
   if (!versions.length) {
@@ -224,69 +221,69 @@ function renderHistorySection(
   const rows = versions.map(v => {
     let ladderIds: string[] = [];
     try {
-      const parsed = JSON.parse(v.ladders_json) as unknown;
+      const parsed = JSON.parse(v.laddersJson) as unknown;
       if (Array.isArray(parsed)) ladderIds = parsed.map(String);
     } catch {}
     const ladderLabels = ladderIds.map(id => ladderNameById.get(id) ?? id);
     const laddersStr = escapeHtml(ladderLabels.join(', '));
 
     const shortSha = `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`;
-    const sizeMb = v.unpacked_bytes !== null
-      ? Math.max(1, Math.round(v.unpacked_bytes / (1024 * 1024)))
-      : null;
-    const sizeNote = sizeMb !== null ? ` <span class="muted">(${sizeMb} MB)</span>` : '';
+    const sizeMb = v.unpackedBytes !== undefined
+      ? Math.max(1, Math.round(v.unpackedBytes / (1024 * 1024)))
+      : undefined;
+    const sizeNote = sizeMb !== undefined ? ` <span class="muted">(${sizeMb} MB)</span>` : '';
     const artifactCell = `<tt>${escapeHtml(shortSha)}</tt>${sizeNote}`;
 
-    const isFullyActive = v.smoke_status === 'passed' &&
-      v.active_ladder_names.length > 0 &&
-      v.active_ladder_names.length >= ladderLabels.length;
-    const isPartiallyActive = v.smoke_status === 'passed' &&
-      v.active_ladder_names.length > 0 &&
-      v.active_ladder_names.length < ladderLabels.length;
-    const isRetired = v.smoke_status === 'passed' && v.active_ladder_names.length === 0;
+    const isFullyActive = v.smokeStatus === 'passed' &&
+      v.activeLadderNames.length > 0 &&
+      v.activeLadderNames.length >= ladderLabels.length;
+    const isPartiallyActive = v.smokeStatus === 'passed' &&
+      v.activeLadderNames.length > 0 &&
+      v.activeLadderNames.length < ladderLabels.length;
+    const isRetired = v.smokeStatus === 'passed' && v.activeLadderNames.length === 0;
 
     let smokeCell: string;
-    if (v.smoke_status === 'pending_pull') {
+    if (v.smokeStatus === 'pending') {
       smokeCell = '<span class="muted">PENDING</span>';
-    } else if (v.smoke_status === 'passed') {
+    } else if (v.smokeStatus === 'passed') {
       const passTag = isRetired ? '<span>PASS</span>' : '<span class="yes">PASS</span>';
       const statsParts: string[] = [];
-      if (v.smoke_duration_ms !== null) {
-        statsParts.push(`${(v.smoke_duration_ms / 1000).toFixed(1)}s`);
+      if (v.smokeDurationMillis !== undefined) {
+        statsParts.push(`${(v.smokeDurationMillis / 1000).toFixed(1)}s`);
       }
-      if (v.smoke_turn_ms !== null) {
-        statsParts.push(`${v.smoke_turn_ms}ms/turn`);
+      if (v.smokeTurnMillis !== undefined) {
+        statsParts.push(`${v.smokeTurnMillis}ms/turn`);
       }
-      if (v.smoke_peak_ram_mb !== null) {
-        statsParts.push(`${v.smoke_peak_ram_mb.toLocaleString('en-US')} MiB`);
+      if (v.smokePeakRam !== undefined) {
+        statsParts.push(`${v.smokePeakRam.toLocaleString('en-US')} MiB`);
       }
       const statsSuffix = statsParts.length
         ? ` <span class="muted">(${escapeHtml(statsParts.join(' · '))})</span>`
         : '';
       smokeCell = `${passTag}${statsSuffix}`;
     } else {
-      const label = v.smoke_status === 'quarantined' ? 'QUARANTINED' : 'FAIL';
-      const dmNote = v.dm_sent ? ' <span class="muted">(DM sent)</span>' : '';
-      const logDetails = v.smoke_error_log
+      const label = v.smokeStatus === 'quarantined' ? 'QUARANTINED' : 'FAIL';
+      const dmNote = v.notified ? ' <span class="muted">(DM sent)</span>' : '';
+      const logDetails = v.smokeError
         ? `<details class="smoke-log">
             <summary>Sandbox <tt>stderr</tt> log</summary>
-            <pre><code>${escapeHtml(v.smoke_error_log)}</code></pre>
+            <pre><code>${escapeHtml(v.smokeError)}</code></pre>
           </details>`
         : '';
       smokeCell = `<span class="no">${label}</span>${dmNote}${logDetails}`;
     }
 
     let stateCell: string;
-    if (v.smoke_status === 'pending_pull') {
+    if (v.smokeStatus === 'pending') {
       stateCell = '<span class="muted">Pending</span>';
-    } else if (v.smoke_status === 'failed_smoke_test') {
+    } else if (v.smokeStatus === 'failed') {
       stateCell = '<span class="muted">Rejected</span>';
-    } else if (v.smoke_status === 'quarantined') {
+    } else if (v.smokeStatus === 'quarantined') {
       stateCell = '<span class="no">Quarantined</span>';
     } else if (isFullyActive) {
       stateCell = '<span class="yes">Active</span>';
     } else if (isPartiallyActive) {
-      const activeList = escapeHtml(v.active_ladder_names.join(', '));
+      const activeList = escapeHtml(v.activeLadderNames.join(', '));
       stateCell = `Active <span class="muted">(${activeList})</span>`;
     } else {
       stateCell = '<span class="muted">Retired</span>';
@@ -294,8 +291,8 @@ function renderHistorySection(
 
     const rowClass = isRetired ? ' class="secondary"' : '';
     const verHtml = isFullyActive
-      ? `<code><strong>${escapeHtml(v.version_str)}</strong></code>`
-      : `<code>${escapeHtml(v.version_str)}</code>`;
+      ? `<code><strong>${escapeHtml(v.version)}</strong></code>`
+      : `<code>${escapeHtml(v.version)}</code>`;
 
     return `<tr${rowClass}>
       <td>${verHtml}</td>
@@ -303,7 +300,7 @@ function renderHistorySection(
       <td>${artifactCell}</td>
       <td>${smokeCell}</td>
       <td>${stateCell}</td>
-      <td class="num muted">${formatIsoDate(v.created_at)}</td>
+      <td class="num muted">${formatIsoDate(v.submittedAt)}</td>
     </tr>`;
   }).join('');
 
@@ -328,18 +325,18 @@ function renderHistorySection(
 }
 
 export function renderAccountPage(opts: {
-  developer: DeveloperRow;
-  bot: BotRow;
-  status: SubmissionStatus;
-  currentLadders: LadderRow[];
-  needsTeamsLadders: LadderRow[];
-  activeEntries: ActiveEntryView[];
-  versions: VersionHistoryView[];
-  allLadders: LadderRow[];
+  developer: db.DeveloperRow;
+  agent: db.AgentRow;
+  status: db.SubmissionStatus;
+  currentLadders: db.LadderRow[];
+  needsTeamsLadders: db.LadderRow[];
+  activeEntries: db.ActiveEntryView[];
+  versions: db.VersionHistoryView[];
+  allLadders: db.LadderRow[];
 }): string {
   const {
     developer,
-    bot,
+    agent,
     status,
     currentLadders,
     needsTeamsLadders,
@@ -349,9 +346,9 @@ export function renderAccountPage(opts: {
   } = opts;
 
   const linkHref = '/auth/discord?intent=link&amp;return_to=%2Faccount%2F';
-  const discordHtml = developer.discord_username
+  const discordHtml = developer.discordUsername
     ? `<span id="discord-view">
-        <tt id="discord-val">@${escapeHtml(developer.discord_username)}</tt>
+        <tt id="discord-val">@${escapeHtml(developer.discordUsername)}</tt>
         <span class="muted">(<a href="${linkHref}" class="subtle">change</a> / ` +
         '<a href="#account" id="discord-unlink-btn" class="subtle">unlink</a>)</span>' +
       '</span>'
@@ -360,7 +357,7 @@ export function renderAccountPage(opts: {
         <span class="muted">(<a href="${linkHref}" class="subtle">link</a>)</span>
       </span>`;
 
-  const projectHref = `/projects/${encodeURIComponent(bot.slug)}/`;
+  const projectHref = `/projects/${encodeURIComponent(agent.slug)}/`;
 
   const statusClass = status.label === 'Eligible'
     ? 'yes'
@@ -369,14 +366,14 @@ export function renderAccountPage(opts: {
     status.reason ?? 'Submission status: Pending / Qualified / Eligible / Ineligible';
 
   const needsTeamsIds = new Set(needsTeamsLadders.map(l => l.id));
-  const activeLadderIdsWithBot = new Set(activeEntries.map(e => e.ladder_id));
+  const activeLadderIdsWithAgent = new Set(activeEntries.map(e => e.ladderId));
   const checkboxesHtml = currentLadders.map(l => {
     const isOpen = l.status === 'active';
-    const checked = isOpen && activeLadderIdsWithBot.has(l.id) ? ' checked' : '';
+    const checked = isOpen && activeLadderIdsWithAgent.has(l.id) ? ' checked' : '';
     const disabled = isOpen ? '' : ' disabled';
     const needsTeams = isOpen && needsTeamsIds.has(l.id) ? ' data-needs-teams="true"' : '';
     const val = escapeHtml(l.id);
-    const label = escapeHtml(l.display_name);
+    const label = escapeHtml(l.name);
     const labelAttrs = isOpen
       ? ''
       : ' class="upcoming" title="Upcoming — not open for submissions yet"';
@@ -385,15 +382,15 @@ export function renderAccountPage(opts: {
   }).join('\n            ');
 
   const firstPoolLadder = needsTeamsLadders[0];
-  let vgcTeamsRowHtml = '';
-  if (firstPoolLadder?.team_count) {
-    const count = firstPoolLadder.team_count;
+  let poolTeamsRowHtml = '';
+  if (firstPoolLadder?.teams) {
+    const count = firstPoolLadder.teams;
     const placeholder =
       `Paste ${count} Showdown teams (=== [format] Team Name ===) ` +
       '— locked for this seasonal ladder on first pass';
-    vgcTeamsRowHtml =
-      '<label for="sub-teams" class="vgc-teams-field hide">VGC Teams</label>\n' +
-      '        <div class="vgc-teams-field hide">\n' +
+    poolTeamsRowHtml =
+      '<label for="sub-teams" class="pool-teams-field hide">Teams</label>\n' +
+      '        <div class="pool-teams-field hide">\n' +
       '          <textarea id="sub-teams" name="teams" class="input-text" ' +
       `spellcheck="false" placeholder="${placeholder}"></textarea>\n` +
       '          <div class="teams-tools">\n' +
@@ -405,20 +402,20 @@ export function renderAccountPage(opts: {
       '        </div>';
   }
 
-  const ladderNameById = new Map(allLadders.map(l => [l.id, l.display_name]));
+  const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
   const content = renderTemplate(TEMPLATE, {
-    ghHref: `https://github.com/${encodeURIComponent(developer.github_login)}`,
-    ghLogin: developer.github_login,
+    ghHref: `https://github.com/${encodeURIComponent(developer.githubLogin)}`,
+    ghLogin: developer.githubLogin,
     discordHtml,
     projectHref,
-    botName: bot.name,
+    projectName: agent.name,
     statusClass,
     statusTitle,
     statusLabel: status.label,
     activeSection: renderActiveSection(activeEntries),
     formDisabledClass: status.canSubmit ? '' : ' form-disabled',
     fieldsetDisabled: status.canSubmit ? '' : ' disabled',
-    vgcTeamsRowHtml,
+    poolTeamsRowHtml,
     checkboxesHtml,
     submitDisabled: status.canSubmit ? '' : ' disabled',
     submitTitleAttr: status.reason ? ` title="${escapeHtml(status.reason)}"` : '',
@@ -459,8 +456,8 @@ function parseSubmissionPayload(
   contentType: string | undefined
 ): {
   version: string;
-  formatType?: string;
-  downloadUrl: string;
+  packageFormat?: string;
+  url: string;
   sha256: string;
   authToken: string;
   ladders: string[];
@@ -480,10 +477,10 @@ function parseSubmissionPayload(
       : typeof rawTeams === 'string' ? rawTeams : undefined;
     return {
       version: typeof json.version === 'string' ? json.version.trim() : '',
-      formatType: typeof json.format_type === 'string' ? json.format_type.trim() : undefined,
-      downloadUrl: typeof json.download_url === 'string' ? json.download_url.trim() : '',
+      packageFormat: typeof json.package === 'string' ? json.package.trim() : undefined,
+      url: typeof json.url === 'string' ? json.url.trim() : '',
       sha256: typeof json.sha256 === 'string' ? json.sha256.trim() : '',
-      authToken: typeof json.auth_token === 'string' ? json.auth_token.trim() : '',
+      authToken: typeof json.authToken === 'string' ? json.authToken.trim() : '',
       ladders,
       teams,
     };
@@ -501,29 +498,67 @@ function parseSubmissionPayload(
 
   return {
     version: str(parsed.version),
-    formatType: str(parsed.format_type) || undefined,
-    downloadUrl: str(parsed.download_url),
+    packageFormat: str(parsed.package) || undefined,
+    url: str(parsed.url),
     sha256: str(parsed.sha256),
-    authToken: str(parsed.auth_token),
+    authToken: str(parsed.authToken),
     ladders,
     teams: parsed.teams !== undefined ? str(parsed.teams) : undefined,
   };
 }
 
-function validateDownloadUrl(downloadUrl: string, formatType: FormatType): string | undefined {
-  if (!downloadUrl || /\s/.test(downloadUrl)) {
+// Rejects loopback, unspecified, link-local (AWS/GCP/Linode 169.254.169.254 metadata), and
+// RFC1918 / IPv6 ULA targets so a competitor cannot trick the Mac mini runner into fetching from
+// its own LAN, SSH tunnel ports, or cloud metadata endpoints when pulling a bundle archive.
+export function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
+    return true;
+  }
+
+  const mappedIpv4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host);
+  const candidate = mappedIpv4 ? mappedIpv4[1] : host;
+
+  const ipVer = net.isIP(candidate);
+  if (ipVer === 4) {
+    const parts = candidate.split('.').map(Number);
+    const [a, b] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+
+  if (ipVer === 6) {
+    if (candidate === '::' || candidate === '::1') return true;
+    if (/^f[cd][0-9a-f]{2}:/i.test(candidate)) return true; // fc00::/7 ULA
+    if (/^fe[89ab][0-9a-f]:/i.test(candidate)) return true; // fe80::/10 link-local
+    return false;
+  }
+
+  return false;
+}
+
+export function validateArtifactUrl(
+  url: string,
+  packageFormat: db.PackageFormat,
+  allowPrivateUrls = false
+): string | undefined {
+  if (!url || /\s/.test(url)) {
     return 'Artifact URL must not be empty or contain whitespace.';
   }
-  const deduced = deduceFormatType(downloadUrl);
-  if (deduced !== formatType) {
-    return formatType === 'bundle'
+  const deduced = deducePackageFormat(url);
+  if (deduced !== packageFormat) {
+    return packageFormat === 'bundle'
       ? 'Bundle Artifact URL must end in .tar.gz, .tgz, .tar.xz, .txz, .tar.zst, or .tzst.'
       : 'OCI image reference must not point to a .tar.{gz,xz,zst} archive.';
   }
-  if (formatType === 'bundle') {
+  if (packageFormat === 'bundle') {
     let parsed: URL;
     try {
-      parsed = new URL(downloadUrl);
+      parsed = new URL(url);
     } catch {
       return 'Bundle Artifact URL must be a valid URL.';
     }
@@ -531,39 +566,54 @@ function validateDownloadUrl(downloadUrl: string, formatType: FormatType): strin
     if (parsed.protocol !== 'https:' && !(allowHttp && parsed.protocol === 'http:')) {
       return 'Bundle Artifact URL must use HTTPS.';
     }
+    if (!allowPrivateUrls && isPrivateOrLoopbackHost(parsed.hostname)) {
+      return 'Bundle Artifact URL must point to a public host.';
+    }
     return undefined;
   }
 
-  if (downloadUrl.startsWith('http://') || downloadUrl.startsWith('https://')) {
+  if (url.startsWith('http://') || url.startsWith('https://')) {
     return (
       'OCI image reference must be a registry reference ' +
-      '(e.g. ghcr.io/org/bot:1.0.0), not an HTTP URL.'
+      '(e.g. ghcr.io/org/agent:1.0.0), not an HTTP URL.'
     );
   }
-  if (!OCI_REF_RE.test(downloadUrl) || !downloadUrl.includes('/')) {
-    return 'Invalid OCI image reference (expected e.g. ghcr.io/org/bot:1.0.0).';
+  if (!OCI_REF_RE.test(url) || !url.includes('/')) {
+    return 'Invalid OCI image reference (expected e.g. ghcr.io/org/agent:1.0.0).';
+  }
+  const slash = url.indexOf('/');
+  const registryHost = url.slice(0, slash).split(':')[0];
+  if (
+    !allowPrivateUrls &&
+    (registryHost.includes('.') || registryHost === 'localhost') &&
+    isPrivateOrLoopbackHost(registryHost)
+  ) {
+    return 'OCI image registry must point to a public host.';
   }
   return undefined;
 }
 
-export function register(app: polka.Polka, options: AccountOptions) {
+export function register(app: polka.Polka, options: Options) {
   const {db, auth} = options;
   const getNow = options.now ?? (() => Math.floor(Date.now() / 1000));
-  const getPoolDirs = () =>
-    options.poolDirsByLadder ?? loadLadderPoolDirs(options.laddersFile ?? LADDERS_FILE);
+  const getPools = () => options.poolsByLadder ??
+    loadLadderPools(options.laddersFile ?? LADDERS_FILE);
   const maxAttempts = options.rateLimitMaxAttempts ?? RATE_LIMIT_MAX_ATTEMPTS;
-  const windowSeconds = options.rateLimitWindowSeconds ?? RATE_LIMIT_WINDOW_S;
-  const attemptsByBot = new Map<number, number[]>();
+  const windowSeconds = options.rateLimitWindowSeconds ?? RATE_LIMIT_WINDOW_SECONDS;
+  const attemptsByAgent = new Map<number, number[]>();
 
-  const checkSubmissionRateLimit = (botId: number, now: number): number | undefined => {
+  // Enforced before body parsing and 1-NN team-uniqueness checks so a logged-in developer cannot
+  // exhaust CPU by spamming 20-team validation pastes (supplements Nginx's IP-based `submission`
+  // zone when multiple co-authors submit for the same project).
+  const checkSubmissionRateLimit = (agentId: number, now: number): number | undefined => {
     const cutoff = now - windowSeconds;
-    const recent = (attemptsByBot.get(botId) ?? []).filter(ts => ts > cutoff);
+    const recent = (attemptsByAgent.get(agentId) ?? []).filter(ts => ts > cutoff);
     if (recent.length >= maxAttempts) {
-      attemptsByBot.set(botId, recent);
+      attemptsByAgent.set(agentId, recent);
       return Math.max(1, recent[0] + windowSeconds - now);
     }
     recent.push(now);
-    attemptsByBot.set(botId, recent);
+    attemptsByAgent.set(agentId, recent);
     return undefined;
   };
 
@@ -575,8 +625,8 @@ export function register(app: polka.Polka, options: AccountOptions) {
     }
 
     const developer = db.getDeveloperByGitHub(login);
-    const bot = developer ? db.getBotById(developer.bot_id) : undefined;
-    if (!developer || !bot || bot.status === 'disabled') {
+    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
+    if (!developer || !agent || agent.status === 'disabled') {
       sendHtml(res, 403, renderNotRegisteredError(login));
       return;
     }
@@ -585,18 +635,18 @@ export function register(app: polka.Polka, options: AccountOptions) {
     const currentLadders = db.getCurrentLadders();
     const needsTeamsLadders = currentLadders.filter(
       l => l.status === 'active' &&
-        l.team_mode === 'competitor_pool' &&
-        !db.hasActiveLadderTeams(l.id, bot.id)
+        l.team === 'pools' &&
+        !db.hasActiveLadderTeams(l.id, agent.id)
     );
 
     const html = renderAccountPage({
       developer,
-      bot,
-      status: db.computeBotSubmissionStatus(bot.id, now),
+      agent,
+      status: db.computeAgentSubmissionStatus(agent.id, now),
       currentLadders,
       needsTeamsLadders,
-      activeEntries: db.getActiveEntriesForBot(bot.id),
-      versions: db.getVersionsForBot(bot.id),
+      activeEntries: db.getActiveEntriesForAgent(agent.id),
+      versions: db.getVersionsForAgent(agent.id),
       allLadders: db.getLadders(),
     });
     sendHtml(res, 200, html);
@@ -610,14 +660,14 @@ export function register(app: polka.Polka, options: AccountOptions) {
     }
 
     const developer = db.getDeveloperByGitHub(login);
-    const bot = developer ? db.getBotById(developer.bot_id) : undefined;
-    if (!developer || !bot || bot.status === 'disabled') {
+    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
+    if (!developer || !agent || agent.status === 'disabled') {
       sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
       return;
     }
 
     const now = getNow();
-    const eligibility = db.computeBotSubmissionStatus(bot.id, now);
+    const eligibility = db.computeAgentSubmissionStatus(agent.id, now);
     if (!eligibility.canSubmit) {
       const code = eligibility.label === 'Pending' || eligibility.label === 'Qualified'
         ? 403
@@ -626,7 +676,7 @@ export function register(app: polka.Polka, options: AccountOptions) {
       return;
     }
 
-    const retryAfter = checkSubmissionRateLimit(bot.id, now);
+    const retryAfter = checkSubmissionRateLimit(agent.id, now);
     if (retryAfter !== undefined) {
       sendJson(
         res,
@@ -653,15 +703,20 @@ export function register(app: polka.Polka, options: AccountOptions) {
       return;
     }
 
-    const formatType: FormatType = payload.formatType === 'bundle' || payload.formatType === 'oci'
-      ? payload.formatType
-      : deduceFormatType(payload.downloadUrl);
-    if (payload.formatType && payload.formatType !== 'bundle' && payload.formatType !== 'oci') {
-      sendJson(res, 400, {error: 'Invalid format_type (expected "bundle" or "oci").'});
+    const packageFormat: db.PackageFormat =
+      payload.packageFormat === 'bundle' || payload.packageFormat === 'oci'
+        ? payload.packageFormat
+        : deducePackageFormat(payload.url);
+    if (
+      payload.packageFormat &&
+      payload.packageFormat !== 'bundle' &&
+      payload.packageFormat !== 'oci'
+    ) {
+      sendJson(res, 400, {error: 'Invalid package (expected "bundle" or "oci").'});
       return;
     }
 
-    const urlErr = validateDownloadUrl(payload.downloadUrl, formatType);
+    const urlErr = validateArtifactUrl(payload.url, packageFormat, options.allowPrivateUrls);
     if (urlErr) {
       sendJson(res, 400, {error: urlErr});
       return;
@@ -681,9 +736,9 @@ export function register(app: polka.Polka, options: AccountOptions) {
     const activeLadders = db.getActiveLadders();
     const byId = new Map(activeLadders.map(l => [l.id.toLowerCase(), l]));
     const bySlot = new Map(activeLadders.map(l => [l.slot.toLowerCase(), l]));
-    const byName = new Map(activeLadders.map(l => [l.display_name.toLowerCase(), l]));
+    const byName = new Map(activeLadders.map(l => [l.name.toLowerCase(), l]));
 
-    const selectedLadders: LadderRow[] = [];
+    const selectedLadders: db.LadderRow[] = [];
     const seenLadderIds = new Set<string>();
     for (const raw of payload.ladders) {
       const key = raw.toLowerCase();
@@ -698,28 +753,28 @@ export function register(app: polka.Polka, options: AccountOptions) {
       }
     }
 
-    const poolDirsMap = getPoolDirs();
+    const poolsMap = getPools();
     const teamsByLadder: Record<string, string[]> = {};
     const hasSubmittedTeams = Array.isArray(payload.teams)
       ? payload.teams.some(t => t.trim().length > 0)
       : Boolean(payload.teams?.trim());
 
-    const competitorPoolLadders = selectedLadders.filter(l => l.team_mode === 'competitor_pool');
-    if (!competitorPoolLadders.length && hasSubmittedTeams) {
+    const poolLadders = selectedLadders.filter(l => l.team === 'pools');
+    if (!poolLadders.length && hasSubmittedTeams) {
       sendJson(res, 400, {
-        error: 'Custom team pools are only accepted when entering a seasonal VGC ladder.',
+        error: 'Custom team pools are only accepted when entering a seasonal pools ladder.',
       });
       return;
     }
 
-    for (const ladder of competitorPoolLadders) {
-      const requiredTeams = ladder.team_count!;
-      const alreadyLocked = db.hasActiveLadderTeams(ladder.id, bot.id);
+    for (const ladder of poolLadders) {
+      const requiredTeams = ladder.teams!;
+      const alreadyLocked = db.hasActiveLadderTeams(ladder.id, agent.id);
       if (alreadyLocked) {
         if (hasSubmittedTeams) {
           sendJson(res, 400, {
             error:
-              `Your ${requiredTeams} teams for ${ladder.display_name} (${ladder.id}) ` +
+              `Your ${requiredTeams} teams for ${ladder.name} (${ladder.id}) ` +
               'are already locked for this season; omit teams to reuse your locked pool.',
           });
           return;
@@ -730,18 +785,18 @@ export function register(app: polka.Polka, options: AccountOptions) {
       if (!hasSubmittedTeams || !payload.teams) {
         sendJson(res, 400, {
           error:
-            `First submission to ${ladder.display_name} requires ${requiredTeams} ` +
+            `First submission to ${ladder.name} requires ${requiredTeams} ` +
             'valid teams passing the 1.30 uniqueness threshold.',
         });
         return;
       }
 
       try {
-        const poolDirs = poolDirsMap.get(ladder.id) ?? [];
+        const pools = poolsMap.get(ladder.id) ?? [];
         teamsByLadder[ladder.id] = validateCompetitorTeams(payload.teams, {
-          formatId: ladder.format_id,
-          poolDirs,
-          teamCount: requiredTeams,
+          format: ladder.format,
+          pools,
+          teams: requiredTeams,
         });
       } catch (err: any) {
         sendJson(res, 400, {error: err?.message || 'Team pool validation failed.'});
@@ -749,25 +804,25 @@ export function register(app: polka.Polka, options: AccountOptions) {
       }
     }
 
-    let authTokenEnc: string | null = null;
+    let authTokenEncoding: string | undefined;
     if (payload.authToken) {
       const secret = auth.getConfig()?.sessionSecret;
       if (!secret) {
-        sendJson(res, 503, {error: 'SESSION_SECRET is required to encrypt auth_token.'});
+        sendJson(res, 503, {error: 'SESSION_SECRET is required to encrypt authToken.'});
         return;
       }
-      authTokenEnc = encryptSecret(payload.authToken, secret);
+      authTokenEncoding = encryptSecret(payload.authToken, secret);
     }
 
     try {
       const created = db.createSubmission({
-        botId: bot.id,
-        submittedByDevId: developer.id,
-        versionStr: payload.version,
-        formatType,
-        downloadUrl: payload.downloadUrl,
+        agentId: agent.id,
+        developerId: developer.id,
+        version: payload.version,
+        package: packageFormat,
+        url: payload.url,
         sha256,
-        authTokenEnc,
+        authTokenEncoding,
         ladderIds: selectedLadders.map(l => l.id),
         teamsByLadder: Object.keys(teamsByLadder).length ? teamsByLadder : undefined,
         now,
@@ -776,9 +831,9 @@ export function register(app: polka.Polka, options: AccountOptions) {
       if (req.headers.accept?.includes('application/json')) {
         sendJson(res, 201, {
           ok: true,
-          version_id: created.id,
-          version: created.version_str,
-          smoke_status: created.smoke_status,
+          versionId: created.id,
+          version: created.version,
+          smokeStatus: created.smokeStatus,
         });
         return;
       }

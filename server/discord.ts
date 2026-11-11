@@ -5,23 +5,21 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
-import type polka from 'polka';
+import polka from 'polka';
 import * as yaml from 'yaml';
 
-import {
-  type ApplySubmissionStatusResult,
-  ArenaDB,
-  type PendingVersionDmRow,
-} from '../db';
+import {Database} from '../db';
+import type * as db from '../db';
 import {root, slugify, toID} from '../static/util';
 
-import type {WatchdogAlert} from './arena';
+import {WatchdogAlert} from './arena';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const DISCORD_MAX_MESSAGE_LEN = 2000;
 const MAX_INTERACTION_BYTES = 64 * 1024;
 const SITES = ['vgc.bot', 'pkmn.bot'];
-const CYCLE_MS = 60_000;
+const CYCLE_MILLIS = 60_000;
+// ASN.1 SubjectPublicKeyInfo header wrapping a raw 32-byte Ed25519 public key for node:crypto.
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const inFlightVersionDms = new Set<number>();
 
@@ -49,20 +47,21 @@ export interface Config {
   staff?: string[];
   pins?: string[];
   ladders: {[ladder: string]: string};
-  bots?: {[bot: string]: string};
+  agents?: {[agent: string]: string};
   authors?: {[author: string]: string};
 }
 
 export interface Leader {
   ladder: string;
-  bot: {id: string; name: string} | null;
-  owner: {name: string; discordId: string | null} | null;
+  agent?: {id: string; name: string};
+  owner?: {name: string; discordId?: string};
 }
 
-// A member id, or a name to look a member up by.
+// A Discord guild member snowflake ID, or a username/display name to resolve against the roster.
 export type Owner = {id: string} | {name: string};
 
-export interface DiscordUser {
+// Discord REST API v10 wire payloads below retain Discord's native snake_case keys (and user.bot).
+export interface User {
   id: string;
   username: string;
   global_name?: string;
@@ -70,7 +69,7 @@ export interface DiscordUser {
 }
 
 export interface GuildMember {
-  user: DiscordUser;
+  user: User;
   nick?: string;
   roles: string[];
 }
@@ -85,7 +84,7 @@ export interface GuildRole {
   name: string;
 }
 
-export interface DiscordEmbed {
+export interface Embed {
   type?: string;
   title?: string;
   description?: string;
@@ -93,7 +92,7 @@ export interface DiscordEmbed {
   fields?: Array<{name: string; value: string}>;
 }
 
-export interface DiscordPoll {
+export interface Poll {
   question: {text?: string};
   answers: Array<{
     answer_id: number;
@@ -104,32 +103,32 @@ export interface DiscordPoll {
   };
 }
 
-export interface DiscordMessageBody {
+export interface MessageBody {
   content?: string;
-  mentions?: DiscordUser[];
+  mentions?: User[];
   attachments?: Array<{url: string}>;
-  embeds?: DiscordEmbed[];
+  embeds?: Embed[];
   sticker_items?: Array<{name: string}>;
-  poll?: DiscordPoll;
+  poll?: Poll;
 }
 
-export interface DiscordMessage extends DiscordMessageBody {
+export interface Message extends MessageBody {
   id: string;
   type?: number;
   timestamp: string;
-  edited_timestamp?: string | null;
+  edited_timestamp?: string;
   content: string;
-  author: DiscordUser;
-  referenced_message?: DiscordMessage | null;
-  message_snapshots?: Array<{message: DiscordMessageBody}>;
+  author: User;
+  referenced_message?: Message;
+  message_snapshots?: Array<{message: MessageBody}>;
 }
 
-export interface DiscordApplication {
+export interface Application {
   id: string;
   verify_key: string;
 }
 
-export interface DiscordCommandOption {
+export interface CommandOption {
   type: number;
   name: string;
   description: string;
@@ -137,15 +136,15 @@ export interface DiscordCommandOption {
   autocomplete?: boolean;
 }
 
-export interface DiscordCommand {
+export interface Command {
   id?: string;
   type: number;
   name: string;
   description: string;
-  options?: DiscordCommandOption[];
+  options?: CommandOption[];
 }
 
-export interface DiscordInteraction {
+export interface Interaction {
   type: number;
   data?: {
     name?: string;
@@ -158,6 +157,13 @@ export interface DiscordInteraction {
   };
 }
 
+interface RawPartnerLeader {
+  ladder: string;
+  agent?: {id: string; name: string} | null;
+  bot?: {id: string; name: string} | null;
+  owner?: {name: string; discordId?: string | null} | null;
+}
+
 function loadConfig(file = root('config', 'discord.yml')): Config {
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
 }
@@ -168,21 +174,21 @@ export function loadGlossary(
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
 }
 
-function botOverride(
-  bot: NonNullable<Leader['bot']>,
-  bots?: {[bot: string]: string}
+function agentOverride(
+  agent: NonNullable<Leader['agent']>,
+  agents?: {[agent: string]: string}
 ): string | undefined {
-  if (!bots) return undefined;
-  if (bots[bot.id]) return bots[bot.id];
-  const id = toID(bot.name);
-  for (const [k, v] of Object.entries(bots)) {
+  if (!agents) return undefined;
+  if (agents[agent.id]) return agents[agent.id];
+  const id = toID(agent.name);
+  for (const [k, v] of Object.entries(agents)) {
     if (id.startsWith(toID(k))) return v;
   }
   return undefined;
 }
 
 export function ownerOf(leader: Leader, config: Config): Owner | undefined {
-  const override = leader.bot && botOverride(leader.bot, config.bots);
+  const override = leader.agent && agentOverride(leader.agent, config.agents);
   if (override) return {name: override};
   if (!leader.owner) return undefined;
   if (leader.owner.discordId) return {id: leader.owner.discordId};
@@ -210,8 +216,8 @@ async function discordRequest(token: string, endpoint: string, init?: RequestIni
   });
   if (res.status === 429) {
     const body = await res.json().catch(() => ({})) as {retry_after?: number};
-    const waitMs = Math.ceil((body.retry_after ?? 1) * 1000);
-    await new Promise(resolve => setTimeout(resolve, waitMs));
+    const waitMillis = Math.ceil((body.retry_after ?? 1) * 1000);
+    await new Promise(resolve => setTimeout(resolve, waitMillis));
     return discordRequest(token, endpoint, init);
   }
   if (!res.ok) {
@@ -249,6 +255,8 @@ export async function fetchGuildRoles(token: string, guild: string): Promise<Gui
   return await discordRequest(token, `/guilds/${guild}/roles`) as GuildRole[];
 }
 
+// Normalizes partner leader payloads from vgc.bot and pkmn.bot (which serialize external "bot"
+// and nullable owner fields) into our internal undefined-based Leader shape at the HTTP boundary.
 export async function fetchLeaders(site: string, vgcToken: string): Promise<Leader[]> {
   const res = await fetch(`https://${site}/api/partner/leaders`, {
     headers: {Authorization: `Bearer ${vgcToken}`},
@@ -256,11 +264,18 @@ export async function fetchLeaders(site: string, vgcToken: string): Promise<Lead
   if (!res.ok) {
     throw new Error(`${site} API failed (${res.status})`);
   }
-  const data = await res.json() as {leaders: Leader[]};
-  return data.leaders;
+  const data = await res.json() as {leaders: RawPartnerLeader[]};
+  return data.leaders.map(raw => {
+    const agent = raw.agent ?? raw.bot ?? undefined;
+    const owner = raw.owner
+      ? {name: raw.owner.name, discordId: raw.owner.discordId ?? undefined}
+      : undefined;
+    return {ladder: raw.ladder, agent, owner};
+  });
 }
 
-// Fetches the members only when some ladder's owner changed since the last cycle.
+// Syncs external partner ladder #1 roles (vgc.bot / pkmn.bot). Guild members are fetched lazily
+// only when a ladder's resolved leader changed since the previous cycle.
 export async function syncRoles(
   token: string,
   vgcToken: string,
@@ -304,7 +319,7 @@ export async function syncRoles(
           `/guilds/${config.guild}/members/${target.user.id}/roles/${roleId}`,
           {method: 'PUT'}
         );
-        const who = `${target.user.username} (${leader.bot?.name})`;
+        const who = `${target.user.username} (${leader.agent?.name})`;
         console.log(`[${leader.ladder}] Assigned role ${roleId} to ${who}`);
       } else if (owner && !target) {
         const who = 'id' in owner ? owner.id : owner.name;
@@ -322,8 +337,11 @@ export async function syncRoles(
   }
 }
 
+// Syncs pkmn.ai Arena Competitor and #1 ladder leader roles directly from SQLite. Unlike external
+// partner ladders, Arena projects can have multiple co-owners in `developers`, so every verified
+// owner of a qualified project or #1 settled Champion receives the corresponding Discord role.
 export async function syncArenaRoles(
-  db: ArenaDB,
+  db: db.Database,
   token: string,
   config: Config,
   state: Map<string, string | undefined>,
@@ -334,7 +352,7 @@ export async function syncArenaRoles(
     label: string;
     roleId: string;
     targetIds: string[];
-    botName: string | null;
+    agentName?: string;
   }> = [];
 
   if (config.competitor) {
@@ -343,17 +361,16 @@ export async function syncArenaRoles(
       label: 'arena:competitor',
       roleId: config.competitor,
       targetIds: db.getCompetitorDiscordIds(),
-      botName: null,
     });
   }
 
   for (const target of db.getArenaLadderRoleTargets()) {
     assignments.push({
-      stateKey: `arena:ladder:${target.discord_role}`,
+      stateKey: `arena:ladder:${target.discordRole}`,
       label: `arena:${target.slot}`,
-      roleId: target.discord_role,
-      targetIds: target.discord_ids,
-      botName: target.bot_name,
+      roleId: target.discordRole,
+      targetIds: target.discordIds,
+      agentName: target.agentName,
     });
   }
 
@@ -389,8 +406,8 @@ export async function syncArenaRoles(
             {method: 'PUT'}
           );
           target.roles.push(item.roleId);
-          const who = item.botName
-            ? `${target.user.username} (${item.botName})`
+          const who = item.agentName
+            ? `${target.user.username} (${item.agentName})`
             : target.user.username;
           console.log(`[${item.label}] Assigned role ${item.roleId} to ${who}`);
         }
@@ -412,7 +429,7 @@ export async function syncArenaRoles(
   return members;
 }
 
-function appendCodeBlockWithinLimit(header: string, rawLog: string | null | undefined): string {
+function appendCodeBlockWithinLimit(header: string, rawLog?: string): string {
   const trimmed = rawLog?.trim();
   if (!trimmed) return header.slice(0, DISCORD_MAX_MESSAGE_LEN);
   const safeLog = trimmed.replace(/```/g, "'''");
@@ -430,42 +447,42 @@ function appendCodeBlockWithinLimit(header: string, rawLog: string | null | unde
 }
 
 export function formatSubmissionDm(input: {
-  botName: string;
-  versionStr: string;
-  smokeStatus: 'failed_smoke_test' | 'quarantined';
+  agentName: string;
+  version: string;
+  smokeStatus: 'failed' | 'quarantined';
   ladderLabels: string[];
-  smokeErrorLog?: string | null;
+  smokeError?: string;
 }): string {
   const laddersPart = input.ladderLabels.length
     ? ` on \`${input.ladderLabels.join(', ')}\``
     : '';
   const header = input.smokeStatus === 'quarantined'
-    ? `**[pkmn.ai]** **${input.botName}** (\`${input.versionStr}\`) has been ` +
+    ? `**[pkmn.ai]** **${input.agentName}** (\`${input.version}\`) has been ` +
       `**quarantined**${laddersPart} and paused from matchmaking. ` +
       'See <https://pkmn.ai/account/> for details.'
-    : `**[pkmn.ai]** **${input.botName}** (\`${input.versionStr}\`) failed its smoke test` +
+    : `**[pkmn.ai]** **${input.agentName}** (\`${input.version}\`) failed its smoke test` +
       `${laddersPart}. Failed smoke tests do not trigger the 14-day cooldown — ` +
       'see <https://pkmn.ai/account/> for full logs.';
-  return appendCodeBlockWithinLimit(header, input.smokeErrorLog);
+  return appendCodeBlockWithinLimit(header, input.smokeError);
 }
 
 export function formatStaffQuarantineDm(input: {
-  botName: string;
-  botSlug: string;
-  versionStr: string;
+  agentName: string;
+  agentSlug: string;
+  version: string;
   ladderLabels: string[];
   ownersNotified: number;
   ownersTotal: number;
-  smokeErrorLog?: string | null;
+  smokeError?: string;
 }): string {
   const laddersPart = input.ladderLabels.length
     ? ` on \`${input.ladderLabels.join(', ')}\``
     : '';
   const header =
-    `**[pkmn.ai Staff]** **${input.botName}** (\`${input.botSlug}\` \`${input.versionStr}\`) ` +
+    `**[pkmn.ai Staff]** **${input.agentName}** (\`${input.agentSlug}\` \`${input.version}\`) ` +
     `was **quarantined**${laddersPart} ` +
     `(owners DM'd: ${input.ownersNotified}/${input.ownersTotal}).`;
-  return appendCodeBlockWithinLimit(header, input.smokeErrorLog);
+  return appendCodeBlockWithinLimit(header, input.smokeError);
 }
 
 export function formatWatchdogDm(alert: WatchdogAlert): string {
@@ -525,13 +542,13 @@ export async function sendDirectMessage(
   }
 }
 
-function resolveLadderLabels(db: ArenaDB, laddersJson: string): string[] {
+function resolveLadderLabels(db: db.Database, laddersJson: string): string[] {
   try {
     const ids = JSON.parse(laddersJson) as unknown;
     if (!Array.isArray(ids)) return [];
     return ids.map(raw => {
       const id = String(raw);
-      return db.getLadder(id)?.display_name ?? id;
+      return db.getLadder(id)?.name ?? id;
     });
   } catch {
     return [];
@@ -539,35 +556,35 @@ function resolveLadderLabels(db: ArenaDB, laddersJson: string): string[] {
 }
 
 async function dispatchVersionDm(
-  db: ArenaDB,
+  db: db.Database,
   token: string,
   config: Config,
-  item: PendingVersionDmRow,
+  item: db.PendingVersionDmRow,
   state: Map<string, string | undefined>,
   notifyStaffIfNoOwners: boolean
 ): Promise<boolean> {
-  if (inFlightVersionDms.has(item.version_id)) return false;
-  const latest = db.getVersionById(item.version_id);
-  if (!latest || latest.dm_sent === 1) return false;
+  if (inFlightVersionDms.has(item.versionId)) return false;
+  const latest = db.getVersionById(item.versionId);
+  if (!latest || latest.notified) return false;
 
-  inFlightVersionDms.add(item.version_id);
+  inFlightVersionDms.add(item.versionId);
   try {
-    const ladderLabels = resolveLadderLabels(db, item.ladders_json);
+    const ladderLabels = resolveLadderLabels(db, item.laddersJson);
     const notifiedOwners = new Set<string>();
     let blockedCount = 0;
     let errorCount = 0;
 
-    const blockedKey = `dm-blocked:${item.version_id}:${item.owner_discord_ids.join(',')}`;
-    if (item.owner_discord_ids.length > 0 && state.get(blockedKey) !== '1') {
+    const blockedKey = `dm-blocked:${item.versionId}:${item.ownerDiscordIds.join(',')}`;
+    if (item.ownerDiscordIds.length > 0 && state.get(blockedKey) !== '1') {
       const ownerMessage = formatSubmissionDm({
-        botName: item.bot_name,
-        versionStr: item.version_str,
-        smokeStatus: item.smoke_status,
+        agentName: item.agentName,
+        version: item.version,
+        smokeStatus: item.smokeStatus,
         ladderLabels,
-        smokeErrorLog: item.smoke_error_log,
+        smokeError: item.smokeError,
       });
 
-      for (const ownerId of item.owner_discord_ids) {
+      for (const ownerId of item.ownerDiscordIds) {
         try {
           const outcome = await sendDirectMessage(token, ownerId, ownerMessage, state);
           if (outcome === 'sent') {
@@ -578,41 +595,45 @@ async function dispatchVersionDm(
         } catch (err) {
           errorCount++;
           console.error(
-            `Error sending submission DM to ${ownerId} for version ${item.version_id}:`,
+            `Error sending submission DM to ${ownerId} for version ${item.versionId}:`,
             err
           );
         }
       }
 
       if (notifiedOwners.size > 0) {
-        db.markVersionDmSent(item.version_id);
+        db.markVersionNotified(item.versionId);
         state.delete(blockedKey);
-      } else if (blockedCount === item.owner_discord_ids.length && errorCount === 0) {
+      } else if (blockedCount === item.ownerDiscordIds.length && errorCount === 0) {
+        // Avoid hammering Discord every 60s when all linked owners have DMs disabled; key includes
+        // ownerDiscordIds so newly linked co-owners still trigger a fresh delivery attempt.
         state.set(blockedKey, '1');
       }
     }
 
-    const staffKey = `dm-staff:${item.version_id}`;
+    let staffNotified = false;
+    const staffKey = `dm-staff:${item.versionId}`;
     if (
-      item.smoke_status === 'quarantined' &&
+      item.smokeStatus === 'quarantined' &&
       config.staff?.length &&
       state.get(staffKey) !== '1' &&
       (notifiedOwners.size > 0 || notifyStaffIfNoOwners)
     ) {
       const staffMessage = formatStaffQuarantineDm({
-        botName: item.bot_name,
-        botSlug: item.bot_slug,
-        versionStr: item.version_str,
+        agentName: item.agentName,
+        agentSlug: item.agentSlug,
+        version: item.version,
         ladderLabels,
         ownersNotified: notifiedOwners.size,
-        ownersTotal: item.owner_discord_ids.length,
-        smokeErrorLog: item.smoke_error_log,
+        ownersTotal: item.ownerDiscordIds.length,
+        smokeError: item.smokeError,
       });
       let staffError = false;
       for (const staffId of config.staff) {
         if (notifiedOwners.has(staffId)) continue;
         try {
-          await sendDirectMessage(token, staffId, staffMessage, state);
+          const outcome = await sendDirectMessage(token, staffId, staffMessage, state);
+          if (outcome === 'sent') staffNotified = true;
         } catch (err) {
           staffError = true;
           console.error(`Error sending quarantine staff DM to ${staffId}:`, err);
@@ -623,58 +644,69 @@ async function dispatchVersionDm(
       }
     }
 
-    return notifiedOwners.size > 0;
+    return notifiedOwners.size > 0 || staffNotified;
   } finally {
-    inFlightVersionDms.delete(item.version_id);
+    inFlightVersionDms.delete(item.versionId);
   }
 }
 
 export async function notifySubmissionStatus(
-  db: ArenaDB,
+  db: db.Database,
   token: string,
   config: Config,
-  result: ApplySubmissionStatusResult,
+  result: db.ApplySubmissionStatusResult,
   state = new Map<string, string | undefined>()
 ): Promise<boolean> {
-  const status = result.version.smoke_status;
-  if (status !== 'failed_smoke_test' && status !== 'quarantined') return false;
-  if (result.version.dm_sent === 1) return false;
+  const status = result.version.smokeStatus;
+  if (status !== 'failed' && status !== 'quarantined') return false;
+  if (result.version.notified) return false;
 
   const ownerDiscordIds = db.getVersionOwnerDiscordIds(
-    result.bot.id,
-    result.version.submitted_by_dev_id
+    result.agent.id,
+    result.version.developerId
   );
   return dispatchVersionDm(
     db,
     token,
     config,
     {
-      version_id: result.version.id,
-      bot_id: result.bot.id,
-      bot_slug: result.bot.slug,
-      bot_name: result.bot.name,
-      version_str: result.version.version_str,
-      smoke_status: status,
-      smoke_error_log: result.version.smoke_error_log,
-      ladders_json: result.version.ladders_json,
-      created_at: result.version.created_at,
-      owner_discord_ids: ownerDiscordIds,
+      versionId: result.version.id,
+      agentId: result.agent.id,
+      agentSlug: result.agent.slug,
+      agentName: result.agent.name,
+      version: result.version.version,
+      smokeStatus: status,
+      smokeError: result.version.smokeError,
+      laddersJson: result.version.laddersJson,
+      submittedAt: result.version.submittedAt,
+      ownerDiscordIds,
     },
     state,
     true
   );
 }
 
+// Reconciles undelivered smoke-failure and quarantine DMs on the 60-second background cycle.
+// Quarantined versions with zero linked Discord owners (e.g. CLI `pkmn quarantine` on a project
+// whose developer hasn't linked Discord yet) still alert `config.staff` once per process while
+// leaving `notified = 0` in SQLite so the owner receives their DM if they link Discord later.
 export async function syncSubmissionDms(
-  db: ArenaDB,
+  db: db.Database,
   token: string,
   config: Config,
   state = new Map<string, string | undefined>()
 ): Promise<number> {
   let deliveredVersions = 0;
   for (const row of db.getPendingVersionDms()) {
-    if (row.owner_discord_ids.length === 0) continue;
-    const sent = await dispatchVersionDm(db, token, config, row, state, false);
+    if (row.ownerDiscordIds.length === 0 && row.smokeStatus !== 'quarantined') continue;
+    const sent = await dispatchVersionDm(
+      db,
+      token,
+      config,
+      row,
+      state,
+      row.smokeStatus === 'quarantined'
+    );
     if (sent) deliveredVersions++;
   }
   return deliveredVersions;
@@ -700,14 +732,14 @@ export async function notifyWatchdogAlert(
   return sent;
 }
 
-function displayName(user: DiscordUser, members?: GuildMember[]): string {
+function displayName(user: User, members?: GuildMember[]): string {
   const member = members?.find(m => m.user.id === user.id);
   return member?.nick ?? member?.user.global_name ?? user.global_name ?? user.username;
 }
 
 function resolveText(
   raw: string,
-  mentions?: DiscordUser[],
+  mentions?: User[],
   members?: GuildMember[],
   channels?: GuildChannel[],
   roles?: GuildRole[]
@@ -736,7 +768,7 @@ function resolveText(
     .trim();
 }
 
-function formatPoll(poll: DiscordPoll): string {
+function formatPoll(poll: Poll): string {
   const q = poll.question.text?.trim() ?? 'Poll';
   const counts = new Map(poll.results?.answer_counts.map(c => [c.id, c.count]));
   const answers = poll.answers.map((a, i) => {
@@ -749,7 +781,7 @@ function formatPoll(poll: DiscordPoll): string {
 }
 
 function formatBody(
-  body: DiscordMessageBody,
+  body: MessageBody,
   members?: GuildMember[],
   channels?: GuildChannel[],
   roles?: GuildRole[]
@@ -778,7 +810,7 @@ function formatBody(
 }
 
 export function formatMessage(
-  message: DiscordMessage,
+  message: Message,
   members?: GuildMember[],
   channels?: GuildChannel[],
   roles?: GuildRole[]
@@ -855,7 +887,7 @@ export async function syncMessages(
     tailOffsets.clear();
   }
 
-  function writeSlice(slice: DiscordMessage[], recordOffsets: boolean) {
+  function writeSlice(slice: Message[], recordOffsets: boolean) {
     const byDate = new Map<string, string[]>();
     for (let i = slice.length - 1; i >= 0; i--) {
       const formatted = formatMessage(slice[i], members, channels, roles);
@@ -886,14 +918,14 @@ export async function syncMessages(
   let page = await discordRequest(
     token,
     `/channels/${channel}/messages?limit=100&after=${after}`
-  ) as DiscordMessage[];
+  ) as Message[];
   restoreTail();
 
   while (page.length === 100) {
     const next = await discordRequest(
       token,
       `/channels/${channel}/messages?limit=100&after=${page[0].id}`
-    ) as DiscordMessage[];
+    ) as Message[];
     if (next.length > 0) {
       writeSlice(page, false);
       after = page[0].id;
@@ -925,7 +957,7 @@ export async function syncPins(
   const data = await discordRequest(
     token,
     `/channels/${channel}/messages/pins`
-  ) as {items: Array<{message: DiscordMessage}>};
+  ) as {items: Array<{message: Message}>};
   const current = data.items.map(i => i.message);
 
   if (
@@ -945,7 +977,7 @@ export async function syncPins(
   }
 
   const used = new Set<string>();
-  const toPin: DiscordMessage[] = [];
+  const toPin: Message[] = [];
   for (let i = pins.length - 1; i >= 0; i--) {
     const content = pins[i];
     const existing = current.find(
@@ -963,7 +995,7 @@ export async function syncPins(
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({content}),
         }
-      ) as DiscordMessage;
+      ) as Message;
       toPin.push(created);
     }
   }
@@ -990,7 +1022,7 @@ export async function syncPins(
     const recent = await discordRequest(
       token,
       `/channels/${channel}/messages?limit=${Math.min(100, toPin.length * 2 + 10)}`
-    ) as DiscordMessage[];
+    ) as Message[];
     for (const m of recent) {
       if (m.type === 6 && m.author.bot) {
         await discordRequest(
@@ -1214,9 +1246,9 @@ export function handleInteraction(
     return {status: 401, headers: {}};
   }
 
-  let interaction: DiscordInteraction;
+  let interaction: Interaction;
   try {
-    interaction = JSON.parse(body) as DiscordInteraction;
+    interaction = JSON.parse(body) as Interaction;
   } catch {
     return {status: 400, headers: {}};
   }
@@ -1273,13 +1305,13 @@ export async function syncCommands(
   token: string,
   guild: string,
   state?: Map<string, string | undefined>,
-  commands: DiscordCommand[] = COMMANDS
-): Promise<DiscordApplication> {
+  commands: Command[] = COMMANDS
+): Promise<Application> {
   const key = JSON.stringify(commands);
   const cachedApp = state?.get('app');
   const app = cachedApp
-    ? JSON.parse(cachedApp) as DiscordApplication
-    : await discordRequest(token, '/oauth2/applications/@me') as DiscordApplication;
+    ? JSON.parse(cachedApp) as Application
+    : await discordRequest(token, '/oauth2/applications/@me') as Application;
   state?.set('app', JSON.stringify({id: app.id, verify_key: app.verify_key}));
 
   if (state?.get('commands') === key) return app;
@@ -1287,9 +1319,9 @@ export async function syncCommands(
   const current = await discordRequest(
     token,
     `/applications/${app.id}/guilds/${guild}/commands`
-  ) as DiscordCommand[];
+  ) as Command[];
 
-  const normalize = (cmds: DiscordCommand[]) =>
+  const normalize = (cmds: Command[]) =>
     cmds
       .map(c => ({
         type: c.type ?? 1,
@@ -1322,7 +1354,7 @@ export async function syncCommands(
 }
 
 export function syncGuildMembers(
-  db: ArenaDB,
+  db: db.Database,
   members: GuildMember[],
   now = Math.floor(Date.now() / 1000)
 ) {
@@ -1333,23 +1365,23 @@ export function syncGuildMembers(
 }
 
 export interface Options {
-  db: ArenaDB;
+  db: db.Database;
   token?: string;
   vgcToken?: string;
   verifyKey?: string;
-  cycleMs?: number;
+  cycleMillis?: number;
   config?: Config;
   configFile?: string;
 }
 
-export interface DiscordHandle {
+export interface Handle {
   stop: () => void;
-  notifySubmissionStatus: (result: ApplySubmissionStatusResult) => Promise<boolean>;
+  notifySubmissionStatus: (result: db.ApplySubmissionStatusResult) => Promise<boolean>;
   notifyWatchdogTimeout: (alert: WatchdogAlert) => Promise<number>;
 }
 
 export async function syncOnce(
-  db: ArenaDB,
+  db: db.Database,
   token: string,
   vgcToken = '',
   state = new Map<string, string | undefined>(),
@@ -1423,10 +1455,10 @@ export async function syncOnce(
   }
 }
 
-export function register(app: polka.Polka, options: Options): DiscordHandle {
+export function register(app: polka.Polka, options: Options): Handle {
   const token = options.token ?? process.env.DISCORD_BOT_TOKEN;
   const vgcToken = options.vgcToken ?? process.env.VGC_BOT_TOKEN ?? '';
-  const cycleMs = options.cycleMs ?? CYCLE_MS;
+  const cycleMillis = options.cycleMillis ?? CYCLE_MILLIS;
   const resolveConfig = (): Config => options.config ?? loadConfig(options.configFile);
   const state = new Map<string, string | undefined>();
   let verifyKey = options.verifyKey;
@@ -1450,7 +1482,7 @@ export function register(app: polka.Polka, options: Options): DiscordHandle {
         },
         options.config ?? options.configFile
       ).finally(scheduleNext);
-    }, cycleMs);
+    }, cycleMillis);
     timer.unref();
   };
 
@@ -1524,7 +1556,7 @@ if (require.main === module) {
     console.error('Missing DISCORD_BOT_TOKEN environment variable');
     process.exit(1);
   }
-  const db = new ArenaDB();
+  const db = new Database();
   db.syncLadders();
   syncOnce(db, token, vgcToken)
     .catch(err => {

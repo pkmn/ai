@@ -1,44 +1,39 @@
-import type {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from 'node:sqlite';
 
-import {
-  type GameOutcome,
-  type MatchCategory,
-  applyMatchOutcomeToStreaks,
-  toTernaryMatchOutcome,
-} from '../server/ratings';
+import * as ratings from '../server/ratings';
 
-import {ensureBotLadderStats, updateFamilyStreaksForMatch} from './bot-ladder-stats';
-import {getVersionById} from './bot-versions';
-import {type LadderStandingOverride, recomputeLadderRatings} from './ladder-entries';
-import {type LadderSlot, type LadderStatus, getLadder} from './ladders';
+import {ensureAgentLadderStats, updateFamilyStreaksForMatch} from './agent-ladder-stats';
+import {getVersionById} from './agent-versions';
+import {LadderStandingOverride, recomputeLadderRatings} from './ladder-entries';
+import {LadderSlot, LadderStatus, getLadder} from './ladders';
 import {upsertPairAggregateForMatch} from './pair-aggregates';
 
-import type {TransactionRunner} from './index';
+import {TransactionRunner} from './index';
 
 export interface CompletedMatchPayload {
   id: string;
-  ladder_id: string;
-  v1_id: number;
-  v2_id: number;
+  ladderId: string;
+  p1VersionId: number;
+  p2VersionId: number;
   seed: string;
-  team1_label?: string | null;
-  team2_label?: string | null;
-  g1_outcome: GameOutcome;
-  g2_outcome: GameOutcome;
-  match_category: MatchCategory;
-  g1_turns: number;
-  g2_turns: number;
-  g1_end_reason: string;
-  g2_end_reason: string;
-  v1_peak_ram_mb: number;
-  v2_peak_ram_mb: number;
-  v1_g1_bank_s: number;
-  v1_g2_bank_s: number;
-  v2_g1_bank_s: number;
-  v2_g2_bank_s: number;
-  v1_avg_turn_ms: number;
-  v2_avg_turn_ms: number;
-  completed_at: number;
+  p1TeamLabel?: string;
+  p2TeamLabel?: string;
+  game1Outcome: ratings.GameOutcome;
+  game2Outcome: ratings.GameOutcome;
+  category: ratings.MatchCategory;
+  game1Turns: number;
+  game2Turns: number;
+  game1EndReason: string;
+  game2EndReason: string;
+  p1PeakRam: number;
+  p2PeakRam: number;
+  p1Game1BankSeconds: number;
+  p1Game2BankSeconds: number;
+  p2Game1BankSeconds: number;
+  p2Game2BankSeconds: number;
+  p1MeanTurnMillis: number;
+  p2MeanTurnMillis: number;
+  completedAt: number;
 }
 
 export interface RecordMatchInput {
@@ -49,28 +44,28 @@ export interface RecordMatchInput {
 
 export interface RecentMatchView {
   id: string;
-  ladder_id: string;
+  ladderId: string;
   slot: LadderSlot;
-  format_id: string;
+  format: string;
   p1: {slug: string; name: string; version: string};
   p2: {slug: string; name: string; version: string};
-  match_category: MatchCategory;
-  g1_turns: number;
-  g2_turns: number;
-  g1_end_reason: string;
-  g2_end_reason: string;
-  v1_avg_turn_ms: number;
-  v2_avg_turn_ms: number;
-  v1_g1_bank_s: number;
-  v1_g2_bank_s: number;
-  v2_g1_bank_s: number;
-  v2_g2_bank_s: number;
-  v1_peak_ram_mb: number;
-  v2_peak_ram_mb: number;
-  completed_at: number;
+  category: ratings.MatchCategory;
+  game1Turns: number;
+  game2Turns: number;
+  game1EndReason: string;
+  game2EndReason: string;
+  p1MeanTurnMillis: number;
+  p2MeanTurnMillis: number;
+  p1Game1BankSeconds: number;
+  p1Game2BankSeconds: number;
+  p2Game1BankSeconds: number;
+  p2Game2BankSeconds: number;
+  p1PeakRam: number;
+  p2PeakRam: number;
+  completedAt: number;
 }
 
-function categoryDeltas(cat: MatchCategory, invert = false) {
+function categoryDeltas(cat: ratings.MatchCategory, invert = false) {
   const base = {
     ww: cat === 'WW' ? 1 : 0,
     wt: cat === 'WT' || cat === 'TW' ? 1 : 0,
@@ -105,6 +100,11 @@ function countSideFaults(
   return {crashes, timeouts, ooms};
 }
 
+// Atomically ingests a completed 2-game blind-pair match in a single `BEGIN IMMEDIATE` SQLite
+// transaction: deduplicates by `match.id` (so runner outbox retries after tunnel reconnects are
+// idempotent), updates per-version and pairwise sufficient statistics, runs the warm-started
+// Newton-Raphson Generalized Davidson rating solve, and auto-archives `'settling'` seasons once
+// their final unsettled entry finishes settling.
 export function recordCompletedMatch(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -117,93 +117,93 @@ export function recordCompletedMatch(
       return {duplicate: true, archivedLadder: false};
     }
 
-    const ladder = getLadder(db, m.ladder_id);
+    const ladder = getLadder(db, m.ladderId);
     if (!ladder) {
-      throw Object.assign(new Error(`Unknown ladder_id "${m.ladder_id}"`), {status: 404});
+      throw Object.assign(new Error(`Unknown ladderId "${m.ladderId}"`), {status: 404});
     }
-    const v1 = getVersionById(db, m.v1_id);
-    const v2 = getVersionById(db, m.v2_id);
+    const v1 = getVersionById(db, m.p1VersionId);
+    const v2 = getVersionById(db, m.p2VersionId);
     if (!v1 || !v2) {
       throw Object.assign(
-        new Error(`Unknown version_id in match (${m.v1_id} vs ${m.v2_id})`),
+        new Error(`Unknown versionId in match (${m.p1VersionId} vs ${m.p2VersionId})`),
         {status: 404}
       );
     }
 
     const prevRow = db.prepare(
       'SELECT MAX(completed_at) AS prev FROM matches WHERE ladder_id = ?'
-    ).get(m.ladder_id) as {prev: number | null} | undefined;
-    const prevMatchSec = prevRow?.prev ?? null;
+    ).get(m.ladderId) as {prev: number | null} | undefined;
+    const prevMatchSec = prevRow?.prev ?? undefined;
 
     db.prepare(`
       INSERT INTO matches (
-        id, ladder_id, v1_id, v2_id, seed, team1_label, team2_label,
-        g1_outcome, g2_outcome, match_category, g1_turns, g2_turns,
-        g1_end_reason, g2_end_reason, v1_peak_ram_mb, v2_peak_ram_mb,
-        v1_g1_bank_s, v1_g2_bank_s, v2_g1_bank_s, v2_g2_bank_s,
-        v1_avg_turn_ms, v2_avg_turn_ms, completed_at
+        id, ladder_id, p1_version_id, p2_version_id, seed, p1_team_label, p2_team_label,
+        game1_outcome, game2_outcome, category, game1_turns, game2_turns,
+        game1_end_reason, game2_end_reason, p1_peak_ram, p2_peak_ram,
+        p1_game1_bank_seconds, p1_game2_bank_seconds, p2_game1_bank_seconds, p2_game2_bank_seconds,
+        p1_mean_turn_millis, p2_mean_turn_millis, completed_at
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       m.id,
-      m.ladder_id,
-      m.v1_id,
-      m.v2_id,
+      m.ladderId,
+      m.p1VersionId,
+      m.p2VersionId,
       m.seed,
-      m.team1_label ?? null,
-      m.team2_label ?? null,
-      m.g1_outcome,
-      m.g2_outcome,
-      m.match_category,
-      m.g1_turns,
-      m.g2_turns,
-      m.g1_end_reason,
-      m.g2_end_reason,
-      m.v1_peak_ram_mb,
-      m.v2_peak_ram_mb,
-      m.v1_g1_bank_s,
-      m.v1_g2_bank_s,
-      m.v2_g1_bank_s,
-      m.v2_g2_bank_s,
-      m.v1_avg_turn_ms,
-      m.v2_avg_turn_ms,
-      m.completed_at
+      m.p1TeamLabel ?? null,
+      m.p2TeamLabel ?? null,
+      m.game1Outcome,
+      m.game2Outcome,
+      m.category,
+      m.game1Turns,
+      m.game2Turns,
+      m.game1EndReason,
+      m.game2EndReason,
+      m.p1PeakRam,
+      m.p2PeakRam,
+      m.p1Game1BankSeconds,
+      m.p1Game2BankSeconds,
+      m.p2Game1BankSeconds,
+      m.p2Game2BankSeconds,
+      m.p1MeanTurnMillis,
+      m.p2MeanTurnMillis,
+      m.completedAt
     );
 
     const ensureEntry = db.prepare(`
-      INSERT OR IGNORE INTO ladder_entries (ladder_id, version_id, role)
-      VALUES (?, ?, 'champion')
+      INSERT OR IGNORE INTO ladder_entries (ladder_id, version_id, role, started_at)
+      VALUES (?, ?, 'champion', ?)
     `);
-    ensureEntry.run(m.ladder_id, m.v1_id);
-    ensureEntry.run(m.ladder_id, m.v2_id);
+    ensureEntry.run(m.ladderId, m.p1VersionId, m.completedAt);
+    ensureEntry.run(m.ladderId, m.p2VersionId, m.completedAt);
 
-    ensureBotLadderStats(db, m.ladder_id, v1.bot_id);
-    ensureBotLadderStats(db, m.ladder_id, v2.bot_id);
+    ensureAgentLadderStats(db, m.ladderId, v1.agentId);
+    ensureAgentLadderStats(db, m.ladderId, v2.agentId);
 
-    const ternary = toTernaryMatchOutcome(m.match_category);
+    const ternary = ratings.toTernaryMatchOutcome(m.category);
     const selectEntryCounters = db.prepare(`
-      SELECT matches_played, cur_win_streak, cur_loss_streak,
-             max_win_streak, max_loss_streak, avg_turn_ms, peak_ram_mb
+      SELECT matches, current_win_streak, current_loss_streak,
+             max_win_streak, max_loss_streak, mean_turn_millis, peak_ram
       FROM ladder_entries
       WHERE ladder_id = ? AND version_id = ?
     `);
     const updateEntryCounters = db.prepare(`
       UPDATE ladder_entries
-      SET matches_played = ?,
+      SET matches = ?,
           ww = ww + ?,
           wt = wt + ?,
           split = split + ?,
           tl = tl + ?,
           ll = ll + ?,
-          cur_win_streak = ?,
-          cur_loss_streak = ?,
+          current_win_streak = ?,
+          current_loss_streak = ?,
           max_win_streak = ?,
           max_loss_streak = ?,
           crashes = crashes + ?,
           timeouts = timeouts + ?,
           ooms = ooms + ?,
-          avg_turn_ms = ?,
-          peak_ram_mb = ?
+          mean_turn_millis = ?,
+          peak_ram = ?
       WHERE ladder_id = ? AND version_id = ?
     `);
 
@@ -211,30 +211,30 @@ export function recordCompletedMatch(
       versionId: number,
       invert: boolean,
       outcome: 'W' | 'L' | 'T',
-      avgTurnMs: number,
-      peakRamMb: number,
+      meanTurnMillis: number,
+      peakRam: number,
       faults: {crashes: number; timeouts: number; ooms: number}
     ) => {
-      const cur = selectEntryCounters.get(m.ladder_id, versionId) as {
-        matches_played: number;
-        cur_win_streak: number;
-        cur_loss_streak: number;
+      const cur = selectEntryCounters.get(m.ladderId, versionId) as {
+        matches: number;
+        current_win_streak: number;
+        current_loss_streak: number;
         max_win_streak: number;
         max_loss_streak: number;
-        avg_turn_ms: number;
-        peak_ram_mb: number;
+        mean_turn_millis: number;
+        peak_ram: number;
       };
-      const streaks = {
-        curWinStreak: cur.cur_win_streak,
-        curLossStreak: cur.cur_loss_streak,
+      const streaks: ratings.StreakState = {
+        currentWinStreak: cur.current_win_streak,
+        currentLossStreak: cur.current_loss_streak,
         maxWinStreak: cur.max_win_streak,
         maxLossStreak: cur.max_loss_streak,
       };
-      applyMatchOutcomeToStreaks(streaks, outcome);
-      const d = categoryDeltas(m.match_category, invert);
-      const nextPlayed = cur.matches_played + 1;
-      const nextAvgTurn = (cur.avg_turn_ms * cur.matches_played + avgTurnMs) / nextPlayed;
-      const nextPeakRam = Math.max(cur.peak_ram_mb, peakRamMb);
+      ratings.applyMatchOutcomeToStreaks(streaks, outcome);
+      const d = categoryDeltas(m.category, invert);
+      const nextPlayed = cur.matches + 1;
+      const nextMeanTurn = (cur.mean_turn_millis * cur.matches + meanTurnMillis) / nextPlayed;
+      const nextPeakRam = Math.max(cur.peak_ram, peakRam);
 
       updateEntryCounters.run(
         nextPlayed,
@@ -243,58 +243,65 @@ export function recordCompletedMatch(
         d.split,
         d.tl,
         d.ll,
-        streaks.curWinStreak,
-        streaks.curLossStreak,
+        streaks.currentWinStreak,
+        streaks.currentLossStreak,
         streaks.maxWinStreak,
         streaks.maxLossStreak,
         faults.crashes,
         faults.timeouts,
         faults.ooms,
-        nextAvgTurn,
+        nextMeanTurn,
         nextPeakRam,
-        m.ladder_id,
+        m.ladderId,
         versionId
       );
     };
 
     applySide(
-      m.v1_id,
+      m.p1VersionId,
       false,
-      ternary.v1,
-      m.v1_avg_turn_ms,
-      m.v1_peak_ram_mb,
+      ternary.p1,
+      m.p1MeanTurnMillis,
+      m.p1PeakRam,
       countSideFaults(
-        m.g1_outcome === 'L',
-        m.g2_outcome === 'L',
-        m.g1_end_reason,
-        m.g2_end_reason
+        m.game1Outcome === 'L',
+        m.game2Outcome === 'L',
+        m.game1EndReason,
+        m.game2EndReason
       )
     );
     applySide(
-      m.v2_id,
+      m.p2VersionId,
       true,
-      ternary.v2,
-      m.v2_avg_turn_ms,
-      m.v2_peak_ram_mb,
+      ternary.p2,
+      m.p2MeanTurnMillis,
+      m.p2PeakRam,
       countSideFaults(
-        m.g1_outcome === 'W',
-        m.g2_outcome === 'W',
-        m.g1_end_reason,
-        m.g2_end_reason
+        m.game1Outcome === 'W',
+        m.game2Outcome === 'W',
+        m.game1EndReason,
+        m.game2EndReason
       )
     );
 
-    if (v1.bot_id !== v2.bot_id) {
-      updateFamilyStreaksForMatch(db, m.ladder_id, v1.bot_id, ternary.v1);
-      updateFamilyStreaksForMatch(db, m.ladder_id, v2.bot_id, ternary.v2);
+    if (v1.agentId !== v2.agentId) {
+      updateFamilyStreaksForMatch(db, m.ladderId, v1.agentId, ternary.p1);
+      updateFamilyStreaksForMatch(db, m.ladderId, v2.agentId, ternary.p2);
     }
 
-    const vLowId = Math.min(m.v1_id, m.v2_id);
-    const vHighId = Math.max(m.v1_id, m.v2_id);
-    const v1IsLow = m.v1_id === vLowId;
-    const pairDelta = categoryDeltas(m.match_category, !v1IsLow);
-    const vLowOutcome = v1IsLow ? ternary.v1 : ternary.v2;
-    upsertPairAggregateForMatch(db, m.ladder_id, vLowId, vHighId, pairDelta, vLowOutcome);
+    const lowVersionId = Math.min(m.p1VersionId, m.p2VersionId);
+    const highVersionId = Math.max(m.p1VersionId, m.p2VersionId);
+    const p1IsLow = m.p1VersionId === lowVersionId;
+    const pairDelta = categoryDeltas(m.category, !p1IsLow);
+    const lowOutcome = p1IsLow ? ternary.p1 : ternary.p2;
+    upsertPairAggregateForMatch(
+      db,
+      m.ladderId,
+      lowVersionId,
+      highVersionId,
+      pairDelta,
+      lowOutcome
+    );
 
     if (input.ladderStandings) {
       const updateOverride = db.prepare(`
@@ -304,12 +311,12 @@ export function recordCompletedMatch(
         WHERE ladder_id = ? AND version_id = ?
       `);
       for (const s of input.ladderStandings) {
-        updateOverride.run(s.role ?? null, s.is_anchor ?? null, m.ladder_id, s.version_id);
+        updateOverride.run(s.role ?? null, s.isAnchor ?? null, m.ladderId, s.versionId);
       }
     }
 
-    const dayUtc = new Date(m.completed_at * 1000).toISOString().slice(0, 10);
-    recomputeLadderRatings(db, m.ladder_id, m.completed_at, prevMatchSec, dayUtc);
+    const dayUtc = new Date(m.completedAt * 1000).toISOString().slice(0, 10);
+    recomputeLadderRatings(db, m.ladderId, m.completedAt, prevMatchSec, dayUtc);
 
     let archivedLadder = false;
     if (ladder.status === 'settling' || input.ladderStatus === 'archived') {
@@ -319,17 +326,17 @@ export function recordCompletedMatch(
           AND role IN ('champion', 'challenger')
           AND settled_at IS NULL
         LIMIT 1
-      `).get(m.ladder_id);
+      `).get(m.ladderId);
 
       if (unsettled === undefined || input.ladderStatus === 'archived') {
         db.prepare(
           "UPDATE ladders SET status = 'archived', archived_at = ? WHERE id = ?"
-        ).run(m.completed_at, m.ladder_id);
+        ).run(m.completedAt, m.ladderId);
         db.prepare(`
           UPDATE ladder_entries
           SET role = 'retired', retired_at = ?
           WHERE ladder_id = ? AND role IN ('champion', 'challenger')
-        `).run(m.completed_at, m.ladder_id);
+        `).run(m.completedAt, m.ladderId);
         archivedLadder = true;
       }
     }
@@ -338,48 +345,12 @@ export function recordCompletedMatch(
   });
 }
 
-export function getRecentMatches(db: DatabaseSync, limit = 50): RecentMatchView[] {
-  const rows = db.prepare(`
-    SELECT
-      m.id,
-      m.ladder_id,
-      l.slot,
-      l.format_id,
-      b1.slug AS p1_slug,
-      b1.name AS p1_name,
-      v1.version_str AS p1_version,
-      b2.slug AS p2_slug,
-      b2.name AS p2_name,
-      v2.version_str AS p2_version,
-      m.match_category,
-      m.g1_turns,
-      m.g2_turns,
-      m.g1_end_reason,
-      m.g2_end_reason,
-      m.v1_avg_turn_ms,
-      m.v2_avg_turn_ms,
-      m.v1_g1_bank_s,
-      m.v1_g2_bank_s,
-      m.v2_g1_bank_s,
-      m.v2_g2_bank_s,
-      m.v1_peak_ram_mb,
-      m.v2_peak_ram_mb,
-      m.completed_at
-    FROM matches m
-    JOIN ladders l ON l.id = m.ladder_id
-    JOIN bot_versions v1 ON v1.id = m.v1_id
-    JOIN bots b1 ON b1.id = v1.bot_id
-    JOIN bot_versions v2 ON v2.id = m.v2_id
-    JOIN bots b2 ON b2.id = v2.bot_id
-    ORDER BY m.completed_at DESC, m.id DESC
-    LIMIT ?
-  `).all(limit) as Array<Record<string, unknown>>;
-
-  return rows.map(r => ({
+function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
+  return {
     id: r.id as string,
-    ladder_id: r.ladder_id as string,
+    ladderId: r.ladder_id as string,
     slot: r.slot as LadderSlot,
-    format_id: r.format_id as string,
+    format: r.format as string,
     p1: {
       slug: r.p1_slug as string,
       name: r.p1_name as string,
@@ -390,95 +361,78 @@ export function getRecentMatches(db: DatabaseSync, limit = 50): RecentMatchView[
       name: r.p2_name as string,
       version: r.p2_version as string,
     },
-    match_category: r.match_category as MatchCategory,
-    g1_turns: r.g1_turns as number,
-    g2_turns: r.g2_turns as number,
-    g1_end_reason: r.g1_end_reason as string,
-    g2_end_reason: r.g2_end_reason as string,
-    v1_avg_turn_ms: r.v1_avg_turn_ms as number,
-    v2_avg_turn_ms: r.v2_avg_turn_ms as number,
-    v1_g1_bank_s: r.v1_g1_bank_s as number,
-    v1_g2_bank_s: r.v1_g2_bank_s as number,
-    v2_g1_bank_s: r.v2_g1_bank_s as number,
-    v2_g2_bank_s: r.v2_g2_bank_s as number,
-    v1_peak_ram_mb: r.v1_peak_ram_mb as number,
-    v2_peak_ram_mb: r.v2_peak_ram_mb as number,
-    completed_at: r.completed_at as number,
-  }));
+    category: r.category as ratings.MatchCategory,
+    game1Turns: r.game1_turns as number,
+    game2Turns: r.game2_turns as number,
+    game1EndReason: r.game1_end_reason as string,
+    game2EndReason: r.game2_end_reason as string,
+    p1MeanTurnMillis: r.p1_mean_turn_millis as number,
+    p2MeanTurnMillis: r.p2_mean_turn_millis as number,
+    p1Game1BankSeconds: r.p1_game1_bank_seconds as number,
+    p1Game2BankSeconds: r.p1_game2_bank_seconds as number,
+    p2Game1BankSeconds: r.p2_game1_bank_seconds as number,
+    p2Game2BankSeconds: r.p2_game2_bank_seconds as number,
+    p1PeakRam: r.p1_peak_ram as number,
+    p2PeakRam: r.p2_peak_ram as number,
+    completedAt: r.completed_at as number,
+  };
 }
 
-export function getRecentMatchesForBotOnLadder(
+const RECENT_MATCH_SELECT_SQL = `
+  SELECT
+    m.id,
+    m.ladder_id,
+    l.slot,
+    l.format,
+    a1.slug AS p1_slug,
+    a1.name AS p1_name,
+    v1.version AS p1_version,
+    a2.slug AS p2_slug,
+    a2.name AS p2_name,
+    v2.version AS p2_version,
+    m.category,
+    m.game1_turns,
+    m.game2_turns,
+    m.game1_end_reason,
+    m.game2_end_reason,
+    m.p1_mean_turn_millis,
+    m.p2_mean_turn_millis,
+    m.p1_game1_bank_seconds,
+    m.p1_game2_bank_seconds,
+    m.p2_game1_bank_seconds,
+    m.p2_game2_bank_seconds,
+    m.p1_peak_ram,
+    m.p2_peak_ram,
+    m.completed_at
+  FROM matches m
+  JOIN ladders l ON l.id = m.ladder_id
+  JOIN agent_versions v1 ON v1.id = m.p1_version_id
+  JOIN agents a1 ON a1.id = v1.agent_id
+  JOIN agent_versions v2 ON v2.id = m.p2_version_id
+  JOIN agents a2 ON a2.id = v2.agent_id
+`;
+
+export function getRecentMatches(db: DatabaseSync, limit = 50): RecentMatchView[] {
+  const rows = db.prepare(`
+    ${RECENT_MATCH_SELECT_SQL}
+    ORDER BY m.completed_at DESC, m.id DESC
+    LIMIT ?
+  `).all(limit) as Array<Record<string, unknown>>;
+  return rows.map(mapRecentMatchRow);
+}
+
+export function getRecentMatchesForAgentOnLadder(
   db: DatabaseSync,
-  botId: number,
+  agentId: number,
   ladderId: string,
   limit = 30
 ): RecentMatchView[] {
   const rows = db.prepare(`
-    SELECT
-      m.id,
-      m.ladder_id,
-      l.slot,
-      l.format_id,
-      b1.slug AS p1_slug,
-      b1.name AS p1_name,
-      v1.version_str AS p1_version,
-      b2.slug AS p2_slug,
-      b2.name AS p2_name,
-      v2.version_str AS p2_version,
-      m.match_category,
-      m.g1_turns,
-      m.g2_turns,
-      m.g1_end_reason,
-      m.g2_end_reason,
-      m.v1_avg_turn_ms,
-      m.v2_avg_turn_ms,
-      m.v1_g1_bank_s,
-      m.v1_g2_bank_s,
-      m.v2_g1_bank_s,
-      m.v2_g2_bank_s,
-      m.v1_peak_ram_mb,
-      m.v2_peak_ram_mb,
-      m.completed_at
-    FROM matches m
-    JOIN ladders l ON l.id = m.ladder_id
-    JOIN bot_versions v1 ON v1.id = m.v1_id
-    JOIN bots b1 ON b1.id = v1.bot_id
-    JOIN bot_versions v2 ON v2.id = m.v2_id
-    JOIN bots b2 ON b2.id = v2.bot_id
+    ${RECENT_MATCH_SELECT_SQL}
     WHERE m.ladder_id = ?
-      AND (v1.bot_id = ? OR v2.bot_id = ?)
+      AND (v1.agent_id = ? OR v2.agent_id = ?)
     ORDER BY m.completed_at DESC, m.id DESC
     LIMIT ?
-  `).all(ladderId, botId, botId, limit) as Array<Record<string, unknown>>;
-
-  return rows.map(r => ({
-    id: r.id as string,
-    ladder_id: r.ladder_id as string,
-    slot: r.slot as LadderSlot,
-    format_id: r.format_id as string,
-    p1: {
-      slug: r.p1_slug as string,
-      name: r.p1_name as string,
-      version: r.p1_version as string,
-    },
-    p2: {
-      slug: r.p2_slug as string,
-      name: r.p2_name as string,
-      version: r.p2_version as string,
-    },
-    match_category: r.match_category as MatchCategory,
-    g1_turns: r.g1_turns as number,
-    g2_turns: r.g2_turns as number,
-    g1_end_reason: r.g1_end_reason as string,
-    g2_end_reason: r.g2_end_reason as string,
-    v1_avg_turn_ms: r.v1_avg_turn_ms as number,
-    v2_avg_turn_ms: r.v2_avg_turn_ms as number,
-    v1_g1_bank_s: r.v1_g1_bank_s as number,
-    v1_g2_bank_s: r.v1_g2_bank_s as number,
-    v2_g1_bank_s: r.v2_g1_bank_s as number,
-    v2_g2_bank_s: r.v2_g2_bank_s as number,
-    v1_peak_ram_mb: r.v1_peak_ram_mb as number,
-    v2_peak_ram_mb: r.v2_peak_ram_mb as number,
-    completed_at: r.completed_at as number,
-  }));
+  `).all(ladderId, agentId, agentId, limit) as Array<Record<string, unknown>>;
+  return rows.map(mapRecentMatchRow);
 }

@@ -1,40 +1,30 @@
 import * as fs from 'fs';
-import type {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from 'node:sqlite';
 import * as path from 'path';
 
 import * as yaml from 'yaml';
 
-import {
-  type SmogonUser,
-  lookupSmogonUser,
-  parseSmogonIdentifier,
-} from '../server/smogon';
-import type {Project} from '../static/projects';
+import * as smogon from '../server/smogon';
+import {Project} from '../static/projects';
 import {root, slugify} from '../static/util';
 
-import {
-  type ResolvedProjectOwner,
-  deleteDevelopersForBot,
-  getDeveloperByGitHub,
-  pruneInactiveDevelopers,
-  upsertProjectDevelopers,
-} from './developers';
+import * as developers from './developers';
 
-import type {TransactionRunner} from './index';
+import {TransactionRunner} from './index';
 
-export type BotStatus = 'pending' | 'qualified' | 'disabled';
+export type AgentStatus = 'pending' | 'qualified' | 'disabled';
 
 export const PROJECTS_FILE = root('static', 'projects.yml');
 export const AVATARS_DIR = root('static', 'avatars');
 
-export interface BotRow {
+export interface AgentRow {
   id: number;
   slug: string;
   name: string;
-  logo_file: string | null;
-  status: BotStatus;
-  cooldown_refunded_at: number | null;
-  updated_at: number;
+  logo?: string;
+  status: AgentStatus;
+  cooldownRefundedAt?: number;
+  updatedAt: number;
 }
 
 export interface RawProjectOwner {
@@ -47,7 +37,7 @@ export interface RawProjectOwner {
 export interface ParsedArenaProject<Owner = RawProjectOwner> {
   slug: string;
   name: string;
-  logoFile: string | null;
+  logo?: string;
   qualified: boolean;
   owners: Owner[];
 }
@@ -55,9 +45,31 @@ export interface ParsedArenaProject<Owner = RawProjectOwner> {
 export interface SyncProjectsOptions {
   avatarsDir?: string;
   smogonToken?: string;
-  lookupSmogon?: (raw: string | number, token?: string) => Promise<SmogonUser>;
+  lookupSmogon?: (raw: string | number, token?: string) => Promise<smogon.User>;
   refreshSmogonNames?: boolean;
   now?: number;
+}
+
+interface RawAgentRow {
+  id: number;
+  slug: string;
+  name: string;
+  logo: string | null;
+  status: AgentStatus;
+  cooldown_refunded_at: number | null;
+  updated_at: number;
+}
+
+function mapAgentRow(raw: RawAgentRow): AgentRow {
+  return {
+    id: raw.id,
+    slug: raw.slug,
+    name: raw.name,
+    logo: raw.logo ?? undefined,
+    status: raw.status,
+    cooldownRefundedAt: raw.cooldown_refunded_at ?? undefined,
+    updatedAt: raw.updated_at,
+  };
 }
 
 export function extractProjectOwners(
@@ -76,7 +88,7 @@ export function extractProjectOwners(
     }
     if (seen.has(github)) continue;
     seen.add(github);
-    const parsed = parseSmogonIdentifier(smogonRaw);
+    const parsed = smogon.parseIdentifier(smogonRaw);
     out.push({
       github,
       rawSmogon: smogonRaw,
@@ -87,6 +99,8 @@ export function extractProjectOwners(
   return out;
 }
 
+// Validates the one-project-per-human anti-circumvention rule across both GitHub handles and
+// Smogon identities when parsing `arena:` blocks from `static/projects.yml`.
 export function parseArenaProjects(
   projectsYaml: string,
   avatarsDir = AVATARS_DIR
@@ -152,17 +166,17 @@ export function parseArenaProjects(
       }
     }
 
-    let logoFile: string | null = null;
+    let logo: string | undefined;
     if (entry.arena.logo?.trim()) {
-      logoFile = entry.arena.logo.trim();
+      logo = entry.arena.logo.trim();
     } else if (avatarsDir && fs.existsSync(path.join(avatarsDir, `${slug}.png`))) {
-      logoFile = `${slug}.png`;
+      logo = `${slug}.png`;
     }
 
     parsed.push({
       slug,
       name,
-      logoFile,
+      logo,
       qualified: Boolean(entry.arena.qualified),
       owners,
     });
@@ -171,7 +185,9 @@ export function parseArenaProjects(
   return parsed;
 }
 
-function validateUniqueSmogonIds(projects: Array<ParsedArenaProject<ResolvedProjectOwner>>) {
+function validateUniqueSmogonIds(
+  projects: Array<ParsedArenaProject<developers.ResolvedProjectOwner>>
+) {
   const smogonIdOwner = new Map<number, string>();
   for (const proj of projects) {
     for (const owner of proj.owners) {
@@ -190,23 +206,25 @@ function validateUniqueSmogonIds(projects: Array<ParsedArenaProject<ResolvedProj
 function applyResolvedProjects(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
-  projects: Array<ParsedArenaProject<ResolvedProjectOwner>>,
+  projects: Array<ParsedArenaProject<developers.ResolvedProjectOwner>>,
   now: number
 ) {
   validateUniqueSmogonIds(projects);
 
-  const upsertBot = db.prepare(`
-    INSERT INTO bots (slug, name, logo_file, status, updated_at)
+  const upsertAgent = db.prepare(`
+    INSERT INTO agents (slug, name, logo, status, updated_at)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(slug) DO UPDATE SET
       name = excluded.name,
-      logo_file = excluded.logo_file,
+      logo = excluded.logo,
       status = excluded.status,
       updated_at = excluded.updated_at
   `);
-  const selectBotId = db.prepare('SELECT id FROM bots WHERE slug = ?');
-  const selectAllBots = db.prepare('SELECT id, slug FROM bots');
-  const disableBot = db.prepare("UPDATE bots SET status = 'disabled', updated_at = ? WHERE id = ?");
+  const selectAgentId = db.prepare('SELECT id FROM agents WHERE slug = ?');
+  const selectAllAgents = db.prepare('SELECT id, slug FROM agents');
+  const disableAgent = db.prepare(
+    "UPDATE agents SET status = 'disabled', updated_at = ? WHERE id = ?"
+  );
 
   inTransaction(() => {
     const activeSlugs = new Set<string>();
@@ -217,20 +235,22 @@ function applyResolvedProjects(
       for (const owner of proj.owners) activeGitHubs.add(owner.github);
     }
 
-    pruneInactiveDevelopers(db, activeGitHubs);
+    developers.pruneInactiveDevelopers(db, activeGitHubs);
 
     for (const proj of projects) {
-      const botStatus: BotStatus = proj.qualified ? 'qualified' : 'pending';
-      upsertBot.run(proj.slug, proj.name, proj.logoFile, botStatus, now);
-      const bot = selectBotId.get(proj.slug) as {id: number};
-      upsertProjectDevelopers(db, bot.id, proj.owners, now);
+      const status: AgentStatus = proj.qualified ? 'qualified' : 'pending';
+      upsertAgent.run(proj.slug, proj.name, proj.logo ?? null, status, now);
+      const agent = selectAgentId.get(proj.slug) as {id: number};
+      developers.upsertProjectDevelopers(db, agent.id, proj.owners, now);
     }
 
-    const allBots = selectAllBots.all() as Array<{id: number; slug: string}>;
-    for (const bot of allBots) {
-      if (!activeSlugs.has(bot.slug)) {
-        disableBot.run(now, bot.id);
-        deleteDevelopersForBot(db, bot.id);
+    // Projects removed from `arena:` in projects.yml are marked 'disabled' rather than deleted so
+    // their historical versions and matches remain intact in the rating graph.
+    const allAgents = selectAllAgents.all() as Array<{id: number; slug: string}>;
+    for (const agent of allAgents) {
+      if (!activeSlugs.has(agent.slug)) {
+        disableAgent.run(now, agent.id);
+        developers.deleteDevelopersForAgent(db, agent.id);
       }
     }
   });
@@ -244,35 +264,36 @@ export function syncProjectsFromYaml(
   now = Math.floor(Date.now() / 1000)
 ) {
   const rawProjects = parseArenaProjects(projectsYaml, avatarsDir);
-  const resolved: Array<ParsedArenaProject<ResolvedProjectOwner>> = rawProjects.map(proj => ({
-    slug: proj.slug,
-    name: proj.name,
-    logoFile: proj.logoFile,
-    qualified: proj.qualified,
-    owners: proj.owners.map(owner => {
-      if (owner.smogonId !== undefined) {
-        const existing = getDeveloperByGitHub(db, owner.github);
-        const smogonUsername = owner.smogonUsername ??
-          (existing?.smogon_id === owner.smogonId ? existing.smogon_username : undefined) ??
-          String(owner.smogonId);
-        return {github: owner.github, smogonId: owner.smogonId, smogonUsername};
-      }
+  const resolved: Array<ParsedArenaProject<developers.ResolvedProjectOwner>> = rawProjects.map(
+    proj => ({
+      slug: proj.slug,
+      name: proj.name,
+      logo: proj.logo,
+      qualified: proj.qualified,
+      owners: proj.owners.map(owner => {
+        const existing = developers.getDeveloperByGitHub(db, owner.github);
+        if (owner.smogonId !== undefined) {
+          const smogonUsername = owner.smogonUsername ??
+            (existing?.smogonId === owner.smogonId ? existing.smogonUsername : undefined) ??
+            String(owner.smogonId);
+          return {github: owner.github, smogonId: owner.smogonId, smogonUsername};
+        }
 
-      const existing = getDeveloperByGitHub(db, owner.github);
-      if (existing) {
-        return {
-          github: owner.github,
-          smogonId: existing.smogon_id,
-          smogonUsername: existing.smogon_username,
-        };
-      }
+        if (existing) {
+          return {
+            github: owner.github,
+            smogonId: existing.smogonId,
+            smogonUsername: existing.smogonUsername,
+          };
+        }
 
-      throw new Error(
-        `Smogon account "${String(owner.rawSmogon)}" for GitHub owner "${owner.github}" ` +
-        'has no numerical ID; pass <name>.<id> / <id> or use syncProjectsWithSmogon()'
-      );
-    }),
-  }));
+        throw new Error(
+          `Smogon account "${String(owner.rawSmogon)}" for GitHub owner "${owner.github}" ` +
+          'has no numerical ID; pass <name>.<id> / <id> or use syncProjectsWithSmogon()'
+        );
+      }),
+    })
+  );
 
   applyResolvedProjects(db, inTransaction, resolved, now);
 }
@@ -288,6 +309,9 @@ export function syncProjects(
   syncProjectsFromYaml(db, inTransaction, fs.readFileSync(file, 'utf8'), avatarsDir, now);
 }
 
+// Syncs `projects.yml` with live Smogon XenForo profile verification. Once a developer's numerical
+// `smogon_id` is stored in SQLite, subsequent syncs query by that immutable ID rather than the
+// string in `projects.yml` so Smogon username changes never break ownership verification.
 export async function syncProjectsFromYamlWithSmogon(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -297,16 +321,16 @@ export async function syncProjectsFromYamlWithSmogon(
   const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
   const now = options.now ?? Math.floor(Date.now() / 1000);
   const smogonToken = options.smogonToken ?? process.env.SMOGON_TOKEN;
-  const lookup = options.lookupSmogon ?? lookupSmogonUser;
+  const lookup = options.lookupSmogon ?? smogon.lookupUser;
   const refreshNames = options.refreshSmogonNames ?? Boolean(smogonToken || options.lookupSmogon);
 
   const rawProjects = parseArenaProjects(projectsYaml, avatarsDir);
-  const resolved: Array<ParsedArenaProject<ResolvedProjectOwner>> = [];
+  const resolved: Array<ParsedArenaProject<developers.ResolvedProjectOwner>> = [];
 
   for (const proj of rawProjects) {
-    const owners: ResolvedProjectOwner[] = [];
+    const owners: developers.ResolvedProjectOwner[] = [];
     for (const owner of proj.owners) {
-      const existing = getDeveloperByGitHub(db, owner.github);
+      const existing = developers.getDeveloperByGitHub(db, owner.github);
 
       if (owner.smogonId !== undefined) {
         if (refreshNames && (smogonToken || options.lookupSmogon)) {
@@ -318,10 +342,11 @@ export async function syncProjectsFromYamlWithSmogon(
             github: owner.github,
             smogonId: profile.id,
             smogonUsername: profile.username,
+            smogonStanding: 'good',
           });
         } else {
           const smogonUsername = owner.smogonUsername ??
-            (existing?.smogon_id === owner.smogonId ? existing.smogon_username : undefined) ??
+            (existing?.smogonId === owner.smogonId ? existing.smogonUsername : undefined) ??
             String(owner.smogonId);
           owners.push({github: owner.github, smogonId: owner.smogonId, smogonUsername});
         }
@@ -329,7 +354,7 @@ export async function syncProjectsFromYamlWithSmogon(
       }
 
       if (existing && refreshNames && (smogonToken || options.lookupSmogon)) {
-        const profile = await lookup(existing.smogon_id, smogonToken);
+        const profile = await lookup(existing.smogonId, smogonToken);
         if (profile.banned) {
           throw new Error(`Smogon account "${profile.username}" (${profile.id}) is banned`);
         }
@@ -337,6 +362,7 @@ export async function syncProjectsFromYamlWithSmogon(
           github: owner.github,
           smogonId: profile.id,
           smogonUsername: profile.username,
+          smogonStanding: 'good',
         });
         continue;
       }
@@ -344,8 +370,8 @@ export async function syncProjectsFromYamlWithSmogon(
       if (existing && !smogonToken && !options.lookupSmogon) {
         owners.push({
           github: owner.github,
-          smogonId: existing.smogon_id,
-          smogonUsername: existing.smogon_username,
+          smogonId: existing.smogonId,
+          smogonUsername: existing.smogonUsername,
         });
         continue;
       }
@@ -358,13 +384,14 @@ export async function syncProjectsFromYamlWithSmogon(
         github: owner.github,
         smogonId: profile.id,
         smogonUsername: profile.username,
+        smogonStanding: 'good',
       });
     }
 
     resolved.push({
       slug: proj.slug,
       name: proj.name,
-      logoFile: proj.logoFile,
+      logo: proj.logo,
       qualified: proj.qualified,
       owners,
     });
@@ -388,33 +415,36 @@ export async function syncProjectsWithSmogon(
   );
 }
 
-export function getBotBySlug(db: DatabaseSync, slug: string): BotRow | undefined {
-  return db.prepare('SELECT * FROM bots WHERE slug = ?')
-    .get(slug.toLowerCase()) as unknown as BotRow | undefined;
+export function getAgentBySlug(db: DatabaseSync, slug: string): AgentRow | undefined {
+  const raw = db.prepare('SELECT * FROM agents WHERE slug = ?')
+    .get(slug.toLowerCase()) as unknown as RawAgentRow | undefined;
+  return raw ? mapAgentRow(raw) : undefined;
 }
 
-export function getBotById(db: DatabaseSync, id: number): BotRow | undefined {
-  return db.prepare('SELECT * FROM bots WHERE id = ?')
-    .get(id) as unknown as BotRow | undefined;
+export function getAgentById(db: DatabaseSync, id: number): AgentRow | undefined {
+  const raw = db.prepare('SELECT * FROM agents WHERE id = ?')
+    .get(id) as unknown as RawAgentRow | undefined;
+  return raw ? mapAgentRow(raw) : undefined;
 }
 
-export function getAllActiveBots(db: DatabaseSync): BotRow[] {
-  return db.prepare(`
+export function getAllActiveAgents(db: DatabaseSync): AgentRow[] {
+  const rows = db.prepare(`
     SELECT *
-    FROM bots
+    FROM agents
     WHERE status != 'disabled'
     ORDER BY slug ASC
-  `).all() as unknown as BotRow[];
+  `).all() as unknown as RawAgentRow[];
+  return rows.map(mapAgentRow);
 }
 
 export function refundCooldown(
   db: DatabaseSync,
-  botSlug: string,
+  agentSlug: string,
   now = Math.floor(Date.now() / 1000)
-): BotRow {
-  const bot = getBotBySlug(db, botSlug);
-  if (!bot) throw new Error(`Bot "${botSlug}" not found`);
-  db.prepare('UPDATE bots SET cooldown_refunded_at = ?, updated_at = ? WHERE id = ?')
-    .run(now, now, bot.id);
-  return getBotById(db, bot.id)!;
+): AgentRow {
+  const agent = getAgentBySlug(db, agentSlug);
+  if (!agent) throw new Error(`Agent "${agentSlug}" not found`);
+  db.prepare('UPDATE agents SET cooldown_refunded_at = ?, updated_at = ? WHERE id = ?')
+    .run(now, now, agent.id);
+  return getAgentById(db, agent.id)!;
 }

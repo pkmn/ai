@@ -1,4 +1,19 @@
+// Whole-history Generalized Davidson rating engine, Likelihood of Superiority (LOS) rank
+// intervals, streak/top-K clock helpers, and active-learning match scheduler.
+//
+// Why Generalized Davidson instead of sequential Elo/Glicko:
+//   1. Every Arena match is a 2-game seat-swapped mirror/pool series (`WW`, `WT`/`TW`,
+//      split `WL`/`LW`/`TT`, `TL`/`LT`, `LL`). Collapsing 2-0 sweeps and 1-1 splits into
+//      independent Bernoulli games ignores within-match correlation (e.g. symmetric team/lead
+//      matchups that frequently split 1-1).
+//   2. Whole-history MAP estimation over all `(version_i, version_j)` pair counts eliminates
+//      path dependence (match order never changes ratings) and yields the exact joint Laplace
+//      covariance matrix `Sigma = H^{-1}`, which is required for correlated pairwise LOS
+//      `Var(theta_i - theta_j) = Sigma_ii + Sigma_jj - 2 Sigma_ij`.
+
 export const ELO_SCALE = 400 / Math.LN10;
+// Logistic-normal scale factor `3 (ln 10)^2 / (400^2 pi^2)` used to integrate a logistic
+// win-probability curve against a Gaussian opponent + posterior rating distribution for GXE.
 export const GXE_C = (3 * Math.LN10 * Math.LN10) / (400 * 400 * Math.PI * Math.PI);
 
 export type GameOutcome = 'W' | 'L' | 'T';
@@ -28,20 +43,33 @@ export interface RatingResult {
   nu1: number;
 }
 
+export interface StreakState {
+  currentWinStreak: number;
+  currentLossStreak: number;
+  maxWinStreak: number;
+  maxLossStreak: number;
+}
+
+export interface PairwiseStreakState {
+  currentStreak: number;
+  lowMaxWinStreak: number;
+  highMaxWinStreak: number;
+}
+
 export interface LadderMatchState {
   id: string;
-  activeBotIndices: number[];
+  activeAgentIndices: number[];
   theta: Float64Array;
   sigma: Float64Array;
-  botMatches: Int32Array;
+  agentMatches: Int32Array;
   pairMatches: Int32Array;
   lastMatchNumber: number;
 }
 
 export interface NextMatchChoice {
   ladderId: string;
-  botI: number;
-  botJ: number;
+  agentI: number;
+  agentJ: number;
   priorityScore: number;
 }
 
@@ -100,14 +128,14 @@ function invertSPDMatrix(A: Float64Array, M: number): Float64Array {
 }
 
 export function computeDavidsonRatings(
-  numBots: number,
+  numAgents: number,
   pairs: PairMatchCounts[],
   anchorIndex = -1,
   anchorElo = 1500,
   warmStartTheta?: Float64Array,
   priorEloStd = 350
 ): RatingResult {
-  const M = numBots;
+  const M = numAgents;
   if (M === 0) {
     return {
       theta: new Float64Array(0),
@@ -142,6 +170,11 @@ export function computeDavidsonRatings(
     totalHalf += p.wt + p.tl;
     totalSplits += p.split;
   }
+  // `nu0 = 2.0` corresponds to two independent Bradley-Terry games (`(e^{d/2} + e^{-d/2})^2 =
+  // e^d + 2 + e^{-d}`). Clamping `nu0 >= 2.0` prevents noisy small samples from under-weighting
+  // 1-1 splits while preserving strict log-concavity (`v(delta) > 0`) of the 5-category
+  // exponential family (`+1`, `+0.5`, `0`, `-0.5`, `-1`). `nu1` empirically estimates rare
+  // single-game ties (`WT`/`TW` and `TL`/`LT`).
   const nu0 = Math.max(2.0, (2 * (totalSplits + 1)) / (totalSweeps + 1));
   const nu1 = totalHalf / (totalSweeps + 1);
 
@@ -278,10 +311,11 @@ export function computeDavidsonRatings(
   }
 
   // Pairwise match outcomes depend only on `theta_i - theta_j`, so the indicator vector `u`
-  // (`u_i = 1/K` on the `K` bots with >0 matches, `0` on 0-match bots) is an exact eigenvector
-  // of `H` (`H u = priorPrecision * u`). Pinning `u^T theta = 0` removes ONLY that global shift
-  // eigenvalue while keeping 0-match bots at `priorEloStd` (350 Elo) and leaving every orthogonal
-  // subspace — and therefore every pairwise variance `Var(theta_i - theta_j)` — 100% exact.
+  // (`u_i = 1/K` on the `K` versions with >0 matches, `0` on 0-match versions) is an exact
+  // eigenvector of `H` (`H u = priorPrecision * u`). Pinning `u^T theta = 0` removes ONLY that
+  // global shift eigenvalue while keeping 0-match versions at `priorEloStd` (350 Elo) and leaving
+  // every orthogonal subspace — and therefore every pairwise variance `Var(theta_i - theta_j)` —
+  // 100% exact.
   let playedCount = 0;
   for (let i = 0; i < M; i++) playedCount += hasPlayed[i];
   if (playedCount > 0) {
@@ -353,6 +387,11 @@ export function computeLOS(
   return normalCdf((theta[i] - theta[j]) / Math.sqrt(varDiff));
 }
 
+// Computes guaranteed rank intervals `[rankMin, rankMax]` among primary family representatives.
+// Competitor `j` is counted as "definitely above" `i` only when BOTH `P(theta_j > theta_i) >= 0.95`
+// (correlated LOS) AND `eloLcb[j] > eloUcb[i]` (non-overlapping marginal 95% intervals), so a rank
+// only settles (`rankMin === rankMax`, e.g. `[1, 1]` for Discord #1 role sync) once both pairwise
+// and marginal uncertainty agree.
 export function computeGuaranteedRankBounds(
   repIndices: number[],
   theta: Float64Array,
@@ -389,83 +428,92 @@ export function computeGuaranteedRankBounds(
 
 export function toTernaryMatchOutcome(
   matchCategory: MatchCategory
-): {v1: TernaryMatchOutcome; v2: TernaryMatchOutcome} {
+): {p1: TernaryMatchOutcome; p2: TernaryMatchOutcome} {
   if (matchCategory === 'WW' || matchCategory === 'WT' || matchCategory === 'TW') {
-    return {v1: 'W', v2: 'L'};
+    return {p1: 'W', p2: 'L'};
   }
   if (matchCategory === 'LL' || matchCategory === 'LT' || matchCategory === 'TL') {
-    return {v1: 'L', v2: 'W'};
+    return {p1: 'L', p2: 'W'};
   }
-  return {v1: 'T', v2: 'T'};
+  return {p1: 'T', p2: 'T'};
 }
 
 export function applyMatchOutcomeToStreaks(
-  row: {
-    curWinStreak: number;
-    curLossStreak: number;
-    maxWinStreak: number;
-    maxLossStreak: number;
-  },
+  row: StreakState,
   outcome: TernaryMatchOutcome
 ): void {
   if (outcome === 'W') {
-    row.curWinStreak += 1;
-    row.curLossStreak = 0;
-    if (row.curWinStreak > row.maxWinStreak) row.maxWinStreak = row.curWinStreak;
+    row.currentWinStreak += 1;
+    row.currentLossStreak = 0;
+    if (row.currentWinStreak > row.maxWinStreak) row.maxWinStreak = row.currentWinStreak;
   } else if (outcome === 'L') {
-    row.curLossStreak += 1;
-    row.curWinStreak = 0;
-    if (row.curLossStreak > row.maxLossStreak) row.maxLossStreak = row.curLossStreak;
+    row.currentLossStreak += 1;
+    row.currentWinStreak = 0;
+    if (row.currentLossStreak > row.maxLossStreak) row.maxLossStreak = row.currentLossStreak;
   } else {
-    row.curWinStreak = 0;
-    row.curLossStreak = 0;
+    row.currentWinStreak = 0;
+    row.currentLossStreak = 0;
   }
 }
 
 export function applyPairwiseStreakUpdate(
-  pairRow: {curStreak: number; vLowMaxWinStreak: number; vHighMaxWinStreak: number},
-  vLowOutcome: TernaryMatchOutcome
+  pairRow: PairwiseStreakState,
+  lowOutcome: TernaryMatchOutcome
 ): void {
-  if (vLowOutcome === 'W') {
-    pairRow.curStreak = pairRow.curStreak > 0 ? pairRow.curStreak + 1 : 1;
-    if (pairRow.curStreak > pairRow.vLowMaxWinStreak) {
-      pairRow.vLowMaxWinStreak = pairRow.curStreak;
+  if (lowOutcome === 'W') {
+    pairRow.currentStreak = pairRow.currentStreak > 0 ? pairRow.currentStreak + 1 : 1;
+    if (pairRow.currentStreak > pairRow.lowMaxWinStreak) {
+      pairRow.lowMaxWinStreak = pairRow.currentStreak;
     }
-  } else if (vLowOutcome === 'L') {
-    pairRow.curStreak = pairRow.curStreak < 0 ? pairRow.curStreak - 1 : -1;
-    const highStreak = -pairRow.curStreak;
-    if (highStreak > pairRow.vHighMaxWinStreak) {
-      pairRow.vHighMaxWinStreak = highStreak;
+  } else if (lowOutcome === 'L') {
+    pairRow.currentStreak = pairRow.currentStreak < 0 ? pairRow.currentStreak - 1 : -1;
+    const highStreak = -pairRow.currentStreak;
+    if (highStreak > pairRow.highMaxWinStreak) {
+      pairRow.highMaxWinStreak = highStreak;
     }
   } else {
-    pairRow.curStreak = 0;
+    pairRow.currentStreak = 0;
   }
 }
 
 export function advanceTopKClock(
-  enteredAt: number | null,
-  maxStreakS: number,
-  totalS: number,
+  enteredAt: number | undefined,
+  maxStreakSeconds: number,
+  totalSeconds: number,
   qualifiesNow: boolean,
-  nowSec: number,
-  deltaSec: number
-): {enteredAt: number | null; maxStreakS: number; totalS: number} {
+  nowSeconds: number,
+  deltaSeconds: number
+): {enteredAt?: number; maxStreakSeconds: number; totalSeconds: number} {
   let nextEntered = enteredAt;
-  let nextMax = maxStreakS;
-  let nextTotal = totalS;
+  let nextMax = maxStreakSeconds;
+  let nextTotal = totalSeconds;
 
-  if (enteredAt !== null) {
-    nextTotal += deltaSec;
-    const currentRunS = Math.max(0, nowSec - enteredAt);
-    if (currentRunS > nextMax) nextMax = currentRunS;
-    if (!qualifiesNow) nextEntered = null;
+  if (enteredAt !== undefined) {
+    nextTotal += deltaSeconds;
+    const currentRunSeconds = Math.max(0, nowSeconds - enteredAt);
+    if (currentRunSeconds > nextMax) nextMax = currentRunSeconds;
+    if (!qualifiesNow) nextEntered = undefined;
   } else if (qualifiesNow) {
-    nextEntered = nowSec;
+    nextEntered = nowSeconds;
   }
 
-  return {enteredAt: nextEntered, maxStreakS: nextMax, totalS: nextTotal};
+  return {enteredAt: nextEntered, maxStreakSeconds: nextMax, totalSeconds: nextTotal};
 }
 
+// Active-learning cross-ladder match scheduler.
+//
+// Scores every candidate `(ladder, agentI, agentJ)` pair by:
+//   `score = infoGain * withinWeight * repeatDamper * agingBoost`
+// where:
+//   - `infoGain = 0.5 * ln(1 + 4 p (1 - p) (sigma_i^2 + sigma_j^2))` is expected Shannon
+//     information gain on `theta_i - theta_j`.
+//   - `withinWeight` combines exponential top-of-ladder focus (`topWeight` using
+//     `min(rank, ucbRank)` so uncertain challengers with high UCB get top-tier attention),
+//     posterior overlap, and a fast-triage bonus steering 0- and 1-match entrants against
+//     Top-5 / Top-10 calibration anchors.
+//   - `repeatDamper = 1 / (1 + 0.25 * mij)` spreads games across distinct pairs.
+//   - `agingBoost` + hard starvation filtering (`>= maxWaitCycles * K`) guarantees no active
+//     ladder goes unscheduled even when another ladder has a burst of new submissions.
 export function selectNextArenaMatch(
   ladders: LadderMatchState[],
   globalMatchCount: number,
@@ -473,8 +521,8 @@ export function selectNextArenaMatch(
   agingRate = 0.50,
   maxWaitCycles = 4
 ): NextMatchChoice {
-  const activeLadders = ladders.filter(l => l.activeBotIndices.length >= 2);
-  if (activeLadders.length === 0) throw new Error('No ladder has >= 2 active bots');
+  const activeLadders = ladders.filter(l => l.activeAgentIndices.length >= 2);
+  if (activeLadders.length === 0) throw new Error('No ladder has >= 2 active agents');
   const K = activeLadders.length;
 
   const starved = activeLadders.filter(
@@ -482,13 +530,13 @@ export function selectNextArenaMatch(
   );
   const candidates = starved.length > 0 ? starved : activeLadders;
 
-  let best: NextMatchChoice | null = null;
+  let best: NextMatchChoice | undefined;
 
   for (const ladder of candidates) {
     const M = ladder.theta.length;
-    const act = ladder.activeBotIndices;
+    const act = ladder.activeAgentIndices;
     const k = act.length;
-    const {theta, sigma, botMatches, pairMatches} = ladder;
+    const {theta, sigma, agentMatches, pairMatches} = ladder;
 
     const byTheta = act.slice().sort((a, b) => theta[b] - theta[a]);
     const byUCB = act.slice().sort(
@@ -512,7 +560,7 @@ export function selectNextArenaMatch(
     const inTriage = new Uint8Array(M);
     for (const i of act) {
       const ucb90 = theta[i] + 1.28 * sigma[i];
-      if (botMatches[i] < 2 || (exploit > 0 && sigma[i] > 0.36 && ucb90 >= thetaTop10)) {
+      if (agentMatches[i] < 2 || (exploit > 0 && sigma[i] > 0.36 && ucb90 >= thetaTop10)) {
         inTriage[i] = 1;
       }
     }
@@ -533,12 +581,12 @@ export function selectNextArenaMatch(
 
         let triageBonus = 1.0;
         if (inTriage[i] || inTriage[j]) {
-          const newBot = inTriage[i] ? i : j;
+          const challenger = inTriage[i] ? i : j;
           const anchor = inTriage[i] ? j : i;
           const target =
-            botMatches[newBot] === 0 ? thetaTop5
-            : botMatches[newBot] === 1 ? thetaTop10
-            : Math.max(thetaTop10, theta[newBot]);
+            agentMatches[challenger] === 0 ? thetaTop5
+            : agentMatches[challenger] === 1 ? thetaTop10
+            : Math.max(thetaTop10, theta[challenger]);
           triageBonus = 1.0 + 2.0 * Math.exp(-Math.abs(theta[anchor] - target));
         }
 
@@ -548,7 +596,7 @@ export function selectNextArenaMatch(
         const score = infoGain * withinWeight * repeatDamper * agingBoost;
 
         if (!best || score > best.priorityScore) {
-          best = {ladderId: ladder.id, botI: i, botJ: j, priorityScore: score};
+          best = {ladderId: ladder.id, agentI: i, agentJ: j, priorityScore: score};
         }
       }
     }

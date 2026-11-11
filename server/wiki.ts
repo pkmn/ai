@@ -5,49 +5,54 @@ import * as path from 'path';
 import * as querystring from 'querystring';
 import {promisify} from 'util';
 
-import type polka from 'polka';
+import polka from 'polka';
 import * as site from 'site';
 import * as yaml from 'yaml';
 
-import type {ArenaDB} from '../db';
+import {Database} from '../db';
 import {header, renderer} from '../static/build';
-import type {Project} from '../static/projects';
+import {Project} from '../static/projects';
 import {escapeHtml, root, slugify} from '../static/util';
 
-import {Auth, type AuthConfig} from './auth';
+import * as auth from './auth';
 
 const execFileAsync = promisify(execFile);
 
 const WIKI_DIR = root('wiki');
 const PROJECTS = root('static', 'projects.yml');
-const CONFIG = root('config', 'wiki.yml');
 const MAX_BODY_BYTES = 256 * 1024;
+
+// Hardcoded site-wide wiki administrators and GitHub -> display-name overrides (replaces the
+// two-line `config/wiki.yml`). Admins can edit any project wiki page regardless of project
+// ownership; `AUTHORS` maps GitHub commit authors to their Smogon handle in revision history.
+export const ADMINS = ['scheibo'];
+export const AUTHORS: Record<string, string> = {scheibo: 'pre'};
 
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 const RESERVED_SLUGS = new Set(['pages', 'edit', 'history']);
 
+// Three-tier read visibility for registered project wiki pages (`{% visibility: ... %}` header):
+//   - `developers` (default for project pages): readable only by registered Arena developers
+//   - `discord`: readable by developers and verified pkmn.ai Discord guild members
+//   - `public` (always used for general non-project pages): readable by everyone
 export type PageVisibility = 'developers' | 'discord' | 'public';
 const VISIBILITIES = new Set<PageVisibility>(['developers', 'discord', 'public']);
 const VISIBILITY = /^\{%\s*visibility:\s*(developers|discord|public)\s*%\}\r?\n?/;
 
-export interface BotPage {
+export interface ProjectPage {
   slug: string;
   name: string;
   owners: Set<string>;
 }
 
-export interface Config {
-  admins?: string[];
-  authors?: {[github: string]: string};
-}
-
 export interface Options {
   wikiDir?: string;
   projectsFile?: string;
-  configFile?: string;
-  auth?: Auth;
-  authConfig?: AuthConfig;
-  db?: ArenaDB;
+  admins?: string[];
+  authors?: Record<string, string>;
+  auth?: auth.Auth;
+  authConfig?: auth.Config;
+  db?: Database;
   isDiscordMember?: (discordId: string) => boolean;
   push?: boolean;
 }
@@ -123,14 +128,14 @@ export function extractAuthorizedGitHubUsers(
   return users;
 }
 
-export function extractBotPages(projectsYaml: string): {
-  bots: Map<string, BotPage>;
+export function extractProjectPages(projectsYaml: string): {
+  projects: Map<string, ProjectPage>;
   aliases: Map<string, string>;
 } {
-  const bots = new Map<string, BotPage>();
+  const projects = new Map<string, ProjectPage>();
   const aliases = new Map<string, string>();
   const entries = (yaml.parse(projectsYaml) ?? []) as Project[];
-  if (!Array.isArray(entries)) return {bots, aliases};
+  if (!Array.isArray(entries)) return {projects, aliases};
   for (const entry of entries) {
     const name = entry?.name?.trim();
     if (!name || !entry.arena) continue;
@@ -143,7 +148,7 @@ export function extractBotPages(projectsYaml: string): {
         if (clean) owners.add(clean);
       }
     }
-    bots.set(slug, {slug, name, owners});
+    projects.set(slug, {slug, name, owners});
     aliases.set(slug.toLowerCase(), slug);
     const arenaSlug = slugify(name).toLowerCase();
     if (arenaSlug) {
@@ -151,7 +156,7 @@ export function extractBotPages(projectsYaml: string): {
       aliases.set(normalizeSlug(arenaSlug).toLowerCase(), slug);
     }
   }
-  return {bots, aliases};
+  return {projects, aliases};
 }
 
 const STYLE = fs.readFileSync(root('static', 'wiki.css'), 'utf8');
@@ -257,23 +262,26 @@ function redirect(res: http.ServerResponse, location: string, status = 302, cook
 export class Wiki {
   readonly wikiDir: string;
   readonly projectsFile: string;
-  readonly configFile: string;
-  readonly auth: Auth;
+  readonly auth: auth.Auth;
+  private readonly configuredAdmins: string[];
+  private readonly configuredAuthors: Record<string, string>;
   private readonly shouldPush: boolean;
   private projectsMtime = -1;
-  private configMtime = -1;
   private adminUsers = new Set<string>();
   private authorizedUsers = new Set<string>();
   private authorMap = new Map<string, string>();
-  private botPages = new Map<string, BotPage>();
-  private botAliases = new Map<string, string>();
+  private projectPages = new Map<string, ProjectPage>();
+  private projectAliases = new Map<string, string>();
+  // Serializes git `add`/`commit` operations in-process so concurrent edits cannot collide on
+  // `.git/index.lock` inside the backing wiki repository.
   private gitQueue: Promise<any> = Promise.resolve();
 
   constructor(options: Options = {}) {
     this.wikiDir = options.wikiDir ?? WIKI_DIR;
     this.projectsFile = options.projectsFile ?? PROJECTS;
-    this.configFile = options.configFile ?? CONFIG;
-    this.auth = options.auth ?? new Auth({
+    this.configuredAdmins = options.admins ?? ADMINS;
+    this.configuredAuthors = options.authors ?? AUTHORS;
+    this.auth = options.auth ?? new auth.Auth({
       config: options.authConfig,
       db: options.db,
       isDiscordMember: options.isDiscordMember,
@@ -286,15 +294,11 @@ export class Wiki {
 
   private refreshMetadata() {
     let pMtime = -1;
-    let cMtime = -1;
     try {
       pMtime = fs.statSync(this.projectsFile).mtimeMs;
     } catch {}
-    try {
-      cMtime = fs.statSync(this.configFile).mtimeMs;
-    } catch {}
 
-    if (pMtime === this.projectsMtime && cMtime === this.configMtime && this.projectsMtime !== -1) {
+    if (pMtime === this.projectsMtime && this.projectsMtime !== -1) {
       return;
     }
 
@@ -305,28 +309,19 @@ export class Wiki {
       } catch {}
     }
 
-    let wikiCfg: Config = {};
-    if (cMtime !== -1) {
-      try {
-        wikiCfg = (yaml.parse(fs.readFileSync(this.configFile, 'utf8')) ?? {}) as Config;
-      } catch {}
-    }
-
-    const admins = wikiCfg.admins ?? [];
-    const authors = wikiCfg.authors ?? {};
-
-    this.adminUsers = new Set(admins.map(a => a.trim().toLowerCase()).filter(Boolean));
-    this.authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, admins);
+    this.adminUsers = new Set(
+      this.configuredAdmins.map(a => a.trim().toLowerCase()).filter(Boolean)
+    );
+    this.authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, this.configuredAdmins);
     this.authorMap = new Map(
-      Object.entries(authors)
+      Object.entries(this.configuredAuthors)
         .filter(([gh, name]) => gh.trim() && typeof name === 'string' && name.trim())
         .map(([gh, name]) => [gh.trim().toLowerCase(), name.trim()])
     );
-    const {bots, aliases} = extractBotPages(projectsRaw);
-    this.botPages = bots;
-    this.botAliases = aliases;
+    const {projects, aliases} = extractProjectPages(projectsRaw);
+    this.projectPages = projects;
+    this.projectAliases = aliases;
     this.projectsMtime = pMtime;
-    this.configMtime = cMtime;
   }
 
   formatAuthor(githubLogin: string): string {
@@ -336,16 +331,16 @@ export class Wiki {
 
   resolveSlug(slug: string): string {
     this.refreshMetadata();
-    return this.botAliases.get(slug.toLowerCase()) ?? slug;
+    return this.projectAliases.get(slug.toLowerCase()) ?? slug;
   }
 
-  getBotPage(slug: string): BotPage | undefined {
+  getProjectPage(slug: string): ProjectPage | undefined {
     this.refreshMetadata();
-    return this.botPages.get(this.resolveSlug(slug));
+    return this.projectPages.get(this.resolveSlug(slug));
   }
 
-  isBotPage(slug: string): boolean {
-    return this.getBotPage(slug) !== undefined;
+  isProjectPage(slug: string): boolean {
+    return this.getProjectPage(slug) !== undefined;
   }
 
   isAdmin(login: string | undefined): boolean {
@@ -362,7 +357,7 @@ export class Wiki {
 
   getPageVisibility(slug: string): PageVisibility {
     const canonical = this.resolveSlug(slug);
-    if (!this.isBotPage(canonical)) return 'public';
+    if (!this.isProjectPage(canonical)) return 'public';
     const raw = this.readRawPage(canonical);
     if (raw === undefined) return 'developers';
     return parsePageContent(raw).visibility ?? 'developers';
@@ -382,8 +377,8 @@ export class Wiki {
     const lower = login.toLowerCase();
     if (this.adminUsers.has(lower)) return true;
     if (!slug) return this.authorizedUsers.has(lower);
-    const bot = this.getBotPage(slug);
-    if (bot) return bot.owners.has(lower);
+    const project = this.getProjectPage(slug);
+    if (project) return project.owners.has(lower);
     return this.authorizedUsers.has(lower);
   }
 
@@ -419,7 +414,7 @@ export class Wiki {
       const m = /^#\s+(.+)$/m.exec(body);
       if (m) return m[1].trim();
     }
-    return this.getBotPage(canonical)?.name ?? formatTitle(canonical);
+    return this.getProjectPage(canonical)?.name ?? formatTitle(canonical);
   }
 
   listPages(): string[] {
@@ -446,8 +441,8 @@ export class Wiki {
   ): Promise<boolean> {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical)) throw new Error(`Invalid slug: ${slug}`);
-    const isBot = this.isBotPage(canonical);
-    const vis = isBot
+    const isProject = this.isProjectPage(canonical);
+    const vis = isProject
       ? (visibility && VISIBILITIES.has(visibility)
         ? visibility
         : this.getPageVisibility(canonical))
@@ -587,7 +582,8 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     if (visibility === 'public') return true;
 
     const authCfg = wiki.auth.getConfig();
-    if (!authCfg?.github && process.env.NODE_ENV === 'development') return true;
+    const devAuth = wiki.auth.isDevAuthEnabled();
+    if (!authCfg?.github && !devAuth && process.env.NODE_ENV === 'development') return true;
 
     const login = wiki.getSessionUser(req);
     if (wiki.isDeveloper(login)) return true;
@@ -608,7 +604,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       return false;
     }
 
-    if (!authCfg?.github) {
+    if (!authCfg?.github && !devAuth) {
       sendError(res, 503, '<p>GitHub OAuth is not configured on this server.</p>');
       return false;
     }
@@ -632,10 +628,11 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     slug?: string
   ): string | undefined => {
     const authCfg = wiki.auth.getConfig();
+    const devAuth = wiki.auth.isDevAuthEnabled();
     let login: string | undefined;
-    if (!authCfg?.github) {
+    if (!authCfg?.github && !devAuth) {
       if (process.env.NODE_ENV === 'development') {
-        login = process.env.WIKI_DEV_USER || 'scheibo';
+        login = 'scheibo';
       } else {
         sendError(res, 503, '<p>GitHub OAuth is not configured on this server.</p>');
         return undefined;
@@ -660,8 +657,8 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     }
 
     if (slug && !wiki.canEdit(login, slug)) {
-      const bot = wiki.getBotPage(slug);
-      const target = escapeHtml(bot ? bot.name : formatTitle(slug));
+      const project = wiki.getProjectPage(slug);
+      const target = escapeHtml(project ? project.name : formatTitle(slug));
       sendError(
         res,
         403,
@@ -686,8 +683,13 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     const raw = wiki.readPage(slug);
     const encoded = encodeSlug(slug);
     if (raw === undefined) {
-      if (wiki.isBotPage(slug) && !wiki.canEdit(getEffectiveUser(req), slug)) {
-        sendError(res, 404, '<p>This bot page has not been created yet.</p>', `/wiki/${encoded}/`);
+      if (wiki.isProjectPage(slug) && !wiki.canEdit(getEffectiveUser(req), slug)) {
+        sendError(
+          res,
+          404,
+          '<p>This project page has not been created yet.</p>',
+          `/wiki/${encoded}/`
+        );
         return;
       }
       redirect(res, `/wiki/${encoded}/edit`);
@@ -695,7 +697,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     }
     const meta: {title?: string; summary?: string} = {};
     const html = renderDjot(raw, meta);
-    const heading = meta.title ?? wiki.getBotPage(slug)?.name ?? formatTitle(slug);
+    const heading = meta.title ?? wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     sendHtml(res, 200, renderPage({
       title: heading,
       heading,
@@ -739,7 +741,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     visibility?: PageVisibility,
     previewHtml?: string
   ) => {
-    const displayTitle = wiki.getBotPage(slug)?.name ?? formatTitle(slug);
+    const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     const heading = `Edit ${displayTitle}`;
     const previewBlock = previewHtml !== undefined
       ? `<section id="wiki-preview">${previewHtml}</section>`
@@ -782,7 +784,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     if (!slug) return;
     if (!requireEditAuth(req, res, slug)) return;
     const existing = wiki.readPage(slug) ?? '';
-    const visibility = wiki.isBotPage(slug) ? wiki.getPageVisibility(slug) : undefined;
+    const visibility = wiki.isProjectPage(slug) ? wiki.getPageVisibility(slug) : undefined;
     renderEditor(res, slug, existing, '', visibility);
   });
 
@@ -802,7 +804,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       const message = typeof parsed.message === 'string' ? parsed.message : '';
       const action = typeof parsed.action === 'string' ? parsed.action : 'save';
       const rawVis = typeof parsed.visibility === 'string' ? parsed.visibility : '';
-      const visibility = wiki.isBotPage(slug)
+      const visibility = wiki.isProjectPage(slug)
         ? (VISIBILITIES.has(rawVis as PageVisibility)
           ? (rawVis as PageVisibility)
           : wiki.getPageVisibility(slug))
@@ -852,7 +854,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     const table = revisions.length
       ? `<table>${headerRow}${rows}</table>`
       : '<p>No history for this page yet.</p>';
-    const displayTitle = wiki.getBotPage(slug)?.name ?? formatTitle(slug);
+    const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     const heading = `History — ${displayTitle}`;
     sendHtml(res, 200, renderPage({
       title: heading,
@@ -876,7 +878,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     if (!requireReadAuth(req, res, slug)) return;
 
     const encoded = encodeSlug(slug);
-    const displayTitle = wiki.getBotPage(slug)?.name ?? formatTitle(slug);
+    const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     if (showDiff) {
       const diff = await wiki.getRevisionDiff(slug, sha);
       if (diff === undefined) {

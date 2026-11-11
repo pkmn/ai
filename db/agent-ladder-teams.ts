@@ -1,0 +1,103 @@
+import {DatabaseSync} from 'node:sqlite';
+
+export type TeamPoolStatus = 'pending' | 'active';
+
+export interface AgentLadderTeamRow {
+  agentId: number;
+  ladderId: string;
+  teamIndex: number;
+  packedTeam: string;
+  status: TeamPoolStatus;
+  submittedAt: number;
+}
+
+export function hasActiveLadderTeams(
+  db: DatabaseSync,
+  ladderId: string,
+  agentId: number
+): boolean {
+  const row = db.prepare(
+    `SELECT 1 FROM agent_ladder_teams
+     WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
+     LIMIT 1`
+  ).get(ladderId, agentId);
+  return row !== undefined;
+}
+
+export function getTeamsForAgentLadder(
+  db: DatabaseSync,
+  ladderId: string,
+  agentId: number,
+  status?: TeamPoolStatus
+): string[] {
+  const rows = status
+    ? db.prepare(
+      `SELECT packed_team FROM agent_ladder_teams
+       WHERE ladder_id = ? AND agent_id = ? AND status = ?
+       ORDER BY team_index ASC`
+    ).all(ladderId, agentId, status)
+    : db.prepare(
+      `SELECT packed_team FROM agent_ladder_teams
+       WHERE ladder_id = ? AND agent_id = ?
+       ORDER BY team_index ASC`
+    ).all(ladderId, agentId);
+  return (rows as Array<{packed_team: string}>).map(r => r.packed_team);
+}
+
+// Stages uploaded team rosters under `status = 'pending'` while the accompanying version awaits
+// offline smoke testing on the Mac mini, leaving any live `'active'` roster untouched until pass.
+export function replacePendingTeams(
+  db: DatabaseSync,
+  agentId: number,
+  teamsByLadder: Record<string, string[]>,
+  now: number
+) {
+  const clearPending = db.prepare(
+    `DELETE FROM agent_ladder_teams
+     WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'`
+  );
+  const insertTeam = db.prepare(`
+    INSERT INTO agent_ladder_teams (
+      agent_id, ladder_id, team_index, packed_team, status, submitted_at
+    )
+    VALUES (?, ?, ?, ?, 'pending', ?)
+  `);
+  for (const [ladderId, packedTeams] of Object.entries(teamsByLadder)) {
+    clearPending.run(ladderId, agentId);
+    for (let i = 0; i < packedTeams.length; i++) {
+      insertTeam.run(agentId, ladderId, i + 1, packedTeams[i], now);
+    }
+  }
+}
+
+// Atomically swaps any staged `'pending'` roster into `'active'` when a submission passes smoke
+// testing. If no replacement paste was uploaded with the new version, the existing `'active'`
+// roster remains live unchanged.
+export function promotePendingTeams(db: DatabaseSync, ladderId: string, agentId: number) {
+  const hasPending = db.prepare(
+    `SELECT 1 FROM agent_ladder_teams
+     WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'
+     LIMIT 1`
+  ).get(ladderId, agentId);
+  if (!hasPending) return;
+
+  db.prepare(`
+    DELETE FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
+  `).run(ladderId, agentId);
+  db.prepare(`
+    UPDATE agent_ladder_teams
+    SET status = 'active'
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'
+  `).run(ladderId, agentId);
+}
+
+export function deletePendingTeams(db: DatabaseSync, ladderIds: string[], agentId: number) {
+  const del = db.prepare(`
+    DELETE FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'
+  `);
+  for (const ladderId of ladderIds) {
+    del.run(ladderId, agentId);
+  }
+}

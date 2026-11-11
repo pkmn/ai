@@ -32,7 +32,7 @@ If this doesn't work, update `~/.ssh/config` instead:
 ```diff
 +Host pkmn.ai
 +  HostName 123.45.67.89
-+  ForwardAgent yes
++  ForwardAgent no
 ```
 
 ## Ubuntu
@@ -97,7 +97,28 @@ cat /etc/lsb-release
 Install general packages required to set up the server:
 
 ```sh
-apt-get install -y git curl build-essential
+apt-get install -y git curl build-essential sqlite3 zstd
+```
+
+Create a restricted, shell-less `tunnel` user so the Mac mini Arena runner can open an outbound SSH
+port-forward (`127.0.0.1:1234`) without shell access:
+
+```sh
+adduser --system --no-create-home --shell /usr/sbin/nologin tunnel
+mkdir -p /etc/ssh/authorized_keys
+touch /etc/ssh/authorized_keys/tunnel
+chmod 644 /etc/ssh/authorized_keys/tunnel
+cat <<'EOF' > /etc/ssh/sshd_config.d/arena-tunnel.conf
+Match User tunnel
+    AuthorizedKeysFile /etc/ssh/authorized_keys/tunnel
+    PasswordAuthentication no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTTY no
+    AllowTcpForwarding local
+    PermitOpen 127.0.0.1:1234
+EOF
+/usr/sbin/sshd -t && service ssh reload
 ```
 
 ## Node
@@ -159,18 +180,46 @@ https://discord.com/oauth2/authorize?client_id=689315793569447954&scope=bot+appl
 
 ## Authentication & Wiki
 
-1. Create a [GitHub OAuth App](https://github.com/settings/developers) with **Homepage URL**
-   `https://pkmn.ai` and **Authorization callback URL** `https://pkmn.ai/auth/github/callback`.
-2. Populate `private/.env` with `GITHUB_CLIENT_ID=...`, `GITHUB_CLIENT_SECRET=...`, a 32-byte hex
-   `SESSION_SECRET=...` (`openssl rand -hex 32`), and a 32-byte hex `ARENA_SECRET=...`.
-3. Create the SQLite directory `/var/lib/pkmn` owned by `pkmn:pkmn`:
+1. Create a [GitHub OAuth App](https://github.com/settings/developers) (under **OAuth Apps** -> **New
+   OAuth App**, or under the `pkmn` GitHub organization settings -> **Developer settings** -> **OAuth
+   Apps**):
+   - **Application name**: `pkmn.ai`
+   - **Homepage URL**: `https://pkmn.ai`
+   - **Authorization callback URL**: `https://pkmn.ai/auth/github/callback`
+   - Leave **Enable Device Flow** unchecked, click **Register application**, then click **Generate a
+     new client secret**.
+2. Copy the **Client ID** and **Client secret** into `private/.env` (`GITHUB_CLIENT_ID=...` and
+   `GITHUB_CLIENT_SECRET=...`), alongside a 32-byte hex `SESSION_SECRET=...` (`openssl rand -hex 32`)
+   and a 32-byte hex `ARENA_SECRET=...`. Run `./private/sync` to sync `private/.env` to production.
+3. **Local Development Auth Testing (`npm run dev`)**:
+   - Because `private/.env` is synced directly to production (where the GitHub OAuth callback points
+     to `https://pkmn.ai/auth/github/callback`) and a single real GitHub account only tests one role,
+     `npm run dev` starts the local server with `DEV_AUTH=1` and `PUBLIC_URL=http://localhost:1234`.
+   - When `DEV_AUTH=1` is set and the request arrives on a loopback socket (`localhost` /
+     `127.0.0.1`), `GET /auth/dev` mints real HMAC-signed `pkmn_session` cookies so every downstream
+     route (`/account`, `/api/submissions`, `/wiki/*`, `/auth/discord/validate`) runs the exact
+     production cookie & authorization codepath:
+     - **Full admin + Discord member** (main browser window):
+       `http://localhost:1234/auth/dev?github=scheibo&discord=513513270670262284&return_to=/account`
+     - **Non-admin competitor** (open an Incognito window or separate browser profile for an isolated
+       cookie jar):
+       `http://localhost:1234/auth/dev?github=pmariglia&return_to=/account`
+     - **Authenticated but unregistered GitHub user** (`403` / non-competitor view):
+       `http://localhost:1234/auth/dev?github=unregistered-user&return_to=/account`
+     - **Unauthenticated visitor**:
+       `http://localhost:1234/auth/dev?clear=1&return_to=/wiki`
+   - If you also want to test the live GitHub redirect flow locally, create a separate `pkmn.ai (dev)`
+     OAuth App with callback `http://localhost:1234/auth/github/callback` and pass its credentials on
+     the command line (`GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... PUBLIC_URL=http://localhost:1234 npm start`)
+     so `private/.env` keeps the production credentials.
+4. Create the SQLite directory `/var/lib/pkmn` owned by `pkmn:pkmn`:
 
 ```sh
 mkdir -p /var/lib/pkmn
 chown pkmn:pkmn /var/lib/pkmn
 ```
 
-4. As `pkmn`, clone the private `pkmn/wiki` repository into `/home/pkmn/ai/wiki` using a deploy key
+5. As `pkmn`, clone the private `pkmn/wiki` repository into `/home/pkmn/ai/wiki` using a deploy key
    with write access:
 
 ```sh

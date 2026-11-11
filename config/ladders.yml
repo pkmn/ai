@@ -1,49 +1,44 @@
-- id: gen1ou20261109
-  slot: rby
-  display_name: RBY
-  format_id: gen1ou
-  team_mode: harvested
-  min_bots: 2
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  discord: '1563716887131459685'
+  team: harvested
   status: upcoming
-  discord_role: '1563716887131459685'
+  min: 2
 
-- id: gen3ou20261109
-  slot: adv
-  display_name: ADV
-  format_id: gen3ou
-  team_mode: harvested
-  min_bots: 2
+- name: ADV
+  format: gen3ou
+  id: gen3ou20261109
+  discord: '1563717163481825472'
+  team: harvested
   status: upcoming
-  discord_role: '1563717163481825472'
+  min: 2
 
-- id: gen9ou20261109
-  slot: sv
-  display_name: SV
-  format_id: gen9ou
-  team_mode: harvested
-  min_bots: 2
+- name: SV
+  format: gen9ou
+  id: gen9ou20261109
+  discord: '1563717708720377977'
+  team: harvested
   status: upcoming
-  discord_role: '1563717708720377977'
+  min: 2
 
-- id: gen9randombattle20261109
-  slot: rand
-  display_name: RAND
-  format_id: gen9randombattle
-  team_mode: random
-  min_bots: 2
+- name: RAND
+  format: gen9randombattle
+  id: gen9randombattle20261109
+  discord: '1563718027994992752'
+  team: random
   status: upcoming
-  discord_role: '1563718027994992752'
+  min: 2
 
-- id: gen9championsvgc2026regmc
-  slot: vgc
-  display_name: VGC
-  format_id: gen9championsvgc2026regmc
-  team_mode: competitor_pool
-  min_bots: 3
-  team_count: 20
+- name: VGC
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  discord: '1564121375558340768'
+  team: pools
   status: upcoming
-  discord_role: '1564121375558340768'
-  pool_dirs:
+  min: 3
+  teams: 20
+  pools:
     - teams/teams/gen9championsvgc2026regmc
     - teams/pkmn_stuff/teams/Teams_real
     - teams/vgc.bot/gen9championsvgc2026regmc

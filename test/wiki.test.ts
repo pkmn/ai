@@ -6,25 +6,11 @@ import * as path from 'path';
 
 import polka from 'polka';
 
-import {
-  type AuthConfig,
-  SESSION_COOKIE,
-  signToken,
-  verifyToken,
-} from '../server/auth';
-import {
-  extractAuthorizedGitHubUsers,
-  extractBotPages,
-  formatTitle,
-  isValidSlug,
-  normalizeSlug,
-  parsePageContent,
-  register,
-  serializePageContent,
-} from '../server/wiki';
+import * as auth from '../server/auth';
+import * as wiki from '../server/wiki';
 import {slugify} from '../static/util';
 
-const AUTH_CFG: AuthConfig = {
+const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-session-secret',
   github: {
     clientId: 'client-id',
@@ -48,21 +34,21 @@ const PROJECTS_YAML = `
   arena:
     owners:
       pmariglia: pmariglia
-- name: Inactive Bot
+- name: Inactive Project
   active: [2020, 2021]
 `;
 
 describe('wiki helpers', () => {
   test('extractAuthorizedGitHubUsers normalizes owners and admin entries', () => {
-    const users = extractAuthorizedGitHubUsers(PROJECTS_YAML, ['Scheibo']);
+    const users = wiki.extractAuthorizedGitHubUsers(PROJECTS_YAML, ['Scheibo']);
     expect([...users].sort()).toEqual(['pairdev', 'pmariglia', 'pre', 'scheibo']);
   });
 
-  test('extractBotPages maps registered arena bots, owners, and slugify aliases', () => {
-    const {bots, aliases} = extractBotPages(PROJECTS_YAML);
-    expect([...bots.keys()]).toEqual(['0_ERROR', 'Foul_Play']);
-    expect([...bots.get('0_ERROR')!.owners].sort()).toEqual(['pairdev', 'pre']);
-    expect([...bots.get('Foul_Play')!.owners]).toEqual(['pmariglia']);
+  test('extractProjectPages maps registered arena projects, owners, and slugify aliases', () => {
+    const {projects, aliases} = wiki.extractProjectPages(PROJECTS_YAML);
+    expect([...projects.keys()]).toEqual(['0_ERROR', 'Foul_Play']);
+    expect([...projects.get('0_ERROR')!.owners].sort()).toEqual(['pairdev', 'pre']);
+    expect([...projects.get('Foul_Play')!.owners]).toEqual(['pmariglia']);
     expect(aliases.get('0-error')).toBe('0_ERROR');
     expect(aliases.get('0_error')).toBe('0_ERROR');
     expect(aliases.get('foul-play')).toBe('Foul_Play');
@@ -70,39 +56,39 @@ describe('wiki helpers', () => {
   });
 
   test('parsePageContent and serializePageContent handle visibility directives', () => {
-    const serialized = serializePageContent('# 0 ERROR\n\nBot notes.', 'discord');
-    expect(serialized).toBe('{% visibility: discord %}\n# 0 ERROR\n\nBot notes.\n');
-    expect(parsePageContent(serialized)).toEqual({
+    const serialized = wiki.serializePageContent('# 0 ERROR\n\nAgent notes.', 'discord');
+    expect(serialized).toBe('{% visibility: discord %}\n# 0 ERROR\n\nAgent notes.\n');
+    expect(wiki.parsePageContent(serialized)).toEqual({
       visibility: 'discord',
-      content: '# 0 ERROR\n\nBot notes.\n',
+      content: '# 0 ERROR\n\nAgent notes.\n',
     });
-    expect(parsePageContent('# Plain\n')).toEqual({content: '# Plain\n'});
+    expect(wiki.parsePageContent('# Plain\n')).toEqual({content: '# Plain\n'});
   });
 
   test('signToken and verifyToken validate HMAC and expiry', () => {
-    const token = signToken({login: 'pre', exp: 2000}, 'secret');
-    expect(verifyToken<{login: string; exp: number}>(token, 'secret', 1500)).toEqual({
+    const token = auth.signToken({login: 'pre', exp: 2000}, 'secret');
+    expect(auth.verifyToken<{login: string; exp: number}>(token, 'secret', 1500)).toEqual({
       login: 'pre',
       exp: 2000,
     });
-    expect(verifyToken(token, 'wrong-secret', 1500)).toBeUndefined();
-    expect(verifyToken(`${token}x`, 'secret', 1500)).toBeUndefined();
-    expect(verifyToken(token, 'secret', 2500)).toBeUndefined();
+    expect(auth.verifyToken(token, 'wrong-secret', 1500)).toBeUndefined();
+    expect(auth.verifyToken(`${token}x`, 'secret', 1500)).toBeUndefined();
+    expect(auth.verifyToken(token, 'secret', 2500)).toBeUndefined();
   });
 
   test('isValidSlug and normalizeSlug support Wikipedia-style names and reject traversal', () => {
-    expect(normalizeSlug('Mew%27s%20Truck')).toBe("Mew's_Truck");
-    expect(formatTitle("Mew's_Truck")).toBe("Mew's Truck");
-    expect(isValidSlug("Mew's_Truck")).toBe(true);
-    expect(isValidSlug('PokéChamp')).toBe(true);
-    expect(isValidSlug('index')).toBe(true);
-    expect(isValidSlug('gen9-ou_notes')).toBe(true);
-    expect(isValidSlug('pages')).toBe(false);
-    expect(isValidSlug('edit')).toBe(false);
-    expect(isValidSlug('history')).toBe(false);
-    expect(isValidSlug('../secret')).toBe(false);
-    expect(isValidSlug('a/b')).toBe(false);
-    expect(isValidSlug('.hidden')).toBe(false);
+    expect(wiki.normalizeSlug('Mew%27s%20Truck')).toBe("Mew's_Truck");
+    expect(wiki.formatTitle("Mew's_Truck")).toBe("Mew's Truck");
+    expect(wiki.isValidSlug("Mew's_Truck")).toBe(true);
+    expect(wiki.isValidSlug('PokéChamp')).toBe(true);
+    expect(wiki.isValidSlug('index')).toBe(true);
+    expect(wiki.isValidSlug('gen9-ou_notes')).toBe(true);
+    expect(wiki.isValidSlug('pages')).toBe(false);
+    expect(wiki.isValidSlug('edit')).toBe(false);
+    expect(wiki.isValidSlug('history')).toBe(false);
+    expect(wiki.isValidSlug('../secret')).toBe(false);
+    expect(wiki.isValidSlug('a/b')).toBe(false);
+    expect(wiki.isValidSlug('.hidden')).toBe(false);
   });
 });
 
@@ -131,7 +117,7 @@ describe('wiki server routes & git history', () => {
     execFileSync('git', ['commit', '-m', 'Initial commit'], {cwd: wikiDir});
 
     const app = polka();
-    register(app, {
+    wiki.register(app, {
       wikiDir,
       projectsFile,
       authConfig: AUTH_CFG,
@@ -154,14 +140,14 @@ describe('wiki server routes & git history', () => {
 
   const sessionCookie = (login: string) => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const token = signToken({github: {id: 1, login}, exp}, AUTH_CFG.sessionSecret);
-    return `${SESSION_COOKIE}=${encodeURIComponent(token)}`;
+    const token = auth.signToken({github: {id: 1, login}, exp}, AUTH_CFG.sessionSecret);
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
   };
 
   const discordCookie = (id: string, username = 'member') => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const token = signToken({discord: {id, username}, exp}, AUTH_CFG.sessionSecret);
-    return `${SESSION_COOKIE}=${encodeURIComponent(token)}`;
+    const token = auth.signToken({discord: {id, username}, exp}, AUTH_CFG.sessionSecret);
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
   };
 
   test('allows public reading of general pages and requires registered auth to edit', async () => {
@@ -311,7 +297,7 @@ describe('wiki server routes & git history', () => {
 
     // 7. View revision snapshot and diff publicly
     const shaMatch = /href="\/wiki\/gen9ou\/([0-9a-f]{40})"/.exec(histHtml);
-    expect(shaMatch).not.toBeNull();
+    expect(shaMatch).toBeTruthy();
     const latestSha = shaMatch![1];
 
     const snapRes = await realFetch(`${baseUrl}/wiki/gen9ou/${latestSha}`);
@@ -331,18 +317,18 @@ describe('wiki server routes & git history', () => {
     expect(pagesHtml).toContain('<a href="/wiki/gen9ou">Gen 9 OU</a>');
   });
 
-  test('enforces bot page ownership and supports developers, discord, and public', async () => {
+  test('enforces project page ownership and supports developers, discord, and public', async () => {
     // 1. Alias redirects (/wiki/0-error -> /wiki/0_ERROR)
     const aliasRes = await realFetch(`${baseUrl}/wiki/0-error`, {redirect: 'manual'});
     expect(aliasRes.status).toBe(302);
     expect(aliasRes.headers.get('location')).toBe('/wiki/0_ERROR');
 
-    // 2. Uncreated bot page defaults to developers visibility and only owners/admins can edit
-    const unauthBot = await realFetch(`${baseUrl}/wiki/0_ERROR`, {redirect: 'manual'});
-    expect(unauthBot.status).toBe(302);
-    expect(unauthBot.headers.get('location')).toBe('/auth/github?return_to=%2Fwiki%2F0_ERROR');
+    // 2. Uncreated project page defaults to developers visibility and only owners/admins can edit
+    const unauthProject = await realFetch(`${baseUrl}/wiki/0_ERROR`, {redirect: 'manual'});
+    expect(unauthProject.status).toBe(302);
+    expect(unauthProject.headers.get('location')).toBe('/auth/github?return_to=%2Fwiki%2F0_ERROR');
 
-    // Other bot's developer (pmariglia) sees 404 on uncreated 0_ERROR and 403 on /edit or POST
+    // Other project's developer (pmariglia) sees 404 on uncreated 0_ERROR and 403 on /edit or POST
     const otherDevView = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
       headers: {Cookie: sessionCookie('pmariglia')},
       redirect: 'manual',
@@ -383,7 +369,7 @@ describe('wiki server routes & git history', () => {
     expect(editorHtml).toContain('id="wiki-visibility"');
     expect(editorHtml).toContain('value="developers"');
 
-    // 4. Owner saves bot page with default (developers) visibility
+    // 4. Owner saves project page with default (developers) visibility
     const saveDev = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
       method: 'POST',
       headers: {
@@ -399,7 +385,7 @@ describe('wiki server routes & git history', () => {
     });
     expect(saveDev.status).toBe(303);
 
-    // Public cannot view developers-only bot page or see it in /wiki/pages
+    // Public cannot view developers-only project page or see it in /wiki/pages
     const pubDenied = await realFetch(`${baseUrl}/wiki/0_ERROR`, {redirect: 'manual'});
     expect(pubDenied.status).toBe(302);
     expect(pubDenied.headers.get('location')).toBe('/auth/github?return_to=%2Fwiki%2F0_ERROR');
@@ -407,7 +393,7 @@ describe('wiki server routes & git history', () => {
     const pubPages = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
     expect(pubPages).not.toContain('0 ERROR');
 
-    // Other registered bot developer (pmariglia) CAN view developers-only bot page
+    // Other registered developer (pmariglia) CAN view developers-only project page
     const otherDevAllowed = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
       headers: {Cookie: sessionCookie('pmariglia')},
     });
@@ -469,7 +455,7 @@ describe('wiki server routes & git history', () => {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({
-        content: '# 0 ERROR\n\nPublic bot profile.',
+        content: '# 0 ERROR\n\nPublic project profile.',
         visibility: 'public',
         message: 'Make public',
         action: 'save',
@@ -480,7 +466,7 @@ describe('wiki server routes & git history', () => {
     // Public visitor (no cookies) can now read /wiki/0_ERROR and see it in /wiki/pages
     const pubAllowed = await realFetch(`${baseUrl}/wiki/0_ERROR`);
     expect(pubAllowed.status).toBe(200);
-    expect(await pubAllowed.text()).toContain('Public bot profile.');
+    expect(await pubAllowed.text()).toContain('Public project profile.');
 
     const pubPagesAfter = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
     expect(pubPagesAfter).toContain('0 ERROR');

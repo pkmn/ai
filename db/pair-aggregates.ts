@@ -1,30 +1,25 @@
-import type {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from 'node:sqlite';
 
-import {
-  type PairMatchCounts,
-  type TernaryMatchOutcome,
-  applyPairwiseStreakUpdate,
-  computeLOS,
-} from '../server/ratings';
+import * as ratings from '../server/ratings';
 
 export interface PairAggregateRow {
-  ladder_id: string;
-  v_low_id: number;
-  v_high_id: number;
+  ladderId: string;
+  lowVersionId: number;
+  highVersionId: number;
   ww: number;
   wt: number;
   split: number;
   tl: number;
   ll: number;
-  cur_streak: number;
-  v_low_max_win_streak: number;
-  v_high_max_win_streak: number;
-  los_low: number | null;
+  currentStreak: number;
+  lowMaxWinStreak: number;
+  highMaxWinStreak: number;
+  lowLos?: number;
 }
 
 export interface IndexedPairKey {
-  vLowId: number;
-  vHighId: number;
+  lowVersionId: number;
+  highVersionId: number;
   i: number;
   j: number;
 }
@@ -33,15 +28,15 @@ export function loadPairAggregates(
   db: DatabaseSync,
   ladderId: string,
   indexByVersionId: Map<number, number>
-): {pairs: PairMatchCounts[]; pairKeys: IndexedPairKey[]} {
+): {pairs: ratings.PairMatchCounts[]; pairKeys: IndexedPairKey[]} {
   const rawPairs = db.prepare(`
-    SELECT v_low_id, v_high_id, ww, wt, split, tl, ll
+    SELECT low_version_id, high_version_id, ww, wt, split, tl, ll
     FROM pair_aggregates
     WHERE ladder_id = ?
-    ORDER BY v_low_id ASC, v_high_id ASC
+    ORDER BY low_version_id ASC, high_version_id ASC
   `).all(ladderId) as Array<{
-    v_low_id: number;
-    v_high_id: number;
+    low_version_id: number;
+    high_version_id: number;
     ww: number;
     wt: number;
     split: number;
@@ -49,70 +44,72 @@ export function loadPairAggregates(
     ll: number;
   }>;
 
-  const pairs: PairMatchCounts[] = [];
+  const pairs: ratings.PairMatchCounts[] = [];
   const pairKeys: IndexedPairKey[] = [];
   for (const p of rawPairs) {
-    const i = indexByVersionId.get(p.v_low_id);
-    const j = indexByVersionId.get(p.v_high_id);
+    const i = indexByVersionId.get(p.low_version_id);
+    const j = indexByVersionId.get(p.high_version_id);
     if (i === undefined || j === undefined) continue;
     pairs.push({i, j, ww: p.ww, wt: p.wt, split: p.split, tl: p.tl, ll: p.ll});
-    pairKeys.push({vLowId: p.v_low_id, vHighId: p.v_high_id, i, j});
+    pairKeys.push({lowVersionId: p.low_version_id, highVersionId: p.high_version_id, i, j});
   }
   return {pairs, pairKeys};
 }
 
+// Updates canonical unordered pair `(low_version_id < high_version_id)` 5-category sufficient
+// statistics so `recomputeLadderRatings` never has to scan the `matches` ledger.
 export function upsertPairAggregateForMatch(
   db: DatabaseSync,
   ladderId: string,
-  vLowId: number,
-  vHighId: number,
+  lowVersionId: number,
+  highVersionId: number,
   delta: {ww: number; wt: number; split: number; tl: number; ll: number},
-  vLowOutcome: TernaryMatchOutcome
+  lowOutcome: ratings.TernaryMatchOutcome
 ) {
   const existingPair = db.prepare(`
-    SELECT cur_streak, v_low_max_win_streak, v_high_max_win_streak
+    SELECT current_streak, low_max_win_streak, high_max_win_streak
     FROM pair_aggregates
-    WHERE ladder_id = ? AND v_low_id = ? AND v_high_id = ?
-  `).get(ladderId, vLowId, vHighId) as {
-    cur_streak: number;
-    v_low_max_win_streak: number;
-    v_high_max_win_streak: number;
+    WHERE ladder_id = ? AND low_version_id = ? AND high_version_id = ?
+  `).get(ladderId, lowVersionId, highVersionId) as {
+    current_streak: number;
+    low_max_win_streak: number;
+    high_max_win_streak: number;
   } | undefined;
 
-  const pairStreaks = {
-    curStreak: existingPair?.cur_streak ?? 0,
-    vLowMaxWinStreak: existingPair?.v_low_max_win_streak ?? 0,
-    vHighMaxWinStreak: existingPair?.v_high_max_win_streak ?? 0,
+  const pairStreaks: ratings.PairwiseStreakState = {
+    currentStreak: existingPair?.current_streak ?? 0,
+    lowMaxWinStreak: existingPair?.low_max_win_streak ?? 0,
+    highMaxWinStreak: existingPair?.high_max_win_streak ?? 0,
   };
-  applyPairwiseStreakUpdate(pairStreaks, vLowOutcome);
+  ratings.applyPairwiseStreakUpdate(pairStreaks, lowOutcome);
 
   db.prepare(`
     INSERT INTO pair_aggregates (
-      ladder_id, v_low_id, v_high_id, ww, wt, split, tl, ll,
-      cur_streak, v_low_max_win_streak, v_high_max_win_streak
+      ladder_id, low_version_id, high_version_id, ww, wt, split, tl, ll,
+      current_streak, low_max_win_streak, high_max_win_streak
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(ladder_id, v_low_id, v_high_id) DO UPDATE SET
+    ON CONFLICT(ladder_id, low_version_id, high_version_id) DO UPDATE SET
       ww = pair_aggregates.ww + excluded.ww,
       wt = pair_aggregates.wt + excluded.wt,
       split = pair_aggregates.split + excluded.split,
       tl = pair_aggregates.tl + excluded.tl,
       ll = pair_aggregates.ll + excluded.ll,
-      cur_streak = excluded.cur_streak,
-      v_low_max_win_streak = excluded.v_low_max_win_streak,
-      v_high_max_win_streak = excluded.v_high_max_win_streak
+      current_streak = excluded.current_streak,
+      low_max_win_streak = excluded.low_max_win_streak,
+      high_max_win_streak = excluded.high_max_win_streak
   `).run(
     ladderId,
-    vLowId,
-    vHighId,
+    lowVersionId,
+    highVersionId,
     delta.ww,
     delta.wt,
     delta.split,
     delta.tl,
     delta.ll,
-    pairStreaks.curStreak,
-    pairStreaks.vLowMaxWinStreak,
-    pairStreaks.vHighMaxWinStreak
+    pairStreaks.currentStreak,
+    pairStreaks.lowMaxWinStreak,
+    pairStreaks.highMaxWinStreak
   );
 }
 
@@ -126,12 +123,12 @@ export function updatePairAggregateLos(
 ) {
   const updatePairLos = db.prepare(`
     UPDATE pair_aggregates
-    SET los_low = ?
-    WHERE ladder_id = ? AND v_low_id = ? AND v_high_id = ?
+    SET low_los = ?
+    WHERE ladder_id = ? AND low_version_id = ? AND high_version_id = ?
   `);
   for (const pk of pairKeys) {
-    const losLow = computeLOS(theta, covariance, M, pk.i, pk.j);
-    updatePairLos.run(losLow, ladderId, pk.vLowId, pk.vHighId);
+    const lowLos = ratings.computeLOS(theta, covariance, M, pk.i, pk.j);
+    updatePairLos.run(lowLos, ladderId, pk.lowVersionId, pk.highVersionId);
   }
 }
 
@@ -139,22 +136,37 @@ export function getPairAggregatesForLadder(
   db: DatabaseSync,
   ladderId: string
 ): PairAggregateRow[] {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       ladder_id,
-      v_low_id,
-      v_high_id,
+      low_version_id,
+      high_version_id,
       ww,
       wt,
       split,
       tl,
       ll,
-      cur_streak,
-      v_low_max_win_streak,
-      v_high_max_win_streak,
-      los_low
+      current_streak,
+      low_max_win_streak,
+      high_max_win_streak,
+      low_los
     FROM pair_aggregates
     WHERE ladder_id = ?
-    ORDER BY v_low_id ASC, v_high_id ASC
-  `).all(ladderId) as unknown as PairAggregateRow[];
+    ORDER BY low_version_id ASC, high_version_id ASC
+  `).all(ladderId) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    ladderId: r.ladder_id as string,
+    lowVersionId: r.low_version_id as number,
+    highVersionId: r.high_version_id as number,
+    ww: r.ww as number,
+    wt: r.wt as number,
+    split: r.split as number,
+    tl: r.tl as number,
+    ll: r.ll as number,
+    currentStreak: r.current_streak as number,
+    lowMaxWinStreak: r.low_max_win_streak as number,
+    highMaxWinStreak: r.high_max_win_streak as number,
+    lowLos: (r.low_los as number | null) ?? undefined,
+  }));
 }

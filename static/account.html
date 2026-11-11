@@ -3,7 +3,7 @@
   <span class="muted">·</span>
   <span><span class="muted">Discord:</span> {{{discordHtml}}}</span>
   <span class="muted">·</span>
-  <span><span class="muted">Project:</span> <a href="{{projectHref}}" class="subtle"><strong>{{botName}}</strong></a></span>
+  <span><span class="muted">Project:</span> <a href="{{projectHref}}" class="subtle"><strong>{{projectName}}</strong></a></span>
   <span class="muted">·</span>
   <span><span class="muted">Status:</span> <span class="{{statusClass}}" title="{{statusTitle}}">{{statusLabel}}</span></span>
 </div>
@@ -19,22 +19,22 @@
         <div class="form-row-inline">
           <input id="sub-ver" name="version" class="input-text input-short" type="text" maxlength="12" placeholder="e.g. 1.0.0" required>
           <label for="sub-type">Package</label>
-          <select id="sub-type" name="format_type" class="min-select">
+          <select id="sub-type" name="package" class="min-select">
             <option value="bundle" selected>darwin/arm64 (.tar.zst)</option>
             <option value="oci">OCI image (linux/arm64)</option>
           </select>
         </div>
 
         <label for="sub-url">Artifact URL</label>
-        <input id="sub-url" name="download_url" class="input-text" type="text" spellcheck="false" placeholder="https://.../bot-darwin-arm64.tar.zst or ghcr.io/org/bot:1.0.0" required>
+        <input id="sub-url" name="url" class="input-text" type="text" spellcheck="false" placeholder="https://.../agent-darwin-arm64.tar.zst or ghcr.io/org/agent:1.0.0" required>
 
         <label for="sub-sha">SHA-256</label>
         <input id="sub-sha" name="sha256" class="input-text" type="text" spellcheck="false" placeholder="64-character hex archive or OCI manifest digest" required>
 
         <label for="sub-auth">Auth Header</label>
-        <input id="sub-auth" name="auth_token" class="input-text" type="password" autocomplete="off" placeholder="Optional one-time header for private releases (scrubbed immediately after fetch)">
+        <input id="sub-auth" name="authToken" class="input-text" type="password" autocomplete="off" placeholder="Optional one-time header for private releases (scrubbed immediately after fetch)">
 
-        {{{vgcTeamsRowHtml}}}
+        {{{poolTeamsRowHtml}}}
 
         <label>Ladders</label>
         <div class="ladders-submit-row">
@@ -80,7 +80,7 @@
       });
     }
 
-    const teamFields = document.querySelectorAll('.vgc-teams-field');
+    const teamFields = document.querySelectorAll('.pool-teams-field');
     const ladderChecks = document.querySelectorAll('input[name="ladders"]');
     const syncTeamsVisibility = () => {
       if (!teamFields.length) return;
@@ -119,10 +119,10 @@
         });
         const payload = {
           version: document.getElementById('sub-ver').value.trim(),
-          format_type: typeSelect.value,
-          download_url: urlInput.value.trim(),
+          package: typeSelect.value,
+          url: urlInput.value.trim(),
           sha256: document.getElementById('sub-sha').value.trim(),
-          auth_token: document.getElementById('sub-auth').value.trim(),
+          authToken: document.getElementById('sub-auth').value.trim(),
           ladders,
         };
         if (teamsArea && !teamsArea.closest('.hide')) {

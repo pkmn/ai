@@ -2,37 +2,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import * as site from 'site';
-import type {Renderer} from 'site/build/page';
 import * as yaml from 'yaml';
 
-import type {
-  ArenaDB,
-  LadderRow,
-  LadderSlot,
-  LadderSnapshotHistoryRow,
-  LeaderboardEntryView,
-  PairAggregateRow,
-  RecentMatchView,
-} from '../db';
-import {header, renderer as siteRenderer} from '../static/build';
+import type * as db from '../db';
+import {Renderer, header, renderer as siteRenderer} from '../static/build';
 import * as projects from '../static/projects';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
-import type {LiveJsonDocument, LiveMatchTelemetry, LiveSlotTelemetry} from './arena';
-import {
-  ELO_SCALE,
-  type PairMatchCounts,
-  computeDavidsonRatings,
-  computeLOS,
-} from './ratings';
-import {renderBotProfiles} from './render-profile';
-import {
-  type TournamentLiveBroadcast,
-  renderArenaTournamentsSummaryHtml,
-  renderTournamentsPages,
-} from './render-tournaments';
-
-export {type TournamentLiveBroadcast};
+import * as arena from './arena';
+import {renderAgentProfiles} from './profile';
+import * as ratings from './ratings';
+import * as tournaments from './tournaments';
 
 export const PUBLIC_DIR = root('public');
 export const STATIC_DIR = root('static');
@@ -66,15 +46,15 @@ export const FORMAT_TITLES: Record<string, string> = {
   gen9championsvgc2026regmc: '[Gen 9 Champions] VGC 2026 Reg M-C',
 };
 
-export interface StandingsJsonEntry {
-  rank: number | null;
-  rank_min: number | null;
-  rank_max: number | null;
-  bot_slug: string;
-  bot_name: string;
+export interface StandingsEntry {
+  rank?: number;
+  rankMin?: number;
+  rankMax?: number;
+  slug: string;
+  name: string;
   version: string;
   role: 'champion' | 'challenger' | 'retired';
-  is_anchor: boolean;
+  isAnchor: boolean;
   provisional: boolean;
   settled: boolean;
   elo: number;
@@ -87,31 +67,31 @@ export interface StandingsJsonEntry {
   ties: number;
   matches: number;
   streak: string;
-  los_next: number | null;
+  losNext?: number;
 }
 
-export interface StandingsJsonLadder {
+export interface StandingsLadder {
   id: string;
-  slot: LadderSlot;
-  display_name: string;
-  format_id: string;
+  slot: db.LadderSlot;
+  name: string;
+  format: string;
   status: string;
-  standings: StandingsJsonEntry[];
+  standings: StandingsEntry[];
 }
 
-export interface StandingsJsonDocument {
-  updated_at: number;
-  ladders: Record<string, StandingsJsonLadder>;
+export interface StandingsDocument {
+  updatedAt: number;
+  ladders: Record<string, StandingsLadder>;
 }
 
-export interface RenderArenaOptions {
-  db: ArenaDB;
+export interface Options {
+  db: db.Database;
   renderer?: Renderer;
   publicDir?: string;
   staticDir?: string;
   avatarsDir?: string;
-  liveDoc?: LiveJsonDocument | null;
-  tournamentBroadcast?: TournamentLiveBroadcast | null;
+  liveDoc?: arena.LiveDocument;
+  tournamentBroadcast?: tournaments.LiveBroadcast;
   recentMatchesLimit?: number;
   now?: number;
 }
@@ -140,7 +120,9 @@ export function copyFileAtomic(srcPath: string, destPath: string) {
   fs.renameSync(tmpPath, destPath);
 }
 
+// Escapes `<` as `\u003c` so inline `<script>` JSON payloads can never break out via `</script>`.
 export function safeInlineJson(value: unknown): string {
+  if (value === undefined) return 'undefined';
   return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
@@ -148,7 +130,7 @@ function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
   const file = path.join(staticDir, 'projects.yml');
   const map = new Map<string, ProjectMeta>();
   if (!fs.existsSync(file)) return map;
-  const parsed = yaml.parse(fs.readFileSync(file, 'utf8')) as projects.Project[] | null;
+  const parsed = yaml.parse(fs.readFileSync(file, 'utf8')) as projects.Project[] | undefined;
   if (!Array.isArray(parsed)) return map;
   for (const p of parsed) {
     if (!p.name) continue;
@@ -166,7 +148,7 @@ function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
   return map;
 }
 
-export function resolveBotHref(
+export function resolveAgentHref(
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>,
   slug: string,
@@ -186,7 +168,7 @@ export function resolveBotHref(
   return undefined;
 }
 
-export function formatBotLink(
+export function formatAgentLink(
   name: string,
   href: string | undefined,
   bold: boolean
@@ -214,66 +196,74 @@ export function formatShortDay(dayUtc: string): string {
   return `${m} ${dayNum}`;
 }
 
-function computeStreakLabel(entry: LeaderboardEntryView): {
+function parseUtcDayMillis(dayUtc: string): number {
+  return Date.parse(`${dayUtc}T00:00:00Z`);
+}
+
+function computeStreakLabel(entry: db.LeaderboardEntryView): {
   text: string;
   html: string;
 } {
-  if (entry.cur_win_streak >= 3) {
-    const s = `W${entry.cur_win_streak}`;
+  if (entry.currentWinStreak >= 3) {
+    const s = `W${entry.currentWinStreak}`;
     return {text: s, html: `<span class="yes">${s}</span>`};
   }
-  if (entry.cur_win_streak >= 1) {
-    const s = `W${entry.cur_win_streak}`;
+  if (entry.currentWinStreak >= 1) {
+    const s = `W${entry.currentWinStreak}`;
     return {text: s, html: s};
   }
-  if (entry.cur_loss_streak >= 3) {
-    const s = `L${entry.cur_loss_streak}`;
+  if (entry.currentLossStreak >= 3) {
+    const s = `L${entry.currentLossStreak}`;
     return {text: s, html: `<span class="no">${s}</span>`};
   }
-  if (entry.cur_loss_streak >= 1) {
-    const s = `L${entry.cur_loss_streak}`;
+  if (entry.currentLossStreak >= 1) {
+    const s = `L${entry.currentLossStreak}`;
     return {text: s, html: s};
   }
-  if (entry.matches_played > 0) {
+  if (entry.matches > 0) {
     return {text: 'T1', html: 'T1'};
   }
   return {text: '—', html: '<span class="muted">—</span>'};
 }
 
+// Computes pairwise Likelihood of Superiority (LOS) for each ranked entrant against the entrant
+// ranked immediately below them (`#r` vs `#(r+1)`). Uses precomputed `pair_aggregates.low_los`
+// when the two versions have already faced each other, falling back to a single warm-started
+// Davidson covariance solve when an adjacent pair has 0 direct head-to-head games.
 export function computeAdjacentLosMap(
-  entries: LeaderboardEntryView[],
-  pairs: PairAggregateRow[]
+  entries: db.LeaderboardEntryView[],
+  pairs: db.PairAggregateRow[]
 ): Map<number, number> {
   const ranked = entries
-    .filter(e => (e.role === 'champion' || e.role === 'challenger') && e.rank_current !== null)
-    .sort((a, b) => a.rank_current! - b.rank_current!);
+    .filter(e => (e.role === 'champion' || e.role === 'challenger') && e.rankCurrent !== undefined)
+    .sort((a, b) => a.rankCurrent! - b.rankCurrent!);
 
   const result = new Map<number, number>();
   if (ranked.length < 2) return result;
 
-  const pairMap = new Map<string, PairAggregateRow>();
+  const pairMap = new Map<string, db.PairAggregateRow>();
   for (const p of pairs) {
-    pairMap.set(`${p.v_low_id}:${p.v_high_id}`, p);
+    pairMap.set(`${p.lowVersionId}:${p.highVersionId}`, p);
   }
 
   let fallbackSolve: {
     indexByVer: Map<number, number>;
     theta: Float64Array;
     covariance: Float64Array;
-  } | null = null;
+  } | undefined;
 
   const ensureFallbackSolve = () => {
     if (fallbackSolve) return fallbackSolve;
     const indexByVer = new Map<number, number>();
     let anchorIdx = -1;
     for (let i = 0; i < entries.length; i++) {
-      indexByVer.set(entries[i].version_id, i);
-      if (entries[i].is_anchor === 1 && anchorIdx === -1) anchorIdx = i;
+      indexByVer.set(entries[i].versionId, i);
+      if (entries[i].isAnchor && anchorIdx === -1) anchorIdx = i;
     }
-    const indexedPairs: PairMatchCounts[] = [];
+    const indexedPairs: ratings.PairMatchCounts[] = [];
     for (const p of pairs) {
-      const idxLow = indexByVer.get(p.v_low_id);
-      const idxHigh = indexByVer.get(p.v_high_id);
+      const idxLow = indexByVer.get(p.lowVersionId);
+      const idxHigh = indexByVer.get(p.highVersionId);
       if (idxLow === undefined || idxHigh === undefined) continue;
       indexedPairs.push({
         i: idxLow,
@@ -285,8 +275,14 @@ export function computeAdjacentLosMap(
         ll: p.ll,
       });
     }
-    const warm = new Float64Array(entries.map(e => (e.rating_elo - 1500) / ELO_SCALE));
-    const solved = computeDavidsonRatings(entries.length, indexedPairs, anchorIdx, 1500, warm);
+    const warm = new Float64Array(entries.map(e => (e.elo - 1500) / ratings.ELO_SCALE));
+    const solved = ratings.computeDavidsonRatings(
+      entries.length,
+      indexedPairs,
+      anchorIdx,
+      1500,
+      warm
+    );
     fallbackSolve = {indexByVer, theta: solved.theta, covariance: solved.covariance};
     return fallbackSolve;
   };
@@ -294,25 +290,25 @@ export function computeAdjacentLosMap(
   for (let r = 0; r < ranked.length - 1; r++) {
     const cur = ranked[r];
     const next = ranked[r + 1];
-    const lowId = Math.min(cur.version_id, next.version_id);
-    const highId = Math.max(cur.version_id, next.version_id);
+    const lowId = Math.min(cur.versionId, next.versionId);
+    const highId = Math.max(cur.versionId, next.versionId);
     const pair = pairMap.get(`${lowId}:${highId}`);
-    if (pair && pair.los_low !== null) {
-      const los = cur.version_id === lowId ? pair.los_low : 1 - pair.los_low;
-      result.set(cur.version_id, los);
+    if (pair?.lowLos !== undefined) {
+      const los = cur.versionId === lowId ? pair.lowLos : 1 - pair.lowLos;
+      result.set(cur.versionId, los);
     } else {
       const solved = ensureFallbackSolve();
-      const idxCur = solved.indexByVer.get(cur.version_id);
-      const idxNext = solved.indexByVer.get(next.version_id);
+      const idxCur = solved.indexByVer.get(cur.versionId);
+      const idxNext = solved.indexByVer.get(next.versionId);
       if (idxCur !== undefined && idxNext !== undefined) {
-        const los = computeLOS(
+        const los = ratings.computeLOS(
           solved.theta,
           solved.covariance,
           entries.length,
           idxCur,
           idxNext
         );
-        result.set(cur.version_id, los);
+        result.set(cur.versionId, los);
       }
     }
   }
@@ -333,32 +329,32 @@ export function heatmapClass(scorePct: number): string {
 }
 
 function renderHistorySectionHtml(
-  ladder: LadderRow,
-  entries: LeaderboardEntryView[],
-  snapshots: LadderSnapshotHistoryRow[],
+  ladder: db.LadderRow,
+  entries: db.LeaderboardEntryView[],
+  snapshots: db.LadderSnapshotHistoryRow[],
   nowSec: number
 ): {html: string; isEmpty: boolean} {
-  const bestActiveByBot = new Map<number, LeaderboardEntryView>();
+  const bestActiveByAgent = new Map<number, db.LeaderboardEntryView>();
   for (const e of entries) {
     if (e.role !== 'champion' && e.role !== 'challenger') continue;
-    if (e.matches_played <= 0) continue;
-    if (!bestActiveByBot.has(e.bot_id)) {
-      bestActiveByBot.set(e.bot_id, e);
+    if (e.matches <= 0) continue;
+    if (!bestActiveByAgent.has(e.agentId)) {
+      bestActiveByAgent.set(e.agentId, e);
     }
   }
 
-  const topBots = [...bestActiveByBot.values()]
+  const topAgents = [...bestActiveByAgent.values()]
     .sort((a, b) => {
-      if (a.rank_current !== null && b.rank_current !== null) {
-        return a.rank_current - b.rank_current;
+      if (a.rankCurrent !== undefined && b.rankCurrent !== undefined) {
+        return a.rankCurrent - b.rankCurrent;
       }
-      if (a.rank_current !== null) return -1;
-      if (b.rank_current !== null) return 1;
-      return b.rating_lcb - a.rating_lcb || b.rating_elo - a.rating_elo;
+      if (a.rankCurrent !== undefined) return -1;
+      if (b.rankCurrent !== undefined) return 1;
+      return b.lcb - a.lcb || b.elo - a.elo;
     })
     .slice(0, SERIES_COLORS.length);
 
-  if (topBots.length === 0) {
+  if (topAgents.length === 0) {
     return {
       html: '<p class="empty-state muted">No rating history yet.</p>',
       isEmpty: true,
@@ -366,42 +362,42 @@ function renderHistorySectionHtml(
   }
 
   const todayUtc = new Date(nowSec * 1000).toISOString().slice(0, 10);
-  const snapsByBot = new Map<number, LadderSnapshotHistoryRow[]>();
+  const snapsByAgent = new Map<number, db.LadderSnapshotHistoryRow[]>();
   for (const s of snapshots) {
-    if (s.matches_played <= 0) continue;
-    const list = snapsByBot.get(s.bot_id) ?? [];
+    if (s.matches <= 0) continue;
+    const list = snapsByAgent.get(s.agentId) ?? [];
     list.push(s);
-    snapsByBot.set(s.bot_id, list);
+    snapsByAgent.set(s.agentId, list);
   }
 
   interface PlottedPoint {
     day: string;
     versionId: number;
-    versionStr: string;
+    version: string;
     elo: number;
     se: number;
   }
 
-  const seriesByBot = new Map<number, PlottedPoint[]>();
+  const seriesByAgent = new Map<number, PlottedPoint[]>();
   const allDaysSet = new Set<string>();
 
-  for (const bot of topBots) {
-    const raw = snapsByBot.get(bot.bot_id) ?? [];
-    const hasSettledDay = raw.some(r => r.matches_played >= 10 || r.rating_se <= 60);
+  for (const agent of topAgents) {
+    const raw = snapsByAgent.get(agent.agentId) ?? [];
+    const hasSettledDay = raw.some(r => r.matches >= 10 || r.se <= 60);
     const filtered = hasSettledDay
-      ? raw.filter(r => r.matches_played >= 10 || r.rating_se <= 60)
+      ? raw.filter(r => r.matches >= 10 || r.se <= 60)
       : raw;
 
     const byDay = new Map<string, PlottedPoint>();
     for (const r of filtered) {
-      const prev = byDay.get(r.day_utc);
-      if (!prev || r.rating_elo > prev.elo) {
-        byDay.set(r.day_utc, {
-          day: r.day_utc,
-          versionId: r.version_id,
-          versionStr: r.version_str,
-          elo: r.rating_elo,
-          se: r.rating_se,
+      const prev = byDay.get(r.dayUtc);
+      if (!prev || r.elo > prev.elo) {
+        byDay.set(r.dayUtc, {
+          day: r.dayUtc,
+          versionId: r.versionId,
+          version: r.version,
+          elo: r.elo,
+          se: r.se,
         });
       }
     }
@@ -409,25 +405,25 @@ function renderHistorySectionHtml(
     if (!byDay.has(todayUtc)) {
       byDay.set(todayUtc, {
         day: todayUtc,
-        versionId: bot.version_id,
-        versionStr: bot.version_str,
-        elo: bot.rating_elo,
-        se: bot.rating_se,
+        versionId: agent.versionId,
+        version: agent.version,
+        elo: agent.elo,
+        se: agent.se,
       });
     }
 
     const pts = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
     for (const pt of pts) allDaysSet.add(pt.day);
-    seriesByBot.set(bot.bot_id, pts);
+    seriesByAgent.set(agent.agentId, pts);
   }
 
   const allDays = [...allDaysSet].sort((a, b) => a.localeCompare(b));
-  const dayIndex = new Map<string, number>();
-  for (let i = 0; i < allDays.length; i++) dayIndex.set(allDays[i], i);
+  const minDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[0]) : 0;
+  const maxDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[allDays.length - 1]) : 0;
 
   let minElo = 1350;
   let maxElo = 1800;
-  for (const pts of seriesByBot.values()) {
+  for (const pts of seriesByAgent.values()) {
     for (const pt of pts) {
       if (pt.elo - 40 < minElo) minElo = pt.elo - 40;
       if (pt.elo + 40 > maxElo) maxElo = pt.elo + 40;
@@ -440,10 +436,12 @@ function renderHistorySectionHtml(
   const xLeft = 45;
   const xRight = 625;
 
+  // Map YYYY-MM-DD dates proportionally by UTC timestamp so irregular snapshot gaps reflect true
+  // elapsed days rather than stretching sparse early days to equal pixel widths.
   const mapX = (day: string): number => {
-    if (allDays.length <= 1) return xRight;
-    const idx = dayIndex.get(day) ?? 0;
-    return Math.round((xLeft + (idx / (allDays.length - 1)) * (xRight - xLeft)) * 10) / 10;
+    if (maxDayMillis <= minDayMillis) return xRight;
+    const frac = (parseUtcDayMillis(day) - minDayMillis) / (maxDayMillis - minDayMillis);
+    return Math.round((xLeft + frac * (xRight - xLeft)) * 10) / 10;
   };
   const mapY = (elo: number): number => {
     const clamped = Math.max(axisMin, Math.min(axisMax, elo));
@@ -462,28 +460,35 @@ function renderHistorySectionHtml(
   gridLines.push(`<line x1="${xLeft}" y1="215" x2="${xRight}" y2="215" />`);
 
   const xLabels: string[] = [];
-  if (allDays.length === 1) {
+  if (maxDayMillis <= minDayMillis) {
     xLabels.push(`<text x="${xLeft}" y="234">${escapeHtml(formatShortDay(allDays[0]))}</text>`);
     xLabels.push(`<text x="${xRight}" y="234">Today</text>`);
   } else {
+    const seenTickX = new Set<number>();
     const tickCount = Math.min(5, allDays.length);
-    const chosenIndices = new Set<number>();
     for (let k = 0; k < tickCount; k++) {
-      chosenIndices.add(Math.round((k / (tickCount - 1)) * (allDays.length - 1)));
-    }
-    const sortedTickIndices = [...chosenIndices].sort((a, b) => a - b);
-    for (const idx of sortedTickIndices) {
-      const d = allDays[idx];
-      const x = mapX(d);
-      const label = idx === allDays.length - 1 && d === todayUtc
+      const targetMillis = minDayMillis + (k / (tickCount - 1)) * (maxDayMillis - minDayMillis);
+      let bestDay = allDays[0];
+      let bestDist = Infinity;
+      for (const d of allDays) {
+        const dist = Math.abs(parseUtcDayMillis(d) - targetMillis);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestDay = d;
+        }
+      }
+      const x = mapX(bestDay);
+      if ([...seenTickX].some(prevX => Math.abs(prevX - x) < 55)) continue;
+      seenTickX.add(x);
+      const label = bestDay === todayUtc && bestDay === allDays[allDays.length - 1]
         ? 'Today'
-        : formatShortDay(d);
+        : formatShortDay(bestDay);
       xLabels.push(`<text x="${x}" y="234">${escapeHtml(label)}</text>`);
     }
   }
 
   interface LabelSpec {
-    botIndex: number;
+    agentIndex: number;
     y: number;
     text: string;
     color: string;
@@ -493,10 +498,10 @@ function renderHistorySectionHtml(
   const labelSpecs: LabelSpec[] = [];
   const svgElements: string[] = [];
 
-  for (let bIdx = topBots.length - 1; bIdx >= 0; bIdx--) {
-    const bot = topBots[bIdx];
-    const color = SERIES_COLORS[bIdx];
-    const pts = seriesByBot.get(bot.bot_id) ?? [];
+  for (let aIdx = topAgents.length - 1; aIdx >= 0; aIdx--) {
+    const agent = topAgents[aIdx];
+    const color = SERIES_COLORS[aIdx];
+    const pts = seriesByAgent.get(agent.agentId) ?? [];
     if (pts.length === 0) continue;
 
     const coords = pts.length === 1
@@ -506,7 +511,7 @@ function renderHistorySectionHtml(
       ]
       : pts.map(pt => ({x: mapX(pt.day), y: mapY(pt.elo), pt}));
 
-    if (bIdx === 0 && coords.length >= 2) {
+    if (aIdx === 0 && coords.length >= 2) {
       const upper = coords.map(c => `${c.x},${mapY(c.pt.elo + 1.96 * c.pt.se)}`);
       const lower = [...coords].reverse().map(c => `${c.x},${mapY(c.pt.elo - 1.96 * c.pt.se)}`);
       svgElements.push(
@@ -515,7 +520,7 @@ function renderHistorySectionHtml(
       );
     }
 
-    const strokeW = bIdx === 0 ? '2.25' : bIdx === 1 ? '1.85' : '1.75';
+    const strokeW = aIdx === 0 ? '2.25' : aIdx === 1 ? '1.85' : '1.75';
     const polyPts = coords.map(c => `${c.x},${c.y}`).join(' ');
     svgElements.push(
       `<polyline fill="none" stroke="${color}" stroke-width="${strokeW}" points="${polyPts}" />`
@@ -527,24 +532,24 @@ function renderHistorySectionHtml(
         const cy = mapY(pts[k].elo);
         svgElements.push(
           `<circle cx="${cx}" cy="${cy}" r="2.5" fill="${color}" ` +
-          `title="${escapeHtml(pts[k].versionStr)}" />`
+          `title="${escapeHtml(pts[k].version)}" />`
         );
       }
     }
 
     const lastCoord = coords[coords.length - 1];
-    if (bIdx === 0) {
+    if (aIdx === 0) {
       svgElements.push(
         `<circle cx="${lastCoord.x}" cy="${lastCoord.y}" r="3" fill="${color}" />`
       );
     }
 
     labelSpecs.push({
-      botIndex: bIdx,
+      agentIndex: aIdx,
       y: lastCoord.y + 3,
-      text: `${bot.bot_name} (${Math.round(bot.rating_elo)})`,
+      text: `${agent.agentName} (${Math.round(agent.elo)})`,
       color,
-      bold: bIdx <= 1,
+      bold: aIdx <= 1,
     });
   }
 
@@ -569,7 +574,7 @@ function renderHistorySectionHtml(
     `${l.bold ? ' font-weight="bold"' : ''}>${escapeHtml(l.text)}</text>`
   ));
 
-  const ariaLabel = `${escapeHtml(ladder.display_name)} Top Bot Rating History`;
+  const ariaLabel = `${escapeHtml(ladder.name)} Top Agent Rating History`;
   return {
     html: `<figure class="chart">
       <svg viewBox="0 0 760 245" role="img" aria-label="${ariaLabel}">
@@ -591,21 +596,21 @@ function renderHistorySectionHtml(
 }
 
 function renderMatchupsSectionHtml(
-  entries: LeaderboardEntryView[],
-  pairs: PairAggregateRow[],
+  entries: db.LeaderboardEntryView[],
+  pairs: db.PairAggregateRow[],
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>,
   profileSlugs: ReadonlySet<string>
 ): {html: string; isEmpty: boolean} {
   const ranked = entries
-    .filter(e => (e.role === 'champion' || e.role === 'challenger') && e.rank_current !== null)
-    .sort((a, b) => a.rank_current! - b.rank_current!)
+    .filter(e => (e.role === 'champion' || e.role === 'challenger') && e.rankCurrent !== undefined)
+    .sort((a, b) => a.rankCurrent! - b.rankCurrent!)
     .slice(0, 20);
 
   const participants = ranked.length >= 2
     ? ranked
     : entries
-      .filter(e => e.role === 'champion' && e.matches_played > 0)
+      .filter(e => e.role === 'champion' && e.matches > 0)
       .slice(0, 20);
 
   if (participants.length < 2) {
@@ -615,39 +620,39 @@ function renderMatchupsSectionHtml(
     };
   }
 
-  const pairMap = new Map<string, PairAggregateRow>();
+  const pairMap = new Map<string, db.PairAggregateRow>();
   for (const p of pairs) {
-    pairMap.set(`${p.v_low_id}:${p.v_high_id}`, p);
+    pairMap.set(`${p.lowVersionId}:${p.highVersionId}`, p);
   }
 
   // Note: `&nbsp;` prevents `site`'s `html-minifier` (`removeEmptyElements: true`)
   // from stripping the top-left corner `<th>` cell.
   const colHeaders = participants
-    .map(p => `<th>${escapeHtml(p.bot_name)}</th>`)
+    .map(p => `<th>${escapeHtml(p.agentName)}</th>`)
     .join('');
 
   const bodyRows = participants.map(rowEntry => {
-    const rowHref = resolveBotHref(
+    const rowHref = resolveAgentHref(
       publicDir,
       projectMeta,
-      rowEntry.bot_slug,
-      rowEntry.bot_name,
+      rowEntry.agentSlug,
+      rowEntry.agentName,
       profileSlugs
     );
-    const rowLabel = `${formatBotLink(rowEntry.bot_name, rowHref, true)} ` +
-      `<code>${escapeHtml(rowEntry.version_str)}</code>`;
+    const rowLabel = `${formatAgentLink(rowEntry.agentName, rowHref, true)} ` +
+      `<code>${escapeHtml(rowEntry.version)}</code>`;
 
     const cells = participants.map(colEntry => {
-      if (rowEntry.version_id === colEntry.version_id) {
+      if (rowEntry.versionId === colEntry.versionId) {
         return '<td class="diag">—</td>';
       }
-      const lowId = Math.min(rowEntry.version_id, colEntry.version_id);
-      const highId = Math.max(rowEntry.version_id, colEntry.version_id);
+      const lowId = Math.min(rowEntry.versionId, colEntry.versionId);
+      const highId = Math.max(rowEntry.versionId, colEntry.versionId);
       const pair = pairMap.get(`${lowId}:${highId}`);
       if (!pair) {
         return '<td class="muted">—</td>';
       }
-      const isLow = rowEntry.version_id === lowId;
+      const isLow = rowEntry.versionId === lowId;
       const wins = isLow ? pair.ww + pair.wt : pair.ll + pair.tl;
       const losses = isLow ? pair.ll + pair.tl : pair.ww + pair.wt;
       const ties = pair.split;
@@ -659,8 +664,8 @@ function renderMatchupsSectionHtml(
       const scoreStr = `${scorePct.toFixed(1)}%`;
       const scoreHtml = scorePct > 50 ? `<strong>${scoreStr}</strong>` : scoreStr;
       const cls = heatmapClass(scorePct);
-      const losPart = pair.los_low !== null
-        ? ` · LOS ${((isLow ? pair.los_low : 1 - pair.los_low) * 100).toFixed(1)}%`
+      const losPart = pair.lowLos !== undefined
+        ? ` · LOS ${((isLow ? pair.lowLos : 1 - pair.lowLos) * 100).toFixed(1)}%`
         : '';
       const tip = `${wins}W–${losses}L–${ties}T (${total} matches)${losPart}`;
       const clsAttr = cls ? ` class="${cls}"` : '';
@@ -690,7 +695,7 @@ function renderMatchupsSectionHtml(
 }
 
 export function renderArenaAndLadderArtifacts(opts: {
-  db: ArenaDB;
+  db: db.Database;
   renderer: Renderer;
   publicDir: string;
   staticDir: string;
@@ -700,13 +705,13 @@ export function renderArenaAndLadderArtifacts(opts: {
 }): {
   arenaHtml: string;
   ladderHtmlBySlot: Record<string, string>;
-  standingsJson: StandingsJsonDocument;
+  standingsJson: StandingsDocument;
 } {
   const {db, renderer, publicDir, staticDir, projectMeta, profileSlugs, nowSec} = opts;
   const ladders = db.getCurrentLadders();
 
   const ladderHtmlBySlot: Record<string, string> = {};
-  const jsonLadders: Record<string, StandingsJsonLadder> = {};
+  const jsonLadders: Record<string, StandingsLadder> = {};
   const ladderSummaryRows: string[] = [];
 
   for (const l of ladders) {
@@ -720,33 +725,33 @@ export function renderArenaAndLadderArtifacts(opts: {
       const href = `/arena/ladders/${encodeURIComponent(other.slot)}/`;
       const isCurrent = other.slot === l.slot;
       const label = isCurrent
-        ? `<strong>${escapeHtml(other.display_name)}</strong>`
-        : escapeHtml(other.display_name);
+        ? `<strong>${escapeHtml(other.name)}</strong>`
+        : escapeHtml(other.name);
       const curAttr = isCurrent ? ' aria-current="page"' : '';
       return `${sep}<li id="${escapeHtml(other.slot)}">` +
         `<a href="${escapeHtml(href)}" class="subtle"${curAttr}>${label}</a></li>`;
     }).join('');
 
-    const seenBestActiveBot = new Set<number>();
-    const jsonRows: StandingsJsonEntry[] = [];
-    let top1SummaryCells = null as string | null;
+    const seenBestActiveAgent = new Set<number>();
+    const jsonRows: StandingsEntry[] = [];
+    let top1SummaryCells: string | undefined;
     let standingsPane: string;
 
     if (entries.length === 0) {
       const msg = l.status === 'upcoming'
-        ? `${escapeHtml(l.display_name)} ladder is upcoming — submissions are not open yet.`
-        : `No active entries on ${escapeHtml(l.display_name)} yet.`;
+        ? `${escapeHtml(l.name)} ladder is upcoming — submissions are not open yet.`
+        : `No active entries on ${escapeHtml(l.name)} yet.`;
       standingsPane = `<p class="empty-state muted">${msg}</p>`;
     } else {
       const rowsHtml = entries.map(e => {
         const isRetired = e.role === 'retired';
         const isActive = e.role === 'champion' || e.role === 'challenger';
-        const isProvisional = isActive && (e.matches_played < 10 || e.rating_se > 60);
-        const isBestActive = isActive && !seenBestActiveBot.has(e.bot_id);
-        if (isBestActive) seenBestActiveBot.add(e.bot_id);
+        const isProvisional = isActive && (e.matches < 10 || e.se > 60);
+        const isBestActive = isActive && !seenBestActiveAgent.has(e.agentId);
+        if (isBestActive) seenBestActiveAgent.add(e.agentId);
         const isSecondaryActive = isActive && !isBestActive;
         const isRankedPrimary =
-          isActive && !isProvisional && isBestActive && e.rank_current !== null;
+          isActive && !isProvisional && isBestActive && e.rankCurrent !== undefined;
 
         const classes: string[] = [];
         const dataAttrs: string[] = [];
@@ -769,29 +774,35 @@ export function renderArenaAndLadderArtifacts(opts: {
 
         let rankCell: string;
         if (isRankedPrimary) {
-          rankCell = `<td><strong>${e.rank_current}</strong></td>`;
+          rankCell = `<td><strong>${e.rankCurrent}</strong></td>`;
         } else if (isRetired) {
           rankCell = '<td class="muted" title="Retired version">—</td>';
         } else if (isSecondaryActive) {
-          const anchorNote = e.is_anchor === 1 ? ' (1500 Elo anchor)' : '';
+          const anchorNote = e.isAnchor ? ' (1500 Elo anchor)' : '';
           rankCell = `<td class="muted" title="Secondary active version${anchorNote}">—</td>`;
         } else {
           rankCell = '<td class="muted">—</td>';
         }
 
-        const href = resolveBotHref(publicDir, projectMeta, e.bot_slug, e.bot_name, profileSlugs);
-        const nameHtml = formatBotLink(e.bot_name, href, isRankedPrimary);
-        const meta = projectMeta.get(e.bot_name);
+        const href = resolveAgentHref(
+          publicDir,
+          projectMeta,
+          e.agentSlug,
+          e.agentName,
+          profileSlugs
+        );
+        const nameHtml = formatAgentLink(e.agentName, href, isRankedPrimary);
+        const meta = projectMeta.get(e.agentName);
         const repoIcon = isBestActive && meta?.source
           ? ` <a href="${escapeHtml(meta.source)}" class="subtle ext" ` +
             `title="Source">${EXT_ICON}</a>`
           : '';
         const retiredTag = isRetired ? ' <span class="muted">(retired)</span>' : '';
-        const botCell = `<td>${nameHtml} <code>${escapeHtml(e.version_str)}</code>` +
+        const agentCell = `<td>${nameHtml} <code>${escapeHtml(e.version)}</code>` +
           `${repoIcon}${retiredTag}</td>`;
 
-        const eloRounded = Math.round(e.rating_elo);
-        const ci95 = e.is_anchor === 1 ? 0 : Math.round(1.96 * e.rating_se);
+        const eloRounded = Math.round(e.elo);
+        const ci95 = e.isAnchor ? 0 : Math.round(1.96 * e.se);
         const eloInner = isRankedPrimary ? `<strong>${eloRounded}</strong>` : `${eloRounded}`;
         const eloCell = `<td class="num">${eloInner} <span class="muted">±${ci95}</span></td>`;
 
@@ -804,56 +815,56 @@ export function renderArenaAndLadderArtifacts(opts: {
         const streak = computeStreakLabel(e);
         const streakCell = `<td class="center">${streak.html}</td>`;
 
-        const adjLos = isRankedPrimary ? adjacentLos.get(e.version_id) : undefined;
-        const losPct = adjLos !== undefined ? Math.round(adjLos * 1000) / 10 : null;
+        const adjLos = isRankedPrimary ? adjacentLos.get(e.versionId) : undefined;
+        const losPct = adjLos !== undefined ? Math.round(adjLos * 1000) / 10 : undefined;
         const losCell = adjLos !== undefined
           ? `<td class="num">${(adjLos * 100).toFixed(1)}%</td>`
           : '<td class="num muted">—</td>';
 
-        if (isRankedPrimary && e.rank_current === 1 && top1SummaryCells === null) {
-          top1SummaryCells = `${botCell}${eloCell}${gxeCell}${wltCell}${streakCell}${losCell}`;
+        if (isRankedPrimary && e.rankCurrent === 1 && top1SummaryCells === undefined) {
+          top1SummaryCells = `${agentCell}${eloCell}${gxeCell}${wltCell}${streakCell}${losCell}`;
         }
 
         jsonRows.push({
-          rank: isRankedPrimary ? e.rank_current : null,
-          rank_min: isRankedPrimary ? e.rank_min : null,
-          rank_max: isRankedPrimary ? e.rank_max : null,
-          bot_slug: e.bot_slug,
-          bot_name: e.bot_name,
-          version: e.version_str,
+          rank: isRankedPrimary ? e.rankCurrent : undefined,
+          rankMin: isRankedPrimary ? e.rankMin : undefined,
+          rankMax: isRankedPrimary ? e.rankMax : undefined,
+          slug: e.agentSlug,
+          name: e.agentName,
+          version: e.version,
           role: e.role,
-          is_anchor: e.is_anchor === 1,
+          isAnchor: e.isAnchor,
           provisional: isProvisional,
-          settled: e.settled_at !== null,
+          settled: e.settledAt !== undefined,
           elo: eloRounded,
-          se: Math.round(e.rating_se * 10) / 10,
+          se: Math.round(e.se * 10) / 10,
           ci95,
-          lcb: Math.round(e.rating_lcb),
+          lcb: Math.round(e.lcb),
           gxe: Math.round(e.gxe * 10) / 10,
           wins,
           losses,
           ties,
-          matches: e.matches_played,
+          matches: e.matches,
           streak: streak.text,
-          los_next: losPct,
+          losNext: losPct,
         });
 
         const clsAttr = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
         const dAttrs = dataAttrs.length > 0 ? ` ${dataAttrs.join(' ')}` : '';
         return `<tr${clsAttr}${dAttrs}${rowTitle}>` +
-          `${rankCell}${botCell}${eloCell}${gxeCell}${wltCell}${streakCell}${losCell}</tr>`;
+          `${rankCell}${agentCell}${eloCell}${gxeCell}${wltCell}${streakCell}${losCell}</tr>`;
       }).join('');
 
       const thGxe = 'Expected win percentage against prior N(1500, 350^2)';
       const thWlt = '2-game blind-pair Match Wins – Losses – Ties (1-1 splits)';
       const thStreak = 'Current consecutive outright match win/loss streak';
-      const thLos = 'Pairwise Likelihood of Superiority over the next-ranked settled bot';
+      const thLos = 'Pairwise Likelihood of Superiority over the next-ranked settled agent';
       standingsPane = `<div class="table-wrap">
         <table class="standings-table">
           <thead>
             <tr>
               <th title="Official rank by Conservative Rating (Elo - 1.96 * SE)">#</th>
-              <th>Bot</th>
+              <th>Agent</th>
               <th class="num" title="MAP Davidson Elo ± 95% Confidence Interval">Elo</th>
               <th class="num" title="${thGxe}">GXE</th>
               <th class="num" title="${thWlt}">W–L–T</th>
@@ -866,14 +877,14 @@ export function renderArenaAndLadderArtifacts(opts: {
       </div>`;
     }
 
-    const fmtTitle = FORMAT_TITLES[l.format_id] ?? l.format_id;
+    const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
     const ladderHref = `/arena/ladders/${encodeURIComponent(l.slot)}/`;
     const ladderCell =
       `<td><a href="${escapeHtml(ladderHref)}" class="subtle" ` +
-      `title="${escapeHtml(fmtTitle)}"><strong><tt>${escapeHtml(l.display_name)}</tt></strong>` +
+      `title="${escapeHtml(fmtTitle)}"><strong><tt>${escapeHtml(l.name)}</tt></strong>` +
       '</a></td>';
 
-    if (top1SummaryCells !== null) {
+    if (top1SummaryCells !== undefined) {
       ladderSummaryRows.push(`<tr>${ladderCell}${top1SummaryCells}</tr>`);
     } else {
       const stateLabel = l.status === 'upcoming'
@@ -912,7 +923,7 @@ export function renderArenaAndLadderArtifacts(opts: {
 
     ladderHtmlBySlot[l.slot] = renderer.render({
       id: 'leaderboard',
-      title: `Arena — ${l.display_name} | pkmn.ai`,
+      title: `Arena — ${l.name} | pkmn.ai`,
       header: header('<a href="/arena/" class="subtle">Ladders</a>'),
       path: `/arena/ladders/${l.slot}/`,
       style: ARENA_STYLE,
@@ -922,8 +933,8 @@ export function renderArenaAndLadderArtifacts(opts: {
     jsonLadders[l.slot] = {
       id: l.id,
       slot: l.slot,
-      display_name: l.display_name,
-      format_id: l.format_id,
+      name: l.name,
+      format: l.format,
       status: l.status,
       standings: jsonRows,
     };
@@ -932,7 +943,7 @@ export function renderArenaAndLadderArtifacts(opts: {
   const arenaDjPath = path.join(staticDir, 'arena.dj');
   const blurbDj = fs.existsSync(arenaDjPath) ? fs.readFileSync(arenaDjPath, 'utf8') : '';
   const blurbHtml = site.html.render(blurbDj);
-  const tournamentsSummaryHtml = renderArenaTournamentsSummaryHtml({
+  const tournamentsSummaryHtml = tournaments.renderArenaTournamentsSummaryHtml({
     db,
     publicDir,
     projectMeta,
@@ -958,7 +969,7 @@ export function renderArenaAndLadderArtifacts(opts: {
     arenaHtml,
     ladderHtmlBySlot,
     standingsJson: {
-      updated_at: nowSec,
+      updatedAt: nowSec,
       ladders: jsonLadders,
     },
   };
@@ -966,23 +977,25 @@ export function renderArenaAndLadderArtifacts(opts: {
 
 function renderLiveSlotCard(
   key: 'p1' | 'p2',
-  slotData: LiveSlotTelemetry,
-  live: LiveMatchTelemetry,
+  slotData: arena.LiveSlot,
+  live: arena.LiveMatch,
   nowSec: number,
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>
 ): string {
-  const isRunning = live.active_slot === key;
+  const isRunning = live.activeSlot === key;
   const otherKey = key === 'p1' ? 'p2' : 'p1';
-  const elapsed = isRunning ? Math.max(0, nowSec - live.turn_started_at) : 0;
-  const budget = isRunning ? Math.round(live.turn_budget_s) : Math.round(slotData.bank_s);
+  const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
+  const budget = isRunning
+    ? Math.round(live.turnBudgetSeconds)
+    : Math.round(slotData.bankSeconds);
   const bank = isRunning
-    ? Math.max(0, Math.round(slotData.bank_s - elapsed))
-    : Math.round(slotData.bank_s);
-  const inc = Math.round(live.increment_s);
-  const ramPct = ((slotData.ram_mb / 14336) * 100).toFixed(1);
-  const href = resolveBotHref(publicDir, projectMeta, slotData.slug, slotData.name);
-  const botHtml = `${formatBotLink(slotData.name, href, true)} ` +
+    ? Math.max(0, Math.round(slotData.bankSeconds - elapsed))
+    : Math.round(slotData.bankSeconds);
+  const inc = Math.round(live.incrementSeconds);
+  const ramPct = ((slotData.ram / 14336) * 100).toFixed(1);
+  const href = resolveAgentHref(publicDir, projectMeta, slotData.slug, slotData.name);
+  const agentHtml = `${formatAgentLink(slotData.name, href, true)} ` +
     `<code>${escapeHtml(slotData.version)}</code>`;
 
   const badge = isRunning
@@ -995,10 +1008,10 @@ function renderLiveSlotCard(
     `Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +${inc}s/turn`;
 
   const turnCls = isRunning ? 'yes' : 'muted';
-  const ramText = `${Math.round(slotData.ram_mb).toLocaleString('en-US')} MiB`;
+  const ramText = `${Math.round(slotData.ram).toLocaleString('en-US')} MiB`;
   return `<div class="slot-card ${isRunning ? 'running' : 'paused'}" id="slot-${key}">
     <div class="slot-top">
-      <span><tt>${key}</tt> ${botHtml}</span>
+      <span><tt>${key}</tt> ${agentHtml}</span>
       ${badge}
     </div>
     <div class="slot-timers" title="${escapeHtml(timerTitle)}">
@@ -1008,8 +1021,8 @@ function renderLiveSlotCard(
         `<span class="muted">(+${inc}s/turn)</span></span>
     </div>
     <div class="slot-telemetry">
-      <span>Last: <tt>${Math.round(slotData.last_turn_ms)} ms</tt></span>
-      <span>Mean: <tt>${Math.round(slotData.mean_turn_ms)} ms/turn</tt></span>
+      <span>Last: <tt>${Math.round(slotData.lastTurnMillis)} ms</tt></span>
+      <span>Mean: <tt>${Math.round(slotData.meanTurnMillis)} ms/turn</tt></span>
       <span title="XNU ri_phys_footprint (14 GiB limit)">RAM: ` +
         `<tt>${ramText}</tt> (${ramPct}%)</span>
     </div>
@@ -1017,7 +1030,7 @@ function renderLiveSlotCard(
 }
 
 function renderLivePanelInner(
-  liveDoc: LiveJsonDocument | null,
+  liveDoc: arena.LiveDocument | undefined,
   nowSec: number,
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>
@@ -1030,25 +1043,25 @@ function renderLivePanelInner(
   }
 
   const l = liveDoc.live;
-  const fmtTitle = FORMAT_TITLES[l.format_id] ?? l.format_id;
+  const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
   let g1Html = '';
-  if (l.g1_summary) {
-    const g1Res = l.g1_summary.winner_slot === 'p1'
+  if (l.game1Summary) {
+    const g1Res = l.game1Summary.winnerSlot === 'p1'
       ? `${escapeHtml(l.p1.name)} 1–0`
-      : l.g1_summary.winner_slot === 'p2'
+      : l.game1Summary.winnerSlot === 'p2'
         ? `${escapeHtml(l.p2.name)} 1–0`
         : 'Tie';
-    g1Html = ` <span class="muted">(<tt>G1</tt>: ${g1Res}, ${l.g1_summary.turns} turns)</span>`;
+    g1Html = ` <span class="muted">(<tt>G1</tt>: ${g1Res}, ${l.game1Summary.turns} turns)</span>`;
   }
-  const hbAge = Math.max(0, nowSec - liveDoc.updated_at);
-  const gameText = `<strong>Game ${l.game_num} / 2</strong>, Turn ${l.turn}${g1Html}`;
+  const hbAge = Math.max(0, nowSec - liveDoc.updatedAt);
+  const gameText = `<strong>Game ${l.game} / 2</strong>, Turn ${l.turn}${g1Html}`;
 
   return `<div class="live-header">
     <span>
-      <code>${escapeHtml(l.match_id)}</code> · <tt>${escapeHtml(fmtTitle)}</tt> · ${gameText}
+      <code>${escapeHtml(l.matchId)}</code> · <tt>${escapeHtml(fmtTitle)}</tt> · ${gameText}
     </span>
     <span class="muted">
-      Heartbeat <tt>#${l.heartbeat_seq}</tt> (<tt id="hb-age">${hbAge}s</tt> ago)
+      Heartbeat <tt>#${l.heartbeatSeq}</tt> (<tt id="hb-age">${hbAge}s</tt> ago)
     </span>
   </div>
   <div class="slots-grid">
@@ -1057,7 +1070,7 @@ function renderLivePanelInner(
   </div>`;
 }
 
-function renderMatchOutcomeDisplay(cat: RecentMatchView['match_category']): {
+function renderMatchOutcomeDisplay(cat: db.RecentMatchView['category']): {
   p1Win: boolean;
   p2Win: boolean;
   html: string;
@@ -1074,11 +1087,11 @@ function renderMatchOutcomeDisplay(cat: RecentMatchView['match_category']): {
 }
 
 export function renderBattlesPage(opts: {
-  db: ArenaDB;
+  db: db.Database;
   renderer: Renderer;
   publicDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
-  liveDoc: LiveJsonDocument | null;
+  liveDoc?: arena.LiveDocument;
   recentMatchesLimit: number;
   nowSec: number;
 }): string {
@@ -1091,28 +1104,28 @@ export function renderBattlesPage(opts: {
     return `—
     <li>
       <input type="radio" name="bformat" id="bf-${slotEsc}" value="${slotEsc}">
-      <label for="bf-${slotEsc}">${escapeHtml(l.display_name)}</label>
+      <label for="bf-${slotEsc}">${escapeHtml(l.name)}</label>
     </li>`;
   }).join('\n    ');
 
-  const botLinks: Record<string, string> = {};
+  const agentLinks: Record<string, string> = {};
   for (const s of db.getProjectArenaSummaries()) {
-    const href = resolveBotHref(publicDir, projectMeta, s.slug, s.name);
-    if (href) botLinks[s.slug] = href;
+    const href = resolveAgentHref(publicDir, projectMeta, s.slug, s.name);
+    if (href) agentLinks[s.slug] = href;
   }
   for (const m of recentMatches) {
     for (const side of [m.p1, m.p2]) {
-      if (!botLinks[side.slug]) {
-        const href = resolveBotHref(publicDir, projectMeta, side.slug, side.name);
-        if (href) botLinks[side.slug] = href;
+      if (!agentLinks[side.slug]) {
+        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name);
+        if (href) agentLinks[side.slug] = href;
       }
     }
   }
   if (liveDoc?.live) {
     for (const side of [liveDoc.live.p1, liveDoc.live.p2]) {
-      if (!botLinks[side.slug]) {
-        const href = resolveBotHref(publicDir, projectMeta, side.slug, side.name);
-        if (href) botLinks[side.slug] = href;
+      if (!agentLinks[side.slug]) {
+        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name);
+        if (href) agentLinks[side.slug] = href;
       }
     }
   }
@@ -1121,39 +1134,38 @@ export function renderBattlesPage(opts: {
     ? '<tr class="empty-row"><td colspan="6" class="center muted">' +
       'No completed battles yet.</td></tr>'
     : recentMatches.map(m => {
-      const r = renderMatchOutcomeDisplay(m.match_category);
-      const p1Href = botLinks[m.p1.slug];
-      const p2Href = botLinks[m.p2.slug];
-      const p1Cell = `${formatBotLink(m.p1.name, p1Href, r.p1Win)} ` +
+      const r = renderMatchOutcomeDisplay(m.category);
+      const p1Href = agentLinks[m.p1.slug];
+      const p2Href = agentLinks[m.p2.slug];
+      const p1Cell = `${formatAgentLink(m.p1.name, p1Href, r.p1Win)} ` +
         `<code>${escapeHtml(m.p1.version)}</code>`;
-      const p2Cell = `${formatBotLink(m.p2.name, p2Href, r.p2Win)} ` +
+      const p2Cell = `${formatAgentLink(m.p2.name, p2Href, r.p2Win)} ` +
         `<code>${escapeHtml(m.p2.version)}</code>`;
 
-      const b1 = Math.round(Math.min(m.v1_g1_bank_s, m.v1_g2_bank_s));
-      const b2 = Math.round(Math.min(m.v2_g1_bank_s, m.v2_g2_bank_s));
+      const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
+      const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
       const tip =
-        `${m.match_category} · ${Math.round(m.v1_avg_turn_ms)}ms/` +
-        `${Math.round(m.v2_avg_turn_ms)}ms · Bank ${b1}s/${b2}s · RAM ` +
-        `${Math.round(m.v1_peak_ram_mb).toLocaleString('en-US')}M/` +
-        `${Math.round(m.v2_peak_ram_mb).toLocaleString('en-US')}M`;
+        `${m.category} · ${Math.round(m.p1MeanTurnMillis)}ms/` +
+        `${Math.round(m.p2MeanTurnMillis)}ms · Bank ${b1}s/${b2}s · RAM ` +
+        `${Math.round(m.p1PeakRam).toLocaleString('en-US')}M/` +
+        `${Math.round(m.p2PeakRam).toLocaleString('en-US')}M`;
 
       const idEsc = escapeHtml(m.id);
-      const rel = formatRelativeTime(nowSec, m.completed_at);
+      const rel = formatRelativeTime(nowSec, m.completedAt);
       return `<tr id="${idEsc}" data-fmt="${escapeHtml(m.slot)}">
         <td><a href="#${idEsc}" class="subtle"><code>${idEsc}</code></a></td>
         <td>${p1Cell}</td>
         <td>${p2Cell}</td>
         <td class="center" title="${escapeHtml(tip)}">${r.html}</td>
-        <td class="num">${m.g1_turns} / ${m.g2_turns}</td>
-        <td class="num muted" data-ts="${m.completed_at}">${rel}</td>
+        <td class="num">${m.game1Turns} / ${m.game2Turns}</td>
+        <td class="num muted" data-ts="${m.completedAt}">${rel}</td>
       </tr>`;
     }).join('\n        ');
 
-  const initialState: LiveJsonDocument = liveDoc ?? {
-    updated_at: nowSec,
+  const initialState: arena.LiveDocument = liveDoc ?? {
+    updatedAt: nowSec,
     stale: false,
-    live: null,
-    recent_matches: recentMatches,
+    recentMatches,
   };
 
   const content = renderTemplate(BATTLES_TEMPLATE, {
@@ -1161,7 +1173,7 @@ export function renderBattlesPage(opts: {
     livePanelInner: renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta),
     historyRows,
     initialLiveJson: safeInlineJson(initialState),
-    botLinksJson: safeInlineJson(botLinks),
+    agentLinksJson: safeInlineJson(agentLinks),
     formatTitlesJson: safeInlineJson(FORMAT_TITLES),
   });
 
@@ -1175,19 +1187,23 @@ export function renderBattlesPage(opts: {
   });
 }
 
-function readExistingLiveJson(publicDir: string): LiveJsonDocument | null {
+function readExistingLiveJson(publicDir: string): arena.LiveDocument | undefined {
   const filePath = path.join(publicDir, 'api', 'live.json');
-  if (!fs.existsSync(filePath)) return null;
+  if (!fs.existsSync(filePath)) return undefined;
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as LiveJsonDocument;
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as arena.LiveDocument;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed;
     }
   } catch {}
-  return null;
+  return undefined;
 }
 
-export function renderArenaPages(options: RenderArenaOptions) {
+// Statically pre-renders all public Arena HTML + JSON surfaces (`/arena/`, `/arena/ladders/*`,
+// `/arena/battles/`, `/arena/tournaments/*`, `/projects/<slug>/`, and `/projects/`) atomically to
+// `public/` after every completed match or submission status change so Nginx serves spectator
+// traffic directly from disk without hitting Node or SQLite.
+export function renderArenaPages(options: Options) {
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const staticDir = options.staticDir ?? STATIC_DIR;
   const nowSec = options.now ?? Math.floor(Date.now() / 1000);
@@ -1196,7 +1212,7 @@ export function renderArenaPages(options: RenderArenaOptions) {
   const renderer = options.renderer ?? (
     publicDir === PUBLIC_DIR
       ? siteRenderer
-      : new site.page.Renderer({
+      : new Renderer({
         public: publicDir,
         analytics: 'G-LQ8TW28Z7Q',
         description: 'The home of competitive Pokémon artificial intelligence',
@@ -1207,36 +1223,36 @@ export function renderArenaPages(options: RenderArenaOptions) {
   );
 
   const projectMeta = loadProjectMetaMap(staticDir);
-  const profileBots = options.db.getAllActiveBots();
-  const profileSlugs = new Set(profileBots.map(b => b.slug));
+  const profileAgents = options.db.getAllActiveAgents();
+  const profileSlugs = new Set(profileAgents.map(a => a.slug));
   const recentBattles = options.db.getRecentMatches(recentMatchesLimit);
   const renderedBattleIds = new Set(recentBattles.map(m => m.id));
 
-  renderBotProfiles({
+  renderAgentProfiles({
     db: options.db,
     renderer,
     publicDir,
     avatarsDir: options.avatarsDir,
     projectMeta,
-    profileBots,
+    profileAgents,
     profileSlugs,
     renderedBattleIds,
     nowSec,
   });
 
   const summaries = options.db.getProjectArenaSummaries();
-  const arenaByName = new Map<string, projects.ProjectArenaInfo>();
+  const arenaByName = new Map<string, projects.ArenaInfo>();
   for (const s of summaries) {
     const profileHref = `/projects/${encodeURIComponent(s.slug)}/`;
     arenaByName.set(s.name, {
       slug: s.slug,
       name: s.name,
       profileHref,
-      bestRank: s.best_rank,
-      bestLcb: s.best_lcb,
+      bestRank: s.bestRank,
+      bestLcb: s.bestLcb,
       ladders: s.ladders.map(b => ({
         slot: b.slot,
-        displayName: b.display_name,
+        name: b.ladderName,
         rank: b.rank,
         provisional: b.provisional,
       })),
@@ -1259,7 +1275,7 @@ export function renderArenaPages(options: RenderArenaOptions) {
   writeFileAtomic(path.join(publicDir, 'arena', 'index.html'), arenaHtml);
   writeFileAtomic(
     path.join(publicDir, 'arena', 'index.json'),
-    `${JSON.stringify(standingsJson, null, 2)}\n`
+    `${JSON.stringify(standingsJson, undefined, 2)}\n`
   );
 
   const laddersDir = path.join(publicDir, 'arena', 'ladders');
@@ -1274,20 +1290,20 @@ export function renderArenaPages(options: RenderArenaOptions) {
     writeFileAtomic(path.join(laddersDir, slot, 'index.html'), ladderHtml);
     writeFileAtomic(
       path.join(laddersDir, slot, 'index.json'),
-      `${JSON.stringify(standingsJson.ladders[slot], null, 2)}\n`
+      `${JSON.stringify(standingsJson.ladders[slot], undefined, 2)}\n`
     );
   }
 
   const liveJsonPath = path.join(publicDir, 'api', 'live.json');
-  const liveDoc = options.liveDoc !== undefined
+  const hasExplicitLiveDoc = Object.prototype.hasOwnProperty.call(options, 'liveDoc');
+  const liveDoc = hasExplicitLiveDoc
     ? options.liveDoc
     : readExistingLiveJson(publicDir);
-  if (options.liveDoc !== undefined || !fs.existsSync(liveJsonPath)) {
-    const docToWrite: LiveJsonDocument = liveDoc ?? {
-      updated_at: nowSec,
+  if (hasExplicitLiveDoc || !fs.existsSync(liveJsonPath)) {
+    const docToWrite: arena.LiveDocument = liveDoc ?? {
+      updatedAt: nowSec,
       stale: false,
-      live: null,
-      recent_matches: recentBattles,
+      recentMatches: recentBattles,
     };
     writeFileAtomic(liveJsonPath, `${JSON.stringify(docToWrite)}\n`);
   }
@@ -1302,12 +1318,17 @@ export function renderArenaPages(options: RenderArenaOptions) {
   });
   writeFileAtomic(path.join(publicDir, 'arena', 'battles', 'index.html'), battlesHtml);
 
-  renderTournamentsPages({
+  const hasExplicitBroadcast = Object.prototype.hasOwnProperty.call(
+    options,
+    'tournamentBroadcast'
+  );
+  tournaments.renderTournamentsPages({
     db: options.db,
     renderer,
     publicDir,
     projectMeta,
     profileSlugs,
     tournamentBroadcast: options.tournamentBroadcast,
+    includeDiskBroadcast: !hasExplicitBroadcast,
   });
 }

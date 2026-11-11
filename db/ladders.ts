@@ -1,20 +1,20 @@
 import * as fs from 'fs';
-import type {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from 'node:sqlite';
 
 import * as yaml from 'yaml';
 
 import {root} from '../static/util';
 
-import type {TransactionRunner} from './index';
+import {TransactionRunner} from './index';
 
 export type LadderSlot = 'rby' | 'adv' | 'sv' | 'rand' | 'vgc';
-export type TeamMode = 'harvested' | 'random' | 'competitor_pool';
+export type TeamMode = 'harvested' | 'random' | 'pools';
 export type LadderStatus = 'upcoming' | 'active' | 'settling' | 'archived';
 
 export const LADDERS_FILE = root('config', 'ladders.yml');
 
 export const SLOTS = new Set<LadderSlot>(['rby', 'adv', 'sv', 'rand', 'vgc']);
-export const TEAM_MODES = new Set<TeamMode>(['harvested', 'random', 'competitor_pool']);
+export const TEAM_MODES = new Set<TeamMode>(['harvested', 'random', 'pools']);
 export const LADDER_STATUSES = new Set<LadderStatus>([
   'upcoming', 'active', 'settling', 'archived',
 ]);
@@ -30,44 +30,85 @@ export const SLOT_ORDER_SQL = `
   END
 `;
 
+// Canonical field order mirrors config/ladders.yml.
 export interface LadderConfig {
+  name: string;
+  format: string;
   id: string;
-  slot: LadderSlot;
-  display_name: string;
-  format_id: string;
-  team_mode: TeamMode;
-  min_bots?: number;
-  team_count?: number;
-  discord_role?: string;
+  discord?: string;
+  team: TeamMode;
   status?: LadderStatus;
-  pool_dirs?: string[];
+  min?: number;
+  teams?: number;
+  pools?: string[];
 }
 
 export interface LadderRow {
   id: string;
   slot: LadderSlot;
-  display_name: string;
-  format_id: string;
-  team_mode: TeamMode;
-  min_bots: number;
-  team_count: number | null;
-  discord_role: string | null;
+  name: string;
+  format: string;
+  team: TeamMode;
+  min: number;
+  teams?: number;
+  discord?: string;
+  status: LadderStatus;
+  createdAt: number;
+  archivedAt?: number;
+}
+
+export interface RotateLadderInput {
+  oldLadderId: string;
+  archivedName: string;
+  newLadderId?: string;
+  newName?: string;
+  newFormat?: string;
+  newTeam?: TeamMode;
+  newMin?: number;
+  newTeams?: number;
+  newDiscord?: string;
+  now?: number;
+}
+
+interface RawLadderRow {
+  id: string;
+  slot: LadderSlot;
+  name: string;
+  format: string;
+  team: TeamMode;
+  min: number;
+  teams: number | null;
+  discord: string | null;
   status: LadderStatus;
   created_at: number;
   archived_at: number | null;
 }
 
-export interface RotateLadderInput {
-  oldLadderId: string;
-  archivedDisplayName: string;
-  newLadderId?: string;
-  newDisplayName?: string;
-  newFormatId?: string;
-  newTeamMode?: TeamMode;
-  newMinBots?: number;
-  newTeamCount?: number | null;
-  newDiscordRole?: string | null;
-  now?: number;
+function mapLadderRow(raw: RawLadderRow): LadderRow {
+  return {
+    id: raw.id,
+    slot: raw.slot,
+    name: raw.name,
+    format: raw.format,
+    team: raw.team,
+    min: raw.min,
+    teams: raw.teams ?? undefined,
+    discord: raw.discord ?? undefined,
+    status: raw.status,
+    createdAt: raw.created_at,
+    archivedAt: raw.archived_at ?? undefined,
+  };
+}
+
+// Infers the canonical URL slot ('rby' | 'adv' | 'sv' | 'rand' | 'vgc') from a ladder's display
+// name ('VGC' or an archived season title such as 'VGC 2026 Reg M-C') so config/ladders.yml does
+// not need a redundant `slot` key.
+export function inferLadderSlot(name: string): LadderSlot {
+  const token = name.trim().split(/\s+/)[0]?.toLowerCase() as LadderSlot;
+  if (!SLOTS.has(token)) {
+    throw new Error(`Cannot infer valid ladder slot from name "${name}"`);
+  }
+  return token;
 }
 
 export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
@@ -81,40 +122,39 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
 
   for (const entry of entries) {
     const id = entry?.id?.trim();
-    const slot = entry?.slot;
-    const displayName = entry?.display_name?.trim();
-    const formatId = entry?.format_id?.trim();
-    const teamMode = entry?.team_mode;
+    const name = entry?.name?.trim();
+    const format = entry?.format?.trim();
+    const team = entry?.team;
     const status = entry?.status ?? 'active';
-    const minBots = entry?.min_bots ?? (teamMode === 'competitor_pool' ? 3 : 2);
+    const min = entry?.min ?? (team === 'pools' ? 3 : 2);
 
-    if (!id || !displayName || !formatId) {
+    if (!id || !name || !format) {
       throw new Error(`Invalid ladder entry in ladders.yml: ${JSON.stringify(entry)}`);
     }
-    if (!SLOTS.has(slot)) {
-      throw new Error(`Invalid ladder slot "${String(slot)}" for "${id}"`);
-    }
-    if (!TEAM_MODES.has(teamMode)) {
-      throw new Error(`Invalid team_mode "${String(teamMode)}" for "${id}"`);
+    const slot = inferLadderSlot(name);
+    if (!TEAM_MODES.has(team)) {
+      throw new Error(`Invalid team mode "${String(team)}" for "${id}"`);
     }
     if (!LADDER_STATUSES.has(status)) {
       throw new Error(`Invalid ladder status "${String(status)}" for "${id}"`);
     }
-    if (!Number.isInteger(minBots) || minBots < 2) {
-      throw new Error(`Invalid min_bots "${String(minBots)}" for "${id}"`);
+    // `pools` ladders require >= 3 distinct active agents so at least one neutral third-party
+    // team pool exists outside the two matched competitors (`P_pool = Pool \ (P_i U P_j)`).
+    if (!Number.isInteger(min) || min < 2 || (team === 'pools' && min < 3)) {
+      throw new Error(`Invalid min "${String(min)}" for "${id}"`);
     }
-    if (teamMode === 'competitor_pool') {
-      if (!Number.isInteger(entry.team_count) || entry.team_count! < 1) {
-        throw new Error(`competitor_pool ladder "${id}" must specify a positive team_count`);
+    if (team === 'pools') {
+      if (!Number.isInteger(entry.teams) || entry.teams! < 1) {
+        throw new Error(`pools ladder "${id}" must specify a positive teams count`);
       }
-    } else if (entry.team_count !== undefined) {
-      throw new Error(`team_count is only valid on competitor_pool ladders ("${id}")`);
+    } else if (entry.teams !== undefined) {
+      throw new Error(`teams is only valid on pools ladders ("${id}")`);
     }
     if (
-      entry.discord_role !== undefined &&
-      (typeof entry.discord_role !== 'string' || !/^\d+$/.test(entry.discord_role.trim()))
+      entry.discord !== undefined &&
+      (typeof entry.discord !== 'string' || !/^\d+$/.test(entry.discord.trim()))
     ) {
-      throw new Error(`Invalid discord_role "${String(entry.discord_role)}" for "${id}"`);
+      throw new Error(`Invalid discord role "${String(entry.discord)}" for "${id}"`);
     }
     if (seenIds.has(id)) {
       throw new Error(`Duplicate ladder id "${id}" in ladders.yml`);
@@ -135,13 +175,13 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
   return entries;
 }
 
-export function loadLadderPoolDirs(file = LADDERS_FILE): Map<string, string[]> {
+export function loadLadderPools(file = LADDERS_FILE): Map<string, string[]> {
   const out = new Map<string, string[]>();
   if (!fs.existsSync(file)) return out;
   const entries = parseLaddersYaml(fs.readFileSync(file, 'utf8'));
   for (const entry of entries) {
-    if (Array.isArray(entry.pool_dirs) && entry.pool_dirs.length) {
-      out.set(entry.id, entry.pool_dirs.map(p => root(p)));
+    if (Array.isArray(entry.pools) && entry.pools.length) {
+      out.set(entry.id, entry.pools.map(p => root(p)));
     }
   }
   return out;
@@ -157,18 +197,18 @@ export function syncLaddersFromYaml(
   const selectExisting = db.prepare('SELECT status, archived_at FROM ladders WHERE id = ?');
   const upsert = db.prepare(`
     INSERT INTO ladders (
-      id, slot, display_name, format_id, team_mode, min_bots,
-      team_count, discord_role, status, created_at, archived_at
+      id, slot, name, format, team, min,
+      teams, discord, status, created_at, archived_at
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       slot = excluded.slot,
-      display_name = excluded.display_name,
-      format_id = excluded.format_id,
-      team_mode = excluded.team_mode,
-      min_bots = excluded.min_bots,
-      team_count = excluded.team_count,
-      discord_role = excluded.discord_role,
+      name = excluded.name,
+      format = excluded.format,
+      team = excluded.team,
+      min = excluded.min,
+      teams = excluded.teams,
+      discord = excluded.discord,
       status = excluded.status,
       archived_at = excluded.archived_at
   `);
@@ -180,24 +220,27 @@ export function syncLaddersFromYaml(
         archived_at: number | null;
       } | undefined;
       let status: LadderStatus = cfg.status ?? 'active';
+      // If a settling season already finished settling and transitioned to 'archived' in SQLite,
+      // do not regress it back to 'settling' on server restart before ladders.yml is updated.
       if (existing?.status === 'archived' && status === 'settling') {
         status = 'archived';
       }
-      const minBots = cfg.min_bots ?? (cfg.team_mode === 'competitor_pool' ? 3 : 2);
-      const teamCount = cfg.team_count ?? null;
-      const discordRole = cfg.discord_role?.trim() || null;
+      const slot = inferLadderSlot(cfg.name);
+      const min = cfg.min ?? (cfg.team === 'pools' ? 3 : 2);
+      const teams = cfg.teams ?? null;
+      const discord = cfg.discord?.trim() || null;
       const archivedAt = status === 'archived'
         ? (existing?.archived_at ?? now)
         : null;
       upsert.run(
         cfg.id,
-        cfg.slot,
-        cfg.display_name.trim(),
-        cfg.format_id.trim(),
-        cfg.team_mode,
-        minBots,
-        teamCount,
-        discordRole,
+        slot,
+        cfg.name.trim(),
+        cfg.format.trim(),
+        cfg.team,
+        min,
+        teams,
+        discord,
         status,
         now,
         archivedAt
@@ -217,43 +260,49 @@ export function syncLadders(
 }
 
 export function getLadders(db: DatabaseSync): LadderRow[] {
-  return db.prepare(
+  const rows = db.prepare(
     `SELECT * FROM ladders ORDER BY ${SLOT_ORDER_SQL} ASC, created_at ASC, id ASC`
-  ).all() as unknown as LadderRow[];
+  ).all() as unknown as RawLadderRow[];
+  return rows.map(mapLadderRow);
 }
 
 export function getCurrentLadders(db: DatabaseSync): LadderRow[] {
-  return db.prepare(
+  const rows = db.prepare(
     `SELECT * FROM ladders
      WHERE status IN ('upcoming', 'active')
      ORDER BY ${SLOT_ORDER_SQL} ASC, created_at ASC, id ASC`
-  ).all() as unknown as LadderRow[];
+  ).all() as unknown as RawLadderRow[];
+  return rows.map(mapLadderRow);
 }
 
 export function getActiveLadders(db: DatabaseSync): LadderRow[] {
-  return db.prepare(
+  const rows = db.prepare(
     `SELECT * FROM ladders
      WHERE status = 'active'
      ORDER BY ${SLOT_ORDER_SQL} ASC, created_at ASC, id ASC`
-  ).all() as unknown as LadderRow[];
+  ).all() as unknown as RawLadderRow[];
+  return rows.map(mapLadderRow);
 }
 
 export function getPlayableLadders(db: DatabaseSync): LadderRow[] {
-  return db.prepare(
+  const rows = db.prepare(
     `SELECT * FROM ladders
      WHERE status IN ('active', 'settling')
      ORDER BY ${SLOT_ORDER_SQL} ASC, created_at ASC, id ASC`
-  ).all() as unknown as LadderRow[];
+  ).all() as unknown as RawLadderRow[];
+  return rows.map(mapLadderRow);
 }
 
 export function getLadder(db: DatabaseSync, id: string): LadderRow | undefined {
-  return db.prepare('SELECT * FROM ladders WHERE id = ?')
-    .get(id) as unknown as LadderRow | undefined;
+  const raw = db.prepare('SELECT * FROM ladders WHERE id = ?')
+    .get(id) as unknown as RawLadderRow | undefined;
+  return raw ? mapLadderRow(raw) : undefined;
 }
 
 export function getActiveLadderBySlot(db: DatabaseSync, slot: LadderSlot): LadderRow | undefined {
-  return db.prepare("SELECT * FROM ladders WHERE slot = ? AND status = 'active'")
-    .get(slot) as unknown as LadderRow | undefined;
+  const raw = db.prepare("SELECT * FROM ladders WHERE slot = ? AND status = 'active'")
+    .get(slot) as unknown as RawLadderRow | undefined;
+  return raw ? mapLadderRow(raw) : undefined;
 }
 
 export function setLadderStatus(
@@ -280,7 +329,7 @@ export function setLadderStatus(
       }
     }
 
-    const archivedAt = status === 'archived' ? (ladder.archived_at ?? now) : null;
+    const archivedAt = status === 'archived' ? (ladder.archivedAt ?? now) : null;
     db.prepare('UPDATE ladders SET status = ?, archived_at = ? WHERE id = ?')
       .run(status, archivedAt, ladderId);
 
@@ -296,6 +345,10 @@ export function setLadderStatus(
   });
 }
 
+// Rotates a seasonal regulation (e.g. VGC Reg M-C -> Reg M-D) without losing historical matches or
+// ratings: if active entries on `oldLadderId` still have unsettled ratings (`settled_at IS NULL`),
+// the outgoing season enters `'settling'` so in-flight competitors finish their 25-match / SE <= 30
+// settlement before freezing into `'archived'`.
 export function rotateLadder(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -317,13 +370,13 @@ export function rotateLadder(
     `).get(oldLadder.id);
 
     const nextOldStatus: LadderStatus = unsettled ? 'settling' : 'archived';
-    const archivedAt = nextOldStatus === 'archived' ? (oldLadder.archived_at ?? now) : null;
+    const archivedAt = nextOldStatus === 'archived' ? (oldLadder.archivedAt ?? now) : null;
 
     db.prepare(`
       UPDATE ladders
-      SET display_name = ?, status = ?, archived_at = ?
+      SET name = ?, status = ?, archived_at = ?
       WHERE id = ?
-    `).run(input.archivedDisplayName.trim(), nextOldStatus, archivedAt, oldLadder.id);
+    `).run(input.archivedName.trim(), nextOldStatus, archivedAt, oldLadder.id);
 
     if (nextOldStatus === 'archived') {
       db.prepare(`
@@ -341,32 +394,32 @@ export function rotateLadder(
         db.prepare("UPDATE ladders SET status = 'active', archived_at = NULL WHERE id = ?")
           .run(newId);
       } else {
-        const teamMode = input.newTeamMode ?? oldLadder.team_mode;
-        const minBots = input.newMinBots ?? oldLadder.min_bots;
-        const teamCount = input.newTeamCount !== undefined
-          ? input.newTeamCount
-          : (teamMode === 'competitor_pool' ? (oldLadder.team_count ?? 20) : null);
-        const discordRole = input.newDiscordRole !== undefined
-          ? input.newDiscordRole
-          : oldLadder.discord_role;
-        const displayName = input.newDisplayName?.trim() || oldLadder.slot.toUpperCase();
-        const formatId = input.newFormatId?.trim() || oldLadder.format_id;
+        const team = input.newTeam ?? oldLadder.team;
+        const min = input.newMin ?? oldLadder.min;
+        const teams = input.newTeams !== undefined
+          ? input.newTeams
+          : (team === 'pools' ? (oldLadder.teams ?? 20) : undefined);
+        const discord = input.newDiscord !== undefined
+          ? input.newDiscord
+          : oldLadder.discord;
+        const name = input.newName?.trim() || oldLadder.slot.toUpperCase();
+        const format = input.newFormat?.trim() || oldLadder.format;
 
         db.prepare(`
           INSERT INTO ladders (
-            id, slot, display_name, format_id, team_mode,
-            min_bots, team_count, discord_role, status, created_at, archived_at
+            id, slot, name, format, team,
+            min, teams, discord, status, created_at, archived_at
           )
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)
         `).run(
           newId,
           oldLadder.slot,
-          displayName,
-          formatId,
-          teamMode,
-          minBots,
-          teamCount,
-          discordRole,
+          name,
+          format,
+          team,
+          min,
+          teams ?? null,
+          discord ?? null,
           now
         );
       }

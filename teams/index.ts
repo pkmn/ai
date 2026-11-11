@@ -16,7 +16,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {Dex, ID, ModdedDex, Nature, StatID, toID} from '@pkmn/dex';
+import {Dex, ID, ModData, ModdedDex, Nature, StatID, toID} from '@pkmn/dex';
 import * as champions from '@pkmn/mods/champions';
 import * as championsregmb from '@pkmn/mods/championsregmb';
 import {PokemonSet, Team} from '@pkmn/sets';
@@ -108,8 +108,8 @@ export function getDex(format: string): ModdedDex {
   const id = toID(format);
   if (id.includes('champions')) {
     return id.includes('regmb')
-      ? Dex.mod('championsregmb' as ID, championsregmb)
-      : Dex.mod('champions' as ID, champions);
+      ? Dex.mod('championsregmb' as ID, championsregmb as unknown as ModData)
+      : Dex.mod('champions' as ID, champions as unknown as ModData);
   }
   const genMatch = /^gen(\d)/.exec(id);
   return genMatch ? Dex.forGen(Number(genMatch[1])) : Dex;

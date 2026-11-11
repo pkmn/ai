@@ -1,18 +1,43 @@
+// Server-side validation and 1-NN uniqueness checking for competitor-submitted team pools.
+//
+// Ladders using `team: pools` (e.g. Gen 9 OU, VGC OTS, Gen 1 OU) require each agent submission
+// to supply `teams` (default 20) legal 6-Pokémon teams that are pairwise distinct from both the
+// public reference pool (`teams/...`) and every earlier team in the same submission (`D >= 1.30`).
+//
+// Zero-oracle sequential uniqueness: we intentionally check ONLY against the public reference
+// pool and the agent's own submitted batch — NEVER against other competitors' private submitted
+// pools — because rejecting a submission for colliding with another agent's secret pool would
+// create a membership-inference oracle leaking private tournament teams.
+
 import * as fs from 'fs';
 import * as path from 'path';
 
-import type {ID, ModdedDex} from '@pkmn/dex';
-import {type PokemonSet, Team} from '@pkmn/sets';
+import {ModdedDex} from '@pkmn/dex';
+import * as champions from '@pkmn/mods/champions';
+import * as championsregmb from '@pkmn/mods/championsregmb';
+import {PokemonSet, Team} from '@pkmn/sets';
+import * as sim from '@pkmn/sim';
 
 import {toID} from '../static/util';
-import {
-  STATS,
-  THRESHOLD,
-  canonSpecies,
-  getDex,
-  parseTeam,
-  teamDistance,
-} from '../teams';
+import * as teams from '../teams';
+
+// `@pkmn/mods` requires parent mods (`champions`) to be registered on `@pkmn/sim`'s `Dex`
+// before child mods (`championsregmb`), attaching format rules to the returned `ModdedDex`.
+const CHAMPIONS_SIM_DEX = sim.Dex.mod('champions', champions as unknown as sim.ModData);
+const CHAMPIONS_REGMB_SIM_DEX =
+  sim.Dex.mod('championsregmb', championsregmb as unknown as sim.ModData);
+
+function getValidator(format: string): sim.TeamValidator {
+  const id = toID(format);
+  const simDex = id.includes('champions')
+    ? (id.includes('regmb') ? CHAMPIONS_REGMB_SIM_DEX : CHAMPIONS_SIM_DEX)
+    : sim.Dex;
+  const resolved = simDex.formats.get(id);
+  if (!resolved.exists) {
+    throw new Error(`Unknown format "${format}".`);
+  }
+  return new sim.TeamValidator(resolved, simDex);
+}
 
 interface PoolEntry {
   id: string;
@@ -26,14 +51,14 @@ export function clearReferencePoolCache() {
   poolCache.clear();
 }
 
-export function loadReferencePool(formatId: string, poolDirs: string[]): PoolEntry[] {
-  const cleanFormat = toID(formatId);
-  const resolvedDirs = poolDirs.map(d => path.resolve(d));
+export function loadReferencePool(format: string, pools: string[]): PoolEntry[] {
+  const cleanFormat = toID(format);
+  const resolvedDirs = pools.map(d => path.resolve(d));
   const cacheKey = `${cleanFormat}::${resolvedDirs.join('|')}`;
   const cached = poolCache.get(cacheKey);
   if (cached) return cached;
 
-  const dex = getDex(cleanFormat);
+  const dex = teams.getDex(cleanFormat);
   const entries: PoolEntry[] = [];
 
   for (const dir of resolvedDirs) {
@@ -45,7 +70,7 @@ export function loadReferencePool(formatId: string, poolDirs: string[]): PoolEnt
       const full = path.join(dir, file);
       try {
         if (!fs.statSync(full).isFile()) continue;
-        const sets = parseTeam(dex, fs.readFileSync(full, 'utf8'));
+        const sets = teams.parseTeam(dex, fs.readFileSync(full, 'utf8'));
         if (!sets.length) continue;
         entries.push({
           id: file,
@@ -77,7 +102,7 @@ export function splitSubmittedTeams(raw: string | string[]): string[] {
       .filter(Boolean);
   }
 
-  // 2. Packed teams: one team per line containing ']'
+  // 2. Packed teams: one team per line containing ']' and '|'
   const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length > 1 && lines.every(l => l.includes(']') && l.includes('|'))) {
     return lines;
@@ -98,7 +123,7 @@ export function splitSubmittedTeams(raw: string | string[]): string[] {
 
 function validateAndCanonicalizeSingleTeam(
   dex: ModdedDex,
-  formatId: string,
+  validator: sim.TeamValidator,
   rawTeam: string,
   teamIndex: number
 ): {canonicalPacked: string; uniquenessSets: Partial<PokemonSet>[]; speciesSet: Set<string>} {
@@ -106,97 +131,31 @@ function validateAndCanonicalizeSingleTeam(
   const imported = Team.import(rawTeam.trim(), dex);
   const rawSets = (imported?.team ?? []).filter(s => s && (s.species || s.name));
 
+  // VGC formats on Showdown allow 4-6 Pokémon per team (`minTeamSize = 4`), whereas Arena
+  // pools require full 6-Pokémon teams both by tournament rule and because `teamDistance` in
+  // `[0, 6]` sums species contributions over all 6 slots.
   if (rawSets.length !== 6) {
     throw new Error(`${label} must contain 6 Pokémon (found ${rawSets.length}).`);
   }
 
-  const isVgc = formatId.includes('vgc') || formatId.includes('champions');
-  const dexNums = new Set<number>();
-  const heldItems = new Set<ID>();
-
-  for (let slot = 0; slot < rawSets.length; slot++) {
-    const s = rawSets[slot];
-    const sp = dex.species.get(s.species || s.name || '');
-    if (!sp.exists || sp.isNonstandard || sp.tier === 'Illegal' || sp.tier === 'Unreleased') {
-      throw new Error(
-        `${label} slot ${slot + 1}: "${s.species || s.name || '?'}" is not legal in ${formatId}.`
-      );
-    }
-
-    if (dexNums.has(sp.num)) {
-      throw new Error(`${label} violates Species Clause (duplicate #${sp.num} ${sp.name}).`);
-    }
-    dexNums.add(sp.num);
-
-    if (s.item) {
-      const it = dex.items.get(s.item);
-      if (!it.exists || it.isNonstandard) {
-        throw new Error(`${label} (${sp.name}): invalid item "${s.item}".`);
-      }
-      if (isVgc && heldItems.has(it.id)) {
-        throw new Error(`${label} violates Item Clause (duplicate ${it.name}).`);
-      }
-      heldItems.add(it.id);
-    }
-
-    const ab = dex.abilities.get(s.ability || '');
-    const allowedAbilities = Object.values(sp.abilities).map(a => toID(a));
-    if (!ab.exists || ab.isNonstandard || !allowedAbilities.includes(ab.id)) {
-      throw new Error(
-        `${label} (${sp.name}): illegal ability "${s.ability || '(missing)'}".`
-      );
-    }
-
-    const moves = s.moves ?? [];
-    if (moves.length < 1 || moves.length > 4) {
-      throw new Error(`${label} (${sp.name}) must have 1 to 4 moves.`);
-    }
-    const moveIds = new Set<ID>();
-    for (const rawMove of moves) {
-      const mv = dex.moves.get(rawMove);
-      if (!mv.exists || mv.isNonstandard) {
-        throw new Error(`${label} (${sp.name}): invalid move "${rawMove}".`);
-      }
-      if (moveIds.has(mv.id)) {
-        throw new Error(`${label} (${sp.name}): duplicate move "${mv.name}".`);
-      }
-      moveIds.add(mv.id);
-    }
-
-    if (s.evs) {
-      let evTotal = 0;
-      for (const st of STATS) {
-        const v = s.evs[st] ?? 0;
-        if (!Number.isInteger(v) || v < 0 || v > 252) {
-          throw new Error(`${label} (${sp.name}): invalid ${st.toUpperCase()} EV "${v}".`);
-        }
-        evTotal += v;
-      }
-      if (dex.gen >= 3 && evTotal > 510) {
-        throw new Error(`${label} (${sp.name}): EV total ${evTotal} exceeds 510.`);
-      }
-    }
-
-    if (s.ivs) {
-      for (const st of STATS) {
-        const v = s.ivs[st] ?? 31;
-        if (!Number.isInteger(v) || v < 0 || v > 31) {
-          throw new Error(`${label} (${sp.name}): invalid ${st.toUpperCase()} IV "${v}".`);
-        }
-      }
-    }
-
-    if (s.level !== undefined && (!Number.isInteger(s.level) || s.level < 1 || s.level > 100)) {
-      throw new Error(`${label} (${sp.name}): invalid level "${s.level}".`);
-    }
+  // `TeamValidator.validateTeam` mutates sets in place while checking learnsets, format
+  // banlists, Species/Item Clauses, and Champions Stat Point caps, so validate a clone.
+  const problems = validator.validateTeam(structuredClone(rawSets) as sim.PokemonSet[]);
+  if (problems?.length) {
+    throw new Error(`${label} is illegal in ${validator.format.name}: ${problems.join('; ')}`);
   }
 
-  const canonicalSets = Team.canonicalize(rawSets, dex);
+  // `@pkmn/sets` `Team.canonicalize` sorts team members and moves into a deterministic canonical
+  // order for packed storage, while intentionally preserving non-`battleOnly` visual/cosmetic
+  // formes (e.g. Gastrodon-East, Sinistcha-Masterpiece, Maushold-Four) for battle presentation.
+  // For 1-NN uniqueness checking, we clone `canonicalSets` and collapse cosmetic/mechanically
+  // identical formes via `canonSpecies` so forme swaps cannot game species distance.
+  const canonicalSets = Team.canonicalize(structuredClone(rawSets), dex);
   const canonicalPacked = new Team(canonicalSets, dex).pack();
 
-  const uniquenessSets = Team.canonicalize(rawSets, dex);
+  const uniquenessSets = structuredClone(canonicalSets);
   for (const s of uniquenessSets) {
-    s.species = canonSpecies(dex, s.species);
+    s.species = teams.canonSpecies(dex, s.species);
   }
   const speciesSet = new Set(uniquenessSets.map(s => String(s.species ?? '')));
 
@@ -213,14 +172,15 @@ function minDistanceAgainstPool(
   let closestId = '';
 
   for (const entry of pool) {
-    // Lower bound: each species in candidate absent from entry contributes +1.0 to teamDistance.
+    // Lower bound: each species in `candidate` absent from `entry` contributes +1.0 to
+    // `teamDistance`, allowing us to prune pairs that cannot beat the running `minD`.
     let unshared = 0;
     for (const sp of candidate.speciesSet) {
       if (!entry.speciesSet.has(sp)) unshared++;
     }
     if (unshared >= minD) continue;
 
-    const d = teamDistance(dex, candidate.sets, entry.sets, defaultLevel);
+    const d = teams.teamDistance(dex, candidate.sets, entry.sets, defaultLevel);
     if (d < minD) {
       minD = d;
       closestId = entry.id;
@@ -230,41 +190,42 @@ function minDistanceAgainstPool(
   return {minD, closestId};
 }
 
-export interface TeamPoolValidationOptions {
-  formatId: string;
-  poolDirs: string[];
-  teamCount: number;
+export interface Options {
+  format: string;
+  pools: string[];
+  teams: number;
   threshold?: number;
 }
 
 export function validateCompetitorTeams(
   rawInput: string | string[],
-  options: TeamPoolValidationOptions
+  options: Options
 ): string[] {
-  const expectedCount = options.teamCount;
-  const threshold = options.threshold ?? THRESHOLD;
-  const formatId = toID(options.formatId);
-  const dex = getDex(formatId);
+  const expectedCount = options.teams;
+  const threshold = options.threshold ?? teams.THRESHOLD;
+  const format = toID(options.format);
+  const dex = teams.getDex(format);
+  const validator = getValidator(format);
   const defaultLevel =
-    formatId.includes('vgc') || formatId.includes('bss') || formatId.includes('champions')
+    format.includes('vgc') || format.includes('bss') || format.includes('champions')
       ? 50
       : 100;
 
   const chunks = splitSubmittedTeams(rawInput);
   if (chunks.length !== expectedCount) {
     throw new Error(
-      `Expected ${expectedCount} teams for ${options.formatId}, received ${chunks.length}.`
+      `Expected ${expectedCount} teams for ${options.format}, received ${chunks.length}.`
     );
   }
 
-  const refPool = loadReferencePool(formatId, options.poolDirs);
+  const refPool = loadReferencePool(format, options.pools);
   const workingPool: PoolEntry[] = [...refPool];
   const packedOut: string[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const {canonicalPacked, uniquenessSets, speciesSet} = validateAndCanonicalizeSingleTeam(
       dex,
-      formatId,
+      validator,
       chunks[i],
       i
     );
@@ -284,6 +245,8 @@ export function validateCompetitorTeams(
       }
     }
 
+    // Append each accepted team to `workingPool` sequentially so team `k` must also be
+    // >= 1.30 away from teams `1..k-1` within the same submission.
     workingPool.push({
       id: `submitted-team-${i + 1}`,
       sets: uniquenessSets,

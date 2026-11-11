@@ -1,3 +1,9 @@
+// Visual regression & layout verifier (`npm run shots [-- --only <filter>]`).
+//
+// Renders every static and dynamic page across 4 viewports (`small`, `phone`, `tablet`, `desktop`)
+// and both color schemes (`light`, `dark`) into `.shots/<viewport>/<theme>/<scenario>.png`,
+// asserting zero runtime console/page errors and zero horizontal overflow on every combination.
+
 import {execFileSync} from 'child_process';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
@@ -9,13 +15,13 @@ import {parseArgs} from 'util';
 import {Browser, BrowserContext, Route, chromium} from 'playwright-core';
 import polka from 'polka';
 
-import {ArenaDB} from '../db';
+import {Database} from '../db';
 import * as account from '../server/account';
-import {Auth, type AuthConfig, SESSION_COOKIE, signToken} from '../server/auth';
+import * as auth from '../server/auth';
 import * as wiki from '../server/wiki';
 import {ROOT, root} from '../static/util';
 
-import {prepareMockStaticDir, seedMockArena} from './mock-arena';
+import {prepareMockStaticDir, seedMockArena} from './mock';
 
 const PUBLIC = root('public');
 const SHOTS_DIR = root('.shots');
@@ -23,11 +29,13 @@ const SHOTS_DIR = root('.shots');
 const ORIGIN = 'http://pkmn.test';
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const VIEWPORTS = {
-  phone: {width: 390, height: 844},
+  small: {width: 375, height: 667}, // iPhone SE (3rd generation)
+  phone: {width: 390, height: 844}, // iPhone 14
+  tablet: {width: 744, height: 1133}, // iPad mini (6th generation, portrait)
   desktop: {width: 1280, height: 900},
 };
 const THEMES = ['light', 'dark'] as const;
-const SETTLE_MS = 200;
+const SETTLE_MILLIS = 200;
 
 interface Scenario {
   name: string;
@@ -36,7 +44,7 @@ interface Scenario {
   click?: string;
 }
 
-const SHOTS_AUTH: AuthConfig = {
+const SHOTS_AUTH: auth.Config = {
   sessionSecret: 'shots-session-secret',
   github: {
     clientId: 'shots-client-id',
@@ -50,11 +58,11 @@ const SHOTS_AUTH: AuthConfig = {
 
 const WIKI_INDEX_DJ = `# Wiki
 
-Shared documentation, format notes, and bot profiles for the \`pkmn.ai\` community.
+Shared documentation, format notes, and project profiles for the \`pkmn.ai\` community.
 
 ## Pages
 
-- [0 ERROR](0_ERROR) — Gen 9 OU search & evaluation bot by *pre*.
+- [0 ERROR](0_ERROR) — Gen 9 OU search & evaluation agent by *pre*.
 - [Gen 9 OU](Gen_9_OU) — Metagame overview, team structures, and benchmark baselines.
 `;
 
@@ -65,14 +73,14 @@ const WIKI_GEN9OU_DJ = [
   '',
   '## Evaluation',
   '',
-  'Bots are evaluated across 2-game blind-pair matches using Davidson MAP ratings:',
+  'Agents are evaluated across 2-game blind-pair matches using Davidson MAP ratings:',
   '',
   '$$`P(i \\text{ beats } j) = ' +
     '\\frac{\\gamma_i}{\\gamma_i + \\gamma_j + \\nu \\sqrt{\\gamma_i \\gamma_j}}`',
   '',
 ].join('\n');
 
-const WIKI_BOT_V1_DJ = `{% visibility: developers %}
+const WIKI_PROJECT_V1_DJ = `{% visibility: developers %}
 # 0 ERROR
 
 \`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
@@ -83,7 +91,7 @@ const WIKI_BOT_V1_DJ = `{% visibility: developers %}
 - Move ordering guided by damage calculator bounds.
 `;
 
-const WIKI_BOT_V2_DJ = `{% visibility: developers %}
+const WIKI_PROJECT_V2_DJ = `{% visibility: developers %}
 # 0 ERROR
 
 \`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
@@ -121,9 +129,9 @@ function buildScenarios(wikiSha: string): Scenario[] {
     {name: 'rules', path: '/rules/'},
     {name: 'wiki', path: '/wiki'},
     {name: 'wiki-pages', path: '/wiki/pages'},
-    {name: 'wiki-bot', path: '/wiki/0_ERROR'},
+    {name: 'wiki-project', path: '/wiki/0_ERROR'},
     {name: 'wiki-edit', path: '/wiki/Gen_9_OU/edit'},
-    {name: 'wiki-edit-bot', path: '/wiki/0_ERROR/edit'},
+    {name: 'wiki-edit-project', path: '/wiki/0_ERROR/edit'},
     {
       name: 'wiki-preview',
       path: '/wiki/0_ERROR/edit',
@@ -135,7 +143,7 @@ function buildScenarios(wikiSha: string): Scenario[] {
   ];
 }
 
-interface ShotsFixture {
+interface Fixture {
   origin: string;
   cookie: string;
   sha: string;
@@ -143,7 +151,7 @@ interface ShotsFixture {
   close: () => Promise<void>;
 }
 
-async function startFixture(): Promise<ShotsFixture> {
+async function startFixture(): Promise<Fixture> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-shots-'));
   const wikiDir = path.join(tmpDir, 'wiki');
   const staticDir = path.join(tmpDir, 'static');
@@ -153,14 +161,14 @@ async function startFixture(): Promise<ShotsFixture> {
   fs.mkdirSync(publicDir, {recursive: true});
 
   const projectsFile = prepareMockStaticDir(staticDir, avatarsDir);
-  const nowSec = Math.floor(NOW / 1000);
-  const db = new ArenaDB(':memory:', {now: nowSec});
+  const nowSeconds = Math.floor(NOW / 1000);
+  const db = new Database(':memory:', {now: nowSeconds});
   seedMockArena({
     db,
     publicDir,
     staticDir,
     avatarsDir,
-    now: nowSec,
+    now: nowSeconds,
     render: true,
   });
 
@@ -182,7 +190,7 @@ async function startFixture(): Promise<ShotsFixture> {
 
   fs.writeFileSync(path.join(wikiDir, 'index.dj'), WIKI_INDEX_DJ, 'utf8');
   fs.writeFileSync(path.join(wikiDir, 'Gen_9_OU.dj'), WIKI_GEN9OU_DJ, 'utf8');
-  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), WIKI_BOT_V1_DJ, 'utf8');
+  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), WIKI_PROJECT_V1_DJ, 'utf8');
   git(['add', 'index.dj', 'Gen_9_OU.dj', '0_ERROR.dj']);
   git(
     [
@@ -193,7 +201,7 @@ async function startFixture(): Promise<ShotsFixture> {
     '2026-10-18T12:00:00Z'
   );
 
-  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), WIKI_BOT_V2_DJ, 'utf8');
+  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), WIKI_PROJECT_V2_DJ, 'utf8');
   git(['add', '0_ERROR.dj']);
   git(
     [
@@ -215,7 +223,7 @@ async function startFixture(): Promise<ShotsFixture> {
     projectsFile,
     db,
     push: false,
-    auth: new Auth({
+    auth: new auth.Auth({
       config: SHOTS_AUTH,
       db,
       isAuthorizedGitHub: (login): boolean => wikiInstance.isDeveloper(login),
@@ -225,7 +233,7 @@ async function startFixture(): Promise<ShotsFixture> {
   account.register(app, {
     db,
     auth: wikiInstance.auth,
-    now: () => nowSec,
+    now: () => nowSeconds,
   });
   wiki.register(app, {
     wikiDir,
@@ -239,7 +247,7 @@ async function startFixture(): Promise<ShotsFixture> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address() as {port: number};
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const token = signToken(
+  const token = auth.signToken(
     {
       github: {id: 1, login: 'scheibo'},
       discord: {id: '513513270670262284', username: 'scheibo'},
@@ -250,7 +258,7 @@ async function startFixture(): Promise<ShotsFixture> {
 
   return {
     origin: `http://127.0.0.1:${addr.port}`,
-    cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`,
     sha,
     publicDir,
     close: async () => {
@@ -310,7 +318,7 @@ const TRANSPARENT_PNG = Buffer.from(
   'base64'
 );
 
-async function serve(route: Route, fixture: ShotsFixture): Promise<void> {
+async function serve(route: Route, fixture: Fixture): Promise<void> {
   const url = new URL(route.request().url());
   if (url.origin !== ORIGIN) {
     if (url.pathname.endsWith('.png')) {
@@ -365,7 +373,7 @@ async function shoot(
   context: BrowserContext,
   scenario: Scenario,
   file: string,
-  fixture: ShotsFixture
+  fixture: Fixture
 ): Promise<string[]> {
   await context.route('**/*', route => serve(route, fixture));
   const page = await context.newPage();
@@ -379,11 +387,11 @@ async function shoot(
   await page.goto(scenario.path);
   if (scenario.waitFor) await page.waitForSelector(scenario.waitFor);
   else await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(SETTLE_MS);
+  await page.waitForTimeout(SETTLE_MILLIS);
   if (scenario.click) {
     await page.click(scenario.click);
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(SETTLE_MS);
+    await page.waitForTimeout(SETTLE_MILLIS);
   }
   await page.evaluate(`(async () => {
     for (const image of document.querySelectorAll("img")) image.loading = "eager";
@@ -393,7 +401,7 @@ async function shoot(
       pending.map((image) => new Promise((done) => (image.onload = image.onerror = done)))
     );
   })()`);
-  await page.waitForTimeout(SETTLE_MS / 2);
+  await page.waitForTimeout(SETTLE_MILLIS / 2);
   const overflow = await page.evaluate<number>(
     'document.documentElement.scrollWidth - window.innerWidth'
   );
@@ -423,9 +431,13 @@ async function run(): Promise<void> {
   );
   const browser = await launch();
   await fsp.rm(newDir, {recursive: true, force: true});
-  await fsp.mkdir(newDir, {recursive: true});
+  for (const device of Object.keys(VIEWPORTS)) {
+    for (const theme of THEMES) {
+      await fsp.mkdir(path.join(newDir, device, theme), {recursive: true});
+    }
+  }
 
-  const shotNames: string[] = [];
+  const shotPaths: string[] = [];
   const errors: string[] = [];
   try {
     for (const scenario of scenarios) {
@@ -440,10 +452,12 @@ async function run(): Promise<void> {
             locale: 'en-US',
           });
           try {
-            const name = `${scenario.name}.${device}.${theme}.png`;
-            const problems = await shoot(context, scenario, path.join(newDir, name), fixture);
-            shotNames.push(name);
-            errors.push(...problems.map(problem => `${scenario.name} (${device}): ${problem}`));
+            const relPath = path.join(device, theme, `${scenario.name}.png`);
+            const problems = await shoot(context, scenario, path.join(newDir, relPath), fixture);
+            shotPaths.push(relPath);
+            errors.push(
+              ...problems.map(problem => `${scenario.name} (${device}/${theme}): ${problem}`)
+            );
           } finally {
             await context.close();
           }
@@ -457,13 +471,16 @@ async function run(): Promise<void> {
   }
 
   if (values.only === undefined) await fsp.rm(SHOTS_DIR, {recursive: true, force: true});
-  await fsp.mkdir(SHOTS_DIR, {recursive: true});
-  for (const name of shotNames) {
-    await fsp.rename(path.join(newDir, name), path.join(SHOTS_DIR, name));
+  for (const relPath of shotPaths) {
+    const dest = path.join(SHOTS_DIR, relPath);
+    await fsp.mkdir(path.dirname(dest), {recursive: true});
+    await fsp.rename(path.join(newDir, relPath), dest);
   }
   await fsp.rm(newDir, {recursive: true, force: true});
 
-  console.log(`Screenshots of ${scenarios.length} scenarios in ${path.relative(ROOT, SHOTS_DIR)}.`);
+  console.log(
+    `Screenshots of ${scenarios.length} scenarios in ${path.relative(ROOT, SHOTS_DIR)}.`
+  );
   for (const error of new Set(errors)) console.warn(`  error: ${error}`);
 }
 

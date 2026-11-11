@@ -1,0 +1,12 @@
+# systemctl enable --now /home/pkmn/ai/config/pkmn.ai-backup.timer
+
+[Unit]
+Description=Run pkmn.ai SQLite backup nightly at 04:15 UTC
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

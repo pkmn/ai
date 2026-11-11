@@ -6,15 +6,14 @@ import * as path from 'path';
 
 import polka from 'polka';
 
-import {ArenaDB, COOLDOWN_S} from '../db';
+import {COOLDOWN_SECONDS, Database} from '../db';
 import * as account from '../server/account';
-import {decryptSecret, deduceFormatType, encryptSecret} from '../server/account';
-import {Auth, type AuthConfig, SESSION_COOKIE, signToken} from '../server/auth';
+import * as auth from '../server/auth';
 import {clearReferencePoolCache, splitSubmittedTeams} from '../server/teams';
 import * as wiki from '../server/wiki';
-import {getDex} from '../teams';
+import {generateValidVgcTeams} from '../tools/mock';
 
-const AUTH_CFG: AuthConfig = {
+const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-account-session-secret',
   arenaSecret: 'test-arena-secret',
   github: {
@@ -51,72 +50,53 @@ const PROJECTS_YAML = `
 const SHA_A = '8f4ac91e0000000000000000000000000000000000000000000000008f4ac91e';
 const SHA_B = '2b1904fa0000000000000000000000000000000000000000000000002b1904fa';
 
-const LEGAL_VGC_SPECIES = [
-  'Archaludon', 'Farigiraf', 'Garchomp', 'Golisopod', 'Incineroar', 'Politoed',
-  'Indeedee-F', 'Annihilape', 'Arcanine-Hisui', 'Meowstic-F', 'Torkoal', 'Raichu',
-  'Basculegion', 'Gholdengo', 'Rillaboom', 'Staraptor', 'Volcarona', 'Salamence',
-  'Kingambit', 'Sneasler', 'Sylveon', 'Delphox', 'Metagross', 'Gengar',
-  'Altaria', 'Milotic', 'Tsareena', 'Sableye',
-];
+describe('submission helpers, SSRF guards, & secret encryption', () => {
+  test('deducePackageFormat distinguishes native archive bundles from OCI refs', () => {
+    expect(account.deducePackageFormat('https://example.com/agent.tar.gz?sig=1')).toBe('bundle');
+    expect(account.deducePackageFormat('https://example.com/agent.tgz')).toBe('bundle');
+    expect(account.deducePackageFormat('https://example.com/agent.tar.xz')).toBe('bundle');
+    expect(account.deducePackageFormat('https://example.com/agent.txz')).toBe('bundle');
+    expect(account.deducePackageFormat('https://example.com/agent.tar.zst')).toBe('bundle');
+    expect(account.deducePackageFormat('https://example.com/agent.tzst')).toBe('bundle');
+    expect(account.deducePackageFormat('ghcr.io/pkmn/0-error:1.2.0')).toBe('oci');
+    expect(account.deducePackageFormat('docker.io/library/agent@sha256:' + SHA_A)).toBe('oci');
+  });
 
-const LEGAL_ITEMS = [
-  'Leftovers', 'Sitrus Berry', 'Choice Scarf', 'Focus Sash',
-  'Life Orb', 'Lum Berry',
-];
+  test('validateArtifactUrl blocks loopback, RFC1918, link-local, and ULA SSRF targets', () => {
+    expect(account.validateArtifactUrl('https://github.com/pkmn/0-error.tar.zst', 'bundle'))
+      .toBeUndefined();
+    expect(account.validateArtifactUrl('ghcr.io/pkmn/0-error:1.2.0', 'oci')).toBeUndefined();
 
-function makeSetPaste(speciesName: string, item: string): string {
-  const dex = getDex('gen9championsvgc2026regmc');
-  const sp = dex.species.get(speciesName);
-  const ability = sp.abilities['0'];
-  const moves = ['Protect', 'Substitute', 'Rest', 'Sleep Talk'];
-  return [
-    `${sp.name} @ ${item}`,
-    `Ability: ${ability}`,
-    'Level: 50',
-    'EVs: 252 HP / 4 Def / 252 Spe',
-    'Timid Nature',
-    ...moves.map(m => `- ${m}`),
-  ].join('\n');
-}
-
-function makeSixMonPaste(indices: number[]): string {
-  return indices
-    .map((spIdx, slot) => makeSetPaste(LEGAL_VGC_SPECIES[spIdx], LEGAL_ITEMS[slot]))
-    .join('\n\n');
-}
-
-function generateDistinctVgcTeams(count: number): string[] {
-  const offsets = [0, 1, 3, 7, 13, 19];
-  const out: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const idxs = offsets.map(off => (i + off) % LEGAL_VGC_SPECIES.length);
-    out.push(makeSixMonPaste(idxs));
-  }
-  return out;
-}
-
-describe('submission helpers & secret encryption', () => {
-  test('deduceFormatType distinguishes native archive bundles from OCI refs', () => {
-    expect(deduceFormatType('https://example.com/bot.tar.gz?sig=1')).toBe('bundle');
-    expect(deduceFormatType('https://example.com/bot.tgz')).toBe('bundle');
-    expect(deduceFormatType('https://example.com/bot.tar.xz')).toBe('bundle');
-    expect(deduceFormatType('https://example.com/bot.txz')).toBe('bundle');
-    expect(deduceFormatType('https://example.com/bot.tar.zst')).toBe('bundle');
-    expect(deduceFormatType('https://example.com/bot.tzst')).toBe('bundle');
-    expect(deduceFormatType('ghcr.io/pkmn/0-error:1.2.0')).toBe('oci');
-    expect(deduceFormatType('docker.io/library/bot@sha256:' + SHA_A)).toBe('oci');
+    const blockedBundles = [
+      'https://127.0.0.1/agent.tar.zst',
+      'https://localhost/agent.tar.zst',
+      'https://[::1]/agent.tar.zst',
+      'https://10.0.0.5/agent.tar.zst',
+      'https://192.168.1.10/agent.tar.zst',
+      'https://172.16.0.1/agent.tar.zst',
+      'https://169.254.169.254/latest/agent.tar.zst',
+      'https://[fd00::1]/agent.tar.zst',
+      'https://[fe80::1]/agent.tar.zst',
+    ];
+    for (const url of blockedBundles) {
+      expect(account.validateArtifactUrl(url, 'bundle')).toContain('public host');
+    }
+    expect(account.validateArtifactUrl('127.0.0.1:5000/pkmn/agent:1.0.0', 'oci'))
+      .toContain('public host');
+    expect(account.validateArtifactUrl('http://127.0.0.1:8080/agent.tar.zst', 'bundle', true))
+      .toBeUndefined();
   });
 
   test('encryptSecret and decryptSecret roundtrip and reject tampering', () => {
-    const enc = encryptSecret('Bearer ghp_secret123', 'session-secret-1');
+    const enc = account.encryptSecret('Bearer ghp_secret123', 'session-secret-1');
     expect(enc).not.toContain('ghp_secret123');
-    expect(decryptSecret(enc, 'session-secret-1')).toBe('Bearer ghp_secret123');
-    expect(() => decryptSecret(enc, 'wrong-secret')).toThrow();
-    expect(() => decryptSecret(`${enc}x`, 'session-secret-1')).toThrow();
+    expect(account.decryptSecret(enc, 'session-secret-1')).toBe('Bearer ghp_secret123');
+    expect(() => account.decryptSecret(enc, 'wrong-secret')).toThrow();
+    expect(() => account.decryptSecret(`${enc}x`, 'session-secret-1')).toThrow();
   });
 
   test('splitSubmittedTeams supports === headers, arrays, and 6-block pastes', () => {
-    const twoTeams = generateDistinctVgcTeams(2);
+    const twoTeams = generateValidVgcTeams(2);
     const withHeaders =
       `=== [gen9championsvgc2026regmc] Team 1 ===\n${twoTeams[0]}\n\n` +
       `=== [gen9championsvgc2026regmc] Team 2 ===\n${twoTeams[1]}`;
@@ -131,7 +111,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
   let poolDir: string;
   let wikiDir: string;
   let projectsFile: string;
-  let db: ArenaDB;
+  let db: Database;
   let server: http.Server;
   let baseUrl: string;
   let currentNow: number;
@@ -159,11 +139,11 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     execFileSync('git', ['add', 'index.dj'], {cwd: wikiDir});
     execFileSync('git', ['commit', '-m', 'Init'], {cwd: wikiDir});
 
-    const twentyOne = generateDistinctVgcTeams(21);
+    const twentyOne = generateValidVgcTeams(21);
     fs.writeFileSync(path.join(poolDir, 'public000001'), twentyOne[20], 'utf8');
 
     currentNow = 1_760_000_000;
-    db = new ArenaDB(':memory:');
+    db = new Database(':memory:');
     db.syncLadders(); // starts all 5 ladders in 'upcoming' status
     db.syncProjectsFromYaml(PROJECTS_YAML, path.join(tmpDir, 'avatars'), currentNow);
     db.linkDeveloperDiscord('pre', '513513270670262284', 'scheibo', currentNow);
@@ -172,7 +152,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       wikiDir,
       projectsFile,
       db,
-      auth: new Auth({
+      auth: new auth.Auth({
         config: AUTH_CFG,
         db,
         isAuthorizedGitHub: (login): boolean => wikiInstance.isDeveloper(login),
@@ -184,7 +164,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     account.register(app, {
       db,
       auth: wikiInstance.auth,
-      poolDirsByLadder: new Map([['gen9championsvgc2026regmc', [poolDir]]]),
+      poolsByLadder: new Map([['gen9championsvgc2026regmc', [poolDir]]]),
       now: () => currentNow,
     });
     wiki.register(app, {
@@ -211,8 +191,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
 
   const cookieFor = (login: string) => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const tok = signToken({github: {id: 1, login}, exp}, AUTH_CFG.sessionSecret);
-    return `${SESSION_COOKIE}=${encodeURIComponent(tok)}`;
+    const tok = auth.signToken({github: {id: 1, login}, exp}, AUTH_CFG.sessionSecret);
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(tok)}`;
   };
 
   test('models Pending -> Qualified -> Eligible lifecycle & wiki access for Pending', async () => {
@@ -255,8 +235,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: JSON.stringify({
         version: '1.0.0',
-        format_type: 'bundle',
-        download_url: 'https://example.com/0-error-1.0.0.tar.zst',
+        package: 'bundle',
+        url: 'https://example.com/0-error-1.0.0.tar.zst',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -272,7 +252,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: new URLSearchParams({
         content: '# Newcomer\n\nWork in progress.',
-        message: 'Initial bot notes',
+        message: 'Initial project notes',
         action: 'save',
       }).toString(),
       redirect: 'manual',
@@ -300,8 +280,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: JSON.stringify({
         version: '0.1.0',
-        format_type: 'bundle',
-        download_url: 'https://example.com/newcomer.tar.zst',
+        package: 'bundle',
+        url: 'https://example.com/newcomer.tar.zst',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -326,8 +306,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: JSON.stringify({
         version: '1.0.0',
-        format_type: 'bundle',
-        download_url: 'https://example.com/0-error.tar.zst',
+        package: 'bundle',
+        url: 'https://example.com/0-error.tar.zst',
         sha256: SHA_A,
         ladders: ['ADV'],
       }),
@@ -337,71 +317,68 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
 
   test('scopes Discord per developer while sharing Active and History tables', async () => {
     openLadders(['gen1ou20261109', 'gen3ou20261109']);
-    const bot = db.getBotBySlug('0-error')!;
+    const agent = db.getAgentBySlug('0-error')!;
 
     const v1 = db.createSubmission({
-      botId: bot.id,
-      submittedByDevId: db.getDeveloperByGitHub('pre')!.id,
-      versionStr: '1.0.0',
-      formatType: 'bundle',
-      downloadUrl: 'https://example.com/0-error-1.0.0.tar.zst',
+      agentId: agent.id,
+      developerId: db.getDeveloperByGitHub('pre')!.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/0-error-1.0.0.tar.zst',
       sha256: SHA_A,
-      authTokenEnc: null,
       ladderIds: ['gen1ou20261109', 'gen3ou20261109'],
       now: currentNow - 40 * 86400,
     });
     db.db.prepare(
-      `UPDATE bot_versions
+      `UPDATE agent_versions
        SET smoke_status = 'passed', unpacked_bytes = 276824064,
-           smoke_duration_ms = 3800, smoke_turn_ms = 375, smoke_peak_ram_mb = 930
+           smoke_duration_millis = 3800, smoke_turn_millis = 375, smoke_peak_ram = 930
        WHERE id = ?`
     ).run(v1.id);
     db.db.prepare(
       `INSERT INTO ladder_entries (
-         ladder_id, version_id, role, rating_elo, rating_se, rank_current,
-         matches_played, ww, wt, split, tl, ll, settled_at
+         ladder_id, version_id, role, elo, se, rank_current,
+         matches, ww, wt, split, tl, ll, settled_at
        ) VALUES (?, ?, 'retired', 1650, 22, NULL, 60, 30, 0, 15, 0, 15, ?)`
     ).run('gen1ou20261109', v1.id, currentNow - 30 * 86400);
 
     const vFail = db.createSubmission({
-      botId: bot.id,
-      submittedByDevId: db.getDeveloperByGitHub('pre')!.id,
-      versionStr: '1.1.0-rc1',
-      formatType: 'bundle',
-      downloadUrl: 'https://example.com/0-error-1.1.0-rc1.tar.zst',
+      agentId: agent.id,
+      developerId: db.getDeveloperByGitHub('pre')!.id,
+      version: '1.1.0-rc1',
+      package: 'bundle',
+      url: 'https://example.com/0-error-1.1.0-rc1.tar.zst',
       sha256: SHA_B,
-      authTokenEnc: null,
       ladderIds: ['gen1ou20261109'],
       now: currentNow - 20 * 86400,
     });
     db.db.prepare(
-      `UPDATE bot_versions
-       SET smoke_status = 'failed_smoke_test', dm_sent = 1,
-           smoke_error_log = 'Seatbelt EPERM: denied read outside $BOT_DIR'
+      `UPDATE agent_versions
+       SET smoke_status = 'failed', notified = 1,
+           smoke_error = 'Seatbelt EPERM: denied read outside $AGENT_DIR'
        WHERE id = ?`
     ).run(vFail.id);
 
     const v2 = db.createSubmission({
-      botId: bot.id,
-      submittedByDevId: db.getDeveloperByGitHub('coauthor')!.id,
-      versionStr: '1.1.0',
-      formatType: 'bundle',
-      downloadUrl: 'https://example.com/0-error-1.1.0.tar.zst',
+      agentId: agent.id,
+      developerId: db.getDeveloperByGitHub('coauthor')!.id,
+      version: '1.1.0',
+      package: 'bundle',
+      url: 'https://example.com/0-error-1.1.0.tar.zst',
       sha256: SHA_A,
-      authTokenEnc: null,
       ladderIds: ['gen1ou20261109', 'gen3ou20261109'],
       now: currentNow - 16 * 86400,
     });
     db.db.prepare(
-      `UPDATE bot_versions
+      `UPDATE agent_versions
        SET smoke_status = 'passed', unpacked_bytes = 312475648,
-           smoke_duration_ms = 4100, smoke_turn_ms = 402, smoke_peak_ram_mb = 1140
+           smoke_duration_millis = 4100, smoke_turn_millis = 402, smoke_peak_ram = 1140
        WHERE id = ?`
     ).run(v2.id);
     db.db.prepare(
       `INSERT INTO ladder_entries (
-         ladder_id, version_id, role, rating_elo, rating_se, rank_current,
-         matches_played, ww, wt, split, tl, ll, settled_at
+         ladder_id, version_id, role, elo, se, rank_current,
+         matches, ww, wt, split, tl, ll, settled_at
        ) VALUES (?, ?, 'champion', 1748, 14.3, 1, 180, 118, 0, 38, 0, 24, ?)`
     ).run('gen1ou20261109', v2.id, currentNow - 10 * 86400);
 
@@ -433,8 +410,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
 
   test('enforces submission format rules, 14-day cooldown, and settlement gates', async () => {
     openLadders(['gen1ou20261109', 'gen9ou20261109']);
-    const bot = db.getBotBySlug('foul-play')!;
-    expect(db.computeBotSubmissionStatus(bot.id, currentNow).label).toBe('Eligible');
+    const agent = db.getAgentBySlug('foul-play')!;
+    expect(db.computeAgentSubmissionStatus(agent.id, currentNow).label).toBe('Eligible');
 
     const badVer = await realFetch(`${baseUrl}/api/submissions`, {
       method: 'POST',
@@ -445,8 +422,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: JSON.stringify({
         version: 'bad version string!!',
-        format_type: 'bundle',
-        download_url: 'https://example.com/fp.tar.xz',
+        package: 'bundle',
+        url: 'https://example.com/fp.tar.xz',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -462,8 +439,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: JSON.stringify({
         version: '1.0.0',
-        format_type: 'oci',
-        download_url: 'https://example.com/fp.tar.xz',
+        package: 'oci',
+        url: 'https://example.com/fp.tar.xz',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -479,26 +456,26 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: JSON.stringify({
         version: '1.0.0',
-        format_type: 'oci',
-        download_url: 'ghcr.io/pmariglia/foul-play:1.0.0',
+        package: 'oci',
+        url: 'ghcr.io/pmariglia/foul-play:1.0.0',
         sha256: SHA_A.toUpperCase(),
-        auth_token: 'Bearer ghcr_pat_123',
+        authToken: 'Bearer ghcr_pat_123',
         ladders: ['RBY', 'SV'],
       }),
     });
     expect(okSub.status).toBe(201);
-    const createdJson = await okSub.json() as {version_id: number; smoke_status: string};
-    expect(createdJson.smoke_status).toBe('pending_pull');
+    const createdJson = await okSub.json() as {versionId: number; smokeStatus: string};
+    expect(createdJson.smokeStatus).toBe('pending');
 
-    const stored = db.getVersionsForBot(bot.id)[0];
+    const stored = db.getVersionsForAgent(agent.id)[0];
     expect(stored.sha256).toBe(SHA_A);
-    expect(JSON.parse(stored.ladders_json)).toEqual(['gen1ou20261109', 'gen9ou20261109']);
-    expect(decryptSecret(stored.auth_token_enc!, AUTH_CFG.sessionSecret)).toBe(
+    expect(JSON.parse(stored.laddersJson)).toEqual(['gen1ou20261109', 'gen9ou20261109']);
+    expect(account.decryptSecret(stored.authTokenEncoding!, AUTH_CFG.sessionSecret)).toBe(
       'Bearer ghcr_pat_123'
     );
 
-    // While pending_pull -> status is Ineligible (429 on second submit)
-    expect(db.computeBotSubmissionStatus(bot.id, currentNow).label).toBe('Ineligible');
+    // While pending -> status is Ineligible (429 on second submit)
+    expect(db.computeAgentSubmissionStatus(agent.id, currentNow).label).toBe('Ineligible');
     const blockedPending = await realFetch(`${baseUrl}/api/submissions`, {
       method: 'POST',
       headers: {
@@ -508,8 +485,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       },
       body: JSON.stringify({
         version: '1.0.1',
-        format_type: 'oci',
-        download_url: 'ghcr.io/pmariglia/foul-play:1.0.1',
+        package: 'oci',
+        url: 'ghcr.io/pmariglia/foul-play:1.0.1',
         sha256: SHA_B,
         ladders: ['RBY'],
       }),
@@ -517,30 +494,30 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     expect(blockedPending.status).toBe(429);
 
     // Failed smoke test automatically refunds cooldown -> Eligible again immediately!
-    db.db.prepare("UPDATE bot_versions SET smoke_status = 'failed_smoke_test' WHERE id = ?")
+    db.db.prepare("UPDATE agent_versions SET smoke_status = 'failed' WHERE id = ?")
       .run(stored.id);
-    expect(db.computeBotSubmissionStatus(bot.id, currentNow).label).toBe('Eligible');
+    expect(db.computeAgentSubmissionStatus(agent.id, currentNow).label).toBe('Eligible');
 
     // Passed smoke test -> triggers 14-day cooldown + unsettled gate
-    db.db.prepare("UPDATE bot_versions SET smoke_status = 'passed' WHERE id = ?")
+    db.db.prepare("UPDATE agent_versions SET smoke_status = 'passed' WHERE id = ?")
       .run(stored.id);
     db.db.prepare(
       `INSERT INTO ladder_entries (
-         ladder_id, version_id, role, rating_elo, rating_se, matches_played
+         ladder_id, version_id, role, elo, se, matches
        ) VALUES ('gen1ou20261109', ?, 'champion', 1550, 85, 10)`
     ).run(stored.id);
 
-    expect(db.computeBotSubmissionStatus(bot.id, currentNow + 86400).label).toBe('Ineligible');
+    expect(db.computeAgentSubmissionStatus(agent.id, currentNow + 86400).label).toBe('Ineligible');
 
-    currentNow += COOLDOWN_S + 60;
-    const unsettledStatus = db.computeBotSubmissionStatus(bot.id, currentNow);
+    currentNow += COOLDOWN_SECONDS + 60;
+    const unsettledStatus = db.computeAgentSubmissionStatus(agent.id, currentNow);
     expect(unsettledStatus.canSubmit).toBe(false);
     expect(unsettledStatus.reason).toContain('has not settled');
 
     db.db.prepare(
-      'UPDATE ladder_entries SET rating_se = 24, matches_played = 30 WHERE version_id = ?'
+      'UPDATE ladder_entries SET se = 24, matches = 30 WHERE version_id = ?'
     ).run(stored.id);
-    expect(db.computeBotSubmissionStatus(bot.id, currentNow)).toEqual({
+    expect(db.computeAgentSubmissionStatus(agent.id, currentNow)).toEqual({
       label: 'Eligible',
       canSubmit: true,
     });
@@ -548,7 +525,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
 
   test('validates VGC 20-team submissions sequentially and locks seasonal pools', async () => {
     openLadders(['gen9championsvgc2026regmc']);
-    const twentyOne = generateDistinctVgcTeams(21);
+    const twentyOne = generateValidVgcTeams(21);
     const validTwenty = twentyOne.slice(0, 20);
     const publicClone = twentyOne[20];
 
@@ -562,8 +539,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         },
         body: JSON.stringify({
           version,
-          format_type: 'bundle',
-          download_url: `https://example.com/0-error-${version}.tar.zst`,
+          package: 'bundle',
+          url: `https://example.com/0-error-${version}.tar.zst`,
           sha256: SHA_A,
           ladders: ['VGC'],
           ...(teams !== undefined ? {teams} : {}),
@@ -616,22 +593,23 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     const okRes = await postVgc('1.0.0', backupPaste);
     expect(okRes.status).toBe(201);
 
-    const bot = db.getBotBySlug('0-error')!;
-    const pendingTeams = db.getTeamsForBotLadder('gen9championsvgc2026regmc', bot.id, 'pending');
+    const agent = db.getAgentBySlug('0-error')!;
+    const pendingTeams =
+      db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending');
     expect(pendingTeams).toHaveLength(20);
 
-    const v1 = db.getVersionsForBot(bot.id)[0];
-    db.db.prepare("UPDATE bot_versions SET smoke_status = 'passed' WHERE id = ?").run(v1.id);
+    const v1 = db.getVersionsForAgent(agent.id)[0];
+    db.db.prepare("UPDATE agent_versions SET smoke_status = 'passed' WHERE id = ?").run(v1.id);
     db.db.prepare(
-      `UPDATE bot_ladder_teams SET status = 'active'
-       WHERE ladder_id = 'gen9championsvgc2026regmc' AND bot_id = ?`
-    ).run(bot.id);
+      `UPDATE agent_ladder_teams SET status = 'active'
+       WHERE ladder_id = 'gen9championsvgc2026regmc' AND agent_id = ?`
+    ).run(agent.id);
     db.db.prepare(
       `INSERT INTO ladder_entries (
-         ladder_id, version_id, role, rating_elo, rating_se, matches_played, settled_at
+         ladder_id, version_id, role, elo, se, matches, settled_at
        ) VALUES ('gen9championsvgc2026regmc', ?, 'champion', 1620, 20, 35, ?)`
     ).run(v1.id, currentNow + 86400);
-    currentNow += COOLDOWN_S + 3600;
+    currentNow += COOLDOWN_SECONDS + 3600;
 
     const overwriteAttempt = await postVgc('1.1.0', backupPaste);
     expect(overwriteAttempt.status).toBe(400);
@@ -639,6 +617,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
 
     const reuseOk = await postVgc('1.1.0');
     expect(reuseOk.status).toBe(201);
-    expect(db.getTeamsForBotLadder('gen9championsvgc2026regmc', bot.id, 'active')).toHaveLength(20);
+    expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'active'))
+      .toHaveLength(20);
   });
 });

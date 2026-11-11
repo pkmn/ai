@@ -2,231 +2,37 @@ import * as fs from 'fs';
 import {DatabaseSync} from 'node:sqlite';
 import * as path from 'path';
 
-import type {RatingResult} from '../server/ratings';
+import {RatingResult} from '../server/ratings';
 import {root} from '../static/util';
 
-import {type BotLadderStatsRow, getBotLadderStats} from './bot-ladder-stats';
-import {
-  type BotLadderTeamRow,
-  type TeamPoolStatus,
-  getTeamsForBotLadder,
-  hasActiveLadderTeams,
-} from './bot-ladder-teams';
-import {
-  type AccountStatusLabel,
-  type ApplySubmissionStatusInput,
-  type ApplySubmissionStatusResult,
-  type BotVersionRow,
-  COOLDOWN_S,
-  type CreateSubmissionInput,
-  type FormatType,
-  type PendingSubmissionRow,
-  type PendingVersionDmRow,
-  SETTLED_MAX_SE,
-  SETTLED_MIN_MATCHES,
-  type SmokeStatus,
-  type SubmissionStatus,
-  type VersionHistoryView,
-  applySubmissionStatus,
-  computeBotSubmissionStatus,
-  createSubmission,
-  getPendingSubmissions,
-  getPendingVersionDms,
-  getVersionById,
-  getVersionBySlugAndStr,
-  getVersionOwnerDiscordIds,
-  getVersionsForBot,
-  markVersionDmSent,
-  quarantineVersion,
-  unquarantineVersion,
-} from './bot-versions';
-import {
-  AVATARS_DIR,
-  type BotRow,
-  type BotStatus,
-  PROJECTS_FILE,
-  type ParsedArenaProject,
-  type RawProjectOwner,
-  type SyncProjectsOptions,
-  extractProjectOwners,
-  getAllActiveBots,
-  getBotById,
-  getBotBySlug,
-  parseArenaProjects,
-  refundCooldown,
-  syncProjects,
-  syncProjectsFromYaml,
-  syncProjectsFromYamlWithSmogon,
-  syncProjectsWithSmogon,
-} from './bots';
-import {
-  type DeveloperRow,
-  type ResolvedProjectOwner,
-  getCompetitorDiscordIds,
-  getDeveloperByDiscordId,
-  getDeveloperByGitHub,
-  getDevelopersForBot,
-  linkDeveloperDiscord,
-  linkDeveloperGitHubId,
-  unlinkDeveloperDiscord,
-} from './developers';
-import {type DiscordMemberRow, isDiscordMember, syncDiscordMembers} from './discord-members';
-import {
-  type ActiveEntryView,
-  type ArenaLadderRoleTarget,
-  type BotLadderProfileEntry,
-  type EntryRole,
-  type LadderStandingOverride,
-  type LeaderboardEntryView,
-  type ProjectArenaLadderBadge,
-  type ProjectArenaSummary,
-  getActiveEntriesForBot,
-  getArenaLadderRoleTargets,
-  getBotLadderProfileEntries,
-  getBotParticipatedLadders,
-  getLeaderboardEntries,
-  getProjectArenaSummaries,
-  hasAnyLeaderboardEntry,
-  recomputeLadderRatings,
-  setLadderAnchor,
-} from './ladder-entries';
-import {
-  LADDERS_FILE,
-  type LadderConfig,
-  type LadderRow,
-  type LadderSlot,
-  type LadderStatus,
-  type RotateLadderInput,
-  type TeamMode,
-  getActiveLadderBySlot,
-  getActiveLadders,
-  getCurrentLadders,
-  getLadder,
-  getLadders,
-  getPlayableLadders,
-  loadLadderPoolDirs,
-  parseLaddersYaml,
-  rotateLadder,
-  setLadderStatus,
-  syncLadders,
-  syncLaddersFromYaml,
-} from './ladders';
-import {
-  type CompletedMatchPayload,
-  type RecentMatchView,
-  type RecordMatchInput,
-  getRecentMatches,
-  getRecentMatchesForBotOnLadder,
-  recordCompletedMatch,
-} from './matches';
-import {type PairAggregateRow, getPairAggregatesForLadder} from './pair-aggregates';
-import {
-  type LadderSnapshotHistoryRow,
-  type RatingSnapshotRow,
-  getRatingSnapshotsForLadder,
-} from './rating-snapshots';
-import {
-  type TournamentEntrantRow,
-  type TournamentEntrantView,
-  type UpsertTournamentEntrantInput,
-  getTournamentEntrants,
-  upsertTournamentEntrant,
-} from './tournament-entrants';
-import {
-  type TournamentGameRow,
-  type TournamentGameStage,
-  type TournamentGameStatus,
-  type TournamentGameView,
-  type TournamentPairRecord,
-  type UpsertTournamentGameInput,
-  getTournamentCrosstable,
-  getTournamentGames,
-  upsertTournamentGame,
-} from './tournament-games';
-import {
-  type TournamentRow,
-  type TournamentStatus,
-  type UpsertTournamentInput,
-  getTournament,
-  getTournaments,
-  upsertTournament,
-} from './tournaments';
+import * as stats from './agent-ladder-stats';
+import * as teams from './agent-ladder-teams';
+import * as versions from './agent-versions';
+import * as agents from './agents';
+import * as developers from './developers';
+import * as discordMembers from './discord-members';
+import * as entries from './ladder-entries';
+import * as ladders from './ladders';
+import * as matches from './matches';
+import * as pairs from './pair-aggregates';
+import * as snapshots from './rating-snapshots';
+import * as entrants from './tournament-entrants';
+import * as games from './tournament-games';
+import * as tournaments from './tournaments';
 
 export type TransactionRunner = <T>(fn: () => T) => T;
 
-export interface ArenaDBOptions {
+export interface Options {
   schemaDir?: string;
   migrationDir?: string;
   backupBeforeMigrate?: boolean;
   now?: number;
 }
 
-export {
-  type AccountStatusLabel,
-  type ActiveEntryView,
-  type ApplySubmissionStatusInput,
-  type ApplySubmissionStatusResult,
-  type ArenaLadderRoleTarget,
-  AVATARS_DIR,
-  type BotLadderProfileEntry,
-  type BotLadderStatsRow,
-  type BotLadderTeamRow,
-  type BotRow,
-  type BotStatus,
-  type BotVersionRow,
-  COOLDOWN_S,
-  type CompletedMatchPayload,
-  type CreateSubmissionInput,
-  type DeveloperRow,
-  type DiscordMemberRow,
-  type EntryRole,
-  type FormatType,
-  LADDERS_FILE,
-  type LadderConfig,
-  type LadderRow,
-  type LadderSlot,
-  type LadderSnapshotHistoryRow,
-  type LadderStandingOverride,
-  type LadderStatus,
-  type LeaderboardEntryView,
-  PROJECTS_FILE,
-  type PairAggregateRow,
-  type ParsedArenaProject,
-  type PendingSubmissionRow,
-  type PendingVersionDmRow,
-  type ProjectArenaLadderBadge,
-  type ProjectArenaSummary,
-  type RatingSnapshotRow,
-  type RawProjectOwner,
-  type RecentMatchView,
-  type RecordMatchInput,
-  type ResolvedProjectOwner,
-  type RotateLadderInput,
-  SETTLED_MAX_SE,
-  SETTLED_MIN_MATCHES,
-  type SmokeStatus,
-  type SubmissionStatus,
-  type SyncProjectsOptions,
-  type TeamMode,
-  type TeamPoolStatus,
-  type TournamentEntrantRow,
-  type TournamentEntrantView,
-  type TournamentGameRow,
-  type TournamentGameStage,
-  type TournamentGameStatus,
-  type TournamentGameView,
-  type TournamentPairRecord,
-  type TournamentRow,
-  type TournamentStatus,
-  type UpsertTournamentEntrantInput,
-  type UpsertTournamentGameInput,
-  type UpsertTournamentInput,
-  type VersionHistoryView,
-  extractProjectOwners,
-  loadLadderPoolDirs,
-  parseArenaProjects,
-  parseLaddersYaml,
-};
+export interface AppliedMigration {
+  version: string;
+  appliedAt: number;
+}
 
 export const DB_PATH = process.env.ARENA_DB_PATH ?? (
   process.env.NODE_ENV === 'production' || fs.existsSync('/var/lib/pkmn')
@@ -245,17 +51,20 @@ function listSqlFiles(dir: string): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
-export class ArenaDB {
+export class Database {
   readonly db: DatabaseSync;
   readonly dbPath: string;
   private readonly txRunner: TransactionRunner = fn => this.inTransaction(fn);
 
-  constructor(dbPath = DB_PATH, options: ArenaDBOptions = {}) {
+  constructor(dbPath = DB_PATH, options: Options = {}) {
     this.dbPath = dbPath;
     if (dbPath !== ':memory:') {
       fs.mkdirSync(path.dirname(dbPath), {recursive: true});
     }
     this.db = new DatabaseSync(dbPath);
+    // WAL + synchronous=NORMAL gives safe single-writer concurrency on local SSD while allowing
+    // external CLI tools (`pkmn quarantine`, `pkmn rotate-ladder`, `.backup`) to read/write
+    // alongside the live Node process within `busy_timeout = 5000` ms.
     if (dbPath !== ':memory:') {
       this.db.exec('PRAGMA journal_mode = WAL;');
     }
@@ -265,7 +74,14 @@ export class ArenaDB {
     this.initializeSchema(options);
   }
 
-  private initializeSchema(options: ArenaDBOptions) {
+  // Dual schema bootstrap:
+  //   - Fresh databases (`:memory:` in tests, first boot in prod) execute every declarative
+  //     `db/schema/*.sql` file and mark all existing `db/migration/NNNN-*.sql` files as applied.
+  //   - Existing databases create an atomic `VACUUM INTO` backup before applying unapplied
+  //     `NNNN-description.sql` migrations in sequence. `PRAGMA foreign_keys = OFF` is toggled
+  //     outside `inTransaction` because SQLite ignores `PRAGMA foreign_keys` inside an open
+  //     transaction; `PRAGMA foreign_key_check` validates referential integrity before `COMMIT`.
+  private initializeSchema(options: Options) {
     const schemaDir = options.schemaDir ?? SCHEMA_DIR;
     const migrationDir = options.migrationDir ?? MIGRATION_DIR;
     const now = options.now ?? Math.floor(Date.now() / 1000);
@@ -358,10 +174,11 @@ export class ArenaDB {
     }
   }
 
-  getAppliedMigrations(): Array<{version: string; applied_at: number}> {
-    return this.db.prepare(
+  getAppliedMigrations(): AppliedMigration[] {
+    const rows = this.db.prepare(
       'SELECT version, applied_at FROM schema_migrations ORDER BY version ASC'
-    ).all() as unknown as Array<{version: string; applied_at: number}>;
+    ).all() as Array<{version: string; applied_at: number}>;
+    return rows.map(r => ({version: r.version, appliedAt: r.applied_at}));
   }
 
   close() {
@@ -383,91 +200,96 @@ export class ArenaDB {
   }
 
   syncLaddersFromYaml(laddersYaml: string, now?: number) {
-    syncLaddersFromYaml(this.db, this.txRunner, laddersYaml, now);
+    ladders.syncLaddersFromYaml(this.db, this.txRunner, laddersYaml, now);
   }
 
   syncLadders(file?: string, now?: number) {
-    syncLadders(this.db, this.txRunner, file, now);
+    ladders.syncLadders(this.db, this.txRunner, file, now);
   }
 
-  getLadders(): LadderRow[] {
-    return getLadders(this.db);
+  getLadders(): ladders.LadderRow[] {
+    return ladders.getLadders(this.db);
   }
 
-  getCurrentLadders(): LadderRow[] {
-    return getCurrentLadders(this.db);
+  getCurrentLadders(): ladders.LadderRow[] {
+    return ladders.getCurrentLadders(this.db);
   }
 
-  getActiveLadders(): LadderRow[] {
-    return getActiveLadders(this.db);
+  getActiveLadders(): ladders.LadderRow[] {
+    return ladders.getActiveLadders(this.db);
   }
 
-  getPlayableLadders(): LadderRow[] {
-    return getPlayableLadders(this.db);
+  getPlayableLadders(): ladders.LadderRow[] {
+    return ladders.getPlayableLadders(this.db);
   }
 
-  getLadder(id: string): LadderRow | undefined {
-    return getLadder(this.db, id);
+  getLadder(id: string): ladders.LadderRow | undefined {
+    return ladders.getLadder(this.db, id);
   }
 
-  getActiveLadderBySlot(slot: LadderSlot): LadderRow | undefined {
-    return getActiveLadderBySlot(this.db, slot);
+  getActiveLadderBySlot(slot: ladders.LadderSlot): ladders.LadderRow | undefined {
+    return ladders.getActiveLadderBySlot(this.db, slot);
   }
 
-  setLadderStatus(ladderId: string, status: LadderStatus, now?: number): LadderRow {
-    return setLadderStatus(this.db, this.txRunner, ladderId, status, now);
+  setLadderStatus(ladderId: string, status: ladders.LadderStatus, now?: number): ladders.LadderRow {
+    return ladders.setLadderStatus(this.db, this.txRunner, ladderId, status, now);
   }
 
-  rotateLadder(input: RotateLadderInput): {oldLadder: LadderRow; newLadder?: LadderRow} {
-    return rotateLadder(this.db, this.txRunner, input);
+  rotateLadder(
+    input: ladders.RotateLadderInput
+  ): {oldLadder: ladders.LadderRow; newLadder?: ladders.LadderRow} {
+    return ladders.rotateLadder(this.db, this.txRunner, input);
   }
 
   syncProjectsFromYaml(projectsYaml: string, avatarsDir?: string, now?: number) {
-    syncProjectsFromYaml(this.db, this.txRunner, projectsYaml, avatarsDir, now);
+    agents.syncProjectsFromYaml(this.db, this.txRunner, projectsYaml, avatarsDir, now);
   }
 
   syncProjects(file?: string, avatarsDir?: string, now?: number) {
-    syncProjects(this.db, this.txRunner, file, avatarsDir, now);
+    agents.syncProjects(this.db, this.txRunner, file, avatarsDir, now);
   }
 
-  async syncProjectsFromYamlWithSmogon(projectsYaml: string, options?: SyncProjectsOptions) {
-    await syncProjectsFromYamlWithSmogon(this.db, this.txRunner, projectsYaml, options);
+  async syncProjectsFromYamlWithSmogon(
+    projectsYaml: string,
+    options?: agents.SyncProjectsOptions
+  ) {
+    await agents.syncProjectsFromYamlWithSmogon(this.db, this.txRunner, projectsYaml, options);
   }
 
-  async syncProjectsWithSmogon(file?: string, options?: SyncProjectsOptions) {
-    await syncProjectsWithSmogon(this.db, this.txRunner, file, options);
+  async syncProjectsWithSmogon(file?: string, options?: agents.SyncProjectsOptions) {
+    await agents.syncProjectsWithSmogon(this.db, this.txRunner, file, options);
   }
 
-  getBotBySlug(slug: string): BotRow | undefined {
-    return getBotBySlug(this.db, slug);
+  getAgentBySlug(slug: string): agents.AgentRow | undefined {
+    return agents.getAgentBySlug(this.db, slug);
   }
 
-  getBotById(id: number): BotRow | undefined {
-    return getBotById(this.db, id);
+  getAgentById(id: number): agents.AgentRow | undefined {
+    return agents.getAgentById(this.db, id);
   }
 
-  refundCooldown(botSlug: string, now?: number): BotRow {
-    return refundCooldown(this.db, botSlug, now);
+  refundCooldown(agentSlug: string, now?: number): agents.AgentRow {
+    return agents.refundCooldown(this.db, agentSlug, now);
   }
 
-  getDeveloperByGitHub(githubLogin: string): DeveloperRow | undefined {
-    return getDeveloperByGitHub(this.db, githubLogin);
+  getDeveloperByGitHub(githubLogin: string): developers.DeveloperRow | undefined {
+    return developers.getDeveloperByGitHub(this.db, githubLogin);
   }
 
-  getDeveloperByDiscordId(discordId: string): DeveloperRow | undefined {
-    return getDeveloperByDiscordId(this.db, discordId);
+  getDeveloperByDiscordId(discordId: string): developers.DeveloperRow | undefined {
+    return developers.getDeveloperByDiscordId(this.db, discordId);
   }
 
-  getDevelopersForBot(botId: number): DeveloperRow[] {
-    return getDevelopersForBot(this.db, botId);
+  getDevelopersForAgent(agentId: number): developers.DeveloperRow[] {
+    return developers.getDevelopersForAgent(this.db, agentId);
   }
 
   getCompetitorDiscordIds(): string[] {
-    return getCompetitorDiscordIds(this.db);
+    return developers.getCompetitorDiscordIds(this.db);
   }
 
   linkDeveloperGitHubId(githubLogin: string, githubId: number, now?: number) {
-    linkDeveloperGitHubId(this.db, githubLogin, githubId, now);
+    developers.linkDeveloperGitHubId(this.db, githubLogin, githubId, now);
   }
 
   linkDeveloperDiscord(
@@ -476,198 +298,231 @@ export class ArenaDB {
     discordUsername: string,
     now?: number
   ) {
-    linkDeveloperDiscord(this.db, this.txRunner, githubLogin, discordId, discordUsername, now);
+    developers.linkDeveloperDiscord(
+      this.db,
+      this.txRunner,
+      githubLogin,
+      discordId,
+      discordUsername,
+      now
+    );
   }
 
   unlinkDeveloperDiscord(githubLogin: string, now?: number) {
-    unlinkDeveloperDiscord(this.db, githubLogin, now);
+    developers.unlinkDeveloperDiscord(this.db, githubLogin, now);
   }
 
   syncDiscordMembers(members: Iterable<{id: string; username: string}>, now?: number) {
-    syncDiscordMembers(this.db, this.txRunner, members, now);
+    discordMembers.syncDiscordMembers(this.db, this.txRunner, members, now);
   }
 
   isDiscordMember(discordId: string | undefined): boolean {
-    return isDiscordMember(this.db, discordId);
+    return discordMembers.isDiscordMember(this.db, discordId);
   }
 
-  hasActiveLadderTeams(ladderId: string, botId: number): boolean {
-    return hasActiveLadderTeams(this.db, ladderId, botId);
+  hasActiveLadderTeams(ladderId: string, agentId: number): boolean {
+    return teams.hasActiveLadderTeams(this.db, ladderId, agentId);
   }
 
-  getTeamsForBotLadder(
+  getTeamsForAgentLadder(
     ladderId: string,
-    botId: number,
-    status?: TeamPoolStatus
+    agentId: number,
+    status?: teams.TeamPoolStatus
   ): string[] {
-    return getTeamsForBotLadder(this.db, ladderId, botId, status);
+    return teams.getTeamsForAgentLadder(this.db, ladderId, agentId, status);
   }
 
-  getVersionById(versionId: number): BotVersionRow | undefined {
-    return getVersionById(this.db, versionId);
+  getVersionById(versionId: number): versions.AgentVersionRow | undefined {
+    return versions.getVersionById(this.db, versionId);
   }
 
-  getVersionBySlugAndStr(
-    botSlug: string,
-    versionStr: string
-  ): (BotVersionRow & {bot_slug: string; bot_name: string}) | undefined {
-    return getVersionBySlugAndStr(this.db, botSlug, versionStr);
+  getVersionBySlugAndLabel(
+    agentSlug: string,
+    version: string
+  ): (versions.AgentVersionRow & {agentSlug: string; agentName: string}) | undefined {
+    return versions.getVersionBySlugAndLabel(this.db, agentSlug, version);
   }
 
-  getActiveEntriesForBot(botId: number): ActiveEntryView[] {
-    return getActiveEntriesForBot(this.db, botId);
+  getActiveEntriesForAgent(agentId: number): entries.ActiveEntryView[] {
+    return entries.getActiveEntriesForAgent(this.db, agentId);
   }
 
-  getVersionsForBot(botId: number): VersionHistoryView[] {
-    return getVersionsForBot(this.db, botId);
+  getVersionsForAgent(agentId: number): versions.VersionHistoryView[] {
+    return versions.getVersionsForAgent(this.db, agentId);
   }
 
-  hasAnyLeaderboardEntry(botId: number): boolean {
-    return hasAnyLeaderboardEntry(this.db, botId);
+  hasAnyLeaderboardEntry(agentId: number): boolean {
+    return entries.hasAnyLeaderboardEntry(this.db, agentId);
   }
 
-  computeBotSubmissionStatus(botId: number, now?: number): SubmissionStatus {
-    return computeBotSubmissionStatus(this.db, botId, now);
+  computeAgentSubmissionStatus(agentId: number, now?: number): versions.SubmissionStatus {
+    return versions.computeAgentSubmissionStatus(this.db, agentId, now);
   }
 
-  createSubmission(input: CreateSubmissionInput): BotVersionRow {
-    return createSubmission(this.db, this.txRunner, input);
+  createSubmission(input: versions.CreateSubmissionInput): versions.AgentVersionRow {
+    return versions.createSubmission(this.db, this.txRunner, input);
   }
 
-  getPendingSubmissions(): PendingSubmissionRow[] {
-    return getPendingSubmissions(this.db);
+  getPendingSubmissions(): versions.PendingSubmissionRow[] {
+    return versions.getPendingSubmissions(this.db);
   }
 
-  getVersionOwnerDiscordIds(botId: number, submittedByDevId?: number | null): string[] {
-    return getVersionOwnerDiscordIds(this.db, botId, submittedByDevId ?? null);
+  getVersionOwnerDiscordIds(agentId: number, developerId?: number): string[] {
+    return versions.getVersionOwnerDiscordIds(this.db, agentId, developerId);
   }
 
-  getPendingVersionDms(): PendingVersionDmRow[] {
-    return getPendingVersionDms(this.db);
+  getPendingVersionDms(): versions.PendingVersionDmRow[] {
+    return versions.getPendingVersionDms(this.db);
   }
 
-  markVersionDmSent(versionId: number) {
-    markVersionDmSent(this.db, versionId);
+  markVersionNotified(versionId: number) {
+    versions.markVersionNotified(this.db, versionId);
   }
 
-  applySubmissionStatus(input: ApplySubmissionStatusInput): ApplySubmissionStatusResult {
-    return applySubmissionStatus(this.db, this.txRunner, input);
+  applySubmissionStatus(
+    input: versions.ApplySubmissionStatusInput
+  ): versions.ApplySubmissionStatusResult {
+    return versions.applySubmissionStatus(this.db, this.txRunner, input);
   }
 
   quarantineVersion(
-    botSlug: string,
-    versionStr: string,
+    agentSlug: string,
+    version: string,
     reason?: string,
     now?: number
-  ): ApplySubmissionStatusResult {
-    return quarantineVersion(this.db, this.txRunner, botSlug, versionStr, reason, now);
+  ): versions.ApplySubmissionStatusResult {
+    return versions.quarantineVersion(this.db, this.txRunner, agentSlug, version, reason, now);
   }
 
-  unquarantineVersion(botSlug: string, versionStr: string, now?: number): BotVersionRow {
-    return unquarantineVersion(this.db, this.txRunner, botSlug, versionStr, now);
+  unquarantineVersion(
+    agentSlug: string,
+    version: string,
+    now?: number
+  ): versions.AgentVersionRow {
+    return versions.unquarantineVersion(this.db, this.txRunner, agentSlug, version, now);
   }
 
   recomputeLadderRatings(
     ladderId: string,
     nowSec?: number,
-    prevMatchSec?: number | null,
+    prevMatchSec?: number,
     dayUtc?: string
   ): RatingResult {
-    return recomputeLadderRatings(this.db, ladderId, nowSec, prevMatchSec, dayUtc);
+    return entries.recomputeLadderRatings(this.db, ladderId, nowSec, prevMatchSec, dayUtc);
   }
 
-  setLadderAnchor(ladderId: string, botSlug: string, versionStr: string, now?: number) {
-    const ver = this.getVersionBySlugAndStr(botSlug, versionStr);
+  setLadderAnchor(ladderId: string, agentSlug: string, version: string, now?: number) {
+    const ver = this.getVersionBySlugAndLabel(agentSlug, version);
     if (!ver) {
-      throw new Error(`Version "${versionStr}" not found for bot "${botSlug}"`);
+      throw new Error(`Version "${version}" not found for agent "${agentSlug}"`);
     }
-    setLadderAnchor(this.db, this.txRunner, ladderId, ver.id, now);
+    entries.setLadderAnchor(this.db, this.txRunner, ladderId, ver.id, now);
   }
 
-  recordCompletedMatch(input: RecordMatchInput): {duplicate: boolean; archivedLadder: boolean} {
-    return recordCompletedMatch(this.db, this.txRunner, input);
+  recordCompletedMatch(
+    input: matches.RecordMatchInput
+  ): {duplicate: boolean; archivedLadder: boolean} {
+    return matches.recordCompletedMatch(this.db, this.txRunner, input);
   }
 
-  getRecentMatches(limit?: number): RecentMatchView[] {
-    return getRecentMatches(this.db, limit);
+  getRecentMatches(limit?: number): matches.RecentMatchView[] {
+    return matches.getRecentMatches(this.db, limit);
   }
 
-  getLeaderboardEntries(ladderId: string): LeaderboardEntryView[] {
-    return getLeaderboardEntries(this.db, ladderId);
+  getLeaderboardEntries(ladderId: string): entries.LeaderboardEntryView[] {
+    return entries.getLeaderboardEntries(this.db, ladderId);
   }
 
-  getProjectArenaSummaries(): ProjectArenaSummary[] {
-    return getProjectArenaSummaries(this.db);
+  getProjectArenaSummaries(): entries.ProjectArenaSummary[] {
+    return entries.getProjectArenaSummaries(this.db);
   }
 
-  getArenaLadderRoleTargets(): ArenaLadderRoleTarget[] {
-    return getArenaLadderRoleTargets(this.db);
+  getArenaLadderRoleTargets(): entries.ArenaLadderRoleTarget[] {
+    return entries.getArenaLadderRoleTargets(this.db);
   }
 
-  getPairAggregatesForLadder(ladderId: string): PairAggregateRow[] {
-    return getPairAggregatesForLadder(this.db, ladderId);
+  getPairAggregatesForLadder(ladderId: string): pairs.PairAggregateRow[] {
+    return pairs.getPairAggregatesForLadder(this.db, ladderId);
   }
 
-  getRatingSnapshotsForLadder(ladderId: string): LadderSnapshotHistoryRow[] {
-    return getRatingSnapshotsForLadder(this.db, ladderId);
+  getRatingSnapshotsForLadder(ladderId: string): snapshots.LadderSnapshotHistoryRow[] {
+    return snapshots.getRatingSnapshotsForLadder(this.db, ladderId);
   }
 
-  getAllActiveBots(): BotRow[] {
-    return getAllActiveBots(this.db);
+  getAllActiveAgents(): agents.AgentRow[] {
+    return agents.getAllActiveAgents(this.db);
   }
 
-  getBotParticipatedLadders(botId: number): LadderRow[] {
-    return getBotParticipatedLadders(this.db, botId);
+  getAgentParticipatedLadders(agentId: number): ladders.LadderRow[] {
+    return entries.getAgentParticipatedLadders(this.db, agentId);
   }
 
-  getBotLadderProfileEntries(botId: number, ladderId: string): BotLadderProfileEntry[] {
-    return getBotLadderProfileEntries(this.db, botId, ladderId);
+  getAgentLadderProfileEntries(
+    agentId: number,
+    ladderId: string
+  ): entries.AgentLadderProfileEntry[] {
+    return entries.getAgentLadderProfileEntries(this.db, agentId, ladderId);
   }
 
-  getBotLadderStats(ladderId: string, botId: number): BotLadderStatsRow | undefined {
-    return getBotLadderStats(this.db, ladderId, botId);
+  getAgentLadderStats(ladderId: string, agentId: number): stats.AgentLadderStatsRow | undefined {
+    return stats.getAgentLadderStats(this.db, ladderId, agentId);
   }
 
-  getRecentMatchesForBotOnLadder(
-    botId: number,
+  getRecentMatchesForAgentOnLadder(
+    agentId: number,
     ladderId: string,
     limit?: number
-  ): RecentMatchView[] {
-    return getRecentMatchesForBotOnLadder(this.db, botId, ladderId, limit);
+  ): matches.RecentMatchView[] {
+    return matches.getRecentMatchesForAgentOnLadder(this.db, agentId, ladderId, limit);
   }
 
-  upsertTournament(input: UpsertTournamentInput) {
-    upsertTournament(this.db, input);
+  upsertTournament(input: tournaments.UpsertTournamentInput) {
+    tournaments.upsertTournament(this.db, input);
   }
 
-  getTournaments(): TournamentRow[] {
-    return getTournaments(this.db);
+  getTournaments(): tournaments.TournamentRow[] {
+    return tournaments.getTournaments(this.db);
   }
 
-  getTournament(id: string): TournamentRow | undefined {
-    return getTournament(this.db, id);
+  getTournament(id: string): tournaments.TournamentRow | undefined {
+    return tournaments.getTournament(this.db, id);
   }
 
-  upsertTournamentEntrant(input: UpsertTournamentEntrantInput) {
-    upsertTournamentEntrant(this.db, input);
+  upsertTournamentEntrant(input: entrants.UpsertTournamentEntrantInput) {
+    entrants.upsertTournamentEntrant(this.db, input);
   }
 
-  getTournamentEntrants(tournamentId: string): TournamentEntrantView[] {
-    return getTournamentEntrants(this.db, tournamentId);
+  getTournamentEntrants(tournamentId: string): entrants.TournamentEntrantView[] {
+    return entrants.getTournamentEntrants(this.db, tournamentId);
   }
 
-  upsertTournamentGame(input: UpsertTournamentGameInput) {
-    upsertTournamentGame(this.db, input);
+  upsertTournamentGame(input: games.UpsertTournamentGameInput) {
+    games.upsertTournamentGame(this.db, input);
   }
 
-  getTournamentGames(tournamentId: string, limit?: number): TournamentGameView[] {
-    return getTournamentGames(this.db, tournamentId, limit);
+  getTournamentGames(tournamentId: string, limit?: number): games.TournamentGameView[] {
+    return games.getTournamentGames(this.db, tournamentId, limit);
   }
 
   getTournamentCrosstable(
     tournamentId: string,
-    stage?: TournamentGameStage
-  ): TournamentPairRecord[] {
-    return getTournamentCrosstable(this.db, tournamentId, stage);
+    stage?: games.TournamentGameStage
+  ): games.TournamentPairRecord[] {
+    return games.getTournamentCrosstable(this.db, tournamentId, stage);
   }
 }
+
+export * from './agent-ladder-stats';
+export * from './agent-ladder-teams';
+export * from './agent-versions';
+export * from './agents';
+export * from './developers';
+export * from './discord-members';
+export * from './ladder-entries';
+export * from './ladders';
+export * from './matches';
+export * from './pair-aggregates';
+export * from './rating-snapshots';
+export * from './tournament-entrants';
+export * from './tournament-games';
+export * from './tournaments';

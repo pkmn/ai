@@ -1,24 +1,25 @@
+// Operator CLI (`npm run pkmn -- <command>`) for administering the pkmn.ai Arena SQLite DB,
+// managing version quarantines and submission cooldowns, rotating seasonal ladders, resolving
+// Smogon forum member IDs, and minting local session cookies for `curl` / browser testing.
+
 require('source-map-support').install();
 
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {
-  ArenaDB,
-  DB_PATH,
-  type LadderStatus,
-  type TeamMode,
-} from '../db';
-import {PUBLIC_DIR, renderArenaPages} from '../server/render';
-import {type SmogonUser, lookupSmogonUser} from '../server/smogon';
+import {DB_PATH, Database, LadderStatus, TeamMode} from '../db';
+import * as auth from '../server/auth';
+import * as render from '../server/render';
+import * as smogon from '../server/smogon';
 
-export interface PkmnCliOptions {
-  db?: ArenaDB;
+export interface Options {
+  db?: Database;
   dbPath?: string;
   publicDir?: string;
   now?: number;
   smogonToken?: string;
-  lookupSmogon?: (raw: string | number, token?: string) => Promise<SmogonUser>;
+  sessionSecret?: string;
+  lookupSmogon?: (raw: string | number, token?: string) => Promise<smogon.User>;
   log?: (line: string) => void;
 }
 
@@ -26,16 +27,16 @@ const USAGE = [
   'Usage: pkmn <command> [args...]',
   '',
   'Commands:',
-  '  quarantine <bot-slug> <version> [--reason "..."]',
-  '  unquarantine <bot-slug> <version>',
-  '  refund-cooldown <bot-slug>',
-  '  set-anchor <ladder_id> <bot-slug> <version>',
+  '  quarantine <agent-slug> <version> [--reason "..."]',
+  '  unquarantine <agent-slug> <version>',
+  '  refund-cooldown <agent-slug>',
+  '  set-anchor <ladder_id> <agent-slug> <version>',
   '  set-ladder-status <ladder_id> <upcoming|active|settling|archived>',
-  '  rotate-ladder <old_ladder_id> --display-name "..." [--new <new_ladder_id>] ' +
-    '[--new-display-name "..."] [--format <format_id>] [--team-mode <mode>] ' +
-    '[--min-bots <n>] [--team-count <n>]',
+  '  rotate-ladder <old_ladder_id> --name "..." [--new <new_ladder_id>] ' +
+    '[--new-name "..."] [--format <format>] [--team <mode>] [--min <n>] [--teams <n>]',
   '  render',
   '  lookup-smogon <username|slug.id|id|url>',
+  '  session [--github <login>] [--discord <id>:<username>] [--ttl <seconds>]',
 ].join('\n');
 
 function parseArgs(argv: string[]): {positional: string[]; flags: Map<string, string>} {
@@ -64,10 +65,7 @@ function parseArgs(argv: string[]): {positional: string[]; flags: Map<string, st
   return {positional, flags};
 }
 
-export async function runPkmnCli(
-  argv: string[],
-  options: PkmnCliOptions = {}
-): Promise<void> {
+export async function runPkmnCli(argv: string[], options: Options = {}): Promise<void> {
   const log = options.log ?? ((line: string) => console.log(line));
   const {positional, flags} = parseArgs(argv);
   const cmd = positional[0];
@@ -82,7 +80,7 @@ export async function runPkmnCli(
     if (!target) {
       throw new Error('Usage: pkmn lookup-smogon <username|slug.id|id|url>');
     }
-    const lookup = options.lookupSmogon ?? lookupSmogonUser;
+    const lookup = options.lookupSmogon ?? smogon.lookupUser;
     const token = options.smogonToken ?? process.env.SMOGON_TOKEN;
     const user = await lookup(target, token);
     log(
@@ -92,13 +90,48 @@ export async function runPkmnCli(
     return;
   }
 
+  if (cmd === 'session') {
+    const secret = flags.get('secret') ?? options.sessionSecret ?? process.env.SESSION_SECRET ?? '';
+    if (!secret) {
+      throw new Error('SESSION_SECRET is required to mint a session cookie');
+    }
+    const githubLogin = flags.get('github');
+    const discordFlag = flags.get('discord');
+    if (!githubLogin && !discordFlag) {
+      throw new Error(
+        'Usage: pkmn session [--github <login>] [--discord <id>:<username>] [--ttl <seconds>]'
+      );
+    }
+    const ttl = flags.has('ttl') ? Number(flags.get('ttl')) : auth.SESSION_TTL_SECONDS;
+    if (!Number.isInteger(ttl) || ttl <= 0) {
+      throw new Error('--ttl must be a positive integer (seconds)');
+    }
+    const now = options.now ?? Math.floor(Date.now() / 1000);
+    let discord: {id: string; username: string} | undefined;
+    if (discordFlag) {
+      const colon = discordFlag.indexOf(':');
+      if (colon <= 0 || colon === discordFlag.length - 1) {
+        throw new Error('--discord must be formatted as <id>:<username>');
+      }
+      discord = {id: discordFlag.slice(0, colon), username: discordFlag.slice(colon + 1)};
+    }
+    const payload: auth.Session = {
+      ...(githubLogin ? {github: {id: 1, login: githubLogin}} : {}),
+      ...(discord ? {discord} : {}),
+      exp: now + ttl,
+    };
+    const token = auth.signToken(payload, secret);
+    log(`${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`);
+    return;
+  }
+
   const ownsDb = !options.db;
-  const db = options.db ?? new ArenaDB(options.dbPath ?? DB_PATH);
+  const db = options.db ?? new Database(options.dbPath ?? DB_PATH);
   const now = options.now ?? Math.floor(Date.now() / 1000);
   const maybeRender = () => {
-    const pub = options.publicDir ?? (ownsDb && !options.dbPath ? PUBLIC_DIR : undefined);
+    const pub = options.publicDir ?? (ownsDb && !options.dbPath ? render.PUBLIC_DIR : undefined);
     if (pub && fs.existsSync(path.join(pub, 'index.html'))) {
-      renderArenaPages({db, publicDir: pub, now});
+      render.renderArenaPages({db, publicDir: pub, now});
     }
   };
 
@@ -107,13 +140,13 @@ export async function runPkmnCli(
       case 'quarantine': {
         const [slug, version] = positional.slice(1);
         if (!slug || !version) {
-          throw new Error('Usage: pkmn quarantine <bot-slug> <version> [--reason "..."]');
+          throw new Error('Usage: pkmn quarantine <agent-slug> <version> [--reason "..."]');
         }
         const reason = flags.get('reason');
         const res = db.quarantineVersion(slug, version, reason, now);
         maybeRender();
         log(
-          `Quarantined ${res.bot.name} (${res.bot.slug}) version ${res.version.version_str}` +
+          `Quarantined ${res.agent.name} (${res.agent.slug}) version ${res.version.version}` +
           (reason ? `: ${reason}` : '')
         );
         return;
@@ -121,26 +154,26 @@ export async function runPkmnCli(
       case 'unquarantine': {
         const [slug, version] = positional.slice(1);
         if (!slug || !version) {
-          throw new Error('Usage: pkmn unquarantine <bot-slug> <version>');
+          throw new Error('Usage: pkmn unquarantine <agent-slug> <version>');
         }
         const ver = db.unquarantineVersion(slug, version, now);
         maybeRender();
-        log(`Unquarantined ${slug} version ${ver.version_str}`);
+        log(`Unquarantined ${slug} version ${ver.version}`);
         return;
       }
       case 'refund-cooldown': {
         const [slug] = positional.slice(1);
         if (!slug) {
-          throw new Error('Usage: pkmn refund-cooldown <bot-slug>');
+          throw new Error('Usage: pkmn refund-cooldown <agent-slug>');
         }
-        const bot = db.refundCooldown(slug, now);
-        log(`Refunded 14-day submission cooldown for ${bot.name} (${bot.slug})`);
+        const agent = db.refundCooldown(slug, now);
+        log(`Refunded 14-day submission cooldown for ${agent.name} (${agent.slug})`);
         return;
       }
       case 'set-anchor': {
         const [ladderId, slug, version] = positional.slice(1);
         if (!ladderId || !slug || !version) {
-          throw new Error('Usage: pkmn set-anchor <ladder_id> <bot-slug> <version>');
+          throw new Error('Usage: pkmn set-anchor <ladder_id> <agent-slug> <version>');
         }
         db.setLadderAnchor(ladderId, slug, version, now);
         maybeRender();
@@ -156,52 +189,52 @@ export async function runPkmnCli(
         }
         const updated = db.setLadderStatus(ladderId, status as LadderStatus, now);
         maybeRender();
-        log(`Ladder ${updated.id} (${updated.display_name}) -> status=${updated.status}`);
+        log(`Ladder ${updated.id} (${updated.name}) -> status=${updated.status}`);
         return;
       }
       case 'rotate-ladder': {
         const [oldLadderId] = positional.slice(1);
-        const displayName = flags.get('display-name');
-        if (!oldLadderId || !displayName) {
+        const archivedName = flags.get('name');
+        if (!oldLadderId || !archivedName) {
           throw new Error(
-            'Usage: pkmn rotate-ladder <old_ladder_id> --display-name "..." [--new <id>]'
+            'Usage: pkmn rotate-ladder <old_ladder_id> --name "..." [--new <id>]'
           );
         }
-        const minBotsStr = flags.get('min-bots');
-        const teamCountStr = flags.get('team-count');
-        const minBots = minBotsStr !== undefined ? Number(minBotsStr) : undefined;
-        const teamCount = teamCountStr !== undefined ? Number(teamCountStr) : undefined;
-        if (minBots !== undefined && (!Number.isInteger(minBots) || minBots < 2)) {
-          throw new Error('--min-bots must be an integer >= 2');
+        const minStr = flags.get('min');
+        const teamsStr = flags.get('teams');
+        const min = minStr !== undefined ? Number(minStr) : undefined;
+        const teams = teamsStr !== undefined ? Number(teamsStr) : undefined;
+        if (min !== undefined && (!Number.isInteger(min) || min < 2)) {
+          throw new Error('--min must be an integer >= 2');
         }
-        if (teamCount !== undefined && (!Number.isInteger(teamCount) || teamCount < 1)) {
-          throw new Error('--team-count must be a positive integer');
+        if (teams !== undefined && (!Number.isInteger(teams) || teams < 1)) {
+          throw new Error('--teams must be a positive integer');
         }
 
         const rotated = db.rotateLadder({
           oldLadderId,
-          archivedDisplayName: displayName,
+          archivedName,
           newLadderId: flags.get('new'),
-          newDisplayName: flags.get('new-display-name'),
-          newFormatId: flags.get('format'),
-          newTeamMode: flags.get('team-mode') as TeamMode | undefined,
-          newMinBots: minBots,
-          newTeamCount: teamCount,
+          newName: flags.get('new-name'),
+          newFormat: flags.get('format'),
+          newTeam: flags.get('team') as TeamMode | undefined,
+          newMin: min,
+          newTeams: teams,
           now,
         });
         maybeRender();
         log(
-          `Rotated ${rotated.oldLadder.id} ("${rotated.oldLadder.display_name}", ` +
-        `status=${rotated.oldLadder.status})` +
-        (rotated.newLadder
-          ? ` -> activated ${rotated.newLadder.id} ("${rotated.newLadder.display_name}")`
-          : '')
+          `Rotated ${rotated.oldLadder.id} ("${rotated.oldLadder.name}", ` +
+          `status=${rotated.oldLadder.status})` +
+          (rotated.newLadder
+            ? ` -> activated ${rotated.newLadder.id} ("${rotated.newLadder.name}")`
+            : '')
         );
         return;
       }
       case 'render': {
-        const pub = options.publicDir ?? PUBLIC_DIR;
-        renderArenaPages({db, publicDir: pub, now});
+        const pub = options.publicDir ?? render.PUBLIC_DIR;
+        render.renderArenaPages({db, publicDir: pub, now});
         log(`Rendered static Arena pages into ${pub}`);
         return;
       }

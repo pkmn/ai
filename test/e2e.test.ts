@@ -7,25 +7,17 @@ import * as path from 'path';
 import {chromium} from 'playwright-core';
 import polka from 'polka';
 
-import {ArenaDB, COOLDOWN_S, LADDERS_FILE} from '../db';
+import {COOLDOWN_SECONDS, Database, LADDERS_FILE} from '../db';
 import * as account from '../server/account';
 import * as arena from '../server/arena';
-import {Auth, type AuthConfig, SESSION_COOKIE, signToken} from '../server/auth';
+import * as auth from '../server/auth';
 import * as discord from '../server/discord';
 import {PUBLIC_DIR, renderArenaPages} from '../server/render';
 import {clearReferencePoolCache} from '../server/teams';
-import {
-  MockArenaClient,
-  buildCanonicalTeamPool,
-  createRng,
-  generateValidVgcTeams,
-  prepareMockStaticDir,
-  sampleCompetitorPoolPair,
-  seedMockArena,
-} from '../tools/mock-arena';
+import * as mock from '../tools/mock';
 import {runPkmnCli} from '../tools/pkmn';
 
-const E2E_AUTH: AuthConfig = {
+const E2E_AUTH: auth.Config = {
   sessionSecret: 'e2e-session-secret-32-bytes-minimum',
   arenaSecret: 'e2e-arena-hmac-secret-32-bytes-min',
   github: {
@@ -83,39 +75,39 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
     clearReferencePoolCache();
   });
 
-  test('sampleCompetitorPoolPair enforces min_bots >= 3, disjoint owners, and <= 1 of 40 teams',
+  test('samplePoolsPair enforces min >= 3, disjoint owners, and <= 1 of 40 teams',
     () => {
-      const bot1Teams = generateValidVgcTeams(20, 0);
-      const bot2Teams = generateValidVgcTeams(20, 1);
-      const bot3Teams = generateValidVgcTeams(20, 2);
+      const agent1Teams = mock.generateValidVgcTeams(20, 0);
+      const agent2Teams = mock.generateValidVgcTeams(20, 1);
+      const agent3Teams = mock.generateValidVgcTeams(20, 2);
 
-      // With only 2 bots, sampling must reject when activeOwnsT1 is true (no 3rd-party team)
-      const twoBotPool = buildCanonicalTeamPool([
-        {botId: 1, botName: '0 ERROR', teams: bot1Teams},
-        {botId: 2, botName: 'Foul Play', teams: bot2Teams},
+      // With only 2 agents, sampling must reject when activeOwnsT1 is true (no 3rd-party team)
+      const twoAgentPool = mock.buildCanonicalTeamPool([
+        {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
+        {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
       ]);
-      expect(() => sampleCompetitorPoolPair(twoBotPool, 1, 2, createRng(1)))
+      expect(() => mock.samplePoolsPair(twoAgentPool, 1, 2, mock.createRng(1)))
         .toThrow(/Insufficient third-party teams in pool/);
 
-      // Include a shared duplicate team between Bot 1 and Bot 2 + Bot 3's 20 teams
-      const sharedTeam = bot1Teams[0];
-      const threeBotPool = buildCanonicalTeamPool([
-        {botId: 1, botName: '0 ERROR', teams: bot1Teams},
-        {botId: 2, botName: 'Foul Play', teams: [sharedTeam, ...bot2Teams.slice(1)]},
-        {botId: 3, botName: "Mew's Truck", teams: bot3Teams},
+      // Include a shared duplicate team between Agent 1 and Agent 2 + Agent 3's 20 teams
+      const sharedTeam = agent1Teams[0];
+      const threeAgentPool = mock.buildCanonicalTeamPool([
+        {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
+        {agentId: 2, agentName: 'Foul Play', teams: [sharedTeam, ...agent2Teams.slice(1)]},
+        {agentId: 3, agentName: "Mew's Truck", teams: agent3Teams},
       ]);
 
-      const byPacked = new Map(threeBotPool.map(e => [e.canonicalPacked, e]));
-      const rng = createRng(42);
+      const byPacked = new Map(threeAgentPool.map(e => [e.canonicalPacked, e]));
+      const rng = mock.createRng(42);
       for (let trial = 0; trial < 200; trial++) {
-        const pair = sampleCompetitorPoolPair(threeBotPool, 1, 2, rng);
+        const pair = mock.samplePoolsPair(threeAgentPool, 1, 2, rng);
         expect(pair.t1Packed).not.toBe(pair.t2Packed);
 
         const e1 = byPacked.get(pair.t1Packed)!;
         const e2 = byPacked.get(pair.t2Packed)!;
         expect(e1.speciesIds).not.toEqual(e2.speciesIds);
 
-        // Neither team may be jointly owned by both active bots (1 & 2)
+        // Neither team may be jointly owned by both active agents (1 & 2)
         expect(e1.owners.has(1) && e1.owners.has(2)).toBe(false);
         expect(e2.owners.has(1) && e2.owners.has(2)).toBe(false);
 
@@ -124,7 +116,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           expect(e2.owners.has(owner)).toBe(false);
         }
 
-        // At most 1 of {T1, T2} belongs to the 40 teams submitted by Bot 1 and Bot 2 combined
+        // At most 1 of {T1, T2} belongs to the 40 teams submitted by Agent 1 and Agent 2 combined
         const activeCount =
           (e1.owners.has(1) || e1.owners.has(2) ? 1 : 0) +
           (e2.owners.has(1) || e2.owners.has(2) ? 1 : 0);
@@ -143,9 +135,9 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       fs.mkdirSync(poolDir, {recursive: true});
       copyRootPublicAssets(PUBLIC_DIR, publicDir);
 
-      const projectsFile = prepareMockStaticDir(staticDir, avatarsDir);
+      const projectsFile = mock.prepareMockStaticDir(staticDir, avatarsDir);
       let nowSec = 1_760_000_000;
-      const db = new ArenaDB(dbPath, {now: nowSec});
+      const db = new Database(dbPath, {now: nowSec});
 
       const discordCalls: Array<{method: string; url: string; body?: string}> = [];
       globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
@@ -171,7 +163,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
               {status: 200, headers: {'content-type': 'application/json'}}
             ));
           }
-          return Promise.resolve(new Response(null, {status: 204}));
+          return Promise.resolve(new Response(undefined, {status: 204}));
         }
         return realFetch(input, init);
       };
@@ -187,44 +179,43 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       db.upsertTournament({
         id: '1',
         name: 'Spring ’26',
-        format_id: 'gen9ou',
-        games_per_matchup: 8,
-        parallel_tables: 2,
-        hardware_desc: 'GCP L4 Spot',
+        format: 'gen9ou',
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot',
         status: 'completed',
-        starts_at: nowSec - 86400,
-        completed_at: nowSec - 3600,
+        startsAt: nowSec - 86400,
+        completedAt: nowSec - 3600,
       });
       db.upsertTournament({
         id: '2',
         name: 'Autumn ’26',
-        format_id: 'gen9championsvgc2026regmc',
-        games_per_matchup: 8,
-        parallel_tables: 2,
-        hardware_desc: 'GCP L4 Spot',
+        format: 'gen9championsvgc2026regmc',
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot',
         status: 'running',
-        starts_at: nowSec - 1800,
-        completed_at: null,
+        startsAt: nowSec - 1800,
       });
 
       const app = polka();
-      const auth = new Auth({
+      const authInstance = new auth.Auth({
         config: E2E_AUTH,
         db,
         isAuthorizedGitHub: login => db.getDeveloperByGitHub(login) !== undefined,
       });
-      auth.register(app);
+      authInstance.register(app);
 
       const discordState = new Map<string, string | undefined>();
-      const poolDirsByLadder = new Map<string, string[]>([
+      const poolsByLadder = new Map<string, string[]>([
         ['gen9championsvgc2026regmc', [poolDir]],
         ['gen9championsvgc2027regma', [poolDir]],
       ]);
 
       account.register(app, {
         db,
-        auth,
-        poolDirsByLadder,
+        auth: authInstance,
+        poolsByLadder,
         rateLimitMaxAttempts: 50,
         now: () => nowSec,
       });
@@ -233,13 +224,13 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       let autoRender = true;
       const arenaHandle = arena.register(app, {
         db,
-        auth,
+        auth: authInstance,
         publicDir,
         now: () => nowSec,
         onSubmissionStatus: result => {
           statusQueue = statusQueue.then(async () => {
             await discord.notifySubmissionStatus(
-              db, 'e2e-bot-token', DISCORD_CONFIG, result, discordState
+              db, 'e2e-discord-token', DISCORD_CONFIG, result, discordState
             );
           });
           return statusQueue.then(() => undefined);
@@ -268,11 +259,11 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       const cookieFor = (githubLogin: string, githubId?: number) => {
         const exp = Math.floor(Date.now() / 1000) + 3600;
         const id = githubId ?? githubIds[githubLogin] ?? 9999;
-        const tok = signToken(
+        const tok = auth.signToken(
           {github: {id, login: githubLogin}, exp},
           E2E_AUTH.sessionSecret
         );
-        return `${SESSION_COOKIE}=${encodeURIComponent(tok)}`;
+        return `${auth.SESSION_COOKIE}=${encodeURIComponent(tok)}`;
       };
 
       try {
@@ -320,32 +311,32 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
 
         const badSubRes = await submitJson('scheibo', {
           version: '0.1.0-bad',
-          format_type: 'bundle',
-          download_url: 'https://r2.example.com/0-error-bad.tar.zst',
+          package: 'bundle',
+          url: 'https://r2.example.com/0-error-bad.tar.zst',
           sha256: SHA_1,
           ladders: ['gen1ou20261109'],
         });
         expect(badSubRes.status).toBe(201);
 
-        let nextSmokeMode: 'passed' | 'failed_smoke_test' = 'failed_smoke_test';
-        const mockArena = new MockArenaClient({
+        let nextSmokeMode: 'passed' | 'failed' = 'failed';
+        const mockArena = new mock.MockArenaClient({
           serverUrl: baseUrl,
           arenaSecret: E2E_AUTH.arenaSecret!,
           now: () => nowSec,
           decideSmoke: sub => ({
             smokeStatus: nextSmokeMode,
-            smokeErrorLog: nextSmokeMode === 'failed_smoke_test'
-              ? `Boot failure in ${sub.version_str}`
-              : null,
+            smokeError: nextSmokeMode === 'failed'
+              ? `Boot failure in ${sub.version}`
+              : undefined,
           }),
         });
 
         expect(await mockArena.syncPendingSubmissions()).toBe(1);
         await statusQueue;
 
-        const failedRow = db.getVersionBySlugAndStr('0-error', '0.1.0-bad')!;
-        expect(failedRow.smoke_status).toBe('failed_smoke_test');
-        expect(failedRow.dm_sent).toBe(1);
+        const failedRow = db.getVersionBySlugAndLabel('0-error', '0.1.0-bad')!;
+        expect(failedRow.smokeStatus).toBe('failed');
+        expect(failedRow.notified).toBe(true);
         expect(discordCalls.some(c => c.url.includes('/channels/dm-513513270670262284/messages')))
           .toBe(true);
 
@@ -359,59 +350,60 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         nextSmokeMode = 'passed';
         const subZero100 = await submitJson('scheibo', {
           version: '1.0.0',
-          format_type: 'bundle',
-          download_url: 'https://r2.example.com/0-error-1.0.0.tar.zst',
+          package: 'bundle',
+          url: 'https://r2.example.com/0-error-1.0.0.tar.zst',
           sha256: SHA_1,
-          auth_token: 'Bearer private-r2-token',
+          authToken: 'Bearer private-r2-token',
           ladders: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
-          teams: generateValidVgcTeams(20, 0),
+          teams: mock.generateValidVgcTeams(20, 0),
         });
         expect(subZero100.status).toBe(201);
 
         const subFp100 = await submitJson('pmariglia', {
           version: '1.0.0',
-          format_type: 'bundle',
-          download_url: 'https://r2.example.com/foul-play-1.0.0.tar.zst',
+          package: 'bundle',
+          url: 'https://r2.example.com/foul-play-1.0.0.tar.zst',
           sha256: SHA_2,
           ladders: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
-          teams: generateValidVgcTeams(20, 1),
+          teams: mock.generateValidVgcTeams(20, 1),
         });
         expect(subFp100.status).toBe(201);
 
-        // Verify pending-submissions decrypts auth_token once, then submission-status wipes it
+        // Verify pending-submissions decrypts authToken once, then submission-status wipes it
         const pendingCheck = await realFetch(`${baseUrl}/api/arena/pending-submissions`, {
           headers: {authorization: `Bearer ${E2E_AUTH.arenaSecret}`},
         });
         const pendingData = await pendingCheck.json() as {
-          submissions: Array<{bot_slug: string; auth_token: string | null}>;
+          submissions: Array<{agentSlug: string; authToken?: string}>;
         };
-        expect(pendingData.submissions.find(s => s.bot_slug === '0-error')?.auth_token)
+        expect(pendingData.submissions.find(s => s.agentSlug === '0-error')?.authToken)
           .toBe('Bearer private-r2-token');
 
         expect(await mockArena.syncPendingSubmissions()).toBe(2);
-        expect(db.getVersionBySlugAndStr('0-error', '1.0.0')?.auth_token_enc).toBeNull();
+        expect(db.getVersionBySlugAndLabel('0-error', '1.0.0')?.authTokenEncoding).toBeUndefined();
 
-        // With only 2 bots on VGC (min_bots = 3), VGC refuses to schedule while RBY schedules!
-        expect(await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'})).toBeNull();
+        // With only 2 agents on VGC (min = 3), VGC refuses to schedule while RBY schedules!
+        expect(await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'}))
+          .toBeUndefined();
         const rbyStep = await mockArena.playMatchStep({ladderId: 'gen1ou20261109'});
         expect(rbyStep?.ladderId).toBe('gen1ou20261109');
 
-        // 5. Submit 3rd VGC bot (Mew's Truck 1.0.0) -> VGC min_bots=3 satisfied -> matches run!
+        // 5. Submit 3rd VGC agent (Mew's Truck 1.0.0) -> VGC min=3 satisfied -> matches run!
         const subMt100 = await submitJson('pkmnbotguy', {
           version: '1.0.0',
-          format_type: 'bundle',
-          download_url: 'https://r2.example.com/mews-truck-1.0.0.tar.zst',
+          package: 'bundle',
+          url: 'https://r2.example.com/mews-truck-1.0.0.tar.zst',
           sha256: SHA_3,
           ladders: ['gen9championsvgc2026regmc'],
-          teams: generateValidVgcTeams(20, 2),
+          teams: mock.generateValidVgcTeams(20, 2),
         });
         expect(subMt100.status).toBe(201);
         expect(await mockArena.syncPendingSubmissions()).toBe(1);
 
         const vgcStep = await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'});
         expect(vgcStep?.ladderId).toBe('gen9championsvgc2026regmc');
-        expect(vgcStep?.t1Label).toMatch(/Team #\d+/);
-        expect(vgcStep?.t2Label).toMatch(/Team #\d+/);
+        expect(vgcStep?.p1TeamLabel).toMatch(/Team #\d+/);
+        expect(vgcStep?.p2TeamLabel).toMatch(/Team #\d+/);
 
         // 6. Set anchor on RBY & VGC, settle all entries, upgrade 0 ERROR -> 1.1.0 -> 1.2.0
         await runPkmnCli(
@@ -429,7 +421,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           autoRender = false;
           for (let step = 0; step < 250; step++) {
             const unsettled = db.getLeaderboardEntries(ladderId)
-              .filter(e => e.role !== 'retired' && e.settled_at === null);
+              .filter(e => e.role !== 'retired' && e.settledAt === undefined);
             if (unsettled.length === 0) break;
             nowSec += 600;
             await mockArena.playMatchStep({ladderId, emitHeartbeats: false});
@@ -446,11 +438,11 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         await settleLadder('gen9championsvgc2026regmc', false);
 
         // Advance past 14-day cooldown -> submit 1.1.0 WITHOUT resending VGC teams!
-        nowSec += COOLDOWN_S + 3600;
+        nowSec += COOLDOWN_SECONDS + 3600;
         const subZero110 = await submitJson('scheibo', {
           version: '1.1.0',
-          format_type: 'bundle',
-          download_url: 'https://r2.example.com/0-error-1.1.0.tar.zst',
+          package: 'bundle',
+          url: 'https://r2.example.com/0-error-1.1.0.tar.zst',
           sha256: SHA_2,
           ladders: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
         });
@@ -461,11 +453,11 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         await settleLadder('gen9championsvgc2026regmc', false);
 
         // Advance past 14-day cooldown -> submit 1.2.0 on RBY -> retires weaker of {1.0.0, 1.1.0}
-        nowSec += COOLDOWN_S + 3600;
+        nowSec += COOLDOWN_SECONDS + 3600;
         const subZero120 = await submitJson('scheibo', {
           version: '1.2.0',
-          format_type: 'bundle',
-          download_url: 'https://r2.example.com/0-error-1.2.0.tar.zst',
+          package: 'bundle',
+          url: 'https://r2.example.com/0-error-1.2.0.tar.zst',
           sha256: SHA_4,
           ladders: ['gen1ou20261109'],
         });
@@ -473,7 +465,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         expect(await mockArena.syncPendingSubmissions()).toBe(1);
 
         const rbyEntries = db.getLeaderboardEntries('gen1ou20261109')
-          .filter(e => e.bot_slug === '0-error');
+          .filter(e => e.agentSlug === '0-error');
         expect(rbyEntries.filter(e => e.role !== 'retired')).toHaveLength(2);
         expect(rbyEntries.filter(e => e.role === 'retired')).toHaveLength(1);
 
@@ -489,7 +481,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         ];
         discordCalls.length = 0;
         await discord.syncArenaRoles(
-          db, 'e2e-bot-token', DISCORD_CONFIG, discordState, guildMembers
+          db, 'e2e-discord-token', DISCORD_CONFIG, discordState, guildMembers
         );
 
         // Qualified devs get Competitor; Pending dev ('asterdev') does NOT
@@ -499,8 +491,8 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           .not.toContain('1568629775122309210');
         // Settled #1 on RBY receives RBY role 1563716887131459685
         const rbyLeader = db.getArenaLadderRoleTargets().find(t => t.slot === 'rby')!;
-        expect(rbyLeader.discord_ids.length).toBeGreaterThan(0);
-        for (const holderId of rbyLeader.discord_ids) {
+        expect(rbyLeader.discordIds.length).toBeGreaterThan(0);
+        for (const holderId of rbyLeader.discordIds) {
           expect(guildMembers.find(m => m.user.id === holderId)?.roles)
             .toContain('1563716887131459685');
         }
@@ -509,8 +501,8 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         //    old VGC enters 'settling', new VGC becomes 'active' -> settle -> auto-'archived'!
         const subFp110 = await submitJson('pmariglia', {
           version: '1.1.0',
-          format_type: 'bundle',
-          download_url: 'https://r2.example.com/foul-play-1.1.0.tar.zst',
+          package: 'bundle',
+          url: 'https://r2.example.com/foul-play-1.1.0.tar.zst',
           sha256: SHA_4,
           ladders: ['gen9championsvgc2026regmc'],
         });
@@ -521,11 +513,11 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           [
             'rotate-ladder',
             'gen9championsvgc2026regmc',
-            '--display-name',
+            '--name',
             'VGC 2026 Reg M-C',
             '--new',
             'gen9championsvgc2027regma',
-            '--new-display-name',
+            '--new-name',
             'VGC',
             '--format',
             'gen9championsvgc2026regmc',
@@ -535,7 +527,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
 
         expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('settling');
         expect(db.getLadder('gen9championsvgc2027regma')?.status).toBe('active');
-        expect(db.getLadder('gen9championsvgc2027regma')?.discord_role)
+        expect(db.getLadder('gen9championsvgc2027regma')?.discord)
           .toBe('1564121375558340768');
 
         // Refresh MockArenaClient ladder metadata, then play settling VGC matches until archived
@@ -556,23 +548,23 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('archived');
 
         // 8. Auto-quarantine Mew's Truck 1.0.0 -> DMs owner & staff
-        const mtVer = db.getVersionBySlugAndStr('mews-truck', '1.0.0')!;
+        const mtVer = db.getVersionBySlugAndLabel('mews-truck', '1.0.0')!;
         discordCalls.length = 0;
         await mockArena.quarantineVersion(mtVer.id, 'Crashed in 5 consecutive games');
         await statusQueue;
-        expect(db.getVersionById(mtVer.id)?.smoke_status).toBe('quarantined');
-        expect(db.getVersionById(mtVer.id)?.dm_sent).toBe(1);
+        expect(db.getVersionById(mtVer.id)?.smokeStatus).toBe('quarantined');
+        expect(db.getVersionById(mtVer.id)?.notified).toBe(true);
         expect(discordCalls.some(c => c.url.includes('/channels/dm-300000000000000002/messages')))
           .toBe(true);
         expect(discordCalls.some(c => c.url.includes('/channels/dm-513513270670262284/messages')))
           .toBe(true);
 
         // 9. Seed full mock fixture + run `hyperlink --check-anchors` + 375px Playwright checks
-        const seedDb = new ArenaDB(':memory:', {now: nowSec});
+        const seedDb = new Database(':memory:', {now: nowSec});
         const viewPublicDir = path.join(tmpDir, 'views-public');
         copyRootPublicAssets(PUBLIC_DIR, viewPublicDir);
         try {
-          seedMockArena({
+          mock.seedMockArena({
             db: seedDb,
             publicDir: viewPublicDir,
             staticDir,

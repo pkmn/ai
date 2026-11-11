@@ -10,7 +10,7 @@ import * as path from 'path';
 import favicons from 'favicons';
 import * as site from 'site';
 
-import {ArenaDB, DB_PATH} from '../db';
+import {DB_PATH, Database} from '../db';
 import {renderArenaPages} from '../server/render';
 
 import * as glossary from './glossary';
@@ -22,7 +22,21 @@ const fs = site.fs;
 const PUBLIC = root('public');
 const STATIC = root('static');
 
-export const renderer = new site.page.Renderer({
+// `site`'s `layout.html` registers `pref.addEventListener('change', e => setTheme(...))` in its
+// outer `<script>` block without defining `setTheme`, expecting each page's `{{{ script }}}`
+// payload to supply it so live OS dark/light switches work. Injecting `SET_THEME` inside
+// `Renderer.render` satisfies that listener across every static and dynamic page in one place.
+export const SET_THEME =
+  "const setTheme = t => document.documentElement.setAttribute('data-theme', t);";
+
+export class Renderer extends site.page.Renderer {
+  override render(page: site.page.Page, replace?: (s: string) => string) {
+    const script = page.script ? `${SET_THEME}\n${page.script}` : SET_THEME;
+    return super.render({...page, script}, replace);
+  }
+}
+
+export const renderer = new Renderer({
   public: PUBLIC,
   analytics: 'G-LQ8TW28Z7Q',
   description: 'The home of competitive Pokémon artificial intelligence',
@@ -125,20 +139,20 @@ const build = async (rebuild?: boolean) => {
   renderer.create('research', research.page(STATIC));
 
   const hasExistingDb = nodeFs.existsSync(DB_PATH);
-  const arenaDb = new ArenaDB(hasExistingDb ? DB_PATH : ':memory:');
+  const db = new Database(hasExistingDb ? DB_PATH : ':memory:');
   try {
-    arenaDb.syncLadders();
+    db.syncLadders();
     if (!hasExistingDb) {
-      arenaDb.syncProjects();
+      db.syncProjects();
     }
     renderArenaPages({
-      db: arenaDb,
+      db,
       renderer,
       publicDir: PUBLIC,
       staticDir: STATIC,
     });
   } finally {
-    arenaDb.close();
+    db.close();
   }
 
   const pages: {[page: string]: string} = {

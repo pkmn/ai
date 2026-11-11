@@ -13,6 +13,8 @@ pins:
     3. Do not discuss plans or methods for breaking TPCi, Smogon, or Pokémon Showdown rules, or openly admit to doing so.
     4. Every rule that applies in similar servers also applies here; when in doubt, lurk before chatting to get a sense of how things work.
 
+# External vgc.bot / pkmn.bot partner leaderboard role sync (VGC_BOT_TOKEN).
+# Native pkmn.ai Arena roles use config/ladders.yml (discord) and SQLite developers.discord_id.
 ladders:
   gen9championsvgc2026regmcots: '1563706041223352363'
   gen9championsvgc2026regmcotsrandom: '1563707260398608425'
@@ -23,7 +25,8 @@ ladders:
   gen3ou: '1564120942932664453'
   gen1ou: '1564121022213398710'
 
-bots:
+# Fallback Discord username mappings for vgc.bot / pkmn.bot leaders with missing/unlinked owners.
+agents:
   incinference: sauce1337
   Metamon: jakegrigsby_14755
   Nessie: nessiedev

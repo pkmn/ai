@@ -1,13 +1,17 @@
-import type {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from 'node:sqlite';
 
-import type {TransactionRunner} from './index';
+import {TransactionRunner} from './index';
 
 export interface DiscordMemberRow {
-  discord_id: string;
+  id: string;
   username: string;
-  updated_at: number;
+  updatedAt: number;
 }
 
+// Atomically replaces the cached Discord guild member roster used by `/auth/discord/validate`
+// (Nginx `auth_request` for `/chat/logs/*`). Full-snapshot replacement ensures departed or kicked
+// guild members lose `/chat/logs/*` access on the very next sync cycle even while their signed
+// `pkmn_session` cookie remains unexpired.
 export function syncDiscordMembers(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -16,7 +20,7 @@ export function syncDiscordMembers(
 ) {
   const clear = db.prepare('DELETE FROM discord_members');
   const insert = db.prepare(
-    'INSERT OR REPLACE INTO discord_members (discord_id, username, updated_at) VALUES (?, ?, ?)'
+    'INSERT OR REPLACE INTO discord_members (id, username, updated_at) VALUES (?, ?, ?)'
   );
   inTransaction(() => {
     clear.run();
@@ -28,6 +32,6 @@ export function syncDiscordMembers(
 
 export function isDiscordMember(db: DatabaseSync, discordId: string | undefined): boolean {
   if (!discordId) return false;
-  const row = db.prepare('SELECT 1 FROM discord_members WHERE discord_id = ?').get(discordId);
+  const row = db.prepare('SELECT 1 FROM discord_members WHERE id = ?').get(discordId);
   return row !== undefined;
 }

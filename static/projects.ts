@@ -8,20 +8,20 @@ import * as yaml from 'yaml';
 import {cite, header, style} from './build';
 import {escapeHtml, slugify} from './util';
 
-export interface ProjectArenaBadge {
+export interface ArenaBadge {
   slot: string;
-  displayName: string;
-  rank: number | null;
+  name: string;
+  rank?: number;
   provisional: boolean;
 }
 
-export interface ProjectArenaInfo {
+export interface ArenaInfo {
   slug: string;
   name: string;
   profileHref?: string;
-  bestRank: number | null;
-  bestLcb: number | null;
-  ladders: ProjectArenaBadge[];
+  bestRank?: number;
+  bestLcb?: number;
+  ladders: ArenaBadge[];
 }
 
 export interface Project {
@@ -44,6 +44,9 @@ export interface Project {
   };
 }
 
+// Hand-curated historical strength ordering used to sort non-Arena projects (and to break ties
+// among Arena projects that do not yet have a settled live rank). Settled Arena entrants always
+// sort ahead of unranked catalog projects by `bestRank`, then `bestLcb`.
 const RANKING = [
   'Jaxcalibur', // top gen9randbats (94.6% GXE) & beat MDB Bo9
   'eevenator', // top gen9randbats (2594 Elo/94.0% GXE/2019 Glicko)
@@ -98,7 +101,7 @@ const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="
 
 export function page(
   dir: string,
-  arenaByName?: ReadonlyMap<string, ProjectArenaInfo>
+  arenaByName?: ReadonlyMap<string, ArenaInfo>
 ) {
   const buf: string[] = [];
 
@@ -129,16 +132,16 @@ export function page(
   projects.sort((a, b) => {
     const aArena = a.name ? arenaByName?.get(a.name) : undefined;
     const bArena = b.name ? arenaByName?.get(b.name) : undefined;
-    const aLiveRank = aArena?.bestRank ?? null;
-    const bLiveRank = bArena?.bestRank ?? null;
+    const aLiveRank = aArena?.bestRank;
+    const bLiveRank = bArena?.bestRank;
 
-    if (aLiveRank !== null && bLiveRank !== null) {
+    if (aLiveRank !== undefined && bLiveRank !== undefined) {
       if (aLiveRank !== bLiveRank) return aLiveRank - bLiveRank;
       const lcbDiff = (bArena?.bestLcb ?? 0) - (aArena?.bestLcb ?? 0);
       if (lcbDiff !== 0) return lcbDiff;
-    } else if (aLiveRank !== null) {
+    } else if (aLiveRank !== undefined) {
       return -1;
-    } else if (bLiveRank !== null) {
+    } else if (bLiveRank !== undefined) {
       return 1;
     }
 
@@ -213,14 +216,14 @@ export function page(
       const profileHref = arenaInfo?.profileHref ?? defaultProfileHref;
       const badgesHtml = arenaInfo && arenaInfo.ladders.length > 0
         ? ' · ' + arenaInfo.ladders.map(b => (
-          b.provisional || b.rank === null
+          b.provisional || b.rank === undefined
             ? `<a href="/arena/ladders/${escapeHtml(b.slot)}/" class="subtle">` +
-              `<tt>${escapeHtml(b.displayName)}</tt> <em>(provisional)</em></a>`
+              `<tt>${escapeHtml(b.name)}</tt> <em>(provisional)</em></a>`
             : `<a href="/arena/ladders/${escapeHtml(b.slot)}/" class="subtle">` +
-              `<tt>${escapeHtml(b.displayName)}</tt> #${b.rank}</a>`
+              `<tt>${escapeHtml(b.name)}</tt> #${b.rank}</a>`
         )).join(', ')
         : '';
-      const nameLink = `<a href="${escapeHtml(profileHref)}" class="arena-bot">` +
+      const nameLink = `<a href="${escapeHtml(profileHref)}" class="arena-agent">` +
         `<strong>${escapeHtml(displayName)}</strong></a>`;
       buf.push(`<tr><td><strong>Arena</strong></td><td>${nameLink}${badgesHtml}</td></tr>`);
     }
@@ -275,7 +278,7 @@ export function page(
     style: `
       main { width: 100%; }
       .description { text-align: center; }
-      .arena-bot { white-space: nowrap; }
+      .arena-agent { white-space: nowrap; }
       td:first-child { width: 8ch; }
       h3 svg {
         display: inline-block;
@@ -288,8 +291,7 @@ export function page(
     header: header('Projects'),
     content: buf.join(''),
     script:
-    `const setTheme = t => document.documentElement.setAttribute('data-theme', t);
-      document.addEventListener('DOMContentLoaded', () => {
+    `document.addEventListener('DOMContentLoaded', () => {
         document.getElementsByTagName('nav')[0].classList.remove('hide');
         const projects = document.getElementsByClassName('project');
         const radios = document.querySelectorAll('input[name="radio"]');

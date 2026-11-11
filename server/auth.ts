@@ -1,32 +1,42 @@
 import * as crypto from 'crypto';
 import * as http from 'http';
 
-import type polka from 'polka';
+import polka from 'polka';
 
-import type {ArenaDB} from '../db';
+import {Database} from '../db';
 import {header, renderer} from '../static/build';
 import {escapeHtml} from '../static/util';
 
 export const SESSION_COOKIE = 'pkmn_session';
 export const STATE_COOKIE = 'pkmn_oauth_state';
-export const SESSION_TTL_S = 30 * 24 * 60 * 60;
-export const STATE_TTL_S = 10 * 60;
+export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+export const STATE_TTL_SECONDS = 10 * 60;
 
 const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
 const DISCORD_API = 'https://discord.com/api/v10';
 
-export interface OAuthProviderConfig {
+// Ephemeral fallback secret used only when `DEV_AUTH=1` in non-production so `npm run dev` can
+// mint and verify `pkmn_session` cookies out of the box with an unpopulated `private/.env`.
+const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex');
+
+export interface OAuthProvider {
   clientId: string;
   clientSecret: string;
 }
 
-export interface AuthConfig {
+export interface Config {
   sessionSecret: string;
   arenaSecret?: string;
-  github?: OAuthProviderConfig;
-  discord?: OAuthProviderConfig;
+  github?: OAuthProvider;
+  discord?: OAuthProvider;
 }
 
+// Unified HMAC-signed cookie payload shared across every authenticated surface on pkmn.ai:
+//   - `github`: authorizes `/account/`, `/api/submissions`, and developer `/wiki` edits
+//   - `discord`: authorizes Nginx `auth_request` on `/chat/logs/` (guild members), `/private/`
+//     (`?guild=0`), Discord-visibility `/wiki` pages, and CLI Bearer tokens via `/chat/logs/token`
+// Signing into GitHub or Discord merges into any existing session rather than overwriting the
+// other provider's claim.
 export interface Session {
   github?: {id: number; login: string};
   discord?: {id: string; username: string};
@@ -42,9 +52,10 @@ interface OAuthStatePayload {
   exp: number;
 }
 
-export interface AuthOptions {
-  config?: AuthConfig;
-  db?: ArenaDB;
+export interface Options {
+  config?: Config;
+  db?: Database;
+  devAuth?: boolean;
   isAuthorizedGitHub?: (login: string) => boolean;
   isDiscordMember?: (discordId: string) => boolean;
 }
@@ -107,6 +118,8 @@ export function sanitizeReturnTo(raw: unknown, fallback = '/'): string {
   return raw;
 }
 
+// Accepts either `Authorization: Bearer <token>` (for headless CLI / script access to
+// `/chat/logs/` via `/chat/logs/token`) or the browser's `pkmn_session` cookie.
 export function extractSessionToken(headers: http.IncomingHttpHeaders): string | undefined {
   const auth = headers.authorization;
   if (typeof auth === 'string') {
@@ -116,8 +129,18 @@ export function extractSessionToken(headers: http.IncomingHttpHeaders): string |
   return parseCookies(headers.cookie)[SESSION_COOKIE];
 }
 
-export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig | undefined {
-  const sessionSecret = env.SESSION_SECRET?.trim();
+export function isLoopbackAddress(remoteAddress: string | undefined): boolean {
+  if (!remoteAddress) return false;
+  return (
+    remoteAddress === '127.0.0.1' ||
+    remoteAddress === '::1' ||
+    remoteAddress === '::ffff:127.0.0.1'
+  );
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config | undefined {
+  const devAuth = env.DEV_AUTH === '1' && env.NODE_ENV !== 'production';
+  const sessionSecret = env.SESSION_SECRET?.trim() || (devAuth ? EPHEMERAL_DEV_SECRET : undefined);
   if (!sessionSecret) return undefined;
 
   const ghClientId = env.GITHUB_CLIENT_ID?.trim();
@@ -200,21 +223,32 @@ function inferOrigin(req: http.IncomingMessage): string {
 }
 
 export class Auth {
-  readonly db?: ArenaDB;
-  private readonly explicitConfig?: AuthConfig;
+  readonly db?: Database;
+  private readonly explicitConfig?: Config;
+  private readonly explicitDevAuth?: boolean;
   private readonly customAuthorizedGitHub?: (login: string) => boolean;
   private readonly customDiscordMember?: (discordId: string) => boolean;
   private registeredApps = new Set<polka.Polka>();
 
-  constructor(options: AuthOptions = {}) {
+  constructor(options: Options = {}) {
     this.explicitConfig = options.config;
     this.db = options.db;
+    this.explicitDevAuth = options.devAuth;
     this.customAuthorizedGitHub = options.isAuthorizedGitHub;
     this.customDiscordMember = options.isDiscordMember;
   }
 
-  getConfig(): AuthConfig | undefined {
-    return this.explicitConfig ?? loadAuthConfig();
+  isDevAuthEnabled(): boolean {
+    if (process.env.NODE_ENV === 'production') return false;
+    return this.explicitDevAuth ?? (process.env.DEV_AUTH === '1');
+  }
+
+  getConfig(): Config | undefined {
+    if (this.explicitConfig) return this.explicitConfig;
+    const env = this.explicitDevAuth
+      ? {...process.env, DEV_AUTH: '1'}
+      : process.env;
+    return loadConfig(env);
   }
 
   getSession(req: http.IncomingMessage): Session | undefined {
@@ -225,13 +259,13 @@ export class Auth {
   }
 
   getGitHubUser(req: http.IncomingMessage): string | undefined {
+    const sessionLogin = this.getSession(req)?.github?.login;
+    if (sessionLogin) return sessionLogin;
     const cfg = this.getConfig();
-    if (!cfg?.github) {
-      return process.env.NODE_ENV === 'development'
-        ? process.env.WIKI_DEV_USER || 'scheibo'
-        : undefined;
+    if (!cfg?.github && !this.isDevAuthEnabled() && process.env.NODE_ENV === 'development') {
+      return 'scheibo';
     }
-    return this.getSession(req)?.github?.login;
+    return undefined;
   }
 
   isAuthorizedGitHub(login: string | undefined): boolean {
@@ -250,7 +284,9 @@ export class Auth {
 
   verifyDiscordAuth(req: http.IncomingMessage): 'authorized' | 'unauthenticated' | 'forbidden' {
     const cfg = this.getConfig();
-    if (!cfg && process.env.NODE_ENV === 'development') return 'authorized';
+    if (!cfg && !this.isDevAuthEnabled() && process.env.NODE_ENV === 'development') {
+      return 'authorized';
+    }
     const session = this.getSession(req);
     if (!session?.discord?.id) return 'unauthenticated';
     return this.isDiscordGuildMember(session.discord.id) ? 'authorized' : 'forbidden';
@@ -259,24 +295,93 @@ export class Auth {
   issueSessionCookie(session: Omit<Session, 'exp'>, now = Math.floor(Date.now() / 1000)): string {
     const cfg = this.getConfig();
     if (!cfg) throw new Error('SESSION_SECRET is not configured');
-    const token = signToken({...session, exp: now + SESSION_TTL_S}, cfg.sessionSecret);
-    return serializeCookie(SESSION_COOKIE, token, SESSION_TTL_S);
+    const token = signToken({...session, exp: now + SESSION_TTL_SECONDS}, cfg.sessionSecret);
+    return serializeCookie(SESSION_COOKIE, token, SESSION_TTL_SECONDS);
   }
 
   register(app: polka.Polka): this {
     if (this.registeredApps.has(app)) return this;
     this.registeredApps.add(app);
 
+    // Local-only persona switcher enabled strictly when `DEV_AUTH=1` (and never in production or
+    // from non-loopback sockets, nor proxied by Nginx). Mints real HMAC-signed `pkmn_session`
+    // cookies so developers can test admin, competitor, stranger, and logged-out states
+    // side-by-side in normal and incognito browser windows without touching `private/.env`.
+    if (this.isDevAuthEnabled()) {
+      app.get('/auth/dev', (req, res) => {
+        if (!isLoopbackAddress(req.socket.remoteAddress) || req.headers['x-forwarded-for']) {
+          sendHtml(res, 403, renderAuthError(403, '<p>/auth/dev is restricted to loopback.</p>'));
+          return;
+        }
+        const returnTo = sanitizeReturnTo(req.query.return_to, '/account/');
+        if (req.query.clear === '1') {
+          const clear = serializeCookie(SESSION_COOKIE, '', 0);
+          redirect(res, returnTo, 302, [clear]);
+          return;
+        }
+
+        const github = typeof req.query.github === 'string' ? req.query.github.trim() : '';
+        const discord = typeof req.query.discord === 'string' ? req.query.discord.trim() : '';
+        const username = typeof req.query.username === 'string' && req.query.username.trim()
+          ? req.query.username.trim()
+          : (github || 'dev');
+
+        if (!github && !discord) {
+          const current = this.getSession(req);
+          const currentDesc = current
+            ? escapeHtml(JSON.stringify({github: current.github, discord: current.discord}))
+            : 'unauthenticated';
+          const ret = encodeURIComponent(returnTo);
+          const body =
+            `<p class="muted">Current session: <code>${currentDesc}</code></p>` +
+            '<p><a href="/auth/dev?github=scheibo&amp;discord=513513270670262284' +
+            `&amp;username=scheibo&amp;return_to=${ret}">Sign in as admin (scheibo)</a></p>` +
+            `<p><a href="/auth/dev?github=pmariglia&amp;return_to=${ret}">` +
+            'Sign in as competitor (pmariglia)</a></p>' +
+            `<p><a href="/auth/dev?github=stranger&amp;return_to=${ret}">` +
+            'Sign in as unregistered GitHub user (stranger)</a></p>' +
+            '<p><a href="/auth/dev?discord=999999999999999999&amp;username=outsider' +
+            `&amp;return_to=${ret}">Sign in as non-guild Discord user</a></p>` +
+            `<p><a href="/auth/dev?clear=1&amp;return_to=${ret}">Clear session</a></p>`;
+          sendHtml(res, 200, renderer.render({
+            id: 'dev-auth',
+            title: 'Dev Auth | pkmn.ai',
+            header: header('Dev Auth'),
+            path: '/auth/dev',
+            content: body,
+            style: 'main { max-width: 65ch; margin: 2rem auto; text-align: center; }',
+          }));
+          return;
+        }
+
+        const existing = this.getSession(req);
+        const devRow = github ? this.db?.getDeveloperByGitHub(github) : undefined;
+        const cookie = this.issueSessionCookie({
+          ...(github
+            ? {github: {id: devRow?.githubId ?? 1, login: github}}
+            : existing?.github ? {github: existing.github} : {}),
+          ...(discord
+            ? {discord: {id: discord, username}}
+            : existing?.discord ? {discord: existing.discord} : {}),
+        });
+        redirect(res, returnTo, 302, [cookie]);
+      });
+    }
+
     app.get('/auth/github', (req, res) => {
       const cfg = this.getConfig();
+      const returnTo = sanitizeReturnTo(req.query.return_to, '/account/');
       if (!cfg?.github) {
+        if (this.isDevAuthEnabled() && isLoopbackAddress(req.socket.remoteAddress)) {
+          redirect(res, `/auth/dev?return_to=${encodeURIComponent(returnTo)}`);
+          return;
+        }
         sendHtml(res, 503, renderAuthError(503, '<p>GitHub OAuth is not configured.</p>'));
         return;
       }
-      const returnTo = sanitizeReturnTo(req.query.return_to, '/account/');
       const redirectUri = `${inferOrigin(req)}/auth/github/callback`;
       const nonce = crypto.randomBytes(16).toString('hex');
-      const exp = Math.floor(Date.now() / 1000) + STATE_TTL_S;
+      const exp = Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS;
       const statePayload: OAuthStatePayload = {
         provider: 'github',
         nonce,
@@ -285,7 +390,7 @@ export class Auth {
         exp,
       };
       const stateToken = signToken(statePayload, cfg.sessionSecret);
-      const cookie = serializeCookie(STATE_COOKIE, stateToken, STATE_TTL_S);
+      const cookie = serializeCookie(STATE_COOKIE, stateToken, STATE_TTL_SECONDS);
 
       const params = new URLSearchParams({
         client_id: cfg.github.clientId,
@@ -390,15 +495,19 @@ export class Auth {
 
     app.get('/auth/discord', (req, res) => {
       const cfg = this.getConfig();
-      if (!cfg?.discord) {
-        sendHtml(res, 503, renderAuthError(503, '<p>Discord OAuth is not configured.</p>'));
-        return;
-      }
       const intent: 'login' | 'link' = req.query.intent === 'link' ? 'link' : 'login';
       const returnTo = sanitizeReturnTo(
         req.query.return_to,
         intent === 'link' ? '/account/' : '/'
       );
+      if (!cfg?.discord) {
+        if (this.isDevAuthEnabled() && isLoopbackAddress(req.socket.remoteAddress)) {
+          redirect(res, `/auth/dev?return_to=${encodeURIComponent(returnTo)}`);
+          return;
+        }
+        sendHtml(res, 503, renderAuthError(503, '<p>Discord OAuth is not configured.</p>'));
+        return;
+      }
 
       if (intent === 'link') {
         const session = this.getSession(req);
@@ -423,7 +532,7 @@ export class Auth {
 
       const redirectUri = `${inferOrigin(req)}/auth/discord/callback`;
       const nonce = crypto.randomBytes(16).toString('hex');
-      const exp = Math.floor(Date.now() / 1000) + STATE_TTL_S;
+      const exp = Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS;
       const statePayload: OAuthStatePayload = {
         provider: 'discord',
         intent,
@@ -433,7 +542,7 @@ export class Auth {
         exp,
       };
       const stateToken = signToken(statePayload, cfg.sessionSecret);
-      const cookie = serializeCookie(STATE_COOKIE, stateToken, STATE_TTL_S);
+      const cookie = serializeCookie(STATE_COOKIE, stateToken, STATE_TTL_SECONDS);
 
       const params = new URLSearchParams({
         client_id: cfg.discord.clientId,
@@ -506,7 +615,7 @@ export class Auth {
           }
           if (this.db) {
             const conflict = this.db.getDeveloperByDiscordId(userData.id);
-            if (conflict && conflict.github_login !== ghLogin.toLowerCase()) {
+            if (conflict && conflict.githubLogin !== ghLogin.toLowerCase()) {
               sendHtml(
                 res,
                 409,
@@ -569,6 +678,8 @@ export class Auth {
       redirect(res, sanitizeReturnTo(req.query.return_to, '/'), 303, [clearSession]);
     });
 
+    // Subrequest endpoint called by Nginx `auth_request` on `/chat/logs/` (requires Discord guild
+    // membership) and `/private/` (`?guild=0`, accepts any signed-in Discord identity).
     app.get('/auth/discord/validate', (req, res) => {
       const session = this.getSession(req);
       if (!session?.discord?.id) {
@@ -624,7 +735,7 @@ export class Auth {
   }
 }
 
-export function register(app: polka.Polka, options: AuthOptions = {}): Auth {
+export function register(app: polka.Polka, options: Options = {}): Auth {
   const auth = new Auth(options);
   return auth.register(app);
 }

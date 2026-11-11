@@ -2,14 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import {
-  ArenaDB,
-  LADDERS_FILE,
-  SCHEMA_DIR,
-  parseArenaProjects,
-  parseLaddersYaml,
-} from '../db';
-import {lookupSmogonUser, parseSmogonIdentifier} from '../server/smogon';
+import {Database, LADDERS_FILE, SCHEMA_DIR, parseArenaProjects, parseLaddersYaml} from '../db';
+import * as smogon from '../server/smogon';
 
 describe('db/schema/*.sql & db/migration/* lifecycle', () => {
   let tmpDir: string;
@@ -23,12 +17,14 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
   });
 
   test('loads individual .sql table definitions from db/schema/', () => {
-    const schemaFiles = fs.readdirSync(SCHEMA_DIR).filter(f => f.endsWith('.sql')).sort();
+    const schemaFiles = fs.readdirSync(SCHEMA_DIR)
+      .filter(f => f.endsWith('.sql'))
+      .sort();
     expect(schemaFiles).toEqual([
-      'bot-ladder-stats.sql',
-      'bot-ladder-teams.sql',
-      'bot-versions.sql',
-      'bots.sql',
+      'agent-ladder-stats.sql',
+      'agent-ladder-teams.sql',
+      'agent-versions.sql',
+      'agents.sql',
       'developers.sql',
       'discord-members.sql',
       'ladder-entries.sql',
@@ -42,7 +38,7 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
       'tournaments.sql',
     ]);
 
-    const db = new ArenaDB(':memory:');
+    const db = new Database(':memory:');
     try {
       const tables = db.db.prepare(
         `SELECT name FROM sqlite_master
@@ -78,7 +74,7 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
     `);
 
     const dbFile = path.join(tmpDir, 'test.sqlite');
-    const db1 = new ArenaDB(dbFile, {schemaDir, migrationDir, now: 1000});
+    const db1 = new Database(dbFile, {schemaDir, migrationDir, now: 1000});
     db1.db.exec(
       "INSERT INTO items (id, name) VALUES (1, 'alpha'); INSERT INTO refs VALUES (10, 1);"
     );
@@ -110,21 +106,21 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
       );
     `);
 
-    const db2 = new ArenaDB(dbFile, {schemaDir, migrationDir, now: 2000});
+    const db2 = new Database(dbFile, {schemaDir, migrationDir, now: 2000});
     expect(fs.existsSync(`${dbFile}.pre-0001-add-tag.bak`)).toBe(true);
     expect(db2.getAppliedMigrations()).toEqual([
-      {version: '0001-add-tag.sql', applied_at: 2000},
-      {version: '0002-rebuild-items.sql', applied_at: 2000},
+      {version: '0001-add-tag.sql', appliedAt: 2000},
+      {version: '0002-rebuild-items.sql', appliedAt: 2000},
     ]);
     const row = db2.db.prepare('SELECT id, name, tag FROM items WHERE id = 1').get();
     expect(row).toEqual({id: 1, name: 'alpha', tag: 'v1'});
     db2.close();
 
     // Fresh DB fast-forwards schemaDir and marks migrations applied without re-running ALTER
-    const freshDb = new ArenaDB(':memory:', {schemaDir, migrationDir, now: 3000});
+    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 3000});
     expect(freshDb.getAppliedMigrations()).toEqual([
-      {version: '0001-add-tag.sql', applied_at: 3000},
-      {version: '0002-rebuild-items.sql', applied_at: 3000},
+      {version: '0001-add-tag.sql', appliedAt: 3000},
+      {version: '0002-rebuild-items.sql', appliedAt: 3000},
     ]);
     freshDb.close();
 
@@ -132,11 +128,11 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
       path.join(migrationDir, '0003-break-fk.sql'),
       'DELETE FROM items WHERE id = 1;'
     );
-    expect(() => new ArenaDB(dbFile, {schemaDir, migrationDir, now: 4000}))
+    expect(() => new Database(dbFile, {schemaDir, migrationDir, now: 4000}))
       .toThrow(/Foreign key check failed in migration "0003-break-fk.sql"/);
 
     fs.rmSync(path.join(migrationDir, '0003-break-fk.sql'));
-    const db3 = new ArenaDB(dbFile, {schemaDir, migrationDir, now: 5000});
+    const db3 = new Database(dbFile, {schemaDir, migrationDir, now: 5000});
     expect(db3.db.prepare('SELECT name FROM items WHERE id = 1').get()).toEqual({name: 'alpha'});
     expect(db3.getAppliedMigrations().map(m => m.version)).toEqual([
       '0001-add-tag.sql',
@@ -146,9 +142,9 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
   });
 });
 
-describe('ladders.yml & ArenaDB ladder sync', () => {
-  test('parses and syncs canonical config/ladders.yml', () => {
-    const db = new ArenaDB(':memory:');
+describe('ladders.yml & Database ladder sync', () => {
+  test('parses and syncs canonical config/ladders.yml with inferred slots', () => {
+    const db = new Database(':memory:');
     try {
       db.syncLadders(LADDERS_FILE, 1_760_000_000);
       expect(db.getActiveLadders()).toEqual([]);
@@ -156,61 +152,61 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
       expect(ladders.map(l => ({
         id: l.id,
         slot: l.slot,
-        display_name: l.display_name,
-        format_id: l.format_id,
-        team_mode: l.team_mode,
-        min_bots: l.min_bots,
-        discord_role: l.discord_role,
+        name: l.name,
+        format: l.format,
+        team: l.team,
+        min: l.min,
+        discord: l.discord,
         status: l.status,
       }))).toEqual([
         {
           id: 'gen1ou20261109',
           slot: 'rby',
-          display_name: 'RBY',
-          format_id: 'gen1ou',
-          team_mode: 'harvested',
-          min_bots: 2,
-          discord_role: '1563716887131459685',
+          name: 'RBY',
+          format: 'gen1ou',
+          team: 'harvested',
+          min: 2,
+          discord: '1563716887131459685',
           status: 'upcoming',
         },
         {
           id: 'gen3ou20261109',
           slot: 'adv',
-          display_name: 'ADV',
-          format_id: 'gen3ou',
-          team_mode: 'harvested',
-          min_bots: 2,
-          discord_role: '1563717163481825472',
+          name: 'ADV',
+          format: 'gen3ou',
+          team: 'harvested',
+          min: 2,
+          discord: '1563717163481825472',
           status: 'upcoming',
         },
         {
           id: 'gen9ou20261109',
           slot: 'sv',
-          display_name: 'SV',
-          format_id: 'gen9ou',
-          team_mode: 'harvested',
-          min_bots: 2,
-          discord_role: '1563717708720377977',
+          name: 'SV',
+          format: 'gen9ou',
+          team: 'harvested',
+          min: 2,
+          discord: '1563717708720377977',
           status: 'upcoming',
         },
         {
           id: 'gen9randombattle20261109',
           slot: 'rand',
-          display_name: 'RAND',
-          format_id: 'gen9randombattle',
-          team_mode: 'random',
-          min_bots: 2,
-          discord_role: '1563718027994992752',
+          name: 'RAND',
+          format: 'gen9randombattle',
+          team: 'random',
+          min: 2,
+          discord: '1563718027994992752',
           status: 'upcoming',
         },
         {
           id: 'gen9championsvgc2026regmc',
           slot: 'vgc',
-          display_name: 'VGC',
-          format_id: 'gen9championsvgc2026regmc',
-          team_mode: 'competitor_pool',
-          min_bots: 3,
-          discord_role: '1564121375558340768',
+          name: 'VGC',
+          format: 'gen9championsvgc2026regmc',
+          team: 'pools',
+          min: 3,
+          discord: '1564121375558340768',
           status: 'upcoming',
         },
       ]);
@@ -221,57 +217,53 @@ describe('ladders.yml & ArenaDB ladder sync', () => {
 
   test('supports seasonal rotation and rejects duplicate active slots', () => {
     expect(() => parseLaddersYaml(`
-- id: gen9championsvgc2026regmc
-  slot: vgc
-  display_name: VGC
-  format_id: gen9championsvgc2026regmc
-  team_mode: competitor_pool
+- name: VGC
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  team: pools
   status: active
-`)).toThrow(/must specify a positive team_count/);
+`)).toThrow(/must specify a positive teams count/);
 
     expect(() => parseLaddersYaml(`
-- id: gen9championsvgc2026regmc
-  slot: vgc
-  display_name: VGC
-  format_id: gen9championsvgc2026regmc
-  team_mode: competitor_pool
-  team_count: 20
+- name: VGC
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  team: pools
   status: active
-- id: gen9championsvgc2026regmd
-  slot: vgc
-  display_name: VGC
-  format_id: gen9championsvgc2026regmd
-  team_mode: competitor_pool
-  team_count: 20
+  teams: 20
+- name: VGC
+  format: gen9championsvgc2026regmd
+  id: gen9championsvgc2026regmd
+  team: pools
   status: active
+  teams: 20
 `)).toThrow(/Multiple current ladders configured for slot "vgc"/);
 
-    const db = new ArenaDB(':memory:');
+    const db = new Database(':memory:');
     try {
       db.syncLaddersFromYaml(`
-- id: gen9championsvgc2026regmc
-  slot: vgc
-  display_name: VGC 2026 Reg M-C
-  format_id: gen9championsvgc2026regmc
-  team_mode: competitor_pool
-  team_count: 20
+- name: VGC 2026 Reg M-C
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  team: pools
   status: archived
-- id: gen9championsvgc2026regmd
-  slot: vgc
-  display_name: VGC
-  format_id: gen9championsvgc2026regmd
-  team_mode: competitor_pool
-  team_count: 20
+  teams: 20
+- name: VGC
+  format: gen9championsvgc2026regmd
+  id: gen9championsvgc2026regmd
+  team: pools
   status: active
+  teams: 20
 `, 1_765_000_000);
 
       const currentVgc = db.getActiveLadderBySlot('vgc')!;
       expect(currentVgc.id).toBe('gen9championsvgc2026regmd');
-      expect(currentVgc.team_count).toBe(20);
+      expect(currentVgc.teams).toBe(20);
       const old = db.getLadder('gen9championsvgc2026regmc')!;
+      expect(old.slot).toBe('vgc');
       expect(old.status).toBe('archived');
-      expect(old.display_name).toBe('VGC 2026 Reg M-C');
-      expect(old.archived_at).toBe(1_765_000_000);
+      expect(old.name).toBe('VGC 2026 Reg M-C');
+      expect(old.archivedAt).toBe(1_765_000_000);
     } finally {
       db.close();
     }
@@ -291,18 +283,18 @@ describe('Smogon lookup & projects.yml arena sync', () => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  test('parseSmogonIdentifier extracts IDs from numbers, slugs, URLs, or usernames', () => {
-    expect(parseSmogonIdentifier(10544)).toEqual({id: 10544});
-    expect(parseSmogonIdentifier('10544')).toEqual({id: 10544});
-    expect(parseSmogonIdentifier('pre.10544')).toEqual({id: 10544, username: 'pre'});
-    expect(parseSmogonIdentifier('https://www.smogon.com/forums/members/pre.10544/'))
+  test('parseIdentifier extracts IDs from numbers, slugs, URLs, or usernames', () => {
+    expect(smogon.parseIdentifier(10544)).toEqual({id: 10544});
+    expect(smogon.parseIdentifier('10544')).toEqual({id: 10544});
+    expect(smogon.parseIdentifier('pre.10544')).toEqual({id: 10544, username: 'pre'});
+    expect(smogon.parseIdentifier('https://www.smogon.com/forums/members/pre.10544/'))
       .toEqual({id: 10544, username: 'pre'});
-    expect(parseSmogonIdentifier('/forums/members/10544/'))
+    expect(smogon.parseIdentifier('/forums/members/10544/'))
       .toEqual({id: 10544, username: undefined});
-    expect(parseSmogonIdentifier('Dr. Perfidious')).toEqual({username: 'Dr. Perfidious'});
+    expect(smogon.parseIdentifier('Dr. Perfidious')).toEqual({username: 'Dr. Perfidious'});
   });
 
-  test('lookupSmogonUser resolves usernames via 303 and parses tooltip JSON', async () => {
+  test('lookupUser resolves usernames via 303 and parses tooltip JSON', async () => {
     globalThis.fetch = ((input: URL | RequestInfo) => {
       const url = typeof input === 'string'
         ? input
@@ -357,7 +349,7 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       return Promise.resolve(new Response(null, {status: 404}));
     });
 
-    expect(await lookupSmogonUser('pre', 'test-token')).toEqual({
+    expect(await smogon.lookupUser('pre', 'test-token')).toEqual({
       id: 10544,
       username: 'pre',
       slug: 'pre',
@@ -365,7 +357,7 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       banned: false,
     });
 
-    expect(await lookupSmogonUser(1, 'test-token')).toEqual({
+    expect(await smogon.lookupUser(1, 'test-token')).toEqual({
       id: 1,
       username: "chaos & co's",
       slug: 'chaos',
@@ -373,11 +365,11 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       banned: false,
     });
 
-    const banned = await lookupSmogonUser('cheater.666', 'test-token');
+    const banned = await smogon.lookupUser('cheater.666', 'test-token');
     expect(banned.banned).toBe(true);
   });
 
-  test('enforces one-project-per-developer on GitHub login and numerical smogon_id', async () => {
+  test('enforces one-project-per-developer on GitHub login and numerical smogonId', async () => {
     expect(() => parseArenaProjects(`
 - name: Alpha
   active: 2026
@@ -404,7 +396,7 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       dev_two: https://www.smogon.com/forums/members/renamed_handle.10544/
 `, tmpDir)).toThrow(/Smogon ID 10544 is assigned to both "Alpha" and "Beta"/);
 
-    const db = new ArenaDB(':memory:');
+    const db = new Database(':memory:');
     try {
       await expect(db.syncProjectsFromYamlWithSmogon(`
 - name: Alpha
@@ -433,7 +425,7 @@ describe('Smogon lookup & projects.yml arena sync', () => {
   });
 
   test('resolves Smogon usernames, refreshes renames by ID, and blocks banned users', async () => {
-    const db = new ArenaDB(':memory:');
+    const db = new Database(':memory:');
     try {
       let currentPreName = 'pre';
       const lookupCalls: Array<string | number> = [];
@@ -473,8 +465,8 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       });
       expect(lookupCalls).toEqual(['pre', 'pmariglia']);
       expect(db.getDeveloperByGitHub('scheibo')).toMatchObject({
-        smogon_id: 10544,
-        smogon_username: 'pre',
+        smogonId: 10544,
+        smogonUsername: 'pre',
       });
 
       // Simulate user 10544 changing Smogon name to 'pre_new' while projects.yml still says 'pre'
@@ -485,11 +477,10 @@ describe('Smogon lookup & projects.yml arena sync', () => {
         lookupSmogon: mockLookup,
         now: 2000,
       });
-      // Looked up by stored numerical ID (10544 & 535629), not stale string 'pre'!
       expect(lookupCalls).toEqual([10544, 535629]);
       expect(db.getDeveloperByGitHub('scheibo')).toMatchObject({
-        smogon_id: 10544,
-        smogon_username: 'pre_new',
+        smogonId: 10544,
+        smogonUsername: 'pre_new',
       });
 
       // Banned Smogon user is rejected
@@ -510,7 +501,7 @@ describe('Smogon lookup & projects.yml arena sync', () => {
     fs.writeFileSync(path.join(avatarsDir, 'foul-play.png'), 'PNG');
 
     const dbFile = path.join(tmpDir, 'arena.sqlite');
-    const db = new ArenaDB(dbFile);
+    const db = new Database(dbFile);
     try {
       db.syncProjectsFromYaml(`
 - name: Foul Play
@@ -529,20 +520,19 @@ describe('Smogon lookup & projects.yml arena sync', () => {
   active: [2019, 2020]
 `, avatarsDir, 1_760_000_000);
 
-      const fp = db.getBotBySlug('foul-play')!;
+      const fp = db.getAgentBySlug('foul-play')!;
       expect(fp.name).toBe('Foul Play');
-      expect(fp.logo_file).toBe('foul-play.png');
+      expect(fp.logo).toBe('foul-play.png');
       expect(fp.status).toBe('qualified');
 
-      const mm = db.getBotBySlug('metamon')!;
-      expect(mm.logo_file).toBeNull();
+      const mm = db.getAgentBySlug('metamon')!;
+      expect(mm.logo).toBeUndefined();
       expect(mm.status).toBe('pending');
-      expect(db.getBotBySlug('historical-only')).toBeUndefined();
+      expect(db.getAgentBySlug('historical-only')).toBeUndefined();
 
       db.linkDeveloperGitHubId('PMariglia', 4242, 1_760_000_100);
       db.linkDeveloperDiscord('PMariglia', '283674461268344832', 'pmariglia', 1_760_000_100);
 
-      // Re-sync after name change on ID 535629, removing CoAuthor, and dropping Metamon from arena
       db.syncProjectsFromYaml(`
 - name: Foul Play
   active: 2021
@@ -553,31 +543,31 @@ describe('Smogon lookup & projects.yml arena sync', () => {
 `, avatarsDir, 1_760_000_200);
 
       const dev = db.getDeveloperByGitHub('pmariglia')!;
-      expect(dev.smogon_id).toBe(535629);
-      expect(dev.smogon_username).toBe('pmariglia_renamed');
-      expect(dev.github_id).toBe(4242);
-      expect(dev.discord_id).toBe('283674461268344832');
-      expect(dev.discord_username).toBe('pmariglia');
+      expect(dev.smogonId).toBe(535629);
+      expect(dev.smogonUsername).toBe('pmariglia_renamed');
+      expect(dev.githubId).toBe(4242);
+      expect(dev.discordId).toBe('283674461268344832');
+      expect(dev.discordUsername).toBe('pmariglia');
 
       expect(db.getDeveloperByGitHub('coauthor')).toBeUndefined();
-      expect(db.getDevelopersForBot(fp.id).map(d => d.github_login)).toEqual([
+      expect(db.getDevelopersForAgent(fp.id).map(d => d.githubLogin)).toEqual([
         'pmariglia',
         'thirddev',
       ]);
 
-      const disabledMm = db.getBotById(mm.id)!;
+      const disabledMm = db.getAgentById(mm.id)!;
       expect(disabledMm.status).toBe('disabled');
       expect(db.getDeveloperByGitHub('jakegrigsby')).toBeUndefined();
 
       db.unlinkDeveloperDiscord('pmariglia', 1_760_000_300);
-      expect(db.getDeveloperByGitHub('pmariglia')!.discord_id).toBeNull();
+      expect(db.getDeveloperByGitHub('pmariglia')!.discordId).toBeUndefined();
     } finally {
       db.close();
     }
   });
 
   test('syncs and checks Discord guild membership', () => {
-    const db = new ArenaDB(':memory:');
+    const db = new Database(':memory:');
     try {
       db.syncDiscordMembers([
         {id: '513513270670262284', username: 'scheibo'},

@@ -1,77 +1,95 @@
-import type {DatabaseSync} from 'node:sqlite';
+import {DatabaseSync} from 'node:sqlite';
 
 export interface RatingSnapshotRow {
-  ladder_id: string;
-  version_id: number;
-  day_utc: string;
-  matches_played: number;
-  rating_elo: number;
-  rating_se: number;
-  rating_lcb: number;
+  ladderId: string;
+  versionId: number;
+  dayUtc: string;
+  matches: number;
+  elo: number;
+  se: number;
+  lcb: number;
   gxe: number;
-  rank_current: number | null;
-  rank_min: number | null;
-  rank_max: number | null;
-  rank_best: number | null;
+  rankCurrent?: number;
+  rankMin?: number;
+  rankMax?: number;
+  rankBest?: number;
 }
 
 export interface RatingSnapshotInput {
   versionId: number;
-  matchesPlayed: number;
-  ratingElo: number;
-  ratingSe: number;
-  ratingLcb: number;
+  matches: number;
+  elo: number;
+  se: number;
+  lcb: number;
   gxe: number;
-  rankCurrent: number | null;
-  rankMin: number | null;
-  rankMax: number | null;
-  bestRank: number | null;
+  rankCurrent?: number;
+  rankMin?: number;
+  rankMax?: number;
+  bestRank?: number;
 }
 
 export interface LadderSnapshotHistoryRow {
-  ladder_id: string;
-  version_id: number;
-  bot_id: number;
-  bot_slug: string;
-  bot_name: string;
-  version_str: string;
-  day_utc: string;
-  matches_played: number;
-  rating_elo: number;
-  rating_se: number;
-  rating_lcb: number;
+  ladderId: string;
+  versionId: number;
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
+  version: string;
+  dayUtc: string;
+  matches: number;
+  elo: number;
+  se: number;
+  lcb: number;
   gxe: number;
-  rank_current: number | null;
+  rankCurrent?: number;
 }
 
 export function getRatingSnapshotsForLadder(
   db: DatabaseSync,
   ladderId: string
 ): LadderSnapshotHistoryRow[] {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       rs.ladder_id,
       rs.version_id,
-      bv.bot_id,
-      b.slug AS bot_slug,
-      b.name AS bot_name,
-      bv.version_str,
+      av.agent_id,
+      a.slug AS agent_slug,
+      a.name AS agent_name,
+      av.version,
       rs.day_utc,
-      rs.matches_played,
-      rs.rating_elo,
-      rs.rating_se,
-      rs.rating_lcb,
+      rs.matches,
+      rs.elo,
+      rs.se,
+      rs.lcb,
       rs.gxe,
       rs.rank_current
     FROM rating_snapshots rs
-    JOIN bot_versions bv ON bv.id = rs.version_id
-    JOIN bots b ON b.id = bv.bot_id
+    JOIN agent_versions av ON av.id = rs.version_id
+    JOIN agents a ON a.id = av.agent_id
     WHERE rs.ladder_id = ?
-      AND bv.smoke_status = 'passed'
+      AND av.smoke_status = 'passed'
     ORDER BY rs.day_utc ASC, rs.version_id ASC
-  `).all(ladderId) as unknown as LadderSnapshotHistoryRow[];
+  `).all(ladderId) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    ladderId: r.ladder_id as string,
+    versionId: r.version_id as number,
+    agentId: r.agent_id as number,
+    agentSlug: r.agent_slug as string,
+    agentName: r.agent_name as string,
+    version: r.version as string,
+    dayUtc: r.day_utc as string,
+    matches: r.matches as number,
+    elo: r.elo as number,
+    se: r.se as number,
+    lcb: r.lcb as number,
+    gxe: r.gxe as number,
+    rankCurrent: (r.rank_current as number | null) ?? undefined,
+  }));
 }
 
+// Overwrites each version's row for `dayUtc` on every post-match solve so historical SVG charts
+// retain end-of-day UTC ratings without storing per-match snapshots.
 export function upsertDailyRatingSnapshots(
   db: DatabaseSync,
   ladderId: string,
@@ -80,16 +98,16 @@ export function upsertDailyRatingSnapshots(
 ) {
   const upsert = db.prepare(`
     INSERT INTO rating_snapshots (
-      ladder_id, version_id, day_utc, matches_played,
-      rating_elo, rating_se, rating_lcb, gxe,
+      ladder_id, version_id, day_utc, matches,
+      elo, se, lcb, gxe,
       rank_current, rank_min, rank_max, rank_best
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(ladder_id, version_id, day_utc) DO UPDATE SET
-      matches_played = excluded.matches_played,
-      rating_elo = excluded.rating_elo,
-      rating_se = excluded.rating_se,
-      rating_lcb = excluded.rating_lcb,
+      matches = excluded.matches,
+      elo = excluded.elo,
+      se = excluded.se,
+      lcb = excluded.lcb,
       gxe = excluded.gxe,
       rank_current = excluded.rank_current,
       rank_min = excluded.rank_min,
@@ -101,15 +119,15 @@ export function upsertDailyRatingSnapshots(
       ladderId,
       v.versionId,
       dayUtc,
-      v.matchesPlayed,
-      v.ratingElo,
-      v.ratingSe,
-      v.ratingLcb,
+      v.matches,
+      v.elo,
+      v.se,
+      v.lcb,
       v.gxe,
-      v.rankCurrent,
-      v.rankMin,
-      v.rankMax,
-      v.bestRank
+      v.rankCurrent ?? null,
+      v.rankMin ?? null,
+      v.rankMax ?? null,
+      v.bestRank ?? null
     );
   }
 }

@@ -1,48 +1,34 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import type {Renderer} from 'site/build/page';
-
-import type {
-  ArenaDB,
-  TournamentEntrantView,
-  TournamentGameView,
-  TournamentPairRecord,
-  TournamentRow,
-} from '../db';
-import {header} from '../static/build';
+import type * as db from '../db';
+import {Renderer, header} from '../static/build';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
-import {
-  ARENA_STYLE,
-  FORMAT_TITLES,
-  type ProjectMeta,
-  formatBotLink,
-  heatmapClass,
-  resolveBotHref,
-  safeInlineJson,
-  writeFileAtomic,
-} from './render';
+import * as render from './render';
 
 const TOURNAMENTS_STYLE = fs.readFileSync(root('static', 'tournaments.css'), 'utf8');
 const TOURNAMENTS_TEMPLATE = fs.readFileSync(root('static', 'tournaments.html'), 'utf8');
 const VIEWER_STYLE = fs.readFileSync(root('static', 'viewer.css'), 'utf8');
 const VIEWER_TEMPLATE = fs.readFileSync(root('static', 'viewer.html'), 'utf8');
 
-export interface TournamentBroadcastClock {
+export interface BroadcastClock {
   name: string;
   bankSeconds: number;
   thinking: boolean;
   incrementSeconds: number;
 }
 
-export interface TournamentLiveBroadcast {
+// Unlike the 24/7 continuous ladders (which enforce a zero-log anti-scouting policy), scheduled
+// Championship Tournaments use locked submitted binaries and open team sheets, so full Showdown
+// battle logs and live spectator broadcasts are published in real time.
+export interface LiveBroadcast {
   tournamentId: string;
   tables: Array<{label: string; idle?: boolean}>;
   seriesLeftHtml: string;
   seriesRightHtml: string;
-  p1: TournamentBroadcastClock;
-  p2: TournamentBroadcastClock;
+  p1: BroadcastClock;
+  p2: BroadcastClock;
   lines: string[];
   live?: boolean;
 }
@@ -59,13 +45,13 @@ export function speciesToMinispriteSlug(species: string): string {
     .replace(/^-|-$/g, '');
 }
 
-export function parsePackedTeamSpecies(packed: string | null): string[] {
+export function parsePackedTeamSpecies(packed?: string): string[] {
   if (!packed?.trim()) return [];
   const out: string[] = [];
   for (const chunk of packed.split(']')) {
     if (!chunk.trim()) continue;
     const fields = chunk.split('|');
-    const species = (fields[1]?.trim() || fields[0]?.trim() || '');
+    const species = fields[1]?.trim() || fields[0]?.trim() || '';
     if (species) out.push(species);
   }
   return out;
@@ -78,7 +64,7 @@ function formatClockMmSs(seconds: number): string {
   return `${mm}:${ss}`;
 }
 
-function renderPartyMinisprites(packed: string | null): string {
+function renderPartyMinisprites(packed?: string): string {
   const speciesList = parsePackedTeamSpecies(packed);
   if (speciesList.length === 0) return '';
   const spans = speciesList.slice(0, 6).map(sp => {
@@ -91,7 +77,7 @@ function renderPartyMinisprites(packed: string | null): string {
   return `<span class="party-minisprites">${spans}</span>`;
 }
 
-function renderClockSide(slot: 'p1' | 'p2', clock: TournamentBroadcastClock): string {
+function renderClockSide(slot: 'p1' | 'p2', clock: BroadcastClock): string {
   const pillCls = clock.thinking ? 'clock-pill thinking' : 'clock-pill';
   const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
   const subText = clock.thinking ? 'thinking…' : `+${clock.incrementSeconds}s/turn`;
@@ -108,18 +94,18 @@ function renderClockSide(slot: 'p1' | 'p2', clock: TournamentBroadcastClock): st
 }
 
 function renderBroadcastSectionHtml(
-  tournament: TournamentRow,
-  broadcast: TournamentLiveBroadcast | undefined
+  tournament: db.TournamentRow,
+  broadcast?: LiveBroadcast
 ): {
   html: string;
   isActive: boolean;
-  viewerInit: {
+  viewerInit?: {
     lines: string[];
     live: boolean;
     side: 'p1';
     thinkingSlot?: 'p1' | 'p2';
     thinkingBankSeconds?: number;
-  } | null;
+  };
 } {
   const isActive = broadcast?.tournamentId === tournament.id;
   const tableNavHtml = isActive && broadcast.tables.length > 0
@@ -148,6 +134,8 @@ function renderBroadcastSectionHtml(
       </div>`
     : '';
 
+  // Sandboxed Showdown replay iframe (`sandbox="allow-scripts"` without `allow-same-origin`)
+  // isolates third-party battle client DOM/scripts from `pkmn.ai` session cookies.
   const html = `${tableNavHtml}
     <div class="broadcast">
       <div class="series-bar">
@@ -167,7 +155,7 @@ function renderBroadcastSectionHtml(
     </div>`;
 
   if (!isActive) {
-    return {html, isActive: false, viewerInit: null};
+    return {html, isActive: false};
   }
 
   const isLive = broadcast.live !== false;
@@ -190,11 +178,11 @@ function renderBroadcastSectionHtml(
 }
 
 function renderTournamentStandingsHtml(opts: {
-  tournament: TournamentRow;
-  entrants: TournamentEntrantView[];
+  tournament: db.TournamentRow;
+  entrants: db.TournamentEntrantView[];
   hasSuperfinal: boolean;
   publicDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
 }): string {
   const {
@@ -209,23 +197,29 @@ function renderTournamentStandingsHtml(opts: {
     return '<p class="empty-state muted">No entrants registered yet.</p>';
   }
 
-  const maxRrGames = Math.max(1, (entrants.length - 1) * tournament.games_per_matchup);
+  const maxRrGames = Math.max(1, (entrants.length - 1) * tournament.gamesPerMatchup);
   const rowsHtml = entrants.map((e, idx) => {
-    const rankNum = e.final_rank ?? idx + 1;
+    const rankNum = e.finalRank ?? idx + 1;
     const sfBadge = hasSuperfinal && rankNum <= 2 ? ' <span class="muted">SF</span>' : '';
-    const href = resolveBotHref(publicDir, projectMeta, e.bot_slug, e.bot_name, profileSlugs);
-    const botHtml = `${formatBotLink(e.bot_name, href, true)} ` +
-      `<code>${escapeHtml(e.version_str)}</code>`;
-    const elo = Math.round(e.tourney_elo);
-    const ci = Math.round(1.96 * e.tourney_se);
+    const href = render.resolveAgentHref(
+      publicDir,
+      projectMeta,
+      e.agentSlug,
+      e.agentName,
+      profileSlugs
+    );
+    const agentHtml = `${render.formatAgentLink(e.agentName, href, true)} ` +
+      `<code>${escapeHtml(e.version)}</code>`;
+    const elo = Math.round(e.elo);
+    const ci = Math.round(1.96 * e.se);
     const ptsStr = e.points.toFixed(1);
-    const sbStr = Math.round(e.sb_score).toLocaleString('en-US');
+    const sbStr = Math.round(e.sonnebornBerger).toLocaleString('en-US');
 
     return '<tr>' +
       `<td><strong>${rankNum}</strong>${sfBadge}</td>` +
-      `<td>${botHtml}</td>` +
+      `<td>${agentHtml}</td>` +
       `<td class="num"><strong>${elo}</strong> <span class="muted">±${ci}</span></td>` +
-      `<td class="num">${e.game_wins}–${e.game_losses}–${e.game_ties}</td>` +
+      `<td class="num">${e.gameWins}–${e.gameLosses}–${e.gameTies}</td>` +
       `<td class="num"><strong>${ptsStr}</strong> <span class="muted">/ ${maxRrGames}</span></td>` +
       `<td class="num">${sbStr}</td>` +
       '</tr>';
@@ -238,7 +232,7 @@ function renderTournamentStandingsHtml(opts: {
       <thead>
         <tr>
           <th>#</th>
-          <th>Bot</th>
+          <th>Agent</th>
           <th class="num" title="Tournament MAP Elo ± 95% CI">Elo</th>
           <th class="num" title="Standalone individual BYOT game Wins – Losses – Ties">W–L–T</th>
           <th class="num" title="${escapeHtml(ptsTitle)}">Points</th>
@@ -251,10 +245,10 @@ function renderTournamentStandingsHtml(opts: {
 }
 
 function renderTournamentCrosstableHtml(opts: {
-  entrants: TournamentEntrantView[];
-  pairs: TournamentPairRecord[];
+  entrants: db.TournamentEntrantView[];
+  pairs: db.TournamentPairRecord[];
   publicDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
 }): {html: string; isEmpty: boolean} {
   const {entrants, pairs, publicDir, projectMeta, profileSlugs} = opts;
@@ -265,35 +259,35 @@ function renderTournamentCrosstableHtml(opts: {
     };
   }
 
-  const pairMap = new Map<string, TournamentPairRecord>();
+  const pairMap = new Map<string, db.TournamentPairRecord>();
   for (const p of pairs) {
-    pairMap.set(`${p.v_low_id}:${p.v_high_id}`, p);
+    pairMap.set(`${p.lowVersionId}:${p.highVersionId}`, p);
   }
 
-  const colHeaders = entrants.map(e => `<th>${escapeHtml(e.bot_name)}</th>`).join('');
+  const colHeaders = entrants.map(e => `<th>${escapeHtml(e.agentName)}</th>`).join('');
   const bodyRows = entrants.map(rowEnt => {
-    const rowHref = resolveBotHref(
+    const rowHref = render.resolveAgentHref(
       publicDir,
       projectMeta,
-      rowEnt.bot_slug,
-      rowEnt.bot_name,
+      rowEnt.agentSlug,
+      rowEnt.agentName,
       profileSlugs
     );
-    const rowLabel = `${formatBotLink(rowEnt.bot_name, rowHref, true)} ` +
-      `<code>${escapeHtml(rowEnt.version_str)}</code>`;
+    const rowLabel = `${render.formatAgentLink(rowEnt.agentName, rowHref, true)} ` +
+      `<code>${escapeHtml(rowEnt.version)}</code>`;
 
     const cells = entrants.map(colEnt => {
-      if (rowEnt.version_id === colEnt.version_id) {
+      if (rowEnt.versionId === colEnt.versionId) {
         return '<td class="diag">—</td>';
       }
-      const lowId = Math.min(rowEnt.version_id, colEnt.version_id);
-      const highId = Math.max(rowEnt.version_id, colEnt.version_id);
+      const lowId = Math.min(rowEnt.versionId, colEnt.versionId);
+      const highId = Math.max(rowEnt.versionId, colEnt.versionId);
       const pair = pairMap.get(`${lowId}:${highId}`);
       if (!pair) return '<td class="muted">—</td>';
 
-      const isLow = rowEnt.version_id === lowId;
-      const wins = isLow ? pair.low_wins : pair.high_wins;
-      const losses = isLow ? pair.high_wins : pair.low_wins;
+      const isLow = rowEnt.versionId === lowId;
+      const wins = isLow ? pair.lowWins : pair.highWins;
+      const losses = isLow ? pair.highWins : pair.lowWins;
       const ties = pair.ties;
       const total = wins + losses + ties;
       if (total === 0) return '<td class="muted">—</td>';
@@ -302,7 +296,7 @@ function renderTournamentCrosstableHtml(opts: {
       const scorePct = (pts / total) * 100;
       const scoreStr = `${scorePct.toFixed(1)}%`;
       const scoreHtml = scorePct > 50 ? `<strong>${scoreStr}</strong>` : scoreStr;
-      const cls = heatmapClass(scorePct);
+      const cls = render.heatmapClass(scorePct);
       const clsAttr = cls ? ` class="${cls}"` : '';
       const tip = `${pts.toFixed(1)} / ${total} pts`;
 
@@ -330,11 +324,11 @@ function renderTournamentCrosstableHtml(opts: {
 }
 
 function renderTournamentGamesHtml(opts: {
-  tournament: TournamentRow;
-  games: TournamentGameView[];
+  tournament: db.TournamentRow;
+  games: db.TournamentGameView[];
   totalCompletedCount: number;
   publicDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
 }): string {
   const {
@@ -349,8 +343,8 @@ function renderTournamentGamesHtml(opts: {
   const rowsHtml = games.length === 0
     ? '<tr><td colspan="6" class="center muted">No completed games yet.</td></tr>'
     : games.map(g => {
-      const codePrefix = g.stage === 'sf' ? 'SF' : 'RR';
-      const codeNum = g.stage === 'sf' ? g.h2h_game_num : g.macro_cycle;
+      const codePrefix = g.stage === 'Superfinal' ? 'SF' : 'RR';
+      const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
       const gameCode = `${codePrefix}${codeNum}`;
       const logRel = `${g.id}.log`;
       const perTourLog = path.join(publicDir, 'arena', 'tournaments', tournament.id, logRel);
@@ -368,19 +362,31 @@ function renderTournamentGamesHtml(opts: {
           ? '0–<strong>1</strong>'
           : '½–½';
 
-      const p1Href = resolveBotHref(publicDir, projectMeta, g.p1_slug, g.p1_name, profileSlugs);
-      const p2Href = resolveBotHref(publicDir, projectMeta, g.p2_slug, g.p2_name, profileSlugs);
-      const p1Party = renderPartyMinisprites(g.p1_team_packed);
-      const p2Party = renderPartyMinisprites(g.p2_team_packed);
+      const p1Href = render.resolveAgentHref(
+        publicDir,
+        projectMeta,
+        g.p1Slug,
+        g.p1Name,
+        profileSlugs
+      );
+      const p2Href = render.resolveAgentHref(
+        publicDir,
+        projectMeta,
+        g.p2Slug,
+        g.p2Name,
+        profileSlugs
+      );
+      const p1Party = renderPartyMinisprites(g.p1Team);
+      const p2Party = renderPartyMinisprites(g.p2Team);
 
-      const p1Cell = `<div class="player-cell">${formatBotLink(g.p1_name, p1Href, p1Won)}` +
+      const p1Cell = `<div class="player-cell">${render.formatAgentLink(g.p1Name, p1Href, p1Won)}` +
         `${p1Party}</div>`;
-      const p2Cell = `<div class="player-cell">${formatBotLink(g.p2_name, p2Href, p2Won)}` +
+      const p2Cell = `<div class="player-cell">${render.formatAgentLink(g.p2Name, p2Href, p2Won)}` +
         `${p2Party}</div>`;
 
-      const turnsStr = g.turns !== null ? String(g.turns) : '—';
-      const b1 = Math.round(g.p1_bank_left_s ?? 0);
-      const b2 = Math.round(g.p2_bank_left_s ?? 0);
+      const turnsStr = g.turns !== undefined ? String(g.turns) : '—';
+      const b1 = Math.round(g.p1BankSeconds ?? 0);
+      const b2 = Math.round(g.p2BankSeconds ?? 0);
 
       return '<tr>' +
         `<td><a href="${escapeHtml(gameHref)}" class="subtle"${replayAttr} ` +
@@ -426,11 +432,11 @@ function renderTournamentGamesHtml(opts: {
     '</p>';
 }
 
-function readExistingTournamentBroadcast(publicDir: string): TournamentLiveBroadcast | undefined {
+function readExistingBroadcast(publicDir: string): LiveBroadcast | undefined {
   const filePath = path.join(publicDir, 'api', 'tournament-live.json');
   if (!fs.existsSync(filePath)) return undefined;
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as TournamentLiveBroadcast;
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as LiveBroadcast;
     if (parsed && typeof parsed === 'object' && typeof parsed.tournamentId === 'string') {
       return parsed;
     }
@@ -442,13 +448,13 @@ export function renderBattleViewerPage(publicDir: string) {
   const viewerHtml = renderTemplate(VIEWER_TEMPLATE, {
     viewerStyle: VIEWER_STYLE,
   });
-  writeFileAtomic(path.join(publicDir, 'arena', 'viewer', 'index.html'), viewerHtml);
+  render.writeFileAtomic(path.join(publicDir, 'arena', 'viewer', 'index.html'), viewerHtml);
 }
 
 export function renderArenaTournamentsSummaryHtml(opts: {
-  db: ArenaDB;
+  db: db.Database;
   publicDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
 }): string {
   const {db, publicDir, projectMeta, profileSlugs} = opts;
@@ -460,14 +466,14 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   const ongoing = tournaments.filter(t => t.status === 'running' || t.status === 'scheduled');
   const completed = tournaments
     .filter(t => t.status === 'completed')
-    .sort((a, b) => (b.completed_at ?? b.starts_at) - (a.completed_at ?? a.starts_at));
+    .sort((a, b) => (b.completedAt ?? b.startsAt) - (a.completedAt ?? a.startsAt));
 
   const parts: string[] = [];
 
   if (ongoing.length > 0) {
     const items = ongoing.map(t => {
       const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
-      const fmtTitle = FORMAT_TITLES[t.format_id] ?? t.format_id;
+      const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
       const entrants = db.getTournamentEntrants(t.id);
       const badge = t.status === 'running'
         ? '<span class="yes">&#9679; Live</span>'
@@ -475,15 +481,15 @@ export function renderArenaTournamentsSummaryHtml(opts: {
       let leaderSuffix = '';
       if (t.status === 'running' && entrants.length > 0) {
         const leader = entrants[0];
-        const lHref = resolveBotHref(
+        const lHref = render.resolveAgentHref(
           publicDir,
           projectMeta,
-          leader.bot_slug,
-          leader.bot_name,
+          leader.agentSlug,
+          leader.agentName,
           profileSlugs
         );
-        leaderSuffix = ` · Leader: ${formatBotLink(leader.bot_name, lHref, true)} ` +
-          `<code>${escapeHtml(leader.version_str)}</code>`;
+        leaderSuffix = ` · Leader: ${render.formatAgentLink(leader.agentName, lHref, true)} ` +
+          `<code>${escapeHtml(leader.version)}</code>`;
       }
       return `<li>${badge} <a href="${escapeHtml(tourHref)}" class="subtle">` +
         `<strong>${escapeHtml(t.name)}</strong></a> · <tt>${escapeHtml(fmtTitle)}</tt> ` +
@@ -495,12 +501,12 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   if (completed.length > 0) {
     const rows = completed.map(t => {
       const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
-      const fmtTitle = FORMAT_TITLES[t.format_id] ?? t.format_id;
+      const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
       const entrants = db.getTournamentEntrants(t.id);
-      const winner = entrants.find(e => e.final_rank === 1) ?? entrants[0];
+      const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
       const maxRrGames = entrants.length >= 2
-        ? (entrants.length - 1) * t.games_per_matchup
-        : t.games_per_matchup;
+        ? (entrants.length - 1) * t.gamesPerMatchup
+        : t.gamesPerMatchup;
 
       if (!winner) {
         return '<tr>' +
@@ -514,17 +520,17 @@ export function renderArenaTournamentsSummaryHtml(opts: {
           '</tr>';
       }
 
-      const wHref = resolveBotHref(
+      const wHref = render.resolveAgentHref(
         publicDir,
         projectMeta,
-        winner.bot_slug,
-        winner.bot_name,
+        winner.agentSlug,
+        winner.agentName,
         profileSlugs
       );
-      const winnerCell = `${formatBotLink(winner.bot_name, wHref, true)} ` +
-        `<code>${escapeHtml(winner.version_str)}</code>`;
-      const elo = Math.round(winner.tourney_elo);
-      const ci = Math.round(1.96 * winner.tourney_se);
+      const winnerCell = `${render.formatAgentLink(winner.agentName, wHref, true)} ` +
+        `<code>${escapeHtml(winner.version)}</code>`;
+      const elo = Math.round(winner.elo);
+      const ci = Math.round(1.96 * winner.se);
       const ptsStr = winner.points.toFixed(1);
 
       return '<tr>' +
@@ -533,7 +539,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
         `<td><tt>${escapeHtml(fmtTitle)}</tt></td>` +
         `<td>${winnerCell}</td>` +
         `<td class="num"><strong>${elo}</strong> <span class="muted">±${ci}</span></td>` +
-        `<td class="num">${winner.game_wins}–${winner.game_losses}–${winner.game_ties}</td>` +
+        `<td class="num">${winner.gameWins}–${winner.gameLosses}–${winner.gameTies}</td>` +
         `<td class="num"><strong>${ptsStr}</strong> ` +
           `<span class="muted">/ ${maxRrGames}</span></td>` +
         '</tr>';
@@ -562,12 +568,13 @@ export function renderArenaTournamentsSummaryHtml(opts: {
 }
 
 export function renderTournamentsPages(opts: {
-  db: ArenaDB;
+  db: db.Database;
   renderer: Renderer;
   publicDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
-  tournamentBroadcast?: TournamentLiveBroadcast | null;
+  tournamentBroadcast?: LiveBroadcast;
+  includeDiskBroadcast?: boolean;
 }) {
   const {db, renderer, publicDir, projectMeta, profileSlugs} = opts;
   renderBattleViewerPage(publicDir);
@@ -586,9 +593,9 @@ export function renderTournamentsPages(opts: {
 
   if (tournaments.length === 0) return;
 
-  const broadcast = opts.tournamentBroadcast === undefined
-    ? readExistingTournamentBroadcast(publicDir)
-    : opts.tournamentBroadcast ?? undefined;
+  const broadcast = opts.tournamentBroadcast ?? (
+    opts.includeDiskBroadcast !== false ? readExistingBroadcast(publicDir) : undefined
+  );
 
   for (const t of tournaments) {
     const eventOptions = tournaments.map(other => {
@@ -599,23 +606,23 @@ export function renderTournamentsPages(opts: {
 
     const entrants = db.getTournamentEntrants(t.id);
     const games = db.getTournamentGames(t.id, 50);
-    const rrPairs = db.getTournamentCrosstable(t.id, 'rr');
-    const sfPairs = db.getTournamentCrosstable(t.id, 'sf');
-    const hasSf = sfPairs.length > 0 || games.some(g => g.stage === 'sf') ||
+    const rrPairs = db.getTournamentCrosstable(t.id, 'Round Robin');
+    const sfPairs = db.getTournamentCrosstable(t.id, 'Superfinal');
+    const hasSf = sfPairs.length > 0 || games.some(g => g.stage === 'Superfinal') ||
       (broadcast?.tournamentId === t.id && broadcast.seriesLeftHtml.includes('Superfinal'));
 
     const n = entrants.length;
-    const rrTotal = n >= 2 ? ((n * (n - 1)) / 2) * t.games_per_matchup : 0;
-    const fmtTitle = FORMAT_TITLES[t.format_id] ?? t.format_id;
-    const isDoubles = t.format_id.includes('vgc') || t.format_id.includes('doubles');
+    const rrTotal = n >= 2 ? ((n * (n - 1)) / 2) * t.gamesPerMatchup : 0;
+    const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
+    const isDoubles = t.format.includes('vgc') || t.format.includes('doubles');
     const inc = isDoubles ? 25 : 10;
     const sfSuffix = hasSf ? ' + 100-game Superfinal' : '';
 
     const metaHtml =
       `<p class="meta"><tt>${escapeHtml(fmtTitle)}</tt> · ${n} Entrants · ` +
-      `<tt>G=${t.games_per_matchup}</tt> Double Round-Robin ` +
+      `<tt>G=${t.gamesPerMatchup}</tt> Double Round-Robin ` +
       `(${rrTotal.toLocaleString('en-US')} games)${sfSuffix}<br>` +
-      `${escapeHtml(t.hardware_desc)} · <tt>150s</tt> bank (<tt>+${inc}s/turn</tt>)</p>`;
+      `${escapeHtml(t.hardware)} · <tt>150s</tt> bank (<tt>+${inc}s/turn</tt>)</p>`;
 
     const broadcastRes = renderBroadcastSectionHtml(t, broadcast);
     const standingsHtml = renderTournamentStandingsHtml({
@@ -635,8 +642,8 @@ export function renderTournamentsPages(opts: {
     });
 
     let completedCount = 0;
-    for (const p of rrPairs) completedCount += p.low_wins + p.high_wins + p.ties;
-    for (const p of sfPairs) completedCount += p.low_wins + p.high_wins + p.ties;
+    for (const p of rrPairs) completedCount += p.lowWins + p.highWins + p.ties;
+    for (const p of sfPairs) completedCount += p.lowWins + p.highWins + p.ties;
 
     const gamesHtml = renderTournamentGamesHtml({
       tournament: t,
@@ -656,7 +663,7 @@ export function renderTournamentsPages(opts: {
       crosstableInitialClass: crossRes.isEmpty ? ' class="hide"' : '',
       crosstableHtml: crossRes.html,
       gamesHtml,
-      viewerInitJson: safeInlineJson(broadcastRes.viewerInit),
+      viewerInitJson: render.safeInlineJson(broadcastRes.viewerInit),
     });
 
     const html = renderer.render({
@@ -664,38 +671,38 @@ export function renderTournamentsPages(opts: {
       title: `${t.name} | pkmn.ai`,
       header: header('<a href="/arena/" class="subtle">Tournaments</a>'),
       path: `/arena/tournaments/${t.id}/`,
-      style: `${ARENA_STYLE}\n${TOURNAMENTS_STYLE}`,
+      style: `${render.ARENA_STYLE}\n${TOURNAMENTS_STYLE}`,
       content,
     });
 
     const tourneyJson = {
       id: t.id,
       name: t.name,
-      format_id: t.format_id,
+      format: t.format,
       status: t.status,
-      games_per_matchup: t.games_per_matchup,
-      starts_at: t.starts_at,
-      completed_at: t.completed_at,
-      completed_games: completedCount,
+      gamesPerMatchup: t.gamesPerMatchup,
+      startsAt: t.startsAt,
+      completedAt: t.completedAt,
+      completedGames: completedCount,
       standings: entrants.map((e, idx) => ({
-        rank: e.final_rank ?? idx + 1,
-        bot_slug: e.bot_slug,
-        bot_name: e.bot_name,
-        version: e.version_str,
-        elo: Math.round(e.tourney_elo),
-        ci95: Math.round(1.96 * e.tourney_se),
-        wins: e.game_wins,
-        losses: e.game_losses,
-        ties: e.game_ties,
+        rank: e.finalRank ?? idx + 1,
+        slug: e.agentSlug,
+        name: e.agentName,
+        version: e.version,
+        elo: Math.round(e.elo),
+        ci95: Math.round(1.96 * e.se),
+        wins: e.gameWins,
+        losses: e.gameLosses,
+        ties: e.gameTies,
         points: e.points,
-        sb_score: e.sb_score,
+        sonnebornBerger: e.sonnebornBerger,
       })),
     };
 
-    writeFileAtomic(path.join(tourneysDir, t.id, 'index.html'), html);
-    writeFileAtomic(
+    render.writeFileAtomic(path.join(tourneysDir, t.id, 'index.html'), html);
+    render.writeFileAtomic(
       path.join(tourneysDir, t.id, 'index.json'),
-      `${JSON.stringify(tourneyJson, null, 2)}\n`
+      `${JSON.stringify(tourneyJson, undefined, 2)}\n`
     );
   }
 }

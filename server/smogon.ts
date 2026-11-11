@@ -1,9 +1,17 @@
+// Smogon XenForo profile resolution and ban-status verification.
+//
+// Smogon AI Policy requires every Arena competitor to be tied to a non-banned Smogon forum
+// account. Because Smogon usernames can be renamed on XenForo while numeric member IDs are
+// immutable, `pkmn register` resolves usernames/URLs to their numeric `smogon_id` once and
+// stores `smogon_id` in `agents`, periodically refreshing display names and ban flags via the
+// lightweight `?tooltip=true&_xfResponseType=json` XenForo endpoint.
+
 const SMOGON_BASE = 'https://www.smogon.com';
 const MEMBER_URL_RE =
   /^(?:https?:\/\/(?:www\.)?smogon\.com)?\/forums\/members\/(?:([^/?#]+)\.)?(\d+)\/?$/i;
 const SLUG_ID_RE = /^([^/?#]+)\.(\d+)$/;
 
-export interface SmogonUser {
+export interface User {
   id: number;
   username: string;
   slug: string;
@@ -11,7 +19,7 @@ export interface SmogonUser {
   banned: boolean;
 }
 
-export function parseSmogonIdentifier(raw: string | number): {id?: number; username?: string} {
+export function parseIdentifier(raw: string | number): {id?: number; username?: string} {
   if (typeof raw === 'number') {
     if (!Number.isInteger(raw) || raw <= 0) {
       throw new Error(`Invalid Smogon user ID: ${raw}`);
@@ -58,6 +66,9 @@ function decodeHtmlEntities(str: string): string {
     .replace(/&amp;/g, '&');
 }
 
+// Smogon's Cloudflare/WAF layer blocks automated XenForo requests unless the authorized
+// `__scraper-token` query parameter is attached on every hop (including 301/303 redirects
+// when canonicalizing `/forums/members/<id>/` -> `/forums/members/<slug>.<id>/`).
 function withToken(rawUrl: string, token: string): URL {
   const u = new URL(rawUrl, SMOGON_BASE);
   u.hash = '';
@@ -67,7 +78,7 @@ function withToken(rawUrl: string, token: string): URL {
   return u;
 }
 
-async function fetchSmogonFollowingRedirects(rawUrl: string, token: string): Promise<Response> {
+async function fetchFollowingRedirects(rawUrl: string, token: string): Promise<Response> {
   let current = rawUrl;
   for (let hops = 0; hops < 8; hops++) {
     const res = await fetch(withToken(current, token), {redirect: 'manual'});
@@ -81,18 +92,20 @@ async function fetchSmogonFollowingRedirects(rawUrl: string, token: string): Pro
   throw new Error(`Too many redirects fetching Smogon URL: ${rawUrl}`);
 }
 
-export async function lookupSmogonUser(
+export async function lookupUser(
   raw: string | number,
   token = process.env.SMOGON_TOKEN
-): Promise<SmogonUser> {
+): Promise<User> {
   if (!token) {
     throw new Error('SMOGON_TOKEN is required to look up Smogon accounts');
   }
 
-  const parsed = parseSmogonIdentifier(raw);
+  const parsed = parseIdentifier(raw);
   let id = parsed.id;
   let fallbackSlug = parsed.username;
 
+  // Username-only inputs resolve via XenForo's `/forums/members/?username=...` 303 redirect,
+  // which points at `/forums/members/<slug>.<id>/` when an exact account exists.
   if (id === undefined) {
     const encoded = encodeURIComponent(parsed.username!);
     const findUrl = `${SMOGON_BASE}/forums/members/?username=${encoded}`;
@@ -112,7 +125,7 @@ export async function lookupSmogonUser(
 
   const tooltipUrl =
     `${SMOGON_BASE}/forums/members/${id}/?tooltip=true&_xfResponseType=json`;
-  const res = await fetchSmogonFollowingRedirects(tooltipUrl, token);
+  const res = await fetchFollowingRedirects(tooltipUrl, token);
   if (!res.ok) {
     throw new Error(`Smogon member ID ${id} not found (HTTP ${res.status})`);
   }
@@ -137,6 +150,8 @@ export async function lookupSmogonUser(
     : '';
   const username = rawName || slug;
 
+  // XenForo marks banned members either with `username--banned` on the display name span or
+  // with a `Banned` userTitle banner in the tooltip card.
   const banned =
     /username--banned/i.test(html) ||
     /<span[^>]*class="[^"]*userTitle[^"]*"[^>]*>\s*Banned\s*<\/span>/i.test(html);

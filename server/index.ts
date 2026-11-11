@@ -2,7 +2,7 @@ require('source-map-support').install();
 
 import {serve} from 'site';
 
-import {ArenaDB} from '../db';
+import {Database} from '../db';
 import {ROOT, root} from '../static/util';
 
 import * as account from './account';
@@ -20,7 +20,10 @@ const safeRender = () => {
   }
 };
 
-const db = new ArenaDB();
+// Reconcile `config/ladders.yml` synchronously on boot, then refresh `static/projects.yml` owner
+// standings from Smogon XenForo HTML profiles (falling back to offline YAML sync if Smogon is
+// unreachable) before writing fresh static Arena pages to `public/`.
+const db = new Database();
 db.syncLadders();
 db.syncProjectsWithSmogon()
   .catch(err => {
@@ -84,4 +87,3 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
 
   wiki.register(app, {auth: wikiInstance.auth, db});
 });
-

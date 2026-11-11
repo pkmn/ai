@@ -37,10 +37,9 @@
 </section>
 
 <script>
-  const setTheme = t => document.documentElement.setAttribute('data-theme', t);
   document.addEventListener('DOMContentLoaded', () => {
     let state = {{{initialLiveJson}}};
-    const botLinks = {{{botLinksJson}}};
+    const agentLinks = {{{agentLinksJson}}};
     const formatTitles = {{{formatTitlesJson}}};
     const livePanel = document.getElementById('live-panel');
     const tbody = document.getElementById('battles-tbody');
@@ -62,23 +61,25 @@
       return Math.floor(diff / 86400) + 'd ago';
     };
 
-    const renderBot = (bot, bold) => {
-      const inner = bold ? '<strong>' + esc(bot.name) + '</strong>' : esc(bot.name);
-      const href = botLinks[bot.slug];
+    const renderAgent = (agent, bold) => {
+      const inner = bold ? '<strong>' + esc(agent.name) + '</strong>' : esc(agent.name);
+      const href = agentLinks[agent.slug];
       const link = href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
-      return link + ' <code>' + esc(bot.version) + '</code>';
+      return link + ' <code>' + esc(agent.version) + '</code>';
     };
 
     const renderSlot = (key, slotData, live, nowSec) => {
-      const isRunning = live.active_slot === key;
+      const isRunning = live.activeSlot === key;
       const otherKey = key === 'p1' ? 'p2' : 'p1';
-      const elapsed = isRunning ? Math.max(0, nowSec - live.turn_started_at) : 0;
-      const budget = isRunning ? Math.round(live.turn_budget_s) : Math.round(slotData.bank_s);
+      const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
+      const budget = isRunning
+        ? Math.round(live.turnBudgetSeconds)
+        : Math.round(slotData.bankSeconds);
       const bank = isRunning
-        ? Math.max(0, Math.round(slotData.bank_s - elapsed))
-        : Math.round(slotData.bank_s);
-      const inc = Math.round(live.increment_s);
-      const ramPct = ((slotData.ram_mb / 14336) * 100).toFixed(1);
+        ? Math.max(0, Math.round(slotData.bankSeconds - elapsed))
+        : Math.round(slotData.bankSeconds);
+      const inc = Math.round(live.incrementSeconds);
+      const ramPct = ((slotData.ram / 14336) * 100).toFixed(1);
       const badge = isRunning
         ? '<span class="state-running" id="state-' + key +
           '" title="Currently executing (SIGCONT)">&#9679; RUNNING</span>'
@@ -87,7 +88,7 @@
       const timerTitle = 'Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +' +
         inc + 's/turn';
       return '<div class="slot-card ' + (isRunning ? 'running' : 'paused') + '" id="slot-' + key + '">' +
-        '<div class="slot-top"><span><tt>' + key + '</tt> ' + renderBot(slotData, true) + '</span>' +
+        '<div class="slot-top"><span><tt>' + key + '</tt> ' + renderAgent(slotData, true) + '</span>' +
         badge + '</div>' +
         '<div class="slot-timers" title="' + esc(timerTitle) + '">' +
         '<span>Turn: <strong id="turn-' + key + '" class="' + (isRunning ? 'yes' : 'muted') + '">' +
@@ -95,10 +96,10 @@
         '<span>Bank: <strong id="bank-' + key + '">' + bank + 's</strong> ' +
         '<span class="muted">(+' + inc + 's/turn)</span></span></div>' +
         '<div class="slot-telemetry">' +
-        '<span>Last: <tt>' + Math.round(slotData.last_turn_ms) + ' ms</tt></span>' +
-        '<span>Mean: <tt>' + Math.round(slotData.mean_turn_ms) + ' ms/turn</tt></span>' +
+        '<span>Last: <tt>' + Math.round(slotData.lastTurnMillis) + ' ms</tt></span>' +
+        '<span>Mean: <tt>' + Math.round(slotData.meanTurnMillis) + ' ms/turn</tt></span>' +
         '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
-        Math.round(slotData.ram_mb).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
+        Math.round(slotData.ram).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
         '</div></div>';
     };
 
@@ -113,22 +114,22 @@
         return;
       }
       const l = state.live;
-      const fmtTitle = formatTitles[l.format_id] || l.format_id;
+      const fmtTitle = formatTitles[l.format] || l.format;
       let g1Html = '';
-      if (l.g1_summary) {
-        const g1Res = l.g1_summary.winner_slot === 'p1'
+      if (l.game1Summary) {
+        const g1Res = l.game1Summary.winnerSlot === 'p1'
           ? esc(l.p1.name) + ' 1–0'
-          : l.g1_summary.winner_slot === 'p2'
+          : l.game1Summary.winnerSlot === 'p2'
             ? esc(l.p2.name) + ' 1–0'
             : 'Tie';
         g1Html = ' <span class="muted">(<tt>G1</tt>: ' + g1Res + ', ' +
-          l.g1_summary.turns + ' turns)</span>';
+          l.game1Summary.turns + ' turns)</span>';
       }
-      const hbAge = Math.max(0, nowSec - state.updated_at);
-      livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.match_id) +
-        '</code> · <tt>' + esc(fmtTitle) + '</tt> · <strong>Game ' + l.game_num +
+      const hbAge = Math.max(0, nowSec - state.updatedAt);
+      livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
+        '</code> · <tt>' + esc(fmtTitle) + '</tt> · <strong>Game ' + l.game +
         ' / 2</strong>, Turn ' + l.turn + g1Html + '</span>' +
-        '<span class="muted">Heartbeat <tt>#' + l.heartbeat_seq + '</tt> (<tt id="hb-age">' +
+        '<span class="muted">Heartbeat <tt>#' + l.heartbeatSeq + '</tt> (<tt id="hb-age">' +
         hbAge + 's</tt> ago)</span></div>' +
         '<div class="slots-grid">' +
         renderSlot('p1', l.p1, l, nowSec) +
@@ -149,25 +150,25 @@
     };
 
     const renderMatchRow = (m, nowSec) => {
-      const r = resultParts(m.match_category);
-      const b1 = Math.round(Math.min(m.v1_g1_bank_s, m.v1_g2_bank_s));
-      const b2 = Math.round(Math.min(m.v2_g1_bank_s, m.v2_g2_bank_s));
-      const tip = m.match_category + ' · ' + Math.round(m.v1_avg_turn_ms) + 'ms/' +
-        Math.round(m.v2_avg_turn_ms) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
-        Math.round(m.v1_peak_ram_mb).toLocaleString('en-US') + 'M/' +
-        Math.round(m.v2_peak_ram_mb).toLocaleString('en-US') + 'M';
+      const r = resultParts(m.category);
+      const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
+      const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
+      const tip = m.category + ' · ' + Math.round(m.p1MeanTurnMillis) + 'ms/' +
+        Math.round(m.p2MeanTurnMillis) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
+        Math.round(m.p1PeakRam).toLocaleString('en-US') + 'M/' +
+        Math.round(m.p2PeakRam).toLocaleString('en-US') + 'M';
       const tr = document.createElement('tr');
       tr.id = m.id;
       tr.dataset.fmt = m.slot;
       if (currentFmt !== 'all' && m.slot !== currentFmt) tr.classList.add('hide');
       tr.innerHTML = '<td><a href="#' + esc(m.id) + '" class="subtle"><code>' + esc(m.id) +
         '</code></a></td>' +
-        '<td>' + renderBot(m.p1, r.p1Win) + '</td>' +
-        '<td>' + renderBot(m.p2, r.p2Win) + '</td>' +
+        '<td>' + renderAgent(m.p1, r.p1Win) + '</td>' +
+        '<td>' + renderAgent(m.p2, r.p2Win) + '</td>' +
         '<td class="center" title="' + esc(tip) + '">' + r.html + '</td>' +
-        '<td class="num">' + m.g1_turns + ' / ' + m.g2_turns + '</td>' +
-        '<td class="num muted" data-ts="' + m.completed_at + '">' +
-        relTime(nowSec, m.completed_at) + '</td>';
+        '<td class="num">' + m.game1Turns + ' / ' + m.game2Turns + '</td>' +
+        '<td class="num muted" data-ts="' + m.completedAt + '">' +
+        relTime(nowSec, m.completedAt) + '</td>';
       return tr;
     };
 
@@ -198,17 +199,17 @@
       const nowSec = Math.floor(Date.now() / 1000);
       const hbEl = document.getElementById('hb-age');
       if (hbEl && state) {
-        hbEl.textContent = Math.max(0, nowSec - state.updated_at) + 's';
+        hbEl.textContent = Math.max(0, nowSec - state.updatedAt) + 's';
       }
-      if (state && state.live && !state.stale && state.live.active_slot) {
-        const key = state.live.active_slot;
+      if (state && state.live && !state.stale && state.live.activeSlot) {
+        const key = state.live.activeSlot;
         const slot = state.live[key];
         if (slot) {
-          const dt = Math.max(0, nowSec - state.live.turn_started_at);
+          const dt = Math.max(0, nowSec - state.live.turnStartedAt);
           const turnEl = document.getElementById('turn-' + key);
           const bankEl = document.getElementById('bank-' + key);
           if (turnEl) turnEl.textContent = dt + 's';
-          if (bankEl) bankEl.textContent = Math.max(0, Math.round(slot.bank_s - dt)) + 's';
+          if (bankEl) bankEl.textContent = Math.max(0, Math.round(slot.bankSeconds - dt)) + 's';
         }
       }
     }, 1000);
@@ -223,20 +224,20 @@
         const next = await res.json();
         const nowSec = Math.floor(Date.now() / 1000);
         const prevKey = state && state.live && !state.stale
-          ? state.live.match_id + ':' + state.live.heartbeat_seq + ':' + state.stale
+          ? state.live.matchId + ':' + state.live.heartbeatSeq + ':' + state.stale
           : 'idle:' + Boolean(state && state.stale);
         const nextKey = next && next.live && !next.stale
-          ? next.live.match_id + ':' + next.live.heartbeat_seq + ':' + next.stale
+          ? next.live.matchId + ':' + next.live.heartbeatSeq + ':' + next.stale
           : 'idle:' + Boolean(next && next.stale);
         state = next;
         if (prevKey !== nextKey) {
           renderLive(nowSec);
         }
-        if (tbody && Array.isArray(next.recent_matches) && next.recent_matches.length > 0) {
+        if (tbody && Array.isArray(next.recentMatches) && next.recentMatches.length > 0) {
           const emptyRow = tbody.querySelector('.empty-row');
           if (emptyRow) emptyRow.remove();
-          for (let i = next.recent_matches.length - 1; i >= 0; i--) {
-            const m = next.recent_matches[i];
+          for (let i = next.recentMatches.length - 1; i >= 0; i--) {
+            const m = next.recentMatches[i];
             if (!document.getElementById(m.id)) {
               tbody.insertBefore(renderMatchRow(m, nowSec), tbody.firstChild);
             }
