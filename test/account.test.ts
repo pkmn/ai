@@ -7,6 +7,7 @@ import * as path from 'path';
 import polka from 'polka';
 
 import {COOLDOWN_SECONDS, Database} from '../db';
+import type * as db from '../db';
 import * as account from '../server/account';
 import * as auth from '../server/auth';
 import {clearReferencePoolCache, splitSubmittedTeams} from '../server/teams';
@@ -112,7 +113,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
   let poolDir: string;
   let wikiDir: string;
   let projectsFile: string;
-  let db: Database;
+  let db: db.Database;
   let server: http.Server;
   let baseUrl: string;
   let currentNow: number;

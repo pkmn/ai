@@ -7,22 +7,13 @@ require('source-map-support').install();
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {
-  AVATARS_DIR,
-  DB_PATH,
-  Database,
-  LadderStatus,
-  PROJECTS_FILE,
-  TeamMode,
-  TournamentStatus,
-  reassignDeveloperInProjectsYaml,
-} from '../db';
+import * as db from '../db';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as smogon from '../server/smogon';
 
 export interface Options {
-  db?: Database;
+  db?: db.Database;
   dbPath?: string;
   projectsFile?: string;
   avatarsDir?: string;
@@ -147,12 +138,12 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
   }
 
   const ownsDb = !options.db;
-  const db = options.db ?? new Database(options.dbPath ?? DB_PATH);
+  const database = options.db ?? new db.Database(options.dbPath ?? db.DB_PATH);
   const now = options.now ?? Math.floor(Date.now() / 1000);
   const maybeRender = () => {
     const pub = options.publicDir ?? (ownsDb && !options.dbPath ? render.PUBLIC_DIR : undefined);
     if (pub && fs.existsSync(path.join(pub, 'index.html'))) {
-      render.renderArenaPages({db, publicDir: pub, now});
+      render.renderArenaPages({db: database, publicDir: pub, now});
     }
   };
 
@@ -164,11 +155,12 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('Usage: pkmn quarantine <agent-slug> <version> [--reason "..."]');
         }
         const reason = flags.get('reason');
-        const res = db.quarantineVersion(slug, version, reason, now);
+        const res = database.quarantineVersion(slug, version, reason, now);
         maybeRender();
+        const suffix = reason ? `: ${reason}` : '';
         log(
-          `Quarantined ${res.agent.name} (${res.agent.slug}) version ${res.version.version}` +
-          (reason ? `: ${reason}` : '')
+          `Quarantined ${res.agent.name} (${res.agent.slug}) version ` +
+          `${res.version.version}${suffix}`
         );
         return;
       }
@@ -177,7 +169,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!slug || !version) {
           throw new Error('Usage: pkmn unquarantine <agent-slug> <version>');
         }
-        const ver = db.unquarantineVersion(slug, version, now);
+        const ver = database.unquarantineVersion(slug, version, now);
         maybeRender();
         log(`Unquarantined ${slug} version ${ver.version}`);
         return;
@@ -187,7 +179,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!slug) {
           throw new Error('Usage: pkmn refund-cooldown <agent-slug>');
         }
-        const agent = db.refundCooldown(slug, now);
+        const agent = database.refundCooldown(slug, now);
         log(`Refunded 14-day submission cooldown for ${agent.name} (${agent.slug})`);
         return;
       }
@@ -196,7 +188,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!ladderId || !slug || !version) {
           throw new Error('Usage: pkmn set-anchor <ladder_id> <agent-slug> <version>');
         }
-        db.setLadderAnchor(ladderId, slug, version, now);
+        database.setLadderAnchor(ladderId, slug, version, now);
         maybeRender();
         log(`Set 1500 Elo anchor on ${ladderId} to ${slug} ${version}`);
         return;
@@ -208,7 +200,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             'Usage: pkmn set-ladder-status <ladder_id> <upcoming|active|settling|archived>'
           );
         }
-        const updated = db.setLadderStatus(ladderId, status as LadderStatus, now);
+        const updated = database.setLadderStatus(ladderId, status as db.LadderStatus, now);
         maybeRender();
         log(`Ladder ${updated.id} (${updated.name}) -> status=${updated.status}`);
         return;
@@ -232,30 +224,30 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('--teams must be a positive integer');
         }
 
-        const rotated = db.rotateLadder({
+        const rotated = database.rotateLadder({
           oldLadderId,
           archivedName,
           newLadderId: flags.get('new'),
           newName: flags.get('new-name'),
           newFormat: flags.get('format'),
-          newTeam: flags.get('team') as TeamMode | undefined,
+          newTeam: flags.get('team') as db.TeamMode | undefined,
           newMin: min,
           newTeams: teams,
           now,
         });
         maybeRender();
+        const nextMsg = rotated.newLadder
+          ? ` -> activated ${rotated.newLadder.id} ("${rotated.newLadder.name}")`
+          : '';
         log(
           `Rotated ${rotated.oldLadder.id} ("${rotated.oldLadder.name}", ` +
-          `status=${rotated.oldLadder.status})` +
-          (rotated.newLadder
-            ? ` -> activated ${rotated.newLadder.id} ("${rotated.newLadder.name}")`
-            : '')
+          `status=${rotated.oldLadder.status})${nextMsg}`
         );
         return;
       }
       case 'render': {
         const pub = options.publicDir ?? render.PUBLIC_DIR;
-        render.renderArenaPages({db, publicDir: pub, now});
+        render.renderArenaPages({db: database, publicDir: pub, now});
         log(`Rendered static Arena pages into ${pub}`);
         return;
       }
@@ -268,11 +260,11 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             '[--smogon <username.id|id|username>] [--projects <path>] [--offline]'
           );
         }
-        const projectsPath = flags.get('projects') ?? options.projectsFile ?? PROJECTS_FILE;
-        const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
+        const projectsPath = flags.get('projects') ?? options.projectsFile ?? db.PROJECTS_FILE;
+        const avatarsDir = options.avatarsDir ?? db.AVATARS_DIR;
         const rawYaml = fs.readFileSync(projectsPath, 'utf8');
         const smogonSpec = flags.get('smogon');
-        const updated = reassignDeveloperInProjectsYaml(
+        const updated = db.reassignDeveloperInProjectsYaml(
           rawYaml,
           githubLogin,
           rawTarget,
@@ -283,9 +275,9 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         fs.renameSync(tmpPath, projectsPath);
 
         if (flags.has('offline')) {
-          db.syncProjects(projectsPath, avatarsDir, now);
+          database.syncProjects(projectsPath, avatarsDir, now);
         } else {
-          await db.syncProjectsWithSmogon(projectsPath, {
+          await database.syncProjectsWithSmogon(projectsPath, {
             avatarsDir,
             smogonToken: options.smogonToken ?? process.env.SMOGON_TOKEN,
             lookupSmogon: options.lookupSmogon,
@@ -299,12 +291,12 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         return;
       }
       case 'sync-projects': {
-        const projectsPath = flags.get('projects') ?? options.projectsFile ?? PROJECTS_FILE;
-        const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
+        const projectsPath = flags.get('projects') ?? options.projectsFile ?? db.PROJECTS_FILE;
+        const avatarsDir = options.avatarsDir ?? db.AVATARS_DIR;
         if (flags.has('offline')) {
-          db.syncProjects(projectsPath, avatarsDir, now);
+          database.syncProjects(projectsPath, avatarsDir, now);
         } else {
-          await db.syncProjectsWithSmogon(projectsPath, {
+          await database.syncProjectsWithSmogon(projectsPath, {
             avatarsDir,
             smogonToken: options.smogonToken ?? process.env.SMOGON_TOKEN,
             lookupSmogon: options.lookupSmogon,
@@ -350,13 +342,13 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!Array.isArray(parsedRules)) {
           throw new Error('--rules must be a JSON array');
         }
-        const status = (flags.get('status') ?? 'scheduled') as TournamentStatus;
+        const status = (flags.get('status') ?? 'scheduled') as db.TournamentStatus;
         if (status !== 'scheduled' && status !== 'running' && status !== 'completed') {
           throw new Error('--status must be scheduled, running, or completed');
         }
         const hardware = flags.get('hardware') ??
           'GCP g2-custom-24-49152 (NVIDIA L4 24 GB VRAM · 24 vCPUs + 48 GB RAM / agent)';
-        db.upsertTournament({
+        database.upsertTournament({
           id: tourneyId,
           name,
           format,
@@ -380,7 +372,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             'Usage: pkmn set-tournament-status <id> <scheduled|running|completed>'
           );
         }
-        const updated = db.setTournamentStatus(tourneyId, status as TournamentStatus, now);
+        const updated = database.setTournamentStatus(tourneyId, status as db.TournamentStatus, now);
         maybeRender();
         log(`Tournament ${updated.id} ("${updated.name}") -> status=${updated.status}`);
         return;
@@ -390,7 +382,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!tourneyId) {
           throw new Error('Usage: pkmn seed-tournament <id>');
         }
-        const count = db.seedTournamentEntrants(tourneyId);
+        const count = database.seedTournamentEntrants(tourneyId);
         maybeRender();
         log(`Seeded ${count} entrants for tournament ${tourneyId}`);
         return;
@@ -403,7 +395,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!fs.existsSync(srcFile) || !fs.statSync(srcFile).isFile()) {
           throw new Error(`Archive file not found: ${srcFile}`);
         }
-        const tournament = db.getTournament(tourneyId);
+        const tournament = database.getTournament(tourneyId);
         if (!tournament) {
           throw new Error(`Unknown tournament "${tourneyId}"`);
         }
@@ -418,7 +410,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         const dest = path.join(pub, 'arena', 'tournaments', tournament.id, fileName);
         render.copyFileAtomic(srcFile, dest);
         if (fs.existsSync(path.join(pub, 'index.html'))) {
-          render.renderArenaPages({db, publicDir: pub, now});
+          render.renderArenaPages({db: database, publicDir: pub, now});
         }
         log(`Published tournament archive -> /arena/tournaments/${tournament.id}/${fileName}`);
         return;
@@ -431,7 +423,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!fs.existsSync(srcFile) || !fs.statSync(srcFile).isFile()) {
           throw new Error(`Archive file not found: ${srcFile}`);
         }
-        const ladder = db.getLadder(ladderId);
+        const ladder = database.getLadder(ladderId);
         if (!ladder) {
           throw new Error(`Unknown ladder "${ladderId}"`);
         }
@@ -452,7 +444,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         const dest = path.join(pub, 'arena', 'ladders', ladder.id, fileName);
         render.copyFileAtomic(srcFile, dest);
         if (fs.existsSync(path.join(pub, 'index.html'))) {
-          render.renderArenaPages({db, publicDir: pub, now});
+          render.renderArenaPages({db: database, publicDir: pub, now});
         }
         log(`Published retired ladder archive -> /arena/ladders/${ladder.id}/${fileName}`);
         return;
@@ -461,7 +453,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         throw new Error(`Unknown command "${cmd}"\n\n${USAGE}`);
     }
   } finally {
-    if (ownsDb) db.close();
+    if (ownsDb) database.close();
   }
 }
 

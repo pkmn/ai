@@ -486,5 +486,50 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
     ladders[0].agentMatches[2] = 40;
     const damped = ratings.selectNextArenaMatch(ladders, 12);
     expect([damped.agentI, damped.agentJ].sort()).toEqual([1, 2]);
+
+    // minAgents gates ladders on distinct active projects, while Champion vs Challenger
+    // self-play pairs within an eligible ladder are scheduled normally
+    expect(() =>
+      ratings.selectNextArenaMatch(
+        [{
+          id: 'self-only',
+          activeAgentIndices: [0, 1],
+          agentIds: new Int32Array([7, 7]),
+          theta: new Float64Array([0, 0]),
+          sigma: new Float64Array([2, 2]),
+          agentMatches: new Int32Array([0, 0]),
+          pairMatches: new Int32Array(4),
+          lastMatchNumber: 0,
+        }],
+        1
+      )).toThrow(/No ladder has >= 2 active agents/);
+
+    const mixedLadders: ratings.LadderMatchState[] = [
+      {
+        id: 'vgc-under-min',
+        activeAgentIndices: [0, 1, 2],
+        agentIds: new Int32Array([1, 2, 3]),
+        minAgents: 4,
+        theta: new Float64Array([0, 0, 0]),
+        sigma: new Float64Array([2, 2, 2]),
+        agentMatches: new Int32Array([0, 0, 0]),
+        pairMatches: new Int32Array(9),
+        lastMatchNumber: 0,
+      },
+      {
+        id: 'rby-family',
+        activeAgentIndices: [0, 1, 2],
+        agentIds: new Int32Array([10, 10, 20]),
+        minAgents: 2,
+        theta: new Float64Array([1.2, 1.2, 0.0]),
+        sigma: new Float64Array([2.0, 2.0, 0.2]),
+        agentMatches: new Int32Array([0, 0, 30]),
+        pairMatches: new Int32Array(9),
+        lastMatchNumber: 0,
+      },
+    ];
+    const familyChoice = ratings.selectNextArenaMatch(mixedLadders, 5);
+    expect(familyChoice.ladderId).toBe('rby-family');
+    expect([familyChoice.agentI, familyChoice.agentJ].sort()).toEqual([0, 1]);
   });
 });

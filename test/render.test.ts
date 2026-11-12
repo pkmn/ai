@@ -9,6 +9,7 @@ import polka from 'polka';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {Database} from '../db';
+import type * as db from '../db';
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as render from '../server/render';
@@ -64,7 +65,7 @@ const TEST_PROJECTS_YAML = `
 `;
 
 function createVersionAndPassSmoke(
-  db: Database,
+  db: db.Database,
   agentSlug: string,
   version: string,
   ladders: string[],
@@ -98,7 +99,7 @@ function createVersionAndPassSmoke(
 
 let matchSeq = 0;
 function playMatch(
-  db: Database,
+  db: db.Database,
   ladderId: string,
   p1VersionId: number,
   p2VersionId: number,
@@ -164,7 +165,7 @@ function seedStaticPublicAssets(tmpPublic: string) {
 describe('Static Arena Views (/arena, ladders, tournaments, /projects/:agent)', () => {
   let tmpDir: string;
   let tmpPublic: string;
-  let db: Database;
+  let db: db.Database;
 
   beforeEach(() => {
     matchSeq = 0;

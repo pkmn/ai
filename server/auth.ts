@@ -3,7 +3,7 @@ import * as http from 'http';
 
 import polka from 'polka';
 
-import {Database} from '../db';
+import * as db from '../db';
 import {header, renderer} from '../static/build';
 import {escapeHtml} from '../static/util';
 
@@ -54,7 +54,7 @@ interface OAuthStatePayload {
 
 export interface Options {
   config?: Config;
-  db?: Database;
+  db?: db.Database;
   devAuth?: boolean;
   isAuthorizedGitHub?: (login: string) => boolean;
   isDiscordMember?: (discordId: string) => boolean;
@@ -223,7 +223,7 @@ function inferOrigin(req: http.IncomingMessage): string {
 }
 
 export class Auth {
-  readonly db?: Database;
+  readonly db?: db.Database;
   private readonly explicitConfig?: Config;
   private readonly explicitDevAuth?: boolean;
   private readonly customAuthorizedGitHub?: (login: string) => boolean;

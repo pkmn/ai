@@ -3,6 +3,7 @@ import * as http from 'http';
 import polka from 'polka';
 
 import {Database} from '../db';
+import type * as db from '../db';
 import * as auth from '../server/auth';
 
 const AUTH_CFG: auth.Config = {
@@ -91,7 +92,7 @@ describe('auth config & helpers', () => {
 });
 
 describe('unified server/auth.ts OAuth, linking, dev switcher, and Nginx validation', () => {
-  let db: Database;
+  let db: db.Database;
   let server: http.Server;
   let baseUrl: string;
   const realFetch = globalThis.fetch;

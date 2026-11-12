@@ -9,7 +9,7 @@ import polka from 'polka';
 import * as site from 'site';
 import * as yaml from 'yaml';
 
-import {Database} from '../db';
+import * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
 import {Project} from '../static/projects';
 import {escapeHtml, root, slugify} from '../static/util';
@@ -54,7 +54,7 @@ export interface Options {
   authors?: Record<string, string>;
   auth?: auth.Auth;
   authConfig?: auth.Config;
-  db?: Database;
+  db?: db.Database;
   isDiscordMember?: (discordId: string) => boolean;
   push?: boolean;
 }

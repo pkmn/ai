@@ -1,0 +1,190 @@
+# Default `pkmn.ai` mock Arena scenario (`npm run mock -- seed`).
+#
+# Populates 14 catalog projects across all 6 developer onboarding personas, 5 active ladders
+# (each with 10 settled competitors + 1 provisional challenger, multi-week daily snapshots,
+# H2H matchup residuals, streaks, and abnormal-termination examples), 3 Championship Tournaments
+# (completed w/ Superfinal + .7z archive, live w/ broadcast, and scheduled), and developer wiki
+# history.
+
+reset --seed 20261110 --open-ladders
+
+# 1. Seed git-backed public & developer-only wiki pages with revision history
+time 2026-10-18T12:00:00Z
+wiki index --by scheibo --message "Create initial wiki index" \
+  --content "# Wiki\n\nShared documentation, format notes, and project profiles for the \`pkmn.ai\` community.\n\n## Pages\n\n- [0 ERROR](0_ERROR) — Gen 9 OU search & evaluation agent by *pre*.\n- [Gen 9 OU](Gen_9_OU) — Metagame overview, team structures, and benchmark baselines."
+
+wiki Gen_9_OU --by scheibo --message "Add Gen 9 OU benchmark overview" \
+  --content "# Gen 9 OU\n\nStandard Smogon Singles format used for the \`pkmn.ai\` ladder and tournament benchmarks.\n\n## Evaluation\n\nAgents are evaluated across 2-game blind-pair matches using Davidson MAP ratings:\n\n\$\$`P(i \\text{ beats } j) = \\frac{\\gamma_i}{\\gamma_i + \\gamma_j + \\nu \\sqrt{\\gamma_i \\gamma_j}}`"
+
+wiki 0_ERROR --by scheibo --visibility developers --message "Create initial 0 ERROR page" \
+  --content "# 0 ERROR\n\n\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.\n\n## Architecture\n\n- Depth-limited Nash equilibrium search over packed battle states.\n- Move ordering guided by damage calculator bounds."
+
+time 2026-10-20T12:00:00Z
+wiki 0_ERROR --by pmariglia --visibility developers --message "Document neural value network" \
+  --content "# 0 ERROR\n\n\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.\n\n## Architecture\n\n- Depth-limited Nash equilibrium search over packed battle states.\n- Neural leaf evaluation network trained via self-play trajectories.\n- Team preview policy conditioned on revealed opponent archetypes."
+
+# 2. Register projects & link Discord accounts across all 6 developer onboarding personas
+time now-36d
+register "0 ERROR" --logo 0-error.png \
+  --owner scheibo:pre.10544 --owner coauthor:coauthor.20001 \
+  --discord 513513270670262284:scheibo
+register "Foul Play" --owner pmariglia:pmariglia.535629 \
+  --discord 283674461268344832:pmariglia
+register "Metamon" --owner jakegrigsby:jakegrigsby.610001 \
+  --discord 300000000000000001:jakegrigsby
+register "Mew's Truck" --owner pkmnbotguy:pkmnbotguy.610002 \
+  --discord 300000000000000002:batistas_dick
+register "MissingNo.Zero" --owner missingno:missingno.610003
+register "Xatu Zero" --owner xatudev:xatudev.610004
+register "AsterAI" --owner asterdev:asterdev.610005 --pending --discord none
+register "Jaxcalibur" --owner jaxdev:jaxdev.610006
+register "eevenator" --owner eevedev:eevedev.610007
+register "AWRorus" --owner awrdev:awrdev.610008
+register "MysteriousWind" --owner winddev:winddev.610009
+register "pokerus" --owner pokerusdev:pokerusdev.610010
+register "mikumiku" --owner mikudev:mikudev.610011
+register "CynthiAI" --owner sisyphus25:sisyphus25.610012
+
+# 3. Record historical failed smoke test on 0 ERROR (`0.9.0-rc1`) for `/account/` History
+time now-34d
+submit 0-error 0.9.0-rc1 rby sv --by scheibo --smoke fail --notified \
+  --error "Error: invalid choice on turn 1 (\"move 5\")\n  at SearchAgent.choose (src/agent.zig:142)"
+
+# 4. Initial 10-agent settled cohorts across all 5 ladders with probabilistic expected ratings
+time now-32d
+submit 0-error 1.0.0 rby=1660 adv=1630 sv=1650 rand=1670 vgc=1680 --by scheibo \
+  --bytes 184mb --duration-millis 2400 --turn-millis 310 --ram 820
+submit foul-play 1.4.0 rby=1460 adv=1500 sv=1500 rand=1500 vgc=1500 --by pmariglia \
+  --bytes 142mb --duration-millis 1900 --turn-millis 260 --ram 640
+submit metamon 1.0.0 rby=1500 adv=1680 sv=1455 --pkg oci \
+  --url ghcr.io/ut-austin-rpl/metamon:1.0.0 \
+  --bytes 412mb --duration-millis 4200 --turn-millis 480 --ram 2150
+submit mews-truck 1.0.0 sv=1710 rand=1580 vgc=1750 \
+  --bytes 298mb --duration-millis 3100 --turn-millis 390 --ram 1580
+submit missingnozero 2.1.0 rby=1630 adv=1450 rand=1735 vgc=1590 \
+  --bytes 210mb --duration-millis 2700 --turn-millis 340 --ram 980
+submit xatu-zero 0.8.0 rby=1590 adv=1580 sv=1575 rand=1450 vgc=1450 --pkg oci \
+  --url ghcr.io/xatu/xatu-zero:0.8.0 \
+  --bytes 356mb --duration-millis 3800 --turn-millis 440 --ram 1840
+submit jaxcalibur 1.3.0 rby=1700 adv=1730 sv=1620 rand=1625 vgc=1640 --pkg oci \
+  --url ghcr.io/jaxcalibur/agent:1.3.0 \
+  --bytes 390mb --duration-millis 3400 --turn-millis 350 --ram 1920
+submit eevenator 0.6.2 rby=1545 adv=1535 sv=1530 rand=1535 vgc=1540 \
+  --bytes 96mb --duration-millis 1500 --turn-millis 210 --ram 520
+submit awrorus 1.1.0 rby=1405 adv=1395 sv=1400 rand=1400 vgc=1395 --pkg oci \
+  --url ghcr.io/awrorus/agent:1.1.0 \
+  --bytes 320mb --duration-millis 3100 --turn-millis 410 --ram 1640
+submit mysteriouswind 0.4.0 rby=1350 adv=1340 sv=1345 rand=1345 vgc=1340 \
+  --bytes 128mb --duration-millis 1850 --turn-millis 295 --ram 710
+submit pokerus 1.0.0 adv=1290 rand=1290 vgc=1285 \
+  --bytes 148mb --duration-millis 2000 --turn-millis 325 --ram 770
+submit mikumiku 0.9.1 rby=1290 sv=1285 \
+  --bytes 168mb --duration-millis 2250 --turn-millis 365 --ram 840
+
+# Designate 1500 Elo anchors per ladder (matching each anchor's 1500 expected rating)
+time now-31d
+ladder anchor rby metamon@1.0.0
+ladder anchor adv,sv,rand,vgc foul-play@1.4.0
+
+# 5. Simulate multi-week Arena matchmaking across all 5 ladders (Days -30 .. -18)
+time now-30d
+play 420 --ladder rby --balanced --over 12d
+time now-30d
+play 420 --ladder adv --balanced --over 28d
+time now-30d
+play 420 --ladder sv --balanced --over 12d
+time now-30d
+play 420 --ladder rand --balanced --over 28d
+time now-30d
+play 420 --ladder vgc --balanced --over 28d
+settle all
+
+# 6. Upgrade 0 ERROR -> 1.1.0 (Day -17) -> refund cooldown -> 1.2.0 (Day -4, retiring 1.0.0)
+time now-17d
+submit 0-error 1.1.0 rby=1715 sv=1705 --by scheibo \
+  --bytes 192mb --duration-millis 2200 --turn-millis 295 --ram 860
+play 140 --ladder rby --over 6d
+time now-17d
+play 140 --ladder sv --over 6d
+settle rby,sv
+
+time now-5d
+refund-cooldown 0-error
+
+time now-4d
+submit 0-error 1.2.0 rby=1775 sv=1760 --by scheibo \
+  --vs jaxcalibur:+180,xatu-zero:-190 \
+  --bytes 198mb --duration-millis 2100 --turn-millis 280 --ram 890
+play 160 --ladder rby --over 3d
+time now-4d
+play 160 --ladder sv --over 3d
+settle rby,sv
+
+# 7. Provisional entrants (< 10 matches, past 14-day cooldown window)
+time now-15d
+submit pokerus 1.0.2 rby=1340 sv=1340 \
+  --bytes 152mb --duration-millis 2050 --turn-millis 330 --ram 780
+submit mikumiku 0.9.2 adv=1330 rand=1330 vgc=1330 \
+  --bytes 170mb --duration-millis 2260 --turn-millis 360 --ram 845
+
+# 8. Championship Tournaments (#1 Completed + Archive, #2 Running + Broadcast, #3 Scheduled)
+time now-90d
+tournament create 1 --name "Tournament #1: Gen 9 OU" --format gen9ou \
+  --games 8 --tables 2 --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now-90d
+tournament enter 1 \
+  mews-truck@1.0.0=1820 \
+  0-error@1.0.0=1740 \
+  jaxcalibur@1.3.0=1610 \
+  xatu-zero@0.8.0=1530 \
+  foul-play@1.4.0=1470 \
+  metamon@1.0.0=1390
+tournament start 1
+tournament play 1 --all --superfinal 1 --over 2d --id-prefix spring26
+tournament complete 1 --archive
+
+time now-2h
+tournament create 2 --name "Tournament #2: VGC 2026 Reg M-C OTS BO3" \
+  --format gen9championsvgc2026regmc --games 8 --tables 2 \
+  --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now-2h
+tournament enter 2 \
+  0-error@1.0.0=1720 \
+  mews-truck@1.0.0=1680 \
+  jaxcalibur@1.3.0=1600 \
+  missingnozero@2.1.0=1530 \
+  eevenator@0.6.2=1470 \
+  foul-play@1.4.0=1410
+tournament start 2
+tournament play 2 --cycles 3 --over 90m --id-prefix autumn26
+tournament broadcast 2 0-error@1.2.0 mews-truck@1.0.0 jaxcalibur@1.3.0 missingnozero@2.1.0 \
+  --cycle 4 --game 4
+
+time now-1h
+tournament create 3 --name "Tournament #3: VGC 2026 Reg M-D OTS BO3" \
+  --format gen9championsvgc2026regmc --games 8 --tables 2 \
+  --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now+14d
+tournament enter 3 foul-play@1.4.1-t3=1560 --pkg oci --by pmariglia
+
+# 9. Recent provisional matches, hot/cold streaks (`W4`/`L4`), and crash/timeout showcase rows
+time now-45m
+match rby pokerus@1.0.2 foul-play@1.4.0 --count 5 --over 15m
+match sv pokerus@1.0.2 foul-play@1.4.0 --count 5 --over 15m
+match adv mikumiku@0.9.2 foul-play@1.4.0 --count 5 --over 5m
+match rand mikumiku@0.9.2 foul-play@1.4.0 --count 5 --over 5m
+match vgc mikumiku@0.9.2 foul-play@1.4.0 --count 5 --over 5m
+
+time now-15m
+match rby 0-error@1.2.0 mikumiku@0.9.1 --count 4 --outcome WW --over 5m
+match vgc mews-truck@1.0.0 pokerus@1.0.0 --count 4 --outcome WW --over 5m
+
+time now-5m
+match sv eevenator@0.6.2 awrorus@1.1.0 --outcome WW --g2-reason crash
+time now-3m
+match vgc jaxcalibur@1.3.0 missingnozero@2.1.0 --outcome WW --g2-reason timeout \
+  --p1-team hash:0-error --p2-team P1:jaxcalibur
+
+# 10. Active live VGC telemetry & static render
+time now
+live match vgc 0-error@1.0.0 jaxcalibur@1.3.0 --id vgc-0009999 \
+  --game 2 --turn 9 --active p2 --g1-winner p1 --g1-turns 11 \
+  --p1-team hash:mews-truck --p2-team P1:0-error
+render

@@ -46,17 +46,334 @@ interface PoolEntry {
 }
 
 const poolCache = new Map<string, PoolEntry[]>();
+const harvestedPoolCache = new Map<string, HarvestedPoolEntry[]>();
+const speciesCache = new Map<string, string[]>();
 
 export function clearReferencePoolCache() {
   poolCache.clear();
+  harvestedPoolCache.clear();
+  speciesCache.clear();
 }
 
 export const TEAM_HASH_LEN = teams.TEAM_HASH_LEN;
 export const hashTeam = teams.hashTeam;
 
+export interface CanonicalPoolOwner {
+  agentName: string;
+  slotIndex: number;
+}
+
+export interface CanonicalPoolEntry {
+  canonicalPacked: string;
+  speciesIds: string[];
+  owners: Map<number, CanonicalPoolOwner>;
+}
+
+export interface SampledPoolPair {
+  t1Packed: string;
+  t2Packed: string;
+  t1Label: string;
+  t2Label: string;
+}
+
+export interface RosterEntry {
+  agentId: number;
+  agentName: string;
+  teams: string[];
+}
+
+export interface HarvestedPoolEntry {
+  id: string;
+  canonicalPacked: string;
+  speciesIds: string[];
+}
+
 export function formatPoolTeamLabel(packedCanonicalTeam: string, owner?: 'P1' | 'P2'): string {
   const shortHash = teams.hashTeam(packedCanonicalTeam);
   return owner ? `${owner}:${shortHash}` : shortHash;
+}
+
+export function extractSpeciesIdsFromPacked(packed: string, format: string): string[] {
+  const cacheKey = `${format}:${packed}`;
+  const cached = speciesCache.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const dex = teams.getDex(format);
+    const parsed = teams.parseTeam(dex, packed);
+    if (parsed.length > 0) {
+      const ids = parsed.map(s => toID(s.species ?? s.name ?? 'unknown')).sort();
+      speciesCache.set(cacheKey, ids);
+      return ids;
+    }
+  } catch {}
+  const fallback = packed
+    .split(']')
+    .filter(Boolean)
+    .map(mon => {
+      const parts = mon.split('|');
+      return toID(parts[1] || parts[0] || 'unknown');
+    })
+    .sort();
+  speciesCache.set(cacheKey, fallback);
+  return fallback;
+}
+
+function normalizeCanonicalPacked(rawTeam: string, format: string): string {
+  const trimmed = rawTeam.trim();
+  if (!trimmed.includes('\n')) return trimmed;
+  try {
+    const dex = teams.getDex(format);
+    const imported = Team.import(trimmed, dex);
+    const sets = Team.canonicalize((imported?.team || []).filter(s => s?.moves?.length), dex);
+    if (sets.length > 0) return new Team(sets, dex).pack();
+  } catch {}
+  return trimmed;
+}
+
+export function buildCanonicalTeamPool(
+  teamsByAgent: Iterable<RosterEntry>,
+  format = 'gen9championsvgc2026regmc'
+): CanonicalPoolEntry[] {
+  const byPacked = new Map<string, CanonicalPoolEntry>();
+  for (const {agentId, agentName, teams: rawTeams} of teamsByAgent) {
+    for (let idx = 0; idx < rawTeams.length; idx++) {
+      const canonicalPacked = normalizeCanonicalPacked(rawTeams[idx], format);
+      if (!canonicalPacked) continue;
+      let entry = byPacked.get(canonicalPacked);
+      if (!entry) {
+        entry = {
+          canonicalPacked,
+          speciesIds: extractSpeciesIdsFromPacked(canonicalPacked, format),
+          owners: new Map(),
+        };
+        byPacked.set(canonicalPacked, entry);
+      }
+      if (!entry.owners.has(agentId)) {
+        entry.owners.set(agentId, {agentName, slotIndex: idx + 1});
+      }
+    }
+  }
+  return [...byPacked.values()];
+}
+
+function isSameSpeciesSix(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((s, idx) => s === b[idx]);
+}
+
+function isValidPoolsPair(
+  t1: CanonicalPoolEntry,
+  t2: CanonicalPoolEntry,
+  agentAId: number,
+  agentBId: number
+): boolean {
+  if (t1.canonicalPacked === t2.canonicalPacked) return false;
+  if (isSameSpeciesSix(t1.speciesIds, t2.speciesIds)) return false;
+  if (t1.owners.has(agentAId) && t1.owners.has(agentBId)) return false;
+  if (t2.owners.has(agentAId) && t2.owners.has(agentBId)) return false;
+  const activeOwnsT1 = t1.owners.has(agentAId) || t1.owners.has(agentBId);
+  const activeOwnsT2 = t2.owners.has(agentAId) || t2.owners.has(agentBId);
+  if (activeOwnsT1 && activeOwnsT2) return false;
+  for (const ownerId of t1.owners.keys()) {
+    if (t2.owners.has(ownerId)) return false;
+  }
+  return true;
+}
+
+// Uniform pseudo-blind-pair sampler for `team: pools` ladders (e.g. VGC):
+//   - Requires `N >= 4` distinct active agent rosters (`min >= 4`).
+//   - When `agentAId !== agentBId`, samples unordered distinct roster pair `{I, J}` with exact
+//     marginal `2 / N` per agent (`2/N` `{A, C}`, `2/N` `{B, C}`, `(N-4)/N` `{C1, C2}`).
+//   - When `agentAId === agentBId` (Champion vs Challenger of the same project), both versions
+//     share that project's seasonal pool, so `{C1, C2}` is drawn uniformly from distinct third
+//     parties (`N - 1 >= 3`) to keep both teams blind to both sides.
+export function samplePoolsPair(
+  pool: CanonicalPoolEntry[],
+  agentAId: number,
+  agentBId: number,
+  rngNextInt: (max: number) => number
+): SampledPoolPair {
+  const rosters = new Map<number, CanonicalPoolEntry[]>();
+  for (const entry of pool) {
+    for (const ownerId of entry.owners.keys()) {
+      let list = rosters.get(ownerId);
+      if (!list) {
+        list = [];
+        rosters.set(ownerId, list);
+      }
+      list.push(entry);
+    }
+  }
+
+  const sameAgent = agentAId === agentBId;
+  const thirdParties = [...rosters.keys()]
+    .filter(id => id !== agentAId && id !== agentBId)
+    .sort((a, b) => a - b);
+  const totalAgents = rosters.size;
+  if (
+    totalAgents < 4 ||
+    !rosters.get(agentAId)?.length ||
+    !rosters.get(agentBId)?.length ||
+    thirdParties.length < 2
+  ) {
+    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
+  }
+
+  const formatProvenanceLabel = (entry: CanonicalPoolEntry): string => {
+    const owner = sameAgent
+      ? undefined
+      : entry.owners.has(agentAId)
+        ? 'P1'
+        : entry.owners.has(agentBId)
+          ? 'P2'
+          : undefined;
+    return formatPoolTeamLabel(entry.canonicalPacked, owner);
+  };
+
+  for (let attempt = 0; attempt < 256; attempt++) {
+    let firstAgentId: number;
+    let secondAgentId: number;
+    if (sameAgent) {
+      const i1 = rngNextInt(thirdParties.length);
+      let i2 = rngNextInt(thirdParties.length - 1);
+      if (i2 >= i1) i2++;
+      firstAgentId = thirdParties[i1];
+      secondAgentId = thirdParties[i2];
+    } else {
+      const roll = rngNextInt(totalAgents);
+      if (roll < 2) {
+        firstAgentId = agentAId;
+        secondAgentId = thirdParties[rngNextInt(thirdParties.length)];
+      } else if (roll < 4) {
+        firstAgentId = agentBId;
+        secondAgentId = thirdParties[rngNextInt(thirdParties.length)];
+      } else {
+        const i1 = rngNextInt(thirdParties.length);
+        let i2 = rngNextInt(thirdParties.length - 1);
+        if (i2 >= i1) i2++;
+        firstAgentId = thirdParties[i1];
+        secondAgentId = thirdParties[i2];
+      }
+    }
+    if (rngNextInt(2) === 1) {
+      [firstAgentId, secondAgentId] = [secondAgentId, firstAgentId];
+    }
+
+    const r1 = rosters.get(firstAgentId)!;
+    const r2 = rosters.get(secondAgentId)!;
+    const t1 = r1[rngNextInt(r1.length)];
+    const t2 = r2[rngNextInt(r2.length)];
+    if (!isValidPoolsPair(t1, t2, agentAId, agentBId)) continue;
+
+    return {
+      t1Packed: t1.canonicalPacked,
+      t2Packed: t2.canonicalPacked,
+      t1Label: formatProvenanceLabel(t1),
+      t2Label: formatProvenanceLabel(t2),
+    };
+  }
+
+  // Deterministic exhaustive fallback for degenerate synthetic pools with heavy duplicate overlap.
+  const validPairs: Array<[CanonicalPoolEntry, CanonicalPoolEntry]> = [];
+  for (const t1 of pool) {
+    for (const t2 of pool) {
+      if (isValidPoolsPair(t1, t2, agentAId, agentBId)) {
+        validPairs.push([t1, t2]);
+      }
+    }
+  }
+  if (!validPairs.length) {
+    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
+  }
+  const [t1, t2] = validPairs[rngNextInt(validPairs.length)];
+  return {
+    t1Packed: t1.canonicalPacked,
+    t2Packed: t2.canonicalPacked,
+    t1Label: formatProvenanceLabel(t1),
+    t2Label: formatProvenanceLabel(t2),
+  };
+}
+
+// Loads static harvested Showdown team files in memory and canonicalizes/packs each team at
+// runtime without mutating files on disk.
+export function loadHarvestedPool(format: string, pools: string[]): HarvestedPoolEntry[] {
+  const cleanFormat = toID(format);
+  const resolvedDirs = pools.map(d => path.resolve(d));
+  const cacheKey = `${cleanFormat}::${resolvedDirs.join('|')}`;
+  const cached = harvestedPoolCache.get(cacheKey);
+  if (cached) return cached;
+
+  const dex = teams.getDex(cleanFormat);
+  const entries: HarvestedPoolEntry[] = [];
+  const seenPacked = new Set<string>();
+
+  for (const dir of resolvedDirs) {
+    if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir)
+      .filter(f => !f.startsWith('.') && f !== 'README.md')
+      .sort((a, b) => a.localeCompare(b));
+    for (const file of files) {
+      const full = path.join(dir, file);
+      try {
+        if (!fs.statSync(full).isFile()) continue;
+        const imported = Team.import(fs.readFileSync(full, 'utf8').trim(), dex);
+        const rawSets = (imported?.team ?? []).filter(s => s && (s.species || s.name));
+        if (!rawSets.length) continue;
+        const canonicalSets = Team.canonicalize(structuredClone(rawSets), dex);
+        const canonicalPacked = new Team(canonicalSets, dex).pack();
+        if (!canonicalPacked || seenPacked.has(canonicalPacked)) continue;
+        seenPacked.add(canonicalPacked);
+        entries.push({
+          id: file,
+          canonicalPacked,
+          speciesIds: canonicalSets.map(s => toID(s.species ?? s.name ?? 'unknown')).sort(),
+        });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  harvestedPoolCache.set(cacheKey, entries);
+  return entries;
+}
+
+export function sampleHarvestedPair(
+  pool: HarvestedPoolEntry[],
+  rngNextInt: (max: number) => number
+): {t1Packed: string; t2Packed: string} {
+  if (pool.length < 2) {
+    throw new Error('Harvested team pool requires at least 2 distinct teams');
+  }
+  const t1 = pool[rngNextInt(pool.length)];
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const t2 = pool[rngNextInt(pool.length)];
+    if (
+      t2.canonicalPacked !== t1.canonicalPacked &&
+      !isSameSpeciesSix(t1.speciesIds, t2.speciesIds)
+    ) {
+      return {t1Packed: t1.canonicalPacked, t2Packed: t2.canonicalPacked};
+    }
+  }
+  const nonMirror = pool.filter(
+    e => e.canonicalPacked !== t1.canonicalPacked && !isSameSpeciesSix(t1.speciesIds, e.speciesIds)
+  );
+  const candidates = nonMirror.length > 0
+    ? nonMirror
+    : pool.filter(e => e.canonicalPacked !== t1.canonicalPacked);
+  const t2 = candidates[rngNextInt(candidates.length)];
+  return {t1Packed: t1.canonicalPacked, t2Packed: t2.canonicalPacked};
+}
+
+export function sampleRandomPair(
+  format: string,
+  seed1: sim.PRNGSeed,
+  seed2: sim.PRNGSeed
+): {t1Packed: string; t2Packed: string} {
+  const cleanFormat = toID(format);
+  const t1Packed = sim.Teams.pack(sim.Teams.generate(cleanFormat, {seed: seed1}));
+  const t2Packed = sim.Teams.pack(sim.Teams.generate(cleanFormat, {seed: seed2}));
+  return {t1Packed, t2Packed};
 }
 
 export function loadReferencePool(format: string, pools: string[]): PoolEntry[] {

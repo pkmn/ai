@@ -1,256 +1,52 @@
-// Mock Arena simulator, team-pool sampler, and deterministic database seeder (`npm run mock`).
+// Declarative Arena scenario runner, probabilistic simulator, and CLI (`npm run mock`).
 //
-// Used by:
-//   - `tools/shots.ts` to populate realistic 10-agent ladders, multi-week rating histories,
-//     dense matchup matrices, and championship tournaments for visual regression screenshots.
-//   - `test/e2e.test.ts` (`MockArenaClient`) to exercise the full `/api/arena/*` HTTP protocol,
-//     team-pool provenance sampling, 14-day cooldowns, version retirement, and ladder rotation.
-//   - Local operators (`npm run mock -- seed | step | run`) when developing without the Mac Mini.
+// Executes declarative `.mock` lifecycle commands (from scenario files, `stdin`, or one-by-one CLI
+// arguments) across both fast Direct DB/FS mode (`npm run mock -- seed`, `tools/shots.ts`) and Live
+// HTTP Server mode (`--server <url>`, `test/e2e.test.ts`), sampling outcomes probabilistically
+// from per-ladder expected ratings via the Generalized Davidson model.
 
 import {execFileSync} from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import {parseArgs} from 'util';
+import * as readline from 'readline';
+import * as zlib from 'zlib';
 
 import * as champions from '@pkmn/mods/champions';
-import {Team} from '@pkmn/sets';
 import * as sim from '@pkmn/sim';
 import * as yaml from 'yaml';
 
-import {DB_PATH, Database, LADDERS_FILE, LadderSlot, LadderStatus, TeamMode} from '../db';
+import * as db from '../db';
 import * as arena from '../server/arena';
+import * as auth from '../server/auth';
 import * as ratings from '../server/ratings';
 import * as render from '../server/render';
-import {formatPoolTeamLabel, splitSubmittedTeams} from '../server/teams';
+import * as teams from '../server/teams';
 import * as tournaments from '../server/tournaments';
+import * as wiki from '../server/wiki';
 import {Project} from '../static/projects';
-import {root, toID} from '../static/util';
-import {getDex, hashTeam, parseTeam} from '../teams';
+import {root, slugify, toID} from '../static/util';
 
 const CHAMPIONS_SIM_DEX = sim.Dex.mod('champions', champions as unknown as sim.ModData);
 
-export interface CanonicalPoolEntry {
-  canonicalPacked: string;
-  speciesIds: string[];
-  owners: Map<number, {agentName: string; slotIndex: number}>;
+export const SCENARIOS_DIR = root('tools', 'scenarios');
+export const SEED_SCENARIO = path.join(SCENARIOS_DIR, 'seed.mock');
+
+function stepMulberry32(state: number): {nextState: number; unit: number} {
+  const nextState = (state + 0x6d2b79f5) >>> 0;
+  let t = Math.imul(nextState ^ (nextState >>> 15), 1 | nextState);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  const unit = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  return {nextState, unit};
 }
 
-export interface SampledPoolPair {
-  t1Packed: string;
-  t2Packed: string;
-  t1Label: string;
-  t2Label: string;
-}
-
-export function createRng(seed = 20261110): (max: number) => number {
-  let state = seed >>> 0;
+export function createRng(rngSeed = 20261110): (max: number) => number {
+  let state = rngSeed >>> 0;
   return (max: number): number => {
     if (max <= 1) return 0;
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    const u = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    return Math.min(max - 1, Math.floor(u * max));
-  };
-}
-
-const speciesCache = new Map<string, string[]>();
-
-function extractSpeciesIdsFromPacked(packed: string, format: string): string[] {
-  const cacheKey = `${format}:${packed}`;
-  const cached = speciesCache.get(cacheKey);
-  if (cached) return cached;
-
-  try {
-    const dex = getDex(format);
-    const parsed = parseTeam(dex, packed);
-    if (parsed.length > 0) {
-      const ids = parsed.map(s => toID(s.species ?? s.name ?? 'unknown')).sort();
-      speciesCache.set(cacheKey, ids);
-      return ids;
-    }
-  } catch {}
-  const fallback = packed
-    .split(']')
-    .filter(Boolean)
-    .map(mon => {
-      const parts = mon.split('|');
-      return toID(parts[1] || parts[0] || 'unknown');
-    })
-    .sort();
-  speciesCache.set(cacheKey, fallback);
-  return fallback;
-}
-
-function normalizeCanonicalPacked(rawTeam: string, format: string): string {
-  const trimmed = rawTeam.trim();
-  if (!trimmed.includes('\n')) return trimmed;
-  try {
-    const dex = getDex(format);
-    const imported = Team.import(trimmed, dex);
-    const sets = Team.canonicalize((imported?.team || []).filter(s => s?.moves?.length), dex);
-    if (sets.length > 0) return new Team(sets, dex).pack();
-  } catch {}
-  return trimmed;
-}
-
-export function buildCanonicalTeamPool(
-  teamsByAgent: Iterable<{agentId: number; agentName: string; teams: string[]}>,
-  format = 'gen9championsvgc2026regmc'
-): CanonicalPoolEntry[] {
-  const byPacked = new Map<string, CanonicalPoolEntry>();
-  for (const {agentId, agentName, teams} of teamsByAgent) {
-    for (let idx = 0; idx < teams.length; idx++) {
-      const canonicalPacked = normalizeCanonicalPacked(teams[idx], format);
-      if (!canonicalPacked) continue;
-      let entry = byPacked.get(canonicalPacked);
-      if (!entry) {
-        entry = {
-          canonicalPacked,
-          speciesIds: extractSpeciesIdsFromPacked(canonicalPacked, format),
-          owners: new Map(),
-        };
-        byPacked.set(canonicalPacked, entry);
-      }
-      if (!entry.owners.has(agentId)) {
-        entry.owners.set(agentId, {agentName, slotIndex: idx + 1});
-      }
-    }
-  }
-  return [...byPacked.values()];
-}
-
-function isValidPoolsPair(
-  t1: CanonicalPoolEntry,
-  t2: CanonicalPoolEntry,
-  agentAId: number,
-  agentBId: number
-): boolean {
-  if (t1.canonicalPacked === t2.canonicalPacked) return false;
-  if (
-    t1.speciesIds.length === t2.speciesIds.length &&
-    t1.speciesIds.every((s, idx) => s === t2.speciesIds[idx])
-  ) {
-    return false;
-  }
-  if (t1.owners.has(agentAId) && t1.owners.has(agentBId)) return false;
-  if (t2.owners.has(agentAId) && t2.owners.has(agentBId)) return false;
-  const activeOwnsT1 = t1.owners.has(agentAId) || t1.owners.has(agentBId);
-  const activeOwnsT2 = t2.owners.has(agentAId) || t2.owners.has(agentBId);
-  if (activeOwnsT1 && activeOwnsT2) return false;
-  for (const ownerId of t1.owners.keys()) {
-    if (t2.owners.has(ownerId)) return false;
-  }
-  return true;
-}
-
-// Uniform pseudo-blind-pair sampler for `team: pools` ladders (e.g. VGC):
-//   - Requires `N >= 4` distinct active agent rosters (`min >= 4`).
-//   - Samples unordered distinct roster pair `{I, J}` with exact marginal `2 / N` per agent:
-//       * `2 / N`: `{agentAId, C}` for uniform third party `C not in {A, B}`
-//       * `2 / N`: `{agentBId, C}` for uniform third party `C not in {A, B}`
-//       * `(N - 4) / N`: `{C1, C2}` uniformly from distinct third parties
-//   - Swaps `(I, J)` with probability `1/2`, draws uniformly within each roster, and rejection-
-//     resamples mirrors / cross-competitor exact duplicates so at most ONE of `{T1, T2}` belongs
-//     to `P_A U P_B` while every agent's teams are assigned with equal `2 / (N * K)` probability.
-export function samplePoolsPair(
-  pool: CanonicalPoolEntry[],
-  agentAId: number,
-  agentBId: number,
-  rngNextInt: (max: number) => number
-): SampledPoolPair {
-  if (agentAId === agentBId) {
-    throw new Error('Cannot sample pools pair for identical competing agents');
-  }
-
-  const rosters = new Map<number, CanonicalPoolEntry[]>();
-  for (const entry of pool) {
-    for (const ownerId of entry.owners.keys()) {
-      let list = rosters.get(ownerId);
-      if (!list) {
-        list = [];
-        rosters.set(ownerId, list);
-      }
-      list.push(entry);
-    }
-  }
-
-  const thirdParties = [...rosters.keys()]
-    .filter(id => id !== agentAId && id !== agentBId)
-    .sort((a, b) => a - b);
-  const totalAgents = rosters.size;
-  if (
-    totalAgents < 4 ||
-    !rosters.get(agentAId)?.length ||
-    !rosters.get(agentBId)?.length ||
-    thirdParties.length < 2
-  ) {
-    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
-  }
-
-  const formatProvenanceLabel = (entry: CanonicalPoolEntry): string => {
-    const owner = entry.owners.has(agentAId)
-      ? 'P1'
-      : entry.owners.has(agentBId)
-        ? 'P2'
-        : undefined;
-    return formatPoolTeamLabel(entry.canonicalPacked, owner);
-  };
-
-  for (let attempt = 0; attempt < 256; attempt++) {
-    const roll = rngNextInt(totalAgents);
-    let firstAgentId: number;
-    let secondAgentId: number;
-    if (roll < 2) {
-      firstAgentId = agentAId;
-      secondAgentId = thirdParties[rngNextInt(thirdParties.length)];
-    } else if (roll < 4) {
-      firstAgentId = agentBId;
-      secondAgentId = thirdParties[rngNextInt(thirdParties.length)];
-    } else {
-      const i1 = rngNextInt(thirdParties.length);
-      let i2 = rngNextInt(thirdParties.length - 1);
-      if (i2 >= i1) i2++;
-      firstAgentId = thirdParties[i1];
-      secondAgentId = thirdParties[i2];
-    }
-    if (rngNextInt(2) === 1) {
-      [firstAgentId, secondAgentId] = [secondAgentId, firstAgentId];
-    }
-
-    const r1 = rosters.get(firstAgentId)!;
-    const r2 = rosters.get(secondAgentId)!;
-    const t1 = r1[rngNextInt(r1.length)];
-    const t2 = r2[rngNextInt(r2.length)];
-    if (!isValidPoolsPair(t1, t2, agentAId, agentBId)) continue;
-
-    return {
-      t1Packed: t1.canonicalPacked,
-      t2Packed: t2.canonicalPacked,
-      t1Label: formatProvenanceLabel(t1),
-      t2Label: formatProvenanceLabel(t2),
-    };
-  }
-
-  // Deterministic exhaustive fallback for degenerate synthetic pools with heavy duplicate overlap
-  const validPairs: Array<[CanonicalPoolEntry, CanonicalPoolEntry]> = [];
-  for (const t1 of pool) {
-    for (const t2 of pool) {
-      if (isValidPoolsPair(t1, t2, agentAId, agentBId)) {
-        validPairs.push([t1, t2]);
-      }
-    }
-  }
-  if (!validPairs.length) {
-    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
-  }
-  const [t1, t2] = validPairs[rngNextInt(validPairs.length)];
-  return {
-    t1Packed: t1.canonicalPacked,
-    t2Packed: t2.canonicalPacked,
-    t1Label: formatProvenanceLabel(t1),
-    t2Label: formatProvenanceLabel(t2),
+    const step = stepMulberry32(state);
+    state = step.nextState;
+    return Math.min(max - 1, Math.floor(step.unit * max));
   };
 }
 
@@ -314,18 +110,3458 @@ export function generateValidVgcTeams(count = 20, agentOffset = 0): string[] {
   return out;
 }
 
-const ZERO_ERROR_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAPklEQVR4nO3SwQkAIAwDwZb9d+7C' +
-  'wcEXkJ6SuQkAAPBn1tp7zhljjAmcB1wHXAdcB1wHXAdcB1wHXAdc5wE93QMR8wX8WQAAAABJRU5ErkJggg==';
+const ZERO_ERROR_PNG_BASE64 = [
+  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAPklEQVR4nO3SwQkAIAwDwZb9d+7C',
+  'wcEXkJ6SuQkAAPBn1tp7zhljjAmcB1wHXAdcB1wHXAdcB1wHXAdc5wE93QMR8wX8WQAAAABJRU5ErkJggg==',
+].join('');
 
-export function prepareMockStaticDir(
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (const byte of buf) {
+    c = CRC32_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const tag = Buffer.from(type, 'ascii');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([tag, data])), 0);
+  return Buffer.concat([len, tag, data, crc]);
+}
+
+function generateAvatarPng(slug: string): Buffer {
+  if (slug === '0-error') {
+    return Buffer.from(ZERO_ERROR_PNG_BASE64, 'base64');
+  }
+  let hash = 2166136261;
+  for (let i = 0; i < slug.length; i++) {
+    hash = Math.imul(hash ^ slug.charCodeAt(i), 16777619) >>> 0;
+  }
+  const fg = [80 + (hash & 0x9f), 80 + ((hash >>> 8) & 0x9f), 80 + ((hash >>> 16) & 0x9f)];
+  const bg = [24, 28, 36];
+  const size = 32;
+  const raw = Buffer.alloc(size * (1 + size * 4));
+  for (let y = 0; y < size; y++) {
+    const rowOff = y * (1 + size * 4);
+    raw[rowOff] = 0;
+    const gy = Math.floor(y / 4);
+    for (let x = 0; x < size; x++) {
+      const gx = Math.floor(x / 4);
+      const mirrorX = gx < 4 ? gx : 7 - gx;
+      const bitIdx = (gy * 4 + mirrorX) % 31;
+      const on = gy > 0 && gy < 7 && mirrorX > 0 && ((hash >>> bitIdx) & 1) === 1;
+      const col = on ? fg : bg;
+      const px = rowOff + 1 + x * 4;
+      raw[px] = col[0];
+      raw[px + 1] = col[1];
+      raw[px + 2] = col[2];
+      raw[px + 3] = 255;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  return Buffer.concat([
+    sig,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function sha256OfTag(tag: string): string {
+  const hex = Buffer.from(tag, 'utf8').toString('hex');
+  return hex.repeat(Math.ceil(64 / hex.length)).slice(0, 64);
+}
+
+export interface Command {
+  lineNumber: number;
+  raw: string;
+  tokens: string[];
+  positional: string[];
+  flags: Map<string, string[]>;
+}
+
+const BOOLEAN_FLAGS = new Set([
+  'open-ladders',
+  'pending',
+  'disabled',
+  'no-guild',
+  'banned',
+  'pass',
+  'fail',
+  'all',
+  'heartbeats',
+  'logs',
+  'archive',
+  'off',
+  'notified',
+  'fast-time',
+  'balanced',
+  'help',
+]);
+
+export function tokenize(line: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let inToken = false;
+  let quote: '\'' | '"' | undefined;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote === '\'') {
+      if (ch === '\'') {
+        quote = undefined;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = undefined;
+      } else if (ch === '\\' && i + 1 < line.length) {
+        i++;
+        const next = line[i];
+        if (next === 'n') current += '\n';
+        else if (next === 't') current += '\t';
+        else if (next === 'r') current += '\r';
+        else current += next;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    // Outside quotes: `#` starts an inline comment when at start-of-token and followed by
+    // whitespace or EOL (so tournament titles or anchors like `#1` remain ordinary tokens).
+    if (ch === '#' && !inToken && (i + 1 === line.length || /\s/.test(line[i + 1]))) {
+      break;
+    }
+    if (ch === '\'' || ch === '"') {
+      quote = ch;
+      inToken = true;
+      continue;
+    }
+    if (ch === '\\' && i + 1 < line.length) {
+      i++;
+      current += line[i];
+      inToken = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (inToken) {
+        tokens.push(current);
+        current = '';
+        inToken = false;
+      }
+      continue;
+    }
+    current += ch;
+    inToken = true;
+  }
+
+  if (quote) {
+    throw new Error(`Unterminated ${quote} quote in mock command: ${line}`);
+  }
+  if (inToken) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+export function parseCommandTokens(
+  tokens: string[],
+  lineNumber = 1,
+  raw = tokens.join(' ')
+): Command {
+  const positional: string[] = [];
+  const flags = new Map<string, string[]>();
+  const pushFlag = (key: string, val: string) => {
+    const list = flags.get(key) ?? [];
+    list.push(val);
+    flags.set(key, list);
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok.startsWith('--') && tok.length > 2) {
+      const eq = tok.indexOf('=');
+      if (eq > 2) {
+        pushFlag(tok.slice(2, eq), tok.slice(eq + 1));
+      } else {
+        const key = tok.slice(2);
+        const next = tokens[i + 1];
+        if (BOOLEAN_FLAGS.has(key) || next === undefined || next.startsWith('--')) {
+          pushFlag(key, 'true');
+        } else {
+          pushFlag(key, next);
+          i++;
+        }
+      }
+    } else {
+      positional.push(tok);
+    }
+  }
+  return {lineNumber, raw, tokens, positional, flags};
+}
+
+export function parseScript(script: string): Command[] {
+  const rawLines = script.replace(/\r\n/g, '\n').split('\n');
+  const commands: Command[] = [];
+  let acc = '';
+  let startLine = 1;
+
+  for (let idx = 0; idx < rawLines.length; idx++) {
+    const raw = rawLines[idx];
+    const trimmed = raw.trim();
+    if (!acc) {
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      startLine = idx + 1;
+    } else if (trimmed.startsWith('#')) {
+      continue;
+    }
+
+    if (raw.endsWith('\\') && !raw.endsWith('\\\\')) {
+      acc += `${raw.slice(0, -1)} `;
+      continue;
+    }
+    acc += raw;
+    const tokens = tokenize(acc);
+    acc = '';
+    if (tokens.length > 0) {
+      commands.push(parseCommandTokens(tokens, startLine, tokens.join(' ')));
+    }
+  }
+
+  if (acc.trim()) {
+    const tokens = tokenize(acc);
+    if (tokens.length > 0) {
+      commands.push(parseCommandTokens(tokens, startLine, tokens.join(' ')));
+    }
+  }
+  return commands;
+}
+
+function getFlag(cmd: Command, key: string): string | undefined {
+  const vals = cmd.flags.get(key);
+  return vals?.[vals.length - 1];
+}
+
+function hasFlag(cmd: Command, key: string): boolean {
+  return cmd.flags.has(key);
+}
+
+export function parseDurationSeconds(spec: string): number {
+  const m = /^([+-]?\d+(?:\.\d+)?)(ms|s|m|h|d|w)?$/i.exec(spec.trim());
+  if (!m) {
+    throw new Error(`Invalid duration "${spec}" (expected e.g. 30s, 10m, 2h, 14d)`);
+  }
+  const value = Number(m[1]);
+  const unit = (m[2] ?? 's').toLowerCase();
+  const mult =
+    unit === 'ms' ? 0.001
+    : unit === 's' ? 1
+    : unit === 'm' ? 60
+    : unit === 'h' ? 3600
+    : unit === 'd' ? 86400
+    : 7 * 86400;
+  return Math.round(value * mult);
+}
+
+export function parseTimestampSpec(
+  spec: string,
+  currentNow: number,
+  anchorNow: number
+): number {
+  const trimmed = spec.trim();
+  if (trimmed === 'now') return anchorNow;
+  if (trimmed.startsWith('now+') || trimmed.startsWith('now-')) {
+    return anchorNow + parseDurationSeconds(trimmed.slice(3));
+  }
+  if (trimmed.startsWith('+') || trimmed.startsWith('-')) {
+    return currentNow + parseDurationSeconds(trimmed);
+  }
+  if (/^\d+$/.test(trimmed)) {
+    return Number(trimmed);
+  }
+  const parsedMillis = Date.parse(trimmed);
+  if (!Number.isNaN(parsedMillis)) {
+    return Math.floor(parsedMillis / 1000);
+  }
+  throw new Error(`Invalid timestamp specification "${spec}"`);
+}
+
+function parseBytesSpec(spec: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)?$/i.exec(spec.trim());
+  if (!m) throw new Error(`Invalid byte size "${spec}"`);
+  const val = Number(m[1]);
+  const unit = (m[2] ?? 'mb').toLowerCase();
+  const mult =
+    unit === 'b' ? 1
+    : unit === 'kb' ? 1024
+    : unit === 'gb' ? 1024 * 1024 * 1024
+    : 1024 * 1024;
+  return Math.round(val * mult);
+}
+
+interface SingleGameRecord {
+  i: number;
+  j: number;
+  outcome: 'W' | 'L' | 'T';
+}
+
+function computeSingleGameTournamentRatings(
+  M: number,
+  games: SingleGameRecord[],
+  anchorIndex = -1,
+  anchorElo = 1550
+): {elo: number[]; se: number[]} {
+  if (M === 0) return {elo: [], se: []};
+  const priorStdElo = 350;
+  const sigma0 = priorStdElo / ratings.ELO_SCALE;
+  const priorPrec = 1 / (sigma0 * sigma0);
+  const theta = new Float64Array(M);
+  const grad = new Float64Array(M);
+  const H = new Float64Array(M * M);
+
+  let tieCount = 0;
+  for (const g of games) {
+    if (g.outcome === 'T') tieCount++;
+  }
+  const tieRate = games.length > 0 ? Math.min(0.5, tieCount / games.length) : 0;
+  const nu = tieRate > 0 ? (2 * tieRate) / (1 - tieRate) : 0;
+
+  for (let iter = 0; iter < 25; iter++) {
+    H.fill(0);
+    for (let i = 0; i < M; i++) {
+      grad[i] = -priorPrec * theta[i];
+      H[i * M + i] = priorPrec;
+    }
+    for (const g of games) {
+      const d = theta[g.i] - theta[g.j];
+      const eh = Math.exp(0.5 * d);
+      const emh = 1 / eh;
+      const Z = eh + emh + nu;
+      const pW = eh / Z;
+      const pL = emh / Z;
+      const y = g.outcome === 'W' ? 0.5 : g.outcome === 'L' ? -0.5 : 0;
+      const mu = 0.5 * (pW - pL);
+      const v = 0.25 * (pW + pL) - mu * mu;
+      const diff = y - mu;
+      grad[g.i] += diff;
+      grad[g.j] -= diff;
+      H[g.i * M + g.i] += v;
+      H[g.j * M + g.j] += v;
+      H[g.i * M + g.j] -= v;
+      H[g.j * M + g.i] -= v;
+    }
+    const step = solveLinearSystem(H, grad, M);
+    let maxStep = 0;
+    for (let i = 0; i < M; i++) {
+      theta[i] += step[i];
+      if (Math.abs(step[i]) > maxStep) maxStep = Math.abs(step[i]);
+    }
+    if (maxStep < 1e-10) break;
+  }
+
+  H.fill(0);
+  const played = new Uint8Array(M);
+  for (let i = 0; i < M; i++) H[i * M + i] = priorPrec;
+  for (const g of games) {
+    const d = theta[g.i] - theta[g.j];
+    const eh = Math.exp(0.5 * d);
+    const emh = 1 / eh;
+    const Z = eh + emh + nu;
+    const pW = eh / Z;
+    const pL = emh / Z;
+    const mu = 0.5 * (pW - pL);
+    const v = Math.max(1e-9, 0.25 * (pW + pL) - mu * mu);
+    H[g.i * M + g.i] += v;
+    H[g.j * M + g.j] += v;
+    H[g.i * M + g.j] -= v;
+    H[g.j * M + g.i] -= v;
+    played[g.i] = 1;
+    played[g.j] = 1;
+  }
+  let playedCount = 0;
+  for (let i = 0; i < M; i++) playedCount += played[i];
+  // Pin the global shift gauge only across entrants with >= 1 game so unplayed entrants keep
+  // their 350 Elo prior uncertainty while pairwise variances stay exact.
+  if (playedCount > 0) {
+    const gauge = 1e6 / (playedCount * playedCount);
+    for (let i = 0; i < M; i++) {
+      if (!played[i]) continue;
+      for (let j = 0; j < M; j++) {
+        if (played[j]) H[i * M + j] += gauge;
+      }
+    }
+  }
+  const cov = invertMatrix(H, M);
+  let offset = 0;
+  if (anchorIndex >= 0 && anchorIndex < M) {
+    offset = theta[anchorIndex];
+  } else if (playedCount > 0) {
+    let sum = 0;
+    for (let i = 0; i < M; i++) {
+      if (played[i]) sum += theta[i];
+    }
+    offset = sum / playedCount;
+  }
+
+  const elo: number[] = [];
+  const se: number[] = [];
+  for (let i = 0; i < M; i++) {
+    elo.push(Math.round(anchorElo + ratings.ELO_SCALE * (theta[i] - offset)));
+    se.push(Math.round(ratings.ELO_SCALE * Math.sqrt(Math.max(0, cov[i * M + i]))));
+  }
+  return {elo, se};
+}
+
+function solveLinearSystem(A: Float64Array, b: Float64Array, n: number): Float64Array {
+  const M = new Float64Array(n * (n + 1));
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) M[r * (n + 1) + c] = A[r * n + c];
+    M[r * (n + 1) + n] = b[r];
+  }
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r * (n + 1) + col]) > Math.abs(M[pivot * (n + 1) + col])) pivot = r;
+    }
+    if (pivot !== col) {
+      for (let c = col; c <= n; c++) {
+        const tmp = M[col * (n + 1) + c];
+        M[col * (n + 1) + c] = M[pivot * (n + 1) + c];
+        M[pivot * (n + 1) + c] = tmp;
+      }
+    }
+    const diag = M[col * (n + 1) + col] || 1e-12;
+    for (let r = col + 1; r < n; r++) {
+      const f = M[r * (n + 1) + col] / diag;
+      for (let c = col; c <= n; c++) M[r * (n + 1) + c] -= f * M[col * (n + 1) + c];
+    }
+  }
+  const x = new Float64Array(n);
+  for (let r = n - 1; r >= 0; r--) {
+    let sum = M[r * (n + 1) + n];
+    for (let c = r + 1; c < n; c++) sum -= M[r * (n + 1) + c] * x[c];
+    x[r] = sum / (M[r * (n + 1) + r] || 1e-12);
+  }
+  return x;
+}
+
+function invertMatrix(A: Float64Array, n: number): Float64Array {
+  const aug = new Float64Array(n * 2 * n);
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) aug[r * 2 * n + c] = A[r * n + c];
+    aug[r * 2 * n + n + r] = 1;
+  }
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(aug[r * 2 * n + col]) > Math.abs(aug[pivot * 2 * n + col])) pivot = r;
+    }
+    if (pivot !== col) {
+      for (let c = 0; c < 2 * n; c++) {
+        const tmp = aug[col * 2 * n + c];
+        aug[col * 2 * n + c] = aug[pivot * 2 * n + c];
+        aug[pivot * 2 * n + c] = tmp;
+      }
+    }
+    const diag = aug[col * 2 * n + col] || 1e-12;
+    for (let c = 0; c < 2 * n; c++) aug[col * 2 * n + c] /= diag;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = aug[r * 2 * n + col];
+      for (let c = 0; c < 2 * n; c++) aug[r * 2 * n + c] -= f * aug[col * 2 * n + c];
+    }
+  }
+  const inv = new Float64Array(n * n);
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) inv[r * n + c] = aug[r * 2 * n + n + c];
+  }
+  return inv;
+}
+
+// Berger round-robin circle method: partitions all K*(K-1)/2 unordered pairs into rounds where
+// each entrant plays at most once per round.
+function buildBergerPairings(count: number): Array<[number, number]> {
+  if (count < 2) return [];
+  const indices: number[] = [];
+  for (let i = 0; i < count; i++) indices.push(i);
+  if (count % 2 === 1) indices.push(-1);
+  const n = indices.length;
+  const half = n / 2;
+  const out: Array<[number, number]> = [];
+  const rot = indices.slice(1);
+  for (let round = 0; round < n - 1; round++) {
+    const circle = [indices[0], ...rot];
+    for (let k = 0; k < half; k++) {
+      const a = circle[k];
+      const b = circle[n - 1 - k];
+      if (a >= 0 && b >= 0) {
+        out.push(round % 2 === 0 ? [a, b] : [b, a]);
+      }
+    }
+    rot.unshift(rot.pop()!);
+  }
+  return out;
+}
+
+const PACKED_FORMAT_TEAMS: Record<string, string[][]> = {
+  gen9ou: [
+    ['Great Tusk', 'Kingambit', 'Gholdengo', 'Dragapult', 'Ogerpon-Wellspring', 'Gliscor'],
+    ['Zamazenta', 'Darkrai', 'Ting-Lu', 'Raging Bolt', 'Hatterene', 'Samurott-Hisui'],
+    ['Dragapult', 'Kingambit', 'Great Tusk', 'Slowking-Galar', 'Corviknight', 'Kyurem'],
+    ['Gliscor', 'Gholdengo', 'Ting-Lu', 'Iron Valiant', 'Cinderace', 'Primarina'],
+  ],
+  gen9championsvgc2026regmc: [
+    ['Incineroar', 'Rillaboom', 'Archaludon', 'Pelipper', 'Basculegion', 'Farigiraf'],
+    ['Garchomp', 'Staraptor', 'Gholdengo', 'Kingambit', 'Sneasler', 'Milotic'],
+    ['Dragonite', 'Arcanine-Hisui', 'Politoed', 'Grimmsnarl', 'Sylveon', 'Metagross'],
+    ['Volcarona', 'Salamence', 'Tsareena', 'Sableye', 'Raichu', 'Torkoal'],
+  ],
+  gen1ou: [
+    ['Tauros', 'Snorlax', 'Chansey', 'Exeggutor', 'Alakazam', 'Starmie'],
+    ['Tauros', 'Snorlax', 'Chansey', 'Rhydon', 'Zapdos', 'Gengar'],
+  ],
+  gen3ou: [
+    ['Tyranitar', 'Swampert', 'Skarmory', 'Blissey', 'Gengar', 'Salamence'],
+    ['Tyranitar', 'Metagross', 'Zapdos', 'Celebi', 'Dugtrio', 'Suicune'],
+  ],
+};
+
+function samplePackedTournamentTeam(format: string, index: number): string {
+  const list = PACKED_FORMAT_TEAMS[format] ?? PACKED_FORMAT_TEAMS.gen9ou;
+  const species = list[index % list.length];
+  return species.map(n => `|${n}`).join(']');
+}
+
+function buildShowdownTournamentLog(opts: {
+  format: string;
+  p1Name: string;
+  p2Name: string;
+  p1TeamPacked: string;
+  p2TeamPacked: string;
+  outcome: 'W' | 'L' | 'T';
+}): string {
+  const isDoubles = opts.format.includes('vgc') || opts.format.includes('doubles');
+  const gen = /^gen(\d)/i.exec(opts.format)?.[1] ?? '9';
+  const tier = isDoubles ? '[Gen 9 Champions] VGC 2026 Reg M-C' : `[Gen ${gen}] OU`;
+  const p1Mons = tournaments.parsePackedTeamSpecies(opts.p1TeamPacked);
+  const p2Mons = tournaments.parsePackedTeamSpecies(opts.p2TeamPacked);
+  const lead1 = p1Mons[0] ?? 'Great Tusk';
+  const lead2 = p2Mons[0] ?? 'Dragapult';
+  const lines = [
+    `|player|p1|${opts.p1Name}|1`,
+    `|player|p2|${opts.p2Name}|2`,
+    `|gametype|${isDoubles ? 'doubles' : 'singles'}`,
+    `|gen|${gen}`,
+    `|tier|${tier}`,
+    ...p1Mons.slice(0, 6).map(sp => `|poke|p1|${sp}|`),
+    ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
+    '|teampreview',
+    `|c|☆${opts.p1Name}|{"team 1":0.685,"team 2":0.315}`,
+    `|c|☆${opts.p2Name}|{"team 1":0.55,"team 2":0.45}`,
+    '|start',
+    `|switch|p1a: ${lead1}|${lead1}|100/100`,
+    `|switch|p2a: ${lead2}|${lead2}|100/100`,
+    '|turn|1',
+    `|c|☆${opts.p1Name}|{"move 1":0.625,"move 2":0.25,"switch 2":0.125}`,
+    `|c|☆${opts.p2Name}|{"move 1":0.55,"move 3":0.3,"switch 2":0.15}`,
+    `|move|p1a: ${lead1}|Protect|p1a: ${lead1}`,
+    `|move|p2a: ${lead2}|U-turn|p1a: ${lead1}`,
+  ];
+  if (opts.outcome === 'T') {
+    lines.push('|tie');
+  } else {
+    const winner = opts.outcome === 'W' ? opts.p1Name : opts.p2Name;
+    const loserLead = opts.outcome === 'W' ? `p2a: ${lead2}` : `p1a: ${lead1}`;
+    lines.push(`|-damage|${loserLead}|0 fnt`, `|faint|${loserLead}`, `|win|${winner}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+export interface PendingSmokeConfig {
+  status?: 'pass' | 'fail';
+  error?: string;
+  bytes?: number;
+  durationMillis?: number;
+  turnMillis?: number;
+  ram?: number;
+}
+
+export interface State {
+  rngState: number;
+  now: number;
+  anchorNow: number;
+  matchSeq: number;
+  heartbeatSeq: number;
+  lastMatchNumberByLadder: Record<string, number>;
+  smogonSeq: number;
+  discordSeq: number;
+  vgcOffsetSeq: number;
+  vgcOffsetBySlug: Record<string, number>;
+  expectedRatings: Record<string, number>;
+  matchupBiases: Record<string, number>;
+  pendingSmoke: Record<string, PendingSmokeConfig>;
+  liveMatch?: arena.LiveMatch;
+  liveStale?: boolean;
+  tournamentBroadcast?: tournaments.LiveBroadcast;
+  featuredBattleId?: string;
+}
+
+export interface Options {
+  db: db.Database;
+  stateFile?: string;
+  mockDir?: string;
+  staticDir?: string;
+  avatarsDir?: string;
+  publicDir?: string;
+  wikiDir?: string;
+  laddersFile?: string;
+  baseStaticDir?: string;
+  baseLaddersFile?: string;
+  now?: number;
+  seed?: number;
+  serverUrl?: string;
+  arenaSecret?: string;
+  sessionSecret?: string;
+  log?: (line: string) => void;
+  onTimeChange?: (nowSeconds: number) => void;
+  onCheckpoint?: (name: string, runner: Runner) => Promise<void> | void;
+  onDiscordSync?: (runner: Runner) => Promise<void> | void;
+}
+
+const ORGANIC_AGENT_POOL = [
+  'BoltBeam',
+  'ShowdownZero',
+  'PorygonZ-RL',
+  'Alabaster',
+  'RegielekiNet',
+  'TerastalMC',
+  'PokeMCTS',
+  'SmogonPPO',
+  'StallBreaker',
+  'FutureSight',
+  'ChoiceBandit',
+  'VictoryStar',
+];
+
+function createInitialState(now: number, rngSeed: number): State {
+  return {
+    rngState: rngSeed >>> 0,
+    now,
+    anchorNow: now,
+    matchSeq: 0,
+    heartbeatSeq: 0,
+    lastMatchNumberByLadder: {},
+    smogonSeq: 700000,
+    discordSeq: 0,
+    vgcOffsetSeq: 0,
+    vgcOffsetBySlug: {},
+    expectedRatings: {},
+    matchupBiases: {},
+    pendingSmoke: {},
+    liveMatch: undefined,
+    liveStale: false,
+    tournamentBroadcast: undefined,
+    featuredBattleId: undefined,
+  };
+}
+
+export class Runner {
+  readonly db: db.Database;
+  readonly staticDir: string;
+  readonly avatarsDir: string;
+  readonly projectsFile: string;
+  readonly laddersFile: string;
+  readonly publicDir?: string;
+  readonly wikiDir?: string;
+  readonly mockDir?: string;
+  readonly stateFile?: string;
+  private readonly baseStaticDir: string;
+  private readonly baseLaddersFile: string;
+  private readonly serverUrl?: string;
+  private readonly arenaSecret?: string;
+  private readonly arenaClient?: arena.Client;
+  private readonly sessionSecret?: string;
+  private readonly log: (line: string) => void;
+  private readonly onTimeChange?: (nowSeconds: number) => void;
+  private readonly onCheckpoint?: (name: string, runner: Runner) => Promise<void> | void;
+  private readonly onDiscordSync?: (runner: Runner) => Promise<void> | void;
+  private readonly devCookies: Map<string, string>;
+  state: State;
+
+  constructor(options: Options) {
+    this.db = options.db;
+    this.mockDir = options.mockDir;
+    this.baseStaticDir = options.baseStaticDir ?? root('static');
+    this.baseLaddersFile = options.baseLaddersFile ?? root('config', 'ladders.yml');
+    this.staticDir = options.staticDir ?? (
+      options.mockDir
+        ? path.join(options.mockDir, 'static')
+        : fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-static-'))
+    );
+    this.avatarsDir = options.avatarsDir ?? path.join(this.staticDir, 'avatars');
+    this.projectsFile = path.join(this.staticDir, 'projects.yml');
+    this.laddersFile = options.laddersFile ??
+      (options.mockDir ? path.join(options.mockDir, 'ladders.yml') : db.LADDERS_FILE);
+    this.publicDir = options.publicDir;
+    this.wikiDir = options.wikiDir ??
+      (options.mockDir ? path.join(options.mockDir, 'wiki') : undefined);
+    this.stateFile = options.stateFile ??
+      (options.mockDir ? path.join(options.mockDir, 'state.json') : undefined);
+    this.serverUrl = options.serverUrl?.replace(/\/+$/, '');
+    this.arenaSecret = options.arenaSecret;
+    const resolvedSecret = options.arenaSecret ?? process.env.ARENA_SECRET;
+    this.arenaClient = this.serverUrl && resolvedSecret
+      ? new arena.Client({serverUrl: this.serverUrl, arenaSecret: resolvedSecret})
+      : undefined;
+    this.sessionSecret = options.sessionSecret;
+    this.log = options.log ?? (() => undefined);
+    this.onTimeChange = options.onTimeChange;
+    this.onCheckpoint = options.onCheckpoint;
+    this.onDiscordSync = options.onDiscordSync;
+    this.devCookies = new Map<string, string>();
+
+    const initialNow = options.now ?? Math.floor(Date.now() / 1000);
+    const initialSeed = options.seed ?? 20261110;
+    if (this.stateFile && fs.existsSync(this.stateFile)) {
+      const loaded = JSON.parse(
+        fs.readFileSync(this.stateFile, 'utf8')
+      ) as Partial<State>;
+      this.state = {
+        ...createInitialState(initialNow, initialSeed),
+        ...loaded,
+        liveMatch: loaded.liveMatch ?? undefined,
+        tournamentBroadcast: loaded.tournamentBroadcast ?? undefined,
+      };
+      if (options.now !== undefined) {
+        this.state.now = options.now;
+        this.state.anchorNow = options.now;
+      }
+      if (options.seed !== undefined) {
+        this.state.rngState = options.seed >>> 0;
+      }
+    } else {
+      this.state = createInitialState(initialNow, initialSeed);
+    }
+  }
+
+  private getArenaClient(): arena.Client {
+    if (this.arenaClient) return this.arenaClient;
+    if (!this.serverUrl) {
+      throw new Error('No serverUrl configured for Arena HTTP client');
+    }
+    const secret = this.arenaSecret ?? process.env.ARENA_SECRET ?? '';
+    if (!secret) {
+      throw new Error('Missing ARENA_SECRET for Arena HTTP client');
+    }
+    return new arena.Client({serverUrl: this.serverUrl, arenaSecret: secret});
+  }
+
+  saveState() {
+    if (!this.stateFile) return;
+    fs.mkdirSync(path.dirname(this.stateFile), {recursive: true});
+    fs.writeFileSync(this.stateFile, `${JSON.stringify(this.state, undefined, 2)}\n`, 'utf8');
+  }
+
+  nextFloat(): number {
+    const step = stepMulberry32(this.state.rngState);
+    this.state.rngState = step.nextState;
+    return step.unit;
+  }
+
+  nextInt = (max: number): number => {
+    if (max <= 1) return 0;
+    return Math.min(max - 1, Math.floor(this.nextFloat() * max));
+  };
+
+  setNow(nowSeconds: number) {
+    this.state.now = Math.floor(nowSeconds);
+    this.onTimeChange?.(this.state.now);
+  }
+
+  buildLiveDocument(): arena.LiveDocument {
+    const countsBySlot = this.db.getMatchCountsBySlot();
+    const recentRaw = this.db.getRecentMatches(50);
+    const targetPublic = this.publicDir ?? render.PUBLIC_DIR;
+    return {
+      updatedAt: this.state.now,
+      stale: Boolean(this.state.liveStale),
+      live: this.state.liveStale ? undefined : this.state.liveMatch,
+      pageSize: 50,
+      totalMatches: countsBySlot.all ?? recentRaw.length,
+      countsBySlot,
+      historyEndpoint: '/api/battles.json',
+      recentMatches: recentRaw.map(m => arena.enrichMatchView(targetPublic, m)),
+    };
+  }
+
+  async runFile(filePath: string): Promise<void> {
+    const content = fs.readFileSync(filePath, 'utf8');
+    await this.runScript(content);
+  }
+
+  async runScript(script: string): Promise<void> {
+    const commands = parseScript(script);
+    for (const cmd of commands) {
+      await this.execCommand(cmd);
+    }
+    this.saveState();
+  }
+
+  async execLine(line: string): Promise<void> {
+    const commands = parseScript(line);
+    for (const cmd of commands) {
+      await this.execCommand(cmd);
+    }
+    this.saveState();
+  }
+
+  async execTokens(tokens: string[]): Promise<void> {
+    if (!tokens.length) return;
+    await this.execCommand(parseCommandTokens(tokens));
+    this.saveState();
+  }
+
+  async execCommand(cmd: Command): Promise<void> {
+    const verb = cmd.positional[0]?.toLowerCase();
+    if (!verb) return;
+
+    switch (verb) {
+      case 'reset':
+        this.cmdReset(cmd);
+        return;
+      case 'time':
+        this.cmdTime(cmd);
+        return;
+      case 'rng':
+        this.cmdRng(cmd);
+        return;
+      case 'checkpoint':
+        if (this.onCheckpoint) {
+          const name = cmd.positional[1] ?? '';
+          await this.onCheckpoint(name, this);
+        }
+        return;
+      case 'register':
+        await this.cmdRegister(cmd);
+        return;
+      case 'qualify':
+        this.cmdSetQualification(cmd, 'qualified');
+        return;
+      case 'disable':
+        this.cmdSetQualification(cmd, 'disabled');
+        return;
+      case 'reassign':
+        this.cmdReassign(cmd);
+        return;
+      case 'refund-cooldown':
+        this.cmdRefundCooldown(cmd);
+        return;
+      case 'discord':
+        await this.cmdDiscord(cmd);
+        return;
+      case 'ladder':
+        await this.cmdLadder(cmd);
+        return;
+      case 'submit':
+        await this.cmdSubmit(cmd);
+        return;
+      case 'smoke':
+        await this.cmdSmoke(cmd);
+        return;
+      case 'quarantine':
+        await this.cmdQuarantine(cmd);
+        return;
+      case 'unquarantine':
+        this.cmdUnquarantine(cmd);
+        return;
+      case 'play':
+        await this.cmdPlay(cmd);
+        return;
+      case 'settle':
+        await this.cmdSettle(cmd);
+        return;
+      case 'match':
+        await this.cmdMatch(cmd);
+        return;
+      case 'live':
+        await this.cmdLive(cmd);
+        return;
+      case 'tournament':
+        await this.cmdTournament(cmd);
+        return;
+      case 'wiki':
+        await this.cmdWiki(cmd);
+        return;
+      case 'render':
+        this.cmdRender();
+        return;
+      case 'simulate':
+        await this.cmdSimulate(cmd);
+        return;
+      default:
+        throw new Error(`Unknown mock command "${verb}" at line ${cmd.lineNumber}: ${cmd.raw}`);
+    }
+  }
+
+  private ensureStaticInitialized() {
+    fs.mkdirSync(this.staticDir, {recursive: true});
+    fs.mkdirSync(this.avatarsDir, {recursive: true});
+    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.ts', 'arena.dj']) {
+      const src = path.join(this.baseStaticDir, name);
+      const dst = path.join(this.staticDir, name);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.copyFileSync(src, dst);
+      }
+    }
+    if (!fs.existsSync(this.projectsFile)) {
+      const baseProjects = path.join(this.baseStaticDir, 'projects.yml');
+      fs.copyFileSync(baseProjects, this.projectsFile);
+    }
+    const zeroPngPath = path.join(this.avatarsDir, '0-error.png');
+    if (!fs.existsSync(zeroPngPath)) {
+      fs.writeFileSync(zeroPngPath, Buffer.from(ZERO_ERROR_PNG_BASE64, 'base64'));
+    }
+    if (!fs.existsSync(this.laddersFile) && fs.existsSync(this.baseLaddersFile)) {
+      fs.mkdirSync(path.dirname(this.laddersFile), {recursive: true});
+      fs.copyFileSync(this.baseLaddersFile, this.laddersFile);
+    }
+  }
+
+  private clearDatabaseTables() {
+    this.db.db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      const tables = this.db.db.prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'`
+      ).all() as Array<{name: string}>;
+      this.db.inTransaction(() => {
+        for (const {name} of tables) {
+          this.db.db.exec(`DELETE FROM "${name.replace(/"/g, '""')}";`);
+        }
+      });
+    } finally {
+      this.db.db.exec('PRAGMA foreign_keys = ON;');
+    }
+  }
+
+  private cmdReset(cmd: Command) {
+    const seedFlag = getFlag(cmd, 'seed');
+    const nowFlag = getFlag(cmd, 'now');
+    const openLadders = hasFlag(cmd, 'open-ladders');
+
+    const nextSeed = seedFlag !== undefined ? Number(seedFlag) : 20261110;
+    const nextAnchorNow = nowFlag !== undefined
+      ? parseTimestampSpec(nowFlag, this.state.now, this.state.anchorNow)
+      : this.state.anchorNow;
+
+    this.state = createInitialState(nextAnchorNow, nextSeed);
+    this.onTimeChange?.(this.state.now);
+    this.devCookies.clear();
+    this.clearDatabaseTables();
+
+    fs.mkdirSync(this.staticDir, {recursive: true});
+    fs.mkdirSync(this.avatarsDir, {recursive: true});
+    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.ts', 'arena.dj']) {
+      const src = path.join(this.baseStaticDir, name);
+      const dst = path.join(this.staticDir, name);
+      if (fs.existsSync(src) && src !== dst) {
+        fs.copyFileSync(src, dst);
+      }
+    }
+
+    const baseProjects = path.join(this.baseStaticDir, 'projects.yml');
+    if (path.resolve(baseProjects) !== path.resolve(this.projectsFile)) {
+      const parsed = (yaml.parse(fs.readFileSync(baseProjects, 'utf8')) ?? []) as Project[];
+      for (const proj of parsed) {
+        delete proj.arena;
+      }
+      fs.writeFileSync(this.projectsFile, yaml.stringify(parsed), 'utf8');
+    }
+    fs.writeFileSync(
+      path.join(this.avatarsDir, '0-error.png'),
+      Buffer.from(ZERO_ERROR_PNG_BASE64, 'base64')
+    );
+
+    if (fs.existsSync(this.baseLaddersFile)) {
+      let rawLadders = fs.readFileSync(this.baseLaddersFile, 'utf8');
+      if (openLadders) {
+        rawLadders = rawLadders.replace(/status:\s*upcoming/g, 'status: active');
+      }
+      if (path.resolve(this.baseLaddersFile) !== path.resolve(this.laddersFile)) {
+        fs.mkdirSync(path.dirname(this.laddersFile), {recursive: true});
+        fs.writeFileSync(this.laddersFile, rawLadders, 'utf8');
+        this.db.syncLadders(this.laddersFile, this.state.now);
+      } else {
+        this.db.syncLaddersFromYaml(rawLadders, this.state.now);
+      }
+    }
+
+    if (this.mockDir) {
+      fs.mkdirSync(this.mockDir, {recursive: true});
+      fs.writeFileSync(
+        path.join(this.mockDir, 'vgc-teams.txt'),
+        `${generateValidVgcTeams(20, 42).join('\n\n')}\n`,
+        'utf8'
+      );
+    }
+
+    if (this.wikiDir) {
+      fs.rmSync(this.wikiDir, {recursive: true, force: true});
+      this.ensureWikiRepo();
+    }
+
+    this.db.syncProjects(this.projectsFile, this.avatarsDir, this.state.now);
+  }
+
+  private cmdTime(cmd: Command) {
+    const spec = cmd.positional[1];
+    if (!spec) throw new Error('Usage: time <+dur|-dur|now|now-dur|iso|unix>');
+    this.setNow(parseTimestampSpec(spec, this.state.now, this.state.anchorNow));
+  }
+
+  private cmdRng(cmd: Command) {
+    const rngSeed = Number(cmd.positional[1]);
+    if (!Number.isFinite(rngSeed)) throw new Error('Usage: rng <seed>');
+    this.state.rngState = rngSeed >>> 0;
+  }
+
+  private loadProjectsArray(): Project[] {
+    this.ensureStaticInitialized();
+    return (yaml.parse(fs.readFileSync(this.projectsFile, 'utf8')) ?? []) as Project[];
+  }
+
+  private saveProjectsArray(projects: Project[]) {
+    fs.writeFileSync(this.projectsFile, yaml.stringify(projects), 'utf8');
+  }
+
+  private nextSmogonSpec(github: string, rawSmogon?: string): string {
+    if (rawSmogon) {
+      if (/\.\d+$/.test(rawSmogon) || /^\d+$/.test(rawSmogon)) return rawSmogon;
+      this.state.smogonSeq++;
+      return `${rawSmogon}.${this.state.smogonSeq}`;
+    }
+    const existing = this.db.getDeveloperByGitHub(github);
+    if (existing) return `${existing.smogonUsername}.${existing.smogonId}`;
+    this.state.smogonSeq++;
+    return `${github}.${this.state.smogonSeq}`;
+  }
+
+  private nextDiscordIdentity(github: string, spec?: string): {id: string; username: string} {
+    if (spec && spec !== 'auto') {
+      const colon = spec.indexOf(':');
+      if (colon > 0) {
+        return {id: spec.slice(0, colon), username: spec.slice(colon + 1)};
+      }
+      if (/^\d+$/.test(spec)) {
+        return {id: spec, username: github};
+      }
+    }
+    this.state.discordSeq++;
+    const id = `400000000000${String(this.state.discordSeq).padStart(6, '0')}`;
+    return {id, username: spec && spec !== 'auto' ? spec : github};
+  }
+
+  private syncGuildMember(id: string, username: string) {
+    this.db.db.prepare(
+      'INSERT OR REPLACE INTO discord_members (id, username, updated_at) VALUES (?, ?, ?)'
+    ).run(id, username, this.state.now);
+  }
+
+  private async cmdRegister(cmd: Command) {
+    const name = cmd.positional[1];
+    if (!name) throw new Error('Usage: register <name> [--owner <gh[:smogon]>...]');
+    const slug = slugify(name).toLowerCase();
+    const isPending = hasFlag(cmd, 'pending');
+    const isDisabled = hasFlag(cmd, 'disabled');
+    const isBanned = hasFlag(cmd, 'banned');
+    const noGuild = hasFlag(cmd, 'no-guild');
+    const logoFlag = getFlag(cmd, 'logo');
+    const discordSpecs = cmd.flags.get('discord') ?? [];
+
+    const rawOwners = cmd.flags.get('owner') ?? [];
+    const ownerEntries: Array<{github: string; smogon: string}> = [];
+    if (rawOwners.length === 0) {
+      const defaultGh = `${slug.replace(/[^a-z0-9]/g, '')}dev`;
+      ownerEntries.push({github: defaultGh, smogon: this.nextSmogonSpec(defaultGh)});
+    } else {
+      for (const raw of rawOwners) {
+        const colon = raw.indexOf(':');
+        const gh = (colon > 0 ? raw.slice(0, colon) : raw).trim().toLowerCase();
+        const sm = colon > 0 ? raw.slice(colon + 1).trim() : undefined;
+        ownerEntries.push({github: gh, smogon: this.nextSmogonSpec(gh, sm)});
+      }
+    }
+
+    let logo: string | undefined;
+    if (logoFlag === 'auto') {
+      logo = `${slug}.png`;
+      fs.mkdirSync(this.avatarsDir, {recursive: true});
+      fs.writeFileSync(path.join(this.avatarsDir, logo), generateAvatarPng(slug));
+    } else if (logoFlag) {
+      logo = logoFlag;
+      const logoPath = path.join(this.avatarsDir, logo);
+      if (!fs.existsSync(logoPath)) {
+        fs.mkdirSync(this.avatarsDir, {recursive: true});
+        fs.writeFileSync(logoPath, generateAvatarPng(slug));
+      }
+    }
+
+    const ownersMap: Record<string, string> = {};
+    for (const o of ownerEntries) {
+      ownersMap[o.github] = o.smogon;
+    }
+
+    const projects = this.loadProjectsArray();
+    let entry = projects.find(
+      p => p.name === name || (p.name && slugify(p.name).toLowerCase() === slug)
+    );
+    const arenaBlock: NonNullable<Project['arena']> = {
+      qualified: !isPending,
+      ...(logo ? {logo} : {}),
+      owners: ownersMap,
+    };
+
+    if (entry) {
+      entry.arena = arenaBlock;
+    } else {
+      entry = {
+        name,
+        site: 'https://pkmn.cc',
+        active: new Date(this.state.now * 1000).getUTCFullYear(),
+        license: 'MIT',
+        source: name === '0 ERROR'
+          ? 'https://github.com/pkmn/engine'
+          : `https://github.com/${ownerEntries[0].github}/${slug}`,
+        ...(name === '0 ERROR'
+          ? {engine: {name: 'pkmn', url: 'https://github.com/pkmn/engine'}}
+          : {}),
+        language: name === '0 ERROR' ? ['Zig', 'TypeScript'] : ['Python', 'Rust'],
+        platform: [
+          {name: 'Pokémon Showdown!', url: 'https://github.com/smogon/pokemon-showdown'},
+        ],
+        arena: arenaBlock,
+      };
+      projects.unshift(entry);
+    }
+    this.saveProjectsArray(projects);
+
+    if (isBanned) {
+      await this.db.syncProjectsWithSmogon(this.projectsFile, {
+        avatarsDir: this.avatarsDir,
+        now: this.state.now,
+        refreshSmogonNames: true,
+        lookupSmogon: raw => {
+          const s = String(raw);
+          const dot = s.lastIndexOf('.');
+          const id = dot > 0 ? Number(s.slice(dot + 1)) : 999999;
+          const username = dot > 0 ? s.slice(0, dot) : s;
+          return Promise.resolve({
+            id,
+            username,
+            slug: username.toLowerCase(),
+            url: `https://www.smogon.com/forums/members/${username.toLowerCase()}.${id}/`,
+            banned: true,
+          });
+        },
+      });
+      return;
+    }
+
+    this.db.syncProjects(this.projectsFile, this.avatarsDir, this.state.now);
+
+    if (isDisabled) {
+      delete entry.arena;
+      this.saveProjectsArray(projects);
+      this.db.syncProjects(this.projectsFile, this.avatarsDir, this.state.now);
+      return;
+    }
+
+    if (discordSpecs[0] === 'none') return;
+    // Pending projects leave Discord unlinked unless `--discord` is explicitly provided.
+    if (isPending && discordSpecs.length === 0) return;
+
+    for (let idx = 0; idx < ownerEntries.length; idx++) {
+      const gh = ownerEntries[idx].github;
+      const spec = discordSpecs[idx] ?? (idx === 0 ? discordSpecs[0] : undefined);
+      if (spec === 'none') continue;
+      if (discordSpecs.length > 0 && idx > 0 && discordSpecs[idx] === undefined) continue;
+      const identity = this.nextDiscordIdentity(gh, spec);
+      this.db.linkDeveloperDiscord(gh, identity.id, identity.username, this.state.now);
+      if (!noGuild) {
+        this.syncGuildMember(identity.id, identity.username);
+      }
+    }
+  }
+
+  private resolveAgent(spec: string) {
+    const bySlug = this.db.getAgentBySlug(spec.toLowerCase()) ??
+      this.db.getAgentBySlug(slugify(spec).toLowerCase());
+    if (bySlug) return bySlug;
+    const targetId = toID(spec);
+    const all = this.db.db.prepare('SELECT slug FROM agents').all() as Array<{slug: string}>;
+    for (const row of all) {
+      const a = this.db.getAgentBySlug(row.slug);
+      if (a && (toID(a.name) === targetId || a.name.toLowerCase() === spec.toLowerCase())) {
+        return a;
+      }
+    }
+    throw new Error(`Unknown agent "${spec}"`);
+  }
+
+  private resolveAgentVersion(spec: string, ladderId?: string) {
+    const atIdx = spec.lastIndexOf('@');
+    if (atIdx > 0) {
+      const agentPart = spec.slice(0, atIdx);
+      const verPart = spec.slice(atIdx + 1);
+      const agent = this.resolveAgent(agentPart);
+      const ver = this.db.getVersionBySlugAndLabel(agent.slug, verPart);
+      if (!ver) {
+        throw new Error(`Version "${verPart}" not found for agent "${agent.slug}"`);
+      }
+      return ver;
+    }
+    const agent = this.resolveAgent(spec);
+    if (ladderId) {
+      const entries = this.db.getLeaderboardEntries(ladderId)
+        .filter(e => e.agentId === agent.id && e.role !== 'retired');
+      if (entries.length > 0) {
+        const chosen = entries[0];
+        const ver = this.db.getVersionById(chosen.versionId)!;
+        return {...ver, agentSlug: agent.slug, agentName: agent.name};
+      }
+    }
+    const history = this.db.getVersionsForAgent(agent.id);
+    const passed = history.find(v => v.smokeStatus === 'passed') ?? history[0];
+    if (!passed) {
+      throw new Error(`Agent "${agent.slug}" has no submitted versions`);
+    }
+    const ver = this.db.getVersionById(passed.id)!;
+    return {...ver, agentSlug: agent.slug, agentName: agent.name};
+  }
+
+  private cmdSetQualification(cmd: Command, target: 'qualified' | 'disabled') {
+    const spec = cmd.positional[1];
+    if (!spec) throw new Error(`Usage: ${cmd.positional[0]} <agent>`);
+    const agent = this.resolveAgent(spec);
+    const projects = this.loadProjectsArray();
+    const proj = projects.find(
+      p => p.name && slugify(p.name).toLowerCase() === agent.slug
+    );
+    if (!proj) throw new Error(`Project "${agent.name}" not found in ${this.projectsFile}`);
+    if (target === 'disabled') {
+      delete proj.arena;
+    } else if (proj.arena) {
+      proj.arena.qualified = true;
+    }
+    this.saveProjectsArray(projects);
+    this.db.syncProjects(this.projectsFile, this.avatarsDir, this.state.now);
+  }
+
+  private cmdReassign(cmd: Command) {
+    const github = cmd.positional[1];
+    const targetRaw = cmd.positional[2] ?? (hasFlag(cmd, 'none') ? '--none' : undefined);
+    if (!github || !targetRaw) {
+      throw new Error('Usage: reassign <github> <target-agent|--none> [--smogon <spec>]');
+    }
+    const targetSlug = targetRaw === '--none' || targetRaw === 'none'
+      ? undefined
+      : this.resolveAgent(targetRaw).slug;
+    const smogonFlag = getFlag(cmd, 'smogon');
+    const existingDev = this.db.getDeveloperByGitHub(github);
+    const smogonValue = smogonFlag
+      ? this.nextSmogonSpec(github, smogonFlag)
+      : existingDev
+        ? `${existingDev.smogonUsername}.${existingDev.smogonId}`
+        : this.nextSmogonSpec(github);
+
+    this.ensureStaticInitialized();
+    const updated = db.reassignDeveloperInProjectsYaml(
+      fs.readFileSync(this.projectsFile, 'utf8'),
+      github,
+      targetSlug,
+      smogonValue
+    );
+    fs.writeFileSync(this.projectsFile, updated.yaml, 'utf8');
+    this.db.syncProjects(this.projectsFile, this.avatarsDir, this.state.now);
+  }
+
+  private cmdRefundCooldown(cmd: Command) {
+    const spec = cmd.positional[1];
+    if (!spec) throw new Error('Usage: refund-cooldown <agent>');
+    const agent = this.resolveAgent(spec);
+    this.db.refundCooldown(agent.slug, this.state.now);
+  }
+
+  private async cmdDiscord(cmd: Command) {
+    const sub = cmd.positional[1]?.toLowerCase();
+    if (sub === 'link') {
+      const gh = cmd.positional[2]?.toLowerCase();
+      if (!gh) throw new Error('Usage: discord link <github> [<id>:<username>] [--no-guild]');
+      const identity = this.nextDiscordIdentity(gh, cmd.positional[3]);
+      this.db.linkDeveloperDiscord(gh, identity.id, identity.username, this.state.now);
+      if (!hasFlag(cmd, 'no-guild')) {
+        this.syncGuildMember(identity.id, identity.username);
+      }
+      return;
+    }
+    if (sub === 'unlink') {
+      const gh = cmd.positional[2]?.toLowerCase();
+      if (!gh) throw new Error('Usage: discord unlink <github>');
+      this.db.unlinkDeveloperDiscord(gh, this.state.now);
+      return;
+    }
+    if (sub === 'sync') {
+      if (this.onDiscordSync) {
+        await this.onDiscordSync(this);
+      }
+      return;
+    }
+    throw new Error(`Unknown discord subcommand "${String(sub)}"`);
+  }
+
+  resolveLadders(spec: string): db.LadderRow[] {
+    const all = this.db.getLadders();
+    const trimmed = spec.trim();
+    if (trimmed.toLowerCase() === 'all') {
+      return all.filter(l => l.status !== 'archived');
+    }
+    const parts = trimmed.split(',').map(s => s.trim()).filter(Boolean);
+    const out: db.LadderRow[] = [];
+    const seen = new Set<string>();
+    for (const part of parts) {
+      const lower = part.toLowerCase();
+      const exact = all.find(l => l.id.toLowerCase() === lower);
+      if (exact) {
+        if (!seen.has(exact.id)) {
+          seen.add(exact.id);
+          out.push(exact);
+        }
+        continue;
+      }
+      const bySlot =
+        all.find(l => l.slot === lower && (l.status === 'active' || l.status === 'upcoming')) ??
+        all.find(l => l.slot === lower && l.status === 'settling') ??
+        all.find(l => l.slot === lower);
+      if (!bySlot) {
+        throw new Error(`Unknown ladder "${part}"`);
+      }
+      if (!seen.has(bySlot.id)) {
+        seen.add(bySlot.id);
+        out.push(bySlot);
+      }
+    }
+    return out;
+  }
+
+  private syncLadderFileStatuses() {
+    if (!fs.existsSync(this.laddersFile)) return;
+    if (path.resolve(this.laddersFile) === path.resolve(root('config', 'ladders.yml'))) return;
+    const rows = this.db.getLadders();
+    const existingCfg = (yaml.parse(fs.readFileSync(this.laddersFile, 'utf8')) ?? []) as
+      db.LadderConfig[];
+    const byId = new Map(existingCfg.map(c => [c.id, c]));
+    const next: db.LadderConfig[] = rows.map(r => {
+      const prev = byId.get(r.id);
+      return {
+        name: r.name,
+        format: r.format,
+        id: r.id,
+        ...(r.discord ? {discord: r.discord} : {}),
+        team: r.team,
+        status: r.status,
+        min: r.min,
+        ...(r.teams !== undefined ? {teams: r.teams} : {}),
+        ...(prev?.pools ? {pools: prev.pools} : {}),
+      };
+    });
+    fs.writeFileSync(this.laddersFile, yaml.stringify(next), 'utf8');
+  }
+
+  private async cmdLadder(cmd: Command) {
+    const sub = cmd.positional[1]?.toLowerCase();
+    if (sub === 'open') {
+      const targetSpec = cmd.positional[2] ?? 'all';
+      for (const ladder of this.resolveLadders(targetSpec)) {
+        this.db.setLadderStatus(ladder.id, 'active', this.state.now);
+      }
+      this.syncLadderFileStatuses();
+      return;
+    }
+    if (sub === 'status') {
+      const targetSpec = cmd.positional[2];
+      const status = cmd.positional[3] as db.LadderStatus | undefined;
+      if (!targetSpec || !status) {
+        throw new Error('Usage: ladder status <ladders|all> <upcoming|active|settling|archived>');
+      }
+      for (const ladder of this.resolveLadders(targetSpec)) {
+        this.db.setLadderStatus(ladder.id, status, this.state.now);
+      }
+      this.syncLadderFileStatuses();
+      return;
+    }
+    if (sub === 'add') {
+      const id = cmd.positional[2];
+      const name = getFlag(cmd, 'name');
+      const format = getFlag(cmd, 'format');
+      if (!id || !name || !format) {
+        throw new Error('Usage: ladder add <id> --name <title> --format <fmt> [--team <mode>]');
+      }
+      const team = (getFlag(cmd, 'team') ?? 'harvested') as db.TeamMode;
+      const min = Number(getFlag(cmd, 'min') ?? (team === 'pools' ? 4 : 2));
+      const teamCount = team === 'pools' ? Number(getFlag(cmd, 'teams') ?? 20) : undefined;
+      const status = (getFlag(cmd, 'status') ?? 'active') as db.LadderStatus;
+      const discord = getFlag(cmd, 'discord');
+
+      this.ensureStaticInitialized();
+      const cfgs = fs.existsSync(this.laddersFile)
+        ? ((yaml.parse(fs.readFileSync(this.laddersFile, 'utf8')) ?? []) as db.LadderConfig[])
+        : [];
+      const filtered = cfgs.filter(c => c.id !== id);
+      filtered.push({
+        name,
+        format,
+        id,
+        ...(discord ? {discord} : {}),
+        team,
+        status,
+        min,
+        ...(teamCount !== undefined ? {teams: teamCount} : {}),
+      });
+      if (path.resolve(this.laddersFile) !== path.resolve(root('config', 'ladders.yml'))) {
+        fs.writeFileSync(this.laddersFile, yaml.stringify(filtered), 'utf8');
+      }
+      this.db.syncLaddersFromYaml(yaml.stringify(filtered), this.state.now);
+      return;
+    }
+    if (sub === 'rotate') {
+      const oldSpec = cmd.positional[2];
+      const archiveName = getFlag(cmd, 'archive-name') ?? getFlag(cmd, 'name');
+      if (!oldSpec || !archiveName) {
+        throw new Error(
+          'Usage: ladder rotate <old> --archive-name <title> [--new <id>] [--new-name <title>]'
+        );
+      }
+      const oldLadder = this.resolveLadders(oldSpec)[0];
+      const newMinFlag = getFlag(cmd, 'min');
+      const newTeamsFlag = getFlag(cmd, 'teams');
+      this.db.rotateLadder({
+        oldLadderId: oldLadder.id,
+        archivedName: archiveName,
+        newLadderId: getFlag(cmd, 'new'),
+        newName: getFlag(cmd, 'new-name'),
+        newFormat: getFlag(cmd, 'format'),
+        newTeam: getFlag(cmd, 'team') as db.TeamMode | undefined,
+        newMin: newMinFlag !== undefined ? Number(newMinFlag) : undefined,
+        newTeams: newTeamsFlag !== undefined ? Number(newTeamsFlag) : undefined,
+        newDiscord: getFlag(cmd, 'discord'),
+        now: this.state.now,
+      });
+      this.syncLadderFileStatuses();
+      return;
+    }
+    if (sub === 'anchor') {
+      const targetSpec = cmd.positional[2];
+      const verSpec = cmd.positional[3];
+      if (!targetSpec || !verSpec) {
+        throw new Error('Usage: ladder anchor <ladders|all> <agent>[@<ver>]');
+      }
+      for (const ladder of this.resolveLadders(targetSpec)) {
+        const ver = this.resolveAgentVersion(verSpec, ladder.id);
+        this.db.setLadderAnchor(ladder.id, ver.agentSlug, ver.version, this.state.now);
+      }
+      return;
+    }
+    if (sub === 'archive') {
+      const targetSpec = cmd.positional[2];
+      if (!targetSpec) throw new Error('Usage: ladder archive <ladder> [--file <path>]');
+      const ladder = this.resolveLadders(targetSpec)[0];
+      const srcFile = getFlag(cmd, 'file');
+      const bytes = srcFile && fs.existsSync(srcFile)
+        ? fs.readFileSync(srcFile)
+        : Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]);
+      if (this.serverUrl) {
+        await this.getArenaClient().uploadLadderArchive(ladder.id, bytes);
+      } else {
+        const pubDir = this.publicDir ?? render.PUBLIC_DIR;
+        const dstDir = path.join(pubDir, 'arena', 'ladders', ladder.id);
+        fs.mkdirSync(dstDir, {recursive: true});
+        fs.writeFileSync(path.join(dstDir, `${ladder.id}-logs.7z`), bytes);
+      }
+      return;
+    }
+    throw new Error(`Unknown ladder subcommand "${String(sub)}"`);
+  }
+
+  private async getDeveloperCookie(githubLogin: string): Promise<string> {
+    const cached = this.devCookies.get(githubLogin);
+    if (cached) return cached;
+
+    if (this.sessionSecret) {
+      let hash = 1000;
+      for (let i = 0; i < githubLogin.length; i++) {
+        hash = (hash * 31 + githubLogin.charCodeAt(i)) % 900000;
+      }
+      const token = auth.signToken(
+        {
+          github: {id: 1000 + hash, login: githubLogin},
+          exp: Math.max(this.state.now, Math.floor(Date.now() / 1000)) + 86400,
+        },
+        this.sessionSecret
+      );
+      const cookie = `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
+      this.devCookies.set(githubLogin, cookie);
+      return cookie;
+    }
+
+    if (this.serverUrl) {
+      const res = await fetch(
+        `${this.serverUrl}/auth/dev?github=${encodeURIComponent(githubLogin)}`,
+        {redirect: 'manual'}
+      );
+      const setCookie = res.headers.get('set-cookie');
+      if (setCookie) {
+        const cookie = setCookie.split(';')[0];
+        this.devCookies.set(githubLogin, cookie);
+        return cookie;
+      }
+    }
+    throw new Error(`Cannot mint session cookie for "${githubLogin}" (missing sessionSecret)`);
+  }
+
+  private getExpectedRating(
+    versionId: number,
+    agentSlug: string,
+    targetKey: string
+  ): number {
+    return (
+      this.state.expectedRatings[`v:${versionId}:${targetKey}`] ??
+      this.state.expectedRatings[`v:${versionId}:*`] ??
+      this.state.expectedRatings[`a:${agentSlug}:${targetKey}`] ??
+      this.state.expectedRatings[`a:${agentSlug}:*`] ??
+      1500
+    );
+  }
+
+  private setExpectedRating(
+    versionId: number,
+    agentSlug: string,
+    targetKey: string,
+    elo: number
+  ) {
+    this.state.expectedRatings[`v:${versionId}:${targetKey}`] = elo;
+    this.state.expectedRatings[`a:${agentSlug}:${targetKey}`] = elo;
+  }
+
+  private getMatchupBiasElo(
+    p1VersionId: number,
+    p1Slug: string,
+    p2VersionId: number,
+    p2Slug: string,
+    p2Version: string
+  ): number {
+    const forward =
+      this.state.matchupBiases[`${p1VersionId}:${p2Slug}@${p2Version}`] ??
+      this.state.matchupBiases[`${p1VersionId}:${p2Slug}`] ??
+      0;
+    const backward =
+      this.state.matchupBiases[`${p2VersionId}:${p1Slug}`] ??
+      0;
+    return forward - backward;
+  }
+
+  private nextAutoVersion(agentId: number): string {
+    const history = this.db.getVersionsForAgent(agentId);
+    if (history.length === 0) return '1.0.0';
+    const latest = history[0].version;
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(latest);
+    if (m) return `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
+    return `1.0.${history.length}`;
+  }
+
+  private getVgcOffsetForSlug(slug: string): number {
+    const existing = this.state.vgcOffsetBySlug[slug];
+    if (existing !== undefined) return existing;
+    const assigned = this.state.vgcOffsetSeq++;
+    this.state.vgcOffsetBySlug[slug] = assigned;
+    return assigned;
+  }
+
+  private looksLikeVersionToken(token: string | undefined): boolean {
+    if (!token || token.includes('=')) return false;
+    return /^v?\d+\.\d+/.test(token) || /^v\d+$/.test(token);
+  }
+
+  private async cmdSubmit(cmd: Command) {
+    const agentSpec = cmd.positional[1];
+    if (!agentSpec) {
+      throw new Error('Usage: submit <agent> [<ver>] [<target>[=<rating>] ...] [options]');
+    }
+    const agent = this.resolveAgent(agentSpec);
+    let posIdx = 2;
+    let version: string;
+    if (this.looksLikeVersionToken(cmd.positional[posIdx])) {
+      version = cmd.positional[posIdx];
+      posIdx++;
+    } else {
+      version = this.nextAutoVersion(agent.id);
+    }
+
+    const ratingFlag = getFlag(cmd, 'rating');
+    const fallbackRating = ratingFlag !== undefined ? Number(ratingFlag) : undefined;
+    const ladderIds: string[] = [];
+    const tournamentIds: string[] = [];
+    const targetRatings = new Map<string, number>();
+
+    const tourFlag = getFlag(cmd, 'tournament');
+    if (tourFlag) {
+      for (const tid of tourFlag.split(',').map(s => s.trim()).filter(Boolean)) {
+        if (!tournamentIds.includes(tid)) tournamentIds.push(tid);
+      }
+    }
+
+    for (let i = posIdx; i < cmd.positional.length; i++) {
+      const raw = cmd.positional[i];
+      const eq = raw.indexOf('=');
+      const lhs = eq > 0 ? raw.slice(0, eq) : raw;
+      const rhs = eq > 0 ? Number(raw.slice(eq + 1)) : fallbackRating;
+
+      if (lhs.startsWith('tournament:')) {
+        const tid = lhs.slice('tournament:'.length);
+        if (!tournamentIds.includes(tid)) tournamentIds.push(tid);
+        if (rhs !== undefined && Number.isFinite(rhs)) targetRatings.set(`tournament:${tid}`, rhs);
+        continue;
+      }
+
+      for (const ladder of this.resolveLadders(lhs)) {
+        if (!ladderIds.includes(ladder.id)) ladderIds.push(ladder.id);
+        if (rhs !== undefined && Number.isFinite(rhs)) targetRatings.set(ladder.id, rhs);
+      }
+    }
+
+    if (ladderIds.length === 0 && tournamentIds.length === 0) {
+      for (const ladder of this.db.getActiveLadders()) {
+        ladderIds.push(ladder.id);
+        if (fallbackRating !== undefined) targetRatings.set(ladder.id, fallbackRating);
+      }
+    }
+
+    const pkgFlag = getFlag(cmd, 'pkg') as 'bundle' | 'oci' | undefined;
+    const pkg: 'bundle' | 'oci' = pkgFlag ??
+      (tournamentIds.length > 0 && ladderIds.length === 0 ? 'oci' : 'bundle');
+    const url = getFlag(cmd, 'url') ?? (
+      pkg === 'oci'
+        ? `ghcr.io/pkmn-mock/${agent.slug}:${version}`
+        : `https://r2.pkmn.cc/${agent.slug}-${version}.tar.zst`
+    );
+    const sha256 = getFlag(cmd, 'sha256') ?? sha256OfTag(`${agent.slug}-${version}`);
+    const authToken = getFlag(cmd, 'auth-token');
+    const byFlag = getFlag(cmd, 'by');
+    const devs = this.db.getDevelopersForAgent(agent.id);
+    const dev = byFlag
+      ? this.db.getDeveloperByGitHub(byFlag)
+      : devs[0];
+
+    const teamsFlag = getFlag(cmd, 'teams') ?? 'auto';
+    let rawVgcTeams: string[] | undefined;
+    const poolsLadders = ladderIds
+      .map(id => this.db.getLadder(id)!)
+      .filter(l => l?.team === 'pools');
+
+    if (poolsLadders.length > 0 && teamsFlag !== 'none') {
+      const needsTeams = teamsFlag !== 'auto' ||
+        poolsLadders.some(l => !this.db.hasActiveLadderTeams(l.id, agent.id));
+      if (needsTeams) {
+        if (teamsFlag === 'auto' || teamsFlag === 'new') {
+          const offset = teamsFlag === 'new'
+            ? (this.state.vgcOffsetSeq++)
+            : this.getVgcOffsetForSlug(agent.slug);
+          rawVgcTeams = generateValidVgcTeams(20, offset);
+        } else {
+          rawVgcTeams = teams.splitSubmittedTeams(fs.readFileSync(teamsFlag, 'utf8'));
+        }
+      }
+    }
+
+    const smokeMode = (getFlag(cmd, 'smoke') ?? 'pass').toLowerCase() as
+      'pass' | 'pending' | 'fail';
+    const smokeError = getFlag(cmd, 'error');
+    const bytesFlag = getFlag(cmd, 'bytes');
+    const durFlag = getFlag(cmd, 'duration-millis');
+    const turnFlag = getFlag(cmd, 'turn-millis');
+    const ramFlag = getFlag(cmd, 'ram');
+    const pendingMeta: PendingSmokeConfig = {
+      status: smokeMode === 'fail' ? 'fail' : 'pass',
+      ...(smokeError !== undefined ? {error: smokeError} : {}),
+      ...(bytesFlag !== undefined ? {bytes: parseBytesSpec(bytesFlag)} : {}),
+      ...(durFlag !== undefined ? {durationMillis: Number(durFlag)} : {}),
+      ...(turnFlag !== undefined ? {turnMillis: Number(turnFlag)} : {}),
+      ...(ramFlag !== undefined ? {ram: Number(ramFlag)} : {}),
+    };
+
+    let versionId: number;
+    if (this.serverUrl) {
+      if (!dev) {
+        throw new Error(`No developer registered for agent "${agent.slug}" to submit via HTTP`);
+      }
+      const cookie = await this.getDeveloperCookie(dev.githubLogin);
+      const res = await fetch(`${this.serverUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          cookie,
+        },
+        body: JSON.stringify({
+          version,
+          package: pkg,
+          url,
+          sha256,
+          ...(authToken ? {authToken} : {}),
+          ladders: ladderIds,
+          ...(tournamentIds.length > 0 ? {tournaments: tournamentIds} : {}),
+          ...(rawVgcTeams ? {teams: rawVgcTeams} : {}),
+        }),
+      });
+      if (res.status !== 201) {
+        const errBody = await res.text().catch(() => '');
+        throw new Error(
+          `POST /api/submissions for ${agent.slug}@${version} failed (${res.status}): ${errBody}`
+        );
+      }
+      const created = this.db.getVersionBySlugAndLabel(agent.slug, version);
+      if (!created) {
+        throw new Error(`Submitted ${agent.slug}@${version} not found in SQLite`);
+      }
+      versionId = created.id;
+    } else {
+      const teamsByLadder: Record<string, string[]> = {};
+      if (rawVgcTeams) {
+        const canonical = teams.splitSubmittedTeams(rawVgcTeams);
+        for (const pl of poolsLadders) {
+          teamsByLadder[pl.id] = canonical;
+        }
+      }
+      const created = this.db.createSubmission({
+        agentId: agent.id,
+        developerId: dev?.id,
+        version,
+        package: pkg,
+        url,
+        sha256,
+        ladderIds,
+        tournamentIds: tournamentIds.length > 0 ? tournamentIds : undefined,
+        teamsByLadder: Object.keys(teamsByLadder).length > 0 ? teamsByLadder : undefined,
+        now: this.state.now,
+      });
+      versionId = created.id;
+    }
+
+    if (fallbackRating !== undefined) {
+      this.setExpectedRating(versionId, agent.slug, '*', fallbackRating);
+    }
+    for (const [key, elo] of targetRatings) {
+      this.setExpectedRating(versionId, agent.slug, key, elo);
+    }
+    for (const tid of tournamentIds) {
+      if (!targetRatings.has(`tournament:${tid}`) && fallbackRating !== undefined) {
+        this.setExpectedRating(versionId, agent.slug, `tournament:${tid}`, fallbackRating);
+      }
+    }
+
+    const vsList = cmd.flags.get('vs') ?? [];
+    for (const vsItem of vsList) {
+      for (const pair of vsItem.split(',').map(s => s.trim()).filter(Boolean)) {
+        const colon = pair.lastIndexOf(':');
+        if (colon <= 0) continue;
+        const oppSpec = pair.slice(0, colon).trim();
+        const deltaElo = Number(pair.slice(colon + 1));
+        if (!Number.isFinite(deltaElo)) continue;
+        if (oppSpec.includes('@')) {
+          const oppVer = this.resolveAgentVersion(oppSpec);
+          this.state.matchupBiases[`${versionId}:${oppVer.agentSlug}@${oppVer.version}`] = deltaElo;
+        } else {
+          const oppAgent = this.resolveAgent(oppSpec);
+          this.state.matchupBiases[`${versionId}:${oppAgent.slug}`] = deltaElo;
+        }
+      }
+    }
+
+    this.state.pendingSmoke[String(versionId)] = pendingMeta;
+    if (smokeMode !== 'pending') {
+      await this.smokeSpecificVersion(versionId, pendingMeta, hasFlag(cmd, 'notified'));
+    }
+  }
+
+  private computeRetiredVersionIdsByLadder(
+    agentId: number,
+    versionId: number,
+    ladderIds: string[]
+  ): Record<string, number> {
+    const retiredByLadder: Record<string, number> = {};
+    for (const ladderId of ladderIds) {
+      const active = this.db.getLeaderboardEntries(ladderId)
+        .filter(e => e.agentId === agentId && e.role !== 'retired' && e.versionId !== versionId)
+        .sort((a, b) => a.lcb - b.lcb || a.versionId - b.versionId);
+      if (active.length >= 2) {
+        retiredByLadder[ladderId] = active[0].versionId;
+      }
+    }
+    return retiredByLadder;
+  }
+
+  private computeTelemetryForVersion(versionId: number, agentId: number) {
+    return {
+      bytes: (120 + ((agentId * 37 + versionId * 19) % 280)) * 1024 * 1024,
+      durationMillis: 1600 + ((agentId * 173 + versionId * 89) % 2400),
+      turnMillis: 210 + ((agentId * 41 + versionId * 23) % 240),
+      ram: 540 + ((agentId * 131 + versionId * 67) % 1400),
+    };
+  }
+
+  private async smokeSpecificVersion(
+    versionId: number,
+    meta: PendingSmokeConfig,
+    markNotified = false
+  ) {
+    const ver = this.db.getVersionById(versionId);
+    if (!ver) throw new Error(`Unknown versionId ${versionId}`);
+    const smokeStatus = meta.status === 'fail' ? 'failed' : 'passed';
+    const telemetry = this.computeTelemetryForVersion(versionId, ver.agentId);
+
+    if (this.serverUrl) {
+      const client = this.getArenaClient();
+      const pendingPayload = await client.getPendingSubmissions();
+      const remoteSub = pendingPayload.submissions.find(s => s.versionId === versionId);
+      const ladders = remoteSub?.ladders ?? [];
+      const retired = smokeStatus === 'passed'
+        ? this.computeRetiredVersionIdsByLadder(ver.agentId, versionId, ladders)
+        : {};
+      await client.reportSubmissionStatus({
+        versionId,
+        smokeStatus,
+        unpackedBytes: meta.bytes ?? telemetry.bytes,
+        smokeDurationMillis: meta.durationMillis ?? telemetry.durationMillis,
+        smokeTurnMillis: meta.turnMillis ?? telemetry.turnMillis,
+        smokePeakRam: meta.ram ?? telemetry.ram,
+        ...(smokeStatus === 'failed'
+          ? {smokeError: meta.error ?? `Smoke test failed in ${ver.version}`}
+          : {}),
+        retiredVersionIdsByLadder: retired,
+      });
+    } else {
+      const pendingRow = this.db.getPendingSubmissions().find(p => p.versionId === versionId);
+      const ladders = pendingRow?.ladders ?? [];
+      const retired = smokeStatus === 'passed'
+        ? this.computeRetiredVersionIdsByLadder(ver.agentId, versionId, ladders)
+        : {};
+      this.db.applySubmissionStatus({
+        versionId,
+        smokeStatus,
+        unpackedBytes: smokeStatus === 'passed' ? (meta.bytes ?? telemetry.bytes) : undefined,
+        smokeDurationMillis: smokeStatus === 'passed'
+          ? (meta.durationMillis ?? telemetry.durationMillis)
+          : undefined,
+        smokeTurnMillis: smokeStatus === 'passed'
+          ? (meta.turnMillis ?? telemetry.turnMillis)
+          : undefined,
+        smokePeakRam: smokeStatus === 'passed' ? (meta.ram ?? telemetry.ram) : undefined,
+        smokeError: smokeStatus === 'failed'
+          ? (meta.error ?? `Smoke test failed in ${ver.version}`)
+          : undefined,
+        retiredVersionIdsByLadder: retired,
+        now: this.state.now + 5,
+      });
+      if (markNotified) {
+        this.db.markVersionNotified(versionId);
+      }
+    }
+    delete this.state.pendingSmoke[String(versionId)];
+  }
+
+  private async cmdSmoke(cmd: Command) {
+    const targetSpec = cmd.positional[1] ?? 'all';
+    const forceFail = hasFlag(cmd, 'fail');
+    const forcePass = hasFlag(cmd, 'pass');
+    const errorFlag = getFlag(cmd, 'error');
+    const bytesFlag = getFlag(cmd, 'bytes');
+    const durFlag = getFlag(cmd, 'duration-millis');
+    const turnFlag = getFlag(cmd, 'turn-millis');
+    const ramFlag = getFlag(cmd, 'ram');
+
+    let pendingList: Array<{versionId: number; agentId: number; ladders: string[]}>;
+    if (this.serverUrl) {
+      const payload = await this.getArenaClient().getPendingSubmissions();
+      pendingList = payload.submissions;
+    } else {
+      pendingList = this.db.getPendingSubmissions().map(p => ({
+        versionId: p.versionId,
+        agentId: p.agentId,
+        ladders: p.ladders,
+      }));
+    }
+
+    if (targetSpec.toLowerCase() !== 'all') {
+      const targetVer = this.resolveAgentVersion(targetSpec);
+      pendingList = pendingList.filter(p => p.versionId === targetVer.id);
+    }
+
+    for (const sub of pendingList) {
+      const stored = this.state.pendingSmoke[String(sub.versionId)] ?? {};
+      const status: 'pass' | 'fail' = forceFail
+        ? 'fail'
+        : forcePass
+          ? 'pass'
+          : (stored.status ?? 'pass');
+      const meta: PendingSmokeConfig = {
+        status,
+        error: errorFlag ?? stored.error,
+        bytes: bytesFlag !== undefined ? parseBytesSpec(bytesFlag) : stored.bytes,
+        durationMillis: durFlag !== undefined ? Number(durFlag) : stored.durationMillis,
+        turnMillis: turnFlag !== undefined ? Number(turnFlag) : stored.turnMillis,
+        ram: ramFlag !== undefined ? Number(ramFlag) : stored.ram,
+      };
+
+      if (this.serverUrl) {
+        const ver = this.db.getVersionById(sub.versionId)!;
+        const telemetry = this.computeTelemetryForVersion(sub.versionId, sub.agentId);
+        const retired = status === 'pass'
+          ? this.computeRetiredVersionIdsByLadder(sub.agentId, sub.versionId, sub.ladders)
+          : {};
+        await this.getArenaClient().reportSubmissionStatus({
+          versionId: sub.versionId,
+          smokeStatus: status === 'fail' ? 'failed' : 'passed',
+          unpackedBytes: meta.bytes ?? telemetry.bytes,
+          smokeDurationMillis: meta.durationMillis ?? telemetry.durationMillis,
+          smokeTurnMillis: meta.turnMillis ?? telemetry.turnMillis,
+          smokePeakRam: meta.ram ?? telemetry.ram,
+          ...(status === 'fail'
+            ? {smokeError: meta.error ?? `Boot failure in ${ver.version}`}
+            : {}),
+          retiredVersionIdsByLadder: retired,
+        });
+        delete this.state.pendingSmoke[String(sub.versionId)];
+      } else {
+        await this.smokeSpecificVersion(sub.versionId, meta, hasFlag(cmd, 'notified'));
+      }
+    }
+  }
+
+  private async cmdQuarantine(cmd: Command) {
+    const spec = cmd.positional[1];
+    if (!spec) throw new Error('Usage: quarantine <agent>[@<ver>] [--reason <msg>]');
+    const ver = this.resolveAgentVersion(spec);
+    const reason = getFlag(cmd, 'reason') ?? 'Quarantined due to repeated runtime crashes';
+    const via = getFlag(cmd, 'via') ?? (this.serverUrl ? 'runner' : 'admin');
+    if (via === 'runner' && this.serverUrl) {
+      await this.getArenaClient().reportSubmissionStatus({
+        versionId: ver.id,
+        smokeStatus: 'quarantined',
+        smokeError: reason,
+      });
+      return;
+    }
+    this.db.quarantineVersion(ver.agentSlug, ver.version, reason, this.state.now);
+  }
+
+  private cmdUnquarantine(cmd: Command) {
+    const spec = cmd.positional[1];
+    if (!spec) throw new Error('Usage: unquarantine <agent>[@<ver>]');
+    const ver = this.resolveAgentVersion(spec);
+    this.db.unquarantineVersion(ver.agentSlug, ver.version, this.state.now);
+  }
+
+  private sampleDavidsonSingleGame(
+    expectedP1: number,
+    expectedP2: number,
+    biasElo: number,
+    tieRate: number
+  ): ratings.GameOutcome {
+    const delta = (expectedP1 - expectedP2 + biasElo) / ratings.ELO_SCALE;
+    const clampedTie = Math.max(0, Math.min(0.8, tieRate));
+    const nu = clampedTie > 0 ? (2 * clampedTie) / (1 - clampedTie) : 0;
+    const w = Math.exp(0.5 * delta);
+    const l = 1 / w;
+    const Z = w + l + nu;
+    const u = this.nextFloat();
+    if (u < w / Z) return 'W';
+    if (u < (w + nu) / Z) return 'T';
+    return 'L';
+  }
+
+  private buildPoolForLadder(ladder: db.LadderRow): teams.CanonicalPoolEntry[] {
+    const entries = this.db.getLeaderboardEntries(ladder.id);
+    const activeAgentIds = new Set(
+      entries.filter(e => e.role !== 'retired').map(e => e.agentId)
+    );
+    const roster = this.db.getActiveRosterForLadder(ladder.id)
+      .filter(r => activeAgentIds.has(r.agentId))
+      .map(r => ({
+        agentId: r.agentId,
+        agentName: r.agentName,
+        teams: r.teams.map(t => t.packed),
+      }));
+    return teams.buildCanonicalTeamPool(roster, ladder.format);
+  }
+
+  private resolvePoolLabelSpec(
+    ladder: db.LadderRow,
+    spec: string | undefined,
+    sampledDefault: string | undefined
+  ): string | undefined {
+    if (!spec) return sampledDefault;
+    if (/^(?:P[12]:)?[0-9a-f]{12}$/.test(spec)) return spec;
+    const pool = this.buildPoolForLadder(ladder);
+    const colon = spec.indexOf(':');
+    const prefix = colon > 0 ? spec.slice(0, colon) : 'hash';
+    const agentPart = colon > 0 ? spec.slice(colon + 1) : spec;
+    const targetAgent = this.resolveAgent(agentPart);
+    const entry = pool.find(e => e.owners.has(targetAgent.id));
+    if (!entry) {
+      throw new Error(`No pool team found for agent "${targetAgent.slug}" on ${ladder.id}`);
+    }
+    if (prefix === 'P1' || prefix === 'P2') {
+      return teams.formatPoolTeamLabel(entry.canonicalPacked, prefix);
+    }
+    return teams.hashTeam(entry.canonicalPacked);
+  }
+
+  private buildCandidateLadderState(ladder: db.LadderRow): {
+    state: ratings.LadderMatchState;
+    entries: db.LeaderboardEntryView[];
+  } | undefined {
+    const entries = this.db.getLeaderboardEntries(ladder.id);
+    const state = arena.buildLadderMatchState(
+      ladder,
+      entries,
+      this.db.getPairAggregatesForLadder(ladder.id),
+      this.state.lastMatchNumberByLadder[ladder.id] ?? 0
+    );
+    return state ? {state, entries} : undefined;
+  }
+
+  private async executeMatchPair(opts: {
+    ladder: db.LadderRow;
+    p1VersionId: number;
+    p1AgentId: number;
+    p1Slug: string;
+    p1Name: string;
+    p1Version: string;
+    p2VersionId: number;
+    p2AgentId: number;
+    p2Slug: string;
+    p2Name: string;
+    p2Version: string;
+    completedAt: number;
+    tieRate?: number;
+    faultRate?: number;
+    forcedOutcome?: ratings.MatchCategory;
+    g1Reason?: string;
+    g2Reason?: string;
+    p1TeamSpec?: string;
+    p2TeamSpec?: string;
+    emitHeartbeats?: boolean;
+  }): Promise<{matchId: string; archivedLadder: boolean}> {
+    const {ladder} = opts;
+    let p1TeamLabel: string | undefined;
+    let p2TeamLabel: string | undefined;
+    if (ladder.team === 'pools') {
+      const pool = this.buildPoolForLadder(ladder);
+      const sampled = teams.samplePoolsPair(pool, opts.p1AgentId, opts.p2AgentId, this.nextInt);
+      p1TeamLabel = this.resolvePoolLabelSpec(ladder, opts.p1TeamSpec, sampled.t1Label);
+      p2TeamLabel = this.resolvePoolLabelSpec(ladder, opts.p2TeamSpec, sampled.t2Label);
+    }
+
+    const defaultTieRate = ladder.team === 'harvested' ? 0.025 : 0;
+    const tieRate = opts.tieRate ?? defaultTieRate;
+    const e1 = this.getExpectedRating(opts.p1VersionId, opts.p1Slug, ladder.id);
+    const e2 = this.getExpectedRating(opts.p2VersionId, opts.p2Slug, ladder.id);
+    const bias = this.getMatchupBiasElo(
+      opts.p1VersionId,
+      opts.p1Slug,
+      opts.p2VersionId,
+      opts.p2Slug,
+      opts.p2Version
+    );
+
+    let g1: ratings.GameOutcome;
+    let g2: ratings.GameOutcome;
+    if (opts.forcedOutcome) {
+      g1 = opts.forcedOutcome[0] as ratings.GameOutcome;
+      g2 = opts.forcedOutcome[1] as ratings.GameOutcome;
+    } else {
+      g1 = this.sampleDavidsonSingleGame(e1, e2, bias, tieRate);
+      g2 = this.sampleDavidsonSingleGame(e1, e2, bias, tieRate);
+    }
+    const category = normalizeMatchCategory(g1, g2);
+
+    const pickReason = (outcome: ratings.GameOutcome, override?: string): string => {
+      if (override) return override;
+      if (outcome === 'T') return 'tie_100_turns';
+      if (opts.faultRate && opts.faultRate > 0 && this.nextFloat() < opts.faultRate) {
+        return this.nextInt(2) === 0 ? 'timeout' : 'crash';
+      }
+      return 'win';
+    };
+
+    const g1Reason = pickReason(g1, opts.g1Reason);
+    const g2Reason = pickReason(g2, opts.g2Reason);
+    const sampleTurns = (outcome: ratings.GameOutcome) =>
+      outcome === 'T' ? 100 : (ladder.slot === 'vgc' ? 7 + this.nextInt(9) : 20 + this.nextInt(28));
+    const g1Turns = sampleTurns(g1);
+    const g2Turns = sampleTurns(g2);
+
+    this.state.matchSeq++;
+    this.state.lastMatchNumberByLadder[ladder.id] = this.state.matchSeq;
+    const prefix = ladder.slot === 'vgc' ? 'vgc' : ladder.format;
+    const matchId = `${prefix}-${String(this.state.matchSeq).padStart(7, '0')}`;
+
+    const p1Ram = 720 + ((opts.p1VersionId * 47) % 980);
+    const p2Ram = 720 + ((opts.p2VersionId * 53) % 980);
+    const p1TurnMillis = 230 + ((opts.p1VersionId * 29) % 240);
+    const p2TurnMillis = 240 + ((opts.p2VersionId * 31) % 240);
+
+    if (opts.emitHeartbeats && this.serverUrl) {
+      const client = this.getArenaClient();
+      const inc = arena.turnIncrementSeconds(ladder.format);
+      this.state.heartbeatSeq++;
+      await client.sendHeartbeat({
+        heartbeatSeq: this.state.heartbeatSeq,
+        matchId,
+        ladderId: ladder.id,
+        format: ladder.format,
+        game: 1,
+        turn: Math.min(12, g1Turns),
+        activeSlot: 'p1',
+        turnStartedAt: opts.completedAt,
+        turnBudgetSeconds: 145,
+        incrementSeconds: inc,
+        p1: {
+          slug: opts.p1Slug,
+          name: opts.p1Name,
+          version: opts.p1Version,
+          bankSeconds: 145,
+          lastTurnMillis: p1TurnMillis,
+          meanTurnMillis: p1TurnMillis,
+          ram: p1Ram,
+          ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
+        },
+        p2: {
+          slug: opts.p2Slug,
+          name: opts.p2Name,
+          version: opts.p2Version,
+          bankSeconds: 142,
+          lastTurnMillis: p2TurnMillis,
+          meanTurnMillis: p2TurnMillis,
+          ram: p2Ram,
+          ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
+        },
+      });
+
+      this.state.heartbeatSeq++;
+      await client.sendHeartbeat({
+        heartbeatSeq: this.state.heartbeatSeq,
+        matchId,
+        ladderId: ladder.id,
+        format: ladder.format,
+        game: 2,
+        turn: Math.min(15, g2Turns),
+        activeSlot: 'p2',
+        turnStartedAt: opts.completedAt,
+        turnBudgetSeconds: 136,
+        incrementSeconds: inc,
+        game1Summary: {
+          ...(g1 === 'W'
+            ? {winnerSlot: 'p1' as const}
+            : g1 === 'L'
+              ? {winnerSlot: 'p2' as const}
+              : {}),
+          turns: g1Turns,
+        },
+        p1: {
+          slug: opts.p1Slug,
+          name: opts.p1Name,
+          version: opts.p1Version,
+          bankSeconds: 138,
+          lastTurnMillis: p1TurnMillis,
+          meanTurnMillis: p1TurnMillis,
+          ram: p1Ram,
+          ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
+        },
+        p2: {
+          slug: opts.p2Slug,
+          name: opts.p2Name,
+          version: opts.p2Version,
+          bankSeconds: 136,
+          lastTurnMillis: p2TurnMillis,
+          meanTurnMillis: p2TurnMillis,
+          ram: p2Ram,
+          ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
+        },
+      });
+    }
+
+    const matchPayload = {
+      id: matchId,
+      ladderId: ladder.id,
+      p1VersionId: opts.p1VersionId,
+      p2VersionId: opts.p2VersionId,
+      seed: `100,200,300,${this.state.matchSeq}`,
+      ...(p1TeamLabel !== undefined ? {p1TeamLabel} : {}),
+      ...(p2TeamLabel !== undefined ? {p2TeamLabel} : {}),
+      game1Outcome: g1,
+      game2Outcome: g2,
+      category,
+      game1Turns: g1Turns,
+      game2Turns: g2Turns,
+      game1EndReason: g1Reason,
+      game2EndReason: g2Reason,
+      p1PeakRam: p1Ram,
+      p2PeakRam: p2Ram,
+      p1Game1BankSeconds: 95 + this.nextInt(55),
+      p1Game2BankSeconds: 90 + this.nextInt(55),
+      p2Game1BankSeconds: 92 + this.nextInt(55),
+      p2Game2BankSeconds: 88 + this.nextInt(55),
+      p1MeanTurnMillis: p1TurnMillis,
+      p2MeanTurnMillis: p2TurnMillis,
+      completedAt: opts.completedAt,
+    };
+
+    const archivedLadder = this.serverUrl
+      ? (await this.getArenaClient().completeMatch({match: matchPayload})).archivedLadder
+      : this.db.recordCompletedMatch({match: matchPayload}).archivedLadder;
+    if (archivedLadder) {
+      this.syncLadderFileStatuses();
+    }
+    this.state.featuredBattleId = matchId;
+    return {matchId, archivedLadder};
+  }
+
+  async playNextScheduledMatch(opts: {
+    ladders?: db.LadderRow[];
+    completedAt?: number;
+    exploit?: number;
+    tieRate?: number;
+    faultRate?: number;
+    emitHeartbeats?: boolean;
+  } = {}): Promise<{matchId: string; ladderId: string; archivedLadder: boolean} | undefined> {
+    const targetLadders = opts.ladders ?? this.db.getPlayableLadders();
+    const candidates: Array<{
+      ladder: db.LadderRow;
+      state: ratings.LadderMatchState;
+      entries: db.LeaderboardEntryView[];
+    }> = [];
+    for (const l of targetLadders) {
+      const refreshed = this.db.getLadder(l.id);
+      if (!refreshed) continue;
+      const built = this.buildCandidateLadderState(refreshed);
+      if (built) candidates.push({ladder: refreshed, ...built});
+    }
+    if (!candidates.length) return undefined;
+
+    const choice = ratings.selectNextArenaMatch(
+      candidates.map(c => c.state),
+      this.state.matchSeq + 1,
+      opts.exploit ?? 0.45
+    );
+    const chosenLadder = candidates.find(c => c.ladder.id === choice.ladderId)!;
+    const e1 = chosenLadder.entries[choice.agentI];
+    const e2 = chosenLadder.entries[choice.agentJ];
+
+    const at = opts.completedAt ?? this.state.now;
+    const res = await this.executeMatchPair({
+      ladder: chosenLadder.ladder,
+      p1VersionId: e1.versionId,
+      p1AgentId: e1.agentId,
+      p1Slug: e1.agentSlug,
+      p1Name: e1.agentName,
+      p1Version: e1.version,
+      p2VersionId: e2.versionId,
+      p2AgentId: e2.agentId,
+      p2Slug: e2.agentSlug,
+      p2Name: e2.agentName,
+      p2Version: e2.version,
+      completedAt: at,
+      tieRate: opts.tieRate,
+      faultRate: opts.faultRate,
+      emitHeartbeats: opts.emitHeartbeats,
+    });
+    return {
+      matchId: res.matchId,
+      ladderId: chosenLadder.ladder.id,
+      archivedLadder: res.archivedLadder,
+    };
+  }
+
+  private async playBalancedMatch(opts: {
+    ladders?: db.LadderRow[];
+    completedAt: number;
+    tieRate?: number;
+    faultRate?: number;
+    emitHeartbeats?: boolean;
+  }): Promise<boolean> {
+    const targetLadders = (opts.ladders ?? this.db.getPlayableLadders()).filter(l => {
+      const cur = this.db.getLadder(l.id);
+      if (!cur || (cur.status !== 'active' && cur.status !== 'settling')) return false;
+      const active = this.db.getLeaderboardEntries(cur.id).filter(e => e.role !== 'retired');
+      return new Set(active.map(e => e.agentId)).size >= cur.min;
+    });
+    if (targetLadders.length === 0) return false;
+
+    const chosenLadder = targetLadders.slice().sort(
+      (a, b) =>
+        (this.state.lastMatchNumberByLadder[a.id] ?? 0) -
+        (this.state.lastMatchNumberByLadder[b.id] ?? 0)
+    )[0];
+    const active = this.db.getLeaderboardEntries(chosenLadder.id).filter(e => e.role !== 'retired');
+    const pairCounts = new Map<string, number>();
+    for (const p of this.db.getPairAggregatesForLadder(chosenLadder.id)) {
+      pairCounts.set(
+        `${p.lowVersionId}:${p.highVersionId}`,
+        p.ww + p.wt + p.split + p.tl + p.ll
+      );
+    }
+
+    let bestPair: [typeof active[number], typeof active[number]] | undefined;
+    let bestScore = -1;
+    for (let i = 0; i < active.length; i++) {
+      for (let j = i + 1; j < active.length; j++) {
+        const a = active[i];
+        const b = active[j];
+        const low = Math.min(a.versionId, b.versionId);
+        const high = Math.max(a.versionId, b.versionId);
+        const mij = pairCounts.get(`${low}:${high}`) ?? 0;
+        const diff = (a.elo - b.elo) / ratings.ELO_SCALE;
+        const p = 1 / (1 + Math.exp(-diff));
+        const score = (0.35 + 4 * p * (1 - p)) / ((1 + mij) * (1 + mij));
+        if (score > bestScore) {
+          bestScore = score;
+          bestPair = [a, b];
+        }
+      }
+    }
+    if (!bestPair) return false;
+
+    const [e1, e2] = bestPair;
+    await this.executeMatchPair({
+      ladder: chosenLadder,
+      p1VersionId: e1.versionId,
+      p1AgentId: e1.agentId,
+      p1Slug: e1.agentSlug,
+      p1Name: e1.agentName,
+      p1Version: e1.version,
+      p2VersionId: e2.versionId,
+      p2AgentId: e2.agentId,
+      p2Slug: e2.agentSlug,
+      p2Name: e2.agentName,
+      p2Version: e2.version,
+      completedAt: opts.completedAt,
+      tieRate: opts.tieRate,
+      faultRate: opts.faultRate,
+      emitHeartbeats: opts.emitHeartbeats,
+    });
+    return true;
+  }
+
+  private async cmdPlay(cmd: Command) {
+    const count = cmd.positional[1] !== undefined ? Number(cmd.positional[1]) : 1;
+    if (!Number.isFinite(count) || count < 0) throw new Error('Usage: play [<count>] [options]');
+    const ladderFlag = getFlag(cmd, 'ladder');
+    const overFlag = getFlag(cmd, 'over');
+    const tieRateFlag = getFlag(cmd, 'tie-rate');
+    const faultRateFlag = getFlag(cmd, 'fault-rate');
+    const exploitFlag = getFlag(cmd, 'exploit');
+    const balanced = hasFlag(cmd, 'balanced');
+    const emitHeartbeats = hasFlag(cmd, 'heartbeats');
+
+    const ladders = ladderFlag ? this.resolveLadders(ladderFlag) : undefined;
+    const startAt = this.state.now;
+    const spanSeconds = overFlag ? parseDurationSeconds(overFlag) : 0;
+    const exploit = exploitFlag !== undefined ? Number(exploitFlag) : 0.45;
+    const tieRate = tieRateFlag !== undefined ? Number(tieRateFlag) : undefined;
+    const faultRate = faultRateFlag !== undefined ? Number(faultRateFlag) : undefined;
+
+    for (let i = 0; i < count; i++) {
+      const stepAt = spanSeconds > 0
+        ? startAt + Math.floor(((i + 1) * spanSeconds) / count)
+        : this.state.now + 1;
+      this.setNow(stepAt);
+      const played = balanced
+        ? await this.playBalancedMatch({
+          ladders,
+          completedAt: stepAt,
+          tieRate,
+          faultRate,
+          emitHeartbeats,
+        })
+        : Boolean(await this.playNextScheduledMatch({
+          ladders,
+          completedAt: stepAt,
+          exploit,
+          tieRate,
+          faultRate,
+          emitHeartbeats,
+        }));
+      if (!played) break;
+    }
+  }
+
+  private async cmdSettle(cmd: Command) {
+    const targetSpec = cmd.positional[1] ?? 'all';
+    const maxSteps = Number(getFlag(cmd, 'max') ?? 8000);
+    const overFlag = getFlag(cmd, 'over');
+    const tieRateFlag = getFlag(cmd, 'tie-rate');
+    const emitHeartbeats = hasFlag(cmd, 'heartbeats');
+    const divisor = Math.max(1, Math.min(maxSteps, 250));
+    const stepSeconds = overFlag
+      ? Math.max(1, Math.floor(parseDurationSeconds(overFlag) / divisor))
+      : 60;
+    const tieRate = tieRateFlag !== undefined ? Number(tieRateFlag) : undefined;
+
+    for (let step = 0; step < maxSteps; step++) {
+      const unsettleCandidates: Array<{
+        ladder: db.LadderRow;
+        active: db.LeaderboardEntryView[];
+        unsettled: db.LeaderboardEntryView[];
+      }> = [];
+
+      for (const l of this.resolveLadders(targetSpec)) {
+        const cur = this.db.getLadder(l.id);
+        if (!cur || (cur.status !== 'active' && cur.status !== 'settling')) continue;
+        const active = this.db.getLeaderboardEntries(cur.id).filter(e => e.role !== 'retired');
+        if (new Set(active.map(e => e.agentId)).size < cur.min) continue;
+        const unsettled = active.filter(e => e.settledAt === undefined);
+        if (unsettled.length > 0) {
+          unsettleCandidates.push({ladder: cur, active, unsettled});
+        }
+      }
+      if (unsettleCandidates.length === 0) break;
+
+      unsettleCandidates.sort(
+        (a, b) =>
+          (this.state.lastMatchNumberByLadder[a.ladder.id] ?? 0) -
+          (this.state.lastMatchNumberByLadder[b.ladder.id] ?? 0)
+      );
+      const chosen = unsettleCandidates[0];
+      const u = chosen.unsettled.slice().sort((a, b) => {
+        const aUnder = a.matches < 25 ? 1 : 0;
+        const bUnder = b.matches < 25 ? 1 : 0;
+        if (aUnder !== bUnder) return bUnder - aUnder;
+        if (aUnder) return a.matches - b.matches;
+        return b.se - a.se;
+      })[0];
+
+      const pairCounts = new Map<string, number>();
+      for (const p of this.db.getPairAggregatesForLadder(chosen.ladder.id)) {
+        pairCounts.set(
+          `${p.lowVersionId}:${p.highVersionId}`,
+          p.ww + p.wt + p.split + p.tl + p.ll
+        );
+      }
+
+      let bestOpp: typeof u | undefined;
+      let bestScore = -1;
+      for (const cand of chosen.active) {
+        if (cand.versionId === u.versionId) continue;
+        const low = Math.min(u.versionId, cand.versionId);
+        const high = Math.max(u.versionId, cand.versionId);
+        const mij = pairCounts.get(`${low}:${high}`) ?? 0;
+        const diff = (u.elo - cand.elo) / ratings.ELO_SCALE;
+        const p = 1 / (1 + Math.exp(-diff));
+        const unsettleBoost = cand.settledAt === undefined ? 1.5 : 1.0;
+        const score = ((0.30 + 4 * p * (1 - p)) * unsettleBoost) / (1 + mij * mij);
+        if (score > bestScore) {
+          bestScore = score;
+          bestOpp = cand;
+        }
+      }
+      if (!bestOpp) break;
+
+      this.setNow(this.state.now + stepSeconds);
+      const isLastCheck = step === maxSteps - 1;
+      await this.executeMatchPair({
+        ladder: chosen.ladder,
+        p1VersionId: u.versionId,
+        p1AgentId: u.agentId,
+        p1Slug: u.agentSlug,
+        p1Name: u.agentName,
+        p1Version: u.version,
+        p2VersionId: bestOpp.versionId,
+        p2AgentId: bestOpp.agentId,
+        p2Slug: bestOpp.agentSlug,
+        p2Name: bestOpp.agentName,
+        p2Version: bestOpp.version,
+        completedAt: this.state.now,
+        tieRate,
+        emitHeartbeats: emitHeartbeats && isLastCheck,
+      });
+    }
+
+    if (emitHeartbeats && this.serverUrl) {
+      const ladders = this.resolveLadders(targetSpec);
+      this.setNow(this.state.now + stepSeconds);
+      await this.playNextScheduledMatch({
+        ladders,
+        completedAt: this.state.now,
+        exploit: 0.45,
+        tieRate,
+        emitHeartbeats: true,
+      });
+    }
+  }
+
+  private async cmdMatch(cmd: Command) {
+    const ladderSpec = cmd.positional[1];
+    const p1Spec = cmd.positional[2];
+    const p2Spec = cmd.positional[3];
+    if (!ladderSpec || !p1Spec || !p2Spec) {
+      throw new Error('Usage: match <ladder> <p1>[@<ver>] <p2>[@<ver>] [options]');
+    }
+    const ladder = this.resolveLadders(ladderSpec)[0];
+    const p1 = this.resolveAgentVersion(p1Spec, ladder.id);
+    const p2 = this.resolveAgentVersion(p2Spec, ladder.id);
+    const count = Number(getFlag(cmd, 'count') ?? 1);
+    const overFlag = getFlag(cmd, 'over');
+    const span = overFlag ? parseDurationSeconds(overFlag) : 0;
+    const startAt = this.state.now;
+
+    const outcomeRaw = getFlag(cmd, 'outcome')?.toUpperCase();
+    const forcedOutcome = outcomeRaw && outcomeRaw !== 'AUTO'
+      ? parseExplicitOutcome(outcomeRaw)
+      : undefined;
+    const reason = getFlag(cmd, 'reason');
+    const g1Reason = getFlag(cmd, 'g1-reason') ?? reason;
+    const g2Reason = getFlag(cmd, 'g2-reason') ?? reason;
+    const tieRateFlag = getFlag(cmd, 'tie-rate');
+    const tieRate = tieRateFlag !== undefined ? Number(tieRateFlag) : undefined;
+    const p1TeamSpec = getFlag(cmd, 'p1-team');
+    const p2TeamSpec = getFlag(cmd, 'p2-team');
+    const emitHeartbeats = hasFlag(cmd, 'heartbeats');
+
+    for (let i = 0; i < count; i++) {
+      const stepAt = span > 0
+        ? startAt + Math.floor(((i + 1) * span) / count)
+        : this.state.now + 1;
+      this.setNow(stepAt);
+      await this.executeMatchPair({
+        ladder,
+        p1VersionId: p1.id,
+        p1AgentId: p1.agentId,
+        p1Slug: p1.agentSlug,
+        p1Name: p1.agentName,
+        p1Version: p1.version,
+        p2VersionId: p2.id,
+        p2AgentId: p2.agentId,
+        p2Slug: p2.agentSlug,
+        p2Name: p2.agentName,
+        p2Version: p2.version,
+        completedAt: stepAt,
+        tieRate,
+        forcedOutcome,
+        g1Reason,
+        g2Reason,
+        p1TeamSpec,
+        p2TeamSpec,
+        emitHeartbeats,
+      });
+    }
+  }
+
+  private async cmdLive(cmd: Command) {
+    const sub = cmd.positional[1]?.toLowerCase();
+    if (sub === 'idle') {
+      this.state.liveMatch = undefined;
+      this.state.liveStale = false;
+      if (this.serverUrl) {
+        await this.getArenaClient().sendHeartbeat({idle: true});
+      }
+      return;
+    }
+    if (sub === 'stale') {
+      this.state.liveMatch = undefined;
+      this.state.liveStale = true;
+      return;
+    }
+    if (sub === 'match') {
+      const ladderSpec = cmd.positional[2];
+      const p1Spec = cmd.positional[3];
+      const p2Spec = cmd.positional[4];
+      if (!ladderSpec || !p1Spec || !p2Spec) {
+        throw new Error('Usage: live match <ladder> <p1>[@<ver>] <p2>[@<ver>] [options]');
+      }
+      const ladder = this.resolveLadders(ladderSpec)[0];
+      const p1 = this.resolveAgentVersion(p1Spec, ladder.id);
+      const p2 = this.resolveAgentVersion(p2Spec, ladder.id);
+      const game: 1 | 2 = Number(getFlag(cmd, 'game') ?? 1) === 2 ? 2 : 1;
+      const turn = Number(getFlag(cmd, 'turn') ?? 9);
+      const activeSlot: 'p1' | 'p2' = getFlag(cmd, 'active') === 'p2' ? 'p2' : 'p1';
+      const g1WinnerRaw = getFlag(cmd, 'g1-winner') ?? 'p1';
+      const g1Winner: 'p1' | 'p2' | undefined =
+        g1WinnerRaw === 'p2' ? 'p2' : g1WinnerRaw === 'tie' ? undefined : 'p1';
+      const g1Turns = Number(getFlag(cmd, 'g1-turns') ?? 11);
+
+      let p1Team: string | undefined;
+      let p2Team: string | undefined;
+      if (ladder.team === 'pools') {
+        const pool = this.buildPoolForLadder(ladder);
+        const sampled = teams.samplePoolsPair(pool, p1.agentId, p2.agentId, this.nextInt);
+        p1Team = this.resolvePoolLabelSpec(ladder, getFlag(cmd, 'p1-team'), sampled.t1Label);
+        p2Team = this.resolvePoolLabelSpec(ladder, getFlag(cmd, 'p2-team'), sampled.t2Label);
+      }
+
+      this.state.heartbeatSeq++;
+      const matchId = getFlag(cmd, 'id') ?? `${ladder.slot}-live-${this.state.heartbeatSeq}`;
+      const inc = arena.turnIncrementSeconds(ladder.format);
+      const liveMatch: arena.LiveMatch = {
+        heartbeatSeq: this.state.heartbeatSeq,
+        matchId,
+        ladderId: ladder.id,
+        slot: ladder.slot,
+        format: ladder.format,
+        game,
+        turn,
+        activeSlot,
+        turnStartedAt: this.state.now - 4,
+        turnBudgetSeconds: 138,
+        incrementSeconds: inc,
+        ...(game === 2 ? {game1Summary: {winnerSlot: g1Winner, turns: g1Turns}} : {}),
+        p1: {
+          slug: p1.agentSlug,
+          name: p1.agentName,
+          version: p1.version,
+          bankSeconds: Number(getFlag(cmd, 'p1-bank') ?? 142),
+          lastTurnMillis: 290,
+          meanTurnMillis: 280,
+          ram: p1.smokePeakRam ?? 890,
+          ...(p1Team ? {team: p1Team} : {}),
+        },
+        p2: {
+          slug: p2.agentSlug,
+          name: p2.agentName,
+          version: p2.version,
+          bankSeconds: Number(getFlag(cmd, 'p2-bank') ?? 128),
+          lastTurnMillis: 340,
+          meanTurnMillis: 315,
+          ram: p2.smokePeakRam ?? 1420,
+          ...(p2Team ? {team: p2Team} : {}),
+        },
+      };
+
+      this.state.liveMatch = liveMatch;
+      this.state.liveStale = false;
+      if (this.serverUrl) {
+        await this.getArenaClient().sendHeartbeat(liveMatch);
+      }
+      return;
+    }
+    throw new Error(`Unknown live subcommand "${String(sub)}"`);
+  }
+
+  private recomputeTournamentStandings(tournamentId: string, assignFinalRanks = false) {
+    const entrants = this.db.getTournamentEntrants(tournamentId)
+      .slice()
+      .sort((a, b) => a.seed - b.seed || a.versionId - b.versionId);
+    if (!entrants.length) return;
+
+    const allGames = this.db.getTournamentGames(tournamentId, 100000)
+      .slice()
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    const M = entrants.length;
+    const idxByVer = new Map<number, number>();
+    entrants.forEach((e, idx) => idxByVer.set(e.versionId, idx));
+
+    const wins = new Int32Array(M);
+    const losses = new Int32Array(M);
+    const ties = new Int32Array(M);
+    const pairScore = new Float64Array(M * M);
+    const sfScore = new Float64Array(M);
+    const singleGames: SingleGameRecord[] = [];
+
+    for (const g of allGames) {
+      if (!g.outcome) continue;
+      const i = idxByVer.get(g.p1VersionId);
+      const j = idxByVer.get(g.p2VersionId);
+      if (i === undefined || j === undefined) continue;
+      singleGames.push({i, j, outcome: g.outcome});
+
+      if (g.stage === 'Superfinal') {
+        if (g.outcome === 'W') {
+          sfScore[i] += 1;
+        } else if (g.outcome === 'L') {
+          sfScore[j] += 1;
+        } else {
+          sfScore[i] += 0.5;
+          sfScore[j] += 0.5;
+        }
+        continue;
+      }
+
+      if (g.outcome === 'W') {
+        wins[i]++;
+        losses[j]++;
+        pairScore[i * M + j] += 1;
+      } else if (g.outcome === 'L') {
+        losses[i]++;
+        wins[j]++;
+        pairScore[j * M + i] += 1;
+      } else {
+        ties[i]++;
+        ties[j]++;
+        pairScore[i * M + j] += 0.5;
+        pairScore[j * M + i] += 0.5;
+      }
+    }
+
+    const points = new Float64Array(M);
+    for (let i = 0; i < M; i++) {
+      points[i] = wins[i] + 0.5 * ties[i];
+    }
+    const sb = new Float64Array(M);
+    for (let i = 0; i < M; i++) {
+      let total = 0;
+      for (let j = 0; j < M; j++) {
+        if (i !== j) total += pairScore[i * M + j] * points[j];
+      }
+      sb[i] = Math.round(total * 100) / 100;
+    }
+
+    const ratingRes = computeSingleGameTournamentRatings(M, singleGames, -1, 1575);
+    const order = entrants.map((_, idx) => idx).sort((a, b) => (
+      points[b] - points[a] ||
+      sb[b] - sb[a] ||
+      ratingRes.elo[b] - ratingRes.elo[a] ||
+      entrants[a].seed - entrants[b].seed
+    ));
+
+    if (order.length >= 2 && (sfScore[order[0]] > 0 || sfScore[order[1]] > 0)) {
+      if (sfScore[order[1]] > sfScore[order[0]]) {
+        const tmp = order[0];
+        order[0] = order[1];
+        order[1] = tmp;
+      }
+    }
+
+    const rankByIdx = new Int32Array(M);
+    order.forEach((entIdx, rankZero) => {
+      rankByIdx[entIdx] = rankZero + 1;
+    });
+
+    for (let i = 0; i < M; i++) {
+      const ent = entrants[i];
+      this.db.upsertTournamentEntrant({
+        tournamentId,
+        agentId: ent.agentId,
+        versionId: ent.versionId,
+        seed: ent.seed,
+        finalRank: assignFinalRanks ? rankByIdx[i] : ent.finalRank,
+        elo: singleGames.length > 0 ? ratingRes.elo[i] : ent.elo,
+        se: singleGames.length > 0 ? ratingRes.se[i] : ent.se,
+        gameWins: wins[i],
+        gameLosses: losses[i],
+        gameTies: ties[i],
+        points: points[i],
+        sonnebornBerger: sb[i],
+      });
+    }
+  }
+
+  private async cmdTournament(cmd: Command) {
+    const sub = cmd.positional[1]?.toLowerCase();
+    if (sub === 'create') {
+      const id = cmd.positional[2];
+      const name = getFlag(cmd, 'name');
+      const format = getFlag(cmd, 'format');
+      if (!id || !name || !format) {
+        throw new Error('Usage: tournament create <id> --name <title> --format <fmt> [options]');
+      }
+      const startsRaw = getFlag(cmd, 'starts');
+      const startsAt = startsRaw
+        ? parseTimestampSpec(startsRaw, this.state.now, this.state.anchorNow)
+        : this.state.now + 7 * 86400;
+      const status = (getFlag(cmd, 'status') ?? 'scheduled') as db.TournamentStatus;
+      this.db.upsertTournament({
+        id,
+        name,
+        format,
+        rulesJson: getFlag(cmd, 'rules') ?? '[]',
+        gamesPerMatchup: Number(getFlag(cmd, 'games') ?? 8),
+        batchSize: Number(getFlag(cmd, 'batch') ?? 10),
+        parallelTables: Number(getFlag(cmd, 'tables') ?? 2),
+        hardware: getFlag(cmd, 'hardware') ?? 'GCP L4 Spot · 24 vCPU · 48 GB RAM',
+        status,
+        startsAt,
+        completedAt: status === 'completed' ? this.state.now : undefined,
+      });
+      return;
+    }
+
+    if (sub === 'enter') {
+      const id = cmd.positional[2];
+      if (!id || cmd.positional.length < 4) {
+        throw new Error('Usage: tournament enter <id> <agent>[@<ver>][=<rating>] ...');
+      }
+      const tour = this.db.getTournament(id);
+      if (!tour) throw new Error(`Unknown tournament "${id}"`);
+
+      for (let i = 3; i < cmd.positional.length; i++) {
+        const raw = cmd.positional[i];
+        const eq = raw.indexOf('=');
+        const verSpec = eq > 0 ? raw.slice(0, eq) : raw;
+        const eloVal = eq > 0 ? Number(raw.slice(eq + 1)) : undefined;
+
+        let resolved: {id: number; agentId: number; agentSlug: string; version: string};
+        try {
+          resolved = this.resolveAgentVersion(verSpec);
+        } catch {
+          const atIdx = verSpec.lastIndexOf('@');
+          if (atIdx > 0) {
+            const agentPart = verSpec.slice(0, atIdx);
+            const verLabel = verSpec.slice(atIdx + 1);
+            await this.execCommand(parseCommandTokens([
+              'submit',
+              agentPart,
+              verLabel,
+              '--tournament',
+              id,
+              '--pkg',
+              getFlag(cmd, 'pkg') ?? 'oci',
+              ...(eloVal !== undefined ? ['--rating', String(eloVal)] : []),
+              ...(getFlag(cmd, 'by') ? ['--by', getFlag(cmd, 'by')!] : []),
+            ]));
+            resolved = this.resolveAgentVersion(verSpec);
+          } else {
+            throw new Error(`Cannot resolve entrant "${verSpec}" for tournament "${id}"`);
+          }
+        }
+
+        const existingEntrants = this.db.getTournamentEntrants(id);
+        if (!existingEntrants.some(e => e.versionId === resolved.id)) {
+          this.db.upsertTournamentEntrant({
+            tournamentId: id,
+            agentId: resolved.agentId,
+            versionId: resolved.id,
+            seed: existingEntrants.length + 1,
+            elo: 1500,
+            se: 350,
+            gameWins: 0,
+            gameLosses: 0,
+            gameTies: 0,
+            points: 0,
+            sonnebornBerger: 0,
+          });
+        }
+        if (eloVal !== undefined && Number.isFinite(eloVal)) {
+          this.setExpectedRating(resolved.id, resolved.agentSlug, `tournament:${id}`, eloVal);
+        }
+      }
+      return;
+    }
+
+    if (sub === 'seed') {
+      const id = cmd.positional[2];
+      if (!id) throw new Error('Usage: tournament seed <id>');
+      this.db.seedTournamentEntrants(id);
+      return;
+    }
+
+    if (sub === 'start') {
+      const id = cmd.positional[2];
+      if (!id) throw new Error('Usage: tournament start <id>');
+      const existingGames = this.db.getTournamentGames(id, 1);
+      if (existingGames.length === 0) {
+        this.db.seedTournamentEntrants(id);
+      }
+      this.db.setTournamentStatus(id, 'running', this.state.now);
+      return;
+    }
+
+    if (sub === 'play') {
+      const id = cmd.positional[2];
+      if (!id) throw new Error('Usage: tournament play <id> [--cycles <c>|--games <n>|--all]');
+      const tour = this.db.getTournament(id);
+      if (!tour) throw new Error(`Unknown tournament "${id}"`);
+      if (tour.status === 'scheduled') {
+        this.db.setTournamentStatus(id, 'running', this.state.now);
+      }
+
+      const entrants = this.db.getTournamentEntrants(id)
+        .slice()
+        .sort((a, b) => a.seed - b.seed || a.versionId - b.versionId);
+      if (entrants.length < 2) return;
+
+      const bergerPairs = buildBergerPairings(entrants.length);
+      const totalCycles = tour.gamesPerMatchup;
+      const fullSchedule: Array<{
+        seq: number;
+        cycle: number;
+        p1: typeof entrants[number];
+        p2: typeof entrants[number];
+      }> = [];
+      let seq = 0;
+      for (let c = 1; c <= totalCycles; c++) {
+        for (const [idxA, idxB] of bergerPairs) {
+          seq++;
+          const swap = c % 2 === 0;
+          fullSchedule.push({
+            seq,
+            cycle: c,
+            p1: swap ? entrants[idxB] : entrants[idxA],
+            p2: swap ? entrants[idxA] : entrants[idxB],
+          });
+        }
+      }
+
+      const existingRrCount = (this.db.db.prepare(
+        `SELECT COUNT(*) AS cnt FROM tournament_games
+         WHERE tournament_id = ? AND stage = 'Round Robin'`
+      ).get(id) as {cnt: number}).cnt;
+
+      const cyclesFlag = getFlag(cmd, 'cycles');
+      const gamesFlag = getFlag(cmd, 'games');
+      const playAll = hasFlag(cmd, 'all') || (!cyclesFlag && !gamesFlag);
+      const gamesToPlay = playAll
+        ? Math.max(0, fullSchedule.length - existingRrCount)
+        : cyclesFlag !== undefined
+          ? Number(cyclesFlag) * bergerPairs.length
+          : Number(gamesFlag ?? 1);
+
+      const slice = fullSchedule.slice(existingRrCount, existingRrCount + gamesToPlay);
+      const overFlag = getFlag(cmd, 'over');
+      const span = overFlag ? parseDurationSeconds(overFlag) : 0;
+      const startAt = this.state.now;
+      const tieRate = Number(getFlag(cmd, 'tie-rate') ?? (tour.format.includes('vgc') ? 0 : 0.03));
+      const writeLogs = hasFlag(cmd, 'logs');
+      const idPrefix = getFlag(cmd, 'id-prefix') ?? `t${id}`;
+
+      const getEntrantExpected = (ent: typeof entrants[number]): number => {
+        const direct = this.state.expectedRatings[`v:${ent.versionId}:tournament:${id}`] ??
+          this.state.expectedRatings[`a:${ent.agentSlug}:tournament:${id}`];
+        if (direct !== undefined) return direct;
+        const formatLadder = this.db.getLadders().find(l => l.format === tour.format);
+        if (formatLadder) {
+          return this.getExpectedRating(ent.versionId, ent.agentSlug, formatLadder.id);
+        }
+        return this.getExpectedRating(ent.versionId, ent.agentSlug, '*');
+      };
+
+      for (let k = 0; k < slice.length; k++) {
+        const item = slice[k];
+        const at = span > 0
+          ? startAt + Math.floor(((k + 1) * span) / Math.max(1, slice.length))
+          : this.state.now + 1;
+        this.setNow(at);
+
+        const e1 = getEntrantExpected(item.p1);
+        const e2 = getEntrantExpected(item.p2);
+        const outcome = this.sampleDavidsonSingleGame(e1, e2, 0, tieRate);
+        const p1Team = samplePackedTournamentTeam(tour.format, item.p1.seed + item.cycle);
+        const p2Team = samplePackedTournamentTeam(tour.format, item.p2.seed + item.cycle + 1);
+        const gameId = `${idPrefix}-rr-${item.seq}`;
+        const isVgc = tour.format.includes('vgc');
+        this.db.upsertTournamentGame({
+          id: gameId,
+          tournamentId: id,
+          stage: 'Round Robin',
+          cycle: item.cycle,
+          matchupGame: item.cycle,
+          p1VersionId: item.p1.versionId,
+          p2VersionId: item.p2.versionId,
+          seed: `10,20,${id},${item.seq}`,
+          p1Team,
+          p2Team,
+          outcome,
+          endReason: outcome === 'T' ? 'tie_100_turns' : 'win',
+          turns: outcome === 'T' ? 100 : (isVgc ? 8 + this.nextInt(9) : 24 + this.nextInt(24)),
+          p1BankSeconds: 70 + this.nextInt(50),
+          p2BankSeconds: 60 + this.nextInt(50),
+          status: 'completed',
+          completedAt: at,
+        });
+
+        if (writeLogs && this.publicDir) {
+          const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
+          fs.mkdirSync(tourDir, {recursive: true});
+          fs.writeFileSync(
+            path.join(tourDir, `${gameId}.log`),
+            buildShowdownTournamentLog({
+              format: tour.format,
+              p1Name: item.p1.agentName,
+              p2Name: item.p2.agentName,
+              p1TeamPacked: p1Team,
+              p2TeamPacked: p2Team,
+              outcome,
+            }),
+            'utf8'
+          );
+        }
+      }
+
+      this.recomputeTournamentStandings(id, false);
+
+      const sfRaw = getFlag(cmd, 'superfinal');
+      if (sfRaw !== undefined) {
+        const sfGames = sfRaw === 'true' ? 1 : Math.max(1, Number(sfRaw));
+        const ranked = this.db.getTournamentEntrants(id)
+          .slice()
+          .sort((a, b) => (
+            b.points - a.points ||
+            b.sonnebornBerger - a.sonnebornBerger ||
+            b.elo - a.elo ||
+            a.seed - b.seed
+          ));
+        if (ranked.length >= 2) {
+          const top1 = ranked[0];
+          const top2 = ranked[1];
+          for (let g = 1; g <= sfGames; g++) {
+            this.setNow(this.state.now + 60);
+            const p1 = g % 2 === 1 ? top1 : top2;
+            const p2 = g % 2 === 1 ? top2 : top1;
+            const e1 = getEntrantExpected(p1);
+            const e2 = getEntrantExpected(p2);
+            const outcome = this.sampleDavidsonSingleGame(e1, e2, 0, 0);
+            const p1Team = samplePackedTournamentTeam(tour.format, g - 1);
+            const p2Team = samplePackedTournamentTeam(tour.format, g);
+            const sfId = `${idPrefix}-sf${g}`;
+            this.db.upsertTournamentGame({
+              id: sfId,
+              tournamentId: id,
+              stage: 'Superfinal',
+              cycle: 1,
+              matchupGame: g,
+              p1VersionId: p1.versionId,
+              p2VersionId: p2.versionId,
+              seed: `10,20,30,${998 + g}`,
+              p1Team,
+              p2Team,
+              outcome,
+              endReason: 'win',
+              turns: tour.format.includes('vgc') ? 10 : 34,
+              p1BankSeconds: 88,
+              p2BankSeconds: 64,
+              status: 'completed',
+              completedAt: this.state.now,
+            });
+            if (this.publicDir) {
+              const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
+              fs.mkdirSync(tourDir, {recursive: true});
+              fs.writeFileSync(
+                path.join(tourDir, `${sfId}.log`),
+                buildShowdownTournamentLog({
+                  format: tour.format,
+                  p1Name: p1.agentName,
+                  p2Name: p2.agentName,
+                  p1TeamPacked: p1Team,
+                  p2TeamPacked: p2Team,
+                  outcome,
+                }),
+                'utf8'
+              );
+            }
+          }
+          this.recomputeTournamentStandings(id, false);
+        }
+      }
+      return;
+    }
+
+    if (sub === 'broadcast') {
+      const id = cmd.positional[2];
+      if (!id) throw new Error('Usage: tournament broadcast <id> [<p1> <p2> ... | --off]');
+      if (hasFlag(cmd, 'off')) {
+        this.state.tournamentBroadcast = undefined;
+        return;
+      }
+      const tour = this.db.getTournament(id);
+      if (!tour) throw new Error(`Unknown tournament "${id}"`);
+      const entrants = this.db.getTournamentEntrants(id);
+      const specs = cmd.positional.slice(3);
+      const pairs: Array<[{name: string; version: string}, {name: string; version: string}]> = [];
+
+      if (specs.length >= 2) {
+        for (let i = 0; i + 1 < specs.length; i += 2) {
+          const v1 = this.resolveAgentVersion(specs[i]);
+          const v2 = this.resolveAgentVersion(specs[i + 1]);
+          pairs.push([
+            {name: v1.agentName, version: v1.version},
+            {name: v2.agentName, version: v2.version},
+          ]);
+        }
+      } else if (entrants.length >= 2) {
+        pairs.push([
+          {name: entrants[0].agentName, version: entrants[0].version},
+          {name: entrants[1].agentName, version: entrants[1].version},
+        ]);
+        if (entrants.length >= 4) {
+          pairs.push([
+            {name: entrants[2].agentName, version: entrants[2].version},
+            {name: entrants[3].agentName, version: entrants[3].version},
+          ]);
+        }
+      }
+      if (!pairs.length) return;
+
+      const [mainP1, mainP2] = pairs[0];
+      const cycle = Number(getFlag(cmd, 'cycle') ?? 4);
+      const game = Number(getFlag(cmd, 'game') ?? cycle);
+      const isDoubles = tour.format.includes('vgc') || tour.format.includes('doubles');
+      const inc = arena.turnIncrementSeconds(tour.format);
+
+      this.state.tournamentBroadcast = {
+        tournamentId: id,
+        tables: pairs.map((pr, idx) => ({
+          label: `Table ${idx + 1} · ${pr[0].name} vs ${pr[1].name}`,
+        })),
+        seriesLeftHtml: `Round Robin · Cycle ${cycle} · Game ${game}`,
+        seriesRightHtml:
+          `${mainP1.name} <code>${mainP1.version}</code> vs ` +
+          `${mainP2.name} <code>${mainP2.version}</code>`,
+        p1: {name: mainP1.name, bankSeconds: 118, thinking: false, incrementSeconds: inc},
+        p2: {name: mainP2.name, bankSeconds: 104, thinking: true, incrementSeconds: inc},
+        lines: [
+          `|player|p1|${mainP1.name}|1`,
+          `|player|p2|${mainP2.name}|2`,
+          `|gametype|${isDoubles ? 'doubles' : 'singles'}`,
+          '|gen|9',
+          `|tier|${isDoubles ? '[Gen 9 Champions] VGC 2026 Reg M-C' : '[Gen 9] OU'}`,
+          '|turn|1',
+        ],
+        live: true,
+      };
+      return;
+    }
+
+    if (sub === 'complete') {
+      const id = cmd.positional[2];
+      if (!id) throw new Error('Usage: tournament complete <id> [--archive]');
+      this.recomputeTournamentStandings(id, true);
+      this.db.setTournamentStatus(id, 'completed', this.state.now);
+      if (this.state.tournamentBroadcast?.tournamentId === id) {
+        this.state.tournamentBroadcast = undefined;
+      }
+      if (hasFlag(cmd, 'archive')) {
+        const archiveBytes = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]);
+        if (this.serverUrl) {
+          await this.getArenaClient().uploadTournamentArchive(id, archiveBytes);
+        } else if (this.publicDir) {
+          const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
+          fs.mkdirSync(tourDir, {recursive: true});
+          fs.writeFileSync(path.join(tourDir, `${id}-replays.7z`), archiveBytes);
+        }
+      }
+      return;
+    }
+
+    throw new Error(`Unknown tournament subcommand "${String(sub)}"`);
+  }
+
+  private ensureWikiRepo() {
+    if (!this.wikiDir) return;
+    fs.mkdirSync(this.wikiDir, {recursive: true});
+    if (!fs.existsSync(path.join(this.wikiDir, '.git'))) {
+      execFileSync('git', ['init', '-b', 'main'], {cwd: this.wikiDir});
+      execFileSync('git', ['config', 'user.name', 'pkmn.ai'], {cwd: this.wikiDir});
+      execFileSync('git', ['config', 'user.email', 'wiki@pkmn.ai'], {cwd: this.wikiDir});
+    }
+  }
+
+  private async cmdWiki(cmd: Command) {
+    const slug = cmd.positional[1];
+    if (!slug) throw new Error('Usage: wiki <slug> (--content <djot> | --file <path>) [options]');
+    const by = getFlag(cmd, 'by') ?? 'scheibo';
+    const message = getFlag(cmd, 'message') ?? `Update ${slug}`;
+    const visibility = getFlag(cmd, 'visibility') as wiki.PageVisibility | undefined;
+    const fileFlag = getFlag(cmd, 'file');
+    const contentFlag = getFlag(cmd, 'content');
+    if (contentFlag === undefined && !fileFlag) {
+      throw new Error(`wiki "${slug}" requires --content or --file`);
+    }
+    let body = fileFlag ? fs.readFileSync(fileFlag, 'utf8') : contentFlag!;
+    if (!body.endsWith('\n')) body += '\n';
+    if (visibility && visibility !== 'public' && !body.startsWith('{% visibility:')) {
+      body = `{% visibility: ${visibility} %}\n${body}`;
+    }
+
+    const via = getFlag(cmd, 'via') ?? 'git';
+    if (via === 'http' && this.serverUrl) {
+      const cookie = await this.getDeveloperCookie(by);
+      const form = new URLSearchParams({
+        action: 'save',
+        content: body,
+        message,
+        ...(visibility ? {visibility} : {}),
+      });
+      const res = await fetch(`${this.serverUrl}/wiki/${encodeURIComponent(slug)}/edit`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          cookie,
+        },
+        body: form.toString(),
+        redirect: 'manual',
+      });
+      if (res.status >= 400) {
+        throw new Error(`POST /wiki/${slug}/edit failed (${res.status})`);
+      }
+      return;
+    }
+
+    if (!this.wikiDir) return;
+    this.ensureWikiRepo();
+    const filename = `${slug}.dj`;
+    fs.writeFileSync(path.join(this.wikiDir, filename), body, 'utf8');
+    const isoDate = new Date(this.state.now * 1000).toISOString();
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_DATE: isoDate,
+      GIT_COMMITTER_DATE: isoDate,
+    };
+    execFileSync('git', ['add', filename], {cwd: this.wikiDir, env});
+    const status = execFileSync('git', ['status', '--porcelain'], {
+      cwd: this.wikiDir,
+      encoding: 'utf8',
+    }).trim();
+    if (status) {
+      execFileSync(
+        'git',
+        ['commit', `--author=${by} <${by}@users.noreply.github.com>`, '-m', message],
+        {cwd: this.wikiDir, env}
+      );
+    }
+  }
+
+  cmdRender(): arena.LiveDocument {
+    const liveDoc = this.buildLiveDocument();
+    if (this.publicDir) {
+      render.renderArenaPages({
+        db: this.db,
+        publicDir: this.publicDir,
+        staticDir: this.staticDir,
+        avatarsDir: this.avatarsDir,
+        liveDoc,
+        tournamentBroadcast: this.state.tournamentBroadcast,
+        now: this.state.now,
+      });
+      const liveJsonPath = path.join(this.publicDir, 'api', 'live.json');
+      fs.mkdirSync(path.dirname(liveJsonPath), {recursive: true});
+      fs.writeFileSync(liveJsonPath, `${JSON.stringify(liveDoc)}\n`, 'utf8');
+    }
+    return liveDoc;
+  }
+
+  private async cmdSimulate(cmd: Command) {
+    const stepsArg = cmd.positional[1] !== undefined ? Number(cmd.positional[1]) : undefined;
+    const intervalMillis = Number(getFlag(cmd, 'interval') ?? 2500);
+    const overFlag = getFlag(cmd, 'over');
+    const isBounded = stepsArg !== undefined;
+    const totalSteps = stepsArg ?? Number.POSITIVE_INFINITY;
+    const stepTimeAdvance = overFlag && stepsArg !== undefined && stepsArg > 0
+      ? Math.max(1, Math.floor(parseDurationSeconds(overFlag) / stepsArg))
+      : 30;
+
+    const loopState = {running: true};
+    const stop = () => {
+      loopState.running = false;
+    };
+    if (!isBounded) {
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+    }
+
+    interface ActiveLiveSim {
+      ladderSlot: string;
+      p1Spec: string;
+      p2Spec: string;
+      stage: number;
+      g1Winner: 'p1' | 'p2';
+    }
+    let activeLive: ActiveLiveSim | undefined;
+
+    const runGenerated = async (commandLine: string) => {
+      this.log(`[mock] ${commandLine}`);
+      await this.execLine(commandLine);
+    };
+
+    try {
+      for (let step = 0; loopState.running && step < totalSteps; step++) {
+        if (isBounded) {
+          this.setNow(this.state.now + stepTimeAdvance);
+        } else {
+          this.setNow(Math.max(this.state.now + 1, Math.floor(Date.now() / 1000)));
+        }
+
+        const pendingCount = this.serverUrl
+          ? (await this.getArenaClient().getPendingSubmissions()).submissions.length
+          : this.db.getPendingSubmissions().length;
+
+        if (pendingCount > 0) {
+          await runGenerated('smoke all --pass');
+          if (!this.serverUrl && this.publicDir) await runGenerated('render');
+        } else if (!isBounded && activeLive) {
+          activeLive.stage++;
+          const {ladderSlot, p1Spec, p2Spec, g1Winner} = activeLive;
+          if (activeLive.stage === 1) {
+            await runGenerated(
+              `live match ${ladderSlot} ${p1Spec} ${p2Spec} ` +
+              '--game 1 --turn 14 --active p2 --p1-bank 134 --p2-bank 129'
+            );
+          } else if (activeLive.stage === 2) {
+            await runGenerated(
+              `live match ${ladderSlot} ${p1Spec} ${p2Spec} ` +
+              `--game 2 --turn 8 --active p1 --g1-winner ${g1Winner} --p1-bank 126 --p2-bank 121`
+            );
+          } else {
+            await runGenerated(`match ${ladderSlot} ${p1Spec} ${p2Spec}`);
+            await runGenerated('live idle');
+            activeLive = undefined;
+          }
+          if (!this.serverUrl && this.publicDir) await runGenerated('render');
+        } else {
+          const roll = this.nextFloat();
+          const allAgents = this.db.getAllActiveAgents();
+          const runningTour = this.db.getRunningTournament();
+
+          if (roll < 0.04 && allAgents.length < 24) {
+            const existingSlugs = new Set(allAgents.map(a => a.slug));
+            const candidateName = ORGANIC_AGENT_POOL.find(
+              n => !existingSlugs.has(slugify(n).toLowerCase())
+            );
+            if (candidateName) {
+              const slug = slugify(candidateName).toLowerCase();
+              const baseElo = 1380 + this.nextInt(320);
+              await runGenerated(`register "${candidateName}" --logo auto`);
+              const openSlots = this.db.getActiveLadders().map(l => l.slot);
+              if (openSlots.length > 0) {
+                const picked = openSlots[this.nextInt(openSlots.length)];
+                await runGenerated(`submit ${slug} 0.1.0 ${picked}=${baseElo}`);
+              }
+            }
+          } else if (roll < 0.11) {
+            const eligible = allAgents.filter(
+              a => this.db.computeAgentSubmissionStatus(a.id, this.state.now).canSubmit
+            );
+            const activeLadders = this.db.getActiveLadders();
+            if (eligible.length > 0 && activeLadders.length > 0) {
+              const chosen = eligible[this.nextInt(eligible.length)];
+              const nextVer = this.nextAutoVersion(chosen.id);
+              const targetLadder = activeLadders[this.nextInt(activeLadders.length)];
+              const prevElo = this.getExpectedRating(0, chosen.slug, targetLadder.id);
+              const nextElo = Math.max(1250, Math.min(1850, prevElo - 10 + this.nextInt(35)));
+              await runGenerated(
+                `submit ${chosen.slug} ${nextVer} ${targetLadder.slot}=${nextElo}`
+              );
+            } else {
+              await runGenerated('play 1');
+            }
+          } else if (roll < 0.20 && runningTour) {
+            await runGenerated(`tournament play ${runningTour.id} --games 1`);
+            await runGenerated(`tournament broadcast ${runningTour.id}`);
+          } else if (!isBounded) {
+            const playable = this.db.getPlayableLadders();
+            const candidates: Array<{
+              ladder: db.LadderRow;
+              state: ratings.LadderMatchState;
+              entries: db.LeaderboardEntryView[];
+            }> = [];
+            for (const l of playable) {
+              const built = this.buildCandidateLadderState(l);
+              if (built) candidates.push({ladder: l, ...built});
+            }
+            if (candidates.length > 0) {
+              const choice = ratings.selectNextArenaMatch(
+                candidates.map(c => c.state),
+                this.state.matchSeq + 1
+              );
+              const chosen = candidates.find(c => c.ladder.id === choice.ladderId)!;
+              const e1 = chosen.entries[choice.agentI];
+              const e2 = chosen.entries[choice.agentJ];
+              if (e1.versionId !== e2.versionId) {
+                activeLive = {
+                  ladderSlot: chosen.ladder.slot,
+                  p1Spec: `${e1.agentSlug}@${e1.version}`,
+                  p2Spec: `${e2.agentSlug}@${e2.version}`,
+                  stage: 0,
+                  g1Winner: this.nextInt(2) === 0 ? 'p1' : 'p2',
+                };
+                const {ladderSlot, p1Spec, p2Spec} = activeLive;
+                await runGenerated(
+                  `live match ${ladderSlot} ${p1Spec} ${p2Spec} ` +
+                  '--game 1 --turn 4 --active p1 --p1-bank 146 --p2-bank 144'
+                );
+              }
+            }
+          } else {
+            await runGenerated('play 1');
+          }
+
+          if (!this.serverUrl && this.publicDir && (!isBounded || step === totalSteps - 1)) {
+            await runGenerated('render');
+          }
+        }
+
+        if (!isBounded && loopState.running) {
+          const jitter = 0.6 + this.nextFloat() * 0.8;
+          await new Promise(resolve => setTimeout(resolve, Math.round(intervalMillis * jitter)));
+        }
+      }
+    } finally {
+      if (!isBounded) {
+        process.off('SIGINT', stop);
+        process.off('SIGTERM', stop);
+      }
+    }
+  }
+}
+
+function normalizeMatchCategory(
+  g1: ratings.GameOutcome,
+  g2: ratings.GameOutcome
+): ratings.MatchCategory {
+  return `${g1}${g2}`;
+}
+
+function parseExplicitOutcome(raw: string): ratings.MatchCategory {
+  const valid = new Set<ratings.MatchCategory>([
+    'WW', 'WT', 'TW', 'WL', 'LW', 'TT', 'TL', 'LT', 'LL',
+  ]);
+  if (!valid.has(raw as ratings.MatchCategory)) {
+    throw new Error(
+      `Invalid match --outcome "${raw}" (expected WW, WT, TW, WL, LW, TT, TL, LT, or LL)`
+    );
+  }
+  return raw as ratings.MatchCategory;
+}
+
+export function prepareStaticDir(
   targetStaticDir: string,
   targetAvatarsDir: string,
-  baseStaticDir = render.STATIC_DIR
+  baseStaticDir = root('static')
 ): string {
   fs.mkdirSync(targetStaticDir, {recursive: true});
   fs.mkdirSync(targetAvatarsDir, {recursive: true});
-
   for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.ts', 'arena.dj']) {
     const src = path.join(baseStaticDir, name);
     const dst = path.join(targetStaticDir, name);
@@ -333,1974 +3569,252 @@ export function prepareMockStaticDir(
       fs.copyFileSync(src, dst);
     }
   }
-
   fs.writeFileSync(
     path.join(targetAvatarsDir, '0-error.png'),
     Buffer.from(ZERO_ERROR_PNG_BASE64, 'base64')
   );
-
-  const rawProjects = yaml.parse(
-    fs.readFileSync(path.join(baseStaticDir, 'projects.yml'), 'utf8')
-  ) as Project[];
-
-  const arenaOverrides: Record<string, NonNullable<Project['arena']>> = {
-    '0 ERROR': {
-      qualified: true,
-      logo: '0-error.png',
-      owners: {
-        scheibo: 'pre.10544',
-        coauthor: 'coauthor.20001',
-      },
-    },
-    'Foul Play': {
-      qualified: true,
-      owners: {pmariglia: 'pmariglia.535629'},
-    },
-    'Metamon': {
-      qualified: true,
-      owners: {jakegrigsby: 'jakegrigsby.610001'},
-    },
-    "Mew's Truck": {
-      qualified: true,
-      owners: {pkmnbotguy: 'pkmnbotguy.610002'},
-    },
-    'MissingNo.Zero': {
-      qualified: true,
-      owners: {missingno: 'missingno.610003'},
-    },
-    'Xatu Zero': {
-      qualified: true,
-      owners: {xatudev: 'xatudev.610004'},
-    },
-    'AsterAI': {
-      qualified: false,
-      owners: {asterdev: 'asterdev.610005'},
-    },
-    'Jaxcalibur': {
-      qualified: true,
-      owners: {jaxdev: 'jaxdev.610006'},
-    },
-    'eevenator': {
-      qualified: true,
-      owners: {eevedev: 'eevedev.610007'},
-    },
-    'AWRorus': {
-      qualified: true,
-      owners: {awrdev: 'awrdev.610008'},
-    },
-    'MysteriousWind': {
-      qualified: true,
-      owners: {winddev: 'winddev.610009'},
-    },
-    'pokerus': {
-      qualified: true,
-      owners: {pokerusdev: 'pokerusdev.610010'},
-    },
-    'mikumiku': {
-      qualified: true,
-      owners: {mikudev: 'mikudev.610011'},
-    },
-    'CynthiAI': {
-      qualified: true,
-      owners: {sisyphus25: 'sisyphus25.610012'},
-    },
-  };
-
-  for (const proj of rawProjects) {
-    if (proj.name && arenaOverrides[proj.name]) {
-      proj.arena = arenaOverrides[proj.name];
-    }
-  }
-
-  if (!rawProjects.some(p => p.name === '0 ERROR')) {
-    rawProjects.unshift({
-      name: '0 ERROR',
-      site: 'https://pkmn.cc',
-      active: 2026,
-      license: 'MIT',
-      source: 'https://github.com/pkmn/engine',
-      engine: {name: 'pkmn', url: 'https://github.com/pkmn/engine'},
-      language: ['Zig', 'TypeScript'],
-      platform: [{name: 'Pokémon Showdown!', url: 'https://github.com/smogon/pokemon-showdown'}],
-      arena: {
-        qualified: true,
-        logo: '0-error.png',
-        owners: {
-          scheibo: 'pre.10544',
-          coauthor: 'coauthor.20001',
-        },
-      },
-    });
-  }
-
   const projectsFile = path.join(targetStaticDir, 'projects.yml');
-  fs.writeFileSync(projectsFile, yaml.stringify(rawProjects), 'utf8');
+  if (!fs.existsSync(projectsFile)) {
+    fs.copyFileSync(path.join(baseStaticDir, 'projects.yml'), projectsFile);
+  }
   return projectsFile;
 }
 
-const MOCK_WIKI_INDEX = `# Wiki
-
-Shared documentation, format notes, and project profiles for the \`pkmn.ai\` community.
-
-## Pages
-
-- [0 ERROR](0_ERROR) — Gen 9 OU search & evaluation agent by *pre*.
-- [Gen 9 OU](Gen_9_OU) — Metagame overview, team structures, and benchmark baselines.
-`;
-
-const MOCK_WIKI_GEN9OU = [
-  '# Gen 9 OU',
-  '',
-  'Standard Smogon Singles format used for the `pkmn.ai` ladder and tournament benchmarks.',
-  '',
-  '## Evaluation',
-  '',
-  'Agents are evaluated across 2-game blind-pair matches using Davidson MAP ratings:',
-  '',
-  '$$`P(i \\text{ beats } j) = ' +
-    '\\frac{\\gamma_i}{\\gamma_i + \\gamma_j + \\nu \\sqrt{\\gamma_i \\gamma_j}}`',
-  '',
-].join('\n');
-
-const MOCK_WIKI_PROJECT_V1 = `{% visibility: developers %}
-# 0 ERROR
-
-\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
-
-## Architecture
-
-- Depth-limited Nash equilibrium search over packed battle states.
-- Move ordering guided by damage calculator bounds.
-`;
-
-const MOCK_WIKI_PROJECT_V2 = `{% visibility: developers %}
-# 0 ERROR
-
-\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
-
-## Architecture
-
-- Depth-limited Nash equilibrium search over packed battle states.
-- Neural leaf evaluation network trained via self-play trajectories.
-- Team preview policy conditioned on revealed opponent archetypes.
-`;
-
-export function seedMockWiki(wikiDir: string): string {
-  fs.rmSync(wikiDir, {recursive: true, force: true});
-  fs.mkdirSync(wikiDir, {recursive: true});
-
-  const git = (args: string[], date?: string) =>
-    execFileSync('git', args, {
-      cwd: wikiDir,
-      env: date
-        ? {
-          ...process.env,
-          GIT_AUTHOR_DATE: date,
-          GIT_COMMITTER_DATE: date,
-        }
-        : process.env,
-    });
-
-  git(['init', '-b', 'main']);
-  git(['config', 'user.name', 'pkmn.ai']);
-  git(['config', 'user.email', 'wiki@pkmn.ai']);
-
-  fs.writeFileSync(path.join(wikiDir, 'index.dj'), MOCK_WIKI_INDEX, 'utf8');
-  fs.writeFileSync(path.join(wikiDir, 'Gen_9_OU.dj'), MOCK_WIKI_GEN9OU, 'utf8');
-  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), MOCK_WIKI_PROJECT_V1, 'utf8');
-  git(['add', 'index.dj', 'Gen_9_OU.dj', '0_ERROR.dj']);
-  git(
-    [
-      'commit',
-      '--author=scheibo <scheibo@users.noreply.github.com>',
-      '-m', 'Create initial wiki pages',
-    ],
-    '2026-10-18T12:00:00Z'
-  );
-
-  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), MOCK_WIKI_PROJECT_V2, 'utf8');
-  git(['add', '0_ERROR.dj']);
-  git(
-    [
-      'commit',
-      '--author=pmariglia <pmariglia@users.noreply.github.com>',
-      '-m', 'Document neural value network',
-    ],
-    '2026-10-20T12:00:00Z'
-  );
-
-  return execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: wikiDir,
-    encoding: 'utf8',
-  }).trim();
-}
-
 export interface SeedOptions {
-  db: Database;
+  db: db.Database;
   publicDir?: string;
   staticDir?: string;
   avatarsDir?: string;
+  wikiDir?: string;
+  mockDir?: string;
   laddersFile?: string;
+  scenarioFile?: string;
   now?: number;
   render?: boolean;
 }
 
 export interface SeedResult {
   liveDoc: arena.LiveDocument;
-  tournamentBroadcast: tournaments.LiveBroadcast;
+  tournamentBroadcast?: tournaments.LiveBroadcast;
   featuredBattleId: string;
 }
 
-export function seedMockArena(options: SeedOptions): SeedResult {
-  const {db} = options;
+export async function seed(options: SeedOptions): Promise<SeedResult> {
   const now = options.now ?? Math.floor(Date.now() / 1000);
-  const staticDir = options.staticDir ?? render.STATIC_DIR;
-  const avatarsDir = options.avatarsDir ?? path.join(staticDir, 'avatars');
-  const projectsFile = path.join(staticDir, 'projects.yml');
+  const scenarioFile = options.scenarioFile ?? SEED_SCENARIO;
 
-  db.syncLadders(options.laddersFile ?? LADDERS_FILE, now - 30 * 86400);
-  for (const ladder of db.getLadders()) {
-    db.setLadderStatus(ladder.id, 'active', now - 30 * 86400);
-  }
+  const runner = new Runner({
+    db: options.db,
+    mockDir: options.mockDir,
+    staticDir: options.staticDir,
+    avatarsDir: options.avatarsDir,
+    publicDir: options.render === false ? undefined : options.publicDir,
+    wikiDir: options.wikiDir,
+    laddersFile: options.laddersFile,
+    now,
+  });
 
-  db.syncProjects(projectsFile, avatarsDir, now - 30 * 86400);
-  db.linkDeveloperDiscord('scheibo', '513513270670262284', 'scheibo', now - 28 * 86400);
-  db.linkDeveloperDiscord('pmariglia', '283674461268344832', 'pmariglia', now - 28 * 86400);
-  db.linkDeveloperDiscord('jakegrigsby', '300000000000000001', 'jakegrigsby', now - 28 * 86400);
-  db.linkDeveloperDiscord('pkmnbotguy', '300000000000000002', 'batistas_dick', now - 28 * 86400);
-  db.syncDiscordMembers([
-    {id: '513513270670262284', username: 'scheibo'},
-    {id: '283674461268344832', username: 'pmariglia'},
-    {id: '300000000000000001', username: 'jakegrigsby'},
-    {id: '300000000000000002', username: 'batistas_dick'},
-  ], now - 60);
+  await runner.runFile(scenarioFile);
+  const liveDoc = options.render !== false && options.publicDir
+    ? runner.cmdRender()
+    : runner.buildLiveDocument();
 
-  const shaOf = (tag: string): string => {
-    const hex = Buffer.from(tag, 'utf8').toString('hex');
-    return hex.repeat(Math.ceil(64 / hex.length)).slice(0, 64);
+  return {
+    liveDoc,
+    tournamentBroadcast: runner.state.tournamentBroadcast,
+    featuredBattleId: runner.state.featuredBattleId ?? '',
   };
-
-  const zeroAgent = db.getAgentBySlug('0-error')!;
-  const fpAgent = db.getAgentBySlug('foul-play')!;
-  const mmAgent = db.getAgentBySlug('metamon')!;
-  const mtAgent = db.getAgentBySlug('mews-truck')!;
-  const mnAgent = db.getAgentBySlug('missingnozero')!;
-  const xzAgent = db.getAgentBySlug('xatu-zero')!;
-  const jaxAgent = db.getAgentBySlug('jaxcalibur')!;
-  const eeveAgent = db.getAgentBySlug('eevenator')!;
-  const awrAgent = db.getAgentBySlug('awrorus')!;
-  const windAgent = db.getAgentBySlug('mysteriouswind')!;
-  const prAgent = db.getAgentBySlug('pokerus')!;
-  const mikuAgent = db.getAgentBySlug('mikumiku')!;
-  const scheiboDev = db.getDeveloperByGitHub('scheibo')!;
-
-  const ALL_LADDERS = [
-    'gen1ou20261109',
-    'gen3ou20261109',
-    'gen9ou20261109',
-    'gen9randombattle20261109',
-    'gen9championsvgc2026regmc',
-  ];
-
-  const vgcPoolInputs: Array<{agentId: number; agentName: string; teams: string[]}> = [];
-  const agentIdByVersion = new Map<number, number>();
-
-  const submitAndPass = (input: {
-    agentId: number;
-    developerId?: number;
-    version: string;
-    pkg: 'bundle' | 'oci';
-    url: string;
-    ladders: string[];
-    tournaments?: string[];
-    vgcOffset?: number;
-    at: number;
-    bytes: number;
-    durationMillis: number;
-    turnMillis: number;
-    ram: number;
-    retiredByLadder?: Record<string, number>;
-  }) => {
-    const vgcTeams =
-      input.vgcOffset !== undefined && input.ladders.includes('gen9championsvgc2026regmc')
-        ? splitSubmittedTeams(generateValidVgcTeams(20, input.vgcOffset))
-        : undefined;
-    const teamsByLadder = vgcTeams ? {gen9championsvgc2026regmc: vgcTeams} : undefined;
-    const v = db.createSubmission({
-      agentId: input.agentId,
-      developerId: input.developerId,
-      version: input.version,
-      package: input.pkg,
-      url: input.url,
-      sha256: shaOf(`${input.agentId}-${input.version}`),
-      ladderIds: input.ladders,
-      tournamentIds: input.tournaments,
-      teamsByLadder,
-      now: input.at,
-    });
-    db.applySubmissionStatus({
-      versionId: v.id,
-      smokeStatus: 'passed',
-      unpackedBytes: input.bytes,
-      smokeDurationMillis: input.durationMillis,
-      smokeTurnMillis: input.turnMillis,
-      smokePeakRam: input.ram,
-      retiredVersionIdsByLadder: input.retiredByLadder,
-      now: input.at + 5,
-    });
-    agentIdByVersion.set(v.id, input.agentId);
-    if (vgcTeams) {
-      const agent = db.getAgentById(input.agentId);
-      vgcPoolInputs.push({
-        agentId: input.agentId,
-        agentName: agent?.name ?? String(input.agentId),
-        teams: vgcTeams,
-      });
-    }
-    return v;
-  };
-
-  // Historical failed smoke test on 0 ERROR (`notified = true`) for `/account/` History table
-  const zeroFail = db.createSubmission({
-    agentId: zeroAgent.id,
-    developerId: scheiboDev.id,
-    version: '0.9.0-rc1',
-    package: 'bundle',
-    url: 'https://r2.pkmn.cc/0-error-0.9.0-rc1.tar.zst',
-    sha256: shaOf('0-error-0.9.0-rc1'),
-    ladderIds: ['gen1ou20261109', 'gen9ou20261109'],
-    now: now - 28 * 86400,
-  });
-  db.applySubmissionStatus({
-    versionId: zeroFail.id,
-    smokeStatus: 'failed',
-    smokeError:
-      'Error: invalid choice on turn 1 ("move 5")\n  at SearchAgent.choose (src/agent.zig:142)',
-    now: now - 28 * 86400 + 8,
-  });
-  db.markVersionNotified(zeroFail.id);
-
-  // Initial cohort across all 5 ladders so every ladder has 10 settled + 1 provisional agents
-  const zV100 = submitAndPass({
-    agentId: zeroAgent.id,
-    developerId: scheiboDev.id,
-    version: '1.0.0',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/0-error-1.0.0.tar.zst',
-    ladders: ALL_LADDERS,
-    vgcOffset: 0,
-    at: now - 27 * 86400,
-    bytes: 184 * 1024 * 1024,
-    durationMillis: 2400,
-    turnMillis: 310,
-    ram: 820,
-  });
-  const fpV1 = submitAndPass({
-    agentId: fpAgent.id,
-    version: '1.4.0',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/foul-play-1.4.0.tar.zst',
-    ladders: ALL_LADDERS,
-    vgcOffset: 1,
-    at: now - 27 * 86400 + 30,
-    bytes: 142 * 1024 * 1024,
-    durationMillis: 1900,
-    turnMillis: 260,
-    ram: 640,
-  });
-  const mmV1 = submitAndPass({
-    agentId: mmAgent.id,
-    version: '1.0.0',
-    pkg: 'oci',
-    url: 'ghcr.io/ut-austin-rpl/metamon:1.0.0',
-    ladders: ['gen1ou20261109', 'gen3ou20261109', 'gen9ou20261109'],
-    at: now - 27 * 86400 + 60,
-    bytes: 412 * 1024 * 1024,
-    durationMillis: 4200,
-    turnMillis: 480,
-    ram: 2150,
-  });
-  const mtV1 = submitAndPass({
-    agentId: mtAgent.id,
-    version: '1.0.0',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/mews-truck-1.0.0.tar.zst',
-    ladders: ['gen9ou20261109', 'gen9randombattle20261109', 'gen9championsvgc2026regmc'],
-    vgcOffset: 2,
-    at: now - 27 * 86400 + 90,
-    bytes: 298 * 1024 * 1024,
-    durationMillis: 3100,
-    turnMillis: 390,
-    ram: 1580,
-  });
-  const mnV1 = submitAndPass({
-    agentId: mnAgent.id,
-    version: '2.1.0',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/missingno-zero-2.1.0.tar.zst',
-    ladders: [
-      'gen1ou20261109',
-      'gen3ou20261109',
-      'gen9randombattle20261109',
-      'gen9championsvgc2026regmc',
-    ],
-    vgcOffset: 3,
-    at: now - 27 * 86400 + 120,
-    bytes: 210 * 1024 * 1024,
-    durationMillis: 2700,
-    turnMillis: 340,
-    ram: 980,
-  });
-  const xzV1 = submitAndPass({
-    agentId: xzAgent.id,
-    version: '0.8.0',
-    pkg: 'oci',
-    url: 'ghcr.io/xatu/xatu-zero:0.8.0',
-    ladders: ALL_LADDERS,
-    vgcOffset: 4,
-    at: now - 27 * 86400 + 150,
-    bytes: 356 * 1024 * 1024,
-    durationMillis: 3800,
-    turnMillis: 440,
-    ram: 1840,
-  });
-  const jaxV1 = submitAndPass({
-    agentId: jaxAgent.id,
-    version: '1.3.0',
-    pkg: 'oci',
-    url: 'ghcr.io/jaxcalibur/agent:1.3.0',
-    ladders: ALL_LADDERS,
-    vgcOffset: 5,
-    at: now - 27 * 86400 + 180,
-    bytes: 390 * 1024 * 1024,
-    durationMillis: 3400,
-    turnMillis: 350,
-    ram: 1920,
-  });
-  const eeveV1 = submitAndPass({
-    agentId: eeveAgent.id,
-    version: '0.6.2',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/eevenator-0.6.2.tar.zst',
-    ladders: ALL_LADDERS,
-    vgcOffset: 6,
-    at: now - 27 * 86400 + 210,
-    bytes: 96 * 1024 * 1024,
-    durationMillis: 1500,
-    turnMillis: 210,
-    ram: 520,
-  });
-  const awrV1 = submitAndPass({
-    agentId: awrAgent.id,
-    version: '1.1.0',
-    pkg: 'oci',
-    url: 'ghcr.io/awrorus/agent:1.1.0',
-    ladders: ALL_LADDERS,
-    vgcOffset: 7,
-    at: now - 27 * 86400 + 240,
-    bytes: 320 * 1024 * 1024,
-    durationMillis: 3100,
-    turnMillis: 410,
-    ram: 1640,
-  });
-  const windV1 = submitAndPass({
-    agentId: windAgent.id,
-    version: '0.4.0',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/mysteriouswind-0.4.0.tar.zst',
-    ladders: ALL_LADDERS,
-    vgcOffset: 8,
-    at: now - 27 * 86400 + 270,
-    bytes: 128 * 1024 * 1024,
-    durationMillis: 1850,
-    turnMillis: 295,
-    ram: 710,
-  });
-  const prV1 = submitAndPass({
-    agentId: prAgent.id,
-    version: '1.0.2',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/pokerus-1.0.2.tar.zst',
-    ladders: ALL_LADDERS,
-    vgcOffset: 9,
-    at: now - 27 * 86400 + 300,
-    bytes: 152 * 1024 * 1024,
-    durationMillis: 2050,
-    turnMillis: 330,
-    ram: 780,
-  });
-  const mikuV1 = submitAndPass({
-    agentId: mikuAgent.id,
-    version: '0.9.1',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/mikumiku-0.9.1.tar.zst',
-    ladders: ALL_LADDERS,
-    vgcOffset: 10,
-    at: now - 27 * 86400 + 330,
-    bytes: 168 * 1024 * 1024,
-    durationMillis: 2250,
-    turnMillis: 365,
-    ram: 840,
-  });
-
-  // Designate 1500 Elo anchors per ladder
-  db.setLadderAnchor('gen1ou20261109', 'metamon', '1.0.0', now - 26 * 86400 + 10);
-  db.setLadderAnchor('gen3ou20261109', 'foul-play', '1.4.0', now - 26 * 86400 + 10);
-  db.setLadderAnchor('gen9ou20261109', 'foul-play', '1.4.0', now - 26 * 86400 + 10);
-  db.setLadderAnchor('gen9randombattle20261109', 'foul-play', '1.4.0', now - 26 * 86400 + 10);
-  db.setLadderAnchor('gen9championsvgc2026regmc', 'foul-play', '1.4.0', now - 26 * 86400 + 10);
-
-  const vgcPool = buildCanonicalTeamPool(vgcPoolInputs);
-  const rng = createRng(20261110);
-  let matchSeq = 0;
-
-  const playSimulatedMatch = (input: {
-    ladderId: string;
-    prefix: string;
-    p1VersionId: number;
-    p2VersionId: number;
-    pWin: number;
-    allowTies?: boolean;
-    completedAt: number;
-    p1TeamLabel?: string;
-    p2TeamLabel?: string;
-    game1EndReason?: string;
-    game2EndReason?: string;
-  }): string => {
-    matchSeq++;
-    const matchId = `${input.prefix}-${String(matchSeq).padStart(7, '0')}`;
-    const sampleGame = (): {outcome: ratings.GameOutcome; reason: string; turns: number} => {
-      const roll = rng(1000) / 1000;
-      if (input.allowTies && roll > 0.965) {
-        return {outcome: 'T', reason: 'tie_100_turns', turns: 100};
-      }
-      const adjusted = input.allowTies ? roll / 0.965 : roll;
-      return {
-        outcome: adjusted < input.pWin ? 'W' : 'L',
-        reason: 'win',
-        turns: 20 + rng(28),
-      };
-    };
-    const g1 = sampleGame();
-    const g2 = sampleGame();
-    const cat = `${g1.outcome}${g2.outcome}` as ratings.MatchCategory;
-
-    let p1TeamLabel = input.p1TeamLabel;
-    let p2TeamLabel = input.p2TeamLabel;
-    if (
-      input.ladderId === 'gen9championsvgc2026regmc' &&
-      p1TeamLabel === undefined &&
-      p2TeamLabel === undefined
-    ) {
-      const a1 = agentIdByVersion.get(input.p1VersionId);
-      const a2 = agentIdByVersion.get(input.p2VersionId);
-      if (a1 !== undefined && a2 !== undefined) {
-        const sampled = samplePoolsPair(vgcPool, a1, a2, rng);
-        p1TeamLabel = sampled.t1Label;
-        p2TeamLabel = sampled.t2Label;
-      }
-    }
-
-    db.recordCompletedMatch({
-      match: {
-        id: matchId,
-        ladderId: input.ladderId,
-        p1VersionId: input.p1VersionId,
-        p2VersionId: input.p2VersionId,
-        seed: `100,200,300,${matchSeq}`,
-        p1TeamLabel,
-        p2TeamLabel,
-        game1Outcome: g1.outcome,
-        game2Outcome: g2.outcome,
-        category: cat,
-        game1Turns: g1.turns,
-        game2Turns: g2.turns,
-        game1EndReason: input.game1EndReason ?? g1.reason,
-        game2EndReason: input.game2EndReason ?? g2.reason,
-        p1PeakRam: 720 + (input.p1VersionId * 47) % 980,
-        p2PeakRam: 720 + (input.p2VersionId * 53) % 980,
-        p1Game1BankSeconds: 95 + rng(55),
-        p1Game2BankSeconds: 90 + rng(55),
-        p2Game1BankSeconds: 92 + rng(55),
-        p2Game2BankSeconds: 88 + rng(55),
-        p1MeanTurnMillis: 230 + (input.p1VersionId * 29) % 240,
-        p2MeanTurnMillis: 240 + (input.p2VersionId * 31) % 240,
-        completedAt: input.completedAt,
-      },
-    });
-    return matchId;
-  };
-
-  interface CompetitorSpec {
-    versionId: number;
-    name: string;
-    skill: number;
-  }
-
-  // Interleaved round-robin generator across `rounds` cycles spanned over `[startAt, endAt]`
-  // so every UTC day records rating snapshots for the Top 5 chart and every pair in the 10x10
-  // matrix accumulates realistic WW / WT / split / TL / LL counts.
-  const runRoundRobin = (config: {
-    ladderId: string;
-    prefix: string;
-    competitors: CompetitorSpec[];
-    rounds: number;
-    startAt: number;
-    endAt: number;
-    allowTies?: boolean;
-    matchupTweaks?: Map<string, number>;
-  }) => {
-    const pairs: Array<[CompetitorSpec, CompetitorSpec]> = [];
-    for (let i = 0; i < config.competitors.length; i++) {
-      for (let j = i + 1; j < config.competitors.length; j++) {
-        pairs.push([config.competitors[i], config.competitors[j]]);
-      }
-    }
-    const totalMatches = pairs.length * config.rounds;
-    const span = Math.max(config.endAt - config.startAt, totalMatches);
-    let idx = 0;
-    for (let r = 0; r < config.rounds; r++) {
-      for (const [c1, c2] of pairs) {
-        const at = config.startAt + Math.floor((idx * span) / totalMatches);
-        idx++;
-        const tweak =
-          config.matchupTweaks?.get(`${c1.versionId}:${c2.versionId}`) ??
-          -(config.matchupTweaks?.get(`${c2.versionId}:${c1.versionId}`) ?? 0);
-        const diff = c1.skill - c2.skill + tweak;
-        const pWin = 1 / (1 + Math.exp(-diff));
-        playSimulatedMatch({
-          ladderId: config.ladderId,
-          prefix: config.prefix,
-          p1VersionId: c1.versionId,
-          p2VersionId: c2.versionId,
-          pWin,
-          allowTies: config.allowTies,
-          completedAt: at,
-        });
-      }
-    }
-  };
-
-  // 1. Settle initial cohort (Days -25 .. -13) across all 5 ladders (10 settled per ladder)
-  runRoundRobin({
-    ladderId: 'gen1ou20261109',
-    prefix: 'gen1ou',
-    competitors: [
-      {versionId: jaxV1.id, name: 'Jaxcalibur', skill: 1.05},
-      {versionId: zV100.id, name: '0 ERROR', skill: 0.85},
-      {versionId: mnV1.id, name: 'MissingNo.Zero', skill: 0.72},
-      {versionId: xzV1.id, name: 'Xatu Zero', skill: 0.48},
-      {versionId: eeveV1.id, name: 'eevenator', skill: 0.25},
-      {versionId: mmV1.id, name: 'Metamon', skill: 0.0},
-      {versionId: fpV1.id, name: 'Foul Play', skill: -0.22},
-      {versionId: awrV1.id, name: 'AWRorus', skill: -0.52},
-      {versionId: windV1.id, name: 'MysteriousWind', skill: -0.82},
-      {versionId: mikuV1.id, name: 'mikumiku', skill: -1.15},
-    ],
-    rounds: 10,
-    startAt: now - 25 * 86400,
-    endAt: now - 13 * 86400,
-    allowTies: true,
-  });
-
-  runRoundRobin({
-    ladderId: 'gen3ou20261109',
-    prefix: 'gen3ou',
-    competitors: [
-      {versionId: jaxV1.id, name: 'Jaxcalibur', skill: 1.25},
-      {versionId: mmV1.id, name: 'Metamon', skill: 0.95},
-      {versionId: zV100.id, name: '0 ERROR', skill: 0.68},
-      {versionId: xzV1.id, name: 'Xatu Zero', skill: 0.42},
-      {versionId: eeveV1.id, name: 'eevenator', skill: 0.18},
-      {versionId: fpV1.id, name: 'Foul Play', skill: 0.0},
-      {versionId: mnV1.id, name: 'MissingNo.Zero', skill: -0.28},
-      {versionId: awrV1.id, name: 'AWRorus', skill: -0.58},
-      {versionId: windV1.id, name: 'MysteriousWind', skill: -0.88},
-      {versionId: prV1.id, name: 'pokerus', skill: -1.18},
-    ],
-    rounds: 10,
-    startAt: now - 25 * 86400,
-    endAt: now - 1 * 86400,
-    allowTies: true,
-  });
-
-  runRoundRobin({
-    ladderId: 'gen9ou20261109',
-    prefix: 'gen9ou',
-    competitors: [
-      {versionId: mtV1.id, name: "Mew's Truck", skill: 1.10},
-      {versionId: zV100.id, name: '0 ERROR', skill: 0.82},
-      {versionId: jaxV1.id, name: 'Jaxcalibur', skill: 0.64},
-      {versionId: xzV1.id, name: 'Xatu Zero', skill: 0.38},
-      {versionId: eeveV1.id, name: 'eevenator', skill: 0.16},
-      {versionId: fpV1.id, name: 'Foul Play', skill: 0.0},
-      {versionId: mmV1.id, name: 'Metamon', skill: -0.24},
-      {versionId: awrV1.id, name: 'AWRorus', skill: -0.55},
-      {versionId: windV1.id, name: 'MysteriousWind', skill: -0.86},
-      {versionId: mikuV1.id, name: 'mikumiku', skill: -1.18},
-    ],
-    rounds: 10,
-    startAt: now - 25 * 86400,
-    endAt: now - 13 * 86400,
-    allowTies: true,
-  });
-
-  runRoundRobin({
-    ladderId: 'gen9randombattle20261109',
-    prefix: 'gen9rand',
-    competitors: [
-      {versionId: mnV1.id, name: 'MissingNo.Zero', skill: 1.28},
-      {versionId: zV100.id, name: '0 ERROR', skill: 0.92},
-      {versionId: jaxV1.id, name: 'Jaxcalibur', skill: 0.65},
-      {versionId: mtV1.id, name: "Mew's Truck", skill: 0.40},
-      {versionId: eeveV1.id, name: 'eevenator', skill: 0.18},
-      {versionId: fpV1.id, name: 'Foul Play', skill: 0.0},
-      {versionId: xzV1.id, name: 'Xatu Zero', skill: -0.26},
-      {versionId: awrV1.id, name: 'AWRorus', skill: -0.56},
-      {versionId: windV1.id, name: 'MysteriousWind', skill: -0.85},
-      {versionId: prV1.id, name: 'pokerus', skill: -1.16},
-    ],
-    rounds: 10,
-    startAt: now - 25 * 86400,
-    endAt: now - 1 * 86400,
-  });
-
-  runRoundRobin({
-    ladderId: 'gen9championsvgc2026regmc',
-    prefix: 'vgc',
-    competitors: [
-      {versionId: mtV1.id, name: "Mew's Truck", skill: 1.35},
-      {versionId: zV100.id, name: '0 ERROR', skill: 0.98},
-      {versionId: jaxV1.id, name: 'Jaxcalibur', skill: 0.72},
-      {versionId: mnV1.id, name: 'MissingNo.Zero', skill: 0.45},
-      {versionId: eeveV1.id, name: 'eevenator', skill: 0.22},
-      {versionId: fpV1.id, name: 'Foul Play', skill: 0.0},
-      {versionId: xzV1.id, name: 'Xatu Zero', skill: -0.28},
-      {versionId: awrV1.id, name: 'AWRorus', skill: -0.58},
-      {versionId: windV1.id, name: 'MysteriousWind', skill: -0.88},
-      {versionId: prV1.id, name: 'pokerus', skill: -1.20},
-    ],
-    rounds: 10,
-    startAt: now - 25 * 86400,
-    endAt: now - 1 * 86400,
-  });
-
-  // 2. Upgrade 0 ERROR -> 1.1.0 (Day -12) -> 1.2.0 (Day -4, retiring 1.0.0 on RBY & SV)
-  const zV110 = submitAndPass({
-    agentId: zeroAgent.id,
-    developerId: scheiboDev.id,
-    version: '1.1.0',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/0-error-1.1.0.tar.zst',
-    ladders: ['gen1ou20261109', 'gen9ou20261109'],
-    at: now - 12 * 86400,
-    bytes: 192 * 1024 * 1024,
-    durationMillis: 2200,
-    turnMillis: 295,
-    ram: 860,
-  });
-
-  for (const [oppId, pWin] of [
-    [jaxV1.id, 0.56], [mnV1.id, 0.62], [xzV1.id, 0.66],
-    [eeveV1.id, 0.72], [mmV1.id, 0.76], [fpV1.id, 0.80],
-  ] as const) {
-    for (let k = 0; k < 15; k++) {
-      playSimulatedMatch({
-        ladderId: 'gen1ou20261109',
-        prefix: 'gen1ou',
-        p1VersionId: zV110.id,
-        p2VersionId: oppId,
-        pWin,
-        allowTies: true,
-        completedAt: now - 11 * 86400 + k * 5400,
-      });
-    }
-  }
-  for (const [oppId, pWin] of [
-    [mtV1.id, 0.54], [jaxV1.id, 0.64], [xzV1.id, 0.68],
-    [eeveV1.id, 0.74], [fpV1.id, 0.78], [mmV1.id, 0.82],
-  ] as const) {
-    for (let k = 0; k < 15; k++) {
-      playSimulatedMatch({
-        ladderId: 'gen9ou20261109',
-        prefix: 'gen9ou',
-        p1VersionId: zV110.id,
-        p2VersionId: oppId,
-        pWin,
-        allowTies: true,
-        completedAt: now - 11 * 86400 + k * 5400,
-      });
-    }
-  }
-
-  db.refundCooldown('0-error', now - 5 * 86400);
-  const zV120 = submitAndPass({
-    agentId: zeroAgent.id,
-    developerId: scheiboDev.id,
-    version: '1.2.0',
-    pkg: 'bundle',
-    url: 'https://r2.pkmn.cc/0-error-1.2.0.tar.zst',
-    ladders: ['gen1ou20261109', 'gen9ou20261109'],
-    at: now - 4 * 86400,
-    bytes: 198 * 1024 * 1024,
-    durationMillis: 2100,
-    turnMillis: 280,
-    ram: 890,
-    retiredByLadder: {
-      gen1ou20261109: zV100.id,
-      gen9ou20261109: zV100.id,
-    },
-  });
-
-  // Play >= 10 matches against rivals for 0 ERROR 1.2.0 on RBY (including stylistic H2H residuals:
-  // dominates Jaxcalibur as Best Matchup, drops extra games to Xatu Zero as Nemesis) and SV.
-  const rbyV120Schedule: Array<[number, number, number]> = [
-    [jaxV1.id, 12, 0.90], // Best Matchup (positive residual above Elo expectation)
-    [mnV1.id, 10, 0.80],
-    [xzV1.id, 12, 0.50], // Nemesis (negative residual below Elo expectation)
-    [eeveV1.id, 8, 0.86],
-    [mmV1.id, 8, 0.88],
-    [fpV1.id, 8, 0.90],
-    [awrV1.id, 6, 0.92],
-    [windV1.id, 6, 0.94],
-    [mikuV1.id, 6, 0.96],
-  ];
-  let stepIdx = 0;
-  for (const [oppId, count, pWin] of rbyV120Schedule) {
-    for (let k = 0; k < count; k++) {
-      stepIdx++;
-      playSimulatedMatch({
-        ladderId: 'gen1ou20261109',
-        prefix: 'gen1ou',
-        p1VersionId: zV120.id,
-        p2VersionId: oppId,
-        pWin,
-        allowTies: true,
-        completedAt: now - 4 * 86400 + stepIdx * 3600,
-      });
-    }
-  }
-
-  stepIdx = 0;
-  for (const [oppId, count, pWin] of [
-    [mtV1.id, 12, 0.78],
-    [jaxV1.id, 10, 0.84],
-    [xzV1.id, 10, 0.54],
-    [eeveV1.id, 8, 0.86],
-    [fpV1.id, 8, 0.88],
-    [mmV1.id, 6, 0.90],
-    [awrV1.id, 6, 0.92],
-    [windV1.id, 6, 0.95],
-  ] as const) {
-    for (let k = 0; k < count; k++) {
-      stepIdx++;
-      playSimulatedMatch({
-        ladderId: 'gen9ou20261109',
-        prefix: 'gen9ou',
-        p1VersionId: zV120.id,
-        p2VersionId: oppId,
-        pWin,
-        allowTies: true,
-        completedAt: now - 4 * 86400 + stepIdx * 3800,
-      });
-    }
-  }
-
-  // 3. Provisional entrants (< 10 matches) + crisp closing streaks (`W5`, `L4`) per ladder
-  for (let k = 0; k < 5; k++) {
-    playSimulatedMatch({
-      ladderId: 'gen1ou20261109',
-      prefix: 'gen1ou',
-      p1VersionId: prV1.id,
-      p2VersionId: fpV1.id,
-      pWin: 0.5,
-      completedAt: now - 7200 + k * 300,
-    });
-    playSimulatedMatch({
-      ladderId: 'gen3ou20261109',
-      prefix: 'gen3ou',
-      p1VersionId: mikuV1.id,
-      p2VersionId: fpV1.id,
-      pWin: 0.5,
-      completedAt: now - 7200 + k * 300,
-    });
-    playSimulatedMatch({
-      ladderId: 'gen9ou20261109',
-      prefix: 'gen9ou',
-      p1VersionId: prV1.id,
-      p2VersionId: fpV1.id,
-      pWin: 0.5,
-      completedAt: now - 7200 + k * 300,
-    });
-    playSimulatedMatch({
-      ladderId: 'gen9randombattle20261109',
-      prefix: 'gen9rand',
-      p1VersionId: mikuV1.id,
-      p2VersionId: fpV1.id,
-      pWin: 0.5,
-      completedAt: now - 7200 + k * 300,
-    });
-    playSimulatedMatch({
-      ladderId: 'gen9championsvgc2026regmc',
-      prefix: 'vgc',
-      p1VersionId: mikuV1.id,
-      p2VersionId: fpV1.id,
-      pWin: 0.5,
-      completedAt: now - 7200 + k * 300,
-    });
-  }
-
-  // Guarantee visible hot/cold streak badges (`W4`, `L4`) at the top and bottom of RBY & VGC
-  for (let k = 0; k < 4; k++) {
-    playSimulatedMatch({
-      ladderId: 'gen1ou20261109',
-      prefix: 'gen1ou',
-      p1VersionId: zV120.id,
-      p2VersionId: mikuV1.id,
-      pWin: 1.0,
-      completedAt: now - 1200 + k * 120,
-    });
-    playSimulatedMatch({
-      ladderId: 'gen9championsvgc2026regmc',
-      prefix: 'vgc',
-      p1VersionId: mtV1.id,
-      p2VersionId: prV1.id,
-      pWin: 1.0,
-      completedAt: now - 1140 + k * 120,
-    });
-  }
-
-  // Include recent abnormal-termination examples (`crash`, `timeout`) and a deterministic
-  // VGC pool-hash battle (`unknown` third-party team + `P1:`-owned team) at the top of `/battles/`.
-  playSimulatedMatch({
-    ladderId: 'gen9ou20261109',
-    prefix: 'gen9ou',
-    p1VersionId: eeveV1.id,
-    p2VersionId: awrV1.id,
-    pWin: 1.0,
-    completedAt: now - 300,
-    game2EndReason: 'crash',
-  });
-  const zeroTeamEntry = vgcPool.find(e => e.owners.has(zeroAgent.id))!;
-  const jaxTeamEntry = vgcPool.find(e => e.owners.has(jaxAgent.id))!;
-  const mtTeamEntry = vgcPool.find(e => e.owners.has(mtAgent.id))!;
-  const featuredBattleId = playSimulatedMatch({
-    ladderId: 'gen9championsvgc2026regmc',
-    prefix: 'vgc',
-    p1VersionId: jaxV1.id,
-    p2VersionId: mnV1.id,
-    pWin: 1.0,
-    completedAt: now - 180,
-    p1TeamLabel: hashTeam(zeroTeamEntry.canonicalPacked),
-    p2TeamLabel: formatPoolTeamLabel(jaxTeamEntry.canonicalPacked, 'P1'),
-    game2EndReason: 'timeout',
-  });
-
-  // 4. Tournaments:
-  //   #1 Completed ("Tournament #1: Gen 9 OU", 6 entrants)
-  //   #2 Running   ("Tournament #2: VGC 2026 Reg M-C OTS BO3", 6 entrants -> site-wide #topbar)
-  //   #3 Scheduled ("Tournament #3: VGC 2026 Reg M-D OTS BO3", open for /account OCI registration)
-  db.upsertTournament({
-    id: '1',
-    name: 'Tournament #1: Gen 9 OU',
-    format: 'gen9ou',
-    gamesPerMatchup: 8,
-    parallelTables: 2,
-    hardware: 'GCP L4 Spot · 24 vCPU · 48 GB RAM',
-    status: 'completed',
-    startsAt: now - 90 * 86400,
-    completedAt: now - 88 * 86400,
-  });
-  const springEntrants = [
-    {
-      agent: mtAgent.id, ver: mtV1.id, seed: 1, rank: 1,
-      elo: 1712, se: 22, w: 31, l: 7, t: 2, pts: 32, sb: 584.5,
-    },
-    {
-      agent: zeroAgent.id, ver: zV100.id, seed: 2, rank: 2,
-      elo: 1668, se: 23, w: 27, l: 11, t: 2, pts: 28, sb: 492.0,
-    },
-    {
-      agent: jaxAgent.id, ver: jaxV1.id, seed: 3, rank: 3,
-      elo: 1614, se: 24, w: 23, l: 15, t: 2, pts: 24, sb: 410.5,
-    },
-    {
-      agent: xzAgent.id, ver: xzV1.id, seed: 4, rank: 4,
-      elo: 1548, se: 24, w: 18, l: 20, t: 2, pts: 19, sb: 318.0,
-    },
-    {
-      agent: fpAgent.id, ver: fpV1.id, seed: 5, rank: 5,
-      elo: 1492, se: 25, w: 13, l: 25, t: 2, pts: 14, sb: 226.5,
-    },
-    {
-      agent: mmAgent.id, ver: mmV1.id, seed: 6, rank: 6,
-      elo: 1418, se: 26, w: 6, l: 32, t: 2, pts: 7, sb: 112.0,
-    },
-  ];
-  for (const ent of springEntrants) {
-    db.upsertTournamentEntrant({
-      tournamentId: '1',
-      agentId: ent.agent,
-      versionId: ent.ver,
-      seed: ent.seed,
-      finalRank: ent.rank,
-      elo: ent.elo,
-      se: ent.se,
-      gameWins: ent.w,
-      gameLosses: ent.l,
-      gameTies: ent.t,
-      points: ent.pts,
-      sonnebornBerger: ent.sb,
-    });
-  }
-  const packedSix = (names: string[]) => names.map(n => `|${n}`).join(']');
-  const ouTeams = [
-    packedSix([
-      'Great Tusk', 'Kingambit', 'Gholdengo', 'Dragapult', 'Ogerpon-Wellspring', 'Gliscor',
-    ]),
-    packedSix([
-      'Zamazenta', 'Darkrai', 'Ting-Lu', 'Raging Bolt', 'Hatterene', 'Samurott-Hisui',
-    ]),
-    packedSix([
-      'Dragapult', 'Kingambit', 'Great Tusk', 'Slowking-Galar', 'Corviknight', 'Kyurem',
-    ]),
-    packedSix([
-      'Gliscor', 'Gholdengo', 'Ting-Lu', 'Iron Valiant', 'Cinderace', 'Primarina',
-    ]),
-  ];
-  let springGameSeq = 0;
-  for (let i = 0; i < springEntrants.length; i++) {
-    for (let j = i + 1; j < springEntrants.length; j++) {
-      for (let g = 1; g <= 4; g++) {
-        springGameSeq++;
-        const outcome: 'W' | 'L' | 'T' = g === 4 && (i + j) % 3 === 0 ? 'L' : 'W';
-        db.upsertTournamentGame({
-          id: `spring26-rr-${springGameSeq}`,
-          tournamentId: '1',
-          stage: 'Round Robin',
-          cycle: g,
-          matchupGame: g,
-          p1VersionId: springEntrants[i].ver,
-          p2VersionId: springEntrants[j].ver,
-          seed: `10,20,30,${springGameSeq}`,
-          p1Team: ouTeams[(i + g) % ouTeams.length],
-          p2Team: ouTeams[(j + g + 1) % ouTeams.length],
-          outcome,
-          endReason: 'win',
-          turns: 26 + ((springGameSeq * 5) % 24),
-          p1BankSeconds: 70 + (springGameSeq % 40),
-          p2BankSeconds: 55 + ((springGameSeq * 3) % 40),
-          status: 'completed',
-          completedAt: now - 89 * 86400 + springGameSeq * 300,
-        });
-      }
-    }
-  }
-  db.upsertTournamentGame({
-    id: 'spring26-sf1',
-    tournamentId: '1',
-    stage: 'Superfinal',
-    cycle: 1,
-    matchupGame: 1,
-    p1VersionId: mtV1.id,
-    p2VersionId: zV100.id,
-    seed: '10,20,30,999',
-    p1Team: ouTeams[0],
-    p2Team: ouTeams[1],
-    outcome: 'W',
-    endReason: 'win',
-    turns: 34,
-    p1BankSeconds: 88,
-    p2BankSeconds: 64,
-    status: 'completed',
-    completedAt: now - 88 * 86400 - 300,
-  });
-
-  db.upsertTournament({
-    id: '2',
-    name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
-    format: 'gen9championsvgc2026regmc',
-    gamesPerMatchup: 8,
-    parallelTables: 2,
-    hardware: 'GCP L4 Spot · 24 vCPU · 48 GB RAM',
-    status: 'running',
-    startsAt: now - 7200,
-  });
-  const autumnEntrants = [
-    {agent: zeroAgent.id, ver: zV120.id, seed: 1, elo: 1664, se: 36, w: 12, l: 3, pts: 12, sb: 64},
-    {agent: mtAgent.id, ver: mtV1.id, seed: 2, elo: 1648, se: 37, w: 11, l: 4, pts: 11, sb: 58},
-    {agent: jaxAgent.id, ver: jaxV1.id, seed: 3, elo: 1582, se: 38, w: 9, l: 6, pts: 9, sb: 44},
-    {agent: mnAgent.id, ver: mnV1.id, seed: 4, elo: 1528, se: 39, w: 7, l: 8, pts: 7, sb: 32},
-    {agent: eeveAgent.id, ver: eeveV1.id, seed: 5, elo: 1476, se: 40, w: 4, l: 11, pts: 4, sb: 18},
-    {agent: fpAgent.id, ver: fpV1.id, seed: 6, elo: 1422, se: 42, w: 2, l: 13, pts: 2, sb: 9},
-  ];
-  for (const ent of autumnEntrants) {
-    db.upsertTournamentEntrant({
-      tournamentId: '2',
-      agentId: ent.agent,
-      versionId: ent.ver,
-      seed: ent.seed,
-      elo: ent.elo,
-      se: ent.se,
-      gameWins: ent.w,
-      gameLosses: ent.l,
-      gameTies: 0,
-      points: ent.pts,
-      sonnebornBerger: ent.sb,
-    });
-  }
-  const vgcPackedTeams = [
-    packedSix(['Incineroar', 'Rillaboom', 'Archaludon', 'Pelipper', 'Basculegion', 'Farigiraf']),
-    packedSix(['Garchomp', 'Talonflame', 'Gholdengo', 'Kingambit', 'Amoonguss', 'Sneasler']),
-    packedSix(['Dragonite', 'Arcanine-Hisui', 'Politoed', 'Grimmsnarl', 'Sylveon', 'Metagross']),
-  ];
-  let autumnGameSeq = 0;
-  for (let i = 0; i < autumnEntrants.length; i++) {
-    for (let j = i + 1; j < autumnEntrants.length; j++) {
-      for (let g = 1; g <= 3; g++) {
-        autumnGameSeq++;
-        db.upsertTournamentGame({
-          id: `autumn26-rr-${autumnGameSeq}`,
-          tournamentId: '2',
-          stage: 'Round Robin',
-          cycle: g,
-          matchupGame: g,
-          p1VersionId: autumnEntrants[i].ver,
-          p2VersionId: autumnEntrants[j].ver,
-          seed: `40,50,60,${autumnGameSeq}`,
-          p1Team: vgcPackedTeams[(i + g) % vgcPackedTeams.length],
-          p2Team: vgcPackedTeams[(j + g + 1) % vgcPackedTeams.length],
-          outcome: g === 2 && (i + j) % 2 === 1 ? 'L' : 'W',
-          endReason: 'win',
-          turns: 8 + (autumnGameSeq % 9),
-          p1BankSeconds: 96 + (autumnGameSeq % 30),
-          p2BankSeconds: 82 + ((autumnGameSeq * 2) % 30),
-          status: 'completed',
-          completedAt: now - 6800 + autumnGameSeq * 120,
-        });
-      }
-    }
-  }
-
-  db.upsertTournament({
-    id: '3',
-    name: 'Tournament #3: VGC 2026 Reg M-D OTS BO3',
-    format: 'gen9championsvgc2026regmc',
-    gamesPerMatchup: 8,
-    parallelTables: 2,
-    hardware: 'GCP L4 Spot · 24 vCPU · 48 GB RAM',
-    status: 'scheduled',
-    startsAt: now + 14 * 86400,
-  });
-  const pmarigliaDev = db.getDeveloperByGitHub('pmariglia')!;
-  submitAndPass({
-    agentId: fpAgent.id,
-    developerId: pmarigliaDev.id,
-    version: '1.4.1-t3',
-    pkg: 'oci',
-    url: 'ghcr.io/pmariglia/foul-play:1.4.1-t3',
-    ladders: [],
-    tournaments: ['3'],
-    at: now - 3600,
-    bytes: 264 * 1024 * 1024,
-    durationMillis: 2300,
-    turnMillis: 270,
-    ram: 710,
-  });
-
-  const liveMatch: arena.LiveMatch = {
-    heartbeatSeq: 42,
-    matchId: 'vgc-0009999',
-    ladderId: 'gen9championsvgc2026regmc',
-    slot: 'vgc',
-    format: 'gen9championsvgc2026regmc',
-    game: 2,
-    turn: 9,
-    activeSlot: 'p2',
-    turnStartedAt: now - 4,
-    turnBudgetSeconds: 138,
-    incrementSeconds: 25,
-    game1Summary: {winnerSlot: 'p1', turns: 11},
-    p1: {
-      slug: '0-error',
-      name: '0 ERROR',
-      version: '1.0.0',
-      bankSeconds: 142,
-      lastTurnMillis: 290,
-      meanTurnMillis: 280,
-      ram: 890,
-      team: hashTeam(mtTeamEntry.canonicalPacked),
-    },
-    p2: {
-      slug: 'jaxcalibur',
-      name: 'Jaxcalibur',
-      version: '1.3.0',
-      bankSeconds: 128,
-      lastTurnMillis: 340,
-      meanTurnMillis: 315,
-      ram: 1920,
-      team: formatPoolTeamLabel(zeroTeamEntry.canonicalPacked, 'P1'),
-    },
-  };
-
-  const countsBySlot = db.getMatchCountsBySlot();
-  const recentRaw = db.getRecentMatches(50);
-  const targetPublic = options.publicDir ?? render.PUBLIC_DIR;
-  const liveDoc: arena.LiveDocument = {
-    updatedAt: now,
-    stale: false,
-    live: liveMatch,
-    pageSize: 50,
-    totalMatches: countsBySlot.all ?? recentRaw.length,
-    countsBySlot,
-    historyEndpoint: '/api/battles.json',
-    recentMatches: recentRaw.map(m => arena.enrichMatchView(targetPublic, m)),
-  };
-
-  const tournamentBroadcast: tournaments.LiveBroadcast = {
-    tournamentId: '2',
-    tables: [
-      {label: "Table 1 · 0 ERROR vs Mew's Truck"},
-      {label: 'Table 2 · Jaxcalibur vs MissingNo.Zero'},
-    ],
-    seriesLeftHtml: 'Round Robin · Cycle 4 · Game 4',
-    seriesRightHtml: "0 ERROR <code>1.2.0</code> vs Mew's Truck <code>1.0.0</code>",
-    p1: {
-      name: '0 ERROR',
-      bankSeconds: 118,
-      thinking: false,
-      incrementSeconds: 25,
-    },
-    p2: {
-      name: "Mew's Truck",
-      bankSeconds: 104,
-      thinking: true,
-      incrementSeconds: 25,
-    },
-    lines: [
-      '|player|p1|0 ERROR|1',
-      "|player|p2|Mew's Truck|2",
-      '|gametype|doubles',
-      '|gen|9',
-      '|tier|[Gen 9 Champions] VGC 2026 Reg M-C',
-      '|turn|1',
-    ],
-    live: true,
-  };
-
-  if (options.render !== false && options.publicDir) {
-    const t1Dir = path.join(options.publicDir, 'arena', 'tournaments', '1');
-    fs.mkdirSync(t1Dir, {recursive: true});
-    const sf1Log = [
-      "|player|p1|Mew's Truck|1",
-      '|player|p2|0 ERROR|2',
-      '|gametype|singles',
-      '|gen|9',
-      '|tier|[Gen 9] OU',
-      '|poke|p1|Great Tusk|',
-      '|poke|p1|Gholdengo|',
-      '|poke|p2|Kingambit, M|',
-      '|poke|p2|Dragapult, F|',
-      '|teampreview',
-      "|c|☆Mew's Truck|{\"team 1\":0.685,\"team 2\":0.315}",
-      '|c|☆0 ERROR|{"team 1":0.55,"team 2":0.45}',
-      '|start',
-      '|switch|p1a: Great Tusk|Great Tusk|100/100',
-      '|switch|p2a: Dragapult|Dragapult, F|100/100',
-      '|turn|1',
-      "|c|☆Mew's Truck|{\"move 1\":0.625,\"move 2\":0.25,\"switch 2\":0.125}",
-      '|c|☆0 ERROR|{"move 1":0.55,"move 3":0.3,"switch 2":0.15}',
-      '|move|p2a: Dragapult|U-turn|p1a: Great Tusk',
-      '|-resisted|p1a: Great Tusk',
-      '|-damage|p1a: Great Tusk|92/100',
-      '|move|p1a: Great Tusk|Knock Off|p2a: Dragapult',
-      '|-supereffective|p2a: Dragapult',
-      '|-damage|p2a: Dragapult|0 fnt',
-      '|faint|p2a: Dragapult',
-      "|win|Mew's Truck",
-    ].join('\n');
-    fs.writeFileSync(path.join(t1Dir, 'spring26-sf1.log'), `${sf1Log}\n`, 'utf8');
-    fs.writeFileSync(
-      path.join(t1Dir, '1-replays.7z'),
-      Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04])
-    );
-
-    render.renderArenaPages({
-      db,
-      publicDir: options.publicDir,
-      staticDir,
-      avatarsDir,
-      liveDoc,
-      tournamentBroadcast,
-      now,
-    });
-    const liveJsonPath = path.join(options.publicDir, 'api', 'live.json');
-    fs.mkdirSync(path.dirname(liveJsonPath), {recursive: true});
-    fs.writeFileSync(liveJsonPath, `${JSON.stringify(liveDoc)}\n`, 'utf8');
-  }
-
-  return {liveDoc, tournamentBroadcast, featuredBattleId};
-}
-
-interface RemotePendingLadder {
-  id: string;
-  slot: LadderSlot;
-  name: string;
-  format: string;
-  team: TeamMode;
-  min: number;
-  teams?: number;
-  status: LadderStatus;
-}
-
-export interface RemotePendingSubmission {
-  versionId: number;
-  agentId: number;
-  agentSlug: string;
-  agentName: string;
-  version: string;
-  package: 'bundle' | 'oci';
-  url: string;
-  sha256: string;
-  authToken?: string;
-  ladders: string[];
-  tournaments?: string[];
-  teamsByLadder: Record<string, string[]>;
-}
-
-interface LocalVersionEntry {
-  versionId: number;
-  agentId: number;
-  agentSlug: string;
-  agentName: string;
-  version: string;
-  isAnchor: boolean;
-  strengthBias: number;
-  active: boolean;
-  matchesPlayed: number;
-  ratingElo: number;
-  ratingSe: number;
-  ratingLcb: number;
-  settled: boolean;
-}
-
-interface LocalLadderState {
-  meta: RemotePendingLadder;
-  entries: LocalVersionEntry[];
-  pairs: Map<string, ratings.PairMatchCounts>;
-  teamsByAgent: Map<number, {agentName: string; teams: string[]}>;
-  lastMatchNumber: number;
-}
-
-export interface SmokeDecision {
-  smokeStatus: 'passed' | 'failed' | 'quarantined';
-  smokeError?: string;
-  unpackedBytes?: number;
-  smokeDurationMillis?: number;
-  smokeTurnMillis?: number;
-  smokePeakRam?: number;
-}
-
-export interface ClientOptions {
-  serverUrl: string;
-  arenaSecret: string;
-  seed?: number;
-  now?: () => number;
-  decideSmoke?: (sub: RemotePendingSubmission) => SmokeDecision;
-}
-
-export class MockArenaClient {
-  private readonly serverUrl: string;
-  private readonly arenaSecret: string;
-  private readonly rng: (max: number) => number;
-  private readonly getNowSeconds: () => number;
-  private readonly decideSmoke: (sub: RemotePendingSubmission) => SmokeDecision;
-  private readonly ladders = new Map<string, LocalLadderState>();
-  private heartbeatSeq = 0;
-  private globalMatchSeq = 0;
-
-  constructor(options: ClientOptions) {
-    this.serverUrl = options.serverUrl.replace(/\/+$/, '');
-    this.arenaSecret = options.arenaSecret;
-    this.rng = createRng(options.seed ?? 20261110);
-    this.getNowSeconds = options.now ?? (() => Math.floor(Date.now() / 1000));
-    this.decideSmoke = options.decideSmoke ?? (() => ({smokeStatus: 'passed'}));
-  }
-
-  private async requestJson<T>(
-    method: 'GET' | 'POST',
-    endpoint: string,
-    body?: object
-  ): Promise<T> {
-    const res = await fetch(`${this.serverUrl}${endpoint}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.arenaSecret}`,
-        ...(body ? {'Content-Type': 'application/json'} : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`Arena HTTP ${method} ${endpoint} failed (${res.status}): ${text}`);
-    }
-    return await res.json() as T;
-  }
-
-  private recomputeLocalLadder(ladder: LocalLadderState) {
-    const M = ladder.entries.length;
-    if (M === 0) return;
-    const indexByVersion = new Map<number, number>();
-    for (let i = 0; i < M; i++) {
-      indexByVersion.set(ladder.entries[i].versionId, i);
-    }
-    const pairList: ratings.PairMatchCounts[] = [];
-    for (const [key, counts] of ladder.pairs) {
-      const [lowStr, highStr] = key.split(':');
-      const i = indexByVersion.get(Number(lowStr));
-      const j = indexByVersion.get(Number(highStr));
-      if (i !== undefined && j !== undefined) {
-        pairList.push({...counts, i, j});
-      }
-    }
-    const anchorIdx = ladder.entries.findIndex(e => e.isAnchor);
-    const res = ratings.computeDavidsonRatings(M, pairList, anchorIdx, 1500);
-    for (let i = 0; i < M; i++) {
-      const e = ladder.entries[i];
-      e.ratingElo = res.elo[i];
-      e.ratingSe = res.eloStd[i];
-      e.ratingLcb = res.eloLcb[i];
-      if (!e.settled && e.matchesPlayed >= 25 && e.ratingSe <= 30.0) {
-        e.settled = true;
-      }
-    }
-  }
-
-  setAnchor(ladderId: string, agentSlug: string, version: string) {
-    const ladder = this.ladders.get(ladderId);
-    if (!ladder) return;
-    for (const entry of ladder.entries) {
-      entry.isAnchor = entry.agentSlug === agentSlug && entry.version === version;
-    }
-    this.recomputeLocalLadder(ladder);
-  }
-
-  async syncPendingSubmissions(): Promise<number> {
-    const payload = await this.requestJson<{
-      ladders: RemotePendingLadder[];
-      submissions: RemotePendingSubmission[];
-    }>('GET', '/api/arena/pending-submissions');
-
-    const activeIds = new Set<string>();
-    for (const meta of payload.ladders) {
-      activeIds.add(meta.id);
-      const existing = this.ladders.get(meta.id);
-      if (existing) {
-        existing.meta = meta;
-      } else {
-        this.ladders.set(meta.id, {
-          meta,
-          entries: [],
-          pairs: new Map(),
-          teamsByAgent: new Map(),
-          lastMatchNumber: 0,
-        });
-      }
-    }
-    for (const id of [...this.ladders.keys()]) {
-      if (!activeIds.has(id)) {
-        this.ladders.get(id)!.meta.status = 'archived';
-      }
-    }
-
-    let processed = 0;
-    for (const sub of payload.submissions) {
-      const decision = this.decideSmoke(sub);
-      const retiredByLadder: Record<string, number> = {};
-
-      if (decision.smokeStatus === 'passed') {
-        for (const ladderId of sub.ladders) {
-          const ladder = this.ladders.get(ladderId);
-          if (!ladder) continue;
-          const submittedTeams = sub.teamsByLadder[ladderId];
-          if (submittedTeams?.length) {
-            ladder.teamsByAgent.set(sub.agentId, {
-              agentName: sub.agentName,
-              teams: submittedTeams,
-            });
-          }
-
-          this.recomputeLocalLadder(ladder);
-          const otherActive = ladder.entries
-            .filter(e => e.agentId === sub.agentId && e.active && e.versionId !== sub.versionId)
-            .sort((a, b) => a.ratingLcb - b.ratingLcb || a.versionId - b.versionId);
-
-          while (otherActive.length >= 2) {
-            const weakest = otherActive.shift()!;
-            weakest.active = false;
-            retiredByLadder[ladderId] = weakest.versionId;
-          }
-
-          if (!ladder.entries.some(e => e.versionId === sub.versionId)) {
-            const bias = (((sub.agentId * 31 + sub.versionId * 17) % 11) - 5) * 0.12;
-            ladder.entries.push({
-              versionId: sub.versionId,
-              agentId: sub.agentId,
-              agentSlug: sub.agentSlug,
-              agentName: sub.agentName,
-              version: sub.version,
-              isAnchor: false,
-              strengthBias: bias,
-              active: true,
-              matchesPlayed: 0,
-              ratingElo: 1500,
-              ratingSe: 350,
-              ratingLcb: 814,
-              settled: false,
-            });
-          }
-        }
-      }
-
-      await this.requestJson('POST', '/api/arena/submission-status', {
-        versionId: sub.versionId,
-        smokeStatus: decision.smokeStatus,
-        unpackedBytes: decision.unpackedBytes ?? 196 * 1024 * 1024,
-        smokeDurationMillis: decision.smokeDurationMillis ?? 2100,
-        smokeTurnMillis: decision.smokeTurnMillis ?? 300,
-        smokePeakRam: decision.smokePeakRam ?? 840,
-        ...(decision.smokeError !== undefined ? {smokeError: decision.smokeError} : {}),
-        retiredVersionIdsByLadder: retiredByLadder,
-      });
-      processed++;
-    }
-
-    return processed;
-  }
-
-  async quarantineVersion(versionId: number, reason: string): Promise<void> {
-    for (const ladder of this.ladders.values()) {
-      for (const entry of ladder.entries) {
-        if (entry.versionId === versionId) {
-          entry.active = false;
-        }
-      }
-    }
-    await this.requestJson('POST', '/api/arena/submission-status', {
-      versionId,
-      smokeStatus: 'quarantined',
-      smokeError: reason,
-    });
-  }
-
-  async sendIdleHeartbeat(): Promise<void> {
-    await this.requestJson('POST', '/api/arena/heartbeat', {
-      idle: true,
-    });
-  }
-
-  async playMatchStep(options: {
-    ladderId?: string;
-    emitHeartbeats?: boolean;
-  } = {}): Promise<{
-    matchId: string;
-    ladderId: string;
-    p1VersionId: number;
-    p2VersionId: number;
-    p1TeamLabel?: string;
-    p2TeamLabel?: string;
-    archivedLadder: boolean;
-  } | undefined> {
-    const candidateStates: ratings.LadderMatchState[] = [];
-
-    for (const [ladderId, ladder] of this.ladders) {
-      if (options.ladderId && ladderId !== options.ladderId) continue;
-      if (ladder.meta.status !== 'active' && ladder.meta.status !== 'settling') continue;
-
-      const activeEntries = ladder.entries.filter(e => e.active);
-      const distinctAgents = new Set(activeEntries.map(e => e.agentId));
-      if (distinctAgents.size < ladder.meta.min) continue;
-
-      if (ladder.meta.status === 'settling' && activeEntries.every(e => e.settled)) {
-        continue;
-      }
-
-      this.recomputeLocalLadder(ladder);
-      const M = ladder.entries.length;
-      const activeIndices: number[] = [];
-      const theta = new Float64Array(M);
-      const sigma = new Float64Array(M);
-      const agentMatches = new Int32Array(M);
-      const pairMatches = new Int32Array(M * M);
-
-      for (let i = 0; i < M; i++) {
-        const e = ladder.entries[i];
-        if (e.active) activeIndices.push(i);
-        theta[i] = (e.ratingElo - 1500) / ratings.ELO_SCALE;
-        sigma[i] = e.ratingSe / ratings.ELO_SCALE;
-        agentMatches[i] = e.matchesPlayed;
-      }
-
-      for (let i = 0; i < M; i++) {
-        for (let j = i + 1; j < M; j++) {
-          const low = Math.min(ladder.entries[i].versionId, ladder.entries[j].versionId);
-          const high = Math.max(ladder.entries[i].versionId, ladder.entries[j].versionId);
-          const rec = ladder.pairs.get(`${low}:${high}`);
-          const count = rec ? rec.ww + rec.wt + rec.split + rec.tl + rec.ll : 0;
-          pairMatches[i * M + j] = count;
-          pairMatches[j * M + i] = count;
-        }
-      }
-
-      candidateStates.push({
-        id: ladderId,
-        activeAgentIndices: activeIndices,
-        theta,
-        sigma,
-        agentMatches,
-        pairMatches,
-        lastMatchNumber: ladder.lastMatchNumber,
-      });
-    }
-
-    if (!candidateStates.length) return undefined;
-
-    const choice = ratings.selectNextArenaMatch(candidateStates, this.globalMatchSeq + 1);
-    if (!choice) return undefined;
-
-    const ladder = this.ladders.get(choice.ladderId)!;
-    let e1 = ladder.entries[choice.agentI];
-    let opponent = ladder.entries[choice.agentJ];
-    // Never pair two versions of the same project; keep the less-settled version!
-    if (e1.agentId === opponent.agentId) {
-      if (opponent.matchesPlayed < e1.matchesPlayed) {
-        e1 = opponent;
-      }
-      const alt = ladder.entries
-        .filter(e => e.active && e.agentId !== e1.agentId)
-        .sort((a, b) => a.matchesPlayed - b.matchesPlayed)[0];
-      if (!alt) return undefined;
-      opponent = alt;
-    }
-
-    let p1TeamLabel: string | undefined;
-    let p2TeamLabel: string | undefined;
-    if (ladder.meta.team === 'pools') {
-      const activeAgentIds = new Set(ladder.entries.filter(e => e.active).map(e => e.agentId));
-      const pool = buildCanonicalTeamPool(
-        [...ladder.teamsByAgent.entries()]
-          .filter(([agentId]) => activeAgentIds.has(agentId))
-          .map(([agentId, data]) => ({agentId, agentName: data.agentName, teams: data.teams})),
-        ladder.meta.format
-      );
-      const sampled = samplePoolsPair(pool, e1.agentId, opponent.agentId, this.rng);
-      p1TeamLabel = sampled.t1Label;
-      p2TeamLabel = sampled.t2Label;
-    }
-
-    this.globalMatchSeq++;
-    ladder.lastMatchNumber = this.globalMatchSeq;
-    const matchId = `${ladder.meta.format}-${String(this.globalMatchSeq).padStart(7, '0')}`;
-    const nowSec = this.getNowSeconds();
-
-    const diff = e1.strengthBias - opponent.strengthBias;
-    const pWin = 1 / (1 + Math.exp(-diff));
-    const sampleGame = (): ratings.GameOutcome => (this.rng(1000) / 1000 < pWin ? 'W' : 'L');
-    const g1 = sampleGame();
-    const g2 = sampleGame();
-    const cat = `${g1}${g2}` as ratings.MatchCategory;
-
-    if (options.emitHeartbeats !== false) {
-      this.heartbeatSeq++;
-      await this.requestJson('POST', '/api/arena/heartbeat', {
-        heartbeatSeq: this.heartbeatSeq,
-        matchId,
-        ladderId: ladder.meta.id,
-        format: ladder.meta.format,
-        game: 1,
-        turn: 14,
-        activeSlot: 'p1',
-        turnStartedAt: nowSec,
-        turnBudgetSeconds: 145,
-        incrementSeconds: ladder.meta.slot === 'vgc' ? 25 : 10,
-        p1: {
-          slug: e1.agentSlug,
-          name: e1.agentName,
-          version: e1.version,
-          bankSeconds: 145,
-          lastTurnMillis: 280,
-          meanTurnMillis: 295,
-          ram: 840,
-          ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
-        },
-        p2: {
-          slug: opponent.agentSlug,
-          name: opponent.agentName,
-          version: opponent.version,
-          bankSeconds: 142,
-          lastTurnMillis: 310,
-          meanTurnMillis: 305,
-          ram: 790,
-          ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
-        },
-      });
-
-      this.heartbeatSeq++;
-      await this.requestJson('POST', '/api/arena/heartbeat', {
-        heartbeatSeq: this.heartbeatSeq,
-        matchId,
-        ladderId: ladder.meta.id,
-        format: ladder.meta.format,
-        game: 2,
-        turn: 21,
-        activeSlot: 'p2',
-        turnStartedAt: nowSec,
-        turnBudgetSeconds: 136,
-        incrementSeconds: ladder.meta.slot === 'vgc' ? 25 : 10,
-        game1Summary: {winnerSlot: g1 === 'W' ? 'p1' : 'p2', turns: 28},
-        p1: {
-          slug: e1.agentSlug,
-          name: e1.agentName,
-          version: e1.version,
-          bankSeconds: 138,
-          lastTurnMillis: 275,
-          meanTurnMillis: 290,
-          ram: 850,
-          ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
-        },
-        p2: {
-          slug: opponent.agentSlug,
-          name: opponent.agentName,
-          version: opponent.version,
-          bankSeconds: 136,
-          lastTurnMillis: 325,
-          meanTurnMillis: 310,
-          ram: 800,
-          ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
-        },
-      });
-    }
-
-    // Update local state before deciding whether a settling ladder can transition to archived
-    e1.matchesPlayed++;
-    opponent.matchesPlayed++;
-    const lowId = Math.min(e1.versionId, opponent.versionId);
-    const highId = Math.max(e1.versionId, opponent.versionId);
-    const pairKey = `${lowId}:${highId}`;
-    let agg = ladder.pairs.get(pairKey);
-    if (!agg) {
-      agg = {i: 0, j: 0, ww: 0, wt: 0, split: 0, tl: 0, ll: 0};
-      ladder.pairs.set(pairKey, agg);
-    }
-    const v1IsLow = e1.versionId === lowId;
-    if (cat === 'WW') {
-      if (v1IsLow) agg.ww++;
-      else agg.ll++;
-    } else if (cat === 'LL') {
-      if (v1IsLow) agg.ll++;
-      else agg.ww++;
-    } else {
-      agg.split++;
-    }
-
-    this.recomputeLocalLadder(ladder);
-    const shouldArchive = (
-      ladder.meta.status === 'settling' &&
-      ladder.entries.filter(e => e.active).every(e => e.settled)
-    );
-
-    const res = await this.requestJson<{
-      ok: boolean;
-      duplicate: boolean;
-      archivedLadder: boolean;
-    }>('POST', '/api/arena/match-complete', {
-      match: {
-        id: matchId,
-        ladderId: ladder.meta.id,
-        p1VersionId: e1.versionId,
-        p2VersionId: opponent.versionId,
-        seed: `100,200,300,${this.globalMatchSeq}`,
-        ...(p1TeamLabel !== undefined ? {p1TeamLabel} : {}),
-        ...(p2TeamLabel !== undefined ? {p2TeamLabel} : {}),
-        game1Outcome: g1,
-        game2Outcome: g2,
-        category: cat,
-        game1Turns: 28,
-        game2Turns: 26,
-        game1EndReason: 'win',
-        game2EndReason: 'win',
-        p1PeakRam: 850,
-        p2PeakRam: 800,
-        p1Game1BankSeconds: 140,
-        p1Game2BankSeconds: 138,
-        p2Game1BankSeconds: 136,
-        p2Game2BankSeconds: 134,
-        p1MeanTurnMillis: 290,
-        p2MeanTurnMillis: 310,
-        completedAt: nowSec,
-      },
-      ...(shouldArchive ? {ladderStatus: 'archived' as const} : {}),
-    });
-
-    if (res.archivedLadder) {
-      ladder.meta.status = 'archived';
-    }
-
-    return {
-      matchId,
-      ladderId: ladder.meta.id,
-      p1VersionId: e1.versionId,
-      p2VersionId: opponent.versionId,
-      p1TeamLabel,
-      p2TeamLabel,
-      archivedLadder: res.archivedLadder,
-    };
-  }
 }
 
 const CLI_USAGE = [
-  'Usage: mock <seed|step|run> [options]',
+  'Usage:',
+  '  mock seed [--db <path>] [--public-dir <dir>] [--now <ts>]',
+  '  mock [-f <scenario.mock>] [--db <path>] [--server <url>] [--secret <tok>]',
+  '  mock <command> [args...] [--db <path>] [--server <url>] [--secret <tok>]',
+  '  mock < tools/scenarios/seed.mock',
   '',
-  'Commands:',
-  '  seed [--db <path>] [--public-dir <dir>] [--now <unix_seconds>]',
-  '  step [--server <url>] [--secret <token>] [--matches <n>] [--smoke <pass|fail>]',
-  '  run  [--server <url>] [--secret <token>] [--interval-millis <ms>] [--smoke <pass|fail>]',
+  'Declarative Commands:',
+  '  reset [--seed <n>] [--now <ts>] [--open-ladders]',
+  '  time <+dur|-dur|now|now-dur|iso|unix>',
+  '  rng <seed>',
+  '  register <name> [--owner <gh[:smogon]>...] [--pending|--disabled] [--logo <file|auto>]',
+  '  qualify <agent> | disable <agent> | reassign <gh> <agent|--none> | refund-cooldown <agent>',
+  '  discord <link|unlink|sync> ...',
+  '  ladder <open|status|add|rotate|anchor|archive> ...',
+  '  submit <agent> [<ver>] [<ladder>[=<rating>] ...] [--smoke <pass|pending|fail>] ...',
+  '  smoke [<agent>[@<ver>]|all] [--pass|--fail] [--error <msg>]',
+  '  quarantine <agent>[@<ver>] [--reason <msg>] | unquarantine <agent>[@<ver>]',
+  '  play [<count>] [--ladder <ladders>] [--over <dur>] [--tie-rate <p>] [--fault-rate <p>]',
+  '  settle [<ladders|all>] [--over <dur>] [--max <n>] [--heartbeats]',
+  '  match <ladder> <p1>[@<ver>] <p2>[@<ver>] [--count <n>] [--outcome <cat>] ...',
+  '  live <match|idle|stale> ...',
+  '  tournament <create|enter|seed|start|play|broadcast|complete> ...',
+  '  wiki <slug> [--by <gh>] [--visibility <vis>] (--content <djot> | --file <path>)',
+  '  render',
+  '  simulate [<steps>] [--interval <millis>] [--over <dur>]',
 ].join('\n');
 
-export async function runMockCli(argv: string[]): Promise<void> {
-  const {positionals, values} = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    options: {
-      db: {type: 'string'},
-      'public-dir': {type: 'string'},
-      server: {type: 'string'},
-      secret: {type: 'string'},
-      matches: {type: 'string'},
-      'interval-millis': {type: 'string'},
-      smoke: {type: 'string'},
-      now: {type: 'string'},
-      help: {type: 'boolean'},
-    },
-  });
+interface GlobalCliFlags {
+  scenarioFile?: string;
+  dbPath?: string;
+  publicDir?: string;
+  serverUrl?: string;
+  arenaSecret?: string;
+  now?: string;
+  help: boolean;
+  remaining: string[];
+}
 
-  const cmd = positionals[0];
-  if (!cmd || cmd === 'help' || values.help) {
+function extractGlobalCliFlags(argv: string[]): GlobalCliFlags {
+  const out: GlobalCliFlags = {help: false, remaining: []};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '-f' || arg === '--file') {
+      out.scenarioFile = argv[++i];
+    } else if (arg.startsWith('--file=')) {
+      out.scenarioFile = arg.slice('--file='.length);
+    } else if (arg === '--db') {
+      out.dbPath = argv[++i];
+    } else if (arg.startsWith('--db=')) {
+      out.dbPath = arg.slice('--db='.length);
+    } else if (arg === '--public-dir') {
+      out.publicDir = argv[++i];
+    } else if (arg.startsWith('--public-dir=')) {
+      out.publicDir = arg.slice('--public-dir='.length);
+    } else if (arg === '--server') {
+      out.serverUrl = argv[++i];
+    } else if (arg.startsWith('--server=')) {
+      out.serverUrl = arg.slice('--server='.length);
+    } else if (arg === '--secret') {
+      out.arenaSecret = argv[++i];
+    } else if (arg.startsWith('--secret=')) {
+      out.arenaSecret = arg.slice('--secret='.length);
+    } else if (arg === '--now' && out.remaining[0] === 'seed') {
+      out.now = argv[++i];
+    } else if (arg === '-h' || (arg === '--help' && out.remaining.length === 0)) {
+      out.help = true;
+    } else {
+      out.remaining.push(arg);
+    }
+  }
+  return out;
+}
+
+export async function run(argv: string[]): Promise<void> {
+  const globalFlags = extractGlobalCliFlags(argv);
+  const firstToken = globalFlags.remaining[0];
+
+  if (globalFlags.help || firstToken === 'help') {
     console.log(CLI_USAGE);
     return;
   }
 
-  if (cmd === 'seed') {
-    const dbPath = values.db ?? DB_PATH;
-    const publicDir = values['public-dir'] ?? render.PUBLIC_DIR;
-    const now = values.now ? Number(values.now) : Math.floor(Date.now() / 1000);
+  const isSeedAlias = firstToken === 'seed' && !globalFlags.scenarioFile;
+  const scenarioFile = isSeedAlias ? SEED_SCENARIO : globalFlags.scenarioFile;
+  const readingStdin = !scenarioFile && globalFlags.remaining.length === 0 && !process.stdin.isTTY;
+
+  if (!scenarioFile && globalFlags.remaining.length === 0 && !readingStdin) {
+    console.log(CLI_USAGE);
+    return;
+  }
+
+  const dbPath = globalFlags.dbPath ?? db.DB_PATH;
+  const publicDir = globalFlags.publicDir ?? render.PUBLIC_DIR;
+  const useMockDir = !globalFlags.dbPath;
+  const mockRoot = useMockDir
+    ? root('.mock')
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-'));
+
+  if (isSeedAlias) {
     if (dbPath !== ':memory:') {
       for (const suffix of ['', '-wal', '-shm']) {
         fs.rmSync(`${dbPath}${suffix}`, {force: true});
       }
     }
-
-    const useMockDir = !values.db;
-    const mockRoot = useMockDir
-      ? root('.mock')
-      : fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-static-'));
     if (useMockDir) {
       fs.rmSync(mockRoot, {recursive: true, force: true});
       fs.mkdirSync(mockRoot, {recursive: true});
     }
-    const staticDir = useMockDir ? path.join(mockRoot, 'static') : mockRoot;
-    const avatarsDir = path.join(staticDir, 'avatars');
-    const laddersFile = root('config', 'ladders.yml');
-    const db = new Database(dbPath);
-    try {
-      prepareMockStaticDir(staticDir, avatarsDir);
-      if (useMockDir) {
-        const rawLadders = fs.readFileSync(laddersFile, 'utf8');
-        fs.writeFileSync(
-          path.join(mockRoot, 'ladders.yml'),
-          rawLadders.replace(/status:\s*upcoming/g, 'status: active'),
-          'utf8'
-        );
-        fs.writeFileSync(
-          path.join(mockRoot, 'vgc-teams.txt'),
-          `${generateValidVgcTeams(20, 42).join('\n\n')}\n`,
-          'utf8'
-        );
-        seedMockWiki(path.join(mockRoot, 'wiki'));
-      }
-      seedMockArena({
-        db,
-        publicDir,
-        staticDir,
-        avatarsDir,
-        laddersFile,
-        now,
-        render: true,
-      });
-      console.log(`Seeded mock Arena DB at ${dbPath} and rendered pages into ${publicDir}`);
-    } finally {
-      db.close();
-      if (!useMockDir) {
-        fs.rmSync(mockRoot, {recursive: true, force: true});
-      }
-    }
-    return;
   }
 
-  const serverUrl = values.server ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
-  const arenaSecret = values.secret ?? process.env.ARENA_SECRET ?? '';
-  if (!arenaSecret) {
-    throw new Error('Missing ARENA_SECRET (pass --secret or set ARENA_SECRET in .env)');
-  }
-  const smokeMode = values.smoke === 'fail' ? 'failed' : 'passed';
-  const client = new MockArenaClient({
-    serverUrl,
-    arenaSecret,
-    decideSmoke: () => ({
-      smokeStatus: smokeMode,
-      smokeError: smokeMode === 'failed' ? 'Simulated smoke test failure' : undefined,
-    }),
-  });
+  const staticDir = useMockDir ? path.join(mockRoot, 'static') : mockRoot;
+  const avatarsDir = path.join(staticDir, 'avatars');
+  const laddersFile = useMockDir
+    ? path.join(mockRoot, 'ladders.yml')
+    : root('config', 'ladders.yml');
+  const wikiDir = useMockDir ? path.join(mockRoot, 'wiki') : undefined;
+  const wallNow = Math.floor(Date.now() / 1000);
+  const nowOverride = globalFlags.now
+    ? parseTimestampSpec(globalFlags.now, wallNow, wallNow)
+    : undefined;
 
-  if (cmd === 'step') {
-    const subCount = await client.syncPendingSubmissions();
-    const matchesToPlay = values.matches ? Number(values.matches) : 1;
-    let played = 0;
-    for (let i = 0; i < matchesToPlay; i++) {
-      const res = await client.playMatchStep();
-      if (!res) break;
-      played++;
-    }
-    console.log(`Processed ${subCount} submission(s) and played ${played} match(es)`);
-    return;
-  }
-
-  if (cmd === 'run') {
-    const intervalMillis = values['interval-millis'] ? Number(values['interval-millis']) : 2000;
-    const state = {running: true};
-    process.on('SIGINT', () => {
-      state.running = false;
+  const database = new db.Database(dbPath, nowOverride !== undefined ? {now: nowOverride} : {});
+  try {
+    const runner = new Runner({
+      db: database,
+      mockDir: useMockDir ? mockRoot : undefined,
+      staticDir,
+      avatarsDir,
+      publicDir,
+      wikiDir,
+      laddersFile,
+      now: nowOverride,
+      serverUrl: globalFlags.serverUrl,
+      arenaSecret: globalFlags.arenaSecret ?? process.env.ARENA_SECRET,
+      sessionSecret: process.env.SESSION_SECRET,
+      log: line => console.log(line),
     });
-    process.on('SIGTERM', () => {
-      state.running = false;
-    });
-    while (state.running) {
-      await client.syncPendingSubmissions();
-      const step = await client.playMatchStep();
-      if (!step) {
-        await client.sendIdleHeartbeat();
-      }
-      await new Promise(resolve => setTimeout(resolve, intervalMillis));
-    }
-    return;
-  }
 
-  throw new Error(`Unknown command "${cmd}"\n\n${CLI_USAGE}`);
+    if (scenarioFile) {
+      await runner.runFile(scenarioFile);
+      if (isSeedAlias) {
+        console.log(`Seeded mock Arena DB at ${dbPath} and rendered pages into ${publicDir}`);
+      }
+      return;
+    }
+
+    if (readingStdin) {
+      const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});
+      let acc = '';
+      let lineNo = 0;
+      for await (const line of rl) {
+        lineNo++;
+        const trimmed = line.trim();
+        if (!acc && (!trimmed || trimmed.startsWith('#'))) continue;
+        if (line.endsWith('\\') && !line.endsWith('\\\\')) {
+          acc += `${line.slice(0, -1)} `;
+          continue;
+        }
+        acc += line;
+        const tokens = tokenize(acc);
+        acc = '';
+        if (tokens.length > 0) {
+          await runner.execCommand(parseCommandTokens(tokens, lineNo, tokens.join(' ')));
+          runner.saveState();
+        }
+      }
+      if (acc.trim()) {
+        const tokens = tokenize(acc);
+        if (tokens.length > 0) {
+          await runner.execCommand(parseCommandTokens(tokens, lineNo, tokens.join(' ')));
+          runner.saveState();
+        }
+      }
+      return;
+    }
+
+    await runner.execTokens(globalFlags.remaining);
+  } finally {
+    database.close();
+    if (!useMockDir) {
+      fs.rmSync(mockRoot, {recursive: true, force: true});
+    }
+  }
 }
 
 if (require.main === module) {
   require('source-map-support').install();
-  runMockCli(process.argv.slice(2)).catch(err => {
+  run(process.argv.slice(2)).catch(err => {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   });

@@ -10,13 +10,27 @@ import {VERSION_RE, root, validateAgentName} from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
-import {GameOutcome, MatchCategory} from './ratings';
+import * as ratings from './ratings';
 
 export const PUBLIC_DIR = root('public');
 // If the Mac Mini Arena worker stops heartbeating for 15 minutes (network drop, power loss,
 // or wedged supervisor), mark public/api/live.json stale so spectators aren't shown a frozen
 // turn clock and alert staff on Discord.
 export const WATCHDOG_TIMEOUT_MILLIS = 15 * 60 * 1000;
+export const STARTING_BANK_SECONDS = 150;
+export const FIRST_TURN_GRACE_SECONDS = 60;
+export const MAX_TURN_SECONDS = 150;
+export const MID_TURN_INCREMENT_SECONDS = 5;
+export const SINGLES_INCREMENT_SECONDS = 10;
+export const DOUBLES_INCREMENT_SECONDS = 25;
+export const MAX_BATTLE_TURNS = 1000;
+
+export function turnIncrementSeconds(format: string): number {
+  return format.includes('doubles') || format.includes('vgc')
+    ? DOUBLES_INCREMENT_SECONDS
+    : SINGLES_INCREMENT_SECONDS;
+}
+
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const RECENT_MATCHES_LIMIT = 50;
@@ -26,8 +40,8 @@ const VALID_SMOKE_UPDATES = new Set<Exclude<db.SmokeStatus, 'pending'>>([
   'failed',
   'quarantined',
 ]);
-const VALID_GAME_OUTCOMES = new Set<GameOutcome>(['W', 'L', 'T']);
-const VALID_MATCH_CATEGORIES = new Set<MatchCategory>([
+const VALID_GAME_OUTCOMES = new Set<ratings.GameOutcome>(['W', 'L', 'T']);
+const VALID_MATCH_CATEGORIES = new Set<ratings.MatchCategory>([
   'WW', 'WT', 'TW', 'WL', 'LW', 'TT', 'TL', 'LT', 'LL',
 ]);
 const VALID_ROLES = new Set<db.EntryRole>([
@@ -133,12 +147,282 @@ export interface Options {
 
 export interface Handle {
   close: () => void;
-  writeLiveJson: (nowSec?: number) => LiveDocument;
+  writeLiveJson: (nowSeconds?: number) => LiveDocument;
   getState: () => {
     lastSeenAt?: number;
     watchdogTriggered: boolean;
     live?: LiveMatch;
   };
+}
+
+export interface PendingLadder {
+  id: string;
+  slot: db.LadderSlot;
+  name: string;
+  format: string;
+  team: db.TeamMode;
+  min: number;
+  teams?: number;
+  status: db.LadderStatus;
+}
+
+export interface PendingSubmission {
+  versionId: number;
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
+  version: string;
+  package: db.PackageFormat;
+  url: string;
+  sha256: string;
+  authToken?: string;
+  ladders: string[];
+  tournaments: string[];
+  teamsByLadder: Record<string, string[]>;
+}
+
+export interface PendingSubmissionsResponse {
+  ladders: PendingLadder[];
+  submissions: PendingSubmission[];
+}
+
+export interface SubmissionStatusPayload {
+  versionId: number;
+  smokeStatus: Exclude<db.SmokeStatus, 'pending'>;
+  unpackedBytes?: number;
+  smokeDurationMillis?: number;
+  smokeTurnMillis?: number;
+  smokePeakRam?: number;
+  smokeError?: string;
+  retiredVersionIdsByLadder?: Record<string, number>;
+}
+
+export interface SubmissionStatusResponse {
+  ok: true;
+  versionId: number;
+  smokeStatus: db.SmokeStatus;
+  retiredByLadder: Record<string, number>;
+}
+
+export type HeartbeatPayload = LiveMatch | {idle: true};
+
+export interface HeartbeatResponse {
+  ok: true;
+  updatedAt: number;
+}
+
+export interface MatchCompletePayload {
+  match: db.CompletedMatchPayload;
+  ladderStatus?: db.LadderStatus;
+  ladderStandings?: db.LadderStandingOverride[];
+}
+
+export interface MatchCompleteResponse {
+  ok: true;
+  duplicate: boolean;
+  archivedLadder: boolean;
+}
+
+export interface LadderArchiveResponse {
+  ok: true;
+  ladderId: string;
+  archiveHref: string;
+  teamsHref: string;
+  bytes: number;
+  sha256: string;
+}
+
+export interface TournamentArchiveResponse {
+  ok: true;
+  tournamentId: string;
+  archiveHref: string;
+  bytes: number;
+  sha256: string;
+}
+
+export interface ClientOptions {
+  serverUrl: string;
+  arenaSecret: string;
+  fetch?: typeof globalThis.fetch;
+}
+
+export function buildLadderMatchState(
+  ladder: db.LadderRow,
+  entries: db.LeaderboardEntryView[],
+  pairs: db.PairAggregateRow[],
+  lastMatchNumber = 0
+): ratings.LadderMatchState | undefined {
+  if (ladder.status !== 'active' && ladder.status !== 'settling') return undefined;
+  const activeEntries = entries.filter(e => e.role !== 'retired');
+  const distinctAgents = new Set(activeEntries.map(e => e.agentId));
+  if (distinctAgents.size < ladder.min) return undefined;
+  if (ladder.status === 'settling' && activeEntries.every(e => e.settledAt !== undefined)) {
+    return undefined;
+  }
+
+  const M = entries.length;
+  const indexByVersion = new Map<number, number>();
+  const activeIndices: number[] = [];
+  const agentIds = new Int32Array(M);
+  const theta = new Float64Array(M);
+  const sigma = new Float64Array(M);
+  const agentMatches = new Int32Array(M);
+  const pairMatches = new Int32Array(M * M);
+
+  for (let i = 0; i < M; i++) {
+    const e = entries[i];
+    indexByVersion.set(e.versionId, i);
+    if (e.role !== 'retired') activeIndices.push(i);
+    agentIds[i] = e.agentId;
+    theta[i] = (e.elo - 1500) / ratings.ELO_SCALE;
+    sigma[i] = e.se / ratings.ELO_SCALE;
+    agentMatches[i] = e.matches;
+  }
+
+  for (const pair of pairs) {
+    const i = indexByVersion.get(pair.lowVersionId);
+    const j = indexByVersion.get(pair.highVersionId);
+    if (i !== undefined && j !== undefined) {
+      const count = pair.ww + pair.wt + pair.split + pair.tl + pair.ll;
+      pairMatches[i * M + j] = count;
+      pairMatches[j * M + i] = count;
+    }
+  }
+
+  return {
+    id: ladder.id,
+    activeAgentIndices: activeIndices,
+    agentIds,
+    minAgents: ladder.min,
+    theta,
+    sigma,
+    agentMatches,
+    pairMatches,
+    lastMatchNumber,
+  };
+}
+
+// Outbound worker control-plane HTTP client used by the Mac Mini Arena coordinator (and `--server`
+// mock scenarios) to communicate with `/api/arena/*` using `Bearer $ARENA_SECRET`.
+export class Client {
+  readonly serverUrl: string;
+  private readonly arenaSecret: string;
+  private readonly fetchImpl: typeof globalThis.fetch;
+
+  constructor(options: ClientOptions) {
+    this.serverUrl = options.serverUrl.replace(/\/+$/, '');
+    this.arenaSecret = options.arenaSecret;
+    this.fetchImpl = options.fetch ?? globalThis.fetch;
+  }
+
+  private async requestJson<T>(
+    method: 'GET' | 'POST',
+    endpoint: string,
+    body?: unknown
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.arenaSecret}`,
+    };
+    let serialized: string | undefined;
+    if (body !== undefined) {
+      headers['content-type'] = 'application/json';
+      serialized = JSON.stringify(body);
+    }
+    const res = await this.fetchImpl(`${this.serverUrl}${endpoint}`, {
+      method,
+      headers,
+      body: serialized,
+    });
+    const text = await res.text();
+    let parsed: unknown;
+    try {
+      parsed = text ? (JSON.parse(text) as unknown) : {};
+    } catch {
+      parsed = {error: text};
+    }
+    if (!res.ok) {
+      const errMsg = parsed && typeof parsed === 'object' && 'error' in parsed
+        ? String(parsed.error)
+        : text;
+      throw new Error(`${method} ${endpoint} failed (${res.status}): ${errMsg}`);
+    }
+    return parsed as T;
+  }
+
+  private async uploadArchive<T>(
+    endpoint: string,
+    archive: Uint8Array,
+    sha256?: string
+  ): Promise<T> {
+    const digest = sha256 ?? crypto.createHash('sha256').update(archive).digest('hex');
+    const res = await this.fetchImpl(`${this.serverUrl}${endpoint}`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${this.arenaSecret}`,
+        'content-type': 'application/x-7z-compressed',
+        'x-content-sha256': digest,
+      },
+      body: Buffer.from(archive),
+    });
+    const text = await res.text();
+    let parsed: unknown;
+    try {
+      parsed = text ? (JSON.parse(text) as unknown) : {};
+    } catch {
+      parsed = {error: text};
+    }
+    if (!res.ok) {
+      const errMsg = parsed && typeof parsed === 'object' && 'error' in parsed
+        ? String(parsed.error)
+        : text;
+      throw new Error(`PUT ${endpoint} failed (${res.status}): ${errMsg}`);
+    }
+    return parsed as T;
+  }
+
+  getPendingSubmissions(): Promise<PendingSubmissionsResponse> {
+    return this.requestJson<PendingSubmissionsResponse>('GET', '/api/arena/pending-submissions');
+  }
+
+  reportSubmissionStatus(payload: SubmissionStatusPayload): Promise<SubmissionStatusResponse> {
+    return this.requestJson<SubmissionStatusResponse>(
+      'POST',
+      '/api/arena/submission-status',
+      payload
+    );
+  }
+
+  sendHeartbeat(payload: HeartbeatPayload): Promise<HeartbeatResponse> {
+    return this.requestJson<HeartbeatResponse>('POST', '/api/arena/heartbeat', payload);
+  }
+
+  completeMatch(payload: MatchCompletePayload): Promise<MatchCompleteResponse> {
+    return this.requestJson<MatchCompleteResponse>('POST', '/api/arena/match-complete', payload);
+  }
+
+  uploadLadderArchive(
+    ladderId: string,
+    archive: Uint8Array,
+    sha256?: string
+  ): Promise<LadderArchiveResponse> {
+    return this.uploadArchive<LadderArchiveResponse>(
+      `/api/arena/ladders/${encodeURIComponent(ladderId)}/archive`,
+      archive,
+      sha256
+    );
+  }
+
+  uploadTournamentArchive(
+    tournamentId: string,
+    archive: Uint8Array,
+    sha256?: string
+  ): Promise<TournamentArchiveResponse> {
+    return this.uploadArchive<TournamentArchiveResponse>(
+      `/api/arena/tournaments/${encodeURIComponent(tournamentId)}/archive`,
+      archive,
+      sha256
+    );
+  }
 }
 
 function sendJson(res: http.ServerResponse, status: number, data: unknown) {
@@ -358,20 +642,20 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
   }
   if (
     typeof m.game1Outcome !== 'string' ||
-    !VALID_GAME_OUTCOMES.has(m.game1Outcome as GameOutcome)
+    !VALID_GAME_OUTCOMES.has(m.game1Outcome as ratings.GameOutcome)
   ) {
     throw Object.assign(new Error('Invalid match.game1Outcome.'), {status: 400});
   }
   if (
     typeof m.game2Outcome !== 'string' ||
-    !VALID_GAME_OUTCOMES.has(m.game2Outcome as GameOutcome)
+    !VALID_GAME_OUTCOMES.has(m.game2Outcome as ratings.GameOutcome)
   ) {
     throw Object.assign(new Error('Invalid match.game2Outcome.'), {status: 400});
   }
-  const expectedCat = `${m.game1Outcome}${m.game2Outcome}` as MatchCategory;
+  const expectedCat = `${m.game1Outcome}${m.game2Outcome}` as ratings.MatchCategory;
   if (
     typeof m.category !== 'string' ||
-    !VALID_MATCH_CATEGORIES.has(m.category as MatchCategory) ||
+    !VALID_MATCH_CATEGORIES.has(m.category as ratings.MatchCategory) ||
     m.category !== expectedCat
   ) {
     throw Object.assign(
@@ -414,8 +698,8 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
     seed: m.seed.trim(),
     p1TeamLabel: typeof m.p1TeamLabel === 'string' ? m.p1TeamLabel : undefined,
     p2TeamLabel: typeof m.p2TeamLabel === 'string' ? m.p2TeamLabel : undefined,
-    game1Outcome: m.game1Outcome as GameOutcome,
-    game2Outcome: m.game2Outcome as GameOutcome,
+    game1Outcome: m.game1Outcome as ratings.GameOutcome,
+    game2Outcome: m.game2Outcome as ratings.GameOutcome,
     category: m.category,
     game1Turns: m.game1Turns,
     game2Turns: m.game2Turns,

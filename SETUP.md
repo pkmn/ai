@@ -215,11 +215,17 @@ npm run mock -- seed
 MOCK=1 npm run dev
 ```
 
-   - `npm run mock -- seed` resets `db/data/arena.sqlite`, populates `.mock/` (`.mock/ladders.yml`
-     with `status: active`, `.mock/static/projects.yml` + mock avatars, a git-initialized `.mock/wiki/`
+   - `npm run mock -- seed` executes the declarative scenario script at `tools/scenarios/seed.mock`,
+     resetting `db/data/arena.sqlite`, populating `.mock/` (`.mock/ladders.yml` with `status: active`,
+     `.mock/static/projects.yml` + mock avatars, `.mock/state.json`, a git-initialized `.mock/wiki/`
      repository with public and `{% visibility: developers %}` pages, and `.mock/vgc-teams.txt` with
-     20 valid VGC Regulation M-C teams), and renders all static Arena pages + live battle/tournament
+     20 valid VGC Regulation M-C teams), and rendering all static Arena pages + live battle/tournament
      feeds into `public/`.
+   - You can also play back custom `.mock` scenario scripts (`MOCK=1 npm run mock -- -f my.mock` or
+     `MOCK=1 npm run mock < my.mock`), run single declarative commands (`MOCK=1 npm run mock -- smoke all`,
+     `MOCK=1 npm run mock -- play 20 --ladder rby`, `MOCK=1 npm run mock -- render`), or run
+     `MOCK=1 npm run mock -- simulate` alongside `MOCK=1 npm run dev` so agents register, smoke-test,
+     and play multi-turn live matches organically in the background.
    - `MOCK=1 npm run dev` starts the server on `http://localhost:1234` with `DEV_AUTH=1` against the
      seeded database and `.mock/` overlay. Live Discord role/pin/DM mutations are disabled whenever
      `NODE_ENV !== 'production'` unless you explicitly pass `DISCORD_SYNC=1` (so `.env`'s
@@ -257,8 +263,9 @@ rm -rf .mock db/data/arena.sqlite* && npm run build
      - **Stage 4 — `Eligible` (settled multi-ladder competitor, VGC teams already locked) — `Foul Play`**:
        `http://localhost:1234/auth/dev?github=pmariglia&return_to=/account`
        *(Submit `1.5.0` in the form to watch `/account` transition immediately to **Ineligible —
-       awaiting Arena smoke testing**, then run `MOCK=1 npm run mock -- step` in a second terminal to
-       smoke-test it, promote it to Challenger, and play a match.)*
+       awaiting Arena smoke testing**, then run `MOCK=1 npm run mock -- simulate` or
+       `MOCK=1 npm run mock -- smoke all && MOCK=1 npm run mock -- play 1 && MOCK=1 npm run mock -- render`
+       in a second terminal to smoke-test it, promote it to Challenger, and play a match.)*
      - **Stage 5 — `Ineligible` (14-day cooldown + Champion/Challenger/Retired + Wiki Admin) — `0 ERROR`**:
        `http://localhost:1234/auth/dev?github=scheibo&discord=513513270670262284&return_to=/account`
        *(Shows `1.2.0` + `1.1.0` active side-by-side, `1.0.0` retired, `0.9.0-rc1` failed smoke test

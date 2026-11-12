@@ -7,15 +7,15 @@ import * as path from 'path';
 import {chromium} from 'playwright-core';
 import polka from 'polka';
 
-import {COOLDOWN_SECONDS, Database, LADDERS_FILE} from '../db';
+import {Database} from '../db';
 import * as account from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import * as discord from '../server/discord';
-import {PUBLIC_DIR, renderArenaPages} from '../server/render';
-import {clearReferencePoolCache} from '../server/teams';
+import * as render from '../server/render';
+import * as teams from '../server/teams';
+import {root} from '../static/util';
 import * as mock from '../tools/mock';
-import {runPkmnCli} from '../tools/pkmn';
 
 const E2E_AUTH: auth.Config = {
   sessionSecret: 'e2e-session-secret-32-bytes-minimum',
@@ -36,11 +36,6 @@ const DISCORD_CONFIG: discord.Config = {
   staff: ['513513270670262284'],
   ladders: {},
 };
-
-const SHA_1 = '1'.repeat(64);
-const SHA_2 = '2'.repeat(64);
-const SHA_3 = '3'.repeat(64);
-const SHA_4 = '4'.repeat(64);
 
 function copyRootPublicAssets(srcPublic: string, dstPublic: string) {
   fs.mkdirSync(dstPublic, {recursive: true});
@@ -67,12 +62,12 @@ function copyRootPublicAssets(srcPublic: string, dstPublic: string) {
   }
 }
 
-describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () => {
+describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycle', () => {
   const realFetch = globalThis.fetch;
 
   afterEach(() => {
     globalThis.fetch = realFetch;
-    clearReferencePoolCache();
+    teams.clearReferencePoolCache();
   });
 
   test('samplePoolsPair enforces min >= 4, <= 1 of 40 active teams, and exact 2/N uniformity',
@@ -83,33 +78,33 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       const agent4Teams = mock.generateValidVgcTeams(20, 3);
 
       // With < 4 distinct agent pools (2 or 3 agents), sampling must reject
-      const twoAgentPool = mock.buildCanonicalTeamPool([
+      const twoAgentPool = teams.buildCanonicalTeamPool([
         {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
         {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
       ]);
-      expect(() => mock.samplePoolsPair(twoAgentPool, 1, 2, mock.createRng(1)))
+      expect(() => teams.samplePoolsPair(twoAgentPool, 1, 2, mock.createRng(1)))
         .toThrow(/min >= 4/);
 
-      const threeAgentPool = mock.buildCanonicalTeamPool([
+      const threeAgentPool = teams.buildCanonicalTeamPool([
         {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
         {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
-        {agentId: 3, agentName: "Mew's Truck", teams: agent3Teams},
+        {agentId: 3, agentName: 'Mew\'s Truck', teams: agent3Teams},
       ]);
-      expect(() => mock.samplePoolsPair(threeAgentPool, 1, 2, mock.createRng(1)))
+      expect(() => teams.samplePoolsPair(threeAgentPool, 1, 2, mock.createRng(1)))
         .toThrow(/min >= 4/);
 
       // Include cross-competitor duplicates (1 & 2 share team #0; 1 & 3 share team #1)
-      const fourAgentPool = mock.buildCanonicalTeamPool([
+      const fourAgentPool = teams.buildCanonicalTeamPool([
         {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
         {agentId: 2, agentName: 'Foul Play', teams: [agent1Teams[0], ...agent2Teams.slice(1)]},
-        {agentId: 3, agentName: "Mew's Truck", teams: [agent1Teams[1], ...agent3Teams.slice(1)]},
+        {agentId: 3, agentName: 'Mew\'s Truck', teams: [agent1Teams[1], ...agent3Teams.slice(1)]},
         {agentId: 4, agentName: 'Metamon', teams: agent4Teams},
       ]);
 
       const byPacked = new Map(fourAgentPool.map(e => [e.canonicalPacked, e]));
       const rng = mock.createRng(42);
       for (let trial = 0; trial < 400; trial++) {
-        const pair = mock.samplePoolsPair(fourAgentPool, 1, 2, rng);
+        const pair = teams.samplePoolsPair(fourAgentPool, 1, 2, rng);
         expect(pair.t1Packed).not.toBe(pair.t2Packed);
 
         const e1 = byPacked.get(pair.t1Packed)!;
@@ -142,10 +137,22 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         expect(prefixedCount).toBe(activeCount);
       }
 
+      // Champion vs Challenger of the same project (`agentAId === agentBId`) draws two blind
+      // third-party teams so neither side has shared-roster knowledge
+      for (let trial = 0; trial < 100; trial++) {
+        const selfPair = teams.samplePoolsPair(fourAgentPool, 1, 1, rng);
+        const s1 = byPacked.get(selfPair.t1Packed)!;
+        const s2 = byPacked.get(selfPair.t2Packed)!;
+        expect(s1.owners.has(1)).toBe(false);
+        expect(s2.owners.has(1)).toBe(false);
+        expect(selfPair.t1Label).toMatch(/^[0-9a-f]{12}$/);
+        expect(selfPair.t2Label).toMatch(/^[0-9a-f]{12}$/);
+      }
+
       // Verify exact 2/N per-agent and 1/(N*K) per-slot uniformity across both N=4 and N=5
       for (const nAgents of [4, 5]) {
         const kTeams = 20;
-        const syntheticPool: mock.CanonicalPoolEntry[] = [];
+        const syntheticPool: teams.CanonicalPoolEntry[] = [];
         for (let agentId = 1; agentId <= nAgents; agentId++) {
           for (let slot = 1; slot <= kTeams; slot++) {
             syntheticPool.push({
@@ -165,7 +172,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         const unifRng = mock.createRng(1000 + nAgents);
         const trials = 40_000;
         for (let t = 0; t < trials; t++) {
-          const sampled = mock.samplePoolsPair(syntheticPool, 1, 2, unifRng);
+          const sampled = teams.samplePoolsPair(syntheticPool, 1, 2, unifRng);
           t1Counts.set(sampled.t1Packed, (t1Counts.get(sampled.t1Packed) ?? 0) + 1);
           t2Counts.set(sampled.t2Packed, (t2Counts.get(sampled.t2Packed) ?? 0) + 1);
           for (const packed of [sampled.t1Packed, sampled.t2Packed]) {
@@ -188,10 +195,125 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       }
     });
 
-  test('runs full server + MockArenaClient + Discord + rotation + 375px Playwright E2E flow',
+  test('probabilistic expected ratings exhibit short-run variance and long-run convergence',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-conv-'));
+      const db = new Database(':memory:', {now: 1_760_000_000});
+      try {
+        const runner = new mock.Runner({
+          db,
+          mockDir: tmpDir,
+          now: 1_760_000_000,
+          seed: 987654,
+        });
+
+        await runner.runScript(`
+          reset --seed 987654
+          ladder open rby,adv
+          register "AlphaAgent" --logo auto
+          register "AnchorAgent" --logo auto
+          register "GammaAgent" --logo auto
+          submit alphaagent 1.0.0 rby=1700 adv=1320
+          submit anchoragent 1.0.0 rby=1500 adv=1500
+          submit gammaagent 1.0.0 rby=1300 adv=1680
+          ladder anchor rby,adv anchoragent@1.0.0
+          play 15 --ladder rby --balanced --tie-rate 0
+        `);
+
+        // Short-run: outcomes are stochastic, not deterministically equal to expected Elo
+        const shortRby = new Map(
+          db.getLeaderboardEntries('gen1ou20261109').map(e => [e.agentSlug, e.elo])
+        );
+        expect(shortRby.get('anchoragent')).toBeCloseTo(1500, 3);
+        expect(Math.round(shortRby.get('alphaagent')!)).not.toBe(1700);
+
+        // Long-run: empirical Davidson MAP ratings converge toward declared expected ratings
+        // independently on both RBY (Alpha=1700, Gamma=1300) and ADV (Alpha=1320, Gamma=1680)
+        await runner.runScript(`
+          play 900 --ladder rby --balanced --tie-rate 0
+          play 900 --ladder adv --balanced --tie-rate 0
+        `);
+
+        const longRby = new Map(
+          db.getLeaderboardEntries('gen1ou20261109').map(e => [e.agentSlug, e.elo])
+        );
+        expect(longRby.get('alphaagent')!).toBeGreaterThan(1665);
+        expect(longRby.get('alphaagent')!).toBeLessThan(1735);
+        expect(longRby.get('gammaagent')!).toBeGreaterThan(1265);
+        expect(longRby.get('gammaagent')!).toBeLessThan(1335);
+
+        const longAdv = new Map(
+          db.getLeaderboardEntries('gen3ou20261109').map(e => [e.agentSlug, e.elo])
+        );
+        expect(longAdv.get('alphaagent')!).toBeGreaterThan(1285);
+        expect(longAdv.get('alphaagent')!).toBeLessThan(1355);
+        expect(longAdv.get('gammaagent')!).toBeGreaterThan(1645);
+        expect(longAdv.get('gammaagent')!).toBeLessThan(1715);
+      } finally {
+        db.close();
+        fs.rmSync(tmpDir, {recursive: true, force: true});
+      }
+    });
+
+  test('persists state.json across sequential one-by-one commands and runs bounded simulate',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-seq-'));
+      const dbPath = path.join(tmpDir, 'arena.sqlite');
+      const lines = [
+        'reset --seed 4242 --now 2026-10-01T00:00:00Z --open-ladders',
+        'register "SoloOne" --pending',
+        'qualify soloone',
+        'register "SoloTwo"',
+        'register "SoloThree"',
+        'submit soloone 1.0.0 rby=1620',
+        'submit solotwo 1.0.0 rby=1500',
+        'submit solothree 1.0.0 rby=1420',
+        'ladder anchor rby solotwo@1.0.0',
+        'play 12 --ladder rby --over 2d',
+        'simulate 8 --over 1d',
+      ];
+
+      try {
+        for (const line of lines) {
+          const db = new Database(dbPath);
+          try {
+            const runner = new mock.Runner({db, mockDir: tmpDir});
+            await runner.execLine(line);
+          } finally {
+            db.close();
+          }
+        }
+
+        const batchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-batch-'));
+        const batchDb = new Database(':memory:');
+        try {
+          const batchRunner = new mock.Runner({db: batchDb, mockDir: batchDir});
+          await batchRunner.runScript(lines.join('\n'));
+
+          const seqDb = new Database(dbPath);
+          try {
+            const seqEntries = seqDb.getLeaderboardEntries('gen1ou20261109')
+              .map(e => ({slug: e.agentSlug, elo: Math.round(e.elo * 100), m: e.matches}));
+            const batchEntries = batchDb.getLeaderboardEntries('gen1ou20261109')
+              .map(e => ({slug: e.agentSlug, elo: Math.round(e.elo * 100), m: e.matches}));
+            expect(seqEntries).toEqual(batchEntries);
+          } finally {
+            seqDb.close();
+          }
+        } finally {
+          batchDb.close();
+          fs.rmSync(batchDir, {recursive: true, force: true});
+        }
+      } finally {
+        fs.rmSync(tmpDir, {recursive: true, force: true});
+      }
+    });
+
+  test('executes tools/scenarios/e2e.mock + seed.mock against Polka HTTP + 375px Playwright',
     async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-e2e-'));
-      const staticDir = path.join(tmpDir, 'static');
+      const mockDir = path.join(tmpDir, 'mock');
+      const staticDir = path.join(mockDir, 'static');
       const avatarsDir = path.join(staticDir, 'avatars');
       const publicDir = path.join(tmpDir, 'public');
       const poolDir = path.join(tmpDir, 'pool');
@@ -199,9 +321,8 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       fs.mkdirSync(poolDir, {recursive: true});
       fs.mkdirSync(publicDir, {recursive: true});
 
-      const projectsFile = mock.prepareMockStaticDir(staticDir, avatarsDir);
-      let nowSec = 1_760_000_000;
-      const db = new Database(dbPath, {now: nowSec});
+      let nowSeconds = 1_760_000_000;
+      const db = new Database(dbPath, {now: nowSeconds});
 
       const discordCalls: Array<{method: string; url: string; body?: string}> = [];
       globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
@@ -232,36 +353,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         return realFetch(input, init);
       };
 
-      db.syncLadders(LADDERS_FILE, nowSec);
-      db.syncProjects(projectsFile, avatarsDir, nowSec);
-      db.linkDeveloperDiscord('scheibo', '513513270670262284', 'scheibo', nowSec);
-      db.linkDeveloperDiscord('pmariglia', '283674461268344832', 'pmariglia', nowSec);
-      db.linkDeveloperDiscord('pkmnbotguy', '300000000000000002', 'batistas_dick', nowSec);
-      db.linkDeveloperDiscord('asterdev', '300000000000000005', 'asterdev', nowSec);
-
-      // Seed completed Tournament #1 + live Tournament #2 for static render coverage
-      db.upsertTournament({
-        id: '1',
-        name: 'Tournament #1: Gen 9 OU',
-        format: 'gen9ou',
-        gamesPerMatchup: 8,
-        parallelTables: 2,
-        hardware: 'GCP L4 Spot',
-        status: 'completed',
-        startsAt: nowSec - 86400,
-        completedAt: nowSec - 3600,
-      });
-      db.upsertTournament({
-        id: '2',
-        name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
-        format: 'gen9championsvgc2026regmc',
-        gamesPerMatchup: 8,
-        parallelTables: 2,
-        hardware: 'GCP L4 Spot',
-        status: 'running',
-        startsAt: nowSec - 1800,
-      });
-
       const app = polka();
       const authInstance = new auth.Auth({
         config: E2E_AUTH,
@@ -281,16 +372,15 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         auth: authInstance,
         poolsByLadder,
         rateLimitMaxAttempts: 50,
-        now: () => nowSec,
+        now: () => nowSeconds,
       });
 
       let statusQueue: Promise<unknown> = Promise.resolve();
-      let autoRender = false;
       const arenaHandle = arena.register(app, {
         db,
         auth: authInstance,
         publicDir,
-        now: () => nowSec,
+        now: () => nowSeconds,
         onSubmissionStatus: result => {
           statusQueue = statusQueue.then(async () => {
             await discord.notifySubmissionStatus(
@@ -299,11 +389,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           });
           return statusQueue.then(() => undefined);
         },
-        onUpdate: () => {
-          if (autoRender) {
-            renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSec});
-          }
-        },
       });
 
       const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
@@ -311,353 +396,199 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       const addr = server.address() as {port: number};
       const baseUrl = `http://127.0.0.1:${addr.port}`;
 
-      const githubIds: Record<string, number> = {
-        scheibo: 1001,
-        coauthor: 1002,
-        pmariglia: 1003,
-        pkmnbotguy: 1004,
-        asterdev: 1005,
-        jakegrigsby: 1006,
-      };
-      const cookieFor = (githubLogin: string, githubId?: number) => {
-        const exp = Math.floor(Date.now() / 1000) + 3600;
-        const id = githubId ?? githubIds[githubLogin] ?? 9999;
+      const cookieFor = (githubLogin: string, githubId = 1001) => {
+        const exp = Math.max(nowSeconds, Math.floor(Date.now() / 1000)) + 86400;
         const tok = auth.signToken(
-          {github: {id, login: githubLogin}, exp},
+          {github: {id: githubId, login: githubLogin}, exp},
           E2E_AUTH.sessionSecret
         );
         return `${auth.SESSION_COOKIE}=${encodeURIComponent(tok)}`;
       };
 
+      const seenCheckpoints: string[] = [];
+      const guildMembers: discord.GuildMember[] = [
+        {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
+        {user: {id: '283674461268344832', username: 'pmariglia'}, roles: []},
+        {user: {id: '300000000000000001', username: 'jakegrigsby'}, roles: []},
+        {user: {id: '300000000000000002', username: 'batistas_dick'}, roles: []},
+        {user: {id: '300000000000000005', username: 'asterdev'}, roles: []},
+      ];
+
       try {
-        // 1. Pre-launch: Qualified ('0 ERROR') & Pending ('AsterAI') have #submission disabled
-        const preAccountRes = await realFetch(`${baseUrl}/account/`, {
-          headers: {cookie: cookieFor('scheibo')},
-        });
-        expect(preAccountRes.status).toBe(200);
-        const preAccountHtml = await preAccountRes.text();
-        expect(preAccountHtml).toContain('Qualified');
-        expect(preAccountHtml).toContain('<fieldset class="form-fieldset" disabled>');
+        const checkpointHandlers: Record<
+          string,
+          (r: mock.Runner) => Promise<void> | void
+        > = {
+          'pre-launch': async () => {
+            const preRes = await realFetch(`${baseUrl}/account/`, {
+              headers: {cookie: cookieFor('scheibo')},
+            });
+            expect(preRes.status).toBe(200);
+            const preHtml = await preRes.text();
+            expect(preHtml).toContain('Qualified');
+            expect(preHtml).toContain('<fieldset class="form-fieldset" disabled>');
 
-        const pendingRes = await realFetch(`${baseUrl}/account/`, {
-          headers: {cookie: cookieFor('asterdev')},
-        });
-        expect(await pendingRes.text()).toContain('Pending');
+            const pendingRes = await realFetch(`${baseUrl}/account/`, {
+              headers: {cookie: cookieFor('asterdev', 1005)},
+            });
+            expect(await pendingRes.text()).toContain('Pending');
+          },
+          'ladders-open': async () => {
+            const eligibleHtml = await (await realFetch(`${baseUrl}/account/`, {
+              headers: {cookie: cookieFor('scheibo')},
+            })).text();
+            expect(eligibleHtml).toContain('Eligible');
+          },
+          'after-smoke-fail': async () => {
+            await statusQueue;
+            const failedRow = db.getVersionBySlugAndLabel('0-error', '0.1.0-bad')!;
+            expect(failedRow.smokeStatus).toBe('failed');
+            expect(failedRow.notified).toBe(true);
+            expect(
+              discordCalls.some(c => c.url.includes('/channels/dm-513513270670262284/messages'))
+            ).toBe(true);
+            const afterFailHtml = await (await realFetch(`${baseUrl}/account/`, {
+              headers: {cookie: cookieFor('scheibo')},
+            })).text();
+            expect(afterFailHtml).toContain('(DM sent)');
+            expect(afterFailHtml).toContain('Eligible');
+          },
+          'pending-auth-token': async () => {
+            const pendingCheck = await realFetch(`${baseUrl}/api/arena/pending-submissions`, {
+              headers: {authorization: `Bearer ${E2E_AUTH.arenaSecret}`},
+            });
+            const pendingData = await pendingCheck.json() as {
+              submissions: Array<{agentSlug: string; authToken?: string}>;
+            };
+            expect(pendingData.submissions.find(s => s.agentSlug === '0-error')?.authToken)
+              .toBe('Bearer private-r2-token');
+          },
+          'two-vgc-agents': async r => {
+            expect(db.getVersionBySlugAndLabel('0-error', '1.0.0')?.authTokenEncoding)
+              .toBeUndefined();
+            // With only 2 agents on VGC (min = 4), VGC refuses to schedule while RBY schedules
+            expect(await r.playNextScheduledMatch({
+              ladders: [db.getLadder('gen9championsvgc2026regmc')!],
+            })).toBeUndefined();
+            const rbyStep = await r.playNextScheduledMatch({
+              ladders: [db.getLadder('gen1ou20261109')!],
+            });
+            expect(rbyStep?.ladderId).toBe('gen1ou20261109');
+          },
+          'three-vgc-agents': async r => {
+            // With 3 agents on VGC (min = 4), VGC still refuses to schedule
+            expect(await r.playNextScheduledMatch({
+              ladders: [db.getLadder('gen9championsvgc2026regmc')!],
+            })).toBeUndefined();
+          },
+          'four-vgc-agents': () => {
+            const recentVgc = db.getRecentMatches(5)
+              .find(m => m.ladderId === 'gen9championsvgc2026regmc');
+            expect(recentVgc).toBeDefined();
+            expect(recentVgc?.p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+            expect(recentVgc?.p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+          },
+          'third-version-retired': () => {
+            const rbyEntries = db.getLeaderboardEntries('gen1ou20261109')
+              .filter(e => e.agentSlug === '0-error');
+            expect(rbyEntries.filter(e => e.role !== 'retired')).toHaveLength(2);
+            expect(rbyEntries.filter(e => e.role === 'retired')).toHaveLength(1);
+          },
+          'discord-synced': () => {
+            expect(guildMembers.find(m => m.user.username === 'scheibo')?.roles)
+              .toContain('1568629775122309210');
+            expect(guildMembers.find(m => m.user.username === 'asterdev')?.roles)
+              .not.toContain('1568629775122309210');
+            const rbyLeader = db.getArenaLadderRoleTargets().find(t => t.slot === 'rby')!;
+            expect(rbyLeader.discordIds.length).toBeGreaterThan(0);
+            for (const holderId of rbyLeader.discordIds) {
+              expect(guildMembers.find(m => m.user.id === holderId)?.roles)
+                .toContain('1563716887131459685');
+            }
+          },
+          'vgc-rotated': () => {
+            expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('settling');
+            expect(db.getLadder('gen9championsvgc2027regma')?.status).toBe('active');
+            expect(db.getLadder('gen9championsvgc2027regma')?.discord)
+              .toBe('1564121375558340768');
+          },
+          'vgc-archived': () => {
+            expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('archived');
+            const oldVgcDir = path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2026regmc');
+            const newVgcDir = path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2027regma');
+            expect(fs.existsSync(path.join(oldVgcDir, 'teams.json'))).toBe(true);
+            expect(fs.existsSync(path.join(oldVgcDir, 'gen9championsvgc2026regmc-logs.7z')))
+              .toBe(true);
+            expect(fs.existsSync(path.join(newVgcDir, 'teams.json'))).toBe(false);
+          },
+          quarantined: async () => {
+            await statusQueue;
+            const mtVer = db.getVersionBySlugAndLabel('mews-truck', '1.0.0')!;
+            expect(mtVer.smokeStatus).toBe('quarantined');
+            expect(mtVer.notified).toBe(true);
+            expect(
+              discordCalls.some(c => c.url.includes('/channels/dm-300000000000000002/messages'))
+            ).toBe(true);
+            expect(
+              discordCalls.some(c => c.url.includes('/channels/dm-513513270670262284/messages'))
+            ).toBe(true);
+          },
+        };
 
-        // 2. Open RBY and VGC ladders via `pkmn` CLI -> Qualified transitions to Eligible
-        await runPkmnCli(
-          ['set-ladder-status', 'gen1ou20261109', 'active'],
-          {db, publicDir, now: nowSec, log: () => undefined}
-        );
-        await runPkmnCli(
-          ['set-ladder-status', 'gen9championsvgc2026regmc', 'active'],
-          {db, publicDir, now: nowSec, log: () => undefined}
-        );
-
-        const eligibleHtml = await (await realFetch(`${baseUrl}/account/`, {
-          headers: {cookie: cookieFor('scheibo')},
-        })).text();
-        expect(eligibleHtml).toContain('Eligible');
-
-        // 3. Submit a smoke-failing version -> MockArenaClient fails it -> Discord DM sent ->
-        //    cooldown is NOT triggered so 0 ERROR can immediately submit 1.0.0!
-        const submitJson = async (login: string, payload: object) =>
-          realFetch(`${baseUrl}/api/submissions`, {
-            method: 'POST',
-            headers: {
-              accept: 'application/json',
-              'content-type': 'application/json',
-              cookie: cookieFor(login),
-            },
-            body: JSON.stringify(payload),
-          });
-
-        const badSubRes = await submitJson('scheibo', {
-          version: '0.1.0-bad',
-          package: 'bundle',
-          url: 'https://r2.example.com/0-error-bad.tar.zst',
-          sha256: SHA_1,
-          ladders: ['gen1ou20261109'],
-        });
-        expect(badSubRes.status).toBe(201);
-
-        let nextSmokeMode: 'passed' | 'failed' = 'failed';
-        const mockArena = new mock.MockArenaClient({
+        const runner = new mock.Runner({
+          db,
+          mockDir,
+          publicDir,
+          now: nowSeconds,
           serverUrl: baseUrl,
-          arenaSecret: E2E_AUTH.arenaSecret!,
-          now: () => nowSec,
-          decideSmoke: sub => ({
-            smokeStatus: nextSmokeMode,
-            smokeError: nextSmokeMode === 'failed'
-              ? `Boot failure in ${sub.version}`
-              : undefined,
-          }),
+          arenaSecret: E2E_AUTH.arenaSecret,
+          sessionSecret: E2E_AUTH.sessionSecret,
+          onTimeChange: nextNow => {
+            nowSeconds = nextNow;
+          },
+          onDiscordSync: async () => {
+            discordCalls.length = 0;
+            await discord.syncArenaRoles(
+              db, 'e2e-discord-token', DISCORD_CONFIG, discordState, guildMembers
+            );
+          },
+          onCheckpoint: async (name, r) => {
+            seenCheckpoints.push(name);
+            const handler = checkpointHandlers[name];
+            await handler(r);
+          },
         });
 
-        expect(await mockArena.syncPendingSubmissions()).toBe(1);
-        await statusQueue;
+        await runner.runFile(root('tools', 'scenarios', 'e2e.mock'));
+        render.renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSeconds});
 
-        const failedRow = db.getVersionBySlugAndLabel('0-error', '0.1.0-bad')!;
-        expect(failedRow.smokeStatus).toBe('failed');
-        expect(failedRow.notified).toBe(true);
-        expect(discordCalls.some(c => c.url.includes('/channels/dm-513513270670262284/messages')))
-          .toBe(true);
+        expect(seenCheckpoints).toEqual([
+          'pre-launch',
+          'ladders-open',
+          'after-smoke-fail',
+          'pending-auth-token',
+          'two-vgc-agents',
+          'three-vgc-agents',
+          'four-vgc-agents',
+          'third-version-retired',
+          'discord-synced',
+          'vgc-rotated',
+          'vgc-archived',
+          'quarantined',
+        ]);
 
-        const afterFailHtml = await (await realFetch(`${baseUrl}/account/`, {
-          headers: {cookie: cookieFor('scheibo')},
-        })).text();
-        expect(afterFailHtml).toContain('(DM sent)');
-        expect(afterFailHtml).toContain('Eligible');
-
-        // 4. Submit 0 ERROR 1.0.0 + Foul Play 1.0.0 with 20 valid VGC teams + encrypted token
-        nextSmokeMode = 'passed';
-        const subZero100 = await submitJson('scheibo', {
-          version: '1.0.0',
-          package: 'bundle',
-          url: 'https://r2.example.com/0-error-1.0.0.tar.zst',
-          sha256: SHA_1,
-          authToken: 'Bearer private-r2-token',
-          ladders: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
-          teams: mock.generateValidVgcTeams(20, 0),
-        });
-        expect(subZero100.status).toBe(201);
-
-        const subFp100 = await submitJson('pmariglia', {
-          version: '1.0.0',
-          package: 'bundle',
-          url: 'https://r2.example.com/foul-play-1.0.0.tar.zst',
-          sha256: SHA_2,
-          ladders: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
-          teams: mock.generateValidVgcTeams(20, 1),
-        });
-        expect(subFp100.status).toBe(201);
-
-        // Verify pending-submissions decrypts authToken once, then submission-status wipes it
-        const pendingCheck = await realFetch(`${baseUrl}/api/arena/pending-submissions`, {
-          headers: {authorization: `Bearer ${E2E_AUTH.arenaSecret}`},
-        });
-        const pendingData = await pendingCheck.json() as {
-          submissions: Array<{agentSlug: string; authToken?: string}>;
-        };
-        expect(pendingData.submissions.find(s => s.agentSlug === '0-error')?.authToken)
-          .toBe('Bearer private-r2-token');
-
-        expect(await mockArena.syncPendingSubmissions()).toBe(2);
-        expect(db.getVersionBySlugAndLabel('0-error', '1.0.0')?.authTokenEncoding).toBeUndefined();
-
-        // With only 2 agents on VGC (min = 4), VGC refuses to schedule while RBY schedules!
-        expect(await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'}))
-          .toBeUndefined();
-        const rbyStep = await mockArena.playMatchStep({ladderId: 'gen1ou20261109'});
-        expect(rbyStep?.ladderId).toBe('gen1ou20261109');
-
-        // 5. Submit 3rd VGC agent (Mew's Truck 1.0.0) -> still below min=4, then 4th (Metamon)!
-        const subMt100 = await submitJson('pkmnbotguy', {
-          version: '1.0.0',
-          package: 'bundle',
-          url: 'https://r2.example.com/mews-truck-1.0.0.tar.zst',
-          sha256: SHA_3,
-          ladders: ['gen9championsvgc2026regmc'],
-          teams: mock.generateValidVgcTeams(20, 2),
-        });
-        expect(subMt100.status).toBe(201);
-        expect(await mockArena.syncPendingSubmissions()).toBe(1);
-        expect(await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'}))
-          .toBeUndefined();
-
-        const subMeta100 = await submitJson('jakegrigsby', {
-          version: '1.0.0',
-          package: 'bundle',
-          url: 'https://r2.example.com/metamon-1.0.0.tar.zst',
-          sha256: SHA_4,
-          ladders: ['gen9championsvgc2026regmc'],
-          teams: mock.generateValidVgcTeams(20, 3),
-        });
-        expect(subMeta100.status).toBe(201);
-        expect(await mockArena.syncPendingSubmissions()).toBe(1);
-
-        const vgcStep = await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'});
-        expect(vgcStep?.ladderId).toBe('gen9championsvgc2026regmc');
-        expect(vgcStep?.p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
-        expect(vgcStep?.p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
-
-        // 6. Set anchor on RBY & VGC, settle all entries, upgrade 0 ERROR -> 1.1.0 -> 1.2.0
-        await runPkmnCli(
-          ['set-anchor', 'gen1ou20261109', 'foul-play', '1.0.0'],
-          {db, publicDir, now: nowSec, log: () => undefined}
-        );
-        await runPkmnCli(
-          ['set-anchor', 'gen9championsvgc2026regmc', 'foul-play', '1.0.0'],
-          {db, publicDir, now: nowSec, log: () => undefined}
-        );
-        mockArena.setAnchor('gen1ou20261109', 'foul-play', '1.0.0');
-        mockArena.setAnchor('gen9championsvgc2026regmc', 'foul-play', '1.0.0');
-
-        const settleLadder = async (ladderId: string, emitFinalHeartbeat = false) => {
-          autoRender = false;
-          for (let step = 0; step < 250; step++) {
-            const unsettled = db.getLeaderboardEntries(ladderId)
-              .filter(e => e.role !== 'retired' && e.settledAt === undefined);
-            if (unsettled.length === 0) break;
-            nowSec += 600;
-            await mockArena.playMatchStep({ladderId, emitHeartbeats: false});
-          }
-          if (emitFinalHeartbeat) {
-            autoRender = true;
-            nowSec += 600;
-            await mockArena.playMatchStep({ladderId, emitHeartbeats: true});
-            autoRender = false;
-          }
-        };
-
-        await settleLadder('gen1ou20261109', true);
-        await settleLadder('gen9championsvgc2026regmc', false);
-
-        // Advance past 14-day cooldown -> submit 1.1.0 WITHOUT resending VGC teams!
-        nowSec += COOLDOWN_SECONDS + 3600;
-        const subZero110 = await submitJson('scheibo', {
-          version: '1.1.0',
-          package: 'bundle',
-          url: 'https://r2.example.com/0-error-1.1.0.tar.zst',
-          sha256: SHA_2,
-          ladders: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
-        });
-        expect(subZero110.status).toBe(201);
-        expect(await mockArena.syncPendingSubmissions()).toBe(1);
-
-        await settleLadder('gen1ou20261109', false);
-        await settleLadder('gen9championsvgc2026regmc', false);
-
-        // Advance past 14-day cooldown -> submit 1.2.0 on RBY -> retires weaker of {1.0.0, 1.1.0}
-        nowSec += COOLDOWN_SECONDS + 3600;
-        const subZero120 = await submitJson('scheibo', {
-          version: '1.2.0',
-          package: 'bundle',
-          url: 'https://r2.example.com/0-error-1.2.0.tar.zst',
-          sha256: SHA_4,
-          ladders: ['gen1ou20261109'],
-        });
-        expect(subZero120.status).toBe(201);
-        expect(await mockArena.syncPendingSubmissions()).toBe(1);
-
-        const rbyEntries = db.getLeaderboardEntries('gen1ou20261109')
-          .filter(e => e.agentSlug === '0-error');
-        expect(rbyEntries.filter(e => e.role !== 'retired')).toHaveLength(2);
-        expect(rbyEntries.filter(e => e.role === 'retired')).toHaveLength(1);
-
-        // Settle 1.2.0 on RBY and verify Discord Competitor + settled #1 RBY role sync
-        await settleLadder('gen1ou20261109', false);
-
-        const guildMembers: discord.GuildMember[] = [
-          {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
-          {user: {id: '283674461268344832', username: 'pmariglia'}, roles: []},
-          {user: {id: '300000000000000002', username: 'batistas_dick'}, roles: []},
-          {user: {id: '300000000000000005', username: 'asterdev'}, roles: []},
-        ];
-        discordCalls.length = 0;
-        await discord.syncArenaRoles(
-          db, 'e2e-discord-token', DISCORD_CONFIG, discordState, guildMembers
-        );
-
-        // Qualified devs get Competitor; Pending dev ('asterdev') does NOT
-        expect(guildMembers.find(m => m.user.username === 'scheibo')?.roles)
-          .toContain('1568629775122309210');
-        expect(guildMembers.find(m => m.user.username === 'asterdev')?.roles)
-          .not.toContain('1568629775122309210');
-        // Settled #1 on RBY receives RBY role 1563716887131459685
-        const rbyLeader = db.getArenaLadderRoleTargets().find(t => t.slot === 'rby')!;
-        expect(rbyLeader.discordIds.length).toBeGreaterThan(0);
-        for (const holderId of rbyLeader.discordIds) {
-          expect(guildMembers.find(m => m.user.id === holderId)?.roles)
-            .toContain('1563716887131459685');
-        }
-
-        // 7. Seasonal VGC rotation: submit unsettled Foul Play 1.1.0 on VGC -> rotate-ladder ->
-        //    old VGC enters 'settling', new VGC becomes 'active' -> settle -> auto-'archived'!
-        const subFp110 = await submitJson('pmariglia', {
-          version: '1.1.0',
-          package: 'bundle',
-          url: 'https://r2.example.com/foul-play-1.1.0.tar.zst',
-          sha256: SHA_4,
-          ladders: ['gen9championsvgc2026regmc'],
-        });
-        expect(subFp110.status).toBe(201);
-        expect(await mockArena.syncPendingSubmissions()).toBe(1);
-
-        await runPkmnCli(
-          [
-            'rotate-ladder',
-            'gen9championsvgc2026regmc',
-            '--name',
-            'VGC 2026 Reg M-C',
-            '--new',
-            'gen9championsvgc2027regma',
-            '--new-name',
-            'VGC',
-            '--format',
-            'gen9championsvgc2026regmc',
-          ],
-          {db, publicDir, now: nowSec, log: () => undefined}
-        );
-
-        expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('settling');
-        expect(db.getLadder('gen9championsvgc2027regma')?.status).toBe('active');
-        expect(db.getLadder('gen9championsvgc2027regma')?.discord)
-          .toBe('1564121375558340768');
-
-        // Refresh MockArenaClient ladder metadata, then play settling VGC matches until archived
-        await mockArena.syncPendingSubmissions();
-        let archived = false;
-        for (let i = 0; i < 200 && !archived; i++) {
-          nowSec += 600;
-          const step = await mockArena.playMatchStep({
-            ladderId: 'gen9championsvgc2026regmc',
-            emitHeartbeats: false,
-          });
-          if (step?.archivedLadder) archived = true;
-        }
-        renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSec});
-        expect(archived).toBe(true);
-        expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('archived');
-        // Retired VGC `pools` ladder automatically exports full seasonal rosters at teams.json,
-        // while active successor `gen9championsvgc2027regma` does not expose teams.json.
-        expect(
-          fs.existsSync(
-            path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2026regmc', 'teams.json')
-          )
-        ).toBe(true);
-        expect(
-          fs.existsSync(
-            path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2027regma', 'teams.json')
-          )
-        ).toBe(false);
-
-        // 8. Auto-quarantine Mew's Truck 1.0.0 -> DMs owner & staff
-        const mtVer = db.getVersionBySlugAndLabel('mews-truck', '1.0.0')!;
-        discordCalls.length = 0;
-        await mockArena.quarantineVersion(mtVer.id, 'Crashed in 5 consecutive games');
-        await statusQueue;
-        expect(db.getVersionById(mtVer.id)?.smokeStatus).toBe('quarantined');
-        expect(db.getVersionById(mtVer.id)?.notified).toBe(true);
-        expect(discordCalls.some(c => c.url.includes('/channels/dm-300000000000000002/messages')))
-          .toBe(true);
-        expect(discordCalls.some(c => c.url.includes('/channels/dm-513513270670262284/messages')))
-          .toBe(true);
-
-        // 9. Seed full mock fixture + run `hyperlink --check-anchors` + 375px Playwright checks
-        const seedDb = new Database(':memory:', {now: nowSec});
+        const seedDb = new Database(':memory:', {now: nowSeconds});
+        const seedMockDir = path.join(tmpDir, 'seed-mock');
         const viewPublicDir = path.join(tmpDir, 'views-public');
-        copyRootPublicAssets(PUBLIC_DIR, viewPublicDir);
+        copyRootPublicAssets(render.PUBLIC_DIR, viewPublicDir);
         try {
-          const seeded = mock.seedMockArena({
+          const seeded = await mock.seed({
             db: seedDb,
+            mockDir: seedMockDir,
             publicDir: viewPublicDir,
-            staticDir,
-            avatarsDir,
-            now: nowSec,
+            now: nowSeconds,
             render: true,
           });
-          // Verify mock tournament archive (.7z) + Showdown replay (.log with |c| policy JSON)
           expect(
             fs.existsSync(path.join(viewPublicDir, 'arena', 'tournaments', '1', '1-replays.7z'))
           ).toBe(true);
@@ -665,8 +596,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
             path.join(viewPublicDir, 'arena', 'tournaments', '1', 'spring26-sf1.log'),
             'utf8'
           );
-          expect(sf1Log).toContain('|c|☆0 ERROR|{');
-          expect(sf1Log).toContain("|c|☆Mew's Truck|{");
+          expect(sf1Log).toContain('|c|☆');
           const tour1JsonPath = path.join(viewPublicDir, 'arena', 'tournaments', '1', 'index.json');
           const tour1Doc = JSON.parse(fs.readFileSync(tour1JsonPath, 'utf8')) as {
             archiveHref?: string;
@@ -681,7 +611,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
               path.join(viewPublicDir, 'arena', 'battles', seeded.featuredBattleId, 'index.html')
             )
           ).toBe(false);
-          // Stub /account/index.html strictly for static hyperlink anchor check
+
           fs.mkdirSync(path.join(viewPublicDir, 'account'), {recursive: true});
           fs.writeFileSync(path.join(viewPublicDir, 'account', 'index.html'), '');
 

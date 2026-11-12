@@ -22,7 +22,7 @@ import * as auth from '../server/auth';
 import * as wiki from '../server/wiki';
 import {ROOT, root} from '../static/util';
 
-import {prepareMockStaticDir, seedMockArena} from './mock';
+import * as mock from './mock';
 
 const PUBLIC = root('public');
 const SHOTS_DIR = root('.shots');
@@ -57,53 +57,6 @@ const SHOTS_AUTH: auth.Config = {
     clientSecret: 'shots-discord-secret',
   },
 };
-
-const WIKI_INDEX_DJ = `# Wiki
-
-Shared documentation, format notes, and project profiles for the \`pkmn.ai\` community.
-
-## Pages
-
-- [0 ERROR](0_ERROR) — Gen 9 OU search & evaluation agent by *pre*.
-- [Gen 9 OU](Gen_9_OU) — Metagame overview, team structures, and benchmark baselines.
-`;
-
-const WIKI_GEN9OU_DJ = [
-  '# Gen 9 OU',
-  '',
-  'Standard Smogon Singles format used for the `pkmn.ai` ladder and tournament benchmarks.',
-  '',
-  '## Evaluation',
-  '',
-  'Agents are evaluated across 2-game blind-pair matches using Davidson MAP ratings:',
-  '',
-  '$$`P(i \\text{ beats } j) = ' +
-    '\\frac{\\gamma_i}{\\gamma_i + \\gamma_j + \\nu \\sqrt{\\gamma_i \\gamma_j}}`',
-  '',
-].join('\n');
-
-const WIKI_PROJECT_V1_DJ = `{% visibility: developers %}
-# 0 ERROR
-
-\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
-
-## Architecture
-
-- Depth-limited Nash equilibrium search over packed battle states.
-- Move ordering guided by damage calculator bounds.
-`;
-
-const WIKI_PROJECT_V2_DJ = `{% visibility: developers %}
-# 0 ERROR
-
-\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.
-
-## Architecture
-
-- Depth-limited Nash equilibrium search over packed battle states.
-- Neural leaf evaluation network trained via self-play trajectories.
-- Team preview policy conditioned on revealed opponent archetypes.
-`;
 
 function buildScenarios(wikiSha: string): Scenario[] {
   return [
@@ -185,61 +138,23 @@ async function startFixture(): Promise<Fixture> {
   const staticDir = path.join(tmpDir, 'static');
   const avatarsDir = path.join(staticDir, 'avatars');
   const publicDir = path.join(tmpDir, 'public');
-  fs.mkdirSync(wikiDir, {recursive: true});
+  const laddersFile = path.join(tmpDir, 'ladders.yml');
   fs.mkdirSync(publicDir, {recursive: true});
   copyStaticPublicHtml(PUBLIC, publicDir);
 
-  const projectsFile = prepareMockStaticDir(staticDir, avatarsDir);
   const nowSeconds = Math.floor(NOW / 1000);
   const db = new Database(':memory:', {now: nowSeconds});
-  seedMockArena({
+  await mock.seed({
     db,
     publicDir,
     staticDir,
     avatarsDir,
+    wikiDir,
+    laddersFile,
     now: nowSeconds,
     render: true,
   });
-
-  const git = (args: string[], date?: string) =>
-    execFileSync('git', args, {
-      cwd: wikiDir,
-      env: date
-        ? {
-          ...process.env,
-          GIT_AUTHOR_DATE: date,
-          GIT_COMMITTER_DATE: date,
-        }
-        : process.env,
-    });
-
-  git(['init', '-b', 'main']);
-  git(['config', 'user.name', 'pkmn.ai']);
-  git(['config', 'user.email', 'wiki@pkmn.ai']);
-
-  fs.writeFileSync(path.join(wikiDir, 'index.dj'), WIKI_INDEX_DJ, 'utf8');
-  fs.writeFileSync(path.join(wikiDir, 'Gen_9_OU.dj'), WIKI_GEN9OU_DJ, 'utf8');
-  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), WIKI_PROJECT_V1_DJ, 'utf8');
-  git(['add', 'index.dj', 'Gen_9_OU.dj', '0_ERROR.dj']);
-  git(
-    [
-      'commit',
-      '--author=scheibo <scheibo@users.noreply.github.com>',
-      '-m', 'Create initial wiki pages',
-    ],
-    '2026-10-18T12:00:00Z'
-  );
-
-  fs.writeFileSync(path.join(wikiDir, '0_ERROR.dj'), WIKI_PROJECT_V2_DJ, 'utf8');
-  git(['add', '0_ERROR.dj']);
-  git(
-    [
-      'commit',
-      '--author=pmariglia <pmariglia@users.noreply.github.com>',
-      '-m', 'Document neural value network',
-    ],
-    '2026-10-20T12:00:00Z'
-  );
+  const projectsFile = path.join(staticDir, 'projects.yml');
 
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: wikiDir,
