@@ -3638,7 +3638,7 @@ export async function seed(options: SeedOptions): Promise<SeedResult> {
 const CLI_USAGE = [
   'Usage:',
   '  mock seed [--db <path>] [--public-dir <dir>] [--now <ts>]',
-  '  mock [-f <scenario.mock>] [--db <path>] [--server <url>] [--secret <tok>]',
+  '  mock [-f <scenario.mock>] [--db <path>] [--server <url>] [--secret <tok>] [--now <ts>]',
   '  mock <command> [args...] [--db <path>] [--server <url>] [--secret <tok>]',
   '  mock < tools/scenarios/seed.mock',
   '',
@@ -3698,8 +3698,10 @@ function extractGlobalCliFlags(argv: string[]): GlobalCliFlags {
       out.arenaSecret = argv[++i];
     } else if (arg.startsWith('--secret=')) {
       out.arenaSecret = arg.slice('--secret='.length);
-    } else if (arg === '--now' && out.remaining[0] === 'seed') {
+    } else if (arg === '--now') {
       out.now = argv[++i];
+    } else if (arg.startsWith('--now=')) {
+      out.now = arg.slice('--now='.length);
     } else if (arg === '-h' || (arg === '--help' && out.remaining.length === 0)) {
       out.help = true;
     } else {

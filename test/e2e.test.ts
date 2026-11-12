@@ -14,6 +14,7 @@ import * as auth from '../server/auth';
 import * as discord from '../server/discord';
 import * as render from '../server/render';
 import * as teams from '../server/teams';
+import * as wiki from '../server/wiki';
 import {root} from '../static/util';
 import * as mock from '../tools/mock';
 
@@ -629,6 +630,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
         const seedMockDir = path.join(tmpDir, 'seed-mock');
         const seedStaticDir = path.join(seedMockDir, 'static');
         const seedAvatarsDir = path.join(seedStaticDir, 'avatars');
+        const seedWikiDir = path.join(seedMockDir, 'wiki');
         const viewPublicDir = path.join(tmpDir, 'views-public');
         copyRootPublicAssets(render.PUBLIC_DIR, viewPublicDir);
         try {
@@ -637,10 +639,22 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
             mockDir: seedMockDir,
             staticDir: seedStaticDir,
             avatarsDir: seedAvatarsDir,
+            wikiDir: seedWikiDir,
             publicDir: viewPublicDir,
             now: nowSeconds,
             render: true,
           });
+          const wikiReader = new wiki.Wiki({
+            wikiDir: seedWikiDir,
+            projectsFile: path.join(seedStaticDir, 'projects.yml'),
+            db: seedDb,
+            push: false,
+          });
+          const zeroErrorHistory = await wikiReader.getHistory('0_ERROR');
+          expect(zeroErrorHistory.map(r => ({author: r.author, ts: r.timestamp}))).toEqual([
+            {author: 'coauthor', ts: nowSeconds},
+            {author: 'scheibo', ts: nowSeconds - 2 * 86400},
+          ]);
           expect(
             fs.existsSync(path.join(viewPublicDir, 'arena', 'tournaments', '1', '1-replays.7z'))
           ).toBe(true);

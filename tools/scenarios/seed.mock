@@ -31,7 +31,7 @@ register "mikumiku" --owner mikudev:mikudev.610011
 register "CynthiAI" --owner sisyphus25:sisyphus25.610012
 
 # 2. Seed git-backed public & developer-only wiki pages with revision history
-time 2026-10-18T12:00:00Z
+time now-2d
 wiki index --by scheibo --message "Create initial wiki index" \
   --content "# Wiki\n\nShared documentation, format notes, and project profiles for the \`pkmn.ai\` community.\n\n## Pages\n\n- [0 ERROR](0_ERROR) — Gen 9 OU search & evaluation agent by *pre*.\n- [Gen 9 OU](Gen_9_OU) — Metagame overview, team structures, and benchmark baselines."
 
@@ -41,7 +41,7 @@ wiki Gen_9_OU --by scheibo --message "Add Gen 9 OU benchmark overview" \
 wiki 0_ERROR --by scheibo --visibility developers --message "Create initial 0 ERROR page" \
   --content "# 0 ERROR\n\n\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.\n\n## Architecture\n\n- Depth-limited Nash equilibrium search over packed battle states.\n- Move ordering guided by damage calculator bounds."
 
-time 2026-10-20T12:00:00Z
+time now
 wiki 0_ERROR --by coauthor --visibility developers --message "Document neural value network" \
   --content "# 0 ERROR\n\n\`0 ERROR\` is a Gen 9 OU battle agent developed by *pre*.\n\n## Architecture\n\n- Depth-limited Nash equilibrium search over packed battle states.\n- Neural leaf evaluation network trained via self-play trajectories.\n- Team preview policy conditioned on revealed opponent archetypes."
 

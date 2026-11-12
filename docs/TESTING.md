@@ -252,7 +252,7 @@ MOCK=1 npm run mock -- simulate --server http://localhost:1234 --secret "$ARENA_
 | `--public-dir <dir>` | Override output directory for static HTML/JSON renders (defaults to `public/`). |
 | `--server <url>` | Run in **Live HTTP Server Mode** against a running `pkmn.ai` server instead of mutating submission/runner tables directly. |
 | `--secret <token>` | Bearer `$ARENA_SECRET` for `/api/arena/*` requests when `--server` is set (falls back to `process.env.ARENA_SECRET`). |
-| `--now <spec>` | Pin the initial simulated clock when running `mock seed` (Unix seconds, ISO-8601, or relative spec). |
+| `--now <spec>` | Pin the initial simulated clock (`anchorNow`) across `mock seed`, `-f <scenario>`, stdin, or commands (Unix seconds, ISO-8601, or relative spec). |
 | `-h`, `--help` | Print CLI usage summary. |
 
 ### Dual Transport Modes
