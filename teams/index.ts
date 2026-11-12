@@ -111,15 +111,17 @@ export function hashTeam(packedCanonicalTeam: string): string {
     .slice(0, TEAM_HASH_LEN);
 }
 
+const CHAMPIONS_DEX = Dex.mod('champions' as ID, champions as unknown as ModData);
+const CHAMPIONS_REGMB_DEX =
+  Dex.mod('championsregmb' as ID, championsregmb as unknown as ModData);
+
 /**
  * Initializes the Dex instance for a given format string.
  */
 export function getDex(format: string): ModdedDex {
   const id = toID(format);
   if (id.includes('champions')) {
-    return id.includes('regmb')
-      ? Dex.mod('championsregmb' as ID, championsregmb as unknown as ModData)
-      : Dex.mod('champions' as ID, champions as unknown as ModData);
+    return id.includes('regmb') ? CHAMPIONS_REGMB_DEX : CHAMPIONS_DEX;
   }
   const genMatch = /^gen(\d)/.exec(id);
   return genMatch ? Dex.forGen(Number(genMatch[1])) : Dex;

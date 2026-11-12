@@ -143,7 +143,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       const poolDir = path.join(tmpDir, 'pool');
       const dbPath = path.join(tmpDir, 'arena.sqlite');
       fs.mkdirSync(poolDir, {recursive: true});
-      copyRootPublicAssets(PUBLIC_DIR, publicDir);
+      fs.mkdirSync(publicDir, {recursive: true});
 
       const projectsFile = mock.prepareMockStaticDir(staticDir, avatarsDir);
       let nowSec = 1_760_000_000;
@@ -231,7 +231,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
       });
 
       let statusQueue: Promise<unknown> = Promise.resolve();
-      let autoRender = true;
+      let autoRender = false;
       const arenaHandle = arena.register(app, {
         db,
         auth: authInstance,
@@ -251,8 +251,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           }
         },
       });
-
-      renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSec});
 
       const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -440,8 +438,8 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
             autoRender = true;
             nowSec += 600;
             await mockArena.playMatchStep({ladderId, emitHeartbeats: true});
+            autoRender = false;
           }
-          autoRender = true;
         };
 
         await settleLadder('gen1ou20261109', true);
@@ -481,7 +479,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
 
         // Settle 1.2.0 on RBY and verify Discord Competitor + settled #1 RBY role sync
         await settleLadder('gen1ou20261109', false);
-        renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSec});
 
         const guildMembers: discord.GuildMember[] = [
           {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
@@ -543,7 +540,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         // Refresh MockArenaClient ladder metadata, then play settling VGC matches until archived
         await mockArena.syncPendingSubmissions();
         let archived = false;
-        autoRender = false;
         for (let i = 0; i < 200 && !archived; i++) {
           nowSec += 600;
           const step = await mockArena.playMatchStep({
@@ -552,7 +548,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           });
           if (step?.archivedLadder) archived = true;
         }
-        autoRender = true;
         renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSec});
         expect(archived).toBe(true);
         expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('archived');
@@ -638,10 +633,10 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
               '/arena/tournaments/1/',
               '/arena/tournaments/2/',
               '/arena/tournaments/3/',
-              '/arena/battles/',
               '/projects/',
               '/projects/0-error/',
               '/account/',
+              '/arena/battles/',
             ];
 
             for (const theme of ['light', 'dark'] as const) {
@@ -689,7 +684,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
 
               for (const p of pathsToVerify) {
                 await page.goto(p);
-                await page.waitForLoadState('networkidle');
                 const overflow = await page.evaluate<number>(
                   'document.documentElement.scrollWidth - window.innerWidth'
                 );
@@ -700,8 +694,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
                 });
                 expect(overflow).toBeLessThanOrEqual(0);
               }
-              await page.goto('/arena/battles/');
-              await page.waitForLoadState('networkidle');
               await page.locator('#battles-tbody tr.battle-row td').first().click();
               expect(
                 await page.locator('#battles-tbody tr.battle-detail-row:not(.hide)').count()
