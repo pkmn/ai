@@ -97,7 +97,16 @@
       );
       if (activeMatchPane) {
         activeMatchPane.querySelectorAll('tbody tr[data-ver]').forEach(row => {
-          row.classList.toggle('hide', ver !== 'all' && row.dataset.ver !== ver);
+          const hidden = ver !== 'all' && row.dataset.ver !== ver;
+          row.classList.toggle('hide', hidden);
+          if (hidden) {
+            row.classList.remove('expanded');
+            row.setAttribute('aria-expanded', 'false');
+            const detail = row.nextElementSibling;
+            if (detail && detail.classList.contains('battle-detail-row')) {
+              detail.classList.add('hide');
+            }
+          }
         });
       }
     };
@@ -164,5 +173,29 @@
         rows.forEach(row => tbody.appendChild(row));
       }));
     });
+
+    const matchesSec = document.getElementById('matches');
+    if (matchesSec) {
+      const toggleMatchRow = row => {
+        const detail = row.nextElementSibling;
+        if (!detail || !detail.classList.contains('battle-detail-row')) return;
+        const open = !detail.classList.toggle('hide');
+        row.classList.toggle('expanded', open);
+        row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      matchesSec.addEventListener('click', e => {
+        if (e.target.closest('a')) return;
+        const row = e.target.closest('tr.battle-row');
+        if (row) toggleMatchRow(row);
+      });
+      matchesSec.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const row = e.target.closest('tr.battle-row');
+        if (row && e.target === row) {
+          e.preventDefault();
+          toggleMatchRow(row);
+        }
+      });
+    }
   });
 </script>

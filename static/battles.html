@@ -34,6 +34,11 @@
       </tbody>
     </table>
   </div>
+  <div class="pager{{{pagerInitialClass}}}" id="battles-pager" aria-label="Battle history pagination">
+    <button type="button" class="pager-btn" id="battles-prev" disabled>&larr; Newer</button>
+    <span class="pager-info muted" id="battles-page-info">{{{pagerInitialInfo}}}</span>
+    <button type="button" class="pager-btn" id="battles-next"{{{pagerNextDisabled}}}>Older &rarr;</button>
+  </div>
 </section>
 
 <script>
@@ -43,8 +48,16 @@
     const formatTitles = {{{formatTitlesJson}}};
     const livePanel = document.getElementById('live-panel');
     const tbody = document.getElementById('battles-tbody');
+    const pager = document.getElementById('battles-pager');
+    const prevBtn = document.getElementById('battles-prev');
+    const nextBtn = document.getElementById('battles-next');
+    const pageInfo = document.getElementById('battles-page-info');
     const radios = document.querySelectorAll('input[name="bformat"]');
+    const pageSize = (state && state.pageSize) || 50;
+    const historyEndpoint = (state && state.historyEndpoint) || '/api/battles.json';
     let currentFmt = 'all';
+    let currentPage = 1;
+    let fetchSeq = 0;
 
     const esc = s => String(s)
       .replace(/&/g, '&amp;')
@@ -60,6 +73,8 @@
       if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
       return Math.floor(diff / 86400) + 'd ago';
     };
+
+    const utcStr = ts => new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
     const renderAgent = (agent, bold) => {
       const inner = bold ? '<strong>' + esc(agent.name) + '</strong>' : esc(agent.name);
@@ -151,6 +166,54 @@
     const isFaultReason = r => r && r !== 'normal' && r !== 'win' && r !== 'tie' &&
       r !== 'turn_limit';
 
+    const formatEndReason = reason => {
+      const norm = String(reason || '').trim().toLowerCase();
+      if (!norm || norm === 'normal' || norm === 'win') {
+        return {html: '<span class="muted">Normal</span>', label: 'Normal', abnormal: false};
+      }
+      if (norm === 'tie') {
+        return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
+      }
+      if (norm === 'turn_limit') {
+        return {html: '<span class="muted">Turn limit</span>', label: 'Turn limit', abnormal: false};
+      }
+      if (norm === 'timeout') {
+        return {html: '<span class="no">Timeout</span>', label: 'Timeout', abnormal: true};
+      }
+      if (norm === 'crash') {
+        return {html: '<span class="no">Crash</span>', label: 'Crash', abnormal: true};
+      }
+      if (norm === 'oom') {
+        return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
+      }
+      if (norm === 'forfeit') {
+        return {html: '<span class="no">Forfeit</span>', label: 'Forfeit', abnormal: true};
+      }
+      if (norm === 'invalid_choice_3x') {
+        return {
+          html: '<span class="no">3&times; Invalid Choice</span>',
+          label: '3x Invalid Choice',
+          abnormal: true,
+        };
+      }
+      return {html: '<span class="no">' + esc(reason) + '</span>', label: reason, abnormal: true};
+    };
+
+    const formatPoolCode = (label, p1Name, p2Name) => {
+      if (!label) return '<span class="muted">—</span>';
+      let tip;
+      if (label.startsWith('P1:')) {
+        tip = 'Known to P1 (' + p1Name + ') — drawn from ' + p1Name +
+          "'s submitted seasonal pool (unknown to " + p2Name + ')';
+      } else if (label.startsWith('P2:')) {
+        tip = 'Known to P2 (' + p2Name + ') — drawn from ' + p2Name +
+          "'s submitted seasonal pool (unknown to " + p1Name + ')';
+      } else {
+        tip = 'Unknown to both players — drawn from a third-party competitor seasonal pool';
+      }
+      return '<code title="' + esc(tip) + '">' + esc(label) + '</code>';
+    };
+
     const resultParts = cat => {
       if (cat === 'WW') return {p1Win: true, p2Win: false, html: '<strong>2</strong>–0'};
       if (cat === 'WT' || cat === 'TW') {
@@ -163,7 +226,124 @@
       return {p1Win: false, p2Win: false, html: '1–1'};
     };
 
-    const renderMatchRow = (m, nowSec) => {
+    const renderMatchDetailHtml = m => {
+      const r = resultParts(m.category);
+      const p1Bold = renderAgent(m.p1, r.p1Win);
+      const p2Bold = renderAgent(m.p2, r.p2Win);
+      const p1Plain = renderAgent(m.p1, false);
+      const p2Plain = renderAgent(m.p2, false);
+      const fmtTitle = formatTitles[m.format] || m.format;
+      const ladderHref = m.ladderHref || (
+        m.ladderStatus === 'archived'
+          ? '/arena/ladders/' + encodeURIComponent(m.ladderId) + '/'
+          : '/arena/ladders/' + encodeURIComponent(m.slot) + '/'
+      );
+      const end1 = formatEndReason(m.game1EndReason);
+      const end2 = formatEndReason(m.game2EndReason);
+      const faults = [];
+      if (end1.abnormal) faults.push(end1.label);
+      if (end2.abnormal && faults.indexOf(end2.label) === -1) faults.push(end2.label);
+      const faultBadge = faults.length > 0
+        ? ' <span class="no" title="Abnormal game termination">[' + esc(faults.join(', ')) + ']</span>'
+        : '';
+
+      const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
+      const t1Code = formatPoolCode(m.p1TeamLabel, m.p1.name, m.p2.name);
+      const t2Code = formatPoolCode(m.p2TeamLabel, m.p1.name, m.p2.name);
+      const poolSummary = showPools
+        ? '<div class="battle-detail-pool" title="12-char pkmn/teams SHA-256 short hashes; ' +
+          'P1:/P2: prefix indicates a team submitted by that player in this match (at most one ' +
+          'team per match can belong to either player)">Teams: Player 1 ' + t1Code +
+          ' · Player 2 ' + t2Code + '</div>'
+        : '';
+
+      const g1Winner = m.game1Outcome === 'W'
+        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
+        : m.game1Outcome === 'L'
+          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
+          : '<span class="muted">Tie</span>';
+      const g2Winner = m.game2Outcome === 'W'
+        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
+        : m.game2Outcome === 'L'
+          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
+          : '<span class="muted">Tie</span>';
+
+      const g1Banks = Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p2Game1BankSeconds) + 's';
+      const g2Banks = Math.round(m.p2Game2BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
+      const p1RamPct = ((m.p1PeakRam / 14336) * 100).toFixed(1);
+      const p2RamPct = ((m.p2PeakRam / 14336) * 100).toFixed(1);
+      const p1RamStr = Math.round(m.p1PeakRam).toLocaleString('en-US') + ' MiB';
+      const p2RamStr = Math.round(m.p2PeakRam).toLocaleString('en-US') + ' MiB';
+      const p1Banks = Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
+      const p2Banks = Math.round(m.p2Game1BankSeconds) + 's / ' + Math.round(m.p2Game2BankSeconds) + 's';
+      const p1Teams = showPools ? ' · Teams ' + t1Code + ' / ' + t2Code : '';
+      const p2Teams = showPools ? ' · Teams ' + t2Code + ' / ' + t1Code : '';
+
+      let archiveNote = '';
+      if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
+        const links = [];
+        if (m.archiveHref) {
+          links.push(
+            '<a href="' + esc(m.archiveHref) + '" class="subtle"><code>' +
+            esc(m.ladderId + '-logs.7z') + '</code></a>'
+          );
+        }
+        if (m.teamsHref) {
+          links.push('<a href="' + esc(m.teamsHref) + '" class="subtle"><code>teams.json</code></a>');
+        }
+        if (links.length > 0) {
+          archiveNote = '<div class="battle-detail-note muted">Retired pool archives: ' +
+            links.join(' · ') + '</div>';
+        }
+      }
+
+      return '<div class="battle-detail">' +
+        '<div class="battle-detail-meta">' +
+          '<span><a href="' + esc(ladderHref) + '" class="subtle"><strong>' + esc(m.ladderName) +
+          '</strong></a> <span class="muted">(<tt>' + esc(fmtTitle) + '</tt>)</span> · ' +
+          '<span class="muted">' + esc(utcStr(m.completedAt)) + '</span></span>' +
+          '<span><span class="muted">Outcome:</span> <code>' + esc(m.category) + '</code> ' +
+          '<span class="muted">(' + (m.game1Turns + m.game2Turns) + ' turns)</span>' +
+          faultBadge + ' · <span class="muted">Seed:</span> <code>' + esc(m.seed) + '</code></span>' +
+        '</div>' +
+        poolSummary +
+        '<div class="battle-detail-grid">' +
+          '<div class="battle-detail-card">' +
+            '<div class="battle-detail-title">Games</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><strong>Game 1</strong> · <tt>p1</tt> ' + p1Plain +
+              ' vs <tt>p2</tt> ' + p2Plain + '</span>' +
+              '<span>' + g1Winner + ' · ' + end1.html + ' · ' + m.game1Turns +
+              't · Bank <tt>' + g1Banks + '</tt></span>' +
+            '</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><strong>Game 2</strong> <span class="muted">(swapped)</span> · <tt>p1</tt> ' +
+              p2Plain + ' vs <tt>p2</tt> ' + p1Plain + '</span>' +
+              '<span>' + g2Winner + ' · ' + end2.html + ' · ' + m.game2Turns +
+              't · Bank <tt>' + g2Banks + '</tt></span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="battle-detail-card">' +
+            '<div class="battle-detail-title">Client Telemetry</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><tt>P1</tt> ' + p1Bold + '</span>' +
+              '<span>Mean <tt>' + Math.round(m.p1MeanTurnMillis) + ' ms/turn</tt> · Peak RAM <tt>' +
+              p1RamStr + '</tt> <span class="muted">(' + p1RamPct + '%)</span> · Banks <tt>' +
+              p1Banks + '</tt>' + p1Teams + '</span>' +
+            '</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><tt>P2</tt> ' + p2Bold + '</span>' +
+              '<span>Mean <tt>' + Math.round(m.p2MeanTurnMillis) + ' ms/turn</tt> · Peak RAM <tt>' +
+              p2RamStr + '</tt> <span class="muted">(' + p2RamPct + '%)</span> · Banks <tt>' +
+              p2Banks + '</tt>' + p2Teams + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        archiveNote +
+      '</div>';
+    };
+
+    const renderMatchPair = (m, nowSec, expanded) => {
       const r = resultParts(m.category);
       const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
       const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
@@ -174,41 +354,183 @@
         Math.round(m.p2MeanTurnMillis) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
         Math.round(m.p1PeakRam).toLocaleString('en-US') + 'M/' +
         Math.round(m.p2PeakRam).toLocaleString('en-US') + 'M' + reasons;
-      const battleHref = '/arena/battles/' + encodeURIComponent(m.id) + '/';
+
       const tr = document.createElement('tr');
       tr.id = m.id;
+      tr.className = 'battle-row' + (expanded ? ' expanded' : '');
       tr.dataset.fmt = m.slot;
-      if (currentFmt !== 'all' && m.slot !== currentFmt) tr.classList.add('hide');
-      tr.innerHTML = '<td><a href="' + esc(battleHref) + '" class="subtle"><code>' + esc(m.id) +
-        '</code></a></td>' +
+      tr.tabIndex = 0;
+      tr.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      tr.innerHTML = '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span><code>' +
+        esc(m.id) + '</code></td>' +
         '<td>' + renderAgent(m.p1, r.p1Win) + '</td>' +
         '<td>' + renderAgent(m.p2, r.p2Win) + '</td>' +
         '<td class="center" title="' + esc(tip) + '">' + r.html + '</td>' +
         '<td class="num">' + m.game1Turns + ' / ' + m.game2Turns + '</td>' +
         '<td class="num muted" data-ts="' + m.completedAt + '">' +
         relTime(nowSec, m.completedAt) + '</td>';
-      return tr;
+
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'battle-detail-row' + (expanded ? '' : ' hide');
+      detailTr.dataset.detailFor = m.id;
+      detailTr.innerHTML = '<td colspan="6">' + renderMatchDetailHtml(m) + '</td>';
+
+      return [tr, detailTr];
     };
 
-    const applyFilter = fmt => {
-      currentFmt = fmt;
-      if (!tbody) return;
-      const rows = tbody.querySelectorAll('tr[data-fmt]');
-      rows.forEach(row => {
-        row.classList.toggle('hide', fmt !== 'all' && row.dataset.fmt !== fmt);
+    const toggleRow = (row, forceOpen) => {
+      const detail = row.nextElementSibling;
+      if (!detail || !detail.classList.contains('battle-detail-row')) return;
+      const open = forceOpen !== undefined ? forceOpen : detail.classList.contains('hide');
+      detail.classList.toggle('hide', !open);
+      row.classList.toggle('expanded', open);
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+
+    if (tbody) {
+      tbody.addEventListener('click', e => {
+        if (e.target.closest('a')) return;
+        const row = e.target.closest('tr.battle-row');
+        if (row) toggleRow(row);
       });
+      tbody.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const row = e.target.closest('tr.battle-row');
+        if (row && e.target === row) {
+          e.preventDefault();
+          toggleRow(row);
+        }
+      });
+    }
+
+    const updatePager = (page, total) => {
+      if (!pager || !prevBtn || !nextBtn || !pageInfo) return;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      pager.classList.toggle('hide', total === 0 || (totalPages <= 1 && page <= 1));
+      prevBtn.disabled = page <= 1;
+      nextBtn.disabled = page >= totalPages;
+      pageInfo.textContent = 'Page ' + page + ' of ' + totalPages + ' (' +
+        total.toLocaleString('en-US') + ' ' + (total === 1 ? 'battle' : 'battles') + ')';
     };
 
-    radios.forEach(r => r.addEventListener('change', () => applyFilter(r.value)));
+    const renderHistoryList = (matches, nowSec) => {
+      if (!tbody) return;
+      const expandedIds = new Set();
+      tbody.querySelectorAll('tr.battle-row.expanded').forEach(r => {
+        if (r.id) expandedIds.add(r.id);
+      });
+      if (!matches || matches.length === 0) {
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="6" class="center muted">' +
+          'No completed battles yet.</td></tr>';
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for (const m of matches) {
+        const pair = renderMatchPair(m, nowSec, expandedIds.has(m.id));
+        frag.appendChild(pair[0]);
+        frag.appendChild(pair[1]);
+      }
+      tbody.innerHTML = '';
+      tbody.appendChild(frag);
+    };
 
-    const checkHash = () => {
+    const loadHistoryPage = async (fmt, page, scrollHistory) => {
+      currentFmt = fmt;
+      currentPage = page;
+      const seq = ++fetchSeq;
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      if (fmt === 'all' && page === 1 && state && Array.isArray(state.recentMatches)) {
+        renderHistoryList(state.recentMatches, nowSec);
+        const total = (state.countsBySlot && state.countsBySlot.all !== undefined)
+          ? state.countsBySlot.all
+          : (state.totalMatches || state.recentMatches.length);
+        updatePager(1, total);
+        if (scrollHistory) {
+          const hist = document.getElementById('history');
+          if (hist) hist.scrollIntoView();
+        }
+        return;
+      }
+
+      try {
+        const qs = '?slot=' + encodeURIComponent(fmt) + '&page=' + page + '&limit=' + pageSize;
+        const res = await fetch(historyEndpoint + qs, {
+          cache: 'no-cache',
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) throw new Error('status ' + res.status);
+        const data = await res.json();
+        if (seq !== fetchSeq) return;
+        if (state && data.countsBySlot) state.countsBySlot = data.countsBySlot;
+        renderHistoryList(data.matches || [], Math.floor(Date.now() / 1000));
+        updatePager(data.page || page, data.total || 0);
+        if (scrollHistory) {
+          const hist = document.getElementById('history');
+          if (hist) hist.scrollIntoView();
+        }
+      } catch {
+        if (seq !== fetchSeq) return;
+        if (page === 1 && state && Array.isArray(state.recentMatches)) {
+          const filtered = fmt === 'all'
+            ? state.recentMatches
+            : state.recentMatches.filter(m => m.slot === fmt);
+          renderHistoryList(filtered, nowSec);
+          const fallbackTotal = (state.countsBySlot && state.countsBySlot[fmt] !== undefined)
+            ? state.countsBySlot[fmt]
+            : filtered.length;
+          updatePager(1, fallbackTotal);
+        }
+      }
+    };
+
+    radios.forEach(r => r.addEventListener('change', () => {
+      loadHistoryPage(r.value, 1, false);
+    }));
+
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        if (currentPage > 1) loadHistoryPage(currentFmt, currentPage - 1, true);
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        loadHistoryPage(currentFmt, currentPage + 1, true);
+      });
+    }
+
+    const checkHash = async () => {
       if (!location.hash) return;
       const id = decodeURIComponent(location.hash.slice(1));
+      if (!id || id === 'live' || id === 'history') return;
       const el = document.getElementById(id);
       if (el && el.tagName === 'TR') {
         el.classList.remove('hide');
+        toggleRow(el, true);
         el.scrollIntoView();
+        return;
       }
+      try {
+        const res = await fetch(historyEndpoint + '?id=' + encodeURIComponent(id), {
+          cache: 'no-cache',
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data || !data.match || !tbody) return;
+        const existing = document.getElementById(data.match.id);
+        if (existing && existing.tagName === 'TR') {
+          toggleRow(existing, true);
+          existing.scrollIntoView();
+          return;
+        }
+        const emptyRow = tbody.querySelector('.empty-row');
+        if (emptyRow) emptyRow.remove();
+        const pair = renderMatchPair(data.match, Math.floor(Date.now() / 1000), true);
+        tbody.insertBefore(pair[1], tbody.firstChild);
+        tbody.insertBefore(pair[0], pair[1]);
+        pair[0].scrollIntoView();
+      } catch {}
     };
     window.addEventListener('hashchange', checkHash);
     checkHash();
@@ -251,15 +573,37 @@
         if (prevKey !== nextKey) {
           renderLive(nowSec);
         }
-        if (tbody && Array.isArray(next.recentMatches) && next.recentMatches.length > 0) {
+        if (
+          currentFmt === 'all' &&
+          currentPage === 1 &&
+          tbody &&
+          Array.isArray(next.recentMatches) &&
+          next.recentMatches.length > 0
+        ) {
           const emptyRow = tbody.querySelector('.empty-row');
           if (emptyRow) emptyRow.remove();
           for (let i = next.recentMatches.length - 1; i >= 0; i--) {
             const m = next.recentMatches[i];
             if (!document.getElementById(m.id)) {
-              tbody.insertBefore(renderMatchRow(m, nowSec), tbody.firstChild);
+              const pair = renderMatchPair(m, nowSec, false);
+              tbody.insertBefore(pair[1], tbody.firstChild);
+              tbody.insertBefore(pair[0], pair[1]);
             }
           }
+          const summaryRows = tbody.querySelectorAll('tr.battle-row');
+          for (let i = summaryRows.length - 1; i >= pageSize; i--) {
+            const row = summaryRows[i];
+            if (row.classList.contains('expanded')) continue;
+            const detail = row.nextElementSibling;
+            if (detail && detail.classList.contains('battle-detail-row')) detail.remove();
+            row.remove();
+          }
+          const total = (next.countsBySlot && next.countsBySlot.all !== undefined)
+            ? next.countsBySlot.all
+            : (next.totalMatches || next.recentMatches.length);
+          updatePager(1, total);
+        } else if (next.countsBySlot && next.countsBySlot[currentFmt] !== undefined) {
+          updatePager(currentPage, next.countsBySlot[currentFmt]);
         }
         if (tbody) {
           tbody.querySelectorAll('td[data-ts]').forEach(td => {

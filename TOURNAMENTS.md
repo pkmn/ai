@@ -176,7 +176,15 @@ After the Round-Robin (and optional 100-game Superfinal between `#1` and `#2`) f
    npm run pkmn -- set-tournament-status 3 completed
    ```
    This sets `status = 'completed'` and `completed_at`, strips the `[LIVE]` `#topbar` banner across `public/`, moves `Tournament #3` into the completed **Tournaments** table on `/arena/`, and writes the final `/arena/tournaments/3/index.html` and `/arena/tournaments/3/index.json` artifacts.
-2. **Archive Replays:** Compress all omniscient `.log` files into `public/arena/tournaments/3/replays.7z` (`@pkmn/stats/tools/compress` layout) and back up to `gs://pkmn-arena/tournaments/3/`.
+2. **Publish Replay Archive:** Compress all omniscient `.log` files (including full team sheets and per-turn `|c|` policy distributions) into a `.7z` archive (`@pkmn/stats/tools/compress` layout), back up to `gs://pkmn-arena/tournaments/3/`, and publish it via the operator CLI or authenticated `PUT /api/arena/tournaments/3/archive` endpoint so `/arena/tournaments/3/` and `/arena/tournaments/3.json` surface `3-replays.7z`:
+   ```sh
+   npm run pkmn -- publish-tournament-archive 3 /tmp/3-replays.7z
+   # or remotely from the coordinator:
+   curl -fsS -X PUT https://pkmn.ai/api/arena/tournaments/3/archive \
+     -H "Authorization: Bearer $ARENA_SECRET" \
+     -H "X-Content-SHA256: $(shasum -a 256 /tmp/3-replays.7z | awk '{print $1}')" \
+     --data-binary @/tmp/3-replays.7z
+   ```
 3. **Delete All Worker VMs & Staging Image (Drop Cloud Spend to `$0.00/hr`):**
    ```sh
    # Delete all pkmn-t3-* worker instances across zones

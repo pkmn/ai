@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS agent_versions (
   agent_id INTEGER NOT NULL REFERENCES agents(id),
   -- Developer who submitted this version on `/account` (NULL if seeded via CLI or developer removed).
   developer_id INTEGER REFERENCES developers(id) ON DELETE SET NULL,
-  -- Competitor-chosen version label matching `^[A-Za-z0-9._-]{1,12}$` (e.g. '1.2.0', 'v2').
-  version TEXT NOT NULL,
+  -- Competitor-chosen version label matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$` (max 12 chars).
+  version TEXT NOT NULL CHECK (length(version) BETWEEN 1 AND 12),
   -- Execution packaging format:
   --   'bundle': native darwin/arm64 tarball (.tar.gz / .tar.xz / .tar.zst) with executable ./run
   --   'oci': OCI container image reference (linux/arm64 on ladders; linux/amd64 on tournaments)

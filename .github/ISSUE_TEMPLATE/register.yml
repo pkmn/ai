@@ -14,7 +14,7 @@ body:
     id: name
     attributes:
       label: Project Name
-      description: Distinct project name (prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare English Pokémon species names, or known players' names). Approval subject to staff discretion.
+      description: Distinct project name (max 18 characters, following Pokémon Showdown username conventions; prefer `^[A-Za-z ]+$`; must not include `poke`/`mon`/`pkmn`/`ai`/`bot`/`agent`/`showdown`/`smogon`, bare English Pokémon species names, or known players' names). Approval subject to staff discretion.
       placeholder: "Foul Play"
     validations:
       required: true

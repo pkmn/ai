@@ -1466,11 +1466,18 @@ export function seedMockArena(options: SeedOptions): SeedResult {
     },
   };
 
+  const countsBySlot = db.getMatchCountsBySlot();
+  const recentRaw = db.getRecentMatches(50);
+  const targetPublic = options.publicDir ?? render.PUBLIC_DIR;
   const liveDoc: arena.LiveDocument = {
     updatedAt: now,
     stale: false,
     live: liveMatch,
-    recentMatches: db.getRecentMatches(50),
+    pageSize: 50,
+    totalMatches: countsBySlot.all ?? recentRaw.length,
+    countsBySlot,
+    historyEndpoint: '/api/battles.json',
+    recentMatches: recentRaw.map(m => arena.enrichMatchView(targetPublic, m)),
   };
 
   const tournamentBroadcast: tournaments.LiveBroadcast = {
@@ -1505,6 +1512,42 @@ export function seedMockArena(options: SeedOptions): SeedResult {
   };
 
   if (options.render !== false && options.publicDir) {
+    const t1Dir = path.join(options.publicDir, 'arena', 'tournaments', '1');
+    fs.mkdirSync(t1Dir, {recursive: true});
+    const sf1Log = [
+      "|player|p1|Mew's Truck|1",
+      '|player|p2|0 ERROR|2',
+      '|gametype|singles',
+      '|gen|9',
+      '|tier|[Gen 9] OU',
+      '|poke|p1|Great Tusk|',
+      '|poke|p1|Gholdengo|',
+      '|poke|p2|Kingambit, M|',
+      '|poke|p2|Dragapult, F|',
+      '|teampreview',
+      "|c|☆Mew's Truck|{\"team 1\":0.685,\"team 2\":0.315}",
+      '|c|☆0 ERROR|{"team 1":0.55,"team 2":0.45}',
+      '|start',
+      '|switch|p1a: Great Tusk|Great Tusk|100/100',
+      '|switch|p2a: Dragapult|Dragapult, F|100/100',
+      '|turn|1',
+      "|c|☆Mew's Truck|{\"move 1\":0.625,\"move 2\":0.25,\"switch 2\":0.125}",
+      '|c|☆0 ERROR|{"move 1":0.55,"move 3":0.3,"switch 2":0.15}',
+      '|move|p2a: Dragapult|U-turn|p1a: Great Tusk',
+      '|-resisted|p1a: Great Tusk',
+      '|-damage|p1a: Great Tusk|92/100',
+      '|move|p1a: Great Tusk|Knock Off|p2a: Dragapult',
+      '|-supereffective|p2a: Dragapult',
+      '|-damage|p2a: Dragapult|0 fnt',
+      '|faint|p2a: Dragapult',
+      "|win|Mew's Truck",
+    ].join('\n');
+    fs.writeFileSync(path.join(t1Dir, 'spring26-sf1.log'), `${sf1Log}\n`, 'utf8');
+    fs.writeFileSync(
+      path.join(t1Dir, '1-replays.7z'),
+      Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04])
+    );
+
     render.renderArenaPages({
       db,
       publicDir: options.publicDir,

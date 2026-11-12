@@ -6,6 +6,7 @@ import type * as db from '../db';
 import {Renderer, header} from '../static/build';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
+import * as arena from './arena';
 import * as ratings from './ratings';
 import * as render from './render';
 
@@ -755,7 +756,6 @@ function renderRecentMatchesPane(opts: {
   ladderKey: string;
   isDefault: boolean;
   matches: db.RecentMatchView[];
-  renderedBattleIds: ReadonlySet<string>;
   publicDir: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
@@ -767,13 +767,28 @@ function renderRecentMatchesPane(opts: {
     ladderKey,
     isDefault,
     matches,
-    renderedBattleIds,
     publicDir,
     projectMeta,
     profileSlugs,
     nowSec,
   } = opts;
   const hideCls = isDefault ? '' : ' hide';
+
+  const agentLinks: Record<string, string> = {};
+  for (const m of matches) {
+    for (const side of [m.p1, m.p2]) {
+      if (!agentLinks[side.slug]) {
+        const href = render.resolveAgentHref(
+          publicDir,
+          projectMeta,
+          side.slug,
+          side.name,
+          profileSlugs
+        );
+        if (href) agentLinks[side.slug] = href;
+      }
+    }
+  }
 
   const rowsHtml = matches.length === 0
     ? '<tr><td colspan="8" class="center muted">No completed matches yet.</td></tr>'
@@ -798,25 +813,22 @@ function renderRecentMatchesPane(opts: {
       const g2Bank = Math.round(weAreP1 ? m.p1Game2BankSeconds : m.p2Game2BankSeconds);
       const peakRam = Math.round(weAreP1 ? m.p1PeakRam : m.p2PeakRam);
 
-      const oppHref = render.resolveAgentHref(
-        publicDir,
-        projectMeta,
-        oppSide.slug,
-        oppSide.name,
-        profileSlugs
-      );
+      const oppHref = agentLinks[oppSide.slug];
       const oppCell = `${render.formatAgentLink(oppSide.name, oppHref, false)} ` +
         `<code>${escapeHtml(oppSide.version)}</code>`;
 
       const idEsc = escapeHtml(m.id);
-      const battleHref = renderedBattleIds.has(m.id)
-        ? `/arena/battles/${encodeURIComponent(m.id)}/`
-        : '/arena/battles/';
       const tsTitle = formatIsoDateTimeUtc(m.completedAt);
       const rel = render.formatRelativeTime(nowSec, m.completedAt);
+      const detailHtml = render.renderBattleInlineDetailHtml(
+        arena.enrichMatchView(publicDir, m),
+        agentLinks
+      );
 
-      return `<tr data-ver="${escapeHtml(ourSide.version)}">` +
-        `<td><a href="${battleHref}" class="subtle"><code>${idEsc}</code></a></td>` +
+      return `<tr class="battle-row" data-ver="${escapeHtml(ourSide.version)}" ` +
+        'tabindex="0" aria-expanded="false">' +
+        '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span>' +
+          `<code>${idEsc}</code></td>` +
         `<td><code>${escapeHtml(ourSide.version)}</code></td>` +
         `<td>${oppCell}</td>` +
         `<td class="center">${resHtml}</td>` +
@@ -824,6 +836,9 @@ function renderRecentMatchesPane(opts: {
         `<td class="num">${g1Bank}s / ${g2Bank}s</td>` +
         `<td class="num">${peakRam.toLocaleString('en-US')}M</td>` +
         `<td class="num muted" title="${escapeHtml(tsTitle)}">${rel}</td>` +
+        '</tr>' +
+        `<tr class="battle-detail-row hide" data-detail-for="${idEsc}">` +
+        `<td colspan="8">${detailHtml}</td>` +
         '</tr>';
     }).join('');
 
@@ -926,7 +941,6 @@ export function renderAgentProfiles(opts: {
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileAgents: db.AgentRow[];
   profileSlugs: ReadonlySet<string>;
-  renderedBattleIds: ReadonlySet<string>;
   nowSec: number;
 }) {
   const {
@@ -937,7 +951,6 @@ export function renderAgentProfiles(opts: {
     projectMeta,
     profileAgents,
     profileSlugs,
-    renderedBattleIds,
     nowSec,
   } = opts;
   const projectsDir = path.join(publicDir, 'projects');
@@ -973,17 +986,24 @@ export function renderAgentProfiles(opts: {
     const ladders = db.getAgentParticipatedLadders(agent.id);
 
     let logoHtml = '';
+    let logoHref: string | undefined;
     if (agent.logo) {
       const srcLogo = path.join(avatarsDir, agent.logo);
       if (fs.existsSync(srcLogo)) {
         const ext = path.extname(agent.logo) || '.png';
         const destFile = `${agent.slug}${ext}`;
         render.copyFileAtomic(srcLogo, path.join(projectsDir, destFile));
-        logoHtml = `<img class="project-logo" src="/projects/${encodeURIComponent(destFile)}" ` +
+        logoHref = `/projects/${encodeURIComponent(destFile)}`;
+        logoHtml = `<img class="project-logo" src="${logoHref}" ` +
           `alt="${escapeHtml(agent.name)}">`;
       }
     }
 
+    const owners = db.getDevelopersForAgent(agent.id).map(d => ({
+      github: d.githubLogin,
+      smogon: d.smogonUsername,
+      smogonId: d.smogonId,
+    }));
     const meta = projectMeta.get(agent.name);
     const siteLink = meta?.site
       ? `<a href="${escapeHtml(meta.site)}" class="subtle" ` +
@@ -1038,10 +1058,23 @@ export function renderAgentProfiles(opts: {
         content,
       });
       render.writeFileAtomic(path.join(projectsDir, agent.slug, 'index.html'), html);
+      render.writeFileAtomic(
+        path.join(projectsDir, agent.slug, 'index.json'),
+        `${JSON.stringify({
+          slug: agent.slug,
+          name: agent.name,
+          status: agent.status,
+          logoHref,
+          owners,
+          metadata: meta,
+          ladders: [],
+        }, undefined, 2)}\n`
+      );
       continue;
     }
 
     const profileDataMap: Record<string, LadderProfileClientData> = {};
+    const ladderJsonList: unknown[] = [];
     const formatNavParts: string[] = [];
     const versionsPanes: string[] = [];
     const matchupsPanes: string[] = [];
@@ -1076,7 +1109,43 @@ export function renderAgentProfiles(opts: {
       const snapshots = db.getRatingSnapshotsForLadder(l.id);
       const familyStats = db.getAgentLadderStats(l.id, agent.id);
       const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id, 30);
-      const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs);
+      const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
+
+      ladderJsonList.push({
+        key: lKey,
+        id: l.id,
+        slot: l.slot,
+        name: l.name,
+        format: l.format,
+        team: l.team,
+        status: l.status,
+        familyStats,
+        versions: agentEntries.map(e => ({
+          version: e.version,
+          package: e.package,
+          role: e.role,
+          isAnchor: e.isAnchor,
+          elo: Math.round(e.elo),
+          se: Math.round(e.se * 10) / 10,
+          lcb: Math.round(e.lcb),
+          gxe: Math.round(e.gxe * 10) / 10,
+          rankCurrent: e.rankCurrent,
+          bestRank: e.bestRank,
+          maxElo: e.maxElo !== undefined ? Math.round(e.maxElo) : undefined,
+          matches: e.matches,
+          wins: e.ww + e.wt,
+          losses: e.ll + e.tl,
+          ties: e.split,
+          meanTurnMillis: Math.round(e.meanTurnMillis),
+          peakRam: Math.round(e.peakRam),
+          maxWinStreak: e.maxWinStreak,
+          maxLossStreak: e.maxLossStreak,
+          submittedAt: e.submittedAt,
+          settledAt: e.settledAt,
+          retiredAt: e.retiredAt,
+        })),
+        recentMatches,
+      });
 
       const sep = i > 0 ? '\n      —\n      ' : '';
       const checked = isDefault ? ' checked' : '';
@@ -1163,7 +1232,6 @@ export function renderAgentProfiles(opts: {
           ladderKey: lKey,
           isDefault,
           matches: recentMatches,
-          renderedBattleIds,
           publicDir,
           projectMeta,
           profileSlugs,
@@ -1210,5 +1278,17 @@ export function renderAgentProfiles(opts: {
     });
 
     render.writeFileAtomic(path.join(projectsDir, agent.slug, 'index.html'), html);
+    render.writeFileAtomic(
+      path.join(projectsDir, agent.slug, 'index.json'),
+      `${JSON.stringify({
+        slug: agent.slug,
+        name: agent.name,
+        status: agent.status,
+        logoHref,
+        owners,
+        metadata: meta,
+        ladders: ladderJsonList,
+      }, undefined, 2)}\n`
+    );
   }
 }

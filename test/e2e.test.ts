@@ -556,6 +556,18 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSec});
         expect(archived).toBe(true);
         expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('archived');
+        // Retired VGC `pools` ladder automatically exports full seasonal rosters at teams.json,
+        // while active successor `gen9championsvgc2027regma` does not expose teams.json.
+        expect(
+          fs.existsSync(
+            path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2026regmc', 'teams.json')
+          )
+        ).toBe(true);
+        expect(
+          fs.existsSync(
+            path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2027regma', 'teams.json')
+          )
+        ).toBe(false);
 
         // 8. Auto-quarantine Mew's Truck 1.0.0 -> DMs owner & staff
         const mtVer = db.getVersionBySlugAndLabel('mews-truck', '1.0.0')!;
@@ -582,6 +594,30 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
             now: nowSec,
             render: true,
           });
+          // Verify mock tournament archive (.7z) + Showdown replay (.log with |c| policy JSON)
+          expect(
+            fs.existsSync(path.join(viewPublicDir, 'arena', 'tournaments', '1', '1-replays.7z'))
+          ).toBe(true);
+          const sf1Log = fs.readFileSync(
+            path.join(viewPublicDir, 'arena', 'tournaments', '1', 'spring26-sf1.log'),
+            'utf8'
+          );
+          expect(sf1Log).toContain('|c|☆0 ERROR|{');
+          expect(sf1Log).toContain("|c|☆Mew's Truck|{");
+          const tour1JsonPath = path.join(viewPublicDir, 'arena', 'tournaments', '1', 'index.json');
+          const tour1Doc = JSON.parse(fs.readFileSync(tour1JsonPath, 'utf8')) as {
+            archiveHref?: string;
+            games: Array<{logHref?: string}>;
+          };
+          expect(tour1Doc.archiveHref).toBe('/arena/tournaments/1/1-replays.7z');
+          expect(tour1Doc.games.some(g => g.logHref === '/arena/tournaments/1/spring26-sf1.log'))
+            .toBe(true);
+          expect(fs.existsSync(path.join(viewPublicDir, 'projects', 'index.json'))).toBe(false);
+          expect(
+            fs.existsSync(
+              path.join(viewPublicDir, 'arena', 'battles', seeded.featuredBattleId, 'index.html')
+            )
+          ).toBe(false);
           // Stub /account/index.html strictly for static hyperlink anchor check
           fs.mkdirSync(path.join(viewPublicDir, 'account'), {recursive: true});
           fs.writeFileSync(path.join(viewPublicDir, 'account', 'index.html'), '');
@@ -603,7 +639,6 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
               '/arena/tournaments/2/',
               '/arena/tournaments/3/',
               '/arena/battles/',
-              `/arena/battles/${seeded.featuredBattleId}/`,
               '/projects/',
               '/projects/0-error/',
               '/account/',
@@ -665,6 +700,17 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
                 });
                 expect(overflow).toBeLessThanOrEqual(0);
               }
+              await page.goto('/arena/battles/');
+              await page.waitForLoadState('networkidle');
+              await page.locator('#battles-tbody tr.battle-row td').first().click();
+              expect(
+                await page.locator('#battles-tbody tr.battle-detail-row:not(.hide)').count()
+              ).toBe(1);
+              expect(
+                await page.evaluate<number>(
+                  'document.documentElement.scrollWidth - window.innerWidth'
+                )
+              ).toBeLessThanOrEqual(0);
               expect(pageErrors).toEqual([]);
               await context.close();
             }
@@ -682,5 +728,5 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         fs.rmSync(tmpDir, {recursive: true, force: true});
       }
     },
-    30_000);
+    45_000);
 });

@@ -11,7 +11,7 @@ import * as account from './account';
 import * as arena from './arena';
 import {Auth} from './auth';
 import * as discord from './discord';
-import {renderArenaPages} from './render';
+import {PUBLIC_DIR, renderArenaPages, resolveStaticJsonUrl} from './render';
 import * as wiki from './wiki';
 
 const isMock = process.env.MOCK === '1';
@@ -70,8 +70,14 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
   const wares = (app as unknown as {wares?: Middleware[]}).wares;
   const staticWare = wares?.[1];
   if (wares && staticWare) {
-    wares[1] = (req, res, next) =>
-      /^\/account(?:\/|$|\?)/.test(req.url) ? next() : staticWare(req, res, next);
+    wares[1] = (req, res, next) => {
+      if (/^(?:\/account(?:\.json|\/|$|\?)|\/wiki(?:\/|$|\?))/.test(req.url)) {
+        next();
+        return;
+      }
+      req.url = resolveStaticJsonUrl(PUBLIC_DIR, req.url);
+      staticWare(req, res, next);
+    };
   }
 
   const battleAliases = [
@@ -90,9 +96,8 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
       res.writeHead(302, {Location: '/arena/battles/'});
       res.end();
     });
-    app.get(`${prefix}/:id`, (req, res) => {
-      const id = encodeURIComponent(String(req.params.id));
-      res.writeHead(302, {Location: `/arena/battles/${id}/`});
+    app.get(`${prefix}.json`, (_req, res) => {
+      res.writeHead(302, {Location: '/arena/battles.json'});
       res.end();
     });
   }

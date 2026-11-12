@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS agents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   -- URL-safe identifier derived from project name via slugify() (e.g. '0-error', 'foul-play').
   slug TEXT NOT NULL UNIQUE,
-  -- Display name from static/projects.yml (e.g. '0 ERROR', 'Foul Play').
-  name TEXT NOT NULL,
+  -- Display name from static/projects.yml (max 18 chars, Pokémon Showdown username conventions).
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 18),
   -- Optional filename in static/avatars/ (or build/public) for the project profile logo, or NULL.
   logo TEXT,
   -- Registration & Smogon standing state:

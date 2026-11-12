@@ -9,7 +9,7 @@ import polka from 'polka';
 import {LADDERS_FILE, SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
 import type * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
-import {escapeHtml, renderTemplate, root} from '../static/util';
+import {VERSION_RE, escapeHtml, renderTemplate, root} from '../static/util';
 
 import {Auth} from './auth';
 import {validateCompetitorTeams} from './teams';
@@ -65,7 +65,6 @@ export function decryptSecret(encoded: string, secret: string): string {
 }
 
 const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
-const VERSION_RE = /^[A-Za-z0-9._-]{1,12}$/;
 const SHA256_RE = /^[0-9a-fA-F]{64}$/;
 const OCI_REF_RE = new RegExp(
   '^[A-Za-z0-9._-]+(?::\\d{1,5})?/[A-Za-z0-9._/-]+' +
@@ -679,10 +678,19 @@ export function register(app: polka.Polka, options: Options) {
     return undefined;
   };
 
-  app.get('/account', (req, res) => {
+  const handleGetAccount = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    forceJson: boolean
+  ) => {
+    const wantsJson = forceJson || Boolean(req.headers.accept?.includes('application/json'));
     const login = auth.getGitHubUser(req);
     if (!login) {
-      redirect(res, '/auth/github?return_to=%2Faccount%2F');
+      if (wantsJson) {
+        sendJson(res, 401, {error: 'GitHub authentication required.'});
+      } else {
+        redirect(res, '/auth/github?return_to=%2Faccount%2F');
+      }
       return;
     }
 
@@ -690,32 +698,80 @@ export function register(app: polka.Polka, options: Options) {
     const agent = developer ? db.getAgentById(developer.agentId) : undefined;
     const liveTournament = db.getRunningTournament();
     if (!developer || !agent || agent.status === 'disabled') {
-      sendHtml(res, 403, renderNotRegisteredError(login, liveTournament));
+      if (wantsJson) {
+        sendJson(res, 403, {
+          error: `GitHub account "${login}" is not registered to an approved Arena project.`,
+        });
+      } else {
+        sendHtml(res, 403, renderNotRegisteredError(login, liveTournament));
+      }
       return;
     }
 
     const now = getNow();
+    const status = db.computeAgentSubmissionStatus(agent.id, now);
+    const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id);
     const currentLadders = db.getCurrentLadders();
     const needsTeamsLadders = currentLadders.filter(
       l => l.status === 'active' &&
         l.team === 'pools' &&
         !db.hasActiveLadderTeams(l.id, agent.id)
     );
+    const activeEntries = db.getActiveEntriesForAgent(agent.id);
+    const versions = db.getVersionsForAgent(agent.id);
+
+    if (wantsJson) {
+      const needsTeamsIds = new Set(needsTeamsLadders.map(l => l.id));
+      sendJson(res, 200, {
+        developer: {
+          github: developer.githubLogin,
+          smogon: developer.smogonUsername,
+          smogonId: developer.smogonId,
+          discordId: developer.discordId,
+          discordUsername: developer.discordUsername,
+        },
+        agent: {
+          slug: agent.slug,
+          name: agent.name,
+          status: agent.status,
+          profileHref: `/projects/${encodeURIComponent(agent.slug)}/`,
+        },
+        submissionStatus: status,
+        tournamentStatuses,
+        currentLadders: currentLadders.map(l => ({
+          id: l.id,
+          slot: l.slot,
+          name: l.name,
+          format: l.format,
+          team: l.team,
+          teams: l.teams,
+          status: l.status,
+          needsTeams: needsTeamsIds.has(l.id),
+        })),
+        activeEntries,
+        versions,
+      });
+      return;
+    }
 
     const html = renderAccountPage({
       developer,
       agent,
-      status: db.computeAgentSubmissionStatus(agent.id, now),
-      tournamentStatuses: db.computeAgentTournamentStatuses(agent.id),
+      status,
+      tournamentStatuses,
       currentLadders,
       needsTeamsLadders,
-      activeEntries: db.getActiveEntriesForAgent(agent.id),
-      versions: db.getVersionsForAgent(agent.id),
+      activeEntries,
+      versions,
       allLadders: db.getLadders(),
       liveTournament,
     });
     sendHtml(res, 200, html);
-  });
+  };
+
+  app.get('/account', (req, res) => handleGetAccount(req, res, false));
+  app.get('/account.json', (req, res) => handleGetAccount(req, res, true));
+  app.get('/account/index.json', (req, res) => handleGetAccount(req, res, true));
 
   app.post('/api/submissions', async (req, res) => {
     const login = auth.getGitHubUser(req);
@@ -765,7 +821,8 @@ export function register(app: polka.Polka, options: Options) {
 
     if (!VERSION_RE.test(payload.version)) {
       sendJson(res, 400, {
-        error: 'Invalid version string (must match ^[A-Za-z0-9._-]{1,12}$).',
+        error:
+          'Invalid version string (must be 1–12 chars matching ^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$).',
       });
       return;
     }

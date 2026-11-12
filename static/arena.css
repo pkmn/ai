@@ -85,6 +85,17 @@ tr.provisional td {
   font-style: italic;
 }
 
+tr.battle-row {
+  cursor: pointer;
+}
+
+tr.battle-detail-row > td {
+  padding: 0.65rem 0.85rem;
+  white-space: normal;
+  background-color: var(--aside-bg-color);
+  border-top: 1px dashed rgb(var(--fg-base) / 15%);
+}
+
 .ext svg {
   display: inline-block;
   width: 0.7em;
@@ -142,6 +153,10 @@ table.matrix td:first-child {
   text-align: left;
   background-color: var(--bg-color);
   border-right: 1px solid rgb(var(--fg-base) / 20%);
+}
+
+tr.battle-row:hover td {
+  background-color: rgb(var(--fg-base) / 4%);
 }
 
 table.matrix tbody td:first-child {
@@ -293,73 +308,126 @@ table.matrix td.diag {
   font-size: 0.82em;
 }
 
-.battle-matchup {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 0.5rem 1.5ch;
-  align-items: baseline;
-  padding: 0.7rem 0;
-  border-bottom: 1px solid rgb(var(--fg-base) / 12%);
+.battle-toggle {
+  display: inline-block;
+  width: 1.15ch;
+  margin-right: 0.45ch;
+  color: rgb(var(--fg-base) / 55%);
+  transition: transform 0.12s ease;
+  user-select: none;
 }
 
-.battle-side {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5ch;
-  align-items: baseline;
+tr.battle-row.expanded .battle-toggle {
+  color: var(--fg-accent-color);
+  transform: rotate(90deg);
+}
+
+.battle-detail {
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
   min-width: 0;
-  font-size: 1.04em;
+  max-width: min(100%, calc(100vw - 4ch - 4vh - 1.7rem));
+  font-size: 0.88em;
 }
 
-.battle-side-right {
-  justify-content: flex-end;
-}
-
-.battle-score {
+.battle-detail-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5ch;
-  align-items: baseline;
-  justify-content: center;
-  text-align: center;
-}
-
-.battle-score-nums {
-  font-size: 1.2em;
-}
-
-.battle-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1.75ch;
+  gap: 0.3rem 1.5ch;
   align-items: baseline;
   justify-content: space-between;
-  margin-top: 0.5rem;
-  font-size: 0.84em;
-}
-
-.battle-meta code {
   overflow-wrap: anywhere;
 }
 
-.battle-note {
-  margin-top: 0.75rem;
-  font-size: 0.86em;
+.battle-detail-pool {
+  margin-top: 0.35rem;
+  font-size: 0.94em;
+  overflow-wrap: anywhere;
 }
 
-@media (width < 640px) {
-  .battle-matchup {
-    grid-template-columns: 1fr;
-  }
+.battle-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-top: 0.55rem;
+}
 
-  .battle-side,
-  .battle-side-right {
-    justify-content: center;
-  }
+.battle-detail-card {
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+  overflow-wrap: anywhere;
+  background-color: var(--bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+}
+
+.battle-detail-title {
+  margin-bottom: 0.25rem;
+  color: rgb(var(--fg-base) / 70%);
+  font-weight: bold;
+  font-size: 0.85em;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.battle-detail-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1ch;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.2rem 0;
+}
+
+.battle-detail-line + .battle-detail-line {
+  border-top: 1px solid rgb(var(--fg-base) / 10%);
+}
+
+.battle-detail-note {
+  margin-top: 0.45rem;
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.5ch;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+  font-size: 0.9em;
+}
+
+.pager-btn {
+  padding: 0.22rem 0.75rem;
+  color: var(--fg-accent-color);
+  font: inherit;
+  font-size: 0.92em;
+  background-color: var(--code-bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+}
+
+.pager-btn:disabled {
+  color: rgb(var(--fg-base) / 40%);
+  cursor: default;
+  opacity: 0.65;
+}
+
+.pager-btn:hover:not(:disabled) {
+  border-color: rgb(var(--fg-base) / 35%);
+}
+
+.pager-info {
+  font-variant-numeric: tabular-nums;
 }
 
 @media (width < 768px) {
-  .slots-grid {
+  .slots-grid,
+  .battle-detail-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -372,6 +440,10 @@ table.matrix td.diag {
 
   .live-panel {
     padding: 1.1ch 1.25ch;
+  }
+
+  .battle-detail {
+    max-width: min(100%, calc(100vw - 2ch - 0.8rem));
   }
 
   .standings-table th,

@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
@@ -327,7 +328,7 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
       arenaSecret: AUTH_CFG.arenaSecret,
       sessionSecret: AUTH_CFG.sessionSecret,
       publicDir: tmpDir,
-      watchdogTimeoutMillis: 60,
+      watchdogTimeoutMillis: 250,
       now: () => fakeNow,
       onWatchdogTimeout: alert => {
         watchdogAlerts.push(alert);
@@ -558,8 +559,8 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
       expect(docAfterMatches.recentMatches).toHaveLength(45);
       expect(docAfterMatches.recentMatches[0].id).toBe('gen1ou-0000000045');
 
-      // Wait >60ms for disconnect watchdog to fire
-      await new Promise(resolve => setTimeout(resolve, 110));
+      // Wait >250ms for disconnect watchdog to fire
+      await new Promise(resolve => setTimeout(resolve, 320));
       expect(watchdogAlerts).toHaveLength(1);
       expect(watchdogAlerts[0].lastMatchId).toBe('gen1ou-0000000045');
       const staleDoc = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
@@ -825,4 +826,222 @@ describe('pkmn CLI (tools/pkmn.ts)', () => {
         db.close();
       }
     });
+
+  test('gates PUT /api/arena/{tournaments,ladders}/:id/archive on completion & pools retirement',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-archive-'));
+      const db = new Database(':memory:');
+      db.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
+      db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
+      db.upsertTournament({
+        id: '3',
+        name: 'Tournament #3: VGC 2026 Reg M-C OTS BO3',
+        format: 'gen9championsvgc2026regmc',
+        gamesPerMatchup: 18,
+        parallelTables: 4,
+        hardware: 'M6 Mac mini',
+        status: 'running',
+        startsAt: 1_700_000_100,
+      });
+
+      const authInstance = new auth.Auth({db, config: AUTH_CFG});
+      const app = polka();
+      const events: string[] = [];
+      arena.register(app, {
+        db,
+        auth: authInstance,
+        publicDir: tmpDir,
+        onUpdate: reason => {
+          events.push(reason);
+        },
+      });
+      const srv = await startTestServer(app);
+
+      try {
+        const archiveBytes = Buffer.from('377abcaf271c-mock-7z-archive-payload', 'utf8');
+        const expectedSha = crypto.createHash('sha256').update(archiveBytes).digest('hex');
+
+        const putBinary = async (route: string, shaHeader?: string) => {
+          const headers: Record<string, string> = {
+            Authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
+            'Content-Type': 'application/x-7z-compressed',
+          };
+          if (shaHeader) headers['X-Content-SHA256'] = shaHeader;
+          const res = await fetch(`${srv.baseUrl}${route}`, {
+            method: 'PUT',
+            headers,
+            body: archiveBytes,
+          });
+          return {status: res.status, data: await res.json() as Record<string, unknown>};
+        };
+
+        // 1. Tournament archive rejected while running (409), SHA mismatch rejected (400),
+        //    accepted once completed (200)
+        expect((await putBinary('/api/arena/tournaments/3/archive')).status).toBe(409);
+
+        db.setTournamentStatus('3', 'completed', 1_700_000_500);
+        expect((await putBinary('/api/arena/tournaments/3/archive', '0'.repeat(64))).status)
+          .toBe(400);
+
+        const okTour = await putBinary('/api/arena/tournaments/3/archive', expectedSha);
+        expect(okTour.status).toBe(200);
+        expect(okTour.data.archiveHref).toBe('/arena/tournaments/3/3-replays.7z');
+        expect(fs.readFileSync(path.join(tmpDir, 'arena', 'tournaments', '3', '3-replays.7z')))
+          .toEqual(archiveBytes);
+
+        // 2. Ladder archive rejected for non-pools ladders even if archived (400)
+        db.setLadderStatus('gen1ou20261109', 'archived', 1_700_000_600);
+        const badHarvested = await putBinary('/api/arena/ladders/gen1ou20261109/archive');
+        expect(badHarvested.status).toBe(400);
+        expect(String(badHarvested.data.error)).toMatch(/team-pool \(pools\)/);
+
+        // 3. Pools ladder archive rejected while active or settling (409), accepted once archived
+        expect((await putBinary('/api/arena/ladders/gen9championsvgc2026regmc/archive')).status)
+          .toBe(409);
+        db.setLadderStatus('gen9championsvgc2026regmc', 'settling', 1_700_000_700);
+        expect((await putBinary('/api/arena/ladders/gen9championsvgc2026regmc/archive')).status)
+          .toBe(409);
+
+        db.setLadderStatus('gen9championsvgc2026regmc', 'archived', 1_700_000_800);
+        const okLadder = await putBinary(
+          '/api/arena/ladders/gen9championsvgc2026regmc/archive',
+          expectedSha
+        );
+        expect(okLadder.status).toBe(200);
+        expect(okLadder.data.archiveHref).toBe(
+          '/arena/ladders/gen9championsvgc2026regmc/gen9championsvgc2026regmc-logs.7z'
+        );
+        expect(
+          fs.readFileSync(path.join(
+            tmpDir,
+            'arena',
+            'ladders',
+            'gen9championsvgc2026regmc',
+            'gen9championsvgc2026regmc-logs.7z'
+          ))
+        ).toEqual(archiveBytes);
+        expect(events).toEqual(['archive-published', 'archive-published']);
+      } finally {
+        await srv.close();
+        db.close();
+        fs.rmSync(tmpDir, {recursive: true, force: true});
+      }
+    });
+
+  test('paginates and filters GET /api/battles.json by slot, agent, and match id', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-battles-page-'));
+    const db = new Database(':memory:');
+    db.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
+    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
+    db.setLadderStatus('gen1ou20261109', 'active', 1_700_000_000);
+    db.setLadderStatus('gen9championsvgc2026regmc', 'active', 1_700_000_000);
+
+    const fp = db.getAgentBySlug('foul-play')!;
+    const zero = db.getAgentBySlug('0-error')!;
+    const vFp = db.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/fp.tar.zst',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_700_000_010,
+    });
+    const vZero = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/zero.tar.zst',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_700_000_010,
+    });
+    db.applySubmissionStatus({versionId: vFp.id, smokeStatus: 'passed', now: 1_700_000_020});
+    db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: 1_700_000_020});
+
+    for (let i = 1; i <= 5; i++) {
+      const isVgc = i % 2 === 0;
+      db.recordCompletedMatch({
+        match: {
+          id: `m-00${i}`,
+          ladderId: isVgc ? 'gen9championsvgc2026regmc' : 'gen1ou20261109',
+          p1VersionId: vFp.id,
+          p2VersionId: vZero.id,
+          seed: `1,2,3,${i}`,
+          game1Outcome: 'W',
+          game2Outcome: 'L',
+          category: 'WL',
+          game1Turns: 20 + i,
+          game2Turns: 22 + i,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1PeakRam: 900,
+          p2PeakRam: 950,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 138,
+          p2Game1BankSeconds: 136,
+          p2Game2BankSeconds: 132,
+          p1MeanTurnMillis: 300,
+          p2MeanTurnMillis: 320,
+          completedAt: 1_700_000_100 + i * 10,
+        },
+      });
+    }
+
+    const app = polka();
+    const handle = arena.register(app, {
+      db,
+      arenaSecret: AUTH_CFG.arenaSecret,
+      publicDir: tmpDir,
+      now: () => 1_700_000_999,
+    });
+    const srv = await startTestServer(app);
+
+    try {
+      const p1 = await (await fetch(`${srv.baseUrl}/api/battles.json?page=1&limit=2`)).json() as {
+        page: number;
+        total: number;
+        totalPages: number;
+        hasPrev: boolean;
+        hasNext: boolean;
+        countsBySlot: Record<string, number>;
+        matches: Array<{id: string}>;
+      };
+      expect(p1.page).toBe(1);
+      expect(p1.total).toBe(5);
+      expect(p1.totalPages).toBe(3);
+      expect(p1.hasPrev).toBe(false);
+      expect(p1.hasNext).toBe(true);
+      expect(p1.countsBySlot).toEqual({all: 5, rby: 3, vgc: 2});
+      expect(p1.matches.map(m => m.id)).toEqual(['m-005', 'm-004']);
+
+      const p3 = await (await fetch(`${srv.baseUrl}/api/battles.json?page=3&limit=2`)).json() as {
+        hasPrev: boolean;
+        hasNext: boolean;
+        matches: Array<{id: string}>;
+      };
+      expect(p3.hasPrev).toBe(true);
+      expect(p3.hasNext).toBe(false);
+      expect(p3.matches.map(m => m.id)).toEqual(['m-001']);
+
+      const vgcOnly = await (
+        await fetch(`${srv.baseUrl}/api/battles.json?slot=vgc&page=1&limit=10`)
+      ).json() as {total: number; matches: Array<{id: string}>};
+      expect(vgcOnly.total).toBe(2);
+      expect(vgcOnly.matches.map(m => m.id)).toEqual(['m-004', 'm-002']);
+
+      const byId = await fetch(`${srv.baseUrl}/api/battles.json?id=m-003`);
+      expect(byId.status).toBe(200);
+      expect(((await byId.json()) as {match: {id: string}}).match.id).toBe('m-003');
+
+      expect((await fetch(`${srv.baseUrl}/api/battles.json?id=missing`)).status).toBe(404);
+      expect((await fetch(`${srv.baseUrl}/api/battles.json?slot=bogus`)).status).toBe(400);
+      expect((await fetch(`${srv.baseUrl}/api/battles.json?page=0`)).status).toBe(400);
+    } finally {
+      handle.close();
+      await srv.close();
+      db.close();
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
 });

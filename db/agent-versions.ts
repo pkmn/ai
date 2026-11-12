@@ -1,5 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {validateVersion} from '../static/util';
+
 import {ensureAgentLadderStats} from './agent-ladder-stats';
 import * as teams from './agent-ladder-teams';
 import {AgentRow, getAgentById} from './agents';
@@ -458,6 +460,12 @@ export function createSubmission(
 ): AgentVersionRow {
   const now = input.now ?? Math.floor(Date.now() / 1000);
   const tournamentIds = input.tournamentIds ?? [];
+  let version: string;
+  try {
+    version = validateVersion(input.version);
+  } catch (err: any) {
+    throw Object.assign(new Error(err.message), {status: 400});
+  }
   return inTransaction(() => {
     const agent = getAgentById(db, input.agentId);
     if (!agent || agent.status === 'disabled') {
@@ -478,10 +486,10 @@ export function createSubmission(
 
     const existing = db.prepare(
       'SELECT id FROM agent_versions WHERE agent_id = ? AND version = ?'
-    ).get(input.agentId, input.version) as {id: number} | undefined;
+    ).get(input.agentId, version) as {id: number} | undefined;
     if (existing) {
       throw Object.assign(
-        new Error(`Version "${input.version}" already exists for this project.`),
+        new Error(`Version "${version}" already exists for this project.`),
         {status: 409}
       );
     }
@@ -533,7 +541,7 @@ export function createSubmission(
     `).run(
       input.agentId,
       input.developerId ?? null,
-      input.version,
+      version,
       input.package,
       input.url,
       input.sha256,

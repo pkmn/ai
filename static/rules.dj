@@ -5,10 +5,11 @@ can request inclusion [via
 GitHub](https://github.com/pkmn/ai/issues/new?template=register.yml). You will
 be required to provide:
 
-  - your **project's name** (subject to staff discretion, prefer regex `^[A-Za-Z
-  ]$`, distinct from other projects, must not include the tokens `poke` / `mon`
-  / `pkmn` / `AI` / `bot` / `agent` / `showdown` / `smogon`, bare English
-  Pokémon species names, or known player's names)
+  - your **project's name** (max 18 characters, following Pokémon Showdown
+  username conventions; subject to staff discretion, prefer regex
+  `^[A-Za-z ]+$`, distinct from other projects, must not include the tokens
+  `poke` / `mon` / `pkmn` / `AI` / `bot` / `agent` / `showdown` / `smogon`, bare
+  English Pokémon species names, or known players' names)
   - **GitHub and Smogon usernames** for each team member associated with your
   project. All authorized team members must be Smogon account holders in good
   standing.
@@ -43,8 +44,8 @@ to be used for notifications about your submissioins and for roles within the
 approved and eligible for submissions you can fill out a submission form with
 the following information:
 
-  - **`version`**: Version string (_e.g._, `1.0.0` or `v2`, regex
-  `^[A-Za-z0-9._-]{1,12}$`).
+  - **`version`**: Version string (max 12 characters, _e.g._, `1.0.0` or `v2`,
+  regex `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`).
   - **`download_url`**: Direct HTTPS URL to a `.tar.gz`/`tar.xz`/`.tar.zst` bundle
   _or_ an OCI container image reference (_e.g._, `ghcr.io/...`, `docker.io/...`).
   - **`sha256`**: 64-character hex SHA-256 checksum of the archive or OCI manifest

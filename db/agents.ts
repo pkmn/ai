@@ -6,7 +6,7 @@ import * as yaml from 'yaml';
 
 import * as smogon from '../server/smogon';
 import {Project} from '../static/projects';
-import {root, slugify} from '../static/util';
+import {root, slugify, toID, validateAgentName} from '../static/util';
 
 import * as developers from './developers';
 
@@ -115,6 +115,7 @@ export function parseArenaProjects(
   }
 
   const seenSlugs = new Set<string>();
+  const seenIds = new Map<string, string>();
   const githubOwner = new Map<string, string>();
   const smogonIdOwner = new Map<number, string>();
   const smogonNameOwner = new Map<string, string>();
@@ -122,10 +123,20 @@ export function parseArenaProjects(
 
   for (const entry of entries) {
     if (!entry?.arena) continue;
-    const name = entry.name?.trim();
-    if (!name) {
+    const rawName = entry.name?.trim();
+    if (!rawName) {
       throw new Error('Arena project entry is missing required "name"');
     }
+    const name = validateAgentName(rawName);
+    const id = toID(name);
+    const prevById = seenIds.get(id);
+    if (prevById) {
+      throw new Error(
+        `Duplicate Pokémon Showdown ID "${id}" between "${prevById}" and "${name}"`
+      );
+    }
+    seenIds.set(id, name);
+
     const slug = slugify(name).toLowerCase();
     if (!slug) {
       throw new Error(`Invalid arena project slug derived from "${name}"`);

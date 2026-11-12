@@ -336,6 +336,10 @@ export class Database {
     return teams.getTeamsForAgentLadder(this.db, ladderId, agentId, status);
   }
 
+  getActiveRosterForLadder(ladderId: string): teams.LadderRosterEntry[] {
+    return teams.getActiveRosterForLadder(this.db, ladderId);
+  }
+
   getVersionById(versionId: number): versions.AgentVersionRow | undefined {
     return versions.getVersionById(this.db, versionId);
   }
@@ -441,8 +445,12 @@ export class Database {
     return matches.getMatch(this.db, id);
   }
 
-  getMatches(): matches.RecentMatchView[] {
-    return matches.getMatches(this.db);
+  getMatchesPage(query?: matches.MatchesPageQuery): matches.MatchesPageResult {
+    return matches.getMatchesPage(this.db, query);
+  }
+
+  getMatchCountsBySlot(): Record<string, number> {
+    return matches.getMatchCountsBySlot(this.db);
   }
 
   getLeaderboardEntries(ladderId: string): entries.LeaderboardEntryView[] {

@@ -4,6 +4,7 @@ import * as path from 'path';
 
 import {Database, LADDERS_FILE, SCHEMA_DIR, parseArenaProjects, parseLaddersYaml} from '../db';
 import * as smogon from '../server/smogon';
+import {validateAgentName, validateVersion} from '../static/util';
 
 describe('db/schema/*.sql & db/migration/* lifecycle', () => {
   let tmpDir: string;
@@ -681,4 +682,66 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       db.close();
     }
   });
+
+  test('enforces <=18-char Pokémon Showdown agent names, toID uniqueness, and <=12-char versions',
+    () => {
+      expect(validateAgentName('0 ERROR')).toBe('0 ERROR');
+      expect(validateAgentName("Mew's Truck")).toBe("Mew's Truck");
+      expect(validateAgentName('PokéChamp 18Chars!')).toBe('PokéChamp 18Chars!');
+
+      expect(() => validateAgentName('Name With Nineteen!')).toThrow(/1–18 characters/);
+      expect(() => validateAgentName('Guest 1234')).toThrow(/guest/i);
+      expect(() => validateAgentName('@RankPrefix')).toThrow(/rank or command/);
+      expect(() => validateAgentName('~AdminBot')).toThrow(/rank or command/);
+      expect(() => validateAgentName('/slashcmd')).toThrow(/rank or command/);
+      expect(() => validateAgentName('Pipe|Name')).toThrow(/Showdown|reserved/i);
+      expect(() => validateAgentName('Double  Space')).toThrow(/Showdown/);
+      expect(() => validateAgentName('12345')).toThrow(/at least one ASCII letter/);
+
+      expect(validateVersion('1.0.0')).toBe('1.0.0');
+      expect(validateVersion('1.4.1-t3')).toBe('1.4.1-t3');
+      expect(validateVersion('v2026.11.11a')).toBe('v2026.11.11a'); // 12 chars
+      expect(() => validateVersion('v2026.11.11ab')).toThrow(/1–12 characters/); // 13 chars
+      expect(() => validateVersion('-bad')).toThrow(/1–12 characters/);
+      expect(() => validateVersion('..')).toThrow(/1–12 characters/);
+      expect(() => validateVersion('1.0/bad')).toThrow(/1–12 characters/);
+
+      // Duplicate Showdown `toID` across distinct slugs (`Foo Bar` vs `FooBar`) is rejected
+      expect(() => parseArenaProjects(`
+- name: Foo Bar
+  active: 2026
+  arena:
+    owners:
+      alice: alice.1
+- name: FooBar
+  active: 2026
+  arena:
+    owners:
+      bob: bob.2
+`)).toThrow(/Duplicate Pokémon Showdown ID "foobar"/);
+
+      const db = new Database(':memory:');
+      try {
+        db.syncLadders(LADDERS_FILE, 1_760_000_000);
+        db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pre: pre.10544
+`, undefined, 1_760_000_000);
+        const agent = db.getAgentBySlug('0-error')!;
+        expect(() => db.createSubmission({
+          agentId: agent.id,
+          version: '1.2.3-rc45678',
+          package: 'bundle',
+          url: 'https://example.com/0-error.tar.zst',
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+        })).toThrow(/1–12 characters/);
+      } finally {
+        db.close();
+      }
+    });
 });

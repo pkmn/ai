@@ -6,7 +6,7 @@ import * as path from 'path';
 import polka from 'polka';
 
 import type * as db from '../db';
-import {root} from '../static/util';
+import {VERSION_RE, root, validateAgentName} from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
@@ -18,6 +18,7 @@ export const PUBLIC_DIR = root('public');
 // turn clock and alert staff on Discord.
 export const WATCHDOG_TIMEOUT_MILLIS = 15 * 60 * 1000;
 const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const RECENT_MATCHES_LIMIT = 50;
 
 const VALID_SMOKE_UPDATES = new Set<Exclude<db.SmokeStatus, 'pending'>>([
@@ -35,6 +36,7 @@ const VALID_ROLES = new Set<db.EntryRole>([
 const VALID_LADDER_STATUSES = new Set<db.LadderStatus>([
   'upcoming', 'active', 'settling', 'archived',
 ]);
+const VALID_SLOTS = new Set<string>(['rby', 'adv', 'sv', 'rand', 'vgc']);
 
 export interface LiveSlot {
   slug: string;
@@ -67,11 +69,40 @@ export interface LiveMatch {
   p2: LiveSlot;
 }
 
+export interface BattleHistoryEntry extends db.RecentMatchView {
+  ladderHref: string;
+  archiveHref?: string;
+  teamsHref?: string;
+}
+
 export interface LiveDocument {
   updatedAt: number;
   stale: boolean;
   live?: LiveMatch;
-  recentMatches: db.RecentMatchView[];
+  pageSize?: number;
+  totalMatches?: number;
+  countsBySlot?: Record<string, number>;
+  historyEndpoint?: string;
+  recentMatches: BattleHistoryEntry[];
+}
+
+export function enrichMatchView(publicDir: string, m: db.RecentMatchView): BattleHistoryEntry {
+  const ladderHref = m.ladderStatus === 'archived'
+    ? `/arena/ladders/${encodeURIComponent(m.ladderId)}/`
+    : `/arena/ladders/${encodeURIComponent(m.slot)}/`;
+  if (m.teamMode !== 'pools' || m.ladderStatus !== 'archived') {
+    return {...m, ladderHref};
+  }
+  const ladderDir = path.join(publicDir, 'arena', 'ladders', m.ladderId);
+  const archiveFile = `${m.ladderId}-logs.7z`;
+  const idEnc = encodeURIComponent(m.ladderId);
+  const archiveHref = fs.existsSync(path.join(ladderDir, archiveFile))
+    ? `/arena/ladders/${idEnc}/${encodeURIComponent(archiveFile)}`
+    : undefined;
+  const teamsHref = fs.existsSync(path.join(ladderDir, 'teams.json'))
+    ? `/arena/ladders/${idEnc}/teams.json`
+    : undefined;
+  return {...m, ladderHref, archiveHref, teamsHref};
 }
 
 export interface WatchdogAlert {
@@ -95,7 +126,9 @@ export interface Options {
     archivedLadder: boolean;
   }) => void | Promise<void>;
   onWatchdogTimeout?: (alert: WatchdogAlert) => void | Promise<void>;
-  onUpdate?: (reason: 'submission-status' | 'match-complete') => void | Promise<void>;
+  onUpdate?: (
+    reason: 'submission-status' | 'match-complete' | 'archive-published'
+  ) => void | Promise<void>;
 }
 
 export interface Handle {
@@ -155,6 +188,76 @@ function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown
   });
 }
 
+function streamBinaryArchive(
+  req: http.IncomingMessage,
+  destPath: string,
+  expectedSha256?: string
+): Promise<{bytes: number; sha256: string}> {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(path.dirname(destPath), {recursive: true});
+    const tmpPath = `${destPath}.tmp.${process.pid}.${Date.now()}`;
+    const out = fs.createWriteStream(tmpPath);
+    const hash = crypto.createHash('sha256');
+    let bytes = 0;
+    let settled = false;
+
+    const cleanupFail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      out.destroy();
+      try {
+        fs.rmSync(tmpPath, {force: true});
+      } catch {}
+      reject(err);
+    };
+
+    req.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      bytes += chunk.length;
+      if (bytes > MAX_ARCHIVE_BYTES) {
+        req.resume();
+        cleanupFail(
+          Object.assign(new Error('Archive exceeds 512 MiB limit.'), {status: 413})
+        );
+        return;
+      }
+      hash.update(chunk);
+      out.write(chunk);
+    });
+
+    req.on('end', () => {
+      if (settled) return;
+      out.end(() => {
+        if (settled) return;
+        if (bytes === 0) {
+          cleanupFail(Object.assign(new Error('Archive body must not be empty.'), {status: 400}));
+          return;
+        }
+        const sha256 = hash.digest('hex');
+        if (expectedSha256 && sha256 !== expectedSha256.toLowerCase()) {
+          const msg = `SHA-256 mismatch: expected ${expectedSha256.toLowerCase()}, got ${sha256}.`;
+          cleanupFail(Object.assign(new Error(msg), {status: 400}));
+          return;
+        }
+        try {
+          fs.renameSync(tmpPath, destPath);
+          settled = true;
+          resolve({bytes, sha256});
+        } catch (err) {
+          cleanupFail(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    });
+
+    req.on('error', err => {
+      cleanupFail(err instanceof Error ? err : new Error(String(err)));
+    });
+    out.on('error', err => {
+      cleanupFail(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+}
+
 // Hash both secrets with SHA-256 before timingSafeEqual so secret length isn't leaked via timing.
 function safeSecretEquals(provided: string, expected: string): boolean {
   const a = crypto.createHash('sha256').update(provided).digest();
@@ -194,7 +297,12 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
   if (typeof obj.name !== 'string' || !obj.name.trim()) {
     throw Object.assign(new Error(`Invalid ${label}.name.`), {status: 400});
   }
-  if (typeof obj.version !== 'string' || !obj.version.trim()) {
+  try {
+    validateAgentName(obj.name);
+  } catch {
+    throw Object.assign(new Error(`Invalid ${label}.name.`), {status: 400});
+  }
+  if (typeof obj.version !== 'string' || !VERSION_RE.test(obj.version.trim())) {
     throw Object.assign(new Error(`Invalid ${label}.version.`), {status: 400});
   }
   if (!isFiniteNonNeg(obj.bankSeconds)) {
@@ -349,13 +457,26 @@ export function register(app: polka.Polka, options: Options): Handle {
     options.sessionSecret ?? options.auth?.getConfig()?.sessionSecret ?? process.env.SESSION_SECRET;
 
   const writeLiveJson = (nowSec = getNowSec(), stale = false): LiveDocument => {
+    const countsBySlot = db.getMatchCountsBySlot();
+    const recentMatches = db.getRecentMatches(recentLimit).map(m => enrichMatchView(publicDir, m));
     const doc: LiveDocument = {
       updatedAt: nowSec,
       stale,
       live: stale ? undefined : currentLive,
-      recentMatches: db.getRecentMatches(recentLimit),
+      pageSize: recentLimit,
+      totalMatches: countsBySlot.all ?? recentMatches.length,
+      countsBySlot,
+      historyEndpoint: '/api/battles.json',
+      recentMatches,
     };
     writeFileAtomic(liveJsonPath, `${JSON.stringify(doc)}\n`);
+    const battlesDir = path.join(publicDir, 'arena', 'battles');
+    if (fs.existsSync(battlesDir)) {
+      writeFileAtomic(
+        path.join(battlesDir, 'index.json'),
+        `${JSON.stringify(doc, undefined, 2)}\n`
+      );
+    }
     return doc;
   };
 
@@ -808,6 +929,180 @@ export function register(app: polka.Polka, options: Options): Handle {
       sendJson(res, status, {error: message});
     }
   });
+
+  app.put('/api/arena/tournaments/:id/archive', async (req, res) => {
+    if (!authenticateArena(req, res)) return;
+
+    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const tournament = db.getTournament(rawId);
+    if (!tournament) {
+      req.resume();
+      sendJson(res, 404, {error: `Unknown tournament "${rawId}".`});
+      return;
+    }
+    if (tournament.status !== 'completed') {
+      req.resume();
+      sendJson(res, 409, {
+        error: 'Tournament replay archives can only be published after status is "completed".',
+      });
+      return;
+    }
+
+    const expectedSha = typeof req.headers['x-content-sha256'] === 'string'
+      ? req.headers['x-content-sha256'].trim()
+      : undefined;
+    if (expectedSha && !/^[0-9a-fA-F]{64}$/.test(expectedSha)) {
+      req.resume();
+      sendJson(res, 400, {error: 'x-content-sha256 must be a 64-character hex string.'});
+      return;
+    }
+
+    const fileName = `${tournament.id}-replays.7z`;
+    const destPath = path.join(publicDir, 'arena', 'tournaments', tournament.id, fileName);
+    try {
+      const {bytes, sha256} = await streamBinaryArchive(req, destPath, expectedSha);
+      await Promise.resolve(options.onUpdate?.('archive-published'));
+      const idEnc = encodeURIComponent(tournament.id);
+      sendJson(res, 200, {
+        ok: true,
+        tournamentId: tournament.id,
+        archiveHref: `/arena/tournaments/${idEnc}/${encodeURIComponent(fileName)}`,
+        bytes,
+        sha256,
+      });
+    } catch (err) {
+      const status = (err as {status?: number}).status ?? 500;
+      const message = err instanceof Error ? err.message : 'Tournament archive upload failed.';
+      sendJson(res, status, {error: message});
+    }
+  });
+
+  app.put('/api/arena/ladders/:id/archive', async (req, res) => {
+    if (!authenticateArena(req, res)) return;
+
+    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const ladder = db.getLadder(rawId);
+    if (!ladder) {
+      req.resume();
+      sendJson(res, 404, {error: `Unknown ladder "${rawId}".`});
+      return;
+    }
+    if (ladder.team !== 'pools') {
+      req.resume();
+      sendJson(res, 400, {
+        error: 'Full battle log archives are only published for team-pool (pools) ladders.',
+      });
+      return;
+    }
+    if (ladder.status !== 'archived') {
+      req.resume();
+      sendJson(res, 409, {
+        error: 'Full battle log archives can only be published after the ladder is archived.',
+      });
+      return;
+    }
+
+    const expectedSha = typeof req.headers['x-content-sha256'] === 'string'
+      ? req.headers['x-content-sha256'].trim()
+      : undefined;
+    if (expectedSha && !/^[0-9a-fA-F]{64}$/.test(expectedSha)) {
+      req.resume();
+      sendJson(res, 400, {error: 'x-content-sha256 must be a 64-character hex string.'});
+      return;
+    }
+
+    const fileName = `${ladder.id}-logs.7z`;
+    const destPath = path.join(publicDir, 'arena', 'ladders', ladder.id, fileName);
+    try {
+      const {bytes, sha256} = await streamBinaryArchive(req, destPath, expectedSha);
+      await Promise.resolve(options.onUpdate?.('archive-published'));
+      const idEnc = encodeURIComponent(ladder.id);
+      sendJson(res, 200, {
+        ok: true,
+        ladderId: ladder.id,
+        archiveHref: `/arena/ladders/${idEnc}/${encodeURIComponent(fileName)}`,
+        teamsHref: `/arena/ladders/${idEnc}/teams.json`,
+        bytes,
+        sha256,
+      });
+    } catch (err) {
+      const status = (err as {status?: number}).status ?? 500;
+      const message = err instanceof Error ? err.message : 'Ladder archive upload failed.';
+      sendJson(res, status, {error: message});
+    }
+  });
+
+  const handleBattlesHistory = (req: http.IncomingMessage, res: http.ServerResponse) => {
+    const parsedUrl = new URL(req.url ?? '/api/battles.json', 'http://localhost');
+    const nowSec = getNowSec();
+
+    const idParam = parsedUrl.searchParams.get('id')?.trim();
+    if (idParam) {
+      const match = db.getMatch(idParam);
+      if (!match) {
+        sendJson(res, 404, {error: `Unknown match "${idParam}".`});
+        return;
+      }
+      sendJson(res, 200, {
+        updatedAt: nowSec,
+        match: enrichMatchView(publicDir, match),
+      });
+      return;
+    }
+
+    const rawSlot = (parsedUrl.searchParams.get('slot') ?? 'all').trim().toLowerCase();
+    if (rawSlot !== 'all' && !VALID_SLOTS.has(rawSlot)) {
+      sendJson(res, 400, {error: `Unknown slot filter "${rawSlot}".`});
+      return;
+    }
+
+    const rawPage = parsedUrl.searchParams.get('page');
+    const parsedPage = rawPage ? Number(rawPage) : 1;
+    if (!Number.isInteger(parsedPage) || parsedPage < 1) {
+      sendJson(res, 400, {error: 'page must be a positive integer.'});
+      return;
+    }
+
+    const rawLimit = parsedUrl.searchParams.get('limit');
+    const parsedLimit = rawLimit ? Number(rawLimit) : recentLimit;
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      sendJson(res, 400, {error: 'limit must be an integer between 1 and 100.'});
+      return;
+    }
+
+    const ladderId = parsedUrl.searchParams.get('ladder')?.trim() || undefined;
+    const agentSlug = parsedUrl.searchParams.get('agent')?.trim() || undefined;
+    const offset = (parsedPage - 1) * parsedLimit;
+    const countsBySlot = db.getMatchCountsBySlot();
+    const {matches, total} = db.getMatchesPage({
+      slot: rawSlot,
+      ladderId,
+      agentSlug,
+      limit: parsedLimit,
+      offset,
+    });
+    const totalPages = Math.max(1, Math.ceil(total / parsedLimit));
+
+    sendJson(res, 200, {
+      updatedAt: nowSec,
+      page: parsedPage,
+      pageSize: parsedLimit,
+      total,
+      totalPages,
+      hasPrev: parsedPage > 1,
+      hasNext: parsedPage < totalPages,
+      slot: rawSlot,
+      ladderId,
+      agentSlug,
+      countsBySlot,
+      matches: matches.map(m => enrichMatchView(publicDir, m)),
+    });
+  };
+
+  app.get('/api/battles.json', handleBattlesHistory);
+  app.get('/api/battles', handleBattlesHistory);
 
   return {
     close: clearWatchdog,

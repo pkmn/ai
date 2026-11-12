@@ -929,4 +929,62 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     expect((await postWiki('0_ERROR', 'pre', '{% visibility: project %}\n# Back!\n')).status)
       .toBe(303);
   });
+
+  test('serves machine-consumable /account.json === /account/index.json and rejects >12c version',
+    async () => {
+      openLadders(['gen1ou20261109']);
+
+      // Unauthenticated -> 401 JSON (never HTML redirect)
+      const unauthJson = await realFetch(`${baseUrl}/account.json`, {redirect: 'manual'});
+      expect(unauthJson.status).toBe(401);
+      expect(unauthJson.headers.get('content-type')).toContain('application/json');
+
+      // Unregistered GitHub user -> 403 JSON
+      const outsiderToken = auth.signToken(
+        {github: {id: 777, login: 'outsider'}, exp: Math.floor(Date.now() / 1000) + 3600},
+        AUTH_CFG.sessionSecret
+      );
+      const forbiddenJson = await realFetch(`${baseUrl}/account.json`, {
+        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(outsiderToken)}`},
+      });
+      expect(forbiddenJson.status).toBe(403);
+
+      // Registered developer -> identical 200 JSON across /account.json & /account/index.json
+      const preToken = auth.signToken(
+        {github: {id: 1, login: 'pre'}, exp: Math.floor(Date.now() / 1000) + 3600},
+        AUTH_CFG.sessionSecret
+      );
+      const cookie = `${auth.SESSION_COOKIE}=${encodeURIComponent(preToken)}`;
+
+      const r1 = await realFetch(`${baseUrl}/account.json`, {headers: {Cookie: cookie}});
+      const r2 = await realFetch(`${baseUrl}/account/index.json`, {headers: {Cookie: cookie}});
+      const r3 = await realFetch(`${baseUrl}/account/`, {
+        headers: {Cookie: cookie, Accept: 'application/json'},
+      });
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(r3.status).toBe(200);
+      const j1 = await r1.json() as Record<string, unknown>;
+      const j2 = await r2.json() as Record<string, unknown>;
+      const j3 = await r3.json() as Record<string, unknown>;
+      expect(j1).toEqual(j2);
+      expect(j1).toEqual(j3);
+      expect((j1.agent as {slug: string}).slug).toBe('0-error');
+      expect((j1.submissionStatus as {label: string}).label).toBe('Eligible');
+
+      // >12 character version rejected at POST /api/submissions
+      const tooLong = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {Cookie: cookie, 'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          version: '1.2.3-toolong',
+          url: 'https://github.com/pkmn/0-error.tar.zst',
+          sha256: SHA_A,
+          ladders: ['gen1ou20261109'],
+        }),
+      });
+      expect(tooLong.status).toBe(400);
+      const errBody = await tooLong.json() as {error: string};
+      expect(errBody.error).toMatch(/1[–-]12 chars/);
+    });
 });

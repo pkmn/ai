@@ -33,6 +33,37 @@ export interface LiveBroadcast {
   live?: boolean;
 }
 
+export function resolveTournamentArchive(
+  publicDir: string,
+  tournamentId: string
+): {name: string; href: string} | undefined {
+  const idEnc = encodeURIComponent(tournamentId);
+  const defaultName = `${tournamentId}-replays.7z`;
+  const candidates: Array<{diskPath: string; name: string; href: string}> = [
+    {
+      diskPath: path.join(publicDir, 'arena', 'tournaments', tournamentId, defaultName),
+      name: defaultName,
+      href: `/arena/tournaments/${idEnc}/${encodeURIComponent(defaultName)}`,
+    },
+    {
+      diskPath: path.join(publicDir, 'arena', 'tournaments', tournamentId, 'replays.7z'),
+      name: 'replays.7z',
+      href: `/arena/tournaments/${idEnc}/replays.7z`,
+    },
+    {
+      diskPath: path.join(publicDir, 'arena', 'tournaments', defaultName),
+      name: defaultName,
+      href: `/arena/tournaments/${encodeURIComponent(defaultName)}`,
+    },
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c.diskPath)) {
+      return {name: c.name, href: c.href};
+    }
+  }
+  return undefined;
+}
+
 export function speciesToMinispriteSlug(species: string): string {
   return species
     .trim()
@@ -399,16 +430,16 @@ function renderTournamentGamesHtml(opts: {
         '</tr>';
     }).join('');
 
-  const archiveName = `${tournament.id}-replays.7z`;
-  const perTourArchive = path.join(publicDir, 'arena', 'tournaments', tournament.id, archiveName);
-  const sharedArchive = path.join(publicDir, 'arena', 'tournaments', archiveName);
-  const archiveHref = fs.existsSync(perTourArchive)
-    ? `/arena/tournaments/${encodeURIComponent(tournament.id)}/${encodeURIComponent(archiveName)}`
-    : fs.existsSync(sharedArchive)
-      ? `/arena/tournaments/${encodeURIComponent(archiveName)}`
-      : '#games';
+  const archive = resolveTournamentArchive(publicDir, tournament.id);
   const jsonHref = `/arena/tournaments/${encodeURIComponent(tournament.id)}/index.json`;
   const bankTip = 'Remaining time bank for Player 1 / Player 2 (150s cap, +10s/turn)';
+  const countStr = totalCompletedCount.toLocaleString('en-US');
+  const archiveLine = archive
+    ? `Archive: <a href="${escapeHtml(archive.href)}"><code>${escapeHtml(archive.name)}</code>` +
+      `</a> (${countStr} games) · <a href="${escapeHtml(jsonHref)}"><code>index.json</code></a>`
+    : `Data: <a href="${escapeHtml(jsonHref)}"><code>index.json</code></a> (${countStr} games` +
+      (tournament.status !== 'completed' ? '; replay archive published upon completion' : '') +
+      ')';
 
   return `<div class="table-wrap">
       <table>
@@ -425,11 +456,7 @@ function renderTournamentGamesHtml(opts: {
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
-    <p class="meta meta-archive">
-      Archive: <a href="${escapeHtml(archiveHref)}"><code>${escapeHtml(archiveName)}</code></a> ` +
-      `(${totalCompletedCount.toLocaleString('en-US')} games) · ` +
-      `<a href="${escapeHtml(jsonHref)}"><code>index.json</code></a>` +
-    '</p>';
+    <p class="meta meta-archive">${archiveLine}</p>`;
 }
 
 function readExistingBroadcast(publicDir: string): LiveBroadcast | undefined {
@@ -605,7 +632,8 @@ export function renderTournamentsPages(opts: {
     }).join('');
 
     const entrants = db.getTournamentEntrants(t.id);
-    const games = db.getTournamentGames(t.id, 50);
+    const allGames = db.getTournamentGames(t.id, 10_000);
+    const games = allGames.slice(0, 50);
     const rrPairs = db.getTournamentCrosstable(t.id, 'Round Robin');
     const sfPairs = db.getTournamentCrosstable(t.id, 'Superfinal');
     const hasSf = sfPairs.length > 0 || games.some(g => g.stage === 'Superfinal') ||
@@ -675,15 +703,45 @@ export function renderTournamentsPages(opts: {
       content,
     });
 
+    const archive = resolveTournamentArchive(publicDir, t.id);
+    const entrantByVer = new Map(entrants.map(e => [e.versionId, e]));
+    let parsedRules: string[] = [];
+    try {
+      const rawRules = JSON.parse(t.rulesJson || '[]') as unknown;
+      if (Array.isArray(rawRules)) parsedRules = rawRules.map(String);
+    } catch {}
+
+    const mapPair = (stage: db.TournamentGameStage, p: db.TournamentPairRecord) => {
+      const low = entrantByVer.get(p.lowVersionId);
+      const high = entrantByVer.get(p.highVersionId);
+      return {
+        stage,
+        lowSlug: low?.agentSlug,
+        lowName: low?.agentName,
+        lowVersion: low?.version,
+        highSlug: high?.agentSlug,
+        highName: high?.agentName,
+        highVersion: high?.version,
+        lowWins: p.lowWins,
+        highWins: p.highWins,
+        ties: p.ties,
+      };
+    };
+
     const tourneyJson = {
       id: t.id,
       name: t.name,
       format: t.format,
+      rules: parsedRules,
       status: t.status,
       gamesPerMatchup: t.gamesPerMatchup,
+      batchSize: t.batchSize,
+      parallelTables: t.parallelTables,
+      hardware: t.hardware,
       startsAt: t.startsAt,
       completedAt: t.completedAt,
       completedGames: completedCount,
+      archiveHref: archive?.href,
       standings: entrants.map((e, idx) => ({
         rank: e.finalRank ?? idx + 1,
         slug: e.agentSlug,
@@ -697,6 +755,43 @@ export function renderTournamentsPages(opts: {
         points: e.points,
         sonnebornBerger: e.sonnebornBerger,
       })),
+      crosstable: [
+        ...rrPairs.map(p => mapPair('Round Robin', p)),
+        ...sfPairs.map(p => mapPair('Superfinal', p)),
+      ],
+      games: allGames.map(g => {
+        const logRel = `${g.id}.log`;
+        const hasLog = fs.existsSync(path.join(tourneysDir, t.id, logRel));
+        const logHref = hasLog
+          ? `/arena/tournaments/${encodeURIComponent(t.id)}/${encodeURIComponent(logRel)}`
+          : undefined;
+        return {
+          id: g.id,
+          stage: g.stage,
+          cycle: g.cycle,
+          matchupGame: g.matchupGame,
+          seed: g.seed,
+          outcome: g.outcome,
+          endReason: g.endReason,
+          turns: g.turns,
+          completedAt: g.completedAt,
+          logHref,
+          p1: {
+            slug: g.p1Slug,
+            name: g.p1Name,
+            version: g.p1Version,
+            team: g.p1Team,
+            bankSeconds: g.p1BankSeconds,
+          },
+          p2: {
+            slug: g.p2Slug,
+            name: g.p2Name,
+            version: g.p2Version,
+            team: g.p2Team,
+            bankSeconds: g.p2BankSeconds,
+          },
+        };
+      }),
     };
 
     render.writeFileAtomic(path.join(tourneysDir, t.id, 'index.html'), html);

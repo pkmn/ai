@@ -11,6 +11,61 @@ export interface AgentLadderTeamRow {
   submittedAt: number;
 }
 
+export interface LadderRosterEntry {
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
+  submittedAt: number;
+  teams: Array<{
+    index: number;
+    packed: string;
+  }>;
+}
+
+export function getActiveRosterForLadder(
+  db: DatabaseSync,
+  ladderId: string
+): LadderRosterEntry[] {
+  const rows = db.prepare(`
+    SELECT
+      alt.agent_id,
+      a.slug AS agent_slug,
+      a.name AS agent_name,
+      alt.team_index,
+      alt.packed_team,
+      alt.submitted_at
+    FROM agent_ladder_teams alt
+    JOIN agents a ON a.id = alt.agent_id
+    WHERE alt.ladder_id = ?
+      AND alt.status = 'active'
+    ORDER BY a.slug ASC, alt.team_index ASC
+  `).all(ladderId) as Array<{
+    agent_id: number;
+    agent_slug: string;
+    agent_name: string;
+    team_index: number;
+    packed_team: string;
+    submitted_at: number;
+  }>;
+
+  const byAgent = new Map<number, LadderRosterEntry>();
+  for (const r of rows) {
+    let entry = byAgent.get(r.agent_id);
+    if (!entry) {
+      entry = {
+        agentId: r.agent_id,
+        agentSlug: r.agent_slug,
+        agentName: r.agent_name,
+        submittedAt: r.submitted_at,
+        teams: [],
+      };
+      byAgent.set(r.agent_id, entry);
+    }
+    entry.teams.push({index: r.team_index, packed: r.packed_team});
+  }
+  return [...byAgent.values()];
+}
+
 export function hasActiveLadderTeams(
   db: DatabaseSync,
   ladderId: string,

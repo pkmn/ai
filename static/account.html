@@ -17,7 +17,7 @@
       <div class="form-grid">
         <label for="sub-ver">Version</label>
         <div class="form-row-inline">
-          <input id="sub-ver" name="version" class="input-text input-short" type="text" maxlength="12" placeholder="e.g. 1.0.0" required>
+          <input id="sub-ver" name="version" class="input-text input-short" type="text" maxlength="12" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,11}" placeholder="e.g. 1.0.0" required>
           <label for="sub-type">Package</label>
           <select id="sub-type" name="package" class="min-select">
             <option value="bundle" selected>darwin/arm64 (.tar.zst)</option>

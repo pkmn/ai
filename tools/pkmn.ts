@@ -53,6 +53,8 @@ const USAGE = [
     '[--status <scheduled|running|completed>]',
   '  set-tournament-status <id> <scheduled|running|completed>',
   '  seed-tournament <id>',
+  '  publish-tournament-archive <id> <archive.7z>',
+  '  publish-ladder-archive <ladder_id> <archive.7z>',
   '  render',
   '  lookup-smogon <username|slug.id|id|url>',
   '  session [--github <login>] [--discord <id>:<username>] [--ttl <seconds>]',
@@ -391,6 +393,68 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         const count = db.seedTournamentEntrants(tourneyId);
         maybeRender();
         log(`Seeded ${count} entrants for tournament ${tourneyId}`);
+        return;
+      }
+      case 'publish-tournament-archive': {
+        const [tourneyId, srcFile] = positional.slice(1);
+        if (!tourneyId || !srcFile) {
+          throw new Error('Usage: pkmn publish-tournament-archive <id> <archive.7z>');
+        }
+        if (!fs.existsSync(srcFile) || !fs.statSync(srcFile).isFile()) {
+          throw new Error(`Archive file not found: ${srcFile}`);
+        }
+        const tournament = db.getTournament(tourneyId);
+        if (!tournament) {
+          throw new Error(`Unknown tournament "${tourneyId}"`);
+        }
+        if (tournament.status !== 'completed') {
+          throw new Error(
+            `Tournament ${tournament.id} must be "completed" before publishing replay archive ` +
+            `(current status="${tournament.status}")`
+          );
+        }
+        const pub = options.publicDir ?? render.PUBLIC_DIR;
+        const fileName = `${tournament.id}-replays.7z`;
+        const dest = path.join(pub, 'arena', 'tournaments', tournament.id, fileName);
+        render.copyFileAtomic(srcFile, dest);
+        if (fs.existsSync(path.join(pub, 'index.html'))) {
+          render.renderArenaPages({db, publicDir: pub, now});
+        }
+        log(`Published tournament archive -> /arena/tournaments/${tournament.id}/${fileName}`);
+        return;
+      }
+      case 'publish-ladder-archive': {
+        const [ladderId, srcFile] = positional.slice(1);
+        if (!ladderId || !srcFile) {
+          throw new Error('Usage: pkmn publish-ladder-archive <ladder_id> <archive.7z>');
+        }
+        if (!fs.existsSync(srcFile) || !fs.statSync(srcFile).isFile()) {
+          throw new Error(`Archive file not found: ${srcFile}`);
+        }
+        const ladder = db.getLadder(ladderId);
+        if (!ladder) {
+          throw new Error(`Unknown ladder "${ladderId}"`);
+        }
+        if (ladder.team !== 'pools') {
+          throw new Error(
+            'Full battle log archives are only published for team-pool (pools) ladders ' +
+            `("${ladder.id}" has team="${ladder.team}")`
+          );
+        }
+        if (ladder.status !== 'archived') {
+          throw new Error(
+            `Ladder "${ladder.id}" must be retired ("archived") before publishing full battle ` +
+            `logs (current status="${ladder.status}")`
+          );
+        }
+        const pub = options.publicDir ?? render.PUBLIC_DIR;
+        const fileName = `${ladder.id}-logs.7z`;
+        const dest = path.join(pub, 'arena', 'ladders', ladder.id, fileName);
+        render.copyFileAtomic(srcFile, dest);
+        if (fs.existsSync(path.join(pub, 'index.html'))) {
+          render.renderArenaPages({db, publicDir: pub, now});
+        }
+        log(`Published retired ladder archive -> /arena/ladders/${ladder.id}/${fileName}`);
         return;
       }
       default:

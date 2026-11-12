@@ -17,6 +17,7 @@ import polka from 'polka';
 
 import {Database} from '../db';
 import * as account from '../server/account';
+import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import * as wiki from '../server/wiki';
 import {ROOT, root} from '../static/util';
@@ -104,7 +105,7 @@ const WIKI_PROJECT_V2_DJ = `{% visibility: developers %}
 - Team preview policy conditioned on revealed opponent archetypes.
 `;
 
-function buildScenarios(wikiSha: string, featuredBattleId: string): Scenario[] {
+function buildScenarios(wikiSha: string): Scenario[] {
   return [
     {name: 'home', path: '/'},
     {name: 'arena', path: '/arena/'},
@@ -113,7 +114,11 @@ function buildScenarios(wikiSha: string, featuredBattleId: string): Scenario[] {
     {name: 'arena-tournament-1', path: '/arena/tournaments/1/'},
     {name: 'arena-tournament-2', path: '/arena/tournaments/2/'},
     {name: 'arena-battles', path: '/arena/battles/'},
-    {name: 'arena-battle', path: `/arena/battles/${featuredBattleId}/`},
+    {
+      name: 'arena-battles-expanded',
+      path: '/arena/battles/',
+      click: '#battles-tbody tr.battle-row td:first-child',
+    },
     {name: 'account', path: '/account/'},
     {name: 'account-tournament', path: '/account/', githubUser: 'pmariglia'},
     {name: 'background', path: '/background/'},
@@ -150,7 +155,6 @@ interface Fixture {
   origin: string;
   cookies: Record<string, string>;
   sha: string;
-  featuredBattleId: string;
   publicDir: string;
   close: () => Promise<void>;
 }
@@ -188,7 +192,7 @@ async function startFixture(): Promise<Fixture> {
   const projectsFile = prepareMockStaticDir(staticDir, avatarsDir);
   const nowSeconds = Math.floor(NOW / 1000);
   const db = new Database(':memory:', {now: nowSeconds});
-  const seeded = seedMockArena({
+  seedMockArena({
     db,
     publicDir,
     staticDir,
@@ -260,6 +264,12 @@ async function startFixture(): Promise<Fixture> {
     auth: wikiInstance.auth,
     now: () => nowSeconds,
   });
+  const arenaHandle = arena.register(app, {
+    db,
+    auth: wikiInstance.auth,
+    publicDir,
+    now: () => nowSeconds,
+  });
   wiki.register(app, {
     wikiDir,
     projectsFile,
@@ -291,9 +301,9 @@ async function startFixture(): Promise<Fixture> {
       pmariglia: mintCookie(2, 'pmariglia', '283674461268344832', 'pmariglia'),
     },
     sha,
-    featuredBattleId: seeded.featuredBattleId,
     publicDir,
     close: async () => {
+      arenaHandle.close();
       server.closeAllConnections();
       await new Promise<void>(resolve => server.close(() => resolve()));
       db.close();
@@ -364,7 +374,9 @@ async function serve(route: Route, fixture: Fixture, cookie: string): Promise<vo
     url.pathname === '/wiki' ||
     url.pathname.startsWith('/wiki/') ||
     url.pathname === '/account' ||
-    url.pathname.startsWith('/account/')
+    url.pathname.startsWith('/account/') ||
+    url.pathname === '/api/battles.json' ||
+    url.pathname === '/api/battles'
   );
   if (isDynamic) {
     const req = route.request();
@@ -459,7 +471,7 @@ async function run(): Promise<void> {
 
   const fixture = await startFixture();
   const newDir = `${SHOTS_DIR}.new`;
-  const scenarios = buildScenarios(fixture.sha, fixture.featuredBattleId).filter(
+  const scenarios = buildScenarios(fixture.sha).filter(
     scenario => scenario.name.includes(values.only ?? '')
   );
   const browser = await launch();

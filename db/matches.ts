@@ -46,6 +46,7 @@ export interface RecentMatchView {
   id: string;
   ladderId: string;
   ladderName: string;
+  ladderStatus: LadderStatus;
   slot: LadderSlot;
   format: string;
   teamMode: TeamMode;
@@ -70,6 +71,19 @@ export interface RecentMatchView {
   p1PeakRam: number;
   p2PeakRam: number;
   completedAt: number;
+}
+
+export interface MatchesPageQuery {
+  slot?: string;
+  ladderId?: string;
+  agentSlug?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface MatchesPageResult {
+  matches: RecentMatchView[];
+  total: number;
 }
 
 function categoryDeltas(cat: ratings.MatchCategory, invert = false) {
@@ -357,6 +371,7 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
     id: r.id as string,
     ladderId: r.ladder_id as string,
     ladderName: r.ladder_name as string,
+    ladderStatus: r.ladder_status as LadderStatus,
     slot: r.slot as LadderSlot,
     format: r.format as string,
     teamMode: r.team_mode as TeamMode,
@@ -397,6 +412,7 @@ const RECENT_MATCH_SELECT_SQL = `
     m.id,
     m.ladder_id,
     l.name AS ladder_name,
+    l.status AS ladder_status,
     l.slot,
     l.format,
     l.team AS team_mode,
@@ -439,12 +455,74 @@ export function getMatch(db: DatabaseSync, id: string): RecentMatchView | undefi
   return row ? mapRecentMatchRow(row) : undefined;
 }
 
-export function getMatches(db: DatabaseSync): RecentMatchView[] {
+export function getMatchesPage(
+  db: DatabaseSync,
+  query: MatchesPageQuery = {}
+): MatchesPageResult {
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (query.slot && query.slot !== 'all') {
+    where.push('l.slot = ?');
+    params.push(query.slot);
+  }
+  if (query.ladderId) {
+    where.push('m.ladder_id = ?');
+    params.push(query.ladderId);
+  }
+  if (query.agentSlug) {
+    where.push('(a1.slug = ? OR a2.slug = ?)');
+    params.push(query.agentSlug, query.agentSlug);
+  }
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const countFromSql = query.agentSlug
+    ? `FROM matches m
+       JOIN ladders l ON l.id = m.ladder_id
+       JOIN agent_versions v1 ON v1.id = m.p1_version_id
+       JOIN agents a1 ON a1.id = v1.agent_id
+       JOIN agent_versions v2 ON v2.id = m.p2_version_id
+       JOIN agents a2 ON a2.id = v2.agent_id`
+    : query.slot && query.slot !== 'all'
+      ? 'FROM matches m JOIN ladders l ON l.id = m.ladder_id'
+      : 'FROM matches m';
+
+  const countRow = db.prepare(`
+    SELECT COUNT(*) AS count
+    ${countFromSql}
+    ${whereSql}
+  `).get(...params) as {count: number};
+
+  const limit = Math.max(1, Math.min(200, Math.trunc(query.limit ?? 50)));
+  const offset = Math.max(0, Math.trunc(query.offset ?? 0));
+
   const rows = db.prepare(`
     ${RECENT_MATCH_SELECT_SQL}
+    ${whereSql}
     ORDER BY m.completed_at DESC, m.id DESC
-  `).all() as Array<Record<string, unknown>>;
-  return rows.map(mapRecentMatchRow);
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset) as Array<Record<string, unknown>>;
+
+  return {
+    matches: rows.map(mapRecentMatchRow),
+    total: countRow.count,
+  };
+}
+
+export function getMatchCountsBySlot(db: DatabaseSync): Record<string, number> {
+  const rows = db.prepare(`
+    SELECT l.slot AS slot, COUNT(*) AS count
+    FROM matches m
+    JOIN ladders l ON l.id = m.ladder_id
+    GROUP BY l.slot
+  `).all() as Array<{slot: string; count: number}>;
+
+  const counts: Record<string, number> = {all: 0};
+  for (const row of rows) {
+    counts[row.slot] = row.count;
+    counts.all += row.count;
+  }
+  return counts;
 }
 
 export function getRecentMatches(db: DatabaseSync, limit = 50): RecentMatchView[] {
