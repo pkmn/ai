@@ -864,6 +864,17 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
         ],
       };
 
+      db.upsertTournament({
+        id: '3',
+        name: 'Summer ’26 — VGC Reg M-D (Scheduled)',
+        format: 'gen9championsvgc2026regmc',
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot · 24 vCPU · 48 GB RAM',
+        status: 'scheduled',
+        startsAt: NOW + 14 * 86400,
+      });
+
       const h = await startRenderHarness({
         db,
         publicDir: tmpPublic,
@@ -882,18 +893,27 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
         const arenaHubHtml = await h.getText('/arena/');
         expect(arenaHubHtml).toContain('href="/arena/tournaments/2/"');
         expect(arenaHubHtml).toContain('href="/arena/tournaments/1/"');
+        expect(arenaHubHtml).toContain('href="/arena/tournaments/3/"');
         expect(arenaHubHtml).toContain('Live');
         expect(arenaHubHtml).toContain('70–26–4');
         expect(arenaHubHtml).toContain('href="/projects/jaxcalibur/"');
 
         const tourney2Html = await h.getText('/arena/tournaments/2/');
         const tourney1Html = await h.getText('/arena/tournaments/1/');
+        const tourney3Html = await h.getText('/arena/tournaments/3/');
         expect(tourney2Html).toContain('<th>Agent</th>');
         expect(tourney2Html).toContain('id="event-select"');
         expect(tourney2Html).toContain('value="/arena/tournaments/2/"');
         expect(tourney2Html).toContain('value="/arena/tournaments/1/"');
+        expect(tourney2Html).toContain('value="/arena/tournaments/3/"');
         expect(tourney1Html).toContain('Spring ’26 — [Gen 1] OU');
         expect(tourney1Html).toMatch(/<section[^>]*id="live"[^>]*class="hide"/);
+        expect(tourney1Html).toContain('class="tour-rules"');
+        expect(tourney1Html).toContain('Tournament #1');
+        expect(tourney2Html).toContain('class="tour-rules"');
+        expect(tourney2Html).toContain('Tournament #2');
+        expect(tourney3Html).toContain('class="tour-rules"');
+        expect(tourney3Html).toContain('Tournament #3');
 
         expect(tourney2Html).toContain('class="clock-bar"');
         expect(tourney2Html).toContain('02:25');
@@ -920,8 +940,13 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
           standings: Array<{slug: string; sonnebornBerger: number}>;
         }>('/arena/tournaments/2/index.json');
         expect(tourney2Json.id).toBe('2');
+        expect(tourney2Json).not.toHaveProperty('rulesHtml');
+        expect(JSON.stringify(tourney2Json)).not.toContain('Pondering & Clocks');
         expect(tourney2Json.standings[0].slug).toBe('metamon');
         expect(tourney2Json.standings[0].sonnebornBerger).toBe(2150);
+
+        expect((await h.getRaw('/tours/1.json')).status).toBe(404);
+        expect((await h.getRaw('/arena/tournaments/1/rules.json')).status).toBe(404);
 
         const hyperlinkBin = root('node_modules', '.bin', 'hyperlink');
         const hlOut = execFileSync(hyperlinkBin, [tmpPublic, '--check-anchors'], {

@@ -857,6 +857,7 @@ export class Runner {
         fs.copyFileSync(src, dst);
       }
     }
+    copyStaticTours(this.baseStaticDir, this.staticDir, false);
     if (!fs.existsSync(this.projectsFile)) {
       const baseProjects = path.join(this.baseStaticDir, 'projects.yml');
       fs.copyFileSync(baseProjects, this.projectsFile);
@@ -913,6 +914,7 @@ export class Runner {
         fs.copyFileSync(src, dst);
       }
     }
+    copyStaticTours(this.baseStaticDir, this.staticDir, true);
 
     const baseProjects = path.join(this.baseStaticDir, 'projects.yml');
     if (path.resolve(baseProjects) !== path.resolve(this.projectsFile)) {
@@ -3400,6 +3402,22 @@ function parseExplicitOutcome(raw: string): ratings.MatchCategory {
   return raw as ratings.MatchCategory;
 }
 
+function copyStaticTours(baseStaticDir: string, targetStaticDir: string, overwrite: boolean) {
+  const srcDir = path.join(baseStaticDir, 'tours');
+  if (!fs.existsSync(srcDir)) return;
+  const dstDir = path.join(targetStaticDir, 'tours');
+  if (path.resolve(srcDir) === path.resolve(dstDir)) return;
+  fs.mkdirSync(dstDir, {recursive: true});
+  for (const entry of fs.readdirSync(srcDir, {withFileTypes: true})) {
+    if (!entry.isFile() || !entry.name.endsWith('.dj')) continue;
+    const src = path.join(srcDir, entry.name);
+    const dst = path.join(dstDir, entry.name);
+    if (overwrite || !fs.existsSync(dst)) {
+      fs.copyFileSync(src, dst);
+    }
+  }
+}
+
 export function prepareStaticDir(
   targetStaticDir: string,
   targetAvatarsDir: string,
@@ -3414,6 +3432,7 @@ export function prepareStaticDir(
       fs.copyFileSync(src, dst);
     }
   }
+  copyStaticTours(baseStaticDir, targetStaticDir, false);
   fs.writeFileSync(
     path.join(targetAvatarsDir, '0-error.png'),
     Buffer.from(ZERO_ERROR_PNG_BASE64, 'base64')

@@ -2358,7 +2358,8 @@ export function register(app: polka.Polka, options: Options) {
     }
     const state = arenaHandle.getState();
     const dbToken = getDbToken();
-    const token = `${dbToken}:${state.liveSeq}`;
+    const rulesMtime = getFileMtimeToken(path.join(staticDir, 'tours', `${tournament.id}.dj`));
+    const token = `${dbToken}:${state.liveSeq}:${rulesMtime}`;
     if (isJson) {
       sendCached(
         req,
@@ -2386,6 +2387,7 @@ export function register(app: polka.Polka, options: Options) {
           renderer,
           tournament,
           publicDir,
+          staticDir,
           projectMeta: ctx.projectMeta,
           profileSlugs: ctx.profileSlugs,
           tournamentBroadcast: arenaHandle.getTournamentBroadcast(tournament.id),

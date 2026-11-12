@@ -1,0 +1,17 @@
+These tournament-specific rules supplement the general [Arena Rules](/rules) for **Tournament #3**.
+
+### Eligibility & Entry Cutoff
+
+- *Registration*: Any project listed on the [projects](/projects) registry (`Pending` or Approved) may submit **one** OCI container image on [account](/account) while registration is open.
+- *Deadline*: Entries close automatically at `00:00:00 UTC` immediately preceding the scheduled start timestamp; updates or resubmissions after a failed smoke test must complete before that cutoff.
+
+### Format & Structure
+
+- *Ruleset*: `[Gen 9 Champions] VGC 2026 Reg M-D` (`gen9championsvgc2026regmc`) Open Team Sheets Best-of-3.
+- *Stage 1 (Double Round-Robin)*: Each matchup consists of `G = 8` scheduled sets with balanced Player 1 / Player 2 starts.
+- *Seeding*: Paired using conservative continuous ladder rating (`Elo − 1.96 × SE`) at the lock deadline.
+
+### Environment & Clock
+
+- *Hardware*: Isolated `g2-custom-24-49152` Spot GPU VM per entrant (`1× NVIDIA L4 24 GB`, `24 vCPUs`, `48 GB RAM`), offline during play.
+- *Clock*: `150s` bank with `+25s/turn` increment and pondering enabled (`ARENA_PONDER=1`).

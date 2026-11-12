@@ -67,6 +67,7 @@ function buildScenarios(wikiSha: string): Scenario[] {
     {name: 'arena-ladder-vgc', path: '/arena/ladders/vgc/'},
     {name: 'arena-tournament-1', path: '/arena/tournaments/1/'},
     {name: 'arena-tournament-2', path: '/arena/tournaments/2/'},
+    {name: 'arena-tournament-3', path: '/arena/tournaments/3/'},
     {name: 'arena-battles', path: '/arena/battles/'},
     {
       name: 'arena-battles-expanded',

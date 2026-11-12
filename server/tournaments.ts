@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import * as site from 'site';
+
 import type * as db from '../db';
 import {Renderer, header, injectLiveBanner} from '../static/build';
 import {
@@ -694,11 +696,21 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   return parts.join('\n  ');
 }
 
+function renderTournamentRulesHtml(staticDir: string, tournamentId: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(tournamentId)) return '';
+  const rulesPath = path.join(staticDir, 'tours', `${tournamentId}.dj`);
+  if (!fs.existsSync(rulesPath)) return '';
+  const body = site.html.render(fs.readFileSync(rulesPath, 'utf8')).trim();
+  if (!body) return '';
+  return `<section class="tour-rules">\n${body}\n</section>`;
+}
+
 export function renderTournamentPage(opts: {
   db: db.Database;
   renderer: Renderer;
   tournament: db.TournamentRow;
   publicDir: string;
+  staticDir?: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
   tournamentBroadcast?: LiveBroadcast;
@@ -709,6 +721,7 @@ export function renderTournamentPage(opts: {
     renderer,
     tournament: t,
     publicDir,
+    staticDir = root('static'),
     projectMeta,
     profileSlugs,
     tournamentBroadcast,
@@ -823,9 +836,12 @@ export function renderTournamentPage(opts: {
     broadcast: broadcastRes.normalized,
   };
 
+  const rulesHtml = renderTournamentRulesHtml(staticDir, t.id);
+
   const content = renderTemplate(TOURNAMENTS_TEMPLATE, {
     eventOptions,
     metaHtml,
+    rulesHtml,
     liveInitialClass: broadcastRes.isActive ? '' : ' class="hide"',
     liveHtml: broadcastRes.html,
     standingsHtml,

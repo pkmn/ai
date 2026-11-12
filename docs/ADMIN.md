@@ -365,6 +365,11 @@ teams and `.log` replays).
 
 - **Naming & URLs:** Titles follow `Tournament #<N>: <Format / Ruleset>` with sequential numeric IDs
   (`1`, `2`, `3`, …) served at `/arena/tournaments/<id>/`.
+- **Tournament-Specific Rules (`static/tours/<id>.dj`):** Each tournament can provide an optional
+  Djot file at `static/tours/<id>.dj` supplementing `/rules/` with event-specific format, stage
+  structure, and hardware rules. Whenever present, `pkmn.ai` renders it directly under the event's
+  metadata header across all tournament states (`scheduled`, `running`, and `completed`), without
+  exposing a separate `.json` endpoint.
 - **Submission Gating & Cutoff:** Both `Pending` (registered) and `qualified` (Approved)
   projects may submit at most 1 OCI container entry (`package: 'oci'`) per `scheduled` tournament
   on `/account/`, completely independent of ladder qualification, the 14-day ladder cooldown, and
