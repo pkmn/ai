@@ -6,7 +6,7 @@
 # (completed w/ Superfinal + .7z archive, live w/ broadcast, and scheduled), and developer wiki
 # history.
 
-reset --seed 20261110 --open-ladders
+reset --seed 20261110
 
 # 1. Seed git-backed public & developer-only wiki pages with revision history
 time 2026-10-18T12:00:00Z
@@ -81,10 +81,12 @@ submit pokerus 1.0.0 adv=1290 rand=1290 vgc=1285 \
 submit mikumiku 0.9.1 rby=1290 sv=1285 \
   --bytes 168mb --duration-millis 2250 --turn-millis 365 --ram 840
 
-# Designate 1500 Elo anchors per ladder (matching each anchor's 1500 expected rating)
+# Upload harvested teams, designate 1500 Elo anchors, and activate staged ladders
 time now-31d
+ladder teams rby,adv,sv
 ladder anchor rby metamon@1.0.0
 ladder anchor adv,sv,rand,vgc foul-play@1.4.0
+ladder open rby,adv,sv,rand,vgc
 
 # 5. Simulate multi-week Arena matchmaking across all 5 ladders (Days -30 .. -18)
 time now-30d

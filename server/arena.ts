@@ -11,6 +11,7 @@ import {VERSION_RE, escapeHtml, root, validateAgentName} from '../static/util';
 import {decryptSecret} from './account';
 import {Auth} from './auth';
 import * as ratings from './ratings';
+import {validateHarvestedTeams} from './teams';
 
 export const PUBLIC_DIR = root('public');
 // If the Mac Mini Arena worker stops heartbeating for 15 minutes (network drop, power loss,
@@ -480,6 +481,7 @@ export interface Options {
       'submission-status' |
       'match-complete' |
       'archive-published' |
+      'ladder-teams' |
       'tournament-game-complete' |
       'tournament-status'
   ) => void | Promise<void>;
@@ -577,6 +579,22 @@ export interface LadderArchiveResponse {
   teamsHref: string;
   bytes: number;
   sha256: string;
+}
+
+export interface LadderTeamsUploadResponse {
+  ok: true;
+  ladderId: string;
+  format: string;
+  count: number;
+  sha256: string;
+}
+
+export interface LadderTeamsResponse {
+  ladderId: string;
+  format: string;
+  count: number;
+  sha256: string;
+  teams: string[];
 }
 
 export interface TournamentArchiveResponse {
@@ -700,7 +718,7 @@ export class Client {
   }
 
   private async requestJson<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     endpoint: string,
     body?: unknown
   ): Promise<T> {
@@ -796,6 +814,24 @@ export class Client {
     );
   }
 
+  uploadLadderTeams(
+    ladderId: string,
+    teams: string | string[]
+  ): Promise<LadderTeamsUploadResponse> {
+    return this.requestJson<LadderTeamsUploadResponse>(
+      'PUT',
+      `/api/arena/ladders/${encodeURIComponent(ladderId)}/teams`,
+      {teams}
+    );
+  }
+
+  getLadderTeams(ladderId: string): Promise<LadderTeamsResponse> {
+    return this.requestJson<LadderTeamsResponse>(
+      'GET',
+      `/api/arena/ladders/${encodeURIComponent(ladderId)}/teams`
+    );
+  }
+
   uploadTournamentArchive(
     tournamentId: string,
     archive: Uint8Array,
@@ -865,6 +901,69 @@ function openSse(res: http.ServerResponse) {
 function sendSse(res: http.ServerResponse, event: string, data: unknown) {
   if (res.writableEnded || res.destroyed) return;
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+const MAX_TEAMS_BODY_BYTES = 8 * 1024 * 1024;
+
+function readTeamsBody(
+  req: http.IncomingMessage,
+  maxBytes = MAX_TEAMS_BODY_BYTES
+): Promise<string | string[]> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    req.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > maxBytes) {
+        settled = true;
+        reject(Object.assign(new Error('Teams body exceeds 8 MiB limit.'), {status: 413}));
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
+      if (contentType.includes('application/json')) {
+        try {
+          const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            reject(Object.assign(new Error('Request body must be a JSON object.'), {status: 400}));
+            return;
+          }
+          const rawTeams = (parsed as Record<string, unknown>).teams;
+          if (typeof rawTeams === 'string') {
+            resolve(rawTeams);
+            return;
+          }
+          if (Array.isArray(rawTeams)) {
+            resolve(rawTeams.map(String));
+            return;
+          }
+          reject(Object.assign(
+            new Error('JSON body must include a string or array "teams" field.'),
+            {status: 400}
+          ));
+          return;
+        } catch {
+          reject(Object.assign(new Error('Invalid JSON request body.'), {status: 400}));
+          return;
+        }
+      }
+      resolve(raw);
+    });
+    req.on('error', err => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+  });
 }
 
 function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -1431,7 +1530,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.get('/api/arena/pending-submissions', (req, res) => {
     if (!authenticateArena(req, res)) return;
     try {
-      const ladders = db.getPlayableLadders().map(l => ({
+      const ladders = db.getLadders().filter(l => l.status !== 'archived').map(l => ({
         id: l.id,
         slot: l.slot,
         name: l.name,
@@ -2343,6 +2442,101 @@ export function register(app: polka.Polka, options: Options): Handle {
       const message = err instanceof Error ? err.message : 'Ladder archive upload failed.';
       sendJson(res, status, {error: message});
     }
+  });
+
+  app.put('/api/arena/ladders/:id/teams', async (req, res) => {
+    if (!authenticateArena(req, res)) return;
+
+    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const ladder = db.getLadder(rawId);
+    if (!ladder) {
+      req.resume();
+      sendJson(res, 404, {error: `Unknown ladder "${rawId}".`});
+      return;
+    }
+    if (ladder.team !== 'harvested') {
+      req.resume();
+      sendJson(res, 400, {
+        error: `Harvested teams can only be uploaded to "harvested" ladders ("${ladder.id}" ` +
+          `has team="${ladder.team}").`,
+      });
+      return;
+    }
+
+    let rawTeams: string | string[];
+    try {
+      rawTeams = await readTeamsBody(req);
+    } catch (err) {
+      const status = (err as {status?: number}).status ?? 400;
+      const message = err instanceof Error ? err.message : 'Invalid request body.';
+      sendJson(res, status, {error: message});
+      return;
+    }
+
+    let packed: string[];
+    try {
+      packed = validateHarvestedTeams(rawTeams, ladder.format);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Harvested team validation failed.';
+      sendJson(res, 400, {error: message});
+      return;
+    }
+
+    const count = db.replaceLadderTeams(ladder.id, packed, getNowSec());
+    const sha256 = crypto.createHash('sha256').update(packed.join('\n')).digest('hex');
+    await Promise.resolve(options.onUpdate?.('ladder-teams'));
+    sendJson(res, 200, {
+      ok: true,
+      ladderId: ladder.id,
+      format: ladder.format,
+      count,
+      sha256,
+    });
+  });
+
+  app.get('/api/arena/ladders/:id/teams', (req, res) => {
+    if (!authenticateArena(req, res)) return;
+
+    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const ladder = db.getLadder(rawId);
+    if (!ladder) {
+      sendJson(res, 404, {error: `Unknown ladder "${rawId}".`});
+      return;
+    }
+    if (ladder.team !== 'harvested') {
+      sendJson(res, 400, {
+        error: `Ladder "${ladder.id}" does not use harvested teams (team="${ladder.team}").`,
+      });
+      return;
+    }
+
+    const teams = db.getLadderTeams(ladder.id);
+    if (teams.length === 0) {
+      sendJson(res, 404, {error: `No harvested teams uploaded for ladder "${ladder.id}".`});
+      return;
+    }
+
+    const sha256 = crypto.createHash('sha256').update(teams.join('\n')).digest('hex');
+    const etag = `"${sha256}"`;
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('ETag', etag);
+    if (req.headers['if-none-match'] === etag) {
+      res.statusCode = 304;
+      res.end();
+      return;
+    }
+
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(JSON.stringify({
+      ladderId: ladder.id,
+      format: ladder.format,
+      count: teams.length,
+      sha256,
+      teams,
+    }));
   });
 
   app.get('/api/live.json', (req, res) => {

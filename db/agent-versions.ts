@@ -6,7 +6,7 @@ import {ensureAgentLadderStats} from './agent-ladder-stats';
 import * as teams from './agent-ladder-teams';
 import {AgentRow, getAgentById} from './agents';
 import * as entries from './ladder-entries';
-import {archiveLadderInPlace, canSettleLadder, getActiveLadders, getLadder} from './ladders';
+import {archiveLadderInPlace, canSettleLadder, getCurrentLadders, getLadder} from './ladders';
 import {upsertTournamentEntrant} from './tournament-entrants';
 import {
   getScheduledTournaments,
@@ -218,7 +218,7 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
     JOIN ladders l ON l.id = le.ladder_id
     WHERE av.agent_id = ?
       AND le.role IN ('champion', 'challenger')
-      AND l.status IN ('active', 'settling')
+      AND l.status IN ('upcoming', 'active', 'settling')
     ORDER BY
       CASE l.slot
         WHEN 'rby' THEN 0
@@ -404,7 +404,7 @@ export function computeAgentSubmissionStatus(
     };
   }
 
-  const openLadders = getActiveLadders(db);
+  const openLadders = getCurrentLadders(db);
   if (!openLadders.length) {
     return {
       label: 'Qualified',
@@ -453,6 +453,7 @@ export function computeAgentSubmissionStatus(
 
   const activeEntries = entries.getActiveEntriesForAgent(db, agentId);
   for (const entry of activeEntries) {
+    if (entry.ladderStatus === 'upcoming') continue;
     const settled = entry.settledAt !== undefined || (
       entry.se <= SETTLED_MAX_SE && entry.matches >= SETTLED_MIN_MATCHES
     );

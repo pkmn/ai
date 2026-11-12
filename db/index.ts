@@ -12,6 +12,7 @@ import * as agents from './agents';
 import * as developers from './developers';
 import * as discordMembers from './discord-members';
 import * as entries from './ladder-entries';
+import * as ladderTeams from './ladder-teams';
 import * as ladders from './ladders';
 import * as matches from './matches';
 import * as pairs from './pair-aggregates';
@@ -246,6 +247,22 @@ export class Database {
 
   setLadderStatus(ladderId: string, status: ladders.LadderStatus, now?: number): ladders.LadderRow {
     return ladders.setLadderStatus(this.db, this.txRunner, ladderId, status, now);
+  }
+
+  countLadderTeams(ladderId: string): number {
+    return ladderTeams.countLadderTeams(this.db, ladderId);
+  }
+
+  hasLadderTeams(ladderId: string): boolean {
+    return ladderTeams.hasLadderTeams(this.db, ladderId);
+  }
+
+  getLadderTeams(ladderId: string): string[] {
+    return ladderTeams.getLadderTeams(this.db, ladderId);
+  }
+
+  replaceLadderTeams(ladderId: string, packedTeams: string[], now?: number): number {
+    return ladderTeams.replaceLadderTeams(this.db, this.txRunner, ladderId, packedTeams, now);
   }
 
   rotateLadder(

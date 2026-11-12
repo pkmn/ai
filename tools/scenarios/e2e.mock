@@ -25,14 +25,14 @@ tournament create 2 --name "Tournament #2: VGC 2026 Reg M-C OTS BO3" \
   --format gen9championsvgc2026regmc --games 8 --tables 2 \
   --hardware "GCP L4 Spot" --starts -30m --status running
 
-# 1. Pre-launch: ladders are `upcoming` -> Qualified & Pending have submission fieldset disabled
+# 1. Pre-launch: ladders are `upcoming` -> Qualified transitions to Eligible, Pending stays disabled
 checkpoint pre-launch
 
-# 2. Open RBY & VGC ladders -> Qualified transitions to Eligible
-ladder open rby,vgc
-checkpoint ladders-open
+# 2. Upload harvested teams for RBY before activating later
+ladder teams rby
+checkpoint teams-uploaded
 
-# 3. Smoke-failing submission -> Discord DM sent -> cooldown is NOT triggered
+# 3. Smoke-failing submission on upcoming RBY -> Discord DM sent -> cooldown is NOT triggered
 submit 0-error 0.1.0-bad rby --by scheibo --smoke pending
 smoke 0-error@0.1.0-bad --fail --error "Boot failure in 0.1.0-bad"
 checkpoint after-smoke-fail
@@ -44,19 +44,23 @@ submit foul-play 1.0.0 rby=1500 vgc=1500 --by pmariglia --smoke pending
 checkpoint pending-auth-token
 
 smoke all --pass
+checkpoint pre-anchor-rby
+ladder anchor rby foul-play@1.0.0
+ladder open rby
 checkpoint two-vgc-agents
 
-# 5. Submit 3rd VGC agent -> VGC `min = 4` still blocks scheduling until 4th VGC agent arrives
+# 5. Submit 3rd VGC agent -> VGC `min = 4` still blocks activation & scheduling until 4th VGC agent arrives
 submit mews-truck 1.0.0 vgc=1610 --by pkmnbotguy
 checkpoint three-vgc-agents
 
 submit metamon 1.0.0 vgc=1560 --by jakegrigsby \
   --url https://r2.example.com/metamon-1.0.0.tar.zst
+ladder anchor vgc foul-play@1.0.0
+ladder open vgc
 play 1 --ladder vgc --heartbeats
 checkpoint four-vgc-agents
 
-# 6. Set 1500 anchors, settle ladders, advance 14d cooldown, reuse locked VGC teams, retire 3rd ver
-ladder anchor rby,vgc foul-play@1.0.0
+# 6. Settle ladders, advance 14d cooldown, reuse locked VGC teams, retire 3rd ver
 settle rby --heartbeats
 settle vgc
 

@@ -3,7 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import * as ratings from '../server/ratings';
 
 import * as stats from './agent-ladder-stats';
-import {LadderRow, LadderSlot, getLadder} from './ladders';
+import {LadderRow, LadderSlot, LadderStatus, getLadder} from './ladders';
 import {loadPairAggregates, updatePairAggregateLos} from './pair-aggregates';
 import {upsertDailyRatingSnapshots} from './rating-snapshots';
 
@@ -15,6 +15,7 @@ export interface ActiveEntryView {
   ladderId: string;
   slot: LadderSlot;
   ladderName: string;
+  ladderStatus: LadderStatus;
   versionId: number;
   version: string;
   role: 'champion' | 'challenger';
@@ -190,6 +191,7 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
       le.ladder_id,
       l.slot,
       l.name AS ladder_name,
+      l.status AS ladder_status,
       le.version_id,
       av.version,
       le.role,
@@ -209,7 +211,7 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
     WHERE av.agent_id = ?
       AND av.smoke_status = 'passed'
       AND le.role IN ('champion', 'challenger')
-      AND l.status IN ('active', 'settling')
+      AND l.status IN ('upcoming', 'active', 'settling')
     ORDER BY
       CASE l.slot
         WHEN 'rby' THEN 0
@@ -227,6 +229,7 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
     ladderId: r.ladder_id as string,
     slot: r.slot as LadderSlot,
     ladderName: r.ladder_name as string,
+    ladderStatus: r.ladder_status as LadderStatus,
     versionId: r.version_id as number,
     version: r.version as string,
     role: r.role as 'champion' | 'challenger',

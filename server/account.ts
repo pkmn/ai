@@ -396,7 +396,7 @@ export function renderAccountPage(opts: {
   const needsTeamsIds = new Set(needsTeamsLadders.map(l => l.id));
   const activeLadderIdsWithAgent = new Set(activeEntries.map(e => e.ladderId));
   const checkboxesHtml = currentLadders.map(l => {
-    const isOpen = l.status === 'active';
+    const isOpen = l.status === 'upcoming' || l.status === 'active';
     const canCheck = isOpen && status.canSubmit;
     const checked = canCheck && activeLadderIdsWithAgent.has(l.id) ? ' checked' : '';
     const disabled = canCheck ? '' : ' disabled';
@@ -405,13 +405,16 @@ export function renderAccountPage(opts: {
     const label = escapeHtml(l.name);
     let labelAttrs = '';
     if (!isOpen) {
-      labelAttrs = ' class="upcoming" title="Upcoming — not open for submissions yet"';
+      labelAttrs = ' class="upcoming" title="Not open for submissions"';
     } else if (!status.canSubmit) {
       const reasonAttr = escapeHtml(status.reason ?? 'Not currently eligible for ladders');
       labelAttrs = ` class="upcoming" title="${reasonAttr}"`;
+    } else if (l.status === 'upcoming') {
+      labelAttrs = ' title="Upcoming — accepting initial entries before matchmaking begins"';
     }
+    const statusHint = l.status === 'upcoming' ? ' <span class="muted">(upcoming)</span>' : '';
     return `<label${labelAttrs}><input type="checkbox" name="ladders" value="${val}"` +
-      `${checked}${disabled}${needsTeams}> ${label}</label>`;
+      `${checked}${disabled}${needsTeams}> ${label}${statusHint}</label>`;
   }).join('\n            ');
 
   let tournamentsRowHtml = '';
@@ -727,7 +730,7 @@ export function register(app: polka.Polka, options: Options) {
     const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id, now);
     const currentLadders = db.getCurrentLadders();
     const needsTeamsLadders = currentLadders.filter(
-      l => l.status === 'active' &&
+      l => (l.status === 'upcoming' || l.status === 'active') &&
         l.team === 'pools' &&
         !db.hasActiveLadderTeams(l.id, agent.id)
     );
@@ -908,10 +911,10 @@ export function register(app: polka.Polka, options: Options) {
       return;
     }
 
-    const activeLadders = db.getActiveLadders();
-    const byId = new Map(activeLadders.map(l => [l.id.toLowerCase(), l]));
-    const bySlot = new Map(activeLadders.map(l => [l.slot.toLowerCase(), l]));
-    const byName = new Map(activeLadders.map(l => [l.name.toLowerCase(), l]));
+    const currentLadders = db.getCurrentLadders();
+    const byId = new Map(currentLadders.map(l => [l.id.toLowerCase(), l]));
+    const bySlot = new Map(currentLadders.map(l => [l.slot.toLowerCase(), l]));
+    const byName = new Map(currentLadders.map(l => [l.name.toLowerCase(), l]));
 
     const selectedLadders: db.LadderRow[] = [];
     const seenLadderIds = new Set<string>();
@@ -919,7 +922,7 @@ export function register(app: polka.Polka, options: Options) {
       const key = raw.toLowerCase();
       const ladder = byId.get(key) ?? bySlot.get(key) ?? byName.get(key);
       if (!ladder) {
-        sendJson(res, 400, {error: `Unknown or inactive ladder "${raw}".`});
+        sendJson(res, 400, {error: `Unknown or closed ladder "${raw}".`});
         return;
       }
       if (!seenLadderIds.has(ladder.id)) {

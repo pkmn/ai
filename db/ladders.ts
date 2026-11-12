@@ -5,6 +5,8 @@ import * as yaml from 'yaml';
 
 import {root} from '../static/util';
 
+import {countLadderTeams} from './ladder-teams';
+
 import {TransactionRunner} from './index';
 
 export type LadderSlot = 'rby' | 'adv' | 'sv' | 'rand' | 'vgc';
@@ -224,8 +226,12 @@ export function syncLaddersFromYaml(
       let status: LadderStatus = cfg.status ?? 'active';
       // If a settling season already finished settling and transitioned to 'archived' in SQLite,
       // do not regress it back to 'settling' on server restart before ladders.yml is updated.
+      // Likewise, do not downgrade an already activated/settling/archived ladder back to 'upcoming'
+      // if config/ladders.yml still lists `status: upcoming`.
       if (existing?.status === 'archived' && status === 'settling') {
         status = 'archived';
+      } else if (existing && existing.status !== 'upcoming' && status === 'upcoming') {
+        status = existing.status;
       }
       const slot = inferLadderSlot(cfg.name);
       const min = cfg.min ?? (cfg.team === 'pools' ? 4 : 2);
@@ -307,6 +313,41 @@ export function getActiveLadderBySlot(db: DatabaseSync, slot: LadderSlot): Ladde
   return raw ? mapLadderRow(raw) : undefined;
 }
 
+export function validateLadderActivation(db: DatabaseSync, ladder: LadderRow): void {
+  if (ladder.team === 'harvested' && countLadderTeams(db, ladder.id) < 2) {
+    throw new Error(
+      `Cannot activate harvested ladder "${ladder.id}": harvested teams have not been uploaded yet.`
+    );
+  }
+
+  const requiredMin = Math.max(ladder.team === 'pools' ? 4 : 2, ladder.min);
+  const activeCount = countDistinctActiveLadderAgents(db, ladder.id);
+  if (activeCount < requiredMin) {
+    throw new Error(
+      `Cannot activate ladder "${ladder.id}": requires at least ${requiredMin} ` +
+      `distinct active entries (found ${activeCount}).`
+    );
+  }
+
+  const anchor = db.prepare(`
+    SELECT 1
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
+    WHERE le.ladder_id = ?
+      AND le.is_anchor = 1
+      AND le.role IN ('champion', 'challenger')
+      AND av.smoke_status = 'passed'
+      AND a.status != 'disabled'
+    LIMIT 1
+  `).get(ladder.id);
+  if (!anchor) {
+    throw new Error(
+      `Cannot activate ladder "${ladder.id}": no active 1500-Elo anchor entry has been set.`
+    );
+  }
+}
+
 export function setLadderStatus(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -329,6 +370,10 @@ export function setLadderStatus(
       if (conflict) {
         throw new Error(`Slot "${ladder.slot}" already has current ladder "${conflict.id}"`);
       }
+    }
+
+    if (status === 'active') {
+      validateLadderActivation(db, ladder);
     }
 
     const archivedAt = status === 'archived' ? (ladder.archivedAt ?? now) : null;
@@ -355,9 +400,11 @@ export function countDistinctActiveLadderAgents(db: DatabaseSync, ladderId: stri
       SELECT COUNT(DISTINCT av.agent_id) AS cnt
       FROM ladder_entries le
       JOIN agent_versions av ON av.id = le.version_id
+      JOIN agents a ON a.id = av.agent_id
       WHERE le.ladder_id = ?
         AND le.role IN ('champion', 'challenger')
         AND av.smoke_status = 'passed'
+        AND a.status != 'disabled'
         AND EXISTS (
           SELECT 1 FROM agent_ladder_teams alt
           WHERE alt.ladder_id = le.ladder_id
@@ -371,9 +418,11 @@ export function countDistinctActiveLadderAgents(db: DatabaseSync, ladderId: stri
     SELECT COUNT(DISTINCT av.agent_id) AS cnt
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
     WHERE le.ladder_id = ?
       AND le.role IN ('champion', 'challenger')
       AND av.smoke_status = 'passed'
+      AND a.status != 'disabled'
   `).get(ladderId) as {cnt: number};
   return row.cnt;
 }
@@ -446,8 +495,10 @@ export function rotateLadder(
       const newId = input.newLadderId.trim();
       const existingNew = getLadder(db, newId);
       if (existingNew) {
-        db.prepare("UPDATE ladders SET status = 'active', archived_at = NULL WHERE id = ?")
-          .run(newId);
+        if (existingNew.status === 'archived') {
+          db.prepare("UPDATE ladders SET status = 'upcoming', archived_at = NULL WHERE id = ?")
+            .run(newId);
+        }
       } else {
         const team = input.newTeam ?? oldLadder.team;
         const min = input.newMin ?? oldLadder.min;
@@ -465,7 +516,7 @@ export function rotateLadder(
             id, slot, name, format, team,
             min, teams, discord, status, created_at, archived_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'upcoming', ?, NULL)
         `).run(
           newId,
           oldLadder.slot,

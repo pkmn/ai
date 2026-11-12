@@ -209,7 +209,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
 
         await runner.runScript(`
           reset --seed 987654
-          ladder open rby,adv
+          ladder teams rby,adv
           register "AlphaAgent" --logo auto
           register "AnchorAgent" --logo auto
           register "GammaAgent" --logo auto
@@ -217,6 +217,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
           submit anchoragent 1.0.0 rby=1500 adv=1500
           submit gammaagent 1.0.0 rby=1300 adv=1680
           ladder anchor rby,adv anchoragent@1.0.0
+          ladder open rby,adv
           play 15 --ladder rby --balanced --tie-rate 0
         `);
 
@@ -260,7 +261,8 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-seq-'));
       const dbPath = path.join(tmpDir, 'arena.sqlite');
       const lines = [
-        'reset --seed 4242 --now 2026-10-01T00:00:00Z --open-ladders',
+        'reset --seed 4242 --now 2026-10-01T00:00:00Z',
+        'ladder teams rby',
         'register "SoloOne" --pending',
         'qualify soloone',
         'register "SoloTwo"',
@@ -269,6 +271,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
         'submit solotwo 1.0.0 rby=1500',
         'submit solothree 1.0.0 rby=1420',
         'ladder anchor rby solotwo@1.0.0',
+        'ladder open rby',
         'play 12 --ladder rby --over 2d',
         'simulate 8 --over 1d',
       ];
@@ -433,19 +436,40 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
             });
             expect(preRes.status).toBe(200);
             const preHtml = await preRes.text();
-            expect(preHtml).toContain('Qualified');
-            expect(preHtml).toContain('<fieldset class="form-fieldset" disabled>');
+            expect(preHtml).toContain('Eligible');
+            expect(preHtml).toContain('(upcoming)');
+            expect(preHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
 
             const pendingRes = await realFetch(`${baseUrl}/account/`, {
               headers: {cookie: cookieFor('asterdev', 1005)},
             });
-            expect(await pendingRes.text()).toContain('Pending');
+            const pendingHtml = await pendingRes.text();
+            expect(pendingHtml).toContain('Pending');
+            expect(pendingHtml).toContain('<fieldset class="form-fieldset" disabled>');
+
+            expect(() => db.setLadderStatus('gen1ou20261109', 'active')).toThrow(/harvested teams/);
           },
-          'ladders-open': async () => {
-            const eligibleHtml = await (await realFetch(`${baseUrl}/account/`, {
-              headers: {cookie: cookieFor('scheibo')},
-            })).text();
-            expect(eligibleHtml).toContain('Eligible');
+          'teams-uploaded': async () => {
+            const client = new arena.Client({
+              serverUrl: baseUrl,
+              arenaSecret: E2E_AUTH.arenaSecret!,
+            });
+            const fetched = await client.getLadderTeams('gen1ou20261109');
+            expect(fetched.ladderId).toBe('gen1ou20261109');
+            expect(fetched.count).toBe(4);
+            expect(fetched.teams).toHaveLength(4);
+
+            const etagRes = await realFetch(`${baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
+              headers: {
+                authorization: `Bearer ${E2E_AUTH.arenaSecret}`,
+                'if-none-match': `"${fetched.sha256}"`,
+              },
+            });
+            expect(etagRes.status).toBe(304);
+
+            expect(() => db.setLadderStatus('gen1ou20261109', 'active')).toThrow(
+              /requires at least 2 distinct active entries/
+            );
           },
           'after-smoke-fail': async () => {
             await statusQueue;
@@ -471,10 +495,18 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
             expect(pendingData.submissions.find(s => s.agentSlug === '0-error')?.authToken)
               .toBe('Bearer private-r2-token');
           },
+          'pre-anchor-rby': () => {
+            expect(() => db.setLadderStatus('gen1ou20261109', 'active')).toThrow(
+              /no active 1500-Elo anchor/
+            );
+          },
           'two-vgc-agents': async r => {
             expect(db.getVersionBySlugAndLabel('0-error', '1.0.0')?.authTokenEncoding)
               .toBeUndefined();
-            // With only 2 agents on VGC (min = 4), VGC refuses to schedule while RBY schedules
+            // With only 2 agents on VGC (min = 4), VGC refuses activation and scheduling
+            expect(() => db.setLadderStatus('gen9championsvgc2026regmc', 'active')).toThrow(
+              /requires at least 4 distinct active entries/
+            );
             expect(await r.playNextScheduledMatch({
               ladders: [db.getLadder('gen9championsvgc2026regmc')!],
             })).toBeUndefined();
@@ -484,7 +516,10 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
             expect(rbyStep?.ladderId).toBe('gen1ou20261109');
           },
           'three-vgc-agents': async r => {
-            // With 3 agents on VGC (min = 4), VGC still refuses to schedule
+            // With 3 agents on VGC (min = 4), VGC still refuses activation and scheduling
+            expect(() => db.setLadderStatus('gen9championsvgc2026regmc', 'active')).toThrow(
+              /requires at least 4 distinct active entries/
+            );
             expect(await r.playNextScheduledMatch({
               ladders: [db.getLadder('gen9championsvgc2026regmc')!],
             })).toBeUndefined();
@@ -516,7 +551,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
           },
           'vgc-rotated': () => {
             expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('settling');
-            expect(db.getLadder('gen9championsvgc2027regma')?.status).toBe('active');
+            expect(db.getLadder('gen9championsvgc2027regma')?.status).toBe('upcoming');
             expect(db.getLadder('gen9championsvgc2027regma')?.discord)
               .toBe('1564121375558340768');
           },
@@ -576,9 +611,10 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
 
         expect(seenCheckpoints).toEqual([
           'pre-launch',
-          'ladders-open',
+          'teams-uploaded',
           'after-smoke-fail',
           'pending-auth-token',
+          'pre-anchor-rby',
           'two-vgc-agents',
           'three-vgc-agents',
           'four-vgc-agents',

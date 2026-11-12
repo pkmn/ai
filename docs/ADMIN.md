@@ -181,88 +181,115 @@ npm run pkmn -- refund-cooldown foul-play
 ## 4. Provisioning Teams for `harvested` Ladders
 
 Ladders with `team: harvested` in `config/ladders.yml` (`RBY` / `gen1ou20261109`, `ADV` /
-`gen3ou20261109`, `SV` / `gen9ou20261109`) **do not upload teams to the `pkmn.ai` web server**.
-Because `pkmn.ai` never executes battles and static harvested pools must remain private to prevent
-counter-scouting, harvested team pools live **exclusively on the M6 Mac mini Arena runner** at
-`/opt/arena/teams/<ladder_id>.txt`.
+`gen3ou20261109`, `SV` / `gen9ou20261109`) store their private team pools in SQLite (`ladder_teams`)
+on the `pkmn.ai` web server so they stay symmetric with `pools` (`agent_ladder_teams`), are
+validated and canonicalized once on ingest, and are never leaked to static `public/`.
 
-### File Format (`/opt/arena/teams/<ladder_id>.txt`)
+### Team File Format & Validation
 
-Each `harvested` ladder uses a **single UTF-8 text file** named after its immutable `ladder_id` from
-`config/ladders.yml` (for example, `gen1ou20261109.txt`, `gen3ou20261109.txt`, `gen9ou20261109.txt`),
-containing **one packed team per line**:
+Upload either a Pokémon Showdown Teambuilder paste (`=== [format] Team Name ===` blocks), plain
+6-Pokémon sets separated by blank lines, or packed team lines (`]`-delimited, one team per line):
 
-- Every line must be a single legal 6-Pokémon team in Pokémon Showdown **packed** format
-  (`NICKNAME|SPECIES|ITEM|ABILITY|MOVES|NATURE|EVS|GENDER|IVS|SHINY|LEVEL|...` joined by `]`), with
-  no blank lines or `===` headers.
-- Before writing `<ladder_id>.txt`, validate each team against `@pkmn/sim`'s
-  `new TeamValidator(format).validateTeam(team)` and canonicalize + pack via `@pkmn/sets`
-  (`new Team(Team.canonicalize(sets, dex), dex).pack()`).
-- Each pool file must contain at least 2 non-mirror teams (in practice, hundreds of high-ladder
-  teams so 2-game blind-pair matches sample diverse matchups without 6-species mirrors).
+- Every team must contain 6 legal Pokémon in the ladder's `format` (`validateHarvestedTeams` checks
+  `@pkmn/sim` `TeamValidator` and canonically sorts sets/moves via `@pkmn/sets`).
+- At least 2 non-mirror teams with distinct 6-species sets are required (in practice, hundreds of
+  high-ladder teams so 2-game blind-pair matches sample diverse matchups).
 
-### Uploading via `rsync` to the Mac mini
+### Uploading Harvested Teams (`pkmn` CLI or HTTP API)
 
-`rsync` the `<ladder_id>.txt` files (along with any era-matched read-only `@pkmn/stats` /
-`randbats` JSON files mounted into agent sandboxes at `$PKMN_STATS_DIR/<ladder_id>/`) directly to
-the Mac mini:
+Upload or replace a `harvested` ladder's pool locally via CLI or remotely over HTTPS using
+`ARENA_SECRET`:
 
 ```sh
-# 1. Ensure destination directories exist on the Mac mini (`arena` SSH host)
-ssh arena 'mkdir -p /opt/arena/teams /opt/arena/stats'
+# Option A: Local CLI on pkmn.ai (writes validated canonical packed teams into ladder_teams)
+npm run pkmn -- upload-ladder-teams gen1ou20261109 /path/to/gen1ou-teams.txt
 
-# 2. Upload single-file packed team pools (one packed team per line)
-rsync -avz \
-  gen1ou20261109.txt \
-  gen3ou20261109.txt \
-  gen9ou20261109.txt \
-  arena:/opt/arena/teams/
+# Option B: Remote upload via Bearer $ARENA_SECRET (accepts text/plain or JSON {"teams": ...})
+curl -fsS -X PUT https://pkmn.ai/api/arena/ladders/gen1ou20261109/teams \
+  -H "Authorization: Bearer $ARENA_SECRET" \
+  -H 'Content-Type: text/plain; charset=utf-8' \
+  --data-binary @gen1ou-teams.txt
+```
 
-# 3. Lock permissions so only the coordinator user (`pkmn`) can read `/opt/arena/teams/`
-#    (sandboxed `p1`/`p2` agent users must never have read access to harvested pools)
-ssh arena 'chmod 750 /opt/arena/teams && chmod 640 /opt/arena/teams/*.txt && wc -l /opt/arena/teams/*.txt'
+Uploading replaces the entire `ladder_teams` pool for `<ladder_id>` atomically in SQLite.
 
-# 4. (Optional) Upload era-matched read-only usage/randbats stats for agent sandboxes
-#    - Constructed ladders (`RBY`, `ADV`, `SV`, `VGC`): stats.json
-#    - Random Battle ladders (`RAND`): data.json, full.json, sets.json
+### How the Mac mini Runner Fetches Harvested Teams
+
+The M6 Mac mini coordinator pulls validated packed teams over authenticated HTTP:
+
+```sh
+# Fetch canonical packed teams (supports ETag / If-None-Match -> 304 Not Modified caching)
+curl -fsS https://pkmn.ai/api/arena/ladders/gen1ou20261109/teams \
+  -H "Authorization: Bearer $ARENA_SECRET"
+```
+
+Store cached copies with `chmod 750` on the coordinator user only (sandboxed `p1`/`p2` agent users
+must never have read access to harvested pools). Optionally, `rsync` era-matched read-only
+`@pkmn/stats` / `randbats` JSON files into agent sandboxes at `/opt/arena/stats/` if agents mount
+public stats data:
+
+```sh
+ssh arena 'mkdir -p /opt/arena/stats'
 rsync -avz stats/ arena:/opt/arena/stats/
 ssh arena 'chmod -R a+rX /opt/arena/stats'
 ```
 
 > [!NOTE]
-> **How `pools` ladders (`VGC`) differ:** Ladders with `team: pools` do not use
-> `/opt/arena/teams/<ladder_id>.txt`. Instead, competitors submit their 20-team seasonal roster on
-> `/account/`, which `pkmn.ai` validates against the public blocklist directories configured under
-> `pools:` in `config/ladders.yml` (`teams/teams/...`, `teams/pkmn_stuff/...`, `teams/vgc.bot/...`)
-> and stores in SQLite (`agent_ladder_teams`) for the Mac mini to pull via
-> `GET /api/arena/pending-submissions`.
+> **How `pools` ladders (`VGC`) differ:** Ladders with `team: pools` do not use `ladder_teams`.
+> Instead, competitors submit their 20-team seasonal roster on `/account/`, which `pkmn.ai`
+> validates incrementally against the public blocklist directories configured under `pools:` in
+> `config/ladders.yml` (`teams/teams/...`, `teams/pkmn_stuff/...`, `teams/vgc.bot/...`) and stores
+> in SQLite (`agent_ladder_teams`) for the Mac mini to pull via `GET /api/arena/pending-submissions`.
 
 ---
 
 ## 5. Ladder Lifecycle, Anchors, Rotation & Archives
 
-### Opening or Updating Ladder Status
+### Staging `upcoming` Ladders & Pre-Activation Checks
 
-At launch (or when pausing/retiring a ladder manually), update `status:` in `config/ladders.yml`
-**and** apply the status transition in SQLite:
+New seasons start with `status: upcoming` in `config/ladders.yml`. While a ladder is `upcoming`:
+
+- Approved (`qualified`) projects see it checked/selectable on `/account/` (`(upcoming)`) and can
+  submit entries immediately, allowing the Mac mini runner to complete smoke tests before matches
+  begin (the settlement gate does not block re-submissions while a ladder is `upcoming`).
+- Matchmaking (`getPlayableLadders()`) ignores `upcoming` ladders until staff flips `status` to
+  `active`.
+
+`npm run pkmn -- set-ladder-status <ladder_id> active` enforces **three preconditions** and refuses
+activation until all three pass:
+
+1. **Harvested teams uploaded (for `team: harvested`):** At least 2 non-mirror legal teams exist in
+   `ladder_teams` (`upload-ladder-teams` or `PUT /api/arena/ladders/<ladder_id>/teams`).
+2. **Minimum active entries:** At least `min` distinct non-disabled projects have active (`champion`
+   or `challenger`), smoke-`passed` entries on `<ladder_id>` (at least **2** on `harvested`/`random`
+   ladders; at least **4** with active team pools on `pools` ladders).
+3. **1500-Elo anchor designated:** One active, smoke-`passed`, non-disabled entry on `<ladder_id>`
+   is pinned as the gauge anchor (`is_anchor = 1`).
+
+Typical launch sequence for a staged ladder:
 
 ```sh
+# 1. Upload harvested team pools for harvested ladders
+npm run pkmn -- upload-ladder-teams gen1ou20261109 gen1ou-teams.txt
+
+# 2. Wait for competitors to submit entries and pass Mac mini smoke tests while status=upcoming,
+#    then pin the 1500-Elo gauge anchor once its version passes smoke testing
+npm run pkmn -- set-anchor gen1ou20261109 metamon 1.0.0
+
+# 3. Flip the ladder to active (verified by set-ladder-status preconditions)
 npm run pkmn -- set-ladder-status gen1ou20261109 active
-npm run pkmn -- set-ladder-status gen3ou20261109 active
-npm run pkmn -- set-ladder-status gen9ou20261109 active
-npm run pkmn -- set-ladder-status gen9randombattle20261109 active
-npm run pkmn -- set-ladder-status gen9championsvgc2026regmc active
 ```
 
 Valid statuses are `upcoming` -> `active` -> `settling` -> `archived`. Always commit the matching
 `status:` update in `config/ladders.yml` so future server restarts stay consistent (`syncLadders`
-automatically avoids regressing a `settling` ladder back from `archived` once it finishes settling).
+refuses to downgrade an already-`active`/`settling`/`archived` SQLite ladder back to `upcoming` or
+regress an `archived` settling ladder back to `settling`).
 
 ### Setting 1500-Elo Gauge Anchors
 
 Once a ladder's designated anchor version (for example, `Metamon` `1.0.0` on `RBY` or `Foul Play`
-`1.0.0` on `ADV`/`SV`/`RAND`) passes smoke testing and enters the ladder, pin its rating to `1500`
-Elo:
+`1.0.0` on `ADV`/`SV`/`RAND`/`VGC`) passes smoke testing and enters the ladder, pin its rating to
+`1500` Elo before opening the ladder:
 
 ```sh
 npm run pkmn -- set-anchor gen1ou20261109 metamon 1.0.0
@@ -275,9 +302,8 @@ npm run pkmn -- set-anchor gen9randombattle20261109 foul-play 1.0.0
 
 When a new VGC regulation begins (or a permanent format undergoes a new epoch):
 
-1. If the new ladder uses `team: harvested`, first `rsync` `/opt/arena/teams/<new_ladder_id>.txt`
-   (and `/opt/arena/stats/<new_ladder_id>/`) to the Mac mini. If it uses `team: pools`, add the new
-   reference blocklist directories under `teams/` and `config/ladders.yml`.
+1. If the new ladder uses `team: pools`, add the new reference blocklist directories under `teams/`
+   and `config/ladders.yml`.
 2. Run `rotate-ladder` on `pkmn.ai`:
 
 ```sh
@@ -296,9 +322,11 @@ What `rotate-ladder` does atomically:
   still have unsettled versions (`matches < 25` or `SE > 30`), it enters `settling` (closing new
   submissions while finishing remaining settlement matches before automatically transitioning to
   `archived`); otherwise it transitions immediately to `archived` and marks its entries `retired`.
-- Creates/activates `gen9championsvgc2026regmd` under the `vgc` URL slot (`/arena/ladders/vgc/`).
-- Update `config/ladders.yml` to record the archived/settling entry alongside the new `active`
-  entry, then commit and deploy.
+- Stages `gen9championsvgc2026regmd` in `status = 'upcoming'` under the `vgc` URL slot
+  (`/arena/ladders/vgc/`) so competitors can upload initial team pools/entries (and staff can upload
+  harvested teams + pin an anchor) before running `set-ladder-status gen9championsvgc2026regmd active`.
+- Update `config/ladders.yml` to record the archived/settling entry alongside the new `upcoming`
+  (and later `active`) entry, then commit and deploy.
 
 ### Publishing Retired `pools` Ladder Archives (`<ladder_id>-logs.7z`)
 

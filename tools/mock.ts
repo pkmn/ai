@@ -111,6 +111,110 @@ export function generateValidVgcTeams(count = 20, agentOffset = 0): string[] {
   return out;
 }
 
+const harvestedTeamsCache = new Map<string, string[]>();
+const HARVESTED_ITEMS = [
+  'Leftovers', 'Choice Scarf', 'Heavy-Duty Boots', 'Life Orb', 'Focus Sash', 'Lum Berry',
+  'Sitrus Berry', 'Choice Specs', 'Choice Band', 'Rocky Helmet',
+];
+
+export function generateValidHarvestedTeams(formatId: string, count = 4): string[] {
+  const format = toID(formatId);
+  const cacheKey = `${format}:${count}`;
+  const cached = harvestedTeamsCache.get(cacheKey);
+  if (cached) return cached;
+
+  const dex = sim.Dex.forFormat(format);
+  const validator = new sim.TeamValidator(format);
+  const validItems = dex.gen >= 2
+    ? HARVESTED_ITEMS.filter(name => {
+      const it = dex.items.get(name);
+      return it.exists && !it.isNonstandard && it.gen <= dex.gen;
+    })
+    : [];
+  const defaultItem = validItems[0] ?? '';
+  const legalSets: sim.PokemonSet[] = [];
+  const targetPoolSize = Math.max(12, count * 6);
+
+  for (const sp of dex.species.all()) {
+    if (!sp.exists || sp.isNonstandard || sp.gen > dex.gen || sp.nfe || sp.forme) continue;
+    if (validator.ruleTable.isBannedSpecies(sp)) continue;
+    const ability = dex.gen >= 3 ? sp.abilities['0'] : '';
+    const learnset = dex.species.getLearnsetData(sp.id).learnset ?? {};
+    const orderedMoveIds = Object.keys(learnset).sort((a, b) => {
+      const ma = dex.moves.get(a);
+      const mb = dex.moves.get(b);
+      const aSafe = ma.category !== 'Status' && !ma.ohko ? 0 : 1;
+      const bSafe = mb.category !== 'Status' && !mb.ohko ? 0 : 1;
+      return aSafe - bSafe;
+    });
+    const moves: string[] = [];
+
+    for (const moveId of orderedMoveIds) {
+      const mv = dex.moves.get(moveId);
+      if (!mv.exists || mv.isNonstandard || mv.gen > dex.gen || mv.isZ || mv.isMax) continue;
+      const candidate: sim.PokemonSet = {
+        name: '',
+        species: sp.name,
+        item: defaultItem,
+        ability,
+        moves: [...moves, mv.name],
+        nature: dex.gen >= 3 ? 'Serious' : '',
+        gender: '',
+        evs: {hp: 252, atk: 0, def: 4, spa: 0, spd: 252, spe: 0},
+        ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
+        level: validator.ruleTable.maxLevel ?? 100,
+      };
+      if (!validator.validateSet(structuredClone(candidate), {})) {
+        moves.push(mv.name);
+        if (moves.length === 4) break;
+      }
+    }
+
+    if (moves.length === 0) continue;
+    legalSets.push({
+      name: '',
+      species: sp.name,
+      item: defaultItem,
+      ability,
+      moves,
+      nature: dex.gen >= 3 ? 'Serious' : '',
+      gender: '',
+      evs: {hp: 252, atk: 0, def: 4, spa: 0, spd: 252, spe: 0},
+      ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
+      level: validator.ruleTable.maxLevel ?? 100,
+    });
+    if (legalSets.length >= targetPoolSize) break;
+  }
+
+  if (legalSets.length < 7) {
+    throw new Error(`Could not synthesize enough legal sets for harvested format "${formatId}".`);
+  }
+
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const start = (i * 5) % legalSets.length;
+    const team: sim.PokemonSet[] = [];
+    for (let slot = 0; slot < 6; slot++) {
+      const base = legalSets[(start + slot) % legalSets.length];
+      team.push({
+        ...structuredClone(base),
+        item: validItems.length > 0 ? validItems[slot % validItems.length] : '',
+      });
+    }
+    const problems = validator.validateTeam(structuredClone(team));
+    if (problems?.length) {
+      throw new Error(
+        `Synthetic harvested team #${i + 1} failed ${formatId} validation: ${problems.join('; ')}`
+      );
+    }
+    out.push(sim.Teams.export(team).trim());
+  }
+
+  teams.validateHarvestedTeams(out, format);
+  harvestedTeamsCache.set(cacheKey, out);
+  return out;
+}
+
 const ZERO_ERROR_PNG_BASE64 = [
   'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAPklEQVR4nO3SwQkAIAwDwZb9d+7C',
   'wcEXkJ6SuQkAAPBn1tp7zhljjAmcB1wHXAdcB1wHXAdcB1wHXAdc5wE93QMR8wX8WQAAAABJRU5ErkJggg==',
@@ -1415,6 +1519,28 @@ export class Runner {
       for (const ladder of this.resolveLadders(targetSpec)) {
         const ver = this.resolveAgentVersion(verSpec, ladder.id);
         this.db.setLadderAnchor(ladder.id, ver.agentSlug, ver.version, this.state.now);
+      }
+      return;
+    }
+    if (sub === 'teams') {
+      const targetSpec = cmd.positional[2] ?? 'all';
+      const countFlag = getFlag(cmd, 'count');
+      const count = countFlag !== undefined ? Number(countFlag) : 4;
+      if (!Number.isInteger(count) || count < 2) {
+        throw new Error('--count must be an integer >= 2');
+      }
+      const targets = this.resolveLadders(targetSpec).filter(l => l.team === 'harvested');
+      if (targets.length === 0) {
+        throw new Error(`No harvested ladders matched "${targetSpec}"`);
+      }
+      for (const ladder of targets) {
+        const rawTeams = generateValidHarvestedTeams(ladder.format, count);
+        if (this.serverUrl && this.arenaSecret) {
+          await this.getArenaClient().uploadLadderTeams(ladder.id, rawTeams);
+        } else {
+          const packed = teams.validateHarvestedTeams(rawTeams, ladder.format);
+          this.db.replaceLadderTeams(ladder.id, packed, this.state.now);
+        }
       }
       return;
     }
@@ -3504,7 +3630,7 @@ const CLI_USAGE = [
   '  register <name> [--owner <gh[:smogon]>...] [--pending|--disabled] [--logo <file|auto>]',
   '  qualify <agent> | disable <agent> | reassign <gh> <agent|--none> | refund-cooldown <agent>',
   '  discord <link|unlink|sync> ...',
-  '  ladder <open|status|add|rotate|anchor|archive> ...',
+  '  ladder <open|status|add|rotate|anchor|teams|archive> ...',
   '  submit <agent> [<ver>] [<ladder>[=<rating>] ...] [--smoke <pass|pending|fail>] ...',
   '  smoke [<agent>[@<ver>]|all] [--pass|--fail] [--error <msg>]',
   '  quarantine <agent>[@<ver>] [--reason <msg>] | unquarantine <agent>[@<ver>]',

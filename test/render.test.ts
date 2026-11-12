@@ -21,6 +21,10 @@ import {hashTeam} from '../teams';
 import {generateValidVgcTeams} from '../tools/mock';
 import {runPkmnCli} from '../tools/pkmn';
 
+function forceLadderActive(database: Database, id: string) {
+  database.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?").run(id);
+}
+
 const NOW = 1_762_800_000;
 const DAY_1 = 1_761_800_000; // 10+ days before DAY_2 to test proportional SVG timestamp spacing
 const DAY_2 = 1_762_664_000;
@@ -313,7 +317,9 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
         expect(arenaHtml).toContain('No championship tournaments scheduled yet.');
 
         const rbyLadderHtml = await h.getText('/arena/ladders/rby/');
-        expect(rbyLadderHtml).toContain('RBY ladder is upcoming');
+        expect(rbyLadderHtml).toContain(
+          'RBY ladder is upcoming — accepting initial entries before matchmaking begins.'
+        );
         expect(rbyLadderHtml).toContain('href="/arena/ladders/rby/"');
         expect(rbyLadderHtml).toContain('href="/arena/ladders/adv/"');
         expect(rbyLadderHtml).toContain('href="/arena/ladders/sv/"');
@@ -337,8 +343,8 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
 
   it('renders /arena hub #1 rows, ladders, proportional charts, /projects/:agent & Battles',
     async () => {
-      db.setLadderStatus('gen1ou20261109', 'active', DAY_1);
-      db.setLadderStatus('gen3ou20261109', 'active', DAY_1);
+      forceLadderActive(db, 'gen1ou20261109');
+      forceLadderActive(db, 'gen3ou20261109');
 
       const jaxV1 = createVersionAndPassSmoke(db, 'jaxcalibur', '1.0.0', ['gen1ou20261109'], DAY_1);
       const metaAnchor = createVersionAndPassSmoke(
@@ -619,7 +625,7 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
 
   it('renders /arena/tournaments/:num pages and /arena ongoing + historical summaries',
     async () => {
-      db.setLadderStatus('gen9ou20261109', 'active', DAY_1);
+      forceLadderActive(db, 'gen9ou20261109');
       const vMeta = createVersionAndPassSmoke(db, 'metamon', '1.3.0', ['gen9ou20261109'], DAY_1);
       const vFoul = createVersionAndPassSmoke(db, 'foul-play', '1.4.0', ['gen9ou20261109'], DAY_1);
       const vJax = createVersionAndPassSmoke(db, 'jaxcalibur', '2.1.0', ['gen9ou20261109'], DAY_1);
@@ -961,7 +967,7 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
 
   it('invalidates SSR cache & ETag immediately on Arena HTTP match-complete and pkmn set-anchor',
     async () => {
-      db.setLadderStatus('gen1ou20261109', 'active', DAY_1);
+      forceLadderActive(db, 'gen1ou20261109');
       const v1 = createVersionAndPassSmoke(db, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
       const v2 = createVersionAndPassSmoke(db, 'foul-play', '1.4.0', ['gen1ou20261109'], DAY_1);
 
@@ -1042,7 +1048,7 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
 
   it('renders inline expandable battle details with pool team hashes & syncs #topbar live banner',
     async () => {
-      db.setLadderStatus('gen9championsvgc2026regmc', 'active', DAY_1);
+      forceLadderActive(db, 'gen9championsvgc2026regmc');
       const vFoul = createVersionAndPassSmoke(
         db, 'foul-play', '1.4.0', ['gen9championsvgc2026regmc'], DAY_1
       );
@@ -1204,8 +1210,8 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
 
   it('emits foo.json === foo/index.json strictly for DB-backed pages and gates retired pool logs',
     async () => {
-      db.setLadderStatus('gen1ou20261109', 'active', DAY_1);
-      db.setLadderStatus('gen9championsvgc2026regmc', 'active', DAY_1);
+      forceLadderActive(db, 'gen1ou20261109');
+      forceLadderActive(db, 'gen9championsvgc2026regmc');
 
       const vgcPastesFp = generateValidVgcTeams(20, 0);
       const vgcPastesJax = generateValidVgcTeams(20, 1);

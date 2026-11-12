@@ -586,3 +586,37 @@ export function validateCompetitorTeams(
 
   return packedOut;
 }
+
+export function validateHarvestedTeams(rawInput: string | string[], formatId: string): string[] {
+  const format = toID(formatId);
+  const dex = teams.getDex(format);
+  const validator = getValidator(format);
+  const chunks = splitSubmittedTeams(rawInput);
+
+  if (chunks.length < 2) {
+    throw new Error(
+      `Harvested ladder ${formatId} requires at least 2 valid teams (received ${chunks.length}).`
+    );
+  }
+
+  const packedOut: string[] = [];
+  const distinctSpeciesSets = new Set<string>();
+  for (let i = 0; i < chunks.length; i++) {
+    const {canonicalPacked, speciesSet} = validateAndCanonicalizeSingleTeam(
+      dex,
+      validator,
+      chunks[i],
+      i
+    );
+    packedOut.push(canonicalPacked);
+    distinctSpeciesSets.add([...speciesSet].sort().join('|'));
+  }
+
+  if (distinctSpeciesSets.size < 2) {
+    throw new Error(
+      `Harvested ladder ${formatId} requires at least 2 non-mirror teams with distinct species.`
+    );
+  }
+
+  return packedOut;
+}

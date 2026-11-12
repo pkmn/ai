@@ -959,7 +959,8 @@ function renderSingleLadderArtifact(opts: {
 
   if (entries.length === 0) {
     const msg = l.status === 'upcoming'
-      ? `${escapeHtml(l.name)} ladder is upcoming — submissions are not open yet.`
+      ? `${escapeHtml(l.name)} ladder is upcoming — accepting initial entries before matchmaking ` +
+        'begins.'
       : isArchived
         ? `${escapeHtml(l.name)} archived with no completed entries.`
         : `No active entries on ${escapeHtml(l.name)} yet.`;

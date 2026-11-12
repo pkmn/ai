@@ -210,7 +210,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
 
     // 1. Pre-launch (all ladders 'upcoming'):
     //    - 'rookie' (qualified omitted) sees Status: Pending + disabled fieldset
-    //    - 'pre' (qualified: true) sees Status: Qualified + disabled fieldset
+    //    - 'pre' (qualified: true) sees Status: Eligible + (upcoming) checkboxes + enabled fieldset
     const rookiePreLaunch = await realFetch(`${baseUrl}/account`, {
       headers: {Cookie: cookieFor('rookie')},
     });
@@ -223,56 +223,13 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       headers: {Cookie: cookieFor('pre')},
     });
     expect(prePreLaunch.status).toBe(200);
-    const preClosedHtml = await prePreLaunch.text();
-    expect(preClosedHtml).toContain('>Qualified<');
-    expect(preClosedHtml).toContain('<fieldset class="form-fieldset" disabled>');
+    const preUpcomingHtml = await prePreLaunch.text();
+    expect(preUpcomingHtml).toContain('>Eligible<');
+    expect(preUpcomingHtml).toContain('(upcoming)');
+    expect(preUpcomingHtml).toContain('value="gen3ou20261109"');
+    expect(preUpcomingHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
 
-    // Submitting while Qualified (before ladders open) returns 403
-    const prematureSub = await realFetch(`${baseUrl}/api/submissions`, {
-      method: 'POST',
-      headers: {
-        Cookie: cookieFor('pre'),
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        version: '1.0.0',
-        package: 'bundle',
-        url: 'https://example.com/0-error-1.0.0.tar.zst',
-        sha256: SHA_A,
-        ladders: ['RBY'],
-      }),
-    });
-    expect(prematureSub.status).toBe(403);
-
-    // Pending developer ('rookie') CAN edit the wiki even before qualification!
-    const wikiSave = await realFetch(`${baseUrl}/wiki/Newcomer`, {
-      method: 'POST',
-      headers: {
-        Cookie: cookieFor('rookie'),
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        content: '# Newcomer\n\nWork in progress.',
-        message: 'Initial project notes',
-        action: 'save',
-      }).toString(),
-      redirect: 'manual',
-    });
-    expect(wikiSave.status).toBe(303);
-
-    // 2. Bring RBY and SV online while ADV/RAND/VGC stay 'upcoming':
-    //    - 'rookie' stays Pending (still disabled, 403 on submit)
-    //    - 'pre' becomes Eligible (fieldset enabled; ADV checkbox remains disabled!)
-    openLadders(['gen1ou20261109', 'gen9ou20261109']);
-
-    const rookieAfterOpen = await realFetch(`${baseUrl}/account`, {
-      headers: {Cookie: cookieFor('rookie')},
-    });
-    const rookieOpenHtml = await rookieAfterOpen.text();
-    expect(rookieOpenHtml).toContain('>Pending<');
-    expect(rookieOpenHtml).toContain('<fieldset class="form-fieldset" disabled>');
-
+    // Pending developer ('rookie') still receives 403 on ladder submissions
     const rookieBlockedSub = await realFetch(`${baseUrl}/api/submissions`, {
       method: 'POST',
       headers: {
@@ -290,16 +247,92 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     });
     expect(rookieBlockedSub.status).toBe(403);
 
+    // Pending developer ('rookie') CAN edit the wiki even before qualification!
+    const wikiSave = await realFetch(`${baseUrl}/wiki/Newcomer`, {
+      method: 'POST',
+      headers: {
+        Cookie: cookieFor('rookie'),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        content: '# Newcomer\n\nWork in progress.',
+        message: 'Initial project notes',
+        action: 'save',
+      }).toString(),
+      redirect: 'manual',
+    });
+    expect(wikiSave.status).toBe(303);
+
+    // Approved developer ('pre') CAN submit to an 'upcoming' ladder (ADV) -> 201!
+    const upcomingLadderSub = await realFetch(`${baseUrl}/api/submissions`, {
+      method: 'POST',
+      headers: {
+        Cookie: cookieFor('pre'),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        version: '0.9.0',
+        package: 'bundle',
+        url: 'https://example.com/0-error-0.9.0.tar.zst',
+        sha256: SHA_A,
+        ladders: ['ADV'],
+      }),
+    });
+    expect(upcomingLadderSub.status).toBe(201);
+    const advVer = (await upcomingLadderSub.json() as {versionId: number});
+    db.applySubmissionStatus({versionId: advVer.versionId, smokeStatus: 'passed', now: currentNow});
+
+    // Entry on 'upcoming' ADV has matches=0 & se=350, yet after cooldown refund 'pre' remains
+    // Eligible (upcoming ladders do not require settlement before matchmaking starts).
+    db.refundCooldown('0-error');
+    expect(db.computeAgentSubmissionStatus(db.getAgentBySlug('0-error')!.id, currentNow)).toEqual({
+      label: 'Eligible',
+      canSubmit: true,
+    });
+
+    // Clean up test submission before checking closed/settled/open transitions
+    db.db.prepare('DELETE FROM ladder_entries WHERE version_id = ?').run(advVer.versionId);
+    db.db.prepare('DELETE FROM agent_ladder_stats').run();
+    db.db.prepare('DELETE FROM agent_versions WHERE id = ?').run(advVer.versionId);
+
+    // 2. When no ladders are 'upcoming' or 'active' (all 'settling'), 'pre' shows Qualified
+    db.db.prepare("UPDATE ladders SET status = 'settling'").run();
+    const preClosed = await realFetch(`${baseUrl}/account`, {
+      headers: {Cookie: cookieFor('pre')},
+    });
+    const preClosedHtml = await preClosed.text();
+    expect(preClosedHtml).toContain('>Qualified<');
+    expect(preClosedHtml).toContain('<fieldset class="form-fieldset" disabled>');
+
+    const closedSub = await realFetch(`${baseUrl}/api/submissions`, {
+      method: 'POST',
+      headers: {
+        Cookie: cookieFor('pre'),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/0-error-1.0.0.tar.zst',
+        sha256: SHA_A,
+        ladders: ['RBY'],
+      }),
+    });
+    expect(closedSub.status).toBe(403);
+
+    // Submitting to a 'settling' ladder once RBY/SV open returns 400
+    openLadders(['gen1ou20261109', 'gen9ou20261109']);
     const preOpen = await realFetch(`${baseUrl}/account`, {
       headers: {Cookie: cookieFor('pre')},
     });
     const preOpenHtml = await preOpen.text();
     expect(preOpenHtml).toContain('>Eligible<');
     expect(preOpenHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
-    expect(preOpenHtml).toContain('value="gen3ou20261109" disabled');
+    expect(preOpenHtml).not.toContain('value="gen3ou20261109"');
 
-    // Submitting to an 'upcoming' ladder (ADV) is rejected with 400
-    const upcomingLadderSub = await realFetch(`${baseUrl}/api/submissions`, {
+    const settlingSub = await realFetch(`${baseUrl}/api/submissions`, {
       method: 'POST',
       headers: {
         Cookie: cookieFor('pre'),
@@ -314,7 +347,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         ladders: ['ADV'],
       }),
     });
-    expect(upcomingLadderSub.status).toBe(400);
+    expect(settlingSub.status).toBe(400);
   });
 
   test('scopes Discord per developer while sharing Active and History tables', async () => {

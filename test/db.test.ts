@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import {Teams} from '@pkmn/sim';
+
 import {
   Database,
   LADDERS_FILE,
@@ -12,7 +14,9 @@ import {
 } from '../db';
 import * as arena from '../server/arena';
 import * as smogon from '../server/smogon';
+import {validateHarvestedTeams} from '../server/teams';
 import {validateAgentName, validateVersion} from '../static/util';
+import {generateValidHarvestedTeams, generateValidVgcTeams} from '../tools/mock';
 
 describe('db/schema/*.sql & db/migration/* lifecycle', () => {
   let tmpDir: string;
@@ -37,6 +41,7 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
       'developers.sql',
       'discord-members.sql',
       'ladder-entries.sql',
+      'ladder-teams.sql',
       'ladders.sql',
       'matches.sql',
       'pair-aggregates.sql',
@@ -707,7 +712,7 @@ describe('Smogon lookup & projects.yml arena sync', () => {
     const db = new Database(':memory:');
     try {
       db.syncLadders(LADDERS_FILE, 1_760_000_000);
-      db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_010);
+      db.db.prepare("UPDATE ladders SET status = 'active' WHERE id = 'gen1ou20261109'").run();
 
       // Initial state: scheibo owns 0 ERROR (Project A), pmariglia owns Foul Play (Project B)
       db.syncProjectsFromYaml(`
@@ -872,5 +877,140 @@ describe('Smogon lookup & projects.yml arena sync', () => {
     // Exact midnight start -> previous-day 00:00:00 UTC
     const prevDayMidnight = Math.floor(Date.parse('2026-11-14T00:00:00Z') / 1000);
     expect(getTournamentClosesAt(sameDayMidnight)).toBe(prevDayMidnight);
+  });
+
+  test('validates harvested ladder_teams and enforces setLadderStatus activation checks', () => {
+    const db = new Database(':memory:');
+    try {
+      db.syncLadders(LADDERS_FILE, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      alpha: alpha.1
+- name: Beta
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      beta: beta.2
+- name: Gamma
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      gamma: gamma.3
+- name: Delta
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      delta: delta.4
+`, undefined, 1_760_000_000);
+
+      // Harvested teams validation rejects < 2 teams, mirror pairs, and illegal sets
+      const rbyTeams = generateValidHarvestedTeams('gen1ou', 4);
+      expect(() => validateHarvestedTeams([rbyTeams[0]], 'gen1ou')).toThrow(/at least 2/);
+      expect(() => validateHarvestedTeams([rbyTeams[0], rbyTeams[0]], 'gen1ou'))
+        .toThrow(/non-mirror/);
+      expect(() => validateHarvestedTeams([rbyTeams[0], 'NotAPokemon\n- Tackle'], 'gen1ou'))
+        .toThrow(/6 Pokémon/);
+
+      const packedRby = validateHarvestedTeams(rbyTeams, 'gen1ou');
+      expect(packedRby).toHaveLength(4);
+      expect(() => db.replaceLadderTeams('gen9randombattle20261109', packedRby, 1_760_000_010))
+        .toThrow(/harvested/);
+
+      // Harvested RBY cannot activate without teams -> entries -> anchor
+      expect(() => db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_020))
+        .toThrow(/harvested teams have not been uploaded yet/);
+
+      expect(db.replaceLadderTeams('gen1ou20261109', packedRby, 1_760_000_020)).toBe(4);
+      expect(db.hasLadderTeams('gen1ou20261109')).toBe(true);
+      expect(db.getLadderTeams('gen1ou20261109')).toEqual(packedRby);
+
+      expect(() => db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_030))
+        .toThrow(/requires at least 2 distinct active entries \(found 0\)/);
+
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      const vA = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_040,
+      });
+      const vB = db.createSubmission({
+        agentId: beta.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/beta.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_040,
+      });
+      db.applySubmissionStatus({versionId: vA.id, smokeStatus: 'passed', now: 1_760_000_050});
+      db.applySubmissionStatus({versionId: vB.id, smokeStatus: 'passed', now: 1_760_000_050});
+
+      expect(() => db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_060))
+        .toThrow(/no active 1500-Elo anchor/);
+
+      db.setLadderAnchor('gen1ou20261109', 'alpha', '1.0.0', 1_760_000_070);
+      const activeRby = db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_080);
+      expect(activeRby.status).toBe('active');
+
+      // Settle RBY entries so alpha & beta can submit separate VGC versions
+      db.db.prepare(
+        `UPDATE ladder_entries
+         SET se = 20, matches = 30, settled_at = 1760000090
+         WHERE ladder_id = 'gen1ou20261109'`
+      ).run();
+
+      // Pools VGC ladder enforces min = 4 with active team rosters + anchor
+      const vgcAgents = ['alpha', 'beta', 'gamma', 'delta'];
+      for (let i = 0; i < 3; i++) {
+        const agent = db.getAgentBySlug(vgcAgents[i])!;
+        const packedVgc = generateValidVgcTeams(20, i).map(p => Teams.pack(Teams.import(p)));
+        const sub = db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.0-vgc',
+          package: 'bundle',
+          url: `https://example.com/${vgcAgents[i]}-vgc.tar.zst`,
+          sha256: String(i + 1).repeat(64),
+          ladderIds: ['gen9championsvgc2026regmc'],
+          teamsByLadder: {gen9championsvgc2026regmc: packedVgc},
+          now: 1_762_000_000,
+        });
+        db.applySubmissionStatus({versionId: sub.id, smokeStatus: 'passed', now: 1_762_000_010});
+      }
+      db.setLadderAnchor('gen9championsvgc2026regmc', 'alpha', '1.0.0-vgc', 1_762_000_020);
+      expect(() => db.setLadderStatus('gen9championsvgc2026regmc', 'active', 1_762_000_030))
+        .toThrow(/requires at least 4 distinct active entries \(found 3\)/);
+
+      const delta = db.getAgentBySlug('delta')!;
+      const deltaVgc = db.createSubmission({
+        agentId: delta.id,
+        version: '1.0.0-vgc',
+        package: 'bundle',
+        url: 'https://example.com/delta-vgc.tar.zst',
+        sha256: '4'.repeat(64),
+        ladderIds: ['gen9championsvgc2026regmc'],
+        teamsByLadder: {
+          gen9championsvgc2026regmc: generateValidVgcTeams(20, 3)
+            .map(p => Teams.pack(Teams.import(p))),
+        },
+        now: 1_762_000_040,
+      });
+      db.applySubmissionStatus({versionId: deltaVgc.id, smokeStatus: 'passed', now: 1_762_000_050});
+      const activeVgc = db.setLadderStatus('gen9championsvgc2026regmc', 'active', 1_762_000_060);
+      expect(activeVgc.status).toBe('active');
+    } finally {
+      db.close();
+    }
   });
 });

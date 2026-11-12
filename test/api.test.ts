@@ -10,6 +10,7 @@ import {Database} from '../db';
 import {encryptSecret} from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
+import {generateValidHarvestedTeams} from '../tools/mock';
 import {runPkmnCli} from '../tools/pkmn';
 
 const AUTH_CFG: auth.Config = {
@@ -1074,11 +1075,11 @@ describe('pkmn CLI (tools/pkmn.ts)', () => {
         expect(oldVgc.status).toBe('archived');
         expect(oldVgc.name).toBe('VGC 2026 Reg M-C');
         expect(oldVgc.slot).toBe('vgc');
-        expect(newVgc.status).toBe('active');
+        expect(newVgc.status).toBe('upcoming');
         expect(newVgc.name).toBe('VGC');
         expect(newVgc.teams).toBe(20);
 
-        // Rotate RBY while unsettled entry exists -> enters 'settling', then archives on match
+        // Rotate RBY while unsettled entry exists -> enters 'settling', stages successor upcoming
         const metaAgent = db.getAgentBySlug('metamon')!;
         const vMeta = db.createSubmission({
           agentId: metaAgent.id,
@@ -1103,7 +1104,7 @@ describe('pkmn CLI (tools/pkmn.ts)', () => {
           {db, now: 1_760_000_530, log}
         );
         expect(db.getLadder('gen1ou20261109')!.status).toBe('settling');
-        expect(db.getLadder('gen1ou20270101')!.status).toBe('active');
+        expect(db.getLadder('gen1ou20270101')!.status).toBe('upcoming');
 
         // Force settle remaining entry via ladderStatus: 'archived' on match-complete
         const finalRes = db.recordCompletedMatch({
@@ -1324,8 +1325,10 @@ describe('pkmn CLI (tools/pkmn.ts)', () => {
     const db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
     db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
-    db.setLadderStatus('gen1ou20261109', 'active', 1_700_000_000);
-    db.setLadderStatus('gen9championsvgc2026regmc', 'active', 1_700_000_000);
+    db.db.prepare("UPDATE ladders SET status = 'active' WHERE id IN (?, ?)").run(
+      'gen1ou20261109',
+      'gen9championsvgc2026regmc'
+    );
 
     const fp = db.getAgentBySlug('foul-play')!;
     const zero = db.getAgentBySlug('0-error')!;
@@ -1435,4 +1438,172 @@ describe('pkmn CLI (tools/pkmn.ts)', () => {
       fs.rmSync(tmpDir, {recursive: true, force: true});
     }
   });
+
+  test('uploads/fetches harvested teams over HTTP & CLI and guards set-ladder-status active',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-teams-'));
+      const db = new Database(':memory:');
+      const upcomingYaml = LADDERS_YAML.replace(/status: active/g, 'status: upcoming');
+      db.syncLaddersFromYaml(upcomingYaml, 1_700_000_000);
+      db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
+
+      const events: string[] = [];
+      const authInstance = new auth.Auth({db, config: AUTH_CFG});
+      const app = polka();
+      const ctrl = arena.register(app, {
+        db,
+        auth: authInstance,
+        publicDir: tmpDir,
+        onUpdate: reason => {
+          events.push(reason);
+        },
+      });
+      const srv = await startTestServer(app);
+      const rbyTeams = generateValidHarvestedTeams('gen1ou', 4);
+      const rbyPaste = rbyTeams.map((t, i) => `=== [gen1ou] Team ${i + 1} ===\n${t}`).join('\n\n');
+
+      try {
+        // Pending-submissions includes upcoming ladders
+        const client = new arena.Client({
+          serverUrl: srv.baseUrl,
+          arenaSecret: AUTH_CFG.arenaSecret!,
+        });
+        const pending = await client.getPendingSubmissions();
+        expect(pending.ladders.map(l => `${l.id}:${l.status}`))
+          .toContain('gen1ou20261109:upcoming');
+
+        // Unauthenticated requests return 401
+        const unauthGet = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`);
+        expect(unauthGet.status).toBe(401);
+        const unauthPut = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
+          method: 'PUT',
+          headers: {'content-type': 'text/plain'},
+          body: rbyPaste,
+        });
+        expect(unauthPut.status).toBe(401);
+
+        // Missing GET returns 404; non-harvested ladder returns 400
+        const emptyGet = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
+          headers: {authorization: `Bearer ${AUTH_CFG.arenaSecret}`},
+        });
+        expect(emptyGet.status).toBe(404);
+
+        const nonHarvestedPut = await fetch(
+          `${srv.baseUrl}/api/arena/ladders/gen9championsvgc2026regmc/teams`,
+          {
+            method: 'PUT',
+            headers: {
+              authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
+              'content-type': 'text/plain',
+            },
+            body: rbyPaste,
+          }
+        );
+        expect(nonHarvestedPut.status).toBe(400);
+
+        const badTeamPut = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
+          method: 'PUT',
+          headers: {
+            authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({teams: [rbyTeams[0], rbyTeams[0]]}),
+        });
+        expect(badTeamPut.status).toBe(400);
+        expect(((await badTeamPut.json()) as {error: string}).error).toContain('non-mirror');
+
+        // Upload text/plain paste over HTTP, then fetch & verify 304 ETag caching
+        const putRes = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
+          method: 'PUT',
+          headers: {
+            authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
+            'content-type': 'text/plain; charset=utf-8',
+          },
+          body: rbyPaste,
+        });
+        expect(putRes.status).toBe(200);
+        const putJson = await putRes.json() as arena.LadderTeamsUploadResponse;
+        expect(putJson.ok).toBe(true);
+        expect(putJson.count).toBe(4);
+        expect(events).toEqual(['ladder-teams']);
+
+        const getRes = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
+          headers: {authorization: `Bearer ${AUTH_CFG.arenaSecret}`},
+        });
+        expect(getRes.status).toBe(200);
+        const etag = getRes.headers.get('etag')!;
+        expect(etag).toBe(`"${putJson.sha256}"`);
+        const fetched = await getRes.json() as arena.LadderTeamsResponse;
+        expect(fetched.teams).toHaveLength(4);
+
+        const cachedRes = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
+          headers: {
+            authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
+            'if-none-match': etag,
+          },
+        });
+        expect(cachedRes.status).toBe(304);
+
+        // CLI upload-ladder-teams & set-ladder-status precondition enforcement
+        const rbyFile = path.join(tmpDir, 'rby-teams.txt');
+        const rbyCliTeams = generateValidHarvestedTeams('gen1ou', 3);
+        fs.writeFileSync(
+          rbyFile,
+          rbyCliTeams.map((t, i) => `=== [gen1ou] Team ${i + 1} ===\n${t}`).join('\n\n'),
+          'utf8'
+        );
+        const logs: string[] = [];
+        await runPkmnCli(
+          ['upload-ladder-teams', 'gen1ou20261109', rbyFile],
+          {db, now: 1_700_000_010, log: s => logs.push(s)}
+        );
+        expect(db.countLadderTeams('gen1ou20261109')).toBe(3);
+
+        await expect(
+          runPkmnCli(['set-ladder-status', 'gen1ou20261109', 'active'], {db, now: 1_700_000_020})
+        ).rejects.toThrow(/requires at least 2 distinct active entries/);
+
+        const zero = db.getAgentBySlug('0-error')!;
+        const fp = db.getAgentBySlug('foul-play')!;
+        const vZ = db.createSubmission({
+          agentId: zero.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/zero-rby.tar.zst',
+          sha256: SHA,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_700_000_030,
+        });
+        const vF = db.createSubmission({
+          agentId: fp.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/fp-rby.tar.zst',
+          sha256: 'b'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: 1_700_000_030,
+        });
+        db.applySubmissionStatus({versionId: vZ.id, smokeStatus: 'passed', now: 1_700_000_040});
+        db.applySubmissionStatus({versionId: vF.id, smokeStatus: 'passed', now: 1_700_000_040});
+
+        await expect(
+          runPkmnCli(['set-ladder-status', 'gen1ou20261109', 'active'], {db, now: 1_700_000_050})
+        ).rejects.toThrow(/no active 1500-Elo anchor/);
+
+        await runPkmnCli(
+          ['set-anchor', 'gen1ou20261109', 'foul-play', '1.0.0'],
+          {db, now: 1_700_000_060, log: s => logs.push(s)}
+        );
+        await runPkmnCli(
+          ['set-ladder-status', 'gen1ou20261109', 'active'],
+          {db, now: 1_700_000_070, log: s => logs.push(s)}
+        );
+        expect(db.getLadder('gen1ou20261109')!.status).toBe('active');
+      } finally {
+        ctrl.close();
+        await srv.close();
+        db.close();
+        fs.rmSync(tmpDir, {recursive: true, force: true});
+      }
+    });
 });

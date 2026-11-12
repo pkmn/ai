@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS ladders (
   -- Discord role Snowflake granted to owners of the settled #1-ranked agent on this ladder, or NULL.
   discord TEXT,
   -- Lifecycle state:
-  --   'upcoming': visible as disabled on /account, not yet open for submissions or matchmaking
+  --   'upcoming': open for initial competitor submissions before matchmaking begins
   --   'active': open for submissions and active-learning matchmaking
   --   'settling': closed to new submissions before archiving; runs until all active entries settle
   --   'archived': frozen historical leaderboard retained for profile/archive browsing

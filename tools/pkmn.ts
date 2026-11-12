@@ -11,6 +11,7 @@ import * as db from '../db';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as smogon from '../server/smogon';
+import {validateHarvestedTeams} from '../server/teams';
 import {syncStaticLiveBanner} from '../static/build';
 
 export interface Options {
@@ -35,6 +36,7 @@ const USAGE = [
   '  refund-cooldown <agent-slug>',
   '  set-anchor <ladder_id> <agent-slug> <version>',
   '  set-ladder-status <ladder_id> <upcoming|active|settling|archived>',
+  '  upload-ladder-teams <ladder_id> <teams-file>',
   '  rotate-ladder <old_ladder_id> --name "..." [--new <new_ladder_id>] ' +
     '[--new-name "..."] [--format <format>] [--team <mode>] [--min <n>] [--teams <n>]',
   '  reassign-developer <github-login> <target-agent-slug|--none> ' +
@@ -201,6 +203,29 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         log(`Ladder ${updated.id} (${updated.name}) -> status=${updated.status}`);
         return;
       }
+      case 'upload-ladder-teams': {
+        const [ladderId, teamsFile] = positional.slice(1);
+        if (!ladderId || !teamsFile) {
+          throw new Error('Usage: pkmn upload-ladder-teams <ladder_id> <teams-file>');
+        }
+        if (!fs.existsSync(teamsFile) || !fs.statSync(teamsFile).isFile()) {
+          throw new Error(`Teams file not found: ${teamsFile}`);
+        }
+        const ladder = database.getLadder(ladderId);
+        if (!ladder) {
+          throw new Error(`Unknown ladder "${ladderId}"`);
+        }
+        if (ladder.team !== 'harvested') {
+          throw new Error(
+            'Harvested teams can only be uploaded to harvested ladders ' +
+            `("${ladder.id}" has team="${ladder.team}")`
+          );
+        }
+        const packed = validateHarvestedTeams(fs.readFileSync(teamsFile, 'utf8'), ladder.format);
+        const count = database.replaceLadderTeams(ladder.id, packed, now);
+        log(`Uploaded ${count} validated teams for ${ladder.id} (${ladder.format})`);
+        return;
+      }
       case 'rotate-ladder': {
         const [oldLadderId] = positional.slice(1);
         const archivedName = flags.get('name');
@@ -232,7 +257,8 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           now,
         });
         const nextMsg = rotated.newLadder
-          ? ` -> activated ${rotated.newLadder.id} ("${rotated.newLadder.name}")`
+          ? ` -> staged ${rotated.newLadder.id} ("${rotated.newLadder.name}", ` +
+            `status=${rotated.newLadder.status})`
           : '';
         log(
           `Rotated ${rotated.oldLadder.id} ("${rotated.oldLadder.name}", ` +
