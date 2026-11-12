@@ -362,6 +362,16 @@ export class Database {
     return teams.getTeamsForAgentLadder(this.db, ladderId, agentId, status);
   }
 
+  replaceSavedTeams(ladderId: string, agentId: number, packedTeams: string[], now?: number) {
+    this.inTransaction(() => {
+      teams.replaceSavedTeams(this.db, ladderId, agentId, packedTeams, now);
+    });
+  }
+
+  clearSavedTeams(ladderId: string, agentId: number) {
+    teams.clearSavedTeams(this.db, ladderId, agentId);
+  }
+
   getActiveRosterForLadder(ladderId: string): teams.LadderRosterEntry[] {
     return teams.getActiveRosterForLadder(this.db, ladderId);
   }

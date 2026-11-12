@@ -1,6 +1,6 @@
 import {DatabaseSync} from 'node:sqlite';
 
-export type TeamPoolStatus = 'pending' | 'active';
+export type TeamPoolStatus = 'saved' | 'pending' | 'active';
 
 export interface AgentLadderTeamRow {
   agentId: number;
@@ -99,17 +99,47 @@ export function getTeamsForAgentLadder(
   return (rows as Array<{packed_team: string}>).map(r => r.packed_team);
 }
 
+export function replaceSavedTeams(
+  db: DatabaseSync,
+  ladderId: string,
+  agentId: number,
+  packedTeams: string[],
+  now = Math.floor(Date.now() / 1000)
+) {
+  db.prepare(
+    `DELETE FROM agent_ladder_teams
+     WHERE ladder_id = ? AND agent_id = ? AND status = 'saved'`
+  ).run(ladderId, agentId);
+  const insertTeam = db.prepare(`
+    INSERT INTO agent_ladder_teams (
+      agent_id, ladder_id, team_index, packed_team, status, submitted_at
+    )
+    VALUES (?, ?, ?, ?, 'saved', ?)
+  `);
+  for (let i = 0; i < packedTeams.length; i++) {
+    insertTeam.run(agentId, ladderId, i + 1, packedTeams[i], now);
+  }
+}
+
+export function clearSavedTeams(db: DatabaseSync, ladderId: string, agentId: number) {
+  db.prepare(
+    `DELETE FROM agent_ladder_teams
+     WHERE ladder_id = ? AND agent_id = ? AND status = 'saved'`
+  ).run(ladderId, agentId);
+}
+
 // Stages uploaded team rosters under `status = 'pending'` while the accompanying version awaits
 // offline smoke testing on the Mac mini, leaving any live `'active'` roster untouched until pass.
+// Any staged `'saved'` partial/complete progress for the same ladder is cleared once promoted here.
 export function replacePendingTeams(
   db: DatabaseSync,
   agentId: number,
   teamsByLadder: Record<string, string[]>,
   now: number
 ) {
-  const clearPending = db.prepare(
+  const clearStaged = db.prepare(
     `DELETE FROM agent_ladder_teams
-     WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'`
+     WHERE ladder_id = ? AND agent_id = ? AND status IN ('saved', 'pending')`
   );
   const insertTeam = db.prepare(`
     INSERT INTO agent_ladder_teams (
@@ -118,7 +148,7 @@ export function replacePendingTeams(
     VALUES (?, ?, ?, ?, 'pending', ?)
   `);
   for (const [ladderId, packedTeams] of Object.entries(teamsByLadder)) {
-    clearPending.run(ladderId, agentId);
+    clearStaged.run(ladderId, agentId);
     for (let i = 0; i < packedTeams.length; i++) {
       insertTeam.run(agentId, ladderId, i + 1, packedTeams[i], now);
     }

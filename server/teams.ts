@@ -481,14 +481,26 @@ function validateAndCanonicalizeSingleTeam(
   // identical formes via `canonSpecies` so forme swaps cannot game species distance.
   const canonicalSets = Team.canonicalize(structuredClone(rawSets), dex);
   const canonicalPacked = new Team(canonicalSets, dex).pack();
+  const entry = toUniquenessEntry(dex, canonicalSets, label);
 
-  const uniquenessSets = structuredClone(canonicalSets);
+  return {
+    canonicalPacked,
+    uniquenessSets: entry.sets,
+    speciesSet: entry.speciesSet,
+  };
+}
+
+function toUniquenessEntry(
+  dex: ModdedDex,
+  sets: Partial<PokemonSet>[],
+  id: string
+): PoolEntry {
+  const uniquenessSets = structuredClone(sets);
   for (const s of uniquenessSets) {
     s.species = teams.canonSpecies(dex, s.species);
   }
   const speciesSet = new Set(uniquenessSets.map(s => String(s.species ?? '')));
-
-  return {canonicalPacked, uniquenessSets, speciesSet};
+  return {id, sets: uniquenessSets, speciesSet};
 }
 
 function minDistanceAgainstPool(
@@ -585,6 +597,125 @@ export function validateCompetitorTeams(
   }
 
   return packedOut;
+}
+
+export interface RejectedTeam {
+  index: number;
+  reason: string;
+  closestId?: string;
+  distance?: number;
+}
+
+export interface IncrementalValidationResult {
+  allSaved: string[];
+  newlySavedCount: number;
+  requiredCount: number;
+  remainingCount: number;
+  rejections: RejectedTeam[];
+  complete: boolean;
+}
+
+export function validateCompetitorTeamsIncremental(
+  rawInput: string | string[],
+  options: Options,
+  existingSavedPacked: string[] = []
+): IncrementalValidationResult {
+  const requiredCount = options.teams;
+  const threshold = options.threshold ?? teams.THRESHOLD;
+  const format = toID(options.format);
+  const dex = teams.getDex(format);
+  const validator = getValidator(format);
+  const defaultLevel =
+    format.includes('vgc') || format.includes('bss') || format.includes('champions')
+      ? 50
+      : 100;
+
+  const refPool = loadReferencePool(format, options.pools);
+  const workingPool: PoolEntry[] = [...refPool];
+  const allSaved = [...existingSavedPacked];
+  const preExistingSet = new Set(existingSavedPacked);
+  const seenExistingInPaste = new Set<string>();
+
+  for (let i = 0; i < existingSavedPacked.length; i++) {
+    const sets = teams.parseTeam(dex, existingSavedPacked[i]);
+    workingPool.push(toUniquenessEntry(dex, sets, `saved-team-${i + 1}`));
+  }
+
+  const chunks = splitSubmittedTeams(rawInput);
+  const rejections: RejectedTeam[] = [];
+  let newlySavedCount = 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      const {canonicalPacked, uniquenessSets, speciesSet} = validateAndCanonicalizeSingleTeam(
+        dex,
+        validator,
+        chunks[i],
+        i
+      );
+
+      // Re-uploading a full .txt after replacing bad teams keeps already-saved distinct teams,
+      // while a second duplicate copy within the same paste is still checked and rejected.
+      if (preExistingSet.has(canonicalPacked) && !seenExistingInPaste.has(canonicalPacked)) {
+        seenExistingInPaste.add(canonicalPacked);
+        continue;
+      }
+
+      if (allSaved.length >= requiredCount) {
+        rejections.push({
+          index: i + 1,
+          reason:
+            `Team #${i + 1} skipped: ${requiredCount}/${requiredCount} distinct teams ` +
+            'already saved.',
+        });
+        continue;
+      }
+
+      if (workingPool.length > 0) {
+        const {minD, closestId} = minDistanceAgainstPool(
+          dex,
+          {sets: uniquenessSets, speciesSet},
+          workingPool,
+          defaultLevel
+        );
+        if (minD < threshold) {
+          rejections.push({
+            index: i + 1,
+            reason:
+              `Team #${i + 1} failed uniqueness check: distance=${minD.toFixed(3)} < ` +
+              `${threshold.toFixed(2)} (closest=${closestId}).`,
+            closestId,
+            distance: minD,
+          });
+          continue;
+        }
+      }
+
+      const nextSlot = allSaved.length + 1;
+      workingPool.push({
+        id: `submitted-team-${nextSlot}`,
+        sets: uniquenessSets,
+        speciesSet,
+      });
+      allSaved.push(canonicalPacked);
+      newlySavedCount++;
+    } catch (err: any) {
+      rejections.push({
+        index: i + 1,
+        reason: err?.message || `Team #${i + 1} is invalid.`,
+      });
+    }
+  }
+
+  const remainingCount = Math.max(0, requiredCount - allSaved.length);
+  return {
+    allSaved,
+    newlySavedCount,
+    requiredCount,
+    remainingCount,
+    rejections,
+    complete: remainingCount === 0 && allSaved.length === requiredCount,
+  };
 }
 
 export function validateHarvestedTeams(rawInput: string | string[], formatId: string): string[] {

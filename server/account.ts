@@ -19,7 +19,11 @@ import {
 } from '../static/util';
 
 import {Auth} from './auth';
-import {validateCompetitorTeams} from './teams';
+import {
+  RejectedTeam,
+  splitSubmittedTeams,
+  validateCompetitorTeamsIncremental,
+} from './teams';
 
 export function deducePackageFormat(url: string): db.PackageFormat {
   const cleanPath = url.split('?')[0].toLowerCase();
@@ -350,6 +354,7 @@ export function renderAccountPage(opts: {
   tournamentStatuses?: db.TournamentSubmissionStatus[];
   currentLadders: db.LadderRow[];
   needsTeamsLadders: db.LadderRow[];
+  savedTeamsByLadder?: Map<string, number>;
   activeEntries: db.ActiveEntryView[];
   versions: db.VersionHistoryView[];
   allLadders: db.LadderRow[];
@@ -363,6 +368,7 @@ export function renderAccountPage(opts: {
     tournamentStatuses = [],
     currentLadders,
     needsTeamsLadders,
+    savedTeamsByLadder = new Map<string, number>(),
     activeEntries,
     versions,
     allLadders,
@@ -400,7 +406,14 @@ export function renderAccountPage(opts: {
     const canCheck = isOpen && status.canSubmit;
     const checked = canCheck && activeLadderIdsWithAgent.has(l.id) ? ' checked' : '';
     const disabled = canCheck ? '' : ' disabled';
-    const needsTeams = canCheck && needsTeamsIds.has(l.id) ? ' data-needs-teams="true"' : '';
+    const needsTeams = needsTeamsIds.has(l.id);
+    const savedCount = savedTeamsByLadder.get(l.id) ?? 0;
+    const requiredCount = l.teams ?? 0;
+    const teamAttrs = canCheck && needsTeams
+      ? ` data-needs-teams="true" data-required-teams="${requiredCount}" ` +
+        `data-saved-teams="${savedCount}" data-ladder-name="${escapeHtml(l.name)}" ` +
+        `data-upcoming="${l.status === 'upcoming' ? 'true' : 'false'}"`
+      : '';
     const val = escapeHtml(l.id);
     const label = escapeHtml(l.name);
     let labelAttrs = '';
@@ -412,9 +425,17 @@ export function renderAccountPage(opts: {
     } else if (l.status === 'upcoming') {
       labelAttrs = ' title="Upcoming — accepting initial entries before matchmaking begins"';
     }
-    const statusHint = l.status === 'upcoming' ? ' <span class="muted">(upcoming)</span>' : '';
+    const statusParts: string[] = [];
+    if (l.status === 'upcoming') statusParts.push('upcoming');
+    if (needsTeams && requiredCount > 0 && savedCount > 0) {
+      statusParts.push(`${savedCount}/${requiredCount} saved`);
+    }
+    const hintText = statusParts.length ? ` (${escapeHtml(statusParts.join(' · '))})` : '';
+    const statusHint = needsTeams
+      ? `<span class="muted pool-status-hint">${hintText}</span>`
+      : hintText ? `<span class="muted">${hintText}</span>` : '';
     return `<label${labelAttrs}><input type="checkbox" name="ladders" value="${val}"` +
-      `${checked}${disabled}${needsTeams}> ${label}${statusHint}</label>`;
+      `${checked}${disabled}${teamAttrs}> ${label}${statusHint}</label>`;
   }).join('\n            ');
 
   let tournamentsRowHtml = '';
@@ -454,20 +475,45 @@ export function renderAccountPage(opts: {
   let poolTeamsRowHtml = '';
   if (firstPoolLadder?.teams && status.canSubmit) {
     const count = firstPoolLadder.teams;
+    const saved = savedTeamsByLadder.get(firstPoolLadder.id) ?? 0;
+    const remaining = Math.max(0, count - saved);
+    const pct = count > 0 ? Math.min(100, Math.round((saved / count) * 100)) : 0;
+    const progressText = remaining === 0
+      ? `<strong>${saved} / ${count}</strong> distinct teams saved &mdash; ready to submit`
+      : `<strong>${saved} / ${count}</strong> distinct teams saved &mdash; ` +
+        `${remaining} more needed`;
     const placeholder =
-      `Paste ${count} Showdown teams (=== [format] Team Name ===) ` +
-      '— locked for this seasonal ladder on first pass';
+      `Paste up to ${count} Showdown teams (=== [format] Team Name ===) — ` +
+      'valid distinct teams save immediately; locked for this season once your build passes';
+    const clearHide = saved > 0 ? '' : ' hide';
     poolTeamsRowHtml =
       '<label for="sub-teams" class="pool-teams-field hide">Teams</label>\n' +
-      '        <div class="pool-teams-field hide">\n' +
+      '        <div class="pool-teams-field hide" id="pool-teams-panel">\n' +
+      '          <div class="teams-progress" id="pool-progress-box">\n' +
+      '            <div class="teams-progress-head">\n' +
+      `              <span id="pool-progress-text">${progressText}</span>\n` +
+      '              <span class="muted">1-NN &ge; 1.30</span>\n' +
+      '            </div>\n' +
+      '            <div class="progress-track"><div class="progress-fill" ' +
+      `id="pool-progress-fill" style="width:${pct}%"></div></div>\n` +
+      '          </div>\n' +
       '          <textarea id="sub-teams" name="teams" class="input-text" ' +
       `spellcheck="false" placeholder="${placeholder}"></textarea>\n` +
       '          <div class="teams-tools">\n' +
-      `            <span class="muted">Required once per season (${count} ` +
-      'legal teams, 1-NN distance &ge; 1.30).</span>\n' +
-      '            <label class="btn-subtle">Load .txt ' +
+      '            <span class="muted">Paste all teams or add remaining ones in ' +
+      'batches.</span>\n' +
+      '            <div class="teams-actions">\n' +
+      '              <label class="btn-subtle">Load .txt ' +
       '<input id="sub-teams-file" type="file" accept=".txt,text/plain" class="hide"></label>\n' +
+      '              <button type="button" id="validate-teams-btn" class="btn-subtle">' +
+      'Validate &amp; Save Teams</button>\n' +
+      `              <button type="button" id="clear-teams-btn" class="btn-subtle${clearHide}">` +
+      'Clear Saved</button>\n' +
+      '            </div>\n' +
       '          </div>\n' +
+      '          <div id="teams-feedback" class="teams-feedback hide">' +
+      '<div id="teams-feedback-summary"></div>' +
+      '<ul id="teams-rejections" class="teams-rejections"></ul></div>\n' +
       '        </div>';
   }
 
@@ -734,6 +780,30 @@ export function register(app: polka.Polka, options: Options) {
         l.team === 'pools' &&
         !db.hasActiveLadderTeams(l.id, agent.id)
     );
+    const savedTeamsByLadder = new Map<string, number>();
+    const savedTeamsJson: Record<string, {
+      savedCount: number;
+      requiredCount: number;
+      remainingCount: number;
+      complete: boolean;
+      locked: boolean;
+    }> = {};
+    for (const l of currentLadders) {
+      if (l.team !== 'pools' || !l.teams) continue;
+      const locked = db.hasActiveLadderTeams(l.id, agent.id);
+      const savedCount = locked
+        ? l.teams
+        : db.getTeamsForAgentLadder(l.id, agent.id, 'saved').length;
+      if (!locked) savedTeamsByLadder.set(l.id, savedCount);
+      const remainingCount = locked ? 0 : Math.max(0, l.teams - savedCount);
+      savedTeamsJson[l.id] = {
+        savedCount,
+        requiredCount: l.teams,
+        remainingCount,
+        complete: remainingCount === 0,
+        locked,
+      };
+    }
     const activeEntries = db.getActiveEntriesForAgent(agent.id);
     const versions = db.getVersionsForAgent(agent.id);
 
@@ -755,6 +825,7 @@ export function register(app: polka.Polka, options: Options) {
         },
         submissionStatus: status,
         tournamentStatuses,
+        savedTeams: savedTeamsJson,
         currentLadders: currentLadders.map(l => ({
           id: l.id,
           slot: l.slot,
@@ -764,6 +835,8 @@ export function register(app: polka.Polka, options: Options) {
           teams: l.teams,
           status: l.status,
           needsTeams: needsTeamsIds.has(l.id),
+          savedCount: savedTeamsJson[l.id]?.savedCount ?? 0,
+          remainingTeams: savedTeamsJson[l.id]?.remainingCount ?? 0,
         })),
         activeEntries,
         versions,
@@ -778,6 +851,7 @@ export function register(app: polka.Polka, options: Options) {
       tournamentStatuses,
       currentLadders,
       needsTeamsLadders,
+      savedTeamsByLadder,
       activeEntries,
       versions,
       allLadders: db.getLadders(),
@@ -790,6 +864,139 @@ export function register(app: polka.Polka, options: Options) {
   app.get('/account', (req, res) => handleGetAccount(req, res, false));
   app.get('/account.json', (req, res) => handleGetAccount(req, res, true));
   app.get('/account/index.json', (req, res) => handleGetAccount(req, res, true));
+
+  const requirePoolAccount = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): db.AgentRow | undefined => {
+    const login = auth.getGitHubUser(req);
+    if (!login) {
+      sendJson(res, 401, {error: 'GitHub authentication required.'});
+      return undefined;
+    }
+    const developer = db.getDeveloperByGitHub(login);
+    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
+    if (!developer || !agent || agent.status === 'disabled') {
+      sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
+      return undefined;
+    }
+    if (agent.status === 'pending') {
+      sendJson(res, 403, {error: 'Pending accounts cannot enter ladders yet.'});
+      return undefined;
+    }
+    return agent;
+  };
+
+  app.post('/api/account/teams', async (req, res) => {
+    const agent = requirePoolAccount(req, res);
+    if (!agent) return;
+
+    let bodyObj: Record<string, unknown>;
+    try {
+      const rawBody = await readBody(req);
+      bodyObj = JSON.parse(rawBody || '{}') as Record<string, unknown>;
+    } catch (err: any) {
+      sendJson(res, err?.status ?? 400, {error: err?.message || 'Malformed request body.'});
+      return;
+    }
+
+    const ladderId = typeof bodyObj.ladderId === 'string' ? bodyObj.ladderId.trim() : '';
+    const ladder = db.getCurrentLadders().find(
+      l => l.id === ladderId && (l.status === 'upcoming' || l.status === 'active') &&
+        l.team === 'pools'
+    );
+    if (!ladder?.teams) {
+      sendJson(res, 400, {error: `Unknown or non-pool ladder "${ladderId}".`});
+      return;
+    }
+    if (db.hasActiveLadderTeams(ladder.id, agent.id)) {
+      sendJson(res, 400, {
+        error:
+          `Your ${ladder.teams} teams for ${ladder.name} (${ladder.id}) ` +
+          'are already locked for this season.',
+      });
+      return;
+    }
+
+    const rawTeams = bodyObj.teams;
+    const validTeamsInput =
+      typeof rawTeams === 'string'
+        ? rawTeams.trim().length > 0
+        : Array.isArray(rawTeams) && rawTeams.some(t => String(t ?? '').trim().length > 0);
+    if (!validTeamsInput) {
+      sendJson(res, 400, {error: 'Paste at least one team to validate.'});
+      return;
+    }
+
+    const existingSaved = db.getTeamsForAgentLadder(ladder.id, agent.id, 'saved');
+    const poolsMap = getPools();
+    const result = validateCompetitorTeamsIncremental(
+      rawTeams as string | string[],
+      {
+        format: ladder.format,
+        pools: poolsMap.get(ladder.id) ?? [],
+        teams: ladder.teams,
+      },
+      existingSaved
+    );
+
+    if (result.allSaved.length !== existingSaved.length) {
+      db.replaceSavedTeams(ladder.id, agent.id, result.allSaved, getNow());
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      ladderId: ladder.id,
+      savedCount: result.allSaved.length,
+      newlySavedCount: result.newlySavedCount,
+      requiredCount: result.requiredCount,
+      remainingCount: result.remainingCount,
+      complete: result.complete,
+      rejections: result.rejections,
+    });
+  });
+
+  app.post('/api/account/teams/clear', async (req, res) => {
+    const agent = requirePoolAccount(req, res);
+    if (!agent) return;
+
+    let bodyObj: Record<string, unknown>;
+    try {
+      const rawBody = await readBody(req);
+      bodyObj = JSON.parse(rawBody || '{}') as Record<string, unknown>;
+    } catch (err: any) {
+      sendJson(res, err?.status ?? 400, {error: err?.message || 'Malformed request body.'});
+      return;
+    }
+
+    const ladderId = typeof bodyObj.ladderId === 'string' ? bodyObj.ladderId.trim() : '';
+    const ladder = db.getCurrentLadders().find(
+      l => l.id === ladderId && (l.status === 'upcoming' || l.status === 'active') &&
+        l.team === 'pools'
+    );
+    if (!ladder?.teams) {
+      sendJson(res, 400, {error: `Unknown or non-pool ladder "${ladderId}".`});
+      return;
+    }
+    if (db.hasActiveLadderTeams(ladder.id, agent.id)) {
+      sendJson(res, 400, {
+        error:
+          `Your ${ladder.teams} teams for ${ladder.name} (${ladder.id}) ` +
+          'are already locked for this season.',
+      });
+      return;
+    }
+
+    db.clearSavedTeams(ladder.id, agent.id);
+    sendJson(res, 200, {
+      ok: true,
+      ladderId: ladder.id,
+      savedCount: 0,
+      requiredCount: ladder.teams,
+      remainingCount: ladder.teams,
+      complete: false,
+    });
+  });
 
   app.post('/api/submissions', async (req, res) => {
     const login = auth.getGitHubUser(req);
@@ -960,26 +1167,65 @@ export function register(app: polka.Polka, options: Options) {
         continue;
       }
 
+      const existingSaved = db.getTeamsForAgentLadder(ladder.id, agent.id, 'saved');
       if (!hasSubmittedTeams || !payload.teams) {
+        if (existingSaved.length === requiredTeams) {
+          teamsByLadder[ladder.id] = existingSaved;
+          continue;
+        }
+        const suffix = existingSaved.length > 0
+          ? ` (${existingSaved.length}/${requiredTeams} distinct teams saved — ` +
+            `${requiredTeams - existingSaved.length} more needed).`
+          : '.';
         sendJson(res, 400, {
           error:
             `First submission to ${ladder.name} requires ${requiredTeams} ` +
-            'valid teams passing the 1.30 uniqueness threshold.',
+            `valid teams passing the 1.30 uniqueness threshold${suffix}`,
+          ladderId: ladder.id,
+          savedCount: existingSaved.length,
+          requiredCount: requiredTeams,
+          remainingCount: requiredTeams - existingSaved.length,
+          rejections: [] as RejectedTeam[],
         });
         return;
       }
 
-      try {
-        const pools = poolsMap.get(ladder.id) ?? [];
-        teamsByLadder[ladder.id] = validateCompetitorTeams(payload.teams, {
+      const pools = poolsMap.get(ladder.id) ?? [];
+      const result = validateCompetitorTeamsIncremental(
+        payload.teams,
+        {
           format: ladder.format,
           pools,
           teams: requiredTeams,
+        },
+        existingSaved
+      );
+
+      if (result.allSaved.length !== existingSaved.length) {
+        db.replaceSavedTeams(ladder.id, agent.id, result.allSaved, now);
+      }
+
+      if (!result.complete || result.rejections.length > 0) {
+        const chunkCount = splitSubmittedTeams(payload.teams).length;
+        const baseError = result.rejections.length > 0
+          ? result.rejections[0].reason
+          : `Expected ${requiredTeams} teams for ${ladder.format}, received ${chunkCount}.`;
+        const progressNote =
+          `(${result.allSaved.length}/${requiredTeams} distinct teams saved — ` +
+          `${result.remainingCount} more needed)`;
+        sendJson(res, 400, {
+          error: `${baseError} ${progressNote}`,
+          ladderId: ladder.id,
+          savedCount: result.allSaved.length,
+          newlySavedCount: result.newlySavedCount,
+          requiredCount: requiredTeams,
+          remainingCount: result.remainingCount,
+          rejections: result.rejections,
         });
-      } catch (err: any) {
-        sendJson(res, 400, {error: err?.message || 'Team pool validation failed.'});
         return;
       }
+
+      teamsByLadder[ladder.id] = result.allSaved;
     }
 
     let authTokenEncoding: string | undefined;

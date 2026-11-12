@@ -98,13 +98,116 @@
 
     const teamFields = document.querySelectorAll('.pool-teams-field');
     const ladderChecks = document.querySelectorAll('input[name="ladders"]');
+    const progressText = document.getElementById('pool-progress-text');
+    const validateTeamsBtn = document.getElementById('validate-teams-btn');
+    const clearTeamsBtn = document.getElementById('clear-teams-btn');
+
+    const getFeedbackEl = () => {
+      let el = document.getElementById('teams-feedback');
+      if (!el) {
+        const panel = document.getElementById('pool-teams-panel');
+        if (!panel) return null;
+        el = document.createElement('div');
+        el.id = 'teams-feedback';
+        el.className = 'teams-feedback hide';
+        panel.appendChild(el);
+      }
+      return el;
+    };
+
+    const getActivePoolCheckbox = () => {
+      let found = null;
+      ladderChecks.forEach(cb => {
+        if (!found && cb.checked && cb.dataset.needsTeams === 'true') found = cb;
+      });
+      return found;
+    };
+
+    const renderPoolProgress = (saved, required) => {
+      const remaining = Math.max(0, required - saved);
+      const pct = required > 0 ? Math.min(100, Math.round((saved / required) * 100)) : 0;
+      const activeCb = getActivePoolCheckbox();
+      if (activeCb) {
+        activeCb.dataset.savedTeams = String(saved);
+        const labelEl = activeCb.closest('label');
+        if (labelEl) {
+          let hintEl = labelEl.querySelector('.pool-status-hint');
+          if (!hintEl) {
+            hintEl = document.createElement('span');
+            hintEl.className = 'muted pool-status-hint';
+            labelEl.appendChild(hintEl);
+          }
+          const parts = [];
+          if (activeCb.dataset.upcoming === 'true') parts.push('upcoming');
+          if (saved > 0 && required > 0) parts.push(saved + '/' + required + ' saved');
+          hintEl.textContent = parts.length ? ' (' + parts.join(' · ') + ')' : '';
+        }
+      }
+      if (progressText) {
+        progressText.textContent = '';
+        const strong = document.createElement('strong');
+        strong.textContent = saved + ' / ' + required;
+        progressText.appendChild(strong);
+        progressText.appendChild(
+          document.createTextNode(
+            remaining === 0
+              ? ' distinct teams saved — ready to submit'
+              : ' distinct teams saved — ' + remaining + ' more needed'
+          )
+        );
+      }
+      let fillEl = document.getElementById('pool-progress-fill');
+      if (!fillEl) {
+        const track = document.querySelector('.progress-track');
+        if (track) {
+          fillEl = document.createElement('div');
+          fillEl.id = 'pool-progress-fill';
+          fillEl.className = 'progress-fill';
+          track.appendChild(fillEl);
+        }
+      }
+      if (fillEl) {
+        fillEl.style.width = pct + '%';
+        fillEl.classList.toggle('complete', remaining === 0 && required > 0);
+      }
+      if (clearTeamsBtn) {
+        clearTeamsBtn.classList.toggle('hide', saved <= 0);
+      }
+    };
+
+    const renderTeamsFeedback = (summary, rejections, isError) => {
+      const box = getFeedbackEl();
+      if (!box) return;
+      box.classList.remove('hide');
+      box.textContent = '';
+      const summaryEl = document.createElement('div');
+      summaryEl.id = 'teams-feedback-summary';
+      summaryEl.className = isError ? 'no' : 'yes';
+      summaryEl.textContent = summary;
+      box.appendChild(summaryEl);
+      if (Array.isArray(rejections) && rejections.length) {
+        const listEl = document.createElement('ul');
+        listEl.id = 'teams-rejections';
+        listEl.className = 'teams-rejections';
+        rejections.forEach(item => {
+          const li = document.createElement('li');
+          li.textContent = typeof item === 'string' ? item : item.reason;
+          listEl.appendChild(li);
+        });
+        box.appendChild(listEl);
+      }
+    };
+
     const syncTeamsVisibility = () => {
       if (!teamFields.length) return;
-      let show = false;
-      ladderChecks.forEach(cb => {
-        if (cb.checked && cb.dataset.needsTeams === 'true') show = true;
-      });
-      teamFields.forEach(el => el.classList.toggle('hide', !show));
+      const activeCb = getActivePoolCheckbox();
+      teamFields.forEach(el => el.classList.toggle('hide', !activeCb));
+      if (activeCb) {
+        renderPoolProgress(
+          Number(activeCb.dataset.savedTeams || 0),
+          Number(activeCb.dataset.requiredTeams || 0)
+        );
+      }
     };
     ladderChecks.forEach(cb => cb.addEventListener('change', syncTeamsVisibility));
     syncTeamsVisibility();
@@ -120,6 +223,87 @@
           teamsArea.value = String(reader.result || '');
         };
         reader.readAsText(f);
+      });
+    }
+
+    if (validateTeamsBtn && teamsArea) {
+      validateTeamsBtn.addEventListener('click', async () => {
+        const activeCb = getActivePoolCheckbox();
+        if (!activeCb) return;
+        if (!teamsArea.value.trim()) {
+          renderTeamsFeedback('Paste one or more Showdown teams first.', [], true);
+          return;
+        }
+        validateTeamsBtn.disabled = true;
+        try {
+          const res = await fetch('/api/account/teams', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', Accept: 'application/json'},
+            body: JSON.stringify({ladderId: activeCb.value, teams: teamsArea.value}),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            renderTeamsFeedback(data.error || ('Validation failed (' + res.status + ')'), [], true);
+            return;
+          }
+          renderPoolProgress(data.savedCount, data.requiredCount);
+          const rej = Array.isArray(data.rejections) ? data.rejections : [];
+          if (rej.length > 0) {
+            renderTeamsFeedback(
+              'Saved ' + data.savedCount + ' / ' + data.requiredCount + ' distinct teams (' +
+                data.remainingCount + ' more needed) — ' + rej.length + ' team(s) rejected:',
+              rej,
+              true
+            );
+          } else if (data.complete) {
+            teamsArea.value = '';
+            renderTeamsFeedback(
+              'All ' + data.requiredCount + ' / ' + data.requiredCount +
+                ' distinct teams validated and saved — submit your build below.',
+              [],
+              false
+            );
+          } else {
+            teamsArea.value = '';
+            renderTeamsFeedback(
+              'Saved +' + data.newlySavedCount + ' team(s): ' + data.savedCount + ' / ' +
+                data.requiredCount + ' saved — ' + data.remainingCount + ' more needed.',
+              [],
+              false
+            );
+          }
+        } catch {
+          renderTeamsFeedback('Network error validating teams.', [], true);
+        } finally {
+          validateTeamsBtn.disabled = false;
+        }
+      });
+    }
+
+    if (clearTeamsBtn) {
+      clearTeamsBtn.addEventListener('click', async () => {
+        const activeCb = getActivePoolCheckbox();
+        if (!activeCb) return;
+        clearTeamsBtn.disabled = true;
+        try {
+          const res = await fetch('/api/account/teams/clear', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', Accept: 'application/json'},
+            body: JSON.stringify({ladderId: activeCb.value}),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            renderTeamsFeedback(data.error || 'Could not clear saved teams.', [], true);
+            return;
+          }
+          renderPoolProgress(0, Number(data.requiredCount || activeCb.dataset.requiredTeams || 0));
+          const box = document.getElementById('teams-feedback');
+          if (box) box.classList.add('hide');
+        } catch {
+          renderTeamsFeedback('Network error clearing saved teams.', [], true);
+        } finally {
+          clearTeamsBtn.disabled = false;
+        }
       });
     }
 
@@ -146,7 +330,7 @@
           ladders,
           tournaments,
         };
-        if (teamsArea && !teamsArea.closest('.hide')) {
+        if (teamsArea && !teamsArea.closest('.hide') && teamsArea.value.trim()) {
           payload.teams = teamsArea.value;
         }
         submitBtn.disabled = true;
@@ -162,6 +346,15 @@
           if (!res.ok) {
             statusEl.className = 'no';
             statusEl.textContent = data.error || ('Submission failed (' + res.status + ')');
+            if (typeof data.savedCount === 'number' && typeof data.requiredCount === 'number') {
+              renderPoolProgress(data.savedCount, data.requiredCount);
+              renderTeamsFeedback(
+                data.savedCount + ' / ' + data.requiredCount + ' distinct teams saved — ' +
+                  data.remainingCount + ' more needed.',
+                data.rejections || [],
+                true
+              );
+            }
             submitBtn.disabled = false;
             return;
           }

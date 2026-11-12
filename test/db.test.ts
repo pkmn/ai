@@ -154,6 +154,65 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
     ]);
     db3.close();
   });
+
+  test('applies 0003-saved-pool-teams and manages saved -> pending -> active transitions', () => {
+    const db = new Database(':memory:');
+    try {
+      expect(db.getAppliedMigrations().map(m => m.version)).toContain('0003-saved-pool-teams.sql');
+      db.syncLadders(LADDERS_FILE, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+        - name: 0 ERROR
+          active: 2026
+          arena:
+            qualified: true
+            owners:
+              pre: pre.10544
+      `, undefined, 1_760_000_000);
+      const agent = db.getAgentBySlug('0-error')!;
+      const dev = db.getDeveloperByGitHub('pre')!;
+
+      db.replaceSavedTeams(
+        'gen9championsvgc2026regmc',
+        agent.id,
+        ['t1', 't2', 't3'],
+        1_760_000_010
+      );
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved')).toEqual([
+        't1', 't2', 't3',
+      ]);
+
+      db.clearSavedTeams('gen9championsvgc2026regmc', agent.id);
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved')).toEqual([]);
+
+      db.replaceSavedTeams('gen9championsvgc2026regmc', agent.id, ['s1', 's2'], 1_760_000_020);
+      const created = db.createSubmission({
+        agentId: agent.id,
+        developerId: dev.id,
+        version: '1.0.0',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/0-error:1.0.0',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen9championsvgc2026regmc'],
+        teamsByLadder: {gen9championsvgc2026regmc: ['p1', 'p2', 'p3']},
+        now: 1_760_000_030,
+      });
+
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved')).toEqual([]);
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending')).toEqual([
+        'p1', 'p2', 'p3',
+      ]);
+
+      db.applySubmissionStatus({
+        versionId: created.id,
+        smokeStatus: 'failed',
+        smokeError: 'boom',
+        now: 1_760_000_040,
+      });
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe('ladders.yml & Database ladder sync', () => {

@@ -19,9 +19,10 @@ CREATE TABLE IF NOT EXISTS agent_ladder_teams (
   -- Canonicalized packed Showdown team string (`Team.pack()`); kept strictly server/runner-internal.
   packed_team TEXT NOT NULL,
   -- Staging state:
+  --   'saved': validated distinct teams saved incrementally before/between submissions
   --   'pending': uploaded with an in-flight `pending` version awaiting smoke test
   --   'active': currently live in the ladder's shared competitor team pool
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('saved', 'pending', 'active')),
   -- Unix timestamp (seconds) when this team roster was submitted.
   submitted_at INTEGER NOT NULL,
   PRIMARY KEY (agent_id, ladder_id, status, team_index)

@@ -582,37 +582,63 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         }),
       });
 
+    const clearSavedVgc = () =>
+      realFetch(`${baseUrl}/api/account/teams/clear`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ladderId: 'gen9championsvgc2026regmc'}),
+      });
+
     const missingRes = await postVgc('1.0.0');
     expect(missingRes.status).toBe(400);
     expect((await missingRes.json() as {error: string}).error).toContain('requires 20 valid teams');
 
     const wrongCount = await postVgc('1.0.0', validTwenty.slice(0, 19));
     expect(wrongCount.status).toBe(400);
-    expect((await wrongCount.json() as {error: string}).error).toContain(
+    const wrongJson = await wrongCount.json() as {
+      error: string;
+      savedCount: number;
+      remainingCount: number;
+    };
+    expect(wrongJson.error).toContain(
       'Expected 20 teams for gen9championsvgc2026regmc, received 19'
     );
+    expect(wrongJson.savedCount).toBe(19);
+    expect(wrongJson.remainingCount).toBe(1);
+    expect((await clearSavedVgc()).status).toBe(200);
 
     const withIllegal = [...validTwenty];
     withIllegal[4] = validTwenty[4].replace(/^[A-Za-z-]+ @/, 'Mewtwo @');
     const illegalRes = await postVgc('1.0.0', withIllegal);
     expect(illegalRes.status).toBe(400);
-    expect((await illegalRes.json() as {error: string}).error).toContain('Team #5');
+    const illegalJson = await illegalRes.json() as {error: string; savedCount: number};
+    expect(illegalJson.error).toContain('Team #5');
+    expect(illegalJson.savedCount).toBe(19);
+    expect((await clearSavedVgc()).status).toBe(200);
 
     const withPublicClone = [...validTwenty];
     withPublicClone[2] = publicClone;
     const pubCloneRes = await postVgc('1.0.0', withPublicClone);
     expect(pubCloneRes.status).toBe(400);
-    const pubErr = (await pubCloneRes.json() as {error: string}).error;
-    expect(pubErr).toContain('Team #3 failed uniqueness check');
-    expect(pubErr).toContain('closest=public000001');
+    const pubJson = await pubCloneRes.json() as {error: string; savedCount: number};
+    expect(pubJson.error).toContain('Team #3 failed uniqueness check');
+    expect(pubJson.error).toContain('closest=public000001');
+    expect(pubJson.savedCount).toBe(19);
+    expect((await clearSavedVgc()).status).toBe(200);
 
     const withSelfClone = [...validTwenty];
     withSelfClone[7] = validTwenty[1];
     const selfCloneRes = await postVgc('1.0.0', withSelfClone);
     expect(selfCloneRes.status).toBe(400);
-    const selfErr = (await selfCloneRes.json() as {error: string}).error;
-    expect(selfErr).toContain('Team #8 failed uniqueness check');
-    expect(selfErr).toContain('closest=submitted-team-2');
+    const selfJson = await selfCloneRes.json() as {error: string; savedCount: number};
+    expect(selfJson.error).toContain('Team #8 failed uniqueness check');
+    expect(selfJson.error).toContain('closest=submitted-team-2');
+    expect(selfJson.savedCount).toBe(19);
+    expect((await clearSavedVgc()).status).toBe(200);
 
     // 6th rapid submission attempt within 60s is throttled with 429 + Retry-After before CPU work!
     const throttledRes = await postVgc('1.0.0', validTwenty);
@@ -655,6 +681,188 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'active'))
       .toHaveLength(20);
   });
+
+  test(
+    'incrementally saves valid pool teams (14/20 -> 20/20), renders /account progress, and clears',
+    async () => {
+      openLadders(['gen9championsvgc2026regmc']);
+      const twentyOne = generateValidVgcTeams(21);
+      const validTwenty = twentyOne.slice(0, 20);
+      const publicClone = twentyOne[20];
+      const illegalTeam = validTwenty[4].replace(/^[A-Za-z-]+ @/, 'Mewtwo @');
+
+      const postTeams = (endpoint: string, body: Record<string, unknown>) =>
+        realFetch(`${baseUrl}${endpoint}`, {
+          method: 'POST',
+          headers: {
+            Cookie: cookieFor('pre'),
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+
+      // Batch 1: 14 distinct valid + 2 illegal + 2 public clones + 2 duplicates of saved teams
+      const batchOne = [
+        ...validTwenty.slice(0, 14),
+        illegalTeam,
+        illegalTeam,
+        publicClone,
+        publicClone,
+        validTwenty[0],
+        validTwenty[1],
+      ];
+      const res1 = await postTeams('/api/account/teams', {
+        ladderId: 'gen9championsvgc2026regmc',
+        teams: batchOne,
+      });
+      expect(res1.status).toBe(200);
+      const j1 = await res1.json() as {
+        savedCount: number;
+        newlySavedCount: number;
+        requiredCount: number;
+        remainingCount: number;
+        complete: boolean;
+        rejections: Array<{index: number; reason: string}>;
+      };
+      expect(j1.savedCount).toBe(14);
+      expect(j1.newlySavedCount).toBe(14);
+      expect(j1.requiredCount).toBe(20);
+      expect(j1.remainingCount).toBe(6);
+      expect(j1.complete).toBe(false);
+      expect(j1.rejections).toHaveLength(6);
+
+      // Verify /account HTML and /account.json reflect 14/20 saved & 6 remaining
+      const acctHtml = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(acctHtml).toContain(
+        '<strong>14 / 20</strong> distinct teams saved — 6 more needed'
+      );
+      expect(acctHtml).toContain('14/20 saved');
+      expect(acctHtml).toContain('data-saved-teams="14"');
+
+      const acctJson = await (await realFetch(`${baseUrl}/account.json`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).json() as {
+        savedTeams: Record<string, {
+          savedCount: number;
+          requiredCount: number;
+          remainingCount: number;
+          complete: boolean;
+          locked: boolean;
+        }>;
+      };
+      expect(acctJson.savedTeams.gen9championsvgc2026regmc).toEqual({
+        savedCount: 14,
+        requiredCount: 20,
+        remainingCount: 6,
+        complete: false,
+        locked: false,
+      });
+
+      // Submitting without teams while at 14/20 explains 6 more needed
+      const incompleteSub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/0-error-1.0.0.tar.zst',
+          sha256: SHA_A,
+          ladders: ['VGC'],
+        }),
+      });
+      expect(incompleteSub.status).toBe(400);
+      expect((await incompleteSub.json() as {error: string}).error)
+        .toContain('14/20 distinct teams saved — 6 more needed');
+
+      // Batch 2: re-upload all 20 with 3 fixed slots; first 14 saved are preserved idempotently
+      const batchTwo = [
+        ...validTwenty.slice(0, 17),
+        illegalTeam,
+        publicClone,
+        validTwenty[2],
+      ];
+      const res2 = await postTeams('/api/account/teams', {
+        ladderId: 'gen9championsvgc2026regmc',
+        teams: batchTwo,
+      });
+      expect(res2.status).toBe(200);
+      const j2 = await res2.json() as {
+        savedCount: number;
+        newlySavedCount: number;
+        remainingCount: number;
+        complete: boolean;
+        rejections: Array<{index: number; reason: string}>;
+      };
+      expect(j2.savedCount).toBe(17);
+      expect(j2.newlySavedCount).toBe(3);
+      expect(j2.remainingCount).toBe(3);
+      expect(j2.complete).toBe(false);
+      expect(j2.rejections).toHaveLength(3);
+
+      // Batch 3: upload only the remaining 3 distinct teams -> 20/20 complete
+      const res3 = await postTeams('/api/account/teams', {
+        ladderId: 'gen9championsvgc2026regmc',
+        teams: validTwenty.slice(17, 20),
+      });
+      expect(res3.status).toBe(200);
+      const j3 = await res3.json() as {
+        savedCount: number;
+        newlySavedCount: number;
+        remainingCount: number;
+        complete: boolean;
+        rejections: unknown[];
+      };
+      expect(j3.savedCount).toBe(20);
+      expect(j3.newlySavedCount).toBe(3);
+      expect(j3.remainingCount).toBe(0);
+      expect(j3.complete).toBe(true);
+      expect(j3.rejections).toEqual([]);
+
+      // Clear resets back to 0/20
+      const clr = await postTeams('/api/account/teams/clear', {
+        ladderId: 'gen9championsvgc2026regmc',
+      });
+      expect(clr.status).toBe(200);
+      const agent = db.getAgentBySlug('0-error')!;
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved'))
+        .toHaveLength(0);
+
+      // Save all 20 again then submit WITHOUT `teams` -> reuses saved 20/20 and promotes to pending
+      const resAll = await postTeams('/api/account/teams', {
+        ladderId: 'gen9championsvgc2026regmc',
+        teams: validTwenty,
+      });
+      expect((await resAll.json() as {complete: boolean}).complete).toBe(true);
+
+      const finalSub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/0-error-1.0.0.tar.zst',
+          sha256: SHA_A,
+          ladders: ['VGC'],
+        }),
+      });
+      expect(finalSub.status).toBe(201);
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved'))
+        .toHaveLength(0);
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending'))
+        .toHaveLength(20);
+    }
+  );
 
   test('gates tournament OCI submissions independently of ladder cooldowns & injects #topbar',
     async () => {
