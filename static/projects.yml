@@ -222,7 +222,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
 - name: Foul Play
-  site: https://www.smogon.com/forums/threads/3648979/
+  site: https://pmariglia.github.io/posts/foul-play/
   active: 2019 # March 24
   license: GPL-3.0
   source: https://github.com/pmariglia/showdown
