@@ -563,4 +563,35 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
     expect(familyChoice.ladderId).toBe('rby-family');
     expect([familyChoice.agentI, familyChoice.agentJ].sort()).toEqual([0, 1]);
   });
+
+  test('computeTournamentRatings solves single-game MAP and preserves unplayed priors', () => {
+    expect(ratings.computeTournamentRatings(0, []).elo).toHaveLength(0);
+
+    const games: ratings.TournamentGameInput[] = [
+      {i: 0, j: 1, outcome: 'W'},
+      {i: 0, j: 1, outcome: 'W'},
+      {i: 1, j: 0, outcome: 'L'},
+      {i: 0, j: 2, outcome: 'W'},
+      {i: 2, j: 0, outcome: 'T'},
+      {i: 1, j: 2, outcome: 'W'},
+    ];
+    // Entrant 3 has 0 games played and must keep priorEloStd = 350.
+    const res = ratings.computeTournamentRatings(4, games, -1, 1500, 350);
+    expect(res.elo[0]).toBeGreaterThan(res.elo[1]);
+    expect(res.elo[1]).toBeGreaterThan(res.elo[2]);
+    expect(res.elo[3]).toBeCloseTo(1500, 6);
+    expect(res.eloStd[3]).toBeCloseTo(350, 4);
+
+    // Order and seat-swap invariance
+    const reversed: ratings.TournamentGameInput[] = games.slice().reverse().map(g => ({
+      i: g.j,
+      j: g.i,
+      outcome: g.outcome === 'W' ? 'L' : g.outcome === 'L' ? 'W' : 'T',
+    }));
+    const revRes = ratings.computeTournamentRatings(4, reversed, -1, 1500, 350);
+    for (let k = 0; k < 4; k++) {
+      expect(revRes.elo[k]).toBeCloseTo(res.elo[k], 8);
+      expect(revRes.eloStd[k]).toBeCloseTo(res.eloStd[k], 8);
+    }
+  });
 });

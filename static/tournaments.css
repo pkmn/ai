@@ -148,6 +148,32 @@
   image-rendering: pixelated;
 }
 
+.live-pill {
+  display: inline-flex;
+  gap: 0.35ch;
+  align-items: center;
+  padding: 0.06rem 0.42rem;
+  color: var(--hl-string);
+  font-weight: bold;
+  font-size: 0.78em;
+  font-family: var(--monospace);
+  line-height: 1.25;
+  white-space: nowrap;
+  text-decoration: none;
+  background-color: color-mix(in oklab, var(--hl-string) 12%, var(--bg-color));
+  border: 1px solid color-mix(in oklab, var(--hl-string) 40%, transparent);
+  border-radius: 3px;
+}
+
+.live-pill:hover {
+  background-color: color-mix(in oklab, var(--hl-string) 20%, var(--bg-color));
+  border-color: color-mix(in oklab, var(--hl-string) 65%, transparent);
+}
+
+tr.live-game-row td {
+  background-color: color-mix(in oklab, var(--hl-string) 5%, var(--bg-color));
+}
+
 @media (width < 640px) {
   nav ul {
     flex-wrap: wrap;

@@ -29,10 +29,154 @@
   document.addEventListener('DOMContentLoaded', () => {
     const eventSelect = document.getElementById('event-select');
     const liveSec = document.getElementById('live');
+    const tableNavWrap = document.getElementById('table-nav-wrap');
+    const seriesLeftEl = document.getElementById('series-left');
+    const seriesRightEl = document.getElementById('series-right');
+    const clockBarEl = document.getElementById('clock-bar');
+    const standingsSec = document.getElementById('standings');
+    const crosstableSec = document.getElementById('crosstable');
+    const gamesTbody = document.getElementById('games-tbody');
+    const gamesArchiveMeta = document.getElementById('games-archive-meta');
     const frame = document.getElementById('ps-viewer-frame');
+
     const initialViewer = {{{viewerInitJson}}};
+    const pageInit = {{{pageInitJson}}} || {};
+
+    const tournamentId = String(pageInit.tournamentId || '');
+    const gamesPerMatchup = Number(pageInit.gamesPerMatchup) || 1;
+    const agentLinks = pageInit.agentLinks || {};
+    let status = pageInit.status || 'scheduled';
+    let hasSuperfinal = Boolean(pageInit.hasSuperfinal);
+    let completedGames = Number(pageInit.completedGames) || 0;
+    let archiveHref = pageInit.archiveHref;
+    let standings = Array.isArray(pageInit.standings) ? pageInit.standings : [];
+    let crosstable = Array.isArray(pageInit.crosstable) ? pageInit.crosstable : [];
+    let broadcast = pageInit.broadcast;
+    let selectedTable = Number(pageInit.selectedTable) || 1;
+    let mode = 'live';
     let viewerReady = false;
     let pendingPayload = initialViewer;
+    let activeClock = (
+      initialViewer &&
+      initialViewer.live &&
+      initialViewer.thinkingSlot
+    )
+      ? {
+        slot: initialViewer.thinkingSlot,
+        bankSeconds: Number(initialViewer.thinkingBankSeconds) || 0,
+        syncMillis: Date.now(),
+      }
+      : undefined;
+
+    const esc = s => String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const formatClockMmSs = seconds => {
+      const s = Math.max(0, Math.round(seconds));
+      const mm = String(Math.floor(s / 60)).padStart(2, '0');
+      const ss = String(s % 60).padStart(2, '0');
+      return mm + ':' + ss;
+    };
+
+    const resolveAgentHref = slug => {
+      if (!slug) return '';
+      if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return agentLinks[slug];
+      return '/projects/' + encodeURIComponent(slug) + '/';
+    };
+
+    const formatAgentLink = (name, slug, bold) => {
+      const inner = bold ? '<strong>' + esc(name) + '</strong>' : esc(name);
+      const href = resolveAgentHref(slug);
+      return href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
+    };
+
+    const speciesToSlug = species => String(species || '')
+      .trim()
+      .toLowerCase()
+      .replace(/♀/g, '-f')
+      .replace(/♂/g, '-m')
+      .replace(/['’.]/g, '')
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    const parsePackedSpecies = packed => {
+      if (!packed || !String(packed).trim()) return [];
+      const out = [];
+      for (const chunk of String(packed).split(']')) {
+        if (!chunk.trim()) continue;
+        const fields = chunk.split('|');
+        const sp = (fields[1] && fields[1].trim()) || (fields[0] && fields[0].trim()) || '';
+        if (sp) out.push(sp);
+      }
+      return out;
+    };
+
+    const renderPartyMinisprites = packed => {
+      const list = parsePackedSpecies(packed);
+      if (list.length === 0) return '';
+      const spans = list.slice(0, 6).map(sp => {
+        const slug = speciesToSlug(sp);
+        if (!slug) return '';
+        const src = 'https://www.smogon.com/forums/media/minisprites/' + slug + '.png';
+        return '<span><img src="' + esc(src) + '" alt="' + esc(sp) +
+          '" title="' + esc(sp) + '"></span>';
+      }).join('');
+      return '<span class="party-minisprites">' + spans + '</span>';
+    };
+
+    const heatmapClass = scorePct => {
+      if (scorePct > 80) return 'hm-w4';
+      if (scorePct > 70) return 'hm-w3';
+      if (scorePct > 60) return 'hm-w2';
+      if (scorePct > 50) return 'hm-w1';
+      if (scorePct < 20) return 'hm-l4';
+      if (scorePct < 30) return 'hm-l3';
+      if (scorePct < 40) return 'hm-l2';
+      if (scorePct < 50) return 'hm-l1';
+      return '';
+    };
+
+    const parseLatestTurn = lines => {
+      if (!Array.isArray(lines) || lines.length === 0) return undefined;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = String(lines[i] || '');
+        if (line.indexOf('|turn|') === 0) {
+          const n = Number(line.slice(6).trim());
+          if (Number.isInteger(n) && n >= 0) return n;
+        }
+      }
+      return undefined;
+    };
+
+    const getTables = () =>
+      (broadcast && Array.isArray(broadcast.tables)) ? broadcast.tables : [];
+
+    const getLiveTables = () =>
+      getTables().filter(tb => !tb.idle && tb.live !== false && tb.p1 && tb.p2);
+
+    const getTable = num => getTables().find(tb => tb.table === num);
+
+    const findLiveTableForEntrant = (liveTbs, slug, name) =>
+      liveTbs.find(tb => (
+        (tb.p1 && (tb.p1.slug === slug || tb.p1.name === name)) ||
+        (tb.p2 && (tb.p2.slug === slug || tb.p2.name === name))
+      ));
+
+    const findLiveTableForPair = (liveTbs, a, b) =>
+      liveTbs.find(tb => {
+        if (!tb.p1 || !tb.p2) return false;
+        const p1A = tb.p1.slug === a.slug || tb.p1.name === a.name;
+        const p2B = tb.p2.slug === b.slug || tb.p2.name === b.name;
+        if (p1A && p2B) return true;
+        const p1B = tb.p1.slug === b.slug || tb.p1.name === b.name;
+        const p2A = tb.p2.slug === a.slug || tb.p2.name === a.name;
+        return p1B && p2A;
+      });
 
     const sendToViewer = msg => {
       if (frame && frame.contentWindow) {
@@ -56,7 +200,11 @@
       if (data.type === 'ready') {
         viewerReady = true;
         syncTheme();
-        if (pendingPayload && Array.isArray(pendingPayload.lines) && pendingPayload.lines.length > 0) {
+        if (
+          pendingPayload &&
+          Array.isArray(pendingPayload.lines) &&
+          pendingPayload.lines.length > 0
+        ) {
           sendToViewer({
             type: 'load',
             lines: pendingPayload.lines,
@@ -67,9 +215,407 @@
       }
     });
 
-    document.querySelectorAll('a[data-replay-log]').forEach(link => {
-      link.addEventListener('click', async ev => {
-        const logUrl = link.getAttribute('data-replay-log');
+    const renderClockSideHtml = (slot, clock) => {
+      const pillCls = clock.thinking ? 'clock-pill thinking' : 'clock-pill';
+      const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
+      const subText = clock.thinking ? 'thinking…' : ('+' + clock.incrementSeconds + 's/turn');
+      const rem = Math.round(clock.bankSeconds);
+      const tip = clock.thinking
+        ? (rem + 's remaining in 150s bank (currently thinking)')
+        : (rem + 's remaining in 150s bank (+' + clock.incrementSeconds + 's/turn)');
+      return '<div class="clock-side" id="clock-side-' + slot + '">' +
+        '<span><tt>' + slot + '</tt> <strong id="clock-name-' + slot + '">' +
+        esc(clock.name) + '</strong></span>' +
+        '<span class="' + pillCls + '" id="clock-pill-' + slot + '" title="' + esc(tip) + '">' +
+        '<span class="' + timeCls + '" id="clock-' + slot + '">' +
+        formatClockMmSs(clock.bankSeconds) + '</span>' +
+        '<span class="clock-sub" id="clock-sub-' + slot + '">' + esc(subText) + '</span>' +
+        '</span></div>';
+    };
+
+    const renderClocks = (p1, p2, isLive) => {
+      if (!clockBarEl) return;
+      if (!p1 || !p2) {
+        clockBarEl.classList.add('hide');
+        clockBarEl.innerHTML = '';
+        activeClock = undefined;
+        return;
+      }
+      clockBarEl.classList.remove('hide');
+      clockBarEl.innerHTML = renderClockSideHtml('p1', p1) + renderClockSideHtml('p2', p2);
+      if (isLive && (p1.thinking || p2.thinking)) {
+        const slot = p1.thinking ? 'p1' : 'p2';
+        const bank = slot === 'p1' ? p1.bankSeconds : p2.bankSeconds;
+        activeClock = {slot, bankSeconds: Number(bank) || 0, syncMillis: Date.now()};
+      } else {
+        activeClock = undefined;
+      }
+    };
+
+    const renderTableNav = () => {
+      if (!tableNavWrap) return;
+      const tables = getTables();
+      if (tables.length === 0) {
+        tableNavWrap.innerHTML = '';
+        return;
+      }
+      const items = tables.map((tb, idx) => {
+        const sep = idx > 0 ? '\n        —\n        ' : '';
+        const checked = (mode === 'live' && tb.table === selectedTable) ? ' checked' : '';
+        const tbId = 'tb-' + esc(tournamentId) + '-' + tb.table;
+        const labelHtml = tb.idle
+          ? (esc(tb.label) + ' <span class="muted">(idle)</span>')
+          : esc(tb.label);
+        return sep + '<li><input type="radio" name="table-' + esc(tournamentId) +
+          '" id="' + tbId + '" value="' + tb.table + '" data-table-num="' +
+          tb.table + '"' + checked + '><label for="' + tbId + '">' + labelHtml + '</label></li>';
+      }).join('');
+      tableNavWrap.innerHTML = '<nav class="subnav" aria-label="Broadcast table"><ul>' +
+        items + '</ul></nav>';
+    };
+
+    const renderSeriesRightForTable = tb => {
+      const base = (tb && tb.seriesRightHtml) ? tb.seriesRightHtml : '<span class="muted">—</span>';
+      if (tb && (tb.idle || tb.live === false)) {
+        const other = getLiveTables().find(x => x.table !== tb.table);
+        if (other) {
+          return base + ' · <a href="#live" class="live-pill" data-live-table="' +
+            other.table + '">&#9679; Watch T' + other.table + '</a>';
+        }
+      }
+      return base;
+    };
+
+    const showLiveTable = (tableNum, scroll) => {
+      const tables = getTables();
+      if (tables.length === 0 || !liveSec) return;
+      const tb = getTable(tableNum) || tables[0];
+      if (!tb) return;
+      mode = 'live';
+      selectedTable = tb.table;
+      liveSec.classList.remove('hide');
+      renderTableNav();
+      if (seriesLeftEl) {
+        seriesLeftEl.innerHTML = tb.seriesLeftHtml || esc(tb.label);
+      }
+      if (seriesRightEl) {
+        seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
+      }
+      if (!tb.idle && tb.p1 && tb.p2) {
+        renderClocks(tb.p1, tb.p2, tb.live !== false);
+      } else {
+        renderClocks(undefined, undefined, false);
+      }
+      const lines = Array.isArray(tb.lines) ? tb.lines : [];
+      const isLive = !tb.idle && tb.live !== false;
+      pendingPayload = {lines, live: isLive, side: 'p1'};
+      if (viewerReady) {
+        sendToViewer({type: 'load', lines, live: isLive, side: 'p1'});
+      }
+      if (scroll) {
+        liveSec.scrollIntoView({behavior: 'smooth'});
+      }
+    };
+
+    const refreshReplayHeaderRight = () => {
+      if (mode !== 'replay' || !seriesRightEl) return;
+      if (getLiveTables().length > 0) {
+        seriesRightEl.innerHTML =
+          '<a href="#live" class="live-pill" data-return-live="1">&#9679; Return to Live</a>';
+      } else {
+        seriesRightEl.innerHTML = '<span class="muted">Completed game</span>';
+      }
+    };
+
+    const renderStandings = () => {
+      const bodyEl = document.getElementById('standings-body');
+      if (!bodyEl || !Array.isArray(standings) || standings.length === 0) return;
+      const liveTbs = getLiveTables();
+      const maxRrGames = Math.max(1, (standings.length - 1) * gamesPerMatchup);
+      const rows = standings.map((e, idx) => {
+        const rankNum = e.rank || (idx + 1);
+        const sfBadge = (hasSuperfinal && rankNum <= 2) ? ' <span class="muted">SF</span>' : '';
+        const liveTb = findLiveTableForEntrant(liveTbs, e.slug, e.name);
+        const liveBadge = liveTb
+          ? ' <a href="#live" class="live-pill" data-live-table="' + liveTb.table +
+            '" title="Spectate live on ' + esc(liveTb.label) + '">&#9679; T' +
+            liveTb.table + '</a>'
+          : '';
+        const agentHtml = formatAgentLink(e.name, e.slug, true) +
+          ' <code>' + esc(e.version) + '</code>' + liveBadge;
+        const elo = Math.round(e.elo);
+        const ci = Math.round(e.ci95);
+        const ptsStr = Number(e.points || 0).toFixed(1);
+        const sbStr = Math.round(e.sonnebornBerger || 0).toLocaleString('en-US');
+        return '<tr>' +
+          '<td><strong>' + rankNum + '</strong>' + sfBadge + '</td>' +
+          '<td>' + agentHtml + '</td>' +
+          '<td class="num"><strong>' + elo + '</strong> <span class="muted">±' + ci + '</span></td>' +
+          '<td class="num">' + e.wins + '–' + e.losses + '–' + e.ties + '</td>' +
+          '<td class="num"><strong>' + ptsStr + '</strong> <span class="muted">/ ' +
+          maxRrGames + '</span></td>' +
+          '<td class="num">' + sbStr + '</td>' +
+          '</tr>';
+      }).join('');
+
+      const ptsTitle = 'Round-Robin points out of ' + maxRrGames +
+        ' games (+1.0 per win, +0.5 per tie)';
+      bodyEl.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
+        '<th>#</th><th>Agent</th>' +
+        '<th class="num" title="Tournament MAP Elo ± 95% CI">Elo</th>' +
+        '<th class="num" title="Standalone individual BYOT game Wins – Losses – Ties">W–L–T</th>' +
+        '<th class="num" title="' + esc(ptsTitle) + '">Points</th>' +
+        '<th class="num" title="Sonneborn-Berger tiebreak score">S–B</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    };
+
+    const renderCrosstable = () => {
+      const bodyEl = document.getElementById('crosstable-body');
+      if (!bodyEl || !crosstableSec) return;
+      const rrPairs = Array.isArray(crosstable)
+        ? crosstable.filter(p => p.stage !== 'Superfinal')
+        : [];
+      const rrLiveTbs = getLiveTables().filter(tb => tb.stage !== 'Superfinal');
+      const order = standings.length >= 2 ? standings : (pageInit.entrants || []);
+      if (order.length < 2 || (rrPairs.length === 0 && rrLiveTbs.length === 0)) {
+        crosstableSec.classList.add('hide');
+        bodyEl.innerHTML = '<p class="empty-state muted">No round-robin games completed yet.</p>';
+        return;
+      }
+
+      crosstableSec.classList.remove('hide');
+      const pairMap = new Map();
+      for (const p of rrPairs) {
+        pairMap.set(p.lowVersionId + ':' + p.highVersionId, p);
+      }
+
+      const colHeaders = order.map(e => '<th>' + esc(e.name) + '</th>').join('');
+      const bodyRows = order.map(rowEnt => {
+        const rowLabel = formatAgentLink(rowEnt.name, rowEnt.slug, true) +
+          ' <code>' + esc(rowEnt.version) + '</code>';
+        const cells = order.map(colEnt => {
+          if (rowEnt.versionId === colEnt.versionId) {
+            return '<td class="diag">—</td>';
+          }
+          const liveTb = findLiveTableForPair(
+            rrLiveTbs,
+            {slug: rowEnt.slug, name: rowEnt.name},
+            {slug: colEnt.slug, name: colEnt.name}
+          );
+          const livePill = liveTb
+            ? '<a href="#live" class="live-pill" data-live-table="' + liveTb.table +
+              '" title="Spectate live on ' + esc(liveTb.label) + '">&#9679; T' +
+              liveTb.table + '</a>'
+            : '';
+
+          const lowId = Math.min(rowEnt.versionId, colEnt.versionId);
+          const highId = Math.max(rowEnt.versionId, colEnt.versionId);
+          const pair = pairMap.get(lowId + ':' + highId);
+          const isLow = rowEnt.versionId === lowId;
+          const wins = pair ? (isLow ? pair.lowWins : pair.highWins) : 0;
+          const losses = pair ? (isLow ? pair.highWins : pair.lowWins) : 0;
+          const ties = pair ? pair.ties : 0;
+          const total = wins + losses + ties;
+
+          if (total === 0) {
+            return livePill ? '<td class="center">' + livePill + '</td>' : '<td class="muted">—</td>';
+          }
+
+          const pts = wins + 0.5 * ties;
+          const scorePct = (pts / total) * 100;
+          const scoreStr = scorePct.toFixed(1) + '%';
+          const scoreHtml = scorePct > 50 ? '<strong>' + scoreStr + '</strong>' : scoreStr;
+          const cls = heatmapClass(scorePct);
+          const clsAttr = cls ? ' class="' + cls + '"' : '';
+          const tip = pts.toFixed(1) + ' / ' + total + ' pts';
+          const subInner = livePill
+            ? (wins + '–' + losses + '–' + ties + ' · ' + livePill)
+            : (wins + '–' + losses + '–' + ties);
+          return '<td' + clsAttr + ' title="' + esc(tip) + '">' + scoreHtml +
+            '<span class="sub">' + subInner + '</span></td>';
+        }).join('');
+        return '<tr><td>' + rowLabel + '</td>' + cells + '</tr>';
+      }).join('');
+
+      bodyEl.innerHTML = '<div class="table-wrap"><table class="matrix"><thead><tr>' +
+        '<th>&nbsp;</th>' + colHeaders +
+        '</tr></thead><tbody>' + bodyRows + '</tbody></table></div>';
+    };
+
+    const buildLiveGameRowEl = tb => {
+      const p1 = tb.p1;
+      const p2 = tb.p2;
+      const codePrefix = tb.stage === 'Superfinal' ? 'SF' : 'RR';
+      const codeNum = tb.stage === 'Superfinal' ? (tb.matchupGame || 1) : (tb.cycle || 1);
+      const gameCode = codePrefix + codeNum;
+      const p1Cell = '<div class="player-cell">' +
+        formatAgentLink(p1.name, p1.slug, false) +
+        renderPartyMinisprites(p1.team) + '</div>';
+      const p2Cell = '<div class="player-cell">' +
+        formatAgentLink(p2.name, p2.slug, false) +
+        renderPartyMinisprites(p2.team) + '</div>';
+      const turn = parseLatestTurn(tb.lines);
+      const turnsStr = turn !== undefined ? String(turn) : '—';
+      const b1 = Math.round(p1.bankSeconds);
+      const b2 = Math.round(p2.bankSeconds);
+      const tip = 'Spectate live on ' + tb.label;
+
+      const tr = document.createElement('tr');
+      tr.className = 'live-game-row';
+      tr.setAttribute('data-live-game-table', String(tb.table));
+      tr.innerHTML =
+        '<td><a href="#live" class="subtle" data-live-table="' + tb.table +
+          '" title="' + esc(tip) + '"><code>' + esc(gameCode) + '</code></a></td>' +
+        '<td>' + p1Cell + '</td>' +
+        '<td>' + p2Cell + '</td>' +
+        '<td class="center"><a href="#live" class="live-pill" data-live-table="' + tb.table +
+          '" title="' + esc(tip) + '">&#9679; T' + tb.table + '</a></td>' +
+        '<td class="num" data-live-turns>' + turnsStr + '</td>' +
+        '<td class="num" data-live-banks>' + b1 + 's / ' + b2 + 's</td>';
+      return tr;
+    };
+
+    const buildCompletedGameRowEl = g => {
+      const codePrefix = g.stage === 'Superfinal' ? 'SF' : 'RR';
+      const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
+      const gameCode = codePrefix + codeNum;
+      const hasLog = Boolean(g.logHref);
+      const gameHref = hasLog ? g.logHref : '#games';
+      const replayAttr = hasLog ? ' data-replay-log="' + esc(g.logHref) + '"' : '';
+
+      const p1Won = g.outcome === 'W';
+      const p2Won = g.outcome === 'L';
+      const resHtml = p1Won
+        ? '<strong>1</strong>–0'
+        : p2Won
+          ? '0–<strong>1</strong>'
+          : '½–½';
+
+      const p1Cell = '<div class="player-cell">' +
+        formatAgentLink(g.p1.name, g.p1.slug, p1Won) +
+        renderPartyMinisprites(g.p1.team) + '</div>';
+      const p2Cell = '<div class="player-cell">' +
+        formatAgentLink(g.p2.name, g.p2.slug, p2Won) +
+        renderPartyMinisprites(g.p2.team) + '</div>';
+
+      const turnsStr = g.turns !== undefined ? String(g.turns) : '—';
+      const b1 = Math.round(g.p1.bankSeconds || 0);
+      const b2 = Math.round(g.p2.bankSeconds || 0);
+
+      const tr = document.createElement('tr');
+      tr.setAttribute('data-game-id', g.id);
+      tr.innerHTML =
+        '<td><a href="' + esc(gameHref) + '" class="subtle"' + replayAttr +
+          ' title="' + esc(g.id) + '"><code>' + esc(gameCode) + '</code></a></td>' +
+        '<td>' + p1Cell + '</td>' +
+        '<td>' + p2Cell + '</td>' +
+        '<td class="center">' + resHtml + '</td>' +
+        '<td class="num">' + turnsStr + '</td>' +
+        '<td class="num">' + b1 + 's / ' + b2 + 's</td>';
+      return tr;
+    };
+
+    const syncLiveGameRows = () => {
+      if (!gamesTbody) return;
+      gamesTbody.querySelectorAll('tr.live-game-row').forEach(el => el.remove());
+      const liveTbs = getLiveTables();
+      if (liveTbs.length > 0) {
+        const emptyRow = gamesTbody.querySelector('.empty-row');
+        if (emptyRow) emptyRow.remove();
+        const frag = document.createDocumentFragment();
+        for (const tb of liveTbs) {
+          frag.appendChild(buildLiveGameRowEl(tb));
+        }
+        gamesTbody.insertBefore(frag, gamesTbody.firstChild);
+      } else if (gamesTbody.children.length === 0) {
+        gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="6" class="center muted">' +
+          'No completed games yet.</td></tr>';
+      }
+    };
+
+    const prependCompletedGameRow = g => {
+      if (!gamesTbody || !g || !g.id) return;
+      let existing = null;
+      gamesTbody.querySelectorAll('tr[data-game-id]').forEach(row => {
+        if (row.getAttribute('data-game-id') === g.id) existing = row;
+      });
+      if (existing) {
+        if (g.logHref) {
+          const link = existing.querySelector('td a');
+          if (link && !link.getAttribute('data-replay-log')) {
+            link.setAttribute('href', g.logHref);
+            link.setAttribute('data-replay-log', g.logHref);
+          }
+        }
+        return;
+      }
+      const emptyRow = gamesTbody.querySelector('.empty-row');
+      if (emptyRow) emptyRow.remove();
+      const tr = buildCompletedGameRowEl(g);
+      let anchor = gamesTbody.firstElementChild;
+      while (anchor && anchor.classList.contains('live-game-row')) {
+        anchor = anchor.nextElementSibling;
+      }
+      gamesTbody.insertBefore(tr, anchor);
+      const completedRows = gamesTbody.querySelectorAll('tr[data-game-id]');
+      for (let i = completedRows.length - 1; i >= 50; i--) {
+        completedRows[i].remove();
+      }
+    };
+
+    const renderArchiveMeta = () => {
+      if (!gamesArchiveMeta) return;
+      const jsonHref = '/arena/tournaments/' + encodeURIComponent(tournamentId) + '/index.json';
+      const countStr = completedGames.toLocaleString('en-US');
+      if (archiveHref) {
+        const parts = archiveHref.split('/');
+        const archiveName = decodeURIComponent(parts[parts.length - 1] || (tournamentId + '-replays.7z'));
+        gamesArchiveMeta.innerHTML = 'Archive: <a href="' + esc(archiveHref) + '"><code>' +
+          esc(archiveName) + '</code></a> (<span id="games-count">' + countStr +
+          '</span> games) · <a href="' + esc(jsonHref) + '"><code>index.json</code></a>';
+      } else {
+        gamesArchiveMeta.innerHTML = 'Data: <a href="' + esc(jsonHref) +
+          '"><code>index.json</code></a> (<span id="games-count">' + countStr + '</span> games' +
+          (status !== 'completed' ? '; replay archive published upon completion' : '') + ')';
+      }
+    };
+
+    if (tableNavWrap) {
+      tableNavWrap.addEventListener('change', ev => {
+        const target = ev.target instanceof Element ? ev.target : undefined;
+        const radio = target ? target.closest('input[data-table-num]') : undefined;
+        if (!radio) return;
+        const num = Number(radio.getAttribute('data-table-num')) || 1;
+        showLiveTable(num, false);
+      });
+    }
+
+    document.addEventListener('click', async ev => {
+      const target = ev.target instanceof Element ? ev.target : undefined;
+      if (!target) return;
+      const liveBtn = target.closest('[data-live-table]');
+      if (liveBtn) {
+        ev.preventDefault();
+        const num = Number(liveBtn.getAttribute('data-live-table')) || 1;
+        showLiveTable(num, true);
+        return;
+      }
+
+      const returnBtn = target.closest('[data-return-live]');
+      if (returnBtn) {
+        ev.preventDefault();
+        const cur = getTable(selectedTable);
+        const liveTbs = getLiveTables();
+        const nextNum = (cur && !cur.idle && cur.live !== false)
+          ? selectedTable
+          : (liveTbs[0] ? liveTbs[0].table : selectedTable);
+        showLiveTable(nextNum, false);
+        return;
+      }
+
+      const replayLink = target.closest('a[data-replay-log]');
+      if (replayLink) {
+        const logUrl = replayLink.getAttribute('data-replay-log');
         if (!logUrl || !frame || !liveSec) return;
         ev.preventDefault();
         try {
@@ -77,41 +623,270 @@
           if (!res.ok) return;
           const text = await res.text();
           const lines = text.split('\n');
+          mode = 'replay';
+          renderClocks(undefined, undefined, false);
+          renderTableNav();
           liveSec.classList.remove('hide');
-          const seriesLeft = document.getElementById('series-left');
-          if (seriesLeft) {
-            seriesLeft.innerHTML = '<strong>Replay</strong> · <code>' +
-              (link.textContent || '') + '</code>';
+          if (seriesLeftEl) {
+            seriesLeftEl.innerHTML = '<strong>Replay</strong> · <code>' +
+              esc(replayLink.textContent || '') + '</code>';
           }
+          refreshReplayHeaderRight();
           pendingPayload = {lines, live: false, side: 'p1'};
           if (viewerReady) {
             sendToViewer({type: 'load', lines, live: false, side: 'p1'});
           }
           liveSec.scrollIntoView({behavior: 'smooth'});
         } catch {}
-      });
+      }
     });
 
-    if (initialViewer && initialViewer.live && initialViewer.thinkingSlot) {
-      const startMs = Date.now();
-      const baseBank = Number(initialViewer.thinkingBankSeconds) || 0;
-      const clockEl = document.getElementById('clock-' + initialViewer.thinkingSlot);
-      if (clockEl) {
-        setInterval(() => {
-          const elapsed = Math.floor((Date.now() - startMs) / 1000);
-          const rem = Math.max(0, Math.round(baseBank - elapsed));
-          const mm = String(Math.floor(rem / 60)).padStart(2, '0');
-          const ss = String(rem % 60).padStart(2, '0');
-          clockEl.textContent = mm + ':' + ss;
-        }, 1000);
-      }
-    }
+    setInterval(() => {
+      if (mode !== 'live' || !activeClock) return;
+      const clockEl = document.getElementById('clock-' + activeClock.slot);
+      if (!clockEl) return;
+      const elapsed = Math.floor((Date.now() - activeClock.syncMillis) / 1000);
+      const rem = Math.max(0, Math.round(activeClock.bankSeconds - elapsed));
+      clockEl.textContent = formatClockMmSs(rem);
+    }, 1000);
 
     if (eventSelect) {
       eventSelect.addEventListener('change', () => {
         if (eventSelect.value) {
           window.location.href = eventSelect.value;
         }
+      });
+    }
+
+    if (typeof EventSource !== 'undefined' && tournamentId && status !== 'completed') {
+      const es = new EventSource(
+        '/api/tournaments/' + encodeURIComponent(tournamentId) + '/stream'
+      );
+
+      es.addEventListener('snapshot', ev => {
+        try {
+          const doc = JSON.parse(ev.data);
+          if (!doc) return;
+          status = doc.status || status;
+          completedGames = Number(doc.completedGames) || 0;
+          archiveHref = doc.archiveHref;
+          if (Array.isArray(doc.standings)) standings = doc.standings;
+          if (Array.isArray(doc.crosstable)) crosstable = doc.crosstable;
+          broadcast = doc.broadcast;
+          if (
+            crosstable.some(c => c.stage === 'Superfinal') ||
+            (Array.isArray(doc.games) && doc.games.some(g => g.stage === 'Superfinal')) ||
+            getLiveTables().some(tb => tb.stage === 'Superfinal')
+          ) {
+            hasSuperfinal = true;
+          }
+          if (Array.isArray(doc.games)) {
+            for (let i = doc.games.length - 1; i >= 0; i--) {
+              prependCompletedGameRow(doc.games[i]);
+            }
+          }
+          syncLiveGameRows();
+          renderArchiveMeta();
+          renderStandings();
+          renderCrosstable();
+
+          if (broadcast && getTables().length > 0) {
+            if (mode === 'live') {
+              const cur = getTable(selectedTable);
+              const liveTbs = getLiveTables();
+              const targetNum = (cur && !cur.idle && cur.live !== false)
+                ? selectedTable
+                : (liveTbs[0] ? liveTbs[0].table : getTables()[0].table);
+              showLiveTable(targetNum, false);
+            } else {
+              renderTableNav();
+              refreshReplayHeaderRight();
+            }
+          } else if (mode === 'live' && liveSec) {
+            liveSec.classList.add('hide');
+            renderClocks(undefined, undefined, false);
+          }
+
+          if (status === 'completed' && !broadcast) {
+            es.close();
+          }
+        } catch {}
+      });
+
+      es.addEventListener('broadcast', ev => {
+        try {
+          broadcast = JSON.parse(ev.data);
+          if (getLiveTables().some(tb => tb.stage === 'Superfinal')) hasSuperfinal = true;
+          syncLiveGameRows();
+          renderStandings();
+          renderCrosstable();
+          if (mode === 'live') {
+            const cur = getTable(selectedTable);
+            const liveTbs = getLiveTables();
+            const targetNum = (cur && !cur.idle && cur.live !== false)
+              ? selectedTable
+              : (liveTbs[0] ? liveTbs[0].table : (getTables()[0] ? getTables()[0].table : 1));
+            showLiveTable(targetNum, false);
+          } else {
+            renderTableNav();
+            refreshReplayHeaderRight();
+          }
+        } catch {}
+      });
+
+      es.addEventListener('table-load', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (!data) return;
+          if (data.broadcast) broadcast = data.broadcast;
+          const loaded = data.table;
+          if (loaded && loaded.stage === 'Superfinal') hasSuperfinal = true;
+          syncLiveGameRows();
+          renderStandings();
+          renderCrosstable();
+          if (mode === 'live') {
+            const cur = getTable(selectedTable);
+            const wasHidden = !liveSec || liveSec.classList.contains('hide');
+            const curInactive = !cur || cur.idle || cur.live === false;
+            if (loaded && (loaded.table === selectedTable || wasHidden || curInactive)) {
+              showLiveTable(loaded.table, false);
+            } else {
+              renderTableNav();
+            }
+          } else {
+            renderTableNav();
+            refreshReplayHeaderRight();
+          }
+        } catch {}
+      });
+
+      es.addEventListener('table-append', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (!data || !broadcast || !Array.isArray(broadcast.tables)) return;
+          const tb = getTable(data.table);
+          if (!tb) return;
+          const newLines = Array.isArray(data.lines) ? data.lines : [];
+          tb.lines = (Array.isArray(tb.lines) ? tb.lines : []).concat(newLines).slice(-10000);
+          if (data.p1) tb.p1 = data.p1;
+          if (data.p2) tb.p2 = data.p2;
+          if (typeof data.live === 'boolean') tb.live = data.live;
+          if (data.updatedAt) tb.updatedAt = data.updatedAt;
+
+          if (gamesTbody) {
+            const liveRow = gamesTbody.querySelector(
+              'tr.live-game-row[data-live-game-table="' + tb.table + '"]'
+            );
+            if (liveRow) {
+              const turn = parseLatestTurn(tb.lines);
+              const turnsTd = liveRow.querySelector('[data-live-turns]') || liveRow.children[4];
+              const banksTd = liveRow.querySelector('[data-live-banks]') || liveRow.children[5];
+              if (turnsTd && turn !== undefined) turnsTd.textContent = String(turn);
+              if (banksTd && tb.p1 && tb.p2) {
+                banksTd.textContent =
+                  Math.round(tb.p1.bankSeconds) + 's / ' + Math.round(tb.p2.bankSeconds) + 's';
+              }
+            }
+          }
+
+          if (mode === 'live' && tb.table === selectedTable) {
+            if (tb.p1 && tb.p2) {
+              renderClocks(tb.p1, tb.p2, tb.live !== false);
+            }
+            if (pendingPayload && Array.isArray(pendingPayload.lines)) {
+              pendingPayload.lines = tb.lines;
+              pendingPayload.live = tb.live !== false;
+            }
+            if (viewerReady && newLines.length > 0) {
+              sendToViewer({type: 'append', lines: newLines});
+            }
+          }
+        } catch {}
+      });
+
+      es.addEventListener('table-idle', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (!data) return;
+          if (data.broadcast) broadcast = data.broadcast;
+          syncLiveGameRows();
+          renderStandings();
+          renderCrosstable();
+          renderTableNav();
+          if (mode === 'live' && data.table === selectedTable) {
+            renderClocks(undefined, undefined, false);
+            const tb = getTable(selectedTable);
+            if (seriesRightEl && tb) {
+              seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
+            }
+          } else if (mode === 'replay') {
+            refreshReplayHeaderRight();
+          }
+        } catch {}
+      });
+
+      es.addEventListener('broadcast-end', () => {
+        broadcast = undefined;
+        renderClocks(undefined, undefined, false);
+        syncLiveGameRows();
+        renderStandings();
+        renderCrosstable();
+        renderTableNav();
+        refreshReplayHeaderRight();
+      });
+
+      es.addEventListener('game-complete', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (!data) return;
+          if (data.status) status = data.status;
+          if (data.completedGames !== undefined) completedGames = Number(data.completedGames) || 0;
+          if (data.archiveHref !== undefined) archiveHref = data.archiveHref;
+          if (Array.isArray(data.standings)) standings = data.standings;
+          if (Array.isArray(data.crosstable)) crosstable = data.crosstable;
+          broadcast = data.broadcast;
+          if (data.game && data.game.stage === 'Superfinal') hasSuperfinal = true;
+
+          syncLiveGameRows();
+          if (data.game) {
+            prependCompletedGameRow(data.game);
+          }
+          renderArchiveMeta();
+          renderStandings();
+          renderCrosstable();
+          renderTableNav();
+
+          if (mode === 'live') {
+            const tb = getTable(selectedTable);
+            if (tb && tb.p1 && tb.p2 && !tb.idle) {
+              renderClocks(tb.p1, tb.p2, tb.live !== false);
+              if (seriesRightEl) {
+                seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
+              }
+            } else {
+              renderClocks(undefined, undefined, false);
+            }
+          } else {
+            refreshReplayHeaderRight();
+          }
+
+          if (status === 'completed' && !broadcast) {
+            es.close();
+          }
+        } catch {}
+      });
+
+      es.addEventListener('status', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (!data) return;
+          if (data.status) status = data.status;
+          if (data.archiveHref !== undefined) archiveHref = data.archiveHref;
+          renderArchiveMeta();
+          if (status === 'completed' && !broadcast) {
+            es.close();
+          }
+        } catch {}
       });
     }
   });

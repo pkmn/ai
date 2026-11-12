@@ -189,6 +189,15 @@ export class Database {
     this.db.close();
   }
 
+  // Combines SQLite's cross-process WAL `data_version` (bumped whenever an external CLI process
+  // commits to `arena.sqlite`) with `total_changes()` (bumped on every statement in this process,
+  // including `:memory:`) into an O(1) cache-invalidation token for SSR routes.
+  getChangeToken(): string {
+    const dv = this.db.prepare('PRAGMA data_version').get() as {data_version?: number} | undefined;
+    const tc = this.db.prepare('SELECT total_changes() AS c').get() as {c?: number} | undefined;
+    return `${dv?.data_version ?? 0}:${tc?.c ?? 0}`;
+  }
+
   inTransaction<T>(fn: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -525,7 +534,7 @@ export class Database {
     status: tournaments.TournamentStatus,
     now?: number
   ): tournaments.TournamentRow {
-    return tournaments.setTournamentStatus(this.db, id, status, now);
+    return tournaments.setTournamentStatus(this.db, this.txRunner, id, status, now);
   }
 
   seedTournamentEntrants(tournamentId: string): number {
@@ -536,12 +545,28 @@ export class Database {
     entrants.upsertTournamentEntrant(this.db, input);
   }
 
+  recomputeTournamentStandings(tournamentId: string, assignFinalRanks = false) {
+    this.inTransaction(() => {
+      entrants.recomputeTournamentStandings(this.db, tournamentId, assignFinalRanks);
+    });
+  }
+
   getTournamentEntrants(tournamentId: string): entrants.TournamentEntrantView[] {
     return entrants.getTournamentEntrants(this.db, tournamentId);
   }
 
   upsertTournamentGame(input: games.UpsertTournamentGameInput) {
     games.upsertTournamentGame(this.db, input);
+  }
+
+  getTournamentGame(gameId: string): games.TournamentGameView | undefined {
+    return games.getTournamentGame(this.db, gameId);
+  }
+
+  recordCompletedTournamentGame(
+    game: games.CompletedTournamentGamePayload
+  ): {duplicate: boolean; game: games.TournamentGameView} {
+    return games.recordCompletedTournamentGame(this.db, this.txRunner, game);
   }
 
   getTournamentGames(tournamentId: string, limit?: number): games.TournamentGameView[] {

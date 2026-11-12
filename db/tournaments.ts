@@ -1,5 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {recomputeTournamentStandings} from './tournament-entrants';
+
 import {TransactionRunner} from './index';
 
 export type TournamentStatus = 'scheduled' | 'running' | 'completed';
@@ -140,21 +142,35 @@ export function getScheduledTournaments(db: DatabaseSync): TournamentRow[] {
 
 export function setTournamentStatus(
   db: DatabaseSync,
+  inTransaction: TransactionRunner,
   id: string,
   status: TournamentStatus,
   now = Math.floor(Date.now() / 1000)
 ): TournamentRow {
-  const existing = getTournament(db, id);
-  if (!existing) {
-    throw new Error(`Unknown tournament "${id}"`);
-  }
-  if (status !== 'scheduled' && status !== 'running' && status !== 'completed') {
-    throw new Error(`Invalid tournament status "${String(status)}"`);
-  }
-  const completedAt = status === 'completed' ? (existing.completedAt ?? now) : null;
-  db.prepare('UPDATE tournaments SET status = ?, completed_at = ? WHERE id = ?')
-    .run(status, completedAt, id);
-  return getTournament(db, id)!;
+  return inTransaction(() => {
+    const existing = getTournament(db, id);
+    if (!existing) {
+      throw new Error(`Unknown tournament "${id}"`);
+    }
+    if (status !== 'scheduled' && status !== 'running' && status !== 'completed') {
+      throw new Error(`Invalid tournament status "${String(status)}"`);
+    }
+    const completedAt = status === 'completed' ? (existing.completedAt ?? now) : null;
+    db.prepare('UPDATE tournaments SET status = ?, completed_at = ? WHERE id = ?')
+      .run(status, completedAt, id);
+    if (status === 'completed') {
+      const completedGames = db.prepare(
+        `SELECT COUNT(*) AS count FROM tournament_games
+         WHERE tournament_id = ? AND status = 'completed'`
+      ).get(id) as {count: number};
+      // Only recompute from `tournament_games` when game rows exist so manual fixture tests that
+      // seed pre-aggregated `tournament_entrants` rows without game rows keep their seeded scores.
+      if (completedGames.count > 0) {
+        recomputeTournamentStandings(db, id, true);
+      }
+    }
+    return getTournament(db, id)!;
+  });
 }
 
 // Re-assigns 1-based tournament seeds ordered by pre-tournament conservative ladder rating (`lcb`)

@@ -24,8 +24,9 @@ import * as render from '../server/render';
 import * as teams from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import * as wiki from '../server/wiki';
+import {syncStaticLiveBanner} from '../static/build';
 import {Project} from '../static/projects';
-import {root, slugify, toID} from '../static/util';
+import {escapeHtml, root, slugify, toID} from '../static/util';
 
 const CHAMPIONS_SIM_DEX = sim.Dex.mod('champions', champions as unknown as sim.ModData);
 
@@ -421,185 +422,6 @@ function parseBytesSpec(spec: string): number {
     : unit === 'gb' ? 1024 * 1024 * 1024
     : 1024 * 1024;
   return Math.round(val * mult);
-}
-
-interface SingleGameRecord {
-  i: number;
-  j: number;
-  outcome: 'W' | 'L' | 'T';
-}
-
-function computeSingleGameTournamentRatings(
-  M: number,
-  games: SingleGameRecord[],
-  anchorIndex = -1,
-  anchorElo = 1550
-): {elo: number[]; se: number[]} {
-  if (M === 0) return {elo: [], se: []};
-  const priorStdElo = 350;
-  const sigma0 = priorStdElo / ratings.ELO_SCALE;
-  const priorPrec = 1 / (sigma0 * sigma0);
-  const theta = new Float64Array(M);
-  const grad = new Float64Array(M);
-  const H = new Float64Array(M * M);
-
-  let tieCount = 0;
-  for (const g of games) {
-    if (g.outcome === 'T') tieCount++;
-  }
-  const tieRate = games.length > 0 ? Math.min(0.5, tieCount / games.length) : 0;
-  const nu = tieRate > 0 ? (2 * tieRate) / (1 - tieRate) : 0;
-
-  for (let iter = 0; iter < 25; iter++) {
-    H.fill(0);
-    for (let i = 0; i < M; i++) {
-      grad[i] = -priorPrec * theta[i];
-      H[i * M + i] = priorPrec;
-    }
-    for (const g of games) {
-      const d = theta[g.i] - theta[g.j];
-      const eh = Math.exp(0.5 * d);
-      const emh = 1 / eh;
-      const Z = eh + emh + nu;
-      const pW = eh / Z;
-      const pL = emh / Z;
-      const y = g.outcome === 'W' ? 0.5 : g.outcome === 'L' ? -0.5 : 0;
-      const mu = 0.5 * (pW - pL);
-      const v = 0.25 * (pW + pL) - mu * mu;
-      const diff = y - mu;
-      grad[g.i] += diff;
-      grad[g.j] -= diff;
-      H[g.i * M + g.i] += v;
-      H[g.j * M + g.j] += v;
-      H[g.i * M + g.j] -= v;
-      H[g.j * M + g.i] -= v;
-    }
-    const step = solveLinearSystem(H, grad, M);
-    let maxStep = 0;
-    for (let i = 0; i < M; i++) {
-      theta[i] += step[i];
-      if (Math.abs(step[i]) > maxStep) maxStep = Math.abs(step[i]);
-    }
-    if (maxStep < 1e-10) break;
-  }
-
-  H.fill(0);
-  const played = new Uint8Array(M);
-  for (let i = 0; i < M; i++) H[i * M + i] = priorPrec;
-  for (const g of games) {
-    const d = theta[g.i] - theta[g.j];
-    const eh = Math.exp(0.5 * d);
-    const emh = 1 / eh;
-    const Z = eh + emh + nu;
-    const pW = eh / Z;
-    const pL = emh / Z;
-    const mu = 0.5 * (pW - pL);
-    const v = Math.max(1e-9, 0.25 * (pW + pL) - mu * mu);
-    H[g.i * M + g.i] += v;
-    H[g.j * M + g.j] += v;
-    H[g.i * M + g.j] -= v;
-    H[g.j * M + g.i] -= v;
-    played[g.i] = 1;
-    played[g.j] = 1;
-  }
-  let playedCount = 0;
-  for (let i = 0; i < M; i++) playedCount += played[i];
-  // Pin the global shift gauge only across entrants with >= 1 game so unplayed entrants keep
-  // their 350 Elo prior uncertainty while pairwise variances stay exact.
-  if (playedCount > 0) {
-    const gauge = 1e6 / (playedCount * playedCount);
-    for (let i = 0; i < M; i++) {
-      if (!played[i]) continue;
-      for (let j = 0; j < M; j++) {
-        if (played[j]) H[i * M + j] += gauge;
-      }
-    }
-  }
-  const cov = invertMatrix(H, M);
-  let offset = 0;
-  if (anchorIndex >= 0 && anchorIndex < M) {
-    offset = theta[anchorIndex];
-  } else if (playedCount > 0) {
-    let sum = 0;
-    for (let i = 0; i < M; i++) {
-      if (played[i]) sum += theta[i];
-    }
-    offset = sum / playedCount;
-  }
-
-  const elo: number[] = [];
-  const se: number[] = [];
-  for (let i = 0; i < M; i++) {
-    elo.push(Math.round(anchorElo + ratings.ELO_SCALE * (theta[i] - offset)));
-    se.push(Math.round(ratings.ELO_SCALE * Math.sqrt(Math.max(0, cov[i * M + i]))));
-  }
-  return {elo, se};
-}
-
-function solveLinearSystem(A: Float64Array, b: Float64Array, n: number): Float64Array {
-  const M = new Float64Array(n * (n + 1));
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) M[r * (n + 1) + c] = A[r * n + c];
-    M[r * (n + 1) + n] = b[r];
-  }
-  for (let col = 0; col < n; col++) {
-    let pivot = col;
-    for (let r = col + 1; r < n; r++) {
-      if (Math.abs(M[r * (n + 1) + col]) > Math.abs(M[pivot * (n + 1) + col])) pivot = r;
-    }
-    if (pivot !== col) {
-      for (let c = col; c <= n; c++) {
-        const tmp = M[col * (n + 1) + c];
-        M[col * (n + 1) + c] = M[pivot * (n + 1) + c];
-        M[pivot * (n + 1) + c] = tmp;
-      }
-    }
-    const diag = M[col * (n + 1) + col] || 1e-12;
-    for (let r = col + 1; r < n; r++) {
-      const f = M[r * (n + 1) + col] / diag;
-      for (let c = col; c <= n; c++) M[r * (n + 1) + c] -= f * M[col * (n + 1) + c];
-    }
-  }
-  const x = new Float64Array(n);
-  for (let r = n - 1; r >= 0; r--) {
-    let sum = M[r * (n + 1) + n];
-    for (let c = r + 1; c < n; c++) sum -= M[r * (n + 1) + c] * x[c];
-    x[r] = sum / (M[r * (n + 1) + r] || 1e-12);
-  }
-  return x;
-}
-
-function invertMatrix(A: Float64Array, n: number): Float64Array {
-  const aug = new Float64Array(n * 2 * n);
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) aug[r * 2 * n + c] = A[r * n + c];
-    aug[r * 2 * n + n + r] = 1;
-  }
-  for (let col = 0; col < n; col++) {
-    let pivot = col;
-    for (let r = col + 1; r < n; r++) {
-      if (Math.abs(aug[r * 2 * n + col]) > Math.abs(aug[pivot * 2 * n + col])) pivot = r;
-    }
-    if (pivot !== col) {
-      for (let c = 0; c < 2 * n; c++) {
-        const tmp = aug[col * 2 * n + c];
-        aug[col * 2 * n + c] = aug[pivot * 2 * n + c];
-        aug[pivot * 2 * n + c] = tmp;
-      }
-    }
-    const diag = aug[col * 2 * n + col] || 1e-12;
-    for (let c = 0; c < 2 * n; c++) aug[col * 2 * n + c] /= diag;
-    for (let r = 0; r < n; r++) {
-      if (r === col) continue;
-      const f = aug[r * 2 * n + col];
-      for (let c = 0; c < 2 * n; c++) aug[r * 2 * n + c] -= f * aug[col * 2 * n + c];
-    }
-  }
-  const inv = new Float64Array(n * n);
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) inv[r * n + c] = aug[r * 2 * n + n + c];
-  }
-  return inv;
 }
 
 // Berger round-robin circle method: partitions all K*(K-1)/2 unordered pairs into rounds where
@@ -2816,115 +2638,6 @@ export class Runner {
     throw new Error(`Unknown live subcommand "${String(sub)}"`);
   }
 
-  private recomputeTournamentStandings(tournamentId: string, assignFinalRanks = false) {
-    const entrants = this.db.getTournamentEntrants(tournamentId)
-      .slice()
-      .sort((a, b) => a.seed - b.seed || a.versionId - b.versionId);
-    if (!entrants.length) return;
-
-    const allGames = this.db.getTournamentGames(tournamentId, 100000)
-      .slice()
-      .sort((a, b) => a.id.localeCompare(b.id));
-
-    const M = entrants.length;
-    const idxByVer = new Map<number, number>();
-    entrants.forEach((e, idx) => idxByVer.set(e.versionId, idx));
-
-    const wins = new Int32Array(M);
-    const losses = new Int32Array(M);
-    const ties = new Int32Array(M);
-    const pairScore = new Float64Array(M * M);
-    const sfScore = new Float64Array(M);
-    const singleGames: SingleGameRecord[] = [];
-
-    for (const g of allGames) {
-      if (!g.outcome) continue;
-      const i = idxByVer.get(g.p1VersionId);
-      const j = idxByVer.get(g.p2VersionId);
-      if (i === undefined || j === undefined) continue;
-      singleGames.push({i, j, outcome: g.outcome});
-
-      if (g.stage === 'Superfinal') {
-        if (g.outcome === 'W') {
-          sfScore[i] += 1;
-        } else if (g.outcome === 'L') {
-          sfScore[j] += 1;
-        } else {
-          sfScore[i] += 0.5;
-          sfScore[j] += 0.5;
-        }
-        continue;
-      }
-
-      if (g.outcome === 'W') {
-        wins[i]++;
-        losses[j]++;
-        pairScore[i * M + j] += 1;
-      } else if (g.outcome === 'L') {
-        losses[i]++;
-        wins[j]++;
-        pairScore[j * M + i] += 1;
-      } else {
-        ties[i]++;
-        ties[j]++;
-        pairScore[i * M + j] += 0.5;
-        pairScore[j * M + i] += 0.5;
-      }
-    }
-
-    const points = new Float64Array(M);
-    for (let i = 0; i < M; i++) {
-      points[i] = wins[i] + 0.5 * ties[i];
-    }
-    const sb = new Float64Array(M);
-    for (let i = 0; i < M; i++) {
-      let total = 0;
-      for (let j = 0; j < M; j++) {
-        if (i !== j) total += pairScore[i * M + j] * points[j];
-      }
-      sb[i] = Math.round(total * 100) / 100;
-    }
-
-    const ratingRes = computeSingleGameTournamentRatings(M, singleGames, -1, 1575);
-    const order = entrants.map((_, idx) => idx).sort((a, b) => (
-      points[b] - points[a] ||
-      sb[b] - sb[a] ||
-      ratingRes.elo[b] - ratingRes.elo[a] ||
-      entrants[a].seed - entrants[b].seed
-    ));
-
-    if (order.length >= 2 && (sfScore[order[0]] > 0 || sfScore[order[1]] > 0)) {
-      if (sfScore[order[1]] > sfScore[order[0]]) {
-        const tmp = order[0];
-        order[0] = order[1];
-        order[1] = tmp;
-      }
-    }
-
-    const rankByIdx = new Int32Array(M);
-    order.forEach((entIdx, rankZero) => {
-      rankByIdx[entIdx] = rankZero + 1;
-    });
-
-    for (let i = 0; i < M; i++) {
-      const ent = entrants[i];
-      this.db.upsertTournamentEntrant({
-        tournamentId,
-        agentId: ent.agentId,
-        versionId: ent.versionId,
-        seed: ent.seed,
-        finalRank: assignFinalRanks ? rankByIdx[i] : ent.finalRank,
-        elo: singleGames.length > 0 ? ratingRes.elo[i] : ent.elo,
-        se: singleGames.length > 0 ? ratingRes.se[i] : ent.se,
-        gameWins: wins[i],
-        gameLosses: losses[i],
-        gameTies: ties[i],
-        points: points[i],
-        sonnebornBerger: sb[i],
-      });
-    }
-  }
-
   private async cmdTournament(cmd: Command) {
     const sub = cmd.positional[1]?.toLowerCase();
     if (sub === 'create') {
@@ -3032,6 +2745,9 @@ export class Runner {
         this.db.seedTournamentEntrants(id);
       }
       this.db.setTournamentStatus(id, 'running', this.state.now);
+      if (this.publicDir) {
+        syncStaticLiveBanner(this.publicDir, this.db.getRunningTournament());
+      }
       return;
     }
 
@@ -3118,7 +2834,7 @@ export class Runner {
         const p2Team = samplePackedTournamentTeam(tour.format, item.p2.seed + item.cycle + 1);
         const gameId = `${idPrefix}-rr-${item.seq}`;
         const isVgc = tour.format.includes('vgc');
-        this.db.upsertTournamentGame({
+        const payload: db.CompletedTournamentGamePayload = {
           id: gameId,
           tournamentId: id,
           stage: 'Round Robin',
@@ -3134,29 +2850,43 @@ export class Runner {
           turns: outcome === 'T' ? 100 : (isVgc ? 8 + this.nextInt(9) : 24 + this.nextInt(24)),
           p1BankSeconds: 70 + this.nextInt(50),
           p2BankSeconds: 60 + this.nextInt(50),
-          status: 'completed',
           completedAt: at,
-        });
+        };
+        const shouldEmitLog =
+          writeLogs || Boolean(this.serverUrl) || k >= slice.length - 3;
+        const logText = shouldEmitLog
+          ? buildShowdownTournamentLog({
+            format: tour.format,
+            p1Name: item.p1.agentName,
+            p2Name: item.p2.agentName,
+            p1TeamPacked: p1Team,
+            p2TeamPacked: p2Team,
+            outcome,
+          })
+          : undefined;
 
-        if (writeLogs && this.publicDir) {
-          const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
-          fs.mkdirSync(tourDir, {recursive: true});
-          fs.writeFileSync(
-            path.join(tourDir, `${gameId}.log`),
-            buildShowdownTournamentLog({
-              format: tour.format,
-              p1Name: item.p1.agentName,
-              p2Name: item.p2.agentName,
-              p1TeamPacked: p1Team,
-              p2TeamPacked: p2Team,
-              outcome,
-            }),
-            'utf8'
-          );
+        if (this.serverUrl) {
+          await this.getArenaClient().completeTournamentGame(id, {
+            game: payload,
+            log: logText,
+            table: (k % Math.max(1, tour.parallelTables)) + 1,
+          });
+        } else {
+          this.db.upsertTournamentGame({
+            ...payload,
+            status: 'completed',
+          });
+          if (logText && this.publicDir) {
+            const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
+            fs.mkdirSync(tourDir, {recursive: true});
+            fs.writeFileSync(path.join(tourDir, `${gameId}.log`), logText, 'utf8');
+          }
         }
       }
 
-      this.recomputeTournamentStandings(id, false);
+      if (!this.serverUrl) {
+        this.db.recomputeTournamentStandings(id, false);
+      }
 
       const sfRaw = getFlag(cmd, 'superfinal');
       if (sfRaw !== undefined) {
@@ -3182,7 +2912,7 @@ export class Runner {
             const p1Team = samplePackedTournamentTeam(tour.format, g - 1);
             const p2Team = samplePackedTournamentTeam(tour.format, g);
             const sfId = `${idPrefix}-sf${g}`;
-            this.db.upsertTournamentGame({
+            const sfPayload: db.CompletedTournamentGamePayload = {
               id: sfId,
               tournamentId: id,
               stage: 'Superfinal',
@@ -3198,27 +2928,37 @@ export class Runner {
               turns: tour.format.includes('vgc') ? 10 : 34,
               p1BankSeconds: 88,
               p2BankSeconds: 64,
-              status: 'completed',
               completedAt: this.state.now,
+            };
+            const sfLog = buildShowdownTournamentLog({
+              format: tour.format,
+              p1Name: p1.agentName,
+              p2Name: p2.agentName,
+              p1TeamPacked: p1Team,
+              p2TeamPacked: p2Team,
+              outcome,
             });
-            if (this.publicDir) {
-              const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
-              fs.mkdirSync(tourDir, {recursive: true});
-              fs.writeFileSync(
-                path.join(tourDir, `${sfId}.log`),
-                buildShowdownTournamentLog({
-                  format: tour.format,
-                  p1Name: p1.agentName,
-                  p2Name: p2.agentName,
-                  p1TeamPacked: p1Team,
-                  p2TeamPacked: p2Team,
-                  outcome,
-                }),
-                'utf8'
-              );
+            if (this.serverUrl) {
+              await this.getArenaClient().completeTournamentGame(id, {
+                game: sfPayload,
+                log: sfLog,
+                table: 1,
+              });
+            } else {
+              this.db.upsertTournamentGame({
+                ...sfPayload,
+                status: 'completed',
+              });
+              if (this.publicDir) {
+                const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
+                fs.mkdirSync(tourDir, {recursive: true});
+                fs.writeFileSync(path.join(tourDir, `${sfId}.log`), sfLog, 'utf8');
+              }
             }
           }
-          this.recomputeTournamentStandings(id, false);
+          if (!this.serverUrl) {
+            this.db.recomputeTournamentStandings(id, false);
+          }
         }
       }
       return;
@@ -3229,74 +2969,157 @@ export class Runner {
       if (!id) throw new Error('Usage: tournament broadcast <id> [<p1> <p2> ... | --off]');
       if (hasFlag(cmd, 'off')) {
         this.state.tournamentBroadcast = undefined;
+        if (this.serverUrl) {
+          await this.getArenaClient().sendTournamentBroadcast(id, {off: true});
+        }
         return;
       }
       const tour = this.db.getTournament(id);
       if (!tour) throw new Error(`Unknown tournament "${id}"`);
       const entrants = this.db.getTournamentEntrants(id);
       const specs = cmd.positional.slice(3);
-      const pairs: Array<[{name: string; version: string}, {name: string; version: string}]> = [];
+      const pairs: Array<[
+        {slug: string; name: string; version: string},
+        {slug: string; name: string; version: string},
+      ]> = [];
 
       if (specs.length >= 2) {
         for (let i = 0; i + 1 < specs.length; i += 2) {
           const v1 = this.resolveAgentVersion(specs[i]);
           const v2 = this.resolveAgentVersion(specs[i + 1]);
           pairs.push([
-            {name: v1.agentName, version: v1.version},
-            {name: v2.agentName, version: v2.version},
+            {slug: v1.agentSlug, name: v1.agentName, version: v1.version},
+            {slug: v2.agentSlug, name: v2.agentName, version: v2.version},
           ]);
         }
       } else if (entrants.length >= 2) {
         pairs.push([
-          {name: entrants[0].agentName, version: entrants[0].version},
-          {name: entrants[1].agentName, version: entrants[1].version},
+          {
+            slug: entrants[0].agentSlug,
+            name: entrants[0].agentName,
+            version: entrants[0].version,
+          },
+          {
+            slug: entrants[1].agentSlug,
+            name: entrants[1].agentName,
+            version: entrants[1].version,
+          },
         ]);
         if (entrants.length >= 4) {
           pairs.push([
-            {name: entrants[2].agentName, version: entrants[2].version},
-            {name: entrants[3].agentName, version: entrants[3].version},
+            {
+              slug: entrants[2].agentSlug,
+              name: entrants[2].agentName,
+              version: entrants[2].version,
+            },
+            {
+              slug: entrants[3].agentSlug,
+              name: entrants[3].agentName,
+              version: entrants[3].version,
+            },
           ]);
         }
       }
       if (!pairs.length) return;
 
-      const [mainP1, mainP2] = pairs[0];
       const cycle = Number(getFlag(cmd, 'cycle') ?? 4);
       const game = Number(getFlag(cmd, 'game') ?? cycle);
       const isDoubles = tour.format.includes('vgc') || tour.format.includes('doubles');
+      const gen = /^gen(\d)/i.exec(tour.format)?.[1] ?? '9';
+      const tier = isDoubles ? '[Gen 9 Champions] VGC 2026 Reg M-C' : `[Gen ${gen}] OU`;
       const inc = arena.turnIncrementSeconds(tour.format);
 
-      this.state.tournamentBroadcast = {
-        tournamentId: id,
-        tables: pairs.map((pr, idx) => ({
-          label: `Table ${idx + 1} · ${pr[0].name} vs ${pr[1].name}`,
-        })),
-        seriesLeftHtml: `Round Robin · Cycle ${cycle} · Game ${game}`,
-        seriesRightHtml:
-          `${mainP1.name} <code>${mainP1.version}</code> vs ` +
-          `${mainP2.name} <code>${mainP2.version}</code>`,
-        p1: {name: mainP1.name, bankSeconds: 118, thinking: false, incrementSeconds: inc},
-        p2: {name: mainP2.name, bankSeconds: 104, thinking: true, incrementSeconds: inc},
-        lines: [
-          `|player|p1|${mainP1.name}|1`,
-          `|player|p2|${mainP2.name}|2`,
-          `|gametype|${isDoubles ? 'doubles' : 'singles'}`,
-          '|gen|9',
-          `|tier|${isDoubles ? '[Gen 9 Champions] VGC 2026 Reg M-C' : '[Gen 9] OU'}`,
-          '|turn|1',
-        ],
-        live: true,
-      };
+      const tables: arena.BroadcastTable[] = pairs.map((pr, idx) => {
+        const tableNum = idx + 1;
+        const p1Team = samplePackedTournamentTeam(tour.format, idx * 2);
+        const p2Team = samplePackedTournamentTeam(tour.format, idx * 2 + 1);
+        const p1Mons = tournaments.parsePackedTeamSpecies(p1Team);
+        const p2Mons = tournaments.parsePackedTeamSpecies(p2Team);
+        const lead1 = p1Mons[0] ?? 'Incineroar';
+        const lead2 = p2Mons[0] ?? 'Garchomp';
+        const turnNum = idx === 0 ? 1 : 3;
+        return {
+          table: tableNum,
+          label: `Table ${tableNum} · ${pr[0].name} vs ${pr[1].name}`,
+          idle: false,
+          gameId: `live-t${id}-c${cycle}-tb${tableNum}`,
+          stage: 'Round Robin',
+          cycle,
+          matchupGame: game,
+          seriesLeftHtml: `Round Robin · Cycle ${cycle} · Game ${game}`,
+          seriesRightHtml:
+            `${escapeHtml(pr[0].name)} <code>${escapeHtml(pr[0].version)}</code> vs ` +
+            `${escapeHtml(pr[1].name)} <code>${escapeHtml(pr[1].version)}</code>`,
+          p1: {
+            slug: pr[0].slug,
+            name: pr[0].name,
+            version: pr[0].version,
+            team: p1Team,
+            bankSeconds: 118 - idx * 8,
+            thinking: idx % 2 === 1,
+            incrementSeconds: inc,
+          },
+          p2: {
+            slug: pr[1].slug,
+            name: pr[1].name,
+            version: pr[1].version,
+            team: p2Team,
+            bankSeconds: 104 - idx * 6,
+            thinking: idx % 2 === 0,
+            incrementSeconds: inc,
+          },
+          lines: [
+            `|player|p1|${pr[0].name}|1`,
+            `|player|p2|${pr[1].name}|2`,
+            `|gametype|${isDoubles ? 'doubles' : 'singles'}`,
+            `|gen|${gen}`,
+            `|tier|${tier}`,
+            ...p1Mons.slice(0, 6).map(sp => `|poke|p1|${sp}|`),
+            ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
+            '|teampreview',
+            '|start',
+            `|switch|p1a: ${lead1}|${lead1}|100/100`,
+            `|switch|p2a: ${lead2}|${lead2}|100/100`,
+            `|turn|${turnNum}`,
+          ],
+          live: true,
+          updatedAt: this.state.now,
+        };
+      });
+
+      const normalized = arena.normalizeLiveBroadcast(
+        {
+          tournamentId: id,
+          updatedAt: this.state.now,
+          tables,
+          seriesLeftHtml: tables[0].seriesLeftHtml ?? '',
+          seriesRightHtml: tables[0].seriesRightHtml ?? '',
+          p1: tables[0].p1!,
+          p2: tables[0].p2!,
+          lines: tables[0].lines ?? [],
+          live: true,
+        },
+        this.state.now
+      );
+      this.state.tournamentBroadcast = normalized;
+      if (this.serverUrl) {
+        await this.getArenaClient().sendTournamentBroadcast(id, normalized);
+      }
       return;
     }
 
     if (sub === 'complete') {
       const id = cmd.positional[2];
       if (!id) throw new Error('Usage: tournament complete <id> [--archive]');
-      this.recomputeTournamentStandings(id, true);
       this.db.setTournamentStatus(id, 'completed', this.state.now);
       if (this.state.tournamentBroadcast?.tournamentId === id) {
         this.state.tournamentBroadcast = undefined;
+      }
+      if (this.serverUrl) {
+        await this.getArenaClient().sendTournamentBroadcast(id, {off: true});
+      }
+      if (this.publicDir) {
+        syncStaticLiveBanner(this.publicDir, this.db.getRunningTournament());
       }
       if (hasFlag(cmd, 'archive')) {
         const archiveBytes = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]);
@@ -3392,18 +3215,8 @@ export class Runner {
   cmdRender(): arena.LiveDocument {
     const liveDoc = this.buildLiveDocument();
     if (this.publicDir) {
-      render.renderArenaPages({
-        db: this.db,
-        publicDir: this.publicDir,
-        staticDir: this.staticDir,
-        avatarsDir: this.avatarsDir,
-        liveDoc,
-        tournamentBroadcast: this.state.tournamentBroadcast,
-        now: this.state.now,
-      });
-      const liveJsonPath = path.join(this.publicDir, 'api', 'live.json');
-      fs.mkdirSync(path.dirname(liveJsonPath), {recursive: true});
-      fs.writeFileSync(liveJsonPath, `${JSON.stringify(liveDoc)}\n`, 'utf8');
+      tournaments.renderBattleViewerPage(this.publicDir);
+      syncStaticLiveBanner(this.publicDir, this.db.getRunningTournament());
     }
     return liveDoc;
   }

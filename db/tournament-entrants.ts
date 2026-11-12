@@ -1,5 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import * as ratings from '../server/ratings';
+
 export interface TournamentEntrantRow {
   tournamentId: string;
   agentId: number;
@@ -111,4 +113,129 @@ export function getTournamentEntrants(
     agentName: r.agent_name as string,
     version: r.version as string,
   }));
+}
+
+// Recomputes Round-Robin points, Sonneborn-Berger opponent-weighted tiebreakers, event-scoped
+// Davidson MAP Elo ± SE, and optional final 1..M placements (including any 100-game #1 vs #2
+// Superfinal swap) over all completed games for `tournamentId`.
+export function recomputeTournamentStandings(
+  db: DatabaseSync,
+  tournamentId: string,
+  assignFinalRanks = false
+) {
+  const entrants = getTournamentEntrants(db, tournamentId)
+    .slice()
+    .sort((a, b) => a.seed - b.seed || a.versionId - b.versionId);
+  if (!entrants.length) return;
+
+  const gameRows = db.prepare(`
+    SELECT stage, p1_version_id, p2_version_id, outcome
+    FROM tournament_games
+    WHERE tournament_id = ?
+      AND status = 'completed'
+      AND outcome IS NOT NULL
+    ORDER BY id ASC
+  `).all(tournamentId) as Array<{
+    stage: 'Round Robin' | 'Superfinal';
+    p1_version_id: number;
+    p2_version_id: number;
+    outcome: ratings.GameOutcome;
+  }>;
+
+  const M = entrants.length;
+  const idxByVer = new Map<number, number>();
+  entrants.forEach((e, idx) => idxByVer.set(e.versionId, idx));
+
+  const wins = new Int32Array(M);
+  const losses = new Int32Array(M);
+  const ties = new Int32Array(M);
+  const pairScore = new Float64Array(M * M);
+  const sfScore = new Float64Array(M);
+  const singleGames: ratings.TournamentGameInput[] = [];
+
+  for (const g of gameRows) {
+    const i = idxByVer.get(g.p1_version_id);
+    const j = idxByVer.get(g.p2_version_id);
+    if (i === undefined || j === undefined) continue;
+    singleGames.push({i, j, outcome: g.outcome});
+
+    if (g.stage === 'Superfinal') {
+      if (g.outcome === 'W') {
+        sfScore[i] += 1;
+      } else if (g.outcome === 'L') {
+        sfScore[j] += 1;
+      } else {
+        sfScore[i] += 0.5;
+        sfScore[j] += 0.5;
+      }
+      continue;
+    }
+
+    if (g.outcome === 'W') {
+      wins[i]++;
+      losses[j]++;
+      pairScore[i * M + j] += 1;
+    } else if (g.outcome === 'L') {
+      losses[i]++;
+      wins[j]++;
+      pairScore[j * M + i] += 1;
+    } else {
+      ties[i]++;
+      ties[j]++;
+      pairScore[i * M + j] += 0.5;
+      pairScore[j * M + i] += 0.5;
+    }
+  }
+
+  const points = new Float64Array(M);
+  for (let i = 0; i < M; i++) {
+    points[i] = wins[i] + 0.5 * ties[i];
+  }
+  const sb = new Float64Array(M);
+  for (let i = 0; i < M; i++) {
+    let total = 0;
+    for (let j = 0; j < M; j++) {
+      if (i !== j) total += pairScore[i * M + j] * points[j];
+    }
+    sb[i] = Math.round(total * 100) / 100;
+  }
+
+  const ratingRes = ratings.computeTournamentRatings(M, singleGames, -1, 1500);
+  const order = entrants.map((_, idx) => idx).sort((a, b) => (
+    points[b] - points[a] ||
+    sb[b] - sb[a] ||
+    ratingRes.elo[b] - ratingRes.elo[a] ||
+    entrants[a].seed - entrants[b].seed
+  ));
+
+  if (order.length >= 2 && (sfScore[order[0]] > 0 || sfScore[order[1]] > 0)) {
+    if (sfScore[order[1]] > sfScore[order[0]]) {
+      const tmp = order[0];
+      order[0] = order[1];
+      order[1] = tmp;
+    }
+  }
+
+  const rankByIdx = new Int32Array(M);
+  order.forEach((entIdx, rankZero) => {
+    rankByIdx[entIdx] = rankZero + 1;
+  });
+
+  for (let i = 0; i < M; i++) {
+    const ent = entrants[i];
+    upsertTournamentEntrant(db, {
+      tournamentId,
+      agentId: ent.agentId,
+      versionId: ent.versionId,
+      seed: ent.seed,
+      finalRank: assignFinalRanks ? rankByIdx[i] : ent.finalRank,
+      elo: singleGames.length > 0 ? Math.round(ratingRes.elo[i]) : ent.elo,
+      se: singleGames.length > 0 ? Math.round(ratingRes.eloStd[i]) : ent.se,
+      gameWins: wins[i],
+      gameLosses: losses[i],
+      gameTies: ties[i],
+      points: points[i],
+      sonnebornBerger: sb[i],
+    });
+  }
 }

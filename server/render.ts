@@ -1,24 +1,27 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as path from 'path';
 
 import {Team} from '@pkmn/sets';
+import polka from 'polka';
 import * as site from 'site';
 import * as yaml from 'yaml';
 
+import {AVATARS_DIR} from '../db';
 import type * as db from '../db';
 import {
   Renderer,
-  formatLiveTournamentBanner,
   header,
+  injectLiveBanner,
   renderer as siteRenderer,
-  syncStaticLiveBanner,
 } from '../static/build';
 import * as projects from '../static/projects';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 import {getDex, hashTeam} from '../teams';
 
 import * as arena from './arena';
-import {renderAgentProfiles} from './profile';
+import {renderAgentProfile, resolveAgentLogo} from './profile';
 import * as ratings from './ratings';
 import * as tournaments from './tournaments';
 
@@ -198,14 +201,13 @@ export interface LadderTeamsDocument {
 
 export interface Options {
   db: db.Database;
+  arena: arena.Handle;
   renderer?: Renderer;
   publicDir?: string;
   staticDir?: string;
   avatarsDir?: string;
-  liveDoc?: arena.LiveDocument;
-  tournamentBroadcast?: tournaments.LiveBroadcast;
   recentMatchesLimit?: number;
-  now?: number;
+  now?: () => number;
 }
 
 export interface ProjectMeta {
@@ -236,40 +238,6 @@ export function copyFileAtomic(srcPath: string, destPath: string) {
 export function safeInlineJson(value: unknown): string {
   if (value === undefined) return 'undefined';
   return JSON.stringify(value).replace(/</g, '\\u003c');
-}
-
-// Resolves `/<path>.json` to `/<path>/index.json` when `<publicDir>/<path>/index.json` exists on
-// disk and `<publicDir>/<path>.json` does not, giving machine consumers parity between
-// `/arena/battles.json` and `/arena/battles/index.json` without duplicating files.
-export function resolveStaticJsonUrl(publicDir: string, rawUrl: string): string {
-  const qIdx = rawUrl.indexOf('?');
-  const pathname = qIdx >= 0 ? rawUrl.slice(0, qIdx) : rawUrl;
-  const query = qIdx >= 0 ? rawUrl.slice(qIdx) : '';
-  if (
-    !pathname.startsWith('/') ||
-    !pathname.endsWith('.json') ||
-    pathname.endsWith('/index.json')
-  ) {
-    return rawUrl;
-  }
-  const prefix = pathname.slice(1, -5);
-  if (!prefix || prefix.includes('\0')) return rawUrl;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(prefix);
-  } catch {
-    return rawUrl;
-  }
-  const rootResolved = path.resolve(publicDir);
-  const directPath = path.resolve(publicDir, `${decoded}.json`);
-  if (!directPath.startsWith(`${rootResolved}${path.sep}`)) return rawUrl;
-  if (fs.existsSync(directPath)) return rawUrl;
-  const indexJsonPath = path.resolve(publicDir, decoded, 'index.json');
-  if (!indexJsonPath.startsWith(`${rootResolved}${path.sep}`)) return rawUrl;
-  if (fs.existsSync(indexJsonPath)) {
-    return `/${prefix}/index.json${query}`;
-  }
-  return rawUrl;
 }
 
 // Full battle logs (containing unpacked team sheets, real agent identities, telemetry, and
@@ -1188,10 +1156,15 @@ function renderSingleLadderArtifact(opts: {
     matchupsPane: matchupsRes.html,
   });
 
+  const liveTournament = db.getRunningTournament();
+  const ladderHeader = injectLiveBanner(
+    header('<a href="/arena/" class="subtle">Ladders</a>'),
+    liveTournament
+  );
   const html = renderer.render({
     id: 'leaderboard',
     title: `Arena — ${l.name} | pkmn.ai`,
-    header: header('<a href="/arena/" class="subtle">Ladders</a>'),
+    header: ladderHeader,
     path: `/arena/ladders/${urlKey}/`,
     style: ARENA_STYLE,
     content: ladderContent,
@@ -1491,7 +1464,7 @@ export function renderArenaAndLadderArtifacts(opts: {
   const arenaHtml = renderer.render({
     id: 'arena',
     title: 'Arena | pkmn.ai',
-    header: header('Arena'),
+    header: injectLiveBanner(header('Arena'), db.getRunningTournament()),
     path: '/arena/',
     style: ARENA_STYLE,
     content: arenaContent,
@@ -1519,7 +1492,8 @@ function renderLiveSlotCard(
   live: arena.LiveMatch,
   nowSec: number,
   publicDir: string,
-  projectMeta: ReadonlyMap<string, ProjectMeta>
+  projectMeta: ReadonlyMap<string, ProjectMeta>,
+  profileSlugs?: ReadonlySet<string>
 ): string {
   const isRunning = live.activeSlot === key;
   const otherKey = key === 'p1' ? 'p2' : 'p1';
@@ -1532,7 +1506,7 @@ function renderLiveSlotCard(
     : Math.round(slotData.bankSeconds);
   const inc = Math.round(live.incrementSeconds);
   const ramPct = ((slotData.ram / 14336) * 100).toFixed(1);
-  const href = resolveAgentHref(publicDir, projectMeta, slotData.slug, slotData.name);
+  const href = resolveAgentHref(publicDir, projectMeta, slotData.slug, slotData.name, profileSlugs);
   const agentHtml = `${formatAgentLink(slotData.name, href, true)} ` +
     `<code>${escapeHtml(slotData.version)}</code>`;
 
@@ -1581,13 +1555,18 @@ function renderLivePanelInner(
   liveDoc: arena.LiveDocument | undefined,
   nowSec: number,
   publicDir: string,
-  projectMeta: ReadonlyMap<string, ProjectMeta>
+  projectMeta: ReadonlyMap<string, ProjectMeta>,
+  profileSlugs?: ReadonlySet<string>
 ): string {
   if (!liveDoc?.live || liveDoc.stale) {
     const idleMsg = liveDoc?.stale
       ? 'No active heartbeat — Arena is offline or idle.'
       : 'No battle currently running — Arena is idle.';
-    return `<div class="live-idle muted">${idleMsg}</div>`;
+    const tourSuffix = liveDoc?.runningTournament
+      ? ` · <a href="${escapeHtml(liveDoc.runningTournament.href)}" class="subtle">` +
+        `<strong>&#9679; Watch ${escapeHtml(liveDoc.runningTournament.name)} live</strong></a>`
+      : '';
+    return `<div class="live-idle muted">${idleMsg}${tourSuffix}</div>`;
   }
 
   const l = liveDoc.live;
@@ -1613,8 +1592,8 @@ function renderLivePanelInner(
     </span>
   </div>
   <div class="slots-grid">
-    ${renderLiveSlotCard('p1', l.p1, l, nowSec, publicDir, projectMeta)}
-    ${renderLiveSlotCard('p2', l.p2, l, nowSec, publicDir, projectMeta)}
+    ${renderLiveSlotCard('p1', l.p1, l, nowSec, publicDir, projectMeta, profileSlugs)}
+    ${renderLiveSlotCard('p2', l.p2, l, nowSec, publicDir, projectMeta, profileSlugs)}
   </div>`;
 }
 
@@ -1842,11 +1821,21 @@ export function renderBattlesPage(opts: {
   renderer: Renderer;
   publicDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
+  profileSlugs?: ReadonlySet<string>;
   liveDoc?: arena.LiveDocument;
   recentMatchesLimit: number;
   nowSec: number;
 }): string {
-  const {db, renderer, publicDir, projectMeta, liveDoc, recentMatchesLimit, nowSec} = opts;
+  const {
+    db,
+    renderer,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+    liveDoc,
+    recentMatchesLimit,
+    nowSec,
+  } = opts;
   const ladders = db.getCurrentLadders();
   const countsBySlot = db.getMatchCountsBySlot();
   const recentMatches = db.getRecentMatches(recentMatchesLimit)
@@ -1865,13 +1854,13 @@ export function renderBattlesPage(opts: {
 
   const agentLinks: Record<string, string> = {};
   for (const s of db.getProjectArenaSummaries()) {
-    const href = resolveAgentHref(publicDir, projectMeta, s.slug, s.name);
+    const href = resolveAgentHref(publicDir, projectMeta, s.slug, s.name, profileSlugs);
     if (href) agentLinks[s.slug] = href;
   }
   for (const m of recentMatches) {
     for (const side of [m.p1, m.p2]) {
       if (!agentLinks[side.slug]) {
-        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name);
+        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name, profileSlugs);
         if (href) agentLinks[side.slug] = href;
       }
     }
@@ -1879,7 +1868,7 @@ export function renderBattlesPage(opts: {
   if (liveDoc?.live) {
     for (const side of [liveDoc.live.p1, liveDoc.live.p2]) {
       if (!agentLinks[side.slug]) {
-        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name);
+        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name, profileSlugs);
         if (href) agentLinks[side.slug] = href;
       }
     }
@@ -1954,7 +1943,7 @@ export function renderBattlesPage(opts: {
 
   const content = renderTemplate(BATTLES_TEMPLATE, {
     formatFilterItems,
-    livePanelInner: renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta),
+    livePanelInner: renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta, profileSlugs),
     historyRows,
     pagerInitialClass,
     pagerInitialInfo,
@@ -1967,34 +1956,79 @@ export function renderBattlesPage(opts: {
   return renderer.render({
     id: 'battles',
     title: 'Arena — Battles | pkmn.ai',
-    header: header('<a href="/arena/" class="subtle">Battles</a>'),
+    header: injectLiveBanner(
+      header('<a href="/arena/" class="subtle">Battles</a>'),
+      db.getRunningTournament()
+    ),
     path: '/arena/battles/',
     style: ARENA_STYLE,
     content,
   });
 }
 
-function readExistingLiveJson(publicDir: string): arena.LiveDocument | undefined {
-  const filePath = path.join(publicDir, 'api', 'live.json');
-  if (!fs.existsSync(filePath)) return undefined;
+function getFileMtimeToken(filePath: string): string {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as arena.LiveDocument;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed;
-    }
-  } catch {}
-  return undefined;
+    return fs.statSync(filePath, {bigint: true}).mtimeNs.toString(36);
+  } catch {
+    return '0';
+  }
 }
 
-// Statically pre-renders all public Arena HTML + JSON surfaces (`/arena/`, `/arena/ladders/*`,
-// `/arena/battles/`, `/arena/tournaments/*`, `/projects/<slug>/`, and `/projects/`) atomically to
-// `public/` after every completed match or submission status change so Nginx serves spectator
-// traffic directly from disk without hitting Node or SQLite.
-export function renderArenaPages(options: Options) {
+const HUB_REDIRECT_ALIASES = [
+  '/ladder',
+  '/ladders',
+  '/leaderboard',
+  '/leaderboards',
+  '/ranking',
+  '/rankings',
+  '/rating',
+  '/ratings',
+  '/tournament',
+  '/tournaments',
+  '/tour',
+  '/tours',
+  '/arena/ladder',
+  '/arena/ladders',
+  '/arena/leaderboard',
+  '/arena/leaderboards',
+  '/arena/ranking',
+  '/arena/rankings',
+  '/arena/rating',
+  '/arena/ratings',
+  '/arena/tournament',
+  '/arena/tournaments',
+  '/arena/tour',
+  '/arena/tours',
+];
+
+const BATTLE_REDIRECT_ALIASES = [
+  '/battles',
+  '/battle',
+  '/matches',
+  '/match',
+  '/games',
+  '/game',
+  '/arena/battle',
+  '/arena/matches',
+  '/arena/match',
+  '/arena/games',
+  '/arena/game',
+];
+
+const ASSET_EXT_RE = /\.[a-z0-9]{1,8}$/i;
+
+// Dynamically serves all SQLite-backed Arena & Project HTML and `.json` surfaces (`/arena`,
+// `/arena/ladders/*`, `/arena/battles`, `/arena/tournaments/*`, `/projects`, `/projects/:slug`)
+// with `Cache-Control: no-cache` + `ETag` (`304 Not Modified`), backed by an in-memory cache that
+// invalidates automatically on SQLite writes (`PRAGMA data_version` + `total_changes()`) and live
+// Arena worker sequence updates.
+export function register(app: polka.Polka, options: Options) {
+  const {db, arena: arenaHandle} = options;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const staticDir = options.staticDir ?? STATIC_DIR;
-  const nowSec = options.now ?? Math.floor(Date.now() / 1000);
+  const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
   const recentMatchesLimit = options.recentMatchesLimit ?? 50;
+  const getNowSec = options.now ?? (() => Math.floor(Date.now() / 1000));
 
   const renderer = options.renderer ?? (
     publicDir === PUBLIC_DIR
@@ -2009,192 +2043,504 @@ export function renderArenaPages(options: Options) {
       })
   );
 
-  const projectMeta = loadProjectMetaMap(staticDir);
-  const profileAgents = options.db.getAllActiveAgents();
-  const profileSlugs = new Set(profileAgents.map(a => a.slug));
-  const countsBySlot = options.db.getMatchCountsBySlot();
-  const recentBattles = options.db.getRecentMatches(recentMatchesLimit)
-    .map(m => arena.enrichMatchView(publicDir, m));
-  const liveTournament = options.db.getRunningTournament();
-  const liveBanner = formatLiveTournamentBanner(liveTournament);
+  interface CacheEntry {
+    token: string;
+    body: Buffer;
+    etag: string;
+    contentType: string;
+  }
 
-  const prevBannerProvider = renderer.liveBannerProvider;
-  renderer.liveBannerProvider = () => liveBanner;
-  try {
-    renderAgentProfiles({
-      db: options.db,
-      renderer,
-      publicDir,
-      avatarsDir: options.avatarsDir,
+  const responseCache = new Map<string, CacheEntry>();
+
+  const getArchiveDiskToken = (): string => {
+    const parts: string[] = [];
+    for (const sub of ['ladders', 'tournaments']) {
+      const base = path.join(publicDir, 'arena', sub);
+      if (!fs.existsSync(base)) continue;
+      for (const entry of fs.readdirSync(base)) {
+        parts.push(`${sub}/${entry}:${getFileMtimeToken(path.join(base, entry))}`);
+      }
+    }
+    return parts.join(',');
+  };
+
+  const getDbToken = (): string => {
+    const state = arenaHandle.getState();
+    const projMtime = getFileMtimeToken(path.join(staticDir, 'projects.yml'));
+    const djMtime = getFileMtimeToken(path.join(staticDir, 'arena.dj'));
+    return `${db.getChangeToken()}:${state.archiveSeq}:${projMtime}:${djMtime}:` +
+      getArchiveDiskToken();
+  };
+
+  let cachedContext: {
+    token: string;
+    projectMeta: Map<string, ProjectMeta>;
+    profileAgents: db.AgentRow[];
+    profileBySlug: Map<string, db.AgentRow>;
+    profileSlugs: Set<string>;
+    liveTournament?: db.TournamentRow;
+  } | undefined;
+
+  const getContext = (dbToken: string) => {
+    if (cachedContext?.token === dbToken) return cachedContext;
+    const projectMeta = loadProjectMetaMap(staticDir);
+    const profileAgents = db.getAllActiveAgents();
+    const profileBySlug = new Map(profileAgents.map(a => [a.slug, a]));
+    const profileSlugs = new Set(profileAgents.map(a => a.slug));
+    const liveTournament = db.getRunningTournament();
+    cachedContext = {
+      token: dbToken,
       projectMeta,
       profileAgents,
+      profileBySlug,
       profileSlugs,
-      nowSec,
-    });
+      liveTournament,
+    };
+    return cachedContext;
+  };
 
-    const summaries = options.db.getProjectArenaSummaries();
-    const arenaByName = new Map<string, projects.ArenaInfo>();
-    for (const s of summaries) {
-      const profileHref = `/projects/${encodeURIComponent(s.slug)}/`;
-      arenaByName.set(s.name, {
-        slug: s.slug,
-        name: s.name,
-        profileHref,
-        bestRank: s.bestRank,
-        bestLcb: s.bestLcb,
-        ladders: s.ladders.map(b => ({
-          slot: b.slot,
-          name: b.ladderName,
-          rank: b.rank,
-          provisional: b.provisional,
-        })),
-      });
-    }
+  let cachedArenaBundle: {
+    token: string;
+    bundle: ReturnType<typeof renderArenaAndLadderArtifacts>;
+  } | undefined;
 
-    const projectsPage = projects.page(staticDir, arenaByName);
-    const projectsHtml = renderer.render({id: 'projects', ...projectsPage});
-    writeFileAtomic(path.join(publicDir, 'projects', 'index.html'), projectsHtml);
-
-    const hasExplicitBroadcast = Object.prototype.hasOwnProperty.call(
-      options,
-      'tournamentBroadcast'
-    );
-    tournaments.renderTournamentsPages({
-      db: options.db,
-      renderer,
-      publicDir,
-      projectMeta,
-      profileSlugs,
-      tournamentBroadcast: options.tournamentBroadcast,
-      includeDiskBroadcast: !hasExplicitBroadcast,
-    });
-
-    const {
-      arenaHtml,
-      ladderHtmlBySlot,
-      ladderJsonBySlot,
-      archivedLadderHtmlById,
-      archivedLadderJsonById,
-      archivedTeamsJsonById,
-      standingsJson,
-    } = renderArenaAndLadderArtifacts({
-      db: options.db,
+  const getArenaBundle = (dbToken: string, nowSec: number) => {
+    const timeBucket = Math.floor(nowSec / 15);
+    const bundleToken = `${dbToken}:${timeBucket}`;
+    if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
+    const ctx = getContext(dbToken);
+    const bundle = renderArenaAndLadderArtifacts({
+      db,
       renderer,
       publicDir,
       staticDir,
-      projectMeta,
-      profileSlugs,
+      projectMeta: ctx.projectMeta,
+      profileSlugs: ctx.profileSlugs,
       nowSec,
     });
-    writeFileAtomic(path.join(publicDir, 'arena', 'index.html'), arenaHtml);
-    writeFileAtomic(
-      path.join(publicDir, 'arena', 'index.json'),
-      `${JSON.stringify(standingsJson, undefined, 2)}\n`
-    );
+    cachedArenaBundle = {token: bundleToken, bundle};
+    return bundle;
+  };
 
-    const laddersDir = path.join(publicDir, 'arena', 'ladders');
-    fs.mkdirSync(laddersDir, {recursive: true});
-    const validLadderDirs = new Set([
-      ...Object.keys(ladderHtmlBySlot),
-      ...Object.keys(archivedLadderHtmlById),
-    ]);
-    for (const entry of fs.readdirSync(laddersDir, {withFileTypes: true})) {
-      if (entry.isDirectory() && !validLadderDirs.has(entry.name)) {
-        fs.rmSync(path.join(laddersDir, entry.name), {recursive: true, force: true});
+  const sendCached = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    cacheKey: string,
+    token: string,
+    contentType: string,
+    compute: () => string | Buffer,
+    cacheControl = 'no-cache'
+  ) => {
+    let entry = responseCache.get(cacheKey);
+    if (entry?.token !== token) {
+      const raw = compute();
+      const body = Buffer.isBuffer(raw) ? raw : Buffer.from(raw, 'utf8');
+      const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
+      entry = {token, body, etag, contentType};
+      if (responseCache.size >= 256) {
+        const oldest = responseCache.keys().next().value;
+        if (oldest !== undefined) responseCache.delete(oldest);
       }
+      responseCache.set(cacheKey, entry);
     }
-    for (const [slot, ladderHtml] of Object.entries(ladderHtmlBySlot)) {
-      const slotDir = path.join(laddersDir, slot);
-      writeFileAtomic(path.join(slotDir, 'index.html'), ladderHtml);
-      writeFileAtomic(
-        path.join(slotDir, 'index.json'),
-        `${JSON.stringify(ladderJsonBySlot[slot], undefined, 2)}\n`
-      );
-      for (const f of fs.readdirSync(slotDir)) {
-        if (f !== 'index.html' && f !== 'index.json' && !f.includes('.tmp.')) {
-          fs.rmSync(path.join(slotDir, f), {recursive: true, force: true});
-        }
-      }
+    res.setHeader('Cache-Control', cacheControl);
+    res.setHeader('ETag', entry.etag);
+    if (req.headers['if-none-match'] === entry.etag) {
+      res.statusCode = 304;
+      res.end();
+      return;
     }
-    for (const [ladderId, ladderHtml] of Object.entries(archivedLadderHtmlById)) {
-      const idDir = path.join(laddersDir, ladderId);
-      writeFileAtomic(path.join(idDir, 'index.html'), ladderHtml);
-      writeFileAtomic(
-        path.join(idDir, 'index.json'),
-        `${JSON.stringify(archivedLadderJsonById[ladderId], undefined, 2)}\n`
-      );
-      const teamsDoc = archivedTeamsJsonById[ladderId];
-      if (teamsDoc) {
-        writeFileAtomic(
-          path.join(idDir, 'teams.json'),
-          `${JSON.stringify(teamsDoc, undefined, 2)}\n`
-        );
-      } else {
-        for (const f of fs.readdirSync(idDir)) {
-          if (f !== 'index.html' && f !== 'index.json' && !f.includes('.tmp.')) {
-            fs.rmSync(path.join(idDir, f), {recursive: true, force: true});
-          }
-        }
-      }
-    }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', entry.contentType);
+    res.end(entry.body);
+  };
 
-    const liveJsonPath = path.join(publicDir, 'api', 'live.json');
-    const hasExplicitLiveDoc = Object.prototype.hasOwnProperty.call(options, 'liveDoc');
-    const rawLiveDoc = hasExplicitLiveDoc
-      ? options.liveDoc
-      : readExistingLiveJson(publicDir);
-    const totalMatches = countsBySlot.all ?? recentBattles.length;
-    const liveDocToWrite: arena.LiveDocument = rawLiveDoc
-      ? {
-        ...rawLiveDoc,
-        pageSize: rawLiveDoc.pageSize ?? recentMatchesLimit,
-        totalMatches: rawLiveDoc.totalMatches ?? totalMatches,
-        countsBySlot: rawLiveDoc.countsBySlot ?? countsBySlot,
-        historyEndpoint: rawLiveDoc.historyEndpoint ?? '/api/battles.json',
-        recentMatches: rawLiveDoc.recentMatches.map(m => arena.enrichMatchView(publicDir, m)),
-      }
-      : {
-        updatedAt: nowSec,
-        stale: false,
-        pageSize: recentMatchesLimit,
-        totalMatches,
-        countsBySlot,
-        historyEndpoint: '/api/battles.json',
-        recentMatches: recentBattles,
-      };
-    if (hasExplicitLiveDoc || !fs.existsSync(liveJsonPath)) {
-      writeFileAtomic(liveJsonPath, `${JSON.stringify(liveDocToWrite)}\n`);
+  const sendJsonNotFound = (res: http.ServerResponse, message = 'Not found.') => {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(JSON.stringify({error: message}));
+  };
+
+  const sendHtmlNotFound = (res: http.ServerResponse) => {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    const static404 = path.join(publicDir, '404.html');
+    if (fs.existsSync(static404)) {
+      res.end(fs.readFileSync(static404));
+      return;
     }
-    const battlesDir = path.join(publicDir, 'arena', 'battles');
-    fs.mkdirSync(battlesDir, {recursive: true});
-    for (const entry of fs.readdirSync(battlesDir, {withFileTypes: true})) {
-      if (entry.isDirectory()) {
-        fs.rmSync(path.join(battlesDir, entry.name), {recursive: true, force: true});
-      } else if (
-        entry.name !== 'index.html' &&
-        entry.name !== 'index.json' &&
-        !entry.name.includes('.tmp.')
-      ) {
-        fs.rmSync(path.join(battlesDir, entry.name), {force: true});
-      }
-    }
-    const battlesHtml = renderBattlesPage({
-      db: options.db,
-      renderer,
-      publicDir,
-      projectMeta,
-      liveDoc: liveDocToWrite,
-      recentMatchesLimit,
-      nowSec,
+    const html = renderer.render({
+      title: '404 | pkmn.ai',
+      header: injectLiveBanner(header('404'), db.getRunningTournament()),
+      path: '',
+      id: 'error',
+      content: '<p>Not Found</p>',
     });
-    writeFileAtomic(path.join(battlesDir, 'index.html'), battlesHtml);
-    writeFileAtomic(
-      path.join(battlesDir, 'index.json'),
-      `${JSON.stringify(liveDocToWrite, undefined, 2)}\n`
-    );
+    res.end(html);
+  };
 
-    syncStaticLiveBanner(publicDir, liveTournament);
-  } finally {
-    renderer.liveBannerProvider = prevBannerProvider;
+  const paramStr = (val: string | string[] | undefined): string => {
+    const raw = Array.isArray(val) ? val[0] : val;
+    try {
+      return decodeURIComponent(raw ?? '').trim();
+    } catch {
+      return (raw ?? '').trim();
+    }
+  };
+
+  for (const prefix of HUB_REDIRECT_ALIASES) {
+    app.get(prefix, (_req, res) => {
+      res.writeHead(302, {Location: '/arena/'});
+      res.end();
+    });
   }
+
+  for (const prefix of BATTLE_REDIRECT_ALIASES) {
+    app.get(prefix, (_req, res) => {
+      res.writeHead(302, {Location: '/arena/battles/'});
+      res.end();
+    });
+    app.get(`${prefix}.json`, (_req, res) => {
+      res.writeHead(302, {Location: '/arena/battles.json'});
+      res.end();
+    });
+  }
+
+  const handleArenaHub = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
+    const nowSec = getNowSec();
+    const dbToken = getDbToken();
+    const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
+    if (asJson) {
+      sendCached(
+        req,
+        res,
+        'arena:json',
+        token,
+        'application/json; charset=utf-8',
+        () => `${JSON.stringify(getArenaBundle(dbToken, nowSec).standingsJson, undefined, 2)}\n`
+      );
+      return;
+    }
+    sendCached(
+      req,
+      res,
+      'arena:html',
+      token,
+      'text/html; charset=utf-8',
+      () => getArenaBundle(dbToken, nowSec).arenaHtml
+    );
+  };
+
+  app.get('/arena', (req, res) => handleArenaHub(req, res, false));
+  app.get('/arena.json', (req, res) => handleArenaHub(req, res, true));
+  app.get('/arena/index.json', (req, res) => handleArenaHub(req, res, true));
+
+  const handleBattles = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
+    const nowSec = getNowSec();
+    const state = arenaHandle.getState();
+    const dbToken = getDbToken();
+    const token = `${dbToken}:${state.liveSeq}:${Math.floor(nowSec / 5)}`;
+    if (asJson) {
+      sendCached(
+        req,
+        res,
+        'battles:json',
+        token,
+        'application/json; charset=utf-8',
+        () => `${JSON.stringify(arenaHandle.getLiveDocument(nowSec), undefined, 2)}\n`
+      );
+      return;
+    }
+    sendCached(req, res, 'battles:html', token, 'text/html; charset=utf-8', () => {
+      const ctx = getContext(dbToken);
+      return renderBattlesPage({
+        db,
+        renderer,
+        publicDir,
+        projectMeta: ctx.projectMeta,
+        profileSlugs: ctx.profileSlugs,
+        liveDoc: arenaHandle.getLiveDocument(nowSec),
+        recentMatchesLimit,
+        nowSec,
+      });
+    });
+  };
+
+  app.get('/arena/battles', (req, res) => handleBattles(req, res, false));
+  app.get('/arena/battles.json', (req, res) => handleBattles(req, res, true));
+  app.get('/arena/battles/index.json', (req, res) => handleBattles(req, res, true));
+
+  app.get('/arena/ladders/:id/teams.json', (req, res) => {
+    const id = paramStr(req.params.id);
+    const ladder = db.getLadder(id);
+    if (ladder?.team !== 'pools' || ladder.status !== 'archived') {
+      sendJsonNotFound(res, `Published teams.json is not available for "${id}".`);
+      return;
+    }
+    const nowSec = getNowSec();
+    const dbToken = getDbToken();
+    sendCached(
+      req,
+      res,
+      `ladder-teams:${ladder.id}`,
+      dbToken,
+      'application/json; charset=utf-8',
+      () => {
+        const doc = getArenaBundle(dbToken, nowSec).archivedTeamsJsonById[ladder.id] ??
+          buildLadderTeamsDocument(db, ladder);
+        return `${JSON.stringify(doc, undefined, 2)}\n`;
+      }
+    );
+  });
+
+  const handleLadder = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    rawKey: string,
+    forceJson: boolean
+  ) => {
+    const isJson = forceJson || rawKey.endsWith('.json');
+    const key = rawKey.endsWith('.json') ? rawKey.slice(0, -5) : rawKey;
+    if (!key) {
+      if (isJson) sendJsonNotFound(res);
+      else sendHtmlNotFound(res);
+      return;
+    }
+    const nowSec = getNowSec();
+    const dbToken = getDbToken();
+    const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
+    const bundle = getArenaBundle(dbToken, nowSec);
+    const jsonDoc = bundle.ladderJsonBySlot[key] ?? bundle.archivedLadderJsonById[key];
+    const htmlDoc = bundle.ladderHtmlBySlot[key] ?? bundle.archivedLadderHtmlById[key];
+    if (!jsonDoc || !htmlDoc) {
+      if (isJson) sendJsonNotFound(res, `Unknown ladder "${key}".`);
+      else sendHtmlNotFound(res);
+      return;
+    }
+    if (isJson) {
+      sendCached(
+        req,
+        res,
+        `ladder:json:${key}`,
+        token,
+        'application/json; charset=utf-8',
+        () => `${JSON.stringify(jsonDoc, undefined, 2)}\n`
+      );
+      return;
+    }
+    sendCached(req, res, `ladder:html:${key}`, token, 'text/html; charset=utf-8', () => htmlDoc);
+  };
+
+  app.get('/arena/ladders/:key/index.json', (req, res) => {
+    handleLadder(req, res, paramStr(req.params.key), true);
+  });
+  app.get('/arena/ladders/:key', (req, res) => {
+    handleLadder(req, res, paramStr(req.params.key), false);
+  });
+
+  const handleTournament = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    rawId: string,
+    forceJson: boolean
+  ) => {
+    const isJson = forceJson || rawId.endsWith('.json');
+    const id = rawId.endsWith('.json') ? rawId.slice(0, -5) : rawId;
+    const tournament = id ? db.getTournament(id) : undefined;
+    if (!tournament) {
+      if (isJson) sendJsonNotFound(res, `Unknown tournament "${id}".`);
+      else sendHtmlNotFound(res);
+      return;
+    }
+    const state = arenaHandle.getState();
+    const dbToken = getDbToken();
+    const token = `${dbToken}:${state.liveSeq}`;
+    if (isJson) {
+      sendCached(
+        req,
+        res,
+        `tournament:json:${tournament.id}`,
+        dbToken,
+        'application/json; charset=utf-8',
+        () => {
+          const doc = arena.buildTournamentDocument(db, publicDir, tournament, 10_000);
+          return `${JSON.stringify(doc, undefined, 2)}\n`;
+        }
+      );
+      return;
+    }
+    sendCached(
+      req,
+      res,
+      `tournament:html:${tournament.id}`,
+      token,
+      'text/html; charset=utf-8',
+      () => {
+        const ctx = getContext(dbToken);
+        return tournaments.renderTournamentPage({
+          db,
+          renderer,
+          tournament,
+          publicDir,
+          projectMeta: ctx.projectMeta,
+          profileSlugs: ctx.profileSlugs,
+          tournamentBroadcast: arenaHandle.getTournamentBroadcast(tournament.id),
+          liveTournament: ctx.liveTournament,
+        }).html;
+      }
+    );
+  };
+
+  app.get('/arena/tournaments/:id/index.json', (req, res) => {
+    handleTournament(req, res, paramStr(req.params.id), true);
+  });
+  app.get('/arena/tournaments/:id', (req, res) => {
+    handleTournament(req, res, paramStr(req.params.id), false);
+  });
+
+  // `/projects` is a static-YAML-backed directory page (augmented with Arena badges), so per
+  // repository rules it must NEVER expose `/projects.json` or `/projects/index.json` (only
+  // database-backed `/projects/:slug.json` is exposed).
+  app.get('/projects.json', (_req, res) => sendJsonNotFound(res));
+  app.get('/projects/index.json', (_req, res) => sendJsonNotFound(res));
+
+  app.get('/projects', (req, res) => {
+    const dbToken = getDbToken();
+    sendCached(req, res, 'projects:html', dbToken, 'text/html; charset=utf-8', () => {
+      const ctx = getContext(dbToken);
+      const summaries = db.getProjectArenaSummaries();
+      const arenaByName = new Map<string, projects.ArenaInfo>();
+      for (const s of summaries) {
+        arenaByName.set(s.name, {
+          slug: s.slug,
+          name: s.name,
+          profileHref: `/projects/${encodeURIComponent(s.slug)}/`,
+          bestRank: s.bestRank,
+          bestLcb: s.bestLcb,
+          ladders: s.ladders.map(b => ({
+            slot: b.slot,
+            name: b.ladderName,
+            rank: b.rank,
+            provisional: b.provisional,
+          })),
+        });
+      }
+      const projectsPage = projects.page(staticDir, arenaByName);
+      return renderer.render({
+        id: 'projects',
+        ...projectsPage,
+        header: injectLiveBanner(projectsPage.header, ctx.liveTournament),
+      });
+    });
+  });
+
+  const handleProjectProfile = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    rawParam: string,
+    forceJson: boolean
+  ) => {
+    if (!rawParam || rawParam === 'index.json') {
+      if (forceJson || rawParam === 'index.json') sendJsonNotFound(res);
+      else sendHtmlNotFound(res);
+      return;
+    }
+
+    const dbToken = getDbToken();
+    const ctx = getContext(dbToken);
+
+    const isJson = forceJson || rawParam.endsWith('.json');
+    if (isJson) {
+      const slug = rawParam.endsWith('.json') ? rawParam.slice(0, -5) : rawParam;
+      const agent = ctx.profileBySlug.get(slug);
+      if (!agent) {
+        sendJsonNotFound(res, `Unknown Arena agent "${slug}".`);
+        return;
+      }
+      const nowSec = getNowSec();
+      const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
+      sendCached(
+        req,
+        res,
+        `profile:json:${agent.slug}`,
+        token,
+        'application/json; charset=utf-8',
+        () => {
+          const {json} = renderAgentProfile({
+            db,
+            renderer,
+            agent,
+            publicDir,
+            avatarsDir,
+            projectMeta: ctx.projectMeta,
+            profileSlugs: ctx.profileSlugs,
+            liveTournament: ctx.liveTournament,
+            nowSec,
+          });
+          return `${JSON.stringify(json, undefined, 2)}\n`;
+        }
+      );
+      return;
+    }
+
+    // Serve agent logo assets (`/projects/<slug>.<ext>`) directly from `avatarsDir`.
+    for (const agent of ctx.profileAgents) {
+      const logo = resolveAgentLogo(agent, avatarsDir);
+      if (logo?.fileName === rawParam) {
+        const mtime = getFileMtimeToken(logo.filePath);
+        sendCached(
+          req,
+          res,
+          `logo:${logo.fileName}`,
+          mtime,
+          logo.contentType,
+          () => fs.readFileSync(logo.filePath),
+          'public, max-age=86400'
+        );
+        return;
+      }
+    }
+
+    const agent = ctx.profileBySlug.get(rawParam);
+    if (agent) {
+      const nowSec = getNowSec();
+      const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
+      sendCached(
+        req,
+        res,
+        `profile:html:${agent.slug}`,
+        token,
+        'text/html; charset=utf-8',
+        () => renderAgentProfile({
+          db,
+          renderer,
+          agent,
+          publicDir,
+          avatarsDir,
+          projectMeta: ctx.projectMeta,
+          profileSlugs: ctx.profileSlugs,
+          liveTournament: ctx.liveTournament,
+          nowSec,
+        }).html
+      );
+      return;
+    }
+
+    if (ASSET_EXT_RE.test(rawParam)) {
+      sendHtmlNotFound(res);
+      return;
+    }
+
+    res.writeHead(302, {Location: `/projects/#${encodeURIComponent(rawParam)}`});
+    res.end();
+  };
+
+  app.get('/projects/:slug/index.json', (req, res) => {
+    handleProjectProfile(req, res, paramStr(req.params.slug), true);
+  });
+  app.get('/projects/:param', (req, res) => {
+    handleProjectProfile(req, res, paramStr(req.params.param), false);
+  });
 }

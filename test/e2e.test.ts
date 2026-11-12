@@ -390,6 +390,14 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
           return statusQueue.then(() => undefined);
         },
       });
+      render.register(app, {
+        db,
+        arena: arenaHandle,
+        publicDir,
+        staticDir,
+        avatarsDir,
+        now: () => nowSeconds,
+      });
 
       const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -512,14 +520,19 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
             expect(db.getLadder('gen9championsvgc2027regma')?.discord)
               .toBe('1564121375558340768');
           },
-          'vgc-archived': () => {
+          'vgc-archived': async () => {
             expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('archived');
             const oldVgcDir = path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2026regmc');
-            const newVgcDir = path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2027regma');
-            expect(fs.existsSync(path.join(oldVgcDir, 'teams.json'))).toBe(true);
             expect(fs.existsSync(path.join(oldVgcDir, 'gen9championsvgc2026regmc-logs.7z')))
               .toBe(true);
-            expect(fs.existsSync(path.join(newVgcDir, 'teams.json'))).toBe(false);
+            const oldTeamsRes = await realFetch(
+              `${baseUrl}/arena/ladders/gen9championsvgc2026regmc/teams.json`
+            );
+            expect(oldTeamsRes.status).toBe(200);
+            const newTeamsRes = await realFetch(
+              `${baseUrl}/arena/ladders/gen9championsvgc2027regma/teams.json`
+            );
+            expect(newTeamsRes.status).toBe(404);
           },
           quarantined: async () => {
             await statusQueue;
@@ -560,7 +573,6 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
         });
 
         await runner.runFile(root('tools', 'scenarios', 'e2e.mock'));
-        render.renderArenaPages({db, publicDir, staticDir, avatarsDir, now: nowSeconds});
 
         expect(seenCheckpoints).toEqual([
           'pre-launch',
@@ -579,12 +591,16 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
 
         const seedDb = new Database(':memory:', {now: nowSeconds});
         const seedMockDir = path.join(tmpDir, 'seed-mock');
+        const seedStaticDir = path.join(seedMockDir, 'static');
+        const seedAvatarsDir = path.join(seedStaticDir, 'avatars');
         const viewPublicDir = path.join(tmpDir, 'views-public');
         copyRootPublicAssets(render.PUBLIC_DIR, viewPublicDir);
         try {
           const seeded = await mock.seed({
             db: seedDb,
             mockDir: seedMockDir,
+            staticDir: seedStaticDir,
+            avatarsDir: seedAvatarsDir,
             publicDir: viewPublicDir,
             now: nowSeconds,
             render: true,
@@ -597,23 +613,13 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
             'utf8'
           );
           expect(sf1Log).toContain('|c|☆');
-          const tour1JsonPath = path.join(viewPublicDir, 'arena', 'tournaments', '1', 'index.json');
-          const tour1Doc = JSON.parse(fs.readFileSync(tour1JsonPath, 'utf8')) as {
-            archiveHref?: string;
-            games: Array<{logHref?: string}>;
-          };
-          expect(tour1Doc.archiveHref).toBe('/arena/tournaments/1/1-replays.7z');
-          expect(tour1Doc.games.some(g => g.logHref === '/arena/tournaments/1/spring26-sf1.log'))
-            .toBe(true);
-          expect(fs.existsSync(path.join(viewPublicDir, 'projects', 'index.json'))).toBe(false);
-          expect(
-            fs.existsSync(
-              path.join(viewPublicDir, 'arena', 'battles', seeded.featuredBattleId, 'index.html')
-            )
-          ).toBe(false);
 
-          fs.mkdirSync(path.join(viewPublicDir, 'account'), {recursive: true});
-          fs.writeFileSync(path.join(viewPublicDir, 'account', 'index.html'), '');
+          for (const stub of ['arena', 'projects', 'account', 'chat']) {
+            const stubDir = path.join(viewPublicDir, stub);
+            fs.mkdirSync(stubDir, {recursive: true});
+            const stubFile = path.join(stubDir, 'index.html');
+            if (!fs.existsSync(stubFile)) fs.writeFileSync(stubFile, '');
+          }
 
           const hyperlinkBin = path.join(process.cwd(), 'node_modules', '.bin', 'hyperlink');
           const linkOut = execFileSync(hyperlinkBin, [viewPublicDir, '--check-anchors'], {
@@ -622,90 +628,567 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
           expect(linkOut).toContain('Found 0 bad links');
           expect(linkOut).toContain('Found 0 bad anchors');
 
-          const browser = await chromium.launch({args: ['--disable-gpu']});
-          try {
-            const pathsToVerify = [
-              '/arena/',
-              '/arena/ladders/rby/',
-              '/arena/ladders/vgc/',
-              '/arena/tournaments/1/',
-              '/arena/tournaments/2/',
-              '/arena/tournaments/3/',
-              '/projects/',
-              '/projects/0-error/',
-              '/account/',
-              '/arena/battles/',
-            ];
+          const viewApp = polka();
+          const viewArena = arena.register(viewApp, {
+            db: seedDb,
+            arenaSecret: E2E_AUTH.arenaSecret,
+            sessionSecret: E2E_AUTH.sessionSecret,
+            publicDir: viewPublicDir,
+            now: () => nowSeconds,
+          });
+          viewArena.setLiveState({
+            live: seeded.liveDoc.live,
+            stale: seeded.liveDoc.stale,
+            updatedAt: seeded.liveDoc.updatedAt,
+          });
+          if (seeded.tournamentBroadcast) {
+            viewArena.setTournamentBroadcast(seeded.tournamentBroadcast);
+          }
+          render.register(viewApp, {
+            db: seedDb,
+            arena: viewArena,
+            publicDir: viewPublicDir,
+            staticDir: seedStaticDir,
+            avatarsDir: seedAvatarsDir,
+            now: () => nowSeconds,
+          });
 
-            for (const theme of ['light', 'dark'] as const) {
-              const context = await browser.newContext({
-                viewport: {width: 375, height: 667},
-                colorScheme: theme,
-                baseURL: 'http://pkmn.test',
+          const mimeByExt: Record<string, string> = {
+            '.html': 'text/html; charset=utf-8',
+            '.css': 'text/css; charset=utf-8',
+            '.js': 'application/javascript; charset=utf-8',
+            '.json': 'application/json; charset=utf-8',
+            '.svg': 'image/svg+xml',
+            '.png': 'image/png',
+            '.log': 'text/plain; charset=utf-8',
+            '.7z': 'application/x-7z-compressed',
+          };
+          const viewServer = http.createServer((req, res) => {
+            const parsedUrl = new URL(req.url ?? '/', 'http://localhost');
+            const pathname = decodeURIComponent(parsedUrl.pathname);
+            const isStaticArenaFile = pathname.startsWith('/arena/viewer/') ||
+              pathname.endsWith('.log') ||
+              pathname.endsWith('.7z');
+            const isSsrOrApi = pathname.startsWith('/api/') ||
+              pathname === '/projects' ||
+              pathname === '/projects.json' ||
+              pathname.startsWith('/projects/') ||
+              ((pathname === '/arena' || pathname.startsWith('/arena/')) && !isStaticArenaFile);
+            if (!isSsrOrApi) {
+              const candidate = path.resolve(viewPublicDir, `.${pathname}`);
+              if (candidate.startsWith(viewPublicDir) && fs.existsSync(candidate)) {
+                const st = fs.statSync(candidate);
+                const file = st.isDirectory() ? path.join(candidate, 'index.html') : candidate;
+                if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+                  const ext = path.extname(file).toLowerCase();
+                  res.statusCode = 200;
+                  res.setHeader('Content-Type', mimeByExt[ext] ?? 'application/octet-stream');
+                  res.end(fs.readFileSync(file));
+                  return;
+                }
+              }
+            }
+            void viewApp.handler(req as polka.Request, res);
+          });
+          await new Promise<void>(resolve => viewServer.listen(0, '127.0.0.1', resolve));
+          const viewPort = (viewServer.address() as {port: number}).port;
+          const viewBaseUrl = `http://127.0.0.1:${viewPort}`;
+
+          try {
+            const tour1Res = await realFetch(`${viewBaseUrl}/arena/tournaments/1/index.json`);
+            expect(tour1Res.status).toBe(200);
+            const tour1Doc = await tour1Res.json() as {
+              archiveHref?: string;
+              games: Array<{logHref?: string}>;
+            };
+            expect(tour1Doc.archiveHref).toBe('/arena/tournaments/1/1-replays.7z');
+            expect(tour1Doc.games.some(g => g.logHref === '/arena/tournaments/1/spring26-sf1.log'))
+              .toBe(true);
+            expect((await realFetch(`${viewBaseUrl}/projects/index.json`)).status).toBe(404);
+            expect(
+              (await realFetch(`${viewBaseUrl}/arena/battles/${seeded.featuredBattleId}`)).status
+            ).toBe(404);
+
+            const browser = await chromium.launch({args: ['--disable-gpu']});
+            try {
+              const pathsToVerify = [
+                '/arena/',
+                '/arena/ladders/rby/',
+                '/arena/ladders/vgc/',
+                '/arena/tournaments/1/',
+                '/arena/tournaments/2/',
+                '/arena/tournaments/3/',
+                '/projects/',
+                '/projects/0-error/',
+                '/account/',
+                '/arena/battles/',
+              ];
+
+              for (const theme of ['light', 'dark'] as const) {
+                const context = await browser.newContext({
+                  viewport: {width: 375, height: 667},
+                  colorScheme: theme,
+                  baseURL: 'http://pkmn.test',
+                });
+                await context.route('**/*', async route => {
+                  const u = new URL(route.request().url());
+                  if (u.origin !== 'http://pkmn.test') {
+                    await route.fulfill({status: 204, body: ''});
+                    return;
+                  }
+                  if (
+                    u.pathname === '/api/battles/stream' ||
+                    /^\/api\/tournaments\/[^/]+\/stream$/.test(u.pathname)
+                  ) {
+                    await route.fulfill({status: 204, contentType: 'text/event-stream', body: ''});
+                    return;
+                  }
+                  if (u.pathname === '/account' || u.pathname.startsWith('/account/')) {
+                    const r = await realFetch(`${baseUrl}${u.pathname}${u.search}`, {
+                      headers: {cookie: cookieFor('scheibo')},
+                    });
+                    await route.fulfill({
+                      status: r.status,
+                      contentType: 'text/html; charset=utf-8',
+                      body: await r.text(),
+                    });
+                    return;
+                  }
+                  const r = await realFetch(`${viewBaseUrl}${u.pathname}${u.search}`);
+                  const bodyBuf = Buffer.from(await r.arrayBuffer());
+                  await route.fulfill({
+                    status: r.status,
+                    contentType: r.headers.get('content-type') ?? 'application/octet-stream',
+                    body: bodyBuf,
+                  });
+                });
+
+                const page = await context.newPage();
+                const pageErrors: string[] = [];
+                page.on('pageerror', err => pageErrors.push(err.message));
+                page.on('console', msg => {
+                  if (msg.type() === 'error') pageErrors.push(msg.text());
+                });
+
+                for (const p of pathsToVerify) {
+                  await page.goto(p);
+                  const overflow = await page.evaluate<number>(
+                    'document.documentElement.scrollWidth - window.innerWidth'
+                  );
+                  expect({path: p, theme, overflow}).toEqual({
+                    path: p,
+                    theme,
+                    overflow: expect.any(Number),
+                  });
+                  expect(overflow).toBeLessThanOrEqual(0);
+                }
+                await page.locator('#battles-tbody tr.battle-row td').first().click();
+                expect(
+                  await page.locator('#battles-tbody tr.battle-detail-row:not(.hide)').count()
+                ).toBe(1);
+                expect(
+                  await page.evaluate<number>(
+                    'document.documentElement.scrollWidth - window.innerWidth'
+                  )
+                ).toBeLessThanOrEqual(0);
+                expect(pageErrors).toEqual([]);
+                await context.close();
+              }
+
+              // Real live EventSource SSE interaction test (no SSE stubbing — direct 127.0.0.1!)
+              const liveClient = new arena.Client({
+                serverUrl: viewBaseUrl,
+                arenaSecret: E2E_AUTH.arenaSecret!,
               });
-              await context.route('**/*', async route => {
+              const liveCtx = await browser.newContext({
+                viewport: {width: 375, height: 667},
+                colorScheme: 'dark',
+              });
+              await liveCtx.route('**/*', async route => {
                 const u = new URL(route.request().url());
-                if (u.origin !== 'http://pkmn.test') {
+                if (u.origin !== viewBaseUrl) {
                   await route.fulfill({status: 204, body: ''});
                   return;
                 }
-                if (u.pathname === '/account' || u.pathname.startsWith('/account/')) {
-                  const r = await realFetch(`${baseUrl}${u.pathname}${u.search}`, {
-                    headers: {cookie: cookieFor('scheibo')},
-                  });
-                  await route.fulfill({
-                    status: r.status,
-                    contentType: 'text/html; charset=utf-8',
-                    body: await r.text(),
-                  });
-                  return;
-                }
-                const clean = decodeURIComponent(u.pathname);
-                const candidate = path.resolve(viewPublicDir, `.${clean}`);
-                if (fs.existsSync(candidate)) {
-                  const st = fs.statSync(candidate);
-                  const file = st.isDirectory() ? path.join(candidate, 'index.html') : candidate;
-                  if (fs.existsSync(file) && fs.statSync(file).isFile()) {
-                    await route.fulfill({path: file});
-                    return;
-                  }
-                }
-                await route.fulfill({status: 404, body: 'Not Found'});
+                await route.continue();
+              });
+              const livePage = await liveCtx.newPage();
+              const liveErrors: string[] = [];
+              livePage.on('pageerror', err => liveErrors.push(err.message));
+              livePage.on('console', msg => {
+                if (msg.type() === 'error') liveErrors.push(msg.text());
               });
 
-              const page = await context.newPage();
-              const pageErrors: string[] = [];
-              page.on('pageerror', err => pageErrors.push(err.message));
-              page.on('console', msg => {
-                if (msg.type() === 'error') pageErrors.push(msg.text());
+              // Part A: `/arena/battles/` live SSE updates without refreshing
+              await livePage.goto(`${viewBaseUrl}/arena/battles/`, {waitUntil: 'domcontentloaded'});
+              await livePage.locator('label[for="bf-vgc"]').click();
+              await livePage.waitForFunction(
+                () => (document.getElementById('bf-vgc') as HTMLInputElement | undefined)?.checked
+              );
+
+              const vgcLadder = seedDb.getCurrentLadders().find(l => l.slot === 'vgc')!;
+              const vgcEntries = seedDb.getLeaderboardEntries(vgcLadder.id)
+                .filter(e => e.role !== 'retired');
+              const p1Entry = vgcEntries[0];
+              const p2Entry = vgcEntries[1];
+
+              await liveClient.sendHeartbeat({
+                heartbeatSeq: 500,
+                matchId: 'vgc-sse-live-001',
+                ladderId: vgcLadder.id,
+                format: vgcLadder.format,
+                game: 1,
+                turn: 4,
+                activeSlot: 'p1',
+                turnStartedAt: nowSeconds - 2,
+                turnBudgetSeconds: 150,
+                incrementSeconds: 25,
+                p1: {
+                  slug: p1Entry.agentSlug,
+                  name: p1Entry.agentName,
+                  version: p1Entry.version,
+                  bankSeconds: 148,
+                  lastTurnMillis: 310,
+                  meanTurnMillis: 300,
+                  ram: 1024,
+                  team: 'P1:aabbccddeeff',
+                },
+                p2: {
+                  slug: p2Entry.agentSlug,
+                  name: p2Entry.agentName,
+                  version: p2Entry.version,
+                  bankSeconds: 150,
+                  lastTurnMillis: 420,
+                  meanTurnMillis: 400,
+                  ram: 1280,
+                  team: '112233445566',
+                },
+              });
+              await livePage.waitForFunction(
+                () => document.getElementById('live-panel')?.textContent
+                  ?.includes('vgc-sse-live-001')
+              );
+              expect(await livePage.locator('#state-p1').textContent()).toContain('RUNNING');
+              expect(await livePage.locator('#state-p2').textContent()).toContain('PAUSED');
+
+              // Swap active slot & advance to Game 2 via SSE without refreshing
+              await liveClient.sendHeartbeat({
+                heartbeatSeq: 501,
+                matchId: 'vgc-sse-live-001',
+                ladderId: vgcLadder.id,
+                format: vgcLadder.format,
+                game: 2,
+                turn: 9,
+                activeSlot: 'p2',
+                turnStartedAt: nowSeconds - 1,
+                turnBudgetSeconds: 145,
+                incrementSeconds: 25,
+                game1Summary: {winnerSlot: 'p1', turns: 11},
+                p1: {
+                  slug: p1Entry.agentSlug,
+                  name: p1Entry.agentName,
+                  version: p1Entry.version,
+                  bankSeconds: 140,
+                  lastTurnMillis: 315,
+                  meanTurnMillis: 305,
+                  ram: 1040,
+                  team: 'P1:aabbccddeeff',
+                },
+                p2: {
+                  slug: p2Entry.agentSlug,
+                  name: p2Entry.agentName,
+                  version: p2Entry.version,
+                  bankSeconds: 145,
+                  lastTurnMillis: 410,
+                  meanTurnMillis: 405,
+                  ram: 1290,
+                  team: '112233445566',
+                },
+              });
+              await livePage.waitForFunction(
+                () => document.getElementById('live-panel')?.textContent?.includes('Game 2 / 2')
+              );
+              expect(await livePage.locator('#state-p1').textContent()).toContain('PAUSED');
+              expect(await livePage.locator('#state-p2').textContent()).toContain('RUNNING');
+
+              // Complete VGC match & start next RBY match -> VGC row prepends to filtered history
+              // AND #live-panel transitions to the new RBY match without refreshing!
+              await liveClient.completeMatch({
+                match: {
+                  id: 'vgc-sse-live-001',
+                  ladderId: vgcLadder.id,
+                  p1VersionId: p1Entry.versionId,
+                  p2VersionId: p2Entry.versionId,
+                  seed: '42,43,44,45',
+                  p1TeamLabel: 'P1:aabbccddeeff',
+                  p2TeamLabel: '112233445566',
+                  game1Outcome: 'W',
+                  game2Outcome: 'W',
+                  category: 'WW',
+                  game1Turns: 11,
+                  game2Turns: 13,
+                  game1EndReason: 'normal',
+                  game2EndReason: 'normal',
+                  p1PeakRam: 1050,
+                  p2PeakRam: 1300,
+                  p1Game1BankSeconds: 142,
+                  p1Game2BankSeconds: 136,
+                  p2Game1BankSeconds: 130,
+                  p2Game2BankSeconds: 120,
+                  p1MeanTurnMillis: 305,
+                  p2MeanTurnMillis: 405,
+                  completedAt: nowSeconds,
+                },
+              });
+              await liveClient.sendHeartbeat({
+                heartbeatSeq: 502,
+                matchId: 'rby-sse-next-002',
+                ladderId: 'gen1ou20261109',
+                format: 'gen1ou',
+                game: 1,
+                turn: 2,
+                activeSlot: 'p1',
+                turnStartedAt: nowSeconds,
+                turnBudgetSeconds: 150,
+                incrementSeconds: 10,
+                p1: {
+                  slug: p1Entry.agentSlug,
+                  name: p1Entry.agentName,
+                  version: p1Entry.version,
+                  bankSeconds: 150,
+                  lastTurnMillis: 200,
+                  meanTurnMillis: 200,
+                  ram: 700,
+                },
+                p2: {
+                  slug: p2Entry.agentSlug,
+                  name: p2Entry.agentName,
+                  version: p2Entry.version,
+                  bankSeconds: 150,
+                  lastTurnMillis: 220,
+                  meanTurnMillis: 220,
+                  ram: 750,
+                },
               });
 
-              for (const p of pathsToVerify) {
-                await page.goto(p);
-                const overflow = await page.evaluate<number>(
-                  'document.documentElement.scrollWidth - window.innerWidth'
-                );
-                expect({path: p, theme, overflow}).toEqual({
-                  path: p,
-                  theme,
-                  overflow: expect.any(Number),
-                });
-                expect(overflow).toBeLessThanOrEqual(0);
-              }
-              await page.locator('#battles-tbody tr.battle-row td').first().click();
+              await livePage.waitForSelector('#battles-tbody tr#vgc-sse-live-001');
+              await livePage.waitForFunction(
+                () => document.getElementById('live-panel')?.textContent
+                  ?.includes('rby-sse-next-002')
+              );
+              await livePage.locator('#battles-tbody tr#vgc-sse-live-001 td').first().click();
               expect(
-                await page.locator('#battles-tbody tr.battle-detail-row:not(.hide)').count()
-              ).toBe(1);
+                await livePage.locator(
+                  '#battles-tbody tr[data-detail-for="vgc-sse-live-001"]:not(.hide)'
+                ).textContent()
+              ).toContain('42,43,44,45');
+
+              // Part B: `/arena/tournaments/2/` multi-table spectating, live game-complete & next!
+              const t2Entrants = seedDb.getTournamentEntrants('2');
+              const eA = t2Entrants[0];
+              const eB = t2Entrants[1];
+              const eC = t2Entrants[2];
+              const eD = t2Entrants[3];
+
+              await liveClient.sendTournamentBroadcast('2', {
+                table: 1,
+                mode: 'load',
+                label: 'Table 1',
+                gameId: 't2-e2e-live-1',
+                stage: 'Round Robin',
+                cycle: 9,
+                matchupGame: 1,
+                p1: {
+                  slug: eA.agentSlug,
+                  name: eA.agentName,
+                  version: eA.version,
+                  bankSeconds: 145,
+                  thinking: true,
+                  incrementSeconds: 10,
+                },
+                p2: {
+                  slug: eB.agentSlug,
+                  name: eB.agentName,
+                  version: eB.version,
+                  bankSeconds: 140,
+                  thinking: false,
+                  incrementSeconds: 10,
+                },
+                lines: ['|gametype|singles', `|player|p1|${eA.agentName}|1`, '|turn|3'],
+              });
+              await liveClient.sendTournamentBroadcast('2', {
+                table: 2,
+                idle: true,
+                label: 'Table 2',
+              });
+
+              await livePage.goto(
+                `${viewBaseUrl}/arena/tournaments/2/`,
+                {waitUntil: 'domcontentloaded'}
+              );
+              await livePage.waitForSelector('#standings [data-live-table="1"]');
+              expect(await livePage.locator('#clock-name-p1').textContent()).toBe(eA.agentName);
+
+              // Wait briefly for EventSource snapshot, then start Table 2 live over SSE so the
+              // `● T2` badge dynamically appears in Standings/Crosstable/Games without reload!
+              await new Promise(resolve => setTimeout(resolve, 60));
+              await liveClient.sendTournamentBroadcast('2', {
+                table: 2,
+                mode: 'load',
+                label: 'Table 2',
+                gameId: 't2-e2e-live-2',
+                stage: 'Round Robin',
+                cycle: 9,
+                matchupGame: 2,
+                p1: {
+                  slug: eC.agentSlug,
+                  name: eC.agentName,
+                  version: eC.version,
+                  bankSeconds: 132,
+                  thinking: false,
+                  incrementSeconds: 10,
+                },
+                p2: {
+                  slug: eD.agentSlug,
+                  name: eD.agentName,
+                  version: eD.version,
+                  bankSeconds: 128,
+                  thinking: true,
+                  incrementSeconds: 10,
+                },
+                lines: ['|gametype|singles', `|player|p1|${eC.agentName}|1`, '|turn|5'],
+              });
+              await livePage.waitForSelector('#standings [data-live-table="2"]');
+
+              // Click live badge in Standings to spectate Table 2 without refreshing!
+              await livePage.locator('#standings [data-live-table="2"]').first().click();
+              await livePage.waitForFunction(
+                expected => document.getElementById('clock-name-p1')?.textContent === expected,
+                eC.agentName
+              );
+              expect(await livePage.locator('#clock-name-p2').textContent()).toBe(eD.agentName);
+
+              // Append new protocol lines & clocks to Table 2 -> updates live clocks & Games row!
+              await liveClient.sendTournamentBroadcast('2', {
+                table: 2,
+                mode: 'append',
+                p1: {
+                  slug: eC.agentSlug,
+                  name: eC.agentName,
+                  version: eC.version,
+                  bankSeconds: 118,
+                  thinking: true,
+                  incrementSeconds: 10,
+                },
+                p2: {
+                  slug: eD.agentSlug,
+                  name: eD.agentName,
+                  version: eD.version,
+                  bankSeconds: 105,
+                  thinking: false,
+                  incrementSeconds: 10,
+                },
+                lines: ['|turn|12'],
+              });
+              await livePage.waitForFunction(
+                () => document.querySelector(
+                  '#games-tbody tr.live-game-row[data-live-game-table="2"]'
+                )?.textContent?.includes('12')
+              );
+
+              // Complete Table 2 game -> updates Standings, Crosstable, and prepends replay row!
+              const prevWins = eC.gameWins;
+              await liveClient.completeTournamentGame('2', {
+                table: 2,
+                log: [
+                  '|gametype|singles',
+                  `|player|p1|${eC.agentName}|1`,
+                  `|player|p2|${eD.agentName}|2`,
+                  '|turn|12',
+                  `|win|${eC.agentName}`,
+                ].join('\n'),
+                game: {
+                  id: 't2-e2e-live-2',
+                  stage: 'Round Robin',
+                  cycle: 9,
+                  matchupGame: 2,
+                  p1VersionId: eC.versionId,
+                  p2VersionId: eD.versionId,
+                  seed: '9,8,7,6',
+                  outcome: 'W',
+                  turns: 12,
+                  endReason: 'normal',
+                  p1BankSeconds: 118,
+                  p2BankSeconds: 105,
+                  completedAt: nowSeconds + 10,
+                },
+              });
+
+              await livePage.waitForSelector('#games-tbody tr[data-game-id="t2-e2e-live-2"]');
+              expect(await livePage.locator('#standings').textContent()).toContain(
+                `${prevWins + 1}–`
+              );
+
+              // Click the newly prepended game's replay link -> Replay mode + Return to Live button
+              await livePage.locator(
+                '#games-tbody a[data-replay-log="/arena/tournaments/2/t2-e2e-live-2.log"]'
+              ).click();
+              await livePage.waitForSelector('[data-return-live]');
+              expect(await livePage.locator('#series-left').textContent()).toContain('Replay');
+
+              // Return to Live (switches to active Table 1), then start the next battle on Table 1
+              // -> #live immediately transitions to the new battle without refreshing!
+              await livePage.locator('[data-return-live]').click();
+              await livePage.waitForFunction(
+                expected => document.getElementById('clock-name-p1')?.textContent === expected,
+                eA.agentName
+              );
+              await liveClient.sendTournamentBroadcast('2', {
+                table: 1,
+                mode: 'load',
+                label: 'Table 1',
+                gameId: 't2-e2e-live-3',
+                stage: 'Round Robin',
+                cycle: 9,
+                matchupGame: 3,
+                p1: {
+                  slug: eB.agentSlug,
+                  name: eB.agentName,
+                  version: eB.version,
+                  bankSeconds: 150,
+                  thinking: true,
+                  incrementSeconds: 10,
+                },
+                p2: {
+                  slug: eC.agentSlug,
+                  name: eC.agentName,
+                  version: eC.version,
+                  bankSeconds: 150,
+                  thinking: false,
+                  incrementSeconds: 10,
+                },
+                lines: ['|gametype|singles', `|player|p1|${eB.agentName}|1`, '|turn|1'],
+              });
+              await livePage.waitForFunction(
+                expected => document.getElementById('clock-name-p1')?.textContent === expected,
+                eB.agentName
+              );
+              expect(await livePage.locator('#clock-name-p2').textContent()).toBe(eC.agentName);
               expect(
-                await page.evaluate<number>(
+                await livePage.evaluate<number>(
                   'document.documentElement.scrollWidth - window.innerWidth'
                 )
               ).toBeLessThanOrEqual(0);
-              expect(pageErrors).toEqual([]);
-              await context.close();
+              expect(liveErrors).toEqual([]);
+
+              await liveCtx.close();
+            } finally {
+              await browser.close();
             }
           } finally {
-            await browser.close();
+            viewArena.close();
+            viewServer.closeAllConnections();
+            await new Promise<void>(resolve => viewServer.close(() => resolve()));
           }
         } finally {
           seedDb.close();

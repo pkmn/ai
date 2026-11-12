@@ -2,67 +2,31 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type * as db from '../db';
-import {Renderer, header} from '../static/build';
+import {Renderer, header, injectLiveBanner} from '../static/build';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
+import * as arena from './arena';
+import {
+  BroadcastClock,
+  BroadcastPlayer,
+  BroadcastTable,
+  LiveBroadcast,
+  resolveTournamentArchive,
+} from './arena';
 import * as render from './render';
+
+export {resolveTournamentArchive};
+export type {
+  BroadcastClock,
+  BroadcastPlayer,
+  BroadcastTable,
+  LiveBroadcast,
+};
 
 const TOURNAMENTS_STYLE = fs.readFileSync(root('static', 'tournaments.css'), 'utf8');
 const TOURNAMENTS_TEMPLATE = fs.readFileSync(root('static', 'tournaments.html'), 'utf8');
 const VIEWER_STYLE = fs.readFileSync(root('static', 'viewer.css'), 'utf8');
 const VIEWER_TEMPLATE = fs.readFileSync(root('static', 'viewer.html'), 'utf8');
-
-export interface BroadcastClock {
-  name: string;
-  bankSeconds: number;
-  thinking: boolean;
-  incrementSeconds: number;
-}
-
-// Unlike the 24/7 continuous ladders (which enforce a zero-log anti-scouting policy), scheduled
-// Championship Tournaments use locked submitted binaries and open team sheets, so full Showdown
-// battle logs and live spectator broadcasts are published in real time.
-export interface LiveBroadcast {
-  tournamentId: string;
-  tables: Array<{label: string; idle?: boolean}>;
-  seriesLeftHtml: string;
-  seriesRightHtml: string;
-  p1: BroadcastClock;
-  p2: BroadcastClock;
-  lines: string[];
-  live?: boolean;
-}
-
-export function resolveTournamentArchive(
-  publicDir: string,
-  tournamentId: string
-): {name: string; href: string} | undefined {
-  const idEnc = encodeURIComponent(tournamentId);
-  const defaultName = `${tournamentId}-replays.7z`;
-  const candidates: Array<{diskPath: string; name: string; href: string}> = [
-    {
-      diskPath: path.join(publicDir, 'arena', 'tournaments', tournamentId, defaultName),
-      name: defaultName,
-      href: `/arena/tournaments/${idEnc}/${encodeURIComponent(defaultName)}`,
-    },
-    {
-      diskPath: path.join(publicDir, 'arena', 'tournaments', tournamentId, 'replays.7z'),
-      name: 'replays.7z',
-      href: `/arena/tournaments/${idEnc}/replays.7z`,
-    },
-    {
-      diskPath: path.join(publicDir, 'arena', 'tournaments', defaultName),
-      name: defaultName,
-      href: `/arena/tournaments/${encodeURIComponent(defaultName)}`,
-    },
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c.diskPath)) {
-      return {name: c.name, href: c.href};
-    }
-  }
-  return undefined;
-}
 
 export function speciesToMinispriteSlug(species: string): string {
   return species
@@ -95,6 +59,18 @@ function formatClockMmSs(seconds: number): string {
   return `${mm}:${ss}`;
 }
 
+function parseLatestTurnFromLines(lines?: string[]): number | undefined {
+  if (!lines || lines.length === 0) return undefined;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line.startsWith('|turn|')) {
+      const n = Number(line.slice(6).trim());
+      if (Number.isInteger(n) && n >= 0) return n;
+    }
+  }
+  return undefined;
+}
+
 function renderPartyMinisprites(packed?: string): string {
   const speciesList = parsePackedTeamSpecies(packed);
   if (speciesList.length === 0) return '';
@@ -116,12 +92,22 @@ function renderClockSide(slot: 'p1' | 'p2', clock: BroadcastClock): string {
   const tip = clock.thinking
     ? `${rem}s remaining in 150s bank (currently thinking)`
     : `${rem}s remaining in 150s bank (+${clock.incrementSeconds}s/turn)`;
-  return '<div class="clock-side">' +
-    `<span><tt>${slot}</tt> <strong>${escapeHtml(clock.name)}</strong></span>` +
-    `<span class="${pillCls}" title="${escapeHtml(tip)}">` +
+  return `<div class="clock-side" id="clock-side-${slot}">` +
+    `<span><tt>${slot}</tt> <strong id="clock-name-${slot}">` +
+      `${escapeHtml(clock.name)}</strong></span>` +
+    `<span class="${pillCls}" id="clock-pill-${slot}" title="${escapeHtml(tip)}">` +
       `<span class="${timeCls}" id="clock-${slot}">${formatClockMmSs(clock.bankSeconds)}</span>` +
-      `<span class="clock-sub">${escapeHtml(subText)}</span>` +
+      `<span class="clock-sub" id="clock-sub-${slot}">${escapeHtml(subText)}</span>` +
     '</span></div>';
+}
+
+function extractLiveTables(
+  tournamentId: string,
+  broadcast?: LiveBroadcast
+): BroadcastTable[] {
+  if (broadcast?.tournamentId !== tournamentId) return [];
+  const norm = arena.normalizeLiveBroadcast(broadcast);
+  return norm.tables.filter(tb => !tb.idle && tb.live !== false && Boolean(tb.p1 && tb.p2));
 }
 
 function renderBroadcastSectionHtml(
@@ -130,6 +116,8 @@ function renderBroadcastSectionHtml(
 ): {
   html: string;
   isActive: boolean;
+  normalized?: LiveBroadcast;
+  selectedTable?: number;
   viewerInit?: {
     lines: string[];
     live: boolean;
@@ -139,35 +127,45 @@ function renderBroadcastSectionHtml(
   };
 } {
   const isActive = broadcast?.tournamentId === tournament.id;
-  const tableNavHtml = isActive && broadcast.tables.length > 0
+  const norm = isActive && broadcast ? arena.normalizeLiveBroadcast(broadcast) : undefined;
+  const selected = norm?.tables.find(tb => !tb.idle && tb.p1 && tb.p2) ??
+    norm?.tables.find(tb => tb.p1 && tb.p2) ??
+    norm?.tables[0];
+
+  const tableNavHtml = norm && norm.tables.length > 0
     ? `<nav class="subnav" aria-label="Broadcast table">
       <ul>
-        ${broadcast.tables.map((tb, idx) => {
+        ${norm.tables.map((tb, idx) => {
           const sep = idx > 0 ? '\n        —\n        ' : '';
-          const checked = idx === 0 ? ' checked' : '';
-          const tbId = `tb-${escapeHtml(tournament.id)}-${idx + 1}`;
+          const checked = tb.table === (selected?.table ?? 1) ? ' checked' : '';
+          const tbId = `tb-${escapeHtml(tournament.id)}-${tb.table}`;
           const labelHtml = tb.idle
             ? `${escapeHtml(tb.label)} <span class="muted">(idle)</span>`
             : escapeHtml(tb.label);
           return `${sep}<li><input type="radio" name="table-${escapeHtml(tournament.id)}" ` +
-            `id="${tbId}"${checked}><label for="${tbId}">${labelHtml}</label></li>`;
+            `id="${tbId}" value="${tb.table}" data-table-num="${tb.table}"${checked}>` +
+            `<label for="${tbId}">${labelHtml}</label></li>`;
         }).join('')}
       </ul>
     </nav>`
     : '';
 
-  const seriesLeft = isActive ? broadcast.seriesLeftHtml : '<strong>Replay</strong>';
-  const seriesRight = isActive ? broadcast.seriesRightHtml : '<span class="muted">—</span>';
-  const clockBarHtml = isActive
-    ? `<div class="clock-bar">
-        ${renderClockSide('p1', broadcast.p1)}
-        ${renderClockSide('p2', broadcast.p2)}
+  const p1Clock = selected?.p1 ?? norm?.p1;
+  const p2Clock = selected?.p2 ?? norm?.p2;
+  const seriesLeft = selected?.seriesLeftHtml ?? norm?.seriesLeftHtml ?? '<strong>Replay</strong>';
+  const seriesRight = selected?.seriesRightHtml ??
+    norm?.seriesRightHtml ??
+    '<span class="muted">—</span>';
+  const clockBarHtml = norm && p1Clock && p2Clock
+    ? `<div class="clock-bar" id="clock-bar">
+        ${renderClockSide('p1', p1Clock)}
+        ${renderClockSide('p2', p2Clock)}
       </div>`
-    : '';
+    : '<div class="clock-bar hide" id="clock-bar"></div>';
 
   // Sandboxed Showdown replay iframe (`sandbox="allow-scripts"` without `allow-same-origin`)
   // isolates third-party battle client DOM/scripts from `pkmn.ai` session cookies.
-  const html = `${tableNavHtml}
+  const html = `<div id="table-nav-wrap">${tableNavHtml}</div>
     <div class="broadcast">
       <div class="series-bar">
         <span id="series-left">${seriesLeft}</span>
@@ -185,21 +183,24 @@ function renderBroadcastSectionHtml(
       </div>
     </div>`;
 
-  if (!isActive) {
+  if (!norm || !p1Clock || !p2Clock) {
     return {html, isActive: false};
   }
 
-  const isLive = broadcast.live !== false;
-  const thinkingSlot = broadcast.p1.thinking
-    ? 'p1'
-    : broadcast.p2.thinking ? 'p2' : undefined;
-  const thinkingBankSeconds = thinkingSlot ? broadcast[thinkingSlot].bankSeconds : undefined;
+  const lines = selected?.lines ?? norm.lines;
+  const isLive = selected ? selected.live !== false : norm.live !== false;
+  const thinkingSlot = p1Clock.thinking ? 'p1' : p2Clock.thinking ? 'p2' : undefined;
+  const thinkingBankSeconds = thinkingSlot
+    ? (thinkingSlot === 'p1' ? p1Clock.bankSeconds : p2Clock.bankSeconds)
+    : undefined;
 
   return {
     html,
     isActive: true,
+    normalized: norm,
+    selectedTable: selected?.table ?? 1,
     viewerInit: {
-      lines: broadcast.lines,
+      lines,
       live: isLive,
       side: 'p1',
       thinkingSlot,
@@ -208,10 +209,40 @@ function renderBroadcastSectionHtml(
   };
 }
 
+function findLiveTableForEntrant(
+  liveTables: BroadcastTable[],
+  slug: string,
+  name: string
+): BroadcastTable | undefined {
+  return liveTables.find(tb => (
+    tb.p1?.slug === slug ||
+    tb.p2?.slug === slug ||
+    tb.p1?.name === name ||
+    tb.p2?.name === name
+  ));
+}
+
+function findLiveTableForPair(
+  liveTables: BroadcastTable[],
+  a: {slug: string; name: string},
+  b: {slug: string; name: string}
+): BroadcastTable | undefined {
+  return liveTables.find(tb => {
+    if (!tb.p1 || !tb.p2) return false;
+    const p1MatchesA = tb.p1.slug === a.slug || tb.p1.name === a.name;
+    const p2MatchesB = tb.p2.slug === b.slug || tb.p2.name === b.name;
+    if (p1MatchesA && p2MatchesB) return true;
+    const p1MatchesB = tb.p1.slug === b.slug || tb.p1.name === b.name;
+    const p2MatchesA = tb.p2.slug === a.slug || tb.p2.name === a.name;
+    return p1MatchesB && p2MatchesA;
+  });
+}
+
 function renderTournamentStandingsHtml(opts: {
   tournament: db.TournamentRow;
   entrants: db.TournamentEntrantView[];
   hasSuperfinal: boolean;
+  liveTables: BroadcastTable[];
   publicDir: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
@@ -220,12 +251,14 @@ function renderTournamentStandingsHtml(opts: {
     tournament,
     entrants,
     hasSuperfinal,
+    liveTables,
     publicDir,
     projectMeta,
     profileSlugs,
   } = opts;
   if (entrants.length === 0) {
-    return '<p class="empty-state muted">No entrants registered yet.</p>';
+    return '<div id="standings-body">' +
+      '<p class="empty-state muted">No entrants registered yet.</p></div>';
   }
 
   const maxRrGames = Math.max(1, (entrants.length - 1) * tournament.gamesPerMatchup);
@@ -239,8 +272,13 @@ function renderTournamentStandingsHtml(opts: {
       e.agentName,
       profileSlugs
     );
+    const liveTb = findLiveTableForEntrant(liveTables, e.agentSlug, e.agentName);
+    const liveBadge = liveTb
+      ? ` <a href="#live" class="live-pill" data-live-table="${liveTb.table}" ` +
+        `title="Spectate live on ${escapeHtml(liveTb.label)}">&#9679; T${liveTb.table}</a>`
+      : '';
     const agentHtml = `${render.formatAgentLink(e.agentName, href, true)} ` +
-      `<code>${escapeHtml(e.version)}</code>`;
+      `<code>${escapeHtml(e.version)}</code>${liveBadge}`;
     const elo = Math.round(e.elo);
     const ci = Math.round(1.96 * e.se);
     const ptsStr = e.points.toFixed(1);
@@ -258,7 +296,7 @@ function renderTournamentStandingsHtml(opts: {
 
   const ptsTitle =
     `Round-Robin points out of ${maxRrGames} games (+1.0 per win, +0.5 per tie)`;
-  return `<div class="table-wrap">
+  return `<div id="standings-body"><div class="table-wrap">
     <table>
       <thead>
         <tr>
@@ -272,20 +310,23 @@ function renderTournamentStandingsHtml(opts: {
       </thead>
       <tbody>${rowsHtml}</tbody>
     </table>
-  </div>`;
+  </div></div>`;
 }
 
 function renderTournamentCrosstableHtml(opts: {
   entrants: db.TournamentEntrantView[];
   pairs: db.TournamentPairRecord[];
+  liveTables: BroadcastTable[];
   publicDir: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
 }): {html: string; isEmpty: boolean} {
-  const {entrants, pairs, publicDir, projectMeta, profileSlugs} = opts;
-  if (entrants.length < 2 || pairs.length === 0) {
+  const {entrants, pairs, liveTables, publicDir, projectMeta, profileSlugs} = opts;
+  const rrLiveTables = liveTables.filter(tb => tb.stage !== 'Superfinal');
+  if (entrants.length < 2 || (pairs.length === 0 && rrLiveTables.length === 0)) {
     return {
-      html: '<p class="empty-state muted">No round-robin games completed yet.</p>',
+      html: '<div id="crosstable-body">' +
+        '<p class="empty-state muted">No round-robin games completed yet.</p></div>',
       isEmpty: true,
     };
   }
@@ -311,17 +352,31 @@ function renderTournamentCrosstableHtml(opts: {
       if (rowEnt.versionId === colEnt.versionId) {
         return '<td class="diag">—</td>';
       }
+      const liveTb = findLiveTableForPair(
+        rrLiveTables,
+        {slug: rowEnt.agentSlug, name: rowEnt.agentName},
+        {slug: colEnt.agentSlug, name: colEnt.agentName}
+      );
+      const livePill = liveTb
+        ? `<a href="#live" class="live-pill" data-live-table="${liveTb.table}" ` +
+          `title="Spectate live on ${escapeHtml(liveTb.label)}">&#9679; T${liveTb.table}</a>`
+        : '';
+
       const lowId = Math.min(rowEnt.versionId, colEnt.versionId);
       const highId = Math.max(rowEnt.versionId, colEnt.versionId);
       const pair = pairMap.get(`${lowId}:${highId}`);
-      if (!pair) return '<td class="muted">—</td>';
-
       const isLow = rowEnt.versionId === lowId;
-      const wins = isLow ? pair.lowWins : pair.highWins;
-      const losses = isLow ? pair.highWins : pair.lowWins;
-      const ties = pair.ties;
+      const wins = pair ? (isLow ? pair.lowWins : pair.highWins) : 0;
+      const losses = pair ? (isLow ? pair.highWins : pair.lowWins) : 0;
+      const ties = pair ? pair.ties : 0;
       const total = wins + losses + ties;
-      if (total === 0) return '<td class="muted">—</td>';
+
+      if (total === 0) {
+        if (livePill) {
+          return `<td class="center">${livePill}</td>`;
+        }
+        return '<td class="muted">—</td>';
+      }
 
       const pts = wins + 0.5 * ties;
       const scorePct = (pts / total) * 100;
@@ -330,16 +385,19 @@ function renderTournamentCrosstableHtml(opts: {
       const cls = render.heatmapClass(scorePct);
       const clsAttr = cls ? ` class="${cls}"` : '';
       const tip = `${pts.toFixed(1)} / ${total} pts`;
+      const subInner = livePill
+        ? `${wins}–${losses}–${ties} · ${livePill}`
+        : `${wins}–${losses}–${ties}`;
 
       return `<td${clsAttr} title="${escapeHtml(tip)}">${scoreHtml}` +
-        `<span class="sub">${wins}–${losses}–${ties}</span></td>`;
+        `<span class="sub">${subInner}</span></td>`;
     }).join('');
 
     return `<tr><td>${rowLabel}</td>${cells}</tr>`;
   }).join('');
 
   return {
-    html: `<div class="table-wrap">
+    html: `<div id="crosstable-body"><div class="table-wrap">
     <table class="matrix">
       <thead>
         <tr>
@@ -349,7 +407,7 @@ function renderTournamentCrosstableHtml(opts: {
       </thead>
       <tbody>${bodyRows}</tbody>
     </table>
-  </div>`,
+  </div></div>`,
     isEmpty: false,
   };
 }
@@ -357,6 +415,7 @@ function renderTournamentCrosstableHtml(opts: {
 function renderTournamentGamesHtml(opts: {
   tournament: db.TournamentRow;
   games: db.TournamentGameView[];
+  liveTables: BroadcastTable[];
   totalCompletedCount: number;
   publicDir: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
@@ -365,70 +424,108 @@ function renderTournamentGamesHtml(opts: {
   const {
     tournament,
     games,
+    liveTables,
     totalCompletedCount,
     publicDir,
     projectMeta,
     profileSlugs,
   } = opts;
 
-  const rowsHtml = games.length === 0
-    ? '<tr><td colspan="6" class="center muted">No completed games yet.</td></tr>'
-    : games.map(g => {
-      const codePrefix = g.stage === 'Superfinal' ? 'SF' : 'RR';
-      const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
-      const gameCode = `${codePrefix}${codeNum}`;
-      const logRel = `${g.id}.log`;
-      const perTourLog = path.join(publicDir, 'arena', 'tournaments', tournament.id, logRel);
-      const hasLog = fs.existsSync(perTourLog);
-      const logUrl = `/arena/tournaments/${encodeURIComponent(tournament.id)}/` +
-        encodeURIComponent(logRel);
-      const gameHref = hasLog ? logUrl : '#games';
-      const replayAttr = hasLog ? ` data-replay-log="${escapeHtml(logUrl)}"` : '';
+  const liveRowsHtml = liveTables.map(tb => {
+    const p1 = tb.p1!;
+    const p2 = tb.p2!;
+    const codePrefix = tb.stage === 'Superfinal' ? 'SF' : 'RR';
+    const codeNum = tb.stage === 'Superfinal' ? (tb.matchupGame ?? 1) : (tb.cycle ?? 1);
+    const gameCode = `${codePrefix}${codeNum}`;
+    const p1Href = p1.slug
+      ? render.resolveAgentHref(publicDir, projectMeta, p1.slug, p1.name, profileSlugs)
+      : undefined;
+    const p2Href = p2.slug
+      ? render.resolveAgentHref(publicDir, projectMeta, p2.slug, p2.name, profileSlugs)
+      : undefined;
+    const p1Cell = `<div class="player-cell">${render.formatAgentLink(p1.name, p1Href, false)}` +
+      `${renderPartyMinisprites(p1.team)}</div>`;
+    const p2Cell = `<div class="player-cell">${render.formatAgentLink(p2.name, p2Href, false)}` +
+      `${renderPartyMinisprites(p2.team)}</div>`;
+    const turn = parseLatestTurnFromLines(tb.lines);
+    const turnsStr = turn !== undefined ? String(turn) : '—';
+    const b1 = Math.round(p1.bankSeconds);
+    const b2 = Math.round(p2.bankSeconds);
+    const tip = `Spectate live on ${tb.label}`;
 
-      const p1Won = g.outcome === 'W';
-      const p2Won = g.outcome === 'L';
-      const resHtml = p1Won
-        ? '<strong>1</strong>–0'
-        : p2Won
-          ? '0–<strong>1</strong>'
-          : '½–½';
+    return `<tr class="live-game-row" data-live-game-table="${tb.table}">` +
+      `<td><a href="#live" class="subtle" data-live-table="${tb.table}" ` +
+        `title="${escapeHtml(tip)}"><code>${escapeHtml(gameCode)}</code></a></td>` +
+      `<td>${p1Cell}</td>` +
+      `<td>${p2Cell}</td>` +
+      `<td class="center"><a href="#live" class="live-pill" data-live-table="${tb.table}" ` +
+        `title="${escapeHtml(tip)}">&#9679; T${tb.table}</a></td>` +
+      `<td class="num">${turnsStr}</td>` +
+      `<td class="num">${b1}s / ${b2}s</td>` +
+      '</tr>';
+  }).join('');
 
-      const p1Href = render.resolveAgentHref(
-        publicDir,
-        projectMeta,
-        g.p1Slug,
-        g.p1Name,
-        profileSlugs
-      );
-      const p2Href = render.resolveAgentHref(
-        publicDir,
-        projectMeta,
-        g.p2Slug,
-        g.p2Name,
-        profileSlugs
-      );
-      const p1Party = renderPartyMinisprites(g.p1Team);
-      const p2Party = renderPartyMinisprites(g.p2Team);
+  const completedRowsHtml = games.map(g => {
+    const codePrefix = g.stage === 'Superfinal' ? 'SF' : 'RR';
+    const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
+    const gameCode = `${codePrefix}${codeNum}`;
+    const logRel = `${g.id}.log`;
+    const perTourLog = path.join(publicDir, 'arena', 'tournaments', tournament.id, logRel);
+    const hasLog = fs.existsSync(perTourLog);
+    const logUrl = `/arena/tournaments/${encodeURIComponent(tournament.id)}/` +
+      encodeURIComponent(logRel);
+    const gameHref = hasLog ? logUrl : '#games';
+    const replayAttr = hasLog ? ` data-replay-log="${escapeHtml(logUrl)}"` : '';
 
-      const p1Cell = `<div class="player-cell">${render.formatAgentLink(g.p1Name, p1Href, p1Won)}` +
-        `${p1Party}</div>`;
-      const p2Cell = `<div class="player-cell">${render.formatAgentLink(g.p2Name, p2Href, p2Won)}` +
-        `${p2Party}</div>`;
+    const p1Won = g.outcome === 'W';
+    const p2Won = g.outcome === 'L';
+    const resHtml = p1Won
+      ? '<strong>1</strong>–0'
+      : p2Won
+        ? '0–<strong>1</strong>'
+        : '½–½';
 
-      const turnsStr = g.turns !== undefined ? String(g.turns) : '—';
-      const b1 = Math.round(g.p1BankSeconds ?? 0);
-      const b2 = Math.round(g.p2BankSeconds ?? 0);
+    const p1Href = render.resolveAgentHref(
+      publicDir,
+      projectMeta,
+      g.p1Slug,
+      g.p1Name,
+      profileSlugs
+    );
+    const p2Href = render.resolveAgentHref(
+      publicDir,
+      projectMeta,
+      g.p2Slug,
+      g.p2Name,
+      profileSlugs
+    );
+    const p1Party = renderPartyMinisprites(g.p1Team);
+    const p2Party = renderPartyMinisprites(g.p2Team);
 
-      return '<tr>' +
-        `<td><a href="${escapeHtml(gameHref)}" class="subtle"${replayAttr} ` +
-          `title="${escapeHtml(g.id)}"><code>${escapeHtml(gameCode)}</code></a></td>` +
-        `<td>${p1Cell}</td>` +
-        `<td>${p2Cell}</td>` +
-        `<td class="center">${resHtml}</td>` +
-        `<td class="num">${turnsStr}</td>` +
-        `<td class="num">${b1}s / ${b2}s</td>` +
-        '</tr>';
-    }).join('');
+    const p1Cell = `<div class="player-cell">${render.formatAgentLink(g.p1Name, p1Href, p1Won)}` +
+      `${p1Party}</div>`;
+    const p2Cell = `<div class="player-cell">${render.formatAgentLink(g.p2Name, p2Href, p2Won)}` +
+      `${p2Party}</div>`;
+
+    const turnsStr = g.turns !== undefined ? String(g.turns) : '—';
+    const b1 = Math.round(g.p1BankSeconds ?? 0);
+    const b2 = Math.round(g.p2BankSeconds ?? 0);
+
+    return `<tr data-game-id="${escapeHtml(g.id)}">` +
+      `<td><a href="${escapeHtml(gameHref)}" class="subtle"${replayAttr} ` +
+        `title="${escapeHtml(g.id)}"><code>${escapeHtml(gameCode)}</code></a></td>` +
+      `<td>${p1Cell}</td>` +
+      `<td>${p2Cell}</td>` +
+      `<td class="center">${resHtml}</td>` +
+      `<td class="num">${turnsStr}</td>` +
+      `<td class="num">${b1}s / ${b2}s</td>` +
+      '</tr>';
+  }).join('');
+
+  const rowsHtml = !liveRowsHtml && !completedRowsHtml
+    ? '<tr class="empty-row"><td colspan="6" class="center muted">' +
+      'No completed games yet.</td></tr>'
+    : `${liveRowsHtml}${completedRowsHtml}`;
 
   const archive = resolveTournamentArchive(publicDir, tournament.id);
   const jsonHref = `/arena/tournaments/${encodeURIComponent(tournament.id)}/index.json`;
@@ -436,8 +533,10 @@ function renderTournamentGamesHtml(opts: {
   const countStr = totalCompletedCount.toLocaleString('en-US');
   const archiveLine = archive
     ? `Archive: <a href="${escapeHtml(archive.href)}"><code>${escapeHtml(archive.name)}</code>` +
-      `</a> (${countStr} games) · <a href="${escapeHtml(jsonHref)}"><code>index.json</code></a>`
-    : `Data: <a href="${escapeHtml(jsonHref)}"><code>index.json</code></a> (${countStr} games` +
+      `</a> (<span id="games-count">${countStr}</span> games) · ` +
+      `<a href="${escapeHtml(jsonHref)}"><code>index.json</code></a>`
+    : `Data: <a href="${escapeHtml(jsonHref)}"><code>index.json</code></a> ` +
+      `(<span id="games-count">${countStr}</span> games` +
       (tournament.status !== 'completed' ? '; replay archive published upon completion' : '') +
       ')';
 
@@ -453,22 +552,10 @@ function renderTournamentGamesHtml(opts: {
             <th class="num" title="${bankTip}">Bank</th>
           </tr>
         </thead>
-        <tbody>${rowsHtml}</tbody>
+        <tbody id="games-tbody">${rowsHtml}</tbody>
       </table>
     </div>
-    <p class="meta meta-archive">${archiveLine}</p>`;
-}
-
-function readExistingBroadcast(publicDir: string): LiveBroadcast | undefined {
-  const filePath = path.join(publicDir, 'api', 'tournament-live.json');
-  if (!fs.existsSync(filePath)) return undefined;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as LiveBroadcast;
-    if (parsed && typeof parsed === 'object' && typeof parsed.tournamentId === 'string') {
-      return parsed;
-    }
-  } catch {}
-  return undefined;
+    <p class="meta meta-archive" id="games-archive-meta">${archiveLine}</p>`;
 }
 
 export function renderBattleViewerPage(publicDir: string) {
@@ -594,210 +681,150 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   return parts.join('\n  ');
 }
 
-export function renderTournamentsPages(opts: {
+export function renderTournamentPage(opts: {
   db: db.Database;
   renderer: Renderer;
+  tournament: db.TournamentRow;
   publicDir: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
   tournamentBroadcast?: LiveBroadcast;
-  includeDiskBroadcast?: boolean;
-}) {
-  const {db, renderer, publicDir, projectMeta, profileSlugs} = opts;
-  renderBattleViewerPage(publicDir);
+  liveTournament?: {id: string; name: string};
+}): {html: string; json: arena.TournamentDocument} {
+  const {
+    db,
+    renderer,
+    tournament: t,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+    tournamentBroadcast,
+    liveTournament,
+  } = opts;
 
-  const tournaments = db.getTournaments();
-  const tourneysDir = path.join(publicDir, 'arena', 'tournaments');
+  const allTournaments = db.getTournaments();
+  const eventOptions = allTournaments.map(other => {
+    const sel = other.id === t.id ? ' selected' : '';
+    const href = `/arena/tournaments/${encodeURIComponent(other.id)}/`;
+    return `<option value="${escapeHtml(href)}"${sel}>${escapeHtml(other.name)}</option>`;
+  }).join('');
 
-  if (fs.existsSync(tourneysDir)) {
-    const validIds = new Set(tournaments.map(t => t.id));
-    for (const entry of fs.readdirSync(tourneysDir, {withFileTypes: true})) {
-      if (entry.isDirectory() && !validIds.has(entry.name)) {
-        fs.rmSync(path.join(tourneysDir, entry.name), {recursive: true, force: true});
-      }
-    }
-  }
+  const entrants = db.getTournamentEntrants(t.id);
+  const games = db.getTournamentGames(t.id, 50);
+  const rrPairs = db.getTournamentCrosstable(t.id, 'Round Robin');
+  const sfPairs = db.getTournamentCrosstable(t.id, 'Superfinal');
+  const broadcastRes = renderBroadcastSectionHtml(t, tournamentBroadcast);
+  const liveTables = extractLiveTables(t.id, tournamentBroadcast);
+  const hasSf = sfPairs.length > 0 ||
+    games.some(g => g.stage === 'Superfinal') ||
+    liveTables.some(tb => tb.stage === 'Superfinal') ||
+    Boolean(broadcastRes.normalized?.seriesLeftHtml.includes('Superfinal'));
 
-  if (tournaments.length === 0) return;
+  const n = entrants.length;
+  const rrTotal = n >= 2 ? ((n * (n - 1)) / 2) * t.gamesPerMatchup : 0;
+  const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
+  const isDoubles = t.format.includes('vgc') || t.format.includes('doubles');
+  const inc = isDoubles ? 25 : 10;
+  const sfSuffix = hasSf ? ' + 100-game Superfinal' : '';
 
-  const broadcast = opts.tournamentBroadcast ?? (
-    opts.includeDiskBroadcast !== false ? readExistingBroadcast(publicDir) : undefined
-  );
+  const metaHtml =
+    `<p class="meta"><tt>${escapeHtml(fmtTitle)}</tt> · ${n} Entrants · ` +
+    `<tt>G=${t.gamesPerMatchup}</tt> Double Round-Robin ` +
+    `(${rrTotal.toLocaleString('en-US')} games)${sfSuffix}<br>` +
+    `${escapeHtml(t.hardware)} · <tt>150s</tt> bank (<tt>+${inc}s/turn</tt>)</p>`;
 
-  for (const t of tournaments) {
-    const eventOptions = tournaments.map(other => {
-      const sel = other.id === t.id ? ' selected' : '';
-      const href = `/arena/tournaments/${encodeURIComponent(other.id)}/`;
-      return `<option value="${escapeHtml(href)}"${sel}>${escapeHtml(other.name)}</option>`;
-    }).join('');
+  const standingsHtml = renderTournamentStandingsHtml({
+    tournament: t,
+    entrants,
+    hasSuperfinal: hasSf,
+    liveTables,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+  });
+  const crossRes = renderTournamentCrosstableHtml({
+    entrants,
+    pairs: rrPairs,
+    liveTables,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+  });
 
-    const entrants = db.getTournamentEntrants(t.id);
-    const allGames = db.getTournamentGames(t.id, 10_000);
-    const games = allGames.slice(0, 50);
-    const rrPairs = db.getTournamentCrosstable(t.id, 'Round Robin');
-    const sfPairs = db.getTournamentCrosstable(t.id, 'Superfinal');
-    const hasSf = sfPairs.length > 0 || games.some(g => g.stage === 'Superfinal') ||
-      (broadcast?.tournamentId === t.id && broadcast.seriesLeftHtml.includes('Superfinal'));
+  let completedCount = 0;
+  for (const p of rrPairs) completedCount += p.lowWins + p.highWins + p.ties;
+  for (const p of sfPairs) completedCount += p.lowWins + p.highWins + p.ties;
 
-    const n = entrants.length;
-    const rrTotal = n >= 2 ? ((n * (n - 1)) / 2) * t.gamesPerMatchup : 0;
-    const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
-    const isDoubles = t.format.includes('vgc') || t.format.includes('doubles');
-    const inc = isDoubles ? 25 : 10;
-    const sfSuffix = hasSf ? ' + 100-game Superfinal' : '';
+  const gamesHtml = renderTournamentGamesHtml({
+    tournament: t,
+    games,
+    liveTables,
+    totalCompletedCount: completedCount,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+  });
 
-    const metaHtml =
-      `<p class="meta"><tt>${escapeHtml(fmtTitle)}</tt> · ${n} Entrants · ` +
-      `<tt>G=${t.gamesPerMatchup}</tt> Double Round-Robin ` +
-      `(${rrTotal.toLocaleString('en-US')} games)${sfSuffix}<br>` +
-      `${escapeHtml(t.hardware)} · <tt>150s</tt> bank (<tt>+${inc}s/turn</tt>)</p>`;
-
-    const broadcastRes = renderBroadcastSectionHtml(t, broadcast);
-    const standingsHtml = renderTournamentStandingsHtml({
-      tournament: t,
-      entrants,
-      hasSuperfinal: hasSf,
+  const agentLinks: Record<string, string> = {};
+  for (const e of entrants) {
+    const href = render.resolveAgentHref(
       publicDir,
       projectMeta,
-      profileSlugs,
-    });
-    const crossRes = renderTournamentCrosstableHtml({
-      entrants,
-      pairs: rrPairs,
-      publicDir,
-      projectMeta,
-      profileSlugs,
-    });
-
-    let completedCount = 0;
-    for (const p of rrPairs) completedCount += p.lowWins + p.highWins + p.ties;
-    for (const p of sfPairs) completedCount += p.lowWins + p.highWins + p.ties;
-
-    const gamesHtml = renderTournamentGamesHtml({
-      tournament: t,
-      games,
-      totalCompletedCount: completedCount,
-      publicDir,
-      projectMeta,
-      profileSlugs,
-    });
-
-    const content = renderTemplate(TOURNAMENTS_TEMPLATE, {
-      eventOptions,
-      metaHtml,
-      liveInitialClass: broadcastRes.isActive ? '' : ' class="hide"',
-      liveHtml: broadcastRes.html,
-      standingsHtml,
-      crosstableInitialClass: crossRes.isEmpty ? ' class="hide"' : '',
-      crosstableHtml: crossRes.html,
-      gamesHtml,
-      viewerInitJson: render.safeInlineJson(broadcastRes.viewerInit),
-    });
-
-    const html = renderer.render({
-      id: 'tournaments',
-      title: `${t.name} | pkmn.ai`,
-      header: header('<a href="/arena/" class="subtle">Tournaments</a>'),
-      path: `/arena/tournaments/${t.id}/`,
-      style: `${render.ARENA_STYLE}\n${TOURNAMENTS_STYLE}`,
-      content,
-    });
-
-    const archive = resolveTournamentArchive(publicDir, t.id);
-    const entrantByVer = new Map(entrants.map(e => [e.versionId, e]));
-    let parsedRules: string[] = [];
-    try {
-      const rawRules = JSON.parse(t.rulesJson || '[]') as unknown;
-      if (Array.isArray(rawRules)) parsedRules = rawRules.map(String);
-    } catch {}
-
-    const mapPair = (stage: db.TournamentGameStage, p: db.TournamentPairRecord) => {
-      const low = entrantByVer.get(p.lowVersionId);
-      const high = entrantByVer.get(p.highVersionId);
-      return {
-        stage,
-        lowSlug: low?.agentSlug,
-        lowName: low?.agentName,
-        lowVersion: low?.version,
-        highSlug: high?.agentSlug,
-        highName: high?.agentName,
-        highVersion: high?.version,
-        lowWins: p.lowWins,
-        highWins: p.highWins,
-        ties: p.ties,
-      };
-    };
-
-    const tourneyJson = {
-      id: t.id,
-      name: t.name,
-      format: t.format,
-      rules: parsedRules,
-      status: t.status,
-      gamesPerMatchup: t.gamesPerMatchup,
-      batchSize: t.batchSize,
-      parallelTables: t.parallelTables,
-      hardware: t.hardware,
-      startsAt: t.startsAt,
-      completedAt: t.completedAt,
-      completedGames: completedCount,
-      archiveHref: archive?.href,
-      standings: entrants.map((e, idx) => ({
-        rank: e.finalRank ?? idx + 1,
-        slug: e.agentSlug,
-        name: e.agentName,
-        version: e.version,
-        elo: Math.round(e.elo),
-        ci95: Math.round(1.96 * e.se),
-        wins: e.gameWins,
-        losses: e.gameLosses,
-        ties: e.gameTies,
-        points: e.points,
-        sonnebornBerger: e.sonnebornBerger,
-      })),
-      crosstable: [
-        ...rrPairs.map(p => mapPair('Round Robin', p)),
-        ...sfPairs.map(p => mapPair('Superfinal', p)),
-      ],
-      games: allGames.map(g => {
-        const logRel = `${g.id}.log`;
-        const hasLog = fs.existsSync(path.join(tourneysDir, t.id, logRel));
-        const logHref = hasLog
-          ? `/arena/tournaments/${encodeURIComponent(t.id)}/${encodeURIComponent(logRel)}`
-          : undefined;
-        return {
-          id: g.id,
-          stage: g.stage,
-          cycle: g.cycle,
-          matchupGame: g.matchupGame,
-          seed: g.seed,
-          outcome: g.outcome,
-          endReason: g.endReason,
-          turns: g.turns,
-          completedAt: g.completedAt,
-          logHref,
-          p1: {
-            slug: g.p1Slug,
-            name: g.p1Name,
-            version: g.p1Version,
-            team: g.p1Team,
-            bankSeconds: g.p1BankSeconds,
-          },
-          p2: {
-            slug: g.p2Slug,
-            name: g.p2Name,
-            version: g.p2Version,
-            team: g.p2Team,
-            bankSeconds: g.p2BankSeconds,
-          },
-        };
-      }),
-    };
-
-    render.writeFileAtomic(path.join(tourneysDir, t.id, 'index.html'), html);
-    render.writeFileAtomic(
-      path.join(tourneysDir, t.id, 'index.json'),
-      `${JSON.stringify(tourneyJson, undefined, 2)}\n`
+      e.agentSlug,
+      e.agentName,
+      profileSlugs
     );
+    if (href) agentLinks[e.agentSlug] = href;
   }
+
+  const json = arena.buildTournamentDocument(db, publicDir, t, 10_000);
+
+  const pageInit = {
+    tournamentId: t.id,
+    format: t.format,
+    gamesPerMatchup: t.gamesPerMatchup,
+    status: t.status,
+    hasSuperfinal: hasSf,
+    selectedTable: broadcastRes.selectedTable ?? 1,
+    completedGames: json.completedGames,
+    archiveHref: json.archiveHref,
+    entrants: entrants.map(e => ({
+      versionId: e.versionId,
+      slug: e.agentSlug,
+      name: e.agentName,
+      version: e.version,
+    })),
+    standings: json.standings,
+    crosstable: json.crosstable,
+    agentLinks,
+    broadcast: broadcastRes.normalized,
+  };
+
+  const content = renderTemplate(TOURNAMENTS_TEMPLATE, {
+    eventOptions,
+    metaHtml,
+    liveInitialClass: broadcastRes.isActive ? '' : ' class="hide"',
+    liveHtml: broadcastRes.html,
+    standingsHtml,
+    crosstableInitialClass: crossRes.isEmpty ? ' class="hide"' : '',
+    crosstableHtml: crossRes.html,
+    gamesHtml,
+    viewerInitJson: render.safeInlineJson(broadcastRes.viewerInit),
+    pageInitJson: render.safeInlineJson(pageInit),
+  });
+
+  const pageHeader = injectLiveBanner(
+    header('<a href="/arena/" class="subtle">Tournaments</a>'),
+    liveTournament ?? db.getRunningTournament()
+  );
+  const html = renderer.render({
+    id: 'tournaments',
+    title: `${t.name} | pkmn.ai`,
+    header: pageHeader,
+    path: `/arena/tournaments/${t.id}/`,
+    style: `${render.ARENA_STYLE}\n${TOURNAMENTS_STYLE}`,
+    content,
+  });
+
+  return {html, json};
 }

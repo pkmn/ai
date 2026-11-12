@@ -19,6 +19,7 @@ import {Database} from '../db';
 import * as account from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
+import * as render from '../server/render';
 import * as wiki from '../server/wiki';
 import {ROOT, root} from '../static/util';
 
@@ -144,7 +145,7 @@ async function startFixture(): Promise<Fixture> {
 
   const nowSeconds = Math.floor(NOW / 1000);
   const db = new Database(':memory:', {now: nowSeconds});
-  await mock.seed({
+  const seeded = await mock.seed({
     db,
     publicDir,
     staticDir,
@@ -183,6 +184,22 @@ async function startFixture(): Promise<Fixture> {
     db,
     auth: wikiInstance.auth,
     publicDir,
+    now: () => nowSeconds,
+  });
+  arenaHandle.setLiveState({
+    live: seeded.liveDoc.live,
+    stale: seeded.liveDoc.stale,
+    updatedAt: seeded.liveDoc.updatedAt,
+  });
+  if (seeded.tournamentBroadcast) {
+    arenaHandle.setTournamentBroadcast(seeded.tournamentBroadcast);
+  }
+  render.register(app, {
+    db,
+    arena: arenaHandle,
+    publicDir,
+    staticDir,
+    avatarsDir,
     now: () => nowSeconds,
   });
   wiki.register(app, {
@@ -285,13 +302,30 @@ async function serve(route: Route, fixture: Fixture, cookie: string): Promise<vo
     await route.fulfill({status: 204, body: ''});
     return;
   }
-  const isDynamic = (
+  if (
+    url.pathname === '/api/battles/stream' ||
+    /^\/api\/tournaments\/[^/]+\/stream$/.test(url.pathname)
+  ) {
+    await route.fulfill({status: 204, contentType: 'text/event-stream', body: ''});
+    return;
+  }
+  const isStaticArenaAsset = (
+    url.pathname === '/arena/viewer' ||
+    url.pathname.startsWith('/arena/viewer/') ||
+    /\.(?:7z|log)$/i.test(url.pathname)
+  );
+  const isDynamic = !isStaticArenaAsset && (
     url.pathname === '/wiki' ||
     url.pathname.startsWith('/wiki/') ||
     url.pathname === '/account' ||
     url.pathname.startsWith('/account/') ||
-    url.pathname === '/api/battles.json' ||
-    url.pathname === '/api/battles'
+    url.pathname === '/projects' ||
+    url.pathname.startsWith('/projects/') ||
+    url.pathname === '/projects.json' ||
+    url.pathname === '/arena' ||
+    url.pathname.startsWith('/arena/') ||
+    url.pathname === '/arena.json' ||
+    url.pathname.startsWith('/api/')
   );
   if (isDynamic) {
     const req = route.request();

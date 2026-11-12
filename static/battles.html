@@ -43,7 +43,7 @@
 
 <script>
   document.addEventListener('DOMContentLoaded', () => {
-    let state = {{{initialLiveJson}}};
+    let state = {{{initialLiveJson}}} || {};
     const agentLinks = {{{agentLinksJson}}};
     const formatTitles = {{{formatTitlesJson}}};
     const livePanel = document.getElementById('live-panel');
@@ -76,9 +76,15 @@
 
     const utcStr = ts => new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
+    const resolveAgentHref = slug => {
+      if (!slug) return '';
+      if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return agentLinks[slug];
+      return '/projects/' + encodeURIComponent(slug) + '/';
+    };
+
     const renderAgent = (agent, bold) => {
       const inner = bold ? '<strong>' + esc(agent.name) + '</strong>' : esc(agent.name);
-      const href = agentLinks[agent.slug];
+      const href = resolveAgentHref(agent.slug);
       const link = href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
       return link + ' <code>' + esc(agent.version) + '</code>';
     };
@@ -132,11 +138,14 @@
     const renderLive = nowSec => {
       if (!livePanel) return;
       if (!state || !state.live || state.stale) {
-        livePanel.innerHTML = '<div class="live-idle muted">' +
-          (state && state.stale
-            ? 'No active heartbeat — Arena is offline or idle.'
-            : 'No battle currently running — Arena is idle.') +
-          '</div>';
+        const idleMsg = state && state.stale
+          ? 'No active heartbeat — Arena is offline or idle.'
+          : 'No battle currently running — Arena is idle.';
+        const tourSuffix = state && state.runningTournament
+          ? ' · <a href="' + esc(state.runningTournament.href) + '" class="subtle">' +
+            '<strong>&#9679; Watch ' + esc(state.runningTournament.name) + ' live</strong></a>'
+          : '';
+        livePanel.innerHTML = '<div class="live-idle muted">' + idleMsg + tourSuffix + '</div>';
         return;
       }
       const l = state.live;
@@ -413,6 +422,63 @@
         total.toLocaleString('en-US') + ' ' + (total === 1 ? 'battle' : 'battles') + ')';
     };
 
+    const trimHistoryRows = () => {
+      if (!tbody) return;
+      const summaryRows = tbody.querySelectorAll('tr.battle-row');
+      for (let i = summaryRows.length - 1; i >= pageSize; i--) {
+        const row = summaryRows[i];
+        if (row.classList.contains('expanded')) continue;
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('battle-detail-row')) detail.remove();
+        row.remove();
+      }
+    };
+
+    const refreshTimestamps = nowSec => {
+      if (!tbody) return;
+      tbody.querySelectorAll('td[data-ts]').forEach(td => {
+        const ts = Number(td.getAttribute('data-ts'));
+        if (Number.isFinite(ts)) td.textContent = relTime(nowSec, ts);
+      });
+    };
+
+    const refreshCurrentPagerCount = () => {
+      if (!state) return;
+      const counts = state.countsBySlot;
+      if (currentFmt === 'all') {
+        const total = (counts && counts.all !== undefined)
+          ? counts.all
+          : (state.totalMatches || (state.recentMatches ? state.recentMatches.length : 0));
+        updatePager(currentPage, total);
+      } else if (counts && counts[currentFmt] !== undefined) {
+        updatePager(currentPage, counts[currentFmt]);
+      }
+    };
+
+    const prependMatchIfVisible = (m, nowSec) => {
+      if (!m || !m.id) return;
+      if (!Array.isArray(state.recentMatches)) state.recentMatches = [];
+      if (!state.recentMatches.some(existing => existing.id === m.id)) {
+        state.recentMatches.unshift(m);
+        if (state.recentMatches.length > pageSize) {
+          state.recentMatches.length = pageSize;
+        }
+      }
+      if (
+        tbody &&
+        currentPage === 1 &&
+        (currentFmt === 'all' || m.slot === currentFmt) &&
+        !document.getElementById(m.id)
+      ) {
+        const emptyRow = tbody.querySelector('.empty-row');
+        if (emptyRow) emptyRow.remove();
+        const pair = renderMatchPair(m, nowSec, false);
+        tbody.insertBefore(pair[1], tbody.firstChild);
+        tbody.insertBefore(pair[0], pair[1]);
+        trimHistoryRows();
+      }
+    };
+
     const renderHistoryList = (matches, nowSec) => {
       if (!tbody) return;
       const expandedIds = new Set();
@@ -535,7 +601,9 @@
     window.addEventListener('hashchange', checkHash);
     checkHash();
 
+    let tickCount = 0;
     setInterval(() => {
+      tickCount++;
       const nowSec = Math.floor(Date.now() / 1000);
       const hbEl = document.getElementById('hb-age');
       if (hbEl && state) {
@@ -552,69 +620,86 @@
           if (bankEl) bankEl.textContent = Math.max(0, Math.round(slot.bankSeconds - dt)) + 's';
         }
       }
+      if (tickCount % 15 === 0) {
+        refreshTimestamps(nowSec);
+      }
     }, 1000);
 
-    const pollLive = async () => {
-      try {
-        const res = await fetch('/api/live.json', {
-          cache: 'no-cache',
-          headers: {Accept: 'application/json'},
-        });
-        if (!res.ok) return;
-        const next = await res.json();
-        const nowSec = Math.floor(Date.now() / 1000);
-        const prevKey = state && state.live && !state.stale
-          ? state.live.matchId + ':' + state.live.heartbeatSeq + ':' + state.stale
-          : 'idle:' + Boolean(state && state.stale);
-        const nextKey = next && next.live && !next.stale
-          ? next.live.matchId + ':' + next.live.heartbeatSeq + ':' + next.stale
-          : 'idle:' + Boolean(next && next.stale);
-        state = next;
-        if (prevKey !== nextKey) {
-          renderLive(nowSec);
-        }
-        if (
-          currentFmt === 'all' &&
-          currentPage === 1 &&
-          tbody &&
-          Array.isArray(next.recentMatches) &&
-          next.recentMatches.length > 0
-        ) {
-          const emptyRow = tbody.querySelector('.empty-row');
-          if (emptyRow) emptyRow.remove();
-          for (let i = next.recentMatches.length - 1; i >= 0; i--) {
-            const m = next.recentMatches[i];
-            if (!document.getElementById(m.id)) {
-              const pair = renderMatchPair(m, nowSec, false);
-              tbody.insertBefore(pair[1], tbody.firstChild);
-              tbody.insertBefore(pair[0], pair[1]);
-            }
-          }
-          const summaryRows = tbody.querySelectorAll('tr.battle-row');
-          for (let i = summaryRows.length - 1; i >= pageSize; i--) {
-            const row = summaryRows[i];
-            if (row.classList.contains('expanded')) continue;
-            const detail = row.nextElementSibling;
-            if (detail && detail.classList.contains('battle-detail-row')) detail.remove();
-            row.remove();
-          }
-          const total = (next.countsBySlot && next.countsBySlot.all !== undefined)
-            ? next.countsBySlot.all
-            : (next.totalMatches || next.recentMatches.length);
-          updatePager(1, total);
-        } else if (next.countsBySlot && next.countsBySlot[currentFmt] !== undefined) {
-          updatePager(currentPage, next.countsBySlot[currentFmt]);
-        }
-        if (tbody) {
-          tbody.querySelectorAll('td[data-ts]').forEach(td => {
-            const ts = Number(td.getAttribute('data-ts'));
-            if (Number.isFinite(ts)) td.textContent = relTime(nowSec, ts);
-          });
-        }
-      } catch {}
+    const liveKey = doc => {
+      const tourId = (doc && doc.runningTournament && doc.runningTournament.id) || '';
+      if (doc && doc.live && !doc.stale) {
+        return doc.live.matchId + ':' + doc.live.heartbeatSeq + ':' + doc.stale + ':' + tourId;
+      }
+      return 'idle:' + Boolean(doc && doc.stale) + ':' + tourId;
     };
 
-    pollLive();
-    setInterval(pollLive, 3000);
+    const applySnapshot = next => {
+      if (!next) return;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const prevKey = liveKey(state);
+      const nextKey = liveKey(next);
+      state = next;
+      if (prevKey !== nextKey) {
+        renderLive(nowSec);
+      }
+      if (Array.isArray(next.recentMatches) && next.recentMatches.length > 0) {
+        for (let i = next.recentMatches.length - 1; i >= 0; i--) {
+          prependMatchIfVisible(next.recentMatches[i], nowSec);
+        }
+      }
+      refreshCurrentPagerCount();
+      refreshTimestamps(nowSec);
+    };
+
+    if (typeof EventSource !== 'undefined') {
+      const es = new EventSource('/api/battles/stream');
+      es.addEventListener('snapshot', ev => {
+        try {
+          applySnapshot(JSON.parse(ev.data));
+        } catch {}
+      });
+      es.addEventListener('live', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          const nowSec = Math.floor(Date.now() / 1000);
+          state.updatedAt = data.updatedAt || nowSec;
+          state.stale = Boolean(data.stale);
+          state.live = state.stale ? undefined : data.live;
+          state.runningTournament = data.runningTournament;
+          renderLive(nowSec);
+        } catch {}
+      });
+      es.addEventListener('match', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          const nowSec = Math.floor(Date.now() / 1000);
+          state.updatedAt = data.updatedAt || nowSec;
+          state.stale = Boolean(data.stale);
+          state.live = state.stale ? undefined : data.live;
+          state.runningTournament = data.runningTournament;
+          if (data.totalMatches !== undefined) state.totalMatches = data.totalMatches;
+          if (data.countsBySlot) state.countsBySlot = data.countsBySlot;
+          renderLive(nowSec);
+          if (data.match) {
+            prependMatchIfVisible(data.match, nowSec);
+          }
+          refreshCurrentPagerCount();
+          refreshTimestamps(nowSec);
+        } catch {}
+      });
+    } else {
+      const pollLive = async () => {
+        try {
+          const res = await fetch('/api/live.json', {
+            cache: 'no-cache',
+            headers: {Accept: 'application/json'},
+          });
+          if (!res.ok) return;
+          applySnapshot(await res.json());
+        } catch {}
+      };
+      pollLive();
+      setInterval(pollLive, 3000);
+    }
   });
 </script>

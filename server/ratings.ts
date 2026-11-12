@@ -75,6 +75,20 @@ export interface NextMatchChoice {
   priorityScore: number;
 }
 
+export interface TournamentGameInput {
+  i: number;
+  j: number;
+  outcome: GameOutcome;
+}
+
+export interface TournamentRatingResult {
+  theta: Float64Array;
+  elo: Float64Array;
+  eloStd: Float64Array;
+  covariance: Float64Array;
+  nu: number;
+}
+
 function choleskyDecompose(A: Float64Array, M: number, L: Float64Array): void {
   L.fill(0);
   for (let i = 0; i < M; i++) {
@@ -622,4 +636,188 @@ export function selectNextArenaMatch(
     }
   }
   return best!;
+}
+
+// Whole-history 3-outcome Davidson MAP solver (`W`, `T`, `L`) for standalone BYOT tournament
+// games (`P(W) = e^{d/2}/Z`, `P(T) = nu/Z`, `P(L) = e^{-d/2}/Z`, `Z = e^{d/2} + nu + e^{-d/2}`).
+export function computeTournamentRatings(
+  numEntrants: number,
+  games: TournamentGameInput[],
+  anchorIndex = -1,
+  centerElo = 1500,
+  priorEloStd = 350
+): TournamentRatingResult {
+  const M = numEntrants;
+  if (M === 0) {
+    return {
+      theta: new Float64Array(0),
+      elo: new Float64Array(0),
+      eloStd: new Float64Array(0),
+      covariance: new Float64Array(0),
+      nu: 0,
+    };
+  }
+
+  const priorSigma = priorEloStd / ELO_SCALE;
+  const priorPrecision = 1 / (priorSigma * priorSigma);
+
+  let totalGames = 0;
+  let tieGames = 0;
+  const pairMap = new Map<number, {i: number; j: number; n: number; y: number}>();
+  for (const g of games) {
+    if (g.i === g.j || g.i < 0 || g.i >= M || g.j < 0 || g.j >= M) continue;
+    totalGames++;
+    if (g.outcome === 'T') tieGames++;
+    const low = Math.min(g.i, g.j);
+    const high = Math.max(g.i, g.j);
+    const key = low * M + high;
+    const sign = g.i === low ? 1 : -1;
+    const y = g.outcome === 'W' ? 0.5 * sign : g.outcome === 'L' ? -0.5 * sign : 0;
+    const existing = pairMap.get(key);
+    if (existing) {
+      existing.n += 1;
+      existing.y += y;
+    } else {
+      pairMap.set(key, {i: low, j: high, n: 1, y});
+    }
+  }
+
+  const tieRate = totalGames > 0 ? Math.min(0.5, tieGames / totalGames) : 0;
+  const nu = tieRate > 0 ? (2 * tieRate) / (1 - tieRate) : 0;
+  const pairs = Array.from(pairMap.values());
+
+  const evalLogPosterior = (x: Float64Array): number => {
+    let val = 0;
+    for (let i = 0; i < M; i++) val -= 0.5 * priorPrecision * x[i] * x[i];
+    for (const p of pairs) {
+      const delta = x[p.i] - x[p.j];
+      const eh = Math.exp(0.5 * delta);
+      const emh = 1 / eh;
+      const Z = eh + emh + nu;
+      val += p.y * delta - p.n * Math.log(Z);
+    }
+    return val;
+  };
+
+  const theta = new Float64Array(M);
+  const grad = new Float64Array(M);
+  const H = new Float64Array(M * M);
+  const L = new Float64Array(M * M);
+  const step = new Float64Array(M);
+  const scratch = new Float64Array(M);
+  const cand = new Float64Array(M);
+
+  for (let iter = 0; iter < 25; iter++) {
+    H.fill(0);
+    let obj = 0;
+    for (let i = 0; i < M; i++) {
+      grad[i] = -priorPrecision * theta[i];
+      H[i * M + i] = priorPrecision;
+      obj -= 0.5 * priorPrecision * theta[i] * theta[i];
+    }
+
+    for (const p of pairs) {
+      const delta = theta[p.i] - theta[p.j];
+      const eh = Math.exp(0.5 * delta);
+      const emh = 1 / eh;
+      const Z = eh + emh + nu;
+      obj += p.y * delta - p.n * Math.log(Z);
+
+      const pW = eh / Z;
+      const pL = emh / Z;
+      const mu = 0.5 * (pW - pL);
+      const v = 0.25 * (pW + pL) - mu * mu;
+      const g = p.y - p.n * mu;
+      const w = p.n * v;
+
+      grad[p.i] += g;
+      grad[p.j] -= g;
+      H[p.i * M + p.i] += w;
+      H[p.j * M + p.j] += w;
+      H[p.i * M + p.j] -= w;
+      H[p.j * M + p.i] -= w;
+    }
+
+    let maxGrad = 0;
+    for (let i = 0; i < M; i++) {
+      const ag = Math.abs(grad[i]);
+      if (ag > maxGrad) maxGrad = ag;
+    }
+    if (maxGrad < 1e-12) break;
+
+    choleskyDecompose(H, M, L);
+    solveCholesky(L, grad, M, step, scratch);
+
+    let alpha = 1.0;
+    while (alpha > 1e-6) {
+      for (let i = 0; i < M; i++) cand[i] = theta[i] + alpha * step[i];
+      if (evalLogPosterior(cand) >= obj - 1e-12) break;
+      alpha *= 0.5;
+    }
+
+    let maxStep = 0;
+    for (let i = 0; i < M; i++) {
+      const d = alpha * step[i];
+      theta[i] += d;
+      if (Math.abs(d) > maxStep) maxStep = Math.abs(d);
+    }
+    if (maxStep < 1e-12) break;
+  }
+
+  H.fill(0);
+  const hasPlayed = new Uint8Array(M);
+  for (let i = 0; i < M; i++) H[i * M + i] = priorPrecision;
+
+  for (const p of pairs) {
+    const delta = theta[p.i] - theta[p.j];
+    const eh = Math.exp(0.5 * delta);
+    const emh = 1 / eh;
+    const Z = eh + emh + nu;
+    const pW = eh / Z;
+    const pL = emh / Z;
+    const mu = 0.5 * (pW - pL);
+    const w = p.n * Math.max(1e-9, 0.25 * (pW + pL) - mu * mu);
+
+    H[p.i * M + p.i] += w;
+    H[p.j * M + p.j] += w;
+    H[p.i * M + p.j] -= w;
+    H[p.j * M + p.i] -= w;
+    hasPlayed[p.i] = 1;
+    hasPlayed[p.j] = 1;
+  }
+
+  let playedCount = 0;
+  for (let i = 0; i < M; i++) playedCount += hasPlayed[i];
+  if (playedCount > 0) {
+    const gaugeTerm = 1e6 / (playedCount * playedCount);
+    for (let i = 0; i < M; i++) {
+      if (!hasPlayed[i]) continue;
+      for (let j = 0; j < M; j++) {
+        if (hasPlayed[j]) H[i * M + j] += gaugeTerm;
+      }
+    }
+  }
+
+  const covariance = invertSPDMatrix(H, M);
+  let offset = 0;
+  if (anchorIndex >= 0 && anchorIndex < M) {
+    offset = theta[anchorIndex];
+  } else if (playedCount > 0) {
+    let sum = 0;
+    for (let i = 0; i < M; i++) {
+      if (hasPlayed[i]) sum += theta[i];
+    }
+    offset = sum / playedCount;
+  }
+
+  const elo = new Float64Array(M);
+  const eloStd = new Float64Array(M);
+  for (let i = 0; i < M; i++) {
+    const centered = theta[i] - offset;
+    theta[i] = centered;
+    elo[i] = centerElo + ELO_SCALE * centered;
+    eloStd[i] = ELO_SCALE * Math.sqrt(Math.max(0, covariance[i * M + i]));
+  }
+
+  return {theta, elo, eloStd, covariance, nu};
 }

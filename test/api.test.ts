@@ -335,7 +335,14 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
       },
     });
     const srv = await startTestServer(app);
-    const liveFile = path.join(tmpDir, 'api', 'live.json');
+    const fetchLive = async () => {
+      const res = await fetch(`${srv.baseUrl}/api/live.json`);
+      expect(res.status).toBe(200);
+      return {
+        etag: res.headers.get('etag'),
+        doc: await res.json() as arena.LiveDocument,
+      };
+    };
 
     try {
       const hbPayload = {
@@ -376,10 +383,15 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
         hbPayload
       );
       expect(hb1.status).toBe(200);
-      const doc1 = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
+      const {doc: doc1, etag: etag1} = await fetchLive();
       expect(doc1.stale).toBe(false);
       expect(doc1.live?.turnStartedAt).toBe(1_760_001_000);
       expect(doc1.live?.slot).toBe('rby');
+      expect(etag1).toBeTruthy();
+      const notMod = await fetch(`${srv.baseUrl}/api/live.json`, {
+        headers: {'If-None-Match': etag1!},
+      });
+      expect(notMod.status).toBe(304);
 
       // Same turn/slot heartbeat preserves turnStartedAt; new turn updates turnStartedAt
       fakeNow = 1_760_001_004;
@@ -390,7 +402,7 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
         AUTH_CFG.arenaSecret,
         {...hbPayload, heartbeatSeq: 2}
       );
-      const doc2 = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
+      const {doc: doc2} = await fetchLive();
       expect(doc2.live?.turnStartedAt).toBe(1_760_001_000);
 
       fakeNow = 1_760_001_009;
@@ -401,7 +413,7 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
         AUTH_CFG.arenaSecret,
         {...hbPayload, heartbeatSeq: 3, turn: 6, activeSlot: 'p2'}
       );
-      const doc3 = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
+      const {doc: doc3} = await fetchLive();
       expect(doc3.live?.turnStartedAt).toBe(1_760_001_009);
 
       // LiveSlot accepts optional pool team short hashes and rejects >64-char team strings
@@ -418,7 +430,7 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
         }
       );
       expect(hbTeamOk.status).toBe(200);
-      const docTeam = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
+      const {doc: docTeam} = await fetchLive();
       expect(docTeam.live?.p1.team).toBe('b7b8bb1cbc73');
       expect(docTeam.live?.p2.team).toBe('P1:16d479804e3d');
 
@@ -552,9 +564,7 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
       ).get('gen1ou20261109') as {cnt: number};
       expect(snapshots.cnt).toBe(2);
 
-      const docAfterMatches = JSON.parse(
-        fs.readFileSync(liveFile, 'utf8')
-      ) as arena.LiveDocument;
+      const {doc: docAfterMatches} = await fetchLive();
       expect(docAfterMatches.live).toBeUndefined();
       expect(docAfterMatches.recentMatches).toHaveLength(45);
       expect(docAfterMatches.recentMatches[0].id).toBe('gen1ou-0000000045');
@@ -563,7 +573,7 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
       await new Promise(resolve => setTimeout(resolve, 320));
       expect(watchdogAlerts).toHaveLength(1);
       expect(watchdogAlerts[0].lastMatchId).toBe('gen1ou-0000000045');
-      const staleDoc = JSON.parse(fs.readFileSync(liveFile, 'utf8')) as arena.LiveDocument;
+      const {doc: staleDoc} = await fetchLive();
       expect(staleDoc.stale).toBe(true);
     } finally {
       ctrl.close();
@@ -571,6 +581,387 @@ describe('Arena Control API, live.json, watchdog & ratings pipeline', () => {
       db.close();
     }
   });
+
+  test('streams SSE on /api/battles/stream and /api/tournaments/:id/stream with live game-complete',
+    async () => {
+      const db = new Database(':memory:');
+      db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
+      db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_760_000_000);
+
+      const zeroAgent = db.getAgentBySlug('0-error')!;
+      const fpAgent = db.getAgentBySlug('foul-play')!;
+      const metaAgent = db.getAgentBySlug('metamon')!;
+
+      const vZero = db.createSubmission({
+        agentId: zeroAgent.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/0-error.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_010,
+      });
+      const vFp = db.createSubmission({
+        agentId: fpAgent.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/fp.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_015,
+      });
+      const vMeta = db.createSubmission({
+        agentId: metaAgent.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/meta.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_020,
+      });
+      db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: 1_760_000_030});
+      db.applySubmissionStatus({versionId: vFp.id, smokeStatus: 'passed', now: 1_760_000_030});
+      db.applySubmissionStatus({versionId: vMeta.id, smokeStatus: 'passed', now: 1_760_000_030});
+
+      db.upsertTournament({
+        id: '2',
+        name: 'Tournament #2: Gen 1 OU',
+        format: 'gen1ou',
+        gamesPerMatchup: 10,
+        parallelTables: 2,
+        hardware: 'M6 Mac mini',
+        status: 'running',
+        startsAt: 1_760_000_100,
+      });
+      db.upsertTournamentEntrant({
+        tournamentId: '2',
+        agentId: zeroAgent.id,
+        versionId: vZero.id,
+        seed: 1,
+      });
+      db.upsertTournamentEntrant({
+        tournamentId: '2',
+        agentId: fpAgent.id,
+        versionId: vFp.id,
+        seed: 2,
+      });
+      db.upsertTournamentEntrant({
+        tournamentId: '2',
+        agentId: metaAgent.id,
+        versionId: vMeta.id,
+        seed: 3,
+      });
+
+      const app = polka();
+      const ctrl = arena.register(app, {
+        db,
+        arenaSecret: AUTH_CFG.arenaSecret,
+        sessionSecret: AUTH_CFG.sessionSecret,
+        publicDir: tmpDir,
+        now: () => 1_760_000_500,
+      });
+      const srv = await startTestServer(app);
+      const client = new arena.Client({
+        serverUrl: srv.baseUrl,
+        arenaSecret: AUTH_CFG.arenaSecret!,
+      });
+
+      const parseSseChunks = (raw: string): Array<{event: string; data: unknown}> => {
+        const out: Array<{event: string; data: unknown}> = [];
+        for (const block of raw.split('\n\n')) {
+          const lines = block.split('\n');
+          let event = 'message';
+          const dataLines: string[] = [];
+          for (const line of lines) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+          }
+          if (dataLines.length > 0) {
+            out.push({event, data: JSON.parse(dataLines.join('\n')) as unknown});
+          }
+        }
+        return out;
+      };
+
+      const openPersistentSse = async (route: string) => {
+        const abort = new AbortController();
+        const res = await fetch(`${srv.baseUrl}${route}`, {signal: abort.signal});
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toContain('text/event-stream');
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const received: Array<{event: string; data: Record<string, unknown>}> = [];
+        const pump = (async () => {
+          try {
+            for (;;) {
+              const {done, value} = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, {stream: true});
+              let sep = buffer.indexOf('\n\n');
+              while (sep >= 0) {
+                const block = buffer.slice(0, sep);
+                buffer = buffer.slice(sep + 2);
+                for (const item of parseSseChunks(`${block}\n\n`)) {
+                  received.push({event: item.event, data: item.data as Record<string, unknown>});
+                }
+                sep = buffer.indexOf('\n\n');
+              }
+            }
+          } catch {}
+        })();
+        const waitForEvent = async (eventName: string, minCount = 1) => {
+          const deadline = Date.now() + 2000;
+          while (Date.now() < deadline) {
+            const matches = received.filter(e => e.event === eventName);
+            if (matches.length >= minCount) return matches[minCount - 1];
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          throw new Error(`Timed out waiting for SSE event "${eventName}"`);
+        };
+        return {
+          received,
+          waitForEvent,
+          close: async () => {
+            abort.abort();
+            await pump;
+          },
+        };
+      };
+
+      try {
+        // 1. One-shot `?once=1` battle SSE snapshot + persistent stream updates
+        const onceBattles = await fetch(`${srv.baseUrl}/api/battles/stream?once=1`);
+        expect(onceBattles.status).toBe(200);
+        const onceEvents = parseSseChunks(await onceBattles.text());
+        expect(onceEvents).toHaveLength(1);
+        expect(onceEvents[0].event).toBe('snapshot');
+
+        const battleStream = await openPersistentSse('/api/battles/stream');
+        const snap = await battleStream.waitForEvent('snapshot');
+        expect((snap.data.runningTournament as {id: string}).id).toBe('2');
+
+        await client.sendHeartbeat({
+          heartbeatSeq: 1,
+          matchId: 'gen1ou-live-sse-1',
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          game: 1,
+          turn: 3,
+          activeSlot: 'p1',
+          turnStartedAt: 1_760_000_498,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 10,
+          p1: {
+            slug: '0-error',
+            name: '0 ERROR',
+            version: '1.0.0',
+            bankSeconds: 149,
+            lastTurnMillis: 250,
+            meanTurnMillis: 250,
+            ram: 800,
+          },
+          p2: {
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '1.0.0',
+            bankSeconds: 150,
+            lastTurnMillis: 300,
+            meanTurnMillis: 300,
+            ram: 950,
+          },
+        });
+        const liveEvt = await battleStream.waitForEvent('live');
+        expect((liveEvt.data.live as {matchId: string}).matchId).toBe('gen1ou-live-sse-1');
+
+        await client.completeMatch({
+          match: {
+            id: 'gen1ou-live-sse-1',
+            ladderId: 'gen1ou20261109',
+            p1VersionId: vZero.id,
+            p2VersionId: vFp.id,
+            seed: '1,2,3,4',
+            game1Outcome: 'W',
+            game2Outcome: 'W',
+            category: 'WW',
+            game1Turns: 20,
+            game2Turns: 24,
+            game1EndReason: 'normal',
+            game2EndReason: 'normal',
+            p1PeakRam: 820,
+            p2PeakRam: 960,
+            p1Game1BankSeconds: 145,
+            p1Game2BankSeconds: 142,
+            p2Game1BankSeconds: 138,
+            p2Game2BankSeconds: 130,
+            p1MeanTurnMillis: 260,
+            p2MeanTurnMillis: 310,
+            completedAt: 1_760_000_500,
+          },
+        });
+        const matchEvt = await battleStream.waitForEvent('match');
+        expect((matchEvt.data.match as {id: string}).id).toBe('gen1ou-live-sse-1');
+        expect(matchEvt.data.live).toBeUndefined();
+        await battleStream.close();
+
+        // 2. Tournament multi-table broadcast + live SSE + game-complete ratings & .log write
+        expect((await fetch(`${srv.baseUrl}/api/tournament-live.json`)).status).toBe(404);
+        expect((await fetch(`${srv.baseUrl}/api/tournaments/999/stream?once=1`)).status).toBe(404);
+
+        const tourStream = await openPersistentSse('/api/tournaments/2/stream');
+        await tourStream.waitForEvent('snapshot');
+
+        await client.sendTournamentBroadcast('2', {
+          table: 1,
+          mode: 'load',
+          gameId: 't2-rr-g1',
+          stage: 'Round Robin',
+          cycle: 1,
+          matchupGame: 1,
+          p1: {
+            slug: '0-error',
+            name: '0 ERROR',
+            version: '1.0.0',
+            bankSeconds: 150,
+            thinking: true,
+            incrementSeconds: 10,
+          },
+          p2: {
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '1.0.0',
+            bankSeconds: 150,
+            thinking: false,
+            incrementSeconds: 10,
+          },
+          lines: ['|gametype|singles', '|player|p1|0 ERROR|1', '|player|p2|Foul Play|2', '|turn|1'],
+        });
+        const loadEvt = await tourStream.waitForEvent('table-load');
+        expect((loadEvt.data.table as {gameId: string}).gameId).toBe('t2-rr-g1');
+
+        const liveBroadcastRes = await fetch(`${srv.baseUrl}/api/tournament-live.json`);
+        expect(liveBroadcastRes.status).toBe(200);
+        const bcEtag = liveBroadcastRes.headers.get('etag')!;
+        expect((await fetch(`${srv.baseUrl}/api/tournament-live.json`, {
+          headers: {'If-None-Match': bcEtag},
+        })).status).toBe(304);
+
+        await client.sendTournamentBroadcast('2', {
+          table: 1,
+          mode: 'append',
+          p1: {
+            slug: '0-error',
+            name: '0 ERROR',
+            version: '1.0.0',
+            bankSeconds: 142,
+            thinking: false,
+            incrementSeconds: 10,
+          },
+          p2: {
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '1.0.0',
+            bankSeconds: 148,
+            thinking: true,
+            incrementSeconds: 10,
+          },
+          lines: ['|move|p1a: Tauros|Body Slam|p2a: Chansey', '|turn|2'],
+        });
+        const appendEvt = await tourStream.waitForEvent('table-append');
+        expect((appendEvt.data.lines as string[])).toContain('|turn|2');
+
+        await client.sendTournamentBroadcast('2', {table: 2, idle: true, label: 'Table 2'});
+        await tourStream.waitForEvent('table-idle');
+
+        const gc1 = await client.completeTournamentGame('2', {
+          table: 1,
+          log: '|gametype|singles\n|player|p1|0 ERROR|1\n|player|p2|Foul Play|2\n|win|0 ERROR\n',
+          game: {
+            id: 't2-rr-g1',
+            stage: 'Round Robin',
+            cycle: 1,
+            matchupGame: 1,
+            p1VersionId: vZero.id,
+            p2VersionId: vFp.id,
+            seed: '1,2,3,4',
+            outcome: 'W',
+            turns: 22,
+            endReason: 'normal',
+            p1BankSeconds: 140,
+            p2BankSeconds: 120,
+            completedAt: 1_760_000_520,
+          },
+        });
+        expect(gc1.duplicate).toBe(false);
+        expect(gc1.logHref).toBe('/arena/tournaments/2/t2-rr-g1.log');
+        expect(
+          fs.existsSync(path.join(tmpDir, 'arena', 'tournaments', '2', 't2-rr-g1.log'))
+        ).toBe(true);
+
+        const gcEvt = await tourStream.waitForEvent('game-complete');
+        expect(gcEvt.data.completedGames).toBe(1);
+        const standingsAfter1 = gcEvt.data.standings as Array<{
+          slug: string;
+          points: number;
+          elo: number;
+        }>;
+        expect(standingsAfter1[0].slug).toBe('0-error');
+        expect(standingsAfter1[0].points).toBe(1);
+        expect(standingsAfter1[0].elo).toBeGreaterThan(1500);
+
+        // Idempotent duplicate submission
+        const gcDup = await client.completeTournamentGame('2', {
+          game: {
+            id: 't2-rr-g1',
+            stage: 'Round Robin',
+            cycle: 1,
+            matchupGame: 1,
+            p1VersionId: vZero.id,
+            p2VersionId: vFp.id,
+            seed: '1,2,3,4',
+            outcome: 'W',
+            turns: 22,
+            endReason: 'normal',
+            p1BankSeconds: 140,
+            p2BankSeconds: 120,
+            completedAt: 1_760_000_520,
+          },
+        });
+        expect(gcDup.duplicate).toBe(true);
+
+        await client.sendTournamentBroadcast('2', {off: true});
+        await tourStream.waitForEvent('broadcast-end');
+        expect((await fetch(`${srv.baseUrl}/api/tournament-live.json`)).status).toBe(404);
+
+        // Complete tournament via final game
+        await client.completeTournamentGame('2', {
+          tournamentStatus: 'completed',
+          game: {
+            id: 't2-rr-g2',
+            stage: 'Round Robin',
+            cycle: 1,
+            matchupGame: 2,
+            p1VersionId: vFp.id,
+            p2VersionId: vMeta.id,
+            seed: '5,6,7,8',
+            outcome: 'W',
+            turns: 30,
+            endReason: 'normal',
+            p1BankSeconds: 130,
+            p2BankSeconds: 110,
+            completedAt: 1_760_000_600,
+          },
+        });
+        expect(db.getTournament('2')?.status).toBe('completed');
+        expect(db.getTournamentEntrants('2')[0].finalRank).toBe(1);
+
+        await tourStream.close();
+      } finally {
+        ctrl.close();
+        await srv.close();
+        db.close();
+      }
+    });
 });
 
 describe('pkmn CLI (tools/pkmn.ts)', () => {

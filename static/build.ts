@@ -11,7 +11,7 @@ import favicons from 'favicons';
 import * as site from 'site';
 
 import {DB_PATH, Database} from '../db';
-import {renderArenaPages} from '../server/render';
+import {renderBattleViewerPage} from '../server/tournaments';
 
 import * as glossary from './glossary';
 import * as research from './research';
@@ -60,17 +60,32 @@ export function syncStaticLiveBanner(
   if (!nodeFs.existsSync(publicDir)) return;
   const banner = formatLiveTournamentBanner(tournament);
 
+  if (tournament) {
+    const stub = path.join(publicDir, 'arena', 'tournaments', tournament.id, 'index.html');
+    if (!nodeFs.existsSync(stub)) {
+      nodeFs.mkdirSync(path.dirname(stub), {recursive: true});
+      nodeFs.writeFileSync(stub, '', 'utf8');
+    }
+  }
+
   const visitDir = (dir: string, relDir: string) => {
     for (const entry of nodeFs.readdirSync(dir, {withFileTypes: true})) {
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (rel === 'arena' || rel === 'api' || rel === 'chat' || rel === 'account') continue;
+        if (
+          rel === 'arena' ||
+          rel === 'api' ||
+          rel === 'chat' ||
+          rel === 'account' ||
+          rel === 'projects'
+        ) {
+          continue;
+        }
         visitDir(full, rel);
         continue;
       }
       if (!entry.isFile() || !entry.name.endsWith('.html')) continue;
-      if (rel.startsWith('projects/') && rel !== 'projects/index.html') continue;
       const raw = nodeFs.readFileSync(full, 'utf8');
       if (!raw || raw.includes('Under Construction:')) continue;
       if (!raw.includes('<header>')) continue;
@@ -141,7 +156,7 @@ const build = async (rebuild?: boolean) => {
   let actual = fs.list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'release', 'chat', 'arena',
-    'account', 'api', 'background', 'index.html', 'favicon.svg',
+    'account', 'background', 'index.html', 'favicon.svg',
     'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
@@ -187,15 +202,28 @@ const build = async (rebuild?: boolean) => {
 
     // `@untitaker/hyperlink` (`hyperlink public --check-anchors`) has no CLI flag or config option
     // to ignore non-static routes (`--help` only exposes `--check-anchors`, `--sources`, `-j`, and
-    // `--github-actions`). Routes linked from `.dj` content that are actually Nginx redirects
-    // (`/chat`) or dynamic SSR routes (`/account`) therefore need 0-byte `index.html` stubs on disk
-    // so `npm run lint` does not report broken links.
-    for (const placeholder of ['chat', 'account']) {
+    // `--github-actions`). Routes linked from `.dj` content that are Nginx redirects (`/chat`) or
+    // dynamic SSR routes (`/account`, `/arena`, `/projects`, and any active live tournament banner
+    // target) therefore get 0-byte `index.html` stubs on disk so `npm run lint` does not report
+    // broken links, while Nginx and Polka's `serve-static` wrapper bypass them at runtime.
+    const projectsDir = path.join(PUBLIC, 'projects');
+    if (fs.exists(projectsDir)) fs.remove(projectsDir);
+    for (const placeholder of ['chat', 'account', 'arena', 'projects']) {
       const file = path.join(PUBLIC, placeholder, 'index.html');
-      if (!fs.exists(file)) {
-        fs.mkdir(path.dirname(file));
-        fs.write(file, '');
-      }
+      fs.mkdir(path.dirname(file));
+      fs.write(file, '');
+    }
+    const runningTournament = db.getRunningTournament();
+    if (runningTournament) {
+      const tourStub = path.join(
+        PUBLIC,
+        'arena',
+        'tournaments',
+        runningTournament.id,
+        'index.html'
+      );
+      fs.mkdir(path.dirname(tourStub));
+      fs.write(tourStub, '');
     }
 
     const files = ['favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib'];
@@ -214,12 +242,26 @@ const build = async (rebuild?: boolean) => {
     renderer.create('glossary', glossary.page(STATIC));
     renderer.create('research', research.page(STATIC));
 
-    renderArenaPages({
-      db,
-      renderer,
-      publicDir: PUBLIC,
-      staticDir: process.env.MOCK === '1' ? root('.mock', 'static') : STATIC,
-    });
+    renderBattleViewerPage(PUBLIC);
+    const pruneArena = (dir: string, relDir: string) => {
+      for (const entry of nodeFs.readdirSync(dir, {withFileTypes: true})) {
+        const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (rel === 'viewer') continue;
+          pruneArena(full, rel);
+          if (nodeFs.readdirSync(full).length === 0) nodeFs.rmdirSync(full);
+          continue;
+        }
+        const keep =
+          rel === 'index.html' ||
+          (runningTournament !== undefined &&
+            rel === `tournaments/${runningTournament.id}/index.html`) ||
+          /\.(?:7z|log)$/i.test(entry.name);
+        if (!keep) nodeFs.unlinkSync(full);
+      }
+    };
+    pruneArena(path.join(PUBLIC, 'arena'), '');
 
     const pages: {[page: string]: string} = {
       background: 'Background',

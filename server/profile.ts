@@ -3,7 +3,7 @@ import * as path from 'path';
 
 import {AVATARS_DIR} from '../db';
 import type * as db from '../db';
-import {Renderer, header} from '../static/build';
+import {Renderer, header, injectLiveBanner} from '../static/build';
 import {escapeHtml, renderTemplate, root} from '../static/util';
 
 import * as arena from './arena';
@@ -933,341 +933,125 @@ function buildProjectMetaRows(
   return rows.join('\n      ');
 }
 
-export function renderAgentProfiles(opts: {
+export interface AgentProfileDocument {
+  slug: string;
+  name: string;
+  status: db.AgentRow['status'];
+  logoHref?: string;
+  owners: Array<{github: string; smogon?: string; smogonId?: number}>;
+  metadata?: render.ProjectMeta;
+  ladders: unknown[];
+}
+
+const LOGO_CONTENT_TYPES: Record<string, string> = {
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+};
+
+export function resolveAgentLogo(
+  agent: Pick<db.AgentRow, 'slug' | 'logo'>,
+  avatarsDir = AVATARS_DIR
+): {filePath: string; fileName: string; href: string; contentType: string} | undefined {
+  if (!agent.logo) return undefined;
+  const filePath = path.join(avatarsDir, agent.logo);
+  if (!fs.existsSync(filePath)) return undefined;
+  const ext = (path.extname(agent.logo) || '.png').toLowerCase();
+  const fileName = `${agent.slug}${ext}`;
+  return {
+    filePath,
+    fileName,
+    href: `/projects/${encodeURIComponent(fileName)}`,
+    contentType: LOGO_CONTENT_TYPES[ext] ?? 'application/octet-stream',
+  };
+}
+
+export function renderAgentProfile(opts: {
   db: db.Database;
   renderer: Renderer;
+  agent: db.AgentRow;
   publicDir: string;
   avatarsDir?: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileAgents: db.AgentRow[];
   profileSlugs: ReadonlySet<string>;
+  liveTournament?: {id: string; name: string};
   nowSec: number;
-}) {
+}): {html: string; json: AgentProfileDocument} {
   const {
     db,
     renderer,
+    agent,
     publicDir,
     avatarsDir = AVATARS_DIR,
     projectMeta,
-    profileAgents,
     profileSlugs,
+    liveTournament,
     nowSec,
   } = opts;
-  const projectsDir = path.join(publicDir, 'projects');
-  fs.mkdirSync(projectsDir, {recursive: true});
 
-  const expectedLogoFiles = new Set<string>();
-  for (const agent of profileAgents) {
-    if (!agent.logo) continue;
-    const srcLogo = path.join(avatarsDir, agent.logo);
-    if (fs.existsSync(srcLogo)) {
-      const ext = path.extname(agent.logo) || '.png';
-      expectedLogoFiles.add(`${agent.slug}${ext}`);
-    }
-  }
+  const ladders = db.getAgentParticipatedLadders(agent.id);
+  const resolvedLogo = resolveAgentLogo(agent, avatarsDir);
+  const logoHref = resolvedLogo?.href;
+  const logoHtml = logoHref
+    ? `<img class="project-logo" src="${logoHref}" alt="${escapeHtml(agent.name)}">`
+    : '';
 
-  // Remove stale profile directories or logo assets when an agent is disabled/removed.
-  for (const entry of fs.readdirSync(projectsDir, {withFileTypes: true})) {
-    if (entry.isDirectory()) {
-      if (!profileSlugs.has(entry.name)) {
-        fs.rmSync(path.join(projectsDir, entry.name), {recursive: true, force: true});
-      }
-    } else if (
-      entry.isFile() &&
-      entry.name !== 'index.html' &&
-      !entry.name.includes('.tmp.') &&
-      !expectedLogoFiles.has(entry.name)
-    ) {
-      fs.rmSync(path.join(projectsDir, entry.name), {force: true});
-    }
-  }
+  const owners = db.getDevelopersForAgent(agent.id).map(d => ({
+    github: d.githubLogin,
+    smogon: d.smogonUsername,
+    smogonId: d.smogonId,
+  }));
+  const meta = projectMeta.get(agent.name);
+  const siteLink = meta?.site
+    ? `<a href="${escapeHtml(meta.site)}" class="subtle" ` +
+      `title="Project Homepage">${render.EXT_ICON}</a>`
+    : '';
+  const profileHeader = injectLiveBanner(
+    header(`${escapeHtml(agent.name)}${siteLink}`),
+    liveTournament ?? db.getRunningTournament()
+  );
 
-  for (const agent of profileAgents) {
-    const ladders = db.getAgentParticipatedLadders(agent.id);
-
-    let logoHtml = '';
-    let logoHref: string | undefined;
-    if (agent.logo) {
-      const srcLogo = path.join(avatarsDir, agent.logo);
-      if (fs.existsSync(srcLogo)) {
-        const ext = path.extname(agent.logo) || '.png';
-        const destFile = `${agent.slug}${ext}`;
-        render.copyFileAtomic(srcLogo, path.join(projectsDir, destFile));
-        logoHref = `/projects/${encodeURIComponent(destFile)}`;
-        logoHtml = `<img class="project-logo" src="${logoHref}" ` +
-          `alt="${escapeHtml(agent.name)}">`;
-      }
-    }
-
-    const owners = db.getDevelopersForAgent(agent.id).map(d => ({
-      github: d.githubLogin,
-      smogon: d.smogonUsername,
-      smogonId: d.smogonId,
-    }));
-    const meta = projectMeta.get(agent.name);
-    const siteLink = meta?.site
-      ? `<a href="${escapeHtml(meta.site)}" class="subtle" ` +
-        `title="Project Homepage">${render.EXT_ICON}</a>`
-      : '';
-    const profileHeader = header(`${escapeHtml(agent.name)}${siteLink}`);
-
-    if (ladders.length === 0) {
-      const statusNote = agent.status === 'pending' ? 'Pending qualification' : 'No active entries';
-      const emptyReign = buildReignRowsHtml(
-        {
-          top1MaxStreakSeconds: 0,
-          top1TotalSeconds: 0,
-          top10MaxStreakSeconds: 0,
-          top10TotalSeconds: 0,
-          top100MaxStreakSeconds: 0,
-          top100TotalSeconds: 0,
-        },
-        nowSec
-      );
-      const content = renderTemplate(PROFILE_TEMPLATE, {
-        logoHtml,
-        controlsInitialClass: ' hide',
-        formatNavItems: '<li><span class="muted">—</span></li>',
-        initialVerOptions: '<option value="all">All (0)</option>',
-        projectMetaRows: buildProjectMetaRows(db, agent, meta, undefined),
-        initialStatRank: `<span class="muted">— (${statusNote})</span>`,
-        initialStatElo: '<span class="muted">—</span>',
-        initialStatGxe: '<span class="muted">—</span>',
-        initialStatPeak: '<span class="muted">—</span>',
-        initialStatRecord: '<span class="muted">0–0–0</span>',
-        initialStatStreak: '<span class="muted">—</span>',
-        initialStatTelemetry: '<span class="muted">—</span>',
-        reignInitialClass: ' hide',
-        initialReignRows: emptyReign,
-        emptyProfileNotice: '<p class="empty-state muted">No Arena ladder entries yet.</p>',
-        versionsInitialClass: ' class="hide"',
-        versionsPanes: '<p class="empty-state muted">No versions yet.</p>',
-        matchupsInitialClass: ' class="hide"',
-        matchupsPanes: '<p class="empty-state muted">No head-to-head matches yet.</p>',
-        matchesInitialClass: ' class="hide"',
-        matchesPanes: '<p class="empty-state muted">No completed matches yet.</p>',
-        profileDataJson: '{}',
-        defaultLadderKeyJson: '""',
-      });
-      const html = renderer.render({
-        id: 'agent-profile',
-        title: `${agent.name} | pkmn.ai`,
-        header: profileHeader,
-        path: `/projects/${agent.slug}/`,
-        style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
-        content,
-      });
-      render.writeFileAtomic(path.join(projectsDir, agent.slug, 'index.html'), html);
-      render.writeFileAtomic(
-        path.join(projectsDir, agent.slug, 'index.json'),
-        `${JSON.stringify({
-          slug: agent.slug,
-          name: agent.name,
-          status: agent.status,
-          logoHref,
-          owners,
-          metadata: meta,
-          ladders: [],
-        }, undefined, 2)}\n`
-      );
-      continue;
-    }
-
-    const profileDataMap: Record<string, LadderProfileClientData> = {};
-    const ladderJsonList: unknown[] = [];
-    const formatNavParts: string[] = [];
-    const versionsPanes: string[] = [];
-    const matchupsPanes: string[] = [];
-    const matchesPanes: string[] = [];
-
-    const usedKeys = new Set<string>();
-    const ladderKeys = ladders.map(l => {
-      const base = l.status !== 'archived' ? l.slot : l.id.toLowerCase();
-      const key = usedKeys.has(base) ? l.id.toLowerCase() : base;
-      usedKeys.add(key);
-      return key;
-    });
-
-    const defaultLadderKey = ladderKeys[0];
-    let latestOverallEntry: db.AgentLadderProfileEntry | undefined;
-    let defaultMatchupsEmpty = true;
-
-    for (let i = 0; i < ladders.length; i++) {
-      const l = ladders[i];
-      const lKey = ladderKeys[i];
-      const isDefault = i === 0;
-
-      const agentEntries = db.getAgentLadderProfileEntries(agent.id, l.id);
-      if (!latestOverallEntry || (
-        agentEntries[0] && agentEntries[0].submittedAt > latestOverallEntry.submittedAt
-      )) {
-        latestOverallEntry = agentEntries[0];
-      }
-
-      const allEntries = db.getLeaderboardEntries(l.id);
-      const pairs = db.getPairAggregatesForLadder(l.id);
-      const snapshots = db.getRatingSnapshotsForLadder(l.id);
-      const familyStats = db.getAgentLadderStats(l.id, agent.id);
-      const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id, 30);
-      const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
-
-      ladderJsonList.push({
-        key: lKey,
-        id: l.id,
-        slot: l.slot,
-        name: l.name,
-        format: l.format,
-        team: l.team,
-        status: l.status,
-        familyStats,
-        versions: agentEntries.map(e => ({
-          version: e.version,
-          package: e.package,
-          role: e.role,
-          isAnchor: e.isAnchor,
-          elo: Math.round(e.elo),
-          se: Math.round(e.se * 10) / 10,
-          lcb: Math.round(e.lcb),
-          gxe: Math.round(e.gxe * 10) / 10,
-          rankCurrent: e.rankCurrent,
-          bestRank: e.bestRank,
-          maxElo: e.maxElo !== undefined ? Math.round(e.maxElo) : undefined,
-          matches: e.matches,
-          wins: e.ww + e.wt,
-          losses: e.ll + e.tl,
-          ties: e.split,
-          meanTurnMillis: Math.round(e.meanTurnMillis),
-          peakRam: Math.round(e.peakRam),
-          maxWinStreak: e.maxWinStreak,
-          maxLossStreak: e.maxLossStreak,
-          submittedAt: e.submittedAt,
-          settledAt: e.settledAt,
-          retiredAt: e.retiredAt,
-        })),
-        recentMatches,
-      });
-
-      const sep = i > 0 ? '\n      —\n      ' : '';
-      const checked = isDefault ? ' checked' : '';
-      formatNavParts.push(
-        `${sep}<li id="${escapeHtml(lKey)}">` +
-        `<input type="radio" name="ladder" id="lad-${escapeHtml(lKey)}" ` +
-        `value="${escapeHtml(lKey)}"${checked}>` +
-        `<label for="lad-${escapeHtml(lKey)}">${escapeHtml(l.name)}</label></li>`
-      );
-
-      const optList = [
-        `<option value="all" selected>All (${agentEntries.length})</option>`,
-        ...agentEntries.map(e => {
-          const stateTag = e.role === 'retired' ? 'retired' : 'active';
-          const vEsc = escapeHtml(e.version);
-          return `<option value="${vEsc}">${vEsc} (${stateTag})</option>`;
-        }),
-      ];
-
-      const vstats: Record<string, VersionDynamicStats> = {
-        all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos),
-      };
-      const reign: Record<string, string> = {
-        all: buildReignRowsHtml(
-          familyStats ?? {
-            top1MaxStreakSeconds: 0,
-            top1TotalSeconds: 0,
-            top10MaxStreakSeconds: 0,
-            top10TotalSeconds: 0,
-            top100MaxStreakSeconds: 0,
-            top100TotalSeconds: 0,
-          },
-          nowSec
-        ),
-      };
-
-      for (const e of agentEntries) {
-        vstats[e.version] = buildVersionDynamicStats(e, adjacentLos);
-        reign[e.version] = buildReignRowsHtml(
-          {
-            top1EnteredAt: e.top1EnteredAt,
-            top1MaxStreakSeconds: e.top1MaxStreakSeconds,
-            top1TotalSeconds: e.top1TotalSeconds,
-            top10EnteredAt: e.top10EnteredAt,
-            top10MaxStreakSeconds: e.top10MaxStreakSeconds,
-            top10TotalSeconds: e.top10TotalSeconds,
-            top100EnteredAt: e.top100EnteredAt,
-            top100MaxStreakSeconds: e.top100MaxStreakSeconds,
-            top100TotalSeconds: e.top100TotalSeconds,
-          },
-          nowSec
-        );
-      }
-
-      profileDataMap[lKey] = {
-        optionsHtml: optList.join(''),
-        vstats,
-        reign,
-      };
-
-      versionsPanes.push(
-        renderVersionsPane(agent.name, lKey, isDefault, agentEntries, snapshots, nowSec)
-      );
-      const h2hPane = renderHeadToHeadPane({
-        agentId: agent.id,
-        ladderKey: lKey,
-        isDefault,
-        agentEntries,
-        allEntries,
-        pairs,
-        publicDir,
-        projectMeta,
-        profileSlugs,
-      });
-      matchupsPanes.push(h2hPane);
-      if (isDefault) {
-        defaultMatchupsEmpty = h2hPane.includes('data-empty="true"');
-      }
-
-      matchesPanes.push(
-        renderRecentMatchesPane({
-          agentSlug: agent.slug,
-          agentName: agent.name,
-          ladderKey: lKey,
-          isDefault,
-          matches: recentMatches,
-          publicDir,
-          projectMeta,
-          profileSlugs,
-          nowSec,
-        })
-      );
-    }
-
-    const initialData = profileDataMap[defaultLadderKey];
-    const initStats = initialData.vstats.all;
+  if (ladders.length === 0) {
+    const statusNote = agent.status === 'pending' ? 'Pending qualification' : 'No active entries';
+    const emptyReign = buildReignRowsHtml(
+      {
+        top1MaxStreakSeconds: 0,
+        top1TotalSeconds: 0,
+        top10MaxStreakSeconds: 0,
+        top10TotalSeconds: 0,
+        top100MaxStreakSeconds: 0,
+        top100TotalSeconds: 0,
+      },
+      nowSec
+    );
     const content = renderTemplate(PROFILE_TEMPLATE, {
       logoHtml,
-      controlsInitialClass: '',
-      formatNavItems: formatNavParts.join(''),
-      initialVerOptions: initialData.optionsHtml,
-      projectMetaRows: buildProjectMetaRows(db, agent, meta, latestOverallEntry),
-      initialStatRank: initStats.rank,
-      initialStatElo: initStats.elo,
-      initialStatGxe: initStats.gxe,
-      initialStatPeak: initStats.peak,
-      initialStatRecord: initStats.record,
-      initialStatStreak: initStats.streak,
-      initialStatTelemetry: initStats.telemetry,
-      reignInitialClass: '',
-      initialReignRows: initialData.reign.all,
-      emptyProfileNotice: '',
-      versionsInitialClass: '',
-      versionsPanes: versionsPanes.join('\n  '),
-      matchupsInitialClass: defaultMatchupsEmpty ? ' class="hide"' : '',
-      matchupsPanes: matchupsPanes.join('\n  '),
-      matchesInitialClass: '',
-      matchesPanes: matchesPanes.join('\n  '),
-      profileDataJson: render.safeInlineJson(profileDataMap),
-      defaultLadderKeyJson: render.safeInlineJson(defaultLadderKey),
+      controlsInitialClass: ' hide',
+      formatNavItems: '<li><span class="muted">—</span></li>',
+      initialVerOptions: '<option value="all">All (0)</option>',
+      projectMetaRows: buildProjectMetaRows(db, agent, meta, undefined),
+      initialStatRank: `<span class="muted">— (${statusNote})</span>`,
+      initialStatElo: '<span class="muted">—</span>',
+      initialStatGxe: '<span class="muted">—</span>',
+      initialStatPeak: '<span class="muted">—</span>',
+      initialStatRecord: '<span class="muted">0–0–0</span>',
+      initialStatStreak: '<span class="muted">—</span>',
+      initialStatTelemetry: '<span class="muted">—</span>',
+      reignInitialClass: ' hide',
+      initialReignRows: emptyReign,
+      emptyProfileNotice: '<p class="empty-state muted">No Arena ladder entries yet.</p>',
+      versionsInitialClass: ' class="hide"',
+      versionsPanes: '<p class="empty-state muted">No versions yet.</p>',
+      matchupsInitialClass: ' class="hide"',
+      matchupsPanes: '<p class="empty-state muted">No head-to-head matches yet.</p>',
+      matchesInitialClass: ' class="hide"',
+      matchesPanes: '<p class="empty-state muted">No completed matches yet.</p>',
+      profileDataJson: '{}',
+      defaultLadderKeyJson: '""',
     });
-
     const html = renderer.render({
       id: 'agent-profile',
       title: `${agent.name} | pkmn.ai`,
@@ -1276,19 +1060,234 @@ export function renderAgentProfiles(opts: {
       style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
       content,
     });
-
-    render.writeFileAtomic(path.join(projectsDir, agent.slug, 'index.html'), html);
-    render.writeFileAtomic(
-      path.join(projectsDir, agent.slug, 'index.json'),
-      `${JSON.stringify({
+    return {
+      html,
+      json: {
         slug: agent.slug,
         name: agent.name,
         status: agent.status,
         logoHref,
         owners,
         metadata: meta,
-        ladders: ladderJsonList,
-      }, undefined, 2)}\n`
+        ladders: [],
+      },
+    };
+  }
+
+  const profileDataMap: Record<string, LadderProfileClientData> = {};
+  const ladderJsonList: unknown[] = [];
+  const formatNavParts: string[] = [];
+  const versionsPanes: string[] = [];
+  const matchupsPanes: string[] = [];
+  const matchesPanes: string[] = [];
+
+  const usedKeys = new Set<string>();
+  const ladderKeys = ladders.map(l => {
+    const base = l.status !== 'archived' ? l.slot : l.id.toLowerCase();
+    const key = usedKeys.has(base) ? l.id.toLowerCase() : base;
+    usedKeys.add(key);
+    return key;
+  });
+
+  const defaultLadderKey = ladderKeys[0];
+  let latestOverallEntry: db.AgentLadderProfileEntry | undefined;
+  let defaultMatchupsEmpty = true;
+
+  for (let i = 0; i < ladders.length; i++) {
+    const l = ladders[i];
+    const lKey = ladderKeys[i];
+    const isDefault = i === 0;
+
+    const agentEntries = db.getAgentLadderProfileEntries(agent.id, l.id);
+    if (!latestOverallEntry || (
+      agentEntries[0] && agentEntries[0].submittedAt > latestOverallEntry.submittedAt
+    )) {
+      latestOverallEntry = agentEntries[0];
+    }
+
+    const allEntries = db.getLeaderboardEntries(l.id);
+    const pairs = db.getPairAggregatesForLadder(l.id);
+    const snapshots = db.getRatingSnapshotsForLadder(l.id);
+    const familyStats = db.getAgentLadderStats(l.id, agent.id);
+    const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id, 30);
+    const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
+
+    ladderJsonList.push({
+      key: lKey,
+      id: l.id,
+      slot: l.slot,
+      name: l.name,
+      format: l.format,
+      team: l.team,
+      status: l.status,
+      familyStats,
+      versions: agentEntries.map(e => ({
+        version: e.version,
+        package: e.package,
+        role: e.role,
+        isAnchor: e.isAnchor,
+        elo: Math.round(e.elo),
+        se: Math.round(e.se * 10) / 10,
+        lcb: Math.round(e.lcb),
+        gxe: Math.round(e.gxe * 10) / 10,
+        rankCurrent: e.rankCurrent,
+        bestRank: e.bestRank,
+        maxElo: e.maxElo !== undefined ? Math.round(e.maxElo) : undefined,
+        matches: e.matches,
+        wins: e.ww + e.wt,
+        losses: e.ll + e.tl,
+        ties: e.split,
+        meanTurnMillis: Math.round(e.meanTurnMillis),
+        peakRam: Math.round(e.peakRam),
+        maxWinStreak: e.maxWinStreak,
+        maxLossStreak: e.maxLossStreak,
+        submittedAt: e.submittedAt,
+        settledAt: e.settledAt,
+        retiredAt: e.retiredAt,
+      })),
+      recentMatches,
+    });
+
+    const sep = i > 0 ? '\n      —\n      ' : '';
+    const checked = isDefault ? ' checked' : '';
+    formatNavParts.push(
+      `${sep}<li id="${escapeHtml(lKey)}">` +
+      `<input type="radio" name="ladder" id="lad-${escapeHtml(lKey)}" ` +
+      `value="${escapeHtml(lKey)}"${checked}>` +
+      `<label for="lad-${escapeHtml(lKey)}">${escapeHtml(l.name)}</label></li>`
+    );
+
+    const optList = [
+      `<option value="all" selected>All (${agentEntries.length})</option>`,
+      ...agentEntries.map(e => {
+        const stateTag = e.role === 'retired' ? 'retired' : 'active';
+        const vEsc = escapeHtml(e.version);
+        return `<option value="${vEsc}">${vEsc} (${stateTag})</option>`;
+      }),
+    ];
+
+    const vstats: Record<string, VersionDynamicStats> = {
+      all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos),
+    };
+    const reign: Record<string, string> = {
+      all: buildReignRowsHtml(
+        familyStats ?? {
+          top1MaxStreakSeconds: 0,
+          top1TotalSeconds: 0,
+          top10MaxStreakSeconds: 0,
+          top10TotalSeconds: 0,
+          top100MaxStreakSeconds: 0,
+          top100TotalSeconds: 0,
+        },
+        nowSec
+      ),
+    };
+
+    for (const e of agentEntries) {
+      vstats[e.version] = buildVersionDynamicStats(e, adjacentLos);
+      reign[e.version] = buildReignRowsHtml(
+        {
+          top1EnteredAt: e.top1EnteredAt,
+          top1MaxStreakSeconds: e.top1MaxStreakSeconds,
+          top1TotalSeconds: e.top1TotalSeconds,
+          top10EnteredAt: e.top10EnteredAt,
+          top10MaxStreakSeconds: e.top10MaxStreakSeconds,
+          top10TotalSeconds: e.top10TotalSeconds,
+          top100EnteredAt: e.top100EnteredAt,
+          top100MaxStreakSeconds: e.top100MaxStreakSeconds,
+          top100TotalSeconds: e.top100TotalSeconds,
+        },
+        nowSec
+      );
+    }
+
+    profileDataMap[lKey] = {
+      optionsHtml: optList.join(''),
+      vstats,
+      reign,
+    };
+
+    versionsPanes.push(
+      renderVersionsPane(agent.name, lKey, isDefault, agentEntries, snapshots, nowSec)
+    );
+    const h2hPane = renderHeadToHeadPane({
+      agentId: agent.id,
+      ladderKey: lKey,
+      isDefault,
+      agentEntries,
+      allEntries,
+      pairs,
+      publicDir,
+      projectMeta,
+      profileSlugs,
+    });
+    matchupsPanes.push(h2hPane);
+    if (isDefault) {
+      defaultMatchupsEmpty = h2hPane.includes('data-empty="true"');
+    }
+
+    matchesPanes.push(
+      renderRecentMatchesPane({
+        agentSlug: agent.slug,
+        agentName: agent.name,
+        ladderKey: lKey,
+        isDefault,
+        matches: recentMatches,
+        publicDir,
+        projectMeta,
+        profileSlugs,
+        nowSec,
+      })
     );
   }
+
+  const initialData = profileDataMap[defaultLadderKey];
+  const initStats = initialData.vstats.all;
+  const content = renderTemplate(PROFILE_TEMPLATE, {
+    logoHtml,
+    controlsInitialClass: '',
+    formatNavItems: formatNavParts.join(''),
+    initialVerOptions: initialData.optionsHtml,
+    projectMetaRows: buildProjectMetaRows(db, agent, meta, latestOverallEntry),
+    initialStatRank: initStats.rank,
+    initialStatElo: initStats.elo,
+    initialStatGxe: initStats.gxe,
+    initialStatPeak: initStats.peak,
+    initialStatRecord: initStats.record,
+    initialStatStreak: initStats.streak,
+    initialStatTelemetry: initStats.telemetry,
+    reignInitialClass: '',
+    initialReignRows: initialData.reign.all,
+    emptyProfileNotice: '',
+    versionsInitialClass: '',
+    versionsPanes: versionsPanes.join('\n  '),
+    matchupsInitialClass: defaultMatchupsEmpty ? ' class="hide"' : '',
+    matchupsPanes: matchupsPanes.join('\n  '),
+    matchesInitialClass: '',
+    matchesPanes: matchesPanes.join('\n  '),
+    profileDataJson: render.safeInlineJson(profileDataMap),
+    defaultLadderKeyJson: render.safeInlineJson(defaultLadderKey),
+  });
+
+  const html = renderer.render({
+    id: 'agent-profile',
+    title: `${agent.name} | pkmn.ai`,
+    header: profileHeader,
+    path: `/projects/${agent.slug}/`,
+    style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
+    content,
+  });
+
+  return {
+    html,
+    json: {
+      slug: agent.slug,
+      name: agent.name,
+      status: agent.status,
+      logoHref,
+      owners,
+      metadata: meta,
+      ladders: ladderJsonList,
+    },
+  };
 }

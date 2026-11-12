@@ -11,6 +11,7 @@ import * as db from '../db';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as smogon from '../server/smogon';
+import {syncStaticLiveBanner} from '../static/build';
 
 export interface Options {
   db?: db.Database;
@@ -46,7 +47,6 @@ const USAGE = [
   '  seed-tournament <id>',
   '  publish-tournament-archive <id> <archive.7z>',
   '  publish-ladder-archive <ladder_id> <archive.7z>',
-  '  render',
   '  lookup-smogon <username|slug.id|id|url>',
   '  session [--github <login>] [--discord <id>:<username>] [--ttl <seconds>]',
 ].join('\n');
@@ -140,10 +140,10 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
   const ownsDb = !options.db;
   const database = options.db ?? new db.Database(options.dbPath ?? db.DB_PATH);
   const now = options.now ?? Math.floor(Date.now() / 1000);
-  const maybeRender = () => {
+  const maybeSyncStaticBanner = () => {
     const pub = options.publicDir ?? (ownsDb && !options.dbPath ? render.PUBLIC_DIR : undefined);
-    if (pub && fs.existsSync(path.join(pub, 'index.html'))) {
-      render.renderArenaPages({db: database, publicDir: pub, now});
+    if (pub && fs.existsSync(pub)) {
+      syncStaticLiveBanner(pub, database.getRunningTournament());
     }
   };
 
@@ -156,7 +156,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         }
         const reason = flags.get('reason');
         const res = database.quarantineVersion(slug, version, reason, now);
-        maybeRender();
         const suffix = reason ? `: ${reason}` : '';
         log(
           `Quarantined ${res.agent.name} (${res.agent.slug}) version ` +
@@ -170,7 +169,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('Usage: pkmn unquarantine <agent-slug> <version>');
         }
         const ver = database.unquarantineVersion(slug, version, now);
-        maybeRender();
         log(`Unquarantined ${slug} version ${ver.version}`);
         return;
       }
@@ -189,7 +187,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('Usage: pkmn set-anchor <ladder_id> <agent-slug> <version>');
         }
         database.setLadderAnchor(ladderId, slug, version, now);
-        maybeRender();
         log(`Set 1500 Elo anchor on ${ladderId} to ${slug} ${version}`);
         return;
       }
@@ -201,7 +198,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           );
         }
         const updated = database.setLadderStatus(ladderId, status as db.LadderStatus, now);
-        maybeRender();
         log(`Ladder ${updated.id} (${updated.name}) -> status=${updated.status}`);
         return;
       }
@@ -235,7 +231,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           newTeams: teams,
           now,
         });
-        maybeRender();
         const nextMsg = rotated.newLadder
           ? ` -> activated ${rotated.newLadder.id} ("${rotated.newLadder.name}")`
           : '';
@@ -243,12 +238,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           `Rotated ${rotated.oldLadder.id} ("${rotated.oldLadder.name}", ` +
           `status=${rotated.oldLadder.status})${nextMsg}`
         );
-        return;
-      }
-      case 'render': {
-        const pub = options.publicDir ?? render.PUBLIC_DIR;
-        render.renderArenaPages({db: database, publicDir: pub, now});
-        log(`Rendered static Arena pages into ${pub}`);
         return;
       }
       case 'reassign-developer': {
@@ -284,7 +273,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             now,
           });
         }
-        maybeRender();
         const fromLabel = updated.previousProject ? `"${updated.previousProject}"` : 'unassigned';
         const toLabel = updated.targetProject ? `"${updated.targetProject}"` : 'unassigned';
         log(`Reassigned @${githubLogin}: ${fromLabel} -> ${toLabel}`);
@@ -303,7 +291,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             now,
           });
         }
-        maybeRender();
         log(`Synced Arena projects from ${projectsPath}`);
         return;
       }
@@ -361,7 +348,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           startsAt,
           completedAt: status === 'completed' ? now : undefined,
         });
-        maybeRender();
+        maybeSyncStaticBanner();
         log(`Upserted tournament ${tourneyId} ("${name}", status=${status})`);
         return;
       }
@@ -373,7 +360,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           );
         }
         const updated = database.setTournamentStatus(tourneyId, status as db.TournamentStatus, now);
-        maybeRender();
+        maybeSyncStaticBanner();
         log(`Tournament ${updated.id} ("${updated.name}") -> status=${updated.status}`);
         return;
       }
@@ -383,7 +370,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('Usage: pkmn seed-tournament <id>');
         }
         const count = database.seedTournamentEntrants(tourneyId);
-        maybeRender();
         log(`Seeded ${count} entrants for tournament ${tourneyId}`);
         return;
       }
@@ -409,9 +395,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         const fileName = `${tournament.id}-replays.7z`;
         const dest = path.join(pub, 'arena', 'tournaments', tournament.id, fileName);
         render.copyFileAtomic(srcFile, dest);
-        if (fs.existsSync(path.join(pub, 'index.html'))) {
-          render.renderArenaPages({db: database, publicDir: pub, now});
-        }
         log(`Published tournament archive -> /arena/tournaments/${tournament.id}/${fileName}`);
         return;
       }
@@ -443,9 +426,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         const fileName = `${ladder.id}-logs.7z`;
         const dest = path.join(pub, 'arena', 'ladders', ladder.id, fileName);
         render.copyFileAtomic(srcFile, dest);
-        if (fs.existsSync(path.join(pub, 'index.html'))) {
-          render.renderArenaPages({db: database, publicDir: pub, now});
-        }
         log(`Published retired ladder archive -> /arena/ladders/${ladder.id}/${fileName}`);
         return;
       }
