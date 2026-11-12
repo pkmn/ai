@@ -275,17 +275,14 @@ export function computeAgentTournamentStatuses(
   if (!scheduled.length) return [];
 
   const agent = getAgentById(db, agentId);
-  if (agent?.status !== 'qualified') {
-    const reason = agent?.status === 'pending'
-      ? 'Project qualification is pending staff review.'
-      : 'Project is disabled.';
+  if (!agent || agent.status === 'disabled') {
     return scheduled.map(t => ({
       tournamentId: t.id,
       name: t.name,
       format: t.format,
       startsAt: t.startsAt,
       canSubmit: false,
-      reason,
+      reason: 'Project is disabled.',
     }));
   }
 
@@ -470,12 +467,6 @@ export function createSubmission(
     const agent = getAgentById(db, input.agentId);
     if (!agent || agent.status === 'disabled') {
       throw Object.assign(new Error('Project is disabled.'), {status: 403});
-    }
-    if (agent.status === 'pending') {
-      throw Object.assign(
-        new Error('Project qualification is pending staff review.'),
-        {status: 403}
-      );
     }
     if (!input.ladderIds.length && !tournamentIds.length) {
       throw Object.assign(

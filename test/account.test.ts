@@ -664,8 +664,32 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         '[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3</a></div>'
       );
 
-      // Pending (unqualified) project STILL cannot submit to tournaments
-      const pendingBlocked = await realFetch(`${baseUrl}/api/submissions`, {
+      // Pending (registered, not yet qualified for ladders) project CAN submit OCI to scheduled
+      // tournaments, while still remaining blocked (403) from entering ladders.
+      const pendingAcctHtml = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('rookie')},
+      })).text();
+      expect(pendingAcctHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
+      expect(pendingAcctHtml).toContain('name="tournaments" type="checkbox" value="3"');
+
+      const pendingBundleBlocked = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('rookie'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '0.1.0-b',
+          package: 'bundle',
+          url: 'https://example.com/newcomer.tar.zst',
+          sha256: SHA_A,
+          tournaments: ['3'],
+        }),
+      });
+      expect(pendingBundleBlocked.status).toBe(400);
+
+      const pendingTourneyOk = await realFetch(`${baseUrl}/api/submissions`, {
         method: 'POST',
         headers: {
           Cookie: cookieFor('rookie'),
@@ -680,7 +704,27 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
           tournaments: ['3'],
         }),
       });
-      expect(pendingBlocked.status).toBe(403);
+      expect(pendingTourneyOk.status).toBe(201);
+
+      // Even after ladders become active, Pending account still cannot become Eligible or submit
+      openLadders(['gen1ou20261109']);
+      const pendingLadderBlocked = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('rookie'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '0.1.1-rby',
+          package: 'oci',
+          url: 'ghcr.io/rookie/newcomer:0.1.1-rby',
+          sha256: SHA_B,
+          ladders: ['gen1ou20261109'],
+        }),
+      });
+      expect(pendingLadderBlocked.status).toBe(403);
+      expect((await pendingLadderBlocked.json() as {error: string}).error).toContain('pending');
 
       // Archive bundle is rejected for tournament submissions (must be self-contained OCI image)
       const bundleRejected = await realFetch(`${baseUrl}/api/submissions`, {

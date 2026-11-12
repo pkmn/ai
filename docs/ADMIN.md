@@ -109,10 +109,11 @@ avatar at `static/avatars/<slug>.png`):
 ```
 
 - **`qualified: false` (or omitted) -> `Pending`:** Owners can sign in to `/account/` (to link
-  Discord) and read/edit developer `/wiki` pages, while the submission form stays disabled.
-- **`qualified: true` -> `Qualified` / `Eligible`:** Unlocks submissions on `/account/` once at
-  least one ladder is `active` (or a tournament is `scheduled`) and all owners have linked Discord
-  and joined the **pkmn.ai** Discord server.
+  Discord or submit 1 OCI entry to a `scheduled` tournament) and read/edit developer `/wiki`
+  pages, while **ladder** submissions stay disabled until staff approve qualification.
+- **`qualified: true` -> `Qualified` / `Eligible`:** Unlocks ladder submissions on `/account/`
+  (marking the project `Eligible` when a ladder is open and cooldown/settlement criteria are met)
+  and allows owners to link Discord and join the **pkmn.ai** Discord server.
 - **`logo` (optional):** Defaults to `static/avatars/<slug>.png` when that file exists; set
   `arena.logo: custom.png` only if overriding the filename.
 
@@ -364,10 +365,11 @@ teams and `.log` replays).
 
 - **Naming & URLs:** Titles follow `Tournament #<N>: <Format / Ruleset>` with sequential numeric IDs
   (`1`, `2`, `3`, …) served at `/arena/tournaments/<id>/`.
-- **Submission Gating:** Any `qualified` project may submit at most 1 OCI container entry
-  (`package: 'oci'`) per `scheduled` tournament on `/account/`, completely independent of the
-  14-day ladder cooldown and unsettled Challenger gates. Failed smoke tests may be resubmitted
-  immediately until registration closes.
+- **Submission Gating:** Both `Pending` (registered) and `qualified` (Approved) projects may
+  submit at most 1 OCI container entry (`package: 'oci'`) per `scheduled` tournament on `/account/`,
+  completely independent of ladder qualification, the 14-day ladder cooldown, and unsettled
+  Challenger gates. Only Approved (`qualified: true`) projects can become `Eligible` for continuous
+  ladders. Failed smoke tests may be resubmitted immediately until registration closes.
 
 ### Step 7.1: Open a Tournament for Submissions (`scheduled`)
 
@@ -384,7 +386,8 @@ npm run pkmn -- create-tournament 3 \
 ```
 
 This creates `/arena/tournaments/3/`, lists the event under **Tournaments** on `/arena/`, and
-exposes the tournament checkbox on `/account/` for all `qualified` projects.
+exposes the tournament checkbox on `/account/` for all registered (`Pending` and `qualified`)
+projects.
 
 ### Step 7.2: Seed Entrants & Bake the Custom Machine Image
 
