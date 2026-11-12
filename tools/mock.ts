@@ -121,44 +121,73 @@ export function buildCanonicalTeamPool(
   return [...byPacked.values()];
 }
 
-// Pseudo-blind-pair sampler for `team: pools` ladders (e.g. VGC):
-//   - Neither team may be jointly owned by both competing agents (`agentAId` and `agentBId`).
-//   - At most ONE of `{T1, T2}` may come from the 40 teams submitted by `agentAId` and `agentBId`
-//     combined (requiring `min >= 3` active agents so a third-party team always exists).
-//   - `T1` and `T2` must have disjoint owner sets and distinct 6-species compositions.
+function isValidPoolsPair(
+  t1: CanonicalPoolEntry,
+  t2: CanonicalPoolEntry,
+  agentAId: number,
+  agentBId: number
+): boolean {
+  if (t1.canonicalPacked === t2.canonicalPacked) return false;
+  if (
+    t1.speciesIds.length === t2.speciesIds.length &&
+    t1.speciesIds.every((s, idx) => s === t2.speciesIds[idx])
+  ) {
+    return false;
+  }
+  if (t1.owners.has(agentAId) && t1.owners.has(agentBId)) return false;
+  if (t2.owners.has(agentAId) && t2.owners.has(agentBId)) return false;
+  const activeOwnsT1 = t1.owners.has(agentAId) || t1.owners.has(agentBId);
+  const activeOwnsT2 = t2.owners.has(agentAId) || t2.owners.has(agentBId);
+  if (activeOwnsT1 && activeOwnsT2) return false;
+  for (const ownerId of t1.owners.keys()) {
+    if (t2.owners.has(ownerId)) return false;
+  }
+  return true;
+}
+
+// Uniform pseudo-blind-pair sampler for `team: pools` ladders (e.g. VGC):
+//   - Requires `N >= 4` distinct active agent rosters (`min >= 4`).
+//   - Samples unordered distinct roster pair `{I, J}` with exact marginal `2 / N` per agent:
+//       * `2 / N`: `{agentAId, C}` for uniform third party `C not in {A, B}`
+//       * `2 / N`: `{agentBId, C}` for uniform third party `C not in {A, B}`
+//       * `(N - 4) / N`: `{C1, C2}` uniformly from distinct third parties
+//   - Swaps `(I, J)` with probability `1/2`, draws uniformly within each roster, and rejection-
+//     resamples mirrors / cross-competitor exact duplicates so at most ONE of `{T1, T2}` belongs
+//     to `P_A U P_B` while every agent's teams are assigned with equal `2 / (N * K)` probability.
 export function samplePoolsPair(
   pool: CanonicalPoolEntry[],
   agentAId: number,
   agentBId: number,
   rngNextInt: (max: number) => number
 ): SampledPoolPair {
-  const eligibleT1 = pool.filter(e => !(e.owners.has(agentAId) && e.owners.has(agentBId)));
-  if (!eligibleT1.length) {
-    throw new Error('No eligible T1 teams in seasonal competitor pool');
+  if (agentAId === agentBId) {
+    throw new Error('Cannot sample pools pair for identical competing agents');
   }
-  const t1 = eligibleT1[rngNextInt(eligibleT1.length)];
-  const activeOwnsT1 = t1.owners.has(agentAId) || t1.owners.has(agentBId);
 
-  const candidatesT2 = pool.filter(cand => {
-    if (cand.canonicalPacked === t1.canonicalPacked) return false;
-    if (
-      cand.speciesIds.length === t1.speciesIds.length &&
-      cand.speciesIds.every((s, idx) => s === t1.speciesIds[idx])
-    ) {
-      return false;
+  const rosters = new Map<number, CanonicalPoolEntry[]>();
+  for (const entry of pool) {
+    for (const ownerId of entry.owners.keys()) {
+      let list = rosters.get(ownerId);
+      if (!list) {
+        list = [];
+        rosters.set(ownerId, list);
+      }
+      list.push(entry);
     }
-    if (cand.owners.has(agentAId) && cand.owners.has(agentBId)) return false;
-    if (activeOwnsT1 && (cand.owners.has(agentAId) || cand.owners.has(agentBId))) return false;
-    for (const ownerId of t1.owners.keys()) {
-      if (cand.owners.has(ownerId)) return false;
-    }
-    return true;
-  });
-
-  if (!candidatesT2.length) {
-    throw new Error('Insufficient third-party teams in pool (VGC requires min >= 3)');
   }
-  const t2 = candidatesT2[rngNextInt(candidatesT2.length)];
+
+  const thirdParties = [...rosters.keys()]
+    .filter(id => id !== agentAId && id !== agentBId)
+    .sort((a, b) => a - b);
+  const totalAgents = rosters.size;
+  if (
+    totalAgents < 4 ||
+    !rosters.get(agentAId)?.length ||
+    !rosters.get(agentBId)?.length ||
+    thirdParties.length < 2
+  ) {
+    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
+  }
 
   const formatProvenanceLabel = (entry: CanonicalPoolEntry): string => {
     const owner = entry.owners.has(agentAId)
@@ -169,6 +198,54 @@ export function samplePoolsPair(
     return formatPoolTeamLabel(entry.canonicalPacked, owner);
   };
 
+  for (let attempt = 0; attempt < 256; attempt++) {
+    const roll = rngNextInt(totalAgents);
+    let firstAgentId: number;
+    let secondAgentId: number;
+    if (roll < 2) {
+      firstAgentId = agentAId;
+      secondAgentId = thirdParties[rngNextInt(thirdParties.length)];
+    } else if (roll < 4) {
+      firstAgentId = agentBId;
+      secondAgentId = thirdParties[rngNextInt(thirdParties.length)];
+    } else {
+      const i1 = rngNextInt(thirdParties.length);
+      let i2 = rngNextInt(thirdParties.length - 1);
+      if (i2 >= i1) i2++;
+      firstAgentId = thirdParties[i1];
+      secondAgentId = thirdParties[i2];
+    }
+    if (rngNextInt(2) === 1) {
+      [firstAgentId, secondAgentId] = [secondAgentId, firstAgentId];
+    }
+
+    const r1 = rosters.get(firstAgentId)!;
+    const r2 = rosters.get(secondAgentId)!;
+    const t1 = r1[rngNextInt(r1.length)];
+    const t2 = r2[rngNextInt(r2.length)];
+    if (!isValidPoolsPair(t1, t2, agentAId, agentBId)) continue;
+
+    return {
+      t1Packed: t1.canonicalPacked,
+      t2Packed: t2.canonicalPacked,
+      t1Label: formatProvenanceLabel(t1),
+      t2Label: formatProvenanceLabel(t2),
+    };
+  }
+
+  // Deterministic exhaustive fallback for degenerate synthetic pools with heavy duplicate overlap
+  const validPairs: Array<[CanonicalPoolEntry, CanonicalPoolEntry]> = [];
+  for (const t1 of pool) {
+    for (const t2 of pool) {
+      if (isValidPoolsPair(t1, t2, agentAId, agentBId)) {
+        validPairs.push([t1, t2]);
+      }
+    }
+  }
+  if (!validPairs.length) {
+    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
+  }
+  const [t1, t2] = validPairs[rngNextInt(validPairs.length)];
   return {
     t1Packed: t1.canonicalPacked,
     t2Packed: t2.canonicalPacked,

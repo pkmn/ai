@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS ladders (
   --   'pools': sampled from competitor-submitted team rosters (e.g. 20 unique VGC teams per agent)
   team TEXT NOT NULL CHECK (team IN ('harvested', 'random', 'pools')),
   -- Minimum distinct active agents required before the matchmaker schedules games on this ladder
-  -- (2 for 'harvested'/'random'; >= 3 for 'pools' so at least one neutral third-party roster exists).
+  -- (2 for 'harvested'/'random'; >= 4 for 'pools' so every agent's roster has uniform 2/N weight
+  -- while enforcing at most one active-player team per match).
   min INTEGER NOT NULL,
   -- Required number of unique teams each competitor must submit when `team = 'pools'` (e.g. 20);
   -- NULL for 'harvested' and 'random' ladders.

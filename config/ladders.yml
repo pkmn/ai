@@ -36,7 +36,7 @@
   discord: '1564121375558340768'
   team: pools
   status: upcoming
-  min: 3
+  min: 4
   teams: 20
   pools:
     - teams/teams/gen9championsvgc2026regmc

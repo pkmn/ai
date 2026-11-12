@@ -206,7 +206,7 @@ describe('ladders.yml & Database ladder sync', () => {
           name: 'VGC',
           format: 'gen9championsvgc2026regmc',
           team: 'pools',
-          min: 3,
+          min: 4,
           discord: '1564121375558340768',
           status: 'upcoming',
         },
@@ -224,6 +224,16 @@ describe('ladders.yml & Database ladder sync', () => {
   team: pools
   status: active
 `)).toThrow(/must specify a positive teams count/);
+
+    expect(() => parseLaddersYaml(`
+- name: VGC
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  team: pools
+  status: active
+  min: 3
+  teams: 20
+`)).toThrow(/Invalid min "3"/);
 
     expect(() => parseLaddersYaml(`
 - name: VGC

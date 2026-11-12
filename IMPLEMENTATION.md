@@ -138,7 +138,7 @@ Every ladder has an **immutable internal `ladder_id`** (representing a frozen ru
 | **`ADV`** | `gen3ou20261109` | `[Gen 3] OU` | Permanent | No | Harvested PS high-ladder logs (`2`) | `Foul Play` (`v1`) |
 | **`SV`** | `gen9ou20261109` | `[Gen 9] OU` | Permanent | Yes | Harvested PS high-ladder logs (`2`) | `Foul Play` (`v1`) |
 | **`RAND`** | `gen9randombattle20261109` | `[Gen 9] Random Battle` | Permanent | No | `@pkmn/sim` `Teams.generate()` (`2`) | `Foul Play` (`v1`) |
-| **`VGC`** | `gen9championsvgc2026regmc` | `[Gen 9 Champions] VGC 2026 Reg M-C` | Seasonal | Yes (Pick 4) | Competitor 20-team pot (`3`) | Designated `v1` / `1500` prior |
+| **`VGC`** | `gen9championsvgc2026regmc` | `[Gen 9 Champions] VGC 2026 Reg M-C` | Seasonal | Yes (Pick 4) | Competitor 20-team pot (`4`) | Designated `v1` / `1500` prior |
 
 - **Decoupled `ladder_id` & Epoch Rotation (`active` $\rightarrow$ `settling` $\rightarrow$ `archived`)**:
   - **`active`**: Shown under its primary short slot code (`RBY`, `ADV`, `SV`, `RAND`, `VGC`) on `/arena/`, `/arena/ladders/:name/`, `/arena/battles/`, and `/account/`, accepting new bot submissions and playing matches continuously. Permanent ladders use the `<format><YYYYMMDD>` identifier convention (e.g., `gen1ou20261109`, `gen9ou20261109`, `gen9randombattle20261109`).
@@ -286,8 +286,8 @@ For each 2-game paired match between Bot $A$ (project $P_A$) and Bot $B$ (projec
 - **Random Battles (`RAND` / `gen9randombattle`)**:
   - Generate $T_1 = \text{Teams.pack}(\text{Teams.generate}(\text{'gen9randombattle'}, \{ \text{seed}: s_{\text{team1}} \}))$ and $T_2 = \text{Teams.pack}(\text{Teams.generate}(\text{'gen9randombattle'}, \{ \text{seed}: s_{\text{team2}} \}))$ upfront so both games use the exact same two random teams.
 - **Seasonal Competitor-Pool Ladder (`VGC` / `gen9championsvgc2026regmc`)**:
-  - Requires at least **3 active projects (`min_bots = 3`)** on the ladder ($\ge 60$ submitted teams in the pot; see Appendix B for `teams/index.ts` $d_{\text{1-NN}} \ge 1.30$ sequential validation on each project's first submission to the ladder).
-  - Sample $(T_1, T_2)$ as a **pseudo-blind-pair** from the combined seasonal pot $\mathcal{T}_{\text{all}} = \bigcup_P \mathcal{T}_P$ (re-rolling 6-species mirrors) subject to the constraint that **at most 1 of $\{T_1, T_2\}$ belongs to the 40 teams $\mathcal{T}_{P_A} \cup \mathcal{T}_{P_B}$ submitted by the two participating projects combined** ($\bigl|\{T_1, T_2\} \cap (\mathcal{T}_{P_A} \cup \mathcal{T}_{P_B})\bigr| \le 1$, accounting for canonical owner sets $\mathcal{O}(H)$).
+  - Requires at least **4 active projects (`min_bots = 4`)** on the ladder ($\ge 80$ submitted teams in the pot; see Appendix B for `teams/index.ts` $d_{\text{1-NN}} \ge 1.30$ sequential validation on each project's first submission to the ladder).
+  - Sample $(T_1, T_2)$ via **uniform hierarchical agent-pair sampling** across all $N \ge 4$ active rosters (each project's roster selected in exactly $\frac{2}{N}$ of matches, and each individual team in slot $T_1$ with probability $\frac{1}{NK}$ and slot $T_2$ with probability $\frac{1}{NK}$, re-rolling 6-species mirrors and cross-competitor exact duplicates) subject to the constraint that **at most 1 of $\{T_1, T_2\}$ belongs to the 40 teams $\mathcal{T}_{P_A} \cup \mathcal{T}_{P_B}$ submitted by the two participating projects combined** ($\bigl|(\text{Owners}(T_1) \cup \text{Owners}(T_2)) \cap \{P_A, P_B\}\bigr| \le 1$).
 - **Game 1 vs. Game 2 Assignment**:
   - **Game 1**: `p1` = Bot $A$ with $T_1$; `p2` = Bot $B$ with $T_2$; battle seed = $s$.
   - **Game 2**: `p1` = Bot $B$ with $T_1$; `p2` = Bot $A$ with $T_2$; battle seed = $s$.
@@ -1405,7 +1405,7 @@ The Arena coordinator runs a single-threaded loop on the M6 Mac mini's 2 Efficie
    - **Smoke Test Through Turn 1 in Subscribed Ladders Only (Including Policy Map Verification)**: Because an agent may only support specific generations or formats, run an offline smoke test (`60s` budget to allow first-run CoreML/Metal shader JIT) against a built-in dummy opponent in **every ladder listed in the submission's `ladders` array and nothing else** (or the tournament format for tournament-only OCI entries). A smoke test passes only when the agent unpacks cleanly, plays **all the way through Turn 1** (including both Team Preview `team ...` and Turn 1 `|turn|1` $\rightarrow$ `|turn|2` or battle end in Team Preview formats like `SV` and `VGC`), **and emits a valid plain-text `<policy_json>` probability distribution in `[0, 1]` summing to `1.0 ± 0.001` before every decision `|request|`** (verified via `validatePolicyLog` in `server/policy.ts`; see `PROTOCOL.md`).
    - **Retire Eligible Weaker Version on New Submission**: For each ladder $L$ in the new submission's `ladders`, if the bot already has 2 active versions on ladder $L$ (which are guaranteed to be settled because `pkmn.ai` enforces that both active versions are settled before accepting a 3rd submission), mark the lower-rated of those two versions as `retired` on ladder $L$ (leaving the strongest version + the latest submission). Note that `is_anchor` is an orthogonal boolean flag on `ladder_entries`: if an anchor `v1` is retired because `v2` and `v3` are stronger, its historical `pair_aggregates` remain in the batch Davidson Hessian to pin `1500` Elo without keeping `v1` in active matchmaking. If a retired version's active ladder count across all ladders reaches `0`, remove its unpacked directory from `/opt/arena/bots/<slug>-<id>/` (or `podman rmi` its OCI image) while keeping its cold archive on `/Volumes/Archive/bots/<slug>/<ver>/` and `gs://pkmn-arena/bots/<slug>/<ver>/`.
    - Report `POST /api/arena/submission-status` (`passed` or `failed_smoke_test`, along with smoke test duration, turn latency, and peak RAM).
-4. **Select Match**: Run `selectNextArenaMatch` locally across all ladders in `status IN ('active', 'settling')` that meet their minimum active project threshold (`min_bots >= 2` for `RBY`/`ADV`/`SV`/`RAND`; `min_bots >= 3` for `VGC`) to pick ladder $L$ and bot pair $(A, B)$.
+4. **Select Match**: Run `selectNextArenaMatch` locally across all ladders in `status IN ('active', 'settling')` that meet their minimum active project threshold (`min_bots >= 2` for `RBY`/`ADV`/`SV`/`RAND`; `min_bots >= 4` for `VGC`) to pick ladder $L$ and bot pair $(A, B)$.
 5. **Sample Teams, Seed & Persist Match Header**:
    - Generate one PRNG seed $s$ and sample distinct teams $(T_1, T_2)$ from ladder $L$'s pool (re-rolling mirrors).
    - Insert a row into `matches` with `status = 'in_progress'`, `seed = s`, `team1_packed = T_1`, and `team2_packed = T_2` before launching Game 1.
@@ -2895,7 +2895,7 @@ CREATE TABLE ladders (
   display_name TEXT NOT NULL,                   -- active short label ('VGC') or archived epoch label ('VGC 2026 Reg M-C')
   format_id TEXT NOT NULL,                      -- @pkmn/sim format ID, e.g. 'gen1ou', 'gen9ou', 'gen9randombattle', 'gen9championsvgc2026regmc'
   team_mode TEXT NOT NULL,                      -- 'harvested' | 'random' | 'competitor_pool'
-  min_bots INTEGER NOT NULL DEFAULT 2,          -- minimum active projects before matchmaking begins (2 default, 3 for VGC)
+  min_bots INTEGER NOT NULL DEFAULT 2,          -- minimum active projects before matchmaking begins (2 default, 4 for VGC)
   team_count INTEGER,                           -- required team pool size on competitor_pool ladders (20 for VGC)
   discord_role TEXT,                            -- Discord role ID for the settled #1 project on this ladder
   status TEXT NOT NULL DEFAULT 'active',        -- 'upcoming' | 'active' | 'settling' | 'archived'
@@ -3743,7 +3743,7 @@ To develop, verify, and visually test the entire `pkmn.ai` VPS control plane **w
 1. **Deterministic Seed Mode (`node build/tools/mock-arena.js seed`)**:
    - Seeds `/var/lib/pkmn/arena.sqlite` (or a test SQLite file) with multi-developer `projects.yml` fixtures, active/provisional/settled/retired/rejected/quarantined versions across `RBY`, `ADV`, `SV`, `RAND`, and `VGC` (including validated 20-team VGC pools), daily `rating_snapshots`, `pair_aggregates`, `matches`, `/api/live.json`, and tournament archives (`Spring ’26`, `Autumn ’26`), then runs `server/render.ts` so all Arena UI views (`/arena/`, `/arena/ladders/<slot>/`, `/arena/tournaments/<num>/`, `/arena/battles/`, `/projects/`, `/projects/<slug>/`, `/account/`) can be inspected in a browser and verified via `npm run shots` (`tools/shots.ts`).
 2. **Live Fake-Arena Simulator Daemon (`node build/tools/mock-arena.js run --server http://127.0.0.1:1234`)**:
-   - Continuously polls `GET /api/arena/pending-submissions`, simulates unpacking and smoke testing (`--smoke=pass|fail`, computing 3rd-version `retired_version_ids_by_ladder`) via `POST /api/arena/submission-status`, streams realistic between-turn `POST /api/arena/heartbeat` updates (ticking Game 1 & Game 2 `PAUSED` / `RUNNING` slots on `/arena/battles/`), samples matches (enforcing `min_bots = 3` and `<= 1 of 40` team sampling on `VGC`), solves exact Davidson MAP ratings + `LOS`, and posts `POST /api/arena/match-complete`.
+   - Continuously polls `GET /api/arena/pending-submissions`, simulates unpacking and smoke testing (`--smoke=pass|fail`, computing 3rd-version `retired_version_ids_by_ladder`) via `POST /api/arena/submission-status`, streams realistic between-turn `POST /api/arena/heartbeat` updates (ticking Game 1 & Game 2 `PAUSED` / `RUNNING` slots on `/arena/battles/`), samples matches (enforcing `min_bots = 4`, exact `2/N` uniform per-agent marginals, and `<= 1 of 40` team sampling on `VGC`), solves exact Davidson MAP ratings + `LOS`, and posts `POST /api/arena/match-complete`.
 3. **Automated Vitest E2E Suite (`test/e2e.test.ts` via `npm run test:integration`)**:
    - Exercises the full lifecycle end-to-end in CI: GitHub + Discord OAuth login/linking, multi-member `/account/` isolation, VGC 20-team `1-NN >= 1.30` validation, cooldown & settlement gating, fake-arena smoke pass/fail + retirement + quarantine, Discord role/DM sync, seasonal `settling` $\rightarrow$ `archived` ladder rotation, and `hyperlink` + Playwright responsive checks.
 
@@ -3842,7 +3842,7 @@ When launching a seasonal ladder where historical high-ladder Pokémon Showdown 
 - **Submitted Once Per Project Per Seasonal `ladder_id`**:
   - On a project's **first submission** to a seasonal `competitor_pool` ladder (`VGC`), the developer provides **$T = 20$ valid teams** alongside their submission on `/account/`.
   - Once that first submission passes its Arena smoke test, those 20 teams are locked into `bot_ladder_teams` for that `(ladder_id, bot_id)` for the duration of the season. **Subsequent version submissions by the same project to that `ladder_id` do not submit new teams**—they inherit the project's 20 locked seasonal teams.
-  - Because the pseudo-blind-pair sampling rule (below) requires drawing at least one team from outside the two playing projects' combined 40 teams whenever one of their teams is drawn, **a minimum of 3 active projects (`min_bots = 3`, $\ge 60$ teams)** is required before matchmaking begins on `VGC`.
+  - Because holding both the pseudo-blind-pair knowledge bound ($X_A + X_B \le 1$) and exact uniform per-competitor pool assignment ($\mathbb{E}[X_i] = \frac{2}{N}$) requires $\Pr(X_A + X_B = 1) = \frac{4}{N} \le 1$, **a minimum of 4 active projects (`min_bots = 4`, $\ge 80$ teams)** is required before matchmaking begins on `VGC`.
 
 #### 2. The Uniqueness vs. Probing Dilemma (Why Cross-Competitor Overlap Rejection Is Always Gameable)
 A subtle security and fairness dilemma arises when two competitors submit identical or heavily overlapping teams (such as a popular tournament-winning rental team):
@@ -3851,11 +3851,11 @@ A subtle security and fairness dilemma arises when two competitors submit identi
    - Suppose `pkmn.ai` rejects Bot $B$'s team submission because one or more of its 20 teams are too close to an earlier competitor's private submission. That rejection acts as a **membership oracle**: a late submitter can probe candidate teams during submission to discover the archetypes earlier competitors submitted.
    - Even an $M / T$ overlap threshold (e.g., rejecting only when $\ge 5$ of $20$ teams overlap) reduces to a 1-bit oracle once an attacker fixes $M - 1$ known staple teams in slots $1 \dots M-1$, puts target team $X$ in slot $M$, and fills slots $M+1 \dots 20$ with obscure teams.
 2. **Why Naive Silent Overlap Acceptance Also Fails**:
-   - Treating identical submissions as independent entries bloats popular teams and breaks the knowledge invariant if Bot $A$ submitted $H$ as `"Bot A Team #1"` and Bot $G$ submitted the exact same canonical team $H$ as `"Bot G Team #6"`.
+   - Treating identical submissions without tracking cross-project ownership breaks the knowledge invariant if Bot $A$ submitted $H$ as `"Bot A Team #1"` and Bot $G$ submitted the exact same canonical team $H$ as `"Bot G Team #6"`.
 
-#### 3. Complete Solution: Sequential `teams/index.ts` ($d_{\text{1-NN}} \ge 1.30$) Validation + At-Most-1-of-40 Sampling
+#### 3. Complete Solution: Sequential `teams/index.ts` ($d_{\text{1-NN}} \ge 1.30$) Validation + Uniform $\frac{2}{N}$ Hierarchical Sampling
 
-To eliminate both the probing oracle and trivial team clones, `pkmn.ai` decouples **Zero-Oracle Submission Validation** (pure function of the submitter's 20 teams + public reference pools) from **Pseudo-Blind-Pair Sampling**:
+To eliminate the probing oracle, trivial team clones, and third-party sampling bias (which would otherwise assign third-party pools more often than active players' own pools and reward pool sabotage), `pkmn.ai` combines **Zero-Oracle Submission Validation** with **Uniform $\frac{2}{N}$ Agent-Pair Sampling**:
 
 1. **Sequential `teams/index.ts` 1-NN Validation on `pkmn.ai` (Zero Private Oracle)**:
    - When Project $A$ submits its 20 teams on `/account/`, `POST /api/submissions` validates them synchronously **without querying any other competitor's private `bot_ladder_teams` rows**:
@@ -3864,76 +3864,95 @@ To eliminate both the probing oracle and trivial team clones, `pkmn.ai` decouple
        1. Compute $d_{\text{1-NN}}(T_k, \mathcal{P}_{k-1}) = \min_{B \in \mathcal{P}_{k-1}} \text{teamDistance}(\text{dex}, T_k, B, 50)$ using `teams/index.ts` (unshared species $= 1.00$; shared species set distance $\le 0.80$ across moves, item, ability, and two-tier deadbanded level-50 stat $L_1$, with Protect-variant and Frustration/Return normalization).
        2. Require **`d_1NN >= 1.30`** (`THRESHOLD = 1.3`). If $d_{\text{1-NN}} < 1.30$, reject the submission immediately naming team #$k$ and its closest public/intra-bundle neighbor.
        3. Append $T_k$ to the working blocklist ($\mathcal{P}_k = \mathcal{P}_{k-1} \cup \{T_k\}$) before testing $T_{k+1}$, guaranteeing every submitted team is at least $1.30$ away from **both** the public metagame pool and the submitter's own other 19 teams!
-2. **Canonical Pool Deduplication & Owner-Set Tracking ($\mathcal{O}(H)$)**:
-   - Across all $n \ge 3$ active projects on the ladder, the Arena groups submitted teams by canonical packed key $H$ and tracks $\text{Owners}(H) \subseteq \{1 \dots n\}$, giving each unique canonical team equal base weight.
-3. **Pseudo-Blind-Pair Sampling ("At Most 1 Team from the Combined 40")**:
-   - In a 2-game match between Bot $A$ (project $P_A$) and Bot $B$ (project $P_B$), let $\mathcal{U}_{AB} = \{P_A, P_B\}$.
-   - Sample distinct non-mirror $(T_1, T_2)$ from the seasonal pool subject to:
-     1. **Disjoint Authors**: $\text{Owners}(T_1) \cap \text{Owners}(T_2) = \emptyset$.
-     2. **At Most 1 Team from the 40 Submitted by $P_A$ and $P_B$ Combined**:
-        $$\mathbb{I}\bigl[\text{Owners}(T_1) \cap \mathcal{U}_{AB} \neq \emptyset\bigr] + \mathbb{I}\bigl[\text{Owners}(T_2) \cap \mathcal{U}_{AB} \neq \emptyset\bigr] \le 1$$
-        *(And neither $T_1$ nor $T_2$ may be jointly owned by both $P_A$ and $P_B$ simultaneously.)* Thus, if $T_1$ comes from either $P_A$'s 20 teams or $P_B$'s 20 teams, $T_2$ **must** come from a third project $P_C \notin \{P_A, P_B\}$—which is always satisfiable because `min_bots = 3` guarantees at least 20 third-party teams in the pot.
+2. **Canonical Owner-Set Tracking ($\mathcal{O}(H)$) & Per-Project Rosters**:
+   - Across all $N \ge 4$ active projects on the ladder, the Arena indexes canonical packed keys $H$ with $\text{Owners}(H) \subseteq \{1 \dots N\}$ and groups entries into per-project 20-team rosters $\mathcal{R}_1, \dots, \mathcal{R}_N$.
+3. **Uniform $\frac{2}{N}$ Pseudo-Blind-Pair Sampling ("At Most 1 Team from the Combined 40, Equal Weight for Every Team")**:
+   - Naively drawing $T_1$ from the flat $20N$-team pool and excluding $P_A \cup P_B$ from $T_2$ whenever $T_1 \in P_A \cup P_B$ under-samples the active players' pools ($\frac{2}{N} - \frac{1}{N(N-1)}$) and over-samples every third-party pool ($\frac{2}{N} + \frac{2}{N(N-1)(N-2)}$), creating an incentive to pollute rivals' matches with auto-loss forced-draw teams.
+   - Instead, in a 2-game match between Bot $A$ ($P_A$) and Bot $B$ ($P_B$) with $N \ge 4$ active projects, sample the unordered pair of distinct rosters $\{I, J\} \subset \{1 \dots N\}$ **first**:
+     - With probability **$\frac{2}{N}$**: $\{P_A, P_C\}$ for a uniformly chosen third party $P_C \notin \{P_A, P_B\}$.
+     - With probability **$\frac{2}{N}$**: $\{P_B, P_C\}$ for a uniformly chosen third party $P_C \notin \{P_A, P_B\}$.
+     - With probability **$\frac{N - 4}{N}$**: $\{P_{C_1}, P_{C_2}\}$ uniformly from the $\binom{N - 2}{2}$ pairs of distinct third parties.
+   - Any third party $P_C \notin \{P_A, P_B\}$ is chosen with marginal probability $\frac{2}{N}\frac{1}{N-2} + \frac{2}{N}\frac{1}{N-2} + \frac{N-4}{N}\frac{2}{N-2} = \frac{2}{N}$—identical to $P_A$ and $P_B$!
+   - Flip a fair coin to orient $(I, J)$ vs $(J, I)$, draw $T_1 \sim \text{Unif}(\mathcal{R}_I)$ and $T_2 \sim \text{Unif}(\mathcal{R}_J)$, and rejection-resample if $T_1$ and $T_2$ share all 6 species, $\text{Owners}(T_1) \cap \text{Owners}(T_2) \neq \emptyset$, either team is jointly owned by $P_A$ and $P_B$, or $\bigl|(\text{Owners}(T_1) \cup \text{Owners}(T_2)) \cap \{P_A, P_B\}\bigr| > 1$. Every team has exact probability $\frac{1}{NK}$ as $T_1$ and $\frac{1}{NK}$ as $T_2$ inside every match (so each player faces one of their own teams in exactly $\frac{1}{N}$ of games).
 
 ```ts
 export interface CanonicalPoolEntry {
   canonicalPacked: string;
   speciesIds: string[]; // 6 sorted species IDs for mirror checking
-  owners: Map<number, { botName: string; slotIndex: number }>; // botId -> { botName, slotIndex }
+  owners: Map<number, { agentName: string; slotIndex: number }>; // agentId -> { agentName, slotIndex }
 }
 
 /**
- * Samples (T1, T2) from a seasonal VGC 20-team pool for a match between botA and botB (requires >= 3 bots).
- * Enforces that at most 1 of {T1, T2} belongs to the 40 teams submitted by botA and botB combined.
+ * Samples (T1, T2) from a seasonal VGC 20-team pool for a match between agentA and agentB (requires >= 4 agents).
+ * Enforces exact 2/N per-agent marginals while ensuring at most 1 of {T1, T2} belongs to agentA U agentB.
  */
 export function sampleCompetitorPoolPair(
   pool: CanonicalPoolEntry[],
-  botAId: number,
-  botBId: number,
+  agentAId: number,
+  agentBId: number,
   rngNextInt: (max: number) => number,
 ): { t1Packed: string; t2Packed: string; t1Label: string; t2Label: string } {
-  const eligibleT1 = pool.filter((e) => !(e.owners.has(botAId) && e.owners.has(botBId)));
-  const t1 = eligibleT1[rngNextInt(eligibleT1.length)];
-  const activeOwnsT1 = t1.owners.has(botAId) || t1.owners.has(botBId);
-
-  const candidatesT2 = pool.filter((cand) => {
-    if (cand.canonicalPacked === t1.canonicalPacked) return false;
-    if (cand.speciesIds.every((s, idx) => s === t1.speciesIds[idx])) return false;
-    if (cand.owners.has(botAId) && cand.owners.has(botBId)) return false;
-    // At most 1 of {T1, T2} may come from the 40 teams submitted by botA and botB combined:
-    if (activeOwnsT1 && (cand.owners.has(botAId) || cand.owners.has(botBId))) return false;
-    for (const ownerId of t1.owners.keys()) {
-      if (cand.owners.has(ownerId)) return false;
+  const rosters = new Map<number, CanonicalPoolEntry[]>();
+  for (const entry of pool) {
+    for (const ownerId of entry.owners.keys()) {
+      const list = rosters.get(ownerId) ?? [];
+      list.push(entry);
+      rosters.set(ownerId, list);
     }
-    return true;
-  });
-
-  if (candidatesT2.length === 0) {
-    throw new Error('Insufficient third-party teams in pool (VGC requires min_bots >= 3)');
   }
-  const t2 = candidatesT2[rngNextInt(candidatesT2.length)];
+  const thirdParties = [...rosters.keys()]
+    .filter((id) => id !== agentAId && id !== agentBId)
+    .sort((a, b) => a - b);
+  const totalAgents = rosters.size;
+  if (totalAgents < 4 || !rosters.get(agentAId)?.length || !rosters.get(agentBId)?.length || thirdParties.length < 2) {
+    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
+  }
 
-  const formatProvenanceLabel = (entry: CanonicalPoolEntry): string => {
-    const activeLabels: string[] = [];
-    if (entry.owners.has(botAId)) {
-      const o = entry.owners.get(botAId)!;
-      activeLabels.push(`${o.botName} Team #${o.slotIndex}`);
+  for (let attempt = 0; attempt < 256; attempt++) {
+    const roll = rngNextInt(totalAgents);
+    let firstId: number;
+    let secondId: number;
+    if (roll < 2) {
+      firstId = agentAId;
+      secondId = thirdParties[rngNextInt(thirdParties.length)];
+    } else if (roll < 4) {
+      firstId = agentBId;
+      secondId = thirdParties[rngNextInt(thirdParties.length)];
+    } else {
+      const i1 = rngNextInt(thirdParties.length);
+      let i2 = rngNextInt(thirdParties.length - 1);
+      if (i2 >= i1) i2++;
+      firstId = thirdParties[i1];
+      secondId = thirdParties[i2];
     }
-    if (entry.owners.has(botBId)) {
-      const o = entry.owners.get(botBId)!;
-      activeLabels.push(`${o.botName} Team #${o.slotIndex}`);
-    }
-    if (activeLabels.length > 0) return activeLabels.join(' / ');
-    const allOwners = [...entry.owners.values()];
-    const chosen = allOwners[rngNextInt(allOwners.length)];
-    return `${chosen.botName} Team #${chosen.slotIndex}`;
-  };
+    if (rngNextInt(2) === 1) [firstId, secondId] = [secondId, firstId];
 
-  return {
-    t1Packed: t1.canonicalPacked,
-    t2Packed: t2.canonicalPacked,
-    t1Label: formatProvenanceLabel(t1),
-    t2Label: formatProvenanceLabel(t2),
-  };
+    const r1 = rosters.get(firstId)!;
+    const r2 = rosters.get(secondId)!;
+    const t1 = r1[rngNextInt(r1.length)];
+    const t2 = r2[rngNextInt(r2.length)];
+    if (t1.canonicalPacked === t2.canonicalPacked) continue;
+    if (t1.speciesIds.every((s, idx) => s === t2.speciesIds[idx])) continue;
+    if (t1.owners.has(agentAId) && t1.owners.has(agentBId)) continue;
+    if (t2.owners.has(agentAId) && t2.owners.has(agentBId)) continue;
+    if ((t1.owners.has(agentAId) || t1.owners.has(agentBId)) && (t2.owners.has(agentAId) || t2.owners.has(agentBId))) {
+      continue;
+    }
+    if ([...t1.owners.keys()].some((o) => t2.owners.has(o))) continue;
+
+    const labelFor = (entry: CanonicalPoolEntry) =>
+      formatPoolTeamLabel(
+        entry.canonicalPacked,
+        entry.owners.has(agentAId) ? 'P1' : entry.owners.has(agentBId) ? 'P2' : undefined,
+      );
+    return {
+      t1Packed: t1.canonicalPacked,
+      t2Packed: t2.canonicalPacked,
+      t1Label: labelFor(t1),
+      t2Label: labelFor(t2),
+    };
+  }
+  throw new Error('Failed to sample non-mirror third-party pair');
 }
 ```
 

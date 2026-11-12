@@ -75,32 +75,41 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
     clearReferencePoolCache();
   });
 
-  test('samplePoolsPair enforces min >= 3, disjoint owners, and <= 1 of 40 teams',
+  test('samplePoolsPair enforces min >= 4, <= 1 of 40 active teams, and exact 2/N uniformity',
     () => {
       const agent1Teams = mock.generateValidVgcTeams(20, 0);
       const agent2Teams = mock.generateValidVgcTeams(20, 1);
       const agent3Teams = mock.generateValidVgcTeams(20, 2);
+      const agent4Teams = mock.generateValidVgcTeams(20, 3);
 
-      // With only 2 agents, sampling must reject when activeOwnsT1 is true (no 3rd-party team)
+      // With < 4 distinct agent pools (2 or 3 agents), sampling must reject
       const twoAgentPool = mock.buildCanonicalTeamPool([
         {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
         {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
       ]);
       expect(() => mock.samplePoolsPair(twoAgentPool, 1, 2, mock.createRng(1)))
-        .toThrow(/Insufficient third-party teams in pool/);
+        .toThrow(/min >= 4/);
 
-      // Include a shared duplicate team between Agent 1 and Agent 2 + Agent 3's 20 teams
-      const sharedTeam = agent1Teams[0];
       const threeAgentPool = mock.buildCanonicalTeamPool([
         {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
-        {agentId: 2, agentName: 'Foul Play', teams: [sharedTeam, ...agent2Teams.slice(1)]},
+        {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
         {agentId: 3, agentName: "Mew's Truck", teams: agent3Teams},
       ]);
+      expect(() => mock.samplePoolsPair(threeAgentPool, 1, 2, mock.createRng(1)))
+        .toThrow(/min >= 4/);
 
-      const byPacked = new Map(threeAgentPool.map(e => [e.canonicalPacked, e]));
+      // Include cross-competitor duplicates (1 & 2 share team #0; 1 & 3 share team #1)
+      const fourAgentPool = mock.buildCanonicalTeamPool([
+        {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
+        {agentId: 2, agentName: 'Foul Play', teams: [agent1Teams[0], ...agent2Teams.slice(1)]},
+        {agentId: 3, agentName: "Mew's Truck", teams: [agent1Teams[1], ...agent3Teams.slice(1)]},
+        {agentId: 4, agentName: 'Metamon', teams: agent4Teams},
+      ]);
+
+      const byPacked = new Map(fourAgentPool.map(e => [e.canonicalPacked, e]));
       const rng = mock.createRng(42);
-      for (let trial = 0; trial < 200; trial++) {
-        const pair = mock.samplePoolsPair(threeAgentPool, 1, 2, rng);
+      for (let trial = 0; trial < 400; trial++) {
+        const pair = mock.samplePoolsPair(fourAgentPool, 1, 2, rng);
         expect(pair.t1Packed).not.toBe(pair.t2Packed);
 
         const e1 = byPacked.get(pair.t1Packed)!;
@@ -131,6 +140,51 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         const prefixedCount =
           (pair.t1Label.includes(':') ? 1 : 0) + (pair.t2Label.includes(':') ? 1 : 0);
         expect(prefixedCount).toBe(activeCount);
+      }
+
+      // Verify exact 2/N per-agent and 1/(N*K) per-slot uniformity across both N=4 and N=5
+      for (const nAgents of [4, 5]) {
+        const kTeams = 20;
+        const syntheticPool: mock.CanonicalPoolEntry[] = [];
+        for (let agentId = 1; agentId <= nAgents; agentId++) {
+          for (let slot = 1; slot <= kTeams; slot++) {
+            syntheticPool.push({
+              canonicalPacked: `packed-agent-${agentId}-slot-${slot}`,
+              speciesIds: [
+                `sp-${agentId}-${slot}-1`, `sp-${agentId}-${slot}-2`, `sp-${agentId}-${slot}-3`,
+                `sp-${agentId}-${slot}-4`, `sp-${agentId}-${slot}-5`, `sp-${agentId}-${slot}-6`,
+              ],
+              owners: new Map([[agentId, {agentName: `Agent ${agentId}`, slotIndex: slot}]]),
+            });
+          }
+        }
+        const lookup = new Map(syntheticPool.map(e => [e.canonicalPacked, e]));
+        const agentCounts = new Map<number, number>();
+        const t1Counts = new Map<string, number>();
+        const t2Counts = new Map<string, number>();
+        const unifRng = mock.createRng(1000 + nAgents);
+        const trials = 40_000;
+        for (let t = 0; t < trials; t++) {
+          const sampled = mock.samplePoolsPair(syntheticPool, 1, 2, unifRng);
+          t1Counts.set(sampled.t1Packed, (t1Counts.get(sampled.t1Packed) ?? 0) + 1);
+          t2Counts.set(sampled.t2Packed, (t2Counts.get(sampled.t2Packed) ?? 0) + 1);
+          for (const packed of [sampled.t1Packed, sampled.t2Packed]) {
+            const ownerId = [...lookup.get(packed)!.owners.keys()][0];
+            agentCounts.set(ownerId, (agentCounts.get(ownerId) ?? 0) + 1);
+          }
+        }
+        const expectedAgentProb = 2 / nAgents;
+        for (let agentId = 1; agentId <= nAgents; agentId++) {
+          const observed = (agentCounts.get(agentId) ?? 0) / trials;
+          expect(Math.abs(observed - expectedAgentProb)).toBeLessThan(0.01);
+        }
+        const expectedSlotProb = 1 / (nAgents * kTeams);
+        for (const entry of syntheticPool) {
+          const obs1 = (t1Counts.get(entry.canonicalPacked) ?? 0) / trials;
+          const obs2 = (t2Counts.get(entry.canonicalPacked) ?? 0) / trials;
+          expect(Math.abs(obs1 - expectedSlotProb)).toBeLessThan(0.003);
+          expect(Math.abs(obs2 - expectedSlotProb)).toBeLessThan(0.003);
+        }
       }
     });
 
@@ -263,6 +317,7 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         pmariglia: 1003,
         pkmnbotguy: 1004,
         asterdev: 1005,
+        jakegrigsby: 1006,
       };
       const cookieFor = (githubLogin: string, githubId?: number) => {
         const exp = Math.floor(Date.now() / 1000) + 3600;
@@ -390,13 +445,13 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
         expect(await mockArena.syncPendingSubmissions()).toBe(2);
         expect(db.getVersionBySlugAndLabel('0-error', '1.0.0')?.authTokenEncoding).toBeUndefined();
 
-        // With only 2 agents on VGC (min = 3), VGC refuses to schedule while RBY schedules!
+        // With only 2 agents on VGC (min = 4), VGC refuses to schedule while RBY schedules!
         expect(await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'}))
           .toBeUndefined();
         const rbyStep = await mockArena.playMatchStep({ladderId: 'gen1ou20261109'});
         expect(rbyStep?.ladderId).toBe('gen1ou20261109');
 
-        // 5. Submit 3rd VGC agent (Mew's Truck 1.0.0) -> VGC min=3 satisfied -> matches run!
+        // 5. Submit 3rd VGC agent (Mew's Truck 1.0.0) -> still below min=4, then 4th (Metamon)!
         const subMt100 = await submitJson('pkmnbotguy', {
           version: '1.0.0',
           package: 'bundle',
@@ -406,6 +461,19 @@ describe('Mock Arena VGC pseudo-blind-pair sampler & end-to-end lifecycle', () =
           teams: mock.generateValidVgcTeams(20, 2),
         });
         expect(subMt100.status).toBe(201);
+        expect(await mockArena.syncPendingSubmissions()).toBe(1);
+        expect(await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'}))
+          .toBeUndefined();
+
+        const subMeta100 = await submitJson('jakegrigsby', {
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://r2.example.com/metamon-1.0.0.tar.zst',
+          sha256: SHA_4,
+          ladders: ['gen9championsvgc2026regmc'],
+          teams: mock.generateValidVgcTeams(20, 3),
+        });
+        expect(subMeta100.status).toBe(201);
         expect(await mockArena.syncPendingSubmissions()).toBe(1);
 
         const vgcStep = await mockArena.playMatchStep({ladderId: 'gen9championsvgc2026regmc'});

@@ -128,7 +128,7 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     const format = entry?.format?.trim();
     const team = entry?.team;
     const status = entry?.status ?? 'active';
-    const min = entry?.min ?? (team === 'pools' ? 3 : 2);
+    const min = entry?.min ?? (team === 'pools' ? 4 : 2);
 
     if (!id || !name || !format) {
       throw new Error(`Invalid ladder entry in ladders.yml: ${JSON.stringify(entry)}`);
@@ -140,9 +140,9 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     if (!LADDER_STATUSES.has(status)) {
       throw new Error(`Invalid ladder status "${String(status)}" for "${id}"`);
     }
-    // `pools` ladders require >= 3 distinct active agents so at least one neutral third-party
-    // team pool exists outside the two matched competitors (`P_pool = Pool \ (P_i U P_j)`).
-    if (!Number.isInteger(min) || min < 2 || (team === 'pools' && min < 3)) {
+    // `pools` ladders require >= 4 distinct active agents so every agent's submitted pool can be
+    // sampled with exact uniform probability `2 / N` while keeping `X_A + X_B <= 1` (`4 / N <= 1`).
+    if (!Number.isInteger(min) || min < 2 || (team === 'pools' && min < 4)) {
       throw new Error(`Invalid min "${String(min)}" for "${id}"`);
     }
     if (team === 'pools') {
@@ -228,7 +228,7 @@ export function syncLaddersFromYaml(
         status = 'archived';
       }
       const slot = inferLadderSlot(cfg.name);
-      const min = cfg.min ?? (cfg.team === 'pools' ? 3 : 2);
+      const min = cfg.min ?? (cfg.team === 'pools' ? 4 : 2);
       const teams = cfg.teams ?? null;
       const discord = cfg.discord?.trim() || null;
       const archivedAt = status === 'archived'

@@ -50,7 +50,7 @@ const LADDERS_YAML = `
   discord: '1564121375558340768'
   team: pools
   status: active
-  min: 3
+  min: 4
   teams: 20
 `;
 
