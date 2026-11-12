@@ -6,7 +6,7 @@ import {ensureAgentLadderStats} from './agent-ladder-stats';
 import * as teams from './agent-ladder-teams';
 import {AgentRow, getAgentById} from './agents';
 import * as entries from './ladder-entries';
-import {getActiveLadders, getLadder} from './ladders';
+import {archiveLadderInPlace, canSettleLadder, getActiveLadders, getLadder} from './ladders';
 import {upsertTournamentEntrant} from './tournament-entrants';
 import {getScheduledTournaments, getTournament} from './tournaments';
 
@@ -770,6 +770,10 @@ export function applySubmissionStatus(
       `).run(prev.id);
       for (const row of affected) {
         entries.promoteRemainingActiveToChampion(db, row.ladder_id, prev.agentId);
+        const l = getLadder(db, row.ladder_id);
+        if (l?.status === 'settling' && !canSettleLadder(db, l)) {
+          archiveLadderInPlace(db, l.id, now);
+        }
       }
     }
 

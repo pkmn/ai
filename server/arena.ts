@@ -250,12 +250,15 @@ export function buildLadderMatchState(
   ladder: db.LadderRow,
   entries: db.LeaderboardEntryView[],
   pairs: db.PairAggregateRow[],
-  lastMatchNumber = 0
+  lastMatchNumber = 0,
+  rosterAgentIds?: ReadonlySet<number>
 ): ratings.LadderMatchState | undefined {
   if (ladder.status !== 'active' && ladder.status !== 'settling') return undefined;
-  const activeEntries = entries.filter(e => e.role !== 'retired');
+  const isPlayableEntry = (e: db.LeaderboardEntryView) =>
+    e.role !== 'retired' && (!rosterAgentIds || rosterAgentIds.has(e.agentId));
+  const activeEntries = entries.filter(isPlayableEntry);
   const distinctAgents = new Set(activeEntries.map(e => e.agentId));
-  if (distinctAgents.size < ladder.min) return undefined;
+  if (distinctAgents.size < Math.max(2, ladder.min)) return undefined;
   if (ladder.status === 'settling' && activeEntries.every(e => e.settledAt !== undefined)) {
     return undefined;
   }
@@ -272,7 +275,7 @@ export function buildLadderMatchState(
   for (let i = 0; i < M; i++) {
     const e = entries[i];
     indexByVersion.set(e.versionId, i);
-    if (e.role !== 'retired') activeIndices.push(i);
+    if (isPlayableEntry(e)) activeIndices.push(i);
     agentIds[i] = e.agentId;
     theta[i] = (e.elo - 1500) / ratings.ELO_SCALE;
     sigma[i] = e.se / ratings.ELO_SCALE;

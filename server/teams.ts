@@ -191,7 +191,8 @@ export function samplePoolsPair(
   pool: CanonicalPoolEntry[],
   agentAId: number,
   agentBId: number,
-  rngNextInt: (max: number) => number
+  rngNextInt: (max: number) => number,
+  minAgents = 4
 ): SampledPoolPair {
   const rosters = new Map<number, CanonicalPoolEntry[]>();
   for (const entry of pool) {
@@ -210,13 +211,16 @@ export function samplePoolsPair(
     .filter(id => id !== agentAId && id !== agentBId)
     .sort((a, b) => a - b);
   const totalAgents = rosters.size;
+  const requiredAgents = Math.max(4, minAgents);
   if (
-    totalAgents < 4 ||
+    totalAgents < requiredAgents ||
     !rosters.get(agentAId)?.length ||
     !rosters.get(agentBId)?.length ||
     thirdParties.length < 2
   ) {
-    throw new Error('Insufficient third-party teams in pool (pools ladders require min >= 4)');
+    throw new Error(
+      `Insufficient third-party teams in pool (pools ladders require min >= ${requiredAgents})`
+    );
   }
 
   const formatProvenanceLabel = (entry: CanonicalPoolEntry): string => {

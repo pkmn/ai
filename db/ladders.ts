@@ -347,10 +347,71 @@ export function setLadderStatus(
   });
 }
 
+export function countDistinctActiveLadderAgents(db: DatabaseSync, ladderId: string): number {
+  const ladder = getLadder(db, ladderId);
+  if (!ladder) return 0;
+  if (ladder.team === 'pools') {
+    const row = db.prepare(`
+      SELECT COUNT(DISTINCT av.agent_id) AS cnt
+      FROM ladder_entries le
+      JOIN agent_versions av ON av.id = le.version_id
+      WHERE le.ladder_id = ?
+        AND le.role IN ('champion', 'challenger')
+        AND av.smoke_status = 'passed'
+        AND EXISTS (
+          SELECT 1 FROM agent_ladder_teams alt
+          WHERE alt.ladder_id = le.ladder_id
+            AND alt.agent_id = av.agent_id
+            AND alt.status = 'active'
+        )
+    `).get(ladderId) as {cnt: number};
+    return row.cnt;
+  }
+  const row = db.prepare(`
+    SELECT COUNT(DISTINCT av.agent_id) AS cnt
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE le.ladder_id = ?
+      AND le.role IN ('champion', 'challenger')
+      AND av.smoke_status = 'passed'
+  `).get(ladderId) as {cnt: number};
+  return row.cnt;
+}
+
+export function canSettleLadder(db: DatabaseSync, ladder: LadderRow): boolean {
+  if (countDistinctActiveLadderAgents(db, ladder.id) < Math.max(2, ladder.min)) {
+    return false;
+  }
+  const unsettled = db.prepare(`
+    SELECT 1
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE le.ladder_id = ?
+      AND le.role IN ('champion', 'challenger')
+      AND av.smoke_status = 'passed'
+      AND le.settled_at IS NULL
+    LIMIT 1
+  `).get(ladder.id);
+  return unsettled !== undefined;
+}
+
+export function archiveLadderInPlace(db: DatabaseSync, ladderId: string, now: number): void {
+  db.prepare(`
+    UPDATE ladders
+    SET status = 'archived', archived_at = COALESCE(archived_at, ?)
+    WHERE id = ?
+  `).run(now, ladderId);
+  db.prepare(`
+    UPDATE ladder_entries
+    SET role = 'retired', retired_at = ?
+    WHERE ladder_id = ? AND role IN ('champion', 'challenger')
+  `).run(now, ladderId);
+}
+
 // Rotates a seasonal regulation (e.g. VGC Reg M-C -> Reg M-D) without losing historical matches or
-// ratings: if active entries on `oldLadderId` still have unsettled ratings (`settled_at IS NULL`),
-// the outgoing season enters `'settling'` so in-flight competitors finish their 25-match / SE <= 30
-// settlement before freezing into `'archived'`.
+// ratings: if `>= min` distinct active projects remain on `oldLadderId` and still have unsettled
+// ratings (`settled_at IS NULL`), the outgoing season enters `'settling'` so in-flight competitors
+// finish their 25-match / SE <= 30 settlement before freezing into `'archived'`.
 export function rotateLadder(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -363,15 +424,7 @@ export function rotateLadder(
       throw new Error(`Ladder "${input.oldLadderId}" not found`);
     }
 
-    const unsettled = db.prepare(`
-      SELECT 1 FROM ladder_entries
-      WHERE ladder_id = ?
-        AND role IN ('champion', 'challenger')
-        AND settled_at IS NULL
-      LIMIT 1
-    `).get(oldLadder.id);
-
-    const nextOldStatus: LadderStatus = unsettled ? 'settling' : 'archived';
+    const nextOldStatus: LadderStatus = canSettleLadder(db, oldLadder) ? 'settling' : 'archived';
     const archivedAt = nextOldStatus === 'archived' ? (oldLadder.archivedAt ?? now) : null;
 
     db.prepare(`

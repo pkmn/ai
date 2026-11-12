@@ -5,7 +5,7 @@ import * as ratings from '../server/ratings';
 import {ensureAgentLadderStats, updateFamilyStreaksForMatch} from './agent-ladder-stats';
 import {getVersionById} from './agent-versions';
 import {LadderStandingOverride, recomputeLadderRatings} from './ladder-entries';
-import {LadderSlot, LadderStatus, TeamMode, getLadder} from './ladders';
+import * as ladders from './ladders';
 import {upsertPairAggregateForMatch} from './pair-aggregates';
 
 import {TransactionRunner} from './index';
@@ -38,7 +38,7 @@ export interface CompletedMatchPayload {
 
 export interface RecordMatchInput {
   match: CompletedMatchPayload;
-  ladderStatus?: LadderStatus;
+  ladderStatus?: ladders.LadderStatus;
   ladderStandings?: LadderStandingOverride[];
 }
 
@@ -46,10 +46,10 @@ export interface RecentMatchView {
   id: string;
   ladderId: string;
   ladderName: string;
-  ladderStatus: LadderStatus;
-  slot: LadderSlot;
+  ladderStatus: ladders.LadderStatus;
+  slot: ladders.LadderSlot;
   format: string;
-  teamMode: TeamMode;
+  teamMode: ladders.TeamMode;
   seed: string;
   p1TeamLabel?: string;
   p2TeamLabel?: string;
@@ -138,7 +138,7 @@ export function recordCompletedMatch(
       return {duplicate: true, archivedLadder: false};
     }
 
-    const ladder = getLadder(db, m.ladderId);
+    const ladder = ladders.getLadder(db, m.ladderId);
     if (!ladder) {
       throw Object.assign(new Error(`Unknown ladderId "${m.ladderId}"`), {status: 404});
     }
@@ -341,23 +341,8 @@ export function recordCompletedMatch(
 
     let archivedLadder = false;
     if (ladder.status === 'settling' || input.ladderStatus === 'archived') {
-      const unsettled = db.prepare(`
-        SELECT 1 FROM ladder_entries
-        WHERE ladder_id = ?
-          AND role IN ('champion', 'challenger')
-          AND settled_at IS NULL
-        LIMIT 1
-      `).get(m.ladderId);
-
-      if (unsettled === undefined || input.ladderStatus === 'archived') {
-        db.prepare(
-          "UPDATE ladders SET status = 'archived', archived_at = ? WHERE id = ?"
-        ).run(m.completedAt, m.ladderId);
-        db.prepare(`
-          UPDATE ladder_entries
-          SET role = 'retired', retired_at = ?
-          WHERE ladder_id = ? AND role IN ('champion', 'challenger')
-        `).run(m.completedAt, m.ladderId);
+      if (input.ladderStatus === 'archived' || !ladders.canSettleLadder(db, ladder)) {
+        ladders.archiveLadderInPlace(db, m.ladderId, m.completedAt);
         archivedLadder = true;
       }
     }
@@ -371,10 +356,10 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
     id: r.id as string,
     ladderId: r.ladder_id as string,
     ladderName: r.ladder_name as string,
-    ladderStatus: r.ladder_status as LadderStatus,
-    slot: r.slot as LadderSlot,
+    ladderStatus: r.ladder_status as ladders.LadderStatus,
+    slot: r.slot as ladders.LadderSlot,
     format: r.format as string,
-    teamMode: r.team_mode as TeamMode,
+    teamMode: r.team_mode as ladders.TeamMode,
     seed: r.seed as string,
     p1TeamLabel: (r.p1_team_label as string | null) ?? undefined,
     p2TeamLabel: (r.p2_team_label as string | null) ?? undefined,

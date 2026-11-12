@@ -810,6 +810,7 @@ export class Runner {
   private readonly onCheckpoint?: (name: string, runner: Runner) => Promise<void> | void;
   private readonly onDiscordSync?: (runner: Runner) => Promise<void> | void;
   private readonly devCookies: Map<string, string>;
+  private readonly poolCache: Map<string, {key: string; pool: teams.CanonicalPoolEntry[]}>;
   state: State;
 
   constructor(options: Options) {
@@ -843,6 +844,7 @@ export class Runner {
     this.onCheckpoint = options.onCheckpoint;
     this.onDiscordSync = options.onDiscordSync;
     this.devCookies = new Map<string, string>();
+    this.poolCache = new Map();
 
     const initialNow = options.now ?? Math.floor(Date.now() / 1000);
     const initialSeed = options.seed ?? 20261110;
@@ -1081,6 +1083,7 @@ export class Runner {
     this.state = createInitialState(nextAnchorNow, nextSeed);
     this.onTimeChange?.(this.state.now);
     this.devCookies.clear();
+    this.poolCache.clear();
     this.clearDatabaseTables();
 
     fs.mkdirSync(this.staticDir, {recursive: true});
@@ -2117,14 +2120,22 @@ export class Runner {
     const activeAgentIds = new Set(
       entries.filter(e => e.role !== 'retired').map(e => e.agentId)
     );
-    const roster = this.db.getActiveRosterForLadder(ladder.id)
-      .filter(r => activeAgentIds.has(r.agentId))
-      .map(r => ({
-        agentId: r.agentId,
-        agentName: r.agentName,
-        teams: r.teams.map(t => t.packed),
-      }));
-    return teams.buildCanonicalTeamPool(roster, ladder.format);
+    const activeRosters = this.db.getActiveRosterForLadder(ladder.id)
+      .filter(r => activeAgentIds.has(r.agentId));
+    const cacheKey = activeRosters
+      .map(r => `${r.agentId}:${r.submittedAt}:${r.teams.length}:${r.teams[0]?.packed ?? ''}`)
+      .join('|');
+    const cached = this.poolCache.get(ladder.id);
+    if (cached?.key === cacheKey) return cached.pool;
+
+    const roster = activeRosters.map(r => ({
+      agentId: r.agentId,
+      agentName: r.agentName,
+      teams: r.teams.map(t => t.packed),
+    }));
+    const pool = teams.buildCanonicalTeamPool(roster, ladder.format);
+    this.poolCache.set(ladder.id, {key: cacheKey, pool});
+    return pool;
   }
 
   private resolvePoolLabelSpec(
@@ -2149,6 +2160,18 @@ export class Runner {
     return teams.hashTeam(entry.canonicalPacked);
   }
 
+  private getRosterAgentIds(ladder: db.LadderRow): ReadonlySet<number> | undefined {
+    if (ladder.team !== 'pools') return undefined;
+    return new Set(this.db.getActiveRosterForLadder(ladder.id).map(r => r.agentId));
+  }
+
+  private getPlayableActiveEntries(ladder: db.LadderRow): db.LeaderboardEntryView[] {
+    const rosterIds = this.getRosterAgentIds(ladder);
+    return this.db.getLeaderboardEntries(ladder.id).filter(
+      e => e.role !== 'retired' && (!rosterIds || rosterIds.has(e.agentId))
+    );
+  }
+
   private buildCandidateLadderState(ladder: db.LadderRow): {
     state: ratings.LadderMatchState;
     entries: db.LeaderboardEntryView[];
@@ -2158,7 +2181,8 @@ export class Runner {
       ladder,
       entries,
       this.db.getPairAggregatesForLadder(ladder.id),
-      this.state.lastMatchNumberByLadder[ladder.id] ?? 0
+      this.state.lastMatchNumberByLadder[ladder.id] ?? 0,
+      this.getRosterAgentIds(ladder)
     );
     return state ? {state, entries} : undefined;
   }
@@ -2190,7 +2214,13 @@ export class Runner {
     let p2TeamLabel: string | undefined;
     if (ladder.team === 'pools') {
       const pool = this.buildPoolForLadder(ladder);
-      const sampled = teams.samplePoolsPair(pool, opts.p1AgentId, opts.p2AgentId, this.nextInt);
+      const sampled = teams.samplePoolsPair(
+        pool,
+        opts.p1AgentId,
+        opts.p2AgentId,
+        this.nextInt,
+        ladder.min
+      );
       p1TeamLabel = this.resolvePoolLabelSpec(ladder, opts.p1TeamSpec, sampled.t1Label);
       p2TeamLabel = this.resolvePoolLabelSpec(ladder, opts.p2TeamSpec, sampled.t2Label);
     }
@@ -2426,8 +2456,8 @@ export class Runner {
     const targetLadders = (opts.ladders ?? this.db.getPlayableLadders()).filter(l => {
       const cur = this.db.getLadder(l.id);
       if (!cur || (cur.status !== 'active' && cur.status !== 'settling')) return false;
-      const active = this.db.getLeaderboardEntries(cur.id).filter(e => e.role !== 'retired');
-      return new Set(active.map(e => e.agentId)).size >= cur.min;
+      const active = this.getPlayableActiveEntries(cur);
+      return new Set(active.map(e => e.agentId)).size >= Math.max(2, cur.min);
     });
     if (targetLadders.length === 0) return false;
 
@@ -2436,7 +2466,7 @@ export class Runner {
         (this.state.lastMatchNumberByLadder[a.id] ?? 0) -
         (this.state.lastMatchNumberByLadder[b.id] ?? 0)
     )[0];
-    const active = this.db.getLeaderboardEntries(chosenLadder.id).filter(e => e.role !== 'retired');
+    const active = this.getPlayableActiveEntries(chosenLadder);
     const pairCounts = new Map<string, number>();
     for (const p of this.db.getPairAggregatesForLadder(chosenLadder.id)) {
       pairCounts.set(
@@ -2551,8 +2581,8 @@ export class Runner {
       for (const l of this.resolveLadders(targetSpec)) {
         const cur = this.db.getLadder(l.id);
         if (!cur || (cur.status !== 'active' && cur.status !== 'settling')) continue;
-        const active = this.db.getLeaderboardEntries(cur.id).filter(e => e.role !== 'retired');
-        if (new Set(active.map(e => e.agentId)).size < cur.min) continue;
+        const active = this.getPlayableActiveEntries(cur);
+        if (new Set(active.map(e => e.agentId)).size < Math.max(2, cur.min)) continue;
         const unsettled = active.filter(e => e.settledAt === undefined);
         if (unsettled.length > 0) {
           unsettleCandidates.push({ladder: cur, active, unsettled});
@@ -2727,7 +2757,13 @@ export class Runner {
       let p2Team: string | undefined;
       if (ladder.team === 'pools') {
         const pool = this.buildPoolForLadder(ladder);
-        const sampled = teams.samplePoolsPair(pool, p1.agentId, p2.agentId, this.nextInt);
+        const sampled = teams.samplePoolsPair(
+          pool,
+          p1.agentId,
+          p2.agentId,
+          this.nextInt,
+          ladder.min
+        );
         p1Team = this.resolvePoolLabelSpec(ladder, getFlag(cmd, 'p1-team'), sampled.t1Label);
         p2Team = this.resolvePoolLabelSpec(ladder, getFlag(cmd, 'p2-team'), sampled.t2Label);
       }

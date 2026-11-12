@@ -441,6 +441,8 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
         [{
           id: 'solo',
           activeAgentIndices: [0],
+          agentIds: new Int32Array([1]),
+          minAgents: 2,
           theta: new Float64Array([0]),
           sigma: new Float64Array([1]),
           agentMatches: new Int32Array([0]),
@@ -448,7 +450,7 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
           lastMatchNumber: 0,
         }],
         0
-      )).toThrow(/No ladder has >= 2 active agents/);
+      )).toThrow(/No ladder meets its minimum distinct active agents/);
 
     // Index 3 is retired (not in activeAgentIndices) despite huge sigma -> must never be selected
     const pairMatches = new Int32Array(16);
@@ -456,6 +458,8 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
       {
         id: 'rby',
         activeAgentIndices: [0, 1, 2],
+        agentIds: new Int32Array([1, 2, 3, 4]),
+        minAgents: 2,
         theta: new Float64Array([0.8, 0.75, 0.0, 0.8]),
         sigma: new Float64Array([0.1, 0.1, 1.8, 2.0]),
         agentMatches: new Int32Array([50, 50, 0, 0]),
@@ -465,6 +469,8 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
       {
         id: 'sv',
         activeAgentIndices: [0, 1],
+        agentIds: new Int32Array([1, 2]),
+        minAgents: 2,
         theta: new Float64Array([0.2, 0.0]),
         sigma: new Float64Array([0.15, 0.15]),
         agentMatches: new Int32Array([30, 30]),
@@ -487,22 +493,47 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
     const damped = ratings.selectNextArenaMatch(ladders, 12);
     expect([damped.agentI, damped.agentJ].sort()).toEqual([1, 2]);
 
-    // minAgents gates ladders on distinct active projects, while Champion vs Challenger
-    // self-play pairs within an eligible ladder are scheduled normally
+    // minAgents gates ladders strictly on distinct active projects (never total version count):
+    // 2 versions of 1 project fails min=2, and 2 versions of 2 projects (4 versions) fails min=4
     expect(() =>
       ratings.selectNextArenaMatch(
-        [{
-          id: 'self-only',
-          activeAgentIndices: [0, 1],
-          agentIds: new Int32Array([7, 7]),
-          theta: new Float64Array([0, 0]),
-          sigma: new Float64Array([2, 2]),
-          agentMatches: new Int32Array([0, 0]),
-          pairMatches: new Int32Array(4),
-          lastMatchNumber: 0,
-        }],
+        [
+          {
+            id: 'self-only',
+            activeAgentIndices: [0, 1],
+            agentIds: new Int32Array([7, 7]),
+            minAgents: 2,
+            theta: new Float64Array([0, 0]),
+            sigma: new Float64Array([2, 2]),
+            agentMatches: new Int32Array([0, 0]),
+            pairMatches: new Int32Array(4),
+            lastMatchNumber: 0,
+          },
+          {
+            id: 'vgc-two-projects-four-versions',
+            activeAgentIndices: [0, 1, 2, 3],
+            agentIds: new Int32Array([1, 1, 2, 2]),
+            minAgents: 4,
+            theta: new Float64Array([0, 0, 0, 0]),
+            sigma: new Float64Array([2, 2, 2, 2]),
+            agentMatches: new Int32Array([0, 0, 0, 0]),
+            pairMatches: new Int32Array(16),
+            lastMatchNumber: 0,
+          },
+          {
+            id: 'vgc-three-projects-four-versions',
+            activeAgentIndices: [0, 1, 2, 3],
+            agentIds: new Int32Array([1, 1, 2, 3]),
+            minAgents: 4,
+            theta: new Float64Array([0, 0, 0, 0]),
+            sigma: new Float64Array([2, 2, 2, 2]),
+            agentMatches: new Int32Array([0, 0, 0, 0]),
+            pairMatches: new Int32Array(16),
+            lastMatchNumber: 0,
+          },
+        ],
         1
-      )).toThrow(/No ladder has >= 2 active agents/);
+      )).toThrow(/No ladder meets its minimum distinct active agents/);
 
     const mixedLadders: ratings.LadderMatchState[] = [
       {

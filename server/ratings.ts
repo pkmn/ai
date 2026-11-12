@@ -59,8 +59,8 @@ export interface PairwiseStreakState {
 export interface LadderMatchState {
   id: string;
   activeAgentIndices: number[];
-  agentIds?: Int32Array;
-  minAgents?: number;
+  agentIds: Int32Array;
+  minAgents: number;
   theta: Float64Array;
   sigma: Float64Array;
   agentMatches: Int32Array;
@@ -516,8 +516,13 @@ export function advanceTopKClock(
 //   - `repeatDamper = 1 / (1 + 0.25 * mij)` spreads games across distinct pairs.
 //   - `agingBoost` + hard starvation filtering (`>= maxWaitCycles * K`) guarantees no active
 //     ladder goes unscheduled even when another ladder has a burst of new submissions.
-function countDistinctActiveAgents(ladder: LadderMatchState): number {
-  if (!ladder.agentIds) return ladder.activeAgentIndices.length;
+export function countDistinctActiveAgents(ladder: LadderMatchState): number {
+  if (ladder.agentIds.length !== ladder.theta.length) {
+    throw new Error(
+      `Ladder "${ladder.id}" agentIds length (${ladder.agentIds.length}) ` +
+      `must match theta length (${ladder.theta.length})`
+    );
+  }
   const seen = new Set<number>();
   for (const idx of ladder.activeAgentIndices) {
     seen.add(ladder.agentIds[idx]);
@@ -533,9 +538,11 @@ export function selectNextArenaMatch(
   maxWaitCycles = 4
 ): NextMatchChoice {
   const activeLadders = ladders.filter(
-    l => countDistinctActiveAgents(l) >= Math.max(2, l.minAgents ?? 2)
+    l => countDistinctActiveAgents(l) >= Math.max(2, l.minAgents)
   );
-  if (activeLadders.length === 0) throw new Error('No ladder has >= 2 active agents');
+  if (activeLadders.length === 0) {
+    throw new Error('No ladder meets its minimum distinct active agents');
+  }
   const K = activeLadders.length;
 
   const starved = activeLadders.filter(

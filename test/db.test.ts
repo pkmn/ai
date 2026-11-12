@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import {Database, LADDERS_FILE, SCHEMA_DIR, parseArenaProjects, parseLaddersYaml} from '../db';
+import * as arena from '../server/arena';
 import * as smogon from '../server/smogon';
 import {validateAgentName, validateVersion} from '../static/util';
 
@@ -275,6 +276,105 @@ describe('ladders.yml & Database ladder sync', () => {
       expect(old.status).toBe('archived');
       expect(old.name).toBe('VGC 2026 Reg M-C');
       expect(old.archivedAt).toBe(1_765_000_000);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('enforces distinct projects (not active versions) for min gating and rotation', () => {
+    const db = new Database(':memory:');
+    try {
+      db.syncLaddersFromYaml(`
+- name: VGC
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  team: pools
+  status: active
+  min: 4
+  teams: 20
+`, 1_760_000_000);
+
+      db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pre: pre.10544
+- name: Foul Play
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pmariglia: pmariglia.100001
+`, undefined, 1_760_000_000);
+
+      const zero = db.getAgentBySlug('0-error')!;
+      const fp = db.getAgentBySlug('foul-play')!;
+      const ladderId = 'gen9championsvgc2026regmc';
+      const dummyTeams = Array.from({length: 20}, (_, i) => `Pikachu|||static|||||||]${i}`);
+
+      // Create 2 active versions on each of the 2 projects via quarantine + replacement +
+      // unquarantine -> 4 active version rows total, but only 2 distinct projects (< min = 4)
+      let seq = 1;
+      for (const agent of [zero, fp]) {
+        const sub1 = db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: `https://example.com/${agent.slug}-1.0.0.tar.zst`,
+          sha256: String(seq++).padStart(64, '0'),
+          ladderIds: [ladderId],
+          teamsByLadder: {[ladderId]: dummyTeams},
+          now: 1_760_000_000 + seq * 1000,
+        });
+        db.applySubmissionStatus({
+          versionId: sub1.id,
+          smokeStatus: 'passed',
+          now: 1_760_000_010 + seq * 1000,
+        });
+        db.quarantineVersion(
+          agent.slug,
+          '1.0.0',
+          'Transient infra glitch',
+          1_760_000_020 + seq * 1000
+        );
+
+        const sub2 = db.createSubmission({
+          agentId: agent.id,
+          version: '1.1.0',
+          package: 'bundle',
+          url: `https://example.com/${agent.slug}-1.1.0.tar.zst`,
+          sha256: String(seq++).padStart(64, '0'),
+          ladderIds: [ladderId],
+          now: 1_760_000_030 + seq * 1000,
+        });
+        db.applySubmissionStatus({
+          versionId: sub2.id,
+          smokeStatus: 'passed',
+          now: 1_760_000_040 + seq * 1000,
+        });
+        db.unquarantineVersion(agent.slug, '1.0.0', 1_760_000_050 + seq * 1000);
+      }
+
+      const entries = db.getLeaderboardEntries(ladderId);
+      expect(entries.filter(e => e.role !== 'retired')).toHaveLength(4);
+
+      const ladder = db.getLadder(ladderId)!;
+      expect(
+        arena.buildLadderMatchState(ladder, entries, db.getPairAggregatesForLadder(ladderId))
+      ).toBeUndefined();
+
+      // Rotating while distinct projects (2) < min (4) must archive immediately, not strand
+      // the outgoing ladder in 'settling' with 0 playable matches
+      const rotated = db.rotateLadder({
+        oldLadderId: ladderId,
+        archivedName: 'VGC 2026 Reg M-C',
+        newLadderId: 'gen9championsvgc2026regmd',
+        now: 1_766_000_000,
+      });
+      expect(rotated.oldLadder.status).toBe('archived');
+      expect(db.getLeaderboardEntries(ladderId).every(e => e.role === 'retired')).toBe(true);
     } finally {
       db.close();
     }
