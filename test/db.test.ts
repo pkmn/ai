@@ -155,10 +155,10 @@ describe('db/schema/*.sql & db/migration/* lifecycle', () => {
     db3.close();
   });
 
-  test('applies 0003-saved-pool-teams and manages saved -> pending -> active transitions', () => {
+  test('bootstraps fresh schema and manages saved -> pending -> active teams', () => {
     const db = new Database(':memory:');
     try {
-      expect(db.getAppliedMigrations().map(m => m.version)).toContain('0003-saved-pool-teams.sql');
+      expect(db.getAppliedMigrations()).toEqual([]);
       db.syncLadders(LADDERS_FILE, 1_760_000_000);
       db.syncProjectsFromYaml(`
         - name: 0 ERROR
