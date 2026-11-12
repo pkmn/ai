@@ -2,7 +2,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import {Database, LADDERS_FILE, SCHEMA_DIR, parseArenaProjects, parseLaddersYaml} from '../db';
+import {
+  Database,
+  LADDERS_FILE,
+  SCHEMA_DIR,
+  getTournamentClosesAt,
+  parseArenaProjects,
+  parseLaddersYaml,
+} from '../db';
 import * as arena from '../server/arena';
 import * as smogon from '../server/smogon';
 import {validateAgentName, validateVersion} from '../static/util';
@@ -854,4 +861,16 @@ describe('Smogon lookup & projects.yml arena sync', () => {
         db.close();
       }
     });
+
+  test('computes tournament entry cutoff at 00:00 UTC strictly before startsAt', () => {
+    // Mid-day start -> same-day 00:00:00 UTC
+    const midDayStart = Math.floor(Date.parse('2026-11-15T18:00:00Z') / 1000);
+    const sameDayMidnight = Math.floor(Date.parse('2026-11-15T00:00:00Z') / 1000);
+    expect(Database.name).toBe('Database');
+    expect(getTournamentClosesAt(midDayStart)).toBe(sameDayMidnight);
+
+    // Exact midnight start -> previous-day 00:00:00 UTC
+    const prevDayMidnight = Math.floor(Date.parse('2026-11-14T00:00:00Z') / 1000);
+    expect(getTournamentClosesAt(sameDayMidnight)).toBe(prevDayMidnight);
+  });
 });

@@ -376,8 +376,11 @@ export class Database {
     return versions.computeAgentSubmissionStatus(this.db, agentId, now);
   }
 
-  computeAgentTournamentStatuses(agentId: number): versions.TournamentSubmissionStatus[] {
-    return versions.computeAgentTournamentStatuses(this.db, agentId);
+  computeAgentTournamentStatuses(
+    agentId: number,
+    now?: number
+  ): versions.TournamentSubmissionStatus[] {
+    return versions.computeAgentTournamentStatuses(this.db, agentId, now);
   }
 
   createSubmission(input: versions.CreateSubmissionInput): versions.AgentVersionRow {
@@ -527,6 +530,10 @@ export class Database {
 
   getScheduledTournaments(): tournaments.TournamentRow[] {
     return tournaments.getScheduledTournaments(this.db);
+  }
+
+  getTournamentClosesAt(startsAt: number): number {
+    return tournaments.getTournamentClosesAt(startsAt);
   }
 
   setTournamentStatus(

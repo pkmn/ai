@@ -3,7 +3,13 @@ import * as path from 'path';
 
 import type * as db from '../db';
 import {Renderer, header, injectLiveBanner} from '../static/build';
-import {escapeHtml, renderTemplate, root} from '../static/util';
+import {
+  escapeHtml,
+  formatUtcDate,
+  formatUtcDateTime,
+  renderTemplate,
+  root,
+} from '../static/util';
 
 import * as arena from './arena';
 import {
@@ -605,9 +611,16 @@ export function renderArenaTournamentsSummaryHtml(opts: {
         leaderSuffix = ` · Leader: ${render.formatAgentLink(leader.agentName, lHref, true)} ` +
           `<code>${escapeHtml(leader.version)}</code>`;
       }
+      let timingSuffix = '';
+      if (t.status === 'scheduled') {
+        const closesAt = db.getTournamentClosesAt(t.startsAt);
+        timingSuffix =
+          ` · starts ${escapeHtml(formatUtcDateTime(t.startsAt))}` +
+          ` (entries close ${escapeHtml(formatUtcDateTime(closesAt))})`;
+      }
       return `<li>${badge} <a href="${escapeHtml(tourHref)}" class="subtle">` +
         `<strong>${escapeHtml(t.name)}</strong></a> · <tt>${escapeHtml(fmtTitle)}</tt> ` +
-        `(${entrants.length} entrants)${leaderSuffix}</li>`;
+        `(${entrants.length} entrants)${leaderSuffix}${timingSuffix}</li>`;
     }).join('\n    ');
     parts.push(`<ul class="tour-ongoing">\n    ${items}\n  </ul>`);
   }
@@ -727,10 +740,20 @@ export function renderTournamentPage(opts: {
   const inc = isDoubles ? 25 : 10;
   const sfSuffix = hasSf ? ' + 100-game Superfinal' : '';
 
+  const closesAt = db.getTournamentClosesAt(t.startsAt);
+  const scheduleLine = t.status === 'scheduled'
+    ? `Starts ${escapeHtml(formatUtcDateTime(t.startsAt))} · ` +
+      `Entries close ${escapeHtml(formatUtcDateTime(closesAt))}<br>`
+    : t.completedAt
+      ? `Started ${escapeHtml(formatUtcDate(t.startsAt))} · ` +
+        `Completed ${escapeHtml(formatUtcDate(t.completedAt))}<br>`
+      : `Started ${escapeHtml(formatUtcDateTime(t.startsAt))}<br>`;
+
   const metaHtml =
     `<p class="meta"><tt>${escapeHtml(fmtTitle)}</tt> · ${n} Entrants · ` +
     `<tt>G=${t.gamesPerMatchup}</tt> Double Round-Robin ` +
     `(${rrTotal.toLocaleString('en-US')} games)${sfSuffix}<br>` +
+    `${scheduleLine}` +
     `${escapeHtml(t.hardware)} · <tt>150s</tt> bank (<tt>+${inc}s/turn</tt>)</p>`;
 
   const standingsHtml = renderTournamentStandingsHtml({

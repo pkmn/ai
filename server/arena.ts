@@ -216,6 +216,7 @@ export interface TournamentDocument {
   parallelTables: number;
   hardware: string;
   startsAt: number;
+  closesAt: number;
   completedAt?: number;
   completedGames: number;
   archiveHref?: string;
@@ -373,6 +374,7 @@ export function buildTournamentDocument(
     parallelTables: tournament.parallelTables,
     hardware: tournament.hardware,
     startsAt: tournament.startsAt,
+    closesAt: db.getTournamentClosesAt(tournament.startsAt),
     completedAt: tournament.completedAt,
     completedGames,
     archiveHref: archive?.href,

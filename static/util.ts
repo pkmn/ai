@@ -101,3 +101,12 @@ export const renderTemplate = (
   template
     .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => String(vars[k] ?? ''))
     .replace(/\{\{(\w+)\}\}/g, (_, k: string) => escapeHtml(String(vars[k] ?? '')));
+
+export function formatUtcDate(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
+}
+
+export function formatUtcDateTime(epochSeconds: number): string {
+  const iso = new Date(epochSeconds * 1000).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}

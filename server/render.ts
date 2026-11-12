@@ -158,6 +158,7 @@ export interface ArenaTournamentSummary {
   format: string;
   status: db.TournamentStatus;
   startsAt: number;
+  closesAt: number;
   completedAt?: number;
   href: string;
   archiveHref?: string;
@@ -1425,6 +1426,7 @@ export function renderArenaAndLadderArtifacts(opts: {
       format: t.format,
       status: t.status,
       startsAt: t.startsAt,
+      closesAt: db.getTournamentClosesAt(t.startsAt),
       completedAt: t.completedAt,
       href: `/arena/tournaments/${encodeURIComponent(t.id)}/`,
       archiveHref: archive?.href,

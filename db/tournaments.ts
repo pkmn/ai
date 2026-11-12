@@ -6,6 +6,13 @@ import {TransactionRunner} from './index';
 
 export type TournamentStatus = 'scheduled' | 'running' | 'completed';
 
+// Entries close at 00:00:00 UTC strictly before `startsAt`
+// (e.g. 2026-11-15T18:00:00Z -> 2026-11-15T00:00:00Z;
+//       2026-11-15T00:00:00Z -> 2026-11-14T00:00:00Z).
+export function getTournamentClosesAt(startsAt: number): number {
+  return Math.floor((startsAt - 1) / 86400) * 86400;
+}
+
 export interface TournamentRow {
   id: string;
   name: string;

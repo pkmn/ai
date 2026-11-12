@@ -9,7 +9,14 @@ import polka from 'polka';
 import {LADDERS_FILE, SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
 import type * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
-import {VERSION_RE, escapeHtml, renderTemplate, root} from '../static/util';
+import {
+  VERSION_RE,
+  escapeHtml,
+  formatUtcDate,
+  formatUtcDateTime,
+  renderTemplate,
+  root,
+} from '../static/util';
 
 import {Auth} from './auth';
 import {validateCompetitorTeams} from './teams';
@@ -347,6 +354,7 @@ export function renderAccountPage(opts: {
   versions: db.VersionHistoryView[];
   allLadders: db.LadderRow[];
   liveTournament?: {id: string; name: string};
+  now?: number;
 }): string {
   const {
     developer,
@@ -359,6 +367,7 @@ export function renderAccountPage(opts: {
     versions,
     allLadders,
     liveTournament,
+    now = Math.floor(Date.now() / 1000),
   } = opts;
 
   const linkHref = '/auth/discord?intent=link&amp;return_to=%2Faccount%2F';
@@ -410,18 +419,23 @@ export function renderAccountPage(opts: {
     const tourneyChecksHtml = tournamentStatuses.map(t => {
       const val = escapeHtml(t.tournamentId);
       const name = escapeHtml(t.name);
+      const scheduleHint =
+        `starts ${formatUtcDate(t.startsAt)} · entries close ${formatUtcDateTime(t.closesAt)}`;
       if (t.canSubmit) {
         const checked = !status.canSubmit && tournamentStatuses.length === 1 ? ' checked' : '';
         const title =
-          'OCI image required (linux/arm64); bundle teams inside your container via /utm';
-        return `<label title="${title}"><input type="checkbox" name="tournaments" ` +
-          `value="${val}"${checked}> ${name} <span class="muted">(OCI)</span></label>`;
+          `OCI image required (linux/arm64); ${scheduleHint}`;
+        return `<label title="${escapeHtml(title)}"><input type="checkbox" name="tournaments" ` +
+          `value="${val}"${checked}> ${name} <span class="muted">(OCI · ` +
+          `closes ${escapeHtml(formatUtcDateTime(t.closesAt))})</span></label>`;
       }
       const badge = t.enteredVersion
         ? `entered: ${escapeHtml(t.enteredVersion)}`
         : t.pendingVersion
           ? `pending: ${escapeHtml(t.pendingVersion)}`
-          : 'closed';
+          : now >= t.closesAt
+            ? 'entries closed'
+            : 'closed';
       const titleAttr = t.reason ? ` title="${escapeHtml(t.reason)}"` : '';
       return `<label class="upcoming"${titleAttr}><input type="checkbox" name="tournaments" ` +
         `value="${val}" disabled> ${name} <span class="muted">(${badge})</span></label>`;
@@ -710,7 +724,7 @@ export function register(app: polka.Polka, options: Options) {
 
     const now = getNow();
     const status = db.computeAgentSubmissionStatus(agent.id, now);
-    const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id);
+    const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id, now);
     const currentLadders = db.getCurrentLadders();
     const needsTeamsLadders = currentLadders.filter(
       l => l.status === 'active' &&
@@ -765,6 +779,7 @@ export function register(app: polka.Polka, options: Options) {
       versions,
       allLadders: db.getLadders(),
       liveTournament,
+      now,
     });
     sendHtml(res, 200, html);
   };
@@ -789,9 +804,8 @@ export function register(app: polka.Polka, options: Options) {
 
     const now = getNow();
     const eligibility = db.computeAgentSubmissionStatus(agent.id, now);
-    const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id);
-    const canSubmitTourney = tournamentStatuses.some(t => t.canSubmit);
-    if (!eligibility.canSubmit && !canSubmitTourney) {
+    const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id, now);
+    if (!eligibility.canSubmit && !tournamentStatuses.length) {
       const code = eligibility.label === 'Pending' || eligibility.label === 'Qualified'
         ? 403
         : 429;
@@ -878,7 +892,8 @@ export function register(app: polka.Polka, options: Options) {
         return;
       }
       if (!tStatus.canSubmit) {
-        sendJson(res, 409, {error: tStatus.reason ?? `Cannot submit to "${tStatus.name}".`});
+        const code = now >= tStatus.closesAt ? 400 : 409;
+        sendJson(res, code, {error: tStatus.reason ?? `Cannot submit to "${tStatus.name}".`});
         return;
       }
       if (!selectedTournamentIds.includes(tStatus.tournamentId)) {

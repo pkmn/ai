@@ -1,6 +1,6 @@
 import {DatabaseSync} from 'node:sqlite';
 
-import {validateVersion} from '../static/util';
+import {formatUtcDateTime, validateVersion} from '../static/util';
 
 import {ensureAgentLadderStats} from './agent-ladder-stats';
 import * as teams from './agent-ladder-teams';
@@ -8,7 +8,11 @@ import {AgentRow, getAgentById} from './agents';
 import * as entries from './ladder-entries';
 import {archiveLadderInPlace, canSettleLadder, getActiveLadders, getLadder} from './ladders';
 import {upsertTournamentEntrant} from './tournament-entrants';
-import {getScheduledTournaments, getTournament} from './tournaments';
+import {
+  getScheduledTournaments,
+  getTournament,
+  getTournamentClosesAt,
+} from './tournaments';
 
 import {TransactionRunner} from './index';
 
@@ -59,6 +63,7 @@ export interface TournamentSubmissionStatus {
   name: string;
   format: string;
   startsAt: number;
+  closesAt: number;
   canSubmit: boolean;
   enteredVersion?: string;
   pendingVersion?: string;
@@ -269,7 +274,8 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
 // ladder Challengers.
 export function computeAgentTournamentStatuses(
   db: DatabaseSync,
-  agentId: number
+  agentId: number,
+  now = Math.floor(Date.now() / 1000)
 ): TournamentSubmissionStatus[] {
   const scheduled = getScheduledTournaments(db);
   if (!scheduled.length) return [];
@@ -281,6 +287,7 @@ export function computeAgentTournamentStatuses(
       name: t.name,
       format: t.format,
       startsAt: t.startsAt,
+      closesAt: getTournamentClosesAt(t.startsAt),
       canSubmit: false,
       reason: 'Project is disabled.',
     }));
@@ -316,25 +323,41 @@ export function computeAgentTournamentStatuses(
   }
 
   return scheduled.map(t => {
+    const closesAt = getTournamentClosesAt(t.startsAt);
     const enteredVersion = enteredByTourney.get(t.id);
+    const pendingVersion = pendingByTourney.get(t.id);
+    if (now >= closesAt) {
+      return {
+        tournamentId: t.id,
+        name: t.name,
+        format: t.format,
+        startsAt: t.startsAt,
+        closesAt,
+        canSubmit: false,
+        enteredVersion,
+        pendingVersion: enteredVersion ? undefined : pendingVersion,
+        reason: `Entries for "${t.name}" closed at ${formatUtcDateTime(closesAt)}.`,
+      };
+    }
     if (enteredVersion) {
       return {
         tournamentId: t.id,
         name: t.name,
         format: t.format,
         startsAt: t.startsAt,
+        closesAt,
         canSubmit: false,
         enteredVersion,
         reason: `Already entered with version ${enteredVersion}.`,
       };
     }
-    const pendingVersion = pendingByTourney.get(t.id);
     if (pendingVersion) {
       return {
         tournamentId: t.id,
         name: t.name,
         format: t.format,
         startsAt: t.startsAt,
+        closesAt,
         canSubmit: false,
         pendingVersion,
         reason: `Version ${pendingVersion} is awaiting smoke testing for this tournament.`,
@@ -345,6 +368,7 @@ export function computeAgentTournamentStatuses(
       name: t.name,
       format: t.format,
       startsAt: t.startsAt,
+      closesAt,
       canSubmit: true,
     };
   });
@@ -504,7 +528,7 @@ export function createSubmission(
         );
       }
       const tourneyStatuses = new Map(
-        computeAgentTournamentStatuses(db, input.agentId).map(s => [s.tournamentId, s])
+        computeAgentTournamentStatuses(db, input.agentId, now).map(s => [s.tournamentId, s])
       );
       for (const tid of tournamentIds) {
         const ts = tourneyStatuses.get(tid);
@@ -515,9 +539,10 @@ export function createSubmission(
           );
         }
         if (!ts.canSubmit) {
+          const code = now >= ts.closesAt ? 400 : 409;
           throw Object.assign(
             new Error(ts.reason ?? `Already entered in ${ts.name}.`),
-            {status: 409}
+            {status: code}
           );
         }
       }

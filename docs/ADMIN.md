@@ -365,11 +365,14 @@ teams and `.log` replays).
 
 - **Naming & URLs:** Titles follow `Tournament #<N>: <Format / Ruleset>` with sequential numeric IDs
   (`1`, `2`, `3`, …) served at `/arena/tournaments/<id>/`.
-- **Submission Gating:** Both `Pending` (registered) and `qualified` (Approved) projects may
-  submit at most 1 OCI container entry (`package: 'oci'`) per `scheduled` tournament on `/account/`,
-  completely independent of ladder qualification, the 14-day ladder cooldown, and unsettled
-  Challenger gates. Only Approved (`qualified: true`) projects can become `Eligible` for continuous
-  ladders. Failed smoke tests may be resubmitted immediately until registration closes.
+- **Submission Gating & Cutoff:** Both `Pending` (registered) and `qualified` (Approved)
+  projects may submit at most 1 OCI container entry (`package: 'oci'`) per `scheduled` tournament
+  on `/account/`, completely independent of ladder qualification, the 14-day ladder cooldown, and
+  unsettled Challenger gates. Only Approved (`qualified: true`) projects can become `Eligible` for
+  continuous ladders. Failed smoke tests may be resubmitted immediately until registration closes.
+  Entries close automatically at **00:00:00 UTC strictly before `startsAt`** (so e.g. a tournament
+  starting `2026-12-12T18:00:00Z` closes entries at `2026-12-12 00:00 UTC`, and one starting
+  `2026-12-12T00:00:00Z` closes at `2026-12-11 00:00 UTC`).
 
 ### Step 7.1: Open a Tournament for Submissions (`scheduled`)
 

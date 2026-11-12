@@ -877,6 +877,77 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         }),
       });
       expect(t4WhileOnCooldown.status).toBe(201);
+
+      // Tournament #5 starting 18:00 UTC tomorrow closes at 00:00 UTC strictly before start
+      const t5ClosesAt = (Math.floor(currentNow / 86400) + 1) * 86400;
+      const t5StartsAt = t5ClosesAt + 18 * 3600;
+      db.upsertTournament({
+        id: '5',
+        name: 'Tournament #5: Midnight Cutoff Test',
+        format: 'gen9ou',
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot',
+        status: 'scheduled',
+        startsAt: t5StartsAt,
+      });
+
+      // 1 second before midnight UTC cutoff -> allowed (checkbox open + POST 201)
+      currentNow = t5ClosesAt - 1;
+      const beforeCutoffJson = await (await realFetch(`${baseUrl}/account.json`, {
+        headers: {Cookie: cookieFor('pmariglia')},
+      })).json() as {
+        tournamentStatuses: Array<{
+          tournamentId: string;
+          closesAt: number;
+          canSubmit: boolean;
+        }>;
+      };
+      const t5Before = beforeCutoffJson.tournamentStatuses.find(t => t.tournamentId === '5');
+      expect(t5Before?.closesAt).toBe(t5ClosesAt);
+      expect(t5Before?.canSubmit).toBe(true);
+
+      const beforeCutoffSub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pmariglia'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.0-t5',
+          package: 'oci',
+          url: 'ghcr.io/pmariglia/foul-play:1.0.0-t5',
+          sha256: SHA_A,
+          tournaments: ['5'],
+        }),
+      });
+      expect(beforeCutoffSub.status).toBe(201);
+
+      // At exact midnight UTC cutoff -> closed even while status === 'scheduled' & now < startsAt
+      currentNow = t5ClosesAt;
+      const afterCutoffHtml = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(afterCutoffHtml).toContain('(entries closed)');
+
+      const afterCutoffSub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.1.0-t5',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:1.1.0-t5',
+          sha256: SHA_B,
+          tournaments: ['5'],
+        }),
+      });
+      expect(afterCutoffSub.status).toBe(400);
+      expect((await afterCutoffSub.json() as {error: string}).error).toContain('closed at');
     });
 
   test('reassigns developer A -> B -> A with wiki ACL & comment preservation', async () => {
