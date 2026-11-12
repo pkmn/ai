@@ -1301,7 +1301,7 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
           .toBe(404);
 
         const dummyArchive = path.join(tmpDir, 'source-archive.7z');
-        fs.writeFileSync(dummyArchive, 'mock-7z-full-battle-logs-with-policy-chat', 'utf8');
+        fs.writeFileSync(dummyArchive, 'mock-7z-full-battle-logs', 'utf8');
 
         await expect(runPkmnCli(
           ['publish-ladder-archive', 'gen9championsvgc2026regmc', dummyArchive],

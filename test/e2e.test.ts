@@ -612,7 +612,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
             path.join(viewPublicDir, 'arena', 'tournaments', '1', 'spring26-sf1.log'),
             'utf8'
           );
-          expect(sf1Log).toContain('|c|☆');
+          expect(sf1Log).toContain('|win|');
 
           for (const stub of ['arena', 'projects', 'account', 'chat']) {
             const stubDir = path.join(viewPublicDir, stub);

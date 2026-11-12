@@ -1402,7 +1402,7 @@ The Arena coordinator runs a single-threaded loop on the M6 Mac mini's 2 Efficie
 2. **Sync Outbox & Pending Submissions**: Flush any unsent match results from the local `outbox` table to `pkmn.ai`, then call `GET /api/arena/pending-submissions`.
 3. **Ingest New Submissions & Format-Scoped Smoke Tests**:
    - For each pending submission, download into `/Volumes/Staging`, verify SHA-256, copy the raw archive to `/Volumes/Archive/bots/<slug>/<ver>/`, unpack/load onto the internal SSD (`/opt/arena/bots/<slug>-<id>/` or Podman VM `arena`), and store any accompanying first-time VGC 20-team list into `bot_ladder_teams`.
-   - **Smoke Test Through Turn 1 in Subscribed Ladders Only (Including Policy Map Verification)**: Because an agent may only support specific generations or formats, run an offline smoke test (`60s` budget to allow first-run CoreML/Metal shader JIT) against a built-in dummy opponent in **every ladder listed in the submission's `ladders` array and nothing else** (or the tournament format for tournament-only OCI entries). A smoke test passes only when the agent unpacks cleanly, plays **all the way through Turn 1** (including both Team Preview `team ...` and Turn 1 `|turn|1` $\rightarrow$ `|turn|2` or battle end in Team Preview formats like `SV` and `VGC`), **and emits a valid plain-text `<policy_json>` probability distribution in `[0, 1]` summing to `1.0 ± 0.001` before every decision `|request|`** (verified via `validatePolicyLog` in `server/policy.ts`; see `PROTOCOL.md`).
+   - **Smoke Test Through Turn 1 in Subscribed Ladders Only**: Because an agent may only support specific generations or formats, run an offline smoke test (`60s` budget to allow first-run CoreML/Metal shader JIT) against a built-in dummy opponent in **every ladder listed in the submission's `ladders` array and nothing else** (or the tournament format for tournament-only OCI entries). A smoke test passes only when the agent unpacks cleanly and plays **all the way through Turn 1** (including both Team Preview `team ...` and Turn 1 `|turn|1` $\rightarrow$ `|turn|2` or battle end in Team Preview formats like `SV` and `VGC`).
    - **Retire Eligible Weaker Version on New Submission**: For each ladder $L$ in the new submission's `ladders`, if the bot already has 2 active versions on ladder $L$ (which are guaranteed to be settled because `pkmn.ai` enforces that both active versions are settled before accepting a 3rd submission), mark the lower-rated of those two versions as `retired` on ladder $L$ (leaving the strongest version + the latest submission). Note that `is_anchor` is an orthogonal boolean flag on `ladder_entries`: if an anchor `v1` is retired because `v2` and `v3` are stronger, its historical `pair_aggregates` remain in the batch Davidson Hessian to pin `1500` Elo without keeping `v1` in active matchmaking. If a retired version's active ladder count across all ladders reaches `0`, remove its unpacked directory from `/opt/arena/bots/<slug>-<id>/` (or `podman rmi` its OCI image) while keeping its cold archive on `/Volumes/Archive/bots/<slug>/<ver>/` and `gs://pkmn-arena/bots/<slug>/<ver>/`.
    - Report `POST /api/arena/submission-status` (`passed` or `failed_smoke_test`, along with smoke test duration, turn latency, and peak RAM).
 4. **Select Match**: Run `selectNextArenaMatch` locally across all ladders in `status IN ('active', 'settling')` that meet their minimum active project threshold (`min_bots >= 2` for `RBY`/`ADV`/`SV`/`RAND`; `min_bots >= 4` for `VGC`) to pick ladder $L$ and bot pair $(A, B)$.
@@ -1423,7 +1423,7 @@ The Arena coordinator runs a single-threaded loop on the M6 Mac mini's 2 Efficie
 8. **Rate, Check Settlement & Publish**:
    - Mark the `matches` row `status = 'completed'`, update `pair_aggregates`, and re-solve Davidson MAP ratings for ladder $L$ in local SQLite.
    - Update `is_settled = 1` on any version on ladder $L$ that now satisfies $\text{SE}(R) \le 30\text{ Elo}$ and $\ge 25$ matches. *(Note: Both the Champion and Challenger remain active and continue playing on ladder $L$ in the steady state; settlement simply marks the weaker version as **eligible to be retired** the next time the developer submits a new version. If ladder $L$ is in `status = 'settling'` and all active versions on $L$ are now settled, transition ladder $L$ to `status = 'archived'` and retire its versions.)*
-   - `POST /api/arena/match-complete` to `pkmn.ai` (or save to `outbox` if `pkmn.ai` is unreachable). When `match-complete` returns `{ archivedLadder: true }` for a competitor-pool (`team === 'pools'`) ladder, pack all completed roomlogs for `<ladder_id>` (rewriting `"Bot A"` / `"Bot B"` to real `<Agent Name> (<version>)` headers and preserving full `p1team`/`p2team` packed rosters + `|c|` policy chat lines) into `<ladder_id>-logs.7z` and upload via `PUT /api/arena/ladders/<ladder_id>/archive`.
+   - `POST /api/arena/match-complete` to `pkmn.ai` (or save to `outbox` if `pkmn.ai` is unreachable). When `match-complete` returns `{ archivedLadder: true }` for a competitor-pool (`team === 'pools'`) ladder, pack all completed roomlogs for `<ladder_id>` (rewriting `"Bot A"` / `"Bot B"` to real `<Agent Name> (<version>)` headers and preserving full `p1team`/`p2team` packed rosters) into `<ladder_id>-logs.7z` and upload via `PUT /api/arena/ladders/<ladder_id>/archive`.
 
 ### Bot `stdin` / `stdout` Protocol & Assigned Teams (`|utm|`)
 
@@ -1448,31 +1448,14 @@ Bots communicate strictly over `stdin` and `stdout` using Pokémon Showdown's pl
   - **Anonymous Opponent Identities in Blind-Pair Matches (`"Bot A"` and `"Bot B"`)**: In all blind-pair matches (both on the continuous CCRL Arena ladders and in Blind-Pair Tournament Mode), bots only ever see `|player|p1|Bot A||`, `|player|p2|Bot B||`, and `"name":"Bot A"` / `"name":"Bot B"` inside `|request|` JSON (`request.side.name`). Hiding opponent identities during blind-pair gameplay prevents bots from hardcoding opponent-specific counter-strategies or adjusting their risk/aggression based on an opponent's known identity or rating. *(By contrast, in Bring-Your-Own-Team (`BYOT`) Live Tournaments in Section 13.4, bots see their opponent's real display name just like in real-life tournament play.)*
   - In `@pkmn/sim`'s `getPlayerStreams(stream)`, `streams.p1.write(choice)` automatically rewrites every line to `>p1 <choice>`, which routes strictly to `battle.choose('p1', choice)`. A bot's `stdout` can never invoke `/utm`, `>player`, `>forcewin`, or `>eval`.
 
-### Per-Turn Policy Logging (`<policy_json>`), Opponent Chat Elision & Choices
-- **Mandatory Per-Decision Policy Distribution (Unprefixed `<policy_json>` Chat Line, `PROTOCOL.md`)**:
-  - Just like Pokémon Showdown's room protocol where unprefixed text is chat, on **every non-`wait` `|request|<json>`** (`teamPreview`, `active`, and `forceSwitch`), before emitting its choice line, each agent **must** emit a single-line JSON object on `stdout` (with **no** `/say` command prefix) mapping **every legal canonical choice available in `|request|`** to a finite **probability in `[0, 1]`** summing to **`1.0` (`±0.001`)**:
-    ```text
-    {"move 1":0.625,"move 2":0.25,"move 3":0,"move 4":0,"switch 2":0.125,"switch 3":0}
-    move 1
-    ```
-  - **Why this is required**:
-    1. **Pokémon Showdown Moderation & Anti-Cheating Analysis**: Saving every Arena agent's full action distribution on every turn allows Smogon / Pokémon Showdown moderators to evaluate human tournament and ladder replays against the exact per-position posteriors of top AI agents.
-    2. **Post-Retirement & Post-Tournament Debugging**: Once a `pools` seasonal ladder retires (`status = 'archived'`) or a tournament finishes and full logs are published, authors can inspect exact `|c|` policy distributions alongside battle events.
-  - **Policy JSON Specification (`server/policy.ts`, `validatePolicyLog`, `PROTOCOL.md`)**:
-    - Flat JSON object `Record<CanonicalChoice, number>` where every value is a finite float in `[0, 1]` and the sum across all legal choices equals **`1.0` (`±1e-3` tolerance)**; deterministic/greedy agents simply log `1` on their selected choice and `0` on all other legal choices.
-    - **Canonical choice keys** follow `@pkmn/sim` 1-based slot syntax derived strictly from the player's own `|request|` JSON:
-      - **Singles `active`**: `"move 1"`..`"move 4"` for non-disabled moves with `pp > 0`, `"move <1..4> <mega|megax|megay|ultra|zmove|dynamax|terastallize>"` when a gimmick is available, and `"switch 2"`..`"switch 6"` for unfainted bench slots when `!active[0].trapped`.
-      - **Doubles / VGC `active`**: `"<slot1>, <slot2>"` joint choices (using `+1`/`+2`/`-1`/`-2` targets if and only if `CHOOSABLE_TARGETS = {'normal','any','adjacentAlly','adjacentAllyOrSelf','adjacentFoe'}`, `pass` for fainted/`commanding` slots, and forbidding duplicate bench switches `switch 3, switch 3` or double gimmicks in the same turn).
-      - **`forceSwitch`**: `"switch <slot>"` in Singles; `"switch <a>, pass"`, `"pass, switch <b>"`, or `"switch <a>, switch <b>"` in Doubles (including `"switch <s>, pass"` / `"pass, switch <s>"` when both active slots fainted and only 1 healthy bench Pokémon remains).
-      - **`teamPreview`**: `"team 1"`..`"team N"` in Pick-All Singles (`SV`), or `"team <l1><l2><b1><b2>"` (`b1 < b2`) in Bring-6-Pick-4 Doubles (`VGC`).
-    - The action actually chosen on the following line must have strictly positive probability (`policy[chosen] > 0`), and `default` / `auto` is rejected in smoke testing.
-- **Complete Inter-Agent Chat & Covert-Channel Elision**:
-  - Plain-text chat lines (`parsed.kind === 'chat'`) are **never** forwarded into `@pkmn/sim` (`>chat`) or to the opposing agent's `stdin`. Instead, the arbiter records `|c|☆<SideLabel>|<compactJson>` **exclusively inside `omniscientLog`** for archival storage.
-  - As defense-in-depth, `pumpSide` strips every `|c|`, `|c:|`, `|chat|`, `|raw|`, `|html|`, `|uhtml|`, `|debug|`, and room join/rename (`|j|`, `|l|`, `|n|`) line (`shouldElideFromPlayerStream` in `server/policy.ts`) before buffering `pendingLines` for any agent's `stdin` (and live tournament spectator broadcasts likewise strip `|c|` until the game concludes). Together with `"Bot A"` / `"Bot B"` blind-pair anonymization and `Team.canonicalize` nickname stripping, **agents have zero visible channel to communicate or signal each other during a battle**.
-- **Valid Choices**: On every active `|request|<json>` (where `request.wait` is falsy), the agent receives the queued battle log lines, `|request|<json>`, and `|inactive|Time left: X sec this turn | Y sec total`, emits `<policy_json>\n`, and writes one newline-terminated choice to `stdout` (e.g., `move 1`, `move 2 terastallize`, `switch 4`, `team 2`, or Doubles `move 1 +2, switch 3`).
+### Opponent Chat Elision & Choices
+- **Complete Inter-Agent Chat & Covert-Channel Elision (`server/protocol.ts`, `PROTOCOL.md`)**:
+  - Plain-text chat or non-choice lines (`parsed.kind === 'chat'`) are discarded and **never** forwarded into `@pkmn/sim` (`>chat`) or to the opposing agent's `stdin`.
+  - As defense-in-depth, `pumpSide` strips every `|c|`, `|c:|`, `|chat|`, `|raw|`, `|html|`, `|uhtml|`, `|debug|`, and room join/rename (`|j|`, `|l|`, `|n|`) line (`shouldElideFromPlayerStream` in `server/protocol.ts`) before buffering `pendingLines` for any agent's `stdin` (and live tournament spectator broadcasts likewise strip `|c|` until the game concludes). Together with `"Bot A"` / `"Bot B"` blind-pair anonymization and `Team.canonicalize` nickname stripping, **agents have zero visible channel to communicate or signal each other during a battle**.
+- **Valid Choices**: On every active `|request|<json>` (where `request.wait` is falsy), the agent receives the queued battle log lines, `|request|<json>`, and `|inactive|Time left: X sec this turn | Y sec total`, and writes one newline-terminated choice to `stdout` (e.g., `move 1`, `move 2 terastallize`, `switch 4`, `team 2`, or Doubles `move 1 +2, switch 3`).
 - **Invalid Choice Cap (3 Retries)**:
-  - If `@pkmn/sim` rejects the choice (or in smoke-test mode, if `validatePolicyLog` rejects a missing/malformed `<policy_json>`), the arbiter emits `|error|[Invalid choice] ...` on that player's `stdin` while keeping its turn clock ticking.
-  - After **3 consecutive invalid choices** on the same request (or immediately on policy validation failure during smoke testing), the agent forfeits (`>forcewin <otherSide>`, recorded as `invalid_choice_3x`).
+  - If `@pkmn/sim` rejects the choice, the arbiter emits `|error|[Invalid choice] ...` on that player's `stdin` while keeping its turn clock ticking.
+  - After **3 consecutive invalid choices** on the same request, the agent forfeits (`>forcewin <otherSide>`, recorded as `invalid_choice_3x`).
 - **Game 2 Continuation**: If an agent crashes, OOMs, times out, or hits 3 invalid choices in Game 1, the Arena still wipes `/tmp` and RAM and runs Game 2 from a clean slate.
 - **Auto-Quarantine**: If a version crashes, OOMs, or times out in **$> 20\%$ of games** (over $\ge 10$ games) or **5 consecutive matches**, the Arena sets its status to `quarantined`, stops scheduling it, and notifies the author and staff via Discord.
 
@@ -1494,11 +1477,9 @@ import { performance } from 'perf_hooks';
 import * as readline from 'readline';
 import { BattleStream, getPlayerStreams, Teams, type PRNGSeed } from '@pkmn/sim';
 import {
-  formatOmniscientPolicyChat,
   parseAgentStdoutLine,
   shouldElideFromPlayerStream,
-  validatePolicyLog,
-} from '../../server/policy';
+} from '../../server/protocol';
 
 // Logical player sides in a two-player Pokémon Showdown battle.
 export type SideID = 'p1' | 'p2';
@@ -1647,7 +1628,7 @@ export class TimeSlicedArenaGame {
       turnTimesMs: [],
     };
 
-    // Read `/say <policy_json>` and move choice lines from stdout while `acceptingOutput` is true
+    // Read move choice lines from stdout while `acceptingOutput` is true
     // (buffering consecutive lines written in a single syscall into `lineQueue`, while discarding
     // unsolicited output outside the bot's active turn).
     const rl = readline.createInterface({ input: proc.stdout });
@@ -1879,25 +1860,17 @@ export class TimeSlicedArenaGame {
               bot.pendingLines = [];
               bot.proc.stdin.write(outLines);
 
-              // Read unprefixed `<policy_json>` chat line(s) followed by the decision choice line,
-              // charging wall-clock time across all stdout lines read for this attempt.
+              // Read the decision choice line (discarding plain chat/text lines so agents
+              // cannot message each other), charging wall-clock time across lines read.
               let choiceLine: string | null = null;
               let attemptElapsedMs = 0;
-              let chatCount = 0;
               while (true) {
                 const remMs = Math.max(0, budgetMs - attemptElapsedMs);
                 const { line, elapsedMs } = await this.waitForLine(bot, remMs);
                 attemptElapsedMs += elapsedMs;
                 if (line === null) break;
                 const parsed = parseAgentStdoutLine(line);
-                if (!parsed) continue;
-                if (parsed.kind === 'chat') {
-                  chatCount++;
-                  if (chatCount <= 4 && parsed.message.length <= 32768) {
-                    latestPolicyJson = parsed.message;
-                  }
-                  continue;
-                }
+                if (!parsed || parsed.kind === 'chat') continue;
                 choiceLine = parsed.choice;
                 break;
               }
@@ -1912,23 +1885,6 @@ export class TimeSlicedArenaGame {
                 break;
               }
 
-              // Validate the per-turn policy distribution (`validatePolicyLog`):
-              //   - In smoke tests (`requirePolicyForSides.has(side)`), a missing or invalid policy
-              //     map fails immediately with an actionable `|error|[Invalid choice]` diagnostic.
-              //   - In live matches, valid policy JSON (or raw chat annotation) is saved strictly
-              //     to `omniscientLog` (`|c|☆Bot A|...`) and NEVER sent to the opponent!
-              const policyCheck = validatePolicyLog(
-                bot.activeRequest,
-                latestPolicyJson,
-                choiceLine
-              );
-              if (!policyCheck.ok && this.requirePolicyForSides.has(side)) {
-                bot.pendingLines.push(`|error|[Invalid choice] ${policyCheck.error}`);
-                retries++;
-                if (retries >= 3) endReason = 'invalid_choice_3x';
-                continue;
-              }
-
               // Tentatively validate the bot's choice against @pkmn/sim's `battle.choose()`.
               const ok = rawStream.battle!.choose(side, choiceLine);
               await new Promise((r) => setImmediate(r));
@@ -1938,11 +1894,6 @@ export class TimeSlicedArenaGame {
                 // the second bot has also chosen its move for this turn.
                 rawStream.battle!.undoChoice(side);
                 bot.pendingLines = [];
-                if (policyCheck.ok && policyCheck.compactJson) {
-                  omniscientLog.push(formatOmniscientPolicyChat(sideLabel, policyCheck.compactJson));
-                } else if (latestPolicyJson) {
-                  omniscientLog.push(formatOmniscientPolicyChat(sideLabel, latestPolicyJson));
-                }
                 validChoice = choiceLine;
                 break;
               } else {
@@ -2850,18 +2801,8 @@ This section consolidates every technical requirement, protocol change, and runt
 
 ### 8. Format Subscription & Smoke Testing
 - When you submit a new version, the Arena runs an automatic offline smoke test (`60s` budget) playing **through the end of Turn 1** (including Team Preview + Turn 1 in `SV` and `VGC`) in **every ladder you checked** (`RBY`, `ADV`, `SV`, `RAND`, `VGC`) or scheduled tournament.
-- On every decision `|request|` during the smoke test, the verifier checks that your agent logged an unprefixed `<policy_json>` line covering every legal choice option with probabilities in `[0, 1]` summing to `1.0` (`±0.001`), zero illegal choices, and strictly positive probability (`> 0`) on the chosen move/switch/team order (`validatePolicyLog` in `server/policy.ts`).
 - Only select ladders your agent actually implements! If a Gen 1–only agent checks `SV`, it will fail the `SV` smoke test and the submission will be rejected (with your 14-day cooldown automatically refunded).
 - All formats use vanilla Pokémon Showdown rules as of Nov 9th, 2026 (`@pkmn/sim@0.11.0`).
-
-### 10. Per-Turn Policy Logging Specification (`PROTOCOL.md`)
-- Every non-`wait` `|request|` requires one plain unprefixed JSON line before the choice line (matching Pokémon Showdown chat, with no `/say` prefix):
-  ```text
-  {"move 1":0.7,"move 2":0.2,"move 3":0,"move 4":0,"switch 2":0.1,"switch 3":0}
-  move 1
-  ```
-- Deterministic / greedy agents that do not maintain a stochastic policy simply log `1` on their selected choice and `0` on all remaining legal choices.
-- All chat lines are stripped from opponent streams (`|c|` never reaches another agent) and saved exclusively into the archived omniscient battle log (`|c|☆<Agent>|<JSON>`) for post-retirement `pools` archives, tournament archives, and Pokémon Showdown anti-cheating moderation analysis.
 
 ### 9. Hardware Limits, Thread Caps & Native `mmap()` Weight Trick
 - **CPU Threads (`10`)**: The Arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`, and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads.
@@ -3306,7 +3247,7 @@ Whenever `POST /api/arena/match-complete`, `POST /api/arena/submission-status`, 
   - Nginx (`location ~ ^/(.+)\.json$ { try_files $uri /$1/index.json =404; }`) and `server/index.ts` resolve `/<path>.json` directly to `/<path>/index.json` without duplicating files on disk.
 - **Post-Tournament & Retired `pools` Ladder Log Archives**:
   - Completed tournaments expose `<id>-replays.7z` (uploaded via `PUT /api/arena/tournaments/:id/archive` or `pkmn publish-tournament-archive`) alongside per-game `.log` replays and `/arena/tournaments/<id>.json`.
-  - Continuous ladders with harvested pools (`RBY`, `ADV`, `SV`) or random teams (`RAND`) never publish raw battle logs or team sheets. Competitor-submitted seasonal pool ladders (`team === 'pools'`, e.g. `VGC`) keep all teams and logs secret while `upcoming`, `active`, or `settling`, and **publish full battle log archives (`<ladderId>-logs.7z`, including full unpacked/packed team sheets and per-turn `|c|` policy distributions) plus `teams.json` at `/arena/ladders/<ladderId>/` strictly after transitioning to `status = 'archived'`** (uploaded via `PUT /api/arena/ladders/:id/archive` or `pkmn publish-ladder-archive`).
+  - Continuous ladders with harvested pools (`RBY`, `ADV`, `SV`) or random teams (`RAND`) never publish raw battle logs or team sheets. Competitor-submitted seasonal pool ladders (`team === 'pools'`, e.g. `VGC`) keep all teams and logs secret while `upcoming`, `active`, or `settling`, and **publish full battle log archives (`<ladderId>-logs.7z`, including full unpacked/packed team sheets) plus `teams.json` at `/arena/ladders/<ladderId>/` strictly after transitioning to `status = 'archived'`** (uploaded via `PUT /api/arena/ladders/:id/archive` or `pkmn publish-ladder-archive`).
 
 ### Adapting Bo1 Game Statistics to 2-Game Blind-Pair (`Bo2`) Matches
 
@@ -3755,10 +3696,8 @@ You can also run the full coordinator + `@pkmn/sim` loop locally on any macOS or
    mkdir -p /tmp/arena-dev/dummy-bot
    cat << 'EOF' > /tmp/arena-dev/dummy-bot/run
    #!/usr/bin/env node
-   // Minimal legal Showdown stdio agent that parses |utm|, logs a uniform [0, 1] policy map
-   // across all legal choices via server/policy, and picks the first legal action.
+   // Minimal legal Showdown stdio agent that parses |utm| and responds with a default choice.
    const readline = require('readline');
-   const { enumerateRequestChoices } = require('/Users/kjs/Code/src/github.com/pkmn/ai/build/server/policy');
    const rl = readline.createInterface({ input: process.stdin });
    rl.on('line', (line) => {
      if (line.startsWith('|utm|')) {
@@ -3769,11 +3708,8 @@ You can also run the full coordinator + `@pkmn/sim` loop locally on any macOS or
        if (!reqStr) return;
        const req = JSON.parse(reqStr);
        if (req.wait) return;
-       const choices = enumerateRequestChoices(req).core;
-       if (!choices.length) return;
-       const prob = 1 / choices.length;
-       const policy = Object.fromEntries(choices.map((c) => [c, prob]));
-       process.stdout.write(`${JSON.stringify(policy)}\n${choices[0]}\n`);
+       const choice = req.teamPreview ? 'team 1234' : 'default';
+       process.stdout.write(`${choice}\n`);
      }
    });
    EOF
@@ -4192,11 +4128,9 @@ import * as readline from 'readline';
 import { BattleStream, getPlayerStreams, Teams, TeamValidator, type PRNGSeed } from '@pkmn/sim';
 import type { SideID, EndReason, GameTelemetry } from '../../arena/src/arbiter';
 import {
-  formatOmniscientPolicyChat,
   parseAgentStdoutLine,
   shouldElideFromPlayerStream,
-  validatePolicyLog,
-} from '../../server/policy';
+} from '../../server/protocol';
 
 export type TourneyEndReason = EndReason | 'spot_preempted';
 
@@ -4292,8 +4226,7 @@ export class ConcurrentTournamentGame {
     };
 
     // Choice cancelling is disabled even while pondering: discard unsolicited stdout lines
-    // emitted while no request is actively awaiting output from this agent, while buffering
-    // consecutive lines (`<policy_json>\n<choice>\n`) emitted during an active turn.
+    // emitted while no request is actively awaiting output from this agent.
     const rlOut = readline.createInterface({ input: proc.stdout });
     rlOut.on('line', (raw) => {
       const line = raw.trim();
@@ -4410,7 +4343,7 @@ export class ConcurrentTournamentGame {
   private async collectSideChoice(
     side: SideID,
     rawStream: BattleStream,
-  ): Promise<{ side: SideID; choice: string | null; policyChatLine?: string; reason?: TourneyEndReason }> {
+  ): Promise<{ side: SideID; choice: string | null; reason?: TourneyEndReason }> {
     const bot = this.bots[side];
     let retries = 0;
 
@@ -4436,7 +4369,6 @@ export class ConcurrentTournamentGame {
       bot.acceptingOutput = true;
       bot.proc.stdin.write(outLines);
 
-      let latestPolicyPayload: string | undefined;
       let choice: string | null = null;
       let totalElapsedMs = 0;
 
@@ -4449,11 +4381,7 @@ export class ConcurrentTournamentGame {
           break;
         }
         const parsed = parseAgentStdoutLine(line);
-        if (!parsed) continue;
-        if (parsed.kind === 'chat') {
-          latestPolicyPayload = parsed.message;
-          continue;
-        }
+        if (!parsed || parsed.kind === 'chat') continue;
         choice = parsed.choice;
         break;
       }
@@ -4478,15 +4406,7 @@ export class ConcurrentTournamentGame {
       if (ok) {
         rawStream.battle!.undoChoice(side);
         bot.pendingLines = [];
-        let policyChatLine: string | undefined;
-        if (latestPolicyPayload !== undefined) {
-          const check = validatePolicyLog(bot.activeRequest, latestPolicyPayload, choice);
-          policyChatLine = formatOmniscientPolicyChat(
-            bot.spec.displayName,
-            check.ok && check.compactJson ? check.compactJson : latestPolicyPayload,
-          );
-        }
-        return { side, choice, policyChatLine };
+        return { side, choice };
       } else {
         retries++;
         if (retries >= 3) {
@@ -4629,9 +4549,6 @@ export class ConcurrentTournamentGame {
 
         for (const res of results) {
           this.bots[res.side].activeRequest = null;
-          // Record `<policy_json>` in the archived `.log` replay (`omniscientLog`) while
-          // withholding it from both the opponent's stdin and the live `onLiveEvent` stream.
-          if (res.policyChatLine) omniscientLog.push(res.policyChatLine);
           await streams[res.side].write(res.choice!);
         }
       }

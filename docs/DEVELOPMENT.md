@@ -157,7 +157,7 @@ worker control plane.
 ├── server/          # Polka server, OAuth, account, wiki, Discord, Arena RPC, rating & team math
 ├── static/          # Djot essays (*.dj), projects/research/glossary catalogs, HTML templates, CSS
 ├── teams/           # 1-NN team distance workspace (teams/index.ts) & reference blocklist pools
-├── test/            # Vitest unit, integration, rating solver, policy, and Playwright E2E suites
+├── test/            # Vitest unit, integration, rating solver, protocol, and Playwright E2E suites
 └── tools/           # Operator CLI (pkmn.ts), scenario simulator (mock.ts), visual verifier (shots.ts)
 ```
 
@@ -188,6 +188,6 @@ worker control plane.
     pages (`/arena`, `/arena/ladders/*`, `/arena/tournaments/*`, `/arena/battles`,
     `/projects/:slug`, `/account`) — never for static YAML/BibTeX/Djot/Git pages.
 - **Agent protocol (`PROTOCOL.md`):**
-  - Per-decision `[0, 1]` action-probability logging rules and reference code live in
-    [`PROTOCOL.md`](../PROTOCOL.md) and are validated by `server/policy.ts` and
-    `test/policy.test.ts`.
+  - Stdio lifecycle, chat/covert-channel elision, and timer rules live in
+    [`PROTOCOL.md`](../PROTOCOL.md), implemented in `server/protocol.ts` and tested by
+    `test/protocol.test.ts`.

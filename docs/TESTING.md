@@ -38,9 +38,8 @@ npm run test:integration
   - `test/ratings.test.ts` — Finite-difference gradients/Hessians, KKT optimality, index-permutation
     invariance, bipartite/disconnected graphs, Monte Carlo convergence, and active-learning
     matchmaking (`server/ratings.ts`).
-  - `test/policy.test.ts` — Compiles the TypeScript reference block in `PROTOCOL.md` and validates
-    per-turn `[0, 1]` action-probability distributions across Singles, Doubles, Team Preview, and
-    gimmick mechanics (`server/policy.ts`).
+  - `test/protocol.test.ts` — Verifies stdio command parsing and opponent chat / covert-channel
+    elision across `@pkmn/sim` battles (`server/protocol.ts`).
   - `test/db.test.ts` — SQLite schema bootstrap, sequential `db/migration/NNNN-*.sql` upgrades,
     project/Smogon sync, ladder lifecycle & rotation, and match aggregation (`db/`).
   - `test/auth.test.ts`, `test/account.test.ts`, `test/wiki.test.ts`, `test/discord.test.ts`,

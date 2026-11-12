@@ -240,9 +240,9 @@ export function safeInlineJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
-// Full battle logs (containing unpacked team sheets, real agent identities, telemetry, and
-// per-turn `|c|` policy distributions) are published exclusively for competitor team-pool
-// (`pools`) ladders strictly AFTER the ladder has been retired (`status === 'archived'`).
+// Full battle logs (containing unpacked team sheets, real agent identities, and telemetry) are
+// published exclusively for competitor team-pool (`pools`) ladders strictly AFTER the ladder has
+// been retired (`status === 'archived'`).
 export function resolveLadderArchive(
   publicDir: string,
   ladder: Pick<db.LadderRow, 'id' | 'team' | 'status'>
@@ -1120,7 +1120,7 @@ function renderSingleLadderArtifact(opts: {
       ladderArchiveHtml = '\n  <p class="battle-note muted">Retired season archive: ' +
         `<a href="${escapeHtml(archive.href)}" class="subtle">` +
         `<code>${escapeHtml(archive.name)}</code></a> ` +
-        '(full Showdown battle logs, unpacked teams &amp; per-turn policy distributions) · ' +
+        '(full Showdown battle logs &amp; unpacked teams) · ' +
         `<a href="${escapeHtml(teamsHref!)}" class="subtle"><code>teams.json</code></a> · ` +
         `<a href="${escapeHtml(jsonHref)}" class="subtle"><code>index.json</code></a></p>`;
     } else {
