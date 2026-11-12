@@ -3282,22 +3282,18 @@ export class Runner {
     if (contentFlag === undefined && !fileFlag) {
       throw new Error(`wiki "${slug}" requires --content or --file`);
     }
-    let body = fileFlag ? fs.readFileSync(fileFlag, 'utf8') : contentFlag!;
-    if (!body.endsWith('\n')) body += '\n';
-    if (visibility && visibility !== 'public' && !body.startsWith('{% visibility:')) {
-      body = `{% visibility: ${visibility} %}\n${body}`;
-    }
+    const rawBody = fileFlag ? fs.readFileSync(fileFlag, 'utf8') : contentFlag!;
 
     const via = getFlag(cmd, 'via') ?? 'git';
     if (via === 'http' && this.serverUrl) {
       const cookie = await this.getDeveloperCookie(by);
       const form = new URLSearchParams({
         action: 'save',
-        content: body,
+        content: rawBody,
         message,
         ...(visibility ? {visibility} : {}),
       });
-      const res = await fetch(`${this.serverUrl}/wiki/${encodeURIComponent(slug)}/edit`, {
+      const res = await fetch(`${this.serverUrl}/wiki/${encodeURIComponent(slug)}`, {
         method: 'POST',
         headers: {
           'content-type': 'application/x-www-form-urlencoded',
@@ -3307,14 +3303,37 @@ export class Runner {
         redirect: 'manual',
       });
       if (res.status >= 400) {
-        throw new Error(`POST /wiki/${slug}/edit failed (${res.status})`);
+        throw new Error(`POST /wiki/${slug} failed (${res.status})`);
       }
       return;
     }
 
+    const wikiCheck = new wiki.Wiki({
+      wikiDir: this.wikiDir,
+      projectsFile: this.projectsFile,
+      db: this.db,
+      push: false,
+    });
+    const canonical = wikiCheck.resolveSlug(slug);
+    if (!wiki.isValidSlug(canonical)) {
+      throw new Error(`Invalid wiki slug "${slug}"`);
+    }
+    if (!wikiCheck.isDeveloper(by)) {
+      throw new Error(`GitHub account "${by}" is not a registered developer`);
+    }
+    if (!wikiCheck.canEdit(by, canonical)) {
+      throw new Error(
+        `GitHub account "${by}" is not authorized to edit project wiki page "${canonical}"`
+      );
+    }
+
     if (!this.wikiDir) return;
     this.ensureWikiRepo();
-    const filename = `${slug}.dj`;
+    const effectiveVisibility = wikiCheck.isProjectPage(canonical)
+      ? (visibility ?? wikiCheck.getPageVisibility(canonical))
+      : undefined;
+    const body = wiki.serializePageContent(rawBody, effectiveVisibility);
+    const filename = `${canonical}.dj`;
     fs.writeFileSync(path.join(this.wikiDir, filename), body, 'utf8');
     const isoDate = new Date(this.state.now * 1000).toISOString();
     const env = {

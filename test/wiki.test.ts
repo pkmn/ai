@@ -6,9 +6,11 @@ import * as path from 'path';
 
 import polka from 'polka';
 
+import {Database} from '../db';
 import * as auth from '../server/auth';
 import * as wiki from '../server/wiki';
 import {slugify} from '../static/util';
+import * as mock from '../tools/mock';
 
 const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-session-secret',
@@ -44,15 +46,18 @@ describe('wiki helpers', () => {
     expect([...users].sort()).toEqual(['pairdev', 'pmariglia', 'pre', 'scheibo']);
   });
 
-  test('extractProjectPages maps registered arena projects, owners, and slugify aliases', () => {
+  test('extractProjectPages maps registered arena projects, owners, and slugify/ID aliases', () => {
     const {projects, aliases} = wiki.extractProjectPages(PROJECTS_YAML);
     expect([...projects.keys()]).toEqual(['0_ERROR', 'Foul_Play']);
     expect([...projects.get('0_ERROR')!.owners].sort()).toEqual(['pairdev', 'pre']);
     expect([...projects.get('Foul_Play')!.owners]).toEqual(['pmariglia']);
     expect(aliases.get('0-error')).toBe('0_ERROR');
     expect(aliases.get('0_error')).toBe('0_ERROR');
+    expect(aliases.get('0error')).toBe('0_ERROR');
     expect(aliases.get('foul-play')).toBe('Foul_Play');
+    expect(aliases.get('foulplay')).toBe('Foul_Play');
     expect(slugify("Mew's Truck").toLowerCase()).toBe('mews-truck');
+    expect(wiki.normalizeSlug('Poke\u0301Champ')).toBe('PokéChamp');
   });
 
   test('parsePageContent and serializePageContent handle visibility directives', () => {
@@ -470,5 +475,96 @@ describe('wiki server routes & git history', () => {
 
     const pubPagesAfter = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
     expect(pubPagesAfter).toContain('0 ERROR');
+
+    // 7. Non-owner registered developer (pmariglia) still cannot edit 0_ERROR (or its aliases)
+    // once the page exists and is public, though pmariglia CAN edit their own project & general
+    // wiki pages.
+    expect(
+      (await realFetch(`${baseUrl}/wiki/0_ERROR/edit`, {
+        headers: {Cookie: sessionCookie('pmariglia')},
+      })).status
+    ).toBe(403);
+
+    for (const alias of ['0_ERROR', '0-error', '0error']) {
+      for (const action of ['preview', 'save']) {
+        const res = await realFetch(`${baseUrl}/wiki/${alias}`, {
+          method: 'POST',
+          headers: {
+            Cookie: sessionCookie('pmariglia'),
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({content: 'hijacked', action}).toString(),
+        });
+        expect(res.status).toBe(403);
+      }
+    }
+    expect(fs.readFileSync(path.join(wikiDir, '0_ERROR.dj'), 'utf8')).toContain(
+      'Public project profile.'
+    );
+
+    expect(
+      (await realFetch(`${baseUrl}/wiki/Foul_Play/edit`, {
+        headers: {Cookie: sessionCookie('pmariglia')},
+      })).status
+    ).toBe(200);
+    const ownSave = await realFetch(`${baseUrl}/wiki/Foul_Play`, {
+      method: 'POST',
+      headers: {
+        Cookie: sessionCookie('pmariglia'),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        content: '# Foul Play\n\nAlpha-beta search.',
+        message: 'Create Foul Play page',
+        action: 'save',
+      }).toString(),
+      redirect: 'manual',
+    });
+    expect(ownSave.status).toBe(303);
+
+    const generalSave = await realFetch(`${baseUrl}/wiki/gen9ou`, {
+      method: 'POST',
+      headers: {
+        Cookie: sessionCookie('pmariglia'),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        content: '# Gen 9 OU\n\nCommunity benchmark notes.',
+        message: 'Add notes',
+        action: 'save',
+      }).toString(),
+      redirect: 'manual',
+    });
+    expect(generalSave.status).toBe(303);
+  });
+
+  test('mock runner rejects unauthorized edits to another project wiki page', async () => {
+    const db = new Database(':memory:');
+    try {
+      const mockRoot = path.join(tmpDir, 'mock-acl');
+      const runner = new mock.Runner({
+        db,
+        mockDir: mockRoot,
+        staticDir: path.join(mockRoot, 'static'),
+        avatarsDir: path.join(mockRoot, 'static', 'avatars'),
+        wikiDir: path.join(mockRoot, 'wiki'),
+        laddersFile: path.join(mockRoot, 'ladders.yml'),
+      });
+      await runner.runScript([
+        'reset --seed 1 --now 2026-10-20T12:00:00Z',
+        'register "0 ERROR" --owner scheibo:pre.10544 --owner coauthor:coauthor.20001',
+        'register "Foul Play" --owner pmariglia:pmariglia.535629',
+        'wiki index --by pmariglia --content "# Wiki"',
+        'wiki 0_ERROR --by coauthor --visibility developers --content "# 0 ERROR"',
+      ].join('\n'));
+      await expect(
+        runner.execLine('wiki 0_ERROR --by pmariglia --content "# Hijacked"')
+      ).rejects.toThrow(/not authorized to edit project wiki page "0_ERROR"/);
+      await expect(
+        runner.execLine('wiki 0error --by pmariglia --content "# Hijacked"')
+      ).rejects.toThrow(/not authorized to edit project wiki page "0_ERROR"/);
+    } finally {
+      db.close();
+    }
   });
 });

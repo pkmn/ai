@@ -12,7 +12,7 @@ import * as yaml from 'yaml';
 import * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
 import {Project} from '../static/projects';
-import {escapeHtml, root, slugify} from '../static/util';
+import {escapeHtml, root, slugify, toID} from '../static/util';
 
 import * as auth from './auth';
 
@@ -69,7 +69,7 @@ export interface Revision {
 
 export function normalizeSlug(raw: string): string {
   try {
-    return decodeURIComponent(raw).trim().replace(/[\s_]+/g, '_');
+    return decodeURIComponent(raw).normalize('NFC').trim().replace(/[\s_]+/g, '_');
   } catch {
     return '';
   }
@@ -156,6 +156,10 @@ export function extractProjectPages(projectsYaml: string): {
     if (arenaSlug) {
       aliases.set(arenaSlug, slug);
       aliases.set(normalizeSlug(arenaSlug).toLowerCase(), slug);
+    }
+    const idAlias = toID(name);
+    if (idAlias && !RESERVED_SLUGS.has(idAlias) && !aliases.has(idAlias)) {
+      aliases.set(idAlias, slug);
     }
   }
   return {projects, aliases};
@@ -341,7 +345,8 @@ export class Wiki {
 
   resolveSlug(slug: string): string {
     this.refreshMetadata();
-    return this.projectAliases.get(slug.toLowerCase()) ?? slug;
+    const normalized = normalizeSlug(slug);
+    return this.projectAliases.get(normalized.toLowerCase()) ?? normalized;
   }
 
   getProjectPage(slug: string): ProjectPage | undefined {
