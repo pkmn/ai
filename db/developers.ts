@@ -64,6 +64,15 @@ export function getDeveloperByGitHub(
   return raw ? mapDeveloperRow(raw) : undefined;
 }
 
+export function getDeveloperByGitHubId(
+  db: DatabaseSync,
+  githubId: number
+): DeveloperRow | undefined {
+  const raw = db.prepare('SELECT * FROM developers WHERE github_id = ?')
+    .get(githubId) as unknown as RawDeveloperRow | undefined;
+  return raw ? mapDeveloperRow(raw) : undefined;
+}
+
 export function getDeveloperByDiscordId(
   db: DatabaseSync,
   discordId: string
@@ -99,10 +108,18 @@ export function linkDeveloperGitHubId(
   githubLogin: string,
   githubId: number,
   now = Math.floor(Date.now() / 1000)
-) {
+): boolean {
+  const cleanLogin = githubLogin.trim().toLowerCase();
+  const existing = getDeveloperByGitHub(db, cleanLogin);
+  if (existing?.githubId !== undefined && existing.githubId !== githubId) {
+    return false;
+  }
   db.prepare(
-    'UPDATE developers SET github_id = ?, verified_at = ? WHERE github_login = ?'
-  ).run(githubId, now, githubLogin.trim().toLowerCase());
+    `UPDATE developers
+     SET github_id = ?, verified_at = ?
+     WHERE github_login = ? AND (github_id IS NULL OR github_id = ?)`
+  ).run(githubId, now, cleanLogin, githubId);
+  return true;
 }
 
 // Enforces global uniqueness of Discord accounts across developers so one person cannot link the

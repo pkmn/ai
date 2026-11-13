@@ -46,6 +46,7 @@ export interface Session {
 interface OAuthStatePayload {
   provider: 'github' | 'discord';
   intent?: 'login' | 'link';
+  githubLogin?: string;
   nonce: string;
   returnTo: string;
   redirectUri: string;
@@ -259,8 +260,18 @@ export class Auth {
   }
 
   getGitHubUser(req: http.IncomingMessage): string | undefined {
-    const sessionLogin = this.getSession(req)?.github?.login;
-    if (sessionLogin) return sessionLogin;
+    const session = this.getSession(req);
+    if (session?.github) {
+      if (session.github.id > 0 && this.db) {
+        const byId = this.db.getDeveloperByGitHubId(session.github.id);
+        if (byId) return byId.githubLogin;
+        const byLogin = this.db.getDeveloperByGitHub(session.github.login);
+        if (byLogin?.githubId !== undefined && byLogin.githubId !== session.github.id) {
+          return undefined;
+        }
+      }
+      return session.github.login;
+    }
     const cfg = this.getConfig();
     if (!cfg?.github && !this.isDevAuthEnabled() && process.env.NODE_ENV === 'development') {
       return 'scheibo';
@@ -452,14 +463,20 @@ export class Auth {
         const userData = await userRes.json() as {id?: number; login?: string};
         if (!userData.login) throw new Error('Missing login from GitHub user API');
 
-        const login = userData.login;
-        if (!this.isAuthorizedGitHub(login)) {
+        const githubId = typeof userData.id === 'number' ? userData.id : 0;
+        const byId = githubId > 0 ? this.db?.getDeveloperByGitHubId(githubId) : undefined;
+        const login = byId?.githubLogin ?? userData.login;
+        const byLogin = this.db?.getDeveloperByGitHub(login);
+        if (
+          !this.isAuthorizedGitHub(login) ||
+          (byLogin?.githubId !== undefined && githubId > 0 && byLogin.githubId !== githubId)
+        ) {
           sendHtml(
             res,
             403,
             renderAuthError(
               403,
-              `<p>GitHub account <code>${escapeHtml(login)}</code> ` +
+              `<p>GitHub account <code>${escapeHtml(userData.login)}</code> ` +
               'is not registered for pkmn.ai competitions.</p>' +
               `<p><a href="${REGISTER_ISSUE_URL}">Register a project on GitHub</a>.</p>`
             ),
@@ -468,7 +485,6 @@ export class Auth {
           return;
         }
 
-        const githubId = typeof userData.id === 'number' ? userData.id : 0;
         if (githubId > 0) {
           this.db?.linkDeveloperGitHubId(login, githubId);
         }
@@ -509,25 +525,27 @@ export class Auth {
         return;
       }
 
+      let linkGitHubLogin: string | undefined;
       if (intent === 'link') {
-        const session = this.getSession(req);
-        if (!session?.github?.login) {
+        const ghLogin = this.getGitHubUser(req);
+        if (!ghLogin) {
           const resume = `/auth/discord?intent=link&return_to=${encodeURIComponent(returnTo)}`;
           redirect(res, `/auth/github?return_to=${encodeURIComponent(resume)}`);
           return;
         }
-        if (!this.isAuthorizedGitHub(session.github.login)) {
+        if (!this.isAuthorizedGitHub(ghLogin)) {
           sendHtml(
             res,
             403,
             renderAuthError(
               403,
-              `<p>GitHub account <code>${escapeHtml(session.github.login)}</code> ` +
+              `<p>GitHub account <code>${escapeHtml(ghLogin)}</code> ` +
               'is not registered for pkmn.ai competitions.</p>'
             )
           );
           return;
         }
+        linkGitHubLogin = ghLogin.toLowerCase();
       }
 
       const redirectUri = `${inferOrigin(req)}/auth/discord/callback`;
@@ -536,6 +554,7 @@ export class Auth {
       const statePayload: OAuthStatePayload = {
         provider: 'discord',
         intent,
+        ...(linkGitHubLogin ? {githubLogin: linkGitHubLogin} : {}),
         nonce,
         returnTo,
         redirectUri,
@@ -603,8 +622,12 @@ export class Auth {
 
         const existing = this.getSession(req);
         if (saved.intent === 'link') {
-          const ghLogin = existing?.github?.login;
-          if (!ghLogin || !this.isAuthorizedGitHub(ghLogin)) {
+          const ghLogin = this.getGitHubUser(req);
+          if (
+            !ghLogin ||
+            !this.isAuthorizedGitHub(ghLogin) ||
+            (saved.githubLogin && saved.githubLogin !== ghLogin.toLowerCase())
+          ) {
             sendHtml(
               res,
               403,
@@ -649,8 +672,7 @@ export class Auth {
     });
 
     app.post('/api/account/discord/unlink', (req, res) => {
-      const session = this.getSession(req);
-      const ghLogin = session?.github?.login;
+      const ghLogin = this.getGitHubUser(req);
       if (!ghLogin || !this.isAuthorizedGitHub(ghLogin)) {
         res.writeHead(401, {
           'Content-Type': 'application/json; charset=utf-8',

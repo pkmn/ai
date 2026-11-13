@@ -201,6 +201,21 @@ describe('unified server/auth.ts OAuth, linking, dev switcher, and Nginx validat
     expect(session.github).toEqual({id: 105440, login: 'pre'});
     expect(session.discord).toEqual({id: '513513270670262284', username: 'scheibo'});
     expect(db.getDeveloperByGitHub('pre')!.githubId).toBe(105440);
+    expect(db.getDeveloperByGitHubId(105440)!.githubLogin).toBe('pre');
+
+    // A handle squatter claiming 'pre' with a different GitHub numeric ID is rejected
+    ghUser = {id: 777777, login: 'pre'};
+    const squatterCb = await realFetch(
+      `${baseUrl}/auth/github/callback?code=c3&state=${encodeURIComponent(state)}`,
+      {
+        headers: {Cookie: `pkmn_oauth_state=${encodeURIComponent(startCookies.pkmn_oauth_state)}`},
+        redirect: 'manual',
+      }
+    );
+    expect(squatterCb.status).toBe(403);
+    expect(db.getDeveloperByGitHub('pre')!.githubId).toBe(105440);
+    expect(db.linkDeveloperGitHubId('pre', 777777)).toBe(false);
+    expect(db.getDeveloperByGitHub('pre')!.githubId).toBe(105440);
   });
 
   test('Discord OAuth links per-developer Discord ID, blocks collisions, and unlinks', async () => {
@@ -296,6 +311,21 @@ describe('unified server/auth.ts OAuth, linking, dev switcher, and Nginx validat
     );
     expect(dupCb.status).toBe(409);
     expect(await dupCb.text()).toContain('already linked to another developer');
+
+    // Replaying pmariglia's link state cookie under pre's session is rejected (state binding)
+    const crossAccountCb = await realFetch(
+      `${baseUrl}/auth/discord/callback?code=dc2&state=${encodeURIComponent(dupState)}`,
+      {
+        headers: {
+          Cookie: [
+            `pkmn_oauth_state=${encodeURIComponent(dupStateCookie)}`,
+            `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+          ].join('; '),
+        },
+        redirect: 'manual',
+      }
+    );
+    expect(crossAccountCb.status).toBe(403);
 
     // Unlink clears Discord fields on 'pre'
     const unlinkRes = await realFetch(`${baseUrl}/api/account/discord/unlink`, {

@@ -306,6 +306,10 @@ export class Database {
     return developers.getDeveloperByGitHub(this.db, githubLogin);
   }
 
+  getDeveloperByGitHubId(githubId: number): developers.DeveloperRow | undefined {
+    return developers.getDeveloperByGitHubId(this.db, githubId);
+  }
+
   getDeveloperByDiscordId(discordId: string): developers.DeveloperRow | undefined {
     return developers.getDeveloperByDiscordId(this.db, discordId);
   }
@@ -318,8 +322,8 @@ export class Database {
     return developers.getCompetitorDiscordIds(this.db);
   }
 
-  linkDeveloperGitHubId(githubLogin: string, githubId: number, now?: number) {
-    developers.linkDeveloperGitHubId(this.db, githubLogin, githubId, now);
+  linkDeveloperGitHubId(githubLogin: string, githubId: number, now?: number): boolean {
+    return developers.linkDeveloperGitHubId(this.db, githubLogin, githubId, now);
   }
 
   linkDeveloperDiscord(
