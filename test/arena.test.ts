@@ -1065,4 +1065,13 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       stateDb.close();
     }
   );
+
+  it('clears uchg/schg immutable flags before wiping scratch volumes in arena/bin/arena', () => {
+    const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
+    const sudoers = fs.readFileSync(root('arena', 'config', 'sudoers'), 'utf8');
+    expect(arenaScript).toContain('/usr/bin/chflags -R nouchg,noschg "$SCRATCH_VOL"');
+    expect(arenaScript).toContain('wipe_scratch');
+    expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,noschg /Volumes/P1');
+    expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,noschg /Volumes/P2');
+  });
 });

@@ -21,8 +21,17 @@ fi
 SCRATCH_VOL="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')"
 CONTAINER_NAME="arena-${SLOT}"
 
+wipe_scratch() {
+  # Clear any user/system immutable flags (`chflags uchg/schg`) set by an untrusted agent so
+  # `find ... -delete` cannot fail with EPERM and leak state across games.
+  sudo /usr/bin/chflags -R nouchg,noschg "$SCRATCH_VOL" 2>/dev/null || true
+  sudo /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete 2>/dev/null || true
+  sudo /bin/chmod 1700 "$SCRATCH_VOL"
+}
+
 case "$ACTION" in
   run)
+    wipe_scratch
     if [[ "$MODE" == "container" ]]; then
       exec podman run --rm -i \
         --name "$CONTAINER_NAME" \
@@ -40,6 +49,10 @@ case "$ACTION" in
         --env HOME=/scratch \
         "$TARGET"
     elif [[ "$MODE" == "native" ]]; then
+      if [[ ! "$TARGET" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "Invalid native agent target: $TARGET" >&2
+        exit 2
+      fi
       AGENT_DIR="/opt/arena/agents/${TARGET}"
       if [[ ! -x "${AGENT_DIR}/run" ]]; then
         echo "Missing executable ${AGENT_DIR}/run" >&2
@@ -93,8 +106,7 @@ case "$ACTION" in
     fi
 
     # 3. Wipe all contents of the APFS scratch volume for this slot without shell glob expansion
-    sudo /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete 2>/dev/null || true
-    sudo /bin/chmod 1700 "$SCRATCH_VOL"
+    wipe_scratch
     ;;
 
   *)
