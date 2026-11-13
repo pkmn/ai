@@ -71,6 +71,9 @@
   (literal "/usr/bin/env")
   (subpath (param "AGENT_RO_DIR")))
 
-;; 7. Read/write ONLY the specific player slot's quota-capped APFS scratch volume (/Volumes/P1 or P2)
+;; 7. Read/write ONLY the specific player slot's quota-capped APFS scratch volume (/Volumes/P1 or P2),
+;;    while denying chflags (`file-write-flags`) so agents cannot set `uchg`/`uappend`.
 (allow file-read* file-write* process-exec
+  (subpath (param "AGENT_SCRATCH_DIR")))
+(deny file-write-flags
   (subpath (param "AGENT_SCRATCH_DIR")))

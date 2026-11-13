@@ -22,9 +22,9 @@ SCRATCH_VOL="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')"
 CONTAINER_NAME="arena-${SLOT}"
 
 wipe_scratch() {
-  # Clear any user/system immutable flags (`chflags uchg/schg`) set by an untrusted agent so
-  # `find ... -delete` cannot fail with EPERM and leak state across games.
-  sudo /usr/bin/chflags -R nouchg,noschg "$SCRATCH_VOL" 2>/dev/null || true
+  # Clear any user/system immutable or append-only flags (`chflags uchg/uappend/schg`) set by an
+  # untrusted agent so `find ... -delete` cannot fail with EPERM and leak state across games.
+  sudo /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL" 2>/dev/null || true
   sudo /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete 2>/dev/null || true
   sudo /bin/chmod 1700 "$SCRATCH_VOL"
 }
@@ -58,8 +58,10 @@ case "$ACTION" in
         echo "Missing executable ${AGENT_DIR}/run" >&2
         exit 2
       fi
-      # Run under role account p1/p2 inside limit supervisor (which scrubs env) and Seatbelt
-      exec sudo -u "$SLOT" /opt/arena/bin/limit "$SLOT" \
+      # Run `limit` supervisor as `pkmn` (so `p1`/`p2` cannot signal it or spoof `.peak_ram`, and
+      # `killall -STOP -u "$SLOT"` never freezes `limit`); `limit` drops the child to `$SLOT`.
+      rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+      exec /opt/arena/bin/limit "$SLOT" \
         /usr/bin/sandbox-exec \
           -f /opt/arena/etc/sandbox.sb \
           -D "AGENT_RO_DIR=${AGENT_DIR}" \

@@ -45,13 +45,16 @@ sudo chown p1:agents /Volumes/P1
 sudo chmod 1700 /Volumes/P1
 sudo chown p2:agents /Volumes/P2
 sudo chmod 1700 /Volumes/P2
+# Grant `pkmn` explicit ACL access so `virtiofsd` (running as `pkmn`) can mount `/Volumes/P1` and
+# `/Volumes/P2` into Podman containers without opening group permissions between `p1` and `p2`.
+sudo chmod +a "user:pkmn allow list,add_file,search,delete,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity" /Volumes/P1 /Volumes/P2 || true
 sudo chown pkmn:agents /Volumes/Staging
 sudo chmod 0700 /Volumes/Staging
 
 sudo mkdir -p /opt/arena/{bin,etc,agents,cas/sha256,teams,state,logs}
 sudo chown -R pkmn:agents /opt/arena
 sudo chmod 0755 /opt/arena /opt/arena/bin /opt/arena/etc /opt/arena/agents
-sudo chmod 0750 /opt/arena/cas /opt/arena/teams /opt/arena/state /opt/arena/logs
+sudo chmod 0700 /opt/arena/cas /opt/arena/teams /opt/arena/state /opt/arena/logs
 
 if [[ -d /Volumes/Archive ]]; then
   sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents}

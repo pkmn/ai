@@ -295,10 +295,10 @@ export class TimeSlicedArenaGame {
         } catch {}
       } else if (player.proc.pid) {
         try {
-          process.kill(player.proc.pid, 'SIGCONT');
+          process.kill(player.proc.pid, 'SIGKILL');
         } catch {}
         try {
-          process.kill(player.proc.pid, 'SIGKILL');
+          process.kill(player.proc.pid, 'SIGCONT');
         } catch {}
       }
       return;
@@ -308,15 +308,34 @@ export class TimeSlicedArenaGame {
     } catch {}
   }
 
+  private async stopPlayerForRamRead(player: SandboxedPlayer | undefined) {
+    if (!player || player.exited || !player.proc.pid) return;
+    try {
+      process.kill(player.proc.pid, 'SIGTERM');
+    } catch {}
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, 100);
+      player.proc.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
   private readPeakRamMib(player: SandboxedPlayer): number {
     if (!this.devMode && player.spec.mode === 'native') {
-      const vol = player.slot === 'p1' ? '/Volumes/P1/.peak_ram' : '/Volumes/P2/.peak_ram';
-      try {
-        if (fs.existsSync(vol)) {
-          const val = Number(fs.readFileSync(vol, 'utf8').trim());
-          if (Number.isFinite(val) && val > 0) return Math.round(val);
-        }
-      } catch {}
+      const candidates = [
+        `/opt/arena/state/peak_ram_${player.slot}`,
+        player.slot === 'p1' ? '/Volumes/P1/.peak_ram' : '/Volumes/P2/.peak_ram',
+      ];
+      for (const file of candidates) {
+        try {
+          if (fs.existsSync(file)) {
+            const val = Number(fs.readFileSync(file, 'utf8').trim());
+            if (Number.isFinite(val) && val > 0) return Math.round(val);
+          }
+        } catch {}
+      }
     }
     return 64;
   }
@@ -601,6 +620,10 @@ export class TimeSlicedArenaGame {
       }
 
       await omniTask;
+      await Promise.all([
+        this.stopPlayerForRamRead(this.p1),
+        this.stopPlayerForRamRead(this.p2),
+      ]);
       const p1PeakRam = this.readPeakRamMib(this.p1);
       const p2PeakRam = this.readPeakRamMib(this.p2);
       const outcome: GameOutcome =

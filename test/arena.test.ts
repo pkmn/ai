@@ -1066,12 +1066,17 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     }
   );
 
-  it('clears uchg/schg immutable flags before wiping scratch volumes in arena/bin/arena', () => {
+  test('clears uchg/schg immutable flags and runs limit as pkmn in arena/bin/arena', () => {
     const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
     const sudoers = fs.readFileSync(root('arena', 'config', 'sudoers'), 'utf8');
-    expect(arenaScript).toContain('/usr/bin/chflags -R nouchg,noschg "$SCRATCH_VOL"');
+    const sandbox = fs.readFileSync(root('arena', 'config', 'sandbox.sb'), 'utf8');
+    const limitC = fs.readFileSync(root('arena', 'bin', 'limit.c'), 'utf8');
+    expect(arenaScript).toContain('/usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL"');
     expect(arenaScript).toContain('wipe_scratch');
-    expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,noschg /Volumes/P1');
-    expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,noschg /Volumes/P2');
+    expect(arenaScript).toContain('exec /opt/arena/bin/limit "$SLOT"');
+    expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P1');
+    expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P2');
+    expect(sandbox).toContain('(deny file-write-flags');
+    expect(limitC).toContain('/opt/arena/state/peak_ram_%s');
   });
 });
