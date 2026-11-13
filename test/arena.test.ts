@@ -612,11 +612,31 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
   test(
     'Coordinator handles crash recovery, smoke tests, 3rd-version retirement, and matches',
     async () => {
+      const utmLogFile = path.join(tmpDir, 'v30-utm.log');
       const bundleDir = path.join(tmpDir, 'coord-bundle');
       fs.mkdirSync(bundleDir, {recursive: true});
-      fs.writeFileSync(path.join(bundleDir, 'run'), fs.readFileSync(defaultAgentScript), {
-        mode: 0o755,
-      });
+      fs.writeFileSync(
+        path.join(bundleDir, 'run'),
+        [
+          '#!/usr/bin/env node',
+          'const fs = require("fs");',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (line.startsWith("|utm|")) {',
+          `    fs.appendFileSync(${JSON.stringify(utmLogFile)}, line.slice(5) + "\\n");`,
+          '    return;',
+          '  }',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
       const bundleTar = path.join(tmpDir, 'coord-agent.tar.gz');
       execFileSync('tar', ['-czf', bundleTar, '-C', bundleDir, '.']);
       const bundleSha = crypto.createHash('sha256')
@@ -748,19 +768,25 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(reportedStatuses[0].smokeStatus).toBe('passed');
       expect(reportedStatuses[0].retiredVersionIdsByLadder).toEqual({gen9customgame: 10});
 
-      // 2. Register v25 locally as well and run a scheduled 2-game mirror match
+      // 2. Register v25 locally with defaultAgentScript and run a scheduled 2-game mirror match
       const v30Local = stateDb.getLocalAgent(30)!;
+      const v25Dir = path.join(agentsDir, 'pokechamp-1.0.0-v25');
+      fs.mkdirSync(v25Dir, {recursive: true});
+      fs.writeFileSync(path.join(v25Dir, 'run'), fs.readFileSync(defaultAgentScript), {
+        mode: 0o755,
+      });
       stateDb.upsertLocalAgent({
         versionId: 25,
         agentId: 2,
         slug: 'pokechamp',
         version: '1.0.0',
         mode: 'native',
-        target: v30Local.target,
+        target: 'pokechamp-1.0.0-v25',
         residency: 'hot',
         unpackedBytes: v30Local.unpackedBytes,
       });
 
+      fs.writeFileSync(utmLogFile, '');
       const matchLadder: LadderSnapshot = {
         ...ladderSnap,
         entries: [
@@ -784,6 +810,11 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(played?.ladderId).toBe('gen9customgame');
       expect(completedMatches).toHaveLength(1);
       expect(heartbeats.length).toBeGreaterThan(0);
+
+      // Verify v30 received T1 in Game 1 and T2 (swapped team) in Game 2
+      const v30UtmLines = fs.readFileSync(utmLogFile, 'utf8').trim().split('\n');
+      expect(v30UtmLines).toHaveLength(2);
+      expect(v30UtmLines[0]).not.toBe(v30UtmLines[1]);
 
       // 3. Verify crash recovery: in_progress is aborted, g1_complete resumes Game 2
       stateDb.createMatchCheckpoint({

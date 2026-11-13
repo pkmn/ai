@@ -520,14 +520,14 @@ export class Coordinator {
     const p2Spec = this.resolveLaunchSpec(cp.p2Mode, cp.p2Target);
     const seed = this.parsePrngSeed(cp.seed);
 
-    // Game 2 swaps sides and teams: P2 sits in slot p1 with T2, P1 sits in slot p2 with T1
+    // Game 2 swaps sides and teams: P2 sits in slot p1 with T1, P1 sits in slot p2 with T2
     const g2Game = new TimeSlicedArenaGame({
       format: cp.format,
       seed,
       p1Spec: p2Spec,
       p2Spec: p1Spec,
-      p1TeamPacked: cp.p2TeamPacked,
-      p2TeamPacked: cp.p1TeamPacked,
+      p1TeamPacked: cp.p1TeamPacked,
+      p2TeamPacked: cp.p2TeamPacked,
       maxTurns: this.maxTurns,
       devMode: this.devMode,
     });
@@ -784,14 +784,14 @@ export class Coordinator {
       p2TurnMillis: g1Res.p2MeanTurnMillis,
     });
 
-    // Game 2: P2 in slot p1 with T2, P1 in slot p2 with T1
+    // Game 2: P2 in slot p1 with T1, P1 in slot p2 with T2
     const g2Game = new TimeSlicedArenaGame({
       format: ladder.format,
       seed: seedStr,
       p1Spec: p2Spec,
       p2Spec: p1Spec,
-      p1TeamPacked: sampled.t2,
-      p2TeamPacked: sampled.t1,
+      p1TeamPacked: sampled.t1,
+      p2TeamPacked: sampled.t2,
       maxTurns: this.maxTurns,
       devMode: this.devMode,
       onTurn: async info => {
