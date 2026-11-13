@@ -41,13 +41,16 @@ create_agent_user p1 591 /Volumes/P1
 create_agent_user p2 592 /Volumes/P2
 
 echo "==> Step 3: Locking down volume ownership and permissions"
-sudo chown p1:agents /Volumes/P1
-sudo chmod 1700 /Volumes/P1
-sudo chown p2:agents /Volumes/P2
-sudo chmod 1700 /Volumes/P2
-# Grant `pkmn` explicit ACL access so `virtiofsd` (running as `pkmn`) can mount `/Volumes/P1` and
-# `/Volumes/P2` into Podman containers without opening group permissions between `p1` and `p2`.
-sudo chmod +a "user:pkmn allow list,add_file,search,delete,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity" /Volumes/P1 /Volumes/P2 || true
+# Own `/Volumes/P1` and `/Volumes/P2` as `root:wheel` (`0700`) with explicit ACLs (omitting
+# `writesecurity` and `chown`) so sandboxed `p1`/`p2` cannot run `chmod -N` to strip `pkmn`'s
+# `virtiofsd` ACL and brick subsequent container mounts.
+SCRATCH_ACL="allow list,add_file,search,delete,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity"
+sudo chown root:wheel /Volumes/P1 /Volumes/P2
+sudo chmod -N /Volumes/P1 /Volumes/P2 2>/dev/null || true
+sudo chmod 0700 /Volumes/P1 /Volumes/P2
+sudo chmod +a "user:pkmn ${SCRATCH_ACL}" /Volumes/P1 /Volumes/P2
+sudo chmod +a "user:p1 ${SCRATCH_ACL}" /Volumes/P1
+sudo chmod +a "user:p2 ${SCRATCH_ACL}" /Volumes/P2
 sudo chown pkmn:agents /Volumes/Staging
 sudo chmod 0700 /Volumes/Staging
 

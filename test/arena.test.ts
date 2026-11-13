@@ -1576,16 +1576,23 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     const sudoers = fs.readFileSync(root('arena', 'config', 'sudoers'), 'utf8');
     const sandbox = fs.readFileSync(root('arena', 'config', 'sandbox.sb'), 'utf8');
     const limitC = fs.readFileSync(root('arena', 'bin', 'limit.c'), 'utf8');
-    expect(arenaScript).toContain('/usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL"');
+    expect(arenaScript).toContain(
+      'sudo -n /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL"'
+    );
+    expect(arenaScript).toContain('sudo -n /usr/bin/ipcs -m');
+    expect(arenaScript).toContain('--device /dev/dri');
     expect(arenaScript).toContain('wipe_scratch');
     expect(arenaScript).toContain('exec sudo -n /opt/arena/bin/limit "$SLOT"');
     expect(arenaScript).toContain('--cpus=10');
     expect(arenaScript).toContain('--memory=14g');
     expect(arenaScript).toContain('--memory-swap=14g');
+    expect(setupScript).toContain('sudo chown root:wheel /Volumes/P1 /Volumes/P2');
     expect(setupScript).toContain('--cpus 10');
     expect(setupScript).toContain('--memory 30720');
     expect(setupScript).not.toContain('swapfile');
     expect(sudoers).not.toContain('/usr/bin/env -i *');
+    expect(sudoers).not.toContain('/usr/sbin/ipcs');
+    expect(sudoers).toContain('/usr/bin/ipcs -m');
     expect(sudoers).toContain('pkmn ALL=(root) NOPASSWD: /opt/arena/bin/limit p1');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P1');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P2');

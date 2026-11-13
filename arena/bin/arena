@@ -4,7 +4,7 @@
 #   arena run     <p1|p2> <container|native> <image_or_agent_id>
 #   arena pause   <p1|p2> <container|native>
 #   arena resume  <p1|p2> <container|native>
-#   arena cleanup <p1|p2> <container|native>
+#   arena cleanup <p1|p2> [container|native]
 
 set -euo pipefail
 
@@ -24,15 +24,21 @@ CONTAINER_NAME="arena-${SLOT}"
 wipe_scratch() {
   # Clear any user/system immutable or append-only flags (`chflags uchg/uappend/schg`) set by an
   # untrusted agent so `find ... -delete` cannot fail with EPERM and leak state across games.
-  sudo /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL" 2>/dev/null || true
-  sudo /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete 2>/dev/null || true
-  sudo /bin/chmod 1700 "$SCRATCH_VOL"
+  sudo -n /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL" 2>/dev/null || true
+  sudo -n /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete 2>/dev/null || true
+  sudo -n /usr/sbin/chown root:wheel "$SCRATCH_VOL"
+  sudo -n /bin/chmod 0700 "$SCRATCH_VOL"
 }
 
 case "$ACTION" in
   run)
     wipe_scratch
     if [[ "$MODE" == "container" ]]; then
+      podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+      GPU_ARGS=()
+      if [[ "${ARENA_PODMAN_GPU:-1}" != "0" ]]; then
+        GPU_ARGS+=(--device /dev/dri)
+      fi
       exec podman run --rm -i \
         --name "$CONTAINER_NAME" \
         --network=none \
@@ -43,6 +49,7 @@ case "$ACTION" in
         --memory=14g \
         --memory-swap=14g \
         --pids-limit=256 \
+        "${GPU_ARGS[@]}" \
         --tmpfs /tmp:rw,noexec,nosuid,size=500m \
         --mount "type=bind,src=${SCRATCH_VOL},dst=/scratch,rw" \
         --env TMPDIR=/scratch \
@@ -77,10 +84,26 @@ case "$ACTION" in
 
   pause)
     if [[ "$MODE" == "container" ]]; then
-      podman pause "$CONTAINER_NAME" >/dev/null 2>&1 || true
+      # Poll briefly on initial startup until `podman run` materializes `$CONTAINER_NAME`
+      for _ in {1..20}; do
+        state="$(podman container inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+        if [[ "$state" == "paused" || "$state" == "exited" || "$state" == "dead" ]]; then
+          break
+        fi
+        if [[ "$state" == "running" ]] && podman pause "$CONTAINER_NAME" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 0.025
+      done
     elif [[ "$MODE" == "native" ]]; then
-      # Freeze every process owned by p1 or p2 on macOS
-      sudo -u "$SLOT" /usr/bin/killall -STOP -u "$SLOT" 2>/dev/null || true
+      # Poll briefly on initial startup until `limit` drops its child to UID `$SLOT`
+      for _ in {1..20}; do
+        if /usr/bin/pgrep -u "$SLOT" >/dev/null 2>&1; then
+          sudo -n -u "$SLOT" /usr/bin/killall -STOP -u "$SLOT" 2>/dev/null || true
+          break
+        fi
+        sleep 0.025
+      done
     fi
     ;;
 
@@ -89,23 +112,24 @@ case "$ACTION" in
       podman unpause "$CONTAINER_NAME" >/dev/null 2>&1 || true
     elif [[ "$MODE" == "native" ]]; then
       # Thaw every process owned by p1 or p2 on macOS
-      sudo -u "$SLOT" /usr/bin/killall -CONT -u "$SLOT" 2>/dev/null || true
+      sudo -n -u "$SLOT" /usr/bin/killall -CONT -u "$SLOT" 2>/dev/null || true
     fi
     ;;
 
   cleanup)
-    if [[ "$MODE" == "container" ]]; then
+    if [[ -z "$MODE" || "$MODE" == "container" ]]; then
       podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
-    elif [[ "$MODE" == "native" ]]; then
+    fi
+    if [[ -z "$MODE" || "$MODE" == "native" ]]; then
       # 1. Unconditionally kill every process and background daemon owned by p1 or p2
-      sudo /usr/bin/killall -9 -u "$SLOT" 2>/dev/null || true
+      sudo -n /usr/bin/killall -9 -u "$SLOT" 2>/dev/null || true
 
-      # 2. Purge any stray System V IPC segments owned by p1 or p2
-      for id in $(sudo /usr/sbin/ipcs -m | awk -v u="$SLOT" '$5 == u {print $2}'); do
-        sudo /usr/sbin/ipcrm -m "$id" 2>/dev/null || true
+      # 2. Purge any stray System V IPC segments owned by p1 or p2 (`/usr/bin/ipcs` on macOS)
+      for id in $(sudo -n /usr/bin/ipcs -m 2>/dev/null | awk -v u="$SLOT" '$5 == u {print $2}'); do
+        sudo -n /usr/bin/ipcrm -m "$id" 2>/dev/null || true
       done
-      for id in $(sudo /usr/sbin/ipcs -s | awk -v u="$SLOT" '$5 == u {print $2}'); do
-        sudo /usr/sbin/ipcrm -s "$id" 2>/dev/null || true
+      for id in $(sudo -n /usr/bin/ipcs -s 2>/dev/null | awk -v u="$SLOT" '$5 == u {print $2}'); do
+        sudo -n /usr/bin/ipcrm -s "$id" 2>/dev/null || true
       done
     fi
 
