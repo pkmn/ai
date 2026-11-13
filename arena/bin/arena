@@ -45,13 +45,8 @@ case "$ACTION" in
         echo "Missing executable ${AGENT_DIR}/run" >&2
         exit 2
       fi
-      # Wipe inherited environment; run under role account p1/p2 inside Seatbelt & limit supervisor
-      exec sudo -u "$SLOT" /usr/bin/env -i \
-        HOME="$SCRATCH_VOL" \
-        TMPDIR="$SCRATCH_VOL" \
-        PATH="/usr/bin:/bin" \
-        ARENA_SLOT="$SLOT" \
-        /opt/arena/bin/limit \
+      # Run under role account p1/p2 inside limit supervisor (which scrubs env) and Seatbelt
+      exec sudo -u "$SLOT" /opt/arena/bin/limit "$SLOT" \
         /usr/bin/sandbox-exec \
           -f /opt/arena/etc/sandbox.sb \
           -D "AGENT_RO_DIR=${AGENT_DIR}" \
@@ -97,8 +92,8 @@ case "$ACTION" in
       done
     fi
 
-    # 3. Wipe the APFS scratch volume for this slot (preserving .peak_ram if readable first)
-    sudo /bin/rm -rf "${SCRATCH_VOL:?}"/* "${SCRATCH_VOL:?}"/.[!.]* 2>/dev/null || true
+    # 3. Wipe all contents of the APFS scratch volume for this slot without shell glob expansion
+    sudo /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete 2>/dev/null || true
     sudo /bin/chmod 1700 "$SCRATCH_VOL"
     ;;
 

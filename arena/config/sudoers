@@ -1,8 +1,9 @@
 # /etc/sudoers.d/arena (mode 0440, owned by root:wheel)
-# Allow pkmn to spawn the supervisor and wipe p1/p2 state without a password prompt.
+# Allow pkmn to spawn the supervisor, pause/resume, and wipe p1/p2 state without a password prompt.
 pkmn ALL=(p1,p2) NOPASSWD: /opt/arena/bin/limit *
+pkmn ALL=(p1,p2) NOPASSWD: /usr/bin/killall -STOP -u p1, /usr/bin/killall -STOP -u p2
+pkmn ALL=(p1,p2) NOPASSWD: /usr/bin/killall -CONT -u p1, /usr/bin/killall -CONT -u p2
 pkmn ALL=(root) NOPASSWD: /usr/bin/killall -9 -u p1, /usr/bin/killall -9 -u p2
-pkmn ALL=(root) NOPASSWD: /bin/rm -rf /Volumes/P1/*, /bin/rm -rf /Volumes/P2/*
-pkmn ALL=(root) NOPASSWD: /bin/rm -rf /Volumes/P1/.[!.]*, /bin/rm -rf /Volumes/P2/.[!.]*
+pkmn ALL=(root) NOPASSWD: /usr/bin/find /Volumes/P1 -mindepth 1 -delete, /usr/bin/find /Volumes/P2 -mindepth 1 -delete
 pkmn ALL=(root) NOPASSWD: /usr/sbin/ipcs *, /usr/sbin/ipcrm *
-pkmn ALL=(root) NOPASSWD: /bin/chmod 1700 /Volumes/P1 /Volumes/P2
+pkmn ALL=(root) NOPASSWD: /bin/chmod 1700 /Volumes/P1, /bin/chmod 1700 /Volumes/P2, /bin/chmod 1700 /Volumes/P1 /Volumes/P2

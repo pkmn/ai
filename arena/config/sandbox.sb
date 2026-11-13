@@ -10,10 +10,10 @@
 (deny system-socket)
 
 ;; 2. Allow basic process execution, fork/exec of helper binaries within allowed paths, and signals
-;;    restricted to the agent's own sandboxed process tree (`pself`)
+;;    restricted to the agent's own sandboxed process tree (`same-sandbox`)
 (allow process-fork)
 (allow process-info* (target self))
-(allow signal (target pself))
+(allow signal (target same-sandbox))
 (allow sysctl-read)
 (allow pseudo-tty)
 
@@ -31,7 +31,7 @@
   (global-name "com.apple.system.notification_center")
   (global-name "com.apple.CoreServices.coreservicesd")
   (global-name "com.apple.CARenderServer")
-  (global-name "com.apple. MTLCompilerService"))
+  (global-name "com.apple.MTLCompilerService"))
 
 ;; 4. Allow Apple Silicon GPU / Neural Engine access for local ML inference (PyTorch MPS / MLX)
 (allow iokit-open

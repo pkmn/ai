@@ -161,6 +161,15 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       ]);
       execFileSync('python3', ['-m', 'py_compile', root('arena/bin/unpack')]);
       expect(typeof arenaIndex.runDaemon).toBe('function');
+
+      const sudoersText = fs.readFileSync(root('arena/config/sudoers'), 'utf8');
+      expect(sudoersText).toContain('/usr/bin/killall -STOP -u p1');
+      expect(sudoersText).toContain('/usr/bin/killall -CONT -u p1');
+      expect(sudoersText).toContain('/usr/bin/find /Volumes/P1 -mindepth 1 -delete');
+
+      const sandboxText = fs.readFileSync(root('arena/config/sandbox.sb'), 'utf8');
+      expect(sandboxText).toContain('(allow signal (target same-sandbox))');
+      expect(sandboxText).toContain('(global-name "com.apple.MTLCompilerService")');
     }
   );
 
