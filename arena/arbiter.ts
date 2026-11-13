@@ -92,8 +92,6 @@ const MAX_INVALID_STRIKES = 3;
 const MAX_STDOUT_LINE_CHARS = 65_536;
 const MAX_LINE_QUEUE = 256;
 const MAX_LINES_PER_DECISION = 64;
-const MAX_CHAT_LINES_PER_DECISION = 1;
-const MAX_CHAT_MESSAGE_CHARS = 500;
 
 export class TimeSlicedArenaGame {
   private readonly format: string;
@@ -379,12 +377,10 @@ export class TimeSlicedArenaGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        if (!player.exited && player.proc.stdin.writable) {
-          player.proc.stdin.write(`${chunk}\n`);
-        }
-
         const lines = chunk.split('\n');
         const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
+        let clearStaleQueue = false;
+        let resendLastRequest = false;
         for (const line of lines) {
           if (line.startsWith('|request|')) {
             const reqJson = line.slice('|request|'.length).trim();
@@ -392,6 +388,7 @@ export class TimeSlicedArenaGame {
               try {
                 const parsed = JSON.parse(reqJson) as {wait?: boolean};
                 if (!parsed.wait) {
+                  clearStaleQueue = true;
                   if (!player.retryingInvalidChoice) {
                     player.invalidStrikes = 0;
                   }
@@ -408,13 +405,22 @@ export class TimeSlicedArenaGame {
             player.invalidStrikes++;
             player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
-              this.forceLose(player.slot, 'invalid_choice_limit');
+              this.forceLose(player.slot, 'invalid_choice_3x');
             } else if (!chunkHasRequest && player.lastRequestJson) {
+              clearStaleQueue = true;
+              resendLastRequest = true;
               player.pendingRequestJson = player.lastRequestJson;
-              if (!player.exited && player.proc.stdin.writable) {
-                player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
-              }
             }
+          }
+        }
+
+        if (clearStaleQueue) {
+          player.lineQueue.length = 0;
+        }
+        if (!player.exited && player.proc.stdin.writable) {
+          player.proc.stdin.write(`${chunk}\n`);
+          if (resendLastRequest && player.lastRequestJson) {
+            player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
           }
         }
       }
@@ -494,7 +500,6 @@ export class TimeSlicedArenaGame {
     let remainingBudgetMs = totalBudgetMs;
     let totalElapsedThisDecisionMs: number;
     let linesReadThisDecision = 0;
-    let chatLinesThisDecision = 0;
     this.resumeSlot(player);
     const decisionStartNs = process.hrtime.bigint();
 
@@ -525,17 +530,7 @@ export class TimeSlicedArenaGame {
         }
 
         const parsed = parseAgentStdoutLine(line);
-        if (!parsed) continue;
-
-        if (parsed.kind === 'chat') {
-          if (chatLinesThisDecision < MAX_CHAT_LINES_PER_DECISION) {
-            chatLinesThisDecision++;
-            const displayName = player.slot === 'p1' ? 'Agent A' : 'Agent B';
-            const safeMsg = parsed.message.slice(0, MAX_CHAT_MESSAGE_CHARS);
-            await this.battleStream.write(`>chat ${displayName}|${safeMsg}`);
-          }
-          continue;
-        }
+        if (!parsed || parsed.kind === 'chat') continue;
 
         const decisionElapsedMs = Math.max(1, Math.ceil(totalElapsedThisDecisionMs));
         const overGraceMs = Math.max(0, decisionElapsedMs - graceMs);

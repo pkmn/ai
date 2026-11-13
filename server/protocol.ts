@@ -41,8 +41,26 @@ function containsUndoSubchoice(choice: string): boolean {
   return false;
 }
 
+function hasEmbeddedControlChars(line: string): boolean {
+  for (let i = 0; i < line.length; i++) {
+    const code = line.charCodeAt(i);
+    if ((code < 0x20 && code !== 0x09) || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function stripControlChars(line: string): string {
+  let out = '';
+  for (let i = 0; i < line.length; i++) {
+    const code = line.charCodeAt(i);
+    if (code === 0x09) out += ' ';
+    else if (code >= 0x20 && code !== 0x7f) out += line[i];
+  }
+  return out;
+}
+
 function isBareSimulatorChoice(body: string): boolean {
-  if (body.startsWith('{') || body.startsWith('[')) return false;
+  if (body.includes('|') || body.startsWith('{') || body.startsWith('[')) return false;
   if (/^[1-9][0-9,\s]*$/.test(body)) return true;
   if (/^team\s+[1-9](?:\s*,\s*[1-9]){0,5}$/i.test(body)) return true;
   const parts = body.split(',');
@@ -59,13 +77,19 @@ function isBareSimulatorChoice(body: string): boolean {
 }
 
 // Parses a single stdout line from an Arena agent into either a Showdown simulator choice string
-// or a plain chat/text line (which callers discard so agents cannot message each other).
+// or a plain chat/text line (which callers discard so agents cannot message each other or inject
+// protocol commands). Lines with embedded `\r` or control characters are always demoted to chat.
 // Explicit forfeits (`forfeit`, `/forfeit`, `/choose forfeit`), tie offers (`/offertie`,
 // `/accepttie`, `/rejecttie`, `/tie`), timer commands (`/timer`), and choice cancellation (`undo`,
 // `/undo`, `/choose undo`) are intentionally rejected as chat so agents cannot forfeit, agree to
 // ties, or manipulate battle state.
 export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undefined {
-  const trimmed = rawLine.replace(/\r$/, '').trim();
+  const withoutCr = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+  if (hasEmbeddedControlChars(withoutCr)) {
+    const cleaned = stripControlChars(withoutCr).trim();
+    return cleaned ? {kind: 'chat', message: cleaned} : undefined;
+  }
+  const trimmed = withoutCr.trim();
   if (!trimmed) return undefined;
 
   // Strip optional leading room prefix `|<room>|` or `|` for agents reusing a PS client adapter.

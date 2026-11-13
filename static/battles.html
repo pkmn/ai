@@ -172,8 +172,15 @@
         '</div>';
     };
 
-    const isFaultReason = r => r && r !== 'normal' && r !== 'win' && r !== 'tie' &&
-      r !== 'turn_limit';
+    const isFaultReason = r => {
+      const norm = String(r || '').trim().toLowerCase();
+      return Boolean(norm) &&
+        norm !== 'normal' &&
+        norm !== 'win' &&
+        norm !== 'tie' &&
+        norm !== 'turn_limit' &&
+        !/^tie_\d+_turns$/.test(norm);
+    };
 
     const formatEndReason = reason => {
       const norm = String(reason || '').trim().toLowerCase();
@@ -183,7 +190,7 @@
       if (norm === 'tie') {
         return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
       }
-      if (norm === 'turn_limit') {
+      if (norm === 'turn_limit' || /^tie_\d+_turns$/.test(norm)) {
         return {html: '<span class="muted">Turn limit</span>', label: 'Turn limit', abnormal: false};
       }
       if (norm === 'timeout') {

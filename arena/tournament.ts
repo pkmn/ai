@@ -121,8 +121,6 @@ const MAX_INVALID_STRIKES = 3;
 const MAX_STDOUT_LINE_CHARS = 65_536;
 const MAX_LINE_QUEUE = 256;
 const MAX_LINES_PER_DECISION = 64;
-const MAX_CHAT_LINES_PER_DECISION = 1;
-const MAX_CHAT_MESSAGE_CHARS = 500;
 
 export function rewriteBlindPlayerNames(
   chunk: string,
@@ -443,7 +441,6 @@ export class ConcurrentTournamentGame {
     let remainingBudgetMs = totalBudgetMs;
     let totalElapsedMs = 0;
     let linesReadThisDecision = 0;
-    let chatLinesThisDecision = 0;
     player.thinking = true;
 
     try {
@@ -476,19 +473,7 @@ export class ConcurrentTournamentGame {
         }
 
         const parsed = parseAgentStdoutLine(line);
-        if (!parsed) continue;
-
-        if (parsed.kind === 'chat') {
-          if (chatLinesThisDecision < MAX_CHAT_LINES_PER_DECISION) {
-            chatLinesThisDecision++;
-            const chatAuthor = this.byot
-              ? player.spec.displayName
-              : (player.slot === 'p1' ? 'Agent A' : 'Agent B');
-            const safeMsg = parsed.message.slice(0, MAX_CHAT_MESSAGE_CHARS);
-            await this.battleStream.write(`>chat ${chatAuthor}|${safeMsg}`);
-          }
-          continue;
-        }
+        if (!parsed || parsed.kind === 'chat') continue;
 
         const decisionElapsedMs = Math.max(1, Math.ceil(totalElapsedMs));
         const overGraceMs = Math.max(0, decisionElapsedMs - graceMs);
@@ -514,11 +499,8 @@ export class ConcurrentTournamentGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        if (!player.exited && player.proc.stdin.writable) {
-          player.proc.stdin.write(`${chunk}\n`);
-        }
-
         let actionableReqJson: string | undefined;
+        let resendLastRequest = false;
         const lines = chunk.split('\n');
         const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
         for (const line of lines) {
@@ -544,13 +526,21 @@ export class ConcurrentTournamentGame {
             player.invalidStrikes++;
             player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
-              this.forceLose(player.slot, 'invalid_choice_limit');
+              this.forceLose(player.slot, 'invalid_choice_3x');
             } else if (!chunkHasRequest && player.lastRequestJson) {
               actionableReqJson = player.lastRequestJson;
-              if (!player.exited && player.proc.stdin.writable) {
-                player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
-              }
+              resendLastRequest = true;
             }
+          }
+        }
+
+        if (actionableReqJson) {
+          player.lineQueue.length = 0;
+        }
+        if (!player.exited && player.proc.stdin.writable) {
+          player.proc.stdin.write(`${chunk}\n`);
+          if (resendLastRequest && player.lastRequestJson) {
+            player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
           }
         }
 

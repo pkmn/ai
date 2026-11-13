@@ -1617,11 +1617,13 @@ function renderMatchOutcomeDisplay(cat: db.RecentMatchView['category']): {
 }
 
 function isAbnormalEndReason(reason: string): boolean {
-  return Boolean(reason) &&
-    reason !== 'normal' &&
-    reason !== 'win' &&
-    reason !== 'tie' &&
-    reason !== 'turn_limit';
+  const norm = reason.trim().toLowerCase();
+  return Boolean(norm) &&
+    norm !== 'normal' &&
+    norm !== 'win' &&
+    norm !== 'tie' &&
+    norm !== 'turn_limit' &&
+    !/^tie_\d+_turns$/.test(norm);
 }
 
 function formatEndReasonHtml(reason: string): {html: string; label: string; abnormal: boolean} {
@@ -1632,7 +1634,7 @@ function formatEndReasonHtml(reason: string): {html: string; label: string; abno
   if (norm === 'tie') {
     return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
   }
-  if (norm === 'turn_limit') {
+  if (norm === 'turn_limit' || /^tie_\d+_turns$/.test(norm)) {
     return {html: '<span class="muted">Turn limit</span>', label: 'Turn limit', abnormal: false};
   }
   if (norm === 'timeout') {

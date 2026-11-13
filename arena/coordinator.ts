@@ -96,7 +96,7 @@ export interface CoordinatorOptions {
   randomInt?: (max: number) => number;
 }
 
-const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid_choice_limit']);
+const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid_choice_3x']);
 
 function isPlayerFault(
   result: ArenaGameResult,
@@ -303,7 +303,7 @@ export class Coordinator {
           devMode: this.devMode,
         });
         const res = await game.run();
-        if (isPlayerFault(res, 'p1')) {
+        if (isPlayerFault(res, 'p1') || res.endReason === 'arbiter_stall') {
           smokeError = `Smoke test failed in ${format}: ${res.endReason}`;
           break;
         }

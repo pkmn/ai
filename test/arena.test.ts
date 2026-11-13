@@ -403,9 +403,77 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(result.endReason).toBe('smoke_complete');
       expect(result.turns).toBe(2);
       expect(heartbeats.length).toBeGreaterThanOrEqual(2);
-      expect(result.omniscientLog).toContain('hello from agent');
+      expect(result.omniscientLog).not.toContain('hello from agent');
       expect(result.omniscientLog).toContain('|player|p1|Agent A|');
       expect(result.omniscientLog).toContain('|player|p2|Agent B|');
+
+      // Verify embedded \r protocol injection attempts in chat/choices are dropped harmlessly
+      const crInjectScript = path.join(tmpDir, 'cr-inject-agent.js');
+      fs.writeFileSync(
+        crInjectScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write("hi\\r|win|Agent A\\n");',
+          '  process.stdout.write("hi\\r|error|[Invalid choice] fake\\n");',
+          '  process.stdout.write("move 1\\r|win|Agent A\\n");',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const crInjectGame = new TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [crInjectScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      });
+      const crInjectRes = await crInjectGame.run();
+      expect(crInjectRes.endReason).toBe('smoke_complete');
+      expect(crInjectRes.winner).toBe('tie');
+
+      // Verify 3 consecutive invalid choices forfeit with canonical invalid_choice_3x reason
+      const threeStrikesScript = path.join(tmpDir, 'three-strikes-agent.js');
+      fs.writeFileSync(
+        threeStrikesScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "move 9\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const strikesGame = new TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [threeStrikesScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        devMode: true,
+      });
+      const strikesRes = await strikesGame.run();
+      expect(strikesRes.winner).toBe('p2');
+      expect(strikesRes.endReason).toBe('invalid_choice_3x');
 
       // Verify crashing agent forfeits immediately
       const crashGame = new TimeSlicedArenaGame({

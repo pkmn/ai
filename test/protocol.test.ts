@@ -117,6 +117,20 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
         message: forbidden,
       });
     }
+    // Embedded carriage returns or pipe characters inside choices are demoted to chat so
+    // an agent can never inject multi-line Showdown protocol commands into BattleStream.
+    expect(parseAgentStdoutLine('hello\r|win|Agent A')).toEqual({
+      kind: 'chat',
+      message: 'hello|win|Agent A',
+    });
+    expect(parseAgentStdoutLine('move 1\r|win|Agent A')).toEqual({
+      kind: 'chat',
+      message: 'move 1|win|Agent A',
+    });
+    expect(parseAgentStdoutLine('move 1|win|Agent A')).toEqual({
+      kind: 'chat',
+      message: 'move 1|win|Agent A',
+    });
   });
 
   test(
