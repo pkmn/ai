@@ -1,10 +1,12 @@
 import {execFileSync, spawn} from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 
 import {Teams} from '@pkmn/sim';
+import polka from 'polka';
 import {afterAll, beforeAll, describe, expect, test} from 'vitest';
 
 import * as arenaIndex from '../arena';
@@ -23,7 +25,9 @@ import {
   rewriteBlindPlayerNames,
   selectNextTournamentBatch,
 } from '../arena/tournament';
+import {Database} from '../db';
 import * as serverArena from '../server/arena';
+import * as auth from '../server/auth';
 import {sampleRandomPair} from '../server/teams';
 import {root} from '../static/util';
 
@@ -1092,6 +1096,151 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(stateDb.getMatchCheckpoint('gen9customgame-0000099')?.status).toBe('complete');
 
       stateDb.close();
+    }
+  );
+
+  test(
+    'Coordinator records LW splits against real server HTTP API and evicts 4xx outbox entries',
+    async () => {
+      const db = new Database(':memory:');
+      const stateDb = new StateDatabase(':memory:');
+      const app = polka();
+      let server: http.Server | undefined;
+      try {
+        db.syncLaddersFromYaml([
+          '- name: RAND',
+          '  id: gen9randombattle202611',
+          '  format: gen9randombattle',
+          '  team: random',
+          '  status: active',
+          '  min: 2',
+        ].join('\n'));
+        db.syncProjectsFromYaml([
+          '- name: 0 ERROR',
+          '  active: 2026',
+          '  arena:',
+          '    qualified: true',
+          '    owners:',
+          '      scheibo: pre.10544',
+          '- name: Foul Play',
+          '  active: 2026',
+          '  arena:',
+          '    qualified: true',
+          '    owners:',
+          '      pmariglia: pmariglia.535629',
+        ].join('\n'));
+        const a1 = db.getAgentBySlug('0-error')!;
+        const a2 = db.getAgentBySlug('foul-play')!;
+        const sub1 = db.createSubmission({
+          agentId: a1.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/a1.tar.zst',
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen9randombattle202611'],
+          tournamentIds: [],
+        });
+        const sub2 = db.createSubmission({
+          agentId: a2.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/a2.tar.zst',
+          sha256: 'b'.repeat(64),
+          ladderIds: ['gen9randombattle202611'],
+          tournamentIds: [],
+        });
+        db.applySubmissionStatus({versionId: sub1.id, smokeStatus: 'passed', unpackedBytes: 1024});
+        db.applySubmissionStatus({versionId: sub2.id, smokeStatus: 'passed', unpackedBytes: 1024});
+
+        const secret = 'real-http-arena-secret-32-bytes-ok';
+        const authInst = new auth.Auth({
+          config: {sessionSecret: 'session-secret-32-bytes-minimum-ok', arenaSecret: secret},
+          db,
+        });
+        const publicDir = path.join(tmpDir, 'real-http-public');
+        fs.mkdirSync(publicDir, {recursive: true});
+        serverArena.register(app, {db, auth: authInst, publicDir});
+
+        server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+        await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+        const serverUrl = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
+        const client = new serverArena.Client({serverUrl, arenaSecret: secret});
+
+        // Script exits 1 in slot p1 and plays legally in slot p2 -> Game 1 = L, Game 2 = W ('LW')
+        const loseAsP1Dir = path.join(tmpDir, 'lose-as-p1-agents', 'lose-p1');
+        fs.mkdirSync(loseAsP1Dir, {recursive: true});
+        fs.writeFileSync(
+          path.join(loseAsP1Dir, 'run'),
+          [
+            '#!/usr/bin/env node',
+            'const readline = require("readline");',
+            'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+            'rl.on("line", line => {',
+            '  if (line.startsWith("|player|p1|")) process.exit(1);',
+            '  if (!line.startsWith("|request|")) return;',
+            '  const raw = line.slice(9).trim();',
+            '  if (!raw || raw === "null") return;',
+            '  const req = JSON.parse(raw);',
+            '  if (!req.wait) process.stdout.write("default\\n");',
+            '});',
+          ].join('\n'),
+          {mode: 0o755}
+        );
+
+        for (const [vid, aid, slug] of [
+          [sub1.id, a1.id, '0-error'],
+          [sub2.id, a2.id, 'foul-play'],
+        ] as const) {
+          stateDb.upsertLocalAgent({
+            versionId: vid,
+            agentId: aid,
+            slug,
+            version: '1.0.0',
+            mode: 'native',
+            target: 'lose-p1',
+            residency: 'hot',
+            unpackedBytes: 1024,
+          });
+        }
+
+        const coord = new Coordinator({
+          client,
+          stateDb,
+          baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          agentsDir: path.join(tmpDir, 'lose-as-p1-agents'),
+          stagingDir: path.join(tmpDir, 'lose-as-p1-staging'),
+          archiveLogsDir: path.join(tmpDir, 'lose-as-p1-logs'),
+          devMode: true,
+        });
+
+        // Enqueue a permanently malformed 400 outbox entry ahead of match execution to verify
+        // flushOutbox evicts permanent 4xx errors instead of wedging the FIFO queue.
+        stateDb.enqueueOutbox(
+          'match-complete',
+          {match: {id: 'bad'}} as unknown as serverArena.MatchCompletePayload
+        );
+
+        const snapRes = await fetch(`${serverUrl}/api/arena/ladders`, {
+          headers: {Authorization: `Bearer ${secret}`},
+        });
+        const {ladders} = await snapRes.json() as {ladders: LadderSnapshot[]};
+        const played = await coord.playNextScheduledMatch(ladders);
+        expect(played?.ladderId).toBe('gen9randombattle202611');
+        expect(stateDb.listOutbox()).toHaveLength(0);
+
+        const recorded = db.getRecentMatches(5);
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0].game1Outcome).toBe('L');
+        expect(recorded[0].game2Outcome).toBe('W');
+        expect(recorded[0].category).toBe('LW');
+      } finally {
+        if (server) {
+          server.closeAllConnections();
+          await new Promise<void>(resolve => server!.close(() => resolve()));
+        }
+        stateDb.close();
+        db.close();
+      }
     }
   );
 

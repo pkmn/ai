@@ -758,7 +758,10 @@ export class Client {
       const errMsg = parsed && typeof parsed === 'object' && 'error' in parsed
         ? String(parsed.error)
         : text;
-      throw new Error(`${method} ${endpoint} failed (${res.status}): ${errMsg}`);
+      throw Object.assign(
+        new Error(`${method} ${endpoint} failed (${res.status}): ${errMsg}`),
+        {status: res.status}
+      );
     }
     return parsed as T;
   }
@@ -789,7 +792,10 @@ export class Client {
       const errMsg = parsed && typeof parsed === 'object' && 'error' in parsed
         ? String(parsed.error)
         : text;
-      throw new Error(`PUT ${endpoint} failed (${res.status}): ${errMsg}`);
+      throw Object.assign(
+        new Error(`PUT ${endpoint} failed (${res.status}): ${errMsg}`),
+        {status: res.status}
+      );
     }
     return parsed as T;
   }

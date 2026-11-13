@@ -111,14 +111,21 @@ function combineMatchCategory(
   g1: ratings.GameOutcome,
   g2: ratings.GameOutcome
 ): ratings.MatchCategory {
-  const s1 = g1 === 'W' ? 1 : g1 === 'T' ? 0.5 : 0;
-  const s2 = g2 === 'W' ? 1 : g2 === 'T' ? 0.5 : 0;
-  const sum = s1 + s2;
-  if (sum === 2) return 'WW';
-  if (sum === 1.5) return 'WT';
-  if (sum === 1) return g1 === 'T' ? 'TT' : 'WL';
-  if (sum === 0.5) return 'TL';
-  return 'LL';
+  return `${g1}${g2}`;
+}
+
+function isPermanentClientError(err: unknown): boolean {
+  const explicitStatus = (err as {status?: unknown} | undefined)?.status;
+  let status = typeof explicitStatus === 'number' ? explicitStatus : undefined;
+  if (status === undefined && err instanceof Error) {
+    const m = /\((\d{3})\):/.exec(err.message);
+    if (m) status = Number(m[1]);
+  }
+  return status !== undefined &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429;
 }
 
 export class Coordinator {
@@ -194,8 +201,13 @@ export class Coordinator {
         }
         this.stateDb.deleteOutboxEntry(entry.id);
         flushed++;
-      } catch {
-        // Tunnel still unreachable; preserve remaining FIFO entries for next retry
+      } catch (err) {
+        if (isPermanentClientError(err)) {
+          console.error(`Dropping permanently rejected outbox entry #${entry.id}:`, err);
+          this.stateDb.deleteOutboxEntry(entry.id);
+          continue;
+        }
+        // Tunnel still unreachable or transient error; preserve FIFO order for next retry
         break;
       }
     }
@@ -381,7 +393,11 @@ export class Coordinator {
   private async reportSubmissionOrOutbox(payload: arena.SubmissionStatusPayload) {
     try {
       await this.client.reportSubmissionStatus(payload);
-    } catch {
+    } catch (err) {
+      if (isPermanentClientError(err)) {
+        console.error('Submission status permanently rejected by server:', err);
+        return;
+      }
       this.stateDb.enqueueOutbox('submission-status', payload);
     }
   }
@@ -391,7 +407,11 @@ export class Coordinator {
   ): Promise<{archivedLadder: boolean}> {
     try {
       return await this.client.completeMatch(payload);
-    } catch {
+    } catch (err) {
+      if (isPermanentClientError(err)) {
+        console.error('Match completion permanently rejected by server:', err);
+        return {archivedLadder: false};
+      }
       this.stateDb.enqueueOutbox('match-complete', payload);
       return {archivedLadder: false};
     }
