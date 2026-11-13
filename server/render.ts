@@ -1644,9 +1644,6 @@ function formatEndReasonHtml(reason: string): {html: string; label: string; abno
   if (norm === 'oom') {
     return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
   }
-  if (norm === 'forfeit') {
-    return {html: '<span class="no">Forfeit</span>', label: 'Forfeit', abnormal: true};
-  }
   if (norm === 'invalid_choice_3x') {
     return {
       html: '<span class="no">3&times; Invalid Choice</span>',

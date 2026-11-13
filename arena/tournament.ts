@@ -395,7 +395,7 @@ export class ConcurrentTournamentGame {
     Promise.resolve(this.battleStream.write('>forcetie')).catch(() => undefined);
   }
 
-  private forfeit(losingSlot: PlayerSlot, reason: string) {
+  private forceLose(losingSlot: PlayerSlot, reason: string) {
     if (this.ended) return;
     this.ended = true;
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
@@ -461,17 +461,17 @@ export class ConcurrentTournamentGame {
         }
         if (timedOut || remainingBudgetMs < 0) {
           player.bankMs = 0;
-          this.forfeit(player.slot, 'timeout');
+          this.forceLose(player.slot, 'timeout');
           return;
         }
         if (line === undefined) {
-          this.forfeit(player.slot, 'crash');
+          this.forceLose(player.slot, 'crash');
           return;
         }
 
         linesReadThisDecision++;
         if (linesReadThisDecision > MAX_LINES_PER_DECISION) {
-          this.forfeit(player.slot, 'crash');
+          this.forceLose(player.slot, 'crash');
           return;
         }
 
@@ -544,7 +544,7 @@ export class ConcurrentTournamentGame {
             player.invalidStrikes++;
             player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
-              this.forfeit(player.slot, 'invalid_choice_limit');
+              this.forceLose(player.slot, 'invalid_choice_limit');
             } else if (!chunkHasRequest && player.lastRequestJson) {
               actionableReqJson = player.lastRequestJson;
               if (!player.exited && player.proc.stdin.writable) {

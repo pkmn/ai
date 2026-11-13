@@ -60,6 +60,10 @@ function isBareSimulatorChoice(body: string): boolean {
 
 // Parses a single stdout line from an Arena agent into either a Showdown simulator choice string
 // or a plain chat/text line (which callers discard so agents cannot message each other).
+// Explicit forfeits (`forfeit`, `/forfeit`, `/choose forfeit`), tie offers (`/offertie`,
+// `/accepttie`, `/rejecttie`, `/tie`), timer commands (`/timer`), and choice cancellation (`undo`,
+// `/undo`, `/choose undo`) are intentionally rejected as chat so agents cannot forfeit, agree to
+// ties, or manipulate battle state.
 export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undefined {
   const trimmed = rawLine.replace(/\r$/, '').trim();
   if (!trimmed) return undefined;
@@ -77,28 +81,36 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
   if (body.startsWith('/choose ')) {
     const choice = body.slice(8).trim();
     if (!choice) return undefined;
-    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    if (containsUndoSubchoice(choice) || !isBareSimulatorChoice(choice)) {
+      return {kind: 'chat', message: body};
+    }
     return {kind: 'choice', choice};
   }
   if (body.startsWith('/team ')) {
     const rest = body.slice(6).trim();
     if (!rest) return undefined;
     const choice = `team ${rest}`;
-    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    if (containsUndoSubchoice(choice) || !isBareSimulatorChoice(choice)) {
+      return {kind: 'chat', message: body};
+    }
     return {kind: 'choice', choice};
   }
   if (body.startsWith('/switch ')) {
     const rest = body.slice(8).trim();
     if (!rest) return undefined;
     const choice = `switch ${rest}`;
-    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    if (containsUndoSubchoice(choice) || !isBareSimulatorChoice(choice)) {
+      return {kind: 'chat', message: body};
+    }
     return {kind: 'choice', choice};
   }
   if (body.startsWith('/move ')) {
     const rest = body.slice(6).trim();
     if (!rest) return undefined;
     const choice = `move ${rest}`;
-    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    if (containsUndoSubchoice(choice) || !isBareSimulatorChoice(choice)) {
+      return {kind: 'chat', message: body};
+    }
     return {kind: 'choice', choice};
   }
   if (

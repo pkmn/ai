@@ -99,6 +99,24 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
       kind: 'chat',
       message: '/team 1, undo',
     });
+    // Explicit forfeits, tie offers, and timer manipulation are forbidden in the Arena.
+    for (const forbidden of [
+      'forfeit',
+      '/forfeit',
+      '/choose forfeit',
+      'offertie',
+      '/offertie',
+      '/choose offertie',
+      '/accepttie',
+      '/rejecttie',
+      '/tie',
+      '/timer on',
+    ]) {
+      expect(parseAgentStdoutLine(forbidden)).toEqual({
+        kind: 'chat',
+        message: forbidden,
+      });
+    }
   });
 
   test(

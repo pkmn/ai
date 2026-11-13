@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS matches (
   -- Turn counts for Game 1 and Game 2.
   game1_turns INTEGER NOT NULL,
   game2_turns INTEGER NOT NULL,
-  -- Termination reason for each game (e.g. 'win', 'tie', 'forfeit', 'timeout', 'crash', 'oom',
+  -- Termination reason for each game (e.g. 'win', 'tie', 'turn_limit', 'timeout', 'crash', 'oom',
   -- 'invalid_choice_3x').
   game1_end_reason TEXT NOT NULL,
   game2_end_reason TEXT NOT NULL,

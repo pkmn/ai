@@ -408,7 +408,7 @@ export class TimeSlicedArenaGame {
             player.invalidStrikes++;
             player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
-              this.forfeit(player.slot, 'invalid_choice_limit');
+              this.forceLose(player.slot, 'invalid_choice_limit');
             } else if (!chunkHasRequest && player.lastRequestJson) {
               player.pendingRequestJson = player.lastRequestJson;
               if (!player.exited && player.proc.stdin.writable) {
@@ -421,7 +421,7 @@ export class TimeSlicedArenaGame {
     })().catch(() => undefined);
   }
 
-  private forfeit(losingSlot: PlayerSlot, reason: string) {
+  private forceLose(losingSlot: PlayerSlot, reason: string) {
     if (this.ended) return;
     this.ended = true;
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
@@ -509,18 +509,18 @@ export class TimeSlicedArenaGame {
 
         if (timedOut || remainingBudgetMs <= 0) {
           player.bankMs = 0;
-          this.forfeit(player.slot, 'timeout');
+          this.forceLose(player.slot, 'timeout');
           return false;
         }
         if (line === undefined) {
           const reason = player.exitCode === 137 ? 'oom' : 'crash';
-          this.forfeit(player.slot, reason);
+          this.forceLose(player.slot, reason);
           return false;
         }
 
         linesReadThisDecision++;
         if (linesReadThisDecision > MAX_LINES_PER_DECISION) {
-          this.forfeit(player.slot, 'crash');
+          this.forceLose(player.slot, 'crash');
           return false;
         }
 
