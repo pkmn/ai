@@ -26,6 +26,16 @@ export const SINGLES_INCREMENT_SECONDS = 10;
 export const DOUBLES_INCREMENT_SECONDS = 25;
 export const MAX_BATTLE_TURNS = 1000;
 
+function decodeRouteParam(param: string | string[] | undefined): string {
+  const raw = Array.isArray(param) ? param[0] : param;
+  if (!raw) return '';
+  try {
+    return decodeURIComponent(raw).trim();
+  } catch {
+    return raw.trim();
+  }
+}
+
 export function turnIncrementSeconds(format: string): number {
   return format.includes('doubles') || format.includes('vgc')
     ? DOUBLES_INCREMENT_SECONDS
@@ -1970,8 +1980,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.post('/api/arena/tournaments/:id/broadcast', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const rawId = decodeRouteParam(req.params.id);
     const tournament = db.getTournament(rawId);
     if (!tournament) {
       sendJson(res, 404, {error: `Unknown tournament "${rawId}".`});
@@ -2185,8 +2194,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.post('/api/arena/tournaments/:id/game-complete', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const rawId = decodeRouteParam(req.params.id);
     const tournament = db.getTournament(rawId);
     if (!tournament) {
       sendJson(res, 404, {error: `Unknown tournament "${rawId}".`});
@@ -2336,8 +2344,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.put('/api/arena/tournaments/:id/archive', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const rawId = decodeRouteParam(req.params.id);
     const tournament = db.getTournament(rawId);
     if (!tournament) {
       req.resume();
@@ -2392,8 +2399,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.put('/api/arena/ladders/:id/archive', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const rawId = decodeRouteParam(req.params.id);
     const ladder = db.getLadder(rawId);
     if (!ladder) {
       req.resume();
@@ -2449,8 +2455,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.put('/api/arena/ladders/:id/teams', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const rawId = decodeRouteParam(req.params.id);
     const ladder = db.getLadder(rawId);
     if (!ladder) {
       req.resume();
@@ -2538,8 +2543,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.get('/api/arena/ladders/:id/teams', (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const rawId = decodeRouteParam(req.params.id);
     const ladder = db.getLadder(rawId);
     if (!ladder) {
       sendJson(res, 404, {error: `Unknown ladder "${rawId}".`});
@@ -2611,8 +2615,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   });
 
   app.get('/api/tournaments/:id/stream', (req, res) => {
-    const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const rawId = decodeURIComponent(paramId ?? '').trim();
+    const rawId = decodeRouteParam(req.params.id);
     const tournament = db.getTournament(rawId);
     if (!tournament) {
       sendJson(res, 404, {error: `Unknown tournament "${rawId}".`});

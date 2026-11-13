@@ -19,6 +19,14 @@ export interface User {
   banned: boolean;
 }
 
+function safeDecodeURIComponent(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export function parseIdentifier(raw: string | number): {id?: number; username?: string} {
   if (typeof raw === 'number') {
     if (!Number.isInteger(raw) || raw <= 0) {
@@ -43,7 +51,7 @@ export function parseIdentifier(raw: string | number): {id?: number; username?: 
   const urlMatch = MEMBER_URL_RE.exec(trimmed);
   if (urlMatch) {
     const id = Number(urlMatch[2]);
-    const slug = urlMatch[1] ? decodeURIComponent(urlMatch[1]) : undefined;
+    const slug = urlMatch[1] ? safeDecodeURIComponent(urlMatch[1]) : undefined;
     return {id, username: slug};
   }
 
@@ -57,8 +65,18 @@ export function parseIdentifier(raw: string | number): {id?: number; username?: 
 
 function decodeHtmlEntities(str: string): string {
   return str
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => {
+      const code = Number(dec);
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : '';
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => {
+      const code = parseInt(hex, 16);
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : '';
+    })
     .replace(/&quot;/g, '"')
     .replace(/&#0*39;|&apos;/g, "'")
     .replace(/&lt;/g, '<')
@@ -120,7 +138,7 @@ export async function lookupUser(
       throw new Error(`Unexpected redirect "${location}" looking up Smogon user "${raw}"`);
     }
     id = Number(m[2]);
-    if (m[1]) fallbackSlug = decodeURIComponent(m[1]);
+    if (m[1]) fallbackSlug = safeDecodeURIComponent(m[1]);
   }
 
   const tooltipUrl =
@@ -143,7 +161,7 @@ export async function lookupUser(
   );
   const nameMatch = nameRe.exec(html);
   const slug = nameMatch?.[1]
-    ? decodeURIComponent(nameMatch[1])
+    ? safeDecodeURIComponent(nameMatch[1])
     : (fallbackSlug ?? String(id));
   const rawName = nameMatch?.[2]
     ? decodeHtmlEntities(nameMatch[2].replace(/<[^>]+>/g, '')).trim()

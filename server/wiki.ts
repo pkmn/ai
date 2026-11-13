@@ -205,17 +205,29 @@ function wikiNav(slug: string, active: 'view' | 'edit' | 'history' | 'pages'): s
 }
 
 const UNSAFE_URI_SCHEME = /^(?:javascript|vbscript|data):/i;
-const DANGEROUS_ATTR_NAMES = new Set(['srcdoc', 'formaction', 'style']);
+const DANGEROUS_ATTR_NAMES = new Set([
+  'srcdoc',
+  'formaction',
+  'style',
+  'ping',
+  'background',
+  'dynsrc',
+  'lowsrc',
+]);
 
 function decodeHtmlEntities(raw: string): string {
   return raw
     .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => {
       const code = parseInt(hex, 16);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : '';
     })
     .replace(/&#([0-9]+);?/g, (_, dec) => {
       const code = parseInt(dec, 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : '';
     })
     .replace(/&colon;/gi, ':')
     .replace(/&tab;/gi, '\t')
@@ -237,27 +249,34 @@ export function sanitizeWikiHtml(html: string): string {
     )
     .replace(
       // eslint-disable-next-line max-len
-      /<\/?(?:script|iframe|object|embed|style|svg|form|applet|template|base|meta|link|input|button|textarea|select)\b[^>]*>/gi,
+      /<\/?(?:script|iframe|object|embed|style|svg|form|applet|template|base|meta|link|input|button|textarea|select)\b(?:\s+(?:[^>"']|"[^"]*"|'[^']*'))*\s*\/?>/gi,
       ''
     );
 
   return withoutBlocks.replace(
-    /<([a-zA-Z][a-zA-Z0-9:-]*)(\s[^>]*)?>/g,
+    /<([a-zA-Z][a-zA-Z0-9:-]*)(\s(?:[^>"']|"[^"]*"|'[^']*')*)?>/g,
     (full, tag: string, attrs: string | undefined) => {
       if (!attrs) return full;
-      const cleaned = attrs.replace(
+      const selfClose = attrs.trimEnd().endsWith('/') ? '/' : '';
+      const attrBody = selfClose ? attrs.replace(/\/\s*$/, '') : attrs;
+      const cleaned = attrBody.replace(
         /\s+([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,
-        (attrMatch, name: string, dq?: string, sq?: string, uq?: string) => {
+        (_attrMatch, name: string, dq?: string, sq?: string, uq?: string) => {
           const lower = name.toLowerCase();
           if (lower.startsWith('on') || DANGEROUS_ATTR_NAMES.has(lower)) return '';
+          const rawVal = dq ?? sq ?? uq;
+          if (rawVal === undefined) return ` ${name}`;
           if (lower === 'href' || lower === 'src' || lower === 'xlink:href' || lower === 'action') {
-            const val = dq ?? sq ?? uq ?? '';
-            if (!isSafeWikiUri(val)) return ` ${name}="#"`;
+            if (!isSafeWikiUri(rawVal)) return ` ${name}="#"`;
           }
-          return attrMatch;
+          const safeVal = rawVal
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+          return ` ${name}="${safeVal}"`;
         }
       );
-      return `<${tag}${cleaned}>`;
+      return `<${tag}${cleaned}${selfClose}>`;
     }
   );
 }
@@ -420,7 +439,19 @@ export class Wiki {
   resolveSlug(slug: string): string {
     this.refreshMetadata();
     const normalized = normalizeSlug(slug);
-    return this.projectAliases.get(normalized.toLowerCase()) ?? normalized;
+    const aliased = this.projectAliases.get(normalized.toLowerCase());
+    if (aliased) return aliased;
+    if (normalized && fs.existsSync(this.wikiDir)) {
+      const lowerTarget = `${normalized.toLowerCase()}.dj`;
+      try {
+        for (const entry of fs.readdirSync(this.wikiDir)) {
+          if (entry.toLowerCase() === lowerTarget && entry.endsWith('.dj')) {
+            return entry.slice(0, -3);
+          }
+        }
+      } catch {}
+    }
+    return normalized;
   }
 
   getProjectPage(slug: string): ProjectPage | undefined {
@@ -983,7 +1014,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
         sendError(res, 404, '<p>Revision not found.</p>');
         return;
       }
-      const renderedDiff = renderDjot(`\`\`\`diff\n${diff}\n\`\`\``);
+      const maxTicks = Math.max(
+        3,
+        ...Array.from(diff.matchAll(/`+/g), m => m[0].length + 1)
+      );
+      const fence = '`'.repeat(maxTicks);
+      const renderedDiff = renderDjot(`${fence}diff\n${diff}\n${fence}`);
       const heading = `${displayTitle} @ ${sha.slice(0, 7)}`;
       const snapLink =
         `<p class="wiki-meta"><a href="/wiki/${escapeHtml(encoded)}/${sha}">View snapshot</a></p>`;
