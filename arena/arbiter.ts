@@ -7,8 +7,11 @@ import {BattleStreams, PRNGSeed} from '@pkmn/sim';
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
+import {ensureSimConfigured} from '../server/teams';
 
 import {AgentMode} from './db';
+
+ensureSimConfigured();
 
 type PlayerSlot = 'p1' | 'p2';
 

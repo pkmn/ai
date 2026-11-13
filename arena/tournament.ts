@@ -6,7 +6,10 @@ import {BattleStreams, Dex, PRNGSeed, PokemonSet, TeamValidator, Teams} from '@p
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
+import {ensureSimConfigured} from '../server/teams';
 import {toID} from '../static/util';
+
+ensureSimConfigured();
 
 type PlayerSlot = 'p1' | 'p2';
 

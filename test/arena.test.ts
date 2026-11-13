@@ -28,6 +28,7 @@ import {
   selectNextTournamentBatch,
 } from '../arena/tournament';
 import * as serverArena from '../server/arena';
+import {sampleRandomPair} from '../server/teams';
 import {root} from '../static/util';
 
 const TEAM_ONE =
@@ -429,6 +430,29 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       });
       const undoRes = await undoGame.run();
       expect(undoRes.endReason).toBe('smoke_complete');
+
+      // Verify gen9championsvgc2026regmc runs as Doubles with Open Team Sheets and
+      // gen9randombattle generates 6-Pokemon teams via @pkmn/randoms
+      const randTeams = sampleRandomPair('gen9randombattle', '1,2,3,4', '5,6,7,8');
+      expect(Teams.unpack(randTeams.t1Packed)).toHaveLength(6);
+      expect(Teams.unpack(randTeams.t2Packed)).toHaveLength(6);
+      expect(randTeams.t1Packed).not.toBe(randTeams.t2Packed);
+
+      const vgcGame = new TimeSlicedArenaGame({
+        format: 'gen9championsvgc2026regmc',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      });
+      const vgcRes = await vgcGame.run();
+      expect(vgcRes.endReason).toBe('smoke_complete');
+      expect(vgcRes.omniscientLog).toContain('|gametype|doubles');
+      expect(vgcRes.omniscientLog).toContain('|showteam|p1|');
+      expect(vgcRes.omniscientLog).toContain('|showteam|p2|');
     }
   );
 

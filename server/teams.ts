@@ -15,6 +15,7 @@ import * as path from 'path';
 import {ModdedDex} from '@pkmn/dex';
 import * as champions from '@pkmn/mods/champions';
 import * as championsregmb from '@pkmn/mods/championsregmb';
+import {TeamGenerators} from '@pkmn/randoms';
 import {PokemonSet, Team} from '@pkmn/sets';
 import * as sim from '@pkmn/sim';
 
@@ -22,10 +23,46 @@ import {toID} from '../static/util';
 import * as teams from '../teams';
 
 // `@pkmn/mods` requires parent mods (`champions`) to be registered on `@pkmn/sim`'s `Dex`
-// before child mods (`championsregmb`), attaching format rules to the returned `ModdedDex`.
+// before child mods (`championsregmb`). We also extend the base `sim.Dex.formats` table so
+// `BattleStreams.BattleStream()` resolves VGC Champions formats (`gen9championsvgc2026regmc`),
+// and register `@pkmn/randoms` so `sim.Teams.generate` works for Random Battle ladders.
 const CHAMPIONS_SIM_DEX = sim.Dex.mod('champions', champions as unknown as sim.ModData);
 const CHAMPIONS_REGMB_SIM_DEX =
   sim.Dex.mod('championsregmb', championsregmb as unknown as sim.ModData);
+
+type FormatListArg = Parameters<typeof sim.Dex.formats.extend>[0];
+
+function forceOpenTeamSheets(formats: FormatListArg): FormatListArg {
+  return formats.map(entry => {
+    const f = entry as {ruleset?: string[]};
+    if (!Array.isArray(f.ruleset) || !f.ruleset.includes('Open Team Sheets')) {
+      return entry;
+    }
+    return {
+      ...entry,
+      ruleset: f.ruleset.map(r => (r === 'Open Team Sheets' ? 'Force Open Team Sheets' : r)),
+    };
+  });
+}
+
+let simConfigured = false;
+export function ensureSimConfigured() {
+  if (simConfigured) return;
+  simConfigured = true;
+  if ((champions as {Formats?: unknown}).Formats) {
+    sim.Dex.formats.extend(
+      forceOpenTeamSheets((champions as unknown as {Formats: FormatListArg}).Formats)
+    );
+  }
+  if ((championsregmb as {Formats?: unknown}).Formats) {
+    sim.Dex.formats.extend(
+      forceOpenTeamSheets((championsregmb as unknown as {Formats: FormatListArg}).Formats)
+    );
+  }
+  sim.Teams.setGeneratorFactory(TeamGenerators);
+}
+
+ensureSimConfigured();
 
 function getValidator(format: string): sim.TeamValidator {
   const id = toID(format);
