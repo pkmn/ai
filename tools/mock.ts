@@ -2162,7 +2162,7 @@ export class Runner {
 
     const pickReason = (outcome: ratings.GameOutcome, override?: string): string => {
       if (override) return override;
-      if (outcome === 'T') return 'tie_100_turns';
+      if (outcome === 'T') return 'tie-100-turns';
       if (opts.faultRate && opts.faultRate > 0 && this.nextFloat() < opts.faultRate) {
         return this.nextInt(2) === 0 ? 'timeout' : 'crash';
       }
@@ -2936,7 +2936,7 @@ export class Runner {
           p1Team,
           p2Team,
           outcome,
-          endReason: outcome === 'T' ? 'tie_100_turns' : 'win',
+          endReason: outcome === 'T' ? 'tie-100-turns' : 'win',
           turns: outcome === 'T' ? 100 : (isVgc ? 8 + this.nextInt(9) : 24 + this.nextInt(24)),
           p1BankSeconds: 70 + this.nextInt(50),
           p2BankSeconds: 60 + this.nextInt(50),

@@ -34,6 +34,7 @@ case "$ACTION" in
   run)
     wipe_scratch
     if [[ "$MODE" == "container" ]]; then
+      rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
       podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
       GPU_ARGS=()
       if [[ "${ARENA_PODMAN_GPU:-1}" != "0" ]]; then
@@ -118,6 +119,12 @@ case "$ACTION" in
 
   cleanup)
     if [[ -z "$MODE" || "$MODE" == "container" ]]; then
+      if [[ "$MODE" == "container" ]]; then
+        peak_bytes="$(podman exec "$CONTAINER_NAME" cat /sys/fs/cgroup/memory.peak 2>/dev/null || true)"
+        if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
+          echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+        fi
+      fi
       podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
     fi
     if [[ -z "$MODE" || "$MODE" == "native" ]]; then

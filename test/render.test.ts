@@ -778,7 +778,7 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
         p2Team: '|Pikachu|Light Ball',
         outcome: 'T',
         turns: 100,
-        endReason: 'tie_100_turns',
+        endReason: 'tie-100-turns',
         p1BankSeconds: 90,
         p2BankSeconds: 80,
         completedAt: DAY_3 + 60,

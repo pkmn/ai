@@ -88,10 +88,184 @@ interface SandboxedPlayer {
   exitCode: number | undefined;
 }
 
-const MAX_INVALID_STRIKES = 3;
-const MAX_STDOUT_LINE_CHARS = 65_536;
-const MAX_LINE_QUEUE = 256;
-const MAX_LINES_PER_DECISION = 64;
+export const MAX_INVALID_STRIKES = 3;
+export const MAX_STDOUT_LINE_CHARS = 65_536;
+export const MAX_LINE_QUEUE = 256;
+export const MAX_LINES_PER_DECISION = 64;
+
+export interface ProtocolStrikeState {
+  retryingInvalidChoice: boolean;
+  invalidStrikes: number;
+  lastRequestJson: string | undefined;
+}
+
+export interface ChunkInspectionResult {
+  actionableReqJson?: string;
+  clearQueue: boolean;
+  resendLastRequest: boolean;
+  forfeitedInvalidChoice: boolean;
+}
+
+export function inspectPlayerProtocolChunk(
+  chunk: string,
+  state: ProtocolStrikeState,
+  ended: boolean
+): ChunkInspectionResult {
+  const lines = chunk.split('\n');
+  const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
+  let actionableReqJson: string | undefined;
+  let clearQueue = false;
+  let resendLastRequest = false;
+  let forfeitedInvalidChoice = false;
+
+  for (const line of lines) {
+    if (line.startsWith('|request|')) {
+      const reqJson = line.slice('|request|'.length).trim();
+      if (reqJson && reqJson !== 'null') {
+        try {
+          const parsed = JSON.parse(reqJson) as {wait?: boolean};
+          if (!parsed.wait) {
+            clearQueue = true;
+            if (!state.retryingInvalidChoice) {
+              state.invalidStrikes = 0;
+            }
+            actionableReqJson = reqJson;
+            state.lastRequestJson = reqJson;
+          }
+        } catch {}
+      }
+    } else if (
+      (line.startsWith('|error|[Invalid choice]') ||
+        line.startsWith('|error|[Unavailable choice]')) &&
+      !ended
+    ) {
+      state.invalidStrikes++;
+      state.retryingInvalidChoice = true;
+      if (state.invalidStrikes >= MAX_INVALID_STRIKES) {
+        forfeitedInvalidChoice = true;
+      } else if (!chunkHasRequest && state.lastRequestJson) {
+        clearQueue = true;
+        resendLastRequest = true;
+        actionableReqJson = state.lastRequestJson;
+      }
+    }
+  }
+
+  return {actionableReqJson, clearQueue, resendLastRequest, forfeitedInvalidChoice};
+}
+
+export interface PlayerClockState {
+  slot: PlayerSlot;
+  bankMs: number;
+  hasTakenFirstDecision: boolean;
+  retryingInvalidChoice: boolean;
+}
+
+export function beginTurnClockStep(
+  player: PlayerClockState,
+  currentTurn: number,
+  lastRewardedTurn: Record<PlayerSlot, number>,
+  timers: {
+    firstTurnGraceMs: number;
+    maxTurnMs: number;
+    fullTurnIncrementMs: number;
+    midTurnIncrementMs: number;
+  }
+): {
+  graceMs: number;
+  turnAllowanceMs: number;
+  totalBudgetMs: number;
+  inactiveLine: string;
+} {
+  const isRetry = player.retryingInvalidChoice;
+  player.retryingInvalidChoice = false;
+
+  // Credit full-turn or mid-turn increment before starting the turn clock,
+  // except when retrying after an invalid/unavailable choice on the same decision.
+  if (player.hasTakenFirstDecision && !isRetry) {
+    const isNewTurn = currentTurn > lastRewardedTurn[player.slot];
+    const incrementMs = isNewTurn ? timers.fullTurnIncrementMs : timers.midTurnIncrementMs;
+    player.bankMs = Math.min(timers.maxTurnMs, player.bankMs + incrementMs);
+    lastRewardedTurn[player.slot] = currentTurn;
+  }
+
+  const isFirstDecision = !player.hasTakenFirstDecision;
+  if (isFirstDecision) {
+    player.hasTakenFirstDecision = true;
+    lastRewardedTurn[player.slot] = currentTurn;
+  }
+  const graceMs = isFirstDecision ? timers.firstTurnGraceMs : 0;
+  const turnAllowanceMs = Math.min(player.bankMs, timers.maxTurnMs);
+  const totalBudgetMs = graceMs + turnAllowanceMs;
+  const turnSec = (turnAllowanceMs / 1000).toFixed(1);
+  const totalSec = (player.bankMs / 1000).toFixed(1);
+  const graceSec = (graceMs / 1000).toFixed(1);
+  const inactiveLine =
+    `|inactive|Time left: ${turnSec} sec this turn | ` +
+    `${totalSec} sec total | ${graceSec} sec grace\n`;
+
+  return {graceMs, turnAllowanceMs, totalBudgetMs, inactiveLine};
+}
+
+export function formatChoiceCommand(choice: string, teamPreview?: boolean): string {
+  return teamPreview && !choice.startsWith('team ') ? `team ${choice}` : choice;
+}
+
+export function inspectOmniscientLine(
+  line: string,
+  opts: {
+    currentTurn: number;
+    maxTurns: number;
+    smokeStopAfterTurn?: number;
+    ended: boolean;
+    expectedP1Name: string;
+  }
+): {
+  currentTurn: number;
+  terminal?: {
+    winner: PlayerSlot | 'tie';
+    endReason: string;
+    forceTie?: boolean;
+  };
+} {
+  if (line.startsWith('|turn|')) {
+    const nextTurn = parseInt(line.slice('|turn|'.length), 10);
+    if (
+      opts.smokeStopAfterTurn !== undefined &&
+      nextTurn > opts.smokeStopAfterTurn &&
+      !opts.ended
+    ) {
+      return {
+        currentTurn: nextTurn,
+        terminal: {winner: 'tie', endReason: 'smoke-complete', forceTie: true},
+      };
+    }
+    if (nextTurn > opts.maxTurns && !opts.ended) {
+      return {
+        currentTurn: nextTurn,
+        terminal: {winner: 'tie', endReason: `tie-${opts.maxTurns}-turns`, forceTie: true},
+      };
+    }
+    return {currentTurn: nextTurn};
+  }
+  if (line.startsWith('|win|') && !opts.ended) {
+    const wName = line.slice('|win|'.length).trim();
+    return {
+      currentTurn: opts.currentTurn,
+      terminal: {
+        winner: wName === opts.expectedP1Name ? 'p1' : 'p2',
+        endReason: 'win',
+      },
+    };
+  }
+  if ((line === '|tie' || line.startsWith('|tie|')) && !opts.ended) {
+    return {
+      currentTurn: opts.currentTurn,
+      terminal: {winner: 'tie', endReason: 'tie'},
+    };
+  }
+  return {currentTurn: opts.currentTurn};
+}
 
 export class TimeSlicedArenaGame {
   private readonly format: string;
@@ -319,6 +493,25 @@ export class TimeSlicedArenaGame {
           stdio: 'ignore',
         });
       } catch {}
+    } else if (!this.devMode && player.spec.mode === 'container') {
+      try {
+        const containerName = `arena-${player.slot}`;
+        const raw = execFileSync(
+          'podman',
+          ['exec', containerName, 'cat', '/sys/fs/cgroup/memory.peak'],
+          {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000}
+        ).trim();
+        const peakBytes = Number(raw);
+        if (Number.isFinite(peakBytes) && peakBytes > 0) {
+          fs.writeFileSync(
+            `/opt/arena/state/peak_ram_${player.slot}`,
+            `${Math.ceil(peakBytes / (1024 * 1024))}\n`
+          );
+        }
+      } catch {}
+      try {
+        process.kill(player.proc.pid, 'SIGTERM');
+      } catch {}
     } else {
       try {
         process.kill(player.proc.pid, 'SIGTERM');
@@ -334,7 +527,7 @@ export class TimeSlicedArenaGame {
   }
 
   private readPeakRamMib(player: SandboxedPlayer): number {
-    if (!this.devMode && player.spec.mode === 'native') {
+    if (!this.devMode) {
       const stateFile = `/opt/arena/state/peak_ram_${player.slot}`;
       try {
         if (fs.existsSync(stateFile)) {
@@ -383,49 +576,19 @@ export class TimeSlicedArenaGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        const lines = chunk.split('\n');
-        const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
-        let clearStaleQueue = false;
-        let resendLastRequest = false;
-        for (const line of lines) {
-          if (line.startsWith('|request|')) {
-            const reqJson = line.slice('|request|'.length).trim();
-            if (reqJson && reqJson !== 'null') {
-              try {
-                const parsed = JSON.parse(reqJson) as {wait?: boolean};
-                if (!parsed.wait) {
-                  clearStaleQueue = true;
-                  if (!player.retryingInvalidChoice) {
-                    player.invalidStrikes = 0;
-                  }
-                  player.pendingRequestJson = reqJson;
-                  player.lastRequestJson = reqJson;
-                }
-              } catch {}
-            }
-          } else if (
-            (line.startsWith('|error|[Invalid choice]') ||
-              line.startsWith('|error|[Unavailable choice]')) &&
-            !this.ended
-          ) {
-            player.invalidStrikes++;
-            player.retryingInvalidChoice = true;
-            if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
-              this.forceLose(player.slot, 'invalid_choice_3x');
-            } else if (!chunkHasRequest && player.lastRequestJson) {
-              clearStaleQueue = true;
-              resendLastRequest = true;
-              player.pendingRequestJson = player.lastRequestJson;
-            }
-          }
+        const inspected = inspectPlayerProtocolChunk(chunk, player, this.ended);
+        if (inspected.actionableReqJson) {
+          player.pendingRequestJson = inspected.actionableReqJson;
         }
-
-        if (clearStaleQueue) {
+        if (inspected.forfeitedInvalidChoice) {
+          this.forceLose(player.slot, 'invalid-choice');
+        }
+        if (inspected.clearQueue) {
           player.lineQueue.length = 0;
         }
         if (!player.exited && player.proc.stdin.writable) {
           player.proc.stdin.write(`${chunk}\n`);
-          if (resendLastRequest && player.lastRequestJson) {
+          if (inspected.resendLastRequest && player.lastRequestJson) {
             player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
           }
         }
@@ -452,35 +615,20 @@ export class TimeSlicedArenaGame {
     };
     player.pendingRequestJson = undefined;
 
-    const isRetry = player.retryingInvalidChoice;
-    player.retryingInvalidChoice = false;
-
-    // Credit full-turn or mid-turn increment before starting the turn clock,
-    // except when retrying after an invalid/unavailable choice on the same decision.
-    if (player.hasTakenFirstDecision && !isRetry) {
-      const isNewTurn = this.currentTurn > this.lastRewardedTurn[player.slot];
-      const incrementMs = isNewTurn ? this.fullTurnIncrementMs : this.midTurnIncrementMs;
-      player.bankMs = Math.min(this.maxTurnMs, player.bankMs + incrementMs);
-      this.lastRewardedTurn[player.slot] = this.currentTurn;
-    }
-
-    const isFirstDecision = !player.hasTakenFirstDecision;
-    if (isFirstDecision) {
-      player.hasTakenFirstDecision = true;
-      this.lastRewardedTurn[player.slot] = this.currentTurn;
-    }
-    const graceMs = isFirstDecision ? this.firstTurnGraceMs : 0;
-    const turnAllowanceMs = Math.min(player.bankMs, this.maxTurnMs);
-    const totalBudgetMs = graceMs + turnAllowanceMs;
+    const {graceMs, totalBudgetMs, inactiveLine} = beginTurnClockStep(
+      player,
+      this.currentTurn,
+      this.lastRewardedTurn,
+      {
+        firstTurnGraceMs: this.firstTurnGraceMs,
+        maxTurnMs: this.maxTurnMs,
+        fullTurnIncrementMs: this.fullTurnIncrementMs,
+        midTurnIncrementMs: this.midTurnIncrementMs,
+      }
+    );
 
     if (!player.exited && player.proc.stdin.writable) {
-      const turnSec = (turnAllowanceMs / 1000).toFixed(1);
-      const totalSec = (player.bankMs / 1000).toFixed(1);
-      const graceSec = (graceMs / 1000).toFixed(1);
-      player.proc.stdin.write(
-        `|inactive|Time left: ${turnSec} sec this turn | ` +
-        `${totalSec} sec total | ${graceSec} sec grace\n`
-      );
+      player.proc.stdin.write(inactiveLine);
     }
 
     if (this.onTurn) {
@@ -545,9 +693,7 @@ export class TimeSlicedArenaGame {
         player.lastDecisionMs = decisionElapsedMs;
         player.totalDecisionMs += decisionElapsedMs;
 
-        const choiceCmd = req.teamPreview && !parsed.choice.startsWith('team ')
-          ? `team ${parsed.choice}`
-          : parsed.choice;
+        const choiceCmd = formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battleStream.write(`>${player.slot} ${choiceCmd}`);
         return true;
       }
@@ -576,35 +722,20 @@ export class TimeSlicedArenaGame {
         for await (const chunk of this.streams.omniscient) {
           this.omniscientLog.push(chunk);
           for (const line of chunk.split('\n')) {
-            if (line.startsWith('|turn|')) {
-              this.currentTurn = parseInt(line.slice('|turn|'.length), 10);
-              if (
-                this.smokeStopAfterTurn !== undefined &&
-                this.currentTurn > this.smokeStopAfterTurn &&
-                !this.ended
-              ) {
-                this.ended = true;
-                this.winner = 'tie';
-                this.endReason = 'smoke_complete';
+            const step = inspectOmniscientLine(line, {
+              currentTurn: this.currentTurn,
+              maxTurns: this.maxTurns,
+              smokeStopAfterTurn: this.smokeStopAfterTurn,
+              ended: this.ended,
+              expectedP1Name: 'Agent A',
+            });
+            this.currentTurn = step.currentTurn;
+            if (step.terminal) {
+              this.ended = true;
+              this.winner = step.terminal.winner;
+              this.endReason = step.terminal.endReason;
+              if (step.terminal.forceTie) {
                 await this.battleStream.write('>forcetie');
-              } else if (this.currentTurn > this.maxTurns && !this.ended) {
-                this.ended = true;
-                this.winner = 'tie';
-                this.endReason = `tie_${this.maxTurns}_turns`;
-                await this.battleStream.write('>forcetie');
-              }
-            } else if (line.startsWith('|win|')) {
-              if (!this.ended) {
-                const winnerName = line.slice('|win|'.length).trim();
-                this.winner = winnerName === 'Agent A' ? 'p1' : 'p2';
-                this.endReason = 'win';
-                this.ended = true;
-              }
-            } else if (line === '|tie' || line.startsWith('|tie|')) {
-              if (!this.ended) {
-                this.winner = 'tie';
-                this.endReason = 'tie';
-                this.ended = true;
               }
             }
           }
@@ -632,7 +763,7 @@ export class TimeSlicedArenaGame {
           if (idleSpins > 2500) {
             this.ended = true;
             this.winner = 'tie';
-            this.endReason = 'arbiter_stall';
+            this.endReason = 'arbiter-stall';
             break;
           }
           await new Promise(r => setTimeout(r, 2));

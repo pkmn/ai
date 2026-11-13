@@ -652,6 +652,9 @@ export class Wiki {
     const aliased = this.projectAliases.get(normalized.toLowerCase());
     if (aliased) return aliased;
     if (normalized && fs.existsSync(this.wikiDir)) {
+      if (fs.existsSync(path.join(this.wikiDir, `${normalized}.dj`))) {
+        return normalized;
+      }
       const lowerTarget = `${normalized.toLowerCase()}.dj`;
       try {
         for (const entry of fs.readdirSync(this.wikiDir)) {
@@ -767,6 +770,26 @@ export class Wiki {
       .map(f => f.slice(0, -3))
       .filter(isValidSlug)
       .sort((a, b) => a.localeCompare(b));
+  }
+
+  listPageSummaries(): Array<{slug: string; title: string; visibility: PageVisibility}> {
+    this.refreshMetadata();
+    const slugs = this.listPages();
+    return slugs.map(slug => {
+      const canonical = this.projectAliases.get(slug.toLowerCase()) ?? slug;
+      const project = this.projectPages.get(canonical);
+      let raw: string | undefined;
+      try {
+        raw = fs.readFileSync(path.join(this.wikiDir, `${slug}.dj`), 'utf8');
+      } catch {}
+      const parsed = raw !== undefined ? parsePageContent(raw) : undefined;
+      const visibility: PageVisibility = project
+        ? (parsed?.visibility ?? 'developers')
+        : 'public';
+      const h1Match = parsed?.content ? /^#\s+(.+)$/m.exec(parsed.content) : null;
+      const title = h1Match?.[1]?.trim() || project?.name || formatTitle(canonical);
+      return {slug, title, visibility};
+    });
   }
 
   private enqueueGit<T>(fn: () => Promise<T>): Promise<T> {
@@ -1063,17 +1086,20 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   app.get('/wiki', (req, res) => renderPageSlug(req, res, 'index'));
 
   app.get('/wiki/pages', (req, res) => {
-    const allPages = wiki.listPages();
+    const summaries = wiki.listPageSummaries();
     const login = getEffectiveUser(req);
-    const needsDiscordCheck = !wiki.isDeveloper(login) &&
-      allPages.some(p => wiki.getPageVisibility(p) === 'discord');
+    const isDev = wiki.isDeveloper(login);
+    const needsDiscordCheck = !isDev && summaries.some(p => p.visibility === 'discord');
     const isDiscord = needsDiscordCheck && wiki.verifyDiscordAuth(req) === 'authorized';
-    const pages = allPages.filter(p => wiki.canRead(login, p, isDiscord));
+    const pages = summaries.filter(p => (
+      p.visibility === 'public' ||
+      isDev ||
+      (p.visibility === 'discord' && isDiscord)
+    ));
 
     const items = pages.map(p => {
-      const href = p === 'index' ? '/wiki' : `/wiki/${encodeSlug(p)}`;
-      const title = escapeHtml(wiki.pageTitle(p));
-      return `<li><a href="${href}">${title}</a></li>`;
+      const href = p.slug === 'index' ? '/wiki' : `/wiki/${encodeSlug(p.slug)}`;
+      return `<li><a href="${href}">${escapeHtml(p.title)}</a></li>`;
     }).join('');
     sendHtml(res, 200, renderPage({
       title: 'Pages — Wiki',

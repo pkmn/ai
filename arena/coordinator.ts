@@ -98,7 +98,7 @@ export interface CoordinatorOptions {
   randomInt?: (max: number) => number;
 }
 
-const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid_choice_3x']);
+const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
 
 function isPlayerFault(
   result: ArenaGameResult,
@@ -107,13 +107,6 @@ function isPlayerFault(
   if (!FAULT_REASONS.has(result.endReason)) return false;
   return (slot === 'p1' && result.winner === 'p2') ||
     (slot === 'p2' && result.winner === 'p1');
-}
-
-function combineMatchCategory(
-  g1: ratings.GameOutcome,
-  g2: ratings.GameOutcome
-): ratings.MatchCategory {
-  return `${g1}${g2}`;
 }
 
 function isPermanentClientError(err: unknown): boolean {
@@ -332,7 +325,7 @@ export class Coordinator {
           devMode: this.devMode,
         });
         const res = await game.run();
-        if (isPlayerFault(res, 'p1') || res.endReason === 'arbiter_stall') {
+        if (isPlayerFault(res, 'p1') || res.endReason === 'arbiter-stall') {
           smokeError = `Smoke test failed in ${format}: ${res.endReason}`;
           break;
         }
@@ -611,7 +604,7 @@ export class Coordinator {
     const g2OutcomeForP1: ratings.GameOutcome =
       g2Res.winner === 'p2' ? 'W' : g2Res.winner === 'p1' ? 'L' : 'T';
 
-    const category = combineMatchCategory(g1Outcome, g2OutcomeForP1);
+    const category: ratings.MatchCategory = `${g1Outcome}${g2OutcomeForP1}`;
     const now = Math.floor(Date.now() / 1000);
     this.writeArchivedGameLog(cp.ladderId, cp.id, 'b', g2Res.omniscientLog, cp.startedAt || now);
 
@@ -907,7 +900,7 @@ export class Coordinator {
     const g2Res = await g2Game.run();
     const g2OutcomeForP1: ratings.GameOutcome =
       g2Res.winner === 'p2' ? 'W' : g2Res.winner === 'p1' ? 'L' : 'T';
-    const category = combineMatchCategory(g1Res.outcome, g2OutcomeForP1);
+    const category: ratings.MatchCategory = `${g1Res.outcome}${g2OutcomeForP1}`;
     const completedAt = Math.floor(Date.now() / 1000);
     this.writeArchivedGameLog(ladder.id, matchId, 'b', g2Res.omniscientLog, now);
 

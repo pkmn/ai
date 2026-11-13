@@ -1551,8 +1551,8 @@ function isAbnormalEndReason(reason: string): boolean {
     norm !== 'normal' &&
     norm !== 'win' &&
     norm !== 'tie' &&
-    norm !== 'turn_limit' &&
-    !/^tie_\d+_turns$/.test(norm);
+    norm !== 'turn-limit' &&
+    !/^tie-\d+-turns$/.test(norm);
 }
 
 function formatEndReasonHtml(reason: string): {html: string; label: string; abnormal: boolean} {
@@ -1563,7 +1563,7 @@ function formatEndReasonHtml(reason: string): {html: string; label: string; abno
   if (norm === 'tie') {
     return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
   }
-  if (norm === 'turn_limit' || /^tie_\d+_turns$/.test(norm)) {
+  if (norm === 'turn-limit' || /^tie-\d+-turns$/.test(norm)) {
     return {html: '<span class="muted">Turn limit</span>', label: 'Turn limit', abnormal: false};
   }
   if (norm === 'timeout') {
@@ -1575,7 +1575,7 @@ function formatEndReasonHtml(reason: string): {html: string; label: string; abno
   if (norm === 'oom') {
     return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
   }
-  if (norm === 'invalid_choice_3x') {
+  if (norm === 'invalid-choice') {
     return {
       html: '<span class="no">3&times; Invalid Choice</span>',
       label: '3x Invalid Choice',

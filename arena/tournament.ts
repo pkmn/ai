@@ -12,6 +12,7 @@ import {GameOutcome} from '../server/ratings';
 import {ensureSimConfigured, resolveArenaFormatId, sampleRandomPair} from '../server/teams';
 import {toID} from '../static/util';
 
+import * as arbiter from './arbiter';
 import * as packages from './packages';
 
 ensureSimConfigured();
@@ -130,10 +131,7 @@ interface RemoteTournamentPlayer {
   exited: boolean;
 }
 
-const MAX_INVALID_STRIKES = 3;
-const MAX_STDOUT_LINE_CHARS = 65_536;
-const MAX_LINE_QUEUE = 256;
-const MAX_LINES_PER_DECISION = 64;
+const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION} = arbiter;
 
 export function rewriteBlindPlayerNames(
   chunk: string,
@@ -462,7 +460,7 @@ export class ConcurrentTournamentGame {
     this.ended = true;
     this.winner = 'preempted';
     this.preemptedSlot = slot;
-    this.endReason = 'spot_preemption';
+    this.endReason = 'spot-preemption';
     this.wakePendingLineResolvers();
     Promise.resolve(this.battleStream.write('>forcetie')).catch(() => undefined);
   }
@@ -483,33 +481,20 @@ export class ConcurrentTournamentGame {
     if (this.ended) return;
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
 
-    const isRetry = player.retryingInvalidChoice;
-    player.retryingInvalidChoice = false;
-
-    if (player.hasTakenFirstDecision && !isRetry) {
-      const isNewTurn = this.currentTurn > this.lastRewardedTurn[player.slot];
-      const incrementMs = isNewTurn ? this.fullTurnIncrementMs : this.midTurnIncrementMs;
-      player.bankMs = Math.min(this.maxTurnMs, player.bankMs + incrementMs);
-      this.lastRewardedTurn[player.slot] = this.currentTurn;
-    }
-
-    const isFirstDecision = !player.hasTakenFirstDecision;
-    if (isFirstDecision) {
-      player.hasTakenFirstDecision = true;
-      this.lastRewardedTurn[player.slot] = this.currentTurn;
-    }
-    const graceMs = isFirstDecision ? this.firstTurnGraceMs : 0;
-    const turnAllowanceMs = Math.min(player.bankMs, this.maxTurnMs);
-    const totalBudgetMs = graceMs + turnAllowanceMs;
+    const {graceMs, totalBudgetMs, inactiveLine} = arbiter.beginTurnClockStep(
+      player,
+      this.currentTurn,
+      this.lastRewardedTurn,
+      {
+        firstTurnGraceMs: this.firstTurnGraceMs,
+        maxTurnMs: this.maxTurnMs,
+        fullTurnIncrementMs: this.fullTurnIncrementMs,
+        midTurnIncrementMs: this.midTurnIncrementMs,
+      }
+    );
 
     if (!player.exited && player.proc.stdin.writable) {
-      const turnSec = (turnAllowanceMs / 1000).toFixed(1);
-      const totalSec = (player.bankMs / 1000).toFixed(1);
-      const graceSec = (graceMs / 1000).toFixed(1);
-      player.proc.stdin.write(
-        `|inactive|Time left: ${turnSec} sec this turn | ` +
-        `${totalSec} sec total | ${graceSec} sec grace\n`
-      );
+      player.proc.stdin.write(inactiveLine);
     }
 
     let remainingBudgetMs = totalBudgetMs;
@@ -555,9 +540,7 @@ export class ConcurrentTournamentGame {
         player.totalTurnMs += decisionElapsedMs;
         player.decisionsCount++;
 
-        const choiceCmd = req.teamPreview && !parsed.choice.startsWith('team ')
-          ? `team ${parsed.choice}`
-          : parsed.choice;
+        const choiceCmd = arbiter.formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battleStream.write(`>${player.slot} ${choiceCmd}`);
         return;
       }
@@ -575,55 +558,24 @@ export class ConcurrentTournamentGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        let actionableReqJson: string | undefined;
-        let resendLastRequest = false;
-        const lines = chunk.split('\n');
-        const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
-        for (const line of lines) {
-          if (line.startsWith('|request|')) {
-            const jsonStr = line.slice('|request|'.length).trim();
-            if (jsonStr && jsonStr !== 'null') {
-              try {
-                const parsed = JSON.parse(jsonStr) as {wait?: boolean};
-                if (!parsed.wait) {
-                  if (!player.retryingInvalidChoice) {
-                    player.invalidStrikes = 0;
-                  }
-                  actionableReqJson = jsonStr;
-                  player.lastRequestJson = jsonStr;
-                }
-              } catch {}
-            }
-          } else if (
-            (line.startsWith('|error|[Invalid choice]') ||
-              line.startsWith('|error|[Unavailable choice]')) &&
-            !this.ended
-          ) {
-            player.invalidStrikes++;
-            player.retryingInvalidChoice = true;
-            if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
-              this.forceLose(player.slot, 'invalid_choice_3x');
-            } else if (!chunkHasRequest && player.lastRequestJson) {
-              actionableReqJson = player.lastRequestJson;
-              resendLastRequest = true;
-            }
-          }
+        const inspected = arbiter.inspectPlayerProtocolChunk(chunk, player, this.ended);
+        if (inspected.forfeitedInvalidChoice) {
+          this.forceLose(player.slot, 'invalid-choice');
         }
-
-        if (actionableReqJson) {
+        if (inspected.actionableReqJson) {
           player.reqSeq++;
           player.lineQueue.length = 0;
           player.localTurnMsQueue.length = 0;
         }
         if (!player.exited && player.proc.stdin.writable) {
           player.proc.stdin.write(`${chunk}\n`);
-          if (resendLastRequest && player.lastRequestJson) {
+          if (inspected.resendLastRequest && player.lastRequestJson) {
             player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
           }
         }
 
-        if (actionableReqJson && !this.ended) {
-          await this.handleDecision(player, actionableReqJson);
+        if (inspected.actionableReqJson && !this.ended) {
+          await this.handleDecision(player, inspected.actionableReqJson);
         }
       }
     })();
@@ -665,7 +617,7 @@ export class ConcurrentTournamentGame {
           winner: 'preempted',
           preemptedSlot: slot,
           turns: 0,
-          endReason: 'spot_preemption',
+          endReason: 'spot-preemption',
           omniscientLog: '',
           p1TeamPacked: p1Team,
           p2TeamPacked: p2Team,
@@ -679,36 +631,20 @@ export class ConcurrentTournamentGame {
       const omniTask = (async () => {
         for await (const rawChunk of this.streams.omniscient) {
           for (const line of rawChunk.split('\n')) {
-            if (line.startsWith('|turn|')) {
-              this.currentTurn = parseInt(line.slice('|turn|'.length), 10);
-              if (
-                this.smokeStopAfterTurn !== undefined &&
-                this.currentTurn > this.smokeStopAfterTurn &&
-                !this.ended
-              ) {
-                this.ended = true;
-                this.winner = 'tie';
-                this.endReason = 'smoke_complete';
+            const step = arbiter.inspectOmniscientLine(line, {
+              currentTurn: this.currentTurn,
+              maxTurns: this.maxTurns,
+              smokeStopAfterTurn: this.smokeStopAfterTurn,
+              ended: this.ended,
+              expectedP1Name: this.byot ? this.p1Spec.displayName : 'Agent A',
+            });
+            this.currentTurn = step.currentTurn;
+            if (step.terminal) {
+              this.ended = true;
+              this.winner = step.terminal.winner;
+              this.endReason = step.terminal.endReason;
+              if (step.terminal.forceTie) {
                 await this.battleStream.write('>forcetie');
-              } else if (this.currentTurn > this.maxTurns && !this.ended) {
-                this.ended = true;
-                this.winner = 'tie';
-                this.endReason = `tie_${this.maxTurns}_turns`;
-                await this.battleStream.write('>forcetie');
-              }
-            } else if (line.startsWith('|win|')) {
-              if (!this.ended) {
-                const wName = line.slice('|win|'.length).trim();
-                const expectedP1Name = this.byot ? this.p1Spec.displayName : 'Agent A';
-                this.winner = wName === expectedP1Name ? 'p1' : 'p2';
-                this.endReason = 'win';
-                this.ended = true;
-              }
-            } else if (line === '|tie' || line.startsWith('|tie|')) {
-              if (!this.ended) {
-                this.winner = 'tie';
-                this.endReason = 'tie';
-                this.ended = true;
               }
             }
           }
@@ -1110,7 +1046,7 @@ export interface TournamentCoordinatorOptions {
   ) => TournamentAgentSpec;
 }
 
-const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'timeout', 'invalid_choice_3x']);
+const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'timeout', 'invalid-choice']);
 
 // GCP-side Tournament Coordinator:
 //   1. `processPendingSubmissions` pulls & smoke-tests `linux/amd64` tournament OCI submissions on

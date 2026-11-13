@@ -13,13 +13,15 @@ export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
 export const MAX_OCI_LAYERS = 32;
 const MAX_REDIRECT_HOPS = 5;
 const DOWNLOAD_TIMEOUT_MILLIS = 180_000;
-export const HOT_AGENTS_HIGH_WATER_BYTES = 1350 * 1024 * 1024 * 1024; // 1.35 TB
-export const HOT_AGENTS_LOW_WATER_BYTES = 1200 * 1024 * 1024 * 1024; // 1.20 TB
-// Separate cap inside the 64 GB Podman VM disk so hot OCI images never exhaust the VM rootfs
-export const HOT_CONTAINERS_HIGH_WATER_BYTES = 40 * 1024 * 1024 * 1024; // 40 GiB
-export const HOT_CONTAINERS_LOW_WATER_BYTES = 32 * 1024 * 1024 * 1024; // 32 GiB
+export const HOT_AGENTS_HIGH_WATER_BYTES = 1350 * 1024 * 1024 * 1024; // 1.35 TB host SSD
+export const HOT_AGENTS_LOW_WATER_BYTES = 1200 * 1024 * 1024 * 1024; // 1.20 TB host SSD
+// Separate disk-usage watermarks inside `podman-machine-default`'s 64 GB virtual disk on the Mac
+// mini SSD (`setup-arena.sh --disk-size 64`) so cached OCI images never fill the VM rootfs.
+export const HOT_CONTAINERS_HIGH_WATER_BYTES = 40 * 1000 * 1000 * 1000; // 40 GB disk
+export const HOT_CONTAINERS_LOW_WATER_BYTES = 32 * 1000 * 1000 * 1000; // 32 GB disk
 
 export const AGENTS_DIR = process.env.ARENA_AGENTS_DIR ?? '/opt/arena/agents';
+export const CAS_DIR = process.env.ARENA_CAS_DIR ?? '/opt/arena/cas/sha256';
 export const STAGING_DIR = process.env.ARENA_STAGING_DIR ?? '/Volumes/Staging';
 export const COLD_AGENTS_DIR =
   process.env.ARENA_COLD_AGENTS_DIR ?? '/Volumes/Archive/cold-agents';
@@ -490,6 +492,7 @@ export function evictColdAgentsIfNeeded(
     containerLowWaterBytes?: number;
     agentsDir?: string;
     coldDir?: string;
+    casDir?: string;
     pinnedVersionIds?: ReadonlySet<number>;
     evictContainerFn?: (target: string, coldArchive: string) => void;
   } = {}
@@ -500,6 +503,7 @@ export function evictColdAgentsIfNeeded(
   const containerLowWater = opts.containerLowWaterBytes ?? HOT_CONTAINERS_LOW_WATER_BYTES;
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
+  const casDir = opts.casDir ?? CAS_DIR;
   const pinned = opts.pinnedVersionIds ?? new Set<number>();
 
   const hotAgents = stateDb.listLocalAgents().filter(a => a.residency === 'hot');
@@ -515,9 +519,11 @@ export function evictColdAgentsIfNeeded(
     .filter(a => !pinned.has(a.versionId))
     .sort((a, b) => a.lastPlayedAt - b.lastPlayedAt || a.versionId - b.versionId);
 
+  let evictedNative = false;
   const evictOne = (v: LocalAgentRow) => {
     const coldArchive = path.join(coldDir, `${v.target}.tar.zst`);
     if (v.mode === 'native') {
+      evictedNative = true;
       const hotDir = path.join(agentsDir, v.target);
       if (fs.existsSync(hotDir)) {
         execFileSync('tar', ['--zstd', '-cf', coldArchive, '-C', hotDir, '.'], {
@@ -554,7 +560,7 @@ export function evictColdAgentsIfNeeded(
   const evicted: number[] = [];
   const evictedSet = new Set<number>();
 
-  // 1. Enforce Podman VM 40 GiB hot-container cap first
+  // 1. Enforce Podman VM 40 GB virtual-disk cap first
   if (containerUsedBytes > containerHighWater) {
     for (const v of victims) {
       if (containerUsedBytes <= containerLowWater) break;
@@ -565,7 +571,7 @@ export function evictColdAgentsIfNeeded(
     }
   }
 
-  // 2. Enforce overall 1.35 TB hot-storage cap across remaining hot agents
+  // 2. Enforce overall 1.35 TB host-SSD cap across remaining hot agents
   if (usedBytes > highWater) {
     for (const v of victims) {
       if (usedBytes <= lowWater) break;
@@ -574,6 +580,21 @@ export function evictColdAgentsIfNeeded(
       evicted.push(v.versionId);
       evictedSet.add(v.versionId);
     }
+  }
+
+  // 3. Reclaim CAS blobs whose hardlink count dropped to 1 (no remaining hot agent links to them)
+  if (evictedNative && fs.existsSync(casDir)) {
+    try {
+      for (const entry of fs.readdirSync(casDir)) {
+        const blobPath = path.join(casDir, entry);
+        try {
+          const st = fs.statSync(blobPath);
+          if (st.isFile() && st.nlink === 1) {
+            fs.rmSync(blobPath, {force: true});
+          }
+        } catch {}
+      }
+    } catch {}
   }
 
   return evicted;

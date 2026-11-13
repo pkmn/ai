@@ -611,7 +611,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       });
 
       const result = await game.run();
-      expect(result.endReason).toBe('smoke_complete');
+      expect(result.endReason).toBe('smoke-complete');
       expect(result.turns).toBe(2);
       expect(heartbeats.length).toBeGreaterThanOrEqual(2);
       expect(result.omniscientLog).not.toContain('hello from agent');
@@ -651,10 +651,10 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         devMode: true,
       });
       const crInjectRes = await crInjectGame.run();
-      expect(crInjectRes.endReason).toBe('smoke_complete');
+      expect(crInjectRes.endReason).toBe('smoke-complete');
       expect(crInjectRes.winner).toBe('tie');
 
-      // Verify 3 consecutive invalid choices forfeit with canonical invalid_choice_3x reason
+      // Verify 3 consecutive invalid choices forfeit with canonical invalid-choice reason
       const threeStrikesScript = path.join(tmpDir, 'three-strikes-agent.js');
       fs.writeFileSync(
         threeStrikesScript,
@@ -684,7 +684,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       });
       const strikesRes = await strikesGame.run();
       expect(strikesRes.winner).toBe('p2');
-      expect(strikesRes.endReason).toBe('invalid_choice_3x');
+      expect(strikesRes.endReason).toBe('invalid-choice');
 
       // Verify crashing agent forfeits immediately
       const crashGame = new TimeSlicedArenaGame({
@@ -731,7 +731,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         devMode: true,
       });
       const undoRes = await undoGame.run();
-      expect(undoRes.endReason).toBe('smoke_complete');
+      expect(undoRes.endReason).toBe('smoke-complete');
 
       // Verify gen9championsvgc2026regmc defaults to Closed Team Sheets on the ladder,
       // supports Open Team Sheets via customRules for tournaments, and gen9randombattle
@@ -752,7 +752,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         devMode: true,
       });
       const vgcRes = await vgcGame.run();
-      expect(vgcRes.endReason).toBe('smoke_complete');
+      expect(vgcRes.endReason).toBe('smoke-complete');
       expect(vgcRes.omniscientLog).toContain('|gametype|doubles');
       expect(vgcRes.omniscientLog).toContain('|teampreview|4');
       expect(vgcRes.omniscientLog).not.toContain('|showteam|');
@@ -769,7 +769,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         devMode: true,
       });
       const vgcOtsRes = await vgcOtsGame.run();
-      expect(vgcOtsRes.endReason).toBe('smoke_complete');
+      expect(vgcOtsRes.endReason).toBe('smoke-complete');
       expect(vgcOtsRes.omniscientLog).toContain('|showteam|p1|');
       expect(vgcOtsRes.omniscientLog).toContain('|showteam|p2|');
 
@@ -816,7 +816,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         devMode: true,
       });
       const retryRes = await retryGame.run();
-      expect(retryRes.endReason).toBe('smoke_complete');
+      expect(retryRes.endReason).toBe('smoke-complete');
       expect(retryRes.p1BankSeconds).toBeLessThanOrEqual(retryRes.p2BankSeconds);
 
       // Verify an agent writing >64 KiB without a newline forfeits immediately with crash
@@ -945,7 +945,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       const preemptRes = await preemptGame.run();
       expect(preemptRes.winner).toBe('preempted');
       expect(preemptRes.preemptedSlot).toBe('p2');
-      expect(preemptRes.endReason).toBe('spot_preemption');
+      expect(preemptRes.endReason).toBe('spot-preemption');
 
       // When wrapped by tourney-relay, child stderr is isolated to /dev/null so an agent
       // cannot spoof ARENA_SPOT_PREEMPTED to dodge a loss.

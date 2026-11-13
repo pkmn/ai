@@ -276,7 +276,7 @@ This section consolidates every technical requirement, protocol change, and runt
   |error|[Invalid choice] Can't move: ...
   |inactive|Time left: ...
   ```
-- Your bot must listen for `|error|[Invalid choice]` lines and immediately emit a legal fallback choice. Emitting **3 consecutive invalid choices** on the same request forfeits the game (`invalid_choice_3x`).
+- Your bot must listen for `|error|[Invalid choice]` lines and immediately emit a legal fallback choice. Emitting **3 consecutive invalid choices** on the same request forfeits the game (`invalid-choice`).
 
 ### 7. Statelessness Between Games & Read-Only Filesystem
 - Your bot process is freshly spawned for Game 1 and killed afterward; a brand-new process is spawned for Game 2.
