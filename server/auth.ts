@@ -223,6 +223,14 @@ function inferOrigin(req: http.IncomingMessage): string {
   return `${proto}://${host}`;
 }
 
+export function isCrossSiteRequest(req: http.IncomingMessage): boolean {
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (fetchSite === 'cross-site') return true;
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin !== inferOrigin(req)) return true;
+  return false;
+}
+
 export class Auth {
   readonly db?: db.Database;
   private readonly explicitConfig?: Config;
@@ -672,6 +680,14 @@ export class Auth {
     });
 
     app.post('/api/account/discord/unlink', (req, res) => {
+      if (isCrossSiteRequest(req)) {
+        res.writeHead(403, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'private, no-store',
+        });
+        res.end(JSON.stringify({error: 'Cross-site requests are not allowed.'}));
+        return;
+      }
       const ghLogin = this.getGitHubUser(req);
       if (!ghLogin || !this.isAuthorizedGitHub(ghLogin)) {
         res.writeHead(401, {
@@ -696,6 +712,11 @@ export class Auth {
     });
 
     app.post('/auth/logout', (req, res) => {
+      if (isCrossSiteRequest(req)) {
+        res.writeHead(403, {'Cache-Control': 'private, no-store'});
+        res.end();
+        return;
+      }
       const clearSession = serializeCookie(SESSION_COOKIE, '', 0);
       redirect(res, sanitizeReturnTo(req.query.return_to, '/'), 303, [clearSession]);
     });
@@ -725,12 +746,7 @@ export class Auth {
     app.get('/chat/logs/token', (req, res) => {
       // Reject cross-site requests and cross-origin fetches so external pages cannot read
       // session tokens even if SameSite cookie policies are bypassed.
-      const fetchSite = req.headers['sec-fetch-site'];
-      const origin = req.headers.origin;
-      if (
-        fetchSite === 'cross-site' ||
-        (typeof origin === 'string' && origin !== inferOrigin(req))
-      ) {
+      if (isCrossSiteRequest(req)) {
         res.writeHead(403, {'Cache-Control': 'private, no-store'});
         res.end();
         return;

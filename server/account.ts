@@ -18,7 +18,7 @@ import {
   root,
 } from '../static/util';
 
-import {Auth} from './auth';
+import {Auth, isCrossSiteRequest} from './auth';
 import {
   RejectedTeam,
   splitSubmittedTeams,
@@ -880,6 +880,10 @@ export function register(app: polka.Polka, options: Options) {
     req: http.IncomingMessage,
     res: http.ServerResponse
   ): db.AgentRow | undefined => {
+    if (isCrossSiteRequest(req)) {
+      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
+      return undefined;
+    }
     const login = auth.getGitHubUser(req);
     if (!login) {
       sendJson(res, 401, {error: 'GitHub authentication required.'});
@@ -1022,6 +1026,10 @@ export function register(app: polka.Polka, options: Options) {
   });
 
   app.post('/api/submissions', async (req, res) => {
+    if (isCrossSiteRequest(req)) {
+      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
+      return;
+    }
     const login = auth.getGitHubUser(req);
     if (!login) {
       sendJson(res, 401, {error: 'GitHub authentication required.'});

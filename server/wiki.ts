@@ -918,6 +918,10 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   });
 
   app.post('/wiki/:page', async (req, res) => {
+    if (auth.isCrossSiteRequest(req)) {
+      sendError(res, 403, '<p>Cross-site requests are not allowed.</p>');
+      return;
+    }
     const rawSlug = slugParam(req.params.page);
     if (!isValidSlug(rawSlug)) {
       sendError(res, 404, '<p>Invalid wiki page name.</p>');

@@ -327,6 +327,27 @@ describe('unified server/auth.ts OAuth, linking, dev switcher, and Nginx validat
     );
     expect(crossAccountCb.status).toBe(403);
 
+    // Cross-site / cross-origin POSTs to unlink and logout are rejected (CSRF defense)
+    const csrfUnlink = await realFetch(`${baseUrl}/api/account/discord/unlink`, {
+      method: 'POST',
+      headers: {
+        Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+        'Sec-Fetch-Site': 'cross-site',
+        Accept: 'application/json',
+      },
+    });
+    expect(csrfUnlink.status).toBe(403);
+
+    const csrfLogout = await realFetch(`${baseUrl}/auth/logout`, {
+      method: 'POST',
+      headers: {
+        Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+        Origin: 'https://evil.example',
+      },
+      redirect: 'manual',
+    });
+    expect(csrfLogout.status).toBe(403);
+
     // Unlink clears Discord fields on 'pre'
     const unlinkRes = await realFetch(`${baseUrl}/api/account/discord/unlink`, {
       method: 'POST',
