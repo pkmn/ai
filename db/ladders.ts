@@ -428,16 +428,29 @@ export function countDistinctActiveLadderAgents(db: DatabaseSync, ladderId: stri
 }
 
 export function canSettleLadder(db: DatabaseSync, ladder: LadderRow): boolean {
-  if (countDistinctActiveLadderAgents(db, ladder.id) < Math.max(2, ladder.min)) {
+  const minActiveAgents = ladder.status === 'settling' ? 2 : Math.max(2, ladder.min);
+  if (countDistinctActiveLadderAgents(db, ladder.id) < minActiveAgents) {
     return false;
+  }
+  if (ladder.status === 'settling' && ladder.team === 'pools') {
+    const poolRow = db.prepare(`
+      SELECT COUNT(DISTINCT alt.agent_id) AS cnt
+      FROM agent_ladder_teams alt
+      WHERE alt.ladder_id = ? AND alt.status = 'active'
+    `).get(ladder.id) as {cnt: number};
+    if (poolRow.cnt < Math.max(2, ladder.min)) {
+      return false;
+    }
   }
   const unsettled = db.prepare(`
     SELECT 1
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
     WHERE le.ladder_id = ?
       AND le.role IN ('champion', 'challenger')
       AND av.smoke_status = 'passed'
+      AND a.status != 'disabled'
       AND le.settled_at IS NULL
     LIMIT 1
   `).get(ladder.id);

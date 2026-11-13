@@ -987,7 +987,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(completedMatches[0].match.seed).not.toBe('20,40,66,84');
       expect(heartbeats.length).toBeGreaterThan(0);
 
-      // Verify v30 received T1 in Game 1 and T2 (swapped team) in Game 2
+      // Verify v30 swapped seats from slot p1 (with T1) in Game 1 to slot p2 (with T2) in Game 2
       const v30UtmLines = fs.readFileSync(utmLogFile, 'utf8').trim().split('\n');
       expect(v30UtmLines).toHaveLength(2);
       expect(v30UtmLines[0]).not.toBe(v30UtmLines[1]);

@@ -496,7 +496,8 @@ export class Coordinator {
     if (!row) return;
 
     const faultRate = row.totalGames > 0 ? row.totalFaults / row.totalGames : 0;
-    if (row.consecutiveFaults >= 5 || (row.totalGames >= 10 && faultRate > 0.20)) {
+    // 5 consecutive matches = 10 consecutive games (`recordAgentGameResult` is per-game).
+    if (row.consecutiveFaults >= 10 || (row.totalGames >= 10 && faultRate > 0.20)) {
       await this.reportSubmissionOrOutbox({
         versionId,
         smokeStatus: 'quarantined',
@@ -587,6 +588,32 @@ export class Coordinator {
 
     await this.completeMatchOrOutbox(payload);
     this.stateDb.markMatchStatus(cp.id, 'complete', now);
+
+    const g1EndReason = cp.game1EndReason ?? 'win';
+    const g1Fault = FAULT_REASONS.has(g1EndReason);
+    const p1FaultG1 = g1Fault && g1Outcome === 'L';
+    const p2FaultG1 = g1Fault && g1Outcome === 'W';
+    const p1FaultG2 = isPlayerFault(g2Res, 'p2');
+    const p2FaultG2 = isPlayerFault(g2Res, 'p1');
+
+    this.stateDb.recordAgentGameResult(cp.p1VersionId, p1FaultG1, now);
+    this.stateDb.recordAgentGameResult(cp.p1VersionId, p1FaultG2, now);
+    this.stateDb.recordAgentGameResult(cp.p2VersionId, p2FaultG1, now);
+    this.stateDb.recordAgentGameResult(cp.p2VersionId, p2FaultG2, now);
+
+    if (p1FaultG1 || p1FaultG2) {
+      await this.checkAndQuarantineIfFaulty(
+        cp.p1VersionId,
+        p1FaultG2 ? g2Res.endReason : g1EndReason
+      );
+    }
+    if (p2FaultG1 || p2FaultG2) {
+      await this.checkAndQuarantineIfFaulty(
+        cp.p2VersionId,
+        p2FaultG2 ? g2Res.endReason : g1EndReason
+      );
+    }
+
     return cp.id;
   }
 
@@ -605,12 +632,17 @@ export class Coordinator {
       const rosterIds = ladder.team === 'pools' && ladder.roster
         ? new Set(ladder.roster.map(r => r.agentId))
         : undefined;
+      if (rosterIds && rosterIds.size < Math.max(2, ladder.min)) continue;
       const isPlayable = (e: LadderSnapshot['entries'][number]) =>
         e.role !== 'retired' && e.role !== 'quarantined' &&
         (!rosterIds || rosterIds.has(e.agentId));
       const activeEntries = ladder.entries.filter(isPlayable);
       const uniqueAgents = new Set(activeEntries.map(e => e.agentId));
-      if (uniqueAgents.size < Math.max(2, ladder.min)) continue;
+      const minActiveAgents = ladder.status === 'settling' ? 2 : Math.max(2, ladder.min);
+      if (uniqueAgents.size < minActiveAgents) continue;
+      if (ladder.status === 'settling' && activeEntries.every(e => e.settledAt !== undefined)) {
+        continue;
+      }
 
       const M = ladder.entries.length;
       const indexByVersion = new Map<number, number>();
@@ -645,7 +677,7 @@ export class Coordinator {
         id: ladder.id,
         activeAgentIndices: activeIndices,
         agentIds,
-        minAgents: ladder.min,
+        minAgents: minActiveAgents,
         theta,
         sigma,
         agentMatches,

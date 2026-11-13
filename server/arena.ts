@@ -657,7 +657,9 @@ export function buildLadderMatchState(
     e.role !== 'retired' && (!rosterAgentIds || rosterAgentIds.has(e.agentId));
   const activeEntries = entries.filter(isPlayableEntry);
   const distinctAgents = new Set(activeEntries.map(e => e.agentId));
-  if (distinctAgents.size < Math.max(2, ladder.min)) return undefined;
+  const minActiveAgents = ladder.status === 'settling' ? 2 : Math.max(2, ladder.min);
+  if (distinctAgents.size < minActiveAgents) return undefined;
+  if (rosterAgentIds && rosterAgentIds.size < Math.max(2, ladder.min)) return undefined;
   if (ladder.status === 'settling' && activeEntries.every(e => e.settledAt !== undefined)) {
     return undefined;
   }
@@ -695,7 +697,7 @@ export function buildLadderMatchState(
     id: ladder.id,
     activeAgentIndices: activeIndices,
     agentIds,
-    minAgents: ladder.min,
+    minAgents: minActiveAgents,
     theta,
     sigma,
     agentMatches,

@@ -450,6 +450,99 @@ describe('ladders.yml & Database ladder sync', () => {
       db.close();
     }
   });
+
+  test('quarantining one of four projects during settling does not archive early', () => {
+    const db = new Database(':memory:');
+    try {
+      db.syncLaddersFromYaml(`
+- name: VGC
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  team: pools
+  status: active
+  min: 4
+  teams: 20
+`, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pre: pre.10544
+- name: Foul Play
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pmariglia: pmariglia.100001
+- name: PokeChamp
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      seth: seth.100002
+- name: Metamon
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      jake: jake.100003
+`, undefined, 1_760_000_000);
+
+      const ladderId = 'gen9championsvgc2026regmc';
+      const dummyTeams = Array.from({length: 20}, (_, i) => `Pikachu|||static|||||||]${i}`);
+      let seq = 1;
+      for (const slug of ['0-error', 'foul-play', 'pokechamp', 'metamon']) {
+        const agent = db.getAgentBySlug(slug)!;
+        const sub = db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: `https://example.com/${slug}-1.0.0.tar.zst`,
+          sha256: String(seq++).padStart(64, '0'),
+          ladderIds: [ladderId],
+          teamsByLadder: {[ladderId]: dummyTeams},
+          now: 1_760_000_000 + seq * 1000,
+        });
+        db.applySubmissionStatus({
+          versionId: sub.id,
+          smokeStatus: 'passed',
+          now: 1_760_000_010 + seq * 1000,
+        });
+      }
+
+      const rotated = db.rotateLadder({
+        oldLadderId: ladderId,
+        archivedName: 'VGC 2026 Reg M-C',
+        newLadderId: 'gen9championsvgc2026regmd',
+        now: 1_766_000_000,
+      });
+      expect(rotated.oldLadder.status).toBe('settling');
+
+      // Quarantining 1 of the 4 projects leaves 3 distinct active projects (>= 2) and all 4
+      // locked team rosters in agent_ladder_teams, so the settling phase must continue for
+      // the remaining 3 projects rather than archiving early.
+      db.quarantineVersion('0-error', '1.0.0', 'Strategic crash', 1_766_000_100);
+
+      const ladderAfter = db.getLadder(ladderId)!;
+      expect(ladderAfter.status).toBe('settling');
+
+      const rosterIds = new Set(db.getActiveRosterForLadder(ladderId).map(r => r.agentId));
+      expect(rosterIds.size).toBe(4);
+
+      const matchState = arena.buildLadderMatchState(
+        ladderAfter,
+        db.getLeaderboardEntries(ladderId),
+        db.getPairAggregatesForLadder(ladderId),
+        0,
+        rosterIds
+      );
+      expect(matchState).toBeDefined();
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe('Smogon lookup & projects.yml arena sync', () => {
