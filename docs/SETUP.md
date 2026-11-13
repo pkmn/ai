@@ -21,7 +21,7 @@ records should look like:
 | `A`  | `pkmn.ai` | *`123.45.67.89`* | `Proxied`    | `Auto` |
 | `A`  | `www`     | *`123.45.67.89`* | `Proxied`    | `Auto` |
 
-In the **SSL/TLS** section of the dashboard, set SSL/TLS encryption mode to "Full". If
+In the **SSL/TLS** section of the dashboard, set SSL/TLS encryption mode to "Full (strict)". If
 [`certbot`](#nginx) encounters errors on renewal, follow the [troubleshooting
 steps](https://omicx.cc/posts/2020-08-04-enable-certbot-automatic-renewal-for-cloudflare-cdn/).
 
@@ -231,7 +231,8 @@ git clone https://github.com/pkmn/ai.git
 ```
 
 As `root`, select an editor for `visudo` and edit `/etc/sudoers.d/pkmn` to give the `pkmn` user
-permission to reload `nginx`, reload `systemd` unit files, and manage any `pkmn.*` service:
+permission to reload `nginx` and restart/check `pkmn.ai-server` (never grant `systemctl
+daemon-reload` or symlinks to `pkmn`-writable unit files, which would allow `root` escalation):
 
 ```sh
 update-alternatives --config editor
@@ -239,20 +240,17 @@ visudo -f /etc/sudoers.d/pkmn
 ```
 
 ```diff
-+pkmn ALL=(ALL) NOPASSWD: /usr/sbin/service nginx reload,/usr/bin/systemctl daemon-reload,/usr/sbin/service pkmn.* *
++pkmn ALL=(root) NOPASSWD: /usr/sbin/service nginx reload,/usr/sbin/service pkmn.ai-server restart,/usr/sbin/service pkmn.ai-server status
 ```
 
-Configure and enable the `systemd` services and timers (`pkmn.ai-server.service`,
-`pkmn.ai-backup.service`, and `pkmn.ai-backup.timer`):
+As `root`, install root-owned copies (`0644`) of the `systemd` services and timers
+(`pkmn.ai-server.service`, `pkmn.ai-backup.service`, and `pkmn.ai-backup.timer`) into
+`/etc/systemd/system/` and enable them:
 
 ```sh
-for config in config/*.{service,timer}; do
-  name=$(basename $config)
-  systemctl enable /home/pkmn/ai/$config
-  if [[ $name == *.timer || $name == "pkmn.ai-server.service" ]]; then
-    systemctl start $name
-  fi
-done
+install -o root -g root -m 0644 /home/pkmn/ai/config/*.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now pkmn.ai-server.service pkmn.ai-backup.timer
 ```
 
 Build the initial static site and start the service as `pkmn`:
@@ -281,7 +279,7 @@ journalctl -xeu 'pkmn.ai*'
 journalctl --vacuum-time=7d
 ```
 
-`pkmn.ai-backup.timer` runs `pkmn.ai-backup.service` nightly at `03:30 UTC` (with randomized delay),
+`pkmn.ai-backup.timer` runs `pkmn.ai-backup.service` nightly at `04:15 UTC` (with randomized delay),
 using SQLite's online `.backup` API to snapshot `/var/lib/pkmn/arena.sqlite` into
 `/var/lib/pkmn/backups/arena-<timestamp>.sqlite.zst` and pruning backups older than 30 days. To
 trigger an immediate backup or restore a compressed snapshot:
@@ -293,22 +291,24 @@ ls -lh /var/lib/pkmn/backups/
 
 # Restore a snapshot (stop pkmn.ai-server first so WAL/SHM files are closed cleanly)
 service pkmn.ai-server stop
-zstd -d /var/lib/pkmn/backups/arena-YYYYMMDDTHHMMSSZ.sqlite.zst -o /tmp/restore.sqlite
-cp /tmp/restore.sqlite /var/lib/pkmn/arena.sqlite
-rm -f /var/lib/pkmn/arena.sqlite-wal /var/lib/pkmn/arena.sqlite-shm /tmp/restore.sqlite
-chown pkmn:pkmn /var/lib/pkmn/arena.sqlite
+zstd -d -f /var/lib/pkmn/backups/arena-YYYYMMDDTHHMMSSZ.sqlite.zst -o /var/lib/pkmn/arena.sqlite.restore
+chown pkmn:pkmn /var/lib/pkmn/arena.sqlite.restore
+chmod 0640 /var/lib/pkmn/arena.sqlite.restore
+mv -f /var/lib/pkmn/arena.sqlite.restore /var/lib/pkmn/arena.sqlite
+rm -f /var/lib/pkmn/arena.sqlite-wal /var/lib/pkmn/arena.sqlite-shm
 service pkmn.ai-server start
 ```
 
 ## nginx
 
 Install `nginx`, add `www-data` to the `pkmn` group so `nginx` can serve the static files in
-`/home/pkmn/ai/public` and `/home/pkmn/ai/chat/logs`, and link `config/nginx.conf`:
+`/home/pkmn/ai/public` and `/home/pkmn/ai/chat/logs`, and install a root-owned copy of
+`config/nginx.conf`:
 
 ```sh
 apt-get install nginx
 usermod -a -G pkmn www-data
-ln -s /home/pkmn/ai/config/nginx.conf /etc/nginx/sites-available/pkmn.ai
+install -o root -g root -m 0644 /home/pkmn/ai/config/nginx.conf /etc/nginx/sites-available/pkmn.ai
 ln -s /etc/nginx/sites-{available,enabled}/pkmn.ai
 ```
 

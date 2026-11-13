@@ -1,4 +1,5 @@
-# systemctl enable /home/pkmn/ai/config/pkmn.ai-server.service
+# install -o root -g root -m 0644 /home/pkmn/ai/config/pkmn.ai-server.service /etc/systemd/system/
+# systemctl daemon-reload && systemctl enable --now pkmn.ai-server.service
 
 [Unit]
 Description=pkmn.ai server
@@ -9,6 +10,7 @@ After=network.target
 Type=simple
 Restart=always
 RestartSec=5s
+Environment=NODE_ENV=production
 EnvironmentFile=/home/pkmn/ai/.env
 ExecStart=/usr/bin/npm start
 WorkingDirectory=/home/pkmn/ai

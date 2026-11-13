@@ -3,6 +3,7 @@
 # Nightly battle log compression (.7z solid LZMA2), monthly .tar GCS rollup,
 # and daily SQLite WAL-safe .backup + zstd compression on the Mac mini.
 set -euo pipefail
+shopt -s nullglob
 
 ARCHIVE_ROOT="${ARENA_ARCHIVE_DIR:-/Volumes/Archive}"
 LOG_ROOT="${ARCHIVE_ROOT}/logs"
@@ -10,13 +11,21 @@ BACKUP_DIR="${ARCHIVE_ROOT}/db-backups"
 STATE_DB="${ARENA_STATE_DB:-/opt/arena/state/arena.sqlite}"
 GCS_BUCKET="${ARENA_GCS_BUCKET:-gs://pkmn-arena}"
 
+# Guard against silently writing into the internal rootfs if the external APFS drive is unmounted
+if [[ "$ARCHIVE_ROOT" == "/Volumes/Archive" && "$(uname -s)" == "Darwin" ]]; then
+  if ! mount | grep -q " on /Volumes/Archive "; then
+    echo "ERROR: /Volumes/Archive is not mounted; aborting archive.sh" >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$LOG_ROOT" "$BACKUP_DIR"
 
 # 1. Daily SQLite backup of local Mac mini state DB (/opt/arena/state/arena.sqlite)
 if [[ -f "$STATE_DB" ]]; then
   TODAY="$(date -u +%Y-%m-%d)"
   OUT_DB="${BACKUP_DIR}/arena-state-${TODAY}.sqlite"
-  sqlite3 "$STATE_DB" ".backup '${OUT_DB}'"
+  sqlite3 -cmd ".timeout 10000" "$STATE_DB" ".backup '${OUT_DB}'"
   zstd -19 --rm -f "$OUT_DB"
   find "$BACKUP_DIR" -name "arena-state-*.sqlite.zst" -mtime +30 -delete
 fi
@@ -31,9 +40,15 @@ if [[ -d "$LOG_ROOT" ]]; then
     DAY_DIR="${LADDER_DIR}/${YESTERDAY}"
     ARCHIVE_7Z="${LADDER_DIR}/${YEAR_MONTH}/${YESTERDAY}.7z"
     if [[ -d "$DAY_DIR" ]]; then
-      mkdir -p "${LADDER_DIR}/${YEAR_MONTH}"
-      7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=64m -ms=on "$ARCHIVE_7Z" "${DAY_DIR}"/*.log
-      7z t "$ARCHIVE_7Z" >/dev/null
+      LOG_FILES=("${DAY_DIR}"/*.log)
+      if (( ${#LOG_FILES[@]} > 0 )); then
+        mkdir -p "${LADDER_DIR}/${YEAR_MONTH}"
+        TMP_7Z="${ARCHIVE_7Z}.tmp"
+        rm -f "$TMP_7Z"
+        7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=64m -ms=on "$TMP_7Z" "${LOG_FILES[@]}"
+        7z t "$TMP_7Z" >/dev/null
+        mv -f "$TMP_7Z" "$ARCHIVE_7Z"
+      fi
       rm -rf "$DAY_DIR"
     fi
   done

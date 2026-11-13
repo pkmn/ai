@@ -322,7 +322,6 @@ async function serve(route: Route, fixture: Fixture, cookie: string): Promise<vo
     url.pathname.startsWith('/account/') ||
     url.pathname === '/projects' ||
     url.pathname.startsWith('/projects/') ||
-    url.pathname === '/projects.json' ||
     url.pathname === '/arena' ||
     url.pathname.startsWith('/arena/') ||
     url.pathname === '/arena.json' ||

@@ -1,4 +1,5 @@
-# systemctl enable --now /home/pkmn/ai/config/pkmn.ai-backup.timer
+# install -o root -g root -m 0644 /home/pkmn/ai/config/pkmn.ai-backup.timer /etc/systemd/system/
+# systemctl daemon-reload && systemctl enable --now pkmn.ai-backup.timer
 
 [Unit]
 Description=Run pkmn.ai SQLite backup nightly at 04:15 UTC
