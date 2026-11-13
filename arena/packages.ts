@@ -1,11 +1,10 @@
 import {execFileSync} from 'child_process';
 import * as crypto from 'crypto';
-import * as dns from 'dns';
 import * as fs from 'fs';
-import * as net from 'net';
 import * as path from 'path';
 
-import {isPrivateOrLoopbackHost, root} from '../static/util';
+import {isAllowedBundleHost} from '../server/account';
+import {root} from '../static/util';
 
 import {AgentMode, LocalAgentRow, StateDatabase} from './db';
 
@@ -310,13 +309,10 @@ export async function downloadAndUnpackBundle(opts: {
   casDir?: string;
   allowPrivateUrls?: boolean;
   timeoutMillis?: number;
-  lookupHost?: (hostname: string) => Promise<ReadonlyArray<{address: string}>>;
 }): Promise<number> {
   const stagingDir = opts.stagingDir ?? STAGING_DIR;
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   const unpackBin = opts.unpackBin ?? UNPACK_BIN;
-  const lookupHost =
-    opts.lookupHost ?? (host => dns.promises.lookup(host, {all: true, verbatim: true}));
 
   fs.mkdirSync(stagingDir, {recursive: true});
   fs.mkdirSync(agentsDir, {recursive: true});
@@ -376,15 +372,8 @@ export async function downloadAndUnpackBundle(opts: {
               `Bundle redirect/download target must use HTTPS (got ${currentUrl.protocol})`
             );
           }
-          const cleanHost = currentUrl.hostname.replace(/^\[|\]$/g, '');
-          if (isPrivateOrLoopbackHost(cleanHost)) {
-            throw new Error('Bundle download target must point to a public host');
-          }
-          if (net.isIP(cleanHost) === 0) {
-            const addrs = await lookupHost(cleanHost);
-            if (addrs.length === 0 || addrs.some(a => isPrivateOrLoopbackHost(a.address))) {
-              throw new Error('Bundle download DNS resolved to a private or loopback IP');
-            }
+          if (currentUrl.port !== '' || !isAllowedBundleHost(currentUrl.hostname)) {
+            throw new Error('Bundle download target must use a supported artifact host');
           }
         }
 

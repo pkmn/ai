@@ -1724,7 +1724,7 @@ export class Runner {
     const url = getFlag(cmd, 'url') ?? (
       pkg === 'oci'
         ? `ghcr.io/pkmn-mock/${agent.slug}:${version}`
-        : `https://r2.pkmn.cc/${agent.slug}-${version}.tar.zst`
+        : `https://github.com/pkmn/${agent.slug}/releases/download/${version}/${agent.slug}.tar.zst`
     );
     const sha256 = getFlag(cmd, 'sha256') ?? sha256OfTag(`${agent.slug}-${version}`);
     const authToken = getFlag(cmd, 'auth-token');

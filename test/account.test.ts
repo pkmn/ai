@@ -54,55 +54,63 @@ const SHA_B = '2b1904fa0000000000000000000000000000000000000000000000002b1904fa'
 
 describe('submission helpers, SSRF guards, & secret encryption', () => {
   test('deducePackageFormat distinguishes native archive bundles from OCI refs', () => {
-    expect(account.deducePackageFormat('https://example.com/agent.tar.gz?sig=1')).toBe('bundle');
-    expect(account.deducePackageFormat('https://example.com/agent.tgz')).toBe('bundle');
-    expect(account.deducePackageFormat('https://example.com/agent.tar.xz')).toBe('bundle');
-    expect(account.deducePackageFormat('https://example.com/agent.txz')).toBe('bundle');
-    expect(account.deducePackageFormat('https://example.com/agent.tar.zst')).toBe('bundle');
-    expect(account.deducePackageFormat('https://example.com/agent.tar.zst#v1')).toBe('bundle');
-    expect(account.deducePackageFormat('https://example.com/agent.tzst')).toBe('bundle');
+    expect(account.deducePackageFormat('https://github.com/pkmn/agent.tar.gz?sig=1')).toBe('bundle');
+    expect(account.deducePackageFormat('https://github.com/pkmn/agent.tgz')).toBe('bundle');
+    expect(account.deducePackageFormat('https://github.com/pkmn/agent.tar.xz')).toBe('bundle');
+    expect(account.deducePackageFormat('https://github.com/pkmn/agent.txz')).toBe('bundle');
+    expect(account.deducePackageFormat('https://github.com/pkmn/agent.tar.zst')).toBe('bundle');
+    expect(account.deducePackageFormat('https://github.com/pkmn/agent.tar.zst#v1')).toBe('bundle');
+    expect(account.deducePackageFormat('https://github.com/pkmn/agent.tzst')).toBe('bundle');
     expect(account.deducePackageFormat('ghcr.io/pkmn/0-error:1.2.0')).toBe('oci');
     expect(account.deducePackageFormat('docker.io/library/agent@sha256:' + SHA_A)).toBe('oci');
   });
 
-  test('validateArtifactUrl blocks loopback, RFC1918, link-local, and ULA SSRF targets', () => {
-    expect(account.validateArtifactUrl('https://github.com/pkmn/0-error.tar.zst', 'bundle'))
-      .toBeUndefined();
-    expect(account.validateArtifactUrl('ghcr.io/pkmn/0-error:1.2.0', 'oci')).toBeUndefined();
-    expect(account.validateArtifactUrl('pkmn/0-error:1.2.0', 'oci')).toBeUndefined();
+  test('validateArtifactUrl enforces strict artifact and OCI registry allowlists', () => {
+    const allowedBundles = [
+      'https://github.com/pkmn/0-error.tar.zst',
+      'https://objects.githubusercontent.com/asset/0-error.tar.gz?X-Amz-Signature=abc',
+      'https://huggingface.co/pkmn/0-error/resolve/main/agent.tar.zst',
+      'https://cdn-lfs-us-1.hf.co/repos/agent.tar.zst',
+      'https://acct123.r2.cloudflarestorage.com/agents/0-error.tar.zst',
+      'https://pub-abc123.r2.dev/0-error.tar.zst',
+      'https://my-bucket.s3.us-east-1.amazonaws.com/0-error.tar.zst',
+      'https://storage.googleapis.com/my-bucket/0-error.tar.zst',
+      'https://f005.backblazeb2.com/file/my-bucket/0-error.tar.zst',
+    ];
+    for (const url of allowedBundles) {
+      expect(account.validateArtifactUrl(url, 'bundle')).toBeUndefined();
+    }
+
+    const allowedOci = [
+      'ghcr.io/pkmn/0-error:1.2.0',
+      'pkmn/0-error:1.2.0',
+      'docker.io/pkmn/0-error:1.2.0',
+      'quay.io/pkmn/0-error:1.2.0',
+      'us-central1-docker.pkg.dev/my-proj/repo/agent:1.2.0',
+      '123456789012.dkr.ecr.us-east-1.amazonaws.com/agent:1.2.0',
+    ];
+    for (const ref of allowedOci) {
+      expect(account.validateArtifactUrl(ref, 'oci')).toBeUndefined();
+    }
 
     const blockedBundles = [
+      'https://evil.example.com/agent.tar.zst',
+      'https://github.com:8443/pkmn/agent.tar.zst',
+      'http://github.com/pkmn/agent.tar.zst',
       'https://127.0.0.1/agent.tar.zst',
-      'https://2130706433/agent.tar.zst',
-      'https://0.0.0.0/agent.tar.zst',
-      'https://100.64.0.5/agent.tar.zst',
-      'https://198.18.0.1/agent.tar.zst',
-      'https://localhost/agent.tar.zst',
-      'https://sub.internal/agent.tar.zst',
+      'https://169.254.169.254/latest/agent.tar.zst',
       'https://[::1]/agent.tar.zst',
       'https://[::ffff:127.0.0.1]/agent.tar.zst',
-      'https://[::ffff:7f00:1]/agent.tar.zst',
-      'https://[::127.0.0.1]/agent.tar.zst',
-      'https://[64:ff9b::a00:1]/agent.tar.zst',
-      'https://[2002:7f00:1::1]/agent.tar.zst',
-      'https://[2001::1]/agent.tar.zst',
-      'https://[ff02::1]/agent.tar.zst',
-      'https://10.0.0.5/agent.tar.zst',
-      'https://192.168.1.10/agent.tar.zst',
-      'https://172.16.0.1/agent.tar.zst',
-      'https://169.254.169.254/latest/agent.tar.zst',
-      'https://[fd00::1]/agent.tar.zst',
-      'https://[fe80::1]/agent.tar.zst',
+      'https://localhost/agent.tar.zst',
     ];
     for (const url of blockedBundles) {
-      expect(account.validateArtifactUrl(url, 'bundle')).toContain('public host');
+      expect(account.validateArtifactUrl(url, 'bundle')).toBeTruthy();
     }
-    expect(account.validateArtifactUrl('127.0.0.1:5000/pkmn/agent:1.0.0', 'oci'))
-      .toContain('public host');
-    expect(account.validateArtifactUrl('2130706433:5000/pkmn/agent:1.0.0', 'oci'))
-      .toContain('public host');
-    expect(account.validateArtifactUrl('intranet:5000/pkmn/agent:1.0.0', 'oci'))
-      .toContain('public host');
+
+    expect(account.validateArtifactUrl('evil.example.com/pkmn/agent:1.0.0', 'oci')).toBeTruthy();
+    expect(account.validateArtifactUrl('ghcr.io:5000/pkmn/agent:1.0.0', 'oci')).toBeTruthy();
+    expect(account.validateArtifactUrl('127.0.0.1:5000/pkmn/agent:1.0.0', 'oci')).toBeTruthy();
+    expect(account.validateArtifactUrl('intranet:5000/pkmn/agent:1.0.0', 'oci')).toBeTruthy();
     expect(account.validateArtifactUrl('http://127.0.0.1:8080/agent.tar.zst', 'bundle', true))
       .toBeUndefined();
   });
@@ -276,7 +284,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       body: JSON.stringify({
         version: '0.1.0',
         package: 'bundle',
-        url: 'https://example.com/newcomer.tar.zst',
+        url: 'https://github.com/pkmn/newcomer.tar.zst',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -310,7 +318,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       body: JSON.stringify({
         version: '0.9.0',
         package: 'bundle',
-        url: 'https://example.com/0-error-0.9.0.tar.zst',
+        url: 'https://github.com/pkmn/0-error-0.9.0.tar.zst',
         sha256: SHA_A,
         ladders: ['ADV'],
       }),
@@ -351,7 +359,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       body: JSON.stringify({
         version: '1.0.0',
         package: 'bundle',
-        url: 'https://example.com/0-error-1.0.0.tar.zst',
+        url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -378,7 +386,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       body: JSON.stringify({
         version: '1.0.0',
         package: 'bundle',
-        url: 'https://example.com/0-error.tar.zst',
+        url: 'https://github.com/pkmn/0-error.tar.zst',
         sha256: SHA_A,
         ladders: ['ADV'],
       }),
@@ -395,7 +403,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       developerId: db.getDeveloperByGitHub('pre')!.id,
       version: '1.0.0',
       package: 'bundle',
-      url: 'https://example.com/0-error-1.0.0.tar.zst',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
       sha256: SHA_A,
       ladderIds: ['gen1ou20261109', 'gen3ou20261109'],
       now: currentNow - 40 * 86400,
@@ -418,7 +426,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       developerId: db.getDeveloperByGitHub('pre')!.id,
       version: '1.1.0-rc1',
       package: 'bundle',
-      url: 'https://example.com/0-error-1.1.0-rc1.tar.zst',
+      url: 'https://github.com/pkmn/0-error-1.1.0-rc1.tar.zst',
       sha256: SHA_B,
       ladderIds: ['gen1ou20261109'],
       now: currentNow - 20 * 86400,
@@ -435,7 +443,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       developerId: db.getDeveloperByGitHub('coauthor')!.id,
       version: '1.1.0',
       package: 'bundle',
-      url: 'https://example.com/0-error-1.1.0.tar.zst',
+      url: 'https://github.com/pkmn/0-error-1.1.0.tar.zst',
       sha256: SHA_A,
       ladderIds: ['gen1ou20261109', 'gen3ou20261109'],
       now: currentNow - 16 * 86400,
@@ -494,7 +502,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       body: JSON.stringify({
         version: 'bad version string!!',
         package: 'bundle',
-        url: 'https://example.com/fp.tar.xz',
+        url: 'https://github.com/pkmn/fp.tar.xz',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -511,7 +519,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       body: JSON.stringify({
         version: '1.0.0',
         package: 'oci',
-        url: 'https://example.com/fp.tar.xz',
+        url: 'https://github.com/pkmn/fp.tar.xz',
         sha256: SHA_A,
         ladders: ['RBY'],
       }),
@@ -611,7 +619,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         body: JSON.stringify({
           version,
           package: 'bundle',
-          url: `https://example.com/0-error-${version}.tar.zst`,
+          url: `https://github.com/pkmn/0-error-${version}.tar.zst`,
           sha256: SHA_A,
           ladders: ['VGC'],
           ...(teams !== undefined ? {teams} : {}),
@@ -808,7 +816,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         body: JSON.stringify({
           version: '1.0.0',
           package: 'bundle',
-          url: 'https://example.com/0-error-1.0.0.tar.zst',
+          url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
           sha256: SHA_A,
           ladders: ['VGC'],
         }),
@@ -900,7 +908,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         body: JSON.stringify({
           version: '1.0.0',
           package: 'bundle',
-          url: 'https://example.com/0-error-1.0.0.tar.zst',
+          url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
           sha256: SHA_A,
           ladders: ['VGC'],
         }),
@@ -973,7 +981,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         body: JSON.stringify({
           version: '0.1.0-b',
           package: 'bundle',
-          url: 'https://example.com/newcomer.tar.zst',
+          url: 'https://github.com/pkmn/newcomer.tar.zst',
           sha256: SHA_A,
           tournaments: ['3'],
         }),
@@ -1028,7 +1036,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         body: JSON.stringify({
           version: '1.0.0-t3',
           package: 'bundle',
-          url: 'https://example.com/0-error-t3.tar.zst',
+          url: 'https://github.com/pkmn/0-error-t3.tar.zst',
           sha256: SHA_A,
           tournaments: ['3'],
         }),
@@ -1144,7 +1152,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         body: JSON.stringify({
           version: '1.1.0',
           package: 'bundle',
-          url: 'https://example.com/0-error-1.1.0.tar.zst',
+          url: 'https://github.com/pkmn/0-error-1.1.0.tar.zst',
           sha256: SHA_A,
           ladders: ['RBY'],
         }),
@@ -1284,7 +1292,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       developerId: db.getDeveloperByGitHub('pre')!.id,
       version: '1.0.0',
       package: 'bundle',
-      url: 'https://example.com/0-error-1.0.0.tar.zst',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
       sha256: SHA_A,
       ladderIds: ['gen1ou20261109'],
       now: currentNow,
@@ -1437,7 +1445,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
         body: JSON.stringify({
           version: '1.0.0',
           package: 'bundle',
-          url: 'https://releases.example.com/0-error.tar.zst?X-Amz-Signature=topsecret',
+          url: 'https://objects.githubusercontent.com/pkmn/0-error.tar.zst?X-Amz-Signature=topsecret',
           sha256: SHA_A,
           authToken: 'ghp_supersecret_token',
           ladders: ['gen1ou20261109'],

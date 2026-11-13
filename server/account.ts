@@ -14,7 +14,6 @@ import {
   formatUtcDate,
   formatUtcDateTime,
   installHeadSupport,
-  isPrivateOrLoopbackHost,
   renderTemplate,
   root,
 } from '../static/util';
@@ -25,8 +24,6 @@ import {
   splitSubmittedTeams,
   validateCompetitorTeamsIncremental,
 } from './teams';
-
-export {isPrivateOrLoopbackHost};
 
 export function deducePackageFormat(url: string): db.PackageFormat {
   const cleanPath = url.split(/[?#]/)[0].toLowerCase();
@@ -643,6 +640,57 @@ function parseSubmissionPayload(
   };
 }
 
+// Strict allowlists of public artifact hosts and container registries (matching `static/rules.dj`).
+// Allowlisting known providers eliminates raw IP literals, arbitrary ports, DNS rebinding, and
+// attacker-controlled redirect/tarpit origins without complex IPv4/IPv6 CIDR munging.
+const ALLOWED_BUNDLE_HOSTS = new Set([
+  'github.com',
+  'api.github.com',
+  'codeload.github.com',
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+  'huggingface.co',
+  's3.amazonaws.com',
+  'storage.googleapis.com',
+]);
+
+const ALLOWED_BUNDLE_HOST_RES = [
+  /^[a-z0-9-]+\.hf\.co$/,
+  /^[a-z0-9.-]+\.r2\.cloudflarestorage\.com$/,
+  /^[a-z0-9-]+\.r2\.dev$/,
+  /^(?:[a-z0-9.-]+\.)?s3(?:\.[a-z0-9-]+)?\.amazonaws\.com$/,
+  /^[a-z0-9.-]+\.storage\.googleapis\.com$/,
+  /^[a-z0-9.-]+\.backblazeb2\.com$/,
+];
+
+const ALLOWED_OCI_HOSTS = new Set([
+  'ghcr.io',
+  'docker.io',
+  'index.docker.io',
+  'registry-1.docker.io',
+  'quay.io',
+  'gcr.io',
+  'public.ecr.aws',
+]);
+
+const ALLOWED_OCI_HOST_RES = [
+  /^[a-z0-9-]+\.gcr\.io$/,
+  /^[a-z0-9-]+-docker\.pkg\.dev$/,
+  /^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com$/,
+];
+
+export function isAllowedBundleHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  if (!host || host.startsWith('[') || host.endsWith('.')) return false;
+  return ALLOWED_BUNDLE_HOSTS.has(host) || ALLOWED_BUNDLE_HOST_RES.some(re => re.test(host));
+}
+
+export function isAllowedOciRegistryHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  if (!host || host.startsWith('[') || host.endsWith('.')) return false;
+  return ALLOWED_OCI_HOSTS.has(host) || ALLOWED_OCI_HOST_RES.some(re => re.test(host));
+}
+
 export function validateArtifactUrl(
   url: string,
   packageFormat: db.PackageFormat,
@@ -664,12 +712,15 @@ export function validateArtifactUrl(
     } catch {
       return 'Bundle Artifact URL must be a valid URL.';
     }
-    const allowHttp = process.env.NODE_ENV !== 'production';
+    const allowHttp = allowPrivateUrls && process.env.NODE_ENV !== 'production';
     if (parsed.protocol !== 'https:' && !(allowHttp && parsed.protocol === 'http:')) {
       return 'Bundle Artifact URL must use HTTPS.';
     }
-    if (!allowPrivateUrls && isPrivateOrLoopbackHost(parsed.hostname)) {
-      return 'Bundle Artifact URL must point to a public host.';
+    if (!allowPrivateUrls && (parsed.port !== '' || !isAllowedBundleHost(parsed.hostname))) {
+      return (
+        'Bundle Artifact URL must be hosted on GitHub, Hugging Face, Cloudflare R2, ' +
+        'AWS S3, GCS, or Backblaze B2.'
+      );
     }
     return undefined;
   }
@@ -685,12 +736,13 @@ export function validateArtifactUrl(
   }
   const slash = url.indexOf('/');
   const authority = url.slice(0, slash);
-  let registryHost: string;
+  let parsedAuthority: URL;
   try {
-    registryHost = new URL(`https://${authority}`).hostname;
+    parsedAuthority = new URL(`https://${authority}`);
   } catch {
     return 'Invalid OCI image reference (expected e.g. ghcr.io/org/agent:1.0.0).';
   }
+  const registryHost = parsedAuthority.hostname;
   const isExplicitRegistry =
     authority.includes('.') ||
     authority.includes(':') ||
@@ -699,9 +751,11 @@ export function validateArtifactUrl(
   if (
     !allowPrivateUrls &&
     isExplicitRegistry &&
-    (!registryHost.includes('.') || isPrivateOrLoopbackHost(registryHost))
+    (parsedAuthority.port !== '' || !isAllowedOciRegistryHost(registryHost))
   ) {
-    return 'OCI image registry must point to a public host.';
+    return (
+      'OCI image registry must be GHCR, Docker Hub, Quay, Google Artifact Registry/GCR, or AWS ECR.'
+    );
   }
   return undefined;
 }

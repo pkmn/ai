@@ -421,22 +421,21 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       ).toBe('Failed with [REDACTED]');
 
       // Verify presigned `.tar.zst?sig=...` query handling, cross-origin Authorization stripping,
-      // and DNS/redirect SSRF blocking in downloadAndUnpackBundle
+      // and strict hostname allowlist enforcement across redirects in downloadAndUnpackBundle
       const realFetch = globalThis.fetch;
       try {
-        // 1. Block DNS rebinding to private/loopback IP
+        // 1. Block unlisted origin before making any HTTP request
         await expect(
           packages.downloadAndUnpackBundle({
             url: 'https://releases.example.com/agent.tar.zst?X-Amz-Signature=123',
             expectedSha256: sha256,
-            agentTargetId: 'agent-rebinding',
+            agentTargetId: 'agent-unlisted',
             stagingDir,
             agentsDir,
-            lookupHost: () => Promise.resolve([{address: '::ffff:127.0.0.1'}]),
           })
-        ).rejects.toThrow(/private or loopback IP/);
+        ).rejects.toThrow(/supported artifact host/);
 
-        // 2. Block HTTPS -> HTTP or loopback redirect
+        // 2. Block redirect from GitHub to an unlisted / metadata target
         globalThis.fetch = () =>
           Promise.resolve(
             new Response('', {
@@ -446,16 +445,15 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
           );
         await expect(
           packages.downloadAndUnpackBundle({
-            url: 'https://releases.example.com/agent.tar.gz',
+            url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.gz',
             expectedSha256: sha256,
             agentTargetId: 'agent-redirect-ssrf',
             stagingDir,
             agentsDir,
-            lookupHost: () => Promise.resolve([{address: '93.184.216.34'}]),
           })
-        ).rejects.toThrow(/public host/);
+        ).rejects.toThrow(/supported artifact host/);
 
-        // 3. Cross-origin redirect strips Authorization and preserves `.tar.gz` before `?query`
+        // 3. Cross-origin GitHub -> objects.githubusercontent.com redirect strips Authorization
         const seenHeaders: Array<{url: string; auth: string | null}> = [];
         const archiveBytes = fs.readFileSync(archivePath);
         globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
@@ -466,12 +464,13 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
               : input.url;
           const hdrs = new Headers(init?.headers);
           seenHeaders.push({url: u, auth: hdrs.get('authorization')});
-          if (u.startsWith('https://api.example.com/')) {
+          if (u.startsWith('https://github.com/')) {
             return Promise.resolve(
               new Response('', {
                 status: 302,
                 headers: {
-                  location: 'https://cdn.example.net/agent.tar.gz?X-Amz-Signature=xyz#dl',
+                  location:
+                    'https://objects.githubusercontent.com/asset/agent.tar.gz?X-Amz-Signature=xyz#dl',
                 },
               })
             );
@@ -480,23 +479,22 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         };
 
         const dlBytes = await packages.downloadAndUnpackBundle({
-          url: 'https://api.example.com/agent.tar.gz?token=1',
+          url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.gz?token=1',
           expectedSha256: sha256,
           agentTargetId: 'agent-presigned',
           authToken: 'ghp_secret_redirect_token',
           stagingDir,
           agentsDir,
           casDir,
-          lookupHost: () => Promise.resolve([{address: '93.184.216.34'}]),
         });
         expect(dlBytes).toBe(bytes1);
         expect(seenHeaders).toEqual([
           {
-            url: 'https://api.example.com/agent.tar.gz?token=1',
+            url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.gz?token=1',
             auth: 'Bearer ghp_secret_redirect_token',
           },
           {
-            url: 'https://cdn.example.net/agent.tar.gz?X-Amz-Signature=xyz#dl',
+            url: 'https://objects.githubusercontent.com/asset/agent.tar.gz?X-Amz-Signature=xyz#dl',
             auth: null,
           },
         ]);
