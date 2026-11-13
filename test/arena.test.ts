@@ -1332,6 +1332,105 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         expect(vgcMatches).toHaveLength(1);
         expect(vgcMatches[0].p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
         expect(vgcMatches[0].p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+
+        // Verify upcoming ladder smoke tests resolve the real format (`gen1ou`, not Gen 9 Custom
+        // Game) and tournament-only OCI submissions stay queued for GCP (`target=tournament`).
+        db.syncLaddersFromYaml([
+          '- name: VGC',
+          '  id: gen9championsvgc2026regmc',
+          '  format: gen9championsvgc2026regmc',
+          '  team: pools',
+          '  status: active',
+          '  min: 4',
+          '  teams: 20',
+          '- name: RBY',
+          '  id: gen1ou20261109',
+          '  format: gen1ou',
+          '  team: random',
+          '  status: upcoming',
+          '  min: 2',
+        ].join('\n'));
+        db.syncProjectsFromYaml([
+          '- name: 0 ERROR',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {scheibo: pre.10544}}',
+          '- name: Foul Play',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+          '- name: Mew\'s Truck',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {truckdev: truckdev.10003}}',
+        ].join('\n'));
+        const mewAgent = db.getAgentBySlug('mews-truck')!;
+        db.upsertTournament({
+          id: '9',
+          name: 'Tournament #9',
+          format: 'gen9ou',
+          gamesPerMatchup: 8,
+          parallelTables: 2,
+          hardware: 'GCP L4',
+          status: 'scheduled',
+          startsAt: Math.floor(Date.now() / 1000) + 86400 * 7,
+        });
+
+        const gen1OnlyDir = path.join(tmpDir, 'gen1-strict-bundle');
+        fs.mkdirSync(gen1OnlyDir, {recursive: true});
+        fs.writeFileSync(
+          path.join(gen1OnlyDir, 'run'),
+          [
+            '#!/usr/bin/env node',
+            'const readline = require("readline");',
+            'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+            'let sawGen1Tier = false;',
+            'rl.on("line", line => {',
+            '  if (line === "|tier|[Gen 1] OU") sawGen1Tier = true;',
+            '  if (line.startsWith("|tier|") && line !== "|tier|[Gen 1] OU") process.exit(2);',
+            '  if (!line.startsWith("|request|")) return;',
+            '  const raw = line.slice(9).trim();',
+            '  if (!raw || raw === "null") return;',
+            '  const req = JSON.parse(raw);',
+            '  if (req.wait) return;',
+            '  if (!sawGen1Tier) process.exit(3);',
+            '  process.stdout.write("default\\n");',
+            '});',
+          ].join('\n'),
+          {mode: 0o755}
+        );
+        const gen1Tar = path.join(tmpDir, 'gen1-strict.tar.gz');
+        execFileSync('tar', ['-czf', gen1Tar, '-C', gen1OnlyDir, '.']);
+        const gen1Sha = crypto.createHash('sha256').update(fs.readFileSync(gen1Tar)).digest('hex');
+
+        const upcomingSub = db.createSubmission({
+          agentId: mewAgent.id,
+          version: '3.0.0',
+          package: 'bundle',
+          url: `file://${gen1Tar}`,
+          sha256: gen1Sha,
+          ladderIds: ['gen1ou20261109'],
+          tournamentIds: [],
+        });
+        const tourneySub = db.createSubmission({
+          agentId: mewAgent.id,
+          version: '3.0.0-t9',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/mews-truck:3.0.0-t9',
+          sha256: 'c'.repeat(64),
+          ladderIds: [],
+          tournamentIds: ['9'],
+        });
+
+        const ladderPending = await client.getPendingSubmissions({target: 'ladder'});
+        expect(ladderPending.submissions.map(s => s.versionId)).toEqual([upcomingSub.id]);
+        const tourneyPending = await client.getPendingSubmissions({
+          target: 'tournament',
+          tournamentId: '9',
+        });
+        expect(tourneyPending.submissions.map(s => s.versionId)).toEqual([tourneySub.id]);
+
+        const processedUpcoming = await coord.processPendingSubmissions();
+        expect(processedUpcoming).toBe(1);
+        expect(db.getVersionById(upcomingSub.id)?.smokeStatus).toBe('passed');
+        expect(db.getVersionById(tourneySub.id)?.smokeStatus).toBe('pending');
       } finally {
         if (server) {
           server.closeAllConnections();

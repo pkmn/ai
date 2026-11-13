@@ -540,8 +540,18 @@ export interface PendingSubmission {
   teamsByLadder: Record<string, string[]>;
 }
 
+export interface PendingTournament {
+  id: string;
+  name: string;
+  format: string;
+  rulesJson: string;
+  status: db.TournamentStatus;
+  startsAt: number;
+}
+
 export interface PendingSubmissionsResponse {
   ladders: PendingLadder[];
+  tournaments?: PendingTournament[];
   submissions: PendingSubmission[];
 }
 
@@ -800,8 +810,18 @@ export class Client {
     return parsed as T;
   }
 
-  getPendingSubmissions(): Promise<PendingSubmissionsResponse> {
-    return this.requestJson<PendingSubmissionsResponse>('GET', '/api/arena/pending-submissions');
+  getPendingSubmissions(opts?: {
+    target?: 'ladder' | 'tournament';
+    tournamentId?: string;
+  }): Promise<PendingSubmissionsResponse> {
+    const params = new URLSearchParams();
+    if (opts?.target) params.set('target', opts.target);
+    if (opts?.tournamentId) params.set('tournament', opts.tournamentId);
+    const qs = params.toString();
+    return this.requestJson<PendingSubmissionsResponse>(
+      'GET',
+      `/api/arena/pending-submissions${qs ? `?${qs}` : ''}`
+    );
   }
 
   getPlayableLadders(): Promise<{
@@ -1588,6 +1608,11 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.get('/api/arena/pending-submissions', (req, res) => {
     if (!authenticateArena(req, res)) return;
     try {
+      const targetFilter = typeof req.query.target === 'string' ? req.query.target : '';
+      const tourneyFilter = typeof req.query.tournament === 'string'
+        ? req.query.tournament.trim()
+        : '';
+
       const ladders = db.getLadders().filter(l => l.status !== 'archived').map(l => ({
         id: l.id,
         slot: l.slot,
@@ -1598,8 +1623,24 @@ export function register(app: polka.Polka, options: Options): Handle {
         teams: l.teams,
         status: l.status,
       }));
+      const tournaments = db.getTournaments()
+        .filter(t => t.status !== 'completed')
+        .map(t => ({
+          id: t.id,
+          name: t.name,
+          format: t.format,
+          rulesJson: t.rulesJson,
+          status: t.status,
+          startsAt: t.startsAt,
+        }));
       const sessionSecret = getSessionSecret();
-      const submissions = db.getPendingSubmissions().map(sub => {
+      const rawPending = db.getPendingSubmissions().filter(sub => {
+        if (targetFilter === 'ladder') return sub.ladders.length > 0;
+        if (targetFilter === 'tournament') return sub.tournaments.length > 0;
+        return true;
+      }).filter(sub => !tourneyFilter || sub.tournaments.includes(tourneyFilter));
+
+      const submissions = rawPending.map(sub => {
         let authToken: string | undefined;
         // Private artifact pull tokens are encrypted at rest with HKDF(SESSION_SECRET) and
         // decrypted only in-memory while serving the authenticated Arena worker pull queue;
@@ -1625,7 +1666,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           teamsByLadder: sub.teamsByLadder,
         };
       });
-      sendJson(res, 200, {ladders, submissions});
+      sendJson(res, 200, {ladders, tournaments, submissions});
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Internal error.';
       sendJson(res, 500, {error: message});

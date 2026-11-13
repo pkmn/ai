@@ -538,6 +538,16 @@ export function createSubmission(
       );
     }
 
+    if (input.ladderIds.length > 0 && tournamentIds.length > 0) {
+      throw Object.assign(
+        new Error(
+          'Ladder (arm64) and tournament (linux/amd64) submissions validate on separate ' +
+          'hosts; submit them as separate versions.'
+        ),
+        {status: 400}
+      );
+    }
+
     if (input.ladderIds.length > 0) {
       const status = computeAgentSubmissionStatus(db, input.agentId, now);
       if (!status.canSubmit) {

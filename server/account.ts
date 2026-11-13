@@ -450,7 +450,7 @@ export function renderAccountPage(opts: {
       if (t.canSubmit) {
         const checked = !status.canSubmit && tournamentStatuses.length === 1 ? ' checked' : '';
         const title =
-          `OCI image required (linux/arm64); ${scheduleHint}`;
+          `OCI image required (linux/amd64); ${scheduleHint}`;
         return `<label title="${escapeHtml(title)}"><input type="checkbox" name="tournaments" ` +
           `value="${val}"${checked}> ${name} <span class="muted">(OCI · ` +
           `closes ${escapeHtml(formatUtcDateTime(t.closesAt))})</span></label>`;

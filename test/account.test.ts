@@ -911,6 +911,7 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       );
       expect(acctHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
       expect(acctHtml).toContain('name="tournaments" type="checkbox" value="3"');
+      expect(acctHtml).toContain('OCI image required (linux/amd64)');
 
       const wikiHtml = await (await realFetch(`${baseUrl}/wiki`)).text();
       expect(wikiHtml).toContain(
@@ -1039,6 +1040,23 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
 
       // Failed smoke test unlocks tournament slot immediately
       db.applySubmissionStatus({versionId, smokeStatus: 'failed', now: currentNow + 5});
+      const mixedSub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.1-mix',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:1.0.1-mix',
+          sha256: SHA_B,
+          ladders: ['gen1ou20261109'],
+          tournaments: ['3'],
+        }),
+      });
+      expect(mixedSub.status).toBe(400);
       const retrySub = await realFetch(`${baseUrl}/api/submissions`, {
         method: 'POST',
         headers: {

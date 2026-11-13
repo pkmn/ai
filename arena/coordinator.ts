@@ -238,10 +238,17 @@ export class Coordinator {
   async processPendingSubmissions(
     laddersById?: ReadonlyMap<string, LadderSnapshot>
   ): Promise<number> {
-    const {submissions} = await this.client.getPendingSubmissions();
+    const {ladders, submissions} = await this.client.getPendingSubmissions({target: 'ladder'});
+    const pendingFormatById = new Map<string, string>();
+    for (const l of ladders) {
+      pendingFormatById.set(l.id, l.format);
+      this.formatByLadderId.set(l.id, l.format);
+    }
     let processed = 0;
 
     for (const sub of submissions) {
+      // Tournament-only submissions target GCP linux/amd64 Spot GPU workers, not Mac mini arm64.
+      if (sub.ladders.length === 0 && sub.tournaments.length > 0) continue;
       processed++;
       const mode = toExecutionMode(sub.package);
       const targetId = formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
@@ -283,7 +290,11 @@ export class Coordinator {
       const candidateSpec = this.resolveLaunchSpec(mode, target);
       const formatsToTest = new Set<string>();
       for (const lid of sub.ladders) {
-        const fmt = laddersById?.get(lid)?.format ?? this.formatByLadderId.get(lid) ?? lid;
+        const fmt =
+          pendingFormatById.get(lid) ??
+          laddersById?.get(lid)?.format ??
+          this.formatByLadderId.get(lid) ??
+          lid;
         formatsToTest.add(fmt);
       }
       if (formatsToTest.size === 0) {
