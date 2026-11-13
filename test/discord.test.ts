@@ -12,8 +12,6 @@ import * as discord from '../server/discord';
 const CONFIG: discord.Config = {
   guild: 'guild',
   ladders: {a: 'role-a', b: 'role-b'},
-  agents: {AgentX: 'sauce'},
-  authors: {pelle: 'pll'},
 };
 
 function leader(
@@ -24,31 +22,44 @@ function leader(
   return {ladder, agent, owner};
 }
 
+const ROLES: discord.GuildRole[] = [
+  {id: 'r-other', name: '🥇 OTS'},
+  {id: 'r-poke', name: '🤖 Poke'},
+  {id: 'r-pokechad', name: '🤖 PokeCHAD'},
+  {id: 'r-mews', name: "🤖 Mew's Truck"},
+];
+
 describe('ownerOf', () => {
   const other = {id: 'a1', name: 'Other'};
   test.each<[string, discord.Leader, ReturnType<typeof discord.ownerOf>]>([
-    ['the config override by agent name',
-      leader('a', {id: 'a2', name: 'AgentX'}, {name: 'x', discordId: '1'}), {name: 'sauce'}],
-    ['the config override by agent family name for a version',
-      leader('a', {id: 'a2', name: 'AgentX v2'}, undefined), {name: 'sauce'}],
     ['the shared Discord account', leader('a', other, {name: 'x', discordId: '1'}), {id: '1'}],
-    ['the mapped author name', leader('a', other, {name: 'pelle'}), {name: 'pll'}],
+    ['the matching 🤖 guild role by agent name',
+      leader('a', {id: 'a2', name: 'Poke'}, {name: 'x'}), {role: 'r-poke'}],
+    ['the matching 🤖 guild role for a version',
+      leader('a', {id: 'a3', name: 'MewsTruck v2'}, undefined), {role: 'r-mews'}],
+    ['the longest matching 🤖 guild role prefix',
+      leader('a', {id: 'a4', name: 'PokeCHAD V3'}, {name: 'dr'}), {role: 'r-pokechad'}],
     ['the author name', leader('a', other, {name: 'x'}), {name: 'x'}],
     ['nobody while the owner is private', leader('a', other, undefined), undefined],
   ])('is %s', (_, l, expected) => {
-    expect(discord.ownerOf(l, CONFIG)).toEqual(expected);
+    expect(discord.ownerOf(l, ROLES)).toEqual(expected);
   });
 });
 
 describe('findMember', () => {
   const members: discord.GuildMember[] = [
-    {user: {id: '1', username: 'nessiedev'}, roles: []},
+    {user: {id: '1', username: 'nessiedev'}, roles: ['r-nessie']},
     {user: {id: '2', username: 'other', global_name: '9'}, nick: '9', roles: []},
   ];
 
   test('matches member strictly by Discord user ID', () => {
     expect(discord.findMember(members, {id: '1'})?.user.username).toBe('nessiedev');
     expect(discord.findMember(members, {id: '9'})).toBeUndefined();
+  });
+
+  test('matches member by guild role ID', () => {
+    expect(discord.findMember(members, {role: 'r-nessie'})?.user.id).toBe('1');
+    expect(discord.findMember(members, {role: 'r-missing'})).toBeUndefined();
   });
 
   test('matches member by case-insensitive username, global name, or nickname', () => {
@@ -66,7 +77,10 @@ interface Call {
 const realFetch = globalThis.fetch;
 
 function stubFetch(
-  leaders: discord.Leader[], members: object[], fail: (call: Call) => boolean = () => false
+  leaders: discord.Leader[],
+  members: object[],
+  fail: (call: Call) => boolean = () => false,
+  roles: discord.GuildRole[] = ROLES
 ) {
   const calls: Call[] = [];
   globalThis.fetch = ((url: string, init?: RequestInit) => {
@@ -79,7 +93,9 @@ function stubFetch(
       ? {leaders: leaders.filter(l => l.ladder === 'a')}
       : call.url.includes('pkmn.bot')
         ? {leaders: leaders.filter(l => l.ladder !== 'a')}
-        : members;
+        : call.url.endsWith('/roles')
+          ? roles
+          : members;
     return Promise.resolve({status, ok: status < 300, text: () => Promise.resolve(''),
       json: () => Promise.resolve(status === 200 ? body : 'boom')});
   }) as unknown as typeof fetch;
@@ -164,6 +180,44 @@ describe('syncRoles', () => {
     console.error = error;
     expect(calls).toContainEqual(expect.objectContaining({method: 'PUT',
       url: expect.stringContaining('/members/new/roles/role-b')}));
+  });
+
+  test('resolves leader owner via 🤖 guild role when owner is private', async () => {
+    const members: discord.GuildMember[] = [
+      {user: {id: 'batista', username: 'batistas_dick'}, roles: ['r-mews']},
+    ];
+    const calls = stubFetch(
+      [leader('a', {id: 'a3', name: 'MewsTruck v2'}, undefined)],
+      members
+    );
+    const state = new Map<string, string | undefined>();
+    await discord.syncRoles('token', 'vgc', CONFIG, state);
+    expect(calls).toContainEqual(expect.objectContaining({
+      method: 'PUT',
+      url: expect.stringContaining('/members/batista/roles/role-a'),
+    }));
+
+    const before = calls.length;
+    await discord.syncRoles('token', 'vgc', CONFIG, state);
+    expect(calls.slice(before).map(c => c.url)).toEqual([
+      expect.stringContaining('vgc.bot'),
+      expect.stringContaining('pkmn.bot'),
+    ]);
+  });
+
+  test('falls back to owner name when matching 🤖 guild role has zero holders', async () => {
+    const members: discord.GuildMember[] = [
+      {user: {id: 'dr', username: 'dr.perfidious'}, roles: []},
+    ];
+    const calls = stubFetch(
+      [leader('a', {id: 'a4', name: 'PokeCHAD V3'}, {name: 'dr.perfidious'})],
+      members
+    );
+    await discord.syncRoles('token', 'vgc', CONFIG, new Map());
+    expect(calls).toContainEqual(expect.objectContaining({
+      method: 'PUT',
+      url: expect.stringContaining('/members/dr/roles/role-a'),
+    }));
   });
 });
 

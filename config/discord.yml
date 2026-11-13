@@ -24,16 +24,3 @@ ladders:
   gen9randombattle: '1564121197069733928'
   gen3ou: '1564120942932664453'
   gen1ou: '1564121022213398710'
-
-# Fallback Discord username mappings for vgc.bot / pkmn.bot leaders with missing/unlinked owners.
-agents:
-  incinference: sauce1337
-  Metamon: jakegrigsby_14755
-  Nessie: nessiedev
-  MewsTruck: batistas_dick
-  delf: hsahovic
-  MildMorpeko: tiny.water
-  Foul Play: pmariglia
-
-authors:
-  pelle: pll

@@ -360,8 +360,8 @@ links.
   access) and `/account/` eligibility checks.
 - Syncs native Arena `#1` leaderboard roles (configured via `discord:` role IDs in
   `config/ladders.yml`) and the `competitor` role (`config/discord.yml`), plus external partner
-  leaderboard roles (`ladders:`, `agents:`, `authors:` in `config/discord.yml` using
-  `VGC_BOT_TOKEN`).
+  leaderboard roles (`ladders:` in `config/discord.yml` using `VGC_BOT_TOKEN`, resolving owners via
+  linked `discordId`s, `🤖 <Agent>` guild roles, or owner usernames).
 - Enforces channel pinned messages (`pins:` in `config/discord.yml`), archives `#general` chat logs
   into `chat/logs/YYYY-MM-DD.txt`, and DMs developers on smoke-test pass/fail/quarantine and staff
   (`staff:` in `config/discord.yml`) if the Mac mini heartbeats go stale (`> 15` minutes).

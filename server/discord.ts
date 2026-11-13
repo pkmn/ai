@@ -47,8 +47,6 @@ export interface Config {
   staff?: string[];
   pins?: string[];
   ladders: {[ladder: string]: string};
-  agents?: {[agent: string]: string};
-  authors?: {[author: string]: string};
 }
 
 export interface Leader {
@@ -57,8 +55,8 @@ export interface Leader {
   owner?: {name: string; discordId?: string};
 }
 
-// A Discord guild member snowflake ID, or a username/display name to resolve against the roster.
-export type Owner = {id: string} | {name: string};
+// A Discord guild member snowflake ID, an agent role ID, or a username/display name to resolve.
+export type Owner = {id: string} | {role: string} | {name: string};
 
 // Discord REST API v10 wire payloads below retain Discord's native snake_case keys (and user.bot).
 export interface User {
@@ -174,29 +172,38 @@ export function loadGlossary(
   return yaml.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
 }
 
-function agentOverride(
+const AGENT_ROLE_PREFIX = '🤖';
+
+function agentRole(
   agent: NonNullable<Leader['agent']>,
-  agents?: {[agent: string]: string}
+  roles?: GuildRole[]
 ): string | undefined {
-  if (!agents) return undefined;
-  if (agents[agent.id]) return agents[agent.id];
+  if (!roles) return undefined;
   const id = toID(agent.name);
-  for (const [k, v] of Object.entries(agents)) {
-    if (id.startsWith(toID(k))) return v;
+  if (!id) return undefined;
+  let match: {id: string; len: number} | undefined;
+  for (const role of roles) {
+    if (!role.name.startsWith(AGENT_ROLE_PREFIX)) continue;
+    const roleAgentId = toID(role.name.slice(AGENT_ROLE_PREFIX.length));
+    if (!roleAgentId) continue;
+    if (id.startsWith(roleAgentId) && (!match || roleAgentId.length > match.len)) {
+      match = {id: role.id, len: roleAgentId.length};
+    }
   }
-  return undefined;
+  return match?.id;
 }
 
-export function ownerOf(leader: Leader, config: Config): Owner | undefined {
-  const override = leader.agent && agentOverride(leader.agent, config.agents);
-  if (override) return {name: override};
+export function ownerOf(leader: Leader, roles?: GuildRole[]): Owner | undefined {
+  if (leader.owner?.discordId) return {id: leader.owner.discordId};
+  const role = leader.agent && agentRole(leader.agent, roles);
+  if (role) return {role};
   if (!leader.owner) return undefined;
-  if (leader.owner.discordId) return {id: leader.owner.discordId};
-  return {name: config.authors?.[leader.owner.name] ?? leader.owner.name};
+  return {name: leader.owner.name};
 }
 
 export function findMember(members: GuildMember[], owner: Owner): GuildMember | undefined {
   if ('id' in owner) return members.find(m => m.user.id === owner.id);
+  if ('role' in owner) return members.find(m => m.roles.includes(owner.role));
   const lower = owner.name.toLowerCase();
   return (
     members.find(m => m.user.id === owner.name) ??
@@ -286,14 +293,15 @@ export async function fetchLeaders(site: string, vgcToken: string): Promise<Lead
   });
 }
 
-// Syncs external partner ladder #1 roles (vgc.bot / pkmn.bot). Guild members are fetched lazily
-// only when a ladder's resolved leader changed since the previous cycle.
+// Syncs external partner ladder #1 roles (vgc.bot / pkmn.bot). Guild members and roles are
+// fetched lazily only when needed to resolve or update a ladder's leader.
 export async function syncRoles(
   token: string,
   vgcToken: string,
   config: Config,
   state: Map<string, string | undefined>,
-  members?: GuildMember[]
+  members?: GuildMember[],
+  roles?: GuildRole[]
 ) {
   const leaders: Leader[] = [];
   for (const site of SITES) {
@@ -303,16 +311,32 @@ export async function syncRoles(
       console.error(`Error fetching leaders from ${site}:`, err);
     }
   }
+  const cachedRoles = state.get('roles');
+  let resolvedRoles = roles ?? (cachedRoles ? JSON.parse(cachedRoles) as GuildRole[] : undefined);
+  if (roles) state.set('roles', JSON.stringify(roles));
+
   for (const leader of leaders) {
     const roleId = config.ladders[leader.ladder];
     if (!roleId) continue;
-    const owner = ownerOf(leader, config);
+    if (!resolvedRoles && leader.agent && !leader.owner?.discordId) {
+      try {
+        resolvedRoles = await fetchGuildRoles(token, config.guild);
+        state.set('roles', JSON.stringify(resolvedRoles));
+      } catch (err) {
+        console.error(`[${leader.ladder}] Error fetching guild roles:`, err);
+      }
+    }
+    const owner = ownerOf(leader, resolvedRoles);
     const key = owner && JSON.stringify(owner);
     if (state.has(leader.ladder) && state.get(leader.ladder) === key) continue;
 
     try {
       members ??= await fetchGuildMembers(token, config.guild);
-      const target = owner && findMember(members, owner);
+      const fallbackOwner = owner && 'role' in owner ? ownerOf(leader) : undefined;
+      const target = owner && (
+        findMember(members, owner) ??
+        (fallbackOwner && findMember(members, fallbackOwner))
+      );
 
       for (const member of members) {
         if (member.roles.includes(roleId) && member.user.id !== target?.user.id) {
@@ -334,7 +358,7 @@ export async function syncRoles(
         const who = `${target.user.username} (${leader.agent?.name})`;
         console.log(`[${leader.ladder}] Assigned role ${roleId} to ${who}`);
       } else if (owner && !target) {
-        const who = 'id' in owner ? owner.id : owner.name;
+        const who = 'id' in owner ? owner.id : 'role' in owner ? `role ${owner.role}` : owner.name;
         console.log(`[${leader.ladder}] ${who} is not in the server`);
       }
 
@@ -342,6 +366,7 @@ export async function syncRoles(
         state.set(leader.ladder, key);
       } else {
         state.delete(leader.ladder);
+        if (!roles) state.delete('roles');
       }
     } catch (err) {
       console.error(`[${leader.ladder}] Error syncing role:`, err);
@@ -1444,9 +1469,18 @@ export async function syncOnce(
     console.error('Error fetching guild members:', err);
   }
 
+  let roles: GuildRole[] | undefined;
+  if (vgcToken || config.channel) {
+    try {
+      roles = await fetchGuildRoles(token, config.guild);
+    } catch (err) {
+      console.error('Error fetching guild roles:', err);
+    }
+  }
+
   if (vgcToken) {
     try {
-      await syncRoles(token, vgcToken, config, state, members);
+      await syncRoles(token, vgcToken, config, state, members, roles);
     } catch (err) {
       console.error('Error syncing partner roles:', err);
     }
@@ -1474,14 +1508,10 @@ export async function syncOnce(
     }
 
     let channels: GuildChannel[] | undefined;
-    let roles: GuildRole[] | undefined;
     try {
-      [channels, roles] = await Promise.all([
-        fetchGuildChannels(token, config.guild),
-        fetchGuildRoles(token, config.guild),
-      ]);
+      channels = await fetchGuildChannels(token, config.guild);
     } catch (err) {
-      console.error('Error fetching guild channels/roles:', err);
+      console.error('Error fetching guild channels:', err);
     }
 
     try {
