@@ -13,13 +13,7 @@ import * as arenaIndex from '../arena';
 import {TimeSlicedArenaGame, TurnHeartbeatInfo} from '../arena/arbiter';
 import {Coordinator, LadderSnapshot} from '../arena/coordinator';
 import {StateDatabase} from '../arena/db';
-import {
-  computeResidencyMultipliers,
-  downloadAndUnpackBundle,
-  evictColdAgentsIfNeeded,
-  unpackLocalTarArchive,
-  verifyOciManifestDigest,
-} from '../arena/packages';
+import * as packages from '../arena/packages';
 import {
   ConcurrentTournamentGame,
   TournamentCoordinator,
@@ -268,7 +262,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       const agentsDir = path.join(tmpDir, 'agents');
       const stagingDir = path.join(tmpDir, 'staging');
 
-      const bytes1 = await downloadAndUnpackBundle({
+      const bytes1 = await packages.downloadAndUnpackBundle({
         url: `file://${archivePath}`,
         expectedSha256: sha256,
         agentTargetId: 'agent-v1',
@@ -280,7 +274,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(fs.existsSync(path.join(agentsDir, 'agent-v1', 'run'))).toBe(true);
 
       // Unpack a second version sharing the identical 70 KB blob to exercise CAS hit
-      const bytes2 = unpackLocalTarArchive({
+      const bytes2 = packages.unpackLocalTarArchive({
         archivePath,
         destDir: path.join(agentsDir, 'agent-v2'),
         casDir,
@@ -289,7 +283,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
 
       // Reject SHA-256 mismatch
       await expect(
-        downloadAndUnpackBundle({
+        packages.downloadAndUnpackBundle({
           url: `file://${archivePath}`,
           expectedSha256: '0'.repeat(64),
           agentTargetId: 'agent-bad-sha',
@@ -307,7 +301,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       fs.writeFileSync(path.join(noRunSrc, 'big.bin'), Buffer.alloc(70_000, 0x99));
       const noRunTar = path.join(tmpDir, 'no-run.tar.gz');
       execFileSync('tar', ['-czf', noRunTar, '-C', noRunSrc, '.']);
-      expect(() => unpackLocalTarArchive({
+      expect(() => packages.unpackLocalTarArchive({
         archivePath: noRunTar,
         destDir: path.join(agentsDir, 'agent-no-run'),
         casDir: noRunCasDir,
@@ -335,23 +329,126 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         ].join('\n'),
         slipTar,
       ]);
-      expect(() => unpackLocalTarArchive({
+      expect(() => packages.unpackLocalTarArchive({
         archivePath: slipTar,
         destDir: path.join(agentsDir, 'agent-slip'),
         casDir,
       })).toThrow(/traverses symlink|escapes|illegal link target/i);
       expect(fs.existsSync(path.join(agentsDir, 'pwned.txt'))).toBe(false);
 
-      // Verify OCI manifest SHA-256 and config digest checks
+      // Verify OCI manifest SHA-256 check strictly rejects config-only digest match
       const sampleManifest = JSON.stringify({
         config: {digest: `sha256:${'a'.repeat(64)}`},
         layers: [{size: 1024}, {size: 2048}],
       });
       const manifestSha = crypto.createHash('sha256').update(sampleManifest).digest('hex');
-      expect(verifyOciManifestDigest(sampleManifest, manifestSha).layerCount).toBe(2);
-      expect(verifyOciManifestDigest(sampleManifest, 'a'.repeat(64)).compressedBytes).toBe(3072);
-      expect(() => verifyOciManifestDigest(sampleManifest, 'b'.repeat(64)))
+      expect(packages.verifyOciManifestDigest(sampleManifest, manifestSha).layerCount).toBe(2);
+      expect(() => packages.verifyOciManifestDigest(sampleManifest, 'a'.repeat(64)))
         .toThrow(/OCI digest mismatch/);
+      expect(() => packages.verifyOciManifestDigest(sampleManifest, 'b'.repeat(64)))
+        .toThrow(/OCI digest mismatch/);
+
+      // Verify skopeo authfile permissions, Docker Hub mapping, and secret scrubbing
+      const authDir = path.join(tmpDir, 'skopeo-auth');
+      fs.mkdirSync(authDir, {recursive: true});
+      const authFile = packages.writePrivateSkopeoAuthfile(
+        authDir,
+        'pkmn/0-error:1.0.0',
+        'Bearer ghp_supersecret999'
+      );
+      expect(fs.statSync(authFile).mode & 0o777).toBe(0o600);
+      const authJson = JSON.parse(fs.readFileSync(authFile, 'utf8')) as {
+        auths: Record<string, {auth: string}>;
+      };
+      expect(Buffer.from(authJson.auths['docker.io'].auth, 'base64').toString('utf8'))
+        .toBe('oauth2:ghp_supersecret999');
+      expect(
+        packages.scrubAuthSecret('Failed with ghp_supersecret999', 'Bearer ghp_supersecret999')
+      ).toBe('Failed with [REDACTED]');
+
+      // Verify presigned `.tar.zst?sig=...` query handling, cross-origin Authorization stripping,
+      // and DNS/redirect SSRF blocking in downloadAndUnpackBundle
+      const realFetch = globalThis.fetch;
+      try {
+        // 1. Block DNS rebinding to private/loopback IP
+        await expect(
+          packages.downloadAndUnpackBundle({
+            url: 'https://releases.example.com/agent.tar.zst?X-Amz-Signature=123',
+            expectedSha256: sha256,
+            agentTargetId: 'agent-rebinding',
+            stagingDir,
+            agentsDir,
+            lookupHost: () => Promise.resolve([{address: '::ffff:127.0.0.1'}]),
+          })
+        ).rejects.toThrow(/private or loopback IP/);
+
+        // 2. Block HTTPS -> HTTP or loopback redirect
+        globalThis.fetch = () =>
+          Promise.resolve(
+            new Response('', {
+              status: 302,
+              headers: {location: 'https://169.254.169.254/latest/meta-data/'},
+            })
+          );
+        await expect(
+          packages.downloadAndUnpackBundle({
+            url: 'https://releases.example.com/agent.tar.gz',
+            expectedSha256: sha256,
+            agentTargetId: 'agent-redirect-ssrf',
+            stagingDir,
+            agentsDir,
+            lookupHost: () => Promise.resolve([{address: '93.184.216.34'}]),
+          })
+        ).rejects.toThrow(/public host/);
+
+        // 3. Cross-origin redirect strips Authorization and preserves `.tar.gz` before `?query`
+        const seenHeaders: Array<{url: string; auth: string | null}> = [];
+        const archiveBytes = fs.readFileSync(archivePath);
+        globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+          const hdrs = new Headers(init?.headers);
+          seenHeaders.push({url: u, auth: hdrs.get('authorization')});
+          if (u.startsWith('https://api.example.com/')) {
+            return Promise.resolve(
+              new Response('', {
+                status: 302,
+                headers: {
+                  location: 'https://cdn.example.net/agent.tar.gz?X-Amz-Signature=xyz#dl',
+                },
+              })
+            );
+          }
+          return Promise.resolve(new Response(archiveBytes, {status: 200}));
+        };
+
+        const dlBytes = await packages.downloadAndUnpackBundle({
+          url: 'https://api.example.com/agent.tar.gz?token=1',
+          expectedSha256: sha256,
+          agentTargetId: 'agent-presigned',
+          authToken: 'ghp_secret_redirect_token',
+          stagingDir,
+          agentsDir,
+          casDir,
+          lookupHost: () => Promise.resolve([{address: '93.184.216.34'}]),
+        });
+        expect(dlBytes).toBe(bytes1);
+        expect(seenHeaders).toEqual([
+          {
+            url: 'https://api.example.com/agent.tar.gz?token=1',
+            auth: 'Bearer ghp_secret_redirect_token',
+          },
+          {
+            url: 'https://cdn.example.net/agent.tar.gz?X-Amz-Signature=xyz#dl',
+            auth: null,
+          },
+        ]);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
     }
   );
 
@@ -380,10 +477,10 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         unpackedBytes: 2048,
       });
 
-      const mult = computeResidencyMultipliers([10, 20], stateDb);
+      const mult = packages.computeResidencyMultipliers([10, 20], stateDb);
       expect(mult[0 * 2 + 1]).toBeCloseTo(1.05, 5);
       stateDb.setAgentResidency(20, 'hot');
-      const multBothHot = computeResidencyMultipliers([10, 20], stateDb);
+      const multBothHot = packages.computeResidencyMultipliers([10, 20], stateDb);
       expect(multBothHot[0 * 2 + 1]).toBeCloseTo(1.15, 5);
 
       expect(stateDb.nextMatchSequence('gen9ou')).toBe(1);
@@ -426,7 +523,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       stateDb.setAgentResidency(30, 'hot', 1000);
       stateDb.setAgentResidency(40, 'hot', 2000);
       const evictedTargets: string[] = [];
-      const evicted = evictColdAgentsIfNeeded(stateDb, {
+      const evicted = packages.evictColdAgentsIfNeeded(stateDb, {
         containerHighWaterBytes: 10_000,
         containerLowWaterBytes: 7_000,
         coldDir: path.join(tmpDir, 'cold-containers'),

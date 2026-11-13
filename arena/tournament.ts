@@ -12,7 +12,7 @@ import {GameOutcome} from '../server/ratings';
 import {ensureSimConfigured, resolveArenaFormatId, sampleRandomPair} from '../server/teams';
 import {toID} from '../static/util';
 
-import {MAX_IMAGE_BYTES, formatAgentTargetId, verifyOciManifestDigest} from './packages';
+import * as packages from './packages';
 
 ensureSimConfigured();
 
@@ -1007,33 +1007,6 @@ export function provisionSpotWorkerVM(
   );
 }
 
-function stripOciTagOrDigest(imageRef: string): string {
-  const withoutDigest = imageRef.split('@')[0];
-  const slashIdx = withoutDigest.lastIndexOf('/');
-  const tail = slashIdx >= 0 ? withoutDigest.slice(slashIdx + 1) : withoutDigest;
-  const colonIdx = tail.indexOf(':');
-  if (colonIdx < 0) return withoutDigest;
-  const repoTail = tail.slice(0, colonIdx);
-  return slashIdx >= 0 ? `${withoutDigest.slice(0, slashIdx)}/${repoTail}` : repoTail;
-}
-
-function writePrivateSkopeoAuthfile(workDir: string, imageRef: string, rawToken: string): string {
-  const clean = rawToken
-    .replace(/^authorization:\s*/i, '')
-    .replace(/^(?:bearer|basic)\s+/i, '')
-    .trim();
-  const creds = clean.includes(':') ? clean : `oauth2:${clean}`;
-  const host = imageRef.split('/')[0];
-  const authPath = path.join(workDir, 'auth.json');
-  const payload = JSON.stringify({
-    auths: {
-      [host]: {auth: Buffer.from(creds, 'utf8').toString('base64')},
-    },
-  });
-  fs.writeFileSync(authPath, payload, {mode: 0o600});
-  return authPath;
-}
-
 function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
@@ -1057,49 +1030,23 @@ export function unpackTournamentOciRootfs(opts: {
   fs.mkdirSync(agentsDir, {recursive: true});
 
   const cleanRef = opts.imageRef.replace(/^docker:\/\//, '').trim();
-  const repoRef = stripOciTagOrDigest(cleanRef);
+  const repoRef = packages.stripOciTagOrDigest(cleanRef);
+  const inspected = packages.inspectRemoteOciSize(
+    cleanRef,
+    opts.authToken,
+    opts.expectedSha256,
+    {os: 'linux', arch: 'amd64'},
+    stagingDir
+  );
   const workDir = fs.mkdtempSync(path.join(stagingDir, `tourney-oci-${opts.targetId}-`));
   fs.chmodSync(workDir, 0o700);
 
   try {
     const skopeoAuthArgs: string[] = [];
     if (opts.authToken) {
-      const authFile = writePrivateSkopeoAuthfile(workDir, cleanRef, opts.authToken);
+      const authFile = packages.writePrivateSkopeoAuthfile(workDir, cleanRef, opts.authToken);
       skopeoAuthArgs.push('--authfile', authFile);
     }
-
-    const outerRaw = execFileSync(
-      'skopeo',
-      ['inspect', '--raw', ...skopeoAuthArgs, `docker://${cleanRef}`],
-      {encoding: 'utf8', timeout: 30_000}
-    );
-    const outerSha = crypto.createHash('sha256').update(outerRaw).digest('hex');
-    const cleanExpected = opts.expectedSha256.trim().toLowerCase().replace(/^sha256:/, '');
-    if (cleanExpected && cleanExpected !== outerSha) {
-      throw new Error(`OCI manifest digest mismatch: expected ${cleanExpected}, got ${outerSha}`);
-    }
-
-    let manifestRaw = outerRaw;
-    let targetSha = outerSha;
-    const parsedOuter = JSON.parse(outerRaw) as {
-      manifests?: Array<{digest?: string; platform?: {os?: string; architecture?: string}}>;
-    };
-    if (Array.isArray(parsedOuter.manifests)) {
-      const amd64 = parsedOuter.manifests.find(
-        m => m.platform?.os === 'linux' && m.platform?.architecture === 'amd64'
-      );
-      if (!amd64?.digest) {
-        throw new Error('Multi-arch OCI index has no linux/amd64 manifest');
-      }
-      targetSha = amd64.digest.toLowerCase().replace(/^sha256:/, '');
-      manifestRaw = execFileSync(
-        'skopeo',
-        ['inspect', '--raw', ...skopeoAuthArgs, `docker://${repoRef}@sha256:${targetSha}`],
-        {encoding: 'utf8', timeout: 30_000}
-      );
-    }
-
-    verifyOciManifestDigest(manifestRaw, targetSha);
 
     const layoutRef = `oci:${path.join(workDir, 'layout')}:latest`;
     execFileSync(
@@ -1109,7 +1056,7 @@ export function unpackTournamentOciRootfs(opts: {
         '--override-os', 'linux',
         '--override-arch', 'amd64',
         ...skopeoAuthArgs,
-        `docker://${repoRef}@sha256:${targetSha}`,
+        `docker://${repoRef}@sha256:${inspected.manifestSha256}`,
         layoutRef,
       ],
       {timeout: 180_000}
@@ -1154,7 +1101,7 @@ export function unpackTournamentOciRootfs(opts: {
         .split(/\s+/)[0]
     );
     const unpackedBytes = Number.isFinite(duKb) ? duKb * 1024 : 0;
-    if (unpackedBytes <= 0 || unpackedBytes > MAX_IMAGE_BYTES) {
+    if (unpackedBytes <= 0 || unpackedBytes > packages.MAX_IMAGE_BYTES) {
       throw new Error(
         `Unpacked tournament rootfs size (${unpackedBytes} B) exceeds 500 MB cap`
       );
@@ -1176,6 +1123,8 @@ export function unpackTournamentOciRootfs(opts: {
     fs.rmSync(destDir, {recursive: true, force: true});
     fs.renameSync(rootfsDir, destDir);
     return unpackedBytes;
+  } catch (err) {
+    throw packages.scrubError(err, opts.authToken);
   } finally {
     fs.rmSync(workDir, {recursive: true, force: true});
   }
@@ -1277,7 +1226,11 @@ export class TournamentCoordinator {
     if (this.customResolveEntrantSpec) {
       return this.customResolveEntrantSpec(entrant, vmHost, controlSocket);
     }
-    const targetId = formatAgentTargetId(entrant.agentSlug, entrant.version, entrant.versionId);
+    const targetId = packages.formatAgentTargetId(
+      entrant.agentSlug,
+      entrant.version,
+      entrant.versionId
+    );
     if (!vmHost || vmHost === 'localhost' || vmHost === '127.0.0.1') {
       return {
         agentId: targetId,
@@ -1307,7 +1260,7 @@ export class TournamentCoordinator {
     for (const sub of submissions) {
       if (sub.tournaments.length === 0) continue;
       processed++;
-      const targetId = formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
+      const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
 
       let unpackedBytes: number;
       try {

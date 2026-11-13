@@ -1,3 +1,4 @@
+import * as net from 'net';
 import * as path from 'path';
 
 export const ROOT = path.basename(path.dirname(__dirname)) === 'build'
@@ -109,4 +110,126 @@ export function formatUtcDate(epochSeconds: number): string {
 export function formatUtcDateTime(epochSeconds: number): string {
   const iso = new Date(epochSeconds * 1000).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+function isPrivateIpv4Nums(a: number, b: number, c: number): boolean {
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT / Tailscale
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local / cloud metadata
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 RFC1918
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // 192.0.0.0/24, 192.0.2.0/24
+  if (a === 192 && b === 88 && c === 99) return true; // 192.88.99.0/24 6to4 relay
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16 RFC1918
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmark
+  if (a === 198 && b === 51 && c === 100) return true; // 198.51.100.0/24 TEST-NET-2
+  if (a === 203 && b === 0 && c === 113) return true; // 203.0.113.0/24 TEST-NET-3
+  if (a >= 224) return true; // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved
+  return false;
+}
+
+function parseIpv6Words(addr: string): number[] | undefined {
+  let normalized = addr;
+  const lastColon = normalized.lastIndexOf(':');
+  if (lastColon >= 0 && normalized.slice(lastColon + 1).includes('.')) {
+    const ipv4Parts = normalized.slice(lastColon + 1).split('.').map(Number);
+    if (
+      ipv4Parts.length !== 4 ||
+      ipv4Parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)
+    ) {
+      return undefined;
+    }
+    const hi = ((ipv4Parts[0] << 8) | ipv4Parts[1]).toString(16);
+    const lo = ((ipv4Parts[2] << 8) | ipv4Parts[3]).toString(16);
+    normalized = `${normalized.slice(0, lastColon)}:${hi}:${lo}`;
+  }
+
+  const dbl = normalized.split('::');
+  if (dbl.length > 2) return undefined;
+  const head = dbl[0] ? dbl[0].split(':') : [];
+  const tail = dbl.length === 2 && dbl[1] ? dbl[1].split(':') : [];
+  const fill = dbl.length === 2 ? 8 - head.length - tail.length : 0;
+  if ((dbl.length === 1 && head.length !== 8) || fill < 0) return undefined;
+
+  const groups = [...head, ...Array<string>(fill).fill('0'), ...tail];
+  if (groups.length !== 8) return undefined;
+  const words: number[] = [];
+  for (const g of groups) {
+    if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return undefined;
+    words.push(parseInt(g, 16));
+  }
+  return words;
+}
+
+// Rejects loopback, unspecified, link-local (AWS/GCP/Linode 169.254.169.254 metadata), CGNAT,
+// RFC1918, IPv6 ULA/multicast, and IPv4-in-IPv6 transition prefixes (`::ffff:0:0/96`, `::/96`,
+// `64:ff9b::/96`, `2002::/16`, `2001::/32`) so a competitor cannot trick the runner into fetching
+// from its LAN, SSH tunnels, or cloud metadata endpoints.
+export function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const trimmed = hostname.trim();
+  if (!trimmed || trimmed.includes('%')) return true;
+
+  const unbracketed = trimmed.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!unbracketed) return true;
+
+  let host: string;
+  try {
+    const parsedUrl = unbracketed.includes(':')
+      ? new URL(`http://[${unbracketed}]/`)
+      : new URL(`http://${unbracketed}/`);
+    host = parsedUrl.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  } catch {
+    return true;
+  }
+
+  if (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal')
+  ) {
+    return true;
+  }
+
+  const ipVer = net.isIP(host);
+  if (ipVer === 4) {
+    const [a, b, c] = host.split('.').map(Number);
+    return isPrivateIpv4Nums(a, b, c);
+  }
+
+  if (ipVer === 6) {
+    const w = parseIpv6Words(host);
+    if (!w) return true;
+    const embeddedPrivate = (hi: number, lo: number) =>
+      isPrivateIpv4Nums(hi >> 8, hi & 0xff, lo >> 8);
+
+    // `::/96` covers unspecified `::`, loopback `::1`, and IPv4-compatible `::w.x.y.z`
+    if (w[0] === 0 && w[1] === 0 && w[2] === 0 && w[3] === 0 && w[4] === 0 && w[5] === 0) {
+      return true;
+    }
+    // `::ffff:0:0/96` IPv4-mapped (WHATWG URL canonicalizes `::ffff:127.0.0.1` -> `::ffff:7f00:1`)
+    if (w[0] === 0 && w[1] === 0 && w[2] === 0 && w[3] === 0 && w[4] === 0 && w[5] === 0xffff) {
+      return embeddedPrivate(w[6], w[7]);
+    }
+    // `::ffff:0:0:0/96` IPv4-translated
+    if (w[0] === 0 && w[1] === 0 && w[2] === 0 && w[3] === 0 && w[4] === 0xffff && w[5] === 0) {
+      return embeddedPrivate(w[6], w[7]);
+    }
+    if (w[0] === 0x0064 && w[1] === 0xff9b) return true; // 64:ff9b::/96 & 64:ff9b:1::/48 NAT64
+    if (w[0] === 0x0100 && w[1] === 0 && w[2] === 0 && w[3] === 0) return true; // 100::/64 discard
+    if (
+      w[0] === 0x2001 &&
+      (w[1] === 0x0000 || (w[1] === 0x0002 && w[2] === 0) || w[1] === 0x0db8)
+    ) {
+      return true; // Teredo 2001::/32, benchmark 2001:2::/48, documentation 2001:db8::/32
+    }
+    if (w[0] === 0x2002) return true; // 6to4 2002::/16
+    if ((w[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 ULA
+    if ((w[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+    if ((w[0] & 0xffc0) === 0xfec0) return true; // fec0::/10 deprecated site-local
+    if ((w[0] & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+    return false;
+  }
+
+  return false;
 }

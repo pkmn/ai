@@ -1,7 +1,6 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
-import * as net from 'net';
 import * as querystring from 'querystring';
 
 import polka from 'polka';
@@ -14,6 +13,7 @@ import {
   escapeHtml,
   formatUtcDate,
   formatUtcDateTime,
+  isPrivateOrLoopbackHost,
   renderTemplate,
   root,
 } from '../static/util';
@@ -25,8 +25,10 @@ import {
   validateCompetitorTeamsIncremental,
 } from './teams';
 
+export {isPrivateOrLoopbackHost};
+
 export function deducePackageFormat(url: string): db.PackageFormat {
-  const cleanPath = url.split('?')[0].toLowerCase();
+  const cleanPath = url.split(/[?#]/)[0].toLowerCase();
   if (
     cleanPath.endsWith('.tar.gz') ||
     cleanPath.endsWith('.tgz') ||
@@ -633,40 +635,6 @@ function parseSubmissionPayload(
   };
 }
 
-// Rejects loopback, unspecified, link-local (AWS/GCP/Linode 169.254.169.254 metadata), and
-// RFC1918 / IPv6 ULA targets so a competitor cannot trick the Mac mini runner into fetching from
-// its own LAN, SSH tunnel ports, or cloud metadata endpoints when pulling a bundle archive.
-export function isPrivateOrLoopbackHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
-    return true;
-  }
-
-  const mappedIpv4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host);
-  const candidate = mappedIpv4 ? mappedIpv4[1] : host;
-
-  const ipVer = net.isIP(candidate);
-  if (ipVer === 4) {
-    const parts = candidate.split('.').map(Number);
-    const [a, b] = parts;
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-    return false;
-  }
-
-  if (ipVer === 6) {
-    if (candidate === '::' || candidate === '::1') return true;
-    if (/^f[cd][0-9a-f]{2}:/i.test(candidate)) return true; // fc00::/7 ULA
-    if (/^fe[89ab][0-9a-f]:/i.test(candidate)) return true; // fe80::/10 link-local
-    return false;
-  }
-
-  return false;
-}
-
 export function validateArtifactUrl(
   url: string,
   packageFormat: db.PackageFormat,
@@ -708,11 +676,22 @@ export function validateArtifactUrl(
     return 'Invalid OCI image reference (expected e.g. ghcr.io/org/agent:1.0.0).';
   }
   const slash = url.indexOf('/');
-  const registryHost = url.slice(0, slash).split(':')[0];
+  const authority = url.slice(0, slash);
+  let registryHost: string;
+  try {
+    registryHost = new URL(`https://${authority}`).hostname;
+  } catch {
+    return 'Invalid OCI image reference (expected e.g. ghcr.io/org/agent:1.0.0).';
+  }
+  const isExplicitRegistry =
+    authority.includes('.') ||
+    authority.includes(':') ||
+    authority.toLowerCase() === 'localhost' ||
+    registryHost !== authority.toLowerCase();
   if (
     !allowPrivateUrls &&
-    (registryHost.includes('.') || registryHost === 'localhost') &&
-    isPrivateOrLoopbackHost(registryHost)
+    isExplicitRegistry &&
+    (!registryHost.includes('.') || isPrivateOrLoopbackHost(registryHost))
   ) {
     return 'OCI image registry must point to a public host.';
   }

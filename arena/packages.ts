@@ -1,14 +1,18 @@
 import {execFileSync} from 'child_process';
 import * as crypto from 'crypto';
+import * as dns from 'dns';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as path from 'path';
 
-import {root} from '../static/util';
+import {isPrivateOrLoopbackHost, root} from '../static/util';
 
 import {AgentMode, LocalAgentRow, StateDatabase} from './db';
 
 export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
 export const MAX_OCI_LAYERS = 32;
+const MAX_REDIRECT_HOPS = 5;
+const DOWNLOAD_TIMEOUT_MILLIS = 180_000;
 export const HOT_AGENTS_HIGH_WATER_BYTES = 1350 * 1024 * 1024 * 1024; // 1.35 TB
 export const HOT_AGENTS_LOW_WATER_BYTES = 1200 * 1024 * 1024 * 1024; // 1.20 TB
 // Separate cap inside the 64 GB Podman VM disk so hot OCI images never exhaust the VM rootfs
@@ -30,6 +34,79 @@ export interface OciManifestInspection {
   layerCount: number;
   manifestSha256: string;
   configSha256?: string;
+  indexSha256?: string;
+}
+
+export function stripOciTagOrDigest(imageRef: string): string {
+  const withoutDigest = imageRef.split('@')[0];
+  const slashIdx = withoutDigest.lastIndexOf('/');
+  const tail = slashIdx >= 0 ? withoutDigest.slice(slashIdx + 1) : withoutDigest;
+  const colonIdx = tail.indexOf(':');
+  if (colonIdx < 0) return withoutDigest;
+  const repoTail = tail.slice(0, colonIdx);
+  return slashIdx >= 0 ? `${withoutDigest.slice(0, slashIdx)}/${repoTail}` : repoTail;
+}
+
+export function scrubAuthSecret(message: string, rawToken?: string): string {
+  if (!rawToken) return message;
+  let out = message;
+  const trimmed = rawToken.trim();
+  if (trimmed.length >= 4) out = out.split(trimmed).join('[REDACTED]');
+  const bare = trimmed
+    .replace(/^authorization:\s*/i, '')
+    .replace(/^(?:bearer|basic)\s+/i, '')
+    .trim();
+  if (bare.length >= 4) out = out.split(bare).join('[REDACTED]');
+  if (bare.includes(':')) {
+    const pass = bare.slice(bare.indexOf(':') + 1);
+    if (pass.length >= 4) out = out.split(pass).join('[REDACTED]');
+  }
+  return out;
+}
+
+export function scrubError(err: unknown, rawToken?: string): Error {
+  if (err instanceof Error) {
+    err.message = scrubAuthSecret(err.message, rawToken);
+    const execErr = err as Error & {stderr?: string | Buffer; stdout?: string | Buffer};
+    if (typeof execErr.stderr === 'string') {
+      execErr.stderr = scrubAuthSecret(execErr.stderr, rawToken);
+    }
+    if (typeof execErr.stdout === 'string') {
+      execErr.stdout = scrubAuthSecret(execErr.stdout, rawToken);
+    }
+    return err;
+  }
+  return new Error(scrubAuthSecret(String(err), rawToken));
+}
+
+export function writePrivateSkopeoAuthfile(
+  workDir: string,
+  imageRef: string,
+  rawToken: string
+): string {
+  const noHeader = rawToken.replace(/^authorization:\s*/i, '').trim();
+  let authBase64: string;
+  if (/^basic\s+/i.test(noHeader)) {
+    const rest = noHeader.replace(/^basic\s+/i, '').trim();
+    authBase64 = rest.includes(':') ? Buffer.from(rest, 'utf8').toString('base64') : rest;
+  } else {
+    const clean = noHeader.replace(/^bearer\s+/i, '').trim();
+    const creds = clean.includes(':') ? clean : `oauth2:${clean}`;
+    authBase64 = Buffer.from(creds, 'utf8').toString('base64');
+  }
+
+  const firstSeg = imageRef.split('/')[0];
+  const host =
+    firstSeg.includes('.') || firstSeg.includes(':') || firstSeg === 'localhost'
+      ? firstSeg
+      : 'docker.io';
+  const auths: Record<string, {auth: string}> = {[host]: {auth: authBase64}};
+  if (host === 'docker.io') {
+    auths['https://index.docker.io/v1/'] = {auth: authBase64};
+  }
+  const authPath = path.join(workDir, 'auth.json');
+  fs.writeFileSync(authPath, JSON.stringify({auths}), {mode: 0o600});
+  return authPath;
 }
 
 export function verifyOciManifestDigest(
@@ -71,10 +148,9 @@ export function verifyOciManifestDigest(
 
   if (expectedSha256) {
     const cleanExpected = expectedSha256.trim().toLowerCase().replace(/^sha256:/, '');
-    if (cleanExpected !== manifestSha256 && cleanExpected !== configSha256) {
+    if (cleanExpected !== manifestSha256) {
       throw new Error(
-        `OCI digest mismatch: expected ${cleanExpected}, ` +
-        `got manifest=${manifestSha256}${configSha256 ? ` config=${configSha256}` : ''}`
+        `OCI digest mismatch: expected ${cleanExpected}, got manifest=${manifestSha256}`
       );
     }
   }
@@ -90,17 +166,66 @@ export function verifyOciManifestDigest(
 export function inspectRemoteOciSize(
   imageRef: string,
   creds?: string,
-  expectedSha256?: string
+  expectedSha256?: string,
+  platform: {os: string; arch: string} = {os: 'linux', arch: 'arm64'},
+  stagingDir = STAGING_DIR
 ): OciManifestInspection {
-  const args = ['inspect', '--raw'];
-  if (creds) args.push('--creds', creds);
-  args.push(`docker://${imageRef}`);
+  const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
+  const repoRef = stripOciTagOrDigest(cleanRef);
+  let authWorkDir: string | undefined;
+  try {
+    const authArgs: string[] = [];
+    if (creds) {
+      fs.mkdirSync(stagingDir, {recursive: true});
+      authWorkDir = fs.mkdtempSync(path.join(stagingDir, 'oci-auth-'));
+      fs.chmodSync(authWorkDir, 0o700);
+      authArgs.push('--authfile', writePrivateSkopeoAuthfile(authWorkDir, cleanRef, creds));
+    }
 
-  const rawJson = execFileSync('skopeo', args, {
-    encoding: 'utf8',
-    timeout: 30_000,
-  });
-  return verifyOciManifestDigest(rawJson, expectedSha256);
+    const outerRaw = execFileSync(
+      'skopeo',
+      ['inspect', '--raw', ...authArgs, `docker://${cleanRef}`],
+      {encoding: 'utf8', timeout: 30_000}
+    );
+    const outerSha = crypto.createHash('sha256').update(outerRaw).digest('hex');
+    const cleanExpected = expectedSha256?.trim().toLowerCase().replace(/^sha256:/, '');
+    if (cleanExpected && cleanExpected !== outerSha) {
+      throw new Error(`OCI digest mismatch: expected ${cleanExpected}, got manifest=${outerSha}`);
+    }
+
+    const parsedOuter = JSON.parse(outerRaw) as {
+      manifests?: Array<{digest?: string; platform?: {os?: string; architecture?: string}}>;
+    };
+    if (Array.isArray(parsedOuter.manifests)) {
+      const target = parsedOuter.manifests.find(
+        m => m.platform?.os === platform.os && m.platform?.architecture === platform.arch
+      );
+      if (!target?.digest) {
+        throw new Error(
+          `Multi-arch OCI index has no ${platform.os}/${platform.arch} manifest`
+        );
+      }
+      const targetSha = target.digest.toLowerCase().replace(/^sha256:/, '');
+      if (!/^[0-9a-f]{64}$/.test(targetSha)) {
+        throw new Error(`Invalid platform manifest digest in OCI index: ${target.digest}`);
+      }
+      const innerRaw = execFileSync(
+        'skopeo',
+        ['inspect', '--raw', ...authArgs, `docker://${repoRef}@sha256:${targetSha}`],
+        {encoding: 'utf8', timeout: 30_000}
+      );
+      return {
+        ...verifyOciManifestDigest(innerRaw, targetSha),
+        indexSha256: outerSha,
+      };
+    }
+
+    return verifyOciManifestDigest(outerRaw, cleanExpected);
+  } catch (err) {
+    throw scrubError(err, creds);
+  } finally {
+    if (authWorkDir) fs.rmSync(authWorkDir, {recursive: true, force: true});
+  }
 }
 
 export function pullAndVerifyOciImage(
@@ -110,18 +235,41 @@ export function pullAndVerifyOciImage(
   stagingDir = STAGING_DIR,
   expectedSha256?: string
 ): number {
-  inspectRemoteOciSize(imageRef, creds, expectedSha256);
+  const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
+  const repoRef = stripOciTagOrDigest(cleanRef);
+  const inspected = inspectRemoteOciSize(
+    cleanRef,
+    creds,
+    expectedSha256,
+    {os: 'linux', arch: 'arm64'},
+    stagingDir
+  );
 
   fs.mkdirSync(stagingDir, {recursive: true});
   const stagingTar = path.join(stagingDir, `oci-${agentTargetId}.tar`);
   fs.rmSync(stagingTar, {force: true});
+  let authWorkDir: string | undefined;
 
   try {
-    const copyArgs = ['copy'];
-    if (creds) copyArgs.push('--src-creds', creds);
-    copyArgs.push(`docker://${imageRef}`, `docker-archive:${stagingTar}:${agentTargetId}:latest`);
+    const authArgs: string[] = [];
+    if (creds) {
+      authWorkDir = fs.mkdtempSync(path.join(stagingDir, 'oci-auth-'));
+      fs.chmodSync(authWorkDir, 0o700);
+      authArgs.push('--authfile', writePrivateSkopeoAuthfile(authWorkDir, cleanRef, creds));
+    }
 
-    execFileSync('skopeo', copyArgs, {timeout: 180_000});
+    execFileSync(
+      'skopeo',
+      [
+        'copy',
+        '--override-os', 'linux',
+        '--override-arch', 'arm64',
+        ...authArgs,
+        `docker://${repoRef}@sha256:${inspected.manifestSha256}`,
+        `docker-archive:${stagingTar}:${agentTargetId}:latest`,
+      ],
+      {timeout: 180_000}
+    );
 
     execFileSync('podman', ['load', '-i', stagingTar], {timeout: 120_000});
 
@@ -141,7 +289,10 @@ export function pullAndVerifyOciImage(
     }
 
     return uncompressedBytes;
+  } catch (err) {
+    throw scrubError(err, creds);
   } finally {
+    if (authWorkDir) fs.rmSync(authWorkDir, {recursive: true, force: true});
     fs.rmSync(stagingTar, {force: true});
   }
 }
@@ -155,17 +306,23 @@ export async function downloadAndUnpackBundle(opts: {
   agentsDir?: string;
   unpackBin?: string;
   casDir?: string;
+  allowPrivateUrls?: boolean;
+  timeoutMillis?: number;
+  lookupHost?: (hostname: string) => Promise<ReadonlyArray<{address: string}>>;
 }): Promise<number> {
   const stagingDir = opts.stagingDir ?? STAGING_DIR;
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   const unpackBin = opts.unpackBin ?? UNPACK_BIN;
+  const lookupHost =
+    opts.lookupHost ?? (host => dns.promises.lookup(host, {all: true, verbatim: true}));
 
   fs.mkdirSync(stagingDir, {recursive: true});
   fs.mkdirSync(agentsDir, {recursive: true});
 
-  const ext = opts.url.endsWith('.tar.zst') || opts.url.endsWith('.tzst')
+  const cleanUrlPath = opts.url.split(/[?#]/)[0].toLowerCase();
+  const ext = cleanUrlPath.endsWith('.tar.zst') || cleanUrlPath.endsWith('.tzst')
     ? '.tar.zst'
-    : opts.url.endsWith('.tar.xz')
+    : cleanUrlPath.endsWith('.tar.xz') || cleanUrlPath.endsWith('.txz')
       ? '.tar.xz'
       : '.tar.gz';
   const archivePath = path.join(stagingDir, `bundle-${opts.agentTargetId}${ext}`);
@@ -175,22 +332,92 @@ export async function downloadAndUnpackBundle(opts: {
   fs.rmSync(destDir, {recursive: true, force: true});
 
   try {
+    const hash = crypto.createHash('sha256');
     if (opts.url.startsWith('file://')) {
       const localPath = opts.url.slice('file://'.length);
-      fs.copyFileSync(localPath, archivePath);
-    } else {
-      const headers: Record<string, string> = {};
-      if (opts.authToken) {
-        headers.authorization = opts.authToken.includes(' ')
-          ? opts.authToken
-          : `Bearer ${opts.authToken}`;
+      const srcFd = fs.openSync(localPath, 'r');
+      const dstFd = fs.openSync(archivePath, 'w', 0o600);
+      const chunk = Buffer.allocUnsafe(65_536);
+      let total = 0;
+      try {
+        while (true) {
+          const bytesRead = fs.readSync(srcFd, chunk, 0, chunk.length, null);
+          if (bytesRead <= 0) break;
+          total += bytesRead;
+          if (total > MAX_IMAGE_BYTES) {
+            throw new Error(
+              `Compressed bundle (${total} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+            );
+          }
+          const slice = chunk.subarray(0, bytesRead);
+          hash.update(slice);
+          fs.writeSync(dstFd, slice);
+        }
+      } finally {
+        fs.closeSync(srcFd);
+        fs.closeSync(dstFd);
       }
-      const res = await fetch(opts.url, {headers});
+    } else {
+      const signal = AbortSignal.timeout(opts.timeoutMillis ?? DOWNLOAD_TIMEOUT_MILLIS);
+      const initialUrl = new URL(opts.url);
+      const initialOrigin = initialUrl.origin;
+      const authHeader = opts.authToken
+        ? (opts.authToken.includes(' ') ? opts.authToken : `Bearer ${opts.authToken}`)
+        : undefined;
+
+      let currentUrl = initialUrl;
+      let res: Response | undefined;
+      for (let hop = 0; ; hop++) {
+        if (!opts.allowPrivateUrls) {
+          if (currentUrl.protocol !== 'https:') {
+            throw new Error(
+              `Bundle redirect/download target must use HTTPS (got ${currentUrl.protocol})`
+            );
+          }
+          const cleanHost = currentUrl.hostname.replace(/^\[|\]$/g, '');
+          if (isPrivateOrLoopbackHost(cleanHost)) {
+            throw new Error('Bundle download target must point to a public host');
+          }
+          if (net.isIP(cleanHost) === 0) {
+            const addrs = await lookupHost(cleanHost);
+            if (addrs.length === 0 || addrs.some(a => isPrivateOrLoopbackHost(a.address))) {
+              throw new Error('Bundle download DNS resolved to a private or loopback IP');
+            }
+          }
+        }
+
+        const headers: Record<string, string> = {};
+        if (authHeader && currentUrl.origin === initialOrigin) {
+          headers.authorization = authHeader;
+        }
+        res = await fetch(currentUrl.toString(), {headers, redirect: 'manual', signal});
+        if (
+          res.status === 301 ||
+          res.status === 302 ||
+          res.status === 303 ||
+          res.status === 307 ||
+          res.status === 308
+        ) {
+          await res.body?.cancel().catch(() => {});
+          if (hop >= MAX_REDIRECT_HOPS) {
+            throw new Error(`Bundle download exceeded ${MAX_REDIRECT_HOPS} redirects`);
+          }
+          const loc = res.headers.get('location');
+          if (!loc) {
+            throw new Error(`Bundle redirect (${res.status}) missing Location header`);
+          }
+          currentUrl = new URL(loc, currentUrl);
+          continue;
+        }
+        break;
+      }
+
       if (!res.ok) {
         throw new Error(`Bundle download failed (${res.status} ${res.statusText})`);
       }
       const contentLength = Number(res.headers?.get?.('content-length') ?? 0);
       if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
+        await res.body?.cancel().catch(() => {});
         throw new Error(
           `Compressed bundle (${contentLength} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
         );
@@ -211,6 +438,7 @@ export async function downloadAndUnpackBundle(opts: {
                 `Compressed bundle (${total} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
               );
             }
+            hash.update(value);
             fs.writeSync(fd, value);
           }
         } finally {
@@ -223,13 +451,12 @@ export async function downloadAndUnpackBundle(opts: {
             `Compressed bundle (${buf.byteLength} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
           );
         }
-        fs.writeFileSync(archivePath, buf);
+        hash.update(buf);
+        fs.writeFileSync(archivePath, buf, {mode: 0o600});
       }
     }
 
-    // Verify SHA-256 digest before invoking the unpacker
-    const hash = crypto.createHash('sha256');
-    hash.update(fs.readFileSync(archivePath));
+    // Verify streamed SHA-256 digest before invoking the unpacker
     const actualSha256 = hash.digest('hex').toLowerCase();
     if (actualSha256 !== opts.expectedSha256.toLowerCase()) {
       throw new Error(
@@ -247,6 +474,8 @@ export async function downloadAndUnpackBundle(opts: {
     });
     const m = /UNPACK_OK:\s*(\d+)\s*bytes/.exec(stdout);
     return m ? Number(m[1]) : 0;
+  } catch (err) {
+    throw scrubError(err, opts.authToken);
   } finally {
     fs.rmSync(archivePath, {force: true});
   }

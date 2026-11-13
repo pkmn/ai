@@ -59,6 +59,7 @@ describe('submission helpers, SSRF guards, & secret encryption', () => {
     expect(account.deducePackageFormat('https://example.com/agent.tar.xz')).toBe('bundle');
     expect(account.deducePackageFormat('https://example.com/agent.txz')).toBe('bundle');
     expect(account.deducePackageFormat('https://example.com/agent.tar.zst')).toBe('bundle');
+    expect(account.deducePackageFormat('https://example.com/agent.tar.zst#v1')).toBe('bundle');
     expect(account.deducePackageFormat('https://example.com/agent.tzst')).toBe('bundle');
     expect(account.deducePackageFormat('ghcr.io/pkmn/0-error:1.2.0')).toBe('oci');
     expect(account.deducePackageFormat('docker.io/library/agent@sha256:' + SHA_A)).toBe('oci');
@@ -68,11 +69,24 @@ describe('submission helpers, SSRF guards, & secret encryption', () => {
     expect(account.validateArtifactUrl('https://github.com/pkmn/0-error.tar.zst', 'bundle'))
       .toBeUndefined();
     expect(account.validateArtifactUrl('ghcr.io/pkmn/0-error:1.2.0', 'oci')).toBeUndefined();
+    expect(account.validateArtifactUrl('pkmn/0-error:1.2.0', 'oci')).toBeUndefined();
 
     const blockedBundles = [
       'https://127.0.0.1/agent.tar.zst',
+      'https://2130706433/agent.tar.zst',
+      'https://0.0.0.0/agent.tar.zst',
+      'https://100.64.0.5/agent.tar.zst',
+      'https://198.18.0.1/agent.tar.zst',
       'https://localhost/agent.tar.zst',
+      'https://sub.internal/agent.tar.zst',
       'https://[::1]/agent.tar.zst',
+      'https://[::ffff:127.0.0.1]/agent.tar.zst',
+      'https://[::ffff:7f00:1]/agent.tar.zst',
+      'https://[::127.0.0.1]/agent.tar.zst',
+      'https://[64:ff9b::a00:1]/agent.tar.zst',
+      'https://[2002:7f00:1::1]/agent.tar.zst',
+      'https://[2001::1]/agent.tar.zst',
+      'https://[ff02::1]/agent.tar.zst',
       'https://10.0.0.5/agent.tar.zst',
       'https://192.168.1.10/agent.tar.zst',
       'https://172.16.0.1/agent.tar.zst',
@@ -84,6 +98,10 @@ describe('submission helpers, SSRF guards, & secret encryption', () => {
       expect(account.validateArtifactUrl(url, 'bundle')).toContain('public host');
     }
     expect(account.validateArtifactUrl('127.0.0.1:5000/pkmn/agent:1.0.0', 'oci'))
+      .toContain('public host');
+    expect(account.validateArtifactUrl('2130706433:5000/pkmn/agent:1.0.0', 'oci'))
+      .toContain('public host');
+    expect(account.validateArtifactUrl('intranet:5000/pkmn/agent:1.0.0', 'oci'))
       .toContain('public host');
     expect(account.validateArtifactUrl('http://127.0.0.1:8080/agent.tar.zst', 'bundle', true))
       .toBeUndefined();

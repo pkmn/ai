@@ -283,6 +283,7 @@ export class Coordinator {
             agentsDir: this.agentsDir,
             unpackBin: this.unpackBin,
             casDir: this.casDir,
+            allowPrivateUrls: this.devMode,
           });
         }
       } catch (err) {
