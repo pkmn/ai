@@ -1094,14 +1094,19 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
 
   test('clears uchg/schg immutable flags and runs limit as pkmn in arena/bin/arena', () => {
     const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
+    const setupScript = fs.readFileSync(root('arena', 'scripts', 'setup-arena.sh'), 'utf8');
     const sudoers = fs.readFileSync(root('arena', 'config', 'sudoers'), 'utf8');
     const sandbox = fs.readFileSync(root('arena', 'config', 'sandbox.sb'), 'utf8');
     const limitC = fs.readFileSync(root('arena', 'bin', 'limit.c'), 'utf8');
     expect(arenaScript).toContain('/usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL"');
     expect(arenaScript).toContain('wipe_scratch');
     expect(arenaScript).toContain('exec /opt/arena/bin/limit "$SLOT"');
-    expect(arenaScript).toContain('--memory=13g');
-    expect(arenaScript).toContain('--memory-swap=26g');
+    expect(arenaScript).toContain('--cpus=10');
+    expect(arenaScript).toContain('--memory=14g');
+    expect(arenaScript).toContain('--memory-swap=14g');
+    expect(setupScript).toContain('--cpus 10');
+    expect(setupScript).toContain('--memory 30720');
+    expect(setupScript).not.toContain('swapfile');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P1');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P2');
     expect(sandbox).toContain('(deny file-write-flags');

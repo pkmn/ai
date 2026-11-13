@@ -114,21 +114,20 @@ sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheck
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false
 
-echo "==> Step 7: Initializing Podman libkrun VM (8 vCPUs, 14 GiB RAM, 16 GiB swap, 64 GB disk)"
+echo "==> Step 7: Initializing Podman libkrun VM (10 vCPUs, 30 GiB RAM, 64 GB disk)"
 if command -v podman >/dev/null 2>&1; then
   if ! podman machine inspect podman-machine-default >/dev/null 2>&1; then
+    # Size the VM to cover two 14 GiB containers (`arena-p1` + `arena-p2`, since `podman pause`
+    # freezes cgroups in RAM without releasing pages) plus 2 GiB guest VM overhead (30 GiB =
+    # 30,720 MiB), with zero swap (`--memory=14g --memory-swap=14g`) to prevent SSD writes.
     podman machine init \
-      --cpus 8 \
-      --memory 14336 \
+      --cpus 10 \
+      --memory 30720 \
       --disk-size 64 \
       --volume /Volumes/P1:/Volumes/P1 \
       --volume /Volumes/P2:/Volumes/P2 \
       --volume /Volumes/Staging:/Volumes/Staging \
       podman-machine-default
-    # Provision 16 GiB swap inside the VM so a paused (`cgroup.freeze=1`) P1 container's pages can
-    # be paged out while P2 allocates up to its 13 GiB resident limit (`--memory=13g --memory-swap=26g`).
-    podman machine ssh podman-machine-default \
-      "sudo sh -c 'if [ ! -f /var/swapfile ]; then fallocate -l 16G /var/swapfile && chmod 600 /var/swapfile && mkswap /var/swapfile && swapon /var/swapfile && echo \"/var/swapfile none swap defaults 0 0\" >> /etc/fstab; fi'" || true
   fi
 fi
 

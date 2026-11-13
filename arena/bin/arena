@@ -39,9 +39,9 @@ case "$ACTION" in
         --read-only \
         --cap-drop=ALL \
         --security-opt=no-new-privileges \
-        --cpus=8 \
-        --memory=13g \
-        --memory-swap=26g \
+        --cpus=10 \
+        --memory=14g \
+        --memory-swap=14g \
         --pids-limit=256 \
         --tmpfs /tmp:rw,noexec,nosuid,size=500m \
         --mount "type=bind,src=${SCRATCH_VOL},dst=/scratch,rw" \
