@@ -32,37 +32,65 @@ const CHAMPIONS_REGMB_SIM_DEX =
 
 type FormatListArg = Parameters<typeof sim.Dex.formats.extend>[0];
 
-function forceOpenTeamSheets(formats: FormatListArg): FormatListArg {
-  return formats.map(entry => {
-    const f = entry as {ruleset?: string[]};
-    if (!Array.isArray(f.ruleset) || !f.ruleset.includes('Open Team Sheets')) {
-      return entry;
-    }
-    return {
-      ...entry,
-      ruleset: f.ruleset.map(r => (r === 'Open Team Sheets' ? 'Force Open Team Sheets' : r)),
-    };
-  });
-}
-
 let simConfigured = false;
 export function ensureSimConfigured() {
   if (simConfigured) return;
   simConfigured = true;
   if ((champions as {Formats?: unknown}).Formats) {
     sim.Dex.formats.extend(
-      forceOpenTeamSheets((champions as unknown as {Formats: FormatListArg}).Formats)
+      (champions as unknown as {Formats: FormatListArg}).Formats
     );
   }
   if ((championsregmb as {Formats?: unknown}).Formats) {
     sim.Dex.formats.extend(
-      forceOpenTeamSheets((championsregmb as unknown as {Formats: FormatListArg}).Formats)
+      (championsregmb as unknown as {Formats: FormatListArg}).Formats
     );
   }
   sim.Teams.setGeneratorFactory(TeamGenerators);
 }
 
 ensureSimConfigured();
+
+// Resolves a format ID and optional custom rules for headless Arena/Tournament play:
+//   - By default (VGC ladder and Closed Team Sheets tournaments), removes upstream's interactive
+//     `Open Team Sheets` rule (`!Open Team Sheets`) so `|showteam|` is not broadcast and
+//     `|uhtml|otsrequest|` is not emitted.
+//   - When a tournament explicitly requests `Open Team Sheets` or `Force Open Team Sheets` via
+//     `customRules` (or inline `@@@` rules), maps `Open Team Sheets` to `Force Open Team Sheets`
+//     so `@pkmn/sim` broadcasts `|showteam|p1|` and `|showteam|p2|` automatically at Team Preview.
+export function resolveArenaFormatId(format: string, customRules?: readonly string[]): string {
+  ensureSimConfigured();
+  const [baseFormat, inlineRaw] = format.split('@@@');
+  const inlineRules = inlineRaw
+    ? inlineRaw.split(',').map(r => r.trim()).filter(Boolean)
+    : [];
+  const rules = [...inlineRules, ...(customRules ?? []).map(r => r.trim()).filter(Boolean)];
+
+  const wantsOts = rules.some(r => {
+    const id = toID(r);
+    return !r.startsWith('!') && (id === 'openteamsheets' || id === 'forceopenteamsheets');
+  });
+
+  if (wantsOts) {
+    const mapped = rules.map(
+      r => toID(r) === 'openteamsheets' && !r.startsWith('!') ? 'Force Open Team Sheets' : r
+    );
+    return `${baseFormat}@@@${mapped.join(',')}`;
+  }
+
+  const resolved = sim.Dex.formats.get(baseFormat);
+  const baseHasInteractiveOts =
+    resolved.exists &&
+    Array.isArray(resolved.ruleset) &&
+    resolved.ruleset.some(r => toID(r) === 'openteamsheets') &&
+    !resolved.ruleset.some(r => toID(r) === 'forceopenteamsheets');
+
+  if (baseHasInteractiveOts && !rules.some(r => toID(r) === 'openteamsheets')) {
+    rules.push('!Open Team Sheets');
+  }
+
+  return rules.length > 0 ? `${baseFormat}@@@${rules.join(',')}` : baseFormat;
+}
 
 function getValidator(format: string): sim.TeamValidator {
   const id = toID(format);

@@ -6,7 +6,7 @@ import {BattleStreams, PRNGSeed} from '@pkmn/sim';
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
-import {ensureSimConfigured} from '../server/teams';
+import {ensureSimConfigured, resolveArenaFormatId} from '../server/teams';
 
 import {AgentMode} from './db';
 
@@ -37,6 +37,7 @@ export interface TurnHeartbeatInfo {
 
 export interface ArenaGameOptions {
   format: string;
+  customRules?: readonly string[];
   seed: PRNGSeed;
   p1Spec: AgentLaunchSpec;
   p2Spec: AgentLaunchSpec;
@@ -125,7 +126,7 @@ export class TimeSlicedArenaGame {
   private endReason = 'normal';
 
   constructor(options: ArenaGameOptions) {
-    this.format = options.format;
+    this.format = resolveArenaFormatId(options.format, options.customRules);
     this.seed = options.seed;
     this.p1Spec = options.p1Spec;
     this.p2Spec = options.p2Spec;

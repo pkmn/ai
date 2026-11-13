@@ -6,7 +6,7 @@ import {BattleStreams, Dex, PRNGSeed, PokemonSet, TeamValidator, Teams} from '@p
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
-import {ensureSimConfigured} from '../server/teams';
+import {ensureSimConfigured, resolveArenaFormatId} from '../server/teams';
 import {toID} from '../static/util';
 
 ensureSimConfigured();
@@ -71,6 +71,7 @@ export interface TournamentTurnBroadcastInfo {
 
 export interface TournamentGameOptions {
   format: string;
+  customRules?: readonly string[];
   seed: PRNGSeed;
   p1Spec: TournamentAgentSpec;
   p2Spec: TournamentAgentSpec;
@@ -171,7 +172,7 @@ export class ConcurrentTournamentGame {
   private endReason = 'normal';
 
   constructor(options: TournamentGameOptions) {
-    this.format = options.format;
+    this.format = resolveArenaFormatId(options.format, options.customRules);
     this.seed = options.seed;
     this.p1Spec = options.p1Spec;
     this.p2Spec = options.p2Spec;
