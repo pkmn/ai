@@ -58,11 +58,12 @@ case "$ACTION" in
         echo "Missing executable ${AGENT_DIR}/run" >&2
         exit 2
       fi
-      # Run `limit` supervisor as `pkmn` (so `p1`/`p2` cannot signal it or spoof `.peak_ram`, and
-      # `killall -STOP -u "$SLOT"` never freezes `limit`); `limit` drops the child to `$SLOT`.
+      # Run `limit` supervisor as `root` via sudoers so `proc_pid_rusage` enforces the 14 GiB
+      # XNU `ri_phys_footprint` cap across all `p1`/`p2` processes while `limit` drops its child
+      # directly to `$SLOT` (`initgroups`/`setgid`/`setuid`) and writes `/opt/arena/state/peak_ram_*`.
       rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
       cd "$SCRATCH_VOL"
-      exec /opt/arena/bin/limit "$SLOT" \
+      exec sudo -n /opt/arena/bin/limit "$SLOT" \
         /usr/bin/sandbox-exec \
           -f /opt/arena/etc/sandbox.sb \
           -D "AGENT_RO_DIR=${AGENT_DIR}" \

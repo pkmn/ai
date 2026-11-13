@@ -1570,7 +1570,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     }
   );
 
-  test('clears uchg/schg immutable flags and runs limit as pkmn in arena/bin/arena', () => {
+  test('clears uchg/schg immutable flags, runs limit as root, and measures XNU footprint', () => {
     const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
     const setupScript = fs.readFileSync(root('arena', 'scripts', 'setup-arena.sh'), 'utf8');
     const sudoers = fs.readFileSync(root('arena', 'config', 'sudoers'), 'utf8');
@@ -1578,16 +1578,39 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     const limitC = fs.readFileSync(root('arena', 'bin', 'limit.c'), 'utf8');
     expect(arenaScript).toContain('/usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL"');
     expect(arenaScript).toContain('wipe_scratch');
-    expect(arenaScript).toContain('exec /opt/arena/bin/limit "$SLOT"');
+    expect(arenaScript).toContain('exec sudo -n /opt/arena/bin/limit "$SLOT"');
     expect(arenaScript).toContain('--cpus=10');
     expect(arenaScript).toContain('--memory=14g');
     expect(arenaScript).toContain('--memory-swap=14g');
     expect(setupScript).toContain('--cpus 10');
     expect(setupScript).toContain('--memory 30720');
     expect(setupScript).not.toContain('swapfile');
+    expect(sudoers).not.toContain('/usr/bin/env -i *');
+    expect(sudoers).toContain('pkmn ALL=(root) NOPASSWD: /opt/arena/bin/limit p1');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P1');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P2');
     expect(sandbox).toContain('(deny file-write-flags');
     expect(limitC).toContain('/opt/arena/state/peak_ram_%s');
+    expect(limitC).not.toContain('.peak_ram');
+    expect(limitC).toContain('PRIO_DARWIN_PROCESS');
+
+    if (process.platform === 'darwin') {
+      const peakFile = path.join(tmpDir, 'darwin-limit-peak.txt');
+      const out = execFileSync(
+        limitBin,
+        [
+          process.execPath,
+          '-e',
+          'const b = Buffer.alloc(36 * 1024 * 1024, 7); setTimeout(() => console.log(b[0]), 80);',
+        ],
+        {
+          encoding: 'utf8',
+          env: {...process.env, ARENA_PEAK_RAM_FILE: peakFile},
+        }
+      ).trim();
+      expect(out).toBe('7');
+      const measuredMib = Number(fs.readFileSync(peakFile, 'utf8').trim());
+      expect(measuredMib).toBeGreaterThanOrEqual(36);
+    }
   });
 });

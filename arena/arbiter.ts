@@ -311,10 +311,21 @@ export class TimeSlicedArenaGame {
   private async stopPlayerForRamRead(player: SandboxedPlayer | undefined) {
     if (!player || player.exited || !player.proc.pid) return;
     try {
-      process.kill(player.proc.pid, 'SIGTERM');
+      player.proc.stdin.end();
     } catch {}
+    if (!this.devMode && player.spec.mode === 'native') {
+      try {
+        execFileSync('sudo', ['-n', '/usr/bin/killall', '-9', '-u', player.slot], {
+          stdio: 'ignore',
+        });
+      } catch {}
+    } else {
+      try {
+        process.kill(player.proc.pid, 'SIGTERM');
+      } catch {}
+    }
     await new Promise<void>(resolve => {
-      const timer = setTimeout(resolve, 100);
+      const timer = setTimeout(resolve, 150);
       player.proc.once('close', () => {
         clearTimeout(timer);
         resolve();
@@ -324,18 +335,13 @@ export class TimeSlicedArenaGame {
 
   private readPeakRamMib(player: SandboxedPlayer): number {
     if (!this.devMode && player.spec.mode === 'native') {
-      const candidates = [
-        `/opt/arena/state/peak_ram_${player.slot}`,
-        player.slot === 'p1' ? '/Volumes/P1/.peak_ram' : '/Volumes/P2/.peak_ram',
-      ];
-      for (const file of candidates) {
-        try {
-          if (fs.existsSync(file)) {
-            const val = Number(fs.readFileSync(file, 'utf8').trim());
-            if (Number.isFinite(val) && val > 0) return Math.round(val);
-          }
-        } catch {}
-      }
+      const stateFile = `/opt/arena/state/peak_ram_${player.slot}`;
+      try {
+        if (fs.existsSync(stateFile)) {
+          const val = Number(fs.readFileSync(stateFile, 'utf8').trim());
+          if (Number.isFinite(val) && val > 0) return Math.round(val);
+        }
+      } catch {}
     }
     return 64;
   }
