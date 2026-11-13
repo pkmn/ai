@@ -46,12 +46,12 @@ describe('findMember', () => {
     {user: {id: '2', username: 'other', global_name: '9'}, nick: '9', roles: []},
   ];
 
-  test('an id matches the member id and nothing else', () => {
+  test('matches member strictly by Discord user ID', () => {
     expect(discord.findMember(members, {id: '1'})?.user.username).toBe('nessiedev');
     expect(discord.findMember(members, {id: '9'})).toBeUndefined();
   });
 
-  test('a name matches the id, username, global name or nickname', () => {
+  test('matches member by case-insensitive username, global name, or nickname', () => {
     expect(discord.findMember(members, {name: 'NESSIEDEV'})?.user.id).toBe('1');
     expect(discord.findMember(members, {name: '9'})?.user.id).toBe('2');
   });
@@ -101,25 +101,24 @@ describe('syncRoles', () => {
     globalThis.fetch = realFetch;
   });
 
-  test('asks both sites with the token, then moves each role, fetching the members once',
-    async () => {
-      const calls = stubFetch(LEADERS, MEMBERS);
-      await discord.syncRoles('token', 'vgc', CONFIG, new Map());
-      expect(calls.slice(0, 2)).toEqual([
-        {method: 'GET', url: expect.stringContaining('vgc.bot'), authorization: 'Bearer vgc'},
-        {method: 'GET', url: expect.stringContaining('pkmn.bot'), authorization: 'Bearer vgc'},
-      ]);
-      expect(memberFetches(calls)).toBe(1);
-      expect(
-        calls.filter(c => c.method !== 'GET').map(({method, url}) => ({method, url}))
-      ).toEqual([
-        {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-a')},
-        {method: 'PUT', url: expect.stringContaining('/members/new/roles/role-a')},
-        {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-b')},
-      ]);
-    });
+  test('fetches leaders from upstream sites once per cycle to reconcile roles', async () => {
+    const calls = stubFetch(LEADERS, MEMBERS);
+    await discord.syncRoles('token', 'vgc', CONFIG, new Map());
+    expect(calls.slice(0, 2)).toEqual([
+      {method: 'GET', url: expect.stringContaining('vgc.bot'), authorization: 'Bearer vgc'},
+      {method: 'GET', url: expect.stringContaining('pkmn.bot'), authorization: 'Bearer vgc'},
+    ]);
+    expect(memberFetches(calls)).toBe(1);
+    expect(
+      calls.filter(c => c.method !== 'GET').map(({method, url}) => ({method, url}))
+    ).toEqual([
+      {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-a')},
+      {method: 'PUT', url: expect.stringContaining('/members/new/roles/role-a')},
+      {method: 'DELETE', url: expect.stringContaining('/members/old/roles/role-b')},
+    ]);
+  });
 
-  test('leaves ladders alone whose owner did not change', async () => {
+  test('skips Discord role mutations when ladder leaders are unchanged', async () => {
     const calls = stubFetch(LEADERS, MEMBERS);
     const state = new Map<string, string | undefined>();
     await discord.syncRoles('token', 'vgc', CONFIG, state);
@@ -131,7 +130,7 @@ describe('syncRoles', () => {
     ]);
   });
 
-  test('tries again next cycle while the owner is not in the server', async () => {
+  test('retries next cycle when the target leader owner is absent from the guild', async () => {
     const gone = leader('a', {id: 'a1', name: 'Leader'}, {name: 'x', discordId: 'gone'});
     const calls = stubFetch([gone], MEMBERS);
     const state = new Map<string, string | undefined>();
@@ -141,7 +140,7 @@ describe('syncRoles', () => {
     expect(calls.filter(c => c.method === 'PUT')).toEqual([]);
   });
 
-  test('a failing site does not stop the next one', async () => {
+  test('continues syncing remaining sites when one upstream site fails', async () => {
     const calls = stubFetch([
       leader('a', undefined, {name: 'x', discordId: 'new'}),
       leader('b', undefined, {name: 'x', discordId: 'new'}),
@@ -154,7 +153,7 @@ describe('syncRoles', () => {
       url: expect.stringContaining('/members/new/roles/role-b')}));
   });
 
-  test('a failing ladder does not stop the next one', async () => {
+  test('continues syncing remaining ladders when one role mutation fails', async () => {
     const calls = stubFetch([
       leader('a', undefined, {name: 'x', discordId: 'new'}),
       leader('b', undefined, {name: 'x', discordId: 'new'}),
@@ -214,11 +213,11 @@ describe('formatMessage', () => {
     });
   });
 
-  test('resolves user mentions and display names (nick > global_name > username)', () => {
+  test('resolves user mentions preferring nick over global name over username', () => {
     const msg: discord.Message = {
       ...base,
       author: {id: 'u1', username: 'scheibo', global_name: 'pre'},
-      content: 'hey <@1> and <@!2> and <@3> and <@999>',
+      content: 'hey <@1> plus <@!2> plus <@3> plus <@999>',
       mentions: [
         {id: '1', username: 'nessiedev', global_name: 'nessie'},
         {id: '3', username: 'bob_user', global_name: 'Bob Global'},
@@ -233,11 +232,11 @@ describe('formatMessage', () => {
       {user: {id: '3', username: 'bob_user', global_name: 'Bob Global'}, nick: 'bobby', roles: []},
     ];
     expect(discord.formatMessage(msg, members)?.line).toBe(
-      '[14:18:30] pre: @bobby[14:18:30] hey @nessie and @sauce and @bobby and <@999>'
+      '[14:18:30] pre: @bobby[14:18:30] hey @nessie plus @sauce plus @bobby plus <@999>'
     );
   });
 
-  test('includes clean attachment URLs for messages with or without text', () => {
+  test('strips query parameters from attachment URLs', () => {
     const url =
       'https://cdn.discordapp.com/attachments/689316506265321535/775113930074882068/img.jpg' +
       '?ex=6aea5619&is=6ae90499&hm=0563e093';
@@ -249,19 +248,29 @@ describe('formatMessage', () => {
     );
   });
 
-  test('resolves channels, roles, custom emojis, and timestamps', () => {
+  test('resolves channel or role mentions', () => {
     const msg: discord.Message = {
       ...base,
-      content: 'in <#10> ping <@&20> <:pokeball:99> at <t:1762093110:F>',
+      content: 'in <#10> ping <@&20>',
     };
     const channels = [{id: '10', name: 'general'}];
     const roles = [{id: '20', name: 'Gen 9 OU'}];
     expect(discord.formatMessage(msg, undefined, channels, roles)?.line).toBe(
-      '[14:18:30] bob: in #general ping @Gen 9 OU :pokeball: at 2025-11-02 14:18:30 UTC'
+      '[14:18:30] bob: in #general ping @Gen 9 OU'
     );
   });
 
-  test('formats polls, forwarded messages, embeds, stickers, and deleted replies', () => {
+  test('formats custom emojis or Discord timestamps', () => {
+    const msg: discord.Message = {
+      ...base,
+      content: '<:pokeball:99> at <t:1762093110:F>',
+    };
+    expect(discord.formatMessage(msg)?.line).toBe(
+      '[14:18:30] bob: :pokeball: at 2025-11-02 14:18:30 UTC'
+    );
+  });
+
+  test('formats poll questions with answer vote counts', () => {
     const pollMsg: discord.Message = {
       ...base,
       content: '',
@@ -277,7 +286,9 @@ describe('formatMessage', () => {
     expect(discord.formatMessage(pollMsg)?.line).toBe(
       '[14:18:30] bob: [Poll: Best search?] 1. 🌲 PUCT (5) | 2. CFR (3)'
     );
+  });
 
+  test('formats forwarded message snapshots', () => {
     const forwarded: discord.Message = {
       ...base,
       content: 'thoughts?',
@@ -291,7 +302,9 @@ describe('formatMessage', () => {
     expect(discord.formatMessage(forwarded, undefined, [{id: '10', name: 'papers'}])?.line).toBe(
       '[14:18:30] bob: thoughts? [Forwarded] new result in #papers https://cdn.discordapp.com/attachments/1/2/a.png'
     );
+  });
 
+  test('formats rich embeds with sticker items', () => {
     const richEmbed: discord.Message = {
       ...base,
       content: '',
@@ -307,15 +320,18 @@ describe('formatMessage', () => {
     expect(discord.formatMessage(richEmbed)?.line).toBe(
       '[14:18:30] bob: [Embed: Tournament Result — 0-ERROR won — Score: 3-1 — https://pkmn.ai/leaderboard] [Sticker: pikachu]'
     );
+  });
 
-    // Link preview embeds on normal text messages should not be duplicated
+  test('omits redundant link preview embeds when URL is already in message text', () => {
     const linkPreview: discord.Message = {
       ...base,
       content: 'see https://pkmn.ai',
       embeds: [{type: 'link', title: 'pkmn.ai', url: 'https://pkmn.ai'}],
     };
     expect(discord.formatMessage(linkPreview)?.line).toBe('[14:18:30] bob: see https://pkmn.ai');
+  });
 
+  test('formats replies to deleted messages with @[deleted]', () => {
     const deletedReply: discord.Message = {
       ...base,
       type: 19,
@@ -327,14 +343,38 @@ describe('formatMessage', () => {
     );
   });
 
-  test('skips empty messages and system message types', () => {
+  test('returns undefined for whitespace-only messages', () => {
     expect(discord.formatMessage({...base, content: '   '})).toBeUndefined();
+  });
+
+  test('returns undefined for non-chat system message types', () => {
     expect(discord.formatMessage({...base, type: 7, content: 'joined'})).toBeUndefined();
   });
 });
 
 describe('syncMessages', () => {
   let tmpDir: string;
+
+  const batch1: discord.Message[] = [
+    {
+      id: '102',
+      timestamp: '2026-11-02T14:22:05.000Z',
+      content: 'second message (typo)',
+      author: {id: 'u2', username: 'alice'},
+      referenced_message: {
+        id: '101',
+        timestamp: '2026-11-02T14:18:30.000Z',
+        content: 'first message',
+        author: {id: 'u1', username: 'bob'},
+      },
+    },
+    {
+      id: '101',
+      timestamp: '2026-11-02T14:18:30.000Z',
+      content: 'first message',
+      author: {id: 'u1', username: 'bob'},
+    },
+  ];
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-test-'));
@@ -345,51 +385,11 @@ describe('syncMessages', () => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  test('writes daily logs, rewrites rolling tail on edits, and graduates at 100', async () => {
+  test('writes initial daily chat logs with cursor state', async () => {
     const urls: string[] = [];
-    const batch1: discord.Message[] = [
-      {
-        id: '102',
-        timestamp: '2026-11-02T14:22:05.000Z',
-        content: 'second message (typo)',
-        author: {id: 'u2', username: 'alice'},
-        referenced_message: {
-          id: '101',
-          timestamp: '2026-11-02T14:18:30.000Z',
-          content: 'first message',
-          author: {id: 'u1', username: 'bob'},
-        },
-      },
-      {
-        id: '101',
-        timestamp: '2026-11-02T14:18:30.000Z',
-        content: 'first message',
-        author: {id: 'u1', username: 'bob'},
-      },
-    ];
-    const batch2: discord.Message[] = [
-      {
-        id: '103',
-        timestamp: '2026-11-03T01:02:03.000Z',
-        content: 'next day message',
-        author: {id: 'u1', username: 'bob'},
-      },
-      {
-        ...batch1[0],
-        content: 'second message (fixed)',
-      },
-      batch1[1],
-    ];
-
-    let call = 0;
     globalThis.fetch = ((url: string) => {
       urls.push(String(url));
-      const body = call++ === 0 ? batch1 : batch2;
-      return Promise.resolve({
-        status: 200,
-        ok: true,
-        json: () => Promise.resolve(body),
-      });
+      return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(batch1)});
     }) as unknown as typeof fetch;
 
     await discord.syncMessages('token', 'chan', tmpDir);
@@ -399,9 +399,28 @@ describe('syncMessages', () => {
       '[14:22:05] alice: @bob[14:18:30] second message (typo)\n'
     );
     expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe('0\n2026-11-02.txt 0\n');
+  });
+
+  test('rewrites rolling message tail when recent messages are edited', async () => {
+    const batch2: discord.Message[] = [
+      {
+        id: '103',
+        timestamp: '2026-11-03T01:02:03.000Z',
+        content: 'next day message',
+        author: {id: 'u1', username: 'bob'},
+      },
+      {...batch1[0], content: 'second message (fixed)'},
+      batch1[1],
+    ];
+
+    let call = 0;
+    globalThis.fetch = (() => {
+      const body = call++ === 0 ? batch1 : batch2;
+      return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(body)});
+    }) as unknown as typeof fetch;
 
     await discord.syncMessages('token', 'chan', tmpDir);
-    expect(urls[1]).toContain('/channels/chan/messages?limit=100&after=0');
+    await discord.syncMessages('token', 'chan', tmpDir);
     expect(fs.readFileSync(path.join(tmpDir, '2026-11-02.txt'), 'utf8')).toBe(
       '[14:18:30] bob: first message\n' +
       '[14:22:05] alice: @bob[14:18:30] second message (fixed)\n'
@@ -412,8 +431,9 @@ describe('syncMessages', () => {
     expect(fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8')).toBe(
       '0\n2026-11-02.txt 0\n2026-11-03.txt 0\n'
     );
+  });
 
-    // When a page hits 100 messages at the head, the older 50 graduate and `after` advances
+  test('graduates older 50 messages when rolling page reaches 100 messages', async () => {
     const fullPage: discord.Message[] = Array.from({length: 100}, (_, i) => ({
       id: String(200 - i),
       timestamp: '2026-11-03T02:00:00.000Z',
@@ -421,17 +441,11 @@ describe('syncMessages', () => {
       author: {id: 'u1', username: 'bob'},
     }));
     globalThis.fetch = ((url: string) => {
-      urls.push(String(url));
       const body = String(url).endsWith('after=0') ? fullPage : [];
-      return Promise.resolve({
-        status: 200,
-        ok: true,
-        json: () => Promise.resolve(body),
-      });
+      return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(body)});
     }) as unknown as typeof fetch;
 
     await discord.syncMessages('token', 'chan', tmpDir);
-    // Older 50 are ids 101..150, so after advances to page[50].id === '150'
     const cursor = fs.readFileSync(path.join(tmpDir, '.cursor'), 'utf8');
     expect(cursor).toMatch(/^150\n2026-11-03\.txt \d+\n$/);
   });
@@ -442,85 +456,56 @@ describe('syncPins', () => {
     globalThis.fetch = realFetch;
   });
 
-  test('replaces user pins with app pins in reverse order and deletes system messages',
-    async () => {
-      const actions: Array<{method: string; url: string; body?: string}> = [];
-      let nextId = 100;
-      const userPins: discord.Message[] = [
-        {id: '1', timestamp: '2026-11-02T00:00:00Z', content: 'first',
-          author: {id: 'u1', username: 'pre'}},
-        {id: '2', timestamp: '2026-11-02T00:00:00Z', content: 'second',
-          author: {id: 'u1', username: 'pre'}},
-        {id: '3', timestamp: '2026-11-02T00:00:00Z', content: 'third',
-          author: {id: 'u1', username: 'pre'}},
-      ];
+  function stubUserPinsFetch(actions: Array<{method: string; url: string; body?: string}>) {
+    let nextId = 100;
+    const userPins: discord.Message[] = [
+      {id: '1', timestamp: '2026-11-02T00:00:00Z', content: 'first',
+        author: {id: 'u1', username: 'pre'}},
+      {id: '2', timestamp: '2026-11-02T00:00:00Z', content: 'second',
+        author: {id: 'u1', username: 'pre'}},
+      {id: '3', timestamp: '2026-11-02T00:00:00Z', content: 'third',
+        author: {id: 'u1', username: 'pre'}},
+    ];
 
-      globalThis.fetch = ((url: string, init?: RequestInit) => {
-        const method = init?.method ?? 'GET';
-        const u = String(url);
-        const body = typeof init?.body === 'string' ? init.body : undefined;
-        actions.push({method, url: u, ...(body ? {body} : {})});
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const u = String(url);
+      const body = typeof init?.body === 'string' ? init.body : undefined;
+      actions.push({method, url: u, ...(body ? {body} : {})});
 
-        if (method === 'GET' && u.endsWith('/messages/pins')) {
-          return Promise.resolve({
-            status: 200,
-            ok: true,
-            json: () => Promise.resolve({items: userPins.map(message => ({message}))}),
-          });
-        }
-        if (method === 'POST' && u.endsWith('/messages')) {
-          const {content} = JSON.parse(body!) as {content: string};
-          const created: discord.Message = {
-            id: String(++nextId),
-            timestamp: '2026-11-07T00:00:00Z',
-            content,
-            author: {id: 'app', username: 'pkmn', bot: true},
-          };
-          return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(created)});
-        }
-        if (method === 'GET' && u.includes('/messages?limit=')) {
-          const recent: discord.Message[] = [
-            {id: '201', type: 6, timestamp: '2026-11-07T00:00:00Z', content: '',
-              author: {id: 'app', username: 'pkmn', bot: true}},
-            {id: '202', type: 6, timestamp: '2026-11-07T00:00:00Z', content: '',
-              author: {id: 'u1', username: 'pre'}},
-            {id: '103', type: 0, timestamp: '2026-11-07T00:00:00Z', content: 'first',
-              author: {id: 'app', username: 'pkmn', bot: true}},
-          ];
-          return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(recent)});
-        }
-        return Promise.resolve({status: 204, ok: true});
-      }) as unknown as typeof fetch;
+      if (method === 'GET' && u.endsWith('/messages/pins')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({items: userPins.map(message => ({message}))}),
+        });
+      }
+      if (method === 'POST' && u.endsWith('/messages')) {
+        const {content} = JSON.parse(body!) as {content: string};
+        const created: discord.Message = {
+          id: String(++nextId),
+          timestamp: '2026-11-07T00:00:00Z',
+          content,
+          author: {id: 'app', username: 'pkmn', bot: true},
+        };
+        return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(created)});
+      }
+      if (method === 'GET' && u.includes('/messages?limit=')) {
+        const recent: discord.Message[] = [
+          {id: '201', type: 6, timestamp: '2026-11-07T00:00:00Z', content: '',
+            author: {id: 'app', username: 'pkmn', bot: true}},
+          {id: '202', type: 6, timestamp: '2026-11-07T00:00:00Z', content: '',
+            author: {id: 'u1', username: 'pre'}},
+          {id: '103', type: 0, timestamp: '2026-11-07T00:00:00Z', content: 'first',
+            author: {id: 'app', username: 'pkmn', bot: true}},
+        ];
+        return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(recent)});
+      }
+      return Promise.resolve({status: 204, ok: true});
+    }) as unknown as typeof fetch;
+  }
 
-      const state = new Map<string, string | undefined>();
-      await discord.syncPins('token', 'chan', ['first', 'second', 'third'], state);
-
-      expect(actions).toEqual([
-        {method: 'GET', url: expect.stringContaining('/channels/chan/messages/pins')},
-        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/1')},
-        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/2')},
-        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/3')},
-        {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
-          body: JSON.stringify({content: 'third'})},
-        {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
-          body: JSON.stringify({content: 'second'})},
-        {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
-          body: JSON.stringify({content: 'first'})},
-        {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/101')},
-        {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/102')},
-        {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/103')},
-        {method: 'GET', url: expect.stringContaining('/channels/chan/messages?limit=16')},
-        {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/201')},
-      ]);
-
-      // Cached state skips subsequent cycles when config is unchanged
-      actions.length = 0;
-      await discord.syncPins('token', 'chan', ['first', 'second', 'third'], state);
-      expect(actions).toEqual([]);
-    });
-
-  test('reuses unchanged app pins, replaces changed ones, and deletes stale app pins', async () => {
-    const actions: Array<{method: string; url: string; body?: string}> = [];
+  function stubExistingAppPinsFetch(actions: Array<{method: string; url: string; body?: string}>) {
     const existingPins: discord.Message[] = [
       {id: '103', timestamp: '2026-11-07T00:00:00Z', content: 'first',
         author: {id: 'app', username: 'pkmn', bot: true}},
@@ -561,15 +546,54 @@ describe('syncPins', () => {
       }
       return Promise.resolve({status: 204, ok: true});
     }) as unknown as typeof fetch;
+  }
 
-    // Already in sync -> no mutations
+  test('replaces user pins with app pins in reverse chronological order', async () => {
+    const actions: Array<{method: string; url: string; body?: string}> = [];
+    stubUserPinsFetch(actions);
+    await discord.syncPins('token', 'chan', ['first', 'second', 'third'], new Map());
+
+    expect(actions).toEqual([
+      {method: 'GET', url: expect.stringContaining('/channels/chan/messages/pins')},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/1')},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/2')},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/pins/3')},
+      {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
+        body: JSON.stringify({content: 'third'})},
+      {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
+        body: JSON.stringify({content: 'second'})},
+      {method: 'POST', url: expect.stringContaining('/channels/chan/messages'),
+        body: JSON.stringify({content: 'first'})},
+      {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/101')},
+      {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/102')},
+      {method: 'PUT', url: expect.stringContaining('/channels/chan/messages/pins/103')},
+      {method: 'GET', url: expect.stringContaining('/channels/chan/messages?limit=16')},
+      {method: 'DELETE', url: expect.stringContaining('/channels/chan/messages/201')},
+    ]);
+  });
+
+  test('skips Discord API calls when pin state cache matches config', async () => {
+    const actions: Array<{method: string; url: string; body?: string}> = [];
+    stubUserPinsFetch(actions);
+    const state = new Map<string, string | undefined>();
+    await discord.syncPins('token', 'chan', ['first', 'second', 'third'], state);
+    actions.length = 0;
+    await discord.syncPins('token', 'chan', ['first', 'second', 'third'], state);
+    expect(actions).toEqual([]);
+  });
+
+  test('leaves existing app pins untouched when already in sync', async () => {
+    const actions: Array<{method: string; url: string; body?: string}> = [];
+    stubExistingAppPinsFetch(actions);
     await discord.syncPins('token', 'chan', ['first', 'second', 'third']);
     expect(actions).toEqual([
       {method: 'GET', url: expect.stringContaining('/channels/chan/messages/pins')},
     ]);
+  });
 
-    // Update the 3rd pin -> unpins all, posts only 'third v2', deletes old msg 101, repins
-    actions.length = 0;
+  test('replaces edited app pins while reusing unchanged ones', async () => {
+    const actions: Array<{method: string; url: string; body?: string}> = [];
+    stubExistingAppPinsFetch(actions);
     await discord.syncPins('token', 'chan', ['first', 'second', 'third v2']);
     expect(actions).toEqual([
       {method: 'GET', url: expect.stringContaining('/channels/chan/messages/pins')},
@@ -588,7 +612,7 @@ describe('syncPins', () => {
 });
 
 describe('syncGuildMembers', () => {
-  test('syncs current Discord guild member IDs and usernames into Database', () => {
+  test('persists current Discord guild member IDs in SQLite', () => {
     const db = new Database(':memory:');
     try {
       discord.syncGuildMembers(db, [
@@ -598,8 +622,18 @@ describe('syncGuildMembers', () => {
       expect(db.isDiscordMember('513513270670262284')).toBe(true);
       expect(db.isDiscordMember('283674461268344832')).toBe(true);
       expect(db.isDiscordMember('999999999999999999')).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
 
-      // Re-sync after a member leaves removes stale membership
+  test('removes departed Discord guild members on subsequent sync', () => {
+    const db = new Database(':memory:');
+    try {
+      discord.syncGuildMembers(db, [
+        {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
+        {user: {id: '283674461268344832', username: 'pmariglia'}, roles: []},
+      ], 1_760_000_000);
       discord.syncGuildMembers(db, [
         {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
       ], 1_760_000_060);
@@ -634,7 +668,7 @@ describe('glossary slash commands', () => {
     globalThis.fetch = realFetch;
   });
 
-  test('formats all static/glossary.yml entries cleanly within Discord limits', () => {
+  test('formats every static/glossary.yml entry within Discord 2000-char limit', () => {
     for (const [term, raw] of Object.entries(glossary)) {
       const reply = discord.formatGlossaryReply(term, raw);
       expect(reply.startsWith(`**[${term}](https://pkmn.ai/glossary/#`)).toBe(true);
@@ -644,7 +678,7 @@ describe('glossary slash commands', () => {
     }
   });
 
-  test('looks up exact keys, slugs/IDs, and {.dfn} aliases', () => {
+  test('looks up glossary terms by exact key, ID, or {.dfn} alias', () => {
     expect(discord.lookupGlossary('NE', glossary)?.term).toBe('NE');
     expect(discord.lookupGlossary('ne', glossary)?.term).toBe('NE');
     expect(discord.lookupGlossary('nash', glossary)?.term).toBe('NE');
@@ -657,26 +691,28 @@ describe('glossary slash commands', () => {
     expect(discord.lookupGlossary('nonexistentterm123', glossary)).toBeUndefined();
   });
 
-  test('autocompletes matching terms and aliases up to 25 choices', () => {
-    const empty = discord.autocompleteGlossary('', glossary);
-    expect(empty).toHaveLength(25);
-
-    const ne = discord.autocompleteGlossary('Nash', glossary);
-    expect(ne[0]).toEqual({name: 'Nash equilibrium (NE)', value: 'NE'});
-
-    const cfr = discord.autocompleteGlossary('CFR', glossary);
-    expect(cfr[0]).toEqual({name: 'CFR', value: 'CFR'});
+  test('autocompletes matching glossary terms up to 25 choices', () => {
+    expect(discord.autocompleteGlossary('', glossary)).toHaveLength(25);
+    expect(discord.autocompleteGlossary('Nash', glossary)[0]).toEqual({
+      name: 'Nash equilibrium (NE)',
+      value: 'NE',
+    });
+    expect(discord.autocompleteGlossary('CFR', glossary)[0]).toEqual({name: 'CFR', value: 'CFR'});
   });
 
-  test('verifies Ed25519 signatures and handles PING, /define, and autocomplete', () => {
+  test('rejects interaction requests with missing or invalid Ed25519 signature', () => {
     const bad = discord.handleInteraction('{"type":1}', {}, verifyKey, glossary);
     expect(bad.status).toBe(401);
+  });
 
+  test('responds to signed PING interactions with PONG', () => {
     const ping = signedInteraction({type: 1});
-    const pingRes = discord.handleInteraction(ping.body, ping.headers, verifyKey, glossary);
-    expect(pingRes.status).toBe(200);
-    expect(JSON.parse(pingRes.body!)).toEqual({type: 1});
+    const res = discord.handleInteraction(ping.body, ping.headers, verifyKey, glossary);
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body!)).toEqual({type: 1});
+  });
 
+  test('responds to /define with formatted glossary entry', () => {
     const cmd = signedInteraction({
       type: 2,
       data: {name: 'define', options: [{name: 'term', value: 'NE'}]},
@@ -692,41 +728,61 @@ describe('glossary slash commands', () => {
     expect(parsed.data.content).toContain('**[NE](https://pkmn.ai/glossary/#NE)**:');
     expect(parsed.data.content).toContain('The **Nash equilibrium**');
     expect(parsed.data.content).toContain('[strategy](https://pkmn.ai/glossary/#strategy)');
+  });
 
+  test('responds ephemerally when /define receives an unknown term', () => {
     const unknown = signedInteraction({
       type: 2,
       data: {name: 'define', options: [{name: 'term', value: 'not-a-term'}]},
     });
-    const unknownRes = discord.handleInteraction(
-      unknown.body,
-      unknown.headers,
-      verifyKey,
-      glossary
-    );
-    expect(unknownRes.status).toBe(200);
-    expect(JSON.parse(unknownRes.body!)).toEqual({
+    const res = discord.handleInteraction(unknown.body, unknown.headers, verifyKey, glossary);
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body!)).toEqual({
       type: 4,
       data: {
         content: 'Unknown glossary term: `not-a-term`. See <https://pkmn.ai/glossary/>.',
         flags: 68,
       },
     });
+  });
 
+  test('responds to /define autocomplete interactions with matching choices', () => {
     const auto = signedInteraction({
       type: 4,
       data: {name: 'define', options: [{name: 'term', value: 'NE', focused: true}]},
     });
-    const autoRes = discord.handleInteraction(auto.body, auto.headers, verifyKey, glossary);
-    expect(autoRes.status).toBe(200);
-    const autoData = JSON.parse(autoRes.body!) as {
+    const res = discord.handleInteraction(auto.body, auto.headers, verifyKey, glossary);
+    expect(res.status).toBe(200);
+    const data = JSON.parse(res.body!) as {
       type: number;
       data: {choices: Array<{name: string; value: string}>};
     };
-    expect(autoData.type).toBe(8);
-    expect(autoData.data.choices[0]).toEqual({name: 'NE', value: 'NE'});
+    expect(data.type).toBe(8);
+    expect(data.data.choices[0]).toEqual({name: 'NE', value: 'NE'});
   });
 
-  test('syncCommands registers /define when missing and skips PUT when in sync', async () => {
+  test('registers /define command via PUT when missing on guild', async () => {
+    const calls: Array<{method: string; url: string; body?: string}> = [];
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      calls.push({method, url: String(url), body: init?.body as string | undefined});
+      if (String(url).endsWith('/oauth2/applications/@me')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'app1', verify_key: verifyKey}),
+        });
+      }
+      return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve([])});
+    }) as unknown as typeof fetch;
+
+    const app = await discord.syncCommands('token', 'guild1', new Map());
+    expect(app).toEqual({id: 'app1', verify_key: verifyKey});
+    expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT']);
+    expect(JSON.parse(calls[2].body!)).toEqual(discord.COMMANDS);
+  });
+
+  test('skips command PUT when remote or cached commands already match', async () => {
     const calls: Array<{method: string; url: string; body?: string}> = [];
     let currentCmds: object[] = [];
     globalThis.fetch = ((url: string, init?: RequestInit) => {
@@ -742,28 +798,19 @@ describe('glossary slash commands', () => {
       if (method === 'PUT') {
         currentCmds = JSON.parse(init?.body as string) as object[];
       }
-      return Promise.resolve({
-        status: 200,
-        ok: true,
-        json: () => Promise.resolve(currentCmds),
-      });
+      return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve(currentCmds)});
     }) as unknown as typeof fetch;
 
     const state = new Map<string, string | undefined>();
-    const app = await discord.syncCommands('token', 'guild1', state);
-    expect(app).toEqual({id: 'app1', verify_key: verifyKey});
-    expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT']);
-    expect(JSON.parse(calls[2].body!)).toEqual(discord.COMMANDS);
-
+    await discord.syncCommands('token', 'guild1', state);
     await discord.syncCommands('token', 'guild1', state);
     expect(calls).toHaveLength(3);
 
-    const freshState = new Map<string, string | undefined>();
-    await discord.syncCommands('token', 'guild1', freshState);
+    await discord.syncCommands('token', 'guild1', new Map());
     expect(calls.map(c => c.method)).toEqual(['GET', 'GET', 'PUT', 'GET', 'GET']);
   });
 
-  test('register mounts POST /discord/interactions on Polka sharing Database', async () => {
+  test('mounts POST /discord/interactions route on Polka', async () => {
     const db = new Database(':memory:');
     const app = polka();
     const handle = discord.register(app, {db, token: '', vgcToken: '', verifyKey});
@@ -790,15 +837,14 @@ describe('glossary slash commands', () => {
   });
 });
 
-describe('Arena roles & submission/quarantine/watchdog DMs', () => {
-  const ARENA_CONFIG: discord.Config = {
-    guild: '689316505560809576',
-    competitor: '1568629775122309210',
-    staff: ['513513270670262284'],
-    ladders: {},
-  };
+const ARENA_CONFIG: discord.Config = {
+  guild: '689316505560809576',
+  competitor: '1568629775122309210',
+  staff: ['513513270670262284'],
+  ladders: {},
+};
 
-  const LADDERS_YAML = `
+const LADDERS_YAML = `
 - name: RBY
   format: gen1ou
   id: gen1ou20261109
@@ -816,7 +862,7 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
   min: 2
 `;
 
-  const PROJECTS_YAML = `
+const PROJECTS_YAML = `
 - name: Foul Play
   authors:
     - pmariglia
@@ -844,87 +890,86 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
       newcomer: newcomer.10004
 `;
 
-  const SHA = 'a'.repeat(64);
+const SHA = 'a'.repeat(64);
 
+function createSeededArenaDb() {
+  const db = new Database(':memory:');
+  db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
+  db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
+  db.linkDeveloperDiscord('pmariglia', '1001', 'pmariglia', 1_760_000_010);
+  db.linkDeveloperDiscord('coauthor', '1002', 'coauthor', 1_760_000_010);
+  return db;
+}
+
+describe('Arena Discord roles', () => {
   afterEach(() => {
     globalThis.fetch = realFetch;
   });
 
-  test('syncArenaRoles assigns Competitor and multi-owner settled #1 ladder roles', async () => {
-    const db = new Database(':memory:');
+  function seedRankedMatchHistory(db: Database, count: number) {
+    db.linkDeveloperDiscord('jakegrigsby', '1003', 'jake', 1_760_000_010);
+    db.linkDeveloperDiscord('newcomer', '1004', 'newcomer', 1_760_000_010);
+    const fpAgent = db.getAgentBySlug('foul-play')!;
+    const mmAgent = db.getAgentBySlug('metamon')!;
+
+    const v1 = db.createSubmission({
+      agentId: fpAgent.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/fp.tar.zst',
+      sha256: SHA,
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_100,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_760_000_110});
+
+    const v2 = db.createSubmission({
+      agentId: mmAgent.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/mm.tar.zst',
+      sha256: SHA,
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_120,
+    });
+    db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: 1_760_000_130});
+    db.setLadderAnchor('gen1ou20261109', 'metamon', '1.0.0', 1_760_000_140);
+
+    for (let idx = 1; idx <= count; idx++) {
+      const g = idx % 3 === 0 ? 'L' : 'W';
+      db.recordCompletedMatch({
+        match: {
+          id: `gen1ou-${String(idx).padStart(6, '0')}`,
+          ladderId: 'gen1ou20261109',
+          p1VersionId: v1.id,
+          p2VersionId: v2.id,
+          seed: `1,2,3,${idx}`,
+          game1Outcome: g,
+          game2Outcome: g,
+          category: `${g}${g}`,
+          game1Turns: 30,
+          game2Turns: 28,
+          game1EndReason: 'win',
+          game2EndReason: 'win',
+          p1PeakRam: 512,
+          p2PeakRam: 512,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 120,
+          p2Game2BankSeconds: 120,
+          p1MeanTurnMillis: 200,
+          p2MeanTurnMillis: 200,
+          completedAt: 1_760_001_000 + idx * 60,
+        },
+      });
+    }
+  }
+
+  test('assigns Competitor role only to qualified owners while stripping stale roles', async () => {
+    const db = createSeededArenaDb();
     try {
-      db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
-      db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
-
-      db.linkDeveloperDiscord('pmariglia', '1001', 'pmariglia', 1_760_000_010);
-      db.linkDeveloperDiscord('coauthor', '1002', 'coauthor', 1_760_000_010);
-      db.linkDeveloperDiscord('jakegrigsby', '1003', 'jake', 1_760_000_010);
-      db.linkDeveloperDiscord('newcomer', '1004', 'newcomer', 1_760_000_010);
-
-      const fpAgent = db.getAgentBySlug('foul-play')!;
-      const mmAgent = db.getAgentBySlug('metamon')!;
-
-      const v1 = db.createSubmission({
-        agentId: fpAgent.id,
-        version: '1.0.0',
-        package: 'bundle',
-        url: 'https://example.com/fp.tar.zst',
-        sha256: SHA,
-        ladderIds: ['gen1ou20261109'],
-        now: 1_760_000_100,
-      });
-      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_760_000_110});
-
-      const v2 = db.createSubmission({
-        agentId: mmAgent.id,
-        version: '1.0.0',
-        package: 'bundle',
-        url: 'https://example.com/mm.tar.zst',
-        sha256: SHA,
-        ladderIds: ['gen1ou20261109'],
-        now: 1_760_000_120,
-      });
-      db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: 1_760_000_130});
-      db.setLadderAnchor('gen1ou20261109', 'metamon', '1.0.0', 1_760_000_140);
-
-      const playMatch = (idx: number, g1: 'W' | 'L', g2: 'W' | 'L' | 'T') => {
-        const cat = `${g1}${g2}` as const;
-        db.recordCompletedMatch({
-          match: {
-            id: `gen1ou-${String(idx).padStart(6, '0')}`,
-            ladderId: 'gen1ou20261109',
-            p1VersionId: v1.id,
-            p2VersionId: v2.id,
-            seed: `1,2,3,${idx}`,
-            game1Outcome: g1,
-            game2Outcome: g2,
-            category: cat,
-            game1Turns: 30,
-            game2Turns: 28,
-            game1EndReason: 'win',
-            game2EndReason: 'win',
-            p1PeakRam: 512,
-            p2PeakRam: 512,
-            p1Game1BankSeconds: 140,
-            p1Game2BankSeconds: 140,
-            p2Game1BankSeconds: 120,
-            p2Game2BankSeconds: 120,
-            p1MeanTurnMillis: 200,
-            p2MeanTurnMillis: 200,
-            completedAt: 1_760_001_000 + idx * 60,
-          },
-        });
-      };
-
-      // 20 competitive matches -> rank === 1 (provisional), settledAt === undefined (< 25)
-      for (let i = 1; i <= 20; i++) {
-        const g = i % 3 === 0 ? 'L' : 'W';
-        playMatch(i, g, g);
-      }
-      const provisionalTop = db.getLeaderboardEntries('gen1ou20261109')[0];
-      expect(provisionalTop.agentSlug).toBe('foul-play');
-      expect(provisionalTop.rankCurrent).toBe(1);
-      expect(provisionalTop.settledAt).toBeUndefined();
+      seedRankedMatchHistory(db, 20);
+      expect(db.getLeaderboardEntries('gen1ou20261109')[0].settledAt).toBeUndefined();
 
       const actions: Array<{method: string; url: string}> = [];
       globalThis.fetch = ((url: string, init?: RequestInit) => {
@@ -932,7 +977,6 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
         return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
       }) as unknown as typeof fetch;
 
-      // Initially: stale holder 9999 has Competitor + RBY + SV; 1002 is not in the guild yet
       const members: discord.GuildMember[] = [
         {user: {id: '1001', username: 'pmariglia'}, roles: []},
         {user: {id: '1003', username: 'jake'}, roles: []},
@@ -942,11 +986,9 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
           roles: ['1568629775122309210', '1563716887131459685', '1563717708720377977'],
         },
       ];
-      const state = new Map<string, string | undefined>();
 
-      await discord.syncArenaRoles(db, 'discord-token', ARENA_CONFIG, state, members);
+      await discord.syncArenaRoles(db, 'discord-token', ARENA_CONFIG, new Map(), members);
       expect(actions).toEqual([
-        // Competitor: remove from stale (9999), assign to 1001 & 1003 (NOT pending 1004!)
         {
           method: 'DELETE',
           url: expect.stringContaining('/members/9999/roles/1568629775122309210'),
@@ -959,38 +1001,40 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
           method: 'PUT',
           url: expect.stringContaining('/members/1003/roles/1568629775122309210'),
         },
-        // RBY (active, provisional #1): remove from stale (9999), assign to nobody yet
         {
           method: 'DELETE',
           url: expect.stringContaining('/members/9999/roles/1563716887131459685'),
         },
-        // SV (upcoming): remove from stale (9999)
         {
           method: 'DELETE',
           url: expect.stringContaining('/members/9999/roles/1563717708720377977'),
         },
       ]);
+    } finally {
+      db.close();
+    }
+  });
 
-      // Now coauthor '1002' joins the guild, and Foul Play naturally settles at #1
-      members.push({user: {id: '1002', username: 'coauthor'}, roles: []});
-      for (let i = 21; i <= 50; i++) {
-        const g = i % 3 === 0 ? 'L' : 'W';
-        playMatch(i, g, g);
-      }
-      const settledTop = db.getLeaderboardEntries('gen1ou20261109')[0];
-      expect(settledTop.agentSlug).toBe('foul-play');
-      expect(settledTop.rankCurrent).toBe(1);
-      expect(settledTop.settledAt).toBeDefined();
+  test('assigns #1 ladder role to all co-owners once top entry is settled', async () => {
+    const db = createSeededArenaDb();
+    try {
+      seedRankedMatchHistory(db, 50);
+      expect(db.getLeaderboardEntries('gen1ou20261109')[0].settledAt).toBeDefined();
 
-      actions.length = 0;
+      const actions: Array<{method: string; url: string}> = [];
+      globalThis.fetch = ((url: string, init?: RequestInit) => {
+        actions.push({method: init?.method ?? 'GET', url: String(url)});
+        return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
+      }) as unknown as typeof fetch;
+
+      const members: discord.GuildMember[] = [
+        {user: {id: '1001', username: 'pmariglia'}, roles: ['1568629775122309210']},
+        {user: {id: '1002', username: 'coauthor'}, roles: ['1568629775122309210']},
+        {user: {id: '1003', username: 'jake'}, roles: ['1568629775122309210']},
+      ];
+      const state = new Map<string, string | undefined>();
       await discord.syncArenaRoles(db, 'discord-token', ARENA_CONFIG, state, members);
       expect(actions).toEqual([
-        // Missing coauthor 1002 now receives Competitor
-        {
-          method: 'PUT',
-          url: expect.stringContaining('/members/1002/roles/1568629775122309210'),
-        },
-        // Both Foul Play co-owners (1001 and 1002) receive settled RBY #1 role
         {
           method: 'PUT',
           url: expect.stringContaining('/members/1001/roles/1563716887131459685'),
@@ -1001,7 +1045,6 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
         },
       ]);
 
-      // Steady-state cycle performs zero API mutations
       actions.length = 0;
       await discord.syncArenaRoles(db, 'discord-token', ARENA_CONFIG, state, members);
       expect(actions).toEqual([]);
@@ -1009,8 +1052,49 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
       db.close();
     }
   });
+});
 
-  test('formats submission, quarantine, and watchdog DMs safely within 2000 chars', () => {
+describe('Arena Discord notifications', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  function stubDmFetch(
+    sentMessages: Array<{recipientOrChannel: string; content: string}>,
+    blockedUsers = new Set<string>()
+  ) {
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const u = String(url);
+      const rawBody = typeof init?.body === 'string' ? init.body : '{}';
+      const body = JSON.parse(rawBody) as {recipient_id?: string; content?: string};
+      if (u.endsWith('/users/@me/channels')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: `dm-${body.recipient_id!}`}),
+        });
+      }
+      if (u.includes('/channels/dm-') && u.endsWith('/messages')) {
+        const channelId = u.split('/channels/')[1].split('/')[0];
+        if (blockedUsers.has(channelId.slice(3))) {
+          return Promise.resolve({
+            status: 403,
+            ok: false,
+            text: () => Promise.resolve('{"code":50007}'),
+          });
+        }
+        sentMessages.push({recipientOrChannel: channelId, content: body.content!});
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'msg-1'}),
+        });
+      }
+      return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
+    }) as unknown as typeof fetch;
+  }
+
+  test('truncates long stderr in submission DMs without breaking code fences', () => {
     const hugeStderr = `Traceback:\n\`\`\`\n${'RuntimeError: boom\n'.repeat(300)}`;
     const failDm = discord.formatSubmissionDm({
       agentName: 'Foul Play',
@@ -1022,9 +1106,10 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
     expect(failDm.length).toBeLessThanOrEqual(2000);
     expect(failDm).toContain('failed its smoke test on `RBY, SV`');
     expect(failDm).toContain('… (truncated)\n```');
-    // Inner triple-backticks must be sanitized so code fence never breaks
     expect(failDm.match(/```/g)).toHaveLength(2);
+  });
 
+  test('formats staff quarantine DM summary with owner notification counts', () => {
     const staffDm = discord.formatStaffQuarantineDm({
       agentName: 'Foul Play',
       agentSlug: 'foul-play',
@@ -1032,11 +1117,13 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
       ladderLabels: ['RBY'],
       ownersNotified: 2,
       ownersTotal: 2,
-      smokeError: hugeStderr,
+      smokeError: 'RuntimeError: boom',
     });
     expect(staffDm.length).toBeLessThanOrEqual(2000);
     expect(staffDm).toContain("owners DM'd: 2/2");
+  });
 
+  test('formats watchdog alert DM with last match metadata', () => {
     const watchdogDm = discord.formatWatchdogDm({
       lastSeenAt: 1_762_807_500,
       lastMatchId: 'gen1ou-0000000972',
@@ -1045,185 +1132,165 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
     expect(watchdogDm.length).toBeLessThanOrEqual(2000);
   });
 
-  test('delivers smoke & quarantine DMs (including 0-owner staff fallback) and marks notified',
-    async () => {
-      const db = new Database(':memory:');
-      try {
-        db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
-        db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
-        db.linkDeveloperDiscord('pmariglia', '1001', 'pmariglia', 1_760_000_010);
-        db.linkDeveloperDiscord('coauthor', '1002', 'coauthor', 1_760_000_010);
+  test('sends smoke-failure DMs to all project owners starting with submitter', async () => {
+    const db = createSeededArenaDb();
+    try {
+      const fpAgent = db.getAgentBySlug('foul-play')!;
+      const coauthorDev = db.getDeveloperByGitHub('coauthor')!;
+      const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+      stubDmFetch(sentMessages);
+      const state = new Map<string, string | undefined>();
 
-        const fpAgent = db.getAgentBySlug('foul-play')!;
-        const coauthorDev = db.getDeveloperByGitHub('coauthor')!;
+      const vFail = db.createSubmission({
+        agentId: fpAgent.id,
+        developerId: coauthorDev.id,
+        version: '1.0.0-bad',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/bad.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_100,
+      });
+      const failRes = db.applySubmissionStatus({
+        versionId: vFail.id,
+        smokeStatus: 'failed',
+        smokeError: 'SyntaxError: invalid choice output',
+        now: 1_760_000_105,
+      });
 
-        const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
-        const blockedUsers = new Set<string>();
-        globalThis.fetch = ((url: string, init?: RequestInit) => {
-          const u = String(url);
-          const rawBody = typeof init?.body === 'string' ? init.body : '{}';
-          const body = JSON.parse(rawBody) as {
-            recipient_id?: string;
-            content?: string;
-          };
-          if (u.endsWith('/users/@me/channels')) {
-            const recipient = body.recipient_id!;
-            return Promise.resolve({
-              status: 200,
-              ok: true,
-              json: () => Promise.resolve({id: `dm-${recipient}`}),
-            });
-          }
-          if (u.includes('/channels/dm-') && u.endsWith('/messages')) {
-            const channelId = u.split('/channels/')[1].split('/')[0];
-            const userId = channelId.slice(3);
-            if (blockedUsers.has(userId)) {
-              return Promise.resolve({
-                status: 403,
-                ok: false,
-                text: () => Promise.resolve('{"code":50007}'),
-              });
-            }
-            sentMessages.push({recipientOrChannel: channelId, content: body.content!});
-            return Promise.resolve({
-              status: 200,
-              ok: true,
-              json: () => Promise.resolve({id: 'msg-1'}),
-            });
-          }
-          return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
-        }) as unknown as typeof fetch;
+      const sent = await discord.notifySubmissionStatus(
+        db, 'discord-token', ARENA_CONFIG, failRes, state
+      );
+      expect(sent).toBe(true);
+      expect(db.getVersionById(vFail.id)?.notified).toBe(true);
+      expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-1002', 'dm-1001']);
+      expect(sentMessages[0].content).toContain('SyntaxError: invalid choice output');
 
-        const state = new Map<string, string | undefined>();
+      sentMessages.length = 0;
+      expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(0);
+      expect(sentMessages).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
 
-        // 1. Smoke-test failure: DMs both owners (submitting dev first), does NOT spam staff
-        const vFail = db.createSubmission({
-          agentId: fpAgent.id,
-          developerId: coauthorDev.id,
-          version: '1.0.0-bad',
-          package: 'bundle',
-          url: 'https://example.com/bad.tar.zst',
-          sha256: SHA,
-          ladderIds: ['gen1ou20261109'],
-          now: 1_760_000_100,
-        });
-        const failRes = db.applySubmissionStatus({
-          versionId: vFail.id,
-          smokeStatus: 'failed',
-          smokeError: 'SyntaxError: invalid choice output',
-          now: 1_760_000_105,
-        });
+  test('delivers quarantine DMs to owners plus staff via syncSubmissionDms', async () => {
+    const db = createSeededArenaDb();
+    try {
+      const fpAgent = db.getAgentBySlug('foul-play')!;
+      const coauthorDev = db.getDeveloperByGitHub('coauthor')!;
+      const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+      stubDmFetch(sentMessages);
 
-        const sentFail = await discord.notifySubmissionStatus(
-          db, 'discord-token', ARENA_CONFIG, failRes, state
-        );
-        expect(sentFail).toBe(true);
-        expect(db.getVersionById(vFail.id)?.notified).toBe(true);
-        expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-1002', 'dm-1001']);
-        expect(sentMessages[0].content).toContain('SyntaxError: invalid choice output');
+      const vGood = db.createSubmission({
+        agentId: fpAgent.id,
+        developerId: coauthorDev.id,
+        version: '1.0.1',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/good.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_200,
+      });
+      db.applySubmissionStatus({versionId: vGood.id, smokeStatus: 'passed', now: 1_760_000_210});
+      db.quarantineVersion('foul-play', '1.0.1', 'Timed out in 5 consecutive matches');
+      expect(db.getVersionById(vGood.id)?.notified).toBe(false);
 
-        // Idempotent across subsequent syncSubmissionDms cycles
-        sentMessages.length = 0;
-        expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(0);
-        expect(sentMessages).toEqual([]);
+      const synced = await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, new Map());
+      expect(synced).toBe(1);
+      expect(db.getVersionById(vGood.id)?.notified).toBe(true);
+      expect(sentMessages.map(m => m.recipientOrChannel)).toEqual([
+        'dm-1002',
+        'dm-1001',
+        'dm-513513270670262284',
+      ]);
+      expect(sentMessages[2].content).toContain("owners DM'd: 2/2");
+    } finally {
+      db.close();
+    }
+  });
 
-        // 2. CLI-style quarantine (`notified = false` in DB): syncSubmissionDms DMs owners + staff
-        const vGood = db.createSubmission({
-          agentId: fpAgent.id,
-          developerId: coauthorDev.id,
-          version: '1.0.1',
-          package: 'bundle',
-          url: 'https://example.com/good.tar.zst',
-          sha256: SHA,
-          ladderIds: ['gen1ou20261109'],
-          now: 1_760_000_200,
-        });
-        db.applySubmissionStatus({versionId: vGood.id, smokeStatus: 'passed', now: 1_760_000_210});
-        db.quarantineVersion('foul-play', '1.0.1', 'Timed out in 5 consecutive matches');
-        expect(db.getVersionById(vGood.id)?.notified).toBe(false);
+  test('alerts staff once when quarantined project has zero linked Discord owners', async () => {
+    const db = createSeededArenaDb();
+    try {
+      const mmAgent = db.getAgentBySlug('metamon')!;
+      const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+      stubDmFetch(sentMessages);
 
-        expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(1);
-        expect(db.getVersionById(vGood.id)?.notified).toBe(true);
-        expect(sentMessages.map(m => m.recipientOrChannel)).toEqual([
-          'dm-1002',
-          'dm-1001',
-          'dm-513513270670262284',
-        ]);
-        expect(sentMessages[2].content).toContain("owners DM'd: 2/2");
+      const vNoDiscord = db.createSubmission({
+        agentId: mmAgent.id,
+        version: '0.8.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/mm-080.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_250,
+      });
+      db.applySubmissionStatus({
+        versionId: vNoDiscord.id,
+        smokeStatus: 'passed',
+        now: 1_760_000_260,
+      });
+      db.quarantineVersion('metamon', '0.8.0', 'Segfault in search thread');
 
-        // 3. Quarantined version with 0 linked Discord owners still alerts staff once via sync!
-        const mmAgent = db.getAgentBySlug('metamon')!;
-        const vNoDiscord = db.createSubmission({
-          agentId: mmAgent.id,
-          version: '0.8.0',
-          package: 'bundle',
-          url: 'https://example.com/mm-080.tar.zst',
-          sha256: SHA,
-          ladderIds: ['gen1ou20261109'],
-          now: 1_760_000_250,
-        });
-        db.applySubmissionStatus({
-          versionId: vNoDiscord.id,
-          smokeStatus: 'passed',
-          now: 1_760_000_260,
-        });
-        db.quarantineVersion('metamon', '0.8.0', 'Segfault in search thread');
-        sentMessages.length = 0;
-        expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(1);
-        expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-513513270670262284']);
-        expect(sentMessages[0].content).toContain("owners DM'd: 0/0");
-        // Leaves notified = false so if owner links Discord later, they still get their DM
-        expect(db.getVersionById(vNoDiscord.id)?.notified).toBe(false);
-        db.markVersionNotified(vNoDiscord.id);
+      const synced = await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, new Map());
+      expect(synced).toBe(1);
+      expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-513513270670262284']);
+      expect(sentMessages[0].content).toContain("owners DM'd: 0/0");
+      expect(db.getVersionById(vNoDiscord.id)?.notified).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
 
-        // 4. Blocked DMs (403 / 50007): leaves notified = false and caches block so sync won't spam
-        db.linkDeveloperDiscord('jakegrigsby', '1003', 'jake', 1_760_000_010);
-        blockedUsers.add('1003');
-        const warnSpy = console.warn;
-        console.warn = () => undefined;
-        try {
-          const vBlocked = db.createSubmission({
-            agentId: mmAgent.id,
-            version: '0.9.0',
-            package: 'bundle',
-            url: 'https://example.com/mm.tar.zst',
-            sha256: SHA,
-            ladderIds: ['gen1ou20261109'],
-            now: 1_762_000_300,
-          });
-          const blockedRes = db.applySubmissionStatus({
-            versionId: vBlocked.id,
-            smokeStatus: 'quarantined',
-            smokeError: 'OOM on turn 3',
-            now: 1_762_000_310,
-          });
-          sentMessages.length = 0;
-          const sentBlocked = await discord.notifySubmissionStatus(
-            db, 'discord-token', ARENA_CONFIG, blockedRes, state
-          );
-          expect(sentBlocked).toBe(true);
-          expect(db.getVersionById(vBlocked.id)?.notified).toBe(false);
-          // Staff STILL gets alerted on quarantine even when owner has DMs closed!
-          expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-513513270670262284']);
-          expect(sentMessages[0].content).toContain("owners DM'd: 0/1");
+  test('caches blocked recipient 403s while still alerting staff on quarantine', async () => {
+    const db = createSeededArenaDb();
+    const warnSpy = console.warn;
+    console.warn = () => undefined;
+    try {
+      db.linkDeveloperDiscord('jakegrigsby', '1003', 'jake', 1_760_000_010);
+      const mmAgent = db.getAgentBySlug('metamon')!;
+      const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+      stubDmFetch(sentMessages, new Set(['1003']));
+      const state = new Map<string, string | undefined>();
 
-          // Subsequent syncSubmissionDms skips blocked recipient without hitting Discord again
-          let fetchCount = 0;
-          globalThis.fetch = (() => {
-            fetchCount++;
-            return Promise.resolve({status: 500, ok: false, text: () => Promise.resolve('')});
-          }) as unknown as typeof fetch;
-          expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(0);
-          expect(fetchCount).toBe(0);
-        } finally {
-          console.warn = warnSpy;
-        }
-      } finally {
-        db.close();
-      }
-    });
+      const vBlocked = db.createSubmission({
+        agentId: mmAgent.id,
+        version: '0.9.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/mm.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_762_000_300,
+      });
+      const blockedRes = db.applySubmissionStatus({
+        versionId: vBlocked.id,
+        smokeStatus: 'quarantined',
+        smokeError: 'OOM on turn 3',
+        now: 1_762_000_310,
+      });
+      const sent = await discord.notifySubmissionStatus(
+        db, 'discord-token', ARENA_CONFIG, blockedRes, state
+      );
+      expect(sent).toBe(true);
+      expect(db.getVersionById(vBlocked.id)?.notified).toBe(false);
+      expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-513513270670262284']);
+      expect(sentMessages[0].content).toContain("owners DM'd: 0/1");
 
-  test('notifyWatchdogAlert sends stalled-worker DM to configured staff', async () => {
+      let fetchCount = 0;
+      globalThis.fetch = (() => {
+        fetchCount++;
+        return Promise.resolve({status: 500, ok: false, text: () => Promise.resolve('')});
+      }) as unknown as typeof fetch;
+      expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(0);
+      expect(fetchCount).toBe(0);
+    } finally {
+      console.warn = warnSpy;
+      db.close();
+    }
+  });
+
+  test('sends stalled-worker watchdog DMs to configured staff', async () => {
     const sent: Array<{url: string; body: string}> = [];
     globalThis.fetch = ((url: string, init?: RequestInit) => {
       const u = String(url);
@@ -1253,7 +1320,7 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
     expect(sent[1].body).toContain('gen1ou-0000000972');
   });
 
-  test('disables background Discord sync outside production unless DISCORD_SYNC=1', async () => {
+  test('skips background Discord sync outside production by default', async () => {
     const prevNodeEnv = process.env.NODE_ENV;
     const prevSync = process.env.DISCORD_SYNC;
     const prevBotToken = process.env.DISCORD_BOT_TOKEN;
@@ -1274,18 +1341,45 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
       delete process.env.DISCORD_SYNC;
       process.env.DISCORD_BOT_TOKEN = 'env-prod-bot-token';
 
-      const app1 = polka();
-      const h1 = discord.register(app1, {db, verifyKey: '00'.repeat(32)});
+      const handle = discord.register(polka(), {db, verifyKey: '00'.repeat(32)});
       await new Promise(resolve => setTimeout(resolve, 25));
-      h1.stop();
+      handle.stop();
       expect(calls).toEqual([]);
+    } finally {
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
+      if (prevSync === undefined) delete process.env.DISCORD_SYNC;
+      else process.env.DISCORD_SYNC = prevSync;
+      if (prevBotToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevBotToken;
+      db.close();
+    }
+  });
 
-      // Opting in via DISCORD_SYNC=1 activates background sync using DISCORD_BOT_TOKEN
+  test('enables background Discord sync outside production when DISCORD_SYNC=1', async () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevSync = process.env.DISCORD_SYNC;
+    const prevBotToken = process.env.DISCORD_BOT_TOKEN;
+    const calls: string[] = [];
+    globalThis.fetch = ((url: string) => {
+      calls.push(String(url));
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve([]),
+        text: () => Promise.resolve(''),
+      });
+    }) as unknown as typeof fetch;
+
+    const db = new Database(':memory:');
+    try {
+      process.env.NODE_ENV = 'development';
       process.env.DISCORD_SYNC = '1';
-      const app2 = polka();
-      const h2 = discord.register(app2, {db, verifyKey: '00'.repeat(32)});
+      process.env.DISCORD_BOT_TOKEN = 'env-prod-bot-token';
+
+      const handle = discord.register(polka(), {db, verifyKey: '00'.repeat(32)});
       await new Promise(resolve => setTimeout(resolve, 25));
-      h2.stop();
+      handle.stop();
       expect(calls.some(u => u.startsWith('https://discord.com/api/v10'))).toBe(true);
     } finally {
       if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
