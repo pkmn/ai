@@ -54,7 +54,7 @@ submit mews-truck 1.0.0 vgc=1610 --by pkmnbotguy
 checkpoint three-vgc-agents
 
 submit metamon 1.0.0 vgc=1560 --by jakegrigsby \
-  --url https://r2.example.com/metamon-1.0.0.tar.zst
+  --url https://pub-metamon.r2.dev/metamon-1.0.0.tar.zst
 ladder anchor vgc foul-play@1.0.0
 ladder open vgc
 play 1 --ladder vgc --heartbeats

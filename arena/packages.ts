@@ -571,22 +571,104 @@ export function evictColdAgentsIfNeeded(
     }
   }
 
-  // 3. Reclaim CAS blobs whose hardlink count dropped to 1 (no remaining hot agent links to them)
+  // 3. Reclaim CAS blobs in `<casDir>/<shard>/<sha256>` no longer referenced by any hot agent.
+  //    APFS `/bin/cp -c` CoW clones have independent inodes (`nlink === 1`) sharing physical
+  //    extents, so we match remaining hot files by exact byte size before hashing.
   if (evictedNative && fs.existsSync(casDir)) {
-    try {
-      for (const entry of fs.readdirSync(casDir)) {
-        const blobPath = path.join(casDir, entry);
-        try {
-          const st = fs.statSync(blobPath);
-          if (st.isFile() && st.nlink === 1) {
-            fs.rmSync(blobPath, {force: true});
-          }
-        } catch {}
-      }
-    } catch {}
+    pruneUnreferencedCasBlobs(casDir, agentsDir);
   }
 
   return evicted;
+}
+
+function sha256FileSync(filePath: string): string {
+  const hash = crypto.createHash('sha256');
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(65_536);
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n <= 0) break;
+      hash.update(n === buf.length ? buf : buf.subarray(0, n));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest('hex');
+}
+
+function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
+  const casBlobs: Array<{blobPath: string; shardPath?: string; digest: string; size: number}> = [];
+  try {
+    for (const entry of fs.readdirSync(casDir, {withFileTypes: true})) {
+      const entryPath = path.join(casDir, entry.name);
+      if (entry.isDirectory()) {
+        for (const sub of fs.readdirSync(entryPath, {withFileTypes: true})) {
+          if (!sub.isFile()) continue;
+          const blobPath = path.join(entryPath, sub.name);
+          try {
+            casBlobs.push({
+              blobPath,
+              shardPath: entryPath,
+              digest: sub.name,
+              size: fs.statSync(blobPath).size,
+            });
+          } catch {}
+        }
+      } else if (entry.isFile()) {
+        try {
+          casBlobs.push({
+            blobPath: entryPath,
+            digest: entry.name,
+            size: fs.statSync(entryPath).size,
+          });
+        } catch {}
+      }
+    }
+  } catch {
+    return;
+  }
+  if (casBlobs.length === 0) return;
+
+  const casSizes = new Set(casBlobs.map(b => b.size));
+  const activeDigests = new Set<string>();
+  const walkHot = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, {withFileTypes: true});
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        walkHot(full);
+      } else if (e.isFile()) {
+        try {
+          if (casSizes.has(fs.statSync(full).size)) {
+            activeDigests.add(sha256FileSync(full));
+          }
+        } catch {}
+      }
+    }
+  };
+  if (fs.existsSync(agentsDir)) walkHot(agentsDir);
+
+  const touchedShards = new Set<string>();
+  for (const blob of casBlobs) {
+    if (!activeDigests.has(blob.digest)) {
+      try {
+        fs.rmSync(blob.blobPath, {force: true});
+        if (blob.shardPath) touchedShards.add(blob.shardPath);
+      } catch {}
+    }
+  }
+  for (const shard of touchedShards) {
+    try {
+      if (fs.readdirSync(shard).length === 0) fs.rmdirSync(shard);
+    } catch {}
+  }
 }
 
 export function ensureAgentResident(

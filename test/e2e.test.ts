@@ -64,7 +64,213 @@ function copyRootPublicAssets(srcPublic: string, dstPublic: string) {
   }
 }
 
-describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycle', () => {
+describe('pools team sampling', () => {
+  const agent1Teams = mock.generateValidVgcTeams(20, 0);
+  const agent2Teams = mock.generateValidVgcTeams(20, 1);
+  const agent3Teams = mock.generateValidVgcTeams(20, 2);
+  const agent4Teams = mock.generateValidVgcTeams(20, 3);
+
+  afterEach(() => {
+    teams.clearReferencePoolCache();
+  });
+
+  test('samplePoolsPair rejects pools with fewer than 4 distinct agents', () => {
+    const twoAgentPool = teams.buildCanonicalTeamPool([
+      {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
+      {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
+    ]);
+    expect(() => teams.samplePoolsPair(twoAgentPool, 1, 2, mock.createRng(1)))
+      .toThrow(/min >= 4/);
+
+    const threeAgentPool = teams.buildCanonicalTeamPool([
+      {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
+      {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
+      {agentId: 3, agentName: "Mew's Truck", teams: agent3Teams},
+    ]);
+    expect(() => teams.samplePoolsPair(threeAgentPool, 1, 2, mock.createRng(1)))
+      .toThrow(/min >= 4/);
+  });
+
+  test('samplePoolsPair deals at most 1 team from active competitors per match', () => {
+    const fourAgentPool = teams.buildCanonicalTeamPool([
+      {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
+      {agentId: 2, agentName: 'Foul Play', teams: [agent1Teams[0], ...agent2Teams.slice(1)]},
+      {agentId: 3, agentName: "Mew's Truck", teams: [agent1Teams[1], ...agent3Teams.slice(1)]},
+      {agentId: 4, agentName: 'Metamon', teams: agent4Teams},
+    ]);
+    const byPacked = new Map(fourAgentPool.map(e => [e.canonicalPacked, e]));
+    const rng = mock.createRng(42);
+
+    for (let trial = 0; trial < 400; trial++) {
+      const pair = teams.samplePoolsPair(fourAgentPool, 1, 2, rng);
+      expect(pair.t1Packed).not.toBe(pair.t2Packed);
+
+      const e1 = byPacked.get(pair.t1Packed)!;
+      const e2 = byPacked.get(pair.t2Packed)!;
+      expect(e1.speciesIds).not.toEqual(e2.speciesIds);
+      expect(e1.owners.has(1) && e1.owners.has(2)).toBe(false);
+      expect(e2.owners.has(1) && e2.owners.has(2)).toBe(false);
+      for (const owner of e1.owners.keys()) {
+        expect(e2.owners.has(owner)).toBe(false);
+      }
+
+      const activeCount =
+        (e1.owners.has(1) || e1.owners.has(2) ? 1 : 0) +
+        (e2.owners.has(1) || e2.owners.has(2) ? 1 : 0);
+      expect(activeCount).toBeLessThanOrEqual(1);
+      expect(pair.t1Label.startsWith('P1:')).toBe(e1.owners.has(1));
+      expect(pair.t1Label.startsWith('P2:')).toBe(e1.owners.has(2));
+      expect(pair.t2Label.startsWith('P1:')).toBe(e2.owners.has(1));
+      expect(pair.t2Label.startsWith('P2:')).toBe(e2.owners.has(2));
+    }
+  });
+
+  test('samplePoolsPair deals two third-party teams on intra-project matches', () => {
+    const fourAgentPool = teams.buildCanonicalTeamPool([
+      {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
+      {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
+      {agentId: 3, agentName: "Mew's Truck", teams: agent3Teams},
+      {agentId: 4, agentName: 'Metamon', teams: agent4Teams},
+    ]);
+    const byPacked = new Map(fourAgentPool.map(e => [e.canonicalPacked, e]));
+    const rng = mock.createRng(77);
+
+    for (let trial = 0; trial < 100; trial++) {
+      const selfPair = teams.samplePoolsPair(fourAgentPool, 1, 1, rng);
+      expect(byPacked.get(selfPair.t1Packed)!.owners.has(1)).toBe(false);
+      expect(byPacked.get(selfPair.t2Packed)!.owners.has(1)).toBe(false);
+      expect(selfPair.t1Label).toMatch(/^[0-9a-f]{12}$/);
+      expect(selfPair.t2Label).toMatch(/^[0-9a-f]{12}$/);
+    }
+  });
+
+  test('buildCanonicalTeamPool deduplicates cosmetic forme, shiny, gender, or Lv100 sets', () => {
+    const gastroWest =
+      'Gastrodon|gastrodon|leftovers|stormdrain|earthpower,icebeam,protect,recover|' +
+      'Calm|252,,,4,252,|M||||';
+    const gastroEast =
+      'Gastrodon-East||leftovers|stormdrain|earthpower,icebeam,protect,recover|' +
+      'Calm|252,,,4,252,|F||S||';
+    const cosmeticPool = teams.buildCanonicalTeamPool([
+      {agentId: 1, agentName: 'A1', teams: [gastroWest]},
+      {agentId: 2, agentName: 'A2', teams: [gastroEast]},
+    ], 'gen9ou');
+    expect(cosmeticPool).toHaveLength(1);
+    expect([...cosmeticPool[0].owners.keys()]).toEqual([1, 2]);
+
+    const vgcL50 = agent1Teams[0];
+    const vgcL100ShinyF = vgcL50
+      .replace(/Level: 50/g, 'Level: 100\nShiny: Yes')
+      .replace(/^([A-Za-z0-9-]+) @/gm, '$1 (F) @');
+    const vgcDedupePool = teams.buildCanonicalTeamPool([
+      {agentId: 1, agentName: 'A1', teams: [vgcL50]},
+      {agentId: 2, agentName: 'A2', teams: [vgcL100ShinyF]},
+    ], 'gen9championsvgc2026regmc');
+    expect(vgcDedupePool).toHaveLength(1);
+    expect([...vgcDedupePool[0].owners.keys()]).toEqual([1, 2]);
+  });
+
+  test('canonSpecies collapses cosmetic formes while preserving distinct ability formes', () => {
+    const gen9Dex = teamMetric.getDex('gen9ou');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Gastrodon-East')).toBe('gastrodon');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Sinistcha-Masterpiece')).toBe('sinistcha');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Maushold-Four')).toBe('maushold');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Meowstic-F')).toBe('meowsticf');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Toxtricity-Low-Key')).toBe('toxtricitylowkey');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Squawkabilly-Yellow')).toBe('squawkabillyyellow');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Basculin-White-Striped'))
+      .toBe('basculinwhitestriped');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Greninja-Bond')).toBe('greninjabond');
+    expect(teamMetric.canonSpecies(gen9Dex, 'Rockruff-Dusk')).toBe('rockruffdusk');
+  });
+
+  test('validateCompetitorTeamsIncremental requires 4 moves only when learnset >= 4', () => {
+    const vgcL50 = agent1Teams[0];
+    const threeMovePaste = vgcL50.replace(/\n- [^\n]+/, '');
+    const threeMoveRes = teams.validateCompetitorTeamsIncremental(
+      [threeMovePaste],
+      {format: 'gen9championsvgc2026regmc', pools: [], teams: 1}
+    );
+    expect(threeMoveRes.newlySavedCount).toBe(0);
+    expect(threeMoveRes.rejections[0]?.reason).toMatch(/must have 4 moves \(found 3\)/);
+
+    const shinyPaste = vgcL50.replace('Level: 50', 'Level: 50\nShiny: Yes');
+    const shinyRes = teams.validateCompetitorTeamsIncremental(
+      [shinyPaste],
+      {format: 'gen9championsvgc2026regmc', pools: [], teams: 1}
+    );
+    expect(shinyRes.complete).toBe(true);
+    expect(shinyRes.allSaved[0]).toContain('|S|');
+
+    const dittoOuPaste = [
+      'Ditto @ Choice Scarf\nAbility: Imposter\nEVs: 252 HP / 4 Atk / 252 Def\n' +
+      'Relaxed Nature\nIVs: 0 Spe\n- Transform',
+      'Great Tusk @ Heavy-Duty Boots\nAbility: Protosynthesis\nEVs: 252 Atk / 4 SpD / 252 Spe\n' +
+      'Jolly Nature\n- Headlong Rush\n- Ice Spinner\n- Rapid Spin\n- Close Combat',
+      'Kingambit @ Leftovers\nAbility: Supreme Overlord\nEVs: 252 HP / 252 Atk / 4 SpD\n' +
+      'Adamant Nature\n- Kowtow Cleave\n- Sucker Punch\n- Swords Dance\n- Iron Head',
+      'Gholdengo @ Air Balloon\nAbility: Good as Gold\nEVs: 252 SpA / 4 SpD / 252 Spe\n' +
+      'Timid Nature\nIVs: 0 Atk\n- Make It Rain\n- Shadow Ball\n- Nasty Plot\n- Recover',
+      'Dragapult @ Choice Specs\nAbility: Infiltrator\nEVs: 252 SpA / 4 SpD / 252 Spe\n' +
+      'Timid Nature\n- Draco Meteor\n- Shadow Ball\n- Flamethrower\n- U-turn',
+      'Gliscor @ Toxic Orb\nAbility: Poison Heal\nEVs: 244 HP / 252 SpD / 12 Spe\n' +
+      'Careful Nature\n- Earthquake\n- Protect\n- Spikes\n- Toxic',
+    ].join('\n\n');
+    const dittoRes = teams.validateCompetitorTeamsIncremental(
+      [dittoOuPaste],
+      {format: 'gen9ou', pools: [], teams: 1}
+    );
+    expect(dittoRes.complete).toBe(true);
+  });
+
+  test('samplePoolsPair achieves 2/N per-agent plus 1/(N*K) per-slot uniformity', () => {
+    for (const nAgents of [4, 5]) {
+      const kTeams = 20;
+      const syntheticPool: teams.CanonicalPoolEntry[] = [];
+      for (let agentId = 1; agentId <= nAgents; agentId++) {
+        for (let slot = 1; slot <= kTeams; slot++) {
+          syntheticPool.push({
+            canonicalPacked: `packed-agent-${agentId}-slot-${slot}`,
+            speciesIds: [
+              `sp-${agentId}-${slot}-1`, `sp-${agentId}-${slot}-2`, `sp-${agentId}-${slot}-3`,
+              `sp-${agentId}-${slot}-4`, `sp-${agentId}-${slot}-5`, `sp-${agentId}-${slot}-6`,
+            ],
+            owners: new Map([[agentId, {agentName: `Agent ${agentId}`, slotIndex: slot}]]),
+          });
+        }
+      }
+      const lookup = new Map(syntheticPool.map(e => [e.canonicalPacked, e]));
+      const agentCounts = new Map<number, number>();
+      const t1Counts = new Map<string, number>();
+      const t2Counts = new Map<string, number>();
+      const unifRng = mock.createRng(1000 + nAgents);
+      const trials = 40_000;
+      for (let t = 0; t < trials; t++) {
+        const sampled = teams.samplePoolsPair(syntheticPool, 1, 2, unifRng);
+        t1Counts.set(sampled.t1Packed, (t1Counts.get(sampled.t1Packed) ?? 0) + 1);
+        t2Counts.set(sampled.t2Packed, (t2Counts.get(sampled.t2Packed) ?? 0) + 1);
+        for (const packed of [sampled.t1Packed, sampled.t2Packed]) {
+          const ownerId = [...lookup.get(packed)!.owners.keys()][0];
+          agentCounts.set(ownerId, (agentCounts.get(ownerId) ?? 0) + 1);
+        }
+      }
+      const expectedAgentProb = 2 / nAgents;
+      for (let agentId = 1; agentId <= nAgents; agentId++) {
+        const observed = (agentCounts.get(agentId) ?? 0) / trials;
+        expect(Math.abs(observed - expectedAgentProb)).toBeLessThan(0.01);
+      }
+      const expectedSlotProb = 1 / (nAgents * kTeams);
+      for (const entry of syntheticPool) {
+        const obs1 = (t1Counts.get(entry.canonicalPacked) ?? 0) / trials;
+        const obs2 = (t2Counts.get(entry.canonicalPacked) ?? 0) / trials;
+        expect(Math.abs(obs1 - expectedSlotProb)).toBeLessThan(0.003);
+        expect(Math.abs(obs2 - expectedSlotProb)).toBeLessThan(0.003);
+      }
+    }
+  });
+});
+
+describe('mock scenarios & E2E lifecycle', () => {
   const realFetch = globalThis.fetch;
 
   afterEach(() => {
@@ -72,210 +278,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
     teams.clearReferencePoolCache();
   });
 
-  test('samplePoolsPair enforces min >= 4, <= 1 of 40 active teams, and exact 2/N uniformity',
-    () => {
-      const agent1Teams = mock.generateValidVgcTeams(20, 0);
-      const agent2Teams = mock.generateValidVgcTeams(20, 1);
-      const agent3Teams = mock.generateValidVgcTeams(20, 2);
-      const agent4Teams = mock.generateValidVgcTeams(20, 3);
-
-      // With < 4 distinct agent pools (2 or 3 agents), sampling must reject
-      const twoAgentPool = teams.buildCanonicalTeamPool([
-        {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
-        {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
-      ]);
-      expect(() => teams.samplePoolsPair(twoAgentPool, 1, 2, mock.createRng(1)))
-        .toThrow(/min >= 4/);
-
-      const threeAgentPool = teams.buildCanonicalTeamPool([
-        {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
-        {agentId: 2, agentName: 'Foul Play', teams: agent2Teams},
-        {agentId: 3, agentName: 'Mew\'s Truck', teams: agent3Teams},
-      ]);
-      expect(() => teams.samplePoolsPair(threeAgentPool, 1, 2, mock.createRng(1)))
-        .toThrow(/min >= 4/);
-
-      // Include cross-competitor duplicates (1 & 2 share team #0; 1 & 3 share team #1)
-      const fourAgentPool = teams.buildCanonicalTeamPool([
-        {agentId: 1, agentName: '0 ERROR', teams: agent1Teams},
-        {agentId: 2, agentName: 'Foul Play', teams: [agent1Teams[0], ...agent2Teams.slice(1)]},
-        {agentId: 3, agentName: 'Mew\'s Truck', teams: [agent1Teams[1], ...agent3Teams.slice(1)]},
-        {agentId: 4, agentName: 'Metamon', teams: agent4Teams},
-      ]);
-
-      const byPacked = new Map(fourAgentPool.map(e => [e.canonicalPacked, e]));
-      const rng = mock.createRng(42);
-      for (let trial = 0; trial < 400; trial++) {
-        const pair = teams.samplePoolsPair(fourAgentPool, 1, 2, rng);
-        expect(pair.t1Packed).not.toBe(pair.t2Packed);
-
-        const e1 = byPacked.get(pair.t1Packed)!;
-        const e2 = byPacked.get(pair.t2Packed)!;
-        expect(e1.speciesIds).not.toEqual(e2.speciesIds);
-
-        // Neither team may be jointly owned by both active agents (1 & 2)
-        expect(e1.owners.has(1) && e1.owners.has(2)).toBe(false);
-        expect(e2.owners.has(1) && e2.owners.has(2)).toBe(false);
-
-        // Disjoint owners between T1 and T2
-        for (const owner of e1.owners.keys()) {
-          expect(e2.owners.has(owner)).toBe(false);
-        }
-
-        // At most 1 of {T1, T2} belongs to the 40 teams submitted by Agent 1 and Agent 2 combined
-        const activeCount =
-          (e1.owners.has(1) || e1.owners.has(2) ? 1 : 0) +
-          (e2.owners.has(1) || e2.owners.has(2) ? 1 : 0);
-        expect(activeCount).toBeLessThanOrEqual(1);
-
-        expect(pair.t1Label).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
-        expect(pair.t2Label).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
-        expect(pair.t1Label.startsWith('P1:')).toBe(e1.owners.has(1));
-        expect(pair.t1Label.startsWith('P2:')).toBe(e1.owners.has(2));
-        expect(pair.t2Label.startsWith('P1:')).toBe(e2.owners.has(1));
-        expect(pair.t2Label.startsWith('P2:')).toBe(e2.owners.has(2));
-        const prefixedCount =
-          (pair.t1Label.includes(':') ? 1 : 0) + (pair.t2Label.includes(':') ? 1 : 0);
-        expect(prefixedCount).toBe(activeCount);
-      }
-
-      // Champion vs Challenger of the same project (`agentAId === agentBId`) draws two blind
-      // third-party teams so neither side has shared-roster knowledge
-      for (let trial = 0; trial < 100; trial++) {
-        const selfPair = teams.samplePoolsPair(fourAgentPool, 1, 1, rng);
-        const s1 = byPacked.get(selfPair.t1Packed)!;
-        const s2 = byPacked.get(selfPair.t2Packed)!;
-        expect(s1.owners.has(1)).toBe(false);
-        expect(s2.owners.has(1)).toBe(false);
-        expect(selfPair.t1Label).toMatch(/^[0-9a-f]{12}$/);
-        expect(selfPair.t2Label).toMatch(/^[0-9a-f]{12}$/);
-      }
-
-      // Cosmetic / ability-identical forme variants, Shiny, Gender, and over-50 VGC levels
-      // deduplicate ownership in buildCanonicalTeamPool without stripping Shiny/Gender from
-      // stored packed teams, while mechanically distinct ability formes stay separate.
-      const gastroWest =
-        'Gastrodon|gastrodon|leftovers|stormdrain|earthpower,icebeam,protect,recover|' +
-        'Calm|252,,,4,252,|M||||';
-      const gastroEast =
-        'Gastrodon-East||leftovers|stormdrain|earthpower,icebeam,protect,recover|' +
-        'Calm|252,,,4,252,|F||S||';
-      const cosmeticPool = teams.buildCanonicalTeamPool([
-        {agentId: 1, agentName: 'A1', teams: [gastroWest]},
-        {agentId: 2, agentName: 'A2', teams: [gastroEast]},
-      ], 'gen9ou');
-      expect(cosmeticPool).toHaveLength(1);
-      expect([...cosmeticPool[0].owners.keys()]).toEqual([1, 2]);
-
-      const vgcL50 = mock.generateValidVgcTeams(1, 0)[0];
-      const vgcL100ShinyF = vgcL50
-        .replace(/Level: 50/g, 'Level: 100\nShiny: Yes')
-        .replace(/^([A-Za-z0-9-]+) @/gm, '$1 (F) @');
-      const vgcDedupePool = teams.buildCanonicalTeamPool([
-        {agentId: 1, agentName: 'A1', teams: [vgcL50]},
-        {agentId: 2, agentName: 'A2', teams: [vgcL100ShinyF]},
-      ], 'gen9championsvgc2026regmc');
-      expect(vgcDedupePool).toHaveLength(1);
-      expect([...vgcDedupePool[0].owners.keys()]).toEqual([1, 2]);
-
-      const gen9Dex = teamMetric.getDex('gen9ou');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Gastrodon-East')).toBe('gastrodon');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Sinistcha-Masterpiece')).toBe('sinistcha');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Maushold-Four')).toBe('maushold');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Meowstic-F')).toBe('meowsticf');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Toxtricity-Low-Key')).toBe('toxtricitylowkey');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Squawkabilly-Yellow')).toBe('squawkabillyyellow');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Basculin-White-Striped'))
-        .toBe('basculinwhitestriped');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Greninja-Bond')).toBe('greninjabond');
-      expect(teamMetric.canonSpecies(gen9Dex, 'Rockruff-Dusk')).toBe('rockruffdusk');
-
-      // Competitor `pools` validation rejects < 4 moves on species with >= 4 legal moves
-      // while preserving Shiny/Gender on valid packed teams.
-      const threeMovePaste = vgcL50.replace(/\n- [^\n]+/, '');
-      const threeMoveRes = teams.validateCompetitorTeamsIncremental(
-        [threeMovePaste],
-        {format: 'gen9championsvgc2026regmc', pools: [], teams: 1}
-      );
-      expect(threeMoveRes.newlySavedCount).toBe(0);
-      expect(threeMoveRes.rejections[0]?.reason).toMatch(/must have 4 moves \(found 3\)/);
-
-      const shinyPaste = vgcL50.replace('Level: 50', 'Level: 50\nShiny: Yes');
-      const shinyRes = teams.validateCompetitorTeamsIncremental(
-        [shinyPaste],
-        {format: 'gen9championsvgc2026regmc', pools: [], teams: 1}
-      );
-      expect(shinyRes.complete).toBe(true);
-      expect(shinyRes.allSaved[0]).toContain('|S|');
-
-      // Species with < 4 legal moves (e.g. Ditto) are still allowed with their full learnset.
-      const dittoOuPaste = [
-        'Ditto @ Choice Scarf\nAbility: Imposter\nEVs: 252 HP / 4 Atk / 252 Def\n' +
-        'Relaxed Nature\nIVs: 0 Spe\n- Transform',
-        'Great Tusk @ Heavy-Duty Boots\nAbility: Protosynthesis\nEVs: 252 Atk / 4 SpD / 252 Spe\n' +
-        'Jolly Nature\n- Headlong Rush\n- Ice Spinner\n- Rapid Spin\n- Close Combat',
-        'Kingambit @ Leftovers\nAbility: Supreme Overlord\nEVs: 252 HP / 252 Atk / 4 SpD\n' +
-        'Adamant Nature\n- Kowtow Cleave\n- Sucker Punch\n- Swords Dance\n- Iron Head',
-        'Gholdengo @ Air Balloon\nAbility: Good as Gold\nEVs: 252 SpA / 4 SpD / 252 Spe\n' +
-        'Timid Nature\nIVs: 0 Atk\n- Make It Rain\n- Shadow Ball\n- Nasty Plot\n- Recover',
-        'Dragapult @ Choice Specs\nAbility: Infiltrator\nEVs: 252 SpA / 4 SpD / 252 Spe\n' +
-        'Timid Nature\n- Draco Meteor\n- Shadow Ball\n- Flamethrower\n- U-turn',
-        'Gliscor @ Toxic Orb\nAbility: Poison Heal\nEVs: 244 HP / 252 SpD / 12 Spe\n' +
-        'Careful Nature\n- Earthquake\n- Protect\n- Spikes\n- Toxic',
-      ].join('\n\n');
-      const dittoRes = teams.validateCompetitorTeamsIncremental(
-        [dittoOuPaste],
-        {format: 'gen9ou', pools: [], teams: 1}
-      );
-      expect(dittoRes.complete).toBe(true);
-
-      // Verify exact 2/N per-agent and 1/(N*K) per-slot uniformity across both N=4 and N=5
-      for (const nAgents of [4, 5]) {
-        const kTeams = 20;
-        const syntheticPool: teams.CanonicalPoolEntry[] = [];
-        for (let agentId = 1; agentId <= nAgents; agentId++) {
-          for (let slot = 1; slot <= kTeams; slot++) {
-            syntheticPool.push({
-              canonicalPacked: `packed-agent-${agentId}-slot-${slot}`,
-              speciesIds: [
-                `sp-${agentId}-${slot}-1`, `sp-${agentId}-${slot}-2`, `sp-${agentId}-${slot}-3`,
-                `sp-${agentId}-${slot}-4`, `sp-${agentId}-${slot}-5`, `sp-${agentId}-${slot}-6`,
-              ],
-              owners: new Map([[agentId, {agentName: `Agent ${agentId}`, slotIndex: slot}]]),
-            });
-          }
-        }
-        const lookup = new Map(syntheticPool.map(e => [e.canonicalPacked, e]));
-        const agentCounts = new Map<number, number>();
-        const t1Counts = new Map<string, number>();
-        const t2Counts = new Map<string, number>();
-        const unifRng = mock.createRng(1000 + nAgents);
-        const trials = 40_000;
-        for (let t = 0; t < trials; t++) {
-          const sampled = teams.samplePoolsPair(syntheticPool, 1, 2, unifRng);
-          t1Counts.set(sampled.t1Packed, (t1Counts.get(sampled.t1Packed) ?? 0) + 1);
-          t2Counts.set(sampled.t2Packed, (t2Counts.get(sampled.t2Packed) ?? 0) + 1);
-          for (const packed of [sampled.t1Packed, sampled.t2Packed]) {
-            const ownerId = [...lookup.get(packed)!.owners.keys()][0];
-            agentCounts.set(ownerId, (agentCounts.get(ownerId) ?? 0) + 1);
-          }
-        }
-        const expectedAgentProb = 2 / nAgents;
-        for (let agentId = 1; agentId <= nAgents; agentId++) {
-          const observed = (agentCounts.get(agentId) ?? 0) / trials;
-          expect(Math.abs(observed - expectedAgentProb)).toBeLessThan(0.01);
-        }
-        const expectedSlotProb = 1 / (nAgents * kTeams);
-        for (const entry of syntheticPool) {
-          const obs1 = (t1Counts.get(entry.canonicalPacked) ?? 0) / trials;
-          const obs2 = (t2Counts.get(entry.canonicalPacked) ?? 0) / trials;
-          expect(Math.abs(obs1 - expectedSlotProb)).toBeLessThan(0.003);
-          expect(Math.abs(obs2 - expectedSlotProb)).toBeLessThan(0.003);
-        }
-      }
-    });
-
-  test('probabilistic expected ratings exhibit short-run variance and long-run convergence',
+  test('exhibits short-run variance before converging to expected Elo over 900 matches',
     async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-conv-'));
       const db = new Database(':memory:', {now: 1_760_000_000});
@@ -301,15 +304,12 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
           play 15 --ladder rby --balanced --tie-rate 0
         `);
 
-        // Short-run: outcomes are stochastic, not deterministically equal to expected Elo
         const shortRby = new Map(
           db.getLeaderboardEntries('gen1ou20261109').map(e => [e.agentSlug, e.elo])
         );
         expect(shortRby.get('anchoragent')).toBeCloseTo(1500, 3);
         expect(Math.round(shortRby.get('alphaagent')!)).not.toBe(1700);
 
-        // Long-run: empirical Davidson MAP ratings converge toward declared expected ratings
-        // independently on both RBY (Alpha=1700, Gamma=1300) and ADV (Alpha=1320, Gamma=1680)
         await runner.runScript(`
           play 900 --ladder rby --balanced --tie-rate 0
           play 900 --ladder adv --balanced --tie-rate 0
@@ -336,7 +336,7 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
       }
     });
 
-  test('persists state.json across sequential one-by-one commands and runs bounded simulate',
+  test('persists mock state.json identically across sequential single-line runs',
     async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-mock-seq-'));
       const dbPath = path.join(tmpDir, 'arena.sqlite');
