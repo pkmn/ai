@@ -11,7 +11,7 @@ import {encryptSecret} from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import {generateValidHarvestedTeams} from '../tools/mock';
-import {runPkmnCli} from '../tools/pkmn';
+import {parseArgs, runPkmnCli} from '../tools/pkmn';
 
 const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-arena-session-secret',
@@ -1136,12 +1136,43 @@ describe('pkmn CLI (tools/pkmn.ts)', () => {
         expect(finalRes.archivedLadder).toBe(true);
         expect(db.getLadder('gen1ou20261109')!.status).toBe('archived');
 
-        // Mint session token via `pkmn session`
+        // Mint session token via `pkmn session` (resolving real githubId from SQLite)
+        db.linkDeveloperGitHubId('pre', 987654, 1_760_000_605);
         await runPkmnCli(
           ['session', '--github', 'pre', '--secret', AUTH_CFG.sessionSecret],
           {db, now: 1_760_000_610, log}
         );
-        expect(logs[logs.length - 1]).toContain('pkmn_session=');
+        const sessionLine = logs[logs.length - 1];
+        expect(sessionLine).toContain('pkmn_session=');
+        const rawTok = decodeURIComponent(sessionLine.slice('pkmn_session='.length));
+        const verified = auth.verifyToken<auth.Session>(
+          rawTok,
+          AUTH_CFG.sessionSecret,
+          1_760_000_610
+        );
+        expect(verified?.github).toEqual({id: 987654, login: 'pre'});
+
+        // Boolean flags (`--offline`, `--none`) never swallow subsequent positional arguments
+        const parsedCli = parseArgs(['reassign-developer', '--offline', 'pre', '--none']);
+        expect(parsedCli.positional).toEqual(['reassign-developer', 'pre']);
+        expect(parsedCli.flags.get('offline')).toBe('true');
+        expect(parsedCli.flags.get('none')).toBe('true');
+
+        // create-tournament rejects unsafe IDs and unknown formats
+        await expect(runPkmnCli(
+          [
+            'create-tournament', '../bad', '--name', 'Bad', '--format', 'gen1ou',
+            '--starts', '2026-12-01T00:00:00Z',
+          ],
+          {db, now: 1_760_000_615, log}
+        )).rejects.toThrow(/Invalid tournament ID/);
+        await expect(runPkmnCli(
+          [
+            'create-tournament', '4', '--name', 'Bad Fmt', '--format', 'notarealformat99',
+            '--starts', '2026-12-01T00:00:00Z',
+          ],
+          {db, now: 1_760_000_615, log}
+        )).rejects.toThrow(/Unknown Pokémon Showdown format/);
 
         // lookup-smogon
         await runPkmnCli(['lookup-smogon', 'pre'], {

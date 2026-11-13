@@ -7,11 +7,13 @@ require('source-map-support').install();
 import * as fs from 'fs';
 import * as path from 'path';
 
+import {Dex} from '@pkmn/sim';
+
 import * as db from '../db';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as smogon from '../server/smogon';
-import {validateHarvestedTeams} from '../server/teams';
+import {ensureSimConfigured, validateHarvestedTeams} from '../server/teams';
 import {syncStaticLiveBanner} from '../static/build';
 
 export interface Options {
@@ -38,7 +40,8 @@ const USAGE = [
   '  set-ladder-status <ladder_id> <upcoming|active|settling|archived>',
   '  upload-ladder-teams <ladder_id> <teams-file>',
   '  rotate-ladder <old_ladder_id> --name "..." [--new <new_ladder_id>] ' +
-    '[--new-name "..."] [--format <format>] [--team <mode>] [--min <n>] [--teams <n>]',
+    '[--new-name "..."] [--format <format>] [--team <mode>] [--min <n>] ' +
+    '[--teams <n>] [--discord <role_id>]',
   '  reassign-developer <github-login> <target-agent-slug|--none> ' +
     '[--smogon <username.id|id|username>] [--projects <path>] [--offline]',
   '  sync-projects [--projects <path>] [--offline]',
@@ -53,7 +56,10 @@ const USAGE = [
   '  session [--github <login>] [--discord <id>:<username>] [--ttl <seconds>]',
 ].join('\n');
 
-function parseArgs(argv: string[]): {positional: string[]; flags: Map<string, string>} {
+const BOOLEAN_FLAGS = new Set(['help', 'offline', 'none']);
+const TOURNAMENT_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+export function parseArgs(argv: string[]): {positional: string[]; flags: Map<string, string>} {
   const positional: string[] = [];
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
@@ -65,7 +71,7 @@ function parseArgs(argv: string[]): {positional: string[]; flags: Map<string, st
       } else {
         const key = arg.slice(2);
         const next = argv[i + 1];
-        if (next === undefined || next.startsWith('--')) {
+        if (BOOLEAN_FLAGS.has(key) || next === undefined || next.startsWith('--')) {
           flags.set(key, 'true');
         } else {
           flags.set(key, next);
@@ -129,8 +135,32 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
       }
       discord = {id: discordFlag.slice(0, colon), username: discordFlag.slice(colon + 1)};
     }
+    let githubClaim: {id: number; login: string} | undefined;
+    if (githubLogin) {
+      let resolvedId = 0;
+      if (flags.has('github-id')) {
+        resolvedId = Number(flags.get('github-id'));
+        if (!Number.isSafeInteger(resolvedId) || resolvedId < 0) {
+          throw new Error('--github-id must be a non-negative integer');
+        }
+      } else if (options.db) {
+        resolvedId = options.db.getDeveloperByGitHub(githubLogin)?.githubId ?? 0;
+      } else {
+        const candidatePath = options.dbPath ?? db.DB_PATH;
+        if (candidatePath !== ':memory:' && fs.existsSync(candidatePath)) {
+          const tempDb = new db.Database(candidatePath);
+          try {
+            resolvedId = tempDb.getDeveloperByGitHub(githubLogin)?.githubId ?? 0;
+          } finally {
+            tempDb.close();
+          }
+        }
+      }
+      githubClaim = {id: resolvedId, login: githubLogin};
+    }
+
     const payload: auth.Session = {
-      ...(githubLogin ? {github: {id: 1, login: githubLogin}} : {}),
+      ...(githubClaim ? {github: githubClaim} : {}),
       ...(discord ? {discord} : {}),
       exp: now + ttl,
     };
@@ -254,6 +284,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           newTeam: flags.get('team') as db.TeamMode | undefined,
           newMin: min,
           newTeams: teams,
+          newDiscord: flags.get('discord'),
           now,
         });
         const nextMsg = rotated.newLadder
@@ -331,6 +362,16 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             '--starts <iso|unix> [--games <n>] [--batch <n>] [--tables <n>] ' +
             '[--hardware "..."] [--rules \'<json>\'] [--status <scheduled|running|completed>]'
           );
+        }
+        if (!TOURNAMENT_ID_RE.test(tourneyId)) {
+          throw new Error(
+            `Invalid tournament ID "${tourneyId}" (must match ^[a-z0-9][a-z0-9-]{0,31}$)`
+          );
+        }
+        ensureSimConfigured();
+        const dexFormat = Dex.formats.get(format);
+        if (!dexFormat.exists) {
+          throw new Error(`Unknown Pokémon Showdown format "${format}"`);
         }
         const startsAt = /^\d+$/.test(startsRaw)
           ? Number(startsRaw)

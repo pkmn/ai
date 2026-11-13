@@ -478,6 +478,9 @@ async function run(): Promise<void> {
     `Screenshots of ${scenarios.length} scenarios in ${path.relative(ROOT, SHOTS_DIR)}.`
   );
   for (const error of new Set(errors)) console.warn(`  error: ${error}`);
+  if (errors.length > 0) {
+    process.exitCode = 1;
+  }
 }
 
 if (require.main === module) {
