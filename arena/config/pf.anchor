@@ -1,4 +1,6 @@
 # /etc/pf.anchors/ai.pkmn.arena
-# Defense-in-depth alongside Seatbelt `(deny network*)`: drop all outbound IPv4/IPv6 traffic
-# (including loopback) from untrusted agent accounts so agents remain completely airgapped.
-block return out quick proto { tcp, udp, icmp, icmp6 } from any to any user { p1, p2 }
+# 1. Block non-loopback inbound SSH (macOS launchd socket-activates sshd on *:22).
+# 2. Drop all outbound traffic (all IPv4/IPv6 protocols, including loopback) from untrusted agent
+#    UIDs p1 (591) and p2 (592) as defense-in-depth alongside Seatbelt `(deny network*)`.
+block drop in quick on ! lo0 proto tcp from any to any port 22
+block return out quick from any to any user { 591, 592 }

@@ -9,7 +9,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/sbin/pfctl</string>
-    <string>-e</string>
+    <string>-E</string>
     <string>-f</string>
     <string>/etc/pf.conf</string>
   </array>

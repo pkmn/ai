@@ -26,6 +26,8 @@
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>AbandonProcessGroup</key>
+  <true/>
   <key>StandardOutPath</key>
   <string>/opt/arena/logs/podman.log</string>
   <key>StandardErrorPath</key>

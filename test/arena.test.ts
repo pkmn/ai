@@ -1618,6 +1618,93 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(out).toBe('7');
       const measuredMib = Number(fs.readFileSync(peakFile, 'utf8').trim());
       expect(measuredMib).toBeGreaterThanOrEqual(36);
+
+      // Validate LaunchDaemon plists, PF anchor ruleset, and live Seatbelt `sandbox.sb` enforcement
+      execFileSync('plutil', [
+        '-lint',
+        root('arena/config/ai.pkmn.arena.plist'),
+        root('arena/config/ai.pkmn.archive.plist'),
+        root('arena/config/ai.pkmn.pf.plist'),
+        root('arena/config/ai.pkmn.podman.plist'),
+        root('arena/config/ai.pkmn.tunnel.plist'),
+      ]);
+      execFileSync('/sbin/pfctl', ['-nf', root('arena/config/pf.anchor')]);
+
+      const realTmp = fs.realpathSync(tmpDir);
+      const sbRo = path.join(realTmp, 'sb-ro');
+      const sbSibling = path.join(realTmp, 'sb-sibling');
+      const sbScratch = path.join(realTmp, 'sb-scratch');
+      fs.mkdirSync(sbRo, {recursive: true});
+      fs.mkdirSync(sbSibling, {recursive: true});
+      fs.mkdirSync(sbScratch, {recursive: true});
+      fs.writeFileSync(path.join(sbRo, 'weights.txt'), 'ok-weights');
+      fs.writeFileSync(path.join(sbSibling, 'secret.txt'), 'rival-secret');
+
+      const sandboxEnv = {
+        HOME: sbScratch,
+        TMPDIR: sbScratch,
+        PATH: '/opt/homebrew/bin:/usr/bin:/bin',
+        LANG: 'C.UTF-8',
+        PYTHONHASHSEED: '0',
+      };
+      const runSandboxed = (pyCode: string) =>
+        execFileSync(
+          '/usr/bin/sandbox-exec',
+          [
+            '-f', root('arena/config/sandbox.sb'),
+            '-D', `AGENT_RO_DIR=${sbRo}`,
+            '-D', `AGENT_SCRATCH_DIR=${sbScratch}`,
+            '/usr/bin/python3',
+            '-c',
+            pyCode,
+          ],
+          {cwd: sbScratch, env: sandboxEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}
+        ).trim();
+
+      // Allowed: own bundle read, scratch write, /dev/fd process substitution, CommandLineTools
+      const allowedOut = runSandboxed([
+        'import pathlib, subprocess',
+        `w = pathlib.Path(${JSON.stringify(path.join(sbRo, 'weights.txt'))}).read_text()`,
+        `s = pathlib.Path(${JSON.stringify(path.join(sbScratch, 'out.txt'))})`,
+        's.write_text(w + "-scratch")',
+        'fd_out = subprocess.check_output(' +
+          '["/bin/bash", "-c", "cat <(echo -fd)"], text=True).strip()',
+        'print(s.read_text() + fd_out)',
+      ].join('\n'));
+      expect(allowedOut).toBe('ok-weights-scratch-fd');
+
+      // Denied: sibling agent directory read
+      expect(() => runSandboxed(
+        `open(${JSON.stringify(path.join(sbSibling, 'secret.txt'))}).read()`
+      )).toThrow();
+
+      // Denied: network bind / outbound connection
+      expect(() => runSandboxed(
+        'import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); ' +
+        's.bind(("127.0.0.1", 0))'
+      )).toThrow();
+
+      // Denied: host process-table enumeration (`kern.proc.all`)
+      expect(() => runSandboxed(
+        'import ctypes; libc = ctypes.CDLL(None); ' +
+        'mib = (ctypes.c_int * 3)(1, 14, 0); sz = ctypes.c_size_t(0); ' +
+        'rc = libc.sysctl(mib, 3, None, ctypes.byref(sz), None, 0); ' +
+        'assert rc == 0'
+      )).toThrow();
+
+      // Denied: chflags uchg on scratch file
+      expect(() => execFileSync(
+        '/usr/bin/sandbox-exec',
+        [
+          '-f', root('arena/config/sandbox.sb'),
+          '-D', `AGENT_RO_DIR=${sbRo}`,
+          '-D', `AGENT_SCRATCH_DIR=${sbScratch}`,
+          '/usr/bin/chflags',
+          'uchg',
+          path.join(sbScratch, 'out.txt'),
+        ],
+        {cwd: sbScratch, env: sandboxEnv, stdio: 'pipe'}
+      )).toThrow();
     }
   });
 });
