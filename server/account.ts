@@ -13,6 +13,7 @@ import {
   escapeHtml,
   formatUtcDate,
   formatUtcDateTime,
+  installHeadSupport,
   isPrivateOrLoopbackHost,
   renderTemplate,
   root,
@@ -105,17 +106,28 @@ function readBody(req: http.IncomingMessage, maxBytes = MAX_SUBMISSION_BYTES): P
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let settled = false;
     req.on('data', (chunk: Buffer) => {
+      if (settled) return;
       total += chunk.length;
       if (total > maxBytes) {
-        req.destroy();
+        settled = true;
+        req.resume();
         reject(Object.assign(new Error('Submission payload exceeds 512 KB limit.'), {status: 413}));
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', err => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
   });
 }
 
@@ -699,6 +711,7 @@ export function validateArtifactUrl(
 }
 
 export function register(app: polka.Polka, options: Options) {
+  installHeadSupport(app);
   const {db, auth} = options;
   const getNow = options.now ?? (() => Math.floor(Date.now() / 1000));
   const getPools = () => options.poolsByLadder ??
@@ -829,7 +842,24 @@ export function register(app: polka.Polka, options: Options) {
           remainingTeams: savedTeamsJson[l.id]?.remainingCount ?? 0,
         })),
         activeEntries,
-        versions,
+        versions: versions.map(v => ({
+          id: v.id,
+          version: v.version,
+          package: v.package,
+          sha256: v.sha256,
+          laddersJson: v.laddersJson,
+          tournamentsJson: v.tournamentsJson,
+          unpackedBytes: v.unpackedBytes,
+          smokeStatus: v.smokeStatus,
+          smokeDurationMillis: v.smokeDurationMillis,
+          smokeTurnMillis: v.smokeTurnMillis,
+          smokePeakRam: v.smokePeakRam,
+          smokeError: v.smokeError,
+          submittedAt: v.submittedAt,
+          activatedAt: v.activatedAt,
+          activeLadderNames: v.activeLadderNames,
+          tournamentNames: v.tournamentNames,
+        })),
       });
       return;
     }

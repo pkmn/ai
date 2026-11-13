@@ -17,7 +17,7 @@ import {
   renderer as siteRenderer,
 } from '../static/build';
 import * as projects from '../static/projects';
-import {escapeHtml, renderTemplate, root} from '../static/util';
+import {escapeHtml, installHeadSupport, renderTemplate, root} from '../static/util';
 import {getDex, hashTeam} from '../teams';
 
 import * as arena from './arena';
@@ -2025,6 +2025,7 @@ const ASSET_EXT_RE = /\.[a-z0-9]{1,8}$/i;
 // invalidates automatically on SQLite writes (`PRAGMA data_version` + `total_changes()`) and live
 // Arena worker sequence updates.
 export function register(app: polka.Polka, options: Options) {
+  installHeadSupport(app);
   const {db, arena: arenaHandle} = options;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const staticDir = options.staticDir ?? STATIC_DIR;
@@ -2147,6 +2148,13 @@ export function register(app: polka.Polka, options: Options) {
     }
     res.setHeader('Cache-Control', cacheControl);
     res.setHeader('ETag', entry.etag);
+    if (entry.contentType === 'image/svg+xml') {
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+      );
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
     if (req.headers['if-none-match'] === entry.etag) {
       res.statusCode = 304;
       res.end();

@@ -13,7 +13,7 @@ import * as yaml from 'yaml';
 import * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
 import {Project} from '../static/projects';
-import {escapeHtml, root, slugify, toID} from '../static/util';
+import {escapeHtml, installHeadSupport, root, slugify, toID} from '../static/util';
 
 import * as auth from './auth';
 
@@ -889,6 +889,7 @@ export class Wiki {
 }
 
 export function register(app: polka.Polka, options: Options = {}): Wiki {
+  installHeadSupport(app);
   const wiki = new Wiki(options);
   wiki.auth.register(app);
   const getLiveTournament = () => options.db?.getRunningTournament();

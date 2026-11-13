@@ -6,7 +6,7 @@ import * as path from 'path';
 import polka from 'polka';
 
 import type * as db from '../db';
-import {VERSION_RE, escapeHtml, root, validateAgentName} from '../static/util';
+import {VERSION_RE, escapeHtml, installHeadSupport, root, validateAgentName} from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
@@ -1509,6 +1509,7 @@ function parseCompletedTournamentGame(
 // The Mac Mini Arena host initiates all connections to the Linode web server authenticated by
 // Bearer $ARENA_SECRET, so the public VPS holds zero inbound credentials to the execution host.
 export function register(app: polka.Polka, options: Options): Handle {
+  installHeadSupport(app);
   const {db} = options;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const watchdogMillis = options.watchdogTimeoutMillis ?? WATCHDOG_TIMEOUT_MILLIS;
@@ -2831,6 +2832,10 @@ export function register(app: polka.Polka, options: Options): Handle {
     const parsedUrl = new URL(req.url ?? '/api/battles/stream', 'http://localhost');
     const once = parsedUrl.searchParams.get('once');
     openSse(res);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     sendSse(res, 'snapshot', getLiveDocument());
     if (once === '1' || once === 'true') {
       res.end();
@@ -2864,6 +2869,10 @@ export function register(app: polka.Polka, options: Options): Handle {
     const parsedUrl = new URL(req.url ?? '/', 'http://localhost');
     const once = parsedUrl.searchParams.get('once');
     openSse(res);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     const doc = buildTournamentDocument(db, publicDir, tournament, 50);
     sendSse(res, 'snapshot', {
       ...doc,

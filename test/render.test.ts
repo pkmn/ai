@@ -16,7 +16,7 @@ import * as render from '../server/render';
 import {formatPoolTeamLabel} from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import {syncStaticLiveBanner} from '../static/build';
-import {root} from '../static/util';
+import {renderTemplate, root} from '../static/util';
 import {hashTeam} from '../teams';
 import {generateValidVgcTeams} from '../tools/mock';
 import {runPkmnCli} from '../tools/pkmn';
@@ -1420,4 +1420,65 @@ describe('Dynamic SSR Arena Views (/arena, ladders, tournaments, /projects/:agen
         await h.close();
       }
     });
+
+  it('enforces single-pass renderTemplate, SVG CSP sandbox, and HTTP HEAD support', async () => {
+    expect(
+      renderTemplate('{{{raw}}}|{{esc}}', {
+        raw: '<span>{{esc}}</span>',
+        esc: '<script>',
+      })
+    ).toBe('<span>{{esc}}</span>|&lt;script&gt;');
+
+    const avatarsDir = path.join(path.dirname(tmpPublic), 'svg-avatars');
+    fs.mkdirSync(avatarsDir, {recursive: true});
+    fs.writeFileSync(
+      path.join(avatarsDir, 'foul-play.svg'),
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>',
+      'utf8'
+    );
+    db.syncProjectsFromYaml(`
+- name: Foul Play
+  active: 2019
+  arena:
+    qualified: true
+    logo: foul-play.svg
+    owners:
+      pmariglia: pmariglia.535629
+`, avatarsDir, NOW);
+    createVersionAndPassSmoke(db, 'foul-play', '1.0.0', ['gen1ou20261109'], DAY_1);
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, avatarsDir});
+    try {
+      const svgRes = await fetch(`${h.baseUrl}/projects/foul-play.svg`);
+      expect(svgRes.status).toBe(200);
+      expect(svgRes.headers.get('content-type')).toBe('image/svg+xml');
+      expect(svgRes.headers.get('content-security-policy')).toBe(
+        "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+      );
+      expect(svgRes.headers.get('x-content-type-options')).toBe('nosniff');
+
+      const getArena = await fetch(`${h.baseUrl}/arena.json`);
+      const etag = getArena.headers.get('etag');
+      const fullText = await getArena.text();
+      expect(etag).toBeTruthy();
+
+      const headArena = await fetch(`${h.baseUrl}/arena.json`, {method: 'HEAD'});
+      expect(headArena.status).toBe(200);
+      expect(headArena.headers.get('etag')).toBe(etag);
+      expect(Number(headArena.headers.get('content-length'))).toBe(Buffer.byteLength(fullText));
+      expect(await headArena.text()).toBe('');
+
+      const head304 = await fetch(`${h.baseUrl}/arena.json`, {
+        method: 'HEAD',
+        headers: {'If-None-Match': etag!},
+      });
+      expect(head304.status).toBe(304);
+
+      const headStream = await fetch(`${h.baseUrl}/api/battles/stream`, {method: 'HEAD'});
+      expect(headStream.status).toBe(200);
+      expect(await headStream.text()).toBe('');
+    } finally {
+      await h.close();
+    }
+  });
 });

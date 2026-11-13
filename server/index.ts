@@ -6,7 +6,7 @@ import {serve} from 'site';
 
 import {Database} from '../db';
 import {syncStaticLiveBanner} from '../static/build';
-import {ROOT, root} from '../static/util';
+import {ROOT, installHeadSupport, root} from '../static/util';
 
 import * as account from './account';
 import * as arena from './arena';
@@ -86,6 +86,7 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
     };
   }
 
+  installHeadSupport(app);
   const wikiInstance = new wiki.Wiki({
     db,
     auth: new Auth({

@@ -1520,10 +1520,13 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.post('/discord/interactions', (req, res) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let settled = false;
     req.on('data', (chunk: Buffer) => {
+      if (settled) return;
       total += chunk.length;
       if (total > MAX_INTERACTION_BYTES) {
-        req.destroy();
+        settled = true;
+        req.resume();
         res.writeHead(413);
         res.end();
         return;
@@ -1531,6 +1534,8 @@ export function register(app: polka.Polka, options: Options): Handle {
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       ready
         .then(() => {
           const rawBody = Buffer.concat(chunks).toString('utf8');
@@ -1545,6 +1550,8 @@ export function register(app: polka.Polka, options: Options): Handle {
         });
     });
     req.on('error', err => {
+      if (settled) return;
+      settled = true;
       console.error('Error reading interaction request:', err);
       res.writeHead(500);
       res.end();

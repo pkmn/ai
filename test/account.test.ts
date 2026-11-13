@@ -1392,5 +1392,56 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       expect(tooLong.status).toBe(400);
       const errBody = await tooLong.json() as {error: string};
       expect(errBody.error).toMatch(/1[–-]12 chars/);
+
+      // Oversized > 512 KB submission returns 413 cleanly without EPIPE
+      const oversized = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {Cookie: cookie, 'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          version: '1.0.0',
+          url: 'https://github.com/pkmn/0-error.tar.zst',
+          sha256: SHA_A,
+          ladders: ['gen1ou20261109'],
+          padding: 'x'.repeat(600_000),
+        }),
+      });
+      expect(oversized.status).toBe(413);
+
+      // Submit valid pending version with private authToken + presigned URL and verify
+      // /account.json omits authTokenEncoding, url, developerId, and notified, and supports HEAD
+      const validSub = await realFetch(`${baseUrl}/api/submissions`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://releases.example.com/0-error.tar.zst?X-Amz-Signature=topsecret',
+          sha256: SHA_A,
+          authToken: 'ghp_supersecret_token',
+          ladders: ['gen1ou20261109'],
+        }),
+      });
+      expect(validSub.status).toBe(201);
+
+      const afterSubJson = await (await realFetch(`${baseUrl}/account.json`, {
+        headers: {Cookie: cookie},
+      })).json() as {versions: Array<Record<string, unknown>>};
+      expect(afterSubJson.versions).toHaveLength(1);
+      expect(afterSubJson.versions[0].version).toBe('1.0.0');
+      expect(afterSubJson.versions[0].authTokenEncoding).toBeUndefined();
+      expect(afterSubJson.versions[0].url).toBeUndefined();
+      expect(afterSubJson.versions[0].developerId).toBeUndefined();
+      expect(afterSubJson.versions[0].notified).toBeUndefined();
+
+      const headJson = await realFetch(`${baseUrl}/account.json`, {
+        method: 'HEAD',
+        headers: {Cookie: cookie},
+      });
+      expect(headJson.status).toBe(200);
+      expect(await headJson.text()).toBe('');
     });
 });

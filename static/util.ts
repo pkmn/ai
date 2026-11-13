@@ -1,3 +1,4 @@
+import * as http from 'http';
 import * as net from 'net';
 import * as path from 'path';
 
@@ -99,9 +100,72 @@ export const renderTemplate = (
   template: string,
   vars: Record<string, string | number | undefined>
 ) =>
-  template
-    .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => String(vars[k] ?? ''))
-    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => escapeHtml(String(vars[k] ?? '')));
+  template.replace(
+    /\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}/g,
+    (_, rawKey?: string, escapedKey?: string) =>
+      rawKey !== undefined
+        ? String(vars[rawKey] ?? '')
+        : escapeHtml(String(vars[escapedKey!] ?? ''))
+  );
+
+const HEAD_SUPPORT = Symbol('pkmn.headSupport');
+
+// Polka (`trouter`) only matches routes registered for the exact HTTP method, returning 404 on
+// `HEAD` requests to `app.get(...)` routes. Installing this idempotent shim falls back to `GET`
+// route lookup when no explicit `HEAD` route exists and suppresses response body bytes while
+// preserving status codes, `ETag` / `304`, redirects, and `Content-Length`.
+export function installHeadSupport(app: object) {
+  const tagged = app as Record<symbol, boolean>;
+  if (tagged[HEAD_SUPPORT]) return;
+  Object.defineProperty(tagged, HEAD_SUPPORT, {value: true, enumerable: false});
+
+  const router = app as {
+    find: (method: string, pathname: string) => unknown;
+    use: (
+      fn: (req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => void
+    ) => unknown;
+  };
+  const origFind = router.find.bind(router);
+  router.find = (method: string, pathname: string) => {
+    const found = origFind(method, pathname);
+    if (method === 'HEAD' && !found) {
+      return origFind('GET', pathname);
+    }
+    return found;
+  };
+
+  router.use((req, res, next) => {
+    if (req.method === 'HEAD') {
+      let wroteChunks = false;
+      const origEnd = res.end.bind(res);
+      res.write = (() => {
+        wroteChunks = true;
+        return true;
+      }) as typeof res.write;
+      res.end = ((chunk?: unknown, ...rest: unknown[]) => {
+        if (
+          !wroteChunks &&
+          !res.headersSent &&
+          res.statusCode !== 204 &&
+          res.statusCode !== 304 &&
+          !res.hasHeader('Content-Length') &&
+          (typeof chunk === 'string' || Buffer.isBuffer(chunk))
+        ) {
+          res.setHeader('Content-Length', String(Buffer.byteLength(chunk)));
+        }
+        const cb = typeof chunk === 'function'
+          ? chunk
+          : typeof rest[0] === 'function'
+            ? rest[0]
+            : typeof rest[1] === 'function'
+              ? rest[1]
+              : undefined;
+        return cb ? origEnd(cb as () => void) : origEnd();
+      }) as typeof res.end;
+    }
+    next();
+  });
+}
 
 export function formatUtcDate(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
