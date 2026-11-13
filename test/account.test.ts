@@ -206,13 +206,34 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  const cookieFor = (login: string) => {
+  const githubIdFor = (login: string): number => {
+    const existing = db.getDeveloperByGitHub(login)?.githubId;
+    if (existing !== undefined) return existing;
+    let h = 2166136261;
+    for (let i = 0; i < login.length; i++) {
+      h = Math.imul(h ^ login.charCodeAt(i), 16777619) >>> 0;
+    }
+    return (h % 900_000_000) + 10_000;
+  };
+
+  const cookieFor = (login: string, id = githubIdFor(login)) => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const tok = auth.signToken({github: {id: 1, login}, exp}, AUTH_CFG.sessionSecret);
+    const tok = auth.signToken({github: {id, login}, exp}, AUTH_CFG.sessionSecret);
     return `${auth.SESSION_COOKIE}=${encodeURIComponent(tok)}`;
   };
 
   test('models Pending -> Qualified -> Eligible lifecycle & wiki access for Pending', async () => {
+    db.linkDeveloperGitHubId('pre', githubIdFor('pre'), currentNow);
+    const mismatchedId = await realFetch(`${baseUrl}/account`, {
+      headers: {Cookie: cookieFor('pre', 999_999)},
+      redirect: 'manual',
+    });
+    expect(mismatchedId.status).toBe(302);
+    const renamedHandle = await realFetch(`${baseUrl}/account`, {
+      headers: {Cookie: cookieFor('pre-renamed', githubIdFor('pre'))},
+    });
+    expect(renamedHandle.status).toBe(200);
+
     const unauth = await realFetch(`${baseUrl}/account`, {redirect: 'manual'});
     expect(unauth.status).toBe(302);
     expect(unauth.headers.get('location')).toBe('/auth/github?return_to=%2Faccount%2F');

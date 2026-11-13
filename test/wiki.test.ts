@@ -204,8 +204,13 @@ describe('wiki server routes & git history', () => {
   });
 
   const sessionCookie = (login: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < login.length; i++) {
+      h = Math.imul(h ^ login.charCodeAt(i), 16777619) >>> 0;
+    }
+    const id = (h % 900_000_000) + 10_000;
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const token = auth.signToken({github: {id: 1, login}, exp}, AUTH_CFG.sessionSecret);
+    const token = auth.signToken({github: {id, login}, exp}, AUTH_CFG.sessionSecret);
     return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
   };
 
