@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- sudo cp /opt/arena/repo/arena/config/ai.pkmn.podman.plist /Library/LaunchDaemons/ai.pkmn.podman.plist -->
+<!-- sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.podman.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.pkmn.podman</string>
+  <key>UserName</key>
+  <string>pkmn</string>
+  <key>GroupName</key>
+  <string>agents</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/pkmn</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/podman</string>
+    <string>machine</string>
+    <string>start</string>
+    <string>podman-machine-default</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/opt/arena/logs/podman.log</string>
+  <key>StandardErrorPath</key>
+  <string>/opt/arena/logs/podman.err</string>
+</dict>
+</plist>

@@ -188,6 +188,7 @@ int main(int argc, char **argv) {
     if (slot && (strcmp(slot, "p1") == 0 || strcmp(slot, "p2") == 0)) {
       char scratch[32];
       snprintf(scratch, sizeof(scratch), "/Volumes/%c%c", slot[0] - 32, slot[1]);
+      (void)chdir(scratch);
       if (target_uid != getuid()) {
         // Supervisor runs as `pkmn`; drop child to role account `p1`/`p2` with scrubbed env
         int rem = argc - cmd_idx;
@@ -205,7 +206,7 @@ int main(int argc, char **argv) {
         sudo_argv[k++] = "-i";
         sudo_argv[k++] = home_kv;
         sudo_argv[k++] = tmp_kv;
-        sudo_argv[k++] = "PATH=/usr/bin:/bin";
+        sudo_argv[k++] = "PATH=/opt/homebrew/bin:/usr/bin:/bin";
         sudo_argv[k++] = "LANG=C.UTF-8";
         sudo_argv[k++] = "PYTHONHASHSEED=0";
         for (int i = 0; i < rem; i++) {
@@ -220,7 +221,7 @@ int main(int argc, char **argv) {
       environ = empty_env;
       setenv("HOME", scratch, 1);
       setenv("TMPDIR", scratch, 1);
-      setenv("PATH", "/usr/bin:/bin", 1);
+      setenv("PATH", "/opt/homebrew/bin:/usr/bin:/bin", 1);
       setenv("LANG", "C.UTF-8", 1);
       setenv("PYTHONHASHSEED", "0", 1);
     }

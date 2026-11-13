@@ -132,8 +132,11 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     'validates syntax and presence of all arena/config, arena/bin, and arena/scripts files',
     () => {
       const expectedFiles = [
+        'arena/SETUP.md',
         'arena/config/ai.pkmn.arena.plist',
+        'arena/config/ai.pkmn.archive.plist',
         'arena/config/ai.pkmn.pf.plist',
+        'arena/config/ai.pkmn.podman.plist',
         'arena/config/ai.pkmn.tunnel.plist',
         'arena/config/pf.anchor',
         'arena/config/sandbox.sb',
@@ -142,6 +145,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         'arena/config/storage.conf',
         'arena/config/sudoers',
         'arena/bin/arena',
+        'arena/bin/baseline',
         'arena/bin/limit.c',
         'arena/bin/unpack',
         'arena/bin/tourney-agent',
@@ -162,6 +166,21 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         root('arena/scripts/bake-image.sh'),
         root('arena/scripts/archive.sh'),
       ]);
+      execFileSync('sh', ['-n', root('arena/bin/baseline')]);
+      const baselineOut = execFileSync(root('arena/bin/baseline'), [], {
+        input: [
+          '|tournament|byot|{"format":"[Gen 9] OU"}',
+          '|request|{"wait":true}',
+          '|request|{"teamPreview":true,"maxChosenTeamSize":4}',
+          '|request|{"teamPreview":true}',
+          '|request|{"active":[{"moves":[{"id":"tackle"}]}]}',
+        ].join('\n') + '\n',
+        encoding: 'utf8',
+      })
+        .trim()
+        .split('\n');
+      expect(baselineOut[0]?.startsWith('/utm ')).toBe(true);
+      expect(baselineOut.slice(1)).toEqual(['/team 1234', '/team 123456', 'default']);
       execFileSync('python3', ['-m', 'py_compile', root('arena/bin/unpack')]);
       expect(typeof arenaIndex.runDaemon).toBe('function');
 

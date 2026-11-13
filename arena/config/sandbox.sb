@@ -45,7 +45,19 @@
   (iokit-user-client-class "IOSurfaceRootUserClient")
   (iokit-user-client-class "H11ANEInDirectPathClient"))
 
-;; 5. Read-only access to macOS system libraries, frameworks, and devices (/dev/null, /dev/urandom)
+;; 5. Read-only access to macOS system libraries, frameworks, devices, and era-matched stats
+(allow file-read-metadata
+  (literal "/Volumes")
+  (literal "/opt")
+  (literal "/opt/arena")
+  (literal "/opt/arena/agents")
+  (literal "/var")
+  (literal "/tmp")
+  (literal "/etc")
+  (literal "/private")
+  (literal "/private/var")
+  (literal "/private/etc"))
+
 (allow file-read*
   (literal "/")
   (literal "/dev/null")
@@ -58,17 +70,20 @@
   (subpath "/usr/share")
   (subpath "/Library/Apple")
   (subpath "/Library/Frameworks")
-  (subpath "/private/var/db/timezone"))
+  (subpath "/private/var/db/timezone")
+  (subpath "/private/var/select")
+  (subpath "/opt/arena/stats"))
 
 (allow file-write-data
   (literal "/dev/null")
   (literal "/dev/zero"))
 
-;; 6. Read/execute ONLY the specific agent's immutable bundle directory (not other agents!)
+;; 6. Read/execute standard utilities, Homebrew runtimes, and ONLY the specific agent's immutable
+;;    bundle directory (never /opt/arena/agents as a whole, /opt/arena/teams, or /opt/arena/state!)
 (allow file-read* process-exec
-  (literal "/bin/sh")
-  (literal "/bin/bash")
-  (literal "/usr/bin/env")
+  (subpath "/bin")
+  (subpath "/usr/bin")
+  (subpath "/opt/homebrew")
   (subpath (param "AGENT_RO_DIR")))
 
 ;; 7. Read/write ONLY the specific player slot's quota-capped APFS scratch volume (/Volumes/P1 or P2),

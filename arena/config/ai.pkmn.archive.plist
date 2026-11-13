@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- sudo cp /opt/arena/repo/arena/config/ai.pkmn.archive.plist /Library/LaunchDaemons/ai.pkmn.archive.plist -->
+<!-- sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.pkmn.archive</string>
+  <key>UserName</key>
+  <string>pkmn</string>
+  <key>GroupName</key>
+  <string>agents</string>
+  <key>WorkingDirectory</key>
+  <string>/opt/arena/repo</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/arena/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/sbin/taskpolicy</string>
+    <string>-b</string>
+    <string>/opt/arena/repo/arena/scripts/archive.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/opt/arena/logs/archive.log</string>
+  <key>StandardErrorPath</key>
+  <string>/opt/arena/logs/archive.err</string>
+</dict>
+</plist>

@@ -554,12 +554,15 @@ What `setup-arena.sh` provisions:
 4. **System Hardening Configs:** Installs `/etc/ssh/sshd_config.d/100-arena-hardening.conf`
    (`ListenAddress 127.0.0.1:22`), `/etc/pf.anchors/ai.pkmn.arena`, `/opt/arena/etc/sandbox.sb`,
    and `/etc/sudoers.d/arena`.
-5. **Compiled Supervisor & Binaries:** Compiles `arena/bin/limit.c` -> `/opt/arena/bin/limit` and
-   installs `/opt/arena/bin/arena` and `/opt/arena/bin/unpack` (`root:wheel`, `0755`).
+5. **Compiled Supervisor & Binaries:** Compiles `arena/bin/limit.c` -> `/opt/arena/bin/limit`,
+   installs `/opt/arena/bin/arena` and `/opt/arena/bin/unpack` (`root:wheel`, `0755`), and installs
+   the deterministic smoke-test baseline agent at `/opt/arena/agents/_baseline/run`.
 6. **Headless Power & Spotlight:** Sets `pmset` (`sleep 0 disksleep 0 displaysleep 0 autorestart 1`),
    disables Spotlight on `/Volumes/{P1,P2,Staging,Archive}`, and disables automatic macOS updates.
-7. **Podman VM & LaunchDaemons:** Initializes `podman-machine-default` (`8` vCPUs, `14 GiB` RAM,
-   `64 GB` disk) and copies `ai.pkmn.{pf,tunnel,arena}.plist` to `/Library/LaunchDaemons/`.
+7. **Podman VM & LaunchDaemons:** Initializes `podman-machine-default` (`10` vCPUs, `30 GiB` /
+   `30,720 MiB` RAM, `64 GB` disk, zero swap), installs `/etc/containers/storage.conf`
+   (`size = "500M"` overlay cap) inside the VM, and copies
+   `ai.pkmn.{pf,tunnel,podman,arena,archive}.plist` to `/Library/LaunchDaemons/`.
 
 ### Step 5.2: Bootstrap `ai.pkmn.pf` & Reload Hardened `sshd`
 
@@ -575,70 +578,16 @@ sudo launchctl kickstart -k system/com.openssh.sshd
 '
 ```
 
-### Step 5.3: Start `podman-machine-default`, Configure 16 GiB Swap, 500 MB Overlay Cap & Boot Autostart
+### Step 5.3: Bootstrap `ai.pkmn.podman` (`podman-machine-default` Boot Autostart)
 
-Start the Podman micro-VM, ensure the 16 GiB `/var/swapfile` is active inside the VM (so a paused
-`cgroup.freeze=1` container's pages can swap out cleanly while its opponent allocates up to its
-13 GiB resident limit), install `arena/config/storage.conf` (`size = "500M"` overlay cap), and
-install a LaunchDaemon (`ai.pkmn.podman.plist`) so `podman-machine-default` starts automatically
-across unattended reboots:
+`setup-arena.sh` already initialized and started `podman-machine-default` (`10` vCPUs, `30 GiB` RAM
+so two concurrent 14 GiB `--memory=14g --memory-swap=14g` containers coexist in physical memory with
+zero disk swap) and installed `/etc/containers/storage.conf` (`size = "500M"` writable overlay cap)
+inside the VM. Bootstrap `/Library/LaunchDaemons/ai.pkmn.podman.plist` so `podman-machine-default`
+starts automatically across unattended macOS reboots:
 
 ```sh
 ssh arena '
-export PATH="/opt/homebrew/bin:$PATH"
-podman machine start podman-machine-default 2>/dev/null || true
-
-# 1. Ensure 16 GiB swapfile is active and persisted in /etc/fstab inside the Podman VM
-podman machine ssh podman-machine-default "sudo sh -c '\''
-  if [ ! -f /var/swapfile ]; then
-    fallocate -l 16G /var/swapfile
-    chmod 600 /var/swapfile
-    mkswap /var/swapfile
-  fi
-  swapon --show | grep -q /var/swapfile || swapon /var/swapfile
-  grep -q /var/swapfile /etc/fstab || echo \"/var/swapfile none swap defaults 0 0\" >> /etc/fstab
-'\''"
-
-# 2. Install /etc/containers/storage.conf (500 MB writable overlay cap)
-podman machine ssh podman-machine-default "sudo mkdir -p /etc/containers && sudo tee /etc/containers/storage.conf >/dev/null" < /opt/arena/repo/arena/config/storage.conf
-
-# 3. Install ai.pkmn.podman.plist so podman-machine-default starts automatically on macOS boot
-sudo tee /Library/LaunchDaemons/ai.pkmn.podman.plist >/dev/null <<\EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>ai.pkmn.podman</string>
-  <key>UserName</key>
-  <string>pkmn</string>
-  <key>GroupName</key>
-  <string>agents</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <key>HOME</key>
-    <string>/Users/pkmn</string>
-  </dict>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/bin/podman</string>
-    <string>machine</string>
-    <string>start</string>
-    <string>podman-machine-default</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/opt/arena/logs/podman.log</string>
-  <key>StandardErrorPath</key>
-  <string>/opt/arena/logs/podman.err</string>
-</dict>
-</plist>
-EOF
-sudo chown root:wheel /Library/LaunchDaemons/ai.pkmn.podman.plist
-sudo chmod 0644 /Library/LaunchDaemons/ai.pkmn.podman.plist
 sudo launchctl bootout system/ai.pkmn.podman 2>/dev/null || true
 sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.podman.plist
 '
@@ -720,14 +669,18 @@ PEAK_MIB="$(cat /opt/arena/state/peak_ram_p1)"
 REMAINING="$(sudo find /Volumes/P1 -mindepth 1 | wc -l | tr -d " ")"
 rm -rf "$TEST_DIR"
 
-echo "Agent stdout: ${OUT} | Peak RAM MiB: ${PEAK_MIB} | Remaining files in /Volumes/P1: ${REMAINING}"
-[[ "$OUT" == "default" && "$REMAINING" == "0" ]] && echo "PASS: Native Seatbelt + limit + cleanup verified"
+# Also verify the installed smoke-test _baseline agent inside the Seatbelt p2 slot
+BASE_OUT="$(printf "|request|{\"teamPreview\":true,\"maxChosenTeamSize\":4}\n|request|{\"active\":[{\"moves\":[{\"id\":\"tackle\"}]}]}\n" | /opt/arena/bin/arena run p2 native _baseline | tr "\n" " ")"
+/opt/arena/bin/arena cleanup p2 native
+
+echo "Agent stdout: ${OUT} | Baseline: ${BASE_OUT}| Peak RAM MiB: ${PEAK_MIB} | Remaining files in /Volumes/P1: ${REMAINING}"
+[[ "$OUT" == "default" && "$BASE_OUT" == "/team 1234 default " && "$REMAINING" == "0" ]] && echo "PASS: Native Seatbelt + limit + _baseline + cleanup verified"
 '
 ```
 
 *Expected:*
-- `Agent stdout: default | Peak RAM MiB: <N> | Remaining files in /Volumes/P1: 0`
-- `PASS: Native Seatbelt + limit + cleanup verified`
+- `Agent stdout: default | Baseline: /team 1234 default | Peak RAM MiB: <N> | Remaining files in /Volumes/P1: 0`
+- `PASS: Native Seatbelt + limit + _baseline + cleanup verified`
 
 ##### Test 5D: Verify `/opt/arena/bin/unpack` & APFS Copy-on-Write CAS Deduplication
 
@@ -759,14 +712,14 @@ echo "PASS: unpack + APFS CoW CAS deduplication verified"
 *Expected:* Two `UNPACK_OK: ... bytes in ... files` lines followed by
 `PASS: unpack + APFS CoW CAS deduplication verified`.
 
-##### Test 5E: Verify Podman VM Swap, Storage Cap & Container Sandbox Execution
+##### Test 5E: Verify Podman VM Memory (`30 GiB`, Zero Swap), Storage Cap & Container Sandbox Execution
 
 ```sh
 ssh arena '
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
 
-# 1. Verify 16 GiB swapfile and 500M overlay storage.conf inside the VM
+# 1. Verify ~30 GiB RAM, 0B swap, and 500M overlay storage.conf inside the VM
 podman machine ssh podman-machine-default "free -h && cat /etc/containers/storage.conf"
 
 # 2. Build a tiny local OCI test image and run it through /opt/arena/bin/arena
@@ -789,7 +742,7 @@ echo "Container stdout: ${OUT} | Remaining files in /Volumes/P1: ${REMAINING}"
 ```
 
 *Expected:*
-- `Swap: 15Gi ...` (`16G` swapfile active) and `size = "500M"` in `/etc/containers/storage.conf`.
+- `Mem: 29Gi ...`, `Swap: 0B`, and `size = "500M"` in `/etc/containers/storage.conf`.
 - `Container stdout: default | Remaining files in /Volumes/P1: 0`
 - `PASS: Podman container sandbox + virtiofs /Volumes/P1 mount verified`
 
@@ -872,51 +825,13 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.arena.plist
 3. Monthly `.tar` rollup of the previous month's `.7z` archives on the 1st of each month.
 4. Optional `gcloud storage rsync` to `gs://pkmn-arena` when `ARENA_GCS_SYNC=1` is set.
 
-### Step 7.1: Install & Bootstrap `ai.pkmn.archive.plist` (Runs Daily at 04:30 UTC)
+### Step 7.1: Bootstrap `ai.pkmn.archive.plist` (Runs Daily at 04:30)
+
+`setup-arena.sh` already installed `/Library/LaunchDaemons/ai.pkmn.archive.plist`. Bootstrap it so
+`launchd` runs `/opt/arena/repo/arena/scripts/archive.sh` daily at `04:30`:
 
 ```sh
 ssh arena '
-sudo tee /Library/LaunchDaemons/ai.pkmn.archive.plist >/dev/null <<\EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>ai.pkmn.archive</string>
-  <key>UserName</key>
-  <string>pkmn</string>
-  <key>GroupName</key>
-  <string>agents</string>
-  <key>WorkingDirectory</key>
-  <string>/opt/arena/repo</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/opt/arena/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/sbin/taskpolicy</string>
-    <string>-b</string>
-    <string>/opt/arena/repo/arena/scripts/archive.sh</string>
-  </array>
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key>
-    <integer>4</integer>
-    <key>Minute</key>
-    <integer>30</integer>
-  </dict>
-  <key>StandardOutPath</key>
-  <string>/opt/arena/logs/archive.log</string>
-  <key>StandardErrorPath</key>
-  <string>/opt/arena/logs/archive.err</string>
-</dict>
-</plist>
-EOF
-
-sudo chown root:wheel /Library/LaunchDaemons/ai.pkmn.archive.plist
-sudo chmod 0644 /Library/LaunchDaemons/ai.pkmn.archive.plist
 sudo launchctl bootout system/ai.pkmn.archive 2>/dev/null || true
 sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist
 '
@@ -1018,9 +933,10 @@ Wait ~60–90 seconds, then verify from your **admin laptop**:
 ssh arena '
 uptime
 sudo pfctl -s info | head -n 1
-sudo launchctl print system/ai.pkmn.tunnel | grep -E "state =|pid ="
-sudo launchctl print system/ai.pkmn.arena  | grep -E "state =|pid ="
-/opt/homebrew/bin/podman machine ssh podman-machine-default "swapon --show"
+sudo launchctl print system/ai.pkmn.tunnel  | grep -E "state =|pid ="
+sudo launchctl print system/ai.pkmn.arena   | grep -E "state =|pid ="
+sudo launchctl print system/ai.pkmn.archive | grep -E "state ="
+/opt/homebrew/bin/podman machine list
 '
 curl -fsS https://pkmn.ai/api/live.json | jq '{updatedAt, stale}'
 ```
@@ -1028,6 +944,6 @@ curl -fsS https://pkmn.ai/api/live.json | jq '{updatedAt, stale}'
 **Expected Output:**
 - `ssh arena` connects via `ProxyJump pkmn.ai`.
 - `pf` is `Enabled`.
-- Both `ai.pkmn.tunnel` and `ai.pkmn.arena` are `running`.
-- `podman-machine-default` is running with `/var/swapfile` (`16G`) active.
+- Both `ai.pkmn.tunnel` and `ai.pkmn.arena` are `running`, and `ai.pkmn.archive` is loaded.
+- `podman-machine-default` shows `Currently running` (`10` vCPUs, `30GiB` RAM).
 - `https://pkmn.ai/api/live.json` reports `"stale": false`.

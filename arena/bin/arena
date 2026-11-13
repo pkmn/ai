@@ -61,6 +61,7 @@ case "$ACTION" in
       # Run `limit` supervisor as `pkmn` (so `p1`/`p2` cannot signal it or spoof `.peak_ram`, and
       # `killall -STOP -u "$SLOT"` never freezes `limit`); `limit` drops the child to `$SLOT`.
       rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+      cd "$SCRATCH_VOL"
       exec /opt/arena/bin/limit "$SLOT" \
         /usr/bin/sandbox-exec \
           -f /opt/arena/etc/sandbox.sb \

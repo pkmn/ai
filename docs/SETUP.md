@@ -84,7 +84,8 @@ apt-get install -y git curl build-essential sqlite3 zstd
 ```
 
 Create a restricted, shell-less `tunnel` user so the Mac mini Arena runner can open an outbound SSH
-port-forward (`127.0.0.1:1234`) without shell access:
+tunnel (`-L 127.0.0.1:1234:127.0.0.1:1234` and `-R 127.0.0.1:2222:127.0.0.1:22`; see
+[`arena/SETUP.md`](../arena/SETUP.md)) without shell access:
 
 ```sh
 adduser --system --no-create-home --shell /usr/sbin/nologin tunnel
@@ -92,14 +93,21 @@ mkdir -p /etc/ssh/authorized_keys
 touch /etc/ssh/authorized_keys/tunnel
 chmod 644 /etc/ssh/authorized_keys/tunnel
 cat <<'EOF' > /etc/ssh/sshd_config.d/arena-tunnel.conf
+ClientAliveInterval 15
+ClientAliveCountMax 3
+
 Match User tunnel
     AuthorizedKeysFile /etc/ssh/authorized_keys/tunnel
     PasswordAuthentication no
-    AllowAgentForwarding no
-    X11Forwarding no
-    PermitTTY no
-    AllowTcpForwarding local
+    PubkeyAuthentication yes
+    ForceCommand /bin/false
+    AllowTcpForwarding yes
     PermitOpen 127.0.0.1:1234
+    PermitListen 127.0.0.1:2222
+    GatewayPorts no
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTTY no
 EOF
 /usr/sbin/sshd -t && service ssh reload
 ```

@@ -51,9 +51,9 @@ sudo chmod +a "user:pkmn allow list,add_file,search,delete,add_subdirectory,dele
 sudo chown pkmn:agents /Volumes/Staging
 sudo chmod 0700 /Volumes/Staging
 
-sudo mkdir -p /opt/arena/{bin,etc,agents,cas/sha256,teams,state,logs}
+sudo mkdir -p /opt/arena/{bin,etc,agents,cas/sha256,teams,stats,state,logs}
 sudo chown -R pkmn:agents /opt/arena
-sudo chmod 0755 /opt/arena /opt/arena/bin /opt/arena/etc /opt/arena/agents
+sudo chmod 0755 /opt/arena /opt/arena/bin /opt/arena/etc /opt/arena/agents /opt/arena/stats
 sudo chmod 0700 /opt/arena/cas /opt/arena/teams /opt/arena/state /opt/arena/logs
 
 if [[ -d /Volumes/Archive ]]; then
@@ -96,13 +96,18 @@ sudo chown root:wheel /etc/sudoers.d/arena
 sudo chmod 0440 /etc/sudoers.d/arena
 sudo visudo -cf /etc/sudoers.d/arena
 
-echo "==> Step 5: Compiling limit.c and installing /opt/arena/bin helpers"
+echo "==> Step 5: Compiling limit.c and installing /opt/arena/bin helpers and _baseline agent"
 clang -O2 -Wall -Wextra -o /tmp/arena-limit "${REPO_DIR}/arena/bin/limit.c"
 sudo mv /tmp/arena-limit /opt/arena/bin/limit
 sudo cp "${REPO_DIR}/arena/bin/arena" /opt/arena/bin/arena
 sudo cp "${REPO_DIR}/arena/bin/unpack" /opt/arena/bin/unpack
 sudo chown root:wheel /opt/arena/bin/limit /opt/arena/bin/arena /opt/arena/bin/unpack
 sudo chmod 0755 /opt/arena/bin/limit /opt/arena/bin/arena /opt/arena/bin/unpack
+
+sudo mkdir -p /opt/arena/agents/_baseline
+sudo cp "${REPO_DIR}/arena/bin/baseline" /opt/arena/agents/_baseline/run
+sudo chown -R root:wheel /opt/arena/agents/_baseline
+sudo chmod 0755 /opt/arena/agents/_baseline /opt/arena/agents/_baseline/run
 
 echo "==> Step 6: Configuring headless power management & disabling Spotlight on scratch volumes"
 sudo pmset -a sleep 0 disksleep 0 displaysleep 0 autorestart 1 womp 1 powernap 0
@@ -114,7 +119,7 @@ sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheck
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false
 
-echo "==> Step 7: Initializing Podman libkrun VM (10 vCPUs, 30 GiB RAM, 64 GB disk)"
+echo "==> Step 7: Initializing Podman libkrun VM (10 vCPUs, 30 GiB RAM, 64 GB disk, 500 MB overlay cap)"
 if command -v podman >/dev/null 2>&1; then
   if ! podman machine inspect podman-machine-default >/dev/null 2>&1; then
     # Size the VM to cover two 14 GiB containers (`arena-p1` + `arena-p2`, since `podman pause`
@@ -129,10 +134,14 @@ if command -v podman >/dev/null 2>&1; then
       --volume /Volumes/Staging:/Volumes/Staging \
       podman-machine-default
   fi
+  podman machine start podman-machine-default 2>/dev/null || true
+  podman machine ssh podman-machine-default \
+    "sudo mkdir -p /etc/containers && sudo tee /etc/containers/storage.conf >/dev/null" \
+    < "${REPO_DIR}/arena/config/storage.conf" || true
 fi
 
-echo "==> Step 8: Installing LaunchDaemons (ai.pkmn.pf, ai.pkmn.tunnel, ai.pkmn.arena)"
-for PLIST in ai.pkmn.pf.plist ai.pkmn.tunnel.plist ai.pkmn.arena.plist; do
+echo "==> Step 8: Installing LaunchDaemons (ai.pkmn.pf, ai.pkmn.tunnel, ai.pkmn.podman, ai.pkmn.arena, ai.pkmn.archive)"
+for PLIST in ai.pkmn.pf.plist ai.pkmn.tunnel.plist ai.pkmn.podman.plist ai.pkmn.arena.plist ai.pkmn.archive.plist; do
   sudo cp "${REPO_DIR}/arena/config/${PLIST}" "/Library/LaunchDaemons/${PLIST}"
   sudo chown root:wheel "/Library/LaunchDaemons/${PLIST}"
   sudo chmod 0644 "/Library/LaunchDaemons/${PLIST}"
@@ -141,4 +150,6 @@ done
 echo "==> Setup complete. Load LaunchDaemons with:"
 echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.pf.plist"
 echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.tunnel.plist"
+echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.podman.plist"
 echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.arena.plist"
+echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist"

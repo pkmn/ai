@@ -117,17 +117,16 @@ export async function runDaemon(opts: {
 
   const client = new arena.Client({serverUrl, arenaSecret});
   const stateDb = new db.StateDatabase(opts.stateDbPath);
-  const baselineSpec: arbiter.AgentLaunchSpec = {
-    mode: 'native',
-    target: process.execPath,
-    args: [__filename, 'baseline'],
-  };
+  const isDev = process.env.ARENA_DEV === '1';
+  const baselineSpec: arbiter.AgentLaunchSpec = isDev
+    ? {mode: 'native', target: process.execPath, args: [__filename, 'baseline']}
+    : {mode: 'native', target: '_baseline'};
 
   const coord = new coordinator.Coordinator({
     client,
     stateDb,
     baselineSpec,
-    devMode: process.env.ARENA_DEV === '1',
+    devMode: isDev,
   });
 
   await coord.recoverIncompleteMatches();
