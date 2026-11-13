@@ -841,6 +841,19 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       });
       expect((await resAll.json() as {complete: boolean}).complete).toBe(true);
 
+      // 5th call to /api/account/teams succeeds; 6th call within window is rate-limited (429)
+      const resFifth = await postTeams('/api/account/teams', {
+        ladderId: 'gen9championsvgc2026regmc',
+        teams: validTwenty.slice(0, 1),
+      });
+      expect(resFifth.status).toBe(200);
+      const resSixth = await postTeams('/api/account/teams', {
+        ladderId: 'gen9championsvgc2026regmc',
+        teams: validTwenty.slice(0, 1),
+      });
+      expect(resSixth.status).toBe(429);
+      expect(resSixth.headers.get('retry-after')).toBeTruthy();
+
       const finalSub = await realFetch(`${baseUrl}/api/submissions`, {
         method: 'POST',
         headers: {

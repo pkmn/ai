@@ -725,21 +725,30 @@ export function register(app: polka.Polka, options: Options) {
   const maxAttempts = options.rateLimitMaxAttempts ?? RATE_LIMIT_MAX_ATTEMPTS;
   const windowSeconds = options.rateLimitWindowSeconds ?? RATE_LIMIT_WINDOW_SECONDS;
   const attemptsByAgent = new Map<number, number[]>();
+  const teamAttemptsByAgent = new Map<number, number[]>();
 
   // Enforced before body parsing and 1-NN team-uniqueness checks so a logged-in developer cannot
   // exhaust CPU by spamming 20-team validation pastes (supplements Nginx's IP-based `submission`
   // zone when multiple co-authors submit for the same project).
-  const checkSubmissionRateLimit = (agentId: number, now: number): number | undefined => {
+  const checkBucketRateLimit = (
+    bucket: Map<number, number[]>,
+    agentId: number,
+    now: number
+  ): number | undefined => {
     const cutoff = now - windowSeconds;
-    const recent = (attemptsByAgent.get(agentId) ?? []).filter(ts => ts > cutoff);
+    const recent = (bucket.get(agentId) ?? []).filter(ts => ts > cutoff);
     if (recent.length >= maxAttempts) {
-      attemptsByAgent.set(agentId, recent);
+      bucket.set(agentId, recent);
       return Math.max(1, recent[0] + windowSeconds - now);
     }
     recent.push(now);
-    attemptsByAgent.set(agentId, recent);
+    bucket.set(agentId, recent);
     return undefined;
   };
+  const checkSubmissionRateLimit = (agentId: number, now: number) =>
+    checkBucketRateLimit(attemptsByAgent, agentId, now);
+  const checkTeamValidationRateLimit = (agentId: number, now: number) =>
+    checkBucketRateLimit(teamAttemptsByAgent, agentId, now);
 
   const handleGetAccount = (
     req: http.IncomingMessage,
@@ -890,6 +899,18 @@ export function register(app: polka.Polka, options: Options) {
   app.post('/api/account/teams', async (req, res) => {
     const agent = requirePoolAccount(req, res);
     if (!agent) return;
+
+    const now = getNow();
+    const retryAfter = checkTeamValidationRateLimit(agent.id, now);
+    if (retryAfter !== undefined) {
+      sendJson(
+        res,
+        429,
+        {error: `Too many team validation attempts; wait ${retryAfter}s before retrying.`},
+        {'Retry-After': String(retryAfter)}
+      );
+      return;
+    }
 
     let bodyObj: Record<string, unknown>;
     try {

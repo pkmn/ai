@@ -155,8 +155,9 @@ export function extractRevealedTeamsFromLog(
     p2: new Map(),
   };
   const names: Record<'p1' | 'p2', string> = {p1: 'p1', p2: 'p2'};
-  const elos: Record<'p1' | 'p2', number> = {p1: 1700, p2: 1700};
+  const elos: Record<'p1' | 'p2', number> = {p1: 0, p2: 0};
   let winnerName: string | undefined;
+  let forfeited = false;
 
   const ensureMon = (side: 'p1' | 'p2', rawSpecies: string): RevealedMonState | undefined => {
     const clean = rawSpecies.split(',')[0].trim();
@@ -240,10 +241,19 @@ export function extractRevealedTeamsFromLog(
       if (resolved?.mon && tType) {
         resolved.mon.teraType = tType;
       }
+    } else if (cmd === '-message') {
+      const msg = (parts[2] ?? '').trim();
+      if (/(?:forfeited|lost due to inactivity)\.?$/i.test(msg)) {
+        forfeited = true;
+      }
+    } else if (cmd === 'forfeit') {
+      forfeited = true;
     } else if (cmd === 'win') {
       winnerName = (parts[2] ?? '').trim();
     }
   }
+
+  if (forfeited) return [];
 
   const out: HarvestedSideCandidate[] = [];
   for (const side of ['p1', 'p2'] as const) {

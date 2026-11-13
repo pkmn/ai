@@ -679,15 +679,17 @@ export function validateCompetitorTeamsIncremental(
   }
 
   const chunks = splitSubmittedTeams(rawInput);
+  const maxChunks = Math.max(50, requiredCount * 2);
+  const boundedChunks = chunks.length > maxChunks ? chunks.slice(0, maxChunks) : chunks;
   const rejections: RejectedTeam[] = [];
   let newlySavedCount = 0;
 
-  for (let i = 0; i < chunks.length; i++) {
+  for (let i = 0; i < boundedChunks.length; i++) {
     try {
       const {canonicalPacked, uniquenessSets, speciesSet} = validateAndCanonicalizeSingleTeam(
         dex,
         validator,
-        chunks[i],
+        boundedChunks[i],
         i
       );
 
@@ -742,6 +744,15 @@ export function validateCompetitorTeamsIncremental(
         reason: err?.message || `Team #${i + 1} is invalid.`,
       });
     }
+  }
+
+  if (chunks.length > maxChunks) {
+    rejections.push({
+      index: maxChunks + 1,
+      reason:
+        `Teams #${maxChunks + 1}–#${chunks.length} skipped: ` +
+        `paste at most ${maxChunks} teams per validation request.`,
+    });
   }
 
   const remainingCount = Math.max(0, requiredCount - allSaved.length);

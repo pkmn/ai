@@ -404,6 +404,24 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(extracted[0].elo).toBe(1780);
       expect(extracted[0].won).toBe(true);
       expect(extracted[0].sets).toHaveLength(6);
+
+      // Forfeited or inactivity-ended logs are excluded from harvested pool extraction
+      const forfeitLog = rawLog.replace('|win|Alice', '|-message|Bob forfeited.\n|win|Alice');
+      expect(extractRevealedTeamsFromLog(forfeitLog, 'gen9customgame')).toEqual([]);
+
+      // Unrated logs default to 0 Elo so they are filtered by minElo
+      const unratedLog = rawLog
+        .replace('|player|p1|Alice|1|1780', '|player|p1|Alice|1|')
+        .replace('|player|p2|Bob|2|1740', '|player|p2|Bob|2|');
+      const unratedExtracted = extractRevealedTeamsFromLog(unratedLog, 'gen9customgame');
+      expect(unratedExtracted[0].elo).toBe(0);
+      expect(
+        filterAndRankHarvestedTeams(unratedExtracted, {
+          formatId: 'gen9customgame',
+          gen: 9,
+          minElo: 1650,
+        })
+      ).toEqual([]);
     }
   );
 
