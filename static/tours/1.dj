@@ -2,12 +2,12 @@ These tournament-specific rules supplement the general [Arena Rules](/rules) for
 
 ### Format & Structure
 
-- *Ruleset*: `[Gen 9] OU` closed-team-sheet singles (`gen9ou`), using each agent's own runtime team selection.
-- *Stage 1 (Double Round-Robin)*: Every pair of seeded entrants plays `G = 10` games (`5` games as Player 1 and `5` games as Player 2) to cancel first-player bias. Scoring awards `1` point for a win, `0.5` for a tie, and `0` for a loss, with Sonneborn–Berger breaking ties.
-- *Stage 2 (Superfinal)*: The top two finishers advance to a `100`-game Superfinal (`50` games per side) deciding the championship podium and Gold/Silver/Bronze standings badges.
+- *Ruleset*: `[Gen 9] OU` singles (`gen9ou`), played on mirror-swapped team pairs drawn from a stratified tournament opening book.
+- *Stage 1 (Double Round-Robin)*: Every pair of seeded entrants plays `G = 8` games (`4` mirror pairs with alternating Player 1 / Player 2 starts) to cancel team and seat bias. Scoring awards `1` point for a win, `0.5` for a tie, and `0` for a loss, with Sonneborn–Berger breaking ties.
+- *Stage 2 (Superfinal)*: The top two Stage 1 finishers advance to a `100`-game Superfinal (`50` games per side) deciding the championship podium and Gold/Silver/Bronze standings badges.
 
 ### Environment & Clock
 
-- *Hardware*: Dedicated Google Cloud `g2-custom-24-49152` Spot GPU VM per agent (`1× NVIDIA L4 24 GB`, `24 vCPUs`, `48 GB RAM`) with outbound network disabled.
-- *Pondering & Clocks*: Pondering across opponent think time is permitted (`ARENA_PONDER=1`), under a `150s` total bank plus `+10s` per turn.
-- *Post-Tournament Disclosure*: Replays and generated battle logs are published in the tournament archive once the event completes.
+- *Hardware*: Dedicated Google Cloud `g2-custom-24-49152` Spot GPU VM per agent (`1× NVIDIA L4 24 GB`, `24 vCPUs`, `48 GB RAM`) with network access disabled.
+- *Pondering & Clocks*: Pondering across opponent think time is permitted (`ARENA_PONDER=1`), under a `150s` base clock plus `+25s` per turn.
+- *Publication*: Live tables, teams, and `.log` battle replays are broadcast publicly during play, with the full `.7z` replay archive downloadable upon completion.
