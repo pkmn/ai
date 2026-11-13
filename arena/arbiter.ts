@@ -377,13 +377,22 @@ export class TimeSlicedArenaGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        for (const line of chunk.split('\n')) {
+        if (!player.exited && player.proc.stdin.writable) {
+          player.proc.stdin.write(`${chunk}\n`);
+        }
+
+        const lines = chunk.split('\n');
+        const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
+        for (const line of lines) {
           if (line.startsWith('|request|')) {
             const reqJson = line.slice('|request|'.length).trim();
             if (reqJson && reqJson !== 'null') {
               try {
                 const parsed = JSON.parse(reqJson) as {wait?: boolean};
                 if (!parsed.wait) {
+                  if (!player.retryingInvalidChoice) {
+                    player.invalidStrikes = 0;
+                  }
                   player.pendingRequestJson = reqJson;
                   player.lastRequestJson = reqJson;
                 }
@@ -398,17 +407,13 @@ export class TimeSlicedArenaGame {
             player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
               this.forfeit(player.slot, 'invalid_choice_limit');
-            } else if (line.startsWith('|error|[Invalid choice]') && player.lastRequestJson) {
+            } else if (!chunkHasRequest && player.lastRequestJson) {
               player.pendingRequestJson = player.lastRequestJson;
               if (!player.exited && player.proc.stdin.writable) {
                 player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
               }
             }
           }
-        }
-
-        if (!player.exited && player.proc.stdin.writable) {
-          player.proc.stdin.write(`${chunk}\n`);
         }
       }
     })().catch(() => undefined);
@@ -451,7 +456,18 @@ export class TimeSlicedArenaGame {
       this.lastRewardedTurn[player.slot] = this.currentTurn;
     }
     const graceMs = isFirstDecision ? this.firstTurnGraceMs : 0;
-    const totalBudgetMs = graceMs + Math.min(player.bankMs, this.maxTurnMs);
+    const turnAllowanceMs = Math.min(player.bankMs, this.maxTurnMs);
+    const totalBudgetMs = graceMs + turnAllowanceMs;
+
+    if (!player.exited && player.proc.stdin.writable) {
+      const turnSec = (turnAllowanceMs / 1000).toFixed(1);
+      const totalSec = (player.bankMs / 1000).toFixed(1);
+      const graceSec = (graceMs / 1000).toFixed(1);
+      player.proc.stdin.write(
+        `|inactive|Time left: ${turnSec} sec this turn | ` +
+        `${totalSec} sec total | ${graceSec} sec grace\n`
+      );
+    }
 
     if (this.onTurn) {
       await this.onTurn({
@@ -474,18 +490,19 @@ export class TimeSlicedArenaGame {
     }
 
     let remainingBudgetMs = totalBudgetMs;
-    let totalElapsedThisDecisionMs = 0;
+    let totalElapsedThisDecisionMs: number;
     let linesReadThisDecision = 0;
     let chatLinesThisDecision = 0;
     this.resumeSlot(player);
+    const decisionStartNs = process.hrtime.bigint();
 
     try {
       while (!this.ended) {
-        const {line, elapsedMs, timedOut} = await this.readLineWithTimeout(
+        const {line, timedOut} = await this.readLineWithTimeout(
           player,
           remainingBudgetMs
         );
-        totalElapsedThisDecisionMs += elapsedMs;
+        totalElapsedThisDecisionMs = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
         remainingBudgetMs = totalBudgetMs - totalElapsedThisDecisionMs;
 
         if (timedOut || remainingBudgetMs <= 0) {

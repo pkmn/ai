@@ -412,7 +412,18 @@ export class ConcurrentTournamentGame {
       this.lastRewardedTurn[player.slot] = this.currentTurn;
     }
     const graceMs = isFirstDecision ? this.firstTurnGraceMs : 0;
-    const totalBudgetMs = graceMs + Math.min(player.bankMs, this.maxTurnMs);
+    const turnAllowanceMs = Math.min(player.bankMs, this.maxTurnMs);
+    const totalBudgetMs = graceMs + turnAllowanceMs;
+
+    if (!player.exited && player.proc.stdin.writable) {
+      const turnSec = (turnAllowanceMs / 1000).toFixed(1);
+      const totalSec = (player.bankMs / 1000).toFixed(1);
+      const graceSec = (graceMs / 1000).toFixed(1);
+      player.proc.stdin.write(
+        `|inactive|Time left: ${turnSec} sec this turn | ` +
+        `${totalSec} sec total | ${graceSec} sec grace\n`
+      );
+    }
 
     let remainingBudgetMs = totalBudgetMs;
     let totalElapsedMs = 0;
@@ -488,14 +499,23 @@ export class ConcurrentTournamentGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
+        if (!player.exited && player.proc.stdin.writable) {
+          player.proc.stdin.write(`${chunk}\n`);
+        }
+
         let actionableReqJson: string | undefined;
-        for (const line of chunk.split('\n')) {
+        const lines = chunk.split('\n');
+        const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
+        for (const line of lines) {
           if (line.startsWith('|request|')) {
             const jsonStr = line.slice('|request|'.length).trim();
             if (jsonStr && jsonStr !== 'null') {
               try {
                 const parsed = JSON.parse(jsonStr) as {wait?: boolean};
                 if (!parsed.wait) {
+                  if (!player.retryingInvalidChoice) {
+                    player.invalidStrikes = 0;
+                  }
                   actionableReqJson = jsonStr;
                   player.lastRequestJson = jsonStr;
                 }
@@ -510,17 +530,13 @@ export class ConcurrentTournamentGame {
             player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
               this.forfeit(player.slot, 'invalid_choice_limit');
-            } else if (line.startsWith('|error|[Invalid choice]') && player.lastRequestJson) {
+            } else if (!chunkHasRequest && player.lastRequestJson) {
               actionableReqJson = player.lastRequestJson;
               if (!player.exited && player.proc.stdin.writable) {
                 player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
               }
             }
           }
-        }
-
-        if (!player.exited && player.proc.stdin.writable) {
-          player.proc.stdin.write(`${chunk}\n`);
         }
 
         if (actionableReqJson && !this.ended) {
