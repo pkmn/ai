@@ -30,6 +30,7 @@
     "fix": "eslint --fix && stylelint --fix static/*.css",
     "clean": "rm -rf public build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
+    "setup": "([ -d node_modules ] || npm install) && npm run compile && node --env-file-if-exists=.env build/tools/setup",
     "build": "npm run compile && node --env-file-if-exists=.env build/static/build",
     "shots": "npm run compile && node --env-file-if-exists=.env build/tools/shots",
     "pkmn": "node --env-file-if-exists=.env build/tools/pkmn",

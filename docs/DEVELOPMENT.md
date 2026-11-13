@@ -15,26 +15,18 @@ prose/BibTeX content guidelines, see [`CONTRIBUTING.md`](../.github/CONTRIBUTING
 - **Git** (used at runtime by the Djot wiki in `server/wiki.ts` and sparse-checkout team submodules)
 - **Playwright Chromium** *(optional, required for `npm run shots` and `test/e2e.test.ts`)*
 
-Clone the repository, initialize the sparse-checked-out reference team submodules (used for `pools`
-ladder $1\text{-NN}$ uniqueness validation), and install dependencies:
+Clone the repository, install dependencies, and initialize the sparse-checked-out reference team
+submodules (used for `pools` ladder $1\text{-NN}$ uniqueness validation) and static build:
 
 ```sh
 git clone https://github.com/pkmn/ai.git
 cd ai
 
-# Initialize shallow sparse-checkouts for reference team pools (avoids pulling unrelated formats)
-for sub in teams/teams teams/pkmn_stuff; do
-  mkdir -p .git/modules/teams
-  git submodule init "$sub"
-  git clone --depth 1 --filter=blob:none --sparse --separate-git-dir=".git/modules/$sub" \
-    "$(git config "submodule.$sub.url")" "$sub"
-done
-git -C teams/teams sparse-checkout set gen9championsvgc2026regmc
-git -C teams/pkmn_stuff sparse-checkout set --no-cone --stdin < teams/pkmn_stuff.txt
-git submodule update --depth 1 teams/teams teams/pkmn_stuff
+# Install Node dependencies, initialize sparse team submodules, and build static pages
+# (In git worktrees, `npm run setup` reuses the main checkout's submodule cache and `private/`.)
+npm run setup
 
-# Install Node dependencies (and optional headless Chromium for E2E / visual tests)
-npm install
+# Optional: install headless Chromium for E2E and visual regression tests
 npx playwright-core install chromium
 ```
 
@@ -93,6 +85,7 @@ npm run dev
 
 | Script | Command / Behavior |
 | :--- | :--- |
+| `npm run setup` | Install dependencies if needed, initialize/repair sparse submodules & worktree `private/`, and build `public/`. |
 | `npm run compile` | Compile TypeScript (`tsc -p .`) into `build/`. |
 | `npm run build` | Compile TypeScript and build all static Djot, BibTeX/YAML, and Arena pages into `public/`. |
 | `npm run dev` | Start the local server on `http://localhost:1234` with `DEV_AUTH=1` and static file watching. |
