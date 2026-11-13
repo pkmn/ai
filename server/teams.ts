@@ -196,6 +196,22 @@ function normalizeCanonicalPacked(rawTeam: string, format: string): string {
   return trimmed;
 }
 
+function canonicalDedupeKey(canonicalPacked: string, format: string): string {
+  try {
+    const dex = teams.getDex(format);
+    const imported = Team.import(canonicalPacked, dex);
+    const raw = (imported?.team || []).filter(s => s?.moves?.length);
+    if (raw.length > 0) {
+      for (const s of raw) {
+        s.species = dex.species.get(teams.canonSpecies(dex, s.species)).name;
+      }
+      const sets = Team.canonicalize(raw, dex);
+      return new Team(sets, dex).pack();
+    }
+  } catch {}
+  return canonicalPacked;
+}
+
 export function buildCanonicalTeamPool(
   teamsByAgent: Iterable<RosterEntry>,
   format = 'gen9championsvgc2026regmc'
@@ -205,14 +221,15 @@ export function buildCanonicalTeamPool(
     for (let idx = 0; idx < rawTeams.length; idx++) {
       const canonicalPacked = normalizeCanonicalPacked(rawTeams[idx], format);
       if (!canonicalPacked) continue;
-      let entry = byPacked.get(canonicalPacked);
+      const dedupeKey = canonicalDedupeKey(canonicalPacked, format);
+      let entry = byPacked.get(dedupeKey);
       if (!entry) {
         entry = {
           canonicalPacked,
           speciesIds: extractSpeciesIdsFromPacked(canonicalPacked, format),
           owners: new Map(),
         };
-        byPacked.set(canonicalPacked, entry);
+        byPacked.set(dedupeKey, entry);
       }
       if (!entry.owners.has(agentId)) {
         entry.owners.set(agentId, {agentName, slotIndex: idx + 1});
@@ -249,6 +266,12 @@ function isValidPoolsPair(
 //   - Requires `N >= 4` distinct active agent rosters (`min >= 4`).
 //   - When `agentAId !== agentBId`, samples unordered distinct roster pair `{I, J}` with exact
 //     marginal `2 / N` per agent (`2/N` `{A, C}`, `2/N` `{B, C}`, `(N-4)/N` `{C1, C2}`).
+//     Allowing at most one active competitor per match to receive a team from their own submitted
+//     roster is INTENTIONAL: never dealing competitors their own teams would remove
+//     skin-in-the-game and incentivize poisoning the shared pool with weak/sabotage teams that
+//     the author never has to pilot themselves. Because every ladder match is a 2-game mirror pair
+//     where P1 and P2 swap teams in Game 2, any single-game hidden-information asymmetry cancels
+//     across the pair.
 //   - When `agentAId === agentBId` (Champion vs Challenger of the same project), both versions
 //     share that project's seasonal pool, so `{C1, C2}` is drawn uniformly from distinct third
 //     parties (`N - 1 >= 3`) to keep both teams blind to both sides.
@@ -539,11 +562,13 @@ function validateAndCanonicalizeSingleTeam(
     throw new Error(`${label} is illegal in ${validator.format.name}: ${problems.join('; ')}`);
   }
 
-  // `@pkmn/sets` `Team.canonicalize` sorts team members and moves into a deterministic canonical
-  // order for packed storage, while intentionally preserving non-`battleOnly` visual/cosmetic
-  // formes (e.g. Gastrodon-East, Sinistcha-Masterpiece, Maushold-Four) for battle presentation.
-  // For 1-NN uniqueness checking, we clone `canonicalSets` and collapse cosmetic/mechanically
-  // identical formes via `canonSpecies` so forme swaps cannot game species distance.
+  // `@pkmn/sets` `Team.canonicalize` sorts all 6 team slots and 4 move slots into a deterministic
+  // canonical order for packed storage (neutralizing Team Preview slot-order watermarking) and
+  // preserves explicit under-leveled sets (`s.level = s.level || (champions ? 50 : 100)`), while
+  // intentionally preserving non-`battleOnly` visual/cosmetic formes (e.g. Gastrodon-East,
+  // Sinistcha-Masterpiece, Maushold-Four) for battle presentation. For 1-NN uniqueness checking
+  // and cross-competitor pool ownership deduplication, `canonSpecies` collapses cosmetic and
+  // mechanically identical formes to their base species ID.
   const canonicalSets = Team.canonicalize(structuredClone(rawSets), dex);
   const canonicalPacked = new Team(canonicalSets, dex).pack();
   const entry = toUniquenessEntry(dex, canonicalSets, label);

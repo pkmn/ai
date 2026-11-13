@@ -150,6 +150,19 @@ describe('Declarative Mock Arena scenarios, probabilistic ratings & E2E lifecycl
         expect(selfPair.t2Label).toMatch(/^[0-9a-f]{12}$/);
       }
 
+      // Cosmetic / same-baseStats forme variants deduplicate ownership in buildCanonicalTeamPool
+      const gastroWest =
+        'Gastrodon||leftovers|stormdrain|earthpower,icebeam,recover,protect|Calm|252,,,4,252,|||||';
+      const gastroEast =
+        'Gastrodon-East||leftovers|stormdrain|earthpower,icebeam,recover,protect|' +
+        'Calm|252,,,4,252,|||||';
+      const cosmeticPool = teams.buildCanonicalTeamPool([
+        {agentId: 1, agentName: 'A1', teams: [gastroWest]},
+        {agentId: 2, agentName: 'A2', teams: [gastroEast]},
+      ], 'gen9ou');
+      expect(cosmeticPool).toHaveLength(1);
+      expect([...cosmeticPool[0].owners.keys()]).toEqual([1, 2]);
+
       // Verify exact 2/N per-agent and 1/(N*K) per-slot uniformity across both N=4 and N=5
       for (const nAgents of [4, 5]) {
         const kTeams = 20;

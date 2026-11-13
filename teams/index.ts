@@ -28,6 +28,9 @@ import {PokemonSet, Team} from '@pkmn/sets';
 // pool), and sized so that against a 5/6-shared-species neighbor (+1.00), a candidate
 // team cannot pass by changing only 1 item (+0.20) or 2 moves (+0.20), requiring at
 // least +0.30 in set changes across the shared Pokemon (e.g. 3 moves, or 1 item + 1 move).
+// Replacing 1 of 6 species (+1.00) plus >= +0.30 across the remaining 5 slots is intentionally
+// sufficient to clear 1.30 so staple 5-Pokemon cores with distinct 6th tech slots and
+// meaningful moveset/item/stat adjustments remain legal across a 20-team submission.
 export const THRESHOLD = 1.3;
 
 // Maximum distance contributed by two sets of the same canonical species (default/Champions).
@@ -66,7 +69,12 @@ export function sameSpeciesCap(dex: ModdedDex): number {
 /**
  * Collapses cosmetic and mechanically identical formes (e.g. Gastrodon-East -> Gastrodon,
  * Keldeo-Resolute -> Keldeo, Sinistcha-Masterpiece -> Sinistcha, Maushold-Four -> Maushold,
- * Greninja-Bond -> Greninja, Toxtricity-Low-Key -> Toxtricity) to their base species ID.
+ * Greninja-Bond -> Greninja, Toxtricity-Low-Key -> Toxtricity, Squawkabilly-Yellow/White/Blue ->
+ * Squawkabilly, Basculin-Blue/White-Striped -> Basculin, Rockruff-Dusk -> Rockruff) to their
+ * base species ID. Any non-battleOnly forme sharing `baseSpecies`, `baseStats`, and `types` with
+ * its base species collapses to `base.id` so cosmetic or ability-slot variants cannot inflate
+ * species distance (+1.0); if two sets choose different abilities, `setDistance` still charges
+ * the ability weight (`wAbil`).
  */
 export function canonSpecies(dex: ModdedDex, speciesId?: string): ID {
   if (!speciesId) return toID(speciesId);
@@ -74,12 +82,9 @@ export function canonSpecies(dex: ModdedDex, speciesId?: string): ID {
   const base = dex.species.get(sp.baseSpecies);
   if (
     base.cosmeticFormes?.includes(sp.name) ||
-    sp.id === 'greninjabond' ||
-    sp.id === 'toxtricitylowkey' ||
     (STATS.every(st => sp.baseStats[st] === base.baseStats[st]) &&
       sp.types.length === base.types.length &&
-      sp.types.every((t, i) => t === base.types[i]) &&
-      Object.values(sp.abilities).join('|') === Object.values(base.abilities).join('|'))
+      sp.types.every((t, i) => t === base.types[i]))
   ) {
     return base.id;
   }
