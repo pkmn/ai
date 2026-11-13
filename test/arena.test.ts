@@ -28,8 +28,9 @@ import {
 import {Database} from '../db';
 import * as serverArena from '../server/arena';
 import * as auth from '../server/auth';
-import {sampleRandomPair} from '../server/teams';
+import {sampleRandomPair, validateCompetitorTeamsIncremental} from '../server/teams';
 import {root} from '../static/util';
+import * as mock from '../tools/mock';
 
 const TEAM_ONE =
   'Pikachu||lightball|static|thunderbolt,quickattack,irontail,volttackle|' +
@@ -1233,6 +1234,104 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         expect(recorded[0].game1Outcome).toBe('L');
         expect(recorded[0].game2Outcome).toBe('W');
         expect(recorded[0].category).toBe('LW');
+
+        // Also verify `pools` ladder roster serialization (`teams: string[]`) end-to-end via
+        // `runDaemon({once: true})` so VGC matches never fail with `rawTeam.trim is not a function`
+        db.setLadderStatus('gen9randombattle202611', 'archived');
+        db.refundCooldown('0-error');
+        db.refundCooldown('foul-play');
+        db.syncLaddersFromYaml([
+          '- name: VGC',
+          '  id: gen9championsvgc2026regmc',
+          '  format: gen9championsvgc2026regmc',
+          '  team: pools',
+          '  status: active',
+          '  min: 4',
+          '  teams: 20',
+        ].join('\n'));
+        db.syncProjectsFromYaml([
+          '- name: 0 ERROR',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {scheibo: pre.10544}}',
+          '- name: Foul Play',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+          '- name: Metamon',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {jake: jake.10001}}',
+          '- name: PokeChamp',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {seth: seth.10002}}',
+        ].join('\n'));
+
+        const daemonStatePath = path.join(tmpDir, 'daemon-pools.sqlite');
+        const daemonAgentsDir = path.join(tmpDir, 'daemon-pools-agents');
+        const defaultRunDir = path.join(daemonAgentsDir, 'default-vgc');
+        fs.mkdirSync(defaultRunDir, {recursive: true});
+        fs.copyFileSync(defaultAgentScript, path.join(defaultRunDir, 'run'));
+        fs.chmodSync(path.join(defaultRunDir, 'run'), 0o755);
+
+        const seedStateDb = new StateDatabase(daemonStatePath);
+        const slugs = ['0-error', 'foul-play', 'metamon', 'pokechamp'];
+        for (let idx = 0; idx < slugs.length; idx++) {
+          const ag = db.getAgentBySlug(slugs[idx])!;
+          const rawTwenty = mock.generateValidVgcTeams(20, idx);
+          const validated = validateCompetitorTeamsIncremental(rawTwenty, {
+            format: 'gen9championsvgc2026regmc',
+            pools: [],
+            teams: 20,
+          });
+          const sub = db.createSubmission({
+            agentId: ag.id,
+            version: '2.0.0',
+            package: 'bundle',
+            url: `https://example.com/${slugs[idx]}.tar.zst`,
+            sha256: String(idx + 1).repeat(64),
+            ladderIds: ['gen9championsvgc2026regmc'],
+            tournamentIds: [],
+            teamsByLadder: {gen9championsvgc2026regmc: validated.allSaved},
+          });
+          db.applySubmissionStatus({
+            versionId: sub.id,
+            smokeStatus: 'passed',
+            unpackedBytes: 1024,
+          });
+          seedStateDb.upsertLocalAgent({
+            versionId: sub.id,
+            agentId: ag.id,
+            slug: ag.slug,
+            version: '2.0.0',
+            mode: 'native',
+            target: 'default-vgc',
+            residency: 'hot',
+            unpackedBytes: 1024,
+          });
+        }
+        seedStateDb.close();
+
+        const prevDev = process.env.ARENA_DEV;
+        process.env.ARENA_DEV = '1';
+        try {
+          await arenaIndex.runDaemon({
+            serverUrl,
+            arenaSecret: secret,
+            stateDbPath: daemonStatePath,
+            agentsDir: daemonAgentsDir,
+            stagingDir: path.join(tmpDir, 'daemon-pools-staging'),
+            archiveLogsDir: path.join(tmpDir, 'daemon-pools-logs'),
+            maxTurns: 1,
+            once: true,
+          });
+        } finally {
+          if (prevDev === undefined) delete process.env.ARENA_DEV;
+          else process.env.ARENA_DEV = prevDev;
+        }
+
+        const vgcMatches = db.getRecentMatches(10)
+          .filter(m => m.ladderId === 'gen9championsvgc2026regmc');
+        expect(vgcMatches).toHaveLength(1);
+        expect(vgcMatches[0].p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+        expect(vgcMatches[0].p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
       } finally {
         if (server) {
           server.closeAllConnections();

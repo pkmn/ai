@@ -804,6 +804,46 @@ export class Client {
     return this.requestJson<PendingSubmissionsResponse>('GET', '/api/arena/pending-submissions');
   }
 
+  getPlayableLadders(): Promise<{
+    ladders: Array<{
+      id: string;
+      slot: string;
+      format: string;
+      team: 'random' | 'harvested' | 'pools';
+      status: 'upcoming' | 'active' | 'settling' | 'archived';
+      min: number;
+      entries: Array<{
+        versionId: number;
+        agentId: number;
+        agentSlug: string;
+        agentName: string;
+        version: string;
+        elo: number;
+        se: number;
+        lcb: number;
+        matches: number;
+        settledAt?: number;
+        role: 'champion' | 'challenger' | 'retired' | 'quarantined';
+      }>;
+      pairAggregates: Array<{
+        lowVersionId: number;
+        highVersionId: number;
+        ww: number;
+        wt: number;
+        split: number;
+        tl: number;
+        ll: number;
+      }>;
+      roster?: Array<{
+        agentId: number;
+        agentName: string;
+        teams: string[];
+      }>;
+    }>;
+  }> {
+    return this.requestJson('GET', '/api/arena/ladders');
+  }
+
   reportSubmissionStatus(payload: SubmissionStatusPayload): Promise<SubmissionStatusResponse> {
     return this.requestJson<SubmissionStatusResponse>(
       'POST',
@@ -2511,14 +2551,8 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.get('/api/arena/ladders', (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    const ladders = db.getPlayableLadders().map(l => ({
-      id: l.id,
-      slot: l.slot,
-      format: l.format,
-      team: l.team,
-      status: l.status,
-      min: l.min,
-      entries: db.getLeaderboardEntries(l.id).map(e => ({
+    const ladders = db.getPlayableLadders().map(l => {
+      const entries = db.getLeaderboardEntries(l.id).map(e => ({
         versionId: e.versionId,
         agentId: e.agentId,
         agentSlug: e.agentSlug,
@@ -2530,18 +2564,42 @@ export function register(app: polka.Polka, options: Options): Handle {
         matches: e.matches,
         ...(e.settledAt !== undefined ? {settledAt: e.settledAt} : {}),
         role: e.role,
-      })),
-      pairAggregates: db.getPairAggregatesForLadder(l.id).map(p => ({
-        lowVersionId: p.lowVersionId,
-        highVersionId: p.highVersionId,
-        ww: p.ww,
-        wt: p.wt,
-        split: p.split,
-        tl: p.tl,
-        ll: p.ll,
-      })),
-      ...(l.team === 'pools' ? {roster: db.getActiveRosterForLadder(l.id)} : {}),
-    }));
+      }));
+      const playableAgents = new Set(
+        entries
+          .filter(e => e.role !== 'retired')
+          .map(e => e.agentId)
+      );
+      const roster = l.team === 'pools'
+        ? db.getActiveRosterForLadder(l.id)
+          .filter(r => playableAgents.has(r.agentId))
+          .map(r => ({
+            agentId: r.agentId,
+            agentName: r.agentName,
+            teams: r.teams.map(t => t.packed),
+          }))
+        : undefined;
+
+      return {
+        id: l.id,
+        slot: l.slot,
+        format: l.format,
+        team: l.team,
+        status: l.status,
+        min: l.min,
+        entries,
+        pairAggregates: db.getPairAggregatesForLadder(l.id).map(p => ({
+          lowVersionId: p.lowVersionId,
+          highVersionId: p.highVersionId,
+          ww: p.ww,
+          wt: p.wt,
+          split: p.split,
+          tl: p.tl,
+          ll: p.ll,
+        })),
+        ...(roster !== undefined ? {roster} : {}),
+      };
+    });
 
     sendJson(res, 200, {ladders});
   });

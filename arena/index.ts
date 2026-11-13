@@ -44,66 +44,23 @@ export function runBaselineStdioAgent(
   });
 }
 
-async function fetchPlayableLadderSnapshots(
-  serverUrl: string,
-  arenaSecret?: string
+export async function fetchPlayableLadderSnapshots(
+  client: arena.Client
 ): Promise<coordinator.LadderSnapshot[]> {
-  const base = serverUrl.replace(/\/+$/, '');
-  const headers: Record<string, string> = {accept: 'application/json'};
-  if (arenaSecret) {
-    headers.authorization = `Bearer ${arenaSecret}`;
-  }
-  const snapRes = await fetch(`${base}/api/arena/ladders`, {headers});
-  if (snapRes.ok) {
-    const snap = await snapRes.json() as {ladders?: coordinator.LadderSnapshot[]};
-    return snap.ladders ?? [];
-  }
-  const hubRes = await fetch(`${base}/arena.json`, {
-    headers: {accept: 'application/json'},
-  });
-  if (!hubRes.ok) return [];
-  const hub = await hubRes.json() as {
-    ladders?: Array<{
-      id: string;
-      slot: string;
-      format: string;
-      team: 'random' | 'harvested' | 'pools';
-      status: 'upcoming' | 'active' | 'settling' | 'archived';
-      min: number;
-    }>;
-  };
-
-  const out: coordinator.LadderSnapshot[] = [];
-  for (const l of hub.ladders ?? []) {
-    if (l.status !== 'active' && l.status !== 'settling') continue;
-    const ladRes = await fetch(`${base}/arena/ladders/${encodeURIComponent(l.id)}.json`, {
-      headers: {accept: 'application/json'},
-    });
-    if (!ladRes.ok) continue;
-    const detail = await ladRes.json() as {
-      entries?: coordinator.LadderSnapshot['entries'];
-      pairAggregates?: coordinator.LadderSnapshot['pairAggregates'];
-      roster?: coordinator.ActiveRosterEntry[];
-    };
-    out.push({
-      id: l.id,
-      slot: l.slot,
-      format: l.format,
-      team: l.team,
-      status: l.status,
-      min: l.min,
-      entries: detail.entries ?? [],
-      pairAggregates: detail.pairAggregates ?? [],
-      roster: detail.roster,
-    });
-  }
-  return out;
+  const {ladders} = await client.getPlayableLadders();
+  return ladders;
 }
 
 export async function runDaemon(opts: {
   serverUrl?: string;
   arenaSecret?: string;
   stateDbPath?: string;
+  agentsDir?: string;
+  stagingDir?: string;
+  coldDir?: string;
+  teamsDir?: string;
+  archiveLogsDir?: string;
+  maxTurns?: number;
   pollIntervalMs?: number;
   once?: boolean;
 } = {}) {
@@ -124,10 +81,14 @@ export async function runDaemon(opts: {
     client,
     stateDb,
     baselineSpec,
+    agentsDir: opts.agentsDir,
+    stagingDir: opts.stagingDir,
+    coldDir: opts.coldDir,
+    teamsDir: opts.teamsDir,
+    archiveLogsDir: opts.archiveLogsDir,
+    maxTurns: opts.maxTurns,
     devMode: isDev,
   });
-
-  await coord.recoverIncompleteMatches();
 
   const pollIntervalMs = opts.pollIntervalMs ?? 5000;
   const status = {running: true};
@@ -137,26 +98,32 @@ export async function runDaemon(opts: {
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 
-  while (status.running) {
-    try {
-      await coord.flushOutbox();
-      const ladders = await fetchPlayableLadderSnapshots(serverUrl, arenaSecret);
-      const byId = new Map(ladders.map(l => [l.id, l]));
-      await coord.processPendingSubmissions(byId);
-      const played = await coord.playNextScheduledMatch(ladders);
-      if (!played && !opts.once) {
-        await client.sendHeartbeat({idle: true}).catch(() => undefined);
-        await new Promise(r => setTimeout(r, pollIntervalMs));
-      }
-    } catch {
-      if (!opts.once) {
-        await new Promise(r => setTimeout(r, pollIntervalMs));
-      }
-    }
-    if (opts.once) break;
-  }
+  try {
+    await coord.recoverIncompleteMatches();
 
-  stateDb.close();
+    while (status.running) {
+      try {
+        await coord.flushOutbox();
+        const ladders = await fetchPlayableLadderSnapshots(client);
+        const byId = new Map(ladders.map(l => [l.id, l]));
+        await coord.processPendingSubmissions(byId);
+        const played = await coord.playNextScheduledMatch(ladders);
+        if (!played && !opts.once) {
+          await client.sendHeartbeat({idle: true}).catch(() => undefined);
+          await new Promise(r => setTimeout(r, pollIntervalMs));
+        }
+      } catch (err) {
+        console.error('Arena daemon cycle error:', err);
+        if (opts.once) throw err;
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+      }
+      if (opts.once) break;
+    }
+  } finally {
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+    stateDb.close();
+  }
 }
 
 if (require.main === module) {
