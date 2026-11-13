@@ -1074,6 +1074,8 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     expect(arenaScript).toContain('/usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL"');
     expect(arenaScript).toContain('wipe_scratch');
     expect(arenaScript).toContain('exec /opt/arena/bin/limit "$SLOT"');
+    expect(arenaScript).toContain('--memory=13g');
+    expect(arenaScript).toContain('--memory-swap=26g');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P1');
     expect(sudoers).toContain('/usr/bin/chflags -R nouchg\\,nouappend\\,noschg /Volumes/P2');
     expect(sandbox).toContain('(deny file-write-flags');

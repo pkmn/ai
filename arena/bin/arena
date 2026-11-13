@@ -41,7 +41,7 @@ case "$ACTION" in
         --security-opt=no-new-privileges \
         --cpus=8 \
         --memory=13g \
-        --memory-swap=13g \
+        --memory-swap=26g \
         --pids-limit=256 \
         --tmpfs /tmp:rw,noexec,nosuid,size=500m \
         --mount "type=bind,src=${SCRATCH_VOL},dst=/scratch,rw" \
