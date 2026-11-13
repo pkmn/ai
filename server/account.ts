@@ -161,10 +161,6 @@ function redirect(res: http.ServerResponse, location: string, status = 302) {
   res.end();
 }
 
-function formatIsoDate(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
-}
-
 function renderActiveSection(entries: db.ActiveEntryView[]): string {
   if (!entries.length) {
     return `<section id="active">
@@ -337,7 +333,7 @@ function renderHistorySection(
       <td>${artifactCell}</td>
       <td>${smokeCell}</td>
       <td>${stateCell}</td>
-      <td class="num muted">${formatIsoDate(v.submittedAt)}</td>
+      <td class="num muted">${formatUtcDate(v.submittedAt)}</td>
     </tr>`;
   }).join('');
 

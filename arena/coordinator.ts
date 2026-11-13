@@ -379,26 +379,6 @@ export class Coordinator {
         pinnedVersionIds: new Set([sub.versionId]),
       });
 
-      // Compute 3rd-version retirement per subscribed ladder
-      const retiredVersionIdsByLadder: Record<string, number> = {};
-      if (laddersById) {
-        for (const lid of sub.ladders) {
-          const snap = laddersById.get(lid);
-          if (!snap) continue;
-          const activeForAgent = snap.entries
-            .filter(
-              e =>
-                e.agentId === sub.agentId &&
-                e.role !== 'retired' &&
-                e.versionId !== sub.versionId
-            )
-            .sort((a, b) => a.lcb - b.lcb || a.versionId - b.versionId);
-          if (activeForAgent.length >= 2) {
-            retiredVersionIdsByLadder[lid] = activeForAgent[0].versionId;
-          }
-        }
-      }
-
       await this.reportSubmissionOrOutbox({
         versionId: sub.versionId,
         smokeStatus: 'passed',
@@ -406,9 +386,6 @@ export class Coordinator {
         smokeDurationMillis,
         smokeTurnMillis: Math.max(1, maxTurnMillis),
         smokePeakRam: maxPeakRam,
-        ...(Object.keys(retiredVersionIdsByLadder).length > 0
-          ? {retiredVersionIdsByLadder}
-          : {}),
       });
     }
 
@@ -721,67 +698,21 @@ export class Coordinator {
     }> = [];
 
     for (const ladder of ladders) {
-      if (ladder.status !== 'active' && ladder.status !== 'settling') continue;
       const rosterIds = ladder.team === 'pools' && ladder.roster
         ? new Set(ladder.roster.map(r => r.agentId))
         : undefined;
-      if (rosterIds && rosterIds.size < Math.max(2, ladder.min)) continue;
-      const isPlayable = (e: LadderSnapshot['entries'][number]) =>
-        e.role !== 'retired' && e.role !== 'quarantined' &&
-        (!rosterIds || rosterIds.has(e.agentId));
-      const activeEntries = ladder.entries.filter(isPlayable);
-      const uniqueAgents = new Set(activeEntries.map(e => e.agentId));
-      const minActiveAgents = ladder.status === 'settling' ? 2 : Math.max(2, ladder.min);
-      if (uniqueAgents.size < minActiveAgents) continue;
-      if (ladder.status === 'settling' && activeEntries.every(e => e.settledAt !== undefined)) {
-        continue;
-      }
-
-      const M = ladder.entries.length;
-      const indexByVersion = new Map<number, number>();
-      const activeIndices: number[] = [];
-      const agentIds = new Int32Array(M);
-      const theta = new Float64Array(M);
-      const sigma = new Float64Array(M);
-      const agentMatches = new Int32Array(M);
-      const pairMatches = new Int32Array(M * M);
-
-      for (let i = 0; i < M; i++) {
-        const e = ladder.entries[i];
-        indexByVersion.set(e.versionId, i);
-        if (isPlayable(e)) activeIndices.push(i);
-        agentIds[i] = e.agentId;
-        theta[i] = (e.elo - 1500) / ratings.ELO_SCALE;
-        sigma[i] = e.se / ratings.ELO_SCALE;
-        agentMatches[i] = e.matches;
-      }
-
-      for (const p of ladder.pairAggregates) {
-        const i = indexByVersion.get(p.lowVersionId);
-        const j = indexByVersion.get(p.highVersionId);
-        if (i !== undefined && j !== undefined) {
-          const count = p.ww + p.wt + p.split + p.tl + p.ll;
-          pairMatches[i * M + j] = count;
-          pairMatches[j * M + i] = count;
-        }
-      }
-
-      const state: ratings.LadderMatchState = {
-        id: ladder.id,
-        activeAgentIndices: activeIndices,
-        agentIds,
-        minAgents: minActiveAgents,
-        theta,
-        sigma,
-        agentMatches,
-        pairMatches,
-        lastMatchNumber: this.stateDb.getLastGlobalMatchSequence(ladder.id),
-        residencyMultipliers: computeResidencyMultipliers(
+      const state = arena.buildLadderMatchState(
+        ladder,
+        ladder.entries,
+        ladder.pairAggregates,
+        this.stateDb.getLastGlobalMatchSequence(ladder.id),
+        rosterIds,
+        computeResidencyMultipliers(
           ladder.entries.map(e => e.versionId),
           this.stateDb
-        ),
-      };
-      candidates.push({ladder, state});
+        )
+      );
+      if (state) candidates.push({ladder, state});
     }
 
     if (candidates.length === 0) return undefined;

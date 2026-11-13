@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as http from 'http';
 import * as net from 'net';
 import * as path from 'path';
@@ -165,6 +166,30 @@ export function installHeadSupport(app: object) {
     }
     next();
   });
+}
+
+export const EXT_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
+  'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>' +
+  '</svg>';
+
+export function writeFileAtomic(filePath: string, contents: string) {
+  fs.mkdirSync(path.dirname(filePath), {recursive: true});
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  fs.writeFileSync(tmpPath, contents, 'utf8');
+  fs.renameSync(tmpPath, filePath);
+}
+
+export function copyFileAtomic(srcPath: string, destPath: string) {
+  fs.mkdirSync(path.dirname(destPath), {recursive: true});
+  const tmpPath = `${destPath}.tmp.${process.pid}.${Date.now()}`;
+  fs.copyFileSync(srcPath, tmpPath);
+  fs.renameSync(tmpPath, destPath);
+}
+
+export function parseUtcDayMillis(dayUtc: string): number {
+  return Date.parse(`${dayUtc}T00:00:00Z`);
 }
 
 export function formatUtcDate(epochSeconds: number): string {

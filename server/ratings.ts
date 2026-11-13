@@ -825,3 +825,41 @@ export function computeTournamentRatings(
 
   return {theta, elo, eloStd, covariance, nu};
 }
+
+export function solveIndexedDavidson(
+  entries: ReadonlyArray<{versionId: number; isAnchor: boolean; elo: number}>,
+  pairs: ReadonlyArray<{
+    lowVersionId: number;
+    highVersionId: number;
+    ww: number;
+    wt: number;
+    split: number;
+    tl: number;
+    ll: number;
+  }>
+): {indexByVer: Map<number, number>; theta: Float64Array; covariance: Float64Array} {
+  const indexByVer = new Map<number, number>();
+  let anchorIdx = -1;
+  for (let i = 0; i < entries.length; i++) {
+    indexByVer.set(entries[i].versionId, i);
+    if (entries[i].isAnchor && anchorIdx === -1) anchorIdx = i;
+  }
+  const indexedPairs: PairMatchCounts[] = [];
+  for (const p of pairs) {
+    const idxLow = indexByVer.get(p.lowVersionId);
+    const idxHigh = indexByVer.get(p.highVersionId);
+    if (idxLow === undefined || idxHigh === undefined) continue;
+    indexedPairs.push({
+      i: idxLow,
+      j: idxHigh,
+      ww: p.ww,
+      wt: p.wt,
+      split: p.split,
+      tl: p.tl,
+      ll: p.ll,
+    });
+  }
+  const warm = new Float64Array(entries.map(e => (e.elo - 1500) / ELO_SCALE));
+  const solved = computeDavidsonRatings(entries.length, indexedPairs, anchorIdx, 1500, warm);
+  return {indexByVer, theta: solved.theta, covariance: solved.covariance};
+}

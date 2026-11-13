@@ -6,7 +6,7 @@ import {html} from 'site';
 import * as yaml from 'yaml';
 
 import {cite, header, style} from './build';
-import {escapeHtml, slugify} from './util';
+import {EXT_ICON, escapeHtml, slugify} from './util';
 
 export interface ArenaBadge {
   slot: string;
@@ -94,10 +94,6 @@ const RANKING = [
 // https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
 // eslint-disable-next-line max-len
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
-
-const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
-  'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>';
 
 export function page(
   dir: string,
@@ -201,7 +197,7 @@ export function page(
         : `${project.active[0]} – ${project.active[1]}`)
       : `${project.active} – <em>present</em>`;
     const title = project.name ?? `<em>${project.identifier ?? identifier}</em>`;
-    const site = project.site ? `<a href="${project.site}" class="subtle">${ICON}</a>` : '';
+    const site = project.site ? `<a href="${project.site}" class="subtle">${EXT_ICON}</a>` : '';
     buf.push(`<h3><a href="#${id}" class="subtle">${title}</a>${site}</h3>`);
     buf.push('<table>');
     if (project.paper) {

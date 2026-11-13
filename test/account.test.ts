@@ -188,11 +188,8 @@ describe('/account/ portal, Pending/Qualified/Eligible/Ineligible lifecycle, and
       now: () => currentNow,
     });
     wiki.register(app, {
-      wikiDir,
-      projectsFile,
-      auth: wikiInstance.auth,
+      wiki: wikiInstance,
       db,
-      push: false,
     });
 
     server = http.createServer((req, res) => app.handler(req as polka.Request, res));

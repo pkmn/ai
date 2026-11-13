@@ -56,6 +56,7 @@ export interface Options {
   auth?: auth.Auth;
   authConfig?: auth.Config;
   db?: db.Database;
+  wiki?: Wiki;
   isDiscordMember?: (discordId: string) => boolean;
   push?: boolean;
 }
@@ -890,7 +891,7 @@ export class Wiki {
 
 export function register(app: polka.Polka, options: Options = {}): Wiki {
   installHeadSupport(app);
-  const wiki = new Wiki(options);
+  const wiki = options.wiki ?? new Wiki(options);
   wiki.auth.register(app);
   const getLiveTournament = () => options.db?.getRunningTournament();
   const renderPage = (opts: Omit<Parameters<typeof renderPageHtml>[0], 'liveTournament'>) =>

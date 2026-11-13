@@ -15,6 +15,7 @@ import * as render from '../server/render';
 import * as smogon from '../server/smogon';
 import {ensureSimConfigured, validateHarvestedTeams} from '../server/teams';
 import {syncStaticLiveBanner} from '../static/build';
+import {writeFileAtomic} from '../static/util';
 
 export interface Options {
   db?: db.Database;
@@ -316,9 +317,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           rawTarget,
           smogonSpec
         );
-        const tmpPath = `${projectsPath}.tmp.${process.pid}.${Date.now()}`;
-        fs.writeFileSync(tmpPath, updated.yaml, 'utf8');
-        fs.renameSync(tmpPath, projectsPath);
+        writeFileAtomic(projectsPath, updated.yaml);
 
         if (flags.has('offline')) {
           database.syncProjects(projectsPath, avatarsDir, now);

@@ -17,7 +17,16 @@ import {
   renderer as siteRenderer,
 } from '../static/build';
 import * as projects from '../static/projects';
-import {escapeHtml, installHeadSupport, renderTemplate, root} from '../static/util';
+import {
+  EXT_ICON,
+  copyFileAtomic,
+  escapeHtml,
+  installHeadSupport,
+  parseUtcDayMillis,
+  renderTemplate,
+  root,
+  writeFileAtomic,
+} from '../static/util';
 import {getDex, hashTeam} from '../teams';
 
 import * as arena from './arena';
@@ -33,10 +42,8 @@ const ARENA_TEMPLATE = fs.readFileSync(root('static', 'arena.html'), 'utf8');
 const LADDER_TEMPLATE = fs.readFileSync(root('static', 'ladder.html'), 'utf8');
 const BATTLES_TEMPLATE = fs.readFileSync(root('static', 'battles.html'), 'utf8');
 
-export const EXT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-  'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>' +
-  '</svg>';
+export {EXT_ICON, copyFileAtomic, writeFileAtomic};
+export const resolveLadderArchive = arena.resolveLadderArchive;
 
 const SERIES_COLORS = [
   'var(--hl-symbol)',
@@ -221,52 +228,10 @@ export interface ProjectMeta {
   language?: string | string[];
 }
 
-export function writeFileAtomic(filePath: string, contents: string) {
-  fs.mkdirSync(path.dirname(filePath), {recursive: true});
-  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-  fs.writeFileSync(tmpPath, contents, 'utf8');
-  fs.renameSync(tmpPath, filePath);
-}
-
-export function copyFileAtomic(srcPath: string, destPath: string) {
-  fs.mkdirSync(path.dirname(destPath), {recursive: true});
-  const tmpPath = `${destPath}.tmp.${process.pid}.${Date.now()}`;
-  fs.copyFileSync(srcPath, tmpPath);
-  fs.renameSync(tmpPath, destPath);
-}
-
 // Escapes `<` as `\u003c` so inline `<script>` JSON payloads can never break out via `</script>`.
 export function safeInlineJson(value: unknown): string {
   if (value === undefined) return 'undefined';
   return JSON.stringify(value).replace(/</g, '\\u003c');
-}
-
-// Full battle logs (containing unpacked team sheets, real agent identities, and telemetry) are
-// published exclusively for competitor team-pool (`pools`) ladders strictly AFTER the ladder has
-// been retired (`status === 'archived'`).
-export function resolveLadderArchive(
-  publicDir: string,
-  ladder: Pick<db.LadderRow, 'id' | 'team' | 'status'>
-): {name: string; href: string} | undefined {
-  if (ladder.team !== 'pools' || ladder.status !== 'archived') return undefined;
-  const idEnc = encodeURIComponent(ladder.id);
-  const defaultName = `${ladder.id}-logs.7z`;
-  const candidates = [
-    {
-      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, defaultName),
-      name: defaultName,
-      href: `/arena/ladders/${idEnc}/${encodeURIComponent(defaultName)}`,
-    },
-    {
-      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, 'logs.7z'),
-      name: 'logs.7z',
-      href: `/arena/ladders/${idEnc}/logs.7z`,
-    },
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c.diskPath)) return {name: c.name, href: c.href};
-  }
-  return undefined;
 }
 
 function buildLadderTeamsDocument(
@@ -364,10 +329,6 @@ export function formatShortDay(dayUtc: string): string {
   return `${m} ${dayNum}`;
 }
 
-function parseUtcDayMillis(dayUtc: string): number {
-  return Date.parse(`${dayUtc}T00:00:00Z`);
-}
-
 function computeStreakLabel(entry: db.LeaderboardEntryView): {
   text: string;
   html: string;
@@ -419,46 +380,7 @@ export function computeAdjacentLosMap(
     pairMap.set(`${p.lowVersionId}:${p.highVersionId}`, p);
   }
 
-  let fallbackSolve: {
-    indexByVer: Map<number, number>;
-    theta: Float64Array;
-    covariance: Float64Array;
-  } | undefined;
-
-  const ensureFallbackSolve = () => {
-    if (fallbackSolve) return fallbackSolve;
-    const indexByVer = new Map<number, number>();
-    let anchorIdx = -1;
-    for (let i = 0; i < entries.length; i++) {
-      indexByVer.set(entries[i].versionId, i);
-      if (entries[i].isAnchor && anchorIdx === -1) anchorIdx = i;
-    }
-    const indexedPairs: ratings.PairMatchCounts[] = [];
-    for (const p of pairs) {
-      const idxLow = indexByVer.get(p.lowVersionId);
-      const idxHigh = indexByVer.get(p.highVersionId);
-      if (idxLow === undefined || idxHigh === undefined) continue;
-      indexedPairs.push({
-        i: idxLow,
-        j: idxHigh,
-        ww: p.ww,
-        wt: p.wt,
-        split: p.split,
-        tl: p.tl,
-        ll: p.ll,
-      });
-    }
-    const warm = new Float64Array(entries.map(e => (e.elo - 1500) / ratings.ELO_SCALE));
-    const solved = ratings.computeDavidsonRatings(
-      entries.length,
-      indexedPairs,
-      anchorIdx,
-      1500,
-      warm
-    );
-    fallbackSolve = {indexByVer, theta: solved.theta, covariance: solved.covariance};
-    return fallbackSolve;
-  };
+  let fallbackSolve: ReturnType<typeof ratings.solveIndexedDavidson> | undefined;
 
   for (let r = 0; r < ranked.length - 1; r++) {
     const cur = ranked[r];
@@ -470,13 +392,13 @@ export function computeAdjacentLosMap(
       const los = cur.versionId === lowId ? pair.lowLos : 1 - pair.lowLos;
       result.set(cur.versionId, los);
     } else {
-      const solved = ensureFallbackSolve();
-      const idxCur = solved.indexByVer.get(cur.versionId);
-      const idxNext = solved.indexByVer.get(next.versionId);
+      fallbackSolve ??= ratings.solveIndexedDavidson(entries, pairs);
+      const idxCur = fallbackSolve.indexByVer.get(cur.versionId);
+      const idxNext = fallbackSolve.indexByVer.get(next.versionId);
       if (idxCur !== undefined && idxNext !== undefined) {
         const los = ratings.computeLOS(
-          solved.theta,
-          solved.covariance,
+          fallbackSolve.theta,
+          fallbackSolve.covariance,
           entries.length,
           idxCur,
           idxNext

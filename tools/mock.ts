@@ -1865,23 +1865,6 @@ export class Runner {
     }
   }
 
-  private computeRetiredVersionIdsByLadder(
-    agentId: number,
-    versionId: number,
-    ladderIds: string[]
-  ): Record<string, number> {
-    const retiredByLadder: Record<string, number> = {};
-    for (const ladderId of ladderIds) {
-      const active = this.db.getLeaderboardEntries(ladderId)
-        .filter(e => e.agentId === agentId && e.role !== 'retired' && e.versionId !== versionId)
-        .sort((a, b) => a.lcb - b.lcb || a.versionId - b.versionId);
-      if (active.length >= 2) {
-        retiredByLadder[ladderId] = active[0].versionId;
-      }
-    }
-    return retiredByLadder;
-  }
-
   private computeTelemetryForVersion(versionId: number, agentId: number) {
     return {
       bytes: (120 + ((agentId * 37 + versionId * 19) % 280)) * 1024 * 1024,
@@ -1903,12 +1886,6 @@ export class Runner {
 
     if (this.serverUrl) {
       const client = this.getArenaClient();
-      const pendingPayload = await client.getPendingSubmissions();
-      const remoteSub = pendingPayload.submissions.find(s => s.versionId === versionId);
-      const ladders = remoteSub?.ladders ?? [];
-      const retired = smokeStatus === 'passed'
-        ? this.computeRetiredVersionIdsByLadder(ver.agentId, versionId, ladders)
-        : {};
       await client.reportSubmissionStatus({
         versionId,
         smokeStatus,
@@ -1919,14 +1896,8 @@ export class Runner {
         ...(smokeStatus === 'failed'
           ? {smokeError: meta.error ?? `Smoke test failed in ${ver.version}`}
           : {}),
-        retiredVersionIdsByLadder: retired,
       });
     } else {
-      const pendingRow = this.db.getPendingSubmissions().find(p => p.versionId === versionId);
-      const ladders = pendingRow?.ladders ?? [];
-      const retired = smokeStatus === 'passed'
-        ? this.computeRetiredVersionIdsByLadder(ver.agentId, versionId, ladders)
-        : {};
       this.db.applySubmissionStatus({
         versionId,
         smokeStatus,
@@ -1941,7 +1912,6 @@ export class Runner {
         smokeError: smokeStatus === 'failed'
           ? (meta.error ?? `Smoke test failed in ${ver.version}`)
           : undefined,
-        retiredVersionIdsByLadder: retired,
         now: this.state.now + 5,
       });
       if (markNotified) {
@@ -1997,9 +1967,6 @@ export class Runner {
       if (this.serverUrl) {
         const ver = this.db.getVersionById(sub.versionId)!;
         const telemetry = this.computeTelemetryForVersion(sub.versionId, sub.agentId);
-        const retired = status === 'pass'
-          ? this.computeRetiredVersionIdsByLadder(sub.agentId, sub.versionId, sub.ladders)
-          : {};
         await this.getArenaClient().reportSubmissionStatus({
           versionId: sub.versionId,
           smokeStatus: status === 'fail' ? 'failed' : 'passed',
@@ -2010,7 +1977,6 @@ export class Runner {
           ...(status === 'fail'
             ? {smokeError: meta.error ?? `Boot failure in ${ver.version}`}
             : {}),
-          retiredVersionIdsByLadder: retired,
         });
         delete this.state.pendingSmoke[String(sub.versionId)];
       } else {

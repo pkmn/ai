@@ -6,7 +6,14 @@ import * as path from 'path';
 import polka from 'polka';
 
 import type * as db from '../db';
-import {VERSION_RE, escapeHtml, installHeadSupport, root, validateAgentName} from '../static/util';
+import {
+  VERSION_RE,
+  escapeHtml,
+  installHeadSupport,
+  root,
+  validateAgentName,
+  writeFileAtomic,
+} from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
@@ -236,20 +243,24 @@ export interface TournamentDocument {
   games: TournamentGameEntry[];
 }
 
+// Full battle logs (containing unpacked team sheets, real agent identities, and telemetry) are
+// published exclusively for competitor team-pool (`pools`) ladders strictly AFTER the ladder has
+// been retired (`status === 'archived'`).
 export function resolveLadderArchive(
   publicDir: string,
-  ladderId: string
+  ladder: Pick<db.LadderRow, 'id' | 'team' | 'status'>
 ): {name: string; href: string} | undefined {
-  const idEnc = encodeURIComponent(ladderId);
-  const defaultName = `${ladderId}-logs.7z`;
+  if (ladder.team !== 'pools' || ladder.status !== 'archived') return undefined;
+  const idEnc = encodeURIComponent(ladder.id);
+  const defaultName = `${ladder.id}-logs.7z`;
   const candidates = [
     {
-      diskPath: path.join(publicDir, 'arena', 'ladders', ladderId, defaultName),
+      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, defaultName),
       name: defaultName,
       href: `/arena/ladders/${idEnc}/${encodeURIComponent(defaultName)}`,
     },
     {
-      diskPath: path.join(publicDir, 'arena', 'ladders', ladderId, 'logs.7z'),
+      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, 'logs.7z'),
       name: 'logs.7z',
       href: `/arena/ladders/${idEnc}/logs.7z`,
     },
@@ -460,7 +471,11 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
     return {...m, ladderHref};
   }
   const idEnc = encodeURIComponent(m.ladderId);
-  const archiveHref = resolveLadderArchive(publicDir, m.ladderId)?.href;
+  const archiveHref = resolveLadderArchive(publicDir, {
+    id: m.ladderId,
+    team: m.teamMode,
+    status: m.ladderStatus,
+  })?.href;
   const teamsHref = `/arena/ladders/${idEnc}/teams.json`;
   return {...m, ladderHref, archiveHref, teamsHref};
 }
@@ -707,15 +722,33 @@ export interface ClientOptions {
 }
 
 export function buildLadderMatchState(
-  ladder: db.LadderRow,
-  entries: db.LeaderboardEntryView[],
-  pairs: db.PairAggregateRow[],
+  ladder: Pick<db.LadderRow, 'id' | 'status' | 'min'>,
+  entries: ReadonlyArray<{
+    versionId: number;
+    agentId: number;
+    role: string;
+    elo: number;
+    se: number;
+    matches: number;
+    settledAt?: number;
+  }>,
+  pairs: ReadonlyArray<{
+    lowVersionId: number;
+    highVersionId: number;
+    ww: number;
+    wt: number;
+    split: number;
+    tl: number;
+    ll: number;
+  }>,
   lastMatchNumber = 0,
-  rosterAgentIds?: ReadonlySet<number>
+  rosterAgentIds?: ReadonlySet<number>,
+  residencyMultipliers?: Float64Array
 ): ratings.LadderMatchState | undefined {
   if (ladder.status !== 'active' && ladder.status !== 'settling') return undefined;
-  const isPlayableEntry = (e: db.LeaderboardEntryView) =>
-    e.role !== 'retired' && (!rosterAgentIds || rosterAgentIds.has(e.agentId));
+  const isPlayableEntry = (e: (typeof entries)[number]) =>
+    e.role !== 'retired' && e.role !== 'quarantined' &&
+    (!rosterAgentIds || rosterAgentIds.has(e.agentId));
   const activeEntries = entries.filter(isPlayableEntry);
   const distinctAgents = new Set(activeEntries.map(e => e.agentId));
   const minActiveAgents = ladder.status === 'settling' ? 2 : Math.max(2, ladder.min);
@@ -764,6 +797,7 @@ export function buildLadderMatchState(
     agentMatches,
     pairMatches,
     lastMatchNumber,
+    residencyMultipliers,
   };
 }
 
@@ -1207,15 +1241,6 @@ function safeSecretEquals(provided: string, expected: string): boolean {
   const a = crypto.createHash('sha256').update(provided).digest();
   const b = crypto.createHash('sha256').update(expected).digest();
   return crypto.timingSafeEqual(a, b);
-}
-
-// Write to a sibling temp file and rename(2) atomically so Nginx serving /api/live.json directly
-// from disk never observes a half-written JSON payload during concurrent spectator polling.
-function writeFileAtomic(filePath: string, contents: string) {
-  fs.mkdirSync(path.dirname(filePath), {recursive: true});
-  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-  fs.writeFileSync(tmpPath, contents, 'utf8');
-  fs.renameSync(tmpPath, filePath);
 }
 
 function isFiniteNonNeg(v: unknown): v is number {

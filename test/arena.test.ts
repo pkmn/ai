@@ -1190,7 +1190,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(processed).toBe(1);
       expect(reportedStatuses).toHaveLength(1);
       expect(reportedStatuses[0].smokeStatus).toBe('passed');
-      expect(reportedStatuses[0].retiredVersionIdsByLadder).toEqual({gen9customgame: 10});
+      expect(reportedStatuses[0].retiredVersionIdsByLadder).toBeUndefined();
 
       // 2. Register v25 locally with defaultAgentScript and run a scheduled 2-game mirror match
       const v30Local = stateDb.getLocalAgent(30)!;

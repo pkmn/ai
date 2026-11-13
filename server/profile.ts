@@ -4,7 +4,14 @@ import * as path from 'path';
 import {AVATARS_DIR} from '../db';
 import type * as db from '../db';
 import {Renderer, header, injectLiveBanner} from '../static/build';
-import {escapeHtml, renderTemplate, root} from '../static/util';
+import {
+  EXT_ICON,
+  escapeHtml,
+  formatUtcDate,
+  parseUtcDayMillis,
+  renderTemplate,
+  root,
+} from '../static/util';
 
 import * as arena from './arena';
 import * as ratings from './ratings';
@@ -29,16 +36,8 @@ interface LadderProfileClientData {
   reign: Record<string, string>;
 }
 
-function formatIsoDate(sec: number): string {
-  return new Date(sec * 1000).toISOString().slice(0, 10);
-}
-
 function formatIsoDateTimeUtc(sec: number): string {
   return `${new Date(sec * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`;
-}
-
-function parseUtcDayMillis(dayUtc: string): number {
-  return Date.parse(`${dayUtc}T00:00:00Z`);
 }
 
 function formatDurationCell(seconds: number, boldDays = false): string {
@@ -124,7 +123,7 @@ function buildVersionDynamicStats(
     entry.role !== 'retired' && (entry.matches < 10 || entry.se > 60);
   let rank: string;
   if (entry.role === 'retired') {
-    const retDate = entry.retiredAt ? ` ${formatIsoDate(entry.retiredAt)}` : '';
+    const retDate = entry.retiredAt ? ` ${formatUtcDate(entry.retiredAt)}` : '';
     rank = `<span class="muted">— (retired${retDate})</span>`;
   } else if (entry.rankCurrent !== undefined && !isProvisional) {
     const nextRank = entry.rankCurrent + 1;
@@ -251,7 +250,7 @@ function renderVersionsLineageSvg(
   nowSec: number
 ): string {
   const entriesChron = [...entriesDesc].reverse();
-  const todayUtc = formatIsoDate(nowSec);
+  const todayUtc = formatUtcDate(nowSec);
   const snapsByVer = new Map<number, db.LadderSnapshotHistoryRow[]>();
   for (const s of snapshots) {
     const list = snapsByVer.get(s.versionId) ?? [];
@@ -265,7 +264,7 @@ function renderVersionsLineageSvg(
   for (const e of entriesChron) {
     const raw = (snapsByVer.get(e.versionId) ?? []).filter(r => r.matches > 0);
     const pts = raw.map(r => ({day: r.dayUtc, elo: r.elo, se: r.se}));
-    const startDay = formatIsoDate(e.submittedAt);
+    const startDay = formatUtcDate(e.submittedAt);
     if (pts.length === 0) {
       pts.push({day: startDay, elo: e.elo, se: e.se});
       if (e.role !== 'retired' && todayUtc > startDay) {
@@ -511,7 +510,7 @@ function renderVersionsPane(
       `<td class="num">${wins}–${losses}–${ties}</td>` +
       `<td class="num">${turnText}</td>` +
       `<td class="num">${ramText}</td>` +
-      `<td class="num muted">${formatIsoDate(e.submittedAt)}</td>` +
+      `<td class="num muted">${formatUtcDate(e.submittedAt)}</td>` +
       '</tr>';
   }).join('');
 
@@ -582,45 +581,7 @@ function renderHeadToHeadPane(opts: {
   const seenOppAgents = new Set<number>();
   const h2hRows: string[] = [];
 
-  let fallbackSolve: {
-    indexByVer: Map<number, number>;
-    theta: Float64Array;
-    covariance: Float64Array;
-  } | undefined;
-  const ensureSolve = () => {
-    if (fallbackSolve) return fallbackSolve;
-    const indexByVer = new Map<number, number>();
-    let anchorIdx = -1;
-    for (let i = 0; i < allEntries.length; i++) {
-      indexByVer.set(allEntries[i].versionId, i);
-      if (allEntries[i].isAnchor && anchorIdx === -1) anchorIdx = i;
-    }
-    const indexedPairs: ratings.PairMatchCounts[] = [];
-    for (const p of pairs) {
-      const iLow = indexByVer.get(p.lowVersionId);
-      const iHigh = indexByVer.get(p.highVersionId);
-      if (iLow === undefined || iHigh === undefined) continue;
-      indexedPairs.push({
-        i: iLow,
-        j: iHigh,
-        ww: p.ww,
-        wt: p.wt,
-        split: p.split,
-        tl: p.tl,
-        ll: p.ll,
-      });
-    }
-    const warm = new Float64Array(allEntries.map(e => (e.elo - 1500) / ratings.ELO_SCALE));
-    const res = ratings.computeDavidsonRatings(
-      allEntries.length,
-      indexedPairs,
-      anchorIdx,
-      1500,
-      warm
-    );
-    fallbackSolve = {indexByVer, theta: res.theta, covariance: res.covariance};
-    return fallbackSolve;
-  };
+  let fallbackSolve: ReturnType<typeof ratings.solveIndexedDavidson> | undefined;
 
   for (const opp of oppCandidates) {
     if (seenOppAgents.has(opp.agentId)) continue;
@@ -681,11 +642,17 @@ function renderHeadToHeadPane(opts: {
       ? (isLow ? pair.lowLos : 1 - pair.lowLos)
       : undefined;
     if (losVal === undefined) {
-      const s = ensureSolve();
-      const idxUs = s.indexByVer.get(rep.versionId);
-      const idxOpp = s.indexByVer.get(opp.versionId);
+      fallbackSolve ??= ratings.solveIndexedDavidson(allEntries, pairs);
+      const idxUs = fallbackSolve.indexByVer.get(rep.versionId);
+      const idxOpp = fallbackSolve.indexByVer.get(opp.versionId);
       if (idxUs !== undefined && idxOpp !== undefined) {
-        losVal = ratings.computeLOS(s.theta, s.covariance, allEntries.length, idxUs, idxOpp);
+        losVal = ratings.computeLOS(
+          fallbackSolve.theta,
+          fallbackSolve.covariance,
+          allEntries.length,
+          idxUs,
+          idxOpp
+        );
       }
     }
     const losPct = losVal !== undefined ? losVal * 100 : 50;
@@ -1007,7 +974,7 @@ export function renderAgentProfile(opts: {
   const meta = projectMeta.get(agent.name);
   const siteLink = meta?.site
     ? `<a href="${escapeHtml(meta.site)}" class="subtle" ` +
-      `title="Project Homepage">${render.EXT_ICON}</a>`
+      `title="Project Homepage">${EXT_ICON}</a>`
     : '';
   const profileHeader = injectLiveBanner(
     header(`${escapeHtml(agent.name)}${siteLink}`),

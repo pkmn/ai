@@ -138,5 +138,5 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
     arena: arenaHandle,
     avatarsDir: isMock ? root('.mock', 'static', 'avatars') : undefined,
   });
-  wiki.register(app, {auth: wikiInstance.auth, db});
+  wiki.register(app, {wiki: wikiInstance, db});
 });
