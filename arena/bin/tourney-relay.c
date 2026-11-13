@@ -4,12 +4,13 @@
 // Measures exact local agent thinking time on the Worker VM using CLOCK_MONOTONIC,
 // completely eliminating SSH / WAN network round-trip latency from turn clock accounting:
 //   1. Forwards stdin lines from sshd -> agent stdin.
-//   2. The instant a `|request|` line (that is not `"wait":true`) is written to the agent's stdin,
-//      starts a local monotonic stopwatch (`timer_active = 1`).
-//   3. Forwards stdout lines from agent -> sshd stdout.
-//   4. The instant the agent outputs a non-empty line while `timer_active == 1`, stops the
-//      local stopwatch and emits `ARENA_TURN_MS=<elapsed_ms>\n` on stderr BEFORE forwarding
-//      the choice line on stdout.
+//   2. Each actionable `|request|` (non-wait) or `|tournament|byot|` line increments `req_seq`
+//      and starts a local monotonic stopwatch (`timer_active = 1`).
+//   3. Forwards stdout lines from agent -> sshd stdout, tagging each delta on stderr as
+//      `ARENA_TURN_MS=<elapsed_ms>\t<req_seq>\n` so pondering lines from an earlier request
+//      can never desynchronize a later turn's clock queue.
+//   4. Terminates `-child_pgid` with `SIGKILL` immediately if stdout breaks (`POLLHUP`/`POLLERR`)
+//      or within 100ms of stdin EOF so SSH disconnects never orphan GPU processes.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -23,10 +24,16 @@
 #include <time.h>
 #include <unistd.h>
 
-#define LINE_BUF_CAP 65536
+#define IN_BUF_CAP 262144
+#define OUT_BUF_CAP 65536
 
-struct line_buf {
-  char data[LINE_BUF_CAP];
+struct in_line_buf {
+  char data[IN_BUF_CAP];
+  size_t len;
+};
+
+struct out_line_buf {
+  char data[OUT_BUF_CAP];
   size_t len;
 };
 
@@ -47,12 +54,6 @@ static int is_actionable_request(const char *line) {
     return 1;
   }
   if (strncmp(line, "|tournament|byot|", 17) == 0) {
-    return 1;
-  }
-  if (
-    strncmp(line, "|error|[Invalid choice]", 23) == 0 ||
-    strncmp(line, "|error|[Unavailable choice]", 27) == 0
-  ) {
     return 1;
   }
   return 0;
@@ -96,6 +97,7 @@ int main(int argc, char **argv) {
   signal(SIGINT, handle_term_signal);
   signal(SIGTERM, handle_term_signal);
   signal(SIGHUP, handle_term_signal);
+  signal(SIGPIPE, SIG_IGN);
 
   pid_t pid = fork();
   if (pid < 0) {
@@ -129,27 +131,60 @@ int main(int argc, char **argv) {
   close(out_pipe[1]);
 
   int timer_active = 0;
+  int stdin_eof = 0;
+  uint64_t req_seq = 0;
   uint64_t turn_start_ns = 0;
+  uint64_t eof_deadline_ns = 0;
 
-  struct pollfd fds[2];
+  struct pollfd fds[3];
   fds[0].fd = STDIN_FILENO;
   fds[0].events = POLLIN;
   fds[1].fd = out_pipe[0];
   fds[1].events = POLLIN;
+  fds[2].fd = STDOUT_FILENO;
+  fds[2].events = 0;
 
-  struct line_buf in_buf = {{0}, 0};
-  struct line_buf out_buf = {{0}, 0};
+  struct in_line_buf in_buf = {{0}, 0};
+  struct out_line_buf out_buf = {{0}, 0};
   char chunk[4096];
 
-  while (poll(fds, 2, -1) > 0) {
-    // 1. Arbiter -> Agent stdin (unbuffered read so poll() never misses batched lines)
-    if (fds[0].fd >= 0 && (fds[0].revents & (POLLIN | POLLHUP))) {
+  for (;;) {
+    int timeout_ms = -1;
+    if (stdin_eof) {
+      uint64_t now_ns = monotonic_ns();
+      if (now_ns >= eof_deadline_ns) goto done;
+      timeout_ms = (int)((eof_deadline_ns - now_ns + 999999ULL) / 1000000ULL);
+    }
+
+    int pr = poll(fds, 3, timeout_ms);
+    if (pr < 0) {
+      if (errno == EINTR) continue;
+      goto done;
+    }
+    if (pr == 0 && stdin_eof) {
+      goto done;
+    }
+
+    if (fds[2].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      goto done;
+    }
+
+    // 1. Arbiter -> Agent stdin
+    if (fds[0].fd >= 0 && (fds[0].revents & (POLLIN | POLLHUP | POLLERR))) {
       ssize_t n = read(STDIN_FILENO, chunk, sizeof(chunk));
       if (n <= 0) {
+        if (in_buf.len > 0) {
+          (void)write_all(in_pipe[1], in_buf.data, in_buf.len);
+          in_buf.len = 0;
+        }
         close(in_pipe[1]);
+        in_pipe[1] = -1;
         fds[0].fd = -1;
+        stdin_eof = 1;
+        eof_deadline_ns = monotonic_ns() + 100000000ULL;
       } else {
-        if (in_buf.len + (size_t)n >= LINE_BUF_CAP) {
+        if (in_buf.len + (size_t)n >= IN_BUF_CAP) {
+          if (write_all(in_pipe[1], in_buf.data, in_buf.len) < 0) goto done;
           in_buf.len = 0;
         }
         memcpy(in_buf.data + in_buf.len, chunk, (size_t)n);
@@ -161,6 +196,7 @@ int main(int argc, char **argv) {
           char saved = in_buf.data[line_len];
           in_buf.data[line_len] = '\0';
           if (is_actionable_request(in_buf.data)) {
+            req_seq++;
             turn_start_ns = monotonic_ns();
             timer_active = 1;
           }
@@ -173,10 +209,12 @@ int main(int argc, char **argv) {
     }
 
     // 2. Agent stdout -> Arbiter
-    if (fds[1].revents & (POLLIN | POLLHUP)) {
+    if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
       ssize_t n = read(out_pipe[0], chunk, sizeof(chunk));
       if (n <= 0) break;
-      if (out_buf.len + (size_t)n >= LINE_BUF_CAP) {
+      if (out_buf.len + (size_t)n >= OUT_BUF_CAP) {
+        // Forward oversized partial line so the arbiter's >64 KiB flood guard kills cleanly.
+        if (write_all(STDOUT_FILENO, out_buf.data, out_buf.len) < 0) goto done;
         out_buf.len = 0;
       }
       memcpy(out_buf.data + out_buf.len, chunk, (size_t)n);
@@ -193,7 +231,12 @@ int main(int argc, char **argv) {
           uint64_t now_ns = monotonic_ns();
           uint64_t elapsed_ns = now_ns > turn_start_ns ? now_ns - turn_start_ns : 1ULL;
           uint64_t elapsed_ms = (elapsed_ns + 999999ULL) / 1000000ULL;
-          fprintf(stderr, "ARENA_TURN_MS=%llu\n", (unsigned long long)elapsed_ms);
+          fprintf(
+            stderr,
+            "ARENA_TURN_MS=%llu\t%llu\n",
+            (unsigned long long)elapsed_ms,
+            (unsigned long long)req_seq
+          );
           fflush(stderr);
           turn_start_ns = now_ns;
         }
@@ -206,6 +249,9 @@ int main(int argc, char **argv) {
 
   int status = 0;
 done:
+  if (in_pipe[1] >= 0) {
+    close(in_pipe[1]);
+  }
   if (child_pgid > 0) {
     kill(-child_pgid, SIGKILL);
   }

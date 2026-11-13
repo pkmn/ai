@@ -19,20 +19,41 @@ fi
 # Prefer killing the agent child before sshd or system services if the 48 GB VM hits OOM
 choom -n 500 -- $$ >/dev/null 2>&1 || true
 
-# Background watcher: long-poll GCE metadata server for Spot VM preemption notice.
-# The instant GCP flips `preempted` to TRUE (30s before hard power-off), emit a marker
-# on stderr and terminate the bubblewrap child so the SSH stream closes cleanly.
+# Save original stderr on FD 3 for preemption signaling without keeping stdout/stderr open on curl
+exec 3>&2
+
+# Background watcher: two-step GCE metadata ETag check + long-poll for Spot VM preemption notice.
+# Keeping curl's own stdout/stderr redirected away from sshd ensures an orphaned curl never blocks
+# SSH channel EOF if the game finishes normally.
 watch_preemption() {
-  local p
-  p=$(curl -s -f -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/preempted?wait_for_change=true&last_etag=0" \
-    2>/dev/null || true)
-  if [[ "$p" == "TRUE" ]]; then
-    echo "ARENA_SPOT_PREEMPTED" >&2
-    kill -TERM 0 2>/dev/null || true
+  local meta_url="http://metadata.google.internal/computeMetadata/v1/instance/preempted"
+  local hdr_file
+  hdr_file="$(mktemp /tmp/arena-preempt-hdr.XXXXXX)"
+  local initial
+  initial=$(curl -s -f --max-time 2 -D "$hdr_file" -H "Metadata-Flavor: Google" \
+    "$meta_url" </dev/null 2>/dev/null || true)
+  local etag
+  etag=$(awk 'tolower($1) == "etag:" { gsub(/[\r\n"]/, "", $2); print $2; exit }' "$hdr_file" 2>/dev/null || true)
+  rm -f "$hdr_file"
+
+  if [[ "$initial" == "TRUE" ]]; then
+    echo "ARENA_SPOT_PREEMPTED" >&3
+    kill -TERM $$ 2>/dev/null || true
+    return
+  fi
+  if [[ -z "$etag" ]]; then
+    return
+  fi
+
+  local changed
+  changed=$(curl -s -f -H "Metadata-Flavor: Google" \
+    "${meta_url}?wait_for_change=true&last_etag=${etag}" </dev/null 2>/dev/null || true)
+  if [[ "$changed" == "TRUE" ]]; then
+    echo "ARENA_SPOT_PREEMPTED" >&3
+    kill -TERM $$ 2>/dev/null || true
   fi
 }
-watch_preemption &
+watch_preemption >/dev/null 2>&1 &
 WATCHER_PID=$!
 trap 'kill $WATCHER_PID 2>/dev/null || true' EXIT
 
@@ -42,6 +63,7 @@ exec /usr/local/bin/tourney-relay \
   bwrap \
     --unshare-all \
     --die-with-parent \
+    --clearenv \
     --ro-bind "$ROOTFS" / \
     --proc /proc \
     --dev /dev \
@@ -53,10 +75,11 @@ exec /usr/local/bin/tourney-relay \
     --ro-bind-try /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
     --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 \
     --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 \
-    --tmpfs /tmp \
-    --tmpfs /scratch \
+    --size 4294967296 --tmpfs /tmp \
+    --size 4294967296 --tmpfs /scratch \
     --setenv HOME /scratch \
     --setenv TMPDIR /scratch \
+    --setenv ARENA_PONDER 1 \
     --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     --chdir / \
     /run

@@ -21,6 +21,7 @@ import {
 } from '../arena/packages';
 import {
   ConcurrentTournamentGame,
+  TournamentCoordinator,
   buildStratifiedTournamentBook,
   rewriteBlindPlayerNames,
   selectNextTournamentBatch,
@@ -222,8 +223,26 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     });
 
     proc.kill('SIGTERM');
-    expect(stderrLines.join('')).toMatch(/ARENA_TURN_MS=[1-9]\d*/);
+    expect(stderrLines.join('')).toMatch(/ARENA_TURN_MS=[1-9]\d*\t1/);
     expect(stdoutLines.join('')).toContain('default');
+
+    // Verify stdin EOF kills hung/ignoring child process groups within ~100ms (no GPU orphans)
+    const hungScript = path.join(tmpDir, 'hung-gpu-agent.js');
+    fs.writeFileSync(
+      hungScript,
+      '#!/usr/bin/env node\nsetInterval(() => {}, 10000);\n',
+      {mode: 0o755}
+    );
+    const hungRelay = spawn(relayBin, [process.execPath, hungScript], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const exitedPromise = new Promise<number | null>(resolve => {
+      hungRelay.on('exit', code => resolve(code));
+    });
+    hungRelay.stdin.end();
+    const exitStart = Date.now();
+    await exitedPromise;
+    expect(Date.now() - exitStart).toBeLessThan(1500);
   });
 
   test(
@@ -1431,6 +1450,70 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         expect(processedUpcoming).toBe(1);
         expect(db.getVersionById(upcomingSub.id)?.smokeStatus).toBe('passed');
         expect(db.getVersionById(tourneySub.id)?.smokeStatus).toBe('pending');
+
+        // GCP TournamentCoordinator validates pending tournament OCI submissions and runs full
+        // Round-Robin + Superfinal with live `.log` publication.
+        const tourneySubA1 = db.createSubmission({
+          agentId: a1.id,
+          version: '3.0.0-t9',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:3.0.0-t9',
+          sha256: 'd'.repeat(64),
+          ladderIds: [],
+          tournamentIds: ['9'],
+        });
+        const tourneySubA2 = db.createSubmission({
+          agentId: a2.id,
+          version: '3.0.0-t9',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/foul-play:3.0.0-t9',
+          sha256: 'e'.repeat(64),
+          ladderIds: [],
+          tournamentIds: ['9'],
+        });
+        db.db.prepare('UPDATE tournaments SET games_per_matchup = 2, batch_size = 2 WHERE id = ?')
+          .run('9');
+
+        const tourCoord = new TournamentCoordinator({
+          client,
+          baselineSpec: {
+            agentId: '_baseline',
+            displayName: 'Baseline',
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: relayBin,
+            localArgs: [process.execPath, defaultAgentScript],
+          },
+          agentsDir: path.join(tmpDir, 'gcp-tourney-agents'),
+          superfinalGames: 2,
+          maxTurns: 1,
+          prepareSubmissionRootfs: () => 2048,
+          resolveEntrantSpec: entrant => ({
+            agentId: `${entrant.agentSlug}-${entrant.versionId}`,
+            displayName: entrant.agentName,
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: relayBin,
+            localArgs: [process.execPath, defaultAgentScript],
+          }),
+        });
+
+        const validatedCount = await tourCoord.processPendingSubmissions('9');
+        expect(validatedCount).toBe(3);
+        expect(db.getVersionById(tourneySub.id)?.smokeStatus).toBe('passed');
+        expect(db.getVersionById(tourneySubA1.id)?.smokeStatus).toBe('passed');
+        expect(db.getVersionById(tourneySubA2.id)?.smokeStatus).toBe('passed');
+        expect(db.getTournamentEntrants('9')).toHaveLength(3);
+
+        db.seedTournamentEntrants('9');
+        const tourRun = await tourCoord.runTournament('9');
+        expect(tourRun.roundRobinGames).toBe(6);
+        expect(tourRun.superfinalGames).toBe(2);
+        expect(db.getTournament('9')?.status).toBe('completed');
+        const finalEntrants = db.getTournamentEntrants('9');
+        expect(finalEntrants.map(e => e.finalRank)).toEqual([1, 2, 3]);
+        const tourLogDir = path.join(publicDir, 'arena', 'tournaments', '9');
+        expect(fs.readdirSync(tourLogDir).filter(f => f.endsWith('.log'))).toHaveLength(8);
       } finally {
         if (server) {
           server.closeAllConnections();

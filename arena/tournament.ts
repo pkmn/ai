@@ -1,4 +1,7 @@
 import {ChildProcessWithoutNullStreams, execFileSync, spawn} from 'child_process';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as readline from 'readline';
 
 import {BattleStreams, Dex, PRNGSeed, PokemonSet, TeamValidator, Teams} from '@pkmn/sim';
@@ -6,8 +9,10 @@ import {BattleStreams, Dex, PRNGSeed, PokemonSet, TeamValidator, Teams} from '@p
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
-import {ensureSimConfigured, resolveArenaFormatId} from '../server/teams';
+import {ensureSimConfigured, resolveArenaFormatId, sampleRandomPair} from '../server/teams';
 import {toID} from '../static/util';
+
+import {MAX_IMAGE_BYTES, formatAgentTargetId, verifyOciManifestDigest} from './packages';
 
 ensureSimConfigured();
 
@@ -79,6 +84,7 @@ export interface TournamentGameOptions {
   p1TeamPacked?: string;
   p2TeamPacked?: string;
   maxTurns?: number;
+  smokeStopAfterTurn?: number;
   startingBankSeconds?: number;
   firstTurnGraceSeconds?: number;
   maxTurnSeconds?: number;
@@ -97,18 +103,25 @@ export interface TournamentGameResult {
   p2TeamPacked: string;
   p1BankSeconds: number;
   p2BankSeconds: number;
+  p1MeanTurnMillis: number;
+  p2MeanTurnMillis: number;
 }
 
 interface RemoteTournamentPlayer {
   slot: PlayerSlot;
   spec: TournamentAgentSpec;
   proc: ChildProcessWithoutNullStreams;
+  usesRelay: boolean;
+  reqSeq: number;
   lineQueue: string[];
   lineResolver: ((line: string | undefined) => void) | undefined;
   localTurnMsQueue: number[];
+  turnMsWaiter: (() => void) | undefined;
   spotPreempted: boolean;
   sshDisconnected: boolean;
   bankMs: number;
+  totalTurnMs: number;
+  decisionsCount: number;
   hasTakenFirstDecision: boolean;
   retryingInvalidChoice: boolean;
   invalidStrikes: number;
@@ -145,6 +158,7 @@ export class ConcurrentTournamentGame {
   private p1TeamPacked?: string;
   private p2TeamPacked?: string;
   private readonly maxTurns: number;
+  private readonly smokeStopAfterTurn?: number;
   private readonly startingBankMs: number;
   private readonly firstTurnGraceMs: number;
   private readonly maxTurnMs: number;
@@ -178,6 +192,7 @@ export class ConcurrentTournamentGame {
     this.p1TeamPacked = options.p1TeamPacked;
     this.p2TeamPacked = options.p2TeamPacked;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
+    this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.startingBankMs =
       (options.startingBankSeconds ?? arena.STARTING_BANK_SECONDS) * 1000;
     this.firstTurnGraceMs =
@@ -231,16 +246,22 @@ export class ConcurrentTournamentGame {
         {stdio: ['pipe', 'pipe', 'pipe']}
       );
 
+    const usesRelay = !spec.localCommand || path.basename(spec.localCommand) === 'tourney-relay';
     const player: RemoteTournamentPlayer = {
       slot,
       spec,
       proc,
+      usesRelay,
+      reqSeq: 0,
       lineQueue: [],
       lineResolver: undefined,
       localTurnMsQueue: [],
+      turnMsWaiter: undefined,
       spotPreempted: false,
       sshDisconnected: false,
       bankMs: this.startingBankMs,
+      totalTurnMs: 0,
+      decisionsCount: 0,
       hasTakenFirstDecision: false,
       retryingInvalidChoice: false,
       invalidStrikes: 0,
@@ -253,6 +274,11 @@ export class ConcurrentTournamentGame {
       player.exited = true;
       if (code === 255) {
         player.sshDisconnected = true;
+      }
+      if (player.turnMsWaiter) {
+        const w = player.turnMsWaiter;
+        player.turnMsWaiter = undefined;
+        w();
       }
       if (player.lineResolver) {
         const resolve = player.lineResolver;
@@ -291,9 +317,22 @@ export class ConcurrentTournamentGame {
     const errRl = readline.createInterface({input: proc.stderr, crlfDelay: Infinity});
     errRl.on('line', errLine => {
       if (errLine.startsWith('ARENA_TURN_MS=')) {
-        const ms = Number(errLine.slice('ARENA_TURN_MS='.length).trim());
-        if (Number.isFinite(ms) && ms >= 0) {
+        const rawVal = errLine.slice('ARENA_TURN_MS='.length).trim();
+        const [msStr, seqStr] = rawVal.split('\t');
+        const ms = Number(msStr);
+        const seq = seqStr !== undefined ? Number(seqStr) : player.reqSeq;
+        if (
+          Number.isFinite(ms) &&
+          ms >= 0 &&
+          seq === player.reqSeq &&
+          player.localTurnMsQueue.length < MAX_LINE_QUEUE
+        ) {
           player.localTurnMsQueue.push(ms);
+          if (player.turnMsWaiter) {
+            const w = player.turnMsWaiter;
+            player.turnMsWaiter = undefined;
+            w();
+          }
         }
       } else if (errLine.includes('ARENA_SPOT_PREEMPTED')) {
         player.spotPreempted = true;
@@ -308,7 +347,35 @@ export class ConcurrentTournamentGame {
     return player;
   }
 
-  private readLineWithTimeout(
+  private async takeLocalTurnMs(
+    player: RemoteTournamentPlayer,
+    line: string | undefined,
+    wallMs: number
+  ): Promise<number> {
+    if (!line || line.length === 0) return wallMs;
+    if (player.localTurnMsQueue.length > 0) {
+      return player.localTurnMsQueue.shift()!;
+    }
+    if (player.usesRelay && !player.exited) {
+      await new Promise<void>(resolve => {
+        const t = setTimeout(() => {
+          if (player.turnMsWaiter === wake) player.turnMsWaiter = undefined;
+          resolve();
+        }, 25);
+        const wake = () => {
+          clearTimeout(t);
+          resolve();
+        };
+        player.turnMsWaiter = wake;
+      });
+      if (player.localTurnMsQueue.length > 0) {
+        return player.localTurnMsQueue.shift()!;
+      }
+    }
+    return wallMs;
+  }
+
+  private async readLineWithTimeout(
     player: RemoteTournamentPlayer,
     budgetMs: number
   ): Promise<{line: string | undefined; elapsedMs: number; timedOut: boolean}> {
@@ -317,29 +384,33 @@ export class ConcurrentTournamentGame {
     if (player.lineQueue.length > 0) {
       const line = player.lineQueue.shift()!;
       const wallMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-      const localMs = line.length > 0 ? player.localTurnMsQueue.shift() : undefined;
-      const elapsedMs = localMs ?? wallMs;
-      return Promise.resolve({line, elapsedMs, timedOut: false});
+      const elapsedMs = await this.takeLocalTurnMs(player, line, wallMs);
+      return {line, elapsedMs, timedOut: false};
     }
     if (player.exited) {
-      return Promise.resolve({line: undefined, elapsedMs: 0, timedOut: false});
+      return {line: undefined, elapsedMs: 0, timedOut: false};
     }
 
-    return new Promise(resolve => {
-      // Allow +1500 ms network slack on the arbiter timer so local VM clock is authoritative
-      const timer = setTimeout(() => {
-        player.lineResolver = undefined;
-        resolve({line: undefined, elapsedMs: budgetMs, timedOut: true});
-      }, Math.max(1, Math.ceil(budgetMs + 1500)));
+    const raw = await new Promise<{line: string | undefined; wallMs: number; timedOut: boolean}>(
+      resolve => {
+        // Allow +1500 ms network slack on the arbiter timer so local VM clock is authoritative
+        const timer = setTimeout(() => {
+          player.lineResolver = undefined;
+          resolve({line: undefined, wallMs: budgetMs, timedOut: true});
+        }, Math.max(1, Math.ceil(budgetMs + 1500)));
 
-      player.lineResolver = line => {
-        clearTimeout(timer);
-        const wallMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-        const localMs = line && line.length > 0 ? player.localTurnMsQueue.shift() : undefined;
-        const elapsedMs = localMs ?? wallMs;
-        resolve({line, elapsedMs, timedOut: false});
-      };
-    });
+        player.lineResolver = line => {
+          clearTimeout(timer);
+          const wallMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+          resolve({line, wallMs, timedOut: false});
+        };
+      }
+    );
+    if (raw.timedOut) {
+      return {line: undefined, elapsedMs: budgetMs, timedOut: true};
+    }
+    const elapsedMs = await this.takeLocalTurnMs(player, raw.line, raw.wallMs);
+    return {line: raw.line, elapsedMs, timedOut: false};
   }
 
   private validateOrFallbackTeam(rawTeam: string | undefined, staticFallback?: string): string {
@@ -362,6 +433,9 @@ export class ConcurrentTournamentGame {
     player: RemoteTournamentPlayer,
     opponentName: string
   ): Promise<string> {
+    player.reqSeq++;
+    player.lineQueue.length = 0;
+    player.localTurnMsQueue.length = 0;
     if (!player.exited && player.proc.stdin.writable) {
       player.proc.stdin.write(`|tournament|byot|${this.format}|${opponentName}\n`);
     }
@@ -478,6 +552,8 @@ export class ConcurrentTournamentGame {
         const decisionElapsedMs = Math.max(1, Math.ceil(totalElapsedMs));
         const overGraceMs = Math.max(0, decisionElapsedMs - graceMs);
         player.bankMs = Math.max(0, player.bankMs - overGraceMs);
+        player.totalTurnMs += decisionElapsedMs;
+        player.decisionsCount++;
 
         const choiceCmd = req.teamPreview && !parsed.choice.startsWith('team ')
           ? `team ${parsed.choice}`
@@ -535,7 +611,9 @@ export class ConcurrentTournamentGame {
         }
 
         if (actionableReqJson) {
+          player.reqSeq++;
           player.lineQueue.length = 0;
+          player.localTurnMsQueue.length = 0;
         }
         if (!player.exited && player.proc.stdin.writable) {
           player.proc.stdin.write(`${chunk}\n`);
@@ -593,6 +671,8 @@ export class ConcurrentTournamentGame {
           p2TeamPacked: p2Team,
           p1BankSeconds: Math.round(this.startingBankMs / 1000),
           p2BankSeconds: Math.round(this.startingBankMs / 1000),
+          p1MeanTurnMillis: 0,
+          p2MeanTurnMillis: 0,
         };
       }
 
@@ -601,7 +681,16 @@ export class ConcurrentTournamentGame {
           for (const line of rawChunk.split('\n')) {
             if (line.startsWith('|turn|')) {
               this.currentTurn = parseInt(line.slice('|turn|'.length), 10);
-              if (this.currentTurn > this.maxTurns && !this.ended) {
+              if (
+                this.smokeStopAfterTurn !== undefined &&
+                this.currentTurn > this.smokeStopAfterTurn &&
+                !this.ended
+              ) {
+                this.ended = true;
+                this.winner = 'tie';
+                this.endReason = 'smoke_complete';
+                await this.battleStream.write('>forcetie');
+              } else if (this.currentTurn > this.maxTurns && !this.ended) {
                 this.ended = true;
                 this.winner = 'tie';
                 this.endReason = `tie_${this.maxTurns}_turns`;
@@ -665,6 +754,12 @@ export class ConcurrentTournamentGame {
         p2TeamPacked: p2Team,
         p1BankSeconds: Math.max(0, Math.round(this.p1.bankMs / 1000)),
         p2BankSeconds: Math.max(0, Math.round(this.p2.bankMs / 1000)),
+        p1MeanTurnMillis: this.p1.decisionsCount > 0
+          ? Math.max(1, Math.round(this.p1.totalTurnMs / this.p1.decisionsCount))
+          : 1,
+        p2MeanTurnMillis: this.p2.decisionsCount > 0
+          ? Math.max(1, Math.round(this.p2.totalTurnMs / this.p2.decisionsCount))
+          : 1,
       };
     } finally {
       try {
@@ -910,4 +1005,754 @@ export function provisionSpotWorkerVM(
   throw new Error(
     `All L4 zones exhausted while provisioning ${vmName} (${provisioningModel})`
   );
+}
+
+function stripOciTagOrDigest(imageRef: string): string {
+  const withoutDigest = imageRef.split('@')[0];
+  const slashIdx = withoutDigest.lastIndexOf('/');
+  const tail = slashIdx >= 0 ? withoutDigest.slice(slashIdx + 1) : withoutDigest;
+  const colonIdx = tail.indexOf(':');
+  if (colonIdx < 0) return withoutDigest;
+  const repoTail = tail.slice(0, colonIdx);
+  return slashIdx >= 0 ? `${withoutDigest.slice(0, slashIdx)}/${repoTail}` : repoTail;
+}
+
+function writePrivateSkopeoAuthfile(workDir: string, imageRef: string, rawToken: string): string {
+  const clean = rawToken
+    .replace(/^authorization:\s*/i, '')
+    .replace(/^(?:bearer|basic)\s+/i, '')
+    .trim();
+  const creds = clean.includes(':') ? clean : `oauth2:${clean}`;
+  const host = imageRef.split('/')[0];
+  const authPath = path.join(workDir, 'auth.json');
+  const payload = JSON.stringify({
+    auths: {
+      [host]: {auth: Buffer.from(creds, 'utf8').toString('base64')},
+    },
+  });
+  fs.writeFileSync(authPath, payload, {mode: 0o600});
+  return authPath;
+}
+
+function shellQuote(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+// Unpacks and verifies a `linux/amd64` tournament OCI image into `/opt/arena/agents/<targetId>` on
+// GCP using `skopeo` + `umoci` (without requiring a rootful container daemon).
+export function unpackTournamentOciRootfs(opts: {
+  imageRef: string;
+  targetId: string;
+  expectedSha256: string;
+  authToken?: string;
+  agentsDir?: string;
+  stagingDir?: string;
+}): number {
+  if (!/^[A-Za-z0-9._-]+$/.test(opts.targetId)) {
+    throw new Error(`Invalid tournament agent targetId: ${opts.targetId}`);
+  }
+  const agentsDir = opts.agentsDir ?? '/opt/arena/agents';
+  const stagingDir = opts.stagingDir ?? '/tmp';
+  fs.mkdirSync(stagingDir, {recursive: true});
+  fs.mkdirSync(agentsDir, {recursive: true});
+
+  const cleanRef = opts.imageRef.replace(/^docker:\/\//, '').trim();
+  const repoRef = stripOciTagOrDigest(cleanRef);
+  const workDir = fs.mkdtempSync(path.join(stagingDir, `tourney-oci-${opts.targetId}-`));
+  fs.chmodSync(workDir, 0o700);
+
+  try {
+    const skopeoAuthArgs: string[] = [];
+    if (opts.authToken) {
+      const authFile = writePrivateSkopeoAuthfile(workDir, cleanRef, opts.authToken);
+      skopeoAuthArgs.push('--authfile', authFile);
+    }
+
+    const outerRaw = execFileSync(
+      'skopeo',
+      ['inspect', '--raw', ...skopeoAuthArgs, `docker://${cleanRef}`],
+      {encoding: 'utf8', timeout: 30_000}
+    );
+    const outerSha = crypto.createHash('sha256').update(outerRaw).digest('hex');
+    const cleanExpected = opts.expectedSha256.trim().toLowerCase().replace(/^sha256:/, '');
+    if (cleanExpected && cleanExpected !== outerSha) {
+      throw new Error(`OCI manifest digest mismatch: expected ${cleanExpected}, got ${outerSha}`);
+    }
+
+    let manifestRaw = outerRaw;
+    let targetSha = outerSha;
+    const parsedOuter = JSON.parse(outerRaw) as {
+      manifests?: Array<{digest?: string; platform?: {os?: string; architecture?: string}}>;
+    };
+    if (Array.isArray(parsedOuter.manifests)) {
+      const amd64 = parsedOuter.manifests.find(
+        m => m.platform?.os === 'linux' && m.platform?.architecture === 'amd64'
+      );
+      if (!amd64?.digest) {
+        throw new Error('Multi-arch OCI index has no linux/amd64 manifest');
+      }
+      targetSha = amd64.digest.toLowerCase().replace(/^sha256:/, '');
+      manifestRaw = execFileSync(
+        'skopeo',
+        ['inspect', '--raw', ...skopeoAuthArgs, `docker://${repoRef}@sha256:${targetSha}`],
+        {encoding: 'utf8', timeout: 30_000}
+      );
+    }
+
+    verifyOciManifestDigest(manifestRaw, targetSha);
+
+    const layoutRef = `oci:${path.join(workDir, 'layout')}:latest`;
+    execFileSync(
+      'skopeo',
+      [
+        'copy',
+        '--override-os', 'linux',
+        '--override-arch', 'amd64',
+        ...skopeoAuthArgs,
+        `docker://${repoRef}@sha256:${targetSha}`,
+        layoutRef,
+      ],
+      {timeout: 180_000}
+    );
+
+    const bundleDir = path.join(workDir, 'bundle');
+    execFileSync(
+      'umoci',
+      ['unpack', '--rootless', '--image', `${path.join(workDir, 'layout')}:latest`, bundleDir],
+      {timeout: 180_000}
+    );
+
+    const rootfsDir = path.join(bundleDir, 'rootfs');
+    const runPath = path.join(rootfsDir, 'run');
+    if (!fs.existsSync(runPath)) {
+      const cfgPath = path.join(bundleDir, 'config.json');
+      if (fs.existsSync(cfgPath)) {
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) as {
+          process?: {cwd?: string; env?: string[]; args?: string[]};
+        };
+        const procArgs = cfg.process?.args ?? [];
+        if (procArgs.length > 0) {
+          const lines = ['#!/bin/sh'];
+          for (const envEntry of cfg.process?.env ?? []) {
+            lines.push(`export ${shellQuote(envEntry)}`);
+          }
+          lines.push(`cd ${shellQuote(cfg.process?.cwd || '/')}`);
+          lines.push(`exec ${procArgs.map(shellQuote).join(' ')} "$@"`);
+          fs.writeFileSync(runPath, `${lines.join('\n')}\n`, {mode: 0o755});
+        }
+      }
+    }
+
+    if (!fs.existsSync(runPath)) {
+      throw new Error('OCI rootfs is missing executable /run and has no OCI Entrypoint/Cmd');
+    }
+    fs.chmodSync(runPath, 0o755);
+
+    const duKb = Number(
+      execFileSync('du', ['-sk', rootfsDir], {encoding: 'utf8', timeout: 30_000})
+        .trim()
+        .split(/\s+/)[0]
+    );
+    const unpackedBytes = Number.isFinite(duKb) ? duKb * 1024 : 0;
+    if (unpackedBytes <= 0 || unpackedBytes > MAX_IMAGE_BYTES) {
+      throw new Error(
+        `Unpacked tournament rootfs size (${unpackedBytes} B) exceeds 500 MB cap`
+      );
+    }
+
+    for (const subDir of ['tmp', 'scratch', 'proc', 'dev', 'usr/lib/x86_64-linux-gnu']) {
+      fs.mkdirSync(path.join(rootfsDir, subDir), {recursive: true});
+    }
+    for (const nvLib of [
+      'libcuda.so.1',
+      'libnvidia-ml.so.1',
+      'libnvidia-ptxjitcompiler.so.1',
+    ]) {
+      const targetFile = path.join(rootfsDir, 'usr/lib/x86_64-linux-gnu', nvLib);
+      if (!fs.existsSync(targetFile)) fs.writeFileSync(targetFile, '');
+    }
+
+    const destDir = path.join(agentsDir, opts.targetId);
+    fs.rmSync(destDir, {recursive: true, force: true});
+    fs.renameSync(rootfsDir, destDir);
+    return unpackedBytes;
+  } finally {
+    fs.rmSync(workDir, {recursive: true, force: true});
+  }
+}
+
+export interface TournamentTableBinding {
+  vmHostA: string;
+  controlSocketA: string;
+  vmHostB: string;
+  controlSocketB: string;
+}
+
+export interface TournamentCoordinatorOptions {
+  client: arena.Client;
+  baselineSpec: TournamentAgentSpec;
+  agentsDir?: string;
+  stagingDir?: string;
+  tourneyAgentBin?: string;
+  tables?: readonly TournamentTableBinding[];
+  superfinalGames?: number;
+  maxTurns?: number;
+  byot?: boolean;
+  randomInt?: (max: number) => number;
+  prepareSubmissionRootfs?: (
+    sub: arena.PendingSubmission,
+    targetId: string
+  ) => Promise<number> | number;
+  resolveEntrantSpec?: (
+    entrant: {
+      versionId: number;
+      agentId: number;
+      agentSlug: string;
+      agentName: string;
+      version: string;
+    },
+    vmHost: string,
+    controlSocket: string
+  ) => TournamentAgentSpec;
+}
+
+const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'timeout', 'invalid_choice_3x']);
+
+// GCP-side Tournament Coordinator:
+//   1. `processPendingSubmissions` pulls & smoke-tests `linux/amd64` tournament OCI submissions on
+//      GCP inside `bwrap` (`tourney-agent`) so Mac minis never touch `amd64` tournament artifacts.
+//   2. `runTournament` drives crash-resumable Double Round-Robin waves + Superfinal across
+//      `parallelTables` with live table broadcasts and immediate `.log` replay publication.
+export class TournamentCoordinator {
+  readonly client: arena.Client;
+  private readonly baselineSpec: TournamentAgentSpec;
+  private readonly agentsDir: string;
+  private readonly stagingDir: string;
+  private readonly tourneyAgentBin: string;
+  private readonly tables: readonly TournamentTableBinding[];
+  private readonly superfinalGames: number;
+  private readonly maxTurns?: number;
+  private readonly byot: boolean;
+  private readonly randomInt: (max: number) => number;
+  private readonly prepareSubmissionRootfs?: (
+    sub: arena.PendingSubmission,
+    targetId: string
+  ) => Promise<number> | number;
+  private readonly customResolveEntrantSpec?: TournamentCoordinatorOptions['resolveEntrantSpec'];
+
+  constructor(options: TournamentCoordinatorOptions) {
+    this.client = options.client;
+    this.baselineSpec = options.baselineSpec;
+    this.agentsDir = options.agentsDir ?? '/opt/arena/agents';
+    this.stagingDir = options.stagingDir ?? '/tmp';
+    this.tourneyAgentBin = options.tourneyAgentBin ?? '/usr/local/bin/tourney-agent';
+    this.tables = options.tables ?? [];
+    this.superfinalGames = options.superfinalGames ?? 100;
+    this.maxTurns = options.maxTurns;
+    this.byot = options.byot ?? false;
+    this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
+    this.prepareSubmissionRootfs = options.prepareSubmissionRootfs;
+    this.customResolveEntrantSpec = options.resolveEntrantSpec;
+  }
+
+  private randomPrngSeed(): PRNGSeed {
+    const s0 = this.randomInt(0x10000);
+    const s1 = this.randomInt(0x10000);
+    const s2 = this.randomInt(0x10000);
+    const s3 = this.randomInt(0x10000);
+    return `${s0},${s1},${s2},${s3}`;
+  }
+
+  private resolveEntrantSpec(
+    entrant: {
+      versionId: number;
+      agentId: number;
+      agentSlug: string;
+      agentName: string;
+      version: string;
+    },
+    vmHost: string,
+    controlSocket: string
+  ): TournamentAgentSpec {
+    if (this.customResolveEntrantSpec) {
+      return this.customResolveEntrantSpec(entrant, vmHost, controlSocket);
+    }
+    const targetId = formatAgentTargetId(entrant.agentSlug, entrant.version, entrant.versionId);
+    if (!vmHost || vmHost === 'localhost' || vmHost === '127.0.0.1') {
+      return {
+        agentId: targetId,
+        displayName: entrant.agentName,
+        vmHost: '127.0.0.1',
+        controlSocket: '',
+        localCommand: this.tourneyAgentBin,
+        localArgs: [targetId],
+      };
+    }
+    return {
+      agentId: targetId,
+      displayName: entrant.agentName,
+      vmHost,
+      controlSocket,
+    };
+  }
+
+  async processPendingSubmissions(tournamentId?: string): Promise<number> {
+    const {tournaments = [], submissions} = await this.client.getPendingSubmissions({
+      target: 'tournament',
+      tournamentId,
+    });
+    const tourneyById = new Map(tournaments.map(t => [t.id, t]));
+    let processed = 0;
+
+    for (const sub of submissions) {
+      if (sub.tournaments.length === 0) continue;
+      processed++;
+      const targetId = formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
+
+      let unpackedBytes: number;
+      try {
+        unpackedBytes = this.prepareSubmissionRootfs
+          ? await this.prepareSubmissionRootfs(sub, targetId)
+          : unpackTournamentOciRootfs({
+            imageRef: sub.url,
+            targetId,
+            expectedSha256: sub.sha256,
+            authToken: sub.authToken,
+            agentsDir: this.agentsDir,
+            stagingDir: this.stagingDir,
+          });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await this.client.reportSubmissionStatus({
+          versionId: sub.versionId,
+          smokeStatus: 'failed',
+          smokeError: `GCP OCI unpack/verification failed: ${msg}`,
+        });
+        continue;
+      }
+
+      const candidateSpec = this.resolveEntrantSpec(
+        {
+          versionId: sub.versionId,
+          agentId: sub.agentId,
+          agentSlug: sub.agentSlug,
+          agentName: sub.agentName,
+          version: sub.version,
+        },
+        '127.0.0.1',
+        ''
+      );
+
+      const smokeStart = Date.now();
+      let maxTurnMillis = 1;
+      let smokeError: string | undefined;
+
+      for (const tid of sub.tournaments) {
+        const meta = tourneyById.get(tid);
+        const format = meta?.format ?? 'gen9ou';
+        let customRules: string[] = [];
+        if (meta?.rulesJson) {
+          try {
+            const parsed = JSON.parse(meta.rulesJson) as unknown;
+            if (Array.isArray(parsed)) {
+              customRules = parsed.filter((r): r is string => typeof r === 'string');
+            }
+          } catch {}
+        }
+
+        let p1TeamPacked: string;
+        let p2TeamPacked: string;
+        try {
+          const pair = sampleRandomPair(format, '1,2,3,4', '5,6,7,8');
+          p1TeamPacked = pair.t1Packed;
+          p2TeamPacked = pair.t2Packed;
+        } catch {
+          p1TeamPacked = synthesizeFallbackPackedTeam(format, 0);
+          p2TeamPacked = synthesizeFallbackPackedTeam(format, 1);
+        }
+
+        const smokeGame = new ConcurrentTournamentGame({
+          format,
+          customRules,
+          seed: '1,2,3,4',
+          p1Spec: candidateSpec,
+          p2Spec: this.baselineSpec,
+          byot: this.byot,
+          p1TeamPacked,
+          p2TeamPacked,
+          smokeStopAfterTurn: 1,
+          startingBankSeconds: 30,
+          firstTurnGraceSeconds: 30,
+          maxTurnSeconds: 30,
+        });
+        const res = await smokeGame.run();
+        const p1Faulted =
+          res.winner === 'preempted' ||
+          (TOURNAMENT_FAULT_REASONS.has(res.endReason) && res.winner === 'p2');
+        if (p1Faulted) {
+          smokeError = `GCP smoke test failed in ${format}: ${res.endReason}`;
+          break;
+        }
+        if (res.p1MeanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1MeanTurnMillis;
+      }
+
+      const smokeDurationMillis = Math.max(1, Date.now() - smokeStart);
+      if (smokeError) {
+        fs.rmSync(path.join(this.agentsDir, targetId), {recursive: true, force: true});
+        await this.client.reportSubmissionStatus({
+          versionId: sub.versionId,
+          smokeStatus: 'failed',
+          smokeError,
+        });
+        continue;
+      }
+
+      await this.client.reportSubmissionStatus({
+        versionId: sub.versionId,
+        smokeStatus: 'passed',
+        unpackedBytes,
+        smokeDurationMillis,
+        smokeTurnMillis: maxTurnMillis,
+      });
+    }
+
+    return processed;
+  }
+
+  private samplePairForGame(
+    book: readonly BlindPairTeamEntry[] | undefined,
+    format: string,
+    gameIndexZeroBased: number
+  ): {p1Team: string; p2Team: string; swappedSeats: boolean} {
+    const pairIdx = Math.floor(gameIndexZeroBased / 2);
+    const swappedSeats = gameIndexZeroBased % 2 === 1;
+    if (book && book.length > 0) {
+      const entry = book[pairIdx % book.length];
+      return {
+        p1Team: entry.team1Packed,
+        p2Team: entry.team2Packed,
+        swappedSeats,
+      };
+    }
+    try {
+      const pair = sampleRandomPair(format, this.randomPrngSeed(), this.randomPrngSeed());
+      return {p1Team: pair.t1Packed, p2Team: pair.t2Packed, swappedSeats};
+    } catch {
+      return {
+        p1Team: synthesizeFallbackPackedTeam(format, pairIdx * 2),
+        p2Team: synthesizeFallbackPackedTeam(format, pairIdx * 2 + 1),
+        swappedSeats,
+      };
+    }
+  }
+
+  async runTournament(
+    tournamentId: string
+  ): Promise<{roundRobinGames: number; superfinalGames: number}> {
+    const state = await this.client.getTournamentState(tournamentId);
+    const tourney = state.tournament;
+    if (tourney.status === 'completed') {
+      return {roundRobinGames: 0, superfinalGames: 0};
+    }
+    if (state.entrants.length < 2) {
+      throw new Error(
+        `Tournament "${tournamentId}" requires at least 2 entrants ` +
+        `(found ${state.entrants.length}).`
+      );
+    }
+
+    const entrantByVersion = new Map(state.entrants.map(e => [e.versionId, e]));
+    const versionIds = state.entrants.map(e => e.versionId);
+    const totalNeededForBook = Math.max(tourney.gamesPerMatchup, this.superfinalGames);
+    const book = state.teamPool.length >= 2
+      ? buildStratifiedTournamentBook(state.teamPool, totalNeededForBook, this.randomInt)
+      : undefined;
+    const incSec = arena.turnIncrementSeconds(tourney.format);
+
+    const rrPlayedByPair = new Map<string, number>();
+    const totalGamesByVersion = new Map<number, number>(versionIds.map(v => [v, 0]));
+    for (const g of state.games) {
+      if (g.stage !== 'Round Robin' || g.outcome === undefined) continue;
+      const low = Math.min(g.p1VersionId, g.p2VersionId);
+      const high = Math.max(g.p1VersionId, g.p2VersionId);
+      const key = `${low}:${high}`;
+      rrPlayedByPair.set(key, (rrPlayedByPair.get(key) ?? 0) + 1);
+      totalGamesByVersion.set(g.p1VersionId, (totalGamesByVersion.get(g.p1VersionId) ?? 0) + 1);
+      totalGamesByVersion.set(g.p2VersionId, (totalGamesByVersion.get(g.p2VersionId) ?? 0) + 1);
+    }
+
+    const matchups: TournamentMatchupState[] = [];
+    for (let i = 0; i < versionIds.length; i++) {
+      for (let j = i + 1; j < versionIds.length; j++) {
+        const low = Math.min(versionIds[i], versionIds[j]);
+        const high = Math.max(versionIds[i], versionIds[j]);
+        matchups.push({
+          agentA: low,
+          agentB: high,
+          gamesPlayed: rrPlayedByPair.get(`${low}:${high}`) ?? 0,
+          gamesTarget: tourney.gamesPerMatchup,
+          inFlight: false,
+        });
+      }
+    }
+
+    const tableCount = Math.max(
+      1,
+      Math.min(tourney.parallelTables, Math.floor(versionIds.length / 2))
+    );
+    let markedRunning = tourney.status === 'running';
+    let rrCompleted = 0;
+
+    const playSingleGame = async (params: {
+      tableNum: number;
+      stage: 'Round Robin' | 'Superfinal';
+      cycle: number;
+      matchupGame: number;
+      gameId: string;
+      entA: (typeof state.entrants)[number];
+      entB: (typeof state.entrants)[number];
+      vmHostA: string;
+      controlA: string;
+      vmHostB: string;
+      controlB: string;
+      gameIndexZeroBased: number;
+      finalTournamentStatus?: 'running' | 'completed';
+    }): Promise<void> => {
+      const sampled = this.samplePairForGame(book, tourney.format, params.gameIndexZeroBased);
+      const p1Ent = sampled.swappedSeats ? params.entB : params.entA;
+      const p2Ent = sampled.swappedSeats ? params.entA : params.entB;
+      const p1Host = sampled.swappedSeats ? params.vmHostB : params.vmHostA;
+      const p1Ctrl = sampled.swappedSeats ? params.controlB : params.controlA;
+      const p2Host = sampled.swappedSeats ? params.vmHostA : params.vmHostB;
+      const p2Ctrl = sampled.swappedSeats ? params.controlA : params.controlB;
+
+      let preemptions = 0;
+      for (;;) {
+        const seed = this.randomPrngSeed();
+        const p1Spec = this.resolveEntrantSpec(p1Ent, p1Host, p1Ctrl);
+        const p2Spec = this.resolveEntrantSpec(p2Ent, p2Host, p2Ctrl);
+
+        await this.client.sendTournamentBroadcast(tournamentId, {
+          table: params.tableNum,
+          mode: 'load',
+          label: `Table ${params.tableNum}`,
+          gameId: params.gameId,
+          stage: params.stage,
+          cycle: params.cycle,
+          matchupGame: params.matchupGame,
+          p1: {
+            slug: p1Ent.agentSlug,
+            name: p1Ent.agentName,
+            version: p1Ent.version,
+            bankSeconds: arena.STARTING_BANK_SECONDS,
+            thinking: true,
+            incrementSeconds: incSec,
+          },
+          p2: {
+            slug: p2Ent.agentSlug,
+            name: p2Ent.agentName,
+            version: p2Ent.version,
+            bankSeconds: arena.STARTING_BANK_SECONDS,
+            thinking: true,
+            incrementSeconds: incSec,
+          },
+          lines: [],
+          live: true,
+        }).catch(() => undefined);
+
+        const game = new ConcurrentTournamentGame({
+          format: tourney.format,
+          customRules: tourney.customRules,
+          seed,
+          p1Spec,
+          p2Spec,
+          byot: this.byot,
+          p1TeamPacked: sampled.p1Team,
+          p2TeamPacked: sampled.p2Team,
+          maxTurns: this.maxTurns,
+          onSpectatorChunk: (chunk, snap) => {
+            const newLines = chunk.split('\n').filter(Boolean);
+            if (newLines.length === 0) return;
+            void this.client.sendTournamentBroadcast(tournamentId, {
+              table: params.tableNum,
+              mode: 'append',
+              p1: {
+                slug: p1Ent.agentSlug,
+                name: p1Ent.agentName,
+                version: p1Ent.version,
+                bankSeconds: snap.p1BankSeconds,
+                thinking: snap.p1Thinking,
+                incrementSeconds: incSec,
+              },
+              p2: {
+                slug: p2Ent.agentSlug,
+                name: p2Ent.agentName,
+                version: p2Ent.version,
+                bankSeconds: snap.p2BankSeconds,
+                thinking: snap.p2Thinking,
+                incrementSeconds: incSec,
+              },
+              lines: newLines,
+              live: true,
+            }).catch(() => undefined);
+          },
+        });
+
+        const res = await game.run();
+        if (res.winner === 'preempted' || !res.outcome) {
+          preemptions++;
+          if (preemptions >= 5) {
+            throw new Error(`Exceeded 5 consecutive Spot preemptions on ${params.gameId}`);
+          }
+          continue;
+        }
+
+        const statusUpdate =
+          params.finalTournamentStatus ?? (!markedRunning ? 'running' : undefined);
+        markedRunning = true;
+        await this.client.completeTournamentGame(tournamentId, {
+          table: params.tableNum,
+          log: res.omniscientLog,
+          ...(statusUpdate ? {tournamentStatus: statusUpdate} : {}),
+          game: {
+            id: params.gameId,
+            stage: params.stage,
+            cycle: params.cycle,
+            matchupGame: params.matchupGame,
+            p1VersionId: p1Ent.versionId,
+            p2VersionId: p2Ent.versionId,
+            seed,
+            preemptions,
+            p1Team: res.p1TeamPacked,
+            p2Team: res.p2TeamPacked,
+            outcome: res.outcome,
+            turns: res.turns,
+            endReason: res.endReason,
+            p1BankSeconds: res.p1BankSeconds,
+            p2BankSeconds: res.p2BankSeconds,
+            completedAt: Math.floor(Date.now() / 1000),
+          },
+        });
+        return;
+      }
+    };
+
+    const runTableWorker = async (tableIdx: number) => {
+      const tableNum = tableIdx + 1;
+      const binding = this.tables[tableIdx] ?? {
+        vmHostA: '127.0.0.1',
+        controlSocketA: '',
+        vmHostB: '127.0.0.1',
+        controlSocketB: '',
+      };
+      const residents: TableResidentPair = {vmAAgent: undefined, vmBAgent: undefined};
+
+      for (;;) {
+        const batch = selectNextTournamentBatch(
+          matchups,
+          totalGamesByVersion,
+          residents,
+          tourney.batchSize
+        );
+        if (!batch) break;
+
+        const low = Math.min(batch.agentOnVmA, batch.agentOnVmB);
+        const high = Math.max(batch.agentOnVmA, batch.agentOnVmB);
+        const matchup = matchups.find(m => m.agentA === low && m.agentB === high)!;
+        matchup.inFlight = true;
+        residents.vmAAgent = batch.agentOnVmA;
+        residents.vmBAgent = batch.agentOnVmB;
+
+        const entA = entrantByVersion.get(batch.agentOnVmA)!;
+        const entB = entrantByVersion.get(batch.agentOnVmB)!;
+
+        try {
+          for (let offset = 0; offset < batch.gamesToPlay; offset++) {
+            const gIdx = batch.startingGameIndex + offset;
+            const matchupGame = gIdx + 1;
+            const cycle = Math.floor(gIdx / Math.max(1, tourney.batchSize)) + 1;
+            const gameId =
+              `t${tourney.id}-rr-${low}-${high}-g${String(matchupGame).padStart(3, '0')}`;
+            await playSingleGame({
+              tableNum,
+              stage: 'Round Robin',
+              cycle,
+              matchupGame,
+              gameId,
+              entA,
+              entB,
+              vmHostA: binding.vmHostA,
+              controlA: binding.controlSocketA,
+              vmHostB: binding.vmHostB,
+              controlB: binding.controlSocketB,
+              gameIndexZeroBased: gIdx,
+            });
+            matchup.gamesPlayed++;
+            totalGamesByVersion.set(
+              batch.agentOnVmA,
+              (totalGamesByVersion.get(batch.agentOnVmA) ?? 0) + 1
+            );
+            totalGamesByVersion.set(
+              batch.agentOnVmB,
+              (totalGamesByVersion.get(batch.agentOnVmB) ?? 0) + 1
+            );
+            rrCompleted++;
+          }
+        } finally {
+          matchup.inFlight = false;
+        }
+      }
+
+      await this.client.sendTournamentBroadcast(tournamentId, {
+        table: tableNum,
+        idle: true,
+        label: `Table ${tableNum}`,
+      }).catch(() => undefined);
+    };
+
+    await Promise.all(Array.from({length: tableCount}, (_, idx) => runTableWorker(idx)));
+
+    // Stage 2: Superfinal between top 2 Stage 1 finishers on Table 1
+    let sfCompleted = 0;
+    if (this.superfinalGames > 0) {
+      const postRrState = await this.client.getTournamentState(tournamentId);
+      const existingSf = postRrState.games.filter(
+        g => g.stage === 'Superfinal' && g.outcome !== undefined
+      ).length;
+      if (postRrState.entrants.length >= 2 && existingSf < this.superfinalGames) {
+        const finalistA = postRrState.entrants[0];
+        const finalistB = postRrState.entrants[1];
+        const binding = this.tables[0] ?? {
+          vmHostA: '127.0.0.1',
+          controlSocketA: '',
+          vmHostB: '127.0.0.1',
+          controlSocketB: '',
+        };
+        for (let gIdx = existingSf; gIdx < this.superfinalGames; gIdx++) {
+          const matchupGame = gIdx + 1;
+          const isFinalGame = matchupGame === this.superfinalGames;
+          const gameId = `t${tourney.id}-sf-g${String(matchupGame).padStart(3, '0')}`;
+          await playSingleGame({
+            tableNum: 1,
+            stage: 'Superfinal',
+            cycle: 1,
+            matchupGame,
+            gameId,
+            entA: finalistA,
+            entB: finalistB,
+            vmHostA: binding.vmHostA,
+            controlA: binding.controlSocketA,
+            vmHostB: binding.vmHostB,
+            controlB: binding.controlSocketB,
+            gameIndexZeroBased: gIdx,
+            finalTournamentStatus: isFinalGame ? 'completed' : undefined,
+          });
+          sfCompleted++;
+        }
+      }
+    }
+
+    await this.client.sendTournamentBroadcast(tournamentId, {off: true}).catch(() => undefined);
+    return {roundRobinGames: rrCompleted, superfinalGames: sfCompleted};
+  }
 }

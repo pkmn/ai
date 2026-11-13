@@ -126,14 +126,130 @@ export async function runDaemon(opts: {
   }
 }
 
+export async function runTournamentValidationDaemon(opts: {
+  serverUrl?: string;
+  arenaSecret?: string;
+  tournamentId?: string;
+  agentsDir?: string;
+  stagingDir?: string;
+  tourneyAgentBin?: string;
+  pollIntervalMs?: number;
+  once?: boolean;
+} = {}) {
+  const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
+  const arenaSecret = opts.arenaSecret ?? process.env.ARENA_SECRET ?? '';
+  if (!arenaSecret) {
+    throw new Error('ARENA_SECRET is required to run the GCP tournament validation daemon');
+  }
+
+  const client = new arena.Client({serverUrl, arenaSecret});
+  const baselineSpec: tournament.TournamentAgentSpec = {
+    agentId: '_baseline',
+    displayName: 'Baseline',
+    vmHost: '127.0.0.1',
+    controlSocket: '',
+    localCommand: process.execPath,
+    localArgs: [__filename, 'baseline'],
+  };
+  const coord = new tournament.TournamentCoordinator({
+    client,
+    baselineSpec,
+    agentsDir: opts.agentsDir,
+    stagingDir: opts.stagingDir,
+    tourneyAgentBin: opts.tourneyAgentBin,
+  });
+
+  const pollIntervalMs = opts.pollIntervalMs ?? 5000;
+  const status = {running: true};
+  const stop = () => {
+    status.running = false;
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  try {
+    while (status.running) {
+      try {
+        const count = await coord.processPendingSubmissions(opts.tournamentId);
+        if (count === 0 && !opts.once) {
+          await new Promise(r => setTimeout(r, pollIntervalMs));
+        }
+      } catch (err) {
+        console.error('GCP tournament validation cycle error:', err);
+        if (opts.once) throw err;
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+      }
+      if (opts.once) break;
+    }
+  } finally {
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+  }
+}
+
+export async function runTournamentDaemon(
+  tournamentId: string,
+  opts: {
+    serverUrl?: string;
+    arenaSecret?: string;
+    agentsDir?: string;
+    stagingDir?: string;
+    tourneyAgentBin?: string;
+    tables?: readonly tournament.TournamentTableBinding[];
+    superfinalGames?: number;
+    maxTurns?: number;
+    byot?: boolean;
+  } = {}
+): Promise<{roundRobinGames: number; superfinalGames: number}> {
+  const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
+  const arenaSecret = opts.arenaSecret ?? process.env.ARENA_SECRET ?? '';
+  if (!arenaSecret) {
+    throw new Error('ARENA_SECRET is required to run the GCP tournament coordinator');
+  }
+
+  const client = new arena.Client({serverUrl, arenaSecret});
+  const baselineSpec: tournament.TournamentAgentSpec = {
+    agentId: '_baseline',
+    displayName: 'Baseline',
+    vmHost: '127.0.0.1',
+    controlSocket: '',
+    localCommand: process.execPath,
+    localArgs: [__filename, 'baseline'],
+  };
+  const coord = new tournament.TournamentCoordinator({
+    client,
+    baselineSpec,
+    agentsDir: opts.agentsDir,
+    stagingDir: opts.stagingDir,
+    tourneyAgentBin: opts.tourneyAgentBin,
+    tables: opts.tables,
+    superfinalGames: opts.superfinalGames,
+    maxTurns: opts.maxTurns,
+    byot: opts.byot,
+  });
+  return coord.runTournament(tournamentId);
+}
+
 if (require.main === module) {
   const sub = process.argv[2] ?? 'daemon';
+  const onFatal = (err: unknown) => {
+    process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+    process.exit(1);
+  };
   if (sub === 'baseline') {
     runBaselineStdioAgent();
+  } else if (sub === 'validate-tournament') {
+    const once = process.argv.includes('--once');
+    const tourneyArg = process.argv.slice(3).find(a => !a.startsWith('--'));
+    void runTournamentValidationDaemon({tournamentId: tourneyArg, once}).catch(onFatal);
+  } else if (sub === 'tournament') {
+    const tourneyId = process.argv[3];
+    if (!tourneyId) {
+      process.stderr.write('Usage: arena tournament <tournament-id>\n');
+      process.exit(2);
+    }
+    void runTournamentDaemon(tourneyId).catch(onFatal);
   } else {
-    void runDaemon().catch(err => {
-      process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
-      process.exit(1);
-    });
+    void runDaemon().catch(onFatal);
   }
 }

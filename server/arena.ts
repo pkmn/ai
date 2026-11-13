@@ -659,6 +659,47 @@ export interface TournamentGameCompleteResponse {
   logHref?: string;
 }
 
+export interface TournamentStateResponse {
+  tournament: {
+    id: string;
+    name: string;
+    format: string;
+    customRules: string[];
+    gamesPerMatchup: number;
+    batchSize: number;
+    parallelTables: number;
+    hardware: string;
+    status: db.TournamentStatus;
+    startsAt: number;
+    completedAt?: number;
+  };
+  entrants: Array<{
+    versionId: number;
+    agentId: number;
+    agentSlug: string;
+    agentName: string;
+    version: string;
+    seed?: number;
+    finalRank?: number;
+    points: number;
+    sonnebornBerger: number;
+    url: string;
+    sha256: string;
+  }>;
+  games: Array<{
+    id: string;
+    stage: db.TournamentGameStage;
+    cycle: number;
+    matchupGame: number;
+    p1VersionId: number;
+    p2VersionId: number;
+    outcome?: 'W' | 'L' | 'T';
+    turns?: number;
+    endReason?: string;
+  }>;
+  teamPool: string[];
+}
+
 export interface ClientOptions {
   serverUrl: string;
   arenaSecret: string;
@@ -907,6 +948,13 @@ export class Client {
     return this.requestJson<LadderTeamsResponse>(
       'GET',
       `/api/arena/ladders/${encodeURIComponent(ladderId)}/teams`
+    );
+  }
+
+  getTournamentState(tournamentId: string): Promise<TournamentStateResponse> {
+    return this.requestJson<TournamentStateResponse>(
+      'GET',
+      `/api/arena/tournaments/${encodeURIComponent(tournamentId)}/state`
     );
   }
 
@@ -2643,6 +2691,93 @@ export function register(app: polka.Polka, options: Options): Handle {
     });
 
     sendJson(res, 200, {ladders});
+  });
+
+  app.get('/api/arena/tournaments/:id/state', (req, res) => {
+    if (!authenticateArena(req, res)) return;
+
+    const rawId = decodeRouteParam(req.params.id);
+    const tournament = db.getTournament(rawId);
+    if (!tournament) {
+      sendJson(res, 404, {error: `Unknown tournament "${rawId}".`});
+      return;
+    }
+
+    let customRules: string[] = [];
+    try {
+      const parsed = JSON.parse(tournament.rulesJson) as unknown;
+      if (Array.isArray(parsed)) {
+        customRules = parsed.filter((r): r is string => typeof r === 'string');
+      }
+    } catch {}
+
+    const entrants = db.getTournamentEntrants(tournament.id).map(e => {
+      const ver = db.getVersionById(e.versionId);
+      return {
+        versionId: e.versionId,
+        agentId: e.agentId,
+        agentSlug: e.agentSlug,
+        agentName: e.agentName,
+        version: e.version,
+        ...(e.seed !== undefined ? {seed: e.seed} : {}),
+        ...(e.finalRank !== undefined ? {finalRank: e.finalRank} : {}),
+        points: e.points,
+        sonnebornBerger: e.sonnebornBerger,
+        url: ver?.url ?? '',
+        sha256: ver?.sha256 ?? '',
+      };
+    });
+
+    const games = db.getTournamentGames(tournament.id).map(g => ({
+      id: g.id,
+      stage: g.stage,
+      cycle: g.cycle,
+      matchupGame: g.matchupGame,
+      p1VersionId: g.p1VersionId,
+      p2VersionId: g.p2VersionId,
+      ...(g.outcome !== undefined ? {outcome: g.outcome} : {}),
+      ...(g.turns !== undefined ? {turns: g.turns} : {}),
+      ...(g.endReason !== undefined ? {endReason: g.endReason} : {}),
+    }));
+
+    let teamPool: string[] = [];
+    const matchingLadder = db.getLadders().find(
+      l => l.format === tournament.format && l.status !== 'archived'
+    ) ?? db.getLadders().find(l => l.format === tournament.format);
+    if (matchingLadder) {
+      if (matchingLadder.team === 'harvested') {
+        teamPool = db.getLadderTeams(matchingLadder.id);
+      } else if (matchingLadder.team === 'pools') {
+        const seen = new Set<string>();
+        for (const r of db.getActiveRosterForLadder(matchingLadder.id)) {
+          for (const t of r.teams) {
+            if (!seen.has(t.packed)) {
+              seen.add(t.packed);
+              teamPool.push(t.packed);
+            }
+          }
+        }
+      }
+    }
+
+    sendJson(res, 200, {
+      tournament: {
+        id: tournament.id,
+        name: tournament.name,
+        format: tournament.format,
+        customRules,
+        gamesPerMatchup: tournament.gamesPerMatchup,
+        batchSize: tournament.batchSize,
+        parallelTables: tournament.parallelTables,
+        hardware: tournament.hardware,
+        status: tournament.status,
+        startsAt: tournament.startsAt,
+        ...(tournament.completedAt !== undefined ? {completedAt: tournament.completedAt} : {}),
+      },
+      entrants,
+      games,
+      teamPool,
+    });
   });
 
   app.get('/api/arena/ladders/:id/teams', (req, res) => {
