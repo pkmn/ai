@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -154,7 +155,15 @@ export class Coordinator {
     this.maxTurns = options.maxTurns;
     this.exploitProbability = options.exploitProbability ?? 0.45;
     this.formatByLadderId = new Map(options.formatByLadderId ?? []);
-    this.randomInt = options.randomInt ?? (max => Math.floor(Math.random() * max));
+    this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
+  }
+
+  private randomPrngSeed(): PRNGSeed {
+    const s0 = this.randomInt(0x10000);
+    const s1 = this.randomInt(0x10000);
+    const s2 = this.randomInt(0x10000);
+    const s3 = this.randomInt(0x10000);
+    return `${s0},${s1},${s2},${s3}`;
   }
 
   registerLadderFormat(ladderId: string, format: string) {
@@ -431,8 +440,7 @@ export class Coordinator {
   private async sampleMatchTeams(
     ladder: LadderSnapshot,
     p1AgentId: number,
-    p2AgentId: number,
-    seq: number
+    p2AgentId: number
   ): Promise<{
     t1: string;
     t2: string;
@@ -460,8 +468,8 @@ export class Coordinator {
       const {t1Packed, t2Packed} = teams.sampleHarvestedPair(pool, this.randomInt);
       return {t1: t1Packed, t2: t2Packed};
     }
-    const seed1: PRNGSeed = `${(seq * 17 + 3) & 0xffff},${(seq * 31 + 5) & 0xffff},101,202`;
-    const seed2: PRNGSeed = `${(seq * 43 + 9) & 0xffff},${(seq * 59 + 13) & 0xffff},303,404`;
+    const seed1 = this.randomPrngSeed();
+    const seed2 = this.randomPrngSeed();
     const {t1Packed, t2Packed} = safeSampleRandomPair(ladder.format, seed1, seed2);
     return {t1: t1Packed, t2: t2Packed};
   }
@@ -685,12 +693,8 @@ export class Coordinator {
     const seq = this.stateDb.nextMatchSequence(ladder.id);
     const prefix = ladder.slot === 'vgc' ? 'vgc' : ladder.format;
     const matchId = `${prefix}-${String(seq).padStart(7, '0')}`;
-    const s0 = (seq * 13 + 7) & 0xffff;
-    const s1 = (seq * 29 + 11) & 0xffff;
-    const s2 = (seq * 47 + 19) & 0xffff;
-    const s3 = (seq * 61 + 23) & 0xffff;
-    const seedStr: PRNGSeed = `${s0},${s1},${s2},${s3}`;
-    const sampled = await this.sampleMatchTeams(ladder, e1.agentId, e2.agentId, seq);
+    const seedStr = this.randomPrngSeed();
+    const sampled = await this.sampleMatchTeams(ladder, e1.agentId, e2.agentId);
     const now = Math.floor(Date.now() / 1000);
 
     this.stateDb.createMatchCheckpoint({

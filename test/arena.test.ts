@@ -809,6 +809,8 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       const played = await coord.playNextScheduledMatch([matchLadder]);
       expect(played?.ladderId).toBe('gen9customgame');
       expect(completedMatches).toHaveLength(1);
+      expect(completedMatches[0].match.seed).toMatch(/^\d+,\d+,\d+,\d+$/);
+      expect(completedMatches[0].match.seed).not.toBe('20,40,66,84');
       expect(heartbeats.length).toBeGreaterThan(0);
 
       // Verify v30 received T1 in Game 1 and T2 (swapped team) in Game 2
