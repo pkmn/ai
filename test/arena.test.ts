@@ -273,12 +273,18 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(bytes1).toBeGreaterThan(70_000);
       expect(fs.existsSync(path.join(agentsDir, 'agent-v1', 'run'))).toBe(true);
 
+      const runUnpack = (tarPath: string, dest: string, targetCasDir = casDir): number => {
+        const out = execFileSync('python3', [packages.UNPACK_BIN, tarPath, dest], {
+          encoding: 'utf8',
+          env: {...process.env, ARENA_CAS_DIR: targetCasDir},
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const m = /UNPACK_OK:\s*(\d+)\s*bytes/.exec(out);
+        return m ? Number(m[1]) : 0;
+      };
+
       // Unpack a second version sharing the identical 70 KB blob to exercise CAS hit
-      const bytes2 = packages.unpackLocalTarArchive({
-        archivePath,
-        destDir: path.join(agentsDir, 'agent-v2'),
-        casDir,
-      });
+      const bytes2 = runUnpack(archivePath, path.join(agentsDir, 'agent-v2'));
       expect(bytes2).toBe(bytes1);
 
       // Reject SHA-256 mismatch
@@ -301,11 +307,8 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       fs.writeFileSync(path.join(noRunSrc, 'big.bin'), Buffer.alloc(70_000, 0x99));
       const noRunTar = path.join(tmpDir, 'no-run.tar.gz');
       execFileSync('tar', ['-czf', noRunTar, '-C', noRunSrc, '.']);
-      expect(() => packages.unpackLocalTarArchive({
-        archivePath: noRunTar,
-        destDir: path.join(agentsDir, 'agent-no-run'),
-        casDir: noRunCasDir,
-      })).toThrow(/missing required executable/i);
+      expect(() => runUnpack(noRunTar, path.join(agentsDir, 'agent-no-run'), noRunCasDir))
+        .toThrow(/missing required executable/i);
       expect(fs.existsSync(noRunCasDir)).toBe(false);
 
       // Reject chained-symlink Tar Slip attempting to escape destDir
@@ -329,11 +332,8 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         ].join('\n'),
         slipTar,
       ]);
-      expect(() => packages.unpackLocalTarArchive({
-        archivePath: slipTar,
-        destDir: path.join(agentsDir, 'agent-slip'),
-        casDir,
-      })).toThrow(/traverses symlink|escapes|illegal link target/i);
+      expect(() => runUnpack(slipTar, path.join(agentsDir, 'agent-slip')))
+        .toThrow(/traverses symlink|escapes|illegal link target/i);
       expect(fs.existsSync(path.join(agentsDir, 'pwned.txt'))).toBe(false);
 
       // Reject hardlink size-amplification > 500 MB and verify destination directory is wiped
@@ -355,22 +355,14 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         hlBombTar,
       ]);
       const hlDest = path.join(agentsDir, 'agent-hl-bomb');
-      expect(() => packages.unpackLocalTarArchive({
-        archivePath: hlBombTar,
-        destDir: hlDest,
-        casDir,
-      })).toThrow(/exceeds 500 MB cap/i);
+      expect(() => runUnpack(hlBombTar, hlDest)).toThrow(/exceeds 500 MB cap/i);
       expect(fs.existsSync(hlDest)).toBe(false);
 
       // Reject truncated/corrupt archive and clean up partial destDir
       const corruptTar = path.join(tmpDir, 'corrupt.tar.gz');
       fs.writeFileSync(corruptTar, fs.readFileSync(archivePath).subarray(0, 48));
       const corruptDest = path.join(agentsDir, 'agent-corrupt');
-      expect(() => packages.unpackLocalTarArchive({
-        archivePath: corruptTar,
-        destDir: corruptDest,
-        casDir,
-      })).toThrow(/UNPACK_ERROR/i);
+      expect(() => runUnpack(corruptTar, corruptDest)).toThrow(/UNPACK_ERROR/i);
       expect(fs.existsSync(corruptDest)).toBe(false);
 
       // On Darwin, verify 0644 Mach-O `.so` extensions are ad-hoc codesigned before CAS CoW
@@ -391,7 +383,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         const soTar = path.join(tmpDir, 'macho-so.tar.gz');
         execFileSync('tar', ['-czf', soTar, '-C', soSrcDir, '.']);
         const soDest = path.join(agentsDir, 'agent-macho-so');
-        packages.unpackLocalTarArchive({archivePath: soTar, destDir: soDest, casDir});
+        runUnpack(soTar, soDest);
 
         const unpackedSo = path.join(soDest, 'ext.cpython-312-darwin.so');
         expect(fs.statSync(unpackedSo).mode & 0o777).toBe(0o644);

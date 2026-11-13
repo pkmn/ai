@@ -111,12 +111,10 @@ interface PoolEntry {
 }
 
 const poolCache = new Map<string, PoolEntry[]>();
-const harvestedPoolCache = new Map<string, HarvestedPoolEntry[]>();
 const speciesCache = new Map<string, string[]>();
 
 export function clearReferencePoolCache() {
   poolCache.clear();
-  harvestedPoolCache.clear();
   speciesCache.clear();
 }
 
@@ -400,50 +398,6 @@ export function samplePoolsPair(
   };
 }
 
-// Loads static harvested Showdown team files in memory and canonicalizes/packs each team at
-// runtime without mutating files on disk.
-export function loadHarvestedPool(format: string, pools: string[]): HarvestedPoolEntry[] {
-  const cleanFormat = toID(format);
-  const resolvedDirs = pools.map(d => path.resolve(d));
-  const cacheKey = `${cleanFormat}::${resolvedDirs.join('|')}`;
-  const cached = harvestedPoolCache.get(cacheKey);
-  if (cached) return cached;
-
-  const dex = teams.getDex(cleanFormat);
-  const entries: HarvestedPoolEntry[] = [];
-  const seenPacked = new Set<string>();
-
-  for (const dir of resolvedDirs) {
-    if (!fs.existsSync(dir)) continue;
-    const files = fs.readdirSync(dir)
-      .filter(f => !f.startsWith('.') && f !== 'README.md')
-      .sort((a, b) => a.localeCompare(b));
-    for (const file of files) {
-      const full = path.join(dir, file);
-      try {
-        if (!fs.statSync(full).isFile()) continue;
-        const imported = Team.import(fs.readFileSync(full, 'utf8').trim(), dex);
-        const rawSets = (imported?.team ?? []).filter(s => s && (s.species || s.name));
-        if (!rawSets.length) continue;
-        const canonicalSets = Team.canonicalize(structuredClone(rawSets), dex);
-        const canonicalPacked = new Team(canonicalSets, dex).pack();
-        if (!canonicalPacked || seenPacked.has(canonicalPacked)) continue;
-        seenPacked.add(canonicalPacked);
-        entries.push({
-          id: file,
-          canonicalPacked,
-          speciesIds: canonicalSets.map(s => toID(s.species ?? s.name ?? 'unknown')).sort(),
-        });
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  harvestedPoolCache.set(cacheKey, entries);
-  return entries;
-}
-
 export function sampleHarvestedPair(
   pool: HarvestedPoolEntry[],
   rngNextInt: (max: number) => number
@@ -701,65 +655,6 @@ export interface Options {
   pools: string[];
   teams: number;
   threshold?: number;
-}
-
-export function validateCompetitorTeams(
-  rawInput: string | string[],
-  options: Options
-): string[] {
-  const expectedCount = options.teams;
-  const threshold = options.threshold ?? teams.THRESHOLD;
-  const format = toID(options.format);
-  const dex = teams.getDex(format);
-  const validator = getValidator(format);
-  const defaultLevel = defaultLevelForFormat(format);
-
-  const chunks = splitSubmittedTeams(rawInput);
-  if (chunks.length !== expectedCount) {
-    throw new Error(
-      `Expected ${expectedCount} teams for ${options.format}, received ${chunks.length}.`
-    );
-  }
-
-  const refPool = loadReferencePool(format, options.pools);
-  const workingPool: PoolEntry[] = [...refPool];
-  const packedOut: string[] = [];
-
-  for (let i = 0; i < chunks.length; i++) {
-    const {canonicalPacked, uniquenessSets, speciesSet} = validateAndCanonicalizeSingleTeam(
-      dex,
-      validator,
-      chunks[i],
-      i,
-      {requireFullMoveset: true, defaultLevel}
-    );
-
-    if (workingPool.length > 0) {
-      const {minD, closestId} = minDistanceAgainstPool(
-        dex,
-        {sets: uniquenessSets, speciesSet},
-        workingPool,
-        defaultLevel
-      );
-      if (minD < threshold) {
-        throw new Error(
-          `Team #${i + 1} failed uniqueness check: distance=${minD.toFixed(3)} < ` +
-          `${threshold.toFixed(2)} (closest=${closestId}).`
-        );
-      }
-    }
-
-    // Append each accepted team to `workingPool` sequentially so team `k` must also be
-    // >= 1.30 away from teams `1..k-1` within the same submission.
-    workingPool.push({
-      id: `submitted-team-${i + 1}`,
-      sets: uniquenessSets,
-      speciesSet,
-    });
-    packedOut.push(canonicalPacked);
-  }
-
-  return packedOut;
 }
 
 export interface RejectedTeam {

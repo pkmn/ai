@@ -481,25 +481,6 @@ export async function downloadAndUnpackBundle(opts: {
   }
 }
 
-export function unpackLocalTarArchive(opts: {
-  archivePath: string;
-  destDir: string;
-  unpackBin?: string;
-  casDir?: string;
-}): number {
-  const unpackBin = opts.unpackBin ?? UNPACK_BIN;
-  const env = {...process.env};
-  if (opts.casDir) env.ARENA_CAS_DIR = opts.casDir;
-
-  const stdout = execFileSync('python3', [unpackBin, opts.archivePath, opts.destDir], {
-    encoding: 'utf8',
-    timeout: 180_000,
-    env,
-  });
-  const m = /UNPACK_OK:\s*(\d+)\s*bytes/.exec(stdout);
-  return m ? Number(m[1]) : 0;
-}
-
 export function evictColdAgentsIfNeeded(
   stateDb: StateDatabase,
   opts: {

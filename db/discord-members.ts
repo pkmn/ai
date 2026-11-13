@@ -2,12 +2,6 @@ import {DatabaseSync} from 'node:sqlite';
 
 import {TransactionRunner} from './index';
 
-export interface DiscordMemberRow {
-  id: string;
-  username: string;
-  updatedAt: number;
-}
-
 // Atomically replaces the cached Discord guild member roster used by `/auth/discord/validate`
 // (Nginx `auth_request` for `/chat/logs/*`). Full-snapshot replacement ensures departed or kicked
 // guild members lose `/chat/logs/*` access on the very next sync cycle even while their signed

@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS rating_snapshots (
   se REAL NOT NULL,
   lcb REAL NOT NULL,
   gxe REAL NOT NULL,
-  -- Snapshot official rank, 95% confidence rank interval `[rank_min, rank_max]`, and career best rank.
+  -- Snapshot official rank, 95% confidence rank interval `[rank_min, rank_max]`, and career best rank
+  -- (retained for future historical rank-band visualizations; do not delete).
   rank_current INTEGER,
   rank_min INTEGER,
   rank_max INTEGER,

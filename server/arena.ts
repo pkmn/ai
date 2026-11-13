@@ -537,7 +537,6 @@ export interface Options {
 export interface Handle {
   close: () => void;
   getLiveDocument: (nowSeconds?: number) => LiveDocument;
-  writeLiveJson: (nowSeconds?: number) => LiveDocument;
   setLiveState: (state: {live?: LiveMatch; stale?: boolean; updatedAt?: number}) => void;
   getTournamentBroadcast: (tournamentId?: string) => LiveBroadcast | undefined;
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
@@ -3051,7 +3050,6 @@ export function register(app: polka.Polka, options: Options): Handle {
   return {
     close: closeAll,
     getLiveDocument,
-    writeLiveJson: (nowSec?: number) => getLiveDocument(nowSec),
     setLiveState: state => {
       currentLive = state.live;
       liveStale = state.stale ?? false;

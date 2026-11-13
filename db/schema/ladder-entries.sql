@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   -- Expected win percentage (0..100) against the prior population N(1500, 350^2), marginalizing SE.
   gxe REAL NOT NULL DEFAULT 50.0,
   -- Peak Conservative Rating achieved once `matches >= 10` (LCB already penalizes wide SE), or NULL.
+  -- Retained alongside `max_elo_at`, `max_gxe_at`, and `best_rank_at` for future profile/account
+  -- peak timeline displays (do not delete).
   max_lcb REAL,
   -- Peak settled MAP Elo (`settled_at IS NOT NULL`), its concurrent SE, and timestamp when achieved.
   max_elo REAL,
@@ -88,11 +90,12 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   mean_turn_millis REAL NOT NULL DEFAULT 0.0,
   -- Maximum XNU physical memory footprint (MiB) observed in any match on this ladder.
   peak_ram REAL NOT NULL DEFAULT 0.0,
-  -- Cumulative fault counters from match end reasons, surfaced for health monitoring.
+  -- Cumulative fault counters from match end reasons (retained alongside `started_at` for future
+  -- `/account` and `/projects/<slug>` health telemetry; do not delete).
   crashes INTEGER NOT NULL DEFAULT 0,
   timeouts INTEGER NOT NULL DEFAULT 0,
   ooms INTEGER NOT NULL DEFAULT 0,
-  -- Unix timestamp (seconds) when this version entered the ladder (defaults to 0 if unspecified).
+  -- Unix timestamp (seconds) when this version entered the ladder (retained for future tenure stats).
   started_at INTEGER NOT NULL DEFAULT 0,
   -- Unix timestamp (seconds) when this version transitioned to `role = 'retired'`, or NULL while active.
   retired_at INTEGER,

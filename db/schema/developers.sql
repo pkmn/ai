@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS developers (
   discord_id TEXT UNIQUE,
   -- Discord username captured at link time for display on /account.
   discord_username TEXT,
-  -- Unix timestamp (seconds) when external standing/identity was last verified, or NULL.
+  -- Unix timestamp (seconds) when external standing/identity was last verified, or NULL
+  -- (retained for future periodic Smogon re-verification scheduling & audit; do not delete).
   verified_at INTEGER,
   -- Unix timestamp (seconds) when this developer row was created.
   created_at INTEGER NOT NULL

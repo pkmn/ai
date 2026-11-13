@@ -952,61 +952,6 @@ export function selectNextTournamentBatch(
   };
 }
 
-export const L4_CANDIDATE_ZONES = [
-  'us-central1-a',
-  'us-central1-b',
-  'us-central1-c',
-  'us-east4-a',
-  'us-east4-c',
-  'us-west1-b',
-] as const;
-
-export interface ProvisionedWorkerVM {
-  vmName: string;
-  zone: string;
-  ip: string;
-  provisioningModel: 'SPOT' | 'STANDARD';
-}
-
-export function provisionSpotWorkerVM(
-  vmName: string,
-  imageName: string,
-  consecutiveSpotFailures = 0
-): ProvisionedWorkerVM {
-  const provisioningModel: 'SPOT' | 'STANDARD' =
-    consecutiveSpotFailures >= 3 ? 'STANDARD' : 'SPOT';
-
-  for (const zone of L4_CANDIDATE_ZONES) {
-    try {
-      const args = [
-        'compute', 'instances', 'create', vmName,
-        `--zone=${zone}`,
-        '--machine-type=g2-custom-24-49152',
-        '--accelerator=type=nvidia-l4,count=1',
-        `--provisioning-model=${provisioningModel}`,
-        ...(provisioningModel === 'SPOT' ? ['--instance-termination-action=DELETE'] : []),
-        '--maintenance-policy=TERMINATE',
-        `--image=${imageName}`,
-        '--boot-disk-size=300GB',
-        '--boot-disk-type=pd-ssd',
-        '--format=value(networkInterfaces[0].networkIP)',
-      ];
-      const ip = execFileSync('gcloud', args, {
-        encoding: 'utf8',
-        timeout: 120_000,
-      }).trim();
-      if (ip) {
-        return {vmName, zone, ip, provisioningModel};
-      }
-    } catch {
-      // Zone exhausted or capacity unavailable; try next candidate zone
-    }
-  }
-  throw new Error(
-    `All L4 zones exhausted while provisioning ${vmName} (${provisioningModel})`
-  );
-}
-
 function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }

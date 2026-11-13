@@ -42,7 +42,6 @@ const SETTLE_MILLIS = 200;
 interface Scenario {
   name: string;
   path: string;
-  waitFor?: string;
   click?: string;
   githubUser?: string;
 }
@@ -381,8 +380,7 @@ async function shoot(
   await page.clock.setFixedTime(NOW);
 
   await page.goto(scenario.path);
-  if (scenario.waitFor) await page.waitForSelector(scenario.waitFor);
-  else await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('networkidle');
   await page.waitForTimeout(SETTLE_MILLIS);
   if (scenario.click) {
     await page.click(scenario.click);

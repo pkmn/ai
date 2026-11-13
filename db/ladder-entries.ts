@@ -246,19 +246,6 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
   }));
 }
 
-export function hasAnyLeaderboardEntry(db: DatabaseSync, agentId: number): boolean {
-  const row = db.prepare(`
-    SELECT 1
-    FROM ladder_entries le
-    JOIN agent_versions av ON av.id = le.version_id
-    WHERE av.agent_id = ?
-      AND av.smoke_status = 'passed'
-      AND le.role IN ('champion', 'challenger', 'retired')
-    LIMIT 1
-  `).get(agentId);
-  return row !== undefined;
-}
-
 export function getAgentParticipatedLadders(db: DatabaseSync, agentId: number): LadderRow[] {
   const rows = db.prepare(`
     SELECT DISTINCT l.*

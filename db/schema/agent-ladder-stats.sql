@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS agent_ladder_stats (
   -- Ladder epoch on which these career stats were earned.
   ladder_id TEXT NOT NULL REFERENCES ladders(id),
   -- Best (lowest number) settled rank achieved by any version of this agent on this ladder.
+  -- (`best_rank_at`, `max_lcb`, `max_elo_at`, `max_elo_version_id`, and `max_gxe_at` are retained
+  -- for future `/projects/<slug>` & `/account` career peak timeline displays; do not delete.)
   best_rank INTEGER,
   best_rank_at INTEGER,
   -- Highest Conservative Rating (`elo - 1.96 * se`) achieved across versions with `matches >= 10`.

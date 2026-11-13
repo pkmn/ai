@@ -1,20 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
 
-export interface RatingSnapshotRow {
-  ladderId: string;
-  versionId: number;
-  dayUtc: string;
-  matches: number;
-  elo: number;
-  se: number;
-  lcb: number;
-  gxe: number;
-  rankCurrent?: number;
-  rankMin?: number;
-  rankMax?: number;
-  rankBest?: number;
-}
-
 export interface RatingSnapshotInput {
   versionId: number;
   matches: number;

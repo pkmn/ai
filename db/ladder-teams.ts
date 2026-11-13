@@ -4,13 +4,6 @@ import {getLadder} from './ladders';
 
 import {TransactionRunner} from './index';
 
-export interface LadderTeamRow {
-  ladderId: string;
-  teamIndex: number;
-  packedTeam: string;
-  uploadedAt: number;
-}
-
 export function countLadderTeams(db: DatabaseSync, ladderId: string): number {
   const row = db.prepare(
     'SELECT COUNT(*) AS cnt FROM ladder_teams WHERE ladder_id = ?'

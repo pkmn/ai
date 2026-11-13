@@ -412,10 +412,6 @@ export class Database {
     return versions.getVersionsForAgent(this.db, agentId);
   }
 
-  hasAnyLeaderboardEntry(agentId: number): boolean {
-    return entries.hasAnyLeaderboardEntry(this.db, agentId);
-  }
-
   computeAgentSubmissionStatus(agentId: number, now?: number): versions.SubmissionStatus {
     return versions.computeAgentSubmissionStatus(this.db, agentId, now);
   }
@@ -573,10 +569,6 @@ export class Database {
 
   getRunningTournament(): tournaments.TournamentRow | undefined {
     return tournaments.getRunningTournament(this.db);
-  }
-
-  getScheduledTournaments(): tournaments.TournamentRow[] {
-    return tournaments.getScheduledTournaments(this.db);
   }
 
   getTournamentClosesAt(startsAt: number): number {

@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS tournament_games (
   -- Execution state: 'pending', 'running', or 'completed'.
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'running', 'completed')),
-  -- Number of cloud spot-VM preemptions encountered before this game completed (for infra auditing).
+  -- Number of cloud spot-VM preemptions encountered before this game completed (retained for
+  -- future tournament infra telemetry & `/arena/tournaments/<id>` diagnostics; do not delete).
   preemptions INTEGER NOT NULL DEFAULT 0,
   -- Packed Showdown teams brought by P1 and P2 (publicly rendered as 6-Pokémon minisprites once done).
   p1_team TEXT,

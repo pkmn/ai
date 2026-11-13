@@ -2,15 +2,6 @@ import {DatabaseSync} from 'node:sqlite';
 
 export type TeamPoolStatus = 'saved' | 'pending' | 'active';
 
-export interface AgentLadderTeamRow {
-  agentId: number;
-  ladderId: string;
-  teamIndex: number;
-  packedTeam: string;
-  status: TeamPoolStatus;
-  submittedAt: number;
-}
-
 export interface LadderRosterEntry {
   agentId: number;
   agentSlug: string;

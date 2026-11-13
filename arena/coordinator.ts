@@ -175,10 +175,6 @@ export class Coordinator {
     return `${s0},${s1},${s2},${s3}`;
   }
 
-  registerLadderFormat(ladderId: string, format: string) {
-    this.formatByLadderId.set(ladderId, format);
-  }
-
   private resolveLaunchSpec(mode: 'container' | 'native', target: string): AgentLaunchSpec {
     if (mode === 'native' && this.devMode && !path.isAbsolute(target)) {
       return {
