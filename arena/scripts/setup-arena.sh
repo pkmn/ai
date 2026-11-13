@@ -59,6 +59,17 @@ if [[ -d /Volumes/Archive ]]; then
   sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents}
 fi
 
+if [[ -d /Users/pkmn/.ssh ]]; then
+  sudo chown -R pkmn:agents /Users/pkmn/.ssh
+  sudo chmod 0700 /Users/pkmn/.ssh
+  if [[ -f /Users/pkmn/.ssh/id_ed25519_tunnel ]]; then
+    sudo chmod 0600 /Users/pkmn/.ssh/id_ed25519_tunnel
+  fi
+  if [[ -f /Users/pkmn/.ssh/authorized_keys ]]; then
+    sudo chmod 0600 /Users/pkmn/.ssh/authorized_keys
+  fi
+fi
+
 echo "==> Step 4: Installing system, SSH, PF, Seatbelt, and sudoers configs"
 sudo cp "${REPO_DIR}/arena/config/sshd-arena.conf" /etc/ssh/sshd_config.d/100-arena-hardening.conf
 sudo chown root:wheel /etc/ssh/sshd_config.d/100-arena-hardening.conf

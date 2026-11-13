@@ -201,7 +201,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
     });
 
     proc.kill('SIGTERM');
-    expect(stderrLines.join('')).toMatch(/ARENA_TURN_MS=\d+/);
+    expect(stderrLines.join('')).toMatch(/ARENA_TURN_MS=[1-9]\d*/);
     expect(stdoutLines.join('')).toContain('default');
   });
 

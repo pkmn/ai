@@ -464,7 +464,8 @@ export class ConcurrentTournamentGame {
           continue;
         }
 
-        const overGraceMs = Math.max(0, totalElapsedMs - graceMs);
+        const decisionElapsedMs = Math.max(1, Math.ceil(totalElapsedMs));
+        const overGraceMs = Math.max(0, decisionElapsedMs - graceMs);
         player.bankMs = Math.max(0, player.bankMs - overGraceMs);
 
         const choiceCmd = req.teamPreview && !parsed.choice.startsWith('team ')

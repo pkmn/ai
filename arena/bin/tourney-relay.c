@@ -30,10 +30,10 @@ struct line_buf {
   size_t len;
 };
 
-static uint64_t monotonic_ms(void) {
+static uint64_t monotonic_ns(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
 static int is_actionable_request(const char *line) {
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
   close(out_pipe[1]);
 
   int timer_active = 0;
-  uint64_t turn_start_ms = 0;
+  uint64_t turn_start_ns = 0;
 
   struct pollfd fds[2];
   fds[0].fd = STDIN_FILENO;
@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
           char saved = in_buf.data[line_len];
           in_buf.data[line_len] = '\0';
           if (is_actionable_request(in_buf.data)) {
-            turn_start_ms = monotonic_ms();
+            turn_start_ns = monotonic_ns();
             timer_active = 1;
           }
           in_buf.data[line_len] = saved;
@@ -168,11 +168,12 @@ int main(int argc, char **argv) {
       while ((nl = memchr(out_buf.data, '\n', out_buf.len)) != NULL) {
         size_t line_len = (size_t)(nl - out_buf.data) + 1;
         if (timer_active && line_len > 1) {
-          uint64_t now_ms = monotonic_ms();
-          uint64_t elapsed = now_ms >= turn_start_ms ? now_ms - turn_start_ms : 0;
-          fprintf(stderr, "ARENA_TURN_MS=%llu\n", (unsigned long long)elapsed);
+          uint64_t now_ns = monotonic_ns();
+          uint64_t elapsed_ns = now_ns > turn_start_ns ? now_ns - turn_start_ns : 1ULL;
+          uint64_t elapsed_ms = (elapsed_ns + 999999ULL) / 1000000ULL;
+          fprintf(stderr, "ARENA_TURN_MS=%llu\n", (unsigned long long)elapsed_ms);
           fflush(stderr);
-          turn_start_ms = now_ms;
+          turn_start_ns = now_ns;
         }
         if (write_all(STDOUT_FILENO, out_buf.data, line_len) < 0) goto done;
         memmove(out_buf.data, out_buf.data + line_len, out_buf.len - line_len);

@@ -499,11 +499,12 @@ export class TimeSlicedArenaGame {
           continue;
         }
 
-        const overGraceMs = Math.max(0, totalElapsedThisDecisionMs - graceMs);
+        const decisionElapsedMs = Math.max(1, Math.ceil(totalElapsedThisDecisionMs));
+        const overGraceMs = Math.max(0, decisionElapsedMs - graceMs);
         player.bankMs = Math.max(0, player.bankMs - overGraceMs);
         player.decisionCount++;
-        player.lastDecisionMs = totalElapsedThisDecisionMs;
-        player.totalDecisionMs += totalElapsedThisDecisionMs;
+        player.lastDecisionMs = decisionElapsedMs;
+        player.totalDecisionMs += decisionElapsedMs;
 
         const choiceCmd = req.teamPreview && !parsed.choice.startsWith('team ')
           ? `team ${parsed.choice}`
