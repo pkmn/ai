@@ -142,6 +142,12 @@ export function recordCompletedMatch(
     if (!ladder) {
       throw Object.assign(new Error(`Unknown ladderId "${m.ladderId}"`), {status: 404});
     }
+    if (ladder.status === 'archived') {
+      throw Object.assign(
+        new Error(`Ladder "${m.ladderId}" is archived and no longer accepts matches.`),
+        {status: 409}
+      );
+    }
     const v1 = getVersionById(db, m.p1VersionId);
     const v2 = getVersionById(db, m.p2VersionId);
     if (!v1 || !v2) {

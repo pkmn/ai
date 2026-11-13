@@ -410,6 +410,11 @@ describe('ladders.yml & Database ladder sync', () => {
           'Transient infra glitch',
           1_760_000_020 + seq * 1000
         );
+        // Self-quarantine does not bypass the 14-day cooldown unless staff refunds it
+        expect(
+          db.computeAgentSubmissionStatus(agent.id, 1_760_000_025 + seq * 1000).reason
+        ).toContain('14-day cooldown active');
+        db.refundCooldown(agent.slug, 1_760_000_025 + seq * 1000);
 
         const sub2 = db.createSubmission({
           agentId: agent.id,
@@ -1165,6 +1170,198 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       db.applySubmissionStatus({versionId: deltaVgc.id, smokeStatus: 'passed', now: 1_762_000_050});
       const activeVgc = db.setLadderStatus('gen9championsvgc2026regmc', 'active', 1_762_000_060);
       expect(activeVgc.status).toBe('active');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('enforces quarantine rank re-densification, unquarantine guards, and archive', () => {
+    const db = new Database(':memory:');
+    try {
+      db.syncLaddersFromYaml(`
+- name: RAND
+  format: gen9randombattle
+  id: gen9randombattle
+  team: random
+  status: upcoming
+  min: 2
+`, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      a: a.1
+- name: Beta
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      b: b.2
+- name: Gamma
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      c: c.3
+`, undefined, 1_760_000_000);
+
+      const vers = ['alpha', 'beta', 'gamma'].map((slug, idx) => {
+        const ag = db.getAgentBySlug(slug)!;
+        const sub = db.createSubmission({
+          agentId: ag.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: `https://example.com/${slug}.tar.zst`,
+          sha256: String(idx + 1).repeat(64),
+          ladderIds: ['gen9randombattle'],
+          now: 1_760_000_010 + idx,
+        });
+        db.applySubmissionStatus({versionId: sub.id, smokeStatus: 'passed', now: 1_760_000_020});
+        return sub;
+      });
+      db.setLadderAnchor('gen9randombattle', 'gamma', '1.0.0', 1_760_000_025);
+      db.setLadderStatus('gen9randombattle', 'active', 1_760_000_030);
+
+      // Pending/failed versions cannot be promoted via unquarantineVersion
+      const agAlpha = db.getAgentBySlug('alpha')!;
+      db.refundCooldown('alpha', 1_760_000_031);
+      // Settle active entries via 20 WW + 10 WL mirror matches per pair so SE <= 30 & rank 1..3
+      let mSeq = 1;
+      for (const [i, j] of [
+        [0, 1],
+        [0, 2],
+        [1, 2],
+      ] as const) {
+        for (let k = 0; k < 30; k++) {
+          const cat = k < 20 ? 'WW' : 'WL';
+          db.recordCompletedMatch({
+            match: {
+              id: `rand-${mSeq++}`,
+              ladderId: 'gen9randombattle',
+              p1VersionId: vers[i].id,
+              p2VersionId: vers[j].id,
+              seed: '1,2,3,4',
+              game1Outcome: 'W',
+              game2Outcome: k < 20 ? 'W' : 'L',
+              category: cat,
+              game1Turns: 10,
+              game2Turns: 10,
+              game1EndReason: 'normal',
+              game2EndReason: 'normal',
+              p1PeakRam: 64,
+              p2PeakRam: 64,
+              p1Game1BankSeconds: 100,
+              p1Game2BankSeconds: 100,
+              p2Game1BankSeconds: 100,
+              p2Game2BankSeconds: 100,
+              p1MeanTurnMillis: 50,
+              p2MeanTurnMillis: 50,
+              completedAt: 1_760_001_000 + mSeq,
+            },
+          });
+        }
+      }
+
+      const rankedBefore = db.getLeaderboardEntries('gen9randombattle');
+      expect(rankedBefore.find(e => e.agentSlug === 'alpha')?.rankCurrent).toBe(1);
+      expect(rankedBefore.find(e => e.agentSlug === 'beta')?.rankCurrent).toBe(2);
+      expect(rankedBefore.find(e => e.agentSlug === 'gamma')?.rankCurrent).toBe(3);
+
+      // Quarantining #2 (beta) immediately re-densifies gamma from #3 -> #2
+      db.quarantineVersion('beta', '1.0.0', 'Timeout loop', 1_760_002_000);
+      const rankedDuring = db.getLeaderboardEntries('gen9randombattle');
+      expect(rankedDuring.find(e => e.agentSlug === 'gamma')?.rankCurrent).toBe(2);
+
+      // Unquarantine rejects non-quarantined versions
+      const pendingSub = db.createSubmission({
+        agentId: agAlpha.id,
+        version: '1.1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-110.tar.zst',
+        sha256: '9'.repeat(64),
+        ladderIds: ['gen9randombattle'],
+        now: 1_760_002_010,
+      });
+      expect(() => db.unquarantineVersion('alpha', '1.1.0', 1_760_002_020))
+        .toThrow(/not quarantined/);
+      db.applySubmissionStatus({
+        versionId: pendingSub.id,
+        smokeStatus: 'failed',
+        smokeError: 'Bad archive',
+        now: 1_760_002_025,
+      });
+      expect(() => db.unquarantineVersion('alpha', '1.1.0', 1_760_002_030))
+        .toThrow(/not quarantined/);
+
+      // Unquarantine restores beta to active #2
+      db.unquarantineVersion('beta', '1.0.0', 1_760_002_040);
+      expect(
+        db.getLeaderboardEntries('gen9randombattle').find(e => e.agentSlug === 'beta')?.rankCurrent
+      ).toBe(2);
+
+      // Tournament quarantine + unquarantine restores scheduled tournament entrant
+      db.upsertTournament({
+        id: '9',
+        name: 'Tour 9',
+        format: 'gen9ou',
+        startsAt: 1_770_000_000,
+        status: 'scheduled',
+        gamesPerMatchup: 8,
+        parallelTables: 4,
+        hardware: 'L4',
+      });
+      const tourSub = db.createSubmission({
+        agentId: agAlpha.id,
+        version: '2.0.0-oci',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/alpha:2.0.0',
+        sha256: '8'.repeat(64),
+        ladderIds: [],
+        tournamentIds: ['9'],
+        now: 1_760_003_000,
+      });
+      db.applySubmissionStatus({versionId: tourSub.id, smokeStatus: 'passed', now: 1_760_003_010});
+      expect(db.getTournamentEntrants('9')).toHaveLength(1);
+      db.quarantineVersion('alpha', '2.0.0-oci', 'Spot check', 1_760_003_020);
+      expect(db.getTournamentEntrants('9')).toHaveLength(0);
+      db.unquarantineVersion('alpha', '2.0.0-oci', 1_760_003_030);
+      expect(db.getTournamentEntrants('9')).toHaveLength(1);
+
+      // Archiving freezes ranks against recomputeLadderRatings, setLadderAnchor, and matches
+      db.setLadderStatus('gen9randombattle', 'archived', 1_760_004_000);
+      db.recomputeLadderRatings('gen9randombattle', 1_760_004_100);
+      const frozen = db.getLeaderboardEntries('gen9randombattle');
+      expect(frozen.find(e => e.agentSlug === 'alpha')?.rankCurrent).toBe(1);
+      expect(frozen.every(e => e.role === 'retired')).toBe(true);
+      expect(() => db.setLadderAnchor('gen9randombattle', 'alpha', '1.0.0', 1_760_004_200))
+        .toThrow(/archived/);
+      expect(() => db.recordCompletedMatch({
+        match: {
+          id: 'rand-late',
+          ladderId: 'gen9randombattle',
+          p1VersionId: vers[0].id,
+          p2VersionId: vers[1].id,
+          seed: '1,2,3,4',
+          game1Outcome: 'W',
+          game2Outcome: 'W',
+          category: 'WW',
+          game1Turns: 5,
+          game2Turns: 5,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1PeakRam: 64,
+          p2PeakRam: 64,
+          p1Game1BankSeconds: 100,
+          p1Game2BankSeconds: 100,
+          p2Game1BankSeconds: 100,
+          p2Game2BankSeconds: 100,
+          p1MeanTurnMillis: 50,
+          p2MeanTurnMillis: 50,
+          completedAt: 1_760_004_300,
+        },
+      })).toThrow(/archived/);
     } finally {
       db.close();
     }

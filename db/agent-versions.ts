@@ -444,10 +444,13 @@ export function computeAgentSubmissionStatus(
   }
 
   const refundedAt = agent.cooldownRefundedAt ?? 0;
+  // Include `'quarantined'` versions that previously activated (`activated_at IS NOT NULL`) so a
+  // competitor cannot intentionally crash/auto-quarantine an unsettled version to evade the 14-day
+  // submission cooldown (staff can still explicitly waive infra glitches via `refundCooldown`).
   const latestPassed = db.prepare(
     `SELECT submitted_at, version FROM agent_versions
      WHERE agent_id = ?
-       AND smoke_status = 'passed'
+       AND (smoke_status = 'passed' OR (smoke_status = 'quarantined' AND activated_at IS NOT NULL))
        AND ladders_json != '[]'
        AND submitted_at > ?
      ORDER BY submitted_at DESC, id DESC
@@ -823,9 +826,13 @@ export function applySubmissionStatus(
         SET role = 'quarantined', rank_current = NULL, rank_min = NULL, rank_max = NULL
         WHERE version_id = ? AND role IN ('champion', 'challenger')
       `).run(prev.id);
+      const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
       for (const row of affected) {
         entries.promoteRemainingActiveToChampion(db, row.ladder_id, prev.agentId);
         const l = getLadder(db, row.ladder_id);
+        if (l && l.status !== 'archived') {
+          entries.recomputeLadderRatings(db, row.ladder_id, now, undefined, dayUtc);
+        }
         if (l?.status === 'settling' && !canSettleLadder(db, l)) {
           archiveLadderInPlace(db, l.id, now);
         }
@@ -868,6 +875,12 @@ export function unquarantineVersion(
     if (!ver) {
       throw new Error(`Version "${version}" not found for agent "${agentSlug}"`);
     }
+    if (ver.smokeStatus !== 'quarantined') {
+      throw new Error(
+        `Version "${version}" for agent "${agentSlug}" is not quarantined ` +
+        `(current status: ${ver.smokeStatus})`
+      );
+    }
 
     db.prepare(
       `UPDATE agent_versions
@@ -886,9 +899,23 @@ export function unquarantineVersion(
       ? quarantinedRows.map(r => r.ladder_id)
       : (JSON.parse(ver.laddersJson) as string[]);
 
+    const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
     for (const ladderId of ladderIds) {
       const ladder = getLadder(db, ladderId);
       if (!ladder) continue;
+      if (ladder.status === 'archived') {
+        db.prepare(`
+          UPDATE ladder_entries
+          SET role = 'retired',
+              retired_at = COALESCE(retired_at, ?),
+              crashes = 0,
+              timeouts = 0,
+              ooms = 0
+          WHERE ladder_id = ? AND version_id = ? AND role = 'quarantined'
+        `).run(now, ladderId, ver.id);
+        continue;
+      }
+
       const otherActive = db.prepare(`
         SELECT le.version_id
         FROM ladder_entries le
@@ -919,10 +946,30 @@ export function unquarantineVersion(
 
       ensureAgentLadderStats(db, ladderId, ver.agentId);
 
-      if (nextRole !== 'retired' && ladder.status !== 'archived') {
-        const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
+      if (nextRole !== 'retired') {
         entries.recomputeLadderRatings(db, ladderId, now, undefined, dayUtc);
       }
+    }
+
+    const tournamentIds = JSON.parse(ver.tournamentsJson) as string[];
+    for (const tournamentId of tournamentIds) {
+      const tournament = getTournament(db, tournamentId);
+      if (tournament?.status !== 'scheduled') continue;
+      if (now >= getTournamentClosesAt(tournament.startsAt)) continue;
+      const alreadyEntered = db.prepare(
+        'SELECT 1 FROM tournament_entrants WHERE tournament_id = ? AND agent_id = ?'
+      ).get(tournamentId, ver.agentId);
+      if (alreadyEntered) continue;
+      const maxRow = db.prepare(
+        `SELECT COALESCE(MAX(seed), 0) AS max_seed
+         FROM tournament_entrants WHERE tournament_id = ?`
+      ).get(tournamentId) as {max_seed: number};
+      upsertTournamentEntrant(db, {
+        tournamentId,
+        agentId: ver.agentId,
+        versionId: ver.id,
+        seed: maxRow.max_seed + 1,
+      });
     }
 
     return getVersionById(db, ver.id)!;

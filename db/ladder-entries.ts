@@ -868,6 +868,8 @@ export function recomputeLadderRatings(
   prevMatchSec?: number,
   dayUtc?: string
 ): ratings.RatingResult {
+  const ladder = getLadder(db, ladderId);
+  const isArchived = ladder?.status === 'archived';
   const rawEntries = db.prepare(`
     SELECT
       le.version_id,
@@ -954,15 +956,44 @@ export function recomputeLadderRatings(
   const families = stats.loadAgentLadderStatsMap(db, ladderId);
   const warmStart = new Float64Array(entries.map(v => (v.elo - 1500) / ratings.ELO_SCALE));
 
+  const frozenStandings = isArchived
+    ? new Map(
+      entries.map(v => [
+        v.versionId,
+        {
+          role: v.role,
+          rankCurrent: v.rankCurrent,
+          rankMin: v.rankMin,
+          rankMax: v.rankMax,
+          bestRank: v.bestRank,
+          bestRankAt: v.bestRankAt,
+        },
+      ])
+    )
+    : undefined;
+
   const res = applyRatingsToEntriesAndFamilies(
     entries,
     pairs,
     anchorIndex,
     nowSec,
-    prevMatchSec,
+    isArchived ? undefined : prevMatchSec,
     families,
     warmStart
   );
+
+  if (frozenStandings) {
+    for (const v of entries) {
+      const snap = frozenStandings.get(v.versionId);
+      if (!snap) continue;
+      v.role = snap.role;
+      v.rankCurrent = snap.rankCurrent;
+      v.rankMin = snap.rankMin;
+      v.rankMax = snap.rankMax;
+      v.bestRank = snap.bestRank;
+      v.bestRankAt = snap.bestRankAt;
+    }
+  }
 
   const updateEntry = db.prepare(`
     UPDATE ladder_entries
@@ -1048,6 +1079,9 @@ export function setLadderAnchor(
   inTransaction(() => {
     const ladder = getLadder(db, ladderId);
     if (!ladder) throw new Error(`Ladder "${ladderId}" not found`);
+    if (ladder.status === 'archived') {
+      throw new Error(`Cannot change anchor on archived ladder "${ladderId}"`);
+    }
     const entry = db.prepare(
       'SELECT 1 FROM ladder_entries WHERE ladder_id = ? AND version_id = ?'
     ).get(ladderId, versionId);
