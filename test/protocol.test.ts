@@ -61,6 +61,24 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
       kind: 'choice',
       choice: 'pass, switch 4',
     });
+    // Choice cancelling (`undo`, `/undo`, `/choose undo`) is forbidden so agents cannot
+    // clear their side's choice in @pkmn/sim without triggering a new |request|.
+    expect(parseAgentStdoutLine('undo')).toEqual({
+      kind: 'chat',
+      message: 'undo',
+    });
+    expect(parseAgentStdoutLine('/undo')).toEqual({
+      kind: 'chat',
+      message: '/undo',
+    });
+    expect(parseAgentStdoutLine('/choose undo')).toEqual({
+      kind: 'chat',
+      message: '/choose undo',
+    });
+    expect(parseAgentStdoutLine('move 1, undo')).toEqual({
+      kind: 'chat',
+      message: 'move 1, undo',
+    });
   });
 
   test(

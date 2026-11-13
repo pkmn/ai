@@ -32,8 +32,14 @@ const BARE_CHOICE_KEYWORDS = new Set([
   'default',
   'auto',
   'recharge',
-  'undo',
 ]);
+
+function containsUndoSubchoice(choice: string): boolean {
+  for (const part of choice.split(',')) {
+    if (part.trim().toLowerCase() === 'undo') return true;
+  }
+  return false;
+}
 
 function isBareSimulatorChoice(body: string): boolean {
   if (body.startsWith('{') || body.startsWith('[')) return false;
@@ -69,7 +75,9 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
 
   if (body.startsWith('/choose ')) {
     const choice = body.slice(8).trim();
-    return choice ? {kind: 'choice', choice} : undefined;
+    if (!choice) return undefined;
+    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    return {kind: 'choice', choice};
   }
   if (body.startsWith('/team ')) {
     const rest = body.slice(6).trim();
@@ -88,8 +96,7 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
     body === '/skip' ||
     body === '/shift' ||
     body === '/default' ||
-    body === '/auto' ||
-    body === '/undo'
+    body === '/auto'
   ) {
     return {kind: 'choice', choice: body.slice(1)};
   }

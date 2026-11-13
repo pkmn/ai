@@ -396,6 +396,39 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       const crashRes = await crashGame.run();
       expect(crashRes.winner).toBe('p2');
       expect(crashRes.endReason).toBe('crash');
+
+      // Verify emitting undo / /undo / /choose undo does not deadlock the arbiter
+      const undoAgentScript = path.join(tmpDir, 'undo-agent.js');
+      fs.writeFileSync(
+        undoAgentScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write("undo\\n/undo\\n/choose undo\\n");',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const undoGame = new TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [undoAgentScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      });
+      const undoRes = await undoGame.run();
+      expect(undoRes.endReason).toBe('smoke_complete');
     }
   );
 

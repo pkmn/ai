@@ -529,12 +529,22 @@ export class TimeSlicedArenaGame {
       await this.battleStream.write(`>player p1 ${p1PlayerSpec}`);
       await this.battleStream.write(`>player p2 ${p2PlayerSpec}`);
 
+      let idleSpins = 0;
       while (!this.ended) {
         if (this.p1.pendingRequestJson) {
+          idleSpins = 0;
           await this.stepPlayerDecision(this.p1);
         } else if (this.p2.pendingRequestJson) {
+          idleSpins = 0;
           await this.stepPlayerDecision(this.p2);
         } else {
+          idleSpins++;
+          if (idleSpins > 2500) {
+            this.ended = true;
+            this.winner = 'tie';
+            this.endReason = 'arbiter_stall';
+            break;
+          }
           await new Promise(r => setTimeout(r, 2));
         }
       }
