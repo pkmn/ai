@@ -42,8 +42,18 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
     SKOPEO_ARGS+=(--src-creds "$CREDS")
   fi
 
-  # 1. Inspect remote manifest before pulling layers (<= 32 layers, <= 500 MB compressed)
+  # 1. Inspect remote manifest before pulling layers (<= 32 layers, <= 500 MB compressed, digest match)
   RAW_MANIFEST="$(skopeo inspect --raw "${SKOPEO_ARGS[@]}" "docker://${IMAGE_URL}")"
+  if [[ -n "$EXPECTED_SHA" ]]; then
+    CLEAN_EXPECTED="$(printf '%s' "$EXPECTED_SHA" | tr 'A-F' 'a-f' | sed 's/^sha256://')"
+    MANIFEST_SHA="$(printf '%s' "$RAW_MANIFEST" | sha256sum | awk '{print $1}')"
+    CONFIG_SHA="$(printf '%s' "$RAW_MANIFEST" | jq -r '.config.digest // "" | sub("^sha256:"; "")' | tr 'A-F' 'a-f')"
+    if [[ "$CLEAN_EXPECTED" != "$MANIFEST_SHA" && "$CLEAN_EXPECTED" != "$CONFIG_SHA" ]]; then
+      echo "ERROR: ${AGENT_ID} OCI digest mismatch (expected ${CLEAN_EXPECTED}, got manifest=${MANIFEST_SHA} config=${CONFIG_SHA})" >&2
+      rm -rf "$WORK_DIR"
+      exit 1
+    fi
+  fi
   LAYER_COUNT="$(printf '%s' "$RAW_MANIFEST" | jq '.layers | length')"
   COMPRESSED_BYTES="$(printf '%s' "$RAW_MANIFEST" | jq '[.layers[].size] | add // 0')"
   if (( LAYER_COUNT == 0 || LAYER_COUNT > 32 )); then

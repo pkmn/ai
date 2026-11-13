@@ -233,7 +233,7 @@ export class Coordinator {
       processed++;
       const mode = toExecutionMode(sub.package);
       const targetId = formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
-      const target = mode === 'container' ? sub.url : targetId;
+      const target = targetId;
 
       let unpackedBytes: number;
       try {
@@ -242,7 +242,8 @@ export class Coordinator {
             sub.url,
             targetId,
             sub.authToken,
-            this.stagingDir
+            this.stagingDir,
+            sub.sha256
           );
         } else {
           unpackedBytes = await downloadAndUnpackBundle({

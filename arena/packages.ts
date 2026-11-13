@@ -25,21 +25,16 @@ export const UNPACK_BIN =
 export interface OciManifestInspection {
   compressedBytes: number;
   layerCount: number;
+  manifestSha256: string;
+  configSha256?: string;
 }
 
-export function inspectRemoteOciSize(
-  imageRef: string,
-  creds?: string
+export function verifyOciManifestDigest(
+  rawManifestJson: string,
+  expectedSha256?: string
 ): OciManifestInspection {
-  const args = ['inspect', '--raw'];
-  if (creds) args.push('--creds', creds);
-  args.push(`docker://${imageRef}`);
-
-  const rawJson = execFileSync('skopeo', args, {
-    encoding: 'utf8',
-    timeout: 30_000,
-  });
-  const manifest = JSON.parse(rawJson) as {
+  const manifest = JSON.parse(rawManifestJson) as {
+    config?: {digest?: string};
     layers?: Array<{size?: number}>;
     manifests?: unknown[];
   };
@@ -65,16 +60,54 @@ export function inspectRemoteOciSize(
     );
   }
 
-  return {compressedBytes, layerCount: manifest.layers.length};
+  const manifestSha256 = crypto.createHash('sha256').update(rawManifestJson).digest('hex');
+  const rawConfigDigest = manifest.config?.digest ?? '';
+  const configSha256 = rawConfigDigest.startsWith('sha256:')
+    ? rawConfigDigest.slice(7).toLowerCase()
+    : undefined;
+
+  if (expectedSha256) {
+    const cleanExpected = expectedSha256.trim().toLowerCase().replace(/^sha256:/, '');
+    if (cleanExpected !== manifestSha256 && cleanExpected !== configSha256) {
+      throw new Error(
+        `OCI digest mismatch: expected ${cleanExpected}, ` +
+        `got manifest=${manifestSha256}${configSha256 ? ` config=${configSha256}` : ''}`
+      );
+    }
+  }
+
+  return {
+    compressedBytes,
+    layerCount: manifest.layers.length,
+    manifestSha256,
+    configSha256,
+  };
+}
+
+export function inspectRemoteOciSize(
+  imageRef: string,
+  creds?: string,
+  expectedSha256?: string
+): OciManifestInspection {
+  const args = ['inspect', '--raw'];
+  if (creds) args.push('--creds', creds);
+  args.push(`docker://${imageRef}`);
+
+  const rawJson = execFileSync('skopeo', args, {
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  return verifyOciManifestDigest(rawJson, expectedSha256);
 }
 
 export function pullAndVerifyOciImage(
   imageRef: string,
   agentTargetId: string,
   creds?: string,
-  stagingDir = STAGING_DIR
+  stagingDir = STAGING_DIR,
+  expectedSha256?: string
 ): number {
-  inspectRemoteOciSize(imageRef, creds);
+  inspectRemoteOciSize(imageRef, creds, expectedSha256);
 
   fs.mkdirSync(stagingDir, {recursive: true});
   const stagingTar = path.join(stagingDir, `oci-${agentTargetId}.tar`);
@@ -83,7 +116,7 @@ export function pullAndVerifyOciImage(
   try {
     const copyArgs = ['copy'];
     if (creds) copyArgs.push('--src-creds', creds);
-    copyArgs.push(`docker://${imageRef}`, `docker-archive:${stagingTar}:${imageRef}`);
+    copyArgs.push(`docker://${imageRef}`, `docker-archive:${stagingTar}:${agentTargetId}:latest`);
 
     execFileSync('skopeo', copyArgs, {timeout: 180_000});
 
@@ -91,13 +124,13 @@ export function pullAndVerifyOciImage(
 
     const uncompressedStr = execFileSync(
       'podman',
-      ['image', 'inspect', '--format', '{{.Size}}', imageRef],
+      ['image', 'inspect', '--format', '{{.Size}}', agentTargetId],
       {encoding: 'utf8', timeout: 15_000}
     ).trim();
     const uncompressedBytes = Number(uncompressedStr);
 
     if (!Number.isFinite(uncompressedBytes) || uncompressedBytes > MAX_IMAGE_BYTES) {
-      execFileSync('podman', ['rmi', '-f', imageRef], {timeout: 30_000});
+      execFileSync('podman', ['rmi', '-f', agentTargetId], {timeout: 30_000});
       throw new Error(
         `Uncompressed OCI image size (${uncompressedBytes} B) ` +
         `exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`

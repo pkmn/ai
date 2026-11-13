@@ -20,6 +20,7 @@ import {
   computeResidencyMultipliers,
   downloadAndUnpackBundle,
   unpackLocalTarArchive,
+  verifyOciManifestDigest,
 } from '../arena/packages';
 import {
   ConcurrentTournamentGame,
@@ -296,6 +297,17 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         casDir,
       })).toThrow(/traverses symlink|escapes/i);
       expect(fs.existsSync(path.join(agentsDir, 'pwned.txt'))).toBe(false);
+
+      // Verify OCI manifest SHA-256 and config digest checks
+      const sampleManifest = JSON.stringify({
+        config: {digest: `sha256:${'a'.repeat(64)}`},
+        layers: [{size: 1024}, {size: 2048}],
+      });
+      const manifestSha = crypto.createHash('sha256').update(sampleManifest).digest('hex');
+      expect(verifyOciManifestDigest(sampleManifest, manifestSha).layerCount).toBe(2);
+      expect(verifyOciManifestDigest(sampleManifest, 'a'.repeat(64)).compressedBytes).toBe(3072);
+      expect(() => verifyOciManifestDigest(sampleManifest, 'b'.repeat(64)))
+        .toThrow(/OCI digest mismatch/);
     }
   );
 
