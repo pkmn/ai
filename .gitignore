@@ -3,6 +3,10 @@
 Thumbs.db
 .vscode
 
+# Python
+__pycache__/
+*.py[cod]
+
 # JS
 coverage/
 node_modules/
