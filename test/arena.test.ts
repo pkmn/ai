@@ -16,6 +16,7 @@ import {StateDatabase} from '../arena/db';
 import {
   computeResidencyMultipliers,
   downloadAndUnpackBundle,
+  evictColdAgentsIfNeeded,
   unpackLocalTarArchive,
   verifyOciManifestDigest,
 } from '../arena/packages';
@@ -400,6 +401,41 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(stateDb.getLocalAgent(10)?.consecutiveFaults).toBe(0);
       expect(stateDb.getLocalAgent(10)?.totalGames).toBe(3);
       expect(stateDb.getLocalAgent(10)?.totalFaults).toBe(2);
+
+      // Verify separate Podman VM hot-container cap evicts oldest container without touching native
+      stateDb.upsertLocalAgent({
+        versionId: 30,
+        agentId: 3,
+        slug: 'gamma',
+        version: '1.0.0',
+        mode: 'container',
+        target: 'gamma-1.0.0-v30',
+        residency: 'hot',
+        unpackedBytes: 6000,
+      });
+      stateDb.upsertLocalAgent({
+        versionId: 40,
+        agentId: 4,
+        slug: 'delta',
+        version: '1.0.0',
+        mode: 'container',
+        target: 'delta-1.0.0-v40',
+        residency: 'hot',
+        unpackedBytes: 6000,
+      });
+      stateDb.setAgentResidency(30, 'hot', 1000);
+      stateDb.setAgentResidency(40, 'hot', 2000);
+      const evictedTargets: string[] = [];
+      const evicted = evictColdAgentsIfNeeded(stateDb, {
+        containerHighWaterBytes: 10_000,
+        containerLowWaterBytes: 7_000,
+        coldDir: path.join(tmpDir, 'cold-containers'),
+        evictContainerFn: target => evictedTargets.push(target),
+      });
+      expect(evicted).toEqual([30]);
+      expect(evictedTargets).toEqual(['gamma-1.0.0-v30']);
+      expect(stateDb.getLocalAgent(30)?.residency).toBe('cold');
+      expect(stateDb.getLocalAgent(10)?.residency).toBe('hot');
 
       stateDb.close();
     }
@@ -924,6 +960,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       const stagingDir = path.join(tmpDir, 'coord-staging');
       const casDir = path.join(tmpDir, 'coord-cas');
 
+      const archiveLogsDir = path.join(tmpDir, 'coord-archive-logs');
       const coord = new Coordinator({
         client: mockClient,
         stateDb,
@@ -931,6 +968,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         agentsDir,
         stagingDir,
         casDir,
+        archiveLogsDir,
         devMode: true,
         maxTurns: 1,
       });
@@ -1108,10 +1146,17 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         p2TurnMillis: 15,
       });
 
+      const hbBeforeRecovery = heartbeats.length;
       const recovered = await coord.recoverIncompleteMatches();
       expect(recovered.aborted).toEqual(['gen9customgame-0000098']);
       expect(recovered.resumed).toEqual(['gen9customgame-0000099']);
       expect(completedMatches).toHaveLength(2);
+      expect(heartbeats.length).toBeGreaterThan(hbBeforeRecovery);
+      expect(
+        fs.existsSync(
+          path.join(archiveLogsDir, 'gen9customgame', '1970-01-01', 'gen9customgame-0000099b.log')
+        )
+      ).toBe(true);
       expect(stateDb.getMatchCheckpoint('gen9customgame-0000098')?.status).toBe('aborted');
       expect(stateDb.getMatchCheckpoint('gen9customgame-0000099')?.status).toBe('complete');
 

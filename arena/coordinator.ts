@@ -1,3 +1,4 @@
+import {execFileSync} from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -16,6 +17,7 @@ import {
   COLD_AGENTS_DIR,
   STAGING_DIR,
   UNPACK_BIN,
+  computeResidencyMultipliers,
   downloadAndUnpackBundle,
   ensureAgentResident,
   evictColdAgentsIfNeeded,
@@ -218,6 +220,13 @@ export class Coordinator {
     aborted: string[];
     resumed: string[];
   }> {
+    if (!this.devMode) {
+      for (const slot of ['p1', 'p2'] as const) {
+        try {
+          execFileSync('/opt/arena/bin/arena', ['cleanup', slot], {timeout: 15_000});
+        } catch {}
+      }
+    }
     const incomplete = this.stateDb.getIncompleteMatches();
     const aborted: string[] = [];
     const resumed: string[] = [];
@@ -339,6 +348,10 @@ export class Coordinator {
       if (smokeError) {
         if (mode === 'native') {
           fs.rmSync(path.join(this.agentsDir, targetId), {recursive: true, force: true});
+        } else {
+          try {
+            execFileSync('podman', ['rmi', '-f', targetId], {timeout: 30_000});
+          } catch {}
         }
         await this.reportSubmissionOrOutbox({
           versionId: sub.versionId,
@@ -506,19 +519,18 @@ export class Coordinator {
     return {t1: t1Packed, t2: t2Packed};
   }
 
-  private writeArchivedBattleLogs(
+  private writeArchivedGameLog(
     ladderId: string,
     matchId: string,
-    logA: string,
-    logB: string,
-    nowSeconds: number
+    suffix: 'a' | 'b',
+    log: string,
+    daySeconds: number
   ) {
     try {
-      const day = new Date(nowSeconds * 1000).toISOString().slice(0, 10);
+      const day = new Date(daySeconds * 1000).toISOString().slice(0, 10);
       const dir = path.join(this.archiveLogsDir, ladderId, day);
       fs.mkdirSync(dir, {recursive: true});
-      fs.writeFileSync(path.join(dir, `${matchId}a.log`), logA, 'utf8');
-      fs.writeFileSync(path.join(dir, `${matchId}b.log`), logB, 'utf8');
+      fs.writeFileSync(path.join(dir, `${matchId}${suffix}.log`), log, 'utf8');
     } catch {}
   }
 
@@ -556,10 +568,16 @@ export class Coordinator {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
     });
+    evictColdAgentsIfNeeded(this.stateDb, {
+      agentsDir: this.agentsDir,
+      coldDir: this.coldDir,
+      pinnedVersionIds: new Set([cp.p1VersionId, cp.p2VersionId]),
+    });
 
     const p1Spec = this.resolveLaunchSpec(cp.p1Mode, cp.p1Target);
     const p2Spec = this.resolveLaunchSpec(cp.p2Mode, cp.p2Target);
     const seed = this.parsePrngSeed(cp.seed);
+    const g1Outcome = cp.game1Outcome ?? 'T';
 
     // Game 2 swaps sides and teams: P2 sits in slot p1 with T1, P1 sits in slot p2 with T2
     const g2Game = new TimeSlicedArenaGame({
@@ -571,14 +589,57 @@ export class Coordinator {
       p2TeamPacked: cp.p2TeamPacked,
       maxTurns: this.maxTurns,
       devMode: this.devMode,
+      onTurn: async info => {
+        this.heartbeatSeq++;
+        await this.client.sendHeartbeat({
+          heartbeatSeq: this.heartbeatSeq,
+          matchId: cp.id,
+          ladderId: cp.ladderId,
+          format: cp.format,
+          game: 2,
+          turn: info.turn,
+          activeSlot: info.activeSlot === 'p1' ? 'p2' : 'p1',
+          turnStartedAt: info.turnStartedAt,
+          turnBudgetSeconds: info.turnBudgetSeconds,
+          incrementSeconds: info.incrementSeconds,
+          game1Summary: {
+            ...(g1Outcome === 'W'
+              ? {winnerSlot: 'p1' as const}
+              : g1Outcome === 'L'
+                ? {winnerSlot: 'p2' as const}
+                : {}),
+            turns: cp.game1Turns ?? 1,
+          },
+          p1: {
+            slug: cp.p1Slug,
+            name: cp.p1Name,
+            version: cp.p1Version,
+            bankSeconds: info.p2BankSeconds,
+            lastTurnMillis: info.p2LastTurnMillis,
+            meanTurnMillis: info.p2MeanTurnMillis,
+            ram: cp.p1Game1Ram ?? 64,
+            ...(cp.p2TeamLabel ? {team: cp.p2TeamLabel} : {}),
+          },
+          p2: {
+            slug: cp.p2Slug,
+            name: cp.p2Name,
+            version: cp.p2Version,
+            bankSeconds: info.p1BankSeconds,
+            lastTurnMillis: info.p1LastTurnMillis,
+            meanTurnMillis: info.p1MeanTurnMillis,
+            ram: cp.p2Game1Ram ?? 64,
+            ...(cp.p1TeamLabel ? {team: cp.p1TeamLabel} : {}),
+          },
+        }).catch(() => undefined);
+      },
     });
     const g2Res = await g2Game.run();
     const g2OutcomeForP1: ratings.GameOutcome =
       g2Res.winner === 'p2' ? 'W' : g2Res.winner === 'p1' ? 'L' : 'T';
 
-    const g1Outcome = cp.game1Outcome ?? 'T';
     const category = combineMatchCategory(g1Outcome, g2OutcomeForP1);
     const now = Math.floor(Date.now() / 1000);
+    this.writeArchivedGameLog(cp.ladderId, cp.id, 'b', g2Res.omniscientLog, cp.startedAt || now);
 
     const p1PeakRam = Math.max(cp.p1Game1Ram ?? 64, g2Res.p2PeakRam);
     const p2PeakRam = Math.max(cp.p2Game1Ram ?? 64, g2Res.p1PeakRam);
@@ -714,6 +775,10 @@ export class Coordinator {
         agentMatches,
         pairMatches,
         lastMatchNumber: this.stateDb.getLastGlobalMatchSequence(ladder.id),
+        residencyMultipliers: computeResidencyMultipliers(
+          ladder.entries.map(e => e.versionId),
+          this.stateDb
+        ),
       };
       candidates.push({ladder, state});
     }
@@ -752,6 +817,11 @@ export class Coordinator {
         `Missing local agent registration for versionId ${e1.versionId} or ${e2.versionId}`
       );
     }
+    evictColdAgentsIfNeeded(this.stateDb, {
+      agentsDir: this.agentsDir,
+      coldDir: this.coldDir,
+      pinnedVersionIds: new Set([e1.versionId, e2.versionId]),
+    });
 
     const seq = this.stateDb.nextMatchSequence(ladder.id);
     const prefix = ladder.slot === 'vgc' ? 'vgc' : ladder.format;
@@ -837,6 +907,7 @@ export class Coordinator {
       },
     });
     const g1Res = await g1Game.run();
+    this.writeArchivedGameLog(ladder.id, matchId, 'a', g1Res.omniscientLog, now);
 
     this.stateDb.checkpointGame1Complete({
       id: matchId,
@@ -910,14 +981,7 @@ export class Coordinator {
       g2Res.winner === 'p2' ? 'W' : g2Res.winner === 'p1' ? 'L' : 'T';
     const category = combineMatchCategory(g1Res.outcome, g2OutcomeForP1);
     const completedAt = Math.floor(Date.now() / 1000);
-
-    this.writeArchivedBattleLogs(
-      ladder.id,
-      matchId,
-      g1Res.omniscientLog,
-      g2Res.omniscientLog,
-      completedAt
-    );
+    this.writeArchivedGameLog(ladder.id, matchId, 'b', g2Res.omniscientLog, now);
 
     const p1PeakRam = Math.max(g1Res.p1PeakRam, g2Res.p2PeakRam);
     const p2PeakRam = Math.max(g1Res.p2PeakRam, g2Res.p1PeakRam);

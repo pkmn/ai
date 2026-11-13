@@ -66,6 +66,7 @@ export interface LadderMatchState {
   agentMatches: Int32Array;
   pairMatches: Int32Array;
   lastMatchNumber: number;
+  residencyMultipliers?: Float64Array;
 }
 
 export interface NextMatchChoice {
@@ -627,7 +628,10 @@ export function selectNextArenaMatch(
         const mij = pairMatches[i * M + j];
         const withinWeight = Math.sqrt(topWeight[i] * topWeight[j]) * overlap * triageBonus;
         const repeatDamper = 1 / (1 + 0.25 * mij);
-        const score = infoGain * withinWeight * repeatDamper * agingBoost;
+        const residency = ladder.residencyMultipliers
+          ? ladder.residencyMultipliers[i * M + j]
+          : 1.0;
+        const score = infoGain * withinWeight * repeatDamper * agingBoost * residency;
 
         if (!best || score > best.priorityScore) {
           best = {ladderId: ladder.id, agentI: i, agentJ: j, priorityScore: score};

@@ -11,6 +11,9 @@ export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
 export const MAX_OCI_LAYERS = 32;
 export const HOT_AGENTS_HIGH_WATER_BYTES = 1350 * 1024 * 1024 * 1024; // 1.35 TB
 export const HOT_AGENTS_LOW_WATER_BYTES = 1200 * 1024 * 1024 * 1024; // 1.20 TB
+// Separate cap inside the 64 GB Podman VM disk so hot OCI images never exhaust the VM rootfs
+export const HOT_CONTAINERS_HIGH_WATER_BYTES = 40 * 1024 * 1024 * 1024; // 40 GiB
+export const HOT_CONTAINERS_LOW_WATER_BYTES = 32 * 1024 * 1024 * 1024; // 32 GiB
 
 export const AGENTS_DIR = process.env.ARENA_AGENTS_DIR ?? '/opt/arena/agents';
 export const STAGING_DIR = process.env.ARENA_STAGING_DIR ?? '/Volumes/Staging';
@@ -273,20 +276,28 @@ export function evictColdAgentsIfNeeded(
   opts: {
     highWaterBytes?: number;
     lowWaterBytes?: number;
+    containerHighWaterBytes?: number;
+    containerLowWaterBytes?: number;
     agentsDir?: string;
     coldDir?: string;
     pinnedVersionIds?: ReadonlySet<number>;
+    evictContainerFn?: (target: string, coldArchive: string) => void;
   } = {}
 ): number[] {
   const highWater = opts.highWaterBytes ?? HOT_AGENTS_HIGH_WATER_BYTES;
   const lowWater = opts.lowWaterBytes ?? HOT_AGENTS_LOW_WATER_BYTES;
+  const containerHighWater = opts.containerHighWaterBytes ?? HOT_CONTAINERS_HIGH_WATER_BYTES;
+  const containerLowWater = opts.containerLowWaterBytes ?? HOT_CONTAINERS_LOW_WATER_BYTES;
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
   const pinned = opts.pinnedVersionIds ?? new Set<number>();
 
   const hotAgents = stateDb.listLocalAgents().filter(a => a.residency === 'hot');
   let usedBytes = hotAgents.reduce((sum, a) => sum + a.unpackedBytes, 0);
-  if (usedBytes <= highWater) return [];
+  let containerUsedBytes = hotAgents
+    .filter(a => a.mode === 'container')
+    .reduce((sum, a) => sum + a.unpackedBytes, 0);
+  if (usedBytes <= highWater && containerUsedBytes <= containerHighWater) return [];
 
   fs.mkdirSync(coldDir, {recursive: true});
 
@@ -294,9 +305,7 @@ export function evictColdAgentsIfNeeded(
     .filter(a => !pinned.has(a.versionId))
     .sort((a, b) => a.lastPlayedAt - b.lastPlayedAt || a.versionId - b.versionId);
 
-  const evicted: number[] = [];
-  for (const v of victims) {
-    if (usedBytes <= lowWater) break;
+  const evictOne = (v: LocalAgentRow) => {
     const coldArchive = path.join(coldDir, `${v.target}.tar.zst`);
     if (v.mode === 'native') {
       const hotDir = path.join(agentsDir, v.target);
@@ -306,6 +315,8 @@ export function evictColdAgentsIfNeeded(
         });
         fs.rmSync(hotDir, {recursive: true, force: true});
       }
+    } else if (opts.evictContainerFn) {
+      opts.evictContainerFn(v.target, coldArchive);
     } else {
       execFileSync(
         'bash',
@@ -325,7 +336,34 @@ export function evictColdAgentsIfNeeded(
 
     stateDb.setAgentResidency(v.versionId, 'cold');
     usedBytes -= v.unpackedBytes;
-    evicted.push(v.versionId);
+    if (v.mode === 'container') {
+      containerUsedBytes -= v.unpackedBytes;
+    }
+  };
+
+  const evicted: number[] = [];
+  const evictedSet = new Set<number>();
+
+  // 1. Enforce Podman VM 40 GiB hot-container cap first
+  if (containerUsedBytes > containerHighWater) {
+    for (const v of victims) {
+      if (containerUsedBytes <= containerLowWater) break;
+      if (v.mode !== 'container') continue;
+      evictOne(v);
+      evicted.push(v.versionId);
+      evictedSet.add(v.versionId);
+    }
+  }
+
+  // 2. Enforce overall 1.35 TB hot-storage cap across remaining hot agents
+  if (usedBytes > highWater) {
+    for (const v of victims) {
+      if (usedBytes <= lowWater) break;
+      if (evictedSet.has(v.versionId)) continue;
+      evictOne(v);
+      evicted.push(v.versionId);
+      evictedSet.add(v.versionId);
+    }
   }
 
   return evicted;
