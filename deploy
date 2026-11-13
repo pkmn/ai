@@ -24,9 +24,12 @@ git submodule update --depth 1 teams/teams teams/pkmn_stuff
 git diff --quiet $HEAD package.json teams/package.json >/dev/null ||
     npm install --omit=dev --silent
 
-# Warn if root-installed systemd unit files changed (must be installed as root into /etc/systemd/system/)
+# Reload unit files if any changes have been made to them
 git diff --quiet $HEAD config/*.{service,timer} ||
-    echo "WARNING: config/*.{service,timer} changed — review and install into /etc/systemd/system/ as root."
+    sudo systemctl daemon-reload
+
+# Ensure runtime writable directories exist before build/restart
+mkdir -p public wiki chat/logs
 
 # Always do a rebuild to regenerate the static pages
 npm run build
@@ -40,7 +43,6 @@ if [ -x private/deploy ]; then
     ./private/deploy
 fi
 
-# Reload NGINX if private/*.conf changed; warn if root-installed config/nginx.conf changed
-if ! git diff --quiet $HEAD config/nginx.conf; then
-    echo "WARNING: config/nginx.conf changed — review and install into /etc/nginx/sites-available/pkmn.ai as root."
-fi
+# Validate and reload NGINX if the config has changed
+git diff --quiet $HEAD config/nginx.conf ||
+    (sudo nginx -t && sudo service nginx reload)

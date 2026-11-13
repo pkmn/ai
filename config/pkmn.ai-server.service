@@ -1,5 +1,4 @@
-# install -o root -g root -m 0644 /home/pkmn/ai/config/pkmn.ai-server.service /etc/systemd/system/
-# systemctl daemon-reload && systemctl enable --now pkmn.ai-server.service
+# systemctl enable --now /home/pkmn/ai/config/pkmn.ai-server.service
 
 [Unit]
 Description=pkmn.ai server
@@ -12,7 +11,7 @@ Restart=always
 RestartSec=5s
 Environment=NODE_ENV=production
 EnvironmentFile=/home/pkmn/ai/.env
-ExecStart=/usr/bin/npm start
+ExecStart=/usr/bin/node --env-file-if-exists=/home/pkmn/ai/.env /home/pkmn/ai/build/server
 WorkingDirectory=/home/pkmn/ai
 StartLimitInterval=0
 StandardOutput=syslog
@@ -20,6 +19,14 @@ StandardError=syslog
 SyslogIdentifier=pkmn.ai.server
 User=pkmn
 Group=pkmn
+# Isolate the running web daemon in a read-only mount namespace with `PR_SET_NO_NEW_PRIVS` so a
+# server compromise cannot invoke `sudo` or modify `config/*`, `deploy`, `build/*`, or `~/.ssh/*`,
+# while keeping `npm run deploy` (`ssh pkmn@pkmn.ai`) seamless outside this unit's namespace.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/pkmn -/home/pkmn/ai/public -/home/pkmn/ai/wiki -/home/pkmn/ai/chat
 
 [Install]
 WantedBy=multi-user.target

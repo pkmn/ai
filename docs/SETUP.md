@@ -230,9 +230,10 @@ cd /home/pkmn
 git clone https://github.com/pkmn/ai.git
 ```
 
-As `root`, select an editor for `visudo` and edit `/etc/sudoers.d/pkmn` to give the `pkmn` user
-permission to reload `nginx` and restart/check `pkmn.ai-server` (never grant `systemctl
-daemon-reload` or symlinks to `pkmn`-writable unit files, which would allow `root` escalation):
+As `root`, select an editor for `visudo` and edit `/etc/sudoers.d/pkmn` to give the `pkmn` deploy
+user permission to validate/reload `nginx`, reload `systemd` unit files, and manage `pkmn.*`
+services (`pkmn.ai-server.service` runs with `NoNewPrivileges=yes` and `ProtectHome=read-only` so
+the running web process itself can neither invoke `sudo` nor modify `/home/pkmn/ai/config/*`):
 
 ```sh
 update-alternatives --config editor
@@ -240,17 +241,20 @@ visudo -f /etc/sudoers.d/pkmn
 ```
 
 ```diff
-+pkmn ALL=(root) NOPASSWD: /usr/sbin/service nginx reload,/usr/sbin/service pkmn.ai-server restart,/usr/sbin/service pkmn.ai-server status
++pkmn ALL=(root) NOPASSWD: /usr/sbin/nginx -t,/usr/sbin/service nginx reload,/usr/bin/systemctl daemon-reload,/usr/sbin/service pkmn.* *
 ```
 
-As `root`, install root-owned copies (`0644`) of the `systemd` services and timers
-(`pkmn.ai-server.service`, `pkmn.ai-backup.service`, and `pkmn.ai-backup.timer`) into
-`/etc/systemd/system/` and enable them:
+Configure and enable the `systemd` services and timers (`pkmn.ai-server.service`,
+`pkmn.ai-backup.service`, and `pkmn.ai-backup.timer`):
 
 ```sh
-install -o root -g root -m 0644 /home/pkmn/ai/config/*.{service,timer} /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now pkmn.ai-server.service pkmn.ai-backup.timer
+for config in config/*.{service,timer}; do
+  name=$(basename $config)
+  systemctl enable /home/pkmn/ai/$config
+  if [[ $name == *.timer || $name == "pkmn.ai-server.service" ]]; then
+    systemctl start $name
+  fi
+done
 ```
 
 Build the initial static site and start the service as `pkmn`:
@@ -302,13 +306,12 @@ service pkmn.ai-server start
 ## nginx
 
 Install `nginx`, add `www-data` to the `pkmn` group so `nginx` can serve the static files in
-`/home/pkmn/ai/public` and `/home/pkmn/ai/chat/logs`, and install a root-owned copy of
-`config/nginx.conf`:
+`/home/pkmn/ai/public` and `/home/pkmn/ai/chat/logs`, and link `config/nginx.conf`:
 
 ```sh
 apt-get install nginx
 usermod -a -G pkmn www-data
-install -o root -g root -m 0644 /home/pkmn/ai/config/nginx.conf /etc/nginx/sites-available/pkmn.ai
+ln -s /home/pkmn/ai/config/nginx.conf /etc/nginx/sites-available/pkmn.ai
 ln -s /etc/nginx/sites-{available,enabled}/pkmn.ai
 ```
 
