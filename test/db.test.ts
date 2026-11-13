@@ -758,13 +758,17 @@ describe('Smogon lookup & projects.yml arena sync', () => {
         smogonUsername: 'pre_new',
       });
 
-      // Banned Smogon user is rejected
+      // Banned Smogon user is rejected and marked with smogonStanding: 'bad'
       currentPreName = 'BANNED_MODE';
       await expect(db.syncProjectsFromYamlWithSmogon(yamlText, {
         avatarsDir: tmpDir,
         lookupSmogon: mockLookup,
         now: 3000,
       })).rejects.toThrow(/is banned/);
+      expect(db.getDeveloperByGitHub('pmariglia')?.smogonStanding).toBe('bad');
+      const fp = db.getAgentBySlug('foul-play')!;
+      expect(db.computeAgentSubmissionStatus(fp.id).canSubmit).toBe(false);
+      expect(db.computeAgentSubmissionStatus(fp.id).reason).toMatch(/not in good standing/);
     } finally {
       db.close();
     }

@@ -244,6 +244,17 @@ export function upsertProjectDevelopers(
   }
 }
 
+export function setDeveloperSmogonStanding(
+  db: DatabaseSync,
+  developerId: number,
+  standing: SmogonStanding,
+  now = Math.floor(Date.now() / 1000)
+) {
+  db.prepare(
+    'UPDATE developers SET smogon_standing = ?, verified_at = ? WHERE id = ?'
+  ).run(standing, now, developerId);
+}
+
 export function deleteDevelopersForAgent(db: DatabaseSync, agentId: number) {
   db.prepare('DELETE FROM developers WHERE agent_id = ?').run(agentId);
 }

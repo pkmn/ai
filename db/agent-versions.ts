@@ -282,7 +282,10 @@ export function computeAgentTournamentStatuses(
   if (!scheduled.length) return [];
 
   const agent = getAgentById(db, agentId);
-  if (!agent || agent.status === 'disabled') {
+  const badSmogon = db.prepare(
+    "SELECT 1 FROM developers WHERE agent_id = ? AND smogon_standing = 'bad' LIMIT 1"
+  ).get(agentId);
+  if (!agent || agent.status === 'disabled' || badSmogon) {
     return scheduled.map(t => ({
       tournamentId: t.id,
       name: t.name,
@@ -290,7 +293,9 @@ export function computeAgentTournamentStatuses(
       startsAt: t.startsAt,
       closesAt: getTournamentClosesAt(t.startsAt),
       canSubmit: false,
-      reason: 'Project is disabled.',
+      reason: badSmogon
+        ? 'Smogon account for this project is not in good standing.'
+        : 'Project is disabled.',
     }));
   }
 
@@ -397,6 +402,17 @@ export function computeAgentSubmissionStatus(
     };
   }
 
+  const badSmogon = db.prepare(
+    "SELECT 1 FROM developers WHERE agent_id = ? AND smogon_standing = 'bad' LIMIT 1"
+  ).get(agentId);
+  if (badSmogon) {
+    return {
+      label: 'Ineligible',
+      canSubmit: false,
+      reason: 'Smogon account for this project is not in good standing.',
+    };
+  }
+
   if (agent.status === 'pending') {
     return {
       label: 'Pending',
@@ -495,6 +511,15 @@ export function createSubmission(
     const agent = getAgentById(db, input.agentId);
     if (!agent || agent.status === 'disabled') {
       throw Object.assign(new Error('Project is disabled.'), {status: 403});
+    }
+    const badSmogon = db.prepare(
+      "SELECT 1 FROM developers WHERE agent_id = ? AND smogon_standing = 'bad' LIMIT 1"
+    ).get(input.agentId);
+    if (badSmogon) {
+      throw Object.assign(
+        new Error('Smogon account for this project is not in good standing.'),
+        {status: 403}
+      );
     }
     if (!input.ladderIds.length && !tournamentIds.length) {
       throw Object.assign(
