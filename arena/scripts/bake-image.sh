@@ -87,6 +87,8 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
     exit 1
   fi
 
+  # Ensure bwrap mountpoint directories exist inside the read-only rootfs
+  sudo mkdir -p "${DEST_DIR}"/{tmp,scratch,proc,dev}
   sudo chown -R root:root "$DEST_DIR"
   sudo chmod -R a+rX,u+w,go-w "$DEST_DIR"
 

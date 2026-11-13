@@ -214,6 +214,9 @@ export class ConcurrentTournamentGame {
   }
 
   private spawnRemotePlayer(slot: PlayerSlot, spec: TournamentAgentSpec): RemoteTournamentPlayer {
+    if (!/^[A-Za-z0-9._-]+$/.test(spec.agentId)) {
+      throw new Error(`Invalid tournament agentId: ${spec.agentId}`);
+    }
     const proc = spec.localCommand
       ? spawn(spec.localCommand, spec.localArgs ?? [], {stdio: ['pipe', 'pipe', 'pipe']})
       : spawn(
@@ -372,12 +375,23 @@ export class ConcurrentTournamentGame {
     return this.validateOrFallbackTeam(undefined, player.spec.staticTeam);
   }
 
+  private wakePendingLineResolvers() {
+    for (const p of [this.p1, this.p2]) {
+      if (p?.lineResolver) {
+        const resolve = p.lineResolver;
+        p.lineResolver = undefined;
+        resolve(undefined);
+      }
+    }
+  }
+
   private abortForSpotPreemption(slot: PlayerSlot) {
     if (this.ended) return;
     this.ended = true;
     this.winner = 'preempted';
     this.preemptedSlot = slot;
     this.endReason = 'spot_preemption';
+    this.wakePendingLineResolvers();
     Promise.resolve(this.battleStream.write('>forcetie')).catch(() => undefined);
   }
 
@@ -386,6 +400,7 @@ export class ConcurrentTournamentGame {
     this.ended = true;
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
     this.endReason = reason;
+    this.wakePendingLineResolvers();
     const winnerSimName = this.byot
       ? (this.winner === 'p1' ? this.p1Spec.displayName : this.p2Spec.displayName)
       : (this.winner === 'p1' ? 'Agent A' : 'Agent B');

@@ -71,6 +71,16 @@ static int write_all(int fd, const char *buf, size_t len) {
   return 0;
 }
 
+static volatile pid_t child_pgid = 0;
+
+static void handle_term_signal(int sig) {
+  (void)sig;
+  if (child_pgid > 0) {
+    kill(-child_pgid, SIGKILL);
+  }
+  _exit(1);
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     fprintf(stderr, "Usage: %s <program> [args...]\n", argv[0]);
@@ -83,6 +93,10 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  signal(SIGINT, handle_term_signal);
+  signal(SIGTERM, handle_term_signal);
+  signal(SIGHUP, handle_term_signal);
+
   pid_t pid = fork();
   if (pid < 0) {
     perror("fork");
@@ -90,6 +104,7 @@ int main(int argc, char **argv) {
   }
 
   if (pid == 0) {
+    setpgid(0, 0);
     dup2(in_pipe[0], STDIN_FILENO);
     dup2(out_pipe[1], STDOUT_FILENO);
     int devnull = open("/dev/null", O_WRONLY);
@@ -106,6 +121,9 @@ int main(int argc, char **argv) {
     execvp(argv[1], &argv[1]);
     _exit(127);
   }
+
+  child_pgid = pid;
+  setpgid(pid, pid);
 
   close(in_pipe[0]);
   close(out_pipe[1]);
@@ -167,7 +185,11 @@ int main(int argc, char **argv) {
       char *nl = NULL;
       while ((nl = memchr(out_buf.data, '\n', out_buf.len)) != NULL) {
         size_t line_len = (size_t)(nl - out_buf.data) + 1;
-        if (timer_active && line_len > 1) {
+        size_t content_len = line_len - 1;
+        if (content_len > 0 && out_buf.data[content_len - 1] == '\r') {
+          content_len--;
+        }
+        if (timer_active && content_len > 0) {
           uint64_t now_ns = monotonic_ns();
           uint64_t elapsed_ns = now_ns > turn_start_ns ? now_ns - turn_start_ns : 1ULL;
           uint64_t elapsed_ms = (elapsed_ns + 999999ULL) / 1000000ULL;
@@ -184,8 +206,16 @@ int main(int argc, char **argv) {
 
   int status = 0;
 done:
+  if (child_pgid > 0) {
+    kill(-child_pgid, SIGKILL);
+  }
   waitpid(pid, &status, 0);
-  if (WIFEXITED(status)) return WEXITSTATUS(status);
+  if (WIFEXITED(status)) {
+    int code = WEXITSTATUS(status);
+    // Reserve exit code 255 exclusively for OpenSSH transport errors so an agent calling
+    // `exit(255)` cannot spoof a Spot VM preemption / SSH disconnect.
+    return code == 255 ? 1 : code;
+  }
   if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
   return 1;
 }

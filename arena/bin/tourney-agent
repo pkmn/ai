@@ -5,6 +5,10 @@
 set -euo pipefail
 
 AGENT_ID="${1:?Usage: tourney-agent <agent_id>}"
+if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "TOURNEY_ERROR: Invalid agent_id ${AGENT_ID}" >&2
+  exit 2
+fi
 ROOTFS="/opt/arena/agents/${AGENT_ID}"
 
 if [[ ! -x "${ROOTFS}/run" ]]; then
@@ -32,26 +36,27 @@ watch_preemption &
 WATCHER_PID=$!
 trap 'kill $WATCHER_PID 2>/dev/null || true' EXIT
 
-# Execute inside an unprivileged user/mount/IPC/PID/network namespace with NVIDIA GPU access
-exec bwrap \
-  --unshare-all \
-  --die-with-parent \
-  --ro-bind "$ROOTFS" / \
-  --ro-bind /usr/local/bin/tourney-relay /usr/local/bin/tourney-relay \
-  --proc /proc \
-  --dev /dev \
-  --dev-bind-try /dev/nvidia0 /dev/nvidia0 \
-  --dev-bind-try /dev/nvidiactl /dev/nvidiactl \
-  --dev-bind-try /dev/nvidia-uvm /dev/nvidia-uvm \
-  --dev-bind-try /dev/nvidia-uvm-tools /dev/nvidia-uvm-tools \
-  --dev-bind-try /dev/nvidia-modeset /dev/nvidia-modeset \
-  --ro-bind-try /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
-  --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 \
-  --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 \
-  --tmpfs /tmp \
-  --tmpfs /scratch \
-  --setenv HOME /scratch \
-  --setenv TMPDIR /scratch \
-  --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  --chdir / \
-  /usr/local/bin/tourney-relay /run
+# Run `tourney-relay` outside `bwrap` so the sandboxed `/run` process in its unshared PID
+# namespace cannot see `tourney-relay` in `/proc` or inject control lines into its stderr.
+exec /usr/local/bin/tourney-relay \
+  bwrap \
+    --unshare-all \
+    --die-with-parent \
+    --ro-bind "$ROOTFS" / \
+    --proc /proc \
+    --dev /dev \
+    --dev-bind-try /dev/nvidia0 /dev/nvidia0 \
+    --dev-bind-try /dev/nvidiactl /dev/nvidiactl \
+    --dev-bind-try /dev/nvidia-uvm /dev/nvidia-uvm \
+    --dev-bind-try /dev/nvidia-uvm-tools /dev/nvidia-uvm-tools \
+    --dev-bind-try /dev/nvidia-modeset /dev/nvidia-modeset \
+    --ro-bind-try /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+    --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 \
+    --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 \
+    --tmpfs /tmp \
+    --tmpfs /scratch \
+    --setenv HOME /scratch \
+    --setenv TMPDIR /scratch \
+    --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    --chdir / \
+    /run
