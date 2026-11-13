@@ -2497,6 +2497,44 @@ export function register(app: polka.Polka, options: Options): Handle {
     });
   });
 
+  app.get('/api/arena/ladders', (req, res) => {
+    if (!authenticateArena(req, res)) return;
+
+    const ladders = db.getPlayableLadders().map(l => ({
+      id: l.id,
+      slot: l.slot,
+      format: l.format,
+      team: l.team,
+      status: l.status,
+      min: l.min,
+      entries: db.getLeaderboardEntries(l.id).map(e => ({
+        versionId: e.versionId,
+        agentId: e.agentId,
+        agentSlug: e.agentSlug,
+        agentName: e.agentName,
+        version: e.version,
+        elo: e.elo,
+        se: e.se,
+        lcb: e.lcb,
+        matches: e.matches,
+        ...(e.settledAt !== undefined ? {settledAt: e.settledAt} : {}),
+        role: e.role,
+      })),
+      pairAggregates: db.getPairAggregatesForLadder(l.id).map(p => ({
+        lowVersionId: p.lowVersionId,
+        highVersionId: p.highVersionId,
+        ww: p.ww,
+        wt: p.wt,
+        split: p.split,
+        tl: p.tl,
+        ll: p.ll,
+      })),
+      ...(l.team === 'pools' ? {roster: db.getActiveRosterForLadder(l.id)} : {}),
+    }));
+
+    sendJson(res, 200, {ladders});
+  });
+
   app.get('/api/arena/ladders/:id/teams', (req, res) => {
     if (!authenticateArena(req, res)) return;
 

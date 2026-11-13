@@ -46,9 +46,19 @@ export function runBaselineStdioAgent(
 }
 
 async function fetchPlayableLadderSnapshots(
-  serverUrl: string
+  serverUrl: string,
+  arenaSecret?: string
 ): Promise<coordinator.LadderSnapshot[]> {
   const base = serverUrl.replace(/\/+$/, '');
+  const headers: Record<string, string> = {accept: 'application/json'};
+  if (arenaSecret) {
+    headers.authorization = `Bearer ${arenaSecret}`;
+  }
+  const snapRes = await fetch(`${base}/api/arena/ladders`, {headers});
+  if (snapRes.ok) {
+    const snap = await snapRes.json() as {ladders?: coordinator.LadderSnapshot[]};
+    return snap.ladders ?? [];
+  }
   const hubRes = await fetch(`${base}/arena.json`, {
     headers: {accept: 'application/json'},
   });
@@ -132,7 +142,7 @@ export async function runDaemon(opts: {
   while (status.running) {
     try {
       await coord.flushOutbox();
-      const ladders = await fetchPlayableLadderSnapshots(serverUrl);
+      const ladders = await fetchPlayableLadderSnapshots(serverUrl, arenaSecret);
       const byId = new Map(ladders.map(l => [l.id, l]));
       await coord.processPendingSubmissions(byId);
       const played = await coord.playNextScheduledMatch(ladders);
