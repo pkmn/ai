@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- sudo cp /opt/arena/repo/arena/config/ai.pkmn.tunnel.plist /Library/LaunchDaemons/ai.pkmn.tunnel.plist -->
+<!-- sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.tunnel.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.pkmn.tunnel</string>
+  <key>UserName</key>
+  <string>pkmn</string>
+  <key>GroupName</key>
+  <string>agents</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/sbin/taskpolicy</string>
+    <string>-b</string>
+    <string>/usr/bin/ssh</string>
+    <string>-N</string>
+    <string>-T</string>
+    <string>-o</string>
+    <string>ServerAliveInterval=15</string>
+    <string>-o</string>
+    <string>ServerAliveCountMax=3</string>
+    <string>-o</string>
+    <string>ExitOnForwardFailure=yes</string>
+    <string>-o</string>
+    <string>StrictHostKeyChecking=accept-new</string>
+    <string>-i</string>
+    <string>/Users/pkmn/.ssh/id_ed25519_tunnel</string>
+    <string>-L</string>
+    <string>127.0.0.1:1234:127.0.0.1:1234</string>
+    <string>-R</string>
+    <string>127.0.0.1:2222:127.0.0.1:22</string>
+    <string>tunnel@pkmn.ai</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/opt/arena/logs/tunnel.log</string>
+  <key>StandardErrorPath</key>
+  <string>/opt/arena/logs/tunnel.err</string>
+</dict>
+</plist>

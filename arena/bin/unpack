@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+# /opt/arena/bin/unpack
+# Safe, quota-enforced archive unpacker for native darwin/arm64 bundles (.tar.gz, .tar.xz, .tar.zst)
+import hashlib
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+
+MAX_UNPACKED_BYTES = 500 * 1024 * 1024  # 500 MB hard resident size cap
+MAX_FILE_COUNT = 25000                  # Inode / decompression bomb cap
+CAS_DIR = "/opt/arena/cas/sha256"       # Content-addressed blob store on same APFS container
+
+def fail(dest_dir: str, msg: str) -> None:
+    shutil.rmtree(dest_dir, ignore_errors=True)
+    print(f"UNPACK_ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def deduplicate_file_apfs_cow(file_path: str, cas_dir: str = CAS_DIR) -> None:
+    """Deduplicate identical files (>64 KB) across agent versions using APFS Copy-on-Write clones."""
+    try:
+        st = os.stat(file_path, follow_symlinks=False)
+        if not stat.S_ISREG(st.st_mode) or st.st_size < 65536:
+            return
+        h = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while chunk := f.read(1024 * 1024):
+                h.update(chunk)
+        digest = h.hexdigest()
+        shard_dir = os.path.join(cas_dir, digest[:2])
+        os.makedirs(shard_dir, exist_ok=True)
+        cas_blob = os.path.join(shard_dir, digest)
+
+        if os.path.exists(cas_blob):
+            # Replace extracted file with an instant 0-byte APFS CoW clone of the CAS blob
+            tmp_path = file_path + ".cow_tmp"
+            subprocess.run(["/bin/cp", "-c", cas_blob, tmp_path], check=True)
+            os.chmod(tmp_path, stat.S_IMODE(st.st_mode))
+            os.replace(tmp_path, file_path)
+        else:
+            # First time seeing this blob: clone it into the CAS store
+            subprocess.run(["/bin/cp", "-c", file_path, cas_blob], check=True)
+    except Exception:
+        # If cp -c is unsupported or fails on non-APFS dev filesystems, keep the extracted file
+        pass
+
+def open_tar_stream(archive_path: str):
+    """Open .tar.gz, .tar.xz, or .tar.zst in streaming mode ('r|*')."""
+    if archive_path.endswith(".tar.zst") or archive_path.endswith(".tzst"):
+        zstd_proc = subprocess.Popen(
+            ["zstd", "-dc", archive_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return tarfile.open(fileobj=zstd_proc.stdout, mode="r|*"), zstd_proc
+    return tarfile.open(archive_path, mode="r|*"), None
+
+def unpack_bundle(archive_path: str, dest_dir: str, cas_dir: str = CAS_DIR) -> int:
+    dest_real = os.path.realpath(dest_dir)
+    os.makedirs(dest_real, exist_ok=True)
+
+    total_bytes = 0
+    file_count = 0
+
+    try:
+        tf, zstd_proc = open_tar_stream(archive_path)
+    except Exception as e:
+        fail(dest_real, f"Invalid tar archive: {e}")
+
+    with tf:
+        for member in tf:
+            file_count += 1
+            if file_count > MAX_FILE_COUNT:
+                fail(dest_real, f"Archive exceeds max file count ({MAX_FILE_COUNT})")
+
+            # 1. Normalize path and forbid absolute paths or '..' traversal
+            rel_path = os.path.normpath(member.name)
+            if rel_path.startswith(("/", "..")) or "/../" in member.name:
+                fail(dest_real, f"Illegal path in archive: {member.name}")
+            if rel_path == ".":
+                continue
+
+            target_path = os.path.join(dest_real, rel_path)
+            if not os.path.abspath(target_path).startswith(dest_real + os.sep):
+                fail(dest_real, f"Path escapes destination: {member.name}")
+
+            # 2. Forbid device nodes, FIFOs, sockets, and hardlinks outside bundle
+            if member.isdev() or member.isfifo() or member.ischr() or member.isblk():
+                fail(dest_real, f"Forbidden special file in archive: {member.name}")
+
+            if member.issym() or member.islnk():
+                link_target = os.path.normpath(
+                    os.path.join(os.path.dirname(target_path), member.linkname)
+                )
+                if not link_target.startswith(dest_real + os.sep):
+                    fail(dest_real, f"Symlink/hardlink escapes bundle: {member.name} -> {member.linkname}")
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                if os.path.lexists(target_path):
+                    os.unlink(target_path)
+                if member.issym():
+                    os.symlink(member.linkname, target_path)
+                else:
+                    os.link(link_target, target_path)
+                continue
+
+            if member.isdir():
+                os.makedirs(target_path, exist_ok=True)
+                continue
+
+            if not member.isfile():
+                fail(dest_real, f"Unsupported tar entry type: {member.name}")
+
+            # 3. Stream-extract regular file while enforcing MAX_UNPACKED_BYTES
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            src = tf.extractfile(member)
+            if src is None:
+                continue
+
+            with src, open(target_path, "wb") as dst:
+                while True:
+                    chunk = src.read(65536)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_UNPACKED_BYTES:
+                        fail(dest_real, f"Unpacked size exceeds 500 MB cap ({MAX_UNPACKED_BYTES} bytes)")
+                    dst.write(chunk)
+
+            # 4. Strip setuid/setgid/sticky bits; preserve owner rx/r permissions
+            mode = stat.S_IMODE(member.mode) & ~(stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX)
+            is_exec = bool(mode & stat.S_IXUSR)
+            os.chmod(target_path, 0o755 if is_exec else 0o644)
+
+            # 5. Deduplicate large weights/libraries across versions via APFS CoW
+            deduplicate_file_apfs_cow(target_path, cas_dir)
+
+    if zstd_proc is not None:
+        zstd_proc.wait()
+        if zstd_proc.returncode != 0:
+            fail(dest_real, "zstd decompression failed")
+
+    # 6. Verify required './run' entrypoint exists at bundle root and is executable
+    run_entry = os.path.join(dest_real, "run")
+    if not os.path.isfile(run_entry) or not os.access(run_entry, os.X_OK):
+        fail(dest_real, "Bundle is missing required executable './run' at root")
+
+    # 7. Strip macOS quarantine/extended attributes and ad-hoc codesign Mach-O binaries on Darwin
+    if sys.platform == "darwin":
+        subprocess.run(["/usr/bin/xattr", "-cr", dest_real], check=False)
+        for root_dir, _, files in os.walk(dest_real):
+            for fname in files:
+                fpath = os.path.join(root_dir, fname)
+                if not os.path.islink(fpath) and os.access(fpath, os.X_OK):
+                    subprocess.run(
+                        ["/usr/bin/codesign", "--force", "--sign", "-", fpath],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+
+    print(f"UNPACK_OK: {total_bytes} bytes in {file_count} files")
+    return total_bytes
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <archive.tar.gz|.tar.xz|.tar.zst> <dest_dir>", file=sys.stderr)
+        sys.exit(2)
+    cas = os.environ.get("ARENA_CAS_DIR", CAS_DIR)
+    unpack_bundle(sys.argv[1], sys.argv[2], cas)

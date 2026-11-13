@@ -1,0 +1,73 @@
+;; /opt/arena/etc/sandbox.sb
+;; Mandatory Access Control (Seatbelt) profile for native darwin/arm64 agents.
+;; Invoked with: sandbox-exec -f /opt/arena/etc/sandbox.sb \
+;;   -D AGENT_RO_DIR=/opt/arena/agents/<id> -D AGENT_SCRATCH_DIR=/Volumes/P1 ...
+(version 1)
+(deny default)
+
+;; 1. Absolutely deny all network and socket operations (IPv4, IPv6, loopback, Unix sockets)
+(deny network*)
+(deny system-socket)
+
+;; 2. Allow basic process execution, fork/exec of helper binaries within allowed paths, and signals
+;;    restricted to the agent's own sandboxed process tree (`pself`)
+(allow process-fork)
+(allow process-info* (target self))
+(allow signal (target pself))
+(allow sysctl-read)
+(allow pseudo-tty)
+
+;; 3. Explicitly deny cross-process Mach/POSIX IPC, keychains, pasteboard, and audio/camera
+(deny ipc-posix-shm*)
+(deny ipc-posix-sem*)
+(deny ipc-sysv*)
+(deny mach-priv*)
+(deny hid-control)
+(deny nvram*)
+
+;; Allow only minimal system Mach services required by dyld, libSystem, and Metal/Accelerate
+(allow mach-lookup
+  (global-name "com.apple.system.logger")
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.CoreServices.coreservicesd")
+  (global-name "com.apple.CARenderServer")
+  (global-name "com.apple. MTLCompilerService"))
+
+;; 4. Allow Apple Silicon GPU / Neural Engine access for local ML inference (PyTorch MPS / MLX)
+(allow iokit-open
+  (iokit-user-client-class "AGXDeviceUserClient")
+  (iokit-user-client-class "AGXCommandQueue")
+  (iokit-user-client-class "AGXSharedUserClient")
+  (iokit-user-client-class "IOAccelerationUserClient")
+  (iokit-user-client-class "IOSurfaceRootUserClient")
+  (iokit-user-client-class "H11ANEInDirectPathClient"))
+
+;; 5. Read-only access to macOS system libraries, frameworks, and devices (/dev/null, /dev/urandom)
+(allow file-read*
+  (literal "/")
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/fd")
+  (subpath "/System")
+  (subpath "/usr/lib")
+  (subpath "/usr/share")
+  (subpath "/Library/Apple")
+  (subpath "/Library/Frameworks")
+  (subpath "/private/var/db/timezone"))
+
+(allow file-write-data
+  (literal "/dev/null")
+  (literal "/dev/zero"))
+
+;; 6. Read/execute ONLY the specific agent's immutable bundle directory (not other agents!)
+(allow file-read* process-exec
+  (literal "/bin/sh")
+  (literal "/bin/bash")
+  (literal "/usr/bin/env")
+  (subpath (param "AGENT_RO_DIR")))
+
+;; 7. Read/write ONLY the specific player slot's quota-capped APFS scratch volume (/Volumes/P1 or P2)
+(allow file-read* file-write* process-exec
+  (subpath (param "AGENT_SCRATCH_DIR")))

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- sudo cp /opt/arena/repo/arena/config/ai.pkmn.arena.plist /Library/LaunchDaemons/ai.pkmn.arena.plist -->
+<!-- sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.arena.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.pkmn.arena</string>
+  <key>UserName</key>
+  <string>pkmn</string>
+  <key>GroupName</key>
+  <string>agents</string>
+  <key>WorkingDirectory</key>
+  <string>/opt/arena/repo</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/arena/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>NODE_ENV</key>
+    <string>production</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/sbin/taskpolicy</string>
+    <string>-b</string>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--env-file-if-exists=/opt/arena/repo/.env</string>
+    <string>/opt/arena/repo/build/arena</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/opt/arena/logs/arena.log</string>
+  <key>StandardErrorPath</key>
+  <string>/opt/arena/logs/arena.err</string>
+</dict>
+</plist>

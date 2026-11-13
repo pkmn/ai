@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# /usr/local/bin/tourney-agent — Rootless bubblewrap + GPU runner for GCP Spot VMs
+# Invoked over SSH by the pkmn.ai Tournament Arbiter:
+#   ssh worker-vm "/usr/local/bin/tourney-agent <agent_id>"
+set -euo pipefail
+
+AGENT_ID="${1:?Usage: tourney-agent <agent_id>}"
+ROOTFS="/opt/arena/agents/${AGENT_ID}"
+
+if [[ ! -x "${ROOTFS}/run" ]]; then
+  echo "TOURNEY_ERROR: Missing executable ${ROOTFS}/run" >&2
+  exit 2
+fi
+
+# Prefer killing the agent child before sshd or system services if the 48 GB VM hits OOM
+choom -n 500 -- $$ >/dev/null 2>&1 || true
+
+# Background watcher: long-poll GCE metadata server for Spot VM preemption notice.
+# The instant GCP flips `preempted` to TRUE (30s before hard power-off), emit a marker
+# on stderr and terminate the bubblewrap child so the SSH stream closes cleanly.
+watch_preemption() {
+  local p
+  p=$(curl -s -f -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/preempted?wait_for_change=true&last_etag=0" \
+    2>/dev/null || true)
+  if [[ "$p" == "TRUE" ]]; then
+    echo "ARENA_SPOT_PREEMPTED" >&2
+    kill -TERM 0 2>/dev/null || true
+  fi
+}
+watch_preemption &
+WATCHER_PID=$!
+trap 'kill $WATCHER_PID 2>/dev/null || true' EXIT
+
+# Execute inside an unprivileged user/mount/IPC/PID/network namespace with NVIDIA GPU access
+exec bwrap \
+  --unshare-all \
+  --die-with-parent \
+  --ro-bind "$ROOTFS" / \
+  --ro-bind /usr/local/bin/tourney-relay /usr/local/bin/tourney-relay \
+  --proc /proc \
+  --dev /dev \
+  --dev-bind-try /dev/nvidia0 /dev/nvidia0 \
+  --dev-bind-try /dev/nvidiactl /dev/nvidiactl \
+  --dev-bind-try /dev/nvidia-uvm /dev/nvidia-uvm \
+  --dev-bind-try /dev/nvidia-uvm-tools /dev/nvidia-uvm-tools \
+  --dev-bind-try /dev/nvidia-modeset /dev/nvidia-modeset \
+  --ro-bind-try /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+  --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 \
+  --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 \
+  --tmpfs /tmp \
+  --tmpfs /scratch \
+  --setenv HOME /scratch \
+  --setenv TMPDIR /scratch \
+  --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  --chdir / \
+  /usr/local/bin/tourney-relay /run

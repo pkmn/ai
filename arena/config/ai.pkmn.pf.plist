@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- sudo cp /opt/arena/repo/arena/config/ai.pkmn.pf.plist /Library/LaunchDaemons/ai.pkmn.pf.plist -->
+<!-- sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.pf.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.pkmn.pf</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/sbin/pfctl</string>
+    <string>-e</string>
+    <string>-f</string>
+    <string>/etc/pf.conf</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardErrorPath</key>
+  <string>/var/log/ai.pkmn.pf.log</string>
+</dict>
+</plist>

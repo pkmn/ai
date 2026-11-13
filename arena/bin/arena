@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# /opt/arena/bin/arena — Unified lifecycle controller for container & native agents
+# Usage:
+#   arena run     <p1|p2> <container|native> <image_or_agent_id>
+#   arena pause   <p1|p2> <container|native>
+#   arena resume  <p1|p2> <container|native>
+#   arena cleanup <p1|p2> <container|native>
+
+set -euo pipefail
+
+ACTION="${1:-}"
+SLOT="${2:-}"
+MODE="${3:-}"
+TARGET="${4:-}"
+
+if [[ "$SLOT" != "p1" && "$SLOT" != "p2" ]]; then
+  echo "Invalid slot: $SLOT (expected p1 or p2)" >&2
+  exit 2
+fi
+
+SCRATCH_VOL="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')"
+CONTAINER_NAME="arena-${SLOT}"
+
+case "$ACTION" in
+  run)
+    if [[ "$MODE" == "container" ]]; then
+      exec podman run --rm -i \
+        --name "$CONTAINER_NAME" \
+        --network=none \
+        --read-only \
+        --cap-drop=ALL \
+        --security-opt=no-new-privileges \
+        --cpus=8 \
+        --memory=13g \
+        --memory-swap=13g \
+        --pids-limit=256 \
+        --tmpfs /tmp:rw,noexec,nosuid,size=500m \
+        --mount "type=bind,src=${SCRATCH_VOL},dst=/scratch,rw" \
+        --env TMPDIR=/scratch \
+        --env HOME=/scratch \
+        "$TARGET"
+    elif [[ "$MODE" == "native" ]]; then
+      AGENT_DIR="/opt/arena/agents/${TARGET}"
+      if [[ ! -x "${AGENT_DIR}/run" ]]; then
+        echo "Missing executable ${AGENT_DIR}/run" >&2
+        exit 2
+      fi
+      # Wipe inherited environment; run under role account p1/p2 inside Seatbelt & limit supervisor
+      exec sudo -u "$SLOT" /usr/bin/env -i \
+        HOME="$SCRATCH_VOL" \
+        TMPDIR="$SCRATCH_VOL" \
+        PATH="/usr/bin:/bin" \
+        ARENA_SLOT="$SLOT" \
+        /opt/arena/bin/limit \
+        /usr/bin/sandbox-exec \
+          -f /opt/arena/etc/sandbox.sb \
+          -D "AGENT_RO_DIR=${AGENT_DIR}" \
+          -D "AGENT_SCRATCH_DIR=${SCRATCH_VOL}" \
+          "${AGENT_DIR}/run"
+    else
+      echo "Unknown mode: $MODE" >&2
+      exit 2
+    fi
+    ;;
+
+  pause)
+    if [[ "$MODE" == "container" ]]; then
+      podman pause "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    elif [[ "$MODE" == "native" ]]; then
+      # Freeze every process owned by p1 or p2 on macOS
+      sudo -u "$SLOT" /usr/bin/killall -STOP -u "$SLOT" 2>/dev/null || true
+    fi
+    ;;
+
+  resume)
+    if [[ "$MODE" == "container" ]]; then
+      podman unpause "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    elif [[ "$MODE" == "native" ]]; then
+      # Thaw every process owned by p1 or p2 on macOS
+      sudo -u "$SLOT" /usr/bin/killall -CONT -u "$SLOT" 2>/dev/null || true
+    fi
+    ;;
+
+  cleanup)
+    if [[ "$MODE" == "container" ]]; then
+      podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    elif [[ "$MODE" == "native" ]]; then
+      # 1. Unconditionally kill every process and background daemon owned by p1 or p2
+      sudo /usr/bin/killall -9 -u "$SLOT" 2>/dev/null || true
+
+      # 2. Purge any stray System V IPC segments owned by p1 or p2
+      for id in $(sudo /usr/sbin/ipcs -m | awk -v u="$SLOT" '$5 == u {print $2}'); do
+        sudo /usr/sbin/ipcrm -m "$id" 2>/dev/null || true
+      done
+      for id in $(sudo /usr/sbin/ipcs -s | awk -v u="$SLOT" '$5 == u {print $2}'); do
+        sudo /usr/sbin/ipcrm -s "$id" 2>/dev/null || true
+      done
+    fi
+
+    # 3. Wipe the APFS scratch volume for this slot (preserving .peak_ram if readable first)
+    sudo /bin/rm -rf "${SCRATCH_VOL:?}"/* "${SCRATCH_VOL:?}"/.[!.]* 2>/dev/null || true
+    sudo /bin/chmod 1700 "$SCRATCH_VOL"
+    ;;
+
+  *)
+    echo "Unknown action: $ACTION" >&2
+    exit 2
+    ;;
+esac

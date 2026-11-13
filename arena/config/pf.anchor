@@ -1,0 +1,3 @@
+# /etc/pf.anchors/ai.pkmn.arena
+# Drop all outbound IPv4 and IPv6 traffic (including loopback) from untrusted agent accounts.
+block return out quick proto { tcp, udp, icmp, icmp6 } from any to any user { p1, p2 }
