@@ -12,6 +12,7 @@
 //      the choice line on stdout.
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -46,6 +47,12 @@ static int is_actionable_request(const char *line) {
     return 1;
   }
   if (strncmp(line, "|tournament|byot|", 17) == 0) {
+    return 1;
+  }
+  if (
+    strncmp(line, "|error|[Invalid choice]", 23) == 0 ||
+    strncmp(line, "|error|[Unavailable choice]", 27) == 0
+  ) {
     return 1;
   }
   return 0;
@@ -85,12 +92,18 @@ int main(int argc, char **argv) {
   if (pid == 0) {
     dup2(in_pipe[0], STDIN_FILENO);
     dup2(out_pipe[1], STDOUT_FILENO);
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+      dup2(devnull, STDERR_FILENO);
+      if (devnull > STDERR_FILENO) close(devnull);
+    } else {
+      close(STDERR_FILENO);
+    }
     close(in_pipe[0]);
     close(in_pipe[1]);
     close(out_pipe[0]);
     close(out_pipe[1]);
     execvp(argv[1], &argv[1]);
-    perror("execvp");
     _exit(127);
   }
 
@@ -155,10 +168,11 @@ int main(int argc, char **argv) {
       while ((nl = memchr(out_buf.data, '\n', out_buf.len)) != NULL) {
         size_t line_len = (size_t)(nl - out_buf.data) + 1;
         if (timer_active && line_len > 1) {
-          uint64_t elapsed = monotonic_ms() - turn_start_ms;
+          uint64_t now_ms = monotonic_ms();
+          uint64_t elapsed = now_ms >= turn_start_ms ? now_ms - turn_start_ms : 0;
           fprintf(stderr, "ARENA_TURN_MS=%llu\n", (unsigned long long)elapsed);
           fflush(stderr);
-          timer_active = 0;
+          turn_start_ms = now_ms;
         }
         if (write_all(STDOUT_FILENO, out_buf.data, line_len) < 0) goto done;
         memmove(out_buf.data, out_buf.data + line_len, out_buf.len - line_len);

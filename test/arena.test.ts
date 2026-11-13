@@ -561,6 +561,35 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(preemptRes.winner).toBe('preempted');
       expect(preemptRes.preemptedSlot).toBe('p2');
       expect(preemptRes.endReason).toBe('spot_preemption');
+
+      // When wrapped by tourney-relay, child stderr is isolated to /dev/null so an agent
+      // cannot spoof ARENA_SPOT_PREEMPTED to dodge a loss.
+      const spoofedPreemptGame = new ConcurrentTournamentGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {
+          agentId: 'foul-play',
+          displayName: 'Foul Play',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, defaultAgentScript],
+        },
+        p2Spec: {
+          agentId: 'pokechamp',
+          displayName: 'PokeChamp',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, preemptScript],
+        },
+        byot: false,
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+      });
+      const spoofedRes = await spoofedPreemptGame.run();
+      expect(spoofedRes.winner).toBe('p1');
+      expect(spoofedRes.endReason).toBe('crash');
       expect(rewriteBlindPlayerNames('|win|Agent A', 'Alpha', 'Beta')).toBe('|win|Alpha');
     }
   );

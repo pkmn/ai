@@ -104,7 +104,7 @@ interface RemoteTournamentPlayer {
   proc: ChildProcessWithoutNullStreams;
   lineQueue: string[];
   lineResolver: ((line: string | undefined) => void) | undefined;
-  lastLocalTurnMs: number | undefined;
+  localTurnMsQueue: number[];
   spotPreempted: boolean;
   sshDisconnected: boolean;
   bankMs: number;
@@ -229,7 +229,7 @@ export class ConcurrentTournamentGame {
       proc,
       lineQueue: [],
       lineResolver: undefined,
-      lastLocalTurnMs: undefined,
+      localTurnMsQueue: [],
       spotPreempted: false,
       sshDisconnected: false,
       bankMs: this.startingBankMs,
@@ -256,7 +256,7 @@ export class ConcurrentTournamentGame {
       if (errLine.startsWith('ARENA_TURN_MS=')) {
         const ms = Number(errLine.slice('ARENA_TURN_MS='.length).trim());
         if (Number.isFinite(ms) && ms >= 0) {
-          player.lastLocalTurnMs = ms;
+          player.localTurnMsQueue.push(ms);
         }
       } else if (errLine.includes('ARENA_SPOT_PREEMPTED')) {
         player.spotPreempted = true;
@@ -292,8 +292,8 @@ export class ConcurrentTournamentGame {
     if (player.lineQueue.length > 0) {
       const line = player.lineQueue.shift()!;
       const wallMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-      const elapsedMs = player.lastLocalTurnMs ?? wallMs;
-      player.lastLocalTurnMs = undefined;
+      const localMs = line.length > 0 ? player.localTurnMsQueue.shift() : undefined;
+      const elapsedMs = localMs ?? wallMs;
       return Promise.resolve({line, elapsedMs, timedOut: false});
     }
     if (player.exited) {
@@ -310,8 +310,8 @@ export class ConcurrentTournamentGame {
       player.lineResolver = line => {
         clearTimeout(timer);
         const wallMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-        const elapsedMs = player.lastLocalTurnMs ?? wallMs;
-        player.lastLocalTurnMs = undefined;
+        const localMs = line && line.length > 0 ? player.localTurnMsQueue.shift() : undefined;
+        const elapsedMs = localMs ?? wallMs;
         resolve({line, elapsedMs, timedOut: false});
       };
     });
