@@ -40,12 +40,23 @@ function logPosterior(
   return val;
 }
 
-describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
-  test('handles empty and zero-match ladders cleanly at the prior', () => {
+const ASYMMETRIC_PAIRS: ratings.PairMatchCounts[] = [
+  {i: 0, j: 1, ww: 19, wt: 4, split: 9, tl: 2, ll: 3},
+  {i: 0, j: 2, ww: 27, wt: 3, split: 6, tl: 1, ll: 1},
+  {i: 0, j: 3, ww: 34, wt: 2, split: 4, tl: 0, ll: 0},
+  {i: 1, j: 2, ww: 14, wt: 5, split: 12, tl: 3, ll: 6},
+  {i: 1, j: 3, ww: 22, wt: 2, split: 8, tl: 1, ll: 2},
+  {i: 2, j: 3, ww: 16, wt: 1, split: 11, tl: 2, ll: 5},
+];
+
+describe('Generalized Davidson MAP rating solver', () => {
+  test('handles empty zero-entry ladders', () => {
     const empty = ratings.computeDavidsonRatings(0, []);
     expect(empty.elo).toHaveLength(0);
     expect(empty.covariance).toHaveLength(0);
+  });
 
+  test('keeps zero-match entrants at the N(1500, 350^2) prior', () => {
     const unplayed = ratings.computeDavidsonRatings(4, [], 0, 1500);
     for (let i = 0; i < 4; i++) {
       expect(unplayed.theta[i]).toBeCloseTo(0, 10);
@@ -62,24 +73,14 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
     expect(unplayed.nu1).toBe(0);
   });
 
-  test('satisfies exact first-order KKT optimality (grad = 0) on asymmetric 5-cat data', () => {
-    const pairs: ratings.PairMatchCounts[] = [
-      {i: 0, j: 1, ww: 19, wt: 4, split: 9, tl: 2, ll: 3},
-      {i: 0, j: 2, ww: 27, wt: 3, split: 6, tl: 1, ll: 1},
-      {i: 0, j: 3, ww: 34, wt: 2, split: 4, tl: 0, ll: 0},
-      {i: 1, j: 2, ww: 14, wt: 5, split: 12, tl: 3, ll: 6},
-      {i: 1, j: 3, ww: 22, wt: 2, split: 8, tl: 1, ll: 2},
-      {i: 2, j: 3, ww: 16, wt: 1, split: 11, tl: 2, ll: 5},
-    ];
-    const res = ratings.computeDavidsonRatings(4, pairs, 2, 1500);
+  test('satisfies first-order KKT optimality (grad = 0) on asymmetric 5-category data', () => {
+    const res = ratings.computeDavidsonRatings(4, ASYMMETRIC_PAIRS, 2, 1500);
 
-    // Recover the zero-mean MAP vector before the final anchor translation
     let mean = 0;
     for (let i = 0; i < 4; i++) mean += res.theta[i];
     mean /= 4;
     const thetaZeroMean = res.theta.map(v => v - mean);
 
-    // Finite-difference gradient of J(theta) must vanish (< 1e-7) in every coordinate
     const eps = 1e-6;
     for (let i = 0; i < 4; i++) {
       const plus = new Float64Array(thetaZeroMean);
@@ -87,16 +88,24 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
       plus[i] += eps;
       minus[i] -= eps;
       const fdGrad =
-        (logPosterior(plus, pairs, res.nu0, res.nu1) -
-          logPosterior(minus, pairs, res.nu0, res.nu1)) /
+        (logPosterior(plus, ASYMMETRIC_PAIRS, res.nu0, res.nu1) -
+          logPosterior(minus, ASYMMETRIC_PAIRS, res.nu0, res.nu1)) /
         (2 * eps);
       expect(Math.abs(fdGrad)).toBeLessThan(1e-7);
     }
+  });
 
-    // Verify finite-difference negative Hessian matches the pairwise Laplace covariance
+  test('matches finite-difference inverse Hessian on zero-sum contrast vectors', () => {
+    const res = ratings.computeDavidsonRatings(4, ASYMMETRIC_PAIRS, 2, 1500);
+
+    let mean = 0;
+    for (let i = 0; i < 4; i++) mean += res.theta[i];
+    mean /= 4;
+    const thetaZeroMean = res.theta.map(v => v - mean);
+
     const eps2 = 1e-4;
     const Hfd = new Float64Array(16);
-    const f0 = logPosterior(thetaZeroMean, pairs, res.nu0, res.nu1);
+    const f0 = logPosterior(thetaZeroMean, ASYMMETRIC_PAIRS, res.nu0, res.nu1);
     for (let i = 0; i < 4; i++) {
       for (let j = i; j < 4; j++) {
         if (i === j) {
@@ -105,9 +114,9 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
           p[i] += eps2;
           m[i] -= eps2;
           const d2 =
-            (logPosterior(p, pairs, res.nu0, res.nu1) -
+            (logPosterior(p, ASYMMETRIC_PAIRS, res.nu0, res.nu1) -
               2 * f0 +
-              logPosterior(m, pairs, res.nu0, res.nu1)) /
+              logPosterior(m, ASYMMETRIC_PAIRS, res.nu0, res.nu1)) /
             (eps2 * eps2);
           Hfd[i * 4 + i] = -d2;
         } else {
@@ -120,10 +129,10 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
           mp[i] -= eps2; mp[j] += eps2;
           mm[i] -= eps2; mm[j] -= eps2;
           const d2 =
-            (logPosterior(pp, pairs, res.nu0, res.nu1) -
-              logPosterior(pm, pairs, res.nu0, res.nu1) -
-              logPosterior(mp, pairs, res.nu0, res.nu1) +
-              logPosterior(mm, pairs, res.nu0, res.nu1)) /
+            (logPosterior(pp, ASYMMETRIC_PAIRS, res.nu0, res.nu1) -
+              logPosterior(pm, ASYMMETRIC_PAIRS, res.nu0, res.nu1) -
+              logPosterior(mp, ASYMMETRIC_PAIRS, res.nu0, res.nu1) +
+              logPosterior(mm, ASYMMETRIC_PAIRS, res.nu0, res.nu1)) /
             (4 * eps2 * eps2);
           Hfd[i * 4 + j] = -d2;
           Hfd[j * 4 + i] = -d2;
@@ -131,7 +140,6 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
       }
     }
 
-    // On any contrast vector c with sum(c) = 0 (e.g. e_i - e_j), H_fd * Sigma * c == c
     for (let i = 0; i < 4; i++) {
       for (let j = i + 1; j < 4; j++) {
         const v = new Float64Array(4);
@@ -149,7 +157,7 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
     }
   });
 
-  test('is invariant to agent index permutations, warm-start offsets, and anchor choice', () => {
+  test('preserves relative ratings under anchor or warm-start shifts', () => {
     const pairs: ratings.PairMatchCounts[] = [
       {i: 0, j: 1, ww: 24, wt: 2, split: 8, tl: 0, ll: 2},
       {i: 1, j: 2, ww: 20, wt: 1, split: 10, tl: 1, ll: 4},
@@ -167,11 +175,7 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
 
     expect(anchor0.elo[0]).toBeCloseTo(1500, 8);
     expect(anchor1.elo[1]).toBeCloseTo(1500, 8);
-
-    // Changing anchor shifts all Elos by a constant while preserving Elo gaps, SEs, and LOS
-    const gap0 = anchor0.elo[0] - anchor0.elo[2];
-    const gap1 = anchor1.elo[0] - anchor1.elo[2];
-    expect(gap0).toBeCloseTo(gap1, 8);
+    expect(anchor0.elo[0] - anchor0.elo[2]).toBeCloseTo(anchor1.elo[0] - anchor1.elo[2], 8);
 
     for (let i = 0; i < 3; i++) {
       expect(anchor0.eloStd[i]).toBeCloseTo(anchor1.eloStd[i], 8);
@@ -181,22 +185,29 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
       ratings.computeLOS(anchor1.theta, anchor1.covariance, 3, 0, 2),
       8
     );
+  });
 
-    // Reverse agent indices (0 <-> 2, 1 <-> 1); flipping (i, j) swaps ww<->ll and wt<->tl
+  test('is invariant to agent index permutations', () => {
+    const pairs: ratings.PairMatchCounts[] = [
+      {i: 0, j: 1, ww: 24, wt: 2, split: 8, tl: 0, ll: 2},
+      {i: 1, j: 2, ww: 20, wt: 1, split: 10, tl: 1, ll: 4},
+      {i: 0, j: 2, ww: 30, wt: 0, split: 4, tl: 0, ll: 0},
+    ];
+    const forward = ratings.computeDavidsonRatings(3, pairs, 1, 1500);
     const reversedPairs: ratings.PairMatchCounts[] = [
       {i: 1, j: 2, ww: 2, wt: 0, split: 8, tl: 2, ll: 24},
       {i: 0, j: 1, ww: 4, wt: 1, split: 10, tl: 1, ll: 20},
       {i: 0, j: 2, ww: 0, wt: 0, split: 4, tl: 0, ll: 30},
     ];
     const rev = ratings.computeDavidsonRatings(3, reversedPairs, 1, 1500);
-    expect(rev.elo[2]).toBeCloseTo(anchor1.elo[0], 6);
-    expect(rev.elo[1]).toBeCloseTo(anchor1.elo[1], 6);
-    expect(rev.elo[0]).toBeCloseTo(anchor1.elo[2], 6);
-    expect(rev.eloStd[2]).toBeCloseTo(anchor1.eloStd[0], 6);
-    expect(rev.eloStd[0]).toBeCloseTo(anchor1.eloStd[2], 6);
+    expect(rev.elo[2]).toBeCloseTo(forward.elo[0], 6);
+    expect(rev.elo[1]).toBeCloseTo(forward.elo[1], 6);
+    expect(rev.elo[0]).toBeCloseTo(forward.elo[2], 6);
+    expect(rev.eloStd[2]).toBeCloseTo(forward.eloStd[0], 6);
+    expect(rev.eloStd[0]).toBeCloseTo(forward.eloStd[2], 6);
   });
 
-  test('shrinks SE monotonically with matches and isolates 0-match newcomers', () => {
+  test('shrinks posterior SE monotonically with match count', () => {
     const seHistory: number[] = [];
     for (const nMatches of [0, 5, 15, 30, 60, 120]) {
       const pairs: ratings.PairMatchCounts[] = nMatches === 0
@@ -218,8 +229,9 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
     }
     expect(seHistory[0]).toBeCloseTo(350, 6);
     expect(seHistory[seHistory.length - 1]).toBeLessThan(20);
+  });
 
-    // Adding 3 unplayed agents must keep them at SE=350 without perturbing settled agents
+  test('isolates zero-match newcomers from settled ratings', () => {
     const basePairs: ratings.PairMatchCounts[] = [
       {i: 0, j: 1, ww: 25, wt: 0, split: 20, tl: 0, ll: 15},
     ];
@@ -232,7 +244,7 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
     }
   });
 
-  test('recovers ground-truth skills and calibrated 95% CIs in a 10-agent league', () => {
+  test('recovers ground-truth skills with calibrated 95% CIs in a 10-agent league', () => {
     const rng = mulberry32(0x5eed1234);
     const M = 10;
     const anchorIdx = 5;
@@ -298,8 +310,8 @@ describe('Generalized Davidson MAP rating solver (server/ratings.ts)', () => {
   });
 });
 
-describe('normalCdf, LOS, expectedMatchScore, GXE & guaranteed rank bounds', () => {
-  test('verifies normalCdf quantiles, antisymmetry, and GXE/expectedMatchScore properties', () => {
+describe('normalCdf, LOS, expectedMatchScore, and rank bounds', () => {
+  test('computes accurate normalCdf quantiles with antisymmetry', () => {
     expect(ratings.normalCdf(0)).toBeCloseTo(0.5, 8);
     expect(ratings.normalCdf(1.6448536)).toBeCloseTo(0.95, 6);
     expect(ratings.normalCdf(1.959964)).toBeCloseTo(0.975, 6);
@@ -307,7 +319,9 @@ describe('normalCdf, LOS, expectedMatchScore, GXE & guaranteed rank bounds', () 
     for (const z of [0.1, 0.75, 1.5, 2.4, 4.0]) {
       expect(ratings.normalCdf(z) + ratings.normalCdf(-z)).toBeCloseTo(1.0, 7);
     }
+  });
 
+  test('computes monotonic antisymmetric expectedMatchScore values', () => {
     for (const [nu0, nu1] of [[2.0, 0], [2.8, 0.2], [4.0, 0.5]]) {
       expect(ratings.expectedMatchScore(0, nu0, nu1)).toBeCloseTo(0.5, 10);
       let prev = ratings.expectedMatchScore(-3, nu0, nu1);
@@ -320,12 +334,11 @@ describe('normalCdf, LOS, expectedMatchScore, GXE & guaranteed rank bounds', () 
         prev = cur;
       }
     }
-
     expect(ratings.ELO_SCALE).toBeCloseTo(173.71779276, 6);
     expect(ratings.GXE_C).toBeCloseTo(1.00724e-5, 9);
   });
 
-  test('uses off-diagonal covariance in LOS and enforces rankMin <= rank <= rankMax', () => {
+  test('incorporates off-diagonal covariance in pairwise LOS', () => {
     const pairs: ratings.PairMatchCounts[] = [
       {i: 0, j: 1, ww: 24, wt: 0, split: 10, tl: 0, ll: 6},
       {i: 2, j: 3, ww: 24, wt: 0, split: 10, tl: 0, ll: 6},
@@ -334,7 +347,9 @@ describe('normalCdf, LOS, expectedMatchScore, GXE & guaranteed rank bounds', () 
     const losDirect = ratings.computeLOS(res.theta, res.covariance, 4, 0, 1);
     const losCross = ratings.computeLOS(res.theta, res.covariance, 4, 0, 3);
     expect(losDirect).toBeGreaterThan(losCross);
+  });
 
+  test('computes guaranteed 95% confidence rank intervals', () => {
     const theta = new Float64Array([2.0, 0.85, 0.84, 0.0]);
     const cov = new Float64Array(16);
     for (let i = 0; i < 4; i++) cov[i * 4 + i] = 0.01;
@@ -357,15 +372,20 @@ describe('normalCdf, LOS, expectedMatchScore, GXE & guaranteed rank bounds', () 
   });
 });
 
-describe('incremental streak, Top-K reign clock & active matchmaker primitives', () => {
-  test('maps all 9 blind-pair categories and updates version & pairwise streaks in O(1)', () => {
-    const winCats: ratings.MatchCategory[] = ['WW', 'WT', 'TW'];
-    const tieCats: ratings.MatchCategory[] = ['WL', 'LW', 'TT'];
-    const lossCats: ratings.MatchCategory[] = ['TL', 'LT', 'LL'];
-    for (const c of winCats) expect(ratings.toTernaryMatchOutcome(c)).toEqual({p1: 'W', p2: 'L'});
-    for (const c of tieCats) expect(ratings.toTernaryMatchOutcome(c)).toEqual({p1: 'T', p2: 'T'});
-    for (const c of lossCats) expect(ratings.toTernaryMatchOutcome(c)).toEqual({p1: 'L', p2: 'W'});
+describe('streaks, Top-K reign clocks, and active matchmaker', () => {
+  test('maps all 9 blind-pair categories to ternary match outcomes', () => {
+    for (const c of ['WW', 'WT', 'TW'] as const) {
+      expect(ratings.toTernaryMatchOutcome(c)).toEqual({p1: 'W', p2: 'L'});
+    }
+    for (const c of ['WL', 'LW', 'TT'] as const) {
+      expect(ratings.toTernaryMatchOutcome(c)).toEqual({p1: 'T', p2: 'T'});
+    }
+    for (const c of ['TL', 'LT', 'LL'] as const) {
+      expect(ratings.toTernaryMatchOutcome(c)).toEqual({p1: 'L', p2: 'W'});
+    }
+  });
 
+  test('updates version consecutive win or loss streaks in O(1)', () => {
     const streaks: ratings.StreakState = {
       currentWinStreak: 0,
       currentLossStreak: 0,
@@ -381,7 +401,9 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
       maxWinStreak: 3,
       maxLossStreak: 2,
     });
+  });
 
+  test('updates signed pairwise head-to-head streaks in O(1)', () => {
     const pair: ratings.PairwiseStreakState = {
       currentStreak: 0,
       lowMaxWinStreak: 0,
@@ -397,7 +419,7 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
     });
   });
 
-  test('tracks Top-K reign entry, cumulative time, max streak, drop, and re-entry', () => {
+  test('tracks cumulative Top-K reign clocks across drop-out cycles', () => {
     let clk: {enteredAt?: number; maxStreakSeconds: number; totalSeconds: number} = {
       enteredAt: undefined,
       maxStreakSeconds: 0,
@@ -435,7 +457,7 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
     expect(clk).toEqual({enteredAt: 4000, maxStreakSeconds: 1800, totalSeconds: 2300});
   });
 
-  test('enforces active-only selection, anti-starvation, triage, and repeat damping', () => {
+  test('throws when no ladder meets minAgents', () => {
     expect(() =>
       ratings.selectNextArenaMatch(
         [{
@@ -451,9 +473,9 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
         }],
         0
       )).toThrow(/No ladder meets its minimum distinct active agents/);
+  });
 
-    // Index 3 is retired (not in activeAgentIndices) despite huge sigma -> must never be selected
-    const pairMatches = new Int32Array(16);
+  test('prioritizes starved ladders before active-learning triage', () => {
     const ladders: ratings.LadderMatchState[] = [
       {
         id: 'rby',
@@ -463,7 +485,7 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
         theta: new Float64Array([0.8, 0.75, 0.0, 0.8]),
         sigma: new Float64Array([0.1, 0.1, 1.8, 2.0]),
         agentMatches: new Int32Array([50, 50, 0, 0]),
-        pairMatches,
+        pairMatches: new Int32Array(16),
         lastMatchNumber: 10,
       },
       {
@@ -478,12 +500,24 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
         lastMatchNumber: 0,
       },
     ];
-
     expect(ratings.selectNextArenaMatch(ladders, 10).ladderId).toBe('sv');
+  });
 
-    ladders[1].lastMatchNumber = 10;
+  test('excludes retired versions while damping saturated repeat pairings', () => {
+    const pairMatches = new Int32Array(16);
+    const ladders: ratings.LadderMatchState[] = [{
+      id: 'rby',
+      activeAgentIndices: [0, 1, 2], // index 3 is retired despite sigma = 2.0
+      agentIds: new Int32Array([1, 2, 3, 4]),
+      minAgents: 2,
+      theta: new Float64Array([0.8, 0.75, 0.0, 0.8]),
+      sigma: new Float64Array([0.1, 0.1, 1.8, 2.0]),
+      agentMatches: new Int32Array([50, 50, 0, 0]),
+      pairMatches,
+      lastMatchNumber: 10,
+    }];
+
     const triage = ratings.selectNextArenaMatch(ladders, 11);
-    expect(triage.ladderId).toBe('rby');
     expect([triage.agentI, triage.agentJ]).toContain(2);
     expect([triage.agentI, triage.agentJ]).not.toContain(3);
 
@@ -492,9 +526,9 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
     ladders[0].agentMatches[2] = 40;
     const damped = ratings.selectNextArenaMatch(ladders, 12);
     expect([damped.agentI, damped.agentJ].sort()).toEqual([1, 2]);
+  });
 
-    // minAgents gates ladders strictly on distinct active projects (never total version count):
-    // 2 versions of 1 project fails min=2, and 2 versions of 2 projects (4 versions) fails min=4
+  test('gates minAgents strictly on distinct active projects rather than version count', () => {
     expect(() =>
       ratings.selectNextArenaMatch(
         [
@@ -534,7 +568,9 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
         ],
         1
       )).toThrow(/No ladder meets its minimum distinct active agents/);
+  });
 
+  test('schedules intra-project Champion vs Challenger calibration matches', () => {
     const mixedLadders: ratings.LadderMatchState[] = [
       {
         id: 'vgc-under-min',
@@ -564,7 +600,7 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
     expect([familyChoice.agentI, familyChoice.agentJ].sort()).toEqual([0, 1]);
   });
 
-  test('computeTournamentRatings solves single-game MAP and preserves unplayed priors', () => {
+  test('computeTournamentRatings solves single-game MAP while preserving unplayed priors', () => {
     expect(ratings.computeTournamentRatings(0, []).elo).toHaveLength(0);
 
     const games: ratings.TournamentGameInput[] = [
@@ -575,14 +611,23 @@ describe('incremental streak, Top-K reign clock & active matchmaker primitives',
       {i: 2, j: 0, outcome: 'T'},
       {i: 1, j: 2, outcome: 'W'},
     ];
-    // Entrant 3 has 0 games played and must keep priorEloStd = 350.
     const res = ratings.computeTournamentRatings(4, games, -1, 1500, 350);
     expect(res.elo[0]).toBeGreaterThan(res.elo[1]);
     expect(res.elo[1]).toBeGreaterThan(res.elo[2]);
     expect(res.elo[3]).toBeCloseTo(1500, 6);
     expect(res.eloStd[3]).toBeCloseTo(350, 4);
+  });
 
-    // Order and seat-swap invariance
+  test('computeTournamentRatings is invariant to game order or seat reversal', () => {
+    const games: ratings.TournamentGameInput[] = [
+      {i: 0, j: 1, outcome: 'W'},
+      {i: 0, j: 1, outcome: 'W'},
+      {i: 1, j: 0, outcome: 'L'},
+      {i: 0, j: 2, outcome: 'W'},
+      {i: 2, j: 0, outcome: 'T'},
+      {i: 1, j: 2, outcome: 'W'},
+    ];
+    const res = ratings.computeTournamentRatings(4, games, -1, 1500, 350);
     const reversed: ratings.TournamentGameInput[] = games.slice().reverse().map(g => ({
       i: g.j,
       j: g.i,

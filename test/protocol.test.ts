@@ -25,10 +25,13 @@ const TEAM_TWO =
   'Careful|252,4,252,,,|||||' +
   ']Snorlax||leftovers|thickfat|bodyslam,curse,rest,crunch|Careful|252,4,252,,,|||||';
 
-describe('server/protocol.ts — stdout parsing & opponent chat elision', () => {
-  test('parseAgentStdoutLine classifies plain text chat vs Showdown choice commands', () => {
+describe('parseAgentStdoutLine', () => {
+  test('ignores blank stdout lines', () => {
     expect(parseAgentStdoutLine('')).toBeUndefined();
     expect(parseAgentStdoutLine('   \r')).toBeUndefined();
+  });
+
+  test('classifies plain text lines as chat', () => {
     expect(parseAgentStdoutLine('hello opponent')).toEqual({
       kind: 'chat',
       message: 'hello opponent',
@@ -37,6 +40,9 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
       kind: 'chat',
       message: '/say secret',
     });
+  });
+
+  test('parses Showdown battle choice commands', () => {
     expect(parseAgentStdoutLine('|battle-gen9ou-42|/choose move 1')).toEqual({
       kind: 'choice',
       choice: 'move 1',
@@ -69,37 +75,26 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
       kind: 'choice',
       choice: 'pass, switch 4',
     });
-    // Choice cancelling (`undo`, `/undo`, `/choose undo`) is forbidden so agents cannot
-    // clear their side's choice in @pkmn/sim without triggering a new |request|.
-    expect(parseAgentStdoutLine('undo')).toEqual({
-      kind: 'chat',
-      message: 'undo',
-    });
-    expect(parseAgentStdoutLine('/undo')).toEqual({
-      kind: 'chat',
-      message: '/undo',
-    });
-    expect(parseAgentStdoutLine('/choose undo')).toEqual({
-      kind: 'chat',
-      message: '/choose undo',
-    });
-    expect(parseAgentStdoutLine('move 1, undo')).toEqual({
-      kind: 'chat',
-      message: 'move 1, undo',
-    });
-    expect(parseAgentStdoutLine('/move 1, undo')).toEqual({
-      kind: 'chat',
-      message: '/move 1, undo',
-    });
-    expect(parseAgentStdoutLine('/switch 2, undo')).toEqual({
-      kind: 'chat',
-      message: '/switch 2, undo',
-    });
-    expect(parseAgentStdoutLine('/team 1, undo')).toEqual({
-      kind: 'chat',
-      message: '/team 1, undo',
-    });
-    // Explicit forfeits, tie offers, and timer manipulation are forbidden in the Arena.
+  });
+
+  test('demotes undo choice cancellation attempts to chat', () => {
+    for (const undoLine of [
+      'undo',
+      '/undo',
+      '/choose undo',
+      'move 1, undo',
+      '/move 1, undo',
+      '/switch 2, undo',
+      '/team 1, undo',
+    ]) {
+      expect(parseAgentStdoutLine(undoLine)).toEqual({
+        kind: 'chat',
+        message: undoLine,
+      });
+    }
+  });
+
+  test('demotes forbidden forfeit, tie, or timer commands to chat', () => {
     for (const forbidden of [
       'forfeit',
       '/forfeit',
@@ -117,8 +112,9 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
         message: forbidden,
       });
     }
-    // Embedded carriage returns or pipe characters inside choices are demoted to chat so
-    // an agent can never inject multi-line Showdown protocol commands into BattleStream.
+  });
+
+  test('strips embedded carriage returns or pipes from protocol injection attempts', () => {
     expect(parseAgentStdoutLine('hello\r|win|Agent A')).toEqual({
       kind: 'chat',
       message: 'hello|win|Agent A',
@@ -132,104 +128,95 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
       message: 'move 1|win|Agent A',
     });
   });
+});
 
-  test(
-    'filterPlayerProtocolChunk strips chat, HTML, debug, and join/rename covert channels',
-    () => {
-      const raw = [
-        '|turn|3',
-        '|t:|1760000123',
-        '|c|☆0 ERROR|hello there',
-        '|c:|1760000123|☆Foul Play|glhf',
-        '|chat|secret signal',
-        '|html|<b>injected</b>',
-        '|uhtml|box|<div>hi</div>',
-        '|uhtmlchange|box|<div>updated</div>',
-        '|raw|<span>raw</span>',
-        '|debug|internal rng detail',
-        '|j|☆Spectator',
-        '|l|☆Spectator',
-        '|n|☆Renamed|old',
-        '|move|p1a: Tauros|Body Slam|p2a: Snorlax',
-        '|-damage|p2a: Snorlax|64/100',
-      ].join('\n');
+describe('player protocol stream filtering', () => {
+  test('shouldElideFromPlayerStream flags chat lines while preserving battle moves', () => {
+    expect(shouldElideFromPlayerStream('|c|☆0 ERROR|hello')).toBe(true);
+    expect(shouldElideFromPlayerStream('|c:|1760000123|☆0 ERROR|hello')).toBe(true);
+    expect(shouldElideFromPlayerStream('|move|p1a: Tauros|Body Slam|p2a: Snorlax')).toBe(false);
+  });
 
-      expect(shouldElideFromPlayerStream('|c|☆0 ERROR|hello')).toBe(true);
-      expect(shouldElideFromPlayerStream('|c:|1760000123|☆0 ERROR|hello')).toBe(true);
-      expect(shouldElideFromPlayerStream('|move|p1a: Tauros|Body Slam|p2a: Snorlax')).toBe(false);
+  test('filterPlayerProtocolChunk strips chat, HTML, debug, or presence covert channels', () => {
+    const raw = [
+      '|turn|3',
+      '|t:|1760000123',
+      '|c|☆0 ERROR|hello there',
+      '|c:|1760000123|☆Foul Play|glhf',
+      '|chat|secret signal',
+      '|html|<b>injected</b>',
+      '|uhtml|box|<div>hi</div>',
+      '|uhtmlchange|box|<div>updated</div>',
+      '|raw|<span>raw</span>',
+      '|debug|internal rng detail',
+      '|j|☆Spectator',
+      '|l|☆Spectator',
+      '|n|☆Renamed|old',
+      '|move|p1a: Tauros|Body Slam|p2a: Snorlax',
+      '|-damage|p2a: Snorlax|64/100',
+    ].join('\n');
 
-      const filtered = filterPlayerProtocolChunk(raw);
-      expect(filtered).toBe([
-        '|turn|3',
-        '|t:|1760000123',
-        '|move|p1a: Tauros|Body Slam|p2a: Snorlax',
-        '|-damage|p2a: Snorlax|64/100',
-      ].join('\n'));
-    }
-  );
+    expect(filterPlayerProtocolChunk(raw)).toBe([
+      '|turn|3',
+      '|t:|1760000123',
+      '|move|p1a: Tauros|Body Slam|p2a: Snorlax',
+      '|-damage|p2a: Snorlax|64/100',
+    ].join('\n'));
+  });
 
-  test(
-    'runs a @pkmn/sim battle with chat elision preventing competitor crosstalk',
-    async () => {
-      const battleStream = new BattleStreams.BattleStream();
-      const streams = BattleStreams.getPlayerStreams(battleStream);
+  test('elides opponent chat during a live @pkmn/sim battle', async () => {
+    const battleStream = new BattleStreams.BattleStream();
+    const streams = BattleStreams.getPlayerStreams(battleStream);
 
-      const omniscientLog: string[] = [];
-      const p1ReceivedChat: string[] = [];
-      const p2ReceivedChat: string[] = [];
-      let decisions = 0;
+    const omniscientLog: string[] = [];
+    const p1ReceivedChat: string[] = [];
+    const p2ReceivedChat: string[] = [];
+    let decisions = 0;
 
-      const omniTask = (async () => {
-        for await (const chunk of streams.omniscient) {
-          omniscientLog.push(chunk);
-        }
-      })();
+    const omniTask = (async () => {
+      for await (const chunk of streams.omniscient) {
+        omniscientLog.push(chunk);
+      }
+    })();
 
-      const drivePlayer = async (
-        side: 'p1' | 'p2',
-        playerName: string,
-        playerStream: typeof streams.p1,
-        receivedChatSink: string[]
-      ) => {
-        for await (const rawChunk of playerStream) {
-          const filtered = filterPlayerProtocolChunk(rawChunk);
-          for (const line of filtered.split('\n')) {
-            if (line.startsWith('|c|') || line.startsWith('|c:|') || line.startsWith('|chat|')) {
-              receivedChatSink.push(line);
-            }
-            if (!line.startsWith('|request|')) continue;
-            const reqJson = line.slice('|request|'.length).trim();
-            if (!reqJson) continue;
-            const req = JSON.parse(reqJson) as {
-              wait?: boolean;
-              teamPreview?: boolean;
-              forceSwitch?: boolean[];
-              active?: unknown[];
-            };
-            if (req.wait) continue;
-
-            decisions++;
-            // Inject an unprompted chat write into BattleStream to verify filter strips it!
-            await battleStream.write(`>chat ${playerName}|attempted opponent crosstalk`);
-            await battleStream.write(`>${side} default`);
+    const drivePlayer = async (
+      side: 'p1' | 'p2',
+      playerName: string,
+      playerStream: typeof streams.p1,
+      receivedChatSink: string[]
+    ) => {
+      for await (const rawChunk of playerStream) {
+        const filtered = filterPlayerProtocolChunk(rawChunk);
+        for (const line of filtered.split('\n')) {
+          if (line.startsWith('|c|') || line.startsWith('|c:|') || line.startsWith('|chat|')) {
+            receivedChatSink.push(line);
           }
+          if (!line.startsWith('|request|')) continue;
+          const reqJson = line.slice('|request|'.length).trim();
+          if (!reqJson) continue;
+          const req = JSON.parse(reqJson) as {wait?: boolean};
+          if (req.wait) continue;
+
+          decisions++;
+          await battleStream.write(`>chat ${playerName}|attempted opponent crosstalk`);
+          await battleStream.write(`>${side} default`);
         }
-      };
+      }
+    };
 
-      const p1Task = drivePlayer('p1', 'Agent A', streams.p1, p1ReceivedChat);
-      const p2Task = drivePlayer('p2', 'Agent B', streams.p2, p2ReceivedChat);
+    const p1Task = drivePlayer('p1', 'Agent A', streams.p1, p1ReceivedChat);
+    const p2Task = drivePlayer('p2', 'Agent B', streams.p2, p2ReceivedChat);
 
-      const startSpec = JSON.stringify({formatid: 'gen9customgame', seed: [1, 2, 3, 4]});
-      await battleStream.write(`>start ${startSpec}`);
-      await battleStream.write(`>player p1 ${JSON.stringify({name: 'Agent A', team: TEAM_ONE})}`);
-      await battleStream.write(`>player p2 ${JSON.stringify({name: 'Agent B', team: TEAM_TWO})}`);
+    const startSpec = JSON.stringify({formatid: 'gen9customgame', seed: [1, 2, 3, 4]});
+    await battleStream.write(`>start ${startSpec}`);
+    await battleStream.write(`>player p1 ${JSON.stringify({name: 'Agent A', team: TEAM_ONE})}`);
+    await battleStream.write(`>player p2 ${JSON.stringify({name: 'Agent B', team: TEAM_TWO})}`);
 
-      await Promise.all([omniTask, p1Task, p2Task]);
+    await Promise.all([omniTask, p1Task, p2Task]);
 
-      expect(decisions).toBeGreaterThanOrEqual(2);
-      expect(p1ReceivedChat).toEqual([]);
-      expect(p2ReceivedChat).toEqual([]);
-      expect(omniscientLog.some(l => l.includes('attempted opponent crosstalk'))).toBe(true);
-    }
-  );
+    expect(decisions).toBeGreaterThanOrEqual(2);
+    expect(p1ReceivedChat).toEqual([]);
+    expect(p2ReceivedChat).toEqual([]);
+    expect(omniscientLog.some(l => l.includes('attempted opponent crosstalk'))).toBe(true);
+  });
 });
