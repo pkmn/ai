@@ -294,6 +294,8 @@ export class TimeSlicedArenaGame {
           });
         } catch {}
       } else if (player.proc.pid) {
+        // Queue SIGKILL while the process is still SIGSTOP-paused before sending SIGCONT so it
+        // terminates immediately upon waking without a user-space execution window.
         try {
           process.kill(player.proc.pid, 'SIGKILL');
         } catch {}
