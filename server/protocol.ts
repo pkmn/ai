@@ -44,6 +44,7 @@ function containsUndoSubchoice(choice: string): boolean {
 function isBareSimulatorChoice(body: string): boolean {
   if (body.startsWith('{') || body.startsWith('[')) return false;
   if (/^[1-9][0-9,\s]*$/.test(body)) return true;
+  if (/^team\s+[1-9](?:\s*,\s*[1-9]){0,5}$/i.test(body)) return true;
   const parts = body.split(',');
   if (parts.length === 0 || parts.length > 3) return false;
   for (const rawPart of parts) {
@@ -81,15 +82,24 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
   }
   if (body.startsWith('/team ')) {
     const rest = body.slice(6).trim();
-    return rest ? {kind: 'choice', choice: `team ${rest}`} : undefined;
+    if (!rest) return undefined;
+    const choice = `team ${rest}`;
+    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    return {kind: 'choice', choice};
   }
   if (body.startsWith('/switch ')) {
     const rest = body.slice(8).trim();
-    return rest ? {kind: 'choice', choice: `switch ${rest}`} : undefined;
+    if (!rest) return undefined;
+    const choice = `switch ${rest}`;
+    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    return {kind: 'choice', choice};
   }
   if (body.startsWith('/move ')) {
     const rest = body.slice(6).trim();
-    return rest ? {kind: 'choice', choice: `move ${rest}`} : undefined;
+    if (!rest) return undefined;
+    const choice = `move ${rest}`;
+    if (containsUndoSubchoice(choice)) return {kind: 'chat', message: body};
+    return {kind: 'choice', choice};
   }
   if (
     body === '/pass' ||

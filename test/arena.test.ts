@@ -412,6 +412,18 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(extracted[0].won).toBe(true);
       expect(extracted[0].sets).toHaveLength(6);
 
+      // Battle-only formes (e.g., Palafin-Hero) collapse onto their out-of-battle base species
+      const battleOnlyLog = rawLog.concat(
+        '\n|switch|p1a: Palafin|Palafin-Hero, L100|100/100'
+      ).replace('|poke|p1|Pikachu|', '|poke|p1|Palafin|')
+        .replace(/p1a: Pikachu\|Pikachu/g, 'p1a: Palafin|Palafin')
+        .replace(/p1a: Pikachu/g, 'p1a: Palafin');
+      const battleOnlyExtracted = extractRevealedTeamsFromLog(battleOnlyLog, 'gen9customgame');
+      expect(battleOnlyExtracted).toHaveLength(1);
+      expect(battleOnlyExtracted[0].sets).toHaveLength(6);
+      expect(battleOnlyExtracted[0].sets[0].species).toBe('Palafin');
+      expect(battleOnlyExtracted[0].sets[0].evs.atk).toBe(252);
+
       // Forfeited or inactivity-ended logs are excluded from harvested pool extraction
       const forfeitLog = rawLog.replace('|win|Alice', '|-message|Bob forfeited.\n|win|Alice');
       expect(extractRevealedTeamsFromLog(forfeitLog, 'gen9customgame')).toEqual([]);

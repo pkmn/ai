@@ -31,11 +31,12 @@ export function runBaselineStdioAgent(
       const req = JSON.parse(raw) as {
         wait?: boolean;
         teamPreview?: boolean;
+        maxChosenTeamSize?: number;
         maxTeamSize?: number;
       };
       if (req.wait) return;
       if (req.teamPreview) {
-        const size = req.maxTeamSize ?? 6;
+        const size = req.maxChosenTeamSize ?? req.maxTeamSize ?? 6;
         const order = Array.from({length: size}, (_, i) => i + 1).join('');
         output.write(`/team ${order}\n`);
       } else {

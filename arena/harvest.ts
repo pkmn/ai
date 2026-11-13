@@ -161,18 +161,39 @@ export function extractRevealedTeamsFromLog(
 
   const ensureMon = (side: 'p1' | 'p2', rawSpecies: string): RevealedMonState | undefined => {
     const clean = rawSpecies.split(',')[0].trim();
-    const sp = dex.species.get(clean);
+    let sp = dex.species.get(clean);
     if (!sp.exists) return undefined;
+    const requiredItem = sp.requiredItem;
+    if (sp.battleOnly) {
+      const outOfBattle = Array.isArray(sp.battleOnly) ? sp.battleOnly[0] : sp.battleOnly;
+      const baseSp = dex.species.get(outOfBattle);
+      if (baseSp.exists) sp = baseSp;
+    } else if (sp.baseSpecies && sp.baseSpecies !== sp.name) {
+      const basePlaceholder = mons[side].get(sp.baseSpecies);
+      if (
+        basePlaceholder?.moves.size === 0 &&
+        !basePlaceholder.item &&
+        !basePlaceholder.ability &&
+        !mons[side].has(sp.name)
+      ) {
+        mons[side].delete(sp.baseSpecies);
+        basePlaceholder.species = sp.name;
+        basePlaceholder.teraType = sp.types[0];
+        mons[side].set(sp.name, basePlaceholder);
+      }
+    }
     let entry = mons[side].get(sp.name);
     if (!entry) {
       entry = {
         species: sp.name,
-        item: '',
+        item: requiredItem || '',
         ability: '',
         teraType: sp.types[0],
         moves: new Set(),
       };
       mons[side].set(sp.name, entry);
+    } else if (requiredItem && !entry.item) {
+      entry.item = requiredItem;
     }
     return entry;
   };
@@ -262,15 +283,40 @@ export function extractRevealedTeamsFromLog(
     for (const m of mons[side].values()) {
       const sp = dex.species.get(m.species);
       const ability = m.ability || (dex.gen >= 3 ? sp.abilities['0'] : '');
+      const moves = [...m.moves];
+      let hasPhysical = false;
+      let hasSpecial = false;
+      for (const moveName of moves) {
+        const mv = dex.moves.get(moveName);
+        if (mv.category === 'Physical') hasPhysical = true;
+        else if (mv.category === 'Special') hasSpecial = true;
+      }
+      let nature = '';
+      let evs = {hp: 252, atk: 252, def: 252, spa: 252, spd: 252, spe: 252};
+      if (dex.gen >= 3) {
+        if (hasPhysical && !hasSpecial) {
+          nature = 'Jolly';
+          evs = {hp: 4, atk: 252, def: 0, spa: 0, spd: 0, spe: 252};
+        } else if (hasSpecial && !hasPhysical) {
+          nature = 'Timid';
+          evs = {hp: 4, atk: 0, def: 0, spa: 252, spd: 0, spe: 252};
+        } else if (hasPhysical && hasSpecial) {
+          nature = 'Naive';
+          evs = {hp: 0, atk: 252, def: 0, spa: 4, spd: 0, spe: 252};
+        } else {
+          nature = 'Timid';
+          evs = {hp: 252, atk: 0, def: 4, spa: 0, spd: 0, spe: 252};
+        }
+      }
       sets.push({
         name: '',
         species: sp.name,
         item: m.item,
         ability,
-        moves: [...m.moves],
-        nature: dex.gen >= 3 ? 'Serious' : '',
+        moves,
+        nature,
         gender: '',
-        evs: {hp: 252, atk: 0, def: 4, spa: 0, spd: 0, spe: 252},
+        evs,
         ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
         level: 100,
         ...(dex.gen === 9 ? {teraType: m.teraType} : {}),

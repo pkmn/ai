@@ -49,6 +49,14 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
       kind: 'choice',
       choice: 'team 1234',
     });
+    expect(parseAgentStdoutLine('team 1, 2, 3, 4')).toEqual({
+      kind: 'choice',
+      choice: 'team 1, 2, 3, 4',
+    });
+    expect(parseAgentStdoutLine('team 1, 2, 3, 4, 5, 6')).toEqual({
+      kind: 'choice',
+      choice: 'team 1, 2, 3, 4, 5, 6',
+    });
     expect(parseAgentStdoutLine('1234')).toEqual({
       kind: 'choice',
       choice: '1234',
@@ -78,6 +86,18 @@ describe('server/protocol.ts — stdout parsing & opponent chat elision', () => 
     expect(parseAgentStdoutLine('move 1, undo')).toEqual({
       kind: 'chat',
       message: 'move 1, undo',
+    });
+    expect(parseAgentStdoutLine('/move 1, undo')).toEqual({
+      kind: 'chat',
+      message: '/move 1, undo',
+    });
+    expect(parseAgentStdoutLine('/switch 2, undo')).toEqual({
+      kind: 'chat',
+      message: '/switch 2, undo',
+    });
+    expect(parseAgentStdoutLine('/team 1, undo')).toEqual({
+      kind: 'chat',
+      message: '/team 1, undo',
     });
   });
 
