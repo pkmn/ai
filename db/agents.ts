@@ -347,6 +347,7 @@ export async function syncProjectsFromYamlWithSmogon(
 
   const rawProjects = parseArenaProjects(projectsYaml, avatarsDir);
   const resolved: Array<ParsedArenaProject<developers.ResolvedProjectOwner>> = [];
+  const bannedDescriptions: string[] = [];
 
   for (const proj of rawProjects) {
     const owners: developers.ResolvedProjectOwner[] = [];
@@ -360,14 +361,13 @@ export async function syncProjectsFromYamlWithSmogon(
         if (refreshNames && (smogonToken || options.lookupSmogon)) {
           const profile = await lookup(owner.smogonId, smogonToken);
           if (profile.banned) {
-            if (existing) developers.setDeveloperSmogonStanding(db, existing.id, 'bad', now);
-            throw new Error(`Smogon account "${profile.username}" (${profile.id}) is banned`);
+            bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
           }
           owners.push({
             github: owner.github,
             smogonId: profile.id,
             smogonUsername: profile.username,
-            smogonStanding: 'good',
+            smogonStanding: profile.banned ? 'bad' : 'good',
           });
         } else {
           const smogonUsername = owner.smogonUsername ??
@@ -381,14 +381,13 @@ export async function syncProjectsFromYamlWithSmogon(
       if (existing && refreshNames && (smogonToken || options.lookupSmogon)) {
         const profile = await lookup(existing.smogonId, smogonToken);
         if (profile.banned) {
-          developers.setDeveloperSmogonStanding(db, existing.id, 'bad', now);
-          throw new Error(`Smogon account "${profile.username}" (${profile.id}) is banned`);
+          bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
         }
         owners.push({
           github: owner.github,
           smogonId: profile.id,
           smogonUsername: profile.username,
-          smogonStanding: 'good',
+          smogonStanding: profile.banned ? 'bad' : 'good',
         });
         continue;
       }
@@ -404,14 +403,13 @@ export async function syncProjectsFromYamlWithSmogon(
 
       const profile = await lookup(owner.rawSmogon, smogonToken);
       if (profile.banned) {
-        if (existing) developers.setDeveloperSmogonStanding(db, existing.id, 'bad', now);
-        throw new Error(`Smogon account "${profile.username}" (${profile.id}) is banned`);
+        bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
       }
       owners.push({
         github: owner.github,
         smogonId: profile.id,
         smogonUsername: profile.username,
-        smogonStanding: 'good',
+        smogonStanding: profile.banned ? 'bad' : 'good',
       });
     }
 
@@ -425,6 +423,9 @@ export async function syncProjectsFromYamlWithSmogon(
   }
 
   applyResolvedProjects(db, inTransaction, resolved, now);
+  if (bannedDescriptions.length > 0) {
+    throw new Error(`Smogon account ${bannedDescriptions.join(', ')} is banned`);
+  }
 }
 
 export async function syncProjectsWithSmogon(

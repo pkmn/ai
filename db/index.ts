@@ -59,6 +59,7 @@ function listSqlFiles(dir: string): string[] {
 export class Database {
   readonly db: DatabaseSync;
   readonly dbPath: string;
+  private txDepth = 0;
   private readonly txRunner: TransactionRunner = fn => this.inTransaction(fn);
 
   constructor(dbPath = defaultDbPath(), options: Options = {}) {
@@ -117,15 +118,16 @@ export class Database {
       seenNumbers.add(prefix);
     }
 
-    this.db.exec(`
+    const createMigrationsTableSql = `
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version TEXT PRIMARY KEY,
         applied_at INTEGER NOT NULL
       );
-    `);
+    `;
 
     if (isFresh) {
       this.inTransaction(() => {
+        this.db.exec(createMigrationsTableSql);
         for (const file of schemaFiles) {
           this.db.exec(fs.readFileSync(path.join(schemaDir, file), 'utf8'));
         }
@@ -138,6 +140,8 @@ export class Database {
       });
       return;
     }
+
+    this.db.exec(createMigrationsTableSql);
 
     const appliedRows = this.db.prepare('SELECT version FROM schema_migrations')
       .all() as Array<{version: string}>;
@@ -200,14 +204,23 @@ export class Database {
   }
 
   inTransaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
+    const depth = this.txDepth;
+    const sp = `sp_${depth}`;
+    this.db.exec(depth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${sp}`);
+    this.txDepth++;
     try {
       const result = fn();
-      this.db.exec('COMMIT');
+      this.txDepth--;
+      this.db.exec(depth === 0 ? 'COMMIT' : `RELEASE SAVEPOINT ${sp}`);
       return result;
     } catch (err) {
+      this.txDepth = depth;
       try {
-        this.db.exec('ROLLBACK');
+        if (depth === 0) {
+          this.db.exec('ROLLBACK');
+        } else {
+          this.db.exec(`ROLLBACK TO SAVEPOINT ${sp}; RELEASE SAVEPOINT ${sp}`);
+        }
       } catch {}
       throw err;
     }
@@ -626,6 +639,7 @@ export * from './agents';
 export * from './developers';
 export * from './discord-members';
 export * from './ladder-entries';
+export * from './ladder-teams';
 export * from './ladders';
 export * from './matches';
 export * from './pair-aggregates';

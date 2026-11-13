@@ -1366,4 +1366,215 @@ describe('Smogon lookup & projects.yml arena sync', () => {
       db.close();
     }
   });
+
+  test('preserves rotated ladders, Superfinal tiebreaks, and Smogon/SAVEPOINT', async () => {
+    const db = new Database(':memory:');
+    try {
+      const laddersYaml = `
+- name: VGC
+  format: gen9championsvgc2026regmc
+  id: gen9championsvgc2026regmc
+  team: pools
+  teams: 20
+  status: active
+  min: 4
+`;
+      db.syncLaddersFromYaml(laddersYaml, 1_760_000_000);
+      expect(() => db.rotateLadder({
+        oldLadderId: 'gen9championsvgc2026regmc',
+        archivedName: 'VGC 2026 Reg M-C',
+        newLadderId: 'gen9championsvgc2026regmd',
+        newMin: 2,
+        now: 1_765_000_000,
+      })).toThrow(/Invalid min/);
+
+      db.rotateLadder({
+        oldLadderId: 'gen9championsvgc2026regmc',
+        archivedName: 'VGC 2026 Reg M-C',
+        newLadderId: 'gen9championsvgc2026regmd',
+        now: 1_765_000_000,
+      });
+      // Re-syncing stale ladders.yml on restart must not clobber archived season title or status
+      db.syncLaddersFromYaml(laddersYaml, 1_766_000_000);
+      const oldVgc = db.getLadder('gen9championsvgc2026regmc')!;
+      expect(oldVgc.name).toBe('VGC 2026 Reg M-C');
+      expect(oldVgc.status).toBe('archived');
+      expect(oldVgc.archivedAt).toBe(1_765_000_000);
+
+      // Smogon identifier bounds + off-domain redirect token guard
+      expect(() => smogon.parseIdentifier('bad.99999999999999999')).toThrow(/Invalid Smogon/);
+      const requestedUrls: string[] = [];
+      try {
+        globalThis.fetch = (input: string | URL | Request) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL ? input.toString() : input.url;
+          requestedUrls.push(u);
+          return Promise.resolve(
+            new Response('', {status: 302, headers: {location: 'https://evilsmogon.com/steal'}})
+          );
+        };
+        await expect(smogon.lookupUser(10544, 'super-secret-smogon-tok'))
+          .rejects.toThrow(/non-Smogon URL/);
+        expect(requestedUrls.some(u => u.includes('evilsmogon.com'))).toBe(false);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+
+      // Brand-new banned owner is persisted with 'bad' standing, subsequent projects still sync,
+      // and banned owners are excluded from @Arena Competitor Discord IDs
+      await expect(db.syncProjectsFromYamlWithSmogon(`
+- name: Bad Proj
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      badgh: 666
+- name: Good Proj
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      goodgh: 777
+`, {
+        avatarsDir: tmpDir,
+        lookupSmogon: id => Promise.resolve({
+          id: Number(id),
+          username: `u${String(id)}`,
+          slug: `u${String(id)}`,
+          url: `https://www.smogon.com/forums/members/${String(id)}/`,
+          banned: Number(id) === 666,
+        }),
+        now: 1_760_000_100,
+      })).rejects.toThrow(/is banned/);
+      expect(db.getDeveloperByGitHub('badgh')?.smogonStanding).toBe('bad');
+      expect(db.getAgentBySlug('good-proj')).toBeDefined();
+      db.linkDeveloperDiscord('badgh', '111111', 'baduser', 1_760_000_110);
+      db.linkDeveloperDiscord('goodgh', '222222', 'gooduser', 1_760_000_110);
+      expect(db.getCompetitorDiscordIds()).toEqual(['222222']);
+
+      // Nested SAVEPOINT transaction rolls back inner failure while outer write commits
+      db.inTransaction(() => {
+        db.refundCooldown('good-proj', 1_760_000_200);
+        expect(() => db.inTransaction(() => {
+          db.refundCooldown('good-proj', 1_760_000_999);
+          throw new Error('abort inner');
+        })).toThrow('abort inner');
+      });
+      expect(db.getAgentBySlug('good-proj')?.cooldownRefundedAt).toBe(1_760_000_200);
+
+      // Tournament Stage 1 tiebreak Elo must not be contaminated by Superfinal losses, and
+      // reopening a completed tournament clears finalRank
+      db.syncProjectsFromYaml(`
+- name: Entrant A
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      ea: ea.101
+- name: Entrant B
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      eb: eb.102
+- name: Entrant C
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      ec: ec.103
+`, undefined, 1_760_000_300);
+      db.upsertTournament({
+        id: 'sf-test',
+        name: 'SF Tiebreak',
+        format: 'gen9ou',
+        startsAt: 1_780_000_000,
+        status: 'scheduled',
+        gamesPerMatchup: 2,
+        parallelTables: 2,
+        hardware: 'L4',
+      });
+      const entVers = ['entrant-a', 'entrant-b', 'entrant-c'].map((slug, idx) => {
+        const ag = db.getAgentBySlug(slug)!;
+        const sub = db.createSubmission({
+          agentId: ag.id,
+          version: '1.0.0',
+          package: 'oci',
+          url: `ghcr.io/pkmn/${slug}:1.0.0`,
+          sha256: String(idx + 3).repeat(64),
+          ladderIds: [],
+          tournamentIds: ['sf-test'],
+          now: 1_760_000_310 + idx,
+        });
+        db.applySubmissionStatus({versionId: sub.id, smokeStatus: 'passed', now: 1_760_000_320});
+        return sub;
+      });
+      // Round Robin: A sweeps B & C (4 pts); B and C split 1-1 (1 pt, identical SB); B has seed 2
+      // while C has seed 3, so B qualifies for Superfinal as #2.
+      const rrGames: Array<[number, number, 'W' | 'L']> = [
+        [entVers[0].id, entVers[1].id, 'W'],
+        [entVers[0].id, entVers[1].id, 'W'],
+        [entVers[0].id, entVers[2].id, 'W'],
+        [entVers[0].id, entVers[2].id, 'W'],
+        [entVers[1].id, entVers[2].id, 'W'],
+        [entVers[1].id, entVers[2].id, 'L'],
+      ];
+      rrGames.forEach(([p1, p2, outcome], i) => {
+        db.recordCompletedTournamentGame({
+          id: `rr-${i + 1}`,
+          tournamentId: 'sf-test',
+          stage: 'Round Robin',
+          cycle: 1,
+          matchupGame: i + 1,
+          p1VersionId: p1,
+          p2VersionId: p2,
+          seed: '1,2,3,4',
+          p1Team: 'Pikachu|||static|||||||]',
+          p2Team: 'Pikachu|||static|||||||]',
+          outcome,
+          turns: 10,
+          endReason: 'normal',
+          p1BankSeconds: 100,
+          p2BankSeconds: 100,
+          completedAt: 1_780_001_000 + i,
+        });
+      });
+      // Now #1 (A) beats #2 (B) 10-0 in the Superfinal; B's overall event Elo drops below C's,
+      // yet B MUST remain #2 ahead of C (#3)!
+      for (let i = 0; i < 10; i++) {
+        db.recordCompletedTournamentGame({
+          id: `sf-${i + 1}`,
+          tournamentId: 'sf-test',
+          stage: 'Superfinal',
+          cycle: 1,
+          matchupGame: i + 1,
+          p1VersionId: entVers[0].id,
+          p2VersionId: entVers[1].id,
+          seed: '1,2,3,4',
+          p1Team: 'Pikachu|||static|||||||]',
+          p2Team: 'Pikachu|||static|||||||]',
+          outcome: 'W',
+          turns: 10,
+          endReason: 'normal',
+          p1BankSeconds: 100,
+          p2BankSeconds: 100,
+          completedAt: 1_780_002_000 + i,
+        });
+      }
+      db.setTournamentStatus('sf-test', 'completed', 1_780_003_000);
+      const finalEntrants = db.getTournamentEntrants('sf-test');
+      expect(finalEntrants.map(e => [e.agentSlug, e.finalRank])).toEqual([
+        ['entrant-a', 1],
+        ['entrant-b', 2],
+        ['entrant-c', 3],
+      ]);
+
+      // Reopening to 'running' clears finalRank
+      db.setTournamentStatus('sf-test', 'running', 1_780_003_100);
+      expect(db.getTournamentEntrants('sf-test').every(e => e.finalRank === undefined)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
 });

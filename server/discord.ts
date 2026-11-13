@@ -206,19 +206,30 @@ export function findMember(members: GuildMember[], owner: Owner): GuildMember | 
   );
 }
 
-async function discordRequest(token: string, endpoint: string, init?: RequestInit): Promise<any> {
+const MAX_DISCORD_RETRIES = 3;
+
+async function discordRequest(
+  token: string,
+  endpoint: string,
+  init?: RequestInit,
+  attempt = 0
+): Promise<any> {
   const res = await fetch(`${DISCORD_API}${endpoint}`, {
     ...init,
     headers: {
       Authorization: `Bot ${token}`,
       ...init?.headers,
     },
+    signal: init?.signal ?? AbortSignal.timeout(15_000),
   });
-  if (res.status === 429) {
+  if (res.status === 429 && attempt < MAX_DISCORD_RETRIES) {
     const body = await res.json().catch(() => ({})) as {retry_after?: number};
-    const waitMillis = Math.ceil((body.retry_after ?? 1) * 1000);
+    const waitMillis = Math.min(
+      30_000,
+      Math.max(100, Math.ceil((body.retry_after ?? 1) * 1000))
+    );
     await new Promise(resolve => setTimeout(resolve, waitMillis));
-    return discordRequest(token, endpoint, init);
+    return discordRequest(token, endpoint, init, attempt + 1);
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -260,6 +271,7 @@ export async function fetchGuildRoles(token: string, guild: string): Promise<Gui
 export async function fetchLeaders(site: string, vgcToken: string): Promise<Leader[]> {
   const res = await fetch(`https://${site}/api/partner/leaders`, {
     headers: {Authorization: `Bearer ${vgcToken}`},
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     throw new Error(`${site} API failed (${res.status})`);

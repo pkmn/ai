@@ -175,6 +175,9 @@ export function setTournamentStatus(
       if (completedGames.count > 0) {
         recomputeTournamentStandings(db, id, true);
       }
+    } else if (existing.status === 'completed') {
+      db.prepare('UPDATE tournament_entrants SET final_rank = NULL WHERE tournament_id = ?')
+        .run(id);
     }
     return getTournament(db, id)!;
   });

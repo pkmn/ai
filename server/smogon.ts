@@ -28,11 +28,15 @@ function safeDecodeURIComponent(raw: string): string {
 }
 
 export function parseIdentifier(raw: string | number): {id?: number; username?: string} {
-  if (typeof raw === 'number') {
-    if (!Number.isInteger(raw) || raw <= 0) {
-      throw new Error(`Invalid Smogon user ID: ${raw}`);
+  const assertSafeSmogonId = (id: number, label: string | number): number => {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`Invalid Smogon user ID: ${String(label)}`);
     }
-    return {id: raw};
+    return id;
+  };
+
+  if (typeof raw === 'number') {
+    return {id: assertSafeSmogonId(raw, raw)};
   }
 
   const trimmed = String(raw ?? '').trim();
@@ -41,23 +45,19 @@ export function parseIdentifier(raw: string | number): {id?: number; username?: 
   }
 
   if (/^\d+$/.test(trimmed)) {
-    const id = Number(trimmed);
-    if (!Number.isSafeInteger(id) || id <= 0) {
-      throw new Error(`Invalid Smogon user ID: ${trimmed}`);
-    }
-    return {id};
+    return {id: assertSafeSmogonId(Number(trimmed), trimmed)};
   }
 
   const urlMatch = MEMBER_URL_RE.exec(trimmed);
   if (urlMatch) {
-    const id = Number(urlMatch[2]);
+    const id = assertSafeSmogonId(Number(urlMatch[2]), trimmed);
     const slug = urlMatch[1] ? safeDecodeURIComponent(urlMatch[1]) : undefined;
     return {id, username: slug};
   }
 
   const slugMatch = SLUG_ID_RE.exec(trimmed);
   if (slugMatch) {
-    return {id: Number(slugMatch[2]), username: slugMatch[1]};
+    return {id: assertSafeSmogonId(Number(slugMatch[2]), trimmed), username: slugMatch[1]};
   }
 
   return {username: trimmed};
@@ -89,19 +89,22 @@ function decodeHtmlEntities(str: string): string {
 // when canonicalizing `/forums/members/<id>/` -> `/forums/members/<slug>.<id>/`).
 function withToken(rawUrl: string, token: string): URL {
   const u = new URL(rawUrl, SMOGON_BASE);
-  u.hash = '';
-  if (u.hostname.endsWith('smogon.com')) {
-    u.searchParams.set('__scraper-token', token);
+  if (u.protocol !== 'https:' || (u.hostname !== 'smogon.com' && u.hostname !== 'www.smogon.com')) {
+    throw new Error(`Refusing to send Smogon token to non-Smogon URL: ${u.origin}`);
   }
+  u.hash = '';
+  u.searchParams.set('__scraper-token', token);
   return u;
 }
 
 async function fetchFollowingRedirects(rawUrl: string, token: string): Promise<Response> {
+  const signal = AbortSignal.timeout(15_000);
   let current = rawUrl;
   for (let hops = 0; hops < 8; hops++) {
-    const res = await fetch(withToken(current, token), {redirect: 'manual'});
+    const res = await fetch(withToken(current, token), {redirect: 'manual', signal});
     const location = res.headers.get('location');
     if (location && res.status >= 300 && res.status < 400) {
+      await res.body?.cancel().catch(() => {});
       current = new URL(location, current).toString();
       continue;
     }
@@ -127,17 +130,29 @@ export async function lookupUser(
   if (id === undefined) {
     const encoded = encodeURIComponent(parsed.username!);
     const findUrl = `${SMOGON_BASE}/forums/members/?username=${encoded}`;
-    const res = await fetch(withToken(findUrl, token), {redirect: 'manual'});
+    const res = await fetch(withToken(findUrl, token), {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15_000),
+    });
     const location = res.headers.get('location');
     if (!location || res.status < 300 || res.status >= 400) {
       throw new Error(`Smogon account "${raw}" not found`);
     }
-    const locPath = new URL(location, SMOGON_BASE).pathname;
-    const m = MEMBER_URL_RE.exec(locPath);
+    const locUrl = new URL(location, SMOGON_BASE);
+    if (
+      locUrl.protocol !== 'https:' ||
+      (locUrl.hostname !== 'smogon.com' && locUrl.hostname !== 'www.smogon.com')
+    ) {
+      throw new Error(`Unexpected redirect "${location}" looking up Smogon user "${raw}"`);
+    }
+    const m = MEMBER_URL_RE.exec(locUrl.pathname);
     if (!m) {
       throw new Error(`Unexpected redirect "${location}" looking up Smogon user "${raw}"`);
     }
     id = Number(m[2]);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`Invalid Smogon user ID in redirect: ${m[2]}`);
+    }
     if (m[1]) fallbackSlug = safeDecodeURIComponent(m[1]);
   }
 

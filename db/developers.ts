@@ -97,6 +97,7 @@ export function getCompetitorDiscordIds(db: DatabaseSync): string[] {
     FROM developers d
     JOIN agents a ON a.id = d.agent_id
     WHERE a.status = 'qualified'
+      AND d.smogon_standing != 'bad'
       AND d.discord_id IS NOT NULL
     ORDER BY d.discord_id ASC
   `).all() as Array<{discord_id: string}>;

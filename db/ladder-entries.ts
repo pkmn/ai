@@ -1148,7 +1148,7 @@ export function getArenaLadderRoleTargets(db: DatabaseSync): ArenaLadderRoleTarg
   const selectOwnerDiscordIds = db.prepare(`
     SELECT DISTINCT discord_id
     FROM developers
-    WHERE agent_id = ? AND discord_id IS NOT NULL
+    WHERE agent_id = ? AND discord_id IS NOT NULL AND smogon_standing != 'bad'
     ORDER BY discord_id ASC
   `);
 

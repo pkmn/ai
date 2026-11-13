@@ -455,6 +455,7 @@ export class Auth {
             code,
             redirect_uri: saved.redirectUri,
           }),
+          signal: AbortSignal.timeout(15_000),
         });
         if (!tokenRes.ok) throw new Error(`GitHub token exchange failed (${tokenRes.status})`);
         const tokenData = await tokenRes.json() as {access_token?: string};
@@ -466,6 +467,7 @@ export class Auth {
             Accept: 'application/vnd.github+json',
             'User-Agent': 'pkmn.ai',
           },
+          signal: AbortSignal.timeout(15_000),
         });
         if (!userRes.ok) throw new Error(`GitHub user fetch failed (${userRes.status})`);
         const userData = await userRes.json() as {id?: number; login?: string};
@@ -614,6 +616,7 @@ export class Auth {
             code,
             redirect_uri: saved.redirectUri,
           }).toString(),
+          signal: AbortSignal.timeout(15_000),
         });
         if (!tokenRes.ok) throw new Error(`Discord token exchange failed (${tokenRes.status})`);
         const tokenData = await tokenRes.json() as {access_token?: string};
@@ -621,6 +624,7 @@ export class Auth {
 
         const userRes = await fetch(`${DISCORD_API}/users/@me`, {
           headers: {Authorization: `Bearer ${tokenData.access_token}`},
+          signal: AbortSignal.timeout(15_000),
         });
         if (!userRes.ok) throw new Error(`Discord user fetch failed (${userRes.status})`);
         const userData = await userRes.json() as {id?: string; username?: string};

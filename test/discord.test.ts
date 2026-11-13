@@ -1189,13 +1189,13 @@ describe('Arena roles & submission/quarantine/watchdog DMs', () => {
             url: 'https://example.com/mm.tar.zst',
             sha256: SHA,
             ladderIds: ['gen1ou20261109'],
-            now: 1_760_000_300,
+            now: 1_762_000_300,
           });
           const blockedRes = db.applySubmissionStatus({
             versionId: vBlocked.id,
             smokeStatus: 'quarantined',
             smokeError: 'OOM on turn 3',
-            now: 1_760_000_310,
+            now: 1_762_000_310,
           });
           sentMessages.length = 0;
           const sentBlocked = await discord.notifySubmissionStatus(

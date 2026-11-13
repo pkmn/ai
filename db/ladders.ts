@@ -191,6 +191,13 @@ export function loadLadderPools(file = LADDERS_FILE): Map<string, string[]> {
   return out;
 }
 
+const STATUS_PROGRESSION: Record<LadderStatus, number> = {
+  upcoming: 0,
+  active: 1,
+  settling: 2,
+  archived: 3,
+};
+
 export function syncLaddersFromYaml(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -198,7 +205,7 @@ export function syncLaddersFromYaml(
   now = Math.floor(Date.now() / 1000)
 ) {
   const configs = parseLaddersYaml(laddersYaml);
-  const selectExisting = db.prepare('SELECT status, archived_at FROM ladders WHERE id = ?');
+  const selectExisting = db.prepare('SELECT name, status, archived_at FROM ladders WHERE id = ?');
   const upsert = db.prepare(`
     INSERT INTO ladders (
       id, slot, name, format, team, min,
@@ -220,20 +227,25 @@ export function syncLaddersFromYaml(
   inTransaction(() => {
     for (const cfg of configs) {
       const existing = selectExisting.get(cfg.id) as {
+        name: string;
         status: LadderStatus;
         archived_at: number | null;
       } | undefined;
       let status: LadderStatus = cfg.status ?? 'active';
-      // If a settling season already finished settling and transitioned to 'archived' in SQLite,
-      // do not regress it back to 'settling' on server restart before ladders.yml is updated.
-      // Likewise, do not downgrade an already activated/settling/archived ladder back to 'upcoming'
-      // if config/ladders.yml still lists `status: upcoming`.
-      if (existing?.status === 'archived' && status === 'settling') {
-        status = 'archived';
-      } else if (existing && existing.status !== 'upcoming' && status === 'upcoming') {
+      // Lifecycle transitions (`upcoming -> active -> settling -> archived`) via `pkmn
+      // ladder-status` or `pkmn rotate-ladder` take precedence in SQLite so a server restart
+      // before `config/ladders.yml` is edited never regresses a rotated or activated season.
+      if (existing && STATUS_PROGRESSION[existing.status] > STATUS_PROGRESSION[status]) {
         status = existing.status;
       }
       const slot = inferLadderSlot(cfg.name);
+      const cfgName = cfg.name.trim();
+      const preserveRotatedTitle =
+        existing &&
+        (status === 'settling' || status === 'archived') &&
+        cfgName.toLowerCase() === slot &&
+        existing.name.trim().toLowerCase() !== slot;
+      const name = preserveRotatedTitle ? existing.name : cfgName;
       const min = cfg.min ?? (cfg.team === 'pools' ? 4 : 2);
       const teams = cfg.teams ?? null;
       const discord = cfg.discord?.trim() || null;
@@ -243,7 +255,7 @@ export function syncLaddersFromYaml(
       upsert.run(
         cfg.id,
         slot,
-        cfg.name.trim(),
+        name,
         cfg.format.trim(),
         cfg.team,
         min,
@@ -514,7 +526,10 @@ export function rotateLadder(
         }
       } else {
         const team = input.newTeam ?? oldLadder.team;
-        const min = input.newMin ?? oldLadder.min;
+        const min = input.newMin ?? (team === 'pools' ? Math.max(4, oldLadder.min) : oldLadder.min);
+        if (!Number.isInteger(min) || min < 2 || (team === 'pools' && min < 4)) {
+          throw new Error(`Invalid min "${String(min)}" for "${newId}"`);
+        }
         const teams = input.newTeams !== undefined
           ? input.newTeams
           : (team === 'pools' ? (oldLadder.teams ?? 20) : undefined);

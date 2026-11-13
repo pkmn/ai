@@ -151,13 +151,14 @@ export function recomputeTournamentStandings(
   const ties = new Int32Array(M);
   const pairScore = new Float64Array(M * M);
   const sfScore = new Float64Array(M);
-  const singleGames: ratings.TournamentGameInput[] = [];
+  const rrGames: ratings.TournamentGameInput[] = [];
+  const allGames: ratings.TournamentGameInput[] = [];
 
   for (const g of gameRows) {
     const i = idxByVer.get(g.p1_version_id);
     const j = idxByVer.get(g.p2_version_id);
     if (i === undefined || j === undefined) continue;
-    singleGames.push({i, j, outcome: g.outcome});
+    allGames.push({i, j, outcome: g.outcome});
 
     if (g.stage === 'Superfinal') {
       if (g.outcome === 'W') {
@@ -171,6 +172,7 @@ export function recomputeTournamentStandings(
       continue;
     }
 
+    rrGames.push({i, j, outcome: g.outcome});
     if (g.outcome === 'W') {
       wins[i]++;
       losses[j]++;
@@ -200,11 +202,16 @@ export function recomputeTournamentStandings(
     sb[i] = Math.round(total * 100) / 100;
   }
 
-  const ratingRes = ratings.computeTournamentRatings(M, singleGames, -1, 1500);
+  // Compute Stage 1 tiebreak Elo strictly from Round-Robin games so a #2 finisher losing the
+  // 100-game Superfinal against #1 can never drop below a tied #3 in Stage 1 ordering.
+  const rrRatingRes = ratings.computeTournamentRatings(M, rrGames, -1, 1500);
+  const allRatingRes = allGames.length === rrGames.length
+    ? rrRatingRes
+    : ratings.computeTournamentRatings(M, allGames, -1, 1500);
   const order = entrants.map((_, idx) => idx).sort((a, b) => (
     points[b] - points[a] ||
     sb[b] - sb[a] ||
-    ratingRes.elo[b] - ratingRes.elo[a] ||
+    rrRatingRes.elo[b] - rrRatingRes.elo[a] ||
     entrants[a].seed - entrants[b].seed
   ));
 
@@ -229,8 +236,8 @@ export function recomputeTournamentStandings(
       versionId: ent.versionId,
       seed: ent.seed,
       finalRank: assignFinalRanks ? rankByIdx[i] : ent.finalRank,
-      elo: singleGames.length > 0 ? Math.round(ratingRes.elo[i]) : ent.elo,
-      se: singleGames.length > 0 ? Math.round(ratingRes.eloStd[i]) : ent.se,
+      elo: allGames.length > 0 ? Math.round(allRatingRes.elo[i]) : ent.elo,
+      se: allGames.length > 0 ? Math.round(allRatingRes.eloStd[i]) : ent.se,
       gameWins: wins[i],
       gameLosses: losses[i],
       gameTies: ties[i],

@@ -186,6 +186,7 @@ export const STATE_DB_PATH =
 export class StateDatabase {
   readonly db: DatabaseSync;
   readonly dbPath: string;
+  private txDepth = 0;
 
   constructor(dbPath = STATE_DB_PATH) {
     this.dbPath = dbPath;
@@ -284,13 +285,24 @@ export class StateDatabase {
   }
 
   inTransaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE;');
+    const depth = this.txDepth;
+    const sp = `sp_${depth}`;
+    this.db.exec(depth === 0 ? 'BEGIN IMMEDIATE;' : `SAVEPOINT ${sp};`);
+    this.txDepth++;
     try {
       const res = fn();
-      this.db.exec('COMMIT;');
+      this.txDepth--;
+      this.db.exec(depth === 0 ? 'COMMIT;' : `RELEASE SAVEPOINT ${sp};`);
       return res;
     } catch (err) {
-      this.db.exec('ROLLBACK;');
+      this.txDepth = depth;
+      try {
+        if (depth === 0) {
+          this.db.exec('ROLLBACK;');
+        } else {
+          this.db.exec(`ROLLBACK TO SAVEPOINT ${sp}; RELEASE SAVEPOINT ${sp};`);
+        }
+      } catch {}
       throw err;
     }
   }
