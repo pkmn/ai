@@ -121,7 +121,7 @@ const MAX_INVALID_STRIKES = 3;
 const MAX_STDOUT_LINE_CHARS = 65_536;
 const MAX_LINE_QUEUE = 256;
 const MAX_LINES_PER_DECISION = 64;
-const MAX_CHAT_LINES_PER_DECISION = 3;
+const MAX_CHAT_LINES_PER_DECISION = 1;
 const MAX_CHAT_MESSAGE_CHARS = 500;
 
 export function rewriteBlindPlayerNames(
