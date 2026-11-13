@@ -12,11 +12,6 @@ import {TimeSlicedArenaGame, TurnHeartbeatInfo} from '../arena/arbiter';
 import {Coordinator, LadderSnapshot} from '../arena/coordinator';
 import {StateDatabase} from '../arena/db';
 import {
-  HarvestedSideCandidate,
-  extractRevealedTeamsFromLog,
-  filterAndRankHarvestedTeams,
-} from '../arena/harvest';
-import {
   computeResidencyMultipliers,
   downloadAndUnpackBundle,
   unpackLocalTarArchive,
@@ -383,85 +378,6 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(stateDb.getLocalAgent(10)?.totalFaults).toBe(2);
 
       stateDb.close();
-    }
-  );
-
-  test(
-    'filterAndRankHarvestedTeams & extractRevealedTeamsFromLog enforce legality and core cap',
-    () => {
-      const sets1 = Teams.unpack(TEAM_ONE)!;
-      const sets2 = Teams.unpack(TEAM_TWO)!;
-
-      const candidates: HarvestedSideCandidate[] = [
-      // Below rating floor (1500 < 1650) -> filtered out
-        {sets: sets1, elo: 1500, won: true},
-        // Duplicate observations of TEAM_ONE above rating floor
-        {sets: sets1, elo: 1750, won: true},
-        {sets: sets1, elo: 1810, won: true},
-        // Observation of TEAM_TWO
-        {sets: sets2, elo: 1720, won: false},
-        // Incomplete 5-Pokemon team -> filtered out
-        {sets: sets1.slice(0, 5), elo: 1900, won: true},
-      ];
-
-      const ranked = filterAndRankHarvestedTeams(candidates, {
-        formatId: 'gen9customgame',
-        gen: 9,
-        minElo: 1650,
-        targetPoolSize: 20,
-      });
-      expect(ranked).toHaveLength(2);
-
-      // Pass 1 log extraction test on a synthetic full-reveal Showdown log
-      const rawLog = [
-        '|player|p1|Alice|1|1780',
-        '|player|p2|Bob|2|1740',
-        ...sets1.flatMap((s, idx) => [
-          `|poke|p1|${s.species}|`,
-          `|switch|p1a: ${s.species}|${s.species}, L100|100/100`,
-          `|-ability|p1a: ${s.species}|${s.ability}`,
-          `|-item|p1a: ${s.species}|${s.item}`,
-          ...s.moves.map(m => `|move|p1a: ${s.species}|${m}|p2a: Target`),
-          ...(idx === 0 ? ['|-terastallize|p1a: Pikachu|Electric'] : []),
-        ]),
-        '|win|Alice',
-      ].join('\n');
-
-      const extracted = extractRevealedTeamsFromLog(rawLog, 'gen9customgame');
-      expect(extracted).toHaveLength(1);
-      expect(extracted[0].elo).toBe(1780);
-      expect(extracted[0].won).toBe(true);
-      expect(extracted[0].sets).toHaveLength(6);
-
-      // Battle-only formes (e.g., Palafin-Hero) collapse onto their out-of-battle base species
-      const battleOnlyLog = rawLog.concat(
-        '\n|switch|p1a: Palafin|Palafin-Hero, L100|100/100'
-      ).replace('|poke|p1|Pikachu|', '|poke|p1|Palafin|')
-        .replace(/p1a: Pikachu\|Pikachu/g, 'p1a: Palafin|Palafin')
-        .replace(/p1a: Pikachu/g, 'p1a: Palafin');
-      const battleOnlyExtracted = extractRevealedTeamsFromLog(battleOnlyLog, 'gen9customgame');
-      expect(battleOnlyExtracted).toHaveLength(1);
-      expect(battleOnlyExtracted[0].sets).toHaveLength(6);
-      expect(battleOnlyExtracted[0].sets[0].species).toBe('Palafin');
-      expect(battleOnlyExtracted[0].sets[0].evs.atk).toBe(252);
-
-      // Forfeited or inactivity-ended logs are excluded from harvested pool extraction
-      const forfeitLog = rawLog.replace('|win|Alice', '|-message|Bob forfeited.\n|win|Alice');
-      expect(extractRevealedTeamsFromLog(forfeitLog, 'gen9customgame')).toEqual([]);
-
-      // Unrated logs default to 0 Elo so they are filtered by minElo
-      const unratedLog = rawLog
-        .replace('|player|p1|Alice|1|1780', '|player|p1|Alice|1|')
-        .replace('|player|p2|Bob|2|1740', '|player|p2|Bob|2|');
-      const unratedExtracted = extractRevealedTeamsFromLog(unratedLog, 'gen9customgame');
-      expect(unratedExtracted[0].elo).toBe(0);
-      expect(
-        filterAndRankHarvestedTeams(unratedExtracted, {
-          formatId: 'gen9customgame',
-          gen: 9,
-          minElo: 1650,
-        })
-      ).toEqual([]);
     }
   );
 

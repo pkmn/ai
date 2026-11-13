@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import * as readline from 'readline';
 
 import * as arena from '../server/arena';
@@ -6,11 +5,10 @@ import * as arena from '../server/arena';
 import * as arbiter from './arbiter';
 import * as coordinator from './coordinator';
 import * as db from './db';
-import * as harvest from './harvest';
 import * as packages from './packages';
 import * as tournament from './tournament';
 
-export {arbiter, coordinator, db, harvest, packages, tournament};
+export {arbiter, coordinator, db, packages, tournament};
 
 // Built-in deterministic baseline stdio agent used as the opponent during Turn-1 smoke tests
 // when invoked via `node build/arena baseline`.
@@ -165,23 +163,6 @@ if (require.main === module) {
   const sub = process.argv[2] ?? 'daemon';
   if (sub === 'baseline') {
     runBaselineStdioAgent();
-  } else if (sub === 'harvest') {
-    const formatId = process.argv[3];
-    const logDir = process.argv[4];
-    const outFile = process.argv[5];
-    if (!formatId || !logDir || !outFile) {
-      process.stderr.write('Usage: arena harvest <format> <log-dir> <out-file>\n');
-      process.exit(2);
-    }
-    const gen = Number(/^gen(\d)/i.exec(formatId)?.[1] ?? 9);
-    const candidates: harvest.HarvestedSideCandidate[] = [];
-    for (const entry of fs.readdirSync(logDir)) {
-      if (!entry.endsWith('.log')) continue;
-      const text = fs.readFileSync(`${logDir}/${entry}`, 'utf8');
-      candidates.push(...harvest.extractRevealedTeamsFromLog(text, formatId));
-    }
-    const pool = harvest.filterAndRankHarvestedTeams(candidates, {formatId, gen});
-    harvest.writeHarvestedPoolFile(outFile, pool);
   } else {
     void runDaemon().catch(err => {
       process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
