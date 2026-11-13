@@ -267,10 +267,16 @@ export class StateDatabase {
       );
 
       CREATE TABLE IF NOT EXISTS ladder_counters (
-        ladder_id  TEXT PRIMARY KEY,
-        last_seq   INTEGER NOT NULL DEFAULT 0
+        ladder_id       TEXT PRIMARY KEY,
+        last_seq        INTEGER NOT NULL DEFAULT 0,
+        last_global_seq INTEGER NOT NULL DEFAULT 0
       );
     `);
+    try {
+      this.db.exec(
+        'ALTER TABLE ladder_counters ADD COLUMN last_global_seq INTEGER NOT NULL DEFAULT 0;'
+      );
+    } catch {}
   }
 
   close() {
@@ -291,11 +297,17 @@ export class StateDatabase {
 
   nextMatchSequence(ladderId: string): number {
     return this.inTransaction(() => {
+      const totalRow = this.db.prepare(
+        'SELECT COALESCE(SUM(last_seq), 0) AS total FROM ladder_counters'
+      ).get() as {total: number};
+      const nextGlobal = totalRow.total + 1;
       this.db.prepare(`
-        INSERT INTO ladder_counters (ladder_id, last_seq)
-        VALUES (?, 1)
-        ON CONFLICT(ladder_id) DO UPDATE SET last_seq = last_seq + 1
-      `).run(ladderId);
+        INSERT INTO ladder_counters (ladder_id, last_seq, last_global_seq)
+        VALUES (?, 1, ?)
+        ON CONFLICT(ladder_id) DO UPDATE SET
+          last_seq = last_seq + 1,
+          last_global_seq = excluded.last_global_seq
+      `).run(ladderId, nextGlobal);
       const row = this.db.prepare(
         'SELECT last_seq FROM ladder_counters WHERE ladder_id = ?'
       ).get(ladderId) as {last_seq: number};
@@ -308,6 +320,20 @@ export class StateDatabase {
       'SELECT last_seq FROM ladder_counters WHERE ladder_id = ?'
     ).get(ladderId) as {last_seq: number} | undefined;
     return row?.last_seq ?? 0;
+  }
+
+  getLastGlobalMatchSequence(ladderId: string): number {
+    const row = this.db.prepare(
+      'SELECT last_global_seq FROM ladder_counters WHERE ladder_id = ?'
+    ).get(ladderId) as {last_global_seq: number} | undefined;
+    return row?.last_global_seq ?? 0;
+  }
+
+  getGlobalMatchCount(): number {
+    const row = this.db.prepare(
+      'SELECT COALESCE(SUM(last_seq), 0) AS total FROM ladder_counters'
+    ).get() as {total: number};
+    return row.total;
   }
 
   upsertLocalAgent(agent: {

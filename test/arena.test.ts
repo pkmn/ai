@@ -348,6 +348,10 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(stateDb.nextMatchSequence('gen9ou')).toBe(1);
       expect(stateDb.nextMatchSequence('gen9ou')).toBe(2);
       expect(stateDb.getMatchSequence('gen9ou')).toBe(2);
+      expect(stateDb.getLastGlobalMatchSequence('gen9ou')).toBe(2);
+      expect(stateDb.nextMatchSequence('gen1ou')).toBe(1);
+      expect(stateDb.getLastGlobalMatchSequence('gen1ou')).toBe(3);
+      expect(stateDb.getGlobalMatchCount()).toBe(3);
 
       stateDb.recordAgentGameResult(10, true, 1000);
       stateDb.recordAgentGameResult(10, true, 1005);

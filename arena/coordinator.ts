@@ -682,15 +682,14 @@ export class Coordinator {
         sigma,
         agentMatches,
         pairMatches,
-        lastMatchNumber: this.stateDb.getMatchSequence(ladder.id),
+        lastMatchNumber: this.stateDb.getLastGlobalMatchSequence(ladder.id),
       };
       candidates.push({ladder, state});
     }
 
     if (candidates.length === 0) return undefined;
 
-    const globalSeq =
-      candidates.reduce((sum, c) => sum + c.state.lastMatchNumber, 0) + 1;
+    const globalSeq = this.stateDb.getGlobalMatchCount();
     const choice = ratings.selectNextArenaMatch(
       candidates.map(c => c.state),
       globalSeq,
