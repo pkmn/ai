@@ -453,6 +453,47 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       expect(vgcRes.omniscientLog).toContain('|gametype|doubles');
       expect(vgcRes.omniscientLog).toContain('|showteam|p1|');
       expect(vgcRes.omniscientLog).toContain('|showteam|p2|');
+
+      // Verify retrying invalid choices does not farm extra bank increments
+      const invalidRetryScript = path.join(tmpDir, 'invalid-retry-agent.js');
+      fs.writeFileSync(
+        invalidRetryScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'let badCount = 0;',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  if (!req.teamPreview && badCount < 2) {',
+          '    badCount++;',
+          '    process.stdout.write("move 9\\n");',
+          '    return;',
+          '  }',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const retryGame = new TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [invalidRetryScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        startingBankSeconds: 100,
+        maxTurnSeconds: 150,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      });
+      const retryRes = await retryGame.run();
+      expect(retryRes.endReason).toBe('smoke_complete');
+      expect(retryRes.p1BankSeconds).toBeLessThanOrEqual(retryRes.p2BankSeconds);
     }
   );
 

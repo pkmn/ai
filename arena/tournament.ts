@@ -109,6 +109,7 @@ interface RemoteTournamentPlayer {
   sshDisconnected: boolean;
   bankMs: number;
   hasTakenFirstDecision: boolean;
+  retryingInvalidChoice: boolean;
   invalidStrikes: number;
   lastRequestJson: string | undefined;
   thinking: boolean;
@@ -234,6 +235,7 @@ export class ConcurrentTournamentGame {
       sshDisconnected: false,
       bankMs: this.startingBankMs,
       hasTakenFirstDecision: false,
+      retryingInvalidChoice: false,
       invalidStrikes: 0,
       lastRequestJson: undefined,
       thinking: false,
@@ -372,7 +374,10 @@ export class ConcurrentTournamentGame {
     if (this.ended) return;
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
 
-    if (player.hasTakenFirstDecision) {
+    const isRetry = player.retryingInvalidChoice;
+    player.retryingInvalidChoice = false;
+
+    if (player.hasTakenFirstDecision && !isRetry) {
       const isNewTurn = this.currentTurn > this.lastRewardedTurn[player.slot];
       const incrementMs = isNewTurn ? this.fullTurnIncrementMs : this.midTurnIncrementMs;
       player.bankMs = Math.min(this.maxTurnMs, player.bankMs + incrementMs);
@@ -380,7 +385,10 @@ export class ConcurrentTournamentGame {
     }
 
     const isFirstDecision = !player.hasTakenFirstDecision;
-    player.hasTakenFirstDecision = true;
+    if (isFirstDecision) {
+      player.hasTakenFirstDecision = true;
+      this.lastRewardedTurn[player.slot] = this.currentTurn;
+    }
     const graceMs = isFirstDecision ? this.firstTurnGraceMs : 0;
     const totalBudgetMs = graceMs + Math.min(player.bankMs, this.maxTurnMs);
 
@@ -458,12 +466,20 @@ export class ConcurrentTournamentGame {
                 }
               } catch {}
             }
-          } else if (line.startsWith('|error|[Invalid choice]') && !this.ended) {
+          } else if (
+            (line.startsWith('|error|[Invalid choice]') ||
+              line.startsWith('|error|[Unavailable choice]')) &&
+            !this.ended
+          ) {
             player.invalidStrikes++;
+            player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
               this.forfeit(player.slot, 'invalid_choice_limit');
-            } else if (player.lastRequestJson) {
+            } else if (line.startsWith('|error|[Invalid choice]') && player.lastRequestJson) {
               actionableReqJson = player.lastRequestJson;
+              if (!player.exited && player.proc.stdin.writable) {
+                player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
+              }
             }
           }
         }

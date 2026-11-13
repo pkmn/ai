@@ -77,6 +77,7 @@ interface SandboxedPlayer {
   lineResolver: ((line: string | undefined) => void) | undefined;
   bankMs: number;
   hasTakenFirstDecision: boolean;
+  retryingInvalidChoice: boolean;
   invalidStrikes: number;
   pendingRequestJson: string | undefined;
   lastRequestJson: string | undefined;
@@ -172,6 +173,7 @@ export class TimeSlicedArenaGame {
       lineResolver: undefined,
       bankMs: this.startingBankMs,
       hasTakenFirstDecision: false,
+      retryingInvalidChoice: false,
       invalidStrikes: 0,
       pendingRequestJson: undefined,
       lastRequestJson: undefined,
@@ -347,11 +349,16 @@ export class TimeSlicedArenaGame {
                 }
               } catch {}
             }
-          } else if (line.startsWith('|error|[Invalid choice]') && !this.ended) {
+          } else if (
+            (line.startsWith('|error|[Invalid choice]') ||
+              line.startsWith('|error|[Unavailable choice]')) &&
+            !this.ended
+          ) {
             player.invalidStrikes++;
+            player.retryingInvalidChoice = true;
             if (player.invalidStrikes >= MAX_INVALID_STRIKES) {
               this.forfeit(player.slot, 'invalid_choice_limit');
-            } else if (player.lastRequestJson) {
+            } else if (line.startsWith('|error|[Invalid choice]') && player.lastRequestJson) {
               player.pendingRequestJson = player.lastRequestJson;
               if (!player.exited && player.proc.stdin.writable) {
                 player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
@@ -386,8 +393,12 @@ export class TimeSlicedArenaGame {
     };
     player.pendingRequestJson = undefined;
 
-    // Credit full-turn or mid-turn increment before starting the turn clock
-    if (player.hasTakenFirstDecision) {
+    const isRetry = player.retryingInvalidChoice;
+    player.retryingInvalidChoice = false;
+
+    // Credit full-turn or mid-turn increment before starting the turn clock,
+    // except when retrying after an invalid/unavailable choice on the same decision.
+    if (player.hasTakenFirstDecision && !isRetry) {
       const isNewTurn = this.currentTurn > this.lastRewardedTurn[player.slot];
       const incrementMs = isNewTurn ? this.fullTurnIncrementMs : this.midTurnIncrementMs;
       player.bankMs = Math.min(this.maxTurnMs, player.bankMs + incrementMs);
@@ -395,7 +406,10 @@ export class TimeSlicedArenaGame {
     }
 
     const isFirstDecision = !player.hasTakenFirstDecision;
-    player.hasTakenFirstDecision = true;
+    if (isFirstDecision) {
+      player.hasTakenFirstDecision = true;
+      this.lastRewardedTurn[player.slot] = this.currentTurn;
+    }
     const graceMs = isFirstDecision ? this.firstTurnGraceMs : 0;
     const totalBudgetMs = graceMs + Math.min(player.bankMs, this.maxTurnMs);
 
