@@ -186,13 +186,42 @@ export async function downloadAndUnpackBundle(opts: {
       if (!res.ok) {
         throw new Error(`Bundle download failed (${res.status} ${res.statusText})`);
       }
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.byteLength > MAX_IMAGE_BYTES) {
+      const contentLength = Number(res.headers?.get?.('content-length') ?? 0);
+      if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
         throw new Error(
-          `Compressed bundle (${buf.byteLength} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+          `Compressed bundle (${contentLength} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
         );
       }
-      fs.writeFileSync(archivePath, buf);
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader();
+        const fd = fs.openSync(archivePath, 'w', 0o600);
+        let total = 0;
+        try {
+          while (true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            if (!value) continue;
+            total += value.byteLength;
+            if (total > MAX_IMAGE_BYTES) {
+              await reader.cancel().catch(() => {});
+              throw new Error(
+                `Compressed bundle (${total} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+              );
+            }
+            fs.writeSync(fd, value);
+          }
+        } finally {
+          fs.closeSync(fd);
+        }
+      } else {
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.byteLength > MAX_IMAGE_BYTES) {
+          throw new Error(
+            `Compressed bundle (${buf.byteLength} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+          );
+        }
+        fs.writeFileSync(archivePath, buf);
+      }
     }
 
     // Verify SHA-256 digest before invoking the unpacker
@@ -328,9 +357,11 @@ export function ensureAgentResident(
     const destDir = path.join(agentsDir, row.target);
     fs.mkdirSync(destDir, {recursive: true});
     if (fs.existsSync(coldArchive)) {
-      execFileSync('tar', ['--zstd', '-xf', coldArchive, '-C', destDir], {
-        timeout: 180_000,
-      });
+      execFileSync(
+        'tar',
+        ['--zstd', '--no-same-owner', '--no-same-permissions', '-xf', coldArchive, '-C', destDir],
+        {timeout: 180_000}
+      );
     }
   } else if (fs.existsSync(coldArchive)) {
     execFileSync(

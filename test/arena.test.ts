@@ -258,17 +258,20 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         })
       ).rejects.toThrow(/SHA-256 mismatch/);
 
-      // Reject bundle missing './run'
+      // Reject bundle missing './run' without polluting CAS store
       const noRunSrc = path.join(tmpDir, 'no-run-src');
+      const noRunCasDir = path.join(tmpDir, 'cas-no-run');
       fs.mkdirSync(noRunSrc, {recursive: true});
       fs.writeFileSync(path.join(noRunSrc, 'README.txt'), 'missing run');
+      fs.writeFileSync(path.join(noRunSrc, 'big.bin'), Buffer.alloc(70_000, 0x99));
       const noRunTar = path.join(tmpDir, 'no-run.tar.gz');
       execFileSync('tar', ['-czf', noRunTar, '-C', noRunSrc, '.']);
       expect(() => unpackLocalTarArchive({
         archivePath: noRunTar,
         destDir: path.join(agentsDir, 'agent-no-run'),
-        casDir,
+        casDir: noRunCasDir,
       })).toThrow(/missing required executable/i);
+      expect(fs.existsSync(noRunCasDir)).toBe(false);
 
       // Reject chained-symlink Tar Slip attempting to escape destDir
       const slipTar = path.join(tmpDir, 'chained-symlink-slip.tar.gz');
@@ -295,7 +298,7 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         archivePath: slipTar,
         destDir: path.join(agentsDir, 'agent-slip'),
         casDir,
-      })).toThrow(/traverses symlink|escapes/i);
+      })).toThrow(/traverses symlink|escapes|illegal link target/i);
       expect(fs.existsSync(path.join(agentsDir, 'pwned.txt'))).toBe(false);
 
       // Verify OCI manifest SHA-256 and config digest checks
