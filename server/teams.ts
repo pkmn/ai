@@ -196,14 +196,28 @@ function normalizeCanonicalPacked(rawTeam: string, format: string): string {
   return trimmed;
 }
 
+function defaultLevelForFormat(format: string): number {
+  const clean = toID(format);
+  return clean.includes('vgc') || clean.includes('bss') || clean.includes('champions') ? 50 : 100;
+}
+
 function canonicalDedupeKey(canonicalPacked: string, format: string): string {
   try {
-    const dex = teams.getDex(format);
+    const cleanFormat = toID(format);
+    const dex = teams.getDex(cleanFormat);
+    const defaultLevel = defaultLevelForFormat(cleanFormat);
     const imported = Team.import(canonicalPacked, dex);
     const raw = (imported?.team || []).filter(s => s?.moves?.length);
     if (raw.length > 0) {
       for (const s of raw) {
         s.species = dex.species.get(teams.canonSpecies(dex, s.species)).name;
+        // Strip shiny, gender, and over-50 levels strictly for cross-competitor deduplication
+        // while keeping them intact on `canonicalPacked` for legality and battle mechanics.
+        s.shiny = undefined;
+        s.gender = undefined;
+        if (defaultLevel === 50 && (s.level ?? defaultLevel) > defaultLevel) {
+          s.level = defaultLevel;
+        }
       }
       const sets = Team.canonicalize(raw, dex);
       return new Team(sets, dex).pack();
@@ -538,11 +552,49 @@ export function splitSubmittedTeams(raw: string | string[]): string[] {
   return [trimmed];
 }
 
+function maxLegalMovesForSpecies(validator: sim.TeamValidator, set: Partial<PokemonSet>): number {
+  const simDex = validator.dex;
+  const sp = simDex.species.get(set.species || set.name);
+  if (!sp.exists) return 4;
+  let cur: sim.Species | undefined = sp;
+  const seen = new Set<string>();
+  const candidates = new Set<string>();
+  while (cur && cur.exists && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const data = simDex.species.getLearnsetData(cur.id);
+    if (data?.learnset) {
+      for (const m of Object.keys(data.learnset)) candidates.add(m);
+    }
+    const nextId: string | undefined = cur.prevo || cur.changesFrom;
+    cur = nextId ? simDex.species.get(nextId) : undefined;
+  }
+  const simSet = set as sim.PokemonSet;
+  const sketch = simDex.moves.get('sketch');
+  if (
+    candidates.has('sketch') &&
+    !validator.checkMove(simSet, sketch, {}) &&
+    !validator.checkCanLearn(sketch, sp)
+  ) {
+    return 4;
+  }
+  let count = 0;
+  for (const m of candidates) {
+    const move = simDex.moves.get(m);
+    if (!move.exists || validator.checkMove(simSet, move, {})) continue;
+    if (!validator.checkCanLearn(move, sp)) {
+      count++;
+      if (count >= 4) return 4;
+    }
+  }
+  return count;
+}
+
 function validateAndCanonicalizeSingleTeam(
   dex: ModdedDex,
   validator: sim.TeamValidator,
   rawTeam: string,
-  teamIndex: number
+  teamIndex: number,
+  options?: {requireFullMoveset?: boolean; defaultLevel?: number}
 ): {canonicalPacked: string; uniquenessSets: Partial<PokemonSet>[]; speciesSet: Set<string>} {
   const label = `Team #${teamIndex + 1}`;
   const imported = Team.import(rawTeam.trim(), dex);
@@ -562,16 +614,33 @@ function validateAndCanonicalizeSingleTeam(
     throw new Error(`${label} is illegal in ${validator.format.name}: ${problems.join('; ')}`);
   }
 
+  // Prevent move-deletion gaming of `dMoves` on competitor-submitted `pools` rosters by requiring
+  // 4 distinct moves unless the species has fewer than 4 legal moves in the format (e.g. Ditto).
+  if (options?.requireFullMoveset) {
+    for (const s of rawSets) {
+      const distinctMoves = new Set((s.moves ?? []).map(m => toID(m)).filter(Boolean));
+      if (distinctMoves.size < 4) {
+        const required = maxLegalMovesForSpecies(validator, s);
+        if (distinctMoves.size < required) {
+          const spName = dex.species.get(s.species || s.name || '').name || 'Pokémon';
+          throw new Error(
+            `${label}: ${spName} must have ${required} moves (found ${distinctMoves.size}).`
+          );
+        }
+      }
+    }
+  }
+
   // `@pkmn/sets` `Team.canonicalize` sorts all 6 team slots and 4 move slots into a deterministic
   // canonical order for packed storage (neutralizing Team Preview slot-order watermarking) and
-  // preserves explicit under-leveled sets (`s.level = s.level || (champions ? 50 : 100)`), while
-  // intentionally preserving non-`battleOnly` visual/cosmetic formes (e.g. Gastrodon-East,
-  // Sinistcha-Masterpiece, Maushold-Four) for battle presentation. For 1-NN uniqueness checking
-  // and cross-competitor pool ownership deduplication, `canonSpecies` collapses cosmetic and
-  // mechanically identical formes to their base species ID.
+  // preserves explicit under-leveled sets (`s.level = s.level || (champions ? 50 : 100)`), `shiny`,
+  // `gender`, and non-`battleOnly` visual/cosmetic formes (e.g. Gastrodon-East,
+  // Sinistcha-Masterpiece, Maushold-Four) for legality and battle mechanics. For 1-NN uniqueness
+  // checking and cross-competitor pool ownership deduplication, `canonSpecies` collapses cosmetic
+  // and ability-identical formes to their base species ID.
   const canonicalSets = Team.canonicalize(structuredClone(rawSets), dex);
   const canonicalPacked = new Team(canonicalSets, dex).pack();
-  const entry = toUniquenessEntry(dex, canonicalSets, label);
+  const entry = toUniquenessEntry(dex, canonicalSets, label, options?.defaultLevel);
 
   return {
     canonicalPacked,
@@ -583,11 +652,17 @@ function validateAndCanonicalizeSingleTeam(
 function toUniquenessEntry(
   dex: ModdedDex,
   sets: Partial<PokemonSet>[],
-  id: string
+  id: string,
+  defaultLevel?: number
 ): PoolEntry {
   const uniquenessSets = structuredClone(sets);
   for (const s of uniquenessSets) {
     s.species = teams.canonSpecies(dex, s.species);
+    s.shiny = undefined;
+    s.gender = undefined;
+    if (defaultLevel === 50 && (s.level ?? 50) > 50) {
+      s.level = 50;
+    }
   }
   const speciesSet = new Set(uniquenessSets.map(s => String(s.species ?? '')));
   return {id, sets: uniquenessSets, speciesSet};
@@ -637,10 +712,7 @@ export function validateCompetitorTeams(
   const format = toID(options.format);
   const dex = teams.getDex(format);
   const validator = getValidator(format);
-  const defaultLevel =
-    format.includes('vgc') || format.includes('bss') || format.includes('champions')
-      ? 50
-      : 100;
+  const defaultLevel = defaultLevelForFormat(format);
 
   const chunks = splitSubmittedTeams(rawInput);
   if (chunks.length !== expectedCount) {
@@ -658,7 +730,8 @@ export function validateCompetitorTeams(
       dex,
       validator,
       chunks[i],
-      i
+      i,
+      {requireFullMoveset: true, defaultLevel}
     );
 
     if (workingPool.length > 0) {
@@ -715,10 +788,7 @@ export function validateCompetitorTeamsIncremental(
   const format = toID(options.format);
   const dex = teams.getDex(format);
   const validator = getValidator(format);
-  const defaultLevel =
-    format.includes('vgc') || format.includes('bss') || format.includes('champions')
-      ? 50
-      : 100;
+  const defaultLevel = defaultLevelForFormat(format);
 
   const refPool = loadReferencePool(format, options.pools);
   const workingPool: PoolEntry[] = [...refPool];
@@ -728,7 +798,7 @@ export function validateCompetitorTeamsIncremental(
 
   for (let i = 0; i < existingSavedPacked.length; i++) {
     const sets = teams.parseTeam(dex, existingSavedPacked[i]);
-    workingPool.push(toUniquenessEntry(dex, sets, `saved-team-${i + 1}`));
+    workingPool.push(toUniquenessEntry(dex, sets, `saved-team-${i + 1}`, defaultLevel));
   }
 
   const chunks = splitSubmittedTeams(rawInput);
@@ -743,7 +813,8 @@ export function validateCompetitorTeamsIncremental(
         dex,
         validator,
         boundedChunks[i],
-        i
+        i,
+        {requireFullMoveset: true, defaultLevel}
       );
 
       // Re-uploading a full .txt after replacing bad teams keeps already-saved distinct teams,

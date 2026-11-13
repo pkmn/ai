@@ -69,12 +69,10 @@ export function sameSpeciesCap(dex: ModdedDex): number {
 /**
  * Collapses cosmetic and mechanically identical formes (e.g. Gastrodon-East -> Gastrodon,
  * Keldeo-Resolute -> Keldeo, Sinistcha-Masterpiece -> Sinistcha, Maushold-Four -> Maushold,
- * Greninja-Bond -> Greninja, Toxtricity-Low-Key -> Toxtricity, Squawkabilly-Yellow/White/Blue ->
- * Squawkabilly, Basculin-Blue/White-Striped -> Basculin, Rockruff-Dusk -> Rockruff) to their
- * base species ID. Any non-battleOnly forme sharing `baseSpecies`, `baseStats`, and `types` with
- * its base species collapses to `base.id` so cosmetic or ability-slot variants cannot inflate
- * species distance (+1.0); if two sets choose different abilities, `setDistance` still charges
- * the ability weight (`wAbil`).
+ * Squawkabilly-Blue -> Squawkabilly, Dudunsparce-Three-Segment -> Dudunsparce) to their base
+ * species ID while preserving formes with distinct ability tables or battleOnly status (e.g.
+ * Meowstic-F, Toxtricity-Low-Key, Squawkabilly-Yellow/White, Basculin-Blue/White-Striped,
+ * Greninja-Bond, Rockruff-Dusk).
  */
 export function canonSpecies(dex: ModdedDex, speciesId?: string): ID {
   if (!speciesId) return toID(speciesId);
@@ -82,9 +80,11 @@ export function canonSpecies(dex: ModdedDex, speciesId?: string): ID {
   const base = dex.species.get(sp.baseSpecies);
   if (
     base.cosmeticFormes?.includes(sp.name) ||
-    (STATS.every(st => sp.baseStats[st] === base.baseStats[st]) &&
+    (!sp.battleOnly &&
+      STATS.every(st => sp.baseStats[st] === base.baseStats[st]) &&
       sp.types.length === base.types.length &&
-      sp.types.every((t, i) => t === base.types[i]))
+      sp.types.every((t, i) => t === base.types[i]) &&
+      (['0', '1', 'H', 'S'] as const).every(k => sp.abilities[k] === base.abilities[k]))
   ) {
     return base.id;
   }
@@ -193,7 +193,7 @@ function getStatVector(
   const sp = dex.species.get(set.species!);
   const nat = dex.gen >= 3 ? dex.natures.get(set.nature || 'serious') : undefined;
   const isChamp = Boolean((dex as {modid?: string}).modid?.startsWith('champions'));
-  const level = set.level || defaultLevel;
+  const level = defaultLevel === 50 ? Math.min(set.level || 50, 50) : (set.level || defaultLevel);
   const defaultEv = dex.gen < 3 ? 252 : 0;
   const vec = {} as Record<StatID, number>;
   for (const st of STATS) {
