@@ -5,8 +5,9 @@ import * as path from 'path';
 import * as querystring from 'querystring';
 import {promisify} from 'util';
 
+import * as djot from '@djot/djot';
+import katex from 'katex';
 import polka from 'polka';
-import * as site from 'site';
 import * as yaml from 'yaml';
 
 import * as db from '../db';
@@ -181,7 +182,7 @@ function renderPageHtml(opts: {
   return renderer.render({
     id: opts.id ?? 'wiki',
     title: `${opts.title} | pkmn.ai`,
-    header: injectLiveBanner(header(opts.heading), opts.liveTournament),
+    header: injectLiveBanner(header(escapeHtml(opts.heading)), opts.liveTournament),
     path: opts.path,
     style: STYLE,
     content: opts.content,
@@ -204,16 +205,15 @@ function wikiNav(slug: string, active: 'view' | 'edit' | 'history' | 'pages'): s
   </nav>`;
 }
 
-const UNSAFE_URI_SCHEME = /^(?:javascript|vbscript|data):/i;
-const DANGEROUS_ATTR_NAMES = new Set([
-  'srcdoc',
-  'formaction',
-  'style',
-  'ping',
-  'background',
-  'dynsrc',
-  'lowsrc',
-]);
+const SMART_PUNCTUATION: Record<djot.SmartPunctuationType, string> = {
+  left_single_quote: '\u2018',
+  right_single_quote: '\u2019',
+  left_double_quote: '\u201c',
+  right_double_quote: '\u201d',
+  ellipses: '\u2026',
+  em_dash: '\u2014',
+  en_dash: '\u2013',
+};
 
 function decodeHtmlEntities(raw: string): string {
   return raw
@@ -221,113 +221,320 @@ function decodeHtmlEntities(raw: string): string {
       const code = parseInt(hex, 16);
       return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
         ? String.fromCodePoint(code)
-        : '';
+        : '\ufffd';
     })
     .replace(/&#([0-9]+);?/g, (_, dec) => {
       const code = parseInt(dec, 10);
       return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
         ? String.fromCodePoint(code)
-        : '';
+        : '\ufffd';
     })
     .replace(/&colon;/gi, ':')
     .replace(/&tab;/gi, '\t')
     .replace(/&newline;/gi, '\n');
 }
 
-function isSafeWikiUri(raw: string | undefined): boolean {
-  if (!raw) return true;
+function resolveWikiHref(raw: string | undefined): string {
+  if (!raw) return '#';
+  const trimmed = raw.trim();
+  if (!trimmed) return '#';
   // eslint-disable-next-line no-control-regex
-  const normalized = decodeHtmlEntities(raw).replace(/[\x00-\x20]+/g, '');
-  return !UNSAFE_URI_SCHEME.test(normalized);
+  const decoded = decodeHtmlEntities(trimmed).replace(/[\x00-\x20]+/g, '');
+  if (!decoded || decoded.includes('\ufffd')) return '#';
+  if (decoded.startsWith('#')) return trimmed;
+  if (decoded.startsWith('/')) {
+    return decoded.startsWith('//') ? '#' : trimmed;
+  }
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(decoded);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    return (scheme === 'https' || scheme === 'http') && /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : '#';
+  }
+  if (decoded.includes(':')) return '#';
+  const [p, hash] = trimmed.split('#');
+  const clean = normalizeSlug(p.replace(/\.dj$/, ''));
+  if (!clean) return hash ? `#${hash}` : '#';
+  return `/wiki/${encodeSlug(clean)}${hash ? `#${hash}` : ''}`;
 }
 
-export function sanitizeWikiHtml(html: string): string {
-  const withoutBlocks = html
-    .replace(
-      /<(script|iframe|object|embed|style|svg|form|applet|template)\b[^>]*>[\s\S]*?<\/\1>/gi,
-      ''
-    )
-    .replace(
-      // eslint-disable-next-line max-len
-      /<\/?(?:script|iframe|object|embed|style|svg|form|applet|template|base|meta|link|input|button|textarea|select)\b(?:\s+(?:[^>"']|"[^"]*"|'[^']*'))*\s*\/?>/gi,
-      ''
-    );
-
-  return withoutBlocks.replace(
-    /<([a-zA-Z][a-zA-Z0-9:-]*)(\s(?:[^>"']|"[^"]*"|'[^']*')*)?>/g,
-    (full, tag: string, attrs: string | undefined) => {
-      if (!attrs) return full;
-      const selfClose = attrs.trimEnd().endsWith('/') ? '/' : '';
-      const attrBody = selfClose ? attrs.replace(/\/\s*$/, '') : attrs;
-      const cleaned = attrBody.replace(
-        /\s+([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,
-        (_attrMatch, name: string, dq?: string, sq?: string, uq?: string) => {
-          const lower = name.toLowerCase();
-          if (lower.startsWith('on') || DANGEROUS_ATTR_NAMES.has(lower)) return '';
-          const rawVal = dq ?? sq ?? uq;
-          if (rawVal === undefined) return ` ${name}`;
-          if (lower === 'href' || lower === 'src' || lower === 'xlink:href' || lower === 'action') {
-            if (!isSafeWikiUri(rawVal)) return ` ${name}="#"`;
-          }
-          const safeVal = rawVal
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-          return ` ${name}="${safeVal}"`;
-        }
-      );
-      return `<${tag}${cleaned}${selfClose}>`;
+function extractPlainText(node: djot.AstNode): string {
+  const parts: string[] = [];
+  const walk = (cur: djot.AstNode) => {
+    if ('text' in cur) {
+      parts.push(cur.text);
+    } else if (cur.tag === 'soft_break' || cur.tag === 'hard_break') {
+      parts.push('\n');
+    } else if ('children' in cur) {
+      for (const child of cur.children) walk(child);
     }
-  );
+  };
+  walk(node);
+  return parts.join('');
 }
 
+function renderSafeMath(tex: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(tex, {
+      output: 'mathml',
+      displayMode,
+      trust: false,
+      strict: 'ignore',
+      throwOnError: true,
+    });
+  } catch {
+    return `<code>${escapeHtml(tex)}</code>`;
+  }
+}
+
+// Locked-down rich-text Djot AST renderer for user-authored wiki pages:
+//   - Drops all raw HTML (`raw_block`, `raw_inline`) and external `<img>` beacons at the AST level
+//   - Ignores all user-supplied Djot `{...}` attributes (`id`, `class`, `onclick`, `style`, etc.)
+//   - Allows only `https://`, `http://`, `/...`, `#...`, and relative wiki links on `<a>`
+//   - Escapes all text and code blocks directly via `escapeHtml` with no post-hoc regex sanitizer
 export function renderDjot(raw: string, save?: {title?: string; summary?: string}): string {
   const {content} = parsePageContent(raw);
-  const rendered = site.html.render(content, {
-    save,
-    overrides: {
-      raw_block: () => '',
-      raw_inline: () => '',
-      image: (node, r) => {
-        if (!isSafeWikiUri(node.destination)) node.destination = '';
-        return r.renderAstNodeDefault(node);
-      },
-      link: (node, r) => {
-        const dest = node.destination;
-        if (!isSafeWikiUri(dest)) {
-          node.destination = '#';
-        } else if (
-          dest &&
-          !dest.startsWith('/') &&
-          !dest.startsWith('#') &&
-          !/^[a-zA-Z]+:/.test(dest)
-        ) {
-          const [p, hash] = dest.split('#');
-          const clean = normalizeSlug(p.replace(/\.dj$/, ''));
-          node.destination = `/wiki/${encodeSlug(clean)}${hash ? `#${hash}` : ''}`;
+  const doc = djot.parse(content);
+  const usedIds = new Set<string>();
+  const footnoteOrder: string[] = [];
+  const footnoteIndex = new Map<string, number>();
+
+  const uniqueHeadingId = (text: string): string | undefined => {
+    const base = slugify(text).toLowerCase();
+    if (!base) return undefined;
+    let candidate = base;
+    let n = 2;
+    while (usedIds.has(candidate)) {
+      candidate = `${base}-${n++}`;
+    }
+    usedIds.add(candidate);
+    return candidate;
+  };
+
+  const resolveLinkNodeHref = (node: djot.Link): string => {
+    if (node.destination !== undefined) return resolveWikiHref(node.destination);
+    if (node.reference !== undefined) {
+      const ref = doc.references[node.reference] ?? doc.autoReferences[node.reference];
+      return resolveWikiHref(ref?.destination);
+    }
+    return '#';
+  };
+
+  const renderInlines = (nodes: djot.Inline[]): string => nodes.map(renderInline).join('');
+
+  const renderInline = (node: djot.Inline): string => {
+    switch (node.tag) {
+      case 'str':
+        return escapeHtml(node.text);
+      case 'soft_break':
+        return '\n';
+      case 'hard_break':
+        return '<br>\n';
+      case 'non_breaking_space':
+        return '&nbsp;';
+      case 'smart_punctuation':
+        return escapeHtml(SMART_PUNCTUATION[node.type] ?? node.text);
+      case 'symb':
+        return escapeHtml(`:${node.alias}:`);
+      case 'verbatim':
+        return `<code>${escapeHtml(node.text)}</code>`;
+      case 'raw_inline':
+        return '';
+      case 'inline_math':
+        return renderSafeMath(node.text, false);
+      case 'display_math':
+        return renderSafeMath(node.text, true);
+      case 'url': {
+        const href = resolveWikiHref(node.text);
+        return `<a href="${escapeHtml(href)}">${escapeHtml(node.text)}</a>`;
+      }
+      case 'email':
+        return escapeHtml(node.text);
+      case 'footnote_reference': {
+        if (!doc.footnotes[node.text]) return escapeHtml(`[^${node.text}]`);
+        let idx = footnoteIndex.get(node.text);
+        if (idx === undefined) {
+          footnoteOrder.push(node.text);
+          idx = footnoteOrder.length;
+          footnoteIndex.set(node.text, idx);
         }
-        return r.renderAstNodeDefault(node);
-      },
-    },
-  });
-  return sanitizeWikiHtml(rendered);
+        return `<sup id="fnref-${idx}"><a href="#fn-${idx}">[${idx}]</a></sup>`;
+      }
+      case 'emph':
+        return `<em>${renderInlines(node.children)}</em>`;
+      case 'strong':
+        return `<strong>${renderInlines(node.children)}</strong>`;
+      case 'link':
+        return `<a href="${escapeHtml(resolveLinkNodeHref(node))}">` +
+          `${renderInlines(node.children)}</a>`;
+      case 'image':
+        return renderInlines(node.children);
+      case 'span':
+        return renderInlines(node.children);
+      case 'mark':
+        return `<mark>${renderInlines(node.children)}</mark>`;
+      case 'superscript':
+        return `<sup>${renderInlines(node.children)}</sup>`;
+      case 'subscript':
+        return `<sub>${renderInlines(node.children)}</sub>`;
+      case 'insert':
+        return `<ins>${renderInlines(node.children)}</ins>`;
+      case 'delete':
+        return `<del>${renderInlines(node.children)}</del>`;
+      case 'double_quoted':
+        return `\u201c${renderInlines(node.children)}\u201d`;
+      case 'single_quoted':
+        return `\u2018${renderInlines(node.children)}\u2019`;
+    }
+  };
+
+  const renderListItemBlocks = (blocks: djot.Block[], tight: boolean): string => {
+    if (tight && blocks.length === 1 && blocks[0].tag === 'para') {
+      return renderInlines(blocks[0].children);
+    }
+    return `\n${renderBlocks(blocks)}`;
+  };
+
+  const renderBlocks = (blocks: djot.Block[], sectionId?: string): string =>
+    blocks.map(b => renderBlock(b, sectionId)).join('');
+
+  const renderBlock = (node: djot.Block, sectionId?: string): string => {
+    switch (node.tag) {
+      case 'para':
+        if (save && !save.summary) save.summary = extractPlainText(node).trim();
+        return `<p>${renderInlines(node.children)}</p>\n`;
+      case 'heading': {
+        if (node.level === 1 && save && save.title === undefined) {
+          save.title = extractPlainText(node).trim();
+          return '';
+        }
+        const level = Math.min(6, Math.max(2, node.level));
+        const inner = renderInlines(node.children);
+        const anchorId = sectionId ?? uniqueHeadingId(extractPlainText(node));
+        return anchorId
+          ? `<h${level}><a href="#${escapeHtml(anchorId)}" class="subtle">` +
+            `${inner}</a></h${level}>\n`
+          : `<h${level}>${inner}</h${level}>\n`;
+      }
+      case 'thematic_break':
+        return '<hr>\n';
+      case 'section': {
+        const firstHeading = node.children.find(
+          (c): c is djot.Heading => c.tag === 'heading'
+        );
+        if (firstHeading?.level === 1) {
+          return renderBlocks(node.children);
+        }
+        const secId = firstHeading ? uniqueHeadingId(extractPlainText(firstHeading)) : undefined;
+        const inner = renderBlocks(node.children, secId);
+        return secId
+          ? `<section id="${escapeHtml(secId)}">\n${inner}</section>\n`
+          : `<section>\n${inner}</section>\n`;
+      }
+      case 'div':
+        return renderBlocks(node.children);
+      case 'code_block':
+        return `<figure class="code"><pre><code>${escapeHtml(node.text.trimEnd())}</code>` +
+          '</pre></figure>\n';
+      case 'raw_block':
+        return '';
+      case 'block_quote':
+        return '<figure class="blockquote"><blockquote>\n' +
+          `${renderBlocks(node.children)}</blockquote></figure>\n`;
+      case 'bullet_list':
+        return '<ul>\n' +
+          node.children.map(li => `<li>${renderListItemBlocks(li.children, node.tight)}</li>\n`)
+            .join('') +
+          '</ul>\n';
+      case 'ordered_list': {
+        const start = node.start !== undefined && node.start !== 1
+          ? ` start="${Number(node.start)}"`
+          : '';
+        return `<ol${start}>\n` +
+          node.children.map(li => `<li>${renderListItemBlocks(li.children, node.tight)}</li>\n`)
+            .join('') +
+          '</ol>\n';
+      }
+      case 'task_list':
+        return '<ul class="task-list">\n' +
+          node.children.map(li => {
+            const box = li.checkbox === 'checked' ? '\u2611 ' : '\u2610 ';
+            return `<li>${box}${renderListItemBlocks(li.children, node.tight)}</li>\n`;
+          }).join('') +
+          '</ul>\n';
+      case 'definition_list':
+        return '<dl>\n' +
+          node.children.map(item =>
+            `<dt>${renderInlines(item.children[0].children)}</dt>\n` +
+            `<dd>\n${renderBlocks(item.children[1].children)}</dd>\n`)
+            .join('') +
+          '</dl>\n';
+      case 'table': {
+        const [caption, ...rows] = node.children;
+        const captionHtml = caption.children.length
+          ? `<caption>${renderInlines(caption.children)}</caption>\n`
+          : '';
+        const rowsHtml = rows.map(row => {
+          const cells = row.children.map(cell => {
+            const tag = cell.head ? 'th' : 'td';
+            return `<${tag}>${renderInlines(cell.children)}</${tag}>`;
+          }).join('');
+          return `<tr>${cells}</tr>\n`;
+        }).join('');
+        return `<table>\n${captionHtml}${rowsHtml}</table>\n`;
+      }
+    }
+  };
+
+  let html = renderBlocks(doc.children);
+  if (footnoteOrder.length > 0) {
+    const items: string[] = [];
+    for (let i = 0; i < footnoteOrder.length; i++) {
+      const label = footnoteOrder[i];
+      const fn = doc.footnotes[label];
+      if (!fn) continue;
+      const num = i + 1;
+      items.push(
+        `<li id="fn-${num}">\n${renderBlocks(fn.children)}` +
+        `<p><a href="#fnref-${num}">\u21a9</a></p></li>\n`
+      );
+    }
+    if (items.length > 0) {
+      html += `<section class="footnotes"><hr>\n<ol>\n${items.join('')}</ol></section>\n`;
+    }
+  }
+  return html;
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let settled = false;
     req.on('data', (chunk: Buffer) => {
+      if (settled) return;
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        req.destroy();
+        settled = true;
+        req.resume();
         reject(Object.assign(new Error('Payload Too Large'), {status: 413}));
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (!settled) {
+        settled = true;
+        resolve(Buffer.concat(chunks).toString('utf8'));
+      }
+    });
+    req.on('error', err => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
   });
 }
 
@@ -370,6 +577,7 @@ export class Wiki {
   readonly wikiDir: string;
   readonly projectsFile: string;
   readonly auth: auth.Auth;
+  private readonly db?: db.Database;
   private readonly configuredAdmins: string[];
   private readonly configuredAuthors: Record<string, string>;
   private readonly shouldPush: boolean;
@@ -386,6 +594,7 @@ export class Wiki {
   constructor(options: Options = {}) {
     this.wikiDir = options.wikiDir ?? WIKI_DIR;
     this.projectsFile = options.projectsFile ?? PROJECTS;
+    this.db = options.db;
     this.configuredAdmins = options.admins ?? ADMINS;
     this.configuredAuthors = options.authors ?? AUTHORS;
     this.auth = options.auth ?? new auth.Auth({
@@ -463,6 +672,15 @@ export class Wiki {
     return this.getProjectPage(slug) !== undefined;
   }
 
+  private isBlockedInDb(lowerLogin: string): boolean {
+    if (!this.db) return false;
+    const dev = this.db.getDeveloperByGitHub(lowerLogin);
+    if (!dev) return false;
+    if (dev.smogonStanding === 'bad') return true;
+    const agent = this.db.getAgentById(dev.agentId);
+    return agent?.status === 'disabled';
+  }
+
   isAdmin(login: string | undefined): boolean {
     if (!login) return false;
     this.refreshMetadata();
@@ -472,7 +690,10 @@ export class Wiki {
   isDeveloper(login: string | undefined): boolean {
     if (!login) return false;
     this.refreshMetadata();
-    return this.authorizedUsers.has(login.toLowerCase());
+    const lower = login.toLowerCase();
+    if (this.adminUsers.has(lower)) return true;
+    if (!this.authorizedUsers.has(lower)) return false;
+    return !this.isBlockedInDb(lower);
   }
 
   getPageVisibility(slug: string): PageVisibility {
@@ -496,6 +717,7 @@ export class Wiki {
     this.refreshMetadata();
     const lower = login.toLowerCase();
     if (this.adminUsers.has(lower)) return true;
+    if (this.isBlockedInDb(lower)) return false;
     if (!slug) return this.authorizedUsers.has(lower);
     const project = this.getProjectPage(slug);
     if (project) return project.owners.has(lower);
@@ -507,7 +729,7 @@ export class Wiki {
   }
 
   getSessionUser(req: http.IncomingMessage): string | undefined {
-    return this.auth.getSession(req)?.github?.login;
+    return this.auth.getGitHubUser(req);
   }
 
   pagePath(slug: string): string {
@@ -964,96 +1186,108 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   });
 
   app.get('/wiki/:page/history', async (req, res) => {
-    const slug = resolveOrRedirect(res, slugParam(req.params.page), '/history');
-    if (!slug) return;
-    if (!requireReadAuth(req, res, slug)) return;
-    const encoded = encodeSlug(slug);
-    const revisions = await wiki.getHistory(slug);
-    const rows = revisions.map(rev => {
-      const date = new Date(rev.timestamp * 1000).toISOString().slice(0, 10);
-      const revUrl = `/wiki/${escapeHtml(encoded)}/${rev.sha}`;
-      const revLink = `<code><a href="${revUrl}">${rev.shortSha}</a></code>`;
-      const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
-      const displayAuthor = escapeHtml(wiki.formatAuthor(rev.author));
-      const authorLink = `<a href="${ghUrl}" class="subtle">${displayAuthor}</a>`;
-      return `<tr>
-        <td class="wiki-meta">${date}</td>
-        <td>${revLink} (<a href="${revUrl}?diff=1">diff</a>)</td>
-        <td>${authorLink}</td>
-        <td>${escapeHtml(rev.subject)}</td>
-      </tr>`;
-    }).join('');
-    const headerRow = '<tr><th>Date</th><th>Revision</th><th>Author</th><th>Summary</th></tr>';
-    const table = revisions.length
-      ? `<table>${headerRow}${rows}</table>`
-      : '<p>No history for this page yet.</p>';
-    const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
-    const heading = `History — ${displayTitle}`;
-    sendHtml(res, 200, renderPage({
-      title: heading,
-      heading,
-      path: `/wiki/${encoded}/history/`,
-      nav: wikiNav(slug, 'history'),
-      content: table,
-    }));
+    try {
+      const slug = resolveOrRedirect(res, slugParam(req.params.page), '/history');
+      if (!slug) return;
+      if (!requireReadAuth(req, res, slug)) return;
+      const encoded = encodeSlug(slug);
+      const revisions = await wiki.getHistory(slug);
+      const rows = revisions.map(rev => {
+        const date = new Date(rev.timestamp * 1000).toISOString().slice(0, 10);
+        const revUrl = `/wiki/${escapeHtml(encoded)}/${rev.sha}`;
+        const revLink = `<code><a href="${revUrl}">${rev.shortSha}</a></code>`;
+        const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
+        const displayAuthor = escapeHtml(wiki.formatAuthor(rev.author));
+        const authorLink = `<a href="${ghUrl}" class="subtle">${displayAuthor}</a>`;
+        return `<tr>
+          <td class="wiki-meta">${date}</td>
+          <td>${revLink} (<a href="${revUrl}?diff=1">diff</a>)</td>
+          <td>${authorLink}</td>
+          <td>${escapeHtml(rev.subject)}</td>
+        </tr>`;
+      }).join('');
+      const headerRow = '<tr><th>Date</th><th>Revision</th><th>Author</th><th>Summary</th></tr>';
+      const table = revisions.length
+        ? `<table>${headerRow}${rows}</table>`
+        : '<p>No history for this page yet.</p>';
+      const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
+      const heading = `History — ${displayTitle}`;
+      sendHtml(res, 200, renderPage({
+        title: heading,
+        heading,
+        path: `/wiki/${encoded}/history/`,
+        nav: wikiNav(slug, 'history'),
+        content: table,
+      }));
+    } catch (err) {
+      console.error('Error rendering wiki history:', err);
+      if (!res.headersSent) sendError(res, 500, '<p>Internal Server Error</p>');
+    }
   });
 
   app.get('/wiki/:page/:sha', async (req, res) => {
-    const rawSlug = slugParam(req.params.page);
-    const sha = param(req.params.sha);
-    if (!isValidSlug(rawSlug) || !SHA_RE.test(sha)) {
-      sendError(res, 404, '<p>Revision not found.</p>');
-      return;
-    }
-    const showDiff = req.query.diff === '1';
-    const slug = resolveOrRedirect(res, rawSlug, `/${sha}${showDiff ? '?diff=1' : ''}`);
-    if (!slug) return;
-    if (!requireReadAuth(req, res, slug)) return;
-
-    const encoded = encodeSlug(slug);
-    const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
-    if (showDiff) {
-      const diff = await wiki.getRevisionDiff(slug, sha);
-      if (diff === undefined) {
+    try {
+      const rawSlug = slugParam(req.params.page);
+      const sha = param(req.params.sha);
+      if (!isValidSlug(rawSlug) || !SHA_RE.test(sha)) {
         sendError(res, 404, '<p>Revision not found.</p>');
         return;
       }
-      const maxTicks = Math.max(
-        3,
-        ...Array.from(diff.matchAll(/`+/g), m => m[0].length + 1)
-      );
-      const fence = '`'.repeat(maxTicks);
-      const renderedDiff = renderDjot(`${fence}diff\n${diff}\n${fence}`);
-      const heading = `${displayTitle} @ ${sha.slice(0, 7)}`;
-      const snapLink =
-        `<p class="wiki-meta"><a href="/wiki/${escapeHtml(encoded)}/${sha}">View snapshot</a></p>`;
+      const showDiff = req.query.diff === '1';
+      const slug = resolveOrRedirect(res, rawSlug, `/${sha}${showDiff ? '?diff=1' : ''}`);
+      if (!slug) return;
+      if (!requireReadAuth(req, res, slug)) return;
+
+      const encoded = encodeSlug(slug);
+      const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
+      if (showDiff) {
+        const diff = await wiki.getRevisionDiff(slug, sha);
+        if (diff === undefined) {
+          sendError(res, 404, '<p>Revision not found.</p>');
+          return;
+        }
+        let maxTicks = 3;
+        for (const m of diff.matchAll(/`+/g)) {
+          if (m[0].length + 1 > maxTicks) maxTicks = m[0].length + 1;
+        }
+        const fence = '`'.repeat(maxTicks);
+        const renderedDiff = renderDjot(`${fence}diff\n${diff}\n${fence}`);
+        const heading = `${displayTitle} @ ${sha.slice(0, 7)}`;
+        const snapLink =
+          `<p class="wiki-meta"><a href="/wiki/${escapeHtml(encoded)}/${sha}">` +
+          'View snapshot</a></p>';
+        sendHtml(res, 200, renderPage({
+          title: heading,
+          heading,
+          path: `/wiki/${encoded}/${sha}/`,
+          nav: wikiNav(slug, 'history'),
+          content: `${snapLink}${renderedDiff}`,
+        }));
+        return;
+      }
+
+      const raw = await wiki.getRevisionContent(slug, sha);
+      if (raw === undefined) {
+        sendError(res, 404, '<p>Revision not found.</p>');
+        return;
+      }
+      const meta: {title?: string; summary?: string} = {};
+      const html = renderDjot(raw, meta);
+      const heading = `${meta.title ?? displayTitle} @ ${sha.slice(0, 7)}`;
+      const diffLink =
+        `<p class="wiki-meta"><a href="/wiki/${escapeHtml(encoded)}/${sha}?diff=1">` +
+        'View diff</a></p>';
       sendHtml(res, 200, renderPage({
         title: heading,
         heading,
         path: `/wiki/${encoded}/${sha}/`,
         nav: wikiNav(slug, 'history'),
-        content: `${snapLink}${renderedDiff}`,
+        content: `${diffLink}${html}`,
       }));
-      return;
+    } catch (err) {
+      console.error('Error rendering wiki revision:', err);
+      if (!res.headersSent) sendError(res, 500, '<p>Internal Server Error</p>');
     }
-
-    const raw = await wiki.getRevisionContent(slug, sha);
-    if (raw === undefined) {
-      sendError(res, 404, '<p>Revision not found.</p>');
-      return;
-    }
-    const meta: {title?: string; summary?: string} = {};
-    const html = renderDjot(raw, meta);
-    const heading = `${meta.title ?? displayTitle} @ ${sha.slice(0, 7)}`;
-    const diffLink =
-      `<p class="wiki-meta"><a href="/wiki/${escapeHtml(encoded)}/${sha}?diff=1">View diff</a></p>`;
-    sendHtml(res, 200, renderPage({
-      title: heading,
-      heading,
-      path: `/wiki/${encoded}/${sha}/`,
-      nav: wikiNav(slug, 'history'),
-      content: `${diffLink}${html}`,
-    }));
   });
 
   return wiki;

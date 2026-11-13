@@ -96,39 +96,64 @@ describe('wiki helpers', () => {
     expect(wiki.isValidSlug('.hidden')).toBe(false);
   });
 
-  test('renderDjot strips raw HTML blocks, inline HTML, event handlers, and unsafe URIs', () => {
+  test('renderDjot enforces locked-down AST subset without raw HTML, attrs, or beacons', () => {
     const raw = [
-      '# Security Test',
+      '# <script>alert(0)</script>',
       '',
       '```=html',
       '<script>fetch("/chat/logs/token")</script>',
       '<iframe src="https://evil.example"></iframe>',
       '```',
       '',
+      '```console',
+      '$ <script>alert("console")</script>',
+      '```',
+      '',
+      '```nonexistentlang',
+      '<svg onload="evil()">',
+      '```',
+      '',
       'Inline `<img src=x onerror=alert(1)>`{=html} and [link](javascript:alert(1)).',
       '',
-      '[Attr link](/wiki/gen9ou){onclick="alert(1)" onmouseover="alert(2)" style="color:red"}',
+      '[Slash tag](/wiki/gen9ou){onclick="alert(1)" onmouseover="alert(2)" style="color:red"}',
       '',
       '[Angle attr](/wiki/gen9ou){title="a>b" onclick="alert(4)"}',
       '',
-      '[Bad entity](javascript&#x110000;:alert(5))',
+      '[Bad entity](javascript&#x110000;:alert(5)) and [proto-rel](//evil.example/x)',
       '',
-      '{.aside title="`<script>alert(3)</script>`{=html}"}',
+      '![Tracking beacon](https://evil.example/pixel.png)',
+      '',
+      '{.aside title="`<img/src=x/onerror=alert(3)>`{=html}"}',
       ':::',
-      'Safe body with math $`x^2`.',
+      'Safe body with math $`x^2` and blocked math $`\\href{not-tex}{x}`.',
       ':::',
+      '',
+      '| Move | Accuracy |',
+      '|:---|---:|',
+      '| _Thunderbolt_ | `100%` |',
     ].join('\n');
-    const html = wiki.renderDjot(raw);
+    const meta: {title?: string; summary?: string} = {};
+    const html = wiki.renderDjot(raw, meta);
+    expect(meta.title).toBe('<script>alert(0)</script>');
     expect(html).not.toContain('<script');
     expect(html).not.toContain('<iframe');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('<svg');
+    expect(html).not.toContain('evil.example');
     expect(html).not.toContain('onerror');
     expect(html).not.toContain('onclick');
     expect(html).not.toContain('onmouseover');
     expect(html).not.toContain('javascript:');
     expect(html).not.toContain('style=');
+    expect(html).toContain('&lt;script&gt;alert(&quot;console&quot;)&lt;/script&gt;');
+    expect(html).toContain('&lt;svg onload=&quot;evil()&quot;&gt;');
     expect(html).toContain('href="#"');
-    expect(html).toContain('<a href="/wiki/gen9ou">Attr link</a>');
+    expect(html).toContain('<a href="/wiki/gen9ou">Slash tag</a>');
+    expect(html).toContain('Tracking beacon');
     expect(html).toContain('<math');
+    expect(html).toContain('<table>');
+    expect(html).toContain('<th>Move</th><th>Accuracy</th>');
+    expect(html).toContain('<td><em>Thunderbolt</em></td><td><code>100%</code></td>');
   });
 });
 
@@ -602,4 +627,116 @@ describe('wiki server routes & git history', () => {
       db.close();
     }
   });
+
+  test('escapes H1 headings in page header, handles dense backtick diffs, and enforces DB standing',
+    async () => {
+      // 1. H1 XSS payload + clean 413 handling + >130,000 backtick runs in diff view
+      const tooLarge = await realFetch(`${baseUrl}/wiki/xss_check`, {
+        method: 'POST',
+        headers: {
+          Cookie: sessionCookie('scheibo'),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `action=save&content=${'x'.repeat(300_000)}`,
+      });
+      expect(tooLarge.status).toBe(413);
+
+      const saveXss = await realFetch(`${baseUrl}/wiki/xss_check`, {
+        method: 'POST',
+        headers: {
+          Cookie: sessionCookie('scheibo'),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          content: '# <img src=x onerror=alert(1)>\n\nSafe text.',
+          message: 'Test heading escape',
+          action: 'save',
+        }).toString(),
+        redirect: 'manual',
+      });
+      expect(saveXss.status).toBe(303);
+
+      const viewHtml = await (await realFetch(`${baseUrl}/wiki/xss_check`)).text();
+      expect(viewHtml).toContain('<h2>&lt;img src=x onerror=alert(1)');
+      expect(viewHtml).not.toContain('<img src=x');
+
+      // Commit >130,000 backtick runs in git to verify ?diff=1 avoids spread stack overflow
+      fs.writeFileSync(
+        path.join(wikiDir, 'xss_check.dj'),
+        `# Heading\n\n${'`a` '.repeat(130_000)}\n`
+      );
+      execFileSync('git', ['commit', '-am', 'Dense backticks'], {cwd: wikiDir});
+      const histHtml = await (await realFetch(`${baseUrl}/wiki/xss_check/history`)).text();
+      const sha = /href="\/wiki\/xss_check\/([0-9a-f]{40})"/.exec(histHtml)![1];
+      const diffRes = await realFetch(`${baseUrl}/wiki/xss_check/${sha}?diff=1`);
+      expect(diffRes.status).toBe(200);
+
+      // 2. DB-backed auth rejects recycled GitHub IDs, banned Smogon standing, and disabled agents
+      const db = new Database(':memory:');
+      const dbApp = polka();
+      let dbServer: http.Server | undefined;
+      try {
+        db.syncProjectsFromYaml([
+          '- name: Foul Play',
+          '  active: 2026',
+          '  arena:',
+          '    qualified: true',
+          '    owners:',
+          '      pmariglia: pmariglia.535629',
+        ].join('\n'));
+        db.linkDeveloperGitHubId('pmariglia', 4242);
+        const agent = db.getAgentBySlug('foul-play')!;
+        const dev = db.getDeveloperByGitHub('pmariglia')!;
+        wiki.register(dbApp, {
+          wikiDir,
+          projectsFile,
+          db,
+          authConfig: AUTH_CFG,
+          push: false,
+        });
+        dbServer = http.createServer((req, res) => dbApp.handler(req as polka.Request, res));
+        await new Promise<void>(resolve => dbServer!.listen(0, '127.0.0.1', resolve));
+        const dbUrl = `http://127.0.0.1:${(dbServer.address() as {port: number}).port}`;
+
+        const mint = (id: number, login: string) => {
+          const exp = Math.floor(Date.now() / 1000) + 3600;
+          const tok = auth.signToken({github: {id, login}, exp}, AUTH_CFG.sessionSecret);
+          return `${auth.SESSION_COOKIE}=${encodeURIComponent(tok)}`;
+        };
+
+        // Recycled GitHub login with wrong numeric ID -> unauthenticated redirect
+        const wrongIdRes = await realFetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+          headers: {Cookie: mint(9999, 'pmariglia')},
+          redirect: 'manual',
+        });
+        expect(wrongIdRes.status).toBe(302);
+
+        // Matching numeric ID succeeds even if cookie holds old pre-rename login
+        const renamedRes = await realFetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+          headers: {Cookie: mint(4242, 'old-pmariglia-handle')},
+        });
+        expect(renamedRes.status).toBe(200);
+
+        // Bad Smogon standing -> 403
+        db.db.prepare("UPDATE developers SET smogon_standing = 'bad' WHERE id = ?").run(dev.id);
+        const badStandingRes = await realFetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+          headers: {Cookie: mint(4242, 'pmariglia')},
+        });
+        expect(badStandingRes.status).toBe(403);
+
+        // Good standing restored, but agent disabled -> 403
+        db.db.prepare("UPDATE developers SET smogon_standing = 'good' WHERE id = ?").run(dev.id);
+        db.db.prepare("UPDATE agents SET status = 'disabled' WHERE id = ?").run(agent.id);
+        const disabledRes = await realFetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+          headers: {Cookie: mint(4242, 'pmariglia')},
+        });
+        expect(disabledRes.status).toBe(403);
+      } finally {
+        if (dbServer) {
+          dbServer.closeAllConnections();
+          await new Promise<void>(resolve => dbServer!.close(() => resolve()));
+        }
+        db.close();
+      }
+    });
 });
