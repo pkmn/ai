@@ -543,6 +543,26 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       const retryRes = await retryGame.run();
       expect(retryRes.endReason).toBe('smoke_complete');
       expect(retryRes.p1BankSeconds).toBeLessThanOrEqual(retryRes.p2BankSeconds);
+
+      // Verify an agent writing >64 KiB without a newline forfeits immediately with crash
+      const floodScript = path.join(tmpDir, 'flood-agent.js');
+      fs.writeFileSync(
+        floodScript,
+        '#!/usr/bin/env node\nprocess.stdout.write("A".repeat(100000));\n',
+        {mode: 0o755}
+      );
+      const floodGame = new TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [floodScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        devMode: true,
+      });
+      const floodRes = await floodGame.run();
+      expect(floodRes.winner).toBe('p2');
+      expect(floodRes.endReason).toBe('crash');
     }
   );
 

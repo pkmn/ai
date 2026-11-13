@@ -117,6 +117,11 @@ interface RemoteTournamentPlayer {
 }
 
 const MAX_INVALID_STRIKES = 3;
+const MAX_STDOUT_LINE_CHARS = 65_536;
+const MAX_LINE_QUEUE = 256;
+const MAX_LINES_PER_DECISION = 64;
+const MAX_CHAT_LINES_PER_DECISION = 3;
+const MAX_CHAT_MESSAGE_CHARS = 500;
 
 export function rewriteBlindPlayerNames(
   chunk: string,
@@ -242,14 +247,42 @@ export class ConcurrentTournamentGame {
       exited: false,
     };
 
-    const outRl = readline.createInterface({input: proc.stdout, crlfDelay: Infinity});
-    outRl.on('line', line => {
+    const onDisconnect = (code?: number | null) => {
+      player.exited = true;
+      if (code === 255) {
+        player.sshDisconnected = true;
+      }
       if (player.lineResolver) {
         const resolve = player.lineResolver;
         player.lineResolver = undefined;
-        resolve(line);
-      } else {
-        player.lineQueue.push(line);
+        resolve(undefined);
+      }
+    };
+
+    let stdoutBuf = '';
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk: string) => {
+      stdoutBuf += chunk;
+      if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
+        stdoutBuf = '';
+        try {
+          proc.kill('SIGKILL');
+        } catch {}
+        onDisconnect(1);
+        return;
+      }
+      let nl = stdoutBuf.indexOf('\n');
+      while (nl >= 0) {
+        const line = stdoutBuf.slice(0, nl).replace(/\r$/, '');
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (player.lineResolver) {
+          const resolve = player.lineResolver;
+          player.lineResolver = undefined;
+          resolve(line);
+        } else if (player.lineQueue.length < MAX_LINE_QUEUE) {
+          player.lineQueue.push(line);
+        }
+        nl = stdoutBuf.indexOf('\n');
       }
     });
 
@@ -264,18 +297,6 @@ export class ConcurrentTournamentGame {
         player.spotPreempted = true;
       }
     });
-
-    const onDisconnect = (code?: number | null) => {
-      player.exited = true;
-      if (code === 255) {
-        player.sshDisconnected = true;
-      }
-      if (player.lineResolver) {
-        const resolve = player.lineResolver;
-        player.lineResolver = undefined;
-        resolve(undefined);
-      }
-    };
 
     proc.on('exit', code => onDisconnect(code));
     proc.on('close', code => onDisconnect(code));
@@ -394,6 +415,8 @@ export class ConcurrentTournamentGame {
 
     let remainingBudgetMs = totalBudgetMs;
     let totalElapsedMs = 0;
+    let linesReadThisDecision = 0;
+    let chatLinesThisDecision = 0;
     player.thinking = true;
 
     try {
@@ -419,14 +442,24 @@ export class ConcurrentTournamentGame {
           return;
         }
 
+        linesReadThisDecision++;
+        if (linesReadThisDecision > MAX_LINES_PER_DECISION) {
+          this.forfeit(player.slot, 'crash');
+          return;
+        }
+
         const parsed = parseAgentStdoutLine(line);
         if (!parsed) continue;
 
         if (parsed.kind === 'chat') {
-          const chatAuthor = this.byot
-            ? player.spec.displayName
-            : (player.slot === 'p1' ? 'Agent A' : 'Agent B');
-          await this.battleStream.write(`>chat ${chatAuthor}|${parsed.message}`);
+          if (chatLinesThisDecision < MAX_CHAT_LINES_PER_DECISION) {
+            chatLinesThisDecision++;
+            const chatAuthor = this.byot
+              ? player.spec.displayName
+              : (player.slot === 'p1' ? 'Agent A' : 'Agent B');
+            const safeMsg = parsed.message.slice(0, MAX_CHAT_MESSAGE_CHARS);
+            await this.battleStream.write(`>chat ${chatAuthor}|${safeMsg}`);
+          }
           continue;
         }
 
