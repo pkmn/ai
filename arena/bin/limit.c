@@ -1,12 +1,8 @@
 // /opt/arena/bin/limit.c
 // Compile on macOS: clang -O2 -Wall -Wextra -o /opt/arena/bin/limit arena/bin/limit.c
-#define _DEFAULT_SOURCE
 #include <errno.h>
 #include <fcntl.h>
-#ifdef __APPLE__
 #include <libproc.h>
-#include <sys/sysctl.h>
-#endif
 #include <pwd.h>
 #include <signal.h>
 #include <stdint.h>
@@ -14,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -34,18 +31,8 @@ static void forward_signal(int sig) {
   }
 }
 
-static uint64_t rusage_maxrss_bytes(const struct rusage *ru) {
-  if (!ru || ru->ru_maxrss <= 0) return 0;
-#ifdef __APPLE__
-  return (uint64_t)ru->ru_maxrss;
-#else
-  return (uint64_t)ru->ru_maxrss * 1024ULL;
-#endif
-}
-
 // Sum XNU physical footprint across every process belonging to target_uid
 static uint64_t total_uid_footprint(uid_t target_uid) {
-#ifdef __APPLE__
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)target_uid};
   size_t buf_size = 0;
   if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) < 0 || buf_size == 0) {
@@ -86,10 +73,6 @@ static uint64_t total_uid_footprint(uid_t target_uid) {
 
   free(procs);
   return total_bytes;
-#else
-  (void)target_uid;
-  return 0;
-#endif
 }
 
 static void kill_all_uid_procs(const char *slot, uid_t target_uid, pid_t child_pg) {
@@ -113,7 +96,6 @@ static void kill_all_uid_procs(const char *slot, uid_t target_uid, pid_t child_p
     }
     return;
   }
-#ifdef __APPLE__
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)target_uid};
   size_t buf_size = 0;
   if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) < 0 || buf_size == 0) {
@@ -133,9 +115,6 @@ static void kill_all_uid_procs(const char *slot, uid_t target_uid, pid_t child_p
     }
   }
   free(procs);
-#else
-  (void)target_uid;
-#endif
 }
 
 static void write_peak_file(const char *path, uint64_t peak_bytes) {
@@ -269,9 +248,9 @@ int main(int argc, char **argv) {
     memset(&child_ru, 0, sizeof(child_ru));
     pid_t w = wait4(pid, &status, terminate_requested ? 0 : WNOHANG, &child_ru);
     if (w == pid) {
-      uint64_t rss_bytes = rusage_maxrss_bytes(&child_ru);
-      if (rss_bytes > peak_bytes) {
-        peak_bytes = rss_bytes;
+      // On Darwin, ru_maxrss is reported in bytes
+      if (child_ru.ru_maxrss > 0 && (uint64_t)child_ru.ru_maxrss > peak_bytes) {
+        peak_bytes = (uint64_t)child_ru.ru_maxrss;
       }
       if (slot && (strcmp(slot, "p1") == 0 || strcmp(slot, "p2") == 0)) {
         kill_all_uid_procs(slot, target_uid, child_pgid);
@@ -297,9 +276,10 @@ int main(int argc, char **argv) {
       }
       struct rusage oom_ru;
       memset(&oom_ru, 0, sizeof(oom_ru));
-      if (wait4(pid, NULL, 0, &oom_ru) == pid) {
-        uint64_t oom_rss = rusage_maxrss_bytes(&oom_ru);
-        if (oom_rss > peak_bytes) peak_bytes = oom_rss;
+      if (wait4(pid, NULL, 0, &oom_ru) == pid &&
+          oom_ru.ru_maxrss > 0 &&
+          (uint64_t)oom_ru.ru_maxrss > peak_bytes) {
+        peak_bytes = (uint64_t)oom_ru.ru_maxrss;
       }
       write_peak_ram_safe(slot, peak_bytes);
       return 137; // Standard SIGKILL / OOM exit code (128 + 9)

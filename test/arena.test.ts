@@ -76,11 +76,13 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       '-o', relayBin,
       root('arena', 'bin', 'tourney-relay.c'),
     ]);
-    execFileSync('clang', [
-      '-O2', '-Wall', '-Wextra', '-Werror',
-      '-o', limitBin,
-      root('arena', 'bin', 'limit.c'),
-    ]);
+    if (process.platform === 'darwin') {
+      execFileSync('clang', [
+        '-O2', '-Wall', '-Wextra', '-Werror',
+        '-o', limitBin,
+        root('arena', 'bin', 'limit.c'),
+      ]);
+    }
 
     defaultAgentScript = path.join(tmpDir, 'default-agent.js');
     fs.writeFileSync(
