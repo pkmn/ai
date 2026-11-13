@@ -52,8 +52,8 @@ smoke tests.
 | **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MB`, deduplicated via `/opt/arena/cas/sha256`). |
 | **Coordinator State DB** | `/opt/arena/state/arena.sqlite` | Local WAL SQLite DB (`local_agents`, `local_matches`, `outbox`, `ladder_counters`). |
 | **Daemon Logs** | `/opt/arena/logs/{arena,tunnel}.{log,err}` | Stdout/stderr logs for `ai.pkmn.arena` and `ai.pkmn.tunnel`. |
-| **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`10G` quota) | Per-slot writable scratch volumes (`1700` + `pkmn` ACL), wiped around every game. |
-| **APFS Staging Volume** | `/Volumes/Staging` (`10G` quota) | Ephemeral download & extraction staging area (`0700` `pkmn:agents`). |
+| **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`4G` quota) | Per-slot writable scratch volumes (`1700` + `pkmn` ACL), wiped around every game. |
+| **APFS Staging Volume** | `/Volumes/Staging` (`6G` quota) | Ephemeral download & extraction staging area (`0700` `pkmn:agents`). |
 | **External Archive SSD** | `/Volumes/Archive` (`1 TB` APFS) | Cold agent `.tar.zst` cache (`cold-agents/`), daily battle logs (`logs/`), DB backups (`db-backups/`). |
 
 ---
@@ -543,8 +543,8 @@ ARENA_APFS_CONTAINER="${APFS_CONTAINER}" ./arena/scripts/setup-arena.sh
 ```
 
 What `setup-arena.sh` provisions:
-1. **APFS Quota Volumes:** Creates `/Volumes/P1`, `/Volumes/P2`, and `/Volumes/Staging` with hard
-   `10G` kernel APFS quotas.
+1. **APFS Quota Volumes:** Creates `/Volumes/P1` and `/Volumes/P2` with hard `4G` kernel APFS
+   quotas and `/Volumes/Staging` with a hard `6G` kernel APFS quota.
 2. **Role Accounts:** Creates `p1` (`UID 591`) and `p2` (`UID 592`) in group `agents` (`GID 590`)
    with `/usr/bin/false` login shells and hidden login-window flags.
 3. **Volume Permissions & ACLs:** Locks `/Volumes/P1` (`p1:agents`, `1700`) and `/Volumes/P2`
@@ -560,7 +560,7 @@ What `setup-arena.sh` provisions:
 6. **Headless Power & Spotlight:** Sets `pmset` (`sleep 0 disksleep 0 displaysleep 0 autorestart 1`),
    disables Spotlight on `/Volumes/{P1,P2,Staging,Archive}`, and disables automatic macOS updates.
 7. **Podman VM & LaunchDaemons:** Initializes `podman-machine-default` (`10` vCPUs, `30 GiB` /
-   `30,720 MiB` RAM, `64 GB` disk, zero swap), installs `/etc/containers/storage.conf`
+   `30,720 MiB` RAM, `48 GB` disk, zero swap), installs `/etc/containers/storage.conf`
    (`size = "500M"` overlay cap) inside the VM, and copies
    `ai.pkmn.{pf,tunnel,podman,arena,archive}.plist` to `/Library/LaunchDaemons/`.
 
@@ -612,7 +612,7 @@ sudo -n -u p2 /usr/bin/env -i HOME=/Volumes/P2 TMPDIR=/Volumes/P2 PATH=/usr/bin:
 ```
 
 *Expected:*
-- `/Volumes/P1`, `/Volumes/P2`, `/Volumes/Staging` mounted (`10Gi` capacity each).
+- `/Volumes/P1` and `/Volumes/P2` mounted (`4Gi` quota each), `/Volumes/Staging` mounted (`6Gi` quota).
 - `/Volumes/P1` (`drwx-----T+` `1700` `p1:agents`) and `/Volumes/P2` (`drwx-----T+` `1700` `p2:agents`) with `0: user:pkmn allow ...` ACL.
 - `sudo -n -u p1 ...` prints `p1` and `sudo -n -u p2 ...` prints `p2` with no password prompt.
 

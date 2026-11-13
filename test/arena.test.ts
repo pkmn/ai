@@ -226,8 +226,11 @@ describe('arena infrastructure', () => {
       expect(arenaScript).toContain('--memory-swap=14g');
 
       expect(setupScript).toContain('sudo chown root:wheel /Volumes/P1 /Volumes/P2');
+      expect(setupScript).toContain('-quota 4G');
+      expect(setupScript).toContain('-quota 6G');
       expect(setupScript).toContain('--cpus 10');
       expect(setupScript).toContain('--memory 30720');
+      expect(setupScript).toContain('--disk-size 48');
       expect(setupScript).not.toContain('swapfile');
 
       expect(sudoers).not.toContain('/usr/bin/env -i *');
@@ -669,6 +672,13 @@ describe('arena infrastructure', () => {
       } finally {
         stateDb.close();
       }
+    });
+
+    test('sizes default hot-cache watermarks within the 256 GB Mac mini SSD', () => {
+      expect(packages.HOT_AGENTS_HIGH_WATER_BYTES).toBe(110_000_000_000);
+      expect(packages.HOT_AGENTS_LOW_WATER_BYTES).toBe(85_000_000_000);
+      expect(packages.HOT_CONTAINERS_HIGH_WATER_BYTES).toBe(32_000_000_000);
+      expect(packages.HOT_CONTAINERS_LOW_WATER_BYTES).toBe(24_000_000_000);
     });
 
     test('evictColdAgentsIfNeeded prunes orphaned CAS blobs on native eviction', () => {

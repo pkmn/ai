@@ -12,12 +12,14 @@ export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
 export const MAX_OCI_LAYERS = 32;
 const MAX_REDIRECT_HOPS = 5;
 const DOWNLOAD_TIMEOUT_MILLIS = 180_000;
-export const HOT_AGENTS_HIGH_WATER_BYTES = 1350 * 1024 * 1024 * 1024; // 1.35 TB host SSD
-export const HOT_AGENTS_LOW_WATER_BYTES = 1200 * 1024 * 1024 * 1024; // 1.20 TB host SSD
-// Separate disk-usage watermarks inside `podman-machine-default`'s 64 GB virtual disk on the Mac
-// mini SSD (`setup-arena.sh --disk-size 64`) so cached OCI images never fill the VM rootfs.
-export const HOT_CONTAINERS_HIGH_WATER_BYTES = 40 * 1000 * 1000 * 1000; // 40 GB disk
-export const HOT_CONTAINERS_LOW_WATER_BYTES = 32 * 1000 * 1000 * 1000; // 32 GB disk
+// Hot-agent disk-usage watermarks sized for the 256 GB Mac mini internal SSD (cold `.tar.zst`
+// archives evict to the external 1 TB `/Volumes/Archive/cold-agents` SSD).
+export const HOT_AGENTS_HIGH_WATER_BYTES = 110 * 1000 * 1000 * 1000; // 110 GB internal SSD
+export const HOT_AGENTS_LOW_WATER_BYTES = 85 * 1000 * 1000 * 1000; // 85 GB internal SSD
+// Separate disk-usage watermarks inside `podman-machine-default`'s 48 GB virtual disk on the Mac
+// mini SSD (`setup-arena.sh --disk-size 48`) so cached OCI images never fill the VM rootfs.
+export const HOT_CONTAINERS_HIGH_WATER_BYTES = 32 * 1000 * 1000 * 1000; // 32 GB VM disk
+export const HOT_CONTAINERS_LOW_WATER_BYTES = 24 * 1000 * 1000 * 1000; // 24 GB VM disk
 
 export const AGENTS_DIR = process.env.ARENA_AGENTS_DIR ?? '/opt/arena/agents';
 export const CAS_DIR = process.env.ARENA_CAS_DIR ?? '/opt/arena/cas/sha256';
@@ -549,7 +551,7 @@ export function evictColdAgentsIfNeeded(
   const evicted: number[] = [];
   const evictedSet = new Set<number>();
 
-  // 1. Enforce Podman VM 40 GB virtual-disk cap first
+  // 1. Enforce Podman VM 32 GB virtual-disk cap first
   if (containerUsedBytes > containerHighWater) {
     for (const v of victims) {
       if (containerUsedBytes <= containerLowWater) break;
@@ -560,7 +562,7 @@ export function evictColdAgentsIfNeeded(
     }
   }
 
-  // 2. Enforce overall 1.35 TB host-SSD cap across remaining hot agents
+  // 2. Enforce overall 110 GB internal-SSD cap across remaining hot agents
   if (usedBytes > highWater) {
     for (const v of victims) {
       if (usedBytes <= lowWater) break;

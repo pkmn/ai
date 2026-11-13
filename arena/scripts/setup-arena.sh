@@ -7,12 +7,15 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APFS_CONTAINER="${ARENA_APFS_CONTAINER:-disk3}"
 
-echo "==> Step 1: Creating quota-capped APFS volumes (P1, P2, Staging)"
-for VOL in P1 P2 Staging; do
+echo "==> Step 1: Creating quota-capped APFS volumes (P1, P2 at 4G; Staging at 6G)"
+for VOL in P1 P2; do
   if [[ ! -d "/Volumes/${VOL}" ]]; then
-    sudo diskutil apfs addVolume "$APFS_CONTAINER" APFS "$VOL" -quota 10G
+    sudo diskutil apfs addVolume "$APFS_CONTAINER" APFS "$VOL" -quota 4G
   fi
 done
+if [[ ! -d "/Volumes/Staging" ]]; then
+  sudo diskutil apfs addVolume "$APFS_CONTAINER" APFS "Staging" -quota 6G
+fi
 
 echo "==> Step 2: Creating role accounts p1 (UID 591) and p2 (UID 592) in group agents (GID 590)"
 if ! dscl . -read /Groups/agents >/dev/null 2>&1; then
@@ -122,7 +125,7 @@ sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheck
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false
 
-echo "==> Step 7: Initializing Podman libkrun VM (10 vCPUs, 30 GiB RAM, 64 GB disk, 500 MB overlay cap)"
+echo "==> Step 7: Initializing Podman libkrun VM (10 vCPUs, 30 GiB RAM, 48 GB disk, 500 MB overlay cap)"
 if command -v podman >/dev/null 2>&1; then
   if ! podman machine inspect podman-machine-default >/dev/null 2>&1; then
     # Size the VM to cover two 14 GiB containers (`arena-p1` + `arena-p2`, since `podman pause`
@@ -131,7 +134,7 @@ if command -v podman >/dev/null 2>&1; then
     podman machine init \
       --cpus 10 \
       --memory 30720 \
-      --disk-size 64 \
+      --disk-size 48 \
       --volume /Volumes/P1:/Volumes/P1 \
       --volume /Volumes/P2:/Volumes/P2 \
       --volume /Volumes/Staging:/Volumes/Staging \
