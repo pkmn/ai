@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS agents (
   -- Optional filename in static/avatars/ (or build/public) for the project profile logo, or NULL.
   logo TEXT,
   -- Registration & Smogon standing state:
-  --   'pending': awaiting staff qualification (`arena.qualified: false`) or Smogon standing check
+  --   'pending': awaiting staff qualification (`arena.qualified: false`) or Smogon standing check;
+  --     intentionally allowed to edit the wiki and enter scheduled tournaments, but gated from
+  --     continuous ladders until promoted to 'qualified'
   --   'qualified': `arena.qualified: true` and every registered owner has 'good' Smogon standing
   --   'disabled': removed from `arena:` in projects.yml or revoked due to bad Smogon standing
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'qualified', 'disabled')),

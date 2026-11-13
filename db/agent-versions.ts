@@ -269,9 +269,10 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
 }
 
 // Evaluates per-tournament submission eligibility for `'scheduled'` events.
-// Unlike continuous ladders, tournaments accept at most 1 successful (or currently pending) OCI
-// entry per qualified project and are never blocked by 14-day ladder cooldowns or unsettled
-// ladder Challengers.
+// Unlike continuous ladders, tournaments intentionally accept entries from both `'pending'` and
+// `'qualified'` projects (only `'disabled'` projects are blocked), accept at most 1 successful
+// (or currently pending) OCI entry per project, and are never blocked by 14-day ladder cooldowns
+// or unsettled ladder Challengers.
 export function computeAgentTournamentStatuses(
   db: DatabaseSync,
   agentId: number,
@@ -489,6 +490,8 @@ export function createSubmission(
     throw Object.assign(new Error(err.message), {status: 400});
   }
   return inTransaction(() => {
+    // Only 'disabled' projects are blocked at the top level; 'pending' projects are intentionally
+    // permitted to submit tournament-only OCI entries while gated from ladders below.
     const agent = getAgentById(db, input.agentId);
     if (!agent || agent.status === 'disabled') {
       throw Object.assign(new Error('Project is disabled.'), {status: 403});

@@ -108,6 +108,8 @@ export function serializePageContent(rawContent: string, visibility?: PageVisibi
   return visibility ? `{% visibility: ${visibility} %}\n${body}` : body;
 }
 
+// All registered `arena.owners` in `static/projects.yml` are intentionally granted wiki access
+// regardless of whether `arena.qualified` is true (`qualified` only gates ladder competition).
 export function extractAuthorizedGitHubUsers(
   projectsYaml: string,
   admins: Iterable<string> = []

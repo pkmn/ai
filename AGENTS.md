@@ -44,6 +44,8 @@ Repository-specific style, naming, and architectural rules for AI coding agents 
   - `/arena/` is the central hub, `/arena/ladders/:name/` hosts ladders, `/arena/tournaments/:id/` hosts tournaments, `/arena/battles/` hosts the live tracker + inline-expandable paginated battle history (`GET /api/battles.json`), and `/projects/:slug/` hosts per-agent statistical profiles.
   - Expose `.json` (`/<path>.json` === `/<path>/index.json`) **only** for SQLite database-backed pages (`/arena`, `/arena/ladders/*`, `/arena/tournaments/*`, `/arena/battles`, `/projects/:slug`, `/account`). Never emit `.json` endpoints for static YAML/BibTeX/Djot/git pages (`/projects`, `/glossary`, `/research`, `/wiki*`, prose essays).
   - Full battle logs and `teams.json` for competitor-submitted `pools` ladders may only be published **after** the ladder status is `archived` (retired).
+- **Qualification & account permissions (`pending` vs `qualified`):**
+  - Registering an `arena:` block in `static/projects.yml` with `qualified: false` (`agents.status = 'pending'`) **intentionally** grants registered owners immediate access to `/wiki*` editing and scheduled tournament submissions (`/account/`), while gating continuous ladder submissions behind `qualified: true` (`agents.status = 'qualified'`). Only `disabled` accounts (`agents.status = 'disabled'`) are blocked from tournaments and `/account/`.
 
 ## Verification
 

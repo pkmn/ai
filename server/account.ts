@@ -390,6 +390,8 @@ export function renderAccountPage(opts: {
 
   const projectHref = `/projects/${encodeURIComponent(agent.slug)}/`;
 
+  // 'pending' projects cannot submit to continuous ladders (`status.canSubmit === false`), but are
+  // intentionally allowed to enter scheduled tournaments (`canSubmitTourney === true`).
   const canSubmitTourney = tournamentStatuses.some(t => t.canSubmit);
   const canSubmitAny = status.canSubmit || canSubmitTourney;
 
