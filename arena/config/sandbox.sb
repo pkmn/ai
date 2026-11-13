@@ -5,7 +5,10 @@
 (version 1)
 (deny default)
 
-;; 1. Absolutely deny all network and socket operations (IPv4, IPv6, loopback, Unix sockets)
+;; 1. Absolutely deny all network and socket operations (IPv4, IPv6, loopback, Unix sockets).
+;;    Combined with /etc/pf.anchors/ai.pkmn.arena (and `--network=none` for OCI containers),
+;;    agents run in a strictly airgapped environment with zero outbound exfiltration channels
+;;    for opponent teams observed during battle.
 (deny network*)
 (deny system-socket)
 

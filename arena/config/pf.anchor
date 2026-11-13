@@ -1,3 +1,4 @@
 # /etc/pf.anchors/ai.pkmn.arena
-# Drop all outbound IPv4 and IPv6 traffic (including loopback) from untrusted agent accounts.
+# Defense-in-depth alongside Seatbelt `(deny network*)`: drop all outbound IPv4/IPv6 traffic
+# (including loopback) from untrusted agent accounts so agents remain completely airgapped.
 block return out quick proto { tcp, udp, icmp, icmp6 } from any to any user { p1, p2 }

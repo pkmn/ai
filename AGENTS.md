@@ -50,6 +50,7 @@ Repository-specific style, naming, and architectural rules for AI coding agents 
   - `samplePoolsPair` (`server/teams.ts`) **intentionally** samples active competitors' own rosters with marginal probability `2/N` (`{A, C}` with `2/N`, `{B, C}` with `2/N`, `{C1, C2}` with `(N-4)/N`, and at most 1 of the 2 match teams from `{A, B}` combined). Never dealing competitors their own submitted teams would remove skin-in-the-game and incentivize poisoning the shared pool with weak teams the author never has to pilot; any single-game hidden-information asymmetry is neutralized across the 2-game mirror pair because P1 and P2 swap teams in Game 2.
   - `@pkmn/sets` `Team.canonicalize` deterministically sorts all 6 team slots and 4 move slots (neutralizing Team Preview slot-order watermarking) while preserving explicit under-leveled sets (`s.level = s.level || (champions ? 50 : 100)`).
   - `THRESHOLD = 1.30` in `teams/index.ts` intentionally permits teams sharing 5 of 6 species (`+1.0` from the swapped 6th slot) provided the 5 shared Pokémon contribute at least `+0.30` in set distance.
+  - Agents execute in an **airgapped sandbox with zero network access** (macOS Seatbelt `(deny network*)` + `/etc/pf.anchors/ai.pkmn.arena` for native bundles, `podman run --network=none` for containers). Observing opponent sets during a game cannot exfiltrate private teams off the Arena host; only cross-game local persistence matters, which is prevented by wiping `/Volumes/P1` and `/Volumes/P2` around every game.
 
 ## Verification
 
