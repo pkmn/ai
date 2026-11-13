@@ -95,6 +95,37 @@ describe('wiki helpers', () => {
     expect(wiki.isValidSlug('a/b')).toBe(false);
     expect(wiki.isValidSlug('.hidden')).toBe(false);
   });
+
+  test('renderDjot strips raw HTML blocks, inline HTML, event handlers, and unsafe URIs', () => {
+    const raw = [
+      '# Security Test',
+      '',
+      '```=html',
+      '<script>fetch("/chat/logs/token")</script>',
+      '<iframe src="https://evil.example"></iframe>',
+      '```',
+      '',
+      'Inline `<img src=x onerror=alert(1)>`{=html} and [link](javascript:alert(1)).',
+      '',
+      '[Attr link](/wiki/gen9ou){onclick="alert(1)" onmouseover="alert(2)" style="color:red"}',
+      '',
+      '{.aside title="`<script>alert(3)</script>`{=html}"}',
+      ':::',
+      'Safe body with math $`x^2`.',
+      ':::',
+    ].join('\n');
+    const html = wiki.renderDjot(raw);
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('<iframe');
+    expect(html).not.toContain('onerror');
+    expect(html).not.toContain('onclick');
+    expect(html).not.toContain('onmouseover');
+    expect(html).not.toContain('javascript:');
+    expect(html).not.toContain('style=');
+    expect(html).toContain('href="#"');
+    expect(html).toContain('<a href="/wiki/gen9ou">Attr link</a>');
+    expect(html).toContain('<math');
+  });
 });
 
 describe('wiki server routes & git history', () => {

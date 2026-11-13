@@ -701,6 +701,18 @@ export class Auth {
     });
 
     app.get('/chat/logs/token', (req, res) => {
+      // Reject cross-site requests and cross-origin fetches so external pages cannot read
+      // session tokens even if SameSite cookie policies are bypassed.
+      const fetchSite = req.headers['sec-fetch-site'];
+      const origin = req.headers.origin;
+      if (
+        fetchSite === 'cross-site' ||
+        (typeof origin === 'string' && origin !== inferOrigin(req))
+      ) {
+        res.writeHead(403, {'Cache-Control': 'private, no-store'});
+        res.end();
+        return;
+      }
       const token = extractSessionToken(req.headers);
       const session = this.getSession(req);
       if (!session?.discord?.id || !token) {
@@ -724,11 +736,17 @@ export class Auth {
         );
         return;
       }
+      // Mint a Discord-scoped token if the session also carries a GitHub developer claim so
+      // CLI tokens for `/chat/logs/` cannot be used to authenticate GitHub-gated mutations.
+      const cfg = this.getConfig();
+      const cliToken = session.github && cfg
+        ? signToken({discord: session.discord, exp: session.exp}, cfg.sessionSecret)
+        : token;
       res.writeHead(200, {
         'Content-Type': 'text/plain; charset=utf-8',
         'Cache-Control': 'private, no-store',
       });
-      res.end(`${token}\n`);
+      res.end(`${cliToken}\n`);
     });
 
     return this;

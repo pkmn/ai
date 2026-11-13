@@ -202,14 +202,85 @@ function wikiNav(slug: string, active: 'view' | 'edit' | 'history' | 'pages'): s
   </nav>`;
 }
 
+const UNSAFE_URI_SCHEME = /^(?:javascript|vbscript|data):/i;
+const DANGEROUS_ATTR_NAMES = new Set(['srcdoc', 'formaction', 'style']);
+
+function decodeHtmlEntities(raw: string): string {
+  return raw
+    .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    })
+    .replace(/&#([0-9]+);?/g, (_, dec) => {
+      const code = parseInt(dec, 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+    })
+    .replace(/&colon;/gi, ':')
+    .replace(/&tab;/gi, '\t')
+    .replace(/&newline;/gi, '\n');
+}
+
+function isSafeWikiUri(raw: string | undefined): boolean {
+  if (!raw) return true;
+  // eslint-disable-next-line no-control-regex
+  const normalized = decodeHtmlEntities(raw).replace(/[\x00-\x20]+/g, '');
+  return !UNSAFE_URI_SCHEME.test(normalized);
+}
+
+export function sanitizeWikiHtml(html: string): string {
+  const withoutBlocks = html
+    .replace(
+      /<(script|iframe|object|embed|style|svg|form|applet|template)\b[^>]*>[\s\S]*?<\/\1>/gi,
+      ''
+    )
+    .replace(
+      // eslint-disable-next-line max-len
+      /<\/?(?:script|iframe|object|embed|style|svg|form|applet|template|base|meta|link|input|button|textarea|select)\b[^>]*>/gi,
+      ''
+    );
+
+  return withoutBlocks.replace(
+    /<([a-zA-Z][a-zA-Z0-9:-]*)(\s[^>]*)?>/g,
+    (full, tag: string, attrs: string | undefined) => {
+      if (!attrs) return full;
+      const cleaned = attrs.replace(
+        /\s+([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,
+        (attrMatch, name: string, dq?: string, sq?: string, uq?: string) => {
+          const lower = name.toLowerCase();
+          if (lower.startsWith('on') || DANGEROUS_ATTR_NAMES.has(lower)) return '';
+          if (lower === 'href' || lower === 'src' || lower === 'xlink:href' || lower === 'action') {
+            const val = dq ?? sq ?? uq ?? '';
+            if (!isSafeWikiUri(val)) return ` ${name}="#"`;
+          }
+          return attrMatch;
+        }
+      );
+      return `<${tag}${cleaned}>`;
+    }
+  );
+}
+
 export function renderDjot(raw: string, save?: {title?: string; summary?: string}): string {
   const {content} = parsePageContent(raw);
-  return site.html.render(content, {
+  const rendered = site.html.render(content, {
     save,
     overrides: {
+      raw_block: () => '',
+      raw_inline: () => '',
+      image: (node, r) => {
+        if (!isSafeWikiUri(node.destination)) node.destination = '';
+        return r.renderAstNodeDefault(node);
+      },
       link: (node, r) => {
         const dest = node.destination;
-        if (dest && !dest.startsWith('/') && !dest.startsWith('#') && !/^[a-zA-Z]+:/.test(dest)) {
+        if (!isSafeWikiUri(dest)) {
+          node.destination = '#';
+        } else if (
+          dest &&
+          !dest.startsWith('/') &&
+          !dest.startsWith('#') &&
+          !/^[a-zA-Z]+:/.test(dest)
+        ) {
           const [p, hash] = dest.split('#');
           const clean = normalizeSlug(p.replace(/\.dj$/, ''));
           node.destination = `/wiki/${encodeSlug(clean)}${hash ? `#${hash}` : ''}`;
@@ -218,6 +289,7 @@ export function renderDjot(raw: string, save?: {title?: string; summary?: string
       },
     },
   });
+  return sanitizeWikiHtml(rendered);
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {

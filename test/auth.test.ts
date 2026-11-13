@@ -398,5 +398,34 @@ describe('unified server/auth.ts OAuth, linking, dev switcher, and Nginx validat
     });
     expect(bearerValidate.status).toBe(200);
     expect(bearerValidate.headers.get('x-auth-user')).toBe('513513270670262284');
+
+    // 4. Rejects cross-origin requests and strips GitHub claims from combined sessions
+    //    when minting a CLI token.
+    const crossOriginAttempt = await realFetch(`${baseUrl}/chat/logs/token`, {
+      headers: {
+        Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(memberToken)}`,
+        Origin: 'https://evil.example',
+      },
+    });
+    expect(crossOriginAttempt.status).toBe(403);
+
+    const dualToken = auth.signToken(
+      {
+        github: {id: 1, login: 'scheibo'},
+        discord: {id: '513513270670262284', username: 'scheibo'},
+        exp,
+      },
+      AUTH_CFG.sessionSecret
+    );
+    const dualRes = await realFetch(`${baseUrl}/chat/logs/token`, {
+      headers: {
+        Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(dualToken)}`,
+      },
+    });
+    expect(dualRes.status).toBe(200);
+    const scopedCliToken = (await dualRes.text()).trim();
+    const decodedScoped = auth.verifyToken<auth.Session>(scopedCliToken, AUTH_CFG.sessionSecret);
+    expect(decodedScoped?.discord?.id).toBe('513513270670262284');
+    expect(decodedScoped?.github).toBeUndefined();
   });
 });
