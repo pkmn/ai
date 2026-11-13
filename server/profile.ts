@@ -1074,7 +1074,7 @@ export function renderAgentProfile(opts: {
 
     const allEntries = db.getLeaderboardEntries(l.id);
     const pairs = db.getPairAggregatesForLadder(l.id);
-    const snapshots = db.getRatingSnapshotsForLadder(l.id);
+    const snapshots = db.getRatingSnapshotsForLadder(l.id, agent.id);
     const familyStats = db.getAgentLadderStats(l.id, agent.id);
     const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id, 30);
     const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);

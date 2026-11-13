@@ -21,6 +21,7 @@ import {
   EXT_ICON,
   copyFileAtomic,
   escapeHtml,
+  formatUtcDate,
   installHeadSupport,
   parseUtcDayMillis,
   renderTemplate,
@@ -1339,8 +1340,12 @@ export function renderArenaAndLadderArtifacts(opts: {
 </section>\n`
     : '';
 
-  const tournamentSummaries: ArenaTournamentSummary[] = db.getTournaments().map(t => {
-    const entrants = db.getTournamentEntrants(t.id);
+  const allTournaments = db.getTournaments();
+  const entrantsByTournament = new Map(
+    allTournaments.map(t => [t.id, db.getTournamentEntrants(t.id)])
+  );
+  const tournamentSummaries: ArenaTournamentSummary[] = allTournaments.map(t => {
+    const entrants = entrantsByTournament.get(t.id) ?? [];
     const top = entrants.find(e => e.finalRank === 1) ?? entrants[0];
     const archive = tournaments.resolveTournamentArchive(publicDir, t.id);
     return {
@@ -1377,6 +1382,8 @@ export function renderArenaAndLadderArtifacts(opts: {
     publicDir,
     projectMeta,
     profileSlugs,
+    tournaments: allTournaments,
+    entrantsByTournament,
   });
 
   const arenaContent = renderTemplate(ARENA_TEMPLATE, {
@@ -1993,8 +2000,9 @@ export function register(app: polka.Polka, options: Options) {
     const state = arenaHandle.getState();
     const projMtime = getFileMtimeToken(path.join(staticDir, 'projects.yml'));
     const djMtime = getFileMtimeToken(path.join(staticDir, 'arena.dj'));
+    const avatarsMtime = getFileMtimeToken(avatarsDir);
     return `${db.getChangeToken()}:${state.archiveSeq}:${projMtime}:${djMtime}:` +
-      getArchiveDiskToken();
+      `${avatarsMtime}:${getArchiveDiskToken()}`;
   };
 
   let cachedContext: {
@@ -2003,6 +2011,7 @@ export function register(app: polka.Polka, options: Options) {
     profileAgents: db.AgentRow[];
     profileBySlug: Map<string, db.AgentRow>;
     profileSlugs: Set<string>;
+    logoByFileName: Map<string, NonNullable<ReturnType<typeof resolveAgentLogo>>>;
     liveTournament?: db.TournamentRow;
   } | undefined;
 
@@ -2012,6 +2021,11 @@ export function register(app: polka.Polka, options: Options) {
     const profileAgents = db.getAllActiveAgents();
     const profileBySlug = new Map(profileAgents.map(a => [a.slug, a]));
     const profileSlugs = new Set(profileAgents.map(a => a.slug));
+    const logoByFileName = new Map<string, NonNullable<ReturnType<typeof resolveAgentLogo>>>();
+    for (const a of profileAgents) {
+      const logo = resolveAgentLogo(a, avatarsDir);
+      if (logo) logoByFileName.set(logo.fileName, logo);
+    }
     const liveTournament = db.getRunningTournament();
     cachedContext = {
       token: dbToken,
@@ -2019,6 +2033,7 @@ export function register(app: polka.Polka, options: Options) {
       profileAgents,
       profileBySlug,
       profileSlugs,
+      logoByFileName,
       liveTournament,
     };
     return cachedContext;
@@ -2030,8 +2045,7 @@ export function register(app: polka.Polka, options: Options) {
   } | undefined;
 
   const getArenaBundle = (dbToken: string, nowSec: number) => {
-    const timeBucket = Math.floor(nowSec / 15);
-    const bundleToken = `${dbToken}:${timeBucket}`;
+    const bundleToken = `${dbToken}:${formatUtcDate(nowSec)}`;
     if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
     const ctx = getContext(dbToken);
     const bundle = renderArenaAndLadderArtifacts({
@@ -2143,7 +2157,7 @@ export function register(app: polka.Polka, options: Options) {
   const handleArenaHub = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
     const nowSec = getNowSec();
     const dbToken = getDbToken();
-    const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
+    const token = `${dbToken}:${formatUtcDate(nowSec)}`;
     if (asJson) {
       sendCached(
         req,
@@ -2242,8 +2256,11 @@ export function register(app: polka.Polka, options: Options) {
     }
     const nowSec = getNowSec();
     const dbToken = getDbToken();
-    const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
     const bundle = getArenaBundle(dbToken, nowSec);
+    const isArchivedOnly = !(key in bundle.ladderJsonBySlot) &&
+      key in bundle.archivedLadderJsonById &&
+      bundle.archivedLadderJsonById[key].status === 'archived';
+    const token = isArchivedOnly ? dbToken : `${dbToken}:${formatUtcDate(nowSec)}`;
     const jsonDoc = bundle.ladderJsonBySlot[key] ?? bundle.archivedLadderJsonById[key];
     const htmlDoc = bundle.ladderHtmlBySlot[key] ?? bundle.archivedLadderHtmlById[key];
     if (!jsonDoc || !htmlDoc) {
@@ -2370,6 +2387,38 @@ export function register(app: polka.Polka, options: Options) {
     });
   });
 
+  const cachedProfiles = new Map<string, {
+    token: string;
+    rendered: ReturnType<typeof renderAgentProfile>;
+  }>();
+
+  const getAgentProfile = (
+    agent: db.AgentRow,
+    ctx: ReturnType<typeof getContext>,
+    token: string,
+    nowSec: number
+  ) => {
+    const existing = cachedProfiles.get(agent.slug);
+    if (existing?.token === token) return existing.rendered;
+    const rendered = renderAgentProfile({
+      db,
+      renderer,
+      agent,
+      publicDir,
+      avatarsDir,
+      projectMeta: ctx.projectMeta,
+      profileSlugs: ctx.profileSlugs,
+      liveTournament: ctx.liveTournament,
+      nowSec,
+    });
+    if (cachedProfiles.size >= 64) {
+      const oldest = cachedProfiles.keys().next().value;
+      if (oldest !== undefined) cachedProfiles.delete(oldest);
+    }
+    cachedProfiles.set(agent.slug, {token, rendered});
+    return rendered;
+  };
+
   const handleProjectProfile = (
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -2401,40 +2450,25 @@ export function register(app: polka.Polka, options: Options) {
         `profile:json:${agent.slug}`,
         token,
         'application/json; charset=utf-8',
-        () => {
-          const {json} = renderAgentProfile({
-            db,
-            renderer,
-            agent,
-            publicDir,
-            avatarsDir,
-            projectMeta: ctx.projectMeta,
-            profileSlugs: ctx.profileSlugs,
-            liveTournament: ctx.liveTournament,
-            nowSec,
-          });
-          return `${JSON.stringify(json, undefined, 2)}\n`;
-        }
+        () => `${JSON.stringify(getAgentProfile(agent, ctx, token, nowSec).json, undefined, 2)}\n`
       );
       return;
     }
 
     // Serve agent logo assets (`/projects/<slug>.<ext>`) directly from `avatarsDir`.
-    for (const agent of ctx.profileAgents) {
-      const logo = resolveAgentLogo(agent, avatarsDir);
-      if (logo?.fileName === rawParam) {
-        const mtime = getFileMtimeToken(logo.filePath);
-        sendCached(
-          req,
-          res,
-          `logo:${logo.fileName}`,
-          mtime,
-          logo.contentType,
-          () => fs.readFileSync(logo.filePath),
-          'public, max-age=86400'
-        );
-        return;
-      }
+    const logo = ctx.logoByFileName.get(rawParam);
+    if (logo) {
+      const mtime = getFileMtimeToken(logo.filePath);
+      sendCached(
+        req,
+        res,
+        `logo:${logo.fileName}`,
+        mtime,
+        logo.contentType,
+        () => fs.readFileSync(logo.filePath),
+        'public, max-age=86400'
+      );
+      return;
     }
 
     const agent = ctx.profileBySlug.get(rawParam);
@@ -2447,17 +2481,7 @@ export function register(app: polka.Polka, options: Options) {
         `profile:html:${agent.slug}`,
         token,
         'text/html; charset=utf-8',
-        () => renderAgentProfile({
-          db,
-          renderer,
-          agent,
-          publicDir,
-          avatarsDir,
-          projectMeta: ctx.projectMeta,
-          profileSlugs: ctx.profileSlugs,
-          liveTournament: ctx.liveTournament,
-          nowSec,
-        }).html
+        () => getAgentProfile(agent, ctx, token, nowSec).html
       );
       return;
     }

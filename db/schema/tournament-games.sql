@@ -47,3 +47,5 @@ CREATE TABLE IF NOT EXISTS tournament_games (
 
 CREATE INDEX IF NOT EXISTS idx_tournament_games_tournament_status
   ON tournament_games(tournament_id, status, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tournament_games_p1_version ON tournament_games(p1_version_id);
+CREATE INDEX IF NOT EXISTS idx_tournament_games_p2_version ON tournament_games(p2_version_id);

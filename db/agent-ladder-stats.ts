@@ -90,6 +90,34 @@ export function updateFamilyStreaksForMatch(
   );
 }
 
+function mapAgentLadderStatsRow(f: Record<string, unknown>): AgentLadderStatsRow {
+  return {
+    agentId: f.agent_id as number,
+    bestRank: (f.best_rank as number | null) ?? undefined,
+    bestRankAt: (f.best_rank_at as number | null) ?? undefined,
+    maxLcb: (f.max_lcb as number | null) ?? undefined,
+    maxElo: (f.max_elo as number | null) ?? undefined,
+    maxEloSe: (f.max_elo_se as number | null) ?? undefined,
+    maxEloAt: (f.max_elo_at as number | null) ?? undefined,
+    maxEloVersionId: (f.max_elo_version_id as number | null) ?? undefined,
+    maxGxe: (f.max_gxe as number | null) ?? undefined,
+    maxGxeAt: (f.max_gxe_at as number | null) ?? undefined,
+    currentWinStreak: f.current_win_streak as number,
+    currentLossStreak: f.current_loss_streak as number,
+    maxWinStreak: f.max_win_streak as number,
+    maxLossStreak: f.max_loss_streak as number,
+    top1EnteredAt: (f.top1_entered_at as number | null) ?? undefined,
+    top1MaxStreakSeconds: f.top1_max_streak_seconds as number,
+    top1TotalSeconds: f.top1_total_seconds as number,
+    top10EnteredAt: (f.top10_entered_at as number | null) ?? undefined,
+    top10MaxStreakSeconds: f.top10_max_streak_seconds as number,
+    top10TotalSeconds: f.top10_total_seconds as number,
+    top100EnteredAt: (f.top100_entered_at as number | null) ?? undefined,
+    top100MaxStreakSeconds: f.top100_max_streak_seconds as number,
+    top100TotalSeconds: f.top100_total_seconds as number,
+  };
+}
+
 export function loadAgentLadderStatsMap(
   db: DatabaseSync,
   ladderId: string
@@ -99,32 +127,8 @@ export function loadAgentLadderStatsMap(
   ).all(ladderId) as Array<Record<string, unknown>>;
   const families = new Map<number, AgentLadderStatsRow>();
   for (const f of rawFamilies) {
-    const agentId = f.agent_id as number;
-    families.set(agentId, {
-      agentId,
-      bestRank: (f.best_rank as number | null) ?? undefined,
-      bestRankAt: (f.best_rank_at as number | null) ?? undefined,
-      maxLcb: (f.max_lcb as number | null) ?? undefined,
-      maxElo: (f.max_elo as number | null) ?? undefined,
-      maxEloSe: (f.max_elo_se as number | null) ?? undefined,
-      maxEloAt: (f.max_elo_at as number | null) ?? undefined,
-      maxEloVersionId: (f.max_elo_version_id as number | null) ?? undefined,
-      maxGxe: (f.max_gxe as number | null) ?? undefined,
-      maxGxeAt: (f.max_gxe_at as number | null) ?? undefined,
-      currentWinStreak: f.current_win_streak as number,
-      currentLossStreak: f.current_loss_streak as number,
-      maxWinStreak: f.max_win_streak as number,
-      maxLossStreak: f.max_loss_streak as number,
-      top1EnteredAt: (f.top1_entered_at as number | null) ?? undefined,
-      top1MaxStreakSeconds: f.top1_max_streak_seconds as number,
-      top1TotalSeconds: f.top1_total_seconds as number,
-      top10EnteredAt: (f.top10_entered_at as number | null) ?? undefined,
-      top10MaxStreakSeconds: f.top10_max_streak_seconds as number,
-      top10TotalSeconds: f.top10_total_seconds as number,
-      top100EnteredAt: (f.top100_entered_at as number | null) ?? undefined,
-      top100MaxStreakSeconds: f.top100_max_streak_seconds as number,
-      top100TotalSeconds: f.top100_total_seconds as number,
-    });
+    const mapped = mapAgentLadderStatsRow(f);
+    families.set(mapped.agentId, mapped);
   }
   return families;
 }
@@ -134,7 +138,10 @@ export function getAgentLadderStats(
   ladderId: string,
   agentId: number
 ): AgentLadderStatsRow | undefined {
-  return loadAgentLadderStatsMap(db, ladderId).get(agentId);
+  const raw = db.prepare(
+    'SELECT * FROM agent_ladder_stats WHERE ladder_id = ? AND agent_id = ?'
+  ).get(ladderId, agentId) as Record<string, unknown> | undefined;
+  return raw ? mapAgentLadderStatsRow(raw) : undefined;
 }
 
 export function upsertAgentLadderStatsMap(

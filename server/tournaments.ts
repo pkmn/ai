@@ -428,6 +428,7 @@ function renderTournamentGamesHtml(opts: {
   publicDir: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
+  logFiles?: ReadonlySet<string>;
 }): string {
   const {
     tournament,
@@ -437,7 +438,9 @@ function renderTournamentGamesHtml(opts: {
     publicDir,
     projectMeta,
     profileSlugs,
+    logFiles,
   } = opts;
+  const resolvedLogs = logFiles ?? arena.listTournamentLogFiles(publicDir, tournament.id);
 
   const liveRowsHtml = liveTables.map(tb => {
     const p1 = tb.p1!;
@@ -478,8 +481,7 @@ function renderTournamentGamesHtml(opts: {
     const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
     const gameCode = `${codePrefix}${codeNum}`;
     const logRel = `${g.id}.log`;
-    const perTourLog = path.join(publicDir, 'arena', 'tournaments', tournament.id, logRel);
-    const hasLog = fs.existsSync(perTourLog);
+    const hasLog = resolvedLogs.has(logRel);
     const logUrl = `/arena/tournaments/${encodeURIComponent(tournament.id)}/` +
       encodeURIComponent(logRel);
     const gameHref = hasLog ? logUrl : '#games';
@@ -578,9 +580,11 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   publicDir: string;
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
+  tournaments?: db.TournamentRow[];
+  entrantsByTournament?: ReadonlyMap<string, db.TournamentEntrantView[]>;
 }): string {
-  const {db, publicDir, projectMeta, profileSlugs} = opts;
-  const tournaments = db.getTournaments();
+  const {db, publicDir, projectMeta, profileSlugs, entrantsByTournament} = opts;
+  const tournaments = opts.tournaments ?? db.getTournaments();
   if (tournaments.length === 0) {
     return '<p class="empty-state muted">No championship tournaments scheduled yet.</p>';
   }
@@ -596,7 +600,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
     const items = ongoing.map(t => {
       const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
       const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
-      const entrants = db.getTournamentEntrants(t.id);
+      const entrants = entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
       const badge = t.status === 'running'
         ? '<span class="yes">&#9679; Live</span>'
         : '<span class="muted">Scheduled</span>';
@@ -631,7 +635,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
     const rows = completed.map(t => {
       const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
       const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
-      const entrants = db.getTournamentEntrants(t.id);
+      const entrants = entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
       const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
       const maxRrGames = entrants.length >= 2
         ? (entrants.length - 1) * t.gamesPerMatchup
@@ -791,6 +795,8 @@ export function renderTournamentPage(opts: {
   for (const p of rrPairs) completedCount += p.lowWins + p.highWins + p.ties;
   for (const p of sfPairs) completedCount += p.lowWins + p.highWins + p.ties;
 
+  const logFiles = arena.listTournamentLogFiles(publicDir, t.id);
+
   const gamesHtml = renderTournamentGamesHtml({
     tournament: t,
     games,
@@ -799,6 +805,7 @@ export function renderTournamentPage(opts: {
     publicDir,
     projectMeta,
     profileSlugs,
+    logFiles,
   });
 
   const agentLinks: Record<string, string> = {};
@@ -813,7 +820,12 @@ export function renderTournamentPage(opts: {
     if (href) agentLinks[e.agentSlug] = href;
   }
 
-  const json = arena.buildTournamentDocument(db, publicDir, t, 10_000);
+  const json = arena.buildTournamentDocument(db, publicDir, t, 10_000, {
+    entrants,
+    rrPairs,
+    sfPairs,
+    logFiles,
+  });
 
   const pageInit = {
     tournamentId: t.id,

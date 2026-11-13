@@ -30,3 +30,5 @@ CREATE TABLE IF NOT EXISTS rating_snapshots (
   rank_best INTEGER,
   PRIMARY KEY (ladder_id, version_id, day_utc)
 );
+
+CREATE INDEX IF NOT EXISTS idx_rating_snapshots_version ON rating_snapshots(version_id);

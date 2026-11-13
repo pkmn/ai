@@ -300,13 +300,26 @@ export function resolveTournamentArchive(
   return undefined;
 }
 
+export function listTournamentLogFiles(publicDir: string, tournamentId: string): Set<string> {
+  const dir = path.join(publicDir, 'arena', 'tournaments', tournamentId);
+  if (!fs.existsSync(dir)) return new Set();
+  try {
+    return new Set(fs.readdirSync(dir).filter(f => f.endsWith('.log')));
+  } catch {
+    return new Set();
+  }
+}
+
 export function enrichTournamentGame(
   publicDir: string,
   tournamentId: string,
-  g: db.TournamentGameView
+  g: db.TournamentGameView,
+  logFiles?: ReadonlySet<string>
 ): TournamentGameEntry {
   const logRel = `${g.id}.log`;
-  const hasLog = fs.existsSync(path.join(publicDir, 'arena', 'tournaments', tournamentId, logRel));
+  const hasLog = logFiles
+    ? logFiles.has(logRel)
+    : fs.existsSync(path.join(publicDir, 'arena', 'tournaments', tournamentId, logRel));
   const logHref = hasLog
     ? `/arena/tournaments/${encodeURIComponent(tournamentId)}/${encodeURIComponent(logRel)}`
     : undefined;
@@ -340,16 +353,25 @@ export function enrichTournamentGame(
   };
 }
 
+export interface PreloadedTournamentData {
+  entrants?: db.TournamentEntrantView[];
+  rrPairs?: db.TournamentPairRecord[];
+  sfPairs?: db.TournamentPairRecord[];
+  logFiles?: ReadonlySet<string>;
+}
+
 export function buildTournamentDocument(
   db: db.Database,
   publicDir: string,
   tournament: db.TournamentRow,
-  gamesLimit = 10_000
+  gamesLimit = 10_000,
+  preloaded?: PreloadedTournamentData
 ): TournamentDocument {
-  const entrants = db.getTournamentEntrants(tournament.id);
+  const entrants = preloaded?.entrants ?? db.getTournamentEntrants(tournament.id);
   const games = db.getTournamentGames(tournament.id, gamesLimit);
-  const rrPairs = db.getTournamentCrosstable(tournament.id, 'Round Robin');
-  const sfPairs = db.getTournamentCrosstable(tournament.id, 'Superfinal');
+  const rrPairs = preloaded?.rrPairs ?? db.getTournamentCrosstable(tournament.id, 'Round Robin');
+  const sfPairs = preloaded?.sfPairs ?? db.getTournamentCrosstable(tournament.id, 'Superfinal');
+  const logFiles = preloaded?.logFiles ?? listTournamentLogFiles(publicDir, tournament.id);
 
   let completedGames = 0;
   for (const p of rrPairs) completedGames += p.lowWins + p.highWins + p.ties;
@@ -418,7 +440,7 @@ export function buildTournamentDocument(
       ...rrPairs.map(p => mapPair('Round Robin', p)),
       ...sfPairs.map(p => mapPair('Superfinal', p)),
     ],
-    games: games.map(g => enrichTournamentGame(publicDir, tournament.id, g)),
+    games: games.map(g => enrichTournamentGame(publicDir, tournament.id, g, logFiles)),
   };
 }
 
@@ -2849,8 +2871,42 @@ export function register(app: polka.Polka, options: Options): Handle {
     }));
   });
 
+  let cachedLiveJson: {key: string; payload: string; etag: string} | undefined;
+
+  const getLadderArchiveToken = (): string => {
+    const base = path.join(publicDir, 'arena', 'ladders');
+    if (!fs.existsSync(base)) return '';
+    const parts: string[] = [];
+    for (const entry of fs.readdirSync(base)) {
+      try {
+        parts.push(`${entry}:${fs.statSync(path.join(base, entry), {bigint: true}).mtimeNs}`);
+      } catch {}
+    }
+    return parts.join(',');
+  };
+
   app.get('/api/live.json', (req, res) => {
-    sendCachedJson(req, res, getLiveDocument());
+    const nowSec = getNowSec();
+    const liveTimeKey = liveUpdatedAt !== undefined
+      ? String(liveUpdatedAt)
+      : String(Math.floor(nowSec / 5));
+    const liveKey = `${db.getChangeToken()}:${liveSeq}:${archiveSeq}:${liveStale ? 1 : 0}:` +
+      `${liveTimeKey}:${getLadderArchiveToken()}`;
+    if (cachedLiveJson?.key !== liveKey) {
+      const payload = JSON.stringify(getLiveDocument(nowSec));
+      const etag = `"${crypto.createHash('sha1').update(payload).digest('hex')}"`;
+      cachedLiveJson = {key: liveKey, payload, etag};
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('ETag', cachedLiveJson.etag);
+    if (req.headers['if-none-match'] === cachedLiveJson.etag) {
+      res.statusCode = 304;
+      res.end();
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(cachedLiveJson.payload);
   });
 
   app.get('/api/battles/stream', (req, res) => {

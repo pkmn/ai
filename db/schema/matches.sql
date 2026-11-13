@@ -65,3 +65,5 @@ CREATE INDEX IF NOT EXISTS idx_matches_p1_completed
   ON matches(ladder_id, p1_version_id, completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_p2_completed
   ON matches(ladder_id, p2_version_id, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_matches_p1_version ON matches(p1_version_id);
+CREATE INDEX IF NOT EXISTS idx_matches_p2_version ON matches(p2_version_id);

@@ -46,8 +46,11 @@ export interface LadderSnapshotHistoryRow {
 
 export function getRatingSnapshotsForLadder(
   db: DatabaseSync,
-  ladderId: string
+  ladderId: string,
+  agentId?: number
 ): LadderSnapshotHistoryRow[] {
+  const agentFilter = agentId !== undefined ? 'AND av.agent_id = ?' : '';
+  const params: Array<string | number> = agentId !== undefined ? [ladderId, agentId] : [ladderId];
   const rows = db.prepare(`
     SELECT
       rs.ladder_id,
@@ -68,8 +71,9 @@ export function getRatingSnapshotsForLadder(
     JOIN agents a ON a.id = av.agent_id
     WHERE rs.ladder_id = ?
       AND av.smoke_status = 'passed'
+      ${agentFilter}
     ORDER BY rs.day_utc ASC, rs.version_id ASC
-  `).all(ladderId) as Array<Record<string, unknown>>;
+  `).all(...params) as Array<Record<string, unknown>>;
 
   return rows.map(r => ({
     ladderId: r.ladder_id as string,

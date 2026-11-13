@@ -65,4 +65,5 @@ CREATE TABLE IF NOT EXISTS agent_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_versions_agent ON agent_versions(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_versions_developer ON agent_versions(developer_id);
 CREATE INDEX IF NOT EXISTS idx_agent_versions_smoke ON agent_versions(smoke_status);

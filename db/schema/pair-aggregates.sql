@@ -42,3 +42,5 @@ CREATE TABLE IF NOT EXISTS pair_aggregates (
   PRIMARY KEY (ladder_id, low_version_id, high_version_id),
   CHECK (low_version_id < high_version_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_pair_aggregates_high_version ON pair_aggregates(high_version_id);

@@ -1094,6 +1094,14 @@ export function formatGlossaryReply(term: string, raw: string): string {
   return `**[${term}](${url})**: ${formatGlossary(raw)}`;
 }
 
+interface GlossaryIndex {
+  keyCount: number;
+  sortedTerms: string[];
+  aliases: Array<{alias: string; term: string}>;
+}
+
+const GLOSSARY_INDEX = Symbol('pkmn.glossaryIndex');
+
 function extractGlossaryAliases(
   glossary: Record<string, string>
 ): Array<{alias: string; term: string}> {
@@ -1122,6 +1130,25 @@ function extractGlossaryAliases(
   return aliases;
 }
 
+function getGlossaryIndex(glossary: Record<string, string>): GlossaryIndex {
+  const keys = Object.keys(glossary);
+  const holder = glossary as Record<PropertyKey, unknown>;
+  const cached = holder[GLOSSARY_INDEX] as GlossaryIndex | undefined;
+  if (cached?.keyCount === keys.length) return cached;
+  const built: GlossaryIndex = {
+    keyCount: keys.length,
+    sortedTerms: keys
+      .slice()
+      .sort((a, b) => a.toLocaleLowerCase().localeCompare(b.toLocaleLowerCase())),
+    aliases: extractGlossaryAliases(glossary),
+  };
+  Object.defineProperty(glossary, GLOSSARY_INDEX, {
+    value: built,
+    configurable: true,
+  });
+  return built;
+}
+
 export function lookupGlossary(
   query: string,
   glossary: Record<string, string>
@@ -1142,7 +1169,7 @@ export function lookupGlossary(
     (id ? terms.find(t => toID(t) === id) : undefined);
   if (match) return {term: match, definition: glossary[match]};
 
-  const aliases = extractGlossaryAliases(glossary);
+  const {aliases} = getGlossaryIndex(glossary);
   const aliasMatch =
     aliases.find(a => a.alias.toLowerCase() === lower) ??
     (id ? aliases.find(a => toID(a.alias) === id) : undefined);
@@ -1168,8 +1195,7 @@ export function autocompleteGlossary(
   query: string,
   glossary: Record<string, string>
 ): Array<{name: string; value: string}> {
-  const terms = Object.keys(glossary).sort((a, b) =>
-    a.toLocaleLowerCase().localeCompare(b.toLocaleLowerCase()));
+  const {sortedTerms: terms, aliases} = getGlossaryIndex(glossary);
   const q = query.trim();
   if (!q) {
     return terms.slice(0, 25).map(t => ({name: t, value: t}));
@@ -1177,7 +1203,6 @@ export function autocompleteGlossary(
 
   const lower = q.toLowerCase();
   const id = toID(q);
-  const aliases = extractGlossaryAliases(glossary);
   const choices: Array<{name: string; value: string}> = [];
   const seen = new Set<string>();
 

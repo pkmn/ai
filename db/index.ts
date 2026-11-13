@@ -525,8 +525,11 @@ export class Database {
     return pairs.getPairAggregatesForLadder(this.db, ladderId);
   }
 
-  getRatingSnapshotsForLadder(ladderId: string): snapshots.LadderSnapshotHistoryRow[] {
-    return snapshots.getRatingSnapshotsForLadder(this.db, ladderId);
+  getRatingSnapshotsForLadder(
+    ladderId: string,
+    agentId?: number
+  ): snapshots.LadderSnapshotHistoryRow[] {
+    return snapshots.getRatingSnapshotsForLadder(this.db, ladderId, agentId);
   }
 
   getAllActiveAgents(): agents.AgentRow[] {
