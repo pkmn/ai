@@ -331,10 +331,12 @@ async function serve(route: Route, fixture: Fixture, cookie: string): Promise<vo
   if (isDynamic) {
     const req = route.request();
     const body = req.postDataBuffer();
+    const reqHeaders = req.headers();
     const res = await fetch(`${fixture.origin}${url.pathname}${url.search}`, {
       method: req.method(),
       headers: {
-        ...req.headers(),
+        ...reqHeaders,
+        ...(reqHeaders.origin === ORIGIN ? {origin: fixture.origin} : {}),
         cookie,
       },
       body: body ? new Uint8Array(body) : undefined,
