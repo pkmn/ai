@@ -268,6 +268,34 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
         destDir: path.join(agentsDir, 'agent-no-run'),
         casDir,
       })).toThrow(/missing required executable/i);
+
+      // Reject chained-symlink Tar Slip attempting to escape destDir
+      const slipTar = path.join(tmpDir, 'chained-symlink-slip.tar.gz');
+      execFileSync('python3', [
+        '-c',
+        [
+          'import io, tarfile, sys',
+          'with tarfile.open(sys.argv[1], "w:gz") as tf:',
+          '    s1 = tarfile.TarInfo("a/b")',
+          '    s1.type = tarfile.SYMTYPE',
+          '    s1.linkname = ".."',
+          '    tf.addfile(s1)',
+          '    s2 = tarfile.TarInfo("a/b/escape")',
+          '    s2.type = tarfile.SYMTYPE',
+          '    s2.linkname = ".."',
+          '    tf.addfile(s2)',
+          '    f = tarfile.TarInfo("escape/pwned.txt")',
+          '    f.size = 5',
+          '    tf.addfile(f, io.BytesIO(b"pwned"))',
+        ].join('\n'),
+        slipTar,
+      ]);
+      expect(() => unpackLocalTarArchive({
+        archivePath: slipTar,
+        destDir: path.join(agentsDir, 'agent-slip'),
+        casDir,
+      })).toThrow(/traverses symlink|escapes/i);
+      expect(fs.existsSync(path.join(agentsDir, 'pwned.txt'))).toBe(false);
     }
   );
 
