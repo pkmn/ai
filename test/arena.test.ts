@@ -336,6 +336,68 @@ describe('arena/ — Mac mini & GCP Championship Tournament infrastructure', () 
       })).toThrow(/traverses symlink|escapes|illegal link target/i);
       expect(fs.existsSync(path.join(agentsDir, 'pwned.txt'))).toBe(false);
 
+      // Reject hardlink size-amplification > 500 MB and verify destination directory is wiped
+      const hlBombTar = path.join(tmpDir, 'hardlink-bomb.tar.gz');
+      execFileSync('python3', [
+        '-c',
+        [
+          'import io, tarfile, sys',
+          'with tarfile.open(sys.argv[1], "w:gz") as tf:',
+          '    base = tarfile.TarInfo("base.bin")',
+          '    base.size = 4 * 1024 * 1024',
+          '    tf.addfile(base, io.BytesIO(b"\\0" * base.size))',
+          '    for i in range(130):',
+          '        lnk = tarfile.TarInfo(f"dup-{i}.bin")',
+          '        lnk.type = tarfile.LNKTYPE',
+          '        lnk.linkname = "base.bin"',
+          '        tf.addfile(lnk)',
+        ].join('\n'),
+        hlBombTar,
+      ]);
+      const hlDest = path.join(agentsDir, 'agent-hl-bomb');
+      expect(() => packages.unpackLocalTarArchive({
+        archivePath: hlBombTar,
+        destDir: hlDest,
+        casDir,
+      })).toThrow(/exceeds 500 MB cap/i);
+      expect(fs.existsSync(hlDest)).toBe(false);
+
+      // Reject truncated/corrupt archive and clean up partial destDir
+      const corruptTar = path.join(tmpDir, 'corrupt.tar.gz');
+      fs.writeFileSync(corruptTar, fs.readFileSync(archivePath).subarray(0, 48));
+      const corruptDest = path.join(agentsDir, 'agent-corrupt');
+      expect(() => packages.unpackLocalTarArchive({
+        archivePath: corruptTar,
+        destDir: corruptDest,
+        casDir,
+      })).toThrow(/UNPACK_ERROR/i);
+      expect(fs.existsSync(corruptDest)).toBe(false);
+
+      // On Darwin, verify 0644 Mach-O `.so` extensions are ad-hoc codesigned before CAS CoW
+      if (process.platform === 'darwin') {
+        const soSrcDir = path.join(tmpDir, 'macho-so-src');
+        fs.mkdirSync(soSrcDir, {recursive: true});
+        fs.writeFileSync(path.join(soSrcDir, 'run'), fs.readFileSync(defaultAgentScript), {
+          mode: 0o755,
+        });
+        const cFile = path.join(tmpDir, 'ext.c');
+        fs.writeFileSync(cFile, 'int pkmn_ext_answer(void) { return 42; }\n');
+        const soFile = path.join(soSrcDir, 'ext.cpython-312-darwin.so');
+        execFileSync('cc', ['-dynamiclib', '-o', soFile, cFile]);
+        execFileSync('/usr/bin/codesign', ['--remove-signature', soFile]);
+        fs.chmodSync(soFile, 0o644);
+        expect(() => execFileSync('/usr/bin/codesign', ['-v', soFile], {stdio: 'pipe'})).toThrow();
+
+        const soTar = path.join(tmpDir, 'macho-so.tar.gz');
+        execFileSync('tar', ['-czf', soTar, '-C', soSrcDir, '.']);
+        const soDest = path.join(agentsDir, 'agent-macho-so');
+        packages.unpackLocalTarArchive({archivePath: soTar, destDir: soDest, casDir});
+
+        const unpackedSo = path.join(soDest, 'ext.cpython-312-darwin.so');
+        expect(fs.statSync(unpackedSo).mode & 0o777).toBe(0o644);
+        execFileSync('/usr/bin/codesign', ['-v', unpackedSo], {stdio: 'pipe'});
+      }
+
       // Verify OCI manifest SHA-256 check strictly rejects config-only digest match
       const sampleManifest = JSON.stringify({
         config: {digest: `sha256:${'a'.repeat(64)}`},

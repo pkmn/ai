@@ -5,6 +5,7 @@ import hashlib
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -13,8 +14,49 @@ MAX_UNPACKED_BYTES = 500 * 1024 * 1024  # 500 MB hard resident size cap
 MAX_FILE_COUNT = 25000                  # Inode / decompression bomb cap
 CAS_DIR = "/opt/arena/cas/sha256"       # Content-addressed blob store on same APFS container
 
+MACHO_MAGICS = {
+    b"\xfe\xed\xfa\xce",
+    b"\xce\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xcf",
+    b"\xcf\xfa\xed\xfe",
+    b"\xbe\xba\xfe\xca",
+    b"\xbf\xba\xfe\xca",
+}
+FAT_MAGICS = {
+    b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+}
+
+def is_macho_file(file_path: str) -> bool:
+    """Detect single-arch or universal Mach-O binaries/dylibs/.so files regardless of +x mode."""
+    try:
+        with open(file_path, "rb") as f:
+            hdr = f.read(8)
+        if len(hdr) < 4:
+            return False
+        magic = hdr[:4]
+        if magic in MACHO_MAGICS:
+            return True
+        if magic in FAT_MAGICS and len(hdr) == 8:
+            # Disambiguate universal Mach-O (`nfat_arch` 1..31) from Java `.class` (major >= 44)
+            nfat_arch = struct.unpack(">I", hdr[4:8])[0]
+            return 1 <= nfat_arch < 32
+        return False
+    except Exception:
+        return False
+
+def close_zstd(zstd_proc) -> None:
+    if zstd_proc is None:
+        return
+    try:
+        if zstd_proc.stdout is not None:
+            zstd_proc.stdout.close()
+    except Exception:
+        pass
+
 def fail(dest_dir: str, msg: str, zstd_proc=None) -> None:
     if zstd_proc is not None:
+        close_zstd(zstd_proc)
         try:
             zstd_proc.kill()
             zstd_proc.wait(timeout=5)
@@ -58,30 +100,30 @@ def open_tar_stream(archive_path: str):
         zstd_proc = subprocess.Popen(
             ["zstd", "-dc", archive_path],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
         return tarfile.open(fileobj=zstd_proc.stdout, mode="r|*"), zstd_proc
     return tarfile.open(archive_path, mode="r|*"), None
 
-def ensure_safe_parent_dirs(dest_real: str, rel_path: str, member_name: str) -> str:
+def ensure_safe_parent_dirs(dest_real: str, rel_path: str, member_name: str, zstd_proc=None) -> str:
     """Create parent directories for rel_path while rejecting any symlink traversal."""
     parts = [p for p in rel_path.split("/") if p and p != "."]
     if not parts:
-        fail(dest_real, f"Illegal empty path in archive: {member_name}")
+        fail(dest_real, f"Illegal empty path in archive: {member_name}", zstd_proc)
     cur = dest_real
     for part in parts[:-1]:
         if part == "..":
-            fail(dest_real, f"Illegal parent traversal in archive: {member_name}")
+            fail(dest_real, f"Illegal parent traversal in archive: {member_name}", zstd_proc)
         cur = os.path.join(cur, part)
         if os.path.islink(cur):
-            fail(dest_real, f"Archive path traverses symlink directory: {member_name}")
+            fail(dest_real, f"Archive path traverses symlink directory: {member_name}", zstd_proc)
         if not os.path.exists(cur):
             os.mkdir(cur, 0o755)
         elif not os.path.isdir(cur):
-            fail(dest_real, f"Non-directory parent in archive path: {member_name}")
+            fail(dest_real, f"Non-directory parent in archive path: {member_name}", zstd_proc)
         real_cur = os.path.realpath(cur)
         if real_cur != dest_real and not real_cur.startswith(dest_real + os.sep):
-            fail(dest_real, f"Resolved parent escapes destination: {member_name}")
+            fail(dest_real, f"Resolved parent escapes destination: {member_name}", zstd_proc)
     target_path = os.path.join(cur, parts[-1])
     return target_path
 
@@ -92,128 +134,164 @@ def unpack_bundle(archive_path: str, dest_dir: str, cas_dir: str = CAS_DIR) -> i
     total_bytes = 0
     file_count = 0
     extracted_regular_files = []
+    zstd_proc = None
 
     try:
-        tf, zstd_proc = open_tar_stream(archive_path)
-    except Exception as e:
-        fail(dest_real, f"Invalid tar archive: {e}")
+        try:
+            tf, zstd_proc = open_tar_stream(archive_path)
+        except Exception as e:
+            fail(dest_real, f"Invalid tar archive: {e}", zstd_proc)
 
-    with tf:
-        for member in tf:
-            file_count += 1
-            if file_count > MAX_FILE_COUNT:
-                fail(dest_real, f"Archive exceeds max file count ({MAX_FILE_COUNT})", zstd_proc)
+        with tf:
+            for member in tf:
+                file_count += 1
+                if file_count > MAX_FILE_COUNT:
+                    fail(dest_real, f"Archive exceeds max file count ({MAX_FILE_COUNT})", zstd_proc)
 
-            # 1. Normalize path and forbid absolute paths or '..' traversal
-            if member.name.startswith("/") or ".." in member.name.split("/"):
-                fail(dest_real, f"Illegal path in archive: {member.name}", zstd_proc)
-            rel_path = os.path.normpath(member.name)
-            if rel_path.startswith(("/", "..")) or "/../" in member.name:
-                fail(dest_real, f"Illegal path in archive: {member.name}", zstd_proc)
-            if rel_path == ".":
-                continue
+                # 1. Normalize path and forbid absolute paths or '..' traversal
+                if member.name.startswith("/") or ".." in member.name.split("/"):
+                    fail(dest_real, f"Illegal path in archive: {member.name}", zstd_proc)
+                rel_path = os.path.normpath(member.name)
+                if rel_path.startswith(("/", "..")) or "/../" in member.name:
+                    fail(dest_real, f"Illegal path in archive: {member.name}", zstd_proc)
+                if rel_path == ".":
+                    continue
 
-            target_path = ensure_safe_parent_dirs(dest_real, rel_path, member.name)
-            if not os.path.abspath(target_path).startswith(dest_real + os.sep):
-                fail(dest_real, f"Path escapes destination: {member.name}", zstd_proc)
+                target_path = ensure_safe_parent_dirs(dest_real, rel_path, member.name, zstd_proc)
+                if not os.path.abspath(target_path).startswith(dest_real + os.sep):
+                    fail(dest_real, f"Path escapes destination: {member.name}", zstd_proc)
 
-            # 2. Forbid device nodes, FIFOs, sockets, and hardlinks outside bundle
-            if member.isdev() or member.isfifo() or member.ischr() or member.isblk():
-                fail(dest_real, f"Forbidden special file in archive: {member.name}", zstd_proc)
+                # 2. Forbid device nodes, FIFOs, sockets, and hardlinks outside bundle
+                if member.isdev() or member.isfifo() or member.ischr() or member.isblk():
+                    fail(dest_real, f"Forbidden special file in archive: {member.name}", zstd_proc)
 
-            if member.issym() or member.islnk():
-                if os.path.isabs(member.linkname) or ".." in [p for p in member.linkname.split("/") if p]:
-                    fail(dest_real, f"Illegal link target: {member.name} -> {member.linkname}", zstd_proc)
-                base_dir = os.path.realpath(os.path.dirname(target_path)) if member.issym() else dest_real
-                resolved_target = os.path.realpath(os.path.join(base_dir, member.linkname))
-                if resolved_target != dest_real and not resolved_target.startswith(dest_real + os.sep):
-                    fail(dest_real, f"Symlink/hardlink escapes bundle: {member.name} -> {member.linkname}", zstd_proc)
+                if member.issym() or member.islnk():
+                    if os.path.isabs(member.linkname) or ".." in [p for p in member.linkname.split("/") if p]:
+                        fail(dest_real, f"Illegal link target: {member.name} -> {member.linkname}", zstd_proc)
+                    base_dir = os.path.realpath(os.path.dirname(target_path)) if member.issym() else dest_real
+                    resolved_target = os.path.realpath(os.path.join(base_dir, member.linkname))
+                    if resolved_target != dest_real and not resolved_target.startswith(dest_real + os.sep):
+                        fail(dest_real, f"Symlink/hardlink escapes bundle: {member.name} -> {member.linkname}", zstd_proc)
+                    if os.path.lexists(target_path):
+                        if os.path.isdir(target_path) and not os.path.islink(target_path):
+                            fail(dest_real, f"Cannot overwrite directory with link: {member.name}", zstd_proc)
+                        os.unlink(target_path)
+                    if member.issym():
+                        os.symlink(member.linkname, target_path)
+                    else:
+                        if os.path.islink(resolved_target) or not os.path.isfile(resolved_target):
+                            fail(dest_real, f"Invalid hardlink target: {member.name} -> {member.linkname}", zstd_proc)
+                        linked_size = os.stat(resolved_target, follow_symlinks=False).st_size
+                        total_bytes += linked_size
+                        if total_bytes > MAX_UNPACKED_BYTES:
+                            fail(
+                                dest_real,
+                                f"Unpacked size exceeds 500 MB cap ({MAX_UNPACKED_BYTES} bytes)",
+                                zstd_proc,
+                            )
+                        os.link(resolved_target, target_path)
+                    continue
+
+                if member.isdir():
+                    if os.path.islink(target_path):
+                        fail(dest_real, f"Cannot overwrite symlink with directory: {member.name}", zstd_proc)
+                    os.makedirs(target_path, exist_ok=True)
+                    continue
+
+                if not member.isfile():
+                    fail(dest_real, f"Unsupported tar entry type: {member.name}", zstd_proc)
+
+                # 3. Stream-extract regular file while enforcing MAX_UNPACKED_BYTES (never follow symlink)
                 if os.path.lexists(target_path):
-                    if os.path.isdir(target_path) and not os.path.islink(target_path):
-                        fail(dest_real, f"Cannot overwrite directory with link: {member.name}", zstd_proc)
+                    if os.path.islink(target_path):
+                        fail(dest_real, f"Refusing to write regular file through symlink: {member.name}", zstd_proc)
                     os.unlink(target_path)
-                if member.issym():
-                    os.symlink(member.linkname, target_path)
-                else:
-                    if os.path.islink(resolved_target) or not os.path.isfile(resolved_target):
-                        fail(dest_real, f"Invalid hardlink target: {member.name} -> {member.linkname}", zstd_proc)
-                    os.link(resolved_target, target_path)
-                continue
+                src = tf.extractfile(member)
+                if src is None:
+                    continue
 
-            if member.isdir():
-                if os.path.islink(target_path):
-                    fail(dest_real, f"Cannot overwrite symlink with directory: {member.name}", zstd_proc)
-                os.makedirs(target_path, exist_ok=True)
-                continue
+                fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+                with src, os.fdopen(fd, "wb") as dst:
+                    while True:
+                        chunk = src.read(65536)
+                        if not chunk:
+                            break
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_UNPACKED_BYTES:
+                            fail(dest_real, f"Unpacked size exceeds 500 MB cap ({MAX_UNPACKED_BYTES} bytes)", zstd_proc)
+                        dst.write(chunk)
 
-            if not member.isfile():
-                fail(dest_real, f"Unsupported tar entry type: {member.name}", zstd_proc)
+                # 4. Strip setuid/setgid/sticky bits; preserve owner rx/r permissions
+                mode = stat.S_IMODE(member.mode) & ~(stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX)
+                is_exec = bool(mode & stat.S_IXUSR)
+                os.chmod(target_path, 0o755 if is_exec else 0o644)
+                extracted_regular_files.append(target_path)
 
-            # 3. Stream-extract regular file while enforcing MAX_UNPACKED_BYTES (never follow symlink)
-            if os.path.lexists(target_path):
-                if os.path.islink(target_path):
-                    fail(dest_real, f"Refusing to write regular file through symlink: {member.name}", zstd_proc)
-                os.unlink(target_path)
-            src = tf.extractfile(member)
-            if src is None:
-                continue
+        if zstd_proc is not None:
+            close_zstd(zstd_proc)
+            zstd_proc.wait(timeout=10)
+            if zstd_proc.returncode != 0:
+                fail(dest_real, "zstd decompression failed")
+            zstd_proc = None
 
-            fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-            with src, os.fdopen(fd, "wb") as dst:
-                while True:
-                    chunk = src.read(65536)
-                    if not chunk:
-                        break
-                    total_bytes += len(chunk)
-                    if total_bytes > MAX_UNPACKED_BYTES:
-                        fail(dest_real, f"Unpacked size exceeds 500 MB cap ({MAX_UNPACKED_BYTES} bytes)", zstd_proc)
-                    dst.write(chunk)
+        # 5. Post-extraction audit: verify every extracted entry and symlink target stays inside dest_real
+        for root_dir, dirs, files in os.walk(dest_real, followlinks=False):
+            for name in dirs + files:
+                p = os.path.join(root_dir, name)
+                resolved = os.path.realpath(p)
+                if resolved != dest_real and not resolved.startswith(dest_real + os.sep):
+                    fail(dest_real, f"Post-extraction symlink escapes bundle: {p}")
 
-            # 4. Strip setuid/setgid/sticky bits; preserve owner rx/r permissions
-            mode = stat.S_IMODE(member.mode) & ~(stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX)
-            is_exec = bool(mode & stat.S_IXUSR)
-            os.chmod(target_path, 0o755 if is_exec else 0o644)
-            extracted_regular_files.append(target_path)
+        # 6. Verify required './run' entrypoint exists at bundle root, is not a symlink, and is executable
+        run_entry = os.path.join(dest_real, "run")
+        if os.path.islink(run_entry) or not os.path.isfile(run_entry) or not os.access(run_entry, os.X_OK):
+            fail(dest_real, "Bundle is missing required executable './run' at root")
 
-    if zstd_proc is not None:
-        zstd_proc.wait()
-        if zstd_proc.returncode != 0:
-            fail(dest_real, "zstd decompression failed")
-
-    # 5. Post-extraction audit: verify every extracted entry and symlink target stays inside dest_real
-    for root_dir, dirs, files in os.walk(dest_real, followlinks=False):
-        for name in dirs + files:
-            p = os.path.join(root_dir, name)
-            resolved = os.path.realpath(p)
-            if resolved != dest_real and not resolved.startswith(dest_real + os.sep):
-                fail(dest_real, f"Post-extraction symlink escapes bundle: {p}")
-
-    # 6. Verify required './run' entrypoint exists at bundle root, is not a symlink, and is executable
-    run_entry = os.path.join(dest_real, "run")
-    if os.path.islink(run_entry) or not os.path.isfile(run_entry) or not os.access(run_entry, os.X_OK):
-        fail(dest_real, "Bundle is missing required executable './run' at root")
-
-    # 7. Deduplicate large weights/libraries across versions via APFS CoW only after full validation
-    for fpath in extracted_regular_files:
-        if os.path.exists(fpath) and not os.path.islink(fpath):
-            deduplicate_file_apfs_cow(fpath, cas_dir)
-
-    # 7. Strip macOS quarantine/extended attributes and ad-hoc codesign Mach-O binaries on Darwin
-    if sys.platform == "darwin":
-        subprocess.run(["/usr/bin/xattr", "-cr", dest_real], check=False)
-        for root_dir, _, files in os.walk(dest_real):
-            for fname in files:
-                fpath = os.path.join(root_dir, fname)
-                if not os.path.islink(fpath) and os.access(fpath, os.X_OK):
+        # 7. Strip macOS quarantine xattrs and ad-hoc codesign all Mach-O binaries/dylibs/.so files
+        #    (including 0644 Python C-extensions) BEFORE APFS CoW CAS deduplication so signed blobs
+        #    are stored in CAS and shared clones are never mutated in place.
+        if sys.platform == "darwin":
+            subprocess.run(["/usr/bin/xattr", "-cr", dest_real], check=False)
+            signed_inodes = set()
+            for fpath in extracted_regular_files:
+                if not os.path.exists(fpath) or os.path.islink(fpath):
+                    continue
+                st = os.stat(fpath, follow_symlinks=False)
+                inode_key = (st.st_dev, st.st_ino)
+                if inode_key in signed_inodes:
+                    continue
+                if is_macho_file(fpath):
+                    signed_inodes.add(inode_key)
+                    orig_mode = stat.S_IMODE(st.st_mode)
+                    if not (orig_mode & stat.S_IWUSR):
+                        os.chmod(fpath, orig_mode | stat.S_IWUSR)
                     subprocess.run(
                         ["/usr/bin/codesign", "--force", "--sign", "-", fpath],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         check=False,
                     )
+                    if not (orig_mode & stat.S_IWUSR):
+                        os.chmod(fpath, orig_mode)
 
-    print(f"UNPACK_OK: {total_bytes} bytes in {file_count} files")
-    return total_bytes
+        # 8. Deduplicate large weights/libraries across versions via APFS CoW only after signing
+        seen_cow_inodes = set()
+        for fpath in extracted_regular_files:
+            if os.path.exists(fpath) and not os.path.islink(fpath):
+                st = os.stat(fpath, follow_symlinks=False)
+                if st.st_nlink > 1:
+                    inode_key = (st.st_dev, st.st_ino)
+                    if inode_key in seen_cow_inodes:
+                        continue
+                    seen_cow_inodes.add(inode_key)
+                deduplicate_file_apfs_cow(fpath, cas_dir)
+
+        print(f"UNPACK_OK: {total_bytes} bytes in {file_count} files")
+        return total_bytes
+    except SystemExit:
+        raise
+    except Exception as e:
+        fail(dest_real, f"Corrupt or unreadable archive: {e}", zstd_proc)
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
