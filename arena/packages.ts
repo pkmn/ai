@@ -6,7 +6,8 @@ import * as path from 'path';
 import {isAllowedBundleHost} from '../server/account';
 import {root} from '../static/util';
 
-import {AgentMode, LocalAgentRow, StateDatabase} from './db';
+import * as db from './db';
+import * as unpack from './unpack';
 
 export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
 export const MAX_OCI_LAYERS = 32;
@@ -314,7 +315,6 @@ export async function downloadAndUnpackBundle(opts: {
 }): Promise<number> {
   const stagingDir = opts.stagingDir ?? STAGING_DIR;
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-  const unpackBin = opts.unpackBin ?? UNPACK_BIN;
 
   fs.mkdirSync(stagingDir, {recursive: true});
   fs.mkdirSync(agentsDir, {recursive: true});
@@ -457,16 +457,19 @@ export async function downloadAndUnpackBundle(opts: {
       );
     }
 
-    const env = {...process.env};
-    if (opts.casDir) env.ARENA_CAS_DIR = opts.casDir;
+    if (opts.unpackBin) {
+      const env = {...process.env};
+      if (opts.casDir) env.ARENA_CAS_DIR = opts.casDir;
+      const stdout = execFileSync(opts.unpackBin, [archivePath, destDir], {
+        encoding: 'utf8',
+        timeout: 180_000,
+        env,
+      });
+      const m = /UNPACK_OK:\s*(\d+)\s*bytes/.exec(stdout);
+      return m ? Number(m[1]) : 0;
+    }
 
-    const stdout = execFileSync('python3', [unpackBin, archivePath, destDir], {
-      encoding: 'utf8',
-      timeout: 180_000,
-      env,
-    });
-    const m = /UNPACK_OK:\s*(\d+)\s*bytes/.exec(stdout);
-    return m ? Number(m[1]) : 0;
+    return unpack.unpackBundle(archivePath, destDir, opts.casDir ?? CAS_DIR);
   } catch (err) {
     throw scrubError(err, opts.authToken);
   } finally {
@@ -475,7 +478,7 @@ export async function downloadAndUnpackBundle(opts: {
 }
 
 export function evictColdAgentsIfNeeded(
-  stateDb: StateDatabase,
+  stateDb: db.Database,
   opts: {
     highWaterBytes?: number;
     lowWaterBytes?: number;
@@ -511,7 +514,7 @@ export function evictColdAgentsIfNeeded(
     .sort((a, b) => a.lastPlayedAt - b.lastPlayedAt || a.versionId - b.versionId);
 
   let evictedNative = false;
-  const evictOne = (v: LocalAgentRow) => {
+  const evictOne = (v: db.LocalAgentRow) => {
     const coldArchive = path.join(coldDir, `${v.target}.tar.zst`);
     if (v.mode === 'native') {
       evictedNative = true;
@@ -674,14 +677,14 @@ function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
 }
 
 export function ensureAgentResident(
-  stateDb: StateDatabase,
+  stateDb: db.Database,
   versionId: number,
   opts: {
     agentsDir?: string;
     coldDir?: string;
     now?: number;
   } = {}
-): LocalAgentRow | undefined {
+): db.LocalAgentRow | undefined {
   const row = stateDb.getLocalAgent(versionId);
   if (!row) return undefined;
 
@@ -723,7 +726,7 @@ export function ensureAgentResident(
 //   - 1.00 when both are in cold storage
 export function computeResidencyMultipliers(
   versionIds: readonly number[],
-  stateDb: StateDatabase
+  stateDb: db.Database
 ): Float64Array {
   const n = versionIds.length;
   const out = new Float64Array(n * n);
@@ -752,6 +755,6 @@ export function formatAgentTargetId(slug: string, version: string, versionId: nu
   return `${slug}-${safeVer}-v${versionId}`;
 }
 
-export function toExecutionMode(pkg: 'bundle' | 'oci'): AgentMode {
+export function toExecutionMode(pkg: 'bundle' | 'oci'): db.ExecutionMode {
   return pkg === 'oci' ? 'container' : 'native';
 }
