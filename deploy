@@ -1,14 +1,18 @@
 #!/bin/bash
 set -euxo pipefail
 
-# Save our current commit to use for comparison later
+command=${1:-reload}
+
+# Save our current commit to use for comparison and rollback
 HEAD=$(git rev-parse HEAD)
 
-# Pull down latest code
-git pull origin main
+# Fetch and verify fast-forward ancestor before modifying checkout
+git fetch origin main
+git merge-base --is-ancestor "$HEAD" origin/main
+git merge --ff-only origin/main
 
 # Update dependencies if package.json has changed
-git diff --quiet $HEAD package.json teams/package.json >/dev/null ||
+git diff --quiet "$HEAD" package.json teams/package.json >/dev/null ||
     npm install --omit=dev --silent
 
 # Initialize/update teams submodules with only the required directories
@@ -16,7 +20,7 @@ npm run compile
 node build/tools/setup --submodules-only
 
 # Reload unit files if any changes have been made to them
-git diff --quiet $HEAD config/*.{service,timer} ||
+git diff --quiet "$HEAD" config/*.{service,timer} ||
     sudo systemctl daemon-reload
 
 # Ensure runtime writable directories exist before build/restart
@@ -26,14 +30,35 @@ mkdir -p public wiki chat/logs
 npm run build
 
 # Restart server if there have been changes
-command=${1:-reload}
-[ "${command}" != "restart" ] && git diff --quiet $HEAD server/ db/ teams/ config/ static/ ||
+[ "${command}" != "restart" ] && git diff --quiet "$HEAD" server/ db/ teams/ config/ static/ ||
     sudo service pkmn.ai-server restart
+
+# Post-deploy HTTP smoke verification with automatic rollback on failure
+verify_server() {
+    test -s public/index.html || return 1
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -fsS "http://127.0.0.1:${PORT:-1234}/arena.json" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    return 1
+}
+
+if ! verify_server; then
+    echo "Post-deploy smoke check failed; rolling back to $HEAD" >&2
+    if [ "$(git rev-parse HEAD)" != "$HEAD" ]; then
+        git reset --hard "$HEAD"
+        npm run build
+        sudo service pkmn.ai-server restart
+    fi
+    exit 1
+fi
 
 if [ -x private/deploy ]; then
     ./private/deploy
 fi
 
 # Validate and reload NGINX if the config has changed
-git diff --quiet $HEAD config/nginx.conf ||
+git diff --quiet "$HEAD" config/nginx.conf ||
     (sudo nginx -t && sudo service nginx reload)

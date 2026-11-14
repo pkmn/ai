@@ -65,21 +65,23 @@ export async function runDaemon(opts: {
   const status = {running: true};
   const stop = () => {
     status.running = false;
+    coord.requestDrain();
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  process.once('SIGUSR1', stop);
 
   try {
     await coord.recoverIncompleteMatches();
 
-    while (status.running) {
+    while (status.running && !coord.isDraining()) {
       try {
         await coord.flushOutbox();
         const ladders = await fetchPlayableLadderSnapshots(client);
         const byId = new Map(ladders.map(l => [l.id, l]));
         await coord.processPendingSubmissions(byId);
         const played = await coord.playNextScheduledMatch(ladders);
-        if (!played && !opts.once) {
+        if (!played && !opts.once && status.running && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);
           await new Promise(r => setTimeout(r, pollIntervalMillis));
         }
@@ -90,9 +92,11 @@ export async function runDaemon(opts: {
       }
       if (opts.once) break;
     }
+    await coord.flushOutbox().catch(() => undefined);
   } finally {
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
+    process.removeListener('SIGUSR1', stop);
     stateDb.close();
   }
 }

@@ -2210,6 +2210,44 @@ describe('arena infrastructure', () => {
         expect(fs.readdirSync(tourLogDir).filter(f => f.endsWith('.log'))).toHaveLength(8);
       });
     });
+
+    test('requestDrain halts new coordinator scheduling while still flushing outbox', async () => {
+      const stateDb = new arenaDb.Database(':memory:');
+      try {
+        let submittedCount = 0;
+        const fakeClient = {
+          getPendingSubmissions: () => Promise.resolve({ladders: [], submissions: []}),
+          reportSubmissionStatus: () => {
+            submittedCount++;
+            return Promise.resolve();
+          },
+          completeMatch: () => Promise.resolve({archivedLadder: false}),
+          sendHeartbeat: () => Promise.resolve(undefined),
+        } as unknown as serverArena.Client;
+
+        stateDb.enqueueOutbox('submission-status', {versionId: 1, smokeStatus: 'passed'});
+        const coord = new coordinator.Coordinator({
+          client: fakeClient,
+          stateDb,
+          baselineSpec: {mode: 'native', target: '_baseline'},
+          devMode: true,
+        });
+
+        expect(coord.isDraining()).toBe(false);
+        coord.requestDrain();
+        expect(coord.isDraining()).toBe(true);
+
+        const processed = await coord.processPendingSubmissions();
+        expect(processed).toBe(0);
+
+        const scheduled = await coord.playNextScheduledMatch([]);
+        expect(scheduled).toBeUndefined();
+        expect(submittedCount).toBe(1);
+        expect(stateDb.listOutbox()).toHaveLength(0);
+      } finally {
+        stateDb.close();
+      }
+    });
   });
 
   describe('Darwin sandbox enforcement', () => {

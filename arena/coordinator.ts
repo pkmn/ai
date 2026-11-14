@@ -122,6 +122,7 @@ export class Coordinator {
   private readonly randomInt: (max: number) => number;
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
   private heartbeatSeq = 0;
+  private draining = false;
 
   constructor(options: Options) {
     this.client = options.client;
@@ -144,6 +145,14 @@ export class Coordinator {
     this.exploitProbability = options.exploitProbability ?? 0.45;
     this.formatByLadderId = new Map(options.formatByLadderId ?? []);
     this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
+  }
+
+  requestDrain() {
+    this.draining = true;
+  }
+
+  isDraining(): boolean {
+    return this.draining;
   }
 
   private randomPrngSeed(): PRNGSeed {
@@ -222,6 +231,7 @@ export class Coordinator {
   async processPendingSubmissions(
     laddersById?: ReadonlyMap<string, LadderSnapshot>
   ): Promise<number> {
+    if (this.draining) return 0;
     const {ladders, submissions} = await this.client.getPendingSubmissions({target: 'ladder'});
     const pendingMetaById = new Map<string, {format: string; team: db.TeamMode}>();
     for (const l of ladders) {
@@ -231,6 +241,7 @@ export class Coordinator {
     let processed = 0;
 
     for (const sub of submissions) {
+      if (this.draining) break;
       // Tournament-only submissions target GCP linux/amd64 Spot GPU workers, not Mac mini arm64.
       if (sub.ladders.length === 0 && sub.tournaments.length > 0) continue;
       processed++;
@@ -678,6 +689,7 @@ export class Coordinator {
     ladders: readonly LadderSnapshot[]
   ): Promise<{matchId: string; ladderId: string; archivedLadder: boolean} | undefined> {
     await this.flushOutbox();
+    if (this.draining) return undefined;
 
     const candidates: Array<{
       ladder: LadderSnapshot;
