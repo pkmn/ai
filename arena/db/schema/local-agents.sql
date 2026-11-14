@@ -5,7 +5,7 @@
 --   (`computeResidencyMultipliers`), and consecutive runtime fault tracking (`CONSECUTIVE_FAULTS_QUARANTINE`).
 -- Relationships: Keyed by `version_id` matching `agent_versions.id` on the central `pkmn.ai` server;
 --   referenced logically by `local_matches` (`p1_version_id`, `p2_version_id`).
--- Why standalone: Hot/cold SSD residency (`/var/lib/arena/agents` vs `/var/lib/arena/cold`),
+-- Why standalone: Hot/cold SSD residency (`/opt/arena/agents` vs `/Volumes/Archive/cold-agents`),
 --   local target paths/tags, and consecutive process fault streaks are host-local execution state
 --   owned by the Mac mini worker rather than public web metadata.
 CREATE TABLE IF NOT EXISTS local_agents (

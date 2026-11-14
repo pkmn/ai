@@ -4,22 +4,6 @@ Self-contained engineering specifications for remaining Arena, Server, UI, and T
 
 ---
 
-## 1. Unify Arena Mac mini State DB Path (`/opt/arena/state/arena.sqlite`)
-
-### Context
-- [arena/scripts/setup-arena.sh](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/scripts/setup-arena.sh), [arena/scripts/archive.sh](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/scripts/archive.sh), and [arena/SETUP.md](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/SETUP.md) store all Mac mini execution state under `/opt/arena/state/arena.sqlite`.
-- However, [arena/db/index.ts](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/db/index.ts#L11-L17) currently falls back to `/var/lib/arena/state.sqlite` when `NODE_ENV === 'production'` and `ARENA_STATE_DB_PATH` is unset.
-
-### Implementation Plan
-1. Update `STATE_DB_PATH` in [arena/db/index.ts](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/db/index.ts#L11-L17) so production defaults to `/opt/arena/state/arena.sqlite` (matching `setup-arena.sh`, `archive.sh`, and `arena/SETUP.md`).
-2. Verify `ai.pkmn.arena.plist` in `arena/scripts/setup-arena.sh` and `arena/SETUP.md` pass or rely on the unified `/opt/arena/state/arena.sqlite` path.
-
-### Acceptance Criteria
-- [ ] `arena/db/index.ts`, `arena/scripts/setup-arena.sh`, `arena/scripts/archive.sh`, and `arena/SETUP.md` all use `/opt/arena/state/arena.sqlite` as the canonical Mac mini state database path.
-- [ ] `npm run test && npx vitest run` pass.
-
----
-
 ## 2. Cold Bundle Archival (`/Volumes/Archive` + `gs://pkmn-arena`), Eager Retirement Eviction & Cache-Aware Matchmaking Bonus ($\rho_{ij}$)
 
 ### Context

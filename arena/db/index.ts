@@ -10,8 +10,8 @@ import * as outbox from './outbox';
 
 function defaultDbPath(): string {
   return process.env.ARENA_STATE_DB_PATH ?? (
-    process.env.NODE_ENV === 'production' || fs.existsSync('/var/lib/arena')
-      ? '/var/lib/arena/state.sqlite'
+    process.env.NODE_ENV === 'production' || fs.existsSync('/opt/arena/state')
+      ? '/opt/arena/state/arena.sqlite'
       : root('db', 'data', 'arena-state.sqlite')
   );
 }
