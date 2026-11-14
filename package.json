@@ -26,8 +26,8 @@
     "vitest": "^5.0.3"
   },
   "scripts": {
-    "lint": "eslint --cache && stylelint static/*.css && hyperlink public --check-anchors",
-    "fix": "eslint --fix && stylelint --fix static/*.css",
+    "lint": "eslint --cache && stylelint static/*.css tools/*.css && hyperlink public --check-anchors",
+    "fix": "eslint --fix && stylelint --fix static/*.css tools/*.css",
     "clean": "rm -rf public build .tsbuildinfo .eslintcache",
     "compile": "tsc -p .",
     "setup": "([ -d node_modules ] || npm install) && npm run compile && node --env-file-if-exists=.env build/tools/setup",

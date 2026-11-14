@@ -71,37 +71,101 @@ node build/teams/index.js <candidate-team.txt> \
 
 ---
 
-## 2. Visual Regression & Layout Verification (`npm run shots`)
+## 2. Visual Regression, Edge-Case Atlas & Layout Verification (`npm run shots`)
 
 Whenever modifying HTML templates (`static/*.html`), stylesheets (`static/*.css`), Djot layouts, or
 client scripts, run [`tools/shots.ts`](../tools/shots.ts):
 
 ```sh
-# Render all scenarios across 4 viewports x 2 color schemes into .shots/
+# Render all ~85 states across 4 viewports x 2 color schemes and generate .shots/index.html
 npm run build
 npm run shots
+
+# Open the interactive one-stop Visual Atlas in your browser (defaults to desktop + light mode)
+open .shots/index.html
+
+# Filter to a specific scenario or logical section (e.g. account, arena, battles, tournaments, wiki)
+npm run shots -- --only account
+npm run shots -- --only arena-ladder
 
 # Record a baseline in .shots/baseline/ before modifying templates or CSS
 npm run shots -- --baseline
 
-# Re-run after changes to compare against .shots/baseline/ and generate .shots/diff/index.html
+# Re-run after changes to compare against .shots/baseline/ and inspect diffs in .shots/index.html
 npm run shots
 npm run shots -- --tolerance 20
-
-# Filter to a specific scenario substring while iterating on a single page
-npm run shots -- --only arena-ladder
-npm run shots -- --only account
 ```
 
 `npm run shots` boots an isolated in-memory fixture seeded with
-[`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock) and captures full-page screenshots across:
+[`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock), applies reversible SQLite savepoints and
+Playwright interactions to trigger every route, lifecycle stage, and error/edge case on the site, and
+captures full-page screenshots across:
 - **4 viewports:** `small` (`375×667`), `phone` (`390×844`), `tablet` (`744×1133`), `desktop`
   (`1280×900`)
 - **2 color schemes:** `light` and `dark`
 
 Every `(scenario, viewport, theme)` combination asserts **zero console/page errors** and **zero
 horizontal overflow** (`document.documentElement.scrollWidth <= window.innerWidth`), writing PNGs to
-`.shots/<viewport>/<theme>/<scenario>.png` for direct inspection.
+`.shots/<viewport>/<theme>/<scenario>.png` and generating a self-contained **Visual Atlas** at
+`.shots/index.html` (rendered from [`tools/shots.html`](../tools/shots.html) and
+[`tools/shots.css`](../tools/shots.css)).
+
+### `.shots/index.html` Visual Atlas & Diff Viewer
+
+Opening `.shots/index.html` provides a one-stop interactive gallery organized into the **7 logical
+sections** of the site, with an interactive carousel per section (`‹ Prev` / `Next ›`, clickable
+state pills, keyboard `←` / `→` to step through states, `↑` / `↓` to jump between sections, `1`–`4`
+to switch viewport, `t` to toggle `light` / `dark` theme, `g` to toggle between Carousel and Grid
+views, `c` to toggle the `Changed Only` filter, `d` to cycle `After` / `3-Up Diff` / `Diff` /
+`Before` comparison views, and instant search filtering).
+
+When a `.shots/baseline/` snapshot exists:
+- `.shots/index.html` highlights every state, section, viewport, and theme that changed vs
+  baseline (`Δ N of 88 states changed`), provides one-click slot chips for every changed
+  `(viewport, theme)` combination on a state, and lets you switch inline between `After`,
+  `Before`, `Diff`, and `3-Up Diff` (`Before | After | Pixel Diff`).
+
+The 7 sections cover:
+
+1. **Overview & Reference Pages (`content`):** Home (both normal state and the `[LIVE]` tournament
+   `#topbar` banner edge case), Background (with `Under Construction` `#topbar`), Concepts overview
+   + 5 subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release
+   announcement, Research bibliography, Arena Rules, and `404` Not Found.
+2. **Projects Directory & Agent Profiles (`projects`):** Directory filters (`All`, `Active`, `Arena`,
+   `Inactive`), multi-version champion profile (`/projects/0-error/`), version dropdown filter, H2H
+   opponent click filter, expanded inline match telemetry, empty filtered recent-matches state,
+   provisional entrant (`/projects/pokerus/`), qualified project with 0 entries
+   (`/projects/cynthiai/`), and pending project (`/projects/asterai/`).
+3. **Arena Hub & Ladders (`arena`):** Active season hub, hub with `#seasons` **Past Seasons** table
+   (`Settling` + `Archived` with `-logs.7z` & `teams.json` links), pre-launch upcoming hub, RBY
+   harvested ladder across `Active` / `Best` / `All` version tabs, VGC competitor `pools` ladder,
+   rotated season in `Settling` grace window, retired season in `Archived` state, and `Upcoming`
+   empty ladder.
+4. **Arena Battles (`battles`):** Live match in progress (`Game 2 / 2`, `PAUSED`/`RUNNING`, G1
+   summary, pool team hashes), inline expanded rows for `[Timeout]`, `[Crash]`, clean 2-game match,
+   and archived `pools` match (with clickable `P1:<hash>` -> `teams.json#<hash>` links), format
+   filter (`VGC`), Page 2 pagination, `Idle` live state, `Stale / Offline` heartbeat state, and
+   empty battle history.
+5. **Championship Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal
+   `SF` badges and `1-replays.7z`), inline Showdown replay viewer, live Tournament `#2` multi-table
+   broadcast (`Table 1`, switched to `Table 2`, `Table 2 (idle)` with `● Watch T1` pill, and Replay
+   mode with `● Return to Live` pill), scheduled Tournament `#3` with registered entrants, and
+   scheduled tournament with 0 entrants.
+6. **Account & Submissions (`account`):** Unregistered GitHub user (`403`), disabled project (`403`),
+   `Pending` qualification (both locked and with Tournament `#3` OCI open), `Qualified` pre-launch,
+   `Eligible` new competitor (`0` submissions), VGC incremental team validation (`0 / 20` panel,
+   partial save + red rejections for `< 1.30` 1-NN duplicate and `< 4` moves, `10 / 20` partial save,
+   and `20 / 20` complete), inline submission form error, `Eligible` settled competitor with locked
+   VGC pool, `Ineligible` awaiting smoke test (`PENDING`), `Ineligible` 14-day ladder cooldown with
+   Tournament `#3` open, expanded `Sandbox stderr log`, `Ineligible` unsettled provisional,
+   `QUARANTINED (DM sent)` runtime fault in History, and `Ineligible` Smogon-banned owner
+   (`smogon_standing = 'bad'`).
+7. **Wiki & Authentication (`wiki`):** Wiki index, all visible pages (`/wiki/pages`),
+   `developers`-restricted project page, `discord`-restricted page, general public editor, project
+   editor with `Developers — Discord — Public` visibility bar, live Djot preview, git revision
+   history, commit snapshot, unified diff, owner redirect on uncreated project page, `404` non-owner
+   on uncreated project page, `403` unregistered user, `403` non-owner edit attempt, `403` non-guild
+   Discord user, and `/auth/dev` persona switcher.
 
 After inspecting `.shots/` (or running local `mock` commands), clean build/public artifacts and
 re-run `npm run test` so `public/` contains no mock state:

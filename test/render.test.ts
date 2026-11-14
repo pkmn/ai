@@ -20,10 +20,13 @@ import {hashTeam} from '../teams';
 import {generateValidVgcTeams} from '../tools/mock';
 import {runPkmnCli} from '../tools/pkmn';
 import {
+  SECTIONS,
+  buildScenarios,
   compareShots,
   decodePng,
   diffPngImages,
   encodePng,
+  renderGalleryHtml,
   standInSprite,
 } from '../tools/shots';
 
@@ -1565,7 +1568,7 @@ describe('JSON route parity & retired pool archives', () => {
     expect([image.data[0], image.data[1], image.data[2], image.data[3]]).toEqual([255, 0, 0, 255]);
   });
 
-  test('compareShots writes diff images with an HTML summary report when pixels differ',
+  test('compareShots writes diff images and returns structured pixel-diff metadata',
     async () => {
       const beforeDir = path.join(tmpDir, 'shots-before');
       const afterDir = path.join(tmpDir, 'shots-after');
@@ -1584,8 +1587,45 @@ describe('JSON route parity & retired pool archives', () => {
       const res = await compareShots(beforeDir, afterDir, diffDir, 0);
       expect(res.same).toBe(false);
       expect(res.changes).toHaveLength(1);
+      expect(res.changes[0]).toMatchObject({
+        name: 'small/light/home.png',
+        status: 'modified',
+        pixels: 1,
+        percent: 25,
+      });
       expect(fs.existsSync(path.join(diffDir, 'small', 'light', 'home.png'))).toBe(true);
-      expect(fs.readFileSync(path.join(diffDir, 'index.html'), 'utf8')).toContain('home.png');
+      expect(fs.existsSync(path.join(diffDir, 'index.html'))).toBe(false);
+    });
+
+  test('buildScenarios and renderGalleryHtml cover all 7 site sections with unique state names',
+    () => {
+      const scenarios = buildScenarios('deadbeef1234');
+      expect(scenarios.length).toBeGreaterThanOrEqual(80);
+      const names = new Set(scenarios.map(s => s.name));
+      expect(names.size).toBe(scenarios.length);
+      for (const section of SECTIONS) {
+        expect(scenarios.some(s => s.section === section.id)).toBe(true);
+      }
+
+      const gallery = renderGalleryHtml(scenarios, {
+        hasBaseline: true,
+        changes: [
+          {
+            name: 'desktop/light/account-teams-invalid.png',
+            note: '420 px (0.36%)',
+            diffPath: '.shots/diff/desktop/light/account-teams-invalid.png',
+            status: 'modified',
+            pixels: 420,
+            percent: 0.36,
+          },
+        ],
+      });
+      expect(gallery).toContain('pkmn.ai Visual Atlas');
+      expect(gallery).toContain('data-vp="desktop" class="active"');
+      expect(gallery).toContain('data-theme="light" class="active"');
+      expect(gallery).toContain('data-compare="split"');
+      expect(gallery).toContain('desktop/light/account-teams-invalid.png');
+      expect(gallery).toContain('account-ineligible-smogon-banned');
     });
 
   test('emits canonical URLs with ETag caching headers across dynamic SSR routes', async () => {

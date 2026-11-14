@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pkmn.ai Visual Atlas ({{scenarioCount}} States)</title>
+  <style>{{{css}}}</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-row">
+      <div class="brand">
+        <h1>pkmn.ai Visual Atlas</h1>
+        <span id="atlas-summary">
+          {{scenarioCount}} states across {{sectionCount}} sections
+        </span>
+        <span id="diff-summary-wrap"></span>
+        <span class="kbd-hint">
+          Keys: ←/→ state · ↑/↓ section · 1–4 viewport · t theme · g grid · c changed · d diff
+        </span>
+      </div>
+      <div class="controls">
+        <input type="search" id="search-input" class="search-input"
+          placeholder="Filter states, routes, personas…">
+        <div class="ctrl-group hide" id="filter-group"
+          title="Filter states by diff status (key: c)">
+          <button type="button" data-filter="all" class="active">All</button>
+          <button type="button" data-filter="changed">Changed</button>
+        </div>
+        <div class="ctrl-group hide" id="compare-group" title="Comparison view mode (key: d)">
+          <button type="button" data-compare="after" class="active">After</button>
+          <button type="button" data-compare="before">Before</button>
+          <button type="button" data-compare="diff">Diff</button>
+          <button type="button" data-compare="split">3-Up Diff</button>
+        </div>
+        <div class="ctrl-group" id="viewport-group" title="Viewport size (keys: 1–4)">
+          <button type="button" data-vp="desktop" class="active">Desktop (1280)</button>
+          <button type="button" data-vp="tablet">Tablet (744)</button>
+          <button type="button" data-vp="phone">Phone (390)</button>
+          <button type="button" data-vp="small">Small (375)</button>
+        </div>
+        <div class="ctrl-group" id="theme-group" title="Color scheme (key: t)">
+          <button type="button" data-theme="light" class="active">Light</button>
+          <button type="button" data-theme="dark">Dark</button>
+        </div>
+        <div class="ctrl-group" id="mode-group" title="Display mode (key: g)">
+          <button type="button" data-mode="carousel" class="active">Carousel</button>
+          <button type="button" data-mode="grid">Grid</button>
+        </div>
+      </div>
+    </div>
+    <nav class="section-nav" id="section-nav"></nav>
+  </header>
+  <main id="atlas-main"></main>
+  <script>
+    (() => {
+      const SECTIONS = {{{sectionsJson}}};
+      const ITEMS = {{{itemsJson}}};
+      const VIEWPORTS = {{{viewportsJson}}};
+      const CHANGES = {{{changesJson}}};
+      const HAS_BASELINE = {{{hasBaselineJson}}};
+
+      const changeBySlot = {};
+      const changesByScenario = {};
+      for (const c of CHANGES) {
+        changeBySlot[c.name] = c;
+        const parts = c.name.split('/');
+        if (parts.length >= 3) {
+          const vp = parts[0];
+          const theme = parts[1];
+          const scen = parts.slice(2).join('/').replace(/\.png$/i, '');
+          if (!changesByScenario[scen]) changesByScenario[scen] = [];
+          changesByScenario[scen].push({
+            vp,
+            theme,
+            name: c.name,
+            note: c.note,
+            hasDiff: c.hasDiff,
+            status: c.status,
+            pixels: c.pixels,
+            percent: c.percent,
+          });
+        }
+      }
+      const changedScenarioSet = new Set(Object.keys(changesByScenario));
+
+      let currentVp = 'desktop';
+      let currentTheme = 'light';
+      let currentMode = 'carousel';
+      let currentFilter = 'all';
+      let currentCompare = 'after';
+      let currentSectionFilter = 'all';
+      let searchQuery = '';
+      let activeSectionId = SECTIONS[0]?.id || 'content';
+      const indexBySection = {};
+      for (const sec of SECTIONS) indexBySection[sec.id] = 0;
+
+      const mainEl = document.getElementById('atlas-main');
+      const secNavEl = document.getElementById('section-nav');
+      const summaryEl = document.getElementById('atlas-summary');
+      const diffSummaryWrapEl = document.getElementById('diff-summary-wrap');
+      const searchEl = document.getElementById('search-input');
+      const filterGroupEl = document.getElementById('filter-group');
+      const compareGroupEl = document.getElementById('compare-group');
+
+      const slotKey = name => currentVp + '/' + currentTheme + '/' + name + '.png';
+      const afterSrc = name => slotKey(name);
+      const beforeSrc = name => 'baseline/' + slotKey(name);
+      const diffSrc = name => 'diff/' + slotKey(name);
+
+      if (HAS_BASELINE) {
+        filterGroupEl.classList.remove('hide');
+        compareGroupEl.classList.remove('hide');
+      }
+
+      const filteredItemsForSection = secId => {
+        const q = searchQuery.trim().toLowerCase();
+        return ITEMS.filter(item => {
+          if (item.section !== secId) return false;
+          if (currentFilter === 'changed' && !changedScenarioSet.has(item.name)) return false;
+          if (!q) return true;
+          return (
+            item.name.toLowerCase().includes(q) ||
+            item.title.toLowerCase().includes(q) ||
+            item.description.toLowerCase().includes(q) ||
+            item.path.toLowerCase().includes(q) ||
+            item.persona.toLowerCase().includes(q)
+          );
+        });
+      };
+
+      const renderDiffHeaderSummary = () => {
+        diffSummaryWrapEl.innerHTML = '';
+        if (!HAS_BASELINE) return;
+
+        if (CHANGES.length > 0) {
+          const pill = document.createElement('button');
+          pill.type = 'button';
+          pill.className = 'diff-summary-pill';
+          pill.title = 'Click to toggle Changed Only filter and 3-Up Diff view';
+          pill.textContent =
+            'Δ ' + changedScenarioSet.size + ' of ' + ITEMS.length +
+            ' states changed (' + CHANGES.length + ' shots)';
+          pill.addEventListener('click', () => {
+            currentFilter = currentFilter === 'changed' ? 'all' : 'changed';
+            if (currentFilter === 'changed' && currentCompare === 'after') {
+              currentCompare = 'split';
+            }
+            syncControlButtons();
+            renderAll();
+          });
+          diffSummaryWrapEl.appendChild(pill);
+        } else {
+          const clean = document.createElement('span');
+          clean.className = 'diff-summary-pill clean';
+          clean.textContent = '✓ 0 changes vs baseline';
+          diffSummaryWrapEl.appendChild(clean);
+        }
+      };
+
+      const updateControlBadges = () => {
+        const allBtn = filterGroupEl.querySelector('[data-filter="all"]');
+        const chgBtn = filterGroupEl.querySelector('[data-filter="changed"]');
+        if (allBtn) allBtn.textContent = 'All (' + ITEMS.length + ')';
+        if (chgBtn) {
+          chgBtn.innerHTML = 'Changed <span class="ctrl-delta">' +
+            changedScenarioSet.size + '</span>';
+        }
+
+        const vpLabels = {
+          desktop: 'Desktop (1280)',
+          tablet: 'Tablet (744)',
+          phone: 'Phone (390)',
+          small: 'Small (375)',
+        };
+        document.querySelectorAll('#viewport-group button').forEach(btn => {
+          const vp = btn.getAttribute('data-vp') || 'desktop';
+          const prefix = vp + '/' + currentTheme + '/';
+          const count = CHANGES.filter(c => c.name.startsWith(prefix)).length;
+          btn.innerHTML = vpLabels[vp] +
+            (count > 0 ? ' <span class="ctrl-delta">Δ' + count + '</span>' : '');
+        });
+
+        const themeLabels = {light: 'Light', dark: 'Dark'};
+        document.querySelectorAll('#theme-group button').forEach(btn => {
+          const th = btn.getAttribute('data-theme') || 'light';
+          const prefix = currentVp + '/' + th + '/';
+          const count = CHANGES.filter(c => c.name.startsWith(prefix)).length;
+          btn.innerHTML = themeLabels[th] +
+            (count > 0 ? ' <span class="ctrl-delta">Δ' + count + '</span>' : '');
+        });
+      };
+
+      const renderSectionNav = () => {
+        let totalVisible = 0;
+        const counts = {};
+        const diffCounts = {};
+        for (const sec of SECTIONS) {
+          const secItems = filteredItemsForSection(sec.id);
+          counts[sec.id] = secItems.length;
+          diffCounts[sec.id] = secItems.filter(i => changedScenarioSet.has(i.name)).length;
+          totalVisible += secItems.length;
+        }
+        summaryEl.textContent =
+          totalVisible + (currentFilter === 'changed' ? ' changed' : '') +
+          ' states across ' + SECTIONS.length + ' sections';
+
+        secNavEl.innerHTML = '';
+        const allBtn = document.createElement('button');
+        allBtn.type = 'button';
+        allBtn.textContent = 'All Sections (' + totalVisible + ')';
+        if (currentSectionFilter === 'all') allBtn.classList.add('active');
+        allBtn.addEventListener('click', () => {
+          currentSectionFilter = 'all';
+          renderAll();
+        });
+        secNavEl.appendChild(allBtn);
+
+        SECTIONS.forEach((sec, idx) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.setAttribute('data-sec', sec.id);
+          const dCount = diffCounts[sec.id];
+          if (dCount > 0) btn.classList.add('has-diff');
+          btn.innerHTML =
+            '<span>' + (idx + 1) + '. ' + sec.title + ' (' + counts[sec.id] + ')</span>' +
+            (dCount > 0 ? '<span class="ctrl-delta">Δ' + dCount + '</span>' : '');
+          if (currentSectionFilter === sec.id) btn.classList.add('active');
+          btn.addEventListener('click', () => {
+            currentSectionFilter = currentSectionFilter === sec.id ? 'all' : sec.id;
+            activeSectionId = sec.id;
+            renderAll();
+          });
+          secNavEl.appendChild(btn);
+        });
+      };
+
+      const stepSection = (secId, delta) => {
+        const items = filteredItemsForSection(secId);
+        if (!items.length) return;
+        const cur = indexBySection[secId] || 0;
+        const next = (cur + delta + items.length) % items.length;
+        indexBySection[secId] = next;
+        activeSectionId = secId;
+        const chosen = items[next];
+        if (chosen) history.replaceState(null, '', '#' + chosen.name);
+        renderAll();
+      };
+
+      const renderAll = () => {
+        document.documentElement.setAttribute('data-ui-theme', currentTheme);
+        renderDiffHeaderSummary();
+        updateControlBadges();
+        renderSectionNav();
+        mainEl.innerHTML = '';
+
+        const vpWidth = VIEWPORTS[currentVp]?.width || 1280;
+        let renderedSections = 0;
+
+        SECTIONS.forEach((sec, secIdx) => {
+          if (currentSectionFilter !== 'all' && currentSectionFilter !== sec.id) return;
+          const items = filteredItemsForSection(sec.id);
+          if (!items.length) return;
+          renderedSections++;
+
+          let activeIdx = indexBySection[sec.id] || 0;
+          if (activeIdx >= items.length) {
+            activeIdx = 0;
+            indexBySection[sec.id] = 0;
+          }
+          const currentItem = items[activeIdx];
+          const secDiffCount = items.filter(i => changedScenarioSet.has(i.name)).length;
+
+          const card = document.createElement('section');
+          card.className = 'section-card';
+          card.id = 'section-' + sec.id;
+          card.addEventListener('mouseenter', () => {
+            activeSectionId = sec.id;
+          });
+
+          const head = document.createElement('div');
+          head.className = 'section-head';
+          head.innerHTML =
+            '<div><h2>' + (secIdx + 1) + '. ' + sec.title +
+            (secDiffCount > 0
+              ? ' <span class="ctrl-delta">Δ ' + secDiffCount + ' changed</span>'
+              : '') +
+            '</h2><p>' + sec.subtitle + '</p></div>' +
+            '<span class="section-counter">' +
+            (currentMode === 'carousel'
+              ? ('State ' + (activeIdx + 1) + ' of ' + items.length)
+              : (items.length + ' states')) +
+            '</span>';
+          card.appendChild(head);
+
+          const strip = document.createElement('div');
+          strip.className = 'state-strip';
+          items.forEach((item, idx) => {
+            const slotChg = changeBySlot[slotKey(item.name)];
+            const scenChgs = changesByScenario[item.name] || [];
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            let cls = 'state-pill';
+            if (currentMode === 'carousel' && idx === activeIdx) cls += ' active';
+            if (slotChg) cls += ' has-diff';
+            else if (scenChgs.length > 0) cls += ' has-other-diff';
+            pill.className = cls;
+
+            const deltaHtml = slotChg
+              ? '<span class="pill-delta" title="Changed in ' + currentVp + '/' + currentTheme +
+                ': ' + slotChg.note + '">Δ</span>'
+              : scenChgs.length > 0
+                ? '<span class="pill-delta" title="Changed in ' +
+                  scenChgs.map(c => c.vp + '/' + c.theme).join(', ') + '">Δ</span>'
+                : '';
+
+            pill.innerHTML =
+              '<span class="num">' + (idx + 1) + '.</span>' +
+              '<span>' + item.title.replace(/^[^:]+:\s*/, '') + '</span>' +
+              deltaHtml;
+            pill.title = item.name + ' (' + item.path + ')' +
+              (slotChg ? ' — ' + slotChg.note : '');
+            pill.addEventListener('click', () => {
+              indexBySection[sec.id] = idx;
+              activeSectionId = sec.id;
+              if (currentMode === 'grid') {
+                currentMode = 'carousel';
+                syncControlButtons();
+              }
+              history.replaceState(null, '', '#' + item.name);
+              renderAll();
+            });
+            strip.appendChild(pill);
+          });
+          card.appendChild(strip);
+
+          if (currentMode === 'carousel') {
+            const slotChg = changeBySlot[slotKey(currentItem.name)];
+            const scenChgs = changesByScenario[currentItem.name] || [];
+
+            const bar = document.createElement('div');
+            bar.className = 'carousel-bar';
+
+            const meta = document.createElement('div');
+            meta.className = 'carousel-meta';
+            const titleRow = document.createElement('div');
+            titleRow.className = 'carousel-title-row';
+
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'carousel-title';
+            titleSpan.textContent = currentItem.title;
+            titleRow.appendChild(titleSpan);
+
+            const idBadge = document.createElement('code');
+            idBadge.className = 'badge';
+            idBadge.textContent = currentItem.name;
+            titleRow.appendChild(idBadge);
+
+            const routeBadge = document.createElement('code');
+            routeBadge.className = 'badge';
+            routeBadge.textContent = currentItem.path + ' · @' + currentItem.persona;
+            titleRow.appendChild(routeBadge);
+
+            if (slotChg) {
+              const diffBadge = document.createElement('span');
+              diffBadge.className = 'badge diff-badge';
+              diffBadge.textContent = 'Δ ' + slotChg.note;
+              titleRow.appendChild(diffBadge);
+            }
+
+            const rawLink = document.createElement('a');
+            rawLink.className = 'badge';
+            rawLink.href = afterSrc(currentItem.name);
+            rawLink.target = '_blank';
+            rawLink.rel = 'noopener';
+            rawLink.textContent = HAS_BASELINE ? 'After PNG ↗' : 'Open PNG ↗';
+            titleRow.appendChild(rawLink);
+
+            if (HAS_BASELINE) {
+              const beforeLink = document.createElement('a');
+              beforeLink.className = 'badge';
+              beforeLink.href = beforeSrc(currentItem.name);
+              beforeLink.target = '_blank';
+              beforeLink.rel = 'noopener';
+              beforeLink.textContent = 'Before PNG ↗';
+              titleRow.appendChild(beforeLink);
+            }
+
+            if (slotChg && slotChg.hasDiff) {
+              const diffLink = document.createElement('a');
+              diffLink.className = 'badge diff-badge';
+              diffLink.href = diffSrc(currentItem.name);
+              diffLink.target = '_blank';
+              diffLink.rel = 'noopener';
+              diffLink.textContent = 'Diff PNG ↗';
+              titleRow.appendChild(diffLink);
+            }
+
+            meta.appendChild(titleRow);
+
+            const desc = document.createElement('div');
+            desc.className = 'carousel-desc';
+            desc.textContent = currentItem.description;
+            meta.appendChild(desc);
+            bar.appendChild(meta);
+
+            const nav = document.createElement('div');
+            nav.className = 'carousel-nav';
+            const prevBtn = document.createElement('button');
+            prevBtn.type = 'button';
+            prevBtn.className = 'nav-btn';
+            prevBtn.textContent = '‹ Prev';
+            prevBtn.addEventListener('click', () => stepSection(sec.id, -1));
+
+            const nextBtn = document.createElement('button');
+            nextBtn.type = 'button';
+            nextBtn.className = 'nav-btn';
+            nextBtn.textContent = 'Next ›';
+            nextBtn.addEventListener('click', () => stepSection(sec.id, 1));
+
+            nav.appendChild(prevBtn);
+            nav.appendChild(nextBtn);
+            bar.appendChild(nav);
+            card.appendChild(bar);
+
+            if (scenChgs.length > 0) {
+              const callout = document.createElement('div');
+              callout.className = 'diff-callout';
+              const lbl = document.createElement('span');
+              lbl.className = 'diff-callout-label';
+              lbl.textContent =
+                'Δ Changed in ' + scenChgs.length + ' of 8 slots ' +
+                '(red changed, magenta beyond an edge):';
+              callout.appendChild(lbl);
+
+              scenChgs.forEach(c => {
+                const slotBtn = document.createElement('button');
+                slotBtn.type = 'button';
+                const isCur = c.vp === currentVp && c.theme === currentTheme;
+                slotBtn.className = 'diff-slot-btn' + (isCur ? ' active' : '');
+                slotBtn.textContent = c.vp + ' / ' + c.theme + ' · ' + c.note;
+                slotBtn.addEventListener('click', () => {
+                  currentVp = c.vp;
+                  currentTheme = c.theme;
+                  if (currentCompare === 'after') currentCompare = 'split';
+                  syncControlButtons();
+                  renderAll();
+                });
+                callout.appendChild(slotBtn);
+              });
+              card.appendChild(callout);
+            }
+
+            const stage = document.createElement('div');
+            stage.className = 'stage';
+
+            if (currentCompare === 'split' && HAS_BASELINE) {
+              const splitGrid = document.createElement('div');
+              splitGrid.className = 'split-grid';
+
+              const makeCol = (label, src, isDiffCol) => {
+                const col = document.createElement('div');
+                col.className = 'split-col' + (isDiffCol && slotChg ? ' diff-col-changed' : '');
+                const colHead = document.createElement('div');
+                colHead.className = 'split-col-head';
+                colHead.innerHTML =
+                  '<span>' + label + '</span>' +
+                  (src
+                    ? '<a class="badge" href="' + src +
+                      '" target="_blank" rel="noopener">Open ↗</a>'
+                    : '');
+                col.appendChild(colHead);
+
+                const colBody = document.createElement('div');
+                colBody.className = 'split-col-body';
+                if (src) {
+                  const im = document.createElement('img');
+                  im.src = src;
+                  im.alt = currentItem.title + ' (' + label + ')';
+                  im.title = 'Click to advance to next state in ' + sec.title;
+                  im.addEventListener('click', () => stepSection(sec.id, 1));
+                  colBody.appendChild(im);
+                } else {
+                  const msg = document.createElement('div');
+                  msg.className = 'split-unchanged';
+                  msg.textContent = slotChg
+                    ? slotChg.note
+                    : '✓ Identical in ' + currentVp + '/' + currentTheme + ' (0 px changed)';
+                  colBody.appendChild(msg);
+                }
+                col.appendChild(colBody);
+                return col;
+              };
+
+              const beforeColSrc = slotChg && slotChg.status === 'added'
+                ? ''
+                : beforeSrc(currentItem.name);
+              const afterColSrc = slotChg && slotChg.status === 'removed'
+                ? ''
+                : afterSrc(currentItem.name);
+              const diffColSrc = slotChg && slotChg.hasDiff ? diffSrc(currentItem.name) : '';
+
+              splitGrid.appendChild(makeCol('Before (Baseline)', beforeColSrc, false));
+              splitGrid.appendChild(makeCol('After (Current)', afterColSrc, false));
+              splitGrid.appendChild(
+                makeCol(
+                  slotChg ? ('Pixel Diff · ' + slotChg.note) : 'Pixel Diff',
+                  diffColSrc,
+                  true
+                )
+              );
+              stage.appendChild(splitGrid);
+            } else {
+              let displaySrc = afterSrc(currentItem.name);
+              let isDiffFrame = false;
+              if (currentCompare === 'before' && HAS_BASELINE) {
+                displaySrc = beforeSrc(currentItem.name);
+              } else if (currentCompare === 'diff' && HAS_BASELINE) {
+                if (slotChg && slotChg.hasDiff) {
+                  displaySrc = diffSrc(currentItem.name);
+                  isDiffFrame = true;
+                  const note = document.createElement('div');
+                  note.className = 'stage-notice diff-active';
+                  note.textContent =
+                    'Pixel Diff (' + currentVp + '/' + currentTheme + '): ' + slotChg.note +
+                    ' — Red changed pixels, magenta beyond resized edge.';
+                  stage.appendChild(note);
+                } else {
+                  const note = document.createElement('div');
+                  note.className = 'stage-notice';
+                  note.textContent = slotChg
+                    ? ('Status in ' + currentVp + '/' + currentTheme + ': ' + slotChg.note)
+                    : ('✓ No pixel changes in ' + currentVp + '/' + currentTheme +
+                      ' vs baseline (showing After screenshot).');
+                  stage.appendChild(note);
+                }
+              }
+
+              const frame = document.createElement('div');
+              frame.className = 'shot-frame' + (isDiffFrame ? ' diff-frame' : '');
+              frame.style.width = vpWidth + 'px';
+
+              const img = document.createElement('img');
+              img.src = displaySrc;
+              img.alt = currentItem.title;
+              img.title = 'Click to advance to next state in ' + sec.title;
+              img.addEventListener('click', () => stepSection(sec.id, 1));
+              frame.appendChild(img);
+              stage.appendChild(frame);
+            }
+            card.appendChild(stage);
+
+            const nextItem = items[(activeIdx + 1) % items.length];
+            const prevItem = items[(activeIdx - 1 + items.length) % items.length];
+            for (const neighbor of [nextItem, prevItem]) {
+              if (neighbor && neighbor.name !== currentItem.name) {
+                const pre = new Image();
+                pre.src = afterSrc(neighbor.name);
+              }
+            }
+          } else {
+            const grid = document.createElement('div');
+            grid.className = 'grid-view';
+            items.forEach((item, idx) => {
+              const slotChg = changeBySlot[slotKey(item.name)];
+              const scenChgs = changesByScenario[item.name] || [];
+              const cell = document.createElement('div');
+              cell.className = 'grid-item' +
+                (slotChg ? ' has-diff' : scenChgs.length > 0 ? ' has-other-diff' : '');
+
+              let thumbSrc = afterSrc(item.name);
+              if (currentCompare === 'before' && HAS_BASELINE) {
+                thumbSrc = beforeSrc(item.name);
+              } else if (
+                (currentCompare === 'diff' || currentCompare === 'split') &&
+                slotChg &&
+                slotChg.hasDiff
+              ) {
+                thumbSrc = diffSrc(item.name);
+              }
+
+              const deltaBadge = slotChg
+                ? '<span class="badge diff-badge">Δ ' + slotChg.note + '</span>'
+                : scenChgs.length > 0
+                  ? '<span class="badge diff-badge">Δ ' + scenChgs.length + ' slots</span>'
+                  : '';
+
+              cell.innerHTML =
+                '<div class="grid-item-head">' +
+                '<div class="grid-item-title"><span>' + (idx + 1) + '. ' + item.title + '</span>' +
+                deltaBadge + '</div>' +
+                '<div class="grid-item-desc">' + item.description + '</div>' +
+                '</div>' +
+                '<div class="grid-item-img-wrap">' +
+                '<img loading="lazy" src="' + thumbSrc + '" alt="' + item.title + '">' +
+                '</div>';
+              cell.addEventListener('click', () => {
+                indexBySection[sec.id] = idx;
+                activeSectionId = sec.id;
+                currentMode = 'carousel';
+                syncControlButtons();
+                history.replaceState(null, '', '#' + item.name);
+                renderAll();
+                document.getElementById('section-' + sec.id)?.scrollIntoView({behavior: 'smooth'});
+              });
+              grid.appendChild(cell);
+            });
+            card.appendChild(grid);
+          }
+
+          mainEl.appendChild(card);
+        });
+
+        if (renderedSections === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'empty-notice';
+          empty.innerHTML = currentFilter === 'changed' && changedScenarioSet.size === 0
+            ? '<strong>✓ All ' + ITEMS.length + ' states match baseline!</strong> ' +
+              'Switch filter to <em>All</em> to browse the full Visual Atlas.'
+            : 'No states match the current filter.';
+          mainEl.appendChild(empty);
+        }
+      };
+
+      const syncControlButtons = () => {
+        document.querySelectorAll('#filter-group button').forEach(btn => {
+          btn.classList.toggle('active', btn.getAttribute('data-filter') === currentFilter);
+        });
+        document.querySelectorAll('#compare-group button').forEach(btn => {
+          btn.classList.toggle('active', btn.getAttribute('data-compare') === currentCompare);
+        });
+        document.querySelectorAll('#viewport-group button').forEach(btn => {
+          btn.classList.toggle('active', btn.getAttribute('data-vp') === currentVp);
+        });
+        document.querySelectorAll('#theme-group button').forEach(btn => {
+          btn.classList.toggle('active', btn.getAttribute('data-theme') === currentTheme);
+        });
+        document.querySelectorAll('#mode-group button').forEach(btn => {
+          btn.classList.toggle('active', btn.getAttribute('data-mode') === currentMode);
+        });
+      };
+
+      document.querySelectorAll('#filter-group button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentFilter = btn.getAttribute('data-filter') || 'all';
+          syncControlButtons();
+          renderAll();
+        });
+      });
+
+      document.querySelectorAll('#compare-group button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentCompare = btn.getAttribute('data-compare') || 'after';
+          syncControlButtons();
+          renderAll();
+        });
+      });
+
+      document.querySelectorAll('#viewport-group button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentVp = btn.getAttribute('data-vp') || 'desktop';
+          syncControlButtons();
+          renderAll();
+        });
+      });
+
+      document.querySelectorAll('#theme-group button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentTheme = btn.getAttribute('data-theme') || 'light';
+          syncControlButtons();
+          renderAll();
+        });
+      });
+
+      document.querySelectorAll('#mode-group button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentMode = btn.getAttribute('data-mode') || 'carousel';
+          syncControlButtons();
+          renderAll();
+        });
+      });
+
+      searchEl.addEventListener('input', () => {
+        searchQuery = searchEl.value || '';
+        renderAll();
+      });
+
+      const selectHashScenario = hash => {
+        const clean = (hash || '').replace(/^#/, '').trim();
+        if (!clean) return;
+        if (clean === 'diff' && HAS_BASELINE) {
+          currentFilter = changedScenarioSet.size > 0 ? 'changed' : 'all';
+          currentCompare = 'split';
+          syncControlButtons();
+          renderAll();
+          return;
+        }
+        const found = ITEMS.find(item => item.name === clean);
+        if (!found) return;
+        if (currentFilter === 'changed' && !changedScenarioSet.has(found.name)) {
+          currentFilter = 'all';
+          syncControlButtons();
+        }
+        const secItems = filteredItemsForSection(found.section);
+        const idx = secItems.findIndex(item => item.name === clean);
+        if (idx >= 0) {
+          indexBySection[found.section] = idx;
+          activeSectionId = found.section;
+          renderAll();
+          document.getElementById('section-' + found.section)?.scrollIntoView();
+        }
+      };
+
+      window.addEventListener('keydown', e => {
+        if (document.activeElement === searchEl) return;
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          stepSection(activeSectionId, 1);
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          stepSection(activeSectionId, -1);
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          const visibleSecs = SECTIONS.filter(
+            s => (currentSectionFilter === 'all' || currentSectionFilter === s.id) &&
+              filteredItemsForSection(s.id).length > 0
+          );
+          if (!visibleSecs.length) return;
+          const curIdx = Math.max(0, visibleSecs.findIndex(s => s.id === activeSectionId));
+          const delta = e.key === 'ArrowDown' ? 1 : -1;
+          const nextSec = visibleSecs[(curIdx + delta + visibleSecs.length) % visibleSecs.length];
+          if (nextSec) {
+            e.preventDefault();
+            activeSectionId = nextSec.id;
+            document.getElementById('section-' + nextSec.id)?.scrollIntoView({behavior: 'smooth'});
+          }
+        } else if (e.key === 't' || e.key === 'T') {
+          currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+          syncControlButtons();
+          renderAll();
+        } else if (e.key === 'g' || e.key === 'G') {
+          currentMode = currentMode === 'carousel' ? 'grid' : 'carousel';
+          syncControlButtons();
+          renderAll();
+        } else if ((e.key === 'c' || e.key === 'C') && HAS_BASELINE) {
+          currentFilter = currentFilter === 'all' ? 'changed' : 'all';
+          syncControlButtons();
+          renderAll();
+        } else if ((e.key === 'd' || e.key === 'D') && HAS_BASELINE) {
+          const order = ['after', 'split', 'diff', 'before'];
+          currentCompare = order[(order.indexOf(currentCompare) + 1) % order.length];
+          syncControlButtons();
+          renderAll();
+        } else if (e.key === '1') {
+          currentVp = 'desktop';
+          syncControlButtons();
+          renderAll();
+        } else if (e.key === '2') {
+          currentVp = 'tablet';
+          syncControlButtons();
+          renderAll();
+        } else if (e.key === '3') {
+          currentVp = 'phone';
+          syncControlButtons();
+          renderAll();
+        } else if (e.key === '4') {
+          currentVp = 'small';
+          syncControlButtons();
+          renderAll();
+        }
+      });
+
+      syncControlButtons();
+      renderAll();
+      if (location.hash) selectHashScenario(location.hash);
+    })();
+  </script>
+</body>
+</html>
