@@ -8,6 +8,8 @@ import {
   Database,
   LADDERS_FILE,
   SCHEMA_DIR,
+  classifyMigrationSql,
+  compareDatabaseSchemas,
   getTournamentClosesAt,
   parseArenaProjects,
   parseLaddersYaml,
@@ -200,6 +202,76 @@ describe('schema migrations', () => {
       expect(db.getAgentBySlug('good-proj')?.cooldownRefundedAt).toBe(1_760_000_200);
     } finally {
       db.close();
+    }
+  });
+
+  test('classifyMigrationSql distinguishes additive from destructive statements', () => {
+    expect(classifyMigrationSql(`
+      -- Add column and index
+      ALTER TABLE items ADD COLUMN tag TEXT NOT NULL DEFAULT 'v1';
+      CREATE INDEX idx_items_tag ON items(tag);
+    `)).toBe('additive');
+
+    expect(classifyMigrationSql(`
+      DROP INDEX IF EXISTS idx_items_tag;
+      ALTER TABLE items DROP COLUMN tag;
+    `)).toBe('destructive');
+  });
+
+  test('classifyMigrationSql recognizes SQLite four-step table rebuild as destructive', () => {
+    expect(classifyMigrationSql(`
+      CREATE TABLE items_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE
+      );
+      INSERT INTO items_new (id, name) SELECT id, name FROM items;
+      DROP TABLE items;
+      ALTER TABLE items_new RENAME TO items;
+    `)).toBe('destructive');
+  });
+
+  test('classifyMigrationSql flags combined additive with destructive changes as mixed', () => {
+    expect(classifyMigrationSql(`
+      ALTER TABLE items ADD COLUMN extra TEXT;
+      DROP TABLE old_items;
+    `)).toBe('mixed');
+  });
+
+  test('compareDatabaseSchemas verifies migrated database matches declarative schema', () => {
+    const schemaDir = path.join(tmpDir, 'schema-eq');
+    const migrationDir = path.join(tmpDir, 'migration-eq');
+    fs.mkdirSync(schemaDir, {recursive: true});
+    fs.mkdirSync(migrationDir, {recursive: true});
+
+    fs.writeFileSync(path.join(schemaDir, 'items.sql'), `
+      CREATE TABLE IF NOT EXISTS items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL
+      );
+    `);
+    const migratedFile = path.join(tmpDir, 'migrated.sqlite');
+    const dbInit = new Database(migratedFile, {schemaDir, migrationDir, now: 1000});
+    dbInit.close();
+
+    fs.writeFileSync(
+      path.join(migrationDir, '0001-add-tag.sql'),
+      "ALTER TABLE items ADD COLUMN tag TEXT NOT NULL DEFAULT 'v1';"
+    );
+    fs.writeFileSync(path.join(schemaDir, 'items.sql'), `
+      CREATE TABLE IF NOT EXISTS items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        tag TEXT NOT NULL DEFAULT 'v1'
+      );
+    `);
+
+    const migratedDb = new Database(migratedFile, {schemaDir, migrationDir, now: 2000});
+    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 2000});
+    try {
+      expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
+    } finally {
+      migratedDb.close();
+      freshDb.close();
     }
   });
 });

@@ -1587,4 +1587,39 @@ describe('JSON route parity & retired pool archives', () => {
       expect(fs.existsSync(path.join(diffDir, 'small', 'light', 'home.png'))).toBe(true);
       expect(fs.readFileSync(path.join(diffDir, 'index.html'), 'utf8')).toContain('home.png');
     });
+
+  test('emits canonical URLs with ETag caching headers across dynamic SSR routes', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic});
+    try {
+      const routes = [
+        {path: '/arena/', canonical: 'https://pkmn.ai/arena/', title: 'Arena | pkmn.ai'},
+        {
+          path: '/arena/ladders/rby/',
+          canonical: 'https://pkmn.ai/arena/ladders/rby/',
+          title: 'Arena — RBY | pkmn.ai',
+        },
+        {
+          path: '/arena/battles/',
+          canonical: 'https://pkmn.ai/arena/battles/',
+          title: 'Arena — Battles | pkmn.ai',
+        },
+        {
+          path: '/projects/foul-play/',
+          canonical: 'https://pkmn.ai/projects/foul-play/',
+          title: 'Foul Play | pkmn.ai',
+        },
+      ];
+      for (const route of routes) {
+        const res = await fetch(`${h.baseUrl}${route.path}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('cache-control')).toBe('no-cache');
+        expect(res.headers.get('etag')).toBeTruthy();
+        const html = await res.text();
+        expect(html).toContain(`<title>${route.title}</title>`);
+        expect(html).toContain(`<link href="${route.canonical}" rel="canonical">`);
+      }
+    } finally {
+      await h.close();
+    }
+  });
 });

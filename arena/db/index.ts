@@ -115,7 +115,8 @@ export class Database extends baseDb.SqliteDatabase {
   }
 }
 
-export type {AppliedMigration, Options, TransactionRunner} from '../../db';
+export {classifyMigrationSql, compareDatabaseSchemas} from '../../db';
+export type {AppliedMigration, MigrationKind, Options, TransactionRunner} from '../../db';
 export * from './ladder-counters';
 export * from './local-agents';
 export * from './local-matches';

@@ -828,6 +828,51 @@ describe('arena infrastructure', () => {
       ]);
     });
 
+    test('validates arena/db migrations against declarative schema definitions', () => {
+      const schemaDir = path.join(tmpDir, 'arena-schema-eq');
+      const migrationDir = path.join(tmpDir, 'arena-migration-eq');
+      fs.mkdirSync(schemaDir, {recursive: true});
+      fs.mkdirSync(migrationDir, {recursive: true});
+      for (const file of arenaDb.SCHEMA_FILES) {
+        fs.copyFileSync(
+          path.join(arenaDb.SCHEMA_DIR, file),
+          path.join(schemaDir, file)
+        );
+      }
+
+      const migratedFile = path.join(tmpDir, 'arena-migrated.sqlite');
+      const initDb = new arenaDb.Database(migratedFile, {schemaDir, migrationDir, now: 1000});
+      initDb.close();
+
+      fs.writeFileSync(
+        path.join(migrationDir, '0001-mixed.sql'),
+        'ALTER TABLE outbox ADD COLUMN note TEXT; DROP TABLE ladder_counters;'
+      );
+      expect(() => new arenaDb.Database(migratedFile, {schemaDir, migrationDir, now: 2000}))
+        .toThrow(/mixes additive and destructive SQL statements/);
+
+      fs.writeFileSync(
+        path.join(migrationDir, '0001-add-outbox-note.sql'),
+        'ALTER TABLE outbox ADD COLUMN note TEXT;'
+      );
+      fs.rmSync(path.join(migrationDir, '0001-mixed.sql'));
+      const outboxSql = fs.readFileSync(path.join(schemaDir, 'outbox.sql'), 'utf8')
+        .replace(
+          '  updated_at INTEGER\n);',
+          '  updated_at INTEGER,\n  note TEXT\n);'
+        );
+      fs.writeFileSync(path.join(schemaDir, 'outbox.sql'), outboxSql);
+
+      const migratedDb = new arenaDb.Database(migratedFile, {schemaDir, migrationDir, now: 2000});
+      const freshDb = new arenaDb.Database(':memory:', {schemaDir, migrationDir, now: 2000});
+      try {
+        expect(arenaDb.compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
+      } finally {
+        migratedDb.close();
+        freshDb.close();
+      }
+    });
+
     test('computeResidencyMultipliers boosts warm pairs over cold pairs', () => {
       const stateDb = new arenaDb.Database(':memory:');
       try {

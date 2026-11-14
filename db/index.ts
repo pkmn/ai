@@ -35,6 +35,173 @@ export interface AppliedMigration {
   appliedAt: number;
 }
 
+export type MigrationKind = 'additive' | 'destructive' | 'mixed';
+
+function stripSqlCommentsAndStrings(sql: string): string {
+  let out = '';
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+    if (ch === '-' && next === '-') {
+      i = sql.indexOf('\n', i + 2);
+      if (i === -1) break;
+      out += '\n';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      if (end === -1) throw new Error('Unterminated /* comment in migration SQL');
+      i = end + 1;
+      out += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      out += quote === "'" ? "''" : ch;
+      for (i++; i < sql.length; i++) {
+        if (sql[i] === quote) {
+          if (sql[i + 1] === quote) {
+            i++;
+            continue;
+          }
+          break;
+        }
+        if (quote === '"') out += sql[i];
+      }
+      if (i >= sql.length) throw new Error(`Unterminated ${quote} literal in migration SQL`);
+      if (quote === '"') out += '"';
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+const ADDITIVE_STATEMENT_RE = new RegExp(
+  '^(?:CREATE\\s+(?:(?:UNIQUE\\s+)?INDEX|TABLE|TRIGGER|VIEW)\\b|' +
+  'ALTER\\s+TABLE\\s+\\S+\\s+ADD\\b|INSERT\\b)',
+  'i'
+);
+const DESTRUCTIVE_STATEMENT_RE = new RegExp(
+  '^(?:DROP\\s+(?:INDEX|TABLE|TRIGGER|VIEW)\\b|' +
+  'ALTER\\s+TABLE\\s+\\S+\\s+(?:DROP|RENAME)\\b|DELETE\\b|UPDATE\\b)',
+  'i'
+);
+const RENAME_STAGING_RE =
+  /^ALTER\s+TABLE\s+"?([A-Za-z0-9_]+)"?\s+RENAME\s+TO\s+"?[A-Za-z0-9_]+"?$/i;
+
+export function classifyMigrationSql(sql: string): MigrationKind {
+  const statements = stripSqlCommentsAndStrings(sql)
+    .split(';')
+    .map(stmt => stmt.trim().replace(/\s+/g, ' '))
+    .filter(stmt => stmt.length > 0 && !/^PRAGMA\b/i.test(stmt));
+  if (statements.length === 0) {
+    throw new Error('Migration SQL contains no executable statements');
+  }
+
+  // Recognize SQLite's standard 4-step table rebuild (`CREATE TABLE x_new`, `INSERT INTO x_new`,
+  // `DROP TABLE x`, `ALTER TABLE x_new RENAME TO x`) so staging-table creation/copy is treated as
+  // part of the destructive table rebuild rather than a mixed additive+destructive migration.
+  const stagingTables = new Set<string>();
+  for (const stmt of statements) {
+    const m = RENAME_STAGING_RE.exec(stmt);
+    if (m) stagingTables.add(m[1].toLowerCase());
+  }
+
+  let hasAdditive = false;
+  let hasDestructive = false;
+  for (const stmt of statements) {
+    const createMatch = /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z0-9_]+)"?\b/i.exec(
+      stmt
+    );
+    const insertMatch = /^INSERT\s+(?:OR\s+\S+\s+)?INTO\s+"?([A-Za-z0-9_]+)"?\b/i.exec(stmt);
+    if (
+      (createMatch && stagingTables.has(createMatch[1].toLowerCase())) ||
+      (insertMatch && stagingTables.has(insertMatch[1].toLowerCase()))
+    ) {
+      hasDestructive = true;
+      continue;
+    }
+    if (ADDITIVE_STATEMENT_RE.test(stmt)) {
+      hasAdditive = true;
+    } else if (DESTRUCTIVE_STATEMENT_RE.test(stmt)) {
+      hasDestructive = true;
+    } else {
+      throw new Error(`Unrecognized SQL migration statement: "${stmt}"`);
+    }
+  }
+
+  if (hasAdditive && hasDestructive) return 'mixed';
+  return hasDestructive ? 'destructive' : 'additive';
+}
+
+export function compareDatabaseSchemas(dbA: DatabaseSync, dbB: DatabaseSync): string[] {
+  const inspect = (conn: DatabaseSync) => {
+    const tables = (conn.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+       ORDER BY name ASC`
+    ).all() as Array<{name: string}>).map(r => r.name);
+    const snapshot = new Map<string, string>();
+    for (const table of tables) {
+      const cols = conn.prepare(`PRAGMA table_info("${table}")`).all() as Array<{
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: string | null;
+        pk: number;
+      }>;
+      const fks = conn.prepare(`PRAGMA foreign_key_list("${table}")`).all() as Array<{
+        table: string;
+        from: string;
+        to: string;
+        on_update: string;
+        on_delete: string;
+      }>;
+      snapshot.set(
+        table,
+        JSON.stringify({
+          cols: cols.map(c => ({
+            name: c.name,
+            type: c.type.toUpperCase(),
+            notnull: c.notnull,
+            dflt: c.dflt_value ?? undefined,
+            pk: c.pk,
+          })),
+          fks: fks
+            .map(f => ({
+              table: f.table,
+              from: f.from,
+              to: f.to,
+              onUpdate: f.on_update,
+              onDelete: f.on_delete,
+            }))
+            .sort((x, y) =>
+              `${x.from}:${x.table}.${x.to}`.localeCompare(`${y.from}:${y.table}.${y.to}`)),
+        })
+      );
+    }
+    return snapshot;
+  };
+
+  const snapA = inspect(dbA);
+  const snapB = inspect(dbB);
+  const allTables = [...new Set([...snapA.keys(), ...snapB.keys()])].sort();
+  const diffs: string[] = [];
+  for (const table of allTables) {
+    const a = snapA.get(table);
+    const b = snapB.get(table);
+    if (a === undefined) {
+      diffs.push(`table "${table}" missing in first schema`);
+    } else if (b === undefined) {
+      diffs.push(`table "${table}" missing in second schema`);
+    } else if (a !== b) {
+      diffs.push(`table "${table}" definition mismatch: ${a} vs ${b}`);
+    }
+  }
+  return diffs;
+}
+
 function defaultDbPath(): string {
   return process.env.ARENA_DB_PATH ?? (
     process.env.NODE_ENV === 'production' || fs.existsSync('/var/lib/pkmn')
@@ -46,6 +213,7 @@ function defaultDbPath(): string {
 export const DB_PATH = defaultDbPath();
 export const SCHEMA_DIR = root('db', 'schema');
 export const MIGRATION_DIR = root('db', 'migration');
+export const SCHEMA_FILES = listSqlFiles(SCHEMA_DIR);
 
 const MIGRATION_FILE_RE = /^\d{4}-[a-z0-9-]+\.sql$/;
 
@@ -125,6 +293,13 @@ export class SqliteDatabase {
         throw new Error(`Duplicate migration sequence prefix "${prefix}" in "${file}"`);
       }
       seenNumbers.add(prefix);
+      const kind = classifyMigrationSql(fs.readFileSync(path.join(migrationDir, file), 'utf8'));
+      if (kind === 'mixed') {
+        throw new Error(
+          `Migration "${file}" mixes additive and destructive SQL statements; ` +
+          'split into separate migrations'
+        );
+      }
     }
 
     const createMigrationsTableSql = `
