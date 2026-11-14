@@ -222,6 +222,7 @@ GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... PUBLIC_URL=http://localhost:1234 n
 | :--- | :--- | :--- |
 | [`pkmn.ts`](../tools/pkmn.ts) | `npm run pkmn -- <cmd>` | Operator CLI: quarantine/unquarantine versions, refund cooldowns, reassign developers, set 1500-Elo anchors, rotate ladders, manage tournaments, lookup Smogon IDs, and mint cookies (see [ADMIN.md](ADMIN.md)). |
 | [`mock.ts`](../tools/mock.ts) | `npm run mock -- ...` | Declarative `.mock` scenario engine, probabilistic Davidson match simulator, and organic site-activity generator (`simulate`). |
+| [`simulate.ts`](../tools/simulate.ts) | `npm run simulate -- ...` | Multi-seed Monte Carlo parameter-sweep simulator for active-learning matchmaking (`selectNextArenaMatch`) and Generalized Davidson ratings (`computeDavidsonRatings`). |
 | [`shots.ts`](../tools/shots.ts) | `npm run shots` | Headless Chromium visual-regression & layout verifier across 4 viewports × 2 color schemes. |
 | [`scenarios/`](../tools/scenarios/) | — | Checked-in `.mock` scenario scripts ([`seed.mock`](../tools/scenarios/seed.mock) for local dev & `shots`, [`e2e.mock`](../tools/scenarios/e2e.mock) for HTTP + Playwright integration tests). |
 
@@ -508,3 +509,95 @@ simulate <steps> [--over <dur>]
 # Unbounded real-time daemon loop with random +/-40% interval jitter (Ctrl-C to stop)
 simulate [--interval <millis>]
 ```
+
+---
+
+## 6. Matchmaking & Rating Parameter-Sweep Simulator (`npm run simulate`)
+
+### Why It Is Used
+
+Unlike traditional human ladders where players self-queue in parallel, the M6 Mac mini Arena runner
+time-slices a single active 2-game match at a time across all playable ladders (`RBY`, `ADV`, `SV`,
+`RAND`, `VGC`). Every match scheduled by [`selectNextArenaMatch`](../server/ratings.ts) must balance
+three competing goals:
+
+1. **Global uncertainty reduction (exploration):** Quickly shrinking 95% confidence intervals
+   ($\text{CI}_{95} < 150\text{ Elo}$) and settling newly submitted Challenger versions across the
+   entire roster using expected Shannon/Fisher information gain
+   $\frac{1}{2}\ln(1 + 4 \hat{p}(1 - \hat{p})(\sigma_i^2 + \sigma_j^2))$.
+2. **Top-of-leaderboard separation (exploitation):** Focusing matches among podium contenders with
+   high conservative lower bounds ($\text{LCB} = \text{Elo} - 1.96\,\text{SE}$) so `#1` and top-3
+   guaranteed rank bounds ($[\text{rankMin}, \text{rankMax}] = [1, 1]$) resolve cleanly without
+   wasting compute on already-separated bottom pairs.
+3. **Cross-ladder & per-agent fairness (anti-starvation):** Ensuring quieter ladders with fewer
+   recent submissions still receive regular matches via `agingRate` and the hard `maxWaitCycles`
+   ceiling (`maxWaitCycles * numPlayableLadders`), and avoiding repeat pairings via the pairwise
+   saturation penalty $1 / \sqrt{1 + n_{ij}}$.
+
+Changing `exploit`, `agingRate`, or `maxWaitCycles` in [`server/ratings.ts`](../server/ratings.ts)
+shifts the Pareto frontier between these objectives. [`tools/simulate.ts`](../tools/simulate.ts)
+runs fast, deterministic multi-seed Monte Carlo trials against the exact production
+`selectNextArenaMatch`, `computeDavidsonRatings`, and `computeGuaranteedRankBounds` implementations
+so hyperparameter changes can be evaluated quantitatively in milliseconds before deploying.
+
+### How to Run `simulate`
+
+Compile TypeScript (`npm run compile` or `npm run build`), then invoke `npm run simulate`:
+
+```sh
+# 1. Run the default parameter sweep (exploit = 0.0, 0.45, 0.80 across 3 ladders x 10 agents, 150 matches, 3 seeds)
+npm run simulate
+
+# 2. Sweep a custom grid of exploit weights, aging rates, and max-wait cycles over 10 PRNG seeds
+npm run simulate -- \
+  --ladders 5 \
+  --agents 12 \
+  --matches 300 \
+  --exploit 0.0,0.30,0.45,0.65 \
+  --aging 0.25,0.50,1.0 \
+  --max-wait 3,4,6 \
+  --seeds 10
+
+# 3. Evaluate matchmaking behavior starting from the actual ladders and ratings in a seeded or production SQLite snapshot
+npm run simulate -- \
+  --db db/data/arena.sqlite \
+  --matches 200 \
+  --exploit 0.0,0.45 \
+  --seeds 5
+```
+
+### CLI Flags
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--ladders <n>` | `3` | Number of synthetic playable ladders to simulate (ignored when `--db` provides playable ladders). |
+| `--agents <n>` | `10` | Active agents per synthetic ladder (index `0` anchored at `1500` Elo; remaining true ratings span `1200..1850` Elo). |
+| `--matches <n>` | `150` | Total 2-game Arena matches scheduled across all ladders per trial. |
+| `--exploit <list>` | `0.0,0.45,0.80` | Comma-separated `exploit` values ($\ge 0$); `0` is pure active-learning uncertainty reduction, higher values weight top-LCB contenders more heavily. |
+| `--aging <list>` | `0.50` | Comma-separated `agingRate` values controlling how quickly a waiting ladder's priority multiplier grows per skipped match. |
+| `--max-wait <list>` | `4` | Comma-separated `maxWaitCycles` values (a ladder waiting $\ge \text{maxWaitCycles} \times L$ matches is forced next). |
+| `--seeds <n\|list>` | `3` | Number of deterministic Mulberry32 seeds (`1..N`) or an explicit comma-separated seed list (`1,7,42`) to average across. |
+| `--db <path>` | unset | Load initial playable ladders and agent true Elo vectors from an existing SQLite database (`champion` and `challenger` entries). |
+
+### Interpreting the Output Metrics
+
+For each `(exploit, agingRate, maxWaitCycles)` point in the sweep grid, `npm run simulate` prints:
+
+- **`info gain` (`nats/match`):** Mean prior-to-posterior information gain per scheduled match. Higher
+  values indicate matches are consistently pairing uncertain, closely rated opponents.
+- **`top-5 pair share` (`%`):** Percentage of all scheduled matches where both agents belong to the
+  ladder's true top 5. Increases with `exploit`, measuring how much compute is concentrated on the
+  title/podium race.
+- **`rating accuracy` (`mean error`, `Kendall tau`, `Top-3`):**
+  - `mean error`: Mean absolute error $|\hat{R}_i - R_i^{\text{true}}|$ in Elo across all agents at
+    the end of the run.
+  - `Kendall tau`: Rank-order correlation $\tau \in [-1, 1]$ between estimated and true Elo rankings.
+  - `Top-3`: Fraction of true top-3 agents recovered by the conservative $\text{LCB}$ leaderboard top 3.
+- **`balance` (`agent matches`, `ladder share`):** Min-to-max range of matches played per agent and
+  fraction of total matches allocated to each ladder, verifying that no agent or ladder is starved.
+- **`convergence` (`all <150 CI95`, `#1 [1,1]`):**
+  - `all <150 CI95`: Median total matches (and percentage of seeds) required until every agent on
+    every ladder has played at least 1 match and achieved $\text{CI}_{95} < 150\text{ Elo}$.
+  - `#1 [1,1]`: Median total matches (and percentage of seeds) required until every ladder's top
+    agent has guaranteed conservative rank bounds $[\text{rankMin}, \text{rankMax}] = [1, 1]$ via
+    `computeGuaranteedRankBounds`.

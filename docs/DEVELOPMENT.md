@@ -97,6 +97,7 @@ npm run dev
 | `npm run test:integration` | Run `npm run test` followed by the full Vitest suite (`vitest test`). |
 | `npm run shots` | Capture & verify responsive light/dark screenshots across 4 viewports into `.shots/`. |
 | `npm run mock -- ...` | Run the `.mock` scenario engine and match simulator (see [TESTING.md](TESTING.md)). |
+| `npm run simulate -- ...` | Run the matchmaking & rating parameter-sweep simulator (see [TESTING.md](TESTING.md)). |
 | `npm run pkmn -- ...` | Run the operator CLI against SQLite (see [ADMIN.md](ADMIN.md)). |
 
 ---
@@ -151,7 +152,7 @@ worker control plane.
 ├── static/          # Djot essays (*.dj), projects/research/glossary catalogs, HTML templates, CSS
 ├── teams/           # 1-NN team distance workspace (teams/index.ts) & reference blocklist pools
 ├── test/            # Vitest unit, integration, rating solver, protocol, and Playwright E2E suites
-└── tools/           # Operator CLI (pkmn.ts), scenario simulator (mock.ts), visual verifier (shots.ts)
+└── tools/           # Operator CLI (pkmn.ts), scenario simulator (mock.ts), matchmaking simulator (simulate.ts), visual verifier (shots.ts)
 ```
 
 ### Key Workflows When Making Changes

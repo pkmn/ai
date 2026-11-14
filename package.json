@@ -34,6 +34,7 @@
     "build": "npm run compile && node --env-file-if-exists=.env build/static/build",
     "shots": "npm run compile && node --env-file-if-exists=.env build/tools/shots",
     "pkmn": "node --env-file-if-exists=.env build/tools/pkmn",
+    "simulate": "node --env-file-if-exists=.env build/tools/simulate",
     "arena": "node --env-file-if-exists=.env build/arena",
     "mock": "node --env-file-if-exists=.env build/tools/mock",
     "dev": "DEV_AUTH=1 PUBLIC_URL=http://localhost:1234 node --env-file-if-exists=.env build/server",

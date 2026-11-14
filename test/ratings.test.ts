@@ -1,4 +1,9 @@
 import * as ratings from '../server/ratings';
+import {
+  computeKendallTau,
+  runMatchmakingSimulation,
+  sweepMatchmakingParameters,
+} from '../tools/simulate';
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -638,5 +643,49 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
       expect(revRes.elo[k]).toBeCloseTo(res.elo[k], 8);
       expect(revRes.eloStd[k]).toBeCloseTo(res.eloStd[k], 8);
     }
+  });
+
+  test('computes Kendall tau rank correlation across concordant or discordant rankings', () => {
+    expect(computeKendallTau([1, 2, 3, 4], [10, 20, 30, 40])).toBeCloseTo(1, 8);
+    expect(computeKendallTau([1, 2, 3, 4], [40, 30, 20, 10])).toBeCloseTo(-1, 8);
+    expect(computeKendallTau([1], [1])).toBe(1);
+  });
+
+  test('reproduces identical matchmaking simulation trajectories for a fixed seed', () => {
+    const a = runMatchmakingSimulation({
+      numLadders: 2,
+      agentsPerLadder: 5,
+      totalMatches: 40,
+      exploit: 0.45,
+      seed: 42,
+    });
+    const b = runMatchmakingSimulation({
+      numLadders: 2,
+      agentsPerLadder: 5,
+      totalMatches: 40,
+      exploit: 0.45,
+      seed: 42,
+    });
+    expect(a).toEqual(b);
+    expect(a.kendallTau).toBeGreaterThan(0.5);
+    expect(a.minAgentMatches).toBeGreaterThan(0);
+  });
+
+  test('sweeps matchmaking parameter grids across multiple seeds', () => {
+    const summaries = sweepMatchmakingParameters({
+      numLadders: 2,
+      agentsPerLadder: 5,
+      totalMatches: 30,
+      exploits: [0, 0.75],
+      agingRates: [0.5],
+      maxWaitCyclesList: [4],
+      seeds: [1, 2],
+    });
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0].exploit).toBe(0);
+    expect(summaries[1].exploit).toBe(0.75);
+    expect(summaries[1].topContenderMatchShare).toBeGreaterThanOrEqual(
+      summaries[0].topContenderMatchShare
+    );
   });
 });
