@@ -1622,4 +1622,26 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('renders opponent filter controls on agent profile pages', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic});
+    try {
+      const html = await h.getText('/projects/foul-play/');
+      expect(html).toContain('id="opp-select"');
+      expect(html).toContain('<option value="jaxcalibur">Jaxcalibur (1)</option>');
+      expect(html).toContain('class="opp-row" data-opp="jaxcalibur"');
+      expect(html).toContain(
+        'class="battle-row" data-opp="jaxcalibur" aria-expanded="false" data-ver="1.0.0"'
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('persists tournament viewer playback speed in localStorage', () => {
+    const tourHtml = fs.readFileSync(root('static', 'tournaments.html'), 'utf8');
+    expect(tourHtml).toContain('pkmn-viewer-speed');
+    expect(tourHtml).toContain("sendToViewer({type: 'speed', speed: saved})");
+    expect(tourHtml).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
+  });
 });

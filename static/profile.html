@@ -61,7 +61,15 @@
 </section>
 
 <section id="matches"{{{matchesInitialClass}}}>
-  <h3><a href="#matches" class="subtle">Recent Matches</a></h3>
+  <div class="matches-header">
+    <h3><a href="#matches" class="subtle">Recent Matches</a></h3>
+    <div class="ver-picker">
+      <label for="opp-select" class="muted">Opponent</label>
+      <select id="opp-select" class="min-select" aria-label="Opponent">
+        {{{initialOppOptions}}}
+      </select>
+    </div>
+  </div>
   {{{matchesPanes}}}
 </section>
 
@@ -70,15 +78,32 @@
     const profileData = {{{profileDataJson}}};
     const ladderRadios = document.querySelectorAll('input[name="ladder"]');
     const verSelect = document.getElementById('ver-select');
+    const oppSelect = document.getElementById('opp-select');
     const reignTbody = document.getElementById('reign-tbody');
     const matchupsSec = document.getElementById('matchups');
+    const matchesSec = document.getElementById('matches');
     const panes = document.querySelectorAll('.profile-pane');
     let curLad = {{{defaultLadderKeyJson}}};
+    let curVer = 'all';
+    let curOpp = 'all';
+
+    const syncUrl = hashOverride => {
+      if (!history.replaceState) return;
+      const url = new URL(location.href);
+      if (curOpp && curOpp !== 'all') {
+        url.searchParams.set('vs', curOpp);
+      } else {
+        url.searchParams.delete('vs');
+      }
+      const nextHash = hashOverride !== undefined ? hashOverride : location.hash;
+      history.replaceState(null, '', url.pathname + url.search + nextHash);
+    };
 
     const applyStats = ver => {
+      curVer = ver || 'all';
       const ladData = profileData[curLad];
       if (!ladData) return;
-      const s = ladData.vstats[ver] || ladData.vstats.all;
+      const s = ladData.vstats[curVer] || ladData.vstats.all;
       if (s) {
         document.getElementById('stat-rank').innerHTML = s.rank;
         document.getElementById('stat-elo').innerHTML = s.elo;
@@ -88,7 +113,9 @@
         document.getElementById('stat-streak').innerHTML = s.streak;
         document.getElementById('stat-telemetry').innerHTML = s.telemetry;
       }
-      const reignHtml = (ladData.reign && ladData.reign[ver]) || (ladData.reign && ladData.reign.all);
+      const reignHtml =
+        (ladData.reign && ladData.reign[curVer]) ||
+        (ladData.reign && ladData.reign.all);
       if (reignTbody && reignHtml) {
         reignTbody.innerHTML = reignHtml;
       }
@@ -96,9 +123,13 @@
         '#matches .profile-pane[data-ladder="' + curLad + '"]'
       );
       if (activeMatchPane) {
+        let visibleCount = 0;
         activeMatchPane.querySelectorAll('tbody tr[data-ver]').forEach(row => {
-          const hidden = ver !== 'all' && row.dataset.ver !== ver;
+          const hidden =
+            (curVer !== 'all' && row.dataset.ver !== curVer) ||
+            (curOpp !== 'all' && row.dataset.opp !== curOpp);
           row.classList.toggle('hide', hidden);
+          if (!hidden) visibleCount++;
           if (hidden) {
             row.classList.remove('expanded');
             row.setAttribute('aria-expanded', 'false');
@@ -108,6 +139,15 @@
             }
           }
         });
+        const emptyFilterRow = activeMatchPane.querySelector('tbody tr.empty-filter-row');
+        if (emptyFilterRow) {
+          emptyFilterRow.classList.toggle('hide', visibleCount > 0);
+        }
+      }
+      if (matchupsSec) {
+        matchupsSec.querySelectorAll('tr.opp-row').forEach(row => {
+          row.classList.toggle('active-opp', curOpp !== 'all' && row.dataset.opp === curOpp);
+        });
       }
     };
 
@@ -115,6 +155,8 @@
       const ladData = profileData[ladKey];
       if (!ladData) return;
       curLad = ladKey;
+      curVer = 'all';
+      curOpp = 'all';
       ladderRadios.forEach(r => {
         if (r.value === ladKey) r.checked = true;
       });
@@ -129,6 +171,10 @@
         verSelect.innerHTML = ladData.optionsHtml;
         verSelect.value = 'all';
       }
+      if (oppSelect && ladData.oppOptionsHtml) {
+        oppSelect.innerHTML = ladData.oppOptionsHtml;
+        oppSelect.value = 'all';
+      }
       applyStats('all');
     };
 
@@ -136,11 +182,17 @@
       verSelect.addEventListener('change', () => applyStats(verSelect.value));
     }
 
+    if (oppSelect) {
+      oppSelect.addEventListener('change', () => {
+        curOpp = oppSelect.value || 'all';
+        applyStats(curVer);
+        syncUrl();
+      });
+    }
+
     ladderRadios.forEach(r => r.addEventListener('change', () => {
       applyLadder(r.value);
-      if (history.replaceState) {
-        history.replaceState(null, '', '#' + r.value);
-      }
+      syncUrl('#' + r.value);
     }));
 
     const applyHash = () => {
@@ -152,6 +204,32 @@
     };
     window.addEventListener('hashchange', applyHash);
     applyHash();
+
+    const initVs = new URLSearchParams(location.search).get('vs');
+    if (initVs && oppSelect) {
+      const matchOpt = Array.from(oppSelect.options).find(o => o.value === initVs);
+      if (matchOpt) {
+        curOpp = initVs;
+        oppSelect.value = initVs;
+        applyStats(curVer);
+      }
+    }
+
+    if (matchupsSec) {
+      matchupsSec.addEventListener('click', e => {
+        if (e.target.closest('a') || e.target.closest('th')) return;
+        const row = e.target.closest('tr.opp-row');
+        if (!row || !row.dataset.opp) return;
+        const nextOpp = curOpp === row.dataset.opp ? 'all' : row.dataset.opp;
+        curOpp = nextOpp;
+        if (oppSelect) oppSelect.value = nextOpp;
+        applyStats(curVer);
+        syncUrl();
+        if (nextOpp !== 'all' && matchesSec) {
+          matchesSec.scrollIntoView({behavior: 'smooth'});
+        }
+      });
+    }
 
     document.querySelectorAll('.h2h-table').forEach(table => {
       const headers = table.querySelectorAll('th.sortable');
@@ -174,7 +252,6 @@
       }));
     });
 
-    const matchesSec = document.getElementById('matches');
     if (matchesSec) {
       const toggleMatchRow = row => {
         const detail = row.nextElementSibling;

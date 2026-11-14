@@ -3017,12 +3017,14 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     const ladderId = parsedUrl.searchParams.get('ladder')?.trim() || undefined;
     const agentSlug = parsedUrl.searchParams.get('agent')?.trim() || undefined;
+    const opponentSlug = parsedUrl.searchParams.get('vs')?.trim() || undefined;
     const offset = (parsedPage - 1) * parsedLimit;
     const countsBySlot = db.getMatchCountsBySlot();
     const {matches, total} = db.getMatchesPage({
       slot: rawSlot,
       ladderId,
       agentSlug,
+      opponentSlug,
       limit: parsedLimit,
       offset,
     });
@@ -3039,6 +3041,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       slot: rawSlot,
       ladderId,
       agentSlug,
+      opponentSlug,
       countsBySlot,
       matches: matches.map(m => enrichMatchView(publicDir, m)),
     });

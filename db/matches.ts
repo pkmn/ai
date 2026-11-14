@@ -77,6 +77,7 @@ export interface MatchesPageQuery {
   slot?: string;
   ladderId?: string;
   agentSlug?: string;
+  opponentSlug?: string;
   limit?: number;
   offset?: number;
 }
@@ -461,13 +462,19 @@ export function getMatchesPage(
     where.push('m.ladder_id = ?');
     params.push(query.ladderId);
   }
-  if (query.agentSlug) {
+  if (query.agentSlug && query.opponentSlug) {
+    where.push('((a1.slug = ? AND a2.slug = ?) OR (a1.slug = ? AND a2.slug = ?))');
+    params.push(query.agentSlug, query.opponentSlug, query.opponentSlug, query.agentSlug);
+  } else if (query.agentSlug) {
     where.push('(a1.slug = ? OR a2.slug = ?)');
     params.push(query.agentSlug, query.agentSlug);
+  } else if (query.opponentSlug) {
+    where.push('(a1.slug = ? OR a2.slug = ?)');
+    params.push(query.opponentSlug, query.opponentSlug);
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-  const countFromSql = query.agentSlug
+  const countFromSql = (query.agentSlug || query.opponentSlug)
     ? `FROM matches m
        JOIN ladders l ON l.id = m.ladder_id
        JOIN agent_versions v1 ON v1.id = m.p1_version_id

@@ -32,6 +32,7 @@ interface VersionDynamicStats {
 
 interface LadderProfileClientData {
   optionsHtml: string;
+  oppOptionsHtml: string;
   vstats: Record<string, VersionDynamicStats>;
   reign: Record<string, string>;
 }
@@ -663,7 +664,8 @@ function renderHeadToHeadPane(opts: {
       : `${scorePct.toFixed(1)}%`;
 
     h2hRows.push(
-      '<tr>' +
+      `<tr class="opp-row" data-opp="${escapeHtml(opp.agentSlug)}" ` +
+        `title="Click to filter Recent Matches vs. ${escapeHtml(opp.agentName)}">` +
       `<td data-val="${escapeHtml(opp.agentName)}">${oppLink} ` +
         `<code>${escapeHtml(opp.version)}</code></td>` +
       `<td class="num" data-val="${oppElo}">${oppElo} <span class="muted">±${oppCi}</span></td>` +
@@ -793,7 +795,7 @@ function renderRecentMatchesPane(opts: {
       );
 
       return `<tr class="battle-row" data-ver="${escapeHtml(ourSide.version)}" ` +
-        'tabindex="0" aria-expanded="false">' +
+        `data-opp="${escapeHtml(oppSide.slug)}" tabindex="0" aria-expanded="false">` +
         '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span>' +
           `<code>${idEsc}</code></td>` +
         `<td><code>${escapeHtml(ourSide.version)}</code></td>` +
@@ -809,6 +811,10 @@ function renderRecentMatchesPane(opts: {
         '</tr>';
     }).join('');
 
+  const filterEmptyRow = matches.length > 0
+    ? '<tr class="empty-filter-row hide">' +
+      '<td colspan="8" class="center muted">No matching battles in recent history.</td></tr>'
+    : '';
   const bankTitle =
     `Remaining ${agentName} time bank in Game 1 / Game 2 (Showdown timer: 150s cap)`;
   return `<div class="table-wrap profile-pane${hideCls}" data-ladder="${escapeHtml(ladderKey)}">
@@ -825,7 +831,7 @@ function renderRecentMatchesPane(opts: {
           <th class="num">Completed</th>
         </tr>
       </thead>
-      <tbody>${rowsHtml}</tbody>
+      <tbody>${rowsHtml}${filterEmptyRow}</tbody>
     </table>
   </div>`;
 }
@@ -999,6 +1005,7 @@ export function renderAgentProfile(opts: {
       controlsInitialClass: ' hide',
       formatNavItems: '<li><span class="muted">—</span></li>',
       initialVerOptions: '<option value="all">All (0)</option>',
+      initialOppOptions: '<option value="all">All (0)</option>',
       projectMetaRows: buildProjectMetaRows(db, agent, meta, undefined),
       initialStatRank: `<span class="muted">— (${statusNote})</span>`,
       initialStatElo: '<span class="muted">—</span>',
@@ -1133,6 +1140,29 @@ export function renderAgentProfile(opts: {
       }),
     ];
 
+    const oppMap = new Map<string, {slug: string; name: string; count: number}>();
+    for (const m of recentMatches) {
+      const opp = m.p1.slug === agent.slug ? m.p2 : m.p1;
+      const cur = oppMap.get(opp.slug);
+      if (cur) cur.count++;
+      else oppMap.set(opp.slug, {slug: opp.slug, name: opp.name, count: 1});
+    }
+    for (const e of allEntries) {
+      if (e.agentId === agent.id || oppMap.has(e.agentSlug)) continue;
+      oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
+    }
+    const sortedOpps = [...oppMap.values()].sort(
+      (a, b) => b.count - a.count || a.name.localeCompare(b.name)
+    );
+    const oppOptList = [
+      `<option value="all" selected>All (${recentMatches.length})</option>`,
+      ...sortedOpps.map(o => {
+        const sEsc = escapeHtml(o.slug);
+        const nEsc = escapeHtml(o.name);
+        return `<option value="${sEsc}">${nEsc} (${o.count})</option>`;
+      }),
+    ];
+
     const vstats: Record<string, VersionDynamicStats> = {
       all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos),
     };
@@ -1170,6 +1200,7 @@ export function renderAgentProfile(opts: {
 
     profileDataMap[lKey] = {
       optionsHtml: optList.join(''),
+      oppOptionsHtml: oppOptList.join(''),
       vstats,
       reign,
     };
@@ -1215,6 +1246,7 @@ export function renderAgentProfile(opts: {
     controlsInitialClass: '',
     formatNavItems: formatNavParts.join(''),
     initialVerOptions: initialData.optionsHtml,
+    initialOppOptions: initialData.oppOptionsHtml,
     projectMetaRows: buildProjectMetaRows(db, agent, meta, latestOverallEntry),
     initialStatRank: initStats.rank,
     initialStatElo: initStats.elo,

@@ -1533,6 +1533,95 @@ describe('GET /api/battles.json pagination', () => {
     expect((await fetch(`${srv.baseUrl}/api/battles.json?slot=bogus`)).status).toBe(400);
     expect((await fetch(`${srv.baseUrl}/api/battles.json?page=0`)).status).toBe(400);
   });
+
+  test('filters GET /api/battles.json head-to-head pairings via vs query parameter', async () => {
+    const vsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-battles-vs-'));
+    const vsDb = new Database(':memory:');
+    vsDb.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
+    vsDb.syncProjectsFromYaml(PROJECTS_YAML, vsDir, 1_700_000_000);
+    vsDb.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?").run('gen1ou20261109');
+
+    const fp = vsDb.getAgentBySlug('foul-play')!;
+    const zero = vsDb.getAgentBySlug('0-error')!;
+    const meta = vsDb.getAgentBySlug('metamon')!;
+    const mkSub = (agentId: number, tag: string) => {
+      const sub = vsDb.createSubmission({
+        agentId,
+        version: '1.0.0',
+        package: 'bundle',
+        url: `https://example.com/${tag}.tar.zst`,
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_010,
+      });
+      vsDb.applySubmissionStatus({versionId: sub.id, smokeStatus: 'passed', now: 1_700_000_020});
+      return sub.id;
+    };
+    const vFp = mkSub(fp.id, 'fp');
+    const vZero = mkSub(zero.id, 'zero');
+    const vMeta = mkSub(meta.id, 'meta');
+
+    const record = (id: string, p1VersionId: number, p2VersionId: number, ts: number) => {
+      vsDb.recordCompletedMatch({
+        match: {
+          id,
+          ladderId: 'gen1ou20261109',
+          p1VersionId,
+          p2VersionId,
+          seed: `1,2,3,${ts}`,
+          game1Outcome: 'W',
+          game2Outcome: 'L',
+          category: 'WL',
+          game1Turns: 20,
+          game2Turns: 22,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1PeakRam: 900,
+          p2PeakRam: 900,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1MeanTurnMillis: 250,
+          p2MeanTurnMillis: 250,
+          completedAt: ts,
+        },
+      });
+    };
+
+    record('m-fp-zero', vFp, vZero, 1_700_000_110);
+    record('m-fp-meta', vFp, vMeta, 1_700_000_120);
+    record('m-zero-meta', vZero, vMeta, 1_700_000_130);
+
+    const vsApp = polka();
+    const vsHandle = arena.register(vsApp, {
+      db: vsDb,
+      arenaSecret: AUTH_CFG.arenaSecret,
+      publicDir: vsDir,
+      now: () => 1_700_000_999,
+    });
+    const vsSrv = await startTestServer(vsApp);
+
+    try {
+      const h2h = await (
+        await fetch(`${vsSrv.baseUrl}/api/battles.json?agent=foul-play&vs=0-error`)
+      ).json() as {
+        total: number;
+        agentSlug: string;
+        opponentSlug: string;
+        matches: Array<{id: string}>;
+      };
+      expect(h2h.total).toBe(1);
+      expect(h2h.agentSlug).toBe('foul-play');
+      expect(h2h.opponentSlug).toBe('0-error');
+      expect(h2h.matches.map(m => m.id)).toEqual(['m-fp-zero']);
+    } finally {
+      vsHandle.close();
+      await vsSrv.close();
+      vsDb.close();
+      fs.rmSync(vsDir, {recursive: true, force: true});
+    }
+  });
 });
 
 describe('harvested ladder teams API', () => {

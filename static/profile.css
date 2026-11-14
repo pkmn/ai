@@ -85,6 +85,28 @@ th.sortable:hover {
   text-decoration: underline;
 }
 
+.matches-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5ch;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 1.75rem 0 0.6rem;
+}
+
+.matches-header h3 {
+  margin: 0;
+}
+
+.opp-row {
+  cursor: pointer;
+}
+
+.opp-row:hover,
+.opp-row.active-opp {
+  background-color: rgb(var(--fg-base) / 4%);
+}
+
 @media (width < 768px) {
   .grid-2 {
     grid-template-columns: 1fr;

@@ -180,6 +180,9 @@
         return p1B && p2A;
       });
 
+    const SPEED_KEY = 'pkmn-viewer-speed';
+    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
+
     const sendToViewer = msg => {
       if (frame && frame.contentWindow) {
         frame.contentWindow.postMessage(msg, '*');
@@ -189,6 +192,15 @@
     const syncTheme = () => {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark';
       sendToViewer({type: 'theme', dark});
+    };
+
+    const syncSpeed = () => {
+      try {
+        const saved = localStorage.getItem(SPEED_KEY);
+        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
+          sendToViewer({type: 'speed', speed: saved});
+        }
+      } catch {}
     };
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
@@ -202,6 +214,7 @@
       if (data.type === 'ready') {
         viewerReady = true;
         syncTheme();
+        syncSpeed();
         if (
           pendingPayload &&
           Array.isArray(pendingPayload.lines) &&
@@ -214,6 +227,14 @@
             side: pendingPayload.side || 'p1',
           });
         }
+      } else if (
+        data.type === 'speed' &&
+        typeof data.speed === 'string' &&
+        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
+      ) {
+        try {
+          localStorage.setItem(SPEED_KEY, data.speed);
+        } catch {}
       }
     });
 
