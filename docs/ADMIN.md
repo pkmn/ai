@@ -452,9 +452,8 @@ gcloud compute instances create pkmn-tourney-bake \
 ```
 
 On `pkmn-tourney-bake`, rootlessly unpack each entrant's pinned `sha256` OCI image, verify its
-resident size cap, static `/teams/<format>.txt` or dynamic `|tournament|byot|<format>|...` -> `/utm`
-response, and a 5-turn isolated `bwrap --unshare-all` smoke game, then snapshot the VM into a
-custom GCP image:
+resident size cap, initial `/utm <packed_team>` BYOT response (for BYOT tournaments), and a Turn-1
+isolated `bwrap --unshare-all` smoke game, then snapshot the VM into a custom GCP image:
 
 ```sh
 skopeo copy "docker://${OCI_REF}@sha256:${SHA256}" "oci:/tmp/oci-${AGENT_ID}:latest"

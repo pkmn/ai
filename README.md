@@ -20,7 +20,7 @@ reference for existing competitive Pokémon AI [projects and papers](https://pkm
 relevant [research](https://pkmn.ai/research), and explanations of important concepts and
 [terms](https://pkmn.ai/glossary) related to the intersection of [competitive Pokémon
 battling](https://www.pkmn.cc/introduction) and artificial intelligence while also providing
-authoritative [rankings](https://pkmn.ai/leaderboard) of existing agents which are continually
+authoritative [rankings](https://pkmn.ai/arena) of existing agents which are continually
 tested within a controlled environment.
 
 Researchers, developers, and interested onlookers are encouraged to join the **pkmn.ai** community
