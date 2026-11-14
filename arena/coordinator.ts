@@ -8,39 +8,11 @@ import {PRNGSeed} from '@pkmn/sim';
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as teams from '../server/teams';
-import {toID} from '../static/util';
+import {root, toID} from '../static/util';
 
-import {AgentLaunchSpec, ArenaGameResult, TimeSlicedArenaGame} from './arbiter';
-import {MatchCheckpoint, StateDatabase} from './db';
-import {
-  AGENTS_DIR,
-  COLD_AGENTS_DIR,
-  STAGING_DIR,
-  UNPACK_BIN,
-  computeResidencyMultipliers,
-  downloadAndUnpackBundle,
-  ensureAgentResident,
-  evictColdAgentsIfNeeded,
-  formatAgentTargetId,
-  pullAndVerifyOciImage,
-  toExecutionMode,
-} from './packages';
-import {synthesizeFallbackPackedTeam} from './tournament';
-
-function safeSampleRandomPair(
-  format: string,
-  seed1: PRNGSeed,
-  seed2: PRNGSeed
-): {t1Packed: string; t2Packed: string} {
-  try {
-    return teams.sampleRandomPair(format, seed1, seed2);
-  } catch {
-    return {
-      t1Packed: synthesizeFallbackPackedTeam(format, 0),
-      t2Packed: synthesizeFallbackPackedTeam(format, 1),
-    };
-  }
-}
+import * as arbiter from './arbiter';
+import * as db from './db';
+import * as packages from './packages';
 
 export interface ActiveRosterEntry {
   agentId: number;
@@ -80,10 +52,10 @@ export interface LadderSnapshot {
   roster?: ActiveRosterEntry[];
 }
 
-export interface CoordinatorOptions {
+export interface Options {
   client: arena.Client;
-  stateDb: StateDatabase;
-  baselineSpec: AgentLaunchSpec;
+  stateDb: db.Database;
+  baselineSpec?: arbiter.AgentLaunchSpec;
   agentsDir?: string;
   stagingDir?: string;
   coldDir?: string;
@@ -100,10 +72,7 @@ export interface CoordinatorOptions {
 
 const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
 
-function isPlayerFault(
-  result: ArenaGameResult,
-  slot: 'p1' | 'p2'
-): boolean {
+function isPlayerFault(result: arbiter.ArenaGameResult, slot: 'p1' | 'p2'): boolean {
   if (!FAULT_REASONS.has(result.endReason)) return false;
   return (slot === 'p1' && result.winner === 'p2') ||
     (slot === 'p2' && result.winner === 'p1');
@@ -123,16 +92,28 @@ function isPermanentClientError(err: unknown): boolean {
     status !== 429;
 }
 
+export function parsePrngSeed(seedStr: string): PRNGSeed {
+  const parts = seedStr.split(',').map(s => s.trim());
+  if (parts.length !== 4 || parts.some(p => !/^\d+$/.test(p))) {
+    throw new Error(`Invalid PRNG seed "${seedStr}" (expected 4 comma-separated uint16 integers)`);
+  }
+  const nums = parts.map(Number);
+  if (nums.some(n => !Number.isInteger(n) || n < 0 || n > 0xffff)) {
+    throw new Error(`Invalid PRNG seed "${seedStr}" (expected 4 comma-separated uint16 integers)`);
+  }
+  return `${nums[0]},${nums[1]},${nums[2]},${nums[3]}`;
+}
+
 export class Coordinator {
   readonly client: arena.Client;
-  readonly stateDb: StateDatabase;
-  private readonly baselineSpec: AgentLaunchSpec;
+  readonly stateDb: db.Database;
+  private readonly baselineSpec: arbiter.AgentLaunchSpec;
   private readonly agentsDir: string;
   private readonly stagingDir: string;
   private readonly coldDir: string;
   private readonly teamsDir: string;
   private readonly archiveLogsDir: string;
-  private readonly unpackBin: string;
+  private readonly unpackBin?: string;
   private readonly casDir?: string;
   private readonly devMode: boolean;
   private readonly maxTurns?: number;
@@ -142,16 +123,21 @@ export class Coordinator {
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
   private heartbeatSeq = 0;
 
-  constructor(options: CoordinatorOptions) {
+  constructor(options: Options) {
     this.client = options.client;
     this.stateDb = options.stateDb;
-    this.baselineSpec = options.baselineSpec;
-    this.agentsDir = options.agentsDir ?? AGENTS_DIR;
-    this.stagingDir = options.stagingDir ?? STAGING_DIR;
-    this.coldDir = options.coldDir ?? COLD_AGENTS_DIR;
+    this.baselineSpec = options.baselineSpec ?? {
+      mode: 'native',
+      target: fs.existsSync('/opt/arena/bin/baseline')
+        ? '/opt/arena/bin/baseline'
+        : root('arena', 'bin', 'baseline'),
+    };
+    this.agentsDir = options.agentsDir ?? packages.AGENTS_DIR;
+    this.stagingDir = options.stagingDir ?? packages.STAGING_DIR;
+    this.coldDir = options.coldDir ?? packages.COLD_AGENTS_DIR;
     this.teamsDir = options.teamsDir ?? '/opt/arena/teams';
     this.archiveLogsDir = options.archiveLogsDir ?? '/Volumes/Archive/logs';
-    this.unpackBin = options.unpackBin ?? UNPACK_BIN;
+    this.unpackBin = options.unpackBin;
     this.casDir = options.casDir;
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.maxTurns = options.maxTurns;
@@ -168,7 +154,7 @@ export class Coordinator {
     return `${s0},${s1},${s2},${s3}`;
   }
 
-  private resolveLaunchSpec(mode: 'container' | 'native', target: string): AgentLaunchSpec {
+  private resolveLaunchSpec(mode: db.ExecutionMode, target: string): arbiter.AgentLaunchSpec {
     if (mode === 'native' && this.devMode && !path.isAbsolute(target)) {
       return {
         mode: 'native',
@@ -190,12 +176,12 @@ export class Coordinator {
           const payload = JSON.parse(entry.payloadJson) as arena.SubmissionStatusPayload;
           await this.client.reportSubmissionStatus(payload);
         }
-        this.stateDb.deleteOutboxEntry(entry.id);
+        this.stateDb.deleteOutbox(entry.id);
         flushed++;
       } catch (err) {
         if (isPermanentClientError(err)) {
           console.error(`Dropping permanently rejected outbox entry #${entry.id}:`, err);
-          this.stateDb.deleteOutboxEntry(entry.id);
+          this.stateDb.deleteOutbox(entry.id);
           continue;
         }
         // Tunnel still unreachable or transient error; preserve FIFO order for next retry
@@ -216,15 +202,15 @@ export class Coordinator {
         } catch {}
       }
     }
-    const incomplete = this.stateDb.getIncompleteMatches();
+    const incomplete = this.stateDb.listIncompleteMatchCheckpoints();
     const aborted: string[] = [];
     const resumed: string[] = [];
 
     for (const cp of incomplete) {
-      if (cp.status === 'in_progress') {
-        this.stateDb.markMatchStatus(cp.id, 'aborted');
+      if (cp.status === 'in-progress') {
+        this.stateDb.markMatchCheckpointStatus(cp.id, 'aborted');
         aborted.push(cp.id);
-      } else if (cp.status === 'g1_complete') {
+      } else if (cp.status === 'g1-complete') {
         await this.resumeAndCompleteGame2(cp);
         resumed.push(cp.id);
       }
@@ -237,9 +223,9 @@ export class Coordinator {
     laddersById?: ReadonlyMap<string, LadderSnapshot>
   ): Promise<number> {
     const {ladders, submissions} = await this.client.getPendingSubmissions({target: 'ladder'});
-    const pendingFormatById = new Map<string, string>();
+    const pendingMetaById = new Map<string, {format: string; team: db.TeamMode}>();
     for (const l of ladders) {
-      pendingFormatById.set(l.id, l.format);
+      pendingMetaById.set(l.id, {format: l.format, team: l.team});
       this.formatByLadderId.set(l.id, l.format);
     }
     let processed = 0;
@@ -248,14 +234,14 @@ export class Coordinator {
       // Tournament-only submissions target GCP linux/amd64 Spot GPU workers, not Mac mini arm64.
       if (sub.ladders.length === 0 && sub.tournaments.length > 0) continue;
       processed++;
-      const mode = toExecutionMode(sub.package);
-      const targetId = formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
+      const mode = packages.toExecutionMode(sub.package);
+      const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
       const target = targetId;
 
       let unpackedBytes: number;
       try {
         if (mode === 'container') {
-          unpackedBytes = pullAndVerifyOciImage(
+          unpackedBytes = packages.pullAndVerifyOciImage(
             sub.url,
             targetId,
             sub.authToken,
@@ -263,7 +249,7 @@ export class Coordinator {
             sub.sha256
           );
         } else {
-          unpackedBytes = await downloadAndUnpackBundle({
+          unpackedBytes = await packages.downloadAndUnpackBundle({
             url: sub.url,
             expectedSha256: sub.sha256,
             agentTargetId: targetId,
@@ -285,34 +271,54 @@ export class Coordinator {
         continue;
       }
 
-      // Run a Turn-1 smoke test in each subscribed ladder's format
       const candidateSpec = this.resolveLaunchSpec(mode, target);
-      const formatsToTest = new Set<string>();
+      const targetsToTest: Array<{ladderId: string; format: string; team: db.TeamMode}> = [];
+      const seenFormats = new Set<string>();
       for (const lid of sub.ladders) {
-        const fmt =
-          pendingFormatById.get(lid) ??
-          laddersById?.get(lid)?.format ??
+        const pendingMeta = pendingMetaById.get(lid);
+        const snapMeta = laddersById?.get(lid);
+        const format = pendingMeta?.format ??
+          snapMeta?.format ??
           this.formatByLadderId.get(lid) ??
           lid;
-        formatsToTest.add(fmt);
+        const team = pendingMeta?.team ?? snapMeta?.team ?? 'random';
+        if (!seenFormats.has(format)) {
+          seenFormats.add(format);
+          targetsToTest.push({ladderId: lid, format, team});
+        }
       }
-      if (formatsToTest.size === 0) {
-        formatsToTest.add('gen9ou');
+      if (targetsToTest.length === 0) {
+        targetsToTest.push({
+          ladderId: 'gen9randombattle',
+          format: 'gen9randombattle',
+          team: 'random',
+        });
       }
 
-      const smokeStartMs = Date.now();
+      const smokeStartMillis = Date.now();
       let maxTurnMillis = 0;
       let maxPeakRam = 64;
       let smokeError: string | undefined;
 
-      for (const format of formatsToTest) {
-        const {t1Packed, t2Packed} = safeSampleRandomPair(
-          format,
-          '1,2,3,4',
-          '5,6,7,8'
-        );
-        const game = new TimeSlicedArenaGame({
-          format,
+      for (const item of targetsToTest) {
+        let t1Packed: string;
+        let t2Packed: string;
+        const subTeams = sub.teamsByLadder?.[item.ladderId];
+        if (item.team === 'pools' && subTeams && subTeams.length >= 2) {
+          t1Packed = subTeams[0];
+          t2Packed = subTeams[1];
+        } else if (item.team === 'harvested') {
+          const pool = await this.loadHarvestedTeamsForLadder(item.ladderId, item.format);
+          t1Packed = pool[0].canonicalPacked;
+          t2Packed = pool[1 % pool.length].canonicalPacked;
+        } else {
+          const pair = teams.sampleRandomPair(item.format, '1,2,3,4', '5,6,7,8');
+          t1Packed = pair.t1Packed;
+          t2Packed = pair.t2Packed;
+        }
+
+        const game = new arbiter.TimeSlicedArenaGame({
+          format: item.format,
           seed: '1,2,3,4',
           p1Spec: candidateSpec,
           p2Spec: this.baselineSpec,
@@ -326,14 +332,14 @@ export class Coordinator {
         });
         const res = await game.run();
         if (isPlayerFault(res, 'p1') || res.endReason === 'arbiter-stall') {
-          smokeError = `Smoke test failed in ${format}: ${res.endReason}`;
+          smokeError = `Smoke test failed in ${item.format}: ${res.endReason}`;
           break;
         }
         if (res.p1MeanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1MeanTurnMillis;
         if (res.p1PeakRam > maxPeakRam) maxPeakRam = res.p1PeakRam;
       }
 
-      const smokeDurationMillis = Math.max(1, Date.now() - smokeStartMs);
+      const smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
 
       if (smokeError) {
         if (mode === 'native') {
@@ -362,7 +368,7 @@ export class Coordinator {
         unpackedBytes,
       });
 
-      evictColdAgentsIfNeeded(this.stateDb, {
+      packages.evictColdAgentsIfNeeded(this.stateDb, {
         agentsDir: this.agentsDir,
         coldDir: this.coldDir,
         pinnedVersionIds: new Set([sub.versionId]),
@@ -482,7 +488,7 @@ export class Coordinator {
     }
     const seed1 = this.randomPrngSeed();
     const seed2 = this.randomPrngSeed();
-    const {t1Packed, t2Packed} = safeSampleRandomPair(ladder.format, seed1, seed2);
+    const {t1Packed, t2Packed} = teams.sampleRandomPair(ladder.format, seed1, seed2);
     return {t1: t1Packed, t2: t2Packed};
   }
 
@@ -518,24 +524,16 @@ export class Coordinator {
     }
   }
 
-  private parsePrngSeed(seedStr: string): PRNGSeed {
-    const nums = seedStr.split(',').map(s => Number(s.trim()));
-    if (nums.length === 4 && nums.every(n => Number.isFinite(n))) {
-      return `${nums[0]},${nums[1]},${nums[2]},${nums[3]}`;
-    }
-    return '1,2,3,4';
-  }
-
-  private async resumeAndCompleteGame2(cp: MatchCheckpoint): Promise<string> {
-    ensureAgentResident(this.stateDb, cp.p1VersionId, {
+  private async resumeAndCompleteGame2(cp: db.LocalMatchCheckpoint): Promise<string> {
+    packages.ensureAgentResident(this.stateDb, cp.p1VersionId, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
     });
-    ensureAgentResident(this.stateDb, cp.p2VersionId, {
+    packages.ensureAgentResident(this.stateDb, cp.p2VersionId, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
     });
-    evictColdAgentsIfNeeded(this.stateDb, {
+    packages.evictColdAgentsIfNeeded(this.stateDb, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
       pinnedVersionIds: new Set([cp.p1VersionId, cp.p2VersionId]),
@@ -543,11 +541,11 @@ export class Coordinator {
 
     const p1Spec = this.resolveLaunchSpec(cp.p1Mode, cp.p1Target);
     const p2Spec = this.resolveLaunchSpec(cp.p2Mode, cp.p2Target);
-    const seed = this.parsePrngSeed(cp.seed);
-    const g1Outcome = cp.game1Outcome ?? 'T';
+    const seed = parsePrngSeed(cp.seed);
+    const g1Outcome = cp.g1Outcome ?? 'T';
 
     // Game 2 swaps sides and teams: P2 sits in slot p1 with T1, P1 sits in slot p2 with T2
-    const g2Game = new TimeSlicedArenaGame({
+    const g2Game = new arbiter.TimeSlicedArenaGame({
       format: cp.format,
       seed,
       p1Spec: p2Spec,
@@ -575,7 +573,7 @@ export class Coordinator {
               : g1Outcome === 'L'
                 ? {winnerSlot: 'p2' as const}
                 : {}),
-            turns: cp.game1Turns ?? 1,
+            turns: cp.g1Turns ?? 1,
           },
           p1: {
             slug: cp.p1Slug,
@@ -584,7 +582,7 @@ export class Coordinator {
             bankSeconds: info.p2BankSeconds,
             lastTurnMillis: info.p2LastTurnMillis,
             meanTurnMillis: info.p2MeanTurnMillis,
-            ram: cp.p1Game1Ram ?? 64,
+            ram: cp.g1P1Ram ?? 64,
             ...(cp.p2TeamLabel ? {team: cp.p2TeamLabel} : {}),
           },
           p2: {
@@ -594,7 +592,7 @@ export class Coordinator {
             bankSeconds: info.p1BankSeconds,
             lastTurnMillis: info.p1LastTurnMillis,
             meanTurnMillis: info.p1MeanTurnMillis,
-            ram: cp.p2Game1Ram ?? 64,
+            ram: cp.g1P2Ram ?? 64,
             ...(cp.p1TeamLabel ? {team: cp.p1TeamLabel} : {}),
           },
         }).catch(() => undefined);
@@ -608,13 +606,13 @@ export class Coordinator {
     const now = Math.floor(Date.now() / 1000);
     this.writeArchivedGameLog(cp.ladderId, cp.id, 'b', g2Res.omniscientLog, cp.startedAt || now);
 
-    const p1PeakRam = Math.max(cp.p1Game1Ram ?? 64, g2Res.p2PeakRam);
-    const p2PeakRam = Math.max(cp.p2Game1Ram ?? 64, g2Res.p1PeakRam);
+    const p1PeakRam = Math.max(cp.g1P1Ram ?? 64, g2Res.p2PeakRam);
+    const p2PeakRam = Math.max(cp.g1P2Ram ?? 64, g2Res.p1PeakRam);
     const p1MeanTurnMillis = Math.round(
-      ((cp.p1Game1TurnMillis ?? 0) + g2Res.p2MeanTurnMillis) / 2
+      ((cp.g1P1TurnMillis ?? 0) + g2Res.p2MeanTurnMillis) / 2
     );
     const p2MeanTurnMillis = Math.round(
-      ((cp.p2Game1TurnMillis ?? 0) + g2Res.p1MeanTurnMillis) / 2
+      ((cp.g1P2TurnMillis ?? 0) + g2Res.p1MeanTurnMillis) / 2
     );
 
     const payload: arena.MatchCompletePayload = {
@@ -629,15 +627,15 @@ export class Coordinator {
         game1Outcome: g1Outcome,
         game2Outcome: g2OutcomeForP1,
         category,
-        game1Turns: cp.game1Turns ?? 1,
+        game1Turns: cp.g1Turns ?? 1,
         game2Turns: g2Res.turns,
-        game1EndReason: cp.game1EndReason ?? 'win',
+        game1EndReason: cp.g1EndReason ?? 'win',
         game2EndReason: g2Res.endReason,
         p1PeakRam,
         p2PeakRam,
-        p1Game1BankSeconds: cp.p1Game1BankSeconds ?? 0,
+        p1Game1BankSeconds: cp.g1P1BankSeconds ?? 0,
         p1Game2BankSeconds: g2Res.p2BankSeconds,
-        p2Game1BankSeconds: cp.p2Game1BankSeconds ?? 0,
+        p2Game1BankSeconds: cp.g1P2BankSeconds ?? 0,
         p2Game2BankSeconds: g2Res.p1BankSeconds,
         p1MeanTurnMillis,
         p2MeanTurnMillis,
@@ -646,9 +644,9 @@ export class Coordinator {
     };
 
     await this.completeMatchOrOutbox(payload);
-    this.stateDb.markMatchStatus(cp.id, 'complete', now);
+    this.stateDb.markMatchCheckpointStatus(cp.id, 'complete', now);
 
-    const g1EndReason = cp.game1EndReason ?? 'win';
+    const g1EndReason = cp.g1EndReason ?? 'win';
     const g1Fault = FAULT_REASONS.has(g1EndReason);
     const p1FaultG1 = g1Fault && g1Outcome === 'L';
     const p2FaultG1 = g1Fault && g1Outcome === 'W';
@@ -696,7 +694,7 @@ export class Coordinator {
         ladder.pairAggregates,
         this.stateDb.getLastGlobalMatchSequence(ladder.id),
         rosterIds,
-        computeResidencyMultipliers(
+        packages.computeResidencyMultipliers(
           ladder.entries.map(e => e.versionId),
           this.stateDb
         )
@@ -725,11 +723,11 @@ export class Coordinator {
     e1: LadderSnapshot['entries'][number],
     e2: LadderSnapshot['entries'][number]
   ): Promise<{matchId: string; ladderId: string; archivedLadder: boolean}> {
-    const a1 = ensureAgentResident(this.stateDb, e1.versionId, {
+    const a1 = packages.ensureAgentResident(this.stateDb, e1.versionId, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
     });
-    const a2 = ensureAgentResident(this.stateDb, e2.versionId, {
+    const a2 = packages.ensureAgentResident(this.stateDb, e2.versionId, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
     });
@@ -738,7 +736,7 @@ export class Coordinator {
         `Missing local agent registration for versionId ${e1.versionId} or ${e2.versionId}`
       );
     }
-    evictColdAgentsIfNeeded(this.stateDb, {
+    packages.evictColdAgentsIfNeeded(this.stateDb, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
       pinnedVersionIds: new Set([e1.versionId, e2.versionId]),
@@ -782,7 +780,7 @@ export class Coordinator {
     const p2Spec = this.resolveLaunchSpec(a2.mode, a2.target);
 
     // Game 1: P1 in slot p1 with T1, P2 in slot p2 with T2
-    const g1Game = new TimeSlicedArenaGame({
+    const g1Game = new arbiter.TimeSlicedArenaGame({
       format: ladder.format,
       seed: seedStr,
       p1Spec,
@@ -844,7 +842,7 @@ export class Coordinator {
     });
 
     // Game 2: P2 in slot p1 with T1, P1 in slot p2 with T2
-    const g2Game = new TimeSlicedArenaGame({
+    const g2Game = new arbiter.TimeSlicedArenaGame({
       format: ladder.format,
       seed: seedStr,
       p1Spec: p2Spec,
@@ -942,7 +940,7 @@ export class Coordinator {
     };
 
     const {archivedLadder} = await this.completeMatchOrOutbox(completePayload);
-    this.stateDb.markMatchStatus(matchId, 'complete', completedAt);
+    this.stateDb.markMatchCheckpointStatus(matchId, 'complete', completedAt);
 
     // Update fault counters for Game 1 and Game 2 and auto-quarantine on threshold breach
     const p1FaultG1 = isPlayerFault(g1Res, 'p1');

@@ -1,6 +1,7 @@
-import * as readline from 'readline';
+import * as fs from 'fs';
 
 import * as arena from '../server/arena';
+import {root} from '../static/util';
 
 import * as arbiter from './arbiter';
 import * as coordinator from './coordinator';
@@ -10,39 +11,9 @@ import * as tournament from './tournament';
 
 export {arbiter, coordinator, db, packages, tournament};
 
-// Built-in deterministic baseline stdio agent used as the opponent during Turn-1 smoke tests
-// when invoked via `node build/arena baseline`.
-export function runBaselineStdioAgent(
-  input: NodeJS.ReadableStream = process.stdin,
-  output: NodeJS.WritableStream = process.stdout
-) {
-  const rl = readline.createInterface({input, crlfDelay: Infinity});
-  rl.on('line', line => {
-    if (line.startsWith('|tournament|byot|')) {
-      output.write('/utm default\n');
-      return;
-    }
-    if (!line.startsWith('|request|')) return;
-    const raw = line.slice('|request|'.length).trim();
-    if (!raw || raw === 'null') return;
-    try {
-      const req = JSON.parse(raw) as {
-        wait?: boolean;
-        teamPreview?: boolean;
-        maxChosenTeamSize?: number;
-        maxTeamSize?: number;
-      };
-      if (req.wait) return;
-      if (req.teamPreview) {
-        const size = req.maxChosenTeamSize ?? req.maxTeamSize ?? 6;
-        const order = Array.from({length: size}, (_, i) => i + 1).join('');
-        output.write(`/team ${order}\n`);
-      } else {
-        output.write('default\n');
-      }
-    } catch {}
-  });
-}
+const BASELINE_BIN = fs.existsSync('/opt/arena/bin/baseline')
+  ? '/opt/arena/bin/baseline'
+  : root('arena', 'bin', 'baseline');
 
 export async function fetchPlayableLadderSnapshots(
   client: arena.Client
@@ -61,7 +32,7 @@ export async function runDaemon(opts: {
   teamsDir?: string;
   archiveLogsDir?: string;
   maxTurns?: number;
-  pollIntervalMs?: number;
+  pollIntervalMillis?: number;
   once?: boolean;
 } = {}) {
   const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
@@ -71,10 +42,10 @@ export async function runDaemon(opts: {
   }
 
   const client = new arena.Client({serverUrl, arenaSecret});
-  const stateDb = new db.StateDatabase(opts.stateDbPath);
+  const stateDb = new db.Database(opts.stateDbPath);
   const isDev = process.env.ARENA_DEV === '1';
   const baselineSpec: arbiter.AgentLaunchSpec = isDev
-    ? {mode: 'native', target: process.execPath, args: [__filename, 'baseline']}
+    ? {mode: 'native', target: BASELINE_BIN}
     : {mode: 'native', target: '_baseline'};
 
   const coord = new coordinator.Coordinator({
@@ -90,7 +61,7 @@ export async function runDaemon(opts: {
     devMode: isDev,
   });
 
-  const pollIntervalMs = opts.pollIntervalMs ?? 5000;
+  const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
   const status = {running: true};
   const stop = () => {
     status.running = false;
@@ -110,12 +81,12 @@ export async function runDaemon(opts: {
         const played = await coord.playNextScheduledMatch(ladders);
         if (!played && !opts.once) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);
-          await new Promise(r => setTimeout(r, pollIntervalMs));
+          await new Promise(r => setTimeout(r, pollIntervalMillis));
         }
       } catch (err) {
         console.error('Arena daemon cycle error:', err);
         if (opts.once) throw err;
-        await new Promise(r => setTimeout(r, pollIntervalMs));
+        await new Promise(r => setTimeout(r, pollIntervalMillis));
       }
       if (opts.once) break;
     }
@@ -133,7 +104,7 @@ export async function runTournamentValidationDaemon(opts: {
   agentsDir?: string;
   stagingDir?: string;
   tourneyAgentBin?: string;
-  pollIntervalMs?: number;
+  pollIntervalMillis?: number;
   once?: boolean;
 } = {}) {
   const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
@@ -143,15 +114,15 @@ export async function runTournamentValidationDaemon(opts: {
   }
 
   const client = new arena.Client({serverUrl, arenaSecret});
-  const baselineSpec: tournament.TournamentAgentSpec = {
+  const baselineSpec: tournament.AgentSpec = {
     agentId: '_baseline',
     displayName: 'Baseline',
     vmHost: '127.0.0.1',
     controlSocket: '',
-    localCommand: process.execPath,
-    localArgs: [__filename, 'baseline'],
+    localCommand: BASELINE_BIN,
+    localArgs: [],
   };
-  const coord = new tournament.TournamentCoordinator({
+  const coord = new tournament.Coordinator({
     client,
     baselineSpec,
     agentsDir: opts.agentsDir,
@@ -159,7 +130,7 @@ export async function runTournamentValidationDaemon(opts: {
     tourneyAgentBin: opts.tourneyAgentBin,
   });
 
-  const pollIntervalMs = opts.pollIntervalMs ?? 5000;
+  const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
   const status = {running: true};
   const stop = () => {
     status.running = false;
@@ -172,12 +143,12 @@ export async function runTournamentValidationDaemon(opts: {
       try {
         const count = await coord.processPendingSubmissions(opts.tournamentId);
         if (count === 0 && !opts.once) {
-          await new Promise(r => setTimeout(r, pollIntervalMs));
+          await new Promise(r => setTimeout(r, pollIntervalMillis));
         }
       } catch (err) {
         console.error('GCP tournament validation cycle error:', err);
         if (opts.once) throw err;
-        await new Promise(r => setTimeout(r, pollIntervalMs));
+        await new Promise(r => setTimeout(r, pollIntervalMillis));
       }
       if (opts.once) break;
     }
@@ -195,10 +166,9 @@ export async function runTournamentDaemon(
     agentsDir?: string;
     stagingDir?: string;
     tourneyAgentBin?: string;
-    tables?: readonly tournament.TournamentTableBinding[];
+    tables?: readonly tournament.TableBinding[];
     superfinalGames?: number;
     maxTurns?: number;
-    byot?: boolean;
   } = {}
 ): Promise<{roundRobinGames: number; superfinalGames: number}> {
   const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
@@ -208,15 +178,15 @@ export async function runTournamentDaemon(
   }
 
   const client = new arena.Client({serverUrl, arenaSecret});
-  const baselineSpec: tournament.TournamentAgentSpec = {
+  const baselineSpec: tournament.AgentSpec = {
     agentId: '_baseline',
     displayName: 'Baseline',
     vmHost: '127.0.0.1',
     controlSocket: '',
-    localCommand: process.execPath,
-    localArgs: [__filename, 'baseline'],
+    localCommand: BASELINE_BIN,
+    localArgs: [],
   };
-  const coord = new tournament.TournamentCoordinator({
+  const coord = new tournament.Coordinator({
     client,
     baselineSpec,
     agentsDir: opts.agentsDir,
@@ -225,7 +195,6 @@ export async function runTournamentDaemon(
     tables: opts.tables,
     superfinalGames: opts.superfinalGames,
     maxTurns: opts.maxTurns,
-    byot: opts.byot,
   });
   return coord.runTournament(tournamentId);
 }
@@ -236,9 +205,7 @@ if (require.main === module) {
     process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
     process.exit(1);
   };
-  if (sub === 'baseline') {
-    runBaselineStdioAgent();
-  } else if (sub === 'validate-tournament') {
+  if (sub === 'validate-tournament') {
     const once = process.argv.includes('--once');
     const tourneyArg = process.argv.slice(3).find(a => !a.startsWith('--'));
     void runTournamentValidationDaemon({tournamentId: tourneyArg, once}).catch(onFatal);

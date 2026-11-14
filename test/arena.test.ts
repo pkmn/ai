@@ -4,22 +4,18 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import * as zlib from 'zlib';
 
 import {Teams} from '@pkmn/sim';
 import polka from 'polka';
 
 import * as arenaIndex from '../arena';
-import {TimeSlicedArenaGame, TurnHeartbeatInfo} from '../arena/arbiter';
-import {Coordinator, LadderSnapshot} from '../arena/coordinator';
-import {StateDatabase} from '../arena/db';
+import * as arbiter from '../arena/arbiter';
+import * as coordinator from '../arena/coordinator';
+import * as arenaDb from '../arena/db';
 import * as packages from '../arena/packages';
-import {
-  ConcurrentTournamentGame,
-  TournamentCoordinator,
-  buildStratifiedTournamentBook,
-  rewriteBlindPlayerNames,
-  selectNextTournamentBatch,
-} from '../arena/tournament';
+import * as tournament from '../arena/tournament';
+import * as unpack from '../arena/unpack';
 import {Database} from '../db';
 import * as serverArena from '../server/arena';
 import * as auth from '../server/auth';
@@ -54,11 +50,76 @@ const TEAM_TWO =
   ']Clefable||leftovers|magicguard|moonblast,softboiled,stealthrock,thunderwave|' +
   'Calm|252,,4,,252,|||||';
 
+const OU_TEAM_ONE =
+  'Great Tusk||BoosterEnergy|Protosynthesis|HeadlongRush,IceSpinner,RapidSpin,KnockOff|' +
+  'Jolly|,252,4,,,252|||||' +
+  ']Kingambit||Leftovers|SupremeOverlord|KowtowCleave,SuckerPunch,IronHead,SwordsDance|' +
+  'Adamant|212,252,,,,44|M||||' +
+  ']Gholdengo||ChoiceScarf|GoodasGold|MakeItRain,ShadowBall,Trick,Recover|' +
+  'Timid|,,4,252,,252||,0,,,,|||' +
+  ']Dragapult||ChoiceSpecs|Infiltrator|DracoMeteor,ShadowBall,Uturn,Flamethrower|' +
+  'Timid|,,4,252,,252|M||||' +
+  ']Glimmora||FocusSash|ToxicDebris|StealthRock,MortalSpin,PowerGem,EarthPower|' +
+  'Timid|,,4,252,,252|F|,0,,,,|||' +
+  ']Iron Valiant||BoosterEnergy|QuarkDrive|Moonblast,CloseCombat,KnockOff,Encore|' +
+  'Naive|,4,,252,,252|||||';
+
+function buildTestTarGz(entries: Array<{
+  name: string;
+  type: '0' | '1' | '2' | '5' | '6' | 'L' | 'K' | 'x';
+  linkname?: string;
+  prefix?: string;
+  data?: Buffer;
+  mode?: number;
+  base256Size?: boolean;
+}>): Buffer {
+  const blocks: Buffer[] = [];
+  for (const entry of entries) {
+    const header = Buffer.alloc(512, 0);
+    header.write(entry.name, 0, 100, 'utf8');
+    const mode = entry.mode ?? (entry.type === '2' ? 0o777 : 0o644);
+    header.write(`${mode.toString(8).padStart(7, '0')}\0`, 100, 8, 'ascii');
+    header.write('0000000\0', 108, 8, 'ascii');
+    header.write('0000000\0', 116, 8, 'ascii');
+    const size = entry.data?.length ?? 0;
+    if (entry.base256Size) {
+      header[124] = 0x80;
+      let rem = size;
+      for (let i = 135; i >= 125; i--) {
+        header[i] = rem & 0xff;
+        rem = Math.floor(rem / 256);
+      }
+    } else {
+      header.write(`${size.toString(8).padStart(11, '0')}\0`, 124, 12, 'ascii');
+    }
+    header.write('00000000000\0', 136, 12, 'ascii');
+    header.fill(0x20, 148, 156);
+    header.write(entry.type, 156, 1, 'ascii');
+    if (entry.linkname) header.write(entry.linkname, 157, 100, 'utf8');
+    header.write('ustar\0', 257, 6, 'ascii');
+    header.write('00', 263, 2, 'ascii');
+    if (entry.prefix) header.write(entry.prefix, 345, 155, 'utf8');
+    let sum = 0;
+    for (let i = 0; i < 512; i++) sum += header[i];
+    header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+    blocks.push(header);
+    if (size > 0 && entry.data) {
+      blocks.push(entry.data);
+      const rem = size % 512;
+      if (rem > 0) blocks.push(Buffer.alloc(512 - rem, 0));
+    }
+  }
+  blocks.push(Buffer.alloc(1024, 0));
+  return zlib.gzipSync(Buffer.concat(blocks));
+}
+
 describe('arena infrastructure', () => {
   let tmpDir: string;
   let relayBin: string;
   let limitBin: string;
+  let sandboxProbeBin: string;
   let defaultAgentScript: string;
+  let tourneyUtmAgentScript: string;
   let crashingAgentScript: string;
   let validArchivePath: string;
   let validArchiveSha: string;
@@ -67,6 +128,7 @@ describe('arena infrastructure', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-test-'));
     relayBin = path.join(tmpDir, 'tourney-relay');
     limitBin = path.join(tmpDir, 'limit');
+    sandboxProbeBin = path.join(tmpDir, 'sandbox-probe');
 
     execFileSync('clang', [
       '-O2', '-Wall', '-Wextra', '-Werror',
@@ -79,6 +141,71 @@ describe('arena infrastructure', () => {
         '-o', limitBin,
         root('arena', 'bin', 'limit.c'),
       ]);
+      const probeSrc = path.join(tmpDir, 'sandbox-probe.c');
+      fs.writeFileSync(
+        probeSrc,
+        [
+          '#include <fcntl.h>',
+          '#include <netinet/in.h>',
+          '#include <stdio.h>',
+          '#include <string.h>',
+          '#include <sys/socket.h>',
+          '#include <sys/sysctl.h>',
+          '#include <unistd.h>',
+          'int main(int argc, char **argv) {',
+          '  if (argc < 2) return 2;',
+          '  if (strcmp(argv[1], "allow") == 0 && argc == 4) {',
+          '    char buf[256] = {0};',
+          '    int fd = open(argv[2], O_RDONLY);',
+          '    if (fd < 0 || read(fd, buf, sizeof(buf) - 32) <= 0) return 1;',
+          '    close(fd);',
+          '    strcat(buf, "-scratch");',
+          '    int out = open(argv[3], O_WRONLY | O_CREAT | O_TRUNC, 0644);',
+          '    if (out < 0 || write(out, buf, strlen(buf)) < 0) return 1;',
+          '    close(out);',
+          '    memset(buf, 0, sizeof(buf));',
+          '    fd = open(argv[3], O_RDONLY);',
+          '    if (fd < 0 || read(fd, buf, sizeof(buf) - 1) <= 0) return 1;',
+          '    close(fd);',
+          '    FILE *p = popen("/bin/bash -c \'cat <(echo -fd)\'", "r");',
+          '    if (!p) return 1;',
+          '    char fd_buf[64] = {0};',
+          '    if (!fgets(fd_buf, sizeof(fd_buf), p)) return 1;',
+          '    pclose(p);',
+          '    fd_buf[strcspn(fd_buf, "\\r\\n")] = \'\\0\';',
+          '    printf("%s%s\\n", buf, fd_buf);',
+          '    return 0;',
+          '  }',
+          '  if (strcmp(argv[1], "read") == 0 && argc == 3) {',
+          '    int fd = open(argv[2], O_RDONLY);',
+          '    if (fd < 0) return 1;',
+          '    close(fd);',
+          '    return 0;',
+          '  }',
+          '  if (strcmp(argv[1], "socket") == 0) {',
+          '    int s = socket(AF_INET, SOCK_STREAM, 0);',
+          '    if (s < 0) return 1;',
+          '    struct sockaddr_in addr = {0};',
+          '    addr.sin_family = AF_INET;',
+          '    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);',
+          '    int rc = bind(s, (struct sockaddr *)&addr, sizeof(addr));',
+          '    close(s);',
+          '    return rc == 0 ? 0 : 1;',
+          '  }',
+          '  if (strcmp(argv[1], "kernproc") == 0) {',
+          '    int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};',
+          '    size_t sz = 0;',
+          '    return sysctl(mib, 3, NULL, &sz, NULL, 0) == 0 ? 0 : 1;',
+          '  }',
+          '  return 2;',
+          '}',
+        ].join('\n')
+      );
+      execFileSync('clang', [
+        '-O2', '-Wall', '-Wextra', '-Werror',
+        '-o', sandboxProbeBin,
+        probeSrc,
+      ]);
     }
 
     defaultAgentScript = path.join(tmpDir, 'default-agent.js');
@@ -90,10 +217,6 @@ describe('arena infrastructure', () => {
         'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
         'let sentChat = false;',
         'rl.on("line", line => {',
-        '  if (line.startsWith("|tournament|byot|")) {',
-        `    process.stdout.write("/utm ${TEAM_ONE}\\n");`,
-        '    return;',
-        '  }',
         '  if (!line.startsWith("|request|")) return;',
         '  const raw = line.slice(9).trim();',
         '  if (!raw || raw === "null") return;',
@@ -103,6 +226,30 @@ describe('arena infrastructure', () => {
         '    sentChat = true;',
         '    process.stdout.write("hello from agent\\n");',
         '  }',
+        '  if (req.teamPreview) {',
+        '    process.stdout.write("/team 123456\\n");',
+        '  } else {',
+        '    process.stdout.write("default\\n");',
+        '  }',
+        '});',
+      ].join('\n'),
+      {mode: 0o755}
+    );
+
+    tourneyUtmAgentScript = path.join(tmpDir, 'tourney-utm-agent.js');
+    fs.writeFileSync(
+      tourneyUtmAgentScript,
+      [
+        '#!/usr/bin/env node',
+        'const readline = require("readline");',
+        `process.stdout.write("/utm ${OU_TEAM_ONE}\\n");`,
+        'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+        'rl.on("line", line => {',
+        '  if (!line.startsWith("|request|")) return;',
+        '  const raw = line.slice(9).trim();',
+        '  if (!raw || raw === "null") return;',
+        '  const req = JSON.parse(raw);',
+        '  if (req.wait) return;',
         '  if (req.teamPreview) {',
         '    process.stdout.write("/team 123456\\n");',
         '  } else {',
@@ -131,14 +278,14 @@ describe('arena infrastructure', () => {
     validArchiveSha = crypto.createHash('sha256')
       .update(fs.readFileSync(validArchivePath))
       .digest('hex');
-  });
+  }, 30_000);
 
   afterAll(() => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
   const runUnpack = (tarPath: string, dest: string, targetCasDir: string): number => {
-    const out = execFileSync('python3', [packages.UNPACK_BIN, tarPath, dest], {
+    const out = execFileSync(packages.UNPACK_BIN, [tarPath, dest], {
       encoding: 'utf8',
       env: {...process.env, ARENA_CAS_DIR: targetCasDir},
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -178,25 +325,24 @@ describe('arena infrastructure', () => {
       expect(typeof arenaIndex.runDaemon).toBe('function');
     });
 
-    test('passes shell or Python syntax checks across arena scripts', () => {
+    test('passes shell syntax checks across arena scripts', () => {
       expect(() => {
         execFileSync('bash', [
           '-n',
           root('arena/bin/arena'),
+          root('arena/bin/unpack'),
           root('arena/bin/tourney-agent'),
           root('arena/scripts/setup-arena.sh'),
           root('arena/scripts/bake-image.sh'),
           root('arena/scripts/archive.sh'),
         ]);
         execFileSync('sh', ['-n', root('arena/bin/baseline')]);
-        execFileSync('python3', ['-m', 'py_compile', root('arena/bin/unpack')]);
       }).not.toThrow();
     });
 
-    test('baseline agent responds to BYOT, team preview, or battle requests', () => {
+    test('baseline agent responds to team preview or battle requests', () => {
       const baselineOut = execFileSync(root('arena/bin/baseline'), [], {
         input: [
-          '|tournament|byot|{"format":"[Gen 9] OU"}',
           '|request|{"wait":true}',
           '|request|{"teamPreview":true,"maxChosenTeamSize":4}',
           '|request|{"teamPreview":true}',
@@ -204,8 +350,7 @@ describe('arena infrastructure', () => {
         ].join('\n') + '\n',
         encoding: 'utf8',
       }).trim().split('\n');
-      expect(baselineOut[0]?.startsWith('/utm ')).toBe(true);
-      expect(baselineOut.slice(1)).toEqual(['/team 1234', '/team 123456', 'default']);
+      expect(baselineOut).toEqual(['/team 1234', '/team 123456', 'default']);
     });
 
     test('configures strict sudoers, scratch chown, Podman RAM, or Seatbelt flags', () => {
@@ -336,49 +481,32 @@ describe('arena infrastructure', () => {
 
     test('rejects chained-symlink Tar Slip archives escaping destination', () => {
       const slipTar = path.join(tmpDir, 'chained-symlink-slip.tar.gz');
-      execFileSync('python3', [
-        '-c',
-        [
-          'import io, tarfile, sys',
-          'with tarfile.open(sys.argv[1], "w:gz") as tf:',
-          '    s1 = tarfile.TarInfo("a/b")',
-          '    s1.type = tarfile.SYMTYPE',
-          '    s1.linkname = ".."',
-          '    tf.addfile(s1)',
-          '    s2 = tarfile.TarInfo("a/b/escape")',
-          '    s2.type = tarfile.SYMTYPE',
-          '    s2.linkname = ".."',
-          '    tf.addfile(s2)',
-          '    f = tarfile.TarInfo("escape/pwned.txt")',
-          '    f.size = 5',
-          '    tf.addfile(f, io.BytesIO(b"pwned"))',
-        ].join('\n'),
+      fs.writeFileSync(
         slipTar,
-      ]);
+        buildTestTarGz([
+          {name: 'a/b', type: '2', linkname: '..'},
+          {name: 'a/b/escape', type: '2', linkname: '..'},
+          {name: 'escape/pwned.txt', type: '0', data: Buffer.from('pwned', 'utf8')},
+        ])
+      );
       const slipAgentsDir = path.join(tmpDir, 'agents-slip');
-      expect(() => runUnpack(slipTar, path.join(slipAgentsDir, 'agent-slip'),
-        path.join(tmpDir, 'cas-slip'))).toThrow(/traverses symlink|escapes|illegal link target/i);
+      expect(() => runUnpack(
+        slipTar,
+        path.join(slipAgentsDir, 'agent-slip'),
+        path.join(tmpDir, 'cas-slip')
+      )).toThrow(/traverses symlink|escapes|illegal link target/i);
       expect(fs.existsSync(path.join(slipAgentsDir, 'pwned.txt'))).toBe(false);
     });
 
     test('rejects hardlink size-amplification archives above 500 MB', () => {
       const hlBombTar = path.join(tmpDir, 'hardlink-bomb.tar.gz');
-      execFileSync('python3', [
-        '-c',
-        [
-          'import io, tarfile, sys',
-          'with tarfile.open(sys.argv[1], "w:gz") as tf:',
-          '    base = tarfile.TarInfo("base.bin")',
-          '    base.size = 4 * 1024 * 1024',
-          '    tf.addfile(base, io.BytesIO(b"\\0" * base.size))',
-          '    for i in range(130):',
-          '        lnk = tarfile.TarInfo(f"dup-{i}.bin")',
-          '        lnk.type = tarfile.LNKTYPE',
-          '        lnk.linkname = "base.bin"',
-          '        tf.addfile(lnk)',
-        ].join('\n'),
-        hlBombTar,
-      ]);
+      const entries: Parameters<typeof buildTestTarGz>[0] = [
+        {name: 'base.bin', type: '0', data: Buffer.alloc(4 * 1024 * 1024, 0)},
+      ];
+      for (let i = 0; i < 130; i++) {
+        entries.push({name: `dup-${i}.bin`, type: '1', linkname: 'base.bin'});
+      }
+      fs.writeFileSync(hlBombTar, buildTestTarGz(entries));
       const hlDest = path.join(tmpDir, 'agent-hl-bomb');
       expect(() => runUnpack(hlBombTar, hlDest, path.join(tmpDir, 'cas-hl')))
         .toThrow(/exceeds 500 MB cap/i);
@@ -417,6 +545,146 @@ describe('arena infrastructure', () => {
       const unpackedSo = path.join(soDest, 'ext.cpython-312-darwin.so');
       expect(fs.statSync(unpackedSo).mode & 0o777).toBe(0o644);
       execFileSync('/usr/bin/codesign', ['-v', unpackedSo], {stdio: 'pipe'});
+    });
+
+    test('parses PAX extended headers, GNU LongLink, ustar prefix, or base-256 sizes', () => {
+      const paxKv = 'path=pax-dir/deep-weights.bin\n';
+      const paxRecord = `${paxKv.length + 3} ${paxKv}`;
+      const tarPath = path.join(tmpDir, 'formats.tar.gz');
+      fs.writeFileSync(
+        tarPath,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\nexit 0\n')},
+          {name: 'PaxHeader/deep', type: 'x', data: Buffer.from(paxRecord, 'utf8')},
+          {name: 'ignored-short-name', type: '0', data: Buffer.from('pax-payload')},
+          {
+            name: '././@LongLink',
+            type: 'L',
+            data: Buffer.from('gnu-long/nested/model.bin\0', 'utf8'),
+          },
+          {
+            name: 'truncated',
+            type: '0',
+            data: Buffer.from('gnu-base256-payload'),
+            base256Size: true,
+          },
+          {
+            name: 'config.json',
+            prefix: 'ustar-prefix/sub',
+            type: '0',
+            data: Buffer.from('{"ok":true}'),
+          },
+        ])
+      );
+      const dest = path.join(tmpDir, 'agent-formats');
+      unpack.unpackBundle(tarPath, dest);
+      expect(fs.readFileSync(path.join(dest, 'pax-dir/deep-weights.bin'), 'utf8'))
+        .toBe('pax-payload');
+      expect(fs.readFileSync(path.join(dest, 'gnu-long/nested/model.bin'), 'utf8'))
+        .toBe('gnu-base256-payload');
+      expect(fs.readFileSync(path.join(dest, 'ustar-prefix/sub/config.json'), 'utf8'))
+        .toBe('{"ok":true}');
+    });
+
+    test('rejects special FIFO entries, absolute paths, or symlink loops', () => {
+      const fifoTar = path.join(tmpDir, 'fifo.tar.gz');
+      fs.writeFileSync(
+        fifoTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\n')},
+          {name: 'pipe.fifo', type: '6'},
+        ])
+      );
+      expect(() => unpack.unpackBundle(fifoTar, path.join(tmpDir, 'agent-fifo')))
+        .toThrow(/Disallowed special file/);
+
+      const absTar = path.join(tmpDir, 'abs.tar.gz');
+      fs.writeFileSync(
+        absTar,
+        buildTestTarGz([
+          {name: '/etc/passwd', type: '0', data: Buffer.from('x')},
+        ])
+      );
+      expect(() => unpack.unpackBundle(absTar, path.join(tmpDir, 'agent-abs')))
+        .toThrow(/Illegal path in archive/);
+
+      const loopTar = path.join(tmpDir, 'loop.tar.gz');
+      fs.writeFileSync(
+        loopTar,
+        buildTestTarGz([
+          {name: 'a', type: '2', linkname: 'b'},
+          {name: 'b', type: '2', linkname: 'a'},
+          {name: 'a/file.txt', type: '0', data: Buffer.from('x')},
+        ])
+      );
+      expect(() => unpack.unpackBundle(loopTar, path.join(tmpDir, 'agent-loop')))
+        .toThrow(/Symlink loop detected/);
+    });
+
+    test('rejects forward hardlinks, symlinked ./run, or non-executable ./run', () => {
+      const fwdLinkTar = path.join(tmpDir, 'fwd-hardlink.tar.gz');
+      fs.writeFileSync(
+        fwdLinkTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\n')},
+          {name: 'dup.bin', type: '1', linkname: 'later.bin'},
+          {name: 'later.bin', type: '0', data: Buffer.from('later')},
+        ])
+      );
+      expect(() => unpack.unpackBundle(fwdLinkTar, path.join(tmpDir, 'agent-fwd-hl')))
+        .toThrow(/does not reference an earlier regular file/);
+
+      const symRunTar = path.join(tmpDir, 'sym-run.tar.gz');
+      fs.writeFileSync(
+        symRunTar,
+        buildTestTarGz([
+          {name: 'real-run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\n')},
+          {name: 'run', type: '2', linkname: 'real-run'},
+        ])
+      );
+      expect(() => unpack.unpackBundle(symRunTar, path.join(tmpDir, 'agent-sym-run')))
+        .toThrow(/missing required executable \.\/run/);
+
+      const nonExecRunTar = path.join(tmpDir, 'nonexec-run.tar.gz');
+      fs.writeFileSync(
+        nonExecRunTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o644, data: Buffer.from('#!/bin/sh\n')},
+        ])
+      );
+      expect(() => unpack.unpackBundle(nonExecRunTar, path.join(tmpDir, 'agent-nonexec-run')))
+        .toThrow(/missing required executable \.\/run/);
+    });
+
+    test('preserves internal links while skipping CAS on multi-linked files', () => {
+      const linksTar = path.join(tmpDir, 'links-cas.tar.gz');
+      const sharedBuf = Buffer.alloc(70_000, 0x41);
+      const uniqueBuf = Buffer.alloc(70_000, 0x42);
+      fs.writeFileSync(
+        linksTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\nexit 0\n')},
+          {name: 'shared.bin', type: '0', mode: 0o644, data: sharedBuf},
+          {name: 'shared-hl.bin', type: '1', linkname: 'shared.bin'},
+          {name: 'shared-sym.bin', type: '2', linkname: 'shared.bin'},
+          {name: 'unique.bin', type: '0', mode: 0o644, data: uniqueBuf},
+        ])
+      );
+      const dest = path.join(tmpDir, 'agent-links-cas');
+      const casDir = path.join(tmpDir, 'cas-links-only');
+      unpack.unpackBundle(linksTar, dest, casDir);
+
+      const stShared = fs.lstatSync(path.join(dest, 'shared.bin'));
+      const stHard = fs.lstatSync(path.join(dest, 'shared-hl.bin'));
+      const stSym = fs.lstatSync(path.join(dest, 'shared-sym.bin'));
+      expect(stShared.ino).toBe(stHard.ino);
+      expect(stShared.nlink).toBe(2);
+      expect(stSym.isSymbolicLink()).toBe(true);
+
+      const sharedDigest = crypto.createHash('sha256').update(sharedBuf).digest('hex');
+      const uniqueDigest = crypto.createHash('sha256').update(uniqueBuf).digest('hex');
+      expect(fs.existsSync(path.join(casDir, sharedDigest.slice(0, 2), sharedDigest))).toBe(false);
+      expect(fs.existsSync(path.join(casDir, uniqueDigest.slice(0, 2), uniqueDigest))).toBe(true);
     });
   });
 
@@ -549,9 +817,19 @@ describe('arena infrastructure', () => {
     });
   });
 
-  describe('StateDatabase residency', () => {
+  describe('arena/db Database', () => {
+    test('loads individual .sql table definitions from arena/db/schema/', () => {
+      expect(arenaDb.SCHEMA_FILES).toEqual([
+        'ladder-counters.sql',
+        'local-agents.sql',
+        'local-matches.sql',
+        'outbox.sql',
+        'schema-migrations.sql',
+      ]);
+    });
+
     test('computeResidencyMultipliers boosts warm pairs over cold pairs', () => {
-      const stateDb = new StateDatabase(':memory:');
+      const stateDb = new arenaDb.Database(':memory:');
       try {
         stateDb.upsertLocalAgent({
           versionId: 10,
@@ -583,7 +861,7 @@ describe('arena infrastructure', () => {
     });
 
     test('tracks per-format plus global match sequence numbers', () => {
-      const stateDb = new StateDatabase(':memory:');
+      const stateDb = new arenaDb.Database(':memory:');
       try {
         expect(stateDb.nextMatchSequence('gen9ou')).toBe(1);
         expect(stateDb.nextMatchSequence('gen9ou')).toBe(2);
@@ -598,7 +876,7 @@ describe('arena infrastructure', () => {
     });
 
     test('resets consecutive fault counters after a clean game', () => {
-      const stateDb = new StateDatabase(':memory:');
+      const stateDb = new arenaDb.Database(':memory:');
       try {
         stateDb.upsertLocalAgent({
           versionId: 10,
@@ -623,7 +901,7 @@ describe('arena infrastructure', () => {
     });
 
     test('evictColdAgentsIfNeeded evicts oldest hot container without touching native', () => {
-      const stateDb = new StateDatabase(':memory:');
+      const stateDb = new arenaDb.Database(':memory:');
       try {
         stateDb.upsertLocalAgent({
           versionId: 10,
@@ -682,7 +960,7 @@ describe('arena infrastructure', () => {
     });
 
     test('evictColdAgentsIfNeeded prunes orphaned CAS blobs on native eviction', () => {
-      const stateDb = new StateDatabase(':memory:');
+      const stateDb = new arenaDb.Database(':memory:');
       try {
         const agentsDir = path.join(tmpDir, 'evict-native-agents');
         const casRoot = path.join(tmpDir, 'evict-native-cas');
@@ -746,8 +1024,8 @@ describe('arena infrastructure', () => {
 
   describe('TimeSlicedArenaGame', () => {
     test('runs sequential @pkmn/sim battles with chat elision plus smoke stop', async () => {
-      const heartbeats: TurnHeartbeatInfo[] = [];
-      const game = new TimeSlicedArenaGame({
+      const heartbeats: arbiter.TurnHeartbeatInfo[] = [];
+      const game = new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
@@ -792,7 +1070,7 @@ describe('arena infrastructure', () => {
         ].join('\n'),
         {mode: 0o755}
       );
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [crInjectScript]},
@@ -825,7 +1103,7 @@ describe('arena infrastructure', () => {
         ].join('\n'),
         {mode: 0o755}
       );
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [threeStrikesScript]},
@@ -839,7 +1117,7 @@ describe('arena infrastructure', () => {
     });
 
     test('forfeits crashing agents immediately with crash', async () => {
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [crashingAgentScript]},
@@ -872,7 +1150,7 @@ describe('arena infrastructure', () => {
         ].join('\n'),
         {mode: 0o755}
       );
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [undoAgentScript]},
@@ -893,7 +1171,7 @@ describe('arena infrastructure', () => {
     });
 
     test('runs VGC ladder games under Closed Team Sheets by default', async () => {
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9championsvgc2026regmc',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
@@ -910,7 +1188,7 @@ describe('arena infrastructure', () => {
     });
 
     test('reveals |showteam| when Open Team Sheets custom rule is enabled', async () => {
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9championsvgc2026regmc',
         customRules: ['Open Team Sheets'],
         seed: '1,2,3,4',
@@ -954,7 +1232,7 @@ describe('arena infrastructure', () => {
         ].join('\n'),
         {mode: 0o755}
       );
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [invalidRetryScript]},
@@ -977,7 +1255,7 @@ describe('arena infrastructure', () => {
         '#!/usr/bin/env node\nprocess.stdout.write("A".repeat(100000));\n',
         {mode: 0o755}
       );
-      const res = await new TimeSlicedArenaGame({
+      const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {mode: 'native', target: process.execPath, args: [floodScript]},
@@ -994,7 +1272,7 @@ describe('arena infrastructure', () => {
   describe('ConcurrentTournamentGame', () => {
     test('rewrites blind Agent A/B protocol names to entrant display names', async () => {
       const spectatorChunks: string[] = [];
-      const blindRes = await new ConcurrentTournamentGame({
+      const blindRes = await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {
@@ -1013,7 +1291,6 @@ describe('arena infrastructure', () => {
           localCommand: relayBin,
           localArgs: [process.execPath, defaultAgentScript],
         },
-        byot: false,
         p1TeamPacked: TEAM_ONE,
         p2TeamPacked: TEAM_TWO,
         maxTurns: 2,
@@ -1025,36 +1302,70 @@ describe('arena infrastructure', () => {
       expect(blindRes.omniscientLog).toContain('|player|p2|PokeChamp|');
       expect(blindRes.omniscientLog).not.toContain('|player|p1|Agent A|');
       expect(spectatorChunks.length).toBeGreaterThan(0);
-      expect(rewriteBlindPlayerNames('|win|Agent A', 'Alpha', 'Beta')).toBe('|win|Alpha');
+      expect(tournament.rewriteBlindPlayerNames('|win|Agent A', 'Alpha', 'Beta'))
+        .toBe('|win|Alpha');
     });
 
-    test('runs BYOT tournament games via |tournament|byot| handshake', async () => {
-      const byotRes = await new ConcurrentTournamentGame({
-        format: 'gen9customgame',
+    test('reads initial /utm line from agents when teams are not pre-assigned', async () => {
+      const utmRes = await new tournament.ConcurrentGame({
+        format: 'gen9ou',
         seed: '1,2,3,4',
         p1Spec: {
           agentId: 'foul-play',
           displayName: 'Foul Play',
           vmHost: 'localhost',
           controlSocket: '/tmp/unused',
-          staticTeam: TEAM_ONE,
           localCommand: relayBin,
-          localArgs: [process.execPath, defaultAgentScript],
+          localArgs: [process.execPath, tourneyUtmAgentScript],
         },
         p2Spec: {
           agentId: 'pokechamp',
           displayName: 'PokeChamp',
           vmHost: 'localhost',
           controlSocket: '/tmp/unused',
-          staticTeam: TEAM_TWO,
           localCommand: relayBin,
-          localArgs: [process.execPath, defaultAgentScript],
+          localArgs: [process.execPath, tourneyUtmAgentScript],
         },
-        byot: true,
         maxTurns: 1,
       }).run();
-      expect(byotRes.p1TeamPacked).toBeTruthy();
-      expect(byotRes.p2TeamPacked).toBeTruthy();
+      expect(utmRes.p1TeamPacked).toBeTruthy();
+      expect(utmRes.p2TeamPacked).toBeTruthy();
+      expect(utmRes.turns).toBeGreaterThanOrEqual(1);
+    });
+
+    test('forfeits entrant immediately when first stdout line is an invalid team', async () => {
+      const badTeamScript = path.join(tmpDir, 'bad-team-agent.js');
+      fs.writeFileSync(
+        badTeamScript,
+        '#!/usr/bin/env node\n' +
+        'process.stdout.write("/utm Mewtwo||leftovers|pressure|recover|||\\n");\n',
+        {mode: 0o755}
+      );
+
+      const badRes = await new tournament.ConcurrentGame({
+        format: 'gen9ou',
+        seed: '1,2,3,4',
+        p1Spec: {
+          agentId: 'bad-agent',
+          displayName: 'Bad Agent',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, badTeamScript],
+        },
+        p2Spec: {
+          agentId: 'pokechamp',
+          displayName: 'PokeChamp',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, tourneyUtmAgentScript],
+        },
+        maxTurns: 1,
+      }).run();
+      expect(badRes.winner).toBe('p2');
+      expect(badRes.outcome).toBe('L');
+      expect(badRes.endReason).toBe('invalid-choice');
     });
 
     test('aborts without penalty on trusted ARENA_SPOT_PREEMPTED signal', async () => {
@@ -1066,7 +1377,7 @@ describe('arena infrastructure', () => {
         {mode: 0o755}
       );
 
-      const preemptRes = await new ConcurrentTournamentGame({
+      const preemptRes = await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {
@@ -1085,7 +1396,6 @@ describe('arena infrastructure', () => {
           localCommand: process.execPath,
           localArgs: [preemptScript],
         },
-        byot: false,
         p1TeamPacked: TEAM_ONE,
         p2TeamPacked: TEAM_TWO,
       }).run();
@@ -1103,7 +1413,7 @@ describe('arena infrastructure', () => {
         {mode: 0o755}
       );
 
-      const spoofedRes = await new ConcurrentTournamentGame({
+      const spoofedRes = await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
         p1Spec: {
@@ -1122,7 +1432,6 @@ describe('arena infrastructure', () => {
           localCommand: relayBin,
           localArgs: [process.execPath, preemptScript],
         },
-        byot: false,
         p1TeamPacked: TEAM_ONE,
         p2TeamPacked: TEAM_TWO,
       }).run();
@@ -1130,27 +1439,14 @@ describe('arena infrastructure', () => {
       expect(spoofedRes.endReason).toBe('crash');
     });
 
-    test('buildStratifiedTournamentBook pairs distinct teams without mirrors', () => {
-      let seed = 42;
-      const rng = (max: number) => {
-        seed = (seed * 1664525 + 1013904223) >>> 0;
-        return seed % max;
-      };
-      const book = buildStratifiedTournamentBook([TEAM_ONE, TEAM_TWO], 8, rng);
-      expect(book).toHaveLength(4);
-      for (const pair of book) {
-        expect(pair.team1Packed).not.toBe(pair.team2Packed);
-      }
-    });
-
-    test('selectNextTournamentBatch schedules sticky-VM matchup waves', () => {
+    test('selectNextBatch schedules sticky-VM matchup waves', () => {
       const matchups = [
         {agentA: 1, agentB: 2, gamesPlayed: 10, gamesTarget: 20, inFlight: false},
         {agentA: 1, agentB: 3, gamesPlayed: 0, gamesTarget: 20, inFlight: false},
         {agentA: 2, agentB: 4, gamesPlayed: 0, gamesTarget: 20, inFlight: false},
       ];
       const totals = new Map<number, number>([[1, 10], [2, 10], [3, 0], [4, 0]]);
-      const batch = selectNextTournamentBatch(matchups, totals, {vmAAgent: 1, vmBAgent: 2}, 10);
+      const batch = tournament.selectNextBatch(matchups, totals, {vmAAgent: 1, vmBAgent: 2}, 10);
       expect(batch).toEqual({
         agentOnVmA: 1,
         agentOnVmB: 3,
@@ -1246,26 +1542,27 @@ describe('arena infrastructure', () => {
         }),
       } as unknown as serverArena.Client;
 
-      const stateDb = new StateDatabase(':memory:');
+      const stateDb = new arenaDb.Database(':memory:');
       const agentsDir = path.join(tmpDir, `${prefix}-agents`);
       const archiveLogsDir = path.join(tmpDir, `${prefix}-logs`);
-      const coord = new Coordinator({
+      const coord = new coordinator.Coordinator({
         client: mockClient,
         stateDb,
         baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
         agentsDir,
         stagingDir: path.join(tmpDir, `${prefix}-staging`),
+        teamsDir: path.join(tmpDir, `${prefix}-teams`),
         casDir: path.join(tmpDir, `${prefix}-cas`),
         archiveLogsDir,
         devMode: true,
         maxTurns: 1,
       });
 
-      const ladderSnap: LadderSnapshot = {
+      const ladderSnap: coordinator.LadderSnapshot = {
         id: 'gen9customgame',
         slot: 'sv',
         format: 'gen9customgame',
-        team: 'random',
+        team: 'harvested',
         status: 'active',
         min: 2,
         entries: [
@@ -1309,6 +1606,13 @@ describe('arena infrastructure', () => {
         heartbeats,
       };
     }
+
+    test('parsePrngSeed throws on malformed or out-of-range PRNG seeds', () => {
+      expect(coordinator.parsePrngSeed('1, 2, 3, 4')).toBe('1,2,3,4');
+      expect(() => coordinator.parsePrngSeed('bad-seed')).toThrow(/Invalid PRNG seed/);
+      expect(() => coordinator.parsePrngSeed('1,2,3')).toThrow(/Invalid PRNG seed/);
+      expect(() => coordinator.parsePrngSeed('1,2,3,70000')).toThrow(/Invalid PRNG seed/);
+    });
 
     test('ingests pending bundle submissions through Turn-1 smoke test', async () => {
       const h = createMockCoordHarness('smoke');
@@ -1359,7 +1663,7 @@ describe('arena infrastructure', () => {
       }
     });
 
-    test('aborts in_progress checkpoints while resuming g1_complete Game 2', async () => {
+    test('aborts in-progress checkpoints while resuming g1-complete Game 2', async () => {
       const h = createMockCoordHarness('recover');
       try {
         await h.coord.processPendingSubmissions(new Map([['gen9customgame', h.ladderSnap]]));
@@ -1369,7 +1673,7 @@ describe('arena infrastructure', () => {
           id: 'gen9customgame-0000098',
           ladderId: 'gen9customgame',
           format: 'gen9customgame',
-          teamMode: 'random',
+          teamMode: 'harvested',
           p1VersionId: 30,
           p1AgentId: 1,
           p1Slug: 'foul-play',
@@ -1394,7 +1698,7 @@ describe('arena infrastructure', () => {
           id: 'gen9customgame-0000099',
           ladderId: 'gen9customgame',
           format: 'gen9customgame',
-          teamMode: 'random',
+          teamMode: 'harvested',
           p1VersionId: 30,
           p1AgentId: 1,
           p1Slug: 'foul-play',
@@ -1481,7 +1785,7 @@ describe('arena infrastructure', () => {
 
     test('records LW split category over HTTP while evicting 4xx outbox items', async () => {
       await withRealArenaServer('lw-split', async ({db, client, serverUrl, secret}) => {
-        const stateDb = new StateDatabase(':memory:');
+        const stateDb = new arenaDb.Database(':memory:');
         try {
           db.syncLaddersFromYaml([
             '- name: RAND',
@@ -1556,7 +1860,7 @@ describe('arena infrastructure', () => {
             });
           }
 
-          const coord = new Coordinator({
+          const coord = new coordinator.Coordinator({
             client,
             stateDb,
             baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
@@ -1574,7 +1878,7 @@ describe('arena infrastructure', () => {
           const snapRes = await fetch(`${serverUrl}/api/arena/ladders`, {
             headers: {Authorization: `Bearer ${secret}`},
           });
-          const {ladders} = await snapRes.json() as {ladders: LadderSnapshot[]};
+          const {ladders} = await snapRes.json() as {ladders: coordinator.LadderSnapshot[]};
           const played = await coord.playNextScheduledMatch(ladders);
           expect(played?.ladderId).toBe('gen9randombattle202611');
           expect(stateDb.listOutbox()).toHaveLength(0);
@@ -1623,7 +1927,7 @@ describe('arena infrastructure', () => {
         fs.copyFileSync(defaultAgentScript, path.join(defaultRunDir, 'run'));
         fs.chmodSync(path.join(defaultRunDir, 'run'), 0o755);
 
-        const seedStateDb = new StateDatabase(daemonStatePath);
+        const seedStateDb = new arenaDb.Database(daemonStatePath);
         const slugs = ['0-error', 'foul-play', 'metamon', 'pokechamp'];
         for (let idx = 0; idx < slugs.length; idx++) {
           const ag = db.getAgentBySlug(slugs[idx])!;
@@ -1681,16 +1985,20 @@ describe('arena infrastructure', () => {
 
     test('resolves upcoming ladder formats while leaving tournament OCI queued', async () => {
       await withRealArenaServer('upcoming-fmt', async ({db, client}) => {
-        const stateDb = new StateDatabase(':memory:');
+        const stateDb = new arenaDb.Database(':memory:');
         try {
           db.syncLaddersFromYaml([
             '- name: RBY',
             '  id: gen1ou20261109',
             '  format: gen1ou',
-            '  team: random',
+            '  team: harvested',
             '  status: upcoming',
             '  min: 2',
           ].join('\n'));
+          db.replaceLadderTeams('gen1ou20261109', [
+            'Tauros|||NoAbility|BodySlam,HyperBeam,Blizzard,Earthquake|||||||',
+            'Snorlax|||NoAbility|BodySlam,Reflect,Rest,Amnesia|||||||',
+          ]);
           db.syncProjectsFromYaml([
             '- name: Mew\'s Truck',
             '  active: 2026',
@@ -1763,12 +2071,13 @@ describe('arena infrastructure', () => {
           });
           expect(tourneyPending.submissions.map(s => s.versionId)).toEqual([tourneySub.id]);
 
-          const coord = new Coordinator({
+          const coord = new coordinator.Coordinator({
             client,
             stateDb,
             baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
             agentsDir: path.join(tmpDir, 'upcoming-agents'),
             stagingDir: path.join(tmpDir, 'upcoming-staging'),
+            teamsDir: path.join(tmpDir, 'upcoming-teams'),
             archiveLogsDir: path.join(tmpDir, 'upcoming-logs'),
             devMode: true,
           });
@@ -1819,7 +2128,7 @@ describe('arena infrastructure', () => {
           });
         }
 
-        const tourCoord = new TournamentCoordinator({
+        const tourCoord = new tournament.Coordinator({
           client,
           baselineSpec: {
             agentId: '_baseline',
@@ -1827,7 +2136,7 @@ describe('arena infrastructure', () => {
             vmHost: '127.0.0.1',
             controlSocket: '',
             localCommand: relayBin,
-            localArgs: [process.execPath, defaultAgentScript],
+            localArgs: [root('arena', 'bin', 'baseline')],
           },
           agentsDir: path.join(tmpDir, 'gcp-tourney-agents'),
           superfinalGames: 2,
@@ -1839,7 +2148,7 @@ describe('arena infrastructure', () => {
             vmHost: '127.0.0.1',
             controlSocket: '',
             localCommand: relayBin,
-            localArgs: [process.execPath, defaultAgentScript],
+            localArgs: [process.execPath, tourneyUtmAgentScript],
           }),
         });
 
@@ -1897,6 +2206,9 @@ describe('arena infrastructure', () => {
       const sbScratch = path.join(realTmp, 'sb-allow-scratch');
       fs.mkdirSync(sbRo, {recursive: true});
       fs.mkdirSync(sbScratch, {recursive: true});
+      const probe = path.join(sbRo, 'probe');
+      fs.copyFileSync(sandboxProbeBin, probe);
+      fs.chmodSync(probe, 0o755);
       fs.writeFileSync(path.join(sbRo, 'weights.txt'), 'ok-weights');
 
       const sandboxEnv = {
@@ -1912,17 +2224,10 @@ describe('arena infrastructure', () => {
           '-f', root('arena/config/sandbox.sb'),
           '-D', `AGENT_RO_DIR=${sbRo}`,
           '-D', `AGENT_SCRATCH_DIR=${sbScratch}`,
-          '/usr/bin/python3',
-          '-c',
-          [
-            'import pathlib, subprocess',
-            `w = pathlib.Path(${JSON.stringify(path.join(sbRo, 'weights.txt'))}).read_text()`,
-            `s = pathlib.Path(${JSON.stringify(path.join(sbScratch, 'out.txt'))})`,
-            's.write_text(w + "-scratch")',
-            'fd_out = subprocess.check_output(' +
-              '["/bin/bash", "-c", "cat <(echo -fd)"], text=True).strip()',
-            'print(s.read_text() + fd_out)',
-          ].join('\n'),
+          probe,
+          'allow',
+          path.join(sbRo, 'weights.txt'),
+          path.join(sbScratch, 'out.txt'),
         ],
         {cwd: sbScratch, env: sandboxEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}
       ).trim();
@@ -1938,6 +2243,9 @@ describe('arena infrastructure', () => {
       fs.mkdirSync(sbRo, {recursive: true});
       fs.mkdirSync(sbSibling, {recursive: true});
       fs.mkdirSync(sbScratch, {recursive: true});
+      const probe = path.join(sbRo, 'probe');
+      fs.copyFileSync(sandboxProbeBin, probe);
+      fs.chmodSync(probe, 0o755);
       fs.writeFileSync(path.join(sbSibling, 'secret.txt'), 'rival-secret');
       fs.writeFileSync(path.join(sbScratch, 'out.txt'), 'scratch-file');
 
@@ -1948,35 +2256,22 @@ describe('arena infrastructure', () => {
         LANG: 'C.UTF-8',
         PYTHONHASHSEED: '0',
       };
-      const runSandboxed = (pyCode: string) =>
+      const runSandboxed = (...args: string[]) =>
         execFileSync(
           '/usr/bin/sandbox-exec',
           [
             '-f', root('arena/config/sandbox.sb'),
             '-D', `AGENT_RO_DIR=${sbRo}`,
             '-D', `AGENT_SCRATCH_DIR=${sbScratch}`,
-            '/usr/bin/python3',
-            '-c',
-            pyCode,
+            probe,
+            ...args,
           ],
           {cwd: sbScratch, env: sandboxEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}
         );
 
-      expect(() => runSandboxed(
-        `open(${JSON.stringify(path.join(sbSibling, 'secret.txt'))}).read()`
-      )).toThrow();
-
-      expect(() => runSandboxed(
-        'import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); ' +
-        's.bind(("127.0.0.1", 0))'
-      )).toThrow();
-
-      expect(() => runSandboxed(
-        'import ctypes; libc = ctypes.CDLL(None); ' +
-        'mib = (ctypes.c_int * 3)(1, 14, 0); sz = ctypes.c_size_t(0); ' +
-        'rc = libc.sysctl(mib, 3, None, ctypes.byref(sz), None, 0); ' +
-        'assert rc == 0'
-      )).toThrow();
+      expect(() => runSandboxed('read', path.join(sbSibling, 'secret.txt'))).toThrow();
+      expect(() => runSandboxed('socket')).toThrow();
+      expect(() => runSandboxed('kernproc')).toThrow();
 
       expect(() => execFileSync(
         '/usr/bin/sandbox-exec',

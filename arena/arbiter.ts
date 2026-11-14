@@ -8,14 +8,14 @@ import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protoco
 import {GameOutcome} from '../server/ratings';
 import {ensureSimConfigured, resolveArenaFormatId} from '../server/teams';
 
-import {AgentMode} from './db';
+import * as db from './db';
 
 ensureSimConfigured();
 
 type PlayerSlot = 'p1' | 'p2';
 
 export interface AgentLaunchSpec {
-  mode: AgentMode;
+  mode: db.ExecutionMode;
   target: string; // OCI image tag for 'container', or bundle directory/path for 'native'
   args?: string[];
   env?: Record<string, string>;
@@ -75,15 +75,15 @@ interface SandboxedPlayer {
   proc: ChildProcessWithoutNullStreams;
   lineQueue: string[];
   lineResolver: ((line: string | undefined) => void) | undefined;
-  bankMs: number;
+  bankMillis: number;
   hasTakenFirstDecision: boolean;
   retryingInvalidChoice: boolean;
   invalidStrikes: number;
   pendingRequestJson: string | undefined;
   lastRequestJson: string | undefined;
   decisionCount: number;
-  totalDecisionMs: number;
-  lastDecisionMs: number;
+  totalDecisionMillis: number;
+  lastDecisionMillis: number;
   exited: boolean;
   exitCode: number | undefined;
 }
@@ -156,7 +156,7 @@ export function inspectPlayerProtocolChunk(
 
 export interface PlayerClockState {
   slot: PlayerSlot;
-  bankMs: number;
+  bankMillis: number;
   hasTakenFirstDecision: boolean;
   retryingInvalidChoice: boolean;
 }
@@ -166,15 +166,15 @@ export function beginTurnClockStep(
   currentTurn: number,
   lastRewardedTurn: Record<PlayerSlot, number>,
   timers: {
-    firstTurnGraceMs: number;
-    maxTurnMs: number;
-    fullTurnIncrementMs: number;
-    midTurnIncrementMs: number;
+    firstTurnGraceMillis: number;
+    maxTurnMillis: number;
+    fullTurnIncrementMillis: number;
+    midTurnIncrementMillis: number;
   }
 ): {
-  graceMs: number;
-  turnAllowanceMs: number;
-  totalBudgetMs: number;
+  graceMillis: number;
+  turnAllowanceMillis: number;
+  totalBudgetMillis: number;
   inactiveLine: string;
 } {
   const isRetry = player.retryingInvalidChoice;
@@ -184,8 +184,10 @@ export function beginTurnClockStep(
   // except when retrying after an invalid/unavailable choice on the same decision.
   if (player.hasTakenFirstDecision && !isRetry) {
     const isNewTurn = currentTurn > lastRewardedTurn[player.slot];
-    const incrementMs = isNewTurn ? timers.fullTurnIncrementMs : timers.midTurnIncrementMs;
-    player.bankMs = Math.min(timers.maxTurnMs, player.bankMs + incrementMs);
+    const incrementMillis = isNewTurn
+      ? timers.fullTurnIncrementMillis
+      : timers.midTurnIncrementMillis;
+    player.bankMillis = Math.min(timers.maxTurnMillis, player.bankMillis + incrementMillis);
     lastRewardedTurn[player.slot] = currentTurn;
   }
 
@@ -194,17 +196,17 @@ export function beginTurnClockStep(
     player.hasTakenFirstDecision = true;
     lastRewardedTurn[player.slot] = currentTurn;
   }
-  const graceMs = isFirstDecision ? timers.firstTurnGraceMs : 0;
-  const turnAllowanceMs = Math.min(player.bankMs, timers.maxTurnMs);
-  const totalBudgetMs = graceMs + turnAllowanceMs;
-  const turnSec = (turnAllowanceMs / 1000).toFixed(1);
-  const totalSec = (player.bankMs / 1000).toFixed(1);
-  const graceSec = (graceMs / 1000).toFixed(1);
+  const graceMillis = isFirstDecision ? timers.firstTurnGraceMillis : 0;
+  const turnAllowanceMillis = Math.min(player.bankMillis, timers.maxTurnMillis);
+  const totalBudgetMillis = graceMillis + turnAllowanceMillis;
+  const turnSeconds = (turnAllowanceMillis / 1000).toFixed(1);
+  const totalSeconds = (player.bankMillis / 1000).toFixed(1);
+  const graceSeconds = (graceMillis / 1000).toFixed(1);
   const inactiveLine =
-    `|inactive|Time left: ${turnSec} sec this turn | ` +
-    `${totalSec} sec total | ${graceSec} sec grace\n`;
+    `|inactive|Time left: ${turnSeconds} sec this turn | ` +
+    `${totalSeconds} sec total | ${graceSeconds} sec grace\n`;
 
-  return {graceMs, turnAllowanceMs, totalBudgetMs, inactiveLine};
+  return {graceMillis, turnAllowanceMillis, totalBudgetMillis, inactiveLine};
 }
 
 export function formatChoiceCommand(choice: string, teamPreview?: boolean): string {
@@ -276,11 +278,11 @@ export class TimeSlicedArenaGame {
   private readonly p2TeamPacked?: string;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
-  private readonly startingBankMs: number;
-  private readonly firstTurnGraceMs: number;
-  private readonly maxTurnMs: number;
-  private readonly fullTurnIncrementMs: number;
-  private readonly midTurnIncrementMs: number;
+  private readonly startingBankMillis: number;
+  private readonly firstTurnGraceMillis: number;
+  private readonly maxTurnMillis: number;
+  private readonly fullTurnIncrementMillis: number;
+  private readonly midTurnIncrementMillis: number;
   private readonly devMode: boolean;
   private readonly arenaBin: string;
   private readonly onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
@@ -306,13 +308,13 @@ export class TimeSlicedArenaGame {
     this.p2TeamPacked = options.p2TeamPacked;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
-    this.startingBankMs =
+    this.startingBankMillis =
       (options.startingBankSeconds ?? arena.STARTING_BANK_SECONDS) * 1000;
-    this.firstTurnGraceMs =
+    this.firstTurnGraceMillis =
       (options.firstTurnGraceSeconds ?? arena.FIRST_TURN_GRACE_SECONDS) * 1000;
-    this.maxTurnMs = (options.maxTurnSeconds ?? arena.MAX_TURN_SECONDS) * 1000;
-    this.fullTurnIncrementMs = arena.turnIncrementSeconds(options.format) * 1000;
-    this.midTurnIncrementMs = arena.MID_TURN_INCREMENT_SECONDS * 1000;
+    this.maxTurnMillis = (options.maxTurnSeconds ?? arena.MAX_TURN_SECONDS) * 1000;
+    this.fullTurnIncrementMillis = arena.turnIncrementSeconds(options.format) * 1000;
+    this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.arenaBin = options.arenaBin ?? '/opt/arena/bin/arena';
     this.onTurn = options.onTurn;
@@ -348,15 +350,15 @@ export class TimeSlicedArenaGame {
       proc,
       lineQueue: [],
       lineResolver: undefined,
-      bankMs: this.startingBankMs,
+      bankMillis: this.startingBankMillis,
       hasTakenFirstDecision: false,
       retryingInvalidChoice: false,
       invalidStrikes: 0,
       pendingRequestJson: undefined,
       lastRequestJson: undefined,
       decisionCount: 0,
-      totalDecisionMs: 0,
-      lastDecisionMs: 0,
+      totalDecisionMillis: 0,
+      lastDecisionMillis: 0,
       exited: false,
       exitCode: undefined,
     };
@@ -526,7 +528,7 @@ export class TimeSlicedArenaGame {
     });
   }
 
-  private readPeakRamMib(player: SandboxedPlayer): number {
+  private readPeakRam(player: SandboxedPlayer): number {
     if (!this.devMode) {
       const stateFile = `/opt/arena/state/peak_ram_${player.slot}`;
       try {
@@ -541,31 +543,31 @@ export class TimeSlicedArenaGame {
 
   private readLineWithTimeout(
     player: SandboxedPlayer,
-    budgetMs: number
-  ): Promise<{line: string | undefined; elapsedMs: number; timedOut: boolean}> {
+    budgetMillis: number
+  ): Promise<{line: string | undefined; elapsedMillis: number; timedOut: boolean}> {
     const startNs = process.hrtime.bigint();
 
     if (player.lineQueue.length > 0) {
       const line = player.lineQueue.shift()!;
-      const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-      return Promise.resolve({line, elapsedMs, timedOut: false});
+      const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
+      return Promise.resolve({line, elapsedMillis, timedOut: false});
     }
     if (player.exited) {
-      const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-      return Promise.resolve({line: undefined, elapsedMs, timedOut: false});
+      const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
+      return Promise.resolve({line: undefined, elapsedMillis, timedOut: false});
     }
 
     return new Promise(resolve => {
       const timer = setTimeout(() => {
         player.lineResolver = undefined;
-        const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-        resolve({line: undefined, elapsedMs, timedOut: true});
-      }, Math.max(1, Math.ceil(budgetMs)));
+        const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
+        resolve({line: undefined, elapsedMillis, timedOut: true});
+      }, Math.max(1, Math.ceil(budgetMillis)));
 
       player.lineResolver = line => {
         clearTimeout(timer);
-        const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1e6;
-        resolve({line, elapsedMs, timedOut: false});
+        const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
+        resolve({line, elapsedMillis, timedOut: false});
       };
     });
   }
@@ -615,15 +617,15 @@ export class TimeSlicedArenaGame {
     };
     player.pendingRequestJson = undefined;
 
-    const {graceMs, totalBudgetMs, inactiveLine} = beginTurnClockStep(
+    const {graceMillis, totalBudgetMillis, inactiveLine} = beginTurnClockStep(
       player,
       this.currentTurn,
       this.lastRewardedTurn,
       {
-        firstTurnGraceMs: this.firstTurnGraceMs,
-        maxTurnMs: this.maxTurnMs,
-        fullTurnIncrementMs: this.fullTurnIncrementMs,
-        midTurnIncrementMs: this.midTurnIncrementMs,
+        firstTurnGraceMillis: this.firstTurnGraceMillis,
+        maxTurnMillis: this.maxTurnMillis,
+        fullTurnIncrementMillis: this.fullTurnIncrementMillis,
+        midTurnIncrementMillis: this.midTurnIncrementMillis,
       }
     );
 
@@ -636,23 +638,23 @@ export class TimeSlicedArenaGame {
         turn: this.currentTurn,
         activeSlot: player.slot,
         turnStartedAt: Math.floor(Date.now() / 1000),
-        turnBudgetSeconds: Math.round(totalBudgetMs / 1000),
-        incrementSeconds: Math.round(this.fullTurnIncrementMs / 1000),
-        p1BankSeconds: Math.max(0, Math.round(this.p1.bankMs / 1000)),
-        p2BankSeconds: Math.max(0, Math.round(this.p2.bankMs / 1000)),
-        p1LastTurnMillis: Math.round(this.p1.lastDecisionMs),
-        p2LastTurnMillis: Math.round(this.p2.lastDecisionMs),
+        turnBudgetSeconds: Math.round(totalBudgetMillis / 1000),
+        incrementSeconds: Math.round(this.fullTurnIncrementMillis / 1000),
+        p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
+        p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
+        p1LastTurnMillis: Math.round(this.p1.lastDecisionMillis),
+        p2LastTurnMillis: Math.round(this.p2.lastDecisionMillis),
         p1MeanTurnMillis: this.p1.decisionCount > 0
-          ? Math.round(this.p1.totalDecisionMs / this.p1.decisionCount)
+          ? Math.round(this.p1.totalDecisionMillis / this.p1.decisionCount)
           : 0,
         p2MeanTurnMillis: this.p2.decisionCount > 0
-          ? Math.round(this.p2.totalDecisionMs / this.p2.decisionCount)
+          ? Math.round(this.p2.totalDecisionMillis / this.p2.decisionCount)
           : 0,
       });
     }
 
-    let remainingBudgetMs = totalBudgetMs;
-    let totalElapsedThisDecisionMs: number;
+    let remainingBudgetMillis = totalBudgetMillis;
+    let totalElapsedThisDecisionMillis: number;
     let linesReadThisDecision = 0;
     this.resumeSlot(player);
     const decisionStartNs = process.hrtime.bigint();
@@ -661,13 +663,13 @@ export class TimeSlicedArenaGame {
       while (!this.ended) {
         const {line, timedOut} = await this.readLineWithTimeout(
           player,
-          remainingBudgetMs
+          remainingBudgetMillis
         );
-        totalElapsedThisDecisionMs = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
-        remainingBudgetMs = totalBudgetMs - totalElapsedThisDecisionMs;
+        totalElapsedThisDecisionMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
+        remainingBudgetMillis = totalBudgetMillis - totalElapsedThisDecisionMillis;
 
-        if (timedOut || remainingBudgetMs <= 0) {
-          player.bankMs = 0;
+        if (timedOut || remainingBudgetMillis <= 0) {
+          player.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
           return false;
         }
@@ -686,12 +688,12 @@ export class TimeSlicedArenaGame {
         const parsed = parseAgentStdoutLine(line);
         if (!parsed || parsed.kind === 'chat') continue;
 
-        const decisionElapsedMs = Math.max(1, Math.ceil(totalElapsedThisDecisionMs));
-        const overGraceMs = Math.max(0, decisionElapsedMs - graceMs);
-        player.bankMs = Math.max(0, player.bankMs - overGraceMs);
+        const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedThisDecisionMillis));
+        const overGraceMillis = Math.max(0, decisionElapsedMillis - graceMillis);
+        player.bankMillis = Math.max(0, player.bankMillis - overGraceMillis);
         player.decisionCount++;
-        player.lastDecisionMs = decisionElapsedMs;
-        player.totalDecisionMs += decisionElapsedMs;
+        player.lastDecisionMillis = decisionElapsedMillis;
+        player.totalDecisionMillis += decisionElapsedMillis;
 
         const choiceCmd = formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battleStream.write(`>${player.slot} ${choiceCmd}`);
@@ -775,8 +777,8 @@ export class TimeSlicedArenaGame {
         this.stopPlayerForRamRead(this.p1),
         this.stopPlayerForRamRead(this.p2),
       ]);
-      const p1PeakRam = this.readPeakRamMib(this.p1);
-      const p2PeakRam = this.readPeakRamMib(this.p2);
+      const p1PeakRam = this.readPeakRam(this.p1);
+      const p2PeakRam = this.readPeakRam(this.p2);
       const outcome: GameOutcome =
         this.winner === 'p1' ? 'W' : this.winner === 'p2' ? 'L' : 'T';
 
@@ -786,18 +788,18 @@ export class TimeSlicedArenaGame {
         turns: this.currentTurn,
         endReason: this.endReason,
         omniscientLog: this.omniscientLog.join('\n'),
-        p1BankSeconds: Math.max(0, Math.round(this.p1.bankMs / 1000)),
-        p2BankSeconds: Math.max(0, Math.round(this.p2.bankMs / 1000)),
+        p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
+        p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
         p1PeakRam,
         p2PeakRam,
         p1MeanTurnMillis: this.p1.decisionCount > 0
-          ? Math.round(this.p1.totalDecisionMs / this.p1.decisionCount)
+          ? Math.round(this.p1.totalDecisionMillis / this.p1.decisionCount)
           : 0,
         p2MeanTurnMillis: this.p2.decisionCount > 0
-          ? Math.round(this.p2.totalDecisionMs / this.p2.decisionCount)
+          ? Math.round(this.p2.totalDecisionMillis / this.p2.decisionCount)
           : 0,
-        p1LastTurnMillis: Math.round(this.p1.lastDecisionMs),
-        p2LastTurnMillis: Math.round(this.p2.lastDecisionMs),
+        p1LastTurnMillis: Math.round(this.p1.lastDecisionMillis),
+        p2LastTurnMillis: Math.round(this.p2.lastDecisionMillis),
       };
     } finally {
       this.cleanupSlot(this.p1);

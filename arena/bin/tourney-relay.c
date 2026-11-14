@@ -4,7 +4,7 @@
 // Measures exact local agent thinking time on the Worker VM using CLOCK_MONOTONIC,
 // completely eliminating SSH / WAN network round-trip latency from turn clock accounting:
 //   1. Forwards stdin lines from sshd -> agent stdin.
-//   2. Each actionable `|request|` (non-wait) or `|tournament|byot|` line increments `req_seq`
+//   2. Each actionable `|request|` (non-wait) line increments `req_seq`
 //      and starts a local monotonic stopwatch (`timer_active = 1`).
 //   3. Forwards stdout lines from agent -> sshd stdout, tagging each delta on stderr as
 //      `ARENA_TURN_MS=<elapsed_ms>\t<req_seq>\n` so pondering lines from an earlier request
@@ -51,9 +51,6 @@ static int is_actionable_request(const char *line) {
     if (strstr(json, "\"wait\":true") != NULL || strstr(json, "\"wait\": true") != NULL) {
       return 0;
     }
-    return 1;
-  }
-  if (strncmp(line, "|tournament|byot|", 17) == 0) {
     return 1;
   }
   return 0;
