@@ -29,6 +29,8 @@ export interface TurnHeartbeatInfo {
   incrementSeconds: number;
   p1BankSeconds: number;
   p2BankSeconds: number;
+  p1Ram: number;
+  p2Ram: number;
   p1LastTurnMillis: number;
   p2LastTurnMillis: number;
   p1MeanTurnMillis: number;
@@ -170,23 +172,38 @@ export function beginTurnClockStep(
     maxTurnMillis: number;
     fullTurnIncrementMillis: number;
     midTurnIncrementMillis: number;
+    accelerate?: boolean;
+    requestCount?: number;
+    activeSidesCount?: number;
   }
 ): {
   graceMillis: number;
   turnAllowanceMillis: number;
   totalBudgetMillis: number;
+  incrementMillis: number;
   inactiveLine: string;
 } {
   const isRetry = player.retryingInvalidChoice;
   player.retryingInvalidChoice = false;
+  let incrementMillis = timers.fullTurnIncrementMillis;
 
   // Credit full-turn or mid-turn increment before starting the turn clock,
   // except when retrying after an invalid/unavailable choice on the same decision.
   if (player.hasTakenFirstDecision && !isRetry) {
     const isNewTurn = currentTurn > lastRewardedTurn[player.slot];
-    const incrementMillis = isNewTurn
-      ? timers.fullTurnIncrementMillis
-      : timers.midTurnIncrementMillis;
+    if (isNewTurn) {
+      incrementMillis = timers.fullTurnIncrementMillis;
+      if (timers.accelerate) {
+        if (currentTurn > 100 && incrementMillis > 5_000) {
+          incrementMillis -= 5_000;
+        }
+        if (currentTurn > 200 && Math.floor((timers.requestCount ?? 0) / 2) % 2 === 1) {
+          incrementMillis = 0;
+        }
+      }
+    } else {
+      incrementMillis = (timers.activeSidesCount ?? 1) <= 1 ? timers.midTurnIncrementMillis : 0;
+    }
     player.bankMillis = Math.min(timers.maxTurnMillis, player.bankMillis + incrementMillis);
     lastRewardedTurn[player.slot] = currentTurn;
   }
@@ -206,7 +223,7 @@ export function beginTurnClockStep(
     `|inactive|Time left: ${turnSeconds} sec this turn | ` +
     `${totalSeconds} sec total | ${graceSeconds} sec grace\n`;
 
-  return {graceMillis, turnAllowanceMillis, totalBudgetMillis, inactiveLine};
+  return {graceMillis, turnAllowanceMillis, totalBudgetMillis, incrementMillis, inactiveLine};
 }
 
 export function formatChoiceCommand(choice: string, teamPreview?: boolean): string {
@@ -283,6 +300,7 @@ export class TimeSlicedArenaGame {
   private readonly maxTurnMillis: number;
   private readonly fullTurnIncrementMillis: number;
   private readonly midTurnIncrementMillis: number;
+  private readonly accelerate: boolean;
   private readonly devMode: boolean;
   private readonly arenaBin: string;
   private readonly onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
@@ -294,6 +312,8 @@ export class TimeSlicedArenaGame {
   private p1!: SandboxedPlayer;
   private p2!: SandboxedPlayer;
   private currentTurn = 0;
+  private requestCount = 0;
+  private waveActiveSidesCount = 1;
   private lastRewardedTurn: Record<PlayerSlot, number> = {p1: -1, p2: -1};
   private ended = false;
   private winner: PlayerSlot | 'tie' = 'tie';
@@ -315,6 +335,7 @@ export class TimeSlicedArenaGame {
     this.maxTurnMillis = (options.maxTurnSeconds ?? arena.MAX_TURN_SECONDS) * 1000;
     this.fullTurnIncrementMillis = arena.turnIncrementSeconds(options.format) * 1000;
     this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
+    this.accelerate = !this.format.includes('vgc') && !this.format.includes('champions');
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.arenaBin = options.arenaBin ?? '/opt/arena/bin/arena';
     this.onTurn = options.onTurn;
@@ -529,8 +550,10 @@ export class TimeSlicedArenaGame {
   }
 
   private readPeakRam(player: SandboxedPlayer): number {
-    if (!this.devMode) {
-      const stateFile = `/opt/arena/state/peak_ram_${player.slot}`;
+    const stateFile = this.devMode
+      ? player.spec.env?.ARENA_PEAK_RAM_FILE
+      : `/opt/arena/state/peak_ram_${player.slot}`;
+    if (stateFile) {
       try {
         if (fs.existsSync(stateFile)) {
           const val = Number(fs.readFileSync(stateFile, 'utf8').trim());
@@ -617,7 +640,7 @@ export class TimeSlicedArenaGame {
     };
     player.pendingRequestJson = undefined;
 
-    const {graceMillis, totalBudgetMillis, inactiveLine} = beginTurnClockStep(
+    const {graceMillis, totalBudgetMillis, incrementMillis, inactiveLine} = beginTurnClockStep(
       player,
       this.currentTurn,
       this.lastRewardedTurn,
@@ -626,6 +649,9 @@ export class TimeSlicedArenaGame {
         maxTurnMillis: this.maxTurnMillis,
         fullTurnIncrementMillis: this.fullTurnIncrementMillis,
         midTurnIncrementMillis: this.midTurnIncrementMillis,
+        accelerate: this.accelerate,
+        requestCount: this.requestCount,
+        activeSidesCount: this.waveActiveSidesCount,
       }
     );
 
@@ -639,9 +665,11 @@ export class TimeSlicedArenaGame {
         activeSlot: player.slot,
         turnStartedAt: Math.floor(Date.now() / 1000),
         turnBudgetSeconds: Math.round(totalBudgetMillis / 1000),
-        incrementSeconds: Math.round(this.fullTurnIncrementMillis / 1000),
+        incrementSeconds: Math.round(incrementMillis / 1000),
         p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
         p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
+        p1Ram: this.readPeakRam(this.p1),
+        p2Ram: this.readPeakRam(this.p2),
         p1LastTurnMillis: Math.round(this.p1.lastDecisionMillis),
         p2LastTurnMillis: Math.round(this.p2.lastDecisionMillis),
         p1MeanTurnMillis: this.p1.decisionCount > 0
@@ -754,12 +782,34 @@ export class TimeSlicedArenaGame {
 
       let idleSpins = 0;
       while (!this.ended) {
-        if (this.p1.pendingRequestJson) {
+        if (this.p1.pendingRequestJson || this.p2.pendingRequestJson) {
+          await Promise.resolve();
+          const p1HasReq = Boolean(this.p1.pendingRequestJson);
+          const p2HasReq = Boolean(this.p2.pendingRequestJson);
+          if (!p1HasReq && !p2HasReq) continue;
           idleSpins = 0;
-          await this.stepPlayerDecision(this.p1);
-        } else if (this.p2.pendingRequestJson) {
-          idleSpins = 0;
-          await this.stepPlayerDecision(this.p2);
+          const isRetryWave =
+            (p1HasReq && this.p1.retryingInvalidChoice) ||
+            (p2HasReq && this.p2.retryingInvalidChoice);
+          if (!isRetryWave) {
+            this.requestCount++;
+            this.waveActiveSidesCount = (p1HasReq ? 1 : 0) + (p2HasReq ? 1 : 0);
+          }
+          // Alternate which slot receives the first CPU slice across decision waves
+          const ordered = this.requestCount % 2 === 1
+            ? [this.p1, this.p2]
+            : [this.p2, this.p1];
+          for (const player of ordered) {
+            if (this.ended) break;
+            if (player.pendingRequestJson) {
+              await this.stepPlayerDecision(player);
+              await Promise.resolve();
+              while (!this.ended && player.pendingRequestJson && player.retryingInvalidChoice) {
+                await this.stepPlayerDecision(player);
+                await Promise.resolve();
+              }
+            }
+          }
         } else {
           idleSpins++;
           if (idleSpins > 2500) {

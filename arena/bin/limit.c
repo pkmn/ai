@@ -251,6 +251,7 @@ int main(int argc, char **argv) {
   child_pgid = pid;
   setpgid(pid, pid);
   uint64_t peak_bytes = 0;
+  uint64_t last_written_mib = 0;
 
   while (1) {
     if (terminate_requested) {
@@ -274,7 +275,14 @@ int main(int argc, char **argv) {
     }
 
     uint64_t used = total_target_footprint(target_uid, child_pgid, isolated_uid);
-    if (used > peak_bytes) peak_bytes = used;
+    if (used > peak_bytes) {
+      peak_bytes = used;
+      uint64_t current_mib = (peak_bytes + (1024ULL * 1024ULL - 1ULL)) / (1024ULL * 1024ULL);
+      if (current_mib > last_written_mib) {
+        last_written_mib = current_mib;
+        write_peak_ram_safe(slot, override_peak_path, peak_bytes);
+      }
+    }
     if (used > MAX_FOOTPRINT_BYTES) {
       fprintf(stderr,
               "ARENA_OOM: UID %u exceeded 14 GiB physical footprint (%llu bytes)\n",

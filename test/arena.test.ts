@@ -1364,6 +1364,114 @@ describe('arena infrastructure', () => {
       expect(res.winner).toBe('p2');
       expect(res.endReason).toBe('crash');
     });
+
+    test('decays non-VGC turn increments after Turn 100 or Turn 200', () => {
+      const lastRewarded = {p1: 100, p2: 100};
+      const player: arbiter.PlayerClockState = {
+        slot: 'p1',
+        bankMillis: 50_000,
+        hasTakenFirstDecision: true,
+        retryingInvalidChoice: false,
+      };
+      const baseTimers = {
+        firstTurnGraceMillis: 60_000,
+        maxTurnMillis: 150_000,
+        fullTurnIncrementMillis: 10_000,
+        midTurnIncrementMillis: 5_000,
+      };
+
+      const step101 = arbiter.beginTurnClockStep(player, 101, lastRewarded, {
+        ...baseTimers,
+        accelerate: true,
+        requestCount: 202,
+      });
+      expect(step101.incrementMillis).toBe(5_000);
+      expect(player.bankMillis).toBe(55_000);
+
+      lastRewarded.p1 = 200;
+      const step201Zero = arbiter.beginTurnClockStep(player, 201, lastRewarded, {
+        ...baseTimers,
+        accelerate: true,
+        requestCount: 402,
+      });
+      expect(step201Zero.incrementMillis).toBe(0);
+      expect(player.bankMillis).toBe(55_000);
+
+      const step202Five = arbiter.beginTurnClockStep(player, 202, lastRewarded, {
+        ...baseTimers,
+        accelerate: true,
+        requestCount: 404,
+      });
+      expect(step202Five.incrementMillis).toBe(5_000);
+      expect(player.bankMillis).toBe(60_000);
+
+      const vgcStep = arbiter.beginTurnClockStep(player, 203, lastRewarded, {
+        ...baseTimers,
+        fullTurnIncrementMillis: 15_000,
+        accelerate: false,
+        requestCount: 406,
+      });
+      expect(vgcStep.incrementMillis).toBe(15_000);
+      expect(player.bankMillis).toBe(75_000);
+    });
+
+    test('grants mid-turn switch increments only when a single side acts', () => {
+      const lastRewarded = {p1: 5, p2: 5};
+      const player: arbiter.PlayerClockState = {
+        slot: 'p1',
+        bankMillis: 50_000,
+        hasTakenFirstDecision: true,
+        retryingInvalidChoice: false,
+      };
+      const timers = {
+        firstTurnGraceMillis: 60_000,
+        maxTurnMillis: 150_000,
+        fullTurnIncrementMillis: 10_000,
+        midTurnIncrementMillis: 5_000,
+      };
+
+      const bothSwitch = arbiter.beginTurnClockStep(player, 5, lastRewarded, {
+        ...timers,
+        activeSidesCount: 2,
+      });
+      expect(bothSwitch.incrementMillis).toBe(0);
+      expect(player.bankMillis).toBe(50_000);
+
+      const singleSwitch = arbiter.beginTurnClockStep(player, 5, lastRewarded, {
+        ...timers,
+        activeSidesCount: 1,
+      });
+      expect(singleSwitch.incrementMillis).toBe(5_000);
+      expect(player.bankMillis).toBe(55_000);
+    });
+
+    test('alternates first CPU slice across waves while reporting live RAM', async () => {
+      const p1PeakFile = path.join(tmpDir, 'live-ram-p1.txt');
+      fs.writeFileSync(p1PeakFile, '128\n');
+      const heartbeats: arbiter.TurnHeartbeatInfo[] = [];
+      const res = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {
+          mode: 'native',
+          target: process.execPath,
+          args: [defaultAgentScript],
+          env: {ARENA_PEAK_RAM_FILE: p1PeakFile},
+        },
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+        onTurn: info => {
+          heartbeats.push(info);
+        },
+      }).run();
+      expect(res.endReason).toBe('smoke-complete');
+      expect(heartbeats.slice(0, 4).map(h => h.activeSlot)).toEqual(['p1', 'p2', 'p2', 'p1']);
+      expect(heartbeats[0].p1Ram).toBe(128);
+      expect(res.p1PeakRam).toBe(128);
+    });
   });
 
   describe('ConcurrentTournamentGame', () => {

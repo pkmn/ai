@@ -605,7 +605,7 @@ export class Coordinator {
             bankSeconds: info.p2BankSeconds,
             lastTurnMillis: info.p2LastTurnMillis,
             meanTurnMillis: info.p2MeanTurnMillis,
-            ram: cp.g1P1Ram ?? 64,
+            ram: Math.max(cp.g1P1Ram ?? 64, info.p2Ram),
             ...(cp.p2TeamLabel ? {team: cp.p2TeamLabel} : {}),
           },
           p2: {
@@ -615,7 +615,7 @@ export class Coordinator {
             bankSeconds: info.p1BankSeconds,
             lastTurnMillis: info.p1LastTurnMillis,
             meanTurnMillis: info.p1MeanTurnMillis,
-            ram: cp.g1P2Ram ?? 64,
+            ram: Math.max(cp.g1P2Ram ?? 64, info.p1Ram),
             ...(cp.p1TeamLabel ? {team: cp.p1TeamLabel} : {}),
           },
         }).catch(() => undefined);
@@ -851,7 +851,7 @@ export class Coordinator {
             bankSeconds: info.p1BankSeconds,
             lastTurnMillis: info.p1LastTurnMillis,
             meanTurnMillis: info.p1MeanTurnMillis,
-            ram: 64,
+            ram: info.p1Ram,
             ...(sampled.t1Label ? {team: sampled.t1Label} : {}),
           },
           p2: {
@@ -861,7 +861,7 @@ export class Coordinator {
             bankSeconds: info.p2BankSeconds,
             lastTurnMillis: info.p2LastTurnMillis,
             meanTurnMillis: info.p2MeanTurnMillis,
-            ram: 64,
+            ram: info.p2Ram,
             ...(sampled.t2Label ? {team: sampled.t2Label} : {}),
           },
         }).catch(() => undefined);
@@ -921,7 +921,7 @@ export class Coordinator {
             bankSeconds: info.p2BankSeconds,
             lastTurnMillis: info.p2LastTurnMillis,
             meanTurnMillis: info.p2MeanTurnMillis,
-            ram: g1Res.p1PeakRam,
+            ram: Math.max(g1Res.p1PeakRam, info.p2Ram),
             ...(sampled.t2Label ? {team: sampled.t2Label} : {}),
           },
           p2: {
@@ -931,7 +931,7 @@ export class Coordinator {
             bankSeconds: info.p1BankSeconds,
             lastTurnMillis: info.p1LastTurnMillis,
             meanTurnMillis: info.p1MeanTurnMillis,
-            ram: g1Res.p2PeakRam,
+            ram: Math.max(g1Res.p2PeakRam, info.p1Ram),
             ...(sampled.t1Label ? {team: sampled.t1Label} : {}),
           },
         }).catch(() => undefined);

@@ -127,6 +127,7 @@ export class ConcurrentGame {
   private readonly maxTurnMillis: number;
   private readonly fullTurnIncrementMillis: number;
   private readonly midTurnIncrementMillis: number;
+  private readonly accelerate: boolean;
   private readonly utmTimeoutMillis: number;
   private readonly onSpectatorChunk?: (
     chunk: string,
@@ -140,6 +141,9 @@ export class ConcurrentGame {
   private p1!: RemoteTournamentPlayer;
   private p2!: RemoteTournamentPlayer;
   private currentTurn = 0;
+  private requestCount = 0;
+  private waveActiveSidesCount = 1;
+  private readonly pendingWaveSlots = new Set<PlayerSlot>();
   private lastRewardedTurn: Record<PlayerSlot, number> = {p1: -1, p2: -1};
   private ended = false;
   private winner: PlayerSlot | 'tie' | 'preempted' = 'tie';
@@ -162,6 +166,7 @@ export class ConcurrentGame {
     this.maxTurnMillis = (options.maxTurnSeconds ?? arena.MAX_TURN_SECONDS) * 1000;
     this.fullTurnIncrementMillis = arena.turnIncrementSeconds(options.format) * 1000;
     this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
+    this.accelerate = !this.format.includes('vgc') && !this.format.includes('champions');
     this.utmTimeoutMillis = options.utmTimeoutMillis ?? 15_000;
     this.onSpectatorChunk = options.onSpectatorChunk;
 
@@ -471,6 +476,16 @@ export class ConcurrentGame {
 
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
     if (this.ended) return;
+    if (!player.retryingInvalidChoice) {
+      this.pendingWaveSlots.add(player.slot);
+    }
+    await Promise.resolve();
+    if (this.ended) return;
+    if (this.pendingWaveSlots.size > 0) {
+      this.requestCount++;
+      this.waveActiveSidesCount = this.pendingWaveSlots.size;
+      this.pendingWaveSlots.clear();
+    }
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
 
     const {graceMillis, totalBudgetMillis, inactiveLine} = arbiter.beginTurnClockStep(
@@ -482,6 +497,9 @@ export class ConcurrentGame {
         maxTurnMillis: this.maxTurnMillis,
         fullTurnIncrementMillis: this.fullTurnIncrementMillis,
         midTurnIncrementMillis: this.midTurnIncrementMillis,
+        accelerate: this.accelerate,
+        requestCount: this.requestCount,
+        activeSidesCount: this.waveActiveSidesCount,
       }
     );
 
