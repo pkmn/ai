@@ -49,6 +49,7 @@ smoke tests.
 | **Repository Checkout** | `/opt/arena/repo` | Git checkout of `github.com/pkmn/ai` (`build/arena` entrypoint + `.env`). |
 | **Binaries & Helpers** | `/opt/arena/bin/{arena,limit,unpack}` | Lifecycle script, C `ri_phys_footprint` 14 GiB supervisor, and stream unpacker. |
 | **Seatbelt Profile** | `/opt/arena/etc/sandbox.sb` | Mandatory Access Control profile for native `darwin/arm64` agent bundles. |
+| **Era-Matched Usage Stats** | `/opt/arena/stats/<ladder_id>/` | Read-only stats mount (`PKMN_STATS_DIR=/opt/arena/stats`) shared by bundles & containers. |
 | **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MB`, deduplicated via `/opt/arena/cas/sha256`). |
 | **Coordinator State DB** | `/opt/arena/state/arena.sqlite` | Local WAL SQLite DB (`local_agents`, `local_matches`, `outbox`, `ladder_counters`). |
 | **Daemon Logs** | `/opt/arena/logs/{arena,tunnel}.{log,err}` | Stdout/stderr logs for `ai.pkmn.arena` and `ai.pkmn.tunnel`. |

@@ -75,10 +75,12 @@ exec /usr/local/bin/tourney-relay \
     --ro-bind-try /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
     --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 \
     --ro-bind-try /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 \
+    --ro-bind-try /opt/arena/stats /opt/arena/stats \
     --size 4294967296 --tmpfs /tmp \
     --size 4294967296 --tmpfs /scratch \
     --setenv HOME /scratch \
     --setenv TMPDIR /scratch \
+    --setenv PKMN_STATS_DIR /opt/arena/stats \
     --setenv ARENA_PONDER 1 \
     --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     --chdir / \

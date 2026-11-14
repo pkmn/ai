@@ -227,6 +227,7 @@ int main(int argc, char **argv) {
       environ = empty_env;
       setenv("HOME", scratch, 1);
       setenv("TMPDIR", scratch, 1);
+      setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1);
       setenv("PATH", "/opt/homebrew/bin:/usr/bin:/bin", 1);
       setenv("LANG", "C.UTF-8", 1);
       setenv("PYTHONHASHSEED", "0", 1);
@@ -239,6 +240,7 @@ int main(int argc, char **argv) {
 
       struct rlimit rl_core = {0, 0};
       setrlimit(RLIMIT_CORE, &rl_core);
+      setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1);
     }
 
     execvp(argv[cmd_idx], &argv[cmd_idx]);

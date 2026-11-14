@@ -52,9 +52,11 @@ case "$ACTION" in
         --pids-limit=256 \
         "${GPU_ARGS[@]}" \
         --tmpfs /tmp:rw,noexec,nosuid,size=500m \
+        --mount "type=bind,src=/opt/arena/stats,dst=/opt/arena/stats,ro" \
         --mount "type=bind,src=${SCRATCH_VOL},dst=/scratch,rw" \
         --env TMPDIR=/scratch \
         --env HOME=/scratch \
+        --env PKMN_STATS_DIR=/opt/arena/stats \
         "$TARGET"
     elif [[ "$MODE" == "native" ]]; then
       if [[ ! "$TARGET" =~ ^[A-Za-z0-9._-]+$ ]]; then

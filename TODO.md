@@ -4,36 +4,11 @@ Self-contained engineering specifications for remaining Arena, Server, UI, and T
 
 ---
 
-## 3. Read-Only Era-Matched Usage Stats Mounts (`/opt/arena/stats` & `PKMN_STATS_DIR`)
+## 4. Two-Pass "Proven-Pilot & Verifiable Contribution" Team Harvesting & Era-Matched Stats Provisioning *(Blocked on Raw PS Server Logs Access)*
 
 ### Context
-- The Arena specification provides read-only usage/randbats data files matching the exact period each ladder's teams are drawn from under `/opt/arena/stats/<ladder_id>/` (consuming 0 bytes of an agent's 500 MB bundle quota):
-  - Constructed formats (`RBY`, `ADV`, `SV`, `VGC`): `@pkmn/stats` `stats.json`.
-  - Random Battles (`RAND`): `data.json`, `full.json`, and `sets.json`.
-- Currently, `/opt/arena/stats` is created by `arena/scripts/setup-arena.sh` and permitted in `arena/config/sandbox.sb` and `arena/bin/tourney-agent`, but:
-  1. `arena/bin/arena` does not mount `/opt/arena/stats` into `podman run`.
-  2. Neither `arena/bin/arena`, `arena/bin/limit.c`, nor `arena/bin/tourney-agent` exports `PKMN_STATS_DIR=/opt/arena/stats`.
-  3. Generating the era-matched stats files for constructed ladders is blocked on access to raw Pokémon Showdown server battle logs.
-
-### Implementation Plan
-1. **Sandbox & Environment Wiring**:
-   - In [arena/bin/arena](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/bin/arena), add `-v /opt/arena/stats:/opt/arena/stats:ro` and `-e PKMN_STATS_DIR=/opt/arena/stats` to the `podman run` invocation.
-   - In [arena/bin/limit.c](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/bin/limit.c), add `"PKMN_STATS_DIR=/opt/arena/stats"` to `clean_env` before `execve`.
-   - In [arena/bin/tourney-agent](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/bin/tourney-agent), add `--setenv PKMN_STATS_DIR /opt/arena/stats` to the `bwrap` invocation.
-   - Document `PKMN_STATS_DIR` in [PROTOCOL.md](file:///Users/kjs/Code/src/github.com/pkmn/ai/PROTOCOL.md) and [arena/SETUP.md](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/SETUP.md).
-2. **Era-Matched Stats Data Provisioning *(Blocked on Raw PS Server Logs Access)***:
-   - Once raw Pokémon Showdown server logs for the target format epochs are available, run `@pkmn/stats` over the exact snapshot windows used for team harvesting to produce `/opt/arena/stats/<ladder_id>/stats.json` (and copy the pinned `gen9randombattle` `data.json`, `full.json`, and `sets.json` into `/opt/arena/stats/<rand_ladder_id>/`).
-
-### Acceptance Criteria
-- [ ] Both native bundles (`limit.c`), macOS OCI containers (`arena/bin/arena`), and tournament containers (`arena/bin/tourney-agent`) have read-only access to `/opt/arena/stats` and receive `PKMN_STATS_DIR=/opt/arena/stats`.
-- [ ] Era-matched stats files are populated under `/opt/arena/stats/<ladder_id>/` once raw PS server logs are available.
-
----
-
-## 4. Two-Pass "Proven-Pilot & Verifiable Contribution" Team Harvesting *(Blocked on Raw PS Server Logs Access)*
-
-### Context
-- Harvesting constructed-format team pools (`RBY`, `ADV`, `SV`) from raw Pokémon Showdown battle logs will live outside this repository and is currently blocked on access to raw PS server logs.
+- Harvesting constructed-format team pools (`RBY`, `ADV`, `SV`) and generating era-matched `@pkmn/stats` usage files (`/opt/arena/stats/<ladder_id>/stats.json`) from raw Pokémon Showdown battle logs will live outside this repository and are currently blocked on access to raw PS server logs.
+- Once raw Pokémon Showdown server logs for the target format epochs are available, run `@pkmn/stats` over the exact snapshot windows used for team harvesting to populate `/opt/arena/stats/<ladder_id>/stats.json` (and copy the pinned `gen9randombattle` `data.json`, `full.json`, and `sets.json` into `/opt/arena/stats/<rand_ladder_id>/`).
 - The complete Two-Pass harvesting algorithm is documented below so no design details are lost.
 
 ### Algorithm Specification

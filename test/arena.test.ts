@@ -393,6 +393,10 @@ describe('arena infrastructure', () => {
       expect(limitC).toContain('/opt/arena/state/peak_ram_%s');
       expect(limitC).not.toContain('.peak_ram');
       expect(limitC).toContain('PRIO_DARWIN_PROCESS');
+      expect(limitC).toContain('setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1)');
+      expect(arenaScript).toContain('--env PKMN_STATS_DIR=/opt/arena/stats');
+      expect(fs.readFileSync(root('arena', 'bin', 'tourney-agent'), 'utf8'))
+        .toContain('--setenv PKMN_STATS_DIR /opt/arena/stats');
     });
   });
 
@@ -2310,11 +2314,12 @@ describe('arena infrastructure', () => {
         [
           process.execPath,
           '-e',
-          'const b = Buffer.alloc(36 * 1024 * 1024, 7); setTimeout(() => console.log(b[0]), 80);',
+          'const b = Buffer.alloc(36 * 1024 * 1024, 7); ' +
+            'setTimeout(() => console.log([b[0], process.env.PKMN_STATS_DIR].join(":")), 80);',
         ],
         {encoding: 'utf8', env: {...process.env, ARENA_PEAK_RAM_FILE: peakFile}}
       ).trim();
-      expect(out).toBe('7');
+      expect(out).toBe('7:/opt/arena/stats');
       expect(Number(fs.readFileSync(peakFile, 'utf8').trim())).toBeGreaterThanOrEqual(36);
     });
 
