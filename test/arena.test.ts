@@ -1065,6 +1065,54 @@ describe('arena infrastructure', () => {
         stateDb.close();
       }
     });
+
+    test('evictColdAgentsIfNeeded eagerly evicts retired versions below watermark', () => {
+      const stateDb = new arenaDb.Database(':memory:');
+      try {
+        const agentsDir = path.join(tmpDir, 'evict-retired-agents');
+        const coldDir = path.join(tmpDir, 'evict-retired-cold');
+        const retiredDir = path.join(agentsDir, 'retired-v1');
+        const activeDir = path.join(agentsDir, 'active-v2');
+        fs.mkdirSync(retiredDir, {recursive: true});
+        fs.mkdirSync(activeDir, {recursive: true});
+        fs.writeFileSync(path.join(retiredDir, 'run'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+        fs.writeFileSync(path.join(activeDir, 'run'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+
+        stateDb.upsertLocalAgent({
+          versionId: 1,
+          agentId: 1,
+          slug: 'retired',
+          version: '1.0.0',
+          mode: 'native',
+          target: 'retired-v1',
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+        stateDb.upsertLocalAgent({
+          versionId: 2,
+          agentId: 2,
+          slug: 'active',
+          version: '2.0.0',
+          mode: 'native',
+          target: 'active-v2',
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+
+        const evicted = packages.evictColdAgentsIfNeeded(stateDb, {
+          agentsDir,
+          coldDir,
+          activeVersionIds: new Set([2]),
+        });
+        expect(evicted).toEqual([1]);
+        expect(stateDb.getLocalAgent(1)?.residency).toBe('cold');
+        expect(stateDb.getLocalAgent(2)?.residency).toBe('hot');
+        expect(fs.existsSync(retiredDir)).toBe(false);
+        expect(fs.existsSync(path.join(coldDir, 'retired-v1.tar.zst'))).toBe(true);
+      } finally {
+        stateDb.close();
+      }
+    });
   });
 
   describe('TimeSlicedArenaGame', () => {
@@ -1668,6 +1716,9 @@ describe('arena infrastructure', () => {
         expect(processed).toBe(1);
         expect(h.reportedStatuses).toHaveLength(1);
         expect(h.reportedStatuses[0].smokeStatus).toBe('passed');
+        expect(
+          fs.existsSync(path.join(`${h.agentsDir}-cold`, 'foul-play-3.0.0-v30.tar.zst'))
+        ).toBe(true);
       } finally {
         h.stateDb.close();
       }

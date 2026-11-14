@@ -477,6 +477,47 @@ export async function downloadAndUnpackBundle(opts: {
   }
 }
 
+export function archiveColdAgent(
+  agent: Pick<db.LocalAgentRow, 'mode' | 'target'>,
+  opts: {
+    agentsDir?: string;
+    coldDir?: string;
+    archiveContainerFn?: (target: string, coldArchive: string) => void;
+  } = {}
+): string {
+  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
+  const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
+  fs.mkdirSync(coldDir, {recursive: true});
+  const coldArchive = path.join(coldDir, `${agent.target}.tar.zst`);
+  if (fs.existsSync(coldArchive)) return coldArchive;
+
+  if (agent.mode === 'native') {
+    const hotDir = path.join(agentsDir, agent.target);
+    if (fs.existsSync(hotDir)) {
+      execFileSync('tar', ['--zstd', '-cf', coldArchive, '-C', hotDir, '.'], {
+        timeout: 180_000,
+      });
+    }
+  } else if (opts.archiveContainerFn) {
+    opts.archiveContainerFn(agent.target, coldArchive);
+  } else {
+    execFileSync(
+      'bash',
+      [
+        '-euo',
+        'pipefail',
+        '-c',
+        'podman save "$1" | zstd -3 -o "$2"',
+        '_',
+        agent.target,
+        coldArchive,
+      ],
+      {timeout: 180_000}
+    );
+  }
+  return coldArchive;
+}
+
 export function evictColdAgentsIfNeeded(
   stateDb: db.Database,
   opts: {
@@ -488,6 +529,7 @@ export function evictColdAgentsIfNeeded(
     coldDir?: string;
     casDir?: string;
     pinnedVersionIds?: ReadonlySet<number>;
+    activeVersionIds?: ReadonlySet<number>;
     evictContainerFn?: (target: string, coldArchive: string) => void;
   } = {}
 ): number[] {
@@ -505,42 +547,37 @@ export function evictColdAgentsIfNeeded(
   let containerUsedBytes = hotAgents
     .filter(a => a.mode === 'container')
     .reduce((sum, a) => sum + a.unpackedBytes, 0);
-  if (usedBytes <= highWater && containerUsedBytes <= containerHighWater) return [];
-
-  fs.mkdirSync(coldDir, {recursive: true});
 
   const victims = hotAgents
     .filter(a => !pinned.has(a.versionId))
     .sort((a, b) => a.lastPlayedAt - b.lastPlayedAt || a.versionId - b.versionId);
 
+  const hasInactiveVictims = opts.activeVersionIds !== undefined &&
+    victims.some(v => !opts.activeVersionIds!.has(v.versionId));
+  if (
+    !hasInactiveVictims &&
+    usedBytes <= highWater &&
+    containerUsedBytes <= containerHighWater
+  ) {
+    return [];
+  }
+
+  fs.mkdirSync(coldDir, {recursive: true});
+
   let evictedNative = false;
   const evictOne = (v: db.LocalAgentRow) => {
-    const coldArchive = path.join(coldDir, `${v.target}.tar.zst`);
+    archiveColdAgent(v, {
+      agentsDir,
+      coldDir,
+      archiveContainerFn: opts.evictContainerFn,
+    });
     if (v.mode === 'native') {
       evictedNative = true;
       const hotDir = path.join(agentsDir, v.target);
       if (fs.existsSync(hotDir)) {
-        execFileSync('tar', ['--zstd', '-cf', coldArchive, '-C', hotDir, '.'], {
-          timeout: 180_000,
-        });
         fs.rmSync(hotDir, {recursive: true, force: true});
       }
-    } else if (opts.evictContainerFn) {
-      opts.evictContainerFn(v.target, coldArchive);
-    } else {
-      execFileSync(
-        'bash',
-        [
-          '-euo',
-          'pipefail',
-          '-c',
-          'podman save "$1" | zstd -3 -o "$2"',
-          '_',
-          v.target,
-          coldArchive,
-        ],
-        {timeout: 180_000}
-      );
+    } else if (!opts.evictContainerFn) {
       execFileSync('podman', ['rmi', v.target], {timeout: 30_000});
     }
 
@@ -554,11 +591,21 @@ export function evictColdAgentsIfNeeded(
   const evicted: number[] = [];
   const evictedSet = new Set<number>();
 
+  // 0. Eagerly evict versions with 0 active ladders (retired or quarantined across all ladders)
+  if (opts.activeVersionIds !== undefined) {
+    for (const v of victims) {
+      if (opts.activeVersionIds.has(v.versionId)) continue;
+      evictOne(v);
+      evicted.push(v.versionId);
+      evictedSet.add(v.versionId);
+    }
+  }
+
   // 1. Enforce Podman VM 32 GB virtual-disk cap first
   if (containerUsedBytes > containerHighWater) {
     for (const v of victims) {
       if (containerUsedBytes <= containerLowWater) break;
-      if (v.mode !== 'container') continue;
+      if (v.mode !== 'container' || evictedSet.has(v.versionId)) continue;
       evictOne(v);
       evicted.push(v.versionId);
       evictedSet.add(v.versionId);

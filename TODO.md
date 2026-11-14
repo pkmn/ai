@@ -4,37 +4,6 @@ Self-contained engineering specifications for remaining Arena, Server, UI, and T
 
 ---
 
-## 2. Cold Bundle Archival (`/Volumes/Archive` + `gs://pkmn-arena`), Eager Retirement Eviction & Cache-Aware Matchmaking Bonus ($\rho_{ij}$)
-
-### Context
-- Currently, [arena/packages.ts](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/packages.ts) and [arena/coordinator.ts](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/coordinator.ts) keep unpacked versions in `/opt/arena/agents/` (or Podman) until hot disk usage exceeds 100 GB native / 35 GB container, at which point LRU versions are compressed to `/Volumes/Archive/cold-agents/<target>.tar.zst` and swapped back in on demand.
-- Three lifecycle and scaling features from the original specification are not yet wired up:
-  1. **Permanent Cold Archival of Raw Bundles**: Every submitted bundle/OCI archive that passes smoke testing should be archived permanently to `/Volumes/Archive/agents/<slug>/<ver>/` and synced to `gs://pkmn-arena/agents/<slug>/<ver>/` by [arena/scripts/archive.sh](file:///Users/kjs/Code/src/github.com/pkmn/ai/arena/scripts/archive.sh).
-  2. **Eager Eviction of Fully Retired Versions**: When a version's active ladder count (`champion` or `challenger`) drops to `0` across all ladders, its unpacked directory `/opt/arena/agents/<slug>-<id>/` (or Podman image) should be evicted immediately from the internal 256 GB SSD rather than waiting for the 100 GB / 35 GB LRU watermark.
-  3. **Cache-Aware Matchmaking Residency Bonus ($\rho_{ij}$)**: When the active version pool exceeds the internal SSD hot budget and uses the two-tier LRU cache, [server/matchmaker.ts](file:///Users/kjs/Code/src/github.com/pkmn/ai/server/matchmaker.ts) (`selectNextArenaMatch`) does not yet apply the SSD residency multiplier $\rho_{ij} \in \{1.00, 1.05, 1.15\}$ (see [docs/HISTORICAL.md](file:///Users/kjs/Code/src/github.com/pkmn/ai/docs/HISTORICAL.md#two-tier-ssd-cache-residency-bonus-rho_ij)).
-
-### Implementation Plan
-1. **Permanent Cold Archive (`/Volumes/Archive/agents/<slug>/<ver>/` & GCS)**:
-   - In `arena/packages.ts`, upon successful smoke test of a native bundle or OCI image, write the compressed archive to `/Volumes/Archive/agents/<slug>/<ver>/bundle.tar.zst` (or `image.oci.tar.zst`) alongside `metadata.json`.
-   - In `arena/scripts/archive.sh`, add `gcloud storage rsync /Volumes/Archive/agents gs://pkmn-arena/agents` alongside the existing battle-log and SQLite backup syncs.
-2. **Eager Eviction on `activeLadders === 0`**:
-   - In `arena/coordinator.ts`, after syncing ladder rosters from `/api/arena/ladders`, compute the set of `versionId`s that hold an active role (`champion` or `challenger`) on at least one active/settling ladder.
-   - For any locally resident `local_agents` row whose `version_id` is no longer active on any ladder, immediately invoke `evictAgentToCold` / remove its hot `/opt/arena/agents/<slug>-<id>/` directory (or `podman rmi`) and mark `is_resident = 0`.
-3. **Residency Bonus $\rho_{ij}$ in `selectNextArenaMatch`**:
-   - Add an optional `residentVersionIds?: ReadonlySet<number>` parameter to `selectNextArenaMatch` in `server/matchmaker.ts`.
-   - When `residentVersionIds` is provided, multiply each candidate pair's priority score by:
-     - `1.15` if both `v1` and `v2` are in `residentVersionIds`
-     - `1.05` if exactly one of `v1` or `v2` is in `residentVersionIds`
-     - `1.00` if neither is in `residentVersionIds`
-   - Pass the set of currently hot-resident `version_id`s from `arena/coordinator.ts` into `selectNextArenaMatch`.
-
-### Acceptance Criteria
-- [ ] Smoke-tested submissions persist a permanent cold archive under `/Volumes/Archive/agents/<slug>/<ver>/` and sync to `gs://pkmn-arena/agents/` in `arena/scripts/archive.sh`.
-- [ ] Versions with `0` active ladders are immediately evicted from `/opt/arena/agents/` / Podman hot storage.
-- [ ] `selectNextArenaMatch` applies $\rho_{ij} \in \{1.00, 1.05, 1.15\}$ when `residentVersionIds` is supplied, verified by unit tests in `test/ratings.test.ts` and `test/arena.test.ts`.
-
----
-
 ## 3. Read-Only Era-Matched Usage Stats Mounts (`/opt/arena/stats` & `PKMN_STATS_DIR`)
 
 ### Context

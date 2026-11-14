@@ -133,14 +133,18 @@ export class Coordinator {
         ? '/opt/arena/bin/baseline'
         : root('arena', 'bin', 'baseline'),
     };
+    this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.agentsDir = options.agentsDir ?? packages.AGENTS_DIR;
     this.stagingDir = options.stagingDir ?? packages.STAGING_DIR;
-    this.coldDir = options.coldDir ?? packages.COLD_AGENTS_DIR;
+    this.coldDir = options.coldDir ?? (
+      this.devMode && !fs.existsSync('/Volumes/Archive')
+        ? path.join(path.dirname(this.agentsDir), `${path.basename(this.agentsDir)}-cold`)
+        : packages.COLD_AGENTS_DIR
+    );
     this.teamsDir = options.teamsDir ?? '/opt/arena/teams';
     this.archiveLogsDir = options.archiveLogsDir ?? '/Volumes/Archive/logs';
     this.unpackBin = options.unpackBin;
     this.casDir = options.casDir;
-    this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.maxTurns = options.maxTurns;
     this.exploitProbability = options.exploitProbability ?? 0.45;
     this.formatByLadderId = new Map(options.formatByLadderId ?? []);
@@ -379,9 +383,17 @@ export class Coordinator {
         unpackedBytes,
       });
 
+      if (mode === 'native' || !this.devMode) {
+        packages.archiveColdAgent(
+          {mode, target},
+          {agentsDir: this.agentsDir, coldDir: this.coldDir}
+        );
+      }
+
       packages.evictColdAgentsIfNeeded(this.stateDb, {
         agentsDir: this.agentsDir,
         coldDir: this.coldDir,
+        casDir: this.casDir,
         pinnedVersionIds: new Set([sub.versionId]),
       });
 
@@ -690,6 +702,24 @@ export class Coordinator {
   ): Promise<{matchId: string; ladderId: string; archivedLadder: boolean} | undefined> {
     await this.flushOutbox();
     if (this.draining) return undefined;
+
+    if (ladders.some(l => l.status === 'active' || l.status === 'settling')) {
+      const activeVersionIds = new Set<number>();
+      for (const ladder of ladders) {
+        if (ladder.status !== 'active' && ladder.status !== 'settling') continue;
+        for (const e of ladder.entries) {
+          if (e.role === 'champion' || e.role === 'challenger') {
+            activeVersionIds.add(e.versionId);
+          }
+        }
+      }
+      packages.evictColdAgentsIfNeeded(this.stateDb, {
+        agentsDir: this.agentsDir,
+        coldDir: this.coldDir,
+        casDir: this.casDir,
+        activeVersionIds,
+      });
+    }
 
     const candidates: Array<{
       ladder: LadderSnapshot;

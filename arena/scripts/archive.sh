@@ -7,6 +7,7 @@ shopt -s nullglob
 
 ARCHIVE_ROOT="${ARENA_ARCHIVE_DIR:-/Volumes/Archive}"
 LOG_ROOT="${ARCHIVE_ROOT}/logs"
+COLD_DIR="${ARCHIVE_ROOT}/cold-agents"
 BACKUP_DIR="${ARCHIVE_ROOT}/db-backups"
 STATE_DB="${ARENA_STATE_DB:-/opt/arena/state/arena.sqlite}"
 GCS_BUCKET="${ARENA_GCS_BUCKET:-gs://pkmn-arena}"
@@ -19,7 +20,7 @@ if [[ "$ARCHIVE_ROOT" == "/Volumes/Archive" && "$(uname -s)" == "Darwin" ]]; the
   fi
 fi
 
-mkdir -p "$LOG_ROOT" "$BACKUP_DIR"
+mkdir -p "$LOG_ROOT" "$COLD_DIR" "$BACKUP_DIR"
 
 # 1. Daily SQLite backup of local Mac mini state DB (/opt/arena/state/arena.sqlite)
 if [[ -f "$STATE_DB" ]]; then
@@ -67,8 +68,9 @@ if [[ "$(date -u +%d)" == "01" ]]; then
   done
 fi
 
-# 4. Sync archives and database backups to Google Cloud Storage if gcloud is configured
+# 4. Sync archives, cold agent bundles, and database backups to Google Cloud Storage
 if command -v gcloud >/dev/null 2>&1 && [[ -n "${ARENA_GCS_SYNC:-}" ]]; then
   gcloud storage rsync -r "$LOG_ROOT" "${GCS_BUCKET}/archives"
+  gcloud storage rsync -r "$COLD_DIR" "${GCS_BUCKET}/agents"
   gcloud storage rsync -r "$BACKUP_DIR" "${GCS_BUCKET}/db-backups"
 fi
