@@ -19,6 +19,13 @@ import {renderTemplate, root} from '../static/util';
 import {hashTeam} from '../teams';
 import {generateValidVgcTeams} from '../tools/mock';
 import {runPkmnCli} from '../tools/pkmn';
+import {
+  compareShots,
+  decodePng,
+  diffPngImages,
+  encodePng,
+  standInSprite,
+} from '../tools/shots';
 
 function forceLadderActive(database: Database, id: string) {
   database.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?").run(id);
@@ -1525,4 +1532,59 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('standInSprite generates deterministic non-transparent species minisprites', () => {
+    const pikachu = standInSprite('/forums/media/minisprites/pikachu.png');
+    const charizard = standInSprite('/forums/media/minisprites/charizard.png');
+    expect(pikachu.equals(standInSprite('/forums/media/minisprites/pikachu.png'))).toBe(true);
+    expect(pikachu.equals(charizard)).toBe(false);
+
+    const decoded = decodePng(pikachu);
+    expect(decoded.width).toBe(40);
+    expect(decoded.height).toBe(30);
+    let opaquePixels = 0;
+    for (let i = 3; i < decoded.data.length; i += 4) {
+      if (decoded.data[i] === 255) opaquePixels++;
+    }
+    expect(opaquePixels).toBeGreaterThan(20);
+  });
+
+  test('diffPngImages highlights modified pixels in red over a faded backdrop', () => {
+    const baseData = Buffer.alloc(4 * 4 * 4, 200);
+    const nextData = Buffer.from(baseData);
+    nextData[0] = 10;
+    nextData[1] = 20;
+    nextData[2] = 30;
+    nextData[3] = 255;
+
+    const {image, count} = diffPngImages(
+      {width: 4, height: 4, data: baseData},
+      {width: 4, height: 4, data: nextData}
+    );
+    expect(count).toBe(1);
+    expect([image.data[0], image.data[1], image.data[2], image.data[3]]).toEqual([255, 0, 0, 255]);
+  });
+
+  test('compareShots writes diff images with an HTML summary report when pixels differ',
+    async () => {
+      const beforeDir = path.join(tmpDir, 'shots-before');
+      const afterDir = path.join(tmpDir, 'shots-after');
+      const diffDir = path.join(tmpDir, 'shots-diff');
+      fs.mkdirSync(path.join(beforeDir, 'small', 'light'), {recursive: true});
+      fs.mkdirSync(path.join(afterDir, 'small', 'light'), {recursive: true});
+
+      const imgA = encodePng({width: 2, height: 2, data: Buffer.alloc(16, 120)});
+      const dataB = Buffer.alloc(16, 120);
+      dataB[0] = 250;
+      const imgB = encodePng({width: 2, height: 2, data: dataB});
+
+      fs.writeFileSync(path.join(beforeDir, 'small', 'light', 'home.png'), imgA);
+      fs.writeFileSync(path.join(afterDir, 'small', 'light', 'home.png'), imgB);
+
+      const res = await compareShots(beforeDir, afterDir, diffDir, 0);
+      expect(res.same).toBe(false);
+      expect(res.changes).toHaveLength(1);
+      expect(fs.existsSync(path.join(diffDir, 'small', 'light', 'home.png'))).toBe(true);
+      expect(fs.readFileSync(path.join(diffDir, 'index.html'), 'utf8')).toContain('home.png');
+    });
 });

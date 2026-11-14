@@ -81,6 +81,13 @@ client scripts, run [`tools/shots.ts`](../tools/shots.ts):
 npm run build
 npm run shots
 
+# Record a baseline in .shots/baseline/ before modifying templates or CSS
+npm run shots -- --baseline
+
+# Re-run after changes to compare against .shots/baseline/ and generate .shots/diff/index.html
+npm run shots
+npm run shots -- --tolerance 20
+
 # Filter to a specific scenario substring while iterating on a single page
 npm run shots -- --only arena-ladder
 npm run shots -- --only account

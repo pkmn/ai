@@ -11,6 +11,7 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import {parseArgs} from 'util';
+import * as zlib from 'zlib';
 
 import {Browser, BrowserContext, Route, chromium} from 'playwright-core';
 import polka from 'polka';
@@ -21,12 +22,14 @@ import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as wiki from '../server/wiki';
-import {ROOT, root} from '../static/util';
+import {ROOT, escapeHtml, root} from '../static/util';
 
 import * as mock from './mock';
 
 const PUBLIC = root('public');
 const SHOTS_DIR = root('.shots');
+export const BASELINE_DIR = path.join(SHOTS_DIR, 'baseline');
+export const DIFF_DIR = path.join(SHOTS_DIR, 'diff');
 
 const ORIGIN = 'http://pkmn.test';
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -286,17 +289,399 @@ function resolveFileInDir(baseDir: string, urlPath: string): string | undefined 
   return undefined;
 }
 
-const TRANSPARENT_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAYAAABe3VzdAAAAIElEQVR4nO3BAQ0AAADCoPdPbQ8HF' +
-  'AAAAAAAAAAAAADwZEC4AAFe72zRAAAAAElFTkSuQmCC',
-  'base64'
-);
+export interface PngImage {
+  width: number;
+  height: number;
+  data: Buffer;
+}
+
+const PNG_SIG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (const byte of buf) {
+    c = CRC32_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const tag = Buffer.from(type, 'ascii');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([tag, data])), 0);
+  return Buffer.concat([len, tag, data, crc]);
+}
+
+export function encodePng(image: PngImage): Buffer {
+  const {width, height, data} = image;
+  const rowBytes = width * 4;
+  const raw = Buffer.alloc(height * (1 + rowBytes));
+  for (let y = 0; y < height; y++) {
+    const dstOff = y * (1 + rowBytes);
+    raw[dstOff] = 0;
+    data.copy(raw, dstOff + 1, y * rowBytes, (y + 1) * rowBytes);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  return Buffer.concat([
+    PNG_SIG,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+export function decodePng(buf: Buffer): PngImage {
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(PNG_SIG)) {
+    throw new Error('Invalid PNG signature');
+  }
+  let width = 0;
+  let height = 0;
+  let colorType = 6;
+  let palette: Buffer | undefined;
+  let trns: Buffer | undefined;
+  const idatParts: Buffer[] = [];
+  let offset = 8;
+
+  while (offset + 8 <= buf.length) {
+    const length = buf.readUInt32BE(offset);
+    const type = buf.toString('ascii', offset + 4, offset + 8);
+    const chunk = buf.subarray(offset + 8, offset + 8 + length);
+    offset += 12 + length;
+    if (type === 'IHDR') {
+      width = chunk.readUInt32BE(0);
+      height = chunk.readUInt32BE(4);
+      colorType = chunk[9];
+    } else if (type === 'PLTE') {
+      palette = chunk;
+    } else if (type === 'tRNS') {
+      trns = chunk;
+    } else if (type === 'IDAT') {
+      idatParts.push(chunk);
+    } else if (type === 'IEND') {
+      break;
+    }
+  }
+
+  const bpp = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : 1;
+  const rowBytes = width * bpp;
+  const stride = 1 + rowBytes;
+  const inflated = zlib.inflateSync(Buffer.concat(idatParts));
+  const unfiltered = Buffer.alloc(height * rowBytes);
+
+  for (let y = 0; y < height; y++) {
+    const filter = inflated[y * stride];
+    const srcOff = y * stride + 1;
+    const dstOff = y * rowBytes;
+    const prevOff = (y - 1) * rowBytes;
+    for (let i = 0; i < rowBytes; i++) {
+      const raw = inflated[srcOff + i];
+      const left = i >= bpp ? unfiltered[dstOff + i - bpp] : 0;
+      const up = y > 0 ? unfiltered[prevOff + i] : 0;
+      const upLeft = y > 0 && i >= bpp ? unfiltered[prevOff + i - bpp] : 0;
+      if (filter === 0) {
+        unfiltered[dstOff + i] = raw;
+      } else if (filter === 1) {
+        unfiltered[dstOff + i] = (raw + left) & 0xff;
+      } else if (filter === 2) {
+        unfiltered[dstOff + i] = (raw + up) & 0xff;
+      } else if (filter === 3) {
+        unfiltered[dstOff + i] = (raw + ((left + up) >>> 1)) & 0xff;
+      } else if (filter === 4) {
+        unfiltered[dstOff + i] = (raw + paethPredictor(left, up, upLeft)) & 0xff;
+      } else {
+        throw new Error(`Unsupported PNG filter type: ${filter}`);
+      }
+    }
+  }
+
+  if (colorType === 6) {
+    return {width, height, data: unfiltered};
+  }
+  const rgba = Buffer.alloc(width * height * 4);
+  const pixels = width * height;
+  for (let p = 0; p < pixels; p++) {
+    const dst = p * 4;
+    if (colorType === 2) {
+      const src = p * 3;
+      rgba[dst] = unfiltered[src];
+      rgba[dst + 1] = unfiltered[src + 1];
+      rgba[dst + 2] = unfiltered[src + 2];
+      rgba[dst + 3] = 255;
+    } else if (colorType === 4) {
+      const src = p * 2;
+      rgba[dst] = unfiltered[src];
+      rgba[dst + 1] = unfiltered[src];
+      rgba[dst + 2] = unfiltered[src];
+      rgba[dst + 3] = unfiltered[src + 1];
+    } else if (colorType === 3 && palette) {
+      const idx = unfiltered[p];
+      rgba[dst] = palette[idx * 3] ?? 0;
+      rgba[dst + 1] = palette[idx * 3 + 1] ?? 0;
+      rgba[dst + 2] = palette[idx * 3 + 2] ?? 0;
+      rgba[dst + 3] = trns && idx < trns.length ? trns[idx] : 255;
+    } else {
+      const gray = unfiltered[p];
+      rgba[dst] = gray;
+      rgba[dst + 1] = gray;
+      rgba[dst + 2] = gray;
+      rgba[dst + 3] = 255;
+    }
+  }
+  return {width, height, data: rgba};
+}
+
+const spriteCache = new Map<string, Buffer>();
+
+export function standInSprite(urlPath: string): Buffer {
+  const cached = spriteCache.get(urlPath);
+  if (cached) return cached;
+
+  const isBattleSprite = urlPath.includes('/sprites/');
+  const width = isBattleSprite ? 96 : 40;
+  const height = isBattleSprite ? 96 : 30;
+
+  let hash = 2166136261;
+  for (let i = 0; i < urlPath.length; i++) {
+    hash = Math.imul(hash ^ urlPath.charCodeAt(i), 16777619) >>> 0;
+  }
+  const primary = [70 + (hash & 0x9f), 70 + ((hash >>> 8) & 0x9f), 70 + ((hash >>> 16) & 0x9f)];
+  const accent = [
+    90 + ((hash >>> 4) & 0x7f),
+    90 + ((hash >>> 12) & 0x7f),
+    90 + ((hash >>> 20) & 0x7f),
+  ];
+  const border = [24, 28, 36];
+
+  const data = Buffer.alloc(width * height * 4);
+  const gridCols = 8;
+  const gridRows = 6;
+  const cellW = isBattleSprite ? 10 : 2;
+  const cellH = isBattleSprite ? 10 : 2;
+  const padX = Math.floor((width - gridCols * cellW) / 2);
+  const padY = Math.floor((height - gridRows * cellH) / 2);
+
+  const filled = (gx: number, gy: number): number => {
+    if (gx < 0 || gx >= gridCols || gy < 0 || gy >= gridRows) return 0;
+    const mx = gx < 4 ? gx : 7 - gx;
+    if (mx === 3 && gy >= 1 && gy <= 4) return 1;
+    const bit = (gy * 4 + mx) % 31;
+    return ((hash >>> bit) & 1) === 1 ? ((gy + mx) % 2 === 0 ? 1 : 2) : 0;
+  };
+
+  for (let y = 0; y < height; y++) {
+    const gy = Math.floor((y - padY) / cellH);
+    const inY = y >= padY && y < padY + gridRows * cellH;
+    for (let x = 0; x < width; x++) {
+      const gx = Math.floor((x - padX) / cellW);
+      const inX = x >= padX && x < padX + gridCols * cellW;
+      const px = (y * width + x) * 4;
+      const cell = inX && inY ? filled(gx, gy) : 0;
+      if (cell > 0) {
+        const col = cell === 1 ? primary : accent;
+        data[px] = col[0];
+        data[px + 1] = col[1];
+        data[px + 2] = col[2];
+        data[px + 3] = 255;
+      } else if (
+        inX &&
+        inY &&
+        (filled(gx - 1, gy) > 0 ||
+          filled(gx + 1, gy) > 0 ||
+          filled(gx, gy - 1) > 0 ||
+          filled(gx, gy + 1) > 0)
+      ) {
+        data[px] = border[0];
+        data[px + 1] = border[1];
+        data[px + 2] = border[2];
+        data[px + 3] = 255;
+      }
+    }
+  }
+
+  const png = encodePng({width, height, data});
+  spriteCache.set(urlPath, png);
+  return png;
+}
+
+export function diffPngImages(a: PngImage, b: PngImage): {image: PngImage; count: number} {
+  const width = Math.max(a.width, b.width);
+  const height = Math.max(a.height, b.height);
+  const data = Buffer.alloc(width * height * 4, 255);
+  let count = 0;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const out = (y * width + x) * 4;
+      const inBoth = x < a.width && y < a.height && x < b.width && y < b.height;
+      const ia = (y * a.width + x) * 4;
+      const ib = (y * b.width + x) * 4;
+      if (inBoth && a.data.readUInt32LE(ia) === b.data.readUInt32LE(ib)) {
+        const luma =
+          0.3 * (b.data[ib] ?? 0) +
+          0.59 * (b.data[ib + 1] ?? 0) +
+          0.11 * (b.data[ib + 2] ?? 0);
+        const faded = 255 - ((255 - Math.round(luma)) >> 2);
+        data[out] = faded;
+        data[out + 1] = faded;
+        data[out + 2] = faded;
+        continue;
+      }
+      count++;
+      data[out + 1] = 0;
+      if (inBoth) data[out + 2] = 0;
+    }
+  }
+  return {image: {width, height, data}, count};
+}
+
+interface ShotChange {
+  name: string;
+  note: string;
+  diffPath?: string;
+}
+
+function listPngsRelative(baseDir: string): string[] {
+  if (!fs.existsSync(baseDir)) return [];
+  const results: string[] = [];
+  const walk = (dir: string, relPrefix: string) => {
+    for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+      if (relPrefix === '' && (entry.name === 'baseline' || entry.name === 'diff')) {
+        continue;
+      }
+      const rel = relPrefix ? path.join(relPrefix, entry.name) : entry.name;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, rel);
+      } else if (entry.isFile() && entry.name.endsWith('.png')) {
+        results.push(rel);
+      }
+    }
+  };
+  walk(baseDir, '');
+  return results.sort();
+}
+
+function renderDiffReport(
+  changes: ShotChange[],
+  beforeDir: string,
+  afterDir: string,
+  diffDir: string
+): string {
+  const imgTag = (dir: string, name: string) => {
+    const rel = path.relative(diffDir, path.join(dir, name)).split(path.sep).join('/');
+    return `<img loading="lazy" src="${escapeHtml(rel)}">`;
+  };
+  const rows = changes.map(({name, note, diffPath}) => {
+    const cells = [
+      `<td>${imgTag(beforeDir, name)}</td>`,
+      `<td>${imgTag(afterDir, name)}</td>`,
+      `<td>${diffPath ? imgTag(diffDir, name) : ''}</td>`,
+    ];
+    return `<h2>${escapeHtml(name)} <small>${escapeHtml(note)}</small></h2>` +
+      `<table><tr>${cells.join('')}</tr></table>`;
+  });
+  return '<!doctype html><meta charset="utf-8"><title>Screenshot changes</title>\n' +
+    '<style>body{font:14px system-ui;margin:1rem}td{vertical-align:top;padding:0 .5rem 0 0}' +
+    'img{max-width:30vw;border:1px solid #ccc}small{font-weight:normal;color:#666}</style>\n' +
+    `<p>Before: ${escapeHtml(path.relative(ROOT, beforeDir) || beforeDir)} · ` +
+    `After: ${escapeHtml(path.relative(ROOT, afterDir) || afterDir)} · ` +
+    'Red changed, magenta beyond an edge.</p>\n' +
+    rows.join('\n');
+}
+
+export async function compareShots(
+  beforeDir: string,
+  afterDir: string,
+  diffDir: string,
+  tolerance = 0,
+  only?: string[]
+): Promise<{same: boolean; changes: ShotChange[]}> {
+  const beforeNames = listPngsRelative(beforeDir);
+  const afterNames = listPngsRelative(afterDir);
+  const names = [...new Set([...beforeNames, ...afterNames])]
+    .filter(name => !only || only.includes(name))
+    .sort();
+  await fsp.rm(diffDir, {recursive: true, force: true});
+  await fsp.mkdir(diffDir, {recursive: true});
+
+  const beforeSet = new Set(beforeNames);
+  const afterSet = new Set(afterNames);
+  const changes: ShotChange[] = [];
+
+  for (const name of names) {
+    if (!afterSet.has(name)) {
+      changes.push({name, note: `only in ${path.relative(ROOT, beforeDir) || beforeDir}`});
+      continue;
+    }
+    if (!beforeSet.has(name)) {
+      changes.push({name, note: `only in ${path.relative(ROOT, afterDir) || afterDir}`});
+      continue;
+    }
+    const [rawA, rawB] = await Promise.all([
+      fsp.readFile(path.join(beforeDir, name)),
+      fsp.readFile(path.join(afterDir, name)),
+    ]);
+    if (rawA.equals(rawB)) continue;
+    const a = decodePng(rawA);
+    const b = decodePng(rawB);
+    const resized = a.width !== b.width || a.height !== b.height;
+    if (!resized && a.data.equals(b.data)) continue;
+
+    const {image, count} = diffPngImages(a, b);
+    if (count === 0 || (count <= tolerance && !resized)) continue;
+
+    const pct = ((100 * count) / (image.width * image.height)).toFixed(2);
+    const sizeNote = resized ? `, ${a.width}×${a.height} → ${b.width}×${b.height}` : '';
+    const diffPath = path.join(diffDir, name);
+    await fsp.mkdir(path.dirname(diffPath), {recursive: true});
+    await fsp.writeFile(diffPath, encodePng(image));
+    changes.push({name, note: `${count} px (${pct}%)${sizeNote}`, diffPath});
+  }
+
+  if (changes.length > 0) {
+    const html = renderDiffReport(changes, beforeDir, afterDir, diffDir);
+    await fsp.writeFile(path.join(diffDir, 'index.html'), html, 'utf8');
+  }
+  return {same: changes.length === 0, changes};
+}
 
 async function serve(route: Route, fixture: Fixture, cookie: string): Promise<void> {
   const url = new URL(route.request().url());
   if (url.origin !== ORIGIN) {
     if (url.pathname.endsWith('.png')) {
-      await route.fulfill({status: 200, contentType: 'image/png', body: TRANSPARENT_PNG});
+      await route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        body: standInSprite(url.pathname),
+      });
       return;
     }
     await route.fulfill({status: 204, body: ''});
@@ -410,6 +795,8 @@ async function run(): Promise<void> {
   const {values} = parseArgs({
     options: {
       only: {type: 'string'},
+      baseline: {type: 'boolean', default: false},
+      tolerance: {type: 'string', default: '0'},
     },
   });
 
@@ -464,18 +851,56 @@ async function run(): Promise<void> {
     await fixture.close();
   }
 
-  if (values.only === undefined) await fsp.rm(SHOTS_DIR, {recursive: true, force: true});
+  if (values.only === undefined) {
+    for (const device of Object.keys(VIEWPORTS)) {
+      await fsp.rm(path.join(SHOTS_DIR, device), {recursive: true, force: true});
+      if (values.baseline) {
+        await fsp.rm(path.join(BASELINE_DIR, device), {recursive: true, force: true});
+      }
+    }
+  }
   for (const relPath of shotPaths) {
+    const src = path.join(newDir, relPath);
     const dest = path.join(SHOTS_DIR, relPath);
     await fsp.mkdir(path.dirname(dest), {recursive: true});
-    await fsp.rename(path.join(newDir, relPath), dest);
+    if (values.baseline) {
+      const baseDest = path.join(BASELINE_DIR, relPath);
+      await fsp.mkdir(path.dirname(baseDest), {recursive: true});
+      await fsp.copyFile(src, baseDest);
+    }
+    await fsp.rename(src, dest);
   }
   await fsp.rm(newDir, {recursive: true, force: true});
 
-  console.log(
-    `Screenshots of ${scenarios.length} scenarios in ${path.relative(ROOT, SHOTS_DIR)}.`
-  );
+  const targetLabel = values.baseline
+    ? path.relative(ROOT, BASELINE_DIR)
+    : path.relative(ROOT, SHOTS_DIR);
+  console.log(`Screenshots of ${scenarios.length} scenarios in ${targetLabel}.`);
   for (const error of new Set(errors)) console.warn(`  error: ${error}`);
+
+  if (!values.baseline && fs.existsSync(BASELINE_DIR)) {
+    const tolerance = Number(values.tolerance) || 0;
+    const only = values.only === undefined ? undefined : shotPaths;
+    const {same, changes} = await compareShots(
+      BASELINE_DIR,
+      SHOTS_DIR,
+      DIFF_DIR,
+      tolerance,
+      only
+    );
+    for (const {name, note} of changes) {
+      console.log(`  changed  ${name}  ${note}`);
+    }
+    if (same) {
+      console.log(`All compared screenshots match ${path.relative(ROOT, BASELINE_DIR)}.`);
+    } else {
+      console.log(
+        `${changes.length} screenshot(s) changed. ` +
+        `See ${path.relative(ROOT, path.join(DIFF_DIR, 'index.html'))}`
+      );
+    }
+  }
+
   if (errors.length > 0) {
     process.exitCode = 1;
   }
