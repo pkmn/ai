@@ -54,10 +54,8 @@
 
 ;; 5. Read-only access to macOS system libraries, frameworks, devices, and era-matched stats
 (allow file-read-metadata
-  (literal "/Applications")
   (literal "/Volumes")
   (literal "/Library")
-  (literal "/Library/Developer")
   (literal "/opt")
   (literal "/opt/arena")
   (literal "/opt/arena/agents")
@@ -66,7 +64,6 @@
   (literal "/etc")
   (literal "/private")
   (literal "/private/var")
-  (literal "/private/var/db")
   (literal "/private/etc"))
 
 (allow file-read*
@@ -75,7 +72,6 @@
   (literal "/dev/zero")
   (literal "/dev/random")
   (literal "/dev/urandom")
-  (literal "/private/var/db/xcode_select_link")
   (subpath "/dev/fd")
   (subpath "/System")
   (subpath "/usr/lib")
@@ -83,7 +79,6 @@
   (subpath "/Library/Apple")
   (subpath "/Library/Frameworks")
   (subpath "/private/var/db/timezone")
-  (subpath "/private/var/select")
   (subpath "/opt/arena/stats"))
 
 (allow file-write-data
@@ -91,13 +86,11 @@
   (literal "/dev/zero")
   (subpath "/dev/fd"))
 
-;; 6. Read/execute standard utilities, CommandLineTools, Homebrew runtimes, and ONLY the specific
-;;    agent's immutable bundle directory (never /opt/arena/agents as a whole or /opt/arena/state!)
+;; 6. Read/execute standard utilities, Homebrew runtimes, and ONLY the specific agent's
+;;    immutable bundle directory (never /opt/arena/agents as a whole or /opt/arena/state!)
 (allow file-read* process-exec
   (subpath "/bin")
   (subpath "/usr/bin")
-  (subpath "/Library/Developer/CommandLineTools")
-  (regex #"^/Applications/Xcode[^/]*\.app(/|$)")
   (subpath "/opt/homebrew")
   (subpath (param "AGENT_RO_DIR")))
 
