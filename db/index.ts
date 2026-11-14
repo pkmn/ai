@@ -49,20 +49,25 @@ export const MIGRATION_DIR = root('db', 'migration');
 
 const MIGRATION_FILE_RE = /^\d{4}-[a-z0-9-]+\.sql$/;
 
-function listSqlFiles(dir: string): string[] {
+export function listSqlFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
     .filter(f => f.endsWith('.sql') && !f.startsWith('.'))
     .sort((a, b) => a.localeCompare(b));
 }
 
-export class Database {
+export class SqliteDatabase {
   readonly db: DatabaseSync;
   readonly dbPath: string;
   private txDepth = 0;
-  private readonly txRunner: TransactionRunner = fn => this.inTransaction(fn);
+  protected readonly txRunner: TransactionRunner = fn => this.inTransaction(fn);
 
-  constructor(dbPath = defaultDbPath(), options: Options = {}) {
+  constructor(
+    dbPath: string,
+    defaultSchemaDir: string,
+    defaultMigrationDir: string,
+    options: Options = {}
+  ) {
     this.dbPath = dbPath;
     if (dbPath !== ':memory:') {
       fs.mkdirSync(path.dirname(dbPath), {recursive: true});
@@ -77,19 +82,23 @@ export class Database {
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec('PRAGMA busy_timeout = 5000;');
-    this.initializeSchema(options);
+    this.initializeSchema(defaultSchemaDir, defaultMigrationDir, options);
   }
 
   // Dual schema bootstrap:
   //   - Fresh databases (`:memory:` in tests, first boot in prod) execute every declarative
-  //     `db/schema/*.sql` file and mark all existing `db/migration/NNNN-*.sql` files as applied.
+  //     `schema/*.sql` file and mark all existing `migration/NNNN-*.sql` files as applied.
   //   - Existing databases create an atomic `VACUUM INTO` backup before applying unapplied
   //     `NNNN-description.sql` migrations in sequence. `PRAGMA foreign_keys = OFF` is toggled
   //     outside `inTransaction` because SQLite ignores `PRAGMA foreign_keys` inside an open
   //     transaction; `PRAGMA foreign_key_check` validates referential integrity before `COMMIT`.
-  private initializeSchema(options: Options) {
-    const schemaDir = options.schemaDir ?? SCHEMA_DIR;
-    const migrationDir = options.migrationDir ?? MIGRATION_DIR;
+  private initializeSchema(
+    defaultSchemaDir: string,
+    defaultMigrationDir: string,
+    options: Options
+  ) {
+    const schemaDir = options.schemaDir ?? defaultSchemaDir;
+    const migrationDir = options.migrationDir ?? defaultMigrationDir;
     const now = options.now ?? Math.floor(Date.now() / 1000);
 
     const existingTables = this.db.prepare(
@@ -224,6 +233,12 @@ export class Database {
       } catch {}
       throw err;
     }
+  }
+}
+
+export class Database extends SqliteDatabase {
+  constructor(dbPath = defaultDbPath(), options: Options = {}) {
+    super(dbPath, SCHEMA_DIR, MIGRATION_DIR, options);
   }
 
   syncLaddersFromYaml(laddersYaml: string, now?: number) {
