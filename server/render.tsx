@@ -24,7 +24,7 @@ export const PUBLIC_DIR = util.root('public');
 export const STATIC_DIR =
   process.env.MOCK === '1' ? util.root('.mock', 'static') : util.root('static');
 
-export const ARENA_STYLE = fs.readFileSync(util.root('static', 'arena.css'), 'utf8');
+export const ARENA_STYLE = fs.readFileSync(util.root('static', 'style', 'arena.css'), 'utf8');
 
 export const EXT_ICON = util.EXT_ICON;
 export const copyFileAtomic = util.copyFileAtomic;
@@ -3522,7 +3522,7 @@ export function register(app: polka.Polka, options: Options) {
         analytics: 'G-LQ8TW28Z7Q',
         description: 'The home of competitive Pokémon artificial intelligence',
         url: 'https://pkmn.ai',
-        stylesheet: path.join(staticDir, 'index.css'),
+        stylesheet: path.join(staticDir, 'style', 'index.css'),
         highlight: true,
       })
   );

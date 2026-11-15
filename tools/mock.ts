@@ -1037,10 +1037,11 @@ export class Runner {
   private ensureStaticInitialized() {
     fs.mkdirSync(this.staticDir, {recursive: true});
     fs.mkdirSync(this.avatarsDir, {recursive: true});
-    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj']) {
+    for (const name of STATIC_FILES) {
       const src = path.join(this.baseStaticDir, name);
       const dst = path.join(this.staticDir, name);
       if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.mkdirSync(path.dirname(dst), {recursive: true});
         fs.copyFileSync(src, dst);
       }
     }
@@ -1094,10 +1095,11 @@ export class Runner {
 
     fs.mkdirSync(this.staticDir, {recursive: true});
     fs.mkdirSync(this.avatarsDir, {recursive: true});
-    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj']) {
+    for (const name of STATIC_FILES) {
       const src = path.join(this.baseStaticDir, name);
       const dst = path.join(this.staticDir, name);
       if (fs.existsSync(src) && src !== dst) {
+        fs.mkdirSync(path.dirname(dst), {recursive: true});
         fs.copyFileSync(src, dst);
       }
     }
@@ -3714,6 +3716,8 @@ function copyStaticTours(baseStaticDir: string, targetStaticDir: string, overwri
   }
 }
 
+const STATIC_FILES = ['style/index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj'];
+
 export function prepareStaticDir(
   targetStaticDir: string,
   targetAvatarsDir: string,
@@ -3721,10 +3725,11 @@ export function prepareStaticDir(
 ): string {
   fs.mkdirSync(targetStaticDir, {recursive: true});
   fs.mkdirSync(targetAvatarsDir, {recursive: true});
-  for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj']) {
+  for (const name of STATIC_FILES) {
     const src = path.join(baseStaticDir, name);
     const dst = path.join(targetStaticDir, name);
     if (fs.existsSync(src) && !fs.existsSync(dst)) {
+      fs.mkdirSync(path.dirname(dst), {recursive: true});
       fs.copyFileSync(src, dst);
     }
   }

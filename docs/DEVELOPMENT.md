@@ -90,8 +90,8 @@ npm run dev
 | `npm run build` | Compile TypeScript and build all static Djot, BibTeX/YAML, and Arena pages into `public/`. |
 | `npm run dev` | Start the local server on `http://localhost:1234` with `DEV_AUTH=1` and static file watching. |
 | `npm start` | Start `build/server` without `DEV_AUTH=1` (production entrypoint). |
-| `npm run lint` | Run `eslint --cache`, `stylelint static/*.css`, and `hyperlink public --check-anchors`. |
-| `npm run fix` | Auto-fix lint and CSS ordering issues (`eslint --fix && stylelint --fix static/*.css`). |
+| `npm run lint` | Run `eslint --cache`, `stylelint static/style/*.css tools/*.css`, and `hyperlink public --check-anchors`. |
+| `npm run fix` | Auto-fix lint and CSS ordering issues (`eslint --fix && stylelint --fix static/style/*.css tools/*.css`). |
 | `npm run clean` | Remove `public/`, `build/`, `.tsbuildinfo`, `.eslintcache`, `.mock/`, and `db/data/`. |
 | `npm run test` | Run `npm run build && npm run lint`. |
 | `npm run test:integration` | Run `npm run test` followed by the full Vitest suite (`vitest test`). |
@@ -163,7 +163,7 @@ worker control plane.
     `static/research.bib`, and `static/glossary.yml`.
   - Render HTML views using the custom React-free TSX renderer in `static/dom.ts` (`h`, `Fragment`,
     `raw`) across `.tsx` modules (`static/*.tsx`, `server/*.tsx`, `tools/shots.tsx`), and keep
-    stylesheets in `static/*.css` / `tools/*.css`.
+    stylesheets in `static/style/*.css` / `tools/*.css`.
   - After changing TSX views, CSS, or client scripts, run `npm run shots` to verify zero console
     errors and zero horizontal overflow across viewports and themes (see [TESTING.md](TESTING.md)).
 - **Database tables & migrations (`db/`):**

@@ -20,7 +20,7 @@ import * as arena from './arena';
 import * as ratings from './ratings';
 import * as render from './render';
 
-const PROFILE_STYLE = fs.readFileSync(root('static', 'profile.css'), 'utf8');
+const PROFILE_STYLE = fs.readFileSync(root('static', 'style', 'profile.css'), 'utf8');
 
 interface VersionDynamicStats {
   rank: string;

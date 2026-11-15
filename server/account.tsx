@@ -88,7 +88,7 @@ const MAX_SUBMISSION_BYTES = 512 * 1024;
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 
-const STYLE = fs.readFileSync(root('static', 'account.css'), 'utf8');
+const STYLE = fs.readFileSync(root('static', 'style', 'account.css'), 'utf8');
 
 const ACCOUNT_SCRIPT = `
   document.addEventListener('DOMContentLoaded', () => {

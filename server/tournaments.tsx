@@ -34,8 +34,8 @@ export type {
   LiveBroadcast,
 };
 
-const TOURNAMENTS_STYLE = fs.readFileSync(root('static', 'tournaments.css'), 'utf8');
-const VIEWER_STYLE = fs.readFileSync(root('static', 'viewer.css'), 'utf8');
+const TOURNAMENTS_STYLE = fs.readFileSync(root('static', 'style', 'tournaments.css'), 'utf8');
+const VIEWER_STYLE = fs.readFileSync(root('static', 'style', 'viewer.css'), 'utf8');
 
 const VIEWER_SCRIPT = `
   (() => {

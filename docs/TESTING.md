@@ -31,7 +31,7 @@ npm run test:integration
   - `node build/static/build` renders all Djot essays, BibTeX/YAML catalogs, and static Arena pages
     into `public/`.
   - `eslint --cache` enforces `@pkmn/eslint-config` across TypeScript sources and tests.
-  - `stylelint static/*.css` checks CSS property ordering and selector specificity.
+  - `stylelint static/style/*.css tools/*.css` checks CSS property ordering and selector specificity.
   - `hyperlink public --check-anchors` verifies zero broken internal links or `#anchor` fragments
     across every generated HTML file in `public/`.
 - **`npx vitest run` (`test/*.test.ts`):**
@@ -73,7 +73,7 @@ node build/teams/index.js <candidate-team.txt> \
 
 ## 2. Visual Regression, Edge-Case Atlas & Layout Verification (`npm run shots`)
 
-Whenever modifying TSX views (`static/*.tsx`, `server/*.tsx`), stylesheets (`static/*.css`), Djot
+Whenever modifying TSX views (`static/*.tsx`, `server/*.tsx`), stylesheets (`static/style/*.css`), Djot
 layouts, or client scripts, run [`tools/shots.tsx`](../tools/shots.tsx):
 
 ```sh

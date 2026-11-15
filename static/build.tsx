@@ -144,7 +144,7 @@ export const renderer = new Renderer({
   analytics: 'G-LQ8TW28Z7Q',
   description: 'The home of competitive Pokémon artificial intelligence',
   url: 'https://pkmn.ai',
-  stylesheet: path.join(STATIC, 'index.css'),
+  stylesheet: path.join(STATIC, 'style', 'index.css'),
   highlight: true,
 });
 

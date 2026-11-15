@@ -180,7 +180,7 @@ export function extractProjectPages(projectsYaml: string): {
   return {projects, aliases};
 }
 
-const STYLE = fs.readFileSync(root('static', 'wiki.css'), 'utf8');
+const STYLE = fs.readFileSync(root('static', 'style', 'wiki.css'), 'utf8');
 
 function renderPageHtml(opts: {
   id?: string;
