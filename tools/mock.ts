@@ -2742,10 +2742,13 @@ export class Runner {
         ? parseTimestampSpec(startsRaw, this.state.now, this.state.anchorNow)
         : this.state.now + 7 * 86400;
       const status = (getFlag(cmd, 'status') ?? 'scheduled') as db.TournamentStatus;
+      const rawTeam = getFlag(cmd, 'team');
+      const team = rawTeam && rawTeam !== 'custom' ? (rawTeam as db.TeamMode) : undefined;
       this.db.upsertTournament({
         id,
         name,
         format,
+        team,
         rulesJson: getFlag(cmd, 'rules') ?? '[]',
         gamesPerMatchup: Number(getFlag(cmd, 'games') ?? 8),
         batchSize: Number(getFlag(cmd, 'batch') ?? 10),

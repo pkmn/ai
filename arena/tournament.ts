@@ -11,6 +11,7 @@ import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protoco
 import {GameOutcome} from '../server/ratings';
 import {ensureSimConfigured, resolveArenaFormatId, sampleRandomPair} from '../server/teams';
 import {toID} from '../static/util';
+import * as teams from '../teams';
 
 import * as arbiter from './arbiter';
 import * as packages from './packages';
@@ -111,6 +112,118 @@ export function rewriteBlindPlayerNames(
     .replaceAll('|win|Agent B', `|win|${p2DisplayName}`)
     .replaceAll('☆Agent A|', `☆${p1DisplayName}|`)
     .replaceAll('☆Agent B|', `☆${p2DisplayName}|`);
+}
+
+export interface TournamentTeamPair {
+  p1Team: string;
+  p2Team: string;
+}
+
+export function buildLockedTournamentTeamBook(
+  teamPool: readonly string[],
+  pairCount: number,
+  format: string,
+  tournamentId = '1'
+): TournamentTeamPair[] {
+  const uniqueTeams = [...new Set(teamPool.filter(Boolean))];
+  if (uniqueTeams.length < 2 || pairCount <= 0) return [];
+
+  const cleanFormat = toID(format);
+  const dex = teams.getDex(cleanFormat);
+  const defaultLevel =
+    cleanFormat.includes('vgc') ||
+    cleanFormat.includes('bss') ||
+    cleanFormat.includes('champions')
+      ? 50
+      : 100;
+
+  // Deterministically order teams by SHA-256(tournamentId:packed) so every Coordinator restart
+  // reconstructs the identical locked 2M-team book from the tournament's teamPool.
+  const annotated = uniqueTeams
+    .map(packed => {
+      const sets = teams.parseTeam(dex, packed);
+      const sortHash = crypto
+        .createHash('sha256')
+        .update(`${tournamentId}:${packed}`)
+        .digest('hex');
+      return {packed, sets, sortHash};
+    })
+    .sort((a, b) => a.sortHash.localeCompare(b.sortHash));
+
+  const targetTeams = pairCount * 2;
+  const selected: typeof annotated = [];
+  const usedPacked = new Set<string>();
+
+  // Pass 1: Select up to 2M pairwise-distinct teams (teamDistance >= THRESHOLD)
+  for (const item of annotated) {
+    if (selected.length >= targetTeams) break;
+    const isDistinctFromSelected = selected.every(
+      prev => teams.teamDistance(dex, item.sets, prev.sets, defaultLevel) >= teams.THRESHOLD
+    );
+    if (!isDistinctFromSelected) continue;
+    usedPacked.add(item.packed);
+    selected.push(item);
+  }
+
+  // Fallback if the pool has fewer than 2M pairwise-distinct teams: fill from remaining teams
+  if (selected.length < targetTeams) {
+    for (const item of annotated) {
+      if (selected.length >= targetTeams) break;
+      if (usedPacked.has(item.packed)) continue;
+      usedPacked.add(item.packed);
+      selected.push(item);
+    }
+  }
+
+  // Pair the selected teams into M match pairs with teamDistance >= THRESHOLD
+  const remaining = [...selected];
+  const pairs: Array<{a: (typeof annotated)[number]; b: (typeof annotated)[number]}> = [];
+
+  while (remaining.length >= 2) {
+    const a = remaining.shift()!;
+    let partnerIdx = remaining.findIndex(
+      cand => teams.teamDistance(dex, a.sets, cand.sets, defaultLevel) >= teams.THRESHOLD
+    );
+    if (partnerIdx < 0) partnerIdx = 0;
+    const [b] = remaining.splice(partnerIdx, 1);
+    pairs.push({a, b});
+  }
+
+  // 2-opt repair if any fallback pair at the tail ended up below THRESHOLD
+  for (let i = 0; i < pairs.length; i++) {
+    if (
+      teams.teamDistance(dex, pairs[i].a.sets, pairs[i].b.sets, defaultLevel) >=
+      teams.THRESHOLD
+    ) {
+      continue;
+    }
+    for (let j = 0; j < pairs.length; j++) {
+      if (i === j) continue;
+      if (
+        teams.teamDistance(dex, pairs[i].a.sets, pairs[j].b.sets, defaultLevel) >=
+          teams.THRESHOLD &&
+        teams.teamDistance(dex, pairs[j].a.sets, pairs[i].b.sets, defaultLevel) >=
+          teams.THRESHOLD
+      ) {
+        const tmp = pairs[i].b;
+        pairs[i].b = pairs[j].b;
+        pairs[j].b = tmp;
+        break;
+      }
+    }
+  }
+
+  const book: TournamentTeamPair[] = pairs.map(p => ({
+    p1Team: p.a.packed,
+    p2Team: p.b.packed,
+  }));
+
+  while (book.length > 0 && book.length < pairCount) {
+    const base = book[book.length % pairs.length];
+    book.push({p1Team: base.p1Team, p2Team: base.p2Team});
+  }
+
+  return book;
 }
 
 export class ConcurrentGame {
@@ -1207,7 +1320,14 @@ export class Coordinator {
 
         let p1TeamPacked: string | undefined;
         let p2TeamPacked: string | undefined;
-        if (toID(format).includes('random')) {
+        const pool = meta?.teamPool ?? [];
+        if ((meta?.team === 'harvested' || meta?.team === 'pools') && pool.length >= 2) {
+          p1TeamPacked = pool[0];
+          p2TeamPacked = pool.find(t => t !== p1TeamPacked) ?? pool[1];
+        } else if (
+          meta?.team === 'random' ||
+          (meta?.team === undefined && toID(format).includes('random'))
+        ) {
           const pair = sampleRandomPair(format, '1,2,3,4', '5,6,7,8');
           p1TeamPacked = pair.t1Packed;
           p2TeamPacked = pair.t2Packed;
@@ -1261,24 +1381,14 @@ export class Coordinator {
   }
 
   private samplePairForGame(
-    teamPool: readonly string[],
-    format: string,
+    lockedBook: readonly TournamentTeamPair[],
     gameIndexZeroBased: number
   ): {p1Team: string | undefined; p2Team: string | undefined; swappedSeats: boolean} {
     const pairIdx = Math.floor(gameIndexZeroBased / 2);
     const swappedSeats = gameIndexZeroBased % 2 === 1;
-    if (teamPool.length >= 2) {
-      const p1Team = teamPool[(pairIdx * 2) % teamPool.length];
-      let p2Team = teamPool[(pairIdx * 2 + 1) % teamPool.length];
-      if (p1Team === p2Team) {
-        const alt = teamPool.find(t => t !== p1Team);
-        if (alt) p2Team = alt;
-      }
-      return {p1Team, p2Team, swappedSeats};
-    }
-    if (toID(format).includes('random')) {
-      const pair = sampleRandomPair(format, this.randomPrngSeed(), this.randomPrngSeed());
-      return {p1Team: pair.t1Packed, p2Team: pair.t2Packed, swappedSeats};
+    if (lockedBook.length > 0) {
+      const pair = lockedBook[pairIdx % lockedBook.length];
+      return {p1Team: pair.p1Team, p2Team: pair.p2Team, swappedSeats};
     }
     return {p1Team: undefined, p2Team: undefined, swappedSeats};
   }
@@ -1301,6 +1411,39 @@ export class Coordinator {
     const entrantByVersion = new Map(state.entrants.map(e => [e.versionId, e]));
     const versionIds = state.entrants.map(e => e.versionId);
     const incSeconds = arena.turnIncrementSeconds(tourney.format);
+    const totalPairs = Math.max(
+      1,
+      Math.ceil(Math.max(tourney.gamesPerMatchup, this.superfinalGames) / 2)
+    );
+    let lockedBook: TournamentTeamPair[] = [];
+    if (
+      tourney.team === 'harvested' ||
+      tourney.team === 'pools' ||
+      (tourney.team === undefined && state.teamPool.length >= 2)
+    ) {
+      lockedBook = buildLockedTournamentTeamBook(
+        state.teamPool,
+        totalPairs,
+        tourney.format,
+        tourney.id
+      );
+    } else if (
+      tourney.team === 'random' ||
+      (tourney.team === undefined && toID(tourney.format).includes('random'))
+    ) {
+      lockedBook = Array.from({length: totalPairs}, () => {
+        const pair = sampleRandomPair(
+          tourney.format,
+          this.randomPrngSeed(),
+          this.randomPrngSeed()
+        );
+        return {p1Team: pair.t1Packed, p2Team: pair.t2Packed};
+      });
+    }
+    const pairSeeds: sim.PRNGSeed[] = Array.from(
+      {length: totalPairs},
+      () => this.randomPrngSeed()
+    );
 
     const rrPlayedByPair = new Map<string, number>();
     const totalGamesByVersion = new Map<number, number>(versionIds.map(v => [v, 0]));
@@ -1352,10 +1495,10 @@ export class Coordinator {
       finalTournamentStatus?: 'running' | 'completed';
     }): Promise<void> => {
       const sampled = this.samplePairForGame(
-        state.teamPool,
-        tourney.format,
+        lockedBook,
         params.gameIndexZeroBased
       );
+      const pairIdx = Math.floor(params.gameIndexZeroBased / 2);
       const p1Ent = sampled.swappedSeats ? params.entB : params.entA;
       const p2Ent = sampled.swappedSeats ? params.entA : params.entB;
       const p1Host = sampled.swappedSeats ? params.vmHostB : params.vmHostA;
@@ -1365,7 +1508,10 @@ export class Coordinator {
 
       let preemptions = 0;
       for (;;) {
-        const seed = this.randomPrngSeed();
+        const seed =
+          preemptions === 0
+            ? pairSeeds[pairIdx % pairSeeds.length]
+            : this.randomPrngSeed();
         const p1Spec = this.resolveEntrantSpec(p1Ent, p1Host, p1Ctrl);
         const p2Spec = this.resolveEntrantSpec(p2Ent, p2Host, p2Ctrl);
 

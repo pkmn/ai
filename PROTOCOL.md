@@ -8,7 +8,7 @@ Arena agents are executed as single-game subprocesses that speak Pokémon Showdo
    ```text
    |utm|<packed_team>
    ```
-   Always slice after the 5-character prefix (`line.slice(5)`) rather than splitting on `|`, because packed team strings use `|` internally as field delimiters.
+   Always slice after the 5-character prefix (`line.slice(5)`) rather than splitting on `|`, because packed team strings use `|` internally as field delimiters. In scheduled tournaments without a pre-assigned team pool (`team` unset), the arbiter sends zero lines on `stdin` before waiting for your very first `stdout` line (`/utm <packed_team>`).
 2. **Battle Events & Decision Requests (`|request|<json>`)**: As the battle progresses, the arbiter writes Showdown protocol lines to your `stdin`, ending each decision prompt with:
    ```text
    |request|{"active":[...],"side":{...}}

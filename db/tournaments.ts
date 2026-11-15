@@ -1,5 +1,6 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {TEAM_MODES, TeamMode} from './ladders';
 import {recomputeTournamentStandings} from './tournament-entrants';
 
 import {TransactionRunner} from './index';
@@ -17,6 +18,7 @@ export interface TournamentRow {
   id: string;
   name: string;
   format: string;
+  team?: TeamMode;
   rulesJson: string;
   gamesPerMatchup: number;
   batchSize: number;
@@ -31,6 +33,7 @@ export interface UpsertTournamentInput {
   id: string;
   name: string;
   format: string;
+  team?: TeamMode;
   rulesJson?: string;
   gamesPerMatchup: number;
   batchSize?: number;
@@ -45,6 +48,7 @@ interface RawTournamentRow {
   id: string;
   name: string;
   format: string;
+  team: TeamMode | null;
   rules_json: string;
   games_per_matchup: number;
   batch_size: number;
@@ -60,6 +64,7 @@ function mapTournamentRow(raw: RawTournamentRow): TournamentRow {
     id: raw.id,
     name: raw.name,
     format: raw.format,
+    team: raw.team ?? undefined,
     rulesJson: raw.rules_json,
     gamesPerMatchup: raw.games_per_matchup,
     batchSize: raw.batch_size,
@@ -72,15 +77,19 @@ function mapTournamentRow(raw: RawTournamentRow): TournamentRow {
 }
 
 export function upsertTournament(db: DatabaseSync, input: UpsertTournamentInput) {
+  if (input.team !== undefined && !TEAM_MODES.has(input.team)) {
+    throw new Error(`Invalid tournament team mode "${String(input.team)}" for "${input.id}"`);
+  }
   db.prepare(`
     INSERT INTO tournaments (
-      id, name, format, rules_json, games_per_matchup,
+      id, name, format, team, rules_json, games_per_matchup,
       batch_size, parallel_tables, hardware, status, starts_at, completed_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       format = excluded.format,
+      team = excluded.team,
       rules_json = excluded.rules_json,
       games_per_matchup = excluded.games_per_matchup,
       batch_size = excluded.batch_size,
@@ -93,6 +102,7 @@ export function upsertTournament(db: DatabaseSync, input: UpsertTournamentInput)
     input.id,
     input.name,
     input.format,
+    input.team ?? null,
     input.rulesJson ?? '[]',
     input.gamesPerMatchup,
     input.batchSize ?? 10,

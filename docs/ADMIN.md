@@ -413,6 +413,7 @@ teams and `.log` replays).
 npm run pkmn -- create-tournament 3 \
   --name "Tournament #3: VGC 2026 Reg M-D OTS BO3" \
   --format gen9championsvgc2026regmd \
+  --team pools \
   --rules '["Open Team Sheets","Best-of-3"]' \
   --games 50 \
   --batch 10 \
@@ -421,9 +422,12 @@ npm run pkmn -- create-tournament 3 \
   --status scheduled
 ```
 
-This creates `/arena/tournaments/3/`, lists the event under **Tournaments** on `/arena/`, and
-exposes the tournament checkbox on `/account/` for all registered (`Pending` and `qualified`)
-projects.
+Pass `--team harvested`, `--team pools`, or `--team random` when the tournament deals teams from a
+pre-assigned pool (using a Common Random Numbers locked $2M$-team book across all Round-Robin
+pairings), or omit `--team` when entrants supply their own team via `/utm <packed_team>` on their
+first `stdout` line. This creates `/arena/tournaments/3/`, lists the event under **Tournaments** on
+`/arena/`, and exposes the tournament checkbox on `/account/` for all registered (`Pending` and
+`qualified`) projects.
 
 ### Step 7.2: Seed Entrants & Bake the Custom Machine Image
 

@@ -131,7 +131,7 @@ submit mikumiku 0.9.2 adv=1330 rand=1330 vgc=1330 \
 
 # 8. Championship Tournaments (#1 Completed + Archive, #2 Running + Broadcast, #3 Scheduled)
 time now-90d
-tournament create 1 --name "Tournament #1: Gen 9 OU" --format gen9ou \
+tournament create 1 --name "Tournament #1: Gen 9 OU" --format gen9ou --team harvested \
   --games 8 --tables 2 --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now-90d
 tournament enter 1 \
   mews-truck@1.0.0=1820 \

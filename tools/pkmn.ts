@@ -47,8 +47,8 @@ const USAGE = [
     '[--smogon <username.id|id|username>] [--projects <path>] [--offline]',
   '  sync-projects [--projects <path>] [--offline]',
   '  create-tournament <id> --name "..." --format <format> --starts <iso|unix> ' +
-    '[--games <n>] [--batch <n>] [--tables <n>] [--hardware "..."] [--rules \'<json>\'] ' +
-    '[--status <scheduled|running|completed>]',
+    '[--team <harvested|random|pools>] [--games <n>] [--batch <n>] [--tables <n>] ' +
+    '[--hardware "..."] [--rules \'<json>\'] [--status <scheduled|running|completed>]',
   '  set-tournament-status <id> <scheduled|running|completed>',
   '  seed-tournament <id>',
   '  publish-tournament-archive <id> <archive.7z>',
@@ -358,14 +358,23 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!tourneyId || !name || !format || !startsRaw) {
           throw new Error(
             'Usage: pkmn create-tournament <id> --name "..." --format <format> ' +
-            '--starts <iso|unix> [--games <n>] [--batch <n>] [--tables <n>] ' +
-            '[--hardware "..."] [--rules \'<json>\'] [--status <scheduled|running|completed>]'
+            '--starts <iso|unix> [--team <harvested|random|pools>] [--games <n>] ' +
+            '[--batch <n>] [--tables <n>] [--hardware "..."] [--rules \'<json>\'] ' +
+            '[--status <scheduled|running|completed>]'
           );
         }
         if (!TOURNAMENT_ID_RE.test(tourneyId)) {
           throw new Error(
             `Invalid tournament ID "${tourneyId}" (must match ^[a-z0-9][a-z0-9-]{0,31}$)`
           );
+        }
+        const rawTeam = flags.get('team');
+        let team: db.TeamMode | undefined;
+        if (rawTeam !== undefined && rawTeam !== 'custom') {
+          if (!db.TEAM_MODES.has(rawTeam as db.TeamMode)) {
+            throw new Error('--team must be harvested, random, pools, or custom');
+          }
+          team = rawTeam as db.TeamMode;
         }
         ensureSimConfigured();
         const dexFormat = Dex.formats.get(format);
@@ -405,6 +414,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           id: tourneyId,
           name,
           format,
+          team,
           rulesJson: JSON.stringify(parsedRules),
           gamesPerMatchup,
           batchSize,

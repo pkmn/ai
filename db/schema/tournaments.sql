@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS tournaments (
   name TEXT NOT NULL,
   -- @pkmn/sim format ID played in this tournament (e.g. 'gen9championsvgc2026regmc').
   format TEXT NOT NULL,
+  -- Optional Arena-assigned team mode ('harvested', 'random', or 'pools'); NULL when entrants
+  -- supply their own teams via `/utm <packed_team>` on their first stdout line.
+  team TEXT CHECK (team IN ('harvested', 'random', 'pools')),
   -- JSON array of additional @pkmn/sim custom rule strings applied on top of `format`.
   rules_json TEXT NOT NULL DEFAULT '[]',
   -- Total head-to-head games scheduled per entrant pair across the Round Robin stage.

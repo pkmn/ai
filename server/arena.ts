@@ -227,6 +227,7 @@ export interface TournamentDocument {
   id: string;
   name: string;
   format: string;
+  team?: db.TeamMode;
   rules: string[];
   status: db.TournamentStatus;
   gamesPerMatchup: number;
@@ -298,6 +299,34 @@ export function resolveTournamentArchive(
     if (fs.existsSync(c.diskPath)) return {name: c.name, href: c.href};
   }
   return undefined;
+}
+
+export function resolveTournamentTeamPool(
+  db: db.Database,
+  tournament: Pick<db.TournamentRow, 'format' | 'team'>
+): string[] {
+  if (tournament.team !== 'harvested' && tournament.team !== 'pools') return [];
+  const allLadders = db.getLadders().filter(l => l.format === tournament.format);
+  const matchingLadder =
+    allLadders.find(l => l.team === tournament.team && l.status !== 'archived') ??
+    allLadders.find(l => l.team === tournament.team) ??
+    allLadders.find(l => l.status !== 'archived') ??
+    allLadders[0];
+  if (!matchingLadder) return [];
+  if (tournament.team === 'harvested') {
+    return db.getLadderTeams(matchingLadder.id);
+  }
+  const seen = new Set<string>();
+  const pool: string[] = [];
+  for (const r of db.getActiveRosterForLadder(matchingLadder.id)) {
+    for (const t of r.teams) {
+      if (!seen.has(t.packed)) {
+        seen.add(t.packed);
+        pool.push(t.packed);
+      }
+    }
+  }
+  return pool.length > 0 ? pool : db.getLadderTeams(matchingLadder.id);
 }
 
 export function listTournamentLogFiles(publicDir: string, tournamentId: string): Set<string> {
@@ -411,6 +440,7 @@ export function buildTournamentDocument(
     id: tournament.id,
     name: tournament.name,
     format: tournament.format,
+    ...(tournament.team ? {team: tournament.team} : {}),
     rules,
     status: tournament.status,
     gamesPerMatchup: tournament.gamesPerMatchup,
@@ -580,6 +610,8 @@ export interface PendingTournament {
   id: string;
   name: string;
   format: string;
+  team?: db.TeamMode;
+  teamPool?: string[];
   rulesJson: string;
   status: db.TournamentStatus;
   startsAt: number;
@@ -700,6 +732,7 @@ export interface TournamentStateResponse {
     id: string;
     name: string;
     format: string;
+    team?: db.TeamMode;
     customRules: string[];
     gamesPerMatchup: number;
     batchSize: number;
@@ -1720,14 +1753,19 @@ export function register(app: polka.Polka, options: Options): Handle {
       }));
       const tournaments = db.getTournaments()
         .filter(t => t.status !== 'completed')
-        .map(t => ({
-          id: t.id,
-          name: t.name,
-          format: t.format,
-          rulesJson: t.rulesJson,
-          status: t.status,
-          startsAt: t.startsAt,
-        }));
+        .map(t => {
+          const teamPool = resolveTournamentTeamPool(db, t);
+          return {
+            id: t.id,
+            name: t.name,
+            format: t.format,
+            ...(t.team ? {team: t.team} : {}),
+            ...(teamPool.length > 0 ? {teamPool} : {}),
+            rulesJson: t.rulesJson,
+            status: t.status,
+            startsAt: t.startsAt,
+          };
+        });
       const sessionSecret = getSessionSecret();
       const rawPending = db.getPendingSubmissions().filter(sub => {
         if (targetFilter === 'ladder') return sub.ladders.length > 0;
@@ -2787,31 +2825,14 @@ export function register(app: polka.Polka, options: Options): Handle {
       ...(g.endReason !== undefined ? {endReason: g.endReason} : {}),
     }));
 
-    let teamPool: string[] = [];
-    const matchingLadder = db.getLadders().find(
-      l => l.format === tournament.format && l.status !== 'archived'
-    ) ?? db.getLadders().find(l => l.format === tournament.format);
-    if (matchingLadder) {
-      if (matchingLadder.team === 'harvested') {
-        teamPool = db.getLadderTeams(matchingLadder.id);
-      } else if (matchingLadder.team === 'pools') {
-        const seen = new Set<string>();
-        for (const r of db.getActiveRosterForLadder(matchingLadder.id)) {
-          for (const t of r.teams) {
-            if (!seen.has(t.packed)) {
-              seen.add(t.packed);
-              teamPool.push(t.packed);
-            }
-          }
-        }
-      }
-    }
+    const teamPool = resolveTournamentTeamPool(db, tournament);
 
     sendJson(res, 200, {
       tournament: {
         id: tournament.id,
         name: tournament.name,
         format: tournament.format,
+        ...(tournament.team ? {team: tournament.team} : {}),
         customRules,
         gamesPerMatchup: tournament.gamesPerMatchup,
         batchSize: tournament.batchSize,

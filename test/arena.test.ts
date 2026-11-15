@@ -1659,6 +1659,21 @@ describe('arena infrastructure', () => {
         startingGameIndex: 0,
       });
     });
+
+    test('buildLockedTournamentTeamBook selects pairwise-distinct teams via teamDistance', () => {
+      const teamOneVariant = TEAM_ONE.replace('thunderbolt', 'discharge');
+      const book = tournament.buildLockedTournamentTeamBook(
+        [TEAM_ONE, teamOneVariant, TEAM_TWO, OU_TEAM_ONE],
+        1,
+        'gen9ou',
+        '7'
+      );
+      expect(book).toHaveLength(1);
+      expect(book[0].p1Team).not.toBe(book[0].p2Team);
+      // Either TEAM_ONE or teamOneVariant (1 move diff < THRESHOLD 1.30) is skipped on Pass 1
+      expect([book[0].p1Team, book[0].p2Team]).not.toEqual([TEAM_ONE, teamOneVariant]);
+      expect([book[0].p1Team, book[0].p2Team]).not.toEqual([teamOneVariant, TEAM_ONE]);
+    });
   });
 
   describe('Coordinator', () => {
@@ -2371,6 +2386,50 @@ describe('arena infrastructure', () => {
         expect(db.getTournamentEntrants('9').map(e => e.finalRank)).toEqual([1, 2, 3]);
         const tourLogDir = path.join(publicDir, 'arena', 'tournaments', '9');
         expect(fs.readdirSync(tourLogDir).filter(f => f.endsWith('.log'))).toHaveLength(8);
+
+        // Verify a harvested tournament locks the identical CRN team pair across all RR pairings
+        db.syncLaddersFromYaml([
+          '- name: SV',
+          '  id: gen9customgame',
+          '  format: gen9customgame',
+          '  team: harvested',
+          '  status: active',
+          '  min: 2',
+        ].join('\n'));
+        db.replaceLadderTeams('gen9customgame', [TEAM_ONE, TEAM_TWO]);
+        db.upsertTournament({
+          id: '10',
+          name: 'Tournament #10',
+          format: 'gen9customgame',
+          team: 'harvested',
+          gamesPerMatchup: 2,
+          batchSize: 2,
+          parallelTables: 2,
+          hardware: 'GCP L4',
+          status: 'scheduled',
+          startsAt: Math.floor(Date.now() / 1000) + 86400 * 7,
+        });
+        for (const [idx, slug] of ['0-error', 'foul-play', 'mews-truck'].entries()) {
+          const ag = db.getAgentBySlug(slug)!;
+          db.createSubmission({
+            agentId: ag.id,
+            version: '3.0.0-t10',
+            package: 'oci',
+            url: `ghcr.io/pkmn/${slug}:3.0.0-t10`,
+            sha256: String(idx + 6).repeat(64),
+            ladderIds: [],
+            tournamentIds: ['10'],
+          });
+        }
+        expect(await tourCoord.processPendingSubmissions('10')).toBe(3);
+        db.seedTournamentEntrants('10');
+        await tourCoord.runTournament('10');
+        const t10Games = db.getTournamentGames('10').filter(g => g.stage === 'Round Robin');
+        expect(t10Games).toHaveLength(6);
+        const oddSeeds = new Set(t10Games.filter(g => g.matchupGame === 1).map(g => g.seed));
+        const evenSeeds = new Set(t10Games.filter(g => g.matchupGame === 2).map(g => g.seed));
+        expect(oddSeeds.size).toBe(1);
+        expect(evenSeeds).toEqual(oddSeeds);
       });
     });
 
