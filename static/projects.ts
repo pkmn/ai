@@ -286,45 +286,44 @@ export function page(
       ${style}`,
     header: header('Projects'),
     content: buf.join(''),
-    script:
-    `document.addEventListener('DOMContentLoaded', () => {
-        document.getElementsByTagName('nav')[0].classList.remove('hide');
-        const projects = document.getElementsByClassName('project');
-        const radios = document.querySelectorAll('input[name="radio"]');
-        const applyFilter = mode => {
-          for (let j = 0; j < projects.length; j++) {
-            let hide = false;
-            if (mode === 'active') hide = !projects[j].dataset.active;
-            else if (mode === 'arena') hide = !projects[j].dataset.arena;
-            else if (mode === 'inactive') hide = Boolean(projects[j].dataset.active);
-            projects[j].classList.toggle('hide', hide);
-          }
-        };
-
-        for (let i = 0; i < radios.length; i++) {
-          radios[i].addEventListener('click', () => applyFilter(radios[i].id));
+    script: `document.addEventListener('DOMContentLoaded', () => {
+      document.getElementsByTagName('nav')[0].classList.remove('hide');
+      const projects = document.getElementsByClassName('project');
+      const radios = document.querySelectorAll('input[name="radio"]');
+      const applyFilter = mode => {
+        for (let j = 0; j < projects.length; j++) {
+          let hide = false;
+          if (mode === 'active') hide = !projects[j].dataset.active;
+          else if (mode === 'arena') hide = !projects[j].dataset.arena;
+          else if (mode === 'inactive') hide = Boolean(projects[j].dataset.active);
+          projects[j].classList.toggle('hide', hide);
         }
+      };
 
-        const checkHash = () => {
-          if (!location.hash) return;
-          const raw = decodeURIComponent(location.hash.slice(1));
-          let el = document.getElementById(raw);
-          if (!el) {
-            const slug = raw.toLowerCase();
-            for (let k = 0; k < projects.length; k++) {
-              if (projects[k].dataset.slug === slug) {
-                el = projects[k];
-                break;
-              }
+      for (let i = 0; i < radios.length; i++) {
+        radios[i].addEventListener('click', () => applyFilter(radios[i].id));
+      }
+
+      const checkHash = () => {
+        if (!location.hash) return;
+        const raw = decodeURIComponent(location.hash.slice(1));
+        let el = document.getElementById(raw);
+        if (!el) {
+          const slug = raw.toLowerCase();
+          for (let k = 0; k < projects.length; k++) {
+            if (projects[k].dataset.slug === slug) {
+              el = projects[k];
+              break;
             }
           }
-          if (el && el.classList.contains('project')) {
-            el.classList.remove('hide');
-            el.scrollIntoView();
-          }
-        };
-        window.addEventListener('hashchange', checkHash);
-        checkHash();
-      });`,
+        }
+        if (el && el.classList.contains('project')) {
+          el.classList.remove('hide');
+          el.scrollIntoView();
+        }
+      };
+      window.addEventListener('hashchange', checkHash);
+      checkHash();
+    });`,
   };
 }
