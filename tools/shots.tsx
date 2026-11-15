@@ -36,6 +36,7 @@ const PUBLIC = root('public');
 const SHOTS_DIR = root('.shots');
 export const BASELINE_DIR = path.join(SHOTS_DIR, 'baseline');
 export const DIFF_DIR = path.join(SHOTS_DIR, 'diff');
+export const CACHE_DIR = path.join(SHOTS_DIR, 'cache');
 export const GALLERY_FILE = path.join(SHOTS_DIR, 'index.html');
 const SHOTS_CSS = fs.readFileSync(root('tools', 'shots.css'), 'utf8');
 
@@ -1757,77 +1758,96 @@ export function decodePng(buf: Buffer): PngImage {
   return {width, height, data: rgba};
 }
 
-const spriteCache = new Map<string, Buffer>();
+const EXTERNAL_HOSTS = new Set(['www.smogon.com', 'play.pokemonshowdown.com']);
+const externalAssetCache = new Map<
+  string,
+  Promise<{contentType: string; body: Buffer} | undefined>
+>();
 
-export function standInSprite(urlPath: string): Buffer {
-  const cached = spriteCache.get(urlPath);
+function contentTypeForPath(pathname: string): string {
+  switch (path.extname(pathname).toLowerCase()) {
+    case '.png':
+      return 'image/png';
+    case '.gif':
+      return 'image/gif';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.svg':
+      return 'image/svg+xml';
+    case '.js':
+      return 'application/javascript; charset=utf-8';
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.mp3':
+      return 'audio/mpeg';
+    case '.ogg':
+      return 'audio/ogg';
+    case '.woff2':
+      return 'font/woff2';
+    case '.woff':
+      return 'font/woff';
+    case '.ttf':
+      return 'font/ttf';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+export function fetchExternalAsset(
+  url: URL,
+  cacheDir = CACHE_DIR
+): Promise<{contentType: string; body: Buffer} | undefined> {
+  if (!EXTERNAL_HOSTS.has(url.hostname)) return Promise.resolve(undefined);
+  const key = `${cacheDir}:${url.origin}${url.pathname}`;
+  const cached = externalAssetCache.get(key);
   if (cached) return cached;
 
-  const isBattleSprite = urlPath.includes('/sprites/');
-  const width = isBattleSprite ? 96 : 40;
-  const height = isBattleSprite ? 96 : 30;
+  const load = async (): Promise<{contentType: string; body: Buffer} | undefined> => {
+    const relPath = path.posix.normalize(url.pathname).replace(/^\/+/, '');
+    const hostRoot = path.resolve(cacheDir, url.hostname);
+    const diskPath = path.resolve(hostRoot, relPath);
+    const safeDisk = diskPath.startsWith(`${hostRoot}${path.sep}`);
 
-  let hash = 2166136261;
-  for (let i = 0; i < urlPath.length; i++) {
-    hash = Math.imul(hash ^ urlPath.charCodeAt(i), 16777619) >>> 0;
-  }
-  const primary = [70 + (hash & 0x9f), 70 + ((hash >>> 8) & 0x9f), 70 + ((hash >>> 16) & 0x9f)];
-  const accent = [
-    90 + ((hash >>> 4) & 0x7f),
-    90 + ((hash >>> 12) & 0x7f),
-    90 + ((hash >>> 20) & 0x7f),
-  ];
-  const border = [24, 28, 36];
+    if (safeDisk && fs.existsSync(diskPath) && fs.statSync(diskPath).isFile()) {
+      return {
+        contentType: contentTypeForPath(url.pathname),
+        body: await fsp.readFile(diskPath),
+      };
+    }
 
-  const data = Buffer.alloc(width * height * 4);
-  const gridCols = 8;
-  const gridRows = 6;
-  const cellW = isBattleSprite ? 10 : 2;
-  const cellH = isBattleSprite ? 10 : 2;
-  const padX = Math.floor((width - gridCols * cellW) / 2);
-  const padY = Math.floor((height - gridRows * cellH) / 2);
-
-  const filled = (gx: number, gy: number): number => {
-    if (gx < 0 || gx >= gridCols || gy < 0 || gy >= gridRows) return 0;
-    const mx = gx < 4 ? gx : 7 - gx;
-    if (mx === 3 && gy >= 1 && gy <= 4) return 1;
-    const bit = (gy * 4 + mx) % 31;
-    return ((hash >>> bit) & 1) === 1 ? ((gy + mx) % 2 === 0 ? 1 : 2) : 0;
+    try {
+      let res = await fetch(url.toString());
+      if (!res.ok && url.hostname === 'play.pokemonshowdown.com') {
+        const fallbackMatch = /^(\/sprites\/[^/]+\/)([a-z0-9]+)-[^/.]+(\.[a-z]+)$/.exec(
+          url.pathname
+        );
+        if (fallbackMatch) {
+          const fallbackUrl = new URL(
+            `${fallbackMatch[1]}${fallbackMatch[2]}${fallbackMatch[3]}`,
+            url.origin
+          );
+          res = await fetch(fallbackUrl.toString());
+        }
+      }
+      if (!res.ok) return undefined;
+      const body = Buffer.from(await res.arrayBuffer());
+      const contentType = res.headers.get('content-type') ?? contentTypeForPath(url.pathname);
+      if (safeDisk) {
+        await fsp.mkdir(path.dirname(diskPath), {recursive: true});
+        const tmpPath = `${diskPath}.tmp.${process.pid}.${Date.now()}`;
+        await fsp.writeFile(tmpPath, body);
+        await fsp.rename(tmpPath, diskPath);
+      }
+      return {contentType, body};
+    } catch {
+      return undefined;
+    }
   };
 
-  for (let y = 0; y < height; y++) {
-    const gy = Math.floor((y - padY) / cellH);
-    const inY = y >= padY && y < padY + gridRows * cellH;
-    for (let x = 0; x < width; x++) {
-      const gx = Math.floor((x - padX) / cellW);
-      const inX = x >= padX && x < padX + gridCols * cellW;
-      const px = (y * width + x) * 4;
-      const cell = inX && inY ? filled(gx, gy) : 0;
-      if (cell > 0) {
-        const col = cell === 1 ? primary : accent;
-        data[px] = col[0];
-        data[px + 1] = col[1];
-        data[px + 2] = col[2];
-        data[px + 3] = 255;
-      } else if (
-        inX &&
-        inY &&
-        (filled(gx - 1, gy) > 0 ||
-          filled(gx + 1, gy) > 0 ||
-          filled(gx, gy - 1) > 0 ||
-          filled(gx, gy + 1) > 0)
-      ) {
-        data[px] = border[0];
-        data[px + 1] = border[1];
-        data[px + 2] = border[2];
-        data[px + 3] = 255;
-      }
-    }
-  }
-
-  const png = encodePng({width, height, data});
-  spriteCache.set(urlPath, png);
-  return png;
+  const promise = load();
+  externalAssetCache.set(key, promise);
+  return promise;
 }
 
 export function diffPngImages(a: PngImage, b: PngImage): {image: PngImage; count: number} {
@@ -1880,7 +1900,10 @@ function listPngsRelative(baseDir: string): string[] {
   const results: string[] = [];
   const walk = (dir: string, relPrefix: string) => {
     for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
-      if (relPrefix === '' && (entry.name === 'baseline' || entry.name === 'diff')) {
+      if (
+        relPrefix === '' &&
+        (entry.name === 'baseline' || entry.name === 'diff' || entry.name === 'cache')
+      ) {
         continue;
       }
       const rel = relPrefix ? path.join(relPrefix, entry.name) : entry.name;
@@ -2803,13 +2826,17 @@ export function renderGalleryHtml(
 async function serve(route: Route, fixture: Fixture, cookie: string): Promise<void> {
   const url = new URL(route.request().url());
   if (url.origin !== ORIGIN) {
-    if (url.pathname.endsWith('.png')) {
-      await route.fulfill({
-        status: 200,
-        contentType: 'image/png',
-        body: standInSprite(url.pathname),
-      });
-      return;
+    if (EXTERNAL_HOSTS.has(url.hostname)) {
+      const asset = await fetchExternalAsset(url);
+      if (asset) {
+        await route.fulfill({
+          status: 200,
+          contentType: asset.contentType,
+          headers: {'access-control-allow-origin': '*'},
+          body: asset.body,
+        });
+        return;
+      }
     }
     await route.fulfill({status: 204, body: ''});
     return;
@@ -2922,6 +2949,68 @@ async function createSlotWorkers(browser: Browser, fixture: Fixture): Promise<Sl
   return workers;
 }
 
+const WAIT_IMAGES_EXPR = `(async () => {
+  for (const image of document.querySelectorAll("img")) image.loading = "eager";
+  await document.fonts.ready;
+  const pending = [...document.images].filter((image) => !image.complete);
+  await Promise.all(
+    pending.map((image) => new Promise((done) => (image.onload = image.onerror = done)))
+  );
+  const bgUrls = new Set();
+  for (const el of document.querySelectorAll('[style*="url("]')) {
+    const m = /url\\(["']?([^"')]+)["']?\\)/.exec(el.getAttribute("style") || "");
+    if (m && m[1]) bgUrls.add(m[1]);
+  }
+  await Promise.all(
+    [...bgUrls].map(
+      (src) =>
+        new Promise((done) => {
+          const img = new Image();
+          img.onload = img.onerror = done;
+          img.src = src;
+        })
+    )
+  );
+})()`;
+
+async function waitForViewerFrames(page: Page): Promise<void> {
+  const handles = await page.locator('iframe.viewer-frame').elementHandles();
+  for (const handle of handles) {
+    const info = await handle.evaluate((el: Element) => {
+      const rect = el.getBoundingClientRect();
+      const visible = rect.width > 0 && rect.height > 0;
+      const isLiveFrame = el.id === 'ps-viewer-frame';
+      const checked = document.querySelector<HTMLInputElement>(
+        '#table-nav-wrap input[type="radio"]:checked'
+      );
+      const label = checked
+        ? document.querySelector(`label[for="${checked.id}"]`)
+        : undefined;
+      const isIdleTable = Boolean(
+        isLiveFrame && label?.textContent?.includes('(idle)')
+      );
+      return {visible, isIdleTable};
+    });
+    if (!info.visible) continue;
+    await handle.scrollIntoViewIfNeeded();
+    const frame = await handle.contentFrame();
+    if (!frame) continue;
+    await frame.waitForFunction(
+      expectIdle => {
+        const status = document.getElementById('status');
+        if (!status) return false;
+        if (status.textContent === 'Loading battle viewer…') return false;
+        if (expectIdle) return status.textContent === 'Waiting for battle…';
+        return status.hidden && Boolean(document.querySelector('#battle .innerbattle'));
+      },
+      info.isIdleTable,
+      {timeout: 10000}
+    );
+    await frame.evaluate(WAIT_IMAGES_EXPR);
+    await page.waitForTimeout(50);
+  }
+}
+
 async function shootWithWorker(
   worker: SlotWorker,
   scenario: Scenario,
@@ -2938,26 +3027,21 @@ async function shootWithWorker(
 
   const {page} = worker;
   await page.goto(scenario.path);
+  await page.evaluate(WAIT_IMAGES_EXPR);
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(SETTLE_MILLIS);
   if (scenario.click) {
     await page.click(scenario.click);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load');
     await page.waitForTimeout(SETTLE_MILLIS);
   }
   if (scenario.act) {
     await scenario.act(page, fixture);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load');
     await page.waitForTimeout(SETTLE_MILLIS);
   }
-  await page.evaluate(`(async () => {
-    for (const image of document.querySelectorAll("img")) image.loading = "eager";
-    await document.fonts.ready;
-    const pending = [...document.images].filter((image) => !image.complete);
-    await Promise.all(
-      pending.map((image) => new Promise((done) => (image.onload = image.onerror = done)))
-    );
-  })()`);
+  await waitForViewerFrames(page);
+  await page.evaluate(WAIT_IMAGES_EXPR);
   await page.evaluate('window.scrollTo(0, 0)');
   await page.waitForTimeout(SETTLE_MILLIS / 2);
   const overflow = await page.evaluate<number>(

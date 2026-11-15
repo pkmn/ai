@@ -3382,7 +3382,7 @@ export function renderBattlesPage(opts: {
               className='viewer-frame'
               src='/arena/viewer/'
               title='Pokémon Showdown battle viewer'
-              sandbox='allow-scripts'
+              sandbox='allow-scripts allow-same-origin'
             />
           </div>
         </div>

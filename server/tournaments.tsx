@@ -287,6 +287,18 @@ const VIEWER_SCRIPT = `
         p1: isLines(msg.p1Lines) ? msg.p1Lines.filter(readable) : fallback.slice(),
         p2: isLines(msg.p2Lines) ? msg.p2Lines.filter(readable) : fallback.slice(),
       };
+      if (sideLines.p1.length === 0 && sideLines.p2.length === 0) {
+        battle = null;
+        el.start.hidden = true;
+        for (const control of el.controls.querySelectorAll('button, select')) {
+          control.disabled = true;
+        }
+        el.turn.textContent = '';
+        el.live.hidden = true;
+        showStatus('Waiting for battle…');
+        notifyApp({type: 'playback', state: 'waiting'});
+        return;
+      }
       sidePokemon = {
         p1: Array.isArray(msg.p1Pokemon)
           ? msg.p1Pokemon
@@ -295,9 +307,16 @@ const VIEWER_SCRIPT = `
           ? msg.p2Pokemon
           : (currentSide === 'p2' && Array.isArray(msg.pokemon) ? msg.pokemon : null),
       };
+      let hash = 0;
+      for (const line of sideLines.p1) {
+        for (let i = 0; i < line.length; i++) {
+          hash = ((hash << 5) - hash + line.charCodeAt(i)) | 0;
+        }
+      }
+      const battleId = 'battle-' + ((Math.abs(hash) % 999999) + 1);
       window.BattleSound.setMute(muted);
       battle = new window.Battle({
-        id: '',
+        id: battleId,
         $frame: window.$(el.battle),
         $logFrame: window.$(el.log),
         log: sideLines[currentSide].slice(),
@@ -368,6 +387,20 @@ const VIEWER_SCRIPT = `
         showStatus('Battle viewer unavailable offline.');
         notifyApp({type: 'error', message: 'init'});
         return;
+      }
+      if (window.Dex) {
+        window.Dex.resourcePrefix = ASSETS + '/';
+        window.Dex.fxPrefix = ASSETS + '/fx/';
+      }
+      if (window.BattleEffects) {
+        for (const fx of Object.values(window.BattleEffects)) {
+          if (fx && typeof fx.url === 'string' && fx.url.startsWith('//')) {
+            fx.url = 'https:' + fx.url;
+          }
+        }
+      }
+      if (window.BattleScene && window.BattleScene.prototype) {
+        window.BattleScene.prototype.preloadEffects = () => {};
       }
 
       showStatus('Waiting for battle…');
@@ -548,7 +581,7 @@ function renderBroadcastSectionHtml(
             className='viewer-frame'
             src='/arena/viewer/'
             title='Pokémon Showdown battle viewer'
-            sandbox='allow-scripts'
+            sandbox='allow-scripts allow-same-origin'
           />
         </div>
       </div>

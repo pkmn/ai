@@ -522,7 +522,7 @@ export function normalizeLiveBroadcast(
     const tableNum = tb.table ?? idx + 1;
     const isPrimaryFallback = idx === 0 && !tb.p1 && !tb.lines;
     const lines = tb.lines ? tb.lines.slice() : (isPrimaryFallback ? raw.lines.slice() : []);
-    const persp = tb.p1Lines && tb.p2Lines
+    const persp = tb.p1Lines && tb.p2Lines && (tb.lines === undefined || lines.length > 0)
       ? {p1Lines: tb.p1Lines.slice(), p2Lines: tb.p2Lines.slice()}
       : extractPerspectiveLogs(lines);
     return {

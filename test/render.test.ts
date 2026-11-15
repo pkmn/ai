@@ -1089,7 +1089,7 @@ describe('tournament SSR views', () => {
     expect(tourney2Html).toContain('01:52');
     expect(tourney2Html).toContain('thinking…');
     expect(tourney2Html).toContain('src="/arena/viewer/"');
-    expect(tourney2Html).toContain('sandbox="allow-scripts"');
+    expect(tourney2Html).toContain('sandbox="allow-scripts allow-same-origin"');
     expect(tourney2Html).toContain('data-live-table="1"');
   });
 
@@ -1783,20 +1783,36 @@ describe('JSON route parity & retired pool archives', () => {
     }
   });
 
-  test('standInSprite generates deterministic non-transparent species minisprites', () => {
-    const pikachu = shots.standInSprite('/forums/media/minisprites/pikachu.png');
-    const charizard = shots.standInSprite('/forums/media/minisprites/charizard.png');
-    expect(pikachu.equals(shots.standInSprite('/forums/media/minisprites/pikachu.png'))).toBe(true);
-    expect(pikachu.equals(charizard)).toBe(false);
+  test('fetchExternalAsset serves cached assets from disk', async () => {
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-shots-cache-'));
+    try {
+      const spriteFile = path.join(
+        cacheDir,
+        'www.smogon.com',
+        'forums',
+        'media',
+        'minisprites',
+        'pikachu.png'
+      );
+      fs.mkdirSync(path.dirname(spriteFile), {recursive: true});
+      const expected = shots.encodePng({width: 4, height: 4, data: Buffer.alloc(4 * 4 * 4, 255)});
+      fs.writeFileSync(spriteFile, expected);
 
-    const decoded = shots.decodePng(pikachu);
-    expect(decoded.width).toBe(40);
-    expect(decoded.height).toBe(30);
-    let opaquePixels = 0;
-    for (let i = 3; i < decoded.data.length; i += 4) {
-      if (decoded.data[i] === 255) opaquePixels++;
+      const hit = await shots.fetchExternalAsset(
+        new URL('https://www.smogon.com/forums/media/minisprites/pikachu.png'),
+        cacheDir
+      );
+      expect(hit?.contentType).toBe('image/png');
+      expect(hit?.body.equals(expected)).toBe(true);
+
+      const blocked = await shots.fetchExternalAsset(
+        new URL('https://example.com/forums/media/minisprites/pikachu.png'),
+        cacheDir
+      );
+      expect(blocked).toBeUndefined();
+    } finally {
+      fs.rmSync(cacheDir, {recursive: true, force: true});
     }
-    expect(opaquePixels).toBeGreaterThan(20);
   });
 
   test('diffPngImages highlights modified pixels in red over a faded backdrop', () => {
