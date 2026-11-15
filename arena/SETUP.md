@@ -94,8 +94,9 @@ sudo scutil --set HostName arena
 sudo scutil --set LocalHostName arena
 sudo scutil --set ComputerName arena
 
-# 2. Enable Remote Login (sshd)
+# 2. Enable Remote Login (sshd) and disable headless idle sleep immediately
 sudo systemsetup -setremotelogin on
+sudo pmset -a sleep 0 disksleep 0 displaysleep 0 autorestart 1 disablesleep 1
 
 # 3. Print the Mac mini's LAN IP address
 ipconfig getifaddr en0 || ipconfig getifaddr en1
@@ -319,29 +320,30 @@ Host arena
 
 1. **Verify `ai.pkmn.tunnel` is running on the Mac mini:**
    ```sh
-   ssh pkmn@arena.local 'sudo launchctl print system/ai.pkmn.tunnel | grep -E "state =|pid =" && cat /opt/arena/logs/tunnel.err'
+   ssh pkmn@arena.local 'launchctl print system/ai.pkmn.tunnel | grep -E "state =|pid =" && cat /opt/arena/logs/tunnel.err'
    ```
    *Expected:* `state = running`, a live `pid = ...`, and no errors in `tunnel.err` (only the
    initial `Permanently added 'pkmn.ai' (ED25519) to the list of known hosts` notice).
 
 2. **Verify `127.0.0.1:2222` is listening on `pkmn.ai`:**
    ```sh
-   ssh pkmn@pkmn.ai 'sudo ss -tlnp | grep ":2222"'
+   ssh pkmn@pkmn.ai 'ss -tln | grep ":2222"'
    ```
-   *Expected:* `LISTEN 0 128 127.0.0.1:2222 0.0.0.0:* users:(("sshd",...))`
+   *Expected:* `LISTEN 0 128 127.0.0.1:2222 0.0.0.0:*`
 
 3. **Verify inbound reverse SSH tunnel (`laptop -> pkmn.ai:2222 -> arena:22`):**
    ```sh
-   ssh arena 'scutil --get HostName && whoami && uname -m'
+   ssh -o StrictHostKeyChecking=accept-new arena 'scutil --get HostName && whoami && uname -m'
    ```
-   *Expected:* `arena`, `pkmn`, `arm64` (you may be prompted once to accept the Mac mini's host key
-   for `[127.0.0.1]:2222`).
+   *Expected:* `arena`, `pkmn`, `arm64`.
 
 4. **Verify outbound local port forward (`arena:1234 -> pkmn.ai:1234`):**
    ```sh
-   ssh arena 'curl -fsS http://127.0.0.1:1234/arena.json | head -c 160 && echo'
+   ssh arena 'curl -fsS -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:1234/'
    ```
-   *Expected:* JSON output beginning with `{"ladders":[...` from `pkmn.ai-server`.
+   *Expected:* `HTTP 200` from `pkmn.ai-server` (and once `pkmn.ai` is deployed with the Arena
+   routes via `npm run deploy`, `ssh arena 'curl -fsS http://127.0.0.1:1234/arena.json | head -c 160 && echo'`
+   returns `{"ladders":[...`).
 
 5. **Verify tunnel lockdown (shell and unauthorized port forwarding rejected):**
    ```sh
@@ -372,10 +374,10 @@ If the external 1 TB SSD is plugged into the Mac mini, format it as a dedicated 
 ssh arena 'diskutil list external physical'
 
 # 2. Format the external disk as APFS named "Archive" (replace diskX with the external disk identifier, e.g. disk4)
-ssh arena 'sudo diskutil eraseDisk APFS Archive GPT /dev/diskX'
+ssh -t arena 'sudo diskutil eraseDisk APFS Archive GPT /dev/diskX'
 
 # 3. Create archive subdirectories and disable Spotlight indexing on the external drive
-ssh arena 'sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents} && sudo chown -R pkmn:agents /Volumes/Archive && sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents} && sudo mdutil -i off /Volumes/Archive'
+ssh -t arena 'sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents} && sudo chown -R pkmn:agents /Volumes/Archive && sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents} && sudo mdutil -i off /Volumes/Archive'
 ```
 
 #### Verify Step 3.1
@@ -398,7 +400,7 @@ by `pkmn:agents`.
 > sentinel file to install the Command Line Tools completely headlessly over SSH:
 
 ```sh
-ssh arena '
+ssh -t arena '
 if ! xcode-select -p >/dev/null 2>&1; then
   touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
   PROD=$(softwareupdate -l | grep "\*.*Command Line" | tail -n 1 | sed "s/^[^C]* //")
@@ -461,7 +463,7 @@ with `WorkingDirectory=/opt/arena/repo`.
 ### Step 4.1: Clone `pkmn/ai` into `/opt/arena/repo` and Compile
 
 ```sh
-ssh arena '
+ssh -t arena '
 export PATH="/opt/homebrew/bin:$PATH"
 sudo mkdir -p /opt/arena
 sudo chown -R pkmn:agents /opt/arena
