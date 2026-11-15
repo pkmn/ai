@@ -908,27 +908,26 @@ Whenever changes to `arena/`, `server/arena.ts`, `server/protocol.ts`, `server/r
 **admin laptop**:
 
 ```sh
-# Standard TypeScript / Node.js coordinator update:
-ssh arena '
-export PATH="/opt/homebrew/bin:$PATH"
-cd /opt/arena/repo
-git pull origin main
-npm install
-npm run compile
-sudo launchctl kickstart -k system/ai.pkmn.arena
-'
+# Pull main on the Mac mini, compile, verify build/arena, and drain via SIGUSR1:
+npm run deploy:arena
 ```
+
+`npm run deploy:arena` runs [`./arena/scripts/deploy.sh`](scripts/deploy.sh) on the Mac mini, which
+verifies a fast-forward merge from `origin/main`, installs `npm` dependencies if `package.json`
+changed, compiles TypeScript, smoke-tests `build/arena` (rolling back automatically on failure), and
+sends `SIGUSR1` to `ai.pkmn.arena` so the coordinator finishes its in-flight match, flushes the
+`outbox`, and exits cleanly for `launchd` (`KeepAlive = true`, `ExitTimeOut = 900`) to respawn on
+the new code.
 
 If a commit modifies native helpers or system configs (`arena/bin/limit.c`, `arena/bin/arena`,
 `arena/bin/unpack`, `arena/config/sandbox.sb`, `arena/config/sudoers`, `arena/config/pf.anchor`, or
-`arena/config/*.plist`), re-run `setup-arena.sh` (which is idempotent) and restart the daemon:
+`arena/config/*.plist`), re-run `setup-arena.sh` (which is idempotent) and drain/restart the daemon:
 
 ```sh
 ssh -t arena '
 export PATH="/opt/homebrew/bin:$PATH"
 cd /opt/arena/repo
-git pull origin main
-npm install && npm run compile
+./arena/scripts/deploy.sh
 ./arena/scripts/setup-arena.sh
 sudo launchctl kickstart -k system/ai.pkmn.arena
 '

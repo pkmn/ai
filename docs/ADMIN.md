@@ -22,6 +22,9 @@ npm run deploy
 
 # Same flow, but only restart pkmn.ai-server if server/db/config/template files changed
 npm run deploy:reload
+
+# Pull main on the Mac mini Arena runner, compile, verify build/arena, and drain via SIGUSR1
+npm run deploy:arena
 ```
 
 Both scripts run `./private/sync` (if present; see `private/SETUP.md`) before SSHing to

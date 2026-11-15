@@ -9,3 +9,4 @@ pkmn ALL=(root) NOPASSWD: /usr/bin/find /Volumes/P1 -mindepth 1 -delete, /usr/bi
 pkmn ALL=(root) NOPASSWD: /usr/bin/ipcs -m, /usr/bin/ipcs -s, /usr/bin/ipcrm -m *, /usr/bin/ipcrm -s *
 pkmn ALL=(root) NOPASSWD: /usr/sbin/chown root\:wheel /Volumes/P1, /usr/sbin/chown root\:wheel /Volumes/P2
 pkmn ALL=(root) NOPASSWD: /bin/chmod 0700 /Volumes/P1, /bin/chmod 0700 /Volumes/P2
+pkmn ALL=(root) NOPASSWD: /bin/launchctl kill SIGUSR1 system/ai.pkmn.arena, /bin/launchctl kickstart -k system/ai.pkmn.arena, /bin/launchctl kickstart -k system/ai.pkmn.tunnel, /bin/launchctl print system/ai.pkmn.*

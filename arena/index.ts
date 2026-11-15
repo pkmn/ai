@@ -63,9 +63,23 @@ export async function runDaemon(opts: {
 
   const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
   const status = {running: true};
+  let wakeSleep: (() => void) | undefined;
+  const sleep = (millis: number) =>
+    new Promise<void>(resolve => {
+      const timer = setTimeout(() => {
+        wakeSleep = undefined;
+        resolve();
+      }, millis);
+      wakeSleep = () => {
+        clearTimeout(timer);
+        wakeSleep = undefined;
+        resolve();
+      };
+    });
   const stop = () => {
     status.running = false;
     coord.requestDrain();
+    wakeSleep?.();
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -83,12 +97,14 @@ export async function runDaemon(opts: {
         const played = await coord.playNextScheduledMatch(ladders);
         if (!played && !opts.once && status.running && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);
-          await new Promise(r => setTimeout(r, pollIntervalMillis));
+          await sleep(pollIntervalMillis);
         }
       } catch (err) {
         console.error('Arena daemon cycle error:', err);
         if (opts.once) throw err;
-        await new Promise(r => setTimeout(r, pollIntervalMillis));
+        if (status.running && !coord.isDraining()) {
+          await sleep(pollIntervalMillis);
+        }
       }
       if (opts.once) break;
     }
@@ -136,8 +152,22 @@ export async function runTournamentValidationDaemon(opts: {
 
   const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
   const status = {running: true};
+  let wakeSleep: (() => void) | undefined;
+  const sleep = (millis: number) =>
+    new Promise<void>(resolve => {
+      const timer = setTimeout(() => {
+        wakeSleep = undefined;
+        resolve();
+      }, millis);
+      wakeSleep = () => {
+        clearTimeout(timer);
+        wakeSleep = undefined;
+        resolve();
+      };
+    });
   const stop = () => {
     status.running = false;
+    wakeSleep?.();
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -146,13 +176,15 @@ export async function runTournamentValidationDaemon(opts: {
     while (status.running) {
       try {
         const count = await coord.processPendingSubmissions(opts.tournamentId);
-        if (count === 0 && !opts.once) {
-          await new Promise(r => setTimeout(r, pollIntervalMillis));
+        if (count === 0 && !opts.once && status.running) {
+          await sleep(pollIntervalMillis);
         }
       } catch (err) {
         console.error('GCP tournament validation cycle error:', err);
         if (opts.once) throw err;
-        await new Promise(r => setTimeout(r, pollIntervalMillis));
+        if (status.running) {
+          await sleep(pollIntervalMillis);
+        }
       }
       if (opts.once) break;
     }

@@ -43,6 +43,7 @@
     "test:integration": "npm run test && vitest test",
     "deploy:reload": "([ ! -x private/sync ] || ./private/sync) && ssh pkmn@pkmn.ai 'cd /home/pkmn/ai && ./deploy reload'",
     "deploy:restart": "([ ! -x private/sync ] || ./private/sync) && ssh pkmn@pkmn.ai 'cd /home/pkmn/ai && ./deploy restart'",
+    "deploy:arena": "ssh arena 'cd /opt/arena/repo && ./arena/scripts/deploy.sh'",
     "deploy": "npm run deploy:restart"
   },
   "stylelint": {

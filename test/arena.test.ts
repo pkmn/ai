@@ -318,6 +318,7 @@ describe('arena infrastructure', () => {
         'arena/scripts/setup-arena.sh',
         'arena/scripts/bake-image.sh',
         'arena/scripts/archive.sh',
+        'arena/scripts/deploy.sh',
       ];
       for (const rel of expectedFiles) {
         expect(fs.existsSync(root(rel))).toBe(true);
@@ -335,6 +336,7 @@ describe('arena infrastructure', () => {
           root('arena/scripts/setup-arena.sh'),
           root('arena/scripts/bake-image.sh'),
           root('arena/scripts/archive.sh'),
+          root('arena/scripts/deploy.sh'),
         ]);
         execFileSync('sh', ['-n', root('arena/bin/baseline')]);
       }).not.toThrow();
@@ -397,6 +399,11 @@ describe('arena infrastructure', () => {
       expect(arenaScript).toContain('--env PKMN_STATS_DIR=/opt/arena/stats');
       expect(fs.readFileSync(root('arena', 'bin', 'tourney-agent'), 'utf8'))
         .toContain('--setenv PKMN_STATS_DIR /opt/arena/stats');
+      expect(fs.readFileSync(root('arena', 'config', 'ai.pkmn.arena.plist'), 'utf8'))
+        .toContain('<key>ExitTimeOut</key>\n  <integer>900</integer>');
+      expect(fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8'))
+        .toContain('launchctl kill SIGUSR1 system/ai.pkmn.arena');
+      expect(sudoers).toContain('/bin/launchctl kill SIGUSR1 system/ai.pkmn.arena');
     });
   });
 
@@ -2469,6 +2476,23 @@ describe('arena infrastructure', () => {
       } finally {
         stateDb.close();
       }
+    });
+
+    test('runDaemon wakes immediately from idle poll sleep on SIGUSR1 drain signal', async () => {
+      await withRealArenaServer('drain-sleep', async ({serverUrl, secret}) => {
+        const start = Date.now();
+        const daemonPromise = arenaIndex.runDaemon({
+          serverUrl,
+          arenaSecret: secret,
+          stateDbPath: ':memory:',
+          pollIntervalMillis: 60_000,
+        });
+        setTimeout(() => {
+          process.emit('SIGUSR1');
+        }, 50);
+        await daemonPromise;
+        expect(Date.now() - start).toBeLessThan(2000);
+      });
     });
   });
 
