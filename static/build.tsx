@@ -15,7 +15,7 @@ import {renderBattleViewerPage} from '../server/tournaments';
 
 import * as glossary from './glossary';
 import * as research from './research';
-import {escapeHtml, root} from './util';
+import {Html, raw, root} from './util';
 
 const fs = site.fs;
 
@@ -32,18 +32,21 @@ export const SET_THEME =
 export function formatLiveTournamentBanner(tournament?: {id: string; name: string}): string {
   if (!tournament) return '';
   const href = `/arena/tournaments/${encodeURIComponent(tournament.id)}/`;
-  return '<div id="topbar">' +
-    `<a href="${escapeHtml(href)}" class="subtle">[LIVE] ${escapeHtml(tournament.name)}</a>` +
-    '</div>';
+  return String(
+    <div id='topbar'>
+      <a href={href} className='subtle'>[LIVE] {tournament.name}</a>
+    </div>
+  );
 }
 
 export function injectLiveBanner(
-  headerHtml: string | undefined,
+  headerHtml: Html | string | undefined,
   tournament?: {id: string; name: string}
 ): string | undefined {
+  const headerStr = headerHtml !== undefined ? String(headerHtml) : undefined;
   const banner = formatLiveTournamentBanner(tournament);
-  if (!banner || headerHtml?.includes('id="topbar"')) return headerHtml;
-  return headerHtml ? `${banner}\n  ${headerHtml}` : banner;
+  if (!banner || headerStr?.includes('id="topbar"')) return headerStr;
+  return headerStr ? `${banner}\n  ${headerStr}` : banner;
 }
 
 const LIVE_TOPBAR_RE =
@@ -86,15 +89,15 @@ export function syncStaticLiveBanner(
         continue;
       }
       if (!entry.isFile() || !entry.name.endsWith('.html')) continue;
-      const raw = nodeFs.readFileSync(full, 'utf8');
-      if (!raw || raw.includes('Under Construction:')) continue;
-      if (!raw.includes('<header>')) continue;
+      const rawHtml = nodeFs.readFileSync(full, 'utf8');
+      if (!rawHtml || rawHtml.includes('Under Construction:')) continue;
+      if (!rawHtml.includes('<header>')) continue;
 
-      const stripped = raw.replace(LIVE_TOPBAR_RE, '');
+      const stripped = rawHtml.replace(LIVE_TOPBAR_RE, '');
       const updated = banner
         ? stripped.replace('<header>', `<header>${banner}\n  `)
         : stripped;
-      if (updated !== raw) {
+      if (updated !== rawHtml) {
         const tmp = `${full}.tmp.${process.pid}.${Date.now()}`;
         nodeFs.writeFileSync(tmp, updated, 'utf8');
         nodeFs.renameSync(tmp, full);
@@ -105,16 +108,32 @@ export function syncStaticLiveBanner(
   visitDir(publicDir, '');
 }
 
+export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
+  header?: Html | string;
+  content: Html | string;
+}
+
 export class Renderer extends site.page.Renderer {
   liveBannerProvider?: () => string;
 
-  override render(page: site.page.Page, replace?: (s: string) => string) {
+  override create(name: string, page: Page, replace?: (s: string) => string) {
+    const headerStr = page.header !== undefined ? String(page.header) : undefined;
+    super.create(name, {...page, header: headerStr, content: String(page.content)}, replace);
+  }
+
+  override render(page: Page, replace?: (s: string) => string) {
     const script = page.script ? `${SET_THEME}\n${page.script}` : SET_THEME;
     const banner = this.liveBannerProvider?.() ?? '';
-    const headerHtml = banner && !page.header?.includes('id="topbar"')
-      ? (page.header ? `${banner}\n  ${page.header}` : banner)
-      : page.header;
-    return super.render({...page, header: headerHtml, script}, replace);
+    const rawHeader = page.header !== undefined ? String(page.header) : undefined;
+    const headerHtml = banner && !rawHeader?.includes('id="topbar"')
+      ? (rawHeader ? `${banner}\n  ${rawHeader}` : banner)
+      : rawHeader;
+    return super.render({
+      ...page,
+      header: headerHtml,
+      content: String(page.content),
+      script,
+    }, replace);
   }
 }
 
@@ -130,23 +149,25 @@ export const renderer = new Renderer({
 export const cite = (title: string, date: Date, p?: string) => {
   const t = title.slice(title.lastIndexOf(' ') + 1).toLowerCase();
   const year = date.getFullYear();
-  return `<section id="citation"><figure class="code"><code><pre>
-@online{pkmn${year}${t},
-  title  = "Competitive Pokémon Artificial Intelligence ${title}",
-  author = "pkmn.ai",
-  month  = "${date.toLocaleString('default', {month: 'long'})}",
-  year   = "${year}",
-  url    = "https://pkmn.ai/${p ?? t}/"
-}
-</pre></code></figure></section>`;
+  const bib = `\n@online{pkmn${year}${t},\n` +
+    `  title  = "Competitive Pokémon Artificial Intelligence ${title}",\n` +
+    '  author = "pkmn.ai",\n' +
+    `  month  = "${date.toLocaleString('default', {month: 'long'})}",\n` +
+    `  year   = "${year}",\n` +
+    `  url    = "https://pkmn.ai/${p ?? t}/"\n` +
+    '}\n';
+  return String(
+    <section id='citation'>
+      <figure className='code'><code><pre>{bib}</pre></code></figure>
+    </section>
+  );
 };
 
-export const header = (title: string, wip = false) =>
-  `${wip
-    ? '<div id="topbar">Under Construction: please excuse any temporary placeholders</div>'
-    : ''}
-  <h1><a href="/" class="subtle">pkmn.ai</a></h1>
-  <h2>${title}</h2>`;
+export const header = (title: Html | string, wip = false) => String(<>
+  {wip && <div id='topbar'>Under Construction: please excuse any temporary placeholders</div>}
+  <h1><a href='/' className='subtle'>pkmn.ai</a></h1>
+  <h2>{title}</h2>
+</>);
 
 export const style = ' [id] { scroll-margin-top: 2rem; }';
 
@@ -184,7 +205,7 @@ const build = async (rebuild?: boolean) => {
         header: header(`${code}`),
         path: '',
         id: 'error',
-        content: `<p>${http.STATUS_CODES[code]}</p>`,
+        content: <p>{http.STATUS_CODES[code]}</p>,
         style: `
           #error h2 {
             text-decoration: none;
@@ -233,10 +254,11 @@ const build = async (rebuild?: boolean) => {
     fs.write(path.join(PUBLIC, 'index.html'), renderer.render({
       id: 'home',
       title: 'pkmn.ai',
-      header: '<h1>pkmn.ai</h1>',
+      header: <h1>pkmn.ai</h1>,
       path: '',
-      content: `${site.html.render(fs.read(path.join(STATIC, 'index.dj'))
-        .replace('<a', '<a class="subtle"'))}`,
+      content: raw(
+        site.html.render(fs.read(path.join(STATIC, 'index.dj')).replace('<a', '<a class="subtle"'))
+      ),
     }));
 
     renderer.create('glossary', glossary.page(STATIC));
@@ -279,7 +301,7 @@ const build = async (rebuild?: boolean) => {
       ` : page === 'background' ? style : '',
         title: `${title} | pkmn.ai`,
         header: header(title, page === 'background'),
-        content: `${site.html.render(fs.read(file))}${citation}`,
+        content: <>{raw(site.html.render(fs.read(file)))}{raw(citation)}</>,
       });
     }
 
@@ -301,7 +323,7 @@ const build = async (rebuild?: boolean) => {
         list-style: none;
       }`,
       header: header('Concepts'),
-      content: `${site.html.render(fs.read(path.join(STATIC, 'concepts.dj')))}`,
+      content: raw(site.html.render(fs.read(path.join(STATIC, 'concepts.dj')))),
     });
 
     if (!rebuild) {
@@ -329,7 +351,7 @@ const build = async (rebuild?: boolean) => {
         title: `Concepts — ${title} | pkmn.ai`,
         style: wip ? style : '',
         header: header(title, wip),
-        content: `${site.html.render(fs.read(file))}${citation}`,
+        content: <>{raw(site.html.render(fs.read(file)))}{raw(citation)}</>,
       });
     }
 

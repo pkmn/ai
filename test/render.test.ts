@@ -15,20 +15,11 @@ import * as render from '../server/render';
 import {formatPoolTeamLabel} from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import {syncStaticLiveBanner} from '../static/build';
-import {renderTemplate, root} from '../static/util';
+import {Fragment, h as jsx, raw, root} from '../static/util';
 import {hashTeam} from '../teams';
 import {generateValidVgcTeams} from '../tools/mock';
 import {runPkmnCli} from '../tools/pkmn';
-import {
-  SECTIONS,
-  buildScenarios,
-  compareShots,
-  decodePng,
-  diffPngImages,
-  encodePng,
-  renderGalleryHtml,
-  standInSprite,
-} from '../tools/shots';
+import * as shots from '../tools/shots';
 
 function forceLadderActive(database: Database, id: string) {
   database.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?").run(id);
@@ -270,14 +261,48 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
   };
 }
 
-describe('renderTemplate', () => {
-  test('substitutes raw or HTML-escaped placeholders in a single pass', () => {
-    expect(
-      renderTemplate('{{{raw}}}|{{esc}}', {
-        raw: '<span>{{esc}}</span>',
-        esc: '<script>',
+describe('dom TSX renderer', () => {
+  test('escapes string children while preserving raw Html fragments', () => {
+    const out = String(jsx('div', undefined, raw('<span>ok</span>'), '|', '<script>'));
+    expect(out).toBe('<div><span>ok</span>|&lt;script&gt;</div>');
+  });
+
+  test('maps JSX attributes with void element support', () => {
+    const out = String(
+      jsx(
+        'label',
+        {
+          className: 'pill',
+          htmlFor: 'chk',
+          hidden: false,
+          draggable: false,
+          'aria-expanded': false,
+        },
+        jsx('input', {id: 'chk', type: 'checkbox', checked: true, required: true})
+      )
+    );
+    expect(out).toBe(
+      '<label class="pill" for="chk" draggable="false" aria-expanded="false">' +
+      '<input id="chk" type="checkbox" checked required></label>'
+    );
+  });
+
+  test('serializes inline style objects with dimensional px suffixes', () => {
+    const out = String(
+      jsx('div', {
+        style: {width: 320, opacity: 0.5, backgroundColor: 'red', '--accent': '#fff'},
       })
-    ).toBe('<span>{{esc}}</span>|&lt;script&gt;');
+    );
+    expect(out).toBe(
+      '<div style="width:320px;opacity:0.5;background-color:red;--accent:#fff"></div>'
+    );
+  });
+
+  test('renders Fragment nodes alongside function components', () => {
+    const Badge = (props: {label: string; children?: unknown}) =>
+      jsx('span', {className: 'badge'}, props.label, ':', props.children as string);
+    const out = String(jsx(Fragment, undefined, jsx(Badge, {label: 'v'}, '1.0')));
+    expect(out).toBe('<span class="badge">v:1.0</span>');
   });
 });
 
@@ -1537,12 +1562,12 @@ describe('JSON route parity & retired pool archives', () => {
   });
 
   test('standInSprite generates deterministic non-transparent species minisprites', () => {
-    const pikachu = standInSprite('/forums/media/minisprites/pikachu.png');
-    const charizard = standInSprite('/forums/media/minisprites/charizard.png');
-    expect(pikachu.equals(standInSprite('/forums/media/minisprites/pikachu.png'))).toBe(true);
+    const pikachu = shots.standInSprite('/forums/media/minisprites/pikachu.png');
+    const charizard = shots.standInSprite('/forums/media/minisprites/charizard.png');
+    expect(pikachu.equals(shots.standInSprite('/forums/media/minisprites/pikachu.png'))).toBe(true);
     expect(pikachu.equals(charizard)).toBe(false);
 
-    const decoded = decodePng(pikachu);
+    const decoded = shots.decodePng(pikachu);
     expect(decoded.width).toBe(40);
     expect(decoded.height).toBe(30);
     let opaquePixels = 0;
@@ -1560,7 +1585,7 @@ describe('JSON route parity & retired pool archives', () => {
     nextData[2] = 30;
     nextData[3] = 255;
 
-    const {image, count} = diffPngImages(
+    const {image, count} = shots.diffPngImages(
       {width: 4, height: 4, data: baseData},
       {width: 4, height: 4, data: nextData}
     );
@@ -1576,15 +1601,15 @@ describe('JSON route parity & retired pool archives', () => {
       fs.mkdirSync(path.join(beforeDir, 'small', 'light'), {recursive: true});
       fs.mkdirSync(path.join(afterDir, 'small', 'light'), {recursive: true});
 
-      const imgA = encodePng({width: 2, height: 2, data: Buffer.alloc(16, 120)});
+      const imgA = shots.encodePng({width: 2, height: 2, data: Buffer.alloc(16, 120)});
       const dataB = Buffer.alloc(16, 120);
       dataB[0] = 250;
-      const imgB = encodePng({width: 2, height: 2, data: dataB});
+      const imgB = shots.encodePng({width: 2, height: 2, data: dataB});
 
       fs.writeFileSync(path.join(beforeDir, 'small', 'light', 'home.png'), imgA);
       fs.writeFileSync(path.join(afterDir, 'small', 'light', 'home.png'), imgB);
 
-      const res = await compareShots(beforeDir, afterDir, diffDir, 0);
+      const res = await shots.compareShots(beforeDir, afterDir, diffDir, 0);
       expect(res.same).toBe(false);
       expect(res.changes).toHaveLength(1);
       expect(res.changes[0]).toMatchObject({
@@ -1599,15 +1624,15 @@ describe('JSON route parity & retired pool archives', () => {
 
   test('buildScenarios and renderGalleryHtml cover all 7 site sections with unique state names',
     () => {
-      const scenarios = buildScenarios('deadbeef1234');
+      const scenarios = shots.buildScenarios('deadbeef1234');
       expect(scenarios.length).toBeGreaterThanOrEqual(80);
       const names = new Set(scenarios.map(s => s.name));
       expect(names.size).toBe(scenarios.length);
-      for (const section of SECTIONS) {
+      for (const section of shots.SECTIONS) {
         expect(scenarios.some(s => s.section === section.id)).toBe(true);
       }
 
-      const gallery = renderGalleryHtml(scenarios, {
+      const gallery = shots.renderGalleryHtml(scenarios, {
         hasBaseline: true,
         changes: [
           {
@@ -1679,10 +1704,10 @@ describe('JSON route parity & retired pool archives', () => {
   });
 
   test('persists tournament viewer playback speed in localStorage', () => {
-    const tourHtml = fs.readFileSync(root('static', 'tournaments.html'), 'utf8');
-    expect(tourHtml).toContain('pkmn-viewer-speed');
-    expect(tourHtml).toContain("sendToViewer({type: 'speed', speed: saved})");
-    expect(tourHtml).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
+    const tourSrc = fs.readFileSync(root('server', 'tournaments.tsx'), 'utf8');
+    expect(tourSrc).toContain('pkmn-viewer-speed');
+    expect(tourSrc).toContain("sendToViewer({type: 'speed', speed: saved})");
+    expect(tourSrc).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
   });
 
   test('paginates dynamic tables at 25 rows per page across ladder, battles, and profile',

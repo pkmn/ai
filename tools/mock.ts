@@ -954,7 +954,7 @@ export class Runner {
   private ensureStaticInitialized() {
     fs.mkdirSync(this.staticDir, {recursive: true});
     fs.mkdirSync(this.avatarsDir, {recursive: true});
-    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.ts', 'arena.dj']) {
+    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj']) {
       const src = path.join(this.baseStaticDir, name);
       const dst = path.join(this.staticDir, name);
       if (fs.existsSync(src) && !fs.existsSync(dst)) {
@@ -1011,7 +1011,7 @@ export class Runner {
 
     fs.mkdirSync(this.staticDir, {recursive: true});
     fs.mkdirSync(this.avatarsDir, {recursive: true});
-    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.ts', 'arena.dj']) {
+    for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj']) {
       const src = path.join(this.baseStaticDir, name);
       const dst = path.join(this.staticDir, name);
       if (fs.existsSync(src) && src !== dst) {
@@ -3539,7 +3539,7 @@ export function prepareStaticDir(
 ): string {
   fs.mkdirSync(targetStaticDir, {recursive: true});
   fs.mkdirSync(targetAvatarsDir, {recursive: true});
-  for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.ts', 'arena.dj']) {
+  for (const name of ['index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj']) {
     const src = path.join(baseStaticDir, name);
     const dst = path.join(targetStaticDir, name);
     if (fs.existsSync(src) && !fs.existsSync(dst)) {

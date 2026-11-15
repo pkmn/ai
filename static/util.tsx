@@ -2,6 +2,11 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
+import {Child, Component, Fragment, Html, escapeHtml, h, raw} from './dom';
+
+export type {Child, Component};
+export {Fragment, Html, escapeHtml, h, raw};
+
 export const ROOT = path.basename(path.dirname(__dirname)) === 'build'
   ? path.join(__dirname, '..', '..')
   : path.join(__dirname, '..');
@@ -48,10 +53,10 @@ function hasControlOrBidiChar(s: string): boolean {
 // (`Dex.getName` + `Users.NameValidator`): 1..18 characters, protocol-safe (`|`, `[`, `]`, `,`
 // forbidden), no consecutive/non-ASCII whitespace or control/bidi/zalgo characters, no leading
 // rank/command prefix, and a non-`guest` `toID` containing at least one ASCII letter.
-export function validateAgentName(raw: string): string {
-  const name = raw.trim();
+export function validateAgentName(rawName: string): string {
+  const name = rawName.trim();
   if (!name || name.length > 18) {
-    throw new Error(`Agent name "${raw}" must be 1–18 characters`);
+    throw new Error(`Agent name "${rawName}" must be 1–18 characters`);
   }
   if (
     /[|[\],]/.test(name) ||
@@ -79,34 +84,15 @@ export function validateAgentName(raw: string): string {
   return name;
 }
 
-export function validateVersion(raw: string): string {
-  const version = raw.trim();
+export function validateVersion(rawVersion: string): string {
+  const version = rawVersion.trim();
   if (!VERSION_RE.test(version)) {
     throw new Error(
-      `Version "${raw}" must be 1–12 characters matching ^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`
+      `Version "${rawVersion}" must be 1–12 characters matching ^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`
     );
   }
   return version;
 }
-
-export const escapeHtml = (str: string) =>
-  str.replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-export const renderTemplate = (
-  template: string,
-  vars: Record<string, string | number | undefined>
-) =>
-  template.replace(
-    /\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}/g,
-    (_, rawKey?: string, escapedKey?: string) =>
-      rawKey !== undefined
-        ? String(vars[rawKey] ?? '')
-        : escapeHtml(String(vars[escapedKey!] ?? ''))
-  );
 
 const HEAD_SUPPORT = Symbol('pkmn.headSupport');
 
@@ -202,7 +188,7 @@ export function formatUtcDateTime(epochSeconds: number): string {
 
 export const TABLE_PAGE_SIZE = 25;
 
-export function renderTablePager(opts: {
+export interface TablePagerProps {
   id?: string;
   label: string;
   total: number;
@@ -211,28 +197,92 @@ export function renderTablePager(opts: {
   pageSize?: number;
   prevLabel?: string;
   nextLabel?: string;
-}): string {
+}
+
+export const TablePager = (opts: TablePagerProps) => {
   const pageSize = opts.pageSize ?? TABLE_PAGE_SIZE;
   const totalPages = Math.max(1, Math.ceil(opts.total / pageSize));
-  const hideCls = totalPages <= 1 ? ' hide' : '';
-  const nextDis = totalPages <= 1 ? ' disabled' : '';
-  const idAttr = opts.id ? ` id="${escapeHtml(opts.id)}"` : '';
-  const prevIdAttr = opts.id ? ` id="${escapeHtml(opts.id)}-prev"` : '';
-  const infoIdAttr = opts.id ? ` id="${escapeHtml(opts.id)}-info"` : '';
-  const nextIdAttr = opts.id ? ` id="${escapeHtml(opts.id)}-next"` : '';
+  const singlePage = totalPages <= 1;
   const word = opts.total === 1 ? opts.singular : opts.plural;
   const info = `Page 1 of ${totalPages} (${opts.total.toLocaleString('en-US')} ${word})`;
-  const prevLabel = opts.prevLabel ?? '&larr; Prev';
-  const nextLabel = opts.nextLabel ?? 'Next &rarr;';
-  return `<div class="pager${hideCls}"${idAttr} aria-label="${escapeHtml(opts.label)}" ` +
-    `data-table-pager data-page-size="${pageSize}" ` +
-    `data-singular="${escapeHtml(opts.singular)}" ` +
-    `data-plural="${escapeHtml(opts.plural)}">\n` +
-    `  <button type="button" class="pager-btn"${prevIdAttr} ` +
-    `data-pager-prev disabled>${prevLabel}</button>\n` +
-    `  <span class="pager-info muted"${infoIdAttr} ` +
-    `data-pager-info>${escapeHtml(info)}</span>\n` +
-    `  <button type="button" class="pager-btn"${nextIdAttr} ` +
-    `data-pager-next${nextDis}>${nextLabel}</button>\n` +
-    '</div>';
-}
+  const prevLabel = opts.prevLabel ?? '\u2190 Prev';
+  const nextLabel = opts.nextLabel ?? 'Next \u2192';
+  return <div
+    className={singlePage ? 'pager hide' : 'pager'}
+    id={opts.id}
+    aria-label={opts.label}
+    data-table-pager={true}
+    data-page-size={pageSize}
+    data-singular={opts.singular}
+    data-plural={opts.plural}
+  >
+    <button
+      type='button'
+      className='pager-btn'
+      id={opts.id ? `${opts.id}-prev` : undefined}
+      data-pager-prev={true}
+      disabled={true}
+    >{prevLabel}</button>
+    <span
+      className='pager-info muted'
+      id={opts.id ? `${opts.id}-info` : undefined}
+      data-pager-info={true}
+    >{info}</span>
+    <button
+      type='button'
+      className='pager-btn'
+      id={opts.id ? `${opts.id}-next` : undefined}
+      data-pager-next={true}
+      disabled={singlePage}
+    >{nextLabel}</button>
+  </div>;
+};
+
+export const TABLE_PAGER_SCRIPT = `
+  document.querySelectorAll('.pager[data-table-pager]').forEach(pager => {
+    const pageSize = Number(pager.dataset.pageSize) || 25;
+    const wrap = pager.previousElementSibling;
+    const tbody = wrap ? wrap.querySelector('tbody') : undefined;
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const prevBtn = pager.querySelector('[data-pager-prev]');
+    const nextBtn = pager.querySelector('[data-pager-next]');
+    const infoEl = pager.querySelector('[data-pager-info]');
+    const singular = pager.dataset.singular || 'row';
+    const plural = pager.dataset.plural || 'rows';
+    let page = 1;
+    const apply = () => {
+      const total = rows.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (page > totalPages) page = totalPages;
+      if (page < 1) page = 1;
+      const start = (page - 1) * pageSize;
+      rows.forEach((row, idx) => {
+        row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+      });
+      pager.classList.toggle('hide', totalPages <= 1);
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= totalPages;
+      if (infoEl) {
+        const word = total === 1 ? singular : plural;
+        infoEl.textContent =
+          'Page ' + page + ' of ' + totalPages +
+          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+      }
+    };
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        if (page > 1) {
+          page--;
+          apply();
+        }
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        page++;
+        apply();
+      });
+    }
+  });
+`;

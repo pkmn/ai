@@ -5,12 +5,10 @@ import * as site from 'site';
 import * as yaml from 'yaml';
 
 import {header} from './build';
-import {slugify} from './util';
+import {raw, slugify} from './util';
 
 export function page(dir: string) {
-  const buf: string[] = [];
-
-  buf.push(site.html.render(fs.readFileSync(path.join(dir, 'glossary.dj'), 'utf8')));
+  const intro = site.html.render(fs.readFileSync(path.join(dir, 'glossary.dj'), 'utf8'));
 
   const glossary: {[term: string]: string} =
     yaml.parse(fs.readFileSync(path.join(dir, 'glossary.yml'), 'utf8'));
@@ -18,18 +16,21 @@ export function page(dir: string) {
   const terms = Object.keys(glossary).sort((a, b) =>
     a.toLocaleLowerCase().localeCompare(b.toLocaleLowerCase()));
 
-  buf.push('<dl>');
-  for (const term of terms) {
-    const id = slugify(term);
-    buf.push(`<div id="${id}"><dt><a href="#${id}" class="subtle">${term}</a></dt>`);
-    buf.push(`<dd>${site.html.render(glossary[term])}</dd></div>`);
-  }
-  buf.push('</dl>');
-
   return {
     path: '/glossary/',
     title: 'Glossary | pkmn.ai',
     header: header('Glossary'),
-    content: buf.join(''),
+    content: <>
+      {raw(intro)}
+      <dl>
+        {terms.map(term => {
+          const id = slugify(term);
+          return <div id={id}>
+            <dt><a href={`#${id}`} className='subtle'>{term}</a></dt>
+            <dd>{raw(site.html.render(glossary[term]))}</dd>
+          </div>;
+        })}
+      </dl>
+    </>,
   };
 }

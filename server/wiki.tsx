@@ -14,11 +14,13 @@ import * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
 import {Project} from '../static/projects';
 import {
+  Html,
+  TABLE_PAGER_SCRIPT,
   TABLE_PAGE_SIZE,
+  TablePager,
   escapeHtml,
   installHeadSupport,
-  renderTablePager,
-  renderTemplate,
+  raw,
   root,
   slugify,
   toID,
@@ -78,9 +80,9 @@ export interface Revision {
   subject: string;
 }
 
-export function normalizeSlug(raw: string): string {
+export function normalizeSlug(rawText: string): string {
   try {
-    return decodeURIComponent(raw).normalize('NFC').trim().replace(/[\s_]+/g, '_');
+    return decodeURIComponent(rawText).normalize('NFC').trim().replace(/[\s_]+/g, '_');
   } catch {
     return '';
   }
@@ -104,12 +106,12 @@ export function encodeSlug(slug: string): string {
   return encodeURIComponent(slug);
 }
 
-export function parsePageContent(raw: string): {content: string; visibility?: PageVisibility} {
-  const m = VISIBILITY.exec(raw);
-  if (!m) return {content: raw};
+export function parsePageContent(rawText: string): {content: string; visibility?: PageVisibility} {
+  const m = VISIBILITY.exec(rawText);
+  if (!m) return {content: rawText};
   return {
     visibility: m[1] as PageVisibility,
-    content: raw.slice(m[0].length),
+    content: rawText.slice(m[0].length),
   };
 }
 
@@ -179,41 +181,39 @@ export function extractProjectPages(projectsYaml: string): {
 }
 
 const STYLE = fs.readFileSync(root('static', 'wiki.css'), 'utf8');
-const HISTORY_TEMPLATE = fs.readFileSync(root('static', 'wiki-history.html'), 'utf8');
 
 function renderPageHtml(opts: {
   id?: string;
   title: string;
   heading: string;
   path: string;
-  nav?: string;
-  content: string;
+  nav?: Html | string;
+  content: Html | string;
   liveTournament?: {id: string; name: string};
 }) {
   return renderer.render({
     id: opts.id ?? 'wiki',
     title: `${opts.title} | pkmn.ai`,
-    header: injectLiveBanner(header(escapeHtml(opts.heading)), opts.liveTournament),
+    header: injectLiveBanner(header(opts.heading), opts.liveTournament),
     path: opts.path,
     style: STYLE,
     content: opts.content,
   }, s => {
     const withRobots = s.replace('</title>', '</title><meta name="robots" content="noindex">');
-    return opts.nav ? withRobots.replace('<footer>', `${opts.nav}<footer>`) : withRobots;
+    return opts.nav ? withRobots.replace('<footer>', `${String(opts.nav)}<footer>`) : withRobots;
   });
 }
 
-function wikiNav(slug: string, active: 'view' | 'edit' | 'history' | 'pages'): string {
+function wikiNav(slug: string, active: 'view' | 'edit' | 'history' | 'pages'): Html {
   const item = (key: typeof active, href: string, label: string) =>
-    key === active ? `<strong>${label}</strong>` : `<a href="${href}">${label}</a>`;
+    key === active ? <strong>{label}</strong> : <a href={href}>{label}</a>;
   const encoded = encodeSlug(slug);
   const viewHref = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
-  return `<nav id="wiki-nav">
-    ${item('view', viewHref, 'View')} —
-    ${item('edit', `/wiki/${encoded}/edit`, 'Edit')} —
-    ${item('history', `/wiki/${encoded}/history`, 'History')} —
-    ${item('pages', '/wiki/pages', 'Pages')}
-  </nav>`;
+  return <nav id='wiki-nav'>
+    {item('view', viewHref, 'View')} — {item('edit', `/wiki/${encoded}/edit`, 'Edit')} —{' '}
+    {item('history', `/wiki/${encoded}/history`, 'History')} —{' '}
+    {item('pages', '/wiki/pages', 'Pages')}
+  </nav>;
 }
 
 const SMART_PUNCTUATION: Record<djot.SmartPunctuationType, string> = {
@@ -226,8 +226,8 @@ const SMART_PUNCTUATION: Record<djot.SmartPunctuationType, string> = {
   en_dash: '\u2013',
 };
 
-function decodeHtmlEntities(raw: string): string {
-  return raw
+function decodeHtmlEntities(rawText: string): string {
+  return rawText
     .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => {
       const code = parseInt(hex, 16);
       return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
@@ -245,9 +245,9 @@ function decodeHtmlEntities(raw: string): string {
     .replace(/&newline;/gi, '\n');
 }
 
-function resolveWikiHref(raw: string | undefined): string {
-  if (!raw) return '#';
-  const trimmed = raw.trim();
+function resolveWikiHref(rawHref: string | undefined): string {
+  if (!rawHref) return '#';
+  const trimmed = rawHref.trim();
   if (!trimmed) return '#';
   // eslint-disable-next-line no-control-regex
   const decoded = decodeHtmlEntities(trimmed).replace(/[\x00-\x20]+/g, '');
@@ -295,7 +295,7 @@ function renderSafeMath(tex: string, displayMode: boolean): string {
       throwOnError: true,
     });
   } catch {
-    return `<code>${escapeHtml(tex)}</code>`;
+    return String(<code>{tex}</code>);
   }
 }
 
@@ -304,8 +304,8 @@ function renderSafeMath(tex: string, displayMode: boolean): string {
 //   - Ignores all user-supplied Djot `{...}` attributes (`id`, `class`, `onclick`, `style`, etc.)
 //   - Allows only `https://`, `http://`, `/...`, `#...`, and relative wiki links on `<a>`
 //   - Escapes all text and code blocks directly via `escapeHtml` with no post-hoc regex sanitizer
-export function renderDjot(raw: string, save?: {title?: string; summary?: string}): string {
-  const {content} = parsePageContent(raw);
+export function renderDjot(rawText: string, save?: {title?: string; summary?: string}): string {
+  const {content} = parsePageContent(rawText);
   const doc = djot.parse(content);
   const usedIds = new Set<string>();
   const footnoteOrder: string[] = [];
@@ -349,7 +349,7 @@ export function renderDjot(raw: string, save?: {title?: string; summary?: string
       case 'symb':
         return escapeHtml(`:${node.alias}:`);
       case 'verbatim':
-        return `<code>${escapeHtml(node.text)}</code>`;
+        return String(<code>{node.text}</code>);
       case 'raw_inline':
         return '';
       case 'inline_math':
@@ -358,7 +358,7 @@ export function renderDjot(raw: string, save?: {title?: string; summary?: string
         return renderSafeMath(node.text, true);
       case 'url': {
         const href = resolveWikiHref(node.text);
-        return `<a href="${escapeHtml(href)}">${escapeHtml(node.text)}</a>`;
+        return String(<a href={href}>{node.text}</a>);
       }
       case 'email':
         return escapeHtml(node.text);
@@ -370,29 +370,30 @@ export function renderDjot(raw: string, save?: {title?: string; summary?: string
           idx = footnoteOrder.length;
           footnoteIndex.set(node.text, idx);
         }
-        return `<sup id="fnref-${idx}"><a href="#fn-${idx}">[${idx}]</a></sup>`;
+        return String(<sup id={`fnref-${idx}`}><a href={`#fn-${idx}`}>{`[${idx}]`}</a></sup>);
       }
       case 'emph':
-        return `<em>${renderInlines(node.children)}</em>`;
+        return String(<em>{raw(renderInlines(node.children))}</em>);
       case 'strong':
-        return `<strong>${renderInlines(node.children)}</strong>`;
+        return String(<strong>{raw(renderInlines(node.children))}</strong>);
       case 'link':
-        return `<a href="${escapeHtml(resolveLinkNodeHref(node))}">` +
-          `${renderInlines(node.children)}</a>`;
+        return String(
+          <a href={resolveLinkNodeHref(node)}>{raw(renderInlines(node.children))}</a>
+        );
       case 'image':
         return renderInlines(node.children);
       case 'span':
         return renderInlines(node.children);
       case 'mark':
-        return `<mark>${renderInlines(node.children)}</mark>`;
+        return String(<mark>{raw(renderInlines(node.children))}</mark>);
       case 'superscript':
-        return `<sup>${renderInlines(node.children)}</sup>`;
+        return String(<sup>{raw(renderInlines(node.children))}</sup>);
       case 'subscript':
-        return `<sub>${renderInlines(node.children)}</sub>`;
+        return String(<sub>{raw(renderInlines(node.children))}</sub>);
       case 'insert':
-        return `<ins>${renderInlines(node.children)}</ins>`;
+        return String(<ins>{raw(renderInlines(node.children))}</ins>);
       case 'delete':
-        return `<del>${renderInlines(node.children)}</del>`;
+        return String(<del>{raw(renderInlines(node.children))}</del>);
       case 'double_quoted':
         return `\u201c${renderInlines(node.children)}\u201d`;
       case 'single_quoted':
@@ -414,19 +415,19 @@ export function renderDjot(raw: string, save?: {title?: string; summary?: string
     switch (node.tag) {
       case 'para':
         if (save && !save.summary) save.summary = extractPlainText(node).trim();
-        return `<p>${renderInlines(node.children)}</p>\n`;
+        return `${String(<p>{raw(renderInlines(node.children))}</p>)}\n`;
       case 'heading': {
         if (node.level === 1 && save && save.title === undefined) {
           save.title = extractPlainText(node).trim();
           return '';
         }
         const level = Math.min(6, Math.max(2, node.level));
-        const inner = renderInlines(node.children);
+        const inner = raw(renderInlines(node.children));
         const anchorId = sectionId ?? uniqueHeadingId(extractPlainText(node));
-        return anchorId
-          ? `<h${level}><a href="#${escapeHtml(anchorId)}" class="subtle">` +
-            `${inner}</a></h${level}>\n`
-          : `<h${level}>${inner}</h${level}>\n`;
+        const headingChild = anchorId
+          ? <a href={`#${anchorId}`} className='subtle'>{inner}</a>
+          : inner;
+        return `${String(h(`h${level}`, undefined, headingChild))}\n`;
       }
       case 'thematic_break':
         return '<hr>\n';
@@ -439,61 +440,75 @@ export function renderDjot(raw: string, save?: {title?: string; summary?: string
         }
         const secId = firstHeading ? uniqueHeadingId(extractPlainText(firstHeading)) : undefined;
         const inner = renderBlocks(node.children, secId);
-        return secId
-          ? `<section id="${escapeHtml(secId)}">\n${inner}</section>\n`
-          : `<section>\n${inner}</section>\n`;
+        return `${String(<section id={secId}>{raw(`\n${inner}`)}</section>)}\n`;
       }
       case 'div':
         return renderBlocks(node.children);
       case 'code_block':
-        return `<figure class="code"><pre><code>${escapeHtml(node.text.trimEnd())}</code>` +
-          '</pre></figure>\n';
+        return `${String(
+          <figure className='code'><pre><code>{node.text.trimEnd()}</code></pre></figure>
+        )}\n`;
       case 'raw_block':
         return '';
       case 'block_quote':
-        return '<figure class="blockquote"><blockquote>\n' +
-          `${renderBlocks(node.children)}</blockquote></figure>\n`;
+        return `${String(
+          <figure className='blockquote'>
+            <blockquote>{raw(`\n${renderBlocks(node.children)}`)}</blockquote>
+          </figure>
+        )}\n`;
       case 'bullet_list':
-        return '<ul>\n' +
-          node.children.map(li => `<li>${renderListItemBlocks(li.children, node.tight)}</li>\n`)
-            .join('') +
-          '</ul>\n';
+        return `${String(
+          <ul>
+            {raw(`\n${node.children.map(
+              li => `${String(<li>{raw(renderListItemBlocks(li.children, node.tight))}</li>)}\n`
+            ).join('')}`)}
+          </ul>
+        )}\n`;
       case 'ordered_list': {
         const start = node.start !== undefined && node.start !== 1
-          ? ` start="${Number(node.start)}"`
-          : '';
-        return `<ol${start}>\n` +
-          node.children.map(li => `<li>${renderListItemBlocks(li.children, node.tight)}</li>\n`)
-            .join('') +
-          '</ol>\n';
+          ? Number(node.start)
+          : undefined;
+        return `${String(
+          <ol start={start}>
+            {raw(`\n${node.children.map(
+              li => `${String(<li>{raw(renderListItemBlocks(li.children, node.tight))}</li>)}\n`
+            ).join('')}`)}
+          </ol>
+        )}\n`;
       }
       case 'task_list':
-        return '<ul class="task-list">\n' +
-          node.children.map(li => {
-            const box = li.checkbox === 'checked' ? '\u2611 ' : '\u2610 ';
-            return `<li>${box}${renderListItemBlocks(li.children, node.tight)}</li>\n`;
-          }).join('') +
-          '</ul>\n';
+        return `${String(
+          <ul className='task-list'>
+            {raw(`\n${node.children.map(li => {
+              const box = li.checkbox === 'checked' ? '\u2611 ' : '\u2610 ';
+              return `${String(
+                <li>{box}{raw(renderListItemBlocks(li.children, node.tight))}</li>
+              )}\n`;
+            }).join('')}`)}
+          </ul>
+        )}\n`;
       case 'definition_list':
-        return '<dl>\n' +
-          node.children.map(item =>
-            `<dt>${renderInlines(item.children[0].children)}</dt>\n` +
-            `<dd>\n${renderBlocks(item.children[1].children)}</dd>\n`)
-            .join('') +
-          '</dl>\n';
+        return `${String(
+          <dl>
+            {raw(`\n${node.children.map(item => (
+              `${String(<dt>{raw(renderInlines(item.children[0].children))}</dt>)}\n` +
+              `${String(<dd>{raw(`\n${renderBlocks(item.children[1].children)}`)}</dd>)}\n`
+            )).join('')}`)}
+          </dl>
+        )}\n`;
       case 'table': {
         const [caption, ...rows] = node.children;
         const captionHtml = caption.children.length
-          ? `<caption>${renderInlines(caption.children)}</caption>\n`
+          ? `${String(<caption>{raw(renderInlines(caption.children))}</caption>)}\n`
           : '';
         const rowsHtml = rows.map(row => {
           const cells = row.children.map(cell => {
             const tag = cell.head ? 'th' : 'td';
-            return `<${tag}>${renderInlines(cell.children)}</${tag}>`;
+            return String(h(tag, undefined, raw(renderInlines(cell.children))));
           }).join('');
-          return `<tr>${cells}</tr>\n`;
+          return `${String(<tr>{raw(cells)}</tr>)}\n`;
         }).join('');
-        return `<table>\n${captionHtml}${rowsHtml}</table>\n`;
+        return `${String(<table>{raw(`\n${captionHtml}${rowsHtml}`)}</table>)}\n`;
       }
     }
   };
@@ -507,12 +522,21 @@ export function renderDjot(raw: string, save?: {title?: string; summary?: string
       if (!fn) continue;
       const num = i + 1;
       items.push(
-        `<li id="fn-${num}">\n${renderBlocks(fn.children)}` +
-        `<p><a href="#fnref-${num}">\u21a9</a></p></li>\n`
+        `${String(
+          <li id={`fn-${num}`}>
+            {raw(`\n${renderBlocks(fn.children)}`)}
+            <p><a href={`#fnref-${num}`}>{'\u21a9'}</a></p>
+          </li>
+        )}\n`
       );
     }
     if (items.length > 0) {
-      html += `<section class="footnotes"><hr>\n<ol>\n${items.join('')}</ol></section>\n`;
+      html += `${String(
+        <section className='footnotes'>
+          <hr />
+          {raw(`\n<ol>\n${items.join('')}</ol>`)}
+        </section>
+      )}\n`;
     }
   }
   return html;
@@ -560,7 +584,7 @@ function sendHtml(res: http.ServerResponse, status: number, html: string) {
 function sendErrorHtml(
   res: http.ServerResponse,
   status: number,
-  content: string,
+  content: Html | string,
   pagePath = '/wiki/',
   liveTournament?: {id: string; name: string}
 ) {
@@ -713,9 +737,9 @@ export class Wiki {
   getPageVisibility(slug: string): PageVisibility {
     const canonical = this.resolveSlug(slug);
     if (!this.isProjectPage(canonical)) return 'public';
-    const raw = this.readRawPage(canonical);
-    if (raw === undefined) return 'developers';
-    return parsePageContent(raw).visibility ?? 'developers';
+    const rawText = this.readRawPage(canonical);
+    if (rawText === undefined) return 'developers';
+    return parsePageContent(rawText).visibility ?? 'developers';
   }
 
   canRead(login: string | undefined, slug = 'index', isDiscordMember = false): boolean {
@@ -759,8 +783,8 @@ export class Wiki {
   }
 
   readPage(slug: string): string | undefined {
-    const raw = this.readRawPage(slug);
-    return raw !== undefined ? parsePageContent(raw).content : undefined;
+    const rawText = this.readRawPage(slug);
+    return rawText !== undefined ? parsePageContent(rawText).content : undefined;
   }
 
   pageTitle(slug: string): string {
@@ -788,11 +812,11 @@ export class Wiki {
     return slugs.map(slug => {
       const canonical = this.projectAliases.get(slug.toLowerCase()) ?? slug;
       const project = this.projectPages.get(canonical);
-      let raw: string | undefined;
+      let rawText: string | undefined;
       try {
-        raw = fs.readFileSync(path.join(this.wikiDir, `${slug}.dj`), 'utf8');
+        rawText = fs.readFileSync(path.join(this.wikiDir, `${slug}.dj`), 'utf8');
       } catch {}
-      const parsed = raw !== undefined ? parsePageContent(raw) : undefined;
+      const parsed = rawText !== undefined ? parsePageContent(rawText) : undefined;
       const visibility: PageVisibility = project
         ? (parsed?.visibility ?? 'developers')
         : 'public';
@@ -932,7 +956,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   const sendError = (
     res: http.ServerResponse,
     status: number,
-    content: string,
+    content: Html | string,
     pagePath = '/wiki/'
   ) => sendErrorHtml(res, status, content, pagePath, getLiveTournament());
 
@@ -948,7 +972,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     suffix = ''
   ): string | undefined => {
     if (!isValidSlug(rawSlug)) {
-      sendError(res, 404, '<p>Invalid wiki page name.</p>');
+      sendError(res, 404, <p>Invalid wiki page name.</p>);
       return undefined;
     }
     const canonical = wiki.resolveSlug(rawSlug);
@@ -981,7 +1005,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
         sendError(
           res,
           403,
-          '<p>Your Discord account is not a member of the pkmn.ai Discord server.</p>'
+          <p>Your Discord account is not a member of the pkmn.ai Discord server.</p>
         );
         return false;
       }
@@ -991,7 +1015,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     }
 
     if (!authCfg?.github && !devAuth) {
-      sendError(res, 503, '<p>GitHub OAuth is not configured on this server.</p>');
+      sendError(res, 503, <p>GitHub OAuth is not configured on this server.</p>);
       return false;
     }
     if (!login) {
@@ -1002,8 +1026,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     sendError(
       res,
       403,
-      `<p>GitHub account <code>${escapeHtml(login)}</code> ` +
-        'is not registered for pkmn.ai competitions.</p>'
+      <p>GitHub account <code>{login}</code> is not registered for pkmn.ai competitions.</p>
     );
     return false;
   };
@@ -1020,7 +1043,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       if (process.env.NODE_ENV === 'development') {
         login = 'scheibo';
       } else {
-        sendError(res, 503, '<p>GitHub OAuth is not configured on this server.</p>');
+        sendError(res, 503, <p>GitHub OAuth is not configured on this server.</p>);
         return undefined;
       }
     } else {
@@ -1036,20 +1059,21 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       sendError(
         res,
         403,
-        `<p>GitHub account <code>${escapeHtml(login)}</code> ` +
-          'is not registered for pkmn.ai competitions.</p>'
+        <p>GitHub account <code>{login}</code> is not registered for pkmn.ai competitions.</p>
       );
       return undefined;
     }
 
     if (slug && !wiki.canEdit(login, slug)) {
       const project = wiki.getProjectPage(slug);
-      const target = escapeHtml(project ? project.name : formatTitle(slug));
+      const target = project ? project.name : formatTitle(slug);
       sendError(
         res,
         403,
-        `<p>GitHub account <code>${escapeHtml(login)}</code> ` +
-          `is not a registered developer of <strong>${target}</strong>.</p>`
+        <p>
+          GitHub account <code>{login}</code> is not a registered developer of{' '}
+          <strong>{target}</strong>.
+        </p>
       );
       return undefined;
     }
@@ -1066,14 +1090,14 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     if (!slug) return;
     if (!requireReadAuth(req, res, slug)) return;
 
-    const raw = wiki.readPage(slug);
+    const rawText = wiki.readPage(slug);
     const encoded = encodeSlug(slug);
-    if (raw === undefined) {
+    if (rawText === undefined) {
       if (wiki.isProjectPage(slug) && !wiki.canEdit(getEffectiveUser(req), slug)) {
         sendError(
           res,
           404,
-          '<p>This project page has not been created yet.</p>',
+          <p>This project page has not been created yet.</p>,
           `/wiki/${encoded}/`
         );
         return;
@@ -1082,14 +1106,14 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       return;
     }
     const meta: {title?: string; summary?: string} = {};
-    const html = renderDjot(raw, meta);
+    const html = renderDjot(rawText, meta);
     const heading = meta.title ?? wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     sendHtml(res, 200, renderPage({
       title: heading,
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
       nav: wikiNav(slug, 'view'),
-      content: html,
+      content: raw(html),
     }));
   };
 
@@ -1107,16 +1131,21 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       (p.visibility === 'discord' && isDiscord)
     ));
 
-    const items = pages.map(p => {
-      const href = p.slug === 'index' ? '/wiki' : `/wiki/${encodeSlug(p.slug)}`;
-      return `<li><a href="${href}">${escapeHtml(p.title)}</a></li>`;
-    }).join('');
     sendHtml(res, 200, renderPage({
       title: 'Pages — Wiki',
       heading: 'Pages',
       path: '/wiki/pages/',
       nav: wikiNav('index', 'pages'),
-      content: pages.length ? `<ul id="wiki-pages">${items}</ul>` : '<p>No pages yet.</p>',
+      content: pages.length ? (
+        <ul id='wiki-pages'>
+          {pages.map(p => {
+            const href = p.slug === 'index' ? '/wiki' : `/wiki/${encodeSlug(p.slug)}`;
+            return <li><a href={href}>{p.title}</a></li>;
+          })}
+        </ul>
+      ) : (
+        <p>No pages yet.</p>
+      ),
     }));
   });
 
@@ -1132,33 +1161,48 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   ) => {
     const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     const heading = `Edit ${displayTitle}`;
-    const previewBlock = previewHtml !== undefined
-      ? `<section id="wiki-preview">${previewHtml}</section>`
-      : '';
     const encoded = encodeSlug(slug);
-    const actionUrl = `/wiki/${escapeHtml(encoded)}`;
-    const summaryInput =
-      `<input type="text" name="message" value="${escapeHtml(message)}" ` +
-      'placeholder="Commit summary (optional)" maxlength="120" />';
-    const radioItem = (val: PageVisibility, label: string) => {
-      const checked = visibility === val ? ' checked="checked"' : '';
-      return `<li><input type="radio" name="visibility" value="${val}" id="vis-${val}"${checked}>` +
-        `<label for="vis-${val}">${label}</label></li>`;
-    };
-    const visibilityNav = visibility
-      ? `<nav id="wiki-visibility"><ul>${radioItem('developers', 'Developers')} — ` +
-        `${radioItem('discord', 'Discord')} — ${radioItem('public', 'Public')}</ul></nav>`
-      : '';
-    const form = `${previewBlock}<form id="wiki-editor" method="post" action="${actionUrl}">
-      <textarea name="content" spellcheck="true" autofocus>${escapeHtml(content)}</textarea>
-      ${summaryInput}
-      ${visibilityNav}
-      <div id="wiki-actions">
-        <button type="submit" name="action" value="save">Save</button>
-        —
-        <button type="submit" name="action" value="preview">Preview</button>
-      </div>
-    </form>`;
+    const actionUrl = `/wiki/${encoded}`;
+    const radioItem = (val: PageVisibility, label: string) => (
+      <li>
+        <input
+          type='radio'
+          name='visibility'
+          value={val}
+          id={`vis-${val}`}
+          checked={visibility === val}
+        />
+        <label htmlFor={`vis-${val}`}>{label}</label>
+      </li>
+    );
+    const form = (
+      <>
+        {previewHtml !== undefined && <section id='wiki-preview'>{raw(previewHtml)}</section>}
+        <form id='wiki-editor' method='post' action={actionUrl}>
+          <textarea name='content' spellcheck={true} autofocus={true}>{content}</textarea>
+          <input
+            type='text'
+            name='message'
+            value={message}
+            placeholder='Commit summary (optional)'
+            maxLength={120}
+          />
+          {visibility && (
+            <nav id='wiki-visibility'>
+              <ul>
+                {radioItem('developers', 'Developers')} — {radioItem('discord', 'Discord')} —{' '}
+                {radioItem('public', 'Public')}
+              </ul>
+            </nav>
+          )}
+          <div id='wiki-actions'>
+            <button type='submit' name='action' value='save'>Save</button>
+            {' — '}
+            <button type='submit' name='action' value='preview'>Preview</button>
+          </div>
+        </form>
+      </>
+    );
     sendHtml(res, 200, renderPage({
       title: heading,
       heading,
@@ -1179,12 +1223,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
   app.post('/wiki/:page', async (req, res) => {
     if (auth.isCrossSiteRequest(req)) {
-      sendError(res, 403, '<p>Cross-site requests are not allowed.</p>');
+      sendError(res, 403, <p>Cross-site requests are not allowed.</p>);
       return;
     }
     const rawSlug = slugParam(req.params.page);
     if (!isValidSlug(rawSlug)) {
-      sendError(res, 404, '<p>Invalid wiki page name.</p>');
+      sendError(res, 404, <p>Invalid wiki page name.</p>);
       return;
     }
     const slug = wiki.resolveSlug(rawSlug);
@@ -1217,7 +1261,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       sendError(
         res,
         status,
-        `<p>${escapeHtml(http.STATUS_CODES[status] ?? 'Internal Server Error')}</p>`,
+        <p>{http.STATUS_CODES[status] ?? 'Internal Server Error'}</p>,
         `/wiki/${encodeSlug(slug)}/`
       );
     }
@@ -1230,31 +1274,55 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       if (!requireReadAuth(req, res, slug)) return;
       const encoded = encodeSlug(slug);
       const revisions = await wiki.getHistory(slug);
-      const rows = revisions.map((rev, idx) => {
-        const date = new Date(rev.timestamp * 1000).toISOString().slice(0, 10);
-        const revUrl = `/wiki/${escapeHtml(encoded)}/${rev.sha}`;
-        const revLink = `<code><a href="${revUrl}">${rev.shortSha}</a></code>`;
-        const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
-        const displayAuthor = escapeHtml(wiki.formatAuthor(rev.author));
-        const authorLink = `<a href="${ghUrl}" class="subtle">${displayAuthor}</a>`;
-        const hideCls = idx >= TABLE_PAGE_SIZE ? ' class="hide"' : '';
-        return `<tr${hideCls}>
-          <td class="wiki-meta">${date}</td>
-          <td>${revLink} (<a href="${revUrl}?diff=1">diff</a>)</td>
-          <td>${authorLink}</td>
-          <td>${escapeHtml(rev.subject)}</td>
-        </tr>`;
-      }).join('');
-      const pagerHtml = renderTablePager({
-        id: 'wiki-history-pager',
-        label: 'Revision history pagination',
-        total: revisions.length,
-        singular: 'revision',
-        plural: 'revisions',
-      });
-      const table = revisions.length
-        ? renderTemplate(HISTORY_TEMPLATE, {rows, pagerHtml})
-        : '<p>No history for this page yet.</p>';
+      const table = revisions.length ? (
+        <>
+          <div className='table-wrap'>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Revision</th>
+                  <th>Author</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {revisions.map((rev, idx) => {
+                  const date = new Date(rev.timestamp * 1000).toISOString().slice(0, 10);
+                  const revUrl = `/wiki/${encoded}/${rev.sha}`;
+                  const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
+                  const displayAuthor = wiki.formatAuthor(rev.author);
+                  return (
+                    <tr className={idx >= TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                      <td className='wiki-meta'>{date}</td>
+                      <td>
+                        <code><a href={revUrl}>{rev.shortSha}</a></code> (
+                        <a href={`${revUrl}?diff=1`}>diff</a>)
+                      </td>
+                      <td>
+                        <a href={ghUrl} className='subtle'>{displayAuthor}</a>
+                      </td>
+                      <td>{rev.subject}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <TablePager
+            id='wiki-history-pager'
+            label='Revision history pagination'
+            total={revisions.length}
+            singular='revision'
+            plural='revisions'
+          />
+          <script>
+            {`document.addEventListener('DOMContentLoaded', () => {${TABLE_PAGER_SCRIPT}});`}
+          </script>
+        </>
+      ) : (
+        <p>No history for this page yet.</p>
+      );
       const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
       const heading = `History — ${displayTitle}`;
       sendHtml(res, 200, renderPage({
@@ -1266,7 +1334,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       }));
     } catch (err) {
       console.error('Error rendering wiki history:', err);
-      if (!res.headersSent) sendError(res, 500, '<p>Internal Server Error</p>');
+      if (!res.headersSent) sendError(res, 500, <p>Internal Server Error</p>);
     }
   });
 
@@ -1275,7 +1343,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       const rawSlug = slugParam(req.params.page);
       const sha = param(req.params.sha);
       if (!isValidSlug(rawSlug) || !SHA_RE.test(sha)) {
-        sendError(res, 404, '<p>Revision not found.</p>');
+        sendError(res, 404, <p>Revision not found.</p>);
         return;
       }
       const showDiff = req.query.diff === '1';
@@ -1288,7 +1356,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       if (showDiff) {
         const diff = await wiki.getRevisionDiff(slug, sha);
         if (diff === undefined) {
-          sendError(res, 404, '<p>Revision not found.</p>');
+          sendError(res, 404, <p>Revision not found.</p>);
           return;
         }
         let maxTicks = 3;
@@ -1298,40 +1366,48 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
         const fence = '`'.repeat(maxTicks);
         const renderedDiff = renderDjot(`${fence}diff\n${diff}\n${fence}`);
         const heading = `${displayTitle} @ ${sha.slice(0, 7)}`;
-        const snapLink =
-          `<p class="wiki-meta"><a href="/wiki/${escapeHtml(encoded)}/${sha}">` +
-          'View snapshot</a></p>';
         sendHtml(res, 200, renderPage({
           title: heading,
           heading,
           path: `/wiki/${encoded}/${sha}/`,
           nav: wikiNav(slug, 'history'),
-          content: `${snapLink}${renderedDiff}`,
+          content: (
+            <>
+              <p className='wiki-meta'>
+                <a href={`/wiki/${encoded}/${sha}`}>View snapshot</a>
+              </p>
+              {raw(renderedDiff)}
+            </>
+          ),
         }));
         return;
       }
 
-      const raw = await wiki.getRevisionContent(slug, sha);
-      if (raw === undefined) {
-        sendError(res, 404, '<p>Revision not found.</p>');
+      const rawText = await wiki.getRevisionContent(slug, sha);
+      if (rawText === undefined) {
+        sendError(res, 404, <p>Revision not found.</p>);
         return;
       }
       const meta: {title?: string; summary?: string} = {};
-      const html = renderDjot(raw, meta);
+      const html = renderDjot(rawText, meta);
       const heading = `${meta.title ?? displayTitle} @ ${sha.slice(0, 7)}`;
-      const diffLink =
-        `<p class="wiki-meta"><a href="/wiki/${escapeHtml(encoded)}/${sha}?diff=1">` +
-        'View diff</a></p>';
       sendHtml(res, 200, renderPage({
         title: heading,
         heading,
         path: `/wiki/${encoded}/${sha}/`,
         nav: wikiNav(slug, 'history'),
-        content: `${diffLink}${html}`,
+        content: (
+          <>
+            <p className='wiki-meta'>
+              <a href={`/wiki/${encoded}/${sha}?diff=1`}>View diff</a>
+            </p>
+            {raw(html)}
+          </>
+        ),
       }));
     } catch (err) {
       console.error('Error rendering wiki revision:', err);
-      if (!res.headersSent) sendError(res, 500, '<p>Internal Server Error</p>');
+      if (!res.headersSent) sendError(res, 500, <p>Internal Server Error</p>);
     }
   });
 

@@ -6,7 +6,7 @@ import {html} from 'site';
 import * as yaml from 'yaml';
 
 import {cite, header, style} from './build';
-import {EXT_ICON, escapeHtml, slugify} from './util';
+import {EXT_ICON, raw, slugify} from './util';
 
 export interface ArenaBadge {
   slot: string;
@@ -95,12 +95,126 @@ const RANKING = [
 // eslint-disable-next-line max-len
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
+const ProjectCard = ({project, bibliography, arenaInfo}: {
+  project: Project;
+  bibliography: {[key: string]: bibtex.Entry};
+  arenaInfo?: ArenaInfo;
+}) => {
+  const inactive = Array.isArray(project.active);
+  const identifier = project.source && /^https:\/\/git(hub|lab).com/.test(project.source)
+    ? project.source.slice(19)
+    : undefined;
+  const id =
+    (project.name ?? identifier ?? project.paper ?? project.identifier)!.replaceAll(' ', '');
+  const rawLabel = project.name ?? identifier ?? project.paper ?? project.identifier ?? '';
+  const slug = slugify(rawLabel).toLowerCase();
+  const isArena = Boolean(project.arena || arenaInfo);
+
+  const active = Array.isArray(project.active)
+    ? (project.active[0] === project.active[1]
+      ? `${project.active[0]}`
+      : `${project.active[0]} – ${project.active[1]}`)
+    : <>
+      {project.active} – <em>present</em>
+    </>;
+
+  const title = project.name ?? <em>{project.identifier ?? identifier}</em>;
+  const displayName = project.name ?? arenaInfo?.name ?? (project.identifier ?? identifier)!;
+  const defaultProfileHref = slug ? `/projects/${encodeURIComponent(slug)}/` : `#${id}`;
+  const profileHref = arenaInfo?.profileHref ?? defaultProfileHref;
+
+  return <section
+    id={id}
+    className='project'
+    data-slug={slug}
+    data-active={inactive ? undefined : 'true'}
+    data-arena={isArena ? 'true' : undefined}
+  >
+    <h3>
+      <a href={`#${id}`} className='subtle'>{title}</a>
+      {project.site && <a href={project.site} className='subtle'>{raw(EXT_ICON)}</a>}
+    </h3>
+    <table>
+      {project.paper && (() => {
+        const p = bibliography[project.paper];
+        return <tr>
+          <td><strong>Paper</strong></td>
+          <td><a href={p.fields.url} className='subtle'><em>{p.fields.title}</em></a></td>
+        </tr>;
+      })()}
+      <tr><td><strong>Active</strong></td><td>{active}</td></tr>
+      {isArena && <tr>
+        <td><strong>Arena</strong></td>
+        <td>
+          <a href={profileHref} className='arena-agent'><strong>{displayName}</strong></a>
+          {arenaInfo && arenaInfo.ladders.length > 0 && <>
+            {' · '}
+            {arenaInfo.ladders.map((b, idx) => <>
+              {idx > 0 && ', '}
+              {b.provisional || b.rank === undefined
+                ? <a href={`/arena/ladders/${b.slot}/`} className='subtle'>
+                  <tt>{b.name}</tt> <em>(provisional)</em>
+                </a>
+                : <a href={`/arena/ladders/${b.slot}/`} className='subtle'>
+                  <tt>{b.name}</tt> #{b.rank}
+                </a>}
+            </>)}
+          </>}
+        </td>
+      </tr>}
+      {project.license
+        ? <tr><td><strong>License</strong></td><td><tt>{project.license}</tt></td></tr>
+        : project.source && <tr><td><strong>License</strong></td><td>None</td></tr>}
+      {project.source && <tr>
+        <td><strong>Source</strong></td>
+        <td><a href={project.source}>{identifier ?? project.source}</a></td>
+      </tr>}
+      {project.engine && <tr>
+        <td><strong>Engine</strong></td>
+        <td>
+          {Array.isArray(project.engine)
+            ? project.engine.map(({name, url}, idx) => <>
+              {idx > 0 && ', '}
+              <a href={url} className='subtle'>{name}</a>
+            </>)
+            : project.engine as string}
+        </td>
+      </tr>}
+      {project.language && <tr>
+        <td><strong>Language</strong></td>
+        <td>
+          {Array.isArray(project.language) ? project.language.join(', ') : project.language}
+        </td>
+      </tr>}
+      {project.platform && <tr>
+        <td><strong>Platform</strong></td>
+        <td>
+          {Array.isArray(project.platform)
+            ? project.platform.map(({name, url}, idx) => <>
+              {idx > 0 && ', '}
+              <a href={url} className='subtle'>{name}</a>
+            </>)
+            : project.platform}
+        </td>
+      </tr>}
+      {project.release && <tr>
+        <td><strong>Release</strong></td>
+        <td>
+          <a href={project.release.url} className='subtle'>
+            {SEMVER.test(project.release.name)
+              ? <code>{project.release.name}</code>
+              : <i>{project.release.name}</i>}
+          </a>
+        </td>
+      </tr>}
+    </table>
+  </section>;
+};
+
 export function page(
   dir: string,
   arenaByName?: ReadonlyMap<string, ArenaInfo>
 ) {
-  const buf: string[] = [];
-
   const file = (ext: string) => path.join(dir, `projects.${ext}`);
 
   const bib = bibtex.parse(fs.readFileSync(file('bib'), 'utf8'), {sentenceCase: false});
@@ -150,123 +264,14 @@ export function page(
 
   const filler = fs.readFileSync(file('dj'), 'utf8');
   const markdown = html.render(filler);
-  buf.push(`<section><div class="description">${markdown}</div></section>`);
-  buf.push(
-    `<nav class="hide">
-      <ul>
-        <li>
-          <input type="radio" value="active" name="radio" id="active" />
-          <label for="active">Active</label>
-        </li>
-        —
-        <li>
-          <input type="radio" value="arena" name="radio" id="arena" />
-          <label for="arena">Arena</label>
-        </li>
-        —
-        <li>
-          <input type="radio" value="all" name="radio" id="all" checked="checked" />
-          <label for="all">All</label>
-        </li>
-        —
-        <li>
-          <input type="radio" value="inactive" name="radio" id="inactive" />
-          <label for="inactive">Inactive</label>
-        </li>
-      </ul>
-     </nav>`
-  );
-  for (const project of projects) {
-    const inactive = Array.isArray(project.active);
-    const identifier = project.source && /^https:\/\/git(hub|lab).com/.test(project.source)
-      ? project.source.slice(19)
-      : undefined;
-    const id =
-      (project.name ?? identifier ?? project.paper ?? project.identifier)!.replaceAll(' ', '');
-    const rawLabel = project.name ?? identifier ?? project.paper ?? project.identifier ?? '';
-    const slug = slugify(rawLabel).toLowerCase();
-    const arenaInfo = project.name ? arenaByName?.get(project.name) : undefined;
-    const isArena = Boolean(project.arena || arenaInfo);
-    const dataAttrs = ` data-slug="${escapeHtml(slug)}"` +
-      `${inactive ? '' : ' data-active="true"'}` +
-      `${isArena ? ' data-arena="true"' : ''}`;
-    buf.push(`<section id="${id}" class="project"${dataAttrs}>`);
-    const active = Array.isArray(project.active)
-      ? (project.active[0] === project.active[1]
-        ? `${project.active[0]}`
-        : `${project.active[0]} – ${project.active[1]}`)
-      : `${project.active} – <em>present</em>`;
-    const title = project.name ?? `<em>${project.identifier ?? identifier}</em>`;
-    const site = project.site ? `<a href="${project.site}" class="subtle">${EXT_ICON}</a>` : '';
-    buf.push(`<h3><a href="#${id}" class="subtle">${title}</a>${site}</h3>`);
-    buf.push('<table>');
-    if (project.paper) {
-      const p = bibliography[project.paper];
-      const paper = `<a href="${p.fields.url}" class="subtle"><em>${p.fields.title}</em></a>`;
-      buf.push(`<tr><td><strong>Paper</strong></td><td>${paper}</td></tr>`);
-    }
-    buf.push(`<tr><td><strong>Active</strong></td><td>${active}</td></tr>`);
-    if (isArena) {
-      const displayName = project.name ?? arenaInfo?.name ?? (project.identifier ?? identifier)!;
-      const defaultProfileHref = slug ? `/projects/${encodeURIComponent(slug)}/` : `#${id}`;
-      const profileHref = arenaInfo?.profileHref ?? defaultProfileHref;
-      const badgesHtml = arenaInfo && arenaInfo.ladders.length > 0
-        ? ' · ' + arenaInfo.ladders.map(b => (
-          b.provisional || b.rank === undefined
-            ? `<a href="/arena/ladders/${escapeHtml(b.slot)}/" class="subtle">` +
-              `<tt>${escapeHtml(b.name)}</tt> <em>(provisional)</em></a>`
-            : `<a href="/arena/ladders/${escapeHtml(b.slot)}/" class="subtle">` +
-              `<tt>${escapeHtml(b.name)}</tt> #${b.rank}</a>`
-        )).join(', ')
-        : '';
-      const nameLink = `<a href="${escapeHtml(profileHref)}" class="arena-agent">` +
-        `<strong>${escapeHtml(displayName)}</strong></a>`;
-      buf.push(`<tr><td><strong>Arena</strong></td><td>${nameLink}${badgesHtml}</td></tr>`);
-    }
-    if (project.license) {
-      buf.push(`<tr><td><strong>License</strong></td><td><tt>${project.license}</tt></td></tr>`);
-    } else if (project.source) {
-      buf.push('<tr><td><strong>License</strong></td><td>None</td></tr>');
-    }
-    if (project.source) {
-      const src = `<a href="${project.source}">${identifier ?? project.source}</a>`;
-      buf.push(`<tr><td><strong>Source</strong></td><td>${src}</td></tr>`);
-    }
-    if (project.engine) {
-      const engine = Array.isArray(project.engine)
-        ? project.engine.map(({name, url}) =>
-          `<a href="${url}" class="subtle">${name}</a>`).join(', ')
-        : project.engine as string;
-      buf.push(`<tr><td><strong>Engine</strong></td><td>${engine}</td></tr>`);
-    }
-    if (project.language) {
-      const lang = Array.isArray(project.language) ? project.language.join(', ') : project.language;
-      buf.push(`<tr><td><strong>Language</strong></td><td>${lang}</td></tr>`);
-    }
-    if (project.platform) {
-      const platform = Array.isArray(project.platform)
-        ? project.platform.map(({name, url}) =>
-          `<a href="${url}" class="subtle">${name}</a>`).join(', ')
-        : project.platform;
-      buf.push(`<tr><td><strong>Platform</strong></td><td>${platform}</td></tr>`);
-    }
-    if (project.release) {
-      const name = SEMVER.test(project.release.name)
-        ? `<code>${project.release.name}</code>`
-        : `<i>${project.release.name}</i>`;
-      const release = `<a href="${project.release.url}" class="subtle">${name}</a>`;
-      buf.push(`<tr><td><strong>Release</strong></td><td>${release}</td></tr>`);
-    }
-    buf.push('</table>');
-    buf.push('</section>');
-  }
 
   let latest = new Date(0);
-  for (const extension of ['bib', 'dj', 'ts', 'yml']) {
-    const date = fs.statSync(file(extension)).mtime;
+  for (const extension of ['bib', 'dj', 'ts', 'tsx', 'yml']) {
+    const f = file(extension);
+    if (!fs.existsSync(f)) continue;
+    const date = fs.statSync(f).mtime;
     if (latest < date) latest = date;
   }
-  buf.push(cite('Projects', latest));
 
   return {
     path: '/projects/',
@@ -285,7 +290,38 @@ export function page(
       }
       ${style}`,
     header: header('Projects'),
-    content: buf.join(''),
+    content: <>
+      <section><div className='description'>{raw(markdown)}</div></section>
+      <nav className='hide'>
+        <ul>
+          <li>
+            <input type='radio' value='active' name='radio' id='active' />
+            <label htmlFor='active'>Active</label>
+          </li>
+          {' — '}
+          <li>
+            <input type='radio' value='arena' name='radio' id='arena' />
+            <label htmlFor='arena'>Arena</label>
+          </li>
+          {' — '}
+          <li>
+            <input type='radio' value='all' name='radio' id='all' checked={true} />
+            <label htmlFor='all'>All</label>
+          </li>
+          {' — '}
+          <li>
+            <input type='radio' value='inactive' name='radio' id='inactive' />
+            <label htmlFor='inactive'>Inactive</label>
+          </li>
+        </ul>
+      </nav>
+      {projects.map(project => <ProjectCard
+        project={project}
+        bibliography={bibliography}
+        arenaInfo={project.name ? arenaByName?.get(project.name) : undefined}
+      />)}
+      {raw(cite('Projects', latest))}
+    </>,
     script: `document.addEventListener('DOMContentLoaded', () => {
       document.getElementsByTagName('nav')[0].classList.remove('hide');
       const projects = document.getElementsByClassName('project');

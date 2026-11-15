@@ -12,7 +12,7 @@ prose/BibTeX content guidelines, see [`CONTRIBUTING.md`](../.github/CONTRIBUTING
 ## 1. Prerequisites & First-Time Setup
 
 - **Node.js 24+** (uses Node's built-in `node:sqlite` `DatabaseSync` and `--env-file-if-exists=.env`)
-- **Git** (used at runtime by the Djot wiki in `server/wiki.ts` and sparse-checkout team submodules)
+- **Git** (used at runtime by the Djot wiki in `server/wiki.tsx` and sparse-checkout team submodules)
 - **Playwright Chromium** *(optional, required for `npm run shots` and `test/e2e.test.ts`)*
 
 Clone the repository, install dependencies, and initialize the sparse-checked-out reference team
@@ -149,22 +149,22 @@ worker control plane.
 │   └── migration/   # Sequential versioned SQL migrations (NNNN-description.sql)
 ├── docs/            # Project design, setup, development, testing, and admin documentation
 ├── server/          # Polka server, OAuth, account, wiki, Discord, Arena RPC, rating & team math
-├── static/          # Djot essays (*.dj), projects/research/glossary catalogs, HTML templates, CSS
+├── static/          # Djot essays (*.dj), projects/research/glossary catalogs, TSX runtime/views, CSS
 ├── teams/           # 1-NN team distance workspace (teams/index.ts) & reference blocklist pools
 ├── test/            # Vitest unit, integration, rating solver, protocol, and Playwright E2E suites
-└── tools/           # Operator CLI (pkmn.ts), scenario simulator (mock.ts), matchmaking simulator (simulate.ts), visual verifier (shots.ts)
+└── tools/           # Operator CLI (pkmn.ts), scenario simulator (mock.ts), matchmaking simulator (simulate.ts), visual verifier (shots.tsx)
 ```
 
 ### Key Workflows When Making Changes
 
-- **Static content, templates & CSS (`static/`):**
+- **Static content, TSX views & CSS (`static/`, `server/`):**
   - Essays and concept pages are authored in [Djot](https://djot.net/) (`static/*.dj`,
     `static/concepts/*.dj`), with catalogs in `static/projects.yml`, `static/projects.bib`,
     `static/research.bib`, and `static/glossary.yml`.
-  - Keep page HTML templates in `static/*.html` (rendered via `renderTemplate` from
-    `static/util.ts`) and stylesheets in `static/*.css` (never inline large HTML/CSS/JS blocks in
-    `server/*.ts`).
-  - After changing templates, CSS, or client scripts, run `npm run shots` to verify zero console
+  - Render HTML views using the custom React-free TSX renderer in `static/dom.ts` (`h`, `Fragment`,
+    `raw`) across `.tsx` modules (`static/*.tsx`, `server/*.tsx`, `tools/shots.tsx`), and keep
+    stylesheets in `static/*.css` / `tools/*.css`.
+  - After changing TSX views, CSS, or client scripts, run `npm run shots` to verify zero console
     errors and zero horizontal overflow across viewports and themes (see [TESTING.md](TESTING.md)).
 - **Database tables & migrations (`db/`):**
   - Each SQLite table owns a 1-to-1 module `db/<table>.ts` (both TypeScript types and SQL queries)

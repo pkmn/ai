@@ -73,8 +73,8 @@ node build/teams/index.js <candidate-team.txt> \
 
 ## 2. Visual Regression, Edge-Case Atlas & Layout Verification (`npm run shots`)
 
-Whenever modifying HTML templates (`static/*.html`), stylesheets (`static/*.css`), Djot layouts, or
-client scripts, run [`tools/shots.ts`](../tools/shots.ts):
+Whenever modifying TSX views (`static/*.tsx`, `server/*.tsx`), stylesheets (`static/*.css`), Djot
+layouts, or client scripts, run [`tools/shots.tsx`](../tools/shots.tsx):
 
 ```sh
 # Render all ~85 states across 4 viewports x 2 color schemes and generate .shots/index.html
@@ -107,7 +107,7 @@ captures full-page screenshots across:
 Every `(scenario, viewport, theme)` combination asserts **zero console/page errors** and **zero
 horizontal overflow** (`document.documentElement.scrollWidth <= window.innerWidth`), writing PNGs to
 `.shots/<viewport>/<theme>/<scenario>.png` and generating a self-contained **Visual Atlas** at
-`.shots/index.html` (rendered from [`tools/shots.html`](../tools/shots.html) and
+`.shots/index.html` (rendered from [`tools/shots.tsx`](../tools/shots.tsx) and
 [`tools/shots.css`](../tools/shots.css)).
 
 ### `.shots/index.html` Visual Atlas & Diff Viewer
@@ -287,7 +287,7 @@ GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... PUBLIC_URL=http://localhost:1234 n
 | [`pkmn.ts`](../tools/pkmn.ts) | `npm run pkmn -- <cmd>` | Operator CLI: quarantine/unquarantine versions, refund cooldowns, reassign developers, set 1500-Elo anchors, rotate ladders, manage tournaments, lookup Smogon IDs, and mint cookies (see [ADMIN.md](ADMIN.md)). |
 | [`mock.ts`](../tools/mock.ts) | `npm run mock -- ...` | Declarative `.mock` scenario engine, probabilistic Davidson match simulator, and organic site-activity generator (`simulate`). |
 | [`simulate.ts`](../tools/simulate.ts) | `npm run simulate -- ...` | Multi-seed Monte Carlo parameter-sweep simulator for active-learning matchmaking (`selectNextArenaMatch`) and Generalized Davidson ratings (`computeDavidsonRatings`). |
-| [`shots.ts`](../tools/shots.ts) | `npm run shots` | Headless Chromium visual-regression & layout verifier across 4 viewports × 2 color schemes. |
+| [`shots.tsx`](../tools/shots.tsx) | `npm run shots` | Headless Chromium visual-regression & layout verifier across 4 viewports × 2 color schemes. |
 | [`scenarios/`](../tools/scenarios/) | — | Checked-in `.mock` scenario scripts ([`seed.mock`](../tools/scenarios/seed.mock) for local dev & `shots`, [`e2e.mock`](../tools/scenarios/e2e.mock) for HTTP + Playwright integration tests). |
 
 ### Invoking `mock`

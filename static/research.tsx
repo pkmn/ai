@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as bibtex from '@retorquere/bibtex-parser';
 
 import {header} from './build';
+import './util';
 
 const names = (e: bibtex.Entry) => {
   const buf: string[] = [];
@@ -37,31 +38,29 @@ const TYPES: {[type: string]: (entry: bibtex.Entry) => string} = {
     ? `${e.fields.archiveprefix}:${e.fields.eprint} [${e.fields.primaryclass}].` : '',
 };
 
-function format(e: bibtex.Entry) {
+const Entry = ({entry: e}: {entry: bibtex.Entry}) => {
   const [author, date] = e.key.split(':');
   const name = /[A-Z][a-z]+[A-Z]/.test(author) && !author.startsWith('Mc')
     ? author.replaceAll(/[A-Z]/g, m => ` ${m}`).trimStart()
     : author;
   const id = `${name} ${date}`;
-
-  const parts: string[] = [];
-  parts.push(`<em>${e.fields.title}</em>. `);
-  parts.push(names(e));
-  parts.push(` (${e.fields.year}) `);
-  parts.push(TYPES[e.type](e));
-
   const urls = e.fields.url.split(',');
-  const sm = urls.length > 1
-    ? ` <a href="${urls[1]}" class="subtle"><em>(Includes supplementary text).</em></a>`
-    : '';
-  const dt = `<div id="${e.key}"><dt><a href="#${e.key}" class="subtle">[${id}]</a></dt>`;
-  const dd = `<dd><a href="${urls[0]}" class="subtle">${parts.join('')}</a>${sm}</dd></div>`;
-  return `${dt}${dd}`;
-}
+
+  return <div id={e.key}>
+    <dt><a href={`#${e.key}`} className='subtle'>[{id}]</a></dt>
+    <dd>
+      <a href={urls[0]} className='subtle'>
+        <em>{e.fields.title}</em>. {names(e)} ({e.fields.year}) {TYPES[e.type](e)}
+      </a>
+      {urls.length > 1 && <>
+        {' '}
+        <a href={urls[1]} className='subtle'><em>(Includes supplementary text).</em></a>
+      </>}
+    </dd>
+  </div>;
+};
 
 export function page(dir: string) {
-  const buf: string[] = [];
-
   const file = fs.readFileSync(path.join(dir, 'research.bib'), 'utf8');
   const bib = bibtex.parse(file, {sentenceCase: false});
   if (bib.errors.length) {
@@ -77,12 +76,6 @@ export function page(dir: string) {
 
     return as[0].localeCompare(bs[0]);
   });
-
-  buf.push('<dl>');
-  for (const entry of bib.entries) {
-    buf.push(format(entry));
-  }
-  buf.push('</dl>');
 
   return {
     path: '/research/',
@@ -113,6 +106,6 @@ export function page(dir: string) {
       dd { width: 100%; }
     }`,
     header: header('Research'),
-    content: buf.join(''),
+    content: <dl>{bib.entries.map(entry => <Entry entry={entry} />)}</dl>,
   };
 }

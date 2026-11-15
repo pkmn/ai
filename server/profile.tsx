@@ -1,0 +1,1925 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+import {AVATARS_DIR} from '../db';
+import type * as db from '../db';
+import {Renderer, header, injectLiveBanner} from '../static/build';
+import {
+  Child,
+  EXT_ICON,
+  Html,
+  TABLE_PAGE_SIZE,
+  TablePager,
+  formatUtcDate,
+  parseUtcDayMillis,
+  raw,
+  root,
+} from '../static/util';
+
+import * as arena from './arena';
+import * as ratings from './ratings';
+import * as render from './render';
+
+const PROFILE_STYLE = fs.readFileSync(root('static', 'profile.css'), 'utf8');
+
+interface VersionDynamicStats {
+  rank: string;
+  elo: string;
+  gxe: string;
+  peak: string;
+  record: string;
+  streak: string;
+  telemetry: string;
+}
+
+interface LadderProfileClientData {
+  optionsHtml: string;
+  oppOptionsHtml: string;
+  vstats: Record<string, VersionDynamicStats>;
+  reign: Record<string, string>;
+}
+
+function formatIsoDateTimeUtc(sec: number): string {
+  return `${new Date(sec * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`;
+}
+
+function formatDurationCell(seconds: number, boldDays = false): Html {
+  if (seconds <= 0) {
+    return <span className='muted'>—</span>;
+  }
+  const days = `${(seconds / 86400).toFixed(1)}d`;
+  const hours = `${Math.round(seconds / 3600).toLocaleString('en-US')}h`;
+  return (
+    <>
+      {boldDays ? <strong>{days}</strong> : days} <span className='muted'>({hours})</span>
+    </>
+  );
+}
+
+// Computes live, longest, and cumulative Top 1 / Top 10 / Top 100 reign durations.
+// If the entrant currently occupies a tier (`top*_entered_at` is set), the ongoing reign since the
+// last match (`nowSec - enteredAt`) is compared against `maxStreakSeconds`; `totalSeconds` already
+// accumulates elapsed intervals on every `recomputeLadderRatings` pass.
+function buildReignRowsHtml(
+  stats: {
+    top1EnteredAt?: number;
+    top1MaxStreakSeconds: number;
+    top1TotalSeconds: number;
+    top10EnteredAt?: number;
+    top10MaxStreakSeconds: number;
+    top10TotalSeconds: number;
+    top100EnteredAt?: number;
+    top100MaxStreakSeconds: number;
+    top100TotalSeconds: number;
+  },
+  nowSec: number
+): string {
+  const cur1 = stats.top1EnteredAt !== undefined
+    ? Math.max(0, nowSec - stats.top1EnteredAt)
+    : 0;
+  const max1 = Math.max(stats.top1MaxStreakSeconds, cur1);
+  const tot1 = stats.top1TotalSeconds;
+
+  const cur10 = stats.top10EnteredAt !== undefined
+    ? Math.max(0, nowSec - stats.top10EnteredAt)
+    : 0;
+  const max10 = Math.max(stats.top10MaxStreakSeconds, cur10);
+  const tot10 = stats.top10TotalSeconds;
+
+  const cur100 = stats.top100EnteredAt !== undefined
+    ? Math.max(0, nowSec - stats.top100EnteredAt)
+    : 0;
+  const max100 = Math.max(stats.top100MaxStreakSeconds, cur100);
+  const tot100 = stats.top100TotalSeconds;
+
+  const t1Tip = 'Guaranteed #1 (rank = 1 & settled)';
+  const t10Tip = 'Guaranteed Top 10 at 95% confidence (rank_max <= 10)';
+  const t100Tip = 'Guaranteed Top 100 at 95% confidence (rank_max <= 100)';
+
+  return String(
+    <>
+      <tr>
+        <td title={t1Tip}><strong>Top 1</strong></td>
+        <td className='num'>{formatDurationCell(cur1, cur1 > 0)}</td>
+        <td className='num'>{formatDurationCell(max1)}</td>
+        <td className='num'>{formatDurationCell(tot1)}</td>
+      </tr>
+      <tr>
+        <td title={t10Tip}><strong>Top 10</strong></td>
+        <td className='num'>{formatDurationCell(cur10, cur10 > 0)}</td>
+        <td className='num'>{formatDurationCell(max10)}</td>
+        <td className='num'>{formatDurationCell(tot10)}</td>
+      </tr>
+      <tr>
+        <td title={t100Tip}><strong>Top 100</strong></td>
+        <td className='num'>{formatDurationCell(cur100, cur100 > 0)}</td>
+        <td className='num'>{formatDurationCell(max100)}</td>
+        <td className='num'>{formatDurationCell(tot100)}</td>
+      </tr>
+    </>
+  );
+}
+
+function formatCurStreakNode(winStreak: number, lossStreak: number, played: number): Child {
+  if (winStreak >= 3) return <span className='yes'>W{winStreak}</span>;
+  if (winStreak >= 1) return `W${winStreak}`;
+  if (lossStreak >= 3) return <span className='no'>L{lossStreak}</span>;
+  if (lossStreak >= 1) return `L${lossStreak}`;
+  if (played > 0) return 'T1';
+  return <span className='muted'>—</span>;
+}
+
+function buildVersionDynamicStats(
+  entry: db.AgentLadderProfileEntry,
+  adjacentLos: ReadonlyMap<number, number>
+): VersionDynamicStats {
+  const isProvisional =
+    entry.role !== 'retired' && (entry.matches < 10 || entry.se > 60);
+  let rank: string;
+  if (entry.role === 'retired') {
+    const retDate = entry.retiredAt ? ` ${formatUtcDate(entry.retiredAt)}` : '';
+    rank = String(<span className='muted'>— (retired{retDate})</span>);
+  } else if (entry.rankCurrent !== undefined && !isProvisional) {
+    const nextRank = entry.rankCurrent + 1;
+    const los = adjacentLos.get(entry.versionId);
+    const rangeNote = (
+      entry.rankMin !== undefined &&
+      entry.rankMax !== undefined &&
+      entry.rankMin < entry.rankMax
+    )
+      ? ` [${entry.rankMin}–${entry.rankMax}]`
+      : '';
+    const losNote = los !== undefined
+      ? ` · LOS ${(los * 100).toFixed(1)}% vs. #${nextRank}`
+      : '';
+    rank = String(
+      <>
+        <strong>#{entry.rankCurrent}</strong>
+        {Boolean(rangeNote || losNote) && (
+          <> <span className='muted'>{rangeNote}{losNote}</span></>
+        )}
+      </>
+    );
+  } else if (isProvisional) {
+    rank = String(<span className='muted'>Provisional</span>);
+  } else {
+    rank = String(<span className='muted'>— (active)</span>);
+  }
+
+  const eloRounded = Math.round(entry.elo);
+  const ci = entry.isAnchor ? 0 : Math.round(1.96 * entry.se);
+  const elo = String(<><strong>{eloRounded}</strong> <span className='muted'>±{ci}</span></>);
+  const gxe = `${entry.gxe.toFixed(1)}%`;
+
+  let peak: string;
+  if (entry.settledAt !== undefined && entry.maxElo !== undefined) {
+    const pCi = entry.isAnchor
+      ? 0
+      : Math.round(1.96 * (entry.maxEloSe ?? entry.se));
+    const pGxe = (entry.maxGxe ?? entry.gxe).toFixed(1);
+    peak = String(
+      <>
+        {entry.bestRank !== undefined && <><strong>#{entry.bestRank}</strong> · </>}
+        {Math.round(entry.maxElo)} <span className='muted'>±{pCi} ({pGxe}% GXE)</span>
+      </>
+    );
+  } else {
+    peak = String(<span className='muted'>Unsettled</span>);
+  }
+
+  const wins = entry.ww + entry.wt;
+  const losses = entry.ll + entry.tl;
+  const ties = entry.split;
+  const record = `${wins}–${losses}–${ties}`;
+
+  const curNode = formatCurStreakNode(
+    entry.currentWinStreak,
+    entry.currentLossStreak,
+    entry.matches
+  );
+  const streak = String(
+    <>
+      {curNode} <span className='muted'>(max {entry.maxWinStreak}W / {entry.maxLossStreak}L)</span>
+    </>
+  );
+
+  const turnMillis = Math.round(entry.meanTurnMillis);
+  const ramText = Math.round(entry.peakRam).toLocaleString('en-US');
+  const telemetry = String(
+    <>{turnMillis} ms/turn <span className='muted'>· {ramText} MiB peak</span></>
+  );
+
+  return {rank, elo, gxe, peak, record, streak, telemetry};
+}
+
+function buildAllVersionsDynamicStats(
+  entries: db.AgentLadderProfileEntry[],
+  familyStats: db.AgentLadderStatsRow | undefined,
+  adjacentLos: ReadonlyMap<number, number>
+): VersionDynamicStats {
+  const activeEntries = entries
+    .filter(e => e.role === 'champion' || e.role === 'challenger')
+    .sort((a, b) => b.lcb - a.lcb || b.elo - a.elo);
+  const rep = activeEntries[0] ?? entries[0];
+  const base = buildVersionDynamicStats(rep, adjacentLos);
+
+  let totalW = 0;
+  let totalL = 0;
+  let totalT = 0;
+  let totalPlayed = 0;
+  for (const e of entries) {
+    totalW += e.ww + e.wt;
+    totalL += e.ll + e.tl;
+    totalT += e.split;
+    totalPlayed += e.matches;
+  }
+
+  let peak = base.peak;
+  if (familyStats?.maxElo !== undefined) {
+    const pCi = Math.round(1.96 * (familyStats.maxEloSe ?? rep.se));
+    const pGxe = (familyStats.maxGxe ?? rep.gxe).toFixed(1);
+    peak = String(
+      <>
+        {familyStats.bestRank !== undefined && <><strong>#{familyStats.bestRank}</strong> · </>}
+        {Math.round(familyStats.maxElo)} <span className='muted'>±{pCi} ({pGxe}% GXE)</span>
+      </>
+    );
+  }
+
+  let streak = base.streak;
+  if (familyStats) {
+    const curNode = formatCurStreakNode(
+      familyStats.currentWinStreak,
+      familyStats.currentLossStreak,
+      totalPlayed
+    );
+    streak = String(
+      <>
+        {curNode}{' '}
+        <span className='muted'>
+          (max {familyStats.maxWinStreak}W / {familyStats.maxLossStreak}L)
+        </span>
+      </>
+    );
+  }
+
+  return {
+    rank: base.rank,
+    elo: base.elo,
+    gxe: base.gxe,
+    peak,
+    record: `${totalW}–${totalL}–${totalT}`,
+    streak,
+    telemetry: base.telemetry,
+  };
+}
+
+function renderVersionsLineageSvg(
+  agentName: string,
+  entriesDesc: db.AgentLadderProfileEntry[],
+  snapshots: db.LadderSnapshotHistoryRow[],
+  nowSec: number
+): Html {
+  const entriesChron = [...entriesDesc].reverse();
+  const todayUtc = formatUtcDate(nowSec);
+  const snapsByVer = new Map<number, db.LadderSnapshotHistoryRow[]>();
+  for (const s of snapshots) {
+    const list = snapsByVer.get(s.versionId) ?? [];
+    list.push(s);
+    snapsByVer.set(s.versionId, list);
+  }
+
+  const allDaysSet = new Set<string>();
+  const ptsByVer = new Map<number, Array<{day: string; elo: number; se: number}>>();
+
+  for (const e of entriesChron) {
+    const rawSnaps = (snapsByVer.get(e.versionId) ?? []).filter(r => r.matches > 0);
+    const pts = rawSnaps.map(r => ({day: r.dayUtc, elo: r.elo, se: r.se}));
+    const startDay = formatUtcDate(e.submittedAt);
+    if (pts.length === 0) {
+      pts.push({day: startDay, elo: e.elo, se: e.se});
+      if (e.role !== 'retired' && todayUtc > startDay) {
+        pts.push({day: todayUtc, elo: e.elo, se: e.se});
+      }
+    } else if (e.role !== 'retired' && pts[pts.length - 1].day < todayUtc) {
+      pts.push({day: todayUtc, elo: e.elo, se: e.se});
+    }
+    for (const pt of pts) allDaysSet.add(pt.day);
+    ptsByVer.set(e.versionId, pts);
+  }
+
+  const allDays = [...allDaysSet].sort((a, b) => a.localeCompare(b));
+  const minDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[0]) : 0;
+  const maxDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[allDays.length - 1]) : 0;
+
+  let minElo = 1500;
+  let maxElo = 1750;
+  for (const pts of ptsByVer.values()) {
+    for (const pt of pts) {
+      if (pt.elo - 40 < minElo) minElo = pt.elo - 40;
+      if (pt.elo + 40 > maxElo) maxElo = pt.elo + 40;
+    }
+  }
+  const axisMin = Math.min(1400, Math.floor(minElo / 100) * 100);
+  const axisMax = Math.max(1800, Math.ceil(maxElo / 100) * 100);
+  const xLeft = 45;
+  const xRight = 720;
+  const yTop = 25;
+  const yBottom = 185;
+
+  // Map YYYY-MM-DD dates proportionally by UTC timestamp rather than array index so irregular
+  // release cadence (e.g. rapid patch followed by weeks of steady play) is true to calendar time.
+  const mapX = (day: string): number => {
+    if (maxDayMillis <= minDayMillis) return xRight;
+    const frac = (parseUtcDayMillis(day) - minDayMillis) / (maxDayMillis - minDayMillis);
+    return Math.round((xLeft + frac * (xRight - xLeft)) * 10) / 10;
+  };
+  const mapY = (elo: number): number => {
+    const clamped = Math.max(axisMin, Math.min(axisMax, elo));
+    const frac = (axisMax - clamped) / Math.max(1, axisMax - axisMin);
+    return Math.round((yTop + frac * (yBottom - yTop)) * 10) / 10;
+  };
+
+  const gridLines: Html[] = [];
+  const yLabels: Html[] = [];
+  const step = axisMax - axisMin > 500 ? 150 : 100;
+  for (let tick = axisMax; tick >= axisMin; tick -= step) {
+    const y = mapY(tick);
+    gridLines.push(
+      <line
+        x1={xLeft}
+        y1={y}
+        x2={xRight}
+        y2={y}
+        stroke-opacity={tick === 1500 ? '0.3' : undefined}
+        stroke-dasharray={tick === 1500 ? '3,3' : undefined}
+      />
+    );
+    yLabels.push(<text x='38' y={y + 4}>{tick}</text>);
+  }
+
+  const activeEntries = entriesChron
+    .filter(e => e.role === 'champion' || e.role === 'challenger')
+    .sort((a, b) => b.lcb - a.lcb);
+  const primaryVerId = (activeEntries[0] ?? entriesChron[entriesChron.length - 1])?.versionId;
+
+  const releaseDividers: Html[] = [];
+  const xLabels: Html[] = [];
+  const seenLabelX = new Set<number>();
+
+  for (let i = 0; i < entriesChron.length; i++) {
+    const e = entriesChron[i];
+    const pts = ptsByVer.get(e.versionId) ?? [];
+    if (pts.length === 0) continue;
+    const x0 = pts.length === 1 && entriesChron.length === 1 ? xLeft : mapX(pts[0].day);
+    if (i > 0 && x0 > xLeft + 25 && x0 < xRight - 25) {
+      releaseDividers.push(<line x1={x0} y1='18' x2={x0} y2='195' />);
+    }
+    const nearExisting = [...seenLabelX].some(prevX => Math.abs(prevX - x0) < 75);
+    if (!nearExisting && x0 < xRight - 55) {
+      seenLabelX.add(x0);
+      const dayLabel = `${render.formatShortDay(pts[0].day)} (${e.version})`;
+      xLabels.push(<text x={x0} y='212'>{dayLabel}</text>);
+    }
+  }
+  xLabels.push(<text x={xRight} y='212'>Today</text>);
+
+  const seriesEls: Html[] = [];
+  const pendingLabels: Array<{
+    x: number;
+    y: number;
+    text: string;
+    isPrimary: boolean;
+  }> = [];
+
+  for (const e of entriesChron) {
+    const pts = ptsByVer.get(e.versionId) ?? [];
+    if (pts.length === 0) continue;
+    const coords = pts.length === 1
+      ? [
+        {x: xLeft, y: mapY(pts[0].elo), pt: pts[0]},
+        {x: xRight, y: mapY(pts[0].elo), pt: pts[0]},
+      ]
+      : pts.map(pt => ({x: mapX(pt.day), y: mapY(pt.elo), pt}));
+
+    const isPrimary = e.versionId === primaryVerId;
+    const ci = e.isAnchor ? 0 : Math.round(1.96 * e.se);
+    const upper = coords.map(c => `${c.x},${mapY(c.pt.elo + (e.isAnchor ? 0 : 1.96 * c.pt.se))}`);
+    const lower = [...coords]
+      .reverse()
+      .map(c => `${c.x},${mapY(c.pt.elo - (e.isAnchor ? 0 : 1.96 * c.pt.se))}`);
+    const polyPts = [...upper, ...lower].join(' ');
+    const linePts = coords.map(c => `${c.x},${c.y}`).join(' ');
+    const last = coords[coords.length - 1];
+    const labelText = `${e.version} (${Math.round(e.elo)} ±${ci})`;
+    const labelX = Math.min(xRight - 115, Math.max(xLeft + 10, last.x - 110));
+    const labelY = Math.max(22, last.y - 10);
+
+    if (isPrimary) {
+      const lcbPts = coords
+        .map(c => `${c.x},${mapY(c.pt.elo - (e.isAnchor ? 0 : 1.96 * c.pt.se))}`)
+        .join(' ');
+      seriesEls.push(
+        <polygon points={polyPts} fill='var(--hl-symbol)' fill-opacity='0.1' />,
+        <polyline
+          fill='none'
+          stroke='var(--hl-symbol)'
+          stroke-opacity='0.75'
+          stroke-width='1.25'
+          stroke-dasharray='3,2'
+          points={lcbPts}
+        />,
+        <polyline
+          fill='none'
+          stroke='var(--hl-symbol)'
+          stroke-width='2.25'
+          points={linePts}
+        />,
+        <circle cx={last.x} cy={last.y} r='3' fill='var(--hl-symbol)' />
+      );
+    } else {
+      const op = e.role === 'retired' ? '0.45' : '0.65';
+      seriesEls.push(
+        <polygon points={polyPts} fill='currentColor' fill-opacity='0.06' />,
+        <polyline
+          fill='none'
+          stroke='currentColor'
+          stroke-opacity={op}
+          stroke-width='1.6'
+          points={linePts}
+        />,
+        <circle cx={last.x} cy={last.y} r='2.5' fill='currentColor' fill-opacity={op} />
+      );
+    }
+    pendingLabels.push({x: labelX, y: labelY, text: labelText, isPrimary});
+  }
+
+  pendingLabels.sort((a, b) => a.y - b.y || Number(b.isPrimary) - Number(a.isPrimary));
+  for (let i = 1; i < pendingLabels.length; i++) {
+    const cur = pendingLabels[i];
+    for (let j = 0; j < i; j++) {
+      const prev = pendingLabels[j];
+      if (Math.abs(cur.x - prev.x) < 115 && cur.y - prev.y < 14) {
+        cur.y = Math.min(yBottom + 4, prev.y + 14);
+      }
+    }
+  }
+  for (const lbl of pendingLabels) {
+    if (lbl.isPrimary) {
+      seriesEls.push(
+        <text
+          x={lbl.x}
+          y={lbl.y}
+          fill='var(--hl-symbol)'
+          font-size='11'
+          font-weight='bold'
+        >
+          {lbl.text}
+        </text>
+      );
+    } else {
+      seriesEls.push(
+        <text x={lbl.x} y={lbl.y} fill='currentColor' fill-opacity='0.6' font-size='11'>
+          {lbl.text}
+        </text>
+      );
+    }
+  }
+
+  return (
+    <figure className='chart'>
+      <svg
+        viewBox='0 0 760 220'
+        role='img'
+        aria-label={`${agentName} Version Lineage and Rating Convergence`}
+      >
+        <g stroke='currentColor' stroke-opacity='0.12' stroke-width='1'>
+          {gridLines}
+        </g>
+        {releaseDividers.length > 0 && (
+          <g stroke='currentColor' stroke-opacity='0.2' stroke-width='1' stroke-dasharray='2,3'>
+            {releaseDividers}
+          </g>
+        )}
+        <g fill='currentColor' fill-opacity='0.5' font-size='11' text-anchor='end'>
+          {yLabels}
+        </g>
+        <g fill='currentColor' fill-opacity='0.5' font-size='11' text-anchor='middle'>
+          {xLabels}
+        </g>
+        {seriesEls}
+      </svg>
+    </figure>
+  );
+}
+
+function renderVersionsPane(
+  agentName: string,
+  ladderKey: string,
+  isDefault: boolean,
+  entriesDesc: db.AgentLadderProfileEntry[],
+  snapshots: db.LadderSnapshotHistoryRow[],
+  nowSec: number
+): Html {
+  const entriesChron = [...entriesDesc].reverse();
+  const prevEloByVer = new Map<number, number>();
+  for (let i = 1; i < entriesChron.length; i++) {
+    prevEloByVer.set(entriesChron[i].versionId, entriesChron[i - 1].elo);
+  }
+
+  const activePrimary = entriesDesc
+    .filter(e => e.role === 'champion' || e.role === 'challenger')
+    .sort((a, b) => b.lcb - a.lcb)[0];
+
+  return (
+    <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
+      {renderVersionsLineageSvg(agentName, entriesDesc, snapshots, nowSec)}
+      <div className='table-wrap'>
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th className='num'>Elo</th>
+              <th className='num' title='Elo improvement over previous version'>
+                {'\u0394'} Elo
+              </th>
+              <th className='num'>GXE</th>
+              <th className='num'>W–L–T</th>
+              <th className='num'>Turn</th>
+              <th className='num'>Peak RAM</th>
+              <th className='num'>Submitted</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entriesDesc.map((e, idx) => {
+              const isPrimary = activePrimary?.versionId === e.versionId;
+              const isRetired = e.role === 'retired';
+              const eloRounded = Math.round(e.elo);
+              const ci = e.isAnchor ? 0 : Math.round(1.96 * e.se);
+              const prevElo = prevEloByVer.get(e.versionId);
+
+              let deltaCell: Html;
+              if (prevElo === undefined) {
+                deltaCell = <td className='num muted'>—</td>;
+              } else {
+                const diff = Math.round(e.elo) - Math.round(prevElo);
+                if (diff > 0) {
+                  deltaCell = <td className='num'><span className='yes'>+{diff}</span></td>;
+                } else if (diff < 0) {
+                  deltaCell = <td className='num'><span className='no'>{diff}</span></td>;
+                } else {
+                  deltaCell = <td className='num muted'>0</td>;
+                }
+              }
+
+              const wins = e.ww + e.wt;
+              const losses = e.ll + e.tl;
+              const ties = e.split;
+              const turnText = `${Math.round(e.meanTurnMillis)} ms`;
+              const ramText = `${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
+              const classes: string[] = [];
+              if (isRetired) classes.push('secondary');
+              if (idx >= TABLE_PAGE_SIZE) classes.push('hide');
+
+              return (
+                <tr
+                  className={classes.length > 0 ? classes.join(' ') : undefined}
+                  data-vrow={e.version}
+                >
+                  <td>
+                    {isPrimary
+                      ? <code><strong>{e.version}</strong></code>
+                      : <code>{e.version}</code>}
+                    {isRetired && <> <span className='muted'>(retired)</span></>}
+                  </td>
+                  <td className='num'>
+                    {isPrimary ? <strong>{eloRounded}</strong> : eloRounded}{' '}
+                    <span className='muted'>±{ci}</span>
+                  </td>
+                  {deltaCell}
+                  <td className='num'>{e.gxe.toFixed(1)}%</td>
+                  <td className='num'>{wins}–{losses}–{ties}</td>
+                  <td className='num'>{turnText}</td>
+                  <td className='num'>{ramText}</td>
+                  <td className='num muted'>{formatUtcDate(e.submittedAt)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        label='Versions pagination'
+        total={entriesDesc.length}
+        singular='version'
+        plural='versions'
+      />
+    </div>
+  );
+}
+
+function renderHeadToHeadPane(opts: {
+  agentId: number;
+  ladderKey: string;
+  isDefault: boolean;
+  agentEntries: db.AgentLadderProfileEntry[];
+  allEntries: db.LeaderboardEntryView[];
+  pairs: db.PairAggregateRow[];
+  publicDir: string;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
+  profileSlugs: ReadonlySet<string>;
+}): {pane: Html; empty: boolean} {
+  const {
+    agentId,
+    ladderKey,
+    isDefault,
+    agentEntries,
+    allEntries,
+    pairs,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+  } = opts;
+  const emptyPane = (
+    <div
+      className={isDefault ? 'table-wrap profile-pane' : 'table-wrap profile-pane hide'}
+      data-ladder={ladderKey}
+      data-empty='true'
+    >
+      <p className='empty-state muted'>No head-to-head matches yet.</p>
+    </div>
+  );
+
+  const activeEntries = agentEntries
+    .filter(e => e.role === 'champion' || e.role === 'challenger')
+    .sort((a, b) => b.lcb - a.lcb);
+  const rep = activeEntries[0] ?? agentEntries[0];
+  if (!rep) return {pane: emptyPane, empty: true};
+
+  const pairMap = new Map<string, db.PairAggregateRow>();
+  for (const p of pairs) {
+    pairMap.set(`${p.lowVersionId}:${p.highVersionId}`, p);
+  }
+
+  // Pick each opponent agent's primary active (or top) version that has played against `rep`.
+  const oppCandidates = allEntries.filter(e => e.agentId !== agentId);
+  const seenOppAgents = new Set<number>();
+  const h2hRows: Html[] = [];
+
+  let fallbackSolve: ReturnType<typeof ratings.solveIndexedDavidson> | undefined;
+
+  for (const opp of oppCandidates) {
+    if (seenOppAgents.has(opp.agentId)) continue;
+    const lowId = Math.min(rep.versionId, opp.versionId);
+    const highId = Math.max(rep.versionId, opp.versionId);
+    const pair = pairMap.get(`${lowId}:${highId}`);
+    if (!pair) continue;
+
+    const isLow = rep.versionId === lowId;
+    const wins = isLow ? pair.ww + pair.wt : pair.ll + pair.tl;
+    const losses = isLow ? pair.ll + pair.tl : pair.ww + pair.wt;
+    const ties = pair.split;
+    const total = wins + losses + ties;
+    if (total === 0) continue;
+
+    seenOppAgents.add(opp.agentId);
+
+    const oppHref = render.resolveAgentHref(
+      publicDir,
+      projectMeta,
+      opp.agentSlug,
+      opp.agentName,
+      profileSlugs
+    );
+    const oppLink = render.formatAgentLink(opp.agentName, oppHref, true);
+    const oppElo = Math.round(opp.elo);
+    const oppCi = opp.isAnchor ? 0 : Math.round(1.96 * opp.se);
+
+    const scorePct = ((wins + 0.5 * ties) / total) * 100;
+    const deltaTheta = (rep.elo - opp.elo) / ratings.ELO_SCALE;
+    const expPct = ratings.expectedMatchScore(deltaTheta) * 100;
+    const resid = scorePct - expPct;
+    const residSign = resid > 0 ? '+' : '';
+    const residText = `${residSign}${resid.toFixed(1)}%`;
+    let residNode: Child = residText;
+    let residTip: string | undefined;
+    // Gate stylistic Best Matchup / Nemesis highlighting on >= 10 paired matches so tiny early
+    // samples (e.g. 1-0 = +50% over expectation) don't masquerade as non-transitive counterpicks.
+    if (total >= 10 && resid >= 4.5) {
+      residNode = <span className='yes'>{residText}</span>;
+      residTip = `Best Matchup (${residText} over Davidson expectation)`;
+    } else if (total >= 10 && resid <= -4.5) {
+      residNode = <span className='no'>{residText}</span>;
+      residTip = `Relative underperformance vs. expectation (${residText})`;
+    }
+
+    const signedCur = isLow ? pair.currentStreak : -pair.currentStreak;
+    const maxW = isLow ? pair.lowMaxWinStreak : pair.highMaxWinStreak;
+    const maxL = isLow ? pair.highMaxWinStreak : pair.lowMaxWinStreak;
+    let curStrNode: Child;
+    if (signedCur >= 3) curStrNode = <span className='yes'>W{signedCur}</span>;
+    else if (signedCur >= 1) curStrNode = `W${signedCur}`;
+    else if (signedCur <= -3) curStrNode = <span className='no'>L{-signedCur}</span>;
+    else if (signedCur <= -1) curStrNode = `L${-signedCur}`;
+    else curStrNode = 'T1';
+
+    let losVal = pair.lowLos !== undefined
+      ? (isLow ? pair.lowLos : 1 - pair.lowLos)
+      : undefined;
+    if (losVal === undefined) {
+      fallbackSolve ??= ratings.solveIndexedDavidson(allEntries, pairs);
+      const idxUs = fallbackSolve.indexByVer.get(rep.versionId);
+      const idxOpp = fallbackSolve.indexByVer.get(opp.versionId);
+      if (idxUs !== undefined && idxOpp !== undefined) {
+        losVal = ratings.computeLOS(
+          fallbackSolve.theta,
+          fallbackSolve.covariance,
+          allEntries.length,
+          idxUs,
+          idxOpp
+        );
+      }
+    }
+    const losPct = losVal !== undefined ? losVal * 100 : 50;
+
+    const wltTip = `${wins} W, ${ties} Split (WL/LW/TT), ${losses} L`;
+    const rowCls = h2hRows.length >= TABLE_PAGE_SIZE ? 'opp-row hide' : 'opp-row';
+
+    h2hRows.push(
+      <tr
+        className={rowCls}
+        data-opp={opp.agentSlug}
+        title={`Click to filter Recent Matches vs. ${opp.agentName}`}
+      >
+        <td data-val={opp.agentName}>
+          {raw(oppLink)} <code>{opp.version}</code>
+        </td>
+        <td className='num' data-val={oppElo}>
+          {oppElo} <span className='muted'>±{oppCi}</span>
+        </td>
+        <td className='num' data-val={wins} title={wltTip}>
+          {wins}–{losses}–{ties}
+        </td>
+        <td className='num' data-val={scorePct.toFixed(1)}>
+          {scorePct >= 50
+            ? <strong>{scorePct.toFixed(1)}%</strong>
+            : `${scorePct.toFixed(1)}%`}
+        </td>
+        <td className='num muted' data-val={expPct.toFixed(1)}>
+          {expPct.toFixed(1)}%
+        </td>
+        <td className='num' data-val={resid.toFixed(1)} title={residTip}>
+          {residNode}
+        </td>
+        <td className='center' data-val={signedCur}>
+          {curStrNode} <span className='muted'>({maxW}W/{maxL}L)</span>
+        </td>
+        <td className='num' data-val={losPct.toFixed(1)}>
+          {losPct.toFixed(1)}%
+        </td>
+      </tr>
+    );
+  }
+
+  if (h2hRows.length === 0) {
+    return {pane: emptyPane, empty: true};
+  }
+
+  const thWlt = 'Match Wins – Losses – Ties (underlying WW / Split / LL in tooltip)';
+  const thExp = 'Expected score % under Generalized Davidson model E[S | delta]';
+  const thDelta =
+    'Davidson Matchup Residual (Actual Score % - Expected Score %): ' +
+    'identifies stylistic Best Matchup (+) and Nemesis (-)';
+  const thStr = 'Current streak (Longest Win / Loss streak vs. opponent)';
+  const thLos = 'Pairwise Likelihood of Superiority';
+
+  return {
+    empty: false,
+    pane: (
+      <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
+        <div className='table-wrap'>
+          <table className='h2h-table'>
+            <thead>
+              <tr>
+                <th className='sortable' data-col='0' data-type='str'>Opponent</th>
+                <th className='num sortable' data-col='1' data-type='num'>Elo</th>
+                <th className='num sortable' data-col='2' data-type='num' title={thWlt}>
+                  W–L–T
+                </th>
+                <th className='num sortable' data-col='3' data-type='num'>Score</th>
+                <th className='num sortable' data-col='4' data-type='num' title={thExp}>
+                  Expected
+                </th>
+                <th className='num sortable' data-col='5' data-type='num' title={thDelta}>
+                  {'\u0394'}
+                </th>
+                <th className='center sortable' data-col='6' data-type='num' title={thStr}>
+                  Streak
+                </th>
+                <th className='num sortable' data-col='7' data-type='num' title={thLos}>
+                  LOS
+                </th>
+              </tr>
+            </thead>
+            <tbody>{h2hRows}</tbody>
+          </table>
+        </div>
+        <TablePager
+          label='Head-to-head pagination'
+          total={h2hRows.length}
+          singular='opponent'
+          plural='opponents'
+        />
+      </div>
+    ),
+  };
+}
+
+function invertCategory(cat: db.RecentMatchView['category']): string {
+  const flip = (c: string) => (c === 'W' ? 'L' : c === 'L' ? 'W' : 'T');
+  return `${flip(cat[0])}${flip(cat[1])}`;
+}
+
+function renderRecentMatchesPane(opts: {
+  agentSlug: string;
+  agentName: string;
+  ladderKey: string;
+  isDefault: boolean;
+  matches: db.RecentMatchView[];
+  publicDir: string;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
+  profileSlugs: ReadonlySet<string>;
+  nowSec: number;
+}): Html {
+  const {
+    agentSlug,
+    agentName,
+    ladderKey,
+    isDefault,
+    matches,
+    publicDir,
+    projectMeta,
+    profileSlugs,
+    nowSec,
+  } = opts;
+
+  const agentLinks: Record<string, string> = {};
+  for (const m of matches) {
+    for (const side of [m.p1, m.p2]) {
+      if (!agentLinks[side.slug]) {
+        const href = render.resolveAgentHref(
+          publicDir,
+          projectMeta,
+          side.slug,
+          side.name,
+          profileSlugs
+        );
+        if (href) agentLinks[side.slug] = href;
+      }
+    }
+  }
+
+  const bankTitle =
+    `Remaining ${agentName} time bank in Game 1 / Game 2 (Showdown timer: 150s cap)`;
+
+  return (
+    <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
+      <div className='table-wrap'>
+        <table className='matches-table'>
+          <thead>
+            <tr>
+              <th>Match</th>
+              <th>Ver.</th>
+              <th>Opponent</th>
+              <th className='center' title='Match Outcome (Game 1 / Game 2 outcomes)'>Result</th>
+              <th className='num' title='Turns in Game 1 / Game 2'>Turns</th>
+              <th className='num' title={bankTitle}>Bank</th>
+              <th className='num' title='Peak XNU phys_footprint RAM across the 2-game match'>
+                RAM
+              </th>
+              <th className='num'>Completed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matches.length === 0 ? (
+              <tr><td colSpan={8} className='center muted'>No completed matches yet.</td></tr>
+            ) : (
+              matches.map((m, idx) => {
+                const weAreP1 = m.p1.slug === agentSlug;
+                const ourSide = weAreP1 ? m.p1 : m.p2;
+                const oppSide = weAreP1 ? m.p2 : m.p1;
+                const ternary = ratings.toTernaryMatchOutcome(m.category);
+                const ourOutcome = weAreP1 ? ternary.p1 : ternary.p2;
+                const ourCat = weAreP1 ? m.category : invertCategory(m.category);
+
+                let resNode: Html;
+                if (ourOutcome === 'W') {
+                  resNode = (
+                    <><span className='yes'>W</span> <span className='muted'>({ourCat})</span></>
+                  );
+                } else if (ourOutcome === 'L') {
+                  resNode = (
+                    <><span className='no'>L</span> <span className='muted'>({ourCat})</span></>
+                  );
+                } else {
+                  resNode = <>T <span className='muted'>({ourCat})</span></>;
+                }
+
+                const g1Bank = Math.round(weAreP1 ? m.p1Game1BankSeconds : m.p2Game1BankSeconds);
+                const g2Bank = Math.round(weAreP1 ? m.p1Game2BankSeconds : m.p2Game2BankSeconds);
+                const peakRam = Math.round(weAreP1 ? m.p1PeakRam : m.p2PeakRam);
+
+                const oppHref = agentLinks[oppSide.slug];
+                const tsTitle = formatIsoDateTimeUtc(m.completedAt);
+                const rel = render.formatRelativeTime(nowSec, m.completedAt);
+                const detailHtml = render.renderBattleInlineDetailHtml(
+                  arena.enrichMatchView(publicDir, m),
+                  agentLinks
+                );
+                const rowCls = idx >= TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
+
+                return (
+                  <>
+                    <tr
+                      className={rowCls}
+                      data-ver={ourSide.version}
+                      data-opp={oppSide.slug}
+                      tabIndex={0}
+                      aria-expanded='false'
+                    >
+                      <td>
+                        <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
+                        <code>{m.id}</code>
+                      </td>
+                      <td><code>{ourSide.version}</code></td>
+                      <td>
+                        {raw(render.formatAgentLink(oppSide.name, oppHref, false))}{' '}
+                        <code>{oppSide.version}</code>
+                      </td>
+                      <td className='center'>{resNode}</td>
+                      <td className='num'>{m.game1Turns} / {m.game2Turns}</td>
+                      <td className='num'>{g1Bank}s / {g2Bank}s</td>
+                      <td className='num'>{peakRam.toLocaleString('en-US')}M</td>
+                      <td className='num muted' title={tsTitle}>{rel}</td>
+                    </tr>
+                    <tr className='battle-detail-row hide' data-detail-for={m.id}>
+                      <td colSpan={8}>{raw(detailHtml)}</td>
+                    </tr>
+                  </>
+                );
+              })
+            )}
+            {matches.length > 0 && (
+              <tr className='empty-filter-row hide'>
+                <td colSpan={8} className='center muted'>
+                  No matching battles in recent history.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        label='Recent matches pagination'
+        total={matches.length}
+        singular='match'
+        plural='matches'
+        prevLabel={'\u2190 Newer'}
+        nextLabel={'Older \u2192'}
+      />
+    </div>
+  );
+}
+
+function buildProjectMetaRows(
+  db: db.Database,
+  agent: db.AgentRow,
+  meta: render.ProjectMeta | undefined,
+  latestEntry: db.AgentLadderProfileEntry | undefined
+): Html[] {
+  const rows: Html[] = [];
+  const devs = db.getDevelopersForAgent(agent.id);
+  if (devs.length > 0) {
+    rows.push(
+      <tr>
+        <td><strong>Author</strong></td>
+        <td>
+          {devs.map((d, i) => [
+            i > 0 && ', ',
+            <a href={`https://github.com/${encodeURIComponent(d.githubLogin)}`} className='subtle'>
+              {d.githubLogin}
+            </a>,
+          ])}
+        </td>
+      </tr>
+    );
+  }
+
+  if (meta?.active !== undefined) {
+    const activeNode = Array.isArray(meta.active)
+      ? (meta.active[0] === meta.active[1]
+        ? `${meta.active[0]}`
+        : `${meta.active[0]} – ${meta.active[1]}`)
+      : <>{meta.active} – <em>present</em></>;
+    rows.push(<tr><td><strong>Active</strong></td><td>{activeNode}</td></tr>);
+  }
+
+  if (meta?.license) {
+    rows.push(<tr><td><strong>License</strong></td><td><tt>{meta.license}</tt></td></tr>);
+  } else if (meta?.source) {
+    rows.push(<tr><td><strong>License</strong></td><td>None</td></tr>);
+  }
+
+  if (meta?.source) {
+    const identifier = /^https:\/\/git(hub|lab)\.com\//.test(meta.source)
+      ? meta.source.slice(19)
+      : meta.source;
+    rows.push(
+      <tr>
+        <td><strong>Source</strong></td>
+        <td><a href={meta.source}>{identifier}</a></td>
+      </tr>
+    );
+  }
+
+  if (meta?.engine) {
+    const engNode = Array.isArray(meta.engine)
+      ? meta.engine.map((e, i) => [
+        i > 0 && ', ',
+        <a href={e.url} className='subtle'>{e.name}</a>,
+      ])
+      : meta.engine;
+    rows.push(<tr><td><strong>Engine</strong></td><td>{engNode}</td></tr>);
+  }
+
+  if (meta?.language) {
+    const langText = Array.isArray(meta.language)
+      ? meta.language.join(', ')
+      : meta.language;
+    rows.push(<tr><td><strong>Language</strong></td><td>{langText}</td></tr>);
+  }
+
+  if (latestEntry) {
+    const pkgNode = latestEntry.package === 'bundle'
+      ? <><tt>darwin/arm64</tt> bundle</>
+      : <><tt>linux/arm64</tt> OCI</>;
+    rows.push(
+      <tr>
+        <td><strong>Artifact</strong></td>
+        <td>
+          {pkgNode}
+          {latestEntry.unpackedBytes !== undefined && (
+            <>
+              {' '}
+              <span className='muted'>
+                ({Math.round(latestEntry.unpackedBytes / (1024 * 1024))} MB)
+              </span>
+            </>
+          )}
+        </td>
+      </tr>
+    );
+  }
+
+  return rows;
+}
+
+function buildProfileScript(
+  profileDataMap: Record<string, LadderProfileClientData>,
+  defaultLadderKey: string
+): string {
+  return `
+  document.addEventListener('DOMContentLoaded', () => {
+    const profileData = ${render.safeInlineJson(profileDataMap)};
+    const ladderRadios = document.querySelectorAll('input[name="ladder"]');
+    const verSelect = document.getElementById('ver-select');
+    const oppSelect = document.getElementById('opp-select');
+    const reignTbody = document.getElementById('reign-tbody');
+    const matchupsSec = document.getElementById('matchups');
+    const matchesSec = document.getElementById('matches');
+    const panes = document.querySelectorAll('.profile-pane');
+    let curLad = ${render.safeInlineJson(defaultLadderKey)};
+    let curVer = 'all';
+    let curOpp = 'all';
+    let matchPage = 1;
+    const pageSize = 25;
+    const panePagers = new WeakMap();
+
+    const updatePagerControls = (pager, page, total) => {
+      if (!pager) return;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      const infoEl = pager.querySelector('[data-pager-info]');
+      const singular = pager.dataset.singular || 'row';
+      const plural = pager.dataset.plural || 'rows';
+      const word = total === 1 ? singular : plural;
+      pager.classList.toggle('hide', totalPages <= 1);
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= totalPages;
+      if (infoEl) {
+        infoEl.textContent =
+          'Page ' + page + ' of ' + totalPages +
+          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+      }
+    };
+
+    document.querySelectorAll('#versions .profile-pane, #matchups .profile-pane').forEach(pane => {
+      const tbody = pane.querySelector('tbody');
+      const pager = pane.querySelector('.pager[data-table-pager]');
+      if (!tbody || !pager) return;
+      let page = 1;
+      const apply = () => {
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const total = rows.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        if (page > totalPages) page = totalPages;
+        if (page < 1) page = 1;
+        const start = (page - 1) * pageSize;
+        rows.forEach((row, idx) => {
+          row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+        });
+        updatePagerControls(pager, page, total);
+      };
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (page > 1) {
+            page--;
+            apply();
+          }
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          page++;
+          apply();
+        });
+      }
+      panePagers.set(pane, {
+        reset: () => {
+          page = 1;
+          apply();
+        },
+      });
+    });
+
+    const applyMatchesPager = () => {
+      const activeMatchPane = document.querySelector(
+        '#matches .profile-pane[data-ladder="' + curLad + '"]'
+      );
+      if (!activeMatchPane) return;
+      const allRows = Array.from(activeMatchPane.querySelectorAll('tbody tr[data-ver]'));
+      const matching = allRows.filter(row => (
+        (curVer === 'all' || row.dataset.ver === curVer) &&
+        (curOpp === 'all' || row.dataset.opp === curOpp)
+      ));
+      const total = matching.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (matchPage > totalPages) matchPage = totalPages;
+      if (matchPage < 1) matchPage = 1;
+      const start = (matchPage - 1) * pageSize;
+      const visible = new Set(matching.slice(start, start + pageSize));
+      allRows.forEach(row => {
+        const hidden = !visible.has(row);
+        row.classList.toggle('hide', hidden);
+        if (hidden) {
+          row.classList.remove('expanded');
+          row.setAttribute('aria-expanded', 'false');
+          const detail = row.nextElementSibling;
+          if (detail && detail.classList.contains('battle-detail-row')) {
+            detail.classList.add('hide');
+          }
+        }
+      });
+      const emptyFilterRow = activeMatchPane.querySelector('tbody tr.empty-filter-row');
+      if (emptyFilterRow) {
+        emptyFilterRow.classList.toggle('hide', total > 0);
+      }
+      const pager = activeMatchPane.querySelector('.pager[data-table-pager]');
+      updatePagerControls(pager, matchPage, total);
+    };
+
+    document.querySelectorAll('#matches .profile-pane').forEach(pane => {
+      const pager = pane.querySelector('.pager[data-table-pager]');
+      if (!pager) return;
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (matchPage > 1) {
+            matchPage--;
+            applyMatchesPager();
+          }
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          matchPage++;
+          applyMatchesPager();
+        });
+      }
+    });
+
+    const syncUrl = hashOverride => {
+      if (!history.replaceState) return;
+      const url = new URL(location.href);
+      if (curOpp && curOpp !== 'all') {
+        url.searchParams.set('vs', curOpp);
+      } else {
+        url.searchParams.delete('vs');
+      }
+      const nextHash = hashOverride !== undefined ? hashOverride : location.hash;
+      history.replaceState(null, '', url.pathname + url.search + nextHash);
+    };
+
+    const applyStats = ver => {
+      curVer = ver || 'all';
+      matchPage = 1;
+      const ladData = profileData[curLad];
+      if (!ladData) return;
+      const s = ladData.vstats[curVer] || ladData.vstats.all;
+      if (s) {
+        document.getElementById('stat-rank').innerHTML = s.rank;
+        document.getElementById('stat-elo').innerHTML = s.elo;
+        document.getElementById('stat-gxe').innerHTML = s.gxe;
+        document.getElementById('stat-peak').innerHTML = s.peak;
+        document.getElementById('stat-record').innerHTML = s.record;
+        document.getElementById('stat-streak').innerHTML = s.streak;
+        document.getElementById('stat-telemetry').innerHTML = s.telemetry;
+      }
+      const reignHtml =
+        (ladData.reign && ladData.reign[curVer]) ||
+        (ladData.reign && ladData.reign.all);
+      if (reignTbody && reignHtml) {
+        reignTbody.innerHTML = reignHtml;
+      }
+      applyMatchesPager();
+      if (matchupsSec) {
+        matchupsSec.querySelectorAll('tr.opp-row').forEach(row => {
+          row.classList.toggle('active-opp', curOpp !== 'all' && row.dataset.opp === curOpp);
+        });
+      }
+    };
+
+    const applyLadder = ladKey => {
+      const ladData = profileData[ladKey];
+      if (!ladData) return;
+      curLad = ladKey;
+      curVer = 'all';
+      curOpp = 'all';
+      ladderRadios.forEach(r => {
+        if (r.value === ladKey) r.checked = true;
+      });
+      panes.forEach(p => {
+        const isCurrent = p.dataset.ladder === ladKey;
+        p.classList.toggle('hide', !isCurrent);
+        if (isCurrent) {
+          const ctrl = panePagers.get(p);
+          if (ctrl) ctrl.reset();
+        }
+      });
+      if (matchupsSec) {
+        const mp = matchupsSec.querySelector('.profile-pane[data-ladder="' + ladKey + '"]');
+        matchupsSec.classList.toggle('hide', !mp || mp.dataset.empty === 'true');
+      }
+      if (verSelect) {
+        verSelect.innerHTML = ladData.optionsHtml;
+        verSelect.value = 'all';
+      }
+      if (oppSelect && ladData.oppOptionsHtml) {
+        oppSelect.innerHTML = ladData.oppOptionsHtml;
+        oppSelect.value = 'all';
+      }
+      applyStats('all');
+    };
+
+    if (verSelect) {
+      verSelect.addEventListener('change', () => applyStats(verSelect.value));
+    }
+
+    if (oppSelect) {
+      oppSelect.addEventListener('change', () => {
+        curOpp = oppSelect.value || 'all';
+        applyStats(curVer);
+        syncUrl();
+      });
+    }
+
+    ladderRadios.forEach(r => r.addEventListener('change', () => {
+      applyLadder(r.value);
+      syncUrl('#' + r.value);
+    }));
+
+    const applyHash = () => {
+      if (!location.hash) return;
+      const hashKey = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+      if (profileData[hashKey]) {
+        applyLadder(hashKey);
+      }
+    };
+    window.addEventListener('hashchange', applyHash);
+    applyHash();
+
+    const initVs = new URLSearchParams(location.search).get('vs');
+    if (initVs && oppSelect) {
+      const matchOpt = Array.from(oppSelect.options).find(o => o.value === initVs);
+      if (matchOpt) {
+        curOpp = initVs;
+        oppSelect.value = initVs;
+        applyStats(curVer);
+      }
+    }
+
+    if (matchupsSec) {
+      matchupsSec.addEventListener('click', e => {
+        if (e.target.closest('a') || e.target.closest('th')) return;
+        const row = e.target.closest('tr.opp-row');
+        if (!row || !row.dataset.opp) return;
+        const nextOpp = curOpp === row.dataset.opp ? 'all' : row.dataset.opp;
+        curOpp = nextOpp;
+        if (oppSelect) oppSelect.value = nextOpp;
+        applyStats(curVer);
+        syncUrl();
+        if (nextOpp !== 'all' && matchesSec) {
+          matchesSec.scrollIntoView({behavior: 'smooth'});
+        }
+      });
+    }
+
+    document.querySelectorAll('.h2h-table').forEach(table => {
+      const headers = table.querySelectorAll('th.sortable');
+      let sortCol = -1;
+      let sortAsc = false;
+      headers.forEach(th => th.addEventListener('click', () => {
+        const col = Number(th.dataset.col);
+        const isNum = th.dataset.type === 'num';
+        sortAsc = sortCol === col ? !sortAsc : !isNum;
+        sortCol = col;
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort((a, b) => {
+          const av = a.children[col].dataset.val || '';
+          const bv = b.children[col].dataset.val || '';
+          const cmp = isNum ? Number(av) - Number(bv) : av.localeCompare(bv);
+          return sortAsc ? cmp : -cmp;
+        });
+        rows.forEach(row => tbody.appendChild(row));
+        const pane = table.closest('.profile-pane');
+        const ctrl = pane ? panePagers.get(pane) : undefined;
+        if (ctrl) ctrl.reset();
+      }));
+    });
+
+    if (matchesSec) {
+      const toggleMatchRow = row => {
+        const detail = row.nextElementSibling;
+        if (!detail || !detail.classList.contains('battle-detail-row')) return;
+        const open = !detail.classList.toggle('hide');
+        row.classList.toggle('expanded', open);
+        row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      matchesSec.addEventListener('click', e => {
+        if (e.target.closest('a')) return;
+        const row = e.target.closest('tr.battle-row');
+        if (row) toggleMatchRow(row);
+      });
+      matchesSec.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const row = e.target.closest('tr.battle-row');
+        if (row && e.target === row) {
+          e.preventDefault();
+          toggleMatchRow(row);
+        }
+      });
+    }
+  });
+`;
+}
+
+export interface AgentProfileDocument {
+  slug: string;
+  name: string;
+  status: db.AgentRow['status'];
+  logoHref?: string;
+  owners: Array<{github: string; smogon?: string; smogonId?: number}>;
+  metadata?: render.ProjectMeta;
+  ladders: unknown[];
+}
+
+const LOGO_CONTENT_TYPES: Record<string, string> = {
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+};
+
+export function resolveAgentLogo(
+  agent: Pick<db.AgentRow, 'slug' | 'logo'>,
+  avatarsDir = AVATARS_DIR
+): {filePath: string; fileName: string; href: string; contentType: string} | undefined {
+  if (!agent.logo) return undefined;
+  const filePath = path.join(avatarsDir, agent.logo);
+  if (!fs.existsSync(filePath)) return undefined;
+  const ext = (path.extname(agent.logo) || '.png').toLowerCase();
+  const fileName = `${agent.slug}${ext}`;
+  return {
+    filePath,
+    fileName,
+    href: `/projects/${encodeURIComponent(fileName)}`,
+    contentType: LOGO_CONTENT_TYPES[ext] ?? 'application/octet-stream',
+  };
+}
+
+export function renderAgentProfile(opts: {
+  db: db.Database;
+  renderer: Renderer;
+  agent: db.AgentRow;
+  publicDir: string;
+  avatarsDir?: string;
+  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
+  profileSlugs: ReadonlySet<string>;
+  liveTournament?: {id: string; name: string};
+  nowSec: number;
+}): {html: string; json: AgentProfileDocument} {
+  const {
+    db,
+    renderer,
+    agent,
+    publicDir,
+    avatarsDir = AVATARS_DIR,
+    projectMeta,
+    profileSlugs,
+    liveTournament,
+    nowSec,
+  } = opts;
+
+  const ladders = db.getAgentParticipatedLadders(agent.id);
+  const resolvedLogo = resolveAgentLogo(agent, avatarsDir);
+  const logoHref = resolvedLogo?.href;
+  const logoNode = logoHref
+    ? <img className='project-logo' src={logoHref} alt={agent.name} />
+    : undefined;
+
+  const owners = db.getDevelopersForAgent(agent.id).map(d => ({
+    github: d.githubLogin,
+    smogon: d.smogonUsername,
+    smogonId: d.smogonId,
+  }));
+  const meta = projectMeta.get(agent.name);
+  const siteLink = meta?.site ? (
+    <a href={meta.site} className='subtle' title='Project Homepage'>
+      {raw(EXT_ICON)}
+    </a>
+  ) : undefined;
+  const profileHeader = injectLiveBanner(
+    header(<>{agent.name}{siteLink}</>),
+    liveTournament ?? db.getRunningTournament()
+  );
+
+  if (ladders.length === 0) {
+    const statusNote = agent.status === 'pending' ? 'Pending qualification' : 'No active entries';
+    const emptyReign = buildReignRowsHtml(
+      {
+        top1MaxStreakSeconds: 0,
+        top1TotalSeconds: 0,
+        top10MaxStreakSeconds: 0,
+        top10TotalSeconds: 0,
+        top100MaxStreakSeconds: 0,
+        top100TotalSeconds: 0,
+      },
+      nowSec
+    );
+    const content = (
+      <>
+        {logoNode}
+        <div className='controls-bar hide'>
+          <nav aria-label='Format'>
+            <ul>
+              <li><span className='muted'>—</span></li>
+            </ul>
+          </nav>
+          <span className='muted'>·</span>
+          <div className='ver-picker'>
+            <label htmlFor='ver-select' className='muted'>Version</label>
+            <select id='ver-select' className='min-select' aria-label='Version'>
+              <option value='all'>All (0)</option>
+            </select>
+          </div>
+        </div>
+
+        <section id='overview'>
+          <div className='grid-2'>
+            <table className='kv'>
+              {buildProjectMetaRows(db, agent, meta, undefined)}
+            </table>
+
+            <table className='kv'>
+              <tr>
+                <td><strong>Rank</strong></td>
+                <td id='stat-rank'><span className='muted'>— ({statusNote})</span></td>
+              </tr>
+              <tr>
+                <td><strong>Elo</strong></td>
+                <td id='stat-elo'><span className='muted'>—</span></td>
+              </tr>
+              <tr>
+                <td><strong>GXE</strong></td>
+                <td id='stat-gxe'><span className='muted'>—</span></td>
+              </tr>
+              <tr>
+                <td><strong>Peak</strong></td>
+                <td id='stat-peak'><span className='muted'>—</span></td>
+              </tr>
+              <tr>
+                <td><strong>Matches</strong></td>
+                <td id='stat-record'><span className='muted'>0–0–0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Streak</strong></td>
+                <td id='stat-streak'><span className='muted'>—</span></td>
+              </tr>
+              <tr>
+                <td><strong>Telemetry</strong></td>
+                <td id='stat-telemetry'><span className='muted'>—</span></td>
+              </tr>
+            </table>
+          </div>
+
+          <div className='table-wrap reign hide'>
+            <table>
+              <thead>
+                <tr>
+                  <th>Reign</th>
+                  <th className='num'>Current Streak</th>
+                  <th className='num'>Longest Streak</th>
+                  <th className='num'>Total Duration</th>
+                </tr>
+              </thead>
+              <tbody id='reign-tbody'>
+                {raw(emptyReign)}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <p className='empty-state muted'>No Arena ladder entries yet.</p>
+
+        <section id='versions' className='hide'>
+          <h3><a href='#versions' className='subtle'>Versions</a></h3>
+          <p className='empty-state muted'>No versions yet.</p>
+        </section>
+
+        <section id='matchups' className='hide'>
+          <h3><a href='#matchups' className='subtle'>Head-to-Head</a></h3>
+          <p className='empty-state muted'>No head-to-head matches yet.</p>
+        </section>
+
+        <section id='matches' className='hide'>
+          <div className='matches-header'>
+            <h3><a href='#matches' className='subtle'>Recent Matches</a></h3>
+            <div className='ver-picker'>
+              <label htmlFor='opp-select' className='muted'>Opponent</label>
+              <select id='opp-select' className='min-select' aria-label='Opponent'>
+                <option value='all'>All (0)</option>
+              </select>
+            </div>
+          </div>
+          <p className='empty-state muted'>No completed matches yet.</p>
+        </section>
+
+        <script>{buildProfileScript({}, '')}</script>
+      </>
+    );
+    const html = renderer.render({
+      id: 'agent-profile',
+      title: `${agent.name} | pkmn.ai`,
+      header: profileHeader,
+      path: `/projects/${agent.slug}/`,
+      style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
+      content,
+    });
+    return {
+      html,
+      json: {
+        slug: agent.slug,
+        name: agent.name,
+        status: agent.status,
+        logoHref,
+        owners,
+        metadata: meta,
+        ladders: [],
+      },
+    };
+  }
+
+  const profileDataMap: Record<string, LadderProfileClientData> = {};
+  const ladderJsonList: unknown[] = [];
+  const formatNavParts: Child[] = [];
+  const versionsPanes: Html[] = [];
+  const matchupsPanes: Html[] = [];
+  const matchesPanes: Html[] = [];
+
+  const usedKeys = new Set<string>();
+  const ladderKeys = ladders.map(l => {
+    const base = l.status !== 'archived' ? l.slot : l.id.toLowerCase();
+    const key = usedKeys.has(base) ? l.id.toLowerCase() : base;
+    usedKeys.add(key);
+    return key;
+  });
+
+  const defaultLadderKey = ladderKeys[0];
+  let latestOverallEntry: db.AgentLadderProfileEntry | undefined;
+  let defaultMatchupsEmpty = true;
+
+  for (let i = 0; i < ladders.length; i++) {
+    const l = ladders[i];
+    const lKey = ladderKeys[i];
+    const isDefault = i === 0;
+
+    const agentEntries = db.getAgentLadderProfileEntries(agent.id, l.id);
+    if (!latestOverallEntry || (
+      agentEntries[0] && agentEntries[0].submittedAt > latestOverallEntry.submittedAt
+    )) {
+      latestOverallEntry = agentEntries[0];
+    }
+
+    const allEntries = db.getLeaderboardEntries(l.id);
+    const pairs = db.getPairAggregatesForLadder(l.id);
+    const snapshots = db.getRatingSnapshotsForLadder(l.id, agent.id);
+    const familyStats = db.getAgentLadderStats(l.id, agent.id);
+    const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id);
+    const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
+
+    ladderJsonList.push({
+      key: lKey,
+      id: l.id,
+      slot: l.slot,
+      name: l.name,
+      format: l.format,
+      team: l.team,
+      status: l.status,
+      familyStats,
+      versions: agentEntries.map(e => ({
+        version: e.version,
+        package: e.package,
+        role: e.role,
+        isAnchor: e.isAnchor,
+        elo: Math.round(e.elo),
+        se: Math.round(e.se * 10) / 10,
+        lcb: Math.round(e.lcb),
+        gxe: Math.round(e.gxe * 10) / 10,
+        rankCurrent: e.rankCurrent,
+        bestRank: e.bestRank,
+        maxElo: e.maxElo !== undefined ? Math.round(e.maxElo) : undefined,
+        matches: e.matches,
+        wins: e.ww + e.wt,
+        losses: e.ll + e.tl,
+        ties: e.split,
+        meanTurnMillis: Math.round(e.meanTurnMillis),
+        peakRam: Math.round(e.peakRam),
+        maxWinStreak: e.maxWinStreak,
+        maxLossStreak: e.maxLossStreak,
+        submittedAt: e.submittedAt,
+        settledAt: e.settledAt,
+        retiredAt: e.retiredAt,
+      })),
+      recentMatches,
+    });
+
+    if (i > 0) formatNavParts.push(' — ');
+    formatNavParts.push(
+      <li id={lKey}>
+        <input
+          type='radio'
+          name='ladder'
+          id={`lad-${lKey}`}
+          value={lKey}
+          checked={isDefault}
+        />
+        <label htmlFor={`lad-${lKey}`}>{l.name}</label>
+      </li>
+    );
+
+    const optNodes = (
+      <>
+        <option value='all' selected={true}>All ({agentEntries.length})</option>
+        {agentEntries.map(e => {
+          const stateTag = e.role === 'retired' ? 'retired' : 'active';
+          return <option value={e.version}>{e.version} ({stateTag})</option>;
+        })}
+      </>
+    );
+
+    const oppMap = new Map<string, {slug: string; name: string; count: number}>();
+    for (const m of recentMatches) {
+      const opp = m.p1.slug === agent.slug ? m.p2 : m.p1;
+      const cur = oppMap.get(opp.slug);
+      if (cur) cur.count++;
+      else oppMap.set(opp.slug, {slug: opp.slug, name: opp.name, count: 1});
+    }
+    for (const e of allEntries) {
+      if (e.agentId === agent.id || oppMap.has(e.agentSlug)) continue;
+      oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
+    }
+    const sortedOpps = [...oppMap.values()].sort(
+      (a, b) => b.count - a.count || a.name.localeCompare(b.name)
+    );
+    const oppOptNodes = (
+      <>
+        <option value='all' selected={true}>All ({recentMatches.length})</option>
+        {sortedOpps.map(o => (
+          <option value={o.slug}>{o.name} ({o.count})</option>
+        ))}
+      </>
+    );
+
+    const vstats: Record<string, VersionDynamicStats> = {
+      all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos),
+    };
+    const reign: Record<string, string> = {
+      all: buildReignRowsHtml(
+        familyStats ?? {
+          top1MaxStreakSeconds: 0,
+          top1TotalSeconds: 0,
+          top10MaxStreakSeconds: 0,
+          top10TotalSeconds: 0,
+          top100MaxStreakSeconds: 0,
+          top100TotalSeconds: 0,
+        },
+        nowSec
+      ),
+    };
+
+    for (const e of agentEntries) {
+      vstats[e.version] = buildVersionDynamicStats(e, adjacentLos);
+      reign[e.version] = buildReignRowsHtml(
+        {
+          top1EnteredAt: e.top1EnteredAt,
+          top1MaxStreakSeconds: e.top1MaxStreakSeconds,
+          top1TotalSeconds: e.top1TotalSeconds,
+          top10EnteredAt: e.top10EnteredAt,
+          top10MaxStreakSeconds: e.top10MaxStreakSeconds,
+          top10TotalSeconds: e.top10TotalSeconds,
+          top100EnteredAt: e.top100EnteredAt,
+          top100MaxStreakSeconds: e.top100MaxStreakSeconds,
+          top100TotalSeconds: e.top100TotalSeconds,
+        },
+        nowSec
+      );
+    }
+
+    profileDataMap[lKey] = {
+      optionsHtml: String(optNodes),
+      oppOptionsHtml: String(oppOptNodes),
+      vstats,
+      reign,
+    };
+
+    versionsPanes.push(
+      renderVersionsPane(agent.name, lKey, isDefault, agentEntries, snapshots, nowSec)
+    );
+    const h2hRes = renderHeadToHeadPane({
+      agentId: agent.id,
+      ladderKey: lKey,
+      isDefault,
+      agentEntries,
+      allEntries,
+      pairs,
+      publicDir,
+      projectMeta,
+      profileSlugs,
+    });
+    matchupsPanes.push(h2hRes.pane);
+    if (isDefault) {
+      defaultMatchupsEmpty = h2hRes.empty;
+    }
+
+    matchesPanes.push(
+      renderRecentMatchesPane({
+        agentSlug: agent.slug,
+        agentName: agent.name,
+        ladderKey: lKey,
+        isDefault,
+        matches: recentMatches,
+        publicDir,
+        projectMeta,
+        profileSlugs,
+        nowSec,
+      })
+    );
+  }
+
+  const initialData = profileDataMap[defaultLadderKey];
+  const initStats = initialData.vstats.all;
+  const content = (
+    <>
+      {logoNode}
+      <div className='controls-bar'>
+        <nav aria-label='Format'>
+          <ul>{formatNavParts}</ul>
+        </nav>
+        <span className='muted'>·</span>
+        <div className='ver-picker'>
+          <label htmlFor='ver-select' className='muted'>Version</label>
+          <select id='ver-select' className='min-select' aria-label='Version'>
+            {raw(initialData.optionsHtml)}
+          </select>
+        </div>
+      </div>
+
+      <section id='overview'>
+        <div className='grid-2'>
+          <table className='kv'>
+            {buildProjectMetaRows(db, agent, meta, latestOverallEntry)}
+          </table>
+
+          <table className='kv'>
+            <tr><td><strong>Rank</strong></td><td id='stat-rank'>{raw(initStats.rank)}</td></tr>
+            <tr><td><strong>Elo</strong></td><td id='stat-elo'>{raw(initStats.elo)}</td></tr>
+            <tr><td><strong>GXE</strong></td><td id='stat-gxe'>{raw(initStats.gxe)}</td></tr>
+            <tr><td><strong>Peak</strong></td><td id='stat-peak'>{raw(initStats.peak)}</td></tr>
+            <tr>
+              <td><strong>Matches</strong></td>
+              <td id='stat-record'>{raw(initStats.record)}</td>
+            </tr>
+            <tr>
+              <td><strong>Streak</strong></td>
+              <td id='stat-streak'>{raw(initStats.streak)}</td>
+            </tr>
+            <tr>
+              <td><strong>Telemetry</strong></td>
+              <td id='stat-telemetry'>{raw(initStats.telemetry)}</td>
+            </tr>
+          </table>
+        </div>
+
+        <div className='table-wrap reign'>
+          <table>
+            <thead>
+              <tr>
+                <th>Reign</th>
+                <th className='num'>Current Streak</th>
+                <th className='num'>Longest Streak</th>
+                <th className='num'>Total Duration</th>
+              </tr>
+            </thead>
+            <tbody id='reign-tbody'>
+              {raw(initialData.reign.all)}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id='versions'>
+        <h3><a href='#versions' className='subtle'>Versions</a></h3>
+        {versionsPanes}
+      </section>
+
+      <section id='matchups' className={defaultMatchupsEmpty ? 'hide' : undefined}>
+        <h3><a href='#matchups' className='subtle'>Head-to-Head</a></h3>
+        {matchupsPanes}
+      </section>
+
+      <section id='matches'>
+        <div className='matches-header'>
+          <h3><a href='#matches' className='subtle'>Recent Matches</a></h3>
+          <div className='ver-picker'>
+            <label htmlFor='opp-select' className='muted'>Opponent</label>
+            <select id='opp-select' className='min-select' aria-label='Opponent'>
+              {raw(initialData.oppOptionsHtml)}
+            </select>
+          </div>
+        </div>
+        {matchesPanes}
+      </section>
+
+      <script>{buildProfileScript(profileDataMap, defaultLadderKey)}</script>
+    </>
+  );
+
+  const html = renderer.render({
+    id: 'agent-profile',
+    title: `${agent.name} | pkmn.ai`,
+    header: profileHeader,
+    path: `/projects/${agent.slug}/`,
+    style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
+    content,
+  });
+
+  return {
+    html,
+    json: {
+      slug: agent.slug,
+      name: agent.name,
+      status: agent.status,
+      logoHref,
+      owners,
+      metadata: meta,
+      ladders: ladderJsonList,
+    },
+  };
+}

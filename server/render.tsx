@@ -10,26 +10,9 @@ import * as yaml from 'yaml';
 
 import {AVATARS_DIR} from '../db';
 import type * as db from '../db';
-import {
-  Renderer,
-  header,
-  injectLiveBanner,
-  renderer as siteRenderer,
-} from '../static/build';
+import * as build from '../static/build';
 import * as projects from '../static/projects';
-import {
-  EXT_ICON,
-  TABLE_PAGE_SIZE,
-  copyFileAtomic,
-  escapeHtml,
-  formatUtcDate,
-  installHeadSupport,
-  parseUtcDayMillis,
-  renderTablePager,
-  renderTemplate,
-  root,
-  writeFileAtomic,
-} from '../static/util';
+import * as util from '../static/util';
 import {getDex, hashTeam} from '../teams';
 
 import * as arena from './arena';
@@ -37,15 +20,15 @@ import {renderAgentProfile, resolveAgentLogo} from './profile';
 import * as ratings from './ratings';
 import * as tournaments from './tournaments';
 
-export const PUBLIC_DIR = root('public');
-export const STATIC_DIR = process.env.MOCK === '1' ? root('.mock', 'static') : root('static');
+export const PUBLIC_DIR = util.root('public');
+export const STATIC_DIR =
+  process.env.MOCK === '1' ? util.root('.mock', 'static') : util.root('static');
 
-export const ARENA_STYLE = fs.readFileSync(root('static', 'arena.css'), 'utf8');
-const ARENA_TEMPLATE = fs.readFileSync(root('static', 'arena.html'), 'utf8');
-const LADDER_TEMPLATE = fs.readFileSync(root('static', 'ladder.html'), 'utf8');
-const BATTLES_TEMPLATE = fs.readFileSync(root('static', 'battles.html'), 'utf8');
+export const ARENA_STYLE = fs.readFileSync(util.root('static', 'arena.css'), 'utf8');
 
-export {EXT_ICON, copyFileAtomic, writeFileAtomic};
+export const EXT_ICON = util.EXT_ICON;
+export const copyFileAtomic = util.copyFileAtomic;
+export const writeFileAtomic = util.writeFileAtomic;
 export const resolveLadderArchive = arena.resolveLadderArchive;
 
 const SERIES_COLORS = [
@@ -68,6 +51,759 @@ export const FORMAT_TITLES: Record<string, string> = {
   gen9championsvgc2026regmd: '[Gen 9 Champions] VGC 2026 Reg M-D',
   gen9championsvgc2026regmdbo3: '[Gen 9 Champions] VGC 2026 Reg M-D (Bo3)',
 };
+
+const LADDER_SCRIPT = `
+  document.addEventListener('DOMContentLoaded', () => {
+    const verRadios = document.querySelectorAll('input[name="versions"]');
+    const rows = Array.from(document.querySelectorAll('.standings-table tbody tr'));
+    const pager = document.getElementById('standings-pager');
+    const prevBtn = document.getElementById('standings-pager-prev');
+    const nextBtn = document.getElementById('standings-pager-next');
+    const infoEl = document.getElementById('standings-pager-info');
+    const pageSize = 25;
+    let mode = 'active';
+    let page = 1;
+
+    const applyStandings = () => {
+      const matching = rows.filter(row => {
+        if (mode === 'all') return true;
+        if (mode === 'best') return Boolean(row.dataset.best);
+        return Boolean(row.dataset.active);
+      });
+      const total = matching.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (page > totalPages) page = totalPages;
+      if (page < 1) page = 1;
+      const start = (page - 1) * pageSize;
+      const visible = new Set(matching.slice(start, start + pageSize));
+      rows.forEach(row => {
+        row.classList.toggle('hide', !visible.has(row));
+      });
+      if (pager && prevBtn && nextBtn && infoEl) {
+        pager.classList.toggle('hide', totalPages <= 1);
+        prevBtn.disabled = page <= 1;
+        nextBtn.disabled = page >= totalPages;
+        const word = total === 1 ? 'entry' : 'entries';
+        infoEl.textContent =
+          'Page ' + page + ' of ' + totalPages +
+          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+      }
+    };
+
+    verRadios.forEach(r => r.addEventListener('change', () => {
+      mode = r.value;
+      page = 1;
+      applyStandings();
+    }));
+
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        if (page > 1) {
+          page--;
+          applyStandings();
+        }
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        page++;
+        applyStandings();
+      });
+    }
+  });
+`;
+
+function buildBattlesScript(
+  initialLiveJson: string,
+  agentLinksJson: string,
+  formatTitlesJson: string
+): string {
+  return `
+  document.addEventListener('DOMContentLoaded', () => {
+    let state = ${initialLiveJson} || {};
+    const agentLinks = ${agentLinksJson};
+    const formatTitles = ${formatTitlesJson};
+    const livePanel = document.getElementById('live-panel');
+    const tbody = document.getElementById('battles-tbody');
+    const pager = document.getElementById('battles-pager');
+    const prevBtn = document.getElementById('battles-prev');
+    const nextBtn = document.getElementById('battles-next');
+    const pageInfo = document.getElementById('battles-page-info');
+    const radios = document.querySelectorAll('input[name="bformat"]');
+    const pageSize = (state && state.pageSize) || 25;
+    const historyEndpoint = (state && state.historyEndpoint) || '/api/battles.json';
+    let currentFmt = 'all';
+    let currentPage = 1;
+    let fetchSeq = 0;
+
+    const esc = s => String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const relTime = (nowSec, ts) => {
+      const diff = Math.max(0, nowSec - ts);
+      if (diff < 60) return diff + 's ago';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    };
+
+    const utcStr = ts =>
+      new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+
+    const resolveAgentHref = slug => {
+      if (!slug) return '';
+      if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return agentLinks[slug];
+      return '/projects/' + encodeURIComponent(slug) + '/';
+    };
+
+    const renderAgent = (agent, bold) => {
+      const inner = bold ? '<strong>' + esc(agent.name) + '</strong>' : esc(agent.name);
+      const href = resolveAgentHref(agent.slug);
+      const link = href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
+      return link + ' <code>' + esc(agent.version) + '</code>';
+    };
+
+    const renderSlot = (key, slotData, live, nowSec) => {
+      const isRunning = live.activeSlot === key;
+      const otherKey = key === 'p1' ? 'p2' : 'p1';
+      const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
+      const budget = isRunning
+        ? Math.round(live.turnBudgetSeconds)
+        : Math.round(slotData.bankSeconds);
+      const bank = isRunning
+        ? Math.max(0, Math.round(slotData.bankSeconds - elapsed))
+        : Math.round(slotData.bankSeconds);
+      const inc = Math.round(live.incrementSeconds);
+      const ramPct = ((slotData.ram / 14336) * 100).toFixed(1);
+      const badge = isRunning
+        ? '<span class="state-running" id="state-' + key +
+          '" title="Currently executing (SIGCONT)">&#9679; RUNNING</span>'
+        : '<span class="state-paused" id="state-' + key +
+          '" title="Frozen by kernel SIGSTOP while ' + otherKey + ' computes">PAUSED</span>';
+      const timerTitle =
+        'Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +' +
+        inc + 's/turn';
+      let teamHtml = '';
+      if (slotData.team) {
+        const teamTip = slotData.team.startsWith('P1:')
+          ? 'Known to Match P1 (drawn from P1 seasonal pool)'
+          : slotData.team.startsWith('P2:')
+            ? 'Known to Match P2 (drawn from P2 seasonal pool)'
+            : 'Unknown to both players (drawn from a third-party competitor pool)';
+        teamHtml = '<span title="' + esc(teamTip) + '">Team: <code>' +
+          esc(slotData.team) + '</code></span>';
+      }
+      return '<div class="slot-card ' + (isRunning ? 'running' : 'paused') +
+        '" id="slot-' + key + '">' +
+        '<div class="slot-top"><span><tt>' + key + '</tt> ' +
+        renderAgent(slotData, true) + '</span>' +
+        badge + '</div>' +
+        '<div class="slot-timers" title="' + esc(timerTitle) + '">' +
+        '<span>Turn: <strong id="turn-' + key + '" class="' +
+        (isRunning ? 'yes' : 'muted') + '">' +
+        elapsed + 's</strong> <span class="muted">/ ' + budget + 's</span></span>' +
+        '<span>Bank: <strong id="bank-' + key + '">' + bank + 's</strong> ' +
+        '<span class="muted">(+' + inc + 's/turn)</span></span></div>' +
+        '<div class="slot-telemetry">' +
+        '<span>Last: <tt>' + Math.round(slotData.lastTurnMillis) + ' ms</tt></span>' +
+        '<span>Mean: <tt>' + Math.round(slotData.meanTurnMillis) + ' ms/turn</tt></span>' +
+        '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
+        Math.round(slotData.ram).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
+        teamHtml +
+        '</div></div>';
+    };
+
+    const renderLive = nowSec => {
+      if (!livePanel) return;
+      if (!state || !state.live || state.stale) {
+        const idleMsg = state && state.stale
+          ? 'No active heartbeat — Arena is offline or idle.'
+          : 'No battle currently running — Arena is idle.';
+        const tourSuffix = state && state.runningTournament
+          ? ' · <a href="' + esc(state.runningTournament.href) + '" class="subtle">' +
+            '<strong>&#9679; Watch ' + esc(state.runningTournament.name) + ' live</strong></a>'
+          : '';
+        livePanel.innerHTML = '<div class="live-idle muted">' + idleMsg + tourSuffix + '</div>';
+        return;
+      }
+      const l = state.live;
+      const fmtTitle = formatTitles[l.format] || l.format;
+      let g1Html = '';
+      if (l.game1Summary) {
+        const g1Res = l.game1Summary.winnerSlot === 'p1'
+          ? esc(l.p1.name) + ' 1–0'
+          : l.game1Summary.winnerSlot === 'p2'
+            ? esc(l.p2.name) + ' 1–0'
+            : 'Tie';
+        g1Html = ' <span class="muted">(<tt>G1</tt>: ' + g1Res + ', ' +
+          l.game1Summary.turns + ' turns)</span>';
+      }
+      const hbAge = Math.max(0, nowSec - state.updatedAt);
+      livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
+        '</code> · <tt>' + esc(fmtTitle) + '</tt> · <strong>Game ' + l.game +
+        ' / 2</strong>, Turn ' + l.turn + g1Html + '</span>' +
+        '<span class="muted">Heartbeat <tt>#' + l.heartbeatSeq + '</tt> (<tt id="hb-age">' +
+        hbAge + 's</tt> ago)</span></div>' +
+        '<div class="slots-grid">' +
+        renderSlot('p1', l.p1, l, nowSec) +
+        renderSlot('p2', l.p2, l, nowSec) +
+        '</div>';
+    };
+
+    const isFaultReason = r => {
+      const norm = String(r || '').trim().toLowerCase();
+      return Boolean(norm) &&
+        norm !== 'normal' &&
+        norm !== 'win' &&
+        norm !== 'tie' &&
+        norm !== 'turn-limit' &&
+        !/^tie-\\d+-turns$/.test(norm);
+    };
+
+    const formatEndReason = reason => {
+      const norm = String(reason || '').trim().toLowerCase();
+      if (!norm || norm === 'normal' || norm === 'win') {
+        return {html: '<span class="muted">Normal</span>', label: 'Normal', abnormal: false};
+      }
+      if (norm === 'tie') {
+        return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
+      }
+      if (norm === 'turn-limit' || /^tie-\\d+-turns$/.test(norm)) {
+        return {
+          html: '<span class="muted">Turn limit</span>',
+          label: 'Turn limit',
+          abnormal: false,
+        };
+      }
+      if (norm === 'timeout') {
+        return {html: '<span class="no">Timeout</span>', label: 'Timeout', abnormal: true};
+      }
+      if (norm === 'crash') {
+        return {html: '<span class="no">Crash</span>', label: 'Crash', abnormal: true};
+      }
+      if (norm === 'oom') {
+        return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
+      }
+      if (norm === 'invalid-choice') {
+        return {
+          html: '<span class="no">3&times; Invalid Choice</span>',
+          label: '3x Invalid Choice',
+          abnormal: true,
+        };
+      }
+      return {html: '<span class="no">' + esc(reason) + '</span>', label: reason, abnormal: true};
+    };
+
+    const formatPoolCode = (label, p1Name, p2Name) => {
+      if (!label) return '<span class="muted">—</span>';
+      let tip;
+      if (label.startsWith('P1:')) {
+        tip = 'Known to P1 (' + p1Name + ') — drawn from ' + p1Name +
+          "'s submitted seasonal pool (unknown to " + p2Name + ')';
+      } else if (label.startsWith('P2:')) {
+        tip = 'Known to P2 (' + p2Name + ') — drawn from ' + p2Name +
+          "'s submitted seasonal pool (unknown to " + p1Name + ')';
+      } else {
+        tip = 'Unknown to both players — drawn from a third-party competitor seasonal pool';
+      }
+      return '<code title="' + esc(tip) + '">' + esc(label) + '</code>';
+    };
+
+    const resultParts = cat => {
+      if (cat === 'WW') return {p1Win: true, p2Win: false, html: '<strong>2</strong>–0'};
+      if (cat === 'WT' || cat === 'TW') {
+        return {p1Win: true, p2Win: false, html: '<strong>1.5</strong>–0.5'};
+      }
+      if (cat === 'LL') return {p1Win: false, p2Win: true, html: '0–<strong>2</strong>'};
+      if (cat === 'LT' || cat === 'TL') {
+        return {p1Win: false, p2Win: true, html: '0.5–<strong>1.5</strong>'};
+      }
+      return {p1Win: false, p2Win: false, html: '1–1'};
+    };
+
+    const renderMatchDetailHtml = m => {
+      const r = resultParts(m.category);
+      const p1Bold = renderAgent(m.p1, r.p1Win);
+      const p2Bold = renderAgent(m.p2, r.p2Win);
+      const p1Plain = renderAgent(m.p1, false);
+      const p2Plain = renderAgent(m.p2, false);
+      const fmtTitle = formatTitles[m.format] || m.format;
+      const ladderHref = m.ladderHref || (
+        m.ladderStatus === 'archived'
+          ? '/arena/ladders/' + encodeURIComponent(m.ladderId) + '/'
+          : '/arena/ladders/' + encodeURIComponent(m.slot) + '/'
+      );
+      const end1 = formatEndReason(m.game1EndReason);
+      const end2 = formatEndReason(m.game2EndReason);
+      const faults = [];
+      if (end1.abnormal) faults.push(end1.label);
+      if (end2.abnormal && faults.indexOf(end2.label) === -1) faults.push(end2.label);
+      const faultBadge = faults.length > 0
+        ? ' <span class="no" title="Abnormal game termination">[' +
+          esc(faults.join(', ')) + ']</span>'
+        : '';
+
+      const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
+      const t1Code = formatPoolCode(m.p1TeamLabel, m.p1.name, m.p2.name);
+      const t2Code = formatPoolCode(m.p2TeamLabel, m.p1.name, m.p2.name);
+      const poolSummary = showPools
+        ? '<div class="battle-detail-pool" title="12-char pkmn/teams SHA-256 short hashes; ' +
+          'P1:/P2: prefix indicates a team submitted by that player in this match (at most one ' +
+          'team per match can belong to either player)">Teams: Player 1 ' + t1Code +
+          ' · Player 2 ' + t2Code + '</div>'
+        : '';
+
+      const g1Winner = m.game1Outcome === 'W'
+        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
+        : m.game1Outcome === 'L'
+          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
+          : '<span class="muted">Tie</span>';
+      const g2Winner = m.game2Outcome === 'W'
+        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
+        : m.game2Outcome === 'L'
+          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
+          : '<span class="muted">Tie</span>';
+
+      const g1Banks =
+        Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p2Game1BankSeconds) + 's';
+      const g2Banks =
+        Math.round(m.p2Game2BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
+      const p1RamPct = ((m.p1PeakRam / 14336) * 100).toFixed(1);
+      const p2RamPct = ((m.p2PeakRam / 14336) * 100).toFixed(1);
+      const p1RamStr = Math.round(m.p1PeakRam).toLocaleString('en-US') + ' MiB';
+      const p2RamStr = Math.round(m.p2PeakRam).toLocaleString('en-US') + ' MiB';
+      const p1Banks =
+        Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
+      const p2Banks =
+        Math.round(m.p2Game1BankSeconds) + 's / ' + Math.round(m.p2Game2BankSeconds) + 's';
+      const p1Teams = showPools ? ' · Teams ' + t1Code + ' / ' + t2Code : '';
+      const p2Teams = showPools ? ' · Teams ' + t2Code + ' / ' + t1Code : '';
+
+      let archiveNote = '';
+      if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
+        const links = [];
+        if (m.archiveHref) {
+          links.push(
+            '<a href="' + esc(m.archiveHref) + '" class="subtle"><code>' +
+            esc(m.ladderId + '-logs.7z') + '</code></a>'
+          );
+        }
+        if (m.teamsHref) {
+          links.push(
+            '<a href="' + esc(m.teamsHref) + '" class="subtle"><code>teams.json</code></a>'
+          );
+        }
+        if (links.length > 0) {
+          archiveNote = '<div class="battle-detail-note muted">Retired pool archives: ' +
+            links.join(' · ') + '</div>';
+        }
+      }
+
+      return '<div class="battle-detail">' +
+        '<div class="battle-detail-meta">' +
+          '<span><a href="' + esc(ladderHref) + '" class="subtle"><strong>' + esc(m.ladderName) +
+          '</strong></a> <span class="muted">(<tt>' + esc(fmtTitle) + '</tt>)</span> · ' +
+          '<span class="muted">' + esc(utcStr(m.completedAt)) + '</span></span>' +
+          '<span><span class="muted">Outcome:</span> <code>' + esc(m.category) + '</code> ' +
+          '<span class="muted">(' + (m.game1Turns + m.game2Turns) + ' turns)</span>' +
+          faultBadge + ' · <span class="muted">Seed:</span> <code>' +
+          esc(m.seed) + '</code></span>' +
+        '</div>' +
+        poolSummary +
+        '<div class="battle-detail-grid">' +
+          '<div class="battle-detail-card">' +
+            '<div class="battle-detail-title">Games</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><strong>Game 1</strong> · <tt>p1</tt> ' + p1Plain +
+              ' vs <tt>p2</tt> ' + p2Plain + '</span>' +
+              '<span>' + g1Winner + ' · ' + end1.html + ' · ' + m.game1Turns +
+              't · Bank <tt>' + g1Banks + '</tt></span>' +
+            '</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><strong>Game 2</strong> <span class="muted">(swapped)</span> · <tt>p1</tt> ' +
+              p2Plain + ' vs <tt>p2</tt> ' + p1Plain + '</span>' +
+              '<span>' + g2Winner + ' · ' + end2.html + ' · ' + m.game2Turns +
+              't · Bank <tt>' + g2Banks + '</tt></span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="battle-detail-card">' +
+            '<div class="battle-detail-title">Client Telemetry</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><tt>P1</tt> ' + p1Bold + '</span>' +
+              '<span>Mean <tt>' + Math.round(m.p1MeanTurnMillis) +
+              ' ms/turn</tt> · Peak RAM <tt>' +
+              p1RamStr + '</tt> <span class="muted">(' + p1RamPct + '%)</span> · Banks <tt>' +
+              p1Banks + '</tt>' + p1Teams + '</span>' +
+            '</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><tt>P2</tt> ' + p2Bold + '</span>' +
+              '<span>Mean <tt>' + Math.round(m.p2MeanTurnMillis) +
+              ' ms/turn</tt> · Peak RAM <tt>' +
+              p2RamStr + '</tt> <span class="muted">(' + p2RamPct + '%)</span> · Banks <tt>' +
+              p2Banks + '</tt>' + p2Teams + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        archiveNote +
+      '</div>';
+    };
+
+    const renderMatchPair = (m, nowSec, expanded) => {
+      const r = resultParts(m.category);
+      const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
+      const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
+      const reasons = (isFaultReason(m.game1EndReason) || isFaultReason(m.game2EndReason))
+        ? ' · End: ' + m.game1EndReason + '/' + m.game2EndReason
+        : '';
+      const tip = m.category + ' · ' + Math.round(m.p1MeanTurnMillis) + 'ms/' +
+        Math.round(m.p2MeanTurnMillis) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
+        Math.round(m.p1PeakRam).toLocaleString('en-US') + 'M/' +
+        Math.round(m.p2PeakRam).toLocaleString('en-US') + 'M' + reasons;
+
+      const tr = document.createElement('tr');
+      tr.id = m.id;
+      tr.className = 'battle-row' + (expanded ? ' expanded' : '');
+      tr.dataset.fmt = m.slot;
+      tr.tabIndex = 0;
+      tr.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      tr.innerHTML = '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span><code>' +
+        esc(m.id) + '</code></td>' +
+        '<td>' + renderAgent(m.p1, r.p1Win) + '</td>' +
+        '<td>' + renderAgent(m.p2, r.p2Win) + '</td>' +
+        '<td class="center" title="' + esc(tip) + '">' + r.html + '</td>' +
+        '<td class="num">' + m.game1Turns + ' / ' + m.game2Turns + '</td>' +
+        '<td class="num muted" data-ts="' + m.completedAt + '">' +
+        relTime(nowSec, m.completedAt) + '</td>';
+
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'battle-detail-row' + (expanded ? '' : ' hide');
+      detailTr.dataset.detailFor = m.id;
+      detailTr.innerHTML = '<td colspan="6">' + renderMatchDetailHtml(m) + '</td>';
+
+      return [tr, detailTr];
+    };
+
+    const toggleRow = (row, forceOpen) => {
+      const detail = row.nextElementSibling;
+      if (!detail || !detail.classList.contains('battle-detail-row')) return;
+      const open = forceOpen !== undefined ? forceOpen : detail.classList.contains('hide');
+      detail.classList.toggle('hide', !open);
+      row.classList.toggle('expanded', open);
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+
+    if (tbody) {
+      tbody.addEventListener('click', e => {
+        if (e.target.closest('a')) return;
+        const row = e.target.closest('tr.battle-row');
+        if (row) toggleRow(row);
+      });
+      tbody.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const row = e.target.closest('tr.battle-row');
+        if (row && e.target === row) {
+          e.preventDefault();
+          toggleRow(row);
+        }
+      });
+    }
+
+    const updatePager = (page, total) => {
+      if (!pager || !prevBtn || !nextBtn || !pageInfo) return;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      pager.classList.toggle('hide', total === 0 || (totalPages <= 1 && page <= 1));
+      prevBtn.disabled = page <= 1;
+      nextBtn.disabled = page >= totalPages;
+      pageInfo.textContent = 'Page ' + page + ' of ' + totalPages + ' (' +
+        total.toLocaleString('en-US') + ' ' + (total === 1 ? 'battle' : 'battles') + ')';
+    };
+
+    const trimHistoryRows = () => {
+      if (!tbody) return;
+      const summaryRows = tbody.querySelectorAll('tr.battle-row');
+      for (let i = summaryRows.length - 1; i >= pageSize; i--) {
+        const row = summaryRows[i];
+        if (row.classList.contains('expanded')) continue;
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('battle-detail-row')) detail.remove();
+        row.remove();
+      }
+    };
+
+    const refreshTimestamps = nowSec => {
+      if (!tbody) return;
+      tbody.querySelectorAll('td[data-ts]').forEach(td => {
+        const ts = Number(td.getAttribute('data-ts'));
+        if (Number.isFinite(ts)) td.textContent = relTime(nowSec, ts);
+      });
+    };
+
+    const refreshCurrentPagerCount = () => {
+      if (!state) return;
+      const counts = state.countsBySlot;
+      if (currentFmt === 'all') {
+        const total = (counts && counts.all !== undefined)
+          ? counts.all
+          : (state.totalMatches || (state.recentMatches ? state.recentMatches.length : 0));
+        updatePager(currentPage, total);
+      } else if (counts && counts[currentFmt] !== undefined) {
+        updatePager(currentPage, counts[currentFmt]);
+      }
+    };
+
+    const prependMatchIfVisible = (m, nowSec) => {
+      if (!m || !m.id) return;
+      if (!Array.isArray(state.recentMatches)) state.recentMatches = [];
+      if (!state.recentMatches.some(existing => existing.id === m.id)) {
+        state.recentMatches.unshift(m);
+        if (state.recentMatches.length > pageSize) {
+          state.recentMatches.length = pageSize;
+        }
+      }
+      if (
+        tbody &&
+        currentPage === 1 &&
+        (currentFmt === 'all' || m.slot === currentFmt) &&
+        !document.getElementById(m.id)
+      ) {
+        const emptyRow = tbody.querySelector('.empty-row');
+        if (emptyRow) emptyRow.remove();
+        const pair = renderMatchPair(m, nowSec, false);
+        tbody.insertBefore(pair[1], tbody.firstChild);
+        tbody.insertBefore(pair[0], pair[1]);
+        trimHistoryRows();
+      }
+    };
+
+    const renderHistoryList = (matches, nowSec) => {
+      if (!tbody) return;
+      const expandedIds = new Set();
+      tbody.querySelectorAll('tr.battle-row.expanded').forEach(r => {
+        if (r.id) expandedIds.add(r.id);
+      });
+      if (!matches || matches.length === 0) {
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="6" class="center muted">' +
+          'No completed battles yet.</td></tr>';
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for (const m of matches) {
+        const pair = renderMatchPair(m, nowSec, expandedIds.has(m.id));
+        frag.appendChild(pair[0]);
+        frag.appendChild(pair[1]);
+      }
+      tbody.innerHTML = '';
+      tbody.appendChild(frag);
+    };
+
+    const loadHistoryPage = async (fmt, page, scrollHistory) => {
+      currentFmt = fmt;
+      currentPage = page;
+      const seq = ++fetchSeq;
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      if (fmt === 'all' && page === 1 && state && Array.isArray(state.recentMatches)) {
+        renderHistoryList(state.recentMatches, nowSec);
+        const total = (state.countsBySlot && state.countsBySlot.all !== undefined)
+          ? state.countsBySlot.all
+          : (state.totalMatches || state.recentMatches.length);
+        updatePager(1, total);
+        if (scrollHistory) {
+          const hist = document.getElementById('history');
+          if (hist) hist.scrollIntoView();
+        }
+        return;
+      }
+
+      try {
+        const qs = '?slot=' + encodeURIComponent(fmt) + '&page=' + page + '&limit=' + pageSize;
+        const res = await fetch(historyEndpoint + qs, {
+          cache: 'no-cache',
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) throw new Error('status ' + res.status);
+        const data = await res.json();
+        if (seq !== fetchSeq) return;
+        if (state && data.countsBySlot) state.countsBySlot = data.countsBySlot;
+        renderHistoryList(data.matches || [], Math.floor(Date.now() / 1000));
+        updatePager(data.page || page, data.total || 0);
+        if (scrollHistory) {
+          const hist = document.getElementById('history');
+          if (hist) hist.scrollIntoView();
+        }
+      } catch {
+        if (seq !== fetchSeq) return;
+        if (page === 1 && state && Array.isArray(state.recentMatches)) {
+          const filtered = fmt === 'all'
+            ? state.recentMatches
+            : state.recentMatches.filter(m => m.slot === fmt);
+          renderHistoryList(filtered, nowSec);
+          const fallbackTotal = (state.countsBySlot && state.countsBySlot[fmt] !== undefined)
+            ? state.countsBySlot[fmt]
+            : filtered.length;
+          updatePager(1, fallbackTotal);
+        }
+      }
+    };
+
+    radios.forEach(r => r.addEventListener('change', () => {
+      loadHistoryPage(r.value, 1, false);
+    }));
+
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        if (currentPage > 1) loadHistoryPage(currentFmt, currentPage - 1, true);
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        loadHistoryPage(currentFmt, currentPage + 1, true);
+      });
+    }
+
+    const checkHash = async () => {
+      if (!location.hash) return;
+      const id = decodeURIComponent(location.hash.slice(1));
+      if (!id || id === 'live' || id === 'history') return;
+      const el = document.getElementById(id);
+      if (el && el.tagName === 'TR') {
+        el.classList.remove('hide');
+        toggleRow(el, true);
+        el.scrollIntoView();
+        return;
+      }
+      try {
+        const res = await fetch(historyEndpoint + '?id=' + encodeURIComponent(id), {
+          cache: 'no-cache',
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data || !data.match || !tbody) return;
+        const existing = document.getElementById(data.match.id);
+        if (existing && existing.tagName === 'TR') {
+          toggleRow(existing, true);
+          existing.scrollIntoView();
+          return;
+        }
+        const emptyRow = tbody.querySelector('.empty-row');
+        if (emptyRow) emptyRow.remove();
+        const pair = renderMatchPair(data.match, Math.floor(Date.now() / 1000), true);
+        tbody.insertBefore(pair[1], tbody.firstChild);
+        tbody.insertBefore(pair[0], pair[1]);
+        pair[0].scrollIntoView();
+      } catch {}
+    };
+    window.addEventListener('hashchange', checkHash);
+    checkHash();
+
+    let tickCount = 0;
+    setInterval(() => {
+      tickCount++;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const hbEl = document.getElementById('hb-age');
+      if (hbEl && state) {
+        hbEl.textContent = Math.max(0, nowSec - state.updatedAt) + 's';
+      }
+      if (state && state.live && !state.stale && state.live.activeSlot) {
+        const key = state.live.activeSlot;
+        const slot = state.live[key];
+        if (slot) {
+          const dt = Math.max(0, nowSec - state.live.turnStartedAt);
+          const turnEl = document.getElementById('turn-' + key);
+          const bankEl = document.getElementById('bank-' + key);
+          if (turnEl) turnEl.textContent = dt + 's';
+          if (bankEl) bankEl.textContent = Math.max(0, Math.round(slot.bankSeconds - dt)) + 's';
+        }
+      }
+      if (tickCount % 15 === 0) {
+        refreshTimestamps(nowSec);
+      }
+    }, 1000);
+
+    const liveKey = doc => {
+      const tourId = (doc && doc.runningTournament && doc.runningTournament.id) || '';
+      if (doc && doc.live && !doc.stale) {
+        return doc.live.matchId + ':' + doc.live.heartbeatSeq + ':' + doc.stale + ':' + tourId;
+      }
+      return 'idle:' + Boolean(doc && doc.stale) + ':' + tourId;
+    };
+
+    const applySnapshot = next => {
+      if (!next) return;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const prevKey = liveKey(state);
+      const nextKey = liveKey(next);
+      state = next;
+      if (prevKey !== nextKey) {
+        renderLive(nowSec);
+      }
+      if (Array.isArray(next.recentMatches) && next.recentMatches.length > 0) {
+        for (let i = next.recentMatches.length - 1; i >= 0; i--) {
+          prependMatchIfVisible(next.recentMatches[i], nowSec);
+        }
+      }
+      refreshCurrentPagerCount();
+      refreshTimestamps(nowSec);
+    };
+
+    if (typeof EventSource !== 'undefined') {
+      const es = new EventSource('/api/battles/stream');
+      es.addEventListener('snapshot', ev => {
+        try {
+          applySnapshot(JSON.parse(ev.data));
+        } catch {}
+      });
+      es.addEventListener('live', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          const nowSec = Math.floor(Date.now() / 1000);
+          state.updatedAt = data.updatedAt || nowSec;
+          state.stale = Boolean(data.stale);
+          state.live = state.stale ? undefined : data.live;
+          state.runningTournament = data.runningTournament;
+          renderLive(nowSec);
+        } catch {}
+      });
+      es.addEventListener('match', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          const nowSec = Math.floor(Date.now() / 1000);
+          state.updatedAt = data.updatedAt || nowSec;
+          state.stale = Boolean(data.stale);
+          state.live = state.stale ? undefined : data.live;
+          state.runningTournament = data.runningTournament;
+          if (data.totalMatches !== undefined) state.totalMatches = data.totalMatches;
+          if (data.countsBySlot) state.countsBySlot = data.countsBySlot;
+          renderLive(nowSec);
+          if (data.match) {
+            prependMatchIfVisible(data.match, nowSec);
+          }
+          refreshCurrentPagerCount();
+          refreshTimestamps(nowSec);
+        } catch {}
+      });
+    } else {
+      const pollLive = async () => {
+        try {
+          const res = await fetch('/api/live.json', {
+            cache: 'no-cache',
+            headers: {Accept: 'application/json'},
+          });
+          if (!res.ok) return;
+          applySnapshot(await res.json());
+        } catch {}
+      };
+      pollLive();
+      setInterval(pollLive, 3000);
+    }
+  });
+`;
+}
 
 export interface StandingsEntry {
   rank?: number;
@@ -213,7 +949,7 @@ export interface LadderTeamsDocument {
 export interface Options {
   db: db.Database;
   arena: arena.Handle;
-  renderer?: Renderer;
+  renderer?: build.Renderer;
   publicDir?: string;
   staticDir?: string;
   avatarsDir?: string;
@@ -304,14 +1040,22 @@ export function resolveAgentHref(
   return undefined;
 }
 
+function renderAgentLink(
+  name: string,
+  href: string | undefined,
+  bold: boolean
+): util.Child {
+  const inner = bold ? <strong>{name}</strong> : name;
+  if (!href) return inner;
+  return <a href={href} className='subtle'>{inner}</a>;
+}
+
 export function formatAgentLink(
   name: string,
   href: string | undefined,
   bold: boolean
 ): string {
-  const inner = bold ? `<strong>${escapeHtml(name)}</strong>` : escapeHtml(name);
-  if (!href) return inner;
-  return `<a href="${escapeHtml(href)}" class="subtle">${inner}</a>`;
+  return String(<>{renderAgentLink(name, href, bold)}</>);
 }
 
 export function formatRelativeTime(nowSec: number, completedAt: number): string {
@@ -334,28 +1078,28 @@ export function formatShortDay(dayUtc: string): string {
 
 function computeStreakLabel(entry: db.LeaderboardEntryView): {
   text: string;
-  html: string;
+  node: util.Child;
 } {
   if (entry.currentWinStreak >= 3) {
     const s = `W${entry.currentWinStreak}`;
-    return {text: s, html: `<span class="yes">${s}</span>`};
+    return {text: s, node: <span className='yes'>{s}</span>};
   }
   if (entry.currentWinStreak >= 1) {
     const s = `W${entry.currentWinStreak}`;
-    return {text: s, html: s};
+    return {text: s, node: s};
   }
   if (entry.currentLossStreak >= 3) {
     const s = `L${entry.currentLossStreak}`;
-    return {text: s, html: `<span class="no">${s}</span>`};
+    return {text: s, node: <span className='no'>{s}</span>};
   }
   if (entry.currentLossStreak >= 1) {
     const s = `L${entry.currentLossStreak}`;
-    return {text: s, html: s};
+    return {text: s, node: s};
   }
   if (entry.matches > 0) {
-    return {text: 'T1', html: 'T1'};
+    return {text: 'T1', node: 'T1'};
   }
-  return {text: '—', html: '<span class="muted">—</span>'};
+  return {text: '—', node: <span className='muted'>—</span>};
 }
 
 // Computes pairwise Likelihood of Superiority (LOS) for each ranked entrant against the entrant
@@ -426,12 +1170,12 @@ export function heatmapClass(scorePct: number): string {
   return '';
 }
 
-function renderHistorySectionHtml(
+function renderHistorySection(
   ladder: db.LadderRow,
   entries: db.LeaderboardEntryView[],
   snapshots: db.LadderSnapshotHistoryRow[],
   nowSec: number
-): {html: string; isEmpty: boolean} {
+): {node: util.Child; isEmpty: boolean} {
   const isArchived = ladder.status === 'archived';
   const hasFrozenRanked = isArchived && entries.some(e => e.rankCurrent !== undefined);
   const bestActiveByAgent = new Map<number, db.LeaderboardEntryView>();
@@ -460,7 +1204,7 @@ function renderHistorySectionHtml(
 
   if (topAgents.length === 0) {
     return {
-      html: '<p class="empty-state muted">No rating history yet.</p>',
+      node: <p className='empty-state muted'>No rating history yet.</p>,
       isEmpty: true,
     };
   }
@@ -523,8 +1267,9 @@ function renderHistorySectionHtml(
   }
 
   const allDays = [...allDaysSet].sort((a, b) => a.localeCompare(b));
-  const minDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[0]) : 0;
-  const maxDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[allDays.length - 1]) : 0;
+  const minDayMillis = allDays.length > 0 ? util.parseUtcDayMillis(allDays[0]) : 0;
+  const maxDayMillis =
+    allDays.length > 0 ? util.parseUtcDayMillis(allDays[allDays.length - 1]) : 0;
 
   let minElo = 1350;
   let maxElo = 1800;
@@ -545,7 +1290,7 @@ function renderHistorySectionHtml(
   // elapsed days rather than stretching sparse early days to equal pixel widths.
   const mapX = (day: string): number => {
     if (maxDayMillis <= minDayMillis) return xRight;
-    const frac = (parseUtcDayMillis(day) - minDayMillis) / (maxDayMillis - minDayMillis);
+    const frac = (util.parseUtcDayMillis(day) - minDayMillis) / (maxDayMillis - minDayMillis);
     return Math.round((xLeft + frac * (xRight - xLeft)) * 10) / 10;
   };
   const mapY = (elo: number): number => {
@@ -554,21 +1299,33 @@ function renderHistorySectionHtml(
     return Math.round((yTop + frac * (yBottom - yTop)) * 10) / 10;
   };
 
-  const gridLines: string[] = [];
-  const yLabels: string[] = [];
+  const gridLines: util.Child[] = [];
+  const yLabels: util.Child[] = [];
   for (let tick = axisMax; tick >= axisMin; tick -= 150) {
     const y = mapY(tick);
-    const attrs = tick === 1500 ? ' stroke-opacity="0.28" stroke-dasharray="3,3"' : '';
-    gridLines.push(`<line x1="${xLeft}" y1="${y}" x2="${xRight}" y2="${y}"${attrs} />`);
-    yLabels.push(`<text x="38" y="${y + 4}">${tick}</text>`);
+    gridLines.push(
+      tick === 1500 ? (
+        <line
+          x1={xLeft}
+          y1={y}
+          x2={xRight}
+          y2={y}
+          stroke-opacity='0.28'
+          stroke-dasharray='3,3'
+        />
+      ) : (
+        <line x1={xLeft} y1={y} x2={xRight} y2={y} />
+      )
+    );
+    yLabels.push(<text x='38' y={y + 4}>{tick}</text>);
   }
-  gridLines.push(`<line x1="${xLeft}" y1="215" x2="${xRight}" y2="215" />`);
+  gridLines.push(<line x1={xLeft} y1='215' x2={xRight} y2='215' />);
 
-  const xLabels: string[] = [];
+  const xLabels: util.Child[] = [];
   if (maxDayMillis <= minDayMillis) {
-    xLabels.push(`<text x="${xLeft}" y="234">${escapeHtml(formatShortDay(allDays[0]))}</text>`);
-    const endLabel = isArchived ? escapeHtml(formatShortDay(todayUtc)) : 'Today';
-    xLabels.push(`<text x="${xRight}" y="234">${endLabel}</text>`);
+    xLabels.push(<text x={xLeft} y='234'>{formatShortDay(allDays[0])}</text>);
+    const endLabel = isArchived ? formatShortDay(todayUtc) : 'Today';
+    xLabels.push(<text x={xRight} y='234'>{endLabel}</text>);
   } else {
     const seenTickX = new Set<number>();
     const tickCount = Math.min(5, allDays.length);
@@ -577,7 +1334,7 @@ function renderHistorySectionHtml(
       let bestDay = allDays[0];
       let bestDist = Infinity;
       for (const d of allDays) {
-        const dist = Math.abs(parseUtcDayMillis(d) - targetMillis);
+        const dist = Math.abs(util.parseUtcDayMillis(d) - targetMillis);
         if (dist < bestDist) {
           bestDist = dist;
           bestDay = d;
@@ -589,7 +1346,7 @@ function renderHistorySectionHtml(
       const label = !isArchived && bestDay === todayUtc && bestDay === allDays[allDays.length - 1]
         ? 'Today'
         : formatShortDay(bestDay);
-      xLabels.push(`<text x="${x}" y="234">${escapeHtml(label)}</text>`);
+      xLabels.push(<text x={x} y='234'>{label}</text>);
     }
   }
 
@@ -602,7 +1359,7 @@ function renderHistorySectionHtml(
   }
 
   const labelSpecs: LabelSpec[] = [];
-  const svgElements: string[] = [];
+  const svgElements: util.Child[] = [];
 
   for (let aIdx = topAgents.length - 1; aIdx >= 0; aIdx--) {
     const agent = topAgents[aIdx];
@@ -621,15 +1378,14 @@ function renderHistorySectionHtml(
       const upper = coords.map(c => `${c.x},${mapY(c.pt.elo + 1.96 * c.pt.se)}`);
       const lower = [...coords].reverse().map(c => `${c.x},${mapY(c.pt.elo - 1.96 * c.pt.se)}`);
       svgElements.push(
-        `<polygon points="${[...upper, ...lower].join(' ')}" ` +
-        `fill="${color}" fill-opacity="0.1" />`
+        <polygon points={[...upper, ...lower].join(' ')} fill={color} fill-opacity='0.1' />
       );
     }
 
     const strokeW = aIdx === 0 ? '2.25' : aIdx === 1 ? '1.85' : '1.75';
     const polyPts = coords.map(c => `${c.x},${c.y}`).join(' ');
     svgElements.push(
-      `<polyline fill="none" stroke="${color}" stroke-width="${strokeW}" points="${polyPts}" />`
+      <polyline fill='none' stroke={color} stroke-width={strokeW} points={polyPts} />
     );
 
     for (let k = 1; k < pts.length; k++) {
@@ -637,17 +1393,14 @@ function renderHistorySectionHtml(
         const cx = mapX(pts[k].day);
         const cy = mapY(pts[k].elo);
         svgElements.push(
-          `<circle cx="${cx}" cy="${cy}" r="2.5" fill="${color}" ` +
-          `title="${escapeHtml(pts[k].version)}" />`
+          <circle cx={cx} cy={cy} r='2.5' fill={color} title={pts[k].version} />
         );
       }
     }
 
     const lastCoord = coords[coords.length - 1];
     if (aIdx === 0) {
-      svgElements.push(
-        `<circle cx="${lastCoord.x}" cy="${lastCoord.y}" r="3" fill="${color}" />`
-      );
+      svgElements.push(<circle cx={lastCoord.x} cy={lastCoord.y} r='3' fill={color} />);
     }
 
     labelSpecs.push({
@@ -676,39 +1429,48 @@ function renderHistorySectionHtml(
   }
 
   const labelEls = labelSpecs.map(l => (
-    `<text x="632" y="${Math.round(l.y * 10) / 10}" fill="${l.color}" font-size="11"` +
-    `${l.bold ? ' font-weight="bold"' : ''}>${escapeHtml(l.text)}</text>`
+    <text
+      x='632'
+      y={Math.round(l.y * 10) / 10}
+      fill={l.color}
+      font-size='11'
+      font-weight={l.bold ? 'bold' : undefined}
+    >
+      {l.text}
+    </text>
   ));
 
-  const ariaLabel = `${escapeHtml(ladder.name)} Top Agent Rating History`;
+  const ariaLabel = `${ladder.name} Top Agent Rating History`;
   return {
-    html: `<figure class="chart">
-      <svg viewBox="0 0 760 245" role="img" aria-label="${ariaLabel}">
-        <g stroke="currentColor" stroke-opacity="0.12" stroke-width="1">
-          ${gridLines.join('\n          ')}
-        </g>
-        <g fill="currentColor" fill-opacity="0.5" font-size="11" text-anchor="end">
-          ${yLabels.join('\n          ')}
-        </g>
-        <g fill="currentColor" fill-opacity="0.5" font-size="11" text-anchor="middle">
-          ${xLabels.join('\n          ')}
-        </g>
-        ${svgElements.join('\n        ')}
-        ${labelEls.join('\n        ')}
-      </svg>
-    </figure>`,
+    node: (
+      <figure className='chart'>
+        <svg viewBox='0 0 760 245' role='img' aria-label={ariaLabel}>
+          <g stroke='currentColor' stroke-opacity='0.12' stroke-width='1'>
+            {gridLines}
+          </g>
+          <g fill='currentColor' fill-opacity='0.5' font-size='11' text-anchor='end'>
+            {yLabels}
+          </g>
+          <g fill='currentColor' fill-opacity='0.5' font-size='11' text-anchor='middle'>
+            {xLabels}
+          </g>
+          {svgElements}
+          {labelEls}
+        </svg>
+      </figure>
+    ),
     isEmpty: false,
   };
 }
 
-function renderMatchupsSectionHtml(
+function renderMatchupsSection(
   entries: db.LeaderboardEntryView[],
   pairs: db.PairAggregateRow[],
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>,
   profileSlugs: ReadonlySet<string>,
   ladderStatus?: db.LadderStatus
-): {html: string; isEmpty: boolean} {
+): {node: util.Child; isEmpty: boolean} {
   const isArchived = ladderStatus === 'archived';
   const ranked = entries
     .filter(e => (
@@ -739,7 +1501,7 @@ function renderMatchupsSectionHtml(
 
   if (participants.length < 2) {
     return {
-      html: '<p class="empty-state muted">Not enough entrants for matchups yet.</p>',
+      node: <p className='empty-state muted'>Not enough entrants for matchups yet.</p>,
       isEmpty: true,
     };
   }
@@ -751,9 +1513,7 @@ function renderMatchupsSectionHtml(
 
   // Note: `&nbsp;` prevents `site`'s `html-minifier` (`removeEmptyElements: true`)
   // from stripping the top-left corner `<th>` cell.
-  const colHeaders = participants
-    .map(p => `<th>${escapeHtml(p.agentName)}</th>`)
-    .join('');
+  const colHeaders = participants.map(p => <th>{p.agentName}</th>);
 
   const bodyRows = participants.map(rowEntry => {
     const rowHref = resolveAgentHref(
@@ -763,18 +1523,16 @@ function renderMatchupsSectionHtml(
       rowEntry.agentName,
       profileSlugs
     );
-    const rowLabel = `${formatAgentLink(rowEntry.agentName, rowHref, true)} ` +
-      `<code>${escapeHtml(rowEntry.version)}</code>`;
 
     const cells = participants.map(colEntry => {
       if (rowEntry.versionId === colEntry.versionId) {
-        return '<td class="diag">—</td>';
+        return <td className='diag'>—</td>;
       }
       const lowId = Math.min(rowEntry.versionId, colEntry.versionId);
       const highId = Math.max(rowEntry.versionId, colEntry.versionId);
       const pair = pairMap.get(`${lowId}:${highId}`);
       if (!pair) {
-        return '<td class="muted">—</td>';
+        return <td className='muted'>—</td>;
       }
       const isLow = rowEntry.versionId === lowId;
       const wins = isLow ? pair.ww + pair.wt : pair.ll + pair.tl;
@@ -782,38 +1540,50 @@ function renderMatchupsSectionHtml(
       const ties = pair.split;
       const total = wins + losses + ties;
       if (total === 0) {
-        return '<td class="muted">—</td>';
+        return <td className='muted'>—</td>;
       }
       const scorePct = ((wins + 0.5 * ties) / total) * 100;
       const scoreStr = `${scorePct.toFixed(1)}%`;
-      const scoreHtml = scorePct > 50 ? `<strong>${scoreStr}</strong>` : scoreStr;
       const cls = heatmapClass(scorePct);
       const losPart = pair.lowLos !== undefined
         ? ` · LOS ${((isLow ? pair.lowLos : 1 - pair.lowLos) * 100).toFixed(1)}%`
         : '';
       const tip = `${wins}W–${losses}L–${ties}T (${total} matches)${losPart}`;
-      const clsAttr = cls ? ` class="${cls}"` : '';
-      return `<td${clsAttr} title="${escapeHtml(tip)}">${scoreHtml}` +
-        `<span class="sub">${wins}–${losses}–${ties}</span></td>`;
-    }).join('');
+      return (
+        <td className={cls || undefined} title={tip}>
+          {scorePct > 50 ? <strong>{scoreStr}</strong> : scoreStr}
+          <span className='sub'>{wins}–{losses}–{ties}</span>
+        </td>
+      );
+    });
 
-    return `<tr><td>${rowLabel}</td>${cells}</tr>`;
-  }).join('');
+    return (
+      <tr>
+        <td>
+          {renderAgentLink(rowEntry.agentName, rowHref, true)}{' '}
+          <code>{rowEntry.version}</code>
+        </td>
+        {cells}
+      </tr>
+    );
+  });
 
   return {
-    html: `<div class="table-wrap">
-    <table class="matrix">
-      <thead>
-        <tr>
-          <th>&nbsp;</th>
-          ${colHeaders}
-        </tr>
-      </thead>
-      <tbody>
-        ${bodyRows}
-      </tbody>
-    </table>
-  </div>`,
+    node: (
+      <div className='table-wrap'>
+        <table className='matrix'>
+          <thead>
+            <tr>
+              <th>{util.raw('&nbsp;')}</th>
+              {colHeaders}
+            </tr>
+          </thead>
+          <tbody>
+            {bodyRows}
+          </tbody>
+        </table>
+      </div>
+    ),
     isEmpty: false,
   };
 }
@@ -823,7 +1593,7 @@ function renderSingleLadderArtifact(opts: {
   currentLadders: db.LadderRow[];
   urlKey: string;
   db: db.Database;
-  renderer: Renderer;
+  renderer: build.Renderer;
   publicDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
@@ -832,7 +1602,7 @@ function renderSingleLadderArtifact(opts: {
   html: string;
   standingsLadder: StandingsLadder;
   ladderDoc: LadderDocument;
-  top1SummaryCells?: string;
+  top1SummaryCells?: util.Child;
   top1Entry?: StandingsEntry;
   hasActiveEntries: boolean;
 } {
@@ -855,44 +1625,49 @@ function renderSingleLadderArtifact(opts: {
   const isPastSeason = l.status === 'settling' || l.status === 'archived';
   const hasFrozenRanked = isArchived && entries.some(e => e.rankCurrent !== undefined);
 
-  let formatNavItems = currentLadders.map((other, idx) => {
-    const sep = idx > 0 ? '\n    —\n    ' : '';
+  const formatNavItems: util.Child[] = [];
+  currentLadders.forEach((other, idx) => {
+    if (idx > 0) formatNavItems.push(' — ');
     const href = `/arena/ladders/${encodeURIComponent(other.slot)}/`;
     const isCurrent = !isPastSeason && other.slot === l.slot;
-    const label = isCurrent
-      ? `<strong>${escapeHtml(other.name)}</strong>`
-      : escapeHtml(other.name);
-    const curAttr = isCurrent ? ' aria-current="page"' : '';
-    return `${sep}<li id="${escapeHtml(other.slot)}">` +
-      `<a href="${escapeHtml(href)}" class="subtle"${curAttr}>${label}</a></li>`;
-  }).join('');
+    formatNavItems.push(
+      <li id={other.slot}>
+        <a href={href} className='subtle' aria-current={isCurrent ? 'page' : undefined}>
+          {isCurrent ? <strong>{other.name}</strong> : other.name}
+        </a>
+      </li>
+    );
+  });
   if (isPastSeason) {
     const selfHref = `/arena/ladders/${encodeURIComponent(l.id)}/`;
-    const sep = formatNavItems ? '\n    —\n    ' : '';
-    formatNavItems += `${sep}<li id="${escapeHtml(l.id)}">` +
-      `<a href="${escapeHtml(selfHref)}" class="subtle" aria-current="page">` +
-      `<strong>${escapeHtml(l.name)}</strong></a> ` +
-      `<span class="muted">(${escapeHtml(l.status)})</span></li>`;
+    if (formatNavItems.length > 0) formatNavItems.push(' — ');
+    formatNavItems.push(
+      <li id={l.id}>
+        <a href={selfHref} className='subtle' aria-current='page'>
+          <strong>{l.name}</strong>
+        </a>{' '}
+        <span className='muted'>({l.status})</span>
+      </li>
+    );
   }
 
   const seenPrimaryAgent = new Set<number>();
   const seenAnyAgent = new Set<number>();
   const jsonRows: StandingsEntry[] = [];
-  let top1SummaryCells: string | undefined;
+  let top1SummaryCells: util.Child | undefined;
   let top1Entry: StandingsEntry | undefined;
-  let standingsPane: string;
+  let standingsPane: util.Child;
 
   if (entries.length === 0) {
     const msg = l.status === 'upcoming'
-      ? `${escapeHtml(l.name)} ladder is upcoming — accepting initial entries before matchmaking ` +
-        'begins.'
+      ? `${l.name} ladder is upcoming — accepting initial entries before matchmaking begins.`
       : isArchived
-        ? `${escapeHtml(l.name)} archived with no completed entries.`
-        : `No active entries on ${escapeHtml(l.name)} yet.`;
-    standingsPane = `<p class="empty-state muted">${msg}</p>`;
+        ? `${l.name} archived with no completed entries.`
+        : `No active entries on ${l.name} yet.`;
+    standingsPane = <p className='empty-state muted'>{msg}</p>;
   } else {
     let activeCount = 0;
-    const rowsHtml = entries.map(e => {
+    const rows = entries.map(e => {
       const isFirstForAgent = !seenAnyAgent.has(e.agentId);
       if (isFirstForAgent) seenAnyAgent.add(e.agentId);
 
@@ -909,39 +1684,34 @@ function renderSingleLadderArtifact(opts: {
         isEffectiveActive && !isProvisional && isBestActive && e.rankCurrent !== undefined;
 
       const classes: string[] = [];
-      const dataAttrs: string[] = [];
-      let rowTitle = '';
+      let rowTitle: string | undefined;
 
       if (isRetired) {
         classes.push('secondary', 'hide');
-        dataAttrs.push('data-retired="true"');
-        if (isBestOverall) dataAttrs.push('data-best="true"');
       } else {
         activeCount++;
-        dataAttrs.push('data-active="true"');
-        if (isBestOverall) dataAttrs.push('data-best="true"');
         if (isProvisional) {
           classes.push('provisional');
           if (isSecondaryActive) classes.push('secondary');
-          rowTitle = ' title="Provisional (&lt; 10 matches or SE &gt; 60 Elo)"';
+          rowTitle = 'Provisional (< 10 matches or SE > 60 Elo)';
         } else if (isSecondaryActive) {
           classes.push('secondary');
         }
-        if (activeCount > TABLE_PAGE_SIZE) {
+        if (activeCount > util.TABLE_PAGE_SIZE) {
           classes.push('hide');
         }
       }
 
-      let rankCell: string;
+      let rankCell: util.Child;
       if (isRankedPrimary) {
-        rankCell = `<td><strong>${e.rankCurrent}</strong></td>`;
+        rankCell = <td><strong>{e.rankCurrent}</strong></td>;
       } else if (isRetired) {
-        rankCell = '<td class="muted" title="Retired version">—</td>';
+        rankCell = <td className='muted' title='Retired version'>—</td>;
       } else if (isSecondaryActive) {
         const anchorNote = e.isAnchor ? ' (1500 Elo anchor)' : '';
-        rankCell = `<td class="muted" title="Secondary active version${anchorNote}">—</td>`;
+        rankCell = <td className='muted' title={`Secondary active version${anchorNote}`}>—</td>;
       } else {
-        rankCell = '<td class="muted">—</td>';
+        rankCell = <td className='muted'>—</td>;
       }
 
       const href = resolveAgentHref(
@@ -951,35 +1721,51 @@ function renderSingleLadderArtifact(opts: {
         e.agentName,
         profileSlugs
       );
-      const nameHtml = formatAgentLink(e.agentName, href, isRankedPrimary);
       const meta = projectMeta.get(e.agentName);
-      const repoIcon = isBestActive && meta?.source
-        ? ` <a href="${escapeHtml(meta.source)}" class="subtle ext" ` +
-          `title="Source">${EXT_ICON}</a>`
-        : '';
-      const retiredTag = isRetired ? ' <span class="muted">(retired)</span>' : '';
-      const agentCell = `<td>${nameHtml} <code>${escapeHtml(e.version)}</code>` +
-        `${repoIcon}${retiredTag}</td>`;
+      const agentCell = (
+        <td>
+          {renderAgentLink(e.agentName, href, isRankedPrimary)}{' '}
+          <code>{e.version}</code>
+          {isBestActive && meta?.source ? (
+            <>
+              {' '}
+              <a href={meta.source} className='subtle ext' title='Source'>
+                {util.raw(util.EXT_ICON)}
+              </a>
+            </>
+          ) : undefined}
+          {isRetired ? (
+            <>
+              {' '}
+              <span className='muted'>(retired)</span>
+            </>
+          ) : undefined}
+        </td>
+      );
 
       const eloRounded = Math.round(e.elo);
       const ci95 = e.isAnchor ? 0 : Math.round(1.96 * e.se);
-      const eloInner = isRankedPrimary ? `<strong>${eloRounded}</strong>` : `${eloRounded}`;
-      const eloCell = `<td class="num">${eloInner} <span class="muted">±${ci95}</span></td>`;
+      const eloCell = (
+        <td className='num'>
+          {isRankedPrimary ? <strong>{eloRounded}</strong> : eloRounded}{' '}
+          <span className='muted'>±{ci95}</span>
+        </td>
+      );
 
-      const gxeCell = `<td class="num">${e.gxe.toFixed(1)}%</td>`;
+      const gxeCell = <td className='num'>{e.gxe.toFixed(1)}%</td>;
       const wins = e.ww + e.wt;
       const losses = e.ll + e.tl;
       const ties = e.split;
-      const wltCell = `<td class="num">${wins}–${losses}–${ties}</td>`;
+      const wltCell = <td className='num'>{wins}–{losses}–{ties}</td>;
 
       const streak = computeStreakLabel(e);
-      const streakCell = `<td class="center">${streak.html}</td>`;
+      const streakCell = <td className='center'>{streak.node}</td>;
 
       const adjLos = isRankedPrimary ? adjacentLos.get(e.versionId) : undefined;
       const losPct = adjLos !== undefined ? Math.round(adjLos * 1000) / 10 : undefined;
       const losCell = adjLos !== undefined
-        ? `<td class="num">${(adjLos * 100).toFixed(1)}%</td>`
-        : '<td class="num muted">—</td>';
+        ? <td className='num'>{(adjLos * 100).toFixed(1)}%</td>
+        : <td className='num muted'>—</td>;
 
       const entryObj: StandingsEntry = {
         rank: isRankedPrimary ? e.rankCurrent : undefined,
@@ -1007,44 +1793,69 @@ function renderSingleLadderArtifact(opts: {
       jsonRows.push(entryObj);
 
       if (isRankedPrimary && e.rankCurrent === 1 && top1SummaryCells === undefined) {
-        top1SummaryCells = `${agentCell}${eloCell}${gxeCell}${wltCell}${streakCell}${losCell}`;
+        top1SummaryCells = (
+          <>
+            {agentCell}
+            {eloCell}
+            {gxeCell}
+            {wltCell}
+            {streakCell}
+            {losCell}
+          </>
+        );
         top1Entry = entryObj;
       }
 
-      const clsAttr = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
-      const dAttrs = dataAttrs.length > 0 ? ` ${dataAttrs.join(' ')}` : '';
-      return `<tr${clsAttr}${dAttrs}${rowTitle}>` +
-        `${rankCell}${agentCell}${eloCell}${gxeCell}${wltCell}${streakCell}${losCell}</tr>`;
-    }).join('');
+      return (
+        <tr
+          className={classes.length > 0 ? classes.join(' ') : undefined}
+          data-retired={isRetired ? 'true' : undefined}
+          data-active={!isRetired ? 'true' : undefined}
+          data-best={isBestOverall ? 'true' : undefined}
+          title={rowTitle}
+        >
+          {rankCell}
+          {agentCell}
+          {eloCell}
+          {gxeCell}
+          {wltCell}
+          {streakCell}
+          {losCell}
+        </tr>
+      );
+    });
 
     const thGxe = 'Expected win percentage against prior N(1500, 350^2)';
     const thWlt = '2-game blind-pair Match Wins – Losses – Ties (1-1 splits)';
     const thStreak = 'Current consecutive outright match win/loss streak';
     const thLos = 'Pairwise Likelihood of Superiority over the next-ranked settled agent';
-    const standingsPagerHtml = renderTablePager({
-      id: 'standings-pager',
-      label: 'Standings pagination',
-      total: activeCount,
-      singular: 'entry',
-      plural: 'entries',
-    });
-    standingsPane = `<div class="table-wrap">
-        <table class="standings-table">
-          <thead>
-            <tr>
-              <th title="Official rank by Conservative Rating (Elo - 1.96 * SE)">#</th>
-              <th>Agent</th>
-              <th class="num" title="MAP Davidson Elo ± 95% Confidence Interval">Elo</th>
-              <th class="num" title="${thGxe}">GXE</th>
-              <th class="num" title="${thWlt}">W–L–T</th>
-              <th class="center" title="${thStreak}">Streak</th>
-              <th class="num" title="${thLos}">LOS</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-      </div>
-      ${standingsPagerHtml}`;
+    standingsPane = (
+      <>
+        <div className='table-wrap'>
+          <table className='standings-table'>
+            <thead>
+              <tr>
+                <th title='Official rank by Conservative Rating (Elo - 1.96 * SE)'>#</th>
+                <th>Agent</th>
+                <th className='num' title='MAP Davidson Elo ± 95% Confidence Interval'>Elo</th>
+                <th className='num' title={thGxe}>GXE</th>
+                <th className='num' title={thWlt}>W–L–T</th>
+                <th className='center' title={thStreak}>Streak</th>
+                <th className='num' title={thLos}>LOS</th>
+              </tr>
+            </thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>
+        <util.TablePager
+          id='standings-pager'
+          label='Standings pagination'
+          total={activeCount}
+          singular='entry'
+          plural='entries'
+        />
+      </>
+    );
   }
 
   const archive = resolveLadderArchive(publicDir, l);
@@ -1054,30 +1865,42 @@ function renderSingleLadderArtifact(opts: {
     : undefined;
   const jsonHref = `/arena/ladders/${urlEnc}/index.json`;
 
-  let ladderArchiveHtml = '';
+  let ladderArchiveNote: util.Child;
   if (l.team === 'pools' && l.status === 'archived') {
     if (archive) {
-      ladderArchiveHtml = '\n  <p class="battle-note muted">Retired season archive: ' +
-        `<a href="${escapeHtml(archive.href)}" class="subtle">` +
-        `<code>${escapeHtml(archive.name)}</code></a> ` +
-        '(full Showdown battle logs &amp; unpacked teams) · ' +
-        `<a href="${escapeHtml(teamsHref!)}" class="subtle"><code>teams.json</code></a> · ` +
-        `<a href="${escapeHtml(jsonHref)}" class="subtle"><code>index.json</code></a></p>`;
+      ladderArchiveNote = (
+        <p className='battle-note muted'>
+          Retired season archive:{' '}
+          <a href={archive.href} className='subtle'>
+            <code>{archive.name}</code>
+          </a>{' '}
+          (full Showdown battle logs &amp; unpacked teams) ·{' '}
+          <a href={teamsHref!} className='subtle'><code>teams.json</code></a> ·{' '}
+          <a href={jsonHref} className='subtle'><code>index.json</code></a>
+        </p>
+      );
     } else {
-      ladderArchiveHtml = '\n  <p class="battle-note muted">Retired season data: ' +
-        `<a href="${escapeHtml(teamsHref!)}" class="subtle"><code>teams.json</code></a> · ` +
-        `<a href="${escapeHtml(jsonHref)}" class="subtle"><code>index.json</code></a> · ` +
-        `full battle log archive (<code>${escapeHtml(`${l.id}-logs.7z`)}</code>) ` +
-        'pending upload.</p>';
+      ladderArchiveNote = (
+        <p className='battle-note muted'>
+          Retired season data:{' '}
+          <a href={teamsHref!} className='subtle'><code>teams.json</code></a> ·{' '}
+          <a href={jsonHref} className='subtle'><code>index.json</code></a> ·{' '}
+          full battle log archive (<code>{`${l.id}-logs.7z`}</code>) pending upload.
+        </p>
+      );
     }
   } else if (l.team === 'pools' && l.status === 'settling') {
-    ladderArchiveHtml = '\n  <p class="battle-note muted">Season settling — full battle log ' +
-      `archive (<code>${escapeHtml(`${l.id}-logs.7z`)}</code>) and <code>teams.json</code> ` +
-      'will be published once remaining provisional entries settle and the ladder is retired.</p>';
+    ladderArchiveNote = (
+      <p className='battle-note muted'>
+        Season settling — full battle log archive (<code>{`${l.id}-logs.7z`}</code>) and{' '}
+        <code>teams.json</code> will be published once remaining provisional entries settle and
+        the ladder is retired.
+      </p>
+    );
   }
 
-  const historyRes = renderHistorySectionHtml(l, entries, snapshots, nowSec);
-  const matchupsRes = renderMatchupsSectionHtml(
+  const historyRes = renderHistorySection(l, entries, snapshots, nowSec);
+  const matchupsRes = renderMatchupsSection(
     entries,
     pairs,
     publicDir,
@@ -1086,19 +1909,50 @@ function renderSingleLadderArtifact(opts: {
     l.status
   );
 
-  const ladderContent = renderTemplate(LADDER_TEMPLATE, {
-    formatNavItems,
-    standingsPane,
-    ladderArchiveHtml,
-    historyInitialClass: historyRes.isEmpty ? ' class="hide"' : '',
-    historyPane: historyRes.html,
-    matchupsInitialClass: matchupsRes.isEmpty ? ' class="hide"' : '',
-    matchupsPane: matchupsRes.html,
-  });
+  const ladderContent = String(
+    <>
+      <nav aria-label='Format'>
+        <ul>
+          {formatNavItems}
+        </ul>
+      </nav>
+      <nav className='subnav' aria-label='Version filter'>
+        <ul>
+          <li>
+            <input type='radio' name='versions' id='ver-active' value='active' checked />
+            <label htmlFor='ver-active'>Active</label>
+          </li>
+          {' — '}
+          <li>
+            <input type='radio' name='versions' id='ver-best' value='best' />
+            <label htmlFor='ver-best'>Best</label>
+          </li>
+          {' — '}
+          <li>
+            <input type='radio' name='versions' id='ver-all' value='all' />
+            <label htmlFor='ver-all'>All</label>
+          </li>
+        </ul>
+      </nav>
+      <section id='standings'>
+        {standingsPane}
+        {ladderArchiveNote}
+      </section>
+      <section id='history' className={historyRes.isEmpty ? 'hide' : undefined}>
+        <h3><a href='#history' className='subtle'>History</a></h3>
+        {historyRes.node}
+      </section>
+      <section id='matchups' className={matchupsRes.isEmpty ? 'hide' : undefined}>
+        <h3><a href='#matchups' className='subtle'>Matchups</a></h3>
+        {matchupsRes.node}
+      </section>
+      <script>{util.raw(LADDER_SCRIPT)}</script>
+    </>
+  );
 
   const liveTournament = db.getRunningTournament();
-  const ladderHeader = injectLiveBanner(
-    header('<a href="/arena/" class="subtle">Ladders</a>'),
+  const ladderHeader = build.injectLiveBanner(
+    build.header(<a href='/arena/' className='subtle'>Ladders</a>),
     liveTournament
   );
   const html = renderer.render({
@@ -1169,7 +2023,7 @@ function renderSingleLadderArtifact(opts: {
 
 export function renderArenaAndLadderArtifacts(opts: {
   db: db.Database;
-  renderer: Renderer;
+  renderer: build.Renderer;
   publicDir: string;
   staticDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
@@ -1197,7 +2051,7 @@ export function renderArenaAndLadderArtifacts(opts: {
   const archivedTeamsJsonById: Record<string, LadderTeamsDocument> = {};
   const jsonLadders: Record<string, StandingsLadder> = {};
   const archivedLadderSummaries: ArchivedLadderSummary[] = [];
-  const ladderSummaryRows: string[] = [];
+  const ladderSummaryRows: util.Child[] = [];
 
   for (const l of ladders) {
     const rendered = renderSingleLadderArtifact({
@@ -1217,13 +2071,16 @@ export function renderArenaAndLadderArtifacts(opts: {
 
     const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
     const ladderHref = `/arena/ladders/${encodeURIComponent(l.slot)}/`;
-    const ladderCell =
-      `<td><a href="${escapeHtml(ladderHref)}" class="subtle" ` +
-      `title="${escapeHtml(fmtTitle)}"><strong><tt>${escapeHtml(l.name)}</tt></strong>` +
-      '</a></td>';
+    const ladderCell = (
+      <td>
+        <a href={ladderHref} className='subtle' title={fmtTitle}>
+          <strong><tt>{l.name}</tt></strong>
+        </a>
+      </td>
+    );
 
     if (rendered.top1SummaryCells !== undefined) {
-      ladderSummaryRows.push(`<tr>${ladderCell}${rendered.top1SummaryCells}</tr>`);
+      ladderSummaryRows.push(<tr>{ladderCell}{rendered.top1SummaryCells}</tr>);
     } else {
       const stateLabel = l.status === 'upcoming'
         ? 'Upcoming'
@@ -1231,18 +2088,20 @@ export function renderArenaAndLadderArtifacts(opts: {
           ? 'Provisional'
           : 'No entries yet';
       ladderSummaryRows.push(
-        `<tr>${ladderCell}` +
-        `<td class="muted">${stateLabel}</td>` +
-        '<td class="num muted">—</td>' +
-        '<td class="num muted">—</td>' +
-        '<td class="num muted">—</td>' +
-        '<td class="center muted">—</td>' +
-        '<td class="num muted">—</td></tr>'
+        <tr>
+          {ladderCell}
+          <td className='muted'>{stateLabel}</td>
+          <td className='num muted'>—</td>
+          <td className='num muted'>—</td>
+          <td className='num muted'>—</td>
+          <td className='center muted'>—</td>
+          <td className='num muted'>—</td>
+        </tr>
       );
     }
   }
 
-  const pastSeasonRows: string[] = [];
+  const pastSeasonRows: util.Child[] = [];
   for (const l of pastLadders) {
     if (l.team === 'pools' && l.status === 'archived') {
       archivedTeamsJsonById[l.id] = buildLadderTeamsDocument(db, l);
@@ -1293,76 +2152,57 @@ export function renderArenaAndLadderArtifacts(opts: {
     });
 
     const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
-    const seasonCell =
-      `<td><a href="${escapeHtml(href)}" class="subtle" ` +
-      `title="${escapeHtml(fmtTitle)}"><strong><tt>${escapeHtml(l.name)}</tt></strong>` +
-      '</a></td>';
-    const dlLinks: string[] = [];
+    const seasonCell = (
+      <td>
+        <a href={href} className='subtle' title={fmtTitle}>
+          <strong><tt>{l.name}</tt></strong>
+        </a>
+      </td>
+    );
+    const dlLinks: util.Child[] = [];
     if (archiveHref) {
       const archiveName = path.basename(archiveHref);
       dlLinks.push(
-        `<a href="${escapeHtml(archiveHref)}" class="subtle">` +
-        `<code>${escapeHtml(archiveName)}</code></a>`
+        <a href={archiveHref} className='subtle'>
+          <code>{archiveName}</code>
+        </a>
       );
     }
     if (teamsHref) {
-      dlLinks.push(`<a href="${escapeHtml(teamsHref)}" class="subtle"><code>teams.json</code></a>`);
+      if (dlLinks.length > 0) dlLinks.push(' · ');
+      dlLinks.push(<a href={teamsHref} className='subtle'><code>teams.json</code></a>);
     }
     const statusText = l.status === 'settling' ? 'Settling' : 'Archived';
     const statusCell = dlLinks.length > 0
-      ? `<td><span class="muted">${statusText}</span> · ${dlLinks.join(' · ')}</td>`
-      : `<td class="muted">${statusText}</td>`;
+      ? <td><span className='muted'>{statusText}</span> · {dlLinks}</td>
+      : <td className='muted'>{statusText}</td>;
 
-    const hideCls = pastSeasonRows.length >= TABLE_PAGE_SIZE ? ' class="hide"' : '';
+    const hideCls = pastSeasonRows.length >= util.TABLE_PAGE_SIZE ? 'hide' : undefined;
     if (w) {
       const wHref = resolveAgentHref(publicDir, projectMeta, w.slug, w.name, profileSlugs);
-      const wLink = formatAgentLink(w.name, wHref, true);
       pastSeasonRows.push(
-        `<tr${hideCls}>${seasonCell}${statusCell}` +
-        `<td>${wLink} <code>${escapeHtml(w.version)}</code></td>` +
-        `<td class="num"><strong>${w.elo}</strong> <span class="muted">±${w.ci95}</span></td>` +
-        `<td class="num">${w.gxe.toFixed(1)}%</td>` +
-        `<td class="num">${w.wins}–${w.losses}–${w.ties}</td></tr>`
+        <tr className={hideCls}>
+          {seasonCell}
+          {statusCell}
+          <td>{renderAgentLink(w.name, wHref, true)} <code>{w.version}</code></td>
+          <td className='num'><strong>{w.elo}</strong> <span className='muted'>±{w.ci95}</span></td>
+          <td className='num'>{w.gxe.toFixed(1)}%</td>
+          <td className='num'>{w.wins}–{w.losses}–{w.ties}</td>
+        </tr>
       );
     } else {
       pastSeasonRows.push(
-        `<tr${hideCls}>${seasonCell}${statusCell}` +
-        '<td class="muted">—</td>' +
-        '<td class="num muted">—</td>' +
-        '<td class="num muted">—</td>' +
-        '<td class="num muted">—</td></tr>'
+        <tr className={hideCls}>
+          {seasonCell}
+          {statusCell}
+          <td className='muted'>—</td>
+          <td className='num muted'>—</td>
+          <td className='num muted'>—</td>
+          <td className='num muted'>—</td>
+        </tr>
       );
     }
   }
-
-  const seasonsPagerHtml = renderTablePager({
-    id: 'seasons-pager',
-    label: 'Past seasons pagination',
-    total: pastSeasonRows.length,
-    singular: 'season',
-    plural: 'seasons',
-  });
-  const pastSeasonsSectionHtml = pastSeasonRows.length > 0
-    ? `\n<section id="seasons">
-  <h3><a href="#seasons" class="subtle">Past Seasons</a></h3>
-  <div class="table-wrap">
-    <table class="standings-table">
-      <thead>
-        <tr>
-          <th>Season</th>
-          <th>Status</th>
-          <th>Champion</th>
-          <th class="num">Elo</th>
-          <th class="num">GXE</th>
-          <th class="num">W–L–T</th>
-        </tr>
-      </thead>
-      <tbody>${pastSeasonRows.join('')}</tbody>
-    </table>
-  </div>
-  ${seasonsPagerHtml}
-</section>\n`
-    : '';
 
   const allTournaments = db.getTournaments();
   const entrantsByTournament = new Map(
@@ -1410,17 +2250,78 @@ export function renderArenaAndLadderArtifacts(opts: {
     entrantsByTournament,
   });
 
-  const arenaContent = renderTemplate(ARENA_TEMPLATE, {
-    blurbHtml,
-    ladderSummaryRows: ladderSummaryRows.join(''),
-    pastSeasonsSectionHtml,
-    tournamentsSummaryHtml,
-  });
+  const arenaContent = String(
+    <>
+      <section id='overview' className='arena-blurb'>
+        {util.raw(blurbHtml)}
+      </section>
+      <section id='ladders'>
+        <h3><a href='#ladders' className='subtle'>Ladders</a></h3>
+        <div className='table-wrap'>
+          <table className='standings-table'>
+            <thead>
+              <tr>
+                <th>Ladder</th>
+                <th>Agent</th>
+                <th className='num' title='MAP Davidson Elo ± 95% Confidence Interval'>Elo</th>
+                <th className='num' title='Expected win percentage against prior N(1500, 350^2)'>
+                  GXE
+                </th>
+                <th
+                  className='num'
+                  title='2-game blind-pair Match Wins – Losses – Ties (1-1 splits)'
+                >
+                  W–L–T
+                </th>
+                <th className='center' title='Current consecutive outright match win/loss streak'>
+                  Streak
+                </th>
+                <th className='num' title='Pairwise Likelihood of Superiority over #2'>LOS</th>
+              </tr>
+            </thead>
+            <tbody>{ladderSummaryRows}</tbody>
+          </table>
+        </div>
+      </section>
+      {pastSeasonRows.length > 0 ? (
+        <section id='seasons'>
+          <h3><a href='#seasons' className='subtle'>Past Seasons</a></h3>
+          <div className='table-wrap'>
+            <table className='standings-table'>
+              <thead>
+                <tr>
+                  <th>Season</th>
+                  <th>Status</th>
+                  <th>Champion</th>
+                  <th className='num'>Elo</th>
+                  <th className='num'>GXE</th>
+                  <th className='num'>W–L–T</th>
+                </tr>
+              </thead>
+              <tbody>{pastSeasonRows}</tbody>
+            </table>
+          </div>
+          <util.TablePager
+            id='seasons-pager'
+            label='Past seasons pagination'
+            total={pastSeasonRows.length}
+            singular='season'
+            plural='seasons'
+          />
+        </section>
+      ) : undefined}
+      <section id='tournaments'>
+        <h3><a href='#tournaments' className='subtle'>Tournaments</a></h3>
+        {util.raw(tournamentsSummaryHtml)}
+      </section>
+      <script>{util.raw(util.TABLE_PAGER_SCRIPT)}</script>
+    </>
+  );
 
   const arenaHtml = renderer.render({
     id: 'arena',
     title: 'Arena | pkmn.ai',
-    header: injectLiveBanner(header('Arena'), db.getRunningTournament()),
+    header: build.injectLiveBanner(build.header('Arena'), db.getRunningTournament()),
     path: '/arena/',
     style: ARENA_STYLE,
     content: arenaContent,
@@ -1450,7 +2351,7 @@ function renderLiveSlotCard(
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>,
   profileSlugs?: ReadonlySet<string>
-): string {
+): util.Child {
   const isRunning = live.activeSlot === key;
   const otherKey = key === 'p1' ? 'p2' : 'p1';
   const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
@@ -1463,48 +2364,68 @@ function renderLiveSlotCard(
   const inc = Math.round(live.incrementSeconds);
   const ramPct = ((slotData.ram / 14336) * 100).toFixed(1);
   const href = resolveAgentHref(publicDir, projectMeta, slotData.slug, slotData.name, profileSlugs);
-  const agentHtml = `${formatAgentLink(slotData.name, href, true)} ` +
-    `<code>${escapeHtml(slotData.version)}</code>`;
 
-  const badge = isRunning
-    ? `<span class="state-running" id="state-${key}" ` +
-      'title="Currently executing (SIGCONT)">&#9679; RUNNING</span>'
-    : `<span class="state-paused" id="state-${key}" ` +
-      `title="Frozen by kernel SIGSTOP while ${otherKey} computes">PAUSED</span>`;
+  const badge = isRunning ? (
+    <span className='state-running' id={`state-${key}`} title='Currently executing (SIGCONT)'>
+      {'\u25cf'} RUNNING
+    </span>
+  ) : (
+    <span
+      className='state-paused'
+      id={`state-${key}`}
+      title={`Frozen by kernel SIGSTOP while ${otherKey} computes`}
+    >
+      PAUSED
+    </span>
+  );
 
   const timerTitle =
     `Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +${inc}s/turn`;
 
   const turnCls = isRunning ? 'yes' : 'muted';
   const ramText = `${Math.round(slotData.ram).toLocaleString('en-US')} MiB`;
-  let teamSpan = '';
+  let teamSpan: util.Child;
   if (slotData.team) {
     const teamTip = slotData.team.startsWith('P1:')
       ? 'Known to Match P1 (drawn from P1 seasonal pool)'
       : slotData.team.startsWith('P2:')
         ? 'Known to Match P2 (drawn from P2 seasonal pool)'
         : 'Unknown to both players (drawn from a third-party competitor pool)';
-    teamSpan = `\n      <span title="${escapeHtml(teamTip)}">Team: ` +
-      `<code>${escapeHtml(slotData.team)}</code></span>`;
+    teamSpan = (
+      <span title={teamTip}>
+        Team: <code>{slotData.team}</code>
+      </span>
+    );
   }
-  return `<div class="slot-card ${isRunning ? 'running' : 'paused'}" id="slot-${key}">
-    <div class="slot-top">
-      <span><tt>${key}</tt> ${agentHtml}</span>
-      ${badge}
+  return (
+    <div className={`slot-card ${isRunning ? 'running' : 'paused'}`} id={`slot-${key}`}>
+      <div className='slot-top'>
+        <span>
+          <tt>{key}</tt> {renderAgentLink(slotData.name, href, true)}{' '}
+          <code>{slotData.version}</code>
+        </span>
+        {badge}
+      </div>
+      <div className='slot-timers' title={timerTitle}>
+        <span>
+          Turn: <strong id={`turn-${key}`} className={turnCls}>{elapsed}s</strong>{' '}
+          <span className='muted'>/ {budget}s</span>
+        </span>
+        <span>
+          Bank: <strong id={`bank-${key}`}>{bank}s</strong>{' '}
+          <span className='muted'>(+{inc}s/turn)</span>
+        </span>
+      </div>
+      <div className='slot-telemetry'>
+        <span>Last: <tt>{Math.round(slotData.lastTurnMillis)} ms</tt></span>
+        <span>Mean: <tt>{Math.round(slotData.meanTurnMillis)} ms/turn</tt></span>
+        <span title='XNU ri_phys_footprint (14 GiB limit)'>
+          RAM: <tt>{ramText}</tt> ({ramPct}%)
+        </span>
+        {teamSpan}
+      </div>
     </div>
-    <div class="slot-timers" title="${escapeHtml(timerTitle)}">
-      <span>Turn: <strong id="turn-${key}" class="${turnCls}">${elapsed}s</strong> ` +
-        `<span class="muted">/ ${budget}s</span></span>
-      <span>Bank: <strong id="bank-${key}">${bank}s</strong> ` +
-        `<span class="muted">(+${inc}s/turn)</span></span>
-    </div>
-    <div class="slot-telemetry">
-      <span>Last: <tt>${Math.round(slotData.lastTurnMillis)} ms</tt></span>
-      <span>Mean: <tt>${Math.round(slotData.meanTurnMillis)} ms/turn</tt></span>
-      <span title="XNU ri_phys_footprint (14 GiB limit)">RAM: ` +
-        `<tt>${ramText}</tt> (${ramPct}%)</span>${teamSpan}
-    </div>
-  </div>`;
+  );
 }
 
 function renderLivePanelInner(
@@ -1513,60 +2434,79 @@ function renderLivePanelInner(
   publicDir: string,
   projectMeta: ReadonlyMap<string, ProjectMeta>,
   profileSlugs?: ReadonlySet<string>
-): string {
+): util.Child {
   if (!liveDoc?.live || liveDoc.stale) {
     const idleMsg = liveDoc?.stale
       ? 'No active heartbeat — Arena is offline or idle.'
       : 'No battle currently running — Arena is idle.';
-    const tourSuffix = liveDoc?.runningTournament
-      ? ` · <a href="${escapeHtml(liveDoc.runningTournament.href)}" class="subtle">` +
-        `<strong>&#9679; Watch ${escapeHtml(liveDoc.runningTournament.name)} live</strong></a>`
-      : '';
-    return `<div class="live-idle muted">${idleMsg}${tourSuffix}</div>`;
+    return (
+      <div className='live-idle muted'>
+        {idleMsg}
+        {liveDoc?.runningTournament ? (
+          <>
+            {' · '}
+            <a href={liveDoc.runningTournament.href} className='subtle'>
+              <strong>{'\u25cf'} Watch {liveDoc.runningTournament.name} live</strong>
+            </a>
+          </>
+        ) : undefined}
+      </div>
+    );
   }
 
   const l = liveDoc.live;
   const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
-  let g1Html = '';
+  let g1Node: util.Child;
   if (l.game1Summary) {
     const g1Res = l.game1Summary.winnerSlot === 'p1'
-      ? `${escapeHtml(l.p1.name)} 1–0`
+      ? `${l.p1.name} 1–0`
       : l.game1Summary.winnerSlot === 'p2'
-        ? `${escapeHtml(l.p2.name)} 1–0`
+        ? `${l.p2.name} 1–0`
         : 'Tie';
-    g1Html = ` <span class="muted">(<tt>G1</tt>: ${g1Res}, ${l.game1Summary.turns} turns)</span>`;
+    g1Node = (
+      <>
+        {' '}
+        <span className='muted'>
+          (<tt>G1</tt>: {g1Res}, {l.game1Summary.turns} turns)
+        </span>
+      </>
+    );
   }
   const hbAge = Math.max(0, nowSec - liveDoc.updatedAt);
-  const gameText = `<strong>Game ${l.game} / 2</strong>, Turn ${l.turn}${g1Html}`;
 
-  return `<div class="live-header">
-    <span>
-      <code>${escapeHtml(l.matchId)}</code> · <tt>${escapeHtml(fmtTitle)}</tt> · ${gameText}
-    </span>
-    <span class="muted">
-      Heartbeat <tt>#${l.heartbeatSeq}</tt> (<tt id="hb-age">${hbAge}s</tt> ago)
-    </span>
-  </div>
-  <div class="slots-grid">
-    ${renderLiveSlotCard('p1', l.p1, l, nowSec, publicDir, projectMeta, profileSlugs)}
-    ${renderLiveSlotCard('p2', l.p2, l, nowSec, publicDir, projectMeta, profileSlugs)}
-  </div>`;
+  return (
+    <>
+      <div className='live-header'>
+        <span>
+          <code>{l.matchId}</code> · <tt>{fmtTitle}</tt> ·{' '}
+          <strong>Game {l.game} / 2</strong>, Turn {l.turn}{g1Node}
+        </span>
+        <span className='muted'>
+          Heartbeat <tt>#{l.heartbeatSeq}</tt> (<tt id='hb-age'>{hbAge}s</tt> ago)
+        </span>
+      </div>
+      <div className='slots-grid'>
+        {renderLiveSlotCard('p1', l.p1, l, nowSec, publicDir, projectMeta, profileSlugs)}
+        {renderLiveSlotCard('p2', l.p2, l, nowSec, publicDir, projectMeta, profileSlugs)}
+      </div>
+    </>
+  );
 }
 
 function renderMatchOutcomeDisplay(cat: db.RecentMatchView['category']): {
   p1Win: boolean;
   p2Win: boolean;
-  html: string;
+  node: util.Child;
 } {
-  if (cat === 'WW') return {p1Win: true, p2Win: false, html: '<strong>2</strong>–0'};
+  if (cat === 'WW') return {p1Win: true, p2Win: false, node: <><strong>2</strong>–0</>};
   if (cat === 'WT' || cat === 'TW') {
-    return {p1Win: true, p2Win: false, html: '<strong>1.5</strong>–0.5'};
+    return {p1Win: true, p2Win: false, node: <><strong>1.5</strong>–0.5</>};
   }
-  if (cat === 'LL') return {p1Win: false, p2Win: true, html: '0–<strong>2</strong>'};
+  if (cat === 'LL') return {p1Win: false, p2Win: true, node: <>0–<strong>2</strong></>};
   if (cat === 'LT' || cat === 'TL') {
-    return {p1Win: false, p2Win: true, html: '0.5–<strong>1.5</strong>'};
+    return {p1Win: false, p2Win: true, node: <>0.5–<strong>1.5</strong></>};
   }
-  return {p1Win: false, p2Win: false, html: '1–1'};
+  return {p1Win: false, p2Win: false, node: '1–1'};
 }
 
 function isAbnormalEndReason(reason: string): boolean {
@@ -1579,35 +2519,39 @@ function isAbnormalEndReason(reason: string): boolean {
     !/^tie-\d+-turns$/.test(norm);
 }
 
-function formatEndReasonHtml(reason: string): {html: string; label: string; abnormal: boolean} {
+function formatEndReasonNode(reason: string): {
+  node: util.Child;
+  label: string;
+  abnormal: boolean;
+} {
   const norm = reason.trim().toLowerCase();
   if (!norm || norm === 'normal' || norm === 'win') {
-    return {html: '<span class="muted">Normal</span>', label: 'Normal', abnormal: false};
+    return {node: <span className='muted'>Normal</span>, label: 'Normal', abnormal: false};
   }
   if (norm === 'tie') {
-    return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
+    return {node: <span className='muted'>Tie</span>, label: 'Tie', abnormal: false};
   }
   if (norm === 'turn-limit' || /^tie-\d+-turns$/.test(norm)) {
-    return {html: '<span class="muted">Turn limit</span>', label: 'Turn limit', abnormal: false};
+    return {node: <span className='muted'>Turn limit</span>, label: 'Turn limit', abnormal: false};
   }
   if (norm === 'timeout') {
-    return {html: '<span class="no">Timeout</span>', label: 'Timeout', abnormal: true};
+    return {node: <span className='no'>Timeout</span>, label: 'Timeout', abnormal: true};
   }
   if (norm === 'crash') {
-    return {html: '<span class="no">Crash</span>', label: 'Crash', abnormal: true};
+    return {node: <span className='no'>Crash</span>, label: 'Crash', abnormal: true};
   }
   if (norm === 'oom') {
-    return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
+    return {node: <span className='no'>OOM</span>, label: 'OOM', abnormal: true};
   }
   if (norm === 'invalid-choice') {
     return {
-      html: '<span class="no">3&times; Invalid Choice</span>',
+      node: <span className='no'>3{'\u00d7'} Invalid Choice</span>,
       label: '3x Invalid Choice',
       abnormal: true,
     };
   }
   return {
-    html: `<span class="no">${escapeHtml(reason)}</span>`,
+    node: <span className='no'>{reason}</span>,
     label: reason,
     abnormal: true,
   };
@@ -1617,8 +2561,8 @@ function formatPoolTeamCode(
   label: string | undefined,
   p1Name: string,
   p2Name: string
-): string {
-  if (!label) return '<span class="muted">—</span>';
+): util.Child {
+  if (!label) return <span className='muted'>—</span>;
   let tip: string;
   if (label.startsWith('P1:')) {
     tip = `Known to P1 (${p1Name}) — drawn from ${p1Name}'s submitted seasonal pool ` +
@@ -1629,7 +2573,7 @@ function formatPoolTeamCode(
   } else {
     tip = 'Unknown to both players — drawn from a third-party competitor seasonal pool';
   }
-  return `<code title="${escapeHtml(tip)}">${escapeHtml(label)}</code>`;
+  return <code title={tip}>{label}</code>;
 }
 
 // Renders the inline expandable detail panel inside a battle history table row.
@@ -1645,48 +2589,35 @@ export function renderBattleInlineDetailHtml(
   const r = renderMatchOutcomeDisplay(m.category);
   const p1Href = agentLinks[m.p1.slug];
   const p2Href = agentLinks[m.p2.slug];
-  const p1Bold = `${formatAgentLink(m.p1.name, p1Href, r.p1Win)} ` +
-    `<code>${escapeHtml(m.p1.version)}</code>`;
-  const p2Bold = `${formatAgentLink(m.p2.name, p2Href, r.p2Win)} ` +
-    `<code>${escapeHtml(m.p2.version)}</code>`;
-  const p1Plain = `${formatAgentLink(m.p1.name, p1Href, false)} ` +
-    `<code>${escapeHtml(m.p1.version)}</code>`;
-  const p2Plain = `${formatAgentLink(m.p2.name, p2Href, false)} ` +
-    `<code>${escapeHtml(m.p2.version)}</code>`;
+  const p1Bold = <>{renderAgentLink(m.p1.name, p1Href, r.p1Win)} <code>{m.p1.version}</code></>;
+  const p2Bold = <>{renderAgentLink(m.p2.name, p2Href, r.p2Win)} <code>{m.p2.version}</code></>;
+  const p1Plain = <>{renderAgentLink(m.p1.name, p1Href, false)} <code>{m.p1.version}</code></>;
+  const p2Plain = <>{renderAgentLink(m.p2.name, p2Href, false)} <code>{m.p2.version}</code></>;
 
   const fmtTitle = FORMAT_TITLES[m.format] ?? m.format;
   const completedIso = new Date(m.completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
   const completedUtc = `${completedIso} UTC`;
 
-  const end1 = formatEndReasonHtml(m.game1EndReason);
-  const end2 = formatEndReasonHtml(m.game2EndReason);
+  const end1 = formatEndReasonNode(m.game1EndReason);
+  const end2 = formatEndReasonNode(m.game2EndReason);
   const faultLabels = [...new Set(
     [end1, end2].filter(e => e.abnormal).map(e => e.label)
   )];
-  const faultBadgeHtml = faultLabels.length > 0
-    ? ' <span class="no" title="Abnormal game termination">' +
-      `[${escapeHtml(faultLabels.join(', '))}]</span>`
-    : '';
 
   const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
   const t1Code = formatPoolTeamCode(m.p1TeamLabel, m.p1.name, m.p2.name);
   const t2Code = formatPoolTeamCode(m.p2TeamLabel, m.p1.name, m.p2.name);
-  const poolSummaryHtml = showPools
-    ? '<div class="battle-detail-pool" title="12-char pkmn/teams SHA-256 short hashes; P1:/P2: ' +
-      'prefix indicates a team submitted by that player in this match (at most one team per ' +
-      `match can belong to either player)">Teams: Player 1 ${t1Code} · Player 2 ${t2Code}</div>`
-    : '';
 
   const g1Winner = m.game1Outcome === 'W'
-    ? `<strong>${escapeHtml(m.p1.name)}</strong> <span class="muted">(P1)</span>`
+    ? <><strong>{m.p1.name}</strong> <span className='muted'>(P1)</span></>
     : m.game1Outcome === 'L'
-      ? `<strong>${escapeHtml(m.p2.name)}</strong> <span class="muted">(P2)</span>`
-      : '<span class="muted">Tie</span>';
+      ? <><strong>{m.p2.name}</strong> <span className='muted'>(P2)</span></>
+      : <span className='muted'>Tie</span>;
   const g2Winner = m.game2Outcome === 'W'
-    ? `<strong>${escapeHtml(m.p1.name)}</strong> <span class="muted">(P1)</span>`
+    ? <><strong>{m.p1.name}</strong> <span className='muted'>(P1)</span></>
     : m.game2Outcome === 'L'
-      ? `<strong>${escapeHtml(m.p2.name)}</strong> <span class="muted">(P2)</span>`
-      : '<span class="muted">Tie</span>';
+      ? <><strong>{m.p2.name}</strong> <span className='muted'>(P2)</span></>
+      : <span className='muted'>Tie</span>;
 
   const g1Banks = `${Math.round(m.p1Game1BankSeconds)}s / ${Math.round(m.p2Game1BankSeconds)}s`;
   // In Game 2, Seat `p1` is Match P2 and Seat `p2` is Match P1.
@@ -1698,82 +2629,106 @@ export function renderBattleInlineDetailHtml(
   const p2RamStr = `${Math.round(m.p2PeakRam).toLocaleString('en-US')} MiB`;
   const p1Banks = `${Math.round(m.p1Game1BankSeconds)}s / ${Math.round(m.p1Game2BankSeconds)}s`;
   const p2Banks = `${Math.round(m.p2Game1BankSeconds)}s / ${Math.round(m.p2Game2BankSeconds)}s`;
-  const p1Teams = showPools ? ` · Teams ${t1Code} / ${t2Code}` : '';
-  const p2Teams = showPools ? ` · Teams ${t2Code} / ${t1Code}` : '';
 
-  let archiveNoteHtml = '';
+  let archiveNote: util.Child;
   if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
-    const links: string[] = [];
+    const links: util.Child[] = [];
     if (m.archiveHref) {
       links.push(
-        `<a href="${escapeHtml(m.archiveHref)}" class="subtle">` +
-        `<code>${escapeHtml(`${m.ladderId}-logs.7z`)}</code></a>`
+        <a href={m.archiveHref} className='subtle'>
+          <code>{`${m.ladderId}-logs.7z`}</code>
+        </a>
       );
     }
     if (m.teamsHref) {
-      links.push(
-        `<a href="${escapeHtml(m.teamsHref)}" class="subtle"><code>teams.json</code></a>`
-      );
+      if (links.length > 0) links.push(' · ');
+      links.push(<a href={m.teamsHref} className='subtle'><code>teams.json</code></a>);
     }
     if (links.length > 0) {
-      archiveNoteHtml = '<div class="battle-detail-note muted">Retired pool archives: ' +
-        `${links.join(' · ')}</div>`;
+      archiveNote = <div className='battle-detail-note muted'>Retired pool archives: {links}</div>;
     }
   }
 
-  return `<div class="battle-detail">
-    <div class="battle-detail-meta">
-      <span>
-        <a href="${escapeHtml(m.ladderHref)}" class="subtle">` +
-          `<strong>${escapeHtml(m.ladderName)}</strong></a>
-        <span class="muted">(<tt>${escapeHtml(fmtTitle)}</tt>)</span> ·
-        <span class="muted">${escapeHtml(completedUtc)}</span>
-      </span>
-      <span>
-        <span class="muted">Outcome:</span> <code>${escapeHtml(m.category)}</code>
-        <span class="muted">(${m.game1Turns + m.game2Turns} turns)</span>${faultBadgeHtml} ·
-        <span class="muted">Seed:</span> <code>${escapeHtml(m.seed)}</code>
-      </span>
-    </div>
-    ${poolSummaryHtml}
-    <div class="battle-detail-grid">
-      <div class="battle-detail-card">
-        <div class="battle-detail-title">Games</div>
-        <div class="battle-detail-line">
-          <span><strong>Game 1</strong> · <tt>p1</tt> ${p1Plain} vs <tt>p2</tt> ${p2Plain}</span>
-          <span>${g1Winner} · ${end1.html} · ${m.game1Turns}t · ` +
-            `Bank <tt>${g1Banks}</tt></span>
+  const poolTitle =
+    '12-char pkmn/teams SHA-256 short hashes; P1:/P2: prefix indicates a team submitted by ' +
+    'that player in this match (at most one team per match can belong to either player)';
+
+  return String(
+    <div className='battle-detail'>
+      <div className='battle-detail-meta'>
+        <span>
+          <a href={m.ladderHref} className='subtle'><strong>{m.ladderName}</strong></a>{' '}
+          <span className='muted'>(<tt>{fmtTitle}</tt>)</span> ·{' '}
+          <span className='muted'>{completedUtc}</span>
+        </span>
+        <span>
+          <span className='muted'>Outcome:</span> <code>{m.category}</code>{' '}
+          <span className='muted'>({m.game1Turns + m.game2Turns} turns)</span>
+          {faultLabels.length > 0 ? (
+            <>
+              {' '}
+              <span className='no' title='Abnormal game termination'>
+                [{faultLabels.join(', ')}]
+              </span>
+            </>
+          ) : undefined}{' '}
+          · <span className='muted'>Seed:</span> <code>{m.seed}</code>
+        </span>
+      </div>
+      {showPools ? (
+        <div className='battle-detail-pool' title={poolTitle}>
+          Teams: Player 1 {t1Code} · Player 2 {t2Code}
         </div>
-        <div class="battle-detail-line">
-          <span><strong>Game 2</strong> <span class="muted">(swapped)</span> · ` +
-            `<tt>p1</tt> ${p2Plain} vs <tt>p2</tt> ${p1Plain}</span>
-          <span>${g2Winner} · ${end2.html} · ${m.game2Turns}t · ` +
-            `Bank <tt>${g2Banks}</tt></span>
+      ) : undefined}
+      <div className='battle-detail-grid'>
+        <div className='battle-detail-card'>
+          <div className='battle-detail-title'>Games</div>
+          <div className='battle-detail-line'>
+            <span><strong>Game 1</strong> · <tt>p1</tt> {p1Plain} vs <tt>p2</tt> {p2Plain}</span>
+            <span>
+              {g1Winner} · {end1.node} · {m.game1Turns}t · Bank <tt>{g1Banks}</tt>
+            </span>
+          </div>
+          <div className='battle-detail-line'>
+            <span>
+              <strong>Game 2</strong> <span className='muted'>(swapped)</span> ·{' '}
+              <tt>p1</tt> {p2Plain} vs <tt>p2</tt> {p1Plain}
+            </span>
+            <span>
+              {g2Winner} · {end2.node} · {m.game2Turns}t · Bank <tt>{g2Banks}</tt>
+            </span>
+          </div>
+        </div>
+        <div className='battle-detail-card'>
+          <div className='battle-detail-title'>Client Telemetry</div>
+          <div className='battle-detail-line'>
+            <span><tt>P1</tt> {p1Bold}</span>
+            <span>
+              Mean <tt>{Math.round(m.p1MeanTurnMillis)} ms/turn</tt> · Peak RAM{' '}
+              <tt>{p1RamStr}</tt> <span className='muted'>({p1RamPct}%)</span> · Banks{' '}
+              <tt>{p1Banks}</tt>
+              {showPools ? <> · Teams {t1Code} / {t2Code}</> : undefined}
+            </span>
+          </div>
+          <div className='battle-detail-line'>
+            <span><tt>P2</tt> {p2Bold}</span>
+            <span>
+              Mean <tt>{Math.round(m.p2MeanTurnMillis)} ms/turn</tt> · Peak RAM{' '}
+              <tt>{p2RamStr}</tt> <span className='muted'>({p2RamPct}%)</span> · Banks{' '}
+              <tt>{p2Banks}</tt>
+              {showPools ? <> · Teams {t2Code} / {t1Code}</> : undefined}
+            </span>
+          </div>
         </div>
       </div>
-      <div class="battle-detail-card">
-        <div class="battle-detail-title">Client Telemetry</div>
-        <div class="battle-detail-line">
-          <span><tt>P1</tt> ${p1Bold}</span>
-          <span>Mean <tt>${Math.round(m.p1MeanTurnMillis)} ms/turn</tt> · ` +
-            `Peak RAM <tt>${p1RamStr}</tt> <span class="muted">(${p1RamPct}%)</span> · ` +
-            `Banks <tt>${p1Banks}</tt>${p1Teams}</span>
-        </div>
-        <div class="battle-detail-line">
-          <span><tt>P2</tt> ${p2Bold}</span>
-          <span>Mean <tt>${Math.round(m.p2MeanTurnMillis)} ms/turn</tt> · ` +
-            `Peak RAM <tt>${p2RamStr}</tt> <span class="muted">(${p2RamPct}%)</span> · ` +
-            `Banks <tt>${p2Banks}</tt>${p2Teams}</span>
-        </div>
-      </div>
+      {archiveNote}
     </div>
-    ${archiveNoteHtml}
-  </div>`;
+  );
 }
 
 export function renderBattlesPage(opts: {
   db: db.Database;
-  renderer: Renderer;
+  renderer: build.Renderer;
   publicDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
   profileSlugs?: ReadonlySet<string>;
@@ -1798,14 +2753,15 @@ export function renderBattlesPage(opts: {
   const totalMatches = countsBySlot.all ?? recentMatches.length;
   const totalPages = Math.max(1, Math.ceil(totalMatches / recentMatchesLimit));
 
-  const formatFilterItems = ladders.map(l => {
-    const slotEsc = escapeHtml(l.slot);
-    return `—
-    <li>
-      <input type="radio" name="bformat" id="bf-${slotEsc}" value="${slotEsc}">
-      <label for="bf-${slotEsc}">${escapeHtml(l.name)}</label>
-    </li>`;
-  }).join('\n    ');
+  const formatFilterItems = ladders.map(l => (
+    <>
+      {' — '}
+      <li>
+        <input type='radio' name='bformat' id={`bf-${l.slot}`} value={l.slot} />
+        <label htmlFor={`bf-${l.slot}`}>{l.name}</label>
+      </li>
+    </>
+  ));
 
   const agentLinks: Record<string, string> = {};
   for (const s of db.getProjectArenaSummaries()) {
@@ -1829,17 +2785,15 @@ export function renderBattlesPage(opts: {
     }
   }
 
-  const historyRows = recentMatches.length === 0
-    ? '<tr class="empty-row"><td colspan="6" class="center muted">' +
-      'No completed battles yet.</td></tr>'
-    : recentMatches.map(m => {
+  const historyRows = recentMatches.length === 0 ? (
+    <tr className='empty-row'>
+      <td colSpan={6} className='center muted'>No completed battles yet.</td>
+    </tr>
+  ) : (
+    recentMatches.map(m => {
       const r = renderMatchOutcomeDisplay(m.category);
       const p1Href = agentLinks[m.p1.slug];
       const p2Href = agentLinks[m.p2.slug];
-      const p1Cell = `${formatAgentLink(m.p1.name, p1Href, r.p1Win)} ` +
-        `<code>${escapeHtml(m.p1.version)}</code>`;
-      const p2Cell = `${formatAgentLink(m.p2.name, p2Href, r.p2Win)} ` +
-        `<code>${escapeHtml(m.p2.version)}</code>`;
 
       const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
       const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
@@ -1853,23 +2807,34 @@ export function renderBattlesPage(opts: {
         `${Math.round(m.p1PeakRam).toLocaleString('en-US')}M/` +
         `${Math.round(m.p2PeakRam).toLocaleString('en-US')}M${reasonSuffix}`;
 
-      const idEsc = escapeHtml(m.id);
       const rel = formatRelativeTime(nowSec, m.completedAt);
       const detailHtml = renderBattleInlineDetailHtml(m, agentLinks);
-      return `<tr id="${idEsc}" class="battle-row" data-fmt="${escapeHtml(m.slot)}" ` +
-        'tabindex="0" aria-expanded="false">\n' +
-        '        <td><span class="battle-toggle" aria-hidden="true">&#9656;</span>' +
-        `<code>${idEsc}</code></td>\n` +
-        `        <td>${p1Cell}</td>\n` +
-        `        <td>${p2Cell}</td>\n` +
-        `        <td class="center" title="${escapeHtml(tip)}">${r.html}</td>\n` +
-        `        <td class="num">${m.game1Turns} / ${m.game2Turns}</td>\n` +
-        `        <td class="num muted" data-ts="${m.completedAt}">${rel}</td>\n` +
-        '      </tr>\n' +
-        `      <tr class="battle-detail-row hide" data-detail-for="${idEsc}">\n` +
-        `        <td colspan="6">${detailHtml}</td>\n` +
-        '      </tr>';
-    }).join('\n      ');
+      return (
+        <>
+          <tr
+            id={m.id}
+            className='battle-row'
+            data-fmt={m.slot}
+            tabIndex={0}
+            aria-expanded='false'
+          >
+            <td>
+              <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
+              <code>{m.id}</code>
+            </td>
+            <td>{renderAgentLink(m.p1.name, p1Href, r.p1Win)} <code>{m.p1.version}</code></td>
+            <td>{renderAgentLink(m.p2.name, p2Href, r.p2Win)} <code>{m.p2.version}</code></td>
+            <td className='center' title={tip}>{r.node}</td>
+            <td className='num'>{m.game1Turns} / {m.game2Turns}</td>
+            <td className='num muted' data-ts={m.completedAt}>{rel}</td>
+          </tr>
+          <tr className='battle-detail-row hide' data-detail-for={m.id}>
+            <td colSpan={6}>{util.raw(detailHtml)}</td>
+          </tr>
+        </>
+      );
+    })
+  );
 
   const initialState: arena.LiveDocument = liveDoc
     ? {
@@ -1890,29 +2855,82 @@ export function renderBattlesPage(opts: {
       recentMatches,
     };
 
-  const pagerInitialClass = totalPages <= 1 ? ' hide' : '';
   const battleWord = totalMatches === 1 ? 'battle' : 'battles';
   const pagerInitialInfo =
     `Page 1 of ${totalPages} (${totalMatches.toLocaleString('en-US')} ${battleWord})`;
-  const pagerNextDisabled = totalPages <= 1 ? ' disabled' : '';
 
-  const content = renderTemplate(BATTLES_TEMPLATE, {
-    formatFilterItems,
-    livePanelInner: renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta, profileSlugs),
-    historyRows,
-    pagerInitialClass,
-    pagerInitialInfo,
-    pagerNextDisabled,
-    initialLiveJson: safeInlineJson(initialState),
-    agentLinksJson: safeInlineJson(agentLinks),
-    formatTitlesJson: safeInlineJson(FORMAT_TITLES),
-  });
+  const content = String(
+    <>
+      <nav aria-label='Format filter'>
+        <ul>
+          <li>
+            <input type='radio' name='bformat' id='bf-all' value='all' checked />
+            <label htmlFor='bf-all'>All</label>
+          </li>
+          {formatFilterItems}
+        </ul>
+      </nav>
+      <section id='live'>
+        <h3><a href='#live' className='subtle'>Live</a></h3>
+        <div className='live-panel' id='live-panel'>
+          {renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta, profileSlugs)}
+        </div>
+      </section>
+      <section id='history'>
+        <h3><a href='#history' className='subtle'>History</a></h3>
+        <div className='table-wrap'>
+          <table id='battles-table'>
+            <thead>
+              <tr>
+                <th>Battle</th>
+                <th>Player 1</th>
+                <th>Player 2</th>
+                <th className='center' title='2-game blind-pair outcome (Game 1 / Game 2)'>
+                  Result
+                </th>
+                <th className='num' title='Turns in Game 1 / Game 2'>Turns</th>
+                <th className='num'>Completed</th>
+              </tr>
+            </thead>
+            <tbody id='battles-tbody'>
+              {historyRows}
+            </tbody>
+          </table>
+        </div>
+        <div
+          className={`pager${totalPages <= 1 ? ' hide' : ''}`}
+          id='battles-pager'
+          aria-label='Battle history pagination'
+        >
+          <button type='button' className='pager-btn' id='battles-prev' disabled>
+            {'\u2190'} Newer
+          </button>
+          <span className='pager-info muted' id='battles-page-info'>{pagerInitialInfo}</span>
+          <button
+            type='button'
+            className='pager-btn'
+            id='battles-next'
+            disabled={totalPages <= 1}
+          >
+            Older {'\u2192'}
+          </button>
+        </div>
+      </section>
+      <script>
+        {util.raw(buildBattlesScript(
+          safeInlineJson(initialState),
+          safeInlineJson(agentLinks),
+          safeInlineJson(FORMAT_TITLES)
+        ))}
+      </script>
+    </>
+  );
 
   return renderer.render({
     id: 'battles',
     title: 'Arena — Battles | pkmn.ai',
-    header: injectLiveBanner(
-      header('<a href="/arena/" class="subtle">Battles</a>'),
+    header: build.injectLiveBanner(
+      build.header(<a href='/arena/' className='subtle'>Battles</a>),
       db.getRunningTournament()
     ),
     path: '/arena/battles/',
@@ -1978,18 +2996,18 @@ const ASSET_EXT_RE = /\.[a-z0-9]{1,8}$/i;
 // invalidates automatically on SQLite writes (`PRAGMA data_version` + `total_changes()`) and live
 // Arena worker sequence updates.
 export function register(app: polka.Polka, options: Options) {
-  installHeadSupport(app);
+  util.installHeadSupport(app);
   const {db, arena: arenaHandle} = options;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const staticDir = options.staticDir ?? STATIC_DIR;
   const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
-  const recentMatchesLimit = options.recentMatchesLimit ?? TABLE_PAGE_SIZE;
+  const recentMatchesLimit = options.recentMatchesLimit ?? util.TABLE_PAGE_SIZE;
   const getNowSec = options.now ?? (() => Math.floor(Date.now() / 1000));
 
   const renderer = options.renderer ?? (
     publicDir === PUBLIC_DIR
-      ? siteRenderer
-      : new Renderer({
+      ? build.renderer
+      : new build.Renderer({
         public: publicDir,
         analytics: 'G-LQ8TW28Z7Q',
         description: 'The home of competitive Pokémon artificial intelligence',
@@ -2069,7 +3087,7 @@ export function register(app: polka.Polka, options: Options) {
   } | undefined;
 
   const getArenaBundle = (dbToken: string, nowSec: number) => {
-    const bundleToken = `${dbToken}:${formatUtcDate(nowSec)}`;
+    const bundleToken = `${dbToken}:${util.formatUtcDate(nowSec)}`;
     if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
     const ctx = getContext(dbToken);
     const bundle = renderArenaAndLadderArtifacts({
@@ -2143,10 +3161,10 @@ export function register(app: polka.Polka, options: Options) {
     }
     const html = renderer.render({
       title: '404 | pkmn.ai',
-      header: injectLiveBanner(header('404'), db.getRunningTournament()),
+      header: build.injectLiveBanner(build.header('404'), db.getRunningTournament()),
       path: '',
       id: 'error',
-      content: '<p>Not Found</p>',
+      content: String(<p>Not Found</p>),
     });
     res.end(html);
   };
@@ -2181,7 +3199,7 @@ export function register(app: polka.Polka, options: Options) {
   const handleArenaHub = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
     const nowSec = getNowSec();
     const dbToken = getDbToken();
-    const token = `${dbToken}:${formatUtcDate(nowSec)}`;
+    const token = `${dbToken}:${util.formatUtcDate(nowSec)}`;
     if (asJson) {
       sendCached(
         req,
@@ -2284,7 +3302,7 @@ export function register(app: polka.Polka, options: Options) {
     const isArchivedOnly = !(key in bundle.ladderJsonBySlot) &&
       key in bundle.archivedLadderJsonById &&
       bundle.archivedLadderJsonById[key].status === 'archived';
-    const token = isArchivedOnly ? dbToken : `${dbToken}:${formatUtcDate(nowSec)}`;
+    const token = isArchivedOnly ? dbToken : `${dbToken}:${util.formatUtcDate(nowSec)}`;
     const jsonDoc = bundle.ladderJsonBySlot[key] ?? bundle.archivedLadderJsonById[key];
     const htmlDoc = bundle.ladderHtmlBySlot[key] ?? bundle.archivedLadderHtmlById[key];
     if (!jsonDoc || !htmlDoc) {
@@ -2406,7 +3424,7 @@ export function register(app: polka.Polka, options: Options) {
       return renderer.render({
         id: 'projects',
         ...projectsPage,
-        header: injectLiveBanner(projectsPage.header, ctx.liveTournament),
+        header: build.injectLiveBanner(projectsPage.header, ctx.liveTournament),
       });
     });
   });
