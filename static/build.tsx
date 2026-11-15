@@ -34,7 +34,9 @@ export function formatLiveTournamentBanner(tournament?: {id: string; name: strin
   const href = `/arena/tournaments/${encodeURIComponent(tournament.id)}/`;
   return String(
     <div id='topbar'>
-      <a href={href} className='subtle'>[LIVE] {tournament.name}</a>
+      <a href={href} className='subtle'>
+        <span>{'\u25cf'} LIVE</span> {tournament.name}
+      </a>
     </div>
   );
 }
@@ -50,7 +52,7 @@ export function injectLiveBanner(
 }
 
 const LIVE_TOPBAR_RE =
-  /<div id="topbar"><a [^>]*>\[LIVE\][\s\S]*?<\/a><\/div>\s*/g;
+  /<div id="topbar"><a [^>]*>[\s\S]*?<\/a><\/div>\s*/g;
 
 // Keeps pre-built static `.dj` pages in `publicDir` (`index.html`, `rules/`, `glossary/`, etc.)
 // synchronized when a tournament transitions into or out of `status = 'running'` at runtime

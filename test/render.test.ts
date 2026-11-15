@@ -1303,7 +1303,7 @@ describe('SSR cache invalidation', () => {
     }
   });
 
-  test('syncs [LIVE] #topbar banner onto non-placeholder static pages until completed',
+  test('syncs LIVE #topbar banner onto non-placeholder static pages until completed',
     async () => {
       db.upsertTournament({
         id: '2',
@@ -1318,18 +1318,19 @@ describe('SSR cache invalidation', () => {
       const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
       try {
         expect(fs.readFileSync(path.join(tmpPublic, 'index.html'), 'utf8'))
-          .toContain('[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3');
+          .toContain('<span>\u25cf LIVE</span> Tournament #2: VGC 2026 Reg M-C OTS BO3');
         expect(fs.readFileSync(path.join(tmpPublic, 'rules', 'index.html'), 'utf8'))
-          .toContain('[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3');
+          .toContain('<span>\u25cf LIVE</span> Tournament #2: VGC 2026 Reg M-C OTS BO3');
         expect(fs.readFileSync(path.join(tmpPublic, 'background', 'index.html'), 'utf8'))
-          .not.toContain('[LIVE]');
+          .not.toContain('\u25cf LIVE');
 
         await runPkmnCli(
           ['set-tournament-status', '2', 'completed'],
           {db, publicDir: tmpPublic, now: NOW + 60, log: () => undefined}
         );
-        expect(fs.readFileSync(path.join(tmpPublic, 'index.html'), 'utf8')).not.toContain('[LIVE]');
-        expect(await h.getText('/arena/battles/')).not.toContain('[LIVE]');
+        expect(fs.readFileSync(path.join(tmpPublic, 'index.html'), 'utf8'))
+          .not.toContain('\u25cf LIVE');
+        expect(await h.getText('/arena/battles/')).not.toContain('\u25cf LIVE');
       } finally {
         await h.close();
       }

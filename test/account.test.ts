@@ -964,7 +964,7 @@ describe('account routes', () => {
     test('renders live tournament #topbar banner across /account or /wiki', async () => {
       const expectedBanner =
         '<div id="topbar"><a href="/arena/tournaments/2/" class="subtle">' +
-        '[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3</a></div>';
+        '<span>\u25cf LIVE</span> Tournament #2: VGC 2026 Reg M-C OTS BO3</a></div>';
 
       const acctHtml = await (await realFetch(`${baseUrl}/account`, {
         headers: {Cookie: cookieFor('pre')},

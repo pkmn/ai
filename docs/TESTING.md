@@ -127,7 +127,7 @@ When a `.shots/baseline/` snapshot exists:
 
 The 7 sections cover:
 
-1. **Overview & Reference Pages (`content`):** Home (both normal state and the `[LIVE]` tournament
+1. **Overview & Reference Pages (`content`):** Home (both normal state and the `● LIVE` tournament
    `#topbar` banner edge case), Background (with `Under Construction` `#topbar`), Concepts overview
    + 5 subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release
    announcement, Research bibliography, Arena Rules, and `404` Not Found.
@@ -194,7 +194,7 @@ MOCK=1 npm run dev
   completed, `#2` running, and `#3` scheduled), and rendering `public/`.
 - `MOCK=1 npm run dev` starts the server on `http://localhost:1234` with `DEV_AUTH=1`.
 - Visit `http://localhost:1234/` or `http://localhost:1234/arena/` to verify the site-wide `#topbar`
-  `[LIVE] Tournament #2: VGC 2026 Reg M-C OTS BO3` banner (while `http://localhost:1234/background/`
+  `● LIVE Tournament #2: VGC 2026 Reg M-C OTS BO3` banner (while `http://localhost:1234/background/`
   retains its permanent `Under Construction` `#topbar`).
 - Optionally run organic background activity in a second terminal so submitted versions automatically
   smoke-test and live matches tick across turns:

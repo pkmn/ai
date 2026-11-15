@@ -269,7 +269,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'content',
       title: 'Home (Live Tournament Banner)',
       description:
-        'Landing page (`/`) with the `#topbar` `[LIVE]` tournament broadcast banner ' +
+        'Landing page (`/`) with the `#topbar` `● LIVE` tournament broadcast banner ' +
         'shown while a championship event is in progress.',
       path: '/',
       setup: fixture => {
@@ -1426,7 +1426,7 @@ async function startFixture(): Promise<Fixture> {
   });
   const projectsFile = path.join(staticDir, 'projects.yml');
 
-  // Default to the normal everyday state without a `[LIVE]` topbar banner across pages; only the
+  // Default to the normal everyday state without a `● LIVE` topbar banner across pages; only the
   // explicit `home-live-banner` scenario enables it via `setShowLiveBanner(true)`.
   let showLiveBanner = false;
   const origGetRunningTournament = db.getRunningTournament.bind(db);

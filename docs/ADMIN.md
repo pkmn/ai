@@ -68,7 +68,7 @@ npm run pkmn -- <command> [args...]
 | `publish-ladder-archive <ladder_id> <archive.7z>` | Publish `<ladder_id>-logs.7z` (and `teams.json`) for an `archived` `pools` ladder. |
 | `create-tournament <id> --name "..." --format <fmt> ...` | Create or update a Championship Tournament (`scheduled`, `running`, or `completed`). |
 | `seed-tournament <id>` | Lock tournament entrants and assign 1-based Berger seeds by conservative ladder rating. |
-| `set-tournament-status <id> <status>` | Flip tournament `<id>` to `scheduled`, `running` (enables `#topbar` `[LIVE]` banner), or `completed`. |
+| `set-tournament-status <id> <status>` | Flip tournament `<id>` to `scheduled`, `running` (enables `#topbar` `● LIVE` banner), or `completed`. |
 | `publish-tournament-archive <id> <archive.7z>` | Publish `<id>-replays.7z` for a `completed` tournament. |
 | `render` | Force a full static HTML/JSON re-render of all Arena and project profile views in `public/`. |
 | `session [--github <login>] [--discord <id>:<name>]` | Mint a signed `pkmn_session` cookie header using `SESSION_SECRET` (for `curl` / debugging). |
@@ -501,7 +501,7 @@ tournament live:
 npm run pkmn -- set-tournament-status 3 running
 ```
 
-Registration closes on `/account/`, the site-wide `[LIVE] Tournament #3: ...` `#topbar` banner is
+Registration closes on `/account/`, the site-wide `● LIVE Tournament #3: ...` `#topbar` banner is
 injected across `pkmn.ai`, and live Showdown frames stream to `/arena/tournaments/3/`
 (`public/api/tournament-live.json`). Spot preemptions reset only the single interrupted
 `in_progress` game back to `pending` (preserving its PRNG `seed`) and replace the VM in the next L4
@@ -509,7 +509,7 @@ zone with zero forfeit penalty.
 
 ### Step 7.4: Complete the Event, Publish Replays & Tear Down Cloud VMs (`completed`)
 
-1. **Finalize standings and clear the `[LIVE]` banner:**
+1. **Finalize standings and clear the `● LIVE` banner:**
 
 ```sh
 npm run pkmn -- set-tournament-status 3 completed
