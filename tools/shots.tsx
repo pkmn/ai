@@ -95,7 +95,7 @@ export const SECTIONS: readonly SectionMeta[] = [
   },
   {
     id: 'tournaments',
-    title: 'Championship Tournaments',
+    title: 'Tournaments',
     subtitle:
       'Completed events with 100-game Superfinals and inline Showdown replay viewer, live ' +
       'multi-table broadcasts with active/idle tables, and scheduled upcoming registrations.',
@@ -320,7 +320,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Home (Live Tournament Banner)',
       description:
         'Landing page (`/`) with the `#topbar` `● LIVE` tournament broadcast banner ' +
-        'shown while a championship event is in progress.',
+        'shown while a tournament event is in progress.',
       path: '/',
       setup: fixture => {
         fixture.setShowLiveBanner(true);
@@ -540,8 +540,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'arena',
       title: 'Arena Hub (Active Season)',
       description:
-        'Central Arena hub (`/arena/`) summarizing the `#1` champion across all 5 active ' +
-        'ladders plus live, scheduled, and completed Championship Tournaments.',
+        'Central Arena hub (`/arena/`) summarizing the `#1` leader across all 5 active ' +
+        'ladders plus live, scheduled, and completed Tournaments.',
       path: '/arena/',
     },
     {
@@ -873,7 +873,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     },
 
     // =========================================================================
-    // 5. Championship Tournaments
+    // 5. Tournaments
     // =========================================================================
     {
       name: 'arena-tournament-1',

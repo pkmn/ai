@@ -428,7 +428,7 @@ describe('empty Arena SSR views', () => {
     expect(arenaHtml).toContain('href="/arena/battles/"');
     expect(arenaHtml).toContain('href="/arena/ladders/rby/"');
     expect(arenaHtml).toContain('Upcoming');
-    expect(arenaHtml).toContain('No championship tournaments scheduled yet.');
+    expect(arenaHtml).toContain('No tournaments scheduled yet.');
   });
 
   test('renders upcoming status notice on /arena/ladders/rby/', async () => {

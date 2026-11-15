@@ -2,7 +2,7 @@
 #
 # Populates 14 catalog projects across all 6 developer onboarding personas, 5 active ladders
 # (each with 10 settled competitors + 1 provisional challenger, multi-week daily snapshots,
-# H2H matchup residuals, streaks, and abnormal-termination examples), 3 Championship Tournaments
+# H2H matchup residuals, streaks, and abnormal-termination examples), 3 Tournaments
 # (completed w/ Superfinal + .7z archive, live w/ broadcast, and scheduled), and developer wiki
 # history.
 
@@ -129,7 +129,7 @@ submit pokerus 1.0.2 rby=1340 sv=1340 \
 submit mikumiku 0.9.2 adv=1330 rand=1330 vgc=1330 \
   --bytes 170mb --duration-millis 2260 --turn-millis 360 --ram 845
 
-# 8. Championship Tournaments (#1 Completed + Archive, #2 Running + Broadcast, #3 Scheduled)
+# 8. Tournaments (#1 Completed + Archive, #2 Running + Broadcast, #3 Scheduled)
 time now-90d
 tournament create 1 --name "Tournament #1: Gen 9 OU" --format gen9ou --team harvested \
   --games 8 --tables 2 --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now-90d

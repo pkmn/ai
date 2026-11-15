@@ -1311,7 +1311,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   const {db, publicDir, projectMeta, profileSlugs, entrantsByTournament} = opts;
   const tournaments = opts.tournaments ?? db.getTournaments();
   if (tournaments.length === 0) {
-    return String(<p className='empty-state muted'>No championship tournaments scheduled yet.</p>);
+    return String(<p className='empty-state muted'>No tournaments scheduled yet.</p>);
   }
 
   const sorted = [...tournaments].sort(

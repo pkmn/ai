@@ -165,13 +165,13 @@ A subtle security and fairness dilemma arises when two competitors submit identi
 
 ---
 
-## 6. Cloud GPU Championship Tournaments (TCEC / CCC Mode)
+## 6. Cloud GPU Tournaments (TCEC / CCC Mode)
 
 ### 6.1 Architectural Comparison: Continuous Arena (CCRL) vs. Live Tournament (TCEC / CCC)
 
 | Dimension | Continuous Rating Arena (CCRL Mode) | Weekend Live Tournament (TCEC / CCC Mode) |
 | :--- | :--- | :--- |
-| **Computer Chess Analogy** | **CCRL / CEGT**: Continuous background calibration of all versions on standardized openings (`ponder = false`). | **TCEC / CCC**: Scheduled premier championship event on dedicated datacenter GPUs & high-core CPUs (`ponder = true`, live broadcast). |
+| **Computer Chess Analogy** | **CCRL / CEGT**: Continuous background calibration of all versions on standardized openings (`ponder = false`). | **TCEC / CCC**: Scheduled premier tournament event on dedicated datacenter GPUs & high-core CPUs (`ponder = true`, live broadcast). |
 | **Coordinator & `@pkmn/sim`** | Runs on the M6 Mac mini's 2 Efficiency cores (`pkmn@arena`). | Runs on the tournament coordinator (`< 0.2 ms` CPU per turn, `< 50 MB` RAM for $K \le 16$ concurrent tables). |
 | **Agent Worker Hardware & OS** | Owned **Apple M6 Mac mini** (`darwin/arm64` + `libkrun` `linux/arm64`), 12c CPU, 12c integrated GPU, 32 GB Unified Memory. | Ephemeral **1-Agent GCP `g2-custom-24-49152` Spot VMs (`Ubuntu 24.04 LTS x86_64`)**: **1× NVIDIA L4 (`24 GB GDDR6`)** + **24 vCPUs (`12` physical Xeon cores)** + **48 GB DDR5 RAM** per agent (`$0.50/hr` Spot per agent, **`$1.00/hr` per 2-VM match table**). |
 | **Per-Agent Compute** | **Shared & Time-Sliced**: 10 CPU cores + M6 GPU (~5 TFLOPS) + 14 GiB total RAM, **only while active**. | **100% Dedicated & Concurrent (`1 VM = 1 Agent`)**: Full VM (**242 TFLOPS FP16 / 485 TOPS INT8 GPU** w/ `24 GB` VRAM + **all 24 vCPUs** + **48 GB host RAM** = **72 GB total memory per agent**). |

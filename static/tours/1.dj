@@ -4,7 +4,7 @@ These tournament-specific rules supplement the general [Arena Rules](/rules) for
 
 - *Ruleset*: `[Gen 9] OU` singles (`gen9ou`), played on mirror-swapped team pairs drawn from a stratified tournament opening book.
 - *Stage 1 (Double Round-Robin)*: Every pair of seeded entrants plays `G = 8` games (`4` mirror pairs with alternating Player 1 / Player 2 starts) to cancel team and seat bias. Scoring awards `1` point for a win, `0.5` for a tie, and `0` for a loss, with Sonneborn–Berger breaking ties.
-- *Stage 2 (Superfinal)*: The top two Stage 1 finishers advance to a `100`-game Superfinal (`50` games per side) deciding the championship podium and Gold/Silver/Bronze standings badges.
+- *Stage 2 (Superfinal)*: The top two Stage 1 finishers advance to a `100`-game Superfinal (`50` games per side) deciding the tournament podium and Gold/Silver/Bronze standings badges.
 
 ### Environment & Clock
 

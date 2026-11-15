@@ -1,7 +1,7 @@
--- Scheduled, live, and archived cloud-GPU tournament events (e.g. seasonal BYOT championships).
+-- Scheduled, live, and archived cloud-GPU tournament events (e.g. seasonal BYOT tournaments).
 --
 -- Features: Tournament selector, event metadata banner, live multi-table broadcast shell, and
---   archived championship pages under `/arena/tournaments/<id>` (summarized on `/arena#tournaments`).
+--   archived tournament pages under `/arena/tournaments/<id>` (summarized on `/arena#tournaments`).
 -- Relationships: Parent of `tournament_entrants` and `tournament_games`.
 -- Why standalone: Tournaments differ fundamentally from continuous blind-pair ladders: they run on
 --   ephemeral cloud GPU VMs over a fixed schedule, allow pondering and Bring-Your-Own-Team (BYOT)
@@ -10,7 +10,7 @@
 CREATE TABLE IF NOT EXISTS tournaments (
   -- URL-safe event identifier (e.g. '1', '2', or 'spring-2026').
   id TEXT PRIMARY KEY,
-  -- Full human-readable event title (e.g. 'Autumn 2026 VGC Championship').
+  -- Full human-readable event title (e.g. 'VGC 2026 Reg M-D OTS (Bo3)').
   name TEXT NOT NULL,
   -- @pkmn/sim format ID played in this tournament (e.g. 'gen9championsvgc2026regmc').
   format TEXT NOT NULL,

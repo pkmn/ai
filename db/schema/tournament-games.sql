@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS tournament_games (
   id TEXT PRIMARY KEY,
   -- Parent tournament event.
   tournament_id TEXT NOT NULL REFERENCES tournaments(id),
-  -- Competition phase: 'Round Robin' or championship 'Superfinal'.
+  -- Competition phase: 'Round Robin' or tournament 'Superfinal'.
   stage TEXT NOT NULL DEFAULT 'Round Robin' CHECK (stage IN ('Round Robin', 'Superfinal')),
   -- 1-based Round Robin macro-cycle index (ensures balanced progress across all pairs).
   cycle INTEGER NOT NULL,

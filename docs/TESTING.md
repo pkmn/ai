@@ -147,7 +147,7 @@ The 7 sections cover:
    `[Timeout]`, `[Crash]`, clean 2-game match, and archived `pools` match (with clickable
    `P1:<hash>` -> `teams.json#<hash>` links), format filter (`VGC`), Page 2 pagination, `Idle` live
    state, `Stale / Offline` heartbeat state, and empty battle history.
-5. **Championship Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal
+5. **Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal
    `SF` badges and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay
    viewer, live Tournament `#2` multi-table broadcast (`Table 1`, switched to `Table 2`,
    `Table 2 (idle)` with `● Watch T1` pill, and inline expanded completed game row while `#live`
@@ -191,7 +191,7 @@ MOCK=1 npm run dev
 - `npm run mock -- seed` runs [`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock), resetting
   `db/data/arena.sqlite`, populating `.mock/` overlays (`.mock/ladders.yml`, `.mock/static/projects.yml`
   + generated 32×32 avatars, `.mock/wiki/` with public and `{% visibility: developers %}` pages,
-  `.mock/vgc-teams.txt` with 20 legal Regulation M-C teams, and Championship Tournaments `#1`
+  `.mock/vgc-teams.txt` with 20 legal Regulation M-C teams, and Tournaments `#1`
   completed, `#2` running, and `#3` scheduled), and rendering `public/`.
 - `MOCK=1 npm run dev` starts the server on `http://localhost:1234` with `DEV_AUTH=1`.
 - Visit `http://localhost:1234/` or `http://localhost:1234/arena/` to verify the site-wide `#topbar`
@@ -536,7 +536,7 @@ live idle
 live stale
 ```
 
-### 5.7 Championship Tournaments
+### 5.7 Tournaments
 
 ```sh
 tournament create <id> --name <title> --format <ps-format> \

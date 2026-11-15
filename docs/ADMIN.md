@@ -3,7 +3,7 @@
 This runbook covers all **application-level** operator workflows for **pkmn.ai**: deploying updates,
 onboarding and managing projects, moderating submissions, provisioning `harvested` ladder team
 pools on the Mac mini Arena runner, managing ladder lifecycles and seasonal rotations, syncing
-Discord roles, and running cloud-GPU Championship Tournaments.
+Discord roles, and running cloud-GPU Tournaments.
 
 For OS-level provisioning and system daemon maintenance (`systemd`, `journalctl`, `nginx`,
 `certbot`, Ubuntu/Node upgrades, and SQLite backups), see [SETUP.md](SETUP.md).
@@ -66,7 +66,7 @@ npm run pkmn -- <command> [args...]
 | `set-ladder-status <ladder_id> <status>` | Set `<ladder_id>` to `upcoming`, `active`, `settling`, or `archived`. |
 | `rotate-ladder <old_id> --name "..." [--new <id> ...]` | Transition `<old_id>` into `settling`/`archived` under its historical name and optionally open `<new_id>`. |
 | `publish-ladder-archive <ladder_id> <archive.7z>` | Publish `<ladder_id>-logs.7z` (and `teams.json`) for an `archived` `pools` ladder. |
-| `create-tournament <id> --name "..." --format <fmt> ...` | Create or update a Championship Tournament (`scheduled`, `running`, or `completed`). |
+| `create-tournament <id> --name "..." --format <fmt> ...` | Create or update a Tournament (`scheduled`, `running`, or `completed`). |
 | `seed-tournament <id>` | Lock tournament entrants and assign 1-based Berger seeds by conservative ladder rating. |
 | `set-tournament-status <id> <status>` | Flip tournament `<id>` to `scheduled`, `running` (enables `#topbar` `● LIVE` banner), or `completed`. |
 | `publish-tournament-archive <id> <archive.7z>` | Publish `<id>-replays.7z` for a `completed` tournament. |
@@ -387,10 +387,10 @@ node --env-file-if-exists=.env build/server/discord
 
 ---
 
-## 7. Championship Tournament Operations
+## 7. Tournament Operations
 
 Unlike continuous ladders on the Mac mini (which time-slice processes and hide logs), scheduled
-Championship Tournaments run on isolated Google Cloud `g2-custom-24-49152` Spot GPU VMs (`1× NVIDIA
+Tournaments run on isolated Google Cloud `g2-custom-24-49152` Spot GPU VMs (`1× NVIDIA
 L4 24 GB`, `24 vCPUs`, `48 GB RAM` per agent) in **live broadcast mode** (`ARENA_PONDER=1`, public
 teams and `.log` replays).
 

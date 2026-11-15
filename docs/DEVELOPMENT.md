@@ -38,7 +38,7 @@ Zero `.env` secrets are required to run the stack locally.
 
 ### Seeded Arena Mode (Recommended)
 
-To explore populated leaderboards, Elo charts, battle history, Championship Tournaments, developer
+To explore populated leaderboards, Elo charts, battle history, Tournaments, developer
 account onboarding stages, and a Git-backed wiki on `http://localhost:1234`:
 
 ```sh

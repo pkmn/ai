@@ -163,7 +163,7 @@ export interface BroadcastTable {
 }
 
 // Unlike the 24/7 continuous ladders (which enforce a zero-log anti-scouting policy), scheduled
-// Championship Tournaments use locked submitted binaries and open team sheets, so full Showdown
+// Tournaments use locked submitted binaries and open team sheets, so full Showdown
 // battle logs and live multi-table spectator broadcasts are streamed in real time.
 export interface LiveBroadcast {
   tournamentId: string;
