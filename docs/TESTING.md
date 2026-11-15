@@ -133,7 +133,7 @@ The 7 sections cover:
    announcement, Research bibliography, Arena Rules, and `404` Not Found.
 2. **Projects Directory & Agent Profiles (`projects`):** Directory filters (`Active`, `All`,
    `Inactive`), multi-version champion profile (`/projects/0-error/`), version dropdown filter, H2H
-   opponent click filter, expanded inline match telemetry, empty filtered recent-matches state,
+   opponent click filter, expanded inline match telemetry, empty filtered matches state,
    provisional entrant (`/projects/pokerus/`), qualified project with 0 entries
    (`/projects/cynthiai/`), and pending project (`/projects/asterai/`).
 3. **Arena Hub & Ladders (`arena`):** Active season hub, hub with `#seasons` **Past Seasons** table

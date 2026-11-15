@@ -1903,7 +1903,7 @@ describe('JSON route parity & retired pool archives', () => {
 
         const profileHtml = await h.getText('/projects/foul-play/');
         expect(profileHtml).toContain('aria-label="Versions pagination"');
-        expect(profileHtml).toContain('aria-label="Recent matches pagination"');
+        expect(profileHtml).toContain('aria-label="Matches pagination"');
         expect(profileHtml).toContain('Page 1 of 2 (29 versions)');
         expect(profileHtml).toContain('Page 1 of 2 (28 matches)');
       } finally {

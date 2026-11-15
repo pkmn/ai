@@ -749,7 +749,7 @@ function renderHeadToHeadPane(opts: {
       <tr
         className={rowCls}
         data-opp={opp.agentSlug}
-        title={`Click to filter Recent Matches vs. ${opp.agentName}`}
+        title={`Click to filter Matches vs. ${opp.agentName}`}
       >
         <td data-val={opp.agentName}>
           {raw(oppLink)} <code>{opp.version}</code>
@@ -972,7 +972,7 @@ function renderRecentMatchesPane(opts: {
             {matches.length > 0 && (
               <tr className='empty-filter-row hide'>
                 <td colSpan={8} className='center muted'>
-                  No matching battles in recent history.
+                  No matching battles.
                 </td>
               </tr>
             )}
@@ -980,7 +980,7 @@ function renderRecentMatchesPane(opts: {
         </table>
       </div>
       <TablePager
-        label='Recent matches pagination'
+        label='Matches pagination'
         total={matches.length}
         singular='match'
         plural='matches'
@@ -1580,7 +1580,7 @@ export function renderAgentProfile(opts: {
 
         <section id='matches' className='hide'>
           <div className='matches-header'>
-            <h3><a href='#matches' className='subtle'>Recent Matches</a></h3>
+            <h3><a href='#matches' className='subtle'>Matches</a></h3>
             <div className='ver-picker'>
               <label htmlFor='opp-select' className='muted'>Opponent</label>
               <select id='opp-select' className='min-select' aria-label='Opponent'>
@@ -1886,7 +1886,7 @@ export function renderAgentProfile(opts: {
 
       <section id='matches'>
         <div className='matches-header'>
-          <h3><a href='#matches' className='subtle'>Recent Matches</a></h3>
+          <h3><a href='#matches' className='subtle'>Matches</a></h3>
           <div className='ver-picker'>
             <label htmlFor='opp-select' className='muted'>Opponent</label>
             <select id='opp-select' className='min-select' aria-label='Opponent'>

@@ -407,7 +407,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       description:
         '`0 ERROR` profile (`/projects/0-error/`) with `#1` reign table, multi-ladder SVG ' +
         'rating chart with version handoff markers, H2H table (`+` Best Matchup / `-` Nemesis ' +
-        'residuals), and Recent Matches.',
+        'residuals), and Matches.',
       path: '/projects/0-error/',
     },
     {
@@ -415,7 +415,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'projects',
       title: 'Agent Profile (Filtered by Active Version)',
       description:
-        'Selecting `1.2.0` in `#ver-select` scopes Head-to-Head statistics and Recent Matches ' +
+        'Selecting `1.2.0` in `#ver-select` scopes Head-to-Head statistics and Matches ' +
         'to that specific version.',
       path: '/projects/0-error/',
       act: async page => {
@@ -427,8 +427,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'projects',
       title: 'Agent Profile (Filtered by H2H Opponent)',
       description:
-        'Clicking an opponent row in `#matchups` highlights the H2H row, displays the ' +
-        '`#matches-opp-chip` filter pill, and filters Recent Matches to that matchup.',
+        'Clicking an opponent row in `#matchups` highlights the H2H row, updates `#opp-select`, ' +
+        'and filters Matches to that matchup.',
       path: '/projects/0-error/',
       click: '#matchups tbody tr.opp-row td:first-child',
     },
@@ -445,10 +445,10 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'project-profile-filter-empty',
       section: 'projects',
-      title: 'Agent Profile (Empty Filtered Recent Matches)',
+      title: 'Agent Profile (Empty Filtered Matches)',
       description:
         'Selecting retired version `1.0.0` in `#ver-select` shows historical `1.0.0` H2H rows ' +
-        'while displaying `"No matching battles in recent history."` in `#matches`.',
+        'while displaying `"No matching battles."` in `#matches`.',
       path: '/projects/0-error/',
       act: async page => {
         await page.selectOption('#ver-select', '1.0.0');
