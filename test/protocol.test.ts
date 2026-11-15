@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 
 import {BattleStreams} from '@pkmn/sim';
-import {describe, expect, test} from 'vitest';
 
 import {
   filterPlayerProtocolChunk,
