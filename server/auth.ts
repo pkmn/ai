@@ -4,7 +4,7 @@ import * as http from 'http';
 import polka from 'polka';
 
 import * as db from '../db';
-import {header, renderer} from '../static/build';
+import {header, renderErrorPage, renderer} from '../static/build';
 import {escapeHtml} from '../static/util';
 
 export const SESSION_COOKIE = 'pkmn_session';
@@ -12,7 +12,6 @@ export const STATE_COOKIE = 'pkmn_oauth_state';
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const STATE_TTL_SECONDS = 10 * 60;
 
-const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
 const DISCORD_API = 'https://discord.com/api/v10';
 
 // Ephemeral fallback secret used only when `DEV_AUTH=1` in non-production so `npm run dev` can
@@ -161,29 +160,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config | undef
   return {sessionSecret, arenaSecret, github, discord};
 }
 
-function renderAuthError(status: number, content: string, pagePath = '/account/'): string {
-  return renderer.render({
-    id: 'error',
-    title: `${status} | pkmn.ai`,
-    header: header(String(status)),
-    path: pagePath,
-    content,
-    style: `
-      #error h2 {
-        text-decoration: none;
-        font-size: 20vh;
-        margin: 0;
-      }
-      #error main {
-        font-size: 1.2em;
-        position: relative;
-        top: -4vh;
-        text-align: center;
-      }`,
-  }).replace('<meta content="pkmn.ai" name="author">',
-    '<meta content="pkmn.ai" name="author">\n<meta content="noindex" name="robots">');
-}
-
 function sendHtml(
   res: http.ServerResponse,
   status: number,
@@ -321,6 +297,8 @@ export class Auth {
   register(app: polka.Polka): this {
     if (this.registeredApps.has(app)) return this;
     this.registeredApps.add(app);
+    const sendError = (res: http.ServerResponse, status: number, cookies?: string[]) =>
+      sendHtml(res, status, renderErrorPage(status, this.db?.getRunningTournament()), cookies);
 
     // Local-only persona switcher enabled strictly when `DEV_AUTH=1` (and never in production or
     // from non-loopback sockets, nor proxied by Nginx). Mints real HMAC-signed `pkmn_session`
@@ -329,7 +307,7 @@ export class Auth {
     if (this.isDevAuthEnabled()) {
       app.get('/auth/dev', (req, res) => {
         if (!isLoopbackAddress(req.socket.remoteAddress) || req.headers['x-forwarded-for']) {
-          sendHtml(res, 403, renderAuthError(403, '<p>/auth/dev is restricted to loopback.</p>'));
+          sendError(res, 403);
           return;
         }
         const returnTo = sanitizeReturnTo(req.query.return_to, '/account/');
@@ -395,7 +373,7 @@ export class Auth {
           redirect(res, `/auth/dev?return_to=${encodeURIComponent(returnTo)}`);
           return;
         }
-        sendHtml(res, 503, renderAuthError(503, '<p>GitHub OAuth is not configured.</p>'));
+        sendError(res, 503);
         return;
       }
       const redirectUri = `${inferOrigin(req)}/auth/github/callback`;
@@ -423,7 +401,7 @@ export class Auth {
     app.get('/auth/github/callback', async (req, res) => {
       const cfg = this.getConfig();
       if (!cfg?.github) {
-        sendHtml(res, 503, renderAuthError(503, '<p>GitHub OAuth is not configured.</p>'));
+        sendError(res, 503);
         return;
       }
       const code = typeof req.query.code === 'string' ? req.query.code : '';
@@ -433,12 +411,7 @@ export class Auth {
       const clearState = serializeCookie(STATE_COOKIE, '', 0);
 
       if (!code || !state || saved?.provider !== 'github' || saved.nonce !== state) {
-        sendHtml(
-          res,
-          400,
-          renderAuthError(400, '<p>Invalid or expired OAuth state.</p>'),
-          [clearState]
-        );
+        sendError(res, 400, [clearState]);
         return;
       }
 
@@ -481,17 +454,7 @@ export class Auth {
           !this.isAuthorizedGitHub(login) ||
           (byLogin?.githubId !== undefined && githubId > 0 && byLogin.githubId !== githubId)
         ) {
-          sendHtml(
-            res,
-            403,
-            renderAuthError(
-              403,
-              `<p>GitHub account <code>${escapeHtml(userData.login)}</code> ` +
-              'is not registered for pkmn.ai competitions.</p>' +
-              `<p><a href="${REGISTER_ISSUE_URL}">Register a project on GitHub</a>.</p>`
-            ),
-            [clearState]
-          );
+          sendError(res, 403, [clearState]);
           return;
         }
 
@@ -510,12 +473,7 @@ export class Auth {
         ]);
       } catch (err) {
         console.error('GitHub OAuth error:', err);
-        sendHtml(
-          res,
-          502,
-          renderAuthError(502, '<p>Failed to authenticate with GitHub.</p>'),
-          [clearState]
-        );
+        sendError(res, 502, [clearState]);
       }
     });
 
@@ -531,7 +489,7 @@ export class Auth {
           redirect(res, `/auth/dev?return_to=${encodeURIComponent(returnTo)}`);
           return;
         }
-        sendHtml(res, 503, renderAuthError(503, '<p>Discord OAuth is not configured.</p>'));
+        sendError(res, 503);
         return;
       }
 
@@ -544,15 +502,7 @@ export class Auth {
           return;
         }
         if (!this.isAuthorizedGitHub(ghLogin)) {
-          sendHtml(
-            res,
-            403,
-            renderAuthError(
-              403,
-              `<p>GitHub account <code>${escapeHtml(ghLogin)}</code> ` +
-              'is not registered for pkmn.ai competitions.</p>'
-            )
-          );
+          sendError(res, 403);
           return;
         }
         linkGitHubLogin = ghLogin.toLowerCase();
@@ -586,7 +536,7 @@ export class Auth {
     app.get('/auth/discord/callback', async (req, res) => {
       const cfg = this.getConfig();
       if (!cfg?.discord) {
-        sendHtml(res, 503, renderAuthError(503, '<p>Discord OAuth is not configured.</p>'));
+        sendError(res, 503);
         return;
       }
       const code = typeof req.query.code === 'string' ? req.query.code : '';
@@ -596,12 +546,7 @@ export class Auth {
       const clearState = serializeCookie(STATE_COOKIE, '', 0);
 
       if (!code || !state || saved?.provider !== 'discord' || saved.nonce !== state) {
-        sendHtml(
-          res,
-          400,
-          renderAuthError(400, '<p>Invalid or expired OAuth state.</p>'),
-          [clearState]
-        );
+        sendError(res, 400, [clearState]);
         return;
       }
 
@@ -640,27 +585,13 @@ export class Auth {
             !this.isAuthorizedGitHub(ghLogin) ||
             (saved.githubLogin && saved.githubLogin !== ghLogin.toLowerCase())
           ) {
-            sendHtml(
-              res,
-              403,
-              renderAuthError(403, '<p>GitHub developer session required to link Discord.</p>'),
-              [clearState]
-            );
+            sendError(res, 403, [clearState]);
             return;
           }
           if (this.db) {
             const conflict = this.db.getDeveloperByDiscordId(userData.id);
             if (conflict && conflict.githubLogin !== ghLogin.toLowerCase()) {
-              sendHtml(
-                res,
-                409,
-                renderAuthError(
-                  409,
-                  `<p>Discord account <code>@${escapeHtml(userData.username)}</code> ` +
-                  'is already linked to another developer.</p>'
-                ),
-                [clearState]
-              );
+              sendError(res, 409, [clearState]);
               return;
             }
             this.db.linkDeveloperDiscord(ghLogin, userData.id, userData.username);
@@ -674,12 +605,7 @@ export class Auth {
         redirect(res, sanitizeReturnTo(saved.returnTo, '/'), 302, [sessionCookie, clearState]);
       } catch (err) {
         console.error('Discord OAuth error:', err);
-        sendHtml(
-          res,
-          502,
-          renderAuthError(502, '<p>Failed to authenticate with Discord.</p>'),
-          [clearState]
-        );
+        sendError(res, 502, [clearState]);
       }
     });
 
@@ -767,15 +693,7 @@ export class Auth {
         return;
       }
       if (!this.isDiscordGuildMember(session.discord.id)) {
-        sendHtml(
-          res,
-          403,
-          renderAuthError(
-            403,
-            '<p>Your Discord account is not a member of the pkmn.ai Discord server.</p>',
-            '/chat/logs/'
-          )
-        );
+        sendError(res, 403);
         return;
       }
       // Mint a Discord-scoped token if the session also carries a GitHub developer claim so

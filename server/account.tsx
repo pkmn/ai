@@ -7,7 +7,7 @@ import polka from 'polka';
 
 import {LADDERS_FILE, SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
 import type * as db from '../db';
-import {header, injectLiveBanner, renderer} from '../static/build';
+import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import {
   Child,
   Html,
@@ -78,7 +78,6 @@ export function decryptSecret(encoded: string, secret: string): string {
   return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
 
-const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
 const SHA256_RE = /^[0-9a-fA-F]{64}$/;
 const OCI_REF_RE = new RegExp(
   '^[A-Za-z0-9._-]+(?::\\d{1,5})?/[A-Za-z0-9._/-]+' +
@@ -1101,30 +1100,6 @@ export function renderAccountPage(opts: {
   }, s => s.replace('</title>', '</title><meta name="robots" content="noindex">'));
 }
 
-function renderNotRegisteredError(
-  login: string,
-  liveTournament?: {id: string; name: string}
-): string {
-  return renderer.render({
-    id: 'error',
-    title: '403 | pkmn.ai',
-    header: injectLiveBanner(header('403'), liveTournament),
-    path: '/account/',
-    content: (
-      <>
-        <p>
-          GitHub account <code>{login}</code> is not registered to an approved pkmn.ai Arena
-          project.
-        </p>
-        <p><a href={REGISTER_ISSUE_URL}>Request project registration on GitHub</a>.</p>
-      </>
-    ),
-    style: `
-      #error h2 { text-decoration: none; font-size: 20vh; margin: 0; }
-      #error main { font-size: 1.2em; position: relative; top: -4vh; text-align: center; }`,
-  }, s => s.replace('</title>', '</title><meta name="robots" content="noindex">'));
-}
-
 function parseSubmissionPayload(
   rawBody: string,
   contentType: string | undefined
@@ -1358,7 +1333,7 @@ export function register(app: polka.Polka, options: Options) {
           error: `GitHub account "${login}" is not registered to an approved Arena project.`,
         });
       } else {
-        sendHtml(res, 403, renderNotRegisteredError(login, liveTournament));
+        sendHtml(res, 403, renderErrorPage(403, liveTournament));
       }
       return;
     }

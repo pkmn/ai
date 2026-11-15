@@ -233,12 +233,12 @@ function setupRotatedSeasons(
 
 async function setupDiscordWikiPage(fixture: Fixture): Promise<() => void> {
   await fixture.wikiInstance.savePage(
-    'Discord_Notes',
-    '# Discord Notes\n\nShared metagame notes visible to verified `pkmn.ai` Discord server ' +
+    'Foul_Play',
+    '# Foul Play\n\nShared metagame notes visible to verified `pkmn.ai` Discord server ' +
       'members.\n\n## Seasonal Pool Observations\n\n- Incineroar + Rillaboom cores remain ' +
       'dominant across Reg M-C pools.',
-    'scheibo',
-    'Add Discord-restricted notes page',
+    'pmariglia',
+    'Add Discord-restricted Foul Play wiki page',
     'discord'
   );
   return () => {
@@ -919,8 +919,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'account',
       title: 'Account: 403 Unregistered GitHub User',
       description:
-        'Visiting `/account/` as `@stranger` returns `403` explaining that the GitHub account ' +
-        'is not registered to an approved Arena project.',
+        'Visiting `/account/` as an unregistered GitHub user (`@stranger`) returns the generic ' +
+        'site `403` page.',
       path: '/account/',
       githubUser: 'stranger',
       expectHttpError: 403,
@@ -930,8 +930,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'account',
       title: 'Account: 403 Disabled Project',
       description:
-        'Visiting `/account/` when the project status is `disabled` returns `403` blocking ' +
-        'both ladder and tournament access.',
+        'Visiting `/account/` when the project status is `disabled` returns the generic site ' +
+        '`403` page.',
       path: '/account/',
       githubUser: 'asterdev',
       expectHttpError: 403,
@@ -1246,11 +1246,11 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'wiki-discord',
       section: 'wiki',
-      title: 'Wiki: Discord-Restricted Page',
+      title: 'Wiki: Discord-Restricted Project Page',
       description:
-        '`Discord_Notes` wiki page (`/wiki/Discord_Notes`, `visibility: discord`) viewed by a ' +
+        '`Foul Play` project wiki page (`/wiki/Foul_Play`, `visibility: discord`) viewed by a ' +
         'verified `pkmn.ai` Discord server member.',
-      path: '/wiki/Discord_Notes',
+      path: '/wiki/Foul_Play',
       setup: fixture => setupDiscordWikiPage(fixture),
     },
     {
@@ -1324,7 +1324,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Wiki: 404 Uncreated Project Page (Non-Owner)',
       description:
         'When a non-owner visits an uncreated project page (`/wiki/Metamon`), the wiki returns ' +
-        '`404` (`"This project page has not been created yet."`).',
+        'the generic site `404` page.',
       path: '/wiki/Metamon',
       githubUser: 'pmariglia',
       expectHttpError: 404,
@@ -1335,7 +1335,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Wiki: 403 Forbidden (Unregistered GitHub User)',
       description:
         'Visiting a `developers`-restricted wiki page (`/wiki/0_ERROR`) as `@stranger` returns ' +
-        '`403` (`"GitHub account stranger is not registered for pkmn.ai competitions."`).',
+        'the generic site `403` page.',
       path: '/wiki/0_ERROR',
       githubUser: 'stranger',
       expectHttpError: 403,
@@ -1346,7 +1346,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Wiki: 403 Forbidden (Editing Another Project’s Page)',
       description:
         'When competitor `@pmariglia` attempts to edit `/wiki/0_ERROR/edit`, the wiki returns ' +
-        '`403` (`"GitHub account pmariglia is not a registered developer of 0 ERROR."`).',
+        'the generic site `403` page.',
       path: '/wiki/0_ERROR/edit',
       githubUser: 'pmariglia',
       expectHttpError: 403,
@@ -1356,9 +1356,9 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'wiki',
       title: 'Wiki: 403 Forbidden (Non-Guild Discord User)',
       description:
-        'Visiting a `discord`-visibility page (`/wiki/Discord_Notes`) as a user not in the ' +
-        '`pkmn.ai` Discord guild returns `403`.',
-      path: '/wiki/Discord_Notes',
+        'Visiting a `discord`-visibility project page (`/wiki/Foul_Play`) as a user not in the ' +
+        '`pkmn.ai` Discord guild returns the generic site `403` page.',
+      path: '/wiki/Foul_Play',
       githubUser: 'outsider',
       expectHttpError: 403,
       setup: fixture => setupDiscordWikiPage(fixture),
@@ -3026,7 +3026,7 @@ async function shootWithWorker(
   }
 
   const {page} = worker;
-  await page.goto(scenario.path);
+  const navRes = await page.goto(scenario.path);
   await page.evaluate(WAIT_IMAGES_EXPR);
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(SETTLE_MILLIS);
@@ -3054,6 +3054,15 @@ async function shootWithWorker(
   const expectedHttpPrefix = scenario.expectHttpError
     ? `Failed to load resource: the server responded with a status of ${scenario.expectHttpError} `
     : undefined;
+  if (
+    scenario.expectHttpError &&
+    navRes?.status() !== scenario.expectHttpError &&
+    (!expectedHttpPrefix || !worker.problems.some(p => p.startsWith(expectedHttpPrefix)))
+  ) {
+    worker.problems.push(
+      `expected HTTP ${scenario.expectHttpError}, got ${navRes?.status() ?? 'no error'}`
+    );
+  }
   return worker.problems.filter(p => !expectedHttpPrefix || !p.startsWith(expectedHttpPrefix));
 }
 

@@ -308,8 +308,8 @@ describe('wiki server routes', () => {
     });
     expect(res.status).toBe(403);
     const body = await res.text();
-    expect(body).toContain('stranger');
-    expect(body).toContain('not registered');
+    expect(body).toContain('<h2>403</h2>');
+    expect(body).toContain('<p>Forbidden</p>');
   });
 
   test('completes GitHub OAuth callback for registered competitors', async () => {
@@ -456,6 +456,7 @@ describe('wiki server routes', () => {
       redirect: 'manual',
     });
     expect(res.status).toBe(404);
+    expect(await res.text()).toContain('<p>Not Found</p>');
   });
 
   test('rejects non-owner developer edits on another project page with 403', async () => {
@@ -463,9 +464,7 @@ describe('wiki server routes', () => {
       headers: {Cookie: sessionCookie('pmariglia')},
     });
     expect(editRes.status).toBe(403);
-    expect(await editRes.text()).toContain(
-      'not a registered developer of <strong>0 ERROR</strong>'
-    );
+    expect(await editRes.text()).toContain('<p>Forbidden</p>');
 
     const postRes = await postWiki('0-error', 'pmariglia', {content: 'hacked', action: 'save'});
     expect(postRes.status).toBe(403);
@@ -539,7 +538,7 @@ describe('wiki server routes', () => {
       headers: {Cookie: discordCookie('999999999999999999', 'outsider')},
     });
     expect(outsiderRes.status).toBe(403);
-    expect(await outsiderRes.text()).toContain('not a member of the pkmn.ai Discord');
+    expect(await outsiderRes.text()).toContain('<p>Forbidden</p>');
   });
 
   test('exposes public project pages to unauthenticated visitors', async () => {

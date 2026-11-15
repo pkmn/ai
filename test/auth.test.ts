@@ -207,7 +207,7 @@ describe('server/auth.ts routes', () => {
     expect(badState.status).toBe(400);
   });
 
-  test('rejects unregistered GitHub users with 403 registration link', async () => {
+  test('rejects unregistered GitHub users with 403', async () => {
     const {state, stateCookie} = await beginGitHubOAuth();
     mockGitHubUser({id: 99999, login: 'unregistered_user'});
 
@@ -220,8 +220,8 @@ describe('server/auth.ts routes', () => {
     );
     expect(strangerCb.status).toBe(403);
     const strangerHtml = await strangerCb.text();
-    expect(strangerHtml).toContain('unregistered_user');
-    expect(strangerHtml).toContain('template=register.yml');
+    expect(strangerHtml).toContain('<h2>403</h2>');
+    expect(strangerHtml).toContain('<p>Forbidden</p>');
   });
 
   test('binds immutable githubId on GitHub OAuth login while keeping Discord claim', async () => {
@@ -339,7 +339,7 @@ describe('server/auth.ts routes', () => {
       }
     );
     expect(dupCb.status).toBe(409);
-    expect(await dupCb.text()).toContain('already linked to another developer');
+    expect(await dupCb.text()).toContain('<p>Conflict</p>');
   });
 
   test('rejects replaying another developer OAuth link state cookie', async () => {

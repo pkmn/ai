@@ -3669,14 +3669,7 @@ export function register(app: polka.Polka, options: Options) {
       res.end(fs.readFileSync(static404));
       return;
     }
-    const html = renderer.render({
-      title: '404 | pkmn.ai',
-      header: build.injectLiveBanner(build.header('404'), db.getRunningTournament()),
-      path: '',
-      id: 'error',
-      content: String(<p>Not Found</p>),
-    });
-    res.end(html);
+    res.end(build.renderErrorPage(404, db.getRunningTournament(), renderer));
   };
 
   const paramStr = (val: string | string[] | undefined): string => {

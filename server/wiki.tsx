@@ -11,7 +11,7 @@ import polka from 'polka';
 import * as yaml from 'yaml';
 
 import * as db from '../db';
-import {header, injectLiveBanner, renderer} from '../static/build';
+import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import {Project} from '../static/projects';
 import {
   Html,
@@ -581,23 +581,6 @@ function sendHtml(res: http.ServerResponse, status: number, html: string) {
   res.end(html);
 }
 
-function sendErrorHtml(
-  res: http.ServerResponse,
-  status: number,
-  content: Html | string,
-  pagePath = '/wiki/',
-  liveTournament?: {id: string; name: string}
-) {
-  sendHtml(res, status, renderPageHtml({
-    id: 'error',
-    title: String(status),
-    heading: String(status),
-    path: pagePath,
-    content,
-    liveTournament,
-  }));
-}
-
 function redirect(res: http.ServerResponse, location: string, status = 302, cookies?: string[]) {
   const headers: http.OutgoingHttpHeaders = {
     Location: location,
@@ -953,12 +936,8 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   const getLiveTournament = () => options.db?.getRunningTournament();
   const renderPage = (opts: Omit<Parameters<typeof renderPageHtml>[0], 'liveTournament'>) =>
     renderPageHtml({...opts, liveTournament: getLiveTournament()});
-  const sendError = (
-    res: http.ServerResponse,
-    status: number,
-    content: Html | string,
-    pagePath = '/wiki/'
-  ) => sendErrorHtml(res, status, content, pagePath, getLiveTournament());
+  const sendError = (res: http.ServerResponse, status: number) =>
+    sendHtml(res, status, renderErrorPage(status, getLiveTournament()));
 
   const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
   const slugParam = (v: string | string[] | undefined) => normalizeSlug(param(v));
@@ -972,7 +951,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     suffix = ''
   ): string | undefined => {
     if (!isValidSlug(rawSlug)) {
-      sendError(res, 404, <p>Invalid wiki page name.</p>);
+      sendError(res, 404);
       return undefined;
     }
     const canonical = wiki.resolveSlug(rawSlug);
@@ -1002,11 +981,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       const status = wiki.verifyDiscordAuth(req);
       if (status === 'authorized') return true;
       if (status === 'forbidden') {
-        sendError(
-          res,
-          403,
-          <p>Your Discord account is not a member of the pkmn.ai Discord server.</p>
-        );
+        sendError(res, 403);
         return false;
       }
       const returnTo = encodeURIComponent(req.originalUrl || req.url || '/wiki');
@@ -1015,7 +990,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     }
 
     if (!authCfg?.github && !devAuth) {
-      sendError(res, 503, <p>GitHub OAuth is not configured on this server.</p>);
+      sendError(res, 503);
       return false;
     }
     if (!login) {
@@ -1023,11 +998,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       redirect(res, `/auth/github?return_to=${returnTo}`);
       return false;
     }
-    sendError(
-      res,
-      403,
-      <p>GitHub account <code>{login}</code> is not registered for pkmn.ai competitions.</p>
-    );
+    sendError(res, 403);
     return false;
   };
 
@@ -1043,7 +1014,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       if (process.env.NODE_ENV === 'development') {
         login = 'scheibo';
       } else {
-        sendError(res, 503, <p>GitHub OAuth is not configured on this server.</p>);
+        sendError(res, 503);
         return undefined;
       }
     } else {
@@ -1056,25 +1027,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     }
 
     if (!wiki.isDeveloper(login)) {
-      sendError(
-        res,
-        403,
-        <p>GitHub account <code>{login}</code> is not registered for pkmn.ai competitions.</p>
-      );
+      sendError(res, 403);
       return undefined;
     }
 
     if (slug && !wiki.canEdit(login, slug)) {
-      const project = wiki.getProjectPage(slug);
-      const target = project ? project.name : formatTitle(slug);
-      sendError(
-        res,
-        403,
-        <p>
-          GitHub account <code>{login}</code> is not a registered developer of{' '}
-          <strong>{target}</strong>.
-        </p>
-      );
+      sendError(res, 403);
       return undefined;
     }
 
@@ -1094,12 +1052,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     const encoded = encodeSlug(slug);
     if (rawText === undefined) {
       if (wiki.isProjectPage(slug) && !wiki.canEdit(getEffectiveUser(req), slug)) {
-        sendError(
-          res,
-          404,
-          <p>This project page has not been created yet.</p>,
-          `/wiki/${encoded}/`
-        );
+        sendError(res, 404);
         return;
       }
       redirect(res, `/wiki/${encoded}/edit`);
@@ -1223,12 +1176,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
   app.post('/wiki/:page', async (req, res) => {
     if (auth.isCrossSiteRequest(req)) {
-      sendError(res, 403, <p>Cross-site requests are not allowed.</p>);
+      sendError(res, 403);
       return;
     }
     const rawSlug = slugParam(req.params.page);
     if (!isValidSlug(rawSlug)) {
-      sendError(res, 404, <p>Invalid wiki page name.</p>);
+      sendError(res, 404);
       return;
     }
     const slug = wiki.resolveSlug(rawSlug);
@@ -1258,12 +1211,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     } catch (err: any) {
       const status = err?.status ?? 500;
       console.error('Error saving wiki page:', err);
-      sendError(
-        res,
-        status,
-        <p>{http.STATUS_CODES[status] ?? 'Internal Server Error'}</p>,
-        `/wiki/${encodeSlug(slug)}/`
-      );
+      sendError(res, status);
     }
   });
 
@@ -1334,7 +1282,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       }));
     } catch (err) {
       console.error('Error rendering wiki history:', err);
-      if (!res.headersSent) sendError(res, 500, <p>Internal Server Error</p>);
+      if (!res.headersSent) sendError(res, 500);
     }
   });
 
@@ -1343,7 +1291,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       const rawSlug = slugParam(req.params.page);
       const sha = param(req.params.sha);
       if (!isValidSlug(rawSlug) || !SHA_RE.test(sha)) {
-        sendError(res, 404, <p>Revision not found.</p>);
+        sendError(res, 404);
         return;
       }
       const showDiff = req.query.diff === '1';
@@ -1356,7 +1304,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       if (showDiff) {
         const diff = await wiki.getRevisionDiff(slug, sha);
         if (diff === undefined) {
-          sendError(res, 404, <p>Revision not found.</p>);
+          sendError(res, 404);
           return;
         }
         let maxTicks = 3;
@@ -1385,7 +1333,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
       const rawText = await wiki.getRevisionContent(slug, sha);
       if (rawText === undefined) {
-        sendError(res, 404, <p>Revision not found.</p>);
+        sendError(res, 404);
         return;
       }
       const meta: {title?: string; summary?: string} = {};
@@ -1407,7 +1355,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       }));
     } catch (err) {
       console.error('Error rendering wiki revision:', err);
-      if (!res.headersSent) sendError(res, 500, <p>Internal Server Error</p>);
+      if (!res.headersSent) sendError(res, 500);
     }
   });
 

@@ -163,11 +163,11 @@ The 7 sections cover:
    `QUARANTINED (DM sent)` runtime fault in History, and `Ineligible` Smogon-banned owner
    (`smogon_standing = 'bad'`).
 7. **Wiki & Authentication (`wiki`):** Wiki index, all visible pages (`/wiki/pages`),
-   `developers`-restricted project page, `discord`-restricted page, general public editor, project
-   editor with `Developers — Discord — Public` visibility bar, live Djot preview, git revision
-   history, commit snapshot, unified diff, owner redirect on uncreated project page, `404` non-owner
-   on uncreated project page, `403` unregistered user, `403` non-owner edit attempt, `403` non-guild
-   Discord user, and `/auth/dev` persona switcher.
+   `developers`-restricted project page, `discord`-restricted project page, general public editor,
+   project editor with `Developers — Discord — Public` visibility bar, live Djot preview, git
+   revision history, commit snapshot, unified diff, owner redirect on uncreated project page,
+   generic `404` non-owner on uncreated project page, generic `403` unregistered user, generic `403`
+   non-owner edit attempt, generic `403` non-guild Discord user, and `/auth/dev` persona switcher.
 
 After inspecting `.shots/` (or running local `mock` commands), clean build/public artifacts and
 re-run `npm run test` so `public/` contains no mock state:
@@ -222,8 +222,8 @@ normal window and an Incognito window side-by-side at any onboarding stage:
 - **Unauthenticated visitor** (public spectator views; `/account` and developer wiki pages redirect
   to login):
   `http://localhost:1234/auth/dev?clear=1&return_to=/arena`
-- **Unregistered GitHub user** (`403` registration prompt on `/account`; blocked from developer wiki
-  pages and editing):
+- **Unregistered GitHub user** (generic `403` page on `/account`; blocked from developer wiki pages
+  and editing):
   `http://localhost:1234/auth/dev?github=stranger&return_to=/account`
 - **Stage 1 — `Pending` (`qualified: false`, Discord unlinked) — `AsterAI`:**
   `http://localhost:1234/auth/dev?github=asterdev&return_to=/account`

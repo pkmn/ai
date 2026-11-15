@@ -283,7 +283,9 @@ describe('account routes', () => {
         headers: {Cookie: cookieFor('stranger')},
       });
       expect(stranger.status).toBe(403);
-      expect(await stranger.text()).toContain('template=register.yml');
+      const html = await stranger.text();
+      expect(html).toContain('<h2>403</h2>');
+      expect(html).toContain('<p>Forbidden</p>');
     });
 
     test('redirects sessions whose numeric GitHub ID disagrees with the database', async () => {

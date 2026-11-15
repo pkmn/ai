@@ -173,6 +173,31 @@ export const header = (title: Html | string, wip = false) => String(<>
 
 export const style = ' [id] { scroll-margin-top: 2rem; }';
 
+export function renderErrorPage(
+  code: number,
+  liveTournament?: {id: string; name: string},
+  customRenderer: Renderer = renderer
+): string {
+  return customRenderer.render({
+    title: `${code} | pkmn.ai`,
+    header: injectLiveBanner(header(`${code}`), liveTournament),
+    path: '',
+    id: 'error',
+    content: <p>{http.STATUS_CODES[code] ?? 'Error'}</p>,
+    style: `
+      #error h2 {
+        text-decoration: none;
+        font-size: 20vh;
+        margin: 0;
+      }
+      #error main {
+        font-size: 1.5em;
+        position: relative;
+        top: -6vh;
+      }`,
+  }).replace('<link href="https://pkmn.ai" rel="canonical">', '');
+}
+
 const build = async (rebuild?: boolean) => {
   fs.mkdir(path.join(PUBLIC));
 
@@ -202,24 +227,7 @@ const build = async (rebuild?: boolean) => {
 
     for (const code of [400, 401, 403, 404, 500, 502, 503, 504]) {
       const page = `${code}.html`;
-      fs.write(path.join(PUBLIC, page), renderer.render({
-        title: `${code} | pkmn.ai`,
-        header: header(`${code}`),
-        path: '',
-        id: 'error',
-        content: <p>{http.STATUS_CODES[code]}</p>,
-        style: `
-          #error h2 {
-            text-decoration: none;
-            font-size: 20vh;
-            margin: 0;
-          }
-          #error main {
-            font-size: 1.5em;
-            position: relative;
-            top: -6vh;
-          }`,
-      }).replace('<link href="https://pkmn.ai" rel="canonical">', ''));
+      fs.write(path.join(PUBLIC, page), renderErrorPage(code));
       expected.add(page);
     }
 
