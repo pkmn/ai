@@ -2077,6 +2077,79 @@ function renderSingleLadderArtifact(opts: {
         ? `${l.name} archived with no completed entries.`
         : `No active entries on ${l.name} yet.`;
     standingsPane = <p className='empty-state muted'>{msg}</p>;
+  } else if (l.status === 'upcoming') {
+    const activeEntrants = entries
+      .filter(e => e.role === 'champion' || e.role === 'challenger')
+      .sort((a, b) => a.submittedAt - b.submittedAt || a.versionId - b.versionId);
+    for (const e of activeEntrants) {
+      seenPrimaryAgent.add(e.agentId);
+      seenAnyAgent.add(e.agentId);
+      jsonRows.push({
+        slug: e.agentSlug,
+        name: e.agentName,
+        version: e.version,
+        role: e.role,
+        isAnchor: e.isAnchor,
+        provisional: true,
+        settled: false,
+        elo: Math.round(e.elo),
+        se: Math.round(e.se * 10) / 10,
+        ci95: e.isAnchor ? 0 : Math.round(1.96 * e.se),
+        lcb: Math.round(e.lcb),
+        gxe: Math.round(e.gxe * 10) / 10,
+        wins: e.ww + e.wt,
+        losses: e.ll + e.tl,
+        ties: e.split,
+        matches: e.matches,
+        streak: '—',
+      });
+    }
+    standingsPane = activeEntrants.length === 0 ? (
+      <p className='empty-state muted'>
+        {`${l.name} ladder is upcoming — accepting initial entries before matchmaking begins.`}
+      </p>
+    ) : (
+      <>
+        <div className='table-wrap'>
+          <table className='standings-table'>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Agent</th>
+                <th className='num'>Submitted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeEntrants.map((e, idx) => {
+                const href = resolveAgentHref(
+                  publicDir,
+                  projectMeta,
+                  e.agentSlug,
+                  e.agentName,
+                  profileSlugs
+                );
+                return (
+                  <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                    <td><strong>{idx + 1}</strong></td>
+                    <td>
+                      {renderAgentLink(e.agentName, href, true)} <code>{e.version}</code>
+                    </td>
+                    <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <util.TablePager
+          id='standings-pager'
+          label='Entrants pagination'
+          total={activeEntrants.length}
+          singular='entrant'
+          plural='entrants'
+        />
+      </>
+    );
   } else {
     let activeCount = 0;
     const rows = entries.map(e => {
@@ -2323,6 +2396,7 @@ function renderSingleLadderArtifact(opts: {
     l.status
   );
 
+  const isUpcoming = l.status === 'upcoming';
   const ladderContent = String(
     <>
       <nav aria-label='Format'>
@@ -2330,7 +2404,7 @@ function renderSingleLadderArtifact(opts: {
           {formatNavItems}
         </ul>
       </nav>
-      <nav className='subnav' aria-label='Version filter'>
+      <nav className={`subnav${isUpcoming ? ' hide' : ''}`} aria-label='Version filter'>
         <ul>
           <li>
             <input type='radio' name='versions' id='ver-active' value='active' checked />
@@ -2352,11 +2426,11 @@ function renderSingleLadderArtifact(opts: {
         {standingsPane}
         {ladderArchiveNote}
       </section>
-      <section id='history' className={historyRes.isEmpty ? 'hide' : undefined}>
+      <section id='history' className={historyRes.isEmpty || isUpcoming ? 'hide' : undefined}>
         <h3><a href='#history' className='subtle'>History</a></h3>
         {historyRes.node}
       </section>
-      <section id='matchups' className={matchupsRes.isEmpty ? 'hide' : undefined}>
+      <section id='matchups' className={matchupsRes.isEmpty || isUpcoming ? 'hide' : undefined}>
         <h3><a href='#matchups' className='subtle'>Matchups</a></h3>
         {matchupsRes.node}
       </section>

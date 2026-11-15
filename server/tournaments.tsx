@@ -677,6 +677,55 @@ function renderTournamentStandingsNode(opts: {
     );
   }
 
+  if (tournament.status === 'scheduled') {
+    const ordered = [...entrants].sort(
+      (a, b) => a.submittedAt - b.submittedAt || a.seed - b.seed
+    );
+    return (
+      <div id='standings-body'>
+        <div className='table-wrap'>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Agent</th>
+                <th className='num'>Submitted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ordered.map((e, idx) => {
+                const href = render.resolveAgentHref(
+                  publicDir,
+                  projectMeta,
+                  e.agentSlug,
+                  e.agentName,
+                  profileSlugs
+                );
+                return (
+                  <tr className={idx >= TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                    <td><strong>{idx + 1}</strong></td>
+                    <td>
+                      {raw(render.formatAgentLink(e.agentName, href, true))}{' '}
+                      <code>{e.version}</code>
+                    </td>
+                    <td className='num muted'>{formatUtcDate(e.submittedAt)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <TablePager
+          id='standings-pager'
+          label='Entrants pagination'
+          total={ordered.length}
+          singular='entrant'
+          plural='entrants'
+        />
+      </div>
+    );
+  }
+
   const maxRrGames = Math.max(1, (entrants.length - 1) * tournament.gamesPerMatchup);
   const ptsTitle =
     `Round-Robin points out of ${maxRrGames} games (+1.0 per win, +0.5 per tie)`;
@@ -2560,7 +2609,11 @@ export function renderTournamentPage(opts: {
       </section>
 
       <section id='standings'>
-        <h3><a href='#standings' className='subtle'>Standings</a></h3>
+        <h3>
+          <a href='#standings' className='subtle'>
+            {t.status === 'scheduled' ? 'Entrants' : 'Standings'}
+          </a>
+        </h3>
         {standingsNode}
       </section>
 
@@ -2569,7 +2622,7 @@ export function renderTournamentPage(opts: {
         {crossRes.node}
       </section>
 
-      <section id='games'>
+      <section id='games' className={t.status === 'scheduled' ? 'hide' : undefined}>
         <h3><a href='#games' className='subtle'>Games</a></h3>
         {gamesNode}
       </section>

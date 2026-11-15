@@ -21,6 +21,7 @@ export interface TournamentEntrantView extends TournamentEntrantRow {
   agentSlug: string;
   agentName: string;
   version: string;
+  submittedAt: number;
 }
 
 export interface UpsertTournamentEntrantInput {
@@ -82,7 +83,8 @@ export function getTournamentEntrants(
       te.*,
       a.slug AS agent_slug,
       a.name AS agent_name,
-      av.version
+      av.version,
+      av.submitted_at
     FROM tournament_entrants te
     JOIN agents a ON a.id = te.agent_id
     JOIN agent_versions av ON av.id = te.version_id
@@ -112,6 +114,7 @@ export function getTournamentEntrants(
     agentSlug: r.agent_slug as string,
     agentName: r.agent_name as string,
     version: r.version as string,
+    submittedAt: r.submitted_at as number,
   }));
 }
 

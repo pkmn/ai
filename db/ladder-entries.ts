@@ -35,6 +35,7 @@ export interface LeaderboardEntryView {
   ladderId: string;
   versionId: number;
   version: string;
+  submittedAt: number;
   agentId: number;
   agentSlug: string;
   agentName: string;
@@ -409,6 +410,7 @@ export function getLeaderboardEntries(
       le.ladder_id,
       le.version_id,
       av.version,
+      av.submitted_at,
       av.agent_id,
       a.slug AS agent_slug,
       a.name AS agent_name,
@@ -447,6 +449,7 @@ export function getLeaderboardEntries(
     ladderId: r.ladder_id as string,
     versionId: r.version_id as number,
     version: r.version as string,
+    submittedAt: r.submitted_at as number,
     agentId: r.agent_id as number,
     agentSlug: r.agent_slug as string,
     agentName: r.agent_name as string,

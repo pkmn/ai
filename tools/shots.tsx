@@ -594,14 +594,24 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-ladder-upcoming',
       section: 'arena',
-      title: 'Ladder: Upcoming (Empty State)',
+      title: 'Ladder: Upcoming (Registered Entrants)',
       description:
-        'Pre-launch ladder in `upcoming` status with 0 entries (`"RBY ladder is upcoming — ' +
-        'accepting initial entries before matchmaking begins."`) and hidden chart/matrix.',
+        'Pre-launch ladder (`/arena/ladders/rby/`) in `upcoming` status listing initial ' +
+        'registered entrants before matchmaking begins (`min = 4`) and hiding chart/matrix.',
       path: '/arena/ladders/rby/',
       setup: fixture => withSavepoint(fixture, raw => {
         raw.prepare("UPDATE ladders SET status = 'upcoming' WHERE id = ?").run(RBY_LADDER_ID);
-        raw.prepare('DELETE FROM ladder_entries WHERE ladder_id = ?').run(RBY_LADDER_ID);
+        raw.prepare(
+          `DELETE FROM ladder_entries
+           WHERE ladder_id = ?
+             AND version_id NOT IN (
+               SELECT version_id
+               FROM ladder_entries
+               WHERE ladder_id = ? AND role IN ('champion', 'challenger')
+               ORDER BY version_id ASC
+               LIMIT 3
+             )`
+        ).run(RBY_LADDER_ID, RBY_LADDER_ID);
       }),
     },
 
@@ -895,8 +905,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'tournaments',
       title: 'Tournament #3 (Scheduled · Entrants Registered)',
       description:
-        'Scheduled upcoming tournament (`/arena/tournaments/3/`) showing registered entrants ' +
-        'with `—` stats and empty Crosstable/Games placeholders.',
+        'Scheduled upcoming tournament (`/arena/tournaments/3/`) during its registration ' +
+        'period listing registered entrants and hiding Crosstable/Games until start.',
       path: '/arena/tournaments/3/',
     },
     {
