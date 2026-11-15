@@ -471,20 +471,3 @@ export function unpackBundle(archivePath: string, destDir: string, casDir?: stri
     throw formatUnpackError(err);
   }
 }
-
-if (require.main === module) {
-  const [, , archiveArg, destArg, casArg] = process.argv;
-  if (!archiveArg || !destArg) {
-    process.stderr.write('Usage: unpack <archive_path> <dest_dir> [cas_dir]\n');
-    process.exit(2);
-  }
-  try {
-    const casDir = casArg || process.env.ARENA_CAS_DIR || undefined;
-    const unpackedBytes = unpackBundle(archiveArg, destArg, casDir);
-    process.stdout.write(`UNPACK_OK: ${unpackedBytes} bytes\n`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : `UNPACK_ERROR: ${String(err)}`;
-    process.stderr.write(`${msg}\n`);
-    process.exit(1);
-  }
-}

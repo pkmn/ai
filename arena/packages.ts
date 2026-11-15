@@ -4,7 +4,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {isAllowedBundleHost} from '../server/account';
-import {root} from '../static/util';
 
 import * as db from './db';
 import * as unpack from './unpack';
@@ -27,11 +26,6 @@ export const CAS_DIR = process.env.ARENA_CAS_DIR ?? '/opt/arena/cas/sha256';
 export const STAGING_DIR = process.env.ARENA_STAGING_DIR ?? '/Volumes/Staging';
 export const COLD_AGENTS_DIR =
   process.env.ARENA_COLD_AGENTS_DIR ?? '/Volumes/Archive/cold-agents';
-export const UNPACK_BIN =
-  process.env.ARENA_UNPACK_BIN ??
-  (fs.existsSync('/opt/arena/bin/unpack')
-    ? '/opt/arena/bin/unpack'
-    : root('arena', 'bin', 'unpack'));
 
 export interface OciManifestInspection {
   compressedBytes: number;
@@ -308,7 +302,6 @@ export async function downloadAndUnpackBundle(opts: {
   authToken?: string;
   stagingDir?: string;
   agentsDir?: string;
-  unpackBin?: string;
   casDir?: string;
   allowPrivateUrls?: boolean;
   timeoutMillis?: number;
@@ -455,18 +448,6 @@ export async function downloadAndUnpackBundle(opts: {
       throw new Error(
         `SHA-256 mismatch: expected ${opts.expectedSha256}, got ${actualSha256}`
       );
-    }
-
-    if (opts.unpackBin) {
-      const env = {...process.env};
-      if (opts.casDir) env.ARENA_CAS_DIR = opts.casDir;
-      const stdout = execFileSync(opts.unpackBin, [archivePath, destDir], {
-        encoding: 'utf8',
-        timeout: 180_000,
-        env,
-      });
-      const m = /UNPACK_OK:\s*(\d+)\s*bytes/.exec(stdout);
-      return m ? Number(m[1]) : 0;
     }
 
     return unpack.unpackBundle(archivePath, destDir, opts.casDir ?? CAS_DIR);

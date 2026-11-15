@@ -61,7 +61,6 @@ export interface Options {
   coldDir?: string;
   teamsDir?: string;
   archiveLogsDir?: string;
-  unpackBin?: string;
   casDir?: string;
   devMode?: boolean;
   maxTurns?: number;
@@ -113,7 +112,6 @@ export class Coordinator {
   private readonly coldDir: string;
   private readonly teamsDir: string;
   private readonly archiveLogsDir: string;
-  private readonly unpackBin?: string;
   private readonly casDir?: string;
   private readonly devMode: boolean;
   private readonly maxTurns?: number;
@@ -144,7 +142,6 @@ export class Coordinator {
     );
     this.teamsDir = options.teamsDir ?? '/opt/arena/teams';
     this.archiveLogsDir = options.archiveLogsDir ?? '/Volumes/Archive/logs';
-    this.unpackBin = options.unpackBin;
     this.casDir = options.casDir;
     this.maxTurns = options.maxTurns;
     this.exploitProbability = options.exploitProbability ?? 0.45;
@@ -272,7 +269,6 @@ export class Coordinator {
             authToken: sub.authToken,
             stagingDir: this.stagingDir,
             agentsDir: this.agentsDir,
-            unpackBin: this.unpackBin,
             casDir: this.casDir,
             allowPrivateUrls: this.devMode,
           });

@@ -63,6 +63,7 @@ sudo chmod 0755 /opt/arena /opt/arena/bin /opt/arena/etc /opt/arena/agents /opt/
 sudo chmod 0700 /opt/arena/cas /opt/arena/teams /opt/arena/state /opt/arena/logs
 
 if [[ -d /Volumes/Archive ]]; then
+  sudo diskutil enableOwnership /Volumes/Archive >/dev/null
   sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents}
   sudo chown -R pkmn:agents /Volumes/Archive
   sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents}
@@ -106,9 +107,8 @@ echo "==> Step 5: Compiling limit.c and installing /opt/arena/bin helpers and _b
 clang -O2 -Wall -Wextra -o /tmp/arena-limit "${REPO_DIR}/arena/bin/limit.c"
 sudo mv /tmp/arena-limit /opt/arena/bin/limit
 sudo cp "${REPO_DIR}/arena/bin/arena" /opt/arena/bin/arena
-sudo cp "${REPO_DIR}/arena/bin/unpack" /opt/arena/bin/unpack
-sudo chown root:wheel /opt/arena/bin/limit /opt/arena/bin/arena /opt/arena/bin/unpack
-sudo chmod 0755 /opt/arena/bin/limit /opt/arena/bin/arena /opt/arena/bin/unpack
+sudo chown root:wheel /opt/arena/bin/limit /opt/arena/bin/arena
+sudo chmod 0755 /opt/arena/bin/limit /opt/arena/bin/arena
 
 sudo mkdir -p /opt/arena/agents/_baseline
 sudo cp "${REPO_DIR}/arena/bin/baseline" /opt/arena/agents/_baseline/run

@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-if [[ -f "$ROOT/build/arena/unpack.js" ]]; then
-  exec node "$ROOT/build/arena/unpack.js" "$@"
-fi
-exec node --experimental-strip-types "$ROOT/arena/unpack.ts" "$@"

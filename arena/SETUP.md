@@ -47,7 +47,7 @@ smoke tests.
 | **Admin / Coordinator User** | `pkmn` (in group `agents`, GID `590`) | Owns `/opt/arena`, runs `ai.pkmn.arena`, `ai.pkmn.tunnel`, and Podman VM. |
 | **Sandbox Slot Users** | `p1` (UID `591`), `p2` (UID `592`) | Unprivileged role accounts (GID `590`, shell `/usr/bin/false`) blocked by `pf`. |
 | **Repository Checkout** | `/opt/arena/repo` | Git checkout of `github.com/pkmn/ai` (`build/arena` entrypoint + `.env`). |
-| **Binaries & Helpers** | `/opt/arena/bin/{arena,limit,unpack}` | Lifecycle script, C `ri_phys_footprint` 14 GiB supervisor, and stream unpacker. |
+| **Binaries & Helpers** | `/opt/arena/bin/{arena,limit}` | Lifecycle script and C `ri_phys_footprint` 14 GiB supervisor. |
 | **Seatbelt Profile** | `/opt/arena/etc/sandbox.sb` | Mandatory Access Control profile for native `darwin/arm64` agent bundles. |
 | **Era-Matched Usage Stats** | `/opt/arena/stats/<ladder_id>/` | Read-only stats mount (`PKMN_STATS_DIR=/opt/arena/stats`) shared by bundles & containers. |
 | **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MB`, deduplicated via `/opt/arena/cas/sha256`). |
@@ -376,8 +376,8 @@ ssh arena 'diskutil list external physical'
 # 2. Format the external disk as APFS named "Archive" (replace diskX with the external disk identifier, e.g. disk4)
 ssh -t arena 'sudo diskutil eraseDisk APFS Archive GPT /dev/diskX'
 
-# 3. Create archive subdirectories and disable Spotlight indexing on the external drive
-ssh -t arena 'sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents} && sudo chown -R pkmn:agents /Volumes/Archive && sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents} && sudo mdutil -i off /Volumes/Archive'
+# 3. Enable POSIX ownership (disabled by default on external drives), create archive subdirectories, and disable Spotlight indexing
+ssh -t arena 'sudo diskutil enableOwnership /Volumes/Archive && sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents} && sudo chown -R pkmn:agents /Volumes/Archive && sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents} && sudo mdutil -i off /Volumes/Archive'
 ```
 
 #### Verify Step 3.1
@@ -389,10 +389,10 @@ ssh arena 'df -h /Volumes/Archive && ls -ld /Volumes/Archive/{logs,db-backups,co
 *Expected:* `/Volumes/Archive` mounted with ~1 TB free and `drwxr-x---` (`0750`) directories owned
 by `pkmn:agents`.
 
-### Step 3.2: Install Xcode Command Line Tools (`clang`, `codesign`, `git`, `python3`)
+### Step 3.2: Install Xcode Command Line Tools (`clang`, `codesign`, `git`)
 
-`arena/bin/limit.c` requires `clang` and macOS SDK headers, while `arena/bin/unpack` uses
-`codesign`, `xattr`, and `python3`.
+`arena/bin/limit.c` requires `clang` and macOS SDK headers, while `arena/unpack.ts` uses
+`codesign` and `xattr` to strip extended attributes and ad-hoc sign unpacked Mach-O binaries.
 
 > [!NOTE]
 > On headless macOS, `xcode-select --install` opens a GUI dialog if called directly. Instead, use
@@ -440,7 +440,7 @@ brew install --cask gcloud-cli
 ```sh
 ssh arena '
 export PATH="/opt/homebrew/bin:$PATH"
-for bin in clang codesign python3 git node npm jq zstd 7z skopeo podman sqlite3 gcloud; do
+for bin in clang codesign git node npm jq zstd 7z skopeo podman sqlite3 gcloud; do
   printf "%-10s -> %s\n" "$bin" "$(command -v "$bin")"
 done
 /opt/homebrew/bin/node -v
@@ -556,8 +556,8 @@ What `setup-arena.sh` provisions:
    (`ListenAddress 127.0.0.1:22`), `/etc/pf.anchors/ai.pkmn.arena`, `/opt/arena/etc/sandbox.sb`,
    and `/etc/sudoers.d/arena`.
 5. **Compiled Supervisor & Binaries:** Compiles `arena/bin/limit.c` -> `/opt/arena/bin/limit`,
-   installs `/opt/arena/bin/arena` and `/opt/arena/bin/unpack` (`root:wheel`, `0755`), and installs
-   the deterministic smoke-test baseline agent at `/opt/arena/agents/_baseline/run`.
+   installs `/opt/arena/bin/arena` (`root:wheel`, `0755`), and installs the deterministic
+   smoke-test baseline agent at `/opt/arena/agents/_baseline/run`.
 6. **Headless Power & Spotlight:** Sets `pmset` (`sleep 0 disksleep 0 displaysleep 0 autorestart 1`),
    disables Spotlight on `/Volumes/{P1,P2,Staging,Archive}`, and disables automatic macOS updates.
 7. **Podman VM & LaunchDaemons:** Initializes `podman-machine-default` (`10` vCPUs, `30 GiB` /
@@ -683,7 +683,7 @@ echo "Agent stdout: ${OUT} | Baseline: ${BASE_OUT}| Peak RAM MiB: ${PEAK_MIB} | 
 - `Agent stdout: default | Baseline: /team 1234 default | Peak RAM MiB: <N> | Remaining files in /Volumes/P1: 0`
 - `PASS: Native Seatbelt + limit + _baseline + cleanup verified`
 
-##### Test 5D: Verify `/opt/arena/bin/unpack` & APFS Copy-on-Write CAS Deduplication
+##### Test 5D: Verify `arena/unpack.ts` & APFS Copy-on-Write CAS Deduplication
 
 ```sh
 ssh arena '
@@ -693,6 +693,7 @@ SRC_DIR="$(mktemp -d /Volumes/Staging/verify-src-XXXXXX)"
 ARCHIVE="/Volumes/Staging/verify-bundle.tar.zst"
 DEST_1="/opt/arena/agents/_verify_unpack_1"
 DEST_2="/opt/arena/agents/_verify_unpack_2"
+CAS_DIR="/opt/arena/cas/_verify_cas"
 
 cat > "${SRC_DIR}/run" <<\EOF
 #!/bin/sh
@@ -702,15 +703,18 @@ chmod 0755 "${SRC_DIR}/run"
 dd if=/dev/urandom of="${SRC_DIR}/weights.bin" bs=1024 count=128 status=none
 tar --zstd -cf "$ARCHIVE" -C "$SRC_DIR" .
 
-/opt/arena/bin/unpack "$ARCHIVE" "$DEST_1"
-/opt/arena/bin/unpack "$ARCHIVE" "$DEST_2"
+/opt/homebrew/bin/node -e "
+  const {unpackBundle} = require(\"/opt/arena/repo/build/arena/unpack\");
+  console.log(\"UNPACK_OK:\", unpackBundle(\"$ARCHIVE\", \"$DEST_1\", \"$CAS_DIR\"), \"bytes\");
+  console.log(\"UNPACK_OK:\", unpackBundle(\"$ARCHIVE\", \"$DEST_2\", \"$CAS_DIR\"), \"bytes\");
+"
 
-rm -rf "$SRC_DIR" "$ARCHIVE" "$DEST_1" "$DEST_2"
+rm -rf "$SRC_DIR" "$ARCHIVE" "$DEST_1" "$DEST_2" "$CAS_DIR"
 echo "PASS: unpack + APFS CoW CAS deduplication verified"
 '
 ```
 
-*Expected:* Two `UNPACK_OK: ... bytes in ... files` lines followed by
+*Expected:* Two `UNPACK_OK: ... bytes` lines followed by
 `PASS: unpack + APFS CoW CAS deduplication verified`.
 
 ##### Test 5E: Verify Podman VM Memory (`30 GiB`, Zero Swap), Storage Cap & Container Sandbox Execution
@@ -922,7 +926,7 @@ sends `SIGUSR1` to `ai.pkmn.arena` so the coordinator finishes its in-flight mat
 the new code.
 
 If a commit modifies native helpers or system configs (`arena/bin/limit.c`, `arena/bin/arena`,
-`arena/bin/unpack`, `arena/config/sandbox.sb`, `arena/config/sudoers`, `arena/config/pf.anchor`, or
+`arena/config/sandbox.sb`, `arena/config/sudoers`, `arena/config/pf.anchor`, or
 `arena/config/*.plist`), re-run `setup-arena.sh` (which is idempotent) and drain/restart the daemon:
 
 ```sh

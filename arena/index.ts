@@ -8,8 +8,9 @@ import * as coordinator from './coordinator';
 import * as db from './db';
 import * as packages from './packages';
 import * as tournament from './tournament';
+import * as unpack from './unpack';
 
-export {arbiter, coordinator, db, packages, tournament};
+export {arbiter, coordinator, db, packages, tournament, unpack};
 
 const BASELINE_BIN = fs.existsSync('/opt/arena/bin/baseline')
   ? '/opt/arena/bin/baseline'

@@ -284,16 +284,6 @@ describe('arena infrastructure', () => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  const runUnpack = (tarPath: string, dest: string, targetCasDir: string): number => {
-    const out = execFileSync(packages.UNPACK_BIN, [tarPath, dest], {
-      encoding: 'utf8',
-      env: {...process.env, ARENA_CAS_DIR: targetCasDir},
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const m = /UNPACK_OK:\s*(\d+)\s*bytes/.exec(out);
-    return m ? Number(m[1]) : 0;
-  };
-
   describe('arena static assets', () => {
     test('includes all required arena/config, arena/bin, or arena/scripts files', () => {
       const expectedFiles = [
@@ -312,7 +302,6 @@ describe('arena infrastructure', () => {
         'arena/bin/arena',
         'arena/bin/baseline',
         'arena/bin/limit.c',
-        'arena/bin/unpack',
         'arena/bin/tourney-agent',
         'arena/bin/tourney-relay.c',
         'arena/scripts/setup-arena.sh',
@@ -331,7 +320,6 @@ describe('arena infrastructure', () => {
         execFileSync('bash', [
           '-n',
           root('arena/bin/arena'),
-          root('arena/bin/unpack'),
           root('arena/bin/tourney-agent'),
           root('arena/scripts/setup-arena.sh'),
           root('arena/scripts/bake-image.sh'),
@@ -455,7 +443,7 @@ describe('arena infrastructure', () => {
     });
   });
 
-  describe('arena/bin/unpack', () => {
+  describe('arena/unpack', () => {
     test('extracts valid native bundles with APFS CoW CAS deduplication', async () => {
       const casDir = path.join(tmpDir, 'cas-dedup');
       const agentsDir = path.join(tmpDir, 'agents-dedup');
@@ -472,7 +460,11 @@ describe('arena infrastructure', () => {
       expect(bytes1).toBeGreaterThan(70_000);
       expect(fs.existsSync(path.join(agentsDir, 'agent-v1', 'run'))).toBe(true);
 
-      const bytes2 = runUnpack(validArchivePath, path.join(agentsDir, 'agent-v2'), casDir);
+      const bytes2 = unpack.unpackBundle(
+        validArchivePath,
+        path.join(agentsDir, 'agent-v2'),
+        casDir
+      );
       expect(bytes2).toBe(bytes1);
     });
 
@@ -485,7 +477,7 @@ describe('arena infrastructure', () => {
       const noRunTar = path.join(tmpDir, 'no-run.tar.gz');
       execFileSync('tar', ['-czf', noRunTar, '-C', noRunSrc, '.']);
 
-      expect(() => runUnpack(noRunTar, path.join(tmpDir, 'agent-no-run'), noRunCasDir))
+      expect(() => unpack.unpackBundle(noRunTar, path.join(tmpDir, 'agent-no-run'), noRunCasDir))
         .toThrow(/missing required executable/i);
       expect(fs.existsSync(noRunCasDir)).toBe(false);
     });
@@ -501,7 +493,7 @@ describe('arena infrastructure', () => {
         ])
       );
       const slipAgentsDir = path.join(tmpDir, 'agents-slip');
-      expect(() => runUnpack(
+      expect(() => unpack.unpackBundle(
         slipTar,
         path.join(slipAgentsDir, 'agent-slip'),
         path.join(tmpDir, 'cas-slip')
@@ -519,7 +511,7 @@ describe('arena infrastructure', () => {
       }
       fs.writeFileSync(hlBombTar, buildTestTarGz(entries));
       const hlDest = path.join(tmpDir, 'agent-hl-bomb');
-      expect(() => runUnpack(hlBombTar, hlDest, path.join(tmpDir, 'cas-hl')))
+      expect(() => unpack.unpackBundle(hlBombTar, hlDest, path.join(tmpDir, 'cas-hl')))
         .toThrow(/exceeds 500 MB cap/i);
       expect(fs.existsSync(hlDest)).toBe(false);
     });
@@ -528,7 +520,7 @@ describe('arena infrastructure', () => {
       const corruptTar = path.join(tmpDir, 'corrupt.tar.gz');
       fs.writeFileSync(corruptTar, fs.readFileSync(validArchivePath).subarray(0, 48));
       const corruptDest = path.join(tmpDir, 'agent-corrupt');
-      expect(() => runUnpack(corruptTar, corruptDest, path.join(tmpDir, 'cas-corrupt')))
+      expect(() => unpack.unpackBundle(corruptTar, corruptDest, path.join(tmpDir, 'cas-corrupt')))
         .toThrow(/UNPACK_ERROR/i);
       expect(fs.existsSync(corruptDest)).toBe(false);
     });
@@ -551,7 +543,7 @@ describe('arena infrastructure', () => {
       const soTar = path.join(tmpDir, 'macho-so.tar.gz');
       execFileSync('tar', ['-czf', soTar, '-C', soSrcDir, '.']);
       const soDest = path.join(tmpDir, 'agent-macho-so');
-      runUnpack(soTar, soDest, path.join(tmpDir, 'cas-macho'));
+      unpack.unpackBundle(soTar, soDest, path.join(tmpDir, 'cas-macho'));
 
       const unpackedSo = path.join(soDest, 'ext.cpython-312-darwin.so');
       expect(fs.statSync(unpackedSo).mode & 0o777).toBe(0o644);
