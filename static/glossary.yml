@@ -712,6 +712,10 @@ offline: |
   An offline algorithm receives all input data upfront and is required to output a solution that
   addresses the entire problem. If something can be done _offline_ that usually means that it can be
   precomputed ahead of time, as opposed to in the middle of a game (contrast to [online](#online)).
+OM: |
+  _Olympus Mons_, the colloquial name for the [**pkmn.ai** arena](/arena) featuring battles on
+  sandboxed, dedicated hardware and ladders which utilize blind-pair matches to eliminate team
+  variance.
 online: |
    An online algorithm is one that can serially process its input piece-by-piece, _i.e._, in the
    order that the input is fed to the algorithm, without having the entire input available from the

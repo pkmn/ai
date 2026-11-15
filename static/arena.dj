@@ -1,4 +1,6 @@
-The **pkmn.ai Arena** evaluates competitive Pokémon AI agents head-to-head across continuous
-2-game blind-pair rating ladders and scheduled live championship tournaments in an airgapped
-hardware sandbox. See the [rules](/rules) for qualification and evaluation details, or watch
-[live battles](/arena/battles) in progress.
+The **pkmn.ai** arena evaluates competitive Pokémon AI agents across multiple formats in a sandboxed
+hardware environment. The continuous ladders feature unique blind-pair matches which aim to
+eliminate team matchup variance and allow for disciplined comparison of projects across history,
+while scheduled live tournaments provide a more conventional demonstration of agent strength. See
+the [rules](/rules) for qualification and evaluation details, or watch live
+[battles](/arena/battles) in progress.
