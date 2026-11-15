@@ -296,11 +296,6 @@ export function page(
           </li>
           {' — '}
           <li>
-            <input type='radio' value='arena' name='radio' id='arena' />
-            <label htmlFor='arena'>Arena</label>
-          </li>
-          {' — '}
-          <li>
             <input type='radio' value='all' name='radio' id='all' checked={true} />
             <label htmlFor='all'>All</label>
           </li>
@@ -326,7 +321,6 @@ export function page(
         for (let j = 0; j < projects.length; j++) {
           let hide = false;
           if (mode === 'active') hide = !projects[j].dataset.active;
-          else if (mode === 'arena') hide = !projects[j].dataset.arena;
           else if (mode === 'inactive') hide = Boolean(projects[j].dataset.active);
           projects[j].classList.toggle('hide', hide);
         }

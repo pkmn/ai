@@ -131,7 +131,7 @@ The 7 sections cover:
    `#topbar` banner edge case), Background (with `Under Construction` `#topbar`), Concepts overview
    + 5 subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release
    announcement, Research bibliography, Arena Rules, and `404` Not Found.
-2. **Projects Directory & Agent Profiles (`projects`):** Directory filters (`All`, `Active`, `Arena`,
+2. **Projects Directory & Agent Profiles (`projects`):** Directory filters (`Active`, `All`,
    `Inactive`), multi-version champion profile (`/projects/0-error/`), version dropdown filter, H2H
    opponent click filter, expanded inline match telemetry, empty filtered recent-matches state,
    provisional entrant (`/projects/pokerus/`), qualified project with 0 entries

@@ -74,7 +74,7 @@ export const SECTIONS: readonly SectionMeta[] = [
     id: 'projects',
     title: 'Projects Directory & Agent Profiles',
     subtitle:
-      'Catalog filtering (All / Active / Arena / Inactive) and per-agent statistical profiles ' +
+      'Catalog filtering (Active / All / Inactive) and per-agent statistical profiles ' +
       'across multi-version champions, filters, inline match drawers, provisional, and empty ' +
       'states.',
   },
@@ -390,15 +390,6 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         'updating `#count` dynamically.',
       path: '/projects/',
       click: 'label[for="active"]',
-    },
-    {
-      name: 'projects-arena',
-      section: 'projects',
-      title: 'Projects Directory (Arena Filter)',
-      description:
-        'Client-side radio filter (`Arena`) isolating registered `pkmn.ai` Arena competitors.',
-      path: '/projects/',
-      click: 'label[for="arena"]',
     },
     {
       name: 'projects-inactive',
