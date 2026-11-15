@@ -113,6 +113,260 @@ const LADDER_SCRIPT = `
   });
 `;
 
+export function buildBattleDetailClientJs(): string {
+  return `
+    const esc = s => String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const relTime = (nowSec, ts) => {
+      const diff = Math.max(0, nowSec - ts);
+      if (diff < 60) return diff + 's ago';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    };
+
+    const utcStr = ts =>
+      new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+
+    const resolveAgentHref = slug => {
+      if (!slug) return '';
+      if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return agentLinks[slug];
+      return '/projects/' + encodeURIComponent(slug) + '/';
+    };
+
+    const renderAgent = (agent, bold) => {
+      const inner = bold ? '<strong>' + esc(agent.name) + '</strong>' : esc(agent.name);
+      const href = resolveAgentHref(agent.slug);
+      const link = href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
+      return link + ' <code>' + esc(agent.version) + '</code>';
+    };
+
+    const isFaultReason = r => {
+      const norm = String(r || '').trim().toLowerCase();
+      return Boolean(norm) &&
+        norm !== 'normal' &&
+        norm !== 'win' &&
+        norm !== 'tie' &&
+        norm !== 'turn-limit' &&
+        !/^tie-\\d+-turns$/.test(norm);
+    };
+
+    const formatEndReason = reason => {
+      const norm = String(reason || '').trim().toLowerCase();
+      if (!norm || norm === 'normal' || norm === 'win') {
+        return {html: '<span class="muted">Normal</span>', label: 'Normal', abnormal: false};
+      }
+      if (norm === 'tie') {
+        return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
+      }
+      if (norm === 'turn-limit' || /^tie-\\d+-turns$/.test(norm)) {
+        return {
+          html: '<span class="muted">Turn limit</span>',
+          label: 'Turn limit',
+          abnormal: false,
+        };
+      }
+      if (norm === 'timeout') {
+        return {html: '<span class="no">Timeout</span>', label: 'Timeout', abnormal: true};
+      }
+      if (norm === 'crash') {
+        return {html: '<span class="no">Crash</span>', label: 'Crash', abnormal: true};
+      }
+      if (norm === 'oom') {
+        return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
+      }
+      if (norm === 'invalid-choice') {
+        return {
+          html: '<span class="no">3&times; Invalid Choice</span>',
+          label: '3x Invalid Choice',
+          abnormal: true,
+        };
+      }
+      return {html: '<span class="no">' + esc(reason) + '</span>', label: reason, abnormal: true};
+    };
+
+    const formatPoolCode = (label, p1Name, p2Name) => {
+      if (!label) return '<span class="muted">—</span>';
+      let tip;
+      if (label.startsWith('P1:')) {
+        tip = 'Known to P1 (' + p1Name + ') — drawn from ' + p1Name +
+          "'s submitted seasonal pool (unknown to " + p2Name + ')';
+      } else if (label.startsWith('P2:')) {
+        tip = 'Known to P2 (' + p2Name + ') — drawn from ' + p2Name +
+          "'s submitted seasonal pool (unknown to " + p1Name + ')';
+      } else {
+        tip = 'Unknown to both players — drawn from a third-party competitor seasonal pool';
+      }
+      return '<code title="' + esc(tip) + '">' + esc(label) + '</code>';
+    };
+
+    const resultParts = cat => {
+      if (cat === 'WW') return {p1Win: true, p2Win: false, html: '<strong>2</strong>–0'};
+      if (cat === 'WT' || cat === 'TW') {
+        return {p1Win: true, p2Win: false, html: '<strong>1.5</strong>–0.5'};
+      }
+      if (cat === 'LL') return {p1Win: false, p2Win: true, html: '0–<strong>2</strong>'};
+      if (cat === 'LT' || cat === 'TL') {
+        return {p1Win: false, p2Win: true, html: '0.5–<strong>1.5</strong>'};
+      }
+      return {p1Win: false, p2Win: false, html: '1–1'};
+    };
+
+    const renderMatchDetailHtml = m => {
+      const r = resultParts(m.category);
+      const p1Bold = renderAgent(m.p1, r.p1Win);
+      const p2Bold = renderAgent(m.p2, r.p2Win);
+      const p1Plain = renderAgent(m.p1, false);
+      const p2Plain = renderAgent(m.p2, false);
+      const fmtTitle = formatTitles[m.format] || m.format;
+      const ladderHref = m.ladderHref || (
+        m.ladderStatus === 'archived'
+          ? '/arena/ladders/' + encodeURIComponent(m.ladderId) + '/'
+          : '/arena/ladders/' + encodeURIComponent(m.slot) + '/'
+      );
+      const end1 = formatEndReason(m.game1EndReason);
+      const end2 = formatEndReason(m.game2EndReason);
+      const faults = [];
+      if (end1.abnormal) faults.push(end1.label);
+      if (end2.abnormal && faults.indexOf(end2.label) === -1) faults.push(end2.label);
+      const faultBadge = faults.length > 0
+        ? ' <span class="no" title="Abnormal game termination">[' +
+          esc(faults.join(', ')) + ']</span>'
+        : '';
+
+      const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
+      const t1Code = formatPoolCode(m.p1TeamLabel, m.p1.name, m.p2.name);
+      const t2Code = formatPoolCode(m.p2TeamLabel, m.p1.name, m.p2.name);
+      const poolSummary = showPools
+        ? '<div class="battle-detail-pool" title="12-char pkmn/teams SHA-256 short hashes; ' +
+          'P1:/P2: prefix indicates a team submitted by that player in this match (at most one ' +
+          'team per match can belong to either player)">Teams: Player 1 ' + t1Code +
+          ' · Player 2 ' + t2Code + '</div>'
+        : '';
+
+      const g1Winner = m.game1Outcome === 'W'
+        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
+        : m.game1Outcome === 'L'
+          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
+          : '<span class="muted">Tie</span>';
+      const g2Winner = m.game2Outcome === 'W'
+        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
+        : m.game2Outcome === 'L'
+          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
+          : '<span class="muted">Tie</span>';
+
+      const g1Banks =
+        Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p2Game1BankSeconds) + 's';
+      const g2Banks =
+        Math.round(m.p2Game2BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
+      const p1RamPct = ((m.p1PeakRam / 14336) * 100).toFixed(1);
+      const p2RamPct = ((m.p2PeakRam / 14336) * 100).toFixed(1);
+      const p1RamStr = Math.round(m.p1PeakRam).toLocaleString('en-US') + ' MiB';
+      const p2RamStr = Math.round(m.p2PeakRam).toLocaleString('en-US') + ' MiB';
+      const p1Banks =
+        Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
+      const p2Banks =
+        Math.round(m.p2Game1BankSeconds) + 's / ' + Math.round(m.p2Game2BankSeconds) + 's';
+      const p1Teams = showPools ? ' · Teams ' + t1Code + ' / ' + t2Code : '';
+      const p2Teams = showPools ? ' · Teams ' + t2Code + ' / ' + t1Code : '';
+
+      const g1ReplayLinks = m.game1LogHref
+        ? ' · <a href="' + esc(m.game1LogHref) + '" class="live-pill" data-replay-log="' +
+          esc(m.game1LogHref) + '" data-replay-match="' + esc(m.id) +
+          '" data-replay-game="1">&#9654; Replay</a> · <a href="' +
+          esc(m.game1LogHref) + '" class="subtle"><code>.log</code></a>'
+        : '';
+      const g2ReplayLinks = m.game2LogHref
+        ? ' · <a href="' + esc(m.game2LogHref) + '" class="live-pill" data-replay-log="' +
+          esc(m.game2LogHref) + '" data-replay-match="' + esc(m.id) +
+          '" data-replay-game="2">&#9654; Replay</a> · <a href="' +
+          esc(m.game2LogHref) + '" class="subtle"><code>.log</code></a>'
+        : '';
+
+      const replayAttrs = (m.game1LogHref || m.game2LogHref)
+        ? ' data-match-id="' + esc(m.id) +
+          '" data-p1-name="' + esc(m.p1.name) +
+          '" data-p2-name="' + esc(m.p2.name) + '"' +
+          (m.game1LogHref ? ' data-g1-log="' + esc(m.game1LogHref) + '"' : '') +
+          (m.game2LogHref ? ' data-g2-log="' + esc(m.game2LogHref) + '"' : '')
+        : '';
+
+      let archiveNote = '';
+      if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
+        const links = [];
+        if (m.archiveHref) {
+          links.push(
+            '<a href="' + esc(m.archiveHref) + '" class="subtle"><code>' +
+            esc(m.ladderId + '-logs.7z') + '</code></a>'
+          );
+        }
+        if (m.teamsHref) {
+          links.push(
+            '<a href="' + esc(m.teamsHref) + '" class="subtle"><code>teams.json</code></a>'
+          );
+        }
+        if (links.length > 0) {
+          archiveNote = '<div class="battle-detail-note muted">Retired pool archives: ' +
+            links.join(' · ') + '</div>';
+        }
+      }
+
+      return '<div class="battle-detail"' + replayAttrs + '>' +
+        '<div class="battle-detail-meta">' +
+          '<span><a href="' + esc(ladderHref) + '" class="subtle"><strong>' + esc(m.ladderName) +
+          '</strong></a> <span class="muted">(<tt>' + esc(fmtTitle) + '</tt>)</span> · ' +
+          '<span class="muted">' + esc(utcStr(m.completedAt)) + '</span></span>' +
+          '<span><span class="muted">Outcome:</span> <code>' + esc(m.category) + '</code> ' +
+          '<span class="muted">(' + (m.game1Turns + m.game2Turns) + ' turns)</span>' +
+          faultBadge + ' · <span class="muted">Seed:</span> <code>' +
+          esc(m.seed) + '</code></span>' +
+        '</div>' +
+        poolSummary +
+        '<div class="battle-detail-grid">' +
+          '<div class="battle-detail-card">' +
+            '<div class="battle-detail-title">Games</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><strong>Game 1</strong> · <tt>p1</tt> ' + p1Plain +
+              ' vs <tt>p2</tt> ' + p2Plain + '</span>' +
+              '<span>' + g1Winner + ' · ' + end1.html + ' · ' + m.game1Turns +
+              't · Bank <tt>' + g1Banks + '</tt>' + g1ReplayLinks + '</span>' +
+            '</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><strong>Game 2</strong> <span class="muted">(swapped)</span> · <tt>p1</tt> ' +
+              p2Plain + ' vs <tt>p2</tt> ' + p1Plain + '</span>' +
+              '<span>' + g2Winner + ' · ' + end2.html + ' · ' + m.game2Turns +
+              't · Bank <tt>' + g2Banks + '</tt>' + g2ReplayLinks + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="battle-detail-card">' +
+            '<div class="battle-detail-title">Client Telemetry</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><tt>P1</tt> ' + p1Bold + '</span>' +
+              '<span>Mean <tt>' + Math.round(m.p1MeanTurnMillis) +
+              ' ms/turn</tt> · Peak RAM <tt>' +
+              p1RamStr + '</tt> <span class="muted">(' + p1RamPct + '%)</span> · Banks <tt>' +
+              p1Banks + '</tt>' + p1Teams + '</span>' +
+            '</div>' +
+            '<div class="battle-detail-line">' +
+              '<span><tt>P2</tt> ' + p2Bold + '</span>' +
+              '<span>Mean <tt>' + Math.round(m.p2MeanTurnMillis) +
+              ' ms/turn</tt> · Peak RAM <tt>' +
+              p2RamStr + '</tt> <span class="muted">(' + p2RamPct + '%)</span> · Banks <tt>' +
+              p2Banks + '</tt>' + p2Teams + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        archiveNote +
+      '</div>';
+    };
+  `;
+}
+
 function buildBattlesScript(
   initialLiveJson: string,
   agentLinksJson: string,
@@ -182,36 +436,7 @@ function buildBattlesScript(
       });
     });
 
-    const esc = s => String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-
-    const relTime = (nowSec, ts) => {
-      const diff = Math.max(0, nowSec - ts);
-      if (diff < 60) return diff + 's ago';
-      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-      return Math.floor(diff / 86400) + 'd ago';
-    };
-
-    const utcStr = ts =>
-      new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-
-    const resolveAgentHref = slug => {
-      if (!slug) return '';
-      if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return agentLinks[slug];
-      return '/projects/' + encodeURIComponent(slug) + '/';
-    };
-
-    const renderAgent = (agent, bold) => {
-      const inner = bold ? '<strong>' + esc(agent.name) + '</strong>' : esc(agent.name);
-      const href = resolveAgentHref(agent.slug);
-      const link = href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
-      return link + ' <code>' + esc(agent.version) + '</code>';
-    };
+    ${buildBattleDetailClientJs()}
 
     const renderShownHeader = () => {
       if (!shownLive) return;
@@ -493,225 +718,6 @@ function buildBattlesScript(
         shownLive = undefined;
         queuedLive = undefined;
       }
-    };
-
-    const isFaultReason = r => {
-      const norm = String(r || '').trim().toLowerCase();
-      return Boolean(norm) &&
-        norm !== 'normal' &&
-        norm !== 'win' &&
-        norm !== 'tie' &&
-        norm !== 'turn-limit' &&
-        !/^tie-\\d+-turns$/.test(norm);
-    };
-
-    const formatEndReason = reason => {
-      const norm = String(reason || '').trim().toLowerCase();
-      if (!norm || norm === 'normal' || norm === 'win') {
-        return {html: '<span class="muted">Normal</span>', label: 'Normal', abnormal: false};
-      }
-      if (norm === 'tie') {
-        return {html: '<span class="muted">Tie</span>', label: 'Tie', abnormal: false};
-      }
-      if (norm === 'turn-limit' || /^tie-\\d+-turns$/.test(norm)) {
-        return {
-          html: '<span class="muted">Turn limit</span>',
-          label: 'Turn limit',
-          abnormal: false,
-        };
-      }
-      if (norm === 'timeout') {
-        return {html: '<span class="no">Timeout</span>', label: 'Timeout', abnormal: true};
-      }
-      if (norm === 'crash') {
-        return {html: '<span class="no">Crash</span>', label: 'Crash', abnormal: true};
-      }
-      if (norm === 'oom') {
-        return {html: '<span class="no">OOM</span>', label: 'OOM', abnormal: true};
-      }
-      if (norm === 'invalid-choice') {
-        return {
-          html: '<span class="no">3&times; Invalid Choice</span>',
-          label: '3x Invalid Choice',
-          abnormal: true,
-        };
-      }
-      return {html: '<span class="no">' + esc(reason) + '</span>', label: reason, abnormal: true};
-    };
-
-    const formatPoolCode = (label, p1Name, p2Name) => {
-      if (!label) return '<span class="muted">—</span>';
-      let tip;
-      if (label.startsWith('P1:')) {
-        tip = 'Known to P1 (' + p1Name + ') — drawn from ' + p1Name +
-          "'s submitted seasonal pool (unknown to " + p2Name + ')';
-      } else if (label.startsWith('P2:')) {
-        tip = 'Known to P2 (' + p2Name + ') — drawn from ' + p2Name +
-          "'s submitted seasonal pool (unknown to " + p1Name + ')';
-      } else {
-        tip = 'Unknown to both players — drawn from a third-party competitor seasonal pool';
-      }
-      return '<code title="' + esc(tip) + '">' + esc(label) + '</code>';
-    };
-
-    const resultParts = cat => {
-      if (cat === 'WW') return {p1Win: true, p2Win: false, html: '<strong>2</strong>–0'};
-      if (cat === 'WT' || cat === 'TW') {
-        return {p1Win: true, p2Win: false, html: '<strong>1.5</strong>–0.5'};
-      }
-      if (cat === 'LL') return {p1Win: false, p2Win: true, html: '0–<strong>2</strong>'};
-      if (cat === 'LT' || cat === 'TL') {
-        return {p1Win: false, p2Win: true, html: '0.5–<strong>1.5</strong>'};
-      }
-      return {p1Win: false, p2Win: false, html: '1–1'};
-    };
-
-    const renderMatchDetailHtml = m => {
-      const r = resultParts(m.category);
-      const p1Bold = renderAgent(m.p1, r.p1Win);
-      const p2Bold = renderAgent(m.p2, r.p2Win);
-      const p1Plain = renderAgent(m.p1, false);
-      const p2Plain = renderAgent(m.p2, false);
-      const fmtTitle = formatTitles[m.format] || m.format;
-      const ladderHref = m.ladderHref || (
-        m.ladderStatus === 'archived'
-          ? '/arena/ladders/' + encodeURIComponent(m.ladderId) + '/'
-          : '/arena/ladders/' + encodeURIComponent(m.slot) + '/'
-      );
-      const end1 = formatEndReason(m.game1EndReason);
-      const end2 = formatEndReason(m.game2EndReason);
-      const faults = [];
-      if (end1.abnormal) faults.push(end1.label);
-      if (end2.abnormal && faults.indexOf(end2.label) === -1) faults.push(end2.label);
-      const faultBadge = faults.length > 0
-        ? ' <span class="no" title="Abnormal game termination">[' +
-          esc(faults.join(', ')) + ']</span>'
-        : '';
-
-      const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
-      const t1Code = formatPoolCode(m.p1TeamLabel, m.p1.name, m.p2.name);
-      const t2Code = formatPoolCode(m.p2TeamLabel, m.p1.name, m.p2.name);
-      const poolSummary = showPools
-        ? '<div class="battle-detail-pool" title="12-char pkmn/teams SHA-256 short hashes; ' +
-          'P1:/P2: prefix indicates a team submitted by that player in this match (at most one ' +
-          'team per match can belong to either player)">Teams: Player 1 ' + t1Code +
-          ' · Player 2 ' + t2Code + '</div>'
-        : '';
-
-      const g1Winner = m.game1Outcome === 'W'
-        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
-        : m.game1Outcome === 'L'
-          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
-          : '<span class="muted">Tie</span>';
-      const g2Winner = m.game2Outcome === 'W'
-        ? '<strong>' + esc(m.p1.name) + '</strong> <span class="muted">(P1)</span>'
-        : m.game2Outcome === 'L'
-          ? '<strong>' + esc(m.p2.name) + '</strong> <span class="muted">(P2)</span>'
-          : '<span class="muted">Tie</span>';
-
-      const g1Banks =
-        Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p2Game1BankSeconds) + 's';
-      const g2Banks =
-        Math.round(m.p2Game2BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
-      const p1RamPct = ((m.p1PeakRam / 14336) * 100).toFixed(1);
-      const p2RamPct = ((m.p2PeakRam / 14336) * 100).toFixed(1);
-      const p1RamStr = Math.round(m.p1PeakRam).toLocaleString('en-US') + ' MiB';
-      const p2RamStr = Math.round(m.p2PeakRam).toLocaleString('en-US') + ' MiB';
-      const p1Banks =
-        Math.round(m.p1Game1BankSeconds) + 's / ' + Math.round(m.p1Game2BankSeconds) + 's';
-      const p2Banks =
-        Math.round(m.p2Game1BankSeconds) + 's / ' + Math.round(m.p2Game2BankSeconds) + 's';
-      const p1Teams = showPools ? ' · Teams ' + t1Code + ' / ' + t2Code : '';
-      const p2Teams = showPools ? ' · Teams ' + t2Code + ' / ' + t1Code : '';
-
-      const g1ReplayLinks = m.game1LogHref
-        ? ' · <a href="' + esc(m.game1LogHref) + '" class="live-pill" data-replay-log="' +
-          esc(m.game1LogHref) + '" data-replay-match="' + esc(m.id) +
-          '" data-replay-game="1">&#9654; Replay</a> · <a href="' +
-          esc(m.game1LogHref) + '" class="subtle"><code>.log</code></a>'
-        : '';
-      const g2ReplayLinks = m.game2LogHref
-        ? ' · <a href="' + esc(m.game2LogHref) + '" class="live-pill" data-replay-log="' +
-          esc(m.game2LogHref) + '" data-replay-match="' + esc(m.id) +
-          '" data-replay-game="2">&#9654; Replay</a> · <a href="' +
-          esc(m.game2LogHref) + '" class="subtle"><code>.log</code></a>'
-        : '';
-
-      const replayAttrs = (m.game1LogHref || m.game2LogHref)
-        ? ' data-match-id="' + esc(m.id) +
-          '" data-p1-name="' + esc(m.p1.name) +
-          '" data-p2-name="' + esc(m.p2.name) + '"' +
-          (m.game1LogHref ? ' data-g1-log="' + esc(m.game1LogHref) + '"' : '') +
-          (m.game2LogHref ? ' data-g2-log="' + esc(m.game2LogHref) + '"' : '')
-        : '';
-
-      let archiveNote = '';
-      if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
-        const links = [];
-        if (m.archiveHref) {
-          links.push(
-            '<a href="' + esc(m.archiveHref) + '" class="subtle"><code>' +
-            esc(m.ladderId + '-logs.7z') + '</code></a>'
-          );
-        }
-        if (m.teamsHref) {
-          links.push(
-            '<a href="' + esc(m.teamsHref) + '" class="subtle"><code>teams.json</code></a>'
-          );
-        }
-        if (links.length > 0) {
-          archiveNote = '<div class="battle-detail-note muted">Retired pool archives: ' +
-            links.join(' · ') + '</div>';
-        }
-      }
-
-      return '<div class="battle-detail"' + replayAttrs + '>' +
-        '<div class="battle-detail-meta">' +
-          '<span><a href="' + esc(ladderHref) + '" class="subtle"><strong>' + esc(m.ladderName) +
-          '</strong></a> <span class="muted">(<tt>' + esc(fmtTitle) + '</tt>)</span> · ' +
-          '<span class="muted">' + esc(utcStr(m.completedAt)) + '</span></span>' +
-          '<span><span class="muted">Outcome:</span> <code>' + esc(m.category) + '</code> ' +
-          '<span class="muted">(' + (m.game1Turns + m.game2Turns) + ' turns)</span>' +
-          faultBadge + ' · <span class="muted">Seed:</span> <code>' +
-          esc(m.seed) + '</code></span>' +
-        '</div>' +
-        poolSummary +
-        '<div class="battle-detail-grid">' +
-          '<div class="battle-detail-card">' +
-            '<div class="battle-detail-title">Games</div>' +
-            '<div class="battle-detail-line">' +
-              '<span><strong>Game 1</strong> · <tt>p1</tt> ' + p1Plain +
-              ' vs <tt>p2</tt> ' + p2Plain + '</span>' +
-              '<span>' + g1Winner + ' · ' + end1.html + ' · ' + m.game1Turns +
-              't · Bank <tt>' + g1Banks + '</tt>' + g1ReplayLinks + '</span>' +
-            '</div>' +
-            '<div class="battle-detail-line">' +
-              '<span><strong>Game 2</strong> <span class="muted">(swapped)</span> · <tt>p1</tt> ' +
-              p2Plain + ' vs <tt>p2</tt> ' + p1Plain + '</span>' +
-              '<span>' + g2Winner + ' · ' + end2.html + ' · ' + m.game2Turns +
-              't · Bank <tt>' + g2Banks + '</tt>' + g2ReplayLinks + '</span>' +
-            '</div>' +
-          '</div>' +
-          '<div class="battle-detail-card">' +
-            '<div class="battle-detail-title">Client Telemetry</div>' +
-            '<div class="battle-detail-line">' +
-              '<span><tt>P1</tt> ' + p1Bold + '</span>' +
-              '<span>Mean <tt>' + Math.round(m.p1MeanTurnMillis) +
-              ' ms/turn</tt> · Peak RAM <tt>' +
-              p1RamStr + '</tt> <span class="muted">(' + p1RamPct + '%)</span> · Banks <tt>' +
-              p1Banks + '</tt>' + p1Teams + '</span>' +
-            '</div>' +
-            '<div class="battle-detail-line">' +
-              '<span><tt>P2</tt> ' + p2Bold + '</span>' +
-              '<span>Mean <tt>' + Math.round(m.p2MeanTurnMillis) +
-              ' ms/turn</tt> · Peak RAM <tt>' +
-              p2RamStr + '</tt> <span class="muted">(' + p2RamPct + '%)</span> · Banks <tt>' +
-              p2Banks + '</tt>' + p2Teams + '</span>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-        archiveNote +
-      '</div>';
     };
 
     const loadRowReplay = async (slot, gameNum) => {

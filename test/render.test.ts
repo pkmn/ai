@@ -704,6 +704,32 @@ describe('populated Arena leaderboard views', () => {
   test('gates profile Best Matchup or Nemesis callouts on at least 10 matches', async () => {
     const foulProfileHtml = await h.getText('/projects/foul-play/');
     expect(foulProfileHtml).not.toMatch(/Athena[\s\S]{0,80}Nemesis/);
+    expect(foulProfileHtml).toContain('Page 1 of 6 (135 matches)');
+    expect(foulProfileHtml).toContain('Page 1 of 2 (28 matches)');
+    expect((foulProfileHtml.match(/class="battle-row"/g) ?? [])).toHaveLength(50);
+
+    const page6 = await h.getJson<{
+      total: number;
+      page: number;
+      matches: Array<{id: string}>;
+    }>('/api/battles.json?ladder=gen1ou20261109&agent=foul-play&page=6&limit=25');
+    expect(page6.total).toBe(135);
+    expect(page6.page).toBe(6);
+    expect(page6.matches).toHaveLength(10);
+
+    const metaV120 = await h.getJson<{
+      total: number;
+      agentVersion?: string;
+      matches: Array<{p1: {slug: string; version: string}; p2: {slug: string; version: string}}>;
+    }>('/api/battles.json?ladder=gen1ou20261109&agent=metamon&version=1.2.0&limit=25');
+    expect(metaV120.agentVersion).toBe('1.2.0');
+    expect(metaV120.total).toBe(88);
+    for (const m of metaV120.matches) {
+      expect(
+        (m.p1.slug === 'metamon' && m.p1.version === '1.2.0') ||
+        (m.p2.slug === 'metamon' && m.p2.version === '1.2.0')
+      ).toBe(true);
+    }
   });
 
   test('renders profile pages for Pending projects without ladder entries', async () => {

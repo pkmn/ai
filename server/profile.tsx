@@ -33,8 +33,10 @@ interface VersionDynamicStats {
 }
 
 interface LadderProfileClientData {
+  ladderId: string;
   optionsHtml: string;
   oppOptionsHtml: string;
+  oppCounts: Record<string, Record<string, number>>;
   vstats: Record<string, VersionDynamicStats>;
   reign: Record<string, string>;
 }
@@ -846,9 +848,9 @@ function renderRecentMatchesPane(opts: {
   ladderKey: string;
   isDefault: boolean;
   matches: db.RecentMatchView[];
+  totalMatches: number;
+  agentLinks: Readonly<Record<string, string>>;
   publicDir: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
   nowSec: number;
 }): Html {
   const {
@@ -857,27 +859,11 @@ function renderRecentMatchesPane(opts: {
     ladderKey,
     isDefault,
     matches,
+    totalMatches,
+    agentLinks,
     publicDir,
-    projectMeta,
-    profileSlugs,
     nowSec,
   } = opts;
-
-  const agentLinks: Record<string, string> = {};
-  for (const m of matches) {
-    for (const side of [m.p1, m.p2]) {
-      if (!agentLinks[side.slug]) {
-        const href = render.resolveAgentHref(
-          publicDir,
-          projectMeta,
-          side.slug,
-          side.name,
-          profileSlugs
-        );
-        if (href) agentLinks[side.slug] = href;
-      }
-    }
-  }
 
   const bankTitle =
     `Remaining ${agentName} time bank in Game 1 / Game 2 (Showdown timer: 150s cap)`;
@@ -969,19 +955,12 @@ function renderRecentMatchesPane(opts: {
                 );
               })
             )}
-            {matches.length > 0 && (
-              <tr className='empty-filter-row hide'>
-                <td colSpan={8} className='center muted'>
-                  No matching battles.
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
       <TablePager
         label='Matches pagination'
-        total={matches.length}
+        total={totalMatches}
         singular='match'
         plural='matches'
         prevLabel={'\u2190 Newer'}
@@ -1086,11 +1065,16 @@ function buildProjectMetaRows(
 
 function buildProfileScript(
   profileDataMap: Record<string, LadderProfileClientData>,
-  defaultLadderKey: string
+  defaultLadderKey: string,
+  agentSlug: string,
+  agentLinks: Readonly<Record<string, string>>
 ): string {
   return `
   document.addEventListener('DOMContentLoaded', () => {
     const profileData = ${render.safeInlineJson(profileDataMap)};
+    const agentSlug = ${render.safeInlineJson(agentSlug)};
+    const agentLinks = ${render.safeInlineJson(agentLinks)};
+    const formatTitles = ${render.safeInlineJson(render.FORMAT_TITLES)};
     const ladderRadios = document.querySelectorAll('input[name="ladder"]');
     const verSelect = document.getElementById('ver-select');
     const oppSelect = document.getElementById('opp-select');
@@ -1102,8 +1086,99 @@ function buildProfileScript(
     let curVer = 'all';
     let curOpp = 'all';
     let matchPage = 1;
+    let matchFetchSeq = 0;
     const pageSize = 25;
     const panePagers = new WeakMap();
+    const initialMatchHtml = Object.create(null);
+
+    document.querySelectorAll('#matches .profile-pane').forEach(pane => {
+      const lad = pane.dataset.ladder;
+      const tbody = pane.querySelector('tbody');
+      if (lad && tbody) {
+        initialMatchHtml[lad] = tbody.innerHTML;
+      }
+    });
+
+    ${render.buildBattleDetailClientJs()}
+
+    const invertCat = cat => {
+      if (cat === 'WW') return 'LL';
+      if (cat === 'LL') return 'WW';
+      if (cat === 'WT') return 'TL';
+      if (cat === 'TW') return 'LT';
+      if (cat === 'TL') return 'WT';
+      if (cat === 'LT') return 'TW';
+      if (cat === 'WL') return 'LW';
+      if (cat === 'LW') return 'WL';
+      return 'TT';
+    };
+
+    const renderProfileMatchPair = (m, nowSec, expanded) => {
+      const weAreP1 = m.p1.slug === agentSlug;
+      const ourSide = weAreP1 ? m.p1 : m.p2;
+      const oppSide = weAreP1 ? m.p2 : m.p1;
+      const ourCat = weAreP1 ? m.category : invertCat(m.category);
+      let resHtml;
+      if (ourCat === 'WW' || ourCat === 'WT' || ourCat === 'TW') {
+        resHtml = '<span class="yes">W</span> <span class="muted">(' + esc(ourCat) + ')</span>';
+      } else if (ourCat === 'LL' || ourCat === 'LT' || ourCat === 'TL') {
+        resHtml = '<span class="no">L</span> <span class="muted">(' + esc(ourCat) + ')</span>';
+      } else {
+        resHtml = 'T <span class="muted">(' + esc(ourCat) + ')</span>';
+      }
+
+      const g1Bank = Math.round(weAreP1 ? m.p1Game1BankSeconds : m.p2Game1BankSeconds);
+      const g2Bank = Math.round(weAreP1 ? m.p1Game2BankSeconds : m.p2Game2BankSeconds);
+      const peakRam = Math.round(weAreP1 ? m.p1PeakRam : m.p2PeakRam);
+      const tsTitle = utcStr(m.completedAt);
+      const rel = relTime(nowSec, m.completedAt);
+
+      const tr = document.createElement('tr');
+      tr.className = 'battle-row' + (expanded ? ' expanded' : '');
+      tr.dataset.ver = ourSide.version;
+      tr.dataset.opp = oppSide.slug;
+      tr.tabIndex = 0;
+      tr.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      tr.innerHTML =
+        '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span><code>' +
+        esc(m.id) + '</code></td>' +
+        '<td><code>' + esc(ourSide.version) + '</code></td>' +
+        '<td>' + renderAgent(oppSide, false) + '</td>' +
+        '<td class="center">' + resHtml + '</td>' +
+        '<td class="num">' + m.game1Turns + ' / ' + m.game2Turns + '</td>' +
+        '<td class="num">' + g1Bank + 's / ' + g2Bank + 's</td>' +
+        '<td class="num">' + peakRam.toLocaleString('en-US') + 'M</td>' +
+        '<td class="num muted" title="' + esc(tsTitle) + '">' + esc(rel) + '</td>';
+
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'battle-detail-row' + (expanded ? '' : ' hide');
+      detailTr.dataset.detailFor = m.id;
+      detailTr.innerHTML = '<td colspan="8">' + renderMatchDetailHtml(m) + '</td>';
+      return [tr, detailTr];
+    };
+
+    const renderMatchesList = (tbody, matches, nowSec) => {
+      if (!tbody) return;
+      if (!matches || matches.length === 0) {
+        if (curVer !== 'all' || curOpp !== 'all') {
+          tbody.innerHTML =
+            '<tr class="empty-filter-row"><td colspan="8" class="center muted">' +
+            'No matching battles.</td></tr>';
+        } else {
+          tbody.innerHTML =
+            '<tr><td colspan="8" class="center muted">No completed matches yet.</td></tr>';
+        }
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for (const m of matches) {
+        const pair = renderProfileMatchPair(m, nowSec, false);
+        frag.appendChild(pair[0]);
+        frag.appendChild(pair[1]);
+      }
+      tbody.innerHTML = '';
+      tbody.appendChild(frag);
+    };
 
     const updatePagerControls = (pager, page, total) => {
       if (!pager) return;
@@ -1165,40 +1240,70 @@ function buildProfileScript(
       });
     });
 
-    const applyMatchesPager = () => {
+    const applyMatchesPager = async scrollMatches => {
+      const ladData = profileData[curLad];
       const activeMatchPane = document.querySelector(
         '#matches .profile-pane[data-ladder="' + curLad + '"]'
       );
-      if (!activeMatchPane) return;
-      const allRows = Array.from(activeMatchPane.querySelectorAll('tbody tr[data-ver]'));
-      const matching = allRows.filter(row => (
-        (curVer === 'all' || row.dataset.ver === curVer) &&
-        (curOpp === 'all' || row.dataset.opp === curOpp)
-      ));
-      const total = matching.length;
-      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (!ladData || !activeMatchPane) return;
+      const tbody = activeMatchPane.querySelector('tbody');
+      const pager = activeMatchPane.querySelector('.pager[data-table-pager]');
+      const vCounts = (ladData.oppCounts && ladData.oppCounts[curVer]) ||
+        (ladData.oppCounts && ladData.oppCounts.all) ||
+        Object.create(null);
+
+      if (oppSelect) {
+        Array.from(oppSelect.options).forEach(opt => {
+          const count = opt.value === 'all' ? (vCounts.all || 0) : (vCounts[opt.value] || 0);
+          const idx = opt.textContent.lastIndexOf(' (');
+          if (idx >= 0) {
+            opt.textContent = opt.textContent.slice(0, idx) + ' (' + count + ')';
+          }
+        });
+      }
+
+      const expectedTotal = curOpp === 'all' ? (vCounts.all || 0) : (vCounts[curOpp] || 0);
+      const totalPages = Math.max(1, Math.ceil(expectedTotal / pageSize));
       if (matchPage > totalPages) matchPage = totalPages;
       if (matchPage < 1) matchPage = 1;
-      const start = (matchPage - 1) * pageSize;
-      const visible = new Set(matching.slice(start, start + pageSize));
-      allRows.forEach(row => {
-        const hidden = !visible.has(row);
-        row.classList.toggle('hide', hidden);
-        if (hidden) {
-          row.classList.remove('expanded');
-          row.setAttribute('aria-expanded', 'false');
-          const detail = row.nextElementSibling;
-          if (detail && detail.classList.contains('battle-detail-row')) {
-            detail.classList.add('hide');
-          }
-        }
-      });
-      const emptyFilterRow = activeMatchPane.querySelector('tbody tr.empty-filter-row');
-      if (emptyFilterRow) {
-        emptyFilterRow.classList.toggle('hide', total > 0);
+
+      const seq = ++matchFetchSeq;
+
+      if (curVer === 'all' && curOpp === 'all' && matchPage === 1 && initialMatchHtml[curLad]) {
+        if (tbody) tbody.innerHTML = initialMatchHtml[curLad];
+        updatePagerControls(pager, 1, expectedTotal);
+        if (scrollMatches && matchesSec) matchesSec.scrollIntoView();
+        return;
       }
-      const pager = activeMatchPane.querySelector('.pager[data-table-pager]');
-      updatePagerControls(pager, matchPage, total);
+
+      if (expectedTotal === 0) {
+        renderMatchesList(tbody, [], Math.floor(Date.now() / 1000));
+        updatePagerControls(pager, 1, 0);
+        if (scrollMatches && matchesSec) matchesSec.scrollIntoView();
+        return;
+      }
+
+      updatePagerControls(pager, matchPage, expectedTotal);
+
+      try {
+        let qs = '?ladder=' + encodeURIComponent(ladData.ladderId) +
+          '&agent=' + encodeURIComponent(agentSlug) +
+          '&page=' + matchPage +
+          '&limit=' + pageSize;
+        if (curVer !== 'all') qs += '&version=' + encodeURIComponent(curVer);
+        if (curOpp !== 'all') qs += '&vs=' + encodeURIComponent(curOpp);
+        const res = await fetch('/api/battles.json' + qs, {
+          cache: 'no-cache',
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (seq !== matchFetchSeq) return;
+        renderMatchesList(tbody, data.matches || [], Math.floor(Date.now() / 1000));
+        const total = data.total !== undefined ? data.total : expectedTotal;
+        updatePagerControls(pager, data.page || matchPage, total);
+        if (scrollMatches && matchesSec) matchesSec.scrollIntoView();
+      } catch {}
     };
 
     document.querySelectorAll('#matches .profile-pane').forEach(pane => {
@@ -1210,14 +1315,14 @@ function buildProfileScript(
         prevBtn.addEventListener('click', () => {
           if (matchPage > 1) {
             matchPage--;
-            applyMatchesPager();
+            void applyMatchesPager(true);
           }
         });
       }
       if (nextBtn) {
         nextBtn.addEventListener('click', () => {
           matchPage++;
-          applyMatchesPager();
+          void applyMatchesPager(true);
         });
       }
     });
@@ -1255,7 +1360,7 @@ function buildProfileScript(
       if (reignTbody && reignHtml) {
         reignTbody.innerHTML = reignHtml;
       }
-      applyMatchesPager();
+      void applyMatchesPager(false);
       if (matchupsSec) {
         matchupsSec.querySelectorAll('tr.opp-row').forEach(row => {
           row.classList.toggle('active-opp', curOpp !== 'all' && row.dataset.opp === curOpp);
@@ -1591,7 +1696,7 @@ export function renderAgentProfile(opts: {
           <p className='empty-state muted'>No completed matches yet.</p>
         </section>
 
-        <script>{buildProfileScript({}, '')}</script>
+        <script>{buildProfileScript({}, '', agent.slug, {})}</script>
       </>
     );
     const html = renderer.render({
@@ -1622,6 +1727,13 @@ export function renderAgentProfile(opts: {
   const versionsPanes: Html[] = [];
   const matchupsPanes: Html[] = [];
   const matchesPanes: Html[] = [];
+  const agentLinks: Record<string, string> = {};
+  const registerAgentLink = (slug: string, name: string) => {
+    if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return;
+    agentLinks[slug] =
+      render.resolveAgentHref(publicDir, projectMeta, slug, name, profileSlugs) ?? '';
+  };
+  registerAgentLink(agent.slug, agent.name);
 
   const usedKeys = new Set<string>();
   const ladderKeys = ladders.map(l => {
@@ -1653,6 +1765,14 @@ export function renderAgentProfile(opts: {
     const familyStats = db.getAgentLadderStats(l.id, agent.id);
     const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id);
     const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
+
+    for (const e of allEntries) {
+      registerAgentLink(e.agentSlug, e.agentName);
+    }
+    for (const m of recentMatches) {
+      registerAgentLink(m.p1.slug, m.p1.name);
+      registerAgentLink(m.p2.slug, m.p2.name);
+    }
 
     ladderJsonList.push({
       key: lKey,
@@ -1714,23 +1834,71 @@ export function renderAgentProfile(opts: {
       </>
     );
 
+    const verById = new Map<number, db.LeaderboardEntryView>();
     const oppMap = new Map<string, {slug: string; name: string; count: number}>();
-    for (const m of recentMatches) {
-      const opp = m.p1.slug === agent.slug ? m.p2 : m.p1;
-      const cur = oppMap.get(opp.slug);
-      if (cur) cur.count++;
-      else oppMap.set(opp.slug, {slug: opp.slug, name: opp.name, count: 1});
-    }
     for (const e of allEntries) {
-      if (e.agentId === agent.id || oppMap.has(e.agentSlug)) continue;
-      oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
+      verById.set(e.versionId, e);
+      if (e.agentId !== agent.id && !oppMap.has(e.agentSlug)) {
+        oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
+      }
     }
+
+    const oppCounts: Record<string, Record<string, number>> = {
+      all: {all: 0},
+    };
+    for (const e of agentEntries) {
+      oppCounts[e.version] = {all: 0};
+    }
+
+    for (const p of pairs) {
+      const count = p.ww + p.wt + p.split + p.tl + p.ll;
+      if (count <= 0) continue;
+      const low = verById.get(p.lowVersionId);
+      const high = verById.get(p.highVersionId);
+      if (!low || !high) continue;
+      if (low.agentId === agent.id && high.agentId === agent.id) {
+        oppCounts.all.all += count;
+        const lowBucket = oppCounts[low.version] ?? (oppCounts[low.version] = {all: 0});
+        lowBucket.all += count;
+        if (high.version !== low.version) {
+          const highBucket = oppCounts[high.version] ?? (oppCounts[high.version] = {all: 0});
+          highBucket.all += count;
+        }
+        continue;
+      }
+      const ourEntry = low.agentId === agent.id
+        ? low
+        : (high.agentId === agent.id ? high : undefined);
+      const oppEntry = low.agentId === agent.id
+        ? high
+        : (high.agentId === agent.id ? low : undefined);
+      if (!ourEntry || !oppEntry) continue;
+
+      oppCounts.all.all += count;
+      oppCounts.all[oppEntry.agentSlug] = (oppCounts.all[oppEntry.agentSlug] ?? 0) + count;
+
+      const verBucket = oppCounts[ourEntry.version] ?? (oppCounts[ourEntry.version] = {all: 0});
+      verBucket.all += count;
+      verBucket[oppEntry.agentSlug] = (verBucket[oppEntry.agentSlug] ?? 0) + count;
+
+      const oppRec = oppMap.get(oppEntry.agentSlug);
+      if (oppRec) {
+        oppRec.count += count;
+      } else {
+        oppMap.set(oppEntry.agentSlug, {
+          slug: oppEntry.agentSlug,
+          name: oppEntry.agentName,
+          count,
+        });
+      }
+    }
+
     const sortedOpps = [...oppMap.values()].sort(
       (a, b) => b.count - a.count || a.name.localeCompare(b.name)
     );
     const oppOptNodes = (
       <>
-        <option value='all' selected={true}>All ({recentMatches.length})</option>
+        <option value='all' selected={true}>All ({oppCounts.all.all})</option>
         {sortedOpps.map(o => (
           <option value={o.slug}>{o.name} ({o.count})</option>
         ))}
@@ -1773,8 +1941,10 @@ export function renderAgentProfile(opts: {
     }
 
     profileDataMap[lKey] = {
+      ladderId: l.id,
       optionsHtml: String(optNodes),
       oppOptionsHtml: String(oppOptNodes),
+      oppCounts,
       vstats,
       reign,
     };
@@ -1805,9 +1975,9 @@ export function renderAgentProfile(opts: {
         ladderKey: lKey,
         isDefault,
         matches: recentMatches,
+        totalMatches: oppCounts.all.all,
+        agentLinks,
         publicDir,
-        projectMeta,
-        profileSlugs,
         nowSec,
       })
     );
@@ -1897,7 +2067,9 @@ export function renderAgentProfile(opts: {
         {matchesPanes}
       </section>
 
-      <script>{buildProfileScript(profileDataMap, defaultLadderKey)}</script>
+      <script>
+        {buildProfileScript(profileDataMap, defaultLadderKey, agent.slug, agentLinks)}
+      </script>
     </>
   );
 

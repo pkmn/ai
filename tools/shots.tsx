@@ -447,11 +447,11 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'projects',
       title: 'Agent Profile (Empty Filtered Matches)',
       description:
-        'Selecting retired version `1.0.0` in `#ver-select` shows historical `1.0.0` H2H rows ' +
-        'while displaying `"No matching battles."` in `#matches`.',
+        'Selecting an unplayed opponent (`pokerus`) in `#opp-select` displays ' +
+        '`"No matching battles."` in `#matches`.',
       path: '/projects/0-error/',
       act: async page => {
-        await page.selectOption('#ver-select', '1.0.0');
+        await page.selectOption('#opp-select', 'pokerus');
       },
     },
     {

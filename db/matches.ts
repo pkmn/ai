@@ -77,6 +77,7 @@ export interface MatchesPageQuery {
   slot?: string;
   ladderId?: string;
   agentSlug?: string;
+  agentVersion?: string;
   opponentSlug?: string;
   limit?: number;
   offset?: number;
@@ -462,7 +463,23 @@ export function getMatchesPage(
     where.push('m.ladder_id = ?');
     params.push(query.ladderId);
   }
-  if (query.agentSlug && query.opponentSlug) {
+  if (query.agentSlug && query.agentVersion && query.opponentSlug) {
+    where.push(
+      '((a1.slug = ? AND v1.version = ? AND a2.slug = ?) OR ' +
+      '(a2.slug = ? AND v2.version = ? AND a1.slug = ?))'
+    );
+    params.push(
+      query.agentSlug,
+      query.agentVersion,
+      query.opponentSlug,
+      query.agentSlug,
+      query.agentVersion,
+      query.opponentSlug
+    );
+  } else if (query.agentSlug && query.agentVersion) {
+    where.push('((a1.slug = ? AND v1.version = ?) OR (a2.slug = ? AND v2.version = ?))');
+    params.push(query.agentSlug, query.agentVersion, query.agentSlug, query.agentVersion);
+  } else if (query.agentSlug && query.opponentSlug) {
     where.push('((a1.slug = ? AND a2.slug = ?) OR (a1.slug = ? AND a2.slug = ?))');
     params.push(query.agentSlug, query.opponentSlug, query.opponentSlug, query.agentSlug);
   } else if (query.agentSlug) {
@@ -474,7 +491,7 @@ export function getMatchesPage(
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-  const countFromSql = (query.agentSlug || query.opponentSlug)
+  const countFromSql = (query.agentSlug || query.agentVersion || query.opponentSlug)
     ? `FROM matches m
        JOIN ladders l ON l.id = m.ladder_id
        JOIN agent_versions v1 ON v1.id = m.p1_version_id
@@ -536,7 +553,7 @@ export function getRecentMatchesForAgentOnLadder(
   db: DatabaseSync,
   agentId: number,
   ladderId: string,
-  limit = 30
+  limit = 25
 ): RecentMatchView[] {
   const rows = db.prepare(`
     ${RECENT_MATCH_SELECT_SQL}
