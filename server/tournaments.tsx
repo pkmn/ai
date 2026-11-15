@@ -1245,6 +1245,12 @@ export function renderBattleViewerPage(publicDir: string) {
   );
 }
 
+export function formatTournamentName(name: string): string {
+  return name
+    .replace(/^Tournament #\d+:\s*/i, '')
+    .replace(/\(?\bBO(\d+)\b\)?/gi, '(Bo$1)');
+}
+
 export function renderArenaTournamentsSummaryHtml(opts: {
   db: db.Database;
   publicDir: string;
@@ -1259,104 +1265,41 @@ export function renderArenaTournamentsSummaryHtml(opts: {
     return String(<p className='empty-state muted'>No championship tournaments scheduled yet.</p>);
   }
 
-  const ongoing = tournaments.filter(t => t.status === 'running' || t.status === 'scheduled');
-  const completed = tournaments
-    .filter(t => t.status === 'completed')
-    .sort((a, b) => (b.completedAt ?? b.startsAt) - (a.completedAt ?? a.startsAt));
+  const sorted = [...tournaments].sort(
+    (a, b) => a.startsAt - b.startsAt || a.id.localeCompare(b.id)
+  );
 
   return String(
     <>
-      {ongoing.length > 0 && (
-        <ul className='tour-ongoing'>
-          {ongoing.map(t => {
-            const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
-            const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
-            const entrants = entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
-            const badge = t.status === 'running'
-              ? <span className='yes'>{'\u25cf'} Live</span>
-              : <span className='muted'>Scheduled</span>;
-            let leaderSuffix: Child = undefined;
-            if (t.status === 'running' && entrants.length > 0) {
-              const leader = entrants[0];
-              const lHref = render.resolveAgentHref(
-                publicDir,
-                projectMeta,
-                leader.agentSlug,
-                leader.agentName,
-                profileSlugs
+      <div className='table-wrap'>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Name</th>
+              <th>Winner</th>
+              <th className='num'>Entrants</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((t, idx) => {
+              const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
+              const entrants =
+                entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
+              const hideCls = idx >= TABLE_PAGE_SIZE ? 'hide' : undefined;
+              const dateCell = t.status === 'running' ? (
+                <td>
+                  <a href={tourHref} className='live-pill'>{'\u25cf'} Live</a>
+                </td>
+              ) : (
+                <td>{formatUtcDate(t.startsAt)}</td>
               );
-              leaderSuffix = (
-                <>
-                  {' · Leader: '}
-                  {raw(render.formatAgentLink(leader.agentName, lHref, true))}{' '}
-                  <code>{leader.version}</code>
-                </>
-              );
-            }
-            let timingSuffix: Child = undefined;
-            if (t.status === 'scheduled') {
-              const closesAt = db.getTournamentClosesAt(t.startsAt);
-              timingSuffix = (
-                <>
-                  {` · starts ${formatUtcDateTime(t.startsAt)}` +
-                    ` (entries close ${formatUtcDateTime(closesAt)})`}
-                </>
-              );
-            }
-            return (
-              <li>
-                {badge}{' '}
-                <a href={tourHref} className='subtle'><strong>{t.name}</strong></a>
-                {' · '}
-                <tt>{fmtTitle}</tt> ({entrants.length} entrants)
-                {leaderSuffix}
-                {timingSuffix}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {completed.length > 0 ? (
-        <>
-          <div className='table-wrap'>
-            <table>
-              <thead>
-                <tr>
-                  <th>Tournament</th>
-                  <th>Format</th>
-                  <th>Winner</th>
-                  <th className='num' title='Tournament MAP Elo ± 95% CI'>Elo</th>
-                  <th className='num' title='Individual game Wins – Losses – Ties'>W–L–T</th>
-                  <th className='num' title='Round-Robin points'>Points</th>
-                </tr>
-              </thead>
-              <tbody>
-                {completed.map((t, idx) => {
-                  const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
-                  const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
-                  const entrants =
-                    entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
-                  const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
-                  const maxRrGames = entrants.length >= 2
-                    ? (entrants.length - 1) * t.gamesPerMatchup
-                    : t.gamesPerMatchup;
-                  const hideCls = idx >= TABLE_PAGE_SIZE ? 'hide' : undefined;
+              const displayName = formatTournamentName(t.name);
 
-                  if (!winner) {
-                    return (
-                      <tr className={hideCls}>
-                        <td>
-                          <a href={tourHref} className='subtle'><strong>{t.name}</strong></a>
-                        </td>
-                        <td><tt>{fmtTitle}</tt></td>
-                        <td className='muted'>—</td>
-                        <td className='num muted'>—</td>
-                        <td className='num muted'>—</td>
-                        <td className='num muted'>—</td>
-                      </tr>
-                    );
-                  }
-
+              let winnerCell: Child = <td className='muted'>-</td>;
+              if (t.status === 'completed') {
+                const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
+                if (winner) {
                   const wHref = render.resolveAgentHref(
                     publicDir,
                     projectMeta,
@@ -1364,46 +1307,55 @@ export function renderArenaTournamentsSummaryHtml(opts: {
                     winner.agentName,
                     profileSlugs
                   );
-                  const elo = Math.round(winner.elo);
-                  const ci = Math.round(1.96 * winner.se);
-                  const ptsStr = winner.points.toFixed(1);
-
-                  return (
-                    <tr className={hideCls}>
-                      <td>
-                        <a href={tourHref} className='subtle'><strong>{t.name}</strong></a>
-                      </td>
-                      <td><tt>{fmtTitle}</tt></td>
-                      <td>
-                        {raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
-                        <code>{winner.version}</code>
-                      </td>
-                      <td className='num'>
-                        <strong>{elo}</strong> <span className='muted'>±{ci}</span>
-                      </td>
-                      <td className='num'>
-                        {winner.gameWins}–{winner.gameLosses}–{winner.gameTies}
-                      </td>
-                      <td className='num'>
-                        <strong>{ptsStr}</strong> <span className='muted'>/ {maxRrGames}</span>
-                      </td>
-                    </tr>
+                  winnerCell = (
+                    <td>
+                      {raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
+                      <code>{winner.version}</code>
+                    </td>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <TablePager
-            id='tournaments-pager'
-            label='Completed tournaments pagination'
-            total={completed.length}
-            singular='tournament'
-            plural='tournaments'
-          />
-        </>
-      ) : (
-        ongoing.length > 0 && <p className='muted'>No completed past tournaments yet.</p>
-      )}
+                }
+              } else if (t.status === 'running') {
+                const leader = entrants[0];
+                if (leader) {
+                  const lHref = render.resolveAgentHref(
+                    publicDir,
+                    projectMeta,
+                    leader.agentSlug,
+                    leader.agentName,
+                    profileSlugs
+                  );
+                  winnerCell = (
+                    <td>
+                      <em>
+                        {raw(render.formatAgentLink(leader.agentName, lHref, true))}{' '}
+                        <code>{leader.version}</code>
+                      </em>
+                    </td>
+                  );
+                }
+              }
+
+              return (
+                <tr className={hideCls}>
+                  {dateCell}
+                  <td>
+                    <a href={tourHref} className='subtle'><strong>{displayName}</strong></a>
+                  </td>
+                  {winnerCell}
+                  <td className='num'>{entrants.length}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        id='tournaments-pager'
+        label='Tournaments pagination'
+        total={sorted.length}
+        singular='tournament'
+        plural='tournaments'
+      />
     </>
   );
 }

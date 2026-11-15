@@ -1065,9 +1065,11 @@ describe('tournament SSR views', () => {
     expect(arenaHubHtml).toContain('href="/arena/tournaments/2/"');
     expect(arenaHubHtml).toContain('href="/arena/tournaments/1/"');
     expect(arenaHubHtml).toContain('href="/arena/tournaments/3/"');
+    expect(arenaHubHtml).toContain('class="live-pill"');
     expect(arenaHubHtml).toContain('Live');
-    expect(arenaHubHtml).toContain('70–26–4');
     expect(arenaHubHtml).toContain('href="/projects/jaxcalibur/"');
+    expect(arenaHubHtml).toContain('<em><a href="/projects/metamon/"');
+    expect(arenaHubHtml).toContain('<td class="muted">-</td>');
   });
 
   test('renders tournament pages with event switcher or per-event rules', async () => {

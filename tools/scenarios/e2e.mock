@@ -21,7 +21,7 @@ register "AsterAI" --owner asterdev:asterdev.610005 --pending \
 
 tournament create 1 --name "Tournament #1: Gen 9 OU" --format gen9ou \
   --games 8 --tables 2 --hardware "GCP L4 Spot" --starts -1d --status completed
-tournament create 2 --name "Tournament #2: VGC 2026 Reg M-C OTS BO3" \
+tournament create 2 --name "Tournament #2: VGC 2026 Reg M-C OTS (Bo3)" \
   --format gen9championsvgc2026regmc --games 8 --tables 2 \
   --hardware "GCP L4 Spot" --starts -30m --status running
 

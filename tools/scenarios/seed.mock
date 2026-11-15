@@ -145,7 +145,7 @@ tournament play 1 --all --superfinal 1 --over 2d --id-prefix spring26
 tournament complete 1 --archive
 
 time now-2h
-tournament create 2 --name "Tournament #2: VGC 2026 Reg M-C OTS BO3" \
+tournament create 2 --name "Tournament #2: VGC 2026 Reg M-C OTS (Bo3)" \
   --format gen9championsvgc2026regmc --games 8 --tables 2 \
   --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now-2h
 tournament enter 2 \
@@ -161,7 +161,7 @@ tournament broadcast 2 0-error@1.2.0 mews-truck@1.0.0 jaxcalibur@1.3.0 missingno
   --cycle 4 --game 4
 
 time now-1h
-tournament create 3 --name "Tournament #3: VGC 2026 Reg M-D OTS BO3" \
+tournament create 3 --name "Tournament #3: VGC 2026 Reg M-D OTS (Bo3)" \
   --format gen9championsvgc2026regmc --games 8 --tables 2 \
   --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now+14d
 tournament enter 3 foul-play@1.4.1-t3=1560 --pkg oci --by pmariglia
