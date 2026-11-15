@@ -156,7 +156,7 @@ const ProjectCard = ({project, bibliography, arenaInfo}: {
                   <tt>{b.name}</tt> <em>(provisional)</em>
                 </a>
                 : <a href={`/arena/ladders/${b.slot}/`} className='subtle'>
-                  <tt>{b.name}</tt> #{b.rank}
+                  <tt>{b.name} #{b.rank}</tt>
                 </a>}
             </>)}
           </>}
