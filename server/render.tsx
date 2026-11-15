@@ -2353,27 +2353,26 @@ function renderSingleLadderArtifact(opts: {
     : undefined;
   const jsonHref = `/arena/ladders/${urlEnc}/index.json`;
 
-  let ladderArchiveNote: util.Child;
   let ladderBottomNote: util.Child;
   if (l.team === 'pools' && l.status === 'archived') {
     if (archive) {
-      ladderArchiveNote = (
+      ladderBottomNote = (
         <p className='battle-note muted'>
           Retired season archive:{' '}
-          <a href={archive.href} className='subtle'>
+          <a href={archive.href}>
             <code>{archive.name}</code>
           </a>{' '}
           (full Showdown battle logs &amp; unpacked teams) ·{' '}
-          <a href={teamsHref!} className='subtle'><code>teams.json</code></a> ·{' '}
-          <a href={jsonHref} className='subtle'><code>index.json</code></a>
+          <a href={teamsHref!}><code>teams.json</code></a> ·{' '}
+          <a href={jsonHref}><code>index.json</code></a>
         </p>
       );
     } else {
-      ladderArchiveNote = (
+      ladderBottomNote = (
         <p className='battle-note muted'>
           Retired season data:{' '}
-          <a href={teamsHref!} className='subtle'><code>teams.json</code></a> ·{' '}
-          <a href={jsonHref} className='subtle'><code>index.json</code></a> ·{' '}
+          <a href={teamsHref!}><code>teams.json</code></a> ·{' '}
+          <a href={jsonHref}><code>index.json</code></a> ·{' '}
           full battle log archive (<code>{`${l.id}-logs.7z`}</code>) pending upload.
         </p>
       );
@@ -2382,11 +2381,11 @@ function renderSingleLadderArtifact(opts: {
     ladderBottomNote = (
       <p className='battle-note muted'>
         Battle log archive (updated daily):{' '}
-        <a href={archive.href} className='subtle'>
+        <a href={archive.href}>
           <code>{archive.name}</code>
         </a>{' '}
         (full Showdown battle logs) ·{' '}
-        <a href={jsonHref} className='subtle'><code>index.json</code></a>
+        <a href={jsonHref}><code>index.json</code></a>
       </p>
     );
   }
@@ -2451,7 +2450,6 @@ function renderSingleLadderArtifact(opts: {
       </nav>
       <section id='standings'>
         {standingsPane}
-        {ladderArchiveNote}
       </section>
       <section id='history' className={historyRes.isEmpty || isUpcoming ? 'hide' : undefined}>
         <h3><a href='#history' className='subtle'>History</a></h3>

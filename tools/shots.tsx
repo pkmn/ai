@@ -626,7 +626,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Ladder: Retired Season (Archived with .7z & teams.json)',
       description:
         'Retired seasonal ladder (`/arena/ladders/gen9championsvgc2026regmc/`) in `archived` ' +
-        'status publishing `<id>-logs.7z`, `teams.json`, and `index.json`.',
+        'status publishing `<id>-logs.7z`, `teams.json`, and `index.json` above the footer.',
       path: `/arena/ladders/${VGC_LADDER_ID}/`,
       setup: fixture => setupRotatedSeasons(fixture, 'archived'),
     },
