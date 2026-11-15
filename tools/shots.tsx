@@ -176,7 +176,8 @@ function withSavepoint(
     raw.exec(
       'ROLLBACK TO SAVEPOINT shots_scenario; ' +
       'RELEASE SAVEPOINT shots_scenario; ' +
-      'UPDATE schema_migrations SET applied_at = applied_at'
+      "INSERT INTO schema_migrations (version, applied_at) VALUES ('_shots', 0) " +
+      'ON CONFLICT(version) DO UPDATE SET applied_at = applied_at + 1'
     );
     afterCleanup?.();
   };
@@ -196,6 +197,67 @@ function setupRotatedSeasons(
   return withSavepoint(
     fixture,
     raw => {
+      raw.prepare(
+        `INSERT INTO ladders (
+          id, slot, name, format, team, status, min, teams, created_at
+        ) VALUES (?, 'vgc', 'VGC', 'gen9championsvgc2026regmd', 'pools', 'active', 4, 20, ?)`
+      ).run('gen9championsvgc2026regmd', NOW_SECONDS - 600);
+      raw.prepare(
+        `INSERT INTO ladder_entries (
+          ladder_id, version_id, role, is_anchor, retired_at, elo, se, lcb, gxe,
+          rank_current, rank_min, rank_max, matches, ww, wt, split, tl, ll,
+          current_win_streak, current_loss_streak, max_win_streak, max_loss_streak,
+          best_rank, best_rank_at, max_lcb, max_elo, max_elo_se, max_elo_at,
+          max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
+          top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
+          top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
+          mean_turn_millis, peak_ram, settled_at
+        )
+        SELECT
+          'gen9championsvgc2026regmd', version_id, role, is_anchor, retired_at, elo, se, lcb, gxe,
+          rank_current, rank_min, rank_max, matches, ww, wt, split, tl, ll,
+          current_win_streak, current_loss_streak, max_win_streak, max_loss_streak,
+          best_rank, best_rank_at, max_lcb, max_elo, max_elo_se, max_elo_at,
+          max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
+          top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
+          top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
+          mean_turn_millis, peak_ram, settled_at
+        FROM ladder_entries
+        WHERE ladder_id = ?`
+      ).run(VGC_LADDER_ID);
+
+      if (mode === 'both') {
+        raw.prepare(
+          `INSERT INTO ladders (
+            id, slot, name, format, team, status, min, teams, created_at, archived_at
+          ) VALUES (?, 'vgc', 'VGC (Reg M-B)', 'gen9championsvgc2026regmb', 'pools', 'settling',
+            4, 20, ?, ?)`
+        ).run('gen9championsvgc2026regmb', NOW_SECONDS - 86400 * 14, NOW_SECONDS - 1800);
+        raw.prepare(
+          `INSERT INTO ladder_entries (
+            ladder_id, version_id, role, is_anchor, retired_at, elo, se, lcb, gxe,
+            rank_current, rank_min, rank_max, matches, ww, wt, split, tl, ll,
+            current_win_streak, current_loss_streak, max_win_streak, max_loss_streak,
+            best_rank, best_rank_at, max_lcb, max_elo, max_elo_se, max_elo_at,
+            max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
+            top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
+            top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
+            mean_turn_millis, peak_ram, settled_at
+          )
+          SELECT
+            'gen9championsvgc2026regmb', version_id, role, is_anchor, retired_at, elo, se, lcb, gxe,
+            rank_current, rank_min, rank_max, matches, ww, wt, split, tl, ll,
+            current_win_streak, current_loss_streak, max_win_streak, max_loss_streak,
+            best_rank, best_rank_at, max_lcb, max_elo, max_elo_se, max_elo_at,
+            max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
+            top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
+            top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
+            mean_turn_millis, peak_ram, settled_at
+          FROM ladder_entries
+          WHERE ladder_id = ?`
+        ).run(VGC_LADDER_ID);
+      }
+
       const targetStatus = mode === 'settling' ? 'settling' : 'archived';
       raw.prepare(
         `UPDATE ladders
@@ -209,19 +271,6 @@ function setupRotatedSeasons(
            WHERE ladder_id = ? AND role IN ('champion', 'challenger')`
         ).run(NOW_SECONDS - 3600, VGC_LADDER_ID);
       }
-      if (mode === 'both') {
-        raw.prepare(
-          `INSERT INTO ladders (
-            id, slot, name, format, team, status, min, teams, created_at, archived_at
-          ) VALUES (?, 'vgc', 'VGC (Reg M-B)', 'gen9championsvgc2026regmb', 'pools', 'settling',
-            4, 20, ?, ?)`
-        ).run('gen9championsvgc2026regmb', NOW_SECONDS - 86400 * 14, NOW_SECONDS - 1800);
-      }
-      raw.prepare(
-        `INSERT INTO ladders (
-          id, slot, name, format, team, status, min, teams, created_at
-        ) VALUES (?, 'vgc', 'VGC', 'gen9championsvgc2026regmd', 'pools', 'active', 4, 20, ?)`
-      ).run('gen9championsvgc2026regmd', NOW_SECONDS - 600);
     },
     () => {
       if (writeArchive) {
