@@ -2014,8 +2014,9 @@ function renderSingleLadderArtifact(opts: {
   html: string;
   standingsLadder: StandingsLadder;
   ladderDoc: LadderDocument;
-  top1SummaryCells?: util.Child;
   top1Entry?: StandingsEntry;
+  entrantCount: number;
+  matchCount: number;
   hasActiveEntries: boolean;
 } {
   const {
@@ -2066,7 +2067,6 @@ function renderSingleLadderArtifact(opts: {
   const seenPrimaryAgent = new Set<number>();
   const seenAnyAgent = new Set<number>();
   const jsonRows: StandingsEntry[] = [];
-  let top1SummaryCells: util.Child | undefined;
   let top1Entry: StandingsEntry | undefined;
   let standingsPane: util.Child;
 
@@ -2204,17 +2204,7 @@ function renderSingleLadderArtifact(opts: {
       };
       jsonRows.push(entryObj);
 
-      if (isRankedPrimary && e.rankCurrent === 1 && top1SummaryCells === undefined) {
-        top1SummaryCells = (
-          <>
-            {agentCell}
-            {eloCell}
-            {gxeCell}
-            {wltCell}
-            {streakCell}
-            {losCell}
-          </>
-        );
+      if (isRankedPrimary && e.rankCurrent === 1 && top1Entry === undefined) {
         top1Entry = entryObj;
       }
 
@@ -2436,12 +2426,28 @@ function renderSingleLadderArtifact(opts: {
     })),
   };
 
+  let pairMatchTotal = 0;
+  for (const p of pairs) {
+    pairMatchTotal += p.ww + p.wt + p.split + p.tl + p.ll;
+  }
+  let entryMatchSum = 0;
+  for (const e of entries) {
+    entryMatchSum += e.matches;
+  }
+  const matchCount = l.status === 'upcoming'
+    ? 0
+    : pairMatchTotal > 0
+      ? pairMatchTotal
+      : Math.round(entryMatchSum / 2);
+  const entrantCount = seenPrimaryAgent.size || seenAnyAgent.size;
+
   return {
     html,
     standingsLadder,
     ladderDoc,
-    top1SummaryCells,
     top1Entry,
+    entrantCount,
+    matchCount,
     hasActiveEntries: entries.some(e => e.role === 'champion' || e.role === 'challenger'),
   };
 }
@@ -2453,6 +2459,7 @@ export function renderArenaAndLadderArtifacts(opts: {
   staticDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
+  liveMatch?: arena.LiveMatch;
   nowSec: number;
 }): {
   arenaHtml: string;
@@ -2463,11 +2470,21 @@ export function renderArenaAndLadderArtifacts(opts: {
   archivedTeamsJsonById: Record<string, LadderTeamsDocument>;
   standingsJson: StandingsDocument;
 } {
-  const {db, renderer, publicDir, staticDir, projectMeta, profileSlugs, nowSec} = opts;
+  const {
+    db,
+    renderer,
+    publicDir,
+    staticDir,
+    projectMeta,
+    profileSlugs,
+    liveMatch,
+    nowSec,
+  } = opts;
   const ladders = db.getCurrentLadders();
   const pastLadders = db.getLadders().filter(
     l => l.status === 'settling' || l.status === 'archived'
   );
+  const lastCompletedByLadder = db.getLastCompletedAtByLadder();
 
   const ladderHtmlBySlot: Record<string, string> = {};
   const ladderJsonBySlot: Record<string, LadderDocument> = {};
@@ -2504,26 +2521,54 @@ export function renderArenaAndLadderArtifacts(opts: {
       </td>
     );
 
-    if (rendered.top1SummaryCells !== undefined) {
-      ladderSummaryRows.push(<tr>{ladderCell}{rendered.top1SummaryCells}</tr>);
+    let leaderCell: util.Child;
+    if (rendered.top1Entry !== undefined) {
+      const w = rendered.top1Entry;
+      const wHref = `/projects/${encodeURIComponent(w.slug)}/`;
+      leaderCell = (
+        <td>
+          {renderAgentLink(w.name, wHref, true)} <code>{w.version}</code>
+        </td>
+      );
     } else {
       const stateLabel = l.status === 'upcoming'
         ? 'Upcoming'
         : rendered.hasActiveEntries
           ? 'Provisional'
           : 'No entries yet';
-      ladderSummaryRows.push(
-        <tr>
-          {ladderCell}
-          <td className='muted'>{stateLabel}</td>
-          <td className='num muted'>—</td>
-          <td className='num muted'>—</td>
-          <td className='num muted'>—</td>
-          <td className='center muted'>—</td>
-          <td className='num muted'>—</td>
-        </tr>
-      );
+      leaderCell = <td className='muted'>{stateLabel}</td>;
     }
+
+    const isLive = l.status !== 'upcoming' &&
+      liveMatch !== undefined &&
+      (liveMatch.ladderId === l.id || liveMatch.slot === l.slot);
+    let lastCell: util.Child = <td className='num muted'>—</td>;
+    if (isLive) {
+      lastCell = (
+        <td className='num'>
+          <a href='/arena/battles/' className='live-pill'>{'\u25cf'} Live</a>
+        </td>
+      );
+    } else if (l.status !== 'upcoming') {
+      const lastTs = lastCompletedByLadder.get(l.id);
+      if (lastTs !== undefined) {
+        lastCell = (
+          <td className='num muted' data-ts={lastTs}>
+            {formatRelativeTime(nowSec, lastTs)}
+          </td>
+        );
+      }
+    }
+
+    ladderSummaryRows.push(
+      <tr>
+        {ladderCell}
+        {leaderCell}
+        <td className='num'>{rendered.entrantCount.toLocaleString('en-US')}</td>
+        <td className='num'>{rendered.matchCount.toLocaleString('en-US')}</td>
+        {lastCell}
+      </tr>
+    );
   }
 
   const pastSeasonRows: util.Child[] = [];
@@ -2687,21 +2732,10 @@ export function renderArenaAndLadderArtifacts(opts: {
             <thead>
               <tr>
                 <th>Ladder</th>
-                <th>Agent</th>
-                <th className='num' title='MAP Davidson Elo ± 95% Confidence Interval'>Elo</th>
-                <th className='num' title='Expected win percentage against prior N(1500, 350^2)'>
-                  GXE
-                </th>
-                <th
-                  className='num'
-                  title='2-game blind-pair Match Wins – Losses – Ties (1-1 splits)'
-                >
-                  W–L–T
-                </th>
-                <th className='center' title='Current consecutive outright match win/loss streak'>
-                  Streak
-                </th>
-                <th className='num' title='Pairwise Likelihood of Superiority over #2'>LOS</th>
+                <th>Leader</th>
+                <th className='num'>Entrants</th>
+                <th className='num'>Matches</th>
+                <th className='num'>Last</th>
               </tr>
             </thead>
             <tbody>{ladderSummaryRows}</tbody>
@@ -3597,7 +3631,10 @@ export function register(app: polka.Polka, options: Options) {
   } | undefined;
 
   const getArenaBundle = (dbToken: string, nowSec: number) => {
-    const bundleToken = `${dbToken}:${util.formatUtcDate(nowSec)}`;
+    const liveDoc = arenaHandle.getLiveDocument(nowSec);
+    const activeLive = !liveDoc.stale ? liveDoc.live : undefined;
+    const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
+    const bundleToken = `${dbToken}:${util.formatUtcDate(nowSec)}:${liveKey}`;
     if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
     const ctx = getContext(dbToken);
     const bundle = renderArenaAndLadderArtifacts({
@@ -3607,6 +3644,7 @@ export function register(app: polka.Polka, options: Options) {
       staticDir,
       projectMeta: ctx.projectMeta,
       profileSlugs: ctx.profileSlugs,
+      liveMatch: activeLive,
       nowSec,
     });
     cachedArenaBundle = {token: bundleToken, bundle};
@@ -3702,7 +3740,10 @@ export function register(app: polka.Polka, options: Options) {
   const handleArenaHub = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
     const nowSec = getNowSec();
     const dbToken = getDbToken();
-    const token = `${dbToken}:${util.formatUtcDate(nowSec)}`;
+    const liveDoc = arenaHandle.getLiveDocument(nowSec);
+    const activeLive = !liveDoc.stale ? liveDoc.live : undefined;
+    const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
+    const token = `${dbToken}:${util.formatUtcDate(nowSec)}:${liveKey}`;
     if (asJson) {
       sendCached(
         req,

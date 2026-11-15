@@ -597,6 +597,19 @@ export function getMatchCountsBySlot(db: DatabaseSync): Record<string, number> {
   return counts;
 }
 
+export function getLastCompletedAtByLadder(db: DatabaseSync): Map<string, number> {
+  const rows = db.prepare(`
+    SELECT ladder_id, MAX(completed_at) AS last_completed_at
+    FROM matches
+    GROUP BY ladder_id
+  `).all() as Array<{ladder_id: string; last_completed_at: number | null}>;
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    if (r.last_completed_at !== null) map.set(r.ladder_id, r.last_completed_at);
+  }
+  return map;
+}
+
 export function getRecentMatches(db: DatabaseSync, limit = 25): RecentMatchView[] {
   const rows = db.prepare(`
     ${RECENT_MATCH_SELECT_SQL}

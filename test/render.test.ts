@@ -584,10 +584,15 @@ describe('populated Arena leaderboard views', () => {
 
   test('renders #1 ladder leaders on the /arena hub', async () => {
     const arenaHubHtml = await h.getText('/arena/');
+    expect(arenaHubHtml).toContain('<th>Leader</th>');
+    expect(arenaHubHtml).toContain('<th class="num">Entrants</th>');
+    expect(arenaHubHtml).toContain('<th class="num">Matches</th>');
+    expect(arenaHubHtml).toContain('<th class="num">Last</th>');
     expect(arenaHubHtml).toContain('href="/arena/ladders/rby/"');
     expect(arenaHubHtml).toContain('href="/arena/ladders/adv/"');
     expect(arenaHubHtml).toContain('href="/projects/jaxcalibur/"');
     expect(arenaHubHtml).toContain('href="/projects/metamon/"');
+    expect(arenaHubHtml).toContain('<a href="/arena/battles/" class="live-pill">');
   });
 
   test('ranks settled entries with LOS-next probabilities while unranking anchors', async () => {

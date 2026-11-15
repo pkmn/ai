@@ -695,6 +695,10 @@ export class Database extends SqliteDatabase {
     return matches.getMatchCountsBySlot(this.db);
   }
 
+  getLastCompletedAtByLadder(): Map<string, number> {
+    return matches.getLastCompletedAtByLadder(this.db);
+  }
+
   getLeaderboardEntries(ladderId: string): entries.LeaderboardEntryView[] {
     return entries.getLeaderboardEntries(this.db, ladderId);
   }
