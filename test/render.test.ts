@@ -694,6 +694,7 @@ describe('populated Arena leaderboard views', () => {
     expect(metaProfileHtml).toContain('id="agent-profile"');
     expect(metaProfileHtml).toContain('src="/projects/metamon.png"');
     expect(metaProfileHtml).toContain('UT-Austin-RPL/metamon');
+    expect(metaProfileHtml).toContain('class="ver-picker" id="ver-picker"');
     expect(metaProfileHtml).toContain('id="ver-select"');
     expect(metaProfileHtml).toContain('1.2.0 (active)');
     expect(metaProfileHtml).toContain('1.0.0 (active)');
@@ -702,6 +703,7 @@ describe('populated Arena leaderboard views', () => {
 
     const athenaProfileHtml = await h.getText('/projects/athena/');
     expect(athenaProfileHtml).toContain('class="hide reign table-wrap"');
+    expect(athenaProfileHtml).toContain('class="hide ver-picker" id="ver-picker"');
   });
 
   test('gates profile Best Matchup or Nemesis callouts on at least 10 matches', async () => {

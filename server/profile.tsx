@@ -34,6 +34,7 @@ interface VersionDynamicStats {
 
 interface LadderProfileClientData {
   ladderId: string;
+  multiVersion: boolean;
   optionsHtml: string;
   oppOptionsHtml: string;
   oppCounts: Record<string, Record<string, number>>;
@@ -1088,6 +1089,8 @@ function buildProfileScript(
     const formatTitles = ${render.safeInlineJson(render.FORMAT_TITLES)};
     const ladderRadios = document.querySelectorAll('input[name="ladder"]');
     const verSelect = document.getElementById('ver-select');
+    const verPicker = document.getElementById('ver-picker');
+    const verSep = document.getElementById('ver-sep');
     const oppSelect = document.getElementById('opp-select');
     const reignTbody = document.getElementById('reign-tbody');
     const reignWrap = reignTbody ? reignTbody.closest('.reign') : null;
@@ -1408,6 +1411,8 @@ function buildProfileScript(
         verSelect.innerHTML = ladData.optionsHtml;
         verSelect.value = 'all';
       }
+      if (verPicker) verPicker.classList.toggle('hide', !ladData.multiVersion);
+      if (verSep) verSep.classList.toggle('hide', !ladData.multiVersion);
       if (oppSelect && ladData.oppOptionsHtml) {
         oppSelect.innerHTML = ladData.oppOptionsHtml;
         oppSelect.value = 'all';
@@ -1957,6 +1962,7 @@ export function renderAgentProfile(opts: {
 
     profileDataMap[lKey] = {
       ladderId: l.id,
+      multiVersion: agentEntries.length > 1,
       optionsHtml: String(optNodes),
       oppOptionsHtml: String(oppOptNodes),
       oppCounts,
@@ -2007,8 +2013,11 @@ export function renderAgentProfile(opts: {
         <nav aria-label='Format'>
           <ul>{formatNavParts}</ul>
         </nav>
-        <span className='muted'>·</span>
-        <div className='ver-picker'>
+        <span id='ver-sep' className={initialData.multiVersion ? 'muted' : 'muted hide'}>·</span>
+        <div
+          id='ver-picker'
+          className={initialData.multiVersion ? 'ver-picker' : 'ver-picker hide'}
+        >
           <label htmlFor='ver-select' className='muted'>Version</label>
           <select id='ver-select' className='min-select' aria-label='Version'>
             {raw(initialData.optionsHtml)}

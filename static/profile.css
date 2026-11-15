@@ -36,6 +36,10 @@ h2 svg {
   font-size: 0.95em;
 }
 
+.ver-picker.hide {
+  display: none;
+}
+
 .min-select {
   max-width: 100%;
   padding: 0.15rem 1.65rem 0.15rem 0.55rem;
