@@ -23,9 +23,8 @@ git merge --ff-only origin/main
 git diff --quiet "$HEAD" package.json teams/package.json >/dev/null ||
     npm install --silent
 
-# Compile TypeScript and sync sparse teams submodules
+# Compile TypeScript
 npm run compile
-node build/tools/setup --submodules-only
 
 # Post-compile smoke verification with automatic rollback on failure
 verify_arena() {
