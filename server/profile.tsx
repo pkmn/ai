@@ -81,18 +81,23 @@ function buildReignRowsHtml(
     : 0;
   const max1 = Math.max(stats.top1MaxStreakSeconds, cur1);
   const tot1 = stats.top1TotalSeconds;
+  const has1 = cur1 > 0 || max1 > 0 || tot1 > 0;
 
   const cur10 = stats.top10EnteredAt !== undefined
     ? Math.max(0, nowSec - stats.top10EnteredAt)
     : 0;
   const max10 = Math.max(stats.top10MaxStreakSeconds, cur10);
   const tot10 = stats.top10TotalSeconds;
+  const has10 = cur10 > 0 || max10 > 0 || tot10 > 0;
 
   const cur100 = stats.top100EnteredAt !== undefined
     ? Math.max(0, nowSec - stats.top100EnteredAt)
     : 0;
   const max100 = Math.max(stats.top100MaxStreakSeconds, cur100);
   const tot100 = stats.top100TotalSeconds;
+  const has100 = cur100 > 0 || max100 > 0 || tot100 > 0;
+
+  if (!has1 && !has10 && !has100) return '';
 
   const t1Tip = 'Guaranteed #1 (rank = 1 & settled)';
   const t10Tip = 'Guaranteed Top 10 at 95% confidence (rank_max <= 10)';
@@ -100,24 +105,30 @@ function buildReignRowsHtml(
 
   return String(
     <>
-      <tr>
-        <td title={t1Tip}><strong>Top 1</strong></td>
-        <td className='num'>{formatDurationCell(cur1, cur1 > 0)}</td>
-        <td className='num'>{formatDurationCell(max1)}</td>
-        <td className='num'>{formatDurationCell(tot1)}</td>
-      </tr>
-      <tr>
-        <td title={t10Tip}><strong>Top 10</strong></td>
-        <td className='num'>{formatDurationCell(cur10, cur10 > 0)}</td>
-        <td className='num'>{formatDurationCell(max10)}</td>
-        <td className='num'>{formatDurationCell(tot10)}</td>
-      </tr>
-      <tr>
-        <td title={t100Tip}><strong>Top 100</strong></td>
-        <td className='num'>{formatDurationCell(cur100, cur100 > 0)}</td>
-        <td className='num'>{formatDurationCell(max100)}</td>
-        <td className='num'>{formatDurationCell(tot100)}</td>
-      </tr>
+      {has1 && (
+        <tr>
+          <td title={t1Tip}><strong>Top 1</strong></td>
+          <td className='num'>{formatDurationCell(cur1, cur1 > 0)}</td>
+          <td className='num'>{formatDurationCell(max1)}</td>
+          <td className='num'>{formatDurationCell(tot1)}</td>
+        </tr>
+      )}
+      {has10 && (
+        <tr>
+          <td title={t10Tip}><strong>Top 10</strong></td>
+          <td className='num'>{formatDurationCell(cur10, cur10 > 0)}</td>
+          <td className='num'>{formatDurationCell(max10)}</td>
+          <td className='num'>{formatDurationCell(tot10)}</td>
+        </tr>
+      )}
+      {has100 && (
+        <tr>
+          <td title={t100Tip}><strong>Top 100</strong></td>
+          <td className='num'>{formatDurationCell(cur100, cur100 > 0)}</td>
+          <td className='num'>{formatDurationCell(max100)}</td>
+          <td className='num'>{formatDurationCell(tot100)}</td>
+        </tr>
+      )}
     </>
   );
 }
@@ -1079,6 +1090,7 @@ function buildProfileScript(
     const verSelect = document.getElementById('ver-select');
     const oppSelect = document.getElementById('opp-select');
     const reignTbody = document.getElementById('reign-tbody');
+    const reignWrap = reignTbody ? reignTbody.closest('.reign') : null;
     const matchupsSec = document.getElementById('matchups');
     const matchesSec = document.getElementById('matches');
     const panes = document.querySelectorAll('.profile-pane');
@@ -1354,11 +1366,14 @@ function buildProfileScript(
         document.getElementById('stat-streak').innerHTML = s.streak;
         document.getElementById('stat-telemetry').innerHTML = s.telemetry;
       }
-      const reignHtml =
-        (ladData.reign && ladData.reign[curVer]) ||
-        (ladData.reign && ladData.reign.all);
-      if (reignTbody && reignHtml) {
+      const reignHtml = ladData.reign
+        ? (ladData.reign[curVer] !== undefined ? ladData.reign[curVer] : (ladData.reign.all || ''))
+        : '';
+      if (reignTbody) {
         reignTbody.innerHTML = reignHtml;
+      }
+      if (reignWrap) {
+        reignWrap.classList.toggle('hide', !reignHtml);
       }
       void applyMatchesPager(false);
       if (matchupsSec) {
@@ -2027,7 +2042,7 @@ export function renderAgentProfile(opts: {
           </table>
         </div>
 
-        <div className='table-wrap reign'>
+        <div className={initialData.reign.all ? 'table-wrap reign' : 'table-wrap reign hide'}>
           <table>
             <thead>
               <tr>

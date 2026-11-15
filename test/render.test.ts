@@ -699,6 +699,9 @@ describe('populated Arena leaderboard views', () => {
     expect(metaProfileHtml).toContain('1.0.0 (active)');
     expect(metaProfileHtml).toContain('class="h2h-table"');
     expect(metaProfileHtml).toContain('Top 10');
+
+    const athenaProfileHtml = await h.getText('/projects/athena/');
+    expect(athenaProfileHtml).toContain('class="hide reign table-wrap"');
   });
 
   test('gates profile Best Matchup or Nemesis callouts on at least 10 matches', async () => {
