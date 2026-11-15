@@ -66,7 +66,7 @@ MOCK=1 npm run mock -- simulate --server http://localhost:1234 --secret dev-secr
 To wipe all mock overlays and return to clean unseeded configs:
 
 ```sh
-rm -rf .mock db/data/arena.sqlite* && npm run build
+npm run clean && npm run build
 ```
 
 ### Unseeded Mode
@@ -92,7 +92,7 @@ npm run dev
 | `npm start` | Start `build/server` without `DEV_AUTH=1` (production entrypoint). |
 | `npm run lint` | Run `eslint --cache`, `stylelint static/*.css`, and `hyperlink public --check-anchors`. |
 | `npm run fix` | Auto-fix lint and CSS ordering issues (`eslint --fix && stylelint --fix static/*.css`). |
-| `npm run clean` | Remove `public/`, `build/`, `.tsbuildinfo`, and `.eslintcache`. |
+| `npm run clean` | Remove `public/`, `build/`, `.tsbuildinfo`, `.eslintcache`, `.mock/`, and `db/data/`. |
 | `npm run test` | Run `npm run build && npm run lint`. |
 | `npm run test:integration` | Run `npm run test` followed by the full Vitest suite (`vitest test`). |
 | `npm run shots` | Capture & verify responsive light/dark screenshots across 4 viewports into `.shots/`. |

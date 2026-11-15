@@ -206,7 +206,7 @@ To wipe all seeded state and return to clean unseeded configs (`config/ladders.y
 `static/projects.yml`):
 
 ```sh
-rm -rf .mock db/data/arena.sqlite* && npm run build
+npm run clean && npm run build
 ```
 
 ### Step 2: Switch Auth Personas via `GET /auth/dev`
