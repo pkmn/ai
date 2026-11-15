@@ -1236,5 +1236,35 @@ describe('account routes', () => {
       expect(headJson.status).toBe(200);
       expect(await headJson.text()).toBe('');
     });
+
+    test('paginates version history on /account/ at 25 rows per page', async () => {
+      const agent = db.getAgentBySlug('0-error')!;
+      const dev = db.getDeveloperByGitHub('pre')!;
+      for (let i = 1; i <= 27; i++) {
+        const sub = db.createSubmission({
+          agentId: agent.id,
+          developerId: dev.id,
+          version: `1.0.${i}`,
+          package: 'bundle',
+          url: `https://github.com/pkmn/0-error-${i}.tar.zst`,
+          sha256: SHA_A,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_762_800_000 + i,
+        });
+        db.applySubmissionStatus({
+          versionId: sub.id,
+          smokeStatus: 'failed',
+          now: 1_762_800_000 + i + 1,
+        });
+      }
+
+      const res = await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('id="history-pager"');
+      expect(html).toContain('Page 1 of 2 (27 versions)');
+    });
   });
 });

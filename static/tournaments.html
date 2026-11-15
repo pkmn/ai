@@ -350,9 +350,18 @@
       }
     };
 
+    const pageSize = 25;
+    let standingsPage = 1;
+    let gamesPage = 1;
+
     const renderStandings = () => {
       const bodyEl = document.getElementById('standings-body');
       if (!bodyEl || !Array.isArray(standings) || standings.length === 0) return;
+      const total = standings.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (standingsPage > totalPages) standingsPage = totalPages;
+      if (standingsPage < 1) standingsPage = 1;
+      const start = (standingsPage - 1) * pageSize;
       const liveTbs = getLiveTables();
       const maxRrGames = Math.max(1, (standings.length - 1) * gamesPerMatchup);
       const rows = standings.map((e, idx) => {
@@ -370,7 +379,8 @@
         const ci = Math.round(e.ci95);
         const ptsStr = Number(e.points || 0).toFixed(1);
         const sbStr = Math.round(e.sonnebornBerger || 0).toLocaleString('en-US');
-        return '<tr>' +
+        const hideAttr = (idx < start || idx >= start + pageSize) ? ' class="hide"' : '';
+        return '<tr' + hideAttr + '>' +
           '<td><strong>' + rankNum + '</strong>' + sfBadge + '</td>' +
           '<td>' + agentHtml + '</td>' +
           '<td class="num"><strong>' + elo + '</strong> <span class="muted">±' + ci + '</span></td>' +
@@ -383,13 +393,27 @@
 
       const ptsTitle = 'Round-Robin points out of ' + maxRrGames +
         ' games (+1.0 per win, +0.5 per tie)';
+      const hideCls = totalPages <= 1 ? ' hide' : '';
+      const prevDis = standingsPage <= 1 ? ' disabled' : '';
+      const nextDis = standingsPage >= totalPages ? ' disabled' : '';
+      const word = total === 1 ? 'entrant' : 'entrants';
+      const info = 'Page ' + standingsPage + ' of ' + totalPages +
+        ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
       bodyEl.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
         '<th>#</th><th>Agent</th>' +
         '<th class="num" title="Tournament MAP Elo ± 95% CI">Elo</th>' +
         '<th class="num" title="Standalone individual BYOT game Wins – Losses – Ties">W–L–T</th>' +
         '<th class="num" title="' + esc(ptsTitle) + '">Points</th>' +
         '<th class="num" title="Sonneborn-Berger tiebreak score">S–B</th>' +
-        '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div class="pager' + hideCls + '" id="standings-pager" aria-label="Standings pagination" ' +
+        'data-table-pager data-page-size="25" data-singular="entrant" data-plural="entrants">' +
+        '<button type="button" class="pager-btn" id="standings-pager-prev" ' +
+        'data-pager-prev' + prevDis + '>&larr; Prev</button>' +
+        '<span class="pager-info muted" id="standings-pager-info" data-pager-info>' +
+        esc(info) + '</span>' +
+        '<button type="button" class="pager-btn" id="standings-pager-next" ' +
+        'data-pager-next' + nextDis + '>Next &rarr;</button></div>';
     };
 
     const renderCrosstable = () => {
@@ -538,6 +562,32 @@
       return tr;
     };
 
+    const applyGamesPager = () => {
+      if (!gamesTbody) return;
+      const rows = Array.from(gamesTbody.querySelectorAll('tr:not(.empty-row)'));
+      const total = rows.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (gamesPage > totalPages) gamesPage = totalPages;
+      if (gamesPage < 1) gamesPage = 1;
+      const start = (gamesPage - 1) * pageSize;
+      rows.forEach((row, idx) => {
+        row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+      });
+      const pager = document.getElementById('games-pager');
+      const prevBtn = document.getElementById('games-pager-prev');
+      const nextBtn = document.getElementById('games-pager-next');
+      const infoEl = document.getElementById('games-pager-info');
+      if (pager && prevBtn && nextBtn && infoEl) {
+        pager.classList.toggle('hide', totalPages <= 1);
+        prevBtn.disabled = gamesPage <= 1;
+        nextBtn.disabled = gamesPage >= totalPages;
+        const word = total === 1 ? 'game' : 'games';
+        infoEl.textContent =
+          'Page ' + gamesPage + ' of ' + totalPages +
+          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+      }
+    };
+
     const syncLiveGameRows = () => {
       if (!gamesTbody) return;
       gamesTbody.querySelectorAll('tr.live-game-row').forEach(el => el.remove());
@@ -554,6 +604,7 @@
         gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="6" class="center muted">' +
           'No completed games yet.</td></tr>';
       }
+      applyGamesPager();
     };
 
     const prependCompletedGameRow = g => {
@@ -580,10 +631,7 @@
         anchor = anchor.nextElementSibling;
       }
       gamesTbody.insertBefore(tr, anchor);
-      const completedRows = gamesTbody.querySelectorAll('tr[data-game-id]');
-      for (let i = completedRows.length - 1; i >= 50; i--) {
-        completedRows[i].remove();
-      }
+      applyGamesPager();
     };
 
     const renderArchiveMeta = () => {
@@ -616,6 +664,30 @@
     document.addEventListener('click', async ev => {
       const target = ev.target instanceof Element ? ev.target : undefined;
       if (!target) return;
+      if (target.closest('#standings-pager-prev')) {
+        if (standingsPage > 1) {
+          standingsPage--;
+          renderStandings();
+        }
+        return;
+      }
+      if (target.closest('#standings-pager-next')) {
+        standingsPage++;
+        renderStandings();
+        return;
+      }
+      if (target.closest('#games-pager-prev')) {
+        if (gamesPage > 1) {
+          gamesPage--;
+          applyGamesPager();
+        }
+        return;
+      }
+      if (target.closest('#games-pager-next')) {
+        gamesPage++;
+        applyGamesPager();
+        return;
+      }
       const liveBtn = target.closest('[data-live-table]');
       if (liveBtn) {
         ev.preventDefault();

@@ -400,6 +400,10 @@ tr.battle-row.expanded .battle-toggle {
   font-size: 0.9em;
 }
 
+.pager.hide {
+  display: none;
+}
+
 .pager-btn {
   padding: 0.22rem 0.75rem;
   color: var(--fg-accent-color);

@@ -40,18 +40,60 @@
 <script>
   document.addEventListener('DOMContentLoaded', () => {
     const verRadios = document.querySelectorAll('input[name="versions"]');
-    const rows = document.querySelectorAll('.standings-table tbody tr');
-    verRadios.forEach(r => r.addEventListener('change', () => {
-      const mode = r.value;
+    const rows = Array.from(document.querySelectorAll('.standings-table tbody tr'));
+    const pager = document.getElementById('standings-pager');
+    const prevBtn = document.getElementById('standings-pager-prev');
+    const nextBtn = document.getElementById('standings-pager-next');
+    const infoEl = document.getElementById('standings-pager-info');
+    const pageSize = 25;
+    let mode = 'active';
+    let page = 1;
+
+    const applyStandings = () => {
+      const matching = rows.filter(row => {
+        if (mode === 'all') return true;
+        if (mode === 'best') return Boolean(row.dataset.best);
+        return Boolean(row.dataset.active);
+      });
+      const total = matching.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (page > totalPages) page = totalPages;
+      if (page < 1) page = 1;
+      const start = (page - 1) * pageSize;
+      const visible = new Set(matching.slice(start, start + pageSize));
       rows.forEach(row => {
-        if (mode === 'all') {
-          row.classList.remove('hide');
-        } else if (mode === 'best') {
-          row.classList.toggle('hide', !row.dataset.best);
-        } else {
-          row.classList.toggle('hide', !row.dataset.active);
+        row.classList.toggle('hide', !visible.has(row));
+      });
+      if (pager && prevBtn && nextBtn && infoEl) {
+        pager.classList.toggle('hide', totalPages <= 1);
+        prevBtn.disabled = page <= 1;
+        nextBtn.disabled = page >= totalPages;
+        const word = total === 1 ? 'entry' : 'entries';
+        infoEl.textContent =
+          'Page ' + page + ' of ' + totalPages +
+          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+      }
+    };
+
+    verRadios.forEach(r => r.addEventListener('change', () => {
+      mode = r.value;
+      page = 1;
+      applyStandings();
+    }));
+
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        if (page > 1) {
+          page--;
+          applyStandings();
         }
       });
-    }));
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        page++;
+        applyStandings();
+      });
+    }
   });
 </script>

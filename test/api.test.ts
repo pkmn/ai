@@ -636,7 +636,9 @@ describe('Arena live heartbeats & match completion', () => {
 
     const {doc} = await fetchLive();
     expect(doc.live).toBeUndefined();
-    expect(doc.recentMatches).toHaveLength(45);
+    expect(doc.recentMatches).toHaveLength(25);
+    expect(doc.totalMatches).toBe(45);
+    expect(doc.pageSize).toBe(25);
   });
 
   test('ignores duplicate match-complete deliveries idempotently', async () => {

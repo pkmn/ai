@@ -9,11 +9,13 @@ import {LADDERS_FILE, SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from
 import type * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
 import {
+  TABLE_PAGE_SIZE,
   VERSION_RE,
   escapeHtml,
   formatUtcDate,
   formatUtcDateTime,
   installHeadSupport,
+  renderTablePager,
   renderTemplate,
   root,
 } from '../static/util';
@@ -235,7 +237,7 @@ function renderHistorySection(
     </section>`;
   }
 
-  const rows = versions.map(v => {
+  const rows = versions.map((v, idx) => {
     let ladderIds: string[] = [];
     try {
       const parsed = JSON.parse(v.laddersJson) as unknown;
@@ -319,7 +321,10 @@ function renderHistorySection(
       stateCell = '<span class="muted">Retired</span>';
     }
 
-    const rowClass = isRetired ? ' class="secondary"' : '';
+    const classes: string[] = [];
+    if (isRetired) classes.push('secondary');
+    if (idx >= TABLE_PAGE_SIZE) classes.push('hide');
+    const rowClass = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
     const verHtml = isFullyActive
       ? `<code><strong>${escapeHtml(v.version)}</strong></code>`
       : `<code>${escapeHtml(v.version)}</code>`;
@@ -333,6 +338,14 @@ function renderHistorySection(
       <td class="num muted">${formatUtcDate(v.submittedAt)}</td>
     </tr>`;
   }).join('');
+
+  const pagerHtml = renderTablePager({
+    id: 'history-pager',
+    label: 'Version history pagination',
+    total: versions.length,
+    singular: 'version',
+    plural: 'versions',
+  });
 
   return `<section id="history">
     <h3><a href="#history" class="subtle">History</a></h3>
@@ -351,6 +364,7 @@ function renderHistorySection(
         <tbody>${rows}</tbody>
       </table>
     </div>
+    ${pagerHtml}
   </section>`;
 }
 

@@ -199,3 +199,40 @@ export function formatUtcDateTime(epochSeconds: number): string {
   const iso = new Date(epochSeconds * 1000).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
+
+export const TABLE_PAGE_SIZE = 25;
+
+export function renderTablePager(opts: {
+  id?: string;
+  label: string;
+  total: number;
+  singular: string;
+  plural: string;
+  pageSize?: number;
+  prevLabel?: string;
+  nextLabel?: string;
+}): string {
+  const pageSize = opts.pageSize ?? TABLE_PAGE_SIZE;
+  const totalPages = Math.max(1, Math.ceil(opts.total / pageSize));
+  const hideCls = totalPages <= 1 ? ' hide' : '';
+  const nextDis = totalPages <= 1 ? ' disabled' : '';
+  const idAttr = opts.id ? ` id="${escapeHtml(opts.id)}"` : '';
+  const prevIdAttr = opts.id ? ` id="${escapeHtml(opts.id)}-prev"` : '';
+  const infoIdAttr = opts.id ? ` id="${escapeHtml(opts.id)}-info"` : '';
+  const nextIdAttr = opts.id ? ` id="${escapeHtml(opts.id)}-next"` : '';
+  const word = opts.total === 1 ? opts.singular : opts.plural;
+  const info = `Page 1 of ${totalPages} (${opts.total.toLocaleString('en-US')} ${word})`;
+  const prevLabel = opts.prevLabel ?? '&larr; Prev';
+  const nextLabel = opts.nextLabel ?? 'Next &rarr;';
+  return `<div class="pager${hideCls}"${idAttr} aria-label="${escapeHtml(opts.label)}" ` +
+    `data-table-pager data-page-size="${pageSize}" ` +
+    `data-singular="${escapeHtml(opts.singular)}" ` +
+    `data-plural="${escapeHtml(opts.plural)}">\n` +
+    `  <button type="button" class="pager-btn"${prevIdAttr} ` +
+    `data-pager-prev disabled>${prevLabel}</button>\n` +
+    `  <span class="pager-info muted"${infoIdAttr} ` +
+    `data-pager-info>${escapeHtml(info)}</span>\n` +
+    `  <button type="button" class="pager-btn"${nextIdAttr} ` +
+    `data-pager-next${nextDis}>${nextLabel}</button>\n` +
+    '</div>';
+}

@@ -491,7 +491,7 @@ export function getMatchesPage(
     ${whereSql}
   `).get(...params) as {count: number};
 
-  const limit = Math.max(1, Math.min(200, Math.trunc(query.limit ?? 50)));
+  const limit = Math.max(1, Math.min(200, Math.trunc(query.limit ?? 25)));
   const offset = Math.max(0, Math.trunc(query.offset ?? 0));
 
   const rows = db.prepare(`
@@ -523,7 +523,7 @@ export function getMatchCountsBySlot(db: DatabaseSync): Record<string, number> {
   return counts;
 }
 
-export function getRecentMatches(db: DatabaseSync, limit = 50): RecentMatchView[] {
+export function getRecentMatches(db: DatabaseSync, limit = 25): RecentMatchView[] {
   const rows = db.prepare(`
     ${RECENT_MATCH_SELECT_SQL}
     ORDER BY m.completed_at DESC, m.id DESC

@@ -388,6 +388,7 @@ describe('wiki server routes', () => {
     expect(histHtml).toContain(
       '<a href="https://github.com/pmariglia" class="subtle">pmariglia</a>'
     );
+    expect(histHtml).toContain('id="wiki-history-pager"');
   });
 
   test('serves historical revision snapshots by commit SHA', async () => {

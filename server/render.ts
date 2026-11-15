@@ -19,11 +19,13 @@ import {
 import * as projects from '../static/projects';
 import {
   EXT_ICON,
+  TABLE_PAGE_SIZE,
   copyFileAtomic,
   escapeHtml,
   formatUtcDate,
   installHeadSupport,
   parseUtcDayMillis,
+  renderTablePager,
   renderTemplate,
   root,
   writeFileAtomic,
@@ -889,6 +891,7 @@ function renderSingleLadderArtifact(opts: {
         : `No active entries on ${escapeHtml(l.name)} yet.`;
     standingsPane = `<p class="empty-state muted">${msg}</p>`;
   } else {
+    let activeCount = 0;
     const rowsHtml = entries.map(e => {
       const isFirstForAgent = !seenAnyAgent.has(e.agentId);
       if (isFirstForAgent) seenAnyAgent.add(e.agentId);
@@ -914,6 +917,7 @@ function renderSingleLadderArtifact(opts: {
         dataAttrs.push('data-retired="true"');
         if (isBestOverall) dataAttrs.push('data-best="true"');
       } else {
+        activeCount++;
         dataAttrs.push('data-active="true"');
         if (isBestOverall) dataAttrs.push('data-best="true"');
         if (isProvisional) {
@@ -922,6 +926,9 @@ function renderSingleLadderArtifact(opts: {
           rowTitle = ' title="Provisional (&lt; 10 matches or SE &gt; 60 Elo)"';
         } else if (isSecondaryActive) {
           classes.push('secondary');
+        }
+        if (activeCount > TABLE_PAGE_SIZE) {
+          classes.push('hide');
         }
       }
 
@@ -1014,6 +1021,13 @@ function renderSingleLadderArtifact(opts: {
     const thWlt = '2-game blind-pair Match Wins – Losses – Ties (1-1 splits)';
     const thStreak = 'Current consecutive outright match win/loss streak';
     const thLos = 'Pairwise Likelihood of Superiority over the next-ranked settled agent';
+    const standingsPagerHtml = renderTablePager({
+      id: 'standings-pager',
+      label: 'Standings pagination',
+      total: activeCount,
+      singular: 'entry',
+      plural: 'entries',
+    });
     standingsPane = `<div class="table-wrap">
         <table class="standings-table">
           <thead>
@@ -1029,7 +1043,8 @@ function renderSingleLadderArtifact(opts: {
           </thead>
           <tbody>${rowsHtml}</tbody>
         </table>
-      </div>`;
+      </div>
+      ${standingsPagerHtml}`;
   }
 
   const archive = resolveLadderArchive(publicDir, l);
@@ -1298,11 +1313,12 @@ export function renderArenaAndLadderArtifacts(opts: {
       ? `<td><span class="muted">${statusText}</span> · ${dlLinks.join(' · ')}</td>`
       : `<td class="muted">${statusText}</td>`;
 
+    const hideCls = pastSeasonRows.length >= TABLE_PAGE_SIZE ? ' class="hide"' : '';
     if (w) {
       const wHref = resolveAgentHref(publicDir, projectMeta, w.slug, w.name, profileSlugs);
       const wLink = formatAgentLink(w.name, wHref, true);
       pastSeasonRows.push(
-        `<tr>${seasonCell}${statusCell}` +
+        `<tr${hideCls}>${seasonCell}${statusCell}` +
         `<td>${wLink} <code>${escapeHtml(w.version)}</code></td>` +
         `<td class="num"><strong>${w.elo}</strong> <span class="muted">±${w.ci95}</span></td>` +
         `<td class="num">${w.gxe.toFixed(1)}%</td>` +
@@ -1310,7 +1326,7 @@ export function renderArenaAndLadderArtifacts(opts: {
       );
     } else {
       pastSeasonRows.push(
-        `<tr>${seasonCell}${statusCell}` +
+        `<tr${hideCls}>${seasonCell}${statusCell}` +
         '<td class="muted">—</td>' +
         '<td class="num muted">—</td>' +
         '<td class="num muted">—</td>' +
@@ -1319,6 +1335,13 @@ export function renderArenaAndLadderArtifacts(opts: {
     }
   }
 
+  const seasonsPagerHtml = renderTablePager({
+    id: 'seasons-pager',
+    label: 'Past seasons pagination',
+    total: pastSeasonRows.length,
+    singular: 'season',
+    plural: 'seasons',
+  });
   const pastSeasonsSectionHtml = pastSeasonRows.length > 0
     ? `\n<section id="seasons">
   <h3><a href="#seasons" class="subtle">Past Seasons</a></h3>
@@ -1337,6 +1360,7 @@ export function renderArenaAndLadderArtifacts(opts: {
       <tbody>${pastSeasonRows.join('')}</tbody>
     </table>
   </div>
+  ${seasonsPagerHtml}
 </section>\n`
     : '';
 
@@ -1959,7 +1983,7 @@ export function register(app: polka.Polka, options: Options) {
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const staticDir = options.staticDir ?? STATIC_DIR;
   const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
-  const recentMatchesLimit = options.recentMatchesLimit ?? 50;
+  const recentMatchesLimit = options.recentMatchesLimit ?? TABLE_PAGE_SIZE;
   const getNowSec = options.now ?? (() => Math.floor(Date.now() / 1000));
 
   const renderer = options.renderer ?? (

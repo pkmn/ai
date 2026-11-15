@@ -6,9 +6,11 @@ import type * as db from '../db';
 import {Renderer, header, injectLiveBanner} from '../static/build';
 import {
   EXT_ICON,
+  TABLE_PAGE_SIZE,
   escapeHtml,
   formatUtcDate,
   parseUtcDayMillis,
+  renderTablePager,
   renderTemplate,
   root,
 } from '../static/util';
@@ -469,7 +471,7 @@ function renderVersionsPane(
     .filter(e => e.role === 'champion' || e.role === 'challenger')
     .sort((a, b) => b.lcb - a.lcb)[0];
 
-  const rowsHtml = entriesDesc.map(e => {
+  const rowsHtml = entriesDesc.map((e, idx) => {
     const isPrimary = activePrimary?.versionId === e.versionId;
     const isRetired = e.role === 'retired';
     const verInner = isPrimary
@@ -501,7 +503,10 @@ function renderVersionsPane(
     const ties = e.split;
     const turnText = `${Math.round(e.meanTurnMillis)} ms`;
     const ramText = `${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
-    const clsAttr = isRetired ? ' class="secondary"' : '';
+    const classes: string[] = [];
+    if (isRetired) classes.push('secondary');
+    if (idx >= TABLE_PAGE_SIZE) classes.push('hide');
+    const clsAttr = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
 
     return `<tr${clsAttr} data-vrow="${escapeHtml(e.version)}">` +
       `<td>${verInner}${retLabel}</td>` +
@@ -516,6 +521,12 @@ function renderVersionsPane(
   }).join('');
 
   const svgHtml = renderVersionsLineageSvg(agentName, entriesDesc, snapshots, nowSec);
+  const pagerHtml = renderTablePager({
+    label: 'Versions pagination',
+    total: entriesDesc.length,
+    singular: 'version',
+    plural: 'versions',
+  });
   return `<div class="profile-pane${hideCls}" data-ladder="${escapeHtml(ladderKey)}">
     ${svgHtml}
     <div class="table-wrap">
@@ -535,6 +546,7 @@ function renderVersionsPane(
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
+    ${pagerHtml}
   </div>`;
 }
 
@@ -662,9 +674,10 @@ function renderHeadToHeadPane(opts: {
     const scoreHtml = scorePct >= 50
       ? `<strong>${scorePct.toFixed(1)}%</strong>`
       : `${scorePct.toFixed(1)}%`;
+    const rowCls = h2hRows.length >= TABLE_PAGE_SIZE ? 'opp-row hide' : 'opp-row';
 
     h2hRows.push(
-      `<tr class="opp-row" data-opp="${escapeHtml(opp.agentSlug)}" ` +
+      `<tr class="${rowCls}" data-opp="${escapeHtml(opp.agentSlug)}" ` +
         `title="Click to filter Recent Matches vs. ${escapeHtml(opp.agentName)}">` +
       `<td data-val="${escapeHtml(opp.agentName)}">${oppLink} ` +
         `<code>${escapeHtml(opp.version)}</code></td>` +
@@ -694,23 +707,32 @@ function renderHeadToHeadPane(opts: {
     'identifies stylistic Best Matchup (+) and Nemesis (-)';
   const thStr = 'Current streak (Longest Win / Loss streak vs. opponent)';
   const thLos = 'Pairwise Likelihood of Superiority';
+  const h2hPagerHtml = renderTablePager({
+    label: 'Head-to-head pagination',
+    total: h2hRows.length,
+    singular: 'opponent',
+    plural: 'opponents',
+  });
 
-  return `<div class="table-wrap profile-pane${hideCls}" data-ladder="${escapeHtml(ladderKey)}">
-    <table class="h2h-table">
-      <thead>
-        <tr>
-          <th class="sortable" data-col="0" data-type="str">Opponent</th>
-          <th class="num sortable" data-col="1" data-type="num">Elo</th>
-          <th class="num sortable" data-col="2" data-type="num" title="${thWlt}">W–L–T</th>
-          <th class="num sortable" data-col="3" data-type="num">Score</th>
-          <th class="num sortable" data-col="4" data-type="num" title="${thExp}">Expected</th>
-          <th class="num sortable" data-col="5" data-type="num" title="${thDelta}">&Delta;</th>
-          <th class="center sortable" data-col="6" data-type="num" title="${thStr}">Streak</th>
-          <th class="num sortable" data-col="7" data-type="num" title="${thLos}">LOS</th>
-        </tr>
-      </thead>
-      <tbody>${h2hRows.join('')}</tbody>
-    </table>
+  return `<div class="profile-pane${hideCls}" data-ladder="${escapeHtml(ladderKey)}">
+    <div class="table-wrap">
+      <table class="h2h-table">
+        <thead>
+          <tr>
+            <th class="sortable" data-col="0" data-type="str">Opponent</th>
+            <th class="num sortable" data-col="1" data-type="num">Elo</th>
+            <th class="num sortable" data-col="2" data-type="num" title="${thWlt}">W–L–T</th>
+            <th class="num sortable" data-col="3" data-type="num">Score</th>
+            <th class="num sortable" data-col="4" data-type="num" title="${thExp}">Expected</th>
+            <th class="num sortable" data-col="5" data-type="num" title="${thDelta}">&Delta;</th>
+            <th class="center sortable" data-col="6" data-type="num" title="${thStr}">Streak</th>
+            <th class="num sortable" data-col="7" data-type="num" title="${thLos}">LOS</th>
+          </tr>
+        </thead>
+        <tbody>${h2hRows.join('')}</tbody>
+      </table>
+    </div>
+    ${h2hPagerHtml}
   </div>`;
 }
 
@@ -761,7 +783,7 @@ function renderRecentMatchesPane(opts: {
 
   const rowsHtml = matches.length === 0
     ? '<tr><td colspan="8" class="center muted">No completed matches yet.</td></tr>'
-    : matches.map(m => {
+    : matches.map((m, idx) => {
       const weAreP1 = m.p1.slug === agentSlug;
       const ourSide = weAreP1 ? m.p1 : m.p2;
       const oppSide = weAreP1 ? m.p2 : m.p1;
@@ -793,8 +815,9 @@ function renderRecentMatchesPane(opts: {
         arena.enrichMatchView(publicDir, m),
         agentLinks
       );
+      const rowCls = idx >= TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
 
-      return `<tr class="battle-row" data-ver="${escapeHtml(ourSide.version)}" ` +
+      return `<tr class="${rowCls}" data-ver="${escapeHtml(ourSide.version)}" ` +
         `data-opp="${escapeHtml(oppSide.slug)}" tabindex="0" aria-expanded="false">` +
         '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span>' +
           `<code>${idEsc}</code></td>` +
@@ -817,22 +840,33 @@ function renderRecentMatchesPane(opts: {
     : '';
   const bankTitle =
     `Remaining ${agentName} time bank in Game 1 / Game 2 (Showdown timer: 150s cap)`;
-  return `<div class="table-wrap profile-pane${hideCls}" data-ladder="${escapeHtml(ladderKey)}">
-    <table class="matches-table">
-      <thead>
-        <tr>
-          <th>Match</th>
-          <th>Ver.</th>
-          <th>Opponent</th>
-          <th class="center" title="Match Outcome (Game 1 / Game 2 outcomes)">Result</th>
-          <th class="num" title="Turns in Game 1 / Game 2">Turns</th>
-          <th class="num" title="${escapeHtml(bankTitle)}">Bank</th>
-          <th class="num" title="Peak XNU phys_footprint RAM across the 2-game match">RAM</th>
-          <th class="num">Completed</th>
-        </tr>
-      </thead>
-      <tbody>${rowsHtml}${filterEmptyRow}</tbody>
-    </table>
+  const matchesPagerHtml = renderTablePager({
+    label: 'Recent matches pagination',
+    total: matches.length,
+    singular: 'match',
+    plural: 'matches',
+    prevLabel: '&larr; Newer',
+    nextLabel: 'Older &rarr;',
+  });
+  return `<div class="profile-pane${hideCls}" data-ladder="${escapeHtml(ladderKey)}">
+    <div class="table-wrap">
+      <table class="matches-table">
+        <thead>
+          <tr>
+            <th>Match</th>
+            <th>Ver.</th>
+            <th>Opponent</th>
+            <th class="center" title="Match Outcome (Game 1 / Game 2 outcomes)">Result</th>
+            <th class="num" title="Turns in Game 1 / Game 2">Turns</th>
+            <th class="num" title="${escapeHtml(bankTitle)}">Bank</th>
+            <th class="num" title="Peak XNU phys_footprint RAM across the 2-game match">RAM</th>
+            <th class="num">Completed</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}${filterEmptyRow}</tbody>
+      </table>
+    </div>
+    ${matchesPagerHtml}
   </div>`;
 }
 
@@ -1083,7 +1117,7 @@ export function renderAgentProfile(opts: {
     const pairs = db.getPairAggregatesForLadder(l.id);
     const snapshots = db.getRatingSnapshotsForLadder(l.id, agent.id);
     const familyStats = db.getAgentLadderStats(l.id, agent.id);
-    const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id, 30);
+    const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id);
     const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
 
     ladderJsonList.push({

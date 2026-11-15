@@ -13,7 +13,16 @@ import * as yaml from 'yaml';
 import * as db from '../db';
 import {header, injectLiveBanner, renderer} from '../static/build';
 import {Project} from '../static/projects';
-import {escapeHtml, installHeadSupport, root, slugify, toID} from '../static/util';
+import {
+  TABLE_PAGE_SIZE,
+  escapeHtml,
+  installHeadSupport,
+  renderTablePager,
+  renderTemplate,
+  root,
+  slugify,
+  toID,
+} from '../static/util';
 
 import * as auth from './auth';
 
@@ -170,6 +179,7 @@ export function extractProjectPages(projectsYaml: string): {
 }
 
 const STYLE = fs.readFileSync(root('static', 'wiki.css'), 'utf8');
+const HISTORY_TEMPLATE = fs.readFileSync(root('static', 'wiki-history.html'), 'utf8');
 
 function renderPageHtml(opts: {
   id?: string;
@@ -1220,23 +1230,30 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       if (!requireReadAuth(req, res, slug)) return;
       const encoded = encodeSlug(slug);
       const revisions = await wiki.getHistory(slug);
-      const rows = revisions.map(rev => {
+      const rows = revisions.map((rev, idx) => {
         const date = new Date(rev.timestamp * 1000).toISOString().slice(0, 10);
         const revUrl = `/wiki/${escapeHtml(encoded)}/${rev.sha}`;
         const revLink = `<code><a href="${revUrl}">${rev.shortSha}</a></code>`;
         const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
         const displayAuthor = escapeHtml(wiki.formatAuthor(rev.author));
         const authorLink = `<a href="${ghUrl}" class="subtle">${displayAuthor}</a>`;
-        return `<tr>
+        const hideCls = idx >= TABLE_PAGE_SIZE ? ' class="hide"' : '';
+        return `<tr${hideCls}>
           <td class="wiki-meta">${date}</td>
           <td>${revLink} (<a href="${revUrl}?diff=1">diff</a>)</td>
           <td>${authorLink}</td>
           <td>${escapeHtml(rev.subject)}</td>
         </tr>`;
       }).join('');
-      const headerRow = '<tr><th>Date</th><th>Revision</th><th>Author</th><th>Summary</th></tr>';
+      const pagerHtml = renderTablePager({
+        id: 'wiki-history-pager',
+        label: 'Revision history pagination',
+        total: revisions.length,
+        singular: 'revision',
+        plural: 'revisions',
+      });
       const table = revisions.length
-        ? `<table>${headerRow}${rows}</table>`
+        ? renderTemplate(HISTORY_TEMPLATE, {rows, pagerHtml})
         : '<p>No history for this page yet.</p>';
       const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
       const heading = `History — ${displayTitle}`;

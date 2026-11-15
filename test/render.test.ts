@@ -1684,4 +1684,44 @@ describe('JSON route parity & retired pool archives', () => {
     expect(tourHtml).toContain("sendToViewer({type: 'speed', speed: saved})");
     expect(tourHtml).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
   });
+
+  test('paginates dynamic tables at 25 rows per page across ladder, battles, and profile',
+    async () => {
+      const jaxId = db.getAgentBySlug('jaxcalibur')!.id;
+      const jaxVer = db.getAgentLadderProfileEntries(jaxId, 'gen1ou20261109')[0].versionId;
+      for (let i = 1; i <= 28; i++) {
+        db.db.prepare("UPDATE ladder_entries SET role = 'retired'").run();
+        db.refundCooldown('foul-play', DAY_1 + i);
+        const vId = createVersionAndPassSmoke(
+          db,
+          'foul-play',
+          `2.0.${i}`,
+          ['gen1ou20261109'],
+          DAY_1 + i
+        );
+        playMatch(db, 'gen1ou20261109', vId, jaxVer, 'W', 'L', NOW + i);
+      }
+      db.db.prepare(
+        "UPDATE ladder_entries SET role = 'challenger' WHERE ladder_id = 'gen1ou20261109'"
+      ).run();
+
+      const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
+      try {
+        const ladderHtml = await h.getText('/arena/ladders/rby/');
+        expect(ladderHtml).toContain('id="standings-pager"');
+        expect(ladderHtml).toContain('Page 1 of 2 (');
+
+        const battlesHtml = await h.getText('/arena/battles/');
+        expect(battlesHtml).toContain('id="battles-pager"');
+        expect(battlesHtml).toContain('Page 1 of 2 (');
+
+        const profileHtml = await h.getText('/projects/foul-play/');
+        expect(profileHtml).toContain('aria-label="Versions pagination"');
+        expect(profileHtml).toContain('aria-label="Recent matches pagination"');
+        expect(profileHtml).toContain('Page 1 of 2 (29 versions)');
+        expect(profileHtml).toContain('Page 1 of 2 (28 matches)');
+      } finally {
+        await h.close();
+      }
+    });
 });

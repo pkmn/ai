@@ -53,7 +53,7 @@
     const nextBtn = document.getElementById('battles-next');
     const pageInfo = document.getElementById('battles-page-info');
     const radios = document.querySelectorAll('input[name="bformat"]');
-    const pageSize = (state && state.pageSize) || 50;
+    const pageSize = (state && state.pageSize) || 25;
     const historyEndpoint = (state && state.historyEndpoint) || '/api/battles.json';
     let currentFmt = 'all';
     let currentPage = 1;

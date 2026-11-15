@@ -86,6 +86,126 @@
     let curLad = {{{defaultLadderKeyJson}}};
     let curVer = 'all';
     let curOpp = 'all';
+    let matchPage = 1;
+    const pageSize = 25;
+    const panePagers = new WeakMap();
+
+    const updatePagerControls = (pager, page, total) => {
+      if (!pager) return;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      const infoEl = pager.querySelector('[data-pager-info]');
+      const singular = pager.dataset.singular || 'row';
+      const plural = pager.dataset.plural || 'rows';
+      const word = total === 1 ? singular : plural;
+      pager.classList.toggle('hide', totalPages <= 1);
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= totalPages;
+      if (infoEl) {
+        infoEl.textContent =
+          'Page ' + page + ' of ' + totalPages +
+          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+      }
+    };
+
+    document.querySelectorAll('#versions .profile-pane, #matchups .profile-pane').forEach(pane => {
+      const tbody = pane.querySelector('tbody');
+      const pager = pane.querySelector('.pager[data-table-pager]');
+      if (!tbody || !pager) return;
+      let page = 1;
+      const apply = () => {
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const total = rows.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        if (page > totalPages) page = totalPages;
+        if (page < 1) page = 1;
+        const start = (page - 1) * pageSize;
+        rows.forEach((row, idx) => {
+          row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+        });
+        updatePagerControls(pager, page, total);
+      };
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (page > 1) {
+            page--;
+            apply();
+          }
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          page++;
+          apply();
+        });
+      }
+      panePagers.set(pane, {
+        reset: () => {
+          page = 1;
+          apply();
+        },
+      });
+    });
+
+    const applyMatchesPager = () => {
+      const activeMatchPane = document.querySelector(
+        '#matches .profile-pane[data-ladder="' + curLad + '"]'
+      );
+      if (!activeMatchPane) return;
+      const allRows = Array.from(activeMatchPane.querySelectorAll('tbody tr[data-ver]'));
+      const matching = allRows.filter(row => (
+        (curVer === 'all' || row.dataset.ver === curVer) &&
+        (curOpp === 'all' || row.dataset.opp === curOpp)
+      ));
+      const total = matching.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (matchPage > totalPages) matchPage = totalPages;
+      if (matchPage < 1) matchPage = 1;
+      const start = (matchPage - 1) * pageSize;
+      const visible = new Set(matching.slice(start, start + pageSize));
+      allRows.forEach(row => {
+        const hidden = !visible.has(row);
+        row.classList.toggle('hide', hidden);
+        if (hidden) {
+          row.classList.remove('expanded');
+          row.setAttribute('aria-expanded', 'false');
+          const detail = row.nextElementSibling;
+          if (detail && detail.classList.contains('battle-detail-row')) {
+            detail.classList.add('hide');
+          }
+        }
+      });
+      const emptyFilterRow = activeMatchPane.querySelector('tbody tr.empty-filter-row');
+      if (emptyFilterRow) {
+        emptyFilterRow.classList.toggle('hide', total > 0);
+      }
+      const pager = activeMatchPane.querySelector('.pager[data-table-pager]');
+      updatePagerControls(pager, matchPage, total);
+    };
+
+    document.querySelectorAll('#matches .profile-pane').forEach(pane => {
+      const pager = pane.querySelector('.pager[data-table-pager]');
+      if (!pager) return;
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (matchPage > 1) {
+            matchPage--;
+            applyMatchesPager();
+          }
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          matchPage++;
+          applyMatchesPager();
+        });
+      }
+    });
 
     const syncUrl = hashOverride => {
       if (!history.replaceState) return;
@@ -101,6 +221,7 @@
 
     const applyStats = ver => {
       curVer = ver || 'all';
+      matchPage = 1;
       const ladData = profileData[curLad];
       if (!ladData) return;
       const s = ladData.vstats[curVer] || ladData.vstats.all;
@@ -119,31 +240,7 @@
       if (reignTbody && reignHtml) {
         reignTbody.innerHTML = reignHtml;
       }
-      const activeMatchPane = document.querySelector(
-        '#matches .profile-pane[data-ladder="' + curLad + '"]'
-      );
-      if (activeMatchPane) {
-        let visibleCount = 0;
-        activeMatchPane.querySelectorAll('tbody tr[data-ver]').forEach(row => {
-          const hidden =
-            (curVer !== 'all' && row.dataset.ver !== curVer) ||
-            (curOpp !== 'all' && row.dataset.opp !== curOpp);
-          row.classList.toggle('hide', hidden);
-          if (!hidden) visibleCount++;
-          if (hidden) {
-            row.classList.remove('expanded');
-            row.setAttribute('aria-expanded', 'false');
-            const detail = row.nextElementSibling;
-            if (detail && detail.classList.contains('battle-detail-row')) {
-              detail.classList.add('hide');
-            }
-          }
-        });
-        const emptyFilterRow = activeMatchPane.querySelector('tbody tr.empty-filter-row');
-        if (emptyFilterRow) {
-          emptyFilterRow.classList.toggle('hide', visibleCount > 0);
-        }
-      }
+      applyMatchesPager();
       if (matchupsSec) {
         matchupsSec.querySelectorAll('tr.opp-row').forEach(row => {
           row.classList.toggle('active-opp', curOpp !== 'all' && row.dataset.opp === curOpp);
@@ -161,7 +258,12 @@
         if (r.value === ladKey) r.checked = true;
       });
       panes.forEach(p => {
-        p.classList.toggle('hide', p.dataset.ladder !== ladKey);
+        const isCurrent = p.dataset.ladder === ladKey;
+        p.classList.toggle('hide', !isCurrent);
+        if (isCurrent) {
+          const ctrl = panePagers.get(p);
+          if (ctrl) ctrl.reset();
+        }
       });
       if (matchupsSec) {
         const mp = matchupsSec.querySelector('.profile-pane[data-ladder="' + ladKey + '"]');
@@ -249,6 +351,9 @@
           return sortAsc ? cmp : -cmp;
         });
         rows.forEach(row => tbody.appendChild(row));
+        const pane = table.closest('.profile-pane');
+        const ctrl = pane ? panePagers.get(pane) : undefined;
+        if (ctrl) ctrl.reset();
       }));
     });
 

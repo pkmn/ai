@@ -1,0 +1,64 @@
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Revision</th>
+        <th>Author</th>
+        <th>Summary</th>
+      </tr>
+    </thead>
+    <tbody>{{{rows}}}</tbody>
+  </table>
+</div>
+{{{pagerHtml}}}
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const pageSize = 25;
+    document.querySelectorAll('.pager[data-table-pager]').forEach(pager => {
+      const wrap = pager.previousElementSibling;
+      const tbody = wrap ? wrap.querySelector('tbody') : undefined;
+      if (!tbody) return;
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      const infoEl = pager.querySelector('[data-pager-info]');
+      const singular = pager.dataset.singular || 'row';
+      const plural = pager.dataset.plural || 'rows';
+      let page = 1;
+      const apply = () => {
+        const total = rows.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        if (page > totalPages) page = totalPages;
+        if (page < 1) page = 1;
+        const start = (page - 1) * pageSize;
+        rows.forEach((row, idx) => {
+          row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+        });
+        pager.classList.toggle('hide', totalPages <= 1);
+        if (prevBtn) prevBtn.disabled = page <= 1;
+        if (nextBtn) nextBtn.disabled = page >= totalPages;
+        if (infoEl) {
+          const word = total === 1 ? singular : plural;
+          infoEl.textContent =
+            'Page ' + page + ' of ' + totalPages +
+            ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+        }
+      };
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (page > 1) {
+            page--;
+            apply();
+          }
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          page++;
+          apply();
+        });
+      }
+    });
+  });
+</script>

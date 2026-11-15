@@ -6,9 +6,11 @@ import * as site from 'site';
 import type * as db from '../db';
 import {Renderer, header, injectLiveBanner} from '../static/build';
 import {
+  TABLE_PAGE_SIZE,
   escapeHtml,
   formatUtcDate,
   formatUtcDateTime,
+  renderTablePager,
   renderTemplate,
   root,
 } from '../static/util';
@@ -291,8 +293,9 @@ function renderTournamentStandingsHtml(opts: {
     const ci = Math.round(1.96 * e.se);
     const ptsStr = e.points.toFixed(1);
     const sbStr = Math.round(e.sonnebornBerger).toLocaleString('en-US');
+    const hideCls = idx >= TABLE_PAGE_SIZE ? ' class="hide"' : '';
 
-    return '<tr>' +
+    return `<tr${hideCls}>` +
       `<td><strong>${rankNum}</strong>${sfBadge}</td>` +
       `<td>${agentHtml}</td>` +
       `<td class="num"><strong>${elo}</strong> <span class="muted">±${ci}</span></td>` +
@@ -304,6 +307,13 @@ function renderTournamentStandingsHtml(opts: {
 
   const ptsTitle =
     `Round-Robin points out of ${maxRrGames} games (+1.0 per win, +0.5 per tie)`;
+  const standingsPagerHtml = renderTablePager({
+    id: 'standings-pager',
+    label: 'Standings pagination',
+    total: entrants.length,
+    singular: 'entrant',
+    plural: 'entrants',
+  });
   return `<div id="standings-body"><div class="table-wrap">
     <table>
       <thead>
@@ -318,7 +328,8 @@ function renderTournamentStandingsHtml(opts: {
       </thead>
       <tbody>${rowsHtml}</tbody>
     </table>
-  </div></div>`;
+  </div>
+  ${standingsPagerHtml}</div>`;
 }
 
 function renderTournamentCrosstableHtml(opts: {
@@ -442,7 +453,7 @@ function renderTournamentGamesHtml(opts: {
   } = opts;
   const resolvedLogs = logFiles ?? arena.listTournamentLogFiles(publicDir, tournament.id);
 
-  const liveRowsHtml = liveTables.map(tb => {
+  const liveRowsHtml = liveTables.map((tb, idx) => {
     const p1 = tb.p1!;
     const p2 = tb.p2!;
     const codePrefix = tb.stage === 'Superfinal' ? 'SF' : 'RR';
@@ -463,8 +474,9 @@ function renderTournamentGamesHtml(opts: {
     const b1 = Math.round(p1.bankSeconds);
     const b2 = Math.round(p2.bankSeconds);
     const tip = `Spectate live on ${tb.label}`;
+    const rowCls = idx >= TABLE_PAGE_SIZE ? 'live-game-row hide' : 'live-game-row';
 
-    return `<tr class="live-game-row" data-live-game-table="${tb.table}">` +
+    return `<tr class="${rowCls}" data-live-game-table="${tb.table}">` +
       `<td><a href="#live" class="subtle" data-live-table="${tb.table}" ` +
         `title="${escapeHtml(tip)}"><code>${escapeHtml(gameCode)}</code></a></td>` +
       `<td>${p1Cell}</td>` +
@@ -476,7 +488,7 @@ function renderTournamentGamesHtml(opts: {
       '</tr>';
   }).join('');
 
-  const completedRowsHtml = games.map(g => {
+  const completedRowsHtml = games.map((g, idx) => {
     const codePrefix = g.stage === 'Superfinal' ? 'SF' : 'RR';
     const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
     const gameCode = `${codePrefix}${codeNum}`;
@@ -520,8 +532,9 @@ function renderTournamentGamesHtml(opts: {
     const turnsStr = g.turns !== undefined ? String(g.turns) : '—';
     const b1 = Math.round(g.p1BankSeconds ?? 0);
     const b2 = Math.round(g.p2BankSeconds ?? 0);
+    const hideCls = liveTables.length + idx >= TABLE_PAGE_SIZE ? ' class="hide"' : '';
 
-    return `<tr data-game-id="${escapeHtml(g.id)}">` +
+    return `<tr${hideCls} data-game-id="${escapeHtml(g.id)}">` +
       `<td><a href="${escapeHtml(gameHref)}" class="subtle"${replayAttr} ` +
         `title="${escapeHtml(g.id)}"><code>${escapeHtml(gameCode)}</code></a></td>` +
       `<td>${p1Cell}</td>` +
@@ -549,6 +562,16 @@ function renderTournamentGamesHtml(opts: {
       `(<span id="games-count">${countStr}</span> games` +
       (tournament.status !== 'completed' ? '; replay archive published upon completion' : '') +
       ')';
+  const totalGameRows = liveTables.length + games.length;
+  const gamesPagerHtml = renderTablePager({
+    id: 'games-pager',
+    label: 'Games pagination',
+    total: totalGameRows,
+    singular: 'game',
+    plural: 'games',
+    prevLabel: '&larr; Newer',
+    nextLabel: 'Older &rarr;',
+  });
 
   return `<div class="table-wrap">
       <table>
@@ -565,6 +588,7 @@ function renderTournamentGamesHtml(opts: {
         <tbody id="games-tbody">${rowsHtml}</tbody>
       </table>
     </div>
+    ${gamesPagerHtml}
     <p class="meta meta-archive" id="games-archive-meta">${archiveLine}</p>`;
 }
 
@@ -632,7 +656,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   }
 
   if (completed.length > 0) {
-    const rows = completed.map(t => {
+    const rows = completed.map((t, idx) => {
       const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
       const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
       const entrants = entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
@@ -640,9 +664,10 @@ export function renderArenaTournamentsSummaryHtml(opts: {
       const maxRrGames = entrants.length >= 2
         ? (entrants.length - 1) * t.gamesPerMatchup
         : t.gamesPerMatchup;
+      const hideCls = idx >= TABLE_PAGE_SIZE ? ' class="hide"' : '';
 
       if (!winner) {
-        return '<tr>' +
+        return `<tr${hideCls}>` +
           `<td><a href="${escapeHtml(tourHref)}" class="subtle">` +
             `<strong>${escapeHtml(t.name)}</strong></a></td>` +
           `<td><tt>${escapeHtml(fmtTitle)}</tt></td>` +
@@ -666,7 +691,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
       const ci = Math.round(1.96 * winner.se);
       const ptsStr = winner.points.toFixed(1);
 
-      return '<tr>' +
+      return `<tr${hideCls}>` +
         `<td><a href="${escapeHtml(tourHref)}" class="subtle">` +
           `<strong>${escapeHtml(t.name)}</strong></a></td>` +
         `<td><tt>${escapeHtml(fmtTitle)}</tt></td>` +
@@ -677,6 +702,13 @@ export function renderArenaTournamentsSummaryHtml(opts: {
           `<span class="muted">/ ${maxRrGames}</span></td>` +
         '</tr>';
     }).join('');
+    const tourPagerHtml = renderTablePager({
+      id: 'tournaments-pager',
+      label: 'Completed tournaments pagination',
+      total: completed.length,
+      singular: 'tournament',
+      plural: 'tournaments',
+    });
 
     parts.push(`<div class="table-wrap">
     <table>
@@ -692,7 +724,8 @@ export function renderArenaTournamentsSummaryHtml(opts: {
       </thead>
       <tbody>${rows}</tbody>
     </table>
-  </div>`);
+  </div>
+  ${tourPagerHtml}`);
   } else if (ongoing.length > 0) {
     parts.push('<p class="muted">No completed past tournaments yet.</p>');
   }
@@ -740,7 +773,7 @@ export function renderTournamentPage(opts: {
   }).join('');
 
   const entrants = db.getTournamentEntrants(t.id);
-  const games = db.getTournamentGames(t.id, 50);
+  const games = db.getTournamentGames(t.id, 10_000);
   const rrPairs = db.getTournamentCrosstable(t.id, 'Round Robin');
   const sfPairs = db.getTournamentCrosstable(t.id, 'Superfinal');
   const broadcastRes = renderBroadcastSectionHtml(t, tournamentBroadcast);

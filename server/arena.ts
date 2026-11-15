@@ -51,7 +51,7 @@ export function turnIncrementSeconds(format: string): number {
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
-const RECENT_MATCHES_LIMIT = 50;
+const RECENT_MATCHES_LIMIT = 25;
 
 const VALID_SMOKE_UPDATES = new Set<Exclude<db.SmokeStatus, 'pending'>>([
   'passed',
