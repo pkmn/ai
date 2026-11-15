@@ -5,6 +5,13 @@
 set -euo pipefail
 shopt -s nullglob
 
+if [[ -f /opt/arena/repo/.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source /opt/arena/repo/.env
+  set +a
+fi
+
 ARCHIVE_ROOT="${ARENA_ARCHIVE_DIR:-/Volumes/Archive}"
 LOG_ROOT="${ARCHIVE_ROOT}/logs"
 COLD_DIR="${ARCHIVE_ROOT}/cold-agents"

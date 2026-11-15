@@ -55,7 +55,7 @@ smoke tests.
 | **Daemon Logs** | `/opt/arena/logs/{arena,tunnel}.{log,err}` | Stdout/stderr logs for `ai.pkmn.arena` and `ai.pkmn.tunnel`. |
 | **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`4G` quota) | Per-slot writable scratch volumes (`1700` + `pkmn` ACL), wiped around every game. |
 | **APFS Staging Volume** | `/Volumes/Staging` (`6G` quota) | Ephemeral download & extraction staging area (`0700` `pkmn:agents`). |
-| **External Archive SSD** | `/Volumes/Archive` (`1 TB` APFS) | Cold agent `.tar.zst` cache (`cold-agents/`), daily battle logs (`logs/`), DB backups (`db-backups/`). |
+| **External Archive SSD** | `/Volumes/Archive` (`1 TB` APFS) | Cold agent `.tar.zst` archive (`cold-agents/`), daily battle logs (`logs/`), DB backups (`db-backups/`). |
 
 ---
 
@@ -425,22 +425,20 @@ fi
 grep -q "/opt/homebrew/bin/brew" ~/.zprofile 2>/dev/null || echo '\''eval "$(/opt/homebrew/bin/brew shellenv)"'\'' >> ~/.zprofile
 '
 
-# 2. Install CLI tools required by arena/
+# 2. Install CLI tools and Google Cloud SDK (`gcloud`) required by arena/
 ssh arena '
 eval "$(/opt/homebrew/bin/brew shellenv)"
 brew install node git jq zstd sevenzip skopeo podman sqlite
+brew install --cask gcloud-cli
 '
 ```
-
-*(Optional: If syncing monthly archives directly from the Mac mini to `gs://pkmn-arena` via
-`ARENA_GCS_SYNC=1`, also run `brew install --cask google-cloud-sdk`.)*
 
 #### Verify Phase 3
 
 ```sh
 ssh arena '
 export PATH="/opt/homebrew/bin:$PATH"
-for bin in clang codesign python3 git node npm jq zstd 7z skopeo podman sqlite3; do
+for bin in clang codesign python3 git node npm jq zstd 7z skopeo podman sqlite3 gcloud; do
   printf "%-10s -> %s\n" "$bin" "$(command -v "$bin")"
 done
 /opt/homebrew/bin/node -v
@@ -816,17 +814,63 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.arena.plist
 
 ---
 
-## Phase 7: Nightly Archival & SQLite Backup (`arena/scripts/archive.sh`)
+## Phase 7: Google Cloud Storage (`gs://pkmn-arena`), Nightly Archival & SQLite Backup (`arena/scripts/archive.sh`)
 
-`arena/scripts/archive.sh` performs four maintenance tasks on the Mac mini:
+`arena/scripts/archive.sh` (and the coordinator's post-smoke-test cold archival) manage local
+`/Volumes/Archive` storage and off-site mirroring to Google Cloud Storage (`gs://pkmn-arena`):
 1. Online SQLite `.backup` of `/opt/arena/state/arena.sqlite` ->
-   `/Volumes/Archive/db-backups/arena-state-YYYY-MM-DD.sqlite.zst` (retaining 30 days).
+   `/Volumes/Archive/db-backups/arena-state-YYYY-MM-DD.sqlite.zst` (retaining 30 days locally).
 2. Nightly solid LZMA2 `.7z` compression of yesterday's raw `.log` files per ladder under
    `/Volumes/Archive/logs/<ladder_id>/<YYYY-MM>/<YYYY-MM-DD>.7z`.
 3. Monthly `.tar` rollup of the previous month's `.7z` archives on the 1st of each month.
-4. Optional `gcloud storage rsync` to `gs://pkmn-arena` when `ARENA_GCS_SYNC=1` is set.
+4. `gcloud storage cp` (on smoke-test pass when `ARENA_GCS_BUCKET` is set) and nightly
+   `gcloud storage rsync` (when `ARENA_GCS_SYNC=1` is set) to `gs://pkmn-arena/{archives,agents,db-backups}`.
 
-### Step 7.1: Bootstrap `ai.pkmn.archive.plist` (Runs Daily at 04:30)
+### Step 7.1: Configure Least-Privilege GCS Service Account & Authenticate `gcloud` on the Mac mini
+
+Because the `gs://pkmn-arena` bucket already exists, create a dedicated service account scoped
+**exclusively** to `gs://pkmn-arena` (never install personal owner credentials on the Mac mini) and
+activate it under the `pkmn` coordinator user:
+
+1. **On your admin laptop** (authenticated to your GCP project), create the `arena-archiver` service
+   account, grant it `roles/storage.objectAdmin` on `gs://pkmn-arena`, and copy its key to the Mac
+   mini:
+   ```sh
+   GCP_PROJECT="$(gcloud config get-value project)"
+   SA_EMAIL="arena-archiver@${GCP_PROJECT}.iam.gserviceaccount.com"
+
+   gcloud iam service-accounts create arena-archiver \
+     --display-name="pkmn.ai Mac mini Archiver" \
+     --project="$GCP_PROJECT" || true
+
+   gcloud storage buckets add-iam-policy-binding gs://pkmn-arena \
+     --member="serviceAccount:${SA_EMAIL}" \
+     --role="roles/storage.objectAdmin"
+
+   umask 077
+   gcloud iam service-accounts keys create /tmp/arena-gcs-key.json \
+     --iam-account="$SA_EMAIL"
+   ssh arena 'sudo mkdir -p /opt/arena/etc && sudo chown pkmn:agents /opt/arena/etc'
+   scp /tmp/arena-gcs-key.json arena:/opt/arena/etc/gcs-key.json
+   rm -f /tmp/arena-gcs-key.json
+   ```
+
+2. **On the Mac mini (`ssh arena`)**, lock down `/opt/arena/etc/gcs-key.json`, activate the service
+   account for `gcloud`, and enable `ARENA_GCS_BUCKET` + `ARENA_GCS_SYNC` in `/opt/arena/repo/.env`:
+   ```sh
+   ssh arena "
+   export PATH=\"/opt/homebrew/bin:\$PATH\"
+   chmod 0600 /opt/arena/etc/gcs-key.json
+   chown pkmn:agents /opt/arena/etc/gcs-key.json
+   gcloud auth activate-service-account --key-file=/opt/arena/etc/gcs-key.json
+   gcloud config set project ${GCP_PROJECT}
+   grep -q '^ARENA_GCS_BUCKET=' /opt/arena/repo/.env || printf 'ARENA_GCS_BUCKET=gs://pkmn-arena\n' >> /opt/arena/repo/.env
+   grep -q '^ARENA_GCS_SYNC=' /opt/arena/repo/.env || printf 'ARENA_GCS_SYNC=1\n' >> /opt/arena/repo/.env
+   sudo launchctl kickstart -k system/ai.pkmn.arena
+   "
+   ```
+
+### Step 7.2: Bootstrap `ai.pkmn.archive.plist` (Runs Daily at 04:30)
 
 `setup-arena.sh` already installed `/Library/LaunchDaemons/ai.pkmn.archive.plist`. Bootstrap it so
 `launchd` runs `/opt/arena/repo/arena/scripts/archive.sh` daily at `04:30`:
@@ -840,8 +884,8 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist
 
 #### Verify Phase 7
 
-Trigger `/opt/arena/repo/arena/scripts/archive.sh` once manually and verify the compressed SQLite
-backup is written and passes `zstd -t` integrity verification:
+Trigger `/opt/arena/repo/arena/scripts/archive.sh` once manually and verify both the local SQLite
+backup and the `gs://pkmn-arena` bucket sync succeed:
 
 ```sh
 ssh arena '
@@ -849,6 +893,7 @@ export PATH="/opt/homebrew/bin:$PATH"
 /opt/arena/repo/arena/scripts/archive.sh
 ls -lh /Volumes/Archive/db-backups/
 zstd -t /Volumes/Archive/db-backups/arena-state-*.sqlite.zst && echo "PASS: SQLite backup archive verified"
+gcloud storage ls gs://pkmn-arena/db-backups/ && echo "PASS: GCS bucket sync verified"
 '
 ```
 
