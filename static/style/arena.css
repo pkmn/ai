@@ -87,6 +87,15 @@ tr.battle-detail-row > td {
   border-top: 1px dashed rgb(var(--fg-base) / 15%);
 }
 
+tr.season-detail-row > td {
+  background-color: var(--aside-bg-color);
+  border-top: 1px dashed rgb(var(--fg-base) / 15%);
+}
+
+td.season-name-cell {
+  padding-left: 2.1ch;
+}
+
 .ext svg {
   display: inline-block;
   width: 0.7em;

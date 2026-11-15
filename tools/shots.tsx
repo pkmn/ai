@@ -500,10 +500,11 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'arena',
       title: 'Arena Hub (With Past Seasons)',
       description:
-        'Arena hub after seasonal rotation showing the `#seasons` **Past Seasons** table with ' +
-        'both a `Settling` season and an `Archived` season (`-logs.7z` & `teams.json` links).',
+        'Arena hub after seasonal rotation with the expandable `VGC` row opened to reveal ' +
+        'both a `settling` season and an `archived` season.',
       path: '/arena/',
       setup: fixture => setupRotatedSeasons(fixture, 'both'),
+      click: 'tr.battle-row[data-slot="vgc"] .battle-toggle',
     },
     {
       name: 'arena-prelaunch',

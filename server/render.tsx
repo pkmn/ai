@@ -2493,85 +2493,11 @@ export function renderArenaAndLadderArtifacts(opts: {
   const archivedTeamsJsonById: Record<string, LadderTeamsDocument> = {};
   const jsonLadders: Record<string, StandingsLadder> = {};
   const archivedLadderSummaries: ArchivedLadderSummary[] = [];
-  const ladderSummaryRows: util.Child[] = [];
+  const pastBySlot = new Map<string, Array<{
+    ladder: db.LadderRow;
+    rendered: ReturnType<typeof renderSingleLadderArtifact>;
+  }>>();
 
-  for (const l of ladders) {
-    const rendered = renderSingleLadderArtifact({
-      ladder: l,
-      currentLadders: ladders,
-      urlKey: l.slot,
-      db,
-      renderer,
-      publicDir,
-      projectMeta,
-      profileSlugs,
-      nowSec,
-    });
-    ladderHtmlBySlot[l.slot] = rendered.html;
-    ladderJsonBySlot[l.slot] = rendered.ladderDoc;
-    jsonLadders[l.slot] = rendered.standingsLadder;
-
-    const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
-    const ladderHref = `/arena/ladders/${encodeURIComponent(l.slot)}/`;
-    const ladderCell = (
-      <td>
-        <a href={ladderHref} className='subtle' title={fmtTitle}>
-          <strong><tt>{l.name}</tt></strong>
-        </a>
-      </td>
-    );
-
-    let leaderCell: util.Child;
-    if (rendered.top1Entry !== undefined) {
-      const w = rendered.top1Entry;
-      const wHref = `/projects/${encodeURIComponent(w.slug)}/`;
-      leaderCell = (
-        <td>
-          {renderAgentLink(w.name, wHref, true)} <code>{w.version}</code>
-        </td>
-      );
-    } else {
-      const stateLabel = l.status === 'upcoming'
-        ? 'Upcoming'
-        : rendered.hasActiveEntries
-          ? 'Provisional'
-          : 'No entries yet';
-      leaderCell = <td className='muted'>{stateLabel}</td>;
-    }
-
-    const isLive = l.status !== 'upcoming' &&
-      liveMatch !== undefined &&
-      (liveMatch.ladderId === l.id || liveMatch.slot === l.slot);
-    let lastCell: util.Child = <td className='num muted'>—</td>;
-    if (isLive) {
-      lastCell = (
-        <td className='num'>
-          <a href='/arena/battles/' className='live-pill'>{'\u25cf'} Live</a>
-        </td>
-      );
-    } else if (l.status !== 'upcoming') {
-      const lastTs = lastCompletedByLadder.get(l.id);
-      if (lastTs !== undefined) {
-        lastCell = (
-          <td className='num muted' data-ts={lastTs}>
-            {formatRelativeTime(nowSec, lastTs)}
-          </td>
-        );
-      }
-    }
-
-    ladderSummaryRows.push(
-      <tr>
-        {ladderCell}
-        {leaderCell}
-        <td className='num'>{rendered.entrantCount.toLocaleString('en-US')}</td>
-        <td className='num'>{rendered.matchCount.toLocaleString('en-US')}</td>
-        {lastCell}
-      </tr>
-    );
-  }
-
-  const pastSeasonRows: util.Child[] = [];
   for (const l of pastLadders) {
     if (l.team === 'pools' && l.status === 'archived') {
       archivedTeamsJsonById[l.id] = buildLadderTeamsDocument(db, l);
@@ -2621,54 +2547,134 @@ export function renderArenaAndLadderArtifacts(opts: {
         : undefined,
     });
 
+    const list = pastBySlot.get(l.slot) ?? [];
+    list.push({ladder: l, rendered});
+    pastBySlot.set(l.slot, list);
+  }
+
+  const ladderSummaryRows: util.Child[] = [];
+
+  for (const l of ladders) {
+    const rendered = renderSingleLadderArtifact({
+      ladder: l,
+      currentLadders: ladders,
+      urlKey: l.slot,
+      db,
+      renderer,
+      publicDir,
+      projectMeta,
+      profileSlugs,
+      nowSec,
+    });
+    ladderHtmlBySlot[l.slot] = rendered.html;
+    ladderJsonBySlot[l.slot] = rendered.ladderDoc;
+    jsonLadders[l.slot] = rendered.standingsLadder;
+
+    const slotPast = pastBySlot.get(l.slot) ?? [];
+    const hasPast = slotPast.length > 0;
     const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
-    const seasonCell = (
+    const ladderHref = `/arena/ladders/${encodeURIComponent(l.slot)}/`;
+    const ladderCell = (
       <td>
-        <a href={href} className='subtle' title={fmtTitle}>
+        {hasPast && <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>}
+        <a href={ladderHref} className='subtle' title={fmtTitle}>
           <strong><tt>{l.name}</tt></strong>
         </a>
       </td>
     );
-    const dlLinks: util.Child[] = [];
-    if (archiveHref) {
-      const archiveName = path.basename(archiveHref);
-      dlLinks.push(
-        <a href={archiveHref} className='subtle'>
-          <code>{archiveName}</code>
-        </a>
-      );
-    }
-    if (teamsHref) {
-      if (dlLinks.length > 0) dlLinks.push(' · ');
-      dlLinks.push(<a href={teamsHref} className='subtle'><code>teams.json</code></a>);
-    }
-    const statusText = l.status === 'settling' ? 'Settling' : 'Archived';
-    const statusCell = dlLinks.length > 0
-      ? <td><span className='muted'>{statusText}</span> · {dlLinks}</td>
-      : <td className='muted'>{statusText}</td>;
 
-    const hideCls = pastSeasonRows.length >= util.TABLE_PAGE_SIZE ? 'hide' : undefined;
-    if (w) {
-      const wHref = resolveAgentHref(publicDir, projectMeta, w.slug, w.name, profileSlugs);
-      pastSeasonRows.push(
-        <tr className={hideCls}>
-          {seasonCell}
-          {statusCell}
-          <td>{renderAgentLink(w.name, wHref, true)} <code>{w.version}</code></td>
-          <td className='num'><strong>{w.elo}</strong> <span className='muted'>±{w.ci95}</span></td>
-          <td className='num'>{w.gxe.toFixed(1)}%</td>
-          <td className='num'>{w.wins}–{w.losses}–{w.ties}</td>
-        </tr>
+    let leaderCell: util.Child;
+    if (rendered.top1Entry !== undefined) {
+      const w = rendered.top1Entry;
+      const wHref = `/projects/${encodeURIComponent(w.slug)}/`;
+      leaderCell = (
+        <td>
+          {renderAgentLink(w.name, wHref, true)} <code>{w.version}</code>
+        </td>
       );
     } else {
-      pastSeasonRows.push(
-        <tr className={hideCls}>
-          {seasonCell}
-          {statusCell}
-          <td className='muted'>—</td>
-          <td className='num muted'>—</td>
-          <td className='num muted'>—</td>
-          <td className='num muted'>—</td>
+      const stateLabel = l.status === 'upcoming'
+        ? 'Upcoming'
+        : rendered.hasActiveEntries
+          ? 'Provisional'
+          : 'No entries yet';
+      leaderCell = <td className='muted'>{stateLabel}</td>;
+    }
+
+    const isLive = l.status !== 'upcoming' &&
+      liveMatch !== undefined &&
+      (liveMatch.ladderId === l.id || liveMatch.slot === l.slot);
+    let lastCell: util.Child = <td className='num muted'>—</td>;
+    if (isLive) {
+      lastCell = (
+        <td className='num'>
+          <a href='/arena/battles/' className='live-pill'>{'\u25cf'} Live</a>
+        </td>
+      );
+    } else if (l.status !== 'upcoming') {
+      const lastTs = lastCompletedByLadder.get(l.id);
+      if (lastTs !== undefined) {
+        lastCell = (
+          <td className='num muted' data-ts={lastTs}>
+            {formatRelativeTime(nowSec, lastTs)}
+          </td>
+        );
+      }
+    }
+
+    ladderSummaryRows.push(
+      <tr
+        className={hasPast ? 'battle-row' : undefined}
+        data-slot={hasPast ? l.slot : undefined}
+        tabIndex={hasPast ? 0 : undefined}
+        aria-expanded={hasPast ? 'false' : undefined}
+      >
+        {ladderCell}
+        {leaderCell}
+        <td className='num'>{rendered.entrantCount.toLocaleString('en-US')}</td>
+        <td className='num'>{rendered.matchCount.toLocaleString('en-US')}</td>
+        {lastCell}
+      </tr>
+    );
+
+    for (const {ladder: past, rendered: pastRendered} of slotPast) {
+      const pastHref = `/arena/ladders/${encodeURIComponent(past.id)}/`;
+      const pastFmtTitle = FORMAT_TITLES[past.format] ?? past.format;
+      const startDate = util.formatUtcDate(past.createdAt);
+      const endDate = past.archivedAt !== undefined
+        ? util.formatUtcDate(past.archivedAt)
+        : util.formatUtcDate(nowSec);
+      const dateRange = `${startDate} – ${endDate}`;
+      const pastW = pastRendered.top1Entry;
+      const pastLeaderCell = pastW ? (
+        <td>
+          {renderAgentLink(pastW.name, `/projects/${encodeURIComponent(pastW.slug)}/`, true)}{' '}
+          <code>{pastW.version}</code>
+        </td>
+      ) : (
+        <td className='muted'>—</td>
+      );
+      const pastLastTs = lastCompletedByLadder.get(past.id);
+      const pastLastCell = pastLastTs !== undefined ? (
+        <td className='num muted' data-ts={pastLastTs}>
+          {formatRelativeTime(nowSec, pastLastTs)}
+        </td>
+      ) : (
+        <td className='num muted'>—</td>
+      );
+
+      ladderSummaryRows.push(
+        <tr className='season-detail-row hide' data-season-for={l.slot}>
+          <td className='season-name-cell'>
+            <a href={pastHref} className='subtle' title={pastFmtTitle}>
+              <strong><tt>{past.name}</tt></strong>
+            </a>{' '}
+            <span className='muted'>({past.status} · {dateRange})</span>
+          </td>
+          {pastLeaderCell}
+          <td className='num'>{pastRendered.entrantCount.toLocaleString('en-US')}</td>
+          <td className='num'>{pastRendered.matchCount.toLocaleString('en-US')}</td>
+          {pastLastCell}
         </tr>
       );
     }
@@ -2742,38 +2748,43 @@ export function renderArenaAndLadderArtifacts(opts: {
           </table>
         </div>
       </section>
-      {pastSeasonRows.length > 0 ? (
-        <section id='seasons'>
-          <h3><a href='#seasons' className='subtle'>Past Seasons</a></h3>
-          <div className='table-wrap'>
-            <table className='standings-table'>
-              <thead>
-                <tr>
-                  <th>Season</th>
-                  <th>Status</th>
-                  <th>Champion</th>
-                  <th className='num'>Elo</th>
-                  <th className='num'>GXE</th>
-                  <th className='num'>W–L–T</th>
-                </tr>
-              </thead>
-              <tbody>{pastSeasonRows}</tbody>
-            </table>
-          </div>
-          <util.TablePager
-            id='seasons-pager'
-            label='Past seasons pagination'
-            total={pastSeasonRows.length}
-            singular='season'
-            plural='seasons'
-          />
-        </section>
-      ) : undefined}
       <section id='tournaments'>
         <h3><a href='#tournaments' className='subtle'>Tournaments</a></h3>
         {util.raw(tournamentsSummaryHtml)}
       </section>
-      <script>{util.raw(util.TABLE_PAGER_SCRIPT)}</script>
+      <script>{util.raw(`
+  ${util.TABLE_PAGER_SCRIPT}
+  document.addEventListener('DOMContentLoaded', () => {
+    const laddersSec = document.getElementById('ladders');
+    if (!laddersSec) return;
+    const toggleSlot = row => {
+      const slot = row.getAttribute('data-slot');
+      if (!slot) return;
+      const open = !row.classList.contains('expanded');
+      row.classList.toggle('expanded', open);
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      laddersSec.querySelectorAll('tr[data-season-for="' + slot + '"]').forEach(sub => {
+        sub.classList.toggle('hide', !open);
+      });
+    };
+    laddersSec.addEventListener('click', ev => {
+      const t = ev.target;
+      if (t && t.closest && t.closest('a, button, input, select, label')) return;
+      const row = t && t.closest ? t.closest('tr.battle-row[data-slot]') : undefined;
+      if (row) toggleSlot(row);
+    });
+    laddersSec.addEventListener('keydown', ev => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      const t = ev.target;
+      if (t && t.closest && t.closest('a, button, input, select, label')) return;
+      const row = t && t.closest ? t.closest('tr.battle-row[data-slot]') : undefined;
+      if (row) {
+        ev.preventDefault();
+        toggleSlot(row);
+      }
+    });
+  });
+`)}</script>
     </>
   );
 
