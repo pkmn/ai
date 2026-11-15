@@ -113,23 +113,20 @@
   border-radius: var(--border-radius);
 }
 
+/* clean-css ignore:start */
 @container (width >= 896px) {
   .viewer-frame {
     height: calc((100cqw - 280px) * 0.5625 + 40px);
   }
 }
 
-.player-cell {
-  display: flex;
-  gap: 1ch;
-  align-items: center;
-  justify-content: space-between;
-}
+/* clean-css ignore:end */
 
 .party-minisprites {
   display: inline-flex;
   gap: 1px;
   align-items: center;
+  vertical-align: middle;
 }
 
 .party-minisprites span {

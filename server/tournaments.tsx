@@ -983,18 +983,10 @@ function renderTournamentGamesNode(opts: {
             <code>{gameCode}</code>
           </a>
         </td>
-        <td>
-          <div className='player-cell'>
-            {raw(render.formatAgentLink(p1.name, p1Href, false))}
-            {renderPartyMinisprites(p1.team)}
-          </div>
-        </td>
-        <td>
-          <div className='player-cell'>
-            {raw(render.formatAgentLink(p2.name, p2Href, false))}
-            {renderPartyMinisprites(p2.team)}
-          </div>
-        </td>
+        <td>{raw(render.formatAgentLink(p1.name, p1Href, false))}</td>
+        <td>{renderPartyMinisprites(p1.team) ?? '\u00a0'}</td>
+        <td>{raw(render.formatAgentLink(p2.name, p2Href, false))}</td>
+        <td>{renderPartyMinisprites(p2.team) ?? '\u00a0'}</td>
         <td className='center'>
           <a href='#live' className='live-pill' data-live-table={tb.table} title={tip}>
             {'\u25cf'} T{tb.table}
@@ -1057,23 +1049,15 @@ function renderTournamentGamesNode(opts: {
             <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
             <code title={g.id}>{gameCode}</code>
           </td>
-          <td>
-            <div className='player-cell'>
-              {raw(render.formatAgentLink(g.p1Name, p1Href, p1Won))}
-              {renderPartyMinisprites(g.p1Team)}
-            </div>
-          </td>
-          <td>
-            <div className='player-cell'>
-              {raw(render.formatAgentLink(g.p2Name, p2Href, p2Won))}
-              {renderPartyMinisprites(g.p2Team)}
-            </div>
-          </td>
+          <td>{raw(render.formatAgentLink(g.p1Name, p1Href, p1Won))}</td>
+          <td>{renderPartyMinisprites(g.p1Team) ?? '\u00a0'}</td>
+          <td>{raw(render.formatAgentLink(g.p2Name, p2Href, p2Won))}</td>
+          <td>{renderPartyMinisprites(g.p2Team) ?? '\u00a0'}</td>
           <td className='center'>{resNode}</td>
           <td className='num muted' title={completedUtc} data-ts={g.completedAt}>{rel}</td>
         </tr>
         <tr className='battle-detail-row hide' data-detail-for={g.id}>
-          <td colSpan={5}>
+          <td colSpan={7}>
             {renderTournamentGameDetailNode(g, hasLog ? logUrl : undefined)}
           </td>
         </tr>
@@ -1094,7 +1078,9 @@ function renderTournamentGamesNode(opts: {
             <tr>
               <th>Game</th>
               <th>Player 1</th>
+              <th>{'\u00a0'}</th>
               <th>Player 2</th>
+              <th>{'\u00a0'}</th>
               <th className='center'>Result</th>
               <th className='num'>Completed</th>
             </tr>
@@ -1102,7 +1088,7 @@ function renderTournamentGamesNode(opts: {
           <tbody id='games-tbody'>
             {liveRows.length === 0 && completedRows.length === 0 ? (
               <tr className='empty-row'>
-                <td colSpan={5} className='center muted'>No completed games yet.</td>
+                <td colSpan={7} className='center muted'>No completed games yet.</td>
               </tr>
             ) : (
               [...liveRows, ...completedRows]
@@ -1886,12 +1872,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const codePrefix = tb.stage === 'Superfinal' ? 'SF' : 'RR';
       const codeNum = tb.stage === 'Superfinal' ? (tb.matchupGame || 1) : (tb.cycle || 1);
       const gameCode = codePrefix + codeNum;
-      const p1Cell = '<div class="player-cell">' +
-        formatAgentLink(p1.name, p1.slug, false) +
-        renderPartyMinisprites(p1.team) + '</div>';
-      const p2Cell = '<div class="player-cell">' +
-        formatAgentLink(p2.name, p2.slug, false) +
-        renderPartyMinisprites(p2.team) + '</div>';
+      const p1NameHtml = formatAgentLink(p1.name, p1.slug, false);
+      const p1SpritesHtml = renderPartyMinisprites(p1.team) || '&nbsp;';
+      const p2NameHtml = formatAgentLink(p2.name, p2.slug, false);
+      const p2SpritesHtml = renderPartyMinisprites(p2.team) || '&nbsp;';
       const turn = parseLatestTurn(tb.lines);
       const tip = turn !== undefined
         ? ('Spectate live on ' + tb.label + ' (Turn ' + turn + ')')
@@ -1903,8 +1887,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       tr.innerHTML =
         '<td><a href="#live" class="subtle" data-live-table="' + tb.table +
           '" title="' + esc(tip) + '"><code>' + esc(gameCode) + '</code></a></td>' +
-        '<td>' + p1Cell + '</td>' +
-        '<td>' + p2Cell + '</td>' +
+        '<td>' + p1NameHtml + '</td>' +
+        '<td>' + p1SpritesHtml + '</td>' +
+        '<td>' + p2NameHtml + '</td>' +
+        '<td>' + p2SpritesHtml + '</td>' +
         '<td class="center"><a href="#live" class="live-pill" data-live-table="' + tb.table +
           '" title="' + esc(tip) + '">&#9679; T' + tb.table + '</a></td>' +
         '<td class="num muted">—</td>';
@@ -1970,12 +1956,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           ? '0–<strong>1</strong>'
           : '½–½';
 
-      const p1Cell = '<div class="player-cell">' +
-        formatAgentLink(g.p1.name, g.p1.slug, p1Won) +
-        renderPartyMinisprites(g.p1.team) + '</div>';
-      const p2Cell = '<div class="player-cell">' +
-        formatAgentLink(g.p2.name, g.p2.slug, p2Won) +
-        renderPartyMinisprites(g.p2.team) + '</div>';
+      const p1NameHtml = formatAgentLink(g.p1.name, g.p1.slug, p1Won);
+      const p1SpritesHtml = renderPartyMinisprites(g.p1.team) || '&nbsp;';
+      const p2NameHtml = formatAgentLink(g.p2.name, g.p2.slug, p2Won);
+      const p2SpritesHtml = renderPartyMinisprites(g.p2.team) || '&nbsp;';
 
       const tsTitle = utcStr(g.completedAt);
       const rel = relTime(nowSec, g.completedAt);
@@ -1988,8 +1972,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       tr.innerHTML =
         '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span><code title="' +
           esc(g.id) + '">' + esc(gameCode) + '</code></td>' +
-        '<td>' + p1Cell + '</td>' +
-        '<td>' + p2Cell + '</td>' +
+        '<td>' + p1NameHtml + '</td>' +
+        '<td>' + p1SpritesHtml + '</td>' +
+        '<td>' + p2NameHtml + '</td>' +
+        '<td>' + p2SpritesHtml + '</td>' +
         '<td class="center">' + resHtml + '</td>' +
         '<td class="num muted" title="' + esc(tsTitle) + '" data-ts="' + g.completedAt + '">' +
           esc(rel) + '</td>';
@@ -1997,7 +1983,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const detailTr = document.createElement('tr');
       detailTr.className = 'battle-detail-row hide';
       detailTr.dataset.detailFor = g.id;
-      detailTr.innerHTML = '<td colspan="5">' + renderTournamentGameDetailHtml(g) + '</td>';
+      detailTr.innerHTML = '<td colspan="7">' + renderTournamentGameDetailHtml(g) + '</td>';
       return [tr, detailTr];
     };
 
@@ -2049,7 +2035,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         }
         gamesTbody.insertBefore(frag, gamesTbody.firstChild);
       } else if (gamesTbody.children.length === 0) {
-        gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="5" class="center muted">' +
+        gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="center muted">' +
           'No completed games yet.</td></tr>';
       }
       applyGamesPager();
