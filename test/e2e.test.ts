@@ -1221,8 +1221,8 @@ describe('mock scenarios & E2E lifecycle', () => {
               });
               await livePage.waitForFunction(
                 () => document.querySelector(
-                  '#games-tbody tr.live-game-row[data-live-game-table="2"]'
-                )?.textContent?.includes('12')
+                  '#games-tbody tr.live-game-row[data-live-game-table="2"] [data-live-table="2"]'
+                )?.getAttribute('title')?.includes('Turn 12')
               );
 
               // Complete Table 2 game -> updates Standings, Crosstable, and prepends replay row!
@@ -1247,6 +1247,10 @@ describe('mock scenarios & E2E lifecycle', () => {
                   outcome: 'W',
                   turns: 12,
                   endReason: 'normal',
+                  p1MeanTurnMillis: 310,
+                  p2MeanTurnMillis: 420,
+                  p1PeakRam: 4096,
+                  p2PeakRam: 3072,
                   p1BankSeconds: 118,
                   p2BankSeconds: 105,
                   completedAt: nowSeconds + 10,
@@ -1258,16 +1262,25 @@ describe('mock scenarios & E2E lifecycle', () => {
                 `${prevWins + 1}–`
               );
 
-              // Click the newly prepended game's replay link -> Replay mode + Return to Live button
+              // Click the newly prepended game row -> expands telemetry + inline replay viewer!
               await livePage.locator(
-                '#games-tbody a[data-replay-log="/arena/tournaments/2/t2-e2e-live-2.log"]'
-              ).click();
-              await livePage.waitForSelector('[data-return-live]');
-              expect(await livePage.locator('#series-left').textContent()).toContain('Replay');
+                '#games-tbody tr[data-game-id="t2-e2e-live-2"] td'
+              ).first().click();
+              const expandedGameDetail = livePage.locator(
+                '#games-tbody tr[data-detail-for="t2-e2e-live-2"]:not(.hide)'
+              );
+              const detailText = await expandedGameDetail.textContent();
+              expect(detailText).toContain('9,8,7,6');
+              expect(detailText).toContain('12 turns');
+              expect(detailText).toContain('310 ms/turn');
+              expect(detailText).toContain('4,096 MiB');
+              await livePage.waitForSelector(
+                '#games-tbody tr[data-detail-for="t2-e2e-live-2"] iframe.replay-viewer-frame'
+              );
 
-              // Return to Live (switches to active Table 1), then start the next battle on Table 1
+              // Switch #live back to active Table 1, then start the next battle on Table 1
               // -> #live immediately transitions to the new battle without refreshing!
-              await livePage.locator('[data-return-live]').click();
+              await livePage.locator('#series-right [data-live-table="1"]').click();
               await livePage.waitForFunction(
                 expected => document.getElementById('clock-name-p1')?.textContent === expected,
                 eA.agentName

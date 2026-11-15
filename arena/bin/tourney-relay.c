@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -70,13 +71,14 @@ static int write_all(int fd, const char *buf, size_t len) {
 }
 
 static volatile pid_t child_pgid = 0;
+static volatile sig_atomic_t term_requested = 0;
 
 static void handle_term_signal(int sig) {
   (void)sig;
+  term_requested = 1;
   if (child_pgid > 0) {
     kill(-child_pgid, SIGKILL);
   }
-  _exit(1);
 }
 
 int main(int argc, char **argv) {
@@ -146,6 +148,7 @@ int main(int argc, char **argv) {
   char chunk[4096];
 
   for (;;) {
+    if (term_requested) goto done;
     int timeout_ms = -1;
     if (stdin_eof) {
       uint64_t now_ns = monotonic_ns();
@@ -253,6 +256,13 @@ done:
     kill(-child_pgid, SIGKILL);
   }
   waitpid(pid, &status, 0);
+  struct rusage ru;
+  if (getrusage(RUSAGE_CHILDREN, &ru) == 0 && ru.ru_maxrss > 0) {
+    unsigned long long peak_mib = (unsigned long long)((ru.ru_maxrss + 1023) / 1024);
+    if (peak_mib < 1ULL) peak_mib = 1ULL;
+    fprintf(stderr, "ARENA_PEAK_RAM=%llu\n", peak_mib);
+    fflush(stderr);
+  }
   if (WIFEXITED(status)) {
     int code = WEXITSTATUS(status);
     // Reserve exit code 255 exclusively for OpenSSH transport errors so an agent calling

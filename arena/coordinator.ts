@@ -792,14 +792,18 @@ export class Coordinator {
       ? this.readArchivedGameLog(cp.ladderId, cp.id, 'a', cp.startedAt || now)
       : undefined;
 
-    const p1PeakRam = Math.max(cp.g1P1Ram ?? 64, g2Res.p2PeakRam);
-    const p2PeakRam = Math.max(cp.g1P2Ram ?? 64, g2Res.p1PeakRam);
-    const p1MeanTurnMillis = Math.round(
-      ((cp.g1P1TurnMillis ?? 0) + g2Res.p2MeanTurnMillis) / 2
-    );
-    const p2MeanTurnMillis = Math.round(
-      ((cp.g1P2TurnMillis ?? 0) + g2Res.p1MeanTurnMillis) / 2
-    );
+    const p1Game1PeakRam = cp.g1P1Ram ?? 64;
+    const p1Game2PeakRam = g2Res.p2PeakRam;
+    const p2Game1PeakRam = cp.g1P2Ram ?? 64;
+    const p2Game2PeakRam = g2Res.p1PeakRam;
+    const p1PeakRam = Math.max(p1Game1PeakRam, p1Game2PeakRam);
+    const p2PeakRam = Math.max(p2Game1PeakRam, p2Game2PeakRam);
+    const p1Game1MeanTurnMillis = Math.round(cp.g1P1TurnMillis ?? 0);
+    const p1Game2MeanTurnMillis = Math.round(g2Res.p2MeanTurnMillis);
+    const p2Game1MeanTurnMillis = Math.round(cp.g1P2TurnMillis ?? 0);
+    const p2Game2MeanTurnMillis = Math.round(g2Res.p1MeanTurnMillis);
+    const p1MeanTurnMillis = Math.round((p1Game1MeanTurnMillis + p1Game2MeanTurnMillis) / 2);
+    const p2MeanTurnMillis = Math.round((p2Game1MeanTurnMillis + p2Game2MeanTurnMillis) / 2);
 
     const payload: arena.MatchCompletePayload = {
       match: {
@@ -819,12 +823,20 @@ export class Coordinator {
         game2EndReason: g2Res.endReason,
         p1PeakRam,
         p2PeakRam,
+        p1Game1PeakRam,
+        p1Game2PeakRam,
+        p2Game1PeakRam,
+        p2Game2PeakRam,
         p1Game1BankSeconds: cp.g1P1BankSeconds ?? 0,
         p1Game2BankSeconds: g2Res.p2BankSeconds,
         p2Game1BankSeconds: cp.g1P2BankSeconds ?? 0,
         p2Game2BankSeconds: g2Res.p1BankSeconds,
         p1MeanTurnMillis,
         p2MeanTurnMillis,
+        p1Game1MeanTurnMillis,
+        p1Game2MeanTurnMillis,
+        p2Game1MeanTurnMillis,
+        p2Game2MeanTurnMillis,
         completedAt: now,
       },
       ...(cp.teamMode === 'random'
@@ -1229,14 +1241,18 @@ export class Coordinator {
       }).catch(() => undefined);
     }
 
-    const p1PeakRam = Math.max(g1Res.p1PeakRam, g2Res.p2PeakRam);
-    const p2PeakRam = Math.max(g1Res.p2PeakRam, g2Res.p1PeakRam);
-    const p1MeanTurnMillis = Math.round(
-      (g1Res.p1MeanTurnMillis + g2Res.p2MeanTurnMillis) / 2
-    );
-    const p2MeanTurnMillis = Math.round(
-      (g1Res.p2MeanTurnMillis + g2Res.p1MeanTurnMillis) / 2
-    );
+    const p1Game1PeakRam = g1Res.p1PeakRam;
+    const p1Game2PeakRam = g2Res.p2PeakRam;
+    const p2Game1PeakRam = g1Res.p2PeakRam;
+    const p2Game2PeakRam = g2Res.p1PeakRam;
+    const p1PeakRam = Math.max(p1Game1PeakRam, p1Game2PeakRam);
+    const p2PeakRam = Math.max(p2Game1PeakRam, p2Game2PeakRam);
+    const p1Game1MeanTurnMillis = Math.round(g1Res.p1MeanTurnMillis);
+    const p1Game2MeanTurnMillis = Math.round(g2Res.p2MeanTurnMillis);
+    const p2Game1MeanTurnMillis = Math.round(g1Res.p2MeanTurnMillis);
+    const p2Game2MeanTurnMillis = Math.round(g2Res.p1MeanTurnMillis);
+    const p1MeanTurnMillis = Math.round((p1Game1MeanTurnMillis + p1Game2MeanTurnMillis) / 2);
+    const p2MeanTurnMillis = Math.round((p2Game1MeanTurnMillis + p2Game2MeanTurnMillis) / 2);
 
     const completePayload: arena.MatchCompletePayload = {
       match: {
@@ -1256,12 +1272,20 @@ export class Coordinator {
         game2EndReason: g2Res.endReason,
         p1PeakRam,
         p2PeakRam,
+        p1Game1PeakRam,
+        p1Game2PeakRam,
+        p2Game1PeakRam,
+        p2Game2PeakRam,
         p1Game1BankSeconds: g1Res.p1BankSeconds,
         p1Game2BankSeconds: g2Res.p2BankSeconds,
         p2Game1BankSeconds: g1Res.p2BankSeconds,
         p2Game2BankSeconds: g2Res.p1BankSeconds,
         p1MeanTurnMillis,
         p2MeanTurnMillis,
+        p1Game1MeanTurnMillis,
+        p1Game2MeanTurnMillis,
+        p2Game1MeanTurnMillis,
+        p2Game2MeanTurnMillis,
         completedAt,
       },
       ...(ladder.team === 'random' ? {game1Log: g1Log, game2Log: g2Log} : {}),

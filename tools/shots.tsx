@@ -826,12 +826,12 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-tournament-1-replay',
       section: 'tournaments',
-      title: 'Tournament #1 (Inline Replay Viewer)',
+      title: 'Tournament #1 (Expanded Game Row · Inline Replay Viewer)',
       description:
-        'Clicking a game code in `#games` on a completed tournament opens the inline ' +
-        'Pokémon Showdown battle viewer in Replay mode (`Replay · SF1`).',
+        'Clicking a completed game row in `#games` expands its telemetry and mounts the inline ' +
+        'Pokémon Showdown replay viewer right inside the row.',
       path: '/arena/tournaments/1/',
-      click: '#games a[data-replay-log]',
+      click: '#games tr.battle-row td:first-child',
     },
     {
       name: 'arena-tournament-2',
@@ -881,12 +881,12 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-tournament-2-replay',
       section: 'tournaments',
-      title: 'Tournament #2 (Live Tournament Viewing Past Replay)',
+      title: 'Tournament #2 (Live Tournament · Expanded Game Replay)',
       description:
-        'Clicking a completed round-robin game during a live tournament switches the viewer to ' +
-        'Replay mode and displays the `● Return to Live` button.',
+        'Clicking a completed round-robin game row in `#games` during a live tournament ' +
+        'expands its telemetry and inline replay viewer while `#live` continues broadcasting.',
       path: '/arena/tournaments/2/',
-      click: '#games a[data-replay-log]',
+      click: '#games tr.battle-row td:first-child',
     },
     {
       name: 'arena-tournament-3',

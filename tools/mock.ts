@@ -2396,12 +2396,20 @@ export class Runner {
       game2EndReason: g2Reason,
       p1PeakRam: p1Ram,
       p2PeakRam: p2Ram,
+      p1Game1PeakRam: Math.max(64, p1Ram - 12 - (this.state.matchSeq % 16)),
+      p1Game2PeakRam: p1Ram,
+      p2Game1PeakRam: p2Ram,
+      p2Game2PeakRam: Math.max(64, p2Ram - 16 - (this.state.matchSeq % 20)),
       p1Game1BankSeconds: 95 + this.nextInt(55),
       p1Game2BankSeconds: 90 + this.nextInt(55),
       p2Game1BankSeconds: 92 + this.nextInt(55),
       p2Game2BankSeconds: 88 + this.nextInt(55),
       p1MeanTurnMillis: p1TurnMillis,
       p2MeanTurnMillis: p2TurnMillis,
+      p1Game1MeanTurnMillis: Math.max(10, p1TurnMillis - 8 + (this.state.matchSeq % 9)),
+      p1Game2MeanTurnMillis: Math.max(10, p1TurnMillis + 8 - (this.state.matchSeq % 9)),
+      p2Game1MeanTurnMillis: Math.max(10, p2TurnMillis + 6 - (this.state.matchSeq % 7)),
+      p2Game2MeanTurnMillis: Math.max(10, p2TurnMillis - 6 + (this.state.matchSeq % 7)),
       completedAt: opts.completedAt,
     };
 
@@ -3103,6 +3111,10 @@ export class Runner {
           turns: outcome === 'T' ? 100 : (isVgc ? 8 + this.nextInt(9) : 24 + this.nextInt(24)),
           p1BankSeconds: 70 + this.nextInt(50),
           p2BankSeconds: 60 + this.nextInt(50),
+          p1MeanTurnMillis: 220 + ((item.p1.versionId * 37 + item.seq * 13) % 380),
+          p2MeanTurnMillis: 240 + ((item.p2.versionId * 41 + item.seq * 17) % 380),
+          p1PeakRam: 1850 + ((item.p1.versionId * 431 + item.seq * 97) % 8600),
+          p2PeakRam: 2100 + ((item.p2.versionId * 479 + item.seq * 113) % 8600),
           completedAt: at,
         };
         const shouldEmitLog =
@@ -3181,6 +3193,10 @@ export class Runner {
               turns: tour.format.includes('vgc') ? 10 : 34,
               p1BankSeconds: 88,
               p2BankSeconds: 64,
+              p1MeanTurnMillis: 250 + ((p1.versionId * 37 + g * 19) % 340),
+              p2MeanTurnMillis: 270 + ((p2.versionId * 41 + g * 23) % 340),
+              p1PeakRam: 2400 + ((p1.versionId * 431 + g * 107) % 8200),
+              p2PeakRam: 2600 + ((p2.versionId * 479 + g * 127) % 8200),
               completedAt: this.state.now,
             };
             const sfLog = buildShowdownTournamentLog({

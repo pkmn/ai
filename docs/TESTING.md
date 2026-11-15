@@ -148,10 +148,11 @@ The 7 sections cover:
    `P1:<hash>` -> `teams.json#<hash>` links), format filter (`VGC`), Page 2 pagination, `Idle` live
    state, `Stale / Offline` heartbeat state, and empty battle history.
 5. **Championship Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal
-   `SF` badges and `1-replays.7z`), inline Showdown replay viewer, live Tournament `#2` multi-table
-   broadcast (`Table 1`, switched to `Table 2`, `Table 2 (idle)` with `● Watch T1` pill, and Replay
-   mode with `● Return to Live` pill), scheduled Tournament `#3` with registered entrants, and
-   scheduled tournament with 0 entrants.
+   `SF` badges and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay
+   viewer, live Tournament `#2` multi-table broadcast (`Table 1`, switched to `Table 2`,
+   `Table 2 (idle)` with `● Watch T1` pill, and inline expanded completed game row while `#live`
+   continues broadcasting), scheduled Tournament `#3` with registered entrants, and scheduled
+   tournament with 0 entrants.
 6. **Account & Submissions (`account`):** Unregistered GitHub user (`403`), disabled project (`403`),
    `Pending` qualification (both locked and with Tournament `#3` OCI open), `Qualified` pre-launch,
    `Eligible` new competitor (`0` submissions), VGC incremental team validation (`0 / 20` panel,

@@ -844,6 +844,63 @@ function renderTournamentCrosstableNode(opts: {
   };
 }
 
+function renderTournamentGameDetailNode(g: db.TournamentGameView, logUrl?: string): Html {
+  const completedAt = g.completedAt ?? 0;
+  const completedIso = new Date(completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const completedUtc = `${completedIso} UTC`;
+  const end = render.formatEndReasonNode(g.endReason ?? 'normal');
+
+  return (
+    <div
+      className='battle-detail'
+      data-match-id={logUrl ? g.id : undefined}
+      data-p1-name={logUrl ? g.p1Name : undefined}
+      data-p2-name={logUrl ? g.p2Name : undefined}
+      data-g1-log={logUrl}
+      data-single-game={logUrl ? '1' : undefined}
+    >
+      <div className='battle-detail-meta'>
+        <span className='muted'>{completedUtc}</span>
+        <span>
+          {g.preemptions > 0 ? (
+            <>
+              <span className='muted'>Preemptions:</span> <code>{g.preemptions}</code> ·{' '}
+            </>
+          ) : undefined}
+          <span className='muted'>Seed:</span> <code>{g.seed}</code>
+        </span>
+      </div>
+      <div className='battle-detail-card'>
+        <div className='battle-detail-title'>
+          <span>Game</span>
+          <span className='battle-detail-sub'>
+            <tt>{g.turns ?? 0} turns</tt>
+            {end.show ? <> · {end.node}</> : undefined}
+          </span>
+        </div>
+        <div className='battle-detail-line'>
+          <span><tt>P1</tt></span>
+          {render.formatGamePlayerTelemetryNode(
+            g.p1MeanTurnMillis ?? 0,
+            g.p1BankSeconds ?? 0,
+            g.p1PeakRam ?? 0,
+            49152
+          )}
+        </div>
+        <div className='battle-detail-line'>
+          <span><tt>P2</tt></span>
+          {render.formatGamePlayerTelemetryNode(
+            g.p2MeanTurnMillis ?? 0,
+            g.p2BankSeconds ?? 0,
+            g.p2PeakRam ?? 0,
+            49152
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function renderTournamentGamesNode(opts: {
   tournament: db.TournamentRow;
   games: db.TournamentGameView[];
@@ -853,6 +910,7 @@ function renderTournamentGamesNode(opts: {
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
   logFiles?: ReadonlySet<string>;
+  nowSec: number;
 }): Html {
   const {
     tournament,
@@ -863,6 +921,7 @@ function renderTournamentGamesNode(opts: {
     projectMeta,
     profileSlugs,
     logFiles,
+    nowSec,
   } = opts;
   const resolvedLogs = logFiles ?? arena.listTournamentLogFiles(publicDir, tournament.id);
 
@@ -879,10 +938,9 @@ function renderTournamentGamesNode(opts: {
       ? render.resolveAgentHref(publicDir, projectMeta, p2.slug, p2.name, profileSlugs)
       : undefined;
     const turn = parseLatestTurnFromLines(tb.lines);
-    const turnsStr = turn !== undefined ? String(turn) : '—';
-    const b1 = Math.round(p1.bankSeconds);
-    const b2 = Math.round(p2.bankSeconds);
-    const tip = `Spectate live on ${tb.label}`;
+    const tip = turn !== undefined
+      ? `Spectate live on ${tb.label} (Turn ${turn})`
+      : `Spectate live on ${tb.label}`;
     const rowCls = idx >= TABLE_PAGE_SIZE ? 'live-game-row hide' : 'live-game-row';
 
     return (
@@ -909,8 +967,7 @@ function renderTournamentGamesNode(opts: {
             {'\u25cf'} T{tb.table}
           </a>
         </td>
-        <td className='num'>{turnsStr}</td>
-        <td className='num'>{b1}s / {b2}s</td>
+        <td className='num muted'>—</td>
       </tr>
     );
   });
@@ -923,7 +980,6 @@ function renderTournamentGamesNode(opts: {
     const hasLog = resolvedLogs.has(logRel);
     const logUrl = `/arena/tournaments/${encodeURIComponent(tournament.id)}/` +
       encodeURIComponent(logRel);
-    const gameHref = hasLog ? logUrl : '#games';
 
     const p1Won = g.outcome === 'W';
     const p2Won = g.outcome === 'L';
@@ -947,47 +1003,53 @@ function renderTournamentGamesNode(opts: {
       g.p2Name,
       profileSlugs
     );
-    const turnsStr = g.turns !== undefined ? String(g.turns) : '—';
-    const b1 = Math.round(g.p1BankSeconds ?? 0);
-    const b2 = Math.round(g.p2BankSeconds ?? 0);
+    const completedAt = g.completedAt ?? 0;
+    const completedIso = new Date(completedAt * 1000)
+      .toISOString()
+      .replace('T', ' ')
+      .slice(0, 19);
+    const completedUtc = `${completedIso} UTC`;
+    const rel = render.formatRelativeTime(nowSec, completedAt);
+    const rowCls = liveTables.length + idx >= TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
 
     return (
-      <tr
-        className={liveTables.length + idx >= TABLE_PAGE_SIZE ? 'hide' : undefined}
-        data-game-id={g.id}
-      >
-        <td>
-          <a
-            href={gameHref}
-            className='subtle'
-            data-replay-log={hasLog ? logUrl : undefined}
-            title={g.id}
-          >
-            <code>{gameCode}</code>
-          </a>
-        </td>
-        <td>
-          <div className='player-cell'>
-            {raw(render.formatAgentLink(g.p1Name, p1Href, p1Won))}
-            {renderPartyMinisprites(g.p1Team)}
-          </div>
-        </td>
-        <td>
-          <div className='player-cell'>
-            {raw(render.formatAgentLink(g.p2Name, p2Href, p2Won))}
-            {renderPartyMinisprites(g.p2Team)}
-          </div>
-        </td>
-        <td className='center'>{resNode}</td>
-        <td className='num'>{turnsStr}</td>
-        <td className='num'>{b1}s / {b2}s</td>
-      </tr>
+      <>
+        <tr
+          className={rowCls}
+          data-game-id={g.id}
+          tabIndex={0}
+          aria-expanded='false'
+        >
+          <td>
+            <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
+            <code title={g.id}>{gameCode}</code>
+          </td>
+          <td>
+            <div className='player-cell'>
+              {raw(render.formatAgentLink(g.p1Name, p1Href, p1Won))}
+              {renderPartyMinisprites(g.p1Team)}
+            </div>
+          </td>
+          <td>
+            <div className='player-cell'>
+              {raw(render.formatAgentLink(g.p2Name, p2Href, p2Won))}
+              {renderPartyMinisprites(g.p2Team)}
+            </div>
+          </td>
+          <td className='center'>{resNode}</td>
+          <td className='num muted' title={completedUtc} data-ts={g.completedAt}>{rel}</td>
+        </tr>
+        <tr className='battle-detail-row hide' data-detail-for={g.id}>
+          <td colSpan={5}>
+            {renderTournamentGameDetailNode(g, hasLog ? logUrl : undefined)}
+          </td>
+        </tr>
+      </>
     );
   });
 
   const archive = resolveTournamentArchive(publicDir, tournament.id);
   const jsonHref = `/arena/tournaments/${encodeURIComponent(tournament.id)}/index.json`;
-  const bankTip = 'Remaining time bank for Player 1 / Player 2 (150s cap, +10s/turn)';
   const countStr = totalCompletedCount.toLocaleString('en-US');
   const totalGameRows = liveTables.length + games.length;
 
@@ -1001,14 +1063,13 @@ function renderTournamentGamesNode(opts: {
               <th>Player 1</th>
               <th>Player 2</th>
               <th className='center'>Result</th>
-              <th className='num'>Turns</th>
-              <th className='num' title={bankTip}>Bank</th>
+              <th className='num'>Completed</th>
             </tr>
           </thead>
           <tbody id='games-tbody'>
             {liveRows.length === 0 && completedRows.length === 0 ? (
               <tr className='empty-row'>
-                <td colSpan={6} className='center muted'>No completed games yet.</td>
+                <td colSpan={5} className='center muted'>No completed games yet.</td>
               </tr>
             ) : (
               [...liveRows, ...completedRows]
@@ -1366,7 +1427,6 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     let crosstable = Array.isArray(pageInit.crosstable) ? pageInit.crosstable : [];
     let broadcast = pageInit.broadcast;
     let selectedTable = Number(pageInit.selectedTable) || 1;
-    let mode = 'live';
     let viewerReady = false;
     let pendingPayload = initialViewer;
     let activeClock = (
@@ -1381,24 +1441,13 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
       : undefined;
 
-    const esc = s => String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+    ${render.buildBattleDetailClientJs()}
 
     const formatClockMmSs = seconds => {
       const s = Math.max(0, Math.round(seconds));
       const mm = String(Math.floor(s / 60)).padStart(2, '0');
       const ss = String(s % 60).padStart(2, '0');
       return mm + ':' + ss;
-    };
-
-    const resolveAgentHref = slug => {
-      if (!slug) return '';
-      if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return agentLinks[slug];
-      return '/projects/' + encodeURIComponent(slug) + '/';
     };
 
     const formatAgentLink = (name, slug, bold) => {
@@ -1490,9 +1539,6 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         const p2A = tb.p2.slug === a.slug || tb.p2.name === a.name;
         return p1B && p2A;
       });
-
-    const SPEED_KEY = 'pkmn-viewer-speed';
-    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
 
     const sendToViewer = msg => {
       if (frame && frame.contentWindow) {
@@ -1599,7 +1645,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
       const items = tables.map((tb, idx) => {
         const sep = idx > 0 ? '\\n        —\\n        ' : '';
-        const checked = (mode === 'live' && tb.table === selectedTable) ? ' checked' : '';
+        const checked = tb.table === selectedTable ? ' checked' : '';
         const tbId = 'tb-' + esc(tournamentId) + '-' + tb.table;
         const labelHtml = tb.idle
           ? (esc(tb.label) + ' <span class="muted">(idle)</span>')
@@ -1629,7 +1675,6 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       if (tables.length === 0 || !liveSec) return;
       const tb = getTable(tableNum) || tables[0];
       if (!tb) return;
-      mode = 'live';
       selectedTable = tb.table;
       liveSec.classList.remove('hide');
       renderTableNav();
@@ -1656,16 +1701,6 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
       if (scroll) {
         liveSec.scrollIntoView({behavior: 'smooth'});
-      }
-    };
-
-    const refreshReplayHeaderRight = () => {
-      if (mode !== 'replay' || !seriesRightEl) return;
-      if (getLiveTables().length > 0) {
-        seriesRightEl.innerHTML =
-          '<a href="#live" class="live-pill" data-return-live="1">&#9679; Return to Live</a>';
-      } else {
-        seriesRightEl.innerHTML = '<span class="muted">Completed game</span>';
       }
     };
 
@@ -1825,10 +1860,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         formatAgentLink(p2.name, p2.slug, false) +
         renderPartyMinisprites(p2.team) + '</div>';
       const turn = parseLatestTurn(tb.lines);
-      const turnsStr = turn !== undefined ? String(turn) : '—';
-      const b1 = Math.round(p1.bankSeconds);
-      const b2 = Math.round(p2.bankSeconds);
-      const tip = 'Spectate live on ' + tb.label;
+      const tip = turn !== undefined
+        ? ('Spectate live on ' + tb.label + ' (Turn ' + turn + ')')
+        : ('Spectate live on ' + tb.label);
 
       const tr = document.createElement('tr');
       tr.className = 'live-game-row';
@@ -1840,18 +1874,60 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         '<td>' + p2Cell + '</td>' +
         '<td class="center"><a href="#live" class="live-pill" data-live-table="' + tb.table +
           '" title="' + esc(tip) + '">&#9679; T' + tb.table + '</a></td>' +
-        '<td class="num" data-live-turns>' + turnsStr + '</td>' +
-        '<td class="num" data-live-banks>' + b1 + 's / ' + b2 + 's</td>';
+        '<td class="num muted">—</td>';
       return tr;
     };
 
-    const buildCompletedGameRowEl = g => {
+    const renderTournamentGameDetailHtml = g => {
+      const end = formatEndReason(g.endReason);
+      const endSuffix = end.show ? (' · ' + end.html) : '';
+      const replayAttrs = g.logHref
+        ? ' data-match-id="' + esc(g.id) +
+          '" data-p1-name="' + esc(g.p1.name) +
+          '" data-p2-name="' + esc(g.p2.name) +
+          '" data-g1-log="' + esc(g.logHref) +
+          '" data-single-game="1"'
+        : '';
+      const preemptPrefix = g.preemptions > 0
+        ? '<span class="muted">Preemptions:</span> <code>' + g.preemptions + '</code> · '
+        : '';
+      const p1Mean = Math.round(g.p1.meanTurnMillis || 0);
+      const p2Mean = Math.round(g.p2.meanTurnMillis || 0);
+      const p1Bank = Math.round(g.p1.bankSeconds || 0);
+      const p2Bank = Math.round(g.p2.bankSeconds || 0);
+      const p1Ram = Math.round(g.p1.peakRam || 0);
+      const p2Ram = Math.round(g.p2.peakRam || 0);
+
+      return '<div class="battle-detail"' + replayAttrs + '>' +
+        '<div class="battle-detail-meta">' +
+          '<span class="muted">' + esc(utcStr(g.completedAt)) + '</span>' +
+          '<span>' + preemptPrefix +
+            '<span class="muted">Seed:</span> <code>' + esc(g.seed) + '</code>' +
+          '</span>' +
+        '</div>' +
+        '<div class="battle-detail-card">' +
+          '<div class="battle-detail-title">' +
+            '<span>Game</span>' +
+            '<span class="battle-detail-sub">' +
+              '<tt>' + g.turns + ' turns</tt>' + endSuffix +
+            '</span>' +
+          '</div>' +
+          '<div class="battle-detail-line">' +
+            '<span><tt>P1</tt></span>' +
+            formatGamePlayerTelemetryHtml(p1Mean, p1Bank, p1Ram, 49152) +
+          '</div>' +
+          '<div class="battle-detail-line">' +
+            '<span><tt>P2</tt></span>' +
+            formatGamePlayerTelemetryHtml(p2Mean, p2Bank, p2Ram, 49152) +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    };
+
+    const buildCompletedGameRowEl = (g, nowSec) => {
       const codePrefix = g.stage === 'Superfinal' ? 'SF' : 'RR';
       const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
       const gameCode = codePrefix + codeNum;
-      const hasLog = Boolean(g.logHref);
-      const gameHref = hasLog ? g.logHref : '#games';
-      const replayAttr = hasLog ? ' data-replay-log="' + esc(g.logHref) + '"' : '';
 
       const p1Won = g.outcome === 'W';
       const p2Won = g.outcome === 'L';
@@ -1868,33 +1944,49 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         formatAgentLink(g.p2.name, g.p2.slug, p2Won) +
         renderPartyMinisprites(g.p2.team) + '</div>';
 
-      const turnsStr = g.turns !== undefined ? String(g.turns) : '—';
-      const b1 = Math.round(g.p1.bankSeconds || 0);
-      const b2 = Math.round(g.p2.bankSeconds || 0);
+      const tsTitle = utcStr(g.completedAt);
+      const rel = relTime(nowSec, g.completedAt);
 
       const tr = document.createElement('tr');
+      tr.className = 'battle-row';
       tr.setAttribute('data-game-id', g.id);
+      tr.tabIndex = 0;
+      tr.setAttribute('aria-expanded', 'false');
       tr.innerHTML =
-        '<td><a href="' + esc(gameHref) + '" class="subtle"' + replayAttr +
-          ' title="' + esc(g.id) + '"><code>' + esc(gameCode) + '</code></a></td>' +
+        '<td><span class="battle-toggle" aria-hidden="true">&#9656;</span><code title="' +
+          esc(g.id) + '">' + esc(gameCode) + '</code></td>' +
         '<td>' + p1Cell + '</td>' +
         '<td>' + p2Cell + '</td>' +
         '<td class="center">' + resHtml + '</td>' +
-        '<td class="num">' + turnsStr + '</td>' +
-        '<td class="num">' + b1 + 's / ' + b2 + 's</td>';
-      return tr;
+        '<td class="num muted" title="' + esc(tsTitle) + '" data-ts="' + g.completedAt + '">' +
+          esc(rel) + '</td>';
+
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'battle-detail-row hide';
+      detailTr.dataset.detailFor = g.id;
+      detailTr.innerHTML = '<td colspan="5">' + renderTournamentGameDetailHtml(g) + '</td>';
+      return [tr, detailTr];
     };
 
     const applyGamesPager = () => {
       if (!gamesTbody) return;
-      const rows = Array.from(gamesTbody.querySelectorAll('tr:not(.empty-row)'));
+      const rows = Array.from(
+        gamesTbody.querySelectorAll('tr:not(.empty-row):not(.battle-detail-row)')
+      );
       const total = rows.length;
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
       if (gamesPage > totalPages) gamesPage = totalPages;
       if (gamesPage < 1) gamesPage = 1;
       const start = (gamesPage - 1) * pageSize;
       rows.forEach((row, idx) => {
-        row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+        const hidden = idx < start || idx >= start + pageSize;
+        row.classList.toggle('hide', hidden);
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('battle-detail-row') && hidden) {
+          detail.classList.add('hide');
+          row.classList.remove('expanded');
+          row.setAttribute('aria-expanded', 'false');
+        }
       });
       const pager = document.getElementById('games-pager');
       const prevBtn = document.getElementById('games-pager-prev');
@@ -1924,7 +2016,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         }
         gamesTbody.insertBefore(frag, gamesTbody.firstChild);
       } else if (gamesTbody.children.length === 0) {
-        gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="6" class="center muted">' +
+        gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="5" class="center muted">' +
           'No completed games yet.</td></tr>';
       }
       applyGamesPager();
@@ -1938,22 +2030,40 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       });
       if (existing) {
         if (g.logHref) {
-          const link = existing.querySelector('td a');
-          if (link && !link.getAttribute('data-replay-log')) {
-            link.setAttribute('href', g.logHref);
-            link.setAttribute('data-replay-log', g.logHref);
+          const detail = existing.nextElementSibling;
+          if (detail && detail.classList.contains('battle-detail-row')) {
+            const slot = detail.querySelector('.battle-detail');
+            if (slot && !slot.getAttribute('data-g1-log')) {
+              slot.setAttribute('data-match-id', g.id);
+              slot.setAttribute('data-p1-name', g.p1.name);
+              slot.setAttribute('data-p2-name', g.p2.name);
+              slot.setAttribute('data-g1-log', g.logHref);
+              slot.setAttribute('data-single-game', '1');
+              const sub = slot.querySelector('.battle-detail-sub');
+              if (sub && !sub.querySelector('a[data-replay-log]')) {
+                sub.insertAdjacentHTML(
+                  'beforeend',
+                  ' · <a href="' + esc(g.logHref) + '" class="live-pill" data-replay-log="' +
+                  esc(g.logHref) + '" data-replay-match="' + esc(g.id) +
+                  '" data-replay-game="1">&#9654; Replay</a> · <a href="' +
+                  esc(g.logHref) + '" class="subtle"><code>.log</code></a>'
+                );
+              }
+            }
           }
         }
         return;
       }
       const emptyRow = gamesTbody.querySelector('.empty-row');
       if (emptyRow) emptyRow.remove();
-      const tr = buildCompletedGameRowEl(g);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const pair = buildCompletedGameRowEl(g, nowSec);
       let anchor = gamesTbody.firstElementChild;
       while (anchor && anchor.classList.contains('live-game-row')) {
         anchor = anchor.nextElementSibling;
       }
-      gamesTbody.insertBefore(tr, anchor);
+      gamesTbody.insertBefore(pair[1], anchor);
+      gamesTbody.insertBefore(pair[0], pair[1]);
       applyGamesPager();
     };
 
@@ -1986,7 +2096,34 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       });
     }
 
-    document.addEventListener('click', async ev => {
+    const toggleGameRow = (row, forceOpen) => {
+      const detail = row.nextElementSibling;
+      if (!detail || !detail.classList.contains('battle-detail-row')) return;
+      const open = forceOpen !== undefined ? forceOpen : detail.classList.contains('hide');
+      detail.classList.toggle('hide', !open);
+      row.classList.toggle('expanded', open);
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        const slot = detail.querySelector('.battle-detail[data-match-id]');
+        if (slot && !slot._loadedLogUrl) {
+          void loadRowReplay(slot, 1);
+        }
+      }
+    };
+
+    if (gamesTbody) {
+      gamesTbody.addEventListener('keydown', ev => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        const target = ev.target instanceof Element ? ev.target : undefined;
+        const row = target ? target.closest('tr.battle-row') : undefined;
+        if (row && target === row) {
+          ev.preventDefault();
+          toggleGameRow(row);
+        }
+      });
+    }
+
+    document.addEventListener('click', ev => {
       const target = ev.target instanceof Element ? ev.target : undefined;
       if (!target) return;
       if (target.closest('#standings-pager-prev')) {
@@ -2021,60 +2158,29 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         return;
       }
 
-      const returnBtn = target.closest('[data-return-live]');
-      if (returnBtn) {
-        ev.preventDefault();
-        const cur = getTable(selectedTable);
-        const liveTbs = getLiveTables();
-        const nextNum = (cur && !cur.idle && cur.live !== false)
-          ? selectedTable
-          : (liveTbs[0] ? liveTbs[0].table : selectedTable);
-        showLiveTable(nextNum, false);
-        return;
-      }
-
       const replayLink = target.closest('a[data-replay-log]');
       if (replayLink) {
-        const logUrl = replayLink.getAttribute('data-replay-log');
-        if (!logUrl || !frame || !liveSec) return;
-        ev.preventDefault();
-        try {
-          const fetchUrl = logUrl + (logUrl.indexOf('?') >= 0 ? '&' : '?') + 'side=both';
-          const res = await fetch(fetchUrl);
-          if (!res.ok) return;
-          const ct = String(res.headers.get('content-type') || '');
-          let lines = [];
-          let p1Lines = undefined;
-          let p2Lines = undefined;
-          if (ct.indexOf('application/json') >= 0) {
-            const parsed = await res.json();
-            lines = Array.isArray(parsed.lines) ? parsed.lines : [];
-            p1Lines = Array.isArray(parsed.p1Lines) ? parsed.p1Lines : undefined;
-            p2Lines = Array.isArray(parsed.p2Lines) ? parsed.p2Lines : undefined;
-          } else {
-            const text = await res.text();
-            lines = text.split('\\n');
-          }
-          mode = 'replay';
-          renderClocks(undefined, undefined, false);
-          renderTableNav();
-          liveSec.classList.remove('hide');
-          if (seriesLeftEl) {
-            seriesLeftEl.innerHTML = '<strong>Replay</strong> · <code>' +
-              esc(replayLink.textContent || '') + '</code>';
-          }
-          refreshReplayHeaderRight();
-          pendingPayload = {lines, p1Lines, p2Lines, live: false, side: 'p1'};
-          if (viewerReady) {
-            sendToViewer({type: 'load', ...pendingPayload});
-          }
-          liveSec.scrollIntoView({behavior: 'smooth'});
-        } catch {}
+        const detailRow = replayLink.closest('tr.battle-detail-row');
+        const slot = detailRow
+          ? detailRow.querySelector('.battle-detail[data-match-id]')
+          : undefined;
+        if (slot) {
+          ev.preventDefault();
+          const gNum = Number(replayLink.getAttribute('data-replay-game')) || 1;
+          void loadRowReplay(slot, gNum);
+          return;
+        }
+      }
+
+      if (target.closest('a')) return;
+      const gameRow = target.closest('#games-tbody tr.battle-row');
+      if (gameRow) {
+        toggleGameRow(gameRow);
       }
     });
 
     setInterval(() => {
-      if (mode !== 'live' || !activeClock) return;
+      if (!activeClock) return;
       const clockEl = document.getElementById('clock-' + activeClock.slot);
       if (!clockEl) return;
       const elapsed = Math.floor((Date.now() - activeClock.syncMillis) / 1000);
@@ -2123,18 +2229,13 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           renderCrosstable();
 
           if (broadcast && getTables().length > 0) {
-            if (mode === 'live') {
-              const cur = getTable(selectedTable);
-              const liveTbs = getLiveTables();
-              const targetNum = (cur && !cur.idle && cur.live !== false)
-                ? selectedTable
-                : (liveTbs[0] ? liveTbs[0].table : getTables()[0].table);
-              showLiveTable(targetNum, false);
-            } else {
-              renderTableNav();
-              refreshReplayHeaderRight();
-            }
-          } else if (mode === 'live' && liveSec) {
+            const cur = getTable(selectedTable);
+            const liveTbs = getLiveTables();
+            const targetNum = (cur && !cur.idle && cur.live !== false)
+              ? selectedTable
+              : (liveTbs[0] ? liveTbs[0].table : getTables()[0].table);
+            showLiveTable(targetNum, false);
+          } else if (liveSec) {
             liveSec.classList.add('hide');
             renderClocks(undefined, undefined, false);
           }
@@ -2152,17 +2253,12 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           syncLiveGameRows();
           renderStandings();
           renderCrosstable();
-          if (mode === 'live') {
-            const cur = getTable(selectedTable);
-            const liveTbs = getLiveTables();
-            const targetNum = (cur && !cur.idle && cur.live !== false)
-              ? selectedTable
-              : (liveTbs[0] ? liveTbs[0].table : (getTables()[0] ? getTables()[0].table : 1));
-            showLiveTable(targetNum, false);
-          } else {
-            renderTableNav();
-            refreshReplayHeaderRight();
-          }
+          const cur = getTable(selectedTable);
+          const liveTbs = getLiveTables();
+          const targetNum = (cur && !cur.idle && cur.live !== false)
+            ? selectedTable
+            : (liveTbs[0] ? liveTbs[0].table : (getTables()[0] ? getTables()[0].table : 1));
+          showLiveTable(targetNum, false);
         } catch {}
       });
 
@@ -2176,18 +2272,13 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           syncLiveGameRows();
           renderStandings();
           renderCrosstable();
-          if (mode === 'live') {
-            const cur = getTable(selectedTable);
-            const wasHidden = !liveSec || liveSec.classList.contains('hide');
-            const curInactive = !cur || cur.idle || cur.live === false;
-            if (loaded && (loaded.table === selectedTable || wasHidden || curInactive)) {
-              showLiveTable(loaded.table, false);
-            } else {
-              renderTableNav();
-            }
+          const cur = getTable(selectedTable);
+          const wasHidden = !liveSec || liveSec.classList.contains('hide');
+          const curInactive = !cur || cur.idle || cur.live === false;
+          if (loaded && (loaded.table === selectedTable || wasHidden || curInactive)) {
+            showLiveTable(loaded.table, false);
           } else {
             renderTableNav();
-            refreshReplayHeaderRight();
           }
         } catch {}
       });
@@ -2223,17 +2314,16 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
             );
             if (liveRow) {
               const turn = parseLatestTurn(tb.lines);
-              const turnsTd = liveRow.querySelector('[data-live-turns]') || liveRow.children[4];
-              const banksTd = liveRow.querySelector('[data-live-banks]') || liveRow.children[5];
-              if (turnsTd && turn !== undefined) turnsTd.textContent = String(turn);
-              if (banksTd && tb.p1 && tb.p2) {
-                banksTd.textContent =
-                  Math.round(tb.p1.bankSeconds) + 's / ' + Math.round(tb.p2.bankSeconds) + 's';
+              if (turn !== undefined) {
+                const tip = 'Spectate live on ' + tb.label + ' (Turn ' + turn + ')';
+                liveRow.querySelectorAll('[data-live-table]').forEach(el => {
+                  el.setAttribute('title', tip);
+                });
               }
             }
           }
 
-          if (mode === 'live' && tb.table === selectedTable) {
+          if (tb.table === selectedTable) {
             if (tb.p1 && tb.p2) {
               renderClocks(tb.p1, tb.p2, tb.live !== false);
             }
@@ -2270,14 +2360,12 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           renderStandings();
           renderCrosstable();
           renderTableNav();
-          if (mode === 'live' && data.table === selectedTable) {
+          if (data.table === selectedTable) {
             renderClocks(undefined, undefined, false);
             const tb = getTable(selectedTable);
             if (seriesRightEl && tb) {
               seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
             }
-          } else if (mode === 'replay') {
-            refreshReplayHeaderRight();
           }
         } catch {}
       });
@@ -2289,7 +2377,6 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         renderStandings();
         renderCrosstable();
         renderTableNav();
-        refreshReplayHeaderRight();
       });
 
       es.addEventListener('game-complete', ev => {
@@ -2313,18 +2400,14 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           renderCrosstable();
           renderTableNav();
 
-          if (mode === 'live') {
-            const tb = getTable(selectedTable);
-            if (tb && tb.p1 && tb.p2 && !tb.idle) {
-              renderClocks(tb.p1, tb.p2, tb.live !== false);
-              if (seriesRightEl) {
-                seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
-              }
-            } else {
-              renderClocks(undefined, undefined, false);
+          const tb = getTable(selectedTable);
+          if (tb && tb.p1 && tb.p2 && !tb.idle) {
+            renderClocks(tb.p1, tb.p2, tb.live !== false);
+            if (seriesRightEl) {
+              seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
             }
           } else {
-            refreshReplayHeaderRight();
+            renderClocks(undefined, undefined, false);
           }
 
           if (status === 'completed' && !broadcast) {
@@ -2360,6 +2443,7 @@ export function renderTournamentPage(opts: {
   profileSlugs: ReadonlySet<string>;
   tournamentBroadcast?: LiveBroadcast;
   liveTournament?: {id: string; name: string};
+  nowSec?: number;
 }): {html: string; json: arena.TournamentDocument} {
   const {
     db,
@@ -2371,6 +2455,7 @@ export function renderTournamentPage(opts: {
     profileSlugs,
     tournamentBroadcast,
     liveTournament,
+    nowSec = Math.floor(Date.now() / 1000),
   } = opts;
 
   const allTournaments = db.getTournaments();
@@ -2432,6 +2517,7 @@ export function renderTournamentPage(opts: {
     projectMeta,
     profileSlugs,
     logFiles,
+    nowSec,
   });
 
   const agentLinks: Record<string, string> = {};

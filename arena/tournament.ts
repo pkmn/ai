@@ -74,6 +74,8 @@ export interface GameResult {
   p2BankSeconds: number;
   p1MeanTurnMillis: number;
   p2MeanTurnMillis: number;
+  p1PeakRam: number;
+  p2PeakRam: number;
 }
 export type TournamentGameResult = GameResult;
 
@@ -92,6 +94,7 @@ interface RemoteTournamentPlayer {
   bankMillis: number;
   totalTurnMillis: number;
   decisionsCount: number;
+  peakRam: number;
   hasTakenFirstDecision: boolean;
   retryingInvalidChoice: boolean;
   invalidStrikes: number;
@@ -360,6 +363,7 @@ export class ConcurrentGame {
       bankMillis: this.startingBankMillis,
       totalTurnMillis: 0,
       decisionsCount: 0,
+      peakRam: 1,
       hasTakenFirstDecision: false,
       retryingInvalidChoice: false,
       invalidStrikes: 0,
@@ -431,6 +435,11 @@ export class ConcurrentGame {
             player.turnMillisWaiter = undefined;
             w();
           }
+        }
+      } else if (errLine.startsWith('ARENA_PEAK_RAM=')) {
+        const mib = Number(errLine.slice('ARENA_PEAK_RAM='.length).trim());
+        if (Number.isFinite(mib) && mib >= 1) {
+          player.peakRam = Math.max(player.peakRam, Math.round(mib));
         }
       } else if (errLine.includes('ARENA_SPOT_PREEMPTED')) {
         player.spotPreempted = true;
@@ -767,6 +776,8 @@ export class ConcurrentGame {
           p2BankSeconds: Math.round(this.startingBankMillis / 1000),
           p1MeanTurnMillis: 0,
           p2MeanTurnMillis: 0,
+          p1PeakRam: 1,
+          p2PeakRam: 1,
         };
       }
 
@@ -790,6 +801,8 @@ export class ConcurrentGame {
           p2BankSeconds: Math.round(this.startingBankMillis / 1000),
           p1MeanTurnMillis: 1,
           p2MeanTurnMillis: 1,
+          p1PeakRam: this.p1.peakRam,
+          p2PeakRam: this.p2.peakRam,
         };
       }
 
@@ -832,6 +845,28 @@ export class ConcurrentGame {
 
       await Promise.all([omniTask, p1Task, p2Task]);
 
+      for (const p of [this.p1, this.p2]) {
+        try {
+          p.proc.stdin.end();
+        } catch {}
+        try {
+          p.proc.kill('SIGTERM');
+        } catch {}
+      }
+      if ((this.p1.usesRelay && !this.p1.exited) || (this.p2.usesRelay && !this.p2.exited)) {
+        await Promise.all([this.p1, this.p2].map(p => (
+          p.exited
+            ? Promise.resolve()
+            : new Promise<void>(resolve => {
+              const t = setTimeout(resolve, 150);
+              p.proc.once('close', () => {
+                clearTimeout(t);
+                resolve();
+              });
+            })
+        )));
+      }
+
       const outcome: GameOutcome | undefined =
         this.winner === 'p1'
           ? 'W'
@@ -858,6 +893,8 @@ export class ConcurrentGame {
         p2MeanTurnMillis: this.p2.decisionsCount > 0
           ? Math.max(1, Math.round(this.p2.totalTurnMillis / this.p2.decisionsCount))
           : 1,
+        p1PeakRam: this.p1.peakRam,
+        p2PeakRam: this.p2.peakRam,
       };
     } finally {
       try {
@@ -1625,6 +1662,10 @@ export class Coordinator {
             endReason: res.endReason,
             p1BankSeconds: res.p1BankSeconds,
             p2BankSeconds: res.p2BankSeconds,
+            p1MeanTurnMillis: res.p1MeanTurnMillis,
+            p2MeanTurnMillis: res.p2MeanTurnMillis,
+            p1PeakRam: res.p1PeakRam,
+            p2PeakRam: res.p2PeakRam,
             completedAt: Math.floor(Date.now() / 1000),
           },
         });

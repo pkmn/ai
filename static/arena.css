@@ -363,12 +363,25 @@ tr.battle-row.expanded .battle-toggle {
 }
 
 .battle-detail-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1ch;
+  align-items: baseline;
+  justify-content: space-between;
   margin-bottom: 0.25rem;
   color: rgb(var(--fg-base) / 70%);
   font-weight: bold;
   font-size: 0.85em;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+.battle-detail-sub {
+  color: var(--fg-color);
+  font-weight: normal;
+  font-size: 1.12em;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .battle-detail-line {

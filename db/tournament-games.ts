@@ -28,6 +28,10 @@ export interface TournamentGameRow {
   endReason?: string;
   p1BankSeconds?: number;
   p2BankSeconds?: number;
+  p1MeanTurnMillis?: number;
+  p2MeanTurnMillis?: number;
+  p1PeakRam?: number;
+  p2PeakRam?: number;
   completedAt?: number;
 }
 
@@ -66,6 +70,10 @@ export interface UpsertTournamentGameInput {
   endReason?: string;
   p1BankSeconds?: number;
   p2BankSeconds?: number;
+  p1MeanTurnMillis?: number;
+  p2MeanTurnMillis?: number;
+  p1PeakRam?: number;
+  p2PeakRam?: number;
   completedAt?: number;
 }
 
@@ -86,6 +94,10 @@ export interface CompletedTournamentGamePayload {
   endReason: string;
   p1BankSeconds: number;
   p2BankSeconds: number;
+  p1MeanTurnMillis?: number;
+  p2MeanTurnMillis?: number;
+  p1PeakRam?: number;
+  p2PeakRam?: number;
   completedAt: number;
 }
 
@@ -95,9 +107,10 @@ export function upsertTournamentGame(db: DatabaseSync, input: UpsertTournamentGa
       id, tournament_id, stage, cycle, matchup_game,
       p1_version_id, p2_version_id, seed, status, preemptions,
       p1_team, p2_team, outcome, turns, end_reason,
-      p1_bank_seconds, p2_bank_seconds, completed_at
+      p1_bank_seconds, p2_bank_seconds, p1_mean_turn_millis, p2_mean_turn_millis,
+      p1_peak_ram, p2_peak_ram, completed_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       stage = excluded.stage,
       cycle = excluded.cycle,
@@ -114,6 +127,10 @@ export function upsertTournamentGame(db: DatabaseSync, input: UpsertTournamentGa
       end_reason = excluded.end_reason,
       p1_bank_seconds = excluded.p1_bank_seconds,
       p2_bank_seconds = excluded.p2_bank_seconds,
+      p1_mean_turn_millis = excluded.p1_mean_turn_millis,
+      p2_mean_turn_millis = excluded.p2_mean_turn_millis,
+      p1_peak_ram = excluded.p1_peak_ram,
+      p2_peak_ram = excluded.p2_peak_ram,
       completed_at = excluded.completed_at
   `).run(
     input.id,
@@ -133,6 +150,10 @@ export function upsertTournamentGame(db: DatabaseSync, input: UpsertTournamentGa
     input.endReason ?? null,
     input.p1BankSeconds ?? null,
     input.p2BankSeconds ?? null,
+    input.p1MeanTurnMillis ?? null,
+    input.p2MeanTurnMillis ?? null,
+    input.p1PeakRam ?? null,
+    input.p2PeakRam ?? null,
     input.completedAt ?? null
   );
 }
@@ -156,6 +177,10 @@ function mapTournamentGameView(r: Record<string, unknown>): TournamentGameView {
     endReason: (r.end_reason as string | null) ?? undefined,
     p1BankSeconds: (r.p1_bank_seconds as number | null) ?? undefined,
     p2BankSeconds: (r.p2_bank_seconds as number | null) ?? undefined,
+    p1MeanTurnMillis: (r.p1_mean_turn_millis as number | null) ?? undefined,
+    p2MeanTurnMillis: (r.p2_mean_turn_millis as number | null) ?? undefined,
+    p1PeakRam: (r.p1_peak_ram as number | null) ?? undefined,
+    p2PeakRam: (r.p2_peak_ram as number | null) ?? undefined,
     completedAt: (r.completed_at as number | null) ?? undefined,
     p1Slug: r.p1_slug as string,
     p1Name: r.p1_name as string,
@@ -239,6 +264,10 @@ export function recordCompletedTournamentGame(
       endReason: game.endReason,
       p1BankSeconds: game.p1BankSeconds,
       p2BankSeconds: game.p2BankSeconds,
+      p1MeanTurnMillis: game.p1MeanTurnMillis ?? existing?.p1MeanTurnMillis,
+      p2MeanTurnMillis: game.p2MeanTurnMillis ?? existing?.p2MeanTurnMillis,
+      p1PeakRam: game.p1PeakRam ?? existing?.p1PeakRam,
+      p2PeakRam: game.p2PeakRam ?? existing?.p2PeakRam,
       completedAt: game.completedAt,
     });
 

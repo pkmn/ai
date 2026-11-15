@@ -940,6 +940,10 @@ describe('tournament SSR views', () => {
       endReason: 'normal',
       p1BankSeconds: 145,
       p2BankSeconds: 112,
+      p1MeanTurnMillis: 260,
+      p2MeanTurnMillis: 310,
+      p1PeakRam: 4096,
+      p2PeakRam: 2048,
       completedAt: DAY_3,
     });
     db.upsertTournamentGame({
@@ -1092,8 +1096,11 @@ describe('tournament SSR views', () => {
   test('renders Superfinal badges with team minisprites in tournament games', async () => {
     const tourney2Html = await h.getText('/arena/tournaments/2/');
     expect(tourney2Html).toContain('<span class="muted">SF</span>');
-    expect(tourney2Html).toContain('<code>SF63</code>');
-    expect(tourney2Html).toContain('<code>RR1</code>');
+    expect(tourney2Html).toContain('<code title="gen9ou-0000000201">SF63</code>');
+    expect(tourney2Html).toContain('<code title="gen9ou-0000000101">RR1</code>');
+    expect(tourney2Html).toContain('data-detail-for="gen9ou-0000000201"');
+    expect(tourney2Html).toContain('<tt>29 turns</tt>');
+    expect(tourney2Html).toContain('RAM <tt>4,096 MiB</tt> <span class="muted">(8.3%)</span>');
     expect(tourney2Html).toContain('½–½');
     expect(tourney2Html).toContain(
       'https://www.smogon.com/forums/media/minisprites/dragapult.png'
@@ -1249,13 +1256,21 @@ describe('SSR cache invalidation', () => {
         game1EndReason: 'normal',
         game2EndReason: 'timeout',
         p1PeakRam: 1240,
+        p1Game1PeakRam: 1180,
+        p1Game2PeakRam: 1240,
         p2PeakRam: 2150,
+        p2Game1PeakRam: 2050,
+        p2Game2PeakRam: 2150,
         p1Game1BankSeconds: 132,
         p1Game2BankSeconds: 118,
         p2Game1BankSeconds: 104,
         p2Game2BankSeconds: 0,
         p1MeanTurnMillis: 310,
+        p1Game1MeanTurnMillis: 295,
+        p1Game2MeanTurnMillis: 325,
         p2MeanTurnMillis: 640,
+        p2Game1MeanTurnMillis: 590,
+        p2Game2MeanTurnMillis: 690,
         completedAt: NOW - 60,
       },
     });
@@ -1310,12 +1325,25 @@ describe('SSR cache invalidation', () => {
       expect(battlesIndex).toContain(`Team: <code>${unknownHash}</code>`);
       expect(battlesIndex).toContain(`Team: <code>${p1OwnedHash}</code>`);
       expect(battlesIndex).toContain('data-detail-for="vgc-0000001"');
+      expect(battlesIndex).toContain('<span>Game 1</span>');
+      expect(battlesIndex).toContain('<span>Game 2</span>');
+      expect(battlesIndex).not.toContain('Client Telemetry');
+      expect(battlesIndex).not.toContain('Outcome:</span>');
       expect(battlesIndex).toContain('99,88,77,66');
+      expect(battlesIndex).toContain('295 ms/turn');
+      expect(battlesIndex).toContain('1,180 MiB');
       expect(battlesIndex).toContain('Timeout');
       expect(battlesIndex).toContain('id="battles-pager"');
 
       const fpProfile = await h.getText('/projects/foul-play/');
+      expect(fpProfile).toContain('<th>Version</th>');
+      expect(fpProfile).not.toContain('<th>Ver.</th>');
       expect(fpProfile).toContain('data-detail-for="vgc-0000001"');
+      expect(fpProfile).toContain('<span>Game 1</span>');
+      expect(fpProfile).toContain('<span>Game 2</span>');
+      expect(fpProfile).toContain('<tt>(P1)</tt>');
+      expect(fpProfile).toContain('<tt>(P2)</tt>');
+      expect(fpProfile).not.toContain('Client Telemetry');
       expect(fpProfile).toContain('99,88,77,66');
     } finally {
       await h.close();
@@ -1728,6 +1756,8 @@ describe('JSON route parity & retired pool archives', () => {
       expect(html).toContain(
         `data-g2-log="/arena/ladders/gen9randombattle20261109/${recent.id}b.log"`
       );
+      expect(html).not.toContain('&#9654; Replay');
+      expect(html).not.toContain('<code>.log</code>');
       const bothJson = await h.getJson<{
         lines: string[];
         p1Lines: string[];
@@ -1896,8 +1926,10 @@ describe('JSON route parity & retired pool archives', () => {
   });
 
   test('persists tournament viewer playback speed in localStorage', () => {
+    const renderSrc = fs.readFileSync(root('server', 'render.tsx'), 'utf8');
     const tourSrc = fs.readFileSync(root('server', 'tournaments.tsx'), 'utf8');
-    expect(tourSrc).toContain('pkmn-viewer-speed');
+    expect(renderSrc).toContain('pkmn-viewer-speed');
+    expect(tourSrc).toContain('render.buildBattleDetailClientJs()');
     expect(tourSrc).toContain("sendToViewer({type: 'speed', speed: saved})");
     expect(tourSrc).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
   });

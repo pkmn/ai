@@ -856,7 +856,6 @@ function invertCategory(cat: db.RecentMatchView['category']): string {
 
 function renderRecentMatchesPane(opts: {
   agentSlug: string;
-  agentName: string;
   ladderKey: string;
   isDefault: boolean;
   matches: db.RecentMatchView[];
@@ -867,7 +866,6 @@ function renderRecentMatchesPane(opts: {
 }): Html {
   const {
     agentSlug,
-    agentName,
     ladderKey,
     isDefault,
     matches,
@@ -877,9 +875,6 @@ function renderRecentMatchesPane(opts: {
     nowSec,
   } = opts;
 
-  const bankTitle =
-    `Remaining ${agentName} time bank in Game 1 / Game 2 (Showdown timer: 150s cap)`;
-
   return (
     <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
       <div className='table-wrap'>
@@ -887,20 +882,15 @@ function renderRecentMatchesPane(opts: {
           <thead>
             <tr>
               <th>Match</th>
-              <th>Ver.</th>
+              <th>Version</th>
               <th>Opponent</th>
               <th className='center' title='Match Outcome (Game 1 / Game 2 outcomes)'>Result</th>
-              <th className='num' title='Turns in Game 1 / Game 2'>Turns</th>
-              <th className='num' title={bankTitle}>Bank</th>
-              <th className='num' title='Peak XNU phys_footprint RAM across the 2-game match'>
-                RAM
-              </th>
               <th className='num'>Completed</th>
             </tr>
           </thead>
           <tbody>
             {matches.length === 0 ? (
-              <tr><td colSpan={8} className='center muted'>No completed matches yet.</td></tr>
+              <tr><td colSpan={5} className='center muted'>No completed matches yet.</td></tr>
             ) : (
               matches.map((m, idx) => {
                 const weAreP1 = m.p1.slug === agentSlug;
@@ -923,16 +913,13 @@ function renderRecentMatchesPane(opts: {
                   resNode = <>T <span className='muted'>({ourCat})</span></>;
                 }
 
-                const g1Bank = Math.round(weAreP1 ? m.p1Game1BankSeconds : m.p2Game1BankSeconds);
-                const g2Bank = Math.round(weAreP1 ? m.p1Game2BankSeconds : m.p2Game2BankSeconds);
-                const peakRam = Math.round(weAreP1 ? m.p1PeakRam : m.p2PeakRam);
-
                 const oppHref = agentLinks[oppSide.slug];
                 const tsTitle = formatIsoDateTimeUtc(m.completedAt);
                 const rel = render.formatRelativeTime(nowSec, m.completedAt);
                 const detailHtml = render.renderBattleInlineDetailHtml(
                   arena.enrichMatchView(publicDir, m),
-                  agentLinks
+                  agentLinks,
+                  agentSlug
                 );
                 const rowCls = idx >= TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
 
@@ -955,13 +942,10 @@ function renderRecentMatchesPane(opts: {
                         <code>{oppSide.version}</code>
                       </td>
                       <td className='center'>{resNode}</td>
-                      <td className='num'>{m.game1Turns} / {m.game2Turns}</td>
-                      <td className='num'>{g1Bank}s / {g2Bank}s</td>
-                      <td className='num'>{peakRam.toLocaleString('en-US')}M</td>
                       <td className='num muted' title={tsTitle}>{rel}</td>
                     </tr>
                     <tr className='battle-detail-row hide' data-detail-for={m.id}>
-                      <td colSpan={8}>{raw(detailHtml)}</td>
+                      <td colSpan={5}>{raw(detailHtml)}</td>
                     </tr>
                   </>
                 );
@@ -1142,9 +1126,6 @@ function buildProfileScript(
         resHtml = 'T <span class="muted">(' + esc(ourCat) + ')</span>';
       }
 
-      const g1Bank = Math.round(weAreP1 ? m.p1Game1BankSeconds : m.p2Game1BankSeconds);
-      const g2Bank = Math.round(weAreP1 ? m.p1Game2BankSeconds : m.p2Game2BankSeconds);
-      const peakRam = Math.round(weAreP1 ? m.p1PeakRam : m.p2PeakRam);
       const tsTitle = utcStr(m.completedAt);
       const rel = relTime(nowSec, m.completedAt);
 
@@ -1160,15 +1141,16 @@ function buildProfileScript(
         '<td><code>' + esc(ourSide.version) + '</code></td>' +
         '<td>' + renderAgent(oppSide, false) + '</td>' +
         '<td class="center">' + resHtml + '</td>' +
-        '<td class="num">' + m.game1Turns + ' / ' + m.game2Turns + '</td>' +
-        '<td class="num">' + g1Bank + 's / ' + g2Bank + 's</td>' +
-        '<td class="num">' + peakRam.toLocaleString('en-US') + 'M</td>' +
         '<td class="num muted" title="' + esc(tsTitle) + '">' + esc(rel) + '</td>';
 
       const detailTr = document.createElement('tr');
       detailTr.className = 'battle-detail-row' + (expanded ? '' : ' hide');
       detailTr.dataset.detailFor = m.id;
-      detailTr.innerHTML = '<td colspan="8">' + renderMatchDetailHtml(m) + '</td>';
+      detailTr.innerHTML = '<td colspan="5">' + renderMatchDetailHtml(m, agentSlug) + '</td>';
+      if (expanded) {
+        const slot = detailTr.querySelector('.battle-detail[data-match-id]');
+        if (slot) void loadRowReplay(slot, 1);
+      }
       return [tr, detailTr];
     };
 
@@ -1177,11 +1159,11 @@ function buildProfileScript(
       if (!matches || matches.length === 0) {
         if (curVer !== 'all' || curOpp !== 'all') {
           tbody.innerHTML =
-            '<tr class="empty-filter-row"><td colspan="8" class="center muted">' +
+            '<tr class="empty-filter-row"><td colspan="5" class="center muted">' +
             'No matching battles.</td></tr>';
         } else {
           tbody.innerHTML =
-            '<tr><td colspan="8" class="center muted">No completed matches yet.</td></tr>';
+            '<tr><td colspan="5" class="center muted">No completed matches yet.</td></tr>';
         }
         return;
       }
@@ -1504,8 +1486,27 @@ function buildProfileScript(
         const open = !detail.classList.toggle('hide');
         row.classList.toggle('expanded', open);
         row.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+          const slot = detail.querySelector('.battle-detail[data-match-id]');
+          if (slot && !slot._loadedLogUrl) {
+            void loadRowReplay(slot, 1);
+          }
+        }
       };
       matchesSec.addEventListener('click', e => {
+        const replayLink = e.target.closest('a[data-replay-log]');
+        if (replayLink) {
+          const detailRow = replayLink.closest('tr.battle-detail-row');
+          const slot = detailRow
+            ? detailRow.querySelector('.battle-detail[data-match-id]')
+            : undefined;
+          if (slot) {
+            e.preventDefault();
+            const gNum = Number(replayLink.getAttribute('data-replay-game')) || 1;
+            void loadRowReplay(slot, gNum);
+            return;
+          }
+        }
         if (e.target.closest('a')) return;
         const row = e.target.closest('tr.battle-row');
         if (row) toggleMatchRow(row);
@@ -1992,7 +1993,6 @@ export function renderAgentProfile(opts: {
     matchesPanes.push(
       renderRecentMatchesPane({
         agentSlug: agent.slug,
-        agentName: agent.name,
         ladderKey: lKey,
         isDefault,
         matches: recentMatches,

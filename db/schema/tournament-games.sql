@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS tournament_games (
   -- Remaining clock bank (in seconds) for P1 and P2 at game end, or NULL until completed.
   p1_bank_seconds REAL,
   p2_bank_seconds REAL,
+  -- Mean decision latency per turn (in milliseconds) for P1 and P2, or NULL until completed.
+  p1_mean_turn_millis REAL,
+  p2_mean_turn_millis REAL,
+  -- Peak RAM footprint (in MiB) for P1 and P2 during this game, or NULL until completed.
+  p1_peak_ram INTEGER,
+  p2_peak_ram INTEGER,
   -- Unix timestamp (seconds) when the game finished, or NULL until completed.
   completed_at INTEGER
 );

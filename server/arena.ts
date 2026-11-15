@@ -215,6 +215,7 @@ export interface TournamentGameEntry {
   cycle: number;
   matchupGame: number;
   seed: string;
+  preemptions?: number;
   outcome?: ratings.GameOutcome;
   endReason?: string;
   turns?: number;
@@ -227,6 +228,8 @@ export interface TournamentGameEntry {
     version: string;
     team?: string;
     bankSeconds?: number;
+    meanTurnMillis?: number;
+    peakRam?: number;
   };
   p2: {
     versionId: number;
@@ -235,6 +238,8 @@ export interface TournamentGameEntry {
     version: string;
     team?: string;
     bankSeconds?: number;
+    meanTurnMillis?: number;
+    peakRam?: number;
   };
 }
 
@@ -379,6 +384,7 @@ export function enrichTournamentGame(
     cycle: g.cycle,
     matchupGame: g.matchupGame,
     seed: g.seed,
+    preemptions: g.preemptions,
     outcome: g.outcome,
     endReason: g.endReason,
     turns: g.turns,
@@ -391,6 +397,8 @@ export function enrichTournamentGame(
       version: g.p1Version,
       team: g.p1Team,
       bankSeconds: g.p1BankSeconds,
+      meanTurnMillis: g.p1MeanTurnMillis,
+      peakRam: g.p1PeakRam,
     },
     p2: {
       versionId: g.p2VersionId,
@@ -399,6 +407,8 @@ export function enrichTournamentGame(
       version: g.p2Version,
       team: g.p2Team,
       bankSeconds: g.p2BankSeconds,
+      meanTurnMillis: g.p2MeanTurnMillis,
+      peakRam: g.p2PeakRam,
     },
   };
 }
@@ -1468,7 +1478,23 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
   if (typeof m.game2EndReason !== 'string' || !m.game2EndReason.trim()) {
     throw Object.assign(new Error('Invalid match.game2EndReason.'), {status: 400});
   }
-  if (!isNonNegInt(m.p1PeakRam) || !isNonNegInt(m.p2PeakRam)) {
+  const hasMatchRam = isNonNegInt(m.p1PeakRam) && isNonNegInt(m.p2PeakRam);
+  const hasGameRam =
+    isNonNegInt(m.p1Game1PeakRam) &&
+    isNonNegInt(m.p1Game2PeakRam) &&
+    isNonNegInt(m.p2Game1PeakRam) &&
+    isNonNegInt(m.p2Game2PeakRam);
+  if (!hasMatchRam && !hasGameRam) {
+    throw Object.assign(new Error('Invalid peak RAM telemetry.'), {status: 400});
+  }
+  if (
+    (m.p1PeakRam !== undefined && !isNonNegInt(m.p1PeakRam)) ||
+    (m.p2PeakRam !== undefined && !isNonNegInt(m.p2PeakRam)) ||
+    (m.p1Game1PeakRam !== undefined && !isNonNegInt(m.p1Game1PeakRam)) ||
+    (m.p1Game2PeakRam !== undefined && !isNonNegInt(m.p1Game2PeakRam)) ||
+    (m.p2Game1PeakRam !== undefined && !isNonNegInt(m.p2Game1PeakRam)) ||
+    (m.p2Game2PeakRam !== undefined && !isNonNegInt(m.p2Game2PeakRam))
+  ) {
     throw Object.assign(new Error('Invalid peak RAM telemetry.'), {status: 400});
   }
   if (
@@ -1479,12 +1505,37 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
   ) {
     throw Object.assign(new Error('Invalid bank telemetry.'), {status: 400});
   }
-  if (!isNonNegInt(m.p1MeanTurnMillis) || !isNonNegInt(m.p2MeanTurnMillis)) {
+  const hasMatchTurnMs = isNonNegInt(m.p1MeanTurnMillis) && isNonNegInt(m.p2MeanTurnMillis);
+  const hasGameTurnMs =
+    isNonNegInt(m.p1Game1MeanTurnMillis) &&
+    isNonNegInt(m.p1Game2MeanTurnMillis) &&
+    isNonNegInt(m.p2Game1MeanTurnMillis) &&
+    isNonNegInt(m.p2Game2MeanTurnMillis);
+  if (!hasMatchTurnMs && !hasGameTurnMs) {
+    throw Object.assign(new Error('Invalid meanTurnMillis telemetry.'), {status: 400});
+  }
+  if (
+    (m.p1MeanTurnMillis !== undefined && !isNonNegInt(m.p1MeanTurnMillis)) ||
+    (m.p2MeanTurnMillis !== undefined && !isNonNegInt(m.p2MeanTurnMillis)) ||
+    (m.p1Game1MeanTurnMillis !== undefined && !isNonNegInt(m.p1Game1MeanTurnMillis)) ||
+    (m.p1Game2MeanTurnMillis !== undefined && !isNonNegInt(m.p1Game2MeanTurnMillis)) ||
+    (m.p2Game1MeanTurnMillis !== undefined && !isNonNegInt(m.p2Game1MeanTurnMillis)) ||
+    (m.p2Game2MeanTurnMillis !== undefined && !isNonNegInt(m.p2Game2MeanTurnMillis))
+  ) {
     throw Object.assign(new Error('Invalid meanTurnMillis telemetry.'), {status: 400});
   }
   if (!isPosInt(m.completedAt)) {
     throw Object.assign(new Error('Invalid match.completedAt.'), {status: 400});
   }
+
+  const p1G1Ram = m.p1Game1PeakRam ?? m.p1PeakRam ?? 0;
+  const p1G2Ram = m.p1Game2PeakRam ?? m.p1PeakRam ?? 0;
+  const p2G1Ram = m.p2Game1PeakRam ?? m.p2PeakRam ?? 0;
+  const p2G2Ram = m.p2Game2PeakRam ?? m.p2PeakRam ?? 0;
+  const p1G1TurnMs = m.p1Game1MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
+  const p1G2TurnMs = m.p1Game2MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
+  const p2G1TurnMs = m.p2Game1MeanTurnMillis ?? m.p2MeanTurnMillis ?? 0;
+  const p2G2TurnMs = m.p2Game2MeanTurnMillis ?? m.p2MeanTurnMillis ?? 0;
 
   return {
     id: m.id.trim(),
@@ -1501,14 +1552,22 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
     game2Turns: m.game2Turns,
     game1EndReason: m.game1EndReason.trim(),
     game2EndReason: m.game2EndReason.trim(),
-    p1PeakRam: m.p1PeakRam,
-    p2PeakRam: m.p2PeakRam,
+    p1PeakRam: m.p1PeakRam ?? Math.max(p1G1Ram, p1G2Ram),
+    p2PeakRam: m.p2PeakRam ?? Math.max(p2G1Ram, p2G2Ram),
+    p1Game1PeakRam: p1G1Ram,
+    p1Game2PeakRam: p1G2Ram,
+    p2Game1PeakRam: p2G1Ram,
+    p2Game2PeakRam: p2G2Ram,
     p1Game1BankSeconds: m.p1Game1BankSeconds,
     p1Game2BankSeconds: m.p1Game2BankSeconds,
     p2Game1BankSeconds: m.p2Game1BankSeconds,
     p2Game2BankSeconds: m.p2Game2BankSeconds,
-    p1MeanTurnMillis: m.p1MeanTurnMillis,
-    p2MeanTurnMillis: m.p2MeanTurnMillis,
+    p1MeanTurnMillis: m.p1MeanTurnMillis ?? Math.round((p1G1TurnMs + p1G2TurnMs) / 2),
+    p2MeanTurnMillis: m.p2MeanTurnMillis ?? Math.round((p2G1TurnMs + p2G2TurnMs) / 2),
+    p1Game1MeanTurnMillis: p1G1TurnMs,
+    p1Game2MeanTurnMillis: p1G2TurnMs,
+    p2Game1MeanTurnMillis: p2G1TurnMs,
+    p2Game2MeanTurnMillis: p2G2TurnMs,
     completedAt: m.completedAt,
   };
 }
@@ -1617,6 +1676,21 @@ function parseCompletedTournamentGame(
   if (!isFiniteNonNeg(g.p2BankSeconds)) {
     throw Object.assign(new Error('Invalid game.p2BankSeconds.'), {status: 400});
   }
+  if (g.p1MeanTurnMillis !== undefined && !isFiniteNonNeg(g.p1MeanTurnMillis)) {
+    throw Object.assign(new Error('Invalid game.p1MeanTurnMillis.'), {status: 400});
+  }
+  if (g.p2MeanTurnMillis !== undefined && !isFiniteNonNeg(g.p2MeanTurnMillis)) {
+    throw Object.assign(new Error('Invalid game.p2MeanTurnMillis.'), {status: 400});
+  }
+  if (g.p1PeakRam !== undefined && !isPosInt(g.p1PeakRam)) {
+    throw Object.assign(new Error('Invalid game.p1PeakRam.'), {status: 400});
+  }
+  if (g.p2PeakRam !== undefined && !isPosInt(g.p2PeakRam)) {
+    throw Object.assign(new Error('Invalid game.p2PeakRam.'), {status: 400});
+  }
+  if (g.preemptions !== undefined && !isNonNegInt(g.preemptions)) {
+    throw Object.assign(new Error('Invalid game.preemptions.'), {status: 400});
+  }
   if (!isPosInt(g.completedAt)) {
     throw Object.assign(new Error('Invalid game.completedAt.'), {status: 400});
   }
@@ -1632,11 +1706,16 @@ function parseCompletedTournamentGame(
     p1Team: typeof g.p1Team === 'string' && g.p1Team.trim() ? g.p1Team.trim() : undefined,
     p2Team: typeof g.p2Team === 'string' && g.p2Team.trim() ? g.p2Team.trim() : undefined,
     seed: g.seed.trim(),
+    preemptions: g.preemptions,
     outcome: g.outcome as ratings.GameOutcome,
     endReason: g.endReason.trim(),
     turns: g.turns,
     p1BankSeconds: g.p1BankSeconds,
     p2BankSeconds: g.p2BankSeconds,
+    p1MeanTurnMillis: g.p1MeanTurnMillis,
+    p2MeanTurnMillis: g.p2MeanTurnMillis,
+    p1PeakRam: g.p1PeakRam,
+    p2PeakRam: g.p2PeakRam,
     completedAt: g.completedAt,
   };
 }

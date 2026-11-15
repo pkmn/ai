@@ -42,17 +42,21 @@ CREATE TABLE IF NOT EXISTS matches (
   -- 'invalid-choice').
   game1_end_reason TEXT NOT NULL,
   game2_end_reason TEXT NOT NULL,
-  -- Peak XNU physical memory footprint (MiB) observed for each agent across the 2-game match.
-  p1_peak_ram REAL NOT NULL,
-  p2_peak_ram REAL NOT NULL,
+  -- Peak XNU physical memory footprint (MiB) observed for each agent in Game 1 and Game 2.
+  p1_game1_peak_ram REAL NOT NULL,
+  p1_game2_peak_ram REAL NOT NULL,
+  p2_game1_peak_ram REAL NOT NULL,
+  p2_game2_peak_ram REAL NOT NULL,
   -- Remaining Showdown chess-clock bank (in seconds) at the end of Game 1 and Game 2 for each agent.
   p1_game1_bank_seconds REAL NOT NULL,
   p1_game2_bank_seconds REAL NOT NULL,
   p2_game1_bank_seconds REAL NOT NULL,
   p2_game2_bank_seconds REAL NOT NULL,
-  -- Mean decision latency per turn (in milliseconds) across both games for each agent.
-  p1_mean_turn_millis REAL NOT NULL,
-  p2_mean_turn_millis REAL NOT NULL,
+  -- Mean decision latency per turn (in milliseconds) in Game 1 and Game 2 for each agent.
+  p1_game1_mean_turn_millis REAL NOT NULL,
+  p1_game2_mean_turn_millis REAL NOT NULL,
+  p2_game1_mean_turn_millis REAL NOT NULL,
+  p2_game2_mean_turn_millis REAL NOT NULL,
   -- Unix timestamp (seconds) when Game 2 finished.
   completed_at INTEGER NOT NULL
 );

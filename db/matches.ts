@@ -25,14 +25,22 @@ export interface CompletedMatchPayload {
   game2Turns: number;
   game1EndReason: string;
   game2EndReason: string;
-  p1PeakRam: number;
-  p2PeakRam: number;
+  p1PeakRam?: number;
+  p2PeakRam?: number;
+  p1Game1PeakRam?: number;
+  p1Game2PeakRam?: number;
+  p2Game1PeakRam?: number;
+  p2Game2PeakRam?: number;
   p1Game1BankSeconds: number;
   p1Game2BankSeconds: number;
   p2Game1BankSeconds: number;
   p2Game2BankSeconds: number;
-  p1MeanTurnMillis: number;
-  p2MeanTurnMillis: number;
+  p1MeanTurnMillis?: number;
+  p2MeanTurnMillis?: number;
+  p1Game1MeanTurnMillis?: number;
+  p1Game2MeanTurnMillis?: number;
+  p2Game1MeanTurnMillis?: number;
+  p2Game2MeanTurnMillis?: number;
   completedAt: number;
 }
 
@@ -64,12 +72,20 @@ export interface RecentMatchView {
   game2EndReason: string;
   p1MeanTurnMillis: number;
   p2MeanTurnMillis: number;
+  p1Game1MeanTurnMillis: number;
+  p1Game2MeanTurnMillis: number;
+  p2Game1MeanTurnMillis: number;
+  p2Game2MeanTurnMillis: number;
   p1Game1BankSeconds: number;
   p1Game2BankSeconds: number;
   p2Game1BankSeconds: number;
   p2Game2BankSeconds: number;
   p1PeakRam: number;
   p2PeakRam: number;
+  p1Game1PeakRam: number;
+  p1Game2PeakRam: number;
+  p2Game1PeakRam: number;
+  p2Game2PeakRam: number;
   completedAt: number;
 }
 
@@ -164,15 +180,32 @@ export function recordCompletedMatch(
     ).get(m.ladderId) as {prev: number | null} | undefined;
     const prevMatchSec = prevRow?.prev ?? undefined;
 
+    const p1G1Ram = m.p1Game1PeakRam ?? m.p1PeakRam ?? 0;
+    const p1G2Ram = m.p1Game2PeakRam ?? m.p1PeakRam ?? 0;
+    const p2G1Ram = m.p2Game1PeakRam ?? m.p2PeakRam ?? 0;
+    const p2G2Ram = m.p2Game2PeakRam ?? m.p2PeakRam ?? 0;
+    const p1PeakRam = m.p1PeakRam ?? Math.max(p1G1Ram, p1G2Ram);
+    const p2PeakRam = m.p2PeakRam ?? Math.max(p2G1Ram, p2G2Ram);
+
+    const p1G1TurnMs = m.p1Game1MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
+    const p1G2TurnMs = m.p1Game2MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
+    const p2G1TurnMs = m.p2Game1MeanTurnMillis ?? m.p2MeanTurnMillis ?? 0;
+    const p2G2TurnMs = m.p2Game2MeanTurnMillis ?? m.p2MeanTurnMillis ?? 0;
+    const p1MeanTurnMillis = m.p1MeanTurnMillis ?? Math.round((p1G1TurnMs + p1G2TurnMs) / 2);
+    const p2MeanTurnMillis = m.p2MeanTurnMillis ?? Math.round((p2G1TurnMs + p2G2TurnMs) / 2);
+
     db.prepare(`
       INSERT INTO matches (
         id, ladder_id, p1_version_id, p2_version_id, seed, p1_team_label, p2_team_label,
         game1_outcome, game2_outcome, category, game1_turns, game2_turns,
-        game1_end_reason, game2_end_reason, p1_peak_ram, p2_peak_ram,
+        game1_end_reason, game2_end_reason,
+        p1_game1_peak_ram, p1_game2_peak_ram, p2_game1_peak_ram, p2_game2_peak_ram,
         p1_game1_bank_seconds, p1_game2_bank_seconds, p2_game1_bank_seconds, p2_game2_bank_seconds,
-        p1_mean_turn_millis, p2_mean_turn_millis, completed_at
+        p1_game1_mean_turn_millis, p1_game2_mean_turn_millis,
+        p2_game1_mean_turn_millis, p2_game2_mean_turn_millis,
+        completed_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       m.id,
       m.ladderId,
@@ -188,14 +221,18 @@ export function recordCompletedMatch(
       m.game2Turns,
       m.game1EndReason,
       m.game2EndReason,
-      m.p1PeakRam,
-      m.p2PeakRam,
+      p1G1Ram,
+      p1G2Ram,
+      p2G1Ram,
+      p2G2Ram,
       m.p1Game1BankSeconds,
       m.p1Game2BankSeconds,
       m.p2Game1BankSeconds,
       m.p2Game2BankSeconds,
-      m.p1MeanTurnMillis,
-      m.p2MeanTurnMillis,
+      p1G1TurnMs,
+      p1G2TurnMs,
+      p2G1TurnMs,
+      p2G2TurnMs,
       m.completedAt
     );
 
@@ -290,8 +327,8 @@ export function recordCompletedMatch(
       m.p1VersionId,
       false,
       ternary.p1,
-      m.p1MeanTurnMillis,
-      m.p1PeakRam,
+      p1MeanTurnMillis,
+      p1PeakRam,
       countSideFaults(
         m.game1Outcome === 'L',
         m.game2Outcome === 'L',
@@ -303,8 +340,8 @@ export function recordCompletedMatch(
       m.p2VersionId,
       true,
       ternary.p2,
-      m.p2MeanTurnMillis,
-      m.p2PeakRam,
+      p2MeanTurnMillis,
+      p2PeakRam,
       countSideFaults(
         m.game1Outcome === 'W',
         m.game2Outcome === 'W',
@@ -360,6 +397,14 @@ export function recordCompletedMatch(
 }
 
 function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
+  const p1G1TurnMs = r.p1_game1_mean_turn_millis as number;
+  const p1G2TurnMs = r.p1_game2_mean_turn_millis as number;
+  const p2G1TurnMs = r.p2_game1_mean_turn_millis as number;
+  const p2G2TurnMs = r.p2_game2_mean_turn_millis as number;
+  const p1G1Ram = r.p1_game1_peak_ram as number;
+  const p1G2Ram = r.p1_game2_peak_ram as number;
+  const p2G1Ram = r.p2_game1_peak_ram as number;
+  const p2G2Ram = r.p2_game2_peak_ram as number;
   return {
     id: r.id as string,
     ladderId: r.ladder_id as string,
@@ -388,14 +433,22 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
     game2Turns: r.game2_turns as number,
     game1EndReason: r.game1_end_reason as string,
     game2EndReason: r.game2_end_reason as string,
-    p1MeanTurnMillis: r.p1_mean_turn_millis as number,
-    p2MeanTurnMillis: r.p2_mean_turn_millis as number,
+    p1MeanTurnMillis: Math.round((p1G1TurnMs + p1G2TurnMs) / 2),
+    p2MeanTurnMillis: Math.round((p2G1TurnMs + p2G2TurnMs) / 2),
+    p1Game1MeanTurnMillis: p1G1TurnMs,
+    p1Game2MeanTurnMillis: p1G2TurnMs,
+    p2Game1MeanTurnMillis: p2G1TurnMs,
+    p2Game2MeanTurnMillis: p2G2TurnMs,
     p1Game1BankSeconds: r.p1_game1_bank_seconds as number,
     p1Game2BankSeconds: r.p1_game2_bank_seconds as number,
     p2Game1BankSeconds: r.p2_game1_bank_seconds as number,
     p2Game2BankSeconds: r.p2_game2_bank_seconds as number,
-    p1PeakRam: r.p1_peak_ram as number,
-    p2PeakRam: r.p2_peak_ram as number,
+    p1PeakRam: Math.max(p1G1Ram, p1G2Ram),
+    p2PeakRam: Math.max(p2G1Ram, p2G2Ram),
+    p1Game1PeakRam: p1G1Ram,
+    p1Game2PeakRam: p1G2Ram,
+    p2Game1PeakRam: p2G1Ram,
+    p2Game2PeakRam: p2G2Ram,
     completedAt: r.completed_at as number,
   };
 }
@@ -425,14 +478,18 @@ const RECENT_MATCH_SELECT_SQL = `
     m.game2_turns,
     m.game1_end_reason,
     m.game2_end_reason,
-    m.p1_mean_turn_millis,
-    m.p2_mean_turn_millis,
+    m.p1_game1_mean_turn_millis,
+    m.p1_game2_mean_turn_millis,
+    m.p2_game1_mean_turn_millis,
+    m.p2_game2_mean_turn_millis,
     m.p1_game1_bank_seconds,
     m.p1_game2_bank_seconds,
     m.p2_game1_bank_seconds,
     m.p2_game2_bank_seconds,
-    m.p1_peak_ram,
-    m.p2_peak_ram,
+    m.p1_game1_peak_ram,
+    m.p1_game2_peak_ram,
+    m.p2_game1_peak_ram,
+    m.p2_game2_peak_ram,
     m.completed_at
   FROM matches m
   JOIN ladders l ON l.id = m.ladder_id
