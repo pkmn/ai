@@ -172,6 +172,7 @@ match rby pokerus@1.0.2 foul-play@1.4.0 --count 5 --over 15m
 match sv pokerus@1.0.2 foul-play@1.4.0 --count 5 --over 15m
 match adv mikumiku@0.9.2 foul-play@1.4.0 --count 5 --over 5m
 match rand mikumiku@0.9.2 foul-play@1.4.0 --count 5 --over 5m
+ladder archive rand
 match vgc mikumiku@0.9.2 foul-play@1.4.0 --count 5 --over 5m
 
 time now-15m

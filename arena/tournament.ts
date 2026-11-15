@@ -38,6 +38,8 @@ export interface TurnBroadcastInfo {
   p1Thinking: boolean;
   p2Thinking: boolean;
   lines: string[];
+  p1Pokemon?: unknown[];
+  p2Pokemon?: unknown[];
 }
 export type TournamentTurnBroadcastInfo = TurnBroadcastInfo;
 
@@ -98,21 +100,9 @@ interface RemoteTournamentPlayer {
   exited: boolean;
 }
 
-const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION} = arbiter;
-
-export function rewriteBlindPlayerNames(
-  chunk: string,
-  p1DisplayName: string,
-  p2DisplayName: string
-): string {
-  return chunk
-    .replaceAll('|player|p1|Agent A|', `|player|p1|${p1DisplayName}|`)
-    .replaceAll('|player|p2|Agent B|', `|player|p2|${p2DisplayName}|`)
-    .replaceAll('|win|Agent A', `|win|${p1DisplayName}`)
-    .replaceAll('|win|Agent B', `|win|${p2DisplayName}`)
-    .replaceAll('☆Agent A|', `☆${p1DisplayName}|`)
-    .replaceAll('☆Agent B|', `☆${p2DisplayName}|`);
-}
+const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION, rewriteBlindPlayerNames} =
+  arbiter;
+export {rewriteBlindPlayerNames};
 
 export interface TournamentTeamPair {
   p1Team: string;
@@ -287,17 +277,35 @@ export class ConcurrentGame {
     this.streams = sim.BattleStreams.getPlayerStreams(this.battleStream);
   }
 
+  private lastLogIndex = 0;
+
+  private getFullLog(): string {
+    const rawLog = this.battleStream.battle
+      ? this.battleStream.battle.log.join('\n')
+      : this.omniscientLog.join('\n');
+    return rewriteBlindPlayerNames(rawLog, this.p1Spec.displayName, this.p2Spec.displayName);
+  }
+
   private getSpectatorLines(): string[] {
-    return this.omniscientLog.join('\n').split('\n').filter(Boolean);
+    const full = this.getFullLog();
+    return full.length > 0 ? full.split('\n') : [];
   }
 
   private emitSpectatorChunk(rawChunk: string) {
+    let chunkToEmit = rawChunk;
+    if (this.battleStream.battle) {
+      const battleLog = this.battleStream.battle.log;
+      chunkToEmit = battleLog.slice(this.lastLogIndex).join('\n');
+      this.lastLogIndex = battleLog.length;
+    }
     const publicChunk = rewriteBlindPlayerNames(
-      rawChunk,
+      chunkToEmit,
       this.p1Spec.displayName,
       this.p2Spec.displayName
     );
     this.omniscientLog.push(publicChunk);
+    const p1Pokemon = this.battleStream.battle?.sides[0]?.getRequestData().pokemon;
+    const p2Pokemon = this.battleStream.battle?.sides[1]?.getRequestData().pokemon;
     this.onSpectatorChunk?.(publicChunk, {
       turn: this.currentTurn,
       p1BankSeconds: Math.max(
@@ -311,6 +319,8 @@ export class ConcurrentGame {
       p1Thinking: Boolean(this.p1?.thinking),
       p2Thinking: Boolean(this.p2?.thinking),
       lines: this.getSpectatorLines(),
+      p1Pokemon,
+      p2Pokemon,
     });
   }
 
@@ -837,7 +847,7 @@ export class ConcurrentGame {
         preemptedSlot: this.preemptedSlot,
         turns: this.currentTurn,
         endReason: this.endReason,
-        omniscientLog: this.omniscientLog.join('\n'),
+        omniscientLog: this.getFullLog(),
         p1TeamPacked: p1Team,
         p2TeamPacked: p2Team,
         p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
@@ -1553,7 +1563,8 @@ export class Coordinator {
           p2TeamPacked: sampled.p2Team,
           maxTurns: this.maxTurns,
           onSpectatorChunk: (chunk, snap) => {
-            const newLines = chunk.split('\n').filter(Boolean);
+            if (!chunk) return;
+            const newLines = chunk.split('\n');
             if (newLines.length === 0) return;
             void this.client.sendTournamentBroadcast(tournamentId, {
               table: params.tableNum,
@@ -1565,6 +1576,7 @@ export class Coordinator {
                 bankSeconds: snap.p1BankSeconds,
                 thinking: snap.p1Thinking,
                 incrementSeconds: incSeconds,
+                ...(snap.p1Pokemon ? {pokemon: snap.p1Pokemon} : {}),
               },
               p2: {
                 slug: p2Ent.agentSlug,
@@ -1573,6 +1585,7 @@ export class Coordinator {
                 bankSeconds: snap.p2BankSeconds,
                 thinking: snap.p2Thinking,
                 incrementSeconds: incSeconds,
+                ...(snap.p2Pokemon ? {pokemon: snap.p2Pokemon} : {}),
               },
               lines: newLines,
               live: true,

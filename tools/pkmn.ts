@@ -486,23 +486,24 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!ladder) {
           throw new Error(`Unknown ladder "${ladderId}"`);
         }
-        if (ladder.team !== 'pools') {
+        if (ladder.team !== 'pools' && ladder.team !== 'random') {
           throw new Error(
-            'Full battle log archives are only published for team-pool (pools) ladders ' +
+            'Full battle log archives are only published for random or team-pool (pools) ladders ' +
             `("${ladder.id}" has team="${ladder.team}")`
           );
         }
-        if (ladder.status !== 'archived') {
+        if (ladder.team === 'pools' && ladder.status !== 'archived') {
           throw new Error(
             `Ladder "${ladder.id}" must be retired ("archived") before publishing full battle ` +
             `logs (current status="${ladder.status}")`
           );
         }
         const pub = options.publicDir ?? render.PUBLIC_DIR;
-        const fileName = `${ladder.id}-logs.7z`;
+        const ext = ladder.team === 'random' ? 'tar' : '7z';
+        const fileName = `${ladder.id}-logs.${ext}`;
         const dest = path.join(pub, 'arena', 'ladders', ladder.id, fileName);
         render.copyFileAtomic(srcFile, dest);
-        log(`Published retired ladder archive -> /arena/ladders/${ladder.id}/${fileName}`);
+        log(`Published ladder archive -> /arena/ladders/${ladder.id}/${fileName}`);
         return;
       }
       default:

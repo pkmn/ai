@@ -35,6 +35,9 @@ export interface TurnHeartbeatInfo {
   p2LastTurnMillis: number;
   p1MeanTurnMillis: number;
   p2MeanTurnMillis: number;
+  omniscientLog: string;
+  p1Pokemon?: unknown[];
+  p2Pokemon?: unknown[];
 }
 
 export interface ArenaGameOptions {
@@ -61,6 +64,8 @@ export interface ArenaGameResult {
   turns: number;
   endReason: string;
   omniscientLog: string;
+  p1Pokemon?: unknown[];
+  p2Pokemon?: unknown[];
   p1BankSeconds: number;
   p2BankSeconds: number;
   p1PeakRam: number;
@@ -94,6 +99,20 @@ export const MAX_INVALID_STRIKES = 3;
 export const MAX_STDOUT_LINE_CHARS = 65_536;
 export const MAX_LINE_QUEUE = 256;
 export const MAX_LINES_PER_DECISION = 64;
+
+export function rewriteBlindPlayerNames(
+  chunk: string,
+  p1DisplayName: string,
+  p2DisplayName: string
+): string {
+  return chunk
+    .replaceAll('|player|p1|Agent A|', `|player|p1|${p1DisplayName}|`)
+    .replaceAll('|player|p2|Agent B|', `|player|p2|${p2DisplayName}|`)
+    .replaceAll('|win|Agent A', `|win|${p1DisplayName}`)
+    .replaceAll('|win|Agent B', `|win|${p2DisplayName}`)
+    .replaceAll('☆Agent A|', `☆${p1DisplayName}|`)
+    .replaceAll('☆Agent B|', `☆${p2DisplayName}|`);
+}
 
 export interface ProtocolStrikeState {
   retryingInvalidChoice: boolean;
@@ -678,6 +697,9 @@ export class TimeSlicedArenaGame {
         p2MeanTurnMillis: this.p2.decisionCount > 0
           ? Math.round(this.p2.totalDecisionMillis / this.p2.decisionCount)
           : 0,
+        omniscientLog: this.battleStream.battle?.log.join('\n') ?? this.omniscientLog.join('\n'),
+        p1Pokemon: this.battleStream.battle?.sides[0]?.getRequestData().pokemon,
+        p2Pokemon: this.battleStream.battle?.sides[1]?.getRequestData().pokemon,
       });
     }
 
@@ -837,7 +859,9 @@ export class TimeSlicedArenaGame {
         outcome,
         turns: this.currentTurn,
         endReason: this.endReason,
-        omniscientLog: this.omniscientLog.join('\n'),
+        omniscientLog: this.battleStream.battle?.log.join('\n') ?? this.omniscientLog.join('\n'),
+        p1Pokemon: this.battleStream.battle?.sides[0]?.getRequestData().pokemon,
+        p2Pokemon: this.battleStream.battle?.sides[1]?.getRequestData().pokemon,
         p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
         p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
         p1PeakRam,

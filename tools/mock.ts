@@ -582,6 +582,26 @@ function samplePackedTournamentTeam(format: string, index: number): string {
   return species.map(n => `|${n}`).join(']');
 }
 
+function buildSampleSidePokemon(slot: 'p1' | 'p2', mons: string[], isRandom: boolean) {
+  const list = (mons.length > 0 ? mons : [slot === 'p1' ? 'Great Tusk' : 'Dragapult']).slice(0, 6);
+  return list.map((sp, idx) => ({
+    ident: `${slot}: ${sp}`,
+    details: isRandom ? `${sp}, L80` : sp,
+    condition: '260/260',
+    active: idx === 0,
+    stats: {atk: 210, def: 195, spa: 170, spd: 175, spe: 205},
+    moves: ['protect', 'uturn', 'earthquake', 'knockoff'],
+    baseAbility: 'protosynthesis',
+    item: 'leftovers',
+    pokeball: 'pokeball',
+    ability: 'protosynthesis',
+    commanding: false,
+    reviving: false,
+    teraType: 'Steel',
+    terastallized: '',
+  }));
+}
+
 function buildShowdownTournamentLog(opts: {
   format: string;
   p1Name: string;
@@ -591,8 +611,13 @@ function buildShowdownTournamentLog(opts: {
   outcome: 'W' | 'L' | 'T';
 }): string {
   const isDoubles = opts.format.includes('vgc') || opts.format.includes('doubles');
+  const isRandom = opts.format.includes('random');
   const gen = /^gen(\d)/i.exec(opts.format)?.[1] ?? '9';
-  const tier = isDoubles ? '[Gen 9 Champions] VGC 2026 Reg M-C' : `[Gen ${gen}] OU`;
+  const tier = isDoubles
+    ? '[Gen 9 Champions] VGC 2026 Reg M-C'
+    : isRandom
+      ? `[Gen ${gen}] Random Battle`
+      : `[Gen ${gen}] OU`;
   const p1Mons = tournaments.parsePackedTeamSpecies(opts.p1TeamPacked);
   const p2Mons = tournaments.parsePackedTeamSpecies(opts.p2TeamPacked);
   const lead1 = p1Mons[0] ?? 'Great Tusk';
@@ -603,11 +628,17 @@ function buildShowdownTournamentLog(opts: {
     `|gametype|${isDoubles ? 'doubles' : 'singles'}`,
     `|gen|${gen}`,
     `|tier|${tier}`,
-    ...p1Mons.slice(0, 6).map(sp => `|poke|p1|${sp}|`),
-    ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
-    '|teampreview',
+    ...(isRandom ? [] : [
+      ...p1Mons.slice(0, 6).map(sp => `|poke|p1|${sp}|`),
+      ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
+      '|teampreview',
+    ]),
     '|start',
+    '|split|p1',
+    `|switch|p1a: ${lead1}|${lead1}|260/260`,
     `|switch|p1a: ${lead1}|${lead1}|100/100`,
+    '|split|p2',
+    `|switch|p2a: ${lead2}|${lead2}|245/245`,
     `|switch|p2a: ${lead2}|${lead2}|100/100`,
     '|turn|1',
     `|move|p1a: ${lead1}|Protect|p1a: ${lead1}`,
@@ -1557,8 +1588,9 @@ export class Runner {
       } else {
         const pubDir = this.publicDir ?? render.PUBLIC_DIR;
         const dstDir = path.join(pubDir, 'arena', 'ladders', ladder.id);
+        const ext = ladder.team === 'random' ? 'tar' : '7z';
         fs.mkdirSync(dstDir, {recursive: true});
-        fs.writeFileSync(path.join(dstDir, `${ladder.id}-logs.7z`), bytes);
+        fs.writeFileSync(path.join(dstDir, `${ladder.id}-logs.${ext}`), bytes);
       }
       return;
     }
@@ -2120,6 +2152,7 @@ export class Runner {
     p1TeamSpec?: string;
     p2TeamSpec?: string;
     emitHeartbeats?: boolean;
+    writeLogs?: boolean;
   }): Promise<{matchId: string; archivedLadder: boolean}> {
     const {ladder} = opts;
     let p1TeamLabel: string | undefined;
@@ -2186,6 +2219,32 @@ export class Runner {
     const p1TurnMillis = 230 + ((opts.p1VersionId * 29) % 240);
     const p2TurnMillis = 240 + ((opts.p2VersionId * 31) % 240);
 
+    const shouldEmitRandomLogs =
+      ladder.team === 'random' && (opts.writeLogs || Boolean(this.serverUrl));
+    let game1Log: string | undefined;
+    let game2Log: string | undefined;
+    if (shouldEmitRandomLogs) {
+      const t1Packed = samplePackedTournamentTeam(ladder.format, this.state.matchSeq);
+      const t2Packed = samplePackedTournamentTeam(ladder.format, this.state.matchSeq + 1);
+      const g2Seat1Outcome: 'W' | 'L' | 'T' = g2 === 'W' ? 'L' : g2 === 'L' ? 'W' : 'T';
+      game1Log = buildShowdownTournamentLog({
+        format: ladder.format,
+        p1Name: opts.p1Name,
+        p2Name: opts.p2Name,
+        p1TeamPacked: t1Packed,
+        p2TeamPacked: t2Packed,
+        outcome: g1,
+      });
+      game2Log = buildShowdownTournamentLog({
+        format: ladder.format,
+        p1Name: opts.p2Name,
+        p2Name: opts.p1Name,
+        p1TeamPacked: t1Packed,
+        p2TeamPacked: t2Packed,
+        outcome: g2Seat1Outcome,
+      });
+    }
+
     if (opts.emitHeartbeats && this.serverUrl) {
       const client = this.getArenaClient();
       const inc = arena.turnIncrementSeconds(ladder.format);
@@ -2201,6 +2260,7 @@ export class Runner {
         turnStartedAt: opts.completedAt,
         turnBudgetSeconds: 145,
         incrementSeconds: inc,
+        ...(game1Log ? {lines: game1Log.trim().split('\n')} : {}),
         p1: {
           slug: opts.p1Slug,
           name: opts.p1Name,
@@ -2235,6 +2295,7 @@ export class Runner {
         turnStartedAt: opts.completedAt,
         turnBudgetSeconds: 136,
         incrementSeconds: inc,
+        ...(game2Log ? {lines: game2Log.trim().split('\n')} : {}),
         game1Summary: {
           ...(g1 === 'W'
             ? {winnerSlot: 'p1' as const}
@@ -2293,8 +2354,18 @@ export class Runner {
     };
 
     const archivedLadder = this.serverUrl
-      ? (await this.getArenaClient().completeMatch({match: matchPayload})).archivedLadder
+      ? (await this.getArenaClient().completeMatch({
+        match: matchPayload,
+        ...(game1Log ? {game1Log} : {}),
+        ...(game2Log ? {game2Log} : {}),
+      })).archivedLadder
       : this.db.recordCompletedMatch({match: matchPayload}).archivedLadder;
+    if (!this.serverUrl && shouldEmitRandomLogs && this.publicDir && game1Log && game2Log) {
+      const ladderDir = path.join(this.publicDir, 'arena', 'ladders', ladder.id);
+      fs.mkdirSync(ladderDir, {recursive: true});
+      fs.writeFileSync(path.join(ladderDir, `${matchId}a.log`), game1Log, 'utf8');
+      fs.writeFileSync(path.join(ladderDir, `${matchId}b.log`), game2Log, 'utf8');
+    }
     if (archivedLadder) {
       this.syncLadderFileStatuses();
     }
@@ -2628,6 +2699,7 @@ export class Runner {
         p1TeamSpec,
         p2TeamSpec,
         emitHeartbeats,
+        writeLogs: true,
       });
     }
   }
@@ -2683,6 +2755,35 @@ export class Runner {
       this.state.heartbeatSeq++;
       const matchId = getFlag(cmd, 'id') ?? `${ladder.slot}-live-${this.state.heartbeatSeq}`;
       const inc = arena.turnIncrementSeconds(ladder.format);
+      let liveLines: string[] | undefined;
+      let p1Pokemon: unknown[] | undefined;
+      let p2Pokemon: unknown[] | undefined;
+      if (ladder.team === 'random') {
+        const seat1Name = game === 2 ? p2.agentName : p1.agentName;
+        const seat2Name = game === 2 ? p1.agentName : p2.agentName;
+        const t1Packed = samplePackedTournamentTeam(ladder.format, p1.agentId);
+        const t2Packed = samplePackedTournamentTeam(ladder.format, p2.agentId + 1);
+        const p1Mons = tournaments.parsePackedTeamSpecies(t1Packed);
+        const p2Mons = tournaments.parsePackedTeamSpecies(t2Packed);
+        p1Pokemon = buildSampleSidePokemon('p1', p1Mons, true);
+        p2Pokemon = buildSampleSidePokemon('p2', p2Mons, true);
+        const fullLog = buildShowdownTournamentLog({
+          format: ladder.format,
+          p1Name: seat1Name,
+          p2Name: seat2Name,
+          p1TeamPacked: t1Packed,
+          p2TeamPacked: t2Packed,
+          outcome: 'W',
+        });
+        liveLines = fullLog
+          .replace(/\n$/, '')
+          .split('\n')
+          .filter(
+            l => !l.startsWith('|-damage|') && !l.startsWith('|faint|') && !l.startsWith('|win|')
+          )
+          .map(l => (l === '|turn|1' ? `|turn|${turn}` : l));
+      }
+      const perspective = liveLines ? arena.extractPerspectiveLogs(liveLines) : undefined;
       const liveMatch: arena.LiveMatch = {
         heartbeatSeq: this.state.heartbeatSeq,
         matchId,
@@ -2696,6 +2797,13 @@ export class Runner {
         turnBudgetSeconds: 138,
         incrementSeconds: inc,
         ...(game === 2 ? {game1Summary: {winnerSlot: g1Winner, turns: g1Turns}} : {}),
+        ...(liveLines ? {
+          lines: liveLines,
+          p1Lines: perspective?.p1Lines,
+          p2Lines: perspective?.p2Lines,
+          p1Pokemon,
+          p2Pokemon,
+        } : {}),
         p1: {
           slug: p1.agentSlug,
           name: p1.agentName,
@@ -3151,6 +3259,7 @@ export class Runner {
             bankSeconds: 118 - idx * 8,
             thinking: idx % 2 === 1,
             incrementSeconds: inc,
+            pokemon: buildSampleSidePokemon('p1', p1Mons, false),
           },
           p2: {
             slug: pr[1].slug,
@@ -3160,6 +3269,7 @@ export class Runner {
             bankSeconds: 104 - idx * 6,
             thinking: idx % 2 === 0,
             incrementSeconds: inc,
+            pokemon: buildSampleSidePokemon('p2', p2Mons, false),
           },
           lines: [
             `|player|p1|${pr[0].name}|1`,
@@ -3171,7 +3281,11 @@ export class Runner {
             ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
             '|teampreview',
             '|start',
+            '|split|p1',
+            `|switch|p1a: ${lead1}|${lead1}|260/260`,
             `|switch|p1a: ${lead1}|${lead1}|100/100`,
+            '|split|p2',
+            `|switch|p2a: ${lead2}|${lead2}|245/245`,
             `|switch|p2a: ${lead2}|${lead2}|100/100`,
             `|turn|${turnNum}`,
           ],

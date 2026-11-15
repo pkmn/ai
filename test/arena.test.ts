@@ -2014,7 +2014,7 @@ describe('arena infrastructure', () => {
     }
 
     test('records LW split category over HTTP while evicting 4xx outbox items', async () => {
-      await withRealArenaServer('lw-split', async ({db, client, serverUrl, secret}) => {
+      await withRealArenaServer('lw-split', async ({db, client, serverUrl, secret, publicDir}) => {
         const stateDb = new arenaDb.Database(':memory:');
         try {
           db.syncLaddersFromYaml([
@@ -2118,6 +2118,27 @@ describe('arena infrastructure', () => {
           expect(recorded[0].game1Outcome).toBe('L');
           expect(recorded[0].game2Outcome).toBe('W');
           expect(recorded[0].category).toBe('LW');
+          const randLogDir = path.join(publicDir, 'arena', 'ladders', 'gen9randombattle202611');
+          const g1Published = fs.readFileSync(
+            path.join(randLogDir, `${recorded[0].id}a.log`),
+            'utf8'
+          );
+          const g2Published = fs.readFileSync(
+            path.join(randLogDir, `${recorded[0].id}b.log`),
+            'utf8'
+          );
+          expect(g1Published).toContain('|player|p1|');
+          expect(g1Published).toContain('|split|p1\n');
+          expect(g1Published).toContain('|split|p2\n');
+          expect(g1Published).not.toContain('Agent A');
+          expect(g1Published).not.toContain('Agent B');
+          expect(g2Published).toContain('|player|p1|');
+          expect(g2Published).not.toContain('Agent A');
+
+          expect(await coord.publishRandomLadderArchive('gen9randombattle202611')).toBe(true);
+          expect(
+            fs.existsSync(path.join(randLogDir, 'gen9randombattle202611-logs.tar'))
+          ).toBe(true);
         } finally {
           stateDb.close();
         }

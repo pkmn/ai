@@ -121,6 +121,7 @@ export class Coordinator {
   private readonly formatByLadderId: Map<string, string>;
   private readonly randomInt: (max: number) => number;
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
+  private readonly lastRandomArchiveDayByLadder = new Map<string, string>();
   private heartbeatSeq = 0;
   private draining = false;
 
@@ -530,6 +531,107 @@ export class Coordinator {
     } catch {}
   }
 
+  private readArchivedGameLog(
+    ladderId: string,
+    matchId: string,
+    suffix: 'a' | 'b',
+    daySeconds: number
+  ): string | undefined {
+    try {
+      const day = new Date(daySeconds * 1000).toISOString().slice(0, 10);
+      const file = path.join(this.archiveLogsDir, ladderId, day, `${matchId}${suffix}.log`);
+      if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
+    } catch {}
+    return undefined;
+  }
+
+  async publishRandomLadderArchive(ladderId: string, excludeDay?: string): Promise<boolean> {
+    const ladderDir = path.join(this.archiveLogsDir, ladderId);
+    if (!fs.existsSync(ladderDir)) return false;
+
+    for (const entry of fs.readdirSync(ladderDir, {withFileTypes: true})) {
+      if (!entry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+      if (excludeDay && entry.name === excludeDay) continue;
+      const day = entry.name;
+      const yearMonth = day.slice(0, 7);
+      const dayDir = path.join(ladderDir, day);
+      const logFiles = fs
+        .readdirSync(dayDir)
+        .filter(f => f.endsWith('.log'))
+        .sort()
+        .map(f => path.join(dayDir, f));
+      if (logFiles.length === 0) continue;
+
+      const monthDir = path.join(ladderDir, yearMonth);
+      fs.mkdirSync(monthDir, {recursive: true});
+      const dayArchive = path.join(monthDir, `${day}.7z`);
+      const tmpDayArchive = `${dayArchive}.tmp`;
+      fs.rmSync(tmpDayArchive, {force: true});
+      try {
+        execFileSync(
+          '7z',
+          ['a', '-t7z', '-m0=lzma2', '-mx=9', '-ms=on', tmpDayArchive, ...logFiles],
+          {stdio: 'ignore', timeout: 60_000}
+        );
+        fs.renameSync(tmpDayArchive, dayArchive);
+      } catch {
+        fs.rmSync(tmpDayArchive, {force: true});
+        const chunks = logFiles.map(
+          f => `# ${path.basename(f)}\n${fs.readFileSync(f, 'utf8')}`
+        );
+        fs.writeFileSync(dayArchive, chunks.join('\n'), 'utf8');
+      }
+      fs.rmSync(dayDir, {recursive: true, force: true});
+    }
+
+    const dailyArchives: string[] = [];
+    for (const entry of fs.readdirSync(ladderDir, {withFileTypes: true})) {
+      if (!entry.isDirectory() || !/^\d{4}-\d{2}$/.test(entry.name)) continue;
+      const monthDir = path.join(ladderDir, entry.name);
+      for (const f of fs.readdirSync(monthDir).sort()) {
+        if (f.endsWith('.7z')) dailyArchives.push(path.join(entry.name, f));
+      }
+    }
+    if (dailyArchives.length === 0) return false;
+    dailyArchives.sort();
+
+    const tarPath = path.join(ladderDir, `${ladderId}-logs.tar`);
+    const tmpTar = `${tarPath}.tmp`;
+    try {
+      fs.rmSync(tmpTar, {force: true});
+      try {
+        execFileSync(
+          'tar',
+          ['-cf', tmpTar, '-C', ladderDir, ...dailyArchives],
+          {stdio: 'ignore', timeout: 60_000}
+        );
+        fs.renameSync(tmpTar, tarPath);
+      } catch {
+        fs.rmSync(tmpTar, {force: true});
+        const chunks = dailyArchives.map(rel => fs.readFileSync(path.join(ladderDir, rel)));
+        fs.writeFileSync(tarPath, Buffer.concat(chunks));
+      }
+      const bytes = fs.readFileSync(tarPath);
+      await this.client.uploadLadderArchive(ladderId, bytes);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async maybePublishDailyRandomArchive(
+    ladderId: string,
+    nowSeconds: number
+  ): Promise<boolean> {
+    const today = new Date(nowSeconds * 1000).toISOString().slice(0, 10);
+    const prev = this.lastRandomArchiveDayByLadder.get(ladderId);
+    this.lastRandomArchiveDayByLadder.set(ladderId, today);
+    if (prev !== undefined && prev !== today) {
+      return this.publishRandomLadderArchive(ladderId, today);
+    }
+    return false;
+  }
+
   private async checkAndQuarantineIfFaulty(versionId: number, lastReason: string) {
     const row = this.stateDb.getLocalAgent(versionId);
     if (!row) return;
@@ -579,6 +681,10 @@ export class Coordinator {
       devMode: this.devMode,
       onTurn: async info => {
         this.heartbeatSeq++;
+        const lines = cp.teamMode === 'random'
+          ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, cp.p2Name, cp.p1Name)
+            .split('\n')
+          : undefined;
         await this.client.sendHeartbeat({
           heartbeatSeq: this.heartbeatSeq,
           matchId: cp.id,
@@ -618,6 +724,13 @@ export class Coordinator {
             ram: Math.max(cp.g1P2Ram ?? 64, info.p1Ram),
             ...(cp.p1TeamLabel ? {team: cp.p1TeamLabel} : {}),
           },
+          ...(lines
+            ? {
+              lines,
+              ...(info.p1Pokemon ? {p1Pokemon: info.p1Pokemon} : {}),
+              ...(info.p2Pokemon ? {p2Pokemon: info.p2Pokemon} : {}),
+            }
+            : {}),
         }).catch(() => undefined);
       },
     });
@@ -627,7 +740,57 @@ export class Coordinator {
 
     const category: ratings.MatchCategory = `${g1Outcome}${g2OutcomeForP1}`;
     const now = Math.floor(Date.now() / 1000);
-    this.writeArchivedGameLog(cp.ladderId, cp.id, 'b', g2Res.omniscientLog, cp.startedAt || now);
+    const g2Log = arbiter.rewriteBlindPlayerNames(g2Res.omniscientLog, cp.p2Name, cp.p1Name);
+    this.writeArchivedGameLog(cp.ladderId, cp.id, 'b', g2Log, cp.startedAt || now);
+    if (cp.teamMode === 'random') {
+      this.heartbeatSeq++;
+      await this.client.sendHeartbeat({
+        heartbeatSeq: this.heartbeatSeq,
+        matchId: cp.id,
+        ladderId: cp.ladderId,
+        format: cp.format,
+        game: 2,
+        turn: g2Res.turns,
+        activeSlot: 'p1',
+        turnStartedAt: now,
+        turnBudgetSeconds: arena.MAX_TURN_SECONDS,
+        incrementSeconds: arena.turnIncrementSeconds(cp.format),
+        game1Summary: {
+          ...(g1Outcome === 'W'
+            ? {winnerSlot: 'p1' as const}
+            : g1Outcome === 'L'
+              ? {winnerSlot: 'p2' as const}
+              : {}),
+          turns: cp.g1Turns ?? 1,
+        },
+        p1: {
+          slug: cp.p1Slug,
+          name: cp.p1Name,
+          version: cp.p1Version,
+          bankSeconds: g2Res.p2BankSeconds,
+          lastTurnMillis: g2Res.p2LastTurnMillis,
+          meanTurnMillis: g2Res.p2MeanTurnMillis,
+          ram: Math.max(cp.g1P1Ram ?? 64, g2Res.p2PeakRam),
+          ...(cp.p2TeamLabel ? {team: cp.p2TeamLabel} : {}),
+        },
+        p2: {
+          slug: cp.p2Slug,
+          name: cp.p2Name,
+          version: cp.p2Version,
+          bankSeconds: g2Res.p1BankSeconds,
+          lastTurnMillis: g2Res.p1LastTurnMillis,
+          meanTurnMillis: g2Res.p1MeanTurnMillis,
+          ram: Math.max(cp.g1P2Ram ?? 64, g2Res.p1PeakRam),
+          ...(cp.p1TeamLabel ? {team: cp.p1TeamLabel} : {}),
+        },
+        lines: g2Log.split('\n'),
+        ...(g2Res.p1Pokemon ? {p1Pokemon: g2Res.p1Pokemon} : {}),
+        ...(g2Res.p2Pokemon ? {p2Pokemon: g2Res.p2Pokemon} : {}),
+      }).catch(() => undefined);
+    }
+    const g1Log = cp.teamMode === 'random'
+      ? this.readArchivedGameLog(cp.ladderId, cp.id, 'a', cp.startedAt || now)
+      : undefined;
 
     const p1PeakRam = Math.max(cp.g1P1Ram ?? 64, g2Res.p2PeakRam);
     const p2PeakRam = Math.max(cp.g1P2Ram ?? 64, g2Res.p1PeakRam);
@@ -664,6 +827,12 @@ export class Coordinator {
         p2MeanTurnMillis,
         completedAt: now,
       },
+      ...(cp.teamMode === 'random'
+        ? {
+          ...(g1Log !== undefined ? {game1Log: g1Log} : {}),
+          game2Log: g2Log,
+        }
+        : {}),
     };
 
     await this.completeMatchOrOutbox(payload);
@@ -833,6 +1002,10 @@ export class Coordinator {
       devMode: this.devMode,
       onTurn: async info => {
         this.heartbeatSeq++;
+        const lines = ladder.team === 'random'
+          ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, e1.agentName, e2.agentName)
+            .split('\n')
+          : undefined;
         await this.client.sendHeartbeat({
           heartbeatSeq: this.heartbeatSeq,
           matchId,
@@ -864,11 +1037,61 @@ export class Coordinator {
             ram: info.p2Ram,
             ...(sampled.t2Label ? {team: sampled.t2Label} : {}),
           },
+          ...(lines
+            ? {
+              lines,
+              ...(info.p1Pokemon ? {p1Pokemon: info.p1Pokemon} : {}),
+              ...(info.p2Pokemon ? {p2Pokemon: info.p2Pokemon} : {}),
+            }
+            : {}),
         }).catch(() => undefined);
       },
     });
     const g1Res = await g1Game.run();
-    this.writeArchivedGameLog(ladder.id, matchId, 'a', g1Res.omniscientLog, now);
+    const g1Log = arbiter.rewriteBlindPlayerNames(
+      g1Res.omniscientLog,
+      e1.agentName,
+      e2.agentName
+    );
+    this.writeArchivedGameLog(ladder.id, matchId, 'a', g1Log, now);
+    if (ladder.team === 'random') {
+      this.heartbeatSeq++;
+      await this.client.sendHeartbeat({
+        heartbeatSeq: this.heartbeatSeq,
+        matchId,
+        ladderId: ladder.id,
+        format: ladder.format,
+        game: 1,
+        turn: g1Res.turns,
+        activeSlot: 'p1',
+        turnStartedAt: Math.floor(Date.now() / 1000),
+        turnBudgetSeconds: arena.MAX_TURN_SECONDS,
+        incrementSeconds: arena.turnIncrementSeconds(ladder.format),
+        p1: {
+          slug: e1.agentSlug,
+          name: e1.agentName,
+          version: e1.version,
+          bankSeconds: g1Res.p1BankSeconds,
+          lastTurnMillis: g1Res.p1LastTurnMillis,
+          meanTurnMillis: g1Res.p1MeanTurnMillis,
+          ram: g1Res.p1PeakRam,
+          ...(sampled.t1Label ? {team: sampled.t1Label} : {}),
+        },
+        p2: {
+          slug: e2.agentSlug,
+          name: e2.agentName,
+          version: e2.version,
+          bankSeconds: g1Res.p2BankSeconds,
+          lastTurnMillis: g1Res.p2LastTurnMillis,
+          meanTurnMillis: g1Res.p2MeanTurnMillis,
+          ram: g1Res.p2PeakRam,
+          ...(sampled.t2Label ? {team: sampled.t2Label} : {}),
+        },
+        lines: g1Log.split('\n'),
+        ...(g1Res.p1Pokemon ? {p1Pokemon: g1Res.p1Pokemon} : {}),
+        ...(g1Res.p2Pokemon ? {p2Pokemon: g1Res.p2Pokemon} : {}),
+      }).catch(() => undefined);
+    }
 
     this.stateDb.checkpointGame1Complete({
       id: matchId,
@@ -895,6 +1118,10 @@ export class Coordinator {
       devMode: this.devMode,
       onTurn: async info => {
         this.heartbeatSeq++;
+        const lines = ladder.team === 'random'
+          ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, e2.agentName, e1.agentName)
+            .split('\n')
+          : undefined;
         await this.client.sendHeartbeat({
           heartbeatSeq: this.heartbeatSeq,
           matchId,
@@ -934,6 +1161,13 @@ export class Coordinator {
             ram: Math.max(g1Res.p2PeakRam, info.p1Ram),
             ...(sampled.t1Label ? {team: sampled.t1Label} : {}),
           },
+          ...(lines
+            ? {
+              lines,
+              ...(info.p1Pokemon ? {p1Pokemon: info.p1Pokemon} : {}),
+              ...(info.p2Pokemon ? {p2Pokemon: info.p2Pokemon} : {}),
+            }
+            : {}),
         }).catch(() => undefined);
       },
     });
@@ -942,7 +1176,58 @@ export class Coordinator {
       g2Res.winner === 'p2' ? 'W' : g2Res.winner === 'p1' ? 'L' : 'T';
     const category: ratings.MatchCategory = `${g1Res.outcome}${g2OutcomeForP1}`;
     const completedAt = Math.floor(Date.now() / 1000);
-    this.writeArchivedGameLog(ladder.id, matchId, 'b', g2Res.omniscientLog, now);
+    const g2Log = arbiter.rewriteBlindPlayerNames(
+      g2Res.omniscientLog,
+      e2.agentName,
+      e1.agentName
+    );
+    this.writeArchivedGameLog(ladder.id, matchId, 'b', g2Log, now);
+    if (ladder.team === 'random') {
+      this.heartbeatSeq++;
+      await this.client.sendHeartbeat({
+        heartbeatSeq: this.heartbeatSeq,
+        matchId,
+        ladderId: ladder.id,
+        format: ladder.format,
+        game: 2,
+        turn: g2Res.turns,
+        activeSlot: 'p1',
+        turnStartedAt: completedAt,
+        turnBudgetSeconds: arena.MAX_TURN_SECONDS,
+        incrementSeconds: arena.turnIncrementSeconds(ladder.format),
+        game1Summary: {
+          ...(g1Res.winner === 'p1'
+            ? {winnerSlot: 'p1' as const}
+            : g1Res.winner === 'p2'
+              ? {winnerSlot: 'p2' as const}
+              : {}),
+          turns: g1Res.turns,
+        },
+        p1: {
+          slug: e1.agentSlug,
+          name: e1.agentName,
+          version: e1.version,
+          bankSeconds: g2Res.p2BankSeconds,
+          lastTurnMillis: g2Res.p2LastTurnMillis,
+          meanTurnMillis: g2Res.p2MeanTurnMillis,
+          ram: Math.max(g1Res.p1PeakRam, g2Res.p2PeakRam),
+          ...(sampled.t2Label ? {team: sampled.t2Label} : {}),
+        },
+        p2: {
+          slug: e2.agentSlug,
+          name: e2.agentName,
+          version: e2.version,
+          bankSeconds: g2Res.p1BankSeconds,
+          lastTurnMillis: g2Res.p1LastTurnMillis,
+          meanTurnMillis: g2Res.p1MeanTurnMillis,
+          ram: Math.max(g1Res.p2PeakRam, g2Res.p1PeakRam),
+          ...(sampled.t1Label ? {team: sampled.t1Label} : {}),
+        },
+        lines: g2Log.split('\n'),
+        ...(g2Res.p1Pokemon ? {p1Pokemon: g2Res.p1Pokemon} : {}),
+        ...(g2Res.p2Pokemon ? {p2Pokemon: g2Res.p2Pokemon} : {}),
+      }).catch(() => undefined);
+    }
 
     const p1PeakRam = Math.max(g1Res.p1PeakRam, g2Res.p2PeakRam);
     const p2PeakRam = Math.max(g1Res.p2PeakRam, g2Res.p1PeakRam);
@@ -979,9 +1264,13 @@ export class Coordinator {
         p2MeanTurnMillis,
         completedAt,
       },
+      ...(ladder.team === 'random' ? {game1Log: g1Log, game2Log: g2Log} : {}),
     };
 
     const {archivedLadder} = await this.completeMatchOrOutbox(completePayload);
+    if (ladder.team === 'random') {
+      await this.maybePublishDailyRandomArchive(ladder.id, completedAt);
+    }
     this.stateDb.markMatchCheckpointStatus(matchId, 'complete', completedAt);
 
     // Update fault counters for Game 1 and Game 2 and auto-quarantine on threshold breach

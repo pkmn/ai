@@ -139,13 +139,14 @@ The 7 sections cover:
 3. **Arena Hub & Ladders (`arena`):** Active season hub, hub with `#seasons` **Past Seasons** table
    (`Settling` + `Archived` with `-logs.7z` & `teams.json` links), pre-launch upcoming hub, RBY
    harvested ladder across `Active` / `Best` / `All` version tabs, VGC competitor `pools` ladder,
-   rotated season in `Settling` grace window, retired season in `Archived` state, and `Upcoming`
-   empty ladder.
+   RAND `random` ladder (with daily `-logs.tar` archive link), rotated season in `Settling` grace
+   window, retired season in `Archived` state, and `Upcoming` empty ladder.
 4. **Arena Battles (`battles`):** Live match in progress (`Game 2 / 2`, `PAUSED`/`RUNNING`, G1
-   summary, pool team hashes), inline expanded rows for `[Timeout]`, `[Crash]`, clean 2-game match,
-   and archived `pools` match (with clickable `P1:<hash>` -> `teams.json#<hash>` links), format
-   filter (`VGC`), Page 2 pagination, `Idle` live state, `Stale / Offline` heartbeat state, and
-   empty battle history.
+   summary, pool team hashes), live `RAND` match with embedded Pokémon Showdown battle viewer,
+   inline expanded `RAND` row with replay viewer (`Game 1` / `Game 2`), inline expanded rows for
+   `[Timeout]`, `[Crash]`, clean 2-game match, and archived `pools` match (with clickable
+   `P1:<hash>` -> `teams.json#<hash>` links), format filter (`VGC`), Page 2 pagination, `Idle` live
+   state, `Stale / Offline` heartbeat state, and empty battle history.
 5. **Championship Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal
    `SF` badges and `1-replays.7z`), inline Showdown replay viewer, live Tournament `#2` multi-table
    broadcast (`Table 1`, switched to `Table 2`, `Table 2 (idle)` with `● Watch T1` pill, and Replay

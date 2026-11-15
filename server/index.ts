@@ -70,11 +70,12 @@ serve(Number(process.env.PORT) || 1234, dirs, app => {
   const staticWare = wares?.[1];
   if (wares && staticWare) {
     wares[1] = (req, res, next) => {
-      const pathname = req.url.split('?')[0];
+      const [pathname, query] = req.url.split('?');
       const isStaticArenaAsset =
         pathname === '/arena/viewer' ||
         pathname.startsWith('/arena/viewer/') ||
-        /\.(?:7z|log)$/i.test(pathname);
+        /\.(?:7z|tar)$/i.test(pathname) ||
+        (/\.log$/i.test(pathname) && !query);
       if (
         !isStaticArenaAsset &&
         /^(?:\/(?:account|wiki|projects|arena)(?:\.json|\/|$)|\/api(?:\/|$))/.test(pathname)

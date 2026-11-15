@@ -99,6 +99,25 @@ const VIEWER_SCRIPT = `
     let live = false;
     let muted = true;
     let controlsBound = false;
+    let sideLines = {p1: [], p2: []};
+    let sidePokemon = {p1: null, p2: null};
+    let currentSide = 'p1';
+
+    const readable = line => !line.startsWith('|request|');
+
+    const ownPokemon = requested => {
+      const pokemon = {...requested};
+      const name = pokemon.ident.slice(pokemon.ident.indexOf(':') + 1).trim();
+      battle.parseDetails(name, pokemon.ident, pokemon.details, pokemon);
+      battle.parseHealth(pokemon.condition, pokemon);
+      return pokemon;
+    };
+
+    const applyTeam = () => {
+      if (!battle) return;
+      const list = sidePokemon[currentSide];
+      battle.myPokemon = Array.isArray(list) ? list.map(ownPokemon) : null;
+    };
 
     const notifyApp = msg => {
       if (window.parent !== window) {
@@ -166,6 +185,12 @@ const VIEWER_SCRIPT = `
         : 'Start';
     };
 
+    const playbackState = () => {
+      if (!battle) return 'waiting';
+      if (battle.ended && battle.atQueueEnd) return 'finished';
+      return battle.started ? 'watching' : 'waiting';
+    };
+
     const render = () => {
       if (!battle) return;
       const playing = isPlaying();
@@ -175,16 +200,24 @@ const VIEWER_SCRIPT = `
       el.live.hidden = !live;
       el.live.dataset.following = String(!battle.paused && battle.seeking === null);
       if (battle.started) el.start.hidden = true;
+      notifyApp({type: 'playback', state: playbackState()});
     };
 
     const play = () => {
       if (!battle) return;
-      if (battle.ended && battle.atQueueEnd) battle.reset();
+      if (battle.ended && battle.atQueueEnd) {
+        battle.reset();
+        applyTeam();
+      }
       battle.play();
     };
 
     const actions = {
-      start: () => battle && battle.reset(),
+      start: () => {
+        if (!battle) return;
+        battle.reset();
+        applyTeam();
+      },
       previous: () => battle && battle.seekBy(-1),
       next: () => battle && battle.seekBy(1),
       end: () => {
@@ -193,7 +226,23 @@ const VIEWER_SCRIPT = `
         if (live && battle.paused) battle.play();
       },
       toggle: () => (isPlaying() ? battle.pause() : play()),
-      switch: () => battle && battle.switchViewpoint(),
+      switch: () => {
+        if (!battle) return;
+        currentSide = currentSide === 'p2' ? 'p1' : 'p2';
+        battle.stepQueue = sideLines[currentSide].slice();
+        if (!battle.started) {
+          battle.setViewpoint(currentSide);
+          applyTeam();
+          return;
+        }
+        const turn = battle.ended && battle.atQueueEnd ? Infinity : battle.turn;
+        const wasPaused = battle.paused;
+        battle.reset();
+        battle.setViewpoint(currentSide);
+        applyTeam();
+        battle.seekTurn(turn);
+        if (!wasPaused && !(battle.ended && battle.atQueueEnd)) battle.play();
+      },
       sound: () => {
         muted = !muted;
         applySound();
@@ -223,51 +272,66 @@ const VIEWER_SCRIPT = `
       });
     };
 
-    const loadBattle = (lines, isLive, side) => {
+    const isLines = val => Array.isArray(val) && val.every(x => typeof x === 'string');
+
+    const loadBattle = msg => {
       if (battle) {
         battle.destroy();
         el.battle.innerHTML = '';
         el.log.innerHTML = '';
       }
-      live = Boolean(isLive);
+      live = Boolean(msg.live);
+      currentSide = msg.side === 'p2' ? 'p2' : 'p1';
+      const fallback = isLines(msg.lines) ? msg.lines.filter(readable) : [];
+      sideLines = {
+        p1: isLines(msg.p1Lines) ? msg.p1Lines.filter(readable) : fallback.slice(),
+        p2: isLines(msg.p2Lines) ? msg.p2Lines.filter(readable) : fallback.slice(),
+      };
+      sidePokemon = {
+        p1: Array.isArray(msg.p1Pokemon)
+          ? msg.p1Pokemon
+          : (currentSide === 'p1' && Array.isArray(msg.pokemon) ? msg.pokemon : null),
+        p2: Array.isArray(msg.p2Pokemon)
+          ? msg.p2Pokemon
+          : (currentSide === 'p2' && Array.isArray(msg.pokemon) ? msg.pokemon : null),
+      };
       window.BattleSound.setMute(muted);
       battle = new window.Battle({
         id: '',
         $frame: window.$(el.battle),
         $logFrame: window.$(el.log),
-        log: lines,
+        log: sideLines[currentSide].slice(),
         paused: !live,
       });
       battle.subscribe(render);
-      if (side === 'p2') battle.setViewpoint('p2');
+      if (currentSide === 'p2') battle.setViewpoint('p2');
+      applyTeam();
       applySound();
       applySpeed();
       enableControls();
       showStatus('');
       el.start.hidden = live;
-      if (live) battle.seekTurn(Infinity);
+      if (live && msg.seekEnd !== false) battle.seekTurn(Infinity);
       render();
     };
-
-    const ownPokemon = requested => {
-      const mon = {...requested};
-      if (typeof mon.ident !== 'string' || typeof mon.details !== 'string') return mon;
-      const name = mon.ident.slice(mon.ident.indexOf(':') + 1).trim();
-      battle.parseDetails(name, mon.ident, mon.details, mon);
-      if (typeof mon.condition === 'string') battle.parseHealth(mon.condition, mon);
-      return mon;
-    };
-
-    const isLines = val => Array.isArray(val) && val.every(x => typeof x === 'string');
 
     const onMessage = event => {
       if (event.source !== window.parent || event.origin !== appOrigin) return;
       const msg = event.data;
       if (!msg || typeof msg !== 'object') return;
-      if (msg.type === 'load' && isLines(msg.lines)) {
-        loadBattle(msg.lines, msg.live, msg.side);
-      } else if (msg.type === 'append' && battle && live && isLines(msg.lines)) {
-        for (const line of msg.lines) battle.add(line);
+      if (msg.type === 'load' && (isLines(msg.lines) || isLines(msg.p1Lines))) {
+        loadBattle(msg);
+      } else if (msg.type === 'append' && battle && live) {
+        const fallback = isLines(msg.lines) ? msg.lines.filter(readable) : [];
+        const addP1 = isLines(msg.p1Lines) ? msg.p1Lines.filter(readable) : fallback;
+        const addP2 = isLines(msg.p2Lines) ? msg.p2Lines.filter(readable) : fallback;
+        sideLines.p1.push(...addP1);
+        sideLines.p2.push(...addP2);
+        if (Array.isArray(msg.p1Pokemon)) sidePokemon.p1 = msg.p1Pokemon;
+        if (Array.isArray(msg.p2Pokemon)) sidePokemon.p2 = msg.p2Pokemon;
+        applyTeam();
+        const toAdd = currentSide === 'p2' ? addP2 : addP1;
+        toAdd.forEach(line => battle.add(line));
         render();
       } else if (msg.type === 'end' && battle) {
         live = false;
@@ -277,8 +341,11 @@ const VIEWER_SCRIPT = `
       } else if (msg.type === 'speed' && Object.hasOwn(SPEEDS, msg.speed)) {
         el.speed.value = msg.speed;
         applySpeed();
-      } else if (msg.type === 'team' && battle && Array.isArray(msg.pokemon)) {
-        battle.myPokemon = msg.pokemon.map(ownPokemon);
+      } else if (msg.type === 'team' && battle) {
+        if (Array.isArray(msg.p1Pokemon)) sidePokemon.p1 = msg.p1Pokemon;
+        if (Array.isArray(msg.p2Pokemon)) sidePokemon.p2 = msg.p2Pokemon;
+        if (Array.isArray(msg.pokemon)) sidePokemon[currentSide] = msg.pokemon;
+        applyTeam();
       }
     };
 
@@ -407,6 +474,10 @@ function renderBroadcastSectionHtml(
   selectedTable?: number;
   viewerInit?: {
     lines: string[];
+    p1Lines?: string[];
+    p2Lines?: string[];
+    p1Pokemon?: unknown[];
+    p2Pokemon?: unknown[];
     live: boolean;
     side: 'p1';
     thinkingSlot?: 'p1' | 'p2';
@@ -489,6 +560,10 @@ function renderBroadcastSectionHtml(
   }
 
   const lines = selected?.lines ?? norm.lines;
+  const p1Lines = selected?.p1Lines ?? norm.p1Lines;
+  const p2Lines = selected?.p2Lines ?? norm.p2Lines;
+  const p1Pokemon = selected?.p1?.pokemon;
+  const p2Pokemon = selected?.p2?.pokemon;
   const isLive = selected ? selected.live !== false : norm.live !== false;
   const thinkingSlot = p1Clock.thinking ? 'p1' : p2Clock.thinking ? 'p2' : undefined;
   const thinkingBankSeconds = thinkingSlot
@@ -502,6 +577,10 @@ function renderBroadcastSectionHtml(
     selectedTable: selected?.table ?? 1,
     viewerInit: {
       lines,
+      p1Lines,
+      p2Lines,
+      p1Pokemon,
+      p2Pokemon,
       live: isLive,
       side: 'p1',
       thinkingSlot,
@@ -1455,6 +1534,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           sendToViewer({
             type: 'load',
             lines: pendingPayload.lines,
+            p1Lines: pendingPayload.p1Lines,
+            p2Lines: pendingPayload.p2Lines,
+            p1Pokemon: pendingPayload.p1Pokemon,
+            p2Pokemon: pendingPayload.p2Pokemon,
             live: Boolean(pendingPayload.live),
             side: pendingPayload.side || 'p1',
           });
@@ -1562,10 +1645,14 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         renderClocks(undefined, undefined, false);
       }
       const lines = Array.isArray(tb.lines) ? tb.lines : [];
+      const p1Lines = Array.isArray(tb.p1Lines) ? tb.p1Lines : undefined;
+      const p2Lines = Array.isArray(tb.p2Lines) ? tb.p2Lines : undefined;
+      const p1Pokemon = tb.p1 && Array.isArray(tb.p1.pokemon) ? tb.p1.pokemon : undefined;
+      const p2Pokemon = tb.p2 && Array.isArray(tb.p2.pokemon) ? tb.p2.pokemon : undefined;
       const isLive = !tb.idle && tb.live !== false;
-      pendingPayload = {lines, live: isLive, side: 'p1'};
+      pendingPayload = {lines, p1Lines, p2Lines, p1Pokemon, p2Pokemon, live: isLive, side: 'p1'};
       if (viewerReady) {
-        sendToViewer({type: 'load', lines, live: isLive, side: 'p1'});
+        sendToViewer({type: 'load', ...pendingPayload});
       }
       if (scroll) {
         liveSec.scrollIntoView({behavior: 'smooth'});
@@ -1952,10 +2039,22 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         if (!logUrl || !frame || !liveSec) return;
         ev.preventDefault();
         try {
-          const res = await fetch(logUrl);
+          const fetchUrl = logUrl + (logUrl.indexOf('?') >= 0 ? '&' : '?') + 'side=both';
+          const res = await fetch(fetchUrl);
           if (!res.ok) return;
-          const text = await res.text();
-          const lines = text.split('\\n');
+          const ct = String(res.headers.get('content-type') || '');
+          let lines = [];
+          let p1Lines = undefined;
+          let p2Lines = undefined;
+          if (ct.indexOf('application/json') >= 0) {
+            const parsed = await res.json();
+            lines = Array.isArray(parsed.lines) ? parsed.lines : [];
+            p1Lines = Array.isArray(parsed.p1Lines) ? parsed.p1Lines : undefined;
+            p2Lines = Array.isArray(parsed.p2Lines) ? parsed.p2Lines : undefined;
+          } else {
+            const text = await res.text();
+            lines = text.split('\\n');
+          }
           mode = 'replay';
           renderClocks(undefined, undefined, false);
           renderTableNav();
@@ -1965,9 +2064,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
               esc(replayLink.textContent || '') + '</code>';
           }
           refreshReplayHeaderRight();
-          pendingPayload = {lines, live: false, side: 'p1'};
+          pendingPayload = {lines, p1Lines, p2Lines, live: false, side: 'p1'};
           if (viewerReady) {
-            sendToViewer({type: 'load', lines, live: false, side: 'p1'});
+            sendToViewer({type: 'load', ...pendingPayload});
           }
           liveSec.scrollIntoView({behavior: 'smooth'});
         } catch {}
@@ -2100,7 +2199,19 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           const tb = getTable(data.table);
           if (!tb) return;
           const newLines = Array.isArray(data.lines) ? data.lines : [];
+          const newP1Lines = Array.isArray(data.p1Lines) ? data.p1Lines : undefined;
+          const newP2Lines = Array.isArray(data.p2Lines) ? data.p2Lines : undefined;
           tb.lines = (Array.isArray(tb.lines) ? tb.lines : []).concat(newLines).slice(-10000);
+          if (newP1Lines) {
+            tb.p1Lines = (Array.isArray(tb.p1Lines) ? tb.p1Lines : [])
+              .concat(newP1Lines)
+              .slice(-10000);
+          }
+          if (newP2Lines) {
+            tb.p2Lines = (Array.isArray(tb.p2Lines) ? tb.p2Lines : [])
+              .concat(newP2Lines)
+              .slice(-10000);
+          }
           if (data.p1) tb.p1 = data.p1;
           if (data.p2) tb.p2 = data.p2;
           if (typeof data.live === 'boolean') tb.live = data.live;
@@ -2126,12 +2237,25 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
             if (tb.p1 && tb.p2) {
               renderClocks(tb.p1, tb.p2, tb.live !== false);
             }
+            const p1Pokemon = tb.p1 && Array.isArray(tb.p1.pokemon) ? tb.p1.pokemon : undefined;
+            const p2Pokemon = tb.p2 && Array.isArray(tb.p2.pokemon) ? tb.p2.pokemon : undefined;
             if (pendingPayload && Array.isArray(pendingPayload.lines)) {
               pendingPayload.lines = tb.lines;
+              pendingPayload.p1Lines = tb.p1Lines;
+              pendingPayload.p2Lines = tb.p2Lines;
+              pendingPayload.p1Pokemon = p1Pokemon;
+              pendingPayload.p2Pokemon = p2Pokemon;
               pendingPayload.live = tb.live !== false;
             }
             if (viewerReady && newLines.length > 0) {
-              sendToViewer({type: 'append', lines: newLines});
+              sendToViewer({
+                type: 'append',
+                lines: newLines,
+                p1Lines: newP1Lines,
+                p2Lines: newP2Lines,
+                p1Pokemon,
+                p2Pokemon,
+              });
             }
           }
         } catch {}

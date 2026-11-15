@@ -124,6 +124,10 @@ function buildBattlesScript(
     const agentLinks = ${agentLinksJson};
     const formatTitles = ${formatTitlesJson};
     const livePanel = document.getElementById('live-panel');
+    const battleViewerWrap = document.getElementById('battle-viewer-wrap');
+    const battleViewerLeft = document.getElementById('battle-viewer-left');
+    const battleViewerRight = document.getElementById('battle-viewer-right');
+    const liveViewerFrame = document.getElementById('ps-viewer-frame');
     const tbody = document.getElementById('battles-tbody');
     const pager = document.getElementById('battles-pager');
     const prevBtn = document.getElementById('battles-prev');
@@ -132,9 +136,51 @@ function buildBattlesScript(
     const radios = document.querySelectorAll('input[name="bformat"]');
     const pageSize = (state && state.pageSize) || 25;
     const historyEndpoint = (state && state.historyEndpoint) || '/api/battles.json';
+    const SPEED_KEY = 'pkmn-viewer-speed';
+    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
     let currentFmt = 'all';
     let currentPage = 1;
     let fetchSeq = 0;
+    let liveViewerReady = false;
+    let viewerPlaybackState = 'waiting';
+    let shownLive = (
+      state &&
+      state.live &&
+      !state.stale &&
+      Array.isArray(state.live.lines) &&
+      state.live.lines.length > 0
+    )
+      ? {...state.live, ended: false, seekEnd: true}
+      : undefined;
+    let queuedLive = undefined;
+    let sentLineCount = 0;
+    let sentP1Count = 0;
+    let sentP2Count = 0;
+    let sentEnd = false;
+
+    const postToFrame = (frameEl, msg) => {
+      if (frameEl && frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage(msg, '*');
+      }
+    };
+
+    const syncFramePrefs = frameEl => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      postToFrame(frameEl, {type: 'theme', dark});
+      try {
+        const saved = localStorage.getItem(SPEED_KEY);
+        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
+          postToFrame(frameEl, {type: 'speed', speed: saved});
+        }
+      } catch {}
+    };
+
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+      postToFrame(liveViewerFrame, {type: 'theme', dark: e.matches});
+      document.querySelectorAll('iframe.replay-viewer-frame').forEach(f => {
+        postToFrame(f, {type: 'theme', dark: e.matches});
+      });
+    });
 
     const esc = s => String(s)
       .replace(/&/g, '&amp;')
@@ -166,6 +212,136 @@ function buildBattlesScript(
       const link = href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
       return link + ' <code>' + esc(agent.version) + '</code>';
     };
+
+    const renderShownHeader = () => {
+      if (!shownLive) return;
+      if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
+      const seat1 = shownLive.game === 2 ? shownLive.p2 : shownLive.p1;
+      const seat2 = shownLive.game === 2 ? shownLive.p1 : shownLive.p2;
+      if (battleViewerLeft) {
+        const badge = shownLive.ended
+          ? '<span class="muted">Finished</span>'
+          : '<span class="yes">&#9679; Live</span>';
+        battleViewerLeft.innerHTML = badge + ' · <code>' +
+          esc(shownLive.matchId) + '</code> · <strong>Game ' + shownLive.game + ' / 2</strong>';
+      }
+      if (battleViewerRight) {
+        battleViewerRight.innerHTML = '<tt>p1</tt> ' + renderAgent(seat1, true) +
+          ' vs <tt>p2</tt> ' + renderAgent(seat2, true);
+      }
+    };
+
+    const loadShownIntoViewer = () => {
+      if (!shownLive) return;
+      renderShownHeader();
+      const lines = Array.isArray(shownLive.lines) ? shownLive.lines : [];
+      const p1Lines = Array.isArray(shownLive.p1Lines) ? shownLive.p1Lines : undefined;
+      const p2Lines = Array.isArray(shownLive.p2Lines) ? shownLive.p2Lines : undefined;
+      sentLineCount = lines.length;
+      sentP1Count = p1Lines ? p1Lines.length : 0;
+      sentP2Count = p2Lines ? p2Lines.length : 0;
+      sentEnd = false;
+      if (!liveViewerReady) return;
+      postToFrame(liveViewerFrame, {
+        type: 'load',
+        lines,
+        p1Lines,
+        p2Lines,
+        p1Pokemon: shownLive.p1Pokemon,
+        p2Pokemon: shownLive.p2Pokemon,
+        live: true,
+        seekEnd: shownLive.seekEnd !== false,
+        side: 'p1',
+      });
+      if (shownLive.ended) {
+        postToFrame(liveViewerFrame, {type: 'end'});
+        sentEnd = true;
+      }
+    };
+
+    const appendShownToViewer = () => {
+      if (!shownLive) return;
+      renderShownHeader();
+      const lines = Array.isArray(shownLive.lines) ? shownLive.lines : [];
+      const p1Lines = Array.isArray(shownLive.p1Lines) ? shownLive.p1Lines : undefined;
+      const p2Lines = Array.isArray(shownLive.p2Lines) ? shownLive.p2Lines : undefined;
+      if (liveViewerReady && lines.length > sentLineCount) {
+        postToFrame(liveViewerFrame, {
+          type: 'append',
+          lines: lines.slice(sentLineCount),
+          p1Lines: p1Lines ? p1Lines.slice(sentP1Count) : undefined,
+          p2Lines: p2Lines ? p2Lines.slice(sentP2Count) : undefined,
+          p1Pokemon: shownLive.p1Pokemon,
+          p2Pokemon: shownLive.p2Pokemon,
+        });
+      }
+      sentLineCount = lines.length;
+      sentP1Count = p1Lines ? p1Lines.length : 0;
+      sentP2Count = p2Lines ? p2Lines.length : 0;
+      if (shownLive.ended && liveViewerReady && !sentEnd) {
+        postToFrame(liveViewerFrame, {type: 'end'});
+        sentEnd = true;
+      }
+    };
+
+    window.addEventListener('message', ev => {
+      const data = ev.data;
+      if (!data || typeof data !== 'object') return;
+      if (
+        data.type === 'speed' &&
+        typeof data.speed === 'string' &&
+        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
+      ) {
+        try {
+          localStorage.setItem(SPEED_KEY, data.speed);
+        } catch {}
+        return;
+      }
+      if (
+        data.type === 'playback' &&
+        liveViewerFrame &&
+        ev.source === liveViewerFrame.contentWindow
+      ) {
+        viewerPlaybackState = data.state || 'waiting';
+        if (viewerPlaybackState === 'finished') {
+          if (queuedLive) {
+            shownLive = queuedLive;
+            queuedLive = undefined;
+            loadShownIntoViewer();
+          } else if (state && state.live && !Array.isArray(state.live.lines)) {
+            if (battleViewerWrap) battleViewerWrap.classList.add('hide');
+            shownLive = undefined;
+          }
+        }
+        return;
+      }
+      if (data.type !== 'ready') return;
+      if (liveViewerFrame && ev.source === liveViewerFrame.contentWindow) {
+        liveViewerReady = true;
+        syncFramePrefs(liveViewerFrame);
+        if (shownLive) {
+          loadShownIntoViewer();
+        }
+        return;
+      }
+      document.querySelectorAll('.battle-detail[data-match-id]').forEach(slot => {
+        const f = slot.querySelector('iframe.replay-viewer-frame');
+        if (f && ev.source === f.contentWindow) {
+          slot._viewerReady = true;
+          syncFramePrefs(f);
+          if (Array.isArray(slot._pendingLines) && slot._pendingLines.length > 0) {
+            postToFrame(f, {
+              type: 'load',
+              lines: slot._pendingLines,
+              p1Lines: slot._pendingP1Lines,
+              p2Lines: slot._pendingP2Lines,
+              live: false,
+              side: 'p1',
+            });
+          }
+        }
+      });
+    });
 
     const renderSlot = (key, slotData, live, nowSec) => {
       const isRunning = live.activeSlot === key;
@@ -228,6 +404,28 @@ function buildBattlesScript(
             '<strong>&#9679; Watch ' + esc(state.runningTournament.name) + ' live</strong></a>'
           : '';
         livePanel.innerHTML = '<div class="live-idle muted">' + idleMsg + tourSuffix + '</div>';
+        if (state && state.stale) {
+          if (battleViewerWrap) battleViewerWrap.classList.add('hide');
+          shownLive = undefined;
+          queuedLive = undefined;
+          return;
+        }
+        if (shownLive) {
+          shownLive.ended = true;
+          if (liveViewerReady && !sentEnd) {
+            postToFrame(liveViewerFrame, {type: 'end'});
+            sentEnd = true;
+          }
+          if (queuedLive && viewerPlaybackState === 'finished') {
+            shownLive = {...queuedLive, ended: true};
+            queuedLive = undefined;
+            loadShownIntoViewer();
+          } else {
+            renderShownHeader();
+          }
+        } else if (battleViewerWrap) {
+          battleViewerWrap.classList.add('hide');
+        }
         return;
       }
       const l = state.live;
@@ -252,6 +450,49 @@ function buildBattlesScript(
         renderSlot('p1', l.p1, l, nowSec) +
         renderSlot('p2', l.p2, l, nowSec) +
         '</div>';
+
+      if (Array.isArray(l.lines) && l.lines.length > 0) {
+        const gameKey = l.matchId + ':' + l.game;
+        const shownKey = shownLive ? (shownLive.matchId + ':' + shownLive.game) : '';
+        if (!shownLive) {
+          shownLive = {...l, ended: false, seekEnd: true};
+          queuedLive = undefined;
+          loadShownIntoViewer();
+        } else if (gameKey === shownKey) {
+          const prevLen = Array.isArray(shownLive.lines) ? shownLive.lines.length : 0;
+          shownLive = {...l, ended: false, seekEnd: shownLive.seekEnd};
+          if (l.lines.length < prevLen) {
+            loadShownIntoViewer();
+          } else {
+            appendShownToViewer();
+          }
+        } else {
+          shownLive.ended = true;
+          if (liveViewerReady && !sentEnd) {
+            postToFrame(liveViewerFrame, {type: 'end'});
+            sentEnd = true;
+          }
+          if (viewerPlaybackState === 'watching') {
+            queuedLive = {...l, ended: false, seekEnd: false};
+            renderShownHeader();
+          } else {
+            shownLive = {...l, ended: false, seekEnd: false};
+            queuedLive = undefined;
+            loadShownIntoViewer();
+          }
+        }
+      } else if (shownLive && viewerPlaybackState === 'watching') {
+        shownLive.ended = true;
+        if (liveViewerReady && !sentEnd) {
+          postToFrame(liveViewerFrame, {type: 'end'});
+          sentEnd = true;
+        }
+        renderShownHeader();
+      } else {
+        if (battleViewerWrap) battleViewerWrap.classList.add('hide');
+        shownLive = undefined;
+        queuedLive = undefined;
+      }
     };
 
     const isFaultReason = r => {
@@ -383,6 +624,27 @@ function buildBattlesScript(
       const p1Teams = showPools ? ' · Teams ' + t1Code + ' / ' + t2Code : '';
       const p2Teams = showPools ? ' · Teams ' + t2Code + ' / ' + t1Code : '';
 
+      const g1ReplayLinks = m.game1LogHref
+        ? ' · <a href="' + esc(m.game1LogHref) + '" class="live-pill" data-replay-log="' +
+          esc(m.game1LogHref) + '" data-replay-match="' + esc(m.id) +
+          '" data-replay-game="1">&#9654; Replay</a> · <a href="' +
+          esc(m.game1LogHref) + '" class="subtle"><code>.log</code></a>'
+        : '';
+      const g2ReplayLinks = m.game2LogHref
+        ? ' · <a href="' + esc(m.game2LogHref) + '" class="live-pill" data-replay-log="' +
+          esc(m.game2LogHref) + '" data-replay-match="' + esc(m.id) +
+          '" data-replay-game="2">&#9654; Replay</a> · <a href="' +
+          esc(m.game2LogHref) + '" class="subtle"><code>.log</code></a>'
+        : '';
+
+      const replayAttrs = (m.game1LogHref || m.game2LogHref)
+        ? ' data-match-id="' + esc(m.id) +
+          '" data-p1-name="' + esc(m.p1.name) +
+          '" data-p2-name="' + esc(m.p2.name) + '"' +
+          (m.game1LogHref ? ' data-g1-log="' + esc(m.game1LogHref) + '"' : '') +
+          (m.game2LogHref ? ' data-g2-log="' + esc(m.game2LogHref) + '"' : '')
+        : '';
+
       let archiveNote = '';
       if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
         const links = [];
@@ -403,7 +665,7 @@ function buildBattlesScript(
         }
       }
 
-      return '<div class="battle-detail">' +
+      return '<div class="battle-detail"' + replayAttrs + '>' +
         '<div class="battle-detail-meta">' +
           '<span><a href="' + esc(ladderHref) + '" class="subtle"><strong>' + esc(m.ladderName) +
           '</strong></a> <span class="muted">(<tt>' + esc(fmtTitle) + '</tt>)</span> · ' +
@@ -421,13 +683,13 @@ function buildBattlesScript(
               '<span><strong>Game 1</strong> · <tt>p1</tt> ' + p1Plain +
               ' vs <tt>p2</tt> ' + p2Plain + '</span>' +
               '<span>' + g1Winner + ' · ' + end1.html + ' · ' + m.game1Turns +
-              't · Bank <tt>' + g1Banks + '</tt></span>' +
+              't · Bank <tt>' + g1Banks + '</tt>' + g1ReplayLinks + '</span>' +
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><strong>Game 2</strong> <span class="muted">(swapped)</span> · <tt>p1</tt> ' +
               p2Plain + ' vs <tt>p2</tt> ' + p1Plain + '</span>' +
               '<span>' + g2Winner + ' · ' + end2.html + ' · ' + m.game2Turns +
-              't · Bank <tt>' + g2Banks + '</tt></span>' +
+              't · Bank <tt>' + g2Banks + '</tt>' + g2ReplayLinks + '</span>' +
             '</div>' +
           '</div>' +
           '<div class="battle-detail-card">' +
@@ -450,6 +712,97 @@ function buildBattlesScript(
         '</div>' +
         archiveNote +
       '</div>';
+    };
+
+    const loadRowReplay = async (slot, gameNum) => {
+      if (!slot) return;
+      const matchId = slot.getAttribute('data-match-id') || '';
+      const p1Name = slot.getAttribute('data-p1-name') || 'P1';
+      const p2Name = slot.getAttribute('data-p2-name') || 'P2';
+      const g1Log = slot.getAttribute('data-g1-log') || '';
+      const g2Log = slot.getAttribute('data-g2-log') || '';
+      const activeGame = (gameNum === 2 && g2Log) ? 2 : 1;
+      const logUrl = activeGame === 2 ? g2Log : (g1Log || g2Log);
+      if (!logUrl) return;
+
+      let wrap = slot.querySelector('.battle-replay-wrap');
+      if (!wrap) {
+        wrap = document.createElement('div');
+        wrap.className = 'battle-replay-wrap';
+        wrap.innerHTML =
+          '<div class="series-bar">' +
+            '<span class="replay-bar-left"></span>' +
+            '<span class="replay-bar-right"></span>' +
+          '</div>' +
+          '<div class="viewer-wrap">' +
+            '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
+              'title="Pokémon Showdown replay viewer" ' +
+              'sandbox="allow-scripts allow-same-origin"></iframe>' +
+          '</div>';
+        slot.insertBefore(wrap, slot.querySelector('.battle-detail-note'));
+      }
+      const leftEl = slot.querySelector('.replay-bar-left');
+      const rightEl = slot.querySelector('.replay-bar-right');
+      const seat1 = activeGame === 2 ? p2Name : p1Name;
+      const seat2 = activeGame === 2 ? p1Name : p2Name;
+      if (leftEl) {
+        leftEl.innerHTML = '<strong>Replay</strong> · <code>' + esc(matchId) +
+          '</code> · <strong>Game ' + activeGame + ' / 2</strong> ' +
+          '<span class="muted">(<tt>p1</tt> ' + esc(seat1) +
+          ' vs <tt>p2</tt> ' + esc(seat2) + ')</span>';
+      }
+      if (rightEl) {
+        const pills = [];
+        if (g1Log) {
+          pills.push(
+            '<a href="' + esc(g1Log) + '" class="live-pill' +
+            (activeGame === 1 ? ' active' : '') + '" data-replay-log="' + esc(g1Log) +
+            '" data-replay-match="' + esc(matchId) +
+            '" data-replay-game="1">&#9654; Game 1</a>'
+          );
+        }
+        if (g2Log) {
+          pills.push(
+            '<a href="' + esc(g2Log) + '" class="live-pill' +
+            (activeGame === 2 ? ' active' : '') + '" data-replay-log="' + esc(g2Log) +
+            '" data-replay-match="' + esc(matchId) +
+            '" data-replay-game="2">&#9654; Game 2</a>'
+          );
+        }
+        pills.push('<a href="' + esc(logUrl) + '" class="subtle"><code>.log</code></a>');
+        rightEl.innerHTML = pills.join(' · ');
+      }
+
+      if (slot._loadedLogUrl === logUrl && Array.isArray(slot._pendingLines)) {
+        return;
+      }
+      slot._loadedLogUrl = logUrl;
+      try {
+        const fetchUrl = logUrl + (logUrl.indexOf('?') >= 0 ? '&' : '?') + 'side=both';
+        const res = await fetch(fetchUrl);
+        if (!res.ok) return;
+        const ct = String(res.headers.get('content-type') || '');
+        let lines = [];
+        let p1Lines = undefined;
+        let p2Lines = undefined;
+        if (ct.indexOf('application/json') >= 0) {
+          const parsed = await res.json();
+          lines = Array.isArray(parsed.lines) ? parsed.lines : [];
+          p1Lines = Array.isArray(parsed.p1Lines) ? parsed.p1Lines : undefined;
+          p2Lines = Array.isArray(parsed.p2Lines) ? parsed.p2Lines : undefined;
+        } else {
+          const text = await res.text();
+          lines = text.split('\\n');
+        }
+        if (slot._loadedLogUrl !== logUrl) return;
+        slot._pendingLines = lines;
+        slot._pendingP1Lines = p1Lines;
+        slot._pendingP2Lines = p2Lines;
+        const f = slot.querySelector('iframe.replay-viewer-frame');
+        if (slot._viewerReady && f) {
+          postToFrame(f, {type: 'load', lines, p1Lines, p2Lines, live: false, side: 'p1'});
+        }
+      } catch {}
     };
 
     const renderMatchPair = (m, nowSec, expanded) => {
@@ -483,6 +836,10 @@ function buildBattlesScript(
       detailTr.className = 'battle-detail-row' + (expanded ? '' : ' hide');
       detailTr.dataset.detailFor = m.id;
       detailTr.innerHTML = '<td colspan="6">' + renderMatchDetailHtml(m) + '</td>';
+      if (expanded) {
+        const slot = detailTr.querySelector('.battle-detail[data-match-id]');
+        if (slot) void loadRowReplay(slot, 1);
+      }
 
       return [tr, detailTr];
     };
@@ -494,10 +851,29 @@ function buildBattlesScript(
       detail.classList.toggle('hide', !open);
       row.classList.toggle('expanded', open);
       row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        const slot = detail.querySelector('.battle-detail[data-match-id]');
+        if (slot && !slot._loadedLogUrl) {
+          void loadRowReplay(slot, 1);
+        }
+      }
     };
 
     if (tbody) {
       tbody.addEventListener('click', e => {
+        const replayLink = e.target.closest('a[data-replay-log]');
+        if (replayLink) {
+          const detailRow = replayLink.closest('tr.battle-detail-row');
+          const slot = detailRow
+            ? detailRow.querySelector('.battle-detail[data-match-id]')
+            : undefined;
+          if (slot) {
+            e.preventDefault();
+            const gNum = Number(replayLink.getAttribute('data-replay-game')) || 1;
+            void loadRowReplay(slot, gNum);
+            return;
+          }
+        }
         if (e.target.closest('a')) return;
         const row = e.target.closest('tr.battle-row');
         if (row) toggleRow(row);
@@ -1866,6 +2242,7 @@ function renderSingleLadderArtifact(opts: {
   const jsonHref = `/arena/ladders/${urlEnc}/index.json`;
 
   let ladderArchiveNote: util.Child;
+  let ladderBottomNote: util.Child;
   if (l.team === 'pools' && l.status === 'archived') {
     if (archive) {
       ladderArchiveNote = (
@@ -1895,6 +2272,17 @@ function renderSingleLadderArtifact(opts: {
         Season settling — full battle log archive (<code>{`${l.id}-logs.7z`}</code>) and{' '}
         <code>teams.json</code> will be published once remaining provisional entries settle and
         the ladder is retired.
+      </p>
+    );
+  } else if (l.team === 'random' && archive) {
+    ladderBottomNote = (
+      <p className='battle-note muted'>
+        Battle log archive (updated daily):{' '}
+        <a href={archive.href} className='subtle'>
+          <code>{archive.name}</code>
+        </a>{' '}
+        (full Showdown battle logs) ·{' '}
+        <a href={jsonHref} className='subtle'><code>index.json</code></a>
       </p>
     );
   }
@@ -1946,6 +2334,7 @@ function renderSingleLadderArtifact(opts: {
         <h3><a href='#matchups' className='subtle'>Matchups</a></h3>
         {matchupsRes.node}
       </section>
+      {ladderBottomNote}
       <script>{util.raw(LADDER_SCRIPT)}</script>
     </>
   );
@@ -2630,6 +3019,41 @@ export function renderBattleInlineDetailHtml(
   const p1Banks = `${Math.round(m.p1Game1BankSeconds)}s / ${Math.round(m.p1Game2BankSeconds)}s`;
   const p2Banks = `${Math.round(m.p2Game1BankSeconds)}s / ${Math.round(m.p2Game2BankSeconds)}s`;
 
+  const g1ReplayLinks = m.game1LogHref ? (
+    <>
+      {' · '}
+      <a
+        href={m.game1LogHref}
+        className='live-pill'
+        data-replay-log={m.game1LogHref}
+        data-replay-match={m.id}
+        data-replay-game='1'
+      >
+        {'\u25b6'} Replay
+      </a>
+      {' · '}
+      <a href={m.game1LogHref} className='subtle'><code>.log</code></a>
+    </>
+  ) : undefined;
+  const g2ReplayLinks = m.game2LogHref ? (
+    <>
+      {' · '}
+      <a
+        href={m.game2LogHref}
+        className='live-pill'
+        data-replay-log={m.game2LogHref}
+        data-replay-match={m.id}
+        data-replay-game='2'
+      >
+        {'\u25b6'} Replay
+      </a>
+      {' · '}
+      <a href={m.game2LogHref} className='subtle'><code>.log</code></a>
+    </>
+  ) : undefined;
+
+  const hasReplay = Boolean(m.game1LogHref || m.game2LogHref);
+
   let archiveNote: util.Child;
   if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
     const links: util.Child[] = [];
@@ -2654,7 +3078,14 @@ export function renderBattleInlineDetailHtml(
     'that player in this match (at most one team per match can belong to either player)';
 
   return String(
-    <div className='battle-detail'>
+    <div
+      className='battle-detail'
+      data-match-id={hasReplay ? m.id : undefined}
+      data-p1-name={hasReplay ? m.p1.name : undefined}
+      data-p2-name={hasReplay ? m.p2.name : undefined}
+      data-g1-log={m.game1LogHref}
+      data-g2-log={m.game2LogHref}
+    >
       <div className='battle-detail-meta'>
         <span>
           <a href={m.ladderHref} className='subtle'><strong>{m.ladderName}</strong></a>{' '}
@@ -2687,6 +3118,7 @@ export function renderBattleInlineDetailHtml(
             <span><strong>Game 1</strong> · <tt>p1</tt> {p1Plain} vs <tt>p2</tt> {p2Plain}</span>
             <span>
               {g1Winner} · {end1.node} · {m.game1Turns}t · Bank <tt>{g1Banks}</tt>
+              {g1ReplayLinks}
             </span>
           </div>
           <div className='battle-detail-line'>
@@ -2696,6 +3128,7 @@ export function renderBattleInlineDetailHtml(
             </span>
             <span>
               {g2Winner} · {end2.node} · {m.game2Turns}t · Bank <tt>{g2Banks}</tt>
+              {g2ReplayLinks}
             </span>
           </div>
         </div>
@@ -2859,6 +3292,33 @@ export function renderBattlesPage(opts: {
   const pagerInitialInfo =
     `Page 1 of ${totalPages} (${totalMatches.toLocaleString('en-US')} ${battleWord})`;
 
+  const liveMatchWithLines =
+    liveDoc && !liveDoc.stale && liveDoc.live?.lines && liveDoc.live.lines.length > 0
+      ? liveDoc.live
+      : undefined;
+  let initialViewerLeft: util.Child = <span className='muted'>—</span>;
+  let initialViewerRight: util.Child = <span className='muted'>—</span>;
+  if (liveMatchWithLines) {
+    const l = liveMatchWithLines;
+    const seat1 = l.game === 2 ? l.p2 : l.p1;
+    const seat2 = l.game === 2 ? l.p1 : l.p2;
+    const s1Href = agentLinks[seat1.slug];
+    const s2Href = agentLinks[seat2.slug];
+    initialViewerLeft = (
+      <>
+        <span className='yes'>{'\u25cf'} Live</span> · <code>{l.matchId}</code> ·{' '}
+        <strong>Game {l.game} / 2</strong>
+      </>
+    );
+    initialViewerRight = (
+      <>
+        <tt>p1</tt> {renderAgentLink(seat1.name, s1Href, true)} <code>{seat1.version}</code>
+        {' vs '}
+        <tt>p2</tt> {renderAgentLink(seat2.name, s2Href, true)} <code>{seat2.version}</code>
+      </>
+    );
+  }
+
   const content = String(
     <>
       <nav aria-label='Format filter'>
@@ -2874,6 +3334,24 @@ export function renderBattlesPage(opts: {
         <h3><a href='#live' className='subtle'>Live</a></h3>
         <div className='live-panel' id='live-panel'>
           {renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta, profileSlugs)}
+        </div>
+        <div
+          className={`battle-viewer-wrap${liveMatchWithLines ? '' : ' hide'}`}
+          id='battle-viewer-wrap'
+        >
+          <div className='series-bar' id='battle-viewer-bar'>
+            <span id='battle-viewer-left'>{initialViewerLeft}</span>
+            <span id='battle-viewer-right'>{initialViewerRight}</span>
+          </div>
+          <div className='viewer-wrap'>
+            <iframe
+              id='ps-viewer-frame'
+              className='viewer-frame'
+              src='/arena/viewer/'
+              title='Pokémon Showdown battle viewer'
+              sandbox='allow-scripts'
+            />
+          </div>
         </div>
       </section>
       <section id='history'>
@@ -3324,8 +3802,54 @@ export function register(app: polka.Polka, options: Options) {
     sendCached(req, res, `ladder:html:${key}`, token, 'text/html; charset=utf-8', () => htmlDoc);
   };
 
+  const serveBattleLogFile = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    subdir: 'ladders' | 'tournaments',
+    rawId: string,
+    rawFile: string
+  ) => {
+    if (!/^[A-Za-z0-9._-]+$/.test(rawId) || !/^[A-Za-z0-9._-]+\.log$/.test(rawFile)) {
+      sendHtmlNotFound(res);
+      return;
+    }
+    const logPath = path.join(publicDir, 'arena', subdir, rawId, rawFile);
+    if (!fs.existsSync(logPath)) {
+      sendHtmlNotFound(res);
+      return;
+    }
+    const rawText = fs.readFileSync(logPath, 'utf8');
+    const side = new URL(req.url ?? '/', 'http://localhost').searchParams.get('side');
+    if (side === 'both') {
+      const lines = rawText.replace(/\n$/, '').split('\n');
+      const {p1Lines, p2Lines} = arena.extractPerspectiveLogs(lines);
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.end(JSON.stringify({lines, p1Lines, p2Lines}));
+      return;
+    }
+    if (side === 'p1' || side === 'p2') {
+      const lines = rawText.replace(/\n$/, '').split('\n');
+      const {p1Lines, p2Lines} = arena.extractPerspectiveLogs(lines);
+      const chosen = side === 'p2' ? p2Lines : p1Lines;
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.end(`${chosen.join('\n')}\n`);
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.end(rawText);
+  };
+
   app.get('/arena/ladders/:key/index.json', (req, res) => {
     handleLadder(req, res, paramStr(req.params.key), true);
+  });
+  app.get('/arena/ladders/:id/:file', (req, res) => {
+    serveBattleLogFile(req, res, 'ladders', paramStr(req.params.id), paramStr(req.params.file));
   });
   app.get('/arena/ladders/:key', (req, res) => {
     handleLadder(req, res, paramStr(req.params.key), false);
@@ -3388,6 +3912,9 @@ export function register(app: polka.Polka, options: Options) {
 
   app.get('/arena/tournaments/:id/index.json', (req, res) => {
     handleTournament(req, res, paramStr(req.params.id), true);
+  });
+  app.get('/arena/tournaments/:id/:file', (req, res) => {
+    serveBattleLogFile(req, res, 'tournaments', paramStr(req.params.id), paramStr(req.params.file));
   });
   app.get('/arena/tournaments/:id', (req, res) => {
     handleTournament(req, res, paramStr(req.params.id), false);

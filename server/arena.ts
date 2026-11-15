@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
+import {extractChannelMessages} from '@pkmn/sim';
 import polka from 'polka';
 
 import type * as db from '../db';
@@ -81,9 +82,11 @@ export interface LiveSlot {
   team?: string;
 }
 
-// Live telemetry intentionally enforces a strict zero-log anti-scouting policy: spectators see
-// turn numbers, Showdown chess clocks, SIGSTOP/SIGCONT slot state, and XNU physical footprint
-// RAM, never teams, Pokémon species, move choices, or battle protocol logs.
+// Live telemetry enforces a strict zero-log anti-scouting policy on `harvested` and `pools`
+// ladders (spectators see turn numbers, Showdown chess clocks, SIGSTOP/SIGCONT slot state, and
+// XNU physical footprint RAM, never teams, Pokémon species, move choices, or battle logs). On
+// `random` ladders, `lines` streams the live Showdown battle log because teams are generated
+// randomly per game and agents execute in an airgapped sandbox without internet access.
 export interface LiveMatch {
   heartbeatSeq: number;
   matchId: string;
@@ -99,12 +102,19 @@ export interface LiveMatch {
   game1Summary?: {winnerSlot?: 'p1' | 'p2'; turns: number};
   p1: LiveSlot;
   p2: LiveSlot;
+  lines?: string[];
+  p1Lines?: string[];
+  p2Lines?: string[];
+  p1Pokemon?: unknown[];
+  p2Pokemon?: unknown[];
 }
 
 export interface BattleHistoryEntry extends db.RecentMatchView {
   ladderHref: string;
   archiveHref?: string;
   teamsHref?: string;
+  game1LogHref?: string;
+  game2LogHref?: string;
 }
 
 export interface LiveDocument {
@@ -130,6 +140,7 @@ export interface BroadcastPlayer extends BroadcastClock {
   slug?: string;
   version?: string;
   team?: string;
+  pokemon?: unknown[];
 }
 
 export interface BroadcastTable {
@@ -145,6 +156,8 @@ export interface BroadcastTable {
   p1?: BroadcastPlayer;
   p2?: BroadcastPlayer;
   lines?: string[];
+  p1Lines?: string[];
+  p2Lines?: string[];
   live?: boolean;
   updatedAt?: number;
 }
@@ -161,6 +174,8 @@ export interface LiveBroadcast {
   p1: BroadcastClock;
   p2: BroadcastClock;
   lines: string[];
+  p1Lines?: string[];
+  p2Lines?: string[];
   live?: boolean;
 }
 
@@ -245,15 +260,21 @@ export interface TournamentDocument {
 }
 
 // Full battle logs (containing unpacked team sheets, real agent identities, and telemetry) are
-// published exclusively for competitor team-pool (`pools`) ladders strictly AFTER the ladder has
-// been retired (`status === 'archived'`).
+// published for random-battle (`random`) ladders (updated daily, as there are no proprietary team
+// rosters) and for competitor team-pool (`pools`) ladders strictly AFTER the ladder has been
+// retired (`status === 'archived'`).
 export function resolveLadderArchive(
   publicDir: string,
   ladder: Pick<db.LadderRow, 'id' | 'team' | 'status'>
 ): {name: string; href: string} | undefined {
-  if (ladder.team !== 'pools' || ladder.status !== 'archived') return undefined;
+  const canExpose =
+    ladder.team === 'random' ||
+    (ladder.team === 'pools' && ladder.status === 'archived');
+  if (!canExpose) return undefined;
   const idEnc = encodeURIComponent(ladder.id);
-  const defaultName = `${ladder.id}-logs.7z`;
+  const ext = ladder.team === 'random' ? 'tar' : '7z';
+  const defaultName = `${ladder.id}-logs.${ext}`;
+  const fallbackName = `logs.${ext}`;
   const candidates = [
     {
       diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, defaultName),
@@ -261,9 +282,9 @@ export function resolveLadderArchive(
       href: `/arena/ladders/${idEnc}/${encodeURIComponent(defaultName)}`,
     },
     {
-      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, 'logs.7z'),
-      name: 'logs.7z',
-      href: `/arena/ladders/${idEnc}/logs.7z`,
+      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, fallbackName),
+      name: fallbackName,
+      href: `/arena/ladders/${idEnc}/${fallbackName}`,
     },
   ];
   for (const c of candidates) {
@@ -474,6 +495,14 @@ export function buildTournamentDocument(
   };
 }
 
+export function extractPerspectiveLogs(
+  lines: readonly string[]
+): {p1Lines: string[]; p2Lines: string[]} {
+  if (lines.length === 0) return {p1Lines: [], p2Lines: []};
+  const ch = extractChannelMessages(lines.join('\n'), [1, 2]);
+  return {p1Lines: ch[1], p2Lines: ch[2]};
+}
+
 export function normalizeLiveBroadcast(
   raw: LiveBroadcast,
   nowSec = Math.floor(Date.now() / 1000)
@@ -482,6 +511,10 @@ export function normalizeLiveBroadcast(
   const tables: BroadcastTable[] = raw.tables.map((tb, idx) => {
     const tableNum = tb.table ?? idx + 1;
     const isPrimaryFallback = idx === 0 && !tb.p1 && !tb.lines;
+    const lines = tb.lines ? tb.lines.slice() : (isPrimaryFallback ? raw.lines.slice() : []);
+    const persp = tb.p1Lines && tb.p2Lines
+      ? {p1Lines: tb.p1Lines.slice(), p2Lines: tb.p2Lines.slice()}
+      : extractPerspectiveLogs(lines);
     return {
       table: tableNum,
       label: tb.label || `Table ${tableNum}`,
@@ -494,7 +527,9 @@ export function normalizeLiveBroadcast(
       seriesRightHtml: tb.seriesRightHtml ?? (isPrimaryFallback ? raw.seriesRightHtml : undefined),
       p1: tb.p1 ?? (isPrimaryFallback ? {...raw.p1} : undefined),
       p2: tb.p2 ?? (isPrimaryFallback ? {...raw.p2} : undefined),
-      lines: tb.lines ? tb.lines.slice() : (isPrimaryFallback ? raw.lines.slice() : []),
+      lines,
+      p1Lines: persp.p1Lines,
+      p2Lines: persp.p2Lines,
       live: tb.idle ? false : (tb.live ?? (isPrimaryFallback ? raw.live !== false : true)),
       updatedAt: tb.updatedAt ?? updatedAt,
     };
@@ -502,6 +537,10 @@ export function normalizeLiveBroadcast(
   const primary = tables.find(tb => !tb.idle && tb.p1 && tb.p2) ??
     tables.find(tb => tb.p1 && tb.p2) ??
     undefined;
+  const primaryLines = primary?.lines ?? raw.lines;
+  const primaryPersp = primary?.p1Lines && primary?.p2Lines
+    ? {p1Lines: primary.p1Lines, p2Lines: primary.p2Lines}
+    : extractPerspectiveLogs(primaryLines);
   return {
     tournamentId: raw.tournamentId,
     updatedAt,
@@ -510,7 +549,9 @@ export function normalizeLiveBroadcast(
     seriesRightHtml: primary?.seriesRightHtml ?? raw.seriesRightHtml,
     p1: primary?.p1 ?? raw.p1,
     p2: primary?.p2 ?? raw.p2,
-    lines: primary?.lines ?? raw.lines,
+    lines: primaryLines,
+    p1Lines: primaryPersp.p1Lines,
+    p2Lines: primaryPersp.p2Lines,
     live: primary ? primary.live !== false : raw.live,
   };
 }
@@ -519,7 +560,10 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
   const ladderHref = m.ladderStatus === 'archived'
     ? `/arena/ladders/${encodeURIComponent(m.ladderId)}/`
     : `/arena/ladders/${encodeURIComponent(m.slot)}/`;
-  if (m.teamMode !== 'pools' || m.ladderStatus !== 'archived') {
+  const canExposeLogs =
+    m.teamMode === 'random' ||
+    (m.teamMode === 'pools' && m.ladderStatus === 'archived');
+  if (!canExposeLogs) {
     return {...m, ladderHref};
   }
   const idEnc = encodeURIComponent(m.ladderId);
@@ -528,8 +572,19 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
     team: m.teamMode,
     status: m.ladderStatus,
   })?.href;
-  const teamsHref = `/arena/ladders/${idEnc}/teams.json`;
-  return {...m, ladderHref, archiveHref, teamsHref};
+  const teamsHref = m.teamMode === 'pools' && m.ladderStatus === 'archived'
+    ? `/arena/ladders/${idEnc}/teams.json`
+    : undefined;
+  const ladderDir = path.join(publicDir, 'arena', 'ladders', m.ladderId);
+  const g1Rel = `${m.id}a.log`;
+  const g2Rel = `${m.id}b.log`;
+  const game1LogHref = fs.existsSync(path.join(ladderDir, g1Rel))
+    ? `/arena/ladders/${idEnc}/${encodeURIComponent(g1Rel)}`
+    : undefined;
+  const game2LogHref = fs.existsSync(path.join(ladderDir, g2Rel))
+    ? `/arena/ladders/${idEnc}/${encodeURIComponent(g2Rel)}`
+    : undefined;
+  return {...m, ladderHref, archiveHref, teamsHref, game1LogHref, game2LogHref};
 }
 
 export interface WatchdogAlert {
@@ -650,6 +705,8 @@ export interface HeartbeatResponse {
 
 export interface MatchCompletePayload {
   match: db.CompletedMatchPayload;
+  game1Log?: string;
+  game2Log?: string;
   ladderStatus?: db.LadderStatus;
   ladderStandings?: db.LadderStandingOverride[];
 }
@@ -664,7 +721,7 @@ export interface LadderArchiveResponse {
   ok: true;
   ladderId: string;
   archiveHref: string;
-  teamsHref: string;
+  teamsHref?: string;
   bytes: number;
   sha256: string;
 }
@@ -1492,6 +1549,7 @@ function parseBroadcastPlayer(raw: unknown, label: string): BroadcastPlayer {
     slug: typeof obj.slug === 'string' && obj.slug.trim() ? obj.slug.trim() : undefined,
     version: typeof obj.version === 'string' && obj.version.trim() ? obj.version.trim() : undefined,
     team: typeof obj.team === 'string' && obj.team.trim() ? obj.team.trim() : undefined,
+    pokemon: Array.isArray(obj.pokemon) ? obj.pokemon.slice(0, 6) : undefined,
   };
 }
 
@@ -2023,6 +2081,28 @@ export function register(app: polka.Polka, options: Options): Handle {
       const ladderId = body.ladderId.trim();
       const ladder = db.getLadder(ladderId);
 
+      let lines: string[] | undefined;
+      let p1Lines: string[] | undefined;
+      let p2Lines: string[] | undefined;
+      let p1Pokemon: unknown[] | undefined;
+      let p2Pokemon: unknown[] | undefined;
+      if (body.lines !== undefined) {
+        if (!Array.isArray(body.lines)) {
+          sendJson(res, 400, {error: 'lines must be an array of strings.'});
+          return;
+        }
+        if (ladder?.team === 'random') {
+          lines = body.lines
+            .slice(-MAX_TABLE_LINES)
+            .map(l => String(l).slice(0, 4096));
+          const extracted = extractPerspectiveLogs(lines);
+          p1Lines = extracted.p1Lines;
+          p2Lines = extracted.p2Lines;
+          if (Array.isArray(body.p1Pokemon)) p1Pokemon = body.p1Pokemon.slice(0, 6);
+          if (Array.isArray(body.p2Pokemon)) p2Pokemon = body.p2Pokemon.slice(0, 6);
+        }
+      }
+
       // Preserve the turn start timestamp across mid-turn telemetry heartbeats so spectator
       // countdown clocks don't jump backward if the runner omits turnStartedAt on repeats.
       const sameActiveTurn = (
@@ -2052,6 +2132,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         game1Summary,
         p1,
         p2,
+        ...(lines !== undefined ? {lines, p1Lines, p2Lines} : {}),
+        ...(p1Pokemon !== undefined ? {p1Pokemon} : {}),
+        ...(p2Pokemon !== undefined ? {p2Pokemon} : {}),
       };
       lastMatchId = matchId;
       liveStale = false;
@@ -2088,6 +2171,26 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     try {
       const match = parseCompletedMatch(body.match);
+
+      let rawG1Log: string | undefined;
+      let rawG2Log: string | undefined;
+      for (const [key, val] of [
+        ['game1Log', body.game1Log],
+        ['game2Log', body.game2Log],
+      ] as const) {
+        if (val !== undefined) {
+          if (typeof val !== 'string') {
+            sendJson(res, 400, {error: `${key} must be a string.`});
+            return;
+          }
+          if (Buffer.byteLength(val, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
+            sendJson(res, 413, {error: `${key} exceeds 512 KiB limit.`});
+            return;
+          }
+          if (key === 'game1Log') rawG1Log = val;
+          else rawG2Log = val;
+        }
+      }
 
       let ladderStatus: db.LadderStatus | undefined;
       if (body.ladderStatus !== undefined) {
@@ -2148,6 +2251,23 @@ export function register(app: polka.Polka, options: Options): Handle {
         ladderStatus,
         ladderStandings,
       });
+
+      const ladderRow = db.getLadder(match.ladderId);
+      if (ladderRow?.team === 'random' && SAFE_ID_RE.test(match.id)) {
+        const ladderDir = path.join(publicDir, 'arena', 'ladders', ladderRow.id);
+        const g1Path = path.join(ladderDir, `${match.id}a.log`);
+        const g2Path = path.join(ladderDir, `${match.id}b.log`);
+        let wroteLog = false;
+        if (rawG1Log !== undefined && (!duplicate || !fs.existsSync(g1Path))) {
+          writeFileAtomic(g1Path, rawG1Log.endsWith('\n') ? rawG1Log : `${rawG1Log}\n`);
+          wroteLog = true;
+        }
+        if (rawG2Log !== undefined && (!duplicate || !fs.existsSync(g2Path))) {
+          writeFileAtomic(g2Path, rawG2Log.endsWith('\n') ? rawG2Log : `${rawG2Log}\n`);
+          wroteLog = true;
+        }
+        if (wroteLog) archiveSeq++;
+      }
 
       const nowSec = getNowSec();
       lastMatchId = match.id;
@@ -2332,6 +2452,10 @@ export function register(app: polka.Polka, options: Options): Handle {
 
       const p1 = body.p1 !== undefined ? parseBroadcastPlayer(body.p1, 'p1') : prev.p1!;
       const p2 = body.p2 !== undefined ? parseBroadcastPlayer(body.p2, 'p2') : prev.p2!;
+      if (mode === 'append') {
+        if (!p1.pokemon && prev.p1?.pokemon) p1.pokemon = prev.p1.pokemon;
+        if (!p2.pokemon && prev.p2?.pokemon) p2.pokemon = prev.p2.pokemon;
+      }
       const incomingLines = Array.isArray(body.lines) ? body.lines.map(String) : [];
 
       let stage = prev.stage;
@@ -2358,6 +2482,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       const mergedLines = mode === 'append'
         ? [...(prev.lines ?? []), ...incomingLines].slice(-MAX_TABLE_LINES)
         : incomingLines.slice(-MAX_TABLE_LINES);
+      const mergedPersp = extractPerspectiveLogs(mergedLines);
 
       const nextTable: BroadcastTable = {
         table: tableNum,
@@ -2370,6 +2495,8 @@ export function register(app: polka.Polka, options: Options): Handle {
         p1,
         p2,
         lines: mergedLines,
+        p1Lines: mergedPersp.p1Lines,
+        p2Lines: mergedPersp.p2Lines,
         live: typeof body.live === 'boolean' ? body.live : true,
         updatedAt: nowSec,
       };
@@ -2388,9 +2515,12 @@ export function register(app: polka.Polka, options: Options): Handle {
       liveSeq++;
 
       if (mode === 'append') {
+        const chunkPersp = extractPerspectiveLogs(incomingLines);
         pushTournamentEvent(tournament.id, 'table-append', {
           table: tableNum,
           lines: incomingLines,
+          p1Lines: chunkPersp.p1Lines,
+          p2Lines: chunkPersp.p2Lines,
           p1: nextTable.p1,
           p2: nextTable.p2,
           live: nextTable.live,
@@ -2626,14 +2756,15 @@ export function register(app: polka.Polka, options: Options): Handle {
       sendJson(res, 404, {error: `Unknown ladder "${rawId}".`});
       return;
     }
-    if (ladder.team !== 'pools') {
+    if (ladder.team !== 'pools' && ladder.team !== 'random') {
       req.resume();
       sendJson(res, 400, {
-        error: 'Full battle log archives are only published for team-pool (pools) ladders.',
+        error:
+          'Full battle log archives are only published for random or team-pool (pools) ladders.',
       });
       return;
     }
-    if (ladder.status !== 'archived') {
+    if (ladder.team === 'pools' && ladder.status !== 'archived') {
       req.resume();
       sendJson(res, 409, {
         error: 'Full battle log archives can only be published after the ladder is archived.',
@@ -2650,7 +2781,8 @@ export function register(app: polka.Polka, options: Options): Handle {
       return;
     }
 
-    const fileName = `${ladder.id}-logs.7z`;
+    const ext = ladder.team === 'random' ? 'tar' : '7z';
+    const fileName = `${ladder.id}-logs.${ext}`;
     const destPath = path.join(publicDir, 'arena', 'ladders', ladder.id, fileName);
     try {
       const {bytes, sha256} = await streamBinaryArchive(req, destPath, expectedSha);
@@ -2661,7 +2793,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         ok: true,
         ladderId: ladder.id,
         archiveHref: `/arena/ladders/${idEnc}/${encodeURIComponent(fileName)}`,
-        teamsHref: `/arena/ladders/${idEnc}/teams.json`,
+        ...(ladder.team === 'pools' ? {teamsHref: `/arena/ladders/${idEnc}/teams.json`} : {}),
         bytes,
         sha256,
       });
@@ -3075,7 +3207,12 @@ export function register(app: polka.Polka, options: Options): Handle {
     close: closeAll,
     getLiveDocument,
     setLiveState: state => {
-      currentLive = state.live;
+      if (state.live?.lines && (!state.live.p1Lines || !state.live.p2Lines)) {
+        const persp = extractPerspectiveLogs(state.live.lines);
+        currentLive = {...state.live, p1Lines: persp.p1Lines, p2Lines: persp.p2Lines};
+      } else {
+        currentLive = state.live;
+      }
       liveStale = state.stale ?? false;
       liveUpdatedAt = state.updatedAt ?? getNowSec();
       liveSeq++;

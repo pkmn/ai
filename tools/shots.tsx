@@ -589,6 +589,16 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       setup: fixture => setupRotatedSeasons(fixture, 'archived'),
     },
     {
+      name: 'arena-ladder-rand',
+      section: 'arena',
+      title: 'Ladder: RAND (Random Battle · Full-History .tar Archive)',
+      description:
+        'Random Battle ladder (`/arena/ladders/rand/`, `team: random`) linking its daily ' +
+        'updated `gen9randombattle20261109-logs.tar` full-history battle log archive at the ' +
+        'bottom of the page just above the footer.',
+      path: '/arena/ladders/rand/',
+    },
+    {
       name: 'arena-ladder-upcoming',
       section: 'arena',
       title: 'Ladder: Upcoming (Empty State)',
@@ -613,6 +623,77 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         '`/arena/battles/` during an active VGC match (`Game 2 / 2 · Turn 9`, `p1` `PAUSED`, ' +
         '`p2` `RUNNING`, Game 1 result, and pool team hashes) above Completed Battles.',
       path: '/arena/battles/',
+    },
+    {
+      name: 'arena-battles-rand-live',
+      section: 'battles',
+      title: 'Battles (Live RAND Match with Showdown Viewer)',
+      description:
+        'When a `RAND` (`team: random`) match is live on `/arena/battles/`, `#live` displays ' +
+        'both the real-time slot telemetry/timers and the live Pokémon Showdown battle viewer.',
+      path: '/arena/battles/',
+      setup: fixture => {
+        fixture.arenaHandle.setLiveState({
+          stale: false,
+          updatedAt: NOW_SECONDS,
+          live: {
+            heartbeatSeq: 42,
+            matchId: 'gen9randombattle-0009998',
+            ladderId: 'gen9randombattle20261109',
+            slot: 'rand',
+            format: 'gen9randombattle',
+            game: 1,
+            turn: 6,
+            activeSlot: 'p1',
+            turnStartedAt: NOW_SECONDS - 3,
+            turnBudgetSeconds: 145,
+            incrementSeconds: 5,
+            lines: [
+              '|player|p1|MissingNo.Zero|1',
+              '|player|p2|0 ERROR|2',
+              '|gametype|singles',
+              '|gen|9',
+              '|tier|[Gen 9] Random Battle',
+              '|start',
+              '|switch|p1a: Great Tusk|Great Tusk, L80|260/260',
+              '|switch|p2a: Dragapult|Dragapult, L78|245/245',
+              '|turn|6',
+            ],
+            p1: {
+              slug: 'missingnozero',
+              name: 'MissingNo.Zero',
+              version: '2.1.0',
+              bankSeconds: 144,
+              lastTurnMillis: 260,
+              meanTurnMillis: 255,
+              ram: 980,
+            },
+            p2: {
+              slug: '0-error',
+              name: '0 ERROR',
+              version: '1.0.0',
+              bankSeconds: 140,
+              lastTurnMillis: 290,
+              meanTurnMillis: 280,
+              ram: 820,
+            },
+          },
+        });
+        return () => {
+          fixture.arenaHandle.setLiveState(fixture.defaultLiveState);
+        };
+      },
+    },
+    {
+      name: 'arena-battles-rand-replay',
+      section: 'battles',
+      title: 'Battles (Expanded RAND Row · Inline Replay Viewer)',
+      description:
+        'Clicking a `RAND` battle row in `#history` expands its telemetry and mounts the ' +
+        'inline Pokémon Showdown replay viewer with `Game 1` / `Game 2` switcher and daily ' +
+        '`.tar` archive link.',
+      path: '/arena/battles/',
+      click: 'tr.battle-row[data-fmt="rand"] td:first-child',
     },
     {
       name: 'arena-battles-expanded',

@@ -56,6 +56,28 @@ if [[ -d "$LOG_ROOT" ]]; then
         7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=64m -ms=on "$TMP_7Z" "${LOG_FILES[@]}"
         7z t "$TMP_7Z" >/dev/null
         mv -f "$TMP_7Z" "$ARCHIVE_7Z"
+
+        # For random-battle ladders, append the daily .7z archive to the cumulative
+        # <ladderId>-logs.tar archive and publish it to the web server so spectators
+        # can download the full history (excluding the current day's in-progress battles).
+        LADDER_ID="$(basename "$LADDER_DIR")"
+        if [[ "$LADDER_ID" == *random* ]]; then
+          FULL_TAR="${LADDER_DIR}/${LADDER_ID}-logs.tar"
+          if [[ -f "$FULL_TAR" ]]; then
+            tar -rf "$FULL_TAR" -C "$LADDER_DIR" "${YEAR_MONTH}/${YESTERDAY}.7z"
+          else
+            tar -cf "$FULL_TAR" -C "$LADDER_DIR" "${YEAR_MONTH}/${YESTERDAY}.7z"
+          fi
+          if [[ -n "${ARENA_SERVER_URL:-}" && -n "${ARENA_SECRET:-}" ]]; then
+            SHA256="$(shasum -a 256 "$FULL_TAR" | awk '{print $1}')"
+            curl -fsS -X PUT \
+              -H "Authorization: Bearer ${ARENA_SECRET}" \
+              -H "Content-Type: application/x-tar" \
+              -H "X-Content-SHA256: ${SHA256}" \
+              --data-binary @"${FULL_TAR}" \
+              "${ARENA_SERVER_URL%/}/api/arena/ladders/${LADDER_ID}/archive" >/dev/null || true
+          fi
+        fi
       fi
       rm -rf "$DAY_DIR"
     fi

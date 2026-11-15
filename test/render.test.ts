@@ -1017,6 +1017,10 @@ describe('tournament SSR views', () => {
     );
     expect(viewerHtml).toContain('.trainersprite');
     expect(viewerHtml).toContain('play.pokemonshowdown.com');
+    expect(viewerHtml).toContain('const ownPokemon = requested => {');
+    expect(viewerHtml).toContain('list.map(ownPokemon)');
+    expect(viewerHtml).toContain('battle.setViewpoint(currentSide)');
+    expect(viewerHtml).toContain('state: playbackState()');
   });
 
   test('renders ongoing or completed tournament summaries on /arena/', async () => {
@@ -1556,6 +1560,160 @@ describe('JSON route parity & retired pool archives', () => {
         '/arena/tournaments/1/index.json'
       );
       expect(tour1Json.archiveHref).toBe('/arena/tournaments/1/1-replays.7z');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('publishes log archives on active random ladders via publish-ladder-archive', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const dummyArchive = path.join(tmpDir, 'rand-archive.7z');
+      fs.writeFileSync(dummyArchive, 'mock-7z-rand-battle-logs', 'utf8');
+
+      await runPkmnCli(
+        ['publish-ladder-archive', 'gen9randombattle20261109', dummyArchive],
+        {db, publicDir: tmpPublic, now: NOW, log: () => undefined}
+      );
+
+      const randJson = await h.getJson<{archiveHref?: string; teamsHref?: string}>(
+        '/arena/ladders/rand/index.json'
+      );
+      expect(randJson.archiveHref).toBe(
+        '/arena/ladders/gen9randombattle20261109/gen9randombattle20261109-logs.tar'
+      );
+      expect(randJson.teamsHref).toBeUndefined();
+
+      const randHtml = await h.getText('/arena/ladders/rand/');
+      expect(randHtml).toContain('Battle log archive (updated daily):');
+      expect(randHtml).toContain('gen9randombattle20261109-logs.tar');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('renders live battle viewer on /arena/battles/ during a random ladder match', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      h.arenaHandle.setLiveState({
+        stale: false,
+        updatedAt: NOW,
+        live: {
+          heartbeatSeq: 9,
+          matchId: 'gen9randombattle-0000100',
+          ladderId: 'gen9randombattle20261109',
+          slot: 'rand',
+          format: 'gen9randombattle',
+          game: 1,
+          turn: 4,
+          activeSlot: 'p1',
+          turnStartedAt: NOW - 2,
+          turnBudgetSeconds: 140,
+          incrementSeconds: 5,
+          lines: [
+            '|player|p1|Foul Play|1',
+            '|player|p2|Jaxcalibur|2',
+            '|gametype|singles',
+            '|gen|9',
+            '|tier|[Gen 9] Random Battle',
+            '|start',
+            '|turn|4',
+          ],
+          p1: {
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '1.0.0',
+            bankSeconds: 140,
+            lastTurnMillis: 220,
+            meanTurnMillis: 215,
+            ram: 640,
+          },
+          p2: {
+            slug: 'jaxcalibur',
+            name: 'Jaxcalibur',
+            version: '1.0.0',
+            bankSeconds: 138,
+            lastTurnMillis: 250,
+            meanTurnMillis: 245,
+            ram: 900,
+          },
+        },
+      });
+
+      const html = await h.getText('/arena/battles/');
+      expect(html).toContain('class="battle-viewer-wrap" id="battle-viewer-wrap"');
+      expect(html).toContain('id="ps-viewer-frame"');
+      expect(html).toContain('gen9randombattle-0000100');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('renders inline replay slot for completed random ladder battles', async () => {
+    const fpVer = db.getAgentLadderProfileEntries(
+      db.getAgentBySlug('foul-play')!.id,
+      'gen1ou20261109'
+    )[0].versionId;
+    const jaxVer = db.getAgentLadderProfileEntries(
+      db.getAgentBySlug('jaxcalibur')!.id,
+      'gen1ou20261109'
+    )[0].versionId;
+    playMatch(db, 'gen9randombattle20261109', fpVer, jaxVer, 'W', 'L', NOW + 50);
+    const recent = db.getRecentMatches(1)[0];
+    const randDir = path.join(tmpPublic, 'arena', 'ladders', 'gen9randombattle20261109');
+    fs.mkdirSync(randDir, {recursive: true});
+    fs.writeFileSync(
+      path.join(randDir, `${recent.id}a.log`),
+      [
+        '|player|p1|Foul Play|1',
+        '|player|p2|Jaxcalibur|2',
+        '|split|p1',
+        '|switch|p1a: Pikachu|Pikachu, L80|210/210',
+        '|switch|p1a: Pikachu|Pikachu, L80|100/100',
+        '|split|p2',
+        '|switch|p2a: Charizard|Charizard, L80|250/250',
+        '|switch|p2a: Charizard|Charizard, L80|100/100',
+        '|win|Foul Play',
+      ].join('\n'),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(randDir, `${recent.id}b.log`), '|win|Jaxcalibur\n', 'utf8');
+    fs.writeFileSync(
+      path.join(randDir, 'gen9randombattle20261109-logs.tar'),
+      Buffer.from('tar'),
+      'utf8'
+    );
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 60});
+    try {
+      const html = await h.getText('/arena/battles/');
+      expect(html).toContain(`data-match-id="${recent.id}"`);
+      expect(html).toContain(
+        `data-g1-log="/arena/ladders/gen9randombattle20261109/${recent.id}a.log"`
+      );
+      expect(html).toContain(
+        `data-g2-log="/arena/ladders/gen9randombattle20261109/${recent.id}b.log"`
+      );
+      const bothJson = await h.getJson<{
+        lines: string[];
+        p1Lines: string[];
+        p2Lines: string[];
+      }>(`/arena/ladders/gen9randombattle20261109/${recent.id}a.log?side=both`);
+      expect(bothJson.p1Lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|210/210');
+      expect(bothJson.p1Lines).toContain('|switch|p2a: Charizard|Charizard, L80|100/100');
+      expect(bothJson.p2Lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|100/100');
+      expect(bothJson.p2Lines).toContain('|switch|p2a: Charizard|Charizard, L80|250/250');
+
+      const p1Text = await h.getText(
+        `/arena/ladders/gen9randombattle20261109/${recent.id}a.log?side=p1`
+      );
+      expect(p1Text).toContain('210/210');
+      expect(p1Text).not.toContain('250/250');
+      const randLadderHtml = await h.getText('/arena/ladders/rand/');
+      const matchupsIdx = randLadderHtml.indexOf('<section id="matchups"');
+      const archiveIdx = randLadderHtml.indexOf('gen9randombattle20261109-logs.tar');
+      expect(matchupsIdx).toBeGreaterThan(0);
+      expect(archiveIdx).toBeGreaterThan(matchupsIdx);
     } finally {
       await h.close();
     }

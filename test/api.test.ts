@@ -556,6 +556,49 @@ describe('Arena live heartbeats & match completion', () => {
     expect(hbBad.status).toBe(400);
   });
 
+  test('extracts p1Lines or p2Lines via extractChannelMessages on random ladder heartbeats',
+    async () => {
+      db.syncLaddersFromYaml(
+        `${LADDERS_YAML}\n- name: RAND\n  format: gen9randombattle\n` +
+        '  id: gen9randombattle20261109\n  team: random\n  status: active\n',
+        1_760_000_000
+      );
+      const hbRand = await apiJson(
+        srv.baseUrl,
+        'POST',
+        '/api/arena/heartbeat',
+        AUTH_CFG.arenaSecret,
+        {
+          ...baseHeartbeat,
+          matchId: 'gen9randombattle-0000001',
+          ladderId: 'gen9randombattle20261109',
+          format: 'gen9randombattle',
+          lines: [
+            '|player|p1|0 ERROR|1',
+            '|player|p2|Foul Play|2',
+            '|split|p1',
+            '|switch|p1a: Pikachu|Pikachu, L80|210/210',
+            '|switch|p1a: Pikachu|Pikachu, L80|100/100',
+            '|split|p2',
+            '|switch|p2a: Charizard|Charizard, L80|250/250',
+            '|switch|p2a: Charizard|Charizard, L80|100/100',
+            '|turn|1',
+          ],
+          p1Pokemon: [{ident: 'p1: Pikachu', details: 'Pikachu, L80', condition: '210/210'}],
+          p2Pokemon: [{ident: 'p2: Charizard', details: 'Charizard, L80', condition: '250/250'}],
+        }
+      );
+      expect(hbRand.status).toBe(200);
+      const {doc} = await fetchLive();
+      expect(doc.live?.slot).toBe('rand');
+      expect(doc.live?.p1Lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|210/210');
+      expect(doc.live?.p1Lines).toContain('|switch|p2a: Charizard|Charizard, L80|100/100');
+      expect(doc.live?.p2Lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|100/100');
+      expect(doc.live?.p2Lines).toContain('|switch|p2a: Charizard|Charizard, L80|250/250');
+      expect(doc.live?.p1Pokemon).toHaveLength(1);
+      expect(doc.live?.p2Pokemon).toHaveLength(1);
+    });
+
   test('fires disconnect watchdog alert once heartbeat exceeds timeout', async () => {
     await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', AUTH_CFG.arenaSecret, baseHeartbeat);
     await new Promise(resolve => setTimeout(resolve, 180));
@@ -1326,7 +1369,11 @@ describe('Arena binary archive uploads', () => {
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-archive-'));
     db = new Database(':memory:');
-    db.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
+    db.syncLaddersFromYaml(
+      `${LADDERS_YAML}\n- name: RAND\n  format: gen9randombattle\n` +
+        '  id: gen9randombattle20261109\n  team: random\n  status: active\n',
+      1_700_000_000
+    );
     db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
     db.upsertTournament({
       id: '3',
@@ -1407,6 +1454,165 @@ describe('Arena binary archive uploads', () => {
       '/arena/ladders/gen9championsvgc2026regmc/gen9championsvgc2026regmc-logs.7z'
     );
     expect(events).toEqual(['archive-published']);
+  });
+
+  test('accepts PUT /api/arena/ladders/:id/archive on active random ladders', async () => {
+    const okRand = await putBinary(
+      '/api/arena/ladders/gen9randombattle20261109/archive',
+      expectedSha
+    );
+    expect(okRand.status).toBe(200);
+    expect(okRand.data.archiveHref).toBe(
+      '/arena/ladders/gen9randombattle20261109/gen9randombattle20261109-logs.tar'
+    );
+    expect(okRand.data.teamsHref).toBeUndefined();
+    expect(
+      fs.readFileSync(
+        path.join(
+          tmpDir,
+          'arena',
+          'ladders',
+          'gen9randombattle20261109',
+          'gen9randombattle20261109-logs.tar'
+        )
+      )
+    ).toEqual(archiveBytes);
+  });
+
+  test('streams live lines on random ladder heartbeats while omitting harvested lines',
+    async () => {
+      const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+      await client.sendHeartbeat({
+        heartbeatSeq: 1,
+        matchId: 'gen9randombattle-0000001',
+        ladderId: 'gen9randombattle20261109',
+        format: 'gen9randombattle',
+        game: 1,
+        turn: 3,
+        activeSlot: 'p1',
+        turnStartedAt: 1_700_000_900,
+        turnBudgetSeconds: 140,
+        incrementSeconds: 5,
+        lines: ['|player|p1|0 ERROR|1', '|player|p2|Foul Play|2', '|turn|3'],
+        p1: {
+          slug: '0-error',
+          name: '0 ERROR',
+          version: '1.0.0',
+          bankSeconds: 140,
+          lastTurnMillis: 200,
+          meanTurnMillis: 200,
+          ram: 800,
+        },
+        p2: {
+          slug: 'foul-play',
+          name: 'Foul Play',
+          version: '1.0.0',
+          bankSeconds: 140,
+          lastTurnMillis: 200,
+          meanTurnMillis: 200,
+          ram: 800,
+        },
+      });
+      expect(ctrl.getLiveDocument(1_700_000_905).live?.lines).toEqual([
+        '|player|p1|0 ERROR|1',
+        '|player|p2|Foul Play|2',
+        '|turn|3',
+      ]);
+
+      await client.sendHeartbeat({
+        heartbeatSeq: 2,
+        matchId: 'gen1ou-0000002',
+        ladderId: 'gen1ou20261109',
+        format: 'gen1ou',
+        game: 1,
+        turn: 2,
+        activeSlot: 'p1',
+        turnStartedAt: 1_700_000_906,
+        turnBudgetSeconds: 140,
+        incrementSeconds: 5,
+        lines: ['|player|p1|0 ERROR|1'],
+        p1: {
+          slug: '0-error',
+          name: '0 ERROR',
+          version: '1.0.0',
+          bankSeconds: 140,
+          lastTurnMillis: 200,
+          meanTurnMillis: 200,
+          ram: 800,
+        },
+        p2: {
+          slug: 'foul-play',
+          name: 'Foul Play',
+          version: '1.0.0',
+          bankSeconds: 140,
+          lastTurnMillis: 200,
+          meanTurnMillis: 200,
+          ram: 800,
+        },
+      });
+      expect(ctrl.getLiveDocument(1_700_000_907).live?.lines).toBeUndefined();
+    });
+
+  test('writes per-game replay logs on random ladder match-complete', async () => {
+    const fp = db.getAgentBySlug('foul-play')!;
+    const zero = db.getAgentBySlug('0-error')!;
+    const vFp = db.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/fp.tar.zst',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen9randombattle20261109'],
+      now: 1_700_000_010,
+    });
+    const vZero = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/zero.tar.zst',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen9randombattle20261109'],
+      now: 1_700_000_010,
+    });
+    db.applySubmissionStatus({versionId: vFp.id, smokeStatus: 'passed', now: 1_700_000_020});
+    db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: 1_700_000_020});
+
+    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+    await client.completeMatch({
+      match: {
+        id: 'gen9randombattle-0000042',
+        ladderId: 'gen9randombattle20261109',
+        p1VersionId: vFp.id,
+        p2VersionId: vZero.id,
+        seed: '1,2,3,42',
+        game1Outcome: 'W',
+        game2Outcome: 'L',
+        category: 'WL',
+        game1Turns: 18,
+        game2Turns: 21,
+        game1EndReason: 'win',
+        game2EndReason: 'win',
+        p1PeakRam: 800,
+        p2PeakRam: 820,
+        p1Game1BankSeconds: 130,
+        p1Game2BankSeconds: 128,
+        p2Game1BankSeconds: 125,
+        p2Game2BankSeconds: 120,
+        p1MeanTurnMillis: 240,
+        p2MeanTurnMillis: 250,
+        completedAt: 1_700_000_950,
+      },
+      game1Log: '|player|p1|Foul Play|1\n|player|p2|0 ERROR|2\n|win|Foul Play\n',
+      game2Log: '|player|p1|0 ERROR|1\n|player|p2|Foul Play|2\n|win|0 ERROR\n',
+    });
+
+    const doc = ctrl.getLiveDocument(1_700_000_960);
+    expect(doc.recentMatches[0].game1LogHref).toBe(
+      '/arena/ladders/gen9randombattle20261109/gen9randombattle-0000042a.log'
+    );
+    expect(doc.recentMatches[0].game2LogHref).toBe(
+      '/arena/ladders/gen9randombattle20261109/gen9randombattle-0000042b.log'
+    );
   });
 });
 
