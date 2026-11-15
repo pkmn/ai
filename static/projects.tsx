@@ -151,13 +151,9 @@ const ProjectCard = ({project, bibliography, arenaInfo}: {
             {' · '}
             {arenaInfo.ladders.map((b, idx) => <>
               {idx > 0 && ', '}
-              {b.provisional || b.rank === undefined
-                ? <a href={`/arena/ladders/${b.slot}/`} className='subtle'>
-                  <tt>{b.name}</tt> <em>(provisional)</em>
-                </a>
-                : <a href={`/arena/ladders/${b.slot}/`} className='subtle'>
-                  <tt>{b.name} #{b.rank}</tt>
-                </a>}
+              <a href={`/arena/ladders/${b.slot}/`} className='subtle'>
+                <tt>{b.provisional || b.rank === undefined ? b.name : `${b.name} #${b.rank}`}</tt>
+              </a>
             </>)}
           </>}
         </td>

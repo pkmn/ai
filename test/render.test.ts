@@ -668,7 +668,9 @@ describe('populated Arena leaderboard views', () => {
   test('orders Arena entries ahead of alphabetical entries on /projects/', async () => {
     const projHtml = await h.getText('/projects/');
     expect(projHtml).toContain('data-arena="true"');
-    expect(projHtml).toContain('<em>(provisional)</em>');
+    expect(projHtml).toContain('<tt>RBY #1</tt>');
+    expect(projHtml).toContain('<tt>RBY</tt>');
+    expect(projHtml).not.toContain('(provisional)');
     const posMetamon = projHtml.indexOf('id="Metamon"');
     const posFoulPlay = projHtml.indexOf('id="FoulPlay"');
     const posEevenator = projHtml.indexOf('id="eevenator"');
