@@ -230,9 +230,9 @@ function setupRotatedSeasons(
         raw.prepare(
           `INSERT INTO ladders (
             id, slot, name, format, team, status, min, teams, created_at, archived_at
-          ) VALUES (?, 'vgc', 'VGC (Reg M-B)', 'gen9championsvgc2026regmb', 'pools', 'settling',
+          ) VALUES (?, 'vgc', 'VGC (Reg M-B)', 'gen9championsvgc2026regmb', 'pools', 'archived',
             4, 20, ?, ?)`
-        ).run('gen9championsvgc2026regmb', NOW_SECONDS - 86400 * 14, NOW_SECONDS - 1800);
+        ).run('gen9championsvgc2026regmb', NOW_SECONDS - 86400 * 14, NOW_SECONDS - 86400 * 7);
         raw.prepare(
           `INSERT INTO ladder_entries (
             ladder_id, version_id, role, is_anchor, retired_at, elo, se, lcb, gxe,
@@ -245,7 +245,7 @@ function setupRotatedSeasons(
             mean_turn_millis, peak_ram, settled_at
           )
           SELECT
-            'gen9championsvgc2026regmb', version_id, role, is_anchor, retired_at, elo, se, lcb, gxe,
+            'gen9championsvgc2026regmb', version_id, 'retired', is_anchor, ?, elo, se, lcb, gxe,
             rank_current, rank_min, rank_max, matches, ww, wt, split, tl, ll,
             current_win_streak, current_loss_streak, max_win_streak, max_loss_streak,
             best_rank, best_rank_at, max_lcb, max_elo, max_elo_se, max_elo_at,
@@ -255,16 +255,16 @@ function setupRotatedSeasons(
             mean_turn_millis, peak_ram, settled_at
           FROM ladder_entries
           WHERE ladder_id = ?`
-        ).run(VGC_LADDER_ID);
+        ).run(NOW_SECONDS - 86400 * 7, VGC_LADDER_ID);
       }
 
-      const targetStatus = mode === 'settling' ? 'settling' : 'archived';
+      const targetStatus = mode === 'archived' ? 'archived' : 'settling';
       raw.prepare(
         `UPDATE ladders
          SET name = 'VGC (Reg M-C)', status = ?, archived_at = ?
          WHERE id = ?`
       ).run(targetStatus, NOW_SECONDS - 3600, VGC_LADDER_ID);
-      if (mode === 'archived' || mode === 'both') {
+      if (mode === 'archived') {
         raw.prepare(
           `UPDATE ladder_entries
            SET role = 'retired', retired_at = ?
@@ -616,7 +616,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Ladder: Rotated Season (Settling Grace Window)',
       description:
         'Rotated seasonal ladder (`/arena/ladders/gen9championsvgc2026regmc/`) in `settling` ' +
-        'status showing `(settling)` in nav and the 48-hour grace window notice.',
+        'status selected via the `#season-select` dropdown on the `VGC` slot.',
       path: `/arena/ladders/${VGC_LADDER_ID}/`,
       setup: fixture => setupRotatedSeasons(fixture, 'settling'),
     },

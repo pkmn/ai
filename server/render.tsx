@@ -110,6 +110,15 @@ const LADDER_SCRIPT = `
         applyStandings();
       });
     }
+
+    const seasonSelect = document.getElementById('season-select');
+    if (seasonSelect) {
+      seasonSelect.addEventListener('change', () => {
+        if (seasonSelect.value) {
+          window.location.href = seasonSelect.value;
+        }
+      });
+    }
   });
 `;
 
@@ -2003,6 +2012,7 @@ function renderMatchupsSection(
 function renderSingleLadderArtifact(opts: {
   ladder: db.LadderRow;
   currentLadders: db.LadderRow[];
+  allLadders?: db.LadderRow[];
   urlKey: string;
   db: db.Database;
   renderer: build.Renderer;
@@ -2035,14 +2045,29 @@ function renderSingleLadderArtifact(opts: {
   const snapshots = db.getRatingSnapshotsForLadder(l.id);
   const adjacentLos = computeAdjacentLosMap(entries, pairs, l.status);
   const isArchived = l.status === 'archived';
-  const isPastSeason = l.status === 'settling' || l.status === 'archived';
   const hasFrozenRanked = isArchived && entries.some(e => e.rankCurrent !== undefined);
+
+  const seasonRank: Record<db.LadderStatus, number> = {
+    active: 0,
+    upcoming: 0,
+    settling: 1,
+    archived: 2,
+  };
+  const slotSeasons = (opts.allLadders ?? db.getLadders())
+    .filter(s => s.slot === l.slot)
+    .sort(
+      (a, b) =>
+        seasonRank[a.status] - seasonRank[b.status] ||
+        b.createdAt - a.createdAt ||
+        b.id.localeCompare(a.id)
+    );
+  const multiSeason = slotSeasons.length > 1;
 
   const formatNavItems: util.Child[] = [];
   currentLadders.forEach((other, idx) => {
     if (idx > 0) formatNavItems.push(' — ');
     const href = `/arena/ladders/${encodeURIComponent(other.slot)}/`;
-    const isCurrent = !isPastSeason && other.slot === l.slot;
+    const isCurrent = other.slot === l.slot;
     formatNavItems.push(
       <li id={other.slot}>
         <a href={href} className='subtle' aria-current={isCurrent ? 'page' : undefined}>
@@ -2051,18 +2076,6 @@ function renderSingleLadderArtifact(opts: {
       </li>
     );
   });
-  if (isPastSeason) {
-    const selfHref = `/arena/ladders/${encodeURIComponent(l.id)}/`;
-    if (formatNavItems.length > 0) formatNavItems.push(' — ');
-    formatNavItems.push(
-      <li id={l.id}>
-        <a href={selfHref} className='subtle' aria-current='page'>
-          <strong>{l.name}</strong>
-        </a>{' '}
-        <span className='muted'>({l.status})</span>
-      </li>
-    );
-  }
 
   const seenPrimaryAgent = new Set<number>();
   const seenAnyAgent = new Set<number>();
@@ -2365,14 +2378,6 @@ function renderSingleLadderArtifact(opts: {
         </p>
       );
     }
-  } else if (l.team === 'pools' && l.status === 'settling') {
-    ladderArchiveNote = (
-      <p className='battle-note muted'>
-        Season settling — full battle log archive (<code>{`${l.id}-logs.7z`}</code>) and{' '}
-        <code>teams.json</code> will be published once remaining provisional entries settle and
-        the ladder is retired.
-      </p>
-    );
   } else if (l.team === 'random' && archive) {
     ladderBottomNote = (
       <p className='battle-note muted'>
@@ -2399,11 +2404,33 @@ function renderSingleLadderArtifact(opts: {
   const isUpcoming = l.status === 'upcoming';
   const ladderContent = String(
     <>
-      <nav aria-label='Format'>
-        <ul>
-          {formatNavItems}
-        </ul>
-      </nav>
+      <div className='controls-bar'>
+        <nav aria-label='Format'>
+          <ul>
+            {formatNavItems}
+          </ul>
+        </nav>
+        <span id='season-sep' className={multiSeason ? 'muted' : 'muted hide'}>·</span>
+        <div
+          id='season-picker'
+          className={multiSeason ? 'ver-picker' : 'ver-picker hide'}
+        >
+          <label htmlFor='season-select' className='muted'>Season</label>
+          <select id='season-select' className='min-select' aria-label='Season'>
+            {slotSeasons.map(s => {
+              const isCurrentSlot = s.status === 'active' || s.status === 'upcoming';
+              const sHref = isCurrentSlot
+                ? `/arena/ladders/${encodeURIComponent(s.slot)}/`
+                : `/arena/ladders/${encodeURIComponent(s.id)}/`;
+              return (
+                <option value={sHref} selected={s.id === l.id}>
+                  {`${s.name} (${s.status})`}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      </div>
       <nav className={`subnav${isUpcoming ? ' hide' : ''}`} aria-label='Version filter'>
         <ul>
           <li>
@@ -2555,9 +2582,13 @@ export function renderArenaAndLadderArtifacts(opts: {
     nowSec,
   } = opts;
   const ladders = db.getCurrentLadders();
-  const pastLadders = db.getLadders().filter(
-    l => l.status === 'settling' || l.status === 'archived'
-  );
+  const allLadders = db.getLadders();
+  const pastLadders = allLadders
+    .filter(l => l.status === 'settling' || l.status === 'archived')
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'settling' ? -1 : 1;
+      return b.createdAt - a.createdAt || b.id.localeCompare(a.id);
+    });
   const lastCompletedByLadder = db.getLastCompletedAtByLadder();
 
   const ladderHtmlBySlot: Record<string, string> = {};
@@ -2579,6 +2610,7 @@ export function renderArenaAndLadderArtifacts(opts: {
     const rendered = renderSingleLadderArtifact({
       ladder: l,
       currentLadders: ladders,
+      allLadders,
       urlKey: l.id,
       db,
       renderer,
@@ -2632,6 +2664,7 @@ export function renderArenaAndLadderArtifacts(opts: {
     const rendered = renderSingleLadderArtifact({
       ladder: l,
       currentLadders: ladders,
+      allLadders,
       urlKey: l.slot,
       db,
       renderer,
