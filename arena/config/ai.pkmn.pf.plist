@@ -10,8 +10,10 @@
   <array>
     <string>/sbin/pfctl</string>
     <string>-E</string>
+    <string>-a</string>
+    <string>com.apple/100.pkmn.arena</string>
     <string>-f</string>
-    <string>/etc/pf.conf</string>
+    <string>/etc/pf.anchors/ai.pkmn.arena</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

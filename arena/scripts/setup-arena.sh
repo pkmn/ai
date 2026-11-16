@@ -72,11 +72,7 @@ sudo chmod 0644 /etc/ssh/sshd_config.d/100-arena-hardening.conf
 sudo cp "${REPO_DIR}/arena/config/pf.anchor" /etc/pf.anchors/ai.pkmn.arena
 sudo chown root:wheel /etc/pf.anchors/ai.pkmn.arena
 sudo chmod 0644 /etc/pf.anchors/ai.pkmn.arena
-if ! grep -q "ai.pkmn.arena" /etc/pf.conf; then
-  printf '\nanchor "ai.pkmn.arena"\nload anchor "ai.pkmn.arena" from "/etc/pf.anchors/ai.pkmn.arena"\n' \
-    | sudo tee -a /etc/pf.conf >/dev/null
-fi
-sudo pfctl -nf /etc/pf.conf
+sudo /sbin/pfctl -n -a com.apple/100.pkmn.arena -f /etc/pf.anchors/ai.pkmn.arena
 
 sudo cp "${REPO_DIR}/arena/config/sandbox.sb" /opt/arena/etc/sandbox.sb
 sudo chown root:wheel /opt/arena/etc/sandbox.sb
@@ -107,12 +103,18 @@ sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheck
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false
 
-echo "==> Step 7: Initializing Podman libkrun VM (10 vCPUs, 30 GiB RAM, 48 GB disk, 500 MB overlay cap)"
+if [[ -x /opt/homebrew/bin/7zz && ! -e /opt/homebrew/bin/7z ]]; then
+  ln -sf /opt/homebrew/bin/7zz /opt/homebrew/bin/7z
+fi
+
+echo "==> Step 7: Initializing Podman libkrun VM (10 vCPUs, 30 GiB RAM, 48 GB disk, zero swap)"
 if command -v podman >/dev/null 2>&1; then
   if ! podman machine inspect podman-machine-default >/dev/null 2>&1; then
     # Size the VM to cover two 14 GiB containers (`arena-p1` + `arena-p2`, since `podman pause`
     # freezes cgroups in RAM without releasing pages) plus 2 GiB guest VM overhead (30 GiB =
     # 30,720 MiB), with zero swap (`--memory=14g --memory-swap=14g`) to prevent SSD writes.
+    # Containers run rootless with `--read-only` + `--tmpfs /tmp:size=500m` + `4G` APFS `/scratch`
+    # (note: rootless Podman cannot use `overlay.size` project quotas, which require `CAP_MKNOD`).
     # Share `/opt/arena/stats` read-only for `PKMN_STATS_DIR` (never `/Volumes/Staging` auth files).
     podman machine init \
       --cpus 10 \
@@ -124,9 +126,9 @@ if command -v podman >/dev/null 2>&1; then
       podman-machine-default
   fi
   podman machine start podman-machine-default 2>/dev/null || true
-  podman machine ssh podman-machine-default \
-    "sudo mkdir -p /etc/containers && sudo tee /etc/containers/storage.conf >/dev/null" \
-    < "${REPO_DIR}/arena/config/storage.conf" || true
+  # Stop the interactive VM before bootstrapping `ai.pkmn.podman.plist` (`RunAtLoad=true`) so
+  # `launchd` takes sole ownership of `podman-machine-default` without colliding on the disk image.
+  podman machine stop podman-machine-default 2>/dev/null || true
 fi
 
 echo "==> Step 8: Installing LaunchDaemons (ai.pkmn.pf, ai.pkmn.podman, ai.pkmn.arena, ai.pkmn.archive)"

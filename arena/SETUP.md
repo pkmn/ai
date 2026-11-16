@@ -510,7 +510,7 @@ ls -l /opt/arena/repo/.env /opt/arena/repo/build/arena/index.js
     serverUrl: process.env.ARENA_SERVER_URL || \"http://127.0.0.1:1234\",
     arenaSecret: process.env.ARENA_SECRET,
   });
-  client.fetchPendingSubmissions().then(res => {
+  client.getPendingSubmissions().then(res => {
     console.log(\"Authenticated RPC OK:\", {
       ladders: res.ladders.length,
       pendingSubmissions: res.submissions.length,
@@ -561,9 +561,9 @@ What `setup-arena.sh` provisions:
    smoke-test baseline agent at `/opt/arena/agents/_baseline/run`.
 6. **Headless Power & Spotlight:** Sets `pmset` (`womp 1 powernap 0`), disables Spotlight on
    `/Volumes/{P1,P2,Staging}`, and disables automatic macOS updates.
-7. **Podman VM & LaunchDaemons:** Initializes `podman-machine-default` (`10` vCPUs, `30 GiB` /
-   `30,720 MiB` RAM, `48 GB` disk, zero swap), installs `/etc/containers/storage.conf`
-   (`size = "500M"` overlay cap) inside the VM, and copies
+7. **Podman VM & LaunchDaemons:** Initializes rootless `podman-machine-default` (`10` vCPUs,
+   `30 GiB` / `30,720 MiB` RAM, `48 GB` disk, zero swap; containers run `--read-only` with
+   `--tmpfs /tmp:size=500m`), stops the interactive VM cleanly for `launchd` ownership, and copies
    `ai.pkmn.{pf,podman,arena,archive}.plist` to `/Library/LaunchDaemons/`.
 
 ### Step 5.2: Bootstrap `ai.pkmn.pf` & Reload Hardened `sshd`
@@ -576,18 +576,16 @@ and `p2`, including loopback; raw ICMP requires root and native bundles also run
 ssh arena '
 sudo launchctl bootout system/ai.pkmn.pf 2>/dev/null || true
 sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.pf.plist
-sudo pfctl -ef /etc/pf.conf 2>/dev/null || true
-sudo launchctl kickstart -k system/com.openssh.sshd
+sudo /usr/sbin/sshd -t
 '
 ```
 
 ### Step 5.3: Bootstrap `ai.pkmn.podman` (`podman-machine-default` Boot Autostart)
 
-`setup-arena.sh` already initialized and started `podman-machine-default` (`10` vCPUs, `30 GiB` RAM
-so two concurrent 14 GiB `--memory=14g --memory-swap=14g` containers coexist in physical memory with
-zero disk swap) and installed `/etc/containers/storage.conf` (`size = "500M"` writable overlay cap)
-inside the VM. Bootstrap `/Library/LaunchDaemons/ai.pkmn.podman.plist` so `podman-machine-default`
-starts automatically across unattended macOS reboots:
+`setup-arena.sh` already initialized `podman-machine-default` (`10` vCPUs, `30 GiB` RAM so two
+concurrent 14 GiB `--memory=14g --memory-swap=14g` `--read-only` containers coexist in physical
+memory with zero disk swap). Bootstrap `/Library/LaunchDaemons/ai.pkmn.podman.plist` so
+`podman-machine-default` starts automatically across unattended macOS reboots:
 
 ```sh
 ssh arena '
@@ -623,8 +621,8 @@ sudo -n -u p2 /usr/bin/env -i HOME=/Volumes/P2 TMPDIR=/Volumes/P2 PATH=/usr/bin:
 
 ```sh
 ssh arena '
-# 1. Verify pf anchor rule is loaded
-sudo pfctl -a ai.pkmn.arena -sr
+# 1. Verify pf anchor rule is loaded under Apple's pre-loaded com.apple/* wildcard anchor
+sudo -n /sbin/pfctl -a com.apple/100.pkmn.arena -sr
 
 # 2. Verify UID p1 is blocked by kernel pf from reaching loopback 127.0.0.1:1234
 if sudo -n -u p1 /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/curl -m 2 -fsS http://127.0.0.1:1234/arena.json >/dev/null 2>&1; then
@@ -726,8 +724,8 @@ ssh arena '
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
 
-# 1. Verify ~30 GiB RAM, 0B swap, and 500M overlay storage.conf inside the VM
-podman machine ssh podman-machine-default "free -h && cat /etc/containers/storage.conf"
+# 1. Verify ~30 GiB RAM and 0B swap inside the rootless VM
+podman machine ssh podman-machine-default "free -h"
 
 # 2. Build a tiny local OCI test image and run it through /opt/arena/bin/arena
 CTX_DIR="$(mktemp -d /Volumes/Staging/podman-verify-XXXXXX)"
@@ -749,7 +747,7 @@ echo "Container stdout: ${OUT} | Remaining files in /Volumes/P1: ${REMAINING}"
 ```
 
 *Expected:*
-- `Mem: 29Gi ...`, `Swap: 0B`, and `size = "500M"` in `/etc/containers/storage.conf`.
+- `Mem: 29Gi ...` and `Swap: 0B`.
 - `Container stdout: default | Remaining files in /Volumes/P1: 0`
 - `PASS: Podman container sandbox + virtiofs /Volumes/P1 mount verified`
 
@@ -858,19 +856,19 @@ activate it under the `pkmn` coordinator user:
    umask 077
    gcloud iam service-accounts keys create /tmp/arena-gcs-key.json \
      --iam-account="$SA_EMAIL"
-   ssh arena 'sudo mkdir -p /opt/arena/etc && sudo chown pkmn:agents /opt/arena/etc'
-   scp /tmp/arena-gcs-key.json arena:/opt/arena/etc/gcs-key.json
+   scp /tmp/arena-gcs-key.json arena:/opt/arena/state/gcs-key.json
    rm -f /tmp/arena-gcs-key.json
    ```
 
-2. **On the Mac mini (`ssh arena`)**, lock down `/opt/arena/etc/gcs-key.json`, activate the service
-   account for `gcloud`, and enable `ARENA_GCS_BUCKET` + `ARENA_GCS_SYNC` in `/opt/arena/repo/.env`:
+2. **On the Mac mini (`ssh arena`)**, lock down `/opt/arena/state/gcs-key.json`, activate the
+   service account for `gcloud`, and enable `ARENA_GCS_BUCKET` + `ARENA_GCS_SYNC` in
+   `/opt/arena/repo/.env`:
    ```sh
    ssh arena "
    export PATH=\"/opt/homebrew/bin:\$PATH\"
-   chmod 0600 /opt/arena/etc/gcs-key.json
-   chown pkmn:agents /opt/arena/etc/gcs-key.json
-   gcloud auth activate-service-account --key-file=/opt/arena/etc/gcs-key.json
+   chmod 0600 /opt/arena/state/gcs-key.json
+   chown pkmn:agents /opt/arena/state/gcs-key.json
+   gcloud auth activate-service-account --key-file=/opt/arena/state/gcs-key.json
    gcloud config set project ${GCP_PROJECT}
    grep -q '^ARENA_GCS_BUCKET=' /opt/arena/repo/.env || printf 'ARENA_GCS_BUCKET=gs://pkmn-arena\n' >> /opt/arena/repo/.env
    grep -q '^ARENA_GCS_SYNC=' /opt/arena/repo/.env || printf 'ARENA_GCS_SYNC=1\n' >> /opt/arena/repo/.env
