@@ -136,12 +136,12 @@ The 7 sections cover:
    opponent click filter, expanded inline match telemetry, empty filtered matches state,
    provisional entrant (`/projects/pokerus/`), qualified project with 0 entries
    (`/projects/cynthiai/`), and pending project (`/projects/asterai/`).
-3. **Arena Hub & Ladders (`arena`):** Active season hub, hub with expandable past season rows
-   (`settling` + `archived`), pre-launch upcoming hub, RBY harvested ladder across `Active` / `Best`
-   / `All` version tabs, VGC competitor `pools` ladder, RAND `random` ladder (with daily `-logs.tar`
-   archive link), rotated season in `settling` grace window via the `#season-select` dropdown,
-   retired season in `archived` state (with `-logs.7z` & `teams.json` links above the footer), and
-   `upcoming` ladder with registered entrants.
+3. **Arena Hub & Ladders (`arena`):** Active season hub, hub with expandable past season rows,
+   pre-launch upcoming hub, RBY harvested ladder across `Active` / `Best` / `All` version tabs, VGC
+   competitor `pools` ladder, RAND `random` ladder (with `Data: <id>-logs.tar` link above the
+   footer), rotated season in `settling` grace window via the `#season-select` dropdown, retired
+   season in `archived` state (with `Data: <id>-logs.7z` link above the footer), and `upcoming`
+   ladder with registered entrants.
 4. **Arena Battles (`battles`):** Live match in progress (`Game 2 / 2`, `PAUSED`/`RUNNING`, G1
    summary, pool team hashes), live `RAND` match with embedded Pokémon Showdown battle viewer,
    inline expanded `RAND` row with replay viewer (`Game 1` / `Game 2`), inline expanded rows for

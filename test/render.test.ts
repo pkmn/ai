@@ -1653,8 +1653,9 @@ describe('JSON route parity & retired pool archives', () => {
       expect(randJson.teamsHref).toBeUndefined();
 
       const randHtml = await h.getText('/arena/ladders/rand/');
-      expect(randHtml).toContain('Battle log archive (updated daily):');
+      expect(randHtml).toContain('Data:');
       expect(randHtml).toContain('gen9randombattle20261109-logs.tar');
+      expect(randHtml).not.toContain('index.json');
     } finally {
       await h.close();
     }

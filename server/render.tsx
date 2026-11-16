@@ -2351,41 +2351,15 @@ function renderSingleLadderArtifact(opts: {
   const teamsHref = l.team === 'pools' && l.status === 'archived'
     ? `/arena/ladders/${urlEnc}/teams.json`
     : undefined;
-  const jsonHref = `/arena/ladders/${urlEnc}/index.json`;
 
   let ladderBottomNote: util.Child;
-  if (l.team === 'pools' && l.status === 'archived') {
-    if (archive) {
-      ladderBottomNote = (
-        <p className='battle-note muted'>
-          Retired season archive:{' '}
-          <a href={archive.href}>
-            <code>{archive.name}</code>
-          </a>{' '}
-          (full Showdown battle logs &amp; unpacked teams) ·{' '}
-          <a href={teamsHref!}><code>teams.json</code></a> ·{' '}
-          <a href={jsonHref}><code>index.json</code></a>
-        </p>
-      );
-    } else {
-      ladderBottomNote = (
-        <p className='battle-note muted'>
-          Retired season data:{' '}
-          <a href={teamsHref!}><code>teams.json</code></a> ·{' '}
-          <a href={jsonHref}><code>index.json</code></a> ·{' '}
-          full battle log archive (<code>{`${l.id}-logs.7z`}</code>) pending upload.
-        </p>
-      );
-    }
-  } else if (l.team === 'random' && archive) {
+  if (((l.team === 'pools' && l.status === 'archived') || l.team === 'random') && archive) {
     ladderBottomNote = (
       <p className='battle-note muted'>
-        Battle log archive (updated daily):{' '}
+        Data:{' '}
         <a href={archive.href}>
           <code>{archive.name}</code>
-        </a>{' '}
-        (full Showdown battle logs) ·{' '}
-        <a href={jsonHref}><code>index.json</code></a>
+        </a>
       </p>
     );
   }

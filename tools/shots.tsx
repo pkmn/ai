@@ -623,10 +623,10 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-ladder-archived',
       section: 'arena',
-      title: 'Ladder: Retired Season (Archived with .7z & teams.json)',
+      title: 'Ladder: Retired Season (Archived with .7z Archive)',
       description:
         'Retired seasonal ladder (`/arena/ladders/gen9championsvgc2026regmc/`) in `archived` ' +
-        'status publishing `<id>-logs.7z`, `teams.json`, and `index.json` above the footer.',
+        'status linking `Data: <id>-logs.7z` above the footer.',
       path: `/arena/ladders/${VGC_LADDER_ID}/`,
       setup: fixture => setupRotatedSeasons(fixture, 'archived'),
     },
@@ -635,9 +635,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'arena',
       title: 'Ladder: RAND (Random Battle · Full-History .tar Archive)',
       description:
-        'Random Battle ladder (`/arena/ladders/rand/`, `team: random`) linking its daily ' +
-        'updated `gen9randombattle20261109-logs.tar` full-history battle log archive at the ' +
-        'bottom of the page just above the footer.',
+        'Random Battle ladder (`/arena/ladders/rand/`, `team: random`) linking ' +
+        '`Data: gen9randombattle20261109-logs.tar` above the footer.',
       path: '/arena/ladders/rand/',
     },
     {
