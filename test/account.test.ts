@@ -361,6 +361,7 @@ describe('account routes', () => {
         '<label for="sub-teams" class="hide pool-teams-field">' +
           'Teams<span class="req">*</span></label>'
       );
+      expect(preHtml).toContain('<label>Target<span class="req">*</span></label>');
       expect(preHtml).toContain('placeholder="1.0.0"');
       expect(preHtml).toContain(
         'placeholder="One-time header for private releases (scrubbed immediately after fetch)"'
@@ -987,6 +988,7 @@ describe('account routes', () => {
       expect(acctHtml).toContain(expectedBanner);
       expect(acctHtml).toContain('name="tournaments" type="checkbox" value="3"');
       expect(acctHtml).toContain('OCI image required (linux/amd64)');
+      expect(acctHtml).toContain('<label>Target<span class="req">*</span></label>');
 
       const wikiHtml = await (await realFetch(`${baseUrl}/wiki`)).text();
       expect(wikiHtml).toContain(expectedBanner);

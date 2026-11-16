@@ -119,6 +119,13 @@ tr.secondary td {
   align-items: center;
 }
 
+.target-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
 .ladders-submit-row {
   display: flex;
   flex-wrap: wrap;

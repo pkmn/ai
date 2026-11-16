@@ -896,9 +896,9 @@ export function renderAccountPage(opts: {
 
               {poolTeamsRow}
 
-              {tournamentStatuses.length > 0 && (
-                <>
-                  <label>Tournaments</label>
+              <label>Target<span className='req'>*</span></label>
+              <div className='target-group'>
+                {tournamentStatuses.length > 0 && (
                   <div className='check-group'>
                     {tournamentStatuses.map(t => {
                       const scheduleHint =
@@ -941,74 +941,73 @@ export function renderAccountPage(opts: {
                       );
                     })}
                   </div>
-                </>
-              )}
+                )}
 
-              <label>Ladders</label>
-              <div className='ladders-submit-row'>
-                <div className='check-group'>
-                  {currentLadders.length === 0 ? ' ' : currentLadders.map(l => {
-                    const isOpen = l.status === 'upcoming' || l.status === 'active';
-                    const canCheck = isOpen && status.canSubmit;
-                    const checked = canCheck && activeLadderIdsWithAgent.has(l.id);
-                    const needsTeams = needsTeamsIds.has(l.id);
-                    const savedCount = savedTeamsByLadder.get(l.id) ?? 0;
-                    const requiredCount = l.teams ?? 0;
-                    let labelClass: string | undefined;
-                    let labelTitle: string | undefined;
-                    if (!isOpen) {
-                      labelClass = 'upcoming';
-                      labelTitle = 'Not open for submissions';
-                    } else if (!status.canSubmit) {
-                      labelClass = 'upcoming';
-                      labelTitle = status.reason ?? 'Not currently eligible for ladders';
-                    } else if (l.status === 'upcoming') {
-                      labelTitle =
-                        'Upcoming — accepting initial entries before matchmaking begins';
-                    }
-                    const statusParts: string[] = [];
-                    if (l.status === 'upcoming') statusParts.push('upcoming');
-                    if (needsTeams && requiredCount > 0 && savedCount > 0) {
-                      statusParts.push(`${savedCount}/${requiredCount} saved`);
-                    }
-                    const hintText = statusParts.length ? ` (${statusParts.join(' · ')})` : '';
-                    return (
-                      <label className={labelClass} title={labelTitle}>
-                        <input
-                          type='checkbox'
-                          name='ladders'
-                          value={l.id}
-                          checked={checked}
-                          disabled={!canCheck}
-                          data-needs-teams={canCheck && needsTeams ? 'true' : undefined}
-                          data-required-teams={canCheck && needsTeams ? requiredCount : undefined}
-                          data-saved-teams={canCheck && needsTeams ? savedCount : undefined}
-                          data-ladder-name={canCheck && needsTeams ? l.name : undefined}
-                          data-upcoming={
-                            canCheck && needsTeams
-                              ? (l.status === 'upcoming' ? 'true' : 'false')
-                              : undefined
-                          }
-                        />{' '}
-                        {l.name}
-                        {needsTeams ? (
-                          <span className='muted pool-status-hint'>{hintText}</span>
-                        ) : (
-                          hintText && <span className='muted'>{hintText}</span>
-                        )}
-                      </label>
-                    );
-                  })}
+                <div className='ladders-submit-row'>
+                  <div className='check-group'>
+                    {currentLadders.length === 0 ? ' ' : currentLadders.map(l => {
+                      const isOpen = l.status === 'upcoming' || l.status === 'active';
+                      const canCheck = isOpen && status.canSubmit;
+                      const checked = canCheck && activeLadderIdsWithAgent.has(l.id);
+                      const needsTeams = needsTeamsIds.has(l.id);
+                      const savedCount = savedTeamsByLadder.get(l.id) ?? 0;
+                      const requiredCount = l.teams ?? 0;
+                      let labelClass: string | undefined;
+                      let labelTitle: string | undefined;
+                      if (!isOpen) {
+                        labelClass = 'upcoming';
+                        labelTitle = 'Not open for submissions';
+                      } else if (!status.canSubmit) {
+                        labelClass = 'upcoming';
+                        labelTitle = status.reason ?? 'Not currently eligible for ladders';
+                      } else if (l.status === 'upcoming') {
+                        labelTitle =
+                          'Upcoming — accepting initial entries before matchmaking begins';
+                      }
+                      const statusParts: string[] = [];
+                      if (l.status === 'upcoming') statusParts.push('upcoming');
+                      if (needsTeams && requiredCount > 0 && savedCount > 0) {
+                        statusParts.push(`${savedCount}/${requiredCount} saved`);
+                      }
+                      const hintText = statusParts.length ? ` (${statusParts.join(' · ')})` : '';
+                      return (
+                        <label className={labelClass} title={labelTitle}>
+                          <input
+                            type='checkbox'
+                            name='ladders'
+                            value={l.id}
+                            checked={checked}
+                            disabled={!canCheck}
+                            data-needs-teams={canCheck && needsTeams ? 'true' : undefined}
+                            data-required-teams={canCheck && needsTeams ? requiredCount : undefined}
+                            data-saved-teams={canCheck && needsTeams ? savedCount : undefined}
+                            data-ladder-name={canCheck && needsTeams ? l.name : undefined}
+                            data-upcoming={
+                              canCheck && needsTeams
+                                ? (l.status === 'upcoming' ? 'true' : 'false')
+                                : undefined
+                            }
+                          />{' '}
+                          {l.name}
+                          {needsTeams ? (
+                            <span className='muted pool-status-hint'>{hintText}</span>
+                          ) : (
+                            hintText && <span className='muted'>{hintText}</span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <button
+                    id='sub-btn'
+                    type='submit'
+                    className='btn'
+                    disabled={true}
+                    title={!canSubmitAny && status.reason ? status.reason : undefined}
+                  >
+                    Submit
+                  </button>
                 </div>
-                <button
-                  id='sub-btn'
-                  type='submit'
-                  className='btn'
-                  disabled={true}
-                  title={!canSubmitAny && status.reason ? status.reason : undefined}
-                >
-                  Submit
-                </button>
               </div>
             </div>
           </fieldset>
