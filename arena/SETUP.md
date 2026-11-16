@@ -853,6 +853,12 @@ activate it under the `pkmn` coordinator user:
      --member="serviceAccount:${SA_EMAIL}" \
      --role="roles/storage.objectAdmin"
 
+   # Required when gs://pkmn-arena has Requester Pays enabled:
+   gcloud services enable cloudresourcemanager.googleapis.com --project="$GCP_PROJECT"
+   gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+     --member="serviceAccount:${SA_EMAIL}" \
+     --role="roles/serviceusage.serviceUsageConsumer"
+
    umask 077
    gcloud iam service-accounts keys create /tmp/arena-gcs-key.json \
      --iam-account="$SA_EMAIL"
@@ -870,9 +876,13 @@ activate it under the `pkmn` coordinator user:
    chown pkmn:agents /opt/arena/state/gcs-key.json
    gcloud auth activate-service-account --key-file=/opt/arena/state/gcs-key.json
    gcloud config set project ${GCP_PROJECT}
+   gcloud config set billing/quota_project ${GCP_PROJECT}
    grep -q '^ARENA_GCS_BUCKET=' /opt/arena/repo/.env || printf 'ARENA_GCS_BUCKET=gs://pkmn-arena\n' >> /opt/arena/repo/.env
    grep -q '^ARENA_GCS_SYNC=' /opt/arena/repo/.env || printf 'ARENA_GCS_SYNC=1\n' >> /opt/arena/repo/.env
-   sudo launchctl kickstart -k system/ai.pkmn.arena
+   grep -q '^CLOUDSDK_CONFIG=' /opt/arena/repo/.env || printf 'CLOUDSDK_CONFIG=/Users/pkmn/.config/gcloud\n' >> /opt/arena/repo/.env
+   grep -q '^CLOUDSDK_CORE_PROJECT=' /opt/arena/repo/.env || printf 'CLOUDSDK_CORE_PROJECT=${GCP_PROJECT}\n' >> /opt/arena/repo/.env
+   grep -q '^CLOUDSDK_BILLING_QUOTA_PROJECT=' /opt/arena/repo/.env || printf 'CLOUDSDK_BILLING_QUOTA_PROJECT=${GCP_PROJECT}\n' >> /opt/arena/repo/.env
+   sudo -n /bin/launchctl kickstart -k system/ai.pkmn.arena
    "
    ```
 
