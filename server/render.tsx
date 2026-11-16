@@ -2423,7 +2423,7 @@ function renderSingleLadderArtifact(opts: {
                 : `/arena/ladders/${encodeURIComponent(s.id)}/`;
               return (
                 <option value={sHref} selected={s.id === l.id}>
-                  {`${s.name} (${s.status})`}
+                  {s.name}
                 </option>
               );
             })}
@@ -2774,7 +2774,7 @@ export function renderArenaAndLadderArtifacts(opts: {
             <a href={pastHref} className='subtle' title={pastFmtTitle}>
               <strong><tt>{past.name}</tt></strong>
             </a>{' '}
-            <span className='muted'>({past.status} · {dateRange})</span>
+            <span className='muted'>({dateRange})</span>
           </td>
           {pastLeaderCell}
           <td className='num'>{pastRendered.entrantCount.toLocaleString('en-US')}</td>
