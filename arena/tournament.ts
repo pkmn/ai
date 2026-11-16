@@ -1548,13 +1548,13 @@ export function unpackOciRootfs(opts: {
 
   const cleanRef = opts.imageRef.replace(/^docker:\/\//, '').trim();
   const repoRef = packages.stripOciTagOrDigest(cleanRef);
-  const inspected = packages.inspectRemoteOciSize(
-    cleanRef,
-    opts.authToken,
-    opts.expectedSha256,
-    {os: 'linux', arch: 'amd64'},
-    stagingDir
-  );
+  const inspected = packages.inspectRemoteOciSize({
+    imageRef: cleanRef,
+    creds: opts.authToken,
+    expectedSha256: opts.expectedSha256,
+    platform: {os: 'linux', arch: 'amd64'},
+    stagingDir,
+  });
   const workDir = fs.mkdtempSync(path.join(stagingDir, `tourney-oci-${opts.targetId}-`));
   fs.chmodSync(workDir, 0o700);
 
@@ -1608,6 +1608,20 @@ export interface TableBinding {
 }
 export type TournamentTableBinding = TableBinding;
 
+export interface EntrantInfo {
+  versionId: number;
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
+  version: string;
+}
+
+export interface MountedEntrant {
+  entrant: EntrantInfo;
+  vmHost: string;
+  controlSocket: string;
+}
+
 export interface Options {
   client: arena.Client;
   baselineSpec: AgentSpec;
@@ -1624,13 +1638,7 @@ export interface Options {
     targetId: string
   ) => Promise<number> | number;
   resolveEntrantSpec?: (
-    entrant: {
-      versionId: number;
-      agentId: number;
-      agentSlug: string;
-      agentName: string;
-      version: string;
-    },
+    entrant: EntrantInfo,
     vmHost: string,
     controlSocket: string
   ) => AgentSpec;
@@ -1689,17 +1697,8 @@ export class Coordinator {
     return `sodium,${crypto.randomBytes(32).toString('hex')}` as sim.PRNGSeed;
   }
 
-  private resolveEntrantSpec(
-    entrant: {
-      versionId: number;
-      agentId: number;
-      agentSlug: string;
-      agentName: string;
-      version: string;
-    },
-    vmHost: string,
-    controlSocket: string
-  ): AgentSpec {
+  private resolveEntrantSpec(mounted: MountedEntrant): AgentSpec {
+    const {entrant, vmHost, controlSocket} = mounted;
     if (this.customResolveEntrantSpec) {
       return this.customResolveEntrantSpec(entrant, vmHost, controlSocket);
     }
@@ -1761,17 +1760,17 @@ export class Coordinator {
         continue;
       }
 
-      const candidateSpec = this.resolveEntrantSpec(
-        {
+      const candidateSpec = this.resolveEntrantSpec({
+        entrant: {
           versionId: sub.versionId,
           agentId: sub.agentId,
           agentSlug: sub.agentSlug,
           agentName: sub.agentName,
           version: sub.version,
         },
-        '127.0.0.1',
-        ''
-      );
+        vmHost: '127.0.0.1',
+        controlSocket: '',
+      });
 
       const smokeStart = Date.now();
       let maxTurnMillis = 1;
@@ -2006,12 +2005,8 @@ export class Coordinator {
       cycle: number;
       matchupGame: number;
       gameId: string;
-      entA: (typeof state.entrants)[number];
-      entB: (typeof state.entrants)[number];
-      vmHostA: string;
-      controlA: string;
-      vmHostB: string;
-      controlB: string;
+      sideA: MountedEntrant;
+      sideB: MountedEntrant;
       gameIndexZeroBased: number;
       finalTournamentStatus?: 'running' | 'completed';
     }): Promise<void> => {
@@ -2021,17 +2016,16 @@ export class Coordinator {
       );
       const pairIdx = Math.floor(params.gameIndexZeroBased / 2);
       const pairSeed = pairSeeds[pairIdx % pairSeeds.length];
-      const p1Ent = sampled.swappedSeats ? params.entB : params.entA;
-      const p2Ent = sampled.swappedSeats ? params.entA : params.entB;
-      const p1Host = sampled.swappedSeats ? params.vmHostB : params.vmHostA;
-      const p1Ctrl = sampled.swappedSeats ? params.controlB : params.controlA;
-      const p2Host = sampled.swappedSeats ? params.vmHostA : params.vmHostB;
-      const p2Ctrl = sampled.swappedSeats ? params.controlA : params.controlB;
+      const [p1Side, p2Side] = sampled.swappedSeats
+        ? [params.sideB, params.sideA]
+        : [params.sideA, params.sideB];
+      const p1Ent = p1Side.entrant;
+      const p2Ent = p2Side.entrant;
 
       let preemptions = 0;
       for (;;) {
-        const p1Spec = this.resolveEntrantSpec(p1Ent, p1Host, p1Ctrl);
-        const p2Spec = this.resolveEntrantSpec(p2Ent, p2Host, p2Ctrl);
+        const p1Spec = this.resolveEntrantSpec(p1Side);
+        const p2Spec = this.resolveEntrantSpec(p2Side);
 
         const sendTableLoad = (info?: {
           game: number;
@@ -2200,15 +2194,19 @@ export class Coordinator {
         residents.vmAAgent = batch.agentOnVmA;
         residents.vmBAgent = batch.agentOnVmB;
 
-        // Order `(entA, entB)` canonically by `(low, high)` so Game 1 and Game 2 mirror seat/team
-        // swaps remain identical across mid-batch restarts regardless of which VM holds `low`.
-        const entLow = entrantByVersion.get(low)!;
-        const entHigh = entrantByVersion.get(high)!;
+        // Order `(sideLow, sideHigh)` canonically by `(low, high)` so Game 1 and Game 2 mirror
+        // seat/team swaps remain identical across mid-batch restarts regardless of VM residency.
         const lowOnVmB = batch.agentOnVmB === low;
-        const hostLow = lowOnVmB ? binding.vmHostB : binding.vmHostA;
-        const ctrlLow = lowOnVmB ? binding.controlSocketB : binding.controlSocketA;
-        const hostHigh = lowOnVmB ? binding.vmHostA : binding.vmHostB;
-        const ctrlHigh = lowOnVmB ? binding.controlSocketA : binding.controlSocketB;
+        const sideLow: MountedEntrant = {
+          entrant: entrantByVersion.get(low)!,
+          vmHost: lowOnVmB ? binding.vmHostB : binding.vmHostA,
+          controlSocket: lowOnVmB ? binding.controlSocketB : binding.controlSocketA,
+        };
+        const sideHigh: MountedEntrant = {
+          entrant: entrantByVersion.get(high)!,
+          vmHost: lowOnVmB ? binding.vmHostA : binding.vmHostB,
+          controlSocket: lowOnVmB ? binding.controlSocketA : binding.controlSocketB,
+        };
 
         try {
           for (let offset = 0; offset < batch.gamesToPlay; offset++) {
@@ -2223,12 +2221,8 @@ export class Coordinator {
               cycle,
               matchupGame,
               gameId,
-              entA: entLow,
-              entB: entHigh,
-              vmHostA: hostLow,
-              controlA: ctrlLow,
-              vmHostB: hostHigh,
-              controlB: ctrlHigh,
+              sideA: sideLow,
+              sideB: sideHigh,
               gameIndexZeroBased: gIdx,
             });
             matchup.gamesPlayed++;
@@ -2285,6 +2279,16 @@ export class Coordinator {
           vmHostB: '127.0.0.1',
           controlSocketB: '',
         };
+        const sfSideA: MountedEntrant = {
+          entrant: finalistA,
+          vmHost: binding.vmHostA,
+          controlSocket: binding.controlSocketA,
+        };
+        const sfSideB: MountedEntrant = {
+          entrant: finalistB,
+          vmHost: binding.vmHostB,
+          controlSocket: binding.controlSocketB,
+        };
         for (let gIdx = existingSf; gIdx < this.superfinalGames; gIdx++) {
           const matchupGame = gIdx + 1;
           const isFinalGame = matchupGame === this.superfinalGames;
@@ -2295,12 +2299,8 @@ export class Coordinator {
             cycle: 1,
             matchupGame,
             gameId,
-            entA: finalistA,
-            entB: finalistB,
-            vmHostA: binding.vmHostA,
-            controlA: binding.controlSocketA,
-            vmHostB: binding.vmHostB,
-            controlB: binding.controlSocketB,
+            sideA: sfSideA,
+            sideB: sfSideB,
             gameIndexZeroBased: rrPairs * 2 + gIdx,
             finalTournamentStatus: isFinalGame ? 'completed' : undefined,
           });

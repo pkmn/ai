@@ -1712,18 +1712,15 @@ export class Runner {
   }
 
   private getMatchupBiasElo(
-    p1VersionId: number,
-    p1Slug: string,
-    p2VersionId: number,
-    p2Slug: string,
-    p2Version: string
+    p1: {versionId: number; slug: string},
+    p2: {versionId: number; slug: string; version: string}
   ): number {
     const forward =
-      this.state.matchupBiases[`${p1VersionId}:${p2Slug}@${p2Version}`] ??
-      this.state.matchupBiases[`${p1VersionId}:${p2Slug}`] ??
+      this.state.matchupBiases[`${p1.versionId}:${p2.slug}@${p2.version}`] ??
+      this.state.matchupBiases[`${p1.versionId}:${p2.slug}`] ??
       0;
     const backward =
-      this.state.matchupBiases[`${p2VersionId}:${p1Slug}`] ??
+      this.state.matchupBiases[`${p2.versionId}:${p1.slug}`] ??
       0;
     return forward - backward;
   }
@@ -2187,54 +2184,52 @@ export class Runner {
 
   private async executeMatchPair(opts: {
     ladder: db.LadderRow;
-    p1VersionId: number;
-    p1AgentId: number;
-    p1Slug: string;
-    p1Name: string;
-    p1Version: string;
-    p2VersionId: number;
-    p2AgentId: number;
-    p2Slug: string;
-    p2Name: string;
-    p2Version: string;
+    p1: {
+      versionId: number;
+      agentId: number;
+      slug: string;
+      name: string;
+      version: string;
+      teamSpec?: string;
+    };
+    p2: {
+      versionId: number;
+      agentId: number;
+      slug: string;
+      name: string;
+      version: string;
+      teamSpec?: string;
+    };
     completedAt: number;
     tieRate?: number;
     faultRate?: number;
     forcedOutcome?: ratings.MatchCategory;
     g1Reason?: string;
     g2Reason?: string;
-    p1TeamSpec?: string;
-    p2TeamSpec?: string;
     emitHeartbeats?: boolean;
     writeLogs?: boolean;
   }): Promise<{matchId: string; archivedLadder: boolean}> {
-    const {ladder} = opts;
+    const {ladder, p1, p2} = opts;
     let p1TeamLabel: string | undefined;
     let p2TeamLabel: string | undefined;
     if (ladder.team === 'pools') {
       const pool = this.buildPoolForLadder(ladder);
       const sampled = teams.samplePoolsPair(
         pool,
-        opts.p1AgentId,
-        opts.p2AgentId,
+        p1.agentId,
+        p2.agentId,
         this.nextInt,
         ladder.min
       );
-      p1TeamLabel = this.resolvePoolLabelSpec(ladder, opts.p1TeamSpec, sampled.t1Label);
-      p2TeamLabel = this.resolvePoolLabelSpec(ladder, opts.p2TeamSpec, sampled.t2Label);
+      p1TeamLabel = this.resolvePoolLabelSpec(ladder, p1.teamSpec, sampled.t1Label);
+      p2TeamLabel = this.resolvePoolLabelSpec(ladder, p2.teamSpec, sampled.t2Label);
     }
 
     const defaultTieRate = ladder.team === 'harvested' ? 0.025 : 0;
     const tieRate = opts.tieRate ?? defaultTieRate;
-    const e1 = this.getExpectedRating(opts.p1VersionId, opts.p1Slug, ladder.id);
-    const e2 = this.getExpectedRating(opts.p2VersionId, opts.p2Slug, ladder.id);
-    const bias = this.getMatchupBiasElo(
-      opts.p1VersionId,
-      opts.p1Slug,
-      opts.p2VersionId,
-      opts.p2Slug,
-      opts.p2Version
-    );
+    const e1 = this.getExpectedRating(p1.versionId, p1.slug, ladder.id);
+    const e2 = this.getExpectedRating(p2.versionId, p2.slug, ladder.id);
+    const bias = this.getMatchupBiasElo(p1, p2);
 
     let g1: ratings.GameOutcome;
     let g2: ratings.GameOutcome;
@@ -2268,10 +2263,10 @@ export class Runner {
     const prefix = ladder.slot === 'vgc' ? 'vgc' : ladder.format;
     const matchId = `${prefix}-${String(this.state.matchSeq).padStart(7, '0')}`;
 
-    const p1Ram = 720 + ((opts.p1VersionId * 47) % 980);
-    const p2Ram = 720 + ((opts.p2VersionId * 53) % 980);
-    const p1TurnMillis = 230 + ((opts.p1VersionId * 29) % 240);
-    const p2TurnMillis = 240 + ((opts.p2VersionId * 31) % 240);
+    const p1Ram = 720 + ((p1.versionId * 47) % 980);
+    const p2Ram = 720 + ((p2.versionId * 53) % 980);
+    const p1TurnMillis = 230 + ((p1.versionId * 29) % 240);
+    const p2TurnMillis = 240 + ((p2.versionId * 31) % 240);
 
     const shouldEmitRandomLogs =
       ladder.team === 'random' && (opts.writeLogs || Boolean(this.serverUrl));
@@ -2283,16 +2278,16 @@ export class Runner {
       const g2Seat1Outcome: 'W' | 'L' | 'T' = g2 === 'W' ? 'L' : g2 === 'L' ? 'W' : 'T';
       game1Log = buildShowdownTournamentLog({
         format: ladder.format,
-        p1Name: opts.p1Name,
-        p2Name: opts.p2Name,
+        p1Name: p1.name,
+        p2Name: p2.name,
         p1TeamPacked: t1Packed,
         p2TeamPacked: t2Packed,
         outcome: g1,
       });
       game2Log = buildShowdownTournamentLog({
         format: ladder.format,
-        p1Name: opts.p2Name,
-        p2Name: opts.p1Name,
+        p1Name: p2.name,
+        p2Name: p1.name,
         p1TeamPacked: t1Packed,
         p2TeamPacked: t2Packed,
         outcome: g2Seat1Outcome,
@@ -2316,9 +2311,9 @@ export class Runner {
         incrementSeconds: inc,
         ...(game1Log ? {lines: game1Log.trim().split('\n')} : {}),
         p1: {
-          slug: opts.p1Slug,
-          name: opts.p1Name,
-          version: opts.p1Version,
+          slug: p1.slug,
+          name: p1.name,
+          version: p1.version,
           bankSeconds: 145,
           lastTurnMillis: p1TurnMillis,
           meanTurnMillis: p1TurnMillis,
@@ -2326,9 +2321,9 @@ export class Runner {
           ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
         },
         p2: {
-          slug: opts.p2Slug,
-          name: opts.p2Name,
-          version: opts.p2Version,
+          slug: p2.slug,
+          name: p2.name,
+          version: p2.version,
           bankSeconds: 142,
           lastTurnMillis: p2TurnMillis,
           meanTurnMillis: p2TurnMillis,
@@ -2359,9 +2354,9 @@ export class Runner {
           turns: g1Turns,
         },
         p1: {
-          slug: opts.p1Slug,
-          name: opts.p1Name,
-          version: opts.p1Version,
+          slug: p1.slug,
+          name: p1.name,
+          version: p1.version,
           bankSeconds: 138,
           lastTurnMillis: p1TurnMillis,
           meanTurnMillis: p1TurnMillis,
@@ -2369,9 +2364,9 @@ export class Runner {
           ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
         },
         p2: {
-          slug: opts.p2Slug,
-          name: opts.p2Name,
-          version: opts.p2Version,
+          slug: p2.slug,
+          name: p2.name,
+          version: p2.version,
           bankSeconds: 136,
           lastTurnMillis: p2TurnMillis,
           meanTurnMillis: p2TurnMillis,
@@ -2384,8 +2379,8 @@ export class Runner {
     const matchPayload = {
       id: matchId,
       ladderId: ladder.id,
-      p1VersionId: opts.p1VersionId,
-      p2VersionId: opts.p2VersionId,
+      p1VersionId: p1.versionId,
+      p2VersionId: p2.versionId,
       seed: `100,200,300,${this.state.matchSeq}`,
       ...(p1TeamLabel !== undefined ? {p1TeamLabel} : {}),
       ...(p2TeamLabel !== undefined ? {p2TeamLabel} : {}),
@@ -2469,16 +2464,20 @@ export class Runner {
     const at = opts.completedAt ?? this.state.now;
     const res = await this.executeMatchPair({
       ladder: chosenLadder.ladder,
-      p1VersionId: e1.versionId,
-      p1AgentId: e1.agentId,
-      p1Slug: e1.agentSlug,
-      p1Name: e1.agentName,
-      p1Version: e1.version,
-      p2VersionId: e2.versionId,
-      p2AgentId: e2.agentId,
-      p2Slug: e2.agentSlug,
-      p2Name: e2.agentName,
-      p2Version: e2.version,
+      p1: {
+        versionId: e1.versionId,
+        agentId: e1.agentId,
+        slug: e1.agentSlug,
+        name: e1.agentName,
+        version: e1.version,
+      },
+      p2: {
+        versionId: e2.versionId,
+        agentId: e2.agentId,
+        slug: e2.agentSlug,
+        name: e2.agentName,
+        version: e2.version,
+      },
       completedAt: at,
       tieRate: opts.tieRate,
       faultRate: opts.faultRate,
@@ -2543,16 +2542,20 @@ export class Runner {
     const [e1, e2] = bestPair;
     await this.executeMatchPair({
       ladder: chosenLadder,
-      p1VersionId: e1.versionId,
-      p1AgentId: e1.agentId,
-      p1Slug: e1.agentSlug,
-      p1Name: e1.agentName,
-      p1Version: e1.version,
-      p2VersionId: e2.versionId,
-      p2AgentId: e2.agentId,
-      p2Slug: e2.agentSlug,
-      p2Name: e2.agentName,
-      p2Version: e2.version,
+      p1: {
+        versionId: e1.versionId,
+        agentId: e1.agentId,
+        slug: e1.agentSlug,
+        name: e1.agentName,
+        version: e1.version,
+      },
+      p2: {
+        versionId: e2.versionId,
+        agentId: e2.agentId,
+        slug: e2.agentSlug,
+        name: e2.agentName,
+        version: e2.version,
+      },
       completedAt: opts.completedAt,
       tieRate: opts.tieRate,
       faultRate: opts.faultRate,
@@ -2679,16 +2682,20 @@ export class Runner {
       const isLastCheck = step === maxSteps - 1;
       await this.executeMatchPair({
         ladder: chosen.ladder,
-        p1VersionId: u.versionId,
-        p1AgentId: u.agentId,
-        p1Slug: u.agentSlug,
-        p1Name: u.agentName,
-        p1Version: u.version,
-        p2VersionId: bestOpp.versionId,
-        p2AgentId: bestOpp.agentId,
-        p2Slug: bestOpp.agentSlug,
-        p2Name: bestOpp.agentName,
-        p2Version: bestOpp.version,
+        p1: {
+          versionId: u.versionId,
+          agentId: u.agentId,
+          slug: u.agentSlug,
+          name: u.agentName,
+          version: u.version,
+        },
+        p2: {
+          versionId: bestOpp.versionId,
+          agentId: bestOpp.agentId,
+          slug: bestOpp.agentSlug,
+          name: bestOpp.agentName,
+          version: bestOpp.version,
+        },
         completedAt: this.state.now,
         tieRate,
         emitHeartbeats: emitHeartbeats && isLastCheck,
@@ -2743,23 +2750,27 @@ export class Runner {
       this.setNow(stepAt);
       await this.executeMatchPair({
         ladder,
-        p1VersionId: p1.id,
-        p1AgentId: p1.agentId,
-        p1Slug: p1.agentSlug,
-        p1Name: p1.agentName,
-        p1Version: p1.version,
-        p2VersionId: p2.id,
-        p2AgentId: p2.agentId,
-        p2Slug: p2.agentSlug,
-        p2Name: p2.agentName,
-        p2Version: p2.version,
+        p1: {
+          versionId: p1.id,
+          agentId: p1.agentId,
+          slug: p1.agentSlug,
+          name: p1.agentName,
+          version: p1.version,
+          teamSpec: p1TeamSpec,
+        },
+        p2: {
+          versionId: p2.id,
+          agentId: p2.agentId,
+          slug: p2.agentSlug,
+          name: p2.agentName,
+          version: p2.version,
+          teamSpec: p2TeamSpec,
+        },
         completedAt: stepAt,
         tieRate,
         forcedOutcome,
         g1Reason,
         g2Reason,
-        p1TeamSpec,
-        p2TeamSpec,
         emitHeartbeats,
         writeLogs: true,
       });
@@ -3093,10 +3104,8 @@ export class Runner {
         stage: db.TournamentGameStage;
         cycle: number;
         matchupGame: number;
-        p1: typeof entrants[number];
-        p2: typeof entrants[number];
-        p1Team: string;
-        p2Team: string;
+        p1: {entrant: typeof entrants[number]; team: string};
+        p2: {entrant: typeof entrants[number]; team: string};
         baseSeed: string;
         seq: number;
         at: number;
@@ -3104,8 +3113,12 @@ export class Runner {
         shouldEmitLog: boolean;
         table: number;
       }) => {
-        const e1 = getEntrantExpected(opts.p1);
-        const e2 = getEntrantExpected(opts.p2);
+        const p1Ent = opts.p1.entrant;
+        const p2Ent = opts.p2.entrant;
+        const p1Team = opts.p1.team;
+        const p2Team = opts.p2.team;
+        const e1 = getEntrantExpected(p1Ent);
+        const e2 = getEntrantExpected(p2Ent);
         const sampleTurns = (out: ratings.GameOutcome) =>
           out === 'T' ? 100 : (isVgc ? 8 + this.nextInt(9) : 24 + this.nextInt(24));
 
@@ -3159,10 +3172,10 @@ export class Runner {
           }
           outcome = s1 > s2 ? 'W' : s2 > s1 ? 'L' : 'T';
 
-          const baseP1Mean = 220 + ((opts.p1.versionId * 37 + opts.seq * 13) % 380);
-          const baseP2Mean = 240 + ((opts.p2.versionId * 41 + opts.seq * 17) % 380);
-          const baseP1Ram = 1850 + ((opts.p1.versionId * 431 + opts.seq * 97) % 8600);
-          const baseP2Ram = 2100 + ((opts.p2.versionId * 479 + opts.seq * 113) % 8600);
+          const baseP1Mean = 220 + ((p1Ent.versionId * 37 + opts.seq * 13) % 380);
+          const baseP2Mean = 240 + ((p2Ent.versionId * 41 + opts.seq * 17) % 380);
+          const baseP1Ram = 1850 + ((p1Ent.versionId * 431 + opts.seq * 97) % 8600);
+          const baseP2Ram = 2100 + ((p2Ent.versionId * 479 + opts.seq * 113) % 8600);
 
           games = outcomes.map((out, idx) => ({
             gameNumber: idx + 1,
@@ -3185,10 +3198,10 @@ export class Runner {
           if (opts.shouldEmitLog) {
             logs = outcomes.map(out => buildShowdownTournamentLog({
               format: tour.format,
-              p1Name: opts.p1.agentName,
-              p2Name: opts.p2.agentName,
-              p1TeamPacked: opts.p1Team,
-              p2TeamPacked: opts.p2Team,
+              p1Name: p1Ent.agentName,
+              p2Name: p2Ent.agentName,
+              p1TeamPacked: p1Team,
+              p2TeamPacked: p2Team,
               outcome: out,
             }));
           }
@@ -3206,20 +3219,20 @@ export class Runner {
               p1: {
                 bankSeconds: isSf ? 88 : 70 + this.nextInt(50),
                 meanTurnMillis: isSf
-                  ? 250 + ((opts.p1.versionId * 37 + g * 19) % 340)
-                  : 220 + ((opts.p1.versionId * 37 + opts.seq * 13) % 380),
+                  ? 250 + ((p1Ent.versionId * 37 + g * 19) % 340)
+                  : 220 + ((p1Ent.versionId * 37 + opts.seq * 13) % 380),
                 peakRam: isSf
-                  ? 2400 + ((opts.p1.versionId * 431 + g * 107) % 8200)
-                  : 1850 + ((opts.p1.versionId * 431 + opts.seq * 97) % 8600),
+                  ? 2400 + ((p1Ent.versionId * 431 + g * 107) % 8200)
+                  : 1850 + ((p1Ent.versionId * 431 + opts.seq * 97) % 8600),
               },
               p2: {
                 bankSeconds: isSf ? 64 : 60 + this.nextInt(50),
                 meanTurnMillis: isSf
-                  ? 270 + ((opts.p2.versionId * 41 + g * 23) % 340)
-                  : 240 + ((opts.p2.versionId * 41 + opts.seq * 17) % 380),
+                  ? 270 + ((p2Ent.versionId * 41 + g * 23) % 340)
+                  : 240 + ((p2Ent.versionId * 41 + opts.seq * 17) % 380),
                 peakRam: isSf
-                  ? 2600 + ((opts.p2.versionId * 479 + g * 127) % 8200)
-                  : 2100 + ((opts.p2.versionId * 479 + opts.seq * 113) % 8600),
+                  ? 2600 + ((p2Ent.versionId * 479 + g * 127) % 8200)
+                  : 2100 + ((p2Ent.versionId * 479 + opts.seq * 113) % 8600),
               },
             },
           ];
@@ -3227,10 +3240,10 @@ export class Runner {
             logs = [
               buildShowdownTournamentLog({
                 format: tour.format,
-                p1Name: opts.p1.agentName,
-                p2Name: opts.p2.agentName,
-                p1TeamPacked: opts.p1Team,
-                p2TeamPacked: opts.p2Team,
+                p1Name: p1Ent.agentName,
+                p2Name: p2Ent.agentName,
+                p1TeamPacked: p1Team,
+                p2TeamPacked: p2Team,
                 outcome,
               }),
             ];
@@ -3244,8 +3257,8 @@ export class Runner {
           cycle: opts.cycle,
           matchupGame: opts.matchupGame,
           outcome,
-          p1: {versionId: opts.p1.versionId, team: opts.p1Team},
-          p2: {versionId: opts.p2.versionId, team: opts.p2Team},
+          p1: {versionId: p1Ent.versionId, team: p1Team},
+          p2: {versionId: p2Ent.versionId, team: p2Team},
           games,
           completedAt: opts.at,
         };
@@ -3297,10 +3310,8 @@ export class Runner {
           stage: 'Round Robin',
           cycle: item.cycle,
           matchupGame: item.cycle,
-          p1: item.p1,
-          p2: item.p2,
-          p1Team,
-          p2Team,
+          p1: {entrant: item.p1, team: p1Team},
+          p2: {entrant: item.p2, team: p2Team},
           baseSeed: `10,20,${id},${item.seq}`,
           seq: item.seq,
           at,
@@ -3340,10 +3351,8 @@ export class Runner {
               stage: 'Superfinal',
               cycle: 1,
               matchupGame: g,
-              p1,
-              p2,
-              p1Team,
-              p2Team,
+              p1: {entrant: p1, team: p1Team},
+              p2: {entrant: p2, team: p2Team},
               baseSeed: `10,20,30,${998 + g}`,
               seq: 998 + g,
               at: this.state.now,

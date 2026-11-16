@@ -52,6 +52,66 @@ export interface LadderSnapshot {
   roster?: ActiveRosterEntry[];
 }
 
+interface MirrorPlayer {
+  versionId: number;
+  agentId: number;
+  slug: string;
+  name: string;
+  version: string;
+  spec: arbiter.AgentLaunchSpec;
+  teamPacked: string;
+  teamLabel?: string;
+}
+
+interface MirrorGameStats {
+  bankSeconds: number;
+  peakRam: number;
+  meanTurnMillis: number;
+}
+
+interface MirrorGame1Summary {
+  outcome: ratings.GameOutcome;
+  turns: number;
+  endReason: string;
+  p1: MirrorGameStats;
+  p2: MirrorGameStats;
+  log?: string;
+}
+
+interface MirrorMatchContext {
+  id: string;
+  ladderId: string;
+  format: string;
+  teamMode: db.TeamMode;
+  seed: PRNGSeed;
+  startedAt: number;
+  p1: MirrorPlayer;
+  p2: MirrorPlayer;
+}
+
+interface MirrorHeartbeatSide {
+  bankSeconds: number;
+  lastTurnMillis: number;
+  meanTurnMillis: number;
+  ram: number;
+  team?: string;
+}
+
+interface MirrorHeartbeatFrame {
+  game: 1 | 2;
+  turn: number;
+  activeSlot: 'p1' | 'p2';
+  turnStartedAt: number;
+  turnBudgetSeconds: number;
+  incrementSeconds: number;
+  game1Summary?: {winnerSlot?: 'p1' | 'p2'; turns: number};
+  p1: MirrorHeartbeatSide;
+  p2: MirrorHeartbeatSide;
+  lines?: string[];
+  p1Pokemon?: unknown[];
+  p2Pokemon?: unknown[];
+}
+
 export interface Options {
   client: arena.Client;
   stateDb: db.Database;
@@ -316,13 +376,13 @@ export class Coordinator {
       let unpackedBytes: number;
       try {
         if (mode === 'container') {
-          unpackedBytes = packages.pullAndVerifyOciImage(
-            sub.url,
-            targetId,
-            sub.authToken,
-            this.stagingDir,
-            sub.sha256
-          );
+          unpackedBytes = packages.pullAndVerifyOciImage({
+            imageRef: sub.url,
+            agentTargetId: targetId,
+            expectedSha256: sub.sha256,
+            creds: sub.authToken,
+            stagingDir: this.stagingDir,
+          });
         } else {
           unpackedBytes = await packages.downloadAndUnpackBundle({
             url: sub.url,
@@ -813,199 +873,189 @@ export class Coordinator {
     }
   }
 
-  private async runGame2AndFinalize(params: {
-    matchId: string;
-    ladderId: string;
-    format: string;
-    teamMode: db.TeamMode;
-    seed: PRNGSeed;
-    startedAt: number;
-    p1VersionId: number;
-    p1Slug: string;
-    p1Name: string;
-    p1Version: string;
-    p1Spec: arbiter.AgentLaunchSpec;
-    p2VersionId: number;
-    p2Slug: string;
-    p2Name: string;
-    p2Version: string;
-    p2Spec: arbiter.AgentLaunchSpec;
-    t1Packed: string;
-    t2Packed: string;
-    t1Label?: string;
-    t2Label?: string;
-    g1Outcome: ratings.GameOutcome;
-    g1Turns: number;
-    g1EndReason: string;
-    g1P1BankSeconds: number;
-    g1P2BankSeconds: number;
-    g1P1PeakRam: number;
-    g1P2PeakRam: number;
-    g1P1MeanTurnMillis: number;
-    g1P2MeanTurnMillis: number;
-    g1Log?: string;
-  }): Promise<{archivedLadder: boolean; aborted: boolean}> {
-    const g1WinnerSlot = params.g1Outcome === 'W'
+  private async sendMatchHeartbeat(
+    match: MirrorMatchContext,
+    frame: MirrorHeartbeatFrame
+  ): Promise<void> {
+    this.heartbeatSeq++;
+    await this.client.sendHeartbeat({
+      heartbeatSeq: this.heartbeatSeq,
+      matchId: match.id,
+      ladderId: match.ladderId,
+      format: match.format,
+      game: frame.game,
+      turn: frame.turn,
+      activeSlot: frame.activeSlot,
+      turnStartedAt: frame.turnStartedAt,
+      turnBudgetSeconds: frame.turnBudgetSeconds,
+      incrementSeconds: frame.incrementSeconds,
+      ...(frame.game1Summary ? {game1Summary: frame.game1Summary} : {}),
+      p1: {
+        slug: match.p1.slug,
+        name: match.p1.name,
+        version: match.p1.version,
+        bankSeconds: frame.p1.bankSeconds,
+        lastTurnMillis: frame.p1.lastTurnMillis,
+        meanTurnMillis: frame.p1.meanTurnMillis,
+        ram: frame.p1.ram,
+        ...(frame.p1.team ? {team: frame.p1.team} : {}),
+      },
+      p2: {
+        slug: match.p2.slug,
+        name: match.p2.name,
+        version: match.p2.version,
+        bankSeconds: frame.p2.bankSeconds,
+        lastTurnMillis: frame.p2.lastTurnMillis,
+        meanTurnMillis: frame.p2.meanTurnMillis,
+        ram: frame.p2.ram,
+        ...(frame.p2.team ? {team: frame.p2.team} : {}),
+      },
+      ...(frame.lines
+        ? {
+          lines: frame.lines,
+          ...(frame.p1Pokemon ? {p1Pokemon: frame.p1Pokemon} : {}),
+          ...(frame.p2Pokemon ? {p2Pokemon: frame.p2Pokemon} : {}),
+        }
+        : {}),
+    }).catch(() => undefined);
+  }
+
+  private async runGame2AndFinalize(
+    match: MirrorMatchContext,
+    game1: MirrorGame1Summary
+  ): Promise<{archivedLadder: boolean; aborted: boolean}> {
+    const g1WinnerSlot = game1.outcome === 'W'
       ? ('p1' as const)
-      : params.g1Outcome === 'L'
+      : game1.outcome === 'L'
         ? ('p2' as const)
         : undefined;
+    const game1Summary = {
+      ...(g1WinnerSlot ? {winnerSlot: g1WinnerSlot} : {}),
+      turns: game1.turns,
+    };
 
     // Game 2 swaps sides and teams: P2 sits in slot p1 with T1, P1 sits in slot p2 with T2
     const g2Game = new arbiter.TimeSlicedArenaGame({
-      format: params.format,
-      seed: params.seed,
-      p1Spec: params.p2Spec,
-      p2Spec: params.p1Spec,
-      p1TeamPacked: params.t1Packed,
-      p2TeamPacked: params.t2Packed,
+      format: match.format,
+      seed: match.seed,
+      p1Spec: match.p2.spec,
+      p2Spec: match.p1.spec,
+      p1TeamPacked: match.p1.teamPacked,
+      p2TeamPacked: match.p2.teamPacked,
       maxTurns: this.maxTurns,
       devMode: this.devMode,
-      includeSpectatorState: params.teamMode === 'random',
+      includeSpectatorState: match.teamMode === 'random',
       onTurn: async info => {
-        this.heartbeatSeq++;
-        const lines = params.teamMode === 'random'
-          ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, params.p2Name, params.p1Name)
+        const lines = match.teamMode === 'random'
+          ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, match.p2.name, match.p1.name)
             .split('\n')
           : undefined;
-        await this.client.sendHeartbeat({
-          heartbeatSeq: this.heartbeatSeq,
-          matchId: params.matchId,
-          ladderId: params.ladderId,
-          format: params.format,
+        await this.sendMatchHeartbeat(match, {
           game: 2,
           turn: info.turn,
           activeSlot: info.activeSlot === 'p1' ? 'p2' : 'p1',
           turnStartedAt: info.turnStartedAt,
           turnBudgetSeconds: info.turnBudgetSeconds,
           incrementSeconds: info.incrementSeconds,
-          game1Summary: {
-            ...(g1WinnerSlot ? {winnerSlot: g1WinnerSlot} : {}),
-            turns: params.g1Turns,
-          },
+          game1Summary,
           p1: {
-            slug: params.p1Slug,
-            name: params.p1Name,
-            version: params.p1Version,
             bankSeconds: info.p2BankSeconds,
             lastTurnMillis: info.p2LastTurnMillis,
             meanTurnMillis: info.p2MeanTurnMillis,
-            ram: Math.max(params.g1P1PeakRam, info.p2Ram),
-            ...(params.t2Label ? {team: params.t2Label} : {}),
+            ram: Math.max(game1.p1.peakRam, info.p2Ram),
+            team: match.p2.teamLabel,
           },
           p2: {
-            slug: params.p2Slug,
-            name: params.p2Name,
-            version: params.p2Version,
             bankSeconds: info.p1BankSeconds,
             lastTurnMillis: info.p1LastTurnMillis,
             meanTurnMillis: info.p1MeanTurnMillis,
-            ram: Math.max(params.g1P2PeakRam, info.p1Ram),
-            ...(params.t1Label ? {team: params.t1Label} : {}),
+            ram: Math.max(game1.p2.peakRam, info.p1Ram),
+            team: match.p1.teamLabel,
           },
-          ...(lines
-            ? {
-              lines,
-              ...(info.p1Pokemon ? {p1Pokemon: info.p1Pokemon} : {}),
-              ...(info.p2Pokemon ? {p2Pokemon: info.p2Pokemon} : {}),
-            }
-            : {}),
-        }).catch(() => undefined);
+          lines,
+          p1Pokemon: info.p1Pokemon,
+          p2Pokemon: info.p2Pokemon,
+        });
       },
     });
     const g2Res = await g2Game.run();
     if (INFRA_VOID_REASONS.has(g2Res.endReason)) {
-      this.stateDb.markMatchCheckpointStatus(params.matchId, 'aborted');
+      this.stateDb.markMatchCheckpointStatus(match.id, 'aborted');
       return {archivedLadder: false, aborted: true};
     }
 
     const g2OutcomeForP1: ratings.GameOutcome =
       g2Res.winner === 'p2' ? 'W' : g2Res.winner === 'p1' ? 'L' : 'T';
-    const category: ratings.MatchCategory = `${params.g1Outcome}${g2OutcomeForP1}`;
+    const category: ratings.MatchCategory = `${game1.outcome}${g2OutcomeForP1}`;
     const completedAt = Math.floor(Date.now() / 1000);
     const g2Log = arbiter.rewriteBlindPlayerNames(
       g2Res.omniscientLog,
-      params.p2Name,
-      params.p1Name
+      match.p2.name,
+      match.p1.name
     );
-    this.writeArchivedGameLog(params.ladderId, params.matchId, 'b', g2Log, params.startedAt);
+    this.writeArchivedGameLog(match.ladderId, match.id, 'b', g2Log, match.startedAt);
 
-    if (params.teamMode === 'random') {
-      this.heartbeatSeq++;
-      await this.client.sendHeartbeat({
-        heartbeatSeq: this.heartbeatSeq,
-        matchId: params.matchId,
-        ladderId: params.ladderId,
-        format: params.format,
+    if (match.teamMode === 'random') {
+      await this.sendMatchHeartbeat(match, {
         game: 2,
         turn: g2Res.turns,
         activeSlot: 'p1',
         turnStartedAt: completedAt,
         turnBudgetSeconds: arena.MAX_TURN_SECONDS,
-        incrementSeconds: arena.turnIncrementSeconds(params.format),
-        game1Summary: {
-          ...(g1WinnerSlot ? {winnerSlot: g1WinnerSlot} : {}),
-          turns: params.g1Turns,
-        },
+        incrementSeconds: arena.turnIncrementSeconds(match.format),
+        game1Summary,
         p1: {
-          slug: params.p1Slug,
-          name: params.p1Name,
-          version: params.p1Version,
           bankSeconds: g2Res.p2BankSeconds,
           lastTurnMillis: g2Res.p2LastTurnMillis,
           meanTurnMillis: g2Res.p2MeanTurnMillis,
-          ram: Math.max(params.g1P1PeakRam, g2Res.p2PeakRam),
-          ...(params.t2Label ? {team: params.t2Label} : {}),
+          ram: Math.max(game1.p1.peakRam, g2Res.p2PeakRam),
+          team: match.p2.teamLabel,
         },
         p2: {
-          slug: params.p2Slug,
-          name: params.p2Name,
-          version: params.p2Version,
           bankSeconds: g2Res.p1BankSeconds,
           lastTurnMillis: g2Res.p1LastTurnMillis,
           meanTurnMillis: g2Res.p1MeanTurnMillis,
-          ram: Math.max(params.g1P2PeakRam, g2Res.p1PeakRam),
-          ...(params.t1Label ? {team: params.t1Label} : {}),
+          ram: Math.max(game1.p2.peakRam, g2Res.p1PeakRam),
+          team: match.p1.teamLabel,
         },
         lines: g2Log.split('\n'),
-        ...(g2Res.p1Pokemon ? {p1Pokemon: g2Res.p1Pokemon} : {}),
-        ...(g2Res.p2Pokemon ? {p2Pokemon: g2Res.p2Pokemon} : {}),
-      }).catch(() => undefined);
+        p1Pokemon: g2Res.p1Pokemon,
+        p2Pokemon: g2Res.p2Pokemon,
+      });
     }
 
-    const g1Log = params.teamMode === 'random'
-      ? (params.g1Log ??
-        this.readArchivedGameLog(params.ladderId, params.matchId, 'a', params.startedAt))
+    const g1Log = match.teamMode === 'random'
+      ? (game1.log ?? this.readArchivedGameLog(match.ladderId, match.id, 'a', match.startedAt))
       : undefined;
 
-    const p1Game1PeakRam = params.g1P1PeakRam;
+    const p1Game1PeakRam = game1.p1.peakRam;
     const p1Game2PeakRam = g2Res.p2PeakRam;
-    const p2Game1PeakRam = params.g1P2PeakRam;
+    const p2Game1PeakRam = game1.p2.peakRam;
     const p2Game2PeakRam = g2Res.p1PeakRam;
     const p1PeakRam = Math.max(p1Game1PeakRam, p1Game2PeakRam);
     const p2PeakRam = Math.max(p2Game1PeakRam, p2Game2PeakRam);
-    const p1Game1MeanTurnMillis = Math.round(params.g1P1MeanTurnMillis);
+    const p1Game1MeanTurnMillis = Math.round(game1.p1.meanTurnMillis);
     const p1Game2MeanTurnMillis = Math.round(g2Res.p2MeanTurnMillis);
-    const p2Game1MeanTurnMillis = Math.round(params.g1P2MeanTurnMillis);
+    const p2Game1MeanTurnMillis = Math.round(game1.p2.meanTurnMillis);
     const p2Game2MeanTurnMillis = Math.round(g2Res.p1MeanTurnMillis);
     const p1MeanTurnMillis = Math.round((p1Game1MeanTurnMillis + p1Game2MeanTurnMillis) / 2);
     const p2MeanTurnMillis = Math.round((p2Game1MeanTurnMillis + p2Game2MeanTurnMillis) / 2);
 
     const payload: arena.MatchCompletePayload = {
       match: {
-        id: params.matchId,
-        ladderId: params.ladderId,
-        p1VersionId: params.p1VersionId,
-        p2VersionId: params.p2VersionId,
-        seed: params.seed,
-        ...(params.t1Label ? {p1TeamLabel: params.t1Label} : {}),
-        ...(params.t2Label ? {p2TeamLabel: params.t2Label} : {}),
-        game1Outcome: params.g1Outcome,
+        id: match.id,
+        ladderId: match.ladderId,
+        p1VersionId: match.p1.versionId,
+        p2VersionId: match.p2.versionId,
+        seed: String(match.seed),
+        ...(match.p1.teamLabel ? {p1TeamLabel: match.p1.teamLabel} : {}),
+        ...(match.p2.teamLabel ? {p2TeamLabel: match.p2.teamLabel} : {}),
+        game1Outcome: game1.outcome,
         game2Outcome: g2OutcomeForP1,
         category,
-        game1Turns: params.g1Turns,
+        game1Turns: game1.turns,
         game2Turns: g2Res.turns,
-        game1EndReason: params.g1EndReason,
+        game1EndReason: game1.endReason,
         game2EndReason: g2Res.endReason,
         p1PeakRam,
         p2PeakRam,
@@ -1013,9 +1063,9 @@ export class Coordinator {
         p1Game2PeakRam,
         p2Game1PeakRam,
         p2Game2PeakRam,
-        p1Game1BankSeconds: params.g1P1BankSeconds,
+        p1Game1BankSeconds: game1.p1.bankSeconds,
         p1Game2BankSeconds: g2Res.p2BankSeconds,
-        p2Game1BankSeconds: params.g1P2BankSeconds,
+        p2Game1BankSeconds: game1.p2.bankSeconds,
         p2Game2BankSeconds: g2Res.p1BankSeconds,
         p1MeanTurnMillis,
         p2MeanTurnMillis,
@@ -1025,7 +1075,7 @@ export class Coordinator {
         p2Game2MeanTurnMillis,
         completedAt,
       },
-      ...(params.teamMode === 'random'
+      ...(match.teamMode === 'random'
         ? {
           ...(g1Log !== undefined ? {game1Log: g1Log} : {}),
           game2Log: g2Log,
@@ -1036,37 +1086,37 @@ export class Coordinator {
     const {archivedLadder} = await this.completeMatchOrOutbox(payload);
     // Mark checkpoint complete BEFORE archive compression/upload so an archive hiccup never
     // replays Game 2 on restart.
-    this.stateDb.markMatchCheckpointStatus(params.matchId, 'complete', completedAt);
+    this.stateDb.markMatchCheckpointStatus(match.id, 'complete', completedAt);
 
     if (archivedLadder) {
-      await this.publishLadderArchive(params.ladderId);
-    } else if (params.teamMode === 'random') {
-      await this.maybePublishDailyRandomArchive(params.ladderId, completedAt);
+      await this.publishLadderArchive(match.ladderId);
+    } else if (match.teamMode === 'random') {
+      await this.maybePublishDailyRandomArchive(match.ladderId, completedAt);
     }
 
-    const g1Fault = FAULT_REASONS.has(params.g1EndReason);
-    const p1FaultG1 = g1Fault && params.g1Outcome === 'L';
-    const p2FaultG1 = g1Fault && params.g1Outcome === 'W';
+    const g1Fault = FAULT_REASONS.has(game1.endReason);
+    const p1FaultG1 = g1Fault && game1.outcome === 'L';
+    const p2FaultG1 = g1Fault && game1.outcome === 'W';
     const p1FaultG2 = isPlayerFault(g2Res, 'p2');
     const p2FaultG2 = isPlayerFault(g2Res, 'p1');
 
-    this.recordLadderGameFault(params.ladderId, params.p1VersionId, p1FaultG1, completedAt);
-    this.recordLadderGameFault(params.ladderId, params.p1VersionId, p1FaultG2, completedAt);
-    this.recordLadderGameFault(params.ladderId, params.p2VersionId, p2FaultG1, completedAt);
-    this.recordLadderGameFault(params.ladderId, params.p2VersionId, p2FaultG2, completedAt);
+    this.recordLadderGameFault(match.ladderId, match.p1.versionId, p1FaultG1, completedAt);
+    this.recordLadderGameFault(match.ladderId, match.p1.versionId, p1FaultG2, completedAt);
+    this.recordLadderGameFault(match.ladderId, match.p2.versionId, p2FaultG1, completedAt);
+    this.recordLadderGameFault(match.ladderId, match.p2.versionId, p2FaultG2, completedAt);
 
     if (p1FaultG1 || p1FaultG2) {
       await this.checkAndQuarantineIfFaulty(
-        params.ladderId,
-        params.p1VersionId,
-        p1FaultG2 ? g2Res.endReason : params.g1EndReason
+        match.ladderId,
+        match.p1.versionId,
+        p1FaultG2 ? g2Res.endReason : game1.endReason
       );
     }
     if (p2FaultG1 || p2FaultG2) {
       await this.checkAndQuarantineIfFaulty(
-        params.ladderId,
-        params.p2VersionId,
-        p2FaultG2 ? g2Res.endReason : params.g1EndReason
+        match.ladderId,
+        match.p2.versionId,
+        p2FaultG2 ? g2Res.endReason : game1.endReason
       );
     }
 
@@ -1076,12 +1126,12 @@ export class Coordinator {
   private async resumeAndCompleteGame2(
     cp: db.LocalMatchCheckpoint
   ): Promise<'resumed' | 'aborted'> {
-    packages.ensureAgentResident(this.stateDb, cp.p1VersionId, {
+    packages.ensureAgentResident(this.stateDb, cp.p1.versionId, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
       casDir: this.casDir,
     });
-    packages.ensureAgentResident(this.stateDb, cp.p2VersionId, {
+    packages.ensureAgentResident(this.stateDb, cp.p2.versionId, {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
       casDir: this.casDir,
@@ -1090,48 +1140,58 @@ export class Coordinator {
       agentsDir: this.agentsDir,
       coldDir: this.coldDir,
       casDir: this.casDir,
-      pinnedVersionIds: new Set([cp.p1VersionId, cp.p2VersionId]),
+      pinnedVersionIds: new Set([cp.p1.versionId, cp.p2.versionId]),
     });
 
-    const p1Spec = this.resolveLaunchSpec(cp.p1Mode, cp.p1Target);
-    const p2Spec = this.resolveLaunchSpec(cp.p2Mode, cp.p2Target);
-    const seed = parsePrngSeed(cp.seed);
-    const g1Outcome = cp.g1Outcome ?? 'T';
-    if (INFRA_VOID_REASONS.has(cp.g1EndReason ?? '')) {
+    const g1 = cp.g1;
+    if (!g1 || INFRA_VOID_REASONS.has(g1.endReason)) {
       this.stateDb.markMatchCheckpointStatus(cp.id, 'aborted');
       return 'aborted';
     }
 
-    const {aborted} = await this.runGame2AndFinalize({
-      matchId: cp.id,
+    const match: MirrorMatchContext = {
+      id: cp.id,
       ladderId: cp.ladderId,
       format: cp.format,
       teamMode: cp.teamMode,
-      seed,
+      seed: parsePrngSeed(cp.seed),
       startedAt: cp.startedAt || Math.floor(Date.now() / 1000),
-      p1VersionId: cp.p1VersionId,
-      p1Slug: cp.p1Slug,
-      p1Name: cp.p1Name,
-      p1Version: cp.p1Version,
-      p1Spec,
-      p2VersionId: cp.p2VersionId,
-      p2Slug: cp.p2Slug,
-      p2Name: cp.p2Name,
-      p2Version: cp.p2Version,
-      p2Spec,
-      t1Packed: cp.p1TeamPacked,
-      t2Packed: cp.p2TeamPacked,
-      t1Label: cp.p1TeamLabel,
-      t2Label: cp.p2TeamLabel,
-      g1Outcome,
-      g1Turns: cp.g1Turns ?? 1,
-      g1EndReason: cp.g1EndReason ?? 'win',
-      g1P1BankSeconds: cp.g1P1BankSeconds ?? 0,
-      g1P2BankSeconds: cp.g1P2BankSeconds ?? 0,
-      g1P1PeakRam: cp.g1P1Ram ?? 64,
-      g1P2PeakRam: cp.g1P2Ram ?? 64,
-      g1P1MeanTurnMillis: cp.g1P1TurnMillis ?? 0,
-      g1P2MeanTurnMillis: cp.g1P2TurnMillis ?? 0,
+      p1: {
+        versionId: cp.p1.versionId,
+        agentId: cp.p1.agentId,
+        slug: cp.p1.slug,
+        name: cp.p1.name,
+        version: cp.p1.version,
+        spec: this.resolveLaunchSpec(cp.p1.mode, cp.p1.target),
+        teamPacked: cp.p1.teamPacked,
+        teamLabel: cp.p1.teamLabel,
+      },
+      p2: {
+        versionId: cp.p2.versionId,
+        agentId: cp.p2.agentId,
+        slug: cp.p2.slug,
+        name: cp.p2.name,
+        version: cp.p2.version,
+        spec: this.resolveLaunchSpec(cp.p2.mode, cp.p2.target),
+        teamPacked: cp.p2.teamPacked,
+        teamLabel: cp.p2.teamLabel,
+      },
+    };
+
+    const {aborted} = await this.runGame2AndFinalize(match, {
+      outcome: g1.outcome,
+      turns: g1.turns,
+      endReason: g1.endReason,
+      p1: {
+        bankSeconds: g1.p1.bankSeconds,
+        peakRam: g1.p1.ram,
+        meanTurnMillis: g1.p1.turnMillis,
+      },
+      p2: {
+        bankSeconds: g1.p2.bankSeconds,
+        peakRam: g1.p2.ram,
+        meanTurnMillis: g1.p2.turnMillis,
+      },
     });
     return aborted ? 'aborted' : 'resumed';
   }
@@ -1262,35 +1322,68 @@ export class Coordinator {
     const seedStr = this.randomPrngSeed();
     const sampled = await this.sampleMatchTeams(ladder, e1.agentId, e2.agentId);
 
+    const p1Spec = this.resolveLaunchSpec(a1.mode, a1.target);
+    const p2Spec = this.resolveLaunchSpec(a2.mode, a2.target);
+    const match: MirrorMatchContext = {
+      id: matchId,
+      ladderId: ladder.id,
+      format: ladder.format,
+      teamMode: ladder.team,
+      seed: seedStr,
+      startedAt: now,
+      p1: {
+        versionId: e1.versionId,
+        agentId: e1.agentId,
+        slug: e1.agentSlug,
+        name: e1.agentName,
+        version: e1.version,
+        spec: p1Spec,
+        teamPacked: sampled.t1,
+        teamLabel: sampled.t1Label,
+      },
+      p2: {
+        versionId: e2.versionId,
+        agentId: e2.agentId,
+        slug: e2.agentSlug,
+        name: e2.agentName,
+        version: e2.version,
+        spec: p2Spec,
+        teamPacked: sampled.t2,
+        teamLabel: sampled.t2Label,
+      },
+    };
+
     this.stateDb.createMatchCheckpoint({
       id: matchId,
       ladderId: ladder.id,
       format: ladder.format,
       teamMode: ladder.team,
-      p1VersionId: e1.versionId,
-      p1AgentId: e1.agentId,
-      p1Slug: e1.agentSlug,
-      p1Name: e1.agentName,
-      p1Version: e1.version,
-      p1Mode: a1.mode,
-      p1Target: a1.target,
-      p2VersionId: e2.versionId,
-      p2AgentId: e2.agentId,
-      p2Slug: e2.agentSlug,
-      p2Name: e2.agentName,
-      p2Version: e2.version,
-      p2Mode: a2.mode,
-      p2Target: a2.target,
       seed: seedStr,
-      p1TeamPacked: sampled.t1,
-      p2TeamPacked: sampled.t2,
-      p1TeamLabel: sampled.t1Label,
-      p2TeamLabel: sampled.t2Label,
+      p1: {
+        versionId: e1.versionId,
+        agentId: e1.agentId,
+        slug: e1.agentSlug,
+        name: e1.agentName,
+        version: e1.version,
+        mode: a1.mode,
+        target: a1.target,
+        teamPacked: sampled.t1,
+        teamLabel: sampled.t1Label,
+      },
+      p2: {
+        versionId: e2.versionId,
+        agentId: e2.agentId,
+        slug: e2.agentSlug,
+        name: e2.agentName,
+        version: e2.version,
+        mode: a2.mode,
+        target: a2.target,
+        teamPacked: sampled.t2,
+        teamLabel: sampled.t2Label,
+      },
       startedAt: now,
     });
 
-    const p1Spec = this.resolveLaunchSpec(a1.mode, a1.target);
-    const p2Spec = this.resolveLaunchSpec(a2.mode, a2.target);
     let g1Checkpointed = false;
 
     try {
@@ -1306,16 +1399,11 @@ export class Coordinator {
         devMode: this.devMode,
         includeSpectatorState: ladder.team === 'random',
         onTurn: async info => {
-          this.heartbeatSeq++;
           const lines = ladder.team === 'random'
             ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, e1.agentName, e2.agentName)
               .split('\n')
             : undefined;
-          await this.client.sendHeartbeat({
-            heartbeatSeq: this.heartbeatSeq,
-            matchId,
-            ladderId: ladder.id,
-            format: ladder.format,
+          await this.sendMatchHeartbeat(match, {
             game: 1,
             turn: info.turn,
             activeSlot: info.activeSlot,
@@ -1323,33 +1411,23 @@ export class Coordinator {
             turnBudgetSeconds: info.turnBudgetSeconds,
             incrementSeconds: info.incrementSeconds,
             p1: {
-              slug: e1.agentSlug,
-              name: e1.agentName,
-              version: e1.version,
               bankSeconds: info.p1BankSeconds,
               lastTurnMillis: info.p1LastTurnMillis,
               meanTurnMillis: info.p1MeanTurnMillis,
               ram: info.p1Ram,
-              ...(sampled.t1Label ? {team: sampled.t1Label} : {}),
+              team: sampled.t1Label,
             },
             p2: {
-              slug: e2.agentSlug,
-              name: e2.agentName,
-              version: e2.version,
               bankSeconds: info.p2BankSeconds,
               lastTurnMillis: info.p2LastTurnMillis,
               meanTurnMillis: info.p2MeanTurnMillis,
               ram: info.p2Ram,
-              ...(sampled.t2Label ? {team: sampled.t2Label} : {}),
+              team: sampled.t2Label,
             },
-            ...(lines
-              ? {
-                lines,
-                ...(info.p1Pokemon ? {p1Pokemon: info.p1Pokemon} : {}),
-                ...(info.p2Pokemon ? {p2Pokemon: info.p2Pokemon} : {}),
-              }
-              : {}),
-          }).catch(() => undefined);
+            lines,
+            p1Pokemon: info.p1Pokemon,
+            p2Pokemon: info.p2Pokemon,
+          });
         },
       });
       const g1Res = await g1Game.run();
@@ -1365,12 +1443,7 @@ export class Coordinator {
       );
       this.writeArchivedGameLog(ladder.id, matchId, 'a', g1Log, now);
       if (ladder.team === 'random') {
-        this.heartbeatSeq++;
-        await this.client.sendHeartbeat({
-          heartbeatSeq: this.heartbeatSeq,
-          matchId,
-          ladderId: ladder.id,
-          format: ladder.format,
+        await this.sendMatchHeartbeat(match, {
           game: 1,
           turn: g1Res.turns,
           activeSlot: 'p1',
@@ -1378,29 +1451,23 @@ export class Coordinator {
           turnBudgetSeconds: arena.MAX_TURN_SECONDS,
           incrementSeconds: arena.turnIncrementSeconds(ladder.format),
           p1: {
-            slug: e1.agentSlug,
-            name: e1.agentName,
-            version: e1.version,
             bankSeconds: g1Res.p1BankSeconds,
             lastTurnMillis: g1Res.p1LastTurnMillis,
             meanTurnMillis: g1Res.p1MeanTurnMillis,
             ram: g1Res.p1PeakRam,
-            ...(sampled.t1Label ? {team: sampled.t1Label} : {}),
+            team: sampled.t1Label,
           },
           p2: {
-            slug: e2.agentSlug,
-            name: e2.agentName,
-            version: e2.version,
             bankSeconds: g1Res.p2BankSeconds,
             lastTurnMillis: g1Res.p2LastTurnMillis,
             meanTurnMillis: g1Res.p2MeanTurnMillis,
             ram: g1Res.p2PeakRam,
-            ...(sampled.t2Label ? {team: sampled.t2Label} : {}),
+            team: sampled.t2Label,
           },
           lines: g1Log.split('\n'),
-          ...(g1Res.p1Pokemon ? {p1Pokemon: g1Res.p1Pokemon} : {}),
-          ...(g1Res.p2Pokemon ? {p2Pokemon: g1Res.p2Pokemon} : {}),
-        }).catch(() => undefined);
+          p1Pokemon: g1Res.p1Pokemon,
+          p2Pokemon: g1Res.p2Pokemon,
+        });
       }
 
       this.stateDb.checkpointGame1Complete({
@@ -1408,46 +1475,34 @@ export class Coordinator {
         outcome: g1Res.outcome,
         turns: g1Res.turns,
         endReason: g1Res.endReason,
-        p1BankSeconds: g1Res.p1BankSeconds,
-        p2BankSeconds: g1Res.p2BankSeconds,
-        p1Ram: g1Res.p1PeakRam,
-        p2Ram: g1Res.p2PeakRam,
-        p1TurnMillis: g1Res.p1MeanTurnMillis,
-        p2TurnMillis: g1Res.p2MeanTurnMillis,
+        p1: {
+          bankSeconds: g1Res.p1BankSeconds,
+          ram: g1Res.p1PeakRam,
+          turnMillis: g1Res.p1MeanTurnMillis,
+        },
+        p2: {
+          bankSeconds: g1Res.p2BankSeconds,
+          ram: g1Res.p2PeakRam,
+          turnMillis: g1Res.p2MeanTurnMillis,
+        },
       });
       g1Checkpointed = true;
 
-      const {archivedLadder} = await this.runGame2AndFinalize({
-        matchId,
-        ladderId: ladder.id,
-        format: ladder.format,
-        teamMode: ladder.team,
-        seed: seedStr,
-        startedAt: now,
-        p1VersionId: e1.versionId,
-        p1Slug: e1.agentSlug,
-        p1Name: e1.agentName,
-        p1Version: e1.version,
-        p1Spec,
-        p2VersionId: e2.versionId,
-        p2Slug: e2.agentSlug,
-        p2Name: e2.agentName,
-        p2Version: e2.version,
-        p2Spec,
-        t1Packed: sampled.t1,
-        t2Packed: sampled.t2,
-        t1Label: sampled.t1Label,
-        t2Label: sampled.t2Label,
-        g1Outcome: g1Res.outcome,
-        g1Turns: g1Res.turns,
-        g1EndReason: g1Res.endReason,
-        g1P1BankSeconds: g1Res.p1BankSeconds,
-        g1P2BankSeconds: g1Res.p2BankSeconds,
-        g1P1PeakRam: g1Res.p1PeakRam,
-        g1P2PeakRam: g1Res.p2PeakRam,
-        g1P1MeanTurnMillis: g1Res.p1MeanTurnMillis,
-        g1P2MeanTurnMillis: g1Res.p2MeanTurnMillis,
-        g1Log,
+      const {archivedLadder} = await this.runGame2AndFinalize(match, {
+        outcome: g1Res.outcome,
+        turns: g1Res.turns,
+        endReason: g1Res.endReason,
+        p1: {
+          bankSeconds: g1Res.p1BankSeconds,
+          peakRam: g1Res.p1PeakRam,
+          meanTurnMillis: g1Res.p1MeanTurnMillis,
+        },
+        p2: {
+          bankSeconds: g1Res.p2BankSeconds,
+          peakRam: g1Res.p2PeakRam,
+          meanTurnMillis: g1Res.p2MeanTurnMillis,
+        },
+        log: g1Log,
       });
       return {matchId, ladderId: ladder.id, archivedLadder};
     } catch (err) {

@@ -244,14 +244,24 @@ export function verifyOciManifestDigest(
   };
 }
 
-export function inspectRemoteOciSize(
-  imageRef: string,
-  creds?: string,
-  expectedSha256?: string,
-  platform: {os: string; arch: string} = {os: 'linux', arch: 'arm64'},
-  stagingDir = STAGING_DIR,
-  allowPrivateUrls = false
-): OciManifestInspection {
+export interface InspectOciOptions {
+  imageRef: string;
+  creds?: string;
+  expectedSha256?: string;
+  platform?: {os: string; arch: string};
+  stagingDir?: string;
+  allowPrivateUrls?: boolean;
+}
+
+export function inspectRemoteOciSize(opts: InspectOciOptions): OciManifestInspection {
+  const {
+    imageRef,
+    creds,
+    expectedSha256,
+    platform = {os: 'linux', arch: 'arm64'},
+    stagingDir = STAGING_DIR,
+    allowPrivateUrls = false,
+  } = opts;
   const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
   validateOciRegistryRef(cleanRef, allowPrivateUrls);
   const repoRef = stripOciTagOrDigest(cleanRef);
@@ -311,14 +321,24 @@ export function inspectRemoteOciSize(
   }
 }
 
-export function pullAndVerifyOciImage(
-  imageRef: string,
-  agentTargetId: string,
-  creds: string | undefined,
-  stagingDir = STAGING_DIR,
-  expectedSha256: string,
-  allowPrivateUrls = false
-): number {
+export interface PullOciOptions {
+  imageRef: string;
+  agentTargetId: string;
+  expectedSha256: string;
+  creds?: string;
+  stagingDir?: string;
+  allowPrivateUrls?: boolean;
+}
+
+export function pullAndVerifyOciImage(opts: PullOciOptions): number {
+  const {
+    imageRef,
+    agentTargetId,
+    expectedSha256,
+    creds,
+    stagingDir = STAGING_DIR,
+    allowPrivateUrls = false,
+  } = opts;
   if (!TARGET_ID_RE.test(agentTargetId) || agentTargetId.includes('..')) {
     throw new Error(`Invalid OCI agent target ID: ${agentTargetId}`);
   }
@@ -328,14 +348,14 @@ export function pullAndVerifyOciImage(
   const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
   validateOciRegistryRef(cleanRef, allowPrivateUrls);
   const repoRef = stripOciTagOrDigest(cleanRef);
-  const inspected = inspectRemoteOciSize(
-    cleanRef,
+  const inspected = inspectRemoteOciSize({
+    imageRef: cleanRef,
     creds,
     expectedSha256,
-    {os: 'linux', arch: 'arm64'},
+    platform: {os: 'linux', arch: 'arm64'},
     stagingDir,
-    allowPrivateUrls
-  );
+    allowPrivateUrls,
+  });
 
   fs.mkdirSync(stagingDir, {recursive: true});
   const stagingTar = path.join(stagingDir, `oci-${agentTargetId}.tar`);

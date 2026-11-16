@@ -2350,23 +2350,27 @@ describe('arena infrastructure', () => {
           ladderId: 'gen9customgame',
           format: 'gen9customgame',
           teamMode: 'harvested',
-          p1VersionId: 30,
-          p1AgentId: 1,
-          p1Slug: 'foul-play',
-          p1Name: 'Foul Play',
-          p1Version: '3.0.0',
-          p1Mode: 'native',
-          p1Target: v30Local.target,
-          p2VersionId: 25,
-          p2AgentId: 2,
-          p2Slug: 'pokechamp',
-          p2Name: 'PokeChamp',
-          p2Version: '1.0.0',
-          p2Mode: 'native',
-          p2Target: v30Local.target,
           seed: '1,2,3,4',
-          p1TeamPacked: TEAM_ONE,
-          p2TeamPacked: TEAM_TWO,
+          p1: {
+            versionId: 30,
+            agentId: 1,
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '3.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_ONE,
+          },
+          p2: {
+            versionId: 25,
+            agentId: 2,
+            slug: 'pokechamp',
+            name: 'PokeChamp',
+            version: '1.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_TWO,
+          },
           startedAt: 1000,
         });
 
@@ -2375,23 +2379,27 @@ describe('arena infrastructure', () => {
           ladderId: 'gen9customgame',
           format: 'gen9customgame',
           teamMode: 'harvested',
-          p1VersionId: 30,
-          p1AgentId: 1,
-          p1Slug: 'foul-play',
-          p1Name: 'Foul Play',
-          p1Version: '3.0.0',
-          p1Mode: 'native',
-          p1Target: v30Local.target,
-          p2VersionId: 25,
-          p2AgentId: 2,
-          p2Slug: 'pokechamp',
-          p2Name: 'PokeChamp',
-          p2Version: '1.0.0',
-          p2Mode: 'native',
-          p2Target: v30Local.target,
           seed: '1,2,3,4',
-          p1TeamPacked: TEAM_ONE,
-          p2TeamPacked: TEAM_TWO,
+          p1: {
+            versionId: 30,
+            agentId: 1,
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '3.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_ONE,
+          },
+          p2: {
+            versionId: 25,
+            agentId: 2,
+            slug: 'pokechamp',
+            name: 'PokeChamp',
+            version: '1.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_TWO,
+          },
           startedAt: 1001,
         });
         h.stateDb.checkpointGame1Complete({
@@ -2399,12 +2407,8 @@ describe('arena infrastructure', () => {
           outcome: 'W',
           turns: 2,
           endReason: 'win',
-          p1BankSeconds: 140,
-          p2BankSeconds: 138,
-          p1Ram: 64,
-          p2Ram: 64,
-          p1TurnMillis: 15,
-          p2TurnMillis: 15,
+          p1: {bankSeconds: 140, ram: 64, turnMillis: 15},
+          p2: {bankSeconds: 138, ram: 64, turnMillis: 15},
         });
 
         const recovered = await h.coord.recoverIncompleteMatches();
@@ -2681,8 +2685,8 @@ describe('arena infrastructure', () => {
       });
     });
 
-    test('reuses active pools team roster during v2.0.0 smoke testing', async () => {
-      await withRealArenaServer('v2-active-teams', async ({db, client}) => {
+    test('reuses locked active pools team roster when smoke testing a new version', async () => {
+      await withRealArenaServer('locked-active-teams', async ({db, client}) => {
         const stateDb = new arenaDb.Database(':memory:');
         try {
           db.syncLaddersFromYaml([
@@ -2704,7 +2708,7 @@ describe('arena infrastructure', () => {
             mock.generateValidVgcTeams(20, 0),
             {format: 'gen9championsvgc2026regmc', pools: [], teams: 20}
           );
-          const v1 = db.createSubmission({
+          const first = db.createSubmission({
             agentId: ag.id,
             version: '1.0.0',
             package: 'bundle',
@@ -2715,7 +2719,7 @@ describe('arena infrastructure', () => {
             now: 1000,
           });
           db.applySubmissionStatus({
-            versionId: v1.id,
+            versionId: first.id,
             smokeStatus: 'passed',
             unpackedBytes: 1024,
             now: 1001,
@@ -2723,12 +2727,12 @@ describe('arena infrastructure', () => {
           db.db.prepare(
             'UPDATE ladder_entries SET se = 35, matches = 25, settled_at = 1002 ' +
               'WHERE version_id = ?'
-          ).run(v1.id);
+          ).run(first.id);
 
-          // v2.0.0 omits `teamsByLadder` to reuse the existing active 20-team roster
-          const v2 = db.createSubmission({
+          // Subsequent version omits `teamsByLadder` to reuse the locked active 20-team roster
+          const next = db.createSubmission({
             agentId: ag.id,
-            version: '2.0.0',
+            version: '1.0.1',
             package: 'bundle',
             url: `file://${bundleTar}`,
             sha256: bundleSha,
@@ -2742,12 +2746,12 @@ describe('arena infrastructure', () => {
             client,
             stateDb,
             baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-            agentsDir: path.join(tmpDir, 'v2-active-agents'),
-            stagingDir: path.join(tmpDir, 'v2-active-staging'),
+            agentsDir: path.join(tmpDir, 'locked-active-agents'),
+            stagingDir: path.join(tmpDir, 'locked-active-staging'),
             devMode: true,
           });
           await coord.processPendingSubmissions();
-          expect(db.getVersionById(v2.id)?.smokeStatus).toBe('passed');
+          expect(db.getVersionById(next.id)?.smokeStatus).toBe('passed');
         } finally {
           stateDb.close();
         }

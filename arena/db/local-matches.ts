@@ -6,42 +6,44 @@ export type CheckpointStatus = 'in-progress' | 'g1-complete' | 'complete' | 'abo
 export type TeamMode = 'random' | 'harvested' | 'pools';
 export type GameOutcome = 'W' | 'L' | 'T';
 
+export interface CheckpointPlayer {
+  versionId: number;
+  agentId: number;
+  slug: string;
+  name: string;
+  version: string;
+  mode: ExecutionMode;
+  target: string;
+  teamPacked: string;
+  teamLabel?: string;
+}
+
+export interface CheckpointGameStats {
+  bankSeconds: number;
+  ram: number;
+  turnMillis: number;
+}
+
+export interface CheckpointGame1 {
+  outcome: GameOutcome;
+  turns: number;
+  endReason: string;
+  p1: CheckpointGameStats;
+  p2: CheckpointGameStats;
+  completedAt?: number;
+}
+
 export interface LocalMatchCheckpoint {
   id: string;
   ladderId: string;
   format: string;
   teamMode: TeamMode;
-  p1VersionId: number;
-  p1AgentId: number;
-  p1Slug: string;
-  p1Name: string;
-  p1Version: string;
-  p1Mode: ExecutionMode;
-  p1Target: string;
-  p2VersionId: number;
-  p2AgentId: number;
-  p2Slug: string;
-  p2Name: string;
-  p2Version: string;
-  p2Mode: ExecutionMode;
-  p2Target: string;
   seed: string;
-  p1TeamPacked: string;
-  p2TeamPacked: string;
-  p1TeamLabel?: string;
-  p2TeamLabel?: string;
+  p1: CheckpointPlayer;
+  p2: CheckpointPlayer;
   status: CheckpointStatus;
-  g1Outcome?: GameOutcome;
-  g1Turns?: number;
-  g1EndReason?: string;
-  g1P1BankSeconds?: number;
-  g1P2BankSeconds?: number;
-  g1P1Ram?: number;
-  g1P2Ram?: number;
-  g1P1TurnMillis?: number;
-  g1P2TurnMillis?: number;
+  g1?: CheckpointGame1;
   startedAt: number;
-  g1CompletedAt?: number;
   completedAt?: number;
 }
 
@@ -50,25 +52,9 @@ export interface CreateMatchCheckpointInput {
   ladderId: string;
   format: string;
   teamMode: TeamMode;
-  p1VersionId: number;
-  p1AgentId: number;
-  p1Slug: string;
-  p1Name: string;
-  p1Version: string;
-  p1Mode: ExecutionMode;
-  p1Target: string;
-  p2VersionId: number;
-  p2AgentId: number;
-  p2Slug: string;
-  p2Name: string;
-  p2Version: string;
-  p2Mode: ExecutionMode;
-  p2Target: string;
   seed: string;
-  p1TeamPacked: string;
-  p2TeamPacked: string;
-  p1TeamLabel?: string;
-  p2TeamLabel?: string;
+  p1: CheckpointPlayer;
+  p2: CheckpointPlayer;
   startedAt?: number;
 }
 
@@ -77,12 +63,8 @@ export interface CompleteGame1Input {
   outcome: GameOutcome;
   turns: number;
   endReason: string;
-  p1BankSeconds: number;
-  p2BankSeconds: number;
-  p1Ram: number;
-  p2Ram: number;
-  p1TurnMillis: number;
-  p2TurnMillis: number;
+  p1: CheckpointGameStats;
+  p2: CheckpointGameStats;
   completedAt?: number;
 }
 
@@ -126,42 +108,57 @@ interface RawLocalMatchRow {
 }
 
 function mapLocalMatchRow(raw: RawLocalMatchRow): LocalMatchCheckpoint {
+  const hasG1 = raw.g1_outcome !== null;
   return {
     id: raw.id,
     ladderId: raw.ladder_id,
     format: raw.format,
     teamMode: raw.team_mode,
-    p1VersionId: raw.p1_version_id,
-    p1AgentId: raw.p1_agent_id,
-    p1Slug: raw.p1_slug,
-    p1Name: raw.p1_name,
-    p1Version: raw.p1_version,
-    p1Mode: raw.p1_mode,
-    p1Target: raw.p1_target,
-    p2VersionId: raw.p2_version_id,
-    p2AgentId: raw.p2_agent_id,
-    p2Slug: raw.p2_slug,
-    p2Name: raw.p2_name,
-    p2Version: raw.p2_version,
-    p2Mode: raw.p2_mode,
-    p2Target: raw.p2_target,
     seed: raw.seed,
-    p1TeamPacked: raw.p1_team_packed,
-    p2TeamPacked: raw.p2_team_packed,
-    p1TeamLabel: raw.p1_team_label ?? undefined,
-    p2TeamLabel: raw.p2_team_label ?? undefined,
+    p1: {
+      versionId: raw.p1_version_id,
+      agentId: raw.p1_agent_id,
+      slug: raw.p1_slug,
+      name: raw.p1_name,
+      version: raw.p1_version,
+      mode: raw.p1_mode,
+      target: raw.p1_target,
+      teamPacked: raw.p1_team_packed,
+      teamLabel: raw.p1_team_label ?? undefined,
+    },
+    p2: {
+      versionId: raw.p2_version_id,
+      agentId: raw.p2_agent_id,
+      slug: raw.p2_slug,
+      name: raw.p2_name,
+      version: raw.p2_version,
+      mode: raw.p2_mode,
+      target: raw.p2_target,
+      teamPacked: raw.p2_team_packed,
+      teamLabel: raw.p2_team_label ?? undefined,
+    },
     status: raw.status,
-    g1Outcome: raw.g1_outcome ?? undefined,
-    g1Turns: raw.g1_turns ?? undefined,
-    g1EndReason: raw.g1_end_reason ?? undefined,
-    g1P1BankSeconds: raw.g1_p1_bank_seconds ?? undefined,
-    g1P2BankSeconds: raw.g1_p2_bank_seconds ?? undefined,
-    g1P1Ram: raw.g1_p1_ram ?? undefined,
-    g1P2Ram: raw.g1_p2_ram ?? undefined,
-    g1P1TurnMillis: raw.g1_p1_turn_millis ?? undefined,
-    g1P2TurnMillis: raw.g1_p2_turn_millis ?? undefined,
+    ...(hasG1
+      ? {
+        g1: {
+          outcome: raw.g1_outcome!,
+          turns: raw.g1_turns ?? 1,
+          endReason: raw.g1_end_reason ?? 'win',
+          p1: {
+            bankSeconds: raw.g1_p1_bank_seconds ?? 0,
+            ram: raw.g1_p1_ram ?? 64,
+            turnMillis: raw.g1_p1_turn_millis ?? 0,
+          },
+          p2: {
+            bankSeconds: raw.g1_p2_bank_seconds ?? 0,
+            ram: raw.g1_p2_ram ?? 64,
+            turnMillis: raw.g1_p2_turn_millis ?? 0,
+          },
+          completedAt: raw.g1_completed_at ?? undefined,
+        },
+      }
+      : {}),
     startedAt: raw.started_at,
-    g1CompletedAt: raw.g1_completed_at ?? undefined,
     completedAt: raw.completed_at ?? undefined,
   };
 }
@@ -181,25 +178,25 @@ export function createMatchCheckpoint(db: DatabaseSync, input: CreateMatchCheckp
     input.ladderId,
     input.format,
     input.teamMode,
-    input.p1VersionId,
-    input.p1AgentId,
-    input.p1Slug,
-    input.p1Name,
-    input.p1Version,
-    input.p1Mode,
-    input.p1Target,
-    input.p2VersionId,
-    input.p2AgentId,
-    input.p2Slug,
-    input.p2Name,
-    input.p2Version,
-    input.p2Mode,
-    input.p2Target,
+    input.p1.versionId,
+    input.p1.agentId,
+    input.p1.slug,
+    input.p1.name,
+    input.p1.version,
+    input.p1.mode,
+    input.p1.target,
+    input.p2.versionId,
+    input.p2.agentId,
+    input.p2.slug,
+    input.p2.name,
+    input.p2.version,
+    input.p2.mode,
+    input.p2.target,
     input.seed,
-    input.p1TeamPacked,
-    input.p2TeamPacked,
-    input.p1TeamLabel ?? null,
-    input.p2TeamLabel ?? null,
+    input.p1.teamPacked,
+    input.p2.teamPacked,
+    input.p1.teamLabel ?? null,
+    input.p2.teamLabel ?? null,
     startedAt
   );
 }
@@ -224,12 +221,12 @@ export function checkpointGame1Complete(db: DatabaseSync, input: CompleteGame1In
     input.outcome,
     input.turns,
     input.endReason,
-    input.p1BankSeconds,
-    input.p2BankSeconds,
-    input.p1Ram,
-    input.p2Ram,
-    input.p1TurnMillis,
-    input.p2TurnMillis,
+    input.p1.bankSeconds,
+    input.p2.bankSeconds,
+    input.p1.ram,
+    input.p2.ram,
+    input.p1.turnMillis,
+    input.p2.turnMillis,
     completedAt,
     input.id
   );
