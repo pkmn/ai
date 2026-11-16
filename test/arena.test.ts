@@ -1469,6 +1469,8 @@ describe('arena infrastructure', () => {
       }).run();
       expect(res.winner).toBe('p2');
       expect(res.endReason).toBe('invalid-choice');
+      expect(res.omniscientLog).toContain('|win|Agent B');
+      expect(res.omniscientLog).not.toMatch(/\n\|tie(?:\n|$)/);
     });
 
     test('forfeits crashing agents immediately with crash', async () => {
@@ -1729,6 +1731,48 @@ describe('arena infrastructure', () => {
       expect(heartbeats.slice(0, 4).map(h => h.activeSlot)).toEqual(['p1', 'p2', 'p2', 'p1']);
       expect(heartbeats[0].p1Ram).toBe(128);
       expect(res.p1PeakRam).toBe(128);
+    });
+
+    test('inspectPlayerProtocolChunk exempts Unavailable choice from strike counter', () => {
+      const state: arbiter.ProtocolStrikeState = {
+        retryingInvalidChoice: false,
+        invalidStrikes: 0,
+        lastRequestJson: '{"active":[{"moves":[{"id":"tackle"}]}]}',
+      };
+      for (let i = 0; i < 4; i++) {
+        const res = arbiter.inspectPlayerProtocolChunk(
+          '|error|[Unavailable choice] Can\'t switch: The active Pokémon is trapped',
+          state,
+          false
+        );
+        expect(res.forfeitedInvalidChoice).toBe(false);
+        expect(res.resendLastRequest).toBe(false);
+        expect(state.invalidStrikes).toBe(0);
+        expect(state.retryingInvalidChoice).toBe(true);
+      }
+    });
+
+    test('formatChoiceCommand preserves default or auto keywords on team preview', () => {
+      expect(arbiter.formatChoiceCommand('default', true)).toBe('default');
+      expect(arbiter.formatChoiceCommand('auto', true)).toBe('auto');
+      expect(arbiter.formatChoiceCommand('1234', true)).toBe('team 1234');
+      expect(arbiter.formatChoiceCommand('team 1234', true)).toBe('team 1234');
+    });
+
+    test('rewriteBlindPlayerNames substitutes display names in a single pass', () => {
+      const raw = '|player|p1|Agent A|101|\n|player|p2|Agent B|102|\n|win|Agent A';
+      const out = arbiter.rewriteBlindPlayerNames(raw, 'Agent B', 'Rival');
+      expect(out).toBe('|player|p1|Agent B|101|\n|player|p2|Rival|102|\n|win|Agent B');
+    });
+
+    test('parsePrngSeed accepts 256-bit sodium seeds alongside legacy 4-uint16 seeds', () => {
+      const hex = 'a1'.repeat(32);
+      const parsed = coordinator.parsePrngSeed(`sodium,${hex.toUpperCase()}`);
+      expect(parsed).toBe(`sodium,${hex}`);
+      const derived = tournament.deriveGameSeed(parsed, 2);
+      expect(String(derived)).toMatch(/^sodium,[0-9a-f]{64}$/);
+      expect(derived).not.toBe(parsed);
+      expect(coordinator.parsePrngSeed('1, 2, 3, 4')).toBe('1,2,3,4');
     });
   });
 
@@ -2283,7 +2327,7 @@ describe('arena infrastructure', () => {
         const played = await h.coord.playNextScheduledMatch([h.ladderSnap]);
         expect(played?.ladderId).toBe('gen9customgame');
         expect(h.completedMatches).toHaveLength(1);
-        expect(h.completedMatches[0].match.seed).toMatch(/^\d+,\d+,\d+,\d+$/);
+        expect(h.completedMatches[0].match.seed).toMatch(/^sodium,[0-9a-f]{64}$/);
         expect(h.heartbeats.length).toBeGreaterThan(0);
 
         const v30UtmLines = fs.readFileSync(utmLogFile, 'utf8').trim().split('\n');

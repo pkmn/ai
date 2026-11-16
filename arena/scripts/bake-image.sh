@@ -100,7 +100,7 @@ ensure_safe_rootfs_dir() {
 
 while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   [[ -z "$AGENT_ID" || "$AGENT_ID" =~ ^# ]] && continue
-  if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$AGENT_ID" == *..* ]]; then
+  if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ || "$AGENT_ID" == *..* ]]; then
     echo "ERROR: Invalid agent_id '${AGENT_ID}'" >&2
     exit 1
   fi

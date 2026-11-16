@@ -26,6 +26,9 @@ export function deriveGameSeed(baseSeed: sim.PRNGSeed, gameNumber: number): sim.
     .createHash('sha256')
     .update(`${baseSeed}:g${gameNumber}`)
     .digest();
+  if (baseSeed.startsWith('sodium,')) {
+    return `sodium,${digest.toString('hex')}`;
+  }
   const s0 = digest.readUInt16BE(0);
   const s1 = digest.readUInt16BE(2);
   const s2 = digest.readUInt16BE(4);
@@ -390,7 +393,7 @@ export class ConcurrentGame {
   }
 
   private spawnRemotePlayer(slot: PlayerSlot, spec: AgentSpec): RemoteTournamentPlayer {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(spec.agentId) || spec.agentId.includes('..')) {
+    if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(spec.agentId) || spec.agentId.includes('..')) {
       throw new Error(`Invalid tournament agentId: ${spec.agentId}`);
     }
     const proc = spec.localCommand
@@ -458,18 +461,18 @@ export class ConcurrentGame {
     proc.stdout.setEncoding('utf8');
     proc.stdout.on('data', (chunk: string) => {
       stdoutBuf += chunk;
-      if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
-        stdoutBuf = '';
-        try {
-          proc.kill('SIGKILL');
-        } catch {}
-        onDisconnect(1);
-        return;
-      }
       let nl = stdoutBuf.indexOf('\n');
       while (nl >= 0) {
         const line = stdoutBuf.slice(0, nl).replace(/\r$/, '');
         stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (line.length > MAX_STDOUT_LINE_CHARS) {
+          stdoutBuf = '';
+          try {
+            proc.kill('SIGKILL');
+          } catch {}
+          onDisconnect(1);
+          return;
+        }
         if (player.lineResolver) {
           const resolve = player.lineResolver;
           player.lineResolver = undefined;
@@ -478,6 +481,13 @@ export class ConcurrentGame {
           player.lineQueue.push(line);
         }
         nl = stdoutBuf.indexOf('\n');
+      }
+      if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
+        stdoutBuf = '';
+        try {
+          proc.kill('SIGKILL');
+        } catch {}
+        onDisconnect(1);
       }
     });
 
@@ -699,8 +709,7 @@ export class ConcurrentGame {
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
     this.endReason = reason;
     this.wakePendingLineResolvers();
-    const winnerSimName = this.winner === 'p1' ? 'Agent A' : 'Agent B';
-    Promise.resolve(this.battleStream.write(`>forcewin ${winnerSimName}`)).catch(() => undefined);
+    Promise.resolve(this.battleStream.write(`>forcewin ${this.winner}`)).catch(() => undefined);
   }
 
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
@@ -722,6 +731,7 @@ export class ConcurrentGame {
       this.currentTurn,
       this.lastRewardedTurn,
       {
+        startingBankMillis: this.startingBankMillis,
         firstTurnGraceMillis: this.firstTurnGraceMillis,
         maxTurnMillis: this.maxTurnMillis,
         fullTurnIncrementMillis: this.fullTurnIncrementMillis,
@@ -882,7 +892,14 @@ export class ConcurrentGame {
         }
         this.emitSpectatorChunk(rawChunk);
       }
-    })();
+    })().catch(() => {
+      if (!this.ended) {
+        this.ended = true;
+        this.winner = 'tie';
+        this.endReason = 'sim-error';
+        this.wakePendingLineResolvers();
+      }
+    });
 
     const p1Task = this.driveConcurrentPlayer(this.p1, this.streams.p1);
     const p2Task = this.driveConcurrentPlayer(this.p2, this.streams.p2);
@@ -1527,7 +1544,7 @@ export function unpackOciRootfs(opts: {
   agentsDir?: string;
   stagingDir?: string;
 }): number {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(opts.targetId) || opts.targetId.includes('..')) {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(opts.targetId) || opts.targetId.includes('..')) {
     throw new Error(`Invalid tournament agent targetId: ${opts.targetId}`);
   }
   const agentsDir = opts.agentsDir ?? '/opt/arena/agents';
@@ -1642,6 +1659,7 @@ export class Coordinator {
   private readonly superfinalGames: number;
   private readonly maxTurns?: number;
   private readonly randomInt: (max: number) => number;
+  private readonly customRandomInt: boolean;
   private readonly prepareSubmissionRootfs?: (
     sub: arena.PendingSubmission,
     targetId: string
@@ -1657,17 +1675,21 @@ export class Coordinator {
     this.tables = options.tables ?? [];
     this.superfinalGames = options.superfinalGames ?? 100;
     this.maxTurns = options.maxTurns;
+    this.customRandomInt = options.randomInt !== undefined;
     this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
     this.prepareSubmissionRootfs = options.prepareSubmissionRootfs;
     this.customResolveEntrantSpec = options.resolveEntrantSpec;
   }
 
   private randomPrngSeed(): sim.PRNGSeed {
-    const s0 = this.randomInt(0x10000);
-    const s1 = this.randomInt(0x10000);
-    const s2 = this.randomInt(0x10000);
-    const s3 = this.randomInt(0x10000);
-    return `${s0},${s1},${s2},${s3}`;
+    if (this.customRandomInt) {
+      const s0 = this.randomInt(0x10000);
+      const s1 = this.randomInt(0x10000);
+      const s2 = this.randomInt(0x10000);
+      const s3 = this.randomInt(0x10000);
+      return `${s0},${s1},${s2},${s3}`;
+    }
+    return `sodium,${crypto.randomBytes(32).toString('hex')}` as sim.PRNGSeed;
   }
 
   private resolveEntrantSpec(

@@ -110,7 +110,7 @@ case "$ACTION" in
         --env ARENA_MEMORY_LIMIT_MB=14336 \
         "$TARGET"
     else
-      if [[ ! "$TARGET" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$TARGET" == *..* ]]; then
+      if [[ ! "$TARGET" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ || "$TARGET" == *..* ]]; then
         echo "Invalid native agent target: $TARGET" >&2
         exit 2
       fi

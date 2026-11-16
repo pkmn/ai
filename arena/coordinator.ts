@@ -92,13 +92,21 @@ function isPermanentClientError(err: unknown): boolean {
 }
 
 export function parsePrngSeed(seedStr: string): PRNGSeed {
-  const parts = seedStr.split(',').map(s => s.trim());
+  const trimmed = seedStr.trim();
+  if (/^sodium,[0-9a-f]{64}$/i.test(trimmed)) {
+    return `sodium,${trimmed.slice(7).toLowerCase()}` as PRNGSeed;
+  }
+  const parts = trimmed.split(',').map(s => s.trim());
   if (parts.length !== 4 || parts.some(p => !/^\d+$/.test(p))) {
-    throw new Error(`Invalid PRNG seed "${seedStr}" (expected 4 comma-separated uint16 integers)`);
+    throw new Error(
+      `Invalid PRNG seed '${seedStr}' (expected 'sodium,<64-hex>' or 4 uint16 integers)`
+    );
   }
   const nums = parts.map(Number);
   if (nums.some(n => !Number.isInteger(n) || n < 0 || n > 0xffff)) {
-    throw new Error(`Invalid PRNG seed "${seedStr}" (expected 4 comma-separated uint16 integers)`);
+    throw new Error(
+      `Invalid PRNG seed '${seedStr}' (expected 'sodium,<64-hex>' or 4 uint16 integers)`
+    );
   }
   return `${nums[0]},${nums[1]},${nums[2]},${nums[3]}`;
 }
@@ -118,6 +126,7 @@ export class Coordinator {
   private readonly exploitProbability: number;
   private readonly formatByLadderId: Map<string, string>;
   private readonly randomInt: (max: number) => number;
+  private readonly customRandomInt: boolean;
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
   private readonly lastRandomArchiveDayByLadder = new Map<string, string>();
   private heartbeatSeq = 0;
@@ -146,6 +155,7 @@ export class Coordinator {
     this.maxTurns = options.maxTurns;
     this.exploitProbability = options.exploitProbability ?? 0.45;
     this.formatByLadderId = new Map(options.formatByLadderId ?? []);
+    this.customRandomInt = options.randomInt !== undefined;
     this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
   }
 
@@ -158,11 +168,14 @@ export class Coordinator {
   }
 
   private randomPrngSeed(): PRNGSeed {
-    const s0 = this.randomInt(0x10000);
-    const s1 = this.randomInt(0x10000);
-    const s2 = this.randomInt(0x10000);
-    const s3 = this.randomInt(0x10000);
-    return `${s0},${s1},${s2},${s3}`;
+    if (this.customRandomInt) {
+      const s0 = this.randomInt(0x10000);
+      const s1 = this.randomInt(0x10000);
+      const s2 = this.randomInt(0x10000);
+      const s3 = this.randomInt(0x10000);
+      return `${s0},${s1},${s2},${s3}`;
+    }
+    return `sodium,${crypto.randomBytes(32).toString('hex')}` as PRNGSeed;
   }
 
   private resolveLaunchSpec(mode: db.ExecutionMode, target: string): arbiter.AgentLaunchSpec {
@@ -675,6 +688,7 @@ export class Coordinator {
       p2TeamPacked: cp.p2TeamPacked,
       maxTurns: this.maxTurns,
       devMode: this.devMode,
+      includeSpectatorState: cp.teamMode === 'random',
       onTurn: async info => {
         this.heartbeatSeq++;
         const lines = cp.teamMode === 'random'
@@ -1008,6 +1022,7 @@ export class Coordinator {
       p2TeamPacked: sampled.t2,
       maxTurns: this.maxTurns,
       devMode: this.devMode,
+      includeSpectatorState: ladder.team === 'random',
       onTurn: async info => {
         this.heartbeatSeq++;
         const lines = ladder.team === 'random'
@@ -1124,6 +1139,7 @@ export class Coordinator {
       p2TeamPacked: sampled.t2,
       maxTurns: this.maxTurns,
       devMode: this.devMode,
+      includeSpectatorState: ladder.team === 'random',
       onTurn: async info => {
         this.heartbeatSeq++;
         const lines = ladder.team === 'random'

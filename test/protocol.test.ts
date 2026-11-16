@@ -79,6 +79,25 @@ describe('parseAgentStdoutLine', () => {
     });
   });
 
+  test('normalizes uppercase slash or team choice keywords', () => {
+    expect(parseAgentStdoutLine('/CHOOSE move 1')).toEqual({
+      kind: 'choice',
+      choice: 'move 1',
+    });
+    expect(parseAgentStdoutLine('/TEAM 1234')).toEqual({
+      kind: 'choice',
+      choice: 'team 1234',
+    });
+    expect(parseAgentStdoutLine('TEAM 1234')).toEqual({
+      kind: 'choice',
+      choice: 'team 1234',
+    });
+    expect(parseAgentStdoutLine('/DEFAULT')).toEqual({
+      kind: 'choice',
+      choice: 'default',
+    });
+  });
+
   test('demotes undo choice cancellation attempts to chat', () => {
     for (const undoLine of [
       'undo',

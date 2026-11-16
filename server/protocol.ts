@@ -76,6 +76,15 @@ function isBareSimulatorChoice(body: string): boolean {
   return true;
 }
 
+function normalizeSimulatorChoice(choice: string): string {
+  const trimmed = choice.trim();
+  if (/^team\b/i.test(trimmed)) {
+    const rest = trimmed.slice(4).trim();
+    return rest ? `team ${rest}` : 'team';
+  }
+  return trimmed;
+}
+
 // Parses a single stdout line from an Arena agent into either a Showdown simulator choice string
 // or a plain chat/text line (which callers discard so agents cannot message each other or inject
 // protocol commands). Lines with embedded `\r` or control characters are always demoted to chat.
@@ -102,15 +111,16 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
   }
   if (!body) return undefined;
 
-  if (body.startsWith('/choose ')) {
-    const choice = body.slice(8).trim();
+  const lowerBody = body.toLowerCase();
+  if (lowerBody.startsWith('/choose ')) {
+    const choice = normalizeSimulatorChoice(body.slice(8));
     if (!choice) return undefined;
     if (containsUndoSubchoice(choice) || !isBareSimulatorChoice(choice)) {
       return {kind: 'chat', message: body};
     }
     return {kind: 'choice', choice};
   }
-  if (body.startsWith('/team ')) {
+  if (lowerBody.startsWith('/team ')) {
     const rest = body.slice(6).trim();
     if (!rest) return undefined;
     const choice = `team ${rest}`;
@@ -119,7 +129,7 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
     }
     return {kind: 'choice', choice};
   }
-  if (body.startsWith('/switch ')) {
+  if (lowerBody.startsWith('/switch ')) {
     const rest = body.slice(8).trim();
     if (!rest) return undefined;
     const choice = `switch ${rest}`;
@@ -128,7 +138,7 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
     }
     return {kind: 'choice', choice};
   }
-  if (body.startsWith('/move ')) {
+  if (lowerBody.startsWith('/move ')) {
     const rest = body.slice(6).trim();
     if (!rest) return undefined;
     const choice = `move ${rest}`;
@@ -138,17 +148,17 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
     return {kind: 'choice', choice};
   }
   if (
-    body === '/pass' ||
-    body === '/skip' ||
-    body === '/shift' ||
-    body === '/default' ||
-    body === '/auto'
+    lowerBody === '/pass' ||
+    lowerBody === '/skip' ||
+    lowerBody === '/shift' ||
+    lowerBody === '/default' ||
+    lowerBody === '/auto'
   ) {
-    return {kind: 'choice', choice: body.slice(1)};
+    return {kind: 'choice', choice: lowerBody.slice(1)};
   }
 
   if (isBareSimulatorChoice(body)) {
-    return {kind: 'choice', choice: body};
+    return {kind: 'choice', choice: normalizeSimulatorChoice(body)};
   }
 
   return {kind: 'chat', message: body};

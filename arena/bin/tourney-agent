@@ -5,7 +5,7 @@
 set -euo pipefail
 
 AGENT_ID="${1:?Usage: tourney-agent <agent_id>}"
-if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$AGENT_ID" == *..* ]]; then
+if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ || "$AGENT_ID" == *..* ]]; then
   echo "TOURNEY_ERROR: Invalid agent_id ${AGENT_ID}" >&2
   exit 2
 fi

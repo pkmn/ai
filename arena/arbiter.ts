@@ -55,6 +55,7 @@ export interface ArenaGameOptions {
   maxTurnSeconds?: number;
   devMode?: boolean;
   arenaBin?: string;
+  includeSpectatorState?: boolean;
   onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 }
 
@@ -74,6 +75,10 @@ export interface ArenaGameResult {
   p2MeanTurnMillis: number;
   p1LastTurnMillis: number;
   p2LastTurnMillis: number;
+  p1ExitCode?: number;
+  p2ExitCode?: number;
+  p1Stderr?: string;
+  p2Stderr?: string;
 }
 
 interface SandboxedPlayer {
@@ -91,6 +96,7 @@ interface SandboxedPlayer {
   decisionCount: number;
   totalDecisionMillis: number;
   lastDecisionMillis: number;
+  stderrTail: string;
   exited: boolean;
   exitCode: number | undefined;
   cleanedUp: boolean;
@@ -100,19 +106,37 @@ export const MAX_INVALID_STRIKES = 3;
 export const MAX_STDOUT_LINE_CHARS = 65_536;
 export const MAX_LINE_QUEUE = 256;
 export const MAX_LINES_PER_DECISION = 64;
+const MAX_STDERR_TAIL_CHARS = 4_096;
+
+const BLIND_NAME_RE = new RegExp(
+  '(\\|player\\|p1\\|Agent A\\||\\|player\\|p2\\|Agent B\\||' +
+    '\\|win\\|Agent A\\b|\\|win\\|Agent B\\b|☆Agent A\\||☆Agent B\\|)',
+  'g'
+);
 
 export function rewriteBlindPlayerNames(
   chunk: string,
   p1DisplayName: string,
   p2DisplayName: string
 ): string {
-  return chunk
-    .replaceAll('|player|p1|Agent A|', `|player|p1|${p1DisplayName}|`)
-    .replaceAll('|player|p2|Agent B|', `|player|p2|${p2DisplayName}|`)
-    .replaceAll('|win|Agent A', `|win|${p1DisplayName}`)
-    .replaceAll('|win|Agent B', `|win|${p2DisplayName}`)
-    .replaceAll('☆Agent A|', `☆${p1DisplayName}|`)
-    .replaceAll('☆Agent B|', `☆${p2DisplayName}|`);
+  return chunk.replace(BLIND_NAME_RE, token => {
+    switch (token) {
+      case '|player|p1|Agent A|':
+        return `|player|p1|${p1DisplayName}|`;
+      case '|player|p2|Agent B|':
+        return `|player|p2|${p2DisplayName}|`;
+      case '|win|Agent A':
+        return `|win|${p1DisplayName}`;
+      case '|win|Agent B':
+        return `|win|${p2DisplayName}`;
+      case '☆Agent A|':
+        return `☆${p1DisplayName}|`;
+      case '☆Agent B|':
+        return `☆${p2DisplayName}|`;
+      default:
+        return token;
+    }
+  });
 }
 
 export interface ProtocolStrikeState {
@@ -156,11 +180,13 @@ export function inspectPlayerProtocolChunk(
           }
         } catch {}
       }
-    } else if (
-      (line.startsWith('|error|[Invalid choice]') ||
-        line.startsWith('|error|[Unavailable choice]')) &&
-      !ended
-    ) {
+    } else if (line.startsWith('|error|[Unavailable choice]') && !ended) {
+      // `[Unavailable choice]` reveals hidden battle state (e.g. Encore/Disable/Arena Trap) and
+      // `@pkmn/sim` always follows immediately with an updated `|request|` — withhold extra bank
+      // increments on the retry, but never count a protocol strike or resend the stale request.
+      state.retryingInvalidChoice = true;
+      clearQueue = true;
+    } else if (line.startsWith('|error|[Invalid choice]') && !ended) {
       state.invalidStrikes++;
       state.retryingInvalidChoice = true;
       if (state.invalidStrikes >= MAX_INVALID_STRIKES) {
@@ -188,6 +214,7 @@ export function beginTurnClockStep(
   currentTurn: number,
   lastRewardedTurn: Record<PlayerSlot, number>,
   timers: {
+    startingBankMillis?: number;
     firstTurnGraceMillis: number;
     maxTurnMillis: number;
     fullTurnIncrementMillis: number;
@@ -205,7 +232,7 @@ export function beginTurnClockStep(
 } {
   const isRetry = player.retryingInvalidChoice;
   player.retryingInvalidChoice = false;
-  let incrementMillis = timers.fullTurnIncrementMillis;
+  let incrementMillis = 0;
 
   // Credit full-turn or mid-turn increment before starting the turn clock,
   // except when retrying after an invalid/unavailable choice on the same decision.
@@ -224,7 +251,8 @@ export function beginTurnClockStep(
     } else {
       incrementMillis = (timers.activeSidesCount ?? 1) <= 1 ? timers.midTurnIncrementMillis : 0;
     }
-    player.bankMillis = Math.min(timers.maxTurnMillis, player.bankMillis + incrementMillis);
+    const maxBankCap = Math.max(timers.startingBankMillis ?? 0, timers.maxTurnMillis);
+    player.bankMillis = Math.min(maxBankCap, player.bankMillis + incrementMillis);
     lastRewardedTurn[player.slot] = currentTurn;
   }
 
@@ -247,7 +275,7 @@ export function beginTurnClockStep(
 }
 
 export function formatChoiceCommand(choice: string, teamPreview?: boolean): string {
-  return teamPreview && !choice.startsWith('team ') ? `team ${choice}` : choice;
+  return teamPreview && /^[1-9][0-9,\s]*$/.test(choice) ? `team ${choice}` : choice;
 }
 
 export function inspectOmniscientLine(
@@ -323,14 +351,15 @@ export class TimeSlicedArenaGame {
   private readonly accelerate: boolean;
   private readonly devMode: boolean;
   private readonly arenaBin: string;
+  private readonly includeSpectatorState: boolean;
   private readonly onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 
   private readonly battleStream: BattleStreams.BattleStream;
   private readonly streams: ReturnType<typeof BattleStreams.getPlayerStreams>;
   private readonly omniscientLog: string[] = [];
 
-  private p1!: SandboxedPlayer;
-  private p2!: SandboxedPlayer;
+  private p1: SandboxedPlayer | undefined = undefined;
+  private p2: SandboxedPlayer | undefined = undefined;
   private currentTurn = 0;
   private requestCount = 0;
   private waveActiveSidesCount = 1;
@@ -358,6 +387,7 @@ export class TimeSlicedArenaGame {
     this.accelerate = !this.format.includes('vgc') && !this.format.includes('champions');
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.arenaBin = options.arenaBin ?? '/opt/arena/bin/arena';
+    this.includeSpectatorState = options.includeSpectatorState ?? true;
     this.onTurn = options.onTurn;
 
     this.battleStream = new BattleStreams.BattleStream();
@@ -400,6 +430,7 @@ export class TimeSlicedArenaGame {
       decisionCount: 0,
       totalDecisionMillis: 0,
       lastDecisionMillis: 0,
+      stderrTail: '',
       exited: false,
       exitCode: undefined,
       cleanedUp: false,
@@ -421,18 +452,18 @@ export class TimeSlicedArenaGame {
     proc.stdout.setEncoding('utf8');
     proc.stdout.on('data', (chunk: string) => {
       stdoutBuf += chunk;
-      if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
-        stdoutBuf = '';
-        try {
-          proc.kill('SIGKILL');
-        } catch {}
-        closeWaiter(1);
-        return;
-      }
       let nl = stdoutBuf.indexOf('\n');
       while (nl >= 0) {
         const line = stdoutBuf.slice(0, nl).replace(/\r$/, '');
         stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (line.length > MAX_STDOUT_LINE_CHARS) {
+          stdoutBuf = '';
+          try {
+            proc.kill('SIGKILL');
+          } catch {}
+          closeWaiter(1);
+          return;
+        }
         if (player.lineResolver) {
           const resolve = player.lineResolver;
           player.lineResolver = undefined;
@@ -442,14 +473,27 @@ export class TimeSlicedArenaGame {
         }
         nl = stdoutBuf.indexOf('\n');
       }
+      if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
+        stdoutBuf = '';
+        try {
+          proc.kill('SIGKILL');
+        } catch {}
+        closeWaiter(1);
+      }
     });
 
     proc.on('exit', code => closeWaiter(code));
     proc.on('close', code => closeWaiter(code));
     proc.on('error', () => closeWaiter(1));
 
-    // Drain stderr without blocking the child pipe buffer
-    proc.stderr.on('data', () => undefined);
+    // Drain stderr while retaining a bounded diagnostic tail for smoke-test and crash reporting
+    proc.stderr.setEncoding('utf8');
+    proc.stderr.on('data', (chunk: string) => {
+      const combined = player.stderrTail + chunk;
+      player.stderrTail = combined.length > MAX_STDERR_TAIL_CHARS
+        ? combined.slice(-MAX_STDERR_TAIL_CHARS)
+        : combined;
+    });
     // Ignore EPIPE on stdin if child exits mid-write
     proc.stdin.on('error', () => undefined);
 
@@ -652,11 +696,15 @@ export class TimeSlicedArenaGame {
     this.ended = true;
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
     this.endReason = reason;
-    const winnerName = this.winner === 'p1' ? 'Agent A' : 'Agent B';
-    Promise.resolve(this.battleStream.write(`>forcewin ${winnerName}`)).catch(() => undefined);
+    // `@pkmn/sim` Battle#win resolves SideID ('p1' / 'p2'), not player display names
+    Promise.resolve(this.battleStream.write(`>forcewin ${this.winner}`)).catch(() => undefined);
   }
 
-  private async stepPlayerDecision(player: SandboxedPlayer): Promise<boolean> {
+  private async stepPlayerDecision(
+    player: SandboxedPlayer,
+    p1: SandboxedPlayer,
+    p2: SandboxedPlayer
+  ): Promise<boolean> {
     if (!player.pendingRequestJson || this.ended) return false;
 
     const req = JSON.parse(player.pendingRequestJson) as {
@@ -671,6 +719,7 @@ export class TimeSlicedArenaGame {
       this.currentTurn,
       this.lastRewardedTurn,
       {
+        startingBankMillis: this.startingBankMillis,
         firstTurnGraceMillis: this.firstTurnGraceMillis,
         maxTurnMillis: this.maxTurnMillis,
         fullTurnIncrementMillis: this.fullTurnIncrementMillis,
@@ -692,28 +741,36 @@ export class TimeSlicedArenaGame {
         turnStartedAt: Math.floor(Date.now() / 1000),
         turnBudgetSeconds: Math.round(totalBudgetMillis / 1000),
         incrementSeconds: Math.round(incrementMillis / 1000),
-        p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
-        p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
-        p1Ram: this.readPeakRam(this.p1),
-        p2Ram: this.readPeakRam(this.p2),
-        p1LastTurnMillis: Math.round(this.p1.lastDecisionMillis),
-        p2LastTurnMillis: Math.round(this.p2.lastDecisionMillis),
-        p1MeanTurnMillis: this.p1.decisionCount > 0
-          ? Math.round(this.p1.totalDecisionMillis / this.p1.decisionCount)
+        p1BankSeconds: Math.max(0, Math.round(p1.bankMillis / 1000)),
+        p2BankSeconds: Math.max(0, Math.round(p2.bankMillis / 1000)),
+        p1Ram: this.readPeakRam(p1),
+        p2Ram: this.readPeakRam(p2),
+        p1LastTurnMillis: Math.round(p1.lastDecisionMillis),
+        p2LastTurnMillis: Math.round(p2.lastDecisionMillis),
+        p1MeanTurnMillis: p1.decisionCount > 0
+          ? Math.round(p1.totalDecisionMillis / p1.decisionCount)
           : 0,
-        p2MeanTurnMillis: this.p2.decisionCount > 0
-          ? Math.round(this.p2.totalDecisionMillis / this.p2.decisionCount)
+        p2MeanTurnMillis: p2.decisionCount > 0
+          ? Math.round(p2.totalDecisionMillis / p2.decisionCount)
           : 0,
-        omniscientLog: this.battleStream.battle?.log.join('\n') ?? this.omniscientLog.join('\n'),
-        p1Pokemon: this.battleStream.battle?.sides[0]?.getRequestData().pokemon,
-        p2Pokemon: this.battleStream.battle?.sides[1]?.getRequestData().pokemon,
+        omniscientLog: this.includeSpectatorState
+          ? (this.battleStream.battle?.log.join('\n') ?? this.omniscientLog.join('\n'))
+          : '',
+        p1Pokemon: this.includeSpectatorState
+          ? this.battleStream.battle?.sides[0]?.getRequestData().pokemon
+          : undefined,
+        p2Pokemon: this.includeSpectatorState
+          ? this.battleStream.battle?.sides[1]?.getRequestData().pokemon
+          : undefined,
       });
     }
 
     let remainingBudgetMillis = totalBudgetMillis;
     let totalElapsedThisDecisionMillis: number;
     let linesReadThisDecision = 0;
+    player.lineQueue.length = 0;
     this.resumeSlot(player);
+    let slotPaused = false;
     const decisionStartNs = process.hrtime.bigint();
 
     try {
@@ -752,30 +809,39 @@ export class TimeSlicedArenaGame {
         player.lastDecisionMillis = decisionElapsedMillis;
         player.totalDecisionMillis += decisionElapsedMillis;
 
+        // Freeze the acting slot before writing into `@pkmn/sim` so it cannot compute while the
+        // simulator resolves the wave or delivers the next turn's protocol lines.
+        this.pauseSlot(player);
+        slotPaused = true;
+        if (this.ended) return false;
         const choiceCmd = formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battleStream.write(`>${player.slot} ${choiceCmd}`);
         return true;
       }
       return false;
     } finally {
-      this.pauseSlot(player);
+      if (!slotPaused) {
+        this.pauseSlot(player);
+      }
     }
   }
 
   async run(): Promise<ArenaGameResult> {
-    this.p1 = this.spawnPlayer('p1', this.p1Spec);
-    this.p2 = this.spawnPlayer('p2', this.p2Spec);
+    const p1 = this.spawnPlayer('p1', this.p1Spec);
+    const p2 = this.spawnPlayer('p2', this.p2Spec);
+    this.p1 = p1;
+    this.p2 = p2;
 
     try {
-      if (this.p1TeamPacked && this.p1.proc.stdin.writable) {
-        this.p1.proc.stdin.write(`|utm|${this.p1TeamPacked}\n`);
+      if (this.p1TeamPacked && p1.proc.stdin.writable) {
+        p1.proc.stdin.write(`|utm|${this.p1TeamPacked}\n`);
       }
-      if (this.p2TeamPacked && this.p2.proc.stdin.writable) {
-        this.p2.proc.stdin.write(`|utm|${this.p2TeamPacked}\n`);
+      if (this.p2TeamPacked && p2.proc.stdin.writable) {
+        p2.proc.stdin.write(`|utm|${this.p2TeamPacked}\n`);
       }
 
-      this.forwardStream(this.p1, this.streams.p1);
-      this.forwardStream(this.p2, this.streams.p2);
+      this.forwardStream(p1, this.streams.p1);
+      this.forwardStream(p2, this.streams.p2);
 
       const omniTask = (async () => {
         for await (const chunk of this.streams.omniscient) {
@@ -799,7 +865,13 @@ export class TimeSlicedArenaGame {
             }
           }
         }
-      })();
+      })().catch(() => {
+        if (!this.ended) {
+          this.ended = true;
+          this.winner = 'tie';
+          this.endReason = 'sim-error';
+        }
+      });
 
       const startSpec = JSON.stringify({formatid: this.format, seed: this.seed});
       const p1PlayerSpec = JSON.stringify({name: 'Agent A', team: this.p1TeamPacked});
@@ -811,40 +883,63 @@ export class TimeSlicedArenaGame {
 
       let idleSpins = 0;
       while (!this.ended) {
-        if (this.p1.pendingRequestJson || this.p2.pendingRequestJson) {
+        if (p1.pendingRequestJson || p2.pendingRequestJson) {
           await Promise.resolve();
-          const p1HasReq = Boolean(this.p1.pendingRequestJson);
-          const p2HasReq = Boolean(this.p2.pendingRequestJson);
+          const p1HasReq = Boolean(p1.pendingRequestJson);
+          const p2HasReq = Boolean(p2.pendingRequestJson);
           if (!p1HasReq && !p2HasReq) continue;
           idleSpins = 0;
+          if (p1HasReq && p2HasReq && p1.exited && p2.exited) {
+            this.ended = true;
+            this.winner = 'tie';
+            this.endReason = 'crash';
+            await Promise.resolve(this.battleStream.write('>forcetie')).catch(() => undefined);
+            break;
+          }
           const isRetryWave =
-            (p1HasReq && this.p1.retryingInvalidChoice) ||
-            (p2HasReq && this.p2.retryingInvalidChoice);
+            (p1HasReq && p1.retryingInvalidChoice) ||
+            (p2HasReq && p2.retryingInvalidChoice);
           if (!isRetryWave) {
             this.requestCount++;
             this.waveActiveSidesCount = (p1HasReq ? 1 : 0) + (p2HasReq ? 1 : 0);
           }
           // Alternate which slot receives the first CPU slice across decision waves
           const ordered = this.requestCount % 2 === 1
-            ? [this.p1, this.p2]
-            : [this.p2, this.p1];
+            ? [p1, p2]
+            : [p2, p1];
           for (const player of ordered) {
             if (this.ended) break;
             if (player.pendingRequestJson) {
-              await this.stepPlayerDecision(player);
+              await this.stepPlayerDecision(player, p1, p2);
               await Promise.resolve();
               while (!this.ended && player.pendingRequestJson && player.retryingInvalidChoice) {
-                await this.stepPlayerDecision(player);
+                await this.stepPlayerDecision(player, p1, p2);
                 await Promise.resolve();
               }
             }
           }
         } else {
           idleSpins++;
+          if (idleSpins >= 10 && (p1.exited || p2.exited)) {
+            if (p1.exited && p2.exited) {
+              this.ended = true;
+              this.winner = 'tie';
+              this.endReason = 'crash';
+              await Promise.resolve(this.battleStream.write('>forcetie')).catch(() => undefined);
+            } else {
+              const exitedPlayer = p1.exited ? p1 : p2;
+              this.forceLose(exitedPlayer.slot, exitedPlayer.exitCode === 137 ? 'oom' : 'crash');
+            }
+            break;
+          }
           if (idleSpins > 2500) {
             this.ended = true;
             this.winner = 'tie';
             this.endReason = 'arbiter-stall';
+            await Promise.resolve(this.battleStream.write('>forcetie')).catch(() => undefined);
+            try {
+              void Promise.resolve(this.battleStream.destroy()).catch(() => undefined);
+            } catch {}
             break;
           }
           await new Promise(r => setTimeout(r, 2));
@@ -853,11 +948,11 @@ export class TimeSlicedArenaGame {
 
       await omniTask;
       await Promise.all([
-        this.stopPlayerForRamRead(this.p1),
-        this.stopPlayerForRamRead(this.p2),
+        this.stopPlayerForRamRead(p1),
+        this.stopPlayerForRamRead(p2),
       ]);
-      const p1PeakRam = this.readPeakRam(this.p1);
-      const p2PeakRam = this.readPeakRam(this.p2);
+      const p1PeakRam = this.readPeakRam(p1);
+      const p2PeakRam = this.readPeakRam(p2);
       const outcome: GameOutcome =
         this.winner === 'p1' ? 'W' : this.winner === 'p2' ? 'L' : 'T';
 
@@ -869,18 +964,22 @@ export class TimeSlicedArenaGame {
         omniscientLog: this.battleStream.battle?.log.join('\n') ?? this.omniscientLog.join('\n'),
         p1Pokemon: this.battleStream.battle?.sides[0]?.getRequestData().pokemon,
         p2Pokemon: this.battleStream.battle?.sides[1]?.getRequestData().pokemon,
-        p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
-        p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
+        p1BankSeconds: Math.max(0, Math.round(p1.bankMillis / 1000)),
+        p2BankSeconds: Math.max(0, Math.round(p2.bankMillis / 1000)),
         p1PeakRam,
         p2PeakRam,
-        p1MeanTurnMillis: this.p1.decisionCount > 0
-          ? Math.round(this.p1.totalDecisionMillis / this.p1.decisionCount)
+        p1MeanTurnMillis: p1.decisionCount > 0
+          ? Math.round(p1.totalDecisionMillis / p1.decisionCount)
           : 0,
-        p2MeanTurnMillis: this.p2.decisionCount > 0
-          ? Math.round(this.p2.totalDecisionMillis / this.p2.decisionCount)
+        p2MeanTurnMillis: p2.decisionCount > 0
+          ? Math.round(p2.totalDecisionMillis / p2.decisionCount)
           : 0,
-        p1LastTurnMillis: Math.round(this.p1.lastDecisionMillis),
-        p2LastTurnMillis: Math.round(this.p2.lastDecisionMillis),
+        p1LastTurnMillis: Math.round(p1.lastDecisionMillis),
+        p2LastTurnMillis: Math.round(p2.lastDecisionMillis),
+        ...(p1.exitCode !== undefined ? {p1ExitCode: p1.exitCode} : {}),
+        ...(p2.exitCode !== undefined ? {p2ExitCode: p2.exitCode} : {}),
+        ...(p1.stderrTail ? {p1Stderr: p1.stderrTail} : {}),
+        ...(p2.stderrTail ? {p2Stderr: p2.stderrTail} : {}),
       };
     } finally {
       this.cleanupSlot(this.p1);
