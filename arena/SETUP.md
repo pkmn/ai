@@ -53,7 +53,7 @@ smoke tests.
 | **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MB`, deduplicated via `/opt/arena/cas/sha256`). |
 | **Coordinator State DB** | `/opt/arena/state/arena.sqlite` | Local WAL SQLite DB (`local_agents`, `local_matches`, `outbox`, `ladder_counters`). |
 | **Daemon Logs** | `/opt/arena/logs/{arena,tunnel}.{log,err}` | Stdout/stderr logs for `ai.pkmn.arena` and `ai.pkmn.tunnel`. |
-| **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`4G` quota) | Per-slot writable scratch volumes (`1700` + `pkmn` ACL), wiped around every game. |
+| **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`4G` quota) | Per-slot writable scratch volumes (`0700` `root:wheel` + `p1`/`p2` & `pkmn` ACLs), wiped around every game. |
 | **APFS Staging Volume** | `/Volumes/Staging` (`6G` quota) | Ephemeral download & extraction staging area (`0700` `pkmn:agents`). |
 | **External Archive SSD** | `/Volumes/Archive` (`1 TB` APFS) | Cold agent `.tar.zst` archive (`cold-agents/`), daily battle logs (`logs/`), DB backups (`db-backups/`). |
 
@@ -548,22 +548,23 @@ What `setup-arena.sh` provisions:
    quotas and `/Volumes/Staging` with a hard `6G` kernel APFS quota.
 2. **Role Accounts:** Creates `p1` (`UID 591`) and `p2` (`UID 592`) in group `agents` (`GID 590`)
    with `/usr/bin/false` login shells and hidden login-window flags.
-3. **Volume Permissions & ACLs:** Locks `/Volumes/P1` (`p1:agents`, `1700`) and `/Volumes/P2`
-   (`p2:agents`, `1700`) so `p1` and `p2` cannot read each other's files, while granting `user:pkmn`
-   an explicit ACL so `virtiofsd` (running as `pkmn`) can bind-mount `/Volumes/P1` and `/Volumes/P2`
-   into Podman containers.
+3. **Volume Permissions & ACLs:** Locks `/Volumes/P1` and `/Volumes/P2` (`root:wheel`, `0700`) with
+   explicit per-slot ACLs (`user:p1` on `/Volumes/P1`, `user:p2` on `/Volumes/P2`) so `p1` and `p2`
+   cannot read each other's files or strip ACLs, while granting `user:pkmn` an explicit ACL so
+   `virtiofsd` (running as `pkmn`) can bind-mount `/Volumes/P1` and `/Volumes/P2` into Podman
+   containers.
 4. **System Hardening Configs:** Installs `/etc/ssh/sshd_config.d/100-arena-hardening.conf`
    (`ListenAddress 127.0.0.1:22`), `/etc/pf.anchors/ai.pkmn.arena`, `/opt/arena/etc/sandbox.sb`,
    and `/etc/sudoers.d/arena`.
 5. **Compiled Supervisor & Binaries:** Compiles `arena/bin/limit.c` -> `/opt/arena/bin/limit`,
    installs `/opt/arena/bin/arena` (`root:wheel`, `0755`), and installs the deterministic
    smoke-test baseline agent at `/opt/arena/agents/_baseline/run`.
-6. **Headless Power & Spotlight:** Sets `pmset` (`sleep 0 disksleep 0 displaysleep 0 autorestart 1`),
-   disables Spotlight on `/Volumes/{P1,P2,Staging,Archive}`, and disables automatic macOS updates.
+6. **Headless Power & Spotlight:** Sets `pmset` (`womp 1 powernap 0`), disables Spotlight on
+   `/Volumes/{P1,P2,Staging}`, and disables automatic macOS updates.
 7. **Podman VM & LaunchDaemons:** Initializes `podman-machine-default` (`10` vCPUs, `30 GiB` /
    `30,720 MiB` RAM, `48 GB` disk, zero swap), installs `/etc/containers/storage.conf`
    (`size = "500M"` overlay cap) inside the VM, and copies
-   `ai.pkmn.{pf,tunnel,podman,arena,archive}.plist` to `/Library/LaunchDaemons/`.
+   `ai.pkmn.{pf,podman,arena,archive}.plist` to `/Library/LaunchDaemons/`.
 
 ### Step 5.2: Bootstrap `ai.pkmn.pf` & Reload Hardened `sshd`
 
@@ -614,7 +615,7 @@ sudo -n -u p2 /usr/bin/env -i HOME=/Volumes/P2 TMPDIR=/Volumes/P2 PATH=/usr/bin:
 
 *Expected:*
 - `/Volumes/P1` and `/Volumes/P2` mounted (`4Gi` quota each), `/Volumes/Staging` mounted (`6Gi` quota).
-- `/Volumes/P1` (`drwx-----T+` `1700` `p1:agents`) and `/Volumes/P2` (`drwx-----T+` `1700` `p2:agents`) with `0: user:pkmn allow ...` ACL.
+- `/Volumes/P1` (`drwx------+` `0700` `root:wheel` with `user:p1` and `user:pkmn` ACLs) and `/Volumes/P2` (`drwx------+` `0700` `root:wheel` with `user:p2` and `user:pkmn` ACLs).
 - `sudo -n -u p1 ...` prints `p1` and `sudo -n -u p2 ...` prints `p2` with no password prompt.
 
 ##### Test 5B: Verify `sshd` Loopback Binding & `pf` Kernel Firewall Airgap

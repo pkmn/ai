@@ -18,12 +18,6 @@ if [[ ! -d "/Volumes/Staging" ]]; then
 fi
 
 echo "==> Step 2: Creating role accounts p1 (UID 591) and p2 (UID 592) in group agents (GID 590)"
-if ! dscl . -read /Groups/agents >/dev/null 2>&1; then
-  sudo dscl . -create /Groups/agents
-  sudo dscl . -create /Groups/agents PrimaryGroupID 590
-fi
-sudo dscl . -append /Groups/agents GroupMembership pkmn || true
-
 create_agent_user() {
   local user="$1"
   local uid="$2"
@@ -57,28 +51,10 @@ sudo chmod +a "user:p2 ${SCRATCH_ACL}" /Volumes/P2
 sudo chown pkmn:agents /Volumes/Staging
 sudo chmod 0700 /Volumes/Staging
 
-sudo mkdir -p /opt/arena/{bin,etc,agents,cas/sha256,teams,stats,state,logs}
-sudo chown -R pkmn:agents /opt/arena
-sudo chmod 0755 /opt/arena /opt/arena/bin /opt/arena/etc /opt/arena/agents /opt/arena/stats
-sudo chmod 0700 /opt/arena/cas /opt/arena/teams /opt/arena/state /opt/arena/logs
-
-if [[ -d /Volumes/Archive ]]; then
-  sudo diskutil enableOwnership /Volumes/Archive >/dev/null
-  sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents}
-  sudo chown -R pkmn:agents /Volumes/Archive
-  sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents}
-fi
-
-if [[ -d /Users/pkmn/.ssh ]]; then
-  sudo chown -R pkmn:agents /Users/pkmn/.ssh
-  sudo chmod 0700 /Users/pkmn/.ssh
-  if [[ -f /Users/pkmn/.ssh/id_ed25519_tunnel ]]; then
-    sudo chmod 0600 /Users/pkmn/.ssh/id_ed25519_tunnel
-  fi
-  if [[ -f /Users/pkmn/.ssh/authorized_keys ]]; then
-    sudo chmod 0600 /Users/pkmn/.ssh/authorized_keys
-  fi
-fi
+sudo mkdir -p /opt/arena/{bin,etc,agents,cas/sha256,teams,stats,state}
+sudo chown -R pkmn:agents /opt/arena/{bin,etc,agents,cas,teams,stats,state}
+sudo chmod 0755 /opt/arena/{bin,etc,agents,stats}
+sudo chmod 0700 /opt/arena/{cas,teams,state}
 
 echo "==> Step 4: Installing system, SSH, PF, Seatbelt, and sudoers configs"
 sudo cp "${REPO_DIR}/arena/config/sshd-arena.conf" /etc/ssh/sshd_config.d/100-arena-hardening.conf
@@ -116,11 +92,8 @@ sudo chown -R root:wheel /opt/arena/agents/_baseline
 sudo chmod 0755 /opt/arena/agents/_baseline /opt/arena/agents/_baseline/run
 
 echo "==> Step 6: Configuring headless power management & disabling Spotlight on scratch volumes"
-sudo pmset -a sleep 0 disksleep 0 displaysleep 0 autorestart 1 womp 1 powernap 0
+sudo pmset -a womp 1 powernap 0
 sudo mdutil -i off /Volumes/P1 /Volumes/P2 /Volumes/Staging 2>/dev/null || true
-if [[ -d /Volumes/Archive ]]; then
-  sudo mdutil -i off /Volumes/Archive 2>/dev/null || true
-fi
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false
@@ -146,8 +119,8 @@ if command -v podman >/dev/null 2>&1; then
     < "${REPO_DIR}/arena/config/storage.conf" || true
 fi
 
-echo "==> Step 8: Installing LaunchDaemons (ai.pkmn.pf, ai.pkmn.tunnel, ai.pkmn.podman, ai.pkmn.arena, ai.pkmn.archive)"
-for PLIST in ai.pkmn.pf.plist ai.pkmn.tunnel.plist ai.pkmn.podman.plist ai.pkmn.arena.plist ai.pkmn.archive.plist; do
+echo "==> Step 8: Installing LaunchDaemons (ai.pkmn.pf, ai.pkmn.podman, ai.pkmn.arena, ai.pkmn.archive)"
+for PLIST in ai.pkmn.pf.plist ai.pkmn.podman.plist ai.pkmn.arena.plist ai.pkmn.archive.plist; do
   sudo cp "${REPO_DIR}/arena/config/${PLIST}" "/Library/LaunchDaemons/${PLIST}"
   sudo chown root:wheel "/Library/LaunchDaemons/${PLIST}"
   sudo chmod 0644 "/Library/LaunchDaemons/${PLIST}"
@@ -155,7 +128,6 @@ done
 
 echo "==> Setup complete. Load LaunchDaemons with:"
 echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.pf.plist"
-echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.tunnel.plist"
 echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.podman.plist"
 echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.arena.plist"
 echo "    sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist"
