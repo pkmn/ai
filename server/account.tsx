@@ -220,15 +220,9 @@ const ACCOUNT_SCRIPT = `
       if (progressText) {
         progressText.textContent = '';
         const strong = document.createElement('strong');
-        strong.textContent = saved + ' / ' + required;
+        strong.textContent = saved + '/' + required;
         progressText.appendChild(strong);
-        progressText.appendChild(
-          document.createTextNode(
-            remaining === 0
-              ? ' distinct teams saved — ready to submit'
-              : ' distinct teams saved — ' + remaining + ' more needed'
-          )
-        );
+        progressText.appendChild(document.createTextNode(' distinct teams saved'));
       }
       let fillEl = document.getElementById('pool-progress-fill');
       if (!fillEl) {
@@ -343,8 +337,8 @@ const ACCOUNT_SCRIPT = `
               const rej = Array.isArray(data.rejections) ? data.rejections : [];
               if (rej.length > 0) {
                 renderTeamsFeedback(
-                  'Saved ' + data.savedCount + ' / ' + data.requiredCount + ' distinct teams (' +
-                    data.remainingCount + ' more needed) — ' + rej.length + ' team(s) rejected:',
+                  'Saved ' + data.savedCount + '/' + data.requiredCount +
+                    ' distinct teams — ' + rej.length + ' team(s) rejected:',
                   rej,
                   true
                 );
@@ -352,8 +346,7 @@ const ACCOUNT_SCRIPT = `
                 if (teamsArea) teamsArea.value = '';
                 renderTeamsFeedback(
                   data.error ||
-                    ('Saved ' + data.savedCount + ' / ' + data.requiredCount +
-                      ' distinct teams — ' + data.remainingCount + ' more needed.'),
+                    ('Saved ' + data.savedCount + '/' + data.requiredCount + ' distinct teams.'),
                   [],
                   true
                 );
@@ -768,12 +761,8 @@ export function renderAccountPage(opts: {
           <div className='teams-progress' id='pool-progress-box'>
             <div className='teams-progress-head'>
               <span id='pool-progress-text'>
-                <strong>{saved} / {count}</strong>
-                {remaining === 0
-                  ? ' distinct teams saved \u2014 ready to submit'
-                  : ` distinct teams saved \u2014 ${remaining} more needed`}
+                <strong>{saved}/{count}</strong> distinct teams saved
               </span>
-              <span className='muted'>{'1-NN \u2265 1.30'}</span>
             </div>
             <div className='progress-track'>
               <div
@@ -1563,8 +1552,7 @@ export function register(app: polka.Polka, options: Options) {
           continue;
         }
         const suffix = existingSaved.length > 0
-          ? ` (${existingSaved.length}/${requiredTeams} distinct teams saved — ` +
-            `${requiredTeams - existingSaved.length} more needed).`
+          ? ` (${existingSaved.length}/${requiredTeams} distinct teams saved).`
           : '.';
         sendJson(res, 400, {
           error:
@@ -1599,9 +1587,7 @@ export function register(app: polka.Polka, options: Options) {
         const baseError = result.rejections.length > 0
           ? result.rejections[0].reason
           : `Expected ${requiredTeams} teams for ${ladder.format}, received ${chunkCount}.`;
-        const progressNote =
-          `(${result.allSaved.length}/${requiredTeams} distinct teams saved — ` +
-          `${result.remainingCount} more needed)`;
+        const progressNote = `(${result.allSaved.length}/${requiredTeams} distinct teams saved)`;
         sendJson(res, 400, {
           error: `${baseError} ${progressNote}`,
           ladderId: ladder.id,

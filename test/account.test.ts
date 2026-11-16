@@ -865,7 +865,11 @@ describe('account routes', () => {
       const acctHtml = await (await realFetch(`${baseUrl}/account`, {
         headers: {Cookie: cookieFor('pre')},
       })).text();
-      expect(acctHtml).toContain('<strong>14 / 20</strong> distinct teams saved — 6 more needed');
+      expect(acctHtml).toContain(
+        '<span id="pool-progress-text"><strong>14/20</strong> distinct teams saved</span>'
+      );
+      expect(acctHtml).not.toContain('more needed');
+      expect(acctHtml).not.toContain('1-NN');
       expect(acctHtml).toContain('data-saved-teams="14"');
 
       const acctJson = await (await realFetch(`${baseUrl}/account.json`, {
@@ -881,8 +885,9 @@ describe('account routes', () => {
 
       const incompleteSub = await postVgc('1.0.0');
       expect(incompleteSub.status).toBe(400);
-      expect((await incompleteSub.json() as {error: string}).error)
-        .toContain('14/20 distinct teams saved — 6 more needed');
+      const incompleteErr = (await incompleteSub.json() as {error: string}).error;
+      expect(incompleteErr).toContain('(14/20 distinct teams saved)');
+      expect(incompleteErr).not.toContain('more needed');
 
       const res2 = await postVgc(
         '1.0.0',

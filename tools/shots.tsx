@@ -1037,10 +1037,10 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-teams-empty',
       section: 'account',
-      title: 'Account: VGC Teams Panel (0 / 20 Saved)',
+      title: 'Account: VGC Teams Panel (0/20 Saved)',
       description:
-        'Checking `VGC` on `/account/` reveals the incremental team pool panel (`0 / 20 ' +
-        'distinct teams saved — 20 more needed`, `1-NN >= 1.30`) and multi-team paste input.',
+        'Checking `VGC` on `/account/` reveals the incremental team pool panel ' +
+        '(`0/20 distinct teams saved`) and multi-team paste input.',
       path: '/account/',
       githubUser: 'sisyphus25',
       click: `input[name="ladders"][value="${VGC_LADDER_ID}"]`,
@@ -1051,7 +1051,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Account: VGC Teams Validation (Partial Save + Rejections)',
       description:
         'Submitting 2 valid teams + 1 near-duplicate (`distance=0.000 < 1.30`) + 1 incomplete ' +
-        'moveset (`must have 4 moves (found 3)`) saves `2 / 20` and lists red rejections.',
+        'moveset (`must have 4 moves (found 3)`) saves `2/20` and lists red rejections.',
       path: '/account/',
       githubUser: 'sisyphus25',
       expectHttpError: 400,
@@ -1088,10 +1088,10 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-teams-partial',
       section: 'account',
-      title: 'Account: VGC Teams Validation (10 / 20 Saved)',
+      title: 'Account: VGC Teams Validation (10/20 Saved)',
       description:
-        'Incremental batch upload reaching `10 / 20` saved teams (`50%` progress bar, ' +
-        '`(10/20 saved)` checkbox hint, and remaining-teams prompt).',
+        'Incremental batch upload reaching `10/20` saved teams (`50%` progress bar, ' +
+        '`(10/20 saved)` checkbox hint, and incomplete count error).',
       path: '/account/',
       githubUser: 'sisyphus25',
       expectHttpError: 400,
@@ -1126,9 +1126,9 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-teams-complete',
       section: 'account',
-      title: 'Account: VGC Teams Validation (All 20 / 20 Saved)',
+      title: 'Account: VGC Teams Validation (All 20/20 Saved)',
       description:
-        'Having all `20 / 20` distinct VGC teams saved turns the progress bar green (`100%`), ' +
+        'Having all `20/20` distinct VGC teams saved turns the progress bar green (`100%`), ' +
         'updates the checkbox hint to `(20/20 saved)`, and enables build submission.',
       path: '/account/',
       githubUser: 'sisyphus25',
