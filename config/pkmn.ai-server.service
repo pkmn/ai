@@ -12,7 +12,10 @@ RestartSec=5s
 Environment=NODE_ENV=production
 EnvironmentFile=/home/pkmn/ai/.env
 ExecStart=/usr/bin/node --env-file-if-exists=/home/pkmn/ai/.env /home/pkmn/ai/build/server
-WorkingDirectory=/home/pkmn/ai
+# `site`'s `fs` helper creates `${process.cwd()}/build/.tmp-*` on import and atomically `rename`s
+# rendered stylesheet assets into `/home/pkmn/ai/public`; running with `cwd = /var/lib/pkmn` keeps
+# `/home/pkmn/ai/build` read-only under `ProtectHome=read-only` on the same filesystem as `public/`.
+WorkingDirectory=/var/lib/pkmn
 StartLimitInterval=0
 StandardOutput=syslog
 StandardError=syslog
