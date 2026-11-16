@@ -42,16 +42,24 @@ export interface OciManifestInspection {
   indexSha256?: string;
 }
 
-// Headless macOS holds external USB/Thunderbolt volumes unmounted at the login window until either
-// `AutomountDisksWithoutUserLogin` is enabled or a local daemon invokes `diskutil mount`.
+// Headless macOS holds external USB/Thunderbolt volumes unmounted at the login window until
+// `AutomountDisksWithoutUserLogin` is enabled or `root` runs `diskutil mount` (`diskarbitrationd`
+// denies non-root `diskutil mount` from `LaunchDaemon`s without an interactive audit session).
 export function tryMountArchiveVolume(): void {
   if (process.platform !== 'darwin' || fs.existsSync('/Volumes/Archive')) return;
   try {
-    execFileSync('/usr/sbin/diskutil', ['mount', 'Archive'], {
+    execFileSync('/usr/bin/sudo', ['-n', '/usr/sbin/diskutil', 'mount', 'Archive'], {
       stdio: 'ignore',
       timeout: 15_000,
     });
-  } catch {}
+  } catch {
+    try {
+      execFileSync('/usr/sbin/diskutil', ['mount', 'Archive'], {
+        stdio: 'ignore',
+        timeout: 15_000,
+      });
+    } catch {}
+  }
 }
 
 // Prevents silent writes onto the 256 GB internal Mac mini SSD (and `/Volumes/Archive 1` mount
