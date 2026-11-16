@@ -395,7 +395,7 @@ if (require.main === module) {
   const format = toID(formatFlag);
 
   if (!teamFile || !blocklistDirs.length || !format) {
-    console.error('Usage: bun index.ts <team-file> <pool-dir...> --format=<format>');
+    console.error('Usage: node build/teams <team-file> <pool-dir...> --format=<format>');
     process.exit(1);
   }
 

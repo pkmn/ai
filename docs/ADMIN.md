@@ -50,27 +50,29 @@ npm run pkmn -- <command> [args...]
 - **Database resolution:** `pkmn` automatically opens `/var/lib/pkmn/arena.sqlite` whenever
   `/var/lib/pkmn` exists or `NODE_ENV=production`, and `db/data/arena.sqlite` locally (override with
   `ARENA_DB_PATH=/path/to/arena.sqlite`, or pass `MOCK=1` locally to read `.mock/` overlays).
-- **Live concurrency & static re-renders:** SQLite runs in WAL mode with `busy_timeout = 5000` ms,
-  so `pkmn` commands can run safely alongside the live `pkmn.ai-server` process and automatically
-  re-render affected static HTML and `.json` pages into `public/`.
+- **Live concurrency & SSR cache invalidation:** SQLite runs in WAL mode with `busy_timeout = 5000`
+  ms, so `pkmn` commands can run safely alongside the live `pkmn.ai-server` process; `pkmn.ai-server`
+  renders Arena and project profile HTML/JSON dynamically and invalidates its ETag cache
+  automatically when the SQLite WAL advances (while tournament status changes also sync the static
+  `#topbar` live banner in `public/`).
 
 | Command | Purpose |
 | :--- | :--- |
 | `lookup-smogon <username\|slug.id\|id\|url>` | Resolve a Smogon forum user's immutable numeric XenForo ID and ban status. |
 | `sync-projects [--projects <path>] [--offline]` | Sync `arena:` blocks from `static/projects.yml` into SQLite (`agents` & `developers`). |
 | `reassign-developer <github> <slug\|--none> [...]` | Move a developer's GitHub login to another project (or remove with `--none`) in `projects.yml` + SQLite. |
-| `quarantine <agent-slug> <version> [--reason "..."]` | Quarantine a misbehaving agent version across ladders and re-render leaderboards. |
-| `unquarantine <agent-slug> <version>` | Restore a quarantined version to active competition and re-render leaderboards. |
+| `quarantine <agent-slug> <version> [--reason "..."]` | Quarantine a misbehaving agent version across ladders and recompute ratings. |
+| `unquarantine <agent-slug> <version>` | Restore a quarantined version to active competition and recompute ratings. |
 | `refund-cooldown <agent-slug>` | Clear the 14-day submission cooldown on `<agent-slug>`. |
 | `set-anchor <ladder_id> <agent-slug> <version>` | Pin `<agent-slug>@<version>` to `1500` Elo on `<ladder_id>` and recompute ratings. |
 | `set-ladder-status <ladder_id> <status>` | Set `<ladder_id>` to `upcoming`, `active`, `settling`, or `archived`. |
+| `upload-ladder-teams <ladder_id> <teams-file>` | Validate and upload canonical `harvested` teams into SQLite (`ladder_teams`). |
 | `rotate-ladder <old_id> --name "..." [--new <id> ...]` | Transition `<old_id>` into `settling`/`archived` under its historical name and optionally open `<new_id>`. |
-| `publish-ladder-archive <ladder_id> <archive.7z>` | Publish `<ladder_id>-logs.7z` (and `teams.json`) for an `archived` `pools` ladder. |
+| `publish-ladder-archive <ladder_id> <file>` | Publish `<ladder_id>-logs.7z` (for `archived` `pools` ladders) or `<ladder_id>-logs.tar` (for `random` ladders). |
 | `create-tournament <id> --name "..." --format <fmt> ...` | Create or update a Tournament (`scheduled`, `running`, or `completed`). |
 | `seed-tournament <id>` | Lock tournament entrants and assign 1-based Berger seeds by conservative ladder rating. |
 | `set-tournament-status <id> <status>` | Flip tournament `<id>` to `scheduled`, `running` (enables `#topbar` `● LIVE` banner), or `completed`. |
 | `publish-tournament-archive <id> <archive.7z>` | Publish `<id>-replays.7z` for a `completed` tournament. |
-| `render` | Force a full static HTML/JSON re-render of all Arena and project profile views in `public/`. |
 | `session [--github <login>] [--discord <id>:<name>]` | Mint a signed `pkmn_session` cookie header using `SESSION_SECRET` (for `curl` / debugging). |
 
 ---
@@ -88,7 +90,8 @@ npm run pkmn -- lookup-smogon pre
 # pre.10544 (id=10544, username="pre", banned=false)
 ```
 
-*(Uses `SMOGON_TOKEN` from `.env` if set, falling back to public XenForo member profile lookup.)*
+*(Queries the XenForo REST API when `SMOGON_TOKEN` is set in `.env`, or resolves numeric `slug.id` /
+member URLs against the public XenForo profile page when `SMOGON_TOKEN` is unset.)*
 
 ### Step 2: Register or Qualify a Project in `static/projects.yml`
 
@@ -333,24 +336,26 @@ What `rotate-ladder` does atomically:
 
 ### Publishing Retired `pools` Ladder Archives (`<ladder_id>-logs.7z`)
 
-Continuous `harvested` and `random` ladders never publish battle logs or team sheets. For
-competitor-submitted `pools` ladders (`VGC`), full battle logs (`<ladder_id>-logs.7z`) and
-`teams.json` may be published **strictly after** the ladder reaches `status = 'archived'`:
+Continuous `harvested` ladders never publish battle logs or team sheets, while `random` ladders
+publish public `.log` replays and daily rolled-up `<ladder_id>-logs.tar` archives. For
+competitor-submitted `pools` ladders (`VGC`), full battle logs (`<ladder_id>-logs.7z`) and dynamic
+`/arena/ladders/<ladder_id>/teams.json` become accessible **strictly after** the ladder reaches
+`status = 'archived'`:
 
 ```sh
 # Option A: Local file on pkmn.ai
 npm run pkmn -- publish-ladder-archive gen9championsvgc2026regmc /tmp/gen9championsvgc2026regmc-logs.7z
 
 # Option B: Remote upload from the Mac mini over HTTPS / tunnel
-curl -fsS -X PUT https://pkmn.ai/api/arena/ladders/gen9championsvgc2026regmc/archive \
+curl -fsS -X POST "https://pkmn.ai/api/arena/ladder-archive?ladderId=gen9championsvgc2026regmc&ext=7z" \
   -H "Authorization: Bearer $ARENA_SECRET" \
   -H "X-Content-SHA256: $(shasum -a 256 gen9championsvgc2026regmc-logs.7z | awk '{print $1}')" \
   --data-binary @gen9championsvgc2026regmc-logs.7z
 ```
 
-Both paths atomically write `public/arena/ladders/<ladder_id>/<ladder_id>-logs.7z`, emit
-`public/arena/ladders/<ladder_id>/teams.json`, and re-render the archived ladder and battle history
-links.
+Both paths atomically write `public/arena/ladders/<ladder_id>/<ladder_id>-logs.7z`, while
+`pkmn.ai-server` serves `/arena/ladders/<ladder_id>/teams.json` dynamically from SQLite once
+`status = 'archived'`.
 
 ---
 
@@ -376,10 +381,10 @@ cd /home/pkmn/ai
 node --env-file-if-exists=.env build/server/discord
 ```
 
-### Wiki Administration (`server/wiki.ts`)
+### Wiki Administration (`server/wiki.tsx`)
 
 - Site-wide wiki administrators (`ADMINS`) and GitHub-to-Smogon revision display-name overrides
-  (`AUTHORS`) are defined at the top of `server/wiki.ts`. Wiki admins can edit any registered
+  (`AUTHORS`) are defined at the top of `server/wiki.tsx`. Wiki admins can edit any registered
   project page (`/wiki/<Project_Name>`) regardless of project ownership.
 - Registered project wiki pages support three read-visibility tiers via an optional first-line
   directive: `{% visibility: developers %}` (default for project pages),
@@ -444,7 +449,7 @@ sqlite3 /var/lib/pkmn/arena.sqlite \
 ```
 
 Provision one staging `g2-custom-24-49152` VM (`200 GB` `pd-ssd`, NVIDIA L4 drivers, `bwrap`,
-`skopeo`, `umoci`, and `/opt/arena/bin/` tournament runner binaries):
+`skopeo`, `p7zip-full`, and `/opt/arena/bin/` tournament runner binaries):
 
 ```sh
 gcloud compute instances create pkmn-tourney-bake \
@@ -458,15 +463,14 @@ gcloud compute instances create pkmn-tourney-bake \
   --boot-disk-size=200GB
 ```
 
-On `pkmn-tourney-bake`, rootlessly unpack each entrant's pinned `sha256` OCI image, verify its
-resident size cap, initial `/utm <packed_team>` BYOT response (for BYOT tournaments), and a Turn-1
-isolated `bwrap --unshare-all` smoke game, then snapshot the VM into a custom GCP image:
+On `pkmn-tourney-bake`, run `arena/scripts/bake-image.sh <tournament_id>` to pull each entrant's
+pinned `sha256` OCI image via `skopeo`, unpack layers via the hardened OCI rootfs extractor
+(`unpackOciLayoutToRootfs`), verify the 500 MB resident size cap, initial `/utm <packed_team>`
+response (when `team` is unset), and a Turn-1 isolated `bwrap --unshare-all` smoke game, then
+snapshot the VM into a custom GCP image:
 
 ```sh
-skopeo copy "docker://${OCI_REF}@sha256:${SHA256}" "oci:/tmp/oci-${AGENT_ID}:latest"
-mkdir -p "/opt/arena/agents/${AGENT_ID}"
-umoci unpack --rootless --image "/tmp/oci-${AGENT_ID}:latest" "/opt/arena/agents/${AGENT_ID}"
-rm -rf "/tmp/oci-${AGENT_ID}"
+./arena/scripts/bake-image.sh 3
 
 # Snapshot staging disk into custom image pkmn-tourney-3
 gcloud compute instances stop pkmn-tourney-bake --zone=us-central1-a
@@ -520,7 +524,7 @@ npm run pkmn -- set-tournament-status 3 completed
 ```sh
 npm run pkmn -- publish-tournament-archive 3 /tmp/3-replays.7z
 # or upload remotely from the tournament coordinator:
-curl -fsS -X PUT https://pkmn.ai/api/arena/tournaments/3/archive \
+curl -fsS -X POST "https://pkmn.ai/api/arena/tournament-archive?tournamentId=3" \
   -H "Authorization: Bearer $ARENA_SECRET" \
   -H "X-Content-SHA256: $(shasum -a 256 /tmp/3-replays.7z | awk '{print $1}')" \
   --data-binary @/tmp/3-replays.7z

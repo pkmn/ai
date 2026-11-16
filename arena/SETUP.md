@@ -376,8 +376,8 @@ ssh arena 'diskutil list external physical'
 # 2. Format the external disk as APFS named "Archive" (replace diskX with the external disk identifier, e.g. disk4)
 ssh -t arena 'sudo diskutil eraseDisk APFS Archive GPT /dev/diskX'
 
-# 3. Enable POSIX ownership (disabled by default on external drives), create archive subdirectories, and disable Spotlight indexing
-ssh -t arena 'sudo diskutil enableOwnership /Volumes/Archive && sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents} && sudo chown -R pkmn:agents /Volumes/Archive && sudo chmod 0750 /Volumes/Archive/{logs,db-backups,cold-agents} && sudo mdutil -i off /Volumes/Archive'
+# 3. Enable POSIX ownership (disabled by default on external drives), create archive subdirectories (0700 so GID 590 cannot read private archives), and disable Spotlight indexing
+ssh -t arena 'sudo diskutil enableOwnership /Volumes/Archive && sudo mkdir -p /Volumes/Archive/{logs,db-backups,cold-agents} && sudo chown -R pkmn:agents /Volumes/Archive && sudo chmod 0700 /Volumes/Archive /Volumes/Archive/{logs,db-backups,cold-agents} && sudo mdutil -i off /Volumes/Archive'
 ```
 
 #### Verify Step 3.1
@@ -386,7 +386,7 @@ ssh -t arena 'sudo diskutil enableOwnership /Volumes/Archive && sudo mkdir -p /V
 ssh arena 'df -h /Volumes/Archive && ls -ld /Volumes/Archive/{logs,db-backups,cold-agents}'
 ```
 
-*Expected:* `/Volumes/Archive` mounted with ~1 TB free and `drwxr-x---` (`0750`) directories owned
+*Expected:* `/Volumes/Archive` mounted with ~1 TB free and `drwx------` (`0700`) directories owned
 by `pkmn:agents`.
 
 ### Step 3.2: Install Xcode Command Line Tools (`clang`, `codesign`, `git`)
@@ -430,7 +430,7 @@ grep -q "/opt/homebrew/bin/brew" ~/.zprofile 2>/dev/null || echo '\''eval "$(/op
 # 2. Install CLI tools and Google Cloud SDK (`gcloud`) required by arena/
 ssh arena '
 eval "$(/opt/homebrew/bin/brew shellenv)"
-brew install node git jq zstd sevenzip skopeo podman sqlite
+brew install node git jq zstd xz sevenzip skopeo podman sqlite
 brew install --cask gcloud-cli
 '
 ```
@@ -568,8 +568,9 @@ What `setup-arena.sh` provisions:
 
 ### Step 5.2: Bootstrap `ai.pkmn.pf` & Reload Hardened `sshd`
 
-Enable the `pf` packet filter LaunchDaemon (which drops all outbound TCP/UDP/ICMP traffic from UIDs
-`p1` and `p2`, including loopback) and reload `sshd` so it binds exclusively to `127.0.0.1:22`:
+Enable the `pf` packet filter LaunchDaemon (which drops all outbound TCP/UDP traffic from UIDs `p1`
+and `p2`, including loopback; raw ICMP requires root and native bundles also run under Seatbelt
+`(deny network*)`) and reload `sshd` so it binds exclusively to `127.0.0.1:22`:
 
 ```sh
 ssh arena '
@@ -635,7 +636,7 @@ fi
 ```
 
 *Expected:*
-- `block return out quick proto tcp from any to any user = 591` (and `592` / `udp` / `icmp` / `icmp6`).
+- `block return out quick proto tcp from any to any user = 591` (and `592` / `udp`).
 - `PASS: pf blocked outbound/loopback network from p1`.
 
 ##### Test 5C: Verify Native Seatbelt Sandbox (`sandbox.sb`), `limit` Supervisor & `arena` Lifecycle
@@ -667,13 +668,13 @@ chmod 0755 "${TEST_DIR}/run"
 
 OUT="$(printf "|request|{\"active\":[{\"moves\":[{\"id\":\"tackle\"}]}]}\n" | /opt/arena/bin/arena run p1 native _verify_native)"
 PEAK_MIB="$(cat /opt/arena/state/peak_ram_p1)"
-/opt/arena/bin/arena cleanup p1 native
+sudo -n /opt/arena/bin/arena cleanup p1 native
 REMAINING="$(sudo find /Volumes/P1 -mindepth 1 | wc -l | tr -d " ")"
 rm -rf "$TEST_DIR"
 
 # Also verify the installed smoke-test _baseline agent inside the Seatbelt p2 slot
 BASE_OUT="$(printf "|request|{\"teamPreview\":true,\"maxChosenTeamSize\":4}\n|request|{\"active\":[{\"moves\":[{\"id\":\"tackle\"}]}]}\n" | /opt/arena/bin/arena run p2 native _baseline | tr "\n" " ")"
-/opt/arena/bin/arena cleanup p2 native
+sudo -n /opt/arena/bin/arena cleanup p2 native
 
 echo "Agent stdout: ${OUT} | Baseline: ${BASE_OUT}| Peak RAM MiB: ${PEAK_MIB} | Remaining files in /Volumes/P1: ${REMAINING}"
 [[ "$OUT" == "default" && "$BASE_OUT" == "/team 1234 default " && "$REMAINING" == "0" ]] && echo "PASS: Native Seatbelt + limit + _baseline + cleanup verified"
@@ -738,7 +739,7 @@ podman build --platform linux/arm64 -t arena-verify-oci:latest "$CTX_DIR" >/dev/
 rm -rf "$CTX_DIR"
 
 OUT="$(printf "|request|{\"active\":[{\"moves\":[{\"id\":\"tackle\"}]}]}\n" | /opt/arena/bin/arena run p1 container arena-verify-oci:latest)"
-/opt/arena/bin/arena cleanup p1 container
+sudo -n /opt/arena/bin/arena cleanup p1 container
 podman rmi -f arena-verify-oci:latest >/dev/null
 REMAINING="$(sudo find /Volumes/P1 -mindepth 1 | wc -l | tr -d " ")"
 
@@ -964,9 +965,9 @@ ssh arena 'sudo chmod -R a+rX,go-w /opt/arena/stats'
 | **Restart coordinator** | `ssh arena 'sudo launchctl kickstart -k system/ai.pkmn.arena'` |
 | **Restart SSH tunnel** | `ssh arena 'sudo launchctl kickstart -k system/ai.pkmn.tunnel'` |
 | **Inspect local agent cache** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT version_id, slug, version, mode, residency, total_games, total_faults, consecutive_faults FROM local_agents;"'` |
-| **Inspect incomplete / recent matches** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, ladder_id, p1_slug, p2_slug, status, game1_outcome, updated_at FROM local_matches ORDER BY started_at DESC LIMIT 10;"'` |
+| **Inspect incomplete / recent matches** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, ladder_id, p1_slug, p2_slug, status, g1_outcome, updated_at FROM local_matches ORDER BY started_at DESC LIMIT 10;"'` |
 | **Inspect pending RPC outbox** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, endpoint, created_at FROM outbox;"'` |
-| **Emergency slot cleanup** | `ssh arena '/opt/arena/bin/arena cleanup p1 native && /opt/arena/bin/arena cleanup p2 native && /opt/arena/bin/arena cleanup p1 container && /opt/arena/bin/arena cleanup p2 container'` |
+| **Emergency slot cleanup** | `ssh arena 'sudo -n /opt/arena/bin/arena cleanup p1 native && sudo -n /opt/arena/bin/arena cleanup p2 native && sudo -n /opt/arena/bin/arena cleanup p1 container && sudo -n /opt/arena/bin/arena cleanup p2 container'` |
 | **Check Podman VM health** | `ssh arena '/opt/homebrew/bin/podman machine list && /opt/homebrew/bin/podman ps -a'` |
 
 ### 8.4 Full Unattended Reboot Persistence Test

@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   --     `pkmn unquarantine` can restore its active role without reviving previously retired entries
   role TEXT NOT NULL DEFAULT 'champion'
     CHECK (role IN ('champion', 'challenger', 'retired', 'quarantined')),
-  -- 1 if this version pins the ladder's 1500.0 Elo translation gauge (theta = 0, SE = 0), else 0.
+  -- 1 if this version pins the ladder's 1500.0 Elo translation gauge (theta_anchor = 0 shift; UI
+  -- displays ±0 CI relative to the anchor while `se` retains inverse-Hessian curvature), else 0.
   -- Orthogonal to `role`: a retired anchor stays in the Davidson solve at exact 1500 Elo forever.
   is_anchor INTEGER NOT NULL DEFAULT 0 CHECK (is_anchor IN (0, 1)),
   -- Posterior mode (MAP) Generalized Davidson rating on the standard Elo scale (anchor = 1500).
