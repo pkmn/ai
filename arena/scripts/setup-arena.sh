@@ -98,6 +98,8 @@ sudo chmod 0755 /opt/arena/agents/_baseline /opt/arena/agents/_baseline/run
 
 echo "==> Step 6: Configuring headless power management & disabling Spotlight on scratch volumes"
 sudo pmset -a womp 1 powernap 0
+sudo defaults write /Library/Preferences/SystemConfiguration/autodiskmount \
+  AutomountDisksWithoutUserLogin -bool true
 sudo mdutil -i off /Volumes/P1 /Volumes/P2 /Volumes/Staging 2>/dev/null || true
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false

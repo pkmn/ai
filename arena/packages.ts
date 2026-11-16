@@ -42,12 +42,27 @@ export interface OciManifestInspection {
   indexSha256?: string;
 }
 
+// Headless macOS holds external USB/Thunderbolt volumes unmounted at the login window until either
+// `AutomountDisksWithoutUserLogin` is enabled or a local daemon invokes `diskutil mount`.
+export function tryMountArchiveVolume(): void {
+  if (process.platform !== 'darwin' || fs.existsSync('/Volumes/Archive')) return;
+  try {
+    execFileSync('/usr/sbin/diskutil', ['mount', 'Archive'], {
+      stdio: 'ignore',
+      timeout: 15_000,
+    });
+  } catch {}
+}
+
 // Prevents silent writes onto the 256 GB internal Mac mini SSD (and `/Volumes/Archive 1` mount
 // collisions) if the external `/Volumes/Archive` drive is unmounted.
 export function assertArchiveVolumeMounted(targetPath: string): void {
   if (process.platform !== 'darwin') return;
   const resolved = path.resolve(targetPath);
   if (resolved !== '/Volumes/Archive' && !resolved.startsWith('/Volumes/Archive/')) return;
+  if (!fs.existsSync('/Volumes/Archive')) {
+    tryMountArchiveVolume();
+  }
   if (!fs.existsSync('/Volumes/Archive')) {
     throw new Error('/Volumes/Archive is not mounted');
   }

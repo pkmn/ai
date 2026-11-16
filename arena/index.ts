@@ -53,6 +53,10 @@ export async function runDaemon(opts: {
     ? {mode: 'native', target: BASELINE_BIN}
     : {mode: 'native', target: '_baseline'};
 
+  if (!isDev && !opts.once && opts.coldDir === undefined && opts.archiveLogsDir === undefined) {
+    packages.tryMountArchiveVolume();
+  }
+
   const coord = new coordinator.Coordinator({
     client,
     stateDb,

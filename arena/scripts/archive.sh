@@ -22,6 +22,9 @@ GCS_BUCKET="${ARENA_GCS_BUCKET:-gs://pkmn-arena}"
 # Guard against silently writing into the internal rootfs if the external APFS drive is unmounted
 if [[ "$ARCHIVE_ROOT" == "/Volumes/Archive" && "$(uname -s)" == "Darwin" ]]; then
   if ! mount | grep -q " on /Volumes/Archive "; then
+    /usr/sbin/diskutil mount Archive >/dev/null 2>&1 || true
+  fi
+  if ! mount | grep -q " on /Volumes/Archive "; then
     echo "ERROR: /Volumes/Archive is not mounted; aborting archive.sh" >&2
     exit 1
   fi
