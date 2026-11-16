@@ -21,21 +21,66 @@ fi
 SCRATCH_VOL="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')"
 CONTAINER_NAME="arena-${SLOT}"
 
+# Read cgroup peak memory from the Podman VM host WITHOUT executing any binary inside the
+# untrusted container (`podman exec`), so a malicious `/bin/cat` can neither hang the daemon nor
+# spoof telemetry.
+record_container_peak_ram() {
+  local cid peak_bytes
+  cid="$(podman container inspect -f '{{.Id}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+  if [[ ! "$cid" =~ ^[0-9a-f]{12,64}$ ]]; then
+    return 0
+  fi
+  peak_bytes="$(podman machine ssh podman-machine-default \
+    "cat /sys/fs/cgroup/machine.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/libpod_parent/libpod-${cid}/memory.peak 2>/dev/null | head -n 1" \
+    2>/dev/null || true)"
+  if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
+    echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+  fi
+}
+
+kill_native_slot_procs() {
+  local pass
+  for pass in {1..10}; do
+    sudo -n /usr/bin/killall -9 -u "$SLOT" 2>/dev/null || true
+    if ! /usr/bin/pgrep -u "$SLOT" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.02
+  done
+  echo "Failed to terminate lingering processes for UID $SLOT" >&2
+  return 1
+}
+
 wipe_scratch() {
-  # Clear any user/system immutable or append-only flags (`chflags uchg/uappend/schg`) set by an
-  # untrusted agent so `find ... -delete` cannot fail with EPERM and leak state across games.
+  # Clear any user/system immutable or append-only flags (`chflags uchg/uappend/schg`) and root
+  # extended attributes set by an untrusted agent so nothing persists across games.
   sudo -n /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL" 2>/dev/null || true
-  sudo -n /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete 2>/dev/null || true
+  sudo -n /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete
+  sudo -n /usr/bin/xattr -c "$SCRATCH_VOL" 2>/dev/null || true
   sudo -n /usr/sbin/chown root:wheel "$SCRATCH_VOL"
   sudo -n /bin/chmod 0700 "$SCRATCH_VOL"
+  if [[ -n "$(sudo -n /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -print -quit)" ]]; then
+    echo "Scratch wipe incomplete on $SCRATCH_VOL" >&2
+    exit 1
+  fi
 }
 
 case "$ACTION" in
   run)
-    wipe_scratch
+    # Terminate any stale container or native slot processes BEFORE wiping scratch so lingering
+    # threads cannot write into `$SCRATCH_VOL` after the wipe completes.
     if [[ "$MODE" == "container" ]]; then
-      rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
       podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    elif [[ "$MODE" == "native" ]]; then
+      kill_native_slot_procs
+    else
+      echo "Unknown mode: $MODE" >&2
+      exit 2
+    fi
+    wipe_scratch
+    rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+
+    if [[ "$MODE" == "container" ]]; then
       GPU_ARGS=()
       if [[ "${ARENA_PODMAN_GPU:-1}" != "0" ]]; then
         GPU_ARGS+=(--device /dev/dri)
@@ -50,28 +95,33 @@ case "$ACTION" in
         --memory=14g \
         --memory-swap=14g \
         --pids-limit=256 \
-        "${GPU_ARGS[@]}" \
+        ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
         --tmpfs /tmp:rw,noexec,nosuid,size=500m \
         --mount "type=bind,src=/opt/arena/stats,dst=/opt/arena/stats,ro" \
         --mount "type=bind,src=${SCRATCH_VOL},dst=/scratch,rw" \
         --env TMPDIR=/scratch \
         --env HOME=/scratch \
+        --env XDG_CACHE_HOME=/scratch \
         --env PKMN_STATS_DIR=/opt/arena/stats \
+        --env OMP_NUM_THREADS=10 \
+        --env MKL_NUM_THREADS=10 \
+        --env TORCH_NUM_THREADS=10 \
+        --env RAYON_NUM_THREADS=10 \
+        --env ARENA_MEMORY_LIMIT_MB=14336 \
         "$TARGET"
-    elif [[ "$MODE" == "native" ]]; then
-      if [[ ! "$TARGET" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    else
+      if [[ ! "$TARGET" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$TARGET" == *..* ]]; then
         echo "Invalid native agent target: $TARGET" >&2
         exit 2
       fi
       AGENT_DIR="/opt/arena/agents/${TARGET}"
-      if [[ ! -x "${AGENT_DIR}/run" ]]; then
+      if [[ ! -f "${AGENT_DIR}/run" || ! -x "${AGENT_DIR}/run" ]]; then
         echo "Missing executable ${AGENT_DIR}/run" >&2
         exit 2
       fi
       # Run `limit` supervisor as `root` via sudoers so `proc_pid_rusage` enforces the 14 GiB
       # XNU `ri_phys_footprint` cap across all `p1`/`p2` processes while `limit` drops its child
       # directly to `$SLOT` (`initgroups`/`setgid`/`setuid`) and writes `/opt/arena/state/peak_ram_*`.
-      rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
       cd "$SCRATCH_VOL"
       exec sudo -n /opt/arena/bin/limit "$SLOT" \
         /usr/bin/sandbox-exec \
@@ -79,40 +129,68 @@ case "$ACTION" in
           -D "AGENT_RO_DIR=${AGENT_DIR}" \
           -D "AGENT_SCRATCH_DIR=${SCRATCH_VOL}" \
           "${AGENT_DIR}/run"
-    else
-      echo "Unknown mode: $MODE" >&2
-      exit 2
     fi
     ;;
 
   pause)
     if [[ "$MODE" == "container" ]]; then
-      # Poll briefly on initial startup until `podman run` materializes `$CONTAINER_NAME`
-      for _ in {1..20}; do
+      paused=0
+      for _ in {1..80}; do
         state="$(podman container inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
         if [[ "$state" == "paused" || "$state" == "exited" || "$state" == "dead" ]]; then
+          paused=1
           break
         fi
         if [[ "$state" == "running" ]]; then
-          peak_bytes="$(podman exec "$CONTAINER_NAME" cat /sys/fs/cgroup/memory.peak 2>/dev/null || true)"
-          if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
-            echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
-          fi
           if podman pause "$CONTAINER_NAME" >/dev/null 2>&1; then
+            record_container_peak_ram
+            paused=1
             break
           fi
         fi
         sleep 0.025
       done
+      if (( paused == 0 )); then
+        echo "Timed out waiting to pause container $CONTAINER_NAME" >&2
+        exit 1
+      fi
     elif [[ "$MODE" == "native" ]]; then
-      # Poll briefly on initial startup until `limit` drops its child to UID `$SLOT`
-      for _ in {1..20}; do
-        if /usr/bin/pgrep -u "$SLOT" >/dev/null 2>&1; then
-          sudo -n -u "$SLOT" /usr/bin/killall -STOP -u "$SLOT" 2>/dev/null || true
+      # Wait for `limit` to drop its child to UID `$SLOT`, then converge `killall -STOP` across
+      # consecutive process-table snapshots so racing child forks cannot escape `SIGSTOP`.
+      saw_procs=0
+      converged=0
+      prev_snap=""
+      for _ in {1..80}; do
+        if ! /usr/bin/pgrep -u "$SLOT" >/dev/null 2>&1; then
+          if (( saw_procs == 1 )); then
+            converged=1
+            break
+          fi
+          sleep 0.025
+          continue
+        fi
+        saw_procs=1
+        sudo -n -u "$SLOT" /usr/bin/killall -STOP -u "$SLOT" 2>/dev/null || true
+        snap="$(/bin/ps -U "$SLOT" -o pid=,state= 2>/dev/null | awk '{print $1":"substr($2,1,1)}' | sort)"
+        if [[ -z "$snap" ]]; then
+          converged=1
           break
         fi
-        sleep 0.025
+        if ! printf '%s\n' "$snap" | grep -qv ':T$'; then
+          if [[ "$snap" == "$prev_snap" ]]; then
+            converged=1
+            break
+          fi
+          prev_snap="$snap"
+        else
+          prev_snap=""
+        fi
+        sleep 0.015
       done
+      if (( converged == 0 )); then
+        echo "Failed to freeze all processes for UID $SLOT" >&2
+        exit 1
+      fi
     fi
     ;;
 
@@ -120,7 +198,6 @@ case "$ACTION" in
     if [[ "$MODE" == "container" ]]; then
       podman unpause "$CONTAINER_NAME" >/dev/null 2>&1 || true
     elif [[ "$MODE" == "native" ]]; then
-      # Thaw every process owned by p1 or p2 on macOS
       sudo -n -u "$SLOT" /usr/bin/killall -CONT -u "$SLOT" 2>/dev/null || true
     fi
     ;;
@@ -128,22 +205,19 @@ case "$ACTION" in
   cleanup)
     if [[ -z "$MODE" || "$MODE" == "container" ]]; then
       if [[ "$MODE" == "container" ]]; then
-        peak_bytes="$(podman exec "$CONTAINER_NAME" cat /sys/fs/cgroup/memory.peak 2>/dev/null || true)"
-        if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
-          echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
-        fi
+        record_container_peak_ram
       fi
       podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
     fi
     if [[ -z "$MODE" || "$MODE" == "native" ]]; then
       # 1. Unconditionally kill every process and background daemon owned by p1 or p2
-      sudo -n /usr/bin/killall -9 -u "$SLOT" 2>/dev/null || true
+      kill_native_slot_procs
 
       # 2. Purge any stray System V IPC segments owned by p1 or p2 (`/usr/bin/ipcs` on macOS)
-      for id in $(sudo -n /usr/bin/ipcs -m 2>/dev/null | awk -v u="$SLOT" '$5 == u {print $2}'); do
+      for id in $(sudo -n /usr/bin/ipcs -m 2>/dev/null | awk -v u="$SLOT" '$5 == u && $2 ~ /^[0-9]+$/ {print $2}'); do
         sudo -n /usr/bin/ipcrm -m "$id" 2>/dev/null || true
       done
-      for id in $(sudo -n /usr/bin/ipcs -s 2>/dev/null | awk -v u="$SLOT" '$5 == u {print $2}'); do
+      for id in $(sudo -n /usr/bin/ipcs -s 2>/dev/null | awk -v u="$SLOT" '$5 == u && $2 ~ /^[0-9]+$/ {print $2}'); do
         sudo -n /usr/bin/ipcrm -s "$id" 2>/dev/null || true
       done
     fi

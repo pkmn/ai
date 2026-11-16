@@ -93,6 +93,7 @@ interface SandboxedPlayer {
   lastDecisionMillis: number;
   exited: boolean;
   exitCode: number | undefined;
+  cleanedUp: boolean;
 }
 
 export const MAX_INVALID_STRIKES = 3;
@@ -401,6 +402,7 @@ export class TimeSlicedArenaGame {
       lastDecisionMillis: 0,
       exited: false,
       exitCode: undefined,
+      cleanedUp: false,
     };
 
     const closeWaiter = (code?: number | null) => {
@@ -462,6 +464,7 @@ export class TimeSlicedArenaGame {
         try {
           execFileSync('podman', ['pause', `arena-dev-${player.slot}-${process.pid}`], {
             stdio: 'ignore',
+            timeout: 10_000,
           });
         } catch {}
       } else if (player.proc.pid) {
@@ -472,8 +475,18 @@ export class TimeSlicedArenaGame {
       return;
     }
     try {
-      execFileSync(this.arenaBin, ['pause', player.slot, player.spec.mode], {stdio: 'ignore'});
-    } catch {}
+      execFileSync(this.arenaBin, ['pause', player.slot, player.spec.mode], {
+        stdio: 'ignore',
+        timeout: 10_000,
+      });
+    } catch {
+      if (!player.exited) {
+        this.cleanupSlot(player);
+        if (this.battleStream.battle) {
+          this.forceLose(player.slot, 'crash');
+        }
+      }
+    }
   }
 
   private resumeSlot(player: SandboxedPlayer) {
@@ -483,6 +496,7 @@ export class TimeSlicedArenaGame {
         try {
           execFileSync('podman', ['unpause', `arena-dev-${player.slot}-${process.pid}`], {
             stdio: 'ignore',
+            timeout: 10_000,
           });
         } catch {}
       } else if (player.proc.pid) {
@@ -493,18 +507,23 @@ export class TimeSlicedArenaGame {
       return;
     }
     try {
-      execFileSync(this.arenaBin, ['resume', player.slot, player.spec.mode], {stdio: 'ignore'});
+      execFileSync(this.arenaBin, ['resume', player.slot, player.spec.mode], {
+        stdio: 'ignore',
+        timeout: 10_000,
+      });
     } catch {}
   }
 
   private cleanupSlot(player: SandboxedPlayer | undefined) {
-    if (!player) return;
+    if (!player || player.cleanedUp) return;
     if (this.devMode) {
+      player.cleanedUp = true;
       if (player.spec.mode === 'container') {
         const containerName = `arena-dev-${player.slot}-${process.pid}`;
         try {
           execFileSync('podman', ['rm', '-f', '-t', '0', containerName], {
             stdio: 'ignore',
+            timeout: 10_000,
           });
         } catch {}
       } else if (player.proc.pid) {
@@ -520,7 +539,11 @@ export class TimeSlicedArenaGame {
       return;
     }
     try {
-      execFileSync(this.arenaBin, ['cleanup', player.slot, player.spec.mode], {stdio: 'ignore'});
+      execFileSync(this.arenaBin, ['cleanup', player.slot, player.spec.mode], {
+        stdio: 'ignore',
+        timeout: 10_000,
+      });
+      player.cleanedUp = true;
     } catch {}
   }
 
@@ -533,27 +556,11 @@ export class TimeSlicedArenaGame {
       try {
         execFileSync('sudo', ['-n', '/usr/bin/killall', '-9', '-u', player.slot], {
           stdio: 'ignore',
+          timeout: 5_000,
         });
       } catch {}
     } else if (!this.devMode && player.spec.mode === 'container') {
-      try {
-        const containerName = `arena-${player.slot}`;
-        const raw = execFileSync(
-          'podman',
-          ['exec', containerName, 'cat', '/sys/fs/cgroup/memory.peak'],
-          {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000}
-        ).trim();
-        const peakBytes = Number(raw);
-        if (Number.isFinite(peakBytes) && peakBytes > 0) {
-          fs.writeFileSync(
-            `/opt/arena/state/peak_ram_${player.slot}`,
-            `${Math.ceil(peakBytes / (1024 * 1024))}\n`
-          );
-        }
-      } catch {}
-      try {
-        process.kill(player.proc.pid, 'SIGTERM');
-      } catch {}
+      this.cleanupSlot(player);
     } else {
       try {
         process.kill(player.proc.pid, 'SIGTERM');

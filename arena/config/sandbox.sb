@@ -13,23 +13,23 @@
 (deny system-socket)
 
 ;; 2. Allow basic process execution, fork/exec of helper binaries within allowed paths, and signals
-;;    restricted to the agent's own sandboxed process tree (`same-sandbox`). Allow general sysctl
-;;    hardware/CPU queries while blocking `kern.proc.*` host process-table enumeration except
-;;    per-PID `kern.proc.pid.*` self-inspection.
+;;    restricted to the agent's own sandboxed process tree (`same-sandbox`). Allow hardware/CPU
+;;    sysctl queries while denying all `kern.proc*` (`kern.proc`, `kern.proc.*`, `kern.procargs2`)
+;;    process-table enumeration (`(allow process-info* (target self))` covers self-inspection).
 (allow process-fork)
 (allow process-info* (target self))
 (allow signal (target same-sandbox))
 (allow sysctl-read)
 (deny sysctl-read
-  (sysctl-name-prefix "kern.proc."))
-(allow sysctl-read
-  (sysctl-name-prefix "kern.proc.pid."))
-(allow pseudo-tty)
+  (sysctl-name-prefix "kern.proc"))
 
-;; 3. Explicitly deny cross-process Mach/POSIX IPC, keychains, pasteboard, and audio/camera
+;; 3. Explicitly deny cross-process Mach/POSIX IPC, darwin notifications, hardlinks, keychains,
+;;    pasteboard, and audio/camera (`notifyd` is omitted so state cannot persist across games).
 (deny ipc-posix-shm*)
 (deny ipc-posix-sem*)
 (deny ipc-sysv*)
+(deny darwin-notification-post)
+(deny file-link)
 (deny mach-priv*)
 (deny hid-control)
 (deny nvram*)
@@ -37,9 +37,7 @@
 ;; Allow only minimal system Mach services required by dyld, libSystem, Metal, and Neural Engine
 (allow mach-lookup
   (global-name "com.apple.system.logger")
-  (global-name "com.apple.system.notification_center")
   (global-name "com.apple.CoreServices.coreservicesd")
-  (global-name "com.apple.CARenderServer")
   (global-name "com.apple.MTLCompilerService")
   (global-name "com.apple.appleneuralengine"))
 
@@ -73,7 +71,14 @@
   (literal "/dev/random")
   (literal "/dev/urandom")
   (subpath "/dev/fd")
-  (subpath "/System")
+  (subpath "/System"))
+
+;; Block traversal of non-firmlinked `/System/Volumes/Data` paths beneath `/System`, then
+;; explicitly grant the required runtime/bundle/scratch subpaths below.
+(deny file-read*
+  (subpath "/System/Volumes/Data"))
+
+(allow file-read*
   (subpath "/usr/lib")
   (subpath "/usr/share")
   (subpath "/Library/Apple")
@@ -95,8 +100,11 @@
   (subpath (param "AGENT_RO_DIR")))
 
 ;; 7. Read/write ONLY the specific player slot's quota-capped APFS scratch volume (/Volumes/P1 or P2),
-;;    while denying chflags (`file-write-flags`) so agents cannot set `uchg`/`uappend`.
+;;    while denying chflags (`file-write-flags`) and denying xattr/timestamp writes on the volume
+;;    root itself so metadata cannot persist across games.
 (allow file-read* file-write* process-exec
   (subpath (param "AGENT_SCRATCH_DIR")))
 (deny file-write-flags
   (subpath (param "AGENT_SCRATCH_DIR")))
+(deny file-write-xattr file-write-times
+  (literal (param "AGENT_SCRATCH_DIR")))

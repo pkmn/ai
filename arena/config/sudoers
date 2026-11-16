@@ -1,12 +1,14 @@
 # /etc/sudoers.d/arena (mode 0440, owned by root:wheel)
 # Allow pkmn to spawn the root RAM/QoS supervisor, pause/resume, and wipe p1/p2 state without a password prompt.
-pkmn ALL=(root) NOPASSWD: /opt/arena/bin/limit p1 /usr/bin/sandbox-exec *, /opt/arena/bin/limit p2 /usr/bin/sandbox-exec *
+pkmn ALL=(root) NOPASSWD: /opt/arena/bin/limit p1 /usr/bin/sandbox-exec -f /opt/arena/etc/sandbox.sb *, /opt/arena/bin/limit p2 /usr/bin/sandbox-exec -f /opt/arena/etc/sandbox.sb *
 pkmn ALL=(p1,p2) NOPASSWD: /usr/bin/killall -STOP -u p1, /usr/bin/killall -STOP -u p2
 pkmn ALL=(p1,p2) NOPASSWD: /usr/bin/killall -CONT -u p1, /usr/bin/killall -CONT -u p2
 pkmn ALL=(root) NOPASSWD: /usr/bin/killall -9 -u p1, /usr/bin/killall -9 -u p2
 pkmn ALL=(root) NOPASSWD: /usr/bin/chflags -R nouchg\,nouappend\,noschg /Volumes/P1, /usr/bin/chflags -R nouchg\,nouappend\,noschg /Volumes/P2
 pkmn ALL=(root) NOPASSWD: /usr/bin/find /Volumes/P1 -mindepth 1 -delete, /usr/bin/find /Volumes/P2 -mindepth 1 -delete
-pkmn ALL=(root) NOPASSWD: /usr/bin/ipcs -m, /usr/bin/ipcs -s, /usr/bin/ipcrm -m *, /usr/bin/ipcrm -s *
+pkmn ALL=(root) NOPASSWD: /usr/bin/find /Volumes/P1 -mindepth 1 -print -quit, /usr/bin/find /Volumes/P2 -mindepth 1 -print -quit
+pkmn ALL=(root) NOPASSWD: /usr/bin/xattr -c /Volumes/P1, /usr/bin/xattr -c /Volumes/P2
+pkmn ALL=(root) NOPASSWD: /usr/bin/ipcs -m, /usr/bin/ipcs -s, /usr/bin/ipcrm -m [0-9]*, /usr/bin/ipcrm -s [0-9]*
 pkmn ALL=(root) NOPASSWD: /usr/sbin/chown root\:wheel /Volumes/P1, /usr/sbin/chown root\:wheel /Volumes/P2
 pkmn ALL=(root) NOPASSWD: /bin/chmod 0700 /Volumes/P1, /bin/chmod 0700 /Volumes/P2
-pkmn ALL=(root) NOPASSWD: /bin/launchctl kill SIGUSR1 system/ai.pkmn.arena, /bin/launchctl kickstart -k system/ai.pkmn.arena, /bin/launchctl kickstart -k system/ai.pkmn.tunnel, /bin/launchctl print system/ai.pkmn.*
+pkmn ALL=(root) NOPASSWD: /bin/launchctl kill SIGUSR1 system/ai.pkmn.arena, /bin/launchctl kickstart -k system/ai.pkmn.arena, /bin/launchctl kickstart -k system/ai.pkmn.tunnel, /bin/launchctl print system/ai.pkmn.arena, /bin/launchctl print system/ai.pkmn.tunnel, /bin/launchctl print system/ai.pkmn.pf, /bin/launchctl print system/ai.pkmn.podman, /bin/launchctl print system/ai.pkmn.archive

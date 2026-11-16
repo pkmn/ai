@@ -146,11 +146,14 @@ describe('arena infrastructure', () => {
         probeSrc,
         [
           '#include <fcntl.h>',
+          '#include <mach/mach.h>',
           '#include <netinet/in.h>',
+          '#include <servers/bootstrap.h>',
           '#include <stdio.h>',
           '#include <string.h>',
           '#include <sys/socket.h>',
           '#include <sys/sysctl.h>',
+          '#include <sys/xattr.h>',
           '#include <unistd.h>',
           'int main(int argc, char **argv) {',
           '  if (argc < 2) return 2;',
@@ -196,6 +199,21 @@ describe('arena infrastructure', () => {
           '    int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};',
           '    size_t sz = 0;',
           '    return sysctl(mib, 3, NULL, &sz, NULL, 0) == 0 ? 0 : 1;',
+          '  }',
+          '  if (strcmp(argv[1], "kernprocuid") == 0) {',
+          '    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)getuid()};',
+          '    size_t sz = 0;',
+          '    return sysctl(mib, 4, NULL, &sz, NULL, 0) == 0 ? 0 : 1;',
+          '  }',
+          '  if (strcmp(argv[1], "notifyd") == 0) {',
+          '    mach_port_t port = MACH_PORT_NULL;',
+          '    kern_return_t kr = bootstrap_look_up(',
+          '      bootstrap_port, "com.apple.system.notification_center", &port',
+          '    );',
+          '    return kr == KERN_SUCCESS ? 0 : 1;',
+          '  }',
+          '  if (strcmp(argv[1], "xattr") == 0 && argc == 3) {',
+          '    return setxattr(argv[2], "user.arena", "x", 1, 0, 0) == 0 ? 0 : 1;',
           '  }',
           '  return 2;',
           '}',
@@ -2879,6 +2897,9 @@ describe('arena infrastructure', () => {
       expect(() => runSandboxed('read', path.join(sbSibling, 'secret.txt'))).toThrow();
       expect(() => runSandboxed('socket')).toThrow();
       expect(() => runSandboxed('kernproc')).toThrow();
+      expect(() => runSandboxed('kernprocuid')).toThrow();
+      expect(() => runSandboxed('notifyd')).toThrow();
+      expect(() => runSandboxed('xattr', sbScratch)).toThrow();
 
       expect(() => execFileSync(
         '/usr/bin/sandbox-exec',
@@ -2892,6 +2913,35 @@ describe('arena infrastructure', () => {
         ],
         {cwd: sbScratch, env: sandboxEnv, stdio: 'pipe'}
       )).toThrow();
+    });
+
+    test('limit binary fails closed when slot privilege drop is unavailable', () => {
+      if (process.platform !== 'darwin') return;
+      let status: number | undefined;
+      try {
+        execFileSync(limitBin, ['p1', '/usr/bin/true'], {stdio: 'pipe'});
+      } catch (err) {
+        status = (err as {status?: number}).status;
+      }
+      expect(status).toBe(126);
+    });
+
+    test('limit binary sums physical memory footprint across forked child workers', () => {
+      if (process.platform !== 'darwin') return;
+      const peakFile = path.join(tmpDir, 'darwin-limit-fork-peak.txt');
+      execFileSync(
+        limitBin,
+        [
+          process.execPath,
+          '-e',
+          'const {spawn} = require("child_process");' +
+            'const c = spawn(process.execPath, ["-e", ' +
+            '"const b = Buffer.alloc(48 * 1024 * 1024, 9); setTimeout(() => b[0], 120);"]);' +
+            'c.on("exit", () => process.exit(0));',
+        ],
+        {encoding: 'utf8', env: {...process.env, ARENA_PEAK_RAM_FILE: peakFile}}
+      );
+      expect(Number(fs.readFileSync(peakFile, 'utf8').trim())).toBeGreaterThanOrEqual(48);
     });
   });
 });
