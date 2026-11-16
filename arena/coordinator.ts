@@ -226,7 +226,7 @@ export class Coordinator {
     this.agentsDir = options.agentsDir ?? packages.AGENTS_DIR;
     this.stagingDir = options.stagingDir ?? packages.STAGING_DIR;
     this.coldDir = options.coldDir ?? (
-      this.devMode && !fs.existsSync('/Volumes/Archive')
+      options.agentsDir !== undefined || (this.devMode && !fs.existsSync('/Volumes/Archive'))
         ? path.join(path.dirname(this.agentsDir), `${path.basename(this.agentsDir)}-cold`)
         : packages.COLD_AGENTS_DIR
     );
