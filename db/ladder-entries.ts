@@ -666,22 +666,27 @@ export function promoteRemainingActiveToChampion(
 // retired—retired entries remain in the graph so cross-version calibration and retired 1500-Elo
 // anchors never drift), then updates Champion/Challenger roles, official conservative LCB ranks,
 // 95% confidence rank intervals, peak stats, and Top-1 / Top-10 / Top-100 reign clocks.
-function applyRatingsToEntriesAndFamilies(
-  entries: EditableLadderEntry[],
-  pairs: ratings.PairMatchCounts[],
-  anchorIndex: number,
-  nowSec: number,
-  prevMatchSec: number | undefined,
-  families: Map<number, stats.AgentLadderStatsRow>,
-  warmStartTheta: Float64Array
-): ratings.RatingResult {
+function applyRatingsToEntriesAndFamilies(opts: {
+  entries: EditableLadderEntry[];
+  pairs: ratings.PairMatchCounts[];
+  anchorIndex: number;
+  nowSec: number;
+  prevMatchSec?: number;
+  families: Map<number, stats.AgentLadderStatsRow>;
+  warmStartTheta: Float64Array;
+}): ratings.RatingResult {
+  const {entries, pairs, anchorIndex, nowSec, prevMatchSec, families, warmStartTheta} = opts;
   const M = entries.length;
   // Cap per-match wall-clock increments at 3600s so runner maintenance or downtime never inflates
   // an incumbent's Top-K reign duration.
   const rawElapsed = prevMatchSec !== undefined ? Math.max(0, nowSec - prevMatchSec) : 0;
   const deltaSeconds = Math.min(3600, rawElapsed);
   const uncountedSeconds = rawElapsed - deltaSeconds;
-  const res = ratings.computeDavidsonRatings(M, pairs, anchorIndex, 1500, warmStartTheta);
+  const tick: ratings.ClockTick = {nowSeconds: nowSec, deltaSeconds, uncountedSeconds};
+  const res = ratings.computeDavidsonRatings(M, pairs, {
+    anchorIndex,
+    warmStartTheta,
+  });
 
   const activeIndicesByAgent = new Map<number, number[]>();
   for (let i = 0; i < M; i++) {
@@ -744,15 +749,7 @@ function applyRatingsToEntriesAndFamilies(
   const repIndices = [...repByAgent.values()].sort(
     (a, b) => entries[b].lcb - entries[a].lcb
   );
-  const {rankMin, rankMax} = ratings.computeGuaranteedRankBounds(
-    repIndices,
-    res.theta,
-    res.covariance,
-    res.eloLcb,
-    res.eloUcb,
-    M,
-    0.95
-  );
+  const {rankMin, rankMax} = ratings.computeGuaranteedRankBounds(repIndices, res, 0.95);
 
   for (let r = 0; r < repIndices.length; r++) {
     const idx = repIndices[r];
@@ -793,39 +790,39 @@ function applyRatingsToEntriesAndFamilies(
     const inTop100 = v.rankMax !== undefined && v.rankMax <= 100;
 
     const c1 = ratings.advanceTopKClock(
-      v.top1EnteredAt,
-      v.top1MaxStreakSeconds,
-      v.top1TotalSeconds,
+      {
+        enteredAt: v.top1EnteredAt,
+        maxStreakSeconds: v.top1MaxStreakSeconds,
+        totalSeconds: v.top1TotalSeconds,
+      },
       inTop1,
-      nowSec,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     v.top1EnteredAt = c1.enteredAt;
     v.top1MaxStreakSeconds = c1.maxStreakSeconds;
     v.top1TotalSeconds = c1.totalSeconds;
 
     const c10 = ratings.advanceTopKClock(
-      v.top10EnteredAt,
-      v.top10MaxStreakSeconds,
-      v.top10TotalSeconds,
+      {
+        enteredAt: v.top10EnteredAt,
+        maxStreakSeconds: v.top10MaxStreakSeconds,
+        totalSeconds: v.top10TotalSeconds,
+      },
       inTop10,
-      nowSec,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     v.top10EnteredAt = c10.enteredAt;
     v.top10MaxStreakSeconds = c10.maxStreakSeconds;
     v.top10TotalSeconds = c10.totalSeconds;
 
     const c100 = ratings.advanceTopKClock(
-      v.top100EnteredAt,
-      v.top100MaxStreakSeconds,
-      v.top100TotalSeconds,
+      {
+        enteredAt: v.top100EnteredAt,
+        maxStreakSeconds: v.top100MaxStreakSeconds,
+        totalSeconds: v.top100TotalSeconds,
+      },
       inTop100,
-      nowSec,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     v.top100EnteredAt = c100.enteredAt;
     v.top100MaxStreakSeconds = c100.maxStreakSeconds;
@@ -867,39 +864,39 @@ function applyRatingsToEntriesAndFamilies(
     const inTop100 = rep?.rankMax !== undefined && rep.rankMax <= 100;
 
     const c1 = ratings.advanceTopKClock(
-      fam.top1EnteredAt,
-      fam.top1MaxStreakSeconds,
-      fam.top1TotalSeconds,
+      {
+        enteredAt: fam.top1EnteredAt,
+        maxStreakSeconds: fam.top1MaxStreakSeconds,
+        totalSeconds: fam.top1TotalSeconds,
+      },
       inTop1,
-      nowSec,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     fam.top1EnteredAt = c1.enteredAt;
     fam.top1MaxStreakSeconds = c1.maxStreakSeconds;
     fam.top1TotalSeconds = c1.totalSeconds;
 
     const c10 = ratings.advanceTopKClock(
-      fam.top10EnteredAt,
-      fam.top10MaxStreakSeconds,
-      fam.top10TotalSeconds,
+      {
+        enteredAt: fam.top10EnteredAt,
+        maxStreakSeconds: fam.top10MaxStreakSeconds,
+        totalSeconds: fam.top10TotalSeconds,
+      },
       inTop10,
-      nowSec,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     fam.top10EnteredAt = c10.enteredAt;
     fam.top10MaxStreakSeconds = c10.maxStreakSeconds;
     fam.top10TotalSeconds = c10.totalSeconds;
 
     const c100 = ratings.advanceTopKClock(
-      fam.top100EnteredAt,
-      fam.top100MaxStreakSeconds,
-      fam.top100TotalSeconds,
+      {
+        enteredAt: fam.top100EnteredAt,
+        maxStreakSeconds: fam.top100MaxStreakSeconds,
+        totalSeconds: fam.top100TotalSeconds,
+      },
       inTop100,
-      nowSec,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     fam.top100EnteredAt = c100.enteredAt;
     fam.top100MaxStreakSeconds = c100.maxStreakSeconds;
@@ -1020,15 +1017,15 @@ export function recomputeLadderRatings(
     )
     : undefined;
 
-  const res = applyRatingsToEntriesAndFamilies(
+  const res = applyRatingsToEntriesAndFamilies({
     entries,
     pairs,
     anchorIndex,
     nowSec,
-    isArchived ? undefined : prevMatchSec,
+    prevMatchSec: isArchived ? undefined : prevMatchSec,
     families,
-    warmStart
-  );
+    warmStartTheta: warmStart,
+  });
 
   if (frozenStandings) {
     for (const v of entries) {
@@ -1107,7 +1104,7 @@ export function recomputeLadderRatings(
     );
   }
 
-  updatePairAggregateLos(db, ladderId, pairKeys, res.theta, res.covariance, entries.length);
+  updatePairAggregateLos(db, ladderId, pairKeys, res);
   stats.upsertAgentLadderStatsMap(db, ladderId, families);
 
   if (dayUtc) {

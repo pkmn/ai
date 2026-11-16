@@ -824,8 +824,8 @@ export interface ClientOptions {
   allowInsecureHttp?: boolean;
 }
 
-export function buildLadderMatchState(
-  ladder: Pick<db.LadderRow, 'id' | 'status' | 'min'>,
+export interface LadderMatchStateInput {
+  ladder: Pick<db.LadderRow, 'id' | 'status' | 'min'>;
   entries: ReadonlyArray<{
     versionId: number;
     agentId: number;
@@ -834,7 +834,7 @@ export function buildLadderMatchState(
     se: number;
     matches: number;
     settledAt?: number;
-  }>,
+  }>;
   pairs: ReadonlyArray<{
     lowVersionId: number;
     highVersionId: number;
@@ -843,11 +843,23 @@ export function buildLadderMatchState(
     split: number;
     tl: number;
     ll: number;
-  }>,
-  lastMatchNumber = 0,
-  rosterAgentIds?: ReadonlySet<number>,
-  residencyMultipliers?: Float64Array
+  }>;
+  lastMatchNumber?: number;
+  rosterAgentIds?: ReadonlySet<number>;
+  residencyMultipliers?: Float64Array;
+}
+
+export function buildLadderMatchState(
+  input: LadderMatchStateInput
 ): ratings.LadderMatchState | undefined {
+  const {
+    ladder,
+    entries,
+    pairs,
+    lastMatchNumber = 0,
+    rosterAgentIds,
+    residencyMultipliers,
+  } = input;
   if (ladder.status !== 'active' && ladder.status !== 'settling') return undefined;
   const isPlayableEntry = (e: (typeof entries)[number]) =>
     e.role !== 'retired' && e.role !== 'quarantined' &&

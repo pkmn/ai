@@ -117,10 +117,10 @@ export function updatePairAggregateLos(
   db: DatabaseSync,
   ladderId: string,
   pairKeys: IndexedPairKey[],
-  theta: Float64Array,
-  covariance: Float64Array,
-  M: number
+  posterior: {theta: Float64Array; covariance: Float64Array}
 ) {
+  const {theta, covariance} = posterior;
+  const M = theta.length;
   const updatePairLos = db.prepare(`
     UPDATE pair_aggregates
     SET low_los = ?

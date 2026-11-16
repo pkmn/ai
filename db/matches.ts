@@ -272,14 +272,15 @@ export function recordCompletedMatch(
       WHERE ladder_id = ? AND version_id = ?
     `);
 
-    const applySide = (
-      versionId: number,
-      invert: boolean,
-      outcome: 'W' | 'L' | 'T',
-      meanTurnMillis: number,
-      peakRam: number,
-      faults: {crashes: number; timeouts: number; ooms: number}
-    ) => {
+    const applySide = (side: {
+      versionId: number;
+      invert: boolean;
+      outcome: 'W' | 'L' | 'T';
+      meanTurnMillis: number;
+      peakRam: number;
+      faults: {crashes: number; timeouts: number; ooms: number};
+    }) => {
+      const {versionId, invert, outcome, meanTurnMillis, peakRam, faults} = side;
       const cur = selectEntryCounters.get(m.ladderId, versionId) as {
         matches: number;
         current_win_streak: number;
@@ -322,32 +323,32 @@ export function recordCompletedMatch(
       );
     };
 
-    applySide(
-      m.p1VersionId,
-      false,
-      ternary.p1,
-      p1MeanTurnMillis,
-      p1PeakRam,
-      countSideFaults(
+    applySide({
+      versionId: m.p1VersionId,
+      invert: false,
+      outcome: ternary.p1,
+      meanTurnMillis: p1MeanTurnMillis,
+      peakRam: p1PeakRam,
+      faults: countSideFaults(
         m.game1Outcome === 'L',
         m.game2Outcome === 'L',
         m.game1EndReason,
         m.game2EndReason
-      )
-    );
-    applySide(
-      m.p2VersionId,
-      true,
-      ternary.p2,
-      p2MeanTurnMillis,
-      p2PeakRam,
-      countSideFaults(
+      ),
+    });
+    applySide({
+      versionId: m.p2VersionId,
+      invert: true,
+      outcome: ternary.p2,
+      meanTurnMillis: p2MeanTurnMillis,
+      peakRam: p2PeakRam,
+      faults: countSideFaults(
         m.game1Outcome === 'W',
         m.game2Outcome === 'W',
         m.game1EndReason,
         m.game2EndReason
-      )
-    );
+      ),
+    });
 
     if (v1.agentId !== v2.agentId) {
       updateFamilyStreaksForMatch(db, m.ladderId, v1.agentId, ternary.p1);

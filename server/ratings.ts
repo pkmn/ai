@@ -149,14 +149,26 @@ interface PairDerivativeTerm {
   j: number;
 }
 
+interface LaplaceSolveOptions<T extends PairDerivativeTerm> {
+  count: number;
+  priorPrecision: number;
+  theta: Float64Array;
+  pairs: readonly T[];
+  evalTerm: (pair: T, delta: number) => {ll: number; g: number; w: number};
+  minHessianWeight?: number;
+}
+
 function solvePairwiseLaplace<T extends PairDerivativeTerm>(
-  M: number,
-  priorPrecision: number,
-  theta: Float64Array,
-  pairs: readonly T[],
-  evalTerm: (pair: T, delta: number) => {ll: number; g: number; w: number},
-  minHessianWeight = 0
+  opts: LaplaceSolveOptions<T>
 ): {covariance: Float64Array; hasPlayed: Uint8Array; playedCount: number} {
+  const {
+    count: M,
+    priorPrecision,
+    theta,
+    pairs,
+    evalTerm,
+    minHessianWeight = 0,
+  } = opts;
   const evalLogPosterior = (x: Float64Array): number => {
     let val = 0;
     for (let i = 0; i < M; i++) val -= 0.5 * priorPrecision * x[i] * x[i];
@@ -262,14 +274,24 @@ function solvePairwiseLaplace<T extends PairDerivativeTerm>(
   return {covariance: invertSPDMatrix(H, M), hasPlayed, playedCount};
 }
 
+export interface DavidsonOptions {
+  anchorIndex?: number;
+  anchorElo?: number;
+  warmStartTheta?: Float64Array;
+  priorEloStd?: number;
+}
+
 export function computeDavidsonRatings(
   numAgents: number,
   pairs: PairMatchCounts[],
-  anchorIndex = -1,
-  anchorElo = 1500,
-  warmStartTheta?: Float64Array,
-  priorEloStd = 350
+  options: DavidsonOptions = {}
 ): RatingResult {
+  const {
+    anchorIndex = -1,
+    anchorElo = 1500,
+    warmStartTheta,
+    priorEloStd = 350,
+  } = options;
   const M = numAgents;
   if (M === 0) {
     return {
@@ -320,23 +342,29 @@ export function computeDavidsonRatings(
     activePairs.push({i: p.i, j: p.j, n, y: p.ww + 0.5 * p.wt - 0.5 * p.tl - p.ll});
   }
 
-  const {covariance} = solvePairwiseLaplace(M, priorPrecision, theta, activePairs, (p, delta) => {
-    const e1 = Math.exp(delta);
-    const em1 = 1 / e1;
-    const eh = Math.exp(0.5 * delta);
-    const emh = 1 / eh;
-    const Z = e1 + nu1 * eh + nu0 + nu1 * emh + em1;
-    const p1 = e1 / Z;
-    const pm1 = em1 / Z;
-    const ph = (nu1 * eh) / Z;
-    const pmh = (nu1 * emh) / Z;
-    const mu = (p1 - pm1) + 0.5 * (ph - pmh);
-    const v = (p1 + pm1) + 0.25 * (ph + pmh) - mu * mu;
-    return {
-      ll: p.y * delta - p.n * Math.log(Z),
-      g: p.y - p.n * mu,
-      w: p.n * v,
-    };
+  const {covariance} = solvePairwiseLaplace({
+    count: M,
+    priorPrecision,
+    theta,
+    pairs: activePairs,
+    evalTerm: (p, delta) => {
+      const e1 = Math.exp(delta);
+      const em1 = 1 / e1;
+      const eh = Math.exp(0.5 * delta);
+      const emh = 1 / eh;
+      const Z = e1 + nu1 * eh + nu0 + nu1 * emh + em1;
+      const p1 = e1 / Z;
+      const pm1 = em1 / Z;
+      const ph = (nu1 * eh) / Z;
+      const pmh = (nu1 * emh) / Z;
+      const mu = (p1 - pm1) + 0.5 * (ph - pmh);
+      const v = (p1 + pm1) + 0.25 * (ph + pmh) - mu * mu;
+      return {
+        ll: p.y * delta - p.n * Math.log(Z),
+        g: p.y - p.n * mu,
+        w: p.n * v,
+      };
+    },
   });
   const anchorOffset = anchorIndex >= 0 && anchorIndex < M ? theta[anchorIndex] : 0;
 
@@ -401,15 +429,20 @@ export function computeLOS(
 // "plausibly above" `i` whenever `j` is NOT definitely below `i` (exact De Morgan negation:
 // `losIJ < 0.95 || eloUcb[j] >= eloLcb[i]`), so `[rankMin, rankMax]` never contradicts a rival's
 // bounds and only settles (`[1, 1]`) once both pairwise and marginal uncertainty agree.
+export interface RankBoundsPosterior {
+  theta: Float64Array;
+  covariance: Float64Array;
+  eloLcb: Float64Array;
+  eloUcb: Float64Array;
+}
+
 export function computeGuaranteedRankBounds(
-  repIndices: number[],
-  theta: Float64Array,
-  cov: Float64Array,
-  eloLcb: Float64Array,
-  eloUcb: Float64Array,
-  M: number,
+  repIndices: readonly number[],
+  posterior: RankBoundsPosterior,
   losThreshold = 0.95
 ): {rankMin: Int32Array; rankMax: Int32Array} {
+  const {theta, covariance: cov, eloLcb, eloUcb} = posterior;
+  const M = theta.length;
   const B = repIndices.length;
   const definitelyAbove = new Int32Array(B);
   const plausiblyAbove = new Int32Array(B);
@@ -493,18 +526,28 @@ export function applyPairwiseStreakUpdate(
   }
 }
 
+export interface TopKClock {
+  enteredAt?: number;
+  maxStreakSeconds: number;
+  totalSeconds: number;
+}
+
+export interface ClockTick {
+  nowSeconds: number;
+  deltaSeconds: number;
+  uncountedSeconds?: number;
+}
+
 export function advanceTopKClock(
-  enteredAt: number | undefined,
-  maxStreakSeconds: number,
-  totalSeconds: number,
+  clock: TopKClock,
   qualifiesNow: boolean,
-  nowSeconds: number,
-  deltaSeconds: number,
-  uncountedSeconds = 0
-): {enteredAt?: number; maxStreakSeconds: number; totalSeconds: number} {
+  tick: ClockTick
+): TopKClock {
+  const {enteredAt} = clock;
+  const {nowSeconds, deltaSeconds, uncountedSeconds = 0} = tick;
   let nextEntered = enteredAt;
-  let nextMax = maxStreakSeconds;
-  let nextTotal = totalSeconds;
+  let nextMax = clock.maxStreakSeconds;
+  let nextTotal = clock.totalSeconds;
 
   if (enteredAt !== undefined) {
     nextTotal += deltaSeconds;
@@ -696,12 +739,12 @@ export function computeTournamentRatings(
   const pairs = Array.from(pairMap.values());
 
   const theta = new Float64Array(M);
-  const {covariance, hasPlayed, playedCount} = solvePairwiseLaplace(
-    M,
+  const {covariance, hasPlayed, playedCount} = solvePairwiseLaplace({
+    count: M,
     priorPrecision,
     theta,
     pairs,
-    (p, delta) => {
+    evalTerm: (p, delta) => {
       const eh = Math.exp(0.5 * delta);
       const emh = 1 / eh;
       const Z = eh + emh + nu;
@@ -715,8 +758,8 @@ export function computeTournamentRatings(
         w: p.n * v,
       };
     },
-    1e-9
-  );
+    minHessianWeight: 1e-9,
+  });
   let offset = 0;
   if (anchorIndex >= 0 && anchorIndex < M) {
     offset = theta[anchorIndex];
@@ -774,6 +817,9 @@ export function solveIndexedDavidson(
     });
   }
   const warm = new Float64Array(entries.map(e => (e.elo - 1500) / ELO_SCALE));
-  const solved = computeDavidsonRatings(entries.length, indexedPairs, anchorIdx, 1500, warm);
+  const solved = computeDavidsonRatings(entries.length, indexedPairs, {
+    anchorIndex: anchorIdx,
+    warmStartTheta: warm,
+  });
   return {indexByVer, theta: solved.theta, covariance: solved.covariance};
 }

@@ -403,33 +403,35 @@ function finalizeArchivedLadderEntries(db: DatabaseSync, ladderId: string, now: 
     WHERE ladder_id = ? AND version_id = ?
   `);
 
+  const tick: ratings.ClockTick = {nowSeconds: now, deltaSeconds, uncountedSeconds};
+
   for (const r of openEntries) {
     const c1 = ratings.advanceTopKClock(
-      (r.top1_entered_at as number | null) ?? undefined,
-      r.top1_max_streak_seconds as number,
-      r.top1_total_seconds as number,
+      {
+        enteredAt: (r.top1_entered_at as number | null) ?? undefined,
+        maxStreakSeconds: r.top1_max_streak_seconds as number,
+        totalSeconds: r.top1_total_seconds as number,
+      },
       false,
-      now,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     const c10 = ratings.advanceTopKClock(
-      (r.top10_entered_at as number | null) ?? undefined,
-      r.top10_max_streak_seconds as number,
-      r.top10_total_seconds as number,
+      {
+        enteredAt: (r.top10_entered_at as number | null) ?? undefined,
+        maxStreakSeconds: r.top10_max_streak_seconds as number,
+        totalSeconds: r.top10_total_seconds as number,
+      },
       false,
-      now,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     const c100 = ratings.advanceTopKClock(
-      (r.top100_entered_at as number | null) ?? undefined,
-      r.top100_max_streak_seconds as number,
-      r.top100_total_seconds as number,
+      {
+        enteredAt: (r.top100_entered_at as number | null) ?? undefined,
+        maxStreakSeconds: r.top100_max_streak_seconds as number,
+        totalSeconds: r.top100_total_seconds as number,
+      },
       false,
-      now,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     updateEntryClocks.run(
       c1.maxStreakSeconds,
@@ -472,31 +474,31 @@ function finalizeArchivedLadderEntries(db: DatabaseSync, ladderId: string, now: 
 
   for (const r of openStats) {
     const c1 = ratings.advanceTopKClock(
-      (r.top1_entered_at as number | null) ?? undefined,
-      r.top1_max_streak_seconds as number,
-      r.top1_total_seconds as number,
+      {
+        enteredAt: (r.top1_entered_at as number | null) ?? undefined,
+        maxStreakSeconds: r.top1_max_streak_seconds as number,
+        totalSeconds: r.top1_total_seconds as number,
+      },
       false,
-      now,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     const c10 = ratings.advanceTopKClock(
-      (r.top10_entered_at as number | null) ?? undefined,
-      r.top10_max_streak_seconds as number,
-      r.top10_total_seconds as number,
+      {
+        enteredAt: (r.top10_entered_at as number | null) ?? undefined,
+        maxStreakSeconds: r.top10_max_streak_seconds as number,
+        totalSeconds: r.top10_total_seconds as number,
+      },
       false,
-      now,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     const c100 = ratings.advanceTopKClock(
-      (r.top100_entered_at as number | null) ?? undefined,
-      r.top100_max_streak_seconds as number,
-      r.top100_total_seconds as number,
+      {
+        enteredAt: (r.top100_entered_at as number | null) ?? undefined,
+        maxStreakSeconds: r.top100_max_streak_seconds as number,
+        totalSeconds: r.top100_total_seconds as number,
+      },
       false,
-      now,
-      deltaSeconds,
-      uncountedSeconds
+      tick
     );
     updateStatClocks.run(
       c1.maxStreakSeconds,

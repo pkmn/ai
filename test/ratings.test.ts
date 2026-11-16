@@ -62,7 +62,7 @@ describe('Generalized Davidson MAP rating solver', () => {
   });
 
   test('keeps zero-match entrants at the N(1500, 350^2) prior', () => {
-    const unplayed = ratings.computeDavidsonRatings(4, [], 0, 1500);
+    const unplayed = ratings.computeDavidsonRatings(4, [], {anchorIndex: 0});
     for (let i = 0; i < 4; i++) {
       expect(unplayed.theta[i]).toBeCloseTo(0, 10);
       expect(unplayed.elo[i]).toBeCloseTo(1500, 10);
@@ -79,7 +79,7 @@ describe('Generalized Davidson MAP rating solver', () => {
   });
 
   test('satisfies first-order KKT optimality (grad = 0) on asymmetric 5-category data', () => {
-    const res = ratings.computeDavidsonRatings(4, ASYMMETRIC_PAIRS, 2, 1500);
+    const res = ratings.computeDavidsonRatings(4, ASYMMETRIC_PAIRS, {anchorIndex: 2});
 
     let mean = 0;
     for (let i = 0; i < 4; i++) mean += res.theta[i];
@@ -101,7 +101,7 @@ describe('Generalized Davidson MAP rating solver', () => {
   });
 
   test('matches finite-difference inverse Hessian on zero-sum contrast vectors', () => {
-    const res = ratings.computeDavidsonRatings(4, ASYMMETRIC_PAIRS, 2, 1500);
+    const res = ratings.computeDavidsonRatings(4, ASYMMETRIC_PAIRS, {anchorIndex: 2});
 
     let mean = 0;
     for (let i = 0; i < 4; i++) mean += res.theta[i];
@@ -168,15 +168,12 @@ describe('Generalized Davidson MAP rating solver', () => {
       {i: 1, j: 2, ww: 20, wt: 1, split: 10, tl: 1, ll: 4},
       {i: 0, j: 2, ww: 30, wt: 0, split: 4, tl: 0, ll: 0},
     ];
-    const anchor0 = ratings.computeDavidsonRatings(3, pairs, 0, 1500);
-    const anchor1 = ratings.computeDavidsonRatings(3, pairs, 1, 1500);
-    const warmShifted = ratings.computeDavidsonRatings(
-      3,
-      pairs,
-      1,
-      1500,
-      new Float64Array([4.5, -2.0, -9.0])
-    );
+    const anchor0 = ratings.computeDavidsonRatings(3, pairs, {anchorIndex: 0});
+    const anchor1 = ratings.computeDavidsonRatings(3, pairs, {anchorIndex: 1});
+    const warmShifted = ratings.computeDavidsonRatings(3, pairs, {
+      anchorIndex: 1,
+      warmStartTheta: new Float64Array([4.5, -2.0, -9.0]),
+    });
 
     expect(anchor0.elo[0]).toBeCloseTo(1500, 8);
     expect(anchor1.elo[1]).toBeCloseTo(1500, 8);
@@ -198,13 +195,13 @@ describe('Generalized Davidson MAP rating solver', () => {
       {i: 1, j: 2, ww: 20, wt: 1, split: 10, tl: 1, ll: 4},
       {i: 0, j: 2, ww: 30, wt: 0, split: 4, tl: 0, ll: 0},
     ];
-    const forward = ratings.computeDavidsonRatings(3, pairs, 1, 1500);
+    const forward = ratings.computeDavidsonRatings(3, pairs, {anchorIndex: 1});
     const reversedPairs: ratings.PairMatchCounts[] = [
       {i: 1, j: 2, ww: 2, wt: 0, split: 8, tl: 2, ll: 24},
       {i: 0, j: 1, ww: 4, wt: 1, split: 10, tl: 1, ll: 20},
       {i: 0, j: 2, ww: 0, wt: 0, split: 4, tl: 0, ll: 30},
     ];
-    const rev = ratings.computeDavidsonRatings(3, reversedPairs, 1, 1500);
+    const rev = ratings.computeDavidsonRatings(3, reversedPairs, {anchorIndex: 1});
     expect(rev.elo[2]).toBeCloseTo(forward.elo[0], 6);
     expect(rev.elo[1]).toBeCloseTo(forward.elo[1], 6);
     expect(rev.elo[0]).toBeCloseTo(forward.elo[2], 6);
@@ -226,7 +223,7 @@ describe('Generalized Davidson MAP rating solver', () => {
           tl: 0,
           ll: nMatches - Math.round(0.35 * nMatches) - Math.round(0.45 * nMatches),
         }];
-      const res = ratings.computeDavidsonRatings(2, pairs, 1, 1500);
+      const res = ratings.computeDavidsonRatings(2, pairs, {anchorIndex: 1});
       seHistory.push(res.eloStd[0]);
     }
     for (let k = 1; k < seHistory.length; k++) {
@@ -240,8 +237,8 @@ describe('Generalized Davidson MAP rating solver', () => {
     const basePairs: ratings.PairMatchCounts[] = [
       {i: 0, j: 1, ww: 25, wt: 0, split: 20, tl: 0, ll: 15},
     ];
-    const twoAgent = ratings.computeDavidsonRatings(2, basePairs, 1, 1500);
-    const fiveAgent = ratings.computeDavidsonRatings(5, basePairs, 1, 1500);
+    const twoAgent = ratings.computeDavidsonRatings(2, basePairs, {anchorIndex: 1});
+    const fiveAgent = ratings.computeDavidsonRatings(5, basePairs, {anchorIndex: 1});
     expect(fiveAgent.elo[0]).toBeCloseTo(twoAgent.elo[0], 8);
     expect(fiveAgent.eloStd[0]).toBeCloseTo(twoAgent.eloStd[0], 5);
     for (const newcomer of [2, 3, 4]) {
@@ -286,8 +283,8 @@ describe('Generalized Davidson MAP rating solver', () => {
       }
     }
 
-    const unanchored = ratings.computeDavidsonRatings(M, pairs, -1, 1500);
-    const anchored = ratings.computeDavidsonRatings(M, pairs, anchorIdx, 1500);
+    const unanchored = ratings.computeDavidsonRatings(M, pairs);
+    const anchored = ratings.computeDavidsonRatings(M, pairs, {anchorIndex: anchorIdx});
     expect(anchored.elo[anchorIdx]).toBeCloseTo(1500, 8);
 
     let trueMean = 0;
@@ -348,7 +345,7 @@ describe('normalCdf, LOS, expectedMatchScore, and rank bounds', () => {
       {i: 0, j: 1, ww: 24, wt: 0, split: 10, tl: 0, ll: 6},
       {i: 2, j: 3, ww: 24, wt: 0, split: 10, tl: 0, ll: 6},
     ];
-    const res = ratings.computeDavidsonRatings(4, pairs, 1, 1500);
+    const res = ratings.computeDavidsonRatings(4, pairs, {anchorIndex: 1});
     const losDirect = ratings.computeLOS(res.theta, res.covariance, 4, 0, 1);
     const losCross = ratings.computeLOS(res.theta, res.covariance, 4, 0, 3);
     expect(losDirect).toBeGreaterThan(losCross);
@@ -368,7 +365,9 @@ describe('normalCdf, LOS, expectedMatchScore, and rank bounds', () => {
     }
 
     const bounds = ratings.computeGuaranteedRankBounds(
-      [0, 1, 2, 3], theta, cov, eloLcb, eloUcb, 4, 0.95
+      [0, 1, 2, 3],
+      {theta, covariance: cov, eloLcb, eloUcb},
+      0.95
     );
     expect([bounds.rankMin[0], bounds.rankMax[0]]).toEqual([1, 1]);
     expect([bounds.rankMin[1], bounds.rankMax[1]]).toEqual([2, 3]);
@@ -394,7 +393,9 @@ describe('normalCdf, LOS, expectedMatchScore, and rank bounds', () => {
       expect(eloUcb[1]).toBeGreaterThan(eloLcb[0]);
 
       const bounds = ratings.computeGuaranteedRankBounds(
-        [0, 1], theta, cov, eloLcb, eloUcb, 2, 0.95
+        [0, 1],
+        {theta, covariance: cov, eloLcb, eloUcb},
+        0.95
       );
       expect([bounds.rankMin[0], bounds.rankMax[0]]).toEqual([1, 2]);
       expect([bounds.rankMin[1], bounds.rankMax[1]]).toEqual([1, 2]);
@@ -449,55 +450,41 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
   });
 
   test('tracks cumulative Top-K reign clocks across drop-out cycles', () => {
-    let clk: {enteredAt?: number; maxStreakSeconds: number; totalSeconds: number} = {
+    let clk: ratings.TopKClock = {
       enteredAt: undefined,
       maxStreakSeconds: 0,
       totalSeconds: 0,
     };
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, true, 1000, 300
-    );
+    clk = ratings.advanceTopKClock(clk, true, {nowSeconds: 1000, deltaSeconds: 300});
     expect(clk).toEqual({enteredAt: 1000, maxStreakSeconds: 0, totalSeconds: 0});
 
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, true, 1600, 600
-    );
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, true, 2500, 900
-    );
+    clk = ratings.advanceTopKClock(clk, true, {nowSeconds: 1600, deltaSeconds: 600});
+    clk = ratings.advanceTopKClock(clk, true, {nowSeconds: 2500, deltaSeconds: 900});
     expect(clk).toEqual({enteredAt: 1000, maxStreakSeconds: 1500, totalSeconds: 1500});
 
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, false, 2800, 300
-    );
+    clk = ratings.advanceTopKClock(clk, false, {nowSeconds: 2800, deltaSeconds: 300});
     expect(clk).toEqual({enteredAt: undefined, maxStreakSeconds: 1800, totalSeconds: 1800});
 
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, false, 3500, 700
-    );
+    clk = ratings.advanceTopKClock(clk, false, {nowSeconds: 3500, deltaSeconds: 700});
     expect(clk).toEqual({enteredAt: undefined, maxStreakSeconds: 1800, totalSeconds: 1800});
 
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, true, 4000, 500
-    );
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, true, 4500, 500
-    );
+    clk = ratings.advanceTopKClock(clk, true, {nowSeconds: 4000, deltaSeconds: 500});
+    clk = ratings.advanceTopKClock(clk, true, {nowSeconds: 4500, deltaSeconds: 500});
     expect(clk).toEqual({enteredAt: 4000, maxStreakSeconds: 1800, totalSeconds: 2300});
   });
 
   test('caps Top-K maxStreakSeconds across multi-day runner downtime gaps', () => {
-    let clk = ratings.advanceTopKClock(undefined, 0, 0, true, 1000, 0);
-    // 7 days elapsed (604,800s), capped to 3600s credited interval (601,200s uncounted).
-    clk = ratings.advanceTopKClock(
-      clk.enteredAt,
-      clk.maxStreakSeconds,
-      clk.totalSeconds,
+    let clk = ratings.advanceTopKClock(
+      {maxStreakSeconds: 0, totalSeconds: 0},
       true,
-      605_800,
-      3600,
-      601_200
+      {nowSeconds: 1000, deltaSeconds: 0}
     );
+    // 7 days elapsed (604,800s), capped to 3600s credited interval (601,200s uncounted).
+    clk = ratings.advanceTopKClock(clk, true, {
+      nowSeconds: 605_800,
+      deltaSeconds: 3600,
+      uncountedSeconds: 601_200,
+    });
     expect(clk.totalSeconds).toBe(3600);
     expect(clk.maxStreakSeconds).toBe(3600);
     expect(605_800 - clk.enteredAt!).toBe(3600);

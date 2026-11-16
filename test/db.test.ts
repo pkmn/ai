@@ -653,11 +653,11 @@ describe('ladders configuration', () => {
       const entries = db.getLeaderboardEntries(ladderId);
       expect(entries.filter(e => e.role !== 'retired')).toHaveLength(4);
       expect(
-        arena.buildLadderMatchState(
-          db.getLadder(ladderId)!,
+        arena.buildLadderMatchState({
+          ladder: db.getLadder(ladderId)!,
           entries,
-          db.getPairAggregatesForLadder(ladderId)
-        )
+          pairs: db.getPairAggregatesForLadder(ladderId),
+        })
       ).toBeUndefined();
     } finally {
       db.close();
@@ -796,13 +796,12 @@ describe('ladders configuration', () => {
 
       const rosterIds = new Set(db.getActiveRosterForLadder(ladderId).map(r => r.agentId));
       expect(rosterIds.size).toBe(4);
-      expect(arena.buildLadderMatchState(
-        ladderAfter,
-        db.getLeaderboardEntries(ladderId),
-        db.getPairAggregatesForLadder(ladderId),
-        0,
-        rosterIds
-      )).toBeDefined();
+      expect(arena.buildLadderMatchState({
+        ladder: ladderAfter,
+        entries: db.getLeaderboardEntries(ladderId),
+        pairs: db.getPairAggregatesForLadder(ladderId),
+        rosterAgentIds: rosterIds,
+      })).toBeDefined();
     } finally {
       db.close();
     }

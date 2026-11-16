@@ -1245,17 +1245,17 @@ export class Coordinator {
       const rosterIds = ladder.team === 'pools' && ladder.roster
         ? new Set(ladder.roster.map(r => r.agentId))
         : undefined;
-      const state = arena.buildLadderMatchState(
+      const state = arena.buildLadderMatchState({
         ladder,
-        availableEntries,
-        ladder.pairAggregates,
-        this.stateDb.getLastGlobalMatchSequence(ladder.id),
-        rosterIds,
-        packages.computeResidencyMultipliers(
+        entries: availableEntries,
+        pairs: ladder.pairAggregates,
+        lastMatchNumber: this.stateDb.getLastGlobalMatchSequence(ladder.id),
+        rosterAgentIds: rosterIds,
+        residencyMultipliers: packages.computeResidencyMultipliers(
           availableEntries.map(e => e.versionId),
           this.stateDb
-        )
-      );
+        ),
+      });
       if (state) candidates.push({ladder, entries: availableEntries, state});
     }
 

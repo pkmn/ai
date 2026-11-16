@@ -2172,13 +2172,13 @@ export class Runner {
     entries: db.LeaderboardEntryView[];
   } | undefined {
     const entries = this.db.getLeaderboardEntries(ladder.id);
-    const state = arena.buildLadderMatchState(
+    const state = arena.buildLadderMatchState({
       ladder,
       entries,
-      this.db.getPairAggregatesForLadder(ladder.id),
-      this.state.lastMatchNumberByLadder[ladder.id] ?? 0,
-      this.getRosterAgentIds(ladder)
-    );
+      pairs: this.db.getPairAggregatesForLadder(ladder.id),
+      lastMatchNumber: this.state.lastMatchNumberByLadder[ladder.id] ?? 0,
+      rosterAgentIds: this.getRosterAgentIds(ladder),
+    });
     return state ? {state, entries} : undefined;
   }
 

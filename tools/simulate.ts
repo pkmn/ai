@@ -263,9 +263,7 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
     const solved = computeDavidsonRatings(
       ls.M,
       Array.from(ls.pairMap.values()),
-      0,
-      1500,
-      ls.matchState.theta
+      {anchorIndex: 0, warmStartTheta: ls.matchState.theta}
     );
     ls.matchState.theta.set(solved.theta);
     for (let a = 0; a < ls.M; a++) {
@@ -291,14 +289,12 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
       const top1Settled = ladderStates.every(l => {
         const rep = Array.from({length: l.M}, (_, a) => a)
           .sort((a, b) => l.eloLcb[b] - l.eloLcb[a]);
-        const bounds = computeGuaranteedRankBounds(
-          rep,
-          l.matchState.theta,
-          l.covariance,
-          l.eloLcb,
-          l.eloUcb,
-          l.M
-        );
+        const bounds = computeGuaranteedRankBounds(rep, {
+          theta: l.matchState.theta,
+          covariance: l.covariance,
+          eloLcb: l.eloLcb,
+          eloUcb: l.eloUcb,
+        });
         return bounds.rankMin[0] === 1 && bounds.rankMax[0] === 1;
       });
       if (top1Settled) matchesToSettleTop1 = step + 1;
