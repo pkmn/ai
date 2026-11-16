@@ -680,18 +680,14 @@ function renderTournamentStandingsNode(opts: {
   entrants: db.TournamentEntrantView[];
   hasSuperfinal: boolean;
   liveTables: BroadcastTable[];
-  publicDir: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
+  links: render.AgentLinkContext;
 }): Html {
   const {
     tournament,
     entrants,
     hasSuperfinal,
     liveTables,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
   } = opts;
   if (entrants.length === 0) {
     return (
@@ -718,13 +714,7 @@ function renderTournamentStandingsNode(opts: {
             </thead>
             <tbody>
               {ordered.map((e, idx) => {
-                const href = render.resolveAgentHref(
-                  publicDir,
-                  projectMeta,
-                  e.agentSlug,
-                  e.agentName,
-                  profileSlugs
-                );
+                const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
                 return (
                   <tr className={idx >= TABLE_PAGE_SIZE ? 'hide' : undefined}>
                     <td><strong>{idx + 1}</strong></td>
@@ -778,13 +768,7 @@ function renderTournamentStandingsNode(opts: {
           <tbody>
             {entrants.map((e, idx) => {
               const rankNum = e.finalRank ?? idx + 1;
-              const href = render.resolveAgentHref(
-                publicDir,
-                projectMeta,
-                e.agentSlug,
-                e.agentName,
-                profileSlugs
-              );
+              const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
               const liveTb = findLiveTableForEntrant(liveTables, e.agentSlug, e.agentName);
               const elo = Math.round(e.elo);
               const ci = Math.round(1.96 * e.se);
@@ -844,11 +828,9 @@ function renderTournamentCrosstableNode(opts: {
   entrants: db.TournamentEntrantView[];
   pairs: db.TournamentPairRecord[];
   liveTables: BroadcastTable[];
-  publicDir: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
+  links: render.AgentLinkContext;
 }): {node: Html; isEmpty: boolean} {
-  const {bestOf, entrants, pairs, liveTables, publicDir, projectMeta, profileSlugs} = opts;
+  const {bestOf, entrants, pairs, liveTables, links} = opts;
   const unitPlural = (bestOf ?? 1) > 1 ? 'matches' : 'games';
   const rrLiveTables = liveTables.filter(tb => tb.stage !== 'Superfinal');
   if (entrants.length < 2 || (pairs.length === 0 && rrLiveTables.length === 0)) {
@@ -881,13 +863,7 @@ function renderTournamentCrosstableNode(opts: {
             </thead>
             <tbody>
               {entrants.map(rowEnt => {
-                const rowHref = render.resolveAgentHref(
-                  publicDir,
-                  projectMeta,
-                  rowEnt.agentSlug,
-                  rowEnt.agentName,
-                  profileSlugs
-                );
+                const rowHref = render.resolveAgentHref(links, rowEnt.agentSlug, rowEnt.agentName);
                 return (
                   <tr>
                     <td>
@@ -1093,9 +1069,7 @@ function renderTournamentGamesNode(opts: {
   games: db.TournamentGameView[];
   liveTables: BroadcastTable[];
   totalCompletedCount: number;
-  publicDir: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
+  links: render.AgentLinkContext;
   logFiles?: ReadonlySet<string>;
   nowSec: number;
 }): Html {
@@ -1104,12 +1078,11 @@ function renderTournamentGamesNode(opts: {
     games,
     liveTables,
     totalCompletedCount,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
     logFiles,
     nowSec,
   } = opts;
+  const {publicDir} = links;
   const isMultiGame = tournament.bestOf > 1;
   const unitSingular = isMultiGame ? 'match' : 'game';
   const unitPlural = isMultiGame ? 'matches' : 'games';
@@ -1122,12 +1095,8 @@ function renderTournamentGamesNode(opts: {
     const codePrefix = tb.stage === 'Superfinal' ? 'SF' : 'RR';
     const codeNum = tb.stage === 'Superfinal' ? (tb.matchupGame ?? 1) : (tb.cycle ?? 1);
     const gameCode = `${codePrefix}${codeNum}`;
-    const p1Href = p1.slug
-      ? render.resolveAgentHref(publicDir, projectMeta, p1.slug, p1.name, profileSlugs)
-      : undefined;
-    const p2Href = p2.slug
-      ? render.resolveAgentHref(publicDir, projectMeta, p2.slug, p2.name, profileSlugs)
-      : undefined;
+    const p1Href = p1.slug ? render.resolveAgentHref(links, p1.slug, p1.name) : undefined;
+    const p2Href = p2.slug ? render.resolveAgentHref(links, p2.slug, p2.name) : undefined;
     const turn = parseLatestTurnFromLines(tb.lines);
     const tip = turn !== undefined
       ? `Spectate live on ${tb.label} (Turn ${turn})`
@@ -1171,20 +1140,8 @@ function renderTournamentGamesNode(opts: {
 
     const {p1Won, p2Won, node: resNode} = renderTournamentResultNode(g, tournament.bestOf);
 
-    const p1Href = render.resolveAgentHref(
-      publicDir,
-      projectMeta,
-      g.p1.slug,
-      g.p1.name,
-      profileSlugs
-    );
-    const p2Href = render.resolveAgentHref(
-      publicDir,
-      projectMeta,
-      g.p2.slug,
-      g.p2.name,
-      profileSlugs
-    );
+    const p1Href = render.resolveAgentHref(links, g.p1.slug, g.p1.name);
+    const p2Href = render.resolveAgentHref(links, g.p2.slug, g.p2.name);
     const completedAt = g.completedAt ?? 0;
     const completedIso = new Date(completedAt * 1000)
       .toISOString()
@@ -1429,13 +1386,11 @@ export function formatTournamentName(name: string): string {
 
 export function renderArenaTournamentsSummaryHtml(opts: {
   db: db.Database;
-  publicDir: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
+  links: render.AgentLinkContext;
   tournaments?: db.TournamentRow[];
   entrantsByTournament?: ReadonlyMap<string, db.TournamentEntrantView[]>;
 }): string {
-  const {db, publicDir, projectMeta, profileSlugs, entrantsByTournament} = opts;
+  const {db, links, entrantsByTournament} = opts;
   const tournaments = opts.tournaments ?? db.getTournaments();
   if (tournaments.length === 0) {
     return String(<p className='empty-state muted'>No tournaments scheduled yet.</p>);
@@ -1476,13 +1431,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
               if (t.status === 'completed') {
                 const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
                 if (winner) {
-                  const wHref = render.resolveAgentHref(
-                    publicDir,
-                    projectMeta,
-                    winner.agentSlug,
-                    winner.agentName,
-                    profileSlugs
-                  );
+                  const wHref = render.resolveAgentHref(links, winner.agentSlug, winner.agentName);
                   winnerCell = (
                     <td>
                       {raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
@@ -2629,10 +2578,8 @@ export function renderTournamentPage(opts: {
   db: db.Database;
   renderer: Renderer;
   tournament: db.TournamentRow;
-  publicDir: string;
+  links: render.AgentLinkContext;
   staticDir?: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
   tournamentBroadcast?: LiveBroadcast;
   liveTournament?: {id: string; name: string};
   nowSec?: number;
@@ -2641,14 +2588,13 @@ export function renderTournamentPage(opts: {
     db,
     renderer,
     tournament: t,
-    publicDir,
+    links,
     staticDir = root('static'),
-    projectMeta,
-    profileSlugs,
     tournamentBroadcast,
     liveTournament,
     nowSec = Math.floor(Date.now() / 1000),
   } = opts;
+  const {publicDir} = links;
 
   const allTournaments = db.getTournaments();
   const entrants = db.getTournamentEntrants(t.id);
@@ -2685,18 +2631,14 @@ export function renderTournamentPage(opts: {
     entrants,
     hasSuperfinal: hasSf,
     liveTables,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
   });
   const crossRes = renderTournamentCrosstableNode({
     bestOf: t.bestOf,
     entrants,
     pairs: rrPairs,
     liveTables,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
   });
 
   let completedCount = 0;
@@ -2710,22 +2652,14 @@ export function renderTournamentPage(opts: {
     games,
     liveTables,
     totalCompletedCount: completedCount,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
     logFiles,
     nowSec,
   });
 
   const agentLinks: Record<string, string> = {};
   for (const e of entrants) {
-    const href = render.resolveAgentHref(
-      publicDir,
-      projectMeta,
-      e.agentSlug,
-      e.agentName,
-      profileSlugs
-    );
+    const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
     if (href) agentLinks[e.agentSlug] = href;
   }
 

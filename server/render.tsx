@@ -1405,13 +1405,18 @@ function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
   return map;
 }
 
+export interface AgentLinkContext {
+  publicDir: string;
+  projectMeta: ReadonlyMap<string, ProjectMeta>;
+  profileSlugs?: ReadonlySet<string>;
+}
+
 export function resolveAgentHref(
-  publicDir: string,
-  projectMeta: ReadonlyMap<string, ProjectMeta>,
+  links: AgentLinkContext,
   slug: string,
-  name: string,
-  profileSlugs?: ReadonlySet<string>
+  name: string
 ): string | undefined {
+  const {publicDir, projectMeta, profileSlugs} = links;
   if (
     profileSlugs?.has(slug) ||
     fs.existsSync(path.join(publicDir, 'projects', slug, 'index.html'))
@@ -1851,9 +1856,7 @@ function renderHistorySection(
 function renderMatchupsSection(
   entries: db.LeaderboardEntryView[],
   pairs: db.PairAggregateRow[],
-  publicDir: string,
-  projectMeta: ReadonlyMap<string, ProjectMeta>,
-  profileSlugs: ReadonlySet<string>,
+  links: AgentLinkContext,
   ladderStatus?: db.LadderStatus
 ): {node: util.Child; isEmpty: boolean} {
   const isArchived = ladderStatus === 'archived';
@@ -1901,13 +1904,7 @@ function renderMatchupsSection(
   const colHeaders = participants.map(p => <th>{p.agentName}</th>);
 
   const bodyRows = participants.map(rowEntry => {
-    const rowHref = resolveAgentHref(
-      publicDir,
-      projectMeta,
-      rowEntry.agentSlug,
-      rowEntry.agentName,
-      profileSlugs
-    );
+    const rowHref = resolveAgentHref(links, rowEntry.agentSlug, rowEntry.agentName);
 
     const cells = participants.map(colEntry => {
       if (rowEntry.versionId === colEntry.versionId) {
@@ -1980,9 +1977,7 @@ function renderSingleLadderArtifact(opts: {
   urlKey: string;
   db: db.Database;
   renderer: build.Renderer;
-  publicDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
+  links: AgentLinkContext;
   nowSec: number;
 }): {
   html: string;
@@ -1999,11 +1994,10 @@ function renderSingleLadderArtifact(opts: {
     urlKey,
     db,
     renderer,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
     nowSec,
   } = opts;
+  const {publicDir, projectMeta} = links;
   const entries = db.getLeaderboardEntries(l.id);
   const pairs = db.getPairAggregatesForLadder(l.id);
   const snapshots = db.getRatingSnapshotsForLadder(l.id);
@@ -2098,13 +2092,7 @@ function renderSingleLadderArtifact(opts: {
             </thead>
             <tbody>
               {activeEntrants.map((e, idx) => {
-                const href = resolveAgentHref(
-                  publicDir,
-                  projectMeta,
-                  e.agentSlug,
-                  e.agentName,
-                  profileSlugs
-                );
+                const href = resolveAgentHref(links, e.agentSlug, e.agentName);
                 return (
                   <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
                     <td><strong>{idx + 1}</strong></td>
@@ -2176,13 +2164,7 @@ function renderSingleLadderArtifact(opts: {
         rankCell = <td className='muted'>—</td>;
       }
 
-      const href = resolveAgentHref(
-        publicDir,
-        projectMeta,
-        e.agentSlug,
-        e.agentName,
-        profileSlugs
-      );
+      const href = resolveAgentHref(links, e.agentSlug, e.agentName);
       const meta = projectMeta.get(e.agentName);
       const agentCell = (
         <td>
@@ -2329,14 +2311,7 @@ function renderSingleLadderArtifact(opts: {
   }
 
   const historyRes = renderHistorySection(l, entries, snapshots, nowSec);
-  const matchupsRes = renderMatchupsSection(
-    entries,
-    pairs,
-    publicDir,
-    projectMeta,
-    profileSlugs,
-    l.status
-  );
+  const matchupsRes = renderMatchupsSection(entries, pairs, links, l.status);
 
   const isUpcoming = l.status === 'upcoming';
   const ladderContent = String(
@@ -2495,10 +2470,8 @@ export interface CachedArchivedLadder {
 export function renderArenaAndLadderArtifacts(opts: {
   db: db.Database;
   renderer: build.Renderer;
-  publicDir: string;
+  links: AgentLinkContext;
   staticDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
   liveMatch?: arena.LiveMatch;
   metaToken?: string;
   archivedCache?: Map<string, CachedArchivedLadder>;
@@ -2515,15 +2488,14 @@ export function renderArenaAndLadderArtifacts(opts: {
   const {
     db,
     renderer,
-    publicDir,
+    links,
     staticDir,
-    projectMeta,
-    profileSlugs,
     liveMatch,
     metaToken,
     archivedCache,
     nowSec,
   } = opts;
+  const {publicDir} = links;
   const ladders = db.getCurrentLadders();
   const allLadders = db.getLadders();
   const runningTour = db.getRunningTournament();
@@ -2577,9 +2549,7 @@ export function renderArenaAndLadderArtifacts(opts: {
           urlKey: l.id,
           db,
           renderer,
-          publicDir,
-          projectMeta,
-          profileSlugs,
+          links,
           nowSec,
         });
         archivedCache.set(l.id, {key: cacheKey, rendered, teamsDoc});
@@ -2595,9 +2565,7 @@ export function renderArenaAndLadderArtifacts(opts: {
         urlKey: l.id,
         db,
         renderer,
-        publicDir,
-        projectMeta,
-        profileSlugs,
+        links,
         nowSec,
       });
     }
@@ -2653,9 +2621,7 @@ export function renderArenaAndLadderArtifacts(opts: {
       urlKey: l.slot,
       db,
       renderer,
-      publicDir,
-      projectMeta,
-      profileSlugs,
+      links,
       nowSec,
     });
     ladderHtmlBySlot[l.slot] = rendered.html;
@@ -2811,9 +2777,7 @@ export function renderArenaAndLadderArtifacts(opts: {
   const blurbHtml = site.html.render(blurbDj);
   const tournamentsSummaryHtml = tournaments.renderArenaTournamentsSummaryHtml({
     db,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
     tournaments: allTournaments,
     entrantsByTournament,
   });
@@ -2910,9 +2874,7 @@ function renderLiveSlotCard(
   slotData: arena.LiveSlot,
   live: arena.LiveMatch,
   nowSec: number,
-  publicDir: string,
-  projectMeta: ReadonlyMap<string, ProjectMeta>,
-  profileSlugs?: ReadonlySet<string>
+  links: AgentLinkContext
 ): util.Child {
   const isRunning = live.activeSlot === key;
   const otherKey = key === 'p1' ? 'p2' : 'p1';
@@ -2925,7 +2887,7 @@ function renderLiveSlotCard(
     : Math.round(slotData.bankSeconds);
   const inc = Math.round(live.incrementSeconds);
   const ramPct = ((slotData.ram / 14336) * 100).toFixed(1);
-  const href = resolveAgentHref(publicDir, projectMeta, slotData.slug, slotData.name, profileSlugs);
+  const href = resolveAgentHref(links, slotData.slug, slotData.name);
 
   const badge = isRunning ? (
     <span className='state-running' id={`state-${key}`} title='Currently executing (SIGCONT)'>
@@ -2993,9 +2955,7 @@ function renderLiveSlotCard(
 function renderLivePanelInner(
   liveDoc: arena.LiveDocument | undefined,
   nowSec: number,
-  publicDir: string,
-  projectMeta: ReadonlyMap<string, ProjectMeta>,
-  profileSlugs?: ReadonlySet<string>
+  links: AgentLinkContext
 ): util.Child {
   if (!liveDoc?.live || liveDoc.stale) {
     const idleMsg = liveDoc?.stale
@@ -3046,8 +3006,8 @@ function renderLivePanelInner(
         </span>
       </div>
       <div className='slots-grid'>
-        {renderLiveSlotCard('p1', l.p1, l, nowSec, publicDir, projectMeta, profileSlugs)}
-        {renderLiveSlotCard('p2', l.p2, l, nowSec, publicDir, projectMeta, profileSlugs)}
+        {renderLiveSlotCard('p1', l.p1, l, nowSec, links)}
+        {renderLiveSlotCard('p2', l.p2, l, nowSec, links)}
       </div>
     </>
   );
@@ -3311,9 +3271,7 @@ export function renderBattleInlineDetailHtml(
 export function renderBattlesPage(opts: {
   db: db.Database;
   renderer: build.Renderer;
-  publicDir: string;
-  projectMeta: ReadonlyMap<string, ProjectMeta>;
-  profileSlugs?: ReadonlySet<string>;
+  links: AgentLinkContext;
   liveDoc?: arena.LiveDocument;
   recentMatchesLimit: number;
   nowSec: number;
@@ -3321,13 +3279,12 @@ export function renderBattlesPage(opts: {
   const {
     db,
     renderer,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
     liveDoc,
     recentMatchesLimit,
     nowSec,
   } = opts;
+  const {publicDir} = links;
   const ladders = db.getCurrentLadders();
   const countsBySlot = db.getMatchCountsBySlot();
   const recentMatches = db.getRecentMatches(recentMatchesLimit)
@@ -3347,13 +3304,13 @@ export function renderBattlesPage(opts: {
 
   const agentLinks: Record<string, string> = {};
   for (const s of db.getProjectArenaSummaries()) {
-    const href = resolveAgentHref(publicDir, projectMeta, s.slug, s.name, profileSlugs);
+    const href = resolveAgentHref(links, s.slug, s.name);
     if (href) agentLinks[s.slug] = href;
   }
   for (const m of recentMatches) {
     for (const side of [m.p1, m.p2]) {
       if (!agentLinks[side.slug]) {
-        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name, profileSlugs);
+        const href = resolveAgentHref(links, side.slug, side.name);
         if (href) agentLinks[side.slug] = href;
       }
     }
@@ -3361,7 +3318,7 @@ export function renderBattlesPage(opts: {
   if (liveDoc?.live) {
     for (const side of [liveDoc.live.p1, liveDoc.live.p2]) {
       if (!agentLinks[side.slug]) {
-        const href = resolveAgentHref(publicDir, projectMeta, side.slug, side.name, profileSlugs);
+        const href = resolveAgentHref(links, side.slug, side.name);
         if (href) agentLinks[side.slug] = href;
       }
     }
@@ -3460,7 +3417,7 @@ export function renderBattlesPage(opts: {
         <h3><a href='#live' className='subtle'>Live</a></h3>
         <div className='live-panel'>
           <div id='live-panel'>
-            {renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta, profileSlugs)}
+            {renderLivePanelInner(liveDoc, nowSec, links)}
           </div>
           <div
             className={`battle-viewer-wrap${liveMatchWithLines ? '' : ' hide'}`}
@@ -3649,6 +3606,7 @@ export function register(app: polka.Polka, options: Options) {
 
   let cachedContext: {
     token: string;
+    links: AgentLinkContext;
     projectMeta: Map<string, ProjectMeta>;
     profileAgents: db.AgentRow[];
     profileBySlug: Map<string, db.AgentRow>;
@@ -3671,6 +3629,7 @@ export function register(app: polka.Polka, options: Options) {
     const liveTournament = db.getRunningTournament();
     cachedContext = {
       token: dbToken,
+      links: {publicDir, projectMeta, profileSlugs},
       projectMeta,
       profileAgents,
       profileBySlug,
@@ -3697,10 +3656,8 @@ export function register(app: polka.Polka, options: Options) {
     const bundle = renderArenaAndLadderArtifacts({
       db,
       renderer,
-      publicDir,
+      links: ctx.links,
       staticDir,
-      projectMeta: ctx.projectMeta,
-      profileSlugs: ctx.profileSlugs,
       liveMatch: activeLive,
       metaToken: ctx.token,
       archivedCache: archivedLadderCache,
@@ -3710,15 +3667,26 @@ export function register(app: polka.Polka, options: Options) {
     return bundle;
   };
 
+  interface CachedResponseOptions {
+    key: string;
+    token: string;
+    contentType: string;
+    cacheControl?: string;
+    compute: () => string | Buffer;
+  }
+
   const sendCached = (
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    cacheKey: string,
-    token: string,
-    contentType: string,
-    compute: () => string | Buffer,
-    cacheControl = 'no-cache'
+    opts: CachedResponseOptions
   ) => {
+    const {
+      key: cacheKey,
+      token,
+      contentType,
+      cacheControl = 'no-cache',
+      compute,
+    } = opts;
     let entry = responseCache.get(cacheKey);
     if (entry?.token !== token) {
       const raw = compute();
@@ -3804,24 +3772,21 @@ export function register(app: polka.Polka, options: Options) {
     const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
     const token = `${dbToken}:${util.formatUtcDate(nowSec)}:${liveKey}`;
     if (asJson) {
-      sendCached(
-        req,
-        res,
-        'arena:json',
+      sendCached(req, res, {
+        key: 'arena:json',
         token,
-        'application/json; charset=utf-8',
-        () => `${JSON.stringify(getArenaBundle(dbToken, nowSec).standingsJson, undefined, 2)}\n`
-      );
+        contentType: 'application/json; charset=utf-8',
+        compute: () =>
+          `${JSON.stringify(getArenaBundle(dbToken, nowSec).standingsJson, undefined, 2)}\n`,
+      });
       return;
     }
-    sendCached(
-      req,
-      res,
-      'arena:html',
+    sendCached(req, res, {
+      key: 'arena:html',
       token,
-      'text/html; charset=utf-8',
-      () => getArenaBundle(dbToken, nowSec).arenaHtml
-    );
+      contentType: 'text/html; charset=utf-8',
+      compute: () => getArenaBundle(dbToken, nowSec).arenaHtml,
+    });
   };
 
   app.get('/arena', (req, res) => handleArenaHub(req, res, false));
@@ -3834,28 +3799,29 @@ export function register(app: polka.Polka, options: Options) {
     const dbToken = getDbToken();
     const token = `${dbToken}:${state.liveSeq}:${Math.floor(nowSec / 5)}`;
     if (asJson) {
-      sendCached(
-        req,
-        res,
-        'battles:json',
+      sendCached(req, res, {
+        key: 'battles:json',
         token,
-        'application/json; charset=utf-8',
-        () => `${JSON.stringify(arenaHandle.getLiveDocument(nowSec), undefined, 2)}\n`
-      );
+        contentType: 'application/json; charset=utf-8',
+        compute: () => `${JSON.stringify(arenaHandle.getLiveDocument(nowSec), undefined, 2)}\n`,
+      });
       return;
     }
-    sendCached(req, res, 'battles:html', token, 'text/html; charset=utf-8', () => {
-      const ctx = getContext(dbToken);
-      return renderBattlesPage({
-        db,
-        renderer,
-        publicDir,
-        projectMeta: ctx.projectMeta,
-        profileSlugs: ctx.profileSlugs,
-        liveDoc: arenaHandle.getLiveDocument(nowSec),
-        recentMatchesLimit,
-        nowSec,
-      });
+    sendCached(req, res, {
+      key: 'battles:html',
+      token,
+      contentType: 'text/html; charset=utf-8',
+      compute: () => {
+        const ctx = getContext(dbToken);
+        return renderBattlesPage({
+          db,
+          renderer,
+          links: ctx.links,
+          liveDoc: arenaHandle.getLiveDocument(nowSec),
+          recentMatchesLimit,
+          nowSec,
+        });
+      },
     });
   };
 
@@ -3872,18 +3838,16 @@ export function register(app: polka.Polka, options: Options) {
     }
     const nowSec = getNowSec();
     const dbToken = getDbToken();
-    sendCached(
-      req,
-      res,
-      `ladder-teams:${ladder.id}`,
-      dbToken,
-      'application/json; charset=utf-8',
-      () => {
+    sendCached(req, res, {
+      key: `ladder-teams:${ladder.id}`,
+      token: dbToken,
+      contentType: 'application/json; charset=utf-8',
+      compute: () => {
         const doc = getArenaBundle(dbToken, nowSec).archivedTeamsJsonById[ladder.id] ??
           buildLadderTeamsDocument(db, ladder);
         return `${JSON.stringify(doc, undefined, 2)}\n`;
-      }
-    );
+      },
+    });
   });
 
   const handleLadder = (
@@ -3914,17 +3878,20 @@ export function register(app: polka.Polka, options: Options) {
       return;
     }
     if (isJson) {
-      sendCached(
-        req,
-        res,
-        `ladder:json:${key}`,
+      sendCached(req, res, {
+        key: `ladder:json:${key}`,
         token,
-        'application/json; charset=utf-8',
-        () => `${JSON.stringify(jsonDoc, undefined, 2)}\n`
-      );
+        contentType: 'application/json; charset=utf-8',
+        compute: () => `${JSON.stringify(jsonDoc, undefined, 2)}\n`,
+      });
       return;
     }
-    sendCached(req, res, `ladder:html:${key}`, token, 'text/html; charset=utf-8', () => htmlDoc);
+    sendCached(req, res, {
+      key: `ladder:html:${key}`,
+      token,
+      contentType: 'text/html; charset=utf-8',
+      compute: () => htmlDoc,
+    });
   };
 
   const serveBattleLogFile = (
@@ -4012,41 +3979,35 @@ export function register(app: polka.Polka, options: Options) {
     const rulesMtime = getFileMtimeToken(path.join(staticDir, 'tours', `${tournament.id}.dj`));
     const token = `${dbToken}:${state.liveSeq}:${rulesMtime}`;
     if (isJson) {
-      sendCached(
-        req,
-        res,
-        `tournament:json:${tournament.id}`,
-        dbToken,
-        'application/json; charset=utf-8',
-        () => {
+      sendCached(req, res, {
+        key: `tournament:json:${tournament.id}`,
+        token: dbToken,
+        contentType: 'application/json; charset=utf-8',
+        compute: () => {
           const doc = arena.buildTournamentDocument(db, publicDir, tournament, 10_000);
           return `${JSON.stringify(doc, undefined, 2)}\n`;
-        }
-      );
+        },
+      });
       return;
     }
-    sendCached(
-      req,
-      res,
-      `tournament:html:${tournament.id}`,
+    sendCached(req, res, {
+      key: `tournament:html:${tournament.id}`,
       token,
-      'text/html; charset=utf-8',
-      () => {
+      contentType: 'text/html; charset=utf-8',
+      compute: () => {
         const ctx = getContext(dbToken);
         return tournaments.renderTournamentPage({
           db,
           renderer,
           tournament,
-          publicDir,
+          links: ctx.links,
           staticDir,
-          projectMeta: ctx.projectMeta,
-          profileSlugs: ctx.profileSlugs,
           tournamentBroadcast: arenaHandle.getTournamentBroadcast(tournament.id),
           liveTournament: ctx.liveTournament,
           nowSec: getNowSec(),
         }).html;
-      }
-    );
+      },
+    });
   };
 
   app.get('/arena/tournaments/:id/index.json', (req, res) => {
@@ -4067,31 +4028,36 @@ export function register(app: polka.Polka, options: Options) {
 
   app.get('/projects', (req, res) => {
     const dbToken = getDbToken();
-    sendCached(req, res, 'projects:html', dbToken, 'text/html; charset=utf-8', () => {
-      const ctx = getContext(dbToken);
-      const summaries = db.getProjectArenaSummaries();
-      const arenaByName = new Map<string, projects.ArenaInfo>();
-      for (const s of summaries) {
-        arenaByName.set(s.name, {
-          slug: s.slug,
-          name: s.name,
-          profileHref: `/projects/${encodeURIComponent(s.slug)}/`,
-          bestRank: s.bestRank,
-          bestLcb: s.bestLcb,
-          ladders: s.ladders.map(b => ({
-            slot: b.slot,
-            name: b.ladderName,
-            rank: b.rank,
-            provisional: b.provisional,
-          })),
+    sendCached(req, res, {
+      key: 'projects:html',
+      token: dbToken,
+      contentType: 'text/html; charset=utf-8',
+      compute: () => {
+        const ctx = getContext(dbToken);
+        const summaries = db.getProjectArenaSummaries();
+        const arenaByName = new Map<string, projects.ArenaInfo>();
+        for (const s of summaries) {
+          arenaByName.set(s.name, {
+            slug: s.slug,
+            name: s.name,
+            profileHref: `/projects/${encodeURIComponent(s.slug)}/`,
+            bestRank: s.bestRank,
+            bestLcb: s.bestLcb,
+            ladders: s.ladders.map(b => ({
+              slot: b.slot,
+              name: b.ladderName,
+              rank: b.rank,
+              provisional: b.provisional,
+            })),
+          });
+        }
+        const projectsPage = projects.page(staticDir, arenaByName);
+        return renderer.render({
+          id: 'projects',
+          ...projectsPage,
+          header: build.injectLiveBanner(projectsPage.header, ctx.liveTournament),
         });
-      }
-      const projectsPage = projects.page(staticDir, arenaByName);
-      return renderer.render({
-        id: 'projects',
-        ...projectsPage,
-        header: build.injectLiveBanner(projectsPage.header, ctx.liveTournament),
-      });
+      },
     });
   });
 
@@ -4112,10 +4078,8 @@ export function register(app: polka.Polka, options: Options) {
       db,
       renderer,
       agent,
-      publicDir,
+      links: ctx.links,
       avatarsDir,
-      projectMeta: ctx.projectMeta,
-      profileSlugs: ctx.profileSlugs,
       liveTournament: ctx.liveTournament,
       nowSec,
     });
@@ -4152,14 +4116,13 @@ export function register(app: polka.Polka, options: Options) {
       }
       const nowSec = getNowSec();
       const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
-      sendCached(
-        req,
-        res,
-        `profile:json:${agent.slug}`,
+      sendCached(req, res, {
+        key: `profile:json:${agent.slug}`,
         token,
-        'application/json; charset=utf-8',
-        () => `${JSON.stringify(getAgentProfile(agent, ctx, token, nowSec).json, undefined, 2)}\n`
-      );
+        contentType: 'application/json; charset=utf-8',
+        compute: () =>
+          `${JSON.stringify(getAgentProfile(agent, ctx, token, nowSec).json, undefined, 2)}\n`,
+      });
       return;
     }
 
@@ -4167,15 +4130,13 @@ export function register(app: polka.Polka, options: Options) {
     const logo = ctx.logoByFileName.get(rawParam);
     if (logo) {
       const mtime = getFileMtimeToken(logo.filePath);
-      sendCached(
-        req,
-        res,
-        `logo:${logo.fileName}`,
-        mtime,
-        logo.contentType,
-        () => fs.readFileSync(logo.filePath),
-        'public, max-age=86400'
-      );
+      sendCached(req, res, {
+        key: `logo:${logo.fileName}`,
+        token: mtime,
+        contentType: logo.contentType,
+        cacheControl: 'public, max-age=86400',
+        compute: () => fs.readFileSync(logo.filePath),
+      });
       return;
     }
 
@@ -4183,14 +4144,12 @@ export function register(app: polka.Polka, options: Options) {
     if (agent) {
       const nowSec = getNowSec();
       const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
-      sendCached(
-        req,
-        res,
-        `profile:html:${agent.slug}`,
+      sendCached(req, res, {
+        key: `profile:html:${agent.slug}`,
         token,
-        'text/html; charset=utf-8',
-        () => getAgentProfile(agent, ctx, token, nowSec).html
-      );
+        contentType: 'text/html; charset=utf-8',
+        compute: () => getAgentProfile(agent, ctx, token, nowSec).html,
+      });
       return;
     }
 

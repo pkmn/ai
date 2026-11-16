@@ -1209,16 +1209,26 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
   app.get('/wiki/:page', (req, res) => renderPageSlug(req, res, slugParam(req.params.page)));
 
-  const renderEditor = (
-    res: http.ServerResponse,
-    slug: string,
-    content: string,
-    message = '',
-    visibility?: PageVisibility,
-    previewHtml?: string,
-    baseSha = wiki.getContentFingerprint(slug),
-    statusCode = 200
-  ) => {
+  interface EditorViewOptions {
+    slug: string;
+    content: string;
+    message?: string;
+    visibility?: PageVisibility;
+    previewHtml?: string;
+    baseSha?: string;
+    statusCode?: number;
+  }
+
+  const renderEditor = (res: http.ServerResponse, opts: EditorViewOptions) => {
+    const {
+      slug,
+      content,
+      message = '',
+      visibility,
+      previewHtml,
+      baseSha = wiki.getContentFingerprint(slug),
+      statusCode = 200,
+    } = opts;
     const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     const heading = `Edit ${displayTitle}`;
     const encoded = encodeSlug(slug);
@@ -1279,7 +1289,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     if (!requireEditAuth(req, res, slug)) return;
     const existing = wiki.readPage(slug) ?? '';
     const visibility = wiki.isProjectPage(slug) ? wiki.getPageVisibility(slug) : undefined;
-    renderEditor(res, slug, existing, '', visibility);
+    renderEditor(res, {slug, content: existing, visibility});
   });
 
   app.post('/wiki/:page', async (req, res) => {
@@ -1319,15 +1329,14 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
       if (action === 'preview') {
         const previewHtml = renderDjot(content, {});
-        renderEditor(
-          res,
+        renderEditor(res, {
           slug,
           content,
           message,
           visibility,
           previewHtml,
-          baseSha || wiki.getContentFingerprint(slug)
-        );
+          baseSha: baseSha || wiki.getContentFingerprint(slug),
+        });
         return;
       }
 
@@ -1340,7 +1349,15 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
           </p>
         );
         const previewHtml = `${conflictNote}${renderDjot(content, {})}`;
-        renderEditor(res, slug, content, message, visibility, previewHtml, currentFingerprint, 409);
+        renderEditor(res, {
+          slug,
+          content,
+          message,
+          visibility,
+          previewHtml,
+          baseSha: currentFingerprint,
+          statusCode: 409,
+        });
         return;
       }
 

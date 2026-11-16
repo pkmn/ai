@@ -527,14 +527,15 @@ function renderVersionsLineageSvg(
   );
 }
 
-function renderVersionsPane(
-  agentName: string,
-  ladderKey: string,
-  isDefault: boolean,
-  entriesDesc: db.AgentLadderProfileEntry[],
-  snapshots: db.LadderSnapshotHistoryRow[],
-  nowSec: number
-): Html {
+function renderVersionsPane(opts: {
+  agentName: string;
+  ladderKey: string;
+  isDefault: boolean;
+  entriesDesc: db.AgentLadderProfileEntry[];
+  snapshots: db.LadderSnapshotHistoryRow[];
+  nowSec: number;
+}): Html {
+  const {agentName, ladderKey, isDefault, entriesDesc, snapshots, nowSec} = opts;
   const entriesChron = [...entriesDesc].reverse();
   const prevEloByVer = new Map<number, number>();
   for (let i = 1; i < entriesChron.length; i++) {
@@ -639,9 +640,7 @@ function renderHeadToHeadPane(opts: {
   agentEntries: db.AgentLadderProfileEntry[];
   allEntries: db.LeaderboardEntryView[];
   pairs: db.PairAggregateRow[];
-  publicDir: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
+  links: render.AgentLinkContext;
 }): {pane: Html; empty: boolean} {
   const {
     agentId,
@@ -650,9 +649,7 @@ function renderHeadToHeadPane(opts: {
     agentEntries,
     allEntries,
     pairs,
-    publicDir,
-    projectMeta,
-    profileSlugs,
+    links,
   } = opts;
   const emptyPane = (
     <div
@@ -698,13 +695,7 @@ function renderHeadToHeadPane(opts: {
 
     seenOppAgents.add(opp.agentId);
 
-    const oppHref = render.resolveAgentHref(
-      publicDir,
-      projectMeta,
-      opp.agentSlug,
-      opp.agentName,
-      profileSlugs
-    );
+    const oppHref = render.resolveAgentHref(links, opp.agentSlug, opp.agentName);
     const oppLink = render.formatAgentLink(opp.agentName, oppHref, true);
     const oppElo = Math.round(opp.elo);
     const oppCi = opp.isAnchor ? 0 : Math.round(1.96 * opp.se);
@@ -1578,10 +1569,8 @@ export function renderAgentProfile(opts: {
   db: db.Database;
   renderer: Renderer;
   agent: db.AgentRow;
-  publicDir: string;
+  links: render.AgentLinkContext;
   avatarsDir?: string;
-  projectMeta: ReadonlyMap<string, render.ProjectMeta>;
-  profileSlugs: ReadonlySet<string>;
   liveTournament?: {id: string; name: string};
   nowSec: number;
 }): {html: string; json: AgentProfileDocument} {
@@ -1589,13 +1578,12 @@ export function renderAgentProfile(opts: {
     db,
     renderer,
     agent,
-    publicDir,
+    links,
     avatarsDir = AVATARS_DIR,
-    projectMeta,
-    profileSlugs,
     liveTournament,
     nowSec,
   } = opts;
+  const {publicDir, projectMeta} = links;
 
   const ladders = db.getAgentParticipatedLadders(agent.id);
   const resolvedLogo = resolveAgentLogo(agent, avatarsDir);
@@ -1765,8 +1753,7 @@ export function renderAgentProfile(opts: {
   const agentLinks: Record<string, string> = {};
   const registerAgentLink = (slug: string, name: string) => {
     if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return;
-    agentLinks[slug] =
-      render.resolveAgentHref(publicDir, projectMeta, slug, name, profileSlugs) ?? '';
+    agentLinks[slug] = render.resolveAgentHref(links, slug, name) ?? '';
   };
   registerAgentLink(agent.slug, agent.name);
 
@@ -1988,7 +1975,14 @@ export function renderAgentProfile(opts: {
     };
 
     versionsPanes.push(
-      renderVersionsPane(agent.name, lKey, isDefault, agentEntries, snapshots, nowSec)
+      renderVersionsPane({
+        agentName: agent.name,
+        ladderKey: lKey,
+        isDefault,
+        entriesDesc: agentEntries,
+        snapshots,
+        nowSec,
+      })
     );
     const h2hRes = renderHeadToHeadPane({
       agentId: agent.id,
@@ -1997,9 +1991,7 @@ export function renderAgentProfile(opts: {
       agentEntries,
       allEntries,
       pairs,
-      publicDir,
-      projectMeta,
-      profileSlugs,
+      links,
     });
     matchupsPanes.push(h2hRes.pane);
     if (isDefault) {

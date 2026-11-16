@@ -295,6 +295,12 @@ export async function fetchLeaders(site: string, vgcToken: string): Promise<Lead
   });
 }
 
+export interface GuildCache {
+  members?: GuildMember[];
+  channels?: GuildChannel[];
+  roles?: GuildRole[];
+}
+
 // Syncs external partner ladder #1 roles (vgc.bot / pkmn.bot). Guild members and roles are
 // fetched lazily only when needed to resolve or update a ladder's leader.
 export async function syncRoles(
@@ -302,9 +308,10 @@ export async function syncRoles(
   vgcToken: string,
   config: Config,
   state: Map<string, string | undefined>,
-  members?: GuildMember[],
-  roles?: GuildRole[]
+  cache: GuildCache = {}
 ) {
+  let {members} = cache;
+  const {roles} = cache;
   const leaders: Leader[] = [];
   for (const site of SITES) {
     try {
@@ -596,14 +603,19 @@ function resolveLadderLabels(db: db.Database, laddersJson: string): string[] {
   }
 }
 
+interface DmContext {
+  db: db.Database;
+  token: string;
+  config: Config;
+  state: Map<string, string | undefined>;
+}
+
 async function dispatchVersionDm(
-  db: db.Database,
-  token: string,
-  config: Config,
+  ctx: DmContext,
   item: db.PendingVersionDmRow,
-  state: Map<string, string | undefined>,
   notifyStaffIfNoOwners: boolean
 ): Promise<boolean> {
+  const {db, token, config, state} = ctx;
   if (inFlightVersionDms.has(item.versionId)) return false;
   const latest = db.getVersionById(item.versionId);
   if (!latest || latest.notified) return false;
@@ -707,9 +719,7 @@ export async function notifySubmissionStatus(
     result.version.developerId
   );
   return dispatchVersionDm(
-    db,
-    token,
-    config,
+    {db, token, config, state},
     {
       versionId: result.version.id,
       agentId: result.agent.id,
@@ -722,7 +732,6 @@ export async function notifySubmissionStatus(
       submittedAt: result.version.submittedAt,
       ownerDiscordIds,
     },
-    state,
     true
   );
 }
@@ -737,15 +746,13 @@ export async function syncSubmissionDms(
   config: Config,
   state = new Map<string, string | undefined>()
 ): Promise<number> {
+  const ctx: DmContext = {db, token, config, state};
   let deliveredVersions = 0;
   for (const row of db.getPendingVersionDms()) {
     if (row.ownerDiscordIds.length === 0 && row.smokeStatus !== 'quarantined') continue;
     const sent = await dispatchVersionDm(
-      db,
-      token,
-      config,
+      ctx,
       row,
-      state,
       row.smokeStatus === 'quarantined'
     );
     if (sent) deliveredVersions++;
@@ -900,10 +907,9 @@ export async function syncMessages(
   token: string,
   channel: string,
   dir = root('chat', 'logs'),
-  members?: GuildMember[],
-  channels?: GuildChannel[],
-  roles?: GuildRole[]
+  cache: GuildCache = {}
 ) {
+  const {members, channels, roles} = cache;
   fs.mkdirSync(dir, {recursive: true});
   const cursorFile = path.join(dir, '.cursor');
   let after = '0';
@@ -1465,14 +1471,19 @@ export interface Handle {
   notifyWatchdogTimeout: (alert: WatchdogAlert) => Promise<number>;
 }
 
+export interface SyncOnceOptions {
+  state?: Map<string, string | undefined>;
+  onVerifyKey?: (key: string) => void;
+  configOrFile?: Config | string;
+}
+
 export async function syncOnce(
   db: db.Database,
   token: string,
   vgcToken = '',
-  state = new Map<string, string | undefined>(),
-  onVerifyKey?: (key: string) => void,
-  configOrFile?: Config | string
+  opts: SyncOnceOptions = {}
 ) {
+  const {state = new Map<string, string | undefined>(), onVerifyKey, configOrFile} = opts;
   const config = typeof configOrFile === 'object'
     ? configOrFile
     : loadConfig(configOrFile);
@@ -1503,7 +1514,7 @@ export async function syncOnce(
 
   if (vgcToken) {
     try {
-      await syncRoles(token, vgcToken, config, state, members, roles);
+      await syncRoles(token, vgcToken, config, state, {members, roles});
     } catch (err) {
       console.error('Error syncing partner roles:', err);
     }
@@ -1538,7 +1549,7 @@ export async function syncOnce(
     }
 
     try {
-      await syncMessages(token, config.channel, undefined, members, channels, roles);
+      await syncMessages(token, config.channel, undefined, {members, channels, roles});
     } catch (err) {
       console.error('Error syncing messages:', err);
     }
@@ -1577,16 +1588,13 @@ export function register(app: polka.Polka, options: Options): Handle {
       } catch (err) {
         console.error('Error reloading glossary:', err);
       }
-      syncOnce(
-        options.db,
-        token,
-        vgcToken,
+      syncOnce(options.db, token, vgcToken, {
         state,
-        k => {
+        onVerifyKey: k => {
           verifyKey = k;
         },
-        options.config ?? options.configFile
-      )
+        configOrFile: options.config ?? options.configFile,
+      })
         .catch(err => {
           console.error('Error in Discord sync cycle:', err);
         })
@@ -1600,17 +1608,14 @@ export function register(app: polka.Polka, options: Options): Handle {
     verifyKeyReady = new Promise<void>(resolve => {
       resolveVerifyKey = resolve;
     });
-    syncOnce(
-      options.db,
-      token,
-      vgcToken,
+    syncOnce(options.db, token, vgcToken, {
       state,
-      k => {
+      onVerifyKey: k => {
         verifyKey = k;
         resolveVerifyKey();
       },
-      options.config ?? options.configFile
-    )
+      configOrFile: options.config ?? options.configFile,
+    })
       .catch(err => {
         console.error('Error in initial Discord sync:', err);
       })
