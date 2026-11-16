@@ -586,6 +586,7 @@ export interface Options {
   sessionSecret?: string;
   publicDir?: string;
   watchdogTimeoutMillis?: number;
+  armWatchdogOnStart?: boolean;
   recentMatchesLimit?: number;
   now?: () => number;
   onSubmissionStatus?: (result: db.ApplySubmissionStatusResult) => void | Promise<void>;
@@ -822,6 +823,8 @@ export interface ClientOptions {
   serverUrl: string;
   arenaSecret: string;
   fetch?: typeof globalThis.fetch;
+  timeoutMillis?: number;
+  allowInsecureHttp?: boolean;
 }
 
 export function buildLadderMatchState(
@@ -904,17 +907,40 @@ export function buildLadderMatchState(
   };
 }
 
+function validateControlPlaneServerUrl(rawUrl: string, allowInsecureHttp = false): string {
+  const trimmed = rawUrl.replace(/\/+$/, '');
+  const parsed = new URL(trimmed);
+  if (parsed.protocol === 'https:') return trimmed;
+  if (parsed.protocol !== 'http:') {
+    throw new Error(`Unsupported control-plane URL scheme "${parsed.protocol}"`);
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isLoopback =
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === '[::1]';
+  if (!isLoopback && !allowInsecureHttp && process.env.ARENA_DEV !== '1') {
+    throw new Error(
+      `Refusing cleartext HTTP control-plane URL "${trimmed}" (use https:// or loopback tunnel)`
+    );
+  }
+  return trimmed;
+}
+
 // Outbound worker control-plane HTTP client used by the Mac Mini Arena coordinator (and `--server`
 // mock scenarios) to communicate with `/api/arena/*` using `Bearer $ARENA_SECRET`.
 export class Client {
   readonly serverUrl: string;
   private readonly arenaSecret: string;
   private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly timeoutMillis: number;
 
   constructor(options: ClientOptions) {
-    this.serverUrl = options.serverUrl.replace(/\/+$/, '');
+    this.serverUrl = validateControlPlaneServerUrl(options.serverUrl, options.allowInsecureHttp);
     this.arenaSecret = options.arenaSecret;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.timeoutMillis = options.timeoutMillis ?? 30_000;
   }
 
   private async requestJson<T>(
@@ -934,6 +960,7 @@ export class Client {
       method,
       headers,
       body: serialized,
+      signal: AbortSignal.timeout(this.timeoutMillis),
     });
     const text = await res.text();
     let parsed: unknown;
@@ -957,17 +984,23 @@ export class Client {
   private async uploadArchive<T>(
     endpoint: string,
     archive: Uint8Array,
-    sha256?: string
+    sha256?: string,
+    contentType = 'application/octet-stream'
   ): Promise<T> {
     const digest = sha256 ?? crypto.createHash('sha256').update(archive).digest('hex');
+    const bodyView = Buffer.isBuffer(archive)
+      ? archive
+      : Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
+    const uploadTimeout = Math.max(this.timeoutMillis, 300_000);
     const res = await this.fetchImpl(`${this.serverUrl}${endpoint}`, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${this.arenaSecret}`,
-        'content-type': 'application/x-7z-compressed',
+        'content-type': contentType,
         'x-content-sha256': digest,
       },
-      body: Buffer.from(archive),
+      body: bodyView as unknown as BodyInit,
+      signal: AbortSignal.timeout(uploadTimeout),
     });
     const text = await res.text();
     let parsed: unknown;
@@ -1103,7 +1136,8 @@ export class Client {
     return this.uploadArchive<TournamentArchiveResponse>(
       `/api/arena/tournaments/${encodeURIComponent(tournamentId)}/archive`,
       archive,
-      sha256
+      sha256,
+      'application/x-7z-compressed'
     );
   }
 
@@ -1161,9 +1195,32 @@ function openSse(res: http.ServerResponse) {
   res.flushHeaders?.();
 }
 
+const MAX_SSE_BUFFER_BYTES = 4 * 1024 * 1024;
+
 function sendSse(res: http.ServerResponse, event: string, data: unknown) {
   if (res.writableEnded || res.destroyed) return;
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function broadcastSseFrame(
+  clients: Set<http.ServerResponse>,
+  event: string,
+  data: unknown
+) {
+  if (clients.size === 0) return;
+  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of clients) {
+    if (client.writableEnded || client.destroyed) {
+      clients.delete(client);
+      continue;
+    }
+    if (client.writableLength > MAX_SSE_BUFFER_BYTES) {
+      client.destroy();
+      clients.delete(client);
+      continue;
+    }
+    client.write(frame);
+  }
 }
 
 const MAX_TEAMS_BODY_BYTES = 8 * 1024 * 1024;
@@ -1303,7 +1360,12 @@ function streamBinaryArchive(
         return;
       }
       hash.update(chunk);
-      out.write(chunk);
+      if (!out.write(chunk)) {
+        req.pause();
+        out.once('drain', () => {
+          if (!settled) req.resume();
+        });
+      }
     });
 
     req.on('end', () => {
@@ -1391,7 +1453,10 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
   }
   let team: string | undefined;
   if (obj.team !== undefined) {
-    if (typeof obj.team !== 'string' || !obj.team.trim() || obj.team.trim().length > 32) {
+    if (
+      typeof obj.team !== 'string' ||
+      !/^(?:P[12]:)?[0-9a-f]{12}$/i.test(obj.team.trim())
+    ) {
       throw Object.assign(new Error(`Invalid ${label}.team.`), {status: 400});
     }
     team = obj.team.trim();
@@ -1834,17 +1899,14 @@ export function register(app: polka.Polka, options: Options): Handle {
   keepaliveTimer.unref();
 
   const pushBattleEvent = (event: string, data: unknown) => {
-    for (const client of battleStreamClients) {
-      sendSse(client, event, data);
-    }
+    broadcastSseFrame(battleStreamClients, event, data);
   };
 
   const pushTournamentEvent = (tournamentId: string, event: string, data: unknown) => {
     const clients = tournamentStreamClients.get(tournamentId);
     if (!clients) return;
-    for (const client of clients) {
-      sendSse(client, event, data);
-    }
+    broadcastSseFrame(clients, event, data);
+    if (clients.size === 0) tournamentStreamClients.delete(tournamentId);
   };
 
   const getRunningTournamentInfo = () => {
@@ -1930,6 +1992,10 @@ export function register(app: polka.Polka, options: Options): Handle {
     watchdogTimer.unref();
   };
 
+  if (options.armWatchdogOnStart) {
+    armWatchdog(getNowSec());
+  }
+
   const authenticateArena = (req: http.IncomingMessage, res: http.ServerResponse): boolean => {
     const expected = getArenaSecret();
     if (!expected) {
@@ -1994,7 +2060,14 @@ export function register(app: polka.Polka, options: Options): Handle {
           if (!sessionSecret) {
             throw new Error('SESSION_SECRET is required to decrypt pending submission authToken');
           }
-          authToken = decryptSecret(sub.authTokenEncoding, sessionSecret);
+          try {
+            authToken = decryptSecret(sub.authTokenEncoding, sessionSecret);
+          } catch (decryptErr) {
+            console.error(
+              `Failed decrypting authToken for pending version ${sub.versionId}:`,
+              decryptErr
+            );
+          }
         }
         return {
           versionId: sub.versionId,
@@ -2235,6 +2308,12 @@ export function register(app: polka.Polka, options: Options): Handle {
       const ladderId = body.ladderId.trim();
       const ladder = db.getLadder(ladderId);
 
+      if (currentLive?.matchId === matchId && body.heartbeatSeq < currentLive.heartbeatSeq) {
+        armWatchdog(nowSec);
+        sendJson(res, 200, {ok: true, updatedAt: liveUpdatedAt ?? nowSec});
+        return;
+      }
+
       let lines: string[] | undefined;
       let p1Lines: string[] | undefined;
       let p2Lines: string[] | undefined;
@@ -2325,6 +2404,13 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     try {
       const match = parseCompletedMatch(body.match);
+      const targetLadder = db.getLadder(match.ladderId);
+      if (targetLadder?.status === 'upcoming') {
+        sendJson(res, 409, {
+          error: `Ladder "${match.ladderId}" is upcoming and does not accept completed matches.`,
+        });
+        return;
+      }
 
       let rawG1Log: string | undefined;
       let rawG2Log: string | undefined;
@@ -2338,8 +2424,10 @@ export function register(app: polka.Polka, options: Options): Handle {
             return;
           }
           if (Buffer.byteLength(val, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
-            sendJson(res, 413, {error: `${key} exceeds 512 KiB limit.`});
-            return;
+            console.warn(
+              `Skipping oversized ${key} on match "${match.id}" (> 512 KiB) while preserving rating`
+            );
+            continue;
           }
           if (key === 'game1Log') rawG1Log = val;
           else rawG2Log = val;
@@ -2507,20 +2595,81 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
+      if (tournament.status === 'completed') {
+        sendJson(res, 409, {
+          error: `Tournament "${tournament.id}" is already completed.`,
+        });
+        return;
+      }
+
       if (Array.isArray(body.tables)) {
+        if (body.tables.length > 64) {
+          sendJson(res, 400, {error: 'tables cannot exceed 64 entries.'});
+          return;
+        }
+        const parsedTables: BroadcastTable[] = body.tables.map((rawTb, tIdx) => {
+          if (!rawTb || typeof rawTb !== 'object' || Array.isArray(rawTb)) {
+            throw Object.assign(new Error(`Invalid tables[${tIdx}].`), {status: 400});
+          }
+          const tb = rawTb as Record<string, unknown>;
+          const tbNum = isPosInt(tb.table) ? tb.table : tIdx + 1;
+          if (tbNum > 64) {
+            throw Object.assign(new Error('table cannot exceed 64.'), {status: 400});
+          }
+          const tbLabel = typeof tb.label === 'string' && tb.label.trim()
+            ? tb.label.trim().slice(0, 128)
+            : `Table ${tbNum}`;
+          const idle = tb.idle === true;
+          const tbP1 = tb.p1 !== undefined
+            ? parseBroadcastPlayer(tb.p1, `tables[${tIdx}].p1`)
+            : undefined;
+          const tbP2 = tb.p2 !== undefined
+            ? parseBroadcastPlayer(tb.p2, `tables[${tIdx}].p2`)
+            : undefined;
+          const tbLines = Array.isArray(tb.lines)
+            ? tb.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
+            : [];
+          const built: BroadcastTable = {
+            table: tbNum,
+            label: tbLabel,
+            idle,
+            gameId: typeof tb.gameId === 'string' && tb.gameId.trim()
+              ? tb.gameId.trim()
+              : undefined,
+            stage: typeof tb.stage === 'string' &&
+              VALID_TOURNAMENT_STAGES.has(tb.stage as db.TournamentGameStage)
+              ? (tb.stage as db.TournamentGameStage)
+              : undefined,
+            cycle: isPosInt(tb.cycle) ? tb.cycle : undefined,
+            matchupGame: isPosInt(tb.matchupGame) ? tb.matchupGame : undefined,
+            ...(isPosInt(tb.game) ? {game: tb.game} : {}),
+            ...(isPosInt(tb.bestOf) ? {bestOf: tb.bestOf} : {}),
+            p1: tbP1,
+            p2: tbP2,
+            lines: tbLines,
+            live: idle ? false : (typeof tb.live === 'boolean' ? tb.live : true),
+            updatedAt: nowSec,
+          };
+          const hdr = buildDefaultTableHeaders(built);
+          built.seriesLeftHtml = hdr.left;
+          built.seriesRightHtml = hdr.right;
+          return built;
+        });
         const rawBroadcast: LiveBroadcast = {
           tournamentId: tournament.id,
           updatedAt: nowSec,
-          tables: body.tables as BroadcastTable[],
-          seriesLeftHtml: typeof body.seriesLeftHtml === 'string' ? body.seriesLeftHtml : '',
-          seriesRightHtml: typeof body.seriesRightHtml === 'string' ? body.seriesRightHtml : '',
+          tables: parsedTables,
+          seriesLeftHtml: '',
+          seriesRightHtml: '',
           p1: body.p1
             ? parseBroadcastPlayer(body.p1, 'p1')
             : {name: '—', bankSeconds: 0, thinking: false, incrementSeconds: 10},
           p2: body.p2
             ? parseBroadcastPlayer(body.p2, 'p2')
             : {name: '—', bankSeconds: 0, thinking: false, incrementSeconds: 10},
-          lines: Array.isArray(body.lines) ? body.lines.map(String) : [],
+          lines: Array.isArray(body.lines)
+            ? body.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
+            : [],
           live: typeof body.live === 'boolean' ? body.live : true,
         };
         const normalized = normalizeLiveBroadcast(rawBroadcast, nowSec);
@@ -2531,12 +2680,12 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      if (!isPosInt(body.table)) {
-        sendJson(res, 400, {error: 'table must be a positive integer.'});
+      if (!isPosInt(body.table) || body.table > 64) {
+        sendJson(res, 400, {error: 'table must be an integer between 1 and 64.'});
         return;
       }
       const tableNum = body.table;
-      const maxTables = Math.max(tournament.parallelTables, tableNum);
+      const maxTables = Math.min(64, Math.max(tournament.parallelTables, tableNum));
       let existing = broadcastsByTournament.get(tournament.id);
       if (!existing) {
         const defaultInc = turnIncrementSeconds(tournament.format);
@@ -2613,7 +2762,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         if (!p1.pokemon && prev.p1?.pokemon) p1.pokemon = prev.p1.pokemon;
         if (!p2.pokemon && prev.p2?.pokemon) p2.pokemon = prev.p2.pokemon;
       }
-      const incomingLines = Array.isArray(body.lines) ? body.lines.map(String) : [];
+      const incomingLines = Array.isArray(body.lines)
+        ? body.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
+        : [];
 
       let stage = prev.stage;
       if (body.stage !== undefined) {
@@ -2652,10 +2803,24 @@ export function register(app: polka.Polka, options: Options): Handle {
         summaries = prev.summaries;
       }
 
+      const prevLines = prev.lines ?? [];
       const mergedLines = mode === 'append'
-        ? [...(prev.lines ?? []), ...incomingLines].slice(-MAX_TABLE_LINES)
+        ? [...prevLines, ...incomingLines].slice(-MAX_TABLE_LINES)
         : incomingLines.slice(-MAX_TABLE_LINES);
-      const mergedPersp = extractPerspectiveLogs(mergedLines);
+      const chunkPersp = mode === 'append' ? extractPerspectiveLogs(incomingLines) : undefined;
+      const canAppendPersp = Boolean(
+        chunkPersp &&
+        prev.p1Lines &&
+        prev.p2Lines &&
+        prevLines.length + incomingLines.length <= MAX_TABLE_LINES &&
+        !incomingLines[incomingLines.length - 1]?.startsWith('|split|')
+      );
+      const mergedPersp = canAppendPersp && chunkPersp
+        ? {
+          p1Lines: [...prev.p1Lines!, ...chunkPersp.p1Lines],
+          p2Lines: [...prev.p2Lines!, ...chunkPersp.p2Lines],
+        }
+        : extractPerspectiveLogs(mergedLines);
 
       const nextTable: BroadcastTable = {
         table: tableNum,
@@ -2677,12 +2842,12 @@ export function register(app: polka.Polka, options: Options): Handle {
         updatedAt: nowSec,
       };
       const defaults = buildDefaultTableHeaders(nextTable);
-      nextTable.seriesLeftHtml = typeof body.seriesLeftHtml === 'string'
-        ? body.seriesLeftHtml
-        : (mode === 'append' && prev.seriesLeftHtml ? prev.seriesLeftHtml : defaults.left);
-      nextTable.seriesRightHtml = typeof body.seriesRightHtml === 'string'
-        ? body.seriesRightHtml
-        : (mode === 'append' && prev.seriesRightHtml ? prev.seriesRightHtml : defaults.right);
+      nextTable.seriesLeftHtml = mode === 'append' && prev.seriesLeftHtml
+        ? prev.seriesLeftHtml
+        : defaults.left;
+      nextTable.seriesRightHtml = mode === 'append' && prev.seriesRightHtml
+        ? prev.seriesRightHtml
+        : defaults.right;
 
       if (idx >= 0) tables[idx] = nextTable;
       else tables.push(nextTable);
@@ -2690,8 +2855,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       broadcastsByTournament.set(tournament.id, normalized);
       liveSeq++;
 
-      if (mode === 'append') {
-        const chunkPersp = extractPerspectiveLogs(incomingLines);
+      if (mode === 'append' && chunkPersp) {
         pushTournamentEvent(tournament.id, 'table-append', {
           table: tableNum,
           lines: incomingLines,
@@ -2750,6 +2914,16 @@ export function register(app: polka.Polka, options: Options): Handle {
           return;
         }
         nextStatus = body.tournamentStatus as db.TournamentStatus;
+        if (
+          (tournament.status === 'completed' && nextStatus !== 'completed') ||
+          (tournament.status === 'running' && nextStatus === 'scheduled')
+        ) {
+          sendJson(res, 409, {
+            error: `Cannot regress tournament status from "${tournament.status}" ` +
+              `to "${nextStatus}".`,
+          });
+          return;
+        }
       }
 
       const parseLogField = (raw: unknown, field: string): string | undefined => {
@@ -2768,8 +2942,11 @@ export function register(app: polka.Polka, options: Options): Handle {
       const rawLog = parseLogField(body.log, 'log');
       let rawLogs: string[] | undefined;
       if (body.logs !== undefined) {
-        if (!Array.isArray(body.logs)) {
-          throw Object.assign(new Error('logs must be an array of strings.'), {status: 400});
+        if (!Array.isArray(body.logs) || body.logs.length > 9) {
+          throw Object.assign(
+            new Error('logs must be an array of at most 9 strings.'),
+            {status: 400}
+          );
         }
         rawLogs = body.logs.map((entry, idx) => parseLogField(entry, `logs[${idx}]`) ?? '');
       }
@@ -3357,14 +3534,14 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     const rawPage = parsedUrl.searchParams.get('page');
     const parsedPage = rawPage ? Number(rawPage) : 1;
-    if (!Number.isInteger(parsedPage) || parsedPage < 1) {
-      sendJson(res, 400, {error: 'page must be a positive integer.'});
+    if (!Number.isSafeInteger(parsedPage) || parsedPage < 1 || parsedPage > 100_000) {
+      sendJson(res, 400, {error: 'page must be an integer between 1 and 100000.'});
       return;
     }
 
     const rawLimit = parsedUrl.searchParams.get('limit');
     const parsedLimit = rawLimit ? Number(rawLimit) : recentLimit;
-    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+    if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
       sendJson(res, 400, {error: 'limit must be an integer between 1 and 100.'});
       return;
     }

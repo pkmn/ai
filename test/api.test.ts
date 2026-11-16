@@ -7,6 +7,7 @@ import * as path from 'path';
 import polka from 'polka';
 
 import {Database} from '../db';
+import {createServerApp} from '../server';
 import {encryptSecret} from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
@@ -2132,4 +2133,210 @@ describe('harvested ladder teams API', () => {
       );
       expect(db.getLadder('gen1ou20261109')!.status).toBe('active');
     });
+});
+
+describe('createServerApp production HTTP hardening', () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-server-app-test-'));
+    db = new Database(':memory:');
+    db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
+    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_760_000_000);
+  });
+
+  afterEach(() => {
+    db.close();
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
+
+  test('converts thrown string-code errors into safe 500 responses without crashing', async () => {
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    handle.app.get('/api/boom', () => {
+      throw Object.assign(new Error('SQLITE_SECRET_DETAIL'), {code: 'ERR_SQLITE_ERROR'});
+    });
+    const srv = await startTestServer(handle.app);
+    try {
+      const res = await fetch(`${srv.baseUrl}/api/boom`);
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as {error: string};
+      expect(body.error).toBe('Internal Server Error');
+      expect(body.error).not.toContain('SQLITE_SECRET_DETAIL');
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('blocks unarchived pools ladder log files from static serving', async () => {
+    const logDir = path.join(tmpDir, 'arena', 'ladders', 'gen9championsvgc2026regmc');
+    fs.mkdirSync(logDir, {recursive: true});
+    fs.writeFileSync(path.join(logDir, 'vgc-001a.log'), '|player|p1|SecretSet\n', 'utf8');
+
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    try {
+      const activeRes = await fetch(
+        `${srv.baseUrl}/arena/ladders/gen9championsvgc2026regmc/vgc-001a.log`
+      );
+      expect(activeRes.status).toBe(404);
+
+      db.setLadderStatus('gen9championsvgc2026regmc', 'archived', 1_760_000_500);
+      const archivedRes = await fetch(
+        `${srv.baseUrl}/arena/ladders/gen9championsvgc2026regmc/vgc-001a.log`
+      );
+      expect(archivedRes.status).toBe(200);
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('rejects astronomical page query parameters on /api/battles.json', async () => {
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    try {
+      const res = await fetch(`${srv.baseUrl}/api/battles.json?page=1e300`);
+      expect(res.status).toBe(400);
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('rejects non-loopback cleartext http:// URLs in arena.Client', () => {
+    const prevDev = process.env.ARENA_DEV;
+    delete process.env.ARENA_DEV;
+    try {
+      expect(() => new arena.Client({
+        serverUrl: 'http://pkmn.ai',
+        arenaSecret: 'secret',
+      })).toThrow(/Refusing cleartext HTTP/);
+      expect(() => new arena.Client({
+        serverUrl: 'https://pkmn.ai',
+        arenaSecret: 'secret',
+      })).not.toThrow();
+    } finally {
+      if (prevDev !== undefined) process.env.ARENA_DEV = prevDev;
+    }
+  });
+
+  test('rejects match-complete submissions targeting upcoming ladders', async () => {
+    db.syncLaddersFromYaml(
+      `${LADDERS_YAML}\n- name: ADV\n  format: gen3ou\n` +
+      '  id: gen3ou20261109\n  team: harvested\n  status: upcoming\n',
+      1_760_000_010
+    );
+    const zero = db.getAgentBySlug('0-error')!;
+    const fp = db.getAgentBySlug('foul-play')!;
+    const v1 = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/z.tar.zst',
+      sha256: SHA,
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_020,
+    });
+    const v2 = db.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/f.tar.zst',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_020,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_760_000_030});
+    db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: 1_760_000_030});
+
+    const app = polka();
+    const ctrl = arena.register(app, {
+      db,
+      arenaSecret: AUTH_CFG.arenaSecret,
+      publicDir: tmpDir,
+    });
+    const srv = await startTestServer(app);
+    try {
+      const res = await apiJson(
+        srv.baseUrl,
+        'POST',
+        '/api/arena/match-complete',
+        AUTH_CFG.arenaSecret,
+        {
+          match: {
+            id: 'gen3ou-000001',
+            ladderId: 'gen3ou20261109',
+            p1VersionId: v1.id,
+            p2VersionId: v2.id,
+            seed: 'sodium,1',
+            game1Outcome: 'W',
+            game2Outcome: 'W',
+            category: 'WW',
+            game1Turns: 10,
+            game2Turns: 10,
+            game1EndReason: 'win',
+            game2EndReason: 'win',
+            p1PeakRam: 256,
+            p2PeakRam: 256,
+            p1Game1BankSeconds: 120,
+            p1Game2BankSeconds: 120,
+            p2Game1BankSeconds: 120,
+            p2Game2BankSeconds: 120,
+            p1MeanTurnMillis: 100,
+            p2MeanTurnMillis: 100,
+            completedAt: 1_760_000_100,
+          },
+        }
+      );
+      expect(res.status).toBe(409);
+    } finally {
+      ctrl.close();
+      await srv.close();
+    }
+  });
+
+  test('ignores raw wire seriesLeftHtml on tournament broadcast updates', async () => {
+    db.upsertTournament({
+      id: '1',
+      name: 'Tour 1',
+      format: 'gen9ou',
+      startsAt: 1_760_000_000,
+      status: 'running',
+      gamesPerMatchup: 4,
+      parallelTables: 2,
+      hardware: 'L4',
+    });
+    const app = polka();
+    const ctrl = arena.register(app, {
+      db,
+      arenaSecret: AUTH_CFG.arenaSecret,
+      publicDir: tmpDir,
+    });
+    const srv = await startTestServer(app);
+    try {
+      const res = await apiJson(
+        srv.baseUrl,
+        'POST',
+        '/api/arena/tournaments/1/broadcast',
+        AUTH_CFG.arenaSecret,
+        {
+          table: 1,
+          mode: 'load',
+          seriesLeftHtml: '<img src=x onerror=alert(1)>',
+          p1: {name: '0 ERROR', bankSeconds: 150, thinking: true, incrementSeconds: 10},
+          p2: {name: 'Foul Play', bankSeconds: 150, thinking: false, incrementSeconds: 10},
+          lines: ['|turn|1'],
+        }
+      );
+      expect(res.status).toBe(200);
+      const bcast = ctrl.getTournamentBroadcast('1');
+      expect(bcast?.seriesLeftHtml).not.toContain('<img');
+      expect(bcast?.seriesLeftHtml).toContain('0 ERROR');
+    } finally {
+      ctrl.close();
+      await srv.close();
+    }
+  });
 });

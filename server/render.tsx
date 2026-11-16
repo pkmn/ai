@@ -3876,6 +3876,19 @@ export function register(app: polka.Polka, options: Options) {
       sendHtmlNotFound(res);
       return;
     }
+    if (subdir === 'ladders') {
+      const ladder = db.getLadder(rawId);
+      const canServe = Boolean(
+        ladder && (
+          ladder.team === 'random' ||
+          (ladder.team === 'pools' && ladder.status === 'archived')
+        )
+      );
+      if (!canServe) {
+        sendHtmlNotFound(res);
+        return;
+      }
+    }
     const logPath = path.join(publicDir, 'arena', subdir, rawId, rawFile);
     if (!fs.existsSync(logPath)) {
       sendHtmlNotFound(res);
