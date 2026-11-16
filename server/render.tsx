@@ -2403,32 +2403,29 @@ function renderSingleLadderArtifact(opts: {
   const isUpcoming = l.status === 'upcoming';
   const ladderContent = String(
     <>
-      <div className='controls-bar'>
-        <nav aria-label='Format'>
-          <ul>
-            {formatNavItems}
-          </ul>
-        </nav>
-        <span id='season-sep' className={multiSeason ? 'muted' : 'muted hide'}>·</span>
-        <div
-          id='season-picker'
-          className={multiSeason ? 'ver-picker' : 'ver-picker hide'}
-        >
-          <label htmlFor='season-select' className='muted'>Season</label>
-          <select id='season-select' className='min-select' aria-label='Season'>
-            {slotSeasons.map(s => {
-              const isCurrentSlot = s.status === 'active' || s.status === 'upcoming';
-              const sHref = isCurrentSlot
-                ? `/arena/ladders/${encodeURIComponent(s.slot)}/`
-                : `/arena/ladders/${encodeURIComponent(s.id)}/`;
-              return (
-                <option value={sHref} selected={s.id === l.id}>
-                  {s.name}
-                </option>
-              );
-            })}
-          </select>
-        </div>
+      <nav aria-label='Format'>
+        <ul>
+          {formatNavItems}
+        </ul>
+      </nav>
+      <div
+        id='season-picker'
+        className={multiSeason ? 'season-bar' : 'season-bar hide'}
+      >
+        <label htmlFor='season-select' className='muted'>Season</label>
+        <select id='season-select' className='min-select' aria-label='Season'>
+          {slotSeasons.map(s => {
+            const isCurrentSlot = s.status === 'active' || s.status === 'upcoming';
+            const sHref = isCurrentSlot
+              ? `/arena/ladders/${encodeURIComponent(s.slot)}/`
+              : `/arena/ladders/${encodeURIComponent(s.id)}/`;
+            return (
+              <option value={sHref} selected={s.id === l.id}>
+                {s.name}
+              </option>
+            );
+          })}
+        </select>
       </div>
       <nav className={`subnav${isUpcoming ? ' hide' : ''}`} aria-label='Version filter'>
         <ul>

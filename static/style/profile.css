@@ -16,6 +16,30 @@ h2 svg {
   image-rendering: pixelated;
 }
 
+.controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5ch;
+  align-items: center;
+  justify-content: center;
+  margin: 0.5rem 0 1.25rem;
+}
+
+.controls-bar nav {
+  margin: 0;
+}
+
+.ver-picker {
+  display: inline-flex;
+  gap: 0.6ch;
+  align-items: center;
+  font-size: 0.95em;
+}
+
+.ver-picker.hide {
+  display: none;
+}
+
 .kv {
   table-layout: fixed;
 }
