@@ -353,6 +353,17 @@ describe('account routes', () => {
       expect(preHtml).toContain('>Eligible<');
       expect(preHtml).toContain('(upcoming)');
       expect(preHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
+      expect(preHtml).toContain('<label for="sub-ver">Version<span class="req">*</span></label>');
+      expect(preHtml).toContain(
+        '<label for="sub-url">Artifact URL<span class="req">*</span></label>'
+      );
+      expect(preHtml).toContain('<label for="sub-sha">SHA-256<span class="req">*</span></label>');
+      expect(preHtml).toContain('<label for="sub-auth">Auth Header</label>');
+      expect(preHtml).toContain(
+        '<label for="sub-teams" class="hide pool-teams-field">' +
+          'Teams<span class="req">*</span></label>'
+      );
+      expect(preHtml).toContain('<button class="btn" id="sub-btn" type="submit" disabled>');
 
       const sub = await postSubmission('pre', {
         version: '0.9.0',

@@ -103,10 +103,59 @@ const ACCOUNT_SCRIPT = `
       });
     }
 
+    const verInput = document.getElementById('sub-ver');
     const urlInput = document.getElementById('sub-url');
+    const shaInput = document.getElementById('sub-sha');
     const typeSelect = document.getElementById('sub-type');
     const tourneyChecks = document.querySelectorAll('input[name="tournaments"]');
     const bundleOpt = typeSelect ? typeSelect.querySelector('option[value="bundle"]') : null;
+    const form = document.getElementById('submission-form');
+    const fieldset = form ? form.querySelector('.form-fieldset') : null;
+    const submitBtn = document.getElementById('sub-btn');
+    const teamFields = document.querySelectorAll('.pool-teams-field');
+    const ladderChecks = document.querySelectorAll('input[name="ladders"]');
+    const progressText = document.getElementById('pool-progress-text');
+    const validateTeamsBtn = document.getElementById('validate-teams-btn');
+    const clearTeamsBtn = document.getElementById('clear-teams-btn');
+    const fileInput = document.getElementById('sub-teams-file');
+    const teamsArea = document.getElementById('sub-teams');
+    let submitting = false;
+
+    const getActivePoolCheckbox = () => {
+      let found = null;
+      ladderChecks.forEach(cb => {
+        if (!found && cb.checked && cb.dataset.needsTeams === 'true') found = cb;
+      });
+      return found;
+    };
+
+    const syncSubmitBtn = () => {
+      if (!submitBtn) return;
+      if (!fieldset || fieldset.disabled || submitting) {
+        submitBtn.disabled = true;
+        return;
+      }
+      const hasVer = Boolean(verInput && verInput.value.trim());
+      const hasUrl = Boolean(urlInput && urlInput.value.trim());
+      const hasSha = Boolean(shaInput && shaInput.value.trim());
+      let hasTarget = false;
+      ladderChecks.forEach(cb => {
+        if (cb.checked && !cb.disabled) hasTarget = true;
+      });
+      tourneyChecks.forEach(cb => {
+        if (cb.checked && !cb.disabled) hasTarget = true;
+      });
+      const activeCb = getActivePoolCheckbox();
+      let hasTeams = true;
+      if (activeCb) {
+        const saved = Number(activeCb.dataset.savedTeams || 0);
+        const required = Number(activeCb.dataset.requiredTeams || 0);
+        hasTeams = (required > 0 && saved >= required) ||
+          Boolean(teamsArea && teamsArea.value.trim());
+      }
+      submitBtn.disabled = !(hasVer && hasUrl && hasSha && hasTarget && hasTeams);
+    };
+
     const syncTourneyPackage = () => {
       if (!typeSelect) return;
       let anyTourney = false;
@@ -115,6 +164,7 @@ const ACCOUNT_SCRIPT = `
       });
       if (bundleOpt) bundleOpt.disabled = anyTourney;
       if (anyTourney) typeSelect.value = 'oci';
+      syncSubmitBtn();
     };
     tourneyChecks.forEach(cb => cb.addEventListener('change', syncTourneyPackage));
     syncTourneyPackage();
@@ -122,21 +172,20 @@ const ACCOUNT_SCRIPT = `
     if (urlInput && typeSelect) {
       urlInput.addEventListener('input', () => {
         const v = urlInput.value.trim().split('?')[0].toLowerCase();
-        if (!v) return;
-        const isArchive = /\\.(tar\\.gz|tgz|tar\\.xz|txz|tar\\.zst|tzst)$/.test(v);
-        if (isArchive && (!bundleOpt || !bundleOpt.disabled)) {
-          typeSelect.value = 'bundle';
-        } else if (!v.startsWith('http://') && !v.startsWith('https://') && v.includes('/')) {
-          typeSelect.value = 'oci';
+        if (v) {
+          const isArchive = /\\.(tar\\.gz|tgz|tar\\.xz|txz|tar\\.zst|tzst)$/.test(v);
+          if (isArchive && (!bundleOpt || !bundleOpt.disabled)) {
+            typeSelect.value = 'bundle';
+          } else if (!v.startsWith('http://') && !v.startsWith('https://') && v.includes('/')) {
+            typeSelect.value = 'oci';
+          }
         }
+        syncSubmitBtn();
       });
     }
-
-    const teamFields = document.querySelectorAll('.pool-teams-field');
-    const ladderChecks = document.querySelectorAll('input[name="ladders"]');
-    const progressText = document.getElementById('pool-progress-text');
-    const validateTeamsBtn = document.getElementById('validate-teams-btn');
-    const clearTeamsBtn = document.getElementById('clear-teams-btn');
+    if (verInput) verInput.addEventListener('input', syncSubmitBtn);
+    if (shaInput) shaInput.addEventListener('input', syncSubmitBtn);
+    if (teamsArea) teamsArea.addEventListener('input', syncSubmitBtn);
 
     const getFeedbackEl = () => {
       let el = document.getElementById('teams-feedback');
@@ -149,14 +198,6 @@ const ACCOUNT_SCRIPT = `
         panel.appendChild(el);
       }
       return el;
-    };
-
-    const getActivePoolCheckbox = () => {
-      let found = null;
-      ladderChecks.forEach(cb => {
-        if (!found && cb.checked && cb.dataset.needsTeams === 'true') found = cb;
-      });
-      return found;
     };
 
     const renderPoolProgress = (saved, required) => {
@@ -209,6 +250,7 @@ const ACCOUNT_SCRIPT = `
       if (clearTeamsBtn) {
         clearTeamsBtn.classList.toggle('hide', saved <= 0);
       }
+      syncSubmitBtn();
     };
 
     const renderTeamsFeedback = (summary, rejections, isError) => {
@@ -235,7 +277,10 @@ const ACCOUNT_SCRIPT = `
     };
 
     const syncTeamsVisibility = () => {
-      if (!teamFields.length) return;
+      if (!teamFields.length) {
+        syncSubmitBtn();
+        return;
+      }
       const activeCb = getActivePoolCheckbox();
       teamFields.forEach(el => el.classList.toggle('hide', !activeCb));
       if (activeCb) {
@@ -243,13 +288,13 @@ const ACCOUNT_SCRIPT = `
           Number(activeCb.dataset.savedTeams || 0),
           Number(activeCb.dataset.requiredTeams || 0)
         );
+      } else {
+        syncSubmitBtn();
       }
     };
     ladderChecks.forEach(cb => cb.addEventListener('change', syncTeamsVisibility));
     syncTeamsVisibility();
 
-    const fileInput = document.getElementById('sub-teams-file');
-    const teamsArea = document.getElementById('sub-teams');
     if (fileInput && teamsArea) {
       fileInput.addEventListener('change', () => {
         const f = fileInput.files && fileInput.files[0];
@@ -257,6 +302,7 @@ const ACCOUNT_SCRIPT = `
         const reader = new FileReader();
         reader.onload = () => {
           teamsArea.value = String(reader.result || '');
+          syncSubmitBtn();
         };
         reader.readAsText(f);
       });
@@ -293,6 +339,7 @@ const ACCOUNT_SCRIPT = `
             );
           } else if (data.complete) {
             teamsArea.value = '';
+            syncSubmitBtn();
             renderTeamsFeedback(
               'All ' + data.requiredCount + ' / ' + data.requiredCount +
                 ' distinct teams validated and saved — submit your build below.',
@@ -301,6 +348,7 @@ const ACCOUNT_SCRIPT = `
             );
           } else {
             teamsArea.value = '';
+            syncSubmitBtn();
             renderTeamsFeedback(
               'Saved +' + data.newlySavedCount + ' team(s): ' + data.savedCount + ' / ' +
                 data.requiredCount + ' saved — ' + data.remainingCount + ' more needed.',
@@ -343,7 +391,6 @@ const ACCOUNT_SCRIPT = `
       });
     }
 
-    const form = document.getElementById('submission-form');
     const getStatusEl = () => {
       let el = document.getElementById('sub-status');
       if (!el && form) {
@@ -354,7 +401,6 @@ const ACCOUNT_SCRIPT = `
       }
       return el;
     };
-    const submitBtn = document.getElementById('sub-btn');
     if (form && submitBtn) {
       form.addEventListener('submit', async e => {
         e.preventDefault();
@@ -369,10 +415,10 @@ const ACCOUNT_SCRIPT = `
           if (cb.checked) tournaments.push(cb.value);
         });
         const payload = {
-          version: document.getElementById('sub-ver').value.trim(),
+          version: verInput.value.trim(),
           package: typeSelect.value,
           url: urlInput.value.trim(),
-          sha256: document.getElementById('sub-sha').value.trim(),
+          sha256: shaInput.value.trim(),
           authToken: document.getElementById('sub-auth').value.trim(),
           ladders,
           tournaments,
@@ -380,7 +426,8 @@ const ACCOUNT_SCRIPT = `
         if (teamsArea && !teamsArea.closest('.hide') && teamsArea.value.trim()) {
           payload.teams = teamsArea.value;
         }
-        submitBtn.disabled = true;
+        submitting = true;
+        syncSubmitBtn();
         statusEl.className = 'muted';
         statusEl.textContent = 'Validating submission...';
         try {
@@ -402,14 +449,16 @@ const ACCOUNT_SCRIPT = `
                 true
               );
             }
-            submitBtn.disabled = false;
+            submitting = false;
+            syncSubmitBtn();
             return;
           }
           window.location.reload();
         } catch {
           statusEl.className = 'no';
           statusEl.textContent = 'Network error submitting version.';
-          submitBtn.disabled = false;
+          submitting = false;
+          syncSubmitBtn();
         }
       });
     }
@@ -798,7 +847,9 @@ export function renderAccountPage(opts: {
       'valid distinct teams save immediately; locked for this season once your build passes';
     poolTeamsRow = (
       <>
-        <label htmlFor='sub-teams' className='pool-teams-field hide'>Teams</label>
+        <label htmlFor='sub-teams' className='pool-teams-field hide'>
+          Teams<span className='req'>*</span>
+        </label>
         <div className='pool-teams-field hide' id='pool-teams-panel'>
           <div className='teams-progress' id='pool-progress-box'>
             <div className='teams-progress-head'>
@@ -909,7 +960,7 @@ export function renderAccountPage(opts: {
         >
           <fieldset className='form-fieldset' disabled={!canSubmitAny}>
             <div className='form-grid'>
-              <label htmlFor='sub-ver'>Version</label>
+              <label htmlFor='sub-ver'>Version<span className='req'>*</span></label>
               <div className='form-row-inline'>
                 <input
                   id='sub-ver'
@@ -928,7 +979,7 @@ export function renderAccountPage(opts: {
                 </select>
               </div>
 
-              <label htmlFor='sub-url'>Artifact URL</label>
+              <label htmlFor='sub-url'>Artifact URL<span className='req'>*</span></label>
               <input
                 id='sub-url'
                 name='url'
@@ -939,7 +990,7 @@ export function renderAccountPage(opts: {
                 required={true}
               />
 
-              <label htmlFor='sub-sha'>SHA-256</label>
+              <label htmlFor='sub-sha'>SHA-256<span className='req'>*</span></label>
               <input
                 id='sub-sha'
                 name='sha256'
@@ -1072,7 +1123,7 @@ export function renderAccountPage(opts: {
                   id='sub-btn'
                   type='submit'
                   className='btn'
-                  disabled={!canSubmitAny}
+                  disabled={true}
                   title={!canSubmitAny && status.reason ? status.reason : undefined}
                 >
                   Submit
