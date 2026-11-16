@@ -111,8 +111,6 @@ export interface LiveMatch {
 
 export interface BattleHistoryEntry extends db.RecentMatchView {
   ladderHref: string;
-  archiveHref?: string;
-  teamsHref?: string;
   game1LogHref?: string;
   game2LogHref?: string;
 }
@@ -570,21 +568,10 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
   const ladderHref = m.ladderStatus === 'archived'
     ? `/arena/ladders/${encodeURIComponent(m.ladderId)}/`
     : `/arena/ladders/${encodeURIComponent(m.slot)}/`;
-  const canExposeLogs =
-    m.teamMode === 'random' ||
-    (m.teamMode === 'pools' && m.ladderStatus === 'archived');
-  if (!canExposeLogs) {
+  if (m.teamMode !== 'random') {
     return {...m, ladderHref};
   }
   const idEnc = encodeURIComponent(m.ladderId);
-  const archiveHref = resolveLadderArchive(publicDir, {
-    id: m.ladderId,
-    team: m.teamMode,
-    status: m.ladderStatus,
-  })?.href;
-  const teamsHref = m.teamMode === 'pools' && m.ladderStatus === 'archived'
-    ? `/arena/ladders/${idEnc}/teams.json`
-    : undefined;
   const ladderDir = path.join(publicDir, 'arena', 'ladders', m.ladderId);
   const g1Rel = `${m.id}a.log`;
   const g2Rel = `${m.id}b.log`;
@@ -594,7 +581,7 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
   const game2LogHref = fs.existsSync(path.join(ladderDir, g2Rel))
     ? `/arena/ladders/${idEnc}/${encodeURIComponent(g2Rel)}`
     : undefined;
-  return {...m, ladderHref, archiveHref, teamsHref, game1LogHref, game2LogHref};
+  return {...m, ladderHref, game1LogHref, game2LogHref};
 }
 
 export interface WatchdogAlert {

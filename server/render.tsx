@@ -320,26 +320,6 @@ export function buildBattleDetailClientJs(): string {
           (m.game2LogHref ? ' data-g2-log="' + esc(m.game2LogHref) + '"' : '')
         : '';
 
-      let archiveNote = '';
-      if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
-        const links = [];
-        if (m.archiveHref) {
-          links.push(
-            '<a href="' + esc(m.archiveHref) + '" class="subtle"><code>' +
-            esc(m.ladderId + '-logs.7z') + '</code></a>'
-          );
-        }
-        if (m.teamsHref) {
-          links.push(
-            '<a href="' + esc(m.teamsHref) + '" class="subtle"><code>teams.json</code></a>'
-          );
-        }
-        if (links.length > 0) {
-          archiveNote = '<div class="battle-detail-note muted">Retired pool archives: ' +
-            links.join(' · ') + '</div>';
-        }
-      }
-
       const g1OutcomePrefix = omitOutcome ? '' : (formatGameOutcomeHtml(m.game1Outcome) + ' · ');
       const g2OutcomePrefix = omitOutcome ? '' : (formatGameOutcomeHtml(m.game2Outcome) + ' · ');
       const g1EndSuffix = end1.show ? (' · ' + end1.html) : '';
@@ -384,7 +364,6 @@ export function buildBattleDetailClientJs(): string {
             '</div>' +
           '</div>' +
         '</div>' +
-        archiveNote +
       '</div>';
     };
 
@@ -473,7 +452,7 @@ export function buildBattleDetailClientJs(): string {
               'title="Pokémon Showdown replay viewer" ' +
               'sandbox="allow-scripts allow-same-origin"></iframe>' +
           '</div>';
-        slot.insertBefore(wrap, slot.querySelector('.battle-detail-note'));
+        slot.appendChild(wrap);
       }
       const leftEl = slot.querySelector('.replay-bar-left');
       const rightEl = slot.querySelector('.replay-bar-right');
@@ -3184,25 +3163,6 @@ export function renderBattleInlineDetailHtml(
 
   const hasReplay = Boolean(m.game1LogHref || m.game2LogHref);
 
-  let archiveNote: util.Child;
-  if (m.teamMode === 'pools' && m.ladderStatus === 'archived') {
-    const links: util.Child[] = [];
-    if (m.archiveHref) {
-      links.push(
-        <a href={m.archiveHref} className='subtle'>
-          <code>{`${m.ladderId}-logs.7z`}</code>
-        </a>
-      );
-    }
-    if (m.teamsHref) {
-      if (links.length > 0) links.push(' · ');
-      links.push(<a href={m.teamsHref} className='subtle'><code>teams.json</code></a>);
-    }
-    if (links.length > 0) {
-      archiveNote = <div className='battle-detail-note muted'>Retired pool archives: {links}</div>;
-    }
-  }
-
   return String(
     <div
       className='battle-detail'
@@ -3284,7 +3244,6 @@ export function renderBattleInlineDetailHtml(
           </div>
         </div>
       </div>
-      {archiveNote}
     </div>
   );
 }

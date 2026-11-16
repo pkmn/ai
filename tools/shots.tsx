@@ -91,7 +91,7 @@ export const SECTIONS: readonly SectionMeta[] = [
     title: 'Arena Battles',
     subtitle:
       'Live battle telemetry (active turn, idle with tournament banner, stale/offline), format ' +
-      'filters, pagination, and inline expandable normal, timeout, crash, and archived-pool rows.',
+      'filters, pagination, and inline expandable normal, timeout, and crash rows.',
   },
   {
     id: 'tournaments',
@@ -775,17 +775,6 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         '(sides and teams swapped) with turn counts and telemetry.',
       path: '/arena/battles/',
       click: 'tr#vgc-0002839 td:first-child',
-    },
-    {
-      name: 'arena-battles-archived-pool',
-      section: 'battles',
-      title: 'Battles (Expanded Row · Archived Pool Team Links)',
-      description:
-        'Once a seasonal `pools` ladder is `archived`, expanding its battle row turns ' +
-        '`P1:<hash>` and `P2:<hash>` into links to `/arena/ladders/<id>/teams.json#<hash>`.',
-      path: '/arena/battles/',
-      click: '#battles-tbody tr.battle-row td:first-child',
-      setup: fixture => setupRotatedSeasons(fixture, 'archived'),
     },
     {
       name: 'arena-battles-filter-vgc',
