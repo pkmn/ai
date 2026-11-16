@@ -1,11 +1,44 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {toID} from '../static/util';
+
 import {TEAM_MODES, TeamMode} from './ladders';
 import {recomputeTournamentStandings} from './tournament-entrants';
 
 import {TransactionRunner} from './index';
 
 export type TournamentStatus = 'scheduled' | 'running' | 'completed';
+
+export function getTournamentBestOf(
+  format: string,
+  rulesOrJson: readonly string[] | string = []
+): number {
+  const [baseFormat, inlineRaw] = format.split('@@@');
+  const baseMatch = /bo(\d+)$/.exec(toID(baseFormat));
+  if (baseMatch) {
+    const n = Number(baseMatch[1]);
+    if (Number.isInteger(n) && n >= 1) return n;
+  }
+  const inlineRules = inlineRaw ? inlineRaw.split(',') : [];
+  let rules: readonly string[] = [];
+  if (typeof rulesOrJson === 'string') {
+    try {
+      const parsed = JSON.parse(rulesOrJson) as unknown;
+      if (Array.isArray(parsed)) rules = parsed.map(String);
+    } catch {}
+  } else {
+    rules = rulesOrJson;
+  }
+  for (const r of [...inlineRules, ...rules]) {
+    if (r.trim().startsWith('!')) continue;
+    const m = /^(?:bestof|bo)(\d+)$/.exec(toID(r));
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isInteger(n) && n >= 1) return n;
+    }
+  }
+  return 1;
+}
 
 // Entries close at 00:00:00 UTC strictly before `startsAt`
 // (e.g. 2026-11-15T18:00:00Z -> 2026-11-15T00:00:00Z;
@@ -20,6 +53,7 @@ export interface TournamentRow {
   format: string;
   team?: TeamMode;
   rulesJson: string;
+  bestOf: number;
   gamesPerMatchup: number;
   batchSize: number;
   parallelTables: number;
@@ -66,6 +100,7 @@ function mapTournamentRow(raw: RawTournamentRow): TournamentRow {
     format: raw.format,
     team: raw.team ?? undefined,
     rulesJson: raw.rules_json,
+    bestOf: getTournamentBestOf(raw.format, raw.rules_json),
     gamesPerMatchup: raw.games_per_matchup,
     batchSize: raw.batch_size,
     parallelTables: raw.parallel_tables,
@@ -177,11 +212,11 @@ export function setTournamentStatus(
       .run(status, completedAt, id);
     if (status === 'completed') {
       const completedGames = db.prepare(
-        `SELECT COUNT(*) AS count FROM tournament_games
+        `SELECT COUNT(*) AS count FROM tournament_matches
          WHERE tournament_id = ? AND status = 'completed'`
       ).get(id) as {count: number};
-      // Only recompute from `tournament_games` when game rows exist so manual fixture tests that
-      // seed pre-aggregated `tournament_entrants` rows without game rows keep their seeded scores.
+      // Only recompute from `tournament_matches` when match rows exist so manual fixture tests that
+      // seed pre-aggregated `tournament_entrants` rows without match rows keep their seeded scores.
       if (completedGames.count > 0) {
         recomputeTournamentStandings(db, id, true);
       }

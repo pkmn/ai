@@ -383,6 +383,10 @@ tr.battle-row.expanded .battle-toggle {
   margin-top: 0.55rem;
 }
 
+.battle-detail-grid.bo3-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .battle-detail-card {
   min-width: 0;
   padding: 0.5rem 0.7rem;
@@ -549,7 +553,8 @@ tr.battle-row.expanded .battle-toggle {
 
 @media (width < 768px) {
   .slots-grid,
-  .battle-detail-grid {
+  .battle-detail-grid,
+  .battle-detail-grid.bo3-grid {
     grid-template-columns: 1fr;
   }
 }

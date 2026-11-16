@@ -6,6 +6,7 @@ import * as readline from 'readline';
 
 import * as sim from '@pkmn/sim';
 
+import {getTournamentBestOf} from '../db/tournaments';
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
@@ -19,6 +20,31 @@ import * as packages from './packages';
 ensureSimConfigured();
 
 type PlayerSlot = 'p1' | 'p2';
+
+export function deriveGameSeed(baseSeed: sim.PRNGSeed, gameNumber: number): sim.PRNGSeed {
+  if (gameNumber <= 1) return baseSeed;
+  const digest = crypto
+    .createHash('sha256')
+    .update(`${baseSeed}:g${gameNumber}`)
+    .digest();
+  const s0 = digest.readUInt16BE(0);
+  const s1 = digest.readUInt16BE(2);
+  const s2 = digest.readUInt16BE(4);
+  const s3 = digest.readUInt16BE(6);
+  return `${s0},${s1},${s2},${s3}`;
+}
+
+export function computeSeriesOutcome(
+  outcomes: readonly GameOutcome[]
+): {outcome: GameOutcome; p1Score: number; p2Score: number} {
+  let p1Score = 0;
+  for (const o of outcomes) {
+    p1Score += o === 'W' ? 1 : o === 'T' ? 0.5 : 0;
+  }
+  const p2Score = outcomes.length - p1Score;
+  const outcome: GameOutcome = p1Score > p2Score ? 'W' : p2Score > p1Score ? 'L' : 'T';
+  return {outcome, p1Score, p2Score};
+}
 
 export interface AgentSpec {
   agentId: string;
@@ -43,10 +69,37 @@ export interface TurnBroadcastInfo {
 }
 export type TournamentTurnBroadcastInfo = TurnBroadcastInfo;
 
+export interface SeriesGameSummary {
+  winnerSlot?: PlayerSlot;
+  turns: number;
+}
+
+export interface GamePlayerStats {
+  bankSeconds: number;
+  meanTurnMillis: number;
+  peakRam: number;
+}
+
+export interface PlayerResult extends GamePlayerStats {
+  teamPacked: string;
+}
+
+export interface SeriesGameResult {
+  seed: sim.PRNGSeed;
+  outcome: GameOutcome;
+  turns: number;
+  endReason: string;
+  omniscientLog: string;
+  p1: GamePlayerStats;
+  p2: GamePlayerStats;
+}
+
 export interface GameOptions {
   format: string;
   customRules?: readonly string[];
+  bestOf?: number;
   seed: sim.PRNGSeed;
+  seeds?: readonly sim.PRNGSeed[];
   p1Spec: AgentSpec;
   p2Spec: AgentSpec;
   p1TeamPacked?: string;
@@ -57,6 +110,11 @@ export interface GameOptions {
   firstTurnGraceSeconds?: number;
   maxTurnSeconds?: number;
   utmTimeoutMillis?: number;
+  onGameStart?: (info: {
+    game: number;
+    bestOf: number;
+    summaries: SeriesGameSummary[];
+  }) => void | Promise<void>;
   onSpectatorChunk?: (chunk: string, state: TurnBroadcastInfo) => void;
 }
 export type TournamentGameOptions = GameOptions;
@@ -68,14 +126,9 @@ export interface GameResult {
   turns: number;
   endReason: string;
   omniscientLog: string;
-  p1TeamPacked: string;
-  p2TeamPacked: string;
-  p1BankSeconds: number;
-  p2BankSeconds: number;
-  p1MeanTurnMillis: number;
-  p2MeanTurnMillis: number;
-  p1PeakRam: number;
-  p2PeakRam: number;
+  p1: PlayerResult;
+  p2: PlayerResult;
+  games: SeriesGameResult[];
 }
 export type TournamentGameResult = GameResult;
 
@@ -221,7 +274,9 @@ export function buildLockedTournamentTeamBook(
 
 export class ConcurrentGame {
   private readonly format: string;
+  private readonly bestOf: number;
   private readonly seed: sim.PRNGSeed;
+  private readonly seeds?: readonly sim.PRNGSeed[];
   private readonly p1Spec: AgentSpec;
   private readonly p2Spec: AgentSpec;
   private p1TeamPacked?: string;
@@ -235,13 +290,14 @@ export class ConcurrentGame {
   private readonly midTurnIncrementMillis: number;
   private readonly accelerate: boolean;
   private readonly utmTimeoutMillis: number;
+  private readonly onGameStart?: GameOptions['onGameStart'];
   private readonly onSpectatorChunk?: (
     chunk: string,
     state: TurnBroadcastInfo
   ) => void;
 
-  private readonly battleStream: sim.BattleStreams.BattleStream;
-  private readonly streams: ReturnType<typeof sim.BattleStreams.getPlayerStreams>;
+  private battleStream: sim.BattleStreams.BattleStream;
+  private streams: ReturnType<typeof sim.BattleStreams.getPlayerStreams>;
   private readonly omniscientLog: string[] = [];
 
   private p1!: RemoteTournamentPlayer;
@@ -258,7 +314,11 @@ export class ConcurrentGame {
 
   constructor(options: GameOptions) {
     this.format = resolveArenaFormatId(options.format, options.customRules);
+    this.bestOf = options.smokeStopAfterTurn !== undefined
+      ? 1
+      : (options.bestOf ?? getTournamentBestOf(options.format, options.customRules));
     this.seed = options.seed;
+    this.seeds = options.seeds;
     this.p1Spec = options.p1Spec;
     this.p2Spec = options.p2Spec;
     this.p1TeamPacked = options.p1TeamPacked;
@@ -274,6 +334,7 @@ export class ConcurrentGame {
     this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
     this.accelerate = !this.format.includes('vgc') && !this.format.includes('champions');
     this.utmTimeoutMillis = options.utmTimeoutMillis ?? 15_000;
+    this.onGameStart = options.onGameStart;
     this.onSpectatorChunk = options.onSpectatorChunk;
 
     this.battleStream = new sim.BattleStreams.BattleStream();
@@ -723,6 +784,141 @@ export class ConcurrentGame {
     })();
   }
 
+  private resetForNextSeriesGame() {
+    this.battleStream = new sim.BattleStreams.BattleStream();
+    this.streams = sim.BattleStreams.getPlayerStreams(this.battleStream);
+    this.omniscientLog.length = 0;
+    this.lastLogIndex = 0;
+    this.currentTurn = 0;
+    this.requestCount = 0;
+    this.waveActiveSidesCount = 1;
+    this.pendingWaveSlots.clear();
+    this.lastRewardedTurn = {p1: -1, p2: -1};
+    this.ended = false;
+    this.winner = 'tie';
+    this.preemptedSlot = undefined;
+    this.endReason = 'normal';
+
+    for (const p of [this.p1, this.p2]) {
+      p.lineQueue.length = 0;
+      p.localTurnMillisQueue.length = 0;
+      p.bankMillis = this.startingBankMillis;
+      p.totalTurnMillis = 0;
+      p.decisionsCount = 0;
+      p.hasTakenFirstDecision = false;
+      p.retryingInvalidChoice = false;
+      p.invalidStrikes = 0;
+      p.lastRequestJson = undefined;
+      p.thinking = false;
+    }
+  }
+
+  private async playSingleBattle(
+    gameSeed: sim.PRNGSeed,
+    p1Team: string,
+    p2Team: string,
+    resetStream: boolean
+  ) {
+    if (resetStream) {
+      this.resetForNextSeriesGame();
+    }
+
+    const omniTask = (async () => {
+      for await (const rawChunk of this.streams.omniscient) {
+        for (const line of rawChunk.split('\n')) {
+          const step = arbiter.inspectOmniscientLine(line, {
+            currentTurn: this.currentTurn,
+            maxTurns: this.maxTurns,
+            smokeStopAfterTurn: this.smokeStopAfterTurn,
+            ended: this.ended,
+            expectedP1Name: 'Agent A',
+          });
+          this.currentTurn = step.currentTurn;
+          if (step.terminal) {
+            this.ended = true;
+            this.winner = step.terminal.winner;
+            this.endReason = step.terminal.endReason;
+            if (step.terminal.forceTie) {
+              await this.battleStream.write('>forcetie');
+            }
+          }
+        }
+        this.emitSpectatorChunk(rawChunk);
+      }
+    })();
+
+    const p1Task = this.driveConcurrentPlayer(this.p1, this.streams.p1);
+    const p2Task = this.driveConcurrentPlayer(this.p2, this.streams.p2);
+
+    await this.battleStream.write(
+      `>start ${JSON.stringify({formatid: this.format, seed: gameSeed})}`
+    );
+    await this.battleStream.write(
+      `>player p1 ${JSON.stringify({name: 'Agent A', team: p1Team})}`
+    );
+    await this.battleStream.write(
+      `>player p2 ${JSON.stringify({name: 'Agent B', team: p2Team})}`
+    );
+
+    await Promise.all([omniTask, p1Task, p2Task]);
+
+    const outcome: GameOutcome | undefined =
+      this.winner === 'p1'
+        ? 'W'
+        : this.winner === 'p2'
+          ? 'L'
+          : this.winner === 'tie'
+            ? 'T'
+            : undefined;
+
+    return {
+      winner: this.winner,
+      outcome,
+      preemptedSlot: this.preemptedSlot,
+      turns: this.currentTurn,
+      endReason: this.endReason,
+      omniscientLog: this.getFullLog(),
+      p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
+      p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
+      p1TotalTurnMillis: this.p1.totalTurnMillis,
+      p1DecisionsCount: this.p1.decisionsCount,
+      p2TotalTurnMillis: this.p2.totalTurnMillis,
+      p2DecisionsCount: this.p2.decisionsCount,
+      p1MeanTurnMillis: this.p1.decisionsCount > 0
+        ? Math.max(1, Math.round(this.p1.totalTurnMillis / this.p1.decisionsCount))
+        : 1,
+      p2MeanTurnMillis: this.p2.decisionsCount > 0
+        ? Math.max(1, Math.round(this.p2.totalTurnMillis / this.p2.decisionsCount))
+        : 1,
+      p1PeakRam: this.p1.peakRam,
+      p2PeakRam: this.p2.peakRam,
+    };
+  }
+
+  private async closePlayers() {
+    for (const p of [this.p1, this.p2]) {
+      try {
+        p.proc.stdin.end();
+      } catch {}
+      try {
+        p.proc.kill('SIGTERM');
+      } catch {}
+    }
+    if ((this.p1.usesRelay && !this.p1.exited) || (this.p2.usesRelay && !this.p2.exited)) {
+      await Promise.all([this.p1, this.p2].map(p => (
+        p.exited
+          ? Promise.resolve()
+          : new Promise<void>(resolve => {
+            const t = setTimeout(resolve, 150);
+            p.proc.once('close', () => {
+              clearTimeout(t);
+              resolve();
+            });
+          })
+      )));
+    }
+  }
+
   async run(): Promise<GameResult> {
     this.p1 = this.spawnRemotePlayer('p1', this.p1Spec);
     this.p2 = this.spawnRemotePlayer('p2', this.p2Spec);
@@ -752,6 +948,8 @@ export class ConcurrentGame {
       this.p1TeamPacked = p1Team;
       this.p2TeamPacked = p2Team;
 
+      const startBankSec = Math.round(this.startingBankMillis / 1000);
+
       if (
         (!p1Res.ok && p1Res.reason === 'spot-preemption') ||
         (!p2Res.ok && p2Res.reason === 'spot-preemption') ||
@@ -770,14 +968,19 @@ export class ConcurrentGame {
           turns: 0,
           endReason: 'spot-preemption',
           omniscientLog: '',
-          p1TeamPacked: p1Team,
-          p2TeamPacked: p2Team,
-          p1BankSeconds: Math.round(this.startingBankMillis / 1000),
-          p2BankSeconds: Math.round(this.startingBankMillis / 1000),
-          p1MeanTurnMillis: 0,
-          p2MeanTurnMillis: 0,
-          p1PeakRam: 1,
-          p2PeakRam: 1,
+          p1: {
+            teamPacked: p1Team,
+            bankSeconds: startBankSec,
+            meanTurnMillis: 0,
+            peakRam: 1,
+          },
+          p2: {
+            teamPacked: p2Team,
+            bankSeconds: startBankSec,
+            meanTurnMillis: 0,
+            peakRam: 1,
+          },
+          games: [],
         };
       }
 
@@ -789,112 +992,158 @@ export class ConcurrentGame {
             : 'p1';
         const endReason = !p1Res.ok ? p1Res.reason : (p2Res as {ok: false; reason: string}).reason;
         const outcome: GameOutcome = winner === 'p1' ? 'W' : winner === 'p2' ? 'L' : 'T';
+        await this.closePlayers();
+        const gamesNeeded = Math.floor(this.bestOf / 2) + 1;
+        const games: SeriesGameResult[] = Array.from({length: gamesNeeded}, (_, idx) => ({
+          seed: this.seeds?.[idx] ?? deriveGameSeed(this.seed, idx + 1),
+          outcome,
+          turns: 0,
+          endReason,
+          omniscientLog: '',
+          p1: {bankSeconds: startBankSec, meanTurnMillis: 1, peakRam: this.p1.peakRam},
+          p2: {bankSeconds: startBankSec, meanTurnMillis: 1, peakRam: this.p2.peakRam},
+        }));
         return {
           winner,
           outcome,
           turns: 0,
           endReason,
           omniscientLog: '',
-          p1TeamPacked: p1Team,
-          p2TeamPacked: p2Team,
-          p1BankSeconds: Math.round(this.startingBankMillis / 1000),
-          p2BankSeconds: Math.round(this.startingBankMillis / 1000),
-          p1MeanTurnMillis: 1,
-          p2MeanTurnMillis: 1,
-          p1PeakRam: this.p1.peakRam,
-          p2PeakRam: this.p2.peakRam,
+          p1: {
+            teamPacked: p1Team,
+            bankSeconds: startBankSec,
+            meanTurnMillis: 1,
+            peakRam: this.p1.peakRam,
+          },
+          p2: {
+            teamPacked: p2Team,
+            bankSeconds: startBankSec,
+            meanTurnMillis: 1,
+            peakRam: this.p2.peakRam,
+          },
+          games,
         };
       }
 
-      const omniTask = (async () => {
-        for await (const rawChunk of this.streams.omniscient) {
-          for (const line of rawChunk.split('\n')) {
-            const step = arbiter.inspectOmniscientLine(line, {
-              currentTurn: this.currentTurn,
-              maxTurns: this.maxTurns,
-              smokeStopAfterTurn: this.smokeStopAfterTurn,
-              ended: this.ended,
-              expectedP1Name: 'Agent A',
-            });
-            this.currentTurn = step.currentTurn;
-            if (step.terminal) {
-              this.ended = true;
-              this.winner = step.terminal.winner;
-              this.endReason = step.terminal.endReason;
-              if (step.terminal.forceTie) {
-                await this.battleStream.write('>forcetie');
-              }
-            }
-          }
-          this.emitSpectatorChunk(rawChunk);
+      // Play up to `bestOf` games in the same running agent processes so `/tmp` state
+      // persists across games of a series (matching Showdown & real-life VGC Bo3).
+      const games: SeriesGameResult[] = [];
+      const summaries: SeriesGameSummary[] = [];
+      let totalTurns = 0;
+      let totalP1Decisions = 0;
+      let totalP1Millis = 0;
+      let totalP2Decisions = 0;
+      let totalP2Millis = 0;
+      let p1PeakRam = this.p1.peakRam;
+      let p2PeakRam = this.p2.peakRam;
+
+      for (let gameNum = 1; gameNum <= this.bestOf; gameNum++) {
+        const gameSeed = this.seeds?.[gameNum - 1] ?? deriveGameSeed(this.seed, gameNum);
+        await this.onGameStart?.({
+          game: gameNum,
+          bestOf: this.bestOf,
+          summaries: [...summaries],
+        });
+        const g = await this.playSingleBattle(gameSeed, p1Team, p2Team, gameNum > 1);
+        totalTurns += g.turns;
+        p1PeakRam = Math.max(p1PeakRam, g.p1PeakRam, this.p1.peakRam);
+        p2PeakRam = Math.max(p2PeakRam, g.p2PeakRam, this.p2.peakRam);
+
+        if (g.winner === 'preempted' || !g.outcome) {
+          await this.closePlayers();
+          return {
+            winner: 'preempted',
+            preemptedSlot: g.preemptedSlot,
+            turns: totalTurns,
+            endReason: 'spot-preemption',
+            omniscientLog: g.omniscientLog,
+            p1: {
+              teamPacked: p1Team,
+              bankSeconds: g.p1BankSeconds,
+              meanTurnMillis: g.p1MeanTurnMillis,
+              peakRam: p1PeakRam,
+            },
+            p2: {
+              teamPacked: p2Team,
+              bankSeconds: g.p2BankSeconds,
+              meanTurnMillis: g.p2MeanTurnMillis,
+              peakRam: p2PeakRam,
+            },
+            games,
+          };
         }
-      })();
 
-      const p1Task = this.driveConcurrentPlayer(this.p1, this.streams.p1);
-      const p2Task = this.driveConcurrentPlayer(this.p2, this.streams.p2);
+        totalP1Decisions += g.p1DecisionsCount;
+        totalP1Millis += g.p1TotalTurnMillis;
+        totalP2Decisions += g.p2DecisionsCount;
+        totalP2Millis += g.p2TotalTurnMillis;
 
-      await this.battleStream.write(
-        `>start ${JSON.stringify({formatid: this.format, seed: this.seed})}`
-      );
-      await this.battleStream.write(
-        `>player p1 ${JSON.stringify({name: 'Agent A', team: p1Team})}`
-      );
-      await this.battleStream.write(
-        `>player p2 ${JSON.stringify({name: 'Agent B', team: p2Team})}`
-      );
+        games.push({
+          seed: gameSeed,
+          outcome: g.outcome,
+          turns: g.turns,
+          endReason: g.endReason,
+          omniscientLog: g.omniscientLog,
+          p1: {
+            bankSeconds: g.p1BankSeconds,
+            meanTurnMillis: g.p1MeanTurnMillis,
+            peakRam: g.p1PeakRam > 1 ? g.p1PeakRam : p1PeakRam,
+          },
+          p2: {
+            bankSeconds: g.p2BankSeconds,
+            meanTurnMillis: g.p2MeanTurnMillis,
+            peakRam: g.p2PeakRam > 1 ? g.p2PeakRam : p2PeakRam,
+          },
+        });
+        summaries.push({
+          winnerSlot: g.winner === 'p1' || g.winner === 'p2' ? g.winner : undefined,
+          turns: g.turns,
+        });
 
-      await Promise.all([omniTask, p1Task, p2Task]);
-
-      for (const p of [this.p1, this.p2]) {
-        try {
-          p.proc.stdin.end();
-        } catch {}
-        try {
-          p.proc.kill('SIGTERM');
-        } catch {}
-      }
-      if ((this.p1.usesRelay && !this.p1.exited) || (this.p2.usesRelay && !this.p2.exited)) {
-        await Promise.all([this.p1, this.p2].map(p => (
-          p.exited
-            ? Promise.resolve()
-            : new Promise<void>(resolve => {
-              const t = setTimeout(resolve, 150);
-              p.proc.once('close', () => {
-                clearTimeout(t);
-                resolve();
-              });
-            })
-        )));
+        const {p1Score, p2Score} = computeSeriesOutcome(games.map(x => x.outcome));
+        if (p1Score > this.bestOf / 2 || p2Score > this.bestOf / 2) break;
       }
 
-      const outcome: GameOutcome | undefined =
-        this.winner === 'p1'
-          ? 'W'
-          : this.winner === 'p2'
-            ? 'L'
-            : this.winner === 'tie'
-              ? 'T'
-              : undefined;
+      await this.closePlayers();
+
+      const {outcome: matchOutcome} = computeSeriesOutcome(games.map(x => x.outcome));
+      const matchWinner: PlayerSlot | 'tie' =
+        matchOutcome === 'W' ? 'p1' : matchOutcome === 'L' ? 'p2' : 'tie';
+      const lastGame = games[games.length - 1];
+      let matchEndReason = 'normal';
+      for (let i = games.length - 1; i >= 0; i--) {
+        if (games[i].endReason !== 'normal') {
+          matchEndReason = games[i].endReason;
+          break;
+        }
+      }
+
+      const p1MeanTurnMillis = totalP1Decisions > 0
+        ? Math.max(1, Math.round(totalP1Millis / totalP1Decisions))
+        : 1;
+      const p2MeanTurnMillis = totalP2Decisions > 0
+        ? Math.max(1, Math.round(totalP2Millis / totalP2Decisions))
+        : 1;
 
       return {
-        winner: this.winner,
-        outcome,
-        preemptedSlot: this.preemptedSlot,
-        turns: this.currentTurn,
-        endReason: this.endReason,
-        omniscientLog: this.getFullLog(),
-        p1TeamPacked: p1Team,
-        p2TeamPacked: p2Team,
-        p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
-        p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
-        p1MeanTurnMillis: this.p1.decisionsCount > 0
-          ? Math.max(1, Math.round(this.p1.totalTurnMillis / this.p1.decisionsCount))
-          : 1,
-        p2MeanTurnMillis: this.p2.decisionsCount > 0
-          ? Math.max(1, Math.round(this.p2.totalTurnMillis / this.p2.decisionsCount))
-          : 1,
-        p1PeakRam: this.p1.peakRam,
-        p2PeakRam: this.p2.peakRam,
+        winner: matchWinner,
+        outcome: matchOutcome,
+        turns: totalTurns,
+        endReason: matchEndReason,
+        omniscientLog: games[0].omniscientLog,
+        p1: {
+          teamPacked: p1Team,
+          bankSeconds: lastGame.p1.bankSeconds,
+          meanTurnMillis: p1MeanTurnMillis,
+          peakRam: p1PeakRam,
+        },
+        p2: {
+          teamPacked: p2Team,
+          bankSeconds: lastGame.p2.bankSeconds,
+          meanTurnMillis: p2MeanTurnMillis,
+          peakRam: p2PeakRam,
+        },
+        games,
       };
     } finally {
       try {
@@ -1401,7 +1650,7 @@ export class Coordinator {
           smokeError = `GCP smoke test failed in ${format}: ${res.endReason}`;
           break;
         }
-        if (res.p1MeanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1MeanTurnMillis;
+        if (res.p1.meanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1.meanTurnMillis;
       }
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStart);
@@ -1496,12 +1745,18 @@ export class Coordinator {
     const totalGamesByVersion = new Map<number, number>(versionIds.map(v => [v, 0]));
     for (const g of state.games) {
       if (g.stage !== 'Round Robin' || g.outcome === undefined) continue;
-      const low = Math.min(g.p1VersionId, g.p2VersionId);
-      const high = Math.max(g.p1VersionId, g.p2VersionId);
+      const low = Math.min(g.p1.versionId, g.p2.versionId);
+      const high = Math.max(g.p1.versionId, g.p2.versionId);
       const key = `${low}:${high}`;
       rrPlayedByPair.set(key, (rrPlayedByPair.get(key) ?? 0) + 1);
-      totalGamesByVersion.set(g.p1VersionId, (totalGamesByVersion.get(g.p1VersionId) ?? 0) + 1);
-      totalGamesByVersion.set(g.p2VersionId, (totalGamesByVersion.get(g.p2VersionId) ?? 0) + 1);
+      totalGamesByVersion.set(
+        g.p1.versionId,
+        (totalGamesByVersion.get(g.p1.versionId) ?? 0) + 1
+      );
+      totalGamesByVersion.set(
+        g.p2.versionId,
+        (totalGamesByVersion.get(g.p2.versionId) ?? 0) + 1
+      );
     }
 
     const matchups: MatchupState[] = [];
@@ -1523,6 +1778,8 @@ export class Coordinator {
       1,
       Math.min(tourney.parallelTables, Math.floor(versionIds.length / 2))
     );
+    const tourneyBestOf = tourney.bestOf ??
+      getTournamentBestOf(tourney.format, tourney.customRules);
     let markedRunning = tourney.status === 'running';
     let rrCompleted = 0;
 
@@ -1562,7 +1819,11 @@ export class Coordinator {
         const p1Spec = this.resolveEntrantSpec(p1Ent, p1Host, p1Ctrl);
         const p2Spec = this.resolveEntrantSpec(p2Ent, p2Host, p2Ctrl);
 
-        await this.client.sendTournamentBroadcast(tournamentId, {
+        const sendTableLoad = (info?: {
+          game: number;
+          bestOf: number;
+          summaries: SeriesGameSummary[];
+        }) => this.client.sendTournamentBroadcast(tournamentId, {
           table: params.tableNum,
           mode: 'load',
           label: `Table ${params.tableNum}`,
@@ -1570,6 +1831,13 @@ export class Coordinator {
           stage: params.stage,
           cycle: params.cycle,
           matchupGame: params.matchupGame,
+          ...(tourneyBestOf > 1 || (info && info.bestOf > 1)
+            ? {
+              bestOf: info?.bestOf ?? tourneyBestOf,
+              game: info?.game ?? 1,
+              ...(info?.summaries.length ? {summaries: info.summaries} : {}),
+            }
+            : {}),
           p1: {
             slug: p1Ent.agentSlug,
             name: p1Ent.agentName,
@@ -1590,15 +1858,23 @@ export class Coordinator {
           live: true,
         }).catch(() => undefined);
 
+        await sendTableLoad({game: 1, bestOf: tourneyBestOf, summaries: []});
+
         const game = new ConcurrentGame({
           format: tourney.format,
           customRules: tourney.customRules,
+          bestOf: tourneyBestOf,
           seed,
           p1Spec,
           p2Spec,
           p1TeamPacked: sampled.p1Team,
           p2TeamPacked: sampled.p2Team,
           maxTurns: this.maxTurns,
+          onGameStart: async info => {
+            if (info.game > 1) {
+              await sendTableLoad(info);
+            }
+          },
           onSpectatorChunk: (chunk, snap) => {
             if (!chunk) return;
             const newLines = chunk.split('\n');
@@ -1644,28 +1920,32 @@ export class Coordinator {
         markedRunning = true;
         await this.client.completeTournamentGame(tournamentId, {
           table: params.tableNum,
-          log: res.omniscientLog,
+          logs: res.games.map(gm => gm.omniscientLog),
           ...(statusUpdate ? {tournamentStatus: statusUpdate} : {}),
           game: {
             id: params.gameId,
             stage: params.stage,
             cycle: params.cycle,
             matchupGame: params.matchupGame,
-            p1VersionId: p1Ent.versionId,
-            p2VersionId: p2Ent.versionId,
-            seed,
             preemptions,
-            p1Team: res.p1TeamPacked,
-            p2Team: res.p2TeamPacked,
             outcome: res.outcome,
-            turns: res.turns,
-            endReason: res.endReason,
-            p1BankSeconds: res.p1BankSeconds,
-            p2BankSeconds: res.p2BankSeconds,
-            p1MeanTurnMillis: res.p1MeanTurnMillis,
-            p2MeanTurnMillis: res.p2MeanTurnMillis,
-            p1PeakRam: res.p1PeakRam,
-            p2PeakRam: res.p2PeakRam,
+            p1: {
+              versionId: p1Ent.versionId,
+              team: res.p1.teamPacked,
+            },
+            p2: {
+              versionId: p2Ent.versionId,
+              team: res.p2.teamPacked,
+            },
+            games: res.games.map((gm, idx) => ({
+              gameNumber: idx + 1,
+              seed: gm.seed,
+              outcome: gm.outcome,
+              turns: gm.turns,
+              endReason: gm.endReason,
+              p1: gm.p1,
+              p2: gm.p2,
+            })),
             completedAt: Math.floor(Date.now() / 1000),
           },
         });

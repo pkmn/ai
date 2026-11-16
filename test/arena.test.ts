@@ -1532,8 +1532,8 @@ describe('arena infrastructure', () => {
         },
         maxTurns: 1,
       }).run();
-      expect(utmRes.p1TeamPacked).toBeTruthy();
-      expect(utmRes.p2TeamPacked).toBeTruthy();
+      expect(utmRes.p1.teamPacked).toBeTruthy();
+      expect(utmRes.p2.teamPacked).toBeTruthy();
       expect(utmRes.turns).toBeGreaterThanOrEqual(1);
     });
 
@@ -1672,6 +1672,117 @@ describe('arena infrastructure', () => {
       // Either TEAM_ONE or teamOneVariant (1 move diff < THRESHOLD 1.30) is skipped on Pass 1
       expect([book[0].p1Team, book[0].p2Team]).not.toEqual([TEAM_ONE, teamOneVariant]);
       expect([book[0].p1Team, book[0].p2Team]).not.toEqual([teamOneVariant, TEAM_ONE]);
+    });
+
+    test('computeSeriesOutcome scores sweeps, splits, or ties for any Best-of-N series', () => {
+      expect(tournament.computeSeriesOutcome(['W', 'W'])).toEqual({
+        outcome: 'W',
+        p1Score: 2,
+        p2Score: 0,
+      });
+      expect(tournament.computeSeriesOutcome(['L', 'L'])).toEqual({
+        outcome: 'L',
+        p1Score: 0,
+        p2Score: 2,
+      });
+      expect(tournament.computeSeriesOutcome(['W', 'L', 'W'])).toEqual({
+        outcome: 'W',
+        p1Score: 2,
+        p2Score: 1,
+      });
+      expect(tournament.computeSeriesOutcome(['W', 'L', 'L'])).toEqual({
+        outcome: 'L',
+        p1Score: 1,
+        p2Score: 2,
+      });
+      expect(tournament.computeSeriesOutcome(['W', 'T', 'T'])).toEqual({
+        outcome: 'W',
+        p1Score: 2,
+        p2Score: 1,
+      });
+      expect(tournament.computeSeriesOutcome(['W', 'L', 'T'])).toEqual({
+        outcome: 'T',
+        p1Score: 1.5,
+        p2Score: 1.5,
+      });
+      expect(tournament.computeSeriesOutcome(['T', 'T', 'T'])).toEqual({
+        outcome: 'T',
+        p1Score: 1.5,
+        p2Score: 1.5,
+      });
+      expect(tournament.computeSeriesOutcome(['W', 'L', 'W', 'L', 'W'])).toEqual({
+        outcome: 'W',
+        p1Score: 3,
+        p2Score: 2,
+      });
+    });
+
+    test('ConcurrentGame plays Best-of-N games in the same agent subprocesses', async () => {
+      const pidRecordFile = path.join(tmpDir, 'bo3-pids.txt');
+      fs.writeFileSync(pidRecordFile, '');
+      const bo3AgentScript = path.join(tmpDir, 'bo3-agent.js');
+      fs.writeFileSync(
+        bo3AgentScript,
+        [
+          '#!/usr/bin/env node',
+          'const fs = require("fs");',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'let gameNum = 0;',
+          'rl.on("line", line => {',
+          '  if (line === "|start") {',
+          '    gameNum++;',
+          `    fs.appendFileSync(${JSON.stringify(pidRecordFile)}, `,
+          '      String(process.pid) + ":" + String(gameNum) + "\\n");',
+          '  }',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write(req.teamPreview ? "/team 1234\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      const bo3Res = await new tournament.ConcurrentGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        bestOf: 3,
+        p1Spec: {
+          agentId: 'foul-play',
+          displayName: 'Foul Play',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, bo3AgentScript],
+        },
+        p2Spec: {
+          agentId: 'pokechamp',
+          displayName: 'PokeChamp',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, bo3AgentScript],
+        },
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        maxTurns: 1,
+      }).run();
+
+      expect(bo3Res.games.length).toBeGreaterThanOrEqual(2);
+      expect(bo3Res.games[0].outcome).toBeDefined();
+      expect(bo3Res.games[1].outcome).toBeDefined();
+      expect(bo3Res.games[1].seed).toBeDefined();
+      expect(bo3Res.games[0].omniscientLog).toContain('|player|p1|Foul Play|');
+      expect(bo3Res.games[1].omniscientLog).toContain('|player|p1|Foul Play|');
+
+      const pidEntries = fs.readFileSync(pidRecordFile, 'utf8').trim().split('\n');
+      const uniquePids = new Set(pidEntries.map(e => e.split(':')[0]));
+      // Only 2 processes (one for P1, one for P2) were spawned across all games in the Bo3 set
+      expect(uniquePids.size).toBe(2);
+      expect(pidEntries.length).toBeGreaterThanOrEqual(4);
     });
   });
 
@@ -2446,8 +2557,12 @@ describe('arena infrastructure', () => {
         await tourCoord.runTournament('10');
         const t10Games = db.getTournamentGames('10').filter(g => g.stage === 'Round Robin');
         expect(t10Games).toHaveLength(6);
-        const oddSeeds = new Set(t10Games.filter(g => g.matchupGame === 1).map(g => g.seed));
-        const evenSeeds = new Set(t10Games.filter(g => g.matchupGame === 2).map(g => g.seed));
+        const oddSeeds = new Set(
+          t10Games.filter(g => g.matchupGame === 1).map(g => g.games[0].seed)
+        );
+        const evenSeeds = new Set(
+          t10Games.filter(g => g.matchupGame === 2).map(g => g.games[0].seed)
+        );
         expect(oddSeeds.size).toBe(1);
         expect(evenSeeds).toEqual(oddSeeds);
       });

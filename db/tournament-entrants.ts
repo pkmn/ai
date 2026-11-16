@@ -133,7 +133,7 @@ export function recomputeTournamentStandings(
 
   const gameRows = db.prepare(`
     SELECT stage, p1_version_id, p2_version_id, outcome
-    FROM tournament_games
+    FROM tournament_matches
     WHERE tournament_id = ?
       AND status = 'completed'
       AND outcome IS NOT NULL

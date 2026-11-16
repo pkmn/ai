@@ -2914,12 +2914,15 @@ export class Runner {
       const status = (getFlag(cmd, 'status') ?? 'scheduled') as db.TournamentStatus;
       const rawTeam = getFlag(cmd, 'team');
       const team = rawTeam && rawTeam !== 'custom' ? (rawTeam as db.TeamMode) : undefined;
+      const defaultRules = /\b(?:bo3|best[- ]of[- ]3)\b/i.test(name)
+        ? (format.includes('vgc') ? '["Open Team Sheets","Best-of-3"]' : '["Best-of-3"]')
+        : '[]';
       this.db.upsertTournament({
         id,
         name,
         format,
         team,
-        rulesJson: getFlag(cmd, 'rules') ?? '[]',
+        rulesJson: getFlag(cmd, 'rules') ?? defaultRules,
         gamesPerMatchup: Number(getFlag(cmd, 'games') ?? 8),
         batchSize: Number(getFlag(cmd, 'batch') ?? 10),
         parallelTables: Number(getFlag(cmd, 'tables') ?? 2),
@@ -3051,7 +3054,7 @@ export class Runner {
       }
 
       const existingRrCount = (this.db.db.prepare(
-        `SELECT COUNT(*) AS cnt FROM tournament_games
+        `SELECT COUNT(*) AS cnt FROM tournament_matches
          WHERE tournament_id = ? AND stage = 'Round Robin'`
       ).get(id) as {cnt: number}).cnt;
 
@@ -3083,6 +3086,199 @@ export class Runner {
         return this.getExpectedRating(ent.versionId, ent.agentSlug, '*');
       };
 
+      const isMultiGame = tour.bestOf > 1;
+      const isVgc = tour.format.includes('vgc');
+      const buildAndSaveMockGame = async (opts: {
+        gameId: string;
+        stage: db.TournamentGameStage;
+        cycle: number;
+        matchupGame: number;
+        p1: typeof entrants[number];
+        p2: typeof entrants[number];
+        p1Team: string;
+        p2Team: string;
+        baseSeed: string;
+        seq: number;
+        at: number;
+        gameTieRate: number;
+        shouldEmitLog: boolean;
+        table: number;
+      }) => {
+        const e1 = getEntrantExpected(opts.p1);
+        const e2 = getEntrantExpected(opts.p2);
+        const sampleTurns = (out: ratings.GameOutcome) =>
+          out === 'T' ? 100 : (isVgc ? 8 + this.nextInt(9) : 24 + this.nextInt(24));
+
+        let outcome: ratings.GameOutcome;
+        let games: db.TournamentGameInput[];
+        let logs: string[] = [];
+
+        if (isMultiGame) {
+          const winsNeeded = Math.floor(tour.bestOf / 2) + 1;
+          const outcomes: ratings.GameOutcome[] = [
+            this.sampleDavidsonSingleGame(e1, e2, 0, opts.gameTieRate),
+          ];
+          const turnsList: number[] = [sampleTurns(outcomes[0])];
+          const p1Banks: number[] = [70 + this.nextInt(50)];
+          const p2Banks: number[] = [60 + this.nextInt(50)];
+
+          const savedRngState = this.state.rngState;
+          this.state.rngState =
+            ((savedRngState ^ Math.imul(opts.seq + 1, 0x9e3779b9)) >>> 0) || 1;
+
+          let w1 = outcomes[0] === 'W' ? 1 : 0;
+          let w2 = outcomes[0] === 'L' ? 1 : 0;
+          for (let gn = 2; gn <= tour.bestOf; gn++) {
+            if (w1 >= winsNeeded || w2 >= winsNeeded) break;
+            const out = this.sampleDavidsonSingleGame(e1, e2, 0, opts.gameTieRate);
+            outcomes.push(out);
+            if (out === 'W') w1++;
+            else if (out === 'L') w2++;
+          }
+          for (let idx = 1; idx < outcomes.length; idx++) {
+            turnsList.push(sampleTurns(outcomes[idx]));
+          }
+          for (let idx = 1; idx < outcomes.length; idx++) {
+            const drop = idx === 1 ? 2 : 5 + (idx - 2) * 3;
+            p1Banks.push(Math.max(10, 70 - drop) + this.nextInt(50));
+            p2Banks.push(Math.max(10, 60 - drop) + this.nextInt(50));
+          }
+          this.state.rngState = savedRngState;
+
+          let s1 = 0;
+          let s2 = 0;
+          for (const out of outcomes) {
+            if (out === 'W') {
+              s1 += 1;
+            } else if (out === 'L') {
+              s2 += 1;
+            } else {
+              s1 += 0.5;
+              s2 += 0.5;
+            }
+          }
+          outcome = s1 > s2 ? 'W' : s2 > s1 ? 'L' : 'T';
+
+          const baseP1Mean = 220 + ((opts.p1.versionId * 37 + opts.seq * 13) % 380);
+          const baseP2Mean = 240 + ((opts.p2.versionId * 41 + opts.seq * 17) % 380);
+          const baseP1Ram = 1850 + ((opts.p1.versionId * 431 + opts.seq * 97) % 8600);
+          const baseP2Ram = 2100 + ((opts.p2.versionId * 479 + opts.seq * 113) % 8600);
+
+          games = outcomes.map((out, idx) => ({
+            gameNumber: idx + 1,
+            seed: idx === 0 ? opts.baseSeed : `10,${20 + idx},${id},${opts.seq}`,
+            outcome: out,
+            turns: turnsList[idx],
+            endReason: out === 'T' ? 'tie-100-turns' : 'win',
+            p1: {
+              bankSeconds: p1Banks[idx],
+              meanTurnMillis: Math.max(10, baseP1Mean + (idx === 0 ? -12 : idx === 1 ? 10 : 4)),
+              peakRam: Math.max(128, baseP1Ram - (idx === 0 ? 64 : idx === 1 ? 24 : 0)),
+            },
+            p2: {
+              bankSeconds: p2Banks[idx],
+              meanTurnMillis: Math.max(10, baseP2Mean + (idx === 0 ? 8 : idx === 1 ? -10 : 3)),
+              peakRam: Math.max(128, baseP2Ram - (idx === 0 ? 52 : idx === 1 ? 18 : 0)),
+            },
+          }));
+
+          if (opts.shouldEmitLog) {
+            logs = outcomes.map(out => buildShowdownTournamentLog({
+              format: tour.format,
+              p1Name: opts.p1.agentName,
+              p2Name: opts.p2.agentName,
+              p1TeamPacked: opts.p1Team,
+              p2TeamPacked: opts.p2Team,
+              outcome: out,
+            }));
+          }
+        } else {
+          outcome = this.sampleDavidsonSingleGame(e1, e2, 0, opts.gameTieRate);
+          const isSf = opts.stage === 'Superfinal';
+          const g = opts.matchupGame;
+          games = [
+            {
+              gameNumber: 1,
+              seed: opts.baseSeed,
+              outcome,
+              endReason: outcome === 'T' ? 'tie-100-turns' : 'win',
+              turns: isSf ? (isVgc ? 10 : 34) : sampleTurns(outcome),
+              p1: {
+                bankSeconds: isSf ? 88 : 70 + this.nextInt(50),
+                meanTurnMillis: isSf
+                  ? 250 + ((opts.p1.versionId * 37 + g * 19) % 340)
+                  : 220 + ((opts.p1.versionId * 37 + opts.seq * 13) % 380),
+                peakRam: isSf
+                  ? 2400 + ((opts.p1.versionId * 431 + g * 107) % 8200)
+                  : 1850 + ((opts.p1.versionId * 431 + opts.seq * 97) % 8600),
+              },
+              p2: {
+                bankSeconds: isSf ? 64 : 60 + this.nextInt(50),
+                meanTurnMillis: isSf
+                  ? 270 + ((opts.p2.versionId * 41 + g * 23) % 340)
+                  : 240 + ((opts.p2.versionId * 41 + opts.seq * 17) % 380),
+                peakRam: isSf
+                  ? 2600 + ((opts.p2.versionId * 479 + g * 127) % 8200)
+                  : 2100 + ((opts.p2.versionId * 479 + opts.seq * 113) % 8600),
+              },
+            },
+          ];
+          if (opts.shouldEmitLog) {
+            logs = [
+              buildShowdownTournamentLog({
+                format: tour.format,
+                p1Name: opts.p1.agentName,
+                p2Name: opts.p2.agentName,
+                p1TeamPacked: opts.p1Team,
+                p2TeamPacked: opts.p2Team,
+                outcome,
+              }),
+            ];
+          }
+        }
+
+        const payload: db.CompletedTournamentGamePayload = {
+          id: opts.gameId,
+          tournamentId: id,
+          stage: opts.stage,
+          cycle: opts.cycle,
+          matchupGame: opts.matchupGame,
+          outcome,
+          p1: {versionId: opts.p1.versionId, team: opts.p1Team},
+          p2: {versionId: opts.p2.versionId, team: opts.p2Team},
+          games,
+          completedAt: opts.at,
+        };
+
+        if (this.serverUrl) {
+          await this.getArenaClient().completeTournamentGame(id, {
+            game: payload,
+            log: logs[0],
+            ...(logs.length > 0 ? {logs} : {}),
+            table: opts.table,
+          });
+        } else {
+          this.db.upsertTournamentGame({
+            ...payload,
+            status: 'completed',
+          });
+          if (opts.shouldEmitLog && this.publicDir && logs.length > 0) {
+            const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
+            fs.mkdirSync(tourDir, {recursive: true});
+            fs.writeFileSync(path.join(tourDir, `${opts.gameId}.log`), logs[0], 'utf8');
+            if (isMultiGame) {
+              for (let idx = 0; idx < logs.length; idx++) {
+                fs.writeFileSync(
+                  path.join(tourDir, `${opts.gameId}-g${idx + 1}.log`),
+                  logs[idx],
+                  'utf8'
+                );
+              }
+            }
+          }
+        }
+      };
+
       for (let k = 0; k < slice.length; k++) {
         const item = slice[k];
         const at = span > 0
@@ -3090,65 +3286,28 @@ export class Runner {
           : this.state.now + 1;
         this.setNow(at);
 
-        const e1 = getEntrantExpected(item.p1);
-        const e2 = getEntrantExpected(item.p2);
-        const outcome = this.sampleDavidsonSingleGame(e1, e2, 0, tieRate);
         const p1Team = samplePackedTournamentTeam(tour.format, item.p1.seed + item.cycle);
         const p2Team = samplePackedTournamentTeam(tour.format, item.p2.seed + item.cycle + 1);
         const gameId = `${idPrefix}-rr-${item.seq}`;
-        const isVgc = tour.format.includes('vgc');
-        const payload: db.CompletedTournamentGamePayload = {
-          id: gameId,
-          tournamentId: id,
+        const shouldEmitLog =
+          writeLogs || Boolean(this.serverUrl) || k >= slice.length - 3;
+
+        await buildAndSaveMockGame({
+          gameId,
           stage: 'Round Robin',
           cycle: item.cycle,
           matchupGame: item.cycle,
-          p1VersionId: item.p1.versionId,
-          p2VersionId: item.p2.versionId,
-          seed: `10,20,${id},${item.seq}`,
+          p1: item.p1,
+          p2: item.p2,
           p1Team,
           p2Team,
-          outcome,
-          endReason: outcome === 'T' ? 'tie-100-turns' : 'win',
-          turns: outcome === 'T' ? 100 : (isVgc ? 8 + this.nextInt(9) : 24 + this.nextInt(24)),
-          p1BankSeconds: 70 + this.nextInt(50),
-          p2BankSeconds: 60 + this.nextInt(50),
-          p1MeanTurnMillis: 220 + ((item.p1.versionId * 37 + item.seq * 13) % 380),
-          p2MeanTurnMillis: 240 + ((item.p2.versionId * 41 + item.seq * 17) % 380),
-          p1PeakRam: 1850 + ((item.p1.versionId * 431 + item.seq * 97) % 8600),
-          p2PeakRam: 2100 + ((item.p2.versionId * 479 + item.seq * 113) % 8600),
-          completedAt: at,
-        };
-        const shouldEmitLog =
-          writeLogs || Boolean(this.serverUrl) || k >= slice.length - 3;
-        const logText = shouldEmitLog
-          ? buildShowdownTournamentLog({
-            format: tour.format,
-            p1Name: item.p1.agentName,
-            p2Name: item.p2.agentName,
-            p1TeamPacked: p1Team,
-            p2TeamPacked: p2Team,
-            outcome,
-          })
-          : undefined;
-
-        if (this.serverUrl) {
-          await this.getArenaClient().completeTournamentGame(id, {
-            game: payload,
-            log: logText,
-            table: (k % Math.max(1, tour.parallelTables)) + 1,
-          });
-        } else {
-          this.db.upsertTournamentGame({
-            ...payload,
-            status: 'completed',
-          });
-          if (logText && this.publicDir) {
-            const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
-            fs.mkdirSync(tourDir, {recursive: true});
-            fs.writeFileSync(path.join(tourDir, `${gameId}.log`), logText, 'utf8');
-          }
-        }
+          baseSeed: `10,20,${id},${item.seq}`,
+          seq: item.seq,
+          at,
+          gameTieRate: tieRate,
+          shouldEmitLog,
+          table: (k % Math.max(1, tour.parallelTables)) + 1,
+        });
       }
 
       if (!this.serverUrl) {
@@ -3173,59 +3332,25 @@ export class Runner {
             this.setNow(this.state.now + 60);
             const p1 = g % 2 === 1 ? top1 : top2;
             const p2 = g % 2 === 1 ? top2 : top1;
-            const e1 = getEntrantExpected(p1);
-            const e2 = getEntrantExpected(p2);
-            const outcome = this.sampleDavidsonSingleGame(e1, e2, 0, 0);
             const p1Team = samplePackedTournamentTeam(tour.format, g - 1);
             const p2Team = samplePackedTournamentTeam(tour.format, g);
             const sfId = `${idPrefix}-sf${g}`;
-            const sfPayload: db.CompletedTournamentGamePayload = {
-              id: sfId,
-              tournamentId: id,
+            await buildAndSaveMockGame({
+              gameId: sfId,
               stage: 'Superfinal',
               cycle: 1,
               matchupGame: g,
-              p1VersionId: p1.versionId,
-              p2VersionId: p2.versionId,
-              seed: `10,20,30,${998 + g}`,
+              p1,
+              p2,
               p1Team,
               p2Team,
-              outcome,
-              endReason: 'win',
-              turns: tour.format.includes('vgc') ? 10 : 34,
-              p1BankSeconds: 88,
-              p2BankSeconds: 64,
-              p1MeanTurnMillis: 250 + ((p1.versionId * 37 + g * 19) % 340),
-              p2MeanTurnMillis: 270 + ((p2.versionId * 41 + g * 23) % 340),
-              p1PeakRam: 2400 + ((p1.versionId * 431 + g * 107) % 8200),
-              p2PeakRam: 2600 + ((p2.versionId * 479 + g * 127) % 8200),
-              completedAt: this.state.now,
-            };
-            const sfLog = buildShowdownTournamentLog({
-              format: tour.format,
-              p1Name: p1.agentName,
-              p2Name: p2.agentName,
-              p1TeamPacked: p1Team,
-              p2TeamPacked: p2Team,
-              outcome,
+              baseSeed: `10,20,30,${998 + g}`,
+              seq: 998 + g,
+              at: this.state.now,
+              gameTieRate: 0,
+              shouldEmitLog: true,
+              table: 1,
             });
-            if (this.serverUrl) {
-              await this.getArenaClient().completeTournamentGame(id, {
-                game: sfPayload,
-                log: sfLog,
-                table: 1,
-              });
-            } else {
-              this.db.upsertTournamentGame({
-                ...sfPayload,
-                status: 'completed',
-              });
-              if (this.publicDir) {
-                const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
-                fs.mkdirSync(tourDir, {recursive: true});
-                fs.writeFileSync(path.join(tourDir, `${sfId}.log`), sfLog, 'utf8');
-              }
-            }
           }
           if (!this.serverUrl) {
             this.db.recomputeTournamentStandings(id, false);
@@ -3309,6 +3434,17 @@ export class Runner {
         const lead1 = p1Mons[0] ?? 'Incineroar';
         const lead2 = p2Mons[0] ?? 'Garchomp';
         const turnNum = idx === 0 ? 1 : 3;
+        const seriesGame = tour.bestOf > 1 && idx === 0 ? 2 : 1;
+        const g1Summary: arena.SeriesGameSummary | undefined = tour.bestOf > 1 && idx === 0
+          ? {winnerSlot: 'p1', turns: 8}
+          : undefined;
+        const seriesLeftHtml = tour.bestOf > 1
+          ? `Round Robin · Cycle ${cycle} · Match ${game} · ` +
+            `<strong>Game ${seriesGame} / ${tour.bestOf}</strong>` +
+            (g1Summary
+              ? ` · <span class="muted"><tt>G1</tt>: ${escapeHtml(pr[0].name)} (8t)</span>`
+              : '')
+          : `Round Robin · Cycle ${cycle} · Game ${game}`;
         return {
           table: tableNum,
           label: `Table ${tableNum} · ${pr[0].name} vs ${pr[1].name}`,
@@ -3317,7 +3453,9 @@ export class Runner {
           stage: 'Round Robin',
           cycle,
           matchupGame: game,
-          seriesLeftHtml: `Round Robin · Cycle ${cycle} · Game ${game}`,
+          ...(tour.bestOf > 1 ? {bestOf: tour.bestOf, game: seriesGame} : {}),
+          ...(g1Summary !== undefined ? {summaries: [g1Summary]} : {}),
+          seriesLeftHtml,
           seriesRightHtml:
             `${escapeHtml(pr[0].name)} <code>${escapeHtml(pr[0].version)}</code> vs ` +
             `${escapeHtml(pr[1].name)} <code>${escapeHtml(pr[1].version)}</code>`,

@@ -567,6 +567,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         raw.exec("UPDATE ladders SET status = 'upcoming'");
         raw.exec('DELETE FROM ladder_entries');
         raw.exec('DELETE FROM tournament_games');
+        raw.exec('DELETE FROM tournament_matches');
         raw.exec('DELETE FROM tournament_entrants');
         raw.exec('DELETE FROM tournaments');
       }),
@@ -930,10 +931,11 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-tournament-2-replay',
       section: 'tournaments',
-      title: 'Tournament #2 (Live Tournament · Expanded Game Replay)',
+      title: 'Tournament #2 (Live Tournament · Expanded Bo3 Match Replay)',
       description:
-        'Clicking a completed round-robin game row in `#games` during a live tournament ' +
-        'expands its telemetry and inline replay viewer while `#live` continues broadcasting.',
+        'Clicking a completed round-robin Best-of-3 match row in `#games` during a live ' +
+        'tournament expands its per-game telemetry and inline `Game 1` / `Game 2` / `Game 3` ' +
+        'replay viewer while `#live` continues broadcasting.',
       path: '/arena/tournaments/2/',
       click: '#games tr.battle-row td:first-child',
     },

@@ -2,340 +2,132 @@ import {DatabaseSync} from 'node:sqlite';
 
 import * as ratings from '../server/ratings';
 
-import {recomputeTournamentStandings} from './tournament-entrants';
-import {getTournament} from './tournaments';
-
-import {TransactionRunner} from './index';
-
-export type TournamentGameStage = 'Round Robin' | 'Superfinal';
-export type TournamentGameStatus = 'pending' | 'running' | 'completed';
+export interface TournamentGamePlayerStats {
+  bankSeconds?: number;
+  meanTurnMillis?: number;
+  peakRam?: number;
+}
 
 export interface TournamentGameRow {
-  id: string;
-  tournamentId: string;
-  stage: TournamentGameStage;
-  cycle: number;
-  matchupGame: number;
-  p1VersionId: number;
-  p2VersionId: number;
+  matchId: string;
+  gameNumber: number;
   seed: string;
-  status: TournamentGameStatus;
-  preemptions: number;
-  p1Team?: string;
-  p2Team?: string;
-  outcome?: 'W' | 'L' | 'T';
+  outcome?: ratings.GameOutcome;
   turns?: number;
   endReason?: string;
-  p1BankSeconds?: number;
-  p2BankSeconds?: number;
-  p1MeanTurnMillis?: number;
-  p2MeanTurnMillis?: number;
-  p1PeakRam?: number;
-  p2PeakRam?: number;
-  completedAt?: number;
+  p1: TournamentGamePlayerStats;
+  p2: TournamentGamePlayerStats;
 }
 
-export interface TournamentGameView extends TournamentGameRow {
-  p1Slug: string;
-  p1Name: string;
-  p1Version: string;
-  p2Slug: string;
-  p2Name: string;
-  p2Version: string;
-}
-
-export interface TournamentPairRecord {
-  lowVersionId: number;
-  highVersionId: number;
-  lowWins: number;
-  highWins: number;
-  ties: number;
-}
-
-export interface UpsertTournamentGameInput {
-  id: string;
-  tournamentId: string;
-  stage?: TournamentGameStage;
-  cycle: number;
-  matchupGame: number;
-  p1VersionId: number;
-  p2VersionId: number;
+export interface TournamentGameInput {
+  gameNumber?: number;
   seed: string;
-  status?: TournamentGameStatus;
-  preemptions?: number;
-  p1Team?: string;
-  p2Team?: string;
-  outcome?: 'W' | 'L' | 'T';
+  outcome?: ratings.GameOutcome;
   turns?: number;
   endReason?: string;
-  p1BankSeconds?: number;
-  p2BankSeconds?: number;
-  p1MeanTurnMillis?: number;
-  p2MeanTurnMillis?: number;
-  p1PeakRam?: number;
-  p2PeakRam?: number;
-  completedAt?: number;
+  p1?: TournamentGamePlayerStats;
+  p2?: TournamentGamePlayerStats;
 }
 
-export interface CompletedTournamentGamePayload {
-  id: string;
-  tournamentId: string;
-  stage?: TournamentGameStage;
-  cycle: number;
-  matchupGame: number;
-  p1VersionId: number;
-  p2VersionId: number;
-  seed: string;
-  preemptions?: number;
-  p1Team?: string;
-  p2Team?: string;
-  outcome: ratings.GameOutcome;
-  turns: number;
-  endReason: string;
-  p1BankSeconds: number;
-  p2BankSeconds: number;
-  p1MeanTurnMillis?: number;
-  p2MeanTurnMillis?: number;
-  p1PeakRam?: number;
-  p2PeakRam?: number;
-  completedAt: number;
-}
-
-export function upsertTournamentGame(db: DatabaseSync, input: UpsertTournamentGameInput) {
-  db.prepare(`
-    INSERT INTO tournament_games (
-      id, tournament_id, stage, cycle, matchup_game,
-      p1_version_id, p2_version_id, seed, status, preemptions,
-      p1_team, p2_team, outcome, turns, end_reason,
-      p1_bank_seconds, p2_bank_seconds, p1_mean_turn_millis, p2_mean_turn_millis,
-      p1_peak_ram, p2_peak_ram, completed_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      stage = excluded.stage,
-      cycle = excluded.cycle,
-      matchup_game = excluded.matchup_game,
-      p1_version_id = excluded.p1_version_id,
-      p2_version_id = excluded.p2_version_id,
-      seed = excluded.seed,
-      status = excluded.status,
-      preemptions = excluded.preemptions,
-      p1_team = excluded.p1_team,
-      p2_team = excluded.p2_team,
-      outcome = excluded.outcome,
-      turns = excluded.turns,
-      end_reason = excluded.end_reason,
-      p1_bank_seconds = excluded.p1_bank_seconds,
-      p2_bank_seconds = excluded.p2_bank_seconds,
-      p1_mean_turn_millis = excluded.p1_mean_turn_millis,
-      p2_mean_turn_millis = excluded.p2_mean_turn_millis,
-      p1_peak_ram = excluded.p1_peak_ram,
-      p2_peak_ram = excluded.p2_peak_ram,
-      completed_at = excluded.completed_at
-  `).run(
-    input.id,
-    input.tournamentId,
-    input.stage ?? 'Round Robin',
-    input.cycle,
-    input.matchupGame,
-    input.p1VersionId,
-    input.p2VersionId,
-    input.seed,
-    input.status ?? 'pending',
-    input.preemptions ?? 0,
-    input.p1Team ?? null,
-    input.p2Team ?? null,
-    input.outcome ?? null,
-    input.turns ?? null,
-    input.endReason ?? null,
-    input.p1BankSeconds ?? null,
-    input.p2BankSeconds ?? null,
-    input.p1MeanTurnMillis ?? null,
-    input.p2MeanTurnMillis ?? null,
-    input.p1PeakRam ?? null,
-    input.p2PeakRam ?? null,
-    input.completedAt ?? null
-  );
-}
-
-function mapTournamentGameView(r: Record<string, unknown>): TournamentGameView {
+function mapTournamentGameRow(r: Record<string, unknown>): TournamentGameRow {
   return {
-    id: r.id as string,
-    tournamentId: r.tournament_id as string,
-    stage: r.stage as TournamentGameStage,
-    cycle: r.cycle as number,
-    matchupGame: r.matchup_game as number,
-    p1VersionId: r.p1_version_id as number,
-    p2VersionId: r.p2_version_id as number,
+    matchId: r.match_id as string,
+    gameNumber: r.game_number as number,
     seed: r.seed as string,
-    status: r.status as TournamentGameStatus,
-    preemptions: r.preemptions as number,
-    p1Team: (r.p1_team as string | null) ?? undefined,
-    p2Team: (r.p2_team as string | null) ?? undefined,
-    outcome: (r.outcome as 'W' | 'L' | 'T' | null) ?? undefined,
+    outcome: (r.outcome as ratings.GameOutcome | null) ?? undefined,
     turns: (r.turns as number | null) ?? undefined,
     endReason: (r.end_reason as string | null) ?? undefined,
-    p1BankSeconds: (r.p1_bank_seconds as number | null) ?? undefined,
-    p2BankSeconds: (r.p2_bank_seconds as number | null) ?? undefined,
-    p1MeanTurnMillis: (r.p1_mean_turn_millis as number | null) ?? undefined,
-    p2MeanTurnMillis: (r.p2_mean_turn_millis as number | null) ?? undefined,
-    p1PeakRam: (r.p1_peak_ram as number | null) ?? undefined,
-    p2PeakRam: (r.p2_peak_ram as number | null) ?? undefined,
-    completedAt: (r.completed_at as number | null) ?? undefined,
-    p1Slug: r.p1_slug as string,
-    p1Name: r.p1_name as string,
-    p1Version: r.p1_version as string,
-    p2Slug: r.p2_slug as string,
-    p2Name: r.p2_name as string,
-    p2Version: r.p2_version as string,
+    p1: {
+      bankSeconds: (r.p1_bank_seconds as number | null) ?? undefined,
+      meanTurnMillis: (r.p1_mean_turn_millis as number | null) ?? undefined,
+      peakRam: (r.p1_peak_ram as number | null) ?? undefined,
+    },
+    p2: {
+      bankSeconds: (r.p2_bank_seconds as number | null) ?? undefined,
+      meanTurnMillis: (r.p2_mean_turn_millis as number | null) ?? undefined,
+      peakRam: (r.p2_peak_ram as number | null) ?? undefined,
+    },
   };
 }
 
-export function getTournamentGame(
+export function replaceTournamentMatchGames(
   db: DatabaseSync,
-  gameId: string
-): TournamentGameView | undefined {
-  const row = db.prepare(`
-    SELECT
-      tg.*,
-      a1.slug AS p1_slug,
-      a1.name AS p1_name,
-      v1.version AS p1_version,
-      a2.slug AS p2_slug,
-      a2.name AS p2_name,
-      v2.version AS p2_version
-    FROM tournament_games tg
-    JOIN agent_versions v1 ON v1.id = tg.p1_version_id
-    JOIN agents a1 ON a1.id = v1.agent_id
-    JOIN agent_versions v2 ON v2.id = tg.p2_version_id
-    JOIN agents a2 ON a2.id = v2.agent_id
-    WHERE tg.id = ?
-  `).get(gameId) as Record<string, unknown> | undefined;
-  return row ? mapTournamentGameView(row) : undefined;
+  matchId: string,
+  games: readonly TournamentGameInput[]
+) {
+  db.prepare('DELETE FROM tournament_games WHERE match_id = ?').run(matchId);
+  if (games.length === 0) return;
+
+  const insert = db.prepare(`
+    INSERT INTO tournament_games (
+      match_id, game_number, seed, outcome, turns, end_reason,
+      p1_bank_seconds, p2_bank_seconds, p1_mean_turn_millis, p2_mean_turn_millis,
+      p1_peak_ram, p2_peak_ram
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (let i = 0; i < games.length; i++) {
+    const g = games[i];
+    const gameNumber = g.gameNumber ?? i + 1;
+    insert.run(
+      matchId,
+      gameNumber,
+      g.seed,
+      g.outcome ?? null,
+      g.turns ?? null,
+      g.endReason ?? null,
+      g.p1?.bankSeconds ?? null,
+      g.p2?.bankSeconds ?? null,
+      g.p1?.meanTurnMillis ?? null,
+      g.p2?.meanTurnMillis ?? null,
+      g.p1?.peakRam ?? null,
+      g.p2?.peakRam ?? null
+    );
+  }
 }
 
-export function recordCompletedTournamentGame(
+export function getTournamentMatchGames(
   db: DatabaseSync,
-  inTransaction: TransactionRunner,
-  game: CompletedTournamentGamePayload
-): {duplicate: boolean; game: TournamentGameView} {
-  return inTransaction(() => {
-    const tournament = getTournament(db, game.tournamentId);
-    if (!tournament) {
-      throw Object.assign(
-        new Error(`Unknown tournament "${game.tournamentId}".`),
-        {status: 404}
-      );
-    }
-    const existing = getTournamentGame(db, game.id);
-    if (existing?.status === 'completed') {
-      return {duplicate: true, game: existing};
-    }
-
-    const entrantRows = db.prepare(`
-      SELECT version_id
-      FROM tournament_entrants
-      WHERE tournament_id = ? AND version_id IN (?, ?)
-    `).all(game.tournamentId, game.p1VersionId, game.p2VersionId) as Array<{version_id: number}>;
-    if (game.p1VersionId === game.p2VersionId || entrantRows.length !== 2) {
-      throw Object.assign(
-        new Error(
-          'Both p1VersionId and p2VersionId must be distinct registered tournament entrants.'
-        ),
-        {status: 400}
-      );
-    }
-
-    upsertTournamentGame(db, {
-      id: game.id,
-      tournamentId: game.tournamentId,
-      stage: game.stage ?? existing?.stage ?? 'Round Robin',
-      cycle: game.cycle,
-      matchupGame: game.matchupGame,
-      p1VersionId: game.p1VersionId,
-      p2VersionId: game.p2VersionId,
-      seed: game.seed,
-      status: 'completed',
-      preemptions: game.preemptions ?? existing?.preemptions ?? 0,
-      p1Team: game.p1Team ?? existing?.p1Team,
-      p2Team: game.p2Team ?? existing?.p2Team,
-      outcome: game.outcome,
-      turns: game.turns,
-      endReason: game.endReason,
-      p1BankSeconds: game.p1BankSeconds,
-      p2BankSeconds: game.p2BankSeconds,
-      p1MeanTurnMillis: game.p1MeanTurnMillis ?? existing?.p1MeanTurnMillis,
-      p2MeanTurnMillis: game.p2MeanTurnMillis ?? existing?.p2MeanTurnMillis,
-      p1PeakRam: game.p1PeakRam ?? existing?.p1PeakRam,
-      p2PeakRam: game.p2PeakRam ?? existing?.p2PeakRam,
-      completedAt: game.completedAt,
-    });
-
-    recomputeTournamentStandings(db, game.tournamentId, tournament.status === 'completed');
-    return {duplicate: false, game: getTournamentGame(db, game.id)!};
-  });
+  matchId: string
+): TournamentGameRow[] {
+  const rows = db
+    .prepare(
+      `
+      SELECT *
+      FROM tournament_games
+      WHERE match_id = ?
+      ORDER BY game_number ASC
+      `
+    )
+    .all(matchId) as Array<Record<string, unknown>>;
+  return rows.map(mapTournamentGameRow);
 }
 
-export function getTournamentGames(
+export function getTournamentMatchGamesByTournament(
   db: DatabaseSync,
-  tournamentId: string,
-  limit = 50
-): TournamentGameView[] {
-  const rows = db.prepare(`
-    SELECT
-      tg.*,
-      a1.slug AS p1_slug,
-      a1.name AS p1_name,
-      v1.version AS p1_version,
-      a2.slug AS p2_slug,
-      a2.name AS p2_name,
-      v2.version AS p2_version
-    FROM tournament_games tg
-    JOIN agent_versions v1 ON v1.id = tg.p1_version_id
-    JOIN agents a1 ON a1.id = v1.agent_id
-    JOIN agent_versions v2 ON v2.id = tg.p2_version_id
-    JOIN agents a2 ON a2.id = v2.agent_id
-    WHERE tg.tournament_id = ?
-      AND tg.status = 'completed'
-    ORDER BY tg.completed_at DESC, tg.id DESC
-    LIMIT ?
-  `).all(tournamentId, limit) as Array<Record<string, unknown>>;
+  tournamentId: string
+): Map<string, TournamentGameRow[]> {
+  const rows = db
+    .prepare(
+      `
+      SELECT g.*
+      FROM tournament_games g
+      JOIN tournament_matches m ON m.id = g.match_id
+      WHERE m.tournament_id = ?
+      ORDER BY g.match_id ASC, g.game_number ASC
+      `
+    )
+    .all(tournamentId) as Array<Record<string, unknown>>;
 
-  return rows.map(mapTournamentGameView);
-}
-
-export function getTournamentCrosstable(
-  db: DatabaseSync,
-  tournamentId: string,
-  stage: TournamentGameStage = 'Round Robin'
-): TournamentPairRecord[] {
-  const rows = db.prepare(`
-    SELECT
-      MIN(p1_version_id, p2_version_id) AS low_version_id,
-      MAX(p1_version_id, p2_version_id) AS high_version_id,
-      SUM(CASE
-        WHEN p1_version_id < p2_version_id AND outcome = 'W' THEN 1
-        WHEN p2_version_id < p1_version_id AND outcome = 'L' THEN 1
-        ELSE 0
-      END) AS low_wins,
-      SUM(CASE
-        WHEN p1_version_id < p2_version_id AND outcome = 'L' THEN 1
-        WHEN p2_version_id < p1_version_id AND outcome = 'W' THEN 1
-        ELSE 0
-      END) AS high_wins,
-      SUM(CASE WHEN outcome = 'T' THEN 1 ELSE 0 END) AS ties
-    FROM tournament_games
-    WHERE tournament_id = ?
-      AND stage = ?
-      AND status = 'completed'
-    GROUP BY MIN(p1_version_id, p2_version_id), MAX(p1_version_id, p2_version_id)
-  `).all(tournamentId, stage) as Array<Record<string, unknown>>;
-
-  return rows.map(r => ({
-    lowVersionId: r.low_version_id as number,
-    highVersionId: r.high_version_id as number,
-    lowWins: r.low_wins as number,
-    highWins: r.high_wins as number,
-    ties: r.ties as number,
-  }));
+  const byMatch = new Map<string, TournamentGameRow[]>();
+  for (const row of rows) {
+    const mapped = mapTournamentGameRow(row);
+    const list = byMatch.get(mapped.matchId);
+    if (list) {
+      list.push(mapped);
+    } else {
+      byMatch.set(mapped.matchId, [mapped]);
+    }
+  }
+  return byMatch;
 }

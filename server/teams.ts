@@ -64,7 +64,15 @@ export function resolveArenaFormatId(format: string, customRules?: readonly stri
   const inlineRules = inlineRaw
     ? inlineRaw.split(',').map(r => r.trim()).filter(Boolean)
     : [];
-  const rules = [...inlineRules, ...(customRules ?? []).map(r => r.trim()).filter(Boolean)];
+  const rules = [...inlineRules, ...(customRules ?? []).map(r => r.trim()).filter(Boolean)]
+    .map(r => {
+      const id = toID(r);
+      if (!r.startsWith('!')) {
+        if (id === 'openteamsheets') return 'Force Open Team Sheets';
+        if (id === 'bestof3' || id === 'bo3') return 'Best of = 3';
+      }
+      return r;
+    });
 
   const wantsOts = rules.some(r => {
     const id = toID(r);
@@ -72,10 +80,7 @@ export function resolveArenaFormatId(format: string, customRules?: readonly stri
   });
 
   if (wantsOts) {
-    const mapped = rules.map(
-      r => toID(r) === 'openteamsheets' && !r.startsWith('!') ? 'Force Open Team Sheets' : r
-    );
-    return `${baseFormat}@@@${mapped.join(',')}`;
+    return `${baseFormat}@@@${rules.join(',')}`;
   }
 
   const resolved = sim.Dex.formats.get(baseFormat);

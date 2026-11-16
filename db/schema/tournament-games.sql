@@ -1,58 +1,17 @@
--- Individual scheduled, live, and completed tournament games with public team sheets and replay metadata.
---
--- Features: Tournament game log table, 6-Pokémon party minisprite rendering, embedded Pokémon
---   Showdown replay viewer links, and live/completed crosstable aggregation on `/arena/tournaments/<id>`.
--- Relationships: Joins `tournaments` and the two competing `agent_versions` (`p1_version_id`,
---   `p2_version_id`).
--- Why standalone: Tournament games are single-battle scheduled units (with Round Robin macro-cycles,
---   spot-VM preemption tracking, public packed team sheets, and public `.log` replay files on disk),
---   completely distinct from anonymized 2-game blind-pair ladder `matches`.
+-- Individual games within a tournament match (1 row for Bo1, up to N rows for BoN).
 CREATE TABLE IF NOT EXISTS tournament_games (
-  -- Unique game identifier, matching the public replay filename `<id>.log` when completed.
-  id TEXT PRIMARY KEY,
-  -- Parent tournament event.
-  tournament_id TEXT NOT NULL REFERENCES tournaments(id),
-  -- Competition phase: 'Round Robin' or tournament 'Superfinal'.
-  stage TEXT NOT NULL DEFAULT 'Round Robin' CHECK (stage IN ('Round Robin', 'Superfinal')),
-  -- 1-based Round Robin macro-cycle index (ensures balanced progress across all pairs).
-  cycle INTEGER NOT NULL,
-  -- 1-based game number within this specific head-to-head matchup.
-  matchup_game INTEGER NOT NULL,
-  -- Agent version occupying Player 1 (`outcome` is recorded from `p1_version_id`'s perspective).
-  p1_version_id INTEGER NOT NULL REFERENCES agent_versions(id),
-  -- Agent version occupying Player 2.
-  p2_version_id INTEGER NOT NULL REFERENCES agent_versions(id),
-  -- Deterministic @pkmn/sim PRNG seed for this game.
+  match_id TEXT NOT NULL REFERENCES tournament_matches(id) ON DELETE CASCADE,
+  game_number INTEGER NOT NULL CHECK (game_number >= 1),
   seed TEXT NOT NULL,
-  -- Execution state: 'pending', 'running', or 'completed'.
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'running', 'completed')),
-  -- Number of cloud spot-VM preemptions encountered before this game completed (retained for
-  -- future tournament infra telemetry & `/arena/tournaments/<id>` diagnostics; do not delete).
-  preemptions INTEGER NOT NULL DEFAULT 0,
-  -- Packed Showdown teams brought by P1 and P2 (publicly rendered as 6-Pokémon minisprites once done).
-  p1_team TEXT,
-  p2_team TEXT,
-  -- Outcome from `p1_version_id`'s perspective ('W', 'L', or 'T'), or NULL until completed.
+  -- Outcome from P1's perspective ('W' = P1 won, 'L' = P2 won, 'T' = tie).
   outcome TEXT CHECK (outcome IN ('W', 'L', 'T')),
-  -- Total battle turns elapsed, or NULL until completed.
   turns INTEGER,
-  -- Game termination reason ('win', 'tie', 'timeout', 'crash', 'oom', etc.), or NULL until completed.
   end_reason TEXT,
-  -- Remaining clock bank (in seconds) for P1 and P2 at game end, or NULL until completed.
   p1_bank_seconds REAL,
   p2_bank_seconds REAL,
-  -- Mean decision latency per turn (in milliseconds) for P1 and P2, or NULL until completed.
   p1_mean_turn_millis REAL,
   p2_mean_turn_millis REAL,
-  -- Peak RAM footprint (in MiB) for P1 and P2 during this game, or NULL until completed.
   p1_peak_ram INTEGER,
   p2_peak_ram INTEGER,
-  -- Unix timestamp (seconds) when the game finished, or NULL until completed.
-  completed_at INTEGER
+  PRIMARY KEY (match_id, game_number)
 );
-
-CREATE INDEX IF NOT EXISTS idx_tournament_games_tournament_status
-  ON tournament_games(tournament_id, status, completed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tournament_games_p1_version ON tournament_games(p1_version_id);
-CREATE INDEX IF NOT EXISTS idx_tournament_games_p2_version ON tournament_games(p2_version_id);

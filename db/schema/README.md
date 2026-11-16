@@ -12,7 +12,7 @@ The **pkmn.ai** Arena server persists all account, ladder, rating, Discord, and 
    - Post-match rating solves and static HTML/JSON generation read only those compact summary tables ($M$ entries and $\le \binom{M}{2}$ pairs), never scanning the unbounded `matches` ledger.
 3. **Anti-Scouting Privacy Boundary**:
    - Ladder tables intentionally store **no battle logs, replays, or raw team species** on public-facing rows: [`agent_ladder_teams`](agent-ladder-teams.sql) keeps submitted VGC team pools internal, and [`matches`](matches.sql) records only anonymized provenance labels (e.g. `'0 ERROR Team #4'`).
-   - By contrast, [`tournament_games`](tournament-games.sql) stores public `p1_team` / `p2_team` packed sheets and links to public `.log` replays.
+   - By contrast, [`tournament_matches`](tournament-matches.sql) stores public `p1_team` / `p2_team` packed sheets and [`tournament_games`](tournament-games.sql) stores individual game outcomes, telemetry, and `.log` replay identifiers.
 4. **Explicit Units & Casing**:
    - Time durations use `_millis` (milliseconds) or `_seconds` (seconds); timestamps (`*_at`) are Unix epoch seconds (`INTEGER`); memory footprints (`*ram`) are MiB.
    - `db/*.ts` translates SQL `snake_case` columns and `NULL` values at the database boundary into terse `camelCase` TypeScript objects using `undefined`.
@@ -42,10 +42,11 @@ erDiagram
     agent_versions ||--o{ rating_snapshots : "daily snapshot"
     agent_versions ||--o{ agent_ladder_stats : "max_elo_version_id"
     agent_versions ||--o{ tournament_entrants : "frozen version"
-    agent_versions ||--o{ tournament_games : "plays p1 / p2"
+    agent_versions ||--o{ tournament_matches : "plays p1 / p2"
 
     tournaments ||--o{ tournament_entrants : "locks roster"
-    tournaments ||--o{ tournament_games : "schedules games"
+    tournaments ||--o{ tournament_matches : "schedules matches"
+    tournament_matches ||--o{ tournament_games : "contains games"
 ```
 
 ## Table Directory
@@ -66,4 +67,5 @@ erDiagram
 | `rating_snapshots` | [`rating-snapshots.sql`](rating-snapshots.sql) | Daily UTC Elo/SE/LCB/GXE/rank snapshots powering ladder and profile rating charts. |
 | `tournaments` | [`tournaments.sql`](tournaments.sql) | Cloud-GPU tournament configurations, hardware specs, and schedule lifecycle. |
 | `tournament_entrants` | [`tournament-entrants.sql`](tournament-entrants.sql) | Locked tournament rosters (1 version per agent), match points, and Sonneborn-Berger tiebreakers. |
-| `tournament_games` | [`tournament-games.sql`](tournament-games.sql) | Individual Round Robin / Superfinal games, public packed teams, and `.log` replay identifiers. |
+| `tournament_matches` | [`tournament-matches.sql`](tournament-matches.sql) | Scheduled/completed Round Robin and Superfinal matches, public packed teams, and series outcomes. |
+| `tournament_games` | [`tournament-games.sql`](tournament-games.sql) | Individual games within a tournament match (1 for Bo1, up to $N$ for Bo$N$), per-game telemetry, and `.log` replay identifiers. |

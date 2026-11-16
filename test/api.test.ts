@@ -999,14 +999,20 @@ describe('Arena SSE streams', () => {
           stage: 'Round Robin',
           cycle: 1,
           matchupGame: 1,
-          p1VersionId: vZeroId,
-          p2VersionId: vFpId,
-          seed: '1,2,3,4',
           outcome: 'W',
-          turns: 22,
-          endReason: 'normal',
-          p1BankSeconds: 140,
-          p2BankSeconds: 120,
+          p1: {versionId: vZeroId},
+          p2: {versionId: vFpId},
+          games: [
+            {
+              gameNumber: 1,
+              seed: '1,2,3,4',
+              outcome: 'W',
+              turns: 22,
+              endReason: 'normal',
+              p1: {bankSeconds: 140},
+              p2: {bankSeconds: 120},
+            },
+          ],
           completedAt: 1_760_000_520,
         },
       });
@@ -1032,14 +1038,20 @@ describe('Arena SSE streams', () => {
           stage: 'Round Robin',
           cycle: 1,
           matchupGame: 1,
-          p1VersionId: vZeroId,
-          p2VersionId: vFpId,
-          seed: '1,2,3,4',
           outcome: 'W',
-          turns: 22,
-          endReason: 'normal',
-          p1BankSeconds: 140,
-          p2BankSeconds: 120,
+          p1: {versionId: vZeroId},
+          p2: {versionId: vFpId},
+          games: [
+            {
+              gameNumber: 1,
+              seed: '1,2,3,4',
+              outcome: 'W',
+              turns: 22,
+              endReason: 'normal',
+              p1: {bankSeconds: 140},
+              p2: {bankSeconds: 120},
+            },
+          ],
           completedAt: 1_760_000_520,
         },
       });
@@ -1052,19 +1064,143 @@ describe('Arena SSE streams', () => {
           stage: 'Round Robin',
           cycle: 1,
           matchupGame: 2,
-          p1VersionId: vFpId,
-          p2VersionId: vMetaId,
-          seed: '5,6,7,8',
           outcome: 'W',
-          turns: 30,
-          endReason: 'normal',
-          p1BankSeconds: 130,
-          p2BankSeconds: 110,
+          p1: {versionId: vFpId},
+          p2: {versionId: vMetaId},
+          games: [
+            {
+              gameNumber: 1,
+              seed: '5,6,7,8',
+              outcome: 'W',
+              turns: 30,
+              endReason: 'normal',
+              p1: {bankSeconds: 130},
+              p2: {bankSeconds: 110},
+            },
+          ],
           completedAt: 1_760_000_600,
         },
       });
       expect(db.getTournament('2')?.status).toBe('completed');
       expect(db.getTournamentEntrants('2')[0].finalRank).toBe(1);
+    } finally {
+      await tourStream.close();
+    }
+  });
+
+  test('writes per-game replay logs for Best-of-N tournament matches', async () => {
+    db.upsertTournament({
+      id: '2',
+      name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
+      format: 'gen9championsvgc2026regmc',
+      rulesJson: JSON.stringify(['Open Team Sheets', 'Best of = 3']),
+      gamesPerMatchup: 10,
+      parallelTables: 2,
+      hardware: 'GCP L4 Spot',
+      status: 'running',
+      startsAt: 1_760_000_100,
+    });
+    const tourStream = await openPersistentSse(srv.baseUrl, '/api/tournaments/2/stream');
+    try {
+      await tourStream.waitForEvent('snapshot');
+      await client.sendTournamentBroadcast('2', {
+        table: 1,
+        mode: 'load',
+        gameId: 't2-bo3-m1',
+        stage: 'Round Robin',
+        cycle: 1,
+        matchupGame: 1,
+        bestOf: 3,
+        game: 2,
+        summaries: [{winnerSlot: 'p1', turns: 8}],
+        p1: {
+          slug: '0-error',
+          name: '0 ERROR',
+          version: '1.0.0',
+          bankSeconds: 150,
+          thinking: true,
+          incrementSeconds: 15,
+        },
+        p2: {
+          slug: 'foul-play',
+          name: 'Foul Play',
+          version: '1.0.0',
+          bankSeconds: 150,
+          thinking: false,
+          incrementSeconds: 15,
+        },
+        lines: ['|gametype|doubles', '|player|p1|0 ERROR|1', '|player|p2|Foul Play|2', '|turn|1'],
+      });
+      const loadEvt = await tourStream.waitForEvent('table-load');
+      const loadedTable = loadEvt.data.table as {
+        seriesLeftHtml?: string;
+        seriesRightHtml?: string;
+      };
+      expect(loadedTable.seriesLeftHtml).toContain('0 ERROR');
+      expect(loadedTable.seriesRightHtml).toContain('Match 1');
+      expect(loadedTable.seriesRightHtml).toContain('Game 2 / 3');
+      expect(loadedTable.seriesRightHtml).toContain('G1');
+      expect(loadedTable.seriesRightHtml).toContain('0 ERROR (8t)');
+
+      const gc = await client.completeTournamentGame('2', {
+        table: 1,
+        logs: [
+          '|gametype|doubles\n|win|0 ERROR\n',
+          '|gametype|doubles\n|win|Foul Play\n',
+          '|gametype|doubles\n|win|0 ERROR\n',
+        ],
+        game: {
+          id: 't2-bo3-m1',
+          stage: 'Round Robin',
+          cycle: 1,
+          matchupGame: 1,
+          outcome: 'W',
+          p1: {versionId: vZeroId},
+          p2: {versionId: vFpId},
+          games: [
+            {
+              gameNumber: 1,
+              seed: '1,2,3,4',
+              outcome: 'W',
+              turns: 8,
+              endReason: 'normal',
+              p1: {bankSeconds: 140},
+              p2: {bankSeconds: 125},
+            },
+            {
+              gameNumber: 2,
+              seed: '5,6,7,8',
+              outcome: 'L',
+              turns: 9,
+              endReason: 'normal',
+              p1: {bankSeconds: 130},
+              p2: {bankSeconds: 136},
+            },
+            {
+              gameNumber: 3,
+              seed: '9,10,11,12',
+              outcome: 'W',
+              turns: 8,
+              endReason: 'normal',
+              p1: {bankSeconds: 132},
+              p2: {bankSeconds: 118},
+            },
+          ],
+          completedAt: 1_760_000_540,
+        },
+      });
+      expect(gc.duplicate).toBe(false);
+      expect(gc.gameLogHrefs).toEqual([
+        '/arena/tournaments/2/t2-bo3-m1-g1.log',
+        '/arena/tournaments/2/t2-bo3-m1-g2.log',
+        '/arena/tournaments/2/t2-bo3-m1-g3.log',
+      ]);
+      expect(fs.existsSync(path.join(tmpDir, 'arena', 'tournaments', '2', 't2-bo3-m1-g1.log')))
+        .toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, 'arena', 'tournaments', '2', 't2-bo3-m1-g2.log')))
+        .toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, 'arena', 'tournaments', '2', 't2-bo3-m1-g3.log')))
+        .toBe(true);
     } finally {
       await tourStream.close();
     }

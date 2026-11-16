@@ -149,8 +149,9 @@ The 7 sections cover:
    live state, `Stale / Offline` heartbeat state, and empty battle history.
 5. **Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal
    `SF` badges and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay
-   viewer, live Tournament `#2` multi-table broadcast (`Table 1`, switched to `Table 2`,
-   `Table 2 (idle)` with `● Watch T1` pill, and inline expanded completed game row while `#live`
+   viewer, live Best-of-3 Tournament `#2` multi-table broadcast (`Table 1`, switched to `Table 2`,
+   `Table 2 (idle)` with `● Watch T1` pill, and inline expanded completed Bo3 match row with
+   multi-game telemetry and `Game 1` / `Game 2` / `Game 3` replay switcher while `#live`
    continues broadcasting), scheduled Tournament `#3` with registered entrants, and scheduled
    tournament with 0 entrants.
 6. **Account & Submissions (`account`):** Unregistered GitHub user (`403`), disabled project (`403`),

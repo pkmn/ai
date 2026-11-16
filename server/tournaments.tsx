@@ -728,9 +728,14 @@ function renderTournamentStandingsNode(opts: {
     );
   }
 
+  const isMultiGame = tournament.bestOf > 1;
+  const unitPlural = isMultiGame ? 'matches' : 'games';
   const maxRrGames = Math.max(1, (entrants.length - 1) * tournament.gamesPerMatchup);
   const ptsTitle =
-    `Round-Robin points out of ${maxRrGames} games (+1.0 per win, +0.5 per tie)`;
+    `Round-Robin points out of ${maxRrGames} ${unitPlural} (+1.0 per win, +0.5 per tie)`;
+  const wltTitle = isMultiGame
+    ? `Best-of-${tournament.bestOf} match Wins – Losses – Ties`
+    : 'Standalone individual BYOT game Wins – Losses – Ties';
 
   return (
     <div id='standings-body'>
@@ -741,7 +746,7 @@ function renderTournamentStandingsNode(opts: {
               <th>#</th>
               <th>Agent</th>
               <th className='num' title='Tournament MAP Elo ± 95% CI'>Elo</th>
-              <th className='num' title='Standalone individual BYOT game Wins – Losses – Ties'>
+              <th className='num' title={wltTitle}>
                 W–L–T
               </th>
               <th className='num' title={ptsTitle}>Points</th>
@@ -813,6 +818,7 @@ function renderTournamentStandingsNode(opts: {
 }
 
 function renderTournamentCrosstableNode(opts: {
+  bestOf?: number;
   entrants: db.TournamentEntrantView[];
   pairs: db.TournamentPairRecord[];
   liveTables: BroadcastTable[];
@@ -820,13 +826,14 @@ function renderTournamentCrosstableNode(opts: {
   projectMeta: ReadonlyMap<string, render.ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
 }): {node: Html; isEmpty: boolean} {
-  const {entrants, pairs, liveTables, publicDir, projectMeta, profileSlugs} = opts;
+  const {bestOf, entrants, pairs, liveTables, publicDir, projectMeta, profileSlugs} = opts;
+  const unitPlural = (bestOf ?? 1) > 1 ? 'matches' : 'games';
   const rrLiveTables = liveTables.filter(tb => tb.stage !== 'Superfinal');
   if (entrants.length < 2 || (pairs.length === 0 && rrLiveTables.length === 0)) {
     return {
       node: (
         <div id='crosstable-body'>
-          <p className='empty-state muted'>No round-robin games completed yet.</p>
+          <p className='empty-state muted'>No round-robin {unitPlural} completed yet.</p>
         </div>
       ),
       isEmpty: true,
@@ -928,20 +935,108 @@ function renderTournamentCrosstableNode(opts: {
   };
 }
 
-function renderTournamentGameDetailNode(g: db.TournamentGameView, logUrl?: string): Html {
+function renderTournamentResultNode(
+  g: db.TournamentGameView,
+  bestOf = 1
+): {
+  p1Won: boolean;
+  p2Won: boolean;
+  node: Child;
+} {
+  const p1Won = g.outcome === 'W';
+  const p2Won = g.outcome === 'L';
+  if (bestOf > 1 || g.games.length > 1) {
+    let s1 = 0;
+    let s2 = 0;
+    for (const gm of g.games) {
+      if (gm.outcome === 'W') {
+        s1 += 1;
+      } else if (gm.outcome === 'L') {
+        s2 += 1;
+      } else if (gm.outcome === 'T') {
+        s1 += 0.5;
+        s2 += 0.5;
+      }
+    }
+    const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+    const s1Str = fmt(s1);
+    const s2Str = fmt(s2);
+    const node = p1Won
+      ? <><strong>{s1Str}</strong>–{s2Str}</>
+      : p2Won
+        ? <>{s1Str}–<strong>{s2Str}</strong></>
+        : `${s1Str}–${s2Str}`;
+    return {p1Won, p2Won, node};
+  }
+  const node = p1Won
+    ? <><strong>1</strong>–0</>
+    : p2Won
+      ? <>0–<strong>1</strong></>
+      : '½–½';
+  return {p1Won, p2Won, node};
+}
+
+function renderSeriesGameCardNode(gm: db.TournamentGameRow, showGameNum: boolean): Html {
+  const end = render.formatEndReasonNode(gm.endReason ?? 'normal');
+  return (
+    <div className='battle-detail-card'>
+      <div className='battle-detail-title'>
+        <span>{showGameNum ? `Game ${gm.gameNumber}` : 'Game'}</span>
+        <span className='battle-detail-sub'>
+          {showGameNum ? <>{render.formatGameOutcomeNode(gm.outcome ?? 'T')} · </> : undefined}
+          <tt>{gm.turns ?? 0} turns</tt>
+          {end.show ? <> · {end.node}</> : undefined}
+        </span>
+      </div>
+      <div className='battle-detail-line'>
+        <span><tt>P1</tt></span>
+        {render.formatGamePlayerTelemetryNode(
+          gm.p1.meanTurnMillis ?? 0,
+          gm.p1.bankSeconds ?? 0,
+          gm.p1.peakRam ?? 0,
+          49152
+        )}
+      </div>
+      <div className='battle-detail-line'>
+        <span><tt>P2</tt></span>
+        {render.formatGamePlayerTelemetryNode(
+          gm.p2.meanTurnMillis ?? 0,
+          gm.p2.bankSeconds ?? 0,
+          gm.p2.peakRam ?? 0,
+          49152
+        )}
+      </div>
+    </div>
+  );
+}
+
+function renderTournamentGameDetailNode(
+  g: db.TournamentGameView,
+  bestOf: number,
+  gameLogUrls: ReadonlyArray<string | undefined>
+): Html {
   const completedAt = g.completedAt ?? 0;
   const completedIso = new Date(completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
   const completedUtc = `${completedIso} UTC`;
-  const end = render.formatEndReasonNode(g.endReason ?? 'normal');
+  const isMulti = bestOf > 1 || g.games.length > 1;
+  const hasReplay = gameLogUrls.some(Boolean);
+  const logAttrs: Record<string, string | undefined> = {};
+  if (hasReplay) {
+    gameLogUrls.forEach((url, idx) => {
+      if (url) logAttrs[`data-g${idx + 1}-log`] = url;
+    });
+  }
 
   return (
     <div
       className='battle-detail'
-      data-match-id={logUrl ? g.id : undefined}
-      data-p1-name={logUrl ? g.p1Name : undefined}
-      data-p2-name={logUrl ? g.p2Name : undefined}
-      data-g1-log={logUrl}
-      data-single-game={logUrl ? '1' : undefined}
+      data-match-id={hasReplay ? g.id : undefined}
+      data-p1-name={hasReplay ? g.p1.name : undefined}
+      data-p2-name={hasReplay ? g.p2.name : undefined}
+      {...logAttrs}
+      data-total-games={hasReplay && isMulti ? String(g.games.length) : undefined}
+      data-same-seats={hasReplay && isMulti ? '1' : undefined}
+      data-single-game={hasReplay && !isMulti ? '1' : undefined}
     >
       <div className='battle-detail-meta'>
         <span className='muted'>{completedUtc}</span>
@@ -951,36 +1046,22 @@ function renderTournamentGameDetailNode(g: db.TournamentGameView, logUrl?: strin
               <span className='muted'>Preemptions:</span> <code>{g.preemptions}</code> ·{' '}
             </>
           ) : undefined}
-          <span className='muted'>Seed:</span> <code>{g.seed}</code>
+          <span className='muted'>{isMulti ? 'Seeds:' : 'Seed:'}</span>{' '}
+          {g.games.map((gm, idx) => (
+            <>
+              {idx > 0 ? ' · ' : undefined}
+              <code>{gm.seed}</code>
+            </>
+          ))}
         </span>
       </div>
-      <div className='battle-detail-card'>
-        <div className='battle-detail-title'>
-          <span>Game</span>
-          <span className='battle-detail-sub'>
-            <tt>{g.turns ?? 0} turns</tt>
-            {end.show ? <> · {end.node}</> : undefined}
-          </span>
+      {isMulti ? (
+        <div className={g.games.length >= 3 ? 'battle-detail-grid bo3-grid' : 'battle-detail-grid'}>
+          {g.games.map(gm => renderSeriesGameCardNode(gm, true))}
         </div>
-        <div className='battle-detail-line'>
-          <span><tt>P1</tt></span>
-          {render.formatGamePlayerTelemetryNode(
-            g.p1MeanTurnMillis ?? 0,
-            g.p1BankSeconds ?? 0,
-            g.p1PeakRam ?? 0,
-            49152
-          )}
-        </div>
-        <div className='battle-detail-line'>
-          <span><tt>P2</tt></span>
-          {render.formatGamePlayerTelemetryNode(
-            g.p2MeanTurnMillis ?? 0,
-            g.p2BankSeconds ?? 0,
-            g.p2PeakRam ?? 0,
-            49152
-          )}
-        </div>
-      </div>
+      ) : (
+        g.games[0] ? renderSeriesGameCardNode(g.games[0], false) : undefined
+      )}
     </div>
   );
 }
@@ -1007,7 +1088,11 @@ function renderTournamentGamesNode(opts: {
     logFiles,
     nowSec,
   } = opts;
+  const isMultiGame = tournament.bestOf > 1;
+  const unitSingular = isMultiGame ? 'match' : 'game';
+  const unitPlural = isMultiGame ? 'matches' : 'games';
   const resolvedLogs = logFiles ?? arena.listTournamentLogFiles(publicDir, tournament.id);
+  const tourPrefix = `/arena/tournaments/${encodeURIComponent(tournament.id)}/`;
 
   const liveRows = liveTables.map((tb, idx) => {
     const p1 = tb.p1!;
@@ -1052,31 +1137,30 @@ function renderTournamentGamesNode(opts: {
     const codePrefix = g.stage === 'Superfinal' ? 'SF' : 'RR';
     const codeNum = g.stage === 'Superfinal' ? g.matchupGame : g.cycle;
     const gameCode = `${codePrefix}${codeNum}`;
-    const logRel = `${g.id}.log`;
-    const hasLog = resolvedLogs.has(logRel);
-    const logUrl = `/arena/tournaments/${encodeURIComponent(tournament.id)}/` +
-      encodeURIComponent(logRel);
+    const singleLogRel = `${g.id}.log`;
+    const singleLogUrl = resolvedLogs.has(singleLogRel)
+      ? `${tourPrefix}${encodeURIComponent(singleLogRel)}`
+      : undefined;
+    const gameLogUrls = g.games.map(gm => {
+      const gRel = `${g.id}-g${gm.gameNumber}.log`;
+      if (resolvedLogs.has(gRel)) return `${tourPrefix}${encodeURIComponent(gRel)}`;
+      return gm.gameNumber === 1 && g.games.length === 1 ? singleLogUrl : undefined;
+    });
 
-    const p1Won = g.outcome === 'W';
-    const p2Won = g.outcome === 'L';
-    const resNode = p1Won
-      ? <><strong>1</strong>–0</>
-      : p2Won
-        ? <>0–<strong>1</strong></>
-        : '½–½';
+    const {p1Won, p2Won, node: resNode} = renderTournamentResultNode(g, tournament.bestOf);
 
     const p1Href = render.resolveAgentHref(
       publicDir,
       projectMeta,
-      g.p1Slug,
-      g.p1Name,
+      g.p1.slug,
+      g.p1.name,
       profileSlugs
     );
     const p2Href = render.resolveAgentHref(
       publicDir,
       projectMeta,
-      g.p2Slug,
-      g.p2Name,
+      g.p2.slug,
+      g.p2.name,
       profileSlugs
     );
     const completedAt = g.completedAt ?? 0;
@@ -1100,16 +1184,16 @@ function renderTournamentGamesNode(opts: {
             <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
             <code title={g.id}>{gameCode}</code>
           </td>
-          <td>{raw(render.formatAgentLink(g.p1Name, p1Href, p1Won))}</td>
-          <td>{renderPartyMinisprites(g.p1Team) ?? '\u00a0'}</td>
-          <td>{raw(render.formatAgentLink(g.p2Name, p2Href, p2Won))}</td>
-          <td>{renderPartyMinisprites(g.p2Team) ?? '\u00a0'}</td>
+          <td>{raw(render.formatAgentLink(g.p1.name, p1Href, p1Won))}</td>
+          <td>{renderPartyMinisprites(g.p1.team) ?? '\u00a0'}</td>
+          <td>{raw(render.formatAgentLink(g.p2.name, p2Href, p2Won))}</td>
+          <td>{renderPartyMinisprites(g.p2.team) ?? '\u00a0'}</td>
           <td className='center'>{resNode}</td>
           <td className='num muted' title={completedUtc} data-ts={g.completedAt}>{rel}</td>
         </tr>
         <tr className='battle-detail-row hide' data-detail-for={g.id}>
           <td colSpan={7}>
-            {renderTournamentGameDetailNode(g, hasLog ? logUrl : undefined)}
+            {renderTournamentGameDetailNode(g, tournament.bestOf, gameLogUrls)}
           </td>
         </tr>
       </>
@@ -1127,7 +1211,7 @@ function renderTournamentGamesNode(opts: {
         <table>
           <thead>
             <tr>
-              <th>Game</th>
+              <th>{isMultiGame ? 'Match' : 'Game'}</th>
               <th>Player 1</th>
               <th>{'\u00a0'}</th>
               <th>Player 2</th>
@@ -1139,7 +1223,9 @@ function renderTournamentGamesNode(opts: {
           <tbody id='games-tbody'>
             {liveRows.length === 0 && completedRows.length === 0 ? (
               <tr className='empty-row'>
-                <td colSpan={7} className='center muted'>No completed games yet.</td>
+                <td colSpan={7} className='center muted'>
+                  No completed {unitPlural} yet.
+                </td>
               </tr>
             ) : (
               [...liveRows, ...completedRows]
@@ -1149,10 +1235,10 @@ function renderTournamentGamesNode(opts: {
       </div>
       <TablePager
         id='games-pager'
-        label='Games pagination'
+        label={isMultiGame ? 'Matches pagination' : 'Games pagination'}
         total={totalGameRows}
-        singular='game'
-        plural='games'
+        singular={unitSingular}
+        plural={unitPlural}
         prevLabel={'\u2190 Newer'}
         nextLabel={'Older \u2192'}
       />
@@ -1160,13 +1246,13 @@ function renderTournamentGamesNode(opts: {
         {archive ? (
           <>
             Archive: <a href={archive.href}><code>{archive.name}</code></a> (
-            <span id='games-count'>{countStr}</span> games) ·{' '}
+            <span id='games-count'>{countStr}</span> {unitPlural}) ·{' '}
             <a href={jsonHref}><code>index.json</code></a>
           </>
         ) : (
           <>
             Data: <a href={jsonHref}><code>index.json</code></a> (
-            <span id='games-count'>{countStr}</span> games
+            <span id='games-count'>{countStr}</span> {unitPlural}
             {tournament.status !== 'completed' && '; replay archive published upon completion'}
             )
           </>
@@ -1437,6 +1523,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     const pageInit = ${render.safeInlineJson(pageInit)} || {};
 
     const tournamentId = String(pageInit.tournamentId || '');
+    const bestOf = Math.max(1, Number(pageInit.bestOf) || 1);
+    const isMultiGame = bestOf > 1;
+    const unitSingular = isMultiGame ? 'match' : 'game';
+    const unitPlural = isMultiGame ? 'matches' : 'games';
     const gamesPerMatchup = Number(pageInit.gamesPerMatchup) || 1;
     const agentLinks = pageInit.agentLinks || {};
     let status = pageInit.status || 'scheduled';
@@ -1767,7 +1857,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }).join('');
 
       const ptsTitle = 'Round-Robin points out of ' + maxRrGames +
-        ' games (+1.0 per win, +0.5 per tie)';
+        ' ' + unitPlural + ' (+1.0 per win, +0.5 per tie)';
+      const wltTitle = isMultiGame
+        ? ('Best-of-' + bestOf + ' match Wins – Losses – Ties')
+        : 'Standalone individual BYOT game Wins – Losses – Ties';
       const hideCls = totalPages <= 1 ? ' hide' : '';
       const prevDis = standingsPage <= 1 ? ' disabled' : '';
       const nextDis = standingsPage >= totalPages ? ' disabled' : '';
@@ -1777,7 +1870,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       bodyEl.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
         '<th>#</th><th>Agent</th>' +
         '<th class="num" title="Tournament MAP Elo ± 95% CI">Elo</th>' +
-        '<th class="num" title="Standalone individual BYOT game Wins – Losses – Ties">W–L–T</th>' +
+        '<th class="num" title="' + esc(wltTitle) + '">W–L–T</th>' +
         '<th class="num" title="' + esc(ptsTitle) + '">Points</th>' +
         '<th class="num" title="Sonneborn-Berger tiebreak score">S–B</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
@@ -1802,7 +1895,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const order = standings.length >= 2 ? standings : (pageInit.entrants || []);
       if (order.length < 2 || (rrPairs.length === 0 && rrLiveTbs.length === 0)) {
         crosstableSec.classList.add('hide');
-        bodyEl.innerHTML = '<p class="empty-state muted">No round-robin games completed yet.</p>';
+        bodyEl.innerHTML = '<p class="empty-state muted">No round-robin ' + unitPlural +
+          ' completed yet.</p>';
         return;
       }
 
@@ -1898,50 +1992,109 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       return tr;
     };
 
-    const renderTournamentGameDetailHtml = g => {
-      const end = formatEndReason(g.endReason);
+    const renderSeriesGameCardHtml = (gm, showGameNum) => {
+      const end = formatEndReason(gm.endReason || 'normal');
       const endSuffix = end.show ? (' · ' + end.html) : '';
-      const replayAttrs = g.logHref
-        ? ' data-match-id="' + esc(g.id) +
-          '" data-p1-name="' + esc(g.p1.name) +
-          '" data-p2-name="' + esc(g.p2.name) +
-          '" data-g1-log="' + esc(g.logHref) +
-          '" data-single-game="1"'
-        : '';
+      const p1 = gm.p1 || {};
+      const p2 = gm.p2 || {};
+      const outcomePrefix = showGameNum ? (formatGameOutcomeHtml(gm.outcome || 'T') + ' · ') : '';
+      return '<div class="battle-detail-card">' +
+        '<div class="battle-detail-title">' +
+          '<span>' + (showGameNum ? ('Game ' + gm.gameNumber) : 'Game') + '</span>' +
+          '<span class="battle-detail-sub">' +
+            outcomePrefix + '<tt>' + (gm.turns || 0) + ' turns</tt>' + endSuffix +
+          '</span>' +
+        '</div>' +
+        '<div class="battle-detail-line">' +
+          '<span><tt>P1</tt></span>' +
+          formatGamePlayerTelemetryHtml(
+            Math.round(p1.meanTurnMillis || 0),
+            Math.round(p1.bankSeconds || 0),
+            Math.round(p1.peakRam || 0),
+            49152
+          ) +
+        '</div>' +
+        '<div class="battle-detail-line">' +
+          '<span><tt>P2</tt></span>' +
+          formatGamePlayerTelemetryHtml(
+            Math.round(p2.meanTurnMillis || 0),
+            Math.round(p2.bankSeconds || 0),
+            Math.round(p2.peakRam || 0),
+            49152
+          ) +
+        '</div>' +
+      '</div>';
+    };
+
+    const renderTournamentGameDetailHtml = g => {
       const preemptPrefix = g.preemptions > 0
         ? '<span class="muted">Preemptions:</span> <code>' + g.preemptions + '</code> · '
         : '';
-      const p1Mean = Math.round(g.p1.meanTurnMillis || 0);
-      const p2Mean = Math.round(g.p2.meanTurnMillis || 0);
-      const p1Bank = Math.round(g.p1.bankSeconds || 0);
-      const p2Bank = Math.round(g.p2.bankSeconds || 0);
-      const p1Ram = Math.round(g.p1.peakRam || 0);
-      const p2Ram = Math.round(g.p2.peakRam || 0);
+      const games = Array.isArray(g.games) ? g.games : [];
+      const isMulti = isMultiGame || games.length > 1;
+      const logUrls = games.map((gm, idx) => gm.logHref || (idx === 0 ? g.logHref : '') || '');
+      const hasReplay = logUrls.some(Boolean);
+
+      let replayAttrs = '';
+      if (hasReplay) {
+        replayAttrs = ' data-match-id="' + esc(g.id) +
+          '" data-p1-name="' + esc(g.p1.name) +
+          '" data-p2-name="' + esc(g.p2.name) + '"';
+        logUrls.forEach((u, idx) => {
+          if (u) replayAttrs += ' data-g' + (idx + 1) + '-log="' + esc(u) + '"';
+        });
+        if (isMulti) {
+          replayAttrs += ' data-total-games="' + games.length + '" data-same-seats="1"';
+        } else {
+          replayAttrs += ' data-single-game="1"';
+        }
+      }
+
+      const seedsHtml = games.map(gm => '<code>' + esc(gm.seed) + '</code>').join(' · ');
+      const cardsHtml = games.map(gm => renderSeriesGameCardHtml(gm, isMulti)).join('');
+      const gridCls = games.length >= 3 ? 'battle-detail-grid bo3-grid' : 'battle-detail-grid';
+      const bodyHtml = isMulti ? '<div class="' + gridCls + '">' + cardsHtml + '</div>' : cardsHtml;
 
       return '<div class="battle-detail"' + replayAttrs + '>' +
         '<div class="battle-detail-meta">' +
           '<span class="muted">' + esc(utcStr(g.completedAt)) + '</span>' +
           '<span>' + preemptPrefix +
-            '<span class="muted">Seed:</span> <code>' + esc(g.seed) + '</code>' +
+            '<span class="muted">' + (isMulti ? 'Seeds:' : 'Seed:') + '</span> ' + seedsHtml +
           '</span>' +
         '</div>' +
-        '<div class="battle-detail-card">' +
-          '<div class="battle-detail-title">' +
-            '<span>Game</span>' +
-            '<span class="battle-detail-sub">' +
-              '<tt>' + g.turns + ' turns</tt>' + endSuffix +
-            '</span>' +
-          '</div>' +
-          '<div class="battle-detail-line">' +
-            '<span><tt>P1</tt></span>' +
-            formatGamePlayerTelemetryHtml(p1Mean, p1Bank, p1Ram, 49152) +
-          '</div>' +
-          '<div class="battle-detail-line">' +
-            '<span><tt>P2</tt></span>' +
-            formatGamePlayerTelemetryHtml(p2Mean, p2Bank, p2Ram, 49152) +
-          '</div>' +
-        '</div>' +
+        bodyHtml +
       '</div>';
+    };
+
+    const formatTournamentResultHtml = g => {
+      const p1Won = g.outcome === 'W';
+      const p2Won = g.outcome === 'L';
+      const games = Array.isArray(g.games) ? g.games : [];
+      if (isMultiGame || games.length > 1) {
+        let s1 = 0;
+        let s2 = 0;
+        for (const gm of games) {
+          if (gm.outcome === 'W') s1 += 1;
+          else if (gm.outcome === 'L') s2 += 1;
+          else if (gm.outcome === 'T') {
+            s1 += 0.5;
+            s2 += 0.5;
+          }
+        }
+        const fmt = v => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+        const s1Str = fmt(s1);
+        const s2Str = fmt(s2);
+        return p1Won
+          ? '<strong>' + s1Str + '</strong>–' + s2Str
+          : p2Won
+            ? s1Str + '–<strong>' + s2Str + '</strong>'
+            : s1Str + '–' + s2Str;
+      }
+      return p1Won
+        ? '<strong>1</strong>–0'
+        : p2Won
+          ? '0–<strong>1</strong>'
+          : '½–½';
     };
 
     const buildCompletedGameRowEl = (g, nowSec) => {
@@ -1951,11 +2104,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
 
       const p1Won = g.outcome === 'W';
       const p2Won = g.outcome === 'L';
-      const resHtml = p1Won
-        ? '<strong>1</strong>–0'
-        : p2Won
-          ? '0–<strong>1</strong>'
-          : '½–½';
+      const resHtml = formatTournamentResultHtml(g);
 
       const p1NameHtml = formatAgentLink(g.p1.name, g.p1.slug, p1Won);
       const p1SpritesHtml = renderPartyMinisprites(g.p1.team) || '&nbsp;';
@@ -2016,7 +2165,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         pager.classList.toggle('hide', totalPages <= 1);
         prevBtn.disabled = gamesPage <= 1;
         nextBtn.disabled = gamesPage >= totalPages;
-        const word = total === 1 ? 'game' : 'games';
+        const word = total === 1 ? unitSingular : unitPlural;
         infoEl.textContent =
           'Page ' + gamesPage + ' of ' + totalPages +
           ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
@@ -2037,7 +2186,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         gamesTbody.insertBefore(frag, gamesTbody.firstChild);
       } else if (gamesTbody.children.length === 0) {
         gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="center muted">' +
-          'No completed games yet.</td></tr>';
+          'No completed ' + unitPlural + ' yet.</td></tr>';
       }
       applyGamesPager();
     };
@@ -2049,7 +2198,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         if (row.getAttribute('data-game-id') === g.id) existing = row;
       });
       if (existing) {
-        if (g.logHref) {
+        const games = Array.isArray(g.games) ? g.games : [];
+        const logUrls = games.map((gm, idx) => gm.logHref || (idx === 0 ? g.logHref : '') || '');
+        if (logUrls.some(Boolean)) {
           const detail = existing.nextElementSibling;
           if (detail && detail.classList.contains('battle-detail-row')) {
             const slot = detail.querySelector('.battle-detail');
@@ -2057,17 +2208,14 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
               slot.setAttribute('data-match-id', g.id);
               slot.setAttribute('data-p1-name', g.p1.name);
               slot.setAttribute('data-p2-name', g.p2.name);
-              slot.setAttribute('data-g1-log', g.logHref);
-              slot.setAttribute('data-single-game', '1');
-              const sub = slot.querySelector('.battle-detail-sub');
-              if (sub && !sub.querySelector('a[data-replay-log]')) {
-                sub.insertAdjacentHTML(
-                  'beforeend',
-                  ' · <a href="' + esc(g.logHref) + '" class="live-pill" data-replay-log="' +
-                  esc(g.logHref) + '" data-replay-match="' + esc(g.id) +
-                  '" data-replay-game="1">&#9654; Replay</a> · <a href="' +
-                  esc(g.logHref) + '" class="subtle"><code>.log</code></a>'
-                );
+              logUrls.forEach((u, idx) => {
+                if (u) slot.setAttribute('data-g' + (idx + 1) + '-log', u);
+              });
+              if (isMultiGame || games.length > 1) {
+                slot.setAttribute('data-total-games', String(games.length));
+                slot.setAttribute('data-same-seats', '1');
+              } else {
+                slot.setAttribute('data-single-game', '1');
               }
             }
           }
@@ -2098,10 +2246,12 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         );
         gamesArchiveMeta.innerHTML = 'Archive: <a href="' + esc(archiveHref) + '"><code>' +
           esc(archiveName) + '</code></a> (<span id="games-count">' + countStr +
-          '</span> games) · <a href="' + esc(jsonHref) + '"><code>index.json</code></a>';
+          '</span> ' + unitPlural + ') · <a href="' + esc(jsonHref) +
+          '"><code>index.json</code></a>';
       } else {
         gamesArchiveMeta.innerHTML = 'Data: <a href="' + esc(jsonHref) +
-          '"><code>index.json</code></a> (<span id="games-count">' + countStr + '</span> games' +
+          '"><code>index.json</code></a> (<span id="games-count">' + countStr + '</span> ' +
+          unitPlural +
           (status !== 'completed' ? '; replay archive published upon completion' : '') + ')';
       }
     };
@@ -2490,12 +2640,16 @@ export function renderTournamentPage(opts: {
     liveTables.some(tb => tb.stage === 'Superfinal') ||
     Boolean(broadcastRes.normalized?.seriesLeftHtml.includes('Superfinal'));
 
+  const isMultiGame = t.bestOf > 1;
   const n = entrants.length;
   const rrTotal = n >= 2 ? ((n * (n - 1)) / 2) * t.gamesPerMatchup : 0;
   const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
   const isDoubles = t.format.includes('vgc') || t.format.includes('doubles');
   const inc = isDoubles ? 25 : 10;
-  const sfSuffix = hasSf ? ' + 100-game Superfinal' : '';
+  const rrUnit = isMultiGame ? `Bo${t.bestOf} matches` : 'games';
+  const sfSuffix = hasSf
+    ? (isMultiGame ? ' + 100-match Superfinal' : ' + 100-game Superfinal')
+    : '';
 
   const closesAt = db.getTournamentClosesAt(t.startsAt);
   const scheduleLine = t.status === 'scheduled'
@@ -2514,6 +2668,7 @@ export function renderTournamentPage(opts: {
     profileSlugs,
   });
   const crossRes = renderTournamentCrosstableNode({
+    bestOf: t.bestOf,
     entrants,
     pairs: rrPairs,
     liveTables,
@@ -2562,6 +2717,7 @@ export function renderTournamentPage(opts: {
   const pageInit = {
     tournamentId: t.id,
     format: t.format,
+    bestOf: t.bestOf,
     gamesPerMatchup: t.gamesPerMatchup,
     status: t.status,
     hasSuperfinal: hasSf,
@@ -2597,7 +2753,7 @@ export function renderTournamentPage(opts: {
 
       <p className='meta'>
         <tt>{fmtTitle}</tt> · {n} Entrants · <tt>G={t.gamesPerMatchup}</tt> Double Round-Robin (
-        {rrTotal.toLocaleString('en-US')} games){sfSuffix}<br />
+        {rrTotal.toLocaleString('en-US')} {rrUnit}){sfSuffix}<br />
         {scheduleLine}<br />
         {t.hardware} · <tt>150s</tt> bank (<tt>+{inc}s/turn</tt>)
       </p>
@@ -2623,7 +2779,7 @@ export function renderTournamentPage(opts: {
       </section>
 
       <section id='games' className={t.status === 'scheduled' ? 'hide' : undefined}>
-        <h3><a href='#games' className='subtle'>Games</a></h3>
+        <h3><a href='#games' className='subtle'>{isMultiGame ? 'Matches' : 'Games'}</a></h3>
         {gamesNode}
       </section>
 

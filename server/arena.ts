@@ -141,6 +141,11 @@ export interface BroadcastPlayer extends BroadcastClock {
   pokemon?: unknown[];
 }
 
+export interface SeriesGameSummary {
+  winnerSlot?: 'p1' | 'p2';
+  turns: number;
+}
+
 export interface BroadcastTable {
   table: number;
   label: string;
@@ -149,6 +154,9 @@ export interface BroadcastTable {
   stage?: db.TournamentGameStage;
   cycle?: number;
   matchupGame?: number;
+  game?: number;
+  bestOf?: number;
+  summaries?: SeriesGameSummary[];
   seriesLeftHtml?: string;
   seriesRightHtml?: string;
   p1?: BroadcastPlayer;
@@ -207,44 +215,29 @@ export interface TournamentCrosstableEntry {
   ties: number;
 }
 
+export interface TournamentGameDetailEntry extends db.TournamentGameRow {
+  logHref?: string;
+}
+
 export interface TournamentGameEntry {
   id: string;
   stage: db.TournamentGameStage;
   cycle: number;
   matchupGame: number;
-  seed: string;
   preemptions?: number;
   outcome?: ratings.GameOutcome;
-  endReason?: string;
-  turns?: number;
   completedAt?: number;
   logHref?: string;
-  p1: {
-    versionId: number;
-    slug: string;
-    name: string;
-    version: string;
-    team?: string;
-    bankSeconds?: number;
-    meanTurnMillis?: number;
-    peakRam?: number;
-  };
-  p2: {
-    versionId: number;
-    slug: string;
-    name: string;
-    version: string;
-    team?: string;
-    bankSeconds?: number;
-    meanTurnMillis?: number;
-    peakRam?: number;
-  };
+  p1: db.TournamentGamePlayerView;
+  p2: db.TournamentGamePlayerView;
+  games: TournamentGameDetailEntry[];
 }
 
 export interface TournamentDocument {
   id: string;
   name: string;
   format: string;
+  bestOf: number;
   team?: db.TeamMode;
   rules: string[];
   status: db.TournamentStatus;
@@ -369,45 +362,35 @@ export function enrichTournamentGame(
   g: db.TournamentGameView,
   logFiles?: ReadonlySet<string>
 ): TournamentGameEntry {
-  const logRel = `${g.id}.log`;
-  const hasLog = logFiles
-    ? logFiles.has(logRel)
-    : fs.existsSync(path.join(publicDir, 'arena', 'tournaments', tournamentId, logRel));
-  const logHref = hasLog
-    ? `/arena/tournaments/${encodeURIComponent(tournamentId)}/${encodeURIComponent(logRel)}`
-    : undefined;
+  const idEnc = encodeURIComponent(tournamentId);
+  const tourDir = path.join(publicDir, 'arena', 'tournaments', tournamentId);
+  const checkLog = (rel: string): string | undefined => {
+    const exists = logFiles ? logFiles.has(rel) : fs.existsSync(path.join(tourDir, rel));
+    return exists ? `/arena/tournaments/${idEnc}/${encodeURIComponent(rel)}` : undefined;
+  };
+  const singleHref = checkLog(`${g.id}.log`);
+  const games: TournamentGameDetailEntry[] = g.games.map(gm => {
+    const gNumHref = checkLog(`${g.id}-g${gm.gameNumber}.log`);
+    const fallbackHref = gm.gameNumber === 1 && g.games.length === 1 ? singleHref : undefined;
+    const logHref = gNumHref ?? fallbackHref;
+    return {
+      ...gm,
+      ...(logHref !== undefined ? {logHref} : {}),
+    };
+  });
+  const logHref = games[0]?.logHref ?? singleHref;
   return {
     id: g.id,
     stage: g.stage,
     cycle: g.cycle,
     matchupGame: g.matchupGame,
-    seed: g.seed,
     preemptions: g.preemptions,
     outcome: g.outcome,
-    endReason: g.endReason,
-    turns: g.turns,
     completedAt: g.completedAt,
     logHref,
-    p1: {
-      versionId: g.p1VersionId,
-      slug: g.p1Slug,
-      name: g.p1Name,
-      version: g.p1Version,
-      team: g.p1Team,
-      bankSeconds: g.p1BankSeconds,
-      meanTurnMillis: g.p1MeanTurnMillis,
-      peakRam: g.p1PeakRam,
-    },
-    p2: {
-      versionId: g.p2VersionId,
-      slug: g.p2Slug,
-      name: g.p2Name,
-      version: g.p2Version,
-      team: g.p2Team,
-      bankSeconds: g.p2BankSeconds,
-      meanTurnMillis: g.p2MeanTurnMillis,
-      peakRam: g.p2PeakRam,
-    },
+    p1: g.p1,
+    p2: g.p2,
+    games,
   };
 }
 
@@ -469,6 +452,7 @@ export function buildTournamentDocument(
     id: tournament.id,
     name: tournament.name,
     format: tournament.format,
+    bestOf: tournament.bestOf,
     ...(tournament.team ? {team: tournament.team} : {}),
     rules,
     status: tournament.status,
@@ -531,6 +515,9 @@ export function normalizeLiveBroadcast(
       stage: tb.stage,
       cycle: tb.cycle,
       matchupGame: tb.matchupGame,
+      ...(tb.game !== undefined ? {game: tb.game} : {}),
+      ...(tb.bestOf !== undefined ? {bestOf: tb.bestOf} : {}),
+      ...(tb.summaries !== undefined ? {summaries: tb.summaries.slice()} : {}),
       seriesLeftHtml: tb.seriesLeftHtml ?? (isPrimaryFallback ? raw.seriesLeftHtml : undefined),
       seriesRightHtml: tb.seriesRightHtml ?? (isPrimaryFallback ? raw.seriesRightHtml : undefined),
       p1: tb.p1 ?? (isPrimaryFallback ? {...raw.p1} : undefined),
@@ -758,6 +745,9 @@ export type TournamentBroadcastPayload =
     stage?: db.TournamentGameStage;
     cycle?: number;
     matchupGame?: number;
+    game?: number;
+    bestOf?: number;
+    summaries?: SeriesGameSummary[];
     seriesLeftHtml?: string;
     seriesRightHtml?: string;
     p1?: BroadcastPlayer;
@@ -771,6 +761,7 @@ export interface TournamentGameCompletePayload {
   game: Omit<db.CompletedTournamentGamePayload, 'tournamentId'>;
   table?: number;
   log?: string;
+  logs?: string[];
   tournamentStatus?: db.TournamentStatus;
 }
 
@@ -779,6 +770,7 @@ export interface TournamentGameCompleteResponse {
   duplicate: boolean;
   gameId: string;
   logHref?: string;
+  gameLogHrefs?: Array<string | undefined>;
 }
 
 export interface TournamentStateResponse {
@@ -786,6 +778,7 @@ export interface TournamentStateResponse {
     id: string;
     name: string;
     format: string;
+    bestOf: number;
     team?: db.TeamMode;
     customRules: string[];
     gamesPerMatchup: number;
@@ -814,11 +807,10 @@ export interface TournamentStateResponse {
     stage: db.TournamentGameStage;
     cycle: number;
     matchupGame: number;
-    p1VersionId: number;
-    p2VersionId: number;
+    p1: db.TournamentGamePlayer;
+    p2: db.TournamentGamePlayer;
     outcome?: 'W' | 'L' | 'T';
-    turns?: number;
-    endReason?: string;
+    games: db.TournamentGameRow[];
   }>;
   teamPool: string[];
 }
@@ -1599,6 +1591,40 @@ function parseBroadcastPlayer(raw: unknown, label: string): BroadcastPlayer {
   };
 }
 
+function formatSeriesSummaryPill(
+  label: string,
+  summary: SeriesGameSummary,
+  p1Name?: string,
+  p2Name?: string
+): string {
+  const winner = summary.winnerSlot === 'p1'
+    ? escapeHtml(p1Name ?? 'P1')
+    : summary.winnerSlot === 'p2'
+      ? escapeHtml(p2Name ?? 'P2')
+      : 'Tie';
+  return `<span class="muted"><tt>${label}</tt>: ${winner} (${summary.turns}t)</span>`;
+}
+
+function parseSeriesGameSummary(raw: unknown, label: string): SeriesGameSummary {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
+  }
+  const s = raw as Record<string, unknown>;
+  if (s.winnerSlot !== 'p1' && s.winnerSlot !== 'p2' && s.winnerSlot !== undefined) {
+    throw Object.assign(
+      new Error(`${label}.winnerSlot must be "p1", "p2", or omitted.`),
+      {status: 400}
+    );
+  }
+  if (!isNonNegInt(s.turns)) {
+    throw Object.assign(
+      new Error(`${label}.turns must be a non-negative integer.`),
+      {status: 400}
+    );
+  }
+  return {winnerSlot: s.winnerSlot, turns: s.turns};
+}
+
 function buildDefaultTableHeaders(tb: BroadcastTable): {left: string; right: string} {
   const left = tb.p1 && tb.p2
     ? `<span class="font-semibold">${escapeHtml(tb.p1.name)}</span>` +
@@ -1606,11 +1632,21 @@ function buildDefaultTableHeaders(tb: BroadcastTable): {left: string; right: str
       ` vs <span class="font-semibold">${escapeHtml(tb.p2.name)}</span>` +
       (tb.p2.version ? ` <span class="ver">v${escapeHtml(tb.p2.version)}</span>` : '')
     : escapeHtml(tb.label);
-  const parts: string[] = [tb.stage ?? 'Round Robin'];
+  const parts: string[] = [escapeHtml(tb.stage ?? 'Round Robin')];
   if (tb.cycle !== undefined) parts.push(`Cycle ${tb.cycle}`);
-  if (tb.matchupGame !== undefined) parts.push(`Game ${tb.matchupGame}`);
-  parts.push(tb.label);
-  return {left, right: escapeHtml(parts.join(' · '))};
+  if (tb.bestOf && tb.bestOf > 1) {
+    if (tb.matchupGame !== undefined) parts.push(`Match ${tb.matchupGame}`);
+    parts.push(`<strong>Game ${tb.game ?? 1} / ${tb.bestOf}</strong>`);
+    if (tb.summaries) {
+      tb.summaries.forEach((s, idx) => {
+        parts.push(formatSeriesSummaryPill(`G${idx + 1}`, s, tb.p1?.name, tb.p2?.name));
+      });
+    }
+  } else if (tb.matchupGame !== undefined) {
+    parts.push(`Game ${tb.matchupGame}`);
+  }
+  parts.push(escapeHtml(tb.label));
+  return {left, right: parts.join(' · ')};
 }
 
 function parseCompletedTournamentGame(
@@ -1636,14 +1672,30 @@ function parseCompletedTournamentGame(
       {status: 400}
     );
   }
-  if (!isPosInt(g.p1VersionId) || !isPosInt(g.p2VersionId) || g.p1VersionId === g.p2VersionId) {
+  const parsePlayer = (val: unknown, label: string): db.TournamentGamePlayer => {
+    if (!val || typeof val !== 'object' || Array.isArray(val)) {
+      throw Object.assign(new Error(`Invalid game.${label}.`), {status: 400});
+    }
+    const obj = val as Record<string, unknown>;
+    if (!isPosInt(obj.versionId)) {
+      throw Object.assign(new Error(`Invalid game.${label}.versionId.`), {status: 400});
+    }
+    let team: string | undefined;
+    if (obj.team !== undefined) {
+      if (typeof obj.team !== 'string') {
+        throw Object.assign(new Error(`Invalid game.${label}.team.`), {status: 400});
+      }
+      if (obj.team.trim()) team = obj.team.trim();
+    }
+    return {versionId: obj.versionId, team};
+  };
+  const p1 = parsePlayer(g.p1, 'p1');
+  const p2 = parsePlayer(g.p2, 'p2');
+  if (p1.versionId === p2.versionId) {
     throw Object.assign(
-      new Error('game.p1VersionId and game.p2VersionId must be distinct positive integers.'),
+      new Error('game.p1.versionId and game.p2.versionId must be distinct positive integers.'),
       {status: 400}
     );
-  }
-  if (typeof g.seed !== 'string' || !g.seed.trim()) {
-    throw Object.assign(new Error('Invalid game.seed.'), {status: 400});
   }
   if (
     typeof g.outcome !== 'string' ||
@@ -1651,36 +1703,79 @@ function parseCompletedTournamentGame(
   ) {
     throw Object.assign(new Error('Invalid game.outcome.'), {status: 400});
   }
-  if (typeof g.endReason !== 'string' || !g.endReason.trim()) {
-    throw Object.assign(new Error('Invalid game.endReason.'), {status: 400});
-  }
-  if (!isNonNegInt(g.turns)) {
-    throw Object.assign(new Error('Invalid game.turns.'), {status: 400});
-  }
-  if (!isFiniteNonNeg(g.p1BankSeconds)) {
-    throw Object.assign(new Error('Invalid game.p1BankSeconds.'), {status: 400});
-  }
-  if (!isFiniteNonNeg(g.p2BankSeconds)) {
-    throw Object.assign(new Error('Invalid game.p2BankSeconds.'), {status: 400});
-  }
-  if (g.p1MeanTurnMillis !== undefined && !isFiniteNonNeg(g.p1MeanTurnMillis)) {
-    throw Object.assign(new Error('Invalid game.p1MeanTurnMillis.'), {status: 400});
-  }
-  if (g.p2MeanTurnMillis !== undefined && !isFiniteNonNeg(g.p2MeanTurnMillis)) {
-    throw Object.assign(new Error('Invalid game.p2MeanTurnMillis.'), {status: 400});
-  }
-  if (g.p1PeakRam !== undefined && !isPosInt(g.p1PeakRam)) {
-    throw Object.assign(new Error('Invalid game.p1PeakRam.'), {status: 400});
-  }
-  if (g.p2PeakRam !== undefined && !isPosInt(g.p2PeakRam)) {
-    throw Object.assign(new Error('Invalid game.p2PeakRam.'), {status: 400});
-  }
   if (g.preemptions !== undefined && !isNonNegInt(g.preemptions)) {
     throw Object.assign(new Error('Invalid game.preemptions.'), {status: 400});
   }
   if (!isPosInt(g.completedAt)) {
     throw Object.assign(new Error('Invalid game.completedAt.'), {status: 400});
   }
+  if (!Array.isArray(g.games) || g.games.length === 0) {
+    throw Object.assign(
+      new Error('game.games must be a non-empty array.'),
+      {status: 400}
+    );
+  }
+
+  const parseGamePlayerStats = (
+    val: unknown,
+    label: string
+  ): db.TournamentGamePlayerStats | undefined => {
+    if (val === undefined) return undefined;
+    if (!val || typeof val !== 'object' || Array.isArray(val)) {
+      throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
+    }
+    const s = val as Record<string, unknown>;
+    if (s.bankSeconds !== undefined && !isFiniteNonNeg(s.bankSeconds)) {
+      throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
+    }
+    if (s.meanTurnMillis !== undefined && !isFiniteNonNeg(s.meanTurnMillis)) {
+      throw Object.assign(new Error(`Invalid ${label}.meanTurnMillis.`), {status: 400});
+    }
+    if (s.peakRam !== undefined && !isPosInt(s.peakRam)) {
+      throw Object.assign(new Error(`Invalid ${label}.peakRam.`), {status: 400});
+    }
+    return {
+      bankSeconds: s.bankSeconds,
+      meanTurnMillis: s.meanTurnMillis,
+      peakRam: s.peakRam,
+    };
+  };
+
+  const games: db.TournamentGameInput[] = g.games.map((rawGm, idx) => {
+    const label = `game.games[${idx}]`;
+    if (!rawGm || typeof rawGm !== 'object' || Array.isArray(rawGm)) {
+      throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
+    }
+    const gm = rawGm as Record<string, unknown>;
+    if (gm.gameNumber !== undefined && !isPosInt(gm.gameNumber)) {
+      throw Object.assign(new Error(`Invalid ${label}.gameNumber.`), {status: 400});
+    }
+    if (typeof gm.seed !== 'string' || !gm.seed.trim()) {
+      throw Object.assign(new Error(`Invalid ${label}.seed.`), {status: 400});
+    }
+    if (
+      gm.outcome !== undefined &&
+      (typeof gm.outcome !== 'string' ||
+        !VALID_GAME_OUTCOMES.has(gm.outcome as ratings.GameOutcome))
+    ) {
+      throw Object.assign(new Error(`Invalid ${label}.outcome.`), {status: 400});
+    }
+    if (gm.turns !== undefined && !isNonNegInt(gm.turns)) {
+      throw Object.assign(new Error(`Invalid ${label}.turns.`), {status: 400});
+    }
+    if (gm.endReason !== undefined && (typeof gm.endReason !== 'string' || !gm.endReason.trim())) {
+      throw Object.assign(new Error(`Invalid ${label}.endReason.`), {status: 400});
+    }
+    return {
+      gameNumber: gm.gameNumber ?? idx + 1,
+      seed: gm.seed.trim(),
+      outcome: gm.outcome as ratings.GameOutcome | undefined,
+      turns: gm.turns,
+      endReason: typeof gm.endReason === 'string' ? gm.endReason.trim() : undefined,
+      p1: parseGamePlayerStats(gm.p1, `${label}.p1`),
+      p2: parseGamePlayerStats(gm.p2, `${label}.p2`),
+    };
+  });
 
   return {
     id: g.id.trim(),
@@ -1688,21 +1783,11 @@ function parseCompletedTournamentGame(
     stage: g.stage as db.TournamentGameStage,
     cycle: g.cycle,
     matchupGame: g.matchupGame,
-    p1VersionId: g.p1VersionId,
-    p2VersionId: g.p2VersionId,
-    p1Team: typeof g.p1Team === 'string' && g.p1Team.trim() ? g.p1Team.trim() : undefined,
-    p2Team: typeof g.p2Team === 'string' && g.p2Team.trim() ? g.p2Team.trim() : undefined,
-    seed: g.seed.trim(),
     preemptions: g.preemptions,
     outcome: g.outcome as ratings.GameOutcome,
-    endReason: g.endReason.trim(),
-    turns: g.turns,
-    p1BankSeconds: g.p1BankSeconds,
-    p2BankSeconds: g.p2BankSeconds,
-    p1MeanTurnMillis: g.p1MeanTurnMillis,
-    p2MeanTurnMillis: g.p2MeanTurnMillis,
-    p1PeakRam: g.p1PeakRam,
-    p2PeakRam: g.p2PeakRam,
+    p1,
+    p2,
+    games,
     completedAt: g.completedAt,
   };
 }
@@ -2544,6 +2629,22 @@ export function register(app: polka.Polka, options: Options): Handle {
       const gameId = typeof body.gameId === 'string' && body.gameId.trim()
         ? body.gameId.trim()
         : (mode === 'append' ? prev.gameId : undefined);
+      const game = isPosInt(body.game)
+        ? body.game
+        : (mode === 'append' ? prev.game : undefined);
+      const bestOf = isPosInt(body.bestOf)
+        ? body.bestOf
+        : (mode === 'append' ? prev.bestOf : tournament.bestOf);
+      let summaries: SeriesGameSummary[] | undefined;
+      if (body.summaries !== undefined) {
+        if (!Array.isArray(body.summaries)) {
+          sendJson(res, 400, {error: 'Invalid summaries.'});
+          return;
+        }
+        summaries = body.summaries.map((s, i) => parseSeriesGameSummary(s, `summaries[${i}]`));
+      } else if (mode === 'append') {
+        summaries = prev.summaries;
+      }
 
       const mergedLines = mode === 'append'
         ? [...(prev.lines ?? []), ...incomingLines].slice(-MAX_TABLE_LINES)
@@ -2558,6 +2659,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         stage,
         cycle,
         matchupGame,
+        ...(game !== undefined ? {game} : {}),
+        ...(bestOf !== undefined && bestOf > 1 ? {bestOf} : {}),
+        ...(summaries !== undefined ? {summaries} : {}),
         p1,
         p2,
         lines: mergedLines,
@@ -2642,25 +2746,48 @@ export function register(app: polka.Polka, options: Options): Handle {
         nextStatus = body.tournamentStatus as db.TournamentStatus;
       }
 
-      let rawLog: string | undefined;
-      if (body.log !== undefined) {
-        if (typeof body.log !== 'string') {
-          sendJson(res, 400, {error: 'log must be a string.'});
-          return;
+      const parseLogField = (raw: unknown, field: string): string | undefined => {
+        if (raw === undefined) return undefined;
+        if (typeof raw !== 'string') {
+          throw Object.assign(new Error(`${field} must be a string.`), {status: 400});
         }
-        if (Buffer.byteLength(body.log, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
-          sendJson(res, 413, {error: 'Tournament game log exceeds 512 KiB limit.'});
-          return;
+        if (Buffer.byteLength(raw, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
+          throw Object.assign(
+            new Error(`Tournament game ${field} exceeds 512 KiB limit.`),
+            {status: 413}
+          );
         }
-        rawLog = body.log;
+        return raw;
+      };
+      const rawLog = parseLogField(body.log, 'log');
+      let rawLogs: string[] | undefined;
+      if (body.logs !== undefined) {
+        if (!Array.isArray(body.logs)) {
+          throw Object.assign(new Error('logs must be an array of strings.'), {status: 400});
+        }
+        rawLogs = body.logs.map((entry, idx) => parseLogField(entry, `logs[${idx}]`) ?? '');
       }
 
       const {duplicate} = db.recordCompletedTournamentGame(game);
 
-      const logPath = path.join(publicDir, 'arena', 'tournaments', tournament.id, `${game.id}.log`);
-      if (rawLog !== undefined && (!duplicate || !fs.existsSync(logPath))) {
-        writeFileAtomic(logPath, rawLog.endsWith('\n') ? rawLog : `${rawLog}\n`);
+      const tourDir = path.join(publicDir, 'arena', 'tournaments', tournament.id);
+      const writeLogIfNeeded = (fileName: string, content: string | undefined) => {
+        if (content === undefined) return;
+        const p = path.join(tourDir, fileName);
+        if (!duplicate || !fs.existsSync(p)) {
+          writeFileAtomic(p, content.endsWith('\n') ? content : `${content}\n`);
+        }
+      };
+      if (rawLogs) {
+        if (rawLogs.length === 1 && game.games.length <= 1) {
+          writeLogIfNeeded(`${game.id}.log`, rawLogs[0]);
+        } else {
+          rawLogs.forEach((content, idx) => {
+            writeLogIfNeeded(`${game.id}-g${idx + 1}.log`, content);
+          });
+        }
       }
+      writeLogIfNeeded(`${game.id}.log`, rawLog);
 
       const statusChanged = nextStatus !== undefined && nextStatus !== tournament.status;
       if (statusChanged && nextStatus) {
@@ -2673,6 +2800,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         const existing = broadcastsByTournament.get(tournament.id);
         if (existing) {
           const tableNum = isPosInt(body.table) ? body.table : undefined;
+          const lastGame = game.games[game.games.length - 1];
           const tables = existing.tables.map(tb => {
             if ((tableNum && tb.table === tableNum) || (tb.gameId && tb.gameId === game.id)) {
               return {
@@ -2682,14 +2810,14 @@ export function register(app: polka.Polka, options: Options): Handle {
                   ? {
                     ...tb.p1,
                     thinking: false,
-                    bankSeconds: game.p1BankSeconds ?? tb.p1.bankSeconds,
+                    bankSeconds: lastGame?.p1?.bankSeconds ?? tb.p1.bankSeconds,
                   }
                   : undefined,
                 p2: tb.p2
                   ? {
                     ...tb.p2,
                     thinking: false,
-                    bankSeconds: game.p2BankSeconds ?? tb.p2.bankSeconds,
+                    bankSeconds: lastGame?.p2?.bankSeconds ?? tb.p2.bankSeconds,
                   }
                   : undefined,
                 updatedAt: game.completedAt,
@@ -2749,6 +2877,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         duplicate,
         gameId: game.id,
         logHref: enrichedGame?.logHref,
+        gameLogHrefs: enrichedGame?.games.map(gm => gm.logHref),
       });
     } catch (err) {
       const status = (err as {status?: number}).status ?? 500;
@@ -3016,11 +3145,10 @@ export function register(app: polka.Polka, options: Options): Handle {
       stage: g.stage,
       cycle: g.cycle,
       matchupGame: g.matchupGame,
-      p1VersionId: g.p1VersionId,
-      p2VersionId: g.p2VersionId,
+      p1: {versionId: g.p1.versionId, ...(g.p1.team ? {team: g.p1.team} : {})},
+      p2: {versionId: g.p2.versionId, ...(g.p2.team ? {team: g.p2.team} : {})},
       ...(g.outcome !== undefined ? {outcome: g.outcome} : {}),
-      ...(g.turns !== undefined ? {turns: g.turns} : {}),
-      ...(g.endReason !== undefined ? {endReason: g.endReason} : {}),
+      games: g.games,
     }));
 
     const teamPool = resolveTournamentTeamPool(db, tournament);
@@ -3032,6 +3160,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         format: tournament.format,
         ...(tournament.team ? {team: tournament.team} : {}),
         customRules,
+        bestOf: tournament.bestOf,
         gamesPerMatchup: tournament.gamesPerMatchup,
         batchSize: tournament.batchSize,
         parallelTables: tournament.parallelTables,

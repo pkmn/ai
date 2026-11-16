@@ -18,7 +18,8 @@ import * as matches from './matches';
 import * as pairs from './pair-aggregates';
 import * as snapshots from './rating-snapshots';
 import * as entrants from './tournament-entrants';
-import * as games from './tournament-games';
+import * as tournamentGames from './tournament-games';
+import * as tournamentMatches from './tournament-matches';
 import * as tournaments from './tournaments';
 
 export type TransactionRunner = <T>(fn: () => T) => T;
@@ -795,29 +796,54 @@ export class Database extends SqliteDatabase {
     return entrants.getTournamentEntrants(this.db, tournamentId);
   }
 
-  upsertTournamentGame(input: games.UpsertTournamentGameInput) {
-    games.upsertTournamentGame(this.db, input);
+  upsertTournamentMatch(input: tournamentMatches.UpsertTournamentMatchInput) {
+    tournamentMatches.upsertTournamentMatch(this.db, input);
   }
 
-  getTournamentGame(gameId: string): games.TournamentGameView | undefined {
-    return games.getTournamentGame(this.db, gameId);
+  upsertTournamentGame(input: tournamentMatches.UpsertTournamentGameInput) {
+    tournamentMatches.upsertTournamentGame(this.db, input);
+  }
+
+  getTournamentMatch(matchId: string): tournamentMatches.TournamentMatchView | undefined {
+    return tournamentMatches.getTournamentMatch(this.db, matchId);
+  }
+
+  getTournamentGame(gameId: string): tournamentMatches.TournamentGameView | undefined {
+    return tournamentMatches.getTournamentGame(this.db, gameId);
+  }
+
+  recordCompletedTournamentMatch(
+    match: tournamentMatches.CompletedTournamentMatchPayload
+  ): {duplicate: boolean; game: tournamentMatches.TournamentMatchView} {
+    return tournamentMatches.recordCompletedTournamentMatch(this.db, this.txRunner, match);
   }
 
   recordCompletedTournamentGame(
-    game: games.CompletedTournamentGamePayload
-  ): {duplicate: boolean; game: games.TournamentGameView} {
-    return games.recordCompletedTournamentGame(this.db, this.txRunner, game);
+    game: tournamentMatches.CompletedTournamentGamePayload
+  ): {duplicate: boolean; game: tournamentMatches.TournamentGameView} {
+    return tournamentMatches.recordCompletedTournamentGame(this.db, this.txRunner, game);
   }
 
-  getTournamentGames(tournamentId: string, limit?: number): games.TournamentGameView[] {
-    return games.getTournamentGames(this.db, tournamentId, limit);
+  getTournamentMatches(
+    tournamentId: string,
+    limit?: number
+  ): tournamentMatches.TournamentMatchView[] {
+    return tournamentMatches.getTournamentMatches(this.db, tournamentId, limit);
+  }
+
+  getTournamentGames(tournamentId: string, limit?: number): tournamentMatches.TournamentGameView[] {
+    return tournamentMatches.getTournamentGames(this.db, tournamentId, limit);
   }
 
   getTournamentCrosstable(
     tournamentId: string,
-    stage?: games.TournamentGameStage
-  ): games.TournamentPairRecord[] {
-    return games.getTournamentCrosstable(this.db, tournamentId, stage);
+    stage?: tournamentMatches.TournamentGameStage
+  ): tournamentMatches.TournamentPairRecord[] {
+    return tournamentMatches.getTournamentCrosstable(this.db, tournamentId, stage);
+  }
+
+  getTournamentMatchGames(matchId: string): tournamentGames.TournamentGameRow[] {
+    return tournamentGames.getTournamentMatchGames(this.db, matchId);
   }
 }
 
@@ -835,4 +861,5 @@ export * from './pair-aggregates';
 export * from './rating-snapshots';
 export * from './tournament-entrants';
 export * from './tournament-games';
+export * from './tournament-matches';
 export * from './tournaments';

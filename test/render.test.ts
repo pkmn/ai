@@ -934,21 +934,21 @@ describe('tournament SSR views', () => {
       stage: 'Round Robin',
       cycle: 1,
       matchupGame: 1,
-      p1VersionId: vMeta,
-      p2VersionId: vFoul,
-      seed: '1,2,3,101',
       status: 'completed',
-      p1Team: teamA,
-      p2Team: teamB,
       outcome: 'W',
-      turns: 34,
-      endReason: 'normal',
-      p1BankSeconds: 145,
-      p2BankSeconds: 112,
-      p1MeanTurnMillis: 260,
-      p2MeanTurnMillis: 310,
-      p1PeakRam: 4096,
-      p2PeakRam: 2048,
+      p1: {versionId: vMeta, team: teamA},
+      p2: {versionId: vFoul, team: teamB},
+      games: [
+        {
+          gameNumber: 1,
+          seed: '1,2,3,101',
+          outcome: 'W',
+          turns: 34,
+          endReason: 'normal',
+          p1: {bankSeconds: 145, meanTurnMillis: 260, peakRam: 4096},
+          p2: {bankSeconds: 112, meanTurnMillis: 310, peakRam: 2048},
+        },
+      ],
       completedAt: DAY_3,
     });
     db.upsertTournamentGame({
@@ -957,17 +957,21 @@ describe('tournament SSR views', () => {
       stage: 'Round Robin',
       cycle: 2,
       matchupGame: 1,
-      p1VersionId: vMeta,
-      p2VersionId: vJax,
-      seed: '1,2,3,102',
       status: 'completed',
-      p1Team: teamA,
-      p2Team: '|Pikachu|Light Ball',
       outcome: 'T',
-      turns: 100,
-      endReason: 'tie-100-turns',
-      p1BankSeconds: 90,
-      p2BankSeconds: 80,
+      p1: {versionId: vMeta, team: teamA},
+      p2: {versionId: vJax, team: '|Pikachu|Light Ball'},
+      games: [
+        {
+          gameNumber: 1,
+          seed: '1,2,3,102',
+          outcome: 'T',
+          turns: 100,
+          endReason: 'tie-100-turns',
+          p1: {bankSeconds: 90},
+          p2: {bankSeconds: 80},
+        },
+      ],
       completedAt: DAY_3 + 60,
     });
     db.upsertTournamentGame({
@@ -976,17 +980,21 @@ describe('tournament SSR views', () => {
       stage: 'Superfinal',
       cycle: 1,
       matchupGame: 63,
-      p1VersionId: vFoul,
-      p2VersionId: vMeta,
-      seed: '1,2,3,201',
       status: 'completed',
-      p1Team: teamB,
-      p2Team: teamA,
       outcome: 'L',
-      turns: 29,
-      endReason: 'normal',
-      p1BankSeconds: 115,
-      p2BankSeconds: 150,
+      p1: {versionId: vFoul, team: teamB},
+      p2: {versionId: vMeta, team: teamA},
+      games: [
+        {
+          gameNumber: 1,
+          seed: '1,2,3,201',
+          outcome: 'L',
+          turns: 29,
+          endReason: 'normal',
+          p1: {bankSeconds: 115},
+          p2: {bankSeconds: 150},
+        },
+      ],
       completedAt: DAY_3 + 120,
     });
 
@@ -1131,6 +1139,106 @@ describe('tournament SSR views', () => {
     expect((await h.getRaw('/tours/1.json')).status).toBe(404);
     expect((await h.getRaw('/arena/tournaments/1/rules.json')).status).toBe(404);
   });
+
+  test('renders Matches headers, series scores, or 3-card details on Best-of-3 tournaments',
+    async () => {
+      db.upsertTournament({
+        id: '4',
+        name: 'Winter ’26 — VGC 2026 Reg M-C OTS BO3',
+        format: 'gen9championsvgc2026regmc',
+        rulesJson: JSON.stringify(['Open Team Sheets', 'Best of = 3']),
+        gamesPerMatchup: 8,
+        parallelTables: 2,
+        hardware: 'GCP L4 Spot',
+        status: 'running',
+        startsAt: DAY_2,
+      });
+      const ent2 = db.getTournamentEntrants('2');
+      for (const e of ent2) {
+        db.upsertTournamentEntrant({
+          tournamentId: '4',
+          agentId: e.agentId,
+          versionId: e.versionId,
+          seed: e.seed,
+          points: e.points,
+          sonnebornBerger: e.sonnebornBerger,
+          gameWins: e.gameWins,
+          gameLosses: e.gameLosses,
+          gameTies: e.gameTies,
+          elo: e.elo,
+          se: e.se,
+          finalRank: e.finalRank,
+        });
+      }
+      db.upsertTournamentGame({
+        id: 'vgc-bo3-0001',
+        tournamentId: '4',
+        stage: 'Round Robin',
+        cycle: 1,
+        matchupGame: 1,
+        status: 'completed',
+        outcome: 'W',
+        p1: {
+          versionId: ent2[0].versionId,
+          team: '|Incineroar|Sitrus Berry]Rillaboom|Assault Vest',
+        },
+        p2: {
+          versionId: ent2[1].versionId,
+          team: '|Flutter Mane|Booster Energy]Urshifu-Rapid-Strike|Focus Sash',
+        },
+        games: [
+          {
+            gameNumber: 1,
+            seed: '1,2,3,4',
+            outcome: 'W',
+            turns: 8,
+            endReason: 'normal',
+            p1: {bankSeconds: 140},
+            p2: {bankSeconds: 130},
+          },
+          {
+            gameNumber: 2,
+            seed: '5,6,7,8',
+            outcome: 'L',
+            turns: 10,
+            endReason: 'normal',
+            p1: {bankSeconds: 125},
+            p2: {bankSeconds: 135},
+          },
+          {
+            gameNumber: 3,
+            seed: '9,10,11,12',
+            outcome: 'W',
+            turns: 8,
+            endReason: 'timeout',
+            p1: {bankSeconds: 120},
+            p2: {bankSeconds: 0},
+          },
+        ],
+        completedAt: DAY_3,
+      });
+      const t4Dir = path.join(tmpPublic, 'arena', 'tournaments', '4');
+      fs.mkdirSync(t4Dir, {recursive: true});
+      fs.writeFileSync(path.join(t4Dir, 'vgc-bo3-0001-g1.log'), '|win|Metamon\n', 'utf8');
+      fs.writeFileSync(path.join(t4Dir, 'vgc-bo3-0001-g2.log'), '|win|Foul Play\n', 'utf8');
+      fs.writeFileSync(path.join(t4Dir, 'vgc-bo3-0001-g3.log'), '|win|Metamon\n', 'utf8');
+
+      const tourney4Html = await h.getText('/arena/tournaments/4/');
+      expect(tourney4Html).toContain('<h3><a href="#games" class="subtle">Matches</a></h3>');
+      expect(tourney4Html).toContain('<th>Match</th>');
+      expect(tourney4Html).toContain('<strong>2</strong>–1');
+      expect(tourney4Html).toContain('class="battle-detail-grid bo3-grid"');
+      expect(tourney4Html).toContain('<span>Game 3</span>');
+      expect(tourney4Html).toContain(
+        '<span class="muted">Seeds:</span> <code>1,2,3,4</code> · ' +
+        '<code>5,6,7,8</code> · <code>9,10,11,12</code>'
+      );
+      expect(tourney4Html).toContain('/arena/tournaments/4/vgc-bo3-0001-g1.log');
+      expect(tourney4Html).toContain('/arena/tournaments/4/vgc-bo3-0001-g2.log');
+      expect(tourney4Html).toContain('/arena/tournaments/4/vgc-bo3-0001-g3.log');
+      expect(tourney4Html).toContain('data-total-games="3"');
+      expect(tourney4Html).toContain('data-same-seats="1"');
+    });
 });
 
 describe('SSR cache invalidation', () => {

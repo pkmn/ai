@@ -10,6 +10,7 @@ import {
   SCHEMA_DIR,
   classifyMigrationSql,
   compareDatabaseSchemas,
+  getTournamentBestOf,
   getTournamentClosesAt,
   parseArenaProjects,
   parseLaddersYaml,
@@ -105,6 +106,7 @@ describe('schema migrations', () => {
       'schema-migrations.sql',
       'tournament-entrants.sql',
       'tournament-games.sql',
+      'tournament-matches.sql',
       'tournaments.sql',
     ]);
 
@@ -1862,16 +1864,20 @@ describe('tournament standings', () => {
         stage: 'Round Robin',
         cycle: 1,
         matchupGame: i + 1,
-        p1VersionId: p1,
-        p2VersionId: p2,
-        seed: '1,2,3,4',
-        p1Team: 'Pikachu|||static|||||||]',
-        p2Team: 'Pikachu|||static|||||||]',
         outcome,
-        turns: 10,
-        endReason: 'normal',
-        p1BankSeconds: 100,
-        p2BankSeconds: 100,
+        p1: {versionId: p1, team: 'Pikachu|||static|||||||]'},
+        p2: {versionId: p2, team: 'Pikachu|||static|||||||]'},
+        games: [
+          {
+            gameNumber: 1,
+            seed: '1,2,3,4',
+            outcome,
+            turns: 10,
+            endReason: 'normal',
+            p1: {bankSeconds: 100},
+            p2: {bankSeconds: 100},
+          },
+        ],
         completedAt: 1_780_001_000 + i,
       });
     });
@@ -1882,16 +1888,20 @@ describe('tournament standings', () => {
         stage: 'Superfinal',
         cycle: 1,
         matchupGame: i + 1,
-        p1VersionId: entVers[0].id,
-        p2VersionId: entVers[1].id,
-        seed: '1,2,3,4',
-        p1Team: 'Pikachu|||static|||||||]',
-        p2Team: 'Pikachu|||static|||||||]',
         outcome: 'W',
-        turns: 10,
-        endReason: 'normal',
-        p1BankSeconds: 100,
-        p2BankSeconds: 100,
+        p1: {versionId: entVers[0].id, team: 'Pikachu|||static|||||||]'},
+        p2: {versionId: entVers[1].id, team: 'Pikachu|||static|||||||]'},
+        games: [
+          {
+            gameNumber: 1,
+            seed: '1,2,3,4',
+            outcome: 'W',
+            turns: 10,
+            endReason: 'normal',
+            p1: {bankSeconds: 100},
+            p2: {bankSeconds: 100},
+          },
+        ],
         completedAt: 1_780_002_000 + i,
       });
     }
@@ -1914,5 +1924,91 @@ describe('tournament standings', () => {
   test('clears finalRank when a completed tournament is reopened to running', () => {
     db.setTournamentStatus('sf-test', 'running', 1_780_003_100);
     expect(db.getTournamentEntrants('sf-test').every(e => e.finalRank === undefined)).toBe(true);
+  });
+
+  test('getTournamentBestOf infers N for Best-of-N rules or formats', () => {
+    expect(getTournamentBestOf('gen9ou', undefined)).toBe(1);
+    expect(getTournamentBestOf('gen1ou', ['Sleep Clause Mod'])).toBe(1);
+    expect(getTournamentBestOf('gen9championsvgc2026regmc', ['Open Team Sheets', 'Best of = 3']))
+      .toBe(3);
+    expect(getTournamentBestOf('gen9championsvgc2026regmc', '["Best-of-3"]')).toBe(3);
+    expect(getTournamentBestOf('gen9vgc2026regibo3', undefined)).toBe(3);
+    expect(getTournamentBestOf('gen9vgc2026regibo5', ['Best of = 5'])).toBe(5);
+  });
+
+  test('persists Best-of-N per-game telemetry in tournament_games linked to matches', () => {
+    db.upsertTournament({
+      id: 'bo3-tour',
+      name: 'VGC Bo3 Tour',
+      format: 'gen9championsvgc2026regmc',
+      rulesJson: JSON.stringify(['Open Team Sheets', 'Best of = 3']),
+      startsAt: 1_785_000_000,
+      status: 'running',
+      gamesPerMatchup: 4,
+      parallelTables: 2,
+      hardware: 'L4',
+    });
+    expect(db.getTournament('bo3-tour')?.bestOf).toBe(3);
+
+    const entVers = db.getTournamentEntrants('sf-test');
+    for (const e of entVers) {
+      db.upsertTournamentEntrant({
+        tournamentId: 'bo3-tour',
+        agentId: e.agentId,
+        versionId: e.versionId,
+        seed: e.seed,
+      });
+    }
+    const recorded = db.recordCompletedTournamentGame({
+      id: 'bo3-m1',
+      tournamentId: 'bo3-tour',
+      stage: 'Round Robin',
+      cycle: 1,
+      matchupGame: 1,
+      outcome: 'W',
+      p1: {versionId: entVers[0].versionId, team: 'Pikachu|||static|||||||]'},
+      p2: {versionId: entVers[1].versionId, team: 'Pikachu|||static|||||||]'},
+      games: [
+        {
+          gameNumber: 1,
+          seed: '1,2,3,4',
+          outcome: 'W',
+          turns: 8,
+          endReason: 'normal',
+          p1: {bankSeconds: 135, meanTurnMillis: 290, peakRam: 1200},
+          p2: {bankSeconds: 120, meanTurnMillis: 400, peakRam: 1400},
+        },
+        {
+          gameNumber: 2,
+          seed: '5,6,7,8',
+          outcome: 'L',
+          turns: 10,
+          endReason: 'normal',
+          p1: {bankSeconds: 118, meanTurnMillis: 320, peakRam: 1220},
+          p2: {bankSeconds: 130, meanTurnMillis: 410, peakRam: 1450},
+        },
+        {
+          gameNumber: 3,
+          seed: '9,10,11,12',
+          outcome: 'W',
+          turns: 9,
+          endReason: 'timeout',
+          p1: {bankSeconds: 112, meanTurnMillis: 320, peakRam: 1240},
+          p2: {bankSeconds: 0, meanTurnMillis: 450, peakRam: 1480},
+        },
+      ],
+      completedAt: 1_785_000_500,
+    });
+    expect(recorded.duplicate).toBe(false);
+    expect(recorded.game.games).toHaveLength(3);
+    expect(recorded.game.games[1].seed).toBe('5,6,7,8');
+    expect(recorded.game.games[2].seed).toBe('9,10,11,12');
+    expect(recorded.game.games.map(g => g.outcome)).toEqual(['W', 'L', 'W']);
+    expect(recorded.game.games.map(g => g.turns)).toEqual([8, 10, 9]);
+    expect(recorded.game.games[2].endReason).toBe('timeout');
+    expect(recorded.game.games[2].p1.bankSeconds).toBe(112);
+    expect(recorded.game.games[2].p2.bankSeconds).toBe(0);
+    expect(recorded.game.games[2].p1.meanTurnMillis).toBe(320);
+    expect(recorded.game.games[2].p2.peakRam).toBe(1480);
   });
 });

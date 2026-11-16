@@ -431,11 +431,18 @@ export function buildBattleDetailClientJs(): string {
       const matchId = slot.getAttribute('data-match-id') || '';
       const p1Name = slot.getAttribute('data-p1-name') || 'P1';
       const p2Name = slot.getAttribute('data-p2-name') || 'P2';
-      const g1Log = slot.getAttribute('data-g1-log') || '';
-      const g2Log = slot.getAttribute('data-g2-log') || '';
       const isSingleGame = slot.getAttribute('data-single-game') === '1';
-      const activeGame = (gameNum === 2 && g2Log) ? 2 : 1;
-      const logUrl = activeGame === 2 ? g2Log : (g1Log || g2Log);
+      const sameSeats = slot.getAttribute('data-same-seats') === '1';
+      const totalGames = Math.max(1, Number(slot.getAttribute('data-total-games')) || 2);
+      const logUrls = [];
+      for (let i = 1; i <= totalGames; i++) {
+        logUrls.push(slot.getAttribute('data-g' + i + '-log') || '');
+      }
+      const reqGame = Number(gameNum) || 1;
+      const activeGame = (reqGame >= 1 && reqGame <= totalGames && logUrls[reqGame - 1])
+        ? reqGame
+        : Math.max(1, logUrls.findIndex(Boolean) + 1);
+      const logUrl = logUrls[activeGame - 1] || '';
       if (!logUrl) return;
 
       let wrap = slot.querySelector('.battle-replay-wrap');
@@ -456,8 +463,8 @@ export function buildBattleDetailClientJs(): string {
       }
       const leftEl = slot.querySelector('.replay-bar-left');
       const rightEl = slot.querySelector('.replay-bar-right');
-      const seat1 = activeGame === 2 ? p2Name : p1Name;
-      const seat2 = activeGame === 2 ? p1Name : p2Name;
+      const seat1 = (!sameSeats && activeGame === 2) ? p2Name : p1Name;
+      const seat2 = (!sameSeats && activeGame === 2) ? p1Name : p2Name;
       if (leftEl) {
         if (isSingleGame) {
           leftEl.innerHTML = '<strong>Replay</strong> · <code>' + esc(matchId) + '</code> ' +
@@ -465,7 +472,7 @@ export function buildBattleDetailClientJs(): string {
             ' vs <tt>p2</tt> ' + esc(p2Name) + ')</span>';
         } else {
           leftEl.innerHTML = '<strong>Replay</strong> · <code>' + esc(matchId) +
-            '</code> · <strong>Game ' + activeGame + ' / 2</strong> ' +
+            '</code> · <strong>Game ' + activeGame + ' / ' + totalGames + '</strong> ' +
             '<span class="muted">(<tt>p1</tt> ' + esc(seat1) +
             ' vs <tt>p2</tt> ' + esc(seat2) + ')</span>';
         }
@@ -473,20 +480,14 @@ export function buildBattleDetailClientJs(): string {
       if (rightEl) {
         const pills = [];
         if (!isSingleGame) {
-          if (g1Log) {
+          for (let i = 0; i < totalGames; i++) {
+            const u = logUrls[i];
+            if (!u) continue;
+            const gIdx = i + 1;
             pills.push(
-              '<a href="' + esc(g1Log) + '" class="live-pill' +
-              (activeGame === 1 ? ' active' : '') + '" data-replay-log="' + esc(g1Log) +
+              '<a href="' + esc(u) + '" data-replay-log="' + esc(u) +
               '" data-replay-match="' + esc(matchId) +
-              '" data-replay-game="1">&#9654; Game 1</a>'
-            );
-          }
-          if (g2Log) {
-            pills.push(
-              '<a href="' + esc(g2Log) + '" class="live-pill' +
-              (activeGame === 2 ? ' active' : '') + '" data-replay-log="' + esc(g2Log) +
-              '" data-replay-match="' + esc(matchId) +
-              '" data-replay-game="2">&#9654; Game 2</a>'
+              '" data-replay-game="' + gIdx + '">&#9654; Game ' + gIdx + '</a>'
             );
           }
         }
@@ -3109,7 +3110,7 @@ function formatPoolTeamCode(
   return <code title={tip}>{label}</code>;
 }
 
-function formatGameOutcomeNode(outcome: 'W' | 'L' | 'T'): util.Child {
+export function formatGameOutcomeNode(outcome: 'W' | 'L' | 'T'): util.Child {
   if (outcome === 'W') return <span className='yes' title='Player 1 won'>W</span>;
   if (outcome === 'L') return <span className='no' title='Player 2 won'>L</span>;
   return <span className='muted' title='Tie'>T</span>;
