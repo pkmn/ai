@@ -7,6 +7,9 @@ import * as zlib from 'zlib';
 export const MAX_BYTES = 500 * 1024 * 1024;
 export const MAX_FILES = 25_000;
 export const CAS_MIN_BYTES = 64 * 1024;
+// Allow up to 64 MiB of 512-byte tar/PAX headers and block padding above the 500 MiB payload cap.
+const MAX_TAR_STREAM_BYTES = MAX_BYTES + 64 * 1024 * 1024;
+const CODESIGN_BATCH_SIZE = 64;
 
 // Mach-O 32-bit, 64-bit, and fat universal binary magic headers.
 const MACHO_MAGICS = new Set([
@@ -65,19 +68,23 @@ function verifyHeaderChecksum(block: Buffer): void {
   }
 }
 
+// PAX record lengths (`<len> <key>=<value>\n`) count UTF-8 bytes rather than UTF-16 code units,
+// so slice on the raw Buffer before decoding multi-byte paths/linkpaths.
 function parsePaxRecords(data: Buffer): Record<string, string> {
   const out: Record<string, string> = {};
   let offset = 0;
-  const text = data.toString('utf8');
-  while (offset < text.length) {
-    const spaceIdx = text.indexOf(' ', offset);
+  while (offset < data.length) {
+    const spaceIdx = data.indexOf(0x20, offset);
     if (spaceIdx < 0) break;
-    const len = parseInt(text.slice(offset, spaceIdx), 10);
-    if (!Number.isFinite(len) || len <= 0) break;
-    const record = text.slice(spaceIdx + 1, offset + len - 1);
-    const eqIdx = record.indexOf('=');
+    const len = parseInt(data.subarray(offset, spaceIdx).toString('utf8'), 10);
+    if (!Number.isFinite(len) || len <= spaceIdx - offset + 1 || offset + len > data.length) {
+      throw new Error('Corrupt PAX extended header record');
+    }
+    const endIdx = data[offset + len - 1] === 0x0a ? offset + len - 1 : offset + len;
+    const body = data.subarray(spaceIdx + 1, endIdx);
+    const eqIdx = body.indexOf(0x3d);
     if (eqIdx > 0) {
-      out[record.slice(0, eqIdx)] = record.slice(eqIdx + 1);
+      out[body.subarray(0, eqIdx).toString('utf8')] = body.subarray(eqIdx + 1).toString('utf8');
     }
     offset += len;
   }
@@ -88,7 +95,7 @@ function decompressArchive(archivePath: string): Buffer {
   const lower = archivePath.toLowerCase();
   if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
     return zlib.gunzipSync(fs.readFileSync(archivePath), {
-      maxOutputLength: MAX_BYTES + 1024 * 1024,
+      maxOutputLength: MAX_TAR_STREAM_BYTES,
     });
   }
   if (lower.endsWith('.tar.zst') || lower.endsWith('.tzst')) {
@@ -99,19 +106,25 @@ function decompressArchive(archivePath: string): Buffer {
     ).zstdDecompressSync;
     if (typeof zstdDecompress === 'function') {
       return zstdDecompress(fs.readFileSync(archivePath), {
-        maxOutputLength: MAX_BYTES + 1024 * 1024,
+        maxOutputLength: MAX_TAR_STREAM_BYTES,
       });
     }
     return execFileSync('zstd', ['-dc', archivePath], {
-      maxBuffer: MAX_BYTES + 16 * 1024 * 1024,
+      maxBuffer: MAX_TAR_STREAM_BYTES,
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 60_000,
     });
   }
   if (lower.endsWith('.tar.xz') || lower.endsWith('.txz')) {
     return execFileSync('xz', ['-dc', archivePath], {
-      maxBuffer: MAX_BYTES + 16 * 1024 * 1024,
+      maxBuffer: MAX_TAR_STREAM_BYTES,
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 60_000,
     });
+  }
+  const st = fs.statSync(archivePath);
+  if (st.size > MAX_TAR_STREAM_BYTES) {
+    throw new Error(`Archive stream exceeds size cap (${st.size} bytes)`);
   }
   return fs.readFileSync(archivePath);
 }
@@ -204,42 +217,69 @@ function parseTarBuffer(tarBuf: Buffer): TarEntry[] {
   return entries;
 }
 
-// Resolves a relative archive path step-by-step against all symlinks declared so far in the
-// archive so chained-symlink Tar Slip attacks (`a/b -> ..`, `a/b/escape -> ..`, `escape/pwned`)
-// are caught before touching the filesystem.
-function resolveInTree(
-  relPath: string,
+// Normalizes an archive entry path without collapsing `..`, rejecting absolute paths, backslashes,
+// NUL bytes, and `..` traversal components. Returns `''` for the archive root (`.` / `./`).
+function canonicalEntryRel(rawPath: string): string {
+  if (!rawPath || rawPath.startsWith('/') || rawPath.includes('\\') || rawPath.includes('\0')) {
+    throw new Error(`Illegal path in archive: ${rawPath}`);
+  }
+  const parts: string[] = [];
+  for (const seg of rawPath.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      throw new Error(`Illegal path in archive: ${rawPath}`);
+    }
+    parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+// Case-insensitive, NFD-normalized key matching macOS APFS lookup semantics so archives cannot
+// smuggle colliding paths (`Link` vs `link`, NFC vs NFD) past symlink/hardlink checks.
+function apfsKey(relPath: string): string {
+  return relPath
+    .split('/')
+    .map(c => c.normalize('NFD').toLowerCase())
+    .join('/');
+}
+
+// Resolves a relative symlink step-by-step against the complete archive symlink map WITHOUT calling
+// `path.posix.normalize` beforehand, catching lexical `<symlink>/..` collapses (`a -> ..`,
+// `s -> a/../../outside`) as well as forward-referenced symlink chains (`s -> t/../outside`
+// followed later in the archive by `t -> .`).
+function verifySymlinkTargetInTree(
+  symRel: string,
+  linkname: string,
   symlinkMap: ReadonlyMap<string, string>,
   maxHops = 40
-): string {
-  const parts = relPath.split('/').filter(p => p && p !== '.');
-  const resolved: string[] = [];
+): void {
+  const symParts = symRel.split('/');
+  const resolved = symParts.slice(0, -1);
+  const pending = linkname.split('/');
   let hops = 0;
 
-  while (parts.length > 0) {
-    const comp = parts.shift()!;
+  while (pending.length > 0) {
+    const comp = pending.shift()!;
+    if (!comp || comp === '.') continue;
     if (comp === '..') {
       if (resolved.length === 0) {
-        throw new Error(`Path traversal escapes destination root: ${relPath}`);
+        throw new Error(`Illegal link target in archive: ${symRel} -> ${linkname}`);
       }
       resolved.pop();
       continue;
     }
-    const candidate = [...resolved, comp].join('/');
-    const target = symlinkMap.get(candidate);
+    const candRel = [...resolved, comp].join('/');
+    const target = symlinkMap.get(apfsKey(candRel));
     if (target !== undefined) {
       hops++;
       if (hops > maxHops) {
-        throw new Error(`Symlink loop detected in archive at: ${candidate}`);
+        throw new Error(`Symlink loop detected in archive at: ${candRel}`);
       }
-      const targetParts = target.split('/').filter(p => p && p !== '.');
-      parts.unshift(...targetParts);
+      pending.unshift(...target.split('/'));
     } else {
       resolved.push(comp);
     }
   }
-
-  return resolved.length > 0 ? resolved.join('/') : '.';
 }
 
 function isMachOBinary(filePath: string): boolean {
@@ -285,6 +325,22 @@ function cloneOrCopyFile(src: string, dst: string) {
   }
 }
 
+function sha256FileSync(filePath: string): string {
+  const hash = crypto.createHash('sha256');
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(65_536);
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n <= 0) break;
+      hash.update(n === buf.length ? buf : buf.subarray(0, n));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest('hex');
+}
+
 function formatUnpackError(err: unknown): Error {
   if (err instanceof Error) {
     if (!err.message.startsWith('UNPACK_ERROR:')) {
@@ -293,6 +349,11 @@ function formatUnpackError(err: unknown): Error {
     return err;
   }
   return new Error(`UNPACK_ERROR: ${String(err)}`);
+}
+
+export function casRefFileForBundle(casDir: string, destDir: string): string {
+  const safeName = path.basename(path.resolve(destDir)).replace(/[^A-Za-z0-9._-]/g, '_');
+  return path.join(path.resolve(casDir), 'refs', `${safeName}.txt`);
 }
 
 export function unpackBundle(archivePath: string, destDir: string, casDir?: string): number {
@@ -307,64 +368,102 @@ export function unpackBundle(archivePath: string, destDir: string, casDir?: stri
       throw new Error(`Archive exceeds 25,000 file cap (${entries.length} entries)`);
     }
 
+    interface ValidatedEntry {
+      rel: string;
+      mode: number;
+      type: 'file' | 'dir' | 'symlink' | 'hardlink';
+      linkname: string;
+      hardlinkSrcRel?: string;
+      data: Buffer;
+    }
+
     let totalBytes = 0;
+    const entryKinds = new Map<string, 'file' | 'dir' | 'symlink' | 'hardlink'>();
     const symlinkMap = new Map<string, string>();
-    const regularSizes = new Map<string, number>();
+    const symlinkEntries: Array<{rel: string; linkname: string}> = [];
+    const regularFiles = new Map<string, {rel: string; size: number}>();
+    const validated: ValidatedEntry[] = [];
 
     for (const m of entries) {
       if (m.type === 'special') {
         throw new Error(`Disallowed special file in archive: ${m.name}`);
       }
-      if (m.name.startsWith('/') || m.name.startsWith('\\')) {
-        throw new Error(`Illegal path in archive: ${m.name}`);
-      }
-      const norm = path.posix.normalize(m.name).replace(/^(\.\/)+/, '');
-      const parts = norm.split('/');
-      if (parts.includes('..')) {
-        throw new Error(`Illegal path in archive: ${m.name}`);
+      const rel = canonicalEntryRel(m.name);
+      if (!rel) {
+        if (m.type === 'dir') continue;
+        throw new Error(`Illegal root entry in archive: ${m.name}`);
       }
 
-      if (norm && norm !== '.') {
-        const parentNorm = path.posix.dirname(norm);
-        if (parentNorm && parentNorm !== '.') {
-          const resolvedParent = resolveInTree(parentNorm, symlinkMap);
-          if (resolvedParent !== parentNorm) {
-            throw new Error(
-              `Archive entry traverses symlinked directory: ${norm} ` +
-              `(resolves via ${resolvedParent})`
-            );
+      const segs = rel.split('/');
+      for (let i = 1; i < segs.length; i++) {
+        const ancRel = segs.slice(0, i).join('/');
+        const ancKey = apfsKey(ancRel);
+        const prevKind = entryKinds.get(ancKey);
+        if (prevKind !== undefined && prevKind !== 'dir') {
+          if (prevKind === 'symlink') {
+            verifySymlinkTargetInTree(ancRel, symlinkMap.get(ancKey)!, symlinkMap);
           }
+          throw new Error(`Archive entry traverses symlinked directory: ${rel}`);
         }
+        entryKinds.set(ancKey, 'dir');
       }
 
-      if (m.type === 'symlink' || m.type === 'hardlink') {
-        if (m.linkname.startsWith('/') || m.linkname.startsWith('\\')) {
-          throw new Error(`Illegal link target in archive: ${m.name} -> ${m.linkname}`);
+      const key = apfsKey(rel);
+      const existingKind = entryKinds.get(key);
+      if (m.type === 'dir') {
+        if (existingKind !== undefined && existingKind !== 'dir') {
+          throw new Error(`Archive directory collides with existing entry: ${rel}`);
         }
-        const linkBase = m.type === 'symlink' ? path.posix.dirname(norm) : '';
-        const targetNorm = path.posix.normalize(
-          linkBase && linkBase !== '.' ? `${linkBase}/${m.linkname}` : m.linkname
-        );
-        if (targetNorm.split('/').includes('..')) {
-          throw new Error(`Illegal link target in archive: ${m.name} -> ${m.linkname}`);
+        entryKinds.set(key, 'dir');
+        validated.push({rel, mode: m.mode, type: 'dir', linkname: '', data: m.data});
+      } else {
+        if (existingKind !== undefined) {
+          throw new Error(`Duplicate or colliding archive entry path: ${rel}`);
         }
-        const resolvedLinkTarget = resolveInTree(targetNorm, symlinkMap);
-        if (m.type === 'symlink' && norm && norm !== '.') {
-          symlinkMap.set(norm, m.linkname);
+        entryKinds.set(key, m.type);
+
+        if (m.type === 'symlink') {
+          if (
+            !m.linkname ||
+            m.linkname.startsWith('/') ||
+            m.linkname.includes('\\') ||
+            m.linkname.includes('\0')
+          ) {
+            throw new Error(`Illegal link target in archive: ${m.name} -> ${m.linkname}`);
+          }
+          symlinkMap.set(key, m.linkname);
+          symlinkEntries.push({rel, linkname: m.linkname});
+          validated.push({rel, mode: m.mode, type: 'symlink', linkname: m.linkname, data: m.data});
         } else if (m.type === 'hardlink') {
-          const targetSize = regularSizes.get(resolvedLinkTarget);
-          if (targetSize === undefined) {
+          if (
+            !m.linkname ||
+            m.linkname.startsWith('/') ||
+            m.linkname.includes('\\') ||
+            m.linkname.includes('\0')
+          ) {
+            throw new Error(`Illegal link target in archive: ${m.name} -> ${m.linkname}`);
+          }
+          const targetRel = canonicalEntryRel(m.linkname);
+          const targetInfo = targetRel ? regularFiles.get(apfsKey(targetRel)) : undefined;
+          if (!targetInfo) {
             throw new Error(
-              `Hardlink target '${resolvedLinkTarget}' for '${norm}' ` +
+              `Hardlink target '${m.linkname}' for '${rel}' ` +
               'does not reference an earlier regular file'
             );
           }
-          totalBytes += targetSize;
-        }
-      } else if (m.type === 'file') {
-        totalBytes += m.size;
-        if (norm && norm !== '.') {
-          regularSizes.set(norm, m.size);
+          totalBytes += targetInfo.size;
+          validated.push({
+            rel,
+            mode: m.mode,
+            type: 'hardlink',
+            linkname: m.linkname,
+            hardlinkSrcRel: targetInfo.rel,
+            data: m.data,
+          });
+        } else {
+          totalBytes += m.size;
+          regularFiles.set(key, {rel, size: m.size});
+          validated.push({rel, mode: m.mode, type: 'file', linkname: '', data: m.data});
         }
       }
 
@@ -373,37 +472,91 @@ export function unpackBundle(archivePath: string, destDir: string, casDir?: stri
       }
     }
 
+    // Validate all symlinks against the complete symlink map so forward-referenced symlink chains
+    // (`s -> t/../outside` declared before `t -> .`) are caught before touching disk.
+    for (const sym of symlinkEntries) {
+      verifySymlinkTargetInTree(sym.rel, sym.linkname, symlinkMap);
+    }
+
     fs.rmSync(resolvedDest, {recursive: true, force: true});
     fs.mkdirSync(resolvedDest, {recursive: true, mode: 0o755});
 
-    for (const m of entries) {
-      const rel = path.posix.normalize(m.name).replace(/^(\.\/)+/, '').replace(/\/+$/, '');
-      if (!rel || rel === '.') continue;
-      const targetPath = path.resolve(resolvedDest, rel);
-      if (targetPath !== resolvedDest && !targetPath.startsWith(`${resolvedDest}${path.sep}`)) {
-        throw new Error(`Path escapes destination directory: ${m.name}`);
+    const assertInsideDest = (p: string, label: string) => {
+      if (p !== resolvedDest && !p.startsWith(`${resolvedDest}${path.sep}`)) {
+        throw new Error(`Path escapes destination directory: ${label}`);
       }
+    };
 
+    // Phase 1: Extract directories and regular files exclusively (zero symlinks exist on disk yet,
+    // and regular files are opened with O_CREAT | O_EXCL | O_NOFOLLOW).
+    for (const m of validated) {
+      if (m.type !== 'dir' && m.type !== 'file') continue;
+      const targetPath = path.resolve(resolvedDest, m.rel);
+      assertInsideDest(targetPath, m.rel);
       if (m.type === 'dir') {
         fs.mkdirSync(targetPath, {recursive: true, mode: 0o755});
-      } else if (m.type === 'symlink') {
-        fs.mkdirSync(path.dirname(targetPath), {recursive: true, mode: 0o755});
-        if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
-        fs.symlinkSync(m.linkname, targetPath);
-      } else if (m.type === 'hardlink') {
-        const linkRel = path.posix.normalize(m.linkname).replace(/^(\.\/)+/, '');
-        const linkSrc = path.resolve(resolvedDest, linkRel);
-        if (!linkSrc.startsWith(`${resolvedDest}${path.sep}`)) {
-          throw new Error(`Hardlink escapes destination directory: ${m.linkname}`);
-        }
-        fs.mkdirSync(path.dirname(targetPath), {recursive: true, mode: 0o755});
-        if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
-        fs.linkSync(linkSrc, targetPath);
-      } else if (m.type === 'file') {
+      } else {
         fs.mkdirSync(path.dirname(targetPath), {recursive: true, mode: 0o755});
         const mode = (m.mode & 0o111) !== 0 ? 0o755 : 0o644;
-        fs.writeFileSync(targetPath, m.data, {mode});
-        fs.chmodSync(targetPath, mode);
+        const fd = fs.openSync(
+          targetPath,
+          fs.constants.O_WRONLY |
+            fs.constants.O_CREAT |
+            fs.constants.O_EXCL |
+            fs.constants.O_NOFOLLOW,
+          mode
+        );
+        try {
+          if (m.data.length > 0) fs.writeSync(fd, m.data, 0, m.data.length, 0);
+          fs.fchmodSync(fd, mode);
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
+    }
+
+    // Phase 2: Materialize hardlinks strictly against verified regular files inside `resolvedDest`.
+    for (const m of validated) {
+      if (m.type !== 'hardlink') continue;
+      const targetPath = path.resolve(resolvedDest, m.rel);
+      const linkSrc = path.resolve(resolvedDest, m.hardlinkSrcRel!);
+      assertInsideDest(targetPath, m.rel);
+      assertInsideDest(linkSrc, m.linkname);
+      const srcStat = fs.lstatSync(linkSrc);
+      if (srcStat.isSymbolicLink() || !srcStat.isFile()) {
+        throw new Error(`Hardlink source is not a regular file: ${m.linkname}`);
+      }
+      fs.mkdirSync(path.dirname(targetPath), {recursive: true, mode: 0o755});
+      fs.linkSync(linkSrc, targetPath);
+    }
+
+    // Phase 3: Materialize symlinks last so no directory/file/hardlink creation ever traverses one.
+    const realDest = fs.realpathSync(resolvedDest);
+    for (const m of validated) {
+      if (m.type !== 'symlink') continue;
+      const targetPath = path.resolve(resolvedDest, m.rel);
+      assertInsideDest(targetPath, m.rel);
+      fs.mkdirSync(path.dirname(targetPath), {recursive: true, mode: 0o755});
+      fs.symlinkSync(m.linkname, targetPath);
+    }
+
+    // Post-extraction belt-and-suspenders realpath check on every materialized symlink whose target
+    // exists on disk.
+    for (const m of validated) {
+      if (m.type !== 'symlink') continue;
+      const targetPath = path.resolve(resolvedDest, m.rel);
+      let realTarget: string | undefined;
+      try {
+        realTarget = fs.realpathSync(targetPath);
+      } catch {
+        realTarget = undefined;
+      }
+      if (
+        realTarget !== undefined &&
+        realTarget !== realDest &&
+        !realTarget.startsWith(`${realDest}${path.sep}`)
+      ) {
+        throw new Error(`Materialized symlink escapes destination directory: ${m.rel}`);
       }
     }
 
@@ -423,29 +576,42 @@ export function unpackBundle(archivePath: string, destDir: string, casDir?: stri
 
     if (process.platform === 'darwin') {
       try {
-        execFileSync('/usr/bin/xattr', ['-cr', resolvedDest], {stdio: 'pipe'});
+        execFileSync('/usr/bin/xattr', ['-crs', resolvedDest], {
+          stdio: 'pipe',
+          timeout: 30_000,
+        });
       } catch {}
       if (fs.existsSync('/usr/bin/codesign')) {
-        for (const fpath of walkFiles(resolvedDest)) {
-          const st = fs.lstatSync(fpath);
-          if ((st.mode & 0o111) !== 0 || isMachOBinary(fpath)) {
-            try {
-              execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', fpath], {
-                stdio: 'pipe',
-              });
-            } catch {}
+        const machoFiles = walkFiles(resolvedDest).filter(isMachOBinary);
+        for (let i = 0; i < machoFiles.length; i += CODESIGN_BATCH_SIZE) {
+          const batch = machoFiles.slice(i, i + CODESIGN_BATCH_SIZE);
+          try {
+            execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', ...batch], {
+              stdio: 'pipe',
+              timeout: 30_000,
+            });
+          } catch {
+            for (const fpath of batch) {
+              try {
+                execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', fpath], {
+                  stdio: 'pipe',
+                  timeout: 10_000,
+                });
+              } catch {}
+            }
           }
         }
       }
     }
 
     if (resolvedCas) {
+      const referencedDigests = new Set<string>();
       for (const fpath of walkFiles(resolvedDest)) {
         const st = fs.lstatSync(fpath);
         if (st.size < CAS_MIN_BYTES || st.nlink > 1) continue;
 
-        const fileBytes = fs.readFileSync(fpath);
-        const digest = crypto.createHash('sha256').update(fileBytes).digest('hex');
+        const digest = sha256FileSync(fpath);
+        referencedDigests.add(digest);
         const casShardDir = path.join(resolvedCas, digest.slice(0, 2));
         fs.mkdirSync(casShardDir, {recursive: true, mode: 0o755});
         const casBlob = path.join(casShardDir, digest);
@@ -462,6 +628,14 @@ export function unpackBundle(archivePath: string, destDir: string, casDir?: stri
         cloneOrCopyFile(casBlob, tmpTarget);
         fs.chmodSync(tmpTarget, origMode);
         fs.renameSync(tmpTarget, fpath);
+      }
+
+      if (referencedDigests.size > 0) {
+        const refFile = casRefFileForBundle(resolvedCas, resolvedDest);
+        fs.mkdirSync(path.dirname(refFile), {recursive: true, mode: 0o700});
+        const tmpRef = `${refFile}.tmp-${process.pid}`;
+        fs.writeFileSync(tmpRef, `${[...referencedDigests].sort().join('\n')}\n`, {mode: 0o600});
+        fs.renameSync(tmpRef, refFile);
       }
     }
 

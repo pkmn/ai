@@ -689,6 +689,76 @@ describe('arena infrastructure', () => {
       expect(fs.existsSync(path.join(casDir, sharedDigest.slice(0, 2), sharedDigest))).toBe(false);
       expect(fs.existsSync(path.join(casDir, uniqueDigest.slice(0, 2), uniqueDigest))).toBe(true);
     });
+
+    test('rejects lexical dot-dot collapse through prefix symlinks', () => {
+      const victimPath = path.join(tmpDir, 'victim-lexical-collapse.txt');
+      fs.rmSync(victimPath, {force: true});
+      const escapeTar = path.join(tmpDir, 'lexical-collapse.tar.gz');
+      fs.writeFileSync(
+        escapeTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\nexit 0\n')},
+          {name: 'd1/d2/d3/d4/a', type: '2', linkname: '../../../..'},
+          {name: 'd1/d2/d3/d4/s', type: '2', linkname: 'a/../../victim-lexical-collapse.txt'},
+        ])
+      );
+      const agentsSub = path.join(tmpDir, 'agents-lex');
+      expect(() => unpack.unpackBundle(escapeTar, path.join(agentsSub, 'bundle')))
+        .toThrow(/illegal link target|escapes/i);
+      expect(fs.existsSync(victimPath)).toBe(false);
+    });
+
+    test('rejects forward-referenced symlink chains escaping destination', () => {
+      const fwdSymTar = path.join(tmpDir, 'forward-sym-escape.tar.gz');
+      fs.writeFileSync(
+        fwdSymTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\nexit 0\n')},
+          {name: 's', type: '2', linkname: 't/../../outside.txt'},
+          {name: 't', type: '2', linkname: 'sub'},
+        ])
+      );
+      expect(() => unpack.unpackBundle(fwdSymTar, path.join(tmpDir, 'agent-fwd-sym')))
+        .toThrow(/illegal link target|escapes/i);
+    });
+
+    test('rejects case-variant or trailing-slash symlink directory collisions', () => {
+      const caseTar = path.join(tmpDir, 'case-sym-escape.tar.gz');
+      fs.writeFileSync(
+        caseTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\nexit 0\n')},
+          {name: 'Link/', type: '2', linkname: '.'},
+          {name: 'link/pwned.txt', type: '0', data: Buffer.from('x')},
+        ])
+      );
+      expect(() => unpack.unpackBundle(caseTar, path.join(tmpDir, 'agent-case-sym')))
+        .toThrow(/traverses symlinked|colliding/i);
+    });
+
+    test('parses multi-byte UTF-8 PAX extended header paths by byte length', () => {
+      const utf8Rel = 'modèles/pokémon-weights.txt';
+      const kv = `path=${utf8Rel}\n`;
+      const kvBytes = Buffer.byteLength(kv, 'utf8');
+      let totalLen = kvBytes + 3;
+      const prefixStr = `${totalLen} `;
+      if (Buffer.byteLength(prefixStr, 'utf8') + kvBytes !== totalLen) {
+        totalLen = Buffer.byteLength(`${kvBytes + 4} `, 'utf8') + kvBytes;
+      }
+      const paxPayload = Buffer.from(`${totalLen} ${kv}14 comment=ok\n`, 'utf8');
+      const paxTar = path.join(tmpDir, 'pax-utf8.tar.gz');
+      fs.writeFileSync(
+        paxTar,
+        buildTestTarGz([
+          {name: 'run', type: '0', mode: 0o755, data: Buffer.from('#!/bin/sh\nexit 0\n')},
+          {name: 'PaxHeader/utf8', type: 'x', data: paxPayload},
+          {name: 'fallback.txt', type: '0', data: Buffer.from('utf8-ok', 'utf8')},
+        ])
+      );
+      const dest = path.join(tmpDir, 'agent-pax-utf8');
+      unpack.unpackBundle(paxTar, dest);
+      expect(fs.readFileSync(path.join(dest, utf8Rel), 'utf8')).toBe('utf8-ok');
+    });
   });
 
   describe('artifact fetch & OCI digest verification', () => {
