@@ -219,6 +219,47 @@ function canonMove(dex: ModdedDex, m: string): ID {
   return mv.exists && mv.stallingMove ? ('protect' as ID) : id;
 }
 
+interface PreparedSetMetrics {
+  rawMoveLen: number;
+  canonMoves: Set<ID>;
+  itemId: ID;
+  abilId: ID;
+  teraId: ID;
+  statVecByLevel: Map<number, Record<StatID, number>>;
+}
+
+const preparedSetCache = new WeakMap<object, Map<ModdedDex, PreparedSetMetrics>>();
+
+function getPreparedSetMetrics(
+  dex: ModdedDex,
+  set: Partial<PokemonSet>,
+  defaultLevel: number,
+  needStats: boolean
+): PreparedSetMetrics {
+  let byDex = preparedSetCache.get(set);
+  if (!byDex) {
+    byDex = new Map();
+    preparedSetCache.set(set, byDex);
+  }
+  let metrics = byDex.get(dex);
+  if (!metrics) {
+    const rawMoves = set.moves || [];
+    metrics = {
+      rawMoveLen: rawMoves.length,
+      canonMoves: new Set(rawMoves.map(m => canonMove(dex, m))),
+      itemId: toID(set.item),
+      abilId: toID(set.ability),
+      teraId: toID(set.teraType),
+      statVecByLevel: new Map(),
+    };
+    byDex.set(dex, metrics);
+  }
+  if (needStats && !metrics.statVecByLevel.has(defaultLevel)) {
+    metrics.statVecByLevel.set(defaultLevel, getStatVector(dex, set, defaultLevel));
+  }
+  return metrics;
+}
+
 /**
  * Computes the distance in [0, sameSpeciesCap(dex)] between two sets of the same canonical species:
  *   - Moves:   weight 0.50
@@ -244,33 +285,40 @@ export function setDistance(
   const wTera = dex.gen === 9 && !isChamp ? 0.10 : 0;
   const totalW = wMoves + wItem + wAbil + wStats + wTera;
 
-  // 1. Moveset distance: fraction of unshared canonicalized moves
-  const movesA = new Set((a.moves || []).map(m => canonMove(dex, m)));
-  const movesB = new Set((b.moves || []).map(m => canonMove(dex, m)));
+  const mA = getPreparedSetMetrics(dex, a, defaultLevel, wStats > 0);
+  const mB = getPreparedSetMetrics(dex, b, defaultLevel, wStats > 0);
+
+  // 1. Moveset distance: unshared canonicalized moves divided by raw move slot count so
+  //    carrying duplicate Protect variants (e.g. Protect + Detect) cannot shrink the denominator
+  //    from 4 to 3 while preserving `setDistance(A, A) === 0`.
   let sharedMoves = 0;
-  for (const m of movesA) if (movesB.has(m)) sharedMoves++;
-  const dMoves = 1 - sharedMoves / Math.max(movesA.size, movesB.size, 1);
+  for (const m of mA.canonMoves) if (mB.canonMoves.has(m)) sharedMoves++;
+  const unsharedMoves = Math.max(mA.canonMoves.size, mB.canonMoves.size) - sharedMoves;
+  const moveDenom = Math.max(
+    mA.rawMoveLen,
+    mB.rawMoveLen,
+    mA.canonMoves.size,
+    mB.canonMoves.size,
+    1
+  );
+  const dMoves = unsharedMoves / moveDenom;
 
   // 2. Held item distance
-  const itemA = toID(a.item);
-  const itemB = toID(b.item);
-  const dItem = wItem > 0 ? (itemA === itemB ? 0 : 1.0) : 0;
+  const dItem = wItem > 0 ? (mA.itemId === mB.itemId ? 0 : 1.0) : 0;
 
   // 3. Ability distance (ignoring non-entry base abilities when both hold the same Mega Stone)
   let dAbil = 0;
-  if (wAbil > 0 && a.ability !== b.ability) {
-    const abilA = toID(a.ability);
-    const abilB = toID(b.ability);
+  if (wAbil > 0 && mA.abilId !== mB.abilId) {
     const ignoreMegaAbil =
-      itemA === itemB &&
-      Boolean(getMegaSpeciesId(dex, a.species, itemA)) &&
-      !ENTRY_ABILITIES.has(abilA) &&
-      !ENTRY_ABILITIES.has(abilB);
+      mA.itemId === mB.itemId &&
+      Boolean(getMegaSpeciesId(dex, a.species, mA.itemId)) &&
+      !ENTRY_ABILITIES.has(mA.abilId) &&
+      !ENTRY_ABILITIES.has(mB.abilId);
     dAbil = ignoreMegaAbil ? 0 : 1.0;
   }
 
   // 4. Tera Type distance (only for non-Champions Gen 9 formats)
-  const dTera = wTera > 0 ? (toID(a.teraType) === toID(b.teraType) ? 0 : 1.0) : 0;
+  const dTera = wTera > 0 ? (mA.teraId === mB.teraId ? 0 : 1.0) : 0;
 
   // 5. Stat distance with two-tier anti-EV-gaming deadband:
   //    - If moves, item, ability, and Tera are all identical, require L1 > 0.30 (a full
@@ -278,8 +326,8 @@ export function setDistance(
   //    - Otherwise use a minor-creep deadband of L1 <= 0.08, scaling linearly to 1.0 at L1 = 0.50.
   let dStats = 0;
   if (wStats > 0) {
-    const vecA = getStatVector(dex, a, defaultLevel);
-    const vecB = getStatVector(dex, b, defaultLevel);
+    const vecA = mA.statVecByLevel.get(defaultLevel)!;
+    const vecB = mB.statVecByLevel.get(defaultLevel)!;
     let statL1 = 0;
     for (const st of STATS) statL1 += Math.abs(vecA[st] - vecB[st]);
     const nonStatDiff = dMoves + dItem + dAbil + dTera;
@@ -294,9 +342,9 @@ export function setDistance(
 
 /**
  * Computes the total team distance D(A, B) between two canonicalized teams.
- * Every unshared species contributes 1.0; each shared species contributes
- * setDistance(sA, sB) in [0, sameSpeciesCap(dex)]. In pre-Team-Preview generations
- * (Gen 1-4), differing dedicated leads (slot 0) contribute an additional lead distance.
+ * Every unshared species contributes 1.0 (symmetrically via `max(|A|, |B|) - |A ∩ B|`); each shared
+ * species contributes `setDistance(sA, sB)` in `[0, sameSpeciesCap(dex)]`. In pre-Team-Preview
+ * generations (Gen 1-4), differing dedicated leads (slot 0) contribute an additional lead distance.
  */
 export function teamDistance(
   dex: ModdedDex,
@@ -306,11 +354,16 @@ export function teamDistance(
 ): number {
   const mapA = new Map(teamA.map(s => [s.species, s]));
   const mapB = new Map(teamB.map(s => [s.species, s]));
-  let dist = 0;
+  let sharedCount = 0;
+  let sharedDist = 0;
   for (const [sp, sA] of mapA) {
     const sB = mapB.get(sp);
-    dist += !sB ? 1.0 : setDistance(dex, sA, sB, defaultLevel);
+    if (sB) {
+      sharedCount++;
+      sharedDist += setDistance(dex, sA, sB, defaultLevel);
+    }
   }
+  let dist = (Math.max(mapA.size, mapB.size) - sharedCount) + sharedDist;
   const leadBonus = GEN_LEAD_BONUS[dex.gen] || 0;
   const leadA = teamA[0]?.species;
   const leadB = teamB[0]?.species;

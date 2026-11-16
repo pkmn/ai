@@ -324,18 +324,21 @@ export function resolveTournamentTeamPool(
 ): string[] {
   if (tournament.team !== 'harvested' && tournament.team !== 'pools') return [];
   const allLadders = db.getLadders().filter(l => l.format === tournament.format);
-  const matchingLadder =
-    allLadders.find(l => l.team === tournament.team && l.status !== 'archived') ??
-    allLadders.find(l => l.team === tournament.team) ??
-    allLadders.find(l => l.status !== 'archived') ??
-    allLadders[0];
-  if (!matchingLadder) return [];
   if (tournament.team === 'harvested') {
-    return db.getLadderTeams(matchingLadder.id);
+    const harvestedLadder =
+      allLadders.find(l => l.team === 'harvested' && l.status !== 'archived') ??
+      allLadders.find(l => l.team === 'harvested');
+    return harvestedLadder ? db.getLadderTeams(harvestedLadder.id) : [];
   }
+  // Competitor-submitted `pools` rosters remain private while a ladder is active/settling/upcoming;
+  // only retired (`status === 'archived'`) ladder pools may be reused in live-replay tournaments.
+  const archivedPoolsLadder = allLadders.find(
+    l => l.team === 'pools' && l.status === 'archived'
+  );
+  if (!archivedPoolsLadder) return [];
   const seen = new Set<string>();
   const pool: string[] = [];
-  for (const r of db.getActiveRosterForLadder(matchingLadder.id)) {
+  for (const r of db.getActiveRosterForLadder(archivedPoolsLadder.id)) {
     for (const t of r.teams) {
       if (!seen.has(t.packed)) {
         seen.add(t.packed);
@@ -343,7 +346,7 @@ export function resolveTournamentTeamPool(
       }
     }
   }
-  return pool.length > 0 ? pool : db.getLadderTeams(matchingLadder.id);
+  return pool.length > 0 ? pool : db.getLadderTeams(archivedPoolsLadder.id);
 }
 
 export function listTournamentLogFiles(publicDir: string, tournamentId: string): Set<string> {

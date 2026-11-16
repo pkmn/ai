@@ -223,6 +223,93 @@ describe('pools team sampling', () => {
     expect(dittoRes.complete).toBe(true);
   });
 
+  test('validateCompetitorTeamsIncremental clamps Level 100 to 50 on Champions VGC teams', () => {
+    const level100Paste = agent1Teams[0].replace(/Level: 50/g, 'Level: 100');
+    const res = teams.validateCompetitorTeamsIncremental(
+      [level100Paste],
+      {format: 'gen9championsvgc2026regmc', pools: [], teams: 1}
+    );
+    expect(res.complete).toBe(true);
+    expect(res.allSaved[0]).not.toContain('|100|');
+    expect(res.allSaved[0]).toContain('|50|');
+  });
+
+  test('teamDistance stays symmetric across unequal team sizes or double-Protect movesets', () => {
+    const dex = teamMetric.getDex('gen9ou');
+    const sixSets = teamMetric.parseTeam(dex, agent1Teams[0]);
+    const fourSets = sixSets.slice(0, 4);
+    expect(teamMetric.teamDistance(dex, fourSets, sixSets, 50)).toBe(2);
+    expect(teamMetric.teamDistance(dex, sixSets, fourSets, 50)).toBe(2);
+
+    const setA = {
+      species: 'incineroar',
+      item: 'sitrusberry',
+      ability: 'intimidate',
+      moves: ['Protect', 'Detect', 'Fake Out', 'Flare Blitz'],
+    };
+    const setB = {
+      species: 'incineroar',
+      item: 'sitrusberry',
+      ability: 'intimidate',
+      moves: ['Protect', 'Spiky Shield', 'Fake Out', 'Parting Shot'],
+    };
+    expect(teamMetric.setDistance(dex, setA, setA, 50)).toBe(0);
+    expect(teamMetric.setDistance(dex, setA, setB, 50)).toBeCloseTo(
+      ((0.50 * 0.25) / 1.10) * teamMetric.sameSpeciesCap(dex),
+      6
+    );
+  });
+
+  test('resolveTournamentTeamPool withholds unarchived pools ladder rosters', () => {
+    const memDb = new Database(':memory:');
+    try {
+      memDb.syncLaddersFromYaml([
+        '- id: vgc-live',
+        '  slot: vgc',
+        '  name: VGC Live',
+        '  format: gen9championsvgc2026regmc',
+        '  team: pools',
+        '  min: 4',
+        '  teams: 1',
+      ].join('\n'), 1000);
+      memDb.syncProjectsFromYaml([
+        '- name: Secret VGC',
+        '  arena:',
+        '    qualified: true',
+        '    owners: [alice]',
+      ].join('\n'), undefined, 1000);
+      const ag = memDb.getAgentBySlug('secret-vgc')!;
+      const sub = memDb.createSubmission({
+        agentId: ag.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/secret.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['vgc-live'],
+        teamsByLadder: {'vgc-live': [agent1Teams[0]]},
+        now: 1000,
+      });
+      memDb.applySubmissionStatus({versionId: sub.id, smokeStatus: 'passed', now: 1001});
+
+      expect(
+        arena.resolveTournamentTeamPool(memDb, {
+          format: 'gen9championsvgc2026regmc',
+          team: 'pools',
+        })
+      ).toEqual([]);
+
+      memDb.setLadderStatus('vgc-live', 'archived', 2000);
+      expect(
+        arena.resolveTournamentTeamPool(memDb, {
+          format: 'gen9championsvgc2026regmc',
+          team: 'pools',
+        })
+      ).toEqual([agent1Teams[0]]);
+    } finally {
+      memDb.close();
+    }
+  });
+
   test('samplePoolsPair achieves 2/N per-agent plus 1/(N*K) per-slot uniformity', () => {
     for (const nAgents of [4, 5]) {
       const kTeams = 20;

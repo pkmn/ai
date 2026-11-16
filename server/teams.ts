@@ -24,11 +24,11 @@ import * as teams from '../teams';
 
 // `@pkmn/mods` requires parent mods (`champions`) to be registered on `@pkmn/sim`'s `Dex`
 // before child mods (`championsregmb`). We also extend the base `sim.Dex.formats` table so
-// `BattleStreams.BattleStream()` resolves VGC Champions formats (`gen9championsvgc2026regmc`),
-// and register `@pkmn/randoms` so `sim.Teams.generate` works for Random Battle ladders.
-const CHAMPIONS_SIM_DEX = sim.Dex.mod('champions', champions as unknown as sim.ModData);
-const CHAMPIONS_REGMB_SIM_DEX =
-  sim.Dex.mod('championsregmb', championsregmb as unknown as sim.ModData);
+// `BattleStreams.BattleStream()` and `sim.TeamValidator` resolve VGC Champions formats
+// (`gen9championsvgc2026regmc`), and register `@pkmn/randoms` so `sim.Teams.generate` works for
+// Random Battle ladders.
+sim.Dex.mod('champions', champions as unknown as sim.ModData);
+sim.Dex.mod('championsregmb', championsregmb as unknown as sim.ModData);
 
 type FormatListArg = Parameters<typeof sim.Dex.formats.extend>[0];
 
@@ -98,15 +98,13 @@ export function resolveArenaFormatId(format: string, customRules?: readonly stri
 }
 
 function getValidator(format: string): sim.TeamValidator {
+  ensureSimConfigured();
   const id = toID(format);
-  const simDex = id.includes('champions')
-    ? (id.includes('regmb') ? CHAMPIONS_REGMB_SIM_DEX : CHAMPIONS_SIM_DEX)
-    : sim.Dex;
-  const resolved = simDex.formats.get(id);
+  const resolved = sim.Dex.formats.get(id);
   if (!resolved.exists) {
-    throw new Error(`Unknown format "${format}".`);
+    throw new Error(`Unknown format '${format}'.`);
   }
-  return new sim.TeamValidator(resolved, simDex);
+  return new sim.TeamValidator(resolved);
 }
 
 interface PoolEntry {
@@ -115,8 +113,17 @@ interface PoolEntry {
   speciesSet: Set<string>;
 }
 
+const MAX_SPECIES_CACHE_SIZE = 10_000;
 const poolCache = new Map<string, PoolEntry[]>();
 const speciesCache = new Map<string, string[]>();
+
+function cacheSpeciesIds(cacheKey: string, ids: string[]) {
+  if (speciesCache.size >= MAX_SPECIES_CACHE_SIZE) {
+    const oldestKey = speciesCache.keys().next().value;
+    if (oldestKey !== undefined) speciesCache.delete(oldestKey);
+  }
+  speciesCache.set(cacheKey, ids);
+}
 
 export function clearReferencePoolCache() {
   poolCache.clear();
@@ -171,7 +178,7 @@ export function extractSpeciesIdsFromPacked(packed: string, format: string): str
     const parsed = teams.parseTeam(dex, packed);
     if (parsed.length > 0) {
       const ids = parsed.map(s => toID(s.species ?? s.name ?? 'unknown')).sort();
-      speciesCache.set(cacheKey, ids);
+      cacheSpeciesIds(cacheKey, ids);
       return ids;
     }
   } catch {}
@@ -183,7 +190,7 @@ export function extractSpeciesIdsFromPacked(packed: string, format: string): str
       return toID(parts[1] || parts[0] || 'unknown');
     })
     .sort();
-  speciesCache.set(cacheKey, fallback);
+  cacheSpeciesIds(cacheKey, fallback);
   return fallback;
 }
 
@@ -370,16 +377,18 @@ export function samplePoolsPair(
 
     const r1 = rosters.get(firstAgentId)!;
     const r2 = rosters.get(secondAgentId)!;
-    const t1 = r1[rngNextInt(r1.length)];
-    const t2 = r2[rngNextInt(r2.length)];
-    if (!isValidPoolsPair(t1, t2, agentAId, agentBId)) continue;
+    for (let pairTry = 0; pairTry < 16; pairTry++) {
+      const t1 = r1[rngNextInt(r1.length)];
+      const t2 = r2[rngNextInt(r2.length)];
+      if (!isValidPoolsPair(t1, t2, agentAId, agentBId)) continue;
 
-    return {
-      t1Packed: t1.canonicalPacked,
-      t2Packed: t2.canonicalPacked,
-      t1Label: formatProvenanceLabel(t1),
-      t2Label: formatProvenanceLabel(t2),
-    };
+      return {
+        t1Packed: t1.canonicalPacked,
+        t2Packed: t2.canonicalPacked,
+        t1Label: formatProvenanceLabel(t1),
+        t2Label: formatProvenanceLabel(t2),
+      };
+    }
   }
 
   // Deterministic exhaustive fallback for degenerate synthetic pools with heavy duplicate overlap.
@@ -566,9 +575,12 @@ function validateAndCanonicalizeSingleTeam(
     throw new Error(`${label} must contain 6 Pokémon (found ${rawSets.length}).`);
   }
 
-  // `TeamValidator.validateTeam` mutates sets in place while checking learnsets, format
-  // banlists, Species/Item Clauses, and Champions Stat Point caps, so validate a clone.
-  const problems = validator.validateTeam(structuredClone(rawSets) as sim.PokemonSet[]);
+  // `TeamValidator.validateTeam` normalizes sets in place (clamping over-50 levels to 50 in
+  // VGC/Champions, correcting spoofed single-option abilities like Wonder Guard on Terapagos, and
+  // clearing illegal fields) while checking learnsets, banlists, Species/Item Clauses, and Stat
+  // Point caps. Retain `validatedSets` so downstream canonicalization packs the normalized sets!
+  const validatedSets = structuredClone(rawSets) as sim.PokemonSet[];
+  const problems = validator.validateTeam(validatedSets);
   if (problems?.length) {
     throw new Error(`${label} is illegal in ${validator.format.name}: ${problems.join('; ')}`);
   }
@@ -576,7 +588,7 @@ function validateAndCanonicalizeSingleTeam(
   // Prevent move-deletion gaming of `dMoves` on competitor-submitted `pools` rosters by requiring
   // 4 distinct moves unless the species has fewer than 4 legal moves in the format (e.g. Ditto).
   if (options?.requireFullMoveset) {
-    for (const s of rawSets) {
+    for (const s of validatedSets) {
       const distinctMoves = new Set((s.moves ?? []).map(m => toID(m)).filter(Boolean));
       if (distinctMoves.size < 4) {
         const required = maxLegalMovesForSpecies(validator, s);
@@ -597,7 +609,7 @@ function validateAndCanonicalizeSingleTeam(
   // Sinistcha-Masterpiece, Maushold-Four) for legality and battle mechanics. For 1-NN uniqueness
   // checking and cross-competitor pool ownership deduplication, `canonSpecies` collapses cosmetic
   // and ability-identical formes to their base species ID.
-  const canonicalSets = Team.canonicalize(structuredClone(rawSets), dex);
+  const canonicalSets = Team.canonicalize(validatedSets, dex);
   const canonicalPacked = new Team(canonicalSets, dex).pack();
   const entry = toUniquenessEntry(dex, canonicalSets, label, options?.defaultLevel);
 

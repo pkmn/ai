@@ -634,12 +634,13 @@ export class ConcurrentGame {
     const sets = sim.Teams.unpack(rawTeam.trim());
     if (!sets || sets.length === 0) return undefined;
     for (const s of sets) s.name = '';
+    const validated = structuredClone(sets);
     const validator = new sim.TeamValidator(this.format);
     if (!validator.format.team) {
-      const problems = validator.validateTeam(structuredClone(sets));
+      const problems = validator.validateTeam(validated);
       if (problems?.length) return undefined;
     }
-    return sim.Teams.pack(sets);
+    return sim.Teams.pack(validated);
   }
 
   private async resolvePlayerTeam(
