@@ -550,14 +550,12 @@ export function buildBattleDetailClientJs(): string {
 
 function buildBattlesScript(
   initialLiveJson: string,
-  agentLinksJson: string,
-  formatTitlesJson: string
+  agentLinksJson: string
 ): string {
   return `
   document.addEventListener('DOMContentLoaded', () => {
     let state = ${initialLiveJson} || {};
     const agentLinks = ${agentLinksJson};
-    const formatTitles = ${formatTitlesJson};
     const livePanel = document.getElementById('live-panel');
     const battleViewerWrap = document.getElementById('battle-viewer-wrap');
     const liveViewerFrame = document.getElementById('ps-viewer-frame');
@@ -765,7 +763,6 @@ function buildBattlesScript(
         return;
       }
       const l = state.live;
-      const fmtTitle = formatTitles[l.format] || l.format;
       let g1Html = '';
       if (l.game1Summary) {
         const g1Res = l.game1Summary.winnerSlot === 'p1'
@@ -778,7 +775,7 @@ function buildBattlesScript(
       }
       const hbAge = Math.max(0, nowSec - state.updatedAt);
       livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
-        '</code> · <tt>' + esc(fmtTitle) + '</tt> · <strong>Game ' + l.game +
+        '</code> · <strong>Game ' + l.game +
         ' / 2</strong>, Turn ' + l.turn + g1Html + '</span>' +
         '<span class="muted">Heartbeat <tt>#' + l.heartbeatSeq + '</tt> (<tt id="hb-age">' +
         hbAge + 's</tt> ago)</span></div>' +
@@ -2981,7 +2978,6 @@ function renderLivePanelInner(
   }
 
   const l = liveDoc.live;
-  const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
   let g1Node: util.Child;
   if (l.game1Summary) {
     const g1Res = l.game1Summary.winnerSlot === 'p1'
@@ -3004,8 +3000,7 @@ function renderLivePanelInner(
     <>
       <div className='live-header'>
         <span>
-          <code>{l.matchId}</code> · <tt>{fmtTitle}</tt> ·{' '}
-          <strong>Game {l.game} / 2</strong>, Turn {l.turn}{g1Node}
+          <code>{l.matchId}</code> · <strong>Game {l.game} / 2</strong>, Turn {l.turn}{g1Node}
         </span>
         <span className='muted'>
           Heartbeat <tt>#{l.heartbeatSeq}</tt> (<tt id='hb-age'>{hbAge}s</tt> ago)
@@ -3506,8 +3501,7 @@ export function renderBattlesPage(opts: {
       <script>
         {util.raw(buildBattlesScript(
           safeInlineJson(initialState),
-          safeInlineJson(agentLinks),
-          safeInlineJson(FORMAT_TITLES)
+          safeInlineJson(agentLinks)
         ))}
       </script>
     </>

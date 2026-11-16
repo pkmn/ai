@@ -659,7 +659,7 @@ describe('populated Arena leaderboard views', () => {
   test('renders live battle tracker with turn clocks on /arena/battles/', async () => {
     const batHtml = await h.getText('/arena/battles/');
     expect(batHtml).toContain('gen1ou-0000000999');
-    expect(batHtml).toContain('[Gen 1] OU');
+    expect(batHtml).not.toContain('[Gen 1] OU');
     expect(batHtml).toContain('Game 2 / 2');
     expect(batHtml).toContain('PAUSED');
     expect(batHtml).toContain('RUNNING');
