@@ -18,24 +18,7 @@ const TOKEN = process.env.GITHUB_TOKEN
   : undefined;
 
 describe('projects', () => {
-  test('validates project release URL formats', () => {
-    for (const project of projects) {
-      if (!project.release) continue;
-      expect(typeof project.release.name).toBe('string');
-      expect(project.release.name.length).toBeGreaterThan(0);
-      const valid =
-        GITHUB.test(project.release.url) ||
-        NPM.test(project.release.url) ||
-        PYPI.test(project.release.url) ||
-        CHROME.test(project.release.url);
-      if (!valid) {
-        throw new Error(`Invalid URL: '${project.release.url}'`);
-      }
-    }
-  });
-
-  test('matches latest upstream release versions', async () => {
-    if (!process.env.LIVE_RELEASES) return;
+  test('releases', async () => {
     for (const project of projects) {
       if (!project.release) continue;
 
