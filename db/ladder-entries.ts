@@ -128,12 +128,6 @@ export interface AgentLadderProfileEntry {
   settledAt?: number;
 }
 
-export interface LadderStandingOverride {
-  versionId: number;
-  role?: EntryRole;
-  isAnchor?: number;
-}
-
 export interface ArenaLadderRoleTarget {
   ladderId: string;
   slot: LadderSlot;

@@ -4,7 +4,7 @@ import * as ratings from '../server/ratings';
 
 import {ensureAgentLadderStats, updateFamilyStreaksForMatch} from './agent-ladder-stats';
 import {getVersionById} from './agent-versions';
-import {LadderStandingOverride, recomputeLadderRatings} from './ladder-entries';
+import {recomputeLadderRatings} from './ladder-entries';
 import * as ladders from './ladders';
 import {upsertPairAggregateForMatch} from './pair-aggregates';
 
@@ -47,7 +47,6 @@ export interface CompletedMatchPayload {
 export interface RecordMatchInput {
   match: CompletedMatchPayload;
   ladderStatus?: ladders.LadderStatus;
-  ladderStandings?: LadderStandingOverride[];
 }
 
 export interface RecentMatchView {
@@ -368,18 +367,6 @@ export function recordCompletedMatch(
       pairDelta,
       lowOutcome
     );
-
-    if (input.ladderStandings) {
-      const updateOverride = db.prepare(`
-        UPDATE ladder_entries
-        SET role = COALESCE(?, role),
-            is_anchor = COALESCE(?, is_anchor)
-        WHERE ladder_id = ? AND version_id = ?
-      `);
-      for (const s of input.ladderStandings) {
-        updateOverride.run(s.role ?? null, s.isAnchor ?? null, m.ladderId, s.versionId);
-      }
-    }
 
     const dayUtc = new Date(m.completedAt * 1000).toISOString().slice(0, 10);
     recomputeLadderRatings(db, m.ladderId, m.completedAt, prevMatchSec, dayUtc);

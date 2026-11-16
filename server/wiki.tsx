@@ -765,12 +765,6 @@ export class Wiki {
     return agent?.status === 'disabled';
   }
 
-  isAdmin(login: string | undefined): boolean {
-    if (!login) return false;
-    this.refreshMetadata();
-    return this.adminUsers.has(login.toLowerCase());
-  }
-
   isDeveloper(login: string | undefined): boolean {
     if (!login) return false;
     this.refreshMetadata();
@@ -792,14 +786,6 @@ export class Wiki {
     if (isProject) return explicit ?? 'developers';
     if (explicit === 'developers' || explicit === 'discord') return explicit;
     return 'public';
-  }
-
-  canRead(login: string | undefined, slug = 'index', isDiscordMember = false): boolean {
-    const visibility = this.getPageVisibility(slug);
-    if (visibility === 'public') return true;
-    if (this.isDeveloper(login)) return true;
-    if (visibility === 'discord') return isDiscordMember;
-    return false;
   }
 
   canEdit(login: string | undefined, slug?: string): boolean {
@@ -837,16 +823,6 @@ export class Wiki {
   readPage(slug: string): string | undefined {
     const rawText = this.readRawPage(slug);
     return rawText !== undefined ? parsePageContent(rawText).content : undefined;
-  }
-
-  pageTitle(slug: string): string {
-    const canonical = this.resolveSlug(slug);
-    const body = this.readPage(canonical);
-    if (body) {
-      const h1 = extractTopHeadingTitle(body);
-      if (h1) return h1;
-    }
-    return this.getProjectPage(canonical)?.name ?? formatTitle(canonical);
   }
 
   getContentFingerprint(slug: string): string {

@@ -19,20 +19,13 @@ import {
 import * as arena from './arena';
 import {
   BroadcastClock,
-  BroadcastPlayer,
   BroadcastTable,
   LiveBroadcast,
   resolveTournamentArchive,
 } from './arena';
 import * as render from './render';
 
-export {resolveTournamentArchive};
-export type {
-  BroadcastClock,
-  BroadcastPlayer,
-  BroadcastTable,
-  LiveBroadcast,
-};
+export type {LiveBroadcast};
 
 const TOURNAMENTS_STYLE = fs.readFileSync(root('static', 'style', 'tournaments.css'), 'utf8');
 const VIEWER_STYLE = fs.readFileSync(root('static', 'style', 'viewer.css'), 'utf8');

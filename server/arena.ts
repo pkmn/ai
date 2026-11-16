@@ -63,9 +63,6 @@ const VALID_GAME_OUTCOMES = new Set<ratings.GameOutcome>(['W', 'L', 'T']);
 const VALID_MATCH_CATEGORIES = new Set<ratings.MatchCategory>([
   'WW', 'WT', 'TW', 'WL', 'LW', 'TT', 'TL', 'LT', 'LL',
 ]);
-const VALID_ROLES = new Set<db.EntryRole>([
-  'champion', 'challenger', 'retired', 'quarantined',
-]);
 const VALID_LADDER_STATUSES = new Set<db.LadderStatus>([
   'upcoming', 'active', 'settling', 'archived',
 ]);
@@ -697,7 +694,6 @@ export interface MatchCompletePayload {
   game1Log?: string;
   game2Log?: string;
   ladderStatus?: db.LadderStatus;
-  ladderStandings?: db.LadderStandingOverride[];
 }
 
 export interface MatchCompleteResponse {
@@ -2447,52 +2443,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         ladderStatus = body.ladderStatus as db.LadderStatus;
       }
 
-      let ladderStandings: db.LadderStandingOverride[] | undefined;
-      if (body.ladderStandings !== undefined) {
-        if (!Array.isArray(body.ladderStandings)) {
-          sendJson(res, 400, {error: 'ladderStandings must be an array.'});
-          return;
-        }
-        ladderStandings = [];
-        for (const item of body.ladderStandings as unknown[]) {
-          if (!item || typeof item !== 'object' || Array.isArray(item)) {
-            sendJson(res, 400, {error: 'Invalid entry in ladderStandings.'});
-            return;
-          }
-          const s = item as Record<string, unknown>;
-          if (!isPosInt(s.versionId)) {
-            sendJson(res, 400, {error: 'ladderStandings[].versionId must be a positive int.'});
-            return;
-          }
-          if (s.role !== undefined && (
-            typeof s.role !== 'string' || !VALID_ROLES.has(s.role as db.EntryRole)
-          )) {
-            sendJson(res, 400, {error: 'Invalid ladderStandings[].role.'});
-            return;
-          }
-          let isAnchor: number | undefined;
-          if (s.isAnchor !== undefined) {
-            if (typeof s.isAnchor === 'boolean') {
-              isAnchor = s.isAnchor ? 1 : 0;
-            } else if (s.isAnchor === 0 || s.isAnchor === 1) {
-              isAnchor = s.isAnchor;
-            } else {
-              sendJson(res, 400, {error: 'ladderStandings[].isAnchor must be a boolean or 0/1.'});
-              return;
-            }
-          }
-          ladderStandings.push({
-            versionId: s.versionId,
-            role: s.role as db.EntryRole | undefined,
-            isAnchor,
-          });
-        }
-      }
-
       const {duplicate, archivedLadder} = db.recordCompletedMatch({
         match,
         ladderStatus,
-        ladderStandings,
       });
 
       const ladderRow = db.getLadder(match.ladderId);

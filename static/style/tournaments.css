@@ -7,20 +7,9 @@
 }
 
 .min-select {
-  max-width: 100%;
   padding: 0.2rem 1.8rem 0.2rem 0.65rem;
-  color: var(--fg-accent-color);
-  font: inherit;
   font-size: 0.92em;
-  font-family: var(--monospace);
-  background-color: var(--code-bg-color);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
   background-position: right 0.5rem center;
-  border: 1px solid var(--code-border-color);
-  border-radius: var(--border-radius);
-  cursor: pointer;
-  appearance: none;
 }
 
 .meta {
@@ -47,16 +36,6 @@
   background-color: var(--aside-bg-color);
   border: 1px solid var(--aside-border-color);
   border-radius: var(--border-radius);
-}
-
-.series-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1ch;
-  align-items: baseline;
-  justify-content: space-between;
-  padding-bottom: 0.45rem;
-  border-bottom: 1px solid rgb(var(--fg-base) / 15%);
 }
 
 .clock-bar {
@@ -99,28 +78,6 @@
   color: rgb(var(--fg-base) / 55%);
   font-size: 0.84em;
 }
-
-.viewer-wrap {
-  container-type: inline-size;
-}
-
-.viewer-frame {
-  display: block;
-  width: 100%;
-  height: calc(56.25cqw + 220px);
-  background-color: var(--bg-color);
-  border: 1px solid var(--code-border-color);
-  border-radius: var(--border-radius);
-}
-
-/* clean-css ignore:start */
-@container (width >= 896px) {
-  .viewer-frame {
-    height: calc((100cqw - 280px) * 0.5625 + 40px);
-  }
-}
-
-/* clean-css ignore:end */
 
 .party-minisprites {
   display: inline-flex;

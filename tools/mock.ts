@@ -3856,33 +3856,6 @@ function copyStaticTours(baseStaticDir: string, targetStaticDir: string, overwri
 
 const STATIC_FILES = ['style/index.css', 'projects.bib', 'projects.dj', 'projects.tsx', 'arena.dj'];
 
-export function prepareStaticDir(
-  targetStaticDir: string,
-  targetAvatarsDir: string,
-  baseStaticDir = root('static')
-): string {
-  fs.mkdirSync(targetStaticDir, {recursive: true});
-  fs.mkdirSync(targetAvatarsDir, {recursive: true});
-  for (const name of STATIC_FILES) {
-    const src = path.join(baseStaticDir, name);
-    const dst = path.join(targetStaticDir, name);
-    if (fs.existsSync(src) && !fs.existsSync(dst)) {
-      fs.mkdirSync(path.dirname(dst), {recursive: true});
-      fs.copyFileSync(src, dst);
-    }
-  }
-  copyStaticTours(baseStaticDir, targetStaticDir, false);
-  fs.writeFileSync(
-    path.join(targetAvatarsDir, '0-error.png'),
-    Buffer.from(ZERO_ERROR_PNG_BASE64, 'base64')
-  );
-  const projectsFile = path.join(targetStaticDir, 'projects.yml');
-  if (!fs.existsSync(projectsFile)) {
-    fs.copyFileSync(path.join(baseStaticDir, 'projects.yml'), projectsFile);
-  }
-  return projectsFile;
-}
-
 export interface SeedOptions {
   db: db.Database;
   publicDir?: string;

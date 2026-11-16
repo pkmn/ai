@@ -26,10 +26,8 @@ export const STATIC_DIR =
 
 export const ARENA_STYLE = fs.readFileSync(util.root('static', 'style', 'arena.css'), 'utf8');
 
-export const EXT_ICON = util.EXT_ICON;
 export const copyFileAtomic = util.copyFileAtomic;
 export const writeFileAtomic = util.writeFileAtomic;
-export const resolveLadderArchive = arena.resolveLadderArchive;
 
 const SERIES_COLORS = [
   'var(--hl-symbol)',
@@ -2312,7 +2310,7 @@ function renderSingleLadderArtifact(opts: {
     );
   }
 
-  const archive = resolveLadderArchive(publicDir, l);
+  const archive = arena.resolveLadderArchive(publicDir, l);
   const urlEnc = encodeURIComponent(urlKey);
   const teamsHref = l.team === 'pools' && l.status === 'archived'
     ? `/arena/ladders/${urlEnc}/teams.json`
@@ -2781,7 +2779,7 @@ export function renderArenaAndLadderArtifacts(opts: {
   const tournamentSummaries: ArenaTournamentSummary[] = allTournaments.map(t => {
     const entrants = entrantsByTournament.get(t.id) ?? [];
     const top = entrants.find(e => e.finalRank === 1) ?? entrants[0];
-    const archive = tournaments.resolveTournamentArchive(publicDir, t.id);
+    const archive = arena.resolveTournamentArchive(publicDir, t.id);
     return {
       id: t.id,
       name: t.name,
