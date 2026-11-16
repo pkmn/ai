@@ -1106,7 +1106,8 @@ describe('tournament SSR views', () => {
     expect(tourney2Html).toContain('01:52');
     expect(tourney2Html).toContain('thinking…');
     expect(tourney2Html).toContain('src="/arena/viewer/"');
-    expect(tourney2Html).toContain('sandbox="allow-scripts allow-same-origin"');
+    expect(tourney2Html).toContain('sandbox="allow-scripts"');
+    expect(tourney2Html).not.toContain('allow-same-origin');
     expect(tourney2Html).toContain('data-live-table="1"');
   });
 
@@ -2108,4 +2109,56 @@ describe('JSON route parity & retired pool archives', () => {
         await h.close();
       }
     });
+
+  test('omits tournament winner in /arena.json while status is running', async () => {
+    const fpVer = db.getVersionBySlugAndLabel('foul-play', '1.0.0')!;
+    db.upsertTournament({
+      id: '2',
+      name: 'Tournament #2: Live SV OU',
+      format: 'gen9ou',
+      gamesPerMatchup: 10,
+      parallelTables: 2,
+      hardware: 'GCP L4 Spot',
+      status: 'running',
+      startsAt: DAY_2,
+    });
+    db.upsertTournamentEntrant({
+      tournamentId: '2',
+      agentId: fpVer.agentId,
+      versionId: fpVer.id,
+      seed: 1,
+      elo: 1610,
+      se: 40,
+      points: 4,
+      gameWins: 4,
+      gameLosses: 0,
+      gameTies: 0,
+    });
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const doc = JSON.parse(await h.getText('/arena.json')) as {
+        tournaments: Array<{id: string; status: string; winner?: unknown}>;
+      };
+      const completed = doc.tournaments.find(t => t.id === '1')!;
+      const running = doc.tournaments.find(t => t.id === '2')!;
+      expect(completed.status).toBe('completed');
+      expect(completed.winner).toBeDefined();
+      expect(running.status).toBe('running');
+      expect(running.winner).toBeUndefined();
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('preserves quarantined opponent matches in profile oppCounts', async () => {
+    db.quarantineVersion('jaxcalibur', '1.0.0', 'crash', NOW + 5);
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 10});
+    try {
+      const html = await h.getText('/projects/foul-play/#vgc');
+      expect(html).toContain('Jaxcalibur (1)');
+    } finally {
+      await h.close();
+    }
+  });
 });

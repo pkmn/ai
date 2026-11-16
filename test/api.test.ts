@@ -1479,8 +1479,15 @@ describe('pkmn CLI commands', () => {
     db.applySubmissionStatus({versionId: tSub.id, smokeStatus: 'passed', now: 1_760_000_635});
     expect(db.getTournamentEntrants('3').map(e => e.agentSlug)).toEqual(['0-error']);
 
+    await expect(
+      runPkmnCli(
+        ['seed-tournament', '3', '--ladder', 'gen1ou20261109'],
+        {db, now: 1_760_000_640, log}
+      )
+    ).rejects.toThrow(/Unknown flag "--ladder"/);
+
     await runPkmnCli(
-      ['seed-tournament', '3', '--ladder', 'gen1ou20261109'],
+      ['seed-tournament', '3'],
       {db, now: 1_760_000_640, log}
     );
     expect(db.getTournamentEntrants('3')[0].seed).toBe(1);

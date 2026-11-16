@@ -752,30 +752,30 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'battles',
       title: 'Battles (Expanded Row · Timeout Fault & Pool Hashes)',
       description:
-        'Expanding `vgc-0002849` reveals Game 1 & Game 2 telemetry, red `[Timeout]` ' +
+        'Expanding `vgc-0002825` reveals Game 1 & Game 2 telemetry, red `[Timeout]` ' +
         'fault badge on Game 2, and unlinked `P1:<hash>` / `P2:<hash>` pool team badges.',
       path: '/arena/battles/',
-      click: 'tr#vgc-0002849 td:first-child',
+      click: 'tr#vgc-0002825 td:first-child',
     },
     {
       name: 'arena-battles-crash-expanded',
       section: 'battles',
       title: 'Battles (Expanded Row · Crash Fault)',
       description:
-        'Expanding `gen9ou-0002848` (`SV`) reveals the red `[Crash]` abnormal termination ' +
+        'Expanding `gen9ou-0002824` (`SV`) reveals the red `[Crash]` abnormal termination ' +
         'badge on Game 2 alongside per-side turn time and peak RAM.',
       path: '/arena/battles/',
-      click: 'tr#gen9ou-0002848 td:first-child',
+      click: 'tr#gen9ou-0002824 td:first-child',
     },
     {
       name: 'arena-battles-normal-expanded',
       section: 'battles',
       title: 'Battles (Expanded Row · Clean 2-Game Match)',
       description:
-        'Expanding `vgc-0002839` without runtime faults shows Game 1 and Game 2 ' +
+        'Expanding `vgc-0002815` without runtime faults shows Game 1 and Game 2 ' +
         '(sides and teams swapped) with turn counts and telemetry.',
       path: '/arena/battles/',
-      click: 'tr#vgc-0002839 td:first-child',
+      click: 'tr#vgc-0002815 td:first-child',
     },
     {
       name: 'arena-battles-filter-vgc',
@@ -2915,7 +2915,8 @@ async function serve(route: Route, fixture: Fixture, cookie: string): Promise<vo
   const isStaticArenaAsset = (
     url.pathname === '/arena/viewer' ||
     url.pathname.startsWith('/arena/viewer/') ||
-    /\.(?:7z|log)$/i.test(url.pathname)
+    /\.(?:7z|tar)$/i.test(url.pathname) ||
+    (/\.log$/i.test(url.pathname) && !url.search)
   );
   const isDynamic = !isStaticArenaAsset && (
     url.pathname === '/wiki' ||
@@ -3037,7 +3038,18 @@ const WAIT_IMAGES_EXPR = `(async () => {
   );
 })()`;
 
-async function waitForViewerFrames(page: Page): Promise<void> {
+interface FrameOverlay {
+  x: number;
+  y: number;
+  png: Buffer;
+}
+
+// Chromium's `Page.captureScreenshot(captureBeyondViewport: true)` omits out-of-process
+// `sandbox="allow-scripts"` (opaque-origin) iframe surfaces that sit below the initial viewport.
+// Capturing each visible viewer element while scrolled into view and compositing it onto the
+// full-page PNG keeps production `sandbox="allow-scripts"` intact without blanking replay shots.
+async function waitForViewerFrames(page: Page): Promise<FrameOverlay[]> {
+  const overlays: FrameOverlay[] = [];
   const handles = await page.locator('iframe.viewer-frame').elementHandles();
   for (const handle of handles) {
     const info = await handle.evaluate((el: Element) => {
@@ -3053,7 +3065,12 @@ async function waitForViewerFrames(page: Page): Promise<void> {
       const isIdleTable = Boolean(
         isLiveFrame && label?.textContent?.includes('(idle)')
       );
-      return {visible, isIdleTable};
+      return {
+        visible,
+        isIdleTable,
+        x: Math.round(rect.left + window.scrollX),
+        y: Math.round(rect.top + window.scrollY),
+      };
     });
     if (!info.visible) continue;
     await handle.scrollIntoViewIfNeeded();
@@ -3072,7 +3089,30 @@ async function waitForViewerFrames(page: Page): Promise<void> {
     );
     await frame.evaluate(WAIT_IMAGES_EXPR);
     await page.waitForTimeout(50);
+    const png = await handle.screenshot({animations: 'disabled', caret: 'hide'});
+    overlays.push({x: info.x, y: info.y, png});
   }
+  return overlays;
+}
+
+function compositeFrameOverlays(basePng: Buffer, overlays: FrameOverlay[]): Buffer {
+  if (overlays.length === 0) return basePng;
+  const base = decodePng(basePng);
+  for (const ov of overlays) {
+    const patch = decodePng(ov.png);
+    const maxRows = Math.min(patch.height, base.height - ov.y);
+    const maxCols = Math.min(patch.width, base.width - ov.x);
+    if (maxRows <= 0 || maxCols <= 0) continue;
+    for (let r = 0; r < maxRows; r++) {
+      const dstRow = ov.y + r;
+      if (dstRow < 0) continue;
+      const srcStart = r * patch.width * 4;
+      const srcEnd = srcStart + maxCols * 4;
+      const dstStart = (dstRow * base.width + Math.max(0, ov.x)) * 4;
+      patch.data.copy(base.data, dstStart, srcStart, srcEnd);
+    }
+  }
+  return encodePng(base);
 }
 
 async function shootWithWorker(
@@ -3104,7 +3144,7 @@ async function shootWithWorker(
     await page.waitForLoadState('load');
     await page.waitForTimeout(SETTLE_MILLIS);
   }
-  await waitForViewerFrames(page);
+  const overlays = await waitForViewerFrames(page);
   await page.evaluate(WAIT_IMAGES_EXPR);
   await page.evaluate('window.scrollTo(0, 0)');
   await page.waitForTimeout(SETTLE_MILLIS / 2);
@@ -3114,7 +3154,8 @@ async function shootWithWorker(
   if (overflow > 0) {
     worker.problems.push(`horizontal overflow: +${overflow}px`);
   }
-  await page.screenshot({path: file, fullPage: true, animations: 'disabled', caret: 'hide'});
+  const rawShot = await page.screenshot({fullPage: true, animations: 'disabled', caret: 'hide'});
+  await fsp.writeFile(file, compositeFrameOverlays(rawShot, overlays));
   const expectedHttpPrefix = scenario.expectHttpError
     ? `Failed to load resource: the server responded with a status of ${scenario.expectHttpError} `
     : undefined;

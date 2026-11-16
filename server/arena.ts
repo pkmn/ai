@@ -399,6 +399,7 @@ export function enrichTournamentGame(
 
 export interface PreloadedTournamentData {
   entrants?: db.TournamentEntrantView[];
+  games?: db.TournamentGameView[];
   rrPairs?: db.TournamentPairRecord[];
   sfPairs?: db.TournamentPairRecord[];
   logFiles?: ReadonlySet<string>;
@@ -412,7 +413,7 @@ export function buildTournamentDocument(
   preloaded?: PreloadedTournamentData
 ): TournamentDocument {
   const entrants = preloaded?.entrants ?? db.getTournamentEntrants(tournament.id);
-  const games = db.getTournamentGames(tournament.id, gamesLimit);
+  const games = preloaded?.games ?? db.getTournamentGames(tournament.id, gamesLimit);
   const rrPairs = preloaded?.rrPairs ?? db.getTournamentCrosstable(tournament.id, 'Round Robin');
   const sfPairs = preloaded?.sfPairs ?? db.getTournamentCrosstable(tournament.id, 'Superfinal');
   const logFiles = preloaded?.logFiles ?? listTournamentLogFiles(publicDir, tournament.id);

@@ -217,13 +217,17 @@ const build = async (rebuild?: boolean) => {
   }
 
   const hasExistingDb = nodeFs.existsSync(DB_PATH);
-  const db = new Database(hasExistingDb ? DB_PATH : ':memory:');
-  try {
-    db.syncLadders();
-    if (!hasExistingDb) {
-      db.syncProjects();
+  const db = hasExistingDb ? new Database(DB_PATH, {readOnly: true}) : undefined;
+  const getRunning = () => {
+    if (!db) return undefined;
+    try {
+      return db.getRunningTournament();
+    } catch {
+      return undefined;
     }
-    renderer.liveBannerProvider = () => formatLiveTournamentBanner(db.getRunningTournament());
+  };
+  try {
+    renderer.liveBannerProvider = () => formatLiveTournamentBanner(getRunning());
 
     for (const code of [400, 401, 403, 404, 500, 502, 503, 504]) {
       const page = `${code}.html`;
@@ -244,7 +248,7 @@ const build = async (rebuild?: boolean) => {
       fs.mkdir(path.dirname(file));
       fs.write(file, '');
     }
-    const runningTournament = db.getRunningTournament();
+    const runningTournament = getRunning();
     if (runningTournament) {
       const tourStub = path.join(
         PUBLIC,
@@ -289,7 +293,7 @@ const build = async (rebuild?: boolean) => {
           rel === 'index.html' ||
           (runningTournament !== undefined &&
             rel === `tournaments/${runningTournament.id}/index.html`) ||
-          /\.(?:7z|log)$/i.test(entry.name);
+          /\.(?:7z|log|tar)$/i.test(entry.name);
         if (!keep) nodeFs.unlinkSync(full);
       }
     };
@@ -370,7 +374,7 @@ const build = async (rebuild?: boolean) => {
     }
   } finally {
     renderer.liveBannerProvider = undefined;
-    db.close();
+    db?.close();
   }
 };
 

@@ -41,6 +41,35 @@ const VIEWER_SCRIPT = `
   (() => {
     'use strict';
 
+    const makeMemStorage = () => {
+      const m = new Map();
+      return {
+        get length() { return m.size; },
+        key: i => Array.from(m.keys())[i] ?? null,
+        getItem: k => (m.has(String(k)) ? m.get(String(k)) : null),
+        setItem: (k, v) => { m.set(String(k), String(v)); },
+        removeItem: k => { m.delete(String(k)); },
+        clear: () => { m.clear(); },
+      };
+    };
+    for (const prop of ['localStorage', 'sessionStorage']) {
+      try {
+        void window[prop];
+      } catch {
+        Object.defineProperty(window, prop, {value: makeMemStorage(), configurable: true});
+      }
+    }
+    try {
+      void document.cookie;
+    } catch {
+      let jar = '';
+      Object.defineProperty(document, 'cookie', {
+        get: () => jar,
+        set: v => { jar = String(v); },
+        configurable: true,
+      });
+    }
+
     const ASSETS = 'https://play.pokemonshowdown.com';
     const STYLES = ['/style/battle.css?a7', '/style/utilichart.css?a7'];
     const SCRIPTS = [
@@ -583,7 +612,7 @@ function renderBroadcastSectionHtml(
             className='viewer-frame'
             src='/arena/viewer/'
             title='Pokémon Showdown battle viewer'
-            sandbox='allow-scripts allow-same-origin'
+            sandbox='allow-scripts'
           />
         </div>
       </div>
@@ -2709,6 +2738,7 @@ export function renderTournamentPage(opts: {
 
   const json = arena.buildTournamentDocument(db, publicDir, t, 10_000, {
     entrants,
+    games,
     rrPairs,
     sfPairs,
     logFiles,

@@ -11,8 +11,20 @@ git fetch origin main
 git merge-base --is-ancestor "$HEAD" origin/main
 git merge --ff-only origin/main
 
+rollback() {
+    echo "Deploy failed; rolling back to $HEAD" >&2
+    trap - ERR
+    if [ "$(git rev-parse HEAD)" != "$HEAD" ]; then
+        git reset --hard "$HEAD"
+        npm run compile
+        npm run build
+        sudo service pkmn.ai-server restart
+    fi
+}
+trap rollback ERR
+
 # Update dependencies if package.json has changed
-git diff --quiet "$HEAD" package.json teams/package.json >/dev/null ||
+git diff --quiet "$HEAD" -- package.json teams/package.json ||
     npm install --omit=dev --silent
 
 # Initialize/update teams submodules with only the required directories
@@ -37,7 +49,8 @@ npm run build
 verify_server() {
     test -s public/index.html || return 1
     for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if curl -fsS "http://127.0.0.1:${PORT:-1234}/arena.json" >/dev/null 2>&1; then
+        if curl -fsS "http://127.0.0.1:${PORT:-1234}/arena.json" >/dev/null 2>&1 &&
+           curl -fsS "http://127.0.0.1:${PORT:-1234}/arena/" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -46,14 +59,11 @@ verify_server() {
 }
 
 if ! verify_server; then
-    echo "Post-deploy smoke check failed; rolling back to $HEAD" >&2
-    if [ "$(git rev-parse HEAD)" != "$HEAD" ]; then
-        git reset --hard "$HEAD"
-        npm run build
-        sudo service pkmn.ai-server restart
-    fi
+    rollback
     exit 1
 fi
+
+trap - ERR
 
 if [ -x private/deploy ]; then
     ./private/deploy

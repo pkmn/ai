@@ -47,17 +47,66 @@ const USAGE = [
     '[--smogon <username.id|id|username>] [--projects <path>] [--offline]',
   '  sync-projects [--projects <path>] [--offline]',
   '  create-tournament <id> --name "..." --format <format> --starts <iso|unix> ' +
-    '[--team <harvested|random|pools>] [--games <n>] [--batch <n>] [--tables <n>] ' +
+    '[--team <harvested|random|pools|custom>] [--games <n>] [--batch <n>] [--tables <n>] ' +
     '[--hardware "..."] [--rules \'<json>\'] [--status <scheduled|running|completed>]',
   '  set-tournament-status <id> <scheduled|running|completed>',
   '  seed-tournament <id>',
   '  publish-tournament-archive <id> <archive.7z>',
-  '  publish-ladder-archive <ladder_id> <archive.7z>',
+  '  publish-ladder-archive <ladder_id> <archive.7z|archive.tar>',
   '  lookup-smogon <username|slug.id|id|url>',
-  '  session [--github <login>] [--discord <id>:<username>] [--ttl <seconds>]',
+  '  session [--github <login>] [--github-id <id>] [--discord <id>:<username>] ' +
+    '[--ttl <seconds>] [--secret <secret>]',
 ].join('\n');
 
 const BOOLEAN_FLAGS = new Set(['help', 'offline', 'none']);
+const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
+  quarantine: new Set(['reason']),
+  unquarantine: new Set(),
+  'refund-cooldown': new Set(),
+  'set-anchor': new Set(),
+  'set-ladder-status': new Set(),
+  'upload-ladder-teams': new Set(),
+  'rotate-ladder': new Set([
+    'name',
+    'new',
+    'new-name',
+    'format',
+    'team',
+    'min',
+    'teams',
+    'discord',
+  ]),
+  'reassign-developer': new Set(['none', 'smogon', 'projects', 'offline']),
+  'sync-projects': new Set(['projects', 'offline']),
+  'create-tournament': new Set([
+    'name',
+    'format',
+    'starts',
+    'team',
+    'games',
+    'batch',
+    'tables',
+    'hardware',
+    'rules',
+    'status',
+  ]),
+  'set-tournament-status': new Set(),
+  'seed-tournament': new Set(),
+  'publish-tournament-archive': new Set(),
+  'publish-ladder-archive': new Set(),
+  'lookup-smogon': new Set(),
+  session: new Set(['github', 'github-id', 'discord', 'ttl', 'secret']),
+};
+
+function assertAllowedFlags(cmd: string, flags: ReadonlyMap<string, string>) {
+  const allowed = ALLOWED_FLAGS_BY_CMD[cmd];
+  if (!allowed) return;
+  for (const key of flags.keys()) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unknown flag "--${key}" for command "${cmd}"`);
+    }
+  }
+}
 const TOURNAMENT_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 export function parseArgs(argv: string[]): {positional: string[]; flags: Map<string, string>} {
@@ -95,6 +144,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
     log(USAGE);
     return;
   }
+  assertAllowedFlags(cmd, flags);
 
   if (cmd === 'lookup-smogon') {
     const target = positional[1];

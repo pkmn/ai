@@ -748,7 +748,7 @@ function renderHeadToHeadPane(opts: {
         losVal = ratings.computeLOS(
           fallbackSolve.theta,
           fallbackSolve.covariance,
-          allEntries.length,
+          fallbackSolve.indexByVer.size,
           idxUs,
           idxOpp
         );
@@ -942,7 +942,9 @@ function renderRecentMatchesPane(opts: {
                         <code>{oppSide.version}</code>
                       </td>
                       <td className='center'>{resNode}</td>
-                      <td className='num muted' title={tsTitle}>{rel}</td>
+                      <td className='num muted' title={tsTitle} data-ts={m.completedAt}>
+                        {rel}
+                      </td>
                     </tr>
                     <tr className='battle-detail-row hide' data-detail-for={m.id}>
                       <td colSpan={5}>{raw(detailHtml)}</td>
@@ -1113,7 +1115,10 @@ function buildProfileScript(
     };
 
     const renderProfileMatchPair = (m, nowSec, expanded) => {
-      const weAreP1 = m.p1.slug === agentSlug;
+      const bothOurs = m.p1.slug === agentSlug && m.p2.slug === agentSlug;
+      const weAreP1 = (bothOurs && curVer !== 'all')
+        ? m.p1.version === curVer
+        : m.p1.slug === agentSlug;
       const ourSide = weAreP1 ? m.p1 : m.p2;
       const oppSide = weAreP1 ? m.p2 : m.p1;
       const ourCat = weAreP1 ? m.category : invertCat(m.category);
@@ -1141,7 +1146,8 @@ function buildProfileScript(
         '<td><code>' + esc(ourSide.version) + '</code></td>' +
         '<td>' + renderAgent(oppSide, false) + '</td>' +
         '<td class="center">' + resHtml + '</td>' +
-        '<td class="num muted" title="' + esc(tsTitle) + '">' + esc(rel) + '</td>';
+        '<td class="num muted" title="' + esc(tsTitle) +
+        '" data-ts="' + m.completedAt + '">' + esc(rel) + '</td>';
 
       const detailTr = document.createElement('tr');
       detailTr.className = 'battle-detail-row' + (expanded ? '' : ' hide');
@@ -1520,6 +1526,14 @@ function buildProfileScript(
         }
       });
     }
+
+    setInterval(() => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      document.querySelectorAll('td[data-ts]').forEach(el => {
+        const ts = Number(el.getAttribute('data-ts'));
+        if (ts > 0) el.textContent = relTime(nowSec, ts);
+      });
+    }, 30000);
   });
 `;
 }
@@ -1855,13 +1869,15 @@ export function renderAgentProfile(opts: {
       </>
     );
 
-    const verById = new Map<number, db.LeaderboardEntryView>();
+    const verById = new Map<number, db.LadderVersionIdentity>();
     const oppMap = new Map<string, {slug: string; name: string; count: number}>();
     for (const e of allEntries) {
-      verById.set(e.versionId, e);
       if (e.agentId !== agent.id && !oppMap.has(e.agentSlug)) {
         oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
       }
+    }
+    for (const v of db.getLadderVersionIdentities(l.id)) {
+      verById.set(v.versionId, v);
     }
 
     const oppCounts: Record<string, Record<string, number>> = {

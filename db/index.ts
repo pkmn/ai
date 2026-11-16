@@ -28,6 +28,7 @@ export interface Options {
   schemaDir?: string;
   migrationDir?: string;
   backupBeforeMigrate?: boolean;
+  readOnly?: boolean;
   now?: number;
 }
 
@@ -293,6 +294,11 @@ export class SqliteDatabase {
     options: Options = {}
   ) {
     this.dbPath = dbPath;
+    if (options.readOnly) {
+      this.db = new DatabaseSync(dbPath, {readOnly: true});
+      this.db.exec('PRAGMA busy_timeout = 5000;');
+      return;
+    }
     if (dbPath !== ':memory:') {
       fs.mkdirSync(path.dirname(dbPath), {recursive: true});
     }
@@ -757,6 +763,14 @@ export class Database extends SqliteDatabase {
 
   getLeaderboardEntries(ladderId: string): entries.LeaderboardEntryView[] {
     return entries.getLeaderboardEntries(this.db, ladderId);
+  }
+
+  getLadderVersionIdentities(ladderId: string): entries.LadderVersionIdentity[] {
+    return entries.getLadderVersionIdentities(this.db, ladderId);
+  }
+
+  getLadderStateSignature(ladderId: string): string {
+    return entries.getLadderStateSignature(this.db, ladderId);
   }
 
   getProjectArenaSummaries(): entries.ProjectArenaSummary[] {

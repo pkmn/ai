@@ -878,13 +878,15 @@ describe('mock scenarios & E2E lifecycle', () => {
             '.png': 'image/png',
             '.log': 'text/plain; charset=utf-8',
             '.7z': 'application/x-7z-compressed',
+            '.tar': 'application/x-tar',
           };
           const viewServer = http.createServer((req, res) => {
             const parsedUrl = new URL(req.url ?? '/', 'http://localhost');
             const pathname = decodeURIComponent(parsedUrl.pathname);
             const isStaticArenaFile = pathname.startsWith('/arena/viewer/') ||
-              pathname.endsWith('.log') ||
-              pathname.endsWith('.7z');
+              (pathname.endsWith('.log') && !parsedUrl.search) ||
+              pathname.endsWith('.7z') ||
+              pathname.endsWith('.tar');
             const isSsrOrApi = pathname.startsWith('/api/') ||
               pathname === '/projects' ||
               pathname === '/projects.json' ||
@@ -991,12 +993,11 @@ describe('mock scenarios & E2E lifecycle', () => {
                   const overflow = await page.evaluate<number>(
                     'document.documentElement.scrollWidth - window.innerWidth'
                   );
-                  expect({path: p, theme, overflow}).toEqual({
+                  expect({path: p, theme, ok: overflow <= 0}).toEqual({
                     path: p,
                     theme,
-                    overflow: expect.any(Number),
+                    ok: true,
                   });
-                  expect(overflow).toBeLessThanOrEqual(0);
                 }
                 await page.locator('#battles-tbody tr.battle-row td').first().click();
                 expect(

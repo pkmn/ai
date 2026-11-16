@@ -207,11 +207,34 @@ const ProjectCard = ({project, bibliography, arenaInfo}: {
   </section>;
 };
 
-export function page(
-  dir: string,
-  arenaByName?: ReadonlyMap<string, ArenaInfo>
-) {
+interface CachedProjectsDir {
+  key: string;
+  bibliography: {[key: string]: bibtex.Entry};
+  projects: Project[];
+  markdown: string;
+  latest: Date;
+}
+
+const projectsDirCache = new Map<string, CachedProjectsDir>();
+
+function loadProjectsDir(dir: string): CachedProjectsDir {
   const file = (ext: string) => path.join(dir, `projects.${ext}`);
+  const extensions = ['bib', 'dj', 'ts', 'tsx', 'yml'];
+  const mtimeParts: string[] = [];
+  let latest = new Date(0);
+  for (const ext of extensions) {
+    const f = file(ext);
+    if (!fs.existsSync(f)) {
+      mtimeParts.push(`${ext}:0`);
+      continue;
+    }
+    const st = fs.statSync(f);
+    mtimeParts.push(`${ext}:${st.mtimeMs}`);
+    if (latest < st.mtime) latest = st.mtime;
+  }
+  const key = mtimeParts.join('|');
+  const hit = projectsDirCache.get(dir);
+  if (hit?.key === key) return hit;
 
   const bib = bibtex.parse(fs.readFileSync(file('bib'), 'utf8'), {sentenceCase: false});
   if (bib.errors.length) {
@@ -220,13 +243,25 @@ export function page(
 
   const bibliography: {[key: string]: bibtex.Entry} = {};
   for (const entry of bib.entries) {
-    const key = entry.key === 'DellAcqua:2022'
+    const entryKey = entry.key === 'DellAcqua:2022'
       ? 'Dell’Acqua:2022'
       : entry.key;
-    bibliography[key] = entry;
+    bibliography[entryKey] = entry;
   }
 
   const projects: Project[] = yaml.parse(fs.readFileSync(file('yml'), 'utf8'));
+  const markdown = html.render(fs.readFileSync(file('dj'), 'utf8'));
+  const cached: CachedProjectsDir = {key, bibliography, projects, markdown, latest};
+  projectsDirCache.set(dir, cached);
+  return cached;
+}
+
+export function page(
+  dir: string,
+  arenaByName?: ReadonlyMap<string, ArenaInfo>
+) {
+  const {bibliography, projects: rawProjects, markdown, latest} = loadProjectsDir(dir);
+  const projects = [...rawProjects];
   const rankIndex = (p: Project) => {
     const id = p.name ?? (p.source && /^https:\/\/git(hub|lab).com/.test(p.source)
       ? p.source.slice(19)
@@ -257,17 +292,6 @@ export function page(
 
     return startYear(a) - startYear(b);
   });
-
-  const filler = fs.readFileSync(file('dj'), 'utf8');
-  const markdown = html.render(filler);
-
-  let latest = new Date(0);
-  for (const extension of ['bib', 'dj', 'ts', 'tsx', 'yml']) {
-    const f = file(extension);
-    if (!fs.existsSync(f)) continue;
-    const date = fs.statSync(f).mtime;
-    if (latest < date) latest = date;
-  }
 
   return {
     path: '/projects/',

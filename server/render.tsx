@@ -396,6 +396,15 @@ export function buildBattleDetailClientJs(): string {
     window.addEventListener('message', ev => {
       const data = ev.data;
       if (!data || typeof data !== 'object') return;
+      const frames = document.querySelectorAll('iframe.viewer-frame');
+      let fromViewer = false;
+      for (let i = 0; i < frames.length; i++) {
+        if (ev.source === frames[i].contentWindow) {
+          fromViewer = true;
+          break;
+        }
+      }
+      if (!fromViewer) return;
       if (
         data.type === 'speed' &&
         typeof data.speed === 'string' &&
@@ -457,7 +466,7 @@ export function buildBattleDetailClientJs(): string {
           '<div class="viewer-wrap">' +
             '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
               'title="Pokémon Showdown replay viewer" ' +
-              'sandbox="allow-scripts allow-same-origin"></iframe>' +
+              'sandbox="allow-scripts"></iframe>' +
           '</div>';
         slot.appendChild(wrap);
       }
@@ -1524,7 +1533,7 @@ export function computeAdjacentLosMap(
         const los = ratings.computeLOS(
           fallbackSolve.theta,
           fallbackSolve.covariance,
-          entries.length,
+          fallbackSolve.indexByVer.size,
           idxCur,
           idxNext
         );
@@ -2479,6 +2488,12 @@ function renderSingleLadderArtifact(opts: {
   };
 }
 
+export interface CachedArchivedLadder {
+  key: string;
+  rendered: ReturnType<typeof renderSingleLadderArtifact>;
+  teamsDoc?: LadderTeamsDocument;
+}
+
 export function renderArenaAndLadderArtifacts(opts: {
   db: db.Database;
   renderer: build.Renderer;
@@ -2487,6 +2502,8 @@ export function renderArenaAndLadderArtifacts(opts: {
   projectMeta: ReadonlyMap<string, ProjectMeta>;
   profileSlugs: ReadonlySet<string>;
   liveMatch?: arena.LiveMatch;
+  metaToken?: string;
+  archivedCache?: Map<string, CachedArchivedLadder>;
   nowSec: number;
 }): {
   arenaHtml: string;
@@ -2505,10 +2522,14 @@ export function renderArenaAndLadderArtifacts(opts: {
     projectMeta,
     profileSlugs,
     liveMatch,
+    metaToken,
+    archivedCache,
     nowSec,
   } = opts;
   const ladders = db.getCurrentLadders();
   const allLadders = db.getLadders();
+  const runningTour = db.getRunningTournament();
+  const laddersNavKey = allLadders.map(x => `${x.id}:${x.name}:${x.status}`).join(',');
   const pastLadders = allLadders
     .filter(l => l.status === 'settling' || l.status === 'archived')
     .sort((a, b) => {
@@ -2530,21 +2551,61 @@ export function renderArenaAndLadderArtifacts(opts: {
   }>>();
 
   for (const l of pastLadders) {
-    if (l.team === 'pools' && l.status === 'archived') {
-      archivedTeamsJsonById[l.id] = buildLadderTeamsDocument(db, l);
+    let rendered: ReturnType<typeof renderSingleLadderArtifact>;
+    let teamsDoc: LadderTeamsDocument | undefined;
+    if (l.status === 'archived' && archivedCache && metaToken !== undefined) {
+      const archiveInfo = arena.resolveLadderArchive(publicDir, l);
+      const cacheKey = [
+        l.id,
+        l.archivedAt ?? 0,
+        metaToken,
+        runningTour ? `${runningTour.id}:${runningTour.name}` : '',
+        laddersNavKey,
+        archiveInfo?.href ?? '',
+        db.getLadderStateSignature(l.id),
+      ].join('|');
+      const hit = archivedCache.get(l.id);
+      if (hit?.key === cacheKey) {
+        rendered = hit.rendered;
+        teamsDoc = hit.teamsDoc;
+      } else {
+        if (l.team === 'pools') {
+          teamsDoc = buildLadderTeamsDocument(db, l);
+        }
+        rendered = renderSingleLadderArtifact({
+          ladder: l,
+          currentLadders: ladders,
+          allLadders,
+          urlKey: l.id,
+          db,
+          renderer,
+          publicDir,
+          projectMeta,
+          profileSlugs,
+          nowSec,
+        });
+        archivedCache.set(l.id, {key: cacheKey, rendered, teamsDoc});
+      }
+    } else {
+      if (l.team === 'pools' && l.status === 'archived') {
+        teamsDoc = buildLadderTeamsDocument(db, l);
+      }
+      rendered = renderSingleLadderArtifact({
+        ladder: l,
+        currentLadders: ladders,
+        allLadders,
+        urlKey: l.id,
+        db,
+        renderer,
+        publicDir,
+        projectMeta,
+        profileSlugs,
+        nowSec,
+      });
     }
-    const rendered = renderSingleLadderArtifact({
-      ladder: l,
-      currentLadders: ladders,
-      allLadders,
-      urlKey: l.id,
-      db,
-      renderer,
-      publicDir,
-      projectMeta,
-      profileSlugs,
-      nowSec,
-    });
+    if (teamsDoc) {
+      archivedTeamsJsonById[l.id] = teamsDoc;
+    }
     archivedLadderHtmlById[l.id] = rendered.html;
     archivedLadderJsonById[l.id] = rendered.ladderDoc;
 
@@ -2731,7 +2792,7 @@ export function renderArenaAndLadderArtifacts(opts: {
       completedAt: t.completedAt,
       href: `/arena/tournaments/${encodeURIComponent(t.id)}/`,
       archiveHref: archive?.href,
-      winner: top && t.status !== 'scheduled'
+      winner: top && t.status === 'completed'
         ? {
           slug: top.agentSlug,
           name: top.agentName,
@@ -3413,7 +3474,7 @@ export function renderBattlesPage(opts: {
                 className='viewer-frame'
                 src='/arena/viewer/'
                 title='Pokémon Showdown battle viewer'
-                sandbox='allow-scripts allow-same-origin'
+                sandbox='allow-scripts'
               />
             </div>
           </div>
@@ -3622,6 +3683,7 @@ export function register(app: polka.Polka, options: Options) {
     return cachedContext;
   };
 
+  const archivedLadderCache = new Map<string, CachedArchivedLadder>();
   let cachedArenaBundle: {
     token: string;
     bundle: ReturnType<typeof renderArenaAndLadderArtifacts>;
@@ -3642,6 +3704,8 @@ export function register(app: polka.Polka, options: Options) {
       projectMeta: ctx.projectMeta,
       profileSlugs: ctx.profileSlugs,
       liveMatch: activeLive,
+      metaToken: ctx.token,
+      archivedCache: archivedLadderCache,
       nowSec,
     });
     cachedArenaBundle = {token: bundleToken, bundle};

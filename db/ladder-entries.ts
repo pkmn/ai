@@ -475,6 +475,64 @@ export function getLeaderboardEntries(
   }));
 }
 
+export interface LadderVersionIdentity {
+  versionId: number;
+  version: string;
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
+}
+
+export function getLadderVersionIdentities(
+  db: DatabaseSync,
+  ladderId: string
+): LadderVersionIdentity[] {
+  const rows = db.prepare(`
+    SELECT
+      le.version_id,
+      av.version,
+      av.agent_id,
+      a.slug AS agent_slug,
+      a.name AS agent_name
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
+    WHERE le.ladder_id = ?
+    ORDER BY le.version_id ASC
+  `).all(ladderId) as Array<{
+    version_id: number;
+    version: string;
+    agent_id: number;
+    agent_slug: string;
+    agent_name: string;
+  }>;
+  return rows.map(r => ({
+    versionId: r.version_id,
+    version: r.version,
+    agentId: r.agent_id,
+    agentSlug: r.agent_slug,
+    agentName: r.agent_name,
+  }));
+}
+
+export function getLadderStateSignature(db: DatabaseSync, ladderId: string): string {
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN role = 'quarantined' THEN 1 ELSE 0 END) AS quarantined,
+      COALESCE(SUM(matches), 0) AS matches,
+      COALESCE(SUM(ROUND(elo, 2)), 0) AS elo_sum
+    FROM ladder_entries
+    WHERE ladder_id = ?
+  `).get(ladderId) as {
+    total: number;
+    quarantined: number | null;
+    matches: number;
+    elo_sum: number;
+  };
+  return `${row.total}:${row.quarantined ?? 0}:${row.matches}:${row.elo_sum}`;
+}
+
 export function getProjectArenaSummaries(db: DatabaseSync): ProjectArenaSummary[] {
   const agentRows = db.prepare(`
     SELECT id, slug, name, status

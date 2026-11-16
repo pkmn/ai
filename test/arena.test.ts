@@ -337,6 +337,7 @@ describe('arena infrastructure', () => {
       expect(() => {
         execFileSync('bash', [
           '-n',
+          root('deploy'),
           root('arena/bin/arena'),
           root('arena/bin/tourney-agent'),
           root('arena/scripts/setup-arena.sh'),
