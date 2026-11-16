@@ -560,8 +560,6 @@ function buildBattlesScript(
     const formatTitles = ${formatTitlesJson};
     const livePanel = document.getElementById('live-panel');
     const battleViewerWrap = document.getElementById('battle-viewer-wrap');
-    const battleViewerLeft = document.getElementById('battle-viewer-left');
-    const battleViewerRight = document.getElementById('battle-viewer-right');
     const liveViewerFrame = document.getElementById('ps-viewer-frame');
     const tbody = document.getElementById('battles-tbody');
     const pager = document.getElementById('battles-pager');
@@ -597,27 +595,9 @@ function buildBattlesScript(
       postToFrame(liveViewerFrame, {type: 'theme', dark: e.matches});
     });
 
-    const renderShownHeader = () => {
-      if (!shownLive) return;
-      if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
-      const seat1 = shownLive.game === 2 ? shownLive.p2 : shownLive.p1;
-      const seat2 = shownLive.game === 2 ? shownLive.p1 : shownLive.p2;
-      if (battleViewerLeft) {
-        const badge = shownLive.ended
-          ? '<span class="muted">Finished</span>'
-          : '<span class="live-pill">&#9679; LIVE</span>';
-        battleViewerLeft.innerHTML = badge + ' · <code>' +
-          esc(shownLive.matchId) + '</code> · <strong>Game ' + shownLive.game + ' / 2</strong>';
-      }
-      if (battleViewerRight) {
-        battleViewerRight.innerHTML = '<tt>p1</tt> ' + renderAgent(seat1, true) +
-          ' vs <tt>p2</tt> ' + renderAgent(seat2, true);
-      }
-    };
-
     const loadShownIntoViewer = () => {
       if (!shownLive) return;
-      renderShownHeader();
+      if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
       const lines = Array.isArray(shownLive.lines) ? shownLive.lines : [];
       const p1Lines = Array.isArray(shownLive.p1Lines) ? shownLive.p1Lines : undefined;
       const p2Lines = Array.isArray(shownLive.p2Lines) ? shownLive.p2Lines : undefined;
@@ -645,7 +625,7 @@ function buildBattlesScript(
 
     const appendShownToViewer = () => {
       if (!shownLive) return;
-      renderShownHeader();
+      if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
       const lines = Array.isArray(shownLive.lines) ? shownLive.lines : [];
       const p1Lines = Array.isArray(shownLive.p1Lines) ? shownLive.p1Lines : undefined;
       const p2Lines = Array.isArray(shownLive.p2Lines) ? shownLive.p2Lines : undefined;
@@ -776,8 +756,8 @@ function buildBattlesScript(
             shownLive = {...queuedLive, ended: true};
             queuedLive = undefined;
             loadShownIntoViewer();
-          } else {
-            renderShownHeader();
+          } else if (battleViewerWrap) {
+            battleViewerWrap.classList.remove('hide');
           }
         } else if (battleViewerWrap) {
           battleViewerWrap.classList.add('hide');
@@ -830,7 +810,7 @@ function buildBattlesScript(
           }
           if (viewerPlaybackState === 'watching') {
             queuedLive = {...l, ended: false, seekEnd: false};
-            renderShownHeader();
+            if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
           } else {
             shownLive = {...l, ended: false, seekEnd: false};
             queuedLive = undefined;
@@ -843,7 +823,7 @@ function buildBattlesScript(
           postToFrame(liveViewerFrame, {type: 'end'});
           sentEnd = true;
         }
-        renderShownHeader();
+        if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
       } else {
         if (battleViewerWrap) battleViewerWrap.classList.add('hide');
         shownLive = undefined;
@@ -3450,28 +3430,6 @@ export function renderBattlesPage(opts: {
     liveDoc && !liveDoc.stale && liveDoc.live?.lines && liveDoc.live.lines.length > 0
       ? liveDoc.live
       : undefined;
-  let initialViewerLeft: util.Child = <span className='muted'>—</span>;
-  let initialViewerRight: util.Child = <span className='muted'>—</span>;
-  if (liveMatchWithLines) {
-    const l = liveMatchWithLines;
-    const seat1 = l.game === 2 ? l.p2 : l.p1;
-    const seat2 = l.game === 2 ? l.p1 : l.p2;
-    const s1Href = agentLinks[seat1.slug];
-    const s2Href = agentLinks[seat2.slug];
-    initialViewerLeft = (
-      <>
-        <span className='live-pill'>{'\u25cf'} LIVE</span> · <code>{l.matchId}</code> ·{' '}
-        <strong>Game {l.game} / 2</strong>
-      </>
-    );
-    initialViewerRight = (
-      <>
-        <tt>p1</tt> {renderAgentLink(seat1.name, s1Href, true)} <code>{seat1.version}</code>
-        {' vs '}
-        <tt>p2</tt> {renderAgentLink(seat2.name, s2Href, true)} <code>{seat2.version}</code>
-      </>
-    );
-  }
 
   const content = String(
     <>
@@ -3486,25 +3444,23 @@ export function renderBattlesPage(opts: {
       </nav>
       <section id='live'>
         <h3><a href='#live' className='subtle'>Live</a></h3>
-        <div className='live-panel' id='live-panel'>
-          {renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta, profileSlugs)}
-        </div>
-        <div
-          className={`battle-viewer-wrap${liveMatchWithLines ? '' : ' hide'}`}
-          id='battle-viewer-wrap'
-        >
-          <div className='series-bar' id='battle-viewer-bar'>
-            <span id='battle-viewer-left'>{initialViewerLeft}</span>
-            <span id='battle-viewer-right'>{initialViewerRight}</span>
+        <div className='live-panel'>
+          <div id='live-panel'>
+            {renderLivePanelInner(liveDoc, nowSec, publicDir, projectMeta, profileSlugs)}
           </div>
-          <div className='viewer-wrap'>
-            <iframe
-              id='ps-viewer-frame'
-              className='viewer-frame'
-              src='/arena/viewer/'
-              title='Pokémon Showdown battle viewer'
-              sandbox='allow-scripts allow-same-origin'
-            />
+          <div
+            className={`battle-viewer-wrap${liveMatchWithLines ? '' : ' hide'}`}
+            id='battle-viewer-wrap'
+          >
+            <div className='viewer-wrap'>
+              <iframe
+                id='ps-viewer-frame'
+                className='viewer-frame'
+                src='/arena/viewer/'
+                title='Pokémon Showdown battle viewer'
+                sandbox='allow-scripts allow-same-origin'
+              />
+            </div>
           </div>
         </div>
       </section>

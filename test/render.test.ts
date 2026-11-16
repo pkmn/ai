@@ -1715,6 +1715,7 @@ describe('JSON route parity & retired pool archives', () => {
       const html = await h.getText('/arena/battles/');
       expect(html).toContain('class="battle-viewer-wrap" id="battle-viewer-wrap"');
       expect(html).toContain('id="ps-viewer-frame"');
+      expect(html).not.toContain('battle-viewer-bar');
       expect(html).toContain('gen9randombattle-0000100');
     } finally {
       await h.close();
