@@ -236,11 +236,16 @@ export function seedTournamentEntrants(
   inTransaction: TransactionRunner,
   tournamentId: string
 ): number {
-  const tournament = getTournament(db, tournamentId);
-  if (!tournament) {
-    throw new Error(`Unknown tournament "${tournamentId}"`);
-  }
   return inTransaction(() => {
+    const tournament = getTournament(db, tournamentId);
+    if (!tournament) {
+      throw new Error(`Unknown tournament '${tournamentId}'`);
+    }
+    if (tournament.status !== 'scheduled') {
+      throw new Error(
+        `Cannot re-seed entrants for tournament '${tournamentId}' in status '${tournament.status}'`
+      );
+    }
     const rows = db.prepare(`
       SELECT
         te.version_id,

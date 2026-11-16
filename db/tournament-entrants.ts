@@ -132,18 +132,41 @@ export function recomputeTournamentStandings(
   if (!entrants.length) return;
 
   const gameRows = db.prepare(`
-    SELECT stage, p1_version_id, p2_version_id, outcome
+    SELECT id, stage, matchup_game, p1_version_id, p2_version_id, outcome
     FROM tournament_matches
     WHERE tournament_id = ?
       AND status = 'completed'
       AND outcome IS NOT NULL
-    ORDER BY id ASC
+    ORDER BY matchup_game ASC, id ASC
   `).all(tournamentId) as Array<{
+    id: string;
     stage: 'Round Robin' | 'Superfinal';
+    matchup_game: number;
     p1_version_id: number;
     p2_version_id: number;
     outcome: ratings.GameOutcome;
   }>;
+
+  const subGameRows = db.prepare(`
+    SELECT tg.match_id, tg.outcome
+    FROM tournament_games tg
+    JOIN tournament_matches tm ON tm.id = tg.match_id
+    WHERE tm.tournament_id = ?
+      AND tm.status = 'completed'
+    ORDER BY tg.match_id ASC, tg.game_number ASC
+  `).all(tournamentId) as Array<{
+    match_id: string;
+    outcome: ratings.GameOutcome;
+  }>;
+  const subOutcomesByMatch = new Map<string, ratings.GameOutcome[]>();
+  for (const sg of subGameRows) {
+    let list = subOutcomesByMatch.get(sg.match_id);
+    if (!list) {
+      list = [];
+      subOutcomesByMatch.set(sg.match_id, list);
+    }
+    list.push(sg.outcome);
+  }
 
   const M = entrants.length;
   const idxByVer = new Map<number, number>();
@@ -161,7 +184,11 @@ export function recomputeTournamentStandings(
     const i = idxByVer.get(g.p1_version_id);
     const j = idxByVer.get(g.p2_version_id);
     if (i === undefined || j === undefined) continue;
-    allGames.push({i, j, outcome: g.outcome});
+    const subOutcomes = subOutcomesByMatch.get(g.id);
+    const ratingOutcomes = subOutcomes && subOutcomes.length > 0 ? subOutcomes : [g.outcome];
+    for (const out of ratingOutcomes) {
+      allGames.push({i, j, outcome: out});
+    }
 
     if (g.stage === 'Superfinal') {
       if (g.outcome === 'W') {
@@ -175,7 +202,9 @@ export function recomputeTournamentStandings(
       continue;
     }
 
-    rrGames.push({i, j, outcome: g.outcome});
+    for (const out of ratingOutcomes) {
+      rrGames.push({i, j, outcome: out});
+    }
     if (g.outcome === 'W') {
       wins[i]++;
       losses[j]++;
@@ -231,6 +260,13 @@ export function recomputeTournamentStandings(
     rankByIdx[entIdx] = rankZero + 1;
   });
 
+  // While `final_rank` is still `NULL` (`assignFinalRanks === false`), persist `rrRatingRes` so
+  // `getTournamentEntrants` (`ORDER BY points DESC, sonneborn_berger DESC, elo DESC`) preserves
+  // exact Stage-1 tiebreak ordering throughout a live Superfinal; once finalized, persist
+  // `final_rank` alongside full-event `allRatingRes`.
+  const displayRatings = assignFinalRanks ? allRatingRes : rrRatingRes;
+  const hasRatedGames = assignFinalRanks ? allGames.length > 0 : rrGames.length > 0;
+
   for (let i = 0; i < M; i++) {
     const ent = entrants[i];
     upsertTournamentEntrant(db, {
@@ -239,8 +275,8 @@ export function recomputeTournamentStandings(
       versionId: ent.versionId,
       seed: ent.seed,
       finalRank: assignFinalRanks ? rankByIdx[i] : ent.finalRank,
-      elo: allGames.length > 0 ? Math.round(allRatingRes.elo[i]) : ent.elo,
-      se: allGames.length > 0 ? Math.round(allRatingRes.eloStd[i]) : ent.se,
+      elo: hasRatedGames ? Math.round(displayRatings.elo[i]) : ent.elo,
+      se: hasRatedGames ? Math.round(displayRatings.eloStd[i]) : ent.se,
       gameWins: wins[i],
       gameLosses: losses[i],
       gameTies: ties[i],

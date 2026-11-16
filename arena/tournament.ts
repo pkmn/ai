@@ -65,7 +65,6 @@ export interface TurnBroadcastInfo {
   p2BankSeconds: number;
   p1Thinking: boolean;
   p2Thinking: boolean;
-  lines: string[];
   p1Pokemon?: unknown[];
   p2Pokemon?: unknown[];
 }
@@ -354,11 +353,6 @@ export class ConcurrentGame {
     return rewriteBlindPlayerNames(rawLog, this.p1Spec.displayName, this.p2Spec.displayName);
   }
 
-  private getSpectatorLines(): string[] {
-    const full = this.getFullLog();
-    return full.length > 0 ? full.split('\n') : [];
-  }
-
   private emitSpectatorChunk(rawChunk: string) {
     let chunkToEmit = rawChunk;
     if (this.battleStream.battle) {
@@ -386,7 +380,6 @@ export class ConcurrentGame {
       ),
       p1Thinking: Boolean(this.p1?.thinking),
       p2Thinking: Boolean(this.p2?.thinking),
-      lines: this.getSpectatorLines(),
       p1Pokemon,
       p2Pokemon,
     });
@@ -1624,6 +1617,7 @@ export interface Options {
   tables?: readonly TableBinding[];
   superfinalGames?: number;
   maxTurns?: number;
+  seedSecret?: string;
   randomInt?: (max: number) => number;
   prepareSubmissionRootfs?: (
     sub: arena.PendingSubmission,
@@ -1659,6 +1653,7 @@ export class Coordinator {
   private readonly tables: readonly TableBinding[];
   private readonly superfinalGames: number;
   private readonly maxTurns?: number;
+  private readonly seedSecret: string;
   private readonly randomInt: (max: number) => number;
   private readonly customRandomInt: boolean;
   private readonly prepareSubmissionRootfs?: (
@@ -1676,6 +1671,7 @@ export class Coordinator {
     this.tables = options.tables ?? [];
     this.superfinalGames = options.superfinalGames ?? 100;
     this.maxTurns = options.maxTurns;
+    this.seedSecret = options.seedSecret ?? process.env.ARENA_SECRET ?? 'tournament-seed';
     this.customRandomInt = options.randomInt !== undefined;
     this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
     this.prepareSubmissionRootfs = options.prepareSubmissionRootfs;
@@ -1869,6 +1865,37 @@ export class Coordinator {
     return {p1Team: undefined, p2Team: undefined, swappedSeats};
   }
 
+  private derivePairSeed(tournamentId: string, pairIdx: number): sim.PRNGSeed {
+    if (this.customRandomInt) {
+      return this.randomPrngSeed();
+    }
+    const hex = crypto
+      .createHmac('sha256', this.seedSecret)
+      .update(`${tournamentId}:pair:${pairIdx}`)
+      .digest('hex');
+    return `sodium,${hex}`;
+  }
+
+  private async completeGameWithRetry(
+    tournamentId: string,
+    payload: arena.TournamentGameCompletePayload
+  ): Promise<arena.TournamentGameCompleteResponse> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        return await this.client.completeTournamentGame(tournamentId, payload);
+      } catch (err) {
+        lastErr = err;
+        const status = (err as {status?: unknown} | undefined)?.status;
+        if (status === 400 || status === 404 || status === 422) {
+          throw err;
+        }
+        await new Promise(r => setTimeout(r, 250 * 2 ** attempt));
+      }
+    }
+    throw lastErr;
+  }
+
   async runTournament(
     tournamentId: string
   ): Promise<{roundRobinGames: number; superfinalGames: number}> {
@@ -1879,7 +1906,7 @@ export class Coordinator {
     }
     if (state.entrants.length < 2) {
       throw new Error(
-        `Tournament "${tournamentId}" requires at least 2 entrants ` +
+        `Tournament '${tournamentId}' requires at least 2 entrants ` +
         `(found ${state.entrants.length}).`
       );
     }
@@ -1887,10 +1914,9 @@ export class Coordinator {
     const entrantByVersion = new Map(state.entrants.map(e => [e.versionId, e]));
     const versionIds = state.entrants.map(e => e.versionId);
     const incSeconds = arena.turnIncrementSeconds(tourney.format);
-    const totalPairs = Math.max(
-      1,
-      Math.ceil(Math.max(tourney.gamesPerMatchup, this.superfinalGames) / 2)
-    );
+    const rrPairs = Math.ceil(tourney.gamesPerMatchup / 2);
+    const sfPairs = Math.ceil(Math.max(0, this.superfinalGames) / 2);
+    const totalPairs = Math.max(1, rrPairs + sfPairs);
     let lockedBook: TournamentTeamPair[] = [];
     if (
       tourney.team === 'harvested' ||
@@ -1907,18 +1933,16 @@ export class Coordinator {
       tourney.team === 'random' ||
       (tourney.team === undefined && toID(tourney.format).includes('random'))
     ) {
-      lockedBook = Array.from({length: totalPairs}, () => {
-        const pair = sampleRandomPair(
-          tourney.format,
-          this.randomPrngSeed(),
-          this.randomPrngSeed()
-        );
+      lockedBook = Array.from({length: totalPairs}, (_, idx) => {
+        const s1 = this.derivePairSeed(`${tourney.id}:team1`, idx);
+        const s2 = this.derivePairSeed(`${tourney.id}:team2`, idx);
+        const pair = sampleRandomPair(tourney.format, s1, s2);
         return {p1Team: pair.t1Packed, p2Team: pair.t2Packed};
       });
     }
     const pairSeeds: sim.PRNGSeed[] = Array.from(
       {length: totalPairs},
-      () => this.randomPrngSeed()
+      (_, idx) => this.derivePairSeed(tourney.id, idx)
     );
 
     const rrPlayedByPair = new Map<string, number>();
@@ -1963,6 +1987,19 @@ export class Coordinator {
     let markedRunning = tourney.status === 'running';
     let rrCompleted = 0;
 
+    const broadcastChains = new Map<number, Promise<void>>();
+    const queueTableBroadcast = (
+      tableNum: number,
+      payload: arena.TournamentBroadcastPayload
+    ): Promise<void> => {
+      const prev = broadcastChains.get(tableNum) ?? Promise.resolve();
+      const next = prev
+        .then(() => this.client.sendTournamentBroadcast(tournamentId, payload))
+        .then(() => undefined, () => undefined);
+      broadcastChains.set(tableNum, next);
+      return next;
+    };
+
     const playSingleGame = async (params: {
       tableNum: number;
       stage: 'Round Robin' | 'Superfinal';
@@ -1983,6 +2020,7 @@ export class Coordinator {
         params.gameIndexZeroBased
       );
       const pairIdx = Math.floor(params.gameIndexZeroBased / 2);
+      const pairSeed = pairSeeds[pairIdx % pairSeeds.length];
       const p1Ent = sampled.swappedSeats ? params.entB : params.entA;
       const p2Ent = sampled.swappedSeats ? params.entA : params.entB;
       const p1Host = sampled.swappedSeats ? params.vmHostB : params.vmHostA;
@@ -1992,10 +2030,6 @@ export class Coordinator {
 
       let preemptions = 0;
       for (;;) {
-        const seed =
-          preemptions === 0
-            ? pairSeeds[pairIdx % pairSeeds.length]
-            : this.randomPrngSeed();
         const p1Spec = this.resolveEntrantSpec(p1Ent, p1Host, p1Ctrl);
         const p2Spec = this.resolveEntrantSpec(p2Ent, p2Host, p2Ctrl);
 
@@ -2003,7 +2037,7 @@ export class Coordinator {
           game: number;
           bestOf: number;
           summaries: SeriesGameSummary[];
-        }) => this.client.sendTournamentBroadcast(tournamentId, {
+        }) => queueTableBroadcast(params.tableNum, {
           table: params.tableNum,
           mode: 'load',
           label: `Table ${params.tableNum}`,
@@ -2036,7 +2070,7 @@ export class Coordinator {
           },
           lines: [],
           live: true,
-        }).catch(() => undefined);
+        });
 
         await sendTableLoad({game: 1, bestOf: tourneyBestOf, summaries: []});
 
@@ -2044,7 +2078,7 @@ export class Coordinator {
           format: tourney.format,
           customRules: tourney.customRules,
           bestOf: tourneyBestOf,
-          seed,
+          seed: pairSeed,
           p1Spec,
           p2Spec,
           p1TeamPacked: sampled.p1Team,
@@ -2059,7 +2093,7 @@ export class Coordinator {
             if (!chunk) return;
             const newLines = chunk.split('\n');
             if (newLines.length === 0) return;
-            void this.client.sendTournamentBroadcast(tournamentId, {
+            queueTableBroadcast(params.tableNum, {
               table: params.tableNum,
               mode: 'append',
               p1: {
@@ -2087,18 +2121,25 @@ export class Coordinator {
         });
 
         const res = await game.run();
+        if (res.launchError) {
+          throw new Error(`Worker launch failed on ${params.gameId}: ${res.launchError}`);
+        }
         if (res.winner === 'preempted' || !res.outcome) {
           preemptions++;
           if (preemptions >= 5) {
             throw new Error(`Exceeded 5 consecutive Spot preemptions on ${params.gameId}`);
           }
+          if (!p1Spec.localCommand && !p2Spec.localCommand) {
+            await new Promise(r => setTimeout(r, Math.min(5000, 250 * 2 ** (preemptions - 1))));
+          }
           continue;
         }
 
+        await (broadcastChains.get(params.tableNum) ?? Promise.resolve());
         const statusUpdate =
           params.finalTournamentStatus ?? (!markedRunning ? 'running' : undefined);
         markedRunning = true;
-        await this.client.completeTournamentGame(tournamentId, {
+        await this.completeGameWithRetry(tournamentId, {
           table: params.tableNum,
           logs: res.games.map(gm => gm.omniscientLog),
           ...(statusUpdate ? {tournamentStatus: statusUpdate} : {}),
@@ -2159,8 +2200,15 @@ export class Coordinator {
         residents.vmAAgent = batch.agentOnVmA;
         residents.vmBAgent = batch.agentOnVmB;
 
-        const entA = entrantByVersion.get(batch.agentOnVmA)!;
-        const entB = entrantByVersion.get(batch.agentOnVmB)!;
+        // Order `(entA, entB)` canonically by `(low, high)` so Game 1 and Game 2 mirror seat/team
+        // swaps remain identical across mid-batch restarts regardless of which VM holds `low`.
+        const entLow = entrantByVersion.get(low)!;
+        const entHigh = entrantByVersion.get(high)!;
+        const lowOnVmB = batch.agentOnVmB === low;
+        const hostLow = lowOnVmB ? binding.vmHostB : binding.vmHostA;
+        const ctrlLow = lowOnVmB ? binding.controlSocketB : binding.controlSocketA;
+        const hostHigh = lowOnVmB ? binding.vmHostA : binding.vmHostB;
+        const ctrlHigh = lowOnVmB ? binding.controlSocketA : binding.controlSocketB;
 
         try {
           for (let offset = 0; offset < batch.gamesToPlay; offset++) {
@@ -2175,22 +2223,22 @@ export class Coordinator {
               cycle,
               matchupGame,
               gameId,
-              entA,
-              entB,
-              vmHostA: binding.vmHostA,
-              controlA: binding.controlSocketA,
-              vmHostB: binding.vmHostB,
-              controlB: binding.controlSocketB,
+              entA: entLow,
+              entB: entHigh,
+              vmHostA: hostLow,
+              controlA: ctrlLow,
+              vmHostB: hostHigh,
+              controlB: ctrlHigh,
               gameIndexZeroBased: gIdx,
             });
             matchup.gamesPlayed++;
             totalGamesByVersion.set(
-              batch.agentOnVmA,
-              (totalGamesByVersion.get(batch.agentOnVmA) ?? 0) + 1
+              low,
+              (totalGamesByVersion.get(low) ?? 0) + 1
             );
             totalGamesByVersion.set(
-              batch.agentOnVmB,
-              (totalGamesByVersion.get(batch.agentOnVmB) ?? 0) + 1
+              high,
+              (totalGamesByVersion.get(high) ?? 0) + 1
             );
             rrCompleted++;
           }
@@ -2199,11 +2247,11 @@ export class Coordinator {
         }
       }
 
-      await this.client.sendTournamentBroadcast(tournamentId, {
+      await queueTableBroadcast(tableNum, {
         table: tableNum,
         idle: true,
         label: `Table ${tableNum}`,
-      }).catch(() => undefined);
+      });
     };
 
     await Promise.all(Array.from({length: tableCount}, (_, idx) => runTableWorker(idx)));
@@ -2212,12 +2260,25 @@ export class Coordinator {
     let sfCompleted = 0;
     if (this.superfinalGames > 0) {
       const postRrState = await this.client.getTournamentState(tournamentId);
-      const existingSf = postRrState.games.filter(
-        g => g.stage === 'Superfinal' && g.outcome !== undefined
-      ).length;
+      const completedSfGames = postRrState.games
+        .filter(g => g.stage === 'Superfinal' && g.outcome !== undefined)
+        .sort((a, b) => a.matchupGame - b.matchupGame);
+      const existingSf = completedSfGames.length;
       if (postRrState.entrants.length >= 2 && existingSf < this.superfinalGames) {
-        const finalistA = postRrState.entrants[0];
-        const finalistB = postRrState.entrants[1];
+        const postEntrantByVer = new Map(postRrState.entrants.map(e => [e.versionId, e]));
+        // If resuming mid-Superfinal, lock the exact two finalists from Game 1 (`matchupGame = 1`,
+        // where `rrPairs * 2 + 0` is even so `p1` = `finalistA` and `p2` = `finalistB`).
+        const g1Sf = completedSfGames.find(g => g.matchupGame === 1) ?? completedSfGames[0];
+        const finalistA = g1Sf
+          ? (g1Sf.matchupGame % 2 === 1
+            ? postEntrantByVer.get(g1Sf.p1.versionId)
+            : postEntrantByVer.get(g1Sf.p2.versionId)) ?? postRrState.entrants[0]
+          : postRrState.entrants[0];
+        const finalistB = g1Sf
+          ? (g1Sf.matchupGame % 2 === 1
+            ? postEntrantByVer.get(g1Sf.p2.versionId)
+            : postEntrantByVer.get(g1Sf.p1.versionId)) ?? postRrState.entrants[1]
+          : postRrState.entrants[1];
         const binding = this.tables[0] ?? {
           vmHostA: '127.0.0.1',
           controlSocketA: '',
@@ -2240,7 +2301,7 @@ export class Coordinator {
             controlA: binding.controlSocketA,
             vmHostB: binding.vmHostB,
             controlB: binding.controlSocketB,
-            gameIndexZeroBased: gIdx,
+            gameIndexZeroBased: rrPairs * 2 + gIdx,
             finalTournamentStatus: isFinalGame ? 'completed' : undefined,
           });
           sfCompleted++;
@@ -2248,7 +2309,9 @@ export class Coordinator {
       }
     }
 
-    await this.client.sendTournamentBroadcast(tournamentId, {off: true}).catch(() => undefined);
+    await this.client
+      .sendTournamentBroadcast(tournamentId, {off: true, tournamentStatus: 'completed'})
+      .catch(() => undefined);
     return {roundRobinGames: rrCompleted, superfinalGames: sfCompleted};
   }
 }

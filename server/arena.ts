@@ -738,7 +738,7 @@ export interface TournamentArchiveResponse {
 }
 
 export type TournamentBroadcastPayload =
-  {off: true} |
+  {off: true; tournamentStatus?: 'completed'} |
   {table: number; idle: true; label?: string} |
   {
     table: number;
@@ -2494,6 +2494,9 @@ export function register(app: polka.Polka, options: Options): Handle {
     const nowSec = getNowSec();
     try {
       if (body.off === true) {
+        if (body.tournamentStatus === 'completed' && tournament.status !== 'completed') {
+          db.setTournamentStatus(tournament.id, 'completed', nowSec);
+        }
         broadcastsByTournament.delete(tournament.id);
         liveSeq++;
         pushTournamentEvent(tournament.id, 'broadcast-end', {
@@ -3143,7 +3146,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       };
     });
 
-    const games = db.getTournamentGames(tournament.id).map(g => ({
+    const games = db.getTournamentGames(tournament.id, 1_000_000).map(g => ({
       id: g.id,
       stage: g.stage,
       cycle: g.cycle,

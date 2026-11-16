@@ -239,6 +239,7 @@ export async function runTournamentDaemon(
     tables: opts.tables,
     superfinalGames: opts.superfinalGames,
     maxTurns: opts.maxTurns,
+    seedSecret: arenaSecret,
   });
   return coord.runTournament(tournamentId);
 }
@@ -254,12 +255,50 @@ if (require.main === module) {
     const tourneyArg = process.argv.slice(3).find(a => !a.startsWith('--'));
     void runTournamentValidationDaemon({tournamentId: tourneyArg, once}).catch(onFatal);
   } else if (sub === 'tournament') {
-    const tourneyId = process.argv[3];
+    const rest = process.argv.slice(3);
+    const tourneyId = rest.find(a => !a.startsWith('--'));
     if (!tourneyId) {
-      process.stderr.write('Usage: arena tournament <tournament-id>\n');
+      process.stderr.write(
+        'Usage: arena tournament <tournament-id> ' +
+        '[--table=<vmA>,<sockA>,<vmB>,<sockB>]... [--superfinal=<N>] [--local]\n'
+      );
       process.exit(2);
     }
-    void runTournamentDaemon(tourneyId).catch(onFatal);
+    const tables: tournament.TableBinding[] = [];
+    let superfinalGames: number | undefined;
+    for (const arg of rest) {
+      if (arg.startsWith('--table=')) {
+        const parts = arg.slice('--table='.length).split(',');
+        if (parts.length !== 4) {
+          process.stderr.write(`Invalid --table binding: ${arg}\n`);
+          process.exit(2);
+        }
+        tables.push({
+          vmHostA: parts[0],
+          controlSocketA: parts[1],
+          vmHostB: parts[2],
+          controlSocketB: parts[3],
+        });
+      } else if (arg.startsWith('--superfinal=')) {
+        const parsed = Number(arg.slice('--superfinal='.length));
+        if (!Number.isInteger(parsed) || parsed < 0) {
+          process.stderr.write(`Invalid --superfinal count: ${arg}\n`);
+          process.exit(2);
+        }
+        superfinalGames = parsed;
+      } else if (arg === '--local') {
+        tables.push({
+          vmHostA: '127.0.0.1',
+          controlSocketA: '',
+          vmHostB: '127.0.0.1',
+          controlSocketB: '',
+        });
+      }
+    }
+    void runTournamentDaemon(tourneyId, {
+      ...(tables.length > 0 ? {tables} : {}),
+      ...(superfinalGames !== undefined ? {superfinalGames} : {}),
+    }).catch(onFatal);
   } else {
     void runDaemon().catch(onFatal);
   }

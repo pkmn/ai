@@ -3049,6 +3049,58 @@ describe('arena infrastructure', () => {
         );
         expect(oddSeeds.size).toBe(1);
         expect(evenSeeds).toEqual(oddSeeds);
+        expect(() => db.seedTournamentEntrants('10')).toThrow(/status 'completed'/);
+
+        // Verify `superfinalGames === 0` still finalizes tournament status to 'completed'
+        db.upsertTournament({
+          id: '11',
+          name: 'Tournament #11',
+          format: 'gen9customgame',
+          team: 'harvested',
+          gamesPerMatchup: 2,
+          batchSize: 2,
+          parallelTables: 1,
+          hardware: 'GCP L4',
+          status: 'scheduled',
+          startsAt: Math.floor(Date.now() / 1000) + 86400 * 7,
+        });
+        for (const [idx, slug] of ['0-error', 'foul-play'].entries()) {
+          const ag = db.getAgentBySlug(slug)!;
+          const v = db.createSubmission({
+            agentId: ag.id,
+            version: '3.0.0-t11',
+            package: 'oci',
+            url: `ghcr.io/pkmn/${slug}:3.0.0-t11`,
+            sha256: String(idx + 8).repeat(64),
+            ladderIds: [],
+            tournamentIds: ['11'],
+          });
+          db.applySubmissionStatus({versionId: v.id, smokeStatus: 'passed', unpackedBytes: 2048});
+        }
+        const noSfCoord = new tournament.Coordinator({
+          client,
+          baselineSpec: {
+            agentId: '_baseline',
+            displayName: 'Baseline',
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: relayBin,
+            localArgs: [root('arena', 'bin', 'baseline')],
+          },
+          superfinalGames: 0,
+          maxTurns: 1,
+          resolveEntrantSpec: entrant => ({
+            agentId: `${entrant.agentSlug}-${entrant.versionId}`,
+            displayName: entrant.agentName,
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: relayBin,
+            localArgs: [process.execPath, tourneyUtmAgentScript],
+          }),
+        });
+        const noSfRes = await noSfCoord.runTournament('11');
+        expect(noSfRes).toEqual({roundRobinGames: 2, superfinalGames: 0});
+        expect(db.getTournament('11')?.status).toBe('completed');
       });
     });
 
