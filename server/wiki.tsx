@@ -912,6 +912,7 @@ export class Wiki {
           [
             '-c', 'user.name=pkmn.ai',
             '-c', 'user.email=wiki@pkmn.ai',
+            '-c', 'commit.gpgsign=false',
             'commit',
             `--author=${gitAuthor}`,
             '-m', summary,

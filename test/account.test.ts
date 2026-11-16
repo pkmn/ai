@@ -189,6 +189,7 @@ describe('account routes', () => {
     execFileSync('git', ['init', '-b', 'main'], {cwd: templateWikiDir});
     execFileSync('git', ['config', 'user.name', 'test'], {cwd: templateWikiDir});
     execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {cwd: templateWikiDir});
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], {cwd: templateWikiDir});
     fs.writeFileSync(path.join(templateWikiDir, 'index.dj'), '# Home\n');
     execFileSync('git', ['add', 'index.dj'], {cwd: templateWikiDir});
     execFileSync('git', ['commit', '-m', 'Init'], {cwd: templateWikiDir});

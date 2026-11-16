@@ -3575,6 +3575,7 @@ export class Runner {
       execFileSync('git', ['init', '-b', 'main'], {cwd: this.wikiDir});
       execFileSync('git', ['config', 'user.name', 'pkmn.ai'], {cwd: this.wikiDir});
       execFileSync('git', ['config', 'user.email', 'wiki@pkmn.ai'], {cwd: this.wikiDir});
+      execFileSync('git', ['config', 'commit.gpgsign', 'false'], {cwd: this.wikiDir});
     }
   }
 
