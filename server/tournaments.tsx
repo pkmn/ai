@@ -1363,25 +1363,6 @@ export function renderArenaTournamentsSummaryHtml(opts: {
                     </td>
                   );
                 }
-              } else if (t.status === 'running') {
-                const leader = entrants[0];
-                if (leader) {
-                  const lHref = render.resolveAgentHref(
-                    publicDir,
-                    projectMeta,
-                    leader.agentSlug,
-                    leader.agentName,
-                    profileSlugs
-                  );
-                  winnerCell = (
-                    <td>
-                      <em>
-                        {raw(render.formatAgentLink(leader.agentName, lHref, true))}{' '}
-                        <code>{leader.version}</code>
-                      </em>
-                    </td>
-                  );
-                }
               }
 
               return (

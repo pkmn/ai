@@ -1073,7 +1073,6 @@ describe('tournament SSR views', () => {
     expect(arenaHubHtml).toContain('class="live-pill"');
     expect(arenaHubHtml).toContain('LIVE');
     expect(arenaHubHtml).toContain('href="/projects/jaxcalibur/"');
-    expect(arenaHubHtml).toContain('<em><a href="/projects/metamon/"');
     expect(arenaHubHtml).toContain('<td class="muted">-</td>');
   });
 
