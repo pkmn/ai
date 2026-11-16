@@ -276,6 +276,38 @@ describe('schema migrations', () => {
       freshDb.close();
     }
   });
+
+  test('compareDatabaseSchemas detects missing indexes across databases', () => {
+    const schemaDirA = path.join(tmpDir, 'schema-idx-a');
+    const schemaDirB = path.join(tmpDir, 'schema-idx-b');
+    const migrationDir = path.join(tmpDir, 'migration-idx');
+    fs.mkdirSync(schemaDirA, {recursive: true});
+    fs.mkdirSync(schemaDirB, {recursive: true});
+    fs.mkdirSync(migrationDir, {recursive: true});
+
+    fs.writeFileSync(path.join(schemaDirA, 'items.sql'), `
+      CREATE TABLE items (
+        id INTEGER PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('open', 'closed'))
+      );
+      CREATE INDEX idx_items_status ON items(status DESC);
+    `);
+    fs.writeFileSync(path.join(schemaDirB, 'items.sql'), `
+      CREATE TABLE items (
+        id INTEGER PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('open', 'closed'))
+      );
+    `);
+
+    const dbA = new Database(':memory:', {schemaDir: schemaDirA, migrationDir});
+    const dbB = new Database(':memory:', {schemaDir: schemaDirB, migrationDir});
+    try {
+      expect(compareDatabaseSchemas(dbA.db, dbB.db).length).toBeGreaterThan(0);
+    } finally {
+      dbA.close();
+      dbB.close();
+    }
+  });
 });
 
 describe('competitor saved teams lifecycle', () => {
@@ -1718,6 +1750,57 @@ describe('quarantine invariants', () => {
     });
     expect(() => db.unquarantineVersion('alpha', '1.1.0', 1_760_002_030))
       .toThrow(/not quarantined/);
+
+    db.quarantineVersion('alpha', '1.1.0', 'Manual quarantine of failed version', 1_760_002_035);
+    expect(() => db.unquarantineVersion('alpha', '1.1.0', 1_760_002_040))
+      .toThrow(/never passed smoke testing/);
+  });
+
+  test('applySubmissionStatus rejects regressions from passed to failed', () => {
+    expect(() =>
+      db.applySubmissionStatus({
+        versionId: versionIds[0],
+        smokeStatus: 'failed',
+        smokeError: 'Late bogus fail',
+        now: 1_760_002_050,
+      })).toThrow(/Invalid submission status transition/);
+  });
+
+  test('disabling a removed project retires its active ladder entries', () => {
+    expect(
+      db.getLeaderboardEntries('gen9randombattle').find(e => e.agentSlug === 'alpha')?.rankCurrent
+    ).toBe(1);
+    db.syncProjectsFromYaml(`
+- name: Beta
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      b: b.2
+- name: Gamma
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      c: c.3
+`, undefined, 1_760_002_100);
+    const entries = db.getLeaderboardEntries('gen9randombattle');
+    expect(entries.find(e => e.agentSlug === 'alpha')?.role).toBe('retired');
+    expect(entries.find(e => e.agentSlug === 'alpha')?.rankCurrent).toBeUndefined();
+    expect(entries.find(e => e.agentSlug === 'beta')?.rankCurrent).toBe(1);
+  });
+
+  test('archiving a ladder closes open Top-K reign clocks', () => {
+    const beforeRow = db.db.prepare(
+      'SELECT top1_entered_at FROM ladder_entries WHERE ladder_id = ? AND version_id = ?'
+    ).get('gen9randombattle', versionIds[0]) as {top1_entered_at: number | null};
+    expect(beforeRow.top1_entered_at).not.toBeNull();
+
+    db.setLadderStatus('gen9randombattle', 'archived', 1_760_004_000);
+    const afterRow = db.db.prepare(
+      'SELECT top1_entered_at FROM ladder_entries WHERE ladder_id = ? AND version_id = ?'
+    ).get('gen9randombattle', versionIds[0]) as {top1_entered_at: number | null};
+    expect(afterRow.top1_entered_at).toBeNull();
   });
 
   test('unquarantineVersion restores quarantined ladder ranks', () => {

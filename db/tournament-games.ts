@@ -103,6 +103,37 @@ export function getTournamentMatchGames(
   return rows.map(mapTournamentGameRow);
 }
 
+export function getTournamentMatchGamesForMatches(
+  db: DatabaseSync,
+  matchIds: readonly string[]
+): Map<string, TournamentGameRow[]> {
+  const byMatch = new Map<string, TournamentGameRow[]>();
+  if (matchIds.length === 0) return byMatch;
+
+  for (let start = 0; start < matchIds.length; start += 500) {
+    const chunk = matchIds.slice(start, start + 500);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const rows = db
+      .prepare(
+        `SELECT *
+         FROM tournament_games
+         WHERE match_id IN (${placeholders})
+         ORDER BY match_id ASC, game_number ASC`
+      )
+      .all(...chunk) as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      const mapped = mapTournamentGameRow(row);
+      const list = byMatch.get(mapped.matchId);
+      if (list) {
+        list.push(mapped);
+      } else {
+        byMatch.set(mapped.matchId, [mapped]);
+      }
+    }
+  }
+  return byMatch;
+}
+
 export function getTournamentMatchGamesByTournament(
   db: DatabaseSync,
   tournamentId: string

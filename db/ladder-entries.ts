@@ -626,9 +626,9 @@ function applyRatingsToEntriesAndFamilies(
   const M = entries.length;
   // Cap per-match wall-clock increments at 3600s so runner maintenance or downtime never inflates
   // an incumbent's Top-K reign duration.
-  const deltaSeconds = prevMatchSec !== undefined
-    ? Math.min(3600, Math.max(0, nowSec - prevMatchSec))
-    : 0;
+  const rawElapsed = prevMatchSec !== undefined ? Math.max(0, nowSec - prevMatchSec) : 0;
+  const deltaSeconds = Math.min(3600, rawElapsed);
+  const uncountedSeconds = rawElapsed - deltaSeconds;
   const res = ratings.computeDavidsonRatings(M, pairs, anchorIndex, 1500, warmStartTheta);
 
   const activeIndicesByAgent = new Map<number, number[]>();
@@ -746,7 +746,8 @@ function applyRatingsToEntriesAndFamilies(
       v.top1TotalSeconds,
       inTop1,
       nowSec,
-      deltaSeconds
+      deltaSeconds,
+      uncountedSeconds
     );
     v.top1EnteredAt = c1.enteredAt;
     v.top1MaxStreakSeconds = c1.maxStreakSeconds;
@@ -758,7 +759,8 @@ function applyRatingsToEntriesAndFamilies(
       v.top10TotalSeconds,
       inTop10,
       nowSec,
-      deltaSeconds
+      deltaSeconds,
+      uncountedSeconds
     );
     v.top10EnteredAt = c10.enteredAt;
     v.top10MaxStreakSeconds = c10.maxStreakSeconds;
@@ -770,7 +772,8 @@ function applyRatingsToEntriesAndFamilies(
       v.top100TotalSeconds,
       inTop100,
       nowSec,
-      deltaSeconds
+      deltaSeconds,
+      uncountedSeconds
     );
     v.top100EnteredAt = c100.enteredAt;
     v.top100MaxStreakSeconds = c100.maxStreakSeconds;
@@ -817,7 +820,8 @@ function applyRatingsToEntriesAndFamilies(
       fam.top1TotalSeconds,
       inTop1,
       nowSec,
-      deltaSeconds
+      deltaSeconds,
+      uncountedSeconds
     );
     fam.top1EnteredAt = c1.enteredAt;
     fam.top1MaxStreakSeconds = c1.maxStreakSeconds;
@@ -829,7 +833,8 @@ function applyRatingsToEntriesAndFamilies(
       fam.top10TotalSeconds,
       inTop10,
       nowSec,
-      deltaSeconds
+      deltaSeconds,
+      uncountedSeconds
     );
     fam.top10EnteredAt = c10.enteredAt;
     fam.top10MaxStreakSeconds = c10.maxStreakSeconds;
@@ -841,7 +846,8 @@ function applyRatingsToEntriesAndFamilies(
       fam.top100TotalSeconds,
       inTop100,
       nowSec,
-      deltaSeconds
+      deltaSeconds,
+      uncountedSeconds
     );
     fam.top100EnteredAt = c100.enteredAt;
     fam.top100MaxStreakSeconds = c100.maxStreakSeconds;
@@ -1053,7 +1059,12 @@ export function recomputeLadderRatings(
   stats.upsertAgentLadderStatsMap(db, ladderId, families);
 
   if (dayUtc) {
-    upsertDailyRatingSnapshots(db, ladderId, dayUtc, entries);
+    upsertDailyRatingSnapshots(
+      db,
+      ladderId,
+      dayUtc,
+      entries.filter(v => v.role === 'champion' || v.role === 'challenger')
+    );
   }
 
   return res;

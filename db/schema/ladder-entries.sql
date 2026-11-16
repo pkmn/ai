@@ -104,3 +104,5 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
 
 CREATE INDEX IF NOT EXISTS idx_ladder_entries_ladder_role
   ON ladder_entries(ladder_id, role);
+CREATE INDEX IF NOT EXISTS idx_ladder_entries_version
+  ON ladder_entries(version_id);

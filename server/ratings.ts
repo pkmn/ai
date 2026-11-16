@@ -144,6 +144,124 @@ function invertSPDMatrix(A: Float64Array, M: number): Float64Array {
   return inv;
 }
 
+interface PairDerivativeTerm {
+  i: number;
+  j: number;
+}
+
+function solvePairwiseLaplace<T extends PairDerivativeTerm>(
+  M: number,
+  priorPrecision: number,
+  theta: Float64Array,
+  pairs: readonly T[],
+  evalTerm: (pair: T, delta: number) => {ll: number; g: number; w: number},
+  minHessianWeight = 0
+): {covariance: Float64Array; hasPlayed: Uint8Array; playedCount: number} {
+  const evalLogPosterior = (x: Float64Array): number => {
+    let val = 0;
+    for (let i = 0; i < M; i++) val -= 0.5 * priorPrecision * x[i] * x[i];
+    for (const p of pairs) {
+      val += evalTerm(p, x[p.i] - x[p.j]).ll;
+    }
+    return val;
+  };
+
+  const grad = new Float64Array(M);
+  const H = new Float64Array(M * M);
+  const L = new Float64Array(M * M);
+  const step = new Float64Array(M);
+  const scratch = new Float64Array(M);
+  const cand = new Float64Array(M);
+
+  // Full-matrix Cholesky Newton method with backtracking line search.
+  // Unlike diagonal Jacobi updates (which oscillate on bipartite match graphs where
+  // lambda_max(D^{-1} H) ~= 2), exact Newton converges quadratically to < 1e-12 in 4-6 steps.
+  for (let iter = 0; iter < 25; iter++) {
+    H.fill(0);
+    let obj = 0;
+    for (let i = 0; i < M; i++) {
+      grad[i] = -priorPrecision * theta[i];
+      H[i * M + i] = priorPrecision;
+      obj -= 0.5 * priorPrecision * theta[i] * theta[i];
+    }
+
+    for (const p of pairs) {
+      const {i, j} = p;
+      const {ll, g, w} = evalTerm(p, theta[i] - theta[j]);
+      obj += ll;
+      grad[i] += g;
+      grad[j] -= g;
+      H[i * M + i] += w;
+      H[j * M + j] += w;
+      H[i * M + j] -= w;
+      H[j * M + i] -= w;
+    }
+
+    let maxGrad = 0;
+    for (let i = 0; i < M; i++) {
+      const ag = Math.abs(grad[i]);
+      if (ag > maxGrad) maxGrad = ag;
+    }
+    if (maxGrad < 1e-12) break;
+
+    choleskyDecompose(H, M, L);
+    solveCholesky(L, grad, M, step, scratch);
+
+    let alpha = 1.0;
+    while (alpha > 1e-6) {
+      for (let i = 0; i < M; i++) cand[i] = theta[i] + alpha * step[i];
+      if (evalLogPosterior(cand) >= obj - 1e-12) break;
+      alpha *= 0.5;
+    }
+
+    let maxStep = 0;
+    for (let i = 0; i < M; i++) {
+      const d = alpha * step[i];
+      theta[i] += d;
+      if (Math.abs(d) > maxStep) maxStep = Math.abs(d);
+    }
+    if (maxStep < 1e-12) break;
+  }
+
+  // Assemble the exact negative Hessian at the converged MAP optimum for Laplace covariance.
+  H.fill(0);
+  const hasPlayed = new Uint8Array(M);
+  for (let i = 0; i < M; i++) H[i * M + i] = priorPrecision;
+
+  for (const p of pairs) {
+    const {i, j} = p;
+    const rawW = evalTerm(p, theta[i] - theta[j]).w;
+    const w = minHessianWeight > 0 ? Math.max(minHessianWeight, rawW) : rawW;
+    H[i * M + i] += w;
+    H[j * M + j] += w;
+    H[i * M + j] -= w;
+    H[j * M + i] -= w;
+    hasPlayed[i] = 1;
+    hasPlayed[j] = 1;
+  }
+
+  // Pairwise match outcomes depend only on `theta_i - theta_j`, so the indicator vector `u`
+  // (`u_i = 1/K` on the `K` versions with >0 matches, `0` on 0-match versions) is an exact
+  // eigenvector of `H` (`H u = priorPrecision * u`). Pinning `u^T theta = 0` removes ONLY that
+  // global shift eigenvalue while keeping 0-match versions at `priorEloStd` (350 Elo) and leaving
+  // every orthogonal subspace — and therefore every pairwise variance `Var(theta_i - theta_j)` —
+  // 100% exact.
+  let playedCount = 0;
+  for (let i = 0; i < M; i++) playedCount += hasPlayed[i];
+  if (playedCount > 0) {
+    const gaugeTerm = 1e6 / (playedCount * playedCount);
+    for (let i = 0; i < M; i++) {
+      if (!hasPlayed[i]) continue;
+      for (let j = 0; j < M; j++) {
+        if (!hasPlayed[j]) continue;
+        H[i * M + j] += gaugeTerm;
+      }
+    }
+  }
+
+  return {covariance: invertSPDMatrix(H, M), hasPlayed, playedCount};
+}
+
 export function computeDavidsonRatings(
   numAgents: number,
   pairs: PairMatchCounts[],
@@ -195,118 +313,14 @@ export function computeDavidsonRatings(
   const nu0 = Math.max(2.0, (2 * (totalSplits + 1)) / (totalSweeps + 1));
   const nu1 = totalHalf / (totalSweeps + 1);
 
-  const nPairs = pairs.length;
-  const pairN = new Float64Array(nPairs);
-  const pairY = new Float64Array(nPairs);
-  for (let k = 0; k < nPairs; k++) {
-    const p = pairs[k];
-    pairN[k] = p.ww + p.wt + p.split + p.tl + p.ll;
-    pairY[k] = p.ww + 0.5 * p.wt - 0.5 * p.tl - p.ll;
+  const activePairs: Array<{i: number; j: number; n: number; y: number}> = [];
+  for (const p of pairs) {
+    const n = p.ww + p.wt + p.split + p.tl + p.ll;
+    if (n === 0) continue;
+    activePairs.push({i: p.i, j: p.j, n, y: p.ww + 0.5 * p.wt - 0.5 * p.tl - p.ll});
   }
 
-  const evalLogPosterior = (x: Float64Array): number => {
-    let val = 0;
-    for (let i = 0; i < M; i++) val -= 0.5 * priorPrecision * x[i] * x[i];
-    for (let k = 0; k < nPairs; k++) {
-      const N = pairN[k];
-      if (N === 0) continue;
-      const {i, j} = pairs[k];
-      const delta = x[i] - x[j];
-      const e1 = Math.exp(delta);
-      const em1 = 1 / e1;
-      const eh = Math.exp(0.5 * delta);
-      const emh = 1 / eh;
-      const Z = e1 + nu1 * eh + nu0 + nu1 * emh + em1;
-      val += pairY[k] * delta - N * Math.log(Z);
-    }
-    return val;
-  };
-
-  const grad = new Float64Array(M);
-  const H = new Float64Array(M * M);
-  const L = new Float64Array(M * M);
-  const step = new Float64Array(M);
-  const scratch = new Float64Array(M);
-  const cand = new Float64Array(M);
-
-  // Full-matrix Cholesky Newton method with backtracking line search.
-  // Unlike diagonal Jacobi updates (which oscillate on bipartite match graphs where
-  // lambda_max(D^{-1} H) ~= 2), exact Newton converges quadratically to < 1e-12 in 4-6 steps.
-  for (let iter = 0; iter < 25; iter++) {
-    H.fill(0);
-    let obj = 0;
-    for (let i = 0; i < M; i++) {
-      grad[i] = -priorPrecision * theta[i];
-      H[i * M + i] = priorPrecision;
-      obj -= 0.5 * priorPrecision * theta[i] * theta[i];
-    }
-
-    for (let k = 0; k < nPairs; k++) {
-      const N = pairN[k];
-      if (N === 0) continue;
-      const {i, j} = pairs[k];
-      const delta = theta[i] - theta[j];
-
-      const e1 = Math.exp(delta);
-      const em1 = 1 / e1;
-      const eh = Math.exp(0.5 * delta);
-      const emh = 1 / eh;
-      const Z = e1 + nu1 * eh + nu0 + nu1 * emh + em1;
-      obj += pairY[k] * delta - N * Math.log(Z);
-
-      const p1 = e1 / Z;
-      const pm1 = em1 / Z;
-      const ph = (nu1 * eh) / Z;
-      const pmh = (nu1 * emh) / Z;
-      const mu = (p1 - pm1) + 0.5 * (ph - pmh);
-      const v = (p1 + pm1) + 0.25 * (ph + pmh) - mu * mu;
-
-      const g = pairY[k] - N * mu;
-      const w = N * v;
-      grad[i] += g;
-      grad[j] -= g;
-      H[i * M + i] += w;
-      H[j * M + j] += w;
-      H[i * M + j] -= w;
-      H[j * M + i] -= w;
-    }
-
-    let maxGrad = 0;
-    for (let i = 0; i < M; i++) {
-      const ag = Math.abs(grad[i]);
-      if (ag > maxGrad) maxGrad = ag;
-    }
-    if (maxGrad < 1e-12) break;
-
-    choleskyDecompose(H, M, L);
-    solveCholesky(L, grad, M, step, scratch);
-
-    let alpha = 1.0;
-    while (alpha > 1e-6) {
-      for (let i = 0; i < M; i++) cand[i] = theta[i] + alpha * step[i];
-      if (evalLogPosterior(cand) >= obj - 1e-12) break;
-      alpha *= 0.5;
-    }
-
-    let maxStep = 0;
-    for (let i = 0; i < M; i++) {
-      const d = alpha * step[i];
-      theta[i] += d;
-      if (Math.abs(d) > maxStep) maxStep = Math.abs(d);
-    }
-    if (maxStep < 1e-12) break;
-  }
-
-  // Assemble the exact negative Hessian at the converged MAP optimum for Laplace covariance.
-  H.fill(0);
-  const hasPlayed = new Uint8Array(M);
-  for (let i = 0; i < M; i++) H[i * M + i] = priorPrecision;
-
-  for (let k = 0; k < nPairs; k++) {
-    const N = pairN[k];
-    if (N === 0) continue;
-    const {i, j} = pairs[k];
-    const delta = theta[i] - theta[j];
+  const {covariance} = solvePairwiseLaplace(M, priorPrecision, theta, activePairs, (p, delta) => {
     const e1 = Math.exp(delta);
     const em1 = 1 / e1;
     const eh = Math.exp(0.5 * delta);
@@ -317,36 +331,13 @@ export function computeDavidsonRatings(
     const ph = (nu1 * eh) / Z;
     const pmh = (nu1 * emh) / Z;
     const mu = (p1 - pm1) + 0.5 * (ph - pmh);
-    const w = N * ((p1 + pm1) + 0.25 * (ph + pmh) - mu * mu);
-
-    H[i * M + i] += w;
-    H[j * M + j] += w;
-    H[i * M + j] -= w;
-    H[j * M + i] -= w;
-    hasPlayed[i] = 1;
-    hasPlayed[j] = 1;
-  }
-
-  // Pairwise match outcomes depend only on `theta_i - theta_j`, so the indicator vector `u`
-  // (`u_i = 1/K` on the `K` versions with >0 matches, `0` on 0-match versions) is an exact
-  // eigenvector of `H` (`H u = priorPrecision * u`). Pinning `u^T theta = 0` removes ONLY that
-  // global shift eigenvalue while keeping 0-match versions at `priorEloStd` (350 Elo) and leaving
-  // every orthogonal subspace — and therefore every pairwise variance `Var(theta_i - theta_j)` —
-  // 100% exact.
-  let playedCount = 0;
-  for (let i = 0; i < M; i++) playedCount += hasPlayed[i];
-  if (playedCount > 0) {
-    const gaugeTerm = 1e6 / (playedCount * playedCount);
-    for (let i = 0; i < M; i++) {
-      if (!hasPlayed[i]) continue;
-      for (let j = 0; j < M; j++) {
-        if (!hasPlayed[j]) continue;
-        H[i * M + j] += gaugeTerm;
-      }
-    }
-  }
-
-  const covariance = invertSPDMatrix(H, M);
+    const v = (p1 + pm1) + 0.25 * (ph + pmh) - mu * mu;
+    return {
+      ll: p.y * delta - p.n * Math.log(Z),
+      g: p.y - p.n * mu,
+      w: p.n * v,
+    };
+  });
   const anchorOffset = anchorIndex >= 0 && anchorIndex < M ? theta[anchorIndex] : 0;
 
   const elo = new Float64Array(M);
@@ -406,9 +397,10 @@ export function computeLOS(
 
 // Computes guaranteed rank intervals `[rankMin, rankMax]` among primary family representatives.
 // Competitor `j` is counted as "definitely above" `i` only when BOTH `P(theta_j > theta_i) >= 0.95`
-// (correlated LOS) AND `eloLcb[j] > eloUcb[i]` (non-overlapping marginal 95% intervals), so a rank
-// only settles (`rankMin === rankMax`, e.g. `[1, 1]` for Discord #1 role sync) once both pairwise
-// and marginal uncertainty agree.
+// (correlated LOS) AND `eloLcb[j] > eloUcb[i]` (non-overlapping marginal 95% intervals), and as
+// "plausibly above" `i` whenever `j` is NOT definitely below `i` (exact De Morgan negation:
+// `losIJ < 0.95 || eloUcb[j] >= eloLcb[i]`), so `[rankMin, rankMax]` never contradicts a rival's
+// bounds and only settles (`[1, 1]`) once both pairwise and marginal uncertainty agree.
 export function computeGuaranteedRankBounds(
   repIndices: number[],
   theta: Float64Array,
@@ -419,26 +411,34 @@ export function computeGuaranteedRankBounds(
   losThreshold = 0.95
 ): {rankMin: Int32Array; rankMax: Int32Array} {
   const B = repIndices.length;
-  const rankMin = new Int32Array(B);
-  const rankMax = new Int32Array(B);
+  const definitelyAbove = new Int32Array(B);
+  const plausiblyAbove = new Int32Array(B);
 
   for (let a = 0; a < B; a++) {
     const i = repIndices[a];
-    let definitelyAbove = 0;
-    let plausiblyAbove = 0;
-    for (let b = 0; b < B; b++) {
-      if (a === b) continue;
+    for (let b = a + 1; b < B; b++) {
       const j = repIndices[b];
-      const losIJ = computeLOS(theta, cov, M, i, j);
-      if (1 - losIJ >= losThreshold && eloLcb[j] > eloUcb[i]) {
-        definitelyAbove++;
+      const losAB = computeLOS(theta, cov, M, i, j);
+      const losBA = 1 - losAB;
+
+      const bDefAboveA = losBA >= losThreshold && eloLcb[j] > eloUcb[i];
+      if (bDefAboveA) definitelyAbove[a]++;
+      if (bDefAboveA || losAB < losThreshold || eloUcb[j] >= eloLcb[i]) {
+        plausiblyAbove[a]++;
       }
-      if (b < a || (losIJ < losThreshold && eloUcb[j] > eloLcb[i])) {
-        plausiblyAbove++;
+
+      if (losAB >= losThreshold && eloLcb[i] > eloUcb[j]) {
+        definitelyAbove[b]++;
       }
+      plausiblyAbove[b]++;
     }
-    rankMin[a] = 1 + definitelyAbove;
-    rankMax[a] = 1 + plausiblyAbove;
+  }
+
+  const rankMin = new Int32Array(B);
+  const rankMax = new Int32Array(B);
+  for (let a = 0; a < B; a++) {
+    rankMin[a] = 1 + definitelyAbove[a];
+    rankMax[a] = 1 + plausiblyAbove[a];
   }
   return {rankMin, rankMax};
 }
@@ -499,7 +499,8 @@ export function advanceTopKClock(
   totalSeconds: number,
   qualifiesNow: boolean,
   nowSeconds: number,
-  deltaSeconds: number
+  deltaSeconds: number,
+  uncountedSeconds = 0
 ): {enteredAt?: number; maxStreakSeconds: number; totalSeconds: number} {
   let nextEntered = enteredAt;
   let nextMax = maxStreakSeconds;
@@ -507,9 +508,13 @@ export function advanceTopKClock(
 
   if (enteredAt !== undefined) {
     nextTotal += deltaSeconds;
-    const currentRunSeconds = Math.max(0, nowSeconds - enteredAt);
+    const effectiveEntered = Math.max(
+      Math.min(nowSeconds, enteredAt + Math.max(0, uncountedSeconds)),
+      nowSeconds - nextTotal
+    );
+    const currentRunSeconds = Math.max(0, nowSeconds - effectiveEntered);
     if (currentRunSeconds > nextMax) nextMax = currentRunSeconds;
-    if (!qualifiesNow) nextEntered = undefined;
+    nextEntered = qualifiesNow ? effectiveEntered : undefined;
   } else if (qualifiesNow) {
     nextEntered = nowSeconds;
   }
@@ -615,7 +620,7 @@ export function selectNextArenaMatch(
         const overlap = 0.20 + 3.5 * Math.exp(-(diff * diff) / (2 * (varSum + 0.04)));
 
         let triageBonus = 1.0;
-        if (inTriage[i] || inTriage[j]) {
+        if (inTriage[i] !== inTriage[j]) {
           const challenger = inTriage[i] ? i : j;
           const anchor = inTriage[i] ? j : i;
           const target =
@@ -690,119 +695,28 @@ export function computeTournamentRatings(
   const nu = tieRate > 0 ? (2 * tieRate) / (1 - tieRate) : 0;
   const pairs = Array.from(pairMap.values());
 
-  const evalLogPosterior = (x: Float64Array): number => {
-    let val = 0;
-    for (let i = 0; i < M; i++) val -= 0.5 * priorPrecision * x[i] * x[i];
-    for (const p of pairs) {
-      const delta = x[p.i] - x[p.j];
-      const eh = Math.exp(0.5 * delta);
-      const emh = 1 / eh;
-      const Z = eh + emh + nu;
-      val += p.y * delta - p.n * Math.log(Z);
-    }
-    return val;
-  };
-
   const theta = new Float64Array(M);
-  const grad = new Float64Array(M);
-  const H = new Float64Array(M * M);
-  const L = new Float64Array(M * M);
-  const step = new Float64Array(M);
-  const scratch = new Float64Array(M);
-  const cand = new Float64Array(M);
-
-  for (let iter = 0; iter < 25; iter++) {
-    H.fill(0);
-    let obj = 0;
-    for (let i = 0; i < M; i++) {
-      grad[i] = -priorPrecision * theta[i];
-      H[i * M + i] = priorPrecision;
-      obj -= 0.5 * priorPrecision * theta[i] * theta[i];
-    }
-
-    for (const p of pairs) {
-      const delta = theta[p.i] - theta[p.j];
+  const {covariance, hasPlayed, playedCount} = solvePairwiseLaplace(
+    M,
+    priorPrecision,
+    theta,
+    pairs,
+    (p, delta) => {
       const eh = Math.exp(0.5 * delta);
       const emh = 1 / eh;
       const Z = eh + emh + nu;
-      obj += p.y * delta - p.n * Math.log(Z);
-
       const pW = eh / Z;
       const pL = emh / Z;
       const mu = 0.5 * (pW - pL);
       const v = 0.25 * (pW + pL) - mu * mu;
-      const g = p.y - p.n * mu;
-      const w = p.n * v;
-
-      grad[p.i] += g;
-      grad[p.j] -= g;
-      H[p.i * M + p.i] += w;
-      H[p.j * M + p.j] += w;
-      H[p.i * M + p.j] -= w;
-      H[p.j * M + p.i] -= w;
-    }
-
-    let maxGrad = 0;
-    for (let i = 0; i < M; i++) {
-      const ag = Math.abs(grad[i]);
-      if (ag > maxGrad) maxGrad = ag;
-    }
-    if (maxGrad < 1e-12) break;
-
-    choleskyDecompose(H, M, L);
-    solveCholesky(L, grad, M, step, scratch);
-
-    let alpha = 1.0;
-    while (alpha > 1e-6) {
-      for (let i = 0; i < M; i++) cand[i] = theta[i] + alpha * step[i];
-      if (evalLogPosterior(cand) >= obj - 1e-12) break;
-      alpha *= 0.5;
-    }
-
-    let maxStep = 0;
-    for (let i = 0; i < M; i++) {
-      const d = alpha * step[i];
-      theta[i] += d;
-      if (Math.abs(d) > maxStep) maxStep = Math.abs(d);
-    }
-    if (maxStep < 1e-12) break;
-  }
-
-  H.fill(0);
-  const hasPlayed = new Uint8Array(M);
-  for (let i = 0; i < M; i++) H[i * M + i] = priorPrecision;
-
-  for (const p of pairs) {
-    const delta = theta[p.i] - theta[p.j];
-    const eh = Math.exp(0.5 * delta);
-    const emh = 1 / eh;
-    const Z = eh + emh + nu;
-    const pW = eh / Z;
-    const pL = emh / Z;
-    const mu = 0.5 * (pW - pL);
-    const w = p.n * Math.max(1e-9, 0.25 * (pW + pL) - mu * mu);
-
-    H[p.i * M + p.i] += w;
-    H[p.j * M + p.j] += w;
-    H[p.i * M + p.j] -= w;
-    H[p.j * M + p.i] -= w;
-    hasPlayed[p.i] = 1;
-    hasPlayed[p.j] = 1;
-  }
-
-  let playedCount = 0;
-  for (let i = 0; i < M; i++) playedCount += hasPlayed[i];
-  if (playedCount > 0) {
-    const gaugeTerm = 1e6 / (playedCount * playedCount);
-    for (let i = 0; i < M; i++) {
-      if (!hasPlayed[i]) continue;
-      for (let j = 0; j < M; j++) {
-        if (hasPlayed[j]) H[i * M + j] += gaugeTerm;
-      }
-    }
-  }
-
-  const covariance = invertSPDMatrix(H, M);
+      return {
+        ll: p.y * delta - p.n * Math.log(Z),
+        g: p.y - p.n * mu,
+        w: p.n * v,
+      };
+    },
+    1e-9
+  );
   let offset = 0;
   if (anchorIndex >= 0 && anchorIndex < M) {
     offset = theta[anchorIndex];

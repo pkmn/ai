@@ -8,6 +8,7 @@ import {
   TournamentGameRow,
   getTournamentMatchGames,
   getTournamentMatchGamesByTournament,
+  getTournamentMatchGamesForMatches,
   replaceTournamentMatchGames,
 } from './tournament-games';
 import {getTournament} from './tournaments';
@@ -297,7 +298,9 @@ export function getTournamentMatches(
     )
     .all(tournamentId, limit) as Array<Record<string, unknown>>;
 
-  const gamesByMatch = getTournamentMatchGamesByTournament(db, tournamentId);
+  const gamesByMatch = rows.length <= 500
+    ? getTournamentMatchGamesForMatches(db, rows.map(row => row.id as string))
+    : getTournamentMatchGamesByTournament(db, tournamentId);
   return rows.map(row => mapTournamentMatchView(row, gamesByMatch.get(row.id as string) ?? []));
 }
 

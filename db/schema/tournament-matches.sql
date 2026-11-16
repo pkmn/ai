@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS tournament_matches (
 
 CREATE INDEX IF NOT EXISTS idx_tournament_matches_tournament_status
   ON tournament_matches(tournament_id, status);
+CREATE INDEX IF NOT EXISTS idx_tournament_matches_completed
+  ON tournament_matches(tournament_id, status, completed_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_tournament_matches_p1_version
   ON tournament_matches(p1_version_id);
 CREATE INDEX IF NOT EXISTS idx_tournament_matches_p2_version

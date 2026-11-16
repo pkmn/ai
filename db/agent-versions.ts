@@ -676,10 +676,68 @@ export function applySubmissionStatus(
       throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 404});
     }
     const agent = getAgentById(db, prev.agentId)!;
-    const shouldResetNotify = (
-      (input.smokeStatus === 'failed' || input.smokeStatus === 'quarantined') &&
-      prev.smokeStatus !== input.smokeStatus
-    );
+    if (prev.smokeStatus === input.smokeStatus) {
+      db.prepare(`
+        UPDATE agent_versions
+        SET auth_token_encoding = NULL,
+            unpacked_bytes = COALESCE(?, unpacked_bytes),
+            smoke_duration_millis = COALESCE(?, smoke_duration_millis),
+            smoke_turn_millis = COALESCE(?, smoke_turn_millis),
+            smoke_peak_ram = COALESCE(?, smoke_peak_ram),
+            smoke_error = ?
+        WHERE id = ?
+      `).run(
+        input.unpackedBytes ?? null,
+        input.smokeDurationMillis ?? null,
+        input.smokeTurnMillis ?? null,
+        input.smokePeakRam ?? null,
+        input.smokeError !== undefined ? input.smokeError : (prev.smokeError ?? null),
+        input.versionId
+      );
+      const retiredOnRepeat: Record<string, number> = {};
+      if (input.smokeStatus === 'passed' && input.retiredVersionIdsByLadder) {
+        const retireRepeat = db.prepare(`
+          UPDATE ladder_entries
+          SET role = 'retired',
+              retired_at = ?,
+              rank_current = NULL,
+              rank_min = NULL,
+              rank_max = NULL
+          WHERE ladder_id = ? AND version_id = ? AND role IN ('champion', 'challenger')
+        `);
+        for (const [ladderId, retiredId] of Object.entries(input.retiredVersionIdsByLadder)) {
+          if (!Number.isInteger(retiredId) || retiredId === prev.id) continue;
+          const target = getVersionById(db, retiredId);
+          if (target?.agentId !== prev.agentId) continue;
+          const info = retireRepeat.run(now, ladderId, retiredId);
+          if (info.changes > 0) {
+            retiredOnRepeat[ladderId] = retiredId;
+            entries.promoteRemainingActiveToChampion(db, ladderId, prev.agentId);
+          }
+        }
+      }
+      return {
+        version: getVersionById(db, input.versionId)!,
+        agent,
+        retiredByLadder: retiredOnRepeat,
+      };
+    }
+    if (
+      ((prev.smokeStatus === 'passed' || prev.smokeStatus === 'quarantined') &&
+        input.smokeStatus === 'failed') ||
+      ((prev.smokeStatus === 'failed' || prev.smokeStatus === 'quarantined') &&
+        input.smokeStatus === 'passed')
+    ) {
+      throw Object.assign(
+        new Error(
+          `Invalid submission status transition from "${prev.smokeStatus}" ` +
+          `to "${input.smokeStatus}"`
+        ),
+        {status: 409}
+      );
+    }
+    const shouldResetNotify =
+      input.smokeStatus === 'failed' || input.smokeStatus === 'quarantined';
     const activatedAt = input.smokeStatus === 'passed'
       ? (prev.activatedAt ?? now)
       : (prev.activatedAt ?? null);
@@ -882,6 +940,12 @@ export function unquarantineVersion(
       throw new Error(
         `Version "${version}" for agent "${agentSlug}" is not quarantined ` +
         `(current status: ${ver.smokeStatus})`
+      );
+    }
+    if (ver.activatedAt === undefined) {
+      throw new Error(
+        `Version "${version}" for agent "${agentSlug}" never passed smoke testing ` +
+        'and cannot be unquarantined'
       );
     }
 

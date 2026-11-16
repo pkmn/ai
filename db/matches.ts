@@ -505,6 +505,29 @@ export function getMatch(db: DatabaseSync, id: string): RecentMatchView | undefi
   return row ? mapRecentMatchRow(row) : undefined;
 }
 
+function resolveVersionIdsForSlug(
+  db: DatabaseSync,
+  slug: string,
+  version?: string
+): number[] {
+  const rows = version !== undefined
+    ? (db.prepare(`
+        SELECT av.id
+        FROM agent_versions av
+        JOIN agents a ON a.id = av.agent_id
+        WHERE a.slug = ? AND av.version = ?
+        ORDER BY av.id ASC
+      `).all(slug, version) as Array<{id: number}>)
+    : (db.prepare(`
+        SELECT av.id
+        FROM agent_versions av
+        JOIN agents a ON a.id = av.agent_id
+        WHERE a.slug = ?
+        ORDER BY av.id ASC
+      `).all(slug) as Array<{id: number}>);
+  return rows.map(r => r.id);
+}
+
 export function getMatchesPage(
   db: DatabaseSync,
   query: MatchesPageQuery = {}
@@ -520,44 +543,44 @@ export function getMatchesPage(
     where.push('m.ladder_id = ?');
     params.push(query.ladderId);
   }
-  if (query.agentSlug && query.agentVersion && query.opponentSlug) {
+
+  // Pre-resolve `agent_versions.id` lists so SQLite can apply its `MULTI-INDEX OR` planner over
+  // `idx_matches_p1_*` + `idx_matches_p2_*` instead of scanning `matches` across joined aliases.
+  const primaryIds = query.agentSlug
+    ? resolveVersionIdsForSlug(db, query.agentSlug, query.agentVersion)
+    : undefined;
+  const oppIds = query.opponentSlug
+    ? resolveVersionIdsForSlug(db, query.opponentSlug)
+    : undefined;
+
+  if (primaryIds?.length === 0 || oppIds?.length === 0) {
+    return {matches: [], total: 0};
+  }
+
+  const inPlaceholders = (ids: number[]) => ids.map(() => '?').join(', ');
+
+  if (primaryIds && oppIds) {
+    const pIn = inPlaceholders(primaryIds);
+    const oIn = inPlaceholders(oppIds);
     where.push(
-      '((a1.slug = ? AND v1.version = ? AND a2.slug = ?) OR ' +
-      '(a2.slug = ? AND v2.version = ? AND a1.slug = ?))'
+      `((m.p1_version_id IN (${pIn}) AND m.p2_version_id IN (${oIn})) OR ` +
+      `(m.p2_version_id IN (${pIn}) AND m.p1_version_id IN (${oIn})))`
     );
-    params.push(
-      query.agentSlug,
-      query.agentVersion,
-      query.opponentSlug,
-      query.agentSlug,
-      query.agentVersion,
-      query.opponentSlug
-    );
-  } else if (query.agentSlug && query.agentVersion) {
-    where.push('((a1.slug = ? AND v1.version = ?) OR (a2.slug = ? AND v2.version = ?))');
-    params.push(query.agentSlug, query.agentVersion, query.agentSlug, query.agentVersion);
-  } else if (query.agentSlug && query.opponentSlug) {
-    where.push('((a1.slug = ? AND a2.slug = ?) OR (a1.slug = ? AND a2.slug = ?))');
-    params.push(query.agentSlug, query.opponentSlug, query.opponentSlug, query.agentSlug);
-  } else if (query.agentSlug) {
-    where.push('(a1.slug = ? OR a2.slug = ?)');
-    params.push(query.agentSlug, query.agentSlug);
-  } else if (query.opponentSlug) {
-    where.push('(a1.slug = ? OR a2.slug = ?)');
-    params.push(query.opponentSlug, query.opponentSlug);
+    params.push(...primaryIds, ...oppIds, ...primaryIds, ...oppIds);
+  } else if (primaryIds) {
+    const pIn = inPlaceholders(primaryIds);
+    where.push(`(m.p1_version_id IN (${pIn}) OR m.p2_version_id IN (${pIn}))`);
+    params.push(...primaryIds, ...primaryIds);
+  } else if (oppIds) {
+    const oIn = inPlaceholders(oppIds);
+    where.push(`(m.p1_version_id IN (${oIn}) OR m.p2_version_id IN (${oIn}))`);
+    params.push(...oppIds, ...oppIds);
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-  const countFromSql = (query.agentSlug || query.agentVersion || query.opponentSlug)
-    ? `FROM matches m
-       JOIN ladders l ON l.id = m.ladder_id
-       JOIN agent_versions v1 ON v1.id = m.p1_version_id
-       JOIN agents a1 ON a1.id = v1.agent_id
-       JOIN agent_versions v2 ON v2.id = m.p2_version_id
-       JOIN agents a2 ON a2.id = v2.agent_id`
-    : query.slot && query.slot !== 'all'
-      ? 'FROM matches m JOIN ladders l ON l.id = m.ladder_id'
-      : 'FROM matches m';
+  const countFromSql = query.slot && query.slot !== 'all'
+    ? 'FROM matches m JOIN ladders l ON l.id = m.ladder_id'
+    : 'FROM matches m';
 
   const countRow = db.prepare(`
     SELECT COUNT(*) AS count

@@ -62,12 +62,14 @@ CREATE TABLE IF NOT EXISTS matches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_matches_ladder_completed
-  ON matches(ladder_id, completed_at DESC);
+  ON matches(ladder_id, completed_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_completed
-  ON matches(completed_at DESC);
+  ON matches(completed_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_p1_completed
-  ON matches(ladder_id, p1_version_id, completed_at DESC);
+  ON matches(ladder_id, p1_version_id, completed_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_p2_completed
-  ON matches(ladder_id, p2_version_id, completed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_matches_p1_version ON matches(p1_version_id);
-CREATE INDEX IF NOT EXISTS idx_matches_p2_version ON matches(p2_version_id);
+  ON matches(ladder_id, p2_version_id, completed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_matches_p1_version
+  ON matches(p1_version_id, completed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_matches_p2_version
+  ON matches(p2_version_id, completed_at DESC, id DESC);

@@ -3,6 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 
 import * as yaml from 'yaml';
 
+import * as ratings from '../server/ratings';
 import {root} from '../static/util';
 
 import {countLadderTeams} from './ladder-teams';
@@ -360,6 +361,156 @@ export function validateLadderActivation(db: DatabaseSync, ladder: LadderRow): v
   }
 }
 
+function finalizeArchivedLadderEntries(db: DatabaseSync, ladderId: string, now: number): void {
+  db.prepare(`
+    UPDATE ladder_entries
+    SET role = 'retired', retired_at = ?
+    WHERE ladder_id = ? AND role IN ('champion', 'challenger')
+  `).run(now, ladderId);
+
+  const prevRow = db.prepare(
+    'SELECT MAX(completed_at) AS prev FROM matches WHERE ladder_id = ?'
+  ).get(ladderId) as {prev: number | null} | undefined;
+  const prevSec = prevRow?.prev ?? undefined;
+  const rawElapsed = prevSec !== undefined ? Math.max(0, now - prevSec) : 0;
+  const deltaSeconds = Math.min(3600, rawElapsed);
+  const uncountedSeconds = rawElapsed - deltaSeconds;
+
+  const openEntries = db.prepare(`
+    SELECT
+      version_id,
+      top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
+      top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
+      top100_entered_at, top100_max_streak_seconds, top100_total_seconds
+    FROM ladder_entries
+    WHERE ladder_id = ?
+      AND (top1_entered_at IS NOT NULL
+        OR top10_entered_at IS NOT NULL
+        OR top100_entered_at IS NOT NULL)
+  `).all(ladderId) as Array<Record<string, unknown>>;
+
+  const updateEntryClocks = db.prepare(`
+    UPDATE ladder_entries
+    SET top1_entered_at = NULL,
+        top1_max_streak_seconds = ?,
+        top1_total_seconds = ?,
+        top10_entered_at = NULL,
+        top10_max_streak_seconds = ?,
+        top10_total_seconds = ?,
+        top100_entered_at = NULL,
+        top100_max_streak_seconds = ?,
+        top100_total_seconds = ?
+    WHERE ladder_id = ? AND version_id = ?
+  `);
+
+  for (const r of openEntries) {
+    const c1 = ratings.advanceTopKClock(
+      (r.top1_entered_at as number | null) ?? undefined,
+      r.top1_max_streak_seconds as number,
+      r.top1_total_seconds as number,
+      false,
+      now,
+      deltaSeconds,
+      uncountedSeconds
+    );
+    const c10 = ratings.advanceTopKClock(
+      (r.top10_entered_at as number | null) ?? undefined,
+      r.top10_max_streak_seconds as number,
+      r.top10_total_seconds as number,
+      false,
+      now,
+      deltaSeconds,
+      uncountedSeconds
+    );
+    const c100 = ratings.advanceTopKClock(
+      (r.top100_entered_at as number | null) ?? undefined,
+      r.top100_max_streak_seconds as number,
+      r.top100_total_seconds as number,
+      false,
+      now,
+      deltaSeconds,
+      uncountedSeconds
+    );
+    updateEntryClocks.run(
+      c1.maxStreakSeconds,
+      c1.totalSeconds,
+      c10.maxStreakSeconds,
+      c10.totalSeconds,
+      c100.maxStreakSeconds,
+      c100.totalSeconds,
+      ladderId,
+      r.version_id as number
+    );
+  }
+
+  const openStats = db.prepare(`
+    SELECT
+      agent_id,
+      top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
+      top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
+      top100_entered_at, top100_max_streak_seconds, top100_total_seconds
+    FROM agent_ladder_stats
+    WHERE ladder_id = ?
+      AND (top1_entered_at IS NOT NULL
+        OR top10_entered_at IS NOT NULL
+        OR top100_entered_at IS NOT NULL)
+  `).all(ladderId) as Array<Record<string, unknown>>;
+
+  const updateStatClocks = db.prepare(`
+    UPDATE agent_ladder_stats
+    SET top1_entered_at = NULL,
+        top1_max_streak_seconds = ?,
+        top1_total_seconds = ?,
+        top10_entered_at = NULL,
+        top10_max_streak_seconds = ?,
+        top10_total_seconds = ?,
+        top100_entered_at = NULL,
+        top100_max_streak_seconds = ?,
+        top100_total_seconds = ?
+    WHERE ladder_id = ? AND agent_id = ?
+  `);
+
+  for (const r of openStats) {
+    const c1 = ratings.advanceTopKClock(
+      (r.top1_entered_at as number | null) ?? undefined,
+      r.top1_max_streak_seconds as number,
+      r.top1_total_seconds as number,
+      false,
+      now,
+      deltaSeconds,
+      uncountedSeconds
+    );
+    const c10 = ratings.advanceTopKClock(
+      (r.top10_entered_at as number | null) ?? undefined,
+      r.top10_max_streak_seconds as number,
+      r.top10_total_seconds as number,
+      false,
+      now,
+      deltaSeconds,
+      uncountedSeconds
+    );
+    const c100 = ratings.advanceTopKClock(
+      (r.top100_entered_at as number | null) ?? undefined,
+      r.top100_max_streak_seconds as number,
+      r.top100_total_seconds as number,
+      false,
+      now,
+      deltaSeconds,
+      uncountedSeconds
+    );
+    updateStatClocks.run(
+      c1.maxStreakSeconds,
+      c1.totalSeconds,
+      c10.maxStreakSeconds,
+      c10.totalSeconds,
+      c100.maxStreakSeconds,
+      c100.totalSeconds,
+      ladderId,
+      r.agent_id as number
+    );
+  }
+}
+
 export function setLadderStatus(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -393,11 +544,7 @@ export function setLadderStatus(
       .run(status, archivedAt, ladderId);
 
     if (status === 'archived') {
-      db.prepare(`
-        UPDATE ladder_entries
-        SET role = 'retired', retired_at = ?
-        WHERE ladder_id = ? AND role IN ('champion', 'challenger')
-      `).run(now, ladderId);
+      finalizeArchivedLadderEntries(db, ladderId, now);
     }
 
     return getLadder(db, ladderId)!;
@@ -475,11 +622,7 @@ export function archiveLadderInPlace(db: DatabaseSync, ladderId: string, now: nu
     SET status = 'archived', archived_at = COALESCE(archived_at, ?)
     WHERE id = ?
   `).run(now, ladderId);
-  db.prepare(`
-    UPDATE ladder_entries
-    SET role = 'retired', retired_at = ?
-    WHERE ladder_id = ? AND role IN ('champion', 'challenger')
-  `).run(now, ladderId);
+  finalizeArchivedLadderEntries(db, ladderId, now);
 }
 
 // Rotates a seasonal regulation (e.g. VGC Reg M-C -> Reg M-D) without losing historical matches or
@@ -508,11 +651,7 @@ export function rotateLadder(
     `).run(input.archivedName.trim(), nextOldStatus, archivedAt, oldLadder.id);
 
     if (nextOldStatus === 'archived') {
-      db.prepare(`
-        UPDATE ladder_entries
-        SET role = 'retired', retired_at = ?
-        WHERE ladder_id = ? AND role IN ('champion', 'challenger')
-      `).run(now, oldLadder.id);
+      finalizeArchivedLadderEntries(db, oldLadder.id, now);
     }
 
     let newLadder: LadderRow | undefined;

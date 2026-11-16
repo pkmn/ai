@@ -9,6 +9,8 @@ import {Project} from '../static/projects';
 import {root, slugify, toID, validateAgentName} from '../static/util';
 
 import * as developers from './developers';
+import {recomputeLadderRatings} from './ladder-entries';
+import * as ladders from './ladders';
 
 import {TransactionRunner} from './index';
 
@@ -263,12 +265,66 @@ function applyResolvedProjects(
     }
 
     // Projects removed from `arena:` in projects.yml are marked 'disabled' rather than deleted so
-    // their historical versions and matches remain intact in the rating graph.
+    // their historical versions and matches remain intact in the rating graph. Both disabled
+    // projects and projects with banned Smogon owners have their active ladder entries retired and
+    // scheduled tournament entries withdrawn so they cannot hold ranks or play new matches.
+    const suspendedAgentIds = new Set<number>();
     const allAgents = selectAllAgents.all() as Array<{id: number; slug: string}>;
     for (const agent of allAgents) {
       if (!activeSlugs.has(agent.slug)) {
         disableAgent.run(now, agent.id);
         developers.deleteDevelopersForAgent(db, agent.id);
+        suspendedAgentIds.add(agent.id);
+      }
+    }
+
+    const badSmogonRows = db.prepare(
+      "SELECT DISTINCT agent_id FROM developers WHERE smogon_standing = 'bad'"
+    ).all() as Array<{agent_id: number}>;
+    for (const row of badSmogonRows) {
+      suspendedAgentIds.add(row.agent_id);
+    }
+
+    if (suspendedAgentIds.size > 0) {
+      const affectedLadders = new Set<string>();
+      const selectActiveLadders = db.prepare(`
+        SELECT DISTINCT le.ladder_id
+        FROM ladder_entries le
+        JOIN agent_versions av ON av.id = le.version_id
+        WHERE av.agent_id = ? AND le.role IN ('champion', 'challenger')
+      `);
+      const retireAgentEntries = db.prepare(`
+        UPDATE ladder_entries
+        SET role = 'retired',
+            retired_at = ?,
+            rank_current = NULL,
+            rank_min = NULL,
+            rank_max = NULL
+        WHERE version_id IN (SELECT id FROM agent_versions WHERE agent_id = ?)
+          AND role IN ('champion', 'challenger')
+      `);
+      const deleteScheduledEntrants = db.prepare(`
+        DELETE FROM tournament_entrants
+        WHERE agent_id = ?
+          AND tournament_id IN (SELECT id FROM tournaments WHERE status = 'scheduled')
+      `);
+
+      for (const agentId of suspendedAgentIds) {
+        deleteScheduledEntrants.run(agentId);
+        const rows = selectActiveLadders.all(agentId) as Array<{ladder_id: string}>;
+        for (const r of rows) affectedLadders.add(r.ladder_id);
+        retireAgentEntries.run(now, agentId);
+      }
+
+      const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
+      for (const ladderId of affectedLadders) {
+        const l = ladders.getLadder(db, ladderId);
+        if (l && l.status !== 'archived') {
+          recomputeLadderRatings(db, ladderId, now, undefined, dayUtc);
+        }
+        if (l?.status === 'settling' && !ladders.canSettleLadder(db, l)) {
+          ladders.archiveLadderInPlace(db, l.id, now);
+        }
       }
     }
   });
@@ -348,6 +404,7 @@ export async function syncProjectsFromYamlWithSmogon(
   const rawProjects = parseArenaProjects(projectsYaml, avatarsDir);
   const resolved: Array<ParsedArenaProject<developers.ResolvedProjectOwner>> = [];
   const bannedDescriptions: string[] = [];
+  const lookupErrors: string[] = [];
 
   for (const proj of rawProjects) {
     const owners: developers.ResolvedProjectOwner[] = [];
@@ -359,16 +416,24 @@ export async function syncProjectsFromYamlWithSmogon(
 
       if (owner.smogonId !== undefined) {
         if (refreshNames && (smogonToken || options.lookupSmogon)) {
-          const profile = await lookup(owner.smogonId, smogonToken);
-          if (profile.banned) {
-            bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
+          try {
+            const profile = await lookup(owner.smogonId, smogonToken);
+            if (profile.banned) {
+              bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
+            }
+            owners.push({
+              github: owner.github,
+              smogonId: profile.id,
+              smogonUsername: profile.username,
+              smogonStanding: profile.banned ? 'bad' : 'good',
+            });
+          } catch (err) {
+            lookupErrors.push(err instanceof Error ? err.message : String(err));
+            const smogonUsername = owner.smogonUsername ??
+              (existing?.smogonId === owner.smogonId ? existing.smogonUsername : undefined) ??
+              String(owner.smogonId);
+            owners.push({github: owner.github, smogonId: owner.smogonId, smogonUsername});
           }
-          owners.push({
-            github: owner.github,
-            smogonId: profile.id,
-            smogonUsername: profile.username,
-            smogonStanding: profile.banned ? 'bad' : 'good',
-          });
         } else {
           const smogonUsername = owner.smogonUsername ??
             (existing?.smogonId === owner.smogonId ? existing.smogonUsername : undefined) ??
@@ -379,16 +444,25 @@ export async function syncProjectsFromYamlWithSmogon(
       }
 
       if (existing && refreshNames && (smogonToken || options.lookupSmogon)) {
-        const profile = await lookup(existing.smogonId, smogonToken);
-        if (profile.banned) {
-          bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
+        try {
+          const profile = await lookup(existing.smogonId, smogonToken);
+          if (profile.banned) {
+            bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
+          }
+          owners.push({
+            github: owner.github,
+            smogonId: profile.id,
+            smogonUsername: profile.username,
+            smogonStanding: profile.banned ? 'bad' : 'good',
+          });
+        } catch (err) {
+          lookupErrors.push(err instanceof Error ? err.message : String(err));
+          owners.push({
+            github: owner.github,
+            smogonId: existing.smogonId,
+            smogonUsername: existing.smogonUsername,
+          });
         }
-        owners.push({
-          github: owner.github,
-          smogonId: profile.id,
-          smogonUsername: profile.username,
-          smogonStanding: profile.banned ? 'bad' : 'good',
-        });
         continue;
       }
 
@@ -425,6 +499,9 @@ export async function syncProjectsFromYamlWithSmogon(
   applyResolvedProjects(db, inTransaction, resolved, now);
   if (bannedDescriptions.length > 0) {
     throw new Error(`Smogon account ${bannedDescriptions.join(', ')} is banned`);
+  }
+  if (lookupErrors.length > 0) {
+    throw new Error(`Smogon lookup failed: ${lookupErrors.join('; ')}`);
   }
 }
 

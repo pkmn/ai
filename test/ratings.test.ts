@@ -375,6 +375,30 @@ describe('normalCdf, LOS, expectedMatchScore, and rank bounds', () => {
     expect([bounds.rankMin[2], bounds.rankMax[2]]).toEqual([2, 3]);
     expect([bounds.rankMin[3], bounds.rankMax[3]]).toEqual([4, 4]);
   });
+
+  test('withholds guaranteed #1 bound when marginal CIs overlap despite high correlated LOS',
+    () => {
+      // Positive off-diagonal covariance makes Var(theta_0 - theta_1) tiny so LOS >= 0.95 while
+      // individual marginal 95% intervals [eloLcb, eloUcb] still overlap.
+      const theta = new Float64Array([0.2, 0.0]);
+      const cov = new Float64Array([0.04, 0.038, 0.038, 0.04]);
+      const eloLcb = new Float64Array([
+        1500 + ratings.ELO_SCALE * 0.2 - 1.96 * ratings.ELO_SCALE * 0.2,
+        1500 - 1.96 * ratings.ELO_SCALE * 0.2,
+      ]);
+      const eloUcb = new Float64Array([
+        1500 + ratings.ELO_SCALE * 0.2 + 1.96 * ratings.ELO_SCALE * 0.2,
+        1500 + 1.96 * ratings.ELO_SCALE * 0.2,
+      ]);
+      expect(ratings.computeLOS(theta, cov, 2, 0, 1)).toBeGreaterThan(0.95);
+      expect(eloUcb[1]).toBeGreaterThan(eloLcb[0]);
+
+      const bounds = ratings.computeGuaranteedRankBounds(
+        [0, 1], theta, cov, eloLcb, eloUcb, 2, 0.95
+      );
+      expect([bounds.rankMin[0], bounds.rankMax[0]]).toEqual([1, 2]);
+      expect([bounds.rankMin[1], bounds.rankMax[1]]).toEqual([1, 2]);
+    });
 });
 
 describe('streaks, Top-K reign clocks, and active matchmaker', () => {
@@ -460,6 +484,23 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
       clk.enteredAt, clk.maxStreakSeconds, clk.totalSeconds, true, 4500, 500
     );
     expect(clk).toEqual({enteredAt: 4000, maxStreakSeconds: 1800, totalSeconds: 2300});
+  });
+
+  test('caps Top-K maxStreakSeconds across multi-day runner downtime gaps', () => {
+    let clk = ratings.advanceTopKClock(undefined, 0, 0, true, 1000, 0);
+    // 7 days elapsed (604,800s), capped to 3600s credited interval (601,200s uncounted).
+    clk = ratings.advanceTopKClock(
+      clk.enteredAt,
+      clk.maxStreakSeconds,
+      clk.totalSeconds,
+      true,
+      605_800,
+      3600,
+      601_200
+    );
+    expect(clk.totalSeconds).toBe(3600);
+    expect(clk.maxStreakSeconds).toBe(3600);
+    expect(605_800 - clk.enteredAt!).toBe(3600);
   });
 
   test('throws when no ladder meets minAgents', () => {
@@ -593,9 +634,9 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
         activeAgentIndices: [0, 1, 2],
         agentIds: new Int32Array([10, 10, 20]),
         minAgents: 2,
-        theta: new Float64Array([1.2, 1.2, 0.0]),
-        sigma: new Float64Array([2.0, 2.0, 0.2]),
-        agentMatches: new Int32Array([0, 0, 30]),
+        theta: new Float64Array([1.2, 1.2, -1.0]),
+        sigma: new Float64Array([0.2, 2.0, 0.2]),
+        agentMatches: new Int32Array([30, 2, 30]),
         pairMatches: new Int32Array(9),
         lastMatchNumber: 0,
       },
@@ -603,6 +644,22 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
     const familyChoice = ratings.selectNextArenaMatch(mixedLadders, 5);
     expect(familyChoice.ladderId).toBe('rby-family');
     expect([familyChoice.agentI, familyChoice.agentJ].sort()).toEqual([0, 1]);
+  });
+
+  test('steers zero-match newcomers against settled anchors instead of each other', () => {
+    const ladders: ratings.LadderMatchState[] = [{
+      id: 'sv',
+      activeAgentIndices: [0, 1, 2, 3, 4, 5, 6],
+      agentIds: new Int32Array([1, 2, 3, 4, 5, 6, 7]),
+      minAgents: 2,
+      theta: new Float64Array([1.2, 0.9, 0.6, 0.3, 0.0, 0.0, 0.0]),
+      sigma: new Float64Array([0.12, 0.12, 0.12, 0.12, 0.12, 2.0, 2.0]),
+      agentMatches: new Int32Array([40, 40, 40, 40, 40, 0, 0]),
+      pairMatches: new Int32Array(49),
+      lastMatchNumber: 0,
+    }];
+    const choice = ratings.selectNextArenaMatch(ladders, 1);
+    expect([choice.agentI, choice.agentJ].sort()).not.toEqual([5, 6]);
   });
 
   test('computeTournamentRatings solves single-game MAP while preserving unplayed priors', () => {

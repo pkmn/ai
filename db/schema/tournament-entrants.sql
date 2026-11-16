@@ -34,3 +34,6 @@ CREATE TABLE IF NOT EXISTS tournament_entrants (
   PRIMARY KEY (tournament_id, version_id),
   UNIQUE (tournament_id, agent_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_tournament_entrants_agent
+  ON tournament_entrants(agent_id);
