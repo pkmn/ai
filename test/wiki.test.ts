@@ -215,6 +215,8 @@ describe('wiki helpers', () => {
 });
 
 describe('wiki server routes', () => {
+  let suiteTmpDir: string;
+  let templateWikiDir: string;
   let tmpDir: string;
   let wikiDir: string;
   let projectsFile: string;
@@ -223,20 +225,32 @@ describe('wiki server routes', () => {
   let discordMembers: Set<string>;
   const realFetch = globalThis.fetch;
 
+  beforeAll(() => {
+    suiteTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-wiki-suite-'));
+    templateWikiDir = path.join(suiteTmpDir, 'wiki-template');
+    fs.mkdirSync(templateWikiDir, {recursive: true});
+    execFileSync('git', ['init', '-b', 'main'], {cwd: templateWikiDir});
+    execFileSync('git', ['config', 'user.name', 'test'], {cwd: templateWikiDir});
+    execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {cwd: templateWikiDir});
+    fs.writeFileSync(
+      path.join(templateWikiDir, 'index.dj'),
+      '# Home\n\nWelcome to [Gen 9](gen9ou).\n'
+    );
+    execFileSync('git', ['add', 'index.dj'], {cwd: templateWikiDir});
+    execFileSync('git', ['commit', '-m', 'Initial commit'], {cwd: templateWikiDir});
+  });
+
+  afterAll(() => {
+    fs.rmSync(suiteTmpDir, {recursive: true, force: true});
+  });
+
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-wiki-test-'));
     wikiDir = path.join(tmpDir, 'wiki');
     projectsFile = path.join(tmpDir, 'projects.yml');
     discordMembers = new Set(['513513270670262284']);
-    fs.mkdirSync(wikiDir, {recursive: true});
+    fs.cpSync(templateWikiDir, wikiDir, {recursive: true});
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
-
-    execFileSync('git', ['init', '-b', 'main'], {cwd: wikiDir});
-    execFileSync('git', ['config', 'user.name', 'test'], {cwd: wikiDir});
-    execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {cwd: wikiDir});
-    fs.writeFileSync(path.join(wikiDir, 'index.dj'), '# Home\n\nWelcome to [Gen 9](gen9ou).\n');
-    execFileSync('git', ['add', 'index.dj'], {cwd: wikiDir});
-    execFileSync('git', ['commit', '-m', 'Initial commit'], {cwd: wikiDir});
 
     const app = polka();
     wiki.register(app, {

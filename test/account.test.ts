@@ -584,7 +584,7 @@ describe('account routes', () => {
         ).toBe(303);
 
         await runPkmnCli(
-          ['reassign-developer', 'pre', 'Foul Play', '--projects', projectsFile],
+          ['reassign-developer', 'pre', 'Foul Play', '--projects', projectsFile, '--offline'],
           {db, now: currentNow + 20, log: () => undefined}
         );
 
@@ -605,7 +605,7 @@ describe('account routes', () => {
         ).toBe(303);
 
         await runPkmnCli(
-          ['reassign-developer', 'pre', '0 ERROR', '--projects', projectsFile],
+          ['reassign-developer', 'pre', '0 ERROR', '--projects', projectsFile, '--offline'],
           {db, now: currentNow + 40, log: () => undefined}
         );
 
