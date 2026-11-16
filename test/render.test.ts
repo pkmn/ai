@@ -1063,6 +1063,9 @@ describe('tournament SSR views', () => {
     expect(viewerHtml).toContain('list.map(ownPokemon)');
     expect(viewerHtml).toContain('battle.setViewpoint(currentSide)');
     expect(viewerHtml).toContain('state: playbackState()');
+    expect(viewerHtml).toContain('class="icon-muted"');
+    expect(viewerHtml).toContain('class="icon-sound"');
+    expect(viewerHtml).toContain('id="sound" aria-label="Sound" aria-pressed="false"');
   });
 
   test('renders ongoing or completed tournament summaries on /arena/', async () => {

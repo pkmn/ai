@@ -138,6 +138,9 @@ body {
 }
 
 .arena-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 28px;
   padding: 0 8px;
   color: var(--ink-soft);
@@ -150,13 +153,35 @@ body {
   cursor: pointer;
 }
 
+.arena-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: currentcolor;
+}
+
+.arena-btn svg .stroke {
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#sound .icon-sound,
+#sound[aria-pressed="true"] .icon-muted {
+  display: none;
+}
+
+#sound[aria-pressed="true"] .icon-sound {
+  display: block;
+}
+
 .arena-speed {
   height: 28px;
   padding: 0 6px;
   color: var(--ink-soft);
   font: inherit;
   font-size: 12px;
-  font-family: monospace;
   background: var(--paper);
   border: 1px solid var(--rule);
   border-radius: 4px;

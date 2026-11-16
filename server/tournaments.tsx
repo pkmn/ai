@@ -169,10 +169,12 @@ const VIEWER_SCRIPT = `
     };
 
     const applySound = () => {
-      if (!battle) return;
-      battle.setMute(muted);
+      try {
+        if (window.BattleSound) window.BattleSound.setMute(muted);
+      } catch {}
+      if (battle) battle.setMute(muted);
       el.sound.setAttribute('aria-pressed', String(!muted));
-      el.sound.textContent = muted ? 'Mute' : 'Sound';
+      el.sound.title = muted ? 'Sound is off' : 'Sound is on';
     };
 
     const describeTurn = () => {
@@ -1257,10 +1259,16 @@ export function renderBattleViewerPage(publicDir: string) {
               type='button'
               className='arena-btn'
               data-action='switch'
+              aria-label='Switch viewpoint'
               title='Switch viewpoint'
               disabled={true}
             >
-              Switch
+              <svg viewBox='0 0 24 24' aria-hidden='true'>
+                <path
+                  className='stroke'
+                  d='M4 7.5h15M15.5 4L19 7.5 15.5 11M20 16.5H5M8.5 13L5 16.5 8.5 20'
+                />
+              </svg>
             </button>
             <select className='arena-speed' id='speed' aria-label='Playback speed' disabled={true}>
               <option value='slow'>Slow</option>
@@ -1273,11 +1281,22 @@ export function renderBattleViewerPage(publicDir: string) {
               className='arena-btn'
               data-action='sound'
               id='sound'
+              aria-label='Sound'
               aria-pressed='false'
-              title='Toggle sound'
+              title='Sound is off'
               disabled={true}
             >
-              Mute
+              <svg className='icon-muted' viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M4 9.5v5h3.5L12 19V5L7.5 9.5z' />
+                <path className='stroke' d='M15.5 9.5l5 5m0-5l-5 5' />
+              </svg>
+              <svg className='icon-sound' viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M4 9.5v5h3.5L12 19V5L7.5 9.5z' />
+                <path
+                  className='stroke'
+                  d='M15 9a4.2 4.2 0 0 1 0 6m2.6-8.6a8 8 0 0 1 0 11.2'
+                />
+              </svg>
             </button>
           </div>
         </div>
