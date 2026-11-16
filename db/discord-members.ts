@@ -12,15 +12,35 @@ export function syncDiscordMembers(
   members: Iterable<{id: string; username: string}>,
   now = Math.floor(Date.now() / 1000)
 ) {
-  const clear = db.prepare('DELETE FROM discord_members');
-  const insert = db.prepare(
+  const incoming = new Map<string, string>();
+  for (const m of members) {
+    incoming.set(m.id, m.username);
+  }
+
+  const existingRows = db.prepare('SELECT id, username FROM discord_members')
+    .all() as Array<{id: string; username: string}>;
+  const existing = new Map(existingRows.map(r => [r.id, r.username]));
+
+  const toDelete: string[] = [];
+  for (const id of existing.keys()) {
+    if (!incoming.has(id)) toDelete.push(id);
+  }
+  const toUpsert: Array<{id: string; username: string}> = [];
+  for (const [id, username] of incoming) {
+    if (existing.get(id) !== username) {
+      toUpsert.push({id, username});
+    }
+  }
+
+  if (toDelete.length === 0 && toUpsert.length === 0) return;
+
+  const del = db.prepare('DELETE FROM discord_members WHERE id = ?');
+  const upsert = db.prepare(
     'INSERT OR REPLACE INTO discord_members (id, username, updated_at) VALUES (?, ?, ?)'
   );
   inTransaction(() => {
-    clear.run();
-    for (const m of members) {
-      insert.run(m.id, m.username, now);
-    }
+    for (const id of toDelete) del.run(id);
+    for (const m of toUpsert) upsert.run(m.id, m.username, now);
   });
 }
 

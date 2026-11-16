@@ -62,6 +62,11 @@ describe('auth config helpers', () => {
     expect(auth.sanitizeReturnTo('/bad\r\nSet-Cookie: x=1', '/')).toBe('/');
   });
 
+  test('sanitizeReturnTo blocks backslash-prefixed scheme-relative paths', () => {
+    expect(auth.sanitizeReturnTo('/\\evil.example/phish', '/')).toBe('/');
+    expect(auth.sanitizeReturnTo('/foo\\bar', '/')).toBe('/');
+  });
+
   test('loadConfig returns undefined without SESSION_SECRET or DEV_AUTH', () => {
     expect(auth.loadConfig({})).toBeUndefined();
   });
@@ -528,5 +533,41 @@ describe('server/auth.ts routes', () => {
     const decodedScoped = auth.verifyToken<auth.Session>(scopedCliToken, AUTH_CFG.sessionSecret);
     expect(decodedScoped?.discord?.id).toBe('513513270670262284');
     expect(decodedScoped?.github).toBeUndefined();
+  });
+
+  test('rejects Sec-Fetch-Site same-site POST requests', async () => {
+    const preGhToken = signSession({github: {id: 10, login: 'pre'}});
+    const res = await realFetch(`${baseUrl}/api/account/discord/unlink`, {
+      method: 'POST',
+      headers: {
+        Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+        'Sec-Fetch-Site': 'same-site',
+        Accept: 'application/json',
+      },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test('rejects GitHub OAuth callbacks with non-positive numeric user IDs', async () => {
+    const {state, stateCookie} = await beginGitHubOAuth();
+    mockGitHubUser({id: 0, login: 'pre'});
+
+    const badCb = await realFetch(
+      `${baseUrl}/auth/github/callback?code=c0&state=${encodeURIComponent(state)}`,
+      {
+        headers: {Cookie: `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`},
+        redirect: 'manual',
+      }
+    );
+    expect(badCb.status).toBe(502);
+  });
+
+  test('clears stale githubId when projects.yml changes an owner handle', () => {
+    db.linkDeveloperGitHubId('pre', 105440);
+    expect(db.getDeveloperByGitHub('pre')!.githubId).toBe(105440);
+
+    db.syncProjectsFromYaml(PROJECTS_YAML.replace('pre: pre.10544', 'pre-new: pre.10544'));
+    expect(db.getDeveloperByGitHub('pre-new')!.githubId).toBeUndefined();
+    expect(db.linkDeveloperGitHubId('pre-new', 909090)).toBe(true);
   });
 });

@@ -39,6 +39,8 @@ describe('ownerOf', () => {
       leader('a', {id: 'a3', name: 'MewsTruck v2'}, undefined), {role: 'r-mews'}],
     ['the longest matching 🤖 guild role prefix',
       leader('a', {id: 'a4', name: 'PokeCHAD V3'}, {name: 'dr'}), {role: 'r-pokechad'}],
+    ['the author name when unversioned prefix only shares a substring',
+      leader('a', {id: 'a5', name: 'PokeMaster'}, {name: 'x'}), {name: 'x'}],
     ['the author name', leader('a', other, {name: 'x'}), {name: 'x'}],
     ['nobody while the owner is private', leader('a', other, undefined), undefined],
   ])('is %s', (_, l, expected) => {
@@ -697,6 +699,23 @@ describe('syncGuildMembers', () => {
       db.close();
     }
   });
+
+  test('skips SQLite writes when synced Discord guild roster is unchanged', () => {
+    const db = new Database(':memory:');
+    try {
+      const roster: discord.GuildMember[] = [
+        {user: {id: '513513270670262284', username: 'scheibo'}, roles: []},
+      ];
+      discord.syncGuildMembers(db, roster, 1_760_000_000);
+      discord.syncGuildMembers(db, roster, 1_760_000_060);
+      const row = db.db.prepare(
+        'SELECT updated_at FROM discord_members WHERE id = ?'
+      ).get('513513270670262284') as {updated_at: number};
+      expect(row.updated_at).toBe(1_760_000_000);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe('glossary slash commands', () => {
@@ -730,6 +749,12 @@ describe('glossary slash commands', () => {
       expect(reply).not.toMatch(/\{[^}]+\}/);
       expect(reply).not.toMatch(/\$`/);
     }
+  });
+
+  test('truncates oversized glossary definitions within 2000 characters', () => {
+    const reply = discord.formatGlossaryReply('Long Term', 'word '.repeat(600));
+    expect(reply.length).toBeLessThanOrEqual(2000);
+    expect(reply).toContain('([more](https://pkmn.ai/glossary/#Long-Term))');
   });
 
   test('looks up glossary terms by exact key, ID, or {.dfn} alias', () => {

@@ -137,6 +137,19 @@ describe('submission helpers', () => {
     expect(() => account.decryptSecret(`${enc}x`, 'session-secret-1')).toThrow();
   });
 
+  test('decryptSecret rejects truncated GCM authentication tags', () => {
+    const enc = account.encryptSecret('Bearer ghp_secret123', 'session-secret-1');
+    const [ver, iv, tag, ct] = enc.split('.');
+    const truncatedTag = Buffer.from(tag, 'base64url').subarray(0, 4).toString('base64url');
+    expect(() => account.decryptSecret(`${ver}.${iv}.${truncatedTag}.${ct}`, 'session-secret-1'))
+      .toThrow();
+  });
+
+  test('validateArtifactUrl blocks embedded URL credentials', () => {
+    expect(account.validateArtifactUrl('https://user:pass@github.com/pkmn/a.tar.zst', 'bundle'))
+      .toBeTruthy();
+  });
+
   test('splitSubmittedTeams parses Showdown === headers, packed lines, arrays, or 6-block pastes',
     () => {
       const twoTeams = VALID_TWENTY_VGC.slice(0, 2);
@@ -929,6 +942,42 @@ describe('account routes', () => {
       const agent = db.getAgentBySlug('0-error')!;
       expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending'))
         .toHaveLength(20);
+    });
+
+    test('clears unlocked saved draft teams on POST /api/account/teams/clear', async () => {
+      await postVgc('1.0.0', VALID_TWENTY_VGC.slice(0, 5));
+      const agent = db.getAgentBySlug('0-error')!;
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved'))
+        .toHaveLength(5);
+
+      const clearRes = await realFetch(`${baseUrl}/api/account/teams/clear`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ladderId: 'gen9championsvgc2026regmc'}),
+      });
+      expect(clearRes.status).toBe(200);
+      expect(await clearRes.json()).toMatchObject({savedCount: 0, requiredCount: 20});
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved'))
+        .toHaveLength(0);
+    });
+
+    test('rejects clearing locked seasonal teams on POST /api/account/teams/clear', async () => {
+      const okRes = await postVgc('1.0.0', VALID_TWENTY_VGC);
+      const {versionId} = await okRes.json() as {versionId: number};
+      db.applySubmissionStatus({versionId, smokeStatus: 'passed', now: currentNow + 5});
+
+      const clearRes = await realFetch(`${baseUrl}/api/account/teams/clear`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieFor('pre'),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ladderId: 'gen9championsvgc2026regmc'}),
+      });
+      expect(clearRes.status).toBe(409);
     });
 
     test('promotes saved 20/20 draft teams to pending when submitting without teams', async () => {

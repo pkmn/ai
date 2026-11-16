@@ -72,8 +72,11 @@ export function decryptSecret(encoded: string, secret: string): string {
   const key = deriveSecretKey(secret);
   const iv = Buffer.from(parts[0], 'base64url');
   const tag = Buffer.from(parts[1], 'base64url');
+  if (iv.length !== 12 || tag.length !== 16) {
+    throw new Error('Invalid encrypted secret IV or authentication tag length');
+  }
   const data = Buffer.from(parts[2], 'base64url');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {authTagLength: 16});
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
@@ -163,7 +166,15 @@ const ACCOUNT_SCRIPT = `
       if (anyTourney) typeSelect.value = 'oci';
       syncSubmitBtn();
     };
-    tourneyChecks.forEach(cb => cb.addEventListener('change', syncTourneyPackage));
+    tourneyChecks.forEach(cb => cb.addEventListener('change', () => {
+      if (cb.checked) {
+        ladderChecks.forEach(lcb => {
+          lcb.checked = false;
+        });
+        syncTeamsVisibility();
+      }
+      syncTourneyPackage();
+    }));
     syncTourneyPackage();
 
     if (urlInput && typeSelect) {
@@ -280,7 +291,15 @@ const ACCOUNT_SCRIPT = `
         syncSubmitBtn();
       }
     };
-    ladderChecks.forEach(cb => cb.addEventListener('change', syncTeamsVisibility));
+    ladderChecks.forEach(cb => cb.addEventListener('change', () => {
+      if (cb.checked) {
+        tourneyChecks.forEach(tcb => {
+          tcb.checked = false;
+        });
+        syncTourneyPackage();
+      }
+      syncTeamsVisibility();
+    }));
     syncTeamsVisibility();
 
     const getStatusEl = () => {
@@ -1157,6 +1176,9 @@ export function validateArtifactUrl(
     } catch {
       return 'Bundle Artifact URL must be a valid URL.';
     }
+    if (parsed.username || parsed.password) {
+      return 'Bundle Artifact URL must not embed credentials.';
+    }
     const allowHttp = allowPrivateUrls && process.env.NODE_ENV !== 'production';
     if (parsed.protocol !== 'https:' && !(allowHttp && parsed.protocol === 'http:')) {
       return 'Bundle Artifact URL must use HTTPS.';
@@ -1209,8 +1231,22 @@ export function register(app: polka.Polka, options: Options) {
   installHeadSupport(app);
   const {db, auth} = options;
   const getNow = options.now ?? (() => Math.floor(Date.now() / 1000));
-  const getPools = () => options.poolsByLadder ??
-    loadLadderPools(options.laddersFile ?? LADDERS_FILE);
+  const laddersPath = options.laddersFile ?? LADDERS_FILE;
+  let cachedPoolsMtime = -1;
+  let cachedPoolsMap: Map<string, string[]> | undefined;
+  const getPools = () => {
+    if (options.poolsByLadder) return options.poolsByLadder;
+    let mtime = -1;
+    try {
+      mtime = fs.statSync(laddersPath).mtimeMs;
+    } catch {}
+    if (cachedPoolsMap && mtime === cachedPoolsMtime && mtime !== -1) {
+      return cachedPoolsMap;
+    }
+    cachedPoolsMap = loadLadderPools(laddersPath);
+    cachedPoolsMtime = mtime;
+    return cachedPoolsMap;
+  };
   const maxAttempts = options.rateLimitMaxAttempts ?? RATE_LIMIT_MAX_ATTEMPTS;
   const windowSeconds = options.rateLimitWindowSeconds ?? RATE_LIMIT_WINDOW_SECONDS;
   const attemptsByAgent = new Map<number, number[]>();
@@ -1371,6 +1407,61 @@ export function register(app: polka.Polka, options: Options) {
   app.get('/account.json', (req, res) => handleGetAccount(req, res, true));
   app.get('/account/index.json', (req, res) => handleGetAccount(req, res, true));
 
+  app.post('/api/account/teams/clear', async (req, res) => {
+    if (isCrossSiteRequest(req)) {
+      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
+      return;
+    }
+    const login = auth.getGitHubUser(req);
+    if (!login) {
+      sendJson(res, 401, {error: 'GitHub authentication required.'});
+      return;
+    }
+    const developer = db.getDeveloperByGitHub(login);
+    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
+    if (!developer || !agent || agent.status === 'disabled') {
+      sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
+      return;
+    }
+    let ladderKey: string;
+    try {
+      const rawBody = await readBody(req, 16 * 1024);
+      if (req.headers['content-type']?.includes('application/json')) {
+        const parsed = JSON.parse(rawBody || '{}') as {ladderId?: unknown};
+        ladderKey = typeof parsed.ladderId === 'string' ? parsed.ladderId.trim() : '';
+      } else {
+        const parsed = querystring.parse(rawBody);
+        const val = Array.isArray(parsed.ladderId) ? parsed.ladderId[0] : parsed.ladderId;
+        ladderKey = (val ?? '').trim();
+      }
+    } catch {
+      sendJson(res, 400, {error: 'Malformed request body.'});
+      return;
+    }
+    const currentLadders = db.getCurrentLadders();
+    const lower = ladderKey.toLowerCase();
+    const ladder = currentLadders.find(
+      l => l.id.toLowerCase() === lower ||
+        l.slot.toLowerCase() === lower ||
+        l.name.toLowerCase() === lower
+    );
+    if (ladder?.team !== 'pools') {
+      sendJson(res, 400, {error: `Unknown pools ladder "${ladderKey}".`});
+      return;
+    }
+    if (db.hasActiveLadderTeams(ladder.id, agent.id)) {
+      sendJson(res, 409, {error: `Teams for ${ladder.name} are already locked for this season.`});
+      return;
+    }
+    db.replaceSavedTeams(ladder.id, agent.id, [], getNow());
+    sendJson(res, 200, {
+      ok: true,
+      ladderId: ladder.id,
+      savedCount: 0,
+      requiredCount: ladder.teams ?? 0,
+    });
+  });
+
   app.post('/api/submissions', async (req, res) => {
     if (isCrossSiteRequest(req)) {
       sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
@@ -1455,6 +1546,25 @@ export function register(app: polka.Polka, options: Options) {
 
     if (!payload.ladders.length && !payload.tournaments.length) {
       sendJson(res, 400, {error: 'Select at least one active ladder or scheduled tournament.'});
+      return;
+    }
+    if (payload.ladders.length > 0 && payload.tournaments.length > 0) {
+      sendJson(res, 400, {
+        error: 'Submit ladder versions and tournament entries separately (do not combine both).',
+      });
+      return;
+    }
+    if (
+      payload.authToken &&
+      (payload.authToken.length > 4096 || /[\r\n]/.test(payload.authToken))
+    ) {
+      sendJson(res, 400, {error: 'Invalid authToken header.'});
+      return;
+    }
+    if (db.getVersionBySlugAndLabel(agent.slug, payload.version)) {
+      sendJson(res, 409, {
+        error: `Version "${payload.version}" already exists for ${agent.name}.`,
+      });
       return;
     }
 

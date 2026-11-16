@@ -114,8 +114,17 @@ export function serializeCookie(name: string, value: string, maxAgeSeconds: numb
 
 export function sanitizeReturnTo(raw: unknown, fallback = '/'): string {
   if (typeof raw !== 'string') return fallback;
-  if (!raw.startsWith('/') || raw.startsWith('//') || /[\r\n]/.test(raw)) return fallback;
-  return raw;
+  // eslint-disable-next-line no-control-regex
+  if (!raw.startsWith('/') || raw.startsWith('//') || /[\\\x00-\x1f\x7f]/.test(raw)) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(raw, 'http://pkmn.local');
+    if (parsed.origin !== 'http://pkmn.local') return fallback;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return fallback;
+  }
 }
 
 // Accepts either `Authorization: Bearer <token>` (for headless CLI / script access to
@@ -191,17 +200,25 @@ function redirect(
 }
 
 function inferOrigin(req: http.IncomingMessage): string {
+  if (process.env.NODE_ENV === 'production' && process.env.PUBLIC_URL?.trim()) {
+    try {
+      return new URL(process.env.PUBLIC_URL.trim()).origin;
+    } catch {}
+  }
   const forwardedProto = req.headers['x-forwarded-proto'];
   const proto = typeof forwardedProto === 'string' && forwardedProto.startsWith('https')
     ? 'https'
     : process.env.NODE_ENV === 'production' ? 'https' : 'http';
-  const host = req.headers.host || '127.0.0.1:1234';
+  const rawHost = typeof req.headers.host === 'string' ? req.headers.host.trim() : '';
+  const host = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(rawHost) ? rawHost : '127.0.0.1:1234';
   return `${proto}://${host}`;
 }
 
 export function isCrossSiteRequest(req: http.IncomingMessage): boolean {
   const fetchSite = req.headers['sec-fetch-site'];
-  if (fetchSite === 'cross-site') return true;
+  if (typeof fetchSite === 'string' && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+    return true;
+  }
   const origin = req.headers.origin;
   if (typeof origin === 'string' && origin !== inferOrigin(req)) return true;
   return false;
@@ -246,9 +263,11 @@ export class Auth {
   getGitHubUser(req: http.IncomingMessage): string | undefined {
     const session = this.getSession(req);
     if (session?.github) {
-      if (session.github.id > 0 && this.db) {
-        const byId = this.db.getDeveloperByGitHubId(session.github.id);
-        if (byId) return byId.githubLogin;
+      if (this.db) {
+        if (session.github.id > 0) {
+          const byId = this.db.getDeveloperByGitHubId(session.github.id);
+          if (byId) return byId.githubLogin;
+        }
         const byLogin = this.db.getDeveloperByGitHub(session.github.login);
         if (byLogin?.githubId !== undefined && byLogin.githubId !== session.github.id) {
           return undefined;
@@ -444,23 +463,28 @@ export class Auth {
         });
         if (!userRes.ok) throw new Error(`GitHub user fetch failed (${userRes.status})`);
         const userData = await userRes.json() as {id?: number; login?: string};
-        if (!userData.login) throw new Error('Missing login from GitHub user API');
+        if (
+          !userData.login ||
+          typeof userData.id !== 'number' ||
+          !Number.isInteger(userData.id) ||
+          userData.id <= 0
+        ) {
+          throw new Error('Missing or invalid id/login from GitHub user API');
+        }
 
-        const githubId = typeof userData.id === 'number' ? userData.id : 0;
-        const byId = githubId > 0 ? this.db?.getDeveloperByGitHubId(githubId) : undefined;
+        const githubId = userData.id;
+        const byId = this.db?.getDeveloperByGitHubId(githubId);
         const login = byId?.githubLogin ?? userData.login;
         const byLogin = this.db?.getDeveloperByGitHub(login);
         if (
           !this.isAuthorizedGitHub(login) ||
-          (byLogin?.githubId !== undefined && githubId > 0 && byLogin.githubId !== githubId)
+          (byLogin?.githubId !== undefined && byLogin.githubId !== githubId)
         ) {
           sendError(res, 403, [clearState]);
           return;
         }
 
-        if (githubId > 0) {
-          this.db?.linkDeveloperGitHubId(login, githubId);
-        }
+        this.db?.linkDeveloperGitHubId(login, githubId);
 
         const existing = this.getSession(req);
         const sessionCookie = this.issueSessionCookie({

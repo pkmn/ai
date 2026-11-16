@@ -124,6 +124,7 @@ describe('wiki helpers', () => {
     expect(wiki.isValidSlug('../secret')).toBe(false);
     expect(wiki.isValidSlug('a/b')).toBe(false);
     expect(wiki.isValidSlug('.hidden')).toBe(false);
+    expect(wiki.isValidSlug('%30_ERROR')).toBe(false);
   });
 
   test('renderDjot strips raw HTML blocks or inline raw HTML', () => {
@@ -330,7 +331,7 @@ describe('wiki server routes', () => {
         return new Response(JSON.stringify({access_token: 'gho_test'}), {status: 200});
       }
       if (url === 'https://api.github.com/user') {
-        return new Response(JSON.stringify({login: 'pmariglia'}), {status: 200});
+        return new Response(JSON.stringify({id: 535629, login: 'pmariglia'}), {status: 200});
       }
       return realFetch(input, init);
     };
@@ -651,6 +652,99 @@ describe('wiki server routes', () => {
     const sha = /href="\/wiki\/backticks\/([0-9a-f]{40})"/.exec(histHtml)![1];
     const diffRes = await realFetch(`${baseUrl}/wiki/backticks/${sha}?diff=1`);
     expect(diffRes.status).toBe(200);
+  });
+
+  test('rejects double-encoded wiki slugs containing literal percent signs', async () => {
+    const res = await realFetch(`${baseUrl}/wiki/%2530_ERROR`);
+    expect(res.status).toBe(404);
+  });
+
+  test('denies anonymous access to historical private revisions on public project pages',
+    async () => {
+      await postWiki('0_ERROR', 'scheibo', {
+        content: '# 0 ERROR\n\nTop-secret private algorithm.',
+        visibility: 'developers',
+        message: 'Private draft',
+        action: 'save',
+      });
+      const privateSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: wikiDir,
+        encoding: 'utf8',
+      }).trim();
+
+      await postWiki('0_ERROR', 'scheibo', {
+        content: '# 0 ERROR\n\nSanitized public summary.',
+        visibility: 'public',
+        message: 'Publish summary',
+        action: 'save',
+      });
+      const publicSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: wikiDir,
+        encoding: 'utf8',
+      }).trim();
+
+      expect((await realFetch(`${baseUrl}/wiki/0_ERROR`)).status).toBe(200);
+      const anonSnap = await realFetch(`${baseUrl}/wiki/0_ERROR/${privateSha}`, {
+        redirect: 'manual',
+      });
+      expect(anonSnap.status).toBe(302);
+
+      const anonDiff = await realFetch(`${baseUrl}/wiki/0_ERROR/${publicSha}?diff=1`, {
+        redirect: 'manual',
+      });
+      expect(anonDiff.status).toBe(302);
+    });
+
+  test('rejects non-commit git object SHAs on revision routes', async () => {
+    const blobSha = execFileSync('git', ['rev-parse', 'HEAD:index.dj'], {
+      cwd: wikiDir,
+      encoding: 'utf8',
+    }).trim();
+    const res = await realFetch(`${baseUrl}/wiki/index/${blobSha}`);
+    expect(res.status).toBe(404);
+  });
+
+  test('rejects wiki POST requests missing content with 400', async () => {
+    const res = await postWiki('gen9ou', 'scheibo', {action: 'save'});
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 409 conflict preview when baseSha lags behind HEAD', async () => {
+    await postWiki('conflict_page', 'scheibo', {
+      content: '# Conflict\n\nVersion 1.',
+      message: 'v1',
+      action: 'save',
+    });
+    const editHtml = await (await realFetch(`${baseUrl}/wiki/conflict_page/edit`, {
+      headers: {Cookie: sessionCookie('scheibo')},
+    })).text();
+    const baseSha = /name="baseSha"[^>]*value="([^"]+)"/.exec(editHtml)![1];
+
+    await postWiki('conflict_page', 'pmariglia', {
+      content: '# Conflict\n\nVersion 2.',
+      message: 'v2',
+      action: 'save',
+    });
+
+    const staleSave = await postWiki('conflict_page', 'scheibo', {
+      content: '# Conflict\n\nStale overwrite.',
+      baseSha,
+      message: 'stale',
+      action: 'save',
+    });
+    expect(staleSave.status).toBe(409);
+    expect(fs.readFileSync(path.join(wikiDir, 'conflict_page.dj'), 'utf8')).toContain('Version 2.');
+  });
+
+  test('ignores hash comments inside fenced code blocks when extracting titles', async () => {
+    await postWiki('code_first', 'scheibo', {
+      content: '```python\n# not a heading\n```\n\n# Real Heading\n',
+      message: 'Add code block before H1',
+      action: 'save',
+    });
+    const pagesHtml = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
+    expect(pagesHtml).toContain('Real Heading');
+    expect(pagesHtml).not.toContain('not a heading');
   });
 });
 

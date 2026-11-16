@@ -1,4 +1,5 @@
 import {execFile} from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -80,9 +81,13 @@ export interface Revision {
   subject: string;
 }
 
+function normalizeDecodedSlug(text: string): string {
+  return text.normalize('NFC').trim().replace(/[\s_]+/g, '_');
+}
+
 export function normalizeSlug(rawText: string): string {
   try {
-    return decodeURIComponent(rawText).normalize('NFC').trim().replace(/[\s_]+/g, '_');
+    return normalizeDecodedSlug(decodeURIComponent(rawText));
   } catch {
     return '';
   }
@@ -92,7 +97,7 @@ export function isValidSlug(slug: string): boolean {
   if (!slug || slug.length > 200) return false;
   if (slug.startsWith('.') || slug.includes('..')) return false;
   // eslint-disable-next-line no-control-regex
-  if (/[/\\<>:"|?*\x00-\x1f\x7f]/.test(slug)) return false;
+  if (/[/\\<>:"|?*%\x00-\x1f\x7f]/.test(slug)) return false;
   return !RESERVED_SLUGS.has(slug.toLowerCase());
 }
 
@@ -169,8 +174,9 @@ export function extractProjectPages(projectsYaml: string): {
     aliases.set(slug.toLowerCase(), slug);
     const arenaSlug = slugify(name).toLowerCase();
     if (arenaSlug) {
-      aliases.set(arenaSlug, slug);
-      aliases.set(normalizeSlug(arenaSlug).toLowerCase(), slug);
+      if (!aliases.has(arenaSlug)) aliases.set(arenaSlug, slug);
+      const normArena = normalizeDecodedSlug(arenaSlug).toLowerCase();
+      if (!aliases.has(normArena)) aliases.set(normArena, slug);
     }
     const idAlias = toID(name);
     if (idAlias && !RESERVED_SLUGS.has(idAlias) && !aliases.has(idAlias)) {
@@ -270,19 +276,40 @@ function resolveWikiHref(rawHref: string | undefined): string {
   return `/wiki/${encodeSlug(clean)}${hash ? `#${hash}` : ''}`;
 }
 
+const MAX_AST_DEPTH = 64;
+
 function extractPlainText(node: djot.AstNode): string {
   const parts: string[] = [];
-  const walk = (cur: djot.AstNode) => {
+  const walk = (cur: djot.AstNode, depth: number) => {
+    if (depth > MAX_AST_DEPTH) return;
     if ('text' in cur) {
       parts.push(cur.text);
     } else if (cur.tag === 'soft_break' || cur.tag === 'hard_break') {
       parts.push('\n');
     } else if ('children' in cur) {
-      for (const child of cur.children) walk(child);
+      for (const child of cur.children) walk(child, depth + 1);
     }
   };
-  walk(node);
+  walk(node, 0);
   return parts.join('');
+}
+
+function extractTopHeadingTitle(body: string): string | undefined {
+  try {
+    const doc = djot.parse(body);
+    for (const child of doc.children) {
+      if (child.tag === 'heading' && child.level === 1) {
+        return extractPlainText(child).trim() || undefined;
+      }
+      if (child.tag === 'section') {
+        const first = child.children.find(
+          (c): c is djot.Heading => c.tag === 'heading' && c.level === 1
+        );
+        if (first) return extractPlainText(first).trim() || undefined;
+      }
+    }
+  } catch {}
+  return undefined;
 }
 
 function renderSafeMath(tex: string, displayMode: boolean): string {
@@ -308,18 +335,26 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
   const {content} = parsePageContent(rawText);
   const doc = djot.parse(content);
   const usedIds = new Set<string>();
+  const nextIdIndex = new Map<string, number>();
   const footnoteOrder: string[] = [];
   const footnoteIndex = new Map<string, number>();
 
   const uniqueHeadingId = (text: string): string | undefined => {
     const base = slugify(text).toLowerCase();
     if (!base) return undefined;
-    let candidate = base;
-    let n = 2;
+    if (!usedIds.has(base)) {
+      usedIds.add(base);
+      nextIdIndex.set(base, 2);
+      return base;
+    }
+    let n = nextIdIndex.get(base) ?? 2;
+    let candidate = `${base}-${n}`;
     while (usedIds.has(candidate)) {
-      candidate = `${base}-${n++}`;
+      n++;
+      candidate = `${base}-${n}`;
     }
     usedIds.add(candidate);
+    nextIdIndex.set(base, n + 1);
     return candidate;
   };
 
@@ -332,9 +367,12 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
     return '#';
   };
 
-  const renderInlines = (nodes: djot.Inline[]): string => nodes.map(renderInline).join('');
+  const renderInlines = (nodes: djot.Inline[], depth = 0): string =>
+    depth > MAX_AST_DEPTH ? '' : nodes.map(n => renderInline(n, depth)).join('');
 
-  const renderInline = (node: djot.Inline): string => {
+  const renderInline = (node: djot.Inline, depth = 0): string => {
+    if (depth > MAX_AST_DEPTH) return '';
+    const nextDepth = depth + 1;
     switch (node.tag) {
       case 'str':
         return escapeHtml(node.text);
@@ -373,56 +411,58 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         return String(<sup id={`fnref-${idx}`}><a href={`#fn-${idx}`}>{`[${idx}]`}</a></sup>);
       }
       case 'emph':
-        return String(<em>{raw(renderInlines(node.children))}</em>);
+        return String(<em>{raw(renderInlines(node.children, nextDepth))}</em>);
       case 'strong':
-        return String(<strong>{raw(renderInlines(node.children))}</strong>);
+        return String(<strong>{raw(renderInlines(node.children, nextDepth))}</strong>);
       case 'link':
         return String(
-          <a href={resolveLinkNodeHref(node)}>{raw(renderInlines(node.children))}</a>
+          <a href={resolveLinkNodeHref(node)}>{raw(renderInlines(node.children, nextDepth))}</a>
         );
       case 'image':
-        return renderInlines(node.children);
+        return renderInlines(node.children, nextDepth);
       case 'span':
-        return renderInlines(node.children);
+        return renderInlines(node.children, nextDepth);
       case 'mark':
-        return String(<mark>{raw(renderInlines(node.children))}</mark>);
+        return String(<mark>{raw(renderInlines(node.children, nextDepth))}</mark>);
       case 'superscript':
-        return String(<sup>{raw(renderInlines(node.children))}</sup>);
+        return String(<sup>{raw(renderInlines(node.children, nextDepth))}</sup>);
       case 'subscript':
-        return String(<sub>{raw(renderInlines(node.children))}</sub>);
+        return String(<sub>{raw(renderInlines(node.children, nextDepth))}</sub>);
       case 'insert':
-        return String(<ins>{raw(renderInlines(node.children))}</ins>);
+        return String(<ins>{raw(renderInlines(node.children, nextDepth))}</ins>);
       case 'delete':
-        return String(<del>{raw(renderInlines(node.children))}</del>);
+        return String(<del>{raw(renderInlines(node.children, nextDepth))}</del>);
       case 'double_quoted':
-        return `\u201c${renderInlines(node.children)}\u201d`;
+        return `\u201c${renderInlines(node.children, nextDepth)}\u201d`;
       case 'single_quoted':
-        return `\u2018${renderInlines(node.children)}\u2019`;
+        return `\u2018${renderInlines(node.children, nextDepth)}\u2019`;
     }
   };
 
-  const renderListItemBlocks = (blocks: djot.Block[], tight: boolean): string => {
+  const renderListItemBlocks = (blocks: djot.Block[], tight: boolean, depth: number): string => {
     if (tight && blocks.length === 1 && blocks[0].tag === 'para') {
-      return renderInlines(blocks[0].children);
+      return renderInlines(blocks[0].children, depth);
     }
-    return `\n${renderBlocks(blocks)}`;
+    return `\n${renderBlocks(blocks, undefined, depth)}`;
   };
 
-  const renderBlocks = (blocks: djot.Block[], sectionId?: string): string =>
-    blocks.map(b => renderBlock(b, sectionId)).join('');
+  const renderBlocks = (blocks: djot.Block[], sectionId?: string, depth = 0): string =>
+    depth > MAX_AST_DEPTH ? '' : blocks.map(b => renderBlock(b, sectionId, depth)).join('');
 
-  const renderBlock = (node: djot.Block, sectionId?: string): string => {
+  const renderBlock = (node: djot.Block, sectionId?: string, depth = 0): string => {
+    if (depth > MAX_AST_DEPTH) return '';
+    const nextDepth = depth + 1;
     switch (node.tag) {
       case 'para':
         if (save && !save.summary) save.summary = extractPlainText(node).trim();
-        return `${String(<p>{raw(renderInlines(node.children))}</p>)}\n`;
+        return `${String(<p>{raw(renderInlines(node.children, nextDepth))}</p>)}\n`;
       case 'heading': {
         if (node.level === 1 && save && save.title === undefined) {
           save.title = extractPlainText(node).trim();
           return '';
         }
         const level = Math.min(6, Math.max(2, node.level));
-        const inner = raw(renderInlines(node.children));
+        const inner = raw(renderInlines(node.children, nextDepth));
         const anchorId = sectionId ?? uniqueHeadingId(extractPlainText(node));
         const headingChild = anchorId
           ? <a href={`#${anchorId}`} className='subtle'>{inner}</a>
@@ -436,14 +476,14 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
           (c): c is djot.Heading => c.tag === 'heading'
         );
         if (firstHeading?.level === 1) {
-          return renderBlocks(node.children);
+          return renderBlocks(node.children, undefined, nextDepth);
         }
         const secId = firstHeading ? uniqueHeadingId(extractPlainText(firstHeading)) : undefined;
-        const inner = renderBlocks(node.children, secId);
+        const inner = renderBlocks(node.children, secId, nextDepth);
         return `${String(<section id={secId}>{raw(`\n${inner}`)}</section>)}\n`;
       }
       case 'div':
-        return renderBlocks(node.children);
+        return renderBlocks(node.children, undefined, nextDepth);
       case 'code_block':
         return `${String(
           <figure className='code'><pre><code>{node.text.trimEnd()}</code></pre></figure>
@@ -453,14 +493,16 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       case 'block_quote':
         return `${String(
           <figure className='blockquote'>
-            <blockquote>{raw(`\n${renderBlocks(node.children)}`)}</blockquote>
+            <blockquote>{raw(`\n${renderBlocks(node.children, undefined, nextDepth)}`)}</blockquote>
           </figure>
         )}\n`;
       case 'bullet_list':
         return `${String(
           <ul>
             {raw(`\n${node.children.map(
-              li => `${String(<li>{raw(renderListItemBlocks(li.children, node.tight))}</li>)}\n`
+              li => `${String(
+                <li>{raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
+              )}\n`
             ).join('')}`)}
           </ul>
         )}\n`;
@@ -471,7 +513,9 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         return `${String(
           <ol start={start}>
             {raw(`\n${node.children.map(
-              li => `${String(<li>{raw(renderListItemBlocks(li.children, node.tight))}</li>)}\n`
+              li => `${String(
+                <li>{raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
+              )}\n`
             ).join('')}`)}
           </ol>
         )}\n`;
@@ -482,7 +526,7 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
             {raw(`\n${node.children.map(li => {
               const box = li.checkbox === 'checked' ? '\u2611 ' : '\u2610 ';
               return `${String(
-                <li>{box}{raw(renderListItemBlocks(li.children, node.tight))}</li>
+                <li>{box}{raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
               )}\n`;
             }).join('')}`)}
           </ul>
@@ -491,20 +535,22 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         return `${String(
           <dl>
             {raw(`\n${node.children.map(item => (
-              `${String(<dt>{raw(renderInlines(item.children[0].children))}</dt>)}\n` +
-              `${String(<dd>{raw(`\n${renderBlocks(item.children[1].children)}`)}</dd>)}\n`
+              `${String(<dt>{raw(renderInlines(item.children[0].children, nextDepth))}</dt>)}\n` +
+              `${String(
+                <dd>{raw(`\n${renderBlocks(item.children[1].children, undefined, nextDepth)}`)}</dd>
+              )}\n`
             )).join('')}`)}
           </dl>
         )}\n`;
       case 'table': {
         const [caption, ...rows] = node.children;
         const captionHtml = caption.children.length
-          ? `${String(<caption>{raw(renderInlines(caption.children))}</caption>)}\n`
+          ? `${String(<caption>{raw(renderInlines(caption.children, nextDepth))}</caption>)}\n`
           : '';
         const rowsHtml = rows.map(row => {
           const cells = row.children.map(cell => {
             const tag = cell.head ? 'th' : 'td';
-            return String(h(tag, undefined, raw(renderInlines(cell.children))));
+            return String(h(tag, undefined, raw(renderInlines(cell.children, nextDepth))));
           }).join('');
           return `${String(<tr>{raw(cells)}</tr>)}\n`;
         }).join('');
@@ -630,7 +676,9 @@ export class Wiki {
     let pMtime = -1;
     try {
       pMtime = fs.statSync(this.projectsFile).mtimeMs;
-    } catch {}
+    } catch {
+      if (this.projectsMtime !== -1) return;
+    }
 
     if (pMtime === this.projectsMtime && this.projectsMtime !== -1) {
       return;
@@ -640,21 +688,36 @@ export class Wiki {
     if (pMtime !== -1) {
       try {
         projectsRaw = fs.readFileSync(this.projectsFile, 'utf8');
-      } catch {}
+      } catch {
+        if (this.projectsMtime !== -1) return;
+      }
+    }
+
+    let authorizedUsers: Set<string>;
+    let extracted: {projects: Map<string, ProjectPage>; aliases: Map<string, string>};
+    try {
+      authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, this.configuredAdmins);
+      extracted = extractProjectPages(projectsRaw);
+    } catch (err) {
+      console.error('Failed parsing projects.yml for wiki metadata:', err);
+      if (this.projectsMtime !== -1) return;
+      authorizedUsers = new Set(
+        this.configuredAdmins.map(a => a.trim().toLowerCase()).filter(Boolean)
+      );
+      extracted = {projects: new Map(), aliases: new Map()};
     }
 
     this.adminUsers = new Set(
       this.configuredAdmins.map(a => a.trim().toLowerCase()).filter(Boolean)
     );
-    this.authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, this.configuredAdmins);
+    this.authorizedUsers = authorizedUsers;
     this.authorMap = new Map(
       Object.entries(this.configuredAuthors)
         .filter(([gh, name]) => gh.trim() && typeof name === 'string' && name.trim())
         .map(([gh, name]) => [gh.trim().toLowerCase(), name.trim()])
     );
-    const {projects, aliases} = extractProjectPages(projectsRaw);
-    this.projectPages = projects;
-    this.projectAliases = aliases;
+    this.projectPages = extracted.projects;
+    this.projectAliases = extracted.aliases;
     this.projectsMtime = pMtime;
   }
 
@@ -663,9 +726,9 @@ export class Wiki {
     return this.authorMap.get(githubLogin.toLowerCase()) ?? githubLogin;
   }
 
-  resolveSlug(slug: string): string {
+  resolveSlug(slug: string, alreadyDecoded = false): string {
     this.refreshMetadata();
-    const normalized = normalizeSlug(slug);
+    const normalized = alreadyDecoded ? normalizeDecodedSlug(slug) : normalizeSlug(slug);
     const aliased = this.projectAliases.get(normalized.toLowerCase());
     if (aliased) return aliased;
     if (normalized && fs.existsSync(this.wikiDir)) {
@@ -719,10 +782,16 @@ export class Wiki {
 
   getPageVisibility(slug: string): PageVisibility {
     const canonical = this.resolveSlug(slug);
-    if (!this.isProjectPage(canonical)) return 'public';
-    const rawText = this.readRawPage(canonical);
-    if (rawText === undefined) return 'developers';
-    return parsePageContent(rawText).visibility ?? 'developers';
+    const isProject = this.isProjectPage(canonical);
+    let rawText: string | undefined;
+    try {
+      rawText = this.readRawPage(canonical);
+    } catch {}
+    if (rawText === undefined) return isProject ? 'developers' : 'public';
+    const explicit = parsePageContent(rawText).visibility;
+    if (isProject) return explicit ?? 'developers';
+    if (explicit === 'developers' || explicit === 'discord') return explicit;
+    return 'public';
   }
 
   canRead(login: string | undefined, slug = 'index', isDiscordMember = false): boolean {
@@ -774,10 +843,16 @@ export class Wiki {
     const canonical = this.resolveSlug(slug);
     const body = this.readPage(canonical);
     if (body) {
-      const m = /^#\s+(.+)$/m.exec(body);
-      if (m) return m[1].trim();
+      const h1 = extractTopHeadingTitle(body);
+      if (h1) return h1;
     }
     return this.getProjectPage(canonical)?.name ?? formatTitle(canonical);
+  }
+
+  getContentFingerprint(slug: string): string {
+    const rawText = this.readRawPage(slug);
+    if (rawText === undefined) return 'new';
+    return crypto.createHash('sha256').update(rawText).digest('hex').slice(0, 16);
   }
 
   listPages(): string[] {
@@ -802,9 +877,11 @@ export class Wiki {
       const parsed = rawText !== undefined ? parsePageContent(rawText) : undefined;
       const visibility: PageVisibility = project
         ? (parsed?.visibility ?? 'developers')
-        : 'public';
-      const h1Match = parsed?.content ? /^#\s+(.+)$/m.exec(parsed.content) : null;
-      const title = h1Match?.[1]?.trim() || project?.name || formatTitle(canonical);
+        : (parsed?.visibility === 'developers' || parsed?.visibility === 'discord'
+          ? parsed.visibility
+          : 'public');
+      const h1Title = parsed?.content ? extractTopHeadingTitle(parsed.content) : undefined;
+      const title = h1Title || project?.name || formatTitle(canonical);
       return {slug, title, visibility};
     });
   }
@@ -834,33 +911,55 @@ export class Wiki {
 
     return this.enqueueGit(async () => {
       fs.mkdirSync(this.wikiDir, {recursive: true});
-      const file = this.pagePath(canonical);
+      const file = path.join(this.wikiDir, `${canonical}.dj`);
       const prev = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined;
       if (prev === content) return false;
 
-      fs.writeFileSync(file, content, 'utf8');
       const rel = `${canonical}.dj`;
+      const literalRel = `:(literal)${rel}`;
       const defaultMsg = prev === undefined ? `Create ${canonical}` : `Update ${canonical}`;
-      const summary = message?.trim() || defaultMsg;
-      const safeAuthor = author.replace(/[<>"]/g, '').trim() || 'wiki';
+      // eslint-disable-next-line no-control-regex
+      const cleanMessage = message?.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+      const summary = cleanMessage || defaultMsg;
+      // eslint-disable-next-line no-control-regex
+      const safeAuthor = author.replace(/[\x00-\x1f\x7f<>"]/g, '').trim() || 'wiki';
       const gitAuthor = `${safeAuthor} <${safeAuthor}@users.noreply.github.com>`;
 
-      await execFileAsync('git', ['add', '--', rel], {cwd: this.wikiDir});
-      await execFileAsync(
-        'git',
-        [
-          '-c', 'user.name=pkmn.ai',
-          '-c', 'user.email=wiki@pkmn.ai',
-          'commit',
-          `--author=${gitAuthor}`,
-          '-m', summary,
-          '--', rel,
-        ],
-        {cwd: this.wikiDir}
-      );
+      fs.writeFileSync(file, content, 'utf8');
+      try {
+        await execFileAsync('git', ['add', '--', literalRel], {
+          cwd: this.wikiDir,
+          timeout: 15_000,
+        });
+        await execFileAsync(
+          'git',
+          [
+            '-c', 'user.name=pkmn.ai',
+            '-c', 'user.email=wiki@pkmn.ai',
+            'commit',
+            `--author=${gitAuthor}`,
+            '-m', summary,
+            '--', literalRel,
+          ],
+          {cwd: this.wikiDir, timeout: 15_000}
+        );
+      } catch (err) {
+        try {
+          if (prev === undefined) fs.rmSync(file, {force: true});
+          else fs.writeFileSync(file, prev, 'utf8');
+          await execFileAsync('git', ['reset', '--mixed', '-q', '--', literalRel], {
+            cwd: this.wikiDir,
+            timeout: 5_000,
+          });
+        } catch {}
+        throw err;
+      }
 
       if (this.shouldPush) {
-        execFileAsync('git', ['push', 'origin', 'HEAD'], {cwd: this.wikiDir}).catch(err => {
+        await execFileAsync('git', ['push', 'origin', 'HEAD'], {
+          cwd: this.wikiDir,
+          timeout: 30_000,
+        }).catch(err => {
           console.error('Error pushing wiki commit:', err);
         });
       }
@@ -871,13 +970,18 @@ export class Wiki {
   async getHistory(slug: string): Promise<Revision[]> {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical)) return [];
-    const file = this.pagePath(canonical);
+    const file = path.join(this.wikiDir, `${canonical}.dj`);
     if (!fs.existsSync(file)) return [];
     try {
       const {stdout} = await execFileAsync(
         'git',
-        ['log', '--follow', '--format=%H%x09%h%x09%an%x09%at%x09%s', '--', `${canonical}.dj`],
-        {cwd: this.wikiDir}
+        [
+          'log',
+          '--format=%H%x09%h%x09%an%x09%at%x09%s',
+          '--',
+          `:(literal)${canonical}.dj`,
+        ],
+        {cwd: this.wikiDir, timeout: 15_000}
       );
       return stdout
         .trim()
@@ -898,31 +1002,49 @@ export class Wiki {
     }
   }
 
-  async getRevisionContent(slug: string, sha: string): Promise<string | undefined> {
+  async getRevisionRecord(
+    slug: string,
+    sha: string,
+    parent = false
+  ): Promise<{content: string; visibility?: PageVisibility} | undefined> {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical) || !SHA_RE.test(sha)) return undefined;
+    const commitRef = parent ? `${sha}^{commit}^` : `${sha}^{commit}`;
     try {
+      await execFileAsync('git', ['rev-parse', '--verify', '--quiet', commitRef], {
+        cwd: this.wikiDir,
+        timeout: 5_000,
+      });
       const {stdout} = await execFileAsync(
         'git',
-        ['show', `${sha}:${canonical}.dj`],
-        {cwd: this.wikiDir}
+        ['show', `${commitRef}:${canonical}.dj`],
+        {cwd: this.wikiDir, timeout: 15_000}
       );
-      return parsePageContent(stdout).content;
+      return parsePageContent(stdout);
     } catch {
       return undefined;
     }
+  }
+
+  async getRevisionContent(slug: string, sha: string): Promise<string | undefined> {
+    const rec = await this.getRevisionRecord(slug, sha);
+    return rec?.content;
   }
 
   async getRevisionDiff(slug: string, sha: string): Promise<string | undefined> {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical) || !SHA_RE.test(sha)) return undefined;
     try {
+      await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], {
+        cwd: this.wikiDir,
+        timeout: 5_000,
+      });
       const {stdout} = await execFileAsync(
         'git',
-        ['show', '--format=', sha, '--', `${canonical}.dj`],
-        {cwd: this.wikiDir}
+        ['show', '--format=', `${sha}^{commit}`, '--', `:(literal)${canonical}.dj`],
+        {cwd: this.wikiDir, timeout: 15_000}
       );
-      return stdout;
+      return stdout || undefined;
     } catch {
       return undefined;
     }
@@ -954,7 +1076,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       sendError(res, 404);
       return undefined;
     }
-    const canonical = wiki.resolveSlug(rawSlug);
+    const canonical = wiki.resolveSlug(rawSlug, true);
     if (canonical !== rawSlug) {
       redirect(res, `/wiki/${encodeSlug(canonical)}${suffix}`);
       return undefined;
@@ -962,12 +1084,19 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     return canonical;
   };
 
+  const stricterVisibility = (a: PageVisibility, b?: PageVisibility): PageVisibility => {
+    if (!b) return a;
+    const rank: Record<PageVisibility, number> = {public: 0, discord: 1, developers: 2};
+    return rank[b] > rank[a] ? b : a;
+  };
+
   const requireReadAuth = (
     req: http.IncomingMessage & {originalUrl?: string},
     res: http.ServerResponse,
-    slug = 'index'
+    slug = 'index',
+    extraVisibility?: PageVisibility
   ): boolean => {
-    const visibility = wiki.getPageVisibility(slug);
+    const visibility = stricterVisibility(wiki.getPageVisibility(slug), extraVisibility);
     if (visibility === 'public') return true;
 
     const authCfg = wiki.auth.getConfig();
@@ -1110,7 +1239,9 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     content: string,
     message = '',
     visibility?: PageVisibility,
-    previewHtml?: string
+    previewHtml?: string,
+    baseSha = wiki.getContentFingerprint(slug),
+    statusCode = 200
   ) => {
     const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     const heading = `Edit ${displayTitle}`;
@@ -1132,6 +1263,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       <>
         {previewHtml !== undefined && <section id='wiki-preview'>{raw(previewHtml)}</section>}
         <form id='wiki-editor' method='post' action={actionUrl}>
+          <input type='hidden' name='baseSha' value={baseSha} />
           <textarea name='content' spellcheck={true} autofocus={true}>{content}</textarea>
           <input
             type='text'
@@ -1156,7 +1288,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
         </form>
       </>
     );
-    sendHtml(res, 200, renderPage({
+    sendHtml(res, statusCode, renderPage({
       title: heading,
       heading,
       path: `/wiki/${encoded}/edit/`,
@@ -1184,15 +1316,24 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       sendError(res, 404);
       return;
     }
-    const slug = wiki.resolveSlug(rawSlug);
+    const slug = wiki.resolveSlug(rawSlug, true);
+    if (!isValidSlug(slug)) {
+      sendError(res, 404);
+      return;
+    }
     const login = requireEditAuth(req, res, slug);
     if (!login) return;
     try {
       const body = await readBody(req);
       const parsed = querystring.parse(body);
-      const content = typeof parsed.content === 'string' ? parsed.content : '';
+      if (typeof parsed.content !== 'string') {
+        sendError(res, 400);
+        return;
+      }
+      const content = parsed.content;
       const message = typeof parsed.message === 'string' ? parsed.message : '';
       const action = typeof parsed.action === 'string' ? parsed.action : 'save';
+      const baseSha = typeof parsed.baseSha === 'string' ? parsed.baseSha.trim() : '';
       const rawVis = typeof parsed.visibility === 'string' ? parsed.visibility : '';
       const visibility = wiki.isProjectPage(slug)
         ? (VISIBILITIES.has(rawVis as PageVisibility)
@@ -1202,7 +1343,28 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
       if (action === 'preview') {
         const previewHtml = renderDjot(content, {});
-        renderEditor(res, slug, content, message, visibility, previewHtml);
+        renderEditor(
+          res,
+          slug,
+          content,
+          message,
+          visibility,
+          previewHtml,
+          baseSha || wiki.getContentFingerprint(slug)
+        );
+        return;
+      }
+
+      const currentFingerprint = wiki.getContentFingerprint(slug);
+      if (baseSha && baseSha !== currentFingerprint) {
+        const conflictNote = String(
+          <p className='no'>
+            Edit conflict: this page was modified by another editor. Review your draft below and
+            save again to overwrite.
+          </p>
+        );
+        const previewHtml = `${conflictNote}${renderDjot(content, {})}`;
+        renderEditor(res, slug, content, message, visibility, previewHtml, currentFingerprint, 409);
         return;
       }
 
@@ -1299,9 +1461,30 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       if (!slug) return;
       if (!requireReadAuth(req, res, slug)) return;
 
+      const isProject = wiki.isProjectPage(slug);
+      const revRecord = await wiki.getRevisionRecord(slug, sha);
+      const revVis: PageVisibility | undefined = revRecord
+        ? (isProject
+          ? (revRecord.visibility ?? 'developers')
+          : (revRecord.visibility === 'developers' || revRecord.visibility === 'discord'
+            ? revRecord.visibility
+            : undefined))
+        : undefined;
+
       const encoded = encodeSlug(slug);
       const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
       if (showDiff) {
+        const parentRecord = await wiki.getRevisionRecord(slug, sha, true);
+        const parentVis: PageVisibility | undefined = parentRecord
+          ? (isProject
+            ? (parentRecord.visibility ?? 'developers')
+            : (parentRecord.visibility === 'developers' || parentRecord.visibility === 'discord'
+              ? parentRecord.visibility
+              : undefined))
+          : undefined;
+        const diffVis = stricterVisibility(revVis ?? 'public', parentVis);
+        if (!requireReadAuth(req, res, slug, diffVis)) return;
+
         const diff = await wiki.getRevisionDiff(slug, sha);
         if (diff === undefined) {
           sendError(res, 404);
@@ -1331,11 +1514,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
         return;
       }
 
-      const rawText = await wiki.getRevisionContent(slug, sha);
-      if (rawText === undefined) {
+      if (!revRecord) {
         sendError(res, 404);
         return;
       }
+      if (!requireReadAuth(req, res, slug, revVis)) return;
+      const rawText = revRecord.content;
       const meta: {title?: string; summary?: string} = {};
       const html = renderDjot(rawText, meta);
       const heading = `${meta.title ?? displayTitle} @ ${sha.slice(0, 7)}`;

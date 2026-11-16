@@ -10,7 +10,7 @@ import * as yaml from 'yaml';
 
 import {Database} from '../db';
 import type * as db from '../db';
-import {root, slugify, toID} from '../static/util';
+import {root, slugify, toID, writeFileAtomic} from '../static/util';
 
 import {WatchdogAlert} from './arena';
 
@@ -181,12 +181,14 @@ function agentRole(
   if (!roles) return undefined;
   const id = toID(agent.name);
   if (!id) return undefined;
+  const strippedId = toID(agent.name.replace(/[\s_-]+v?\d[\w.-]*$/i, ''));
   let match: {id: string; len: number} | undefined;
   for (const role of roles) {
     if (!role.name.startsWith(AGENT_ROLE_PREFIX)) continue;
     const roleAgentId = toID(role.name.slice(AGENT_ROLE_PREFIX.length));
     if (!roleAgentId) continue;
-    if (id.startsWith(roleAgentId) && (!match || roleAgentId.length > match.len)) {
+    const isMatch = roleAgentId === id || (Boolean(strippedId) && roleAgentId === strippedId);
+    if (isMatch && (!match || roleAgentId.length > match.len)) {
       match = {id: role.id, len: roleAgentId.length};
     }
   }
@@ -258,7 +260,7 @@ export async function fetchGuildMembers(token: string, guild: string): Promise<G
       token,
       `/guilds/${guild}/members?limit=1000&after=${after}`
     ) as GuildMember[];
-    all.push(...page);
+    all.push(...page.map(m => ({...m, roles: [...m.roles]})));
     if (page.length < 1000) break;
     after = page[page.length - 1].user.id;
   }
@@ -345,6 +347,7 @@ export async function syncRoles(
             `/guilds/${config.guild}/members/${member.user.id}/roles/${roleId}`,
             {method: 'DELETE'}
           );
+          member.roles = member.roles.filter(r => r !== roleId);
           console.log(`[${leader.ladder}] Removed role ${roleId} from ${member.user.username}`);
         }
       }
@@ -355,6 +358,7 @@ export async function syncRoles(
           `/guilds/${config.guild}/members/${target.user.id}/roles/${roleId}`,
           {method: 'PUT'}
         );
+        target.roles.push(roleId);
         const who = `${target.user.username} (${leader.agent?.name})`;
         console.log(`[${leader.ladder}] Assigned role ${roleId} to ${who}`);
       } else if (owner && !target) {
@@ -771,7 +775,8 @@ export async function notifyWatchdogAlert(
 
 function displayName(user: User, members?: GuildMember[]): string {
   const member = members?.find(m => m.user.id === user.id);
-  return member?.nick ?? member?.user.global_name ?? user.global_name ?? user.username;
+  const rawName = member?.nick ?? member?.user.global_name ?? user.global_name ?? user.username;
+  return rawName.replace(/[\r\n]+/g, ' ').trim() || user.username;
 }
 
 function resolveText(
@@ -887,7 +892,8 @@ export function formatMessage(
     prefix = '@[deleted] ';
   }
 
-  return {date, line: `[${time}] ${displayName(message.author, members)}: ${prefix}${content}`};
+  const safeContent = content.replace(/\n/g, '\n  ');
+  return {date, line: `[${time}] ${displayName(message.author, members)}: ${prefix}${safeContent}`};
 }
 
 export async function syncMessages(
@@ -949,7 +955,7 @@ export async function syncMessages(
 
   function saveCursor() {
     const offsetLines = Array.from(tailOffsets.entries()).map(([f, s]) => `${f} ${s}`);
-    fs.writeFileSync(cursorFile, `${[after, ...offsetLines].join('\n')}\n`);
+    writeFileAtomic(cursorFile, `${[after, ...offsetLines].join('\n')}\n`);
   }
 
   let page = await discordRequest(
@@ -994,12 +1000,22 @@ export async function syncPins(
   const data = await discordRequest(
     token,
     `/channels/${channel}/messages/pins`
-  ) as {items: Array<{message: Message}>};
-  const current = data.items.map(i => i.message);
+  ) as {items?: Array<{message: Message}>} | undefined;
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const current = items.map(i => i.message);
+  let ownBotId: string | undefined;
+  const cachedApp = state?.get('app');
+  if (cachedApp) {
+    try {
+      ownBotId = (JSON.parse(cachedApp) as {id?: string}).id;
+    } catch {}
+  }
+  const isOwnBotMessage = (m: Message) =>
+    Boolean(m.author?.bot && (!ownBotId || m.author.id === ownBotId));
 
   if (
     current.length === pins.length &&
-    current.every((m, i) => m.author.bot && !m.edited_timestamp && m.content === pins[i])
+    current.every((m, i) => isOwnBotMessage(m) && !m.edited_timestamp && m.content === pins[i])
   ) {
     state?.set(channel, key);
     return;
@@ -1018,7 +1034,7 @@ export async function syncPins(
   for (let i = pins.length - 1; i >= 0; i--) {
     const content = pins[i];
     const existing = current.find(
-      m => !used.has(m.id) && m.author.bot && !m.edited_timestamp && m.content === content
+      m => !used.has(m.id) && isOwnBotMessage(m) && !m.edited_timestamp && m.content === content
     );
     if (existing) {
       used.add(existing.id);
@@ -1038,7 +1054,7 @@ export async function syncPins(
   }
 
   for (const m of current) {
-    if (m.author.bot && !used.has(m.id)) {
+    if (isOwnBotMessage(m) && !used.has(m.id)) {
       await discordRequest(
         token,
         `/channels/${channel}/messages/${m.id}`,
@@ -1060,13 +1076,15 @@ export async function syncPins(
       token,
       `/channels/${channel}/messages?limit=${Math.min(100, toPin.length * 2 + 10)}`
     ) as Message[];
-    for (const m of recent) {
-      if (m.type === 6 && m.author.bot) {
-        await discordRequest(
-          token,
-          `/channels/${channel}/messages/${m.id}`,
-          {method: 'DELETE'}
-        );
+    if (Array.isArray(recent)) {
+      for (const m of recent) {
+        if (m.type === 6 && isOwnBotMessage(m)) {
+          await discordRequest(
+            token,
+            `/channels/${channel}/messages/${m.id}`,
+            {method: 'DELETE'}
+          );
+        }
       }
     }
   }
@@ -1116,7 +1134,11 @@ export function formatGlossary(raw: string): string {
 
 export function formatGlossaryReply(term: string, raw: string): string {
   const url = `https://pkmn.ai/glossary/#${slugify(term)}`;
-  return `**[${term}](${url})**: ${formatGlossary(raw)}`;
+  const full = `**[${term}](${url})**: ${formatGlossary(raw)}`;
+  if (full.length <= DISCORD_MAX_MESSAGE_LEN) return full;
+  const suffix = `… ([more](${url}))`;
+  const head = full.slice(0, Math.max(0, DISCORD_MAX_MESSAGE_LEN - suffix.length)).trimEnd();
+  return `${head}${suffix}`;
 }
 
 interface GlossaryIndex {
@@ -1347,13 +1369,14 @@ export function handleInteraction(
         }),
       };
     }
+    const safeTerm = termOpt.replace(/[`\r\n]+/g, ' ').trim().slice(0, 100);
     return {
       status: 200,
       headers: jsonHeaders,
       body: JSON.stringify({
         type: 4,
         data: {
-          content: `Unknown glossary term: \`${termOpt}\`. See <https://pkmn.ai/glossary/>.`,
+          content: `Unknown glossary term: \`${safeTerm}\`. See <https://pkmn.ai/glossary/>.`,
           flags: 68,
         },
       }),
@@ -1535,17 +1558,26 @@ export function register(app: polka.Polka, options: Options): Handle {
   const resolveConfig = (): Config => options.config ?? loadConfig(options.configFile);
   const state = new Map<string, string | undefined>();
   let verifyKey = options.verifyKey;
-  let glossary = loadGlossary();
+  let glossary: Record<string, string> = {};
+  try {
+    glossary = loadGlossary();
+  } catch (err) {
+    console.error('Error loading glossary:', err);
+  }
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
-  let ready = Promise.resolve();
+  let verifyKeyReady = Promise.resolve();
 
   const scheduleNext = () => {
     if (stopped || !token) return;
     timer = setTimeout(() => {
       if (stopped) return;
-      glossary = loadGlossary();
-      ready = syncOnce(
+      try {
+        glossary = loadGlossary();
+      } catch (err) {
+        console.error('Error reloading glossary:', err);
+      }
+      syncOnce(
         options.db,
         token,
         vgcToken,
@@ -1554,22 +1586,38 @@ export function register(app: polka.Polka, options: Options): Handle {
           verifyKey = k;
         },
         options.config ?? options.configFile
-      ).finally(scheduleNext);
+      )
+        .catch(err => {
+          console.error('Error in Discord sync cycle:', err);
+        })
+        .finally(scheduleNext);
     }, cycleMillis);
     timer.unref();
   };
 
   if (token) {
-    ready = syncOnce(
+    let resolveVerifyKey!: () => void;
+    verifyKeyReady = new Promise<void>(resolve => {
+      resolveVerifyKey = resolve;
+    });
+    syncOnce(
       options.db,
       token,
       vgcToken,
       state,
       k => {
         verifyKey = k;
+        resolveVerifyKey();
       },
       options.config ?? options.configFile
-    ).finally(scheduleNext);
+    )
+      .catch(err => {
+        console.error('Error in initial Discord sync:', err);
+      })
+      .finally(() => {
+        resolveVerifyKey();
+        scheduleNext();
+      });
   }
 
   app.post('/discord/interactions', (req, res) => {
@@ -1591,7 +1639,8 @@ export function register(app: polka.Polka, options: Options): Handle {
     req.on('end', () => {
       if (settled) return;
       settled = true;
-      ready
+      const waitKey = verifyKey ? Promise.resolve() : verifyKeyReady;
+      waitKey
         .then(() => {
           const rawBody = Buffer.concat(chunks).toString('utf8');
           const result = handleInteraction(rawBody, req.headers, verifyKey, glossary);

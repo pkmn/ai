@@ -202,6 +202,7 @@ export function upsertProjectDevelopers(
   const updateDev = db.prepare(`
     UPDATE developers
     SET agent_id = ?,
+        github_id = CASE WHEN github_login = ? THEN github_id ELSE NULL END,
         github_login = ?,
         smogon_id = ?,
         smogon_username = ?,
@@ -223,6 +224,7 @@ export function upsertProjectDevelopers(
     if (existing) {
       updateDev.run(
         agentId,
+        cleanGithub,
         cleanGithub,
         owner.smogonId,
         owner.smogonUsername,
