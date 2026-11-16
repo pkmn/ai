@@ -23,9 +23,9 @@ rollback() {
 }
 trap rollback ERR
 
-# Update dependencies if package.json has changed
+# Update dependencies if package.json has changed (`npm_config_allow_git=all` for npm 12+)
 git diff --quiet "$HEAD" -- package.json teams/package.json ||
-    npm install --omit=dev --silent
+    npm_config_allow_git=all npm install --omit=dev --silent
 
 # Initialize/update teams submodules with only the required directories
 npm run compile

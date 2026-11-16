@@ -136,7 +136,8 @@ The 7 sections cover:
 1. **Static (`static`):** Home (both normal state and the `● LIVE` tournament `#topbar` banner edge
    case), Background (with `Under Construction` `#topbar`), Concepts overview + 5 subpages
    (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release announcement,
-   Research bibliography, Arena Rules, and `404` Not Found.
+   Research bibliography, Arena Rules (TODO: temporary `404` until `static/rules.dj` is finished),
+   and `404` Not Found.
 2. **Projects (`projects`):** Directory filters (`Active`, `All`, `Inactive`), multi-version
    champion profile (`/projects/0-error/`), version dropdown filter, H2H opponent click filter,
    expanded inline match telemetry, empty filtered matches state, provisional entrant

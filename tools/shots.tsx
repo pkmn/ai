@@ -343,10 +343,12 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       path: '/research/',
     },
     {
+      // TODO: Remove `expectHttpError: 404` once `static/rules.dj` is finished.
       name: 'rules',
       section: 'static',
       title: 'Rules',
       path: '/rules/',
+      expectHttpError: 404,
     },
     {
       name: 'not-found',
@@ -1158,13 +1160,13 @@ function copyStaticPublicHtml(srcPublic: string, dstPublic: string) {
   if (fs.existsSync(indexHtml)) {
     fs.copyFileSync(indexHtml, path.join(dstPublic, 'index.html'));
   }
+  // TODO: Restore `'rules'` once `static/rules.dj` is finished.
   for (const dir of [
     'background',
     'concepts',
     'glossary',
     'release',
     'research',
-    'rules',
   ]) {
     const srcDir = path.join(srcPublic, dir);
     if (fs.existsSync(srcDir)) {
@@ -2767,7 +2769,9 @@ async function serve(route: Route, fixture: Fixture, cookie: string): Promise<vo
     await route.fulfill({status: res.status, headers, body: buffer});
     return;
   }
-  const file = (
+  // TODO: Remove temporary `/rules` 404 bypass once `static/rules.dj` is finished.
+  const isBlockedRules = url.pathname === '/rules' || url.pathname.startsWith('/rules/');
+  const file = isBlockedRules ? undefined : (
     resolveFileInDir(fixture.publicDir, url.pathname) ??
     resolveFileInDir(PUBLIC, url.pathname)
   );

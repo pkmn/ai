@@ -19,9 +19,9 @@ git fetch origin main
 git merge-base --is-ancestor "$HEAD" origin/main
 git merge --ff-only origin/main
 
-# Update dependencies if package.json has changed
+# Update dependencies if package.json has changed (`npm_config_allow_git=all` for npm 12+)
 git diff --quiet "$HEAD" package.json teams/package.json >/dev/null ||
-    npm install --silent
+    npm_config_allow_git=all npm install --silent
 
 # Compile TypeScript
 npm run compile

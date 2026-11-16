@@ -200,9 +200,10 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       pathname.startsWith('/arena/viewer/') ||
       (/^\/arena\/tournaments\/[^/]+\/[^/]+\.(?:7z|tar)$/i.test(pathname)) ||
       (/^\/arena\/tournaments\/[^/]+\/[^/]+\.log$/i.test(pathname) && !query);
+    // TODO: Remove `rules` from this `serve-static` bypass once `static/rules.dj` is finished.
     if (
       !isStaticArenaAsset &&
-      /^(?:\/(?:account|wiki|projects|arena)(?:\.json|\/|$)|\/api(?:\/|$))/.test(pathname)
+      /^(?:\/(?:account|wiki|projects|arena|rules)(?:\.json|\/|$)|\/api(?:\/|$))/.test(pathname)
     ) {
       next();
       return;
