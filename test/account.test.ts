@@ -169,6 +169,21 @@ describe('submission helpers', () => {
     });
 });
 
+function copyDirSync(src: string, dst: string) {
+  fs.mkdirSync(dst, {recursive: true});
+  for (const entry of fs.readdirSync(src, {withFileTypes: true})) {
+    const srcPath = path.join(src, entry.name);
+    const dstPath = path.join(dst, entry.name);
+    if (entry.isDirectory()) {
+      copyDirSync(srcPath, dstPath);
+    } else if (entry.isSymbolicLink()) {
+      fs.symlinkSync(fs.readlinkSync(srcPath), dstPath);
+    } else {
+      fs.copyFileSync(srcPath, dstPath);
+    }
+  }
+}
+
 describe('account routes', () => {
   let suiteTmpDir: string;
   let templateWikiDir: string;
@@ -177,7 +192,7 @@ describe('account routes', () => {
   let wikiDir: string;
   let projectsFile: string;
   let db: db.Database;
-  let server: http.Server;
+  let server: http.Server | undefined;
   let baseUrl: string;
   let currentNow: number;
   const realFetch = globalThis.fetch;
@@ -190,17 +205,19 @@ describe('account routes', () => {
     execFileSync('git', ['config', 'user.name', 'test'], {cwd: templateWikiDir});
     execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {cwd: templateWikiDir});
     execFileSync('git', ['config', 'commit.gpgsign', 'false'], {cwd: templateWikiDir});
+    execFileSync('git', ['config', 'gc.auto', '0'], {cwd: templateWikiDir});
+    execFileSync('git', ['config', 'maintenance.auto', 'false'], {cwd: templateWikiDir});
     fs.writeFileSync(path.join(templateWikiDir, 'index.dj'), '# Home\n');
     execFileSync('git', ['add', 'index.dj'], {cwd: templateWikiDir});
     execFileSync('git', ['commit', '-m', 'Init'], {cwd: templateWikiDir});
   });
 
   afterAll(() => {
-    fs.rmSync(suiteTmpDir, {recursive: true, force: true});
+    if (suiteTmpDir) fs.rmSync(suiteTmpDir, {recursive: true, force: true});
   });
 
   const openLadders = (ids: string[]) => {
-    const stmt = db.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?");
+    const stmt = db!.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?");
     for (const id of ids) stmt.run(id);
   };
 
@@ -211,23 +228,24 @@ describe('account routes', () => {
     wikiDir = path.join(tmpDir, 'wiki');
     projectsFile = path.join(tmpDir, 'projects.yml');
     fs.mkdirSync(poolDir, {recursive: true});
-    fs.cpSync(templateWikiDir, wikiDir, {recursive: true});
+    copyDirSync(templateWikiDir, wikiDir);
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
     fs.writeFileSync(path.join(poolDir, 'public000001'), PUBLIC_CLONE_VGC, 'utf8');
 
     currentNow = 1_760_000_000;
-    db = new Database(':memory:');
-    db.syncLadders();
-    db.syncProjectsFromYaml(PROJECTS_YAML, path.join(tmpDir, 'avatars'), currentNow);
-    db.linkDeveloperDiscord('pre', '513513270670262284', 'scheibo', currentNow);
+    const nextDb = new Database(':memory:');
+    db = nextDb;
+    nextDb.syncLadders();
+    nextDb.syncProjectsFromYaml(PROJECTS_YAML, path.join(tmpDir, 'avatars'), currentNow);
+    nextDb.linkDeveloperDiscord('pre', '513513270670262284', 'scheibo', currentNow);
 
     const wikiInstance = new wiki.Wiki({
       wikiDir,
       projectsFile,
-      db,
+      db: nextDb,
       auth: new auth.Auth({
         config: AUTH_CFG,
-        db,
+        db: nextDb,
         isAuthorizedGitHub: (login): boolean => wikiInstance.isDeveloper(login),
       }),
       push: false,
@@ -235,25 +253,31 @@ describe('account routes', () => {
     const app = polka();
     wikiInstance.auth.register(app);
     account.register(app, {
-      db,
+      db: nextDb,
       auth: wikiInstance.auth,
       poolsByLadder: new Map([['gen9championsvgc2026regmc', [poolDir]]]),
       now: () => currentNow,
     });
-    wiki.register(app, {wiki: wikiInstance, db});
+    wiki.register(app, {wiki: wikiInstance, db: nextDb});
 
-    server = http.createServer((req, res) => app.handler(req as polka.Request, res));
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const addr = server.address() as {port: number};
+    const nextServer = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    server = nextServer;
+    await new Promise<void>(resolve => nextServer.listen(0, '127.0.0.1', resolve));
+    const addr = nextServer.address() as {port: number};
     baseUrl = `http://127.0.0.1:${addr.port}`;
   });
 
   afterEach(async () => {
     globalThis.fetch = realFetch;
-    server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    db.close();
-    fs.rmSync(tmpDir, {recursive: true, force: true});
+    if (server) {
+      server.closeAllConnections();
+      if (server.listening) {
+        await new Promise<void>(resolve => server!.close(() => resolve()));
+      }
+      server = undefined;
+    }
+    (db as db.Database | undefined)?.close();
+    if (tmpDir) fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
   const githubIdFor = (login: string): number => {
