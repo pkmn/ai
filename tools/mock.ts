@@ -1578,18 +1578,25 @@ export class Runner {
         );
       }
       const oldLadder = this.resolveLadders(oldSpec)[0];
+      const newId = getFlag(cmd, 'new');
       const newMinFlag = getFlag(cmd, 'min');
       const newTeamsFlag = getFlag(cmd, 'teams');
       this.db.rotateLadder({
         oldLadderId: oldLadder.id,
         archivedName: archiveName,
-        newLadderId: getFlag(cmd, 'new'),
-        newName: getFlag(cmd, 'new-name'),
-        newFormat: getFlag(cmd, 'format'),
-        newTeam: getFlag(cmd, 'team') as db.TeamMode | undefined,
-        newMin: newMinFlag !== undefined ? Number(newMinFlag) : undefined,
-        newTeams: newTeamsFlag !== undefined ? Number(newTeamsFlag) : undefined,
-        newDiscord: getFlag(cmd, 'discord'),
+        ...(newId
+          ? {
+            next: {
+              id: newId,
+              name: getFlag(cmd, 'new-name'),
+              format: getFlag(cmd, 'format'),
+              team: getFlag(cmd, 'team') as db.TeamMode | undefined,
+              min: newMinFlag !== undefined ? Number(newMinFlag) : undefined,
+              teams: newTeamsFlag !== undefined ? Number(newTeamsFlag) : undefined,
+              discord: getFlag(cmd, 'discord'),
+            },
+          }
+          : {}),
         now: this.state.now,
       });
       this.syncLadderFileStatuses();

@@ -59,14 +59,16 @@ export interface AgentSpec {
 }
 export type TournamentAgentSpec = AgentSpec;
 
+export interface TurnSlotBroadcast {
+  bankSeconds: number;
+  thinking: boolean;
+  pokemon?: unknown[];
+}
+
 export interface TurnBroadcastInfo {
   turn: number;
-  p1BankSeconds: number;
-  p2BankSeconds: number;
-  p1Thinking: boolean;
-  p2Thinking: boolean;
-  p1Pokemon?: unknown[];
-  p2Pokemon?: unknown[];
+  p1: TurnSlotBroadcast;
+  p2: TurnSlotBroadcast;
 }
 export type TournamentTurnBroadcastInfo = TurnBroadcastInfo;
 
@@ -370,19 +372,23 @@ export class ConcurrentGame {
     const p2Pokemon = this.battleStream.battle?.sides[1]?.getRequestData().pokemon;
     this.onSpectatorChunk?.(publicChunk, {
       turn: this.currentTurn,
-      p1BankSeconds: Math.max(
-        0,
-        Math.round((this.p1?.bankMillis ?? this.startingBankMillis) / 1000)
-      ),
-      p2BankSeconds: Math.max(
-        0,
-        Math.round((this.p2?.bankMillis ?? this.startingBankMillis) / 1000)
-      ),
-      p1Thinking: Boolean(this.p1?.thinking),
-      p2Thinking: Boolean(this.p2?.thinking),
-      p1Pokemon,
-      p2Pokemon,
+      p1: this.buildSlotBroadcast(this.p1, p1Pokemon),
+      p2: this.buildSlotBroadcast(this.p2, p2Pokemon),
     });
+  }
+
+  private buildSlotBroadcast(
+    player: RemoteTournamentPlayer | undefined,
+    pokemon: unknown[] | undefined
+  ): TurnSlotBroadcast {
+    return {
+      bankSeconds: Math.max(
+        0,
+        Math.round((player?.bankMillis ?? this.startingBankMillis) / 1000)
+      ),
+      thinking: Boolean(player?.thinking),
+      ...(pokemon !== undefined ? {pokemon} : {}),
+    };
   }
 
   private spawnRemotePlayer(slot: PlayerSlot, spec: AgentSpec): RemoteTournamentPlayer {
@@ -926,20 +932,20 @@ export class ConcurrentGame {
       turns: this.currentTurn,
       endReason: this.endReason,
       omniscientLog: this.getFullLog(),
-      p1BankSeconds: Math.max(0, Math.round(this.p1.bankMillis / 1000)),
-      p2BankSeconds: Math.max(0, Math.round(this.p2.bankMillis / 1000)),
-      p1TotalTurnMillis: this.p1.totalTurnMillis,
-      p1DecisionsCount: this.p1.decisionsCount,
-      p2TotalTurnMillis: this.p2.totalTurnMillis,
-      p2DecisionsCount: this.p2.decisionsCount,
-      p1MeanTurnMillis: this.p1.decisionsCount > 0
-        ? Math.max(1, Math.round(this.p1.totalTurnMillis / this.p1.decisionsCount))
+      p1: this.buildSingleBattleStats(this.p1),
+      p2: this.buildSingleBattleStats(this.p2),
+    };
+  }
+
+  private buildSingleBattleStats(player: RemoteTournamentPlayer) {
+    return {
+      bankSeconds: Math.max(0, Math.round(player.bankMillis / 1000)),
+      totalTurnMillis: player.totalTurnMillis,
+      decisionsCount: player.decisionsCount,
+      meanTurnMillis: player.decisionsCount > 0
+        ? Math.max(1, Math.round(player.totalTurnMillis / player.decisionsCount))
         : 1,
-      p2MeanTurnMillis: this.p2.decisionsCount > 0
-        ? Math.max(1, Math.round(this.p2.totalTurnMillis / this.p2.decisionsCount))
-        : 1,
-      p1PeakRam: this.p1.peakRam,
-      p2PeakRam: this.p2.peakRam,
+      peakRam: player.peakRam,
     };
   }
 
@@ -1112,8 +1118,8 @@ export class ConcurrentGame {
         });
         const g = await this.playSingleBattle(gameSeed, p1Team, p2Team, gameNum > 1);
         totalTurns += g.turns;
-        p1PeakRam = Math.max(p1PeakRam, g.p1PeakRam, this.p1.peakRam);
-        p2PeakRam = Math.max(p2PeakRam, g.p2PeakRam, this.p2.peakRam);
+        p1PeakRam = Math.max(p1PeakRam, g.p1.peakRam, this.p1.peakRam);
+        p2PeakRam = Math.max(p2PeakRam, g.p2.peakRam, this.p2.peakRam);
 
         if (g.winner === 'preempted' || !g.outcome) {
           await this.closePlayers();
@@ -1128,24 +1134,24 @@ export class ConcurrentGame {
             omniscientLog: g.omniscientLog,
             p1: {
               teamPacked: p1Team,
-              bankSeconds: g.p1BankSeconds,
-              meanTurnMillis: g.p1MeanTurnMillis,
+              bankSeconds: g.p1.bankSeconds,
+              meanTurnMillis: g.p1.meanTurnMillis,
               peakRam: p1PeakRam,
             },
             p2: {
               teamPacked: p2Team,
-              bankSeconds: g.p2BankSeconds,
-              meanTurnMillis: g.p2MeanTurnMillis,
+              bankSeconds: g.p2.bankSeconds,
+              meanTurnMillis: g.p2.meanTurnMillis,
               peakRam: p2PeakRam,
             },
             games,
           };
         }
 
-        totalP1Decisions += g.p1DecisionsCount;
-        totalP1Millis += g.p1TotalTurnMillis;
-        totalP2Decisions += g.p2DecisionsCount;
-        totalP2Millis += g.p2TotalTurnMillis;
+        totalP1Decisions += g.p1.decisionsCount;
+        totalP1Millis += g.p1.totalTurnMillis;
+        totalP2Decisions += g.p2.decisionsCount;
+        totalP2Millis += g.p2.totalTurnMillis;
 
         games.push({
           seed: gameSeed,
@@ -1154,14 +1160,14 @@ export class ConcurrentGame {
           endReason: g.endReason,
           omniscientLog: g.omniscientLog,
           p1: {
-            bankSeconds: g.p1BankSeconds,
-            meanTurnMillis: g.p1MeanTurnMillis,
-            peakRam: g.p1PeakRam > 1 ? g.p1PeakRam : p1PeakRam,
+            bankSeconds: g.p1.bankSeconds,
+            meanTurnMillis: g.p1.meanTurnMillis,
+            peakRam: g.p1.peakRam > 1 ? g.p1.peakRam : p1PeakRam,
           },
           p2: {
-            bankSeconds: g.p2BankSeconds,
-            meanTurnMillis: g.p2MeanTurnMillis,
-            peakRam: g.p2PeakRam > 1 ? g.p2PeakRam : p2PeakRam,
+            bankSeconds: g.p2.bankSeconds,
+            meanTurnMillis: g.p2.meanTurnMillis,
+            peakRam: g.p2.peakRam > 1 ? g.p2.peakRam : p2PeakRam,
           },
         });
         summaries.push({
@@ -1600,13 +1606,21 @@ export function unpackOciRootfs(opts: {
 }
 export {unpackOciRootfs as unpackTournamentOciRootfs};
 
+export interface WorkerVmBinding {
+  host: string;
+  controlSocket: string;
+}
+
 export interface TableBinding {
-  vmHostA: string;
-  controlSocketA: string;
-  vmHostB: string;
-  controlSocketB: string;
+  vmA: WorkerVmBinding;
+  vmB: WorkerVmBinding;
 }
 export type TournamentTableBinding = TableBinding;
+
+const LOCAL_TABLE_BINDING: TableBinding = {
+  vmA: {host: '127.0.0.1', controlSocket: ''},
+  vmB: {host: '127.0.0.1', controlSocket: ''},
+};
 
 export interface EntrantInfo {
   versionId: number;
@@ -2094,19 +2108,19 @@ export class Coordinator {
                 slug: p1Ent.agentSlug,
                 name: p1Ent.agentName,
                 version: p1Ent.version,
-                bankSeconds: snap.p1BankSeconds,
-                thinking: snap.p1Thinking,
+                bankSeconds: snap.p1.bankSeconds,
+                thinking: snap.p1.thinking,
                 incrementSeconds: incSeconds,
-                ...(snap.p1Pokemon ? {pokemon: snap.p1Pokemon} : {}),
+                ...(snap.p1.pokemon ? {pokemon: snap.p1.pokemon} : {}),
               },
               p2: {
                 slug: p2Ent.agentSlug,
                 name: p2Ent.agentName,
                 version: p2Ent.version,
-                bankSeconds: snap.p2BankSeconds,
-                thinking: snap.p2Thinking,
+                bankSeconds: snap.p2.bankSeconds,
+                thinking: snap.p2.thinking,
                 incrementSeconds: incSeconds,
-                ...(snap.p2Pokemon ? {pokemon: snap.p2Pokemon} : {}),
+                ...(snap.p2.pokemon ? {pokemon: snap.p2.pokemon} : {}),
               },
               lines: newLines,
               live: true,
@@ -2170,12 +2184,7 @@ export class Coordinator {
 
     const runTableWorker = async (tableIdx: number) => {
       const tableNum = tableIdx + 1;
-      const binding = this.tables[tableIdx] ?? {
-        vmHostA: '127.0.0.1',
-        controlSocketA: '',
-        vmHostB: '127.0.0.1',
-        controlSocketB: '',
-      };
+      const binding = this.tables[tableIdx] ?? LOCAL_TABLE_BINDING;
       const residents: TableResidentPair = {vmAAgent: undefined, vmBAgent: undefined};
 
       for (;;) {
@@ -2197,15 +2206,17 @@ export class Coordinator {
         // Order `(sideLow, sideHigh)` canonically by `(low, high)` so Game 1 and Game 2 mirror
         // seat/team swaps remain identical across mid-batch restarts regardless of VM residency.
         const lowOnVmB = batch.agentOnVmB === low;
+        const lowVm = lowOnVmB ? binding.vmB : binding.vmA;
+        const highVm = lowOnVmB ? binding.vmA : binding.vmB;
         const sideLow: MountedEntrant = {
           entrant: entrantByVersion.get(low)!,
-          vmHost: lowOnVmB ? binding.vmHostB : binding.vmHostA,
-          controlSocket: lowOnVmB ? binding.controlSocketB : binding.controlSocketA,
+          vmHost: lowVm.host,
+          controlSocket: lowVm.controlSocket,
         };
         const sideHigh: MountedEntrant = {
           entrant: entrantByVersion.get(high)!,
-          vmHost: lowOnVmB ? binding.vmHostA : binding.vmHostB,
-          controlSocket: lowOnVmB ? binding.controlSocketA : binding.controlSocketB,
+          vmHost: highVm.host,
+          controlSocket: highVm.controlSocket,
         };
 
         try {
@@ -2273,21 +2284,16 @@ export class Coordinator {
             ? postEntrantByVer.get(g1Sf.p2.versionId)
             : postEntrantByVer.get(g1Sf.p1.versionId)) ?? postRrState.entrants[1]
           : postRrState.entrants[1];
-        const binding = this.tables[0] ?? {
-          vmHostA: '127.0.0.1',
-          controlSocketA: '',
-          vmHostB: '127.0.0.1',
-          controlSocketB: '',
-        };
+        const binding = this.tables[0] ?? LOCAL_TABLE_BINDING;
         const sfSideA: MountedEntrant = {
           entrant: finalistA,
-          vmHost: binding.vmHostA,
-          controlSocket: binding.controlSocketA,
+          vmHost: binding.vmA.host,
+          controlSocket: binding.vmA.controlSocket,
         };
         const sfSideB: MountedEntrant = {
           entrant: finalistB,
-          vmHost: binding.vmHostB,
-          controlSocket: binding.controlSocketB,
+          vmHost: binding.vmB.host,
+          controlSocket: binding.vmB.controlSocket,
         };
         for (let gIdx = existingSf; gIdx < this.superfinalGames; gIdx++) {
           const matchupGame = gIdx + 1;

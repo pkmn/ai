@@ -479,14 +479,14 @@ export class Coordinator {
         });
         const res = await game.run();
         if (isPlayerFault(res, 'p1') || INFRA_VOID_REASONS.has(res.endReason)) {
-          const stderrSnippet = res.p1Stderr
-            ? ` (${res.p1Stderr.trim().replace(/\s+/g, ' ').slice(0, 240)})`
+          const stderrSnippet = res.p1.stderr
+            ? ` (${res.p1.stderr.trim().replace(/\s+/g, ' ').slice(0, 240)})`
             : '';
           smokeError = `Smoke test failed in ${item.format}: ${res.endReason}${stderrSnippet}`;
           break;
         }
-        if (res.p1MeanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1MeanTurnMillis;
-        if (res.p1PeakRam > maxPeakRam) maxPeakRam = res.p1PeakRam;
+        if (res.p1.meanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1.meanTurnMillis;
+        if (res.p1.peakRam > maxPeakRam) maxPeakRam = res.p1.peakRam;
       }
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
@@ -959,22 +959,22 @@ export class Coordinator {
           incrementSeconds: info.incrementSeconds,
           game1Summary,
           p1: {
-            bankSeconds: info.p2BankSeconds,
-            lastTurnMillis: info.p2LastTurnMillis,
-            meanTurnMillis: info.p2MeanTurnMillis,
-            ram: Math.max(game1.p1.peakRam, info.p2Ram),
+            bankSeconds: info.p2.bankSeconds,
+            lastTurnMillis: info.p2.lastTurnMillis,
+            meanTurnMillis: info.p2.meanTurnMillis,
+            ram: Math.max(game1.p1.peakRam, info.p2.ram),
             team: match.p2.teamLabel,
           },
           p2: {
-            bankSeconds: info.p1BankSeconds,
-            lastTurnMillis: info.p1LastTurnMillis,
-            meanTurnMillis: info.p1MeanTurnMillis,
-            ram: Math.max(game1.p2.peakRam, info.p1Ram),
+            bankSeconds: info.p1.bankSeconds,
+            lastTurnMillis: info.p1.lastTurnMillis,
+            meanTurnMillis: info.p1.meanTurnMillis,
+            ram: Math.max(game1.p2.peakRam, info.p1.ram),
             team: match.p1.teamLabel,
           },
           lines,
-          p1Pokemon: info.p1Pokemon,
-          p2Pokemon: info.p2Pokemon,
+          p1Pokemon: info.p1.pokemon,
+          p2Pokemon: info.p2.pokemon,
         });
       },
     });
@@ -1005,22 +1005,22 @@ export class Coordinator {
         incrementSeconds: arena.turnIncrementSeconds(match.format),
         game1Summary,
         p1: {
-          bankSeconds: g2Res.p2BankSeconds,
-          lastTurnMillis: g2Res.p2LastTurnMillis,
-          meanTurnMillis: g2Res.p2MeanTurnMillis,
-          ram: Math.max(game1.p1.peakRam, g2Res.p2PeakRam),
+          bankSeconds: g2Res.p2.bankSeconds,
+          lastTurnMillis: g2Res.p2.lastTurnMillis,
+          meanTurnMillis: g2Res.p2.meanTurnMillis,
+          ram: Math.max(game1.p1.peakRam, g2Res.p2.peakRam),
           team: match.p2.teamLabel,
         },
         p2: {
-          bankSeconds: g2Res.p1BankSeconds,
-          lastTurnMillis: g2Res.p1LastTurnMillis,
-          meanTurnMillis: g2Res.p1MeanTurnMillis,
-          ram: Math.max(game1.p2.peakRam, g2Res.p1PeakRam),
+          bankSeconds: g2Res.p1.bankSeconds,
+          lastTurnMillis: g2Res.p1.lastTurnMillis,
+          meanTurnMillis: g2Res.p1.meanTurnMillis,
+          ram: Math.max(game1.p2.peakRam, g2Res.p1.peakRam),
           team: match.p1.teamLabel,
         },
         lines: g2Log.split('\n'),
-        p1Pokemon: g2Res.p1Pokemon,
-        p2Pokemon: g2Res.p2Pokemon,
+        p1Pokemon: g2Res.p1.pokemon,
+        p2Pokemon: g2Res.p2.pokemon,
       });
     }
 
@@ -1029,15 +1029,15 @@ export class Coordinator {
       : undefined;
 
     const p1Game1PeakRam = game1.p1.peakRam;
-    const p1Game2PeakRam = g2Res.p2PeakRam;
+    const p1Game2PeakRam = g2Res.p2.peakRam;
     const p2Game1PeakRam = game1.p2.peakRam;
-    const p2Game2PeakRam = g2Res.p1PeakRam;
+    const p2Game2PeakRam = g2Res.p1.peakRam;
     const p1PeakRam = Math.max(p1Game1PeakRam, p1Game2PeakRam);
     const p2PeakRam = Math.max(p2Game1PeakRam, p2Game2PeakRam);
     const p1Game1MeanTurnMillis = Math.round(game1.p1.meanTurnMillis);
-    const p1Game2MeanTurnMillis = Math.round(g2Res.p2MeanTurnMillis);
+    const p1Game2MeanTurnMillis = Math.round(g2Res.p2.meanTurnMillis);
     const p2Game1MeanTurnMillis = Math.round(game1.p2.meanTurnMillis);
-    const p2Game2MeanTurnMillis = Math.round(g2Res.p1MeanTurnMillis);
+    const p2Game2MeanTurnMillis = Math.round(g2Res.p1.meanTurnMillis);
     const p1MeanTurnMillis = Math.round((p1Game1MeanTurnMillis + p1Game2MeanTurnMillis) / 2);
     const p2MeanTurnMillis = Math.round((p2Game1MeanTurnMillis + p2Game2MeanTurnMillis) / 2);
 
@@ -1064,9 +1064,9 @@ export class Coordinator {
         p2Game1PeakRam,
         p2Game2PeakRam,
         p1Game1BankSeconds: game1.p1.bankSeconds,
-        p1Game2BankSeconds: g2Res.p2BankSeconds,
+        p1Game2BankSeconds: g2Res.p2.bankSeconds,
         p2Game1BankSeconds: game1.p2.bankSeconds,
-        p2Game2BankSeconds: g2Res.p1BankSeconds,
+        p2Game2BankSeconds: g2Res.p1.bankSeconds,
         p1MeanTurnMillis,
         p2MeanTurnMillis,
         p1Game1MeanTurnMillis,
@@ -1411,22 +1411,22 @@ export class Coordinator {
             turnBudgetSeconds: info.turnBudgetSeconds,
             incrementSeconds: info.incrementSeconds,
             p1: {
-              bankSeconds: info.p1BankSeconds,
-              lastTurnMillis: info.p1LastTurnMillis,
-              meanTurnMillis: info.p1MeanTurnMillis,
-              ram: info.p1Ram,
+              bankSeconds: info.p1.bankSeconds,
+              lastTurnMillis: info.p1.lastTurnMillis,
+              meanTurnMillis: info.p1.meanTurnMillis,
+              ram: info.p1.ram,
               team: sampled.t1Label,
             },
             p2: {
-              bankSeconds: info.p2BankSeconds,
-              lastTurnMillis: info.p2LastTurnMillis,
-              meanTurnMillis: info.p2MeanTurnMillis,
-              ram: info.p2Ram,
+              bankSeconds: info.p2.bankSeconds,
+              lastTurnMillis: info.p2.lastTurnMillis,
+              meanTurnMillis: info.p2.meanTurnMillis,
+              ram: info.p2.ram,
               team: sampled.t2Label,
             },
             lines,
-            p1Pokemon: info.p1Pokemon,
-            p2Pokemon: info.p2Pokemon,
+            p1Pokemon: info.p1.pokemon,
+            p2Pokemon: info.p2.pokemon,
           });
         },
       });
@@ -1451,22 +1451,22 @@ export class Coordinator {
           turnBudgetSeconds: arena.MAX_TURN_SECONDS,
           incrementSeconds: arena.turnIncrementSeconds(ladder.format),
           p1: {
-            bankSeconds: g1Res.p1BankSeconds,
-            lastTurnMillis: g1Res.p1LastTurnMillis,
-            meanTurnMillis: g1Res.p1MeanTurnMillis,
-            ram: g1Res.p1PeakRam,
+            bankSeconds: g1Res.p1.bankSeconds,
+            lastTurnMillis: g1Res.p1.lastTurnMillis,
+            meanTurnMillis: g1Res.p1.meanTurnMillis,
+            ram: g1Res.p1.peakRam,
             team: sampled.t1Label,
           },
           p2: {
-            bankSeconds: g1Res.p2BankSeconds,
-            lastTurnMillis: g1Res.p2LastTurnMillis,
-            meanTurnMillis: g1Res.p2MeanTurnMillis,
-            ram: g1Res.p2PeakRam,
+            bankSeconds: g1Res.p2.bankSeconds,
+            lastTurnMillis: g1Res.p2.lastTurnMillis,
+            meanTurnMillis: g1Res.p2.meanTurnMillis,
+            ram: g1Res.p2.peakRam,
             team: sampled.t2Label,
           },
           lines: g1Log.split('\n'),
-          p1Pokemon: g1Res.p1Pokemon,
-          p2Pokemon: g1Res.p2Pokemon,
+          p1Pokemon: g1Res.p1.pokemon,
+          p2Pokemon: g1Res.p2.pokemon,
         });
       }
 
@@ -1476,14 +1476,14 @@ export class Coordinator {
         turns: g1Res.turns,
         endReason: g1Res.endReason,
         p1: {
-          bankSeconds: g1Res.p1BankSeconds,
-          ram: g1Res.p1PeakRam,
-          turnMillis: g1Res.p1MeanTurnMillis,
+          bankSeconds: g1Res.p1.bankSeconds,
+          ram: g1Res.p1.peakRam,
+          turnMillis: g1Res.p1.meanTurnMillis,
         },
         p2: {
-          bankSeconds: g1Res.p2BankSeconds,
-          ram: g1Res.p2PeakRam,
-          turnMillis: g1Res.p2MeanTurnMillis,
+          bankSeconds: g1Res.p2.bankSeconds,
+          ram: g1Res.p2.peakRam,
+          turnMillis: g1Res.p2.meanTurnMillis,
         },
       });
       g1Checkpointed = true;
@@ -1493,14 +1493,14 @@ export class Coordinator {
         turns: g1Res.turns,
         endReason: g1Res.endReason,
         p1: {
-          bankSeconds: g1Res.p1BankSeconds,
-          peakRam: g1Res.p1PeakRam,
-          meanTurnMillis: g1Res.p1MeanTurnMillis,
+          bankSeconds: g1Res.p1.bankSeconds,
+          peakRam: g1Res.p1.peakRam,
+          meanTurnMillis: g1Res.p1.meanTurnMillis,
         },
         p2: {
-          bankSeconds: g1Res.p2BankSeconds,
-          peakRam: g1Res.p2PeakRam,
-          meanTurnMillis: g1Res.p2MeanTurnMillis,
+          bankSeconds: g1Res.p2.bankSeconds,
+          peakRam: g1Res.p2.peakRam,
+          meanTurnMillis: g1Res.p2.meanTurnMillis,
         },
         log: g1Log,
       });

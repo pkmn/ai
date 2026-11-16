@@ -326,16 +326,23 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('--teams must be a positive integer');
         }
 
+        const newId = flags.get('new');
         const rotated = database.rotateLadder({
           oldLadderId,
           archivedName,
-          newLadderId: flags.get('new'),
-          newName: flags.get('new-name'),
-          newFormat: flags.get('format'),
-          newTeam: flags.get('team') as db.TeamMode | undefined,
-          newMin: min,
-          newTeams: teams,
-          newDiscord: flags.get('discord'),
+          ...(newId
+            ? {
+              next: {
+                id: newId,
+                name: flags.get('new-name'),
+                format: flags.get('format'),
+                team: flags.get('team') as db.TeamMode | undefined,
+                min,
+                teams,
+                discord: flags.get('discord'),
+              },
+            }
+            : {}),
           now,
         });
         const nextMsg = rotated.newLadder

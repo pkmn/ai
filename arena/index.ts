@@ -274,10 +274,8 @@ if (require.main === module) {
           process.exit(2);
         }
         tables.push({
-          vmHostA: parts[0],
-          controlSocketA: parts[1],
-          vmHostB: parts[2],
-          controlSocketB: parts[3],
+          vmA: {host: parts[0], controlSocket: parts[1]},
+          vmB: {host: parts[2], controlSocket: parts[3]},
         });
       } else if (arg.startsWith('--superfinal=')) {
         const parsed = Number(arg.slice('--superfinal='.length));
@@ -288,10 +286,8 @@ if (require.main === module) {
         superfinalGames = parsed;
       } else if (arg === '--local') {
         tables.push({
-          vmHostA: '127.0.0.1',
-          controlSocketA: '',
-          vmHostB: '127.0.0.1',
-          controlSocketB: '',
+          vmA: {host: '127.0.0.1', controlSocket: ''},
+          vmB: {host: '127.0.0.1', controlSocket: ''},
         });
       }
     }

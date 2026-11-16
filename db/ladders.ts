@@ -62,16 +62,20 @@ export interface LadderRow {
   archivedAt?: number;
 }
 
+export interface StagedLadderInput {
+  id: string;
+  name?: string;
+  format?: string;
+  team?: TeamMode;
+  min?: number;
+  teams?: number;
+  discord?: string;
+}
+
 export interface RotateLadderInput {
   oldLadderId: string;
   archivedName: string;
-  newLadderId?: string;
-  newName?: string;
-  newFormat?: string;
-  newTeam?: TeamMode;
-  newMin?: number;
-  newTeams?: number;
-  newDiscord?: string;
+  next?: StagedLadderInput;
   now?: number;
 }
 
@@ -657,8 +661,9 @@ export function rotateLadder(
     }
 
     let newLadder: LadderRow | undefined;
-    if (input.newLadderId) {
-      const newId = input.newLadderId.trim();
+    if (input.next?.id) {
+      const next = input.next;
+      const newId = next.id.trim();
       const existingNew = getLadder(db, newId);
       if (existingNew) {
         if (existingNew.status === 'archived') {
@@ -666,19 +671,19 @@ export function rotateLadder(
             .run(newId);
         }
       } else {
-        const team = input.newTeam ?? oldLadder.team;
-        const min = input.newMin ?? (team === 'pools' ? Math.max(4, oldLadder.min) : oldLadder.min);
+        const team = next.team ?? oldLadder.team;
+        const min = next.min ?? (team === 'pools' ? Math.max(4, oldLadder.min) : oldLadder.min);
         if (!Number.isInteger(min) || min < 2 || (team === 'pools' && min < 4)) {
           throw new Error(`Invalid min "${String(min)}" for "${newId}"`);
         }
-        const teams = input.newTeams !== undefined
-          ? input.newTeams
+        const teams = next.teams !== undefined
+          ? next.teams
           : (team === 'pools' ? (oldLadder.teams ?? 20) : undefined);
-        const discord = input.newDiscord !== undefined
-          ? input.newDiscord
+        const discord = next.discord !== undefined
+          ? next.discord
           : oldLadder.discord;
-        const name = input.newName?.trim() || oldLadder.slot.toUpperCase();
-        const format = input.newFormat?.trim() || oldLadder.format;
+        const name = next.name?.trim() || oldLadder.slot.toUpperCase();
+        const format = next.format?.trim() || oldLadder.format;
 
         db.prepare(`
           INSERT INTO ladders (

@@ -1603,7 +1603,7 @@ describe('arena infrastructure', () => {
         devMode: true,
       }).run();
       expect(res.endReason).toBe('smoke-complete');
-      expect(res.p1BankSeconds).toBeLessThanOrEqual(res.p2BankSeconds);
+      expect(res.p1.bankSeconds).toBeLessThanOrEqual(res.p2.bankSeconds);
     });
 
     test('forfeits agents writing over 64 KiB without a newline', async () => {
@@ -1730,8 +1730,8 @@ describe('arena infrastructure', () => {
       }).run();
       expect(res.endReason).toBe('smoke-complete');
       expect(heartbeats.slice(0, 4).map(h => h.activeSlot)).toEqual(['p1', 'p2', 'p2', 'p1']);
-      expect(heartbeats[0].p1Ram).toBe(128);
-      expect(res.p1PeakRam).toBe(128);
+      expect(heartbeats[0].p1.ram).toBe(128);
+      expect(res.p1.peakRam).toBe(128);
     });
 
     test('inspectPlayerProtocolChunk exempts Unavailable choice from strike counter', () => {

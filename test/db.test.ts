@@ -536,7 +536,7 @@ describe('ladders configuration', () => {
       db.rotateLadder({
         oldLadderId: 'gen9championsvgc2026regmc',
         archivedName: 'VGC 2026 Reg M-C',
-        newLadderId: 'gen9championsvgc2026regmd',
+        next: {id: 'gen9championsvgc2026regmd'},
         now: 1_765_000_000,
       });
       db.syncLaddersFromYaml(laddersYaml, 1_766_000_000);
@@ -564,8 +564,7 @@ describe('ladders configuration', () => {
       expect(() => db.rotateLadder({
         oldLadderId: 'gen9championsvgc2026regmc',
         archivedName: 'VGC 2026 Reg M-C',
-        newLadderId: 'gen9championsvgc2026regmd',
-        newMin: 2,
+        next: {id: 'gen9championsvgc2026regmd', min: 2},
         now: 1_765_000_000,
       })).toThrow(/Invalid min/);
     } finally {
@@ -711,7 +710,7 @@ describe('ladders configuration', () => {
       const rotated = db.rotateLadder({
         oldLadderId: ladderId,
         archivedName: 'VGC 2026 Reg M-C',
-        newLadderId: 'gen9championsvgc2026regmd',
+        next: {id: 'gen9championsvgc2026regmd'},
         now: 1_766_000_000,
       });
       expect(rotated.oldLadder.status).toBe('archived');
@@ -785,7 +784,7 @@ describe('ladders configuration', () => {
       const rotated = db.rotateLadder({
         oldLadderId: ladderId,
         archivedName: 'VGC 2026 Reg M-C',
-        newLadderId: 'gen9championsvgc2026regmd',
+        next: {id: 'gen9championsvgc2026regmd'},
         now: 1_766_000_000,
       });
       expect(rotated.oldLadder.status).toBe('settling');

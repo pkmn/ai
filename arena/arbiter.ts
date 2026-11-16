@@ -21,23 +21,23 @@ export interface AgentLaunchSpec {
   env?: Record<string, string>;
 }
 
+export interface TurnSlotInfo {
+  bankSeconds: number;
+  ram: number;
+  lastTurnMillis: number;
+  meanTurnMillis: number;
+  pokemon?: unknown[];
+}
+
 export interface TurnHeartbeatInfo {
   turn: number;
   activeSlot: PlayerSlot;
   turnStartedAt: number;
   turnBudgetSeconds: number;
   incrementSeconds: number;
-  p1BankSeconds: number;
-  p2BankSeconds: number;
-  p1Ram: number;
-  p2Ram: number;
-  p1LastTurnMillis: number;
-  p2LastTurnMillis: number;
-  p1MeanTurnMillis: number;
-  p2MeanTurnMillis: number;
   omniscientLog: string;
-  p1Pokemon?: unknown[];
-  p2Pokemon?: unknown[];
+  p1: TurnSlotInfo;
+  p2: TurnSlotInfo;
 }
 
 export interface ArenaGameOptions {
@@ -59,26 +59,24 @@ export interface ArenaGameOptions {
   onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 }
 
+export interface PlayerGameResult {
+  bankSeconds: number;
+  peakRam: number;
+  meanTurnMillis: number;
+  lastTurnMillis: number;
+  pokemon?: unknown[];
+  exitCode?: number;
+  stderr?: string;
+}
+
 export interface ArenaGameResult {
   winner: PlayerSlot | 'tie';
   outcome: GameOutcome; // From P1's perspective: 'W' | 'L' | 'T'
   turns: number;
   endReason: string;
   omniscientLog: string;
-  p1Pokemon?: unknown[];
-  p2Pokemon?: unknown[];
-  p1BankSeconds: number;
-  p2BankSeconds: number;
-  p1PeakRam: number;
-  p2PeakRam: number;
-  p1MeanTurnMillis: number;
-  p2MeanTurnMillis: number;
-  p1LastTurnMillis: number;
-  p2LastTurnMillis: number;
-  p1ExitCode?: number;
-  p2ExitCode?: number;
-  p1Stderr?: string;
-  p2Stderr?: string;
+  p1: PlayerGameResult;
+  p2: PlayerGameResult;
 }
 
 interface SandboxedPlayer {
@@ -741,27 +739,11 @@ export class TimeSlicedArenaGame {
         turnStartedAt: Math.floor(Date.now() / 1000),
         turnBudgetSeconds: Math.round(totalBudgetMillis / 1000),
         incrementSeconds: Math.round(incrementMillis / 1000),
-        p1BankSeconds: Math.max(0, Math.round(p1.bankMillis / 1000)),
-        p2BankSeconds: Math.max(0, Math.round(p2.bankMillis / 1000)),
-        p1Ram: this.readPeakRam(p1),
-        p2Ram: this.readPeakRam(p2),
-        p1LastTurnMillis: Math.round(p1.lastDecisionMillis),
-        p2LastTurnMillis: Math.round(p2.lastDecisionMillis),
-        p1MeanTurnMillis: p1.decisionCount > 0
-          ? Math.round(p1.totalDecisionMillis / p1.decisionCount)
-          : 0,
-        p2MeanTurnMillis: p2.decisionCount > 0
-          ? Math.round(p2.totalDecisionMillis / p2.decisionCount)
-          : 0,
         omniscientLog: this.includeSpectatorState
           ? (this.battleStream.battle?.log.join('\n') ?? this.omniscientLog.join('\n'))
           : '',
-        p1Pokemon: this.includeSpectatorState
-          ? this.battleStream.battle?.sides[0]?.getRequestData().pokemon
-          : undefined,
-        p2Pokemon: this.includeSpectatorState
-          ? this.battleStream.battle?.sides[1]?.getRequestData().pokemon
-          : undefined,
+        p1: this.buildTurnSlotInfo(p1, 0),
+        p2: this.buildTurnSlotInfo(p2, 1),
       });
     }
 
@@ -951,8 +933,6 @@ export class TimeSlicedArenaGame {
         this.stopPlayerForRamRead(p1),
         this.stopPlayerForRamRead(p2),
       ]);
-      const p1PeakRam = this.readPeakRam(p1);
-      const p2PeakRam = this.readPeakRam(p2);
       const outcome: GameOutcome =
         this.winner === 'p1' ? 'W' : this.winner === 'p2' ? 'L' : 'T';
 
@@ -962,28 +942,42 @@ export class TimeSlicedArenaGame {
         turns: this.currentTurn,
         endReason: this.endReason,
         omniscientLog: this.battleStream.battle?.log.join('\n') ?? this.omniscientLog.join('\n'),
-        p1Pokemon: this.battleStream.battle?.sides[0]?.getRequestData().pokemon,
-        p2Pokemon: this.battleStream.battle?.sides[1]?.getRequestData().pokemon,
-        p1BankSeconds: Math.max(0, Math.round(p1.bankMillis / 1000)),
-        p2BankSeconds: Math.max(0, Math.round(p2.bankMillis / 1000)),
-        p1PeakRam,
-        p2PeakRam,
-        p1MeanTurnMillis: p1.decisionCount > 0
-          ? Math.round(p1.totalDecisionMillis / p1.decisionCount)
-          : 0,
-        p2MeanTurnMillis: p2.decisionCount > 0
-          ? Math.round(p2.totalDecisionMillis / p2.decisionCount)
-          : 0,
-        p1LastTurnMillis: Math.round(p1.lastDecisionMillis),
-        p2LastTurnMillis: Math.round(p2.lastDecisionMillis),
-        ...(p1.exitCode !== undefined ? {p1ExitCode: p1.exitCode} : {}),
-        ...(p2.exitCode !== undefined ? {p2ExitCode: p2.exitCode} : {}),
-        ...(p1.stderrTail ? {p1Stderr: p1.stderrTail} : {}),
-        ...(p2.stderrTail ? {p2Stderr: p2.stderrTail} : {}),
+        p1: this.buildPlayerGameResult(p1, 0),
+        p2: this.buildPlayerGameResult(p2, 1),
       };
     } finally {
       this.cleanupSlot(this.p1);
       this.cleanupSlot(this.p2);
     }
+  }
+
+  private buildTurnSlotInfo(player: SandboxedPlayer, sideIdx: 0 | 1): TurnSlotInfo {
+    const pokemon = this.includeSpectatorState
+      ? this.battleStream.battle?.sides[sideIdx]?.getRequestData().pokemon
+      : undefined;
+    return {
+      bankSeconds: Math.max(0, Math.round(player.bankMillis / 1000)),
+      ram: this.readPeakRam(player),
+      lastTurnMillis: Math.round(player.lastDecisionMillis),
+      meanTurnMillis: player.decisionCount > 0
+        ? Math.round(player.totalDecisionMillis / player.decisionCount)
+        : 0,
+      ...(pokemon !== undefined ? {pokemon} : {}),
+    };
+  }
+
+  private buildPlayerGameResult(player: SandboxedPlayer, sideIdx: 0 | 1): PlayerGameResult {
+    const pokemon = this.battleStream.battle?.sides[sideIdx]?.getRequestData().pokemon;
+    return {
+      bankSeconds: Math.max(0, Math.round(player.bankMillis / 1000)),
+      peakRam: this.readPeakRam(player),
+      meanTurnMillis: player.decisionCount > 0
+        ? Math.round(player.totalDecisionMillis / player.decisionCount)
+        : 0,
+      lastTurnMillis: Math.round(player.lastDecisionMillis),
+      ...(pokemon !== undefined ? {pokemon} : {}),
+      ...(player.exitCode !== undefined ? {exitCode: player.exitCode} : {}),
+      ...(player.stderrTail ? {stderr: player.stderrTail} : {}),
+    };
   }
 }
