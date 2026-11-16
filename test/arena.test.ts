@@ -315,7 +315,6 @@ describe('arena infrastructure', () => {
         'arena/config/sandbox.sb',
         'arena/config/sshd-arena.conf',
         'arena/config/sshd-tunnel.conf',
-        'arena/config/storage.conf',
         'arena/config/sudoers',
         'arena/bin/arena',
         'arena/bin/baseline',
