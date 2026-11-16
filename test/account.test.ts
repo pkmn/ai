@@ -629,6 +629,18 @@ describe('account routes', () => {
         ladders: ['RBY'],
       });
       expect(badType.status).toBe(400);
+
+      const badSha = await postSubmission('pmariglia', {
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/fp.tar.xz',
+        sha256: 'not-a-sha256',
+        ladders: ['RBY'],
+      });
+      expect(badSha.status).toBe(400);
+      expect(await badSha.json()).toEqual({
+        error: 'Invalid SHA-256 (must be a 64-character hex digest).',
+      });
     });
 
     test('rejects version strings longer than 12 characters with 400', async () => {

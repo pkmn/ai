@@ -1449,7 +1449,7 @@ export function register(app: polka.Polka, options: Options) {
     }
 
     if (!SHA256_RE.test(payload.sha256)) {
-      sendJson(res, 400, {error: 'Invalid sha256 (must be a 64-character hex digest).'});
+      sendJson(res, 400, {error: 'Invalid SHA-256 (must be a 64-character hex digest).'});
       return;
     }
     const sha256 = payload.sha256.toLowerCase();
