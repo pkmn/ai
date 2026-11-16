@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {isAllowedBundleHost} from '../server/account';
+import {isAllowedBundleHost, isAllowedOciRegistryHost} from '../server/account';
 
 import * as db from './db';
 import * as unpack from './unpack';
@@ -12,6 +12,13 @@ export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
 export const MAX_OCI_LAYERS = 32;
 const MAX_REDIRECT_HOPS = 5;
 const DOWNLOAD_TIMEOUT_MILLIS = 180_000;
+const TARGET_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const ALLOWED_OCI_LAYER_MEDIATYPE_RE = new RegExp(
+  '^(?:application/vnd\\.(?:oci\\.image\\.layer\\.v1\\.tar|' +
+  'docker\\.image\\.rootfs\\.diff\\.tar)(?:\\+(?:gzip|zstd)|\\.gzip|\\.zstd)?|' +
+  'application/x-tar)$'
+);
+
 // Hot-agent disk-usage watermarks sized for the 256 GB Mac mini internal SSD (cold `.tar.zst`
 // archives evict to the external 1 TB `/Volumes/Archive/cold-agents` SSD).
 export const HOT_AGENTS_HIGH_WATER_BYTES = 110 * 1000 * 1000 * 1000; // 110 GB internal SSD
@@ -35,6 +42,44 @@ export interface OciManifestInspection {
   indexSha256?: string;
 }
 
+// Prevents silent writes onto the 256 GB internal Mac mini SSD (and `/Volumes/Archive 1` mount
+// collisions) if the external `/Volumes/Archive` drive is unmounted.
+export function assertArchiveVolumeMounted(targetPath: string): void {
+  if (process.platform !== 'darwin') return;
+  const resolved = path.resolve(targetPath);
+  if (resolved !== '/Volumes/Archive' && !resolved.startsWith('/Volumes/Archive/')) return;
+  if (!fs.existsSync('/Volumes/Archive')) {
+    throw new Error('/Volumes/Archive is not mounted');
+  }
+  if (fs.statSync('/Volumes/Archive').dev === fs.statSync('/').dev) {
+    throw new Error('/Volumes/Archive resolves to the root SSD instead of an external volume');
+  }
+}
+
+export function validateOciRegistryRef(cleanRef: string, allowPrivateUrls = false): void {
+  if (!cleanRef || cleanRef.startsWith('http://') || cleanRef.startsWith('https://')) {
+    throw new Error(`Invalid OCI image reference: ${cleanRef}`);
+  }
+  const slash = cleanRef.indexOf('/');
+  if (slash <= 0) return;
+  const authority = cleanRef.slice(0, slash);
+  const isExplicitRegistry =
+    authority.includes('.') ||
+    authority.includes(':') ||
+    authority.toLowerCase() === 'localhost';
+  if (!isExplicitRegistry || allowPrivateUrls) return;
+
+  let parsedAuthority: URL;
+  try {
+    parsedAuthority = new URL(`https://${authority}`);
+  } catch {
+    throw new Error(`Invalid OCI registry authority: ${authority}`);
+  }
+  if (parsedAuthority.port !== '' || !isAllowedOciRegistryHost(parsedAuthority.hostname)) {
+    throw new Error(`Disallowed OCI registry host: ${parsedAuthority.hostname}`);
+  }
+}
+
 export function stripOciTagOrDigest(imageRef: string): string {
   const withoutDigest = imageRef.split('@')[0];
   const slashIdx = withoutDigest.lastIndexOf('/');
@@ -48,16 +93,28 @@ export function stripOciTagOrDigest(imageRef: string): string {
 export function scrubAuthSecret(message: string, rawToken?: string): string {
   if (!rawToken) return message;
   let out = message;
+  const candidates = new Set<string>();
   const trimmed = rawToken.trim();
-  if (trimmed.length >= 4) out = out.split(trimmed).join('[REDACTED]');
+  if (trimmed.length >= 4) candidates.add(trimmed);
   const bare = trimmed
     .replace(/^authorization:\s*/i, '')
     .replace(/^(?:bearer|basic)\s+/i, '')
     .trim();
-  if (bare.length >= 4) out = out.split(bare).join('[REDACTED]');
+  if (bare.length >= 4) {
+    candidates.add(bare);
+    candidates.add(Buffer.from(bare, 'utf8').toString('base64'));
+    if (!bare.includes(':')) {
+      candidates.add(Buffer.from(`oauth2:${bare}`, 'utf8').toString('base64'));
+    }
+  }
   if (bare.includes(':')) {
     const pass = bare.slice(bare.indexOf(':') + 1);
-    if (pass.length >= 4) out = out.split(pass).join('[REDACTED]');
+    if (pass.length >= 4) candidates.add(pass);
+  }
+  for (const secret of candidates) {
+    if (secret.length >= 4) {
+      out = out.split(secret).join('[REDACTED]');
+    }
   }
   return out;
 }
@@ -68,9 +125,13 @@ export function scrubError(err: unknown, rawToken?: string): Error {
     const execErr = err as Error & {stderr?: string | Buffer; stdout?: string | Buffer};
     if (typeof execErr.stderr === 'string') {
       execErr.stderr = scrubAuthSecret(execErr.stderr, rawToken);
+    } else if (Buffer.isBuffer(execErr.stderr)) {
+      execErr.stderr = Buffer.from(scrubAuthSecret(execErr.stderr.toString('utf8'), rawToken));
     }
     if (typeof execErr.stdout === 'string') {
       execErr.stdout = scrubAuthSecret(execErr.stdout, rawToken);
+    } else if (Buffer.isBuffer(execErr.stdout)) {
+      execErr.stdout = Buffer.from(scrubAuthSecret(execErr.stdout.toString('utf8'), rawToken));
     }
     return err;
   }
@@ -112,8 +173,8 @@ export function verifyOciManifestDigest(
   expectedSha256?: string
 ): OciManifestInspection {
   const manifest = JSON.parse(rawManifestJson) as {
-    config?: {digest?: string};
-    layers?: Array<{size?: number}>;
+    config?: {digest?: string; urls?: unknown};
+    layers?: Array<{size?: unknown; urls?: unknown; mediaType?: unknown}>;
     manifests?: unknown[];
   };
 
@@ -127,10 +188,32 @@ export function verifyOciManifestDigest(
       `Invalid OCI layer count: ${manifest.layers.length} (max ${MAX_OCI_LAYERS})`
     );
   }
+  if (manifest.config?.urls !== undefined) {
+    throw new Error('OCI config descriptor must not contain external URLs');
+  }
 
   let compressedBytes = 0;
   for (const layer of manifest.layers) {
-    compressedBytes += Number(layer.size ?? 0);
+    if (layer.urls !== undefined) {
+      throw new Error('OCI foreign layers with external URLs are disallowed');
+    }
+    if (
+      layer.mediaType !== undefined &&
+      (typeof layer.mediaType !== 'string' || !ALLOWED_OCI_LAYER_MEDIATYPE_RE.test(layer.mediaType))
+    ) {
+      const mediaDesc = typeof layer.mediaType === 'string'
+        ? layer.mediaType
+        : typeof layer.mediaType;
+      throw new Error(`Unsupported OCI layer mediaType: ${mediaDesc}`);
+    }
+    if (
+      typeof layer.size !== 'number' ||
+      !Number.isSafeInteger(layer.size) ||
+      layer.size < 0
+    ) {
+      throw new Error('Invalid OCI layer size');
+    }
+    compressedBytes += layer.size;
   }
   if (compressedBytes > MAX_IMAGE_BYTES) {
     throw new Error(
@@ -166,9 +249,11 @@ export function inspectRemoteOciSize(
   creds?: string,
   expectedSha256?: string,
   platform: {os: string; arch: string} = {os: 'linux', arch: 'arm64'},
-  stagingDir = STAGING_DIR
+  stagingDir = STAGING_DIR,
+  allowPrivateUrls = false
 ): OciManifestInspection {
   const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
+  validateOciRegistryRef(cleanRef, allowPrivateUrls);
   const repoRef = stripOciTagOrDigest(cleanRef);
   let authWorkDir: string | undefined;
   try {
@@ -229,24 +314,34 @@ export function inspectRemoteOciSize(
 export function pullAndVerifyOciImage(
   imageRef: string,
   agentTargetId: string,
-  creds?: string,
+  creds: string | undefined,
   stagingDir = STAGING_DIR,
-  expectedSha256?: string
+  expectedSha256: string,
+  allowPrivateUrls = false
 ): number {
+  if (!TARGET_ID_RE.test(agentTargetId) || agentTargetId.includes('..')) {
+    throw new Error(`Invalid OCI agent target ID: ${agentTargetId}`);
+  }
+  if (!expectedSha256 || !/^(?:sha256:)?[0-9a-fA-F]{64}$/.test(expectedSha256.trim())) {
+    throw new Error('Expected 64-hex SHA-256 manifest digest for OCI pull');
+  }
   const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
+  validateOciRegistryRef(cleanRef, allowPrivateUrls);
   const repoRef = stripOciTagOrDigest(cleanRef);
   const inspected = inspectRemoteOciSize(
     cleanRef,
     creds,
     expectedSha256,
     {os: 'linux', arch: 'arm64'},
-    stagingDir
+    stagingDir,
+    allowPrivateUrls
   );
 
   fs.mkdirSync(stagingDir, {recursive: true});
   const stagingTar = path.join(stagingDir, `oci-${agentTargetId}.tar`);
   fs.rmSync(stagingTar, {force: true});
   let authWorkDir: string | undefined;
+  let imageLoaded = false;
 
   try {
     const authArgs: string[] = [];
@@ -266,10 +361,11 @@ export function pullAndVerifyOciImage(
         `docker://${repoRef}@sha256:${inspected.manifestSha256}`,
         `docker-archive:${stagingTar}:${agentTargetId}:latest`,
       ],
-      {timeout: 180_000}
+      {env: {...process.env, TMPDIR: stagingDir}, timeout: 180_000}
     );
 
     execFileSync('podman', ['load', '-i', stagingTar], {timeout: 120_000});
+    imageLoaded = true;
 
     const uncompressedStr = execFileSync(
       'podman',
@@ -279,7 +375,6 @@ export function pullAndVerifyOciImage(
     const uncompressedBytes = Number(uncompressedStr);
 
     if (!Number.isFinite(uncompressedBytes) || uncompressedBytes > MAX_IMAGE_BYTES) {
-      execFileSync('podman', ['rmi', '-f', agentTargetId], {timeout: 30_000});
       throw new Error(
         `Uncompressed OCI image size (${uncompressedBytes} B) ` +
         `exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
@@ -288,6 +383,11 @@ export function pullAndVerifyOciImage(
 
     return uncompressedBytes;
   } catch (err) {
+    if (imageLoaded) {
+      try {
+        execFileSync('podman', ['rmi', '-f', agentTargetId], {timeout: 30_000});
+      } catch {}
+    }
     throw scrubError(err, creds);
   } finally {
     if (authWorkDir) fs.rmSync(authWorkDir, {recursive: true, force: true});
@@ -306,6 +406,10 @@ export async function downloadAndUnpackBundle(opts: {
   allowPrivateUrls?: boolean;
   timeoutMillis?: number;
 }): Promise<number> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(opts.agentTargetId) ||
+      opts.agentTargetId.includes('..')) {
+    throw new Error(`Invalid bundle agent target ID: ${opts.agentTargetId}`);
+  }
   const stagingDir = opts.stagingDir ?? STAGING_DIR;
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
 
@@ -322,11 +426,13 @@ export async function downloadAndUnpackBundle(opts: {
   const destDir = path.join(agentsDir, opts.agentTargetId);
 
   fs.rmSync(archivePath, {force: true});
-  fs.rmSync(destDir, {recursive: true, force: true});
 
   try {
     const hash = crypto.createHash('sha256');
     if (opts.url.startsWith('file://')) {
+      if (!opts.allowPrivateUrls) {
+        throw new Error('Bundle download target must use HTTPS (file:// URLs are disallowed)');
+      }
       const localPath = opts.url.slice('file://'.length);
       const srcFd = fs.openSync(localPath, 'r');
       const dstFd = fs.openSync(archivePath, 'w', 0o600);
@@ -468,33 +574,50 @@ export function archiveColdAgent(
 ): string {
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
+  assertArchiveVolumeMounted(coldDir);
   fs.mkdirSync(coldDir, {recursive: true});
   const coldArchive = path.join(coldDir, `${agent.target}.tar.zst`);
-  if (fs.existsSync(coldArchive)) return coldArchive;
+  try {
+    if (fs.existsSync(coldArchive) && fs.statSync(coldArchive).size > 0) {
+      return coldArchive;
+    }
+  } catch {}
 
-  if (agent.mode === 'native') {
-    const hotDir = path.join(agentsDir, agent.target);
-    if (fs.existsSync(hotDir)) {
-      execFileSync('tar', ['--zstd', '-cf', coldArchive, '-C', hotDir, '.'], {
+  if (agent.mode === 'container' && opts.archiveContainerFn) {
+    opts.archiveContainerFn(agent.target, coldArchive);
+    return coldArchive;
+  }
+
+  const tmpArchive = `${coldArchive}.tmp-${process.pid}`;
+  fs.rmSync(tmpArchive, {force: true});
+  try {
+    if (agent.mode === 'native') {
+      const hotDir = path.join(agentsDir, agent.target);
+      if (!fs.existsSync(hotDir)) {
+        throw new Error(`Hot native bundle directory missing for ${agent.target}`);
+      }
+      execFileSync('tar', ['--zstd', '-cf', tmpArchive, '-C', hotDir, '.'], {
         timeout: 180_000,
       });
+    } else {
+      execFileSync(
+        'bash',
+        [
+          '-euo',
+          'pipefail',
+          '-c',
+          'podman save "$1" | zstd -3 -o "$2"',
+          '_',
+          agent.target,
+          tmpArchive,
+        ],
+        {timeout: 180_000}
+      );
     }
-  } else if (opts.archiveContainerFn) {
-    opts.archiveContainerFn(agent.target, coldArchive);
-  } else {
-    execFileSync(
-      'bash',
-      [
-        '-euo',
-        'pipefail',
-        '-c',
-        'podman save "$1" | zstd -3 -o "$2"',
-        '_',
-        agent.target,
-        coldArchive,
-      ],
-      {timeout: 180_000}
-    );
+    fs.renameSync(tmpArchive, coldArchive);
+  } catch (err) {
+    fs.rmSync(tmpArchive, {force: true});
+    throw err;
   }
   return coldArchive;
 }
@@ -523,7 +646,7 @@ export function evictColdAgentsIfNeeded(
   const casDir = opts.casDir ?? CAS_DIR;
   const pinned = opts.pinnedVersionIds ?? new Set<number>();
 
-  const hotAgents = stateDb.listLocalAgents().filter(a => a.residency === 'hot');
+  const hotAgents = stateDb.listLocalAgents('hot');
   let usedBytes = hotAgents.reduce((sum, a) => sum + a.unpackedBytes, 0);
   let containerUsedBytes = hotAgents
     .filter(a => a.mode === 'container')
@@ -543,6 +666,7 @@ export function evictColdAgentsIfNeeded(
     return [];
   }
 
+  assertArchiveVolumeMounted(coldDir);
   fs.mkdirSync(coldDir, {recursive: true});
 
   let evictedNative = false;
@@ -557,6 +681,9 @@ export function evictColdAgentsIfNeeded(
       const hotDir = path.join(agentsDir, v.target);
       if (fs.existsSync(hotDir)) {
         fs.rmSync(hotDir, {recursive: true, force: true});
+      }
+      if (fs.existsSync(casDir)) {
+        fs.rmSync(unpack.casRefFileForBundle(casDir, hotDir), {force: true});
       }
     } else if (!opts.evictContainerFn) {
       execFileSync('podman', ['rmi', v.target], {timeout: 30_000});
@@ -605,8 +732,6 @@ export function evictColdAgentsIfNeeded(
   }
 
   // 3. Reclaim CAS blobs in `<casDir>/<shard>/<sha256>` no longer referenced by any hot agent.
-  //    APFS `/bin/cp -c` CoW clones have independent inodes (`nlink === 1`) sharing physical
-  //    extents, so we match remaining hot files by exact byte size before hashing.
   if (evictedNative && fs.existsSync(casDir)) {
     pruneUnreferencedCasBlobs(casDir, agentsDir);
   }
@@ -630,10 +755,11 @@ function sha256FileSync(filePath: string): string {
   return hash.digest('hex');
 }
 
-function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
+export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
   const casBlobs: Array<{blobPath: string; shardPath?: string; digest: string; size: number}> = [];
   try {
     for (const entry of fs.readdirSync(casDir, {withFileTypes: true})) {
+      if (entry.name === 'refs') continue;
       const entryPath = path.join(casDir, entry.name);
       if (entry.isDirectory()) {
         for (const sub of fs.readdirSync(entryPath, {withFileTypes: true})) {
@@ -665,28 +791,72 @@ function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
 
   const casSizes = new Set(casBlobs.map(b => b.size));
   const activeDigests = new Set<string>();
-  const walkHot = (dir: string) => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, {withFileTypes: true});
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (e.isSymbolicLink()) continue;
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        walkHot(full);
-      } else if (e.isFile()) {
+  const liveAgentNames = new Set<string>();
+
+  if (fs.existsSync(agentsDir)) {
+    for (const top of fs.readdirSync(agentsDir, {withFileTypes: true})) {
+      if (top.isSymbolicLink() || !top.isDirectory()) continue;
+      liveAgentNames.add(top.name);
+      const bundleDir = path.join(agentsDir, top.name);
+      const refFile = unpack.casRefFileForBundle(casDir, bundleDir);
+      if (fs.existsSync(refFile)) {
         try {
-          if (casSizes.has(fs.statSync(full).size)) {
-            activeDigests.add(sha256FileSync(full));
+          for (const line of fs.readFileSync(refFile, 'utf8').split(/\r?\n/)) {
+            const d = line.trim();
+            if (d) activeDigests.add(d);
           }
+          continue;
+        } catch {}
+      }
+
+      // Fallback for legacy/test agent directories unpacked without a `.txt` CAS manifest: scan
+      // size-matching files once and persist the manifest for O(1) future evictions.
+      const bundleDigests = new Set<string>();
+      const walkBundle = (dir: string) => {
+        let entries: fs.Dirent[];
+        try {
+          entries = fs.readdirSync(dir, {withFileTypes: true});
+        } catch {
+          return;
+        }
+        for (const e of entries) {
+          if (e.isSymbolicLink()) continue;
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) {
+            walkBundle(full);
+          } else if (e.isFile()) {
+            try {
+              if (casSizes.has(fs.statSync(full).size)) {
+                const digest = sha256FileSync(full);
+                bundleDigests.add(digest);
+                activeDigests.add(digest);
+              }
+            } catch {}
+          }
+        }
+      };
+      walkBundle(bundleDir);
+      if (bundleDigests.size > 0) {
+        try {
+          fs.mkdirSync(path.dirname(refFile), {recursive: true, mode: 0o700});
+          fs.writeFileSync(refFile, `${[...bundleDigests].sort().join('\n')}\n`, {mode: 0o600});
         } catch {}
       }
     }
-  };
-  if (fs.existsSync(agentsDir)) walkHot(agentsDir);
+  }
+
+  const refsDir = path.join(path.resolve(casDir), 'refs');
+  if (fs.existsSync(refsDir)) {
+    try {
+      for (const ref of fs.readdirSync(refsDir)) {
+        if (!ref.endsWith('.txt')) continue;
+        const name = ref.slice(0, -4);
+        if (!liveAgentNames.has(name)) {
+          fs.rmSync(path.join(refsDir, ref), {force: true});
+        }
+      }
+    } catch {}
+  }
 
   const touchedShards = new Set<string>();
   for (const blob of casBlobs) {
@@ -710,6 +880,7 @@ export function ensureAgentResident(
   opts: {
     agentsDir?: string;
     coldDir?: string;
+    casDir?: string;
     now?: number;
   } = {}
 ): db.LocalAgentRow | undefined {
@@ -717,26 +888,30 @@ export function ensureAgentResident(
   if (!row) return undefined;
 
   const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   if (row.residency === 'hot') {
+    if (row.mode === 'native') {
+      const hotRun = path.join(agentsDir, row.target, 'run');
+      if (!fs.existsSync(hotRun)) {
+        throw new Error(`Hot native bundle missing executable ./run for ${row.target}`);
+      }
+    }
     stateDb.setAgentResidency(versionId, 'hot', now);
     return stateDb.getLocalAgent(versionId);
   }
 
-  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
+  assertArchiveVolumeMounted(coldDir);
   const coldArchive = path.join(coldDir, `${row.target}.tar.zst`);
+  if (!fs.existsSync(coldArchive) || fs.statSync(coldArchive).size === 0) {
+    throw new Error(`Cold archive missing or empty for ${row.target}: ${coldArchive}`);
+  }
 
   if (row.mode === 'native') {
     const destDir = path.join(agentsDir, row.target);
-    fs.mkdirSync(destDir, {recursive: true});
-    if (fs.existsSync(coldArchive)) {
-      execFileSync(
-        'tar',
-        ['--zstd', '--no-same-owner', '--no-same-permissions', '-xf', coldArchive, '-C', destDir],
-        {timeout: 180_000}
-      );
-    }
-  } else if (fs.existsSync(coldArchive)) {
+    fs.mkdirSync(agentsDir, {recursive: true});
+    unpack.unpackBundle(coldArchive, destDir, opts.casDir ?? CAS_DIR);
+  } else {
     execFileSync(
       'bash',
       ['-euo', 'pipefail', '-c', 'zstd -dc "$1" | podman load', '_', coldArchive],
@@ -758,10 +933,8 @@ export function computeResidencyMultipliers(
 ): Float64Array {
   const n = versionIds.length;
   const out = new Float64Array(n * n);
-  const hotFlags = versionIds.map(vid => {
-    const row = stateDb.getLocalAgent(vid);
-    return !row || row.residency === 'hot';
-  });
+  const hotSet = new Set(stateDb.listLocalAgents('hot').map(a => a.versionId));
+  const hotFlags = versionIds.map(vid => hotSet.has(vid));
 
   for (let i = 0; i < n; i++) {
     out[i * n + i] = 1.0;
@@ -778,9 +951,19 @@ export function computeResidencyMultipliers(
   return out;
 }
 
+function sanitizeOciToken(raw: string, fallback: string): string {
+  const cleaned = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/[._-]{2,}/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '');
+  return cleaned || fallback;
+}
+
 export function formatAgentTargetId(slug: string, version: string, versionId: number): string {
-  const safeVer = version.replace(/[^a-zA-Z0-9._-]/g, '-');
-  return `${slug}-${safeVer}-v${versionId}`;
+  const safeSlug = sanitizeOciToken(slug, 'agent');
+  const safeVer = sanitizeOciToken(version, '0');
+  return `${safeSlug}-${safeVer}-v${versionId}`;
 }
 
 export function toExecutionMode(pkg: 'bundle' | 'oci'): db.ExecutionMode {

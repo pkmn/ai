@@ -456,6 +456,7 @@ describe('arena infrastructure', () => {
         stagingDir,
         agentsDir,
         casDir,
+        allowPrivateUrls: true,
       });
       expect(bytes1).toBeGreaterThan(70_000);
       expect(fs.existsSync(path.join(agentsDir, 'agent-v1', 'run'))).toBe(true);
@@ -776,8 +777,53 @@ describe('arena infrastructure', () => {
           agentTargetId: 'agent-bad-sha',
           stagingDir: path.join(tmpDir, 'staging-sha'),
           agentsDir: path.join(tmpDir, 'agents-sha'),
+          allowPrivateUrls: true,
         })
       ).rejects.toThrow(/SHA-256 mismatch/);
+    });
+
+    test('downloadAndUnpackBundle rejects file:// URLs when allowPrivateUrls is omitted', async () => {
+      await expect(
+        packages.downloadAndUnpackBundle({
+          url: `file://${validArchivePath}`,
+          expectedSha256: validArchiveSha,
+          agentTargetId: 'agent-file-blocked',
+          stagingDir: path.join(tmpDir, 'staging-file-blocked'),
+          agentsDir: path.join(tmpDir, 'agents-file-blocked'),
+        })
+      ).rejects.toThrow(/file:\/\/ URLs are disallowed/);
+    });
+
+    test('verifyOciManifestDigest rejects foreign-layer URLs or invalid layer sizes', () => {
+      const foreignManifest = JSON.stringify({
+        config: {digest: `sha256:${'a'.repeat(64)}`},
+        layers: [{size: 1024, urls: ['https://169.254.169.254/latest/meta-data/']}],
+      });
+      expect(() => packages.verifyOciManifestDigest(foreignManifest))
+        .toThrow(/foreign layers/i);
+
+      const missingSizeManifest = JSON.stringify({
+        config: {digest: `sha256:${'a'.repeat(64)}`},
+        layers: [{}],
+      });
+      expect(() => packages.verifyOciManifestDigest(missingSizeManifest))
+        .toThrow(/Invalid OCI layer size/);
+    });
+
+    test('formatAgentTargetId normalizes uppercase or repeated separators for OCI refs', () => {
+      expect(packages.formatAgentTargetId('0_ERROR', '1.0.0-RC1..beta', 42))
+        .toBe('0_error-1.0.0-rc1-beta-v42');
+    });
+
+    test('scrubError redacts base64 credentials from Buffer stderr properties', () => {
+      const token = 'Bearer ghp_supersecret999';
+      const b64 = Buffer.from('oauth2:ghp_supersecret999', 'utf8').toString('base64');
+      const err = Object.assign(new Error(`Auth failed: ${b64}`), {
+        stderr: Buffer.from(`header=${b64} raw=ghp_supersecret999`, 'utf8'),
+      });
+      const scrubbed = packages.scrubError(err, token) as Error & {stderr: Buffer};
+      expect(scrubbed.message).not.toContain(b64);
+      expect(scrubbed.stderr.toString('utf8')).toBe('header=[REDACTED] raw=[REDACTED]');
     });
 
     test('verifyOciManifestDigest pins full manifest digest rather than config digest', () => {
@@ -1182,6 +1228,39 @@ describe('arena infrastructure', () => {
         expect(stateDb.getLocalAgent(2)?.residency).toBe('hot');
         expect(fs.existsSync(retiredDir)).toBe(false);
         expect(fs.existsSync(path.join(coldDir, 'retired-v1.tar.zst'))).toBe(true);
+
+        const restored = packages.ensureAgentResident(stateDb, 1, {
+          agentsDir,
+          coldDir,
+          casDir: path.join(tmpDir, 'evict-retired-cas'),
+          now: 9000,
+        });
+        expect(restored?.residency).toBe('hot');
+        expect(fs.existsSync(path.join(retiredDir, 'run'))).toBe(true);
+      } finally {
+        stateDb.close();
+      }
+    });
+
+    test('ensureAgentResident throws when cold archive is missing', () => {
+      const stateDb = new arenaDb.Database(':memory:');
+      try {
+        const agentsDir = path.join(tmpDir, 'missing-cold-agents');
+        const coldDir = path.join(tmpDir, 'missing-cold-dir');
+        stateDb.upsertLocalAgent({
+          versionId: 77,
+          agentId: 7,
+          slug: 'ghost',
+          version: '1.0.0',
+          mode: 'native',
+          target: 'ghost-1.0.0-v77',
+          residency: 'cold',
+          unpackedBytes: 1024,
+        });
+        expect(() => packages.ensureAgentResident(stateDb, 77, {agentsDir, coldDir}))
+          .toThrow(/Cold archive missing/);
+        expect(stateDb.getLocalAgent(77)?.residency).toBe('cold');
+        expect(fs.existsSync(path.join(agentsDir, 'ghost-1.0.0-v77'))).toBe(false);
       } finally {
         stateDb.close();
       }
