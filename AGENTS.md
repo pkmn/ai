@@ -17,8 +17,9 @@ Repository-specific style, naming, and architectural rules for AI coding agents 
   - Never disable `@typescript-eslint/no-shadow`, `@typescript-eslint/no-floating-promises`, or `@typescript-eslint/no-misused-promises` with `eslint-disable`; fix the promise handling or use namespace imports / non-shadowing names.
 - **Shared utilities:** Import `ROOT`, `root(...paths)`, `slugify`, `toID`, `escapeHtml`, `raw`, `h`, `Fragment`, `TablePager`, and name/version validators from `static/util.tsx` rather than re-implementing them per file.
 - **Structured parameters & domain substructs (never flat parameter bags):** Keep positional parameter lists to $\le 7\text{–}8$ arguments. More importantly, **switching a long positional list to a single giant flat `{...}` object is still bad** — any options object, payload, or domain interface with many fields should itself be decomposed into logical substructs rather than left as a flat 15–30 property bag:
-  - Group symmetric per-player fields into `p1` / `p2` substructs (`MirrorPlayer`, `MountedEntrant`, `GamePlayerStats`) and multi-game series into a `games` array rather than flattening `p1VersionId`/`p2VersionId` or `game1*`/`game2*`/`game3*` top-level fields.
+  - Group symmetric per-player fields into `p1` / `p2` substructs (`MirrorPlayer`, `PlayerGameResult`, `MountedEntrant`, `GamePlayerStats`) and multi-game series into a `games` array rather than flattening `p1VersionId`/`p2VersionId` or `game1*`/`game2*`/`game3*` top-level fields.
   - Group cohesive domain state and repeated context (`TopKClock`, `RankBoundsPosterior`, `AgentLinkContext`, `GuildCache`) into reusable substructs composed inside larger interfaces and options objects.
+  - **Database table exemption:** Structs that map directly to/from a SQLite database table or query view (`*Row`, `Raw*Row`, `*View`, and direct row write payloads) are exempt — do not artificially nest 1-to-1 SQL column mappings into substructs when the underlying table is intentionally flat.
 
 ## Terminology & Naming
 
