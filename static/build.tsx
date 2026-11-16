@@ -3,6 +3,7 @@
 
 require('source-map-support').install();
 
+import * as crypto from 'crypto';
 import * as nodeFs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -18,6 +19,31 @@ import * as research from './research';
 import {Html, raw, root} from './util';
 
 const fs = site.fs;
+
+// `site.fs` stages temp files in `${process.cwd()}/build/.tmp-*` before `fs.renameSync`ing into
+// `public/`. Under systemd `ReadWritePaths=/var/lib/pkmn -/home/pkmn/ai/public`, those paths live
+// on separate Linux VFS bind mounts (`EXDEV` on `rename`). Staging adjacent to the target file
+// keeps every atomic rename on the destination mount.
+(fs as {write: typeof fs.write; copy: typeof fs.copy}).write = (file, data) => {
+  nodeFs.mkdirSync(path.dirname(file), {recursive: true});
+  const tmp = `${file}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
+  try {
+    nodeFs.writeFileSync(tmp, data, {flag: 'wx'});
+    nodeFs.renameSync(tmp, file);
+  } finally {
+    nodeFs.rmSync(tmp, {force: true});
+  }
+};
+(fs as {write: typeof fs.write; copy: typeof fs.copy}).copy = (src, dst) => {
+  nodeFs.mkdirSync(path.dirname(dst), {recursive: true});
+  const tmp = `${dst}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
+  try {
+    nodeFs.copyFileSync(src, tmp, nodeFs.constants.COPYFILE_EXCL);
+    nodeFs.renameSync(tmp, dst);
+  } finally {
+    nodeFs.rmSync(tmp, {force: true});
+  }
+};
 
 const PUBLIC = root('public');
 const STATIC = root('static');
