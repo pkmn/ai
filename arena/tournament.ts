@@ -2,7 +2,6 @@ import {ChildProcessWithoutNullStreams, execFileSync, spawn} from 'child_process
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as readline from 'readline';
 
 import * as sim from '@pkmn/sim';
 
@@ -125,6 +124,7 @@ export interface GameResult {
   preemptedSlot?: PlayerSlot;
   turns: number;
   endReason: string;
+  launchError?: string;
   omniscientLog: string;
   p1: PlayerResult;
   p2: PlayerResult;
@@ -144,6 +144,7 @@ interface RemoteTournamentPlayer {
   turnMillisWaiter: (() => void) | undefined;
   spotPreempted: boolean;
   sshDisconnected: boolean;
+  launchError: string | undefined;
   bankMillis: number;
   totalTurnMillis: number;
   decisionsCount: number;
@@ -389,7 +390,7 @@ export class ConcurrentGame {
   }
 
   private spawnRemotePlayer(slot: PlayerSlot, spec: AgentSpec): RemoteTournamentPlayer {
-    if (!/^[A-Za-z0-9._-]+$/.test(spec.agentId)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(spec.agentId) || spec.agentId.includes('..')) {
       throw new Error(`Invalid tournament agentId: ${spec.agentId}`);
     }
     const proc = spec.localCommand
@@ -408,7 +409,9 @@ export class ConcurrentGame {
         {stdio: ['pipe', 'pipe', 'pipe']}
       );
 
-    const usesRelay = !spec.localCommand || path.basename(spec.localCommand) === 'tourney-relay';
+    const localBase = spec.localCommand ? path.basename(spec.localCommand) : '';
+    const usesRelay =
+      !spec.localCommand || localBase === 'tourney-relay' || localBase === 'tourney-agent';
     const player: RemoteTournamentPlayer = {
       slot,
       spec,
@@ -421,6 +424,7 @@ export class ConcurrentGame {
       turnMillisWaiter: undefined,
       spotPreempted: false,
       sshDisconnected: false,
+      launchError: undefined,
       bankMillis: this.startingBankMillis,
       totalTurnMillis: 0,
       decisionsCount: 0,
@@ -477,8 +481,7 @@ export class ConcurrentGame {
       }
     });
 
-    const errRl = readline.createInterface({input: proc.stderr, crlfDelay: Infinity});
-    errRl.on('line', errLine => {
+    const handleStderrLine = (errLine: string) => {
       if (errLine.startsWith('ARENA_TURN_MS=')) {
         const rawVal = errLine.slice('ARENA_TURN_MS='.length).trim();
         const [millisStr, seqStr] = rawVal.split('\t');
@@ -504,11 +507,44 @@ export class ConcurrentGame {
         }
       } else if (errLine.includes('ARENA_SPOT_PREEMPTED')) {
         player.spotPreempted = true;
+      } else if (errLine.startsWith('TOURNEY_ERROR:')) {
+        player.launchError = errLine.trim();
+      }
+    };
+
+    let stderrBuf = '';
+    let stderrOverflow = false;
+    proc.stderr.setEncoding('utf8');
+    proc.stderr.on('data', (chunk: string) => {
+      let data = chunk;
+      if (stderrOverflow) {
+        const nl = data.indexOf('\n');
+        if (nl < 0) return;
+        data = data.slice(nl + 1);
+        stderrOverflow = false;
+      }
+      stderrBuf += data;
+      let nl = stderrBuf.indexOf('\n');
+      while (nl >= 0) {
+        const errLine = stderrBuf.slice(0, nl).replace(/\r$/, '');
+        stderrBuf = stderrBuf.slice(nl + 1);
+        handleStderrLine(errLine);
+        nl = stderrBuf.indexOf('\n');
+      }
+      if (stderrBuf.length > MAX_STDOUT_LINE_CHARS) {
+        stderrBuf = '';
+        stderrOverflow = true;
       }
     });
 
     proc.on('exit', code => onDisconnect(code));
-    proc.on('close', code => onDisconnect(code));
+    proc.on('close', code => {
+      if (stderrBuf.length > 0 && !stderrOverflow) {
+        handleStderrLine(stderrBuf.replace(/\r$/, ''));
+        stderrBuf = '';
+      }
+      onDisconnect(code);
+    });
     proc.on('error', () => onDisconnect(255));
     proc.stdin.on('error', () => undefined);
 
@@ -520,7 +556,7 @@ export class ConcurrentGame {
     line: string | undefined,
     wallMillis: number
   ): Promise<number> {
-    if (!line || line.length === 0 || player.reqSeq === 0) return wallMillis;
+    if (line === undefined || player.reqSeq === 0) return wallMillis;
     if (player.localTurnMillisQueue.length > 0) {
       return player.localTurnMillisQueue.shift()!;
     }
@@ -718,6 +754,7 @@ export class ConcurrentGame {
           this.abortForSpotPreemption(player.slot);
           return;
         }
+        if (this.ended) return;
         if (timedOut || remainingBudgetMillis < 0) {
           player.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
@@ -900,16 +937,33 @@ export class ConcurrentGame {
       try {
         p.proc.stdin.end();
       } catch {}
-      try {
-        p.proc.kill('SIGTERM');
-      } catch {}
     }
-    if ((this.p1.usesRelay && !this.p1.exited) || (this.p2.usesRelay && !this.p2.exited)) {
+    // Let `tourney-relay` observe stdin EOF (100ms deadline), reap its child, and flush
+    // `ARENA_PEAK_RAM=<mib>` on stderr before sending SIGTERM to the local transport/process.
+    await Promise.all([this.p1, this.p2].map(p => (
+      p.exited
+        ? Promise.resolve()
+        : new Promise<void>(resolve => {
+          const t = setTimeout(resolve, p.usesRelay ? 250 : 50);
+          p.proc.once('close', () => {
+            clearTimeout(t);
+            resolve();
+          });
+        })
+    )));
+    for (const p of [this.p1, this.p2]) {
+      if (!p.exited) {
+        try {
+          p.proc.kill('SIGTERM');
+        } catch {}
+      }
+    }
+    if (!this.p1.exited || !this.p2.exited) {
       await Promise.all([this.p1, this.p2].map(p => (
         p.exited
           ? Promise.resolve()
           : new Promise<void>(resolve => {
-            const t = setTimeout(resolve, 150);
+            const t = setTimeout(resolve, 100);
             p.proc.once('close', () => {
               clearTimeout(t);
               resolve();
@@ -1008,6 +1062,7 @@ export class ConcurrentGame {
           outcome,
           turns: 0,
           endReason,
+          launchError: this.p1.launchError ?? this.p2.launchError,
           omniscientLog: '',
           p1: {
             teamPacked: p1Team,
@@ -1051,11 +1106,14 @@ export class ConcurrentGame {
 
         if (g.winner === 'preempted' || !g.outcome) {
           await this.closePlayers();
+          p1PeakRam = Math.max(p1PeakRam, this.p1.peakRam);
+          p2PeakRam = Math.max(p2PeakRam, this.p2.peakRam);
           return {
             winner: 'preempted',
             preemptedSlot: g.preemptedSlot,
             turns: totalTurns,
             endReason: 'spot-preemption',
+            launchError: this.p1.launchError ?? this.p2.launchError,
             omniscientLog: g.omniscientLog,
             p1: {
               teamPacked: p1Team,
@@ -1105,6 +1163,12 @@ export class ConcurrentGame {
       }
 
       await this.closePlayers();
+      p1PeakRam = Math.max(p1PeakRam, this.p1.peakRam);
+      p2PeakRam = Math.max(p2PeakRam, this.p2.peakRam);
+      for (const gameEntry of games) {
+        if (gameEntry.p1.peakRam <= 1 && p1PeakRam > 1) gameEntry.p1.peakRam = p1PeakRam;
+        if (gameEntry.p2.peakRam <= 1 && p2PeakRam > 1) gameEntry.p2.peakRam = p2PeakRam;
+      }
 
       const {outcome: matchOutcome} = computeSeriesOutcome(games.map(x => x.outcome));
       const matchWinner: PlayerSlot | 'tie' =
@@ -1130,6 +1194,7 @@ export class ConcurrentGame {
         outcome: matchOutcome,
         turns: totalTurns,
         endReason: matchEndReason,
+        launchError: this.p1.launchError ?? this.p2.launchError,
         omniscientLog: games[0].omniscientLog,
         p1: {
           teamPacked: p1Team,
@@ -1312,6 +1377,146 @@ function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
+const RESERVED_TOURNEY_ENV_PREFIXES = [
+  'HOME=',
+  'TMPDIR=',
+  'XDG_CACHE_HOME=',
+  'PKMN_STATS_DIR=',
+  'ARENA_PONDER=',
+];
+
+function lstatIfExists(targetPath: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(targetPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
+function ensureSafeRootfsDir(rootfsDir: string, relDir: string) {
+  let cur = rootfsDir;
+  for (const part of relDir.split('/')) {
+    if (!part) continue;
+    cur = path.join(cur, part);
+    const st = lstatIfExists(cur);
+    if (!st) {
+      fs.mkdirSync(cur, {mode: 0o755});
+    } else if (st.isSymbolicLink() || !st.isDirectory()) {
+      throw new Error(`OCI rootfs contains unsafe symlink or non-directory at /${relDir}`);
+    }
+  }
+}
+
+function ensureSafeEmptyRootfsFile(rootfsDir: string, relFile: string) {
+  const dirRel = path.posix.dirname(relFile);
+  if (dirRel && dirRel !== '.') {
+    ensureSafeRootfsDir(rootfsDir, dirRel);
+  }
+  const fullPath = path.join(rootfsDir, relFile);
+  const st = lstatIfExists(fullPath);
+  if (!st) {
+    const fd = fs.openSync(
+      fullPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+      0o644
+    );
+    fs.closeSync(fd);
+    return;
+  }
+  if (st.isSymbolicLink() || !st.isFile()) {
+    throw new Error(`OCI rootfs contains unsafe symlink or non-regular file at /${relFile}`);
+  }
+}
+
+export function finalizeUnpackedOciRootfs(bundleDir: string): number {
+  const rootfsDir = path.join(bundleDir, 'rootfs');
+  const rootStat = lstatIfExists(rootfsDir);
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error('Unpacked OCI bundle rootfs is missing or not a directory');
+  }
+
+  const runPath = path.join(rootfsDir, 'run');
+  const runStat = lstatIfExists(runPath);
+  let hasRegularRun = false;
+  if (runStat && !runStat.isSymbolicLink() && runStat.isFile()) {
+    fs.chmodSync(runPath, 0o755);
+    hasRegularRun = true;
+  }
+
+  const arenaRunPath = path.join(rootfsDir, '.arena-run');
+  if (!hasRegularRun) {
+    if (lstatIfExists(arenaRunPath)) {
+      throw new Error('OCI rootfs contains colliding /.arena-run entry');
+    }
+    const cfgPath = path.join(bundleDir, 'config.json');
+    const cfgStat = lstatIfExists(cfgPath);
+    if (cfgStat && !cfgStat.isSymbolicLink() && cfgStat.isFile()) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) as {
+        process?: {cwd?: string; env?: string[]; args?: string[]};
+      };
+      const procArgs = cfg.process?.args ?? [];
+      if (procArgs.length > 0) {
+        const lines = ['#!/bin/sh'];
+        for (const envEntry of cfg.process?.env ?? []) {
+          if (RESERVED_TOURNEY_ENV_PREFIXES.some(prefix => envEntry.startsWith(prefix))) {
+            continue;
+          }
+          lines.push(`export ${shellQuote(envEntry)}`);
+        }
+        lines.push(`cd ${shellQuote(cfg.process?.cwd || '/')}`);
+        lines.push(`exec ${procArgs.map(shellQuote).join(' ')} "$@"`);
+        const fd = fs.openSync(
+          arenaRunPath,
+          fs.constants.O_WRONLY |
+            fs.constants.O_CREAT |
+            fs.constants.O_EXCL |
+            fs.constants.O_NOFOLLOW,
+          0o755
+        );
+        try {
+          fs.writeFileSync(fd, `${lines.join('\n')}\n`, 'utf8');
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
+    }
+  }
+
+  const arenaRunStat = lstatIfExists(arenaRunPath);
+  const hasLauncher = Boolean(
+    arenaRunStat && !arenaRunStat.isSymbolicLink() && arenaRunStat.isFile()
+  );
+  if (!hasRegularRun && !hasLauncher) {
+    throw new Error('OCI rootfs is missing executable /run and has no OCI Entrypoint/Cmd');
+  }
+
+  const duKb = Number(
+    execFileSync('du', ['-sk', rootfsDir], {encoding: 'utf8', timeout: 30_000})
+      .trim()
+      .split(/\s+/)[0]
+  );
+  const unpackedBytes = Number.isFinite(duKb) ? duKb * 1024 : 0;
+  if (unpackedBytes <= 0 || unpackedBytes > packages.MAX_IMAGE_BYTES) {
+    throw new Error(
+      `Unpacked tournament rootfs size (${unpackedBytes} B) exceeds 500 MB cap`
+    );
+  }
+
+  for (const subDir of ['tmp', 'scratch', 'proc', 'dev', 'usr/lib/x86_64-linux-gnu']) {
+    ensureSafeRootfsDir(rootfsDir, subDir);
+  }
+  for (const nvLib of [
+    'libcuda.so.1',
+    'libnvidia-ml.so.1',
+    'libnvidia-ptxjitcompiler.so.1',
+  ]) {
+    ensureSafeEmptyRootfsFile(rootfsDir, `usr/lib/x86_64-linux-gnu/${nvLib}`);
+  }
+
+  return unpackedBytes;
+}
+
 // Unpacks and verifies a `linux/amd64` tournament OCI image into `/opt/arena/agents/<targetId>` on
 // GCP using `skopeo` + `umoci` (without requiring a rootful container daemon).
 export function unpackOciRootfs(opts: {
@@ -1322,7 +1527,7 @@ export function unpackOciRootfs(opts: {
   agentsDir?: string;
   stagingDir?: string;
 }): number {
-  if (!/^[A-Za-z0-9._-]+$/.test(opts.targetId)) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(opts.targetId) || opts.targetId.includes('..')) {
     throw new Error(`Invalid tournament agent targetId: ${opts.targetId}`);
   }
   const agentsDir = opts.agentsDir ?? '/opt/arena/agents';
@@ -1370,56 +1575,8 @@ export function unpackOciRootfs(opts: {
       {timeout: 180_000}
     );
 
+    const unpackedBytes = finalizeUnpackedOciRootfs(bundleDir);
     const rootfsDir = path.join(bundleDir, 'rootfs');
-    const runPath = path.join(rootfsDir, 'run');
-    if (!fs.existsSync(runPath)) {
-      const cfgPath = path.join(bundleDir, 'config.json');
-      if (fs.existsSync(cfgPath)) {
-        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) as {
-          process?: {cwd?: string; env?: string[]; args?: string[]};
-        };
-        const procArgs = cfg.process?.args ?? [];
-        if (procArgs.length > 0) {
-          const lines = ['#!/bin/sh'];
-          for (const envEntry of cfg.process?.env ?? []) {
-            lines.push(`export ${shellQuote(envEntry)}`);
-          }
-          lines.push(`cd ${shellQuote(cfg.process?.cwd || '/')}`);
-          lines.push(`exec ${procArgs.map(shellQuote).join(' ')} "$@"`);
-          fs.writeFileSync(runPath, `${lines.join('\n')}\n`, {mode: 0o755});
-        }
-      }
-    }
-
-    if (!fs.existsSync(runPath)) {
-      throw new Error('OCI rootfs is missing executable /run and has no OCI Entrypoint/Cmd');
-    }
-    fs.chmodSync(runPath, 0o755);
-
-    const duKb = Number(
-      execFileSync('du', ['-sk', rootfsDir], {encoding: 'utf8', timeout: 30_000})
-        .trim()
-        .split(/\s+/)[0]
-    );
-    const unpackedBytes = Number.isFinite(duKb) ? duKb * 1024 : 0;
-    if (unpackedBytes <= 0 || unpackedBytes > packages.MAX_IMAGE_BYTES) {
-      throw new Error(
-        `Unpacked tournament rootfs size (${unpackedBytes} B) exceeds 500 MB cap`
-      );
-    }
-
-    for (const subDir of ['tmp', 'scratch', 'proc', 'dev', 'usr/lib/x86_64-linux-gnu']) {
-      fs.mkdirSync(path.join(rootfsDir, subDir), {recursive: true});
-    }
-    for (const nvLib of [
-      'libcuda.so.1',
-      'libnvidia-ml.so.1',
-      'libnvidia-ptxjitcompiler.so.1',
-    ]) {
-      const targetFile = path.join(rootfsDir, 'usr/lib/x86_64-linux-gnu', nvLib);
-      if (!fs.existsSync(targetFile)) fs.writeFileSync(targetFile, '');
-    }
-
     const destDir = path.join(agentsDir, opts.targetId);
     fs.rmSync(destDir, {recursive: true, force: true});
     fs.renameSync(rootfsDir, destDir);

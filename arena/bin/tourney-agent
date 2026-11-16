@@ -5,33 +5,48 @@
 set -euo pipefail
 
 AGENT_ID="${1:?Usage: tourney-agent <agent_id>}"
-if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$AGENT_ID" == *..* ]]; then
   echo "TOURNEY_ERROR: Invalid agent_id ${AGENT_ID}" >&2
   exit 2
 fi
 ROOTFS="/opt/arena/agents/${AGENT_ID}"
 
-if [[ ! -x "${ROOTFS}/run" ]]; then
+ENTRYPOINT="/run"
+if [[ -f "${ROOTFS}/.arena-run" && -x "${ROOTFS}/.arena-run" && ! -L "${ROOTFS}/.arena-run" ]]; then
+  ENTRYPOINT="/.arena-run"
+elif [[ ! -f "${ROOTFS}/run" || ! -x "${ROOTFS}/run" ]]; then
   echo "TOURNEY_ERROR: Missing executable ${ROOTFS}/run" >&2
   exit 2
 fi
 
 # Prefer killing the agent child before sshd or system services if the 48 GB VM hits OOM
-choom -n 500 -- $$ >/dev/null 2>&1 || true
+choom -n 500 -p $$ >/dev/null 2>&1 || true
 
-# Save original stderr on FD 3 for preemption signaling without keeping stdout/stderr open on curl
+# Save original stderr on FD 3 for preemption signaling while explicitly closing FD 3 on `curl`
+# and `tourney-relay` so neither background curl nor the sandboxed child inherits sshd's stderr FD.
 exec 3>&2
 
+RELAY_PID=""
+WATCHER_PID=""
+cleanup_runner() {
+  if [[ -n "$WATCHER_PID" ]]; then
+    kill "$WATCHER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$RELAY_PID" ]]; then
+    kill -TERM "$RELAY_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup_runner EXIT
+trap 'cleanup_runner; exit 143' TERM INT HUP
+
 # Background watcher: two-step GCE metadata ETag check + long-poll for Spot VM preemption notice.
-# Keeping curl's own stdout/stderr redirected away from sshd ensures an orphaned curl never blocks
-# SSH channel EOF if the game finishes normally.
 watch_preemption() {
   local meta_url="http://metadata.google.internal/computeMetadata/v1/instance/preempted"
   local hdr_file
   hdr_file="$(mktemp /tmp/arena-preempt-hdr.XXXXXX)"
   local initial
   initial=$(curl -s -f --max-time 2 -D "$hdr_file" -H "Metadata-Flavor: Google" \
-    "$meta_url" </dev/null 2>/dev/null || true)
+    "$meta_url" </dev/null 2>/dev/null 3>&- || true)
   local etag
   etag=$(awk 'tolower($1) == "etag:" { gsub(/[\r\n"]/, "", $2); print $2; exit }' "$hdr_file" 2>/dev/null || true)
   rm -f "$hdr_file"
@@ -47,7 +62,7 @@ watch_preemption() {
 
   local changed
   changed=$(curl -s -f -H "Metadata-Flavor: Google" \
-    "${meta_url}?wait_for_change=true&last_etag=${etag}" </dev/null 2>/dev/null || true)
+    "${meta_url}?wait_for_change=true&last_etag=${etag}" </dev/null 2>/dev/null 3>&- || true)
   if [[ "$changed" == "TRUE" ]]; then
     echo "ARENA_SPOT_PREEMPTED" >&3
     kill -TERM $$ 2>/dev/null || true
@@ -55,13 +70,14 @@ watch_preemption() {
 }
 watch_preemption >/dev/null 2>&1 &
 WATCHER_PID=$!
-trap 'kill $WATCHER_PID 2>/dev/null || true' EXIT
 
-# Run `tourney-relay` outside `bwrap` so the sandboxed `/run` process in its unshared PID
-# namespace cannot see `tourney-relay` in `/proc` or inject control lines into its stderr.
-exec /usr/local/bin/tourney-relay \
+# Run `tourney-relay` outside `bwrap` with FD 3 closed so the sandboxed agent process in its
+# unshared PID namespace and session cannot see `tourney-relay` or spoof `ARENA_SPOT_PREEMPTED`,
+# while keeping bash alive to run `cleanup_runner` on normal game exit.
+/usr/local/bin/tourney-relay \
   bwrap \
     --unshare-all \
+    --new-session \
     --die-with-parent \
     --clearenv \
     --ro-bind "$ROOTFS" / \
@@ -84,4 +100,12 @@ exec /usr/local/bin/tourney-relay \
     --setenv ARENA_PONDER 1 \
     --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     --chdir / \
-    /run
+    "$ENTRYPOINT" 3>&- &
+RELAY_PID=$!
+
+set +e
+wait "$RELAY_PID"
+RELAY_STATUS=$?
+set -e
+RELAY_PID=""
+exit "$RELAY_STATUS"

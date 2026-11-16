@@ -18,11 +18,12 @@ sudo apt-get update -y
 sudo apt-get install -y bubblewrap skopeo umoci jq util-linux zstd gcc libc6-dev curl
 
 echo "==> Compiling /usr/local/bin/tourney-relay and installing /usr/local/bin/tourney-agent"
-gcc -O2 -Wall -Wextra -o /tmp/tourney-relay "${ARENA_DIR}/bin/tourney-relay.c"
-sudo mv /tmp/tourney-relay /usr/local/bin/tourney-relay
-sudo cp "${ARENA_DIR}/bin/tourney-agent" /usr/local/bin/tourney-agent
-sudo chown root:root /usr/local/bin/tourney-relay /usr/local/bin/tourney-agent
-sudo chmod 0755 /usr/local/bin/tourney-relay /usr/local/bin/tourney-agent
+RELAY_BUILD_DIR="$(mktemp -d /tmp/tourney-relay-build.XXXXXX)"
+chmod 0700 "$RELAY_BUILD_DIR"
+gcc -O2 -Wall -Wextra -o "${RELAY_BUILD_DIR}/tourney-relay" "${ARENA_DIR}/bin/tourney-relay.c"
+sudo install -o root -g root -m 0755 "${RELAY_BUILD_DIR}/tourney-relay" /usr/local/bin/tourney-relay
+rm -rf "$RELAY_BUILD_DIR"
+sudo install -o root -g root -m 0755 "${ARENA_DIR}/bin/tourney-agent" /usr/local/bin/tourney-agent
 
 sudo mkdir -p /opt/arena/agents
 sudo chown -R "$(id -u):$(id -g)" /opt/arena/agents
@@ -41,11 +42,19 @@ write_skopeo_authfile() {
   if [[ "$creds" != *:* ]]; then
     creds="oauth2:${creds}"
   fi
-  local host="${image_ref%%/*}"
+  local first_seg="${image_ref%%/*}"
+  local host="$first_seg"
+  if [[ "$first_seg" == "$image_ref" || ( "$first_seg" != *.* && "$first_seg" != *:* && "$first_seg" != "localhost" ) || "$first_seg" == "docker.io" || "$first_seg" == "index.docker.io" || "$first_seg" == "registry-1.docker.io" ]]; then
+    host="https://index.docker.io/v1/"
+  fi
   local b64
   b64="$(printf '%s' "$creds" | base64 | tr -d '\r\n')"
   umask 077
-  jq -n --arg host "$host" --arg auth "$b64" '{auths: {($host): {auth: $auth}}}' > "$auth_file"
+  if [[ "$host" == "https://index.docker.io/v1/" ]]; then
+    jq -n --arg auth "$b64" '{auths: {"https://index.docker.io/v1/": {auth: $auth}, "docker.io": {auth: $auth}, "registry-1.docker.io": {auth: $auth}}}' > "$auth_file"
+  else
+    jq -n --arg host "$host" --arg auth "$b64" '{auths: {($host): {auth: $auth}}}' > "$auth_file"
+  fi
   chmod 0600 "$auth_file"
 }
 
@@ -66,9 +75,32 @@ strip_tag_or_digest() {
   fi
 }
 
+ensure_safe_rootfs_dir() {
+  local rootfs="$1"
+  local rel="$2"
+  local cur="$rootfs"
+  local IFS='/'
+  local part
+  for part in $rel; do
+    [[ -z "$part" ]] && continue
+    cur="${cur}/${part}"
+    if [[ -L "$cur" ]]; then
+      echo "ERROR: Unsafe symlink at OCI mount target ${rel}" >&2
+      return 1
+    fi
+    if [[ -e "$cur" && ! -d "$cur" ]]; then
+      echo "ERROR: Non-directory at OCI mount target ${rel}" >&2
+      return 1
+    fi
+    if [[ ! -d "$cur" ]]; then
+      mkdir "$cur"
+    fi
+  done
+}
+
 while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   [[ -z "$AGENT_ID" || "$AGENT_ID" =~ ^# ]] && continue
-  if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$AGENT_ID" == *..* ]]; then
     echo "ERROR: Invalid agent_id '${AGENT_ID}'" >&2
     exit 1
   fi
@@ -91,9 +123,10 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
     SKOPEO_ARGS+=(--authfile "$AUTH_FILE")
   fi
 
-  # 1. Inspect remote manifest/index, enforce exact manifest digest match, and resolve linux/amd64
-  RAW_MANIFEST="$(skopeo inspect --raw "${SKOPEO_ARGS[@]}" "docker://${CLEAN_IMAGE}")"
-  OUTER_SHA="$(printf '%s' "$RAW_MANIFEST" | sha256sum | awk '{print $1}')"
+  # 1. Inspect remote manifest/index directly to disk so trailing newlines are preserved when hashing
+  MANIFEST_FILE="${WORK_DIR}/manifest.json"
+  skopeo inspect --raw "${SKOPEO_ARGS[@]}" "docker://${CLEAN_IMAGE}" > "$MANIFEST_FILE"
+  OUTER_SHA="$(sha256sum "$MANIFEST_FILE" | awk '{print $1}')"
   if [[ -n "$EXPECTED_SHA" ]]; then
     CLEAN_EXPECTED="$(printf '%s' "$EXPECTED_SHA" | tr 'A-F' 'a-f' | sed 's/^sha256://')"
     if [[ "$CLEAN_EXPECTED" != "$OUTER_SHA" ]]; then
@@ -104,21 +137,21 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   fi
 
   TARGET_SHA="$OUTER_SHA"
-  if printf '%s' "$RAW_MANIFEST" | jq -e '.manifests != null' >/dev/null 2>&1; then
-    AMD64_DIGEST="$(printf '%s' "$RAW_MANIFEST" | jq -r '
+  if jq -e '.manifests != null' "$MANIFEST_FILE" >/dev/null 2>&1; then
+    AMD64_DIGEST="$(jq -r '
       [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest // ""
-    ')"
+    ' "$MANIFEST_FILE")"
     if [[ -z "$AMD64_DIGEST" ]]; then
       echo "ERROR: ${AGENT_ID} multi-arch index has no linux/amd64 manifest" >&2
       rm -rf "$WORK_DIR"
       exit 1
     fi
     TARGET_SHA="${AMD64_DIGEST#sha256:}"
-    RAW_MANIFEST="$(skopeo inspect --raw "${SKOPEO_ARGS[@]}" "docker://${REPO_REF}@sha256:${TARGET_SHA}")"
+    skopeo inspect --raw "${SKOPEO_ARGS[@]}" "docker://${REPO_REF}@sha256:${TARGET_SHA}" > "$MANIFEST_FILE"
   fi
 
-  LAYER_COUNT="$(printf '%s' "$RAW_MANIFEST" | jq '.layers | length')"
-  COMPRESSED_BYTES="$(printf '%s' "$RAW_MANIFEST" | jq '[.layers[].size] | add // 0')"
+  LAYER_COUNT="$(jq -r '.layers | length' "$MANIFEST_FILE")"
+  COMPRESSED_BYTES="$(jq -r '[.layers[].size] | add // 0' "$MANIFEST_FILE")"
   if (( LAYER_COUNT == 0 || LAYER_COUNT > 32 )); then
     echo "ERROR: ${AGENT_ID} has invalid layer count (${LAYER_COUNT})" >&2
     rm -rf "$WORK_DIR"
@@ -137,46 +170,72 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   rm -f "${WORK_DIR}/auth.json"
   umoci unpack --rootless --image "${WORK_DIR}/layout:latest" "${WORK_DIR}/bundle"
 
-  # Synthesize /run from OCI config.json Entrypoint/Cmd/Env/WorkingDir when /run is not provided
-  if [[ ! -e "${WORK_DIR}/bundle/rootfs/run" ]]; then
+  ROOTFS_STAGE="${WORK_DIR}/bundle/rootfs"
+  if [[ -L "$ROOTFS_STAGE" || ! -d "$ROOTFS_STAGE" ]]; then
+    echo "ERROR: ${AGENT_ID} unpacked rootfs is not a directory" >&2
+    rm -rf "$WORK_DIR"
+    exit 1
+  fi
+
+  # Synthesize /.arena-run from OCI config.json Entrypoint/Cmd when /run is absent or an FHS directory
+  if [[ ! -f "${ROOTFS_STAGE}/run" || -L "${ROOTFS_STAGE}/run" || ! -x "${ROOTFS_STAGE}/run" ]]; then
+    if [[ -e "${ROOTFS_STAGE}/.arena-run" || -L "${ROOTFS_STAGE}/.arena-run" ]]; then
+      echo "ERROR: ${AGENT_ID} contains colliding /.arena-run path" >&2
+      rm -rf "$WORK_DIR"
+      exit 1
+    fi
     PROC_ARGS="$(jq -r '(.process.args // []) | map(@sh) | join(" ")' "${WORK_DIR}/bundle/config.json")"
     if [[ -n "$PROC_ARGS" ]]; then
       PROC_CWD="$(jq -r '.process.cwd // "/"' "${WORK_DIR}/bundle/config.json")"
       {
         echo "#!/bin/sh"
-        jq -r '(.process.env // [])[] | "export " + (@sh)' "${WORK_DIR}/bundle/config.json"
-        printf 'cd %s\n' "$(printf '%s' "$PROC_CWD" | jq -R '@sh')"
+        jq -r '(.process.env // [])[]
+          | select((startswith("HOME=") or startswith("TMPDIR=") or startswith("XDG_CACHE_HOME=") or startswith("PKMN_STATS_DIR=") or startswith("ARENA_PONDER=")) | not)
+          | "export " + (@sh)' "${WORK_DIR}/bundle/config.json"
+        printf 'cd %s\n' "$(printf '%s' "$PROC_CWD" | jq -r '@sh' -R)"
         printf 'exec %s "$@"\n' "$PROC_ARGS"
-      } > "${WORK_DIR}/bundle/rootfs/run"
-      chmod 0755 "${WORK_DIR}/bundle/rootfs/run"
+      } > "${ROOTFS_STAGE}/.arena-run"
+      chmod 0755 "${ROOTFS_STAGE}/.arena-run"
     fi
   fi
 
+  if [[ ( ! -f "${ROOTFS_STAGE}/run" || -L "${ROOTFS_STAGE}/run" || ! -x "${ROOTFS_STAGE}/run" ) && ( ! -f "${ROOTFS_STAGE}/.arena-run" || ! -x "${ROOTFS_STAGE}/.arena-run" ) ]]; then
+    echo "ERROR: ${AGENT_ID} is missing executable /run (and has no OCI Entrypoint/Cmd)" >&2
+    rm -rf "$WORK_DIR"
+    exit 1
+  fi
+
+  # Verify bwrap mountpoint directories and NVIDIA driver bind targets without following symlinks
+  for mnt_dir in tmp scratch proc dev usr/lib/x86_64-linux-gnu; do
+    if ! ensure_safe_rootfs_dir "$ROOTFS_STAGE" "$mnt_dir"; then
+      rm -rf "$WORK_DIR"
+      exit 1
+    fi
+  done
+  for nvlib in libcuda.so.1 libnvidia-ml.so.1 libnvidia-ptxjitcompiler.so.1; do
+    nv_target="${ROOTFS_STAGE}/usr/lib/x86_64-linux-gnu/${nvlib}"
+    if [[ -L "$nv_target" ]]; then
+      echo "ERROR: ${AGENT_ID} has symlink at NVIDIA bind target ${nvlib}" >&2
+      rm -rf "$WORK_DIR"
+      exit 1
+    fi
+    if [[ ! -e "$nv_target" ]]; then
+      touch "$nv_target"
+    fi
+  done
+
   DEST_DIR="/opt/arena/agents/${AGENT_ID}"
   sudo rm -rf "$DEST_DIR"
-  sudo mv "${WORK_DIR}/bundle/rootfs" "$DEST_DIR"
+  sudo mv "$ROOTFS_STAGE" "$DEST_DIR"
   rm -rf "$WORK_DIR"
 
-  # 3. Verify unpacked size <= 500 MB and executable /run entrypoint exists
+  # 3. Verify unpacked size <= 500 MB and lock down read-only permissions
   UNPACKED_KB="$(sudo du -sk "$DEST_DIR" | awk '{print $1}')"
   if (( UNPACKED_KB > 512000 )); then
     echo "ERROR: ${AGENT_ID} unpacked rootfs exceeds 500 MB (${UNPACKED_KB} KiB)" >&2
     sudo rm -rf "$DEST_DIR"
     exit 1
   fi
-  if [[ ! -x "${DEST_DIR}/run" ]]; then
-    echo "ERROR: ${AGENT_ID} is missing executable /run (and has no OCI Entrypoint/Cmd)" >&2
-    sudo rm -rf "$DEST_DIR"
-    exit 1
-  fi
-
-  # Ensure bwrap mountpoint directories and NVIDIA driver bind targets exist before read-only chmod
-  sudo mkdir -p "${DEST_DIR}"/{tmp,scratch,proc,dev} "${DEST_DIR}/usr/lib/x86_64-linux-gnu"
-  for nvlib in libcuda.so.1 libnvidia-ml.so.1 libnvidia-ptxjitcompiler.so.1; do
-    if [[ ! -e "${DEST_DIR}/usr/lib/x86_64-linux-gnu/${nvlib}" ]]; then
-      sudo touch "${DEST_DIR}/usr/lib/x86_64-linux-gnu/${nvlib}"
-    fi
-  done
   sudo chown -R root:root "$DEST_DIR"
   sudo chmod -R a+rX,u+w,go-w "$DEST_DIR"
 

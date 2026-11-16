@@ -3,13 +3,15 @@
 //
 // Measures exact local agent thinking time on the Worker VM using CLOCK_MONOTONIC,
 // completely eliminating SSH / WAN network round-trip latency from turn clock accounting:
-//   1. Forwards stdin lines from sshd -> agent stdin.
+//   1. Forwards stdin lines from sshd -> agent stdin over a non-blocking pipe so an agent that
+//      never reads stdin cannot wedge disconnect or EOF cleanup.
 //   2. Each actionable `|request|` (non-wait) line increments `req_seq`
 //      and starts a local monotonic stopwatch (`timer_active = 1`).
-//   3. Forwards stdout lines from agent -> sshd stdout, tagging each delta on stderr as
-//      `ARENA_TURN_MS=<elapsed_ms>\t<req_seq>\n` so pondering lines from an earlier request
-//      can never desynchronize a later turn's clock queue.
-//   4. Terminates `-child_pgid` with `SIGKILL` immediately if stdout breaks (`POLLHUP`/`POLLERR`)
+//   3. Forwards stdout lines from agent -> sshd stdout, tagging every newline (including empty
+//      lines) on stderr as `ARENA_TURN_MS=<elapsed_ms>\t<req_seq>\n` so turn-clock queues stay
+//      1-to-1 with stdout lines.
+//   4. Places the child in a dedicated session (`setsid()`), closes all inherited FDs >= 3, and
+//      terminates `-child_pgid` with `SIGKILL` immediately if stdout breaks (`POLLHUP`/`POLLERR`)
 //      or within 100ms of stdin EOF so SSH disconnects never orphan GPU processes.
 #define _GNU_SOURCE
 #include <errno.h>
@@ -25,8 +27,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define IN_BUF_CAP 262144
-#define OUT_BUF_CAP 65536
+#define IN_BUF_CAP       262144
+#define OUT_BUF_CAP      65536
+#define PIPE_OUT_BUF_CAP 524288
 
 struct in_line_buf {
   char data[IN_BUF_CAP];
@@ -35,6 +38,11 @@ struct in_line_buf {
 
 struct out_line_buf {
   char data[OUT_BUF_CAP];
+  size_t len;
+};
+
+struct pipe_out_buf {
+  char data[PIPE_OUT_BUF_CAP];
   size_t len;
 };
 
@@ -70,6 +78,67 @@ static int write_all(int fd, const char *buf, size_t len) {
   return 0;
 }
 
+static void flush_to_agent(int *fd_ptr, struct pipe_out_buf *buf) {
+  int fd = *fd_ptr;
+  if (fd < 0 || buf->len == 0) return;
+  size_t off = 0;
+  while (off < buf->len) {
+    ssize_t w = write(fd, buf->data + off, buf->len - off);
+    if (w < 0) {
+      if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+      close(fd);
+      *fd_ptr = -1;
+      buf->len = 0;
+      return;
+    }
+    off += (size_t)w;
+  }
+  if (off > 0) {
+    if (off < buf->len) {
+      memmove(buf->data, buf->data + off, buf->len - off);
+    }
+    buf->len -= off;
+  }
+}
+
+static void queue_to_agent(
+  int *fd_ptr,
+  struct pipe_out_buf *buf,
+  const char *src,
+  size_t len
+) {
+  if (*fd_ptr < 0 || len == 0) return;
+  flush_to_agent(fd_ptr, buf);
+  if (*fd_ptr < 0) return;
+
+  size_t off = 0;
+  if (buf->len == 0) {
+    while (off < len) {
+      ssize_t w = write(*fd_ptr, src + off, len - off);
+      if (w < 0) {
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+        close(*fd_ptr);
+        *fd_ptr = -1;
+        return;
+      }
+      off += (size_t)w;
+    }
+  }
+
+  size_t rem = len - off;
+  if (rem == 0) return;
+  if (buf->len + rem > PIPE_OUT_BUF_CAP) {
+    close(*fd_ptr);
+    *fd_ptr = -1;
+    buf->len = 0;
+    return;
+  }
+  memcpy(buf->data + buf->len, src + off, rem);
+  buf->len += rem;
+}
+
 static volatile pid_t child_pgid = 0;
 static volatile sig_atomic_t term_requested = 0;
 
@@ -78,6 +147,7 @@ static void handle_term_signal(int sig) {
   term_requested = 1;
   if (child_pgid > 0) {
     kill(-child_pgid, SIGKILL);
+    kill(child_pgid, SIGKILL);
   }
 }
 
@@ -105,7 +175,7 @@ int main(int argc, char **argv) {
   }
 
   if (pid == 0) {
-    setpgid(0, 0);
+    (void)setsid();
     dup2(in_pipe[0], STDIN_FILENO);
     dup2(out_pipe[1], STDOUT_FILENO);
     int devnull = open("/dev/null", O_WRONLY);
@@ -119,15 +189,24 @@ int main(int argc, char **argv) {
     close(in_pipe[1]);
     close(out_pipe[0]);
     close(out_pipe[1]);
+    long max_fd = sysconf(_SC_OPEN_MAX);
+    if (max_fd < 0 || max_fd > 65536) max_fd = 4096;
+    for (int fd = 3; fd < (int)max_fd; fd++) {
+      close(fd);
+    }
     execvp(argv[1], &argv[1]);
     _exit(127);
   }
 
   child_pgid = pid;
-  setpgid(pid, pid);
 
   close(in_pipe[0]);
   close(out_pipe[1]);
+
+  int in_flags = fcntl(in_pipe[1], F_GETFL, 0);
+  if (in_flags >= 0) {
+    (void)fcntl(in_pipe[1], F_SETFL, in_flags | O_NONBLOCK);
+  }
 
   int timer_active = 0;
   int stdin_eof = 0;
@@ -135,16 +214,19 @@ int main(int argc, char **argv) {
   uint64_t turn_start_ns = 0;
   uint64_t eof_deadline_ns = 0;
 
-  struct pollfd fds[3];
+  struct pollfd fds[4];
   fds[0].fd = STDIN_FILENO;
   fds[0].events = POLLIN;
   fds[1].fd = out_pipe[0];
   fds[1].events = POLLIN;
   fds[2].fd = STDOUT_FILENO;
   fds[2].events = 0;
+  fds[3].fd = -1;
+  fds[3].events = POLLOUT;
 
   struct in_line_buf in_buf = {{0}, 0};
   struct out_line_buf out_buf = {{0}, 0};
+  struct pipe_out_buf pipe_out = {{0}, 0};
   char chunk[4096];
 
   for (;;) {
@@ -156,7 +238,9 @@ int main(int argc, char **argv) {
       timeout_ms = (int)((eof_deadline_ns - now_ns + 999999ULL) / 1000000ULL);
     }
 
-    int pr = poll(fds, 3, timeout_ms);
+    fds[3].fd = (in_pipe[1] >= 0 && pipe_out.len > 0) ? in_pipe[1] : -1;
+
+    int pr = poll(fds, 4, timeout_ms);
     if (pr < 0) {
       if (errno == EINTR) continue;
       goto done;
@@ -169,22 +253,33 @@ int main(int argc, char **argv) {
       goto done;
     }
 
+    if (fds[3].fd >= 0 && (fds[3].revents & (POLLOUT | POLLERR | POLLHUP))) {
+      flush_to_agent(&in_pipe[1], &pipe_out);
+      if (stdin_eof && pipe_out.len == 0 && in_pipe[1] >= 0) {
+        close(in_pipe[1]);
+        in_pipe[1] = -1;
+      }
+    }
+
     // 1. Arbiter -> Agent stdin
     if (fds[0].fd >= 0 && (fds[0].revents & (POLLIN | POLLHUP | POLLERR))) {
       ssize_t n = read(STDIN_FILENO, chunk, sizeof(chunk));
       if (n <= 0) {
         if (in_buf.len > 0) {
-          (void)write_all(in_pipe[1], in_buf.data, in_buf.len);
+          queue_to_agent(&in_pipe[1], &pipe_out, in_buf.data, in_buf.len);
           in_buf.len = 0;
         }
-        close(in_pipe[1]);
-        in_pipe[1] = -1;
+        flush_to_agent(&in_pipe[1], &pipe_out);
+        if (pipe_out.len == 0 && in_pipe[1] >= 0) {
+          close(in_pipe[1]);
+          in_pipe[1] = -1;
+        }
         fds[0].fd = -1;
         stdin_eof = 1;
         eof_deadline_ns = monotonic_ns() + 100000000ULL;
       } else {
         if (in_buf.len + (size_t)n >= IN_BUF_CAP) {
-          if (write_all(in_pipe[1], in_buf.data, in_buf.len) < 0) goto done;
+          queue_to_agent(&in_pipe[1], &pipe_out, in_buf.data, in_buf.len);
           in_buf.len = 0;
         }
         memcpy(in_buf.data + in_buf.len, chunk, (size_t)n);
@@ -201,7 +296,7 @@ int main(int argc, char **argv) {
             timer_active = 1;
           }
           in_buf.data[line_len] = saved;
-          if (write_all(in_pipe[1], in_buf.data, line_len) < 0) goto done;
+          queue_to_agent(&in_pipe[1], &pipe_out, in_buf.data, line_len);
           memmove(in_buf.data, in_buf.data + line_len, in_buf.len - line_len);
           in_buf.len -= line_len;
         }
@@ -223,11 +318,7 @@ int main(int argc, char **argv) {
       char *nl = NULL;
       while ((nl = memchr(out_buf.data, '\n', out_buf.len)) != NULL) {
         size_t line_len = (size_t)(nl - out_buf.data) + 1;
-        size_t content_len = line_len - 1;
-        if (content_len > 0 && out_buf.data[content_len - 1] == '\r') {
-          content_len--;
-        }
-        if (timer_active && content_len > 0) {
+        if (timer_active) {
           uint64_t now_ns = monotonic_ns();
           uint64_t elapsed_ns = now_ns > turn_start_ns ? now_ns - turn_start_ns : 1ULL;
           uint64_t elapsed_ms = (elapsed_ns + 999999ULL) / 1000000ULL;
@@ -254,11 +345,17 @@ done:
   }
   if (child_pgid > 0) {
     kill(-child_pgid, SIGKILL);
+    kill(child_pgid, SIGKILL);
   }
   waitpid(pid, &status, 0);
   struct rusage ru;
   if (getrusage(RUSAGE_CHILDREN, &ru) == 0 && ru.ru_maxrss > 0) {
-    unsigned long long peak_mib = (unsigned long long)((ru.ru_maxrss + 1023) / 1024);
+#ifdef __APPLE__
+    unsigned long long peak_mib =
+      (unsigned long long)((ru.ru_maxrss + (1024ULL * 1024ULL - 1ULL)) / (1024ULL * 1024ULL));
+#else
+    unsigned long long peak_mib = (unsigned long long)((ru.ru_maxrss + 1023ULL) / 1024ULL);
+#endif
     if (peak_mib < 1ULL) peak_mib = 1ULL;
     fprintf(stderr, "ARENA_PEAK_RAM=%llu\n", peak_mib);
     fflush(stderr);

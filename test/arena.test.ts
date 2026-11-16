@@ -459,6 +459,98 @@ describe('arena infrastructure', () => {
       await exitedPromise;
       expect(Date.now() - exitStart).toBeLessThan(1500);
     });
+
+    test('exits promptly on stdin EOF when child never reads flooded stdin', async () => {
+      const noReadScript = path.join(tmpDir, 'noread-agent.js');
+      fs.writeFileSync(
+        noReadScript,
+        '#!/usr/bin/env node\nconst b = Buffer.alloc(16 * 1024 * 1024, 3);' +
+          'setInterval(() => b[0], 10000);\n',
+        {mode: 0o755}
+      );
+      const relay = spawn(relayBin, [process.execPath, noReadScript], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      relay.stdin.on('error', () => undefined);
+      let stderrOut = '';
+      relay.stderr.setEncoding('utf8');
+      relay.stderr.on('data', chunk => {
+        stderrOut += String(chunk);
+      });
+      const exitedPromise = new Promise<number | null>(resolve => {
+        relay.on('close', code => resolve(code));
+      });
+      const line = `|c|~|${'x'.repeat(4000)}\n`;
+      for (let i = 0; i < 80; i++) {
+        relay.stdin.write(line);
+      }
+      relay.stdin.end();
+      const start = Date.now();
+      await exitedPromise;
+      expect(Date.now() - start).toBeLessThan(1500);
+      const ramMatch = /ARENA_PEAK_RAM=(\d+)/.exec(stderrOut);
+      expect(ramMatch).toBeTruthy();
+      const peakMib = Number(ramMatch![1]);
+      expect(peakMib).toBeGreaterThanOrEqual(16);
+      expect(peakMib).toBeLessThan(4096);
+    });
+
+    test('closes inherited file descriptors above stderr before exec', async () => {
+      const relay = spawn(
+        relayBin,
+        ['/bin/sh', '-c', 'if echo leaked >&3 2>/dev/null; then echo OPEN; else echo CLOSED; fi'],
+        {stdio: ['pipe', 'pipe', 'pipe', 'pipe']}
+      );
+      let out = '';
+      relay.stdout.setEncoding('utf8');
+      relay.stdout.on('data', chunk => {
+        out += String(chunk);
+      });
+      await new Promise<void>(resolve => {
+        relay.on('close', () => resolve());
+      });
+      expect(out.trim()).toBe('CLOSED');
+    });
+
+    test('emits ARENA_TURN_MS on empty stdout lines to keep turn clocks aligned', async () => {
+      const emptyLineScript = path.join(tmpDir, 'empty-line-agent.js');
+      fs.writeFileSync(
+        emptyLineScript,
+        '#!/usr/bin/env node\nconst readline = require("readline");' +
+          'const rl = readline.createInterface({input: process.stdin});' +
+          'rl.on("line", line => {' +
+          '  if (!line.startsWith("|request|")) return;' +
+          '  process.stdout.write("\\n");' +
+          '  setTimeout(() => process.stdout.write("default\\n"), 25);' +
+          '});\n',
+        {mode: 0o755}
+      );
+      const res = await new tournament.ConcurrentGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        smokeStopAfterTurn: 1,
+        p1Spec: {
+          agentId: 'empty-p1',
+          displayName: 'Empty P1',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, emptyLineScript],
+        },
+        p2Spec: {
+          agentId: 'default-p2',
+          displayName: 'Default P2',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, defaultAgentScript],
+        },
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+      }).run();
+      expect(res.p1.meanTurnMillis).toBeGreaterThanOrEqual(20);
+      expect(res.p1.peakRam).toBeGreaterThan(1);
+    });
   });
 
   describe('arena/unpack', () => {
@@ -1808,6 +1900,45 @@ describe('arena infrastructure', () => {
       }).run();
       expect(spoofedRes.winner).toBe('p1');
       expect(spoofedRes.endReason).toBe('crash');
+    });
+
+    test('finalizeUnpackedOciRootfs synthesizes /.arena-run when /run is an FHS directory', () => {
+      const bundleDir = path.join(tmpDir, 'oci-fhs-run');
+      const rootfsDir = path.join(bundleDir, 'rootfs');
+      fs.mkdirSync(path.join(rootfsDir, 'run'), {recursive: true});
+      fs.mkdirSync(path.join(rootfsDir, 'app'), {recursive: true});
+      fs.writeFileSync(path.join(rootfsDir, 'app', 'agent.py'), 'print("default")\n');
+      fs.writeFileSync(
+        path.join(bundleDir, 'config.json'),
+        JSON.stringify({
+          process: {
+            cwd: '/app',
+            env: ['HOME=/root', 'TMPDIR=/tmp', 'CUSTOM_VAR=ok'],
+            args: ['python3', '/app/agent.py'],
+          },
+        })
+      );
+
+      const bytes = tournament.finalizeUnpackedOciRootfs(bundleDir);
+      expect(bytes).toBeGreaterThan(0);
+      expect(fs.statSync(path.join(rootfsDir, 'run')).isDirectory()).toBe(true);
+      const launcher = fs.readFileSync(path.join(rootfsDir, '.arena-run'), 'utf8');
+      expect(launcher).toContain('export \'CUSTOM_VAR=ok\'');
+      expect(launcher).not.toContain('HOME=/root');
+      expect(launcher).not.toContain('TMPDIR=/tmp');
+      expect(launcher).toContain('exec \'python3\' \'/app/agent.py\' "$@"');
+    });
+
+    test('finalizeUnpackedOciRootfs rejects symlinked mountpoint or NVIDIA bind targets', () => {
+      const bundleDir = path.join(tmpDir, 'oci-symlink-escape');
+      const rootfsDir = path.join(bundleDir, 'rootfs');
+      const outsideDir = path.join(tmpDir, 'oci-outside-host');
+      fs.mkdirSync(rootfsDir, {recursive: true});
+      fs.mkdirSync(outsideDir, {recursive: true});
+      fs.writeFileSync(path.join(rootfsDir, 'run'), '#!/bin/sh\necho default\n', {mode: 0o755});
+      fs.symlinkSync(outsideDir, path.join(rootfsDir, 'tmp'));
+
+      expect(() => tournament.finalizeUnpackedOciRootfs(bundleDir)).toThrow(/unsafe symlink/i);
     });
 
     test('selectNextBatch schedules sticky-VM matchup waves', () => {
