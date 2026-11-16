@@ -50,6 +50,10 @@ export class Database extends baseDb.SqliteDatabase {
     return localAgents.recordAgentGameResult(this.db, versionId, faulted, now);
   }
 
+  resetAgentFaults(versionId: number) {
+    localAgents.resetAgentFaults(this.db, versionId);
+  }
+
   totalHotUnpackedBytes(mode?: localAgents.ExecutionMode): number {
     return localAgents.totalHotUnpackedBytes(this.db, mode);
   }

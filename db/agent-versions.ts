@@ -633,8 +633,11 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
     const teamsByLadder: Record<string, string[]> = {};
     for (const ladderId of ladders) {
       const pendingTeams = teams.getTeamsForAgentLadder(db, ladderId, row.agent_id, 'pending');
-      if (pendingTeams.length > 0) {
-        teamsByLadder[ladderId] = pendingTeams;
+      const ladderTeams = pendingTeams.length > 0
+        ? pendingTeams
+        : teams.getTeamsForAgentLadder(db, ladderId, row.agent_id, 'active');
+      if (ladderTeams.length > 0) {
+        teamsByLadder[ladderId] = ladderTeams;
       }
     }
     return {

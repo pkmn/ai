@@ -27,13 +27,15 @@ if [[ "$ARCHIVE_ROOT" == "/Volumes/Archive" && "$(uname -s)" == "Darwin" ]]; the
   fi
 fi
 
+umask 077
 mkdir -p "$LOG_ROOT" "$COLD_DIR" "$BACKUP_DIR"
 
 # 1. Daily SQLite backup of local Mac mini state DB (/opt/arena/state/arena.sqlite)
 if [[ -f "$STATE_DB" ]]; then
   TODAY="$(date -u +%Y-%m-%d)"
   OUT_DB="${BACKUP_DIR}/arena-state-${TODAY}.sqlite"
-  sqlite3 -cmd ".timeout 10000" "$STATE_DB" ".backup '${OUT_DB}'"
+  ESCAPED_OUT_DB="${OUT_DB//\'/\'\'}"
+  sqlite3 -cmd ".timeout 10000" "$STATE_DB" ".backup '${ESCAPED_OUT_DB}'"
   zstd -19 --rm -f "$OUT_DB"
   find "$BACKUP_DIR" -name "arena-state-*.sqlite.zst" -mtime +30 -delete
 fi
@@ -63,19 +65,31 @@ if [[ -d "$LOG_ROOT" ]]; then
         LADDER_ID="$(basename "$LADDER_DIR")"
         if [[ "$LADDER_ID" == *random* ]]; then
           FULL_TAR="${LADDER_DIR}/${LADDER_ID}-logs.tar"
-          if [[ -f "$FULL_TAR" ]]; then
-            tar -rf "$FULL_TAR" -C "$LADDER_DIR" "${YEAR_MONTH}/${YESTERDAY}.7z"
-          else
-            tar -cf "$FULL_TAR" -C "$LADDER_DIR" "${YEAR_MONTH}/${YESTERDAY}.7z"
-          fi
-          if [[ -n "${ARENA_SERVER_URL:-}" && -n "${ARENA_SECRET:-}" ]]; then
-            SHA256="$(shasum -a 256 "$FULL_TAR" | awk '{print $1}')"
-            curl -fsS -X PUT \
-              -H "Authorization: Bearer ${ARENA_SECRET}" \
-              -H "Content-Type: application/x-tar" \
-              -H "X-Content-SHA256: ${SHA256}" \
-              --data-binary @"${FULL_TAR}" \
-              "${ARENA_SERVER_URL%/}/api/arena/ladders/${LADDER_ID}/archive" >/dev/null || true
+          TMP_FULL_TAR="${FULL_TAR}.tmp.$$"
+          rm -f "$TMP_FULL_TAR"
+          MEMBERS=()
+          for M_TAR in "${LADDER_DIR}"/[0-9][0-9][0-9][0-9]-[0-9][0-9].tar; do
+            [[ -f "$M_TAR" ]] && MEMBERS+=("$(basename "$M_TAR")")
+          done
+          for M_DIR in "${LADDER_DIR}"/[0-9][0-9][0-9][0-9]-[0-9][0-9]; do
+            [[ -d "$M_DIR" ]] || continue
+            M_NAME="$(basename "$M_DIR")"
+            for D_7Z in "${M_DIR}"/*.7z; do
+              [[ -f "$D_7Z" ]] && MEMBERS+=("${M_NAME}/$(basename "$D_7Z")")
+            done
+          done
+          if (( ${#MEMBERS[@]} > 0 )); then
+            tar -cf "$TMP_FULL_TAR" -C "$LADDER_DIR" "${MEMBERS[@]}"
+            mv -f "$TMP_FULL_TAR" "$FULL_TAR"
+            if [[ -n "${ARENA_SERVER_URL:-}" && -n "${ARENA_SECRET:-}" ]]; then
+              SHA256="$(shasum -a 256 "$FULL_TAR" | awk '{print $1}')"
+              curl -fsS -X PUT \
+                -H "Authorization: Bearer ${ARENA_SECRET}" \
+                -H "Content-Type: application/x-tar" \
+                -H "X-Content-SHA256: ${SHA256}" \
+                --data-binary @"${FULL_TAR}" \
+                "${ARENA_SERVER_URL%/}/api/arena/ladders/${LADDER_ID}/archive" >/dev/null || true
+            fi
           fi
         fi
       fi

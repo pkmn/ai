@@ -145,6 +145,16 @@ export function recordAgentGameResult(
   return getLocalAgent(db, versionId);
 }
 
+export function resetAgentFaults(db: DatabaseSync, versionId: number) {
+  db.prepare(`
+    UPDATE local_agents
+    SET consecutive_faults = 0,
+        total_games = 0,
+        total_faults = 0
+    WHERE version_id = ?
+  `).run(versionId);
+}
+
 export function totalHotUnpackedBytes(db: DatabaseSync, mode?: ExecutionMode): number {
   const row = mode
     ? (db.prepare(`

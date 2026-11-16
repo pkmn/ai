@@ -45,6 +45,10 @@ export async function runDaemon(opts: {
   const client = new arena.Client({serverUrl, arenaSecret});
   const stateDb = new db.Database(opts.stateDbPath);
   const isDev = process.env.ARENA_DEV === '1';
+  if (isDev && process.env.NODE_ENV === 'production') {
+    stateDb.close();
+    throw new Error('Refusing to enable ARENA_DEV=1 in NODE_ENV=production');
+  }
   const baselineSpec: arbiter.AgentLaunchSpec = isDev
     ? {mode: 'native', target: BASELINE_BIN}
     : {mode: 'native', target: '_baseline'};
@@ -82,9 +86,9 @@ export async function runDaemon(opts: {
     coord.requestDrain();
     wakeSleep?.();
   };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
-  process.once('SIGUSR1', stop);
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  process.on('SIGUSR1', stop);
 
   try {
     await coord.recoverIncompleteMatches();
@@ -92,9 +96,12 @@ export async function runDaemon(opts: {
     while (status.running && !coord.isDraining()) {
       try {
         await coord.flushOutbox();
-        const ladders = await fetchPlayableLadderSnapshots(client);
+        let ladders = await fetchPlayableLadderSnapshots(client);
         const byId = new Map(ladders.map(l => [l.id, l]));
-        await coord.processPendingSubmissions(byId);
+        const ingested = await coord.processPendingSubmissions(byId);
+        if (ingested > 0 && status.running && !coord.isDraining()) {
+          ladders = await fetchPlayableLadderSnapshots(client);
+        }
         const played = await coord.playNextScheduledMatch(ladders);
         if (!played && !opts.once && status.running && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);

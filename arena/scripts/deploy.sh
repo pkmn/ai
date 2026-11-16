@@ -42,7 +42,7 @@ if ! verify_arena; then
 fi
 
 # Signal the running coordinator to drain after the current match (if Arena files changed)
-if [ "${command}" = "restart" ] || ! git diff --quiet "$HEAD" arena/ server/ teams/ static/util.ts package.json teams/package.json; then
+if [ "${command}" = "restart" ] || ! git diff --quiet "$HEAD" arena/ server/ db/ teams/ static/util.tsx package.json teams/package.json; then
     sudo -n /bin/launchctl kill SIGUSR1 system/ai.pkmn.arena 2>/dev/null ||
         pkill -USR1 -u "$(id -un)" -f '/build/arena' || true
 fi

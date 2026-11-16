@@ -2674,9 +2674,151 @@ describe('arena infrastructure', () => {
 
         const vgcMatches = db.getRecentMatches(10);
         expect(vgcMatches).toHaveLength(1);
+        expect(vgcMatches[0].id).toBe('gen9championsvgc2026regmc-0000001');
         expect(vgcMatches[0].p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
         expect(vgcMatches[0].p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
       });
+    });
+
+    test('reuses active pools team roster during v2.0.0 smoke testing', async () => {
+      await withRealArenaServer('v2-active-teams', async ({db, client}) => {
+        const stateDb = new arenaDb.Database(':memory:');
+        try {
+          db.syncLaddersFromYaml([
+            '- name: VGC',
+            '  id: gen9championsvgc2026regmc',
+            '  format: gen9championsvgc2026regmc',
+            '  team: pools',
+            '  status: active',
+            '  min: 4',
+            '  teams: 20',
+          ].join('\n'));
+          db.syncProjectsFromYaml([
+            '- name: Foul Play',
+            '  active: 2026',
+            '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+          ].join('\n'));
+          const ag = db.getAgentBySlug('foul-play')!;
+          const validated = validateCompetitorTeamsIncremental(
+            mock.generateValidVgcTeams(20, 0),
+            {format: 'gen9championsvgc2026regmc', pools: [], teams: 20}
+          );
+          const v1 = db.createSubmission({
+            agentId: ag.id,
+            version: '1.0.0',
+            package: 'bundle',
+            url: `file://${bundleTar}`,
+            sha256: bundleSha,
+            ladderIds: ['gen9championsvgc2026regmc'],
+            teamsByLadder: {gen9championsvgc2026regmc: validated.allSaved},
+            now: 1000,
+          });
+          db.applySubmissionStatus({
+            versionId: v1.id,
+            smokeStatus: 'passed',
+            unpackedBytes: 1024,
+            now: 1001,
+          });
+          db.db.prepare(
+            'UPDATE ladder_entries SET se = 35, matches = 25, settled_at = 1002 ' +
+              'WHERE version_id = ?'
+          ).run(v1.id);
+
+          // v2.0.0 omits `teamsByLadder` to reuse the existing active 20-team roster
+          const v2 = db.createSubmission({
+            agentId: ag.id,
+            version: '2.0.0',
+            package: 'bundle',
+            url: `file://${bundleTar}`,
+            sha256: bundleSha,
+            ladderIds: ['gen9championsvgc2026regmc'],
+            now: 1000 + 15 * 86400,
+          });
+          const pending = await client.getPendingSubmissions({target: 'ladder'});
+          expect(pending.submissions[0]?.teamsByLadder?.gen9championsvgc2026regmc).toHaveLength(20);
+
+          const coord = new coordinator.Coordinator({
+            client,
+            stateDb,
+            baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+            agentsDir: path.join(tmpDir, 'v2-active-agents'),
+            stagingDir: path.join(tmpDir, 'v2-active-staging'),
+            devMode: true,
+          });
+          await coord.processPendingSubmissions();
+          expect(db.getVersionById(v2.id)?.smokeStatus).toBe('passed');
+        } finally {
+          stateDb.close();
+        }
+      });
+    });
+
+    test('retains 401 outbox items while skipping unregistered local agents', async () => {
+      const stateDb = new arenaDb.Database(':memory:');
+      try {
+        const fakeClient = {
+          completeMatch: () =>
+            Promise.reject(
+              Object.assign(new Error('Unauthorized (401): tunnel flap'), {status: 401})
+            ),
+        } as unknown as serverArena.Client;
+        const coord = new coordinator.Coordinator({
+          client: fakeClient,
+          stateDb,
+          baselineSpec: {mode: 'native', target: '_baseline'},
+          devMode: true,
+        });
+        stateDb.enqueueOutbox(
+          'match-complete',
+          {match: {id: 'm1'}} as unknown as serverArena.MatchCompletePayload
+        );
+        const flushed = await coord.flushOutbox();
+        expect(flushed).toBe(0);
+        const queued = stateDb.listOutbox();
+        expect(queued).toHaveLength(1);
+        expect(queued[0].attempts).toBe(1);
+        expect(queued[0].lastError).toContain('401');
+
+        // Unregistered local agents are skipped rather than throwing in playNextScheduledMatch
+        const scheduled = await coord.playNextScheduledMatch([{
+          id: 'gen9ou',
+          slot: 'ou',
+          format: 'gen9ou',
+          team: 'harvested',
+          status: 'active',
+          min: 2,
+          entries: [
+            {
+              versionId: 901,
+              agentId: 1,
+              agentSlug: 'missing-a',
+              agentName: 'Missing A',
+              version: '1.0.0',
+              elo: 1500,
+              se: 350,
+              lcb: 814,
+              matches: 0,
+              role: 'challenger',
+            },
+            {
+              versionId: 902,
+              agentId: 2,
+              agentSlug: 'missing-b',
+              agentName: 'Missing B',
+              version: '1.0.0',
+              elo: 1500,
+              se: 350,
+              lcb: 814,
+              matches: 0,
+              role: 'challenger',
+            },
+          ],
+          pairAggregates: [],
+        }]);
+        expect(scheduled).toBeUndefined();
+      } finally {
+        stateDb.close();
+      }
     });
 
     test('resolves upcoming ladder formats while leaving tournament OCI queued', async () => {
