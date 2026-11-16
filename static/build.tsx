@@ -148,13 +148,18 @@ export const renderer = new Renderer({
   highlight: true,
 });
 
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
 export const cite = (title: string, date: Date, p?: string) => {
   const t = title.slice(title.lastIndexOf(' ') + 1).toLowerCase();
-  const year = date.getFullYear();
+  const year = date.getUTCFullYear();
   const bib = `\n@online{pkmn${year}${t},\n` +
     `  title  = "Competitive Pokémon Artificial Intelligence ${title}",\n` +
     '  author = "pkmn.ai",\n' +
-    `  month  = "${date.toLocaleString('default', {month: 'long'})}",\n` +
+    `  month  = "${MONTHS[date.getUTCMonth()]}",\n` +
     `  year   = "${year}",\n` +
     `  url    = "https://pkmn.ai/${p ?? t}/"\n` +
     '}\n';

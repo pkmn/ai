@@ -1982,6 +1982,90 @@ describe('JSON route parity & retired pool archives', () => {
       expect(fs.existsSync(path.join(diffDir, 'index.html'))).toBe(false);
     });
 
+  test('compareShots scopes sprite-animation tolerance strictly to viewer regions', async () => {
+    const beforeDir = path.join(tmpDir, 'viewer-before');
+    const afterDir = path.join(tmpDir, 'viewer-after');
+    const diffDir = path.join(tmpDir, 'viewer-diff');
+    fs.mkdirSync(path.join(beforeDir, 'desktop', 'light'), {recursive: true});
+    fs.mkdirSync(path.join(afterDir, 'desktop', 'light'), {recursive: true});
+
+    const width = 10;
+    const height = 10;
+    const slot = 'desktop/light/replay.png';
+    const viewerRect = {x: 2, y: 2, width: 5, height: 4}; // 20 px viewer area
+    const setPixel = (
+      buf: Buffer,
+      x: number,
+      y: number,
+      rgba: [number, number, number, number]
+    ) => {
+      const off = (y * width + x) * 4;
+      buf[off] = rgba[0];
+      buf[off + 1] = rgba[1];
+      buf[off + 2] = rgba[2];
+      buf[off + 3] = rgba[3];
+    };
+
+    const baseRaw = Buffer.alloc(width * height * 4, 120);
+    for (let i = 3; i < baseRaw.length; i += 4) baseRaw[i] = 255;
+    fs.writeFileSync(path.join(beforeDir, slot), shots.encodePng({width, height, data: baseRaw}));
+    fs.writeFileSync(
+      path.join(beforeDir, 'regions.json'),
+      JSON.stringify({[slot]: [viewerRect]})
+    );
+
+    // 1. Subpixel AA (<= 16 delta) + 3 moving sprite pixels (3/20 = 15% <= 25%) inside viewer pass.
+    const spriteRaw = Buffer.from(baseRaw);
+    setPixel(spriteRaw, 2, 2, [128, 120, 120, 255]);
+    setPixel(spriteRaw, 3, 3, [250, 20, 20, 255]);
+    setPixel(spriteRaw, 4, 3, [250, 20, 20, 255]);
+    setPixel(spriteRaw, 5, 3, [250, 20, 20, 255]);
+    fs.writeFileSync(path.join(afterDir, slot), shots.encodePng({width, height, data: spriteRaw}));
+    fs.writeFileSync(
+      path.join(afterDir, 'regions.json'),
+      JSON.stringify({[slot]: [viewerRect]})
+    );
+
+    const okRes = await shots.compareShots(beforeDir, afterDir, diffDir, 0);
+    expect(okRes.same).toBe(true);
+    expect(okRes.changes).toEqual([]);
+
+    // 2. A single 1px change outside the viewer rect still fails strictly without viewer noise.
+    const outsideRaw = Buffer.from(spriteRaw);
+    setPixel(outsideRaw, 0, 0, [10, 10, 10, 255]);
+    fs.writeFileSync(path.join(afterDir, slot), shots.encodePng({width, height, data: outsideRaw}));
+
+    const outRes = await shots.compareShots(beforeDir, afterDir, diffDir, 0);
+    expect(outRes.same).toBe(false);
+    expect(outRes.changes[0]).toMatchObject({name: slot, pixels: 1});
+
+    // 3. Viewer rect geometry shift (e.g. layout pushed viewer down by 4px) fails strictly.
+    fs.writeFileSync(path.join(afterDir, slot), shots.encodePng({width, height, data: spriteRaw}));
+    fs.writeFileSync(
+      path.join(afterDir, 'regions.json'),
+      JSON.stringify({[slot]: [{...viewerRect, y: viewerRect.y + 4}]})
+    );
+    const shiftRes = await shots.compareShots(beforeDir, afterDir, diffDir, 0);
+    expect(shiftRes.same).toBe(false);
+    expect(shiftRes.changes[0]?.pixels).toBe(4);
+
+    // 4. Large change inside viewer (> 25%, e.g. 10/20 = 50% broken viewer/backdrop) fails.
+    const brokenRaw = Buffer.from(baseRaw);
+    for (let y = 2; y <= 3; y++) {
+      for (let x = 2; x < 7; x++) {
+        setPixel(brokenRaw, x, y, [255, 255, 255, 255]);
+      }
+    }
+    fs.writeFileSync(path.join(afterDir, slot), shots.encodePng({width, height, data: brokenRaw}));
+    fs.writeFileSync(
+      path.join(afterDir, 'regions.json'),
+      JSON.stringify({[slot]: [viewerRect]})
+    );
+    const brokenRes = await shots.compareShots(beforeDir, afterDir, diffDir, 0);
+    expect(brokenRes.same).toBe(false);
+    expect(brokenRes.changes[0]?.pixels).toBe(10);
+  });
+
   test('buildScenarios and renderGalleryHtml cover all 7 site sections with unique state names',
     () => {
       const scenarios = shots.buildScenarios('deadbeef1234');

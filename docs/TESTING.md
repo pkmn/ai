@@ -124,6 +124,12 @@ When a `.shots/baseline/` snapshot exists:
   baseline (`Δ N of 88 states changed`), provides one-click slot chips for every changed
   `(viewport, theme)` combination on a state, and lets you switch inline between `After`,
   `Before`, `Diff`, and `3-Up Diff` (`Before | After | Pixel Diff`).
+- `regions.json` (in `.shots/` and `.shots/baseline/`) records the exact bounding boxes of any
+  visible `iframe.viewer-frame` Pokémon Showdown battle/replay viewers. Outside viewer frames,
+  pixel comparison enforces strict `0`-pixel tolerance (unless `--tolerance` is passed); inside
+  unchanged viewer frames, minor corner/icon anti-aliasing and animated sprite frame variations
+  (up to `25%` of the viewer area) are tolerated so moving battle sprites do not cause false
+  positives while broken viewers, backdrop changes, or layout shifts still fail.
 
 The 7 sections cover:
 

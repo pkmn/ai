@@ -71,6 +71,7 @@ export interface Options {
   wiki?: Wiki;
   isDiscordMember?: (discordId: string) => boolean;
   push?: boolean;
+  now?: () => number;
 }
 
 export interface Revision {
@@ -645,6 +646,7 @@ export class Wiki {
   private readonly configuredAdmins: string[];
   private readonly configuredAuthors: Record<string, string>;
   private readonly shouldPush: boolean;
+  private readonly now?: () => number;
   private projectsMtime = -1;
   private adminUsers = new Set<string>();
   private authorizedUsers = new Set<string>();
@@ -670,6 +672,7 @@ export class Wiki {
     this.shouldPush = options.push ?? (
       process.env.WIKI_PUSH === '1' || process.env.NODE_ENV === 'production'
     );
+    this.now = options.now;
   }
 
   private refreshMetadata() {
@@ -902,9 +905,14 @@ export class Wiki {
       const gitAuthor = `${safeAuthor} <${safeAuthor}@users.noreply.github.com>`;
 
       fs.writeFileSync(file, content, 'utf8');
+      const isoDate = this.now ? new Date(this.now() * 1000).toISOString() : undefined;
+      const env = isoDate
+        ? {...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate}
+        : undefined;
       try {
         await execFileAsync('git', ['add', '--', literalRel], {
           cwd: this.wikiDir,
+          env,
           timeout: 15_000,
         });
         await execFileAsync(
@@ -918,7 +926,7 @@ export class Wiki {
             '-m', summary,
             '--', literalRel,
           ],
-          {cwd: this.wikiDir, timeout: 15_000}
+          {cwd: this.wikiDir, env, timeout: 15_000}
         );
       } catch (err) {
         try {

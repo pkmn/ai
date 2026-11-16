@@ -1034,6 +1034,10 @@ export class Runner {
     }
   }
 
+  private touchAtNow(filePath: string) {
+    fs.utimesSync(filePath, this.state.now, this.state.now);
+  }
+
   private ensureStaticInitialized() {
     fs.mkdirSync(this.staticDir, {recursive: true});
     fs.mkdirSync(this.avatarsDir, {recursive: true});
@@ -1043,12 +1047,14 @@ export class Runner {
       if (fs.existsSync(src) && !fs.existsSync(dst)) {
         fs.mkdirSync(path.dirname(dst), {recursive: true});
         fs.copyFileSync(src, dst);
+        this.touchAtNow(dst);
       }
     }
     copyStaticTours(this.baseStaticDir, this.staticDir, false);
     if (!fs.existsSync(this.projectsFile)) {
       const baseProjects = path.join(this.baseStaticDir, 'projects.yml');
       fs.copyFileSync(baseProjects, this.projectsFile);
+      this.touchAtNow(this.projectsFile);
     }
     const zeroPngPath = path.join(this.avatarsDir, '0-error.png');
     if (!fs.existsSync(zeroPngPath)) {
@@ -1065,7 +1071,11 @@ export class Runner {
     try {
       const tables = this.db.db.prepare(
         `SELECT name FROM sqlite_master
-         WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'`
+         WHERE type = 'table'
+           AND (
+             name = 'sqlite_sequence' OR
+             (name NOT LIKE 'sqlite_%' AND name != 'schema_migrations')
+           )`
       ).all() as Array<{name: string}>;
       this.db.inTransaction(() => {
         for (const {name} of tables) {
@@ -1101,6 +1111,7 @@ export class Runner {
       if (fs.existsSync(src) && src !== dst) {
         fs.mkdirSync(path.dirname(dst), {recursive: true});
         fs.copyFileSync(src, dst);
+        this.touchAtNow(dst);
       }
     }
     copyStaticTours(this.baseStaticDir, this.staticDir, true);
@@ -1112,6 +1123,7 @@ export class Runner {
         delete proj.arena;
       }
       fs.writeFileSync(this.projectsFile, yaml.stringify(parsed), 'utf8');
+      this.touchAtNow(this.projectsFile);
     }
     fs.writeFileSync(
       path.join(this.avatarsDir, '0-error.png'),
@@ -1168,6 +1180,7 @@ export class Runner {
 
   private saveProjectsArray(projects: Project[]) {
     fs.writeFileSync(this.projectsFile, yaml.stringify(projects), 'utf8');
+    this.touchAtNow(this.projectsFile);
   }
 
   private nextSmogonSpec(github: string, rawSmogon?: string): string {

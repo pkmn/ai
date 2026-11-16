@@ -130,6 +130,7 @@ submit mikumiku 0.9.2 adv=1330 rand=1330 vgc=1330 \
   --bytes 170mb --duration-millis 2260 --turn-millis 360 --ram 845
 
 # 8. Tournaments (#1 Completed + Archive, #2 Running + Broadcast, #3 Scheduled)
+rng 20261111
 time now-90d
 tournament create 1 --name "Tournament #1: Gen 9 OU" --format gen9ou --team harvested \
   --games 8 --tables 2 --hardware "GCP L4 Spot · 24 vCPU · 48 GB RAM" --starts now-90d
@@ -173,6 +174,7 @@ tournament enter 3 \
   --pkg oci --by pmariglia
 
 # 9. Recent provisional matches, hot/cold streaks (`W4`/`L4`), and crash/timeout showcase rows
+rng 20261112
 time now-45m
 match rby pokerus@1.0.2 foul-play@1.4.0 --count 5 --over 15m
 match sv pokerus@1.0.2 foul-play@1.4.0 --count 5 --over 15m

@@ -38,6 +38,10 @@ export const BASELINE_DIR = path.join(SHOTS_DIR, 'baseline');
 export const DIFF_DIR = path.join(SHOTS_DIR, 'diff');
 export const CACHE_DIR = path.join(SHOTS_DIR, 'cache');
 export const GALLERY_FILE = path.join(SHOTS_DIR, 'index.html');
+export const REGIONS_FILE = path.join(SHOTS_DIR, 'regions.json');
+export const BASELINE_REGIONS_FILE = path.join(BASELINE_DIR, 'regions.json');
+export const VIEWER_CHANNEL_DELTA = 16;
+export const VIEWER_MAX_DIFF_RATIO = 0.25;
 const SHOTS_CSS = fs.readFileSync(root('tools', 'shots.css'), 'utf8');
 
 const ORIGIN = 'http://pkmn.test';
@@ -754,30 +758,30 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'battles',
       title: 'Battles (Expanded Row · Timeout Fault & Pool Hashes)',
       description:
-        'Expanding `vgc-0002825` reveals Game 1 & Game 2 telemetry, red `[Timeout]` ' +
+        'Expanding the timeout showcase row reveals Game 1 & Game 2 telemetry, red `[Timeout]` ' +
         'fault badge on Game 2, and unlinked `P1:<hash>` / `P2:<hash>` pool team badges.',
       path: '/arena/battles/',
-      click: 'tr#vgc-0002825 td:first-child',
+      click: 'tr.battle-row:has(td[title*="timeout"]) td:first-child',
     },
     {
       name: 'arena-battles-crash-expanded',
       section: 'battles',
       title: 'Battles (Expanded Row · Crash Fault)',
       description:
-        'Expanding `gen9ou-0002824` (`SV`) reveals the red `[Crash]` abnormal termination ' +
+        'Expanding the crash showcase row (`SV`) reveals the red `[Crash]` abnormal termination ' +
         'badge on Game 2 alongside per-side turn time and peak RAM.',
       path: '/arena/battles/',
-      click: 'tr#gen9ou-0002824 td:first-child',
+      click: 'tr.battle-row:has(td[title*="crash"]) td:first-child',
     },
     {
       name: 'arena-battles-normal-expanded',
       section: 'battles',
       title: 'Battles (Expanded Row · Clean 2-Game Match)',
       description:
-        'Expanding `vgc-0002815` without runtime faults shows Game 1 and Game 2 ' +
+        'Expanding a clean VGC row without runtime faults shows Game 1 and Game 2 ' +
         '(sides and teams swapped) with turn counts and telemetry.',
       path: '/arena/battles/',
-      click: 'tr#vgc-0002815 td:first-child',
+      click: 'tr.battle-row[data-fmt="vgc"]:not(:has(td[title*="End:"])) td:first-child',
     },
     {
       name: 'arena-battles-filter-vgc',
@@ -1510,6 +1514,7 @@ async function startFixture(): Promise<Fixture> {
     projectsFile,
     db,
     push: false,
+    now: () => NOW_SECONDS,
     auth: new auth.Auth({
       config: SHOTS_AUTH,
       db,
@@ -1549,11 +1554,8 @@ async function startFixture(): Promise<Fixture> {
     now: () => NOW_SECONDS,
   });
   wiki.register(app, {
-    wikiDir,
-    projectsFile,
-    db,
+    wiki: wikiInstance,
     auth: wikiInstance.auth,
-    push: false,
   });
 
   const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
@@ -1916,11 +1918,108 @@ export function fetchExternalAsset(
   return promise;
 }
 
-export function diffPngImages(a: PngImage, b: PngImage): {image: PngImage; count: number} {
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type RegionsMap = Record<string, Rect[]>;
+
+export interface DiffOptions {
+  viewerRects?: readonly Rect[];
+  viewerChannelDelta?: number;
+  viewerMaxRatio?: number;
+}
+
+function findRectIndex(rects: readonly Rect[], x: number, y: number): number {
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function rectsMatch(a: readonly Rect[], b: readonly Rect[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      Math.abs(a[i].x - b[i].x) > 1 ||
+      Math.abs(a[i].y - b[i].y) > 1 ||
+      Math.abs(a[i].width - b[i].width) > 1 ||
+      Math.abs(a[i].height - b[i].height) > 1
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function readRegionsFile(dir: string): RegionsMap | undefined {
+  const file = path.join(dir, 'regions.json');
+  if (!fs.existsSync(file)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as RegionsMap;
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeRegionsFile(
+  file: string,
+  updates: RegionsMap,
+  mergeExisting: boolean
+): Promise<void> {
+  const base: RegionsMap = mergeExisting && fs.existsSync(file)
+    ? (JSON.parse(await fsp.readFile(file, 'utf8')) as RegionsMap)
+    : {};
+  for (const [key, rects] of Object.entries(updates)) {
+    if (rects.length > 0) {
+      base[key] = rects;
+    } else {
+      delete base[key];
+    }
+  }
+  const sorted: RegionsMap = {};
+  for (const key of Object.keys(base).sort()) {
+    sorted[key] = base[key];
+  }
+  await fsp.mkdir(path.dirname(file), {recursive: true});
+  await fsp.writeFile(file, `${JSON.stringify(sorted, undefined, 2)}\n`, 'utf8');
+}
+
+// Outside `viewerRects`, every 1px RGBA difference counts strictly. Inside each Showdown viewer
+// iframe rect, multi-frame animated Pokémon GIFs (`sprites/ani/*.gif`) tick on Blink's C++ clock
+// independently of Playwright's `animations: 'disabled'`, so minor corner/icon AA
+// (`<= channelDelta`) is ignored and sprite movement up to `maxRatio` of that viewer rect's area
+// is tolerated while still catching broken/blank viewers, backdrop changes, or layout shifts.
+export function diffPngImages(
+  a: PngImage,
+  b: PngImage,
+  options: DiffOptions = {}
+): {image: PngImage; count: number} {
   const width = Math.max(a.width, b.width);
   const height = Math.max(a.height, b.height);
   const data = Buffer.alloc(width * height * 4, 255);
+  const rects = options.viewerRects ?? [];
+  const channelDelta = options.viewerChannelDelta ?? VIEWER_CHANNEL_DELTA;
+  const maxRatio = options.viewerMaxRatio ?? VIEWER_MAX_DIFF_RATIO;
+  const rectDiffOffsets: number[][] = rects.map(() => []);
   let count = 0;
+
+  const writeFaded = (out: number, ib: number) => {
+    const luma =
+      0.3 * (b.data[ib] ?? 0) +
+      0.59 * (b.data[ib + 1] ?? 0) +
+      0.11 * (b.data[ib + 2] ?? 0);
+    const faded = 255 - ((255 - Math.round(luma)) >> 2);
+    data[out] = faded;
+    data[out + 1] = faded;
+    data[out + 2] = faded;
+  };
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -1929,21 +2028,45 @@ export function diffPngImages(a: PngImage, b: PngImage): {image: PngImage; count
       const ia = (y * a.width + x) * 4;
       const ib = (y * b.width + x) * 4;
       if (inBoth && a.data.readUInt32LE(ia) === b.data.readUInt32LE(ib)) {
-        const luma =
-          0.3 * (b.data[ib] ?? 0) +
-          0.59 * (b.data[ib + 1] ?? 0) +
-          0.11 * (b.data[ib + 2] ?? 0);
-        const faded = 255 - ((255 - Math.round(luma)) >> 2);
-        data[out] = faded;
-        data[out + 1] = faded;
-        data[out + 2] = faded;
+        writeFaded(out, ib);
         continue;
+      }
+      if (inBoth && rects.length > 0) {
+        const rIdx = findRectIndex(rects, x, y);
+        if (rIdx >= 0) {
+          const maxCh = Math.max(
+            Math.abs(a.data[ia] - b.data[ib]),
+            Math.abs(a.data[ia + 1] - b.data[ib + 1]),
+            Math.abs(a.data[ia + 2] - b.data[ib + 2]),
+            Math.abs(a.data[ia + 3] - b.data[ib + 3])
+          );
+          writeFaded(out, ib);
+          if (maxCh > channelDelta) {
+            rectDiffOffsets[rIdx].push(out);
+          }
+          continue;
+        }
       }
       count++;
       data[out + 1] = 0;
       if (inBoth) data[out + 2] = 0;
     }
   }
+
+  for (let rIdx = 0; rIdx < rects.length; rIdx++) {
+    const rect = rects[rIdx];
+    const area = Math.max(1, rect.width * rect.height);
+    const offsets = rectDiffOffsets[rIdx];
+    if (offsets.length / area > maxRatio) {
+      count += offsets.length;
+      for (const out of offsets) {
+        data[out] = 255;
+        data[out + 1] = 0;
+        data[out + 2] = 0;
+      }
+    }
+  }
+
   return {image: {width, height, data}, count};
 }
 
@@ -2001,6 +2124,8 @@ export async function compareShots(
   await fsp.rm(diffDir, {recursive: true, force: true});
   await fsp.mkdir(diffDir, {recursive: true});
 
+  const beforeRegions = readRegionsFile(beforeDir);
+  const afterRegions = readRegionsFile(afterDir);
   const beforeSet = new Set(beforeNames);
   const afterSet = new Set(afterNames);
   const changes: ShotChange[] = [];
@@ -2032,7 +2157,21 @@ export async function compareShots(
     const resized = a.width !== b.width || a.height !== b.height;
     if (!resized && a.data.equals(b.data)) continue;
 
-    const {image, count} = diffPngImages(a, b);
+    let viewerRects: readonly Rect[] | undefined;
+    if (!resized) {
+      if (beforeRegions && afterRegions) {
+        const bRects = beforeRegions[name] ?? [];
+        const aRects = afterRegions[name] ?? [];
+        if (rectsMatch(bRects, aRects) && aRects.length > 0) {
+          viewerRects = aRects;
+        }
+      } else {
+        const fallback = afterRegions?.[name] ?? beforeRegions?.[name];
+        if (fallback?.length) viewerRects = fallback;
+      }
+    }
+
+    const {image, count} = diffPngImages(a, b, {viewerRects});
     if (count === 0 || (count <= tolerance && !resized)) continue;
 
     const pctNum = Number(((100 * count) / (image.width * image.height)).toFixed(2));
@@ -3046,36 +3185,52 @@ interface FrameOverlay {
   png: Buffer;
 }
 
+const SETTLE_VIEWER_EXPR = `(() => {
+  if (window.jQuery) {
+    window.jQuery.fx.off = true;
+    window.jQuery(":animated").stop(true, true);
+  }
+})()`;
+
 // Chromium's `Page.captureScreenshot(captureBeyondViewport: true)` omits out-of-process
 // `sandbox="allow-scripts"` (opaque-origin) iframe surfaces that sit below the initial viewport.
-// Capturing each visible viewer element while scrolled into view and compositing it onto the
-// full-page PNG keeps production `sandbox="allow-scripts"` intact without blanking replay shots.
+// Measuring all viewer coordinates at `(0, 0)` first, scrolling each frame to a deterministic
+// integer offset before capture, and compositing onto the full-page PNG keeps production
+// `sandbox="allow-scripts"` intact without 1px scroll-rounding shifts or blank replay shots.
 async function waitForViewerFrames(page: Page): Promise<FrameOverlay[]> {
   const overlays: FrameOverlay[] = [];
+  await page.evaluate('window.scrollTo(0, 0)');
   const handles = await page.locator('iframe.viewer-frame').elementHandles();
-  for (const handle of handles) {
-    const info = await handle.evaluate((el: Element) => {
-      const rect = el.getBoundingClientRect();
-      const visible = rect.width > 0 && rect.height > 0;
-      const isLiveFrame = el.id === 'ps-viewer-frame';
-      const checked = document.querySelector<HTMLInputElement>(
-        '#table-nav-wrap input[type="radio"]:checked'
-      );
-      const label = checked
-        ? document.querySelector(`label[for="${checked.id}"]`)
-        : undefined;
-      const isIdleTable = Boolean(
-        isLiveFrame && label?.textContent?.includes('(idle)')
-      );
-      return {
-        visible,
-        isIdleTable,
-        x: Math.round(rect.left + window.scrollX),
-        y: Math.round(rect.top + window.scrollY),
-      };
-    });
+  const measured = await Promise.all(
+    handles.map(async handle => {
+      const info = await handle.evaluate((el: Element) => {
+        const rect = el.getBoundingClientRect();
+        const visible = rect.width > 0 && rect.height > 0;
+        const isLiveFrame = el.id === 'ps-viewer-frame';
+        const checked = document.querySelector<HTMLInputElement>(
+          '#table-nav-wrap input[type="radio"]:checked'
+        );
+        const label = checked
+          ? document.querySelector(`label[for="${checked.id}"]`)
+          : undefined;
+        const isIdleTable = Boolean(
+          isLiveFrame && label?.textContent?.includes('(idle)')
+        );
+        return {
+          visible,
+          isIdleTable,
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+        };
+      });
+      return {handle, info};
+    })
+  );
+
+  for (const {handle, info} of measured) {
     if (!info.visible) continue;
-    await handle.scrollIntoViewIfNeeded();
+    const scrollTargetY = Math.max(0, info.y - 16);
+    await page.evaluate((sy: number) => window.scrollTo(0, sy), scrollTargetY);
     const frame = await handle.contentFrame();
     if (!frame) continue;
     await frame.waitForFunction(
@@ -3090,6 +3245,7 @@ async function waitForViewerFrames(page: Page): Promise<FrameOverlay[]> {
       {timeout: 10000}
     );
     await frame.evaluate(WAIT_IMAGES_EXPR);
+    await frame.evaluate(SETTLE_VIEWER_EXPR);
     await page.waitForTimeout(50);
     const png = await handle.screenshot({animations: 'disabled', caret: 'hide'});
     overlays.push({x: info.x, y: info.y, png});
@@ -3097,24 +3253,30 @@ async function waitForViewerFrames(page: Page): Promise<FrameOverlay[]> {
   return overlays;
 }
 
-function compositeFrameOverlays(basePng: Buffer, overlays: FrameOverlay[]): Buffer {
-  if (overlays.length === 0) return basePng;
+function compositeFrameOverlays(
+  basePng: Buffer,
+  overlays: FrameOverlay[]
+): {png: Buffer; rects: Rect[]} {
+  if (overlays.length === 0) return {png: basePng, rects: []};
   const base = decodePng(basePng);
+  const rects: Rect[] = [];
   for (const ov of overlays) {
     const patch = decodePng(ov.png);
-    const maxRows = Math.min(patch.height, base.height - ov.y);
-    const maxCols = Math.min(patch.width, base.width - ov.x);
+    const dstX = Math.max(0, ov.x);
+    const dstY = Math.max(0, ov.y);
+    const maxRows = Math.min(patch.height, base.height - dstY);
+    const maxCols = Math.min(patch.width, base.width - dstX);
     if (maxRows <= 0 || maxCols <= 0) continue;
     for (let r = 0; r < maxRows; r++) {
-      const dstRow = ov.y + r;
-      if (dstRow < 0) continue;
+      const dstRow = dstY + r;
       const srcStart = r * patch.width * 4;
       const srcEnd = srcStart + maxCols * 4;
-      const dstStart = (dstRow * base.width + Math.max(0, ov.x)) * 4;
+      const dstStart = (dstRow * base.width + dstX) * 4;
       patch.data.copy(base.data, dstStart, srcStart, srcEnd);
     }
+    rects.push({x: dstX, y: dstY, width: maxCols, height: maxRows});
   }
-  return encodePng(base);
+  return {png: encodePng(base), rects};
 }
 
 async function shootWithWorker(
@@ -3122,7 +3284,7 @@ async function shootWithWorker(
   scenario: Scenario,
   file: string,
   fixture: Fixture
-): Promise<string[]> {
+): Promise<{problems: string[]; viewerRects: Rect[]}> {
   const cookie = fixture.cookies[scenario.githubUser ?? 'scheibo'] ?? fixture.cookies.scheibo;
   worker.setCookie(cookie);
   worker.problems.length = 0;
@@ -3156,8 +3318,18 @@ async function shootWithWorker(
   if (overflow > 0) {
     worker.problems.push(`horizontal overflow: +${overflow}px`);
   }
+  // Chromium's `captureBeyondViewport` full-page screenshot intermittently shifts sticky
+  // table-column compositor tiles by 1px on tall mobile pages even when `scrollLeft === 0`.
+  await page.evaluate(`(() => {
+    const sel = "table.matrix th:first-child, table.matrix td:first-child";
+    for (const el of document.querySelectorAll(sel)) {
+      const wrap = el.closest(".table-wrap");
+      if (!wrap || wrap.scrollLeft === 0) el.style.position = "static";
+    }
+  })()`);
   const rawShot = await page.screenshot({fullPage: true, animations: 'disabled', caret: 'hide'});
-  await fsp.writeFile(file, compositeFrameOverlays(rawShot, overlays));
+  const composited = compositeFrameOverlays(rawShot, overlays);
+  await fsp.writeFile(file, composited.png);
   const expectedHttpPrefix = scenario.expectHttpError
     ? `Failed to load resource: the server responded with a status of ${scenario.expectHttpError} `
     : undefined;
@@ -3170,7 +3342,10 @@ async function shootWithWorker(
       `expected HTTP ${scenario.expectHttpError}, got ${navRes?.status() ?? 'no error'}`
     );
   }
-  return worker.problems.filter(p => !expectedHttpPrefix || !p.startsWith(expectedHttpPrefix));
+  return {
+    problems: worker.problems.filter(p => !expectedHttpPrefix || !p.startsWith(expectedHttpPrefix)),
+    viewerRects: composited.rects,
+  };
 }
 
 async function run(): Promise<void> {
@@ -3203,6 +3378,7 @@ async function run(): Promise<void> {
   }
 
   const shotPaths: string[] = [];
+  const shotRegions: RegionsMap = {};
   const errors: string[] = [];
   try {
     const workers = await createSlotWorkers(browser, fixture);
@@ -3213,13 +3389,14 @@ async function run(): Promise<void> {
           if (scenario.serial) {
             for (const worker of workers) {
               const relPath = path.join(worker.device, worker.theme, `${scenario.name}.png`);
-              const problems = await shootWithWorker(
+              const {problems, viewerRects} = await shootWithWorker(
                 worker,
                 scenario,
                 path.join(newDir, relPath),
                 fixture
               );
               shotPaths.push(relPath);
+              shotRegions[relPath.split(path.sep).join('/')] = viewerRects;
               errors.push(
                 ...problems.map(
                   problem => `${scenario.name} (${worker.device}/${worker.theme}): ${problem}`
@@ -3230,13 +3407,14 @@ async function run(): Promise<void> {
             await Promise.all(
               workers.map(async worker => {
                 const relPath = path.join(worker.device, worker.theme, `${scenario.name}.png`);
-                const problems = await shootWithWorker(
+                const {problems, viewerRects} = await shootWithWorker(
                   worker,
                   scenario,
                   path.join(newDir, relPath),
                   fixture
                 );
                 shotPaths.push(relPath);
+                shotRegions[relPath.split(path.sep).join('/')] = viewerRects;
                 errors.push(
                   ...problems.map(
                     problem => `${scenario.name} (${worker.device}/${worker.theme}): ${problem}`
@@ -3258,7 +3436,8 @@ async function run(): Promise<void> {
     await fixture.close();
   }
 
-  if (values.only === undefined) {
+  const isFiltered = values.only !== undefined;
+  if (!isFiltered) {
     for (const device of Object.keys(VIEWPORTS)) {
       await fsp.rm(path.join(SHOTS_DIR, device), {recursive: true, force: true});
       if (values.baseline) {
@@ -3278,6 +3457,10 @@ async function run(): Promise<void> {
     await fsp.rename(src, dest);
   }
   await fsp.rm(newDir, {recursive: true, force: true});
+  await writeRegionsFile(REGIONS_FILE, shotRegions, isFiltered);
+  if (values.baseline) {
+    await writeRegionsFile(BASELINE_REGIONS_FILE, shotRegions, isFiltered);
+  }
 
   const presentScenarios = allScenarios.filter(
     s => fs.existsSync(path.join(SHOTS_DIR, 'desktop', 'light', `${s.name}.png`))
