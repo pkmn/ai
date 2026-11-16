@@ -115,9 +115,6 @@ const ACCOUNT_SCRIPT = `
     const teamFields = document.querySelectorAll('.pool-teams-field');
     const ladderChecks = document.querySelectorAll('input[name="ladders"]');
     const progressText = document.getElementById('pool-progress-text');
-    const validateTeamsBtn = document.getElementById('validate-teams-btn');
-    const clearTeamsBtn = document.getElementById('clear-teams-btn');
-    const fileInput = document.getElementById('sub-teams-file');
     const teamsArea = document.getElementById('sub-teams');
     let submitting = false;
 
@@ -247,9 +244,6 @@ const ACCOUNT_SCRIPT = `
         fillEl.style.width = pct + '%';
         fillEl.classList.toggle('complete', remaining === 0 && required > 0);
       }
-      if (clearTeamsBtn) {
-        clearTeamsBtn.classList.toggle('hide', saved <= 0);
-      }
       syncSubmitBtn();
     };
 
@@ -294,102 +288,6 @@ const ACCOUNT_SCRIPT = `
     };
     ladderChecks.forEach(cb => cb.addEventListener('change', syncTeamsVisibility));
     syncTeamsVisibility();
-
-    if (fileInput && teamsArea) {
-      fileInput.addEventListener('change', () => {
-        const f = fileInput.files && fileInput.files[0];
-        if (!f) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          teamsArea.value = String(reader.result || '');
-          syncSubmitBtn();
-        };
-        reader.readAsText(f);
-      });
-    }
-
-    if (validateTeamsBtn && teamsArea) {
-      validateTeamsBtn.addEventListener('click', async () => {
-        const activeCb = getActivePoolCheckbox();
-        if (!activeCb) return;
-        if (!teamsArea.value.trim()) {
-          renderTeamsFeedback('Paste one or more Showdown teams first.', [], true);
-          return;
-        }
-        validateTeamsBtn.disabled = true;
-        try {
-          const res = await fetch('/api/account/teams', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', Accept: 'application/json'},
-            body: JSON.stringify({ladderId: activeCb.value, teams: teamsArea.value}),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            renderTeamsFeedback(data.error || ('Validation failed (' + res.status + ')'), [], true);
-            return;
-          }
-          renderPoolProgress(data.savedCount, data.requiredCount);
-          const rej = Array.isArray(data.rejections) ? data.rejections : [];
-          if (rej.length > 0) {
-            renderTeamsFeedback(
-              'Saved ' + data.savedCount + ' / ' + data.requiredCount + ' distinct teams (' +
-                data.remainingCount + ' more needed) — ' + rej.length + ' team(s) rejected:',
-              rej,
-              true
-            );
-          } else if (data.complete) {
-            teamsArea.value = '';
-            syncSubmitBtn();
-            renderTeamsFeedback(
-              'All ' + data.requiredCount + ' / ' + data.requiredCount +
-                ' distinct teams validated and saved — submit your build below.',
-              [],
-              false
-            );
-          } else {
-            teamsArea.value = '';
-            syncSubmitBtn();
-            renderTeamsFeedback(
-              'Saved +' + data.newlySavedCount + ' team(s): ' + data.savedCount + ' / ' +
-                data.requiredCount + ' saved — ' + data.remainingCount + ' more needed.',
-              [],
-              false
-            );
-          }
-        } catch {
-          renderTeamsFeedback('Network error validating teams.', [], true);
-        } finally {
-          validateTeamsBtn.disabled = false;
-        }
-      });
-    }
-
-    if (clearTeamsBtn) {
-      clearTeamsBtn.addEventListener('click', async () => {
-        const activeCb = getActivePoolCheckbox();
-        if (!activeCb) return;
-        clearTeamsBtn.disabled = true;
-        try {
-          const res = await fetch('/api/account/teams/clear', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', Accept: 'application/json'},
-            body: JSON.stringify({ladderId: activeCb.value}),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            renderTeamsFeedback(data.error || 'Could not clear saved teams.', [], true);
-            return;
-          }
-          renderPoolProgress(0, Number(data.requiredCount || activeCb.dataset.requiredTeams || 0));
-          const box = document.getElementById('teams-feedback');
-          if (box) box.classList.add('hide');
-        } catch {
-          renderTeamsFeedback('Network error clearing saved teams.', [], true);
-        } finally {
-          clearTeamsBtn.disabled = false;
-        }
-      });
-    }
 
     const getStatusEl = () => {
       let el = document.getElementById('sub-status');
@@ -438,16 +336,31 @@ const ACCOUNT_SCRIPT = `
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) {
-            statusEl.className = 'no';
-            statusEl.textContent = data.error || ('Submission failed (' + res.status + ')');
             if (typeof data.savedCount === 'number' && typeof data.requiredCount === 'number') {
+              statusEl.className = 'hide';
+              statusEl.textContent = '';
               renderPoolProgress(data.savedCount, data.requiredCount);
-              renderTeamsFeedback(
-                data.savedCount + ' / ' + data.requiredCount + ' distinct teams saved — ' +
-                  data.remainingCount + ' more needed.',
-                data.rejections || [],
-                true
-              );
+              const rej = Array.isArray(data.rejections) ? data.rejections : [];
+              if (rej.length > 0) {
+                renderTeamsFeedback(
+                  'Saved ' + data.savedCount + ' / ' + data.requiredCount + ' distinct teams (' +
+                    data.remainingCount + ' more needed) — ' + rej.length + ' team(s) rejected:',
+                  rej,
+                  true
+                );
+              } else {
+                if (teamsArea) teamsArea.value = '';
+                renderTeamsFeedback(
+                  data.error ||
+                    ('Saved ' + data.savedCount + ' / ' + data.requiredCount +
+                      ' distinct teams — ' + data.remainingCount + ' more needed.'),
+                  [],
+                  true
+                );
+              }
+            } else {
+              statusEl.className = 'no';
+              statusEl.textContent = data.error || ('Submission failed (' + res.status + ')');
             }
             submitting = false;
             syncSubmitBtn();
@@ -843,8 +756,9 @@ export function renderAccountPage(opts: {
     const remaining = Math.max(0, count - saved);
     const pct = count > 0 ? Math.min(100, Math.round((saved / count) * 100)) : 0;
     const placeholder =
-      `Paste up to ${count} Showdown teams (=== [format] Team Name ===) — ` +
-      'valid distinct teams save immediately; locked for this season once your build passes';
+      `Paste up to ${count} teams (one packed team per line or exportable with ` +
+      '"=== [format] Team Name ===" separators). Valid distinct teams will be saved ' +
+      'immediately upon upload and are locked for the season once your build passes.';
     poolTeamsRow = (
       <>
         <label htmlFor='sub-teams' className='pool-teams-field hide'>
@@ -863,7 +777,9 @@ export function renderAccountPage(opts: {
             </div>
             <div className='progress-track'>
               <div
-                className='progress-fill'
+                className={
+                  remaining === 0 && count > 0 ? 'progress-fill complete' : 'progress-fill'
+                }
                 id='pool-progress-fill'
                 style={{width: `${pct}%`}}
               />
@@ -876,30 +792,6 @@ export function renderAccountPage(opts: {
             spellcheck={false}
             placeholder={placeholder}
           />
-          <div className='teams-tools'>
-            <span className='muted'>Paste all teams or add remaining ones in batches.</span>
-            <div className='teams-actions'>
-              <label className='btn-subtle'>
-                {'Load .txt '}
-                <input
-                  id='sub-teams-file'
-                  type='file'
-                  accept='.txt,text/plain'
-                  className='hide'
-                />
-              </label>
-              <button type='button' id='validate-teams-btn' className='btn-subtle'>
-                Validate &amp; Save Teams
-              </button>
-              <button
-                type='button'
-                id='clear-teams-btn'
-                className={saved > 0 ? 'btn-subtle' : 'btn-subtle hide'}
-              >
-                Clear Saved
-              </button>
-            </div>
-          </div>
           <div id='teams-feedback' className='teams-feedback hide'>
             <div id='teams-feedback-summary' />
             <ul id='teams-rejections' className='teams-rejections' />
@@ -969,7 +861,7 @@ export function renderAccountPage(opts: {
                   type='text'
                   maxLength={12}
                   pattern='[A-Za-z0-9][A-Za-z0-9._\-]{0,11}'
-                  placeholder='e.g. 1.0.0'
+                  placeholder='1.0.0'
                   required={true}
                 />
                 <label htmlFor='sub-type'>Package</label>
@@ -1009,7 +901,7 @@ export function renderAccountPage(opts: {
                 type='password'
                 autocomplete='off'
                 placeholder={
-                  'Optional one-time header for private releases (scrubbed immediately after fetch)'
+                  'One-time header for private releases (scrubbed immediately after fetch)'
                 }
               />
 
@@ -1334,30 +1226,21 @@ export function register(app: polka.Polka, options: Options) {
   const maxAttempts = options.rateLimitMaxAttempts ?? RATE_LIMIT_MAX_ATTEMPTS;
   const windowSeconds = options.rateLimitWindowSeconds ?? RATE_LIMIT_WINDOW_SECONDS;
   const attemptsByAgent = new Map<number, number[]>();
-  const teamAttemptsByAgent = new Map<number, number[]>();
 
   // Enforced before body parsing and 1-NN team-uniqueness checks so a logged-in developer cannot
   // exhaust CPU by spamming 20-team validation pastes (supplements Nginx's IP-based `submission`
   // zone when multiple co-authors submit for the same project).
-  const checkBucketRateLimit = (
-    bucket: Map<number, number[]>,
-    agentId: number,
-    now: number
-  ): number | undefined => {
+  const checkSubmissionRateLimit = (agentId: number, now: number): number | undefined => {
     const cutoff = now - windowSeconds;
-    const recent = (bucket.get(agentId) ?? []).filter(ts => ts > cutoff);
+    const recent = (attemptsByAgent.get(agentId) ?? []).filter(ts => ts > cutoff);
     if (recent.length >= maxAttempts) {
-      bucket.set(agentId, recent);
+      attemptsByAgent.set(agentId, recent);
       return Math.max(1, recent[0] + windowSeconds - now);
     }
     recent.push(now);
-    bucket.set(agentId, recent);
+    attemptsByAgent.set(agentId, recent);
     return undefined;
   };
-  const checkSubmissionRateLimit = (agentId: number, now: number) =>
-    checkBucketRateLimit(attemptsByAgent, agentId, now);
-  const checkTeamValidationRateLimit = (agentId: number, now: number) =>
-    checkBucketRateLimit(teamAttemptsByAgent, agentId, now);
 
   const handleGetAccount = (
     req: http.IncomingMessage,
@@ -1499,155 +1382,6 @@ export function register(app: polka.Polka, options: Options) {
   app.get('/account', (req, res) => handleGetAccount(req, res, false));
   app.get('/account.json', (req, res) => handleGetAccount(req, res, true));
   app.get('/account/index.json', (req, res) => handleGetAccount(req, res, true));
-
-  const requirePoolAccount = (
-    req: http.IncomingMessage,
-    res: http.ServerResponse
-  ): db.AgentRow | undefined => {
-    if (isCrossSiteRequest(req)) {
-      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
-      return undefined;
-    }
-    const login = auth.getGitHubUser(req);
-    if (!login) {
-      sendJson(res, 401, {error: 'GitHub authentication required.'});
-      return undefined;
-    }
-    const developer = db.getDeveloperByGitHub(login);
-    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
-    if (!developer || !agent || agent.status === 'disabled') {
-      sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
-      return undefined;
-    }
-    if (agent.status === 'pending') {
-      sendJson(res, 403, {error: 'Pending accounts cannot enter ladders yet.'});
-      return undefined;
-    }
-    return agent;
-  };
-
-  app.post('/api/account/teams', async (req, res) => {
-    const agent = requirePoolAccount(req, res);
-    if (!agent) return;
-
-    const now = getNow();
-    const retryAfter = checkTeamValidationRateLimit(agent.id, now);
-    if (retryAfter !== undefined) {
-      sendJson(
-        res,
-        429,
-        {error: `Too many team validation attempts; wait ${retryAfter}s before retrying.`},
-        {'Retry-After': String(retryAfter)}
-      );
-      return;
-    }
-
-    let bodyObj: Record<string, unknown>;
-    try {
-      const rawBody = await readBody(req);
-      bodyObj = JSON.parse(rawBody || '{}') as Record<string, unknown>;
-    } catch (err: any) {
-      sendJson(res, err?.status ?? 400, {error: err?.message || 'Malformed request body.'});
-      return;
-    }
-
-    const ladderId = typeof bodyObj.ladderId === 'string' ? bodyObj.ladderId.trim() : '';
-    const ladder = db.getCurrentLadders().find(
-      l => l.id === ladderId && (l.status === 'upcoming' || l.status === 'active') &&
-        l.team === 'pools'
-    );
-    if (!ladder?.teams) {
-      sendJson(res, 400, {error: `Unknown or non-pool ladder "${ladderId}".`});
-      return;
-    }
-    if (db.hasActiveLadderTeams(ladder.id, agent.id)) {
-      sendJson(res, 400, {
-        error:
-          `Your ${ladder.teams} teams for ${ladder.name} (${ladder.id}) ` +
-          'are already locked for this season.',
-      });
-      return;
-    }
-
-    const rawTeams = bodyObj.teams;
-    const validTeamsInput =
-      typeof rawTeams === 'string'
-        ? rawTeams.trim().length > 0
-        : Array.isArray(rawTeams) && rawTeams.some(t => String(t ?? '').trim().length > 0);
-    if (!validTeamsInput) {
-      sendJson(res, 400, {error: 'Paste at least one team to validate.'});
-      return;
-    }
-
-    const existingSaved = db.getTeamsForAgentLadder(ladder.id, agent.id, 'saved');
-    const poolsMap = getPools();
-    const result = validateCompetitorTeamsIncremental(
-      rawTeams as string | string[],
-      {
-        format: ladder.format,
-        pools: poolsMap.get(ladder.id) ?? [],
-        teams: ladder.teams,
-      },
-      existingSaved
-    );
-
-    if (result.allSaved.length !== existingSaved.length) {
-      db.replaceSavedTeams(ladder.id, agent.id, result.allSaved, getNow());
-    }
-
-    sendJson(res, 200, {
-      ok: true,
-      ladderId: ladder.id,
-      savedCount: result.allSaved.length,
-      newlySavedCount: result.newlySavedCount,
-      requiredCount: result.requiredCount,
-      remainingCount: result.remainingCount,
-      complete: result.complete,
-      rejections: result.rejections,
-    });
-  });
-
-  app.post('/api/account/teams/clear', async (req, res) => {
-    const agent = requirePoolAccount(req, res);
-    if (!agent) return;
-
-    let bodyObj: Record<string, unknown>;
-    try {
-      const rawBody = await readBody(req);
-      bodyObj = JSON.parse(rawBody || '{}') as Record<string, unknown>;
-    } catch (err: any) {
-      sendJson(res, err?.status ?? 400, {error: err?.message || 'Malformed request body.'});
-      return;
-    }
-
-    const ladderId = typeof bodyObj.ladderId === 'string' ? bodyObj.ladderId.trim() : '';
-    const ladder = db.getCurrentLadders().find(
-      l => l.id === ladderId && (l.status === 'upcoming' || l.status === 'active') &&
-        l.team === 'pools'
-    );
-    if (!ladder?.teams) {
-      sendJson(res, 400, {error: `Unknown or non-pool ladder "${ladderId}".`});
-      return;
-    }
-    if (db.hasActiveLadderTeams(ladder.id, agent.id)) {
-      sendJson(res, 400, {
-        error:
-          `Your ${ladder.teams} teams for ${ladder.name} (${ladder.id}) ` +
-          'are already locked for this season.',
-      });
-      return;
-    }
-
-    db.clearSavedTeams(ladder.id, agent.id);
-    sendJson(res, 200, {
-      ok: true,
-      ladderId: ladder.id,
-      savedCount: 0,
-      requiredCount: ladder.teams,
-      remainingCount: ladder.teams,
-      complete: false,
-    });
-  });
 
   app.post('/api/submissions', async (req, res) => {
     if (isCrossSiteRequest(req)) {

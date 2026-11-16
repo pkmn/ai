@@ -4,6 +4,7 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 
+import {Team} from '@pkmn/sets';
 import polka from 'polka';
 
 import {COOLDOWN_SECONDS, Database} from '../db';
@@ -136,15 +137,23 @@ describe('submission helpers', () => {
     expect(() => account.decryptSecret(`${enc}x`, 'session-secret-1')).toThrow();
   });
 
-  test('splitSubmittedTeams parses Showdown === headers, arrays, or 6-block pastes', () => {
-    const twoTeams = VALID_TWENTY_VGC.slice(0, 2);
-    const withHeaders =
-      `=== [gen9championsvgc2026regmc] Team 1 ===\n${twoTeams[0]}\n\n` +
-      `=== [gen9championsvgc2026regmc] Team 2 ===\n${twoTeams[1]}`;
-    expect(splitSubmittedTeams(withHeaders)).toHaveLength(2);
-    expect(splitSubmittedTeams(twoTeams)).toHaveLength(2);
-    expect(splitSubmittedTeams(`${twoTeams[0]}\n\n${twoTeams[1]}`)).toHaveLength(2);
-  });
+  test('splitSubmittedTeams parses Showdown === headers, packed lines, arrays, or 6-block pastes',
+    () => {
+      const twoTeams = VALID_TWENTY_VGC.slice(0, 2);
+      const withHeaders =
+        `=== [gen9championsvgc2026regmc] Team 1 ===\n${twoTeams[0]}\n\n` +
+        `=== [gen9championsvgc2026regmc] Team 2 ===\n${twoTeams[1]}`;
+      expect(splitSubmittedTeams(withHeaders)).toHaveLength(2);
+      expect(splitSubmittedTeams(twoTeams)).toHaveLength(2);
+      expect(splitSubmittedTeams(`${twoTeams[0]}\n\n${twoTeams[1]}`)).toHaveLength(2);
+      const packedOne = Team.import(twoTeams[0])!.pack();
+      const packedTwo = Team.import(twoTeams[1])!.pack();
+      expect(splitSubmittedTeams(`${packedOne}\n${packedTwo}`)).toEqual([packedOne, packedTwo]);
+      expect(splitSubmittedTeams(`${packedOne}\ncorrupted-line`)).toEqual([
+        packedOne,
+        'corrupted-line',
+      ]);
+    });
 });
 
 describe('account routes', () => {
@@ -260,17 +269,6 @@ describe('account routes', () => {
       body: JSON.stringify(body),
     });
 
-  const postDraftTeams = (endpoint: string, body: Record<string, unknown>, login = 'pre') =>
-    realFetch(`${baseUrl}${endpoint}`, {
-      method: 'POST',
-      headers: {
-        Cookie: cookieFor(login),
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
-
   describe('account portal qualification lifecycle', () => {
     test('redirects unauthenticated /account requests to GitHub OAuth', async () => {
       const unauth = await realFetch(`${baseUrl}/account`, {redirect: 'manual'});
@@ -363,7 +361,17 @@ describe('account routes', () => {
         '<label for="sub-teams" class="hide pool-teams-field">' +
           'Teams<span class="req">*</span></label>'
       );
-      expect(preHtml).toContain('<button class="btn" id="sub-btn" type="submit" disabled>');
+      expect(preHtml).toContain('placeholder="1.0.0"');
+      expect(preHtml).toContain(
+        'placeholder="One-time header for private releases (scrubbed immediately after fetch)"'
+      );
+      expect(preHtml).toContain(
+        'Paste up to 20 teams (one packed team per line or exportable with '
+      );
+      expect(preHtml).not.toContain('validate-teams-btn');
+      expect(preHtml).not.toContain('clear-teams-btn');
+      expect(preHtml).not.toContain('sub-teams-file');
+      expect(preHtml).toMatch(/<button(?=[^>]*\bid="sub-btn")(?=[^>]*\bdisabled\b)[^>]*>/);
 
       const sub = await postSubmission('pre', {
         version: '0.9.0',
@@ -845,17 +853,13 @@ describe('account routes', () => {
         VALID_TWENTY_VGC[0],
         VALID_TWENTY_VGC[1],
       ];
-      const res1 = await postDraftTeams('/api/account/teams', {
-        ladderId: 'gen9championsvgc2026regmc',
-        teams: batchOne,
-      });
-      expect(res1.status).toBe(200);
+      const res1 = await postVgc('1.0.0', batchOne);
+      expect(res1.status).toBe(400);
       expect(await res1.json()).toMatchObject({
         savedCount: 14,
         newlySavedCount: 14,
         requiredCount: 20,
         remainingCount: 6,
-        complete: false,
       });
 
       const acctHtml = await (await realFetch(`${baseUrl}/account`, {
@@ -880,66 +884,47 @@ describe('account routes', () => {
       expect((await incompleteSub.json() as {error: string}).error)
         .toContain('14/20 distinct teams saved — 6 more needed');
 
-      const res2 = await postDraftTeams('/api/account/teams', {
-        ladderId: 'gen9championsvgc2026regmc',
-        teams: [...VALID_TWENTY_VGC.slice(0, 17), illegalTeam, PUBLIC_CLONE_VGC,
-          VALID_TWENTY_VGC[2]],
-      });
+      const res2 = await postVgc(
+        '1.0.0',
+        [...VALID_TWENTY_VGC.slice(0, 17), illegalTeam, PUBLIC_CLONE_VGC, VALID_TWENTY_VGC[2]]
+      );
+      expect(res2.status).toBe(400);
       expect(await res2.json()).toMatchObject({
         savedCount: 17,
         newlySavedCount: 3,
         remainingCount: 3,
-        complete: false,
       });
 
-      const res3 = await postDraftTeams('/api/account/teams', {
-        ladderId: 'gen9championsvgc2026regmc',
-        teams: VALID_TWENTY_VGC.slice(17, 20),
-      });
-      expect(await res3.json()).toMatchObject({
-        savedCount: 20,
-        newlySavedCount: 3,
-        remainingCount: 0,
-        complete: true,
-        rejections: [],
-      });
-    });
-
-    test('clears saved draft teams via POST /api/account/teams/clear', async () => {
-      await postDraftTeams('/api/account/teams', {
-        ladderId: 'gen9championsvgc2026regmc',
-        teams: VALID_TWENTY_VGC.slice(0, 5),
-      });
-      const clr = await postDraftTeams('/api/account/teams/clear', {
-        ladderId: 'gen9championsvgc2026regmc',
-      });
-      expect(clr.status).toBe(200);
+      const res3 = await postVgc('1.0.0', VALID_TWENTY_VGC.slice(17, 20));
+      expect(res3.status).toBe(201);
       const agent = db.getAgentBySlug('0-error')!;
-      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved'))
-        .toHaveLength(0);
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending'))
+        .toHaveLength(20);
     });
 
-    test('rate-limits /api/account/teams after 5 attempts per minute', async () => {
-      for (let i = 0; i < 5; i++) {
-        const res = await postDraftTeams('/api/account/teams', {
-          ladderId: 'gen9championsvgc2026regmc',
-          teams: VALID_TWENTY_VGC.slice(0, 1),
-        });
-        expect(res.status).toBe(200);
-      }
-      const sixth = await postDraftTeams('/api/account/teams', {
-        ladderId: 'gen9championsvgc2026regmc',
-        teams: VALID_TWENTY_VGC.slice(0, 1),
-      });
-      expect(sixth.status).toBe(429);
-      expect(sixth.headers.get('retry-after')).toBeTruthy();
+    test('accepts 20 packed teams separated by newlines', async () => {
+      const packedPaste = VALID_TWENTY_VGC
+        .map(t => Team.import(t)!.pack())
+        .join('\n');
+      const res = await postVgc('1.0.0', packedPaste);
+      expect(res.status).toBe(201);
+      const agent = db.getAgentBySlug('0-error')!;
+      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending'))
+        .toHaveLength(20);
     });
 
     test('promotes saved 20/20 draft teams to pending when submitting without teams', async () => {
-      await postDraftTeams('/api/account/teams', {
-        ladderId: 'gen9championsvgc2026regmc',
-        teams: VALID_TWENTY_VGC,
+      const saveAllWithExtraDup = await postVgc(
+        '1.0.0',
+        [...VALID_TWENTY_VGC, VALID_TWENTY_VGC[0]]
+      );
+      expect(saveAllWithExtraDup.status).toBe(400);
+      expect(await saveAllWithExtraDup.json()).toMatchObject({
+        savedCount: 20,
+        requiredCount: 20,
+        remainingCount: 0,
       });
+
       const finalSub = await postVgc('1.0.0');
       expect(finalSub.status).toBe(201);
       const agent = db.getAgentBySlug('0-error')!;

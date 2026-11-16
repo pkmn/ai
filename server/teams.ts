@@ -489,7 +489,7 @@ export function splitSubmittedTeams(raw: string | string[]): string[] {
 
   // 2. Packed teams: one team per line containing ']' and '|'
   const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length > 1 && lines.every(l => l.includes(']') && l.includes('|'))) {
+  if (lines.length > 1 && lines.some(l => l.includes(']') && l.includes('|'))) {
     return lines;
   }
 

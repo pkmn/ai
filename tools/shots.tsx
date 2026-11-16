@@ -1040,7 +1040,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Account: VGC Teams Panel (0 / 20 Saved)',
       description:
         'Checking `VGC` on `/account/` reveals the incremental team pool panel (`0 / 20 ' +
-        'distinct teams saved — 20 more needed`, `1-NN >= 1.30`, `Load .txt` & `Validate`).',
+        'distinct teams saved — 20 more needed`, `1-NN >= 1.30`) and multi-team paste input.',
       path: '/account/',
       githubUser: 'sisyphus25',
       click: `input[name="ladders"][value="${VGC_LADDER_ID}"]`,
@@ -1050,10 +1050,11 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'account',
       title: 'Account: VGC Teams Validation (Partial Save + Rejections)',
       description:
-        'Validating 2 valid teams + 1 near-duplicate (`distance=0.000 < 1.30`) + 1 incomplete ' +
-        'moveset (`has 3 move(s); must have 4`) saves `2 / 20` and lists red rejections.',
+        'Submitting 2 valid teams + 1 near-duplicate (`distance=0.000 < 1.30`) + 1 incomplete ' +
+        'moveset (`must have 4 moves (found 3)`) saves `2 / 20` and lists red rejections.',
       path: '/account/',
       githubUser: 'sisyphus25',
+      expectHttpError: 400,
       serial: true,
       beforePage: fixture => {
         fixture.db.clearSavedTeams(VGC_LADDER_ID, fixture.cynthiaiId);
@@ -1063,6 +1064,12 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       },
       act: async (page, fixture) => {
         await page.click(`input[name="ladders"][value="${VGC_LADDER_ID}"]`);
+        await page.fill('#sub-ver', '1.0.0');
+        await page.fill(
+          '#sub-url',
+          'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0/cynthiai.tar.zst'
+        );
+        await page.fill('#sub-sha', 'a'.repeat(64));
         const t1 = fixture.rawVgcTeams[0];
         const t2 = fixture.rawVgcTeams[1];
         const t3Dup = fixture.rawVgcTeams[0];
@@ -1074,7 +1081,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           `=== [gen9championsvgc2026regmc] Team 4 (Short Moves) ===\n${t4Short}`,
         ].join('\n\n');
         await page.fill('#sub-teams', paste);
-        await page.click('#validate-teams-btn');
+        await page.click('#sub-btn');
         await page.waitForSelector('#teams-feedback:not(.hide)');
       },
     },
@@ -1083,10 +1090,11 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'account',
       title: 'Account: VGC Teams Validation (10 / 20 Saved)',
       description:
-        'Incremental batch validation reaching `10 / 20` saved teams (`50%` progress bar, ' +
-        '`(10/20 saved)` checkbox hint, green feedback, and `Clear Saved` button visible).',
+        'Incremental batch upload reaching `10 / 20` saved teams (`50%` progress bar, ' +
+        '`(10/20 saved)` checkbox hint, and remaining-teams prompt).',
       path: '/account/',
       githubUser: 'sisyphus25',
+      expectHttpError: 400,
       serial: true,
       beforePage: fixture => {
         fixture.db.replaceSavedTeams(
@@ -1101,11 +1109,17 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       },
       act: async (page, fixture) => {
         await page.click(`input[name="ladders"][value="${VGC_LADDER_ID}"]`);
+        await page.fill('#sub-ver', '1.0.0');
+        await page.fill(
+          '#sub-url',
+          'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0/cynthiai.tar.zst'
+        );
+        await page.fill('#sub-sha', 'a'.repeat(64));
         await page.fill(
           '#sub-teams',
           `=== [gen9championsvgc2026regmc] Team 10 ===\n${fixture.rawVgcTeams[9]}`
         );
-        await page.click('#validate-teams-btn');
+        await page.click('#sub-btn');
         await page.waitForSelector('#teams-feedback:not(.hide)');
       },
     },
@@ -1114,7 +1128,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'account',
       title: 'Account: VGC Teams Validation (All 20 / 20 Saved)',
       description:
-        'Completing all `20 / 20` distinct VGC teams turns the progress bar green (`100%`), ' +
+        'Having all `20 / 20` distinct VGC teams saved turns the progress bar green (`100%`), ' +
         'updates the checkbox hint to `(20/20 saved)`, and enables build submission.',
       path: '/account/',
       githubUser: 'sisyphus25',
@@ -1123,21 +1137,21 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         fixture.db.replaceSavedTeams(
           VGC_LADDER_ID,
           fixture.cynthiaiId,
-          fixture.canonicalVgcTeams.slice(0, 19),
+          fixture.canonicalVgcTeams,
           NOW_SECONDS
         );
       },
       setup: fixture => () => {
         fixture.db.clearSavedTeams(VGC_LADDER_ID, fixture.cynthiaiId);
       },
-      act: async (page, fixture) => {
+      act: async page => {
         await page.click(`input[name="ladders"][value="${VGC_LADDER_ID}"]`);
+        await page.fill('#sub-ver', '1.0.0');
         await page.fill(
-          '#sub-teams',
-          `=== [gen9championsvgc2026regmc] Team 20 ===\n${fixture.rawVgcTeams[19]}`
+          '#sub-url',
+          'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0/cynthiai.tar.zst'
         );
-        await page.click('#validate-teams-btn');
-        await page.waitForSelector('#teams-feedback:not(.hide)');
+        await page.fill('#sub-sha', 'a'.repeat(64));
       },
     },
     {

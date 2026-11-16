@@ -206,35 +206,6 @@ textarea.input-text {
   opacity: 0.45;
 }
 
-.btn-subtle {
-  padding: 0.12rem 0.5rem;
-  color: var(--fg-color);
-  font: inherit;
-  font-size: 0.8em;
-  font-family: var(--monospace);
-  background-color: transparent;
-  border: 1px solid var(--code-border-color);
-  border-radius: var(--border-radius);
-  cursor: pointer;
-}
-
-.teams-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1ch;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 0.35rem;
-  font-size: 0.82em;
-}
-
-.teams-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.6ch;
-  align-items: center;
-}
-
 .teams-progress {
   margin-bottom: 0.45rem;
   padding: 0.45rem 0.65rem;
