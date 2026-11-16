@@ -107,9 +107,11 @@ interface MirrorHeartbeatFrame {
   game1Summary?: {winnerSlot?: 'p1' | 'p2'; turns: number};
   p1: MirrorHeartbeatSide;
   p2: MirrorHeartbeatSide;
-  lines?: string[];
-  p1Pokemon?: unknown[];
-  p2Pokemon?: unknown[];
+  viewer?: {
+    lines: string[];
+    p1Pokemon?: unknown[];
+    p2Pokemon?: unknown[];
+  };
 }
 
 export interface Options {
@@ -910,11 +912,13 @@ export class Coordinator {
         ram: frame.p2.ram,
         ...(frame.p2.team ? {team: frame.p2.team} : {}),
       },
-      ...(frame.lines
+      ...(frame.viewer
         ? {
-          lines: frame.lines,
-          ...(frame.p1Pokemon ? {p1Pokemon: frame.p1Pokemon} : {}),
-          ...(frame.p2Pokemon ? {p2Pokemon: frame.p2Pokemon} : {}),
+          viewer: {
+            lines: frame.viewer.lines,
+            ...(frame.viewer.p1Pokemon ? {p1: {pokemon: frame.viewer.p1Pokemon}} : {}),
+            ...(frame.viewer.p2Pokemon ? {p2: {pokemon: frame.viewer.p2Pokemon}} : {}),
+          },
         }
         : {}),
     }).catch(() => undefined);
@@ -972,9 +976,15 @@ export class Coordinator {
             ram: Math.max(game1.p2.peakRam, info.p1.ram),
             team: match.p1.teamLabel,
           },
-          lines,
-          p1Pokemon: info.p1.pokemon,
-          p2Pokemon: info.p2.pokemon,
+          ...(lines
+            ? {
+              viewer: {
+                lines,
+                p1Pokemon: info.p1.pokemon,
+                p2Pokemon: info.p2.pokemon,
+              },
+            }
+            : {}),
         });
       },
     });
@@ -1018,9 +1028,11 @@ export class Coordinator {
           ram: Math.max(game1.p2.peakRam, g2Res.p1.peakRam),
           team: match.p1.teamLabel,
         },
-        lines: g2Log.split('\n'),
-        p1Pokemon: g2Res.p1.pokemon,
-        p2Pokemon: g2Res.p2.pokemon,
+        viewer: {
+          lines: g2Log.split('\n'),
+          p1Pokemon: g2Res.p1.pokemon,
+          p2Pokemon: g2Res.p2.pokemon,
+        },
       });
     }
 
@@ -1424,9 +1436,15 @@ export class Coordinator {
               ram: info.p2.ram,
               team: sampled.t2Label,
             },
-            lines,
-            p1Pokemon: info.p1.pokemon,
-            p2Pokemon: info.p2.pokemon,
+            ...(lines
+              ? {
+                viewer: {
+                  lines,
+                  p1Pokemon: info.p1.pokemon,
+                  p2Pokemon: info.p2.pokemon,
+                },
+              }
+              : {}),
           });
         },
       });
@@ -1464,9 +1482,11 @@ export class Coordinator {
             ram: g1Res.p2.peakRam,
             team: sampled.t2Label,
           },
-          lines: g1Log.split('\n'),
-          p1Pokemon: g1Res.p1.pokemon,
-          p2Pokemon: g1Res.p2.pokemon,
+          viewer: {
+            lines: g1Log.split('\n'),
+            p1Pokemon: g1Res.p1.pokemon,
+            p2Pokemon: g1Res.p2.pokemon,
+          },
         });
       }
 

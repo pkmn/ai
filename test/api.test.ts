@@ -574,30 +574,34 @@ describe('Arena live heartbeats & match completion', () => {
           matchId: 'gen9randombattle-0000001',
           ladderId: 'gen9randombattle20261109',
           format: 'gen9randombattle',
-          lines: [
-            '|player|p1|0 ERROR|1',
-            '|player|p2|Foul Play|2',
-            '|split|p1',
-            '|switch|p1a: Pikachu|Pikachu, L80|210/210',
-            '|switch|p1a: Pikachu|Pikachu, L80|100/100',
-            '|split|p2',
-            '|switch|p2a: Charizard|Charizard, L80|250/250',
-            '|switch|p2a: Charizard|Charizard, L80|100/100',
-            '|turn|1',
-          ],
-          p1Pokemon: [{ident: 'p1: Pikachu', details: 'Pikachu, L80', condition: '210/210'}],
-          p2Pokemon: [{ident: 'p2: Charizard', details: 'Charizard, L80', condition: '250/250'}],
+          viewer: {
+            lines: [
+              '|player|p1|0 ERROR|1',
+              '|player|p2|Foul Play|2',
+              '|split|p1',
+              '|switch|p1a: Pikachu|Pikachu, L80|210/210',
+              '|switch|p1a: Pikachu|Pikachu, L80|100/100',
+              '|split|p2',
+              '|switch|p2a: Charizard|Charizard, L80|250/250',
+              '|switch|p2a: Charizard|Charizard, L80|100/100',
+              '|turn|1',
+            ],
+            p1: {pokemon: [{ident: 'p1: Pikachu', details: 'Pikachu, L80', condition: '210/210'}]},
+            p2: {
+              pokemon: [{ident: 'p2: Charizard', details: 'Charizard, L80', condition: '250/250'}],
+            },
+          },
         }
       );
       expect(hbRand.status).toBe(200);
       const {doc} = await fetchLive();
       expect(doc.live?.slot).toBe('rand');
-      expect(doc.live?.p1Lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|210/210');
-      expect(doc.live?.p1Lines).toContain('|switch|p2a: Charizard|Charizard, L80|100/100');
-      expect(doc.live?.p2Lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|100/100');
-      expect(doc.live?.p2Lines).toContain('|switch|p2a: Charizard|Charizard, L80|250/250');
-      expect(doc.live?.p1Pokemon).toHaveLength(1);
-      expect(doc.live?.p2Pokemon).toHaveLength(1);
+      expect(doc.live?.viewer?.p1.lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|210/210');
+      expect(doc.live?.viewer?.p1.lines).toContain('|switch|p2a: Charizard|Charizard, L80|100/100');
+      expect(doc.live?.viewer?.p2.lines).toContain('|switch|p1a: Pikachu|Pikachu, L80|100/100');
+      expect(doc.live?.viewer?.p2.lines).toContain('|switch|p2a: Charizard|Charizard, L80|250/250');
+      expect(doc.live?.viewer?.p1.pokemon).toHaveLength(1);
+      expect(doc.live?.viewer?.p2.pokemon).toHaveLength(1);
     });
 
   test('fires disconnect watchdog alert once heartbeat exceeds timeout', async () => {
@@ -1637,7 +1641,7 @@ describe('Arena binary archive uploads', () => {
         turnStartedAt: 1_700_000_900,
         turnBudgetSeconds: 140,
         incrementSeconds: 5,
-        lines: ['|player|p1|0 ERROR|1', '|player|p2|Foul Play|2', '|turn|3'],
+        viewer: {lines: ['|player|p1|0 ERROR|1', '|player|p2|Foul Play|2', '|turn|3']},
         p1: {
           slug: '0-error',
           name: '0 ERROR',
@@ -1657,7 +1661,7 @@ describe('Arena binary archive uploads', () => {
           ram: 800,
         },
       });
-      expect(ctrl.getLiveDocument(1_700_000_905).live?.lines).toEqual([
+      expect(ctrl.getLiveDocument(1_700_000_905).live?.viewer?.lines).toEqual([
         '|player|p1|0 ERROR|1',
         '|player|p2|Foul Play|2',
         '|turn|3',
@@ -1674,7 +1678,7 @@ describe('Arena binary archive uploads', () => {
         turnStartedAt: 1_700_000_906,
         turnBudgetSeconds: 140,
         incrementSeconds: 5,
-        lines: ['|player|p1|0 ERROR|1'],
+        viewer: {lines: ['|player|p1|0 ERROR|1']},
         p1: {
           slug: '0-error',
           name: '0 ERROR',
@@ -1694,7 +1698,7 @@ describe('Arena binary archive uploads', () => {
           ram: 800,
         },
       });
-      expect(ctrl.getLiveDocument(1_700_000_907).live?.lines).toBeUndefined();
+      expect(ctrl.getLiveDocument(1_700_000_907).live?.viewer).toBeUndefined();
     });
 
   test('writes per-game replay logs on random ladder match-complete', async () => {
@@ -1751,10 +1755,10 @@ describe('Arena binary archive uploads', () => {
     });
 
     const doc = ctrl.getLiveDocument(1_700_000_960);
-    expect(doc.recentMatches[0].game1LogHref).toBe(
+    expect(doc.recentMatches[0].games[0].logHref).toBe(
       '/arena/ladders/gen9randombattle20261109/gen9randombattle-0000042a.log'
     );
-    expect(doc.recentMatches[0].game2LogHref).toBe(
+    expect(doc.recentMatches[0].games[1].logHref).toBe(
       '/arena/ladders/gen9randombattle20261109/gen9randombattle-0000042b.log'
     );
   });

@@ -79,10 +79,27 @@ export interface LiveSlot {
   team?: string;
 }
 
+export interface LiveViewerSide {
+  lines: string[];
+  pokemon?: unknown[];
+}
+
+export interface LiveViewerState {
+  lines: string[];
+  p1: LiveViewerSide;
+  p2: LiveViewerSide;
+}
+
+export interface LiveViewerInput {
+  lines: string[];
+  p1?: {lines?: string[]; pokemon?: unknown[]};
+  p2?: {lines?: string[]; pokemon?: unknown[]};
+}
+
 // Live telemetry enforces a strict zero-log anti-scouting policy on `harvested` and `pools`
 // ladders (spectators see turn numbers, Showdown chess clocks, SIGSTOP/SIGCONT slot state, and
 // XNU physical footprint RAM, never teams, Pokémon species, move choices, or battle logs). On
-// `random` ladders, `lines` streams the live Showdown battle log because teams are generated
+// `random` ladders, `viewer` streams the live Showdown battle log because teams are generated
 // randomly per game and agents execute in an airgapped sandbox without internet access.
 export interface LiveMatch {
   heartbeatSeq: number;
@@ -99,17 +116,18 @@ export interface LiveMatch {
   game1Summary?: {winnerSlot?: 'p1' | 'p2'; turns: number};
   p1: LiveSlot;
   p2: LiveSlot;
-  lines?: string[];
-  p1Lines?: string[];
-  p2Lines?: string[];
-  p1Pokemon?: unknown[];
-  p2Pokemon?: unknown[];
+  viewer?: LiveViewerState;
 }
 
-export interface BattleHistoryEntry extends db.RecentMatchView {
+export type LiveMatchInput = Omit<LiveMatch, 'viewer'> & {viewer?: LiveViewerInput};
+
+export interface BattleHistoryGameEntry extends db.RecentMatchGame {
+  logHref?: string;
+}
+
+export interface BattleHistoryEntry extends Omit<db.RecentMatchView, 'games'> {
   ladderHref: string;
-  game1LogHref?: string;
-  game2LogHref?: string;
+  games: [BattleHistoryGameEntry, BattleHistoryGameEntry];
 }
 
 export interface LiveDocument {
@@ -197,18 +215,18 @@ export interface TournamentStandingEntry {
   sonnebornBerger: number;
 }
 
+export interface TournamentCrosstableSide {
+  versionId: number;
+  slug?: string;
+  name?: string;
+  version?: string;
+  wins: number;
+}
+
 export interface TournamentCrosstableEntry {
   stage: db.TournamentGameStage;
-  lowVersionId: number;
-  highVersionId: number;
-  lowSlug?: string;
-  lowName?: string;
-  lowVersion?: string;
-  highSlug?: string;
-  highName?: string;
-  highVersion?: string;
-  lowWins: number;
-  highWins: number;
+  low: TournamentCrosstableSide;
+  high: TournamentCrosstableSide;
   ties: number;
 }
 
@@ -435,16 +453,20 @@ export function buildTournamentDocument(
     const high = entrantByVer.get(p.highVersionId);
     return {
       stage,
-      lowVersionId: p.lowVersionId,
-      highVersionId: p.highVersionId,
-      lowSlug: low?.agentSlug,
-      lowName: low?.agentName,
-      lowVersion: low?.version,
-      highSlug: high?.agentSlug,
-      highName: high?.agentName,
-      highVersion: high?.version,
-      lowWins: p.lowWins,
-      highWins: p.highWins,
+      low: {
+        versionId: p.lowVersionId,
+        slug: low?.agentSlug,
+        name: low?.agentName,
+        version: low?.version,
+        wins: p.lowWins,
+      },
+      high: {
+        versionId: p.highVersionId,
+        slug: high?.agentSlug,
+        name: high?.agentName,
+        version: high?.version,
+        wins: p.highWins,
+      },
       ties: p.ties,
     };
   };
@@ -552,12 +574,39 @@ export function normalizeLiveBroadcast(
   };
 }
 
+export function normalizeLiveViewer(input?: LiveViewerInput): LiveViewerState | undefined {
+  if (!input || !Array.isArray(input.lines)) return undefined;
+  const lines = input.lines.slice();
+  const hasPersp = Array.isArray(input.p1?.lines) && Array.isArray(input.p2?.lines);
+  const persp = hasPersp
+    ? {p1Lines: input.p1!.lines!.slice(), p2Lines: input.p2!.lines!.slice()}
+    : extractPerspectiveLogs(lines);
+  const p1Pokemon = Array.isArray(input.p1?.pokemon) ? input.p1.pokemon.slice(0, 6) : undefined;
+  const p2Pokemon = Array.isArray(input.p2?.pokemon) ? input.p2.pokemon.slice(0, 6) : undefined;
+  return {
+    lines,
+    p1: {
+      lines: persp.p1Lines,
+      ...(p1Pokemon !== undefined ? {pokemon: p1Pokemon} : {}),
+    },
+    p2: {
+      lines: persp.p2Lines,
+      ...(p2Pokemon !== undefined ? {pokemon: p2Pokemon} : {}),
+    },
+  };
+}
+
 export function enrichMatchView(publicDir: string, m: db.RecentMatchView): BattleHistoryEntry {
   const ladderHref = m.ladderStatus === 'archived'
     ? `/arena/ladders/${encodeURIComponent(m.ladderId)}/`
     : `/arena/ladders/${encodeURIComponent(m.slot)}/`;
+  const [g1, g2] = m.games;
   if (m.teamMode !== 'random') {
-    return {...m, ladderHref};
+    return {
+      ...m,
+      ladderHref,
+      games: [{...g1}, {...g2}],
+    };
   }
   const idEnc = encodeURIComponent(m.ladderId);
   const ladderDir = path.join(publicDir, 'arena', 'ladders', m.ladderId);
@@ -569,7 +618,14 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
   const game2LogHref = fs.existsSync(path.join(ladderDir, g2Rel))
     ? `/arena/ladders/${idEnc}/${encodeURIComponent(g2Rel)}`
     : undefined;
-  return {...m, ladderHref, game1LogHref, game2LogHref};
+  return {
+    ...m,
+    ladderHref,
+    games: [
+      {...g1, ...(game1LogHref !== undefined ? {logHref: game1LogHref} : {})},
+      {...g2, ...(game2LogHref !== undefined ? {logHref: game2LogHref} : {})},
+    ],
+  };
 }
 
 export interface WatchdogAlert {
@@ -608,7 +664,7 @@ export interface Options {
 export interface Handle {
   close: () => void;
   getLiveDocument: (nowSeconds?: number) => LiveDocument;
-  setLiveState: (state: {live?: LiveMatch; stale?: boolean; updatedAt?: number}) => void;
+  setLiveState: (state: {live?: LiveMatchInput; stale?: boolean; updatedAt?: number}) => void;
   getTournamentBroadcast: (tournamentId?: string) => LiveBroadcast | undefined;
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
   notifyTournamentStatus: (tournamentId: string) => void;
@@ -682,7 +738,7 @@ export interface SubmissionStatusResponse {
   retiredByLadder: Record<string, number>;
 }
 
-export type HeartbeatPayload = LiveMatch | {idle: true};
+export type HeartbeatPayload = LiveMatchInput | {idle: true};
 
 export interface HeartbeatResponse {
   ok: true;
@@ -2323,25 +2379,36 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      let lines: string[] | undefined;
-      let p1Lines: string[] | undefined;
-      let p2Lines: string[] | undefined;
-      let p1Pokemon: unknown[] | undefined;
-      let p2Pokemon: unknown[] | undefined;
-      if (body.lines !== undefined) {
-        if (!Array.isArray(body.lines)) {
-          sendJson(res, 400, {error: 'lines must be an array of strings.'});
+      let viewer: LiveViewerState | undefined;
+      if (body.viewer !== undefined) {
+        if (
+          !body.viewer ||
+          typeof body.viewer !== 'object' ||
+          Array.isArray(body.viewer)
+        ) {
+          sendJson(res, 400, {error: 'Invalid viewer object.'});
+          return;
+        }
+        const rawViewer = body.viewer as Record<string, unknown>;
+        if (!Array.isArray(rawViewer.lines)) {
+          sendJson(res, 400, {error: 'viewer.lines must be an array of strings.'});
           return;
         }
         if (ladder?.team === 'random') {
-          lines = body.lines
+          const lines = rawViewer.lines
             .slice(-MAX_TABLE_LINES)
             .map(l => String(l).slice(0, 4096));
-          const extracted = extractPerspectiveLogs(lines);
-          p1Lines = extracted.p1Lines;
-          p2Lines = extracted.p2Lines;
-          if (Array.isArray(body.p1Pokemon)) p1Pokemon = body.p1Pokemon.slice(0, 6);
-          if (Array.isArray(body.p2Pokemon)) p2Pokemon = body.p2Pokemon.slice(0, 6);
+          const rawP1 = rawViewer.p1 && typeof rawViewer.p1 === 'object'
+            ? (rawViewer.p1 as Record<string, unknown>)
+            : undefined;
+          const rawP2 = rawViewer.p2 && typeof rawViewer.p2 === 'object'
+            ? (rawViewer.p2 as Record<string, unknown>)
+            : undefined;
+          viewer = normalizeLiveViewer({
+            lines,
+            p1: Array.isArray(rawP1?.pokemon) ? {pokemon: rawP1.pokemon} : undefined,
+            p2: Array.isArray(rawP2?.pokemon) ? {pokemon: rawP2.pokemon} : undefined,
+          });
         }
       }
 
@@ -2374,9 +2441,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         game1Summary,
         p1,
         p2,
-        ...(lines !== undefined ? {lines, p1Lines, p2Lines} : {}),
-        ...(p1Pokemon !== undefined ? {p1Pokemon} : {}),
-        ...(p2Pokemon !== undefined ? {p2Pokemon} : {}),
+        ...(viewer !== undefined ? {viewer} : {}),
       };
       lastMatchId = matchId;
       liveStale = false;
@@ -3554,11 +3619,15 @@ export function register(app: polka.Polka, options: Options): Handle {
     close: closeAll,
     getLiveDocument,
     setLiveState: state => {
-      if (state.live?.lines && (!state.live.p1Lines || !state.live.p2Lines)) {
-        const persp = extractPerspectiveLogs(state.live.lines);
-        currentLive = {...state.live, p1Lines: persp.p1Lines, p2Lines: persp.p2Lines};
+      if (state.live) {
+        const {viewer: rawViewer, ...rest} = state.live;
+        const normalizedViewer = normalizeLiveViewer(rawViewer);
+        currentLive = {
+          ...rest,
+          ...(normalizedViewer !== undefined ? {viewer: normalizedViewer} : {}),
+        };
       } else {
-        currentLive = state.live;
+        currentLive = undefined;
       }
       liveStale = state.stale ?? false;
       liveUpdatedAt = state.updatedAt ?? getNowSec();

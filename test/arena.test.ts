@@ -2565,8 +2565,8 @@ describe('arena infrastructure', () => {
 
           const recorded = db.getRecentMatches(5);
           expect(recorded).toHaveLength(1);
-          expect(recorded[0].game1Outcome).toBe('L');
-          expect(recorded[0].game2Outcome).toBe('W');
+          expect(recorded[0].games[0].outcome).toBe('L');
+          expect(recorded[0].games[1].outcome).toBe('W');
           expect(recorded[0].category).toBe('LW');
           const randLogDir = path.join(publicDir, 'arena', 'ladders', 'gen9randombattle202611');
           const g1Published = fs.readFileSync(
@@ -2680,8 +2680,8 @@ describe('arena infrastructure', () => {
         const vgcMatches = db.getRecentMatches(10);
         expect(vgcMatches).toHaveLength(1);
         expect(vgcMatches[0].id).toBe('gen9championsvgc2026regmc-0000001');
-        expect(vgcMatches[0].p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
-        expect(vgcMatches[0].p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+        expect(vgcMatches[0].p1.teamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+        expect(vgcMatches[0].p2.teamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
       });
     });
 

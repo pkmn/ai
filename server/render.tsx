@@ -280,46 +280,24 @@ export function buildBattleDetailClientJs(): string {
       const g2P1Label = p2IsUs ? '(P1)' : 'P1';
       const g2P2Label = p1IsUs ? '(P2)' : 'P2';
 
-      const end1 = formatEndReason(m.game1EndReason);
-      const end2 = formatEndReason(m.game2EndReason);
+      const [g1, g2] = m.games;
+      const end1 = formatEndReason(g1.endReason);
+      const end2 = formatEndReason(g2.endReason);
 
-      const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
-      const t1Code = formatPoolCode(m.p1TeamLabel, m.p1.name, m.p2.name);
-      const t2Code = formatPoolCode(m.p2TeamLabel, m.p1.name, m.p2.name);
+      const showPools = m.teamMode === 'pools' || Boolean(m.p1.teamLabel || m.p2.teamLabel);
+      const t1Code = formatPoolCode(m.p1.teamLabel, m.p1.name, m.p2.name);
+      const t2Code = formatPoolCode(m.p2.teamLabel, m.p1.name, m.p2.name);
 
-      const g1P1Mean = m.p1Game1MeanTurnMillis !== undefined
-        ? m.p1Game1MeanTurnMillis
-        : m.p1MeanTurnMillis;
-      const g1P2Mean = m.p2Game1MeanTurnMillis !== undefined
-        ? m.p2Game1MeanTurnMillis
-        : m.p2MeanTurnMillis;
-      const g2P1Mean = m.p2Game2MeanTurnMillis !== undefined
-        ? m.p2Game2MeanTurnMillis
-        : m.p2MeanTurnMillis;
-      const g2P2Mean = m.p1Game2MeanTurnMillis !== undefined
-        ? m.p1Game2MeanTurnMillis
-        : m.p1MeanTurnMillis;
-
-      const g1P1Bank = m.p1Game1BankSeconds;
-      const g1P2Bank = m.p2Game1BankSeconds;
-      const g2P1Bank = m.p2Game2BankSeconds;
-      const g2P2Bank = m.p1Game2BankSeconds;
-
-      const g1P1Ram = m.p1Game1PeakRam !== undefined ? m.p1Game1PeakRam : m.p1PeakRam;
-      const g1P2Ram = m.p2Game1PeakRam !== undefined ? m.p2Game1PeakRam : m.p2PeakRam;
-      const g2P1Ram = m.p2Game2PeakRam !== undefined ? m.p2Game2PeakRam : m.p2PeakRam;
-      const g2P2Ram = m.p1Game2PeakRam !== undefined ? m.p1Game2PeakRam : m.p1PeakRam;
-
-      const replayAttrs = (m.game1LogHref || m.game2LogHref)
+      const replayAttrs = (g1.logHref || g2.logHref)
         ? ' data-match-id="' + esc(m.id) +
           '" data-p1-name="' + esc(m.p1.name) +
           '" data-p2-name="' + esc(m.p2.name) + '"' +
-          (m.game1LogHref ? ' data-g1-log="' + esc(m.game1LogHref) + '"' : '') +
-          (m.game2LogHref ? ' data-g2-log="' + esc(m.game2LogHref) + '"' : '')
+          (g1.logHref ? ' data-g1-log="' + esc(g1.logHref) + '"' : '') +
+          (g2.logHref ? ' data-g2-log="' + esc(g2.logHref) + '"' : '')
         : '';
 
-      const g1OutcomePrefix = omitOutcome ? '' : (formatGameOutcomeHtml(m.game1Outcome) + ' · ');
-      const g2OutcomePrefix = omitOutcome ? '' : (formatGameOutcomeHtml(m.game2Outcome) + ' · ');
+      const g1OutcomePrefix = omitOutcome ? '' : (formatGameOutcomeHtml(g1.outcome) + ' · ');
+      const g2OutcomePrefix = omitOutcome ? '' : (formatGameOutcomeHtml(g2.outcome) + ' · ');
       const g1EndSuffix = end1.show ? (' · ' + end1.html) : '';
       const g2EndSuffix = end2.show ? (' · ' + end2.html) : '';
 
@@ -333,32 +311,48 @@ export function buildBattleDetailClientJs(): string {
             '<div class="battle-detail-title">' +
               '<span>Game 1</span>' +
               '<span class="battle-detail-sub">' + g1OutcomePrefix +
-                '<tt>' + m.game1Turns + ' turns</tt>' + g1EndSuffix +
+                '<tt>' + g1.turns + ' turns</tt>' + g1EndSuffix +
               '</span>' +
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g1P1Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(g1P1Mean, g1P1Bank, g1P1Ram) +
+              formatGamePlayerTelemetryHtml(
+                g1.p1.meanTurnMillis,
+                g1.p1.bankSeconds,
+                g1.p1.peakRam
+              ) +
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g1P2Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(g1P2Mean, g1P2Bank, g1P2Ram) +
+              formatGamePlayerTelemetryHtml(
+                g1.p2.meanTurnMillis,
+                g1.p2.bankSeconds,
+                g1.p2.peakRam
+              ) +
             '</div>' +
           '</div>' +
           '<div class="battle-detail-card">' +
             '<div class="battle-detail-title">' +
               '<span>Game 2</span>' +
               '<span class="battle-detail-sub">' + g2OutcomePrefix +
-                '<tt>' + m.game2Turns + ' turns</tt>' + g2EndSuffix +
+                '<tt>' + g2.turns + ' turns</tt>' + g2EndSuffix +
               '</span>' +
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g2P1Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(g2P1Mean, g2P1Bank, g2P1Ram) +
+              formatGamePlayerTelemetryHtml(
+                g2.p2.meanTurnMillis,
+                g2.p2.bankSeconds,
+                g2.p2.peakRam
+              ) +
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g2P2Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(g2P2Mean, g2P2Bank, g2P2Ram) +
+              formatGamePlayerTelemetryHtml(
+                g2.p1.meanTurnMillis,
+                g2.p1.bankSeconds,
+                g2.p1.peakRam
+              ) +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -563,8 +557,9 @@ function buildBattlesScript(
       state &&
       state.live &&
       !state.stale &&
-      Array.isArray(state.live.lines) &&
-      state.live.lines.length > 0
+      state.live.viewer &&
+      Array.isArray(state.live.viewer.lines) &&
+      state.live.viewer.lines.length > 0
     )
       ? {...state.live, ended: false, seekEnd: true}
       : undefined;
@@ -581,11 +576,12 @@ function buildBattlesScript(
     });
 
     const loadShownIntoViewer = () => {
-      if (!shownLive) return;
+      if (!shownLive || !shownLive.viewer) return;
       if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
-      const lines = Array.isArray(shownLive.lines) ? shownLive.lines : [];
-      const p1Lines = Array.isArray(shownLive.p1Lines) ? shownLive.p1Lines : undefined;
-      const p2Lines = Array.isArray(shownLive.p2Lines) ? shownLive.p2Lines : undefined;
+      const v = shownLive.viewer;
+      const lines = Array.isArray(v.lines) ? v.lines : [];
+      const p1Lines = v.p1 && Array.isArray(v.p1.lines) ? v.p1.lines : undefined;
+      const p2Lines = v.p2 && Array.isArray(v.p2.lines) ? v.p2.lines : undefined;
       sentLineCount = lines.length;
       sentP1Count = p1Lines ? p1Lines.length : 0;
       sentP2Count = p2Lines ? p2Lines.length : 0;
@@ -596,8 +592,8 @@ function buildBattlesScript(
         lines,
         p1Lines,
         p2Lines,
-        p1Pokemon: shownLive.p1Pokemon,
-        p2Pokemon: shownLive.p2Pokemon,
+        p1Pokemon: v.p1 ? v.p1.pokemon : undefined,
+        p2Pokemon: v.p2 ? v.p2.pokemon : undefined,
         live: true,
         seekEnd: shownLive.seekEnd !== false,
         side: 'p1',
@@ -609,19 +605,20 @@ function buildBattlesScript(
     };
 
     const appendShownToViewer = () => {
-      if (!shownLive) return;
+      if (!shownLive || !shownLive.viewer) return;
       if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
-      const lines = Array.isArray(shownLive.lines) ? shownLive.lines : [];
-      const p1Lines = Array.isArray(shownLive.p1Lines) ? shownLive.p1Lines : undefined;
-      const p2Lines = Array.isArray(shownLive.p2Lines) ? shownLive.p2Lines : undefined;
+      const v = shownLive.viewer;
+      const lines = Array.isArray(v.lines) ? v.lines : [];
+      const p1Lines = v.p1 && Array.isArray(v.p1.lines) ? v.p1.lines : undefined;
+      const p2Lines = v.p2 && Array.isArray(v.p2.lines) ? v.p2.lines : undefined;
       if (liveViewerReady && lines.length > sentLineCount) {
         postToFrame(liveViewerFrame, {
           type: 'append',
           lines: lines.slice(sentLineCount),
           p1Lines: p1Lines ? p1Lines.slice(sentP1Count) : undefined,
           p2Lines: p2Lines ? p2Lines.slice(sentP2Count) : undefined,
-          p1Pokemon: shownLive.p1Pokemon,
-          p2Pokemon: shownLive.p2Pokemon,
+          p1Pokemon: v.p1 ? v.p1.pokemon : undefined,
+          p2Pokemon: v.p2 ? v.p2.pokemon : undefined,
         });
       }
       sentLineCount = lines.length;
@@ -647,7 +644,11 @@ function buildBattlesScript(
             shownLive = queuedLive;
             queuedLive = undefined;
             loadShownIntoViewer();
-          } else if (state && state.live && !Array.isArray(state.live.lines)) {
+          } else if (
+            state &&
+            state.live &&
+            !(state.live.viewer && Array.isArray(state.live.viewer.lines))
+          ) {
             if (battleViewerWrap) battleViewerWrap.classList.add('hide');
             shownLive = undefined;
           }
@@ -771,7 +772,7 @@ function buildBattlesScript(
         renderSlot('p2', l.p2, l, nowSec) +
         '</div>';
 
-      if (Array.isArray(l.lines) && l.lines.length > 0) {
+      if (l.viewer && Array.isArray(l.viewer.lines) && l.viewer.lines.length > 0) {
         const gameKey = l.matchId + ':' + l.game;
         const shownKey = shownLive ? (shownLive.matchId + ':' + shownLive.game) : '';
         if (!shownLive) {
@@ -779,9 +780,11 @@ function buildBattlesScript(
           queuedLive = undefined;
           loadShownIntoViewer();
         } else if (gameKey === shownKey) {
-          const prevLen = Array.isArray(shownLive.lines) ? shownLive.lines.length : 0;
+          const prevLen = shownLive.viewer && Array.isArray(shownLive.viewer.lines)
+            ? shownLive.viewer.lines.length
+            : 0;
           shownLive = {...l, ended: false, seekEnd: shownLive.seekEnd};
-          if (l.lines.length < prevLen) {
+          if (l.viewer.lines.length < prevLen) {
             loadShownIntoViewer();
           } else {
             appendShownToViewer();
@@ -817,15 +820,16 @@ function buildBattlesScript(
 
     const renderMatchPair = (m, nowSec, expanded) => {
       const r = resultParts(m.category);
-      const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
-      const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
-      const reasons = (isFaultReason(m.game1EndReason) || isFaultReason(m.game2EndReason))
-        ? ' · End: ' + m.game1EndReason + '/' + m.game2EndReason
+      const [g1, g2] = m.games;
+      const b1 = Math.round(Math.min(g1.p1.bankSeconds, g2.p1.bankSeconds));
+      const b2 = Math.round(Math.min(g1.p2.bankSeconds, g2.p2.bankSeconds));
+      const reasons = (isFaultReason(g1.endReason) || isFaultReason(g2.endReason))
+        ? ' · End: ' + g1.endReason + '/' + g2.endReason
         : '';
-      const tip = m.category + ' · ' + Math.round(m.p1MeanTurnMillis) + 'ms/' +
-        Math.round(m.p2MeanTurnMillis) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
-        Math.round(m.p1PeakRam).toLocaleString('en-US') + 'M/' +
-        Math.round(m.p2PeakRam).toLocaleString('en-US') + 'M' + reasons;
+      const tip = m.category + ' · ' + Math.round(m.p1.meanTurnMillis) + 'ms/' +
+        Math.round(m.p2.meanTurnMillis) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
+        Math.round(m.p1.peakRam).toLocaleString('en-US') + 'M/' +
+        Math.round(m.p2.peakRam).toLocaleString('en-US') + 'M' + reasons;
 
       const tr = document.createElement('tr');
       tr.id = m.id;
@@ -1227,13 +1231,15 @@ export interface StandingsLadder {
   standings: StandingsEntry[];
 }
 
+export interface PairingAgentSummary {
+  slug?: string;
+  name?: string;
+  version?: string;
+}
+
 export interface LadderPairingSummary {
-  lowSlug?: string;
-  lowName?: string;
-  lowVersion?: string;
-  highSlug?: string;
-  highName?: string;
-  highVersion?: string;
+  low: PairingAgentSummary;
+  high: PairingAgentSummary;
   ww: number;
   wt: number;
   split: number;
@@ -2408,12 +2414,16 @@ function renderSingleLadderArtifact(opts: {
       const low = entryByVer.get(p.lowVersionId);
       const high = entryByVer.get(p.highVersionId);
       return {
-        lowSlug: low?.agentSlug,
-        lowName: low?.agentName,
-        lowVersion: low?.version,
-        highSlug: high?.agentSlug,
-        highName: high?.agentName,
-        highVersion: high?.version,
+        low: {
+          slug: low?.agentSlug,
+          name: low?.agentName,
+          version: low?.version,
+        },
+        high: {
+          slug: high?.agentSlug,
+          name: high?.agentName,
+          version: high?.version,
+        },
         ww: p.ww,
         wt: p.wt,
         split: p.split,
@@ -3174,14 +3184,15 @@ export function renderBattleInlineDetailHtml(
   const completedIso = new Date(m.completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
   const completedUtc = `${completedIso} UTC`;
 
-  const end1 = formatEndReasonNode(m.game1EndReason);
-  const end2 = formatEndReasonNode(m.game2EndReason);
+  const [g1, g2] = m.games;
+  const end1 = formatEndReasonNode(g1.endReason);
+  const end2 = formatEndReasonNode(g2.endReason);
 
-  const showPools = m.teamMode === 'pools' || Boolean(m.p1TeamLabel || m.p2TeamLabel);
-  const t1Code = formatPoolTeamCode(m.p1TeamLabel, m.p1.name, m.p2.name);
-  const t2Code = formatPoolTeamCode(m.p2TeamLabel, m.p1.name, m.p2.name);
+  const showPools = m.teamMode === 'pools' || Boolean(m.p1.teamLabel || m.p2.teamLabel);
+  const t1Code = formatPoolTeamCode(m.p1.teamLabel, m.p1.name, m.p2.name);
+  const t2Code = formatPoolTeamCode(m.p2.teamLabel, m.p1.name, m.p2.name);
 
-  const hasReplay = Boolean(m.game1LogHref || m.game2LogHref);
+  const hasReplay = Boolean(g1.logHref || g2.logHref);
 
   return String(
     <div
@@ -3189,8 +3200,8 @@ export function renderBattleInlineDetailHtml(
       data-match-id={hasReplay ? m.id : undefined}
       data-p1-name={hasReplay ? m.p1.name : undefined}
       data-p2-name={hasReplay ? m.p2.name : undefined}
-      data-g1-log={m.game1LogHref}
-      data-g2-log={m.game2LogHref}
+      data-g1-log={g1.logHref}
+      data-g2-log={g2.logHref}
     >
       <div className='battle-detail-meta'>
         <span className='muted'>{completedUtc}</span>
@@ -3203,8 +3214,8 @@ export function renderBattleInlineDetailHtml(
           <div className='battle-detail-title'>
             <span>Game 1</span>
             <span className='battle-detail-sub'>
-              {!omitOutcome ? <>{formatGameOutcomeNode(m.game1Outcome)} · </> : undefined}
-              <tt>{m.game1Turns} turns</tt>
+              {!omitOutcome ? <>{formatGameOutcomeNode(g1.outcome)} · </> : undefined}
+              <tt>{g1.turns} turns</tt>
               {end1.show ? <> · {end1.node}</> : undefined}
             </span>
           </div>
@@ -3214,9 +3225,9 @@ export function renderBattleInlineDetailHtml(
               {showPools ? <> {t1Code}</> : undefined}
             </span>
             {formatGamePlayerTelemetryNode(
-              m.p1Game1MeanTurnMillis,
-              m.p1Game1BankSeconds,
-              m.p1Game1PeakRam
+              g1.p1.meanTurnMillis,
+              g1.p1.bankSeconds,
+              g1.p1.peakRam
             )}
           </div>
           <div className='battle-detail-line'>
@@ -3225,9 +3236,9 @@ export function renderBattleInlineDetailHtml(
               {showPools ? <> {t2Code}</> : undefined}
             </span>
             {formatGamePlayerTelemetryNode(
-              m.p2Game1MeanTurnMillis,
-              m.p2Game1BankSeconds,
-              m.p2Game1PeakRam
+              g1.p2.meanTurnMillis,
+              g1.p2.bankSeconds,
+              g1.p2.peakRam
             )}
           </div>
         </div>
@@ -3235,8 +3246,8 @@ export function renderBattleInlineDetailHtml(
           <div className='battle-detail-title'>
             <span>Game 2</span>
             <span className='battle-detail-sub'>
-              {!omitOutcome ? <>{formatGameOutcomeNode(m.game2Outcome)} · </> : undefined}
-              <tt>{m.game2Turns} turns</tt>
+              {!omitOutcome ? <>{formatGameOutcomeNode(g2.outcome)} · </> : undefined}
+              <tt>{g2.turns} turns</tt>
               {end2.show ? <> · {end2.node}</> : undefined}
             </span>
           </div>
@@ -3246,9 +3257,9 @@ export function renderBattleInlineDetailHtml(
               {showPools ? <> {t1Code}</> : undefined}
             </span>
             {formatGamePlayerTelemetryNode(
-              m.p2Game2MeanTurnMillis,
-              m.p2Game2BankSeconds,
-              m.p2Game2PeakRam
+              g2.p2.meanTurnMillis,
+              g2.p2.bankSeconds,
+              g2.p2.peakRam
             )}
           </div>
           <div className='battle-detail-line'>
@@ -3257,9 +3268,9 @@ export function renderBattleInlineDetailHtml(
               {showPools ? <> {t2Code}</> : undefined}
             </span>
             {formatGamePlayerTelemetryNode(
-              m.p1Game2MeanTurnMillis,
-              m.p1Game2BankSeconds,
-              m.p1Game2PeakRam
+              g2.p1.meanTurnMillis,
+              g2.p1.bankSeconds,
+              g2.p1.peakRam
             )}
           </div>
         </div>
@@ -3334,17 +3345,18 @@ export function renderBattlesPage(opts: {
       const p1Href = agentLinks[m.p1.slug];
       const p2Href = agentLinks[m.p2.slug];
 
-      const b1 = Math.round(Math.min(m.p1Game1BankSeconds, m.p1Game2BankSeconds));
-      const b2 = Math.round(Math.min(m.p2Game1BankSeconds, m.p2Game2BankSeconds));
+      const [g1, g2] = m.games;
+      const b1 = Math.round(Math.min(g1.p1.bankSeconds, g2.p1.bankSeconds));
+      const b2 = Math.round(Math.min(g1.p2.bankSeconds, g2.p2.bankSeconds));
       const reasonSuffix =
-        isAbnormalEndReason(m.game1EndReason) || isAbnormalEndReason(m.game2EndReason)
-          ? ` · End: ${m.game1EndReason}/${m.game2EndReason}`
+        isAbnormalEndReason(g1.endReason) || isAbnormalEndReason(g2.endReason)
+          ? ` · End: ${g1.endReason}/${g2.endReason}`
           : '';
       const tip =
-        `${m.category} · ${Math.round(m.p1MeanTurnMillis)}ms/` +
-        `${Math.round(m.p2MeanTurnMillis)}ms · Bank ${b1}s/${b2}s · RAM ` +
-        `${Math.round(m.p1PeakRam).toLocaleString('en-US')}M/` +
-        `${Math.round(m.p2PeakRam).toLocaleString('en-US')}M${reasonSuffix}`;
+        `${m.category} · ${Math.round(m.p1.meanTurnMillis)}ms/` +
+        `${Math.round(m.p2.meanTurnMillis)}ms · Bank ${b1}s/${b2}s · RAM ` +
+        `${Math.round(m.p1.peakRam).toLocaleString('en-US')}M/` +
+        `${Math.round(m.p2.peakRam).toLocaleString('en-US')}M${reasonSuffix}`;
 
       const rel = formatRelativeTime(nowSec, m.completedAt);
       const detailHtml = renderBattleInlineDetailHtml(m, agentLinks);
@@ -3398,7 +3410,7 @@ export function renderBattlesPage(opts: {
     `Page 1 of ${totalPages} (${totalMatches.toLocaleString('en-US')} ${battleWord})`;
 
   const liveMatchWithLines =
-    liveDoc && !liveDoc.stale && liveDoc.live?.lines && liveDoc.live.lines.length > 0
+    liveDoc && !liveDoc.stale && (liveDoc.live?.viewer?.lines.length ?? 0) > 0
       ? liveDoc.live
       : undefined;
 

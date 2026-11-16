@@ -695,8 +695,8 @@ describe('mock scenarios & E2E lifecycle', () => {
             const recentVgc = db.getRecentMatches(5)
               .find(m => m.ladderId === 'gen9championsvgc2026regmc');
             expect(recentVgc).toBeDefined();
-            expect(recentVgc?.p1TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
-            expect(recentVgc?.p2TeamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+            expect(recentVgc?.p1.teamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
+            expect(recentVgc?.p2.teamLabel).toMatch(/^(?:P[12]:)?[0-9a-f]{12}$/);
           },
           'third-version-retired': () => {
             const rbyEntries = db.getLeaderboardEntries('gen1ou20261109')

@@ -1791,15 +1791,17 @@ describe('JSON route parity & retired pool archives', () => {
           turnStartedAt: NOW - 2,
           turnBudgetSeconds: 140,
           incrementSeconds: 5,
-          lines: [
-            '|player|p1|Foul Play|1',
-            '|player|p2|Jaxcalibur|2',
-            '|gametype|singles',
-            '|gen|9',
-            '|tier|[Gen 9] Random Battle',
-            '|start',
-            '|turn|4',
-          ],
+          viewer: {
+            lines: [
+              '|player|p1|Foul Play|1',
+              '|player|p2|Jaxcalibur|2',
+              '|gametype|singles',
+              '|gen|9',
+              '|tier|[Gen 9] Random Battle',
+              '|start',
+              '|turn|4',
+            ],
+          },
           p1: {
             slug: 'foul-play',
             name: 'Foul Play',
@@ -2157,6 +2159,66 @@ describe('JSON route parity & retired pool archives', () => {
     try {
       const html = await h.getText('/projects/foul-play/#vgc');
       expect(html).toContain('Jaxcalibur (1)');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('emits nested substructs across ladder, tournament, battles, or profile JSON', async () => {
+    const fpVer = db.getVersionsForAgent(db.getAgentBySlug('foul-play')!.id)[0];
+    const jaxVer = db.getVersionsForAgent(db.getAgentBySlug('jaxcalibur')!.id)[0];
+    db.upsertTournamentEntrant({
+      tournamentId: '1',
+      agentId: jaxVer.agentId,
+      versionId: jaxVer.id,
+      seed: 2,
+      elo: 1480,
+      se: 30,
+      points: 6,
+      gameWins: 6,
+      gameLosses: 12,
+      gameTies: 0,
+      finalRank: 2,
+    });
+    db.recordCompletedTournamentMatch({
+      id: 't1-rr-01',
+      tournamentId: '1',
+      stage: 'Round Robin',
+      cycle: 1,
+      matchupGame: 1,
+      outcome: 'W',
+      p1: {versionId: fpVer.id},
+      p2: {versionId: jaxVer.id},
+      games: [{gameNumber: 1, seed: '1,2,3,4', outcome: 'W', turns: 9, endReason: 'normal'}],
+      completedAt: DAY_2,
+    });
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const ladderDoc = await h.getJson<render.LadderDocument>('/arena/ladders/vgc/index.json');
+      expect(ladderDoc.pairings[0].low.slug).toBe('foul-play');
+      expect(ladderDoc.pairings[0].high.slug).toBe('jaxcalibur');
+
+      const tourDoc = await h.getJson<arena.TournamentDocument>('/arena/tournaments/1/index.json');
+      expect(tourDoc.crosstable[0].low).toMatchObject({slug: 'foul-play', wins: 1});
+      expect(tourDoc.crosstable[0].high).toMatchObject({slug: 'jaxcalibur', wins: 0});
+
+      const battlesDoc = await h.getJson<arena.LiveDocument>('/arena/battles.json');
+      expect(battlesDoc.recentMatches[0].p1.meanTurnMillis).toBe(300);
+      expect(battlesDoc.recentMatches[0].games).toHaveLength(2);
+      expect(battlesDoc.recentMatches[0].games[0].gameNumber).toBe(1);
+      expect(battlesDoc.recentMatches[0].games[1].gameNumber).toBe(2);
+
+      const profileDoc = await h.getJson<{
+        ladders: Array<{
+          slot: string;
+          stats?: {reign: {top1: {totalSeconds: number}}};
+          recentMatches: arena.BattleHistoryEntry[];
+        }>;
+      }>('/projects/foul-play.json');
+      const vgcProfile = profileDoc.ladders.find(l => l.slot === 'vgc')!;
+      expect(vgcProfile.stats?.reign.top1.totalSeconds).toBeGreaterThanOrEqual(0);
+      expect(vgcProfile.recentMatches[0].games).toHaveLength(2);
     } finally {
       await h.close();
     }

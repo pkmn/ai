@@ -1289,6 +1289,8 @@ describe('account routes', () => {
         })).json() as {versions: Array<Record<string, unknown>>};
         expect(afterSubJson.versions).toHaveLength(1);
         expect(afterSubJson.versions[0].version).toBe('1.0.0');
+        expect(afterSubJson.versions[0].ladders).toEqual(['gen1ou20261109']);
+        expect(afterSubJson.versions[0].smoke).toEqual({status: 'pending'});
         expect(afterSubJson.versions[0].authTokenEncoding).toBeUndefined();
         expect(afterSubJson.versions[0].url).toBeUndefined();
         expect(afterSubJson.versions[0].developerId).toBeUndefined();

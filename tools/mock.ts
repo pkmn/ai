@@ -2877,13 +2877,21 @@ export class Runner {
         turnBudgetSeconds: 138,
         incrementSeconds: inc,
         ...(game === 2 ? {game1Summary: {winnerSlot: g1Winner, turns: g1Turns}} : {}),
-        ...(liveLines ? {
-          lines: liveLines,
-          p1Lines: perspective?.p1Lines,
-          p2Lines: perspective?.p2Lines,
-          p1Pokemon,
-          p2Pokemon,
-        } : {}),
+        ...(liveLines && perspective
+          ? {
+            viewer: {
+              lines: liveLines,
+              p1: {
+                lines: perspective.p1Lines,
+                ...(p1Pokemon ? {pokemon: p1Pokemon} : {}),
+              },
+              p2: {
+                lines: perspective.p2Lines,
+                ...(p2Pokemon ? {pokemon: p2Pokemon} : {}),
+              },
+            },
+          }
+          : {}),
         p1: {
           slug: p1.agentSlug,
           name: p1.agentName,

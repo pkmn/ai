@@ -49,6 +49,30 @@ export interface RecordMatchInput {
   ladderStatus?: ladders.LadderStatus;
 }
 
+export interface RecentMatchPlayer {
+  slug: string;
+  name: string;
+  version: string;
+  teamLabel?: string;
+  meanTurnMillis: number;
+  peakRam: number;
+}
+
+export interface RecentMatchGameStats {
+  meanTurnMillis: number;
+  bankSeconds: number;
+  peakRam: number;
+}
+
+export interface RecentMatchGame {
+  gameNumber: 1 | 2;
+  outcome: ratings.GameOutcome;
+  turns: number;
+  endReason: string;
+  p1: RecentMatchGameStats;
+  p2: RecentMatchGameStats;
+}
+
 export interface RecentMatchView {
   id: string;
   ladderId: string;
@@ -58,33 +82,10 @@ export interface RecentMatchView {
   format: string;
   teamMode: ladders.TeamMode;
   seed: string;
-  p1TeamLabel?: string;
-  p2TeamLabel?: string;
-  p1: {slug: string; name: string; version: string};
-  p2: {slug: string; name: string; version: string};
-  game1Outcome: ratings.GameOutcome;
-  game2Outcome: ratings.GameOutcome;
   category: ratings.MatchCategory;
-  game1Turns: number;
-  game2Turns: number;
-  game1EndReason: string;
-  game2EndReason: string;
-  p1MeanTurnMillis: number;
-  p2MeanTurnMillis: number;
-  p1Game1MeanTurnMillis: number;
-  p1Game2MeanTurnMillis: number;
-  p2Game1MeanTurnMillis: number;
-  p2Game2MeanTurnMillis: number;
-  p1Game1BankSeconds: number;
-  p1Game2BankSeconds: number;
-  p2Game1BankSeconds: number;
-  p2Game2BankSeconds: number;
-  p1PeakRam: number;
-  p2PeakRam: number;
-  p1Game1PeakRam: number;
-  p1Game2PeakRam: number;
-  p2Game1PeakRam: number;
-  p2Game2PeakRam: number;
+  p1: RecentMatchPlayer;
+  p2: RecentMatchPlayer;
+  games: [RecentMatchGame, RecentMatchGame];
   completedAt: number;
 }
 
@@ -393,6 +394,8 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
   const p1G2Ram = r.p1_game2_peak_ram as number;
   const p2G1Ram = r.p2_game1_peak_ram as number;
   const p2G2Ram = r.p2_game2_peak_ram as number;
+  const p1TeamLabel = (r.p1_team_label as string | null) ?? undefined;
+  const p2TeamLabel = (r.p2_team_label as string | null) ?? undefined;
   return {
     id: r.id as string,
     ladderId: r.ladder_id as string,
@@ -402,41 +405,57 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
     format: r.format as string,
     teamMode: r.team_mode as ladders.TeamMode,
     seed: r.seed as string,
-    p1TeamLabel: (r.p1_team_label as string | null) ?? undefined,
-    p2TeamLabel: (r.p2_team_label as string | null) ?? undefined,
+    category: r.category as ratings.MatchCategory,
     p1: {
       slug: r.p1_slug as string,
       name: r.p1_name as string,
       version: r.p1_version as string,
+      ...(p1TeamLabel !== undefined ? {teamLabel: p1TeamLabel} : {}),
+      meanTurnMillis: Math.round((p1G1TurnMs + p1G2TurnMs) / 2),
+      peakRam: Math.max(p1G1Ram, p1G2Ram),
     },
     p2: {
       slug: r.p2_slug as string,
       name: r.p2_name as string,
       version: r.p2_version as string,
+      ...(p2TeamLabel !== undefined ? {teamLabel: p2TeamLabel} : {}),
+      meanTurnMillis: Math.round((p2G1TurnMs + p2G2TurnMs) / 2),
+      peakRam: Math.max(p2G1Ram, p2G2Ram),
     },
-    game1Outcome: r.game1_outcome as ratings.GameOutcome,
-    game2Outcome: r.game2_outcome as ratings.GameOutcome,
-    category: r.category as ratings.MatchCategory,
-    game1Turns: r.game1_turns as number,
-    game2Turns: r.game2_turns as number,
-    game1EndReason: r.game1_end_reason as string,
-    game2EndReason: r.game2_end_reason as string,
-    p1MeanTurnMillis: Math.round((p1G1TurnMs + p1G2TurnMs) / 2),
-    p2MeanTurnMillis: Math.round((p2G1TurnMs + p2G2TurnMs) / 2),
-    p1Game1MeanTurnMillis: p1G1TurnMs,
-    p1Game2MeanTurnMillis: p1G2TurnMs,
-    p2Game1MeanTurnMillis: p2G1TurnMs,
-    p2Game2MeanTurnMillis: p2G2TurnMs,
-    p1Game1BankSeconds: r.p1_game1_bank_seconds as number,
-    p1Game2BankSeconds: r.p1_game2_bank_seconds as number,
-    p2Game1BankSeconds: r.p2_game1_bank_seconds as number,
-    p2Game2BankSeconds: r.p2_game2_bank_seconds as number,
-    p1PeakRam: Math.max(p1G1Ram, p1G2Ram),
-    p2PeakRam: Math.max(p2G1Ram, p2G2Ram),
-    p1Game1PeakRam: p1G1Ram,
-    p1Game2PeakRam: p1G2Ram,
-    p2Game1PeakRam: p2G1Ram,
-    p2Game2PeakRam: p2G2Ram,
+    games: [
+      {
+        gameNumber: 1,
+        outcome: r.game1_outcome as ratings.GameOutcome,
+        turns: r.game1_turns as number,
+        endReason: r.game1_end_reason as string,
+        p1: {
+          meanTurnMillis: p1G1TurnMs,
+          bankSeconds: r.p1_game1_bank_seconds as number,
+          peakRam: p1G1Ram,
+        },
+        p2: {
+          meanTurnMillis: p2G1TurnMs,
+          bankSeconds: r.p2_game1_bank_seconds as number,
+          peakRam: p2G1Ram,
+        },
+      },
+      {
+        gameNumber: 2,
+        outcome: r.game2_outcome as ratings.GameOutcome,
+        turns: r.game2_turns as number,
+        endReason: r.game2_end_reason as string,
+        p1: {
+          meanTurnMillis: p1G2TurnMs,
+          bankSeconds: r.p1_game2_bank_seconds as number,
+          peakRam: p1G2Ram,
+        },
+        p2: {
+          meanTurnMillis: p2G2TurnMs,
+          bankSeconds: r.p2_game2_bank_seconds as number,
+          peakRam: p2G2Ram,
+        },
+      },
+    ],
     completedAt: r.completed_at as number,
   };
 }

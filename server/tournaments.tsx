@@ -1874,7 +1874,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       crosstableSec.classList.remove('hide');
       const pairMap = new Map();
       for (const p of rrPairs) {
-        pairMap.set(p.lowVersionId + ':' + p.highVersionId, p);
+        pairMap.set(p.low.versionId + ':' + p.high.versionId, p);
       }
 
       const colHeaders = order.map(e => '<th>' + esc(e.name) + '</th>').join('');
@@ -1900,8 +1900,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           const highId = Math.max(rowEnt.versionId, colEnt.versionId);
           const pair = pairMap.get(lowId + ':' + highId);
           const isLow = rowEnt.versionId === lowId;
-          const wins = pair ? (isLow ? pair.lowWins : pair.highWins) : 0;
-          const losses = pair ? (isLow ? pair.highWins : pair.lowWins) : 0;
+          const wins = pair ? (isLow ? pair.low.wins : pair.high.wins) : 0;
+          const losses = pair ? (isLow ? pair.high.wins : pair.low.wins) : 0;
           const ties = pair ? pair.ties : 0;
           const total = wins + losses + ties;
 

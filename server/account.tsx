@@ -1364,24 +1364,38 @@ export function register(app: polka.Polka, options: Options) {
           remainingTeams: savedTeamsJson[l.id]?.remainingCount ?? 0,
         })),
         activeEntries,
-        versions: versions.map(v => ({
-          id: v.id,
-          version: v.version,
-          package: v.package,
-          sha256: v.sha256,
-          laddersJson: v.laddersJson,
-          tournamentsJson: v.tournamentsJson,
-          unpackedBytes: v.unpackedBytes,
-          smokeStatus: v.smokeStatus,
-          smokeDurationMillis: v.smokeDurationMillis,
-          smokeTurnMillis: v.smokeTurnMillis,
-          smokePeakRam: v.smokePeakRam,
-          smokeError: v.smokeError,
-          submittedAt: v.submittedAt,
-          activatedAt: v.activatedAt,
-          activeLadderNames: v.activeLadderNames,
-          tournamentNames: v.tournamentNames,
-        })),
+        versions: versions.map(v => {
+          let ladders: string[] = [];
+          let tournaments: string[] = [];
+          try {
+            const parsedLadders = JSON.parse(v.laddersJson || '[]') as unknown;
+            if (Array.isArray(parsedLadders)) ladders = parsedLadders.map(String);
+          } catch {}
+          try {
+            const parsedTournaments = JSON.parse(v.tournamentsJson || '[]') as unknown;
+            if (Array.isArray(parsedTournaments)) tournaments = parsedTournaments.map(String);
+          } catch {}
+          return {
+            id: v.id,
+            version: v.version,
+            package: v.package,
+            sha256: v.sha256,
+            ladders,
+            tournaments,
+            unpackedBytes: v.unpackedBytes,
+            smoke: {
+              status: v.smokeStatus,
+              durationMillis: v.smokeDurationMillis,
+              turnMillis: v.smokeTurnMillis,
+              peakRam: v.smokePeakRam,
+              error: v.smokeError,
+            },
+            submittedAt: v.submittedAt,
+            activatedAt: v.activatedAt,
+            activeLadderNames: v.activeLadderNames,
+            tournamentNames: v.tournamentNames,
+          };
+        }),
       });
       return;
     }

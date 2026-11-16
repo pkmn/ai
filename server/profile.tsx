@@ -1796,6 +1796,44 @@ export function renderAgentProfile(opts: {
       registerAgentLink(m.p2.slug, m.p2.name);
     }
 
+    const statsJson = familyStats
+      ? {
+        bestRank: familyStats.bestRank,
+        bestRankAt: familyStats.bestRankAt,
+        maxLcb: familyStats.maxLcb !== undefined ? Math.round(familyStats.maxLcb) : undefined,
+        maxElo: familyStats.maxElo !== undefined ? Math.round(familyStats.maxElo) : undefined,
+        maxEloSe: familyStats.maxEloSe !== undefined
+          ? Math.round(familyStats.maxEloSe * 10) / 10
+          : undefined,
+        maxEloAt: familyStats.maxEloAt,
+        maxGxe: familyStats.maxGxe !== undefined
+          ? Math.round(familyStats.maxGxe * 10) / 10
+          : undefined,
+        maxGxeAt: familyStats.maxGxeAt,
+        currentWinStreak: familyStats.currentWinStreak,
+        currentLossStreak: familyStats.currentLossStreak,
+        maxWinStreak: familyStats.maxWinStreak,
+        maxLossStreak: familyStats.maxLossStreak,
+        reign: {
+          top1: {
+            enteredAt: familyStats.top1EnteredAt,
+            maxStreakSeconds: familyStats.top1MaxStreakSeconds,
+            totalSeconds: familyStats.top1TotalSeconds,
+          },
+          top10: {
+            enteredAt: familyStats.top10EnteredAt,
+            maxStreakSeconds: familyStats.top10MaxStreakSeconds,
+            totalSeconds: familyStats.top10TotalSeconds,
+          },
+          top100: {
+            enteredAt: familyStats.top100EnteredAt,
+            maxStreakSeconds: familyStats.top100MaxStreakSeconds,
+            totalSeconds: familyStats.top100TotalSeconds,
+          },
+        },
+      }
+      : undefined;
+
     ladderJsonList.push({
       key: lKey,
       id: l.id,
@@ -1804,7 +1842,7 @@ export function renderAgentProfile(opts: {
       format: l.format,
       team: l.team,
       status: l.status,
-      familyStats,
+      ...(statsJson ? {stats: statsJson} : {}),
       versions: agentEntries.map(e => ({
         version: e.version,
         package: e.package,
@@ -1829,7 +1867,7 @@ export function renderAgentProfile(opts: {
         settledAt: e.settledAt,
         retiredAt: e.retiredAt,
       })),
-      recentMatches,
+      recentMatches: recentMatches.map(m => arena.enrichMatchView(publicDir, m)),
     });
 
     if (i > 0) formatNavParts.push(' — ');
