@@ -498,20 +498,22 @@ tr.battle-row.expanded .battle-toggle {
   border-radius: var(--border-radius);
 }
 
+/* clean-css ignore:start */
 @container (width >= 896px) {
   .viewer-frame {
     height: calc((100cqw - 280px) * 0.5625 + 40px);
   }
 }
 
-.live-pill {
-  display: inline-flex;
-  gap: 0.35ch;
-  align-items: center;
-  padding: 0.06rem 0.42rem;
+/* clean-css ignore:end */
+
+.live-pill,
+.live-pill:visited {
+  display: inline-block;
+  padding: 0.08rem 0.45rem;
   color: var(--hl-string);
   font-weight: bold;
-  font-size: 0.78em;
+  font-size: 0.8em;
   font-family: var(--monospace);
   line-height: 1.25;
   white-space: nowrap;
@@ -522,7 +524,10 @@ tr.battle-row.expanded .battle-toggle {
 }
 
 .live-pill:hover,
+.live-pill:focus,
 .live-pill.active {
+  color: var(--hl-string);
+  text-decoration: none;
   background-color: color-mix(in oklab, var(--hl-string) 22%, var(--bg-color));
   border-color: color-mix(in oklab, var(--hl-string) 70%, transparent);
 }

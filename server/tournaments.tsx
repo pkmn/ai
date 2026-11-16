@@ -1250,7 +1250,7 @@ export function renderBattleViewerPage(publicDir: string) {
           </div>
 
           <p className='arena-turn' id='turn' />
-          <span className='arena-live' id='live' hidden={true}>{'\u25cf'} Live</span>
+          <span className='arena-live' id='live' hidden={true}>{'\u25cf'} LIVE</span>
 
           <div className='arena-group arena-end'>
             <button
@@ -1338,7 +1338,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
               const hideCls = idx >= TABLE_PAGE_SIZE ? 'hide' : undefined;
               const dateCell = t.status === 'running' ? (
                 <td>
-                  <a href={tourHref} className='live-pill'>{'\u25cf'} Live</a>
+                  <a href={tourHref} className='live-pill'>{'\u25cf'} LIVE</a>
                 </td>
               ) : (
                 <td>{formatUtcDate(t.startsAt)}</td>

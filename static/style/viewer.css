@@ -184,13 +184,22 @@ body {
 }
 
 .arena-live {
+  display: inline-block;
+  padding: 1px 6px;
   color: var(--live);
   font-weight: 700;
-  font-size: 12px;
+  font-size: 11px;
+  font-family: monospace;
+  line-height: 1.25;
+  background: color-mix(in oklab, var(--live) 12%, var(--paper));
+  border: 1px solid color-mix(in oklab, var(--live) 40%, transparent);
+  border-radius: 3px;
 }
 
 .arena-live[data-following="false"] {
   color: var(--ink-muted);
+  background: var(--paper);
+  border-color: var(--rule);
 }
 
 .battle-log,

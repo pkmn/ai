@@ -605,7 +605,7 @@ function buildBattlesScript(
       if (battleViewerLeft) {
         const badge = shownLive.ended
           ? '<span class="muted">Finished</span>'
-          : '<span class="yes">&#9679; Live</span>';
+          : '<span class="live-pill">&#9679; LIVE</span>';
         battleViewerLeft.innerHTML = badge + ' · <code>' +
           esc(shownLive.matchId) + '</code> · <strong>Game ' + shownLive.game + ' / 2</strong>';
       }
@@ -2713,7 +2713,7 @@ export function renderArenaAndLadderArtifacts(opts: {
     if (isLive) {
       lastCell = (
         <td className='num'>
-          <a href='/arena/battles/' className='live-pill'>{'\u25cf'} Live</a>
+          <a href='/arena/battles/' className='live-pill'>{'\u25cf'} LIVE</a>
         </td>
       );
     } else if (l.status !== 'upcoming') {
@@ -3489,7 +3489,7 @@ export function renderBattlesPage(opts: {
     const s2Href = agentLinks[seat2.slug];
     initialViewerLeft = (
       <>
-        <span className='yes'>{'\u25cf'} Live</span> · <code>{l.matchId}</code> ·{' '}
+        <span className='live-pill'>{'\u25cf'} LIVE</span> · <code>{l.matchId}</code> ·{' '}
         <strong>Game {l.game} / 2</strong>
       </>
     );
