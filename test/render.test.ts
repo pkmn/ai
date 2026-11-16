@@ -2066,36 +2066,50 @@ describe('JSON route parity & retired pool archives', () => {
     expect(brokenRes.changes[0]?.pixels).toBe(10);
   });
 
-  test('buildScenarios and renderGalleryHtml cover all 7 site sections with unique state names',
-    () => {
-      const scenarios = shots.buildScenarios('deadbeef1234');
-      expect(scenarios.length).toBeGreaterThanOrEqual(80);
-      const names = new Set(scenarios.map(s => s.name));
-      expect(names.size).toBe(scenarios.length);
-      for (const section of shots.SECTIONS) {
-        expect(scenarios.some(s => s.section === section.id)).toBe(true);
-      }
+  test('renderGalleryHtml covers all 7 Visual Atlas sections with unique state names', () => {
+    const scenarios = shots.buildScenarios('deadbeef1234');
+    expect(scenarios.length).toBeGreaterThanOrEqual(80);
+    expect(shots.SECTIONS.map(s => s.title)).toEqual([
+      'Static',
+      'Projects',
+      'Ladders',
+      'Battles',
+      'Tournaments',
+      'Account',
+      'Wiki',
+    ]);
+    const names = new Set(scenarios.map(s => s.name));
+    expect(names.size).toBe(scenarios.length);
+    for (const section of shots.SECTIONS) {
+      expect(scenarios.some(s => s.section === section.id)).toBe(true);
+      const titles = scenarios.filter(s => s.section === section.id).map(s => s.title);
+      expect(new Set(titles).size).toBe(titles.length);
+    }
 
-      const gallery = shots.renderGalleryHtml(scenarios, {
-        hasBaseline: true,
-        changes: [
-          {
-            name: 'desktop/light/account-teams-invalid.png',
-            note: '420 px (0.36%)',
-            diffPath: '.shots/diff/desktop/light/account-teams-invalid.png',
-            status: 'modified',
-            pixels: 420,
-            percent: 0.36,
-          },
-        ],
-      });
-      expect(gallery).toContain('pkmn.ai Visual Atlas');
-      expect(gallery).toContain('data-vp="desktop" class="active"');
-      expect(gallery).toContain('data-theme="light" class="active"');
-      expect(gallery).toContain('data-compare="split"');
-      expect(gallery).toContain('desktop/light/account-teams-invalid.png');
-      expect(gallery).toContain('account-ineligible-smogon-banned');
+    const gallery = shots.renderGalleryHtml(scenarios, {
+      hasBaseline: true,
+      changes: [
+        {
+          name: 'desktop/light/account-teams-invalid.png',
+          note: '420 px (0.36%)',
+          diffPath: '.shots/diff/desktop/light/account-teams-invalid.png',
+          status: 'modified',
+          pixels: 420,
+          percent: 0.36,
+        },
+      ],
     });
+    expect(gallery).toContain('pkmn.ai Visual Atlas');
+    expect(gallery).toContain("'All (' + totalVisible + ')'");
+    expect(gallery).not.toContain('search-input');
+    expect(gallery).not.toContain('carousel-desc');
+    expect(gallery).not.toContain('grid-item-desc');
+    expect(gallery).toContain('data-vp="desktop" class="active"');
+    expect(gallery).toContain('data-theme="light" class="active"');
+    expect(gallery).toContain('data-compare="split"');
+    expect(gallery).toContain('desktop/light/account-teams-invalid.png');
+    expect(gallery).toContain('account-ineligible-smogon-banned');
+  });
 
   test('emits canonical URLs with ETag caching headers across dynamic SSR routes', async () => {
     const h = await startRenderHarness({db, publicDir: tmpPublic});

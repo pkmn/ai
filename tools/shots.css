@@ -120,8 +120,10 @@ code {
 
 .ctrl-group {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 2px;
   align-items: center;
+  max-width: 100%;
   padding: 2px;
   background: var(--badge-bg);
   border: 1px solid var(--border);
@@ -201,17 +203,6 @@ code {
   border-radius: 999px;
 }
 
-.search-input {
-  min-width: 195px;
-  padding: 0.28rem 0.55rem;
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
 main {
   display: flex;
   flex-direction: column;
@@ -241,9 +232,9 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.25rem 0.75rem;
+  padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--border);
 }
 
@@ -253,13 +244,6 @@ main {
   align-items: center;
   margin: 0;
   font-size: 17px;
-}
-
-.section-head p {
-  width: 100%;
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-  font-size: 13px;
 }
 
 .section-counter {
@@ -339,23 +323,17 @@ main {
   gap: 0.75rem;
   align-items: center;
   justify-content: space-between;
-  padding: 0.8rem 1.25rem;
+  padding: 0.65rem 1.25rem;
   border-bottom: 1px solid var(--border);
-}
-
-.carousel-meta {
-   display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 260px;
 }
 
 .carousel-title-row {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
   gap: 0.45rem;
   align-items: center;
+  min-width: 240px;
 }
 
 .carousel-title {
@@ -383,11 +361,6 @@ a.badge:hover {
   font-weight: 600;
   background: var(--diff-soft);
   border-color: var(--diff-border);
-}
-
-.carousel-desc {
-  color: var(--muted);
-  font-size: 13px;
 }
 
 .carousel-nav {
@@ -561,7 +534,7 @@ a.badge:hover {
 
 .grid-view {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
   gap: 1rem;
   padding: 1.25rem;
   background: var(--stage-bg);
@@ -604,14 +577,8 @@ a.badge:hover {
   gap: 0.35rem;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.2rem;
   font-weight: 600;
   font-size: 13.5px;
-}
-
-.grid-item-desc {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .grid-item-img-wrap {

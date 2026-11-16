@@ -84,9 +84,9 @@ npm run shots
 # Open the interactive one-stop Visual Atlas in your browser (defaults to desktop + light mode)
 open .shots/index.html
 
-# Filter to a specific scenario or logical section (e.g. account, arena, battles, tournaments, wiki)
+# Filter to a specific scenario or logical section (e.g. account, battles, ladders, projects, static, tournaments, wiki)
 npm run shots -- --only account
-npm run shots -- --only arena-ladder
+npm run shots -- --only ladders
 
 # Record a baseline in .shots/baseline/ before modifying templates or CSS
 npm run shots -- --baseline
@@ -116,12 +116,12 @@ Opening `.shots/index.html` provides a one-stop interactive gallery organized in
 sections** of the site, with an interactive carousel per section (`‹ Prev` / `Next ›`, clickable
 state pills, keyboard `←` / `→` to step through states, `↑` / `↓` to jump between sections, `1`–`4`
 to switch viewport, `t` to toggle `light` / `dark` theme, `g` to toggle between Carousel and Grid
-views, `c` to toggle the `Changed Only` filter, `d` to cycle `After` / `3-Up Diff` / `Diff` /
-`Before` comparison views, and instant search filtering).
+views, `c` to toggle the `Changed Only` filter, and `d` to cycle `After` / `3-Up Diff` / `Diff` /
+`Before` comparison views).
 
 When a `.shots/baseline/` snapshot exists:
 - `.shots/index.html` highlights every state, section, viewport, and theme that changed vs
-  baseline (`Δ N of 88 states changed`), provides one-click slot chips for every changed
+  baseline (`Δ N of 89 states changed`), provides one-click slot chips for every changed
   `(viewport, theme)` combination on a state, and lets you switch inline between `After`,
   `Before`, `Diff`, and `3-Up Diff` (`Before | After | Pixel Diff`).
 - `regions.json` (in `.shots/` and `.shots/baseline/`) records the exact bounding boxes of any
@@ -133,48 +133,48 @@ When a `.shots/baseline/` snapshot exists:
 
 The 7 sections cover:
 
-1. **Overview & Reference Pages (`content`):** Home (both normal state and the `● LIVE` tournament
-   `#topbar` banner edge case), Background (with `Under Construction` `#topbar`), Concepts overview
-   + 5 subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release
-   announcement, Research bibliography, Arena Rules, and `404` Not Found.
-2. **Projects Directory & Agent Profiles (`projects`):** Directory filters (`Active`, `All`,
-   `Inactive`), multi-version champion profile (`/projects/0-error/`), version dropdown filter, H2H
-   opponent click filter, expanded inline match telemetry, empty filtered matches state,
-   provisional entrant (`/projects/pokerus/`), qualified project with 0 entries
-   (`/projects/cynthiai/`), and pending project (`/projects/asterai/`).
-3. **Arena Hub & Ladders (`arena`):** Active season hub, hub with expandable past season rows,
-   pre-launch upcoming hub, RBY harvested ladder across `Active` / `Best` / `All` version tabs, VGC
-   competitor `pools` ladder, RAND `random` ladder (with `Data: <id>-logs.tar` link above the
-   footer), rotated season in `settling` grace window via the `#season-select` dropdown, retired
-   season in `archived` state (with `Data: <id>-logs.7z` link above the footer), and `upcoming`
-   ladder with registered entrants.
-4. **Arena Battles (`battles`):** Live match in progress (`Game 2 / 2`, `PAUSED`/`RUNNING`, G1
-   summary, pool team hashes), live `RAND` match with embedded Pokémon Showdown battle viewer,
-   inline expanded `RAND` row with replay viewer (`Game 1` / `Game 2`), inline expanded rows for
+1. **Static (`static`):** Home (both normal state and the `● LIVE` tournament `#topbar` banner edge
+   case), Background (with `Under Construction` `#topbar`), Concepts overview + 5 subpages
+   (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release announcement,
+   Research bibliography, Arena Rules, and `404` Not Found.
+2. **Projects (`projects`):** Directory filters (`Active`, `All`, `Inactive`), multi-version
+   champion profile (`/projects/0-error/`), version dropdown filter, H2H opponent click filter,
+   expanded inline match telemetry, empty filtered matches state, provisional entrant
+   (`/projects/pokerus/`), qualified project with 0 entries (`/projects/cynthiai/`), and pending
+   project (`/projects/asterai/`).
+3. **Ladders (`ladders`):** Active season hub, hub with expandable past season rows, pre-launch
+   upcoming hub, RBY harvested ladder across `Active` / `Best` / `All` version tabs, VGC competitor
+   `pools` ladder, RAND `random` ladder (with `Data: <id>-logs.tar` link above the footer), rotated
+   season in `settling` grace window via the `#season-select` dropdown, retired season in `archived`
+   state (with `Data: <id>-logs.7z` link above the footer), and `upcoming` ladder with registered
+   entrants.
+4. **Battles (`battles`):** Live match in progress (`Game 2 / 2`, `PAUSED`/`RUNNING`, G1 summary,
+   pool team hashes), live `RAND` match with embedded Pokémon Showdown battle viewer, inline
+   expanded `RAND` row with replay viewer (`Game 1` / `Game 2`), inline expanded rows for
    `[Timeout]`, `[Crash]`, and clean 2-game match, format filter (`VGC`), Page 2 pagination, `Idle`
    live state, `Stale / Offline` heartbeat state, and empty battle history.
-5. **Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal
-   `SF` badges and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay
-   viewer, live Best-of-3 Tournament `#2` multi-table broadcast (`Table 1`, switched to `Table 2`,
+5. **Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal `SF` badges
+   and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay viewer, live
+   Best-of-3 Tournament `#2` multi-table broadcast (`Table 1`, switched to `Table 2`,
    `Table 2 (idle)` with `● Watch T1` pill, and inline expanded completed Bo3 match row with
-   multi-game telemetry and `Game 1` / `Game 2` / `Game 3` replay switcher while `#live`
-   continues broadcasting), scheduled Tournament `#3` with registered entrants, and scheduled
-   tournament with 0 entrants.
-6. **Account & Submissions (`account`):** Unregistered GitHub user (`403`), disabled project (`403`),
-   `Pending` qualification (both locked and with Tournament `#3` OCI open), `Qualified` pre-launch,
-   `Eligible` new competitor (`0` submissions), VGC incremental team validation (`0 / 20` panel,
-   partial save + red rejections for `< 1.30` 1-NN duplicate and `< 4` moves, `10 / 20` partial save,
-   and `20 / 20` complete), inline submission form error, `Eligible` settled competitor with locked
-   VGC pool, `Ineligible` awaiting smoke test (`PENDING`), `Ineligible` 14-day ladder cooldown with
-   Tournament `#3` open, expanded `Sandbox stderr log`, `Ineligible` unsettled provisional,
+   multi-game telemetry and `Game 1` / `Game 2` / `Game 3` replay switcher while `#live` continues
+   broadcasting), scheduled Tournament `#3` with registered entrants, and scheduled tournament with
+   0 entrants.
+6. **Account (`account`):** Unregistered GitHub user (`403`), disabled project (`403`), `Pending`
+   qualification (both locked and with Tournament `#3` OCI open), `Qualified` pre-launch, `Eligible`
+   new competitor (`0` submissions), VGC incremental team validation (`0 / 20` panel, partial save +
+   red rejections for `< 1.30` 1-NN duplicate and `< 4` moves, `10 / 20` partial save, and `20 / 20`
+   complete), inline submission form error, `Eligible` settled competitor with locked VGC pool,
+   `Ineligible` awaiting smoke test (`PENDING`), `Ineligible` 14-day ladder cooldown with Tournament
+   `#3` open, expanded `Sandbox stderr log`, `Ineligible` unsettled provisional,
    `QUARANTINED (DM sent)` runtime fault in History, and `Ineligible` Smogon-banned owner
    (`smogon_standing = 'bad'`).
-7. **Wiki & Authentication (`wiki`):** Wiki index, all visible pages (`/wiki/pages`),
-   `developers`-restricted project page, `discord`-restricted project page, general public editor,
-   project editor with `Developers — Discord — Public` visibility bar, live Djot preview, git
-   revision history, commit snapshot, unified diff, owner redirect on uncreated project page,
-   generic `404` non-owner on uncreated project page, generic `403` unregistered user, generic `403`
-   non-owner edit attempt, generic `403` non-guild Discord user, and `/auth/dev` persona switcher.
+7. **Wiki (`wiki`):** Wiki index, all visible pages (`/wiki/pages`), `developers`-restricted project
+   page, `discord`-restricted project page, general public editor, project editor with
+   `Developers — Discord — Public` visibility bar, live Djot preview, git revision history, commit
+   snapshot, unified diff, owner redirect on uncreated project page, generic `404` non-owner on
+   uncreated project page, generic `403` unregistered user, generic `403` non-owner edit attempt,
+   generic `403` non-guild Discord user, and `/auth/dev` persona switcher.
 
 After inspecting `.shots/` (or running local `mock` commands), clean build/public artifacts and
 re-run `npm run test` so `public/` contains no mock state:

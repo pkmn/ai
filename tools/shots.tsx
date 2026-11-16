@@ -59,74 +59,27 @@ const THEMES = ['light', 'dark'] as const;
 const SETTLE_MILLIS = 150;
 
 export type SectionId =
-  'content' | 'projects' | 'arena' | 'battles' | 'tournaments' | 'account' | 'wiki';
+  'static' | 'projects' | 'ladders' | 'battles' | 'tournaments' | 'account' | 'wiki';
 
 export interface SectionMeta {
   id: SectionId;
   title: string;
-  subtitle: string;
 }
 
 export const SECTIONS: readonly SectionMeta[] = [
-  {
-    id: 'content',
-    title: 'Overview & Reference Pages',
-    subtitle:
-      'Static documentation, domain background, concept deep-dives, academic bibliography, ' +
-      'competition rules, and 404 error page.',
-  },
-  {
-    id: 'projects',
-    title: 'Projects Directory & Agent Profiles',
-    subtitle:
-      'Catalog filtering (Active / All / Inactive) and per-agent statistical profiles ' +
-      'across multi-version champions, filters, inline match drawers, provisional, and empty ' +
-      'states.',
-  },
-  {
-    id: 'arena',
-    title: 'Arena Hub & Ladders',
-    subtitle:
-      'Central hub, past seasons archive, and continuous leaderboards across Active / Best / All ' +
-      'version tabs, harvested & pools modes, and upcoming / settling / archived lifecycles.',
-  },
-  {
-    id: 'battles',
-    title: 'Arena Battles',
-    subtitle:
-      'Live battle telemetry (active turn, idle with tournament banner, stale/offline), format ' +
-      'filters, pagination, and inline expandable normal, timeout, and crash rows.',
-  },
-  {
-    id: 'tournaments',
-    title: 'Tournaments',
-    subtitle:
-      'Completed events with 100-game Superfinals and inline Showdown replay viewer, live ' +
-      'multi-table broadcasts with active/idle tables, and scheduled upcoming registrations.',
-  },
-  {
-    id: 'account',
-    title: 'Account & Submissions',
-    subtitle:
-      'Every developer persona and eligibility state: 403 unregistered/disabled, Pending ' +
-      '(locked vs tournament open), Qualified, Eligible, incremental VGC team validation ' +
-      '(0/20, rejections, 10/20, 20/20), submission errors, smoke pending/failed/quarantined, ' +
-      '14d cooldown, unsettled provisional, and Smogon-banned.',
-  },
-  {
-    id: 'wiki',
-    title: 'Wiki & Authentication',
-    subtitle:
-      'Git-backed Djot wiki across public, Discord, and developer visibilities, live preview, ' +
-      'revision history, snapshots, unified diffs, 403/404 permission gates, and Dev Auth.',
-  },
+  {id: 'static', title: 'Static'},
+  {id: 'projects', title: 'Projects'},
+  {id: 'ladders', title: 'Ladders'},
+  {id: 'battles', title: 'Battles'},
+  {id: 'tournaments', title: 'Tournaments'},
+  {id: 'account', title: 'Account'},
+  {id: 'wiki', title: 'Wiki'},
 ];
 
 export interface Scenario {
   name: string;
   section: SectionId;
   title: string;
-  description: string;
   path: string;
   click?: string;
   githubUser?: string;
@@ -309,22 +262,18 @@ async function setupDiscordWikiPage(fixture: Fixture): Promise<() => void> {
 export function buildScenarios(wikiSha: string): Scenario[] {
   return [
     // =========================================================================
-    // 1. Overview & Reference Pages
+    // 1. Static
     // =========================================================================
     {
       name: 'home',
-      section: 'content',
+      section: 'static',
       title: 'Home',
-      description: 'Landing page (`/`) in the standard state when no tournament is live.',
       path: '/',
     },
     {
       name: 'home-live-banner',
-      section: 'content',
-      title: 'Home (Live Tournament Banner)',
-      description:
-        'Landing page (`/`) with the `#topbar` `● LIVE` tournament broadcast banner ' +
-        'shown while a tournament event is in progress.',
+      section: 'static',
+      title: 'Home (Live)',
       path: '/',
       setup: fixture => {
         fixture.setShowLiveBanner(true);
@@ -335,142 +284,111 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     },
     {
       name: 'background',
-      section: 'content',
-      title: 'Background (Under Construction Banner)',
-      description:
-        'Competitive Pokémon Background guide (`/background/`) displaying its permanent ' +
-        '`Under Construction` topbar notice.',
+      section: 'static',
+      title: 'Background',
       path: '/background/',
     },
     {
       name: 'concepts',
-      section: 'content',
-      title: 'Concepts Overview',
-      description: 'Technical concepts hub (`/concepts/`) linking the 5 domain deep-dives.',
+      section: 'static',
+      title: 'Concepts',
       path: '/concepts/',
     },
     {
       name: 'concepts-baselines',
-      section: 'content',
-      title: 'Concepts: Baselines',
-      description: 'Heuristic and search baseline agents (`/concepts/baselines/`).',
+      section: 'static',
+      title: 'Baselines',
       path: '/concepts/baselines/',
     },
     {
       name: 'concepts-complexity',
-      section: 'content',
-      title: 'Concepts: Complexity',
-      description: 'Game-tree branching factors and imperfect-information complexity.',
+      section: 'static',
+      title: 'Complexity',
       path: '/concepts/complexity/',
     },
     {
       name: 'concepts-engines',
-      section: 'content',
-      title: 'Concepts: Simulation Engines',
-      description: 'Battle simulator architectures and deterministic state transitions.',
+      section: 'static',
+      title: 'Engines',
       path: '/concepts/engines/',
     },
     {
       name: 'concepts-protocol',
-      section: 'content',
-      title: 'Concepts: Protocol',
-      description: 'Pokémon Showdown wire protocol and choice grammar (`/concepts/protocol/`).',
+      section: 'static',
+      title: 'Protocol',
       path: '/concepts/protocol/',
     },
     {
       name: 'concepts-variants',
-      section: 'content',
-      title: 'Concepts: Format Variants',
-      description: 'Generational mechanics, Singles vs Doubles VGC, and teambuilding modes.',
+      section: 'static',
+      title: 'Variants',
       path: '/concepts/variants/',
     },
     {
       name: 'glossary',
-      section: 'content',
+      section: 'static',
       title: 'Glossary',
-      description: 'Cross-disciplinary competitive Pokémon and AI terminology (`/glossary/`).',
       path: '/glossary/',
     },
     {
       name: 'release',
-      section: 'content',
-      title: 'Release Announcement',
-      description: 'Platform launch essay and benchmark roadmap (`/release/`).',
+      section: 'static',
+      title: 'Release',
       path: '/release/',
     },
     {
       name: 'research',
-      section: 'content',
-      title: 'Research Bibliography',
-      description: 'Curated academic literature and BibTeX citations (`/research/`).',
+      section: 'static',
+      title: 'Research',
       path: '/research/',
     },
     {
       name: 'rules',
-      section: 'content',
-      title: 'Arena Rules & Sandboxing',
-      description:
-        'Hardware quotas, airgapped Seatbelt/Podman sandboxing, Davidson ratings, and ' +
-        'qualification rules (`/rules/`).',
+      section: 'static',
+      title: 'Rules',
       path: '/rules/',
     },
     {
       name: 'not-found',
-      section: 'content',
-      title: '404 Not Found',
-      description: 'Static 404 error page returned for unknown routes (`/nonexistent-page`).',
+      section: 'static',
+      title: '404',
       path: '/nonexistent-page',
       expectHttpError: 404,
     },
 
     // =========================================================================
-    // 2. Projects Directory & Agent Profiles
+    // 2. Projects
     // =========================================================================
     {
       name: 'projects',
       section: 'projects',
-      title: 'Projects Directory (All)',
-      description:
-        'Complete catalog of competitive Pokémon AI projects (`/projects/`) with Arena rank ' +
-        'pills and language/license metadata.',
+      title: 'Directory',
       path: '/projects/',
     },
     {
       name: 'projects-active',
       section: 'projects',
-      title: 'Projects Directory (Active Filter)',
-      description:
-        'Client-side radio filter (`Active`) showing currently maintained projects and ' +
-        'updating `#count` dynamically.',
+      title: 'Directory (Active)',
       path: '/projects/',
       click: 'label[for="active"]',
     },
     {
       name: 'projects-inactive',
       section: 'projects',
-      title: 'Projects Directory (Inactive Filter)',
-      description:
-        'Client-side radio filter (`Inactive`) showing historical/archived projects.',
+      title: 'Directory (Inactive)',
       path: '/projects/',
       click: 'label[for="inactive"]',
     },
     {
       name: 'project-profile',
       section: 'projects',
-      title: 'Agent Profile (Multi-Version Champion)',
-      description:
-        '`0 ERROR` profile (`/projects/0-error/`) with `#1` reign table, multi-ladder SVG ' +
-        'rating chart with version handoff markers, H2H table (`+` Best Matchup / `-` Nemesis ' +
-        'residuals), and Matches.',
+      title: 'Profile',
       path: '/projects/0-error/',
     },
     {
       name: 'project-profile-version',
       section: 'projects',
-      title: 'Agent Profile (Filtered by Active Version)',
-      description:
-        'Selecting `1.2.0` in `#ver-select` scopes Head-to-Head statistics and Matches ' +
-        'to that specific version.',
+      title: 'Profile (Version)',
       path: '/projects/0-error/',
       act: async page => {
         await page.selectOption('#ver-select', '1.2.0');
@@ -479,30 +397,21 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'project-profile-opponent',
       section: 'projects',
-      title: 'Agent Profile (Filtered by H2H Opponent)',
-      description:
-        'Clicking an opponent row in `#matchups` highlights the H2H row, updates `#opp-select`, ' +
-        'and filters Matches to that matchup.',
+      title: 'Profile (Opponent)',
       path: '/projects/0-error/',
       click: '#matchups tbody tr.opp-row td:first-child',
     },
     {
       name: 'project-profile-match-expanded',
       section: 'projects',
-      title: 'Agent Profile (Expanded Match Telemetry)',
-      description:
-        'Clicking a match row in `#matches` expands inline Game 1 & Game 2 telemetry, turn ' +
-        'times, peak RAM, and replay links.',
+      title: 'Profile (Expanded)',
       path: '/projects/0-error/',
       click: '#matches tbody tr.battle-row td:first-child',
     },
     {
       name: 'project-profile-filter-empty',
       section: 'projects',
-      title: 'Agent Profile (Empty Filtered Matches)',
-      description:
-        'Selecting an unplayed opponent (`pokerus`) in `#opp-select` displays ' +
-        '`"No matching battles."` in `#matches`.',
+      title: 'Profile (No Matches)',
       path: '/projects/0-error/',
       act: async page => {
         await page.selectOption('#opp-select', 'pokerus');
@@ -511,61 +420,43 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'project-profile-provisional',
       section: 'projects',
-      title: 'Agent Profile (Provisional Entrant)',
-      description:
-        '`pokerus` profile (`/projects/pokerus/`) with unsettled active entries (`5/25` ' +
-        'matches, `Rank: Provisional`, `Peak: Unsettled`, and empty settled H2H notice).',
+      title: 'Profile (Provisional)',
       path: '/projects/pokerus/',
     },
     {
       name: 'project-profile-qualified-empty',
       section: 'projects',
-      title: 'Agent Profile (Qualified · 0 Entries)',
-      description:
-        '`CynthiAI` profile (`/projects/cynthiai/`) for a newly qualified project before its ' +
-        'first submission (`Status: — (No active entries)`).',
+      title: 'Profile (Qualified)',
       path: '/projects/cynthiai/',
     },
     {
       name: 'project-profile-pending-empty',
       section: 'projects',
-      title: 'Agent Profile (Pending Qualification)',
-      description:
-        '`AsterAI` profile (`/projects/asterai/`) for a registered project awaiting baseline ' +
-        'qualification (`Status: — (Pending qualification)`).',
+      title: 'Profile (Pending)',
       path: '/projects/asterai/',
     },
 
     // =========================================================================
-    // 3. Arena Hub & Ladders
+    // 3. Ladders
     // =========================================================================
     {
       name: 'arena',
-      section: 'arena',
-      title: 'Arena Hub (Active Season)',
-      description:
-        'Central Arena hub (`/arena/`) summarizing the `#1` leader across all 5 active ' +
-        'ladders plus live, scheduled, and completed Tournaments.',
+      section: 'ladders',
+      title: 'Hub',
       path: '/arena/',
     },
     {
       name: 'arena-seasons',
-      section: 'arena',
-      title: 'Arena Hub (With Past Seasons)',
-      description:
-        'Arena hub after seasonal rotation with the expandable `VGC` row opened to reveal ' +
-        'both a `settling` season and an `archived` season.',
+      section: 'ladders',
+      title: 'Hub (Seasons)',
       path: '/arena/',
       setup: fixture => setupRotatedSeasons(fixture, 'both'),
       click: 'tr.battle-row[data-slot="vgc"] .battle-toggle',
     },
     {
       name: 'arena-prelaunch',
-      section: 'arena',
-      title: 'Arena Hub (Pre-Launch / Upcoming)',
-      description:
-        'Pre-launch Arena hub when all 5 ladders are in `upcoming` status (`Upcoming`) and no ' +
-        'tournaments have been scheduled yet.',
+      section: 'ladders',
+      title: 'Hub (Upcoming)',
       path: '/arena/',
       setup: fixture => withSavepoint(fixture, raw => {
         raw.exec("UPDATE ladders SET status = 'upcoming'");
@@ -578,79 +469,54 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     },
     {
       name: 'arena-ladder-rby',
-      section: 'arena',
-      title: 'Ladder: RBY (Active Versions Tab)',
-      description:
-        'Harvested ladder (`/arena/ladders/rby/`) default `Active` tab: settled `#1`–`#5` ' +
-        'ranks, secondary active `0 ERROR 1.1.0` (`—`), `Metamon 1.0.0` `1500 ±0` anchor, ' +
-        '`pokerus` `Provisional`, `W4`/`L4` streaks, Rating History SVG, and Matchups matrix.',
+      section: 'ladders',
+      title: 'RBY',
       path: '/arena/ladders/rby/',
     },
     {
       name: 'arena-ladder-rby-best',
-      section: 'arena',
-      title: 'Ladder: RBY (Best Versions Filter)',
-      description:
-        '`Best` version filter on `/arena/ladders/rby/` collapsing each project to its ' +
-        'highest-rated active version (hiding secondary active `0 ERROR 1.1.0`).',
+      section: 'ladders',
+      title: 'RBY (Best)',
       path: '/arena/ladders/rby/',
       click: 'label[for="ver-best"]',
     },
     {
       name: 'arena-ladder-rby-all',
-      section: 'arena',
-      title: 'Ladder: RBY (All Versions Filter)',
-      description:
-        '`All` version filter on `/arena/ladders/rby/` revealing historical retired versions ' +
-        '(`0 ERROR 1.0.0 (retired)`) alongside active versions.',
+      section: 'ladders',
+      title: 'RBY (All)',
       path: '/arena/ladders/rby/',
       click: 'label[for="ver-all"]',
     },
     {
       name: 'arena-ladder-vgc',
-      section: 'arena',
-      title: 'Ladder: VGC (Competitor Pools)',
-      description:
-        'Seasonal `pools` ladder (`/arena/ladders/vgc/`) where matches sample pairs from ' +
-        'competitors’ 20-team rosters with `2/N` skin-in-the-game probability.',
+      section: 'ladders',
+      title: 'VGC',
       path: '/arena/ladders/vgc/',
     },
     {
       name: 'arena-ladder-settling',
-      section: 'arena',
-      title: 'Ladder: Rotated Season (Settling Grace Window)',
-      description:
-        'Rotated seasonal ladder (`/arena/ladders/gen9championsvgc2026regmc/`) in `settling` ' +
-        'status selected via the `#season-select` dropdown on the `VGC` slot.',
+      section: 'ladders',
+      title: 'VGC (Settling)',
       path: `/arena/ladders/${VGC_LADDER_ID}/`,
       setup: fixture => setupRotatedSeasons(fixture, 'settling'),
     },
     {
       name: 'arena-ladder-archived',
-      section: 'arena',
-      title: 'Ladder: Retired Season (Archived with .7z Archive)',
-      description:
-        'Retired seasonal ladder (`/arena/ladders/gen9championsvgc2026regmc/`) in `archived` ' +
-        'status linking `Data: <id>-logs.7z` above the footer.',
+      section: 'ladders',
+      title: 'VGC (Archived)',
       path: `/arena/ladders/${VGC_LADDER_ID}/`,
       setup: fixture => setupRotatedSeasons(fixture, 'archived'),
     },
     {
       name: 'arena-ladder-rand',
-      section: 'arena',
-      title: 'Ladder: RAND (Random Battle · Full-History .tar Archive)',
-      description:
-        'Random Battle ladder (`/arena/ladders/rand/`, `team: random`) linking ' +
-        '`Data: gen9randombattle20261109-logs.tar` above the footer.',
+      section: 'ladders',
+      title: 'RAND',
       path: '/arena/ladders/rand/',
     },
     {
       name: 'arena-ladder-upcoming',
-      section: 'arena',
-      title: 'Ladder: Upcoming (Registered Entrants)',
-      description:
-        'Pre-launch ladder (`/arena/ladders/rby/`) in `upcoming` status listing initial ' +
-        'registered entrants before matchmaking begins (`min = 4`) and hiding chart/matrix.',
+      section: 'ladders',
+      title: 'RBY (Upcoming)',
       path: '/arena/ladders/rby/',
       setup: fixture => withSavepoint(fixture, raw => {
         raw.prepare("UPDATE ladders SET status = 'upcoming' WHERE id = ?").run(RBY_LADDER_ID);
@@ -669,24 +535,18 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     },
 
     // =========================================================================
-    // 4. Arena Battles
+    // 4. Battles
     // =========================================================================
     {
       name: 'arena-battles',
       section: 'battles',
-      title: 'Battles (Live Match in Progress)',
-      description:
-        '`/arena/battles/` during an active VGC match (`Game 2 / 2 · Turn 9`, `p1` `PAUSED`, ' +
-        '`p2` `RUNNING`, Game 1 result, and pool team hashes) above Completed Battles.',
+      title: 'Live',
       path: '/arena/battles/',
     },
     {
       name: 'arena-battles-rand-live',
       section: 'battles',
-      title: 'Battles (Live RAND Match with Showdown Viewer)',
-      description:
-        'When a `RAND` (`team: random`) match is live on `/arena/battles/`, `#live` displays ' +
-        'both the real-time slot telemetry/timers and the live Pokémon Showdown battle viewer.',
+      title: 'Live (RAND)',
       path: '/arena/battles/',
       setup: fixture => {
         fixture.arenaHandle.setLiveState({
@@ -745,71 +605,49 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-battles-rand-replay',
       section: 'battles',
-      title: 'Battles (Expanded RAND Row · Inline Replay Viewer)',
-      description:
-        'Clicking a `RAND` battle row in `#history` expands its telemetry and mounts the ' +
-        'inline Pokémon Showdown replay viewer with `Game 1` / `Game 2` switcher and daily ' +
-        '`.tar` archive link.',
+      title: 'Replay (RAND)',
       path: '/arena/battles/',
       click: 'tr.battle-row[data-fmt="rand"] td:first-child',
     },
     {
       name: 'arena-battles-expanded',
       section: 'battles',
-      title: 'Battles (Expanded Row · Timeout Fault & Pool Hashes)',
-      description:
-        'Expanding the timeout showcase row reveals Game 1 & Game 2 telemetry, red `[Timeout]` ' +
-        'fault badge on Game 2, and unlinked `P1:<hash>` / `P2:<hash>` pool team badges.',
+      title: 'Expanded (Timeout)',
       path: '/arena/battles/',
       click: 'tr.battle-row:has(td[title*="timeout"]) td:first-child',
     },
     {
       name: 'arena-battles-crash-expanded',
       section: 'battles',
-      title: 'Battles (Expanded Row · Crash Fault)',
-      description:
-        'Expanding the crash showcase row (`SV`) reveals the red `[Crash]` abnormal termination ' +
-        'badge on Game 2 alongside per-side turn time and peak RAM.',
+      title: 'Expanded (Crash)',
       path: '/arena/battles/',
       click: 'tr.battle-row:has(td[title*="crash"]) td:first-child',
     },
     {
       name: 'arena-battles-normal-expanded',
       section: 'battles',
-      title: 'Battles (Expanded Row · Clean 2-Game Match)',
-      description:
-        'Expanding a clean VGC row without runtime faults shows Game 1 and Game 2 ' +
-        '(sides and teams swapped) with turn counts and telemetry.',
+      title: 'Expanded (Clean)',
       path: '/arena/battles/',
       click: 'tr.battle-row[data-fmt="vgc"]:not(:has(td[title*="End:"])) td:first-child',
     },
     {
       name: 'arena-battles-filter-vgc',
       section: 'battles',
-      title: 'Battles (Filtered by Format)',
-      description:
-        'Selecting the `VGC` format filter fetches `/api/battles.json?ladder=vgc` and ' +
-        'updates the pagination count to VGC matches only.',
+      title: 'Filter (VGC)',
       path: '/arena/battles/',
       click: 'label[for="bf-vgc"]',
     },
     {
       name: 'arena-battles-page-2',
       section: 'battles',
-      title: 'Battles (Paginated History · Page 2)',
-      description:
-        'Clicking `Older →` (`#battles-next`) loads Page 2 of completed battles and enables ' +
-        '`← Newer` (`#battles-prev`).',
+      title: 'Page 2',
       path: '/arena/battles/',
       click: '#battles-next',
     },
     {
       name: 'arena-battles-idle',
       section: 'battles',
-      title: 'Battles (Live Idle)',
-      description:
-        'When the Arena runner is idle between ladder matches, `#live` displays ' +
-        '`"No battle currently running — Arena is idle."`.',
+      title: 'Idle',
       path: '/arena/battles/',
       setup: fixture => {
         fixture.arenaHandle.setLiveState({
@@ -825,10 +663,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-battles-stale',
       section: 'battles',
-      title: 'Battles (Live Stale / Offline)',
-      description:
-        'When the Arena runner heartbeat has expired (`stale: true`), `#live` displays ' +
-        '`"No active heartbeat — Arena is offline or idle."`.',
+      title: 'Stale',
       path: '/arena/battles/',
       setup: fixture => {
         fixture.arenaHandle.setLiveState({
@@ -844,10 +679,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-battles-empty',
       section: 'battles',
-      title: 'Battles (Empty History)',
-      description:
-        '`/arena/battles/` before any matches have completed (`"No completed battles yet."` ' +
-        'and hidden pager).',
+      title: 'Empty',
       path: '/arena/battles/',
       setup: fixture => {
         fixture.arenaHandle.setLiveState({
@@ -873,48 +705,33 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-tournament-1',
       section: 'tournaments',
-      title: 'Tournament #1 (Completed · Superfinal & Archive)',
-      description:
-        'Completed tournament (`/arena/tournaments/1/`) with `SF` badges on `#1`/`#2`, ' +
-        '`Superfinal` column in Standings, Crosstable, Games list, and `1-replays.7z` link.',
+      title: 'Completed',
       path: '/arena/tournaments/1/',
     },
     {
       name: 'arena-tournament-1-replay',
       section: 'tournaments',
-      title: 'Tournament #1 (Expanded Game Row · Inline Replay Viewer)',
-      description:
-        'Clicking a completed game row in `#games` expands its telemetry and mounts the inline ' +
-        'Pokémon Showdown replay viewer right inside the row.',
+      title: 'Completed (Replay)',
       path: '/arena/tournaments/1/',
       click: '#games tr.battle-row td:first-child',
     },
     {
       name: 'arena-tournament-2',
       section: 'tournaments',
-      title: 'Tournament #2 (Live Broadcast · Table 1)',
-      description:
-        'Running tournament (`/arena/tournaments/2/`) with multi-table live broadcast (`Table ' +
-        '1` active), `thinking…` clock pill, and `● T1` / `● T2` badges across tables.',
+      title: 'Live (Table 1)',
       path: '/arena/tournaments/2/',
     },
     {
       name: 'arena-tournament-2-table2',
       section: 'tournaments',
-      title: 'Tournament #2 (Live Broadcast · Switched to Table 2)',
-      description:
-        'Clicking `Table 2` in `#table-nav-wrap` switches the embedded live viewer and player ' +
-        'clock bars to Table 2 (`Jaxcalibur vs MissingNo.Zero`).',
+      title: 'Live (Table 2)',
       path: '/arena/tournaments/2/',
       click: 'label[for="tb-2-2"]',
     },
     {
       name: 'arena-tournament-2-table2-idle',
       section: 'tournaments',
-      title: 'Tournament #2 (Live Broadcast · Idle Table & Watch T1 Pill)',
-      description:
-        'Viewing Table 2 after its game finishes (`idle: true`) shows `Table 2 (idle)` and ' +
-        'reveals the `● Watch T1` quick-switch action pill.',
+      title: 'Live (Idle Table)',
       path: '/arena/tournaments/2/',
       click: 'label[for="tb-2-2"]',
       setup: fixture => {
@@ -937,30 +754,20 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'arena-tournament-2-replay',
       section: 'tournaments',
-      title: 'Tournament #2 (Live Tournament · Expanded Bo3 Match Replay)',
-      description:
-        'Clicking a completed round-robin Best-of-3 match row in `#games` during a live ' +
-        'tournament expands its per-game telemetry and inline `Game 1` / `Game 2` / `Game 3` ' +
-        'replay viewer while `#live` continues broadcasting.',
+      title: 'Live (Replay)',
       path: '/arena/tournaments/2/',
       click: '#games tr.battle-row td:first-child',
     },
     {
       name: 'arena-tournament-3',
       section: 'tournaments',
-      title: 'Tournament #3 (Scheduled · Entrants Registered)',
-      description:
-        'Scheduled upcoming tournament (`/arena/tournaments/3/`) during its registration ' +
-        'period listing registered entrants and hiding Crosstable/Games until start.',
+      title: 'Scheduled',
       path: '/arena/tournaments/3/',
     },
     {
       name: 'arena-tournament-empty',
       section: 'tournaments',
-      title: 'Tournament #3 (Scheduled · 0 Entrants)',
-      description:
-        'Scheduled upcoming tournament before any project has entered (`"No entrants ' +
-        'registered yet."`).',
+      title: 'Scheduled (Empty)',
       path: '/arena/tournaments/3/',
       setup: fixture => withSavepoint(fixture, raw => {
         raw.exec("DELETE FROM tournament_entrants WHERE tournament_id = '3'");
@@ -968,15 +775,12 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     },
 
     // =========================================================================
-    // 6. Account & Submissions
+    // 6. Account
     // =========================================================================
     {
       name: 'account-unregistered',
       section: 'account',
-      title: 'Account: 403 Unregistered GitHub User',
-      description:
-        'Visiting `/account/` as an unregistered GitHub user (`@stranger`) returns the generic ' +
-        'site `403` page.',
+      title: '403 Unregistered',
       path: '/account/',
       githubUser: 'stranger',
       expectHttpError: 403,
@@ -984,10 +788,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-disabled',
       section: 'account',
-      title: 'Account: 403 Disabled Project',
-      description:
-        'Visiting `/account/` when the project status is `disabled` returns the generic site ' +
-        '`403` page.',
+      title: '403 Disabled',
       path: '/account/',
       githubUser: 'asterdev',
       expectHttpError: 403,
@@ -998,10 +799,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-pending-locked',
       section: 'account',
-      title: 'Account: Pending Qualification (No Open Tournament)',
-      description:
-        '`AsterAI` (`qualified: false`, Discord `None (link)`) when no scheduled tournament is ' +
-        'open: Status `Pending` (`muted`), form disabled awaiting baseline qualification.',
+      title: 'Pending (Locked)',
       path: '/account/',
       githubUser: 'asterdev',
       setup: fixture => withSavepoint(fixture, raw => {
@@ -1011,20 +809,14 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-pending-tournament',
       section: 'account',
-      title: 'Account: Pending Qualification (Tournament Open)',
-      description:
-        '`AsterAI` (`Pending` status): continuous ladder checkboxes are disabled, while ' +
-        'scheduled Tournament #3 OCI registration is open and pre-selected.',
+      title: 'Pending (Tournament)',
       path: '/account/',
       githubUser: 'asterdev',
     },
     {
       name: 'account-qualified-closed',
       section: 'account',
-      title: 'Account: Qualified (Ladders Not Open Yet)',
-      description:
-        'Qualified competitor (`CynthiAI`) when no ladders or tournaments are open yet: Status ' +
-        '`Qualified` (`"Ladders are not open for submissions yet."`).',
+      title: 'Qualified',
       path: '/account/',
       githubUser: 'sisyphus25',
       setup: fixture => withSavepoint(fixture, raw => {
@@ -1035,20 +827,14 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-eligible-new',
       section: 'account',
-      title: 'Account: Eligible (New Competitor · 0 Submissions)',
-      description:
-        '`CynthiAI` (`@sisyphus25`, Discord linked): Status `Eligible` (`yes`) with all 5 ' +
-        'ladders and Tournament #3 open, and empty Active/History sections.',
+      title: 'Eligible (New)',
       path: '/account/',
       githubUser: 'sisyphus25',
     },
     {
       name: 'account-teams-empty',
       section: 'account',
-      title: 'Account: VGC Teams Panel (0/20 Saved)',
-      description:
-        'Checking `VGC` on `/account/` reveals the incremental team pool panel ' +
-        '(`0/20 distinct teams saved`) and multi-team paste input.',
+      title: 'Teams (0/20)',
       path: '/account/',
       githubUser: 'sisyphus25',
       click: `input[name="ladders"][value="${VGC_LADDER_ID}"]`,
@@ -1056,10 +842,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-teams-invalid',
       section: 'account',
-      title: 'Account: VGC Teams Validation (Partial Save + Rejections)',
-      description:
-        'Submitting 2 valid teams + 1 near-duplicate (`distance=0.000 < 1.30`) + 1 incomplete ' +
-        'moveset (`must have 4 moves (found 3)`) saves `2/20` and lists red rejections.',
+      title: 'Teams (Invalid)',
       path: '/account/',
       githubUser: 'sisyphus25',
       expectHttpError: 400,
@@ -1096,10 +879,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-teams-partial',
       section: 'account',
-      title: 'Account: VGC Teams Validation (10/20 Saved)',
-      description:
-        'Incremental batch upload reaching `10/20` saved teams (`50%` progress bar, ' +
-        '`(10/20 saved)` checkbox hint, and incomplete count error).',
+      title: 'Teams (10/20)',
       path: '/account/',
       githubUser: 'sisyphus25',
       expectHttpError: 400,
@@ -1134,10 +914,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-teams-complete',
       section: 'account',
-      title: 'Account: VGC Teams Validation (All 20/20 Saved)',
-      description:
-        'Having all `20/20` distinct VGC teams saved turns the progress bar green (`100%`), ' +
-        'updates the checkbox hint to `(20/20 saved)`, and enables build submission.',
+      title: 'Teams (20/20)',
       path: '/account/',
       githubUser: 'sisyphus25',
       serial: true,
@@ -1165,10 +942,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-submission-error',
       section: 'account',
-      title: 'Account: Submission Form Validation Error',
-      description:
-        'Submitting a build with a malformed artifact URL or SHA-256 digest displays an inline ' +
-        'red error message in `#sub-status.no` without leaving the page.',
+      title: 'Form Error',
       path: '/account/',
       githubUser: 'sisyphus25',
       expectHttpError: 400,
@@ -1187,20 +961,14 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-tournament',
       section: 'account',
-      title: 'Account: Eligible (Settled Competitor & Locked VGC Pool)',
-      description:
-        '`Foul Play` (`@pmariglia`): settled across all 5 ladders, VGC teams already locked ' +
-        'for the season, Tournament #3 disabled (`entered: 1.4.1-t3`), and `Entered` history.',
+      title: 'Eligible (Settled)',
       path: '/account/',
       githubUser: 'pmariglia',
     },
     {
       name: 'account-ineligible-smoke-pending',
       section: 'account',
-      title: 'Account: Ineligible (Awaiting Smoke Test)',
-      description:
-        'While version `1.0.0-rc1` has `smoke_status = "pending"`, status is `Ineligible` ' +
-        '(`"Version 1.0.0-rc1 is currently awaiting Arena smoke testing."`) and `PENDING`.',
+      title: 'Smoke Pending',
       path: '/account/',
       githubUser: 'sisyphus25',
       setup: fixture => withSavepoint(fixture, raw => {
@@ -1222,39 +990,27 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account',
       section: 'account',
-      title: 'Account: Ineligible (14-Day Cooldown · Tournament Open)',
-      description:
-        '`0 ERROR` (`@scheibo`): 14-day ladder cooldown active (`10d remaining after 1.2.0`) ' +
-        'while Tournament #3 OCI registration remains open; shows Champion + Challenger rows.',
+      title: 'Cooldown',
       path: '/account/',
     },
     {
       name: 'account-smoke-log-expanded',
       section: 'account',
-      title: 'Account: Expanded Failed Smoke Test Log',
-      description:
-        'Expanding `Sandbox stderr log` on failed version `0.9.0-rc1` (`FAIL (DM sent)`) ' +
-        'reveals the sandboxed stderr stack trace.',
+      title: 'Smoke Log',
       path: '/account/',
       click: 'details.smoke-log summary',
     },
     {
       name: 'account-ineligible-provisional',
       section: 'account',
-      title: 'Account: Ineligible (Unsettled Provisional Active Entry)',
-      description:
-        '`pokerus` (`@pokerusdev`): blocked from submitting a new ladder version until active ' +
-        'version `1.0.2` settles (`SE=55.0, matches=5/25`), while Tournament #3 stays open.',
+      title: 'Unsettled',
       path: '/account/',
       githubUser: 'pokerusdev',
     },
     {
       name: 'account-ineligible-quarantined',
       section: 'account',
-      title: 'Account: Quarantined Version in History',
-      description:
-        'When an active version is auto-quarantined for repeated runtime crashes/timeouts, ' +
-        'History displays `QUARANTINED (DM sent)` / `Quarantined` with its fault trace.',
+      title: 'Quarantined',
       path: '/account/',
       click: 'details.smoke-log summary',
       setup: fixture => withSavepoint(fixture, raw => {
@@ -1273,10 +1029,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'account-ineligible-smogon-banned',
       section: 'account',
-      title: 'Account: Ineligible (Smogon Standing Bad / Banned)',
-      description:
-        'When a project owner has `smogon_standing = "bad"`, status is `Ineligible` (`"Smogon ' +
-        'account for this project is not in good standing."`) and all submissions are locked.',
+      title: 'Banned',
       path: '/account/',
       githubUser: 'pmariglia',
       setup: fixture => withSavepoint(fixture, raw => {
@@ -1287,114 +1040,81 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     },
 
     // =========================================================================
-    // 7. Wiki & Authentication
+    // 7. Wiki
     // =========================================================================
     {
       name: 'wiki',
       section: 'wiki',
-      title: 'Wiki Index (`Home.dj`)',
-      description: 'Public community wiki landing page (`/wiki`) with sidebar navigation.',
+      title: 'Home',
       path: '/wiki',
     },
     {
       name: 'wiki-pages',
       section: 'wiki',
-      title: 'Wiki Pages Directory',
-      description:
-        'Directory of all wiki pages visible to the current session (`/wiki/pages`).',
+      title: 'Pages',
       path: '/wiki/pages',
     },
     {
       name: 'wiki-project',
       section: 'wiki',
-      title: 'Wiki: Developer-Restricted Project Page',
-      description:
-        '`0 ERROR` project wiki page (`/wiki/0_ERROR`, `visibility: developers`) viewed by ' +
-        'an authorized registered competitor.',
+      title: 'Project (Developers)',
       path: '/wiki/0_ERROR',
     },
     {
       name: 'wiki-discord',
       section: 'wiki',
-      title: 'Wiki: Discord-Restricted Project Page',
-      description:
-        '`Foul Play` project wiki page (`/wiki/Foul_Play`, `visibility: discord`) viewed by a ' +
-        'verified `pkmn.ai` Discord server member.',
+      title: 'Project (Discord)',
       path: '/wiki/Foul_Play',
       setup: fixture => setupDiscordWikiPage(fixture),
     },
     {
       name: 'wiki-edit',
       section: 'wiki',
-      title: 'Wiki Editor (General Public Page)',
-      description:
-        'Editing a non-project wiki page (`/wiki/Gen_9_OU/edit`), which is always public and ' +
-        'omits the visibility radio bar.',
+      title: 'Edit (Public)',
       path: '/wiki/Gen_9_OU/edit',
     },
     {
       name: 'wiki-edit-project',
       section: 'wiki',
-      title: 'Wiki Editor (Project Page with Visibility Bar)',
-      description:
-        'Editing a project wiki page (`/wiki/0_ERROR/edit`) as its owner, showing the ' +
-        '`Developers — Discord — Public` `#wiki-visibility` selector.',
+      title: 'Edit (Project)',
       path: '/wiki/0_ERROR/edit',
     },
     {
       name: 'wiki-preview',
       section: 'wiki',
-      title: 'Wiki Editor (Live Djot Preview)',
-      description:
-        'Clicking `Preview` in `/wiki/0_ERROR/edit` renders the formatted Djot preview above ' +
-        'the editor textarea before committing.',
+      title: 'Preview',
       path: '/wiki/0_ERROR/edit',
       click: '#wiki-actions button[value="preview"]',
     },
     {
       name: 'wiki-history',
       section: 'wiki',
-      title: 'Wiki Revision History',
-      description:
-        'Git commit log (`/wiki/0_ERROR/history`) mapping GitHub committers (`scheibo`, ' +
-        '`coauthor`) to their Smogon usernames (`pre`, `coauthor`) with `(diff)` links.',
+      title: 'History',
       path: '/wiki/0_ERROR/history',
     },
     {
       name: 'wiki-revision',
       section: 'wiki',
-      title: 'Wiki Historical Revision Snapshot',
-      description:
-        'Read-only snapshot of a specific git commit (`/wiki/0_ERROR/<sha>`) with revision ' +
-        'banner and link to diff.',
+      title: 'Revision',
       path: `/wiki/0_ERROR/${wikiSha}`,
     },
     {
       name: 'wiki-diff',
       section: 'wiki',
-      title: 'Wiki Revision Unified Diff',
-      description:
-        'Unified git diff view (`/wiki/0_ERROR/<sha>?diff=1`) highlighting added and removed ' +
-        'lines.',
+      title: 'Diff',
       path: `/wiki/0_ERROR/${wikiSha}?diff=1`,
     },
     {
       name: 'wiki-uncreated-owner',
       section: 'wiki',
-      title: 'Wiki: Uncreated Project Page (Owner Redirect to Editor)',
-      description:
-        'When a project owner (`@pmariglia`) visits their uncreated project page ' +
-        '(`/wiki/Foul_Play`), they are redirected to `/wiki/Foul_Play/edit` with starter Djot.',
+      title: 'Uncreated (Owner)',
       path: '/wiki/Foul_Play',
       githubUser: 'pmariglia',
     },
     {
       name: 'wiki-uncreated-other',
       section: 'wiki',
-      title: 'Wiki: 404 Uncreated Project Page (Non-Owner)',
-      description:
-        'When a non-owner visits an uncreated project page (`/wiki/Metamon`), the wiki returns ' +
-        'the generic site `404` page.',
+      title: '404 Uncreated',
       path: '/wiki/Metamon',
       githubUser: 'pmariglia',
       expectHttpError: 404,
@@ -1402,10 +1122,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'wiki-forbidden-stranger',
       section: 'wiki',
-      title: 'Wiki: 403 Forbidden (Unregistered GitHub User)',
-      description:
-        'Visiting a `developers`-restricted wiki page (`/wiki/0_ERROR`) as `@stranger` returns ' +
-        'the generic site `403` page.',
+      title: '403 Unregistered',
       path: '/wiki/0_ERROR',
       githubUser: 'stranger',
       expectHttpError: 403,
@@ -1413,10 +1130,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'wiki-forbidden-nonowner',
       section: 'wiki',
-      title: 'Wiki: 403 Forbidden (Editing Another Project’s Page)',
-      description:
-        'When competitor `@pmariglia` attempts to edit `/wiki/0_ERROR/edit`, the wiki returns ' +
-        'the generic site `403` page.',
+      title: '403 Non-Owner',
       path: '/wiki/0_ERROR/edit',
       githubUser: 'pmariglia',
       expectHttpError: 403,
@@ -1424,10 +1138,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'wiki-forbidden-discord',
       section: 'wiki',
-      title: 'Wiki: 403 Forbidden (Non-Guild Discord User)',
-      description:
-        'Visiting a `discord`-visibility project page (`/wiki/Foul_Play`) as a user not in the ' +
-        '`pkmn.ai` Discord guild returns the generic site `403` page.',
+      title: '403 Non-Guild',
       path: '/wiki/Foul_Play',
       githubUser: 'outsider',
       expectHttpError: 403,
@@ -1436,10 +1147,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     {
       name: 'auth-dev',
       section: 'wiki',
-      title: 'Dev Auth Persona Switcher (`/auth/dev`)',
-      description:
-        'Local loopback persona switcher (`DEV_AUTH=1`) for signing in as admin, competitor, ' +
-        'unregistered GitHub user, or non-guild Discord user.',
+      title: 'Dev Auth',
       path: '/auth/dev',
     },
   ];
@@ -2238,8 +1946,7 @@ function buildGalleryScript(opts: {
       let currentFilter = 'all';
       let currentCompare = 'after';
       let currentSectionFilter = 'all';
-      let searchQuery = '';
-      let activeSectionId = SECTIONS[0]?.id || 'content';
+      let activeSectionId = SECTIONS[0]?.id || 'static';
       const indexBySection = {};
       for (const sec of SECTIONS) indexBySection[sec.id] = 0;
 
@@ -2247,7 +1954,6 @@ function buildGalleryScript(opts: {
       const secNavEl = document.getElementById('section-nav');
       const summaryEl = document.getElementById('atlas-summary');
       const diffSummaryWrapEl = document.getElementById('diff-summary-wrap');
-      const searchEl = document.getElementById('search-input');
       const filterGroupEl = document.getElementById('filter-group');
       const compareGroupEl = document.getElementById('compare-group');
 
@@ -2261,21 +1967,10 @@ function buildGalleryScript(opts: {
         compareGroupEl.classList.remove('hide');
       }
 
-      const filteredItemsForSection = secId => {
-        const q = searchQuery.trim().toLowerCase();
-        return ITEMS.filter(item => {
-          if (item.section !== secId) return false;
-          if (currentFilter === 'changed' && !changedScenarioSet.has(item.name)) return false;
-          if (!q) return true;
-          return (
-            item.name.toLowerCase().includes(q) ||
-            item.title.toLowerCase().includes(q) ||
-            item.description.toLowerCase().includes(q) ||
-            item.path.toLowerCase().includes(q) ||
-            item.persona.toLowerCase().includes(q)
-          );
-        });
-      };
+      const filteredItemsForSection = secId => ITEMS.filter(
+        item => item.section === secId &&
+          (currentFilter !== 'changed' || changedScenarioSet.has(item.name))
+      );
 
       const renderDiffHeaderSummary = () => {
         diffSummaryWrapEl.innerHTML = '';
@@ -2356,7 +2051,7 @@ function buildGalleryScript(opts: {
         secNavEl.innerHTML = '';
         const allBtn = document.createElement('button');
         allBtn.type = 'button';
-        allBtn.textContent = 'All Sections (' + totalVisible + ')';
+        allBtn.textContent = 'All (' + totalVisible + ')';
         if (currentSectionFilter === 'all') allBtn.classList.add('active');
         allBtn.addEventListener('click', () => {
           currentSectionFilter = 'all';
@@ -2429,11 +2124,11 @@ function buildGalleryScript(opts: {
           const head = document.createElement('div');
           head.className = 'section-head';
           head.innerHTML =
-            '<div><h2>' + (secIdx + 1) + '. ' + sec.title +
+            '<h2>' + (secIdx + 1) + '. ' + sec.title +
             (secDiffCount > 0
               ? ' <span class="ctrl-delta">Δ ' + secDiffCount + ' changed</span>'
               : '') +
-            '</h2><p>' + sec.subtitle + '</p></div>' +
+            '</h2>' +
             '<span class="section-counter">' +
             (currentMode === 'carousel'
               ? ('State ' + (activeIdx + 1) + ' of ' + items.length)
@@ -2464,7 +2159,7 @@ function buildGalleryScript(opts: {
 
             pill.innerHTML =
               '<span class="num">' + (idx + 1) + '.</span>' +
-              '<span>' + item.title.replace(/^[^:]+:\\s*/, '') + '</span>' +
+              '<span>' + item.title + '</span>' +
               deltaHtml;
             pill.title = item.name + ' (' + item.path + ')' +
               (slotChg ? ' — ' + slotChg.note : '');
@@ -2489,8 +2184,6 @@ function buildGalleryScript(opts: {
             const bar = document.createElement('div');
             bar.className = 'carousel-bar';
 
-            const meta = document.createElement('div');
-            meta.className = 'carousel-meta';
             const titleRow = document.createElement('div');
             titleRow.className = 'carousel-title-row';
 
@@ -2544,13 +2237,7 @@ function buildGalleryScript(opts: {
               titleRow.appendChild(diffLink);
             }
 
-            meta.appendChild(titleRow);
-
-            const desc = document.createElement('div');
-            desc.className = 'carousel-desc';
-            desc.textContent = currentItem.description;
-            meta.appendChild(desc);
-            bar.appendChild(meta);
+            bar.appendChild(titleRow);
 
             const nav = document.createElement('div');
             nav.className = 'carousel-nav';
@@ -2737,7 +2424,6 @@ function buildGalleryScript(opts: {
                 '<div class="grid-item-head">' +
                 '<div class="grid-item-title"><span>' + (idx + 1) + '. ' + item.title + '</span>' +
                 deltaBadge + '</div>' +
-                '<div class="grid-item-desc">' + item.description + '</div>' +
                 '</div>' +
                 '<div class="grid-item-img-wrap">' +
                 '<img loading="lazy" src="' + thumbSrc + '" alt="' + item.title + '">' +
@@ -2828,11 +2514,6 @@ function buildGalleryScript(opts: {
         });
       });
 
-      searchEl.addEventListener('input', () => {
-        searchQuery = searchEl.value || '';
-        renderAll();
-      });
-
       const selectHashScenario = hash => {
         const clean = (hash || '').replace(/^#/, '').trim();
         if (!clean) return;
@@ -2860,7 +2541,6 @@ function buildGalleryScript(opts: {
       };
 
       window.addEventListener('keydown', e => {
-        if (document.activeElement === searchEl) return;
         if (e.key === 'ArrowRight') {
           e.preventDefault();
           stepSection(activeSectionId, 1);
@@ -2944,7 +2624,6 @@ export function renderGalleryHtml(
         name: s.name,
         section: s.section,
         title: s.title,
-        description: s.description,
         path: s.path,
         persona: s.githubUser ?? 'scheibo',
       }))
@@ -2977,12 +2656,6 @@ export function renderGalleryHtml(
               </span>
             </div>
             <div className='controls'>
-              <input
-                type='search'
-                id='search-input'
-                className='search-input'
-                placeholder='Filter states, routes, personas…'
-              />
               <div
                 className='ctrl-group hide'
                 id='filter-group'
