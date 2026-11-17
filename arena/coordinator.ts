@@ -231,7 +231,8 @@ export class Coordinator {
         : packages.COLD_AGENTS_DIR
     );
     this.teamsDir = options.teamsDir ?? '/opt/arena/teams';
-    this.archiveLogsDir = options.archiveLogsDir ?? '/Volumes/Archive/logs';
+    this.archiveLogsDir =
+      options.archiveLogsDir ?? process.env.ARENA_ARCHIVE_LOGS_DIR ?? '/Volumes/Archive/logs';
     this.casDir = options.casDir;
     this.maxTurns = options.maxTurns;
     this.exploitProbability = options.exploitProbability ?? 0.45;
@@ -370,6 +371,8 @@ export class Coordinator {
       if (this.draining) break;
       // Tournament-only submissions target GCP linux/amd64 Spot GPU workers, not Mac mini arm64.
       if (sub.ladders.length === 0 && sub.tournaments.length > 0) continue;
+      // Refresh the 15m server watchdog between submissions so large launch queues stay non-stale.
+      await this.client.sendHeartbeat?.({idle: true})?.catch(() => undefined);
       processed++;
       const mode = packages.toExecutionMode(sub.package);
       const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);

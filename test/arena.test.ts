@@ -2295,6 +2295,7 @@ describe('arena infrastructure', () => {
           new Map([['gen9customgame', h.ladderSnap]])
         );
         expect(processed).toBe(1);
+        expect(h.heartbeats).toContainEqual({idle: true});
         expect(h.reportedStatuses).toHaveLength(1);
         expect(h.reportedStatuses[0].smokeStatus).toBe('passed');
         expect(

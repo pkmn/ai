@@ -80,13 +80,23 @@ Walk through the initial macOS Setup Assistant with these exact choices:
      online without a physical keyboard attached.
 5. **Analytics, Screen Time, Siri, Apple Intelligence, Location Services:** Disable / Skip all.
 
-### Step 1.2: Disable Auto-Login, Set Hostname & Enable SSH on the Mac mini
+### Step 1.2: Disable Auto-Login, Grant Full Disk Access, Set Hostname & Enable SSH
 
 1. Open **System Settings -> Users & Groups** and ensure **Automatically log in** is set to **Off**.
    - *Why:* When the Mac mini boots headless with no display connected, stopping at the login window
      avoids launching an interactive Aqua / `WindowServer` / Finder session, saving ~1.5 GB of
      Unified Memory for agents.
-2. Open **Terminal.app** on the Mac mini and run:
+2. Open **System Settings -> Privacy & Security -> Full Disk Access**, click **`+`**, press
+   **`Cmd+Shift+G`**, and grant Full Disk Access to `/usr/sbin/taskpolicy`, `/bin/bash`, and
+   `/usr/bin/tar` *(you will also add `/opt/homebrew/bin/node` after installing Homebrew in
+   Step 3.3; optionally enable **System Settings -> General -> Sharing -> Screen Sharing** so you
+   can open System Settings over an SSH tunnel `ssh -L 5900:127.0.0.1:5900 arena` without attaching
+   a physical monitor)*.
+   - *Why:* On macOS Sequoia+, headless `LaunchDaemons` (`ai.pkmn.arena` and `ai.pkmn.archive`) are
+     blocked by TCC (`kTCCServiceSystemPolicyRemovableVolumes`) from writing to external USB/TB
+     APFS drives (`/Volumes/Archive`) unless Full Disk Access is granted in System Settings (`ssh`
+     sessions inherit `Remote Login`'s grant, which would otherwise mask missing daemon access).
+3. Open **Terminal.app** on the Mac mini and run:
 
 ```sh
 # 1. Set all three macOS hostnames to 'arena'
@@ -434,6 +444,13 @@ brew install node git jq zstd xz sevenzip skopeo podman sqlite
 brew install --cask gcloud-cli
 '
 ```
+
+> [!IMPORTANT]
+> After `brew install node` completes (and after any future `brew upgrade node`, which changes the
+> ad-hoc Mach-O CDHash), open **System Settings -> Privacy & Security -> Full Disk Access** (via the
+> attached monitor or `ssh -L 5900:127.0.0.1:5900 arena` Screen Sharing) and ensure
+> `/opt/homebrew/bin/node` (alongside `/usr/sbin/taskpolicy`, `/bin/bash`, and `/usr/bin/tar`) is
+> enabled so `ai.pkmn.arena` can write cold archives and battle logs to `/Volumes/Archive`.
 
 #### Verify Phase 3
 
