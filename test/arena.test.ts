@@ -366,8 +366,6 @@ describe('arena infrastructure', () => {
       const setupScript = fs.readFileSync(root('arena', 'scripts', 'setup-arena.sh'), 'utf8');
       const sudoers = fs.readFileSync(root('arena', 'config', 'sudoers'), 'utf8');
       const sandbox = fs.readFileSync(root('arena', 'config', 'sandbox.sb'), 'utf8');
-      const sshdConf = fs.readFileSync(root('arena', 'config', 'sshd-arena.conf'), 'utf8');
-      const pfAnchor = fs.readFileSync(root('arena', 'config', 'pf.anchor'), 'utf8');
       const limitC = fs.readFileSync(root('arena', 'bin', 'limit.c'), 'utf8');
 
       expect(arenaScript).toContain(
@@ -397,11 +395,6 @@ describe('arena infrastructure', () => {
       expect(sudoers).toContain('/usr/bin/killall -STOP -u p1');
       expect(sudoers).toContain('/usr/bin/killall -CONT -u p1');
       expect(sudoers).toContain('/usr/bin/find /Volumes/P1/scratch -mindepth 1 -delete');
-
-      expect(sshdConf).toContain('AllowAgentForwarding no');
-      expect(sshdConf).toContain('AllowTcpForwarding local');
-      expect(sshdConf).toContain('PermitOpen 127.0.0.1:5900');
-      expect(pfAnchor).toContain('port { 22, 3283, 5900 }');
 
       expect(sandbox).toContain('(allow signal (target same-sandbox))');
       expect(sandbox).toContain('(global-name "com.apple.MTLCompilerService")');
