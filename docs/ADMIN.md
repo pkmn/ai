@@ -33,6 +33,23 @@ sparse-checked-out `teams/teams` and `teams/pkmn_stuff` submodules, runs `npm in
 when `package.json` changed, reloads `systemd` or `nginx` if `config/` changed, rebuilds `public/`
 via `npm run build`, and restarts `pkmn.ai-server` when needed.
 
+### Remote GUI Maintenance on the Mac mini (`arena` Screen Sharing)
+
+For GUI-only macOS tasks on the headless M6 Mac mini (toggling **Full Disk Access** after a
+`brew upgrade node` or installing manual macOS updates; see [`arena/SETUP.md`](../arena/SETUP.md)),
+macOS Screen Sharing is firewalled from the LAN/internet by `pf` (`! lo0` ports `22`, `3283`, `5900`
+dropped) and restricted in `sshd` via `AllowTcpForwarding local` + `PermitOpen 127.0.0.1:5900`
+(`AllowAgentForwarding no` remains enforced). Tunnel local port `5901` (avoiding collision with your
+laptop's own port `5900`) over `ProxyJump pkmn.ai`:
+
+```sh
+# Terminal 1: hold loopback VNC forward open through pkmn.ai -> arena
+ssh -N -L 5901:127.0.0.1:5900 arena
+
+# Terminal 2 (on macOS laptop): launch Screen Sharing.app and sign in as pkmn
+open vnc://127.0.0.1:5901
+```
+
 ### Running the `pkmn` Operator CLI
 
 Compile TypeScript (`npm run build` or `npm run compile`, already done on production by `./deploy`),

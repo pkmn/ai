@@ -89,9 +89,10 @@ Walk through the initial macOS Setup Assistant with these exact choices:
 2. Open **System Settings -> Privacy & Security -> Full Disk Access**, click **`+`**, press
    **`Cmd+Shift+G`**, and grant Full Disk Access to `/usr/sbin/taskpolicy`, `/bin/bash`, and
    `/usr/bin/tar` *(you will also add `/opt/homebrew/bin/node` after installing Homebrew in
-   Step 3.3; optionally enable **System Settings -> General -> Sharing -> Screen Sharing** so you
-   can open System Settings over an SSH tunnel `ssh -L 5900:127.0.0.1:5900 arena` without attaching
-   a physical monitor)*.
+   Step 3.3)*. Then open **System Settings -> General -> Sharing** and toggle **Screen Sharing**
+   **On** *(reachable exclusively over loopback SSH `ssh -N -L 5901:127.0.0.1:5900 arena` +
+   `open vnc://127.0.0.1:5901` — `/etc/pf.anchors/ai.pkmn.arena` blocks non-loopback ports `22`,
+   `3283`, and `5900`, and `sshd` sets `PermitOpen 127.0.0.1:5900`)*.
    - *Why:* On macOS Sequoia+, headless `LaunchDaemons` (`ai.pkmn.arena` and `ai.pkmn.archive`) are
      blocked by TCC (`kTCCServiceSystemPolicyRemovableVolumes`) from writing to external USB/TB
      APFS drives (`/Volumes/Archive`) unless Full Disk Access is granted in System Settings (`ssh`
@@ -448,9 +449,10 @@ brew install --cask gcloud-cli
 > [!IMPORTANT]
 > After `brew install node` completes (and after any future `brew upgrade node`, which changes the
 > ad-hoc Mach-O CDHash), open **System Settings -> Privacy & Security -> Full Disk Access** (via the
-> attached monitor or `ssh -L 5900:127.0.0.1:5900 arena` Screen Sharing) and ensure
-> `/opt/homebrew/bin/node` (alongside `/usr/sbin/taskpolicy`, `/bin/bash`, and `/usr/bin/tar`) is
-> enabled so `ai.pkmn.arena` can write cold archives and battle logs to `/Volumes/Archive`.
+> attached monitor or remote Screen Sharing `ssh -N -L 5901:127.0.0.1:5900 arena` +
+> `open vnc://127.0.0.1:5901`) and ensure `/opt/homebrew/bin/node` (alongside `/usr/sbin/taskpolicy`,
+> `/bin/bash`, and `/usr/bin/tar`) is enabled so `ai.pkmn.arena` can write cold archives and battle
+> logs to `/Volumes/Archive`.
 
 #### Verify Phase 3
 
@@ -993,6 +995,7 @@ ssh arena 'sudo chmod -R a+rX,go-w /opt/arena/stats'
 | **Inspect pending RPC outbox** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, endpoint, created_at FROM outbox;"'` |
 | **Emergency slot cleanup** | `ssh arena 'sudo -n /opt/arena/bin/arena cleanup p1 native && sudo -n /opt/arena/bin/arena cleanup p2 native && sudo -n /opt/arena/bin/arena cleanup p1 container && sudo -n /opt/arena/bin/arena cleanup p2 container'` |
 | **Check Podman VM health** | `ssh arena '/opt/homebrew/bin/podman machine list && /opt/homebrew/bin/podman ps -a'` |
+| **Remote Screen Sharing (GUI)** | `ssh -N -L 5901:127.0.0.1:5900 arena` *(then `open vnc://127.0.0.1:5901` on laptop)* |
 
 ### 8.4 Full Unattended Reboot Persistence Test
 
