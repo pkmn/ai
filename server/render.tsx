@@ -2266,7 +2266,7 @@ function renderSingleLadderArtifact(opts: {
     });
 
     const thGxe = 'Expected win percentage against prior N(1500, 350^2)';
-    const thWlt = '2-game blind-pair Match Wins – Losses – Ties (1-1 splits)';
+    const thWlt = '2-game blind-pair Match Wins – Losses – Ties';
     const thStreak = 'Current consecutive outright match win/loss streak';
     const thLos = 'Pairwise Likelihood of Superiority over the next-ranked settled agent';
     standingsPane = (

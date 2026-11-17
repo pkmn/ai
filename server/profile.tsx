@@ -101,8 +101,8 @@ function buildReignRowsHtml(
   if (!has1 && !has10 && !has100) return '';
 
   const t1Tip = 'Guaranteed #1 (rank = 1 & settled)';
-  const t10Tip = 'Guaranteed Top 10 at 95% confidence (rank_max <= 10)';
-  const t100Tip = 'Guaranteed Top 100 at 95% confidence (rank_max <= 100)';
+  const t10Tip = 'Guaranteed Top 10 at 95% confidence';
+  const t100Tip = 'Guaranteed Top 100 at 95% confidence';
 
   return String(
     <>
@@ -712,7 +712,7 @@ function renderHeadToHeadPane(opts: {
     // samples (e.g. 1-0 = +50% over expectation) don't masquerade as non-transitive counterpicks.
     if (total >= 10 && resid >= 4.5) {
       residNode = <span className='yes'>{residText}</span>;
-      residTip = `Best Matchup (${residText} over Davidson expectation)`;
+      residTip = `Best Matchup (${residText} over expectation)`;
     } else if (total >= 10 && resid <= -4.5) {
       residNode = <span className='no'>{residText}</span>;
       residTip = `Relative underperformance vs. expectation (${residText})`;
@@ -747,7 +747,7 @@ function renderHeadToHeadPane(opts: {
     }
     const losPct = losVal !== undefined ? losVal * 100 : 50;
 
-    const wltTip = `${wins} W, ${ties} Split (WL/LW/TT), ${losses} L`;
+    const wltTip = `${wins} W, ${ties} (WL/LW/TT), ${losses} L`;
     const rowCls = h2hRows.length >= TABLE_PAGE_SIZE ? 'opp-row hide' : 'opp-row';
 
     h2hRows.push(
@@ -790,12 +790,10 @@ function renderHeadToHeadPane(opts: {
     return {pane: emptyPane, empty: true};
   }
 
-  const thWlt = 'Match Wins – Losses – Ties (underlying WW / Split / LL in tooltip)';
-  const thExp = 'Expected score % under Generalized Davidson model E[S | delta]';
-  const thDelta =
-    'Davidson Matchup Residual (Actual Score % - Expected Score %): ' +
-    'identifies stylistic Best Matchup (+) and Nemesis (-)';
-  const thStr = 'Current streak (Longest Win / Loss streak vs. opponent)';
+  const thWlt = 'Match Wins – Losses – Ties';
+  const thExp = 'Expected Score %';
+  const thDelta = 'Actual Score % - Expected Score %';
+  const thStr = 'Current streak (Longest Win / Loss streak vs. Opponent)';
   const thLos = 'Pairwise Likelihood of Superiority';
 
   return {
@@ -875,7 +873,7 @@ function renderRecentMatchesPane(opts: {
               <th>Match</th>
               <th>Version</th>
               <th>Opponent</th>
-              <th className='center' title='Match Outcome (Game 1 / Game 2 outcomes)'>Result</th>
+              <th className='center' title='Match Outcome (Game 1 / Game 2 Outcomes)'>Result</th>
               <th className='num'>Completed</th>
             </tr>
           </thead>

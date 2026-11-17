@@ -747,7 +747,7 @@ function renderTournamentStandingsNode(opts: {
     `Round-Robin points out of ${maxRrGames} ${unitPlural} (+1.0 per win, +0.5 per tie)`;
   const wltTitle = isMultiGame
     ? `Best-of-${tournament.bestOf} match Wins – Losses – Ties`
-    : 'Standalone individual BYOT game Wins – Losses – Ties';
+    : 'Standalone individual game Wins – Losses – Ties';
 
   return (
     <div id='standings-body'>
