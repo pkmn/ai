@@ -53,7 +53,7 @@ smoke tests.
 | **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MB`, deduplicated via `/opt/arena/cas/sha256`). |
 | **Coordinator State DB** | `/opt/arena/state/arena.sqlite` | Local WAL SQLite DB (`local_agents`, `local_matches`, `outbox`, `ladder_counters`). |
 | **Daemon Logs** | `/opt/arena/logs/{arena,tunnel}.{log,err}` | Stdout/stderr logs for `ai.pkmn.arena` and `ai.pkmn.tunnel`. |
-| **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`4G` quota) | Per-slot writable scratch volumes (`0700` `root:wheel` + `p1`/`p2` & `pkmn` ACLs), wiped around every game. |
+| **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`4G` quota) | Quota-capped APFS volumes (`0711` `root:wheel`) with `/Volumes/P{1,2}/scratch` (`0700` + `p1`/`p2` & `pkmn` ACLs) wiped around every game. |
 | **APFS Staging Volume** | `/Volumes/Staging` (`6G` quota) | Ephemeral download & extraction staging area (`0700` `pkmn:agents`). |
 | **External Archive SSD** | `/Volumes/Archive` (`1 TB` APFS) | Cold agent `.tar.zst` archive (`cold-agents/`), daily battle logs (`logs/`), DB backups (`db-backups/`). |
 
@@ -548,11 +548,10 @@ What `setup-arena.sh` provisions:
    quotas and `/Volumes/Staging` with a hard `6G` kernel APFS quota.
 2. **Role Accounts:** Creates `p1` (`UID 591`) and `p2` (`UID 592`) in group `agents` (`GID 590`)
    with `/usr/bin/false` login shells and hidden login-window flags.
-3. **Volume Permissions & ACLs:** Locks `/Volumes/P1` and `/Volumes/P2` (`root:wheel`, `0700`) with
-   explicit per-slot ACLs (`user:p1` on `/Volumes/P1`, `user:p2` on `/Volumes/P2`) so `p1` and `p2`
-   cannot read each other's files or strip ACLs, while granting `user:pkmn` an explicit ACL so
-   `virtiofsd` (running as `pkmn`) can bind-mount `/Volumes/P1` and `/Volumes/P2` into Podman
-   containers.
+3. **Volume Permissions & ACLs:** Locks the `/Volumes/P1` and `/Volumes/P2` mount roots (`root:wheel`,
+   `0711` + `user:pkmn` read/search ACL so `mds`/`.Spotlight-V100` stays inaccessible to `p1`/`p2`)
+   and isolates per-game writable state to `/Volumes/P1/scratch` and `/Volumes/P2/scratch` (`0700`
+   `root:wheel` with explicit `user:p1`/`user:p2` and `user:pkmn` ACLs for Seatbelt & `virtiofs`).
 4. **System Hardening Configs:** Installs `/etc/ssh/sshd_config.d/100-arena-hardening.conf`
    (`ListenAddress 127.0.0.1:22`), `/etc/pf.anchors/ai.pkmn.arena`, `/opt/arena/etc/sandbox.sb`,
    and `/etc/sudoers.d/arena`.
@@ -605,16 +604,16 @@ Run each of these 6 verification tests over `ssh arena` before starting the coor
 ```sh
 ssh arena '
 df -h /Volumes/P1 /Volumes/P2 /Volumes/Staging
-ls -lde /Volumes/P1 /Volumes/P2 /Volumes/Staging
+ls -lde /Volumes/P1 /Volumes/P2 /Volumes/P1/scratch /Volumes/P2/scratch /Volumes/Staging
 id p1 && id p2
-sudo -n -u p1 /usr/bin/env -i HOME=/Volumes/P1 TMPDIR=/Volumes/P1 PATH=/usr/bin:/bin /usr/bin/id -un
-sudo -n -u p2 /usr/bin/env -i HOME=/Volumes/P2 TMPDIR=/Volumes/P2 PATH=/usr/bin:/bin /usr/bin/id -un
+sudo -n -u p1 /usr/bin/env -i HOME=/Volumes/P1/scratch TMPDIR=/Volumes/P1/scratch PATH=/usr/bin:/bin /usr/bin/id -un
+sudo -n -u p2 /usr/bin/env -i HOME=/Volumes/P2/scratch TMPDIR=/Volumes/P2/scratch PATH=/usr/bin:/bin /usr/bin/id -un
 '
 ```
 
 *Expected:*
 - `/Volumes/P1` and `/Volumes/P2` mounted (`4Gi` quota each), `/Volumes/Staging` mounted (`6Gi` quota).
-- `/Volumes/P1` (`drwx------+` `0700` `root:wheel` with `user:p1` and `user:pkmn` ACLs) and `/Volumes/P2` (`drwx------+` `0700` `root:wheel` with `user:p2` and `user:pkmn` ACLs).
+- `/Volumes/P1/scratch` (`drwx------+` `0700` `root:wheel` with `user:p1` and `user:pkmn` ACLs) and `/Volumes/P2/scratch` (`drwx------+` `0700` `root:wheel` with `user:p2` and `user:pkmn` ACLs).
 - `sudo -n -u p1 ...` prints `p1` and `sudo -n -u p2 ...` prints `p2` with no password prompt.
 
 ##### Test 5B: Verify `sshd` Loopback Binding & `pf` Kernel Firewall Airgap
@@ -667,20 +666,20 @@ chmod 0755 "${TEST_DIR}/run"
 OUT="$(printf "|request|{\"active\":[{\"moves\":[{\"id\":\"tackle\"}]}]}\n" | /opt/arena/bin/arena run p1 native _verify_native)"
 PEAK_MIB="$(cat /opt/arena/state/peak_ram_p1)"
 sudo -n /opt/arena/bin/arena cleanup p1 native
-REMAINING="$(sudo find /Volumes/P1 -mindepth 1 | wc -l | tr -d " ")"
+REMAINING="$(sudo find /Volumes/P1/scratch -mindepth 1 | wc -l | tr -d " ")"
 rm -rf "$TEST_DIR"
 
 # Also verify the installed smoke-test _baseline agent inside the Seatbelt p2 slot
 BASE_OUT="$(printf "|request|{\"teamPreview\":true,\"maxChosenTeamSize\":4}\n|request|{\"active\":[{\"moves\":[{\"id\":\"tackle\"}]}]}\n" | /opt/arena/bin/arena run p2 native _baseline | tr "\n" " ")"
 sudo -n /opt/arena/bin/arena cleanup p2 native
 
-echo "Agent stdout: ${OUT} | Baseline: ${BASE_OUT}| Peak RAM MiB: ${PEAK_MIB} | Remaining files in /Volumes/P1: ${REMAINING}"
+echo "Agent stdout: ${OUT} | Baseline: ${BASE_OUT}| Peak RAM MiB: ${PEAK_MIB} | Remaining files in /Volumes/P1/scratch: ${REMAINING}"
 [[ "$OUT" == "default" && "$BASE_OUT" == "/team 1234 default " && "$REMAINING" == "0" ]] && echo "PASS: Native Seatbelt + limit + _baseline + cleanup verified"
 '
 ```
 
 *Expected:*
-- `Agent stdout: default | Baseline: /team 1234 default | Peak RAM MiB: <N> | Remaining files in /Volumes/P1: 0`
+- `Agent stdout: default | Baseline: /team 1234 default | Peak RAM MiB: <N> | Remaining files in /Volumes/P1/scratch: 0`
 - `PASS: Native Seatbelt + limit + _baseline + cleanup verified`
 
 ##### Test 5D: Verify `arena/unpack.ts` & APFS Copy-on-Write CAS Deduplication
@@ -739,17 +738,17 @@ rm -rf "$CTX_DIR"
 OUT="$(printf "|request|{\"active\":[{\"moves\":[{\"id\":\"tackle\"}]}]}\n" | /opt/arena/bin/arena run p1 container arena-verify-oci:latest)"
 sudo -n /opt/arena/bin/arena cleanup p1 container
 podman rmi -f arena-verify-oci:latest >/dev/null
-REMAINING="$(sudo find /Volumes/P1 -mindepth 1 | wc -l | tr -d " ")"
+REMAINING="$(sudo find /Volumes/P1/scratch -mindepth 1 | wc -l | tr -d " ")"
 
-echo "Container stdout: ${OUT} | Remaining files in /Volumes/P1: ${REMAINING}"
-[[ "$OUT" == "default" && "$REMAINING" == "0" ]] && echo "PASS: Podman container sandbox + virtiofs /Volumes/P1 mount verified"
+echo "Container stdout: ${OUT} | Remaining files in /Volumes/P1/scratch: ${REMAINING}"
+[[ "$OUT" == "default" && "$REMAINING" == "0" ]] && echo "PASS: Podman container sandbox + virtiofs /Volumes/P1/scratch mount verified"
 '
 ```
 
 *Expected:*
 - `Mem: 29Gi ...` and `Swap: 0B`.
-- `Container stdout: default | Remaining files in /Volumes/P1: 0`
-- `PASS: Podman container sandbox + virtiofs /Volumes/P1 mount verified`
+- `Container stdout: default | Remaining files in /Volumes/P1/scratch: 0`
+- `PASS: Podman container sandbox + virtiofs /Volumes/P1/scratch mount verified`
 
 ##### Test 5F: Run the Repository Unit & Integration Test Suite on the Mac mini
 

@@ -18,7 +18,7 @@ if [[ "$SLOT" != "p1" && "$SLOT" != "p2" ]]; then
   exit 2
 fi
 
-SCRATCH_VOL="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')"
+SCRATCH_DIR="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')/scratch"
 CONTAINER_NAME="arena-${SLOT}"
 
 # Read cgroup peak memory from the Podman VM host WITHOUT executing any binary inside the
@@ -52,15 +52,16 @@ kill_native_slot_procs() {
 }
 
 wipe_scratch() {
-  # Clear any user/system immutable or append-only flags (`chflags uchg/uappend/schg`) and root
-  # extended attributes set by an untrusted agent so nothing persists across games.
-  sudo -n /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL" 2>/dev/null || true
-  sudo -n /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -delete
-  sudo -n /usr/bin/xattr -c "$SCRATCH_VOL" 2>/dev/null || true
-  sudo -n /usr/sbin/chown root:wheel "$SCRATCH_VOL"
-  sudo -n /bin/chmod 0700 "$SCRATCH_VOL"
-  if [[ -n "$(sudo -n /usr/bin/find "$SCRATCH_VOL" -mindepth 1 -print -quit)" ]]; then
-    echo "Scratch wipe incomplete on $SCRATCH_VOL" >&2
+  # Wipe `/Volumes/P{1,2}/scratch` rather than the APFS volume mount root (`/Volumes/P{1,2}`),
+  # where macOS creates SIP/MACF DataVault `.Spotlight-V100` (`EPERM` even for root `find`) and
+  # `.fseventsd`/`.Trashes`. Clear immutable/append-only flags and xattrs so nothing persists.
+  sudo -n /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_DIR" 2>/dev/null || true
+  sudo -n /usr/bin/find "$SCRATCH_DIR" -mindepth 1 -delete
+  sudo -n /usr/bin/xattr -c "$SCRATCH_DIR" 2>/dev/null || true
+  sudo -n /usr/sbin/chown root:wheel "$SCRATCH_DIR"
+  sudo -n /bin/chmod 0700 "$SCRATCH_DIR"
+  if [[ -n "$(sudo -n /usr/bin/find "$SCRATCH_DIR" -mindepth 1 -print -quit)" ]]; then
+    echo "Scratch wipe incomplete on $SCRATCH_DIR" >&2
     exit 1
   fi
 }
@@ -68,7 +69,7 @@ wipe_scratch() {
 case "$ACTION" in
   run)
     # Terminate any stale container or native slot processes BEFORE wiping scratch so lingering
-    # threads cannot write into `$SCRATCH_VOL` after the wipe completes.
+    # threads cannot write into `$SCRATCH_DIR` after the wipe completes.
     if [[ "$MODE" == "container" ]]; then
       podman rm -f -t 0 "$CONTAINER_NAME" >/dev/null 2>&1 || true
     elif [[ "$MODE" == "native" ]]; then
@@ -98,7 +99,7 @@ case "$ACTION" in
         ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
         --tmpfs /tmp:rw,noexec,nosuid,size=500m \
         --mount "type=bind,src=/opt/arena/stats,dst=/opt/arena/stats,ro" \
-        --mount "type=bind,src=${SCRATCH_VOL},dst=/scratch,rw" \
+        --mount "type=bind,src=${SCRATCH_DIR},dst=/scratch,rw" \
         --env TMPDIR=/scratch \
         --env HOME=/scratch \
         --env XDG_CACHE_HOME=/scratch \
@@ -122,12 +123,12 @@ case "$ACTION" in
       # Run `limit` supervisor as `root` via sudoers so `proc_pid_rusage` enforces the 14 GiB
       # XNU `ri_phys_footprint` cap across all `p1`/`p2` processes while `limit` drops its child
       # directly to `$SLOT` (`initgroups`/`setgid`/`setuid`) and writes `/opt/arena/state/peak_ram_*`.
-      cd "$SCRATCH_VOL"
+      cd "$SCRATCH_DIR"
       exec sudo -n /opt/arena/bin/limit "$SLOT" \
         /usr/bin/sandbox-exec \
           -f /opt/arena/etc/sandbox.sb \
           -D "AGENT_RO_DIR=${AGENT_DIR}" \
-          -D "AGENT_SCRATCH_DIR=${SCRATCH_VOL}" \
+          -D "AGENT_SCRATCH_DIR=${SCRATCH_DIR}" \
           "${AGENT_DIR}/run"
     fi
     ;;

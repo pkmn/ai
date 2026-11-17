@@ -1,7 +1,7 @@
 ;; /opt/arena/etc/sandbox.sb
 ;; Mandatory Access Control (Seatbelt) profile for native darwin/arm64 agents.
 ;; Invoked with: sandbox-exec -f /opt/arena/etc/sandbox.sb \
-;;   -D AGENT_RO_DIR=/opt/arena/agents/<id> -D AGENT_SCRATCH_DIR=/Volumes/P1 ...
+;;   -D AGENT_RO_DIR=/opt/arena/agents/<id> -D AGENT_SCRATCH_DIR=/Volumes/P1/scratch ...
 (version 1)
 (deny default)
 
@@ -99,9 +99,15 @@
   (subpath "/opt/homebrew")
   (subpath (param "AGENT_RO_DIR")))
 
-;; 7. Read/write ONLY the specific player slot's quota-capped APFS scratch volume (/Volumes/P1 or P2),
-;;    while denying chflags (`file-write-flags`) and denying xattr/timestamp writes on the volume
-;;    root itself so metadata cannot persist across games.
+;; 7. Read/write ONLY the specific player slot's scratch directory (/Volumes/P1/scratch or P2/scratch),
+;;    allowing metadata-only traversal of the APFS mount roots (/Volumes/P{1,2}) while denying chflags
+;;    (`file-write-flags`) and xattr/timestamp writes on the scratch root itself.
+(allow file-read-metadata
+  (literal "/Volumes/P1")
+  (literal "/Volumes/P2")
+  (literal "/System/Volumes/Data/Volumes")
+  (literal "/System/Volumes/Data/Volumes/P1")
+  (literal "/System/Volumes/Data/Volumes/P2"))
 (allow file-read* file-write* process-exec
   (subpath (param "AGENT_SCRATCH_DIR")))
 (deny file-write-flags

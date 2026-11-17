@@ -369,7 +369,7 @@ describe('arena infrastructure', () => {
       const limitC = fs.readFileSync(root('arena', 'bin', 'limit.c'), 'utf8');
 
       expect(arenaScript).toContain(
-        'sudo -n /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_VOL"'
+        'sudo -n /usr/bin/chflags -R nouchg,nouappend,noschg "$SCRATCH_DIR"'
       );
       expect(arenaScript).toContain('sudo -n /usr/bin/ipcs -m');
       expect(arenaScript).toContain('--device /dev/dri');
@@ -378,7 +378,9 @@ describe('arena infrastructure', () => {
       expect(arenaScript).toContain('--memory=14g');
       expect(arenaScript).toContain('--memory-swap=14g');
 
-      expect(setupScript).toContain('sudo chown root:wheel /Volumes/P1 /Volumes/P2');
+      expect(setupScript).toContain(
+        'sudo chown root:wheel /Volumes/P1 /Volumes/P2 /Volumes/P1/scratch /Volumes/P2/scratch'
+      );
       expect(setupScript).toContain('-quota 4G');
       expect(setupScript).toContain('-quota 6G');
       expect(setupScript).toContain('--cpus 10');
@@ -392,7 +394,7 @@ describe('arena infrastructure', () => {
       expect(sudoers).toContain('pkmn ALL=(root) NOPASSWD: /opt/arena/bin/limit p1');
       expect(sudoers).toContain('/usr/bin/killall -STOP -u p1');
       expect(sudoers).toContain('/usr/bin/killall -CONT -u p1');
-      expect(sudoers).toContain('/usr/bin/find /Volumes/P1 -mindepth 1 -delete');
+      expect(sudoers).toContain('/usr/bin/find /Volumes/P1/scratch -mindepth 1 -delete');
 
       expect(sandbox).toContain('(allow signal (target same-sandbox))');
       expect(sandbox).toContain('(global-name "com.apple.MTLCompilerService")');

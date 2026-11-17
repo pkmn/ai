@@ -38,20 +38,26 @@ create_agent_user() {
   sudo dscl . -create "/Users/${user}" Password "*"
 }
 
-create_agent_user p1 591 /Volumes/P1
-create_agent_user p2 592 /Volumes/P2
+create_agent_user p1 591 /Volumes/P1/scratch
+create_agent_user p2 592 /Volumes/P2/scratch
 
 echo "==> Step 3: Locking down volume and directory ownership and permissions"
-# Own `/Volumes/P1` and `/Volumes/P2` as `root:wheel` (`0700`) with explicit ACLs omitting
-# `writesecurity`, `chown`, `writeattr`, and `writeextattr` on the root so sandboxed `p1`/`p2`
-# can neither strip `pkmn`'s `virtiofsd` ACL nor persist xattrs/timestamps on the volume root.
+# Keep APFS mount roots `/Volumes/P1` and `/Volumes/P2` as `root:wheel` (`0711` + `user:pkmn`
+# read/search ACL for `krunkit` `virtiofs`) so macOS SIP/MACF DataVault `.Spotlight-V100` and
+# `.fseventsd`/`.Trashes` stay inaccessible to `p1`/`p2`, and isolate per-game writable state to
+# `/Volumes/P{1,2}/scratch` (`0700` `root:wheel` + explicit ACLs omitting `writesecurity`, `chown`,
+# `writeattr`, and `writeextattr`).
+VOL_ACL="allow list,search,readattr,readextattr,readsecurity"
 SCRATCH_ACL="allow list,add_file,search,delete,add_subdirectory,delete_child,readattr,readextattr,readsecurity"
-sudo chown root:wheel /Volumes/P1 /Volumes/P2
-sudo chmod -N /Volumes/P1 /Volumes/P2 2>/dev/null || true
-sudo chmod 0700 /Volumes/P1 /Volumes/P2
-sudo chmod +a "user:pkmn ${SCRATCH_ACL}" /Volumes/P1 /Volumes/P2
-sudo chmod +a "user:p1 ${SCRATCH_ACL}" /Volumes/P1
-sudo chmod +a "user:p2 ${SCRATCH_ACL}" /Volumes/P2
+sudo mkdir -p /Volumes/P1/scratch /Volumes/P2/scratch
+sudo chown root:wheel /Volumes/P1 /Volumes/P2 /Volumes/P1/scratch /Volumes/P2/scratch
+sudo chmod -N /Volumes/P1 /Volumes/P2 /Volumes/P1/scratch /Volumes/P2/scratch 2>/dev/null || true
+sudo chmod 0711 /Volumes/P1 /Volumes/P2
+sudo chmod +a "user:pkmn ${VOL_ACL}" /Volumes/P1 /Volumes/P2
+sudo chmod 0700 /Volumes/P1/scratch /Volumes/P2/scratch
+sudo chmod +a "user:pkmn ${SCRATCH_ACL}" /Volumes/P1/scratch /Volumes/P2/scratch
+sudo chmod +a "user:p1 ${SCRATCH_ACL}" /Volumes/P1/scratch
+sudo chmod +a "user:p2 ${SCRATCH_ACL}" /Volumes/P2/scratch
 sudo chown pkmn:agents /Volumes/Staging
 sudo chmod 0700 /Volumes/Staging
 
@@ -101,6 +107,8 @@ sudo pmset -a womp 1 powernap 0
 sudo defaults write /Library/Preferences/SystemConfiguration/autodiskmount \
   AutomountDisksWithoutUserLogin -bool true
 sudo mdutil -i off /Volumes/P1 /Volumes/P2 /Volumes/Staging 2>/dev/null || true
+sudo touch /Volumes/P1/.metadata_never_index /Volumes/P2/.metadata_never_index \
+  /Volumes/Staging/.metadata_never_index
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false

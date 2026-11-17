@@ -256,8 +256,8 @@ int main(int argc, char **argv) {
     (void)setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_DEFAULT);
 
     if (valid_slot) {
-      char scratch[32];
-      snprintf(scratch, sizeof(scratch), "/Volumes/%c%c", slot[0] - 32, slot[1]);
+      char scratch[64];
+      snprintf(scratch, sizeof(scratch), "/Volumes/%c%c/scratch", slot[0] - 32, slot[1]);
 
       if (target_uid != getuid()) {
         if (geteuid() != 0) {
