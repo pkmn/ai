@@ -47,6 +47,12 @@ const fs = site.fs;
 
 const PUBLIC = root('public');
 const STATIC = root('static');
+const IS_PRODUCTION =
+  process.env.NODE_ENV === 'production' || nodeFs.existsSync('/var/lib/pkmn');
+const GTAG_RE = new RegExp(
+  '\\s*<script async src="https://www\\.googletagmanager\\.com/gtag/js\\?id=[^"]*"></script>' +
+  "\\s*<script>[\\s\\S]*?gtag\\('config',\\s*'[^']*'\\);\\s*</script>"
+);
 
 // `site`'s `layout.html` registers `pref.addEventListener('change', e => setTheme(...))` in its
 // outer `<script>` block without defining `setTheme`, expecting each page's `{{{ script }}}`
@@ -158,12 +164,18 @@ export class Renderer extends site.page.Renderer {
     const headerHtml = banner && !rawHeader?.includes('id="topbar"')
       ? (rawHeader ? `${banner}\n  ${rawHeader}` : banner)
       : rawHeader;
+    const transform = IS_PRODUCTION
+      ? replace
+      : (s: string) => {
+        const clean = s.replace(GTAG_RE, '');
+        return replace ? replace(clean) : clean;
+      };
     return super.render({
       ...page,
       header: headerHtml,
       content: String(page.content),
       script,
-    }, replace);
+    }, transform);
   }
 }
 

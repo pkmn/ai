@@ -1941,6 +1941,81 @@ describe('JSON route parity & retired pool archives', () => {
     }
   });
 
+  test('fetchExternalAsset rejects captive-portal HTML responses without caching', async () => {
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-shots-captive-'));
+    const origFetch = globalThis.fetch;
+    shots.resetExternalAssetCache();
+    try {
+      globalThis.fetch = () => Promise.resolve(
+        new Response('<!doctype html><html><body>Inflight Portal</body></html>', {
+          status: 200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        })
+      );
+      const res = await shots.fetchExternalAsset(
+        new URL('https://play.pokemonshowdown.com/js/battle.js?a7'),
+        cacheDir
+      );
+      expect(res).toBeUndefined();
+      expect(
+        fs.existsSync(path.join(cacheDir, 'play.pokemonshowdown.com', 'js', 'battle.js'))
+      ).toBe(false);
+    } finally {
+      globalThis.fetch = origFetch;
+      shots.resetExternalAssetCache();
+      fs.rmSync(cacheDir, {recursive: true, force: true});
+    }
+  });
+
+  test('fetchExternalAsset purges corrupted HTML files from disk cache', async () => {
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-shots-poison-'));
+    const origFetch = globalThis.fetch;
+    shots.resetExternalAssetCache();
+    try {
+      const poisoned = path.join(cacheDir, 'play.pokemonshowdown.com', 'js', 'battle.js');
+      fs.mkdirSync(path.dirname(poisoned), {recursive: true});
+      fs.writeFileSync(poisoned, '<html>Captive Portal</html>', 'utf8');
+      globalThis.fetch = () => Promise.reject(new TypeError('fetch failed'));
+
+      const res = await shots.fetchExternalAsset(
+        new URL('https://play.pokemonshowdown.com/js/battle.js'),
+        cacheDir
+      );
+      expect(res).toBeUndefined();
+      expect(fs.existsSync(poisoned)).toBe(false);
+    } finally {
+      globalThis.fetch = origFetch;
+      shots.resetExternalAssetCache();
+      fs.rmSync(cacheDir, {recursive: true, force: true});
+    }
+  });
+
+  test('fetchExternalAsset short-circuits subsequent requests to unreachable hosts', async () => {
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-shots-offline-'));
+    const origFetch = globalThis.fetch;
+    shots.resetExternalAssetCache();
+    try {
+      let calls = 0;
+      globalThis.fetch = () => {
+        calls++;
+        return Promise.reject(new TypeError('fetch failed'));
+      };
+      await shots.fetchExternalAsset(
+        new URL('https://www.smogon.com/forums/media/minisprites/tauros.png'),
+        cacheDir
+      );
+      await shots.fetchExternalAsset(
+        new URL('https://www.smogon.com/forums/media/minisprites/chansey.png'),
+        cacheDir
+      );
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = origFetch;
+      shots.resetExternalAssetCache();
+      fs.rmSync(cacheDir, {recursive: true, force: true});
+    }
+  });
+
   test('diffPngImages highlights modified pixels in red over a faded backdrop', () => {
     const baseData = Buffer.alloc(4 * 4 * 4, 200);
     const nextData = Buffer.from(baseData);

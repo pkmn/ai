@@ -1470,4 +1470,25 @@ describe('Arena Discord notifications', () => {
       db.close();
     }
   });
+
+  test('aborts syncOnce immediately when Discord API is unreachable', async () => {
+    const warnSpy = console.warn;
+    console.warn = () => {};
+    const calls: string[] = [];
+    globalThis.fetch = ((url: string) => {
+      calls.push(String(url));
+      return Promise.reject(new TypeError('fetch failed'));
+    }) as unknown as typeof fetch;
+
+    const db = createSeededArenaDb();
+    try {
+      await discord.syncOnce(db, 'discord-token', 'vgc-token', {
+        configOrFile: ARENA_CONFIG,
+      });
+      expect(calls).toHaveLength(1);
+    } finally {
+      console.warn = warnSpy;
+      db.close();
+    }
+  });
 });

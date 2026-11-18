@@ -6,7 +6,7 @@ import * as yaml from 'yaml';
 
 import * as smogon from '../server/smogon';
 import {Project} from '../static/projects';
-import {root, slugify, toID, validateAgentName} from '../static/util';
+import {isConnectivityError, root, slugify, toID, validateAgentName} from '../static/util';
 
 import * as developers from './developers';
 import {recomputeLadderRatings} from './ladder-entries';
@@ -405,6 +405,12 @@ export async function syncProjectsFromYamlWithSmogon(
   const resolved: Array<ParsedArenaProject<developers.ResolvedProjectOwner>> = [];
   const bannedDescriptions: string[] = [];
   const lookupErrors: string[] = [];
+  let unreachable = false;
+
+  const recordLookupError = (err: unknown) => {
+    if (isConnectivityError(err)) unreachable = true;
+    lookupErrors.push(err instanceof Error ? err.message : String(err));
+  };
 
   for (const proj of rawProjects) {
     const owners: developers.ResolvedProjectOwner[] = [];
@@ -415,7 +421,7 @@ export async function syncProjectsFromYamlWithSmogon(
           : undefined);
 
       if (owner.smogonId !== undefined) {
-        if (refreshNames && (smogonToken || options.lookupSmogon)) {
+        if (!unreachable && refreshNames && (smogonToken || options.lookupSmogon)) {
           try {
             const profile = await lookup(owner.smogonId, smogonToken);
             if (profile.banned) {
@@ -428,7 +434,7 @@ export async function syncProjectsFromYamlWithSmogon(
               smogonStanding: profile.banned ? 'bad' : 'good',
             });
           } catch (err) {
-            lookupErrors.push(err instanceof Error ? err.message : String(err));
+            recordLookupError(err);
             const smogonUsername = owner.smogonUsername ??
               (existing?.smogonId === owner.smogonId ? existing.smogonUsername : undefined) ??
               String(owner.smogonId);
@@ -443,7 +449,7 @@ export async function syncProjectsFromYamlWithSmogon(
         continue;
       }
 
-      if (existing && refreshNames && (smogonToken || options.lookupSmogon)) {
+      if (existing && !unreachable && refreshNames && (smogonToken || options.lookupSmogon)) {
         try {
           const profile = await lookup(existing.smogonId, smogonToken);
           if (profile.banned) {
@@ -456,7 +462,7 @@ export async function syncProjectsFromYamlWithSmogon(
             smogonStanding: profile.banned ? 'bad' : 'good',
           });
         } catch (err) {
-          lookupErrors.push(err instanceof Error ? err.message : String(err));
+          recordLookupError(err);
           owners.push({
             github: owner.github,
             smogonId: existing.smogonId,
@@ -466,7 +472,7 @@ export async function syncProjectsFromYamlWithSmogon(
         continue;
       }
 
-      if (existing && !smogonToken && !options.lookupSmogon) {
+      if (existing && (unreachable || (!smogonToken && !options.lookupSmogon))) {
         owners.push({
           github: owner.github,
           smogonId: existing.smogonId,
@@ -475,16 +481,27 @@ export async function syncProjectsFromYamlWithSmogon(
         continue;
       }
 
-      const profile = await lookup(owner.rawSmogon, smogonToken);
-      if (profile.banned) {
-        bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
+      if (unreachable) {
+        lookupErrors.push(
+          `Cannot resolve Smogon username "${String(owner.rawSmogon)}" while offline`
+        );
+        continue;
       }
-      owners.push({
-        github: owner.github,
-        smogonId: profile.id,
-        smogonUsername: profile.username,
-        smogonStanding: profile.banned ? 'bad' : 'good',
-      });
+
+      try {
+        const profile = await lookup(owner.rawSmogon, smogonToken);
+        if (profile.banned) {
+          bannedDescriptions.push(`"${profile.username}" (${profile.id})`);
+        }
+        owners.push({
+          github: owner.github,
+          smogonId: profile.id,
+          smogonUsername: profile.username,
+          smogonStanding: profile.banned ? 'bad' : 'good',
+        });
+      } catch (err) {
+        recordLookupError(err);
+      }
     }
 
     resolved.push({
@@ -501,7 +518,10 @@ export async function syncProjectsFromYamlWithSmogon(
     throw new Error(`Smogon account ${bannedDescriptions.join(', ')} is banned`);
   }
   if (lookupErrors.length > 0) {
-    throw new Error(`Smogon lookup failed: ${lookupErrors.join('; ')}`);
+    throw Object.assign(
+      new Error(`Smogon lookup failed: ${lookupErrors.join('; ')}`),
+      unreachable ? {connectivity: true} : {}
+    );
   }
 }
 

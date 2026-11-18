@@ -232,8 +232,10 @@ body {
   width: auto;
   height: auto;
   min-height: 0;
+  overflow: hidden auto;
   color: var(--ink-soft);
   font: 12.5px/1.42 Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  overflow-wrap: anywhere;
   background: var(--paper);
   border: 0;
   scrollbar-color: var(--rule) transparent;
@@ -299,4 +301,30 @@ body {
   .arena-turn {
     display: none;
   }
+}
+
+:root[data-offline="true"][data-has-log="true"] body {
+  display: flex;
+  flex-direction: column;
+}
+
+:root[data-offline="true"][data-has-log="true"] .arena-stage {
+  aspect-ratio: auto;
+  border-bottom: 1px solid var(--rule);
+}
+
+:root[data-offline="true"][data-has-log="true"] .arena-status {
+  position: static;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+:root[data-offline="true"][data-has-log="true"] .battle-log {
+  order: 1;
+  border-left: 0;
+}
+
+:root[data-offline="true"][data-has-log="true"] .arena-controls {
+  order: 2;
+  border-bottom: 0;
 }

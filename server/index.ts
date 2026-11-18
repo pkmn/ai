@@ -2,13 +2,14 @@ require('source-map-support').install();
 
 import * as fs from 'fs';
 import * as http from 'http';
+import * as path from 'path';
 
 import polka from 'polka';
 import serveStatic from 'serve-static';
 
 import {Database} from '../db';
 import {renderErrorPage, syncStaticLiveBanner} from '../static/build';
-import {installHeadSupport, root} from '../static/util';
+import {installHeadSupport, isConnectivityError, root} from '../static/util';
 
 import * as account from './account';
 import * as arena from './arena';
@@ -295,10 +296,9 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  // Reconcile `config/ladders.yml` synchronously on boot, then refresh `static/projects.yml` owner
-  // standings from Smogon XenForo HTML profiles (falling back to offline YAML sync if Smogon is
-  // unreachable) before syncing the live tournament topbar banner onto pre-built static `.dj`
-  // pages.
+  // Reconcile `config/ladders.yml`, local `static/projects.yml`, and the live tournament topbar
+  // banner synchronously on boot so SQLite is immediately populated even offline, then refresh
+  // Smogon XenForo standings asynchronously in the background when `SMOGON_TOKEN` is configured.
   const db = new Database();
   db.syncLadders();
   const syncBanner = () => {
@@ -308,22 +308,33 @@ if (require.main === module) {
       console.error('Failed syncing static live tournament banner:', err);
     }
   };
-  if (isMock) {
+  try {
     db.syncProjects();
-    syncBanner();
-  } else {
+  } catch (err) {
+    if (isMock || !process.env.SMOGON_TOKEN) {
+      console.error('Offline project sync failed:', err);
+    }
+  }
+  syncBanner();
+
+  if (!isMock && process.env.SMOGON_TOKEN) {
     db.syncProjectsWithSmogon()
-      .catch(err => {
-        console.error('Error syncing projects with Smogon:', err);
-        try {
-          db.syncProjects();
-        } catch (fallbackErr) {
-          console.error('Offline project sync failed:', fallbackErr);
-        }
-      })
-      .finally(() => {
+      .then(() => {
         syncBanner();
+      })
+      .catch(err => {
+        if (isConnectivityError(err)) {
+          console.warn('Smogon unreachable; using offline projects.yml sync.');
+        } else {
+          console.error('Error syncing projects with Smogon:', err);
+        }
       });
+  }
+
+  if (!fs.existsSync(path.join(render.PUBLIC_DIR, 'index.html'))) {
+    console.warn(
+      'Warning: public/index.html not found — run "npm run build" to generate static pages.'
+    );
   }
 
   const hasPriorMatches = !isMock && db.getRecentMatches(1).length > 0;
@@ -337,5 +348,8 @@ if (require.main === module) {
   const server = http.createServer((req, res) => {
     (app.handler as http.RequestListener)(req, res);
   });
-  server.listen(port, host);
+  server.listen(port, host, () => {
+    const displayHost = host === '127.0.0.1' ? 'localhost' : host;
+    console.log(`Listening on http://${displayHost}:${port}`);
+  });
 }

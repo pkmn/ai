@@ -928,6 +928,17 @@ describe('Smogon lookup', () => {
       .rejects.toThrow(/non-Smogon URL/);
     expect(requestedUrls.some(u => u.includes('evilsmogon.com'))).toBe(false);
   });
+
+  test('lookupUser flags captive-portal HTML responses as connectivity errors', async () => {
+    globalThis.fetch = () => Promise.resolve(
+      new Response('<!doctype html><html><body>Airplane Wi-Fi</body></html>', {
+        status: 200,
+        headers: {'content-type': 'text/html; charset=utf-8'},
+      })
+    );
+    await expect(smogon.lookupUser(10544, 'test-token'))
+      .rejects.toMatchObject({connectivity: true});
+  });
 });
 
 describe('project ownership sync', () => {
@@ -1142,6 +1153,67 @@ describe('project ownership sync', () => {
       db.linkDeveloperDiscord('badgh', '111111', 'baduser', 1_760_000_110);
       db.linkDeveloperDiscord('goodgh', '222222', 'gooduser', 1_760_000_110);
       expect(db.getCompetitorDiscordIds()).toEqual(['222222']);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('short-circuits remaining Smogon lookups after a connectivity failure', async () => {
+    const db = new Database(':memory:');
+    try {
+      const attempted: Array<string | number> = [];
+      await expect(db.syncProjectsFromYamlWithSmogon(`
+- name: Alpha
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      dev_one: pre.10544
+- name: Beta
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      dev_two: pmariglia.535629
+`, {
+        avatarsDir: tmpDir,
+        lookupSmogon: raw => {
+          attempted.push(raw);
+          const err = new TypeError('fetch failed');
+          return Promise.reject(err);
+        },
+        now: 1000,
+      })).rejects.toMatchObject({connectivity: true});
+      expect(attempted).toEqual([10544]);
+      expect(db.getAgentBySlug('alpha')).toBeDefined();
+      expect(db.getAgentBySlug('beta')).toBeDefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  test('syncs valid projects when an initial username lookup fails offline', async () => {
+    const db = new Database(':memory:');
+    try {
+      await expect(db.syncProjectsFromYamlWithSmogon(`
+- name: Unresolved
+  active: 2026
+  arena:
+    owners:
+      offline_dev: some_username
+- name: Resolved
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      pre_gh: pre.10544
+`, {
+        avatarsDir: tmpDir,
+        lookupSmogon: () => Promise.reject(new TypeError('fetch failed')),
+        now: 1000,
+      })).rejects.toMatchObject({connectivity: true});
+      expect(db.getAgentBySlug('resolved')).toBeDefined();
+      expect(db.getDeveloperByGitHub('pre_gh')?.smogonId).toBe(10544);
     } finally {
       db.close();
     }

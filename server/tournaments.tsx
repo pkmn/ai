@@ -92,7 +92,9 @@ const VIEWER_SCRIPT = `
     };
 
     const SCENE_WIDTH = 640;
+    const ASSET_TIMEOUT_MILLIS = 4000;
     const appOrigin = new URL(location.href).origin;
+    const externalNodes = [];
 
     document.addEventListener('error', event => {
       const image = event.target;
@@ -118,12 +120,97 @@ const VIEWER_SCRIPT = `
     };
 
     let battle = null;
+    let offline = false;
+    let offlineEnded = false;
+    let offlineTurn = 0;
     let live = false;
     let muted = true;
     let controlsBound = false;
     let sideLines = {p1: [], p2: []};
     let sidePokemon = {p1: null, p2: null};
     let currentSide = 'p1';
+
+    const escLog = str => String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+
+    const formatIdent = rawIdent => {
+      const s = String(rawIdent || '').trim();
+      const colon = s.indexOf(':');
+      if (colon < 0) return escLog(s);
+      const slot = s.slice(0, colon).trim();
+      const nick = s.slice(colon + 1).trim();
+      return '<tt>' + escLog(slot) + '</tt> ' + escLog(nick);
+    };
+
+    const renderOfflineLog = lines => {
+      let turn = 0;
+      let ended = false;
+      const rows = [];
+      for (const line of lines) {
+        if (!line || line[0] !== '|') continue;
+        const parts = line.split('|');
+        const cmd = parts[1] || '';
+        if (cmd === 'turn') {
+          const n = Number(parts[2]);
+          if (Number.isInteger(n) && n >= 0) turn = n;
+          rows.push('<h2 class="battle-history">Turn ' + escLog(parts[2]) + '</h2>');
+        } else if (cmd === 'tier' && parts[2]) {
+          rows.push('<div class="battle-history"><strong>' + escLog(parts[2]) + '</strong></div>');
+        } else if (cmd === 'player' && parts[2] && parts[3]) {
+          rows.push(
+            '<div class="battle-history"><tt>' + escLog(parts[2]) + '</tt> <strong>' +
+            escLog(parts[3]) + '</strong></div>'
+          );
+        } else if (cmd === 'poke' && parts[2] && parts[3]) {
+          const species = parts[3].split(',')[0].trim();
+          rows.push(
+            '<div class="battle-history"><em><tt>' + escLog(parts[2]) + '</tt> ' +
+            escLog(species) + '</em></div>'
+          );
+        } else if ((cmd === 'switch' || cmd === 'drag' || cmd === 'replace') && parts[2]) {
+          const species = (parts[3] || '').split(',')[0].trim();
+          const hp = (parts[4] || '').trim();
+          rows.push(
+            '<div class="battle-history">' + formatIdent(parts[2]) +
+            (species ? ' — <strong>' + escLog(species) + '</strong>' : '') +
+            (hp ? ' <em>(' + escLog(hp) + ')</em>' : '') + '</div>'
+          );
+        } else if (cmd === 'move' && parts[2] && parts[3]) {
+          const target = (parts[4] || '').trim();
+          rows.push(
+            '<div class="battle-history">' + formatIdent(parts[2]) +
+            ' used <strong>' + escLog(parts[3]) + '</strong>' +
+            (target && target !== parts[2] ? ' on ' + formatIdent(target) : '') + '!</div>'
+          );
+        } else if ((cmd === '-damage' || cmd === '-heal') && parts[2] && parts[3]) {
+          rows.push(
+            '<div class="battle-history"><em>(' + formatIdent(parts[2]) + ': ' +
+            escLog(parts[3]) + ')</em></div>'
+          );
+        } else if (cmd === 'faint' && parts[2]) {
+          rows.push(
+            '<div class="battle-history"><strong>' + formatIdent(parts[2]) +
+            ' fainted!</strong></div>'
+          );
+        } else if (cmd === 'win' && parts[2]) {
+          ended = true;
+          rows.push(
+            '<div class="battle-history"><strong>' + escLog(parts[2]) +
+            ' won the battle!</strong></div>'
+          );
+        } else if (cmd === 'tie') {
+          ended = true;
+          rows.push('<div class="battle-history"><strong>Tie between players!</strong></div>');
+        }
+      }
+      offlineTurn = turn;
+      offlineEnded = ended;
+      el.log.innerHTML = rows.length ? '<div class="inner">' + rows.join('') + '</div>' : '';
+      el.log.scrollTop = live ? el.log.scrollHeight : 0;
+    };
 
     const readable = line => !line.startsWith('|request|');
 
@@ -166,6 +253,7 @@ const VIEWER_SCRIPT = `
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = ASSETS + stylePath;
+      externalNodes.push(link);
       const styleAnchor = document.getElementById('viewer-style');
       document.head.insertBefore(link, styleAnchor);
     };
@@ -174,10 +262,36 @@ const VIEWER_SCRIPT = `
       const script = document.createElement('script');
       script.src = ASSETS + scriptPath;
       script.async = false;
-      script.onload = resolve;
-      script.onerror = () => reject(new Error('Could not load ' + scriptPath));
+      externalNodes.push(script);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        script.remove();
+        reject(new Error('Timed out loading ' + scriptPath));
+      }, ASSET_TIMEOUT_MILLIS);
+      script.onload = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      script.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        script.remove();
+        reject(new Error('Could not load ' + scriptPath));
+      };
       document.head.appendChild(script);
     });
+
+    const clearExternalNodes = () => {
+      while (externalNodes.length > 0) {
+        const node = externalNodes.pop();
+        if (node && node.parentNode) node.parentNode.removeChild(node);
+      }
+    };
 
     const isPlaying = () =>
       Boolean(battle && !battle.paused && !(battle.ended && battle.atQueueEnd));
@@ -200,6 +314,12 @@ const VIEWER_SCRIPT = `
     };
 
     const describeTurn = () => {
+      if (offline) {
+        if (sideLines.p1.length === 0 && sideLines.p2.length === 0) return '';
+        if (offlineEnded && !live) return 'Finished';
+        if (offlineTurn > 0) return 'Turn ' + offlineTurn;
+        return live ? 'Starting' : 'Start';
+      }
       if (!battle) return '';
       if (battle.ended && battle.atQueueEnd) return 'Finished';
       if (battle.turn > 0) return 'Turn ' + battle.turn;
@@ -210,12 +330,25 @@ const VIEWER_SCRIPT = `
     };
 
     const playbackState = () => {
+      if (offline) {
+        if (sideLines.p1.length === 0 && sideLines.p2.length === 0) return 'waiting';
+        if (offlineEnded && !live) return 'finished';
+        return 'watching';
+      }
       if (!battle) return 'waiting';
       if (battle.ended && battle.atQueueEnd) return 'finished';
       return battle.started ? 'watching' : 'waiting';
     };
 
     const render = () => {
+      if (offline) {
+        el.turn.textContent = describeTurn();
+        el.live.hidden = !live;
+        el.live.dataset.following = 'true';
+        el.start.hidden = true;
+        notifyApp({type: 'playback', state: playbackState()});
+        return;
+      }
       if (!battle) return;
       const playing = isPlaying();
       el.toggle.innerHTML = playing ? '&#9208;' : '&#9654;';
@@ -251,6 +384,12 @@ const VIEWER_SCRIPT = `
       },
       toggle: () => (isPlaying() ? battle.pause() : play()),
       switch: () => {
+        if (offline) {
+          if (sideLines.p1.length === 0 && sideLines.p2.length === 0) return;
+          currentSide = currentSide === 'p2' ? 'p1' : 'p2';
+          renderOfflineLog(sideLines[currentSide]);
+          return;
+        }
         if (!battle) return;
         currentSide = currentSide === 'p2' ? 'p1' : 'p2';
         battle.stepQueue = sideLines[currentSide].slice();
@@ -273,10 +412,7 @@ const VIEWER_SCRIPT = `
       },
     };
 
-    const enableControls = () => {
-      for (const control of el.controls.querySelectorAll('button, select')) {
-        control.disabled = false;
-      }
+    const bindControlEvents = () => {
       if (controlsBound) return;
       controlsBound = true;
       el.controls.addEventListener('click', event => {
@@ -296,6 +432,20 @@ const VIEWER_SCRIPT = `
       });
     };
 
+    const enableControls = () => {
+      for (const control of el.controls.querySelectorAll('button, select')) {
+        control.disabled = false;
+      }
+      bindControlEvents();
+    };
+
+    const enableOfflineControls = () => {
+      for (const control of el.controls.querySelectorAll('button, select')) {
+        control.disabled = control.getAttribute('data-action') !== 'switch';
+      }
+      bindControlEvents();
+    };
+
     const isLines = val => Array.isArray(val) && val.every(x => typeof x === 'string');
 
     const loadBattle = msg => {
@@ -313,6 +463,10 @@ const VIEWER_SCRIPT = `
       };
       if (sideLines.p1.length === 0 && sideLines.p2.length === 0) {
         battle = null;
+        offlineTurn = 0;
+        offlineEnded = false;
+        delete document.documentElement.dataset.hasLog;
+        el.log.innerHTML = '';
         el.start.hidden = true;
         for (const control of el.controls.querySelectorAll('button, select')) {
           control.disabled = true;
@@ -320,7 +474,17 @@ const VIEWER_SCRIPT = `
         el.turn.textContent = '';
         el.live.hidden = true;
         showStatus('Waiting for battle…');
+        if (offline) document.body.dataset.settled = 'true';
         notifyApp({type: 'playback', state: 'waiting'});
+        return;
+      }
+      if (offline) {
+        document.documentElement.dataset.hasLog = 'true';
+        renderOfflineLog(sideLines[currentSide]);
+        enableOfflineControls();
+        showStatus('Battle viewer offline — showing battle log.');
+        document.body.dataset.settled = 'true';
+        render();
         return;
       }
       sidePokemon = {
@@ -364,7 +528,7 @@ const VIEWER_SCRIPT = `
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'load' && (isLines(msg.lines) || isLines(msg.p1Lines))) {
         loadBattle(msg);
-      } else if (msg.type === 'append' && battle && live) {
+      } else if (msg.type === 'append' && (battle || offline) && live) {
         const fallback = isLines(msg.lines) ? msg.lines.filter(readable) : [];
         const addP1 = isLines(msg.p1Lines) ? msg.p1Lines.filter(readable) : fallback;
         const addP2 = isLines(msg.p2Lines) ? msg.p2Lines.filter(readable) : fallback;
@@ -372,15 +536,30 @@ const VIEWER_SCRIPT = `
         sideLines.p2.push(...addP2);
         if (Array.isArray(msg.p1Pokemon)) sidePokemon.p1 = msg.p1Pokemon;
         if (Array.isArray(msg.p2Pokemon)) sidePokemon.p2 = msg.p2Pokemon;
+        if (offline) {
+          renderOfflineLog(sideLines[currentSide]);
+          if (sideLines[currentSide].length > 0) {
+            document.documentElement.dataset.hasLog = 'true';
+            enableOfflineControls();
+            showStatus('Battle viewer offline — showing battle log.');
+          }
+          render();
+          return;
+        }
         applyTeam();
         const toAdd = currentSide === 'p2' ? addP2 : addP1;
         toAdd.forEach(line => battle.add(line));
         render();
-      } else if (msg.type === 'end' && battle) {
+      } else if (msg.type === 'end' && (battle || offline)) {
         live = false;
         render();
       } else if (msg.type === 'theme' && typeof msg.dark === 'boolean') {
         applyTheme(msg.dark);
+        if (offline) {
+          setTimeout(() => {
+            document.body.dataset.settled = 'true';
+          }, 0);
+        }
       } else if (msg.type === 'speed' && Object.hasOwn(SPEEDS, msg.speed)) {
         el.speed.value = msg.speed;
         applySpeed();
@@ -400,16 +579,26 @@ const VIEWER_SCRIPT = `
       fitScene();
       window.addEventListener('message', onMessage);
 
+      const enterOfflineMode = () => {
+        clearExternalNodes();
+        offline = true;
+        document.documentElement.dataset.offline = 'true';
+        el.status.dataset.offline = 'true';
+        showStatus('Battle viewer offline (play.pokemonshowdown.com unreachable).');
+        notifyApp({type: 'ready'});
+        setTimeout(() => {
+          document.body.dataset.settled = 'true';
+        }, 50);
+      };
+
       try {
         await Promise.all(SCRIPTS.map(loadScript));
       } catch {
-        showStatus('Battle viewer offline (play.pokemonshowdown.com unreachable).');
-        notifyApp({type: 'error', message: 'offline'});
+        enterOfflineMode();
         return;
       }
       if (typeof window.Battle !== 'function' || typeof window.$ !== 'function') {
-        showStatus('Battle viewer unavailable offline.');
-        notifyApp({type: 'error', message: 'init'});
+        enterOfflineMode();
         return;
       }
       if (window.Dex) {
@@ -478,6 +667,10 @@ function parseLatestTurnFromLines(lines?: string[]): number | undefined {
   return undefined;
 }
 
+function speciesToMinispriteAbbr(species: string): string {
+  return species.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || '?';
+}
+
 function renderPartyMinisprites(packed?: string): Child {
   const speciesList = parsePackedTeamSpecies(packed);
   if (speciesList.length === 0) return undefined;
@@ -486,8 +679,13 @@ function renderPartyMinisprites(packed?: string): Child {
       {speciesList.slice(0, 6).map(sp => {
         const slug = speciesToMinispriteSlug(sp);
         if (!slug) return undefined;
+        const abbr = speciesToMinispriteAbbr(sp);
         const src = `https://www.smogon.com/forums/media/minisprites/${slug}.png`;
-        return <span><img src={src} alt={sp} title={sp} /></span>;
+        return (
+          <span title={sp} data-mon={abbr}>
+            <img src={src} alt={sp} title={sp} />
+          </span>
+        );
       })}
     </span>
   );
@@ -1477,7 +1675,42 @@ function renderTournamentRulesNode(staticDir: string, tournamentId: string): Chi
 
 function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
   return `
+  (() => {
+    const fallbackMinisprite = img => {
+      if (!(img instanceof HTMLImageElement)) return;
+      const slot = img.closest('.party-minisprites span[data-mon]');
+      if (!slot) return;
+      slot.classList.add('sprite-fallback');
+      img.removeAttribute('src');
+      img.remove();
+    };
+
+    document.addEventListener('error', ev => {
+      fallbackMinisprite(ev.target);
+    }, true);
+
+    const sweepMinisprites = rootEl => {
+      const imgs = (rootEl || document).querySelectorAll('.party-minisprites img');
+      imgs.forEach(img => {
+        if (img.complete && img.naturalWidth === 0) {
+          fallbackMinisprite(img);
+        }
+      });
+      if (!imgs.length) return;
+      setTimeout(() => {
+        imgs.forEach(img => {
+          if (img.isConnected && (!img.complete || img.naturalWidth === 0)) {
+            fallbackMinisprite(img);
+          }
+        });
+      }, 4000);
+    };
+    sweepMinisprites(document);
+    window.__sweepMinisprites = sweepMinisprites;
+  })();
+
   document.addEventListener('DOMContentLoaded', () => {
+    if (window.__sweepMinisprites) window.__sweepMinisprites(document);
     const eventSelect = document.getElementById('event-select');
     const liveSec = document.getElementById('live');
     const tableNavWrap = document.getElementById('table-nav-wrap');
@@ -1559,15 +1792,19 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       return out;
     };
 
+    const speciesToAbbr = species =>
+      String(species || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || '?';
+
     const renderPartyMinisprites = packed => {
       const list = parsePackedSpecies(packed);
       if (list.length === 0) return '';
       const spans = list.slice(0, 6).map(sp => {
         const slug = speciesToSlug(sp);
         if (!slug) return '';
+        const abbr = speciesToAbbr(sp);
         const src = 'https://www.smogon.com/forums/media/minisprites/' + slug + '.png';
-        return '<span><img src="' + esc(src) + '" alt="' + esc(sp) +
-          '" title="' + esc(sp) + '"></span>';
+        return '<span title="' + esc(sp) + '" data-mon="' + esc(abbr) + '">' +
+          '<img src="' + esc(src) + '" alt="' + esc(sp) + '" title="' + esc(sp) + '"></span>';
       }).join('');
       return '<span class="party-minisprites">' + spans + '</span>';
     };
@@ -2110,6 +2347,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
 
     const applyGamesPager = () => {
       if (!gamesTbody) return;
+      if (window.__sweepMinisprites) window.__sweepMinisprites(gamesTbody);
       const rows = Array.from(
         gamesTbody.querySelectorAll('tr:not(.empty-row):not(.battle-detail-row)')
       );

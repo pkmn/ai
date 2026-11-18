@@ -6,7 +6,10 @@
 // stores `smogon_id` in `agents`, periodically refreshing display names and ban flags via the
 // lightweight `?tooltip=true&_xfResponseType=json` XenForo endpoint.
 
+import {parseJsonResponse} from '../static/util';
+
 const SMOGON_BASE = 'https://www.smogon.com';
+export const TIMEOUT_MILLIS = 5_000;
 const MEMBER_URL_RE =
   /^(?:https?:\/\/(?:www\.)?smogon\.com)?\/forums\/members\/(?:([^/?#]+)\.)?(\d+)\/?$/i;
 const SLUG_ID_RE = /^([^/?#]+)\.(\d+)$/;
@@ -98,7 +101,7 @@ function withToken(rawUrl: string, token: string): URL {
 }
 
 async function fetchFollowingRedirects(rawUrl: string, token: string): Promise<Response> {
-  const signal = AbortSignal.timeout(15_000);
+  const signal = AbortSignal.timeout(TIMEOUT_MILLIS);
   let current = rawUrl;
   for (let hops = 0; hops < 8; hops++) {
     const res = await fetch(withToken(current, token), {redirect: 'manual', signal});
@@ -132,7 +135,7 @@ export async function lookupUser(
     const findUrl = `${SMOGON_BASE}/forums/members/?username=${encoded}`;
     const res = await fetch(withToken(findUrl, token), {
       redirect: 'manual',
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(TIMEOUT_MILLIS),
     });
     const location = res.headers.get('location');
     if (!location || res.status < 300 || res.status >= 400) {
@@ -163,7 +166,7 @@ export async function lookupUser(
     throw new Error(`Smogon member ID ${id} not found (HTTP ${res.status})`);
   }
 
-  const data = await res.json() as {status?: string; html?: {content?: string}};
+  const data = await parseJsonResponse<{status?: string; html?: {content?: string}}>(res, 'Smogon');
   const html = data.html?.content ?? '';
   if (data.status !== 'ok' || !html) {
     throw new Error(`Smogon member ID ${id} returned invalid profile payload`);

@@ -10,7 +10,14 @@ import * as yaml from 'yaml';
 
 import {Database} from '../db';
 import type * as db from '../db';
-import {root, slugify, toID, writeFileAtomic} from '../static/util';
+import {
+  isConnectivityError,
+  parseJsonResponse,
+  root,
+  slugify,
+  toID,
+  writeFileAtomic,
+} from '../static/util';
 
 import {WatchdogAlert} from './arena';
 
@@ -249,7 +256,7 @@ async function discordRequest(
     );
   }
   if (res.status === 204) return undefined;
-  return res.json();
+  return parseJsonResponse(res, 'Discord API');
 }
 
 export async function fetchGuildMembers(token: string, guild: string): Promise<GuildMember[]> {
@@ -285,7 +292,7 @@ export async function fetchLeaders(site: string, vgcToken: string): Promise<Lead
   if (!res.ok) {
     throw new Error(`${site} API failed (${res.status})`);
   }
-  const data = await res.json() as {leaders: RawPartnerLeader[]};
+  const data = await parseJsonResponse<{leaders: RawPartnerLeader[]}>(res, `${site} API`);
   return data.leaders.map(raw => {
     const agent = raw.agent ?? raw.bot ?? undefined;
     const owner = raw.owner
@@ -1492,14 +1499,24 @@ export async function syncOnce(
     const app = await syncCommands(token, config.guild, state);
     onVerifyKey?.(app.verify_key);
   } catch (err) {
+    if (isConnectivityError(err)) {
+      console.warn('Discord API unreachable; skipping sync cycle.');
+      return;
+    }
     console.error('Error syncing commands:', err);
   }
 
   let members: GuildMember[] | undefined;
+  let membersFetchFailed = false;
   try {
     members = await fetchGuildMembers(token, config.guild);
     syncGuildMembers(db, members);
   } catch (err) {
+    membersFetchFailed = true;
+    if (isConnectivityError(err)) {
+      console.warn('Discord API unreachable; skipping sync cycle.');
+      return;
+    }
     console.error('Error fetching guild members:', err);
   }
 
@@ -1508,6 +1525,10 @@ export async function syncOnce(
     try {
       roles = await fetchGuildRoles(token, config.guild);
     } catch (err) {
+      if (isConnectivityError(err)) {
+        console.warn('Discord API unreachable; skipping remainder of sync cycle.');
+        return;
+      }
       console.error('Error fetching guild roles:', err);
     }
   }
@@ -1520,10 +1541,12 @@ export async function syncOnce(
     }
   }
 
-  try {
-    members = await syncArenaRoles(db, token, config, state, members);
-  } catch (err) {
-    console.error('Error syncing Arena roles:', err);
+  if (!membersFetchFailed) {
+    try {
+      members = await syncArenaRoles(db, token, config, state, members);
+    } catch (err) {
+      console.error('Error syncing Arena roles:', err);
+    }
   }
 
   try {

@@ -152,15 +152,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config | undef
   const sessionSecret = env.SESSION_SECRET?.trim() || (devAuth ? EPHEMERAL_DEV_SECRET : undefined);
   if (!sessionSecret) return undefined;
 
+  // When `DEV_AUTH=1` (`npm run dev`), ignore `.env` OAuth credentials so `/auth/github` and
+  // `/auth/discord` on loopback route to `/auth/dev` instead of redirecting out to github.com or
+  // discord.com (which breaks offline and against production redirect URIs).
   const ghClientId = env.GITHUB_CLIENT_ID?.trim();
   const ghClientSecret = env.GITHUB_CLIENT_SECRET?.trim();
-  const github = ghClientId && ghClientSecret
+  const github = !devAuth && ghClientId && ghClientSecret
     ? {clientId: ghClientId, clientSecret: ghClientSecret}
     : undefined;
 
   const discordClientId = env.DISCORD_CLIENT_ID?.trim();
   const discordClientSecret = env.DISCORD_CLIENT_SECRET?.trim();
-  const discord = discordClientId && discordClientSecret
+  const discord = !devAuth && discordClientId && discordClientSecret
     ? {clientId: discordClientId, clientSecret: discordClientSecret}
     : undefined;
 

@@ -28,7 +28,7 @@ import * as teams from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import * as wiki from '../server/wiki';
 import {syncStaticLiveBanner} from '../static/build';
-import {ROOT, raw as rawHtml, root} from '../static/util';
+import {ROOT, isConnectivityError, raw as rawHtml, root} from '../static/util';
 
 import * as mock from './mock';
 
@@ -84,6 +84,7 @@ export interface Scenario {
   click?: string;
   githubUser?: string;
   serial?: boolean;
+  offline?: boolean;
   expectHttpError?: number;
   setup?: (fixture: Fixture) => Promise<(() => Promise<void> | void) | void> |
     (() => Promise<void> | void) | void;
@@ -759,6 +760,13 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Live (Replay)',
       path: '/arena/tournaments/2/',
       click: '#games tr.battle-row td:first-child',
+    },
+    {
+      name: 'arena-tournament-2-offline',
+      section: 'tournaments',
+      title: 'Live (Offline)',
+      path: '/arena/tournaments/2/',
+      offline: true,
     },
     {
       name: 'arena-tournament-3',
@@ -1537,10 +1545,65 @@ export function decodePng(buf: Buffer): PngImage {
 }
 
 const EXTERNAL_HOSTS = new Set(['www.smogon.com', 'play.pokemonshowdown.com']);
+const EXTERNAL_FETCH_TIMEOUT_MILLIS = 3_000;
+const GIF87A_SIG = Buffer.from('GIF87a', 'ascii');
+const GIF89A_SIG = Buffer.from('GIF89a', 'ascii');
 const externalAssetCache = new Map<
   string,
   Promise<{contentType: string; body: Buffer} | undefined>
 >();
+const unreachableHosts = new Set<string>();
+
+function resolveMainWorktreeCacheDir(): string | undefined {
+  try {
+    const commonDir = execFileSync(
+      'git',
+      ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+      {cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']}
+    ).trim();
+    if (!commonDir) return undefined;
+    const mainRoot = path.dirname(fs.realpathSync(commonDir));
+    if (mainRoot === fs.realpathSync(ROOT)) return undefined;
+    const candidate = path.join(mainRoot, '.shots', 'cache');
+    return fs.existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const MAIN_CACHE_DIR = resolveMainWorktreeCacheDir();
+
+export function resetExternalAssetCache(): void {
+  externalAssetCache.clear();
+  unreachableHosts.clear();
+}
+
+export function isValidExternalAsset(
+  pathname: string,
+  body: Buffer,
+  responseContentType?: string
+): boolean {
+  if (body.length === 0) return false;
+  if (responseContentType && /text\/html/i.test(responseContentType)) return false;
+  const ext = path.extname(pathname).toLowerCase();
+  if (ext === '.png') {
+    return body.length >= 8 && body.subarray(0, 8).equals(PNG_SIG);
+  }
+  if (ext === '.gif') {
+    return (
+      body.length >= 6 &&
+      (body.subarray(0, 6).equals(GIF87A_SIG) || body.subarray(0, 6).equals(GIF89A_SIG))
+    );
+  }
+  if (ext === '.jpg' || ext === '.jpeg') {
+    return body.length >= 3 && body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff;
+  }
+  if (ext === '.js' || ext === '.css' || ext === '.svg') {
+    const head = body.subarray(0, 256).toString('utf8').trimStart();
+    if (/^<!doctype\s+html\b|^<html\b/i.test(head)) return false;
+  }
+  return true;
+}
 
 function contentTypeForPath(pathname: string): string {
   switch (path.extname(pathname).toLowerCase()) {
@@ -1572,6 +1635,27 @@ function contentTypeForPath(pathname: string): string {
   }
 }
 
+async function readValidCachedFile(
+  baseCacheDir: string,
+  hostname: string,
+  relPath: string,
+  pathname: string,
+  purgeInvalid: boolean
+): Promise<{contentType: string; body: Buffer} | undefined> {
+  const hostRoot = path.resolve(baseCacheDir, hostname);
+  const diskPath = path.resolve(hostRoot, relPath);
+  if (!diskPath.startsWith(`${hostRoot}${path.sep}`)) return undefined;
+  if (!fs.existsSync(diskPath) || !fs.statSync(diskPath).isFile()) return undefined;
+  const body = await fsp.readFile(diskPath);
+  if (!isValidExternalAsset(pathname, body)) {
+    if (purgeInvalid) {
+      await fsp.rm(diskPath, {force: true});
+    }
+    return undefined;
+  }
+  return {contentType: contentTypeForPath(pathname), body};
+}
+
 export function fetchExternalAsset(
   url: URL,
   cacheDir = CACHE_DIR
@@ -1587,15 +1671,27 @@ export function fetchExternalAsset(
     const diskPath = path.resolve(hostRoot, relPath);
     const safeDisk = diskPath.startsWith(`${hostRoot}${path.sep}`);
 
-    if (safeDisk && fs.existsSync(diskPath) && fs.statSync(diskPath).isFile()) {
-      return {
-        contentType: contentTypeForPath(url.pathname),
-        body: await fsp.readFile(diskPath),
-      };
+    const localHit = await readValidCachedFile(cacheDir, url.hostname, relPath, url.pathname, true);
+    if (localHit) return localHit;
+
+    if (cacheDir === CACHE_DIR && MAIN_CACHE_DIR) {
+      const mainHit = await readValidCachedFile(
+        MAIN_CACHE_DIR,
+        url.hostname,
+        relPath,
+        url.pathname,
+        false
+      );
+      if (mainHit) return mainHit;
     }
 
+    if (unreachableHosts.has(url.hostname)) return undefined;
+
     try {
-      let res = await fetch(url.toString());
+      let targetPathname = url.pathname;
+      let res = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MILLIS),
+      });
       if (!res.ok && url.hostname === 'play.pokemonshowdown.com') {
         const fallbackMatch = /^(\/sprites\/[^/]+\/)([a-z0-9]+)-[^/.]+(\.[a-z]+)$/.exec(
           url.pathname
@@ -1605,12 +1701,22 @@ export function fetchExternalAsset(
             `${fallbackMatch[1]}${fallbackMatch[2]}${fallbackMatch[3]}`,
             url.origin
           );
-          res = await fetch(fallbackUrl.toString());
+          targetPathname = fallbackUrl.pathname;
+          res = await fetch(fallbackUrl.toString(), {
+            signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MILLIS),
+          });
         }
       }
       if (!res.ok) return undefined;
+      const rawContentType = res.headers.get('content-type') ?? undefined;
       const body = Buffer.from(await res.arrayBuffer());
-      const contentType = res.headers.get('content-type') ?? contentTypeForPath(url.pathname);
+      if (!isValidExternalAsset(targetPathname, body, rawContentType)) {
+        // Captive portals frequently answer arbitrary HTTPS/HTTP requests with 200 OK HTML; treat
+        // the host as unreachable for this run and never poison `.shots/cache/` with HTML.
+        unreachableHosts.add(url.hostname);
+        return undefined;
+      }
+      const contentType = rawContentType ?? contentTypeForPath(targetPathname);
       if (safeDisk) {
         await fsp.mkdir(path.dirname(diskPath), {recursive: true});
         const tmpPath = `${diskPath}.tmp.${process.pid}.${Date.now()}`;
@@ -1618,7 +1724,10 @@ export function fetchExternalAsset(
         await fsp.rename(tmpPath, diskPath);
       }
       return {contentType, body};
-    } catch {
+    } catch (err) {
+      if (isConnectivityError(err)) {
+        unreachableHosts.add(url.hostname);
+      }
       return undefined;
     }
   };
@@ -2703,10 +2812,15 @@ export function renderGalleryHtml(
   return `<!doctype html>\n${String(doc)}`;
 }
 
-async function serve(route: Route, fixture: Fixture, cookie: string): Promise<void> {
+async function serve(
+  route: Route,
+  fixture: Fixture,
+  cookie: string,
+  forceOffline: boolean
+): Promise<void> {
   const url = new URL(route.request().url());
   if (url.origin !== ORIGIN) {
-    if (EXTERNAL_HOSTS.has(url.hostname)) {
+    if (!forceOffline && EXTERNAL_HOSTS.has(url.hostname)) {
       const asset = await fetchExternalAsset(url);
       if (asset) {
         await route.fulfill({
@@ -2794,6 +2908,7 @@ interface SlotWorker {
   page: Page;
   problems: string[];
   setCookie: (cookie: string) => void;
+  setOffline: (offline: boolean) => void;
 }
 
 async function createSlotWorkers(browser: Browser, fixture: Fixture): Promise<SlotWorker[]> {
@@ -2801,6 +2916,7 @@ async function createSlotWorkers(browser: Browser, fixture: Fixture): Promise<Sl
   for (const [device, viewport] of Object.entries(VIEWPORTS)) {
     for (const theme of THEMES) {
       let currentCookie = fixture.cookies.scheibo;
+      let currentOffline = false;
       const context = await browser.newContext({
         viewport,
         colorScheme: theme,
@@ -2809,7 +2925,7 @@ async function createSlotWorkers(browser: Browser, fixture: Fixture): Promise<Sl
         timezoneId: 'UTC',
         locale: 'en-US',
       });
-      await context.route('**/*', route => serve(route, fixture, currentCookie));
+      await context.route('**/*', route => serve(route, fixture, currentCookie, currentOffline));
       const page = await context.newPage();
       const problems: string[] = [];
       page.on('pageerror', error => problems.push(error.message));
@@ -2825,6 +2941,9 @@ async function createSlotWorkers(browser: Browser, fixture: Fixture): Promise<Sl
         problems,
         setCookie: (cookie: string) => {
           currentCookie = cookie;
+        },
+        setOffline: (offline: boolean) => {
+          currentOffline = offline;
         },
       });
     }
@@ -2915,6 +3034,9 @@ async function waitForViewerFrames(page: Page): Promise<FrameOverlay[]> {
         const status = document.getElementById('status');
         if (!status) return false;
         if (status.textContent === 'Loading battle viewer…') return false;
+        if (status.dataset.offline === 'true') {
+          return document.body?.dataset.settled === 'true';
+        }
         if (expectIdle) return status.textContent === 'Waiting for battle…';
         return status.hidden && Boolean(document.querySelector('#battle .innerbattle'));
       },
@@ -2964,6 +3086,7 @@ async function shootWithWorker(
 ): Promise<{problems: string[]; viewerRects: Rect[]}> {
   const cookie = fixture.cookies[scenario.githubUser ?? 'scheibo'] ?? fixture.cookies.scheibo;
   worker.setCookie(cookie);
+  worker.setOffline(Boolean(scenario.offline));
   worker.problems.length = 0;
 
   if (scenario.beforePage) {
@@ -3171,6 +3294,12 @@ async function run(): Promise<void> {
     `Screenshots of ${scenarios.length} scenarios in ${targetLabel} ` +
     `(gallery: ${path.relative(ROOT, GALLERY_FILE)}).`
   );
+  if (unreachableHosts.size > 0) {
+    console.log(
+      `  note: external host(s) unreachable (${[...unreachableHosts].sort().join(', ')}); ` +
+      'rendered with offline fallbacks.'
+    );
+  }
   for (const error of new Set(errors)) console.warn(`  error: ${error}`);
 
   if (!values.baseline && hasBaseline) {

@@ -101,6 +101,23 @@ describe('auth config helpers', () => {
       discord: {clientId: '689315793569447954', clientSecret: 'disc-sec'},
     });
   });
+
+  test('loadConfig ignores env OAuth credentials in DEV_AUTH mode', () => {
+    const devCfg = auth.loadConfig({
+      DEV_AUTH: '1',
+      SESSION_SECRET: 'sec-dev',
+      GITHUB_CLIENT_ID: 'gh-id',
+      GITHUB_CLIENT_SECRET: 'gh-sec',
+      DISCORD_CLIENT_ID: '689315793569447954',
+      DISCORD_CLIENT_SECRET: 'disc-sec',
+    });
+    expect(devCfg).toEqual({
+      sessionSecret: 'sec-dev',
+      arenaSecret: undefined,
+      github: undefined,
+      discord: undefined,
+    });
+  });
 });
 
 describe('server/auth.ts routes', () => {

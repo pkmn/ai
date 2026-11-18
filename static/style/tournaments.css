@@ -94,6 +94,19 @@
   height: 24px;
 }
 
+.party-minisprites span.sprite-fallback::after {
+  padding: 1px 2px;
+  color: rgb(var(--fg-base) / 65%);
+  font-size: 9px;
+  font-family: var(--monospace);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  background-color: var(--code-bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: 3px;
+  content: attr(data-mon);
+}
+
 .party-minisprites img {
   width: auto;
   max-width: none;

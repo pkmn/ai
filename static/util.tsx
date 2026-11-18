@@ -186,6 +186,62 @@ export function formatUtcDateTime(epochSeconds: number): string {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
+const CONNECTIVITY_CODES = new Set([
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETDOWN',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+// Detects offline DNS/socket errors, AbortSignal timeouts, and captive-portal non-JSON hijacks so
+// startup hooks and background loops can short-circuit cleanly instead of stalling per request.
+export function isConnectivityError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const rec = err as {
+    connectivity?: unknown;
+    name?: unknown;
+    code?: unknown;
+    message?: unknown;
+    cause?: unknown;
+  };
+  if (rec.connectivity === true) return true;
+  if (rec.name === 'TimeoutError' || rec.name === 'AbortError') return true;
+  if (typeof rec.code === 'string' && CONNECTIVITY_CODES.has(rec.code)) return true;
+  if (
+    rec.name === 'TypeError' &&
+    typeof rec.message === 'string' &&
+    /fetch failed/i.test(rec.message)
+  ) {
+    return true;
+  }
+  return rec.cause !== undefined && rec.cause !== err && isConnectivityError(rec.cause);
+}
+
+export async function parseJsonResponse<T>(res: Response, label: string): Promise<T> {
+  const contentType = res.headers?.get?.('content-type') ?? '';
+  if (/text\/html/i.test(contentType)) {
+    throw Object.assign(
+      new Error(`${label} returned HTML instead of JSON (captive portal or outage)`),
+      {connectivity: true}
+    );
+  }
+  try {
+    return await res.json() as T;
+  } catch (err) {
+    throw Object.assign(
+      new Error(`${label} returned invalid JSON (captive portal or outage)`),
+      {connectivity: true, cause: err}
+    );
+  }
+}
+
 export const TABLE_PAGE_SIZE = 25;
 
 export interface TablePagerProps {
