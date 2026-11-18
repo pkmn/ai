@@ -4,6 +4,8 @@ import * as ratings from '../server/ratings';
 
 export interface TournamentGamePlayerStats {
   bankSeconds?: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   meanTurnMillis?: number;
   peakRam?: number;
 }
@@ -39,11 +41,15 @@ function mapTournamentGameRow(r: Record<string, unknown>): TournamentGameRow {
     endReason: (r.end_reason as string | null) ?? undefined,
     p1: {
       bankSeconds: (r.p1_bank_seconds as number | null) ?? undefined,
+      initMillis: (r.p1_init_millis as number | null) ?? undefined,
+      teamPreviewMillis: (r.p1_team_preview_millis as number | null) ?? undefined,
       meanTurnMillis: (r.p1_mean_turn_millis as number | null) ?? undefined,
       peakRam: (r.p1_peak_ram as number | null) ?? undefined,
     },
     p2: {
       bankSeconds: (r.p2_bank_seconds as number | null) ?? undefined,
+      initMillis: (r.p2_init_millis as number | null) ?? undefined,
+      teamPreviewMillis: (r.p2_team_preview_millis as number | null) ?? undefined,
       meanTurnMillis: (r.p2_mean_turn_millis as number | null) ?? undefined,
       peakRam: (r.p2_peak_ram as number | null) ?? undefined,
     },
@@ -61,9 +67,11 @@ export function replaceTournamentMatchGames(
   const insert = db.prepare(`
     INSERT INTO tournament_games (
       match_id, game_number, seed, outcome, turns, end_reason,
-      p1_bank_seconds, p2_bank_seconds, p1_mean_turn_millis, p2_mean_turn_millis,
+      p1_bank_seconds, p2_bank_seconds, p1_init_millis, p2_init_millis,
+      p1_team_preview_millis, p2_team_preview_millis,
+      p1_mean_turn_millis, p2_mean_turn_millis,
       p1_peak_ram, p2_peak_ram
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (let i = 0; i < games.length; i++) {
@@ -78,6 +86,10 @@ export function replaceTournamentMatchGames(
       g.endReason ?? null,
       g.p1?.bankSeconds ?? null,
       g.p2?.bankSeconds ?? null,
+      g.p1?.initMillis ?? null,
+      g.p2?.initMillis ?? null,
+      g.p1?.teamPreviewMillis ?? null,
+      g.p2?.teamPreviewMillis ?? null,
       g.p1?.meanTurnMillis ?? null,
       g.p2?.meanTurnMillis ?? null,
       g.p1?.peakRam ?? null,

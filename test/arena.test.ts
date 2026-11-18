@@ -232,6 +232,7 @@ describe('arena infrastructure', () => {
       [
         '#!/usr/bin/env node',
         'const readline = require("readline");',
+        'process.stdout.write("/ready\\n");',
         'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
         'let sentChat = false;',
         'rl.on("line", line => {',
@@ -260,7 +261,9 @@ describe('arena infrastructure', () => {
       [
         '#!/usr/bin/env node',
         'const readline = require("readline");',
+        'process.stdout.write("/ready\\n");',
         `process.stdout.write("/utm ${OU_TEAM_ONE}\\n");`,
+        'process.stdout.write("/ready\\n");',
         'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
         'rl.on("line", line => {',
         '  if (!line.startsWith("|request|")) return;',
@@ -358,7 +361,7 @@ describe('arena infrastructure', () => {
         ].join('\n') + '\n',
         encoding: 'utf8',
       }).trim().split('\n');
-      expect(baselineOut).toEqual(['/team 1234', '/team 123456', 'default']);
+      expect(baselineOut).toEqual(['/ready', '/team 1234', '/team 123456', 'default']);
     });
 
     test('configures strict sudoers, scratch chown, Podman RAM, or Seatbelt flags', () => {
@@ -537,6 +540,7 @@ describe('arena infrastructure', () => {
       fs.writeFileSync(
         emptyLineScript,
         '#!/usr/bin/env node\nconst readline = require("readline");' +
+          'process.stdout.write("/ready\\n");' +
           'const rl = readline.createInterface({input: process.stdin});' +
           'rl.on("line", line => {' +
           '  if (!line.startsWith("|request|")) return;' +
@@ -1433,6 +1437,7 @@ describe('arena infrastructure', () => {
           '#!/usr/bin/env node',
           'const fs = require("fs");',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'rl.on("line", line => {',
           '  if (line.startsWith("|utm|")) {',
@@ -1473,6 +1478,7 @@ describe('arena infrastructure', () => {
         [
           '#!/usr/bin/env node',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'rl.on("line", line => {',
           '  if (!line.startsWith("|request|")) return;',
@@ -1509,6 +1515,7 @@ describe('arena infrastructure', () => {
         [
           '#!/usr/bin/env node',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'rl.on("line", line => {',
           '  if (!line.startsWith("|request|")) return;',
@@ -1557,6 +1564,7 @@ describe('arena infrastructure', () => {
         [
           '#!/usr/bin/env node',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'rl.on("line", line => {',
           '  if (!line.startsWith("|request|")) return;',
@@ -1630,6 +1638,7 @@ describe('arena infrastructure', () => {
         [
           '#!/usr/bin/env node',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'let badCount = 0;',
           'let sawInactive = false;',
@@ -1696,7 +1705,6 @@ describe('arena infrastructure', () => {
         retryingInvalidChoice: false,
       };
       const baseTimers = {
-        firstTurnGraceMillis: 60_000,
         maxTurnMillis: 150_000,
         fullTurnIncrementMillis: 10_000,
         midTurnIncrementMillis: 5_000,
@@ -1746,7 +1754,6 @@ describe('arena infrastructure', () => {
         retryingInvalidChoice: false,
       };
       const timers = {
-        firstTurnGraceMillis: 60_000,
         maxTurnMillis: 150_000,
         fullTurnIncrementMillis: 10_000,
         midTurnIncrementMillis: 5_000,
@@ -1790,9 +1797,102 @@ describe('arena infrastructure', () => {
         },
       }).run();
       expect(res.endReason).toBe('smoke-complete');
-      expect(heartbeats.slice(0, 4).map(h => h.activeSlot)).toEqual(['p1', 'p2', 'p2', 'p1']);
+      expect(heartbeats.slice(0, 2).map(h => h.phase)).toEqual(['init', 'init']);
+      expect(heartbeats.filter(h => h.phase !== 'init').slice(0, 4).map(h => h.activeSlot))
+        .toEqual(['p1', 'p2', 'p2', 'p1']);
       expect(heartbeats[0].p1.ram).toBe(128);
       expect(res.p1.peakRam).toBe(128);
+    });
+
+    test('forfeits agent that fails to send /ready within grace period', async () => {
+      const slowReadyScript = path.join(tmpDir, 'slow-ready-agent.js');
+      fs.writeFileSync(
+        slowReadyScript,
+        '#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n',
+        {mode: 0o755}
+      );
+      const heartbeats: arbiter.TurnHeartbeatInfo[] = [];
+      const res = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [slowReadyScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        readyGraceSeconds: 0.1,
+        devMode: true,
+        onTurn: info => {
+          heartbeats.push(info);
+        },
+      }).run();
+      expect(res.winner).toBe('p2');
+      expect(res.endReason).toBe('timeout');
+      expect(res.turns).toBe(0);
+      expect(heartbeats[0].phase).toBe('init');
+      expect(heartbeats[0].activeSlot).toBe('p1');
+    });
+
+    test('separates initMillis, teamPreviewMillis, and regular meanTurnMillis', async () => {
+      const timedScript = path.join(tmpDir, 'timed-telemetry-agent.js');
+      const utmOrderLog = path.join(tmpDir, 'utm-order.log');
+      fs.writeFileSync(utmOrderLog, '');
+      fs.writeFileSync(
+        timedScript,
+        [
+          '#!/usr/bin/env node',
+          'const fs = require("fs");',
+          'const readline = require("readline");',
+          'let readySent = false;',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (line.startsWith("|utm|")) {',
+          '    const tag = readySent ? "after\\n" : "before\\n";',
+          `    fs.appendFileSync(${JSON.stringify(utmOrderLog)}, tag);`,
+          '    return;',
+          '  }',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  if (req.teamPreview) {',
+          '    setTimeout(() => process.stdout.write("/team 123456\\n"), 40);',
+          '  } else {',
+          '    process.stdout.write("default\\n");',
+          '  }',
+          '});',
+          'setTimeout(() => { readySent = true; process.stdout.write("/ready\\n"); }, 35);',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      const ouRes = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9ou',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [timedScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: OU_TEAM_ONE,
+        p2TeamPacked: OU_TEAM_ONE,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      }).run();
+      expect(ouRes.endReason).toBe('smoke-complete');
+      expect(fs.readFileSync(utmOrderLog, 'utf8').trim()).toBe('after');
+      expect(ouRes.p1.initMillis).toBeGreaterThanOrEqual(25);
+      expect(ouRes.p1.teamPreviewMillis).toBeGreaterThanOrEqual(30);
+      expect(ouRes.p1.meanTurnMillis).toBeLessThan(30);
+
+      const noTpRes = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9randombattle',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      }).run();
+      expect(noTpRes.p1.initMillis).toBeGreaterThan(0);
+      expect(noTpRes.p1.teamPreviewMillis).toBeUndefined();
+      expect(noTpRes.p1.meanTurnMillis).toBeGreaterThan(0);
     });
 
     test('inspectPlayerProtocolChunk exempts Unavailable choice from strike counter', () => {
@@ -1912,6 +2012,7 @@ describe('arena infrastructure', () => {
           '#!/usr/bin/env node',
           'const fs = require("fs");',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'rl.on("line", line => {',
           '  if (line.startsWith("|utm|")) {',
@@ -1963,6 +2064,7 @@ describe('arena infrastructure', () => {
       fs.writeFileSync(
         badTeamScript,
         '#!/usr/bin/env node\n' +
+        'process.stdout.write("/ready\\n");\n' +
         'process.stdout.write("/utm Mewtwo||leftovers|pressure|recover|||\\n");\n',
         {mode: 0o755}
       );
@@ -2187,6 +2289,7 @@ describe('arena infrastructure', () => {
           '#!/usr/bin/env node',
           'const fs = require("fs");',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'let gameNum = 0;',
           'rl.on("line", line => {',
@@ -2252,6 +2355,7 @@ describe('arena infrastructure', () => {
         [
           '#!/usr/bin/env node',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'rl.on("line", line => {',
           '  if (!line.startsWith("|request|")) return;',
@@ -2322,6 +2426,7 @@ describe('arena infrastructure', () => {
           '#!/usr/bin/env node',
           'const fs = require("fs");',
           'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
           'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
           'rl.on("line", line => {',
           '  if (line.startsWith("|utm|")) {',
@@ -2522,12 +2627,17 @@ describe('arena infrastructure', () => {
         ) as serverArena.LiveMatchInput[];
         expect(g1Beats.length).toBeGreaterThan(0);
         expect(g2Beats.length).toBeGreaterThan(0);
-        expect(g1Beats[0].viewer?.lines).toBeUndefined();
-        expect(g1Beats[0].viewer?.p1?.pokemon).toHaveLength(6);
-        expect(g2Beats[0].viewer?.lines).toBeUndefined();
-        expect(g2Beats[0].viewer?.p1?.pokemon).toHaveLength(6);
+        expect(g1Beats[0].phase).toBe('init');
+        expect(g2Beats[0].phase).toBe('init');
+        const g1BattleBeats = g1Beats.filter(hb => hb.phase !== 'init');
+        const g2BattleBeats = g2Beats.filter(hb => hb.phase !== 'init');
+        expect(g1BattleBeats[0].viewer?.lines).toBeUndefined();
+        expect(g1BattleBeats[0].viewer?.p1?.pokemon).toHaveLength(6);
+        expect(g2BattleBeats[0].viewer?.lines).toBeUndefined();
+        expect(g2BattleBeats[0].viewer?.p1?.pokemon).toHaveLength(6);
         expect(g2Beats[0].game1Summary?.endReason).toBeDefined();
         expect(g2Beats[0].game1Summary?.p1?.bankSeconds).toBeGreaterThanOrEqual(0);
+        expect(g2Beats[0].game1Summary?.p1?.initMillis).toBeGreaterThan(0);
         expect(g2Beats[0].game1Summary?.p2?.bankSeconds).toBeGreaterThanOrEqual(0);
         expect(g2Beats[0].game1Summary?.viewer?.p1?.pokemon).toHaveLength(6);
       } finally {
@@ -2745,6 +2855,7 @@ describe('arena infrastructure', () => {
             [
               '#!/usr/bin/env node',
               'const readline = require("readline");',
+              'process.stdout.write("/ready\\n");',
               'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
               'rl.on("line", line => {',
               '  if (line.startsWith("|player|p1|")) process.exit(1);',
@@ -3233,6 +3344,7 @@ describe('arena infrastructure', () => {
             [
               '#!/usr/bin/env node',
               'const readline = require("readline");',
+              'process.stdout.write("/ready\\n");',
               'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
               'let sawGen1Tier = false;',
               'rl.on("line", line => {',

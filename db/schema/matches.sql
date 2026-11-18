@@ -52,7 +52,17 @@ CREATE TABLE IF NOT EXISTS matches (
   p1_game2_bank_seconds REAL NOT NULL,
   p2_game1_bank_seconds REAL NOT NULL,
   p2_game2_bank_seconds REAL NOT NULL,
-  -- Mean decision latency per turn (in milliseconds) in Game 1 and Game 2 for each agent.
+  -- Initialization latency before `/ready` (in milliseconds) in Game 1 and Game 2 for each agent.
+  p1_game1_init_millis REAL NOT NULL DEFAULT 0.0,
+  p1_game2_init_millis REAL NOT NULL DEFAULT 0.0,
+  p2_game1_init_millis REAL NOT NULL DEFAULT 0.0,
+  p2_game2_init_millis REAL NOT NULL DEFAULT 0.0,
+  -- Team preview decision latency (in milliseconds) in Game 1 and Game 2, or NULL when format has no team preview.
+  p1_game1_team_preview_millis REAL,
+  p1_game2_team_preview_millis REAL,
+  p2_game1_team_preview_millis REAL,
+  p2_game2_team_preview_millis REAL,
+  -- Mean decision latency per regular turn (in milliseconds) in Game 1 and Game 2 for each agent.
   p1_game1_mean_turn_millis REAL NOT NULL,
   p1_game2_mean_turn_millis REAL NOT NULL,
   p2_game1_mean_turn_millis REAL NOT NULL,

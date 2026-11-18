@@ -1194,21 +1194,11 @@ function renderSeriesGameCardNode(gm: db.TournamentGameRow, showGameNum: boolean
       </div>
       <div className='battle-detail-line'>
         <span><tt>P1</tt></span>
-        {render.formatGamePlayerTelemetryNode(
-          gm.p1.meanTurnMillis ?? 0,
-          gm.p1.bankSeconds ?? 0,
-          gm.p1.peakRam ?? 0,
-          49152
-        )}
+        {render.formatGamePlayerTelemetryNode(gm.p1)}
       </div>
       <div className='battle-detail-line'>
         <span><tt>P2</tt></span>
-        {render.formatGamePlayerTelemetryNode(
-          gm.p2.meanTurnMillis ?? 0,
-          gm.p2.bankSeconds ?? 0,
-          gm.p2.peakRam ?? 0,
-          49152
-        )}
+        {render.formatGamePlayerTelemetryNode(gm.p2)}
       </div>
     </div>
   );
@@ -2276,21 +2266,11 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         '</div>' +
         '<div class="battle-detail-line">' +
           '<span><tt>P1</tt></span>' +
-          formatGamePlayerTelemetryHtml(
-            Math.round(p1.meanTurnMillis || 0),
-            Math.round(p1.bankSeconds || 0),
-            Math.round(p1.peakRam || 0),
-            49152
-          ) +
+          formatGamePlayerTelemetryHtml(p1) +
         '</div>' +
         '<div class="battle-detail-line">' +
           '<span><tt>P2</tt></span>' +
-          formatGamePlayerTelemetryHtml(
-            Math.round(p2.meanTurnMillis || 0),
-            Math.round(p2.bankSeconds || 0),
-            Math.round(p2.peakRam || 0),
-            49152
-          ) +
+          formatGamePlayerTelemetryHtml(p2) +
         '</div>' +
       '</div>';
     };

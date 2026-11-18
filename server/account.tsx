@@ -616,6 +616,12 @@ function renderHistorySection(
                 if (v.smokeDurationMillis !== undefined) {
                   statsParts.push(`${(v.smokeDurationMillis / 1000).toFixed(1)}s`);
                 }
+                if (v.smokeInitMillis !== undefined) {
+                  statsParts.push(`${v.smokeInitMillis}ms init`);
+                }
+                if (v.smokeTeamPreviewMillis !== undefined) {
+                  statsParts.push(`${v.smokeTeamPreviewMillis}ms team`);
+                }
                 if (v.smokeTurnMillis !== undefined) {
                   statsParts.push(`${v.smokeTurnMillis}ms/turn`);
                 }
@@ -1394,6 +1400,8 @@ export function register(app: polka.Polka, options: Options) {
             smoke: {
               status: v.smokeStatus,
               durationMillis: v.smokeDurationMillis,
+              initMillis: v.smokeInitMillis,
+              teamPreviewMillis: v.smokeTeamPreviewMillis,
               turnMillis: v.smokeTurnMillis,
               peakRam: v.smokePeakRam,
               error: v.smokeError,

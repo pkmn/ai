@@ -1170,7 +1170,7 @@ describe('tournament SSR views', () => {
     expect(tourney2Html).toContain('<code title="gen9ou-0000000101">RR1</code>');
     expect(tourney2Html).toContain('data-detail-for="gen9ou-0000000201"');
     expect(tourney2Html).toContain('<tt>29 turns</tt>');
-    expect(tourney2Html).toContain('RAM <tt>4,096 MiB</tt> <span class="muted">(8.3%)</span>');
+    expect(tourney2Html).toContain('RAM <tt>4,096 MiB</tt>');
     expect(tourney2Html).toContain('½–½');
     expect(tourney2Html).toContain(
       'https://www.smogon.com/forums/media/minisprites/dragapult.png'

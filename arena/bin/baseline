@@ -2,6 +2,8 @@
 # Built-in baseline opponent for 1-turn offline smoke tests.
 set -euo pipefail
 
+echo "/ready"
+
 while IFS= read -r line; do
   case "$line" in
     \|request\|*)

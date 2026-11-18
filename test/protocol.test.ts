@@ -33,6 +33,11 @@ describe('parseAgentStdoutLine', () => {
     expect(parseAgentStdoutLine('   \r')).toBeUndefined();
   });
 
+  test('parses /ready handshake command', () => {
+    expect(parseAgentStdoutLine('/ready')).toEqual({kind: 'ready'});
+    expect(parseAgentStdoutLine('  /READY\r')).toEqual({kind: 'ready'});
+  });
+
   test('classifies plain text lines as chat', () => {
     expect(parseAgentStdoutLine('hello opponent')).toEqual({
       kind: 'chat',
@@ -244,6 +249,7 @@ describe('player protocol stream filtering', () => {
   test('PROTOCOL.md documents every wire token enforced by the Arena protocol', () => {
     const doc = fs.readFileSync(root('PROTOCOL.md'), 'utf8');
     for (const token of [
+      '/ready',
       '|utm|',
       '|request|',
       '|inactive|Time left:',

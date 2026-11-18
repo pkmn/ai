@@ -6,7 +6,10 @@
 //   and agent chat lines are never forwarded into `@pkmn/sim`, so competing agents cannot exchange
 //   signals during a game.
 
-export type ParsedAgentStdout = {kind: 'chat'; message: string} | {kind: 'choice'; choice: string};
+export type ParsedAgentStdout =
+  {kind: 'ready'} |
+  {kind: 'chat'; message: string} |
+  {kind: 'choice'; choice: string};
 
 const ELIDED_PLAYER_PREFIXES = [
   '|c|',
@@ -112,6 +115,9 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
   if (!body) return undefined;
 
   const lowerBody = body.toLowerCase();
+  if (lowerBody === '/ready') {
+    return {kind: 'ready'};
+  }
   if (lowerBody.startsWith('/choose ')) {
     const choice = normalizeSimulatorChoice(body.slice(8));
     if (!choice) return undefined;

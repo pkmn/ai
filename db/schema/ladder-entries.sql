@@ -89,8 +89,16 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   top100_entered_at INTEGER,
   top100_max_streak_seconds INTEGER NOT NULL DEFAULT 0,
   top100_total_seconds INTEGER NOT NULL DEFAULT 0,
-  -- Running mean decision time per turn in milliseconds across all games played on this ladder.
+  -- Running mean initialization latency before `/ready` in milliseconds on this ladder.
+  mean_init_millis REAL NOT NULL DEFAULT 0.0,
+  -- Running mean team preview selection time in milliseconds on this ladder, or NULL if none.
+  mean_team_preview_millis REAL,
+  -- Number of matches on this ladder that recorded a team preview decision for this entry.
+  team_preview_matches INTEGER NOT NULL DEFAULT 0,
+  -- Running mean decision time per regular turn in milliseconds across all games played on this ladder.
   mean_turn_millis REAL NOT NULL DEFAULT 0.0,
+  -- Running mean XNU physical memory footprint (MiB) across all games played on this ladder.
+  mean_ram REAL NOT NULL DEFAULT 0.0,
   -- Maximum XNU physical memory footprint (MiB) observed in any match on this ladder.
   peak_ram REAL NOT NULL DEFAULT 0.0,
   -- Cumulative fault counters from match end reasons (retained alongside `started_at` for future

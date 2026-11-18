@@ -2457,12 +2457,20 @@ export class Runner {
           endReason: g1Reason,
           p1: {
             bankSeconds: 145,
+            initMillis: 380 + Math.round(p1TurnMillis * 1.3),
+            ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
+              ? {teamPreviewMillis: Math.max(25, Math.round(p1TurnMillis * 1.5))}
+              : {}),
             meanTurnMillis: p1TurnMillis,
             ram: p1Ram,
             ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
           },
           p2: {
             bankSeconds: 142,
+            initMillis: 360 + Math.round(p2TurnMillis * 1.3),
+            ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
+              ? {teamPreviewMillis: Math.max(25, Math.round(p2TurnMillis * 1.5))}
+              : {}),
             meanTurnMillis: p2TurnMillis,
             ram: p2Ram,
             ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
@@ -2520,6 +2528,18 @@ export class Runner {
       p1Game2BankSeconds: 90 + this.nextInt(55),
       p2Game1BankSeconds: 92 + this.nextInt(55),
       p2Game2BankSeconds: 88 + this.nextInt(55),
+      p1Game1InitMillis: 380 + Math.round(p1TurnMillis * 1.3) + (this.state.matchSeq % 29),
+      p1Game2InitMillis: 390 + Math.round(p1TurnMillis * 1.3) + (this.state.matchSeq % 31),
+      p2Game1InitMillis: 360 + Math.round(p2TurnMillis * 1.3) + (this.state.matchSeq % 23),
+      p2Game2InitMillis: 370 + Math.round(p2TurnMillis * 1.3) + (this.state.matchSeq % 27),
+      ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
+        ? {
+          p1Game1TeamPreviewMillis: Math.max(25, Math.round(p1TurnMillis * 1.5) - 6),
+          p1Game2TeamPreviewMillis: Math.max(25, Math.round(p1TurnMillis * 1.5) + 6),
+          p2Game1TeamPreviewMillis: Math.max(25, Math.round(p2TurnMillis * 1.5) + 4),
+          p2Game2TeamPreviewMillis: Math.max(25, Math.round(p2TurnMillis * 1.5) - 4),
+        }
+        : {}),
       p1MeanTurnMillis: p1TurnMillis,
       p2MeanTurnMillis: p2TurnMillis,
       p1Game1MeanTurnMillis: Math.max(10, p1TurnMillis - 8 + (this.state.matchSeq % 9)),
@@ -3083,6 +3103,10 @@ export class Runner {
               endReason: g1Reason,
               p1: {
                 bankSeconds: 144,
+                initMillis: 740,
+                ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
+                  ? {teamPreviewMillis: 410}
+                  : {}),
                 meanTurnMillis: 268,
                 ram: Math.max(64, p1Ram - 32),
                 ...(p2Team ? {team: p2Team} : {}),
@@ -3092,6 +3116,10 @@ export class Runner {
               },
               p2: {
                 bankSeconds: 131,
+                initMillis: 790,
+                ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
+                  ? {teamPreviewMillis: 460}
+                  : {}),
                 meanTurnMillis: 304,
                 ram: Math.max(64, p2Ram - 64),
                 ...(p1Team ? {team: p1Team} : {}),

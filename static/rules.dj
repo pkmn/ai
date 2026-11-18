@@ -194,8 +194,8 @@ input (`stdin`)** and **standard output (`stdout`)** with no room-ID prefix line
 
   - there is no login protocol, agents must simply write **`/ready`** to `stdout` to indicate that
     it has initialized and loaded in any data or weights it needs to begin playing a game. Agents
-    that fail signal readiness within **60 seconds** and will receive a game loss.
-  - in non-Random Battle formats, the very first line sent to your agent's `stdin` on the ladder is:
+    that fail to signal readiness within **60 seconds** will receive a game loss.
+  - after `/ready` is received, in non-Random Battle formats, the very first line sent to your agent's `stdin` on the ladder is:
       ```text
       |utm|<packed_team>
       ```
@@ -215,7 +215,7 @@ input (`stdin`)** and **standard output (`stdout`)** with no room-ID prefix line
     while unpaused and an authoritative clock line will be sent on `stdin` immediately after every
     `|request|<json>` to facilitate timer management:
       ```text
-      |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 60.0 sec grace
+      |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 0.0 sec grace
       ```
   - if your agent makes an invalid or unavailable choice it remains unpaused with its turn
     clock still ticking and receives:

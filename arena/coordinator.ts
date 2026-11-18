@@ -68,8 +68,34 @@ interface MirrorPlayer {
 interface MirrorGameStats {
   bankSeconds: number;
   peakRam: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   meanTurnMillis: number;
   pokemon?: unknown[];
+}
+
+function summarizeMatchSide(side: {g1: MirrorGameStats; g2: MirrorGameStats}) {
+  const g1 = {
+    bankSeconds: side.g1.bankSeconds,
+    peakRam: side.g1.peakRam,
+    initMillis: Math.round(side.g1.initMillis ?? 0),
+    teamPreviewMillis: side.g1.teamPreviewMillis,
+    meanTurnMillis: Math.round(side.g1.meanTurnMillis),
+  };
+  const g2 = {
+    bankSeconds: side.g2.bankSeconds,
+    peakRam: side.g2.peakRam,
+    initMillis: Math.round(side.g2.initMillis ?? 0),
+    teamPreviewMillis: side.g2.teamPreviewMillis,
+    meanTurnMillis: Math.round(side.g2.meanTurnMillis),
+  };
+  return {
+    g1,
+    g2,
+    peakRam: Math.max(g1.peakRam, g2.peakRam),
+    initMillis: Math.round((g1.initMillis + g2.initMillis) / 2),
+    meanTurnMillis: Math.round((g1.meanTurnMillis + g2.meanTurnMillis) / 2),
+  };
 }
 
 interface MirrorGame1Summary {
@@ -95,6 +121,8 @@ interface MirrorMatchContext {
 
 interface MirrorHeartbeatSide {
   bankSeconds: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   lastTurnMillis: number;
   meanTurnMillis: number;
   ram: number;
@@ -103,6 +131,7 @@ interface MirrorHeartbeatSide {
 
 interface MirrorHeartbeatFrame {
   game: 1 | 2;
+  phase?: arena.LivePhase;
   turn: number;
   activeSlot: 'p1' | 'p2';
   turnStartedAt: number;
@@ -456,6 +485,8 @@ export class Coordinator {
       }
 
       const smokeStartMillis = Date.now();
+      let maxInitMillis = 0;
+      let maxTeamPreviewMillis: number | undefined;
       let maxTurnMillis = 0;
       let maxPeakRam = 64;
       let smokeError: string | undefined;
@@ -505,7 +536,7 @@ export class Coordinator {
           sendUtm: item.team !== 'random',
           smokeStopAfterTurn: 1,
           startingBankSeconds: 30,
-          firstTurnGraceSeconds: 30,
+          readyGraceSeconds: 30,
           maxTurnSeconds: 30,
           devMode: this.devMode,
           includeSpectatorState: false,
@@ -517,6 +548,13 @@ export class Coordinator {
             : '';
           smokeError = `Smoke test failed in ${item.format}: ${res.endReason}${stderrSnippet}`;
           break;
+        }
+        if (res.p1.initMillis > maxInitMillis) maxInitMillis = res.p1.initMillis;
+        if (
+          res.p1.teamPreviewMillis !== undefined &&
+          (maxTeamPreviewMillis === undefined || res.p1.teamPreviewMillis > maxTeamPreviewMillis)
+        ) {
+          maxTeamPreviewMillis = res.p1.teamPreviewMillis;
         }
         if (res.p1.meanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1.meanTurnMillis;
         if (res.p1.peakRam > maxPeakRam) maxPeakRam = res.p1.peakRam;
@@ -571,6 +609,10 @@ export class Coordinator {
         smokeStatus: 'passed',
         unpackedBytes,
         smokeDurationMillis,
+        smokeInitMillis: Math.max(1, maxInitMillis),
+        ...(maxTeamPreviewMillis !== undefined
+          ? {smokeTeamPreviewMillis: Math.max(1, maxTeamPreviewMillis)}
+          : {}),
         smokeTurnMillis: Math.max(1, maxTurnMillis),
         smokePeakRam: maxPeakRam,
       });
@@ -940,6 +982,7 @@ export class Coordinator {
       ladderId: match.ladderId,
       format: match.format,
       game: frame.game,
+      ...(frame.phase ? {phase: frame.phase} : {}),
       turn: frame.turn,
       activeSlot: frame.activeSlot,
       turnStartedAt: frame.turnStartedAt,
@@ -951,6 +994,10 @@ export class Coordinator {
         name: match.p1.name,
         version: match.p1.version,
         bankSeconds: frame.p1.bankSeconds,
+        ...(frame.p1.initMillis !== undefined ? {initMillis: frame.p1.initMillis} : {}),
+        ...(frame.p1.teamPreviewMillis !== undefined
+          ? {teamPreviewMillis: frame.p1.teamPreviewMillis}
+          : {}),
         lastTurnMillis: frame.p1.lastTurnMillis,
         meanTurnMillis: frame.p1.meanTurnMillis,
         ram: frame.p1.ram,
@@ -961,6 +1008,10 @@ export class Coordinator {
         name: match.p2.name,
         version: match.p2.version,
         bankSeconds: frame.p2.bankSeconds,
+        ...(frame.p2.initMillis !== undefined ? {initMillis: frame.p2.initMillis} : {}),
+        ...(frame.p2.teamPreviewMillis !== undefined
+          ? {teamPreviewMillis: frame.p2.teamPreviewMillis}
+          : {}),
         lastTurnMillis: frame.p2.lastTurnMillis,
         meanTurnMillis: frame.p2.meanTurnMillis,
         ram: frame.p2.ram,
@@ -993,12 +1044,20 @@ export class Coordinator {
       endReason: game1.endReason,
       p1: {
         bankSeconds: game1.p1.bankSeconds,
+        ...(game1.p1.initMillis !== undefined ? {initMillis: Math.round(game1.p1.initMillis)} : {}),
+        ...(game1.p1.teamPreviewMillis !== undefined
+          ? {teamPreviewMillis: Math.round(game1.p1.teamPreviewMillis)}
+          : {}),
         meanTurnMillis: Math.round(game1.p1.meanTurnMillis),
         ram: game1.p1.peakRam,
         ...(match.p1.teamLabel ? {team: match.p1.teamLabel} : {}),
       },
       p2: {
         bankSeconds: game1.p2.bankSeconds,
+        ...(game1.p2.initMillis !== undefined ? {initMillis: Math.round(game1.p2.initMillis)} : {}),
+        ...(game1.p2.teamPreviewMillis !== undefined
+          ? {teamPreviewMillis: Math.round(game1.p2.teamPreviewMillis)}
+          : {}),
         meanTurnMillis: Math.round(game1.p2.meanTurnMillis),
         ram: game1.p2.peakRam,
         ...(match.p2.teamLabel ? {team: match.p2.teamLabel} : {}),
@@ -1033,6 +1092,7 @@ export class Coordinator {
           : undefined;
         await this.sendMatchHeartbeat(match, {
           game: 2,
+          phase: info.phase,
           turn: info.turn,
           activeSlot: info.activeSlot === 'p1' ? 'p2' : 'p1',
           turnStartedAt: info.turnStartedAt,
@@ -1041,6 +1101,8 @@ export class Coordinator {
           game1Summary,
           p1: {
             bankSeconds: info.p2.bankSeconds,
+            initMillis: info.p2.initMillis,
+            teamPreviewMillis: info.p2.teamPreviewMillis,
             lastTurnMillis: info.p2.lastTurnMillis,
             meanTurnMillis: info.p2.meanTurnMillis,
             ram: info.p2.ram,
@@ -1048,6 +1110,8 @@ export class Coordinator {
           },
           p2: {
             bankSeconds: info.p1.bankSeconds,
+            initMillis: info.p1.initMillis,
+            teamPreviewMillis: info.p1.teamPreviewMillis,
             lastTurnMillis: info.p1.lastTurnMillis,
             meanTurnMillis: info.p1.meanTurnMillis,
             ram: info.p1.ram,
@@ -1120,18 +1184,8 @@ export class Coordinator {
       ? (game1.log ?? this.readArchivedGameLog(match.ladderId, match.id, 'a', match.startedAt))
       : undefined;
 
-    const p1Game1PeakRam = game1.p1.peakRam;
-    const p1Game2PeakRam = g2Res.p2.peakRam;
-    const p2Game1PeakRam = game1.p2.peakRam;
-    const p2Game2PeakRam = g2Res.p1.peakRam;
-    const p1PeakRam = Math.max(p1Game1PeakRam, p1Game2PeakRam);
-    const p2PeakRam = Math.max(p2Game1PeakRam, p2Game2PeakRam);
-    const p1Game1MeanTurnMillis = Math.round(game1.p1.meanTurnMillis);
-    const p1Game2MeanTurnMillis = Math.round(g2Res.p2.meanTurnMillis);
-    const p2Game1MeanTurnMillis = Math.round(game1.p2.meanTurnMillis);
-    const p2Game2MeanTurnMillis = Math.round(g2Res.p1.meanTurnMillis);
-    const p1MeanTurnMillis = Math.round((p1Game1MeanTurnMillis + p1Game2MeanTurnMillis) / 2);
-    const p2MeanTurnMillis = Math.round((p2Game1MeanTurnMillis + p2Game2MeanTurnMillis) / 2);
+    const p1 = summarizeMatchSide({g1: game1.p1, g2: g2Res.p2});
+    const p2 = summarizeMatchSide({g1: game1.p2, g2: g2Res.p1});
 
     const payload: arena.MatchCompletePayload = {
       match: {
@@ -1149,22 +1203,40 @@ export class Coordinator {
         game2Turns: g2Res.turns,
         game1EndReason: game1.endReason,
         game2EndReason: g2Res.endReason,
-        p1PeakRam,
-        p2PeakRam,
-        p1Game1PeakRam,
-        p1Game2PeakRam,
-        p2Game1PeakRam,
-        p2Game2PeakRam,
-        p1Game1BankSeconds: game1.p1.bankSeconds,
-        p1Game2BankSeconds: g2Res.p2.bankSeconds,
-        p2Game1BankSeconds: game1.p2.bankSeconds,
-        p2Game2BankSeconds: g2Res.p1.bankSeconds,
-        p1MeanTurnMillis,
-        p2MeanTurnMillis,
-        p1Game1MeanTurnMillis,
-        p1Game2MeanTurnMillis,
-        p2Game1MeanTurnMillis,
-        p2Game2MeanTurnMillis,
+        p1PeakRam: p1.peakRam,
+        p2PeakRam: p2.peakRam,
+        p1Game1PeakRam: p1.g1.peakRam,
+        p1Game2PeakRam: p1.g2.peakRam,
+        p2Game1PeakRam: p2.g1.peakRam,
+        p2Game2PeakRam: p2.g2.peakRam,
+        p1Game1BankSeconds: p1.g1.bankSeconds,
+        p1Game2BankSeconds: p1.g2.bankSeconds,
+        p2Game1BankSeconds: p2.g1.bankSeconds,
+        p2Game2BankSeconds: p2.g2.bankSeconds,
+        p1InitMillis: p1.initMillis,
+        p2InitMillis: p2.initMillis,
+        p1Game1InitMillis: p1.g1.initMillis,
+        p1Game2InitMillis: p1.g2.initMillis,
+        p2Game1InitMillis: p2.g1.initMillis,
+        p2Game2InitMillis: p2.g2.initMillis,
+        ...(p1.g1.teamPreviewMillis !== undefined
+          ? {p1Game1TeamPreviewMillis: p1.g1.teamPreviewMillis}
+          : {}),
+        ...(p1.g2.teamPreviewMillis !== undefined
+          ? {p1Game2TeamPreviewMillis: p1.g2.teamPreviewMillis}
+          : {}),
+        ...(p2.g1.teamPreviewMillis !== undefined
+          ? {p2Game1TeamPreviewMillis: p2.g1.teamPreviewMillis}
+          : {}),
+        ...(p2.g2.teamPreviewMillis !== undefined
+          ? {p2Game2TeamPreviewMillis: p2.g2.teamPreviewMillis}
+          : {}),
+        p1MeanTurnMillis: p1.meanTurnMillis,
+        p2MeanTurnMillis: p2.meanTurnMillis,
+        p1Game1MeanTurnMillis: p1.g1.meanTurnMillis,
+        p1Game2MeanTurnMillis: p1.g2.meanTurnMillis,
+        p2Game1MeanTurnMillis: p2.g1.meanTurnMillis,
+        p2Game2MeanTurnMillis: p2.g2.meanTurnMillis,
         completedAt,
       },
       ...(sendLogs
@@ -1500,6 +1572,7 @@ export class Coordinator {
             : undefined;
           await this.sendMatchHeartbeat(match, {
             game: 1,
+            phase: info.phase,
             turn: info.turn,
             activeSlot: info.activeSlot,
             turnStartedAt: info.turnStartedAt,
@@ -1507,6 +1580,8 @@ export class Coordinator {
             incrementSeconds: info.incrementSeconds,
             p1: {
               bankSeconds: info.p1.bankSeconds,
+              initMillis: info.p1.initMillis,
+              teamPreviewMillis: info.p1.teamPreviewMillis,
               lastTurnMillis: info.p1.lastTurnMillis,
               meanTurnMillis: info.p1.meanTurnMillis,
               ram: info.p1.ram,
@@ -1514,6 +1589,8 @@ export class Coordinator {
             },
             p2: {
               bankSeconds: info.p2.bankSeconds,
+              initMillis: info.p2.initMillis,
+              teamPreviewMillis: info.p2.teamPreviewMillis,
               lastTurnMillis: info.p2.lastTurnMillis,
               meanTurnMillis: info.p2.meanTurnMillis,
               ram: info.p2.ram,
@@ -1600,12 +1677,16 @@ export class Coordinator {
         p1: {
           bankSeconds: g1Res.p1.bankSeconds,
           peakRam: g1Res.p1.peakRam,
+          initMillis: g1Res.p1.initMillis,
+          teamPreviewMillis: g1Res.p1.teamPreviewMillis,
           meanTurnMillis: g1Res.p1.meanTurnMillis,
           pokemon: g1Res.p1.pokemon,
         },
         p2: {
           bankSeconds: g1Res.p2.bankSeconds,
           peakRam: g1Res.p2.peakRam,
+          initMillis: g1Res.p2.initMillis,
+          teamPreviewMillis: g1Res.p2.teamPreviewMillis,
           meanTurnMillis: g1Res.p2.meanTurnMillis,
           pokemon: g1Res.p2.pokemon,
         },

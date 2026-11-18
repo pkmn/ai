@@ -27,7 +27,7 @@ export const PUBLIC_DIR = root('public');
 // turn clock and alert staff on Discord.
 export const WATCHDOG_TIMEOUT_MILLIS = 15 * 60 * 1000;
 export const STARTING_BANK_SECONDS = 150;
-export const FIRST_TURN_GRACE_SECONDS = 60;
+export const READY_GRACE_SECONDS = 60;
 export const MAX_TURN_SECONDS = 150;
 export const MID_TURN_INCREMENT_SECONDS = 5;
 export const SINGLES_INCREMENT_SECONDS = 10;
@@ -76,11 +76,15 @@ export interface PokemonHealth {
   color: PokemonColor;
 }
 
+export type LivePhase = 'init' | 'preview' | 'battle';
+
 export interface LiveSlot {
   slug: string;
   name: string;
   version: string;
   bankSeconds: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   lastTurnMillis: number;
   meanTurnMillis: number;
   ram: number;
@@ -90,6 +94,8 @@ export interface LiveSlot {
 
 export interface LiveGameSummarySide {
   bankSeconds: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   meanTurnMillis: number;
   ram: number;
   team?: string;
@@ -138,6 +144,7 @@ export interface LiveMatch {
   slot?: db.LadderSlot;
   format: string;
   game: 1 | 2;
+  phase?: LivePhase;
   turn: number;
   activeSlot?: 'p1' | 'p2';
   turnStartedAt: number;
@@ -968,6 +975,8 @@ export interface SubmissionStatusPayload {
   smokeStatus: Exclude<db.SmokeStatus, 'pending'>;
   unpackedBytes?: number;
   smokeDurationMillis?: number;
+  smokeInitMillis?: number;
+  smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
   smokeError?: string;
@@ -1776,6 +1785,12 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
   if (!isFiniteNonNeg(obj.bankSeconds)) {
     throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
   }
+  if (obj.initMillis !== undefined && !isFiniteNonNeg(obj.initMillis)) {
+    throw Object.assign(new Error(`Invalid ${label}.initMillis.`), {status: 400});
+  }
+  if (obj.teamPreviewMillis !== undefined && !isFiniteNonNeg(obj.teamPreviewMillis)) {
+    throw Object.assign(new Error(`Invalid ${label}.teamPreviewMillis.`), {status: 400});
+  }
   if (!isFiniteNonNeg(obj.lastTurnMillis)) {
     throw Object.assign(new Error(`Invalid ${label}.lastTurnMillis.`), {status: 400});
   }
@@ -1794,6 +1809,8 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
     name: obj.name.trim(),
     version: obj.version.trim(),
     bankSeconds: obj.bankSeconds,
+    ...(obj.initMillis !== undefined ? {initMillis: obj.initMillis} : {}),
+    ...(obj.teamPreviewMillis !== undefined ? {teamPreviewMillis: obj.teamPreviewMillis} : {}),
     lastTurnMillis: obj.lastTurnMillis,
     meanTurnMillis: obj.meanTurnMillis,
     ram: obj.ram,
@@ -1810,6 +1827,12 @@ function parseLiveGameSummarySide(raw: unknown, label: string): LiveGameSummaryS
   if (!isFiniteNonNeg(obj.bankSeconds)) {
     throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
   }
+  if (obj.initMillis !== undefined && !isFiniteNonNeg(obj.initMillis)) {
+    throw Object.assign(new Error(`Invalid ${label}.initMillis.`), {status: 400});
+  }
+  if (obj.teamPreviewMillis !== undefined && !isFiniteNonNeg(obj.teamPreviewMillis)) {
+    throw Object.assign(new Error(`Invalid ${label}.teamPreviewMillis.`), {status: 400});
+  }
   if (!isFiniteNonNeg(obj.meanTurnMillis)) {
     throw Object.assign(new Error(`Invalid ${label}.meanTurnMillis.`), {status: 400});
   }
@@ -1822,6 +1845,8 @@ function parseLiveGameSummarySide(raw: unknown, label: string): LiveGameSummaryS
     : undefined;
   return {
     bankSeconds: obj.bankSeconds,
+    ...(obj.initMillis !== undefined ? {initMillis: obj.initMillis} : {}),
+    ...(obj.teamPreviewMillis !== undefined ? {teamPreviewMillis: obj.teamPreviewMillis} : {}),
     meanTurnMillis: obj.meanTurnMillis,
     ram: obj.ram,
     ...(team !== undefined ? {team} : {}),
@@ -2004,6 +2029,28 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
   ) {
     throw Object.assign(new Error('Invalid meanTurnMillis telemetry.'), {status: 400});
   }
+  const optInitFields = [
+    m.p1InitMillis,
+    m.p2InitMillis,
+    m.p1Game1InitMillis,
+    m.p1Game2InitMillis,
+    m.p2Game1InitMillis,
+    m.p2Game2InitMillis,
+  ];
+  if (optInitFields.some(v => v !== undefined && !isFiniteNonNeg(v))) {
+    throw Object.assign(new Error('Invalid initMillis telemetry.'), {status: 400});
+  }
+  const optTpFields = [
+    m.p1TeamPreviewMillis,
+    m.p2TeamPreviewMillis,
+    m.p1Game1TeamPreviewMillis,
+    m.p1Game2TeamPreviewMillis,
+    m.p2Game1TeamPreviewMillis,
+    m.p2Game2TeamPreviewMillis,
+  ];
+  if (optTpFields.some(v => v !== undefined && !isFiniteNonNeg(v))) {
+    throw Object.assign(new Error('Invalid teamPreviewMillis telemetry.'), {status: 400});
+  }
   if (!isPosInt(m.completedAt)) {
     throw Object.assign(new Error('Invalid match.completedAt.'), {status: 400});
   }
@@ -2012,6 +2059,22 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
   const p1G2Ram = m.p1Game2PeakRam ?? m.p1PeakRam ?? 0;
   const p2G1Ram = m.p2Game1PeakRam ?? m.p2PeakRam ?? 0;
   const p2G2Ram = m.p2Game2PeakRam ?? m.p2PeakRam ?? 0;
+  const p1G1InitMs = (m.p1Game1InitMillis as number | undefined) ??
+    (m.p1InitMillis as number | undefined) ?? 0;
+  const p1G2InitMs = (m.p1Game2InitMillis as number | undefined) ??
+    (m.p1InitMillis as number | undefined) ?? 0;
+  const p2G1InitMs = (m.p2Game1InitMillis as number | undefined) ??
+    (m.p2InitMillis as number | undefined) ?? 0;
+  const p2G2InitMs = (m.p2Game2InitMillis as number | undefined) ??
+    (m.p2InitMillis as number | undefined) ?? 0;
+  const p1G1TpMs = (m.p1Game1TeamPreviewMillis as number | undefined) ??
+    (m.p1TeamPreviewMillis as number | undefined);
+  const p1G2TpMs = (m.p1Game2TeamPreviewMillis as number | undefined) ??
+    (m.p1TeamPreviewMillis as number | undefined);
+  const p2G1TpMs = (m.p2Game1TeamPreviewMillis as number | undefined) ??
+    (m.p2TeamPreviewMillis as number | undefined);
+  const p2G2TpMs = (m.p2Game2TeamPreviewMillis as number | undefined) ??
+    (m.p2TeamPreviewMillis as number | undefined);
   const p1G1TurnMs = m.p1Game1MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
   const p1G2TurnMs = m.p1Game2MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
   const p2G1TurnMs = m.p2Game1MeanTurnMillis ?? m.p2MeanTurnMillis ?? 0;
@@ -2042,6 +2105,18 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
     p1Game2BankSeconds: m.p1Game2BankSeconds,
     p2Game1BankSeconds: m.p2Game1BankSeconds,
     p2Game2BankSeconds: m.p2Game2BankSeconds,
+    p1InitMillis: (m.p1InitMillis as number | undefined) ??
+      Math.round((p1G1InitMs + p1G2InitMs) / 2),
+    p2InitMillis: (m.p2InitMillis as number | undefined) ??
+      Math.round((p2G1InitMs + p2G2InitMs) / 2),
+    p1Game1InitMillis: p1G1InitMs,
+    p1Game2InitMillis: p1G2InitMs,
+    p2Game1InitMillis: p2G1InitMs,
+    p2Game2InitMillis: p2G2InitMs,
+    ...(p1G1TpMs !== undefined ? {p1Game1TeamPreviewMillis: p1G1TpMs} : {}),
+    ...(p1G2TpMs !== undefined ? {p1Game2TeamPreviewMillis: p1G2TpMs} : {}),
+    ...(p2G1TpMs !== undefined ? {p2Game1TeamPreviewMillis: p2G1TpMs} : {}),
+    ...(p2G2TpMs !== undefined ? {p2Game2TeamPreviewMillis: p2G2TpMs} : {}),
     p1MeanTurnMillis: m.p1MeanTurnMillis ?? Math.round((p1G1TurnMs + p1G2TurnMs) / 2),
     p2MeanTurnMillis: m.p2MeanTurnMillis ?? Math.round((p2G1TurnMs + p2G2TurnMs) / 2),
     p1Game1MeanTurnMillis: p1G1TurnMs,
@@ -2269,6 +2344,12 @@ function parseCompletedTournamentGame(
     if (s.bankSeconds !== undefined && !isFiniteNonNeg(s.bankSeconds)) {
       throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
     }
+    if (s.initMillis !== undefined && !isFiniteNonNeg(s.initMillis)) {
+      throw Object.assign(new Error(`Invalid ${label}.initMillis.`), {status: 400});
+    }
+    if (s.teamPreviewMillis !== undefined && !isFiniteNonNeg(s.teamPreviewMillis)) {
+      throw Object.assign(new Error(`Invalid ${label}.teamPreviewMillis.`), {status: 400});
+    }
     if (s.meanTurnMillis !== undefined && !isFiniteNonNeg(s.meanTurnMillis)) {
       throw Object.assign(new Error(`Invalid ${label}.meanTurnMillis.`), {status: 400});
     }
@@ -2277,6 +2358,8 @@ function parseCompletedTournamentGame(
     }
     return {
       bankSeconds: s.bankSeconds,
+      initMillis: s.initMillis,
+      teamPreviewMillis: s.teamPreviewMillis,
       meanTurnMillis: s.meanTurnMillis,
       peakRam: s.peakRam,
     };
@@ -2611,6 +2694,11 @@ export function register(app: polka.Polka, options: Options): Handle {
     try {
       const unpackedBytes = optInt(body.unpackedBytes, 'unpackedBytes');
       const smokeDurationMillis = optInt(body.smokeDurationMillis, 'smokeDurationMillis');
+      const smokeInitMillis = optInt(body.smokeInitMillis, 'smokeInitMillis');
+      const smokeTeamPreviewMillis = optInt(
+        body.smokeTeamPreviewMillis,
+        'smokeTeamPreviewMillis'
+      );
       const smokeTurnMillis = optInt(body.smokeTurnMillis, 'smokeTurnMillis');
       const smokePeakRam = optInt(body.smokePeakRam, 'smokePeakRam');
       let smokeError: string | undefined;
@@ -2653,6 +2741,8 @@ export function register(app: polka.Polka, options: Options): Handle {
         smokeStatus: smokeStatus as Exclude<db.SmokeStatus, 'pending'>,
         unpackedBytes,
         smokeDurationMillis,
+        smokeInitMillis,
+        smokeTeamPreviewMillis,
         smokeTurnMillis,
         smokePeakRam,
         smokeError,
@@ -2789,6 +2879,12 @@ export function register(app: polka.Polka, options: Options): Handle {
             ...game1Summary,
             p1: game1Summary.p1 ?? {
               bankSeconds: currentLive.p1.bankSeconds,
+              ...(currentLive.p1.initMillis !== undefined
+                ? {initMillis: currentLive.p1.initMillis}
+                : {}),
+              ...(currentLive.p1.teamPreviewMillis !== undefined
+                ? {teamPreviewMillis: currentLive.p1.teamPreviewMillis}
+                : {}),
               meanTurnMillis: currentLive.p1.meanTurnMillis,
               ram: currentLive.p1.ram,
               ...(currentLive.p1.team ? {team: currentLive.p1.team} : {}),
@@ -2796,6 +2892,12 @@ export function register(app: polka.Polka, options: Options): Handle {
             },
             p2: game1Summary.p2 ?? {
               bankSeconds: currentLive.p2.bankSeconds,
+              ...(currentLive.p2.initMillis !== undefined
+                ? {initMillis: currentLive.p2.initMillis}
+                : {}),
+              ...(currentLive.p2.teamPreviewMillis !== undefined
+                ? {teamPreviewMillis: currentLive.p2.teamPreviewMillis}
+                : {}),
               meanTurnMillis: currentLive.p2.meanTurnMillis,
               ram: currentLive.p2.ram,
               ...(currentLive.p2.team ? {team: currentLive.p2.team} : {}),
@@ -2864,11 +2966,23 @@ export function register(app: polka.Polka, options: Options): Handle {
         }
       }
 
+      const phase = body.phase as LivePhase | undefined;
+      if (
+        phase !== undefined &&
+        phase !== 'init' &&
+        phase !== 'preview' &&
+        phase !== 'battle'
+      ) {
+        sendJson(res, 400, {error: 'Invalid phase.'});
+        return;
+      }
+
       // Preserve the turn start timestamp across mid-turn telemetry heartbeats so spectator
       // countdown clocks don't jump backward if the runner omits turnStartedAt on repeats.
       const sameActiveTurn = (
         currentLive?.matchId === matchId &&
         currentLive.game === body.game &&
+        currentLive.phase === phase &&
         currentLive.turn === body.turn &&
         currentLive.activeSlot === body.activeSlot
       );
@@ -2885,6 +2999,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         slot: ladder?.slot,
         format,
         game: body.game,
+        ...(phase !== undefined ? {phase} : {}),
         turn: body.turn,
         activeSlot: body.activeSlot,
         turnStartedAt,

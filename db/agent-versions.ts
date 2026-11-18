@@ -38,6 +38,8 @@ export interface AgentVersionRow {
   unpackedBytes?: number;
   smokeStatus: SmokeStatus;
   smokeDurationMillis?: number;
+  smokeInitMillis?: number;
+  smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
   smokeError?: string;
@@ -104,6 +106,8 @@ export interface ApplySubmissionStatusInput {
   smokeStatus: Exclude<SmokeStatus, 'pending'>;
   unpackedBytes?: number;
   smokeDurationMillis?: number;
+  smokeInitMillis?: number;
+  smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
   smokeError?: string;
@@ -144,6 +148,8 @@ interface RawAgentVersionRow {
   unpacked_bytes: number | null;
   smoke_status: SmokeStatus;
   smoke_duration_millis: number | null;
+  smoke_init_millis: number | null;
+  smoke_team_preview_millis: number | null;
   smoke_turn_millis: number | null;
   smoke_peak_ram: number | null;
   smoke_error: string | null;
@@ -167,6 +173,8 @@ function mapVersionRow(raw: RawAgentVersionRow): AgentVersionRow {
     unpackedBytes: raw.unpacked_bytes ?? undefined,
     smokeStatus: raw.smoke_status,
     smokeDurationMillis: raw.smoke_duration_millis ?? undefined,
+    smokeInitMillis: raw.smoke_init_millis ?? undefined,
+    smokeTeamPreviewMillis: raw.smoke_team_preview_millis ?? undefined,
     smokeTurnMillis: raw.smoke_turn_millis ?? undefined,
     smokePeakRam: raw.smoke_peak_ram ?? undefined,
     smokeError: raw.smoke_error ?? undefined,
@@ -683,6 +691,8 @@ export function applySubmissionStatus(
         SET auth_token_encoding = NULL,
             unpacked_bytes = COALESCE(?, unpacked_bytes),
             smoke_duration_millis = COALESCE(?, smoke_duration_millis),
+            smoke_init_millis = COALESCE(?, smoke_init_millis),
+            smoke_team_preview_millis = COALESCE(?, smoke_team_preview_millis),
             smoke_turn_millis = COALESCE(?, smoke_turn_millis),
             smoke_peak_ram = COALESCE(?, smoke_peak_ram),
             smoke_error = ?
@@ -690,6 +700,8 @@ export function applySubmissionStatus(
       `).run(
         input.unpackedBytes ?? null,
         input.smokeDurationMillis ?? null,
+        input.smokeInitMillis ?? null,
+        input.smokeTeamPreviewMillis ?? null,
         input.smokeTurnMillis ?? null,
         input.smokePeakRam ?? null,
         input.smokeError !== undefined ? input.smokeError : (prev.smokeError ?? null),
@@ -752,6 +764,8 @@ export function applySubmissionStatus(
           smoke_status = ?,
           unpacked_bytes = COALESCE(?, unpacked_bytes),
           smoke_duration_millis = COALESCE(?, smoke_duration_millis),
+          smoke_init_millis = COALESCE(?, smoke_init_millis),
+          smoke_team_preview_millis = COALESCE(?, smoke_team_preview_millis),
           smoke_turn_millis = COALESCE(?, smoke_turn_millis),
           smoke_peak_ram = COALESCE(?, smoke_peak_ram),
           smoke_error = ?,
@@ -762,6 +776,8 @@ export function applySubmissionStatus(
       input.smokeStatus,
       input.unpackedBytes ?? null,
       input.smokeDurationMillis ?? null,
+      input.smokeInitMillis ?? null,
+      input.smokeTeamPreviewMillis ?? null,
       input.smokeTurnMillis ?? null,
       input.smokePeakRam ?? null,
       input.smokeError !== undefined ? input.smokeError : (prev.smokeError ?? null),
@@ -797,15 +813,25 @@ export function applySubmissionStatus(
       `);
       const upsertEntry = db.prepare(`
         INSERT INTO ladder_entries (
-          ladder_id, version_id, role, mean_turn_millis, peak_ram, started_at
+          ladder_id, version_id, role,
+          mean_init_millis, mean_turn_millis, mean_ram, peak_ram,
+          started_at
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ladder_id, version_id) DO UPDATE SET
           role = excluded.role,
           retired_at = NULL,
+          mean_init_millis = CASE
+            WHEN ladder_entries.matches = 0 THEN excluded.mean_init_millis
+            ELSE ladder_entries.mean_init_millis
+          END,
           mean_turn_millis = CASE
             WHEN ladder_entries.matches = 0 THEN excluded.mean_turn_millis
             ELSE ladder_entries.mean_turn_millis
+          END,
+          mean_ram = CASE
+            WHEN ladder_entries.matches = 0 THEN excluded.mean_ram
+            ELSE ladder_entries.mean_ram
           END,
           peak_ram = MAX(ladder_entries.peak_ram, excluded.peak_ram)
       `);
@@ -841,7 +867,9 @@ export function applySubmissionStatus(
           ladderId,
           prev.id,
           'challenger',
+          input.smokeInitMillis ?? 0,
           input.smokeTurnMillis ?? 0,
+          input.smokePeakRam ?? 0,
           input.smokePeakRam ?? 0,
           now
         );

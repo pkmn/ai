@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS agent_versions (
     CHECK (smoke_status IN ('pending', 'passed', 'failed', 'quarantined')),
   -- Total wall-clock duration of the offline smoke test in milliseconds, or NULL.
   smoke_duration_millis INTEGER,
+  -- Max `/ready` initialization latency observed during the smoke test in milliseconds, or NULL.
+  smoke_init_millis INTEGER,
+  -- Max team preview selection latency observed during the smoke test in milliseconds, or NULL.
+  smoke_team_preview_millis INTEGER,
   -- Mean Turn-1 decision latency observed during the smoke test in milliseconds, or NULL.
   smoke_turn_millis INTEGER,
   -- Peak XNU physical memory footprint observed during the smoke test in MiB, or NULL.

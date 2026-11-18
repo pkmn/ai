@@ -220,10 +220,18 @@ function buildVersionDynamicStats(
     </>
   );
 
+  const initMillis = Math.round(entry.meanInitMillis);
   const turnMillis = Math.round(entry.meanTurnMillis);
-  const ramText = Math.round(entry.peakRam).toLocaleString('en-US');
+  const meanRamText = Math.round(entry.meanRam).toLocaleString('en-US');
+  const hasTp = entry.meanTeamPreviewMillis !== undefined;
   const telemetry = String(
-    <>{turnMillis} ms/turn <span className='muted'>· {ramText} MiB peak</span></>
+    <>
+      {turnMillis} ms/turn{' '}
+      <span className='muted'>
+        ({initMillis} ms init{hasTp && ` · ${Math.round(entry.meanTeamPreviewMillis!)} ms preview`})
+      </span>
+      {' · '}RAM {meanRamText} MiB
+    </>
   );
 
   return {rank, elo, gxe, peak, record, streak, telemetry};
@@ -555,6 +563,7 @@ function renderVersionsPane(opts: {
   const activePrimary = entriesDesc
     .filter(e => e.role === 'champion' || e.role === 'challenger')
     .sort((a, b) => b.lcb - a.lcb)[0];
+  const hasTeamPreview = entriesDesc.some(e => e.meanTeamPreviewMillis !== undefined);
 
   return (
     <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
@@ -570,8 +579,12 @@ function renderVersionsPane(opts: {
               </th>
               <th className='num'>GXE</th>
               <th className='num'>W–L–T</th>
-              <th className='num'>Turn</th>
-              <th className='num'>Peak RAM</th>
+              <th className='num' title='Mean /ready initialization time'>Init</th>
+              {hasTeamPreview && (
+                <th className='num' title='Mean team preview selection time'>Preview</th>
+              )}
+              <th className='num' title='Mean regular turn decision time'>Turn</th>
+              <th className='num' title='Mean / Peak XNU physical memory footprint'>RAM</th>
               <th className='num'>Submitted</th>
             </tr>
           </thead>
@@ -600,8 +613,13 @@ function renderVersionsPane(opts: {
               const wins = e.ww + e.wt;
               const losses = e.ll + e.tl;
               const ties = e.split;
+              const initText = `${Math.round(e.meanInitMillis)} ms`;
+              const tpText = e.meanTeamPreviewMillis !== undefined
+                ? `${Math.round(e.meanTeamPreviewMillis)} ms`
+                : '—';
               const turnText = `${Math.round(e.meanTurnMillis)} ms`;
-              const ramText = `${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
+              const meanRamText = `${Math.round(e.meanRam).toLocaleString('en-US')} MiB`;
+              const peakRamTip = `Peak: ${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
               const classes: string[] = [];
               if (isRetired) classes.push('secondary');
               if (idx >= TABLE_PAGE_SIZE) classes.push('hide');
@@ -624,8 +642,10 @@ function renderVersionsPane(opts: {
                   {deltaCell}
                   <td className='num'>{e.gxe.toFixed(1)}%</td>
                   <td className='num'>{wins}–{losses}–{ties}</td>
+                  <td className='num'>{initText}</td>
+                  {hasTeamPreview && <td className='num'>{tpText}</td>}
                   <td className='num'>{turnText}</td>
-                  <td className='num'>{ramText}</td>
+                  <td className='num' title={peakRamTip}>{meanRamText}</td>
                   <td className='num muted'>{formatUtcDate(e.submittedAt)}</td>
                 </tr>
               );
@@ -1868,7 +1888,12 @@ export function renderAgentProfile(opts: {
         wins: e.ww + e.wt,
         losses: e.ll + e.tl,
         ties: e.split,
+        meanInitMillis: Math.round(e.meanInitMillis),
+        ...(e.meanTeamPreviewMillis !== undefined
+          ? {meanTeamPreviewMillis: Math.round(e.meanTeamPreviewMillis)}
+          : {}),
         meanTurnMillis: Math.round(e.meanTurnMillis),
+        meanRam: Math.round(e.meanRam),
         peakRam: Math.round(e.peakRam),
         maxWinStreak: e.maxWinStreak,
         maxLossStreak: e.maxLossStreak,

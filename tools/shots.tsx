@@ -171,7 +171,8 @@ function setupRotatedSeasons(
           max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
           top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
           top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
-          mean_turn_millis, peak_ram, settled_at
+          mean_init_millis, mean_team_preview_millis, team_preview_matches,
+          mean_turn_millis, mean_ram, peak_ram, settled_at
         )
         SELECT
           'gen9championsvgc2026regmd', version_id, role, is_anchor, retired_at, elo, se, lcb, gxe,
@@ -181,7 +182,8 @@ function setupRotatedSeasons(
           max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
           top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
           top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
-          mean_turn_millis, peak_ram, settled_at
+          mean_init_millis, mean_team_preview_millis, team_preview_matches,
+          mean_turn_millis, mean_ram, peak_ram, settled_at
         FROM ladder_entries
         WHERE ladder_id = ?`
       ).run(VGC_LADDER_ID);
@@ -202,7 +204,8 @@ function setupRotatedSeasons(
             max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
             top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
             top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
-            mean_turn_millis, peak_ram, settled_at
+            mean_init_millis, mean_team_preview_millis, team_preview_matches,
+            mean_turn_millis, mean_ram, peak_ram, settled_at
           )
           SELECT
             'gen9championsvgc2026regmb', version_id, 'retired', is_anchor, ?, elo, se, lcb, gxe,
@@ -212,7 +215,8 @@ function setupRotatedSeasons(
             max_gxe, max_gxe_at, top1_entered_at, top1_max_streak_seconds, top1_total_seconds,
             top10_entered_at, top10_max_streak_seconds, top10_total_seconds,
             top100_entered_at, top100_max_streak_seconds, top100_total_seconds,
-            mean_turn_millis, peak_ram, settled_at
+            mean_init_millis, mean_team_preview_millis, team_preview_matches,
+            mean_turn_millis, mean_ram, peak_ram, settled_at
           FROM ladder_entries
           WHERE ladder_id = ?`
         ).run(NOW_SECONDS - 86400 * 7, VGC_LADDER_ID);
@@ -631,6 +635,53 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       path: '/arena/battles/',
     },
     {
+      name: 'arena-battles-init-live',
+      section: 'battles',
+      title: 'Live (Init /ready)',
+      path: '/arena/battles/',
+      setup: fixture => {
+        fixture.arenaHandle.setLiveState({
+          stale: false,
+          updatedAt: NOW_SECONDS,
+          live: {
+            heartbeatSeq: 1,
+            matchId: 'gen9championsvgc2026regmc-0009999',
+            ladderId: 'gen9championsvgc2026regmc',
+            slot: 'vgc',
+            format: 'gen9championsvgc2026regmc',
+            game: 1,
+            phase: 'init',
+            turn: 0,
+            activeSlot: 'p1',
+            turnStartedAt: NOW_SECONDS - 12,
+            turnBudgetSeconds: 60,
+            incrementSeconds: 25,
+            p1: {
+              slug: 'missingnozero',
+              name: 'MissingNo.Zero',
+              version: '2.1.0',
+              bankSeconds: 150,
+              lastTurnMillis: 0,
+              meanTurnMillis: 0,
+              ram: 640,
+            },
+            p2: {
+              slug: '0-error',
+              name: '0 ERROR',
+              version: '1.0.0',
+              bankSeconds: 150,
+              lastTurnMillis: 0,
+              meanTurnMillis: 0,
+              ram: 64,
+            },
+          },
+        });
+        return () => {
+          fixture.arenaHandle.setLiveState(fixture.defaultLiveState);
+        };
+      },
+    },
+    {
       name: 'arena-battles-vgc-preview',
       section: 'battles',
       title: 'Live (VGC Preview)',
@@ -666,6 +717,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             slot: base.slot,
             format: base.format,
             game: 1,
+            phase: 'preview',
             turn: 0,
             activeSlot: 'p1',
             turnStartedAt: NOW_SECONDS - 2,
@@ -780,6 +832,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               endReason: 'timeout',
               p1: {
                 bankSeconds: 0,
+                initMillis: 880,
+                teamPreviewMillis: 520,
                 meanTurnMillis: 3420,
                 ram: 1120,
                 pokemon: [
@@ -793,6 +847,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               },
               p2: {
                 bankSeconds: 118,
+                initMillis: 610,
+                teamPreviewMillis: 390,
                 meanTurnMillis: 410,
                 ram: 940,
                 pokemon: [

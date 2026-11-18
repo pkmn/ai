@@ -262,13 +262,22 @@ export function buildBattleDetailClientJs(): string {
       return '<span class="muted" title="Tie">T</span>';
     };
 
-    const formatGamePlayerTelemetryHtml = (meanMillis, bankSeconds, peakRam, maxRamMib) => {
-      const cap = maxRamMib || 14336;
-      const ramStr = Math.round(peakRam).toLocaleString('en-US') + ' MiB';
-      const ramPct = ((peakRam / cap) * 100).toFixed(1);
-      return '<span>Mean <tt>' + Math.round(meanMillis) + ' ms/turn</tt> · Bank <tt>' +
-        Math.round(bankSeconds) + 's</tt> · RAM <tt>' + ramStr +
-        '</tt> <span class="muted">(' + ramPct + '%)</span></span>';
+    const formatGamePlayerTelemetryHtml = p => {
+      const meanMillis = Math.round(p.meanTurnMillis || 0);
+      const bankSeconds = Math.round(p.bankSeconds || 0);
+      const ramStr = Math.round(p.peakRam || 0).toLocaleString('en-US') + ' MiB';
+      const parenParts = [];
+      if (p.initMillis !== undefined) {
+        parenParts.push('<tt>' + Math.round(p.initMillis) + ' ms</tt> init');
+      }
+      if (p.teamPreviewMillis !== undefined) {
+        parenParts.push('<tt>' + Math.round(p.teamPreviewMillis) + ' ms</tt> preview');
+      }
+      const parenHtml = parenParts.length > 0
+        ? ' <span class="muted">(' + parenParts.join(' · ') + ')</span>'
+        : '';
+      return '<span><tt>' + meanMillis + ' ms/turn</tt>' + parenHtml +
+        ' · Bank <tt>' + bankSeconds + 's</tt> · RAM <tt>' + ramStr + '</tt></span>';
     };
 
     const renderMatchDetailHtml = (m, perspectiveSlug) => {
@@ -316,19 +325,11 @@ export function buildBattleDetailClientJs(): string {
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g1P1Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(
-                g1.p1.meanTurnMillis,
-                g1.p1.bankSeconds,
-                g1.p1.peakRam
-              ) +
+              formatGamePlayerTelemetryHtml(g1.p1) +
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g1P2Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(
-                g1.p2.meanTurnMillis,
-                g1.p2.bankSeconds,
-                g1.p2.peakRam
-              ) +
+              formatGamePlayerTelemetryHtml(g1.p2) +
             '</div>' +
           '</div>' +
           '<div class="battle-detail-card">' +
@@ -340,19 +341,11 @@ export function buildBattleDetailClientJs(): string {
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g2P1Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(
-                g2.p2.meanTurnMillis,
-                g2.p2.bankSeconds,
-                g2.p2.peakRam
-              ) +
+              formatGamePlayerTelemetryHtml(g2.p2) +
             '</div>' +
             '<div class="battle-detail-line">' +
               '<span><tt>' + g2P2Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(
-                g2.p1.meanTurnMillis,
-                g2.p1.bankSeconds,
-                g2.p1.peakRam
-              ) +
+              formatGamePlayerTelemetryHtml(g2.p1) +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -695,19 +688,28 @@ function buildBattlesScript(
     };
 
     const renderGame1SideHtml = (key, slotMeta, side, won) => {
-      const ramPct = ((side.ram / 14336) * 100).toFixed(1);
       const orbs = renderPokemonOrbsHtml(side.pokemon);
       const teamHtml = renderTeamSpanHtml(side.team);
+      const parenParts = [];
+      if (side.initMillis !== undefined) {
+        parenParts.push('<tt>' + Math.round(side.initMillis) + ' ms</tt> init');
+      }
+      if (side.teamPreviewMillis !== undefined) {
+        parenParts.push('<tt>' + Math.round(side.teamPreviewMillis) + ' ms</tt> preview');
+      }
+      const parenHtml = parenParts.length > 0
+        ? ' <span class="muted">(' + parenParts.join(' · ') + ')</span>'
+        : '';
       return '<div class="live-g1-side">' +
         '<div class="live-g1-top">' +
         '<span><tt>' + key + '</tt> ' + renderAgent(slotMeta, won) + '</span>' +
         orbs +
         '</div>' +
         '<div class="live-g1-telemetry">' +
-        '<span>Mean: <tt>' + Math.round(side.meanTurnMillis) + ' ms/turn</tt></span>' +
+        '<span><tt>' + Math.round(side.meanTurnMillis) + ' ms/turn</tt>' + parenHtml + '</span>' +
         '<span>Bank: <tt>' + Math.round(side.bankSeconds) + 's</tt></span>' +
         '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
-        Math.round(side.ram).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
+        Math.round(side.ram).toLocaleString('en-US') + ' MiB</tt></span>' +
         teamHtml +
         '</div></div>';
     };
@@ -738,25 +740,30 @@ function buildBattlesScript(
     };
 
     const renderSlot = (key, slotData, live, nowSec) => {
+      const isInit = live.phase === 'init';
       const isRunning = live.activeSlot === key;
       const otherKey = key === 'p1' ? 'p2' : 'p1';
       const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
       const budget = isRunning
         ? Math.round(live.turnBudgetSeconds)
-        : Math.round(slotData.bankSeconds);
-      const bank = isRunning
+        : (isInit ? 60 : Math.round(slotData.bankSeconds));
+      const bank = isRunning && !isInit
         ? Math.max(0, Math.round(slotData.bankSeconds - elapsed))
         : Math.round(slotData.bankSeconds);
       const inc = Math.round(live.incrementSeconds);
       const ramPct = ((slotData.ram / 14336) * 100).toFixed(1);
       const badge = isRunning
-        ? '<span class="state-running" id="state-' + key +
-          '" title="Currently executing (SIGCONT)">&#9679; RUNNING</span>'
+        ? '<span class="state-running" id="state-' + key + '" title="' +
+          (isInit
+            ? 'Initializing (waiting for /ready within 60s grace)'
+            : 'Currently executing (SIGCONT)') +
+          '">&#9679; ' + (isInit ? 'INITIALIZING' : 'RUNNING') + '</span>'
         : '<span class="state-paused" id="state-' + key +
           '" title="Frozen by kernel SIGSTOP while ' + otherKey + ' computes">PAUSED</span>';
       const timerTitle =
-        'Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +' +
+        '60s /ready init grace + Pokémon Showdown RoomBattleTimer: 150s max bank, +' +
         inc + 's/turn';
+      const stepLabel = isInit ? 'Init' : 'Turn';
       const teamHtml = renderTeamSpanHtml(slotData.team);
       const orbsHtml = renderPokemonOrbsHtml(slotData.pokemon);
       return '<div class="slot-card ' + (isRunning ? 'running' : 'paused') +
@@ -766,7 +773,7 @@ function buildBattlesScript(
         orbsHtml +
         badge + '</div>' +
         '<div class="slot-timers" title="' + esc(timerTitle) + '">' +
-        '<span>Turn: <strong id="turn-' + key + '" class="' +
+        '<span>' + stepLabel + ': <strong id="turn-' + key + '" class="' +
         (isRunning ? 'yes' : 'muted') + '">' +
         elapsed + 's</strong> <span class="muted">/ ' + budget + 's</span></span>' +
         '<span>Bank: <strong id="bank-' + key + '">' + bank + 's</strong> ' +
@@ -816,11 +823,15 @@ function buildBattlesScript(
         return;
       }
       const l = state.live;
-      const turnText = l.turn === 0 ? ' · Team Preview' : (', Turn ' + l.turn);
       const hbAge = Math.max(0, nowSec - state.updatedAt);
+      const stepText = l.phase === 'init'
+        ? ' · Initializing (<code>/ready</code>)'
+        : (l.phase === 'preview' || l.turn === 0)
+          ? ' · Team Preview'
+          : ', Turn ' + l.turn;
       livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
         '</code> · <strong>Game ' + l.game +
-        ' / 2</strong>' + turnText + '</span>' +
+        ' / 2</strong>' + stepText + '</span>' +
         '<span class="muted">Heartbeat <tt>#' + l.heartbeatSeq + '</tt> (<tt id="hb-age">' +
         hbAge + 's</tt> ago)</span></div>' +
         renderGame1SummaryHtml(l) +
@@ -1163,7 +1174,9 @@ function buildBattlesScript(
           const turnEl = document.getElementById('turn-' + key);
           const bankEl = document.getElementById('bank-' + key);
           if (turnEl) turnEl.textContent = dt + 's';
-          if (bankEl) bankEl.textContent = Math.max(0, Math.round(slot.bankSeconds - dt)) + 's';
+          if (bankEl && state.live.phase !== 'init') {
+            bankEl.textContent = Math.max(0, Math.round(slot.bankSeconds - dt)) + 's';
+          }
         }
       }
       if (tickCount % 15 === 0) {
@@ -2976,9 +2989,10 @@ function renderLiveGame1Side(
   won: boolean,
   links: AgentLinkContext
 ): util.Child {
-  const ramPct = ((side.ram / 14336) * 100).toFixed(1);
   const ramText = `${Math.round(side.ram).toLocaleString('en-US')} MiB`;
   const href = resolveAgentHref(links, slotMeta.slug, slotMeta.name);
+  const hasInit = side.initMillis !== undefined;
+  const hasTp = side.teamPreviewMillis !== undefined;
   return (
     <div className='live-g1-side'>
       <div className='live-g1-top'>
@@ -2989,10 +3003,24 @@ function renderLiveGame1Side(
         {renderPokemonOrbsNode(side.pokemon)}
       </div>
       <div className='live-g1-telemetry'>
-        <span>Mean: <tt>{Math.round(side.meanTurnMillis)} ms/turn</tt></span>
+        <span>
+          <tt>{Math.round(side.meanTurnMillis)} ms/turn</tt>
+          {(hasInit || hasTp) && (
+            <>
+              {' '}
+              <span className='muted'>
+                (
+                {hasInit && <><tt>{Math.round(side.initMillis!)} ms</tt> init</>}
+                {hasInit && hasTp && ' · '}
+                {hasTp && <><tt>{Math.round(side.teamPreviewMillis!)} ms</tt> preview</>}
+                )
+              </span>
+            </>
+          )}
+        </span>
         <span>Bank: <tt>{Math.round(side.bankSeconds)}s</tt></span>
         <span title='XNU ri_phys_footprint (14 GiB limit)'>
-          RAM: <tt>{ramText}</tt> ({ramPct}%)
+          RAM: <tt>{ramText}</tt>
         </span>
         {renderTeamSpanNode(side.team)}
       </div>
@@ -3037,13 +3065,14 @@ function renderLiveSlotCard(
   nowSec: number,
   links: AgentLinkContext
 ): util.Child {
+  const isInit = live.phase === 'init';
   const isRunning = live.activeSlot === key;
   const otherKey = key === 'p1' ? 'p2' : 'p1';
   const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
   const budget = isRunning
     ? Math.round(live.turnBudgetSeconds)
-    : Math.round(slotData.bankSeconds);
-  const bank = isRunning
+    : (isInit ? 60 : Math.round(slotData.bankSeconds));
+  const bank = isRunning && !isInit
     ? Math.max(0, Math.round(slotData.bankSeconds - elapsed))
     : Math.round(slotData.bankSeconds);
   const inc = Math.round(live.incrementSeconds);
@@ -3051,8 +3080,14 @@ function renderLiveSlotCard(
   const href = resolveAgentHref(links, slotData.slug, slotData.name);
 
   const badge = isRunning ? (
-    <span className='state-running' id={`state-${key}`} title='Currently executing (SIGCONT)'>
-      {'\u25cf'} RUNNING
+    <span
+      className='state-running'
+      id={`state-${key}`}
+      title={isInit
+        ? 'Initializing (waiting for /ready within 60s grace)'
+        : 'Currently executing (SIGCONT)'}
+    >
+      {'\u25cf'} {isInit ? 'INITIALIZING' : 'RUNNING'}
     </span>
   ) : (
     <span
@@ -3065,7 +3100,8 @@ function renderLiveSlotCard(
   );
 
   const timerTitle =
-    `Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +${inc}s/turn`;
+    `60s /ready init grace + Pokémon Showdown RoomBattleTimer: 150s max bank, +${inc}s/turn`;
+  const stepLabel = isInit ? 'Init' : 'Turn';
 
   const turnCls = isRunning ? 'yes' : 'muted';
   const ramText = `${Math.round(slotData.ram).toLocaleString('en-US')} MiB`;
@@ -3081,7 +3117,7 @@ function renderLiveSlotCard(
       </div>
       <div className='slot-timers' title={timerTitle}>
         <span>
-          Turn: <strong id={`turn-${key}`} className={turnCls}>{elapsed}s</strong>{' '}
+          {stepLabel}: <strong id={`turn-${key}`} className={turnCls}>{elapsed}s</strong>{' '}
           <span className='muted'>/ {budget}s</span>
         </span>
         <span>
@@ -3126,14 +3162,18 @@ function renderLivePanelInner(
   }
 
   const l = liveDoc.live;
-  const turnText = l.turn === 0 ? ' · Team Preview' : `, Turn ${l.turn}`;
   const hbAge = Math.max(0, nowSec - liveDoc.updatedAt);
 
   return (
     <>
       <div className='live-header'>
         <span>
-          <code>{l.matchId}</code> · <strong>Game {l.game} / 2</strong>{turnText}
+          <code>{l.matchId}</code> · <strong>Game {l.game} / 2</strong>
+          {l.phase === 'init'
+            ? <> · Initializing (<code>/ready</code>)</>
+            : (l.phase === 'preview' || l.turn === 0)
+              ? <> · Team Preview</>
+              : <>, Turn {l.turn}</>}
         </span>
         <span className='muted'>
           Heartbeat <tt>#{l.heartbeatSeq}</tt> (<tt id='hb-age'>{hbAge}s</tt> ago)
@@ -3270,19 +3310,36 @@ export function formatGameOutcomeNode(outcome: 'W' | 'L' | 'T'): util.Child {
   return <span className='muted' title='Tie'>T</span>;
 }
 
-export function formatGamePlayerTelemetryNode(
-  meanMillis: number,
-  bankSeconds: number,
-  peakRam: number,
-  maxRamMib = 14336
-): util.Child {
-  const ramStr = `${Math.round(peakRam).toLocaleString('en-US')} MiB`;
-  const ramPct = ((peakRam / maxRamMib) * 100).toFixed(1);
+export interface GamePlayerTelemetry {
+  meanTurnMillis?: number;
+  bankSeconds?: number;
+  peakRam?: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
+}
+
+export function formatGamePlayerTelemetryNode(p: GamePlayerTelemetry): util.Child {
+  const meanMillis = Math.round(p.meanTurnMillis ?? 0);
+  const bankSeconds = Math.round(p.bankSeconds ?? 0);
+  const ramStr = `${Math.round(p.peakRam ?? 0).toLocaleString('en-US')} MiB`;
+  const hasInit = p.initMillis !== undefined;
+  const hasTp = p.teamPreviewMillis !== undefined;
   return (
     <span>
-      Mean <tt>{Math.round(meanMillis)} ms/turn</tt> · Bank{' '}
-      <tt>{Math.round(bankSeconds)}s</tt> · RAM <tt>{ramStr}</tt>{' '}
-      <span className='muted'>({ramPct}%)</span>
+      <tt>{meanMillis} ms/turn</tt>
+      {(hasInit || hasTp) && (
+        <>
+          {' '}
+          <span className='muted'>
+            (
+            {hasInit && <><tt>{Math.round(p.initMillis!)} ms</tt> init</>}
+            {hasInit && hasTp && ' · '}
+            {hasTp && <><tt>{Math.round(p.teamPreviewMillis!)} ms</tt> preview</>}
+            )
+          </span>
+        </>
+      )}
+      {' · '}Bank <tt>{bankSeconds}s</tt> · RAM <tt>{ramStr}</tt>
     </span>
   );
 }
@@ -3349,22 +3406,14 @@ export function renderBattleInlineDetailHtml(
               <tt>{g1P1Label}</tt>
               {showPools ? <> {t1Code}</> : undefined}
             </span>
-            {formatGamePlayerTelemetryNode(
-              g1.p1.meanTurnMillis,
-              g1.p1.bankSeconds,
-              g1.p1.peakRam
-            )}
+            {formatGamePlayerTelemetryNode(g1.p1)}
           </div>
           <div className='battle-detail-line'>
             <span>
               <tt>{g1P2Label}</tt>
               {showPools ? <> {t2Code}</> : undefined}
             </span>
-            {formatGamePlayerTelemetryNode(
-              g1.p2.meanTurnMillis,
-              g1.p2.bankSeconds,
-              g1.p2.peakRam
-            )}
+            {formatGamePlayerTelemetryNode(g1.p2)}
           </div>
         </div>
         <div className='battle-detail-card'>
@@ -3381,22 +3430,14 @@ export function renderBattleInlineDetailHtml(
               <tt>{g2P1Label}</tt>
               {showPools ? <> {t1Code}</> : undefined}
             </span>
-            {formatGamePlayerTelemetryNode(
-              g2.p2.meanTurnMillis,
-              g2.p2.bankSeconds,
-              g2.p2.peakRam
-            )}
+            {formatGamePlayerTelemetryNode(g2.p2)}
           </div>
           <div className='battle-detail-line'>
             <span>
               <tt>{g2P2Label}</tt>
               {showPools ? <> {t2Code}</> : undefined}
             </span>
-            {formatGamePlayerTelemetryNode(
-              g2.p1.meanTurnMillis,
-              g2.p1.bankSeconds,
-              g2.p1.peakRam
-            )}
+            {formatGamePlayerTelemetryNode(g2.p1)}
           </div>
         </div>
       </div>

@@ -4,19 +4,20 @@ Arena agents are executed as single-game subprocesses that speak Pokémon Showdo
 
 ## 1. Stream Lifecycle
 
-1. **Assigned Team (`|utm|<packed_team>`)**: In non-Random Battle formats where the Arena assigns teams (`harvested` and `pools`), before `|init|battle`, the arbiter writes your full assigned team (including exact EVs, IVs, and Natures) in `@pkmn/sets` packed format:
+1. **Readiness Handshake (`/ready`)**: Immediately after startup (e.g. after loading weights or warming caches), write the literal line `/ready` followed by a newline (`\n`) to `stdout` and flush immediately. Agents that fail to send `/ready` within **60 seconds** forfeit the game (`timeout`).
+2. **Assigned Team (`|utm|<packed_team>`)**: After `/ready` is received, in non-Random Battle formats where the Arena assigns teams (`harvested` and `pools`), before `|init|battle`, the arbiter writes your full assigned team (including exact EVs, IVs, and Natures) in `@pkmn/sets` packed format:
    ```text
    |utm|<packed_team>
    ```
-   Always slice after the 5-character prefix (`line.slice(5)`) rather than splitting on `|`, because packed team strings use `|` internally as field delimiters. In Random Battle formats (`random`), `|utm|` is omitted and `stdin` begins directly with Pokémon Showdown battle protocol lines. In scheduled tournaments without a pre-assigned team pool (`team` unset), the arbiter sends zero lines on `stdin` before waiting for your very first `stdout` line (`/utm <packed_team>`).
-2. **Battle Events & Decision Requests (`|request|<json>`)**: As the battle progresses, the arbiter writes Showdown protocol lines to your `stdin`, ending each decision prompt with:
+   Always slice after the 5-character prefix (`line.slice(5)`) rather than splitting on `|`, because packed team strings use `|` internally as field delimiters. In Random Battle formats (`random`), `|utm|` is omitted and `stdin` begins directly with Pokémon Showdown battle protocol lines. In scheduled tournaments without a pre-assigned team pool (`team` unset), the arbiter sends zero lines on `stdin` after `/ready` before waiting for your next `stdout` line (`/utm <packed_team>`).
+3. **Battle Events & Decision Requests (`|request|<json>`)**: As the battle progresses, the arbiter writes Showdown protocol lines to your `stdin`, ending each decision prompt with:
    ```text
    |request|{"active":[...],"side":{...}}
-   |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 60.0 sec grace
+   |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 0.0 sec grace
    ```
    - Never identify your seat by display name (blind-pair ladder games anonymize player display names). Always read `request.side.id` (`"p1"` or `"p2"`).
    - If `request.wait` is truthy (or `request` has none of `teamPreview`, `forceSwitch`, `active`), do **not** write anything to `stdout`.
-3. **Responding on `stdout` (`<choice>`)**: For every decision `|request|` (where `request.wait` is falsy), write a single newline-terminated simulator choice line (`<= 64 KiB`) to `stdout` and **flush immediately** (e.g. `move 1`, `move 2 terastallize`, `switch 3`, `team 1234`, or `/choose move 1`):
+4. **Responding on `stdout` (`<choice>`)**: For every decision `|request|` (where `request.wait` is falsy), write a single newline-terminated simulator choice line (`<= 64 KiB`) to `stdout` and **flush immediately** (e.g. `move 1`, `move 2 terastallize`, `switch 3`, `team 1234`, or `/choose move 1`):
    ```text
    move 1
    ```

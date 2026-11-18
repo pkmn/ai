@@ -124,7 +124,10 @@ export interface AgentLadderProfileEntry {
   top100EnteredAt?: number;
   top100MaxStreakSeconds: number;
   top100TotalSeconds: number;
+  meanInitMillis: number;
+  meanTeamPreviewMillis?: number;
   meanTurnMillis: number;
+  meanRam: number;
   peakRam: number;
   settledAt?: number;
 }
@@ -337,7 +340,10 @@ export function getAgentLadderProfileEntries(
       le.top100_entered_at,
       le.top100_max_streak_seconds,
       le.top100_total_seconds,
+      le.mean_init_millis,
+      le.mean_team_preview_millis,
       le.mean_turn_millis,
+      le.mean_ram,
       le.peak_ram,
       le.settled_at
     FROM ladder_entries le
@@ -393,7 +399,10 @@ export function getAgentLadderProfileEntries(
     top100EnteredAt: (r.top100_entered_at as number | null) ?? undefined,
     top100MaxStreakSeconds: r.top100_max_streak_seconds as number,
     top100TotalSeconds: r.top100_total_seconds as number,
+    meanInitMillis: r.mean_init_millis as number,
+    meanTeamPreviewMillis: (r.mean_team_preview_millis as number | null) ?? undefined,
     meanTurnMillis: r.mean_turn_millis as number,
+    meanRam: r.mean_ram as number,
     peakRam: r.peak_ram as number,
     settledAt: (r.settled_at as number | null) ?? undefined,
   }));

@@ -78,6 +78,8 @@ export interface SeriesGameSummary {
 
 export interface GamePlayerStats {
   bankSeconds: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   meanTurnMillis: number;
   peakRam: number;
 }
@@ -110,7 +112,7 @@ export interface GameOptions {
   maxTurns?: number;
   smokeStopAfterTurn?: number;
   startingBankSeconds?: number;
-  firstTurnGraceSeconds?: number;
+  readyGraceSeconds?: number;
   maxTurnSeconds?: number;
   utmTimeoutMillis?: number;
   onGameStart?: (info: {
@@ -151,6 +153,9 @@ interface RemoteTournamentPlayer {
   sshDisconnected: boolean;
   launchError: string | undefined;
   bankMillis: number;
+  initMillis: number;
+  totalTeamPreviewMillis: number;
+  teamPreviewCount: number;
   totalTurnMillis: number;
   decisionsCount: number;
   peakRam: number;
@@ -292,7 +297,7 @@ export class ConcurrentGame {
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
   private readonly startingBankMillis: number;
-  private readonly firstTurnGraceMillis: number;
+  private readonly readyGraceMillis: number;
   private readonly maxTurnMillis: number;
   private readonly fullTurnIncrementMillis: number;
   private readonly midTurnIncrementMillis: number;
@@ -337,8 +342,8 @@ export class ConcurrentGame {
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.startingBankMillis =
       (options.startingBankSeconds ?? arena.STARTING_BANK_SECONDS) * 1000;
-    this.firstTurnGraceMillis =
-      (options.firstTurnGraceSeconds ?? arena.FIRST_TURN_GRACE_SECONDS) * 1000;
+    this.readyGraceMillis =
+      (options.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
     this.maxTurnMillis = (options.maxTurnSeconds ?? arena.MAX_TURN_SECONDS) * 1000;
     this.fullTurnIncrementMillis = arena.turnIncrementSeconds(options.format) * 1000;
     this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
@@ -428,6 +433,9 @@ export class ConcurrentGame {
       sshDisconnected: false,
       launchError: undefined,
       bankMillis: this.startingBankMillis,
+      initMillis: 0,
+      totalTeamPreviewMillis: 0,
+      teamPreviewCount: 0,
       totalTurnMillis: 0,
       decisionsCount: 0,
       peakRam: 1,
@@ -639,6 +647,36 @@ export class ConcurrentGame {
     return res.packed;
   }
 
+  private async waitForPlayerReady(
+    player: RemoteTournamentPlayer
+  ): Promise<{ok: true} | {ok: false; reason: 'spot-preemption' | 'timeout' | 'crash'}> {
+    let remaining = this.readyGraceMillis;
+    const startNs = process.hrtime.bigint();
+    let linesRead = 0;
+    while (true) {
+      const {line, timedOut} = await this.readLineWithTimeout(player, remaining);
+      const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
+      remaining = this.readyGraceMillis - elapsedMillis;
+      if (player.spotPreempted || player.sshDisconnected) {
+        return {ok: false, reason: 'spot-preemption'};
+      }
+      if (timedOut || remaining <= 0) {
+        return {ok: false, reason: 'timeout'};
+      }
+      if (line === undefined) {
+        return {ok: false, reason: 'crash'};
+      }
+      linesRead++;
+      if (linesRead > arbiter.MAX_LINES_PER_DECISION) {
+        return {ok: false, reason: 'crash'};
+      }
+      if (parseAgentStdoutLine(line)?.kind === 'ready') {
+        player.initMillis = Math.max(1, Math.ceil(elapsedMillis));
+        return {ok: true};
+      }
+    }
+  }
+
   private async resolvePlayerTeam(
     player: RemoteTournamentPlayer,
     assignedTeam: string | undefined
@@ -646,6 +684,9 @@ export class ConcurrentGame {
     {ok: true; team: string} |
     {ok: false; reason: 'spot-preemption' | 'timeout' | 'crash' | 'invalid-choice'}
   > {
+    const readyRes = await this.waitForPlayerReady(player);
+    if (!readyRes.ok) return readyRes;
+
     if (assignedTeam !== undefined) {
       const valid = await this.validatePackedTeam(assignedTeam);
       if (!valid) {
@@ -730,7 +771,6 @@ export class ConcurrentGame {
       this.lastRewardedTurn,
       {
         startingBankMillis: this.startingBankMillis,
-        firstTurnGraceMillis: this.firstTurnGraceMillis,
         maxTurnMillis: this.maxTurnMillis,
         fullTurnIncrementMillis: this.fullTurnIncrementMillis,
         midTurnIncrementMillis: this.midTurnIncrementMillis,
@@ -783,13 +823,18 @@ export class ConcurrentGame {
         }
 
         const parsed = parseAgentStdoutLine(line);
-        if (!parsed || parsed.kind === 'chat') continue;
+        if (!parsed || parsed.kind === 'chat' || parsed.kind === 'ready') continue;
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedMillis));
         const overGraceMillis = Math.max(0, decisionElapsedMillis - graceMillis);
         player.bankMillis = Math.max(0, player.bankMillis - overGraceMillis);
-        player.totalTurnMillis += decisionElapsedMillis;
-        player.decisionsCount++;
+        if (req.teamPreview) {
+          player.totalTeamPreviewMillis += decisionElapsedMillis;
+          player.teamPreviewCount++;
+        } else {
+          player.totalTurnMillis += decisionElapsedMillis;
+          player.decisionsCount++;
+        }
         player.thinking = false;
 
         const choiceCmd = arbiter.formatChoiceCommand(parsed.choice, req.teamPreview);
@@ -863,6 +908,8 @@ export class ConcurrentGame {
       p.lineQueue.length = 0;
       p.localTurnMillisQueue.length = 0;
       p.bankMillis = this.startingBankMillis;
+      p.totalTeamPreviewMillis = 0;
+      p.teamPreviewCount = 0;
       p.totalTurnMillis = 0;
       p.decisionsCount = 0;
       p.hasTakenFirstDecision = false;
@@ -956,8 +1003,13 @@ export class ConcurrentGame {
   }
 
   private buildSingleBattleStats(player: RemoteTournamentPlayer) {
+    const teamPreviewMillis = player.teamPreviewCount > 0
+      ? Math.max(1, Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount))
+      : undefined;
     return {
       bankSeconds: Math.max(0, Math.round(player.bankMillis / 1000)),
+      initMillis: player.initMillis,
+      ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
       totalTurnMillis: player.totalTurnMillis,
       decisionsCount: player.decisionsCount,
       meanTurnMillis: player.decisionsCount > 0
@@ -1185,11 +1237,19 @@ export class ConcurrentGame {
           omniscientLog: g.omniscientLog,
           p1: {
             bankSeconds: g.p1.bankSeconds,
+            initMillis: g.p1.initMillis,
+            ...(g.p1.teamPreviewMillis !== undefined
+              ? {teamPreviewMillis: g.p1.teamPreviewMillis}
+              : {}),
             meanTurnMillis: g.p1.meanTurnMillis,
             peakRam: g.p1.peakRam > 1 ? g.p1.peakRam : p1PeakRam,
           },
           p2: {
             bankSeconds: g.p2.bankSeconds,
+            initMillis: g.p2.initMillis,
+            ...(g.p2.teamPreviewMillis !== undefined
+              ? {teamPreviewMillis: g.p2.teamPreviewMillis}
+              : {}),
             meanTurnMillis: g.p2.meanTurnMillis,
             peakRam: g.p2.peakRam > 1 ? g.p2.peakRam : p2PeakRam,
           },
@@ -1811,6 +1871,8 @@ export class Coordinator {
       });
 
       const smokeStart = Date.now();
+      let maxInitMillis = 1;
+      let maxTeamPreviewMillis: number | undefined;
       let maxTurnMillis = 1;
       let smokeError: string | undefined;
 
@@ -1856,7 +1918,7 @@ export class Coordinator {
           sendUtm: meta?.team !== undefined ? meta.team !== 'random' : undefined,
           smokeStopAfterTurn: 1,
           startingBankSeconds: 30,
-          firstTurnGraceSeconds: 30,
+          readyGraceSeconds: 30,
           maxTurnSeconds: 30,
         });
         const res = await smokeGame.run();
@@ -1866,6 +1928,13 @@ export class Coordinator {
         if (p1Faulted) {
           smokeError = `GCP smoke test failed in ${format}: ${res.endReason}`;
           break;
+        }
+        if ((res.p1.initMillis ?? 0) > maxInitMillis) maxInitMillis = res.p1.initMillis ?? 0;
+        if (
+          res.p1.teamPreviewMillis !== undefined &&
+          (maxTeamPreviewMillis === undefined || res.p1.teamPreviewMillis > maxTeamPreviewMillis)
+        ) {
+          maxTeamPreviewMillis = res.p1.teamPreviewMillis;
         }
         if (res.p1.meanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1.meanTurnMillis;
       }
@@ -1886,6 +1955,10 @@ export class Coordinator {
         smokeStatus: 'passed',
         unpackedBytes,
         smokeDurationMillis,
+        smokeInitMillis: maxInitMillis,
+        ...(maxTeamPreviewMillis !== undefined
+          ? {smokeTeamPreviewMillis: maxTeamPreviewMillis}
+          : {}),
         smokeTurnMillis: maxTurnMillis,
       });
     }

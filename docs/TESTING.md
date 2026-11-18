@@ -150,10 +150,10 @@ The 7 sections cover:
    season in `settling` grace window via the `#season-select` dropdown, retired season in `archived`
    state (with `Data: <id>-logs.tar` link above the footer), and `upcoming` ladder with registered
    entrants.
-4. **Battles (`battles`):** Live VGC match in progress across stages (`Game 1 / 2 · Team Preview`
-   with 6 HP circle indicators per side, `Game 1 / 2` mid-battle shrunk to the 4 brought Pokémon,
-   and `Game 2 / 2` with Game 1's summary card persisted on top above Game 2's live row and swapped
-   pool team hashes), live 6v6 Singles `Game 2 / 2` with Game 1 `[Timeout]` summary on top and 6
+4. **Battles (`battles`):** Live VGC match in progress across stages (`Game 1 / 2 · Initializing
+   (/ready)` 60s startup grace step, `Game 1 / 2 · Team Preview` with 6 HP circle indicators per
+   side, `Game 1 / 2` mid-battle shrunk to the 4 brought Pokémon, and `Game 2 / 2` with Game 1's
+   summary card persisted on top above Game 2's live row and swapped pool team hashes), live 6v6 Singles `Game 2 / 2` with Game 1 `[Timeout]` summary on top and 6
    HP circle indicators per side, live `RAND` match with HP circle indicators and embedded Pokémon
    Showdown battle viewer, inline expanded `RAND` row with replay viewer (`Game 1` / `Game 2`),
    inline expanded retired `pools` (`VGC`) row with replay viewer (`Game 1` / `Game 2`), inline

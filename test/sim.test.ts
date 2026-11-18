@@ -102,7 +102,14 @@ describe('multi-version @pkmn/sim support', () => {
     `);
     rawDb.close();
 
-    const db = new Database(dbPath, {backupBeforeMigrate: false});
+    const migDir = path.join(tmpDir, 'migration');
+    fs.mkdirSync(migDir, {recursive: true});
+    fs.copyFileSync(
+      root('db', 'migration', '0001-sim-version.sql'),
+      path.join(migDir, '0001-sim-version.sql')
+    );
+
+    const db = new Database(dbPath, {backupBeforeMigrate: false, migrationDir: migDir});
     try {
       expect(db.getLadder('gen1ou20261109')?.version).toBe(SIM_VERSION);
     } finally {
