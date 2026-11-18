@@ -6,10 +6,11 @@ import * as path from 'path';
 
 import polka from 'polka';
 import serveStatic from 'serve-static';
+import {serve} from 'site';
 
 import {Database} from '../db';
 import {renderErrorPage, syncStaticLiveBanner} from '../static/build';
-import {installHeadSupport, isConnectivityError, root} from '../static/util';
+import {ROOT, installHeadSupport, isConnectivityError, root} from '../static/util';
 
 import * as account from './account';
 import * as arena from './arena';
@@ -20,6 +21,7 @@ import * as wiki from './wiki';
 
 export interface ServerAppOptions {
   db: Database;
+  app?: polka.Polka;
   publicDir?: string;
   avatarsDir?: string;
   isMock?: boolean;
@@ -153,7 +155,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   const {db} = options;
   const publicDir = options.publicDir ?? render.PUBLIC_DIR;
   const isMock = options.isMock ?? (process.env.MOCK === '1');
-  const app = polka();
+  const app = options.app ?? polka();
   installSafeErrorHandlers(app, db);
 
   const syncBanner = () => {
@@ -168,12 +170,13 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   // so `@untitaker/hyperlink` (`hyperlink public --check-anchors`) validates internal `.dj` links.
   // Bypass `serve-static` for dynamic SSR/API routes and gate static ladder archives/logs on the
   // ladder's publication status (`random`, or `pools` strictly after `status === 'archived'`).
-  const staticWare = serveStatic(publicDir) as unknown as (
+  type Middleware = (
     req: http.IncomingMessage,
     res: http.ServerResponse,
     next: (err?: unknown) => void
   ) => void;
-  app.use((req, res, next) => {
+  const staticWare = serveStatic(publicDir) as unknown as Middleware;
+  const gatedStaticWare: Middleware = (req, res, next) => {
     const [pathname, query] = (req.url ?? '/').split('?');
     const ladderAssetMatch = /^\/arena\/ladders\/([^/]+)\/([^/]+)$/.exec(pathname);
     if (ladderAssetMatch && /\.(?:7z|tar|log)$/i.test(ladderAssetMatch[2])) {
@@ -210,7 +213,13 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       return;
     }
     staticWare(req, res, next);
-  });
+  };
+  const wares = (app as unknown as {wares?: Middleware[]}).wares;
+  if (options.app && wares?.[1]) {
+    wares[1] = gatedStaticWare;
+  } else {
+    app.use(gatedStaticWare);
+  }
 
   installHeadSupport(app);
   const wikiInstance = new wiki.Wiki({
@@ -331,25 +340,42 @@ if (require.main === module) {
       });
   }
 
-  if (!fs.existsSync(path.join(render.PUBLIC_DIR, 'index.html'))) {
-    console.warn(
-      'Warning: public/index.html not found — run "npm run build" to generate static pages.'
-    );
-  }
-
   const hasPriorMatches = !isMock && db.getRecentMatches(1).length > 0;
-  const {app} = createServerApp({
-    db,
-    isMock,
-    armWatchdogOnStart: hasPriorMatches,
-  });
   const port = Number(process.env.PORT) || 1234;
-  const host = process.env.HOST ?? '127.0.0.1';
-  const server = http.createServer((req, res) => {
-    (app.handler as http.RequestListener)(req, res);
-  });
-  server.listen(port, host, () => {
-    const displayHost = host === '127.0.0.1' ? 'localhost' : host;
-    console.log(`Listening on http://${displayHost}:${port}`);
-  });
+  if (process.env.NODE_ENV === 'development') {
+    const dirs = {
+      root: ROOT,
+      out: root('build', 'static'),
+      static: root('static'),
+      extra: root('private'),
+    };
+    serve(port, dirs, app => {
+      syncBanner();
+      createServerApp({
+        app,
+        db,
+        isMock,
+        armWatchdogOnStart: hasPriorMatches,
+      });
+    });
+  } else {
+    if (!fs.existsSync(path.join(render.PUBLIC_DIR, 'index.html'))) {
+      console.warn(
+        'Warning: public/index.html not found — run "npm run build" to generate static pages.'
+      );
+    }
+    const {app} = createServerApp({
+      db,
+      isMock,
+      armWatchdogOnStart: hasPriorMatches,
+    });
+    const host = process.env.HOST ?? '127.0.0.1';
+    const server = http.createServer((req, res) => {
+      (app.handler as http.RequestListener)(req, res);
+    });
+    server.listen(port, host, () => {
+      const displayHost = host === '127.0.0.1' ? 'localhost' : host;
+      console.log(`Listening on http://${displayHost}:${port}`);
+    });
+  }
 }
