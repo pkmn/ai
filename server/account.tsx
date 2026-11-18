@@ -510,7 +510,8 @@ function renderActiveSection(entries: db.ActiveEntryView[]): Html {
                         : <span className='muted'>—</span>}
                     </td>
                     <td className='num'>
-                      <strong>{elo}</strong> <span className='muted'>±{ci}</span>
+                      <strong>{elo}</strong>
+                      {!e.isAnchor && <> <span className='muted'>±{ci}</span></>}
                     </td>
                     <td className='num'>{w}–{l}–{t}</td>
                     <td>
@@ -527,7 +528,10 @@ function renderActiveSection(entries: db.ActiveEntryView[]): Html {
                   <td><tt>{e.ladderName}</tt></td>
                   <td><code>{e.version}</code></td>
                   <td className='num muted'>—</td>
-                  <td className='num'>{elo} <span className='muted'>±{ci}</span></td>
+                  <td className='num'>
+                    {elo}
+                    {!e.isAnchor && <> <span className='muted'>±{ci}</span></>}
+                  </td>
                   <td className='num'>{w}–{l}–{t}</td>
                   <td>{settled ? 'Settled' : 'Provisional'}</td>
                 </tr>

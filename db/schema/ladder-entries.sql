@@ -17,17 +17,19 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   version_id INTEGER NOT NULL REFERENCES agent_versions(id),
   -- Matchmaking & leaderboard visibility role ('Champion + Challenger' 2-version retention):
   --   'champion': highest-LCB active version for this agent on this ladder
-  --   'challenger': second active version (up to 2 concurrent active versions per agent per ladder)
-  --   'retired': superseded when a 3rd version passed smoke test (retiring argmin lcb) or when the
-  --     season archived; excluded from new matchmaking but kept in the Davidson graph to preserve
-  --     cross-version rating calibration (including retired 1500-Elo anchors)
+  --   'challenger': secondary active version (up to 2 non-anchor active versions per agent per
+  --     ladder, plus any active 1500-Elo anchor)
+  --   'retired': superseded when a 3rd non-anchor version passed smoke test (retiring argmin lcb)
+  --     or when the season archived; excluded from new matchmaking but kept in the Davidson graph
+  --     to preserve cross-version rating calibration (including archived 1500-Elo anchors)
   --   'quarantined': temporarily suspended due to runtime faults; remembers active membership so
   --     `pkmn unquarantine` can restore its active role without reviving previously retired entries
   role TEXT NOT NULL DEFAULT 'champion'
     CHECK (role IN ('champion', 'challenger', 'retired', 'quarantined')),
   -- 1 if this version pins the ladder's 1500.0 Elo translation gauge (theta_anchor = 0 shift; UI
-  -- displays ±0 CI relative to the anchor while `se` retains inverse-Hessian curvature), else 0.
-  -- Orthogonal to `role`: a retired anchor stays in the Davidson solve at exact 1500 Elo forever.
+  -- omits ±CI on the anchor while `se` retains inverse-Hessian curvature), else 0.
+  -- Orthogonal to `role`: an anchor is never retired by the 2-version per-agent cap and stays in
+  -- the Davidson solve at exact 1500 Elo forever (even after season archival).
   is_anchor INTEGER NOT NULL DEFAULT 0 CHECK (is_anchor IN (0, 1)),
   -- Posterior mode (MAP) Generalized Davidson rating on the standard Elo scale (anchor = 1500).
   elo REAL NOT NULL DEFAULT 1500.0,

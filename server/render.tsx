@@ -1770,7 +1770,7 @@ function renderHistorySection(
       ]
       : pts.map(pt => ({x: mapX(pt.day), y: mapY(pt.elo), pt}));
 
-    if (aIdx === 0 && coords.length >= 2) {
+    if (aIdx === 0 && coords.length >= 2 && !agent.isAnchor) {
       const upper = coords.map(c => `${c.x},${mapY(c.pt.elo + 1.96 * c.pt.se)}`);
       const lower = [...coords].reverse().map(c => `${c.x},${mapY(c.pt.elo - 1.96 * c.pt.se)}`);
       svgElements.push(
@@ -2195,10 +2195,10 @@ function renderSingleLadderArtifact(opts: {
 
       const eloRounded = Math.round(e.elo);
       const ci95 = e.isAnchor ? 0 : Math.round(1.96 * e.se);
+      const eloNode = isRankedPrimary ? <strong>{eloRounded}</strong> : eloRounded;
       const eloCell = (
         <td className='num'>
-          {isRankedPrimary ? <strong>{eloRounded}</strong> : eloRounded}{' '}
-          <span className='muted'>±{ci95}</span>
+          {e.isAnchor ? eloNode : <>{eloNode} <span className='muted'>±{ci95}</span></>}
         </td>
       );
 

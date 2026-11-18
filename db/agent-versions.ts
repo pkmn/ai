@@ -660,8 +660,9 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
 // Applies smoke-test or quarantine outcomes from the Arena runner:
 //   - Always scrubs `auth_token_encoding = NULL` so private pull tokens never persist at rest.
 //   - On `'passed'`: promotes any staged `'pending'` team rosters to `'active'` and enforces the
-//     2-version Champion + Challenger cap per ladder by retiring `argmin(lcb)` when a 3rd active
-//     version enters (preserving its historical edges in the Davidson graph).
+//     2-version Champion + Challenger cap per ladder across non-anchor versions by retiring
+//     `argmin(lcb)` when a 3rd non-anchor active version enters (anchors always stay active, and
+//     retired entries keep their historical edges in the Davidson graph).
 //   - On `'failed'` / `'quarantined'`: discards staged `'pending'` teams and resets `notified = 0`
 //     so `server/discord.ts` delivers diagnostic DMs to linked owners.
 export function applySubmissionStatus(
@@ -703,7 +704,10 @@ export function applySubmissionStatus(
               rank_current = NULL,
               rank_min = NULL,
               rank_max = NULL
-          WHERE ladder_id = ? AND version_id = ? AND role IN ('champion', 'challenger')
+          WHERE ladder_id = ?
+            AND version_id = ?
+            AND role IN ('champion', 'challenger')
+            AND is_anchor = 0
         `);
         for (const [ladderId, retiredId] of Object.entries(input.retiredVersionIdsByLadder)) {
           if (!Number.isInteger(retiredId) || retiredId === prev.id) continue;
@@ -778,9 +782,9 @@ export function applySubmissionStatus(
             rank_current = NULL,
             rank_min = NULL,
             rank_max = NULL
-        WHERE ladder_id = ? AND version_id = ?
+        WHERE ladder_id = ? AND version_id = ? AND is_anchor = 0
       `);
-      const selectOtherActive = db.prepare(`
+      const selectOtherNonAnchorActive = db.prepare(`
         SELECT le.version_id, le.lcb, le.elo
         FROM ladder_entries le
         JOIN agent_versions av ON av.id = le.version_id
@@ -788,6 +792,7 @@ export function applySubmissionStatus(
           AND av.agent_id = ?
           AND le.version_id != ?
           AND le.role IN ('champion', 'challenger')
+          AND le.is_anchor = 0
         ORDER BY le.lcb ASC, le.elo ASC, le.version_id ASC
       `);
       const upsertEntry = db.prepare(`
@@ -820,32 +825,27 @@ export function applySubmissionStatus(
         if (!ladder) continue;
         teams.promotePendingTeams(db, ladderId, prev.agentId);
 
-        const otherActive = selectOtherActive.all(
+        const otherNonAnchorActive = selectOtherNonAnchorActive.all(
           ladderId,
           prev.agentId,
           prev.id
         ) as Array<{version_id: number; lcb: number; elo: number}>;
 
-        while (otherActive.length >= 2) {
-          const weakest = otherActive.shift()!;
+        while (otherNonAnchorActive.length >= 2) {
+          const weakest = otherNonAnchorActive.shift()!;
           retireEntry.run(now, ladderId, weakest.version_id);
           retiredByLadder[ladderId] = weakest.version_id;
         }
 
-        const role: entries.EntryRole = otherActive.length === 0 ? 'champion' : 'challenger';
-        if (otherActive.length === 1) {
-          db.prepare(
-            "UPDATE ladder_entries SET role = 'champion' WHERE ladder_id = ? AND version_id = ?"
-          ).run(ladderId, otherActive[0].version_id);
-        }
         upsertEntry.run(
           ladderId,
           prev.id,
-          role,
+          'challenger',
           input.smokeTurnMillis ?? 0,
           input.smokePeakRam ?? 0,
           now
         );
+        entries.promoteRemainingActiveToChampion(db, ladderId, prev.agentId);
         ensureAgentLadderStats(db, ladderId, prev.agentId);
       }
 
@@ -983,7 +983,12 @@ export function unquarantineVersion(
         continue;
       }
 
-      const otherActive = db.prepare(`
+      const selfEntry = db.prepare(
+        'SELECT is_anchor FROM ladder_entries WHERE ladder_id = ? AND version_id = ?'
+      ).get(ladderId, ver.id) as {is_anchor: number} | undefined;
+      const isSelfAnchor = selfEntry?.is_anchor === 1;
+
+      const otherNonAnchorActive = db.prepare(`
         SELECT le.version_id
         FROM ladder_entries le
         JOIN agent_versions av ON av.id = le.version_id
@@ -991,13 +996,14 @@ export function unquarantineVersion(
           AND av.agent_id = ?
           AND le.version_id != ?
           AND le.role IN ('champion', 'challenger')
+          AND le.is_anchor = 0
       `).all(ladderId, ver.agentId, ver.id) as Array<{version_id: number}>;
 
-      const nextRole: entries.EntryRole = otherActive.length >= 2
+      const nextRole: entries.EntryRole = !isSelfAnchor && otherNonAnchorActive.length >= 2
         ? 'retired'
-        : otherActive.length === 1
-          ? 'challenger'
-          : 'champion';
+        : otherNonAnchorActive.length === 0
+          ? 'champion'
+          : 'challenger';
       const retiredAt = nextRole === 'retired' ? now : null;
 
       db.prepare(`

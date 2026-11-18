@@ -1654,6 +1654,115 @@ describe('ladder activation invariants', () => {
     expect(db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_080).status).toBe('active');
   });
 
+  test('setLadderAnchor reactivates retired anchor and trims excess when reassigned', () => {
+    const packedRby = validateHarvestedTeams(generateValidHarvestedTeams('gen1ou', 4), 'gen1ou');
+    db.replaceLadderTeams('gen1ou20261109', packedRby, 1_760_000_020);
+
+    const alpha = db.getAgentBySlug('alpha')!;
+    const beta = db.getAgentBySlug('beta')!;
+
+    const subB1 = db.createSubmission({
+      agentId: beta.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/beta-1.0.0.tar.zst',
+      sha256: '9'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_030,
+    });
+    db.applySubmissionStatus({versionId: subB1.id, smokeStatus: 'passed', now: 1_760_000_035});
+    db.setLadderAnchor('gen1ou20261109', 'beta', '1.0.0', 1_760_000_040);
+
+    const recordSeries = (idPrefix: string, p1: number, p2: number, baseTs: number) => {
+      for (let i = 0; i < 65; i++) {
+        const g2 = i % 3 === 0 ? 'L' : 'W';
+        const cat = g2 === 'W' ? 'WW' : 'WL';
+        db.recordCompletedMatch({
+          match: {
+            id: `gen1ou-${idPrefix}-${i}`,
+            ladderId: 'gen1ou20261109',
+            p1VersionId: p1,
+            p2VersionId: p2,
+            seed: `1,2,3,${i}`,
+            game1Outcome: 'W',
+            game2Outcome: g2,
+            category: cat,
+            game1Turns: 20,
+            game2Turns: 20,
+            game1EndReason: 'normal',
+            game2EndReason: 'normal',
+            p1PeakRam: 128,
+            p2PeakRam: 128,
+            p1Game1BankSeconds: 120,
+            p1Game2BankSeconds: 120,
+            p2Game1BankSeconds: 120,
+            p2Game2BankSeconds: 120,
+            p1MeanTurnMillis: 100,
+            p2MeanTurnMillis: 100,
+            completedAt: baseTs + i,
+          },
+        });
+      }
+    };
+
+    // Submit 3 escalating versions of alpha before setting alpha 1.0.0 as anchor -> 1.0.0 retires
+    const alphaIds: number[] = [];
+    for (const [idx, ver] of ['1.0.0', '1.5.0', '2.0.0'].entries()) {
+      if (idx > 0) db.refundCooldown('alpha', 1_760_000_090 + idx * 500);
+      const sub = db.createSubmission({
+        agentId: alpha.id,
+        version: ver,
+        package: 'bundle',
+        url: `https://github.com/pkmn/alpha-${ver}.tar.zst`,
+        sha256: String(idx + 1).repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_100 + idx * 500,
+      });
+      db.applySubmissionStatus({
+        versionId: sub.id,
+        smokeStatus: 'passed',
+        now: 1_760_000_110 + idx * 500,
+      });
+      if (idx === 0) {
+        db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_115);
+      }
+      alphaIds.push(sub.id);
+      const opp = idx === 0 ? subB1.id : alphaIds[idx - 1];
+      recordSeries(`a${idx}`, sub.id, opp, 1_760_000_120 + idx * 500);
+    }
+
+    const beforeAnchor = db.getLeaderboardEntries('gen1ou20261109')
+      .filter(e => e.agentSlug === 'alpha');
+    expect(beforeAnchor.find(e => e.version === '1.0.0')?.role).toBe('retired');
+
+    // Designating retired 1.0.0 as anchor reactivates it alongside stronger 1.5.0 + 2.0.0
+    db.setLadderAnchor('gen1ou20261109', 'alpha', '1.0.0', 1_760_002_000);
+    const withAnchor = db.getLeaderboardEntries('gen1ou20261109')
+      .filter(e => e.agentSlug === 'alpha');
+    expect(withAnchor.filter(e => e.role !== 'retired')).toHaveLength(3);
+    expect(withAnchor.find(e => e.version === '2.0.0')?.role).toBe('champion');
+    expect(withAnchor.find(e => e.version === '1.5.0')?.role).toBe('challenger');
+    expect(withAnchor.find(e => e.version === '1.0.0')?.isAnchor).toBe(true);
+    expect(withAnchor.find(e => e.version === '1.0.0')?.role).toBe('challenger');
+
+    // Unquarantining 2.0.0 while 1.0.0 (anchor) + 1.5.0 are active restores 2.0.0 as active
+    db.quarantineVersion('alpha', '2.0.0', 'Transient fault', 1_760_002_050);
+    db.unquarantineVersion('alpha', '2.0.0', 1_760_002_060);
+    const afterUnq = db.getLeaderboardEntries('gen1ou20261109')
+      .filter(e => e.agentSlug === 'alpha' && e.role !== 'retired');
+    expect(afterUnq).toHaveLength(3);
+
+    // Moving the anchor back to beta 1.0.0 trims alpha's 3 non-anchor active versions back to 2
+    db.setLadderAnchor('gen1ou20261109', 'beta', '1.0.0', 1_760_002_100);
+    const afterMove = db.getLeaderboardEntries('gen1ou20261109')
+      .filter(e => e.agentSlug === 'alpha');
+    expect(afterMove.filter(e => e.role !== 'retired').map(e => e.version).sort()).toEqual([
+      '1.5.0',
+      '2.0.0',
+    ]);
+    expect(afterMove.find(e => e.version === '1.0.0')?.role).toBe('retired');
+  });
+
   test('setLadderStatus activates pools ladders once 4 distinct rosters exist', () => {
     const vgcAgents = ['alpha', 'beta', 'gamma', 'delta'];
     for (let i = 0; i < 3; i++) {

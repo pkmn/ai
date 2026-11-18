@@ -19,6 +19,7 @@ export interface ActiveEntryView {
   versionId: number;
   version: string;
   role: 'champion' | 'challenger';
+  isAnchor: boolean;
   elo: number;
   se: number;
   rankCurrent?: number;
@@ -190,6 +191,7 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
       le.version_id,
       av.version,
       le.role,
+      le.is_anchor,
       le.elo,
       le.se,
       le.rank_current,
@@ -228,6 +230,7 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
     versionId: r.version_id as number,
     version: r.version as string,
     role: r.role as 'champion' | 'challenger',
+    isAnchor: (r.is_anchor as number) === 1,
     elo: r.elo as number,
     se: r.se as number,
     rankCurrent: (r.rank_current as number | null) ?? undefined,
@@ -1132,17 +1135,75 @@ export function setLadderAnchor(
     if (ladder.status === 'archived') {
       throw new Error(`Cannot change anchor on archived ladder "${ladderId}"`);
     }
-    const entry = db.prepare(
-      'SELECT 1 FROM ladder_entries WHERE ladder_id = ? AND version_id = ?'
-    ).get(ladderId, versionId);
+    const entry = db.prepare(`
+      SELECT le.role, av.smoke_status, a.status AS agent_status
+      FROM ladder_entries le
+      JOIN agent_versions av ON av.id = le.version_id
+      JOIN agents a ON a.id = av.agent_id
+      WHERE le.ladder_id = ? AND le.version_id = ?
+    `).get(ladderId, versionId) as {
+      role: EntryRole;
+      smoke_status: string;
+      agent_status: string;
+    } | undefined;
     if (!entry) {
       throw new Error(`Version ${versionId} has no entry on ladder "${ladderId}"`);
     }
 
+    const prevAnchors = db.prepare(`
+      SELECT DISTINCT av.agent_id
+      FROM ladder_entries le
+      JOIN agent_versions av ON av.id = le.version_id
+      WHERE le.ladder_id = ? AND le.is_anchor = 1
+    `).all(ladderId) as Array<{agent_id: number}>;
+
     db.prepare('UPDATE ladder_entries SET is_anchor = 0 WHERE ladder_id = ?').run(ladderId);
-    db.prepare(
-      'UPDATE ladder_entries SET is_anchor = 1 WHERE ladder_id = ? AND version_id = ?'
-    ).run(ladderId, versionId);
+    if (
+      entry.role === 'retired' &&
+      entry.smoke_status === 'passed' &&
+      entry.agent_status !== 'disabled'
+    ) {
+      db.prepare(`
+        UPDATE ladder_entries
+        SET is_anchor = 1, role = 'challenger', retired_at = NULL
+        WHERE ladder_id = ? AND version_id = ?
+      `).run(ladderId, versionId);
+    } else {
+      db.prepare(
+        'UPDATE ladder_entries SET is_anchor = 1 WHERE ladder_id = ? AND version_id = ?'
+      ).run(ladderId, versionId);
+    }
+
+    // If an agent previously held the anchor alongside 2 other active versions, clearing
+    // `is_anchor = 0` leaves 3 non-anchor active versions—trim excess back to the 2-version cap.
+    const selectNonAnchorActive = db.prepare(`
+      SELECT le.version_id
+      FROM ladder_entries le
+      JOIN agent_versions av ON av.id = le.version_id
+      WHERE le.ladder_id = ?
+        AND av.agent_id = ?
+        AND le.role IN ('champion', 'challenger')
+        AND le.is_anchor = 0
+      ORDER BY le.lcb ASC, le.elo ASC, le.version_id ASC
+    `);
+    const retireExcess = db.prepare(`
+      UPDATE ladder_entries
+      SET role = 'retired',
+          retired_at = ?,
+          rank_current = NULL,
+          rank_min = NULL,
+          rank_max = NULL
+      WHERE ladder_id = ? AND version_id = ? AND is_anchor = 0
+    `);
+    for (const prev of prevAnchors) {
+      const nonAnchorActive = selectNonAnchorActive.all(ladderId, prev.agent_id) as Array<{
+        version_id: number;
+      }>;
+      while (nonAnchorActive.length > 2) {
+        const weakest = nonAnchorActive.shift()!;
+        retireExcess.run(now, ladderId, weakest.version_id);
+      }
+    }
 
     const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
     recomputeLadderRatings(db, ladderId, now, undefined, dayUtc);

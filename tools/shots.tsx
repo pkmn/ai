@@ -491,6 +491,75 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       click: 'label[for="ver-all"]',
     },
     {
+      name: 'arena-ladder-rby-anchor',
+      section: 'ladders',
+      title: 'RBY (Anchor + 2 Active)',
+      path: '/arena/ladders/rby/',
+      setup: fixture => withSavepoint(fixture, raw => {
+        const meta = raw.prepare("SELECT id FROM agents WHERE slug = 'metamon'")
+          .get() as {id: number};
+        const anchorEntry = raw.prepare(`
+          SELECT le.rank_current
+          FROM ladder_entries le
+          JOIN agent_versions av ON av.id = le.version_id
+          WHERE le.ladder_id = ? AND av.agent_id = ? AND le.is_anchor = 1
+        `).get(RBY_LADDER_ID, meta.id) as {rank_current: number | null};
+        const oldRank = anchorEntry?.rank_current ?? 99;
+        raw.prepare(`
+          UPDATE ladder_entries
+          SET rank_current = rank_current + 1
+          WHERE ladder_id = ? AND rank_current >= 2 AND rank_current < ?
+        `).run(RBY_LADDER_ID, oldRank);
+        raw.prepare(`
+          UPDATE ladder_entries
+          SET role = 'challenger', rank_current = NULL, rank_min = NULL, rank_max = NULL
+          WHERE ladder_id = ?
+            AND version_id IN (SELECT id FROM agent_versions WHERE agent_id = ?)
+            AND is_anchor = 1
+        `).run(RBY_LADDER_ID, meta.id);
+
+        const insVer = raw.prepare(`
+          INSERT INTO agent_versions (
+            agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+            smoke_status, submitted_at, activated_at
+          ) VALUES (?, ?, 'oci', ?, ?, ?, '[]', 'passed', ?, ?)
+        `);
+        const insEntry = raw.prepare(`
+          INSERT INTO ladder_entries (
+            ladder_id, version_id, role, is_anchor, elo, se, lcb, gxe,
+            rank_current, matches, ww, wt, split, tl, ll,
+            current_win_streak, settled_at, started_at
+          ) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, 32, 20, 0, 6, 0, 6, 2, ?, ?)
+        `);
+        const v15 = Number(insVer.run(
+          meta.id,
+          '1.5.0',
+          'ghcr.io/ut-austin-rpl/metamon:1.5.0',
+          'e'.repeat(64),
+          JSON.stringify([RBY_LADDER_ID]),
+          NOW_SECONDS - 86400 * 16,
+          NOW_SECONDS - 86400 * 16
+        ).lastInsertRowid);
+        insEntry.run(
+          RBY_LADDER_ID, v15, 'challenger', 1615, 22, 1571.9, 68.4, null,
+          NOW_SECONDS - 86400 * 10, NOW_SECONDS - 86400 * 16
+        );
+        const v20 = Number(insVer.run(
+          meta.id,
+          '2.0.0',
+          'ghcr.io/ut-austin-rpl/metamon:2.0.0',
+          'f'.repeat(64),
+          JSON.stringify([RBY_LADDER_ID]),
+          NOW_SECONDS - 86400,
+          NOW_SECONDS - 86400
+        ).lastInsertRowid);
+        insEntry.run(
+          RBY_LADDER_ID, v20, 'champion', 1725, 21, 1683.8, 79.6, 2,
+          NOW_SECONDS - 3600, NOW_SECONDS - 86400
+        );
+      }),
+    },
+    {
       name: 'arena-ladder-vgc',
       section: 'ladders',
       title: 'VGC',
