@@ -17,6 +17,26 @@ ARENA_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 sudo apt-get update -y
 sudo apt-get install -y bubblewrap skopeo umoci jq util-linux zstd gcc libc6-dev curl
 
+echo "==> Blocking uncommon kernel socket modules (sctp, dccp, rds, tipc) in /etc/modprobe.d/arena-blacklist.conf"
+# Prevent unprivileged `bwrap` entrants from auto-loading kernel socket modules via `request_module`
+# (e.g. CVE-2026-64564 / CVE-2026-72447) during smoke tests and on snapshotted Spot Worker VMs.
+sudo tee /etc/modprobe.d/arena-blacklist.conf >/dev/null <<'EOF'
+install sctp /bin/false
+blacklist sctp
+install dccp /bin/false
+blacklist dccp
+install rds /bin/false
+blacklist rds
+install tipc /bin/false
+blacklist tipc
+EOF
+sudo chmod 0644 /etc/modprobe.d/arena-blacklist.conf
+sudo modprobe -r sctp dccp rds tipc 2>/dev/null || true
+if lsmod | awk '{print $1}' | grep -qxE 'sctp|dccp|rds|tipc'; then
+  echo "ERROR: Blocked kernel socket module remains loaded on staging VM" >&2
+  exit 1
+fi
+
 echo "==> Compiling /usr/local/bin/tourney-relay and installing /usr/local/bin/tourney-agent"
 RELAY_BUILD_DIR="$(mktemp -d /tmp/tourney-relay-build.XXXXXX)"
 chmod 0700 "$RELAY_BUILD_DIR"

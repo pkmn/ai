@@ -413,6 +413,24 @@ describe('arena infrastructure', () => {
         .toContain('launchctl kill SIGUSR1 system/ai.pkmn.arena');
       expect(sudoers).toContain('/bin/launchctl kill SIGUSR1 system/ai.pkmn.arena');
     });
+
+    test('blocks kernel socket module auto-loading inside Podman VM in setup-arena.sh', () => {
+      const setupScript = fs.readFileSync(root('arena', 'scripts', 'setup-arena.sh'), 'utf8');
+      expect(setupScript).toContain('/etc/modprobe.d/arena-blacklist.conf');
+      expect(setupScript).toContain('install sctp /bin/false');
+      expect(setupScript).toContain('blacklist sctp');
+      expect(setupScript).toContain('sudo modprobe -r sctp dccp rds tipc');
+    });
+
+    test('blocks kernel socket module auto-loading prior to smoke tests in bake-image.sh', () => {
+      const bakeScript = fs.readFileSync(root('arena', 'scripts', 'bake-image.sh'), 'utf8');
+      const blacklistPos = bakeScript.indexOf('/etc/modprobe.d/arena-blacklist.conf');
+      const smokePos = bakeScript.indexOf('/usr/local/bin/tourney-agent');
+      expect(blacklistPos).toBeGreaterThan(0);
+      expect(smokePos).toBeGreaterThan(blacklistPos);
+      expect(bakeScript).toContain('install sctp /bin/false');
+      expect(bakeScript).toContain('blacklist sctp');
+    });
   });
 
   describe('tourney-relay binary', () => {

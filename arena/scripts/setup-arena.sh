@@ -135,10 +135,17 @@ if command -v podman >/dev/null 2>&1; then
       --volume /opt/arena/stats:/opt/arena/stats:ro \
       podman-machine-default
   fi
+  WAS_RUNNING="$(podman machine inspect --format '{{.State}}' podman-machine-default 2>/dev/null || true)"
   podman machine start podman-machine-default 2>/dev/null || true
-  # Stop the interactive VM before bootstrapping `ai.pkmn.podman.plist` (`RunAtLoad=true`) so
-  # `launchd` takes sole ownership of `podman-machine-default` without colliding on the disk image.
-  podman machine stop podman-machine-default 2>/dev/null || true
+  # Block uncommon Linux socket modules (`sctp`, `dccp`, `rds`, `tipc`) from auto-loading inside
+  # the shared Podman VM when untrusted containers invoke `socket(...)` (e.g. CVE-2026-64564).
+  podman machine ssh podman-machine-default \
+    'printf "install sctp /bin/false\nblacklist sctp\ninstall dccp /bin/false\nblacklist dccp\ninstall rds /bin/false\nblacklist rds\ninstall tipc /bin/false\nblacklist tipc\n" | sudo tee /etc/modprobe.d/arena-blacklist.conf >/dev/null && sudo chmod 0644 /etc/modprobe.d/arena-blacklist.conf && { sudo modprobe -r sctp dccp rds tipc 2>/dev/null || true; }'
+  if [[ "$WAS_RUNNING" != "running" ]]; then
+    # Stop the interactive VM before bootstrapping `ai.pkmn.podman.plist` (`RunAtLoad=true`) so
+    # `launchd` takes sole ownership of `podman-machine-default` without colliding on the disk image.
+    podman machine stop podman-machine-default 2>/dev/null || true
+  fi
 fi
 
 echo "==> Step 8: Installing LaunchDaemons (ai.pkmn.pf, ai.pkmn.podman, ai.pkmn.arena, ai.pkmn.archive)"

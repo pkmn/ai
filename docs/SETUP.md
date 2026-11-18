@@ -77,10 +77,23 @@ ufw enable
 ufw status
 ```
 
-Install general packages required to set up and maintain the server:
+Install general packages required to set up and maintain the server, and disable unused kernel
+socket protocol modules (`sctp`, `dccp`, `rds`, `tipc`) from auto-loading:
 
 ```sh
 apt-get install -y git curl build-essential sqlite3 zstd
+cat <<'EOF' > /etc/modprobe.d/arena-blacklist.conf
+install sctp /bin/false
+blacklist sctp
+install dccp /bin/false
+blacklist dccp
+install rds /bin/false
+blacklist rds
+install tipc /bin/false
+blacklist tipc
+EOF
+chmod 0644 /etc/modprobe.d/arena-blacklist.conf
+modprobe -r sctp dccp rds tipc 2>/dev/null || true
 ```
 
 Create a restricted, shell-less `tunnel` user so the Mac mini Arena runner can open an outbound SSH

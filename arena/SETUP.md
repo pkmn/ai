@@ -577,8 +577,9 @@ What `setup-arena.sh` provisions:
    `/Volumes/{P1,P2,Staging}`, and disables automatic macOS updates.
 7. **Podman VM & LaunchDaemons:** Initializes rootless `podman-machine-default` (`10` vCPUs,
    `30 GiB` / `30,720 MiB` RAM, `48 GB` disk, zero swap; containers run `--read-only` with
-   `--tmpfs /tmp:size=500m`), stops the interactive VM cleanly for `launchd` ownership, and copies
-   `ai.pkmn.{pf,podman,arena,archive}.plist` to `/Library/LaunchDaemons/`.
+   `--tmpfs /tmp:size=500m`), disables uncommon Linux socket modules (`sctp`, `dccp`, `rds`, `tipc`)
+   via `/etc/modprobe.d/arena-blacklist.conf`, stops the interactive VM cleanly for `launchd`
+   ownership, and copies `ai.pkmn.{pf,podman,arena,archive}.plist` to `/Library/LaunchDaemons/`.
 
 ### Step 5.2: Bootstrap `ai.pkmn.pf` & Reload Hardened `sshd`
 
@@ -738,8 +739,8 @@ ssh arena '
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
 
-# 1. Verify ~30 GiB RAM and 0B swap inside the rootless VM
-podman machine ssh podman-machine-default "free -h"
+# 1. Verify ~30 GiB RAM, 0B swap, and kernel socket module blacklist inside the rootless VM
+podman machine ssh podman-machine-default "free -h && test -f /etc/modprobe.d/arena-blacklist.conf"
 
 # 2. Build a tiny local OCI test image and run it through /opt/arena/bin/arena
 CTX_DIR="$(mktemp -d /Volumes/Staging/podman-verify-XXXXXX)"
