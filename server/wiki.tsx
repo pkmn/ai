@@ -7,6 +7,7 @@ import * as querystring from 'querystring';
 import {promisify} from 'util';
 
 import * as djot from '@djot/djot';
+import hljs from 'highlight.js';
 import katex from 'katex';
 import polka from 'polka';
 import * as yaml from 'yaml';
@@ -327,11 +328,34 @@ function renderSafeMath(tex: string, displayMode: boolean): string {
   }
 }
 
+function renderSafeCode(source: string, lang?: string): string {
+  const trimmed = source.trimEnd();
+  if (!lang) return escapeHtml(trimmed);
+  if (lang === 'console') {
+    let cont = false;
+    return trimmed.split('\n').map(line => {
+      if (cont) {
+        cont = line.endsWith('\\');
+        return escapeHtml(line);
+      }
+      if (line.startsWith('$ ')) {
+        cont = line.endsWith('\\');
+        const prompt = String(<span className='hl-title function_'>$</span>);
+        return `${prompt} ${escapeHtml(line.slice(2))}`;
+      }
+      if (line.startsWith('#')) return String(<span className='hl-comment'>{line}</span>);
+      return String(<span className='hl-output'>{line}</span>);
+    }).join('\n');
+  }
+  if (!hljs.getLanguage(lang)) return escapeHtml(trimmed);
+  return hljs.highlight(trimmed, {language: lang, ignoreIllegals: true}).value;
+}
+
 // Locked-down rich-text Djot AST renderer for user-authored wiki pages:
 //   - Drops all raw HTML (`raw_block`, `raw_inline`) and external `<img>` beacons at the AST level
-//   - Ignores all user-supplied Djot `{...}` attributes (`id`, `class`, `onclick`, `style`, etc.)
+//   - Supports `::: aside` and `{title="..."}` captions, ignoring all other `{...}` attributes
 //   - Allows only `https://`, `http://`, `/...`, `#...`, and relative wiki links on `<a>`
-//   - Escapes all text and code blocks directly via `escapeHtml` with no post-hoc regex sanitizer
+//   - Escapes all text and syntax-highlighted code blocks with no post-hoc regex sanitizer
 export function renderDjot(rawText: string, save?: {title?: string; summary?: string}): string {
   const {content} = parsePageContent(rawText);
   const doc = djot.parse(content);
@@ -440,6 +464,17 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
     }
   };
 
+  const renderSafeTitle = (rawTitle: string | undefined, depth: number): string => {
+    const trimmed = rawTitle?.trim();
+    if (!trimmed || depth > MAX_AST_DEPTH) return '';
+    const parsed = djot.parse(trimmed);
+    return parsed.children
+      .filter((b): b is djot.Para => b.tag === 'para')
+      .map(p => renderInlines(p.children, depth + 1))
+      .join(' ')
+      .trim();
+  };
+
   const renderListItemBlocks = (blocks: djot.Block[], tight: boolean, depth: number): string => {
     if (tight && blocks.length === 1 && blocks[0].tag === 'para') {
       return renderInlines(blocks[0].children, depth);
@@ -483,12 +518,29 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         const inner = renderBlocks(node.children, secId, nextDepth);
         return `${String(<section id={secId}>{raw(`\n${inner}`)}</section>)}\n`;
       }
-      case 'div':
+      case 'div': {
+        const classes = node.attributes?.class?.split(/\s+/) ?? [];
+        if (classes.includes('aside')) {
+          const title = renderSafeTitle(node.attributes?.title, nextDepth);
+          const body = renderBlocks(node.children, undefined, nextDepth);
+          return `${String(
+            <aside>
+              {title ? <div className='title'>{raw(title)}</div> : ''}
+              {raw(`\n${body}`)}
+            </aside>
+          )}\n`;
+        }
         return renderBlocks(node.children, undefined, nextDepth);
-      case 'code_block':
+      }
+      case 'code_block': {
+        const title = renderSafeTitle(node.attributes?.title, nextDepth);
         return `${String(
-          <figure className='code'><pre><code>{node.text.trimEnd()}</code></pre></figure>
+          <figure className='code'>
+            {title ? <figcaption className='title'>{raw(title)}</figcaption> : ''}
+            <pre><code>{raw(renderSafeCode(node.text, node.lang))}</code></pre>
+          </figure>
         )}\n`;
+      }
       case 'raw_block':
         return '';
       case 'block_quote':

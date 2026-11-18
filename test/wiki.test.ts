@@ -212,6 +212,33 @@ describe('wiki helpers', () => {
     expect(html).toContain('<th>Move</th><th>Accuracy</th>');
     expect(html).toContain('<td><em>Thunderbolt</em></td><td><code>100%</code></td>');
   });
+
+  test('renderDjot renders aside callouts with sanitized titles', () => {
+    const raw = [
+      '{title="Note `<script>alert(1)</script>`{=html}" onclick="alert(2)"}',
+      '::: aside',
+      'Raw thoughts welcome.',
+      ':::',
+    ].join('\n');
+    const html = wiki.renderDjot(raw);
+    expect(html).toContain('<aside><div class="title">Note</div>');
+    expect(html).toContain('<p>Raw thoughts welcome.</p>');
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('onclick');
+  });
+
+  test('renderDjot highlights fenced code blocks with optional title captions', () => {
+    const raw = [
+      '{title="example.ts `<img src=x onerror=alert(1)>`{=html}"}',
+      '```ts',
+      'export const evaluate = (state: State): number => 0;',
+      '```',
+    ].join('\n');
+    const html = wiki.renderDjot(raw);
+    expect(html).toContain('<figcaption class="title">example.ts</figcaption>');
+    expect(html).toContain('<span class="hl-keyword">export</span>');
+    expect(html).not.toContain('onerror');
+  });
 });
 
 function copyDirSync(src: string, dst: string) {
