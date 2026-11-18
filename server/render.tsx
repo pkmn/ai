@@ -4051,7 +4051,6 @@ export function register(app: polka.Polka, options: Options) {
         for (const s of summaries) {
           arenaByName.set(s.name, {
             slug: s.slug,
-            name: s.name,
             profileHref: `/projects/${encodeURIComponent(s.slug)}/`,
             bestRank: s.bestRank,
             bestLcb: s.bestLcb,

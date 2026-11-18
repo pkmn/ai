@@ -17,7 +17,6 @@ export interface ArenaBadge {
 
 export interface ArenaInfo {
   slug: string;
-  name: string;
   profileHref?: string;
   bestRank?: number;
   bestLcb?: number;
@@ -119,7 +118,6 @@ const ProjectCard = ({project, bibliography, arenaInfo}: {
     </>;
 
   const title = project.name ?? <em>{project.identifier ?? identifier}</em>;
-  const displayName = project.name ?? arenaInfo?.name ?? (project.identifier ?? identifier)!;
   const defaultProfileHref = slug ? `/projects/${encodeURIComponent(slug)}/` : `#${id}`;
   const profileHref = arenaInfo?.profileHref ?? defaultProfileHref;
 
@@ -146,7 +144,7 @@ const ProjectCard = ({project, bibliography, arenaInfo}: {
       {isArena && <tr>
         <td><strong>Arena</strong></td>
         <td>
-          <a href={profileHref} className='arena-agent'><strong>{displayName}</strong></a>
+          <a href={profileHref} className='arena-agent'><strong>{project.name}</strong></a>
           {arenaInfo && arenaInfo.ladders.length > 0 && <>
             {' · '}
             {arenaInfo.ladders.map((b, idx) => <>
