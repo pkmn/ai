@@ -212,7 +212,12 @@ function renderPageHtml(opts: {
   });
 }
 
-function wikiNav(slug: string, active: 'view' | 'edit' | 'history' | 'pages'): Html {
+function wikiNav(
+  slug: string,
+  active: 'view' | 'edit' | 'history' | 'pages',
+  loggedIn = false,
+  returnTo = '/wiki'
+): Html {
   const item = (key: typeof active, href: string, label: string) =>
     key === active ? <strong>{label}</strong> : <a href={href}>{label}</a>;
   const encoded = encodeSlug(slug);
@@ -221,6 +226,16 @@ function wikiNav(slug: string, active: 'view' | 'edit' | 'history' | 'pages'): H
     {item('view', viewHref, 'View')} — {item('edit', `/wiki/${encoded}/edit`, 'Edit')} —{' '}
     {item('history', `/wiki/${encoded}/history`, 'History')} —{' '}
     {item('pages', '/wiki/pages', 'Pages')}
+    {loggedIn && <>
+      {' — '}
+      <form
+        method='POST'
+        action={`/auth/logout?return_to=${encodeURIComponent(returnTo)}`}
+        className='inline-form'
+      >
+        <button type='submit' className='link-btn'>Logout</button>
+      </form>
+    </>}
   </nav>;
 }
 
@@ -1264,11 +1279,13 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     const meta: {title?: string; summary?: string} = {};
     const html = renderDjot(rawText, meta);
     const heading = meta.title ?? wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
+    const viewPath = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
+    const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
     sendHtml(res, 200, renderPage({
       title: heading,
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
-      nav: wikiNav(slug, 'view'),
+      nav: wikiNav(slug, 'view', loggedIn, viewPath),
       content: raw(html),
     }));
   };
@@ -1287,11 +1304,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       (p.visibility === 'discord' && isDiscord)
     ));
 
+    const loggedIn = Boolean(login || wiki.auth.getSession(req));
     sendHtml(res, 200, renderPage({
       title: 'Pages — Wiki',
       heading: 'Pages',
       path: '/wiki/pages/',
-      nav: wikiNav('index', 'pages'),
+      nav: wikiNav('index', 'pages', loggedIn, '/wiki/pages'),
       content: pages.length ? (
         <ul id='wiki-pages'>
           {pages.map(p => {
@@ -1376,7 +1394,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       title: heading,
       heading,
       path: `/wiki/${encoded}/edit/`,
-      nav: wikiNav(slug, 'edit'),
+      nav: wikiNav(slug, 'edit', true, `/wiki/${encoded}`),
       content: form,
     }));
   };
@@ -1526,11 +1544,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       );
       const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
       const heading = `History — ${displayTitle}`;
+      const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
       sendHtml(res, 200, renderPage({
         title: heading,
         heading,
         path: `/wiki/${encoded}/history/`,
-        nav: wikiNav(slug, 'history'),
+        nav: wikiNav(slug, 'history', loggedIn, `/wiki/${encoded}/history`),
         content: table,
       }));
     } catch (err) {
@@ -1588,11 +1607,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
         const fence = '`'.repeat(maxTicks);
         const renderedDiff = renderDjot(`${fence}diff\n${diff}\n${fence}`);
         const heading = `${displayTitle} @ ${sha.slice(0, 7)}`;
+        const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
         sendHtml(res, 200, renderPage({
           title: heading,
           heading,
           path: `/wiki/${encoded}/${sha}/`,
-          nav: wikiNav(slug, 'history'),
+          nav: wikiNav(slug, 'history', loggedIn, `/wiki/${encoded}/${sha}?diff=1`),
           content: (
             <>
               <p className='wiki-meta'>
@@ -1614,11 +1634,12 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
       const meta: {title?: string; summary?: string} = {};
       const html = renderDjot(rawText, meta);
       const heading = `${meta.title ?? displayTitle} @ ${sha.slice(0, 7)}`;
+      const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
       sendHtml(res, 200, renderPage({
         title: heading,
         heading,
         path: `/wiki/${encoded}/${sha}/`,
-        nav: wikiNav(slug, 'history'),
+        nav: wikiNav(slug, 'history', loggedIn, `/wiki/${encoded}/${sha}`),
         content: (
           <>
             <p className='wiki-meta'>

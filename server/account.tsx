@@ -737,14 +737,14 @@ export function renderAccountPage(opts: {
     <span id='discord-view'>
       <tt id='discord-val'>@{developer.discordUsername}</tt>{' '}
       <span className='muted'>
-        (<a href={linkHref} className='subtle'>change</a> /{' '}
-        <a href='#account' id='discord-unlink-btn' className='subtle'>unlink</a>)
+        (<a href={linkHref}>change</a> /{' '}
+        <a href='#account' id='discord-unlink-btn'>unlink</a>)
       </span>
     </span>
   ) : (
     <span id='discord-view'>
       <span className='muted' id='discord-val'>None</span>{' '}
-      <span className='muted'>(<a href={linkHref} className='subtle'>link</a>)</span>
+      <span className='muted'>(<a href={linkHref}>link</a>)</span>
     </span>
   );
 
@@ -850,6 +850,10 @@ export function renderAccountPage(opts: {
           <span className='muted'>Status:</span>{' '}
           <span className={statusClass} title={statusTitle}>{status.label}</span>
         </span>
+        <span className='muted'>·</span>
+        <form method='POST' action='/auth/logout?return_to=%2Farena%2F' className='inline-form'>
+          <button type='submit' className='link-btn'>Logout</button>
+        </form>
       </div>
 
       {renderActiveSection(activeEntries)}
