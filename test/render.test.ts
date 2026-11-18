@@ -1465,6 +1465,143 @@ describe('SSR cache invalidation', () => {
       }
     });
 
+  test('refreshes /arena/ relative timestamps across 15-second idle buckets', async () => {
+    forceLadderActive(db, 'gen1ou20261109');
+    const v1 = createVersionAndPassSmoke(db, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
+    const v2 = createVersionAndPassSmoke(db, 'foul-play', '1.4.0', ['gen1ou20261109'], DAY_1);
+    playMatch(db, 'gen1ou20261109', v1, v2, 'W', 'W', NOW - 10);
+
+    let currentNow = NOW;
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: () => currentNow});
+    try {
+      const initialHtml = await h.getText('/arena/');
+      expect(initialHtml).toContain('>10s ago<');
+
+      currentNow = NOW + 120;
+      const refreshedHtml = await h.getText('/arena/');
+      expect(refreshedHtml).toContain('>2m ago<');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('refreshes /arena/tournaments/:id/ relative timestamps across 15-second idle buckets',
+    async () => {
+      const vMeta = createVersionAndPassSmoke(db, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
+      const vFoul = createVersionAndPassSmoke(db, 'foul-play', '1.4.0', ['gen1ou20261109'], DAY_1);
+      const agentMeta = db.getAgentBySlug('metamon')!;
+      const agentFoul = db.getAgentBySlug('foul-play')!;
+
+      db.upsertTournament({
+        id: '1',
+        name: 'Spring ’26 — [Gen 1] OU',
+        format: 'gen1ou',
+        gamesPerMatchup: 2,
+        parallelTables: 1,
+        hardware: 'Isolated GCP c3-standard-22 VMs',
+        status: 'completed',
+        startsAt: DAY_1,
+        completedAt: NOW - 10,
+      });
+      db.upsertTournamentEntrant({
+        tournamentId: '1',
+        agentId: agentMeta.id,
+        versionId: vMeta,
+        seed: 1,
+        points: 1,
+        sonnebornBerger: 0,
+        gameWins: 1,
+        gameLosses: 0,
+        gameTies: 0,
+        elo: 1520,
+        se: 30,
+        finalRank: 1,
+      });
+      db.upsertTournamentEntrant({
+        tournamentId: '1',
+        agentId: agentFoul.id,
+        versionId: vFoul,
+        seed: 2,
+        points: 0,
+        sonnebornBerger: 0,
+        gameWins: 0,
+        gameLosses: 1,
+        gameTies: 0,
+        elo: 1480,
+        se: 30,
+        finalRank: 2,
+      });
+      db.upsertTournamentGame({
+        id: 'gen1ou-0000000001',
+        tournamentId: '1',
+        stage: 'Round Robin',
+        cycle: 1,
+        matchupGame: 1,
+        status: 'completed',
+        outcome: 'W',
+        p1: {versionId: vMeta, team: '|Tauros|'},
+        p2: {versionId: vFoul, team: '|Snorlax|'},
+        games: [
+          {
+            gameNumber: 1,
+            seed: '1,2,3,4',
+            outcome: 'W',
+            turns: 20,
+            endReason: 'normal',
+            p1: {bankSeconds: 140},
+            p2: {bankSeconds: 130},
+          },
+        ],
+        completedAt: NOW - 10,
+      });
+
+      let currentNow = NOW;
+      const h = await startRenderHarness({db, publicDir: tmpPublic, now: () => currentNow});
+      try {
+        const initialHtml = await h.getText('/arena/tournaments/1/');
+        expect(initialHtml).toContain('>10s ago<');
+
+        currentNow = NOW + 120;
+        const refreshedHtml = await h.getText('/arena/tournaments/1/');
+        expect(refreshedHtml).toContain('>2m ago<');
+      } finally {
+        await h.close();
+      }
+    });
+
+  test('invalidates /projects/ ETag when projects.dj changes on disk', async () => {
+    const tmpStatic = path.join(tmpDir, 'static');
+    fs.cpSync(root('static'), tmpStatic, {recursive: true});
+
+    const h = await startRenderHarness({
+      db,
+      publicDir: tmpPublic,
+      staticDir: tmpStatic,
+      now: NOW,
+    });
+    try {
+      const initialRes = await h.getRaw('/projects/');
+      const initialEtag = initialRes.headers.get('etag')!;
+      expect(
+        (await h.getRaw('/projects/', {headers: {'If-None-Match': initialEtag}})).status
+      ).toBe(304);
+
+      const djPath = path.join(tmpStatic, 'projects.dj');
+      fs.appendFileSync(djPath, '\nUpdated catalog intro blurb.\n');
+      const bumpedTime = new Date(Date.now() + 5000);
+      fs.utimesSync(djPath, bumpedTime, bumpedTime);
+
+      const updatedRes = await h.getRaw('/projects/', {
+        headers: {'If-None-Match': initialEtag},
+      });
+      expect(updatedRes.status).toBe(200);
+      expect(updatedRes.headers.get('etag')).not.toBe(initialEtag);
+      expect(await updatedRes.text()).toContain('Updated catalog intro blurb.');
+    } finally {
+      await h.close();
+    }
+  });
+
   function seedInlineVgcBattleFixture() {
     forceLadderActive(db, 'gen9championsvgc2026regmc');
     const vFoul = createVersionAndPassSmoke(

@@ -3662,7 +3662,7 @@ export function register(app: polka.Polka, options: Options) {
     const liveDoc = arenaHandle.getLiveDocument(nowSec);
     const activeLive = !liveDoc.stale ? liveDoc.live : undefined;
     const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
-    const bundleToken = `${dbToken}:${util.formatUtcDate(nowSec)}:${liveKey}`;
+    const bundleToken = `${dbToken}:${Math.floor(nowSec / 15)}:${liveKey}`;
     if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
     const ctx = getContext(dbToken);
     const bundle = renderArenaAndLadderArtifacts({
@@ -3782,7 +3782,7 @@ export function register(app: polka.Polka, options: Options) {
     const liveDoc = arenaHandle.getLiveDocument(nowSec);
     const activeLive = !liveDoc.stale ? liveDoc.live : undefined;
     const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
-    const token = `${dbToken}:${util.formatUtcDate(nowSec)}:${liveKey}`;
+    const token = `${dbToken}:${Math.floor(nowSec / 15)}:${liveKey}`;
     if (asJson) {
       sendCached(req, res, {
         key: 'arena:json',
@@ -3986,10 +3986,11 @@ export function register(app: polka.Polka, options: Options) {
       else sendHtmlNotFound(res);
       return;
     }
+    const nowSec = getNowSec();
     const state = arenaHandle.getState();
     const dbToken = getDbToken();
     const rulesMtime = getFileMtimeToken(path.join(staticDir, 'tours', `${tournament.id}.dj`));
-    const token = `${dbToken}:${state.liveSeq}:${rulesMtime}`;
+    const token = `${dbToken}:${state.liveSeq}:${rulesMtime}:${Math.floor(nowSec / 15)}`;
     if (isJson) {
       sendCached(req, res, {
         key: `tournament:json:${tournament.id}`,
@@ -4016,7 +4017,7 @@ export function register(app: polka.Polka, options: Options) {
           staticDir,
           tournamentBroadcast: arenaHandle.getTournamentBroadcast(tournament.id),
           liveTournament: ctx.liveTournament,
-          nowSec: getNowSec(),
+          nowSec,
         }).html;
       },
     });
@@ -4040,9 +4041,12 @@ export function register(app: polka.Polka, options: Options) {
 
   app.get('/projects', (req, res) => {
     const dbToken = getDbToken();
+    const bibMtime = getFileMtimeToken(path.join(staticDir, 'projects.bib'));
+    const projDjMtime = getFileMtimeToken(path.join(staticDir, 'projects.dj'));
+    const token = `${dbToken}:${bibMtime}:${projDjMtime}`;
     sendCached(req, res, {
       key: 'projects:html',
-      token: dbToken,
+      token,
       contentType: 'text/html; charset=utf-8',
       compute: () => {
         const ctx = getContext(dbToken);
