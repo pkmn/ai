@@ -4,11 +4,11 @@ Arena agents are executed as single-game subprocesses that speak Pokémon Showdo
 
 ## 1. Stream Lifecycle
 
-1. **Assigned Team (`|utm|<packed_team>`)**: Before `|init|battle`, the arbiter writes your full assigned team (including exact EVs, IVs, and Natures) in `@pkmn/sets` packed format:
+1. **Assigned Team (`|utm|<packed_team>`)**: In non-Random Battle formats where the Arena assigns teams (`harvested` and `pools`), before `|init|battle`, the arbiter writes your full assigned team (including exact EVs, IVs, and Natures) in `@pkmn/sets` packed format:
    ```text
    |utm|<packed_team>
    ```
-   Always slice after the 5-character prefix (`line.slice(5)`) rather than splitting on `|`, because packed team strings use `|` internally as field delimiters. In scheduled tournaments without a pre-assigned team pool (`team` unset), the arbiter sends zero lines on `stdin` before waiting for your very first `stdout` line (`/utm <packed_team>`).
+   Always slice after the 5-character prefix (`line.slice(5)`) rather than splitting on `|`, because packed team strings use `|` internally as field delimiters. In Random Battle formats (`random`), `|utm|` is omitted and `stdin` begins directly with Pokémon Showdown battle protocol lines. In scheduled tournaments without a pre-assigned team pool (`team` unset), the arbiter sends zero lines on `stdin` before waiting for your very first `stdout` line (`/utm <packed_team>`).
 2. **Battle Events & Decision Requests (`|request|<json>`)**: As the battle progresses, the arbiter writes Showdown protocol lines to your `stdin`, ending each decision prompt with:
    ```text
    |request|{"active":[...],"side":{...}}

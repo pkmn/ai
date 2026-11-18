@@ -1,7 +1,7 @@
 import {ChildProcessWithoutNullStreams, execFileSync, spawn} from 'child_process';
 import * as fs from 'fs';
 
-import {BattleStreams, PRNGSeed} from '@pkmn/sim';
+import {BattleStreams, Dex, PRNGSeed} from '@pkmn/sim';
 
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
@@ -48,6 +48,7 @@ export interface ArenaGameOptions {
   p2Spec: AgentLaunchSpec;
   p1TeamPacked?: string;
   p2TeamPacked?: string;
+  sendUtm?: boolean;
   maxTurns?: number;
   smokeStopAfterTurn?: number;
   startingBankSeconds?: number;
@@ -339,6 +340,7 @@ export class TimeSlicedArenaGame {
   private readonly p2Spec: AgentLaunchSpec;
   private readonly p1TeamPacked?: string;
   private readonly p2TeamPacked?: string;
+  private readonly sendUtm: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
   private readonly startingBankMillis: number;
@@ -373,6 +375,7 @@ export class TimeSlicedArenaGame {
     this.p2Spec = options.p2Spec;
     this.p1TeamPacked = options.p1TeamPacked;
     this.p2TeamPacked = options.p2TeamPacked;
+    this.sendUtm = options.sendUtm ?? !Dex.formats.get(this.format).team;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.startingBankMillis =
@@ -815,10 +818,10 @@ export class TimeSlicedArenaGame {
     this.p2 = p2;
 
     try {
-      if (this.p1TeamPacked && p1.proc.stdin.writable) {
+      if (this.sendUtm && this.p1TeamPacked && p1.proc.stdin.writable) {
         p1.proc.stdin.write(`|utm|${this.p1TeamPacked}\n`);
       }
-      if (this.p2TeamPacked && p2.proc.stdin.writable) {
+      if (this.sendUtm && this.p2TeamPacked && p2.proc.stdin.writable) {
         p2.proc.stdin.write(`|utm|${this.p2TeamPacked}\n`);
       }
 

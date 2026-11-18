@@ -1405,6 +1405,49 @@ describe('arena infrastructure', () => {
       expect(result.omniscientLog).toContain('|player|p2|Agent B|');
     });
 
+    test('omits |utm| on stdin for Random Battle formats', async () => {
+      const randUtmLog = path.join(tmpDir, 'arbiter-rand-utm.log');
+      const probeScript = path.join(tmpDir, 'arbiter-rand-probe.js');
+      fs.writeFileSync(randUtmLog, '');
+      fs.writeFileSync(
+        probeScript,
+        [
+          '#!/usr/bin/env node',
+          'const fs = require("fs");',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (line.startsWith("|utm|")) {',
+          `    fs.appendFileSync(${JSON.stringify(randUtmLog)}, line + "\\n");`,
+          '    return;',
+          '  }',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      const pair = sampleRandomPair('gen9randombattle', '1,2,3,4', '5,6,7,8');
+      const res = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9randombattle',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [probeScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [probeScript]},
+        p1TeamPacked: pair.t1Packed,
+        p2TeamPacked: pair.t2Packed,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      }).run();
+
+      expect(res.endReason).toBe('smoke-complete');
+      expect(fs.readFileSync(randUtmLog, 'utf8')).toBe('');
+    });
+
     test('neutralizes embedded carriage returns in agent stdout lines', async () => {
       const crInjectScript = path.join(tmpDir, 'cr-inject-agent.js');
       fs.writeFileSync(
@@ -1840,6 +1883,62 @@ describe('arena infrastructure', () => {
       expect(utmRes.p1.teamPacked).toBeTruthy();
       expect(utmRes.p2.teamPacked).toBeTruthy();
       expect(utmRes.turns).toBeGreaterThanOrEqual(1);
+    });
+
+    test('omits |utm| on stdin for Random Battle tournament games', async () => {
+      const tourneyRandUtmLog = path.join(tmpDir, 'tourney-rand-utm.log');
+      const probeScript = path.join(tmpDir, 'tourney-rand-probe.js');
+      fs.writeFileSync(tourneyRandUtmLog, '');
+      fs.writeFileSync(
+        probeScript,
+        [
+          '#!/usr/bin/env node',
+          'const fs = require("fs");',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (line.startsWith("|utm|")) {',
+          `    fs.appendFileSync(${JSON.stringify(tourneyRandUtmLog)}, line + "\\n");`,
+          '    return;',
+          '  }',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      const pair = sampleRandomPair('gen9randombattle', '1,2,3,4', '5,6,7,8');
+      const randRes = await new tournament.ConcurrentGame({
+        format: 'gen9randombattle',
+        seed: '1,2,3,4',
+        p1Spec: {
+          agentId: 'foul-play',
+          displayName: 'Foul Play',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, probeScript],
+        },
+        p2Spec: {
+          agentId: 'pokechamp',
+          displayName: 'PokeChamp',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, probeScript],
+        },
+        p1TeamPacked: pair.t1Packed,
+        p2TeamPacked: pair.t2Packed,
+        maxTurns: 1,
+      }).run();
+
+      expect(randRes.turns).toBeGreaterThanOrEqual(1);
+      expect(fs.readFileSync(tourneyRandUtmLog, 'utf8')).toBe('');
     });
 
     test('forfeits entrant immediately when first stdout line is an invalid team', async () => {
@@ -2336,6 +2435,43 @@ describe('arena infrastructure', () => {
         const v30UtmLines = fs.readFileSync(utmLogFile, 'utf8').trim().split('\n');
         expect(v30UtmLines).toHaveLength(2);
         expect(v30UtmLines[0]).not.toBe(v30UtmLines[1]);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+    test('omits |utm| across a 2-game random ladder mirror match', async () => {
+      const h = createMockCoordHarness('rand-mirror');
+      try {
+        await h.coord.processPendingSubmissions(new Map([['gen9customgame', h.ladderSnap]]));
+        const v25Dir = path.join(h.agentsDir, 'pokechamp-1.0.0-v25');
+        fs.mkdirSync(v25Dir, {recursive: true});
+        fs.writeFileSync(path.join(v25Dir, 'run'), fs.readFileSync(defaultAgentScript), {
+          mode: 0o755,
+        });
+        h.stateDb.upsertLocalAgent({
+          versionId: 25,
+          agentId: 2,
+          slug: 'pokechamp',
+          version: '1.0.0',
+          mode: 'native',
+          target: 'pokechamp-1.0.0-v25',
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+
+        const randSnap: coordinator.LadderSnapshot = {
+          ...h.ladderSnap,
+          id: 'gen9randombattle20261109',
+          slot: 'rand',
+          format: 'gen9randombattle',
+          team: 'random',
+        };
+        fs.writeFileSync(utmLogFile, '');
+        const played = await h.coord.playNextScheduledMatch([randSnap]);
+        expect(played?.ladderId).toBe('gen9randombattle20261109');
+        expect(h.completedMatches).toHaveLength(1);
+        expect(fs.readFileSync(utmLogFile, 'utf8')).toBe('');
       } finally {
         h.stateDb.close();
       }

@@ -107,6 +107,7 @@ export interface GameOptions {
   p2Spec: AgentSpec;
   p1TeamPacked?: string;
   p2TeamPacked?: string;
+  sendUtm?: boolean;
   maxTurns?: number;
   smokeStopAfterTurn?: number;
   startingBankSeconds?: number;
@@ -286,6 +287,7 @@ export class ConcurrentGame {
   private readonly p2Spec: AgentSpec;
   private p1TeamPacked?: string;
   private p2TeamPacked?: string;
+  private readonly sendUtm: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
   private readonly startingBankMillis: number;
@@ -328,6 +330,7 @@ export class ConcurrentGame {
     this.p2Spec = options.p2Spec;
     this.p1TeamPacked = options.p1TeamPacked;
     this.p2TeamPacked = options.p2TeamPacked;
+    this.sendUtm = options.sendUtm ?? !sim.Dex.formats.get(this.format).team;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.startingBankMillis =
@@ -654,7 +657,7 @@ export class ConcurrentGame {
       if (!valid) {
         return {ok: false, reason: 'invalid-choice'};
       }
-      if (!player.exited && player.proc.stdin.writable) {
+      if (this.sendUtm && !player.exited && player.proc.stdin.writable) {
         player.proc.stdin.write(`|utm|${valid}\n`);
       }
       return {ok: true, team: valid};
@@ -1826,6 +1829,7 @@ export class Coordinator {
           p2Spec: this.baselineSpec,
           p1TeamPacked,
           p2TeamPacked,
+          sendUtm: meta?.team !== undefined ? meta.team !== 'random' : undefined,
           smokeStopAfterTurn: 1,
           startingBankSeconds: 30,
           firstTurnGraceSeconds: 30,
@@ -2091,6 +2095,7 @@ export class Coordinator {
           p2Spec,
           p1TeamPacked: sampled.p1Team,
           p2TeamPacked: sampled.p2Team,
+          sendUtm: tourney.team !== undefined ? tourney.team !== 'random' : undefined,
           maxTurns: this.maxTurns,
           onGameStart: async info => {
             if (info.game > 1) {
