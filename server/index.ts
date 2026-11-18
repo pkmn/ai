@@ -195,6 +195,9 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
         next();
         return;
       }
+      if (ladder?.team === 'pools') {
+        arena.promoteArchivedPoolsLogs(publicDir, ladder.id);
+      }
       staticWare(req, res, next);
       return;
     }

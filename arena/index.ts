@@ -100,7 +100,11 @@ export async function runDaemon(opts: {
     while (status.running && !coord.isDraining()) {
       try {
         await coord.flushOutbox();
-        let ladders = await fetchPlayableLadderSnapshots(client);
+        const initialSnap = await client.getPlayableLadders();
+        let ladders = initialSnap.ladders;
+        if (initialSnap.unpublishedArchivedPoolsLadders?.length) {
+          await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
+        }
         const byId = new Map(ladders.map(l => [l.id, l]));
         const ingested = await coord.processPendingSubmissions(byId);
         if (ingested > 0 && status.running && !coord.isDraining()) {

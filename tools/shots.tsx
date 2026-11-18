@@ -146,11 +146,13 @@ function setupRotatedSeasons(
   mode: 'settling' | 'archived' | 'both'
 ): () => void {
   const archiveDir = path.join(fixture.publicDir, 'arena', 'ladders', VGC_LADDER_ID);
-  const archiveFile = path.join(archiveDir, `${VGC_LADDER_ID}-logs.7z`);
-  const writeArchive = mode === 'archived' || mode === 'both';
+  const privateDir = path.join(fixture.publicDir, 'arena', 'ladders', '.private', VGC_LADDER_ID);
+  const archiveFile = path.join(archiveDir, `${VGC_LADDER_ID}-logs.tar`);
+  const writeArchive = mode === 'archived';
   if (writeArchive) {
+    arena.promoteArchivedPoolsLogs(fixture.publicDir, VGC_LADDER_ID);
     fs.mkdirSync(archiveDir, {recursive: true});
-    fs.writeFileSync(archiveFile, Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]));
+    fs.writeFileSync(archiveFile, Buffer.from('mock-tar-vgc-logs'));
   }
   return withSavepoint(
     fixture,
@@ -233,6 +235,19 @@ function setupRotatedSeasons(
     () => {
       if (writeArchive) {
         fs.rmSync(archiveFile, {force: true});
+        if (fs.existsSync(archiveDir)) {
+          fs.mkdirSync(path.dirname(privateDir), {recursive: true});
+          if (!fs.existsSync(privateDir)) {
+            fs.renameSync(archiveDir, privateDir);
+          } else {
+            for (const f of fs.readdirSync(archiveDir)) {
+              if (f.endsWith('.log')) {
+                fs.renameSync(path.join(archiveDir, f), path.join(privateDir, f));
+              }
+            }
+            fs.rmSync(archiveDir, {recursive: true, force: true});
+          }
+        }
       }
     }
   );
@@ -680,6 +695,14 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Replay (RAND)',
       path: '/arena/battles/',
       click: 'tr.battle-row[data-fmt="rand"] td:first-child',
+    },
+    {
+      name: 'arena-battles-vgc-archived-replay',
+      section: 'battles',
+      title: 'Replay (Archived Pool)',
+      path: '/arena/battles/',
+      setup: fixture => setupRotatedSeasons(fixture, 'archived'),
+      click: 'tr.battle-row[data-fmt="vgc"] td:first-child',
     },
     {
       name: 'arena-battles-expanded',

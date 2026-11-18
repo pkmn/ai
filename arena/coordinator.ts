@@ -207,6 +207,7 @@ export class Coordinator {
     {sha256: string; entries: teams.HarvestedPoolEntry[]}
   >();
   private readonly lastRandomArchiveDayByLadder = new Map<string, string>();
+  private readonly archivePublishCooldownByLadder = new Map<string, number>();
   private readonly ladderFaults = new Map<string, LadderFaultCounter>();
   private readonly quarantinedOnLadder = new Set<string>();
   private readonly brokenUntilByVersion = new Map<number, number>();
@@ -732,12 +733,8 @@ export class Coordinator {
       const day = entry.name;
       const yearMonth = day.slice(0, 7);
       const dayDir = path.join(ladderDir, day);
-      const logFiles = fs
-        .readdirSync(dayDir)
-        .filter(f => f.endsWith('.log'))
-        .sort()
-        .map(f => path.join(dayDir, f));
-      if (logFiles.length === 0) continue;
+      const hasLogs = fs.readdirSync(dayDir).some(f => f.endsWith('.log'));
+      if (!hasLogs) continue;
 
       const monthDir = path.join(ladderDir, yearMonth);
       fs.mkdirSync(monthDir, {recursive: true, mode: 0o700});
@@ -747,8 +744,8 @@ export class Coordinator {
       try {
         execFileSync(
           '7z',
-          ['a', '-t7z', '-m0=lzma2', '-mx=9', '-ms=on', tmpDayArchive, ...logFiles],
-          {stdio: 'ignore', timeout: 60_000}
+          ['a', '-t7z', '-m0=lzma2', '-mx=9', '-ms=on', tmpDayArchive, '*.log'],
+          {cwd: dayDir, stdio: 'ignore', timeout: 60_000}
         );
         execFileSync('7z', ['t', tmpDayArchive], {stdio: 'ignore', timeout: 30_000});
         fs.renameSync(tmpDayArchive, dayArchive);
@@ -786,12 +783,34 @@ export class Coordinator {
       fs.renameSync(tmpTar, tarPath);
       const bytes = fs.readFileSync(tarPath);
       await this.client.uploadLadderArchive(ladderId, bytes);
+      this.archivePublishCooldownByLadder.delete(ladderId);
       return true;
     } catch (err) {
       fs.rmSync(tmpTar, {force: true});
       console.error(`Failed to build/upload ${ladderId}-logs.tar:`, err);
       return false;
     }
+  }
+
+  async publishArchivedPoolsLadders(
+    ladderIds: readonly string[],
+    nowSeconds = Math.floor(Date.now() / 1000)
+  ): Promise<number> {
+    let published = 0;
+    for (const ladderId of ladderIds) {
+      const retryAfter = this.archivePublishCooldownByLadder.get(ladderId);
+      if (retryAfter !== undefined && nowSeconds < retryAfter) continue;
+      const ok = await this.publishLadderArchive(ladderId);
+      if (ok) {
+        published++;
+      } else {
+        this.archivePublishCooldownByLadder.set(
+          ladderId,
+          nowSeconds + BROKEN_AGENT_COOLDOWN_SECONDS
+        );
+      }
+    }
+    return published;
   }
 
   async publishRandomLadderArchive(ladderId: string, excludeDay?: string): Promise<boolean> {
@@ -1041,7 +1060,8 @@ export class Coordinator {
       });
     }
 
-    const g1Log = match.teamMode === 'random'
+    const sendLogs = match.teamMode === 'random' || match.teamMode === 'pools';
+    const g1Log = sendLogs
       ? (game1.log ?? this.readArchivedGameLog(match.ladderId, match.id, 'a', match.startedAt))
       : undefined;
 
@@ -1092,7 +1112,7 @@ export class Coordinator {
         p2Game2MeanTurnMillis,
         completedAt,
       },
-      ...(match.teamMode === 'random'
+      ...(sendLogs
         ? {
           ...(g1Log !== undefined ? {game1Log: g1Log} : {}),
           game2Log: g2Log,
@@ -1105,7 +1125,7 @@ export class Coordinator {
     // replays Game 2 on restart.
     this.stateDb.markMatchCheckpointStatus(match.id, 'complete', completedAt);
 
-    if (archivedLadder) {
+    if (archivedLadder && sendLogs) {
       await this.publishLadderArchive(match.ladderId);
     } else if (match.teamMode === 'random') {
       await this.maybePublishDailyRandomArchive(match.ladderId, completedAt);

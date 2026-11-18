@@ -271,9 +271,10 @@ export interface TournamentDocument {
 }
 
 // Full battle logs (containing unpacked team sheets, real agent identities, and telemetry) are
-// published for random-battle (`random`) ladders (updated daily, as there are no proprietary team
-// rosters) and for competitor team-pool (`pools`) ladders strictly AFTER the ladder has been
-// retired (`status === 'archived'`).
+// published as `<ladder_id>-logs.tar` (wrapping daily `.7z` archives and monthly `.tar` rollups)
+// for random-battle (`random`) ladders (updated daily, as there are no proprietary team rosters)
+// and for competitor team-pool (`pools`) ladders strictly AFTER the ladder has been retired
+// (`status === 'archived'`).
 export function resolveLadderArchive(
   publicDir: string,
   ladder: Pick<db.LadderRow, 'id' | 'team' | 'status'>
@@ -283,9 +284,8 @@ export function resolveLadderArchive(
     (ladder.team === 'pools' && ladder.status === 'archived');
   if (!canExpose) return undefined;
   const idEnc = encodeURIComponent(ladder.id);
-  const ext = ladder.team === 'random' ? 'tar' : '7z';
-  const defaultName = `${ladder.id}-logs.${ext}`;
-  const fallbackName = `logs.${ext}`;
+  const defaultName = `${ladder.id}-logs.tar`;
+  const fallbackName = 'logs.tar';
   const candidates = [
     {
       diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, defaultName),
@@ -601,12 +601,18 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
     ? `/arena/ladders/${encodeURIComponent(m.ladderId)}/`
     : `/arena/ladders/${encodeURIComponent(m.slot)}/`;
   const [g1, g2] = m.games;
-  if (m.teamMode !== 'random') {
+  const canExposeLogs =
+    m.teamMode === 'random' ||
+    (m.teamMode === 'pools' && m.ladderStatus === 'archived');
+  if (!canExposeLogs) {
     return {
       ...m,
       ladderHref,
       games: [{...g1}, {...g2}],
     };
+  }
+  if (m.teamMode === 'pools') {
+    promoteArchivedPoolsLogs(publicDir, m.ladderId);
   }
   const idEnc = encodeURIComponent(m.ladderId);
   const ladderDir = path.join(publicDir, 'arena', 'ladders', m.ladderId);
@@ -1136,6 +1142,7 @@ export class Client {
         teams: string[];
       }>;
     }>;
+    unpublishedArchivedPoolsLadders?: string[];
   }> {
     return this.requestJson('GET', '/api/arena/ladders');
   }
@@ -1685,6 +1692,7 @@ function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
 }
 
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_LOG_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.log$/;
 const VALID_TOURNAMENT_STAGES = new Set<db.TournamentGameStage>(['Round Robin', 'Superfinal']);
 const VALID_TOURNAMENT_STATUSES = new Set<db.TournamentStatus>([
   'scheduled',
@@ -1694,6 +1702,45 @@ const VALID_TOURNAMENT_STATUSES = new Set<db.TournamentStatus>([
 const SSE_KEEPALIVE_MILLIS = 25_000;
 const MAX_TABLE_LINES = 10_000;
 const MAX_TOURNAMENT_LOG_BYTES = 512 * 1024;
+
+// Moves staged per-game `.log` files for a `pools` ladder from `public/arena/ladders/.private/<id>`
+// (blocked by nginx's dot-path rule while the season is live) into `public/arena/ladders/<id>`
+// once the ladder transitions to `status === 'archived'`.
+export function promoteArchivedPoolsLogs(publicDir: string, ladderId: string): boolean {
+  if (!SAFE_ID_RE.test(ladderId)) return false;
+  const privateRoot = path.join(publicDir, 'arena', 'ladders', '.private');
+  const stagedDir = path.join(privateRoot, ladderId);
+  if (!fs.existsSync(stagedDir)) return false;
+  const publicLadderDir = path.join(publicDir, 'arena', 'ladders', ladderId);
+  if (!fs.existsSync(publicLadderDir)) {
+    fs.mkdirSync(path.dirname(publicLadderDir), {recursive: true});
+    try {
+      fs.renameSync(stagedDir, publicLadderDir);
+      try {
+        if (fs.readdirSync(privateRoot).length === 0) fs.rmdirSync(privateRoot);
+      } catch {}
+      return true;
+    } catch {}
+  }
+  fs.mkdirSync(publicLadderDir, {recursive: true});
+  let moved = false;
+  for (const name of fs.readdirSync(stagedDir)) {
+    if (!SAFE_LOG_FILE_RE.test(name)) continue;
+    const src = path.join(stagedDir, name);
+    const dst = path.join(publicLadderDir, name);
+    if (!fs.existsSync(dst)) {
+      fs.renameSync(src, dst);
+      moved = true;
+    } else {
+      fs.rmSync(src, {force: true});
+    }
+  }
+  try {
+    fs.rmdirSync(stagedDir);
+    if (fs.readdirSync(privateRoot).length === 0) fs.rmdirSync(privateRoot);
+  } catch {}
+  return moved;
+}
 
 function parseBroadcastPlayer(raw: unknown, label: string): BroadcastPlayer {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -2526,8 +2573,17 @@ export function register(app: polka.Polka, options: Options): Handle {
       });
 
       const ladderRow = db.getLadder(match.ladderId);
-      if (ladderRow?.team === 'random' && SAFE_ID_RE.test(match.id)) {
-        const ladderDir = path.join(publicDir, 'arena', 'ladders', ladderRow.id);
+      if (
+        (ladderRow?.team === 'random' || ladderRow?.team === 'pools') &&
+        SAFE_ID_RE.test(match.id)
+      ) {
+        const isPublic = ladderRow.team === 'random' || ladderRow.status === 'archived';
+        if (ladderRow.team === 'pools' && isPublic) {
+          if (promoteArchivedPoolsLogs(publicDir, ladderRow.id)) archiveSeq++;
+        }
+        const ladderDir = isPublic
+          ? path.join(publicDir, 'arena', 'ladders', ladderRow.id)
+          : path.join(publicDir, 'arena', 'ladders', '.private', ladderRow.id);
         const g1Path = path.join(ladderDir, `${match.id}a.log`);
         const g2Path = path.join(ladderDir, `${match.id}b.log`);
         let wroteLog = false;
@@ -2539,7 +2595,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           writeFileAtomic(g2Path, rawG2Log.endsWith('\n') ? rawG2Log : `${rawG2Log}\n`);
           wroteLog = true;
         }
-        if (wroteLog) archiveSeq++;
+        if (wroteLog && isPublic) archiveSeq++;
       }
 
       const nowSec = getNowSec();
@@ -3190,10 +3246,12 @@ export function register(app: polka.Polka, options: Options): Handle {
       return;
     }
 
-    const ext = ladder.team === 'random' ? 'tar' : '7z';
-    const fileName = `${ladder.id}-logs.${ext}`;
+    const fileName = `${ladder.id}-logs.tar`;
     const destPath = path.join(publicDir, 'arena', 'ladders', ladder.id, fileName);
     try {
+      if (ladder.team === 'pools') {
+        promoteArchivedPoolsLogs(publicDir, ladder.id);
+      }
       const {bytes, sha256} = await streamBinaryArchive(req, destPath, expectedSha);
       archiveSeq++;
       await Promise.resolve(options.onUpdate?.('archive-published'));
@@ -3316,7 +3374,15 @@ export function register(app: polka.Polka, options: Options): Handle {
       };
     });
 
-    sendJson(res, 200, {ladders});
+    const unpublishedArchivedPoolsLadders = db.getLadders()
+      .filter(l => {
+        if (l.team !== 'pools' || l.status !== 'archived') return false;
+        promoteArchivedPoolsLogs(publicDir, l.id);
+        return !resolveLadderArchive(publicDir, l);
+      })
+      .map(l => l.id);
+
+    sendJson(res, 200, {ladders, unpublishedArchivedPoolsLadders});
   });
 
   app.get('/api/arena/tournaments/:id/state', (req, res) => {
@@ -3439,6 +3505,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     if (!fs.existsSync(base)) return '';
     const parts: string[] = [];
     for (const entry of fs.readdirSync(base)) {
+      if (entry.startsWith('.')) continue;
       try {
         parts.push(`${entry}:${fs.statSync(path.join(base, entry), {bigint: true}).mtimeNs}`);
       } catch {}

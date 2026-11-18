@@ -148,13 +148,14 @@ The 7 sections cover:
    `1500` anchor alongside 2 stronger active versions), VGC competitor
    `pools` ladder, RAND `random` ladder (with `Data: <id>-logs.tar` link above the footer), rotated
    season in `settling` grace window via the `#season-select` dropdown, retired season in `archived`
-   state (with `Data: <id>-logs.7z` link above the footer), and `upcoming` ladder with registered
+   state (with `Data: <id>-logs.tar` link above the footer), and `upcoming` ladder with registered
    entrants.
 4. **Battles (`battles`):** Live match in progress (`Game 2 / 2`, `PAUSED`/`RUNNING`, G1 summary,
    pool team hashes), live `RAND` match with embedded Pokémon Showdown battle viewer, inline
-   expanded `RAND` row with replay viewer (`Game 1` / `Game 2`), inline expanded rows for
-   `[Timeout]`, `[Crash]`, and clean 2-game match, format filter (`VGC`), Page 2 pagination, `Idle`
-   live state, `Stale / Offline` heartbeat state, and empty battle history.
+   expanded `RAND` row with replay viewer (`Game 1` / `Game 2`), inline expanded retired `pools`
+   (`VGC`) row with replay viewer (`Game 1` / `Game 2`), inline expanded rows for `[Timeout]`,
+   `[Crash]`, and clean 2-game match, format filter (`VGC`), Page 2 pagination, `Idle` live state,
+   `Stale / Offline` heartbeat state, and empty battle history.
 5. **Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal `SF` badges
    and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay viewer, live
    Best-of-3 Tournament `#2` multi-table broadcast (`Table 1` with simultaneous dual-thinking
@@ -487,7 +488,7 @@ ladder rotate <old-ladder> --archive-name <archived-title> \
 # Pin <agent>[@<ver>] as the 1500-Elo gauge anchor and recompute ratings
 ladder anchor <ladders|all> <agent>[@<ver>]
 
-# Publish <ladder_id>-logs.7z to public/arena/ladders/<ladder_id>/
+# Publish <ladder_id>-logs.tar to public/arena/ladders/<ladder_id>/
 ladder archive <ladder> [--file <path>]
 ```
 

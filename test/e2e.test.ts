@@ -716,17 +716,45 @@ describe('mock scenarios & E2E lifecycle', () => {
                 .toContain('1563716887131459685');
             }
           },
-          'vgc-rotated': () => {
+          'vgc-rotated': async () => {
             expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('settling');
             expect(db.getLadder('gen9championsvgc2027regma')?.status).toBe('upcoming');
             expect(db.getLadder('gen9championsvgc2027regma')?.discord)
               .toBe('1564121375558340768');
+            const settlingBattlesRes = await realFetch(
+              `${baseUrl}/api/battles.json?ladder=gen9championsvgc2026regmc&limit=5`
+            );
+            const settlingBattles = await settlingBattlesRes.json() as {
+              matches: Array<{games: Array<{logHref?: string}>}>;
+            };
+            expect(settlingBattles.matches.length).toBeGreaterThan(0);
+            expect(settlingBattles.matches[0].games[0].logHref).toBeUndefined();
           },
           'vgc-archived': async () => {
             expect(db.getLadder('gen9championsvgc2026regmc')?.status).toBe('archived');
             const oldVgcDir = path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2026regmc');
-            expect(fs.existsSync(path.join(oldVgcDir, 'gen9championsvgc2026regmc-logs.7z')))
+            expect(fs.existsSync(path.join(oldVgcDir, 'gen9championsvgc2026regmc-logs.tar')))
               .toBe(true);
+            const archivedBattlesRes = await realFetch(
+              `${baseUrl}/api/battles.json?ladder=gen9championsvgc2026regmc&limit=5`
+            );
+            const archivedBattles = await archivedBattlesRes.json() as {
+              matches: Array<{id: string; games: Array<{logHref?: string}>}>;
+            };
+            expect(archivedBattles.matches.length).toBeGreaterThan(0);
+            const firstArchived = archivedBattles.matches[0];
+            expect(firstArchived.games[0].logHref).toBe(
+              `/arena/ladders/gen9championsvgc2026regmc/${firstArchived.id}a.log`
+            );
+            expect(firstArchived.games[1].logHref).toBe(
+              `/arena/ladders/gen9championsvgc2026regmc/${firstArchived.id}b.log`
+            );
+            const replayBothRes = await realFetch(
+              `${baseUrl}${firstArchived.games[0].logHref}?side=both`
+            );
+            expect(replayBothRes.status).toBe(200);
+            const replayBoth = await replayBothRes.json() as {lines: string[]};
+            expect(replayBoth.lines.some(l => l.startsWith('|player|p1|'))).toBe(true);
             const oldTeamsRes = await realFetch(
               `${baseUrl}/arena/ladders/gen9championsvgc2026regmc/teams.json`
             );

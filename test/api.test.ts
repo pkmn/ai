@@ -1600,9 +1600,96 @@ describe('Arena binary archive uploads', () => {
     );
     expect(okLadder.status).toBe(200);
     expect(okLadder.data.archiveHref).toBe(
-      '/arena/ladders/gen9championsvgc2026regmc/gen9championsvgc2026regmc-logs.7z'
+      '/arena/ladders/gen9championsvgc2026regmc/gen9championsvgc2026regmc-logs.tar'
     );
     expect(events).toEqual(['archive-published']);
+  });
+
+  test('stages pools match logs privately until the ladder is archived', async () => {
+    const fp = db.getAgentBySlug('foul-play')!;
+    const zero = db.getAgentBySlug('0-error')!;
+    const vFp = db.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/fp-vgc.tar.zst',
+      sha256: 'c'.repeat(64),
+      ladderIds: ['gen9randombattle20261109'],
+      now: 1_700_000_010,
+    });
+    const vZero = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/zero-vgc.tar.zst',
+      sha256: 'd'.repeat(64),
+      ladderIds: ['gen9randombattle20261109'],
+      now: 1_700_000_010,
+    });
+    db.applySubmissionStatus({versionId: vFp.id, smokeStatus: 'passed', now: 1_700_000_020});
+    db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: 1_700_000_020});
+
+    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+    await client.completeMatch({
+      match: {
+        id: 'vgc-0000077',
+        ladderId: 'gen9championsvgc2026regmc',
+        p1VersionId: vFp.id,
+        p2VersionId: vZero.id,
+        seed: '1,2,3,77',
+        p1TeamLabel: 'P1:aabbccddeeff',
+        p2TeamLabel: '112233445566',
+        game1Outcome: 'W',
+        game2Outcome: 'L',
+        category: 'WL',
+        game1Turns: 8,
+        game2Turns: 10,
+        game1EndReason: 'win',
+        game2EndReason: 'win',
+        p1PeakRam: 900,
+        p2PeakRam: 920,
+        p1Game1BankSeconds: 140,
+        p1Game2BankSeconds: 138,
+        p2Game1BankSeconds: 135,
+        p2Game2BankSeconds: 130,
+        p1MeanTurnMillis: 210,
+        p2MeanTurnMillis: 220,
+        completedAt: 1_700_000_750,
+      },
+      game1Log: '|player|p1|Foul Play|1\n|player|p2|0 ERROR|2\n|win|Foul Play\n',
+      game2Log: '|player|p1|0 ERROR|1\n|player|p2|Foul Play|2\n|win|0 ERROR\n',
+    });
+
+    const pubDir = path.join(tmpDir, 'arena', 'ladders', 'gen9championsvgc2026regmc');
+    const privDir = path.join(tmpDir, 'arena', 'ladders', '.private', 'gen9championsvgc2026regmc');
+    expect(fs.existsSync(pubDir)).toBe(false);
+    expect(fs.existsSync(path.join(privDir, 'vgc-0000077a.log'))).toBe(true);
+    expect(fs.existsSync(path.join(privDir, 'vgc-0000077b.log'))).toBe(true);
+    expect(ctrl.getLiveDocument(1_700_000_760).recentMatches[0].games[0].logHref).toBeUndefined();
+
+    db.setLadderStatus('gen9championsvgc2026regmc', 'archived', 1_700_000_800);
+    const doc = ctrl.getLiveDocument(1_700_000_810);
+    expect(doc.recentMatches[0].games[0].logHref).toBe(
+      '/arena/ladders/gen9championsvgc2026regmc/vgc-0000077a.log'
+    );
+    expect(doc.recentMatches[0].games[1].logHref).toBe(
+      '/arena/ladders/gen9championsvgc2026regmc/vgc-0000077b.log'
+    );
+    expect(fs.existsSync(privDir)).toBe(false);
+    expect(fs.existsSync(path.join(pubDir, 'vgc-0000077a.log'))).toBe(true);
+  });
+
+  test('reports unpublished archived pools ladders on GET /api/arena/ladders', async () => {
+    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+    expect((await client.getPlayableLadders()).unpublishedArchivedPoolsLadders).toEqual([]);
+
+    db.setLadderStatus('gen9championsvgc2026regmc', 'archived', 1_700_000_800);
+    expect((await client.getPlayableLadders()).unpublishedArchivedPoolsLadders).toEqual([
+      'gen9championsvgc2026regmc',
+    ]);
+
+    await putBinary('/api/arena/ladders/gen9championsvgc2026regmc/archive', expectedSha);
+    expect((await client.getPlayableLadders()).unpublishedArchivedPoolsLadders).toEqual([]);
   });
 
   test('accepts PUT /api/arena/ladders/:id/archive on active random ladders', async () => {

@@ -701,8 +701,11 @@ function buildShowdownTournamentLog(opts: {
     : isRandom
       ? `[Gen ${gen}] Random Battle`
       : `[Gen ${gen}] OU`;
-  const p1Mons = tournaments.parsePackedTeamSpecies(opts.p1TeamPacked);
-  const p2Mons = tournaments.parsePackedTeamSpecies(opts.p2TeamPacked);
+  const dex = isDoubles ? CHAMPIONS_SIM_DEX : sim.Dex;
+  const p1Mons = tournaments.parsePackedTeamSpecies(opts.p1TeamPacked)
+    .map(s => dex.species.get(s).name || s);
+  const p2Mons = tournaments.parsePackedTeamSpecies(opts.p2TeamPacked)
+    .map(s => dex.species.get(s).name || s);
   const lead1 = p1Mons[0] ?? 'Great Tusk';
   const lead2 = p2Mons[0] ?? 'Dragapult';
   const move1 = gen === 1 ? 'Rest' : 'Protect';
@@ -1572,7 +1575,15 @@ export class Runner {
         throw new Error('Usage: ladder status <ladders|all> <upcoming|active|settling|archived>');
       }
       for (const ladder of this.resolveLadders(targetSpec)) {
-        this.db.setLadderStatus(ladder.id, status, this.state.now);
+        const updated = this.db.setLadderStatus(ladder.id, status, this.state.now);
+        if (
+          !this.serverUrl &&
+          this.publicDir &&
+          updated.team === 'pools' &&
+          status === 'archived'
+        ) {
+          arena.promoteArchivedPoolsLogs(this.publicDir, updated.id);
+        }
       }
       this.syncLadderFileStatuses();
       return;
@@ -1623,7 +1634,7 @@ export class Runner {
       const newId = getFlag(cmd, 'new');
       const newMinFlag = getFlag(cmd, 'min');
       const newTeamsFlag = getFlag(cmd, 'teams');
-      this.db.rotateLadder({
+      const rotated = this.db.rotateLadder({
         oldLadderId: oldLadder.id,
         archivedName: archiveName,
         ...(newId
@@ -1641,6 +1652,14 @@ export class Runner {
           : {}),
         now: this.state.now,
       });
+      if (
+        !this.serverUrl &&
+        this.publicDir &&
+        rotated.oldLadder.team === 'pools' &&
+        rotated.oldLadder.status === 'archived'
+      ) {
+        arena.promoteArchivedPoolsLogs(this.publicDir, rotated.oldLadder.id);
+      }
       this.syncLadderFileStatuses();
       return;
     }
@@ -1685,15 +1704,17 @@ export class Runner {
       const srcFile = getFlag(cmd, 'file');
       const bytes = srcFile && fs.existsSync(srcFile)
         ? fs.readFileSync(srcFile)
-        : Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]);
+        : Buffer.from('mock-tar-ladder-logs');
       if (this.serverUrl) {
         await this.getArenaClient().uploadLadderArchive(ladder.id, bytes);
       } else {
         const pubDir = this.publicDir ?? render.PUBLIC_DIR;
         const dstDir = path.join(pubDir, 'arena', 'ladders', ladder.id);
-        const ext = ladder.team === 'random' ? 'tar' : '7z';
+        if (ladder.team === 'pools') {
+          arena.promoteArchivedPoolsLogs(pubDir, ladder.id);
+        }
         fs.mkdirSync(dstDir, {recursive: true});
-        fs.writeFileSync(path.join(dstDir, `${ladder.id}-logs.${ext}`), bytes);
+        fs.writeFileSync(path.join(dstDir, `${ladder.id}-logs.tar`), bytes);
       }
       return;
     }
@@ -2261,6 +2282,8 @@ export class Runner {
     const {ladder, p1, p2} = opts;
     let p1TeamLabel: string | undefined;
     let p2TeamLabel: string | undefined;
+    let sampledT1Packed: string | undefined;
+    let sampledT2Packed: string | undefined;
     if (ladder.team === 'pools') {
       const pool = this.buildPoolForLadder(ladder);
       const sampled = teams.samplePoolsPair(
@@ -2270,6 +2293,8 @@ export class Runner {
         this.nextInt,
         ladder.min
       );
+      sampledT1Packed = sampled.t1Packed;
+      sampledT2Packed = sampled.t2Packed;
       p1TeamLabel = this.resolvePoolLabelSpec(ladder, p1.teamSpec, sampled.t1Label);
       p2TeamLabel = this.resolvePoolLabelSpec(ladder, p2.teamSpec, sampled.t2Label);
     }
@@ -2317,13 +2342,16 @@ export class Runner {
     const p1TurnMillis = 230 + ((p1.versionId * 29) % 240);
     const p2TurnMillis = 240 + ((p2.versionId * 31) % 240);
 
-    const shouldEmitRandomLogs =
-      ladder.team === 'random' && (opts.writeLogs || Boolean(this.serverUrl));
+    const shouldEmitLogs =
+      (ladder.team === 'random' || ladder.team === 'pools') &&
+      (opts.writeLogs || Boolean(this.serverUrl));
     let game1Log: string | undefined;
     let game2Log: string | undefined;
-    if (shouldEmitRandomLogs) {
-      const t1Packed = samplePackedTournamentTeam(ladder.format, this.state.matchSeq);
-      const t2Packed = samplePackedTournamentTeam(ladder.format, this.state.matchSeq + 1);
+    if (shouldEmitLogs) {
+      const t1Packed = sampledT1Packed ??
+        samplePackedTournamentTeam(ladder.format, this.state.matchSeq);
+      const t2Packed = sampledT2Packed ??
+        samplePackedTournamentTeam(ladder.format, this.state.matchSeq + 1);
       const g2Seat1Outcome: 'W' | 'L' | 'T' = g2 === 'W' ? 'L' : g2 === 'L' ? 'W' : 'T';
       game1Log = buildShowdownTournamentLog({
         format: ladder.format,
@@ -2346,6 +2374,7 @@ export class Runner {
     if (opts.emitHeartbeats && this.serverUrl) {
       const client = this.getArenaClient();
       const inc = arena.turnIncrementSeconds(ladder.format);
+      const emitLiveLines = ladder.team === 'random';
       this.state.heartbeatSeq++;
       await client.sendHeartbeat({
         heartbeatSeq: this.state.heartbeatSeq,
@@ -2358,7 +2387,7 @@ export class Runner {
         turnStartedAt: opts.completedAt,
         turnBudgetSeconds: 145,
         incrementSeconds: inc,
-        ...(game1Log ? {lines: game1Log.trim().split('\n')} : {}),
+        ...(emitLiveLines && game1Log ? {lines: game1Log.trim().split('\n')} : {}),
         p1: {
           slug: p1.slug,
           name: p1.name,
@@ -2393,7 +2422,7 @@ export class Runner {
         turnStartedAt: opts.completedAt,
         turnBudgetSeconds: 136,
         incrementSeconds: inc,
-        ...(game2Log ? {lines: game2Log.trim().split('\n')} : {}),
+        ...(emitLiveLines && game2Log ? {lines: game2Log.trim().split('\n')} : {}),
         game1Summary: {
           ...(g1 === 'W'
             ? {winnerSlot: 'p1' as const}
@@ -2466,8 +2495,14 @@ export class Runner {
         ...(game2Log ? {game2Log} : {}),
       })).archivedLadder
       : this.db.recordCompletedMatch({match: matchPayload}).archivedLadder;
-    if (!this.serverUrl && shouldEmitRandomLogs && this.publicDir && game1Log && game2Log) {
-      const ladderDir = path.join(this.publicDir, 'arena', 'ladders', ladder.id);
+    if (!this.serverUrl && shouldEmitLogs && this.publicDir && game1Log && game2Log) {
+      const isPublic = ladder.team === 'random' || archivedLadder || ladder.status === 'archived';
+      if (ladder.team === 'pools' && isPublic) {
+        arena.promoteArchivedPoolsLogs(this.publicDir, ladder.id);
+      }
+      const ladderDir = isPublic
+        ? path.join(this.publicDir, 'arena', 'ladders', ladder.id)
+        : path.join(this.publicDir, 'arena', 'ladders', '.private', ladder.id);
       fs.mkdirSync(ladderDir, {recursive: true});
       fs.writeFileSync(path.join(ladderDir, `${matchId}a.log`), game1Log, 'utf8');
       fs.writeFileSync(path.join(ladderDir, `${matchId}b.log`), game2Log, 'utf8');

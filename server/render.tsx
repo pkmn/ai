@@ -3296,19 +3296,31 @@ export function renderBattlesPage(opts: {
     nowSec,
   } = opts;
   const {publicDir} = links;
-  const ladders = db.getCurrentLadders();
   const countsBySlot = db.getMatchCountsBySlot();
+  const currentBySlot = new Map(db.getCurrentLadders().map(l => [l.slot, l]));
+  const filterSlots: Array<{slot: db.LadderSlot; name: string}> = [];
+  const seenSlots = new Set<db.LadderSlot>();
+  for (const l of db.getLadders()) {
+    if (seenSlots.has(l.slot)) continue;
+    const current = currentBySlot.get(l.slot);
+    if (!current && !(countsBySlot[l.slot] > 0)) continue;
+    seenSlots.add(l.slot);
+    filterSlots.push({
+      slot: l.slot,
+      name: current ? current.name : l.slot.toUpperCase(),
+    });
+  }
   const recentMatches = db.getRecentMatches(recentMatchesLimit)
     .map(m => arena.enrichMatchView(publicDir, m));
   const totalMatches = countsBySlot.all ?? recentMatches.length;
   const totalPages = Math.max(1, Math.ceil(totalMatches / recentMatchesLimit));
 
-  const formatFilterItems = ladders.map(l => (
+  const formatFilterItems = filterSlots.map(s => (
     <>
       {' — '}
       <li>
-        <input type='radio' name='bformat' id={`bf-${l.slot}`} value={l.slot} />
-        <label htmlFor={`bf-${l.slot}`}>{l.name}</label>
+        <input type='radio' name='bformat' id={`bf-${s.slot}`} value={s.slot} />
+        <label htmlFor={`bf-${s.slot}`}>{s.name}</label>
       </li>
     </>
   ));
@@ -3601,6 +3613,7 @@ export function register(app: polka.Polka, options: Options) {
       const base = path.join(publicDir, 'arena', sub);
       if (!fs.existsSync(base)) continue;
       for (const entry of fs.readdirSync(base)) {
+        if (entry.startsWith('.')) continue;
         parts.push(`${sub}/${entry}:${getFileMtimeToken(path.join(base, entry))}`);
       }
     }
@@ -3928,6 +3941,9 @@ export function register(app: polka.Polka, options: Options) {
       if (!canServe) {
         sendHtmlNotFound(res);
         return;
+      }
+      if (ladder?.team === 'pools') {
+        arena.promoteArchivedPoolsLogs(publicDir, ladder.id);
       }
     }
     const logPath = path.join(publicDir, 'arena', subdir, rawId, rawFile);

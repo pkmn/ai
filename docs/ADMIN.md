@@ -68,7 +68,7 @@ npm run pkmn -- <command> [args...]
 | `set-ladder-status <ladder_id> <status>` | Set `<ladder_id>` to `upcoming`, `active`, `settling`, or `archived`. |
 | `upload-ladder-teams <ladder_id> <teams-file>` | Validate and upload canonical `harvested` teams into SQLite (`ladder_teams`). |
 | `rotate-ladder <old_id> --name "..." [--new <id> ...]` | Transition `<old_id>` into `settling`/`archived` under its historical name and optionally open `<new_id>`. |
-| `publish-ladder-archive <ladder_id> <file>` | Publish `<ladder_id>-logs.7z` (for `archived` `pools` ladders) or `<ladder_id>-logs.tar` (for `random` ladders). |
+| `publish-ladder-archive <ladder_id> <file>` | Publish `<ladder_id>-logs.tar` (for `random` ladders or `archived` `pools` ladders). |
 | `create-tournament <id> --name "..." --format <fmt> ...` | Create or update a Tournament (`scheduled`, `running`, or `completed`). |
 | `seed-tournament <id>` | Lock tournament entrants and assign 1-based Berger seeds by conservative ladder rating. |
 | `set-tournament-status <id> <status>` | Flip tournament `<id>` to `scheduled`, `running` (enables `#topbar` `● LIVE` banner), or `completed`. |
@@ -334,26 +334,29 @@ What `rotate-ladder` does atomically:
 - Update `config/ladders.yml` to record the archived/settling entry alongside the new `upcoming`
   (and later `active`) entry, then commit and deploy.
 
-### Publishing Retired `pools` Ladder Archives (`<ladder_id>-logs.7z`)
+### Publishing Retired `pools` Ladder Archives (`<ladder_id>-logs.tar`)
 
 Continuous `harvested` ladders never publish battle logs or team sheets, while `random` ladders
-publish public `.log` replays and daily rolled-up `<ladder_id>-logs.tar` archives. For
-competitor-submitted `pools` ladders (`VGC`), full battle logs (`<ladder_id>-logs.7z`) and dynamic
-`/arena/ladders/<ladder_id>/teams.json` become accessible **strictly after** the ladder reaches
-`status = 'archived'`:
+publish public `.log` replays and daily rolled-up `<ladder_id>-logs.tar` archives (an outer `.tar`
+wrapping daily solid `.7z` archives and monthly `.tar` rollups). For competitor-submitted `pools`
+ladders (`VGC`), per-game `.log` replays are staged privately under
+`public/arena/ladders/.private/<ladder_id>/` while live and promoted automatically to
+`public/arena/ladders/<ladder_id>/`—alongside `<ladder_id>-logs.tar` and dynamic
+`/arena/ladders/<ladder_id>/teams.json`—**strictly after** the ladder reaches `status = 'archived'`:
 
 ```sh
 # Option A: Local file on pkmn.ai
-npm run pkmn -- publish-ladder-archive gen9championsvgc2026regmc /tmp/gen9championsvgc2026regmc-logs.7z
+npm run pkmn -- publish-ladder-archive gen9championsvgc2026regmc /tmp/gen9championsvgc2026regmc-logs.tar
 
 # Option B: Remote upload from the Mac mini over HTTPS / tunnel
-curl -fsS -X POST "https://pkmn.ai/api/arena/ladder-archive?ladderId=gen9championsvgc2026regmc&ext=7z" \
+curl -fsS -X PUT "https://pkmn.ai/api/arena/ladders/gen9championsvgc2026regmc/archive" \
   -H "Authorization: Bearer $ARENA_SECRET" \
-  -H "X-Content-SHA256: $(shasum -a 256 gen9championsvgc2026regmc-logs.7z | awk '{print $1}')" \
-  --data-binary @gen9championsvgc2026regmc-logs.7z
+  -H "X-Content-SHA256: $(shasum -a 256 gen9championsvgc2026regmc-logs.tar | awk '{print $1}')" \
+  --data-binary @gen9championsvgc2026regmc-logs.tar
 ```
 
-Both paths atomically write `public/arena/ladders/<ladder_id>/<ladder_id>-logs.7z`, while
+Both paths atomically write `public/arena/ladders/<ladder_id>/<ladder_id>-logs.tar` (and ensure
+staged `.log` replays are promoted into `public/arena/ladders/<ladder_id>/`), while
 `pkmn.ai-server` serves `/arena/ladders/<ladder_id>/teams.json` dynamically from SQLite once
 `status = 'archived'`.
 

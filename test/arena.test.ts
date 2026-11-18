@@ -2884,6 +2884,134 @@ describe('arena infrastructure', () => {
       });
     });
 
+    test('publishes retired pools ladder tar archive via runDaemon({once: true})', async () => {
+      await withRealArenaServer('pools-arch', async ({db, serverUrl, secret, publicDir}) => {
+        db.syncLaddersFromYaml([
+          '- name: VGC',
+          '  id: gen9championsvgc2026regmc',
+          '  format: gen9championsvgc2026regmc',
+          '  team: pools',
+          '  status: active',
+          '  min: 4',
+          '  teams: 20',
+        ].join('\n'));
+        db.syncProjectsFromYaml([
+          '- name: 0 ERROR',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {scheibo: pre.10544}}',
+          '- name: Foul Play',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+          '- name: Metamon',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {jake: jake.10001}}',
+          '- name: PokeChamp',
+          '  active: 2026',
+          '  arena: {qualified: true, owners: {seth: seth.10002}}',
+        ].join('\n'));
+
+        const daemonStatePath = path.join(tmpDir, 'daemon-pools-arch.sqlite');
+        const daemonAgentsDir = path.join(tmpDir, 'daemon-pools-arch-agents');
+        const daemonLogsDir = path.join(tmpDir, 'daemon-pools-arch-logs');
+        const defaultRunDir = path.join(daemonAgentsDir, 'default-vgc');
+        fs.mkdirSync(defaultRunDir, {recursive: true});
+        fs.copyFileSync(defaultAgentScript, path.join(defaultRunDir, 'run'));
+        fs.chmodSync(path.join(defaultRunDir, 'run'), 0o755);
+
+        const seedStateDb = new arenaDb.Database(daemonStatePath);
+        const slugs = ['0-error', 'foul-play', 'metamon', 'pokechamp'];
+        for (let idx = 0; idx < slugs.length; idx++) {
+          const ag = db.getAgentBySlug(slugs[idx])!;
+          const validated = validateCompetitorTeamsIncremental(
+            mock.generateValidVgcTeams(20, idx),
+            {format: 'gen9championsvgc2026regmc', pools: [], teams: 20}
+          );
+          const sub = db.createSubmission({
+            agentId: ag.id,
+            version: '1.0.0',
+            package: 'bundle',
+            url: `https://github.com/pkmn/${slugs[idx]}.tar.zst`,
+            sha256: String(idx + 1).repeat(64),
+            ladderIds: ['gen9championsvgc2026regmc'],
+            teamsByLadder: {gen9championsvgc2026regmc: validated.allSaved},
+          });
+          db.applySubmissionStatus({versionId: sub.id, smokeStatus: 'passed', unpackedBytes: 1024});
+          seedStateDb.upsertLocalAgent({
+            versionId: sub.id,
+            agentId: ag.id,
+            slug: ag.slug,
+            version: '1.0.0',
+            mode: 'native',
+            target: 'default-vgc',
+            residency: 'hot',
+            unpackedBytes: 1024,
+          });
+        }
+        seedStateDb.close();
+
+        const prevDev = process.env.ARENA_DEV;
+        process.env.ARENA_DEV = '1';
+        try {
+          await arenaIndex.runDaemon({
+            serverUrl,
+            arenaSecret: secret,
+            stateDbPath: daemonStatePath,
+            agentsDir: daemonAgentsDir,
+            stagingDir: path.join(tmpDir, 'daemon-pools-arch-staging'),
+            archiveLogsDir: daemonLogsDir,
+            maxTurns: 1,
+            once: true,
+          });
+
+          const vgcPubDir = path.join(publicDir, 'arena', 'ladders', 'gen9championsvgc2026regmc');
+          const vgcPrivDir = path.join(
+            publicDir,
+            'arena',
+            'ladders',
+            '.private',
+            'gen9championsvgc2026regmc'
+          );
+          expect(fs.existsSync(vgcPubDir)).toBe(false);
+          expect(
+            fs.existsSync(path.join(vgcPrivDir, 'gen9championsvgc2026regmc-0000001a.log'))
+          ).toBe(true);
+          expect(
+            fs.existsSync(path.join(vgcPrivDir, 'gen9championsvgc2026regmc-0000001b.log'))
+          ).toBe(true);
+
+          db.setLadderStatus(
+            'gen9championsvgc2026regmc',
+            'archived',
+            Math.floor(Date.now() / 1000)
+          );
+          await arenaIndex.runDaemon({
+            serverUrl,
+            arenaSecret: secret,
+            stateDbPath: daemonStatePath,
+            agentsDir: daemonAgentsDir,
+            stagingDir: path.join(tmpDir, 'daemon-pools-arch-staging'),
+            archiveLogsDir: daemonLogsDir,
+            maxTurns: 1,
+            once: true,
+          });
+
+          expect(fs.existsSync(vgcPrivDir)).toBe(false);
+          expect(
+            fs.existsSync(path.join(vgcPubDir, 'gen9championsvgc2026regmc-logs.tar'))
+          ).toBe(true);
+          expect(
+            fs.existsSync(path.join(vgcPubDir, 'gen9championsvgc2026regmc-0000001a.log'))
+          ).toBe(true);
+          expect(
+            fs.existsSync(path.join(vgcPubDir, 'gen9championsvgc2026regmc-0000001b.log'))
+          ).toBe(true);
+        } finally {
+          if (prevDev === undefined) delete process.env.ARENA_DEV;
+          else process.env.ARENA_DEV = prevDev;
+        }
+      });
+    });
+
     test('reuses locked active pools team roster when smoke testing a new version', async () => {
       await withRealArenaServer('locked-active-teams', async ({db, client}) => {
         const stateDb = new arenaDb.Database(':memory:');

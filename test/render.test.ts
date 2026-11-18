@@ -2035,7 +2035,7 @@ describe('JSON route parity & retired pool archives', () => {
         '/arena/ladders/gen9championsvgc2026regmc/index.json'
       );
       expect(vgcLadderJson.archiveHref).toBe(
-        '/arena/ladders/gen9championsvgc2026regmc/gen9championsvgc2026regmc-logs.7z'
+        '/arena/ladders/gen9championsvgc2026regmc/gen9championsvgc2026regmc-logs.tar'
       );
       expect(vgcLadderJson.teamsHref).toBe(
         '/arena/ladders/gen9championsvgc2026regmc/teams.json'
@@ -2205,6 +2205,119 @@ describe('JSON route parity & retired pool archives', () => {
       const archiveIdx = randLadderHtml.indexOf('gen9randombattle20261109-logs.tar');
       expect(matchupsIdx).toBeGreaterThan(0);
       expect(archiveIdx).toBeGreaterThan(matchupsIdx);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('withholds inline replay log attributes while a pools ladder is active', async () => {
+    const vgcMatches = db.getMatchesPage({ladderId: 'gen9championsvgc2026regmc', limit: 5}).matches;
+    expect(vgcMatches.length).toBeGreaterThan(0);
+    const vgcMatch = vgcMatches[0];
+    const vgcDir = path.join(tmpPublic, 'arena', 'ladders', 'gen9championsvgc2026regmc');
+    fs.mkdirSync(vgcDir, {recursive: true});
+    fs.writeFileSync(path.join(vgcDir, `${vgcMatch.id}a.log`), '|win|Foul Play\n', 'utf8');
+    fs.writeFileSync(path.join(vgcDir, `${vgcMatch.id}b.log`), '|win|Jaxcalibur\n', 'utf8');
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 60});
+    try {
+      const html = await h.getText('/arena/battles/');
+      expect(html).not.toContain(
+        `/arena/ladders/gen9championsvgc2026regmc/${vgcMatch.id}a.log`
+      );
+      expect(
+        (await h.getRaw(`/arena/ladders/gen9championsvgc2026regmc/${vgcMatch.id}a.log?side=both`))
+          .status
+      ).toBe(404);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('renders inline replay slot for archived pools ladder battles on battles page', async () => {
+    const vgcMatch = db.getMatchesPage({
+      ladderId: 'gen9championsvgc2026regmc',
+      limit: 1,
+    }).matches[0];
+    const stagedDir = path.join(
+      tmpPublic,
+      'arena',
+      'ladders',
+      '.private',
+      'gen9championsvgc2026regmc'
+    );
+    fs.mkdirSync(stagedDir, {recursive: true});
+    fs.writeFileSync(
+      path.join(stagedDir, `${vgcMatch.id}a.log`),
+      [
+        '|player|p1|Foul Play|1',
+        '|player|p2|Jaxcalibur|2',
+        '|gametype|doubles',
+        '|gen|9',
+        '|tier|[Gen 9 Champions] VGC 2026 Reg M-C',
+        '|split|p1',
+        '|switch|p1a: Incineroar|Incineroar|202/202',
+        '|switch|p1a: Incineroar|Incineroar|100/100',
+        '|win|Foul Play',
+      ].join('\n'),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(stagedDir, `${vgcMatch.id}b.log`), '|win|Jaxcalibur\n', 'utf8');
+
+    await runPkmnCli(
+      ['set-ladder-status', 'gen9championsvgc2026regmc', 'archived'],
+      {db, publicDir: tmpPublic, now: NOW + 10, log: () => undefined}
+    );
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 60});
+    try {
+      const html = await h.getText('/arena/battles/');
+      expect(html).toContain(`data-match-id="${vgcMatch.id}"`);
+      expect(html).toContain(
+        `data-g1-log="/arena/ladders/gen9championsvgc2026regmc/${vgcMatch.id}a.log"`
+      );
+      expect(html).toContain(
+        `data-g2-log="/arena/ladders/gen9championsvgc2026regmc/${vgcMatch.id}b.log"`
+      );
+      const bothJson = await h.getJson<{lines: string[]; p1Lines: string[]; p2Lines: string[]}>(
+        `/arena/ladders/gen9championsvgc2026regmc/${vgcMatch.id}a.log?side=both`
+      );
+      expect(bothJson.p1Lines).toContain('|switch|p1a: Incineroar|Incineroar|202/202');
+      expect(bothJson.p2Lines).toContain('|switch|p1a: Incineroar|Incineroar|100/100');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('renders inline replay slot for archived pools ladder battles on agent profiles',
+    async () => {
+      const vgcMatch = db.getMatchesPage({
+        ladderId: 'gen9championsvgc2026regmc',
+        limit: 1,
+      }).matches[0];
+      db.setLadderStatus('gen9championsvgc2026regmc', 'archived', NOW + 10);
+      const vgcDir = path.join(tmpPublic, 'arena', 'ladders', 'gen9championsvgc2026regmc');
+      fs.mkdirSync(vgcDir, {recursive: true});
+      fs.writeFileSync(path.join(vgcDir, `${vgcMatch.id}a.log`), '|win|Foul Play\n', 'utf8');
+      fs.writeFileSync(path.join(vgcDir, `${vgcMatch.id}b.log`), '|win|Jaxcalibur\n', 'utf8');
+
+      const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 60});
+      try {
+        const profileHtml = await h.getText(`/projects/${vgcMatch.p1.slug}/`);
+        expect(profileHtml).toContain(
+          `data-g1-log="/arena/ladders/gen9championsvgc2026regmc/${vgcMatch.id}a.log"`
+        );
+      } finally {
+        await h.close();
+      }
+    });
+
+  test('retains slot filter on battles page when all ladders in a slot are archived', async () => {
+    db.setLadderStatus('gen9championsvgc2026regmc', 'archived', NOW + 10);
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 60});
+    try {
+      const html = await h.getText('/arena/battles/');
+      expect(html).toContain('id="bf-vgc"');
     } finally {
       await h.close();
     }

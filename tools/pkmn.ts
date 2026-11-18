@@ -10,6 +10,7 @@ import * as path from 'path';
 import {Dex} from '@pkmn/sim';
 
 import * as db from '../db';
+import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as smogon from '../server/smogon';
@@ -52,7 +53,7 @@ const USAGE = [
   '  set-tournament-status <id> <scheduled|running|completed>',
   '  seed-tournament <id>',
   '  publish-tournament-archive <id> <archive.7z>',
-  '  publish-ladder-archive <ladder_id> <archive.7z|archive.tar>',
+  '  publish-ladder-archive <ladder_id> <archive.tar>',
   '  lookup-smogon <username|slug.id|id|url>',
   '  session [--github <login>] [--github-id <id>] [--discord <id>:<username>] ' +
     '[--ttl <seconds>] [--secret <secret>]',
@@ -281,6 +282,9 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           );
         }
         const updated = database.setLadderStatus(ladderId, status as db.LadderStatus, now);
+        if (updated.team === 'pools' && updated.status === 'archived') {
+          arena.promoteArchivedPoolsLogs(options.publicDir ?? render.PUBLIC_DIR, updated.id);
+        }
         log(`Ladder ${updated.id} (${updated.name}) -> status=${updated.status}`);
         return;
       }
@@ -345,6 +349,12 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             : {}),
           now,
         });
+        if (rotated.oldLadder.team === 'pools' && rotated.oldLadder.status === 'archived') {
+          arena.promoteArchivedPoolsLogs(
+            options.publicDir ?? render.PUBLIC_DIR,
+            rotated.oldLadder.id
+          );
+        }
         const nextMsg = rotated.newLadder
           ? ` -> staged ${rotated.newLadder.id} ("${rotated.newLadder.name}", ` +
             `status=${rotated.newLadder.status})`
@@ -534,7 +544,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
       case 'publish-ladder-archive': {
         const [ladderId, srcFile] = positional.slice(1);
         if (!ladderId || !srcFile) {
-          throw new Error('Usage: pkmn publish-ladder-archive <ladder_id> <archive.7z>');
+          throw new Error('Usage: pkmn publish-ladder-archive <ladder_id> <archive.tar>');
         }
         if (!fs.existsSync(srcFile) || !fs.statSync(srcFile).isFile()) {
           throw new Error(`Archive file not found: ${srcFile}`);
@@ -556,9 +566,11 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           );
         }
         const pub = options.publicDir ?? render.PUBLIC_DIR;
-        const ext = ladder.team === 'random' ? 'tar' : '7z';
-        const fileName = `${ladder.id}-logs.${ext}`;
+        const fileName = `${ladder.id}-logs.tar`;
         const dest = path.join(pub, 'arena', 'ladders', ladder.id, fileName);
+        if (ladder.team === 'pools') {
+          arena.promoteArchivedPoolsLogs(pub, ladder.id);
+        }
         render.copyFileAtomic(srcFile, dest);
         log(`Published ladder archive -> /arena/ladders/${ladder.id}/${fileName}`);
         return;
