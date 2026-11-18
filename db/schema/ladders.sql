@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS ladders (
   name TEXT NOT NULL,
   -- @pkmn/sim format ID used for battle simulation and TeamValidator legality checks (e.g. 'gen1ou').
   format TEXT NOT NULL,
+  -- @pkmn/sim version (e.g. '0.11.0') used to simulate battles and validate teams on this ladder.
+  version TEXT NOT NULL,
   -- How teams are supplied before each blind-pair match:
   --   'harvested': sampled from curated public tournament/high-ladder pools on the Arena runner
   --   'random': generated per seed by @pkmn/sim (e.g. gen9randombattle)

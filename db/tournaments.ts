@@ -51,6 +51,7 @@ export interface TournamentRow {
   id: string;
   name: string;
   format: string;
+  version: string;
   team?: TeamMode;
   rulesJson: string;
   bestOf: number;
@@ -67,6 +68,7 @@ export interface UpsertTournamentInput {
   id: string;
   name: string;
   format: string;
+  version: string;
   team?: TeamMode;
   rulesJson?: string;
   gamesPerMatchup: number;
@@ -82,6 +84,7 @@ interface RawTournamentRow {
   id: string;
   name: string;
   format: string;
+  version: string;
   team: TeamMode | null;
   rules_json: string;
   games_per_matchup: number;
@@ -98,6 +101,7 @@ function mapTournamentRow(raw: RawTournamentRow): TournamentRow {
     id: raw.id,
     name: raw.name,
     format: raw.format,
+    version: raw.version,
     team: raw.team ?? undefined,
     rulesJson: raw.rules_json,
     bestOf: getTournamentBestOf(raw.format, raw.rules_json),
@@ -112,18 +116,23 @@ function mapTournamentRow(raw: RawTournamentRow): TournamentRow {
 }
 
 export function upsertTournament(db: DatabaseSync, input: UpsertTournamentInput) {
+  const version = input.version.trim();
+  if (!version) {
+    throw new Error(`Tournament "${input.id}" must specify a @pkmn/sim version`);
+  }
   if (input.team !== undefined && !TEAM_MODES.has(input.team)) {
     throw new Error(`Invalid tournament team mode "${String(input.team)}" for "${input.id}"`);
   }
   db.prepare(`
     INSERT INTO tournaments (
-      id, name, format, team, rules_json, games_per_matchup,
+      id, name, format, version, team, rules_json, games_per_matchup,
       batch_size, parallel_tables, hardware, status, starts_at, completed_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       format = excluded.format,
+      version = excluded.version,
       team = excluded.team,
       rules_json = excluded.rules_json,
       games_per_matchup = excluded.games_per_matchup,
@@ -137,6 +146,7 @@ export function upsertTournament(db: DatabaseSync, input: UpsertTournamentInput)
     input.id,
     input.name,
     input.format,
+    version,
     input.team ?? null,
     input.rulesJson ?? '[]',
     input.gamesPerMatchup,

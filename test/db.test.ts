@@ -454,6 +454,7 @@ describe('ladders configuration', () => {
     expect(() => parseLaddersYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   status: active
@@ -464,6 +465,7 @@ describe('ladders configuration', () => {
     expect(() => parseLaddersYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   status: active
@@ -476,12 +478,14 @@ describe('ladders configuration', () => {
     expect(() => parseLaddersYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   status: active
   teams: 20
 - name: VGC
   format: gen9championsvgc2026regmd
+  version: '0.11.0'
   id: gen9championsvgc2026regmd
   team: pools
   status: active
@@ -495,12 +499,14 @@ describe('ladders configuration', () => {
       db.syncLaddersFromYaml(`
 - name: VGC 2026 Reg M-C
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   status: archived
   teams: 20
 - name: VGC
   format: gen9championsvgc2026regmd
+  version: '0.11.0'
   id: gen9championsvgc2026regmd
   team: pools
   status: active
@@ -526,6 +532,7 @@ describe('ladders configuration', () => {
       const laddersYaml = `
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   teams: 20
@@ -555,6 +562,7 @@ describe('ladders configuration', () => {
       db.syncLaddersFromYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   teams: 20
@@ -576,6 +584,7 @@ describe('ladders configuration', () => {
     db.syncLaddersFromYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   status: active
@@ -669,6 +678,7 @@ describe('ladders configuration', () => {
       db.syncLaddersFromYaml(`
 - name: RAND
   format: gen9randombattle
+  version: '0.11.0'
   id: gen9randombattle
   team: random
   status: active
@@ -726,6 +736,7 @@ describe('ladders configuration', () => {
       db.syncLaddersFromYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   status: active
@@ -1813,6 +1824,7 @@ describe('quarantine invariants', () => {
     db.syncLaddersFromYaml(`
 - name: RAND
   format: gen9randombattle
+  version: '0.11.0'
   id: gen9randombattle
   team: random
   status: upcoming
@@ -1997,6 +2009,7 @@ describe('quarantine invariants', () => {
       id: '9',
       name: 'Tour 9',
       format: 'gen9ou',
+      version: '0.11.0',
       startsAt: 1_770_000_000,
       status: 'scheduled',
       gamesPerMatchup: 8,
@@ -2089,6 +2102,7 @@ describe('tournament standings', () => {
       id: 'sf-test',
       name: 'SF Tiebreak',
       format: 'gen9ou',
+      version: '0.11.0',
       startsAt: 1_780_000_000,
       status: 'scheduled',
       gamesPerMatchup: 2,
@@ -2203,6 +2217,7 @@ describe('tournament standings', () => {
       id: 'bo3-tour',
       name: 'VGC Bo3 Tour',
       format: 'gen9championsvgc2026regmc',
+      version: '0.11.0',
       rulesJson: JSON.stringify(['Open Team Sheets', 'Best of = 3']),
       startsAt: 1_785_000_000,
       status: 'running',

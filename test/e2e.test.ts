@@ -268,6 +268,7 @@ describe('pools team sampling', () => {
         '  slot: vgc',
         '  name: VGC Live',
         '  format: gen9championsvgc2026regmc',
+        '  version: 0.11.0',
         '  team: pools',
         '  min: 4',
         '  teams: 1',

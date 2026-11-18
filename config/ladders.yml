@@ -1,5 +1,6 @@
 - name: RBY
   format: gen1ou
+  version: '0.11.0'
   id: gen1ou20261109
   discord: '1563716887131459685'
   team: harvested
@@ -8,6 +9,7 @@
 
 - name: ADV
   format: gen3ou
+  version: '0.11.0'
   id: gen3ou20261109
   discord: '1563717163481825472'
   team: harvested
@@ -16,6 +18,7 @@
 
 - name: SV
   format: gen9ou
+  version: '0.11.0'
   id: gen9ou20261109
   discord: '1563717708720377977'
   team: harvested
@@ -24,6 +27,7 @@
 
 - name: RAND
   format: gen9randombattle
+  version: '0.11.0'
   id: gen9randombattle20261109
   discord: '1563718027994992752'
   team: random
@@ -32,6 +36,7 @@
 
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   discord: '1564121375558340768'
   team: pools

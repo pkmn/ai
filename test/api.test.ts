@@ -44,11 +44,13 @@ const PROJECTS_YAML = `
 const LADDERS_YAML = `
 - name: RBY
   format: gen1ou
+  version: '0.11.0'
   id: gen1ou20261109
   team: harvested
   status: active
 - name: VGC
   format: gen9championsvgc2026regmc
+  version: '0.11.0'
   id: gen9championsvgc2026regmc
   discord: '1564121375558340768'
   team: pools
@@ -561,7 +563,7 @@ describe('Arena live heartbeats & match completion', () => {
   test('extracts p1Lines or p2Lines via extractChannelMessages on random ladder heartbeats',
     async () => {
       db.syncLaddersFromYaml(
-        `${LADDERS_YAML}\n- name: RAND\n  format: gen9randombattle\n` +
+        `${LADDERS_YAML}\n- name: RAND\n  format: gen9randombattle\n  version: '0.11.0'\n` +
         '  id: gen9randombattle20261109\n  team: random\n  status: active\n',
         1_760_000_000
       );
@@ -792,6 +794,7 @@ describe('Arena SSE streams', () => {
       id: '2',
       name: 'Tournament #2: Gen 1 OU',
       format: 'gen1ou',
+      version: '0.11.0',
       gamesPerMatchup: 10,
       parallelTables: 2,
       hardware: 'GCP L4 Spot',
@@ -1099,6 +1102,7 @@ describe('Arena SSE streams', () => {
       id: '2',
       name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
       format: 'gen9championsvgc2026regmc',
+      version: '0.11.0',
       rulesJson: JSON.stringify(['Open Team Sheets', 'Best of = 3']),
       gamesPerMatchup: 10,
       parallelTables: 2,
@@ -1420,7 +1424,7 @@ describe('pkmn CLI commands', () => {
     await expect(runPkmnCli(
       [
         'create-tournament', '../bad', '--name', 'Bad', '--format', 'gen1ou',
-        '--starts', '2026-12-01T00:00:00Z',
+        '--version', '0.11.0', '--starts', '2026-12-01T00:00:00Z',
       ],
       {db, now: 1_760_000_615, log}
     )).rejects.toThrow(/Invalid tournament ID/);
@@ -1428,7 +1432,7 @@ describe('pkmn CLI commands', () => {
     await expect(runPkmnCli(
       [
         'create-tournament', '4', '--name', 'Bad Fmt', '--format', 'notarealformat99',
-        '--starts', '2026-12-01T00:00:00Z',
+        '--version', '0.11.0', '--starts', '2026-12-01T00:00:00Z',
       ],
       {db, now: 1_760_000_615, log}
     )).rejects.toThrow(/Unknown Pokémon Showdown format/);
@@ -1458,6 +1462,8 @@ describe('pkmn CLI commands', () => {
         'Tournament #3: Gen 1 OU',
         '--format',
         'gen1ou',
+        '--version',
+        '0.11.0',
         '--games',
         '8',
         '--tables',
@@ -1519,7 +1525,7 @@ describe('Arena binary archive uploads', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-archive-'));
     db = new Database(':memory:');
     db.syncLaddersFromYaml(
-      `${LADDERS_YAML}\n- name: RAND\n  format: gen9randombattle\n` +
+      `${LADDERS_YAML}\n- name: RAND\n  format: gen9randombattle\n  version: '0.11.0'\n` +
         '  id: gen9randombattle20261109\n  team: random\n  status: active\n',
       1_700_000_000
     );
@@ -1528,6 +1534,7 @@ describe('Arena binary archive uploads', () => {
       id: '3',
       name: 'Tournament #3: VGC 2026 Reg M-C OTS BO3',
       format: 'gen9championsvgc2026regmc',
+      version: '0.11.0',
       gamesPerMatchup: 18,
       parallelTables: 4,
       hardware: 'GCP L4 Spot',
@@ -2354,7 +2361,7 @@ describe('createServerApp production HTTP hardening', () => {
 
   test('rejects match-complete submissions targeting upcoming ladders', async () => {
     db.syncLaddersFromYaml(
-      `${LADDERS_YAML}\n- name: ADV\n  format: gen3ou\n` +
+      `${LADDERS_YAML}\n- name: ADV\n  format: gen3ou\n  version: '0.11.0'\n` +
       '  id: gen3ou20261109\n  team: harvested\n  status: upcoming\n',
       1_760_000_010
     );
@@ -2432,6 +2439,7 @@ describe('createServerApp production HTTP hardening', () => {
       id: '1',
       name: 'Tour 1',
       format: 'gen9ou',
+      version: '0.11.0',
       startsAt: 1_760_000_000,
       status: 'running',
       gamesPerMatchup: 4,

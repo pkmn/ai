@@ -926,6 +926,7 @@ const ARENA_CONFIG: discord.Config = {
 const LADDERS_YAML = `
 - name: RBY
   format: gen1ou
+  version: '0.11.0'
   id: gen1ou20261109
   discord: '1563716887131459685'
   team: harvested
@@ -934,6 +935,7 @@ const LADDERS_YAML = `
 
 - name: SV
   format: gen9ou
+  version: '0.11.0'
   id: gen9ou20261109
   discord: '1563717708720377977'
   team: harvested

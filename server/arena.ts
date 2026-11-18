@@ -923,6 +923,7 @@ export interface PendingLadder {
   slot: db.LadderSlot;
   name: string;
   format: string;
+  version?: string;
   team: db.TeamMode;
   min: number;
   teams?: number;
@@ -948,6 +949,7 @@ export interface PendingTournament {
   id: string;
   name: string;
   format: string;
+  version?: string;
   team?: db.TeamMode;
   teamPool?: string[];
   rulesJson: string;
@@ -1076,6 +1078,7 @@ export interface TournamentStateResponse {
     id: string;
     name: string;
     format: string;
+    version?: string;
     bestOf: number;
     team?: db.TeamMode;
     customRules: string[];
@@ -1346,6 +1349,7 @@ export class Client {
       id: string;
       slot: string;
       format: string;
+      version?: string;
       team: 'random' | 'harvested' | 'pools';
       status: 'upcoming' | 'active' | 'settling' | 'archived';
       min: number;
@@ -2493,6 +2497,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         slot: l.slot,
         name: l.name,
         format: l.format,
+        version: l.version,
         team: l.team,
         min: l.min,
         teams: l.teams,
@@ -2506,6 +2511,7 @@ export function register(app: polka.Polka, options: Options): Handle {
             id: t.id,
             name: t.name,
             format: t.format,
+            version: t.version,
             ...(t.team ? {team: t.team} : {}),
             ...(teamPool.length > 0 ? {teamPool} : {}),
             rulesJson: t.rulesJson,
@@ -3756,6 +3762,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         id: l.id,
         slot: l.slot,
         format: l.format,
+        version: l.version,
         team: l.team,
         status: l.status,
         min: l.min,
@@ -3837,6 +3844,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         id: tournament.id,
         name: tournament.name,
         format: tournament.format,
+        version: tournament.version,
         ...(tournament.team ? {team: tournament.team} : {}),
         customRules,
         bestOf: tournament.bestOf,

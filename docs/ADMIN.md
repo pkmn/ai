@@ -68,8 +68,9 @@ npm run pkmn -- <command> [args...]
 | `set-ladder-status <ladder_id> <status>` | Set `<ladder_id>` to `upcoming`, `active`, `settling`, or `archived`. |
 | `upload-ladder-teams <ladder_id> <teams-file>` | Validate and upload canonical `harvested` teams into SQLite (`ladder_teams`). |
 | `rotate-ladder <old_id> --name "..." [--new <id> ...]` | Transition `<old_id>` into `settling`/`archived` under its historical name and optionally open `<new_id>`. |
+| `install-sim <version> [--sim <spec> ...]` | Install an isolated `@pkmn/sim` version under `sim/<version>/` and verify its worker boots cleanly. |
 | `publish-ladder-archive <ladder_id> <file>` | Publish `<ladder_id>-logs.tar` (for `random` ladders or `archived` `pools` ladders). |
-| `create-tournament <id> --name "..." --format <fmt> ...` | Create or update a Tournament (`scheduled`, `running`, or `completed`). |
+| `create-tournament <id> --name "..." --format <fmt> --version <ver> ...` | Create or update a Tournament (`scheduled`, `running`, or `completed`). |
 | `seed-tournament <id>` | Lock tournament entrants and assign 1-based Berger seeds by conservative ladder rating. |
 | `set-tournament-status <id> <status>` | Flip tournament `<id>` to `scheduled`, `running` (enables `#topbar` `● LIVE` banner), or `completed`. |
 | `publish-tournament-archive <id> <archive.7z>` | Publish `<id>-replays.7z` for a `completed` tournament. |
@@ -304,13 +305,42 @@ npm run pkmn -- set-anchor gen9ou20261109 foul-play 1.0.0
 npm run pkmn -- set-anchor gen9randombattle20261109 foul-play 1.0.0
 ```
 
+### Adding a New `@pkmn/sim` Version
+
+Every ladder in `config/ladders.yml` and every tournament in SQLite explicitly specifies a
+`version` string (e.g. `0.11.0`, or a pinned tag/commit key such as `0.12.0` or `reg-md-202612`).
+Each version runs inside its own isolated `worker_threads` worker (`server/sim-worker.ts`) so fixed
+ladders (`RBY`, `ADV`, `SV`, `RAND`) remain frozen while seasonal `VGC` ladders or tournaments
+advance to newer Pokémon Showdown commits.
+
+To install a new `@pkmn/sim` version on both the web server (`pkmn.ai`) and the Arena coordinator
+host (`arena`):
+
+```sh
+# Install an npm-published version into sim/0.12.0/ and verify the worker boots:
+npm run pkmn -- install-sim 0.12.0 \
+  --dex @pkmn/dex@0.12.0 \
+  --mods @pkmn/mods@0.12.0 \
+  --randoms @pkmn/randoms@0.12.0
+
+# Or install directly from a git commit / tarball under a custom version key:
+npm run pkmn -- install-sim vgc-2026-12 \
+  --sim https://github.com/pkmn/ps/tarball/<commit-sha>
+```
+
+`sim/<version>/` is gitignored (`sim/`), so run `pkmn install-sim <version>` on each host (both
+`pkmn.ai` for team validation and the Mac mini `arena` runner for battle simulation) before
+activating a ladder or tournament that references `<version>`.
+
 ### Rotating a Seasonal or Epoch Ladder
 
 When a new VGC regulation begins (or a permanent format undergoes a new epoch):
 
-1. If the new ladder uses `team: pools`, add the new reference blocklist directories under `teams/`
+1. If the new ladder uses a new `@pkmn/sim` version, install it with `pkmn install-sim <version>`
+   on both `pkmn.ai` and `arena`.
+2. If the new ladder uses `team: pools`, add the new reference blocklist directories under `teams/`
    and `config/ladders.yml`.
-2. Run `rotate-ladder` on `pkmn.ai`:
+3. Run `rotate-ladder` on `pkmn.ai`:
 
 ```sh
 npm run pkmn -- rotate-ladder gen9championsvgc2026regmc \
@@ -318,6 +348,7 @@ npm run pkmn -- rotate-ladder gen9championsvgc2026regmc \
   --new gen9championsvgc2026regmd \
   --new-name "VGC" \
   --format gen9championsvgc2026regmd \
+  --version 0.12.0 \
   --team pools \
   --min 4 \
   --teams 20
@@ -424,6 +455,7 @@ teams and `.log` replays).
 npm run pkmn -- create-tournament 3 \
   --name "Tournament #3: VGC 2026 Reg M-D OTS BO3" \
   --format gen9championsvgc2026regmd \
+  --version 0.11.0 \
   --team pools \
   --rules '["Open Team Sheets","Best-of-3"]' \
   --games 50 \

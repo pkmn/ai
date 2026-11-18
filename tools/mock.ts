@@ -1546,6 +1546,7 @@ export class Runner {
       return {
         name: r.name,
         format: r.format,
+        version: r.version,
         id: r.id,
         ...(r.discord ? {discord: r.discord} : {}),
         team: r.team,
@@ -1606,9 +1607,11 @@ export class Runner {
         ? ((yaml.parse(fs.readFileSync(this.laddersFile, 'utf8')) ?? []) as db.LadderConfig[])
         : [];
       const filtered = cfgs.filter(c => c.id !== id);
+      const version = getFlag(cmd, 'version') ?? db.SIM_VERSION;
       filtered.push({
         name,
         format,
+        version,
         id,
         ...(discord ? {discord} : {}),
         team,
@@ -3171,6 +3174,7 @@ export class Runner {
         id,
         name,
         format,
+        version: getFlag(cmd, 'version') ?? db.SIM_VERSION,
         team,
         rulesJson: getFlag(cmd, 'rules') ?? defaultRules,
         gamesPerMatchup: Number(getFlag(cmd, 'games') ?? 8),

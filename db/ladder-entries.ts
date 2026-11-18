@@ -276,6 +276,7 @@ export function getAgentParticipatedLadders(db: DatabaseSync, agentId: number): 
     slot: r.slot as LadderSlot,
     name: r.name as string,
     format: r.format as string,
+    version: r.version as string,
     team: r.team as LadderRow['team'],
     min: r.min as number,
     teams: (r.teams as number | null) ?? undefined,

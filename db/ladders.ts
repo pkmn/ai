@@ -23,6 +23,8 @@ export const TEAM_MODES = new Set<TeamMode>(['harvested', 'random', 'pools']);
 export const LADDER_STATUSES = new Set<LadderStatus>([
   'upcoming', 'active', 'settling', 'archived',
 ]);
+export const SIM_VERSION = '0.11.0';
+const SIM_VERSION_RE = /^[A-Za-z0-9._-]+$/;
 
 export const SLOT_ORDER_SQL = `
   CASE slot
@@ -39,6 +41,7 @@ export const SLOT_ORDER_SQL = `
 export interface LadderConfig {
   name: string;
   format: string;
+  version: string;
   id: string;
   discord?: string;
   team: TeamMode;
@@ -53,6 +56,7 @@ export interface LadderRow {
   slot: LadderSlot;
   name: string;
   format: string;
+  version: string;
   team: TeamMode;
   min: number;
   teams?: number;
@@ -66,6 +70,7 @@ export interface StagedLadderInput {
   id: string;
   name?: string;
   format?: string;
+  version?: string;
   team?: TeamMode;
   min?: number;
   teams?: number;
@@ -84,6 +89,7 @@ interface RawLadderRow {
   slot: LadderSlot;
   name: string;
   format: string;
+  version: string;
   team: TeamMode;
   min: number;
   teams: number | null;
@@ -99,6 +105,7 @@ function mapLadderRow(raw: RawLadderRow): LadderRow {
     slot: raw.slot,
     name: raw.name,
     format: raw.format,
+    version: raw.version,
     team: raw.team,
     min: raw.min,
     teams: raw.teams ?? undefined,
@@ -165,6 +172,12 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     ) {
       throw new Error(`Invalid discord role "${String(entry.discord)}" for "${id}"`);
     }
+    if (
+      typeof entry.version !== 'string' ||
+      !SIM_VERSION_RE.test(entry.version.trim())
+    ) {
+      throw new Error(`Missing or invalid version "${String(entry.version)}" for "${id}"`);
+    }
     if (seenIds.has(id)) {
       throw new Error(`Duplicate ladder id "${id}" in ladders.yml`);
     }
@@ -213,14 +226,15 @@ export function syncLaddersFromYaml(
   const selectExisting = db.prepare('SELECT name, status, archived_at FROM ladders WHERE id = ?');
   const upsert = db.prepare(`
     INSERT INTO ladders (
-      id, slot, name, format, team, min,
+      id, slot, name, format, version, team, min,
       teams, discord, status, created_at, archived_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       slot = excluded.slot,
       name = excluded.name,
       format = excluded.format,
+      version = excluded.version,
       team = excluded.team,
       min = excluded.min,
       teams = excluded.teams,
@@ -257,11 +271,13 @@ export function syncLaddersFromYaml(
       const archivedAt = status === 'archived'
         ? (existing?.archived_at ?? now)
         : null;
+      const version = cfg.version.trim();
       upsert.run(
         cfg.id,
         slot,
         name,
         cfg.format.trim(),
+        version,
         cfg.team,
         min,
         teams,
@@ -684,18 +700,23 @@ export function rotateLadder(
           : oldLadder.discord;
         const name = next.name?.trim() || oldLadder.slot.toUpperCase();
         const format = next.format?.trim() || oldLadder.format;
+        const version = next.version?.trim() || oldLadder.version;
+        if (!SIM_VERSION_RE.test(version)) {
+          throw new Error(`Invalid version "${version}" for "${newId}"`);
+        }
 
         db.prepare(`
           INSERT INTO ladders (
-            id, slot, name, format, team,
+            id, slot, name, format, version, team,
             min, teams, discord, status, created_at, archived_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'upcoming', ?, NULL)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'upcoming', ?, NULL)
         `).run(
           newId,
           oldLadder.slot,
           name,
           format,
+          version,
           team,
           min,
           teams ?? null,

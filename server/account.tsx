@@ -25,7 +25,7 @@ import {Auth, isCrossSiteRequest} from './auth';
 import {
   RejectedTeam,
   splitSubmittedTeams,
-  validateCompetitorTeamsIncremental,
+  validateCompetitorTeamsIncrementalForVersion,
 } from './teams';
 
 export function deducePackageFormat(url: string): db.PackageFormat {
@@ -1699,14 +1699,15 @@ export function register(app: polka.Polka, options: Options) {
       }
 
       const pools = poolsMap.get(ladder.id) ?? [];
-      const result = validateCompetitorTeamsIncremental(
+      const result = await validateCompetitorTeamsIncrementalForVersion(
         payload.teams,
         {
           format: ladder.format,
           pools,
           teams: requiredTeams,
         },
-        existingSaved
+        existingSaved,
+        ladder.version
       );
 
       if (result.allSaved.length !== existingSaved.length) {

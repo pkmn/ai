@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS tournaments (
   name TEXT NOT NULL,
   -- @pkmn/sim format ID played in this tournament (e.g. 'gen9championsvgc2026regmc').
   format TEXT NOT NULL,
+  -- @pkmn/sim version (e.g. '0.11.0') used to simulate battles in this tournament.
+  version TEXT NOT NULL,
   -- Optional Arena-assigned team mode ('harvested', 'random', or 'pools'); NULL when entrants
   -- supply their own teams via `/utm <packed_team>` on their first stdout line.
   team TEXT CHECK (team IN ('harvested', 'random', 'pools')),

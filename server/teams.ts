@@ -19,82 +19,38 @@ import {TeamGenerators} from '@pkmn/randoms';
 import {PokemonSet, Team} from '@pkmn/sets';
 import * as sim from '@pkmn/sim';
 
+import {SIM_VERSION} from '../db/ladders';
 import {toID} from '../static/util';
 import * as teams from '../teams';
+
+import {validateTeam} from './sim';
+import {
+  configureSimMod,
+  resolveArenaFormatIdWithSim,
+  sampleRandomPairWithSim,
+} from './sim-ops';
 
 // `@pkmn/mods` requires parent mods (`champions`) to be registered on `@pkmn/sim`'s `Dex`
 // before child mods (`championsregmb`). We also extend the base `sim.Dex.formats` table so
 // `BattleStreams.BattleStream()` and `sim.TeamValidator` resolve VGC Champions formats
 // (`gen9championsvgc2026regmc`), and register `@pkmn/randoms` so `sim.Teams.generate` works for
 // Random Battle ladders.
-sim.Dex.mod('champions', champions as unknown as sim.ModData);
-sim.Dex.mod('championsregmb', championsregmb as unknown as sim.ModData);
-
-type FormatListArg = Parameters<typeof sim.Dex.formats.extend>[0];
-
 let simConfigured = false;
 export function ensureSimConfigured() {
   if (simConfigured) return;
   simConfigured = true;
-  if ((champions as {Formats?: unknown}).Formats) {
-    sim.Dex.formats.extend(
-      (champions as unknown as {Formats: FormatListArg}).Formats
-    );
-  }
-  if ((championsregmb as {Formats?: unknown}).Formats) {
-    sim.Dex.formats.extend(
-      (championsregmb as unknown as {Formats: FormatListArg}).Formats
-    );
-  }
-  sim.Teams.setGeneratorFactory(TeamGenerators);
+  configureSimMod(sim, {
+    champions,
+    championsregmb,
+    teamGenerators: TeamGenerators,
+  });
 }
 
 ensureSimConfigured();
 
-// Resolves a format ID and optional custom rules for headless Arena/Tournament play:
-//   - By default (VGC ladder and Closed Team Sheets tournaments), removes upstream's interactive
-//     `Open Team Sheets` rule (`!Open Team Sheets`) so `|showteam|` is not broadcast and
-//     `|uhtml|otsrequest|` is not emitted.
-//   - When a tournament explicitly requests `Open Team Sheets` or `Force Open Team Sheets` via
-//     `customRules` (or inline `@@@` rules), maps `Open Team Sheets` to `Force Open Team Sheets`
-//     so `@pkmn/sim` broadcasts `|showteam|p1|` and `|showteam|p2|` automatically at Team Preview.
-export function resolveArenaFormatId(format: string, customRules?: readonly string[]): string {
+export function resolveArenaFormatId(format: string): string {
   ensureSimConfigured();
-  const [baseFormat, inlineRaw] = format.split('@@@');
-  const inlineRules = inlineRaw
-    ? inlineRaw.split(',').map(r => r.trim()).filter(Boolean)
-    : [];
-  const rules = [...inlineRules, ...(customRules ?? []).map(r => r.trim()).filter(Boolean)]
-    .map(r => {
-      const id = toID(r);
-      if (!r.startsWith('!')) {
-        if (id === 'openteamsheets') return 'Force Open Team Sheets';
-        if (id === 'bestof3' || id === 'bo3') return 'Best of = 3';
-      }
-      return r;
-    });
-
-  const wantsOts = rules.some(r => {
-    const id = toID(r);
-    return !r.startsWith('!') && (id === 'openteamsheets' || id === 'forceopenteamsheets');
-  });
-
-  if (wantsOts) {
-    return `${baseFormat}@@@${rules.join(',')}`;
-  }
-
-  const resolved = sim.Dex.formats.get(baseFormat);
-  const baseHasInteractiveOts =
-    resolved.exists &&
-    Array.isArray(resolved.ruleset) &&
-    resolved.ruleset.some(r => toID(r) === 'openteamsheets') &&
-    !resolved.ruleset.some(r => toID(r) === 'forceopenteamsheets');
-
-  if (baseHasInteractiveOts && !rules.some(r => toID(r) === 'openteamsheets')) {
-    rules.push('!Open Team Sheets');
-  }
-
-  return rules.length > 0 ? `${baseFormat}@@@${rules.join(',')}` : baseFormat;
+  return resolveArenaFormatIdWithSim(sim, format);
 }
 
 function getValidator(format: string): sim.TeamValidator {
@@ -444,10 +400,7 @@ export function sampleRandomPair(
   seed1: sim.PRNGSeed,
   seed2: sim.PRNGSeed
 ): {t1Packed: string; t2Packed: string} {
-  const cleanFormat = toID(format);
-  const t1Packed = sim.Teams.pack(sim.Teams.generate(cleanFormat, {seed: seed1}));
-  const t2Packed = sim.Teams.pack(sim.Teams.generate(cleanFormat, {seed: seed2}));
-  return {t1Packed, t2Packed};
+  return sampleRandomPairWithSim(sim, format, seed1, seed2);
 }
 
 export function loadReferencePool(format: string, pools: string[]): PoolEntry[] {
@@ -834,4 +787,44 @@ export function validateHarvestedTeams(rawInput: string | string[], formatId: st
   }
 
   return packedOut;
+}
+
+export async function validateCompetitorTeamsIncrementalForVersion(
+  rawInput: string | string[],
+  options: Options,
+  existingSavedPacked: string[] = [],
+  version = SIM_VERSION
+): Promise<IncrementalValidationResult> {
+  if (version === SIM_VERSION) {
+    return validateCompetitorTeamsIncremental(rawInput, options, existingSavedPacked);
+  }
+  const result = validateCompetitorTeamsIncremental(rawInput, options, existingSavedPacked);
+  const existingSet = new Set(existingSavedPacked);
+  const accepted: string[] = [...existingSavedPacked];
+  const rejections = [...result.rejections];
+  let newlySavedCount = 0;
+
+  for (const packed of result.allSaved) {
+    if (existingSet.has(packed)) continue;
+    const check = await validateTeam(options.format, packed, version);
+    if (check.problems && check.problems.length > 0) {
+      rejections.push({
+        index: accepted.length + 1,
+        reason: `Rejected by @pkmn/sim@${version}: ${check.problems[0]}`,
+      });
+    } else {
+      accepted.push(check.packed ?? packed);
+      newlySavedCount++;
+    }
+  }
+
+  const remainingCount = Math.max(0, result.requiredCount - accepted.length);
+  return {
+    allSaved: accepted,
+    newlySavedCount,
+    requiredCount: result.requiredCount,
+    remainingCount,
+    rejections,
+    complete: remainingCount === 0 && accepted.length === result.requiredCount,
+  };
 }

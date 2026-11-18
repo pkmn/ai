@@ -3,10 +3,11 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {PRNGSeed} from '@pkmn/sim';
+import type {PRNGSeed} from '@pkmn/sim';
 
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
+import * as sim from '../server/sim';
 import * as teams from '../server/teams';
 import {root, toID} from '../static/util';
 
@@ -24,6 +25,7 @@ export interface LadderSnapshot {
   id: string;
   slot: string;
   format: string;
+  version?: string;
   team: 'random' | 'harvested' | 'pools';
   status: 'upcoming' | 'active' | 'settling' | 'archived';
   min: number;
@@ -83,6 +85,7 @@ interface MirrorMatchContext {
   id: string;
   ladderId: string;
   format: string;
+  version?: string;
   teamMode: db.TeamMode;
   seed: PRNGSeed;
   startedAt: number;
@@ -129,6 +132,7 @@ export interface Options {
   maxTurns?: number;
   exploitProbability?: number;
   formatByLadderId?: ReadonlyMap<string, string>;
+  versionByLadderId?: ReadonlyMap<string, string>;
   randomInt?: (max: number) => number;
 }
 
@@ -201,6 +205,7 @@ export class Coordinator {
   private readonly maxTurns?: number;
   private readonly exploitProbability: number;
   private readonly formatByLadderId: Map<string, string>;
+  private readonly versionByLadderId: Map<string, string>;
   private readonly randomInt: (max: number) => number;
   private readonly customRandomInt: boolean;
   private readonly harvestedCache = new Map<
@@ -239,6 +244,7 @@ export class Coordinator {
     this.maxTurns = options.maxTurns;
     this.exploitProbability = options.exploitProbability ?? 0.45;
     this.formatByLadderId = new Map(options.formatByLadderId ?? []);
+    this.versionByLadderId = new Map(options.versionByLadderId ?? []);
     this.customRandomInt = options.randomInt !== undefined;
     this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
   }
@@ -362,10 +368,14 @@ export class Coordinator {
   ): Promise<number> {
     if (this.draining) return 0;
     const {ladders, submissions} = await this.client.getPendingSubmissions({target: 'ladder'});
-    const pendingMetaById = new Map<string, {format: string; team: db.TeamMode}>();
+    const pendingMetaById = new Map<
+      string,
+      {format: string; version?: string; team: db.TeamMode}
+    >();
     for (const l of ladders) {
-      pendingMetaById.set(l.id, {format: l.format, team: l.team});
+      pendingMetaById.set(l.id, {format: l.format, version: l.version, team: l.team});
       this.formatByLadderId.set(l.id, l.format);
+      if (l.version) this.versionByLadderId.set(l.id, l.version);
     }
     let processed = 0;
 
@@ -413,7 +423,12 @@ export class Coordinator {
       }
 
       const candidateSpec = this.resolveLaunchSpec(mode, target);
-      const targetsToTest: Array<{ladderId: string; format: string; team: db.TeamMode}> = [];
+      const targetsToTest: Array<{
+        ladderId: string;
+        format: string;
+        version?: string;
+        team: db.TeamMode;
+      }> = [];
       const seenFormats = new Set<string>();
       for (const lid of sub.ladders) {
         const pendingMeta = pendingMetaById.get(lid);
@@ -422,10 +437,14 @@ export class Coordinator {
           snapMeta?.format ??
           this.formatByLadderId.get(lid) ??
           lid;
+        const version = pendingMeta?.version ??
+          snapMeta?.version ??
+          this.versionByLadderId.get(lid);
         const team = pendingMeta?.team ?? snapMeta?.team ?? 'random';
-        if (!seenFormats.has(format)) {
-          seenFormats.add(format);
-          targetsToTest.push({ladderId: lid, format, team});
+        const formatKey = `${format}::${version ?? ''}`;
+        if (!seenFormats.has(formatKey)) {
+          seenFormats.add(formatKey);
+          targetsToTest.push({ladderId: lid, format, version, team});
         }
       }
       if (targetsToTest.length === 0) {
@@ -460,7 +479,12 @@ export class Coordinator {
             t1Packed = pool[0].canonicalPacked;
             t2Packed = pool[1 % pool.length].canonicalPacked;
           } else {
-            const pair = teams.sampleRandomPair(item.format, '1,2,3,4', '5,6,7,8');
+            const pair = await sim.sampleRandomPair(
+              item.format,
+              '1,2,3,4',
+              '5,6,7,8',
+              item.version
+            );
             t1Packed = pair.t1Packed;
             t2Packed = pair.t2Packed;
           }
@@ -472,6 +496,7 @@ export class Coordinator {
 
         const game = new arbiter.TimeSlicedArenaGame({
           format: item.format,
+          version: item.version,
           seed: '1,2,3,4',
           p1Spec: candidateSpec,
           p2Spec: this.baselineSpec,
@@ -688,7 +713,12 @@ export class Coordinator {
     }
     const seed1 = this.randomPrngSeed();
     const seed2 = this.randomPrngSeed();
-    const {t1Packed, t2Packed} = teams.sampleRandomPair(ladder.format, seed1, seed2);
+    const {t1Packed, t2Packed} = await sim.sampleRandomPair(
+      ladder.format,
+      seed1,
+      seed2,
+      ladder.version
+    );
     return {t1: t1Packed, t2: t2Packed};
   }
 
@@ -986,6 +1016,7 @@ export class Coordinator {
     // Game 2 swaps sides and teams: P2 sits in slot p1 with T1, P1 sits in slot p2 with T2
     const g2Game = new arbiter.TimeSlicedArenaGame({
       format: match.format,
+      version: match.version ?? this.versionByLadderId.get(match.ladderId),
       seed: match.seed,
       p1Spec: match.p2.spec,
       p2Spec: match.p1.spec,
@@ -1389,6 +1420,7 @@ export class Coordinator {
       id: matchId,
       ladderId: ladder.id,
       format: ladder.format,
+      version: ladder.version,
       teamMode: ladder.team,
       seed: seedStr,
       startedAt: now,
@@ -1451,6 +1483,7 @@ export class Coordinator {
       // Game 1: P1 in slot p1 with T1, P2 in slot p2 with T2
       const g1Game = new arbiter.TimeSlicedArenaGame({
         format: ladder.format,
+        version: ladder.version,
         seed: seedStr,
         p1Spec,
         p2Spec,

@@ -3,24 +3,23 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import * as sim from '@pkmn/sim';
+import type {PRNGSeed} from '@pkmn/sim';
 
+import {SIM_VERSION} from '../db/ladders';
 import {getTournamentBestOf} from '../db/tournaments';
 import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
-import {ensureSimConfigured, resolveArenaFormatId, sampleRandomPair} from '../server/teams';
+import * as sim from '../server/sim';
 import {toID} from '../static/util';
 import * as teams from '../teams';
 
 import * as arbiter from './arbiter';
 import * as packages from './packages';
 
-ensureSimConfigured();
-
 type PlayerSlot = 'p1' | 'p2';
 
-export function deriveGameSeed(baseSeed: sim.PRNGSeed, gameNumber: number): sim.PRNGSeed {
+export function deriveGameSeed(baseSeed: PRNGSeed, gameNumber: number): PRNGSeed {
   if (gameNumber <= 1) return baseSeed;
   const digest = crypto
     .createHash('sha256')
@@ -88,7 +87,7 @@ export interface PlayerResult extends GamePlayerStats {
 }
 
 export interface SeriesGameResult {
-  seed: sim.PRNGSeed;
+  seed: PRNGSeed;
   outcome: GameOutcome;
   turns: number;
   endReason: string;
@@ -99,10 +98,10 @@ export interface SeriesGameResult {
 
 export interface GameOptions {
   format: string;
-  customRules?: readonly string[];
+  version?: string;
   bestOf?: number;
-  seed: sim.PRNGSeed;
-  seeds?: readonly sim.PRNGSeed[];
+  seed: PRNGSeed;
+  seeds?: readonly PRNGSeed[];
   p1Spec: AgentSpec;
   p2Spec: AgentSpec;
   p1TeamPacked?: string;
@@ -280,15 +279,16 @@ export function buildLockedTournamentTeamBook(
 }
 
 export class ConcurrentGame {
-  private readonly format: string;
+  private readonly version: string;
+  private format: string;
   private readonly bestOf: number;
-  private readonly seed: sim.PRNGSeed;
-  private readonly seeds?: readonly sim.PRNGSeed[];
+  private readonly seed: PRNGSeed;
+  private readonly seeds?: readonly PRNGSeed[];
   private readonly p1Spec: AgentSpec;
   private readonly p2Spec: AgentSpec;
   private p1TeamPacked?: string;
   private p2TeamPacked?: string;
-  private readonly sendUtm: boolean;
+  private sendUtm?: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
   private readonly startingBankMillis: number;
@@ -305,8 +305,7 @@ export class ConcurrentGame {
   ) => void;
   private readonly onClockChange?: (state: TurnBroadcastInfo) => void;
 
-  private battleStream: sim.BattleStreams.BattleStream;
-  private streams: ReturnType<typeof sim.BattleStreams.getPlayerStreams>;
+  private battle: sim.BattleHandle;
   private readonly omniscientLog: string[] = [];
 
   private p1!: RemoteTournamentPlayer;
@@ -322,17 +321,18 @@ export class ConcurrentGame {
   private endReason = 'normal';
 
   constructor(options: GameOptions) {
-    this.format = resolveArenaFormatId(options.format, options.customRules);
+    this.version = options.version ?? SIM_VERSION;
+    this.format = options.format;
     this.bestOf = options.smokeStopAfterTurn !== undefined
       ? 1
-      : (options.bestOf ?? getTournamentBestOf(options.format, options.customRules));
+      : (options.bestOf ?? getTournamentBestOf(options.format));
     this.seed = options.seed;
     this.seeds = options.seeds;
     this.p1Spec = options.p1Spec;
     this.p2Spec = options.p2Spec;
     this.p1TeamPacked = options.p1TeamPacked;
     this.p2TeamPacked = options.p2TeamPacked;
-    this.sendUtm = options.sendUtm ?? !sim.Dex.formats.get(this.format).team;
+    this.sendUtm = options.sendUtm;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.startingBankMillis =
@@ -348,22 +348,17 @@ export class ConcurrentGame {
     this.onSpectatorChunk = options.onSpectatorChunk;
     this.onClockChange = options.onClockChange;
 
-    this.battleStream = new sim.BattleStreams.BattleStream();
-    this.streams = sim.BattleStreams.getPlayerStreams(this.battleStream);
+    this.battle = sim.createBattle(this.version);
   }
 
-  private lastLogIndex = 0;
-
   private getFullLog(): string {
-    const rawLog = this.battleStream.battle
-      ? this.battleStream.battle.log.join('\n')
-      : this.omniscientLog.join('\n');
+    const rawLog = this.battle.getLog().join('\n');
     return rewriteBlindPlayerNames(rawLog, this.p1Spec.displayName, this.p2Spec.displayName);
   }
 
   private buildBroadcastState(): TurnBroadcastInfo {
-    const p1Pokemon = this.battleStream.battle?.sides[0]?.getRequestData().pokemon;
-    const p2Pokemon = this.battleStream.battle?.sides[1]?.getRequestData().pokemon;
+    const p1Pokemon = this.battle.getPokemon('p1');
+    const p2Pokemon = this.battle.getPokemon('p2');
     return {
       turn: this.currentTurn,
       p1: this.buildSlotBroadcast(this.p1, p1Pokemon),
@@ -372,15 +367,9 @@ export class ConcurrentGame {
   }
 
   private emitSpectatorChunk(rawChunk: string) {
-    let chunkToEmit = rawChunk;
-    if (this.battleStream.battle) {
-      const battleLog = this.battleStream.battle.log;
-      chunkToEmit = battleLog.slice(this.lastLogIndex).join('\n');
-      this.lastLogIndex = battleLog.length;
-    }
-    if (!chunkToEmit) return;
+    if (!rawChunk) return;
     const publicChunk = rewriteBlindPlayerNames(
-      chunkToEmit,
+      rawChunk,
       this.p1Spec.displayName,
       this.p2Spec.displayName
     );
@@ -639,18 +628,15 @@ export class ConcurrentGame {
     return {line: raw.line, elapsedMillis, timedOut: false};
   }
 
-  private validatePackedTeam(rawTeam: string | undefined): string | undefined {
+  private async validatePackedTeam(rawTeam: string | undefined): Promise<string | undefined> {
     if (!rawTeam) return undefined;
-    const sets = sim.Teams.unpack(rawTeam.trim());
-    if (!sets || sets.length === 0) return undefined;
-    for (const s of sets) s.name = '';
-    const validated = structuredClone(sets);
-    const validator = new sim.TeamValidator(this.format);
-    if (!validator.format.team) {
-      const problems = validator.validateTeam(validated);
-      if (problems?.length) return undefined;
-    }
-    return sim.Teams.pack(validated);
+    const res = await sim.validateTeam(
+      this.format,
+      rawTeam.trim(),
+      this.version
+    );
+    if (res.problems && res.problems.length > 0) return undefined;
+    return res.packed;
   }
 
   private async resolvePlayerTeam(
@@ -661,7 +647,7 @@ export class ConcurrentGame {
     {ok: false; reason: 'spot-preemption' | 'timeout' | 'crash' | 'invalid-choice'}
   > {
     if (assignedTeam !== undefined) {
-      const valid = this.validatePackedTeam(assignedTeam);
+      const valid = await this.validatePackedTeam(assignedTeam);
       if (!valid) {
         return {ok: false, reason: 'invalid-choice'};
       }
@@ -687,7 +673,7 @@ export class ConcurrentGame {
     if (!trimmed.startsWith('/utm ')) {
       return {ok: false, reason: 'invalid-choice'};
     }
-    const valid = this.validatePackedTeam(trimmed.slice(5));
+    const valid = await this.validatePackedTeam(trimmed.slice(5));
     if (!valid) {
       return {ok: false, reason: 'invalid-choice'};
     }
@@ -711,7 +697,7 @@ export class ConcurrentGame {
     this.preemptedSlot = slot;
     this.endReason = 'spot-preemption';
     this.wakePendingLineResolvers();
-    Promise.resolve(this.battleStream.write('>forcetie')).catch(() => undefined);
+    Promise.resolve(this.battle.write('>forcetie')).catch(() => undefined);
   }
 
   private forceLose(losingSlot: PlayerSlot, reason: string) {
@@ -720,7 +706,7 @@ export class ConcurrentGame {
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
     this.endReason = reason;
     this.wakePendingLineResolvers();
-    Promise.resolve(this.battleStream.write(`>forcewin ${this.winner}`)).catch(() => undefined);
+    Promise.resolve(this.battle.write(`>forcewin ${this.winner}`)).catch(() => undefined);
   }
 
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
@@ -807,7 +793,7 @@ export class ConcurrentGame {
         player.thinking = false;
 
         const choiceCmd = arbiter.formatChoiceCommand(parsed.choice, req.teamPreview);
-        await this.battleStream.write(`>${player.slot} ${choiceCmd}`);
+        await this.battle.write(`>${player.slot} ${choiceCmd}`);
         return;
       }
     } finally {
@@ -861,10 +847,8 @@ export class ConcurrentGame {
   }
 
   private resetForNextSeriesGame() {
-    this.battleStream = new sim.BattleStreams.BattleStream();
-    this.streams = sim.BattleStreams.getPlayerStreams(this.battleStream);
+    this.battle = sim.createBattle(this.version);
     this.omniscientLog.length = 0;
-    this.lastLogIndex = 0;
     this.currentTurn = 0;
     this.requestCount = 0;
     this.waveActiveSidesCount = 1;
@@ -890,7 +874,7 @@ export class ConcurrentGame {
   }
 
   private async playSingleBattle(
-    gameSeed: sim.PRNGSeed,
+    gameSeed: PRNGSeed,
     p1Team: string,
     p2Team: string,
     resetStream: boolean
@@ -900,7 +884,7 @@ export class ConcurrentGame {
     }
 
     const omniTask = (async () => {
-      for await (const rawChunk of this.streams.omniscient) {
+      for await (const rawChunk of this.battle.streams.omniscient) {
         for (const line of rawChunk.split('\n')) {
           const step = arbiter.inspectOmniscientLine(line, {
             currentTurn: this.currentTurn,
@@ -915,7 +899,7 @@ export class ConcurrentGame {
             this.winner = step.terminal.winner;
             this.endReason = step.terminal.endReason;
             if (step.terminal.forceTie) {
-              await this.battleStream.write('>forcetie');
+              await this.battle.write('>forcetie');
             }
           }
         }
@@ -935,16 +919,16 @@ export class ConcurrentGame {
       }
     });
 
-    const p1Task = this.driveConcurrentPlayer(this.p1, this.streams.p1);
-    const p2Task = this.driveConcurrentPlayer(this.p2, this.streams.p2);
+    const p1Task = this.driveConcurrentPlayer(this.p1, this.battle.streams.p1);
+    const p2Task = this.driveConcurrentPlayer(this.p2, this.battle.streams.p2);
 
-    await this.battleStream.write(
+    await this.battle.write(
       `>start ${JSON.stringify({formatid: this.format, seed: gameSeed})}`
     );
-    await this.battleStream.write(
+    await this.battle.write(
       `>player p1 ${JSON.stringify({name: 'Agent A', team: p1Team})}`
     );
-    await this.battleStream.write(
+    await this.battle.write(
       `>player p2 ${JSON.stringify({name: 'Agent B', team: p2Team})}`
     );
 
@@ -1025,6 +1009,12 @@ export class ConcurrentGame {
   }
 
   async run(): Promise<GameResult> {
+    this.format = await sim.resolveArenaFormatId(this.format, this.version);
+    this.sendUtm = this.sendUtm ?? !(await sim.isGeneratedTeamFormat(
+      this.format,
+      this.version
+    ));
+
     this.p1 = this.spawnRemotePlayer('p1', this.p1Spec);
     this.p2 = this.spawnRemotePlayer('p2', this.p2Spec);
 
@@ -1734,7 +1724,7 @@ export class Coordinator {
     this.customResolveEntrantSpec = options.resolveEntrantSpec;
   }
 
-  private randomPrngSeed(): sim.PRNGSeed {
+  private randomPrngSeed(): PRNGSeed {
     if (this.customRandomInt) {
       const s0 = this.randomInt(0x10000);
       const s1 = this.randomInt(0x10000);
@@ -1742,7 +1732,7 @@ export class Coordinator {
       const s3 = this.randomInt(0x10000);
       return `${s0},${s1},${s2},${s3}`;
     }
-    return `sodium,${crypto.randomBytes(32).toString('hex')}` as sim.PRNGSeed;
+    return `sodium,${crypto.randomBytes(32).toString('hex')}` as PRNGSeed;
   }
 
   private resolveEntrantSpec(mounted: MountedEntrant): AgentSpec {
@@ -1847,14 +1837,17 @@ export class Coordinator {
           meta?.team === 'random' ||
           (meta?.team === undefined && toID(format).includes('random'))
         ) {
-          const pair = sampleRandomPair(format, '1,2,3,4', '5,6,7,8');
+          const pair = await sim.sampleRandomPair(format, '1,2,3,4', '5,6,7,8', meta?.version);
           p1TeamPacked = pair.t1Packed;
           p2TeamPacked = pair.t2Packed;
         }
 
+        const smokeFormat = customRules.length > 0
+          ? `${format}${format.includes('@@@') ? ',' : '@@@'}${customRules.join(',')}`
+          : format;
         const smokeGame = new ConcurrentGame({
-          format,
-          customRules,
+          format: smokeFormat,
+          version: meta?.version,
           seed: '1,2,3,4',
           p1Spec: candidateSpec,
           p2Spec: this.baselineSpec,
@@ -1913,7 +1906,7 @@ export class Coordinator {
     return {p1Team: undefined, p2Team: undefined, swappedSeats};
   }
 
-  private derivePairSeed(tournamentId: string, pairIdx: number): sim.PRNGSeed {
+  private derivePairSeed(tournamentId: string, pairIdx: number): PRNGSeed {
     if (this.customRandomInt) {
       return this.randomPrngSeed();
     }
@@ -1981,14 +1974,14 @@ export class Coordinator {
       tourney.team === 'random' ||
       (tourney.team === undefined && toID(tourney.format).includes('random'))
     ) {
-      lockedBook = Array.from({length: totalPairs}, (_, idx) => {
+      lockedBook = await Promise.all(Array.from({length: totalPairs}, async (_, idx) => {
         const s1 = this.derivePairSeed(`${tourney.id}:team1`, idx);
         const s2 = this.derivePairSeed(`${tourney.id}:team2`, idx);
-        const pair = sampleRandomPair(tourney.format, s1, s2);
+        const pair = await sim.sampleRandomPair(tourney.format, s1, s2, tourney.version);
         return {p1Team: pair.t1Packed, p2Team: pair.t2Packed};
-      });
+      }));
     }
-    const pairSeeds: sim.PRNGSeed[] = Array.from(
+    const pairSeeds: PRNGSeed[] = Array.from(
       {length: totalPairs},
       (_, idx) => this.derivePairSeed(tourney.id, idx)
     );
@@ -2144,9 +2137,13 @@ export class Coordinator {
           }).catch(() => undefined);
         };
 
+        const matchFormat = tourney.customRules.length > 0
+          ? `${tourney.format}${tourney.format.includes('@@@') ? ',' : '@@@'}` +
+            `${tourney.customRules.join(',')}`
+          : tourney.format;
         const game = new ConcurrentGame({
-          format: tourney.format,
-          customRules: tourney.customRules,
+          format: matchFormat,
+          version: tourney.version,
           bestOf: tourneyBestOf,
           seed: pairSeed,
           p1Spec,

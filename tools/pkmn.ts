@@ -4,19 +4,19 @@
 
 require('source-map-support').install();
 
+import {execFileSync} from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-
-import {Dex} from '@pkmn/sim';
 
 import * as db from '../db';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
+import * as sim from '../server/sim';
 import * as smogon from '../server/smogon';
-import {ensureSimConfigured, validateHarvestedTeams} from '../server/teams';
+import {validateHarvestedTeams} from '../server/teams';
 import {syncStaticLiveBanner} from '../static/build';
-import {writeFileAtomic} from '../static/util';
+import {root, writeFileAtomic} from '../static/util';
 
 export interface Options {
   db?: db.Database;
@@ -42,14 +42,16 @@ const USAGE = [
   '  set-ladder-status <ladder_id> <upcoming|active|settling|archived>',
   '  upload-ladder-teams <ladder_id> <teams-file>',
   '  rotate-ladder <old_ladder_id> --name "..." [--new <new_ladder_id>] ' +
-    '[--new-name "..."] [--format <format>] [--team <mode>] [--min <n>] ' +
-    '[--teams <n>] [--discord <role_id>]',
+    '[--new-name "..."] [--format <format>] [--version <sim_version>] [--team <mode>] ' +
+    '[--min <n>] [--teams <n>] [--discord <role_id>]',
+  '  install-sim <version> [--sim <spec>] [--dex <spec>] [--mods <spec>] [--randoms <spec>]',
   '  reassign-developer <github-login> <target-agent-slug|--none> ' +
     '[--smogon <username.id|id|username>] [--projects <path>] [--offline]',
   '  sync-projects [--projects <path>] [--offline]',
-  '  create-tournament <id> --name "..." --format <format> --starts <iso|unix> ' +
-    '[--team <harvested|random|pools|custom>] [--games <n>] [--batch <n>] [--tables <n>] ' +
-    '[--hardware "..."] [--rules \'<json>\'] [--status <scheduled|running|completed>]',
+  '  create-tournament <id> --name "..." --format <format> --version <sim_version> ' +
+    '--starts <iso|unix> [--team <harvested|random|pools|custom>] [--games <n>] ' +
+    '[--batch <n>] [--tables <n>] [--hardware "..."] [--rules \'<json>\'] ' +
+    '[--status <scheduled|running|completed>]',
   '  set-tournament-status <id> <scheduled|running|completed>',
   '  seed-tournament <id>',
   '  publish-tournament-archive <id> <archive.7z>',
@@ -72,16 +74,19 @@ const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
     'new',
     'new-name',
     'format',
+    'version',
     'team',
     'min',
     'teams',
     'discord',
   ]),
+  'install-sim': new Set(['sim', 'dex', 'mods', 'randoms']),
   'reassign-developer': new Set(['none', 'smogon', 'projects', 'offline']),
   'sync-projects': new Set(['projects', 'offline']),
   'create-tournament': new Set([
     'name',
     'format',
+    'version',
     'starts',
     'team',
     'games',
@@ -340,6 +345,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
                 id: newId,
                 name: flags.get('new-name'),
                 format: flags.get('format'),
+                version: flags.get('version'),
                 team: flags.get('team') as db.TeamMode | undefined,
                 min,
                 teams,
@@ -417,16 +423,51 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         log(`Synced Arena projects from ${projectsPath}`);
         return;
       }
+      case 'install-sim': {
+        const [version] = positional.slice(1);
+        if (!version || !/^[A-Za-z0-9._-]+$/.test(version)) {
+          throw new Error(
+            'Usage: pkmn install-sim <version> [--sim <spec>] [--dex <spec>] ' +
+            '[--mods <spec>] [--randoms <spec>]'
+          );
+        }
+        const simDir = root('sim', version);
+        fs.mkdirSync(simDir, {recursive: true});
+        const pkgPath = path.join(simDir, 'package.json');
+        if (!fs.existsSync(pkgPath)) {
+          writeFileAtomic(
+            pkgPath,
+            `${JSON.stringify({name: `pkmn-sim-${version}`, private: true}, null, 2)}\n`
+          );
+        }
+        const simSpec = flags.get('sim') ?? `@pkmn/sim@${version}`;
+        const pkgs = [simSpec];
+        const dexSpec = flags.get('dex');
+        const modsSpec = flags.get('mods');
+        const randomsSpec = flags.get('randoms');
+        if (dexSpec) pkgs.push(dexSpec);
+        if (modsSpec) pkgs.push(modsSpec);
+        if (randomsSpec) pkgs.push(randomsSpec);
+        execFileSync('npm', ['install', '--prefix', simDir, '--no-save', ...pkgs], {
+          stdio: 'inherit',
+        });
+        const resolvedVersion = await sim.getWorkerSimVersion(version);
+        await sim.closeAllWorkers();
+        log(`Installed @pkmn/sim ${resolvedVersion} in ${simDir} (key="${version}")`);
+        return;
+      }
       case 'create-tournament': {
         const [tourneyId] = positional.slice(1);
         const name = flags.get('name');
         const format = flags.get('format');
+        const simVersion = flags.get('version');
         const startsRaw = flags.get('starts');
-        if (!tourneyId || !name || !format || !startsRaw) {
+        if (!tourneyId || !name || !format || !simVersion || !startsRaw) {
           throw new Error(
             'Usage: pkmn create-tournament <id> --name "..." --format <format> ' +
-            '--starts <iso|unix> [--team <harvested|random|pools>] [--games <n>] ' +
-            '[--batch <n>] [--tables <n>] [--hardware "..."] [--rules \'<json>\'] ' +
+            '--version <sim_version> --starts <iso|unix> ' +
+            '[--team <harvested|random|pools>] [--games <n>] [--batch <n>] ' +
+            '[--tables <n>] [--hardware "..."] [--rules \'<json>\'] ' +
             '[--status <scheduled|running|completed>]'
           );
         }
@@ -443,10 +484,14 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           }
           team = rawTeam as db.TeamMode;
         }
-        ensureSimConfigured();
-        const dexFormat = Dex.formats.get(format);
-        if (!dexFormat.exists) {
-          throw new Error(`Unknown Pokémon Showdown format "${format}"`);
+        try {
+          if (!(await sim.hasFormat(format, simVersion))) {
+            throw new Error(
+              `Unknown Pokémon Showdown format "${format}" for @pkmn/sim "${simVersion}"`
+            );
+          }
+        } finally {
+          await sim.closeAllWorkers();
         }
         const startsAt = /^\d+$/.test(startsRaw)
           ? Number(startsRaw)
@@ -481,6 +526,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           id: tourneyId,
           name,
           format,
+          version: simVersion,
           team,
           rulesJson: JSON.stringify(parsedRules),
           gamesPerMatchup,
