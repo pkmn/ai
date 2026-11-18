@@ -1108,8 +1108,8 @@ describe('tournament SSR views', () => {
     expect(tourney2Html).toContain('class="clock-bar"');
     expect(tourney2Html).toContain('02:25');
     expect(tourney2Html).toContain('01:52');
-    expect(tourney2Html).toContain('class="clock-pill locked" id="clock-pill-p1"');
-    expect(tourney2Html).toContain('id="clock-sub-p1">locked in<');
+    expect(tourney2Html).toContain('class="clock-pill committed" id="clock-pill-p1"');
+    expect(tourney2Html).toContain('id="clock-sub-p1">committed<');
     expect(tourney2Html).toContain('class="clock-pill thinking" id="clock-pill-p2"');
     expect(tourney2Html).toContain('id="clock-sub-p2">thinking…<');
     expect(tourney2Html).toContain('src="/arena/viewer/"');
@@ -1133,7 +1133,7 @@ describe('tournament SSR views', () => {
       expect(html).toContain('id="clock-sub-p1">thinking…<');
       expect(html).toContain('class="clock-pill thinking" id="clock-pill-p2"');
       expect(html).toContain('id="clock-sub-p2">thinking…<');
-      expect(html).not.toContain('>locked in<');
+      expect(html).not.toContain('>committed<');
     } finally {
       h.arenaHandle.setTournamentBroadcast(prev, '2');
     }
@@ -1154,7 +1154,7 @@ describe('tournament SSR views', () => {
       const html = await h.getText('/arena/tournaments/2/');
       expect(html).toContain('id="clock-sub-p1">+10s/turn<');
       expect(html).toContain('id="clock-sub-p2">+10s/turn<');
-      expect(html).not.toContain('>locked in<');
+      expect(html).not.toContain('>committed<');
     } finally {
       h.arenaHandle.setTournamentBroadcast(prev, '2');
     }

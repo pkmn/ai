@@ -2228,7 +2228,7 @@ describe('arena infrastructure', () => {
       expect(pidEntries.length).toBeGreaterThanOrEqual(4);
     });
 
-    test('ConcurrentGame emits simultaneous thinking clocks with mid-turn lock-in', async () => {
+    test('ConcurrentGame emits simultaneous thinking clocks with mid-turn commit', async () => {
       const slowAgentScript = path.join(tmpDir, 'slow-tourney-agent.js');
       fs.writeFileSync(
         slowAgentScript,
@@ -2285,7 +2285,7 @@ describe('arena infrastructure', () => {
 
       // At decision wave start, both sides are actively thinking simultaneously
       expect(chunkSnaps.some(s => s.p1.thinking && s.p2.thinking)).toBe(true);
-      // When Fast Agent (p1) commits first, onClockChange reports p1 locked in while p2 thinks
+      // When Fast Agent (p1) commits first, onClockChange reports p1 committed while p2 thinks
       expect(clockChanges.some(s => !s.p1.thinking && s.p2.thinking)).toBe(true);
     });
   });

@@ -694,24 +694,24 @@ function renderPartyMinisprites(packed?: string): Child {
 function renderClockSide(
   slot: 'p1' | 'p2',
   clock: BroadcastClock,
-  lockedIn = false
+  committed = false
 ): Html {
   const pillCls = clock.thinking
     ? 'clock-pill thinking'
-    : lockedIn
-      ? 'clock-pill locked'
+    : committed
+      ? 'clock-pill committed'
       : 'clock-pill';
   const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
   const subText = clock.thinking
     ? 'thinking…'
-    : lockedIn
-      ? 'locked in'
+    : committed
+      ? 'committed'
       : `+${clock.incrementSeconds}s/turn`;
   const rem = Math.round(clock.bankSeconds);
   const tip = clock.thinking
     ? `${rem}s remaining in 150s bank (currently thinking)`
-    : lockedIn
-      ? `${rem}s remaining in 150s bank (choice locked in, waiting for opponent)`
+    : committed
+      ? `${rem}s remaining in 150s bank (choice committed, waiting for opponent)`
       : `${rem}s remaining in 150s bank (+${clock.incrementSeconds}s/turn)`;
   return (
     <div className='clock-side' id={`clock-side-${slot}`}>
@@ -1972,23 +1972,23 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       return Math.max(0, Math.round(active.bankSeconds - elapsed));
     };
 
-    const renderClockSideHtml = (slot, clock, lockedIn, bankSeconds) => {
+    const renderClockSideHtml = (slot, clock, committed, bankSeconds) => {
       const pillCls = clock.thinking
         ? 'clock-pill thinking'
-        : lockedIn
-          ? 'clock-pill locked'
+        : committed
+          ? 'clock-pill committed'
           : 'clock-pill';
       const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
       const subText = clock.thinking
         ? 'thinking…'
-        : lockedIn
-          ? 'locked in'
+        : committed
+          ? 'committed'
           : ('+' + clock.incrementSeconds + 's/turn');
       const rem = Math.round(bankSeconds);
       const tip = clock.thinking
         ? (rem + 's remaining in 150s bank (currently thinking)')
-        : lockedIn
-          ? (rem + 's remaining in 150s bank (choice locked in, waiting for opponent)')
+        : committed
+          ? (rem + 's remaining in 150s bank (choice committed, waiting for opponent)')
           : (rem + 's remaining in 150s bank (+' + clock.incrementSeconds + 's/turn)');
       return '<div class="clock-side" id="clock-side-' + slot + '">' +
         '<span><tt>' + slot + '</tt> <strong id="clock-name-' + slot + '">' +
@@ -2011,12 +2011,12 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const state = isLive ? clockStateByTable.get(tb.table) : undefined;
       const p1Bank = displayedBankSeconds(state, 'p1', tb.p1, nowMillis);
       const p2Bank = displayedBankSeconds(state, 'p2', tb.p2, nowMillis);
-      const p1Locked = isLive && !tb.p1.thinking && Boolean(tb.p2.thinking);
-      const p2Locked = isLive && !tb.p2.thinking && Boolean(tb.p1.thinking);
+      const p1Committed = isLive && !tb.p1.thinking && Boolean(tb.p2.thinking);
+      const p2Committed = isLive && !tb.p2.thinking && Boolean(tb.p1.thinking);
       clockBarEl.classList.remove('hide');
       clockBarEl.innerHTML =
-        renderClockSideHtml('p1', tb.p1, p1Locked, p1Bank) +
-        renderClockSideHtml('p2', tb.p2, p2Locked, p2Bank);
+        renderClockSideHtml('p1', tb.p1, p1Committed, p1Bank) +
+        renderClockSideHtml('p2', tb.p2, p2Committed, p2Bank);
     };
 
     const renderTableNav = () => {

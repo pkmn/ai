@@ -1294,7 +1294,7 @@ describe('mock scenarios & E2E lifecycle', () => {
                 return c1 !== '' && c1 !== '02:12' && c2 !== '' && c2 !== '02:08';
               });
 
-              // P1 commits its decision mid-turn (empty lines) -> P1 locks in, while P2 keeps
+              // P1 commits its decision mid-turn (empty lines) -> P1 is committed, while P2 keeps
               // its elapsed countdown without jumping back to its 128s start-of-turn bank!
               await liveClient.sendTournamentBroadcast('2', {
                 table: 2,
@@ -1318,7 +1318,7 @@ describe('mock scenarios & E2E lifecycle', () => {
                 lines: [],
               });
               await livePage.waitForFunction(
-                () => document.getElementById('clock-sub-p1')?.textContent === 'locked in'
+                () => document.getElementById('clock-sub-p1')?.textContent === 'committed'
               );
               expect(await livePage.locator('#clock-p1').textContent()).toBe('02:10');
               expect(await livePage.locator('#clock-sub-p2').textContent()).toBe('thinking…');
