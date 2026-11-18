@@ -1108,11 +1108,56 @@ describe('tournament SSR views', () => {
     expect(tourney2Html).toContain('class="clock-bar"');
     expect(tourney2Html).toContain('02:25');
     expect(tourney2Html).toContain('01:52');
-    expect(tourney2Html).toContain('thinking…');
+    expect(tourney2Html).toContain('class="clock-pill locked" id="clock-pill-p1"');
+    expect(tourney2Html).toContain('id="clock-sub-p1">locked in<');
+    expect(tourney2Html).toContain('class="clock-pill thinking" id="clock-pill-p2"');
+    expect(tourney2Html).toContain('id="clock-sub-p2">thinking…<');
     expect(tourney2Html).toContain('src="/arena/viewer/"');
     expect(tourney2Html).toContain('sandbox="allow-scripts"');
     expect(tourney2Html).not.toContain('allow-same-origin');
     expect(tourney2Html).toContain('data-live-table="1"');
+  });
+
+  test('renders simultaneous thinking clocks on live tournament pages', async () => {
+    const prev = h.arenaHandle.getTournamentBroadcast('2');
+    try {
+      const next = structuredClone(prev!);
+      next.tables[0].p1!.thinking = true;
+      next.tables[0].p2!.thinking = true;
+      next.p1.thinking = true;
+      next.p2.thinking = true;
+      h.arenaHandle.setTournamentBroadcast(next);
+
+      const html = await h.getText('/arena/tournaments/2/');
+      expect(html).toContain('class="clock-pill thinking" id="clock-pill-p1"');
+      expect(html).toContain('id="clock-sub-p1">thinking…<');
+      expect(html).toContain('class="clock-pill thinking" id="clock-pill-p2"');
+      expect(html).toContain('id="clock-sub-p2">thinking…<');
+      expect(html).not.toContain('>locked in<');
+    } finally {
+      h.arenaHandle.setTournamentBroadcast(prev, '2');
+    }
+  });
+
+  test('renders turn increments on non-thinking completed table clocks', async () => {
+    const prev = h.arenaHandle.getTournamentBroadcast('2');
+    try {
+      const next = structuredClone(prev!);
+      next.tables[0].live = false;
+      next.tables[0].p1!.thinking = false;
+      next.tables[0].p2!.thinking = false;
+      next.live = false;
+      next.p1.thinking = false;
+      next.p2.thinking = false;
+      h.arenaHandle.setTournamentBroadcast(next);
+
+      const html = await h.getText('/arena/tournaments/2/');
+      expect(html).toContain('id="clock-sub-p1">+10s/turn<');
+      expect(html).toContain('id="clock-sub-p2">+10s/turn<');
+      expect(html).not.toContain('>locked in<');
+    } finally {
+      h.arenaHandle.setTournamentBroadcast(prev, '2');
+    }
   });
 
   test('renders Superfinal badges with team minisprites in tournament games', async () => {

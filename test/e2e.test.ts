@@ -1246,8 +1246,8 @@ describe('mock scenarios & E2E lifecycle', () => {
               await livePage.waitForSelector('#standings [data-live-table="1"]');
               expect(await livePage.locator('#clock-name-p1').textContent()).toBe(eA.agentName);
 
-              // Wait briefly for EventSource snapshot, then start Table 2 live over SSE so the
-              // `● T2` badge dynamically appears in Standings/Crosstable/Games without reload!
+              // Wait briefly for EventSource snapshot, then start Table 2 live over SSE with
+              // BOTH players thinking simultaneously so both timers decrement together!
               await new Promise(resolve => setTimeout(resolve, 60));
               await liveClient.sendTournamentBroadcast('2', {
                 table: 2,
@@ -1262,7 +1262,7 @@ describe('mock scenarios & E2E lifecycle', () => {
                   name: eC.agentName,
                   version: eC.version,
                   bankSeconds: 132,
-                  thinking: false,
+                  thinking: true,
                   incrementSeconds: 10,
                 },
                 p2: {
@@ -1284,6 +1284,45 @@ describe('mock scenarios & E2E lifecycle', () => {
                 eC.agentName
               );
               expect(await livePage.locator('#clock-name-p2').textContent()).toBe(eD.agentName);
+              expect(await livePage.locator('#clock-sub-p1').textContent()).toBe('thinking…');
+              expect(await livePage.locator('#clock-sub-p2').textContent()).toBe('thinking…');
+
+              // Verify BOTH sides' timers decrement simultaneously in real time!
+              await livePage.waitForFunction(() => {
+                const c1 = document.getElementById('clock-p1')?.textContent ?? '';
+                const c2 = document.getElementById('clock-p2')?.textContent ?? '';
+                return c1 !== '' && c1 !== '02:12' && c2 !== '' && c2 !== '02:08';
+              });
+
+              // P1 commits its decision mid-turn (empty lines) -> P1 locks in, while P2 keeps
+              // its elapsed countdown without jumping back to its 128s start-of-turn bank!
+              await liveClient.sendTournamentBroadcast('2', {
+                table: 2,
+                mode: 'append',
+                p1: {
+                  slug: eC.agentSlug,
+                  name: eC.agentName,
+                  version: eC.version,
+                  bankSeconds: 130,
+                  thinking: false,
+                  incrementSeconds: 10,
+                },
+                p2: {
+                  slug: eD.agentSlug,
+                  name: eD.agentName,
+                  version: eD.version,
+                  bankSeconds: 128,
+                  thinking: true,
+                  incrementSeconds: 10,
+                },
+                lines: [],
+              });
+              await livePage.waitForFunction(
+                () => document.getElementById('clock-sub-p1')?.textContent === 'locked in'
+              );
+              expect(await livePage.locator('#clock-p1').textContent()).toBe('02:10');
+              expect(await livePage.locator('#clock-sub-p2').textContent()).toBe('thinking…');
+              expect(await livePage.locator('#clock-p2').textContent()).not.toBe('02:08');
 
               // Append new protocol lines & clocks to Table 2 -> updates live clocks & Games row!
               await liveClient.sendTournamentBroadcast('2', {
@@ -1302,7 +1341,7 @@ describe('mock scenarios & E2E lifecycle', () => {
                   name: eD.agentName,
                   version: eD.version,
                   bankSeconds: 105,
-                  thinking: false,
+                  thinking: true,
                   incrementSeconds: 10,
                 },
                 lines: ['|turn|12'],

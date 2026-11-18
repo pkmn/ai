@@ -2227,6 +2227,67 @@ describe('arena infrastructure', () => {
       expect(uniquePids.size).toBe(2);
       expect(pidEntries.length).toBeGreaterThanOrEqual(4);
     });
+
+    test('ConcurrentGame emits simultaneous thinking clocks with mid-turn lock-in', async () => {
+      const slowAgentScript = path.join(tmpDir, 'slow-tourney-agent.js');
+      fs.writeFileSync(
+        slowAgentScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  setTimeout(() => {',
+          '    process.stdout.write(req.teamPreview ? "/team 1234\\n" : "default\\n");',
+          '  }, 90);',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      const chunkSnaps: tournament.TurnBroadcastInfo[] = [];
+      const clockChanges: tournament.TurnBroadcastInfo[] = [];
+
+      await new tournament.ConcurrentGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1Spec: {
+          agentId: 'fast-agent',
+          displayName: 'Fast Agent',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, defaultAgentScript],
+        },
+        p2Spec: {
+          agentId: 'slow-agent',
+          displayName: 'Slow Agent',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, slowAgentScript],
+        },
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        maxTurns: 2,
+        onSpectatorChunk: (_chunk, state) => {
+          chunkSnaps.push(structuredClone(state));
+        },
+        onClockChange: state => {
+          clockChanges.push(structuredClone(state));
+        },
+      }).run();
+
+      // At decision wave start, both sides are actively thinking simultaneously
+      expect(chunkSnaps.some(s => s.p1.thinking && s.p2.thinking)).toBe(true);
+      // When Fast Agent (p1) commits first, onClockChange reports p1 locked in while p2 thinks
+      expect(clockChanges.some(s => !s.p1.thinking && s.p2.thinking)).toBe(true);
+    });
   });
 
   describe('Coordinator', () => {

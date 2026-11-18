@@ -157,7 +157,8 @@ The 7 sections cover:
    live state, `Stale / Offline` heartbeat state, and empty battle history.
 5. **Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal `SF` badges
    and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay viewer, live
-   Best-of-3 Tournament `#2` multi-table broadcast (`Table 1`, switched to `Table 2`,
+   Best-of-3 Tournament `#2` multi-table broadcast (`Table 1` with simultaneous dual-thinking
+   clocks, switched to `Table 2` with P1 `locked in` while P2 continues `thinking…`,
    `Table 2 (idle)` with `● Watch T1` pill, inline expanded completed Bo3 match row with
    multi-game telemetry and `Game 1` / `Game 2` / `Game 3` replay switcher while `#live` continues
    broadcasting, and offline graceful degradation with the battle-log fallback viewer and species

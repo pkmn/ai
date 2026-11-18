@@ -120,6 +120,7 @@ export interface GameOptions {
     summaries: SeriesGameSummary[];
   }) => void | Promise<void>;
   onSpectatorChunk?: (chunk: string, state: TurnBroadcastInfo) => void;
+  onClockChange?: (state: TurnBroadcastInfo) => void;
 }
 export type TournamentGameOptions = GameOptions;
 
@@ -302,6 +303,7 @@ export class ConcurrentGame {
     chunk: string,
     state: TurnBroadcastInfo
   ) => void;
+  private readonly onClockChange?: (state: TurnBroadcastInfo) => void;
 
   private battleStream: sim.BattleStreams.BattleStream;
   private streams: ReturnType<typeof sim.BattleStreams.getPlayerStreams>;
@@ -344,6 +346,7 @@ export class ConcurrentGame {
     this.utmTimeoutMillis = options.utmTimeoutMillis ?? 15_000;
     this.onGameStart = options.onGameStart;
     this.onSpectatorChunk = options.onSpectatorChunk;
+    this.onClockChange = options.onClockChange;
 
     this.battleStream = new sim.BattleStreams.BattleStream();
     this.streams = sim.BattleStreams.getPlayerStreams(this.battleStream);
@@ -358,6 +361,16 @@ export class ConcurrentGame {
     return rewriteBlindPlayerNames(rawLog, this.p1Spec.displayName, this.p2Spec.displayName);
   }
 
+  private buildBroadcastState(): TurnBroadcastInfo {
+    const p1Pokemon = this.battleStream.battle?.sides[0]?.getRequestData().pokemon;
+    const p2Pokemon = this.battleStream.battle?.sides[1]?.getRequestData().pokemon;
+    return {
+      turn: this.currentTurn,
+      p1: this.buildSlotBroadcast(this.p1, p1Pokemon),
+      p2: this.buildSlotBroadcast(this.p2, p2Pokemon),
+    };
+  }
+
   private emitSpectatorChunk(rawChunk: string) {
     let chunkToEmit = rawChunk;
     if (this.battleStream.battle) {
@@ -365,19 +378,14 @@ export class ConcurrentGame {
       chunkToEmit = battleLog.slice(this.lastLogIndex).join('\n');
       this.lastLogIndex = battleLog.length;
     }
+    if (!chunkToEmit) return;
     const publicChunk = rewriteBlindPlayerNames(
       chunkToEmit,
       this.p1Spec.displayName,
       this.p2Spec.displayName
     );
     this.omniscientLog.push(publicChunk);
-    const p1Pokemon = this.battleStream.battle?.sides[0]?.getRequestData().pokemon;
-    const p2Pokemon = this.battleStream.battle?.sides[1]?.getRequestData().pokemon;
-    this.onSpectatorChunk?.(publicChunk, {
-      turn: this.currentTurn,
-      p1: this.buildSlotBroadcast(this.p1, p1Pokemon),
-      p2: this.buildSlotBroadcast(this.p2, p2Pokemon),
-    });
+    this.onSpectatorChunk?.(publicChunk, this.buildBroadcastState());
   }
 
   private buildSlotBroadcast(
@@ -728,6 +736,7 @@ export class ConcurrentGame {
       this.pendingWaveSlots.clear();
     }
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
+    const wasRetry = player.retryingInvalidChoice;
 
     const {graceMillis, totalBudgetMillis, inactiveLine} = arbiter.beginTurnClockStep(
       player,
@@ -753,6 +762,9 @@ export class ConcurrentGame {
     let totalElapsedMillis = 0;
     let linesReadThisDecision = 0;
     player.thinking = true;
+    if (wasRetry && !this.ended) {
+      this.onClockChange?.(this.buildBroadcastState());
+    }
 
     try {
       while (!this.ended) {
@@ -792,6 +804,7 @@ export class ConcurrentGame {
         player.bankMillis = Math.max(0, player.bankMillis - overGraceMillis);
         player.totalTurnMillis += decisionElapsedMillis;
         player.decisionsCount++;
+        player.thinking = false;
 
         const choiceCmd = arbiter.formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battleStream.write(`>${player.slot} ${choiceCmd}`);
@@ -829,6 +842,19 @@ export class ConcurrentGame {
 
         if (inspected.actionableReqJson && !this.ended) {
           await this.handleDecision(player, inspected.actionableReqJson);
+          const other = player.slot === 'p1' ? this.p2 : this.p1;
+          if (!this.ended && other?.thinking) {
+            setImmediate(() => {
+              if (
+                !this.ended &&
+                !player.thinking &&
+                !player.retryingInvalidChoice &&
+                other.thinking
+              ) {
+                this.onClockChange?.(this.buildBroadcastState());
+              }
+            });
+          }
         }
       }
     })();
@@ -892,6 +918,11 @@ export class ConcurrentGame {
               await this.battleStream.write('>forcetie');
             }
           }
+        }
+        if (!this.ended) {
+          // Drain all microtasks so concurrent player tasks enter `handleDecision`
+          // (`beginTurnClockStep` + `thinking = true`) before snapshotting spectator clocks.
+          await new Promise<void>(resolve => setImmediate(resolve));
         }
         this.emitSpectatorChunk(rawChunk);
       }
@@ -2086,6 +2117,33 @@ export class Coordinator {
 
         await sendTableLoad({game: 1, bestOf: tourneyBestOf, summaries: []});
 
+        const sendTableAppend = (lines: string[], snap: TurnBroadcastInfo) => {
+          queueTableBroadcast(params.tableNum, {
+            table: params.tableNum,
+            mode: 'append',
+            p1: {
+              slug: p1Ent.agentSlug,
+              name: p1Ent.agentName,
+              version: p1Ent.version,
+              bankSeconds: snap.p1.bankSeconds,
+              thinking: snap.p1.thinking,
+              incrementSeconds: incSeconds,
+              ...(snap.p1.pokemon ? {pokemon: snap.p1.pokemon} : {}),
+            },
+            p2: {
+              slug: p2Ent.agentSlug,
+              name: p2Ent.agentName,
+              version: p2Ent.version,
+              bankSeconds: snap.p2.bankSeconds,
+              thinking: snap.p2.thinking,
+              incrementSeconds: incSeconds,
+              ...(snap.p2.pokemon ? {pokemon: snap.p2.pokemon} : {}),
+            },
+            lines,
+            live: true,
+          }).catch(() => undefined);
+        };
+
         const game = new ConcurrentGame({
           format: tourney.format,
           customRules: tourney.customRules,
@@ -2106,30 +2164,10 @@ export class Coordinator {
             if (!chunk) return;
             const newLines = chunk.split('\n');
             if (newLines.length === 0) return;
-            queueTableBroadcast(params.tableNum, {
-              table: params.tableNum,
-              mode: 'append',
-              p1: {
-                slug: p1Ent.agentSlug,
-                name: p1Ent.agentName,
-                version: p1Ent.version,
-                bankSeconds: snap.p1.bankSeconds,
-                thinking: snap.p1.thinking,
-                incrementSeconds: incSeconds,
-                ...(snap.p1.pokemon ? {pokemon: snap.p1.pokemon} : {}),
-              },
-              p2: {
-                slug: p2Ent.agentSlug,
-                name: p2Ent.agentName,
-                version: p2Ent.version,
-                bankSeconds: snap.p2.bankSeconds,
-                thinking: snap.p2.thinking,
-                incrementSeconds: incSeconds,
-                ...(snap.p2.pokemon ? {pokemon: snap.p2.pokemon} : {}),
-              },
-              lines: newLines,
-              live: true,
-            }).catch(() => undefined);
+            sendTableAppend(newLines, snap);
+          },
+          onClockChange: snap => {
+            sendTableAppend([], snap);
           },
         });
 

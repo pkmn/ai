@@ -691,14 +691,28 @@ function renderPartyMinisprites(packed?: string): Child {
   );
 }
 
-function renderClockSide(slot: 'p1' | 'p2', clock: BroadcastClock): Html {
-  const pillCls = clock.thinking ? 'clock-pill thinking' : 'clock-pill';
+function renderClockSide(
+  slot: 'p1' | 'p2',
+  clock: BroadcastClock,
+  lockedIn = false
+): Html {
+  const pillCls = clock.thinking
+    ? 'clock-pill thinking'
+    : lockedIn
+      ? 'clock-pill locked'
+      : 'clock-pill';
   const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
-  const subText = clock.thinking ? 'thinking…' : `+${clock.incrementSeconds}s/turn`;
+  const subText = clock.thinking
+    ? 'thinking…'
+    : lockedIn
+      ? 'locked in'
+      : `+${clock.incrementSeconds}s/turn`;
   const rem = Math.round(clock.bankSeconds);
   const tip = clock.thinking
     ? `${rem}s remaining in 150s bank (currently thinking)`
-    : `${rem}s remaining in 150s bank (+${clock.incrementSeconds}s/turn)`;
+    : lockedIn
+      ? `${rem}s remaining in 150s bank (choice locked in, waiting for opponent)`
+      : `${rem}s remaining in 150s bank (+${clock.incrementSeconds}s/turn)`;
   return (
     <div className='clock-side' id={`clock-side-${slot}`}>
       <span><tt>{slot}</tt> <strong id={`clock-name-${slot}`}>{clock.name}</strong></span>
@@ -735,8 +749,6 @@ function renderBroadcastSectionHtml(
     p2Pokemon?: unknown[];
     live: boolean;
     side: 'p1';
-    thinkingSlot?: 'p1' | 'p2';
-    thinkingBankSeconds?: number;
   };
 } {
   const isActive = broadcast?.tournamentId === tournament.id;
@@ -747,6 +759,9 @@ function renderBroadcastSectionHtml(
 
   const p1Clock = selected?.p1 ?? norm?.p1;
   const p2Clock = selected?.p2 ?? norm?.p2;
+  const isLive = selected
+    ? (!selected.idle && selected.live !== false)
+    : Boolean(norm && norm.live !== false);
   const seriesLeft = selected?.seriesLeftHtml ?? norm?.seriesLeftHtml ?? '<strong>Replay</strong>';
   const seriesRight = selected?.seriesRightHtml ??
     norm?.seriesRightHtml ??
@@ -791,8 +806,8 @@ function renderBroadcastSectionHtml(
         </div>
         {norm && p1Clock && p2Clock ? (
           <div className='clock-bar' id='clock-bar'>
-            {renderClockSide('p1', p1Clock)}
-            {renderClockSide('p2', p2Clock)}
+            {renderClockSide('p1', p1Clock, isLive && !p1Clock.thinking && p2Clock.thinking)}
+            {renderClockSide('p2', p2Clock, isLive && !p2Clock.thinking && p1Clock.thinking)}
           </div>
         ) : (
           <div className='clock-bar hide' id='clock-bar' />
@@ -819,11 +834,6 @@ function renderBroadcastSectionHtml(
   const p2Lines = selected?.p2Lines ?? norm.p2Lines;
   const p1Pokemon = selected?.p1?.pokemon;
   const p2Pokemon = selected?.p2?.pokemon;
-  const isLive = selected ? selected.live !== false : norm.live !== false;
-  const thinkingSlot = p1Clock.thinking ? 'p1' : p2Clock.thinking ? 'p2' : undefined;
-  const thinkingBankSeconds = thinkingSlot
-    ? (thinkingSlot === 'p1' ? p1Clock.bankSeconds : p2Clock.bankSeconds)
-    : undefined;
 
   return {
     node,
@@ -838,8 +848,6 @@ function renderBroadcastSectionHtml(
       p2Pokemon,
       live: isLive,
       side: 'p1',
-      thinkingSlot,
-      thinkingBankSeconds,
     },
   };
 }
@@ -1743,17 +1751,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     let selectedTable = Number(pageInit.selectedTable) || 1;
     let viewerReady = false;
     let pendingPayload = initialViewer;
-    let activeClock = (
-      initialViewer &&
-      initialViewer.live &&
-      initialViewer.thinkingSlot
-    )
-      ? {
-        slot: initialViewer.thinkingSlot,
-        bankSeconds: Number(initialViewer.thinkingBankSeconds) || 0,
-        syncMillis: Date.now(),
-      }
-      : undefined;
+    const clockStateByTable = new Map();
 
     ${render.buildBattleDetailClientJs()}
 
@@ -1917,41 +1915,108 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
     });
 
-    const renderClockSideHtml = (slot, clock) => {
-      const pillCls = clock.thinking ? 'clock-pill thinking' : 'clock-pill';
+    const syncSideClock = (prevSide, clock, sameDecision, nowMillis) => {
+      if (!clock || !clock.thinking) return undefined;
+      const bank = Number(clock.bankSeconds) || 0;
+      if (sameDecision && prevSide && prevSide.bankSeconds === bank) {
+        return prevSide;
+      }
+      return {bankSeconds: bank, syncMillis: nowMillis};
+    };
+
+    const syncTableClock = (tb, nowMillis, forceReset) => {
+      if (!tb || typeof tb.table !== 'number') return;
+      const isLive = !tb.idle && tb.live !== false && Boolean(tb.p1 && tb.p2);
+      if (!isLive) {
+        clockStateByTable.delete(tb.table);
+        return;
+      }
+      const turn = parseLatestTurn(tb.lines);
+      const lineCount = Array.isArray(tb.lines) ? tb.lines.length : 0;
+      const prev = clockStateByTable.get(tb.table);
+      const sameDecision = Boolean(
+        !forceReset &&
+        prev &&
+        (prev.gameId || '') === (tb.gameId || '') &&
+        (prev.game || 1) === (tb.game || 1) &&
+        prev.turn === turn &&
+        prev.lineCount === lineCount
+      );
+      clockStateByTable.set(tb.table, {
+        gameId: tb.gameId || '',
+        game: tb.game || 1,
+        turn,
+        lineCount,
+        p1: syncSideClock(prev && prev.p1, tb.p1, sameDecision, nowMillis),
+        p2: syncSideClock(prev && prev.p2, tb.p2, sameDecision, nowMillis),
+      });
+    };
+
+    const syncAllTableClocks = (nowMillis, forceReset) => {
+      const seen = new Set();
+      for (const tb of getTables()) {
+        seen.add(tb.table);
+        syncTableClock(tb, nowMillis, forceReset);
+      }
+      for (const tableNum of Array.from(clockStateByTable.keys())) {
+        if (!seen.has(tableNum)) clockStateByTable.delete(tableNum);
+      }
+    };
+
+    syncAllTableClocks(Date.now(), false);
+
+    const displayedBankSeconds = (tableState, slot, clock, nowMillis) => {
+      const active = tableState && tableState[slot];
+      if (!active || !clock || !clock.thinking) return Number(clock.bankSeconds) || 0;
+      const elapsed = Math.floor((nowMillis - active.syncMillis) / 1000);
+      return Math.max(0, Math.round(active.bankSeconds - elapsed));
+    };
+
+    const renderClockSideHtml = (slot, clock, lockedIn, bankSeconds) => {
+      const pillCls = clock.thinking
+        ? 'clock-pill thinking'
+        : lockedIn
+          ? 'clock-pill locked'
+          : 'clock-pill';
       const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
-      const subText = clock.thinking ? 'thinking…' : ('+' + clock.incrementSeconds + 's/turn');
-      const rem = Math.round(clock.bankSeconds);
+      const subText = clock.thinking
+        ? 'thinking…'
+        : lockedIn
+          ? 'locked in'
+          : ('+' + clock.incrementSeconds + 's/turn');
+      const rem = Math.round(bankSeconds);
       const tip = clock.thinking
         ? (rem + 's remaining in 150s bank (currently thinking)')
-        : (rem + 's remaining in 150s bank (+' + clock.incrementSeconds + 's/turn)');
+        : lockedIn
+          ? (rem + 's remaining in 150s bank (choice locked in, waiting for opponent)')
+          : (rem + 's remaining in 150s bank (+' + clock.incrementSeconds + 's/turn)');
       return '<div class="clock-side" id="clock-side-' + slot + '">' +
         '<span><tt>' + slot + '</tt> <strong id="clock-name-' + slot + '">' +
         esc(clock.name) + '</strong></span>' +
         '<span class="' + pillCls + '" id="clock-pill-' + slot + '" title="' + esc(tip) + '">' +
         '<span class="' + timeCls + '" id="clock-' + slot + '">' +
-        formatClockMmSs(clock.bankSeconds) + '</span>' +
+        formatClockMmSs(bankSeconds) + '</span>' +
         '<span class="clock-sub" id="clock-sub-' + slot + '">' + esc(subText) + '</span>' +
         '</span></div>';
     };
 
-    const renderClocks = (p1, p2, isLive) => {
+    const renderClocks = (tb, nowMillis = Date.now()) => {
       if (!clockBarEl) return;
-      if (!p1 || !p2) {
+      if (!tb || tb.idle || !tb.p1 || !tb.p2) {
         clockBarEl.classList.add('hide');
         clockBarEl.innerHTML = '';
-        activeClock = undefined;
         return;
       }
+      const isLive = tb.live !== false;
+      const state = isLive ? clockStateByTable.get(tb.table) : undefined;
+      const p1Bank = displayedBankSeconds(state, 'p1', tb.p1, nowMillis);
+      const p2Bank = displayedBankSeconds(state, 'p2', tb.p2, nowMillis);
+      const p1Locked = isLive && !tb.p1.thinking && Boolean(tb.p2.thinking);
+      const p2Locked = isLive && !tb.p2.thinking && Boolean(tb.p1.thinking);
       clockBarEl.classList.remove('hide');
-      clockBarEl.innerHTML = renderClockSideHtml('p1', p1) + renderClockSideHtml('p2', p2);
-      if (isLive && (p1.thinking || p2.thinking)) {
-        const slot = p1.thinking ? 'p1' : 'p2';
-        const bank = slot === 'p1' ? p1.bankSeconds : p2.bankSeconds;
-        activeClock = {slot, bankSeconds: Number(bank) || 0, syncMillis: Date.now()};
-      } else {
-        activeClock = undefined;
-      }
+      clockBarEl.innerHTML =
+        renderClockSideHtml('p1', tb.p1, p1Locked, p1Bank) +
+        renderClockSideHtml('p2', tb.p2, p2Locked, p2Bank);
     };
 
     const renderTableNav = () => {
@@ -2002,11 +2067,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       if (seriesRightEl) {
         seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
       }
-      if (!tb.idle && tb.p1 && tb.p2) {
-        renderClocks(tb.p1, tb.p2, tb.live !== false);
-      } else {
-        renderClocks(undefined, undefined, false);
-      }
+      renderClocks(tb);
       const lines = Array.isArray(tb.lines) ? tb.lines : [];
       const p1Lines = Array.isArray(tb.p1Lines) ? tb.p1Lines : undefined;
       const p2Lines = Array.isArray(tb.p2Lines) ? tb.p2Lines : undefined;
@@ -2559,12 +2620,22 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     });
 
     setInterval(() => {
-      if (!activeClock) return;
-      const clockEl = document.getElementById('clock-' + activeClock.slot);
-      if (!clockEl) return;
-      const elapsed = Math.floor((Date.now() - activeClock.syncMillis) / 1000);
-      const rem = Math.max(0, Math.round(activeClock.bankSeconds - elapsed));
-      clockEl.textContent = formatClockMmSs(rem);
+      const state = clockStateByTable.get(selectedTable);
+      if (!state) return;
+      const nowMillis = Date.now();
+      for (const slot of ['p1', 'p2']) {
+        const side = state[slot];
+        if (!side) continue;
+        const clockEl = document.getElementById('clock-' + slot);
+        if (!clockEl) continue;
+        const elapsed = Math.floor((nowMillis - side.syncMillis) / 1000);
+        const rem = Math.max(0, Math.round(side.bankSeconds - elapsed));
+        clockEl.textContent = formatClockMmSs(rem);
+        const pillEl = document.getElementById('clock-pill-' + slot);
+        if (pillEl) {
+          pillEl.title = rem + 's remaining in 150s bank (currently thinking)';
+        }
+      }
     }, 1000);
 
     if (eventSelect) {
@@ -2590,6 +2661,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           if (Array.isArray(doc.standings)) standings = doc.standings;
           if (Array.isArray(doc.crosstable)) crosstable = doc.crosstable;
           broadcast = doc.broadcast;
+          syncAllTableClocks(Date.now(), false);
           if (
             crosstable.some(c => c.stage === 'Superfinal') ||
             (Array.isArray(doc.games) && doc.games.some(g => g.stage === 'Superfinal')) ||
@@ -2616,7 +2688,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
             showLiveTable(targetNum, false);
           } else if (liveSec) {
             liveSec.classList.add('hide');
-            renderClocks(undefined, undefined, false);
+            renderClocks(undefined);
           }
 
           if (status === 'completed' && !broadcast) {
@@ -2628,6 +2700,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       es.addEventListener('broadcast', ev => {
         try {
           broadcast = JSON.parse(ev.data);
+          syncAllTableClocks(Date.now(), false);
           if (getLiveTables().some(tb => tb.stage === 'Superfinal')) hasSuperfinal = true;
           syncLiveGameRows();
           renderStandings();
@@ -2647,7 +2720,12 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           if (!data) return;
           if (data.broadcast) broadcast = data.broadcast;
           const loaded = data.table;
-          if (loaded && loaded.stage === 'Superfinal') hasSuperfinal = true;
+          const nowMillis = Date.now();
+          syncAllTableClocks(nowMillis, false);
+          if (loaded) {
+            syncTableClock(getTable(loaded.table) || loaded, nowMillis, true);
+            if (loaded.stage === 'Superfinal') hasSuperfinal = true;
+          }
           syncLiveGameRows();
           renderStandings();
           renderCrosstable();
@@ -2686,6 +2764,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           if (data.p2) tb.p2 = data.p2;
           if (typeof data.live === 'boolean') tb.live = data.live;
           if (data.updatedAt) tb.updatedAt = data.updatedAt;
+          const nowMillis = Date.now();
+          syncTableClock(tb, nowMillis, newLines.length > 0);
 
           if (gamesTbody) {
             const liveRow = gamesTbody.querySelector(
@@ -2704,7 +2784,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
 
           if (tb.table === selectedTable) {
             if (tb.p1 && tb.p2) {
-              renderClocks(tb.p1, tb.p2, tb.live !== false);
+              renderClocks(tb, nowMillis);
             }
             const p1Pokemon = tb.p1 && Array.isArray(tb.p1.pokemon) ? tb.p1.pokemon : undefined;
             const p2Pokemon = tb.p2 && Array.isArray(tb.p2.pokemon) ? tb.p2.pokemon : undefined;
@@ -2735,12 +2815,13 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           const data = JSON.parse(ev.data);
           if (!data) return;
           if (data.broadcast) broadcast = data.broadcast;
+          syncAllTableClocks(Date.now(), false);
           syncLiveGameRows();
           renderStandings();
           renderCrosstable();
           renderTableNav();
           if (data.table === selectedTable) {
-            renderClocks(undefined, undefined, false);
+            renderClocks(undefined);
             const tb = getTable(selectedTable);
             if (seriesRightEl && tb) {
               seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
@@ -2751,7 +2832,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
 
       es.addEventListener('broadcast-end', () => {
         broadcast = undefined;
-        renderClocks(undefined, undefined, false);
+        clockStateByTable.clear();
+        renderClocks(undefined);
         syncLiveGameRows();
         renderStandings();
         renderCrosstable();
@@ -2768,6 +2850,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           if (Array.isArray(data.standings)) standings = data.standings;
           if (Array.isArray(data.crosstable)) crosstable = data.crosstable;
           broadcast = data.broadcast;
+          const nowMillis = Date.now();
+          syncAllTableClocks(nowMillis, false);
           if (data.game && data.game.stage === 'Superfinal') hasSuperfinal = true;
 
           syncLiveGameRows();
@@ -2781,12 +2865,12 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
 
           const tb = getTable(selectedTable);
           if (tb && tb.p1 && tb.p2 && !tb.idle) {
-            renderClocks(tb.p1, tb.p2, tb.live !== false);
+            renderClocks(tb, nowMillis);
             if (seriesRightEl) {
               seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
             }
           } else {
-            renderClocks(undefined, undefined, false);
+            renderClocks(undefined);
           }
 
           if (status === 'completed' && !broadcast) {
