@@ -59,5 +59,14 @@ Repository-specific style, naming, and architectural rules for AI coding agents 
 ## Verification
 
 - Run `npm run test` (`tsc -p .`, static build, `eslint --cache`, `stylelint static/style/*.css tools/*.css`, and `hyperlink public --check-anchors`) and `npx vitest run` before considering any change complete.
-- When modifying TSX views, CSS, or client scripts, run `npm run shots -- --baseline` before your changes and `npm run shots` afterward to verify all viewports (`375px` `small` through `desktop` in `light` and `dark` themes) have zero console/page errors and zero horizontal overflow (`scrollWidth <= innerWidth`), inspect visual diffs in `.shots/index.html` and changed `.shots/` PNGs directly, and re-run `npm run clean && npm run test` afterward so `public/` contains no mock artifacts.
+- When modifying TSX views, CSS, or client scripts, run `npm run shots --
+  --baseline` before your changes and `npm run shots` afterward to verify all
+  viewports (`375px` `small` through `desktop` in `light` and `dark` themes)
+  have zero console/page errors and zero horizontal overflow (`scrollWidth <=
+  innerWidth`), inspect visual diffs in `.shots/index.html` and changed
+  `.shots/` PNGs directly, and re-run `npm run clean && npm run test` afterward
+  so `public/` contains no mock artifacts. Always include links to the relevant
+  screenshots that changed (light mode desktop) in the response to the user, and
+  include the full path on disk to the .shots/index.html file in case you are
+  working in a git-worktree
 - **Keep `tools/shots.tsx` scenarios in sync with the UI:** Whenever adding, modifying, or removing a route, UI view, interactive control, lifecycle state, or error/edge case, add or update the corresponding scenario(s) in `tools/shots.tsx` (`buildScenarios`) and `docs/TESTING.md` so the `.shots/index.html` Visual Atlas never goes stale.
