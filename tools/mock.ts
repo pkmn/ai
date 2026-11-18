@@ -634,23 +634,54 @@ function samplePackedTournamentTeam(format: string, index: number): string {
   return species.map(n => `|${n}`).join(']');
 }
 
-function buildSampleSidePokemon(slot: 'p1' | 'p2', mons: string[], isRandom: boolean) {
+function parseFormatGen(format: string): number {
+  const m = /^gen(\d+)/i.exec(format);
+  return m ? Number(m[1]) : 9;
+}
+
+function buildPreStartTeamLines(
+  isRandom: boolean,
+  gen: number,
+  p1Mons: readonly string[],
+  p2Mons: readonly string[]
+): string[] {
+  if (isRandom) return [];
+  if (gen < 5) {
+    return [
+      `|teamsize|p1|${Math.min(6, p1Mons.length) || 6}`,
+      `|teamsize|p2|${Math.min(6, p2Mons.length) || 6}`,
+    ];
+  }
+  return [
+    ...p1Mons.slice(0, 6).map(sp => `|poke|p1|${sp}|`),
+    ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
+    '|teampreview',
+  ];
+}
+
+function buildSampleSidePokemon(slot: 'p1' | 'p2', mons: string[], isRandom: boolean, gen = 9) {
   const list = (mons.length > 0 ? mons : [slot === 'p1' ? 'Great Tusk' : 'Dragapult']).slice(0, 6);
+  const moves = gen === 1
+    ? ['bodyslam', 'hyperbeam', 'earthquake', 'rest']
+    : gen < 4
+      ? ['protect', 'bodyslam', 'earthquake', 'rest']
+      : ['protect', 'uturn', 'earthquake', 'knockoff'];
+  const ability = gen < 3 ? '' : gen < 9 ? 'intimidate' : 'protosynthesis';
+  const item = gen < 2 ? '' : 'leftovers';
   return list.map((sp, idx) => ({
     ident: `${slot}: ${sp}`,
     details: isRandom ? `${sp}, L80` : sp,
     condition: '260/260',
     active: idx === 0,
-    stats: {atk: 210, def: 195, spa: 170, spd: 175, spe: 205},
-    moves: ['protect', 'uturn', 'earthquake', 'knockoff'],
-    baseAbility: 'protosynthesis',
-    item: 'leftovers',
+    stats: {atk: 210, def: 195, spa: 170, spd: gen === 1 ? 170 : 175, spe: 205},
+    moves,
+    baseAbility: ability,
+    item,
     pokeball: 'pokeball',
-    ability: 'protosynthesis',
+    ability,
     commanding: false,
     reviving: false,
-    teraType: 'Steel',
-    terastallized: '',
+    ...(gen >= 9 ? {teraType: 'Steel', terastallized: ''} : {}),
   }));
 }
 
@@ -664,7 +695,7 @@ function buildShowdownTournamentLog(opts: {
 }): string {
   const isDoubles = opts.format.includes('vgc') || opts.format.includes('doubles');
   const isRandom = opts.format.includes('random');
-  const gen = /^gen(\d)/i.exec(opts.format)?.[1] ?? '9';
+  const gen = parseFormatGen(opts.format);
   const tier = isDoubles
     ? '[Gen 9 Champions] VGC 2026 Reg M-C'
     : isRandom
@@ -674,17 +705,15 @@ function buildShowdownTournamentLog(opts: {
   const p2Mons = tournaments.parsePackedTeamSpecies(opts.p2TeamPacked);
   const lead1 = p1Mons[0] ?? 'Great Tusk';
   const lead2 = p2Mons[0] ?? 'Dragapult';
+  const move1 = gen === 1 ? 'Rest' : 'Protect';
+  const move2 = gen < 4 ? 'Body Slam' : 'U-turn';
   const lines = [
     `|player|p1|${opts.p1Name}|1`,
     `|player|p2|${opts.p2Name}|2`,
     `|gametype|${isDoubles ? 'doubles' : 'singles'}`,
     `|gen|${gen}`,
     `|tier|${tier}`,
-    ...(isRandom ? [] : [
-      ...p1Mons.slice(0, 6).map(sp => `|poke|p1|${sp}|`),
-      ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
-      '|teampreview',
-    ]),
+    ...buildPreStartTeamLines(isRandom, gen, p1Mons, p2Mons),
     '|start',
     '|split|p1',
     `|switch|p1a: ${lead1}|${lead1}|260/260`,
@@ -693,8 +722,8 @@ function buildShowdownTournamentLog(opts: {
     `|switch|p2a: ${lead2}|${lead2}|245/245`,
     `|switch|p2a: ${lead2}|${lead2}|100/100`,
     '|turn|1',
-    `|move|p1a: ${lead1}|Protect|p1a: ${lead1}`,
-    `|move|p2a: ${lead2}|U-turn|p1a: ${lead1}`,
+    `|move|p1a: ${lead1}|${move1}|p1a: ${lead1}`,
+    `|move|p2a: ${lead2}|${move2}|p1a: ${lead1}`,
   ];
   if (opts.outcome === 'T') {
     lines.push('|tie');
@@ -2858,8 +2887,9 @@ export class Runner {
         const t2Packed = samplePackedTournamentTeam(ladder.format, p2.agentId + 1);
         const p1Mons = tournaments.parsePackedTeamSpecies(t1Packed);
         const p2Mons = tournaments.parsePackedTeamSpecies(t2Packed);
-        p1Pokemon = buildSampleSidePokemon('p1', p1Mons, true);
-        p2Pokemon = buildSampleSidePokemon('p2', p2Mons, true);
+        const gen = parseFormatGen(ladder.format);
+        p1Pokemon = buildSampleSidePokemon('p1', p1Mons, true, gen);
+        p2Pokemon = buildSampleSidePokemon('p2', p2Mons, true, gen);
         const fullLog = buildShowdownTournamentLog({
           format: ladder.format,
           p1Name: seat1Name,
@@ -3458,8 +3488,13 @@ export class Runner {
       const cycle = Number(getFlag(cmd, 'cycle') ?? 4);
       const game = Number(getFlag(cmd, 'game') ?? cycle);
       const isDoubles = tour.format.includes('vgc') || tour.format.includes('doubles');
-      const gen = /^gen(\d)/i.exec(tour.format)?.[1] ?? '9';
-      const tier = isDoubles ? '[Gen 9 Champions] VGC 2026 Reg M-C' : `[Gen ${gen}] OU`;
+      const isRandom = tour.format.includes('random');
+      const gen = parseFormatGen(tour.format);
+      const tier = isDoubles
+        ? '[Gen 9 Champions] VGC 2026 Reg M-C'
+        : isRandom
+          ? `[Gen ${gen}] Random Battle`
+          : `[Gen ${gen}] OU`;
       const inc = arena.turnIncrementSeconds(tour.format);
 
       const tables: arena.BroadcastTable[] = pairs.map((pr, idx) => {
@@ -3504,7 +3539,7 @@ export class Runner {
             bankSeconds: 118 - idx * 8,
             thinking: idx % 2 === 1,
             incrementSeconds: inc,
-            pokemon: buildSampleSidePokemon('p1', p1Mons, false),
+            pokemon: buildSampleSidePokemon('p1', p1Mons, isRandom, gen),
           },
           p2: {
             slug: pr[1].slug,
@@ -3514,7 +3549,7 @@ export class Runner {
             bankSeconds: 104 - idx * 6,
             thinking: idx % 2 === 0,
             incrementSeconds: inc,
-            pokemon: buildSampleSidePokemon('p2', p2Mons, false),
+            pokemon: buildSampleSidePokemon('p2', p2Mons, isRandom, gen),
           },
           lines: [
             `|player|p1|${pr[0].name}|1`,
@@ -3522,9 +3557,7 @@ export class Runner {
             `|gametype|${isDoubles ? 'doubles' : 'singles'}`,
             `|gen|${gen}`,
             `|tier|${tier}`,
-            ...p1Mons.slice(0, 6).map(sp => `|poke|p1|${sp}|`),
-            ...p2Mons.slice(0, 6).map(sp => `|poke|p2|${sp}|`),
-            '|teampreview',
+            ...buildPreStartTeamLines(isRandom, gen, p1Mons, p2Mons),
             '|start',
             '|split|p1',
             `|switch|p1a: ${lead1}|${lead1}|260/260`,
