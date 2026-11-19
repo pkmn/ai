@@ -3,8 +3,6 @@ import {DatabaseSync} from 'node:sqlite';
 import * as os from 'os';
 import * as path from 'path';
 
-import {afterAll, afterEach, describe, expect, test} from 'vitest';
-
 import {Database} from '../db';
 import {LADDERS_FILE, SIM_VERSION, parseLaddersYaml} from '../db/ladders';
 import * as sim from '../server/sim';
