@@ -2514,6 +2514,23 @@ describe('arena infrastructure', () => {
         const v30UtmLines = fs.readFileSync(utmLogFile, 'utf8').trim().split('\n');
         expect(v30UtmLines).toHaveLength(2);
         expect(v30UtmLines[0]).not.toBe(v30UtmLines[1]);
+
+        const g1Beats = h.heartbeats.filter(
+          hb => !('idle' in hb) && hb.game === 1
+        ) as serverArena.LiveMatchInput[];
+        const g2Beats = h.heartbeats.filter(
+          hb => !('idle' in hb) && hb.game === 2
+        ) as serverArena.LiveMatchInput[];
+        expect(g1Beats.length).toBeGreaterThan(0);
+        expect(g2Beats.length).toBeGreaterThan(0);
+        expect(g1Beats[0].viewer?.lines).toBeUndefined();
+        expect(g1Beats[0].viewer?.p1?.pokemon).toHaveLength(6);
+        expect(g2Beats[0].viewer?.lines).toBeUndefined();
+        expect(g2Beats[0].viewer?.p1?.pokemon).toHaveLength(6);
+        expect(g2Beats[0].game1Summary?.endReason).toBeDefined();
+        expect(g2Beats[0].game1Summary?.p1?.bankSeconds).toBeGreaterThanOrEqual(0);
+        expect(g2Beats[0].game1Summary?.p2?.bankSeconds).toBeGreaterThanOrEqual(0);
+        expect(g2Beats[0].game1Summary?.viewer?.p1?.pokemon).toHaveLength(6);
       } finally {
         h.stateDb.close();
       }

@@ -2375,6 +2375,19 @@ export class Runner {
       const client = this.getArenaClient();
       const inc = arena.turnIncrementSeconds(ladder.format);
       const emitLiveLines = ladder.team === 'random';
+      const hbT1 = sampledT1Packed ??
+        samplePackedTournamentTeam(ladder.format, this.state.matchSeq);
+      const hbT2 = sampledT2Packed ??
+        samplePackedTournamentTeam(ladder.format, this.state.matchSeq + 1);
+      const gen = parseFormatGen(ladder.format);
+      const hbLimit = ladder.format.toLowerCase().includes('vgc') ? 4 : 6;
+      const hbT1Mons = tournaments.parsePackedTeamSpecies(hbT1).slice(0, hbLimit);
+      const hbT2Mons = tournaments.parsePackedTeamSpecies(hbT2).slice(0, hbLimit);
+      const g1P1Pokemon = buildSampleSidePokemon('p1', hbT1Mons, true, gen);
+      const g1P2Pokemon = buildSampleSidePokemon('p2', hbT2Mons, true, gen);
+      const g2P1Pokemon = buildSampleSidePokemon('p1', hbT1Mons, true, gen);
+      const g2P2Pokemon = buildSampleSidePokemon('p2', hbT2Mons, true, gen);
+
       this.state.heartbeatSeq++;
       await client.sendHeartbeat({
         heartbeatSeq: this.state.heartbeatSeq,
@@ -2387,7 +2400,11 @@ export class Runner {
         turnStartedAt: opts.completedAt,
         turnBudgetSeconds: 145,
         incrementSeconds: inc,
-        ...(emitLiveLines && game1Log ? {lines: game1Log.trim().split('\n')} : {}),
+        viewer: {
+          ...(emitLiveLines && game1Log ? {lines: game1Log.trim().split('\n')} : {}),
+          p1: {pokemon: g1P1Pokemon},
+          p2: {pokemon: g1P2Pokemon},
+        },
         p1: {
           slug: p1.slug,
           name: p1.name,
@@ -2422,7 +2439,11 @@ export class Runner {
         turnStartedAt: opts.completedAt,
         turnBudgetSeconds: 136,
         incrementSeconds: inc,
-        ...(emitLiveLines && game2Log ? {lines: game2Log.trim().split('\n')} : {}),
+        viewer: {
+          ...(emitLiveLines && game2Log ? {lines: game2Log.trim().split('\n')} : {}),
+          p1: {pokemon: g2P1Pokemon},
+          p2: {pokemon: g2P2Pokemon},
+        },
         game1Summary: {
           ...(g1 === 'W'
             ? {winnerSlot: 'p1' as const}
@@ -2430,6 +2451,23 @@ export class Runner {
               ? {winnerSlot: 'p2' as const}
               : {}),
           turns: g1Turns,
+          endReason: g1Reason,
+          p1: {
+            bankSeconds: 145,
+            meanTurnMillis: p1TurnMillis,
+            ram: p1Ram,
+            ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
+          },
+          p2: {
+            bankSeconds: 142,
+            meanTurnMillis: p2TurnMillis,
+            ram: p2Ram,
+            ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
+          },
+          viewer: {
+            p1: {pokemon: g1P1Pokemon},
+            p2: {pokemon: g1P2Pokemon},
+          },
         },
         p1: {
           slug: p1.slug,
@@ -2893,6 +2931,7 @@ export class Runner {
       const g1Winner: 'p1' | 'p2' | undefined =
         g1WinnerRaw === 'p2' ? 'p2' : g1WinnerRaw === 'tie' ? undefined : 'p1';
       const g1Turns = Number(getFlag(cmd, 'g1-turns') ?? 11);
+      const g1Reason = getFlag(cmd, 'g1-reason') ?? (g1Winner ? 'win' : 'tie');
 
       let p1Team: string | undefined;
       let p2Team: string | undefined;
@@ -2908,6 +2947,83 @@ export class Runner {
         p1Team = this.resolvePoolLabelSpec(ladder, getFlag(cmd, 'p1-team'), sampled.t1Label);
         p2Team = this.resolvePoolLabelSpec(ladder, getFlag(cmd, 'p2-team'), sampled.t2Label);
       }
+
+      const isVgc = ladder.format.toLowerCase().includes('vgc');
+      const buildLivePokemon = (side: 'p1' | 'p2'): arena.PokemonHealth[] => {
+        if (turn === 0) {
+          return Array.from({length: 6}, () => ({percent: 100, color: 'green' as const}));
+        }
+        if (isVgc) {
+          return side === 'p1'
+            ? [
+              arena.computePokemonHealth(68, 180, ladder.format),
+              arena.computePokemonHealth(175, 175, ladder.format),
+              arena.computePokemonHealth(0, 175, ladder.format),
+              arena.computePokemonHealth(133, 175, ladder.format),
+            ]
+            : [
+              arena.computePokemonHealth(101, 201, ladder.format),
+              arena.computePokemonHealth(28, 175, ladder.format),
+              arena.computePokemonHealth(0, 175, ladder.format),
+              arena.computePokemonHealth(160, 175, ladder.format),
+            ];
+        }
+        return side === 'p1'
+          ? [
+            arena.computePokemonHealth(85, 220, ladder.format),
+            arena.computePokemonHealth(260, 260, ladder.format),
+            arena.computePokemonHealth(0, 240, ladder.format),
+            arena.computePokemonHealth(218, 260, ladder.format),
+            arena.computePokemonHealth(35, 220, ladder.format),
+            arena.computePokemonHealth(138, 280, ladder.format),
+          ]
+          : [
+            arena.computePokemonHealth(100, 201, ladder.format),
+            arena.computePokemonHealth(0, 240, ladder.format),
+            arena.computePokemonHealth(250, 250, ladder.format),
+            arena.computePokemonHealth(0, 230, ladder.format),
+            arena.computePokemonHealth(170, 250, ladder.format),
+            arena.computePokemonHealth(40, 201, ladder.format),
+          ];
+      };
+      const buildFinishedPokemon = (outcome: 'win' | 'loss' | 'tie'): arena.PokemonHealth[] => {
+        const size = isVgc ? 4 : 6;
+        if (outcome === 'loss') {
+          return Array.from({length: size}, () => ({percent: 0, color: 'fainted' as const}));
+        }
+        if (outcome === 'tie') {
+          return isVgc
+            ? [
+              {percent: 0, color: 'fainted'},
+              arena.computePokemonHealth(58, 180, ladder.format),
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+            ]
+            : [
+              arena.computePokemonHealth(31, 220, ladder.format),
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+              arena.computePokemonHealth(92, 240, ladder.format),
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+            ];
+        }
+        return isVgc
+          ? [
+            {percent: 0, color: 'fainted'},
+            arena.computePokemonHealth(126, 180, ladder.format),
+            {percent: 0, color: 'fainted'},
+            {percent: 0, color: 'fainted'},
+          ]
+          : [
+            arena.computePokemonHealth(62, 220, ladder.format),
+            {percent: 0, color: 'fainted'},
+            arena.computePokemonHealth(240, 240, ladder.format),
+            {percent: 0, color: 'fainted'},
+            arena.computePokemonHealth(154, 240, ladder.format),
+            {percent: 0, color: 'fainted'},
+          ];
+      };
 
       this.state.heartbeatSeq++;
       const matchId = getFlag(cmd, 'id') ?? `${ladder.slot}-live-${this.state.heartbeatSeq}`;
@@ -2942,6 +3058,8 @@ export class Runner {
           .map(l => (l === '|turn|1' ? `|turn|${turn}` : l));
       }
       const perspective = liveLines ? arena.extractPerspectiveLogs(liveLines) : undefined;
+      const p1Ram = p1.smokePeakRam ?? 890;
+      const p2Ram = p2.smokePeakRam ?? 1420;
       const liveMatch: arena.LiveMatch = {
         heartbeatSeq: this.state.heartbeatSeq,
         matchId,
@@ -2954,7 +3072,33 @@ export class Runner {
         turnStartedAt: this.state.now - 4,
         turnBudgetSeconds: 138,
         incrementSeconds: inc,
-        ...(game === 2 ? {game1Summary: {winnerSlot: g1Winner, turns: g1Turns}} : {}),
+        ...(game === 2
+          ? {
+            game1Summary: {
+              winnerSlot: g1Winner,
+              turns: g1Turns,
+              endReason: g1Reason,
+              p1: {
+                bankSeconds: 144,
+                meanTurnMillis: 268,
+                ram: Math.max(64, p1Ram - 32),
+                ...(p2Team ? {team: p2Team} : {}),
+                pokemon: buildFinishedPokemon(
+                  g1Winner === 'p1' ? 'win' : g1Winner === 'p2' ? 'loss' : 'tie'
+                ),
+              },
+              p2: {
+                bankSeconds: 131,
+                meanTurnMillis: 304,
+                ram: Math.max(64, p2Ram - 64),
+                ...(p1Team ? {team: p1Team} : {}),
+                pokemon: buildFinishedPokemon(
+                  g1Winner === 'p2' ? 'win' : g1Winner === 'p1' ? 'loss' : 'tie'
+                ),
+              },
+            },
+          }
+          : {}),
         ...(liveLines && perspective
           ? {
             viewer: {
@@ -2977,8 +3121,9 @@ export class Runner {
           bankSeconds: Number(getFlag(cmd, 'p1-bank') ?? 142),
           lastTurnMillis: 290,
           meanTurnMillis: 280,
-          ram: p1.smokePeakRam ?? 890,
+          ram: p1Ram,
           ...(p1Team ? {team: p1Team} : {}),
+          ...(ladder.team !== 'random' ? {pokemon: buildLivePokemon('p1')} : {}),
         },
         p2: {
           slug: p2.agentSlug,
@@ -2987,8 +3132,9 @@ export class Runner {
           bankSeconds: Number(getFlag(cmd, 'p2-bank') ?? 128),
           lastTurnMillis: 340,
           meanTurnMillis: 315,
-          ram: p2.smokePeakRam ?? 1420,
+          ram: p2Ram,
           ...(p2Team ? {team: p2Team} : {}),
+          ...(ladder.team !== 'random' ? {pokemon: buildLivePokemon('p2')} : {}),
         },
       };
 

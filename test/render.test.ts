@@ -2814,4 +2814,162 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('renders HP circle indicators with percentage tooltips on /arena/battles/', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      h.arenaHandle.setLiveState({
+        stale: false,
+        updatedAt: NOW,
+        live: {
+          heartbeatSeq: 19,
+          matchId: 'vgc-0000444',
+          ladderId: 'gen9championsvgc2026regmc20261109',
+          slot: 'vgc',
+          format: 'gen9championsvgc2026regmc',
+          game: 2,
+          turn: 7,
+          activeSlot: 'p1',
+          turnStartedAt: NOW - 2,
+          turnBudgetSeconds: 140,
+          incrementSeconds: 25,
+          game1Summary: {
+            winnerSlot: 'p2',
+            turns: 12,
+            endReason: 'timeout',
+            p1: {
+              bankSeconds: 0,
+              meanTurnMillis: 1950,
+              ram: 840,
+              team: 'P1:aabbccddeeff',
+              pokemon: [
+                {percent: 64, color: 'green'},
+                {percent: 0, color: 'fainted'},
+                {percent: 0, color: 'fainted'},
+                {percent: 0, color: 'fainted'},
+              ],
+            },
+            p2: {
+              bankSeconds: 132,
+              meanTurnMillis: 290,
+              ram: 960,
+              team: '112233445566',
+              pokemon: [
+                {percent: 91, color: 'green'},
+                {percent: 42, color: 'yellow'},
+                {percent: 0, color: 'fainted'},
+                {percent: 0, color: 'fainted'},
+              ],
+            },
+          },
+          p1: {
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '1.0.0',
+            bankSeconds: 142,
+            lastTurnMillis: 250,
+            meanTurnMillis: 245,
+            ram: 860,
+            team: '112233445566',
+            pokemon: [
+              {percent: 98, color: 'green'},
+              {percent: 50, color: 'yellow'},
+              {percent: 18, color: 'red'},
+              {percent: 0, color: 'fainted'},
+            ],
+          },
+          p2: {
+            slug: 'jaxcalibur',
+            name: 'Jaxcalibur',
+            version: '1.0.0',
+            bankSeconds: 136,
+            lastTurnMillis: 280,
+            meanTurnMillis: 275,
+            ram: 990,
+            team: 'P1:aabbccddeeff',
+            pokemon: [
+              {percent: 100, color: 'green'},
+              {percent: 73, color: 'green'},
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+            ],
+          },
+        },
+      });
+
+      const html = await h.getText('/arena/battles/');
+      const g1Pos = html.indexOf('id="live-g1"');
+      const g2Pos = html.indexOf('id="slot-p1"');
+      expect(g1Pos).toBeGreaterThan(0);
+      expect(g1Pos).toBeLessThan(g2Pos);
+      expect(html).toContain('12 turns');
+      expect(html).toContain('Timeout');
+      expect(html).toContain('1950 ms/turn');
+      expect(html).toMatch(
+        /<span[^>]*class="(?:green hp-orb|hp-orb green)"[^>]*title="98%"[^>]*>\u25cf<\/span>/
+      );
+      expect(html).toMatch(/<span[^>]*class="hp-orb yellow"[^>]*title="50%"[^>]*>\u25cf<\/span>/);
+      expect(html).toMatch(/<span[^>]*class="hp-orb red"[^>]*title="18%"[^>]*>\u25cf<\/span>/);
+      expect(html).toMatch(
+        /<span[^>]*class="(?:fainted hp-orb|hp-orb fainted)"[^>]*title="0%"[^>]*>\u25cf<\/span>/
+      );
+      expect(html).not.toContain('orb-svg');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('renders Team Preview label on Turn 0 live battles', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const sixFull: arena.PokemonHealth[] = Array.from(
+        {length: 6},
+        () => ({percent: 100, color: 'green'})
+      );
+      h.arenaHandle.setLiveState({
+        stale: false,
+        updatedAt: NOW,
+        live: {
+          heartbeatSeq: 1,
+          matchId: 'vgc-0000445',
+          ladderId: 'gen9championsvgc2026regmc20261109',
+          slot: 'vgc',
+          format: 'gen9championsvgc2026regmc',
+          game: 1,
+          turn: 0,
+          activeSlot: 'p1',
+          turnStartedAt: NOW - 1,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 25,
+          p1: {
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '1.0.0',
+            bankSeconds: 150,
+            lastTurnMillis: 0,
+            meanTurnMillis: 0,
+            ram: 780,
+            pokemon: sixFull,
+          },
+          p2: {
+            slug: 'jaxcalibur',
+            name: 'Jaxcalibur',
+            version: '1.0.0',
+            bankSeconds: 150,
+            lastTurnMillis: 0,
+            meanTurnMillis: 0,
+            ram: 820,
+            pokemon: sixFull,
+          },
+        },
+      });
+      const html = await h.getText('/arena/battles/');
+      expect(html).toContain('Team Preview');
+      expect(
+        html.match(/<span[^>]*class="(?:green hp-orb|hp-orb green)"[^>]*title="100%"/g) ?? []
+      ).toHaveLength(12);
+    } finally {
+      await h.close();
+    }
+  });
 });

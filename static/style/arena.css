@@ -1,5 +1,14 @@
 :root {
   --monospace: monospace;
+  --orb-green: #22a54f;
+  --orb-yellow: #df9f00;
+  --orb-red: #dc3c31;
+}
+
+[data-theme="dark"] {
+  --orb-green: #3fb950;
+  --orb-yellow: #e3b341;
+  --orb-red: #f47067;
 }
 
 [id] {
@@ -262,6 +271,96 @@ table.matrix td.diag {
   border-bottom: 1px solid rgb(var(--fg-base) / 15%);
 }
 
+.hp-orbs {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
+  line-height: 1;
+  user-select: none;
+}
+
+.hp-orb {
+  color: var(--orb-green);
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: help;
+}
+
+.hp-orb.yellow {
+  color: var(--orb-yellow);
+}
+
+.hp-orb.red {
+  color: var(--orb-red);
+}
+
+.hp-orb.fainted {
+  color: rgb(var(--fg-base) / 26%);
+}
+
+.live-g1 {
+  margin-top: 0.65rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.88em;
+  background-color: color-mix(in oklab, var(--bg-color) 65%, var(--aside-bg-color));
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+}
+
+.live-g1-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1ch;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.live-g1-label {
+  color: rgb(var(--fg-base) / 68%);
+  font-weight: bold;
+  font-size: 0.85em;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.live-g1-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgb(var(--fg-base) / 12%);
+}
+
+.live-g1-side {
+  min-width: 0;
+}
+
+.live-g1-side:first-child {
+  padding-right: 1.5ch;
+}
+
+.live-g1-side + .live-g1-side {
+  padding-left: 1.5ch;
+  border-left: 1px solid rgb(var(--fg-base) / 12%);
+}
+
+.live-g1-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75ch;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.live-g1-telemetry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.18rem 1.35ch;
+  margin-top: 0.22rem;
+  color: rgb(var(--fg-base) / 62%);
+  font-size: 0.86em;
+}
+
 .slots-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -270,6 +369,7 @@ table.matrix td.diag {
 }
 
 .slot-card {
+  min-width: 0;
   padding: 0.75rem 1rem;
   background-color: var(--bg-color);
   border: 1px solid var(--code-border-color);
@@ -287,14 +387,14 @@ table.matrix td.diag {
 .slot-top {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75ch;
+  gap: 0.25rem 0.8ch;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 0.45rem;
 }
 
 .state-running {
   display: inline-block;
+  margin-left: auto;
   padding: 0.08rem 0.45rem;
   color: var(--hl-string);
   font-weight: bold;
@@ -307,6 +407,7 @@ table.matrix td.diag {
 
 .state-paused {
   display: inline-block;
+  margin-left: auto;
   padding: 0.08rem 0.45rem;
   color: rgb(var(--fg-base) / 55%);
   font-size: 0.8em;
@@ -507,10 +608,23 @@ tr.battle-row.expanded .battle-toggle {
 }
 
 @media (width < 768px) {
+  .live-g1-grid,
   .slots-grid,
   .battle-detail-grid,
   .battle-detail-grid.bo3-grid {
     grid-template-columns: 1fr;
+  }
+
+  .live-g1-side:first-child {
+    padding-right: 0;
+  }
+
+  .live-g1-side + .live-g1-side {
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    padding-left: 0;
+    border-top: 1px dashed rgb(var(--fg-base) / 12%);
+    border-left: none;
   }
 }
 

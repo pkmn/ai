@@ -67,6 +67,14 @@ const VALID_LADDER_STATUSES = new Set<db.LadderStatus>([
   'upcoming', 'active', 'settling', 'archived',
 ]);
 const VALID_SLOTS = new Set<string>(['rby', 'adv', 'sv', 'rand', 'vgc']);
+const VALID_POKEMON_COLORS = new Set<PokemonColor>(['green', 'yellow', 'red', 'fainted']);
+
+export type PokemonColor = 'green' | 'yellow' | 'red' | 'fainted';
+
+export interface PokemonHealth {
+  percent: number;
+  color: PokemonColor;
+}
 
 export interface LiveSlot {
   slug: string;
@@ -77,6 +85,27 @@ export interface LiveSlot {
   meanTurnMillis: number;
   ram: number;
   team?: string;
+  pokemon?: PokemonHealth[];
+}
+
+export interface LiveGameSummarySide {
+  bankSeconds: number;
+  meanTurnMillis: number;
+  ram: number;
+  team?: string;
+  pokemon?: PokemonHealth[];
+}
+
+export interface LiveGameSummary {
+  winnerSlot?: 'p1' | 'p2';
+  turns: number;
+  endReason?: string;
+  p1?: LiveGameSummarySide;
+  p2?: LiveGameSummarySide;
+}
+
+export interface LiveGameSummaryInput extends LiveGameSummary {
+  viewer?: LiveViewerInput;
 }
 
 export interface LiveViewerSide {
@@ -91,16 +120,17 @@ export interface LiveViewerState {
 }
 
 export interface LiveViewerInput {
-  lines: string[];
+  lines?: string[];
   p1?: {lines?: string[]; pokemon?: unknown[]};
   p2?: {lines?: string[]; pokemon?: unknown[]};
 }
 
 // Live telemetry enforces a strict zero-log anti-scouting policy on `harvested` and `pools`
-// ladders (spectators see turn numbers, Showdown chess clocks, SIGSTOP/SIGCONT slot state, and
-// XNU physical footprint RAM, never teams, Pokémon species, move choices, or battle logs). On
-// `random` ladders, `viewer` streams the live Showdown battle log because teams are generated
-// randomly per game and agents execute in an airgapped sandbox without internet access.
+// ladders (spectators see turn numbers, Showdown chess clocks, SIGSTOP/SIGCONT slot state,
+// XNU physical footprint RAM, and sanitized per-Pokémon HP% + bar color — never teams, Pokémon
+// species, move choices, raw max HP, or battle logs). On `random` ladders, `viewer` streams the
+// live Showdown battle log because teams are generated randomly per game and agents execute in an
+// airgapped sandbox without internet access.
 export interface LiveMatch {
   heartbeatSeq: number;
   matchId: string;
@@ -113,13 +143,16 @@ export interface LiveMatch {
   turnStartedAt: number;
   turnBudgetSeconds: number;
   incrementSeconds: number;
-  game1Summary?: {winnerSlot?: 'p1' | 'p2'; turns: number};
+  game1Summary?: LiveGameSummary;
   p1: LiveSlot;
   p2: LiveSlot;
   viewer?: LiveViewerState;
 }
 
-export type LiveMatchInput = Omit<LiveMatch, 'viewer'> & {viewer?: LiveViewerInput};
+export type LiveMatchInput = Omit<LiveMatch, 'viewer' | 'game1Summary'> & {
+  game1Summary?: LiveGameSummaryInput;
+  viewer?: LiveViewerInput;
+};
 
 export interface BattleHistoryGameEntry extends db.RecentMatchGame {
   logHref?: string;
@@ -508,6 +541,208 @@ export function buildTournamentDocument(
     ],
     games: games.map(g => enrichTournamentGame(publicDir, tournament.id, g, logFiles)),
   };
+}
+
+// Computes integer HP percentage (`0..100`) and HP bar color matching Pokémon Showdown
+// (`@pkmn/sim` `Pokemon#getHealth` and `pokemon-showdown-client` `Pokemon#getHPColor` / `hpWidth`)
+// without exposing exact `maxhp`, species, or moves. Color carries exact-ratio boundary information
+// (`hp * 2 > maxhp` green, `hp * 5 > maxhp` yellow, `<= 1/5` red) that integer rounding alone
+// loses (e.g. `101/201` -> `50%` green vs `100/200` -> `50%` yellow).
+export function computePokemonHealth(
+  hp: number,
+  maxhp: number,
+  format = '',
+  explicitColor?: 'g' | 'y' | 'r'
+): PokemonHealth {
+  if (!Number.isFinite(hp) || !Number.isFinite(maxhp) || hp <= 0 || maxhp <= 0) {
+    return {percent: 0, color: 'fainted'};
+  }
+  if (hp >= maxhp) {
+    return {percent: 100, color: 'green'};
+  }
+  const color: PokemonColor = explicitColor === 'g'
+    ? 'green'
+    : explicitColor === 'y'
+      ? 'yellow'
+      : explicitColor === 'r'
+        ? 'red'
+        : hp * 2 > maxhp
+          ? 'green'
+          : hp * 5 > maxhp
+            ? 'yellow'
+            : 'red';
+
+  const lowerFmt = format.toLowerCase();
+  let percent: number;
+  if (lowerFmt.includes('champions')) {
+    percent = Math.max(1, Math.min(99, Math.floor((100 * hp) / maxhp) || 1));
+  } else {
+    const genMatch = /^gen(\d+)/.exec(lowerFmt);
+    const gen = genMatch ? Number(genMatch[1]) : 9;
+    if (gen >= 7) {
+      const ceil = Math.ceil((100 * hp) / maxhp);
+      percent = ceil >= 100 ? 99 : Math.max(1, ceil);
+    } else {
+      const rounded = Math.round((100 * hp) / maxhp) || 1;
+      percent = rounded >= 100 ? 99 : Math.max(1, rounded);
+    }
+  }
+  return {percent, color};
+}
+
+export function parseHealthCondition(condition: string, format = ''): PokemonHealth | undefined {
+  const trimmed = condition.trim();
+  if (!trimmed) return undefined;
+  const token = trimmed.split(/\s+/)[0];
+  if (token === '0' || token === '0.0' || trimmed.endsWith(' fnt') || trimmed === 'fnt') {
+    return {percent: 0, color: 'fainted'};
+  }
+  const slash = token.indexOf('/');
+  if (slash > 0) {
+    const curStr = token.slice(0, slash);
+    let maxStr = token.slice(slash + 1);
+    const tail = maxStr.slice(-1);
+    let explicitColor: 'g' | 'y' | 'r' | undefined;
+    if (tail === 'g' || tail === 'y' || tail === 'r') {
+      explicitColor = tail;
+      maxStr = maxStr.slice(0, -1);
+    }
+    const hp = Number(curStr);
+    const maxhp = Number(maxStr);
+    if (!Number.isFinite(hp) || !Number.isFinite(maxhp) || maxhp <= 0) return undefined;
+    return computePokemonHealth(hp, maxhp, format, explicitColor);
+  }
+  const pct = Number(token.endsWith('%') ? token.slice(0, -1) : token);
+  if (Number.isFinite(pct)) {
+    return computePokemonHealth(pct, 100, format);
+  }
+  return undefined;
+}
+
+function isSanitizedPokemonHealth(item: unknown): item is PokemonHealth {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+  const obj = item as Record<string, unknown>;
+  return (
+    typeof obj.percent === 'number' &&
+    Number.isInteger(obj.percent) &&
+    obj.percent >= 0 &&
+    obj.percent <= 100 &&
+    typeof obj.color === 'string' &&
+    VALID_POKEMON_COLORS.has(obj.color as PokemonColor)
+  );
+}
+
+function extractRequestPokemonFromLines(
+  lines: readonly string[] | undefined
+): {p1?: unknown[]; p2?: unknown[]} {
+  if (!lines || lines.length === 0) return {};
+  let p1: unknown[] | undefined;
+  let p2: unknown[] | undefined;
+  for (const line of lines) {
+    if (!line.startsWith('|request|')) continue;
+    const rawJson = line.slice('|request|'.length).trim();
+    if (!rawJson || rawJson === 'null') continue;
+    try {
+      const parsed = JSON.parse(rawJson) as {
+        side?: {id?: string; pokemon?: unknown[]};
+      };
+      const sideId = parsed.side?.id;
+      const mons = parsed.side?.pokemon;
+      if (Array.isArray(mons) && (sideId === 'p1' || sideId === 'p2')) {
+        if (sideId === 'p1') p1 = mons;
+        else p2 = mons;
+      }
+    } catch {}
+  }
+  return {p1, p2};
+}
+
+function projectPokemonHealthOrder(
+  entries: ReadonlyArray<{health: PokemonHealth; active: boolean}>,
+  finished = false
+): PokemonHealth[] {
+  const activeSlots = entries.filter(e => e.active).map(e => e.health);
+  const benchSlots = entries.filter(e => !e.active).map(e => e.health);
+  const aliveBench = benchSlots.filter(m => m.color !== 'fainted');
+  const faintedBench = benchSlots.filter(m => m.color === 'fainted');
+  if (!finished && aliveBench.length > 0) {
+    return [...activeSlots, ...aliveBench, ...faintedBench];
+  }
+  const aliveActives = activeSlots.filter(m => m.color !== 'fainted');
+  const faintedActives = activeSlots.filter(m => m.color === 'fainted');
+  return [...aliveActives, ...aliveBench, ...faintedActives, ...faintedBench];
+}
+
+// Sanitizes `@pkmn/sim` `side.getRequestData().pokemon` (`|request|<json>` `side.pokemon`) into
+// `{percent, color}` health indicators without battle-log replay. Keeps `active` slot(s) in front
+// (so a newly fainted active stays grey in-place during `forceSwitch`), swaps active and alive
+// bench circles 1-for-1 across switches, and excludes fainted bench Pokémon (plus unreplaceable
+// fainted actives when the bench is empty or `finished` is set) to the rightmost slots.
+export function extractBattlePokemonHealth(opts: {
+  lines?: readonly string[];
+  format?: string;
+  p1Pokemon?: readonly unknown[];
+  p2Pokemon?: readonly unknown[];
+  finished?: boolean;
+}): {p1: PokemonHealth[]; p2: PokemonHealth[]} {
+  const format = opts.format ?? '';
+  const lowerFmt = format.toLowerCase();
+  const defaultActiveCount = lowerFmt.includes('doubles') || lowerFmt.includes('vgc') ? 2 : 1;
+  const fromLines = (!opts.p1Pokemon || !opts.p2Pokemon)
+    ? extractRequestPokemonFromLines(opts.lines)
+    : {};
+
+  const buildSide = (rawMonList: readonly unknown[] | undefined): PokemonHealth[] => {
+    if (!rawMonList || rawMonList.length === 0) return [];
+    const entries: Array<{health: PokemonHealth; active: boolean}> = [];
+    rawMonList.slice(0, 6).forEach((raw, idx) => {
+      if (isSanitizedPokemonHealth(raw)) {
+        entries.push({
+          health: {percent: raw.percent, color: raw.color},
+          active: idx < defaultActiveCount,
+        });
+        return;
+      }
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      const obj = raw as Record<string, unknown>;
+      const cond = obj.condition;
+      const health: PokemonHealth = typeof cond === 'string'
+        ? (parseHealthCondition(cond, format) ?? {percent: 100, color: 'green'})
+        : {percent: 100, color: 'green'};
+      const active = typeof obj.active === 'boolean' ? obj.active : idx < defaultActiveCount;
+      entries.push({health, active});
+    });
+    if (entries.length === 0) return [];
+    return projectPokemonHealthOrder(entries, opts.finished);
+  };
+
+  return {
+    p1: buildSide(opts.p1Pokemon ?? fromLines.p1),
+    p2: buildSide(opts.p2Pokemon ?? fromLines.p2),
+  };
+}
+
+function isViewerSeatSwapped(
+  lines: readonly string[],
+  game: 1 | 2,
+  matchP1Name: string,
+  matchP2Name: string
+): boolean {
+  let logP1: string | undefined;
+  let logP2: string | undefined;
+  for (const line of lines) {
+    if (line.startsWith('|player|p1|')) {
+      logP1 = line.split('|')[3]?.trim() || undefined;
+    } else if (line.startsWith('|player|p2|')) {
+      logP2 = line.split('|')[3]?.trim() || undefined;
+    }
+    if (logP1 && logP2) break;
+  }
+  if (logP1 && logP2 && logP1 !== logP2 && matchP1Name !== matchP2Name) {
+    if (logP1 === matchP2Name && logP2 === matchP1Name) return true;
+    if (logP1 === matchP1Name && logP2 === matchP2Name) return false;
+  }
+  return game === 2;
 }
 
 export function extractPerspectiveLogs(
@@ -1492,6 +1727,29 @@ function isPosInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v > 0;
 }
 
+function parsePokemonHealthArray(raw: unknown, label: string): PokemonHealth[] {
+  if (!Array.isArray(raw) || raw.length > 6) {
+    throw Object.assign(
+      new Error(`${label} must be an array of at most 6 Pokémon health entries.`),
+      {status: 400}
+    );
+  }
+  return raw.map((entry, idx) => {
+    if (!isSanitizedPokemonHealth(entry)) {
+      throw Object.assign(new Error(`Invalid ${label}[${idx}].`), {status: 400});
+    }
+    return {percent: entry.percent, color: entry.color};
+  });
+}
+
+function parseTeamHashLabel(raw: unknown, label: string): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || !/^(?:P[12]:)?[0-9a-f]{12}$/i.test(raw.trim())) {
+    throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
+  }
+  return raw.trim();
+}
+
 function parseLiveSlot(raw: unknown, label: string): LiveSlot {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw Object.assign(new Error(`Invalid ${label} telemetry object.`), {status: 400});
@@ -1523,16 +1781,10 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
   if (!isFiniteNonNeg(obj.ram)) {
     throw Object.assign(new Error(`Invalid ${label}.ram.`), {status: 400});
   }
-  let team: string | undefined;
-  if (obj.team !== undefined) {
-    if (
-      typeof obj.team !== 'string' ||
-      !/^(?:P[12]:)?[0-9a-f]{12}$/i.test(obj.team.trim())
-    ) {
-      throw Object.assign(new Error(`Invalid ${label}.team.`), {status: 400});
-    }
-    team = obj.team.trim();
-  }
+  const team = parseTeamHashLabel(obj.team, `${label}.team`);
+  const pokemon = obj.pokemon !== undefined
+    ? parsePokemonHealthArray(obj.pokemon, `${label}.pokemon`)
+    : undefined;
   return {
     slug: obj.slug.trim(),
     name: obj.name.trim(),
@@ -1542,6 +1794,111 @@ function parseLiveSlot(raw: unknown, label: string): LiveSlot {
     meanTurnMillis: obj.meanTurnMillis,
     ram: obj.ram,
     team,
+    ...(pokemon && pokemon.length > 0 ? {pokemon} : {}),
+  };
+}
+
+function parseLiveGameSummarySide(raw: unknown, label: string): LiveGameSummarySide {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
+  }
+  const obj = raw as Record<string, unknown>;
+  if (!isFiniteNonNeg(obj.bankSeconds)) {
+    throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
+  }
+  if (!isFiniteNonNeg(obj.meanTurnMillis)) {
+    throw Object.assign(new Error(`Invalid ${label}.meanTurnMillis.`), {status: 400});
+  }
+  if (!isFiniteNonNeg(obj.ram)) {
+    throw Object.assign(new Error(`Invalid ${label}.ram.`), {status: 400});
+  }
+  const team = parseTeamHashLabel(obj.team, `${label}.team`);
+  const pokemon = obj.pokemon !== undefined
+    ? parsePokemonHealthArray(obj.pokemon, `${label}.pokemon`)
+    : undefined;
+  return {
+    bankSeconds: obj.bankSeconds,
+    meanTurnMillis: obj.meanTurnMillis,
+    ram: obj.ram,
+    ...(team !== undefined ? {team} : {}),
+    ...(pokemon && pokemon.length > 0 ? {pokemon} : {}),
+  };
+}
+
+function parseLiveGameSummary(raw: unknown, format: string): LiveGameSummary {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw Object.assign(new Error('Invalid game1Summary.'), {status: 400});
+  }
+  const g1 = raw as Record<string, unknown>;
+  if (g1.winnerSlot !== 'p1' && g1.winnerSlot !== 'p2' && g1.winnerSlot !== undefined) {
+    throw Object.assign(
+      new Error('game1Summary.winnerSlot must be "p1", "p2", or omitted.'),
+      {status: 400}
+    );
+  }
+  if (!isNonNegInt(g1.turns)) {
+    throw Object.assign(
+      new Error('game1Summary.turns must be a non-negative integer.'),
+      {status: 400}
+    );
+  }
+  let endReason: string | undefined;
+  if (g1.endReason !== undefined) {
+    if (typeof g1.endReason !== 'string' || !g1.endReason.trim()) {
+      throw Object.assign(new Error('Invalid game1Summary.endReason.'), {status: 400});
+    }
+    endReason = g1.endReason.trim().slice(0, 64);
+  }
+  let p1 = g1.p1 !== undefined ? parseLiveGameSummarySide(g1.p1, 'game1Summary.p1') : undefined;
+  let p2 = g1.p2 !== undefined ? parseLiveGameSummarySide(g1.p2, 'game1Summary.p2') : undefined;
+
+  if (g1.viewer !== undefined) {
+    if (!g1.viewer || typeof g1.viewer !== 'object' || Array.isArray(g1.viewer)) {
+      throw Object.assign(new Error('Invalid game1Summary.viewer.'), {status: 400});
+    }
+    const rv = g1.viewer as Record<string, unknown>;
+    if (rv.lines !== undefined && !Array.isArray(rv.lines)) {
+      throw Object.assign(
+        new Error('game1Summary.viewer.lines must be an array of strings.'),
+        {status: 400}
+      );
+    }
+    const lines = Array.isArray(rv.lines)
+      ? rv.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
+      : [];
+    const rawP1 = rv.p1 && typeof rv.p1 === 'object'
+      ? (rv.p1 as Record<string, unknown>)
+      : undefined;
+    const rawP2 = rv.p2 && typeof rv.p2 === 'object'
+      ? (rv.p2 as Record<string, unknown>)
+      : undefined;
+    const g1Health = extractBattlePokemonHealth({
+      lines,
+      format,
+      p1Pokemon: Array.isArray(rawP1?.pokemon) ? rawP1.pokemon : undefined,
+      p2Pokemon: Array.isArray(rawP2?.pokemon) ? rawP2.pokemon : undefined,
+      finished: true,
+    });
+    if (p1 && !p1.pokemon && g1Health.p1.length > 0) p1 = {...p1, pokemon: g1Health.p1};
+    if (p2 && !p2.pokemon && g1Health.p2.length > 0) p2 = {...p2, pokemon: g1Health.p2};
+  }
+  if (p1?.pokemon || p2?.pokemon) {
+    const projected = extractBattlePokemonHealth({
+      format,
+      p1Pokemon: p1?.pokemon,
+      p2Pokemon: p2?.pokemon,
+      finished: true,
+    });
+    if (p1?.pokemon) p1 = {...p1, pokemon: projected.p1};
+    if (p2?.pokemon) p2 = {...p2, pokemon: projected.p2};
+  }
+
+  return {
+    ...(g1.winnerSlot !== undefined ? {winnerSlot: g1.winnerSlot} : {}),
+    turns: g1.turns,
+    ...(endReason !== undefined ? {endReason} : {}),
+    ...(p1 !== undefined ? {p1} : {}),
+    ...(p2 !== undefined ? {p2} : {}),
   };
 }
 
@@ -2388,34 +2745,22 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      let game1Summary: {winnerSlot?: 'p1' | 'p2'; turns: number} | undefined;
-      if (body.game1Summary !== undefined) {
-        if (
-          !body.game1Summary ||
-          typeof body.game1Summary !== 'object' ||
-          Array.isArray(body.game1Summary)
-        ) {
-          sendJson(res, 400, {error: 'Invalid game1Summary.'});
-          return;
-        }
-        const g1 = body.game1Summary as Record<string, unknown>;
-        if (
-          g1.winnerSlot !== 'p1' &&
-          g1.winnerSlot !== 'p2' &&
-          g1.winnerSlot !== undefined
-        ) {
-          sendJson(res, 400, {error: 'game1Summary.winnerSlot must be "p1", "p2", or omitted.'});
-          return;
-        }
-        if (!isNonNegInt(g1.turns)) {
-          sendJson(res, 400, {error: 'game1Summary.turns must be a non-negative integer.'});
-          return;
-        }
-        game1Summary = {winnerSlot: g1.winnerSlot, turns: g1.turns};
-      }
+      const format = body.format.trim();
+      let game1Summary = body.game1Summary !== undefined
+        ? parseLiveGameSummary(body.game1Summary, format)
+        : undefined;
 
-      const p1 = parseLiveSlot(body.p1, 'p1');
-      const p2 = parseLiveSlot(body.p2, 'p2');
+      let p1 = parseLiveSlot(body.p1, 'p1');
+      let p2 = parseLiveSlot(body.p2, 'p2');
+      if (p1.pokemon || p2.pokemon) {
+        const projected = extractBattlePokemonHealth({
+          format,
+          p1Pokemon: p1.pokemon,
+          p2Pokemon: p2.pokemon,
+        });
+        if (p1.pokemon) p1 = {...p1, pokemon: projected.p1};
+        if (p2.pokemon) p2 = {...p2, pokemon: projected.p2};
+      }
       const matchId = body.matchId.trim();
       const ladderId = body.ladderId.trim();
       const ladder = db.getLadder(ladderId);
@@ -2424,6 +2769,41 @@ export function register(app: polka.Polka, options: Options): Handle {
         armWatchdog(nowSec);
         sendJson(res, 200, {ok: true, updatedAt: liveUpdatedAt ?? nowSec});
         return;
+      }
+
+      if (game1Summary && currentLive?.matchId === matchId) {
+        if (currentLive.game === 1) {
+          const prevG1Pokemon = extractBattlePokemonHealth({
+            format,
+            p1Pokemon: currentLive.p1.pokemon,
+            p2Pokemon: currentLive.p2.pokemon,
+            finished: true,
+          });
+          game1Summary = {
+            ...game1Summary,
+            p1: game1Summary.p1 ?? {
+              bankSeconds: currentLive.p1.bankSeconds,
+              meanTurnMillis: currentLive.p1.meanTurnMillis,
+              ram: currentLive.p1.ram,
+              ...(currentLive.p1.team ? {team: currentLive.p1.team} : {}),
+              ...(prevG1Pokemon.p1.length > 0 ? {pokemon: prevG1Pokemon.p1} : {}),
+            },
+            p2: game1Summary.p2 ?? {
+              bankSeconds: currentLive.p2.bankSeconds,
+              meanTurnMillis: currentLive.p2.meanTurnMillis,
+              ram: currentLive.p2.ram,
+              ...(currentLive.p2.team ? {team: currentLive.p2.team} : {}),
+              ...(prevG1Pokemon.p2.length > 0 ? {pokemon: prevG1Pokemon.p2} : {}),
+            },
+          };
+        } else if (currentLive.game1Summary) {
+          game1Summary = {
+            ...currentLive.game1Summary,
+            ...game1Summary,
+            p1: game1Summary.p1 ?? currentLive.game1Summary.p1,
+            p2: game1Summary.p2 ?? currentLive.game1Summary.p2,
+          };
+        }
       }
 
       let viewer: LiveViewerState | undefined;
@@ -2437,24 +2817,43 @@ export function register(app: polka.Polka, options: Options): Handle {
           return;
         }
         const rawViewer = body.viewer as Record<string, unknown>;
-        if (!Array.isArray(rawViewer.lines)) {
+        if (rawViewer.lines !== undefined && !Array.isArray(rawViewer.lines)) {
           sendJson(res, 400, {error: 'viewer.lines must be an array of strings.'});
           return;
         }
-        if (ladder?.team === 'random') {
-          const lines = rawViewer.lines
-            .slice(-MAX_TABLE_LINES)
-            .map(l => String(l).slice(0, 4096));
-          const rawP1 = rawViewer.p1 && typeof rawViewer.p1 === 'object'
-            ? (rawViewer.p1 as Record<string, unknown>)
-            : undefined;
-          const rawP2 = rawViewer.p2 && typeof rawViewer.p2 === 'object'
-            ? (rawViewer.p2 as Record<string, unknown>)
-            : undefined;
+        const lines = Array.isArray(rawViewer.lines)
+          ? rawViewer.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
+          : [];
+        const rawP1 = rawViewer.p1 && typeof rawViewer.p1 === 'object'
+          ? (rawViewer.p1 as Record<string, unknown>)
+          : undefined;
+        const rawP2 = rawViewer.p2 && typeof rawViewer.p2 === 'object'
+          ? (rawViewer.p2 as Record<string, unknown>)
+          : undefined;
+        const rawP1Pokemon = Array.isArray(rawP1?.pokemon) ? rawP1.pokemon : undefined;
+        const rawP2Pokemon = Array.isArray(rawP2?.pokemon) ? rawP2.pokemon : undefined;
+
+        const health = extractBattlePokemonHealth({
+          lines,
+          format,
+          p1Pokemon: rawP1Pokemon,
+          p2Pokemon: rawP2Pokemon,
+        });
+        const swapped = isViewerSeatSwapped(lines, body.game, p1.name, p2.name);
+        const matchP1Health = swapped ? health.p2 : health.p1;
+        const matchP2Health = swapped ? health.p1 : health.p2;
+        if (!p1.pokemon && matchP1Health.length > 0) {
+          p1 = {...p1, pokemon: matchP1Health};
+        }
+        if (!p2.pokemon && matchP2Health.length > 0) {
+          p2 = {...p2, pokemon: matchP2Health};
+        }
+
+        if (ladder?.team === 'random' && lines.length > 0) {
           viewer = normalizeLiveViewer({
             lines,
-            p1: Array.isArray(rawP1?.pokemon) ? {pokemon: rawP1.pokemon} : undefined,
-            p2: Array.isArray(rawP2?.pokemon) ? {pokemon: rawP2.pokemon} : undefined,
+            p1: rawP1Pokemon ? {pokemon: rawP1Pokemon} : undefined,
+            p2: rawP2Pokemon ? {pokemon: rawP2Pokemon} : undefined,
           });
         }
       }
@@ -2478,7 +2877,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         matchId,
         ladderId,
         slot: ladder?.slot,
-        format: body.format.trim(),
+        format,
         game: body.game,
         turn: body.turn,
         activeSlot: body.activeSlot,
@@ -3689,8 +4088,68 @@ export function register(app: polka.Polka, options: Options): Handle {
       if (state.live) {
         const {viewer: rawViewer, ...rest} = state.live;
         const normalizedViewer = normalizeLiveViewer(rawViewer);
+        let p1 = rest.p1;
+        let p2 = rest.p2;
+        if (p1.pokemon || p2.pokemon) {
+          const projected = extractBattlePokemonHealth({
+            format: rest.format,
+            p1Pokemon: p1.pokemon,
+            p2Pokemon: p2.pokemon,
+          });
+          if (p1.pokemon) p1 = {...p1, pokemon: projected.p1};
+          if (p2.pokemon) p2 = {...p2, pokemon: projected.p2};
+        }
+        let game1Summary = rest.game1Summary;
+        if (game1Summary && (game1Summary.p1?.pokemon || game1Summary.p2?.pokemon)) {
+          const g1Proj = extractBattlePokemonHealth({
+            format: rest.format,
+            p1Pokemon: game1Summary.p1?.pokemon,
+            p2Pokemon: game1Summary.p2?.pokemon,
+            finished: true,
+          });
+          game1Summary = {
+            ...game1Summary,
+            ...(game1Summary.p1
+              ? {
+                p1: {
+                  ...game1Summary.p1,
+                  ...(game1Summary.p1.pokemon ? {pokemon: g1Proj.p1} : {}),
+                },
+              }
+              : {}),
+            ...(game1Summary.p2
+              ? {
+                p2: {
+                  ...game1Summary.p2,
+                  ...(game1Summary.p2.pokemon ? {pokemon: g1Proj.p2} : {}),
+                },
+              }
+              : {}),
+          };
+        }
+        if (rawViewer && (!p1.pokemon || !p2.pokemon)) {
+          const health = extractBattlePokemonHealth({
+            lines: rawViewer.lines,
+            format: rest.format,
+            p1Pokemon: rawViewer.p1?.pokemon,
+            p2Pokemon: rawViewer.p2?.pokemon,
+          });
+          const swapped = isViewerSeatSwapped(
+            rawViewer.lines ?? [],
+            rest.game,
+            p1.name,
+            p2.name
+          );
+          const matchP1Health = swapped ? health.p2 : health.p1;
+          const matchP2Health = swapped ? health.p1 : health.p2;
+          if (!p1.pokemon && matchP1Health.length > 0) p1 = {...p1, pokemon: matchP1Health};
+          if (!p2.pokemon && matchP2Health.length > 0) p2 = {...p2, pokemon: matchP2Health};
+        }
         currentLive = {
           ...rest,
+          ...(game1Summary !== undefined ? {game1Summary} : {}),
+          p1,
+          p2,
           ...(normalizedViewer !== undefined ? {viewer: normalizedViewer} : {}),
         };
       } else {

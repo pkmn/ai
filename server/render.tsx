@@ -665,6 +665,78 @@ function buildBattlesScript(
       }
     });
 
+    const renderTeamSpanHtml = team => {
+      if (!team) return '';
+      const teamTip = team.startsWith('P1:')
+        ? 'Known to Match P1 (drawn from P1 seasonal pool)'
+        : team.startsWith('P2:')
+          ? 'Known to Match P2 (drawn from P2 seasonal pool)'
+          : 'Unknown to both players (drawn from a third-party competitor pool)';
+      return '<span title="' + esc(teamTip) + '">Team: <code>' + esc(team) + '</code></span>';
+    };
+
+    const renderPokemonOrbsHtml = pokemon => {
+      if (!Array.isArray(pokemon) || pokemon.length === 0) return '';
+      let orbs = '';
+      for (let i = 0; i < pokemon.length; i++) {
+        const m = pokemon[i];
+        if (!m || typeof m !== 'object') continue;
+        const pct = Math.max(0, Math.min(100, Math.round(Number(m.percent) || 0)));
+        const color = (
+          m.color === 'yellow' || m.color === 'red' || m.color === 'fainted'
+        )
+          ? m.color
+          : 'green';
+        const tip = pct + '%';
+        orbs += '<span class="hp-orb ' + color + '" title="' + tip +
+          '" role="img" aria-label="' + tip + '">&#9679;</span>';
+      }
+      return orbs ? '<span class="hp-orbs" aria-label="Pokémon health">' + orbs + '</span>' : '';
+    };
+
+    const renderGame1SideHtml = (key, slotMeta, side, won) => {
+      const ramPct = ((side.ram / 14336) * 100).toFixed(1);
+      const orbs = renderPokemonOrbsHtml(side.pokemon);
+      const teamHtml = renderTeamSpanHtml(side.team);
+      return '<div class="live-g1-side">' +
+        '<div class="live-g1-top">' +
+        '<span><tt>' + key + '</tt> ' + renderAgent(slotMeta, won) + '</span>' +
+        orbs +
+        '</div>' +
+        '<div class="live-g1-telemetry">' +
+        '<span>Mean: <tt>' + Math.round(side.meanTurnMillis) + ' ms/turn</tt></span>' +
+        '<span>Bank: <tt>' + Math.round(side.bankSeconds) + 's</tt></span>' +
+        '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
+        Math.round(side.ram).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
+        teamHtml +
+        '</div></div>';
+    };
+
+    const renderGame1SummaryHtml = l => {
+      const g1 = l.game1Summary;
+      if (!g1) return '';
+      const winnerHtml = g1.winnerSlot === 'p1'
+        ? '<span class="yes">' + esc(l.p1.name) + '</span> won'
+        : g1.winnerSlot === 'p2'
+          ? '<span class="yes">' + esc(l.p2.name) + '</span> won'
+          : '<span class="muted">Tie</span>';
+      const end = g1.endReason ? formatEndReason(g1.endReason) : undefined;
+      const endSuffix = (end && end.show) ? (' · ' + end.html) : '';
+      const sidesHtml = (g1.p1 && g1.p2)
+        ? '<div class="live-g1-grid">' +
+          renderGame1SideHtml('p1', l.p1, g1.p1, g1.winnerSlot === 'p1') +
+          renderGame1SideHtml('p2', l.p2, g1.p2, g1.winnerSlot === 'p2') +
+          '</div>'
+        : '';
+      return '<div class="live-g1" id="live-g1">' +
+        '<div class="live-g1-head">' +
+        '<span class="live-g1-label">Game 1</span>' +
+        '<span>' + winnerHtml + ' · <tt>' + g1.turns + ' turns</tt>' + endSuffix + '</span>' +
+        '</div>' +
+        sidesHtml +
+        '</div>';
+    };
+
     const renderSlot = (key, slotData, live, nowSec) => {
       const isRunning = live.activeSlot === key;
       const otherKey = key === 'p1' ? 'p2' : 'p1';
@@ -685,20 +757,13 @@ function buildBattlesScript(
       const timerTitle =
         'Pokémon Showdown RoomBattleTimer: 150s max bank (+60s Turn 1 grace), +' +
         inc + 's/turn';
-      let teamHtml = '';
-      if (slotData.team) {
-        const teamTip = slotData.team.startsWith('P1:')
-          ? 'Known to Match P1 (drawn from P1 seasonal pool)'
-          : slotData.team.startsWith('P2:')
-            ? 'Known to Match P2 (drawn from P2 seasonal pool)'
-            : 'Unknown to both players (drawn from a third-party competitor pool)';
-        teamHtml = '<span title="' + esc(teamTip) + '">Team: <code>' +
-          esc(slotData.team) + '</code></span>';
-      }
+      const teamHtml = renderTeamSpanHtml(slotData.team);
+      const orbsHtml = renderPokemonOrbsHtml(slotData.pokemon);
       return '<div class="slot-card ' + (isRunning ? 'running' : 'paused') +
         '" id="slot-' + key + '">' +
         '<div class="slot-top"><span><tt>' + key + '</tt> ' +
         renderAgent(slotData, true) + '</span>' +
+        orbsHtml +
         badge + '</div>' +
         '<div class="slot-timers" title="' + esc(timerTitle) + '">' +
         '<span>Turn: <strong id="turn-' + key + '" class="' +
@@ -751,22 +816,14 @@ function buildBattlesScript(
         return;
       }
       const l = state.live;
-      let g1Html = '';
-      if (l.game1Summary) {
-        const g1Res = l.game1Summary.winnerSlot === 'p1'
-          ? esc(l.p1.name) + ' 1–0'
-          : l.game1Summary.winnerSlot === 'p2'
-            ? esc(l.p2.name) + ' 1–0'
-            : 'Tie';
-        g1Html = ' <span class="muted">(<tt>G1</tt>: ' + g1Res + ', ' +
-          l.game1Summary.turns + ' turns)</span>';
-      }
+      const turnText = l.turn === 0 ? ' · Team Preview' : (', Turn ' + l.turn);
       const hbAge = Math.max(0, nowSec - state.updatedAt);
       livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
         '</code> · <strong>Game ' + l.game +
-        ' / 2</strong>, Turn ' + l.turn + g1Html + '</span>' +
+        ' / 2</strong>' + turnText + '</span>' +
         '<span class="muted">Heartbeat <tt>#' + l.heartbeatSeq + '</tt> (<tt id="hb-age">' +
         hbAge + 's</tt> ago)</span></div>' +
+        renderGame1SummaryHtml(l) +
         '<div class="slots-grid">' +
         renderSlot('p1', l.p1, l, nowSec) +
         renderSlot('p2', l.p2, l, nowSec) +
@@ -2879,6 +2936,97 @@ export function renderArenaAndLadderArtifacts(opts: {
   };
 }
 
+function renderTeamSpanNode(team: string | undefined): util.Child {
+  if (!team) return undefined;
+  const teamTip = team.startsWith('P1:')
+    ? 'Known to Match P1 (drawn from P1 seasonal pool)'
+    : team.startsWith('P2:')
+      ? 'Known to Match P2 (drawn from P2 seasonal pool)'
+      : 'Unknown to both players (drawn from a third-party competitor pool)';
+  return (
+    <span title={teamTip}>
+      Team: <code>{team}</code>
+    </span>
+  );
+}
+
+function renderPokemonOrbsNode(pokemon: readonly arena.PokemonHealth[] | undefined): util.Child {
+  if (!pokemon || pokemon.length === 0) return undefined;
+  return (
+    <span className='hp-orbs' aria-label='Pokémon health'>
+      {pokemon.map(m => {
+        const tip = `${Math.max(0, Math.min(100, Math.round(m.percent)))}%`;
+        return (
+          <span className={`hp-orb ${m.color}`} title={tip} role='img' aria-label={tip}>
+            {'\u25cf'}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function renderLiveGame1Side(
+  key: 'p1' | 'p2',
+  slotMeta: arena.LiveSlot,
+  side: arena.LiveGameSummarySide,
+  won: boolean,
+  links: AgentLinkContext
+): util.Child {
+  const ramPct = ((side.ram / 14336) * 100).toFixed(1);
+  const ramText = `${Math.round(side.ram).toLocaleString('en-US')} MiB`;
+  const href = resolveAgentHref(links, slotMeta.slug, slotMeta.name);
+  return (
+    <div className='live-g1-side'>
+      <div className='live-g1-top'>
+        <span>
+          <tt>{key}</tt> {renderAgentLink(slotMeta.name, href, won)}{' '}
+          <code>{slotMeta.version}</code>
+        </span>
+        {renderPokemonOrbsNode(side.pokemon)}
+      </div>
+      <div className='live-g1-telemetry'>
+        <span>Mean: <tt>{Math.round(side.meanTurnMillis)} ms/turn</tt></span>
+        <span>Bank: <tt>{Math.round(side.bankSeconds)}s</tt></span>
+        <span title='XNU ri_phys_footprint (14 GiB limit)'>
+          RAM: <tt>{ramText}</tt> ({ramPct}%)
+        </span>
+        {renderTeamSpanNode(side.team)}
+      </div>
+    </div>
+  );
+}
+
+function renderLiveGame1Summary(live: arena.LiveMatch, links: AgentLinkContext): util.Child {
+  const g1 = live.game1Summary;
+  if (!g1) return undefined;
+  const winnerNode = g1.winnerSlot === 'p1' ? (
+    <><span className='yes'>{live.p1.name}</span> won</>
+  ) : g1.winnerSlot === 'p2' ? (
+    <><span className='yes'>{live.p2.name}</span> won</>
+  ) : (
+    <span className='muted'>Tie</span>
+  );
+  const end = g1.endReason ? formatEndReasonNode(g1.endReason) : undefined;
+  return (
+    <div className='live-g1' id='live-g1'>
+      <div className='live-g1-head'>
+        <span className='live-g1-label'>Game 1</span>
+        <span>
+          {winnerNode} · <tt>{g1.turns} turns</tt>
+          {end?.show ? <> · {end.node}</> : undefined}
+        </span>
+      </div>
+      {g1.p1 && g1.p2 ? (
+        <div className='live-g1-grid'>
+          {renderLiveGame1Side('p1', live.p1, g1.p1, g1.winnerSlot === 'p1', links)}
+          {renderLiveGame1Side('p2', live.p2, g1.p2, g1.winnerSlot === 'p2', links)}
+        </div>
+      ) : undefined}
+    </div>
+  );
+}
+
 function renderLiveSlotCard(
   key: 'p1' | 'p2',
   slotData: arena.LiveSlot,
@@ -2918,19 +3066,6 @@ function renderLiveSlotCard(
 
   const turnCls = isRunning ? 'yes' : 'muted';
   const ramText = `${Math.round(slotData.ram).toLocaleString('en-US')} MiB`;
-  let teamSpan: util.Child;
-  if (slotData.team) {
-    const teamTip = slotData.team.startsWith('P1:')
-      ? 'Known to Match P1 (drawn from P1 seasonal pool)'
-      : slotData.team.startsWith('P2:')
-        ? 'Known to Match P2 (drawn from P2 seasonal pool)'
-        : 'Unknown to both players (drawn from a third-party competitor pool)';
-    teamSpan = (
-      <span title={teamTip}>
-        Team: <code>{slotData.team}</code>
-      </span>
-    );
-  }
   return (
     <div className={`slot-card ${isRunning ? 'running' : 'paused'}`} id={`slot-${key}`}>
       <div className='slot-top'>
@@ -2938,6 +3073,7 @@ function renderLiveSlotCard(
           <tt>{key}</tt> {renderAgentLink(slotData.name, href, true)}{' '}
           <code>{slotData.version}</code>
         </span>
+        {renderPokemonOrbsNode(slotData.pokemon)}
         {badge}
       </div>
       <div className='slot-timers' title={timerTitle}>
@@ -2956,7 +3092,7 @@ function renderLiveSlotCard(
         <span title='XNU ri_phys_footprint (14 GiB limit)'>
           RAM: <tt>{ramText}</tt> ({ramPct}%)
         </span>
-        {teamSpan}
+        {renderTeamSpanNode(slotData.team)}
       </div>
     </div>
   );
@@ -2987,34 +3123,20 @@ function renderLivePanelInner(
   }
 
   const l = liveDoc.live;
-  let g1Node: util.Child;
-  if (l.game1Summary) {
-    const g1Res = l.game1Summary.winnerSlot === 'p1'
-      ? `${l.p1.name} 1–0`
-      : l.game1Summary.winnerSlot === 'p2'
-        ? `${l.p2.name} 1–0`
-        : 'Tie';
-    g1Node = (
-      <>
-        {' '}
-        <span className='muted'>
-          (<tt>G1</tt>: {g1Res}, {l.game1Summary.turns} turns)
-        </span>
-      </>
-    );
-  }
+  const turnText = l.turn === 0 ? ' · Team Preview' : `, Turn ${l.turn}`;
   const hbAge = Math.max(0, nowSec - liveDoc.updatedAt);
 
   return (
     <>
       <div className='live-header'>
         <span>
-          <code>{l.matchId}</code> · <strong>Game {l.game} / 2</strong>, Turn {l.turn}{g1Node}
+          <code>{l.matchId}</code> · <strong>Game {l.game} / 2</strong>{turnText}
         </span>
         <span className='muted'>
           Heartbeat <tt>#{l.heartbeatSeq}</tt> (<tt id='hb-age'>{hbAge}s</tt> ago)
         </span>
       </div>
+      {renderLiveGame1Summary(l, links)}
       <div className='slots-grid'>
         {renderLiveSlotCard('p1', l.p1, l, nowSec, links)}
         {renderLiveSlotCard('p2', l.p2, l, nowSec, links)}

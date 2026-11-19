@@ -2469,4 +2469,310 @@ describe('createServerApp production HTTP hardening', () => {
       await srv.close();
     }
   });
+
+  test('computes Showdown HP percentages with boundary color rounding across generations', () => {
+    const vgcFmt = 'gen9championsvgc2026regmc';
+    expect(arena.computePokemonHealth(101, 201, vgcFmt)).toEqual({percent: 50, color: 'green'});
+    expect(arena.computePokemonHealth(100, 200, vgcFmt)).toEqual({percent: 50, color: 'yellow'});
+    expect(arena.computePokemonHealth(41, 201, vgcFmt)).toEqual({percent: 20, color: 'yellow'});
+    expect(arena.computePokemonHealth(40, 200, vgcFmt)).toEqual({percent: 20, color: 'red'});
+    expect(arena.computePokemonHealth(200, 201, vgcFmt)).toEqual({percent: 99, color: 'green'});
+    expect(arena.computePokemonHealth(1, 201, vgcFmt)).toEqual({percent: 1, color: 'red'});
+
+    expect(arena.computePokemonHealth(200, 201, 'gen9ou')).toEqual({percent: 99, color: 'green'});
+    expect(arena.computePokemonHealth(100, 201, 'gen9ou')).toEqual({percent: 50, color: 'yellow'});
+    expect(arena.computePokemonHealth(101, 201, 'gen9ou')).toEqual({percent: 51, color: 'green'});
+    expect(arena.computePokemonHealth(40, 201, 'gen9ou')).toEqual({percent: 20, color: 'red'});
+
+    expect(arena.computePokemonHealth(101, 201, 'gen1ou')).toEqual({percent: 50, color: 'green'});
+    expect(arena.computePokemonHealth(100, 201, 'gen1ou')).toEqual({percent: 50, color: 'yellow'});
+    expect(arena.computePokemonHealth(0, 200, 'gen1ou')).toEqual({percent: 0, color: 'fainted'});
+  });
+
+  test('shrinks VGC HP indicators from 6 in Team Preview to 4 after selection', () => {
+    const previewP1 = [
+      {ident: 'p1: Incineroar', condition: '200/200'},
+      {ident: 'p1: Flutter Mane', condition: '130/130'},
+      {ident: 'p1: Rillaboom', condition: '207/207'},
+      {ident: 'p1: Urshifu', condition: '175/175'},
+      {ident: 'p1: Raging Bolt', condition: '231/231'},
+      {ident: 'p1: Amoonguss', condition: '221/221'},
+    ];
+    const previewP2 = [
+      {ident: 'p2: Calyrex', condition: '175/175'},
+      {ident: 'p2: Zamazenta', condition: '199/199'},
+      {ident: 'p2: Chien-Pao', condition: '155/155'},
+      {ident: 'p2: Ogerpon', condition: '187/187'},
+      {ident: 'p2: Tornadus', condition: '186/186'},
+      {ident: 'p2: Landorus', condition: '165/165'},
+    ];
+    const preview = arena.extractBattlePokemonHealth({
+      format: 'gen9championsvgc2026regmc',
+      lines: [
+        `|request|${JSON.stringify({teamPreview: true, side: {id: 'p1', pokemon: previewP1}})}`,
+        `|request|${JSON.stringify({teamPreview: true, side: {id: 'p2', pokemon: previewP2}})}`,
+      ],
+    });
+    expect(preview.p1).toHaveLength(6);
+    expect(preview.p2).toHaveLength(6);
+    expect(preview.p1.every(m => m.percent === 100 && m.color === 'green')).toBe(true);
+
+    const started = arena.extractBattlePokemonHealth({
+      format: 'gen9championsvgc2026regmc',
+      p1Pokemon: [
+        {ident: 'p1: Incineroar', condition: '200/200', active: true},
+        {ident: 'p1: Flutter Mane', condition: '39/130', active: true},
+        {ident: 'p1: Rillaboom', condition: '207/207', active: false},
+        {ident: 'p1: Amoonguss', condition: '221/221', active: false},
+      ],
+      p2Pokemon: [
+        {ident: 'p2: Calyrex', condition: '175/175', active: true},
+        {ident: 'p2: Chien-Pao', condition: '0 fnt', active: false},
+        {ident: 'p2: Ogerpon', condition: '187/187', active: true},
+        {ident: 'p2: Tornadus', condition: '186/186', active: false},
+      ],
+    });
+    expect(started.p1).toEqual([
+      {percent: 100, color: 'green'},
+      {percent: 30, color: 'yellow'},
+      {percent: 100, color: 'green'},
+      {percent: 100, color: 'green'},
+    ]);
+    expect(started.p2).toEqual([
+      {percent: 100, color: 'green'},
+      {percent: 100, color: 'green'},
+      {percent: 100, color: 'green'},
+      {percent: 0, color: 'fainted'},
+    ]);
+  });
+
+  test('swaps HP indicator positions when players switch Pokémon', () => {
+    const beforeSwitch = arena.extractBattlePokemonHealth({
+      format: 'gen9ou',
+      p1Pokemon: [
+        {ident: 'p1: Zoroark', condition: '36/240', active: true},
+        {ident: 'p1: Kingambit', condition: '340/340', active: false},
+        {ident: 'p1: Great Tusk', condition: '370/370', active: false},
+        {ident: 'p1: Dragapult', condition: '317/317', active: false},
+        {ident: 'p1: Gholdengo', condition: '315/315', active: false},
+        {ident: 'p1: Ting-Lu', condition: '514/514', active: false},
+      ],
+    });
+    expect(beforeSwitch.p1[0]).toEqual({percent: 15, color: 'red'});
+    expect(beforeSwitch.p1[1]).toEqual({percent: 100, color: 'green'});
+
+    // `@pkmn/sim` swaps `side.pokemon[0]` with `side.pokemon[1]` when Kingambit switches in
+    const afterSwitch = arena.extractBattlePokemonHealth({
+      format: 'gen9ou',
+      p1Pokemon: [
+        {ident: 'p1: Kingambit', condition: '340/340', active: true},
+        {ident: 'p1: Zoroark', condition: '36/240', active: false},
+        {ident: 'p1: Great Tusk', condition: '370/370', active: false},
+        {ident: 'p1: Dragapult', condition: '317/317', active: false},
+        {ident: 'p1: Gholdengo', condition: '315/315', active: false},
+        {ident: 'p1: Ting-Lu', condition: '514/514', active: false},
+      ],
+    });
+    expect(afterSwitch.p1).toEqual([
+      {percent: 100, color: 'green'},
+      {percent: 15, color: 'red'},
+      {percent: 100, color: 'green'},
+      {percent: 100, color: 'green'},
+      {percent: 100, color: 'green'},
+      {percent: 100, color: 'green'},
+    ]);
+  });
+
+  test('moves fainted Pokémon right after replacement while keeping forceSwitch grey', () => {
+    // 1. Active M3 faints (`forceSwitch` pending while bench has alive Pokémon): grey stays in 0
+    const onForceSwitch = arena.extractBattlePokemonHealth({
+      format: 'gen9ou',
+      p1Pokemon: [
+        {ident: 'p1: M3', condition: '0 fnt', active: true},
+        {ident: 'p1: M2', condition: '40/100', active: false},
+        {ident: 'p1: M1', condition: '80/100', active: false},
+        {ident: 'p1: M4', condition: '100/100', active: false},
+        {ident: 'p1: M5', condition: '30/100', active: false},
+        {ident: 'p1: M6', condition: '15/100', active: false},
+      ],
+    });
+    expect(onForceSwitch.p1.map(m => m.percent)).toEqual([0, 40, 80, 100, 30, 15]);
+
+    // 2. Slot 2 (M2) switches in (`@pkmn/sim` swaps index 0 <-> 1): M2 -> slot 1, M3 -> slot 6
+    const afterReplacement = arena.extractBattlePokemonHealth({
+      format: 'gen9ou',
+      p1Pokemon: [
+        {ident: 'p1: M2', condition: '40/100', active: true},
+        {ident: 'p1: M3', condition: '0 fnt', active: false},
+        {ident: 'p1: M1', condition: '80/100', active: false},
+        {ident: 'p1: M4', condition: '100/100', active: false},
+        {ident: 'p1: M5', condition: '30/100', active: false},
+        {ident: 'p1: M6', condition: '15/100', active: false},
+      ],
+    });
+    expect(afterReplacement.p1.map(m => m.percent)).toEqual([40, 80, 100, 30, 15, 0]);
+
+    // 3. Subsequent switch between active M2 and UI slot 4 (M5, at `@pkmn/sim` index 4):
+    //    swaps UI slot 1 <-> UI slot 4 in-place while fainted M3 stays pinned at slot 6!
+    const afterNextSwitch = arena.extractBattlePokemonHealth({
+      format: 'gen9ou',
+      p1Pokemon: [
+        {ident: 'p1: M5', condition: '30/100', active: true},
+        {ident: 'p1: M3', condition: '0 fnt', active: false},
+        {ident: 'p1: M1', condition: '80/100', active: false},
+        {ident: 'p1: M4', condition: '100/100', active: false},
+        {ident: 'p1: M2', condition: '40/100', active: false},
+        {ident: 'p1: M6', condition: '15/100', active: false},
+      ],
+    });
+    expect(afterNextSwitch.p1.map(m => m.percent)).toEqual([30, 80, 100, 40, 15, 0]);
+  });
+
+  test('compacts unreplaceable fainted active slots on empty bench or finished summary', () => {
+    // VGC 1v2 endgame: `p1a` fainted, `p1b` alive at 70%, bench empty -> `[70%, 0%, 0%, 0%]`
+    const vgcSolo = arena.extractBattlePokemonHealth({
+      format: 'gen9championsvgc2026regmc',
+      p1Pokemon: [
+        {ident: 'p1: Incineroar', condition: '0 fnt', active: true},
+        {ident: 'p1: Flutter Mane', condition: '70/100', active: true},
+        {ident: 'p1: Rillaboom', condition: '0 fnt', active: false},
+        {ident: 'p1: Amoonguss', condition: '0 fnt', active: false},
+      ],
+    });
+    expect(vgcSolo.p1.map(m => m.percent)).toEqual([70, 0, 0, 0]);
+
+    // Finished Game 1 summary after timeout during `forceSwitch`: alive bench slides to front
+    const finishedTimeout = arena.extractBattlePokemonHealth({
+      format: 'gen9ou',
+      finished: true,
+      p1Pokemon: [
+        {ident: 'p1: M1', condition: '0 fnt', active: true},
+        {ident: 'p1: M2', condition: '62/100', active: false},
+        {ident: 'p1: M3', condition: '0 fnt', active: false},
+        {ident: 'p1: M4', condition: '29/100', active: false},
+        {ident: 'p1: M5', condition: '0 fnt', active: false},
+        {ident: 'p1: M6', condition: '0 fnt', active: false},
+      ],
+    });
+    expect(finishedTimeout.p1.map(m => m.percent)).toEqual([62, 29, 0, 0, 0, 0]);
+  });
+
+  test('exposes sanitized HP indicators on pools heartbeats without leaking logs', async () => {
+    const app = polka();
+    const ctrl = arena.register(app, {
+      db,
+      arenaSecret: AUTH_CFG.arenaSecret,
+      publicDir: tmpDir,
+    });
+    const srv = await startTestServer(app);
+    try {
+      const client = new arena.Client({
+        serverUrl: srv.baseUrl,
+        arenaSecret: AUTH_CFG.arenaSecret!,
+      });
+      await client.sendHeartbeat({
+        heartbeatSeq: 10,
+        matchId: 'vgc-0000123',
+        ladderId: 'gen9championsvgc2026regmc20261109',
+        format: 'gen9championsvgc2026regmc',
+        game: 2,
+        turn: 4,
+        activeSlot: 'p2',
+        turnStartedAt: 1_760_000_200,
+        turnBudgetSeconds: 140,
+        incrementSeconds: 25,
+        game1Summary: {
+          winnerSlot: 'p1',
+          turns: 9,
+          endReason: 'win',
+          p1: {bankSeconds: 144, meanTurnMillis: 260, ram: 810, team: 'P1:aabbccddeeff'},
+          p2: {bankSeconds: 132, meanTurnMillis: 295, ram: 920, team: '112233445566'},
+          viewer: {
+            p1: {
+              pokemon: [
+                {ident: 'p1: Incineroar', condition: '200/200'},
+                {ident: 'p1: Flutter Mane', condition: '98/100'},
+                {ident: 'p1: Rillaboom', condition: '207/207'},
+                {ident: 'p1: Amoonguss', condition: '221/221'},
+              ],
+            },
+            p2: {
+              pokemon: [
+                {ident: 'p2: Calyrex', condition: '0 fnt'},
+                {ident: 'p2: Chien-Pao', condition: '0 fnt'},
+                {ident: 'p2: Ogerpon', condition: '0 fnt'},
+                {ident: 'p2: Tornadus', condition: '0 fnt'},
+              ],
+            },
+          },
+        },
+        // Game 2 swaps seats: Showdown p1 is Foul Play (Match P2), p2 is 0 ERROR (Match P1)
+        viewer: {
+          p1: {
+            pokemon: [
+              {ident: 'p1: Incineroar', condition: '40/200'},
+              {ident: 'p1: Flutter Mane', condition: '130/130'},
+              {ident: 'p1: Rillaboom', condition: '207/207'},
+              {ident: 'p1: Amoonguss', condition: '221/221'},
+            ],
+          },
+          p2: {
+            pokemon: [
+              {ident: 'p2: Calyrex', condition: '196/200'},
+              {ident: 'p2: Chien-Pao', condition: '155/155'},
+              {ident: 'p2: Ogerpon', condition: '187/187'},
+              {ident: 'p2: Tornadus', condition: '186/186'},
+            ],
+          },
+        },
+        p1: {
+          slug: '0-error',
+          name: '0 ERROR',
+          version: '1.0.0',
+          bankSeconds: 138,
+          lastTurnMillis: 250,
+          meanTurnMillis: 255,
+          ram: 820,
+          team: '112233445566',
+        },
+        p2: {
+          slug: 'foul-play',
+          name: 'Foul Play',
+          version: '1.0.0',
+          bankSeconds: 136,
+          lastTurnMillis: 280,
+          meanTurnMillis: 290,
+          ram: 940,
+          team: 'P1:aabbccddeeff',
+        },
+      });
+
+      const doc = ctrl.getLiveDocument(1_760_000_202);
+      const serialized = JSON.stringify(doc);
+      expect(doc.live?.viewer).toBeUndefined();
+      expect(serialized).not.toContain('Incineroar');
+      expect(serialized).not.toContain('Flutter Mane');
+      expect(serialized).not.toContain('Calyrex');
+      expect((doc.live?.game1Summary as Record<string, unknown> | undefined)?.viewer)
+        .toBeUndefined();
+
+      // Match P1 (0 ERROR) was Showdown p2 in Game 2 (`196/200` -> 98% green)
+      expect(doc.live?.p1.pokemon?.[0]).toEqual({percent: 98, color: 'green'});
+      expect(doc.live?.p1.pokemon).toHaveLength(4);
+      // Match P2 (Foul Play) was Showdown p1 in Game 2 (`40/200` -> 20% red)
+      expect(doc.live?.p2.pokemon?.[0]).toEqual({percent: 20, color: 'red'});
+      expect(doc.live?.p2.pokemon).toHaveLength(4);
+      // Game 1 summary retains Game 1 stats and sanitized final HP orbs
+      expect(doc.live?.game1Summary?.p1?.pokemon).toEqual([
+        {percent: 100, color: 'green'},
+        {percent: 98, color: 'green'},
+        {percent: 100, color: 'green'},
+        {percent: 100, color: 'green'},
+      ]);
+      expect(doc.live?.game1Summary?.p2?.pokemon?.[0]).toEqual({percent: 0, color: 'fainted'});
+    } finally {
+      ctrl.close();
+      await srv.close();
+    }
+  });
 });

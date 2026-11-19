@@ -67,6 +67,7 @@ interface MirrorGameStats {
   bankSeconds: number;
   peakRam: number;
   meanTurnMillis: number;
+  pokemon?: unknown[];
 }
 
 interface MirrorGame1Summary {
@@ -104,11 +105,11 @@ interface MirrorHeartbeatFrame {
   turnStartedAt: number;
   turnBudgetSeconds: number;
   incrementSeconds: number;
-  game1Summary?: {winnerSlot?: 'p1' | 'p2'; turns: number};
+  game1Summary?: arena.LiveGameSummaryInput;
   p1: MirrorHeartbeatSide;
   p2: MirrorHeartbeatSide;
   viewer?: {
-    lines: string[];
+    lines?: string[];
     p1Pokemon?: unknown[];
     p2Pokemon?: unknown[];
   };
@@ -938,7 +939,7 @@ export class Coordinator {
       ...(frame.viewer
         ? {
           viewer: {
-            lines: frame.viewer.lines,
+            ...(frame.viewer.lines ? {lines: frame.viewer.lines} : {}),
             ...(frame.viewer.p1Pokemon ? {p1: {pokemon: frame.viewer.p1Pokemon}} : {}),
             ...(frame.viewer.p2Pokemon ? {p2: {pokemon: frame.viewer.p2Pokemon}} : {}),
           },
@@ -956,9 +957,30 @@ export class Coordinator {
       : game1.outcome === 'L'
         ? ('p2' as const)
         : undefined;
-    const game1Summary = {
+    const game1Summary: arena.LiveGameSummaryInput = {
       ...(g1WinnerSlot ? {winnerSlot: g1WinnerSlot} : {}),
       turns: game1.turns,
+      endReason: game1.endReason,
+      p1: {
+        bankSeconds: game1.p1.bankSeconds,
+        meanTurnMillis: Math.round(game1.p1.meanTurnMillis),
+        ram: game1.p1.peakRam,
+        ...(match.p1.teamLabel ? {team: match.p1.teamLabel} : {}),
+      },
+      p2: {
+        bankSeconds: game1.p2.bankSeconds,
+        meanTurnMillis: Math.round(game1.p2.meanTurnMillis),
+        ram: game1.p2.peakRam,
+        ...(match.p2.teamLabel ? {team: match.p2.teamLabel} : {}),
+      },
+      ...(game1.p1.pokemon || game1.p2.pokemon
+        ? {
+          viewer: {
+            ...(game1.p1.pokemon ? {p1: {pokemon: game1.p1.pokemon}} : {}),
+            ...(game1.p2.pokemon ? {p2: {pokemon: game1.p2.pokemon}} : {}),
+          },
+        }
+        : {}),
     };
 
     // Game 2 swaps sides and teams: P2 sits in slot p1 with T1, P1 sits in slot p2 with T2
@@ -972,9 +994,9 @@ export class Coordinator {
       sendUtm: match.teamMode !== 'random',
       maxTurns: this.maxTurns,
       devMode: this.devMode,
-      includeSpectatorState: match.teamMode === 'random',
+      includeSpectatorState: true,
       onTurn: async info => {
-        const lines = match.teamMode === 'random'
+        const lines = match.teamMode === 'random' && info.omniscientLog
           ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, match.p2.name, match.p1.name)
             .split('\n')
           : undefined;
@@ -990,20 +1012,20 @@ export class Coordinator {
             bankSeconds: info.p2.bankSeconds,
             lastTurnMillis: info.p2.lastTurnMillis,
             meanTurnMillis: info.p2.meanTurnMillis,
-            ram: Math.max(game1.p1.peakRam, info.p2.ram),
+            ram: info.p2.ram,
             team: match.p2.teamLabel,
           },
           p2: {
             bankSeconds: info.p1.bankSeconds,
             lastTurnMillis: info.p1.lastTurnMillis,
             meanTurnMillis: info.p1.meanTurnMillis,
-            ram: Math.max(game1.p2.peakRam, info.p1.ram),
+            ram: info.p1.ram,
             team: match.p1.teamLabel,
           },
-          ...(lines
+          ...(lines || info.p1.pokemon || info.p2.pokemon
             ? {
               viewer: {
-                lines,
+                ...(lines ? {lines} : {}),
                 p1Pokemon: info.p1.pokemon,
                 p2Pokemon: info.p2.pokemon,
               },
@@ -1029,36 +1051,38 @@ export class Coordinator {
     );
     this.writeArchivedGameLog(match.ladderId, match.id, 'b', g2Log, match.startedAt);
 
-    if (match.teamMode === 'random') {
-      await this.sendMatchHeartbeat(match, {
-        game: 2,
-        turn: g2Res.turns,
-        activeSlot: 'p1',
-        turnStartedAt: completedAt,
-        turnBudgetSeconds: arena.MAX_TURN_SECONDS,
-        incrementSeconds: arena.turnIncrementSeconds(match.format),
-        game1Summary,
-        p1: {
-          bankSeconds: g2Res.p2.bankSeconds,
-          lastTurnMillis: g2Res.p2.lastTurnMillis,
-          meanTurnMillis: g2Res.p2.meanTurnMillis,
-          ram: Math.max(game1.p1.peakRam, g2Res.p2.peakRam),
-          team: match.p2.teamLabel,
-        },
-        p2: {
-          bankSeconds: g2Res.p1.bankSeconds,
-          lastTurnMillis: g2Res.p1.lastTurnMillis,
-          meanTurnMillis: g2Res.p1.meanTurnMillis,
-          ram: Math.max(game1.p2.peakRam, g2Res.p1.peakRam),
-          team: match.p1.teamLabel,
-        },
-        viewer: {
-          lines: g2Log.split('\n'),
-          p1Pokemon: g2Res.p1.pokemon,
-          p2Pokemon: g2Res.p2.pokemon,
-        },
-      });
-    }
+    await this.sendMatchHeartbeat(match, {
+      game: 2,
+      turn: g2Res.turns,
+      activeSlot: 'p1',
+      turnStartedAt: completedAt,
+      turnBudgetSeconds: arena.MAX_TURN_SECONDS,
+      incrementSeconds: arena.turnIncrementSeconds(match.format),
+      game1Summary,
+      p1: {
+        bankSeconds: g2Res.p2.bankSeconds,
+        lastTurnMillis: g2Res.p2.lastTurnMillis,
+        meanTurnMillis: g2Res.p2.meanTurnMillis,
+        ram: g2Res.p2.peakRam,
+        team: match.p2.teamLabel,
+      },
+      p2: {
+        bankSeconds: g2Res.p1.bankSeconds,
+        lastTurnMillis: g2Res.p1.lastTurnMillis,
+        meanTurnMillis: g2Res.p1.meanTurnMillis,
+        ram: g2Res.p1.peakRam,
+        team: match.p1.teamLabel,
+      },
+      ...(match.teamMode === 'random' || g2Res.p1.pokemon || g2Res.p2.pokemon
+        ? {
+          viewer: {
+            ...(match.teamMode === 'random' ? {lines: g2Log.split('\n')} : {}),
+            p1Pokemon: g2Res.p1.pokemon,
+            p2Pokemon: g2Res.p2.pokemon,
+          },
+        }
+        : {}),
+    });
 
     const sendLogs = match.teamMode === 'random' || match.teamMode === 'pools';
     const g1Log = sendLogs
@@ -1435,9 +1459,9 @@ export class Coordinator {
         sendUtm: ladder.team !== 'random',
         maxTurns: this.maxTurns,
         devMode: this.devMode,
-        includeSpectatorState: ladder.team === 'random',
+        includeSpectatorState: true,
         onTurn: async info => {
-          const lines = ladder.team === 'random'
+          const lines = ladder.team === 'random' && info.omniscientLog
             ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, e1.agentName, e2.agentName)
               .split('\n')
             : undefined;
@@ -1462,10 +1486,10 @@ export class Coordinator {
               ram: info.p2.ram,
               team: sampled.t2Label,
             },
-            ...(lines
+            ...(lines || info.p1.pokemon || info.p2.pokemon
               ? {
                 viewer: {
-                  lines,
+                  ...(lines ? {lines} : {}),
                   p1Pokemon: info.p1.pokemon,
                   p2Pokemon: info.p2.pokemon,
                 },
@@ -1486,35 +1510,37 @@ export class Coordinator {
         e2.agentName
       );
       this.writeArchivedGameLog(ladder.id, matchId, 'a', g1Log, now);
-      if (ladder.team === 'random') {
-        await this.sendMatchHeartbeat(match, {
-          game: 1,
-          turn: g1Res.turns,
-          activeSlot: 'p1',
-          turnStartedAt: Math.floor(Date.now() / 1000),
-          turnBudgetSeconds: arena.MAX_TURN_SECONDS,
-          incrementSeconds: arena.turnIncrementSeconds(ladder.format),
-          p1: {
-            bankSeconds: g1Res.p1.bankSeconds,
-            lastTurnMillis: g1Res.p1.lastTurnMillis,
-            meanTurnMillis: g1Res.p1.meanTurnMillis,
-            ram: g1Res.p1.peakRam,
-            team: sampled.t1Label,
-          },
-          p2: {
-            bankSeconds: g1Res.p2.bankSeconds,
-            lastTurnMillis: g1Res.p2.lastTurnMillis,
-            meanTurnMillis: g1Res.p2.meanTurnMillis,
-            ram: g1Res.p2.peakRam,
-            team: sampled.t2Label,
-          },
-          viewer: {
-            lines: g1Log.split('\n'),
-            p1Pokemon: g1Res.p1.pokemon,
-            p2Pokemon: g1Res.p2.pokemon,
-          },
-        });
-      }
+      await this.sendMatchHeartbeat(match, {
+        game: 1,
+        turn: g1Res.turns,
+        activeSlot: 'p1',
+        turnStartedAt: Math.floor(Date.now() / 1000),
+        turnBudgetSeconds: arena.MAX_TURN_SECONDS,
+        incrementSeconds: arena.turnIncrementSeconds(ladder.format),
+        p1: {
+          bankSeconds: g1Res.p1.bankSeconds,
+          lastTurnMillis: g1Res.p1.lastTurnMillis,
+          meanTurnMillis: g1Res.p1.meanTurnMillis,
+          ram: g1Res.p1.peakRam,
+          team: sampled.t1Label,
+        },
+        p2: {
+          bankSeconds: g1Res.p2.bankSeconds,
+          lastTurnMillis: g1Res.p2.lastTurnMillis,
+          meanTurnMillis: g1Res.p2.meanTurnMillis,
+          ram: g1Res.p2.peakRam,
+          team: sampled.t2Label,
+        },
+        ...(ladder.team === 'random' || g1Res.p1.pokemon || g1Res.p2.pokemon
+          ? {
+            viewer: {
+              ...(ladder.team === 'random' ? {lines: g1Log.split('\n')} : {}),
+              p1Pokemon: g1Res.p1.pokemon,
+              p2Pokemon: g1Res.p2.pokemon,
+            },
+          }
+          : {}),
+      });
 
       this.stateDb.checkpointGame1Complete({
         id: matchId,
@@ -1542,11 +1568,13 @@ export class Coordinator {
           bankSeconds: g1Res.p1.bankSeconds,
           peakRam: g1Res.p1.peakRam,
           meanTurnMillis: g1Res.p1.meanTurnMillis,
+          pokemon: g1Res.p1.pokemon,
         },
         p2: {
           bankSeconds: g1Res.p2.bankSeconds,
           peakRam: g1Res.p2.peakRam,
           meanTurnMillis: g1Res.p2.meanTurnMillis,
+          pokemon: g1Res.p2.pokemon,
         },
         log: g1Log,
       });
