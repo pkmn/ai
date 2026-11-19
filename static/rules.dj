@@ -26,10 +26,9 @@ required to provide:
   - a PNG image (_optional_) with your *project's logo* to be displayed on your project's
     statistics page.
 
-This will open up an issue on the [pkmn/ai](https://github.com/pkmn/ai) repository. Staff will
-review this issue, fill in the appropriate information in
-[`projects.yml`](https://github.com/pkmn/ai/blob/main/static/projects.yml), and approve your project
-for submissions.
+Staff will review the resulting [pkmn/ai](https://github.com/pkmn/ai) issue, add your project to
+[`projects.yml`](https://github.com/pkmn/ai/blob/main/static/projects.yml), and approve it for
+submissions.
 
 ::: aside
 The *pkmn.ai* arena competitions aim to provide the fairest way to evaluate the strength of
@@ -41,12 +40,9 @@ strong agent that works in any environment, you have likely strayed in the wrong
 
 ### Submission
 
-Registered competitors may access the [account](/account) page, which requires GitHub OAuth
-credentials to authenticate. On this page you will be able to manage private account details
-(_e.g._, associating a Discord user ID with your account to be used for notifications about your
-submissions and for roles within the [chat](/chat) room) and view your account's status. Once your
-account is approved and eligible for submissions, you can fill out a submission form with the
-following information:
+Registered competitors sign in to [account](/account) via GitHub OAuth to view status, link a
+Discord ID (for notifications and [chat](/chat) roles), and --- once approved and eligible ---
+submit an agent with:
 
   - *`version`*: unique version string within your project (cannot be reused even after a failed
     smoke test; max 12 characters, _e.g._, `1.0.0` or `v2`, regex
@@ -61,11 +57,10 @@ following information:
 
 Ladder submissions will run on an *Apple M6 Mac mini* with access to *10 cores* (8 Performance & 2
 Efficiency), *14 GiB* of dedicated RAM, and 4 GiB of scratch `$TMPDIR` storage wiped between games.
-The *network will be disabled* for all competitors. Competitors will be blind to the name of their
-opponents. Ladder submissions may take the form of either an OCI `linux/arm64` container that can
-access the *GPU* virtually via Vulkan passthrough, or a native bundle that has full native access
-to the GPU/ANE via Metal/CoreML. Tournament hardware will be outlined in the tournament-specific
-rules and will only support `linux/amd64` OCI containers.
+The *network is disabled* and opponents are anonymous. Ladder submissions may be an OCI
+`linux/arm64` container (virtual *GPU* via Vulkan passthrough) or a native bundle (direct GPU/ANE
+via Metal/CoreML). Tournaments specify their own hardware and accept only `linux/amd64` OCI
+containers.
 
 {summary="*OCI Container*"}
 ::: details
@@ -110,8 +105,7 @@ archive root. OCI containers must contain at most 32 OCI layers and the containe
 
 Tournaments close at `00:00:00 UTC` strictly before start time and accept only the first successful
 entry for a project (resubmissions are allowed after a failed smoke test until the cutoff). Ladder
-competitors may have *up to 2 versions* of their project competing concurrently, but may only submit
-a new version of their agent after both of the following conditions are true:
+competitors may run *up to 2 versions* concurrently and may submit a new version once both hold:
 
   - *14 days* have elapsed since their last successful ladder submission.
   - all of their *previous submissions have settled* to $`\text{SE}(R) \le 30\text{ Elo}`
@@ -119,18 +113,17 @@ a new version of their agent after both of the following conditions are true:
     [blind-pair matches](#Matchmaking) (50 games).
 
 A submission succeeds if the arena can unpack it and play through the first turn of a battle in the
-format(s) it is entered in ("smoke test"). For ladder submissions, if there are already 2 versions
-of a project on the same ladder, the weaker of the two versions will be automatically retired,
-leaving the *strongest version of the agent and the latest submission*.
+format(s) it is entered in ("smoke test"). If 2 versions are already active on a ladder, the weaker
+is automatically retired, leaving the *strongest version and the latest submission*.
 
 ### Format
 
 A *pkmn.ai* ladder is fixed to a specific time period and will not be updated if the community
 later decides to [change](https://pkmn.cc/changes) the rules --- it is necessary to hold the format
-constant to be able to compare to past versions. However, in order to support more dynamic
-metagames, certain formats will operate on a seasonal model and will be retired and replaced with
-more modern rules. All current ladders use Pokémon Showdown's rules and mechanics as of Nov 9th
-2026 ([a78551b0](https://github.com/smogon/pokemon-showdown/commit/a78551b0)/
+constant to be able to compare to past versions. To support dynamic metagames, seasonal formats
+rotate and are replaced with newer rules. All current ladders use Pokémon Showdown's rules and
+mechanics as of Nov 9th 2026
+([a78551b0](https://github.com/smogon/pokemon-showdown/commit/a78551b0)/
 [v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)).
 
 The competitive Pokémon formats currently eligible for *fixed* ladder submissions are:
@@ -139,9 +132,8 @@ The competitive Pokémon formats currently eligible for *fixed* ladder submissio
 - *ADV*: `gen3ou`
 - *SV*: `gen9ou`
 
-Strong human-made teams harvested from Pokémon Showdown server logs will be provided to the
-competitors ([see below](#Protocol)), and [data.pkmn.cc](https://data.pkmn.cc) formatted usage
-stats data computed from the period the teams have been drawn from will be provided at
+Strong human teams harvested from Pokémon Showdown logs are assigned per match
+([see below](#Protocol)), with era-matched [data.pkmn.cc](https://data.pkmn.cc) usage stats at
 `$PKMN_STATS_DIR/<format>.json`.
 
 The competitive Pokémon formats currently eligible for *seasonal* ladder submissions are:
@@ -149,10 +141,9 @@ The competitive Pokémon formats currently eligible for *seasonal* ladder submis
 {summary="*RAND* (`gen9randombattle`)"}
 ::: details
 In Generation X this ladder will be retired and replaced with one supporting `gen10randombattle` if
-Pokémon Showdown creates one. Teams will be provided by the random team generator bundled with
-Pokémon Showdown, and [data.pkmn.cc](https://data.pkmn.cc) formatted usage stats data computed from
-the period the teams have been drawn from will be provided at `$PKMN_STATS_DIR` in the same
-hierarchy as exists on the site.
+Pokémon Showdown creates one. Teams come from Pokémon Showdown's random generator, with era-matched
+[data.pkmn.cc](https://data.pkmn.cc) stats under `$PKMN_STATS_DIR` in the same hierarchy as the
+site.
 :::
 
 {summary="*VGC* (`gen9championsvgc2026regmc`)"}
@@ -170,18 +161,14 @@ parties). Teams submitted to the pool must be
 [distinct](https://github.com/pkmn/ai/blob/main/teams/README.md) from each other and from any
 publicly shared teams. No usage statistics will be provided for the format.
 
-To speak to the "spirit of this competition" referenced above: submitting degenerate teams to the
-pool is considered to be contrary to the goals of the ladder (and pointless --- [blind-pair
-matches](#Matchmaking) ensure this is most likely to simply result in ties), whereas submitting
-teams you feel your agent has a better chance of mastering due to specific training or mastery over
-niche mechanics is considered fair play.
+Submitting degenerate teams to the pool violates the spirit of this competition (and is pointless,
+since [blind-pair matches](#Matchmaking) tend to end in ties); submitting legitimate teams tailored
+to your agent's strengths is fair play.
 :::
 
-Ladders and tournaments hosted on *pkmn.ai* will all follow the exact same timer rules as Pokémon
-Showdown (without Pokémon Showdown's 60-second disconnect grace); however, *canceling or undoing*
-moves is disabled, as is *forfeiting or offering ties*. Furthermore,
-[*pondering*](/glossary#pondering) will be disabled in ladder matches, though it will be enabled by
-default in tournaments unless otherwise specified.
+All competitions follow Pokémon Showdown's timer rules (without its 60-second disconnect grace),
+with *undoing*, *forfeiting*, and *offering ties* disabled. [*Pondering*](/glossary#pondering) is
+disabled on ladders and enabled by default in tournaments.
 
 Logs or team information from the ladders using harvested human team data will never be made public.
 *RAND* ladder games and tournament matches (logs and teams) are broadcast live --- with full
@@ -246,11 +233,8 @@ the series) and communicates strictly over *standard input (`stdin`)* and *stand
 
 ### Matchmaking
 
-Pokémon battles on the *pkmn.ai* arena ladders are always conducted in the form of *blind-pair
-matches* --- a given pairing of agents will always play out two games against each other in
-succession, with the teams swapped between games. Because all games on the ladder occur in a
-sandbox, agents are unaware of any details from the first game as they play out the second, meaning
-team-matchup variance can be eliminated.
+Ladder battles are played as *blind-pair matches*: two successive sandboxed games with teams
+swapped, eliminating team-matchup variance since neither agent sees Game 1 during Game 2.
 
 Ratings are modeled using batch [Maximum a posteriori (MAP)
 estimation](https://en.wikipedia.org/wiki/Maximum_a_posteriori_estimation) over a 5-category
@@ -270,10 +254,8 @@ gain](https://en.wikipedia.org/wiki/Information_gain_(decision_tree)) over compe
 all ladders while prioritizing determining the strongest competitors and matching them against each
 other, dampening repeat matchups, and preventing the outright starvation of any project or ladder.
 
-Matchmaking and ratings in tournaments are dependent on the exact tournament rules, but by default
-involve a Round Robin format where every competitor plays every other competitor for a fixed number
-of games or matches, followed by a Superfinal where the top two entrants after the Round Robin
-square off in an extended series to determine the winner.
+Tournament formats depend on event rules, defaulting to a Round Robin followed by an extended
+Superfinal between the top two entrants.
 
 ### Recommendations
 
@@ -324,8 +306,7 @@ square off in an extended series to determine the winner.
     `ARENA_MEMORY_LIMIT_MB=14336` is set --- be sure to size runtime tables to account for potential
     runtime overhead and avoid triggering a forfeit due to running out of memory (OOM). In
     tournaments with pondering enabled, `ARENA_PONDER=1` is set.
-  - on macOS, natively bundled submissions can take advantage of the fact that clean, read-only
-    memory-mapped file pages (`mmap` with `PROT_READ` and `MAP_PRIVATE` or `MAP_SHARED`, such as
-    `safetensors` or `gguf` memory mapping) are backed by the read-only bundle file on disk and
-    count as 0 bytes toward the arena-enforced 14 GiB RAM limit.
+  - on macOS, clean read-only memory-mapped pages in native bundles (`mmap` with `PROT_READ` and
+    `MAP_PRIVATE`/`MAP_SHARED`, _e.g._, `safetensors`/`gguf`) are file-backed and count as 0 bytes
+    toward the 14 GiB RAM limit.
 :::
