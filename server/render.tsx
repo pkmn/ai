@@ -738,13 +738,21 @@ function buildBattlesScript(
 
     const renderSlot = (key, slotData, live, nowSec) => {
       const isInit = live.phase === 'init';
+      const isPreview = live.phase === 'preview';
       const isRunning = live.activeSlot === key;
       const otherKey = key === 'p1' ? 'p2' : 'p1';
+      const fmtId = String(live.format || '').toLowerCase();
+      const isVgcTimer = fmtId.includes('vgc') || fmtId.includes('bss');
+      const maxTurnSec = isVgcTimer ? 55 : 150;
+      const maxFirstTurnSec = isVgcTimer ? 90 : 150;
       const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
       const budget = isRunning
         ? Math.round(live.turnBudgetSeconds)
-        : (isInit ? 60 : Math.round(slotData.bankSeconds));
-      const bank = isRunning && !isInit
+        : (isInit ? 60 : Math.min(
+          Math.round(slotData.bankSeconds),
+          isPreview ? maxFirstTurnSec : maxTurnSec
+        ));
+      const bank = isRunning && !isInit && !(isVgcTimer && isPreview)
         ? Math.max(0, Math.round(slotData.bankSeconds - elapsed))
         : Math.round(slotData.bankSeconds);
       const inc = Math.round(live.incrementSeconds);
@@ -757,9 +765,12 @@ function buildBattlesScript(
           '">&#9679; ' + (isInit ? 'INITIALIZING' : 'RUNNING') + '</span>'
         : '<span class="state-paused" id="state-' + key +
           '" title="Frozen by kernel SIGSTOP while ' + otherKey + ' computes">PAUSED</span>';
-      const timerTitle =
-        '60s /ready init grace + Pokémon Showdown RoomBattleTimer: 150s max bank, +' +
-        inc + 's/turn';
+      const timerTitle = isVgcTimer
+        ? '60s /ready init grace + Pokémon Showdown VGC Timer: 420s Your Time, 90s preview, ' +
+          '55s/turn'
+        : '60s /ready init grace + Pokémon Showdown RoomBattleTimer: 150s max bank, ' +
+          '60s grace, +' + inc + 's/turn';
+      const bankMeta = inc > 0 ? ('(+' + inc + 's/turn)') : ('(' + maxTurnSec + 's/turn)');
       const stepLabel = isInit ? 'Init' : 'Turn';
       const teamHtml = renderTeamSpanHtml(slotData.team);
       const orbsHtml = renderPokemonOrbsHtml(slotData.pokemon);
@@ -774,7 +785,7 @@ function buildBattlesScript(
         (isRunning ? 'yes' : 'muted') + '">' +
         elapsed + 's</strong> <span class="muted">/ ' + budget + 's</span></span>' +
         '<span>Bank: <strong id="bank-' + key + '">' + bank + 's</strong> ' +
-        '<span class="muted">(+' + inc + 's/turn)</span></span></div>' +
+        '<span class="muted">' + bankMeta + '</span></span></div>' +
         '<div class="slot-telemetry">' +
         '<span>Last: <tt>' + Math.round(slotData.lastTurnMillis) + ' ms</tt></span>' +
         '<span>Mean: <tt>' + Math.round(slotData.meanTurnMillis) + ' ms/turn</tt></span>' +
@@ -1170,8 +1181,12 @@ function buildBattlesScript(
           const dt = Math.max(0, nowSec - state.live.turnStartedAt);
           const turnEl = document.getElementById('turn-' + key);
           const bankEl = document.getElementById('bank-' + key);
+          const fmtId = String(state.live.format || '').toLowerCase();
+          const isVgcPreview =
+            state.live.phase === 'preview' &&
+            (fmtId.includes('vgc') || fmtId.includes('bss'));
           if (turnEl) turnEl.textContent = dt + 's';
-          if (bankEl && state.live.phase !== 'init') {
+          if (bankEl && state.live.phase !== 'init' && !isVgcPreview) {
             bankEl.textContent = Math.max(0, Math.round(slot.bankSeconds - dt)) + 's';
           }
         }
@@ -3043,13 +3058,16 @@ function renderLiveSlotCard(
   links: AgentLinkContext
 ): util.Child {
   const isInit = live.phase === 'init';
+  const isPreview = live.phase === 'preview';
   const isRunning = live.activeSlot === key;
   const otherKey = key === 'p1' ? 'p2' : 'p1';
+  const timer = arena.timerSettingsForFormat(live.format);
   const elapsed = isRunning ? Math.max(0, nowSec - live.turnStartedAt) : 0;
+  const pausedTurnMax = isPreview ? timer.maxFirstTurnSeconds : timer.maxPerTurnSeconds;
   const budget = isRunning
     ? Math.round(live.turnBudgetSeconds)
-    : (isInit ? 60 : Math.round(slotData.bankSeconds));
-  const bank = isRunning && !isInit
+    : (isInit ? 60 : Math.min(Math.round(slotData.bankSeconds), pausedTurnMax));
+  const bank = isRunning && !isInit && !(timer.timeoutAutoChoose && isPreview)
     ? Math.max(0, Math.round(slotData.bankSeconds - elapsed))
     : Math.round(slotData.bankSeconds);
   const inc = Math.round(live.incrementSeconds);
@@ -3076,8 +3094,12 @@ function renderLiveSlotCard(
     </span>
   );
 
-  const timerTitle =
-    `60s /ready init grace + Pokémon Showdown RoomBattleTimer: 150s max bank, +${inc}s/turn`;
+  const timerTitle = timer.timeoutAutoChoose
+    ? `60s /ready init grace + Pokémon Showdown VGC Timer: ${timer.startingSeconds}s Your Time, ` +
+      `${timer.maxFirstTurnSeconds}s preview, ${timer.maxPerTurnSeconds}s/turn`
+    : `60s /ready init grace + Pokémon Showdown RoomBattleTimer: ${timer.startingSeconds}s ` +
+      `max bank, ${timer.graceSeconds}s grace, +${inc}s/turn`;
+  const bankMeta = inc > 0 ? `(+${inc}s/turn)` : `(${timer.maxPerTurnSeconds}s/turn)`;
   const stepLabel = isInit ? 'Init' : 'Turn';
 
   const turnCls = isRunning ? 'yes' : 'muted';
@@ -3099,7 +3121,7 @@ function renderLiveSlotCard(
         </span>
         <span>
           Bank: <strong id={`bank-${key}`}>{bank}s</strong>{' '}
-          <span className='muted'>(+{inc}s/turn)</span>
+          <span className='muted'>{bankMeta}</span>
         </span>
       </div>
       <div className='slot-telemetry'>

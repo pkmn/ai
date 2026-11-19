@@ -9,5 +9,5 @@ These tournament-specific rules supplement the general [Arena Rules](/rules) for
 ### Environment & Clock
 
 - *Hardware*: Dedicated Google Cloud `g2-custom-24-49152` Spot GPU VM per agent (`1× NVIDIA L4 24 GB`, `24 vCPUs`, `48 GB RAM`) with network access disabled.
-- *Pondering & Clocks*: Agents may ponder (`ARENA_PONDER=1`) with a `150s` base clock and `+25s` increment per turn.
+- *Pondering & Clocks*: Agents may ponder (`ARENA_PONDER=1`) under Pokémon Showdown's VGC Timer (`420s` Your Time, `90s` Team Preview, `55s` per turn with auto-choose on turn timeout).
 - *Publication*: Live tables stream on this page during play, and full `.log` replay bundles become downloadable upon completion.

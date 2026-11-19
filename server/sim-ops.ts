@@ -2,6 +2,28 @@ import type * as sim from '@pkmn/sim';
 
 import {toID} from '../static/util';
 
+export const STARTING_BANK_SECONDS = 150;
+export const STARTING_GRACE_SECONDS = 60;
+export const MAX_TURN_SECONDS = 150;
+export const MID_TURN_INCREMENT_SECONDS = 5;
+export const SINGLES_INCREMENT_SECONDS = 10;
+export const DOUBLES_INCREMENT_SECONDS = 25;
+export const VGC_STARTING_BANK_SECONDS = 420;
+export const VGC_GRACE_SECONDS = 90;
+export const VGC_MAX_TURN_SECONDS = 55;
+export const VGC_MAX_FIRST_TURN_SECONDS = 90;
+
+export interface TimerSettings {
+  startingSeconds: number;
+  graceSeconds: number;
+  addPerTurnSeconds: number;
+  midTurnIncrementSeconds: number;
+  maxPerTurnSeconds: number;
+  maxFirstTurnSeconds: number;
+  timeoutAutoChoose: boolean;
+  accelerate: boolean;
+}
+
 type FormatListArg = Parameters<typeof sim.Dex.formats.extend>[0];
 
 export function configureSimMod(
@@ -87,5 +109,33 @@ export function sampleRandomPairWithSim(
   return {
     t1Packed: simMod.Teams.pack(t1),
     t2Packed: simMod.Teams.pack(t2),
+  };
+}
+
+// Matches Pokémon Showdown's `RoomBattleTimer` defaults + `RuleTable.timer` overrides
+// (`server/room-battle.ts`), omitting WebSocket disconnect timers (`dcTimer`/`dcTimerBank`).
+export function resolveTimerSettingsWithSim(
+  simMod: typeof sim,
+  format: string
+): TimerSettings {
+  const resolved = simMod.Dex.formats.get(format);
+  const ruleTable = simMod.Dex.formats.getRuleTable(resolved);
+  const raw = ruleTable.timer?.[0];
+  const hasLongTurns = resolved.exists && resolved.gameType !== 'singles';
+  const addPerTurnSeconds =
+    raw?.addPerTurn ?? (hasLongTurns ? DOUBLES_INCREMENT_SECONDS : SINGLES_INCREMENT_SECONDS);
+  const maxPerTurnRaw = raw?.maxPerTurn ?? MAX_TURN_SECONDS;
+  const maxPerTurnSeconds = maxPerTurnRaw > 0 ? maxPerTurnRaw : Infinity;
+  const maxFirstTurnRaw = raw?.maxFirstTurn ?? MAX_TURN_SECONDS;
+  const maxFirstTurnSeconds = maxFirstTurnRaw > 0 ? maxFirstTurnRaw : maxPerTurnSeconds;
+  return {
+    startingSeconds: raw?.starting ?? STARTING_BANK_SECONDS,
+    graceSeconds: raw?.grace ?? STARTING_GRACE_SECONDS,
+    addPerTurnSeconds,
+    midTurnIncrementSeconds: Math.min(Math.max(0, addPerTurnSeconds), MID_TURN_INCREMENT_SECONDS),
+    maxPerTurnSeconds,
+    maxFirstTurnSeconds,
+    timeoutAutoChoose: raw?.timeoutAutoChoose ?? false,
+    accelerate: raw?.accelerate ?? !raw,
   };
 }

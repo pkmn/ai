@@ -19,6 +19,7 @@ import * as unpack from '../arena/unpack';
 import {Database} from '../db';
 import * as serverArena from '../server/arena';
 import * as auth from '../server/auth';
+import * as sim from '../server/sim';
 import {sampleRandomPair, validateCompetitorTeamsIncremental} from '../server/teams';
 import {root} from '../static/util';
 import * as mock from '../tools/mock';
@@ -1762,6 +1763,164 @@ describe('arena infrastructure', () => {
       });
       expect(singleSwitch.incrementMillis).toBe(5_000);
       expect(player.bankMillis).toBe(55_000);
+    });
+
+    test('resolves VGC Timer ruleset from @pkmn/sim format tables', async () => {
+      const settings = await sim.getTimerSettings('gen9championsvgc2026regmc@@@!Open Team Sheets');
+      expect(settings).toEqual({
+        startingSeconds: 420,
+        graceSeconds: 90,
+        addPerTurnSeconds: 0,
+        midTurnIncrementSeconds: 0,
+        maxPerTurnSeconds: 55,
+        maxFirstTurnSeconds: 90,
+        timeoutAutoChoose: true,
+        accelerate: false,
+      });
+    });
+
+    test('resolves standard Singles timer settings from @pkmn/sim format tables', async () => {
+      const settings = await sim.getTimerSettings('gen9ou');
+      expect(settings).toEqual({
+        startingSeconds: 150,
+        graceSeconds: 60,
+        addPerTurnSeconds: 10,
+        midTurnIncrementSeconds: 5,
+        maxPerTurnSeconds: 150,
+        maxFirstTurnSeconds: 150,
+        timeoutAutoChoose: false,
+        accelerate: true,
+      });
+    });
+
+    test('resolves standard Doubles timer settings from @pkmn/sim format tables', async () => {
+      const settings = await sim.getTimerSettings('gen9doublesou');
+      expect(settings).toEqual({
+        startingSeconds: 150,
+        graceSeconds: 60,
+        addPerTurnSeconds: 25,
+        midTurnIncrementSeconds: 5,
+        maxPerTurnSeconds: 150,
+        maxFirstTurnSeconds: 150,
+        timeoutAutoChoose: false,
+        accelerate: true,
+      });
+    });
+
+    test('applies initial grace before draining total bank on first turn', () => {
+      const timers = arbiter.resolveClockTimers(
+        serverArena.timerSettingsForFormat('gen9championsvgc2026regmc')
+      );
+      const lastRewarded = {p1: -1, p2: -1};
+      const player: arbiter.PlayerClockState = {
+        slot: 'p1',
+        bankMillis: timers.startingBankMillis + timers.graceMillis,
+        hasTakenFirstDecision: false,
+        retryingInvalidChoice: false,
+      };
+
+      const preview = arbiter.beginTurnClockStep(player, 0, lastRewarded, timers);
+      expect(preview.turnAllowanceMillis).toBe(90_000);
+      expect(preview.inactiveLine).toBe(
+        '|inactive|Time left: 90.0 sec this turn | 420.0 sec total | 90.0 sec grace\n'
+      );
+
+      player.bankMillis -= 40_000;
+      const turn1 = arbiter.beginTurnClockStep(player, 1, lastRewarded, timers);
+      expect(player.bankMillis).toBe(420_000);
+      expect(turn1.turnAllowanceMillis).toBe(55_000);
+      expect(turn1.inactiveLine).toBe(
+        '|inactive|Time left: 55.0 sec this turn | 420.0 sec total | 0.0 sec grace\n'
+      );
+    });
+
+    test('preserves remaining turn budget across invalid choice retries', () => {
+      const timers = arbiter.resolveClockTimers(
+        serverArena.timerSettingsForFormat('gen9championsvgc2026regmc')
+      );
+      const lastRewarded = {p1: -1, p2: -1};
+      const player: arbiter.PlayerClockState = {
+        slot: 'p1',
+        bankMillis: timers.startingBankMillis + timers.graceMillis,
+        hasTakenFirstDecision: false,
+        retryingInvalidChoice: false,
+      };
+
+      const first = arbiter.beginTurnClockStep(player, 0, lastRewarded, timers);
+      expect(first.turnAllowanceMillis).toBe(90_000);
+
+      player.bankMillis -= 20_000;
+      player.turnRemainingMillis = (player.turnRemainingMillis ?? 0) - 20_000;
+      player.retryingInvalidChoice = true;
+
+      const retry = arbiter.beginTurnClockStep(player, 0, lastRewarded, timers);
+      expect(retry.turnAllowanceMillis).toBe(70_000);
+      expect(retry.inactiveLine).toBe(
+        '|inactive|Time left: 70.0 sec this turn | 420.0 sec total | 70.0 sec grace\n'
+      );
+    });
+
+    test('auto-chooses default on VGC turn timeout while total bank remains', async () => {
+      const stallPreviewScript = path.join(tmpDir, 'vgc-stall-preview-agent.js');
+      fs.writeFileSync(
+        stallPreviewScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
+          'const rl = readline.createInterface({input: process.stdin});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice("|request|".length));',
+          '  if (req.wait || req.teamPreview) return;',
+          '  process.stdout.write("default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      const res = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9championsvgc2026regmc',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [stallPreviewScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        startingBankSeconds: 2,
+        maxTurnSeconds: 0.15,
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      }).run();
+      expect(res.endReason).toBe('smoke-complete');
+      expect(res.turns).toBeGreaterThanOrEqual(2);
+    });
+
+    test('forfeits VGC game on timeout when total bank reaches zero', async () => {
+      const stallAllScript = path.join(tmpDir, 'vgc-stall-all-agent.js');
+      fs.writeFileSync(
+        stallAllScript,
+        [
+          '#!/usr/bin/env node',
+          'process.stdout.write("/ready\\n");',
+          'setInterval(() => {}, 1000);',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      const res = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9championsvgc2026regmc',
+        seed: '1,2,3,4',
+        p1Spec: {mode: 'native', target: process.execPath, args: [stallAllScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        startingBankSeconds: 0.15,
+        maxTurnSeconds: 0.15,
+        devMode: true,
+      }).run();
+      expect(res.winner).toBe('p2');
+      expect(res.endReason).toBe('timeout');
+      expect(res.p1.bankSeconds).toBe(0);
     });
 
     test('alternates first CPU slice across waves', async () => {

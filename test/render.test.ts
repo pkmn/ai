@@ -1160,6 +1160,11 @@ describe('tournament SSR views', () => {
     }
   });
 
+  test('renders VGC Your Time clock metadata on tournament pages', async () => {
+    const html = await h.getText('/arena/tournaments/3/');
+    expect(html).toContain('<tt>420s</tt> Your Time (<tt>90s</tt> preview, <tt>55s/turn</tt>)');
+  });
+
   test('renders Superfinal badges with team minisprites in tournament games', async () => {
     const tourney2Html = await h.getText('/arena/tournaments/2/');
     expect(tourney2Html).toContain('<span class="muted">SF</span>');

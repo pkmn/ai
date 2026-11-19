@@ -695,6 +695,7 @@ function renderPartyMinisprites(packed?: string): Child {
 function renderClockSide(
   slot: 'p1' | 'p2',
   clock: BroadcastClock,
+  timer: arena.TimerSettings,
   committed = false
 ): Html {
   const pillCls = clock.thinking
@@ -703,17 +704,21 @@ function renderClockSide(
       ? 'clock-pill committed'
       : 'clock-pill';
   const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
+  const incLabel = clock.incrementSeconds > 0
+    ? `+${clock.incrementSeconds}s/turn`
+    : `${timer.maxPerTurnSeconds}s/turn`;
   const subText = clock.thinking
     ? 'thinking…'
     : committed
       ? 'committed'
-      : `+${clock.incrementSeconds}s/turn`;
+      : incLabel;
   const rem = Math.round(clock.bankSeconds);
+  const bankTip = `${rem}s remaining in ${timer.startingSeconds}s bank`;
   const tip = clock.thinking
-    ? `${rem}s remaining in 150s bank (currently thinking)`
+    ? `${bankTip} (currently thinking)`
     : committed
-      ? `${rem}s remaining in 150s bank (choice committed, waiting for opponent)`
-      : `${rem}s remaining in 150s bank (+${clock.incrementSeconds}s/turn)`;
+      ? `${bankTip} (choice committed, waiting for opponent)`
+      : `${bankTip} (${incLabel})`;
   return (
     <div className='clock-side' id={`clock-side-${slot}`}>
       <span><tt>{slot}</tt> <strong id={`clock-name-${slot}`}>{clock.name}</strong></span>
@@ -760,6 +765,7 @@ function renderBroadcastSectionHtml(
 
   const p1Clock = selected?.p1 ?? norm?.p1;
   const p2Clock = selected?.p2 ?? norm?.p2;
+  const timer = arena.timerSettingsForFormat(tournament.format);
   const isLive = selected
     ? (!selected.idle && selected.live !== false)
     : Boolean(norm && norm.live !== false);
@@ -807,8 +813,8 @@ function renderBroadcastSectionHtml(
         </div>
         {norm && p1Clock && p2Clock ? (
           <div className='clock-bar' id='clock-bar'>
-            {renderClockSide('p1', p1Clock, isLive && !p1Clock.thinking && p2Clock.thinking)}
-            {renderClockSide('p2', p2Clock, isLive && !p2Clock.thinking && p1Clock.thinking)}
+            {renderClockSide('p1', p1Clock, timer, isLive && !p1Clock.thinking && p2Clock.thinking)}
+            {renderClockSide('p2', p2Clock, timer, isLive && !p2Clock.thinking && p1Clock.thinking)}
           </div>
         ) : (
           <div className='clock-bar hide' id='clock-bar' />
@@ -1731,6 +1737,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     const unitSingular = isMultiGame ? 'match' : 'game';
     const unitPlural = isMultiGame ? 'matches' : 'games';
     const gamesPerMatchup = Number(pageInit.gamesPerMatchup) || 1;
+    const startingBankSeconds = Number(pageInit.startingBankSeconds) || 150;
+    const maxTurnSeconds = Number(pageInit.maxTurnSeconds) || 150;
     const agentLinks = pageInit.agentLinks || {};
     let status = pageInit.status || 'scheduled';
     let hasSuperfinal = Boolean(pageInit.hasSuperfinal);
@@ -1970,17 +1978,21 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           ? 'clock-pill committed'
           : 'clock-pill';
       const timeCls = clock.thinking ? 'clock-time yes' : 'clock-time';
+      const incLabel = clock.incrementSeconds > 0
+        ? ('+' + clock.incrementSeconds + 's/turn')
+        : (maxTurnSeconds + 's/turn');
       const subText = clock.thinking
         ? 'thinking…'
         : committed
           ? 'committed'
-          : ('+' + clock.incrementSeconds + 's/turn');
+          : incLabel;
       const rem = Math.round(bankSeconds);
       const tip = clock.thinking
-        ? (rem + 's remaining in 150s bank (currently thinking)')
+        ? (rem + 's remaining in ' + startingBankSeconds + 's bank (currently thinking)')
         : committed
-          ? (rem + 's remaining in 150s bank (choice committed, waiting for opponent)')
-          : (rem + 's remaining in 150s bank (+' + clock.incrementSeconds + 's/turn)');
+          ? (rem + 's remaining in ' + startingBankSeconds +
+            's bank (choice committed, waiting for opponent)')
+          : (rem + 's remaining in ' + startingBankSeconds + 's bank (' + incLabel + ')');
       return '<div class="clock-side" id="clock-side-' + slot + '">' +
         '<span><tt>' + slot + '</tt> <strong id="clock-name-' + slot + '">' +
         esc(clock.name) + '</strong></span>' +
@@ -2614,7 +2626,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         clockEl.textContent = formatClockMmSs(rem);
         const pillEl = document.getElementById('clock-pill-' + slot);
         if (pillEl) {
-          pillEl.title = rem + 's remaining in 150s bank (currently thinking)';
+          pillEl.title = rem + 's remaining in ' + startingBankSeconds +
+            's bank (currently thinking)';
         }
       }
     }, 1000);
@@ -2915,8 +2928,7 @@ export function renderTournamentPage(opts: {
   const n = entrants.length;
   const rrTotal = n >= 2 ? ((n * (n - 1)) / 2) * t.gamesPerMatchup : 0;
   const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
-  const isDoubles = t.format.includes('vgc') || t.format.includes('doubles');
-  const inc = isDoubles ? 25 : 10;
+  const timer = arena.timerSettingsForFormat(t.format);
   const rrUnit = isMultiGame ? `Bo${t.bestOf} matches` : 'games';
   const sfSuffix = hasSf
     ? (isMultiGame ? ' + 100-match Superfinal' : ' + 100-game Superfinal')
@@ -2979,6 +2991,8 @@ export function renderTournamentPage(opts: {
     format: t.format,
     bestOf: t.bestOf,
     gamesPerMatchup: t.gamesPerMatchup,
+    startingBankSeconds: timer.startingSeconds,
+    maxTurnSeconds: timer.maxPerTurnSeconds,
     status: t.status,
     hasSuperfinal: hasSf,
     selectedTable: broadcastRes.selectedTable ?? 1,
@@ -3015,7 +3029,16 @@ export function renderTournamentPage(opts: {
         <tt>{fmtTitle}</tt> · {n} Entrants · <tt>G={t.gamesPerMatchup}</tt> Double Round-Robin (
         {rrTotal.toLocaleString('en-US')} {rrUnit}){sfSuffix}<br />
         {scheduleLine}<br />
-        {t.hardware} · <tt>150s</tt> bank (<tt>+{inc}s/turn</tt>)
+        {t.hardware} · {timer.addPerTurnSeconds > 0 ? (
+          <>
+            <tt>{timer.startingSeconds}s</tt> bank (<tt>+{timer.addPerTurnSeconds}s/turn</tt>)
+          </>
+        ) : (
+          <>
+            <tt>{timer.startingSeconds}s</tt> Your Time (<tt>{timer.maxFirstTurnSeconds}s</tt>{' '}
+            preview, <tt>{timer.maxPerTurnSeconds}s/turn</tt>)
+          </>
+        )}
       </p>
 
       {renderTournamentRulesNode(staticDir, t.id)}

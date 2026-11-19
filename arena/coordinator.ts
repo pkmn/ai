@@ -1062,13 +1062,14 @@ export class Coordinator {
     );
     this.writeArchivedGameLog(match.ladderId, match.id, 'b', g2Log, match.startedAt);
 
+    const matchTimers = arena.timerSettingsForFormat(match.format);
     await this.sendMatchHeartbeat(match, {
       game: 2,
       turn: g2Res.turns,
       activeSlot: 'p1',
       turnStartedAt: completedAt,
-      turnBudgetSeconds: arena.MAX_TURN_SECONDS,
-      incrementSeconds: arena.turnIncrementSeconds(match.format),
+      turnBudgetSeconds: matchTimers.maxPerTurnSeconds,
+      incrementSeconds: matchTimers.addPerTurnSeconds,
       game1Summary,
       p1: {
         bankSeconds: g2Res.p2.bankSeconds,
@@ -1508,13 +1509,14 @@ export class Coordinator {
         e2.agentName
       );
       this.writeArchivedGameLog(ladder.id, matchId, 'a', g1Log, now);
+      const ladderTimers = arena.timerSettingsForFormat(ladder.format);
       await this.sendMatchHeartbeat(match, {
         game: 1,
         turn: g1Res.turns,
         activeSlot: 'p1',
         turnStartedAt: Math.floor(Date.now() / 1000),
-        turnBudgetSeconds: arena.MAX_TURN_SECONDS,
-        incrementSeconds: arena.turnIncrementSeconds(ladder.format),
+        turnBudgetSeconds: ladderTimers.maxPerTurnSeconds,
+        incrementSeconds: ladderTimers.addPerTurnSeconds,
         p1: {
           bankSeconds: g1Res.p1.bankSeconds,
           lastTurnMillis: g1Res.p1.lastTurnMillis,

@@ -7,11 +7,7 @@ import type * as simTypes from '@pkmn/sim';
 
 import {root, toID} from '../static/util';
 
-import {
-  configureSimMod,
-  resolveArenaFormatIdWithSim,
-  sampleRandomPairWithSim,
-} from './sim-ops';
+import * as simOps from './sim-ops';
 
 export interface WorkerInitData {
   version: string;
@@ -21,6 +17,9 @@ export type RpcRequest = {
   method: 'getVersion';
 } | {
   method: 'resolveArenaFormatId';
+  format: string;
+} | {
+  method: 'getTimerSettings';
   format: string;
 } | {
   method: 'isGeneratedTeamFormat';
@@ -116,7 +115,7 @@ const init = workerData as WorkerInitData;
 const {req: simRequire, pkgVersion} = resolveRequireAnchor(init.version);
 const simMod = simRequire('@pkmn/sim') as typeof simTypes;
 
-configureSimMod(simMod, {
+simOps.configureSimMod(simMod, {
   champions: tryRequire(simRequire, '@pkmn/mods/champions'),
   championsregmb: tryRequire(simRequire, '@pkmn/mods/championsregmb'),
   teamGenerators: (tryRequire(simRequire, '@pkmn/randoms') as {
@@ -217,13 +216,15 @@ function handleRpc(req: RpcRequest): unknown {
     case 'getVersion':
       return pkgVersion;
     case 'resolveArenaFormatId':
-      return resolveArenaFormatIdWithSim(simMod, req.format);
+      return simOps.resolveArenaFormatIdWithSim(simMod, req.format);
+    case 'getTimerSettings':
+      return simOps.resolveTimerSettingsWithSim(simMod, req.format);
     case 'isGeneratedTeamFormat':
       return Boolean(simMod.Dex.formats.get(req.format).team);
     case 'hasFormat':
       return Boolean(simMod.Dex.formats.get(req.format).exists);
     case 'sampleRandomPair':
-      return sampleRandomPairWithSim(simMod, req.format, req.seed1, req.seed2);
+      return simOps.sampleRandomPairWithSim(simMod, req.format, req.seed1, req.seed2);
     case 'validateTeam': {
       const resolved = simMod.Dex.formats.get(toID(req.format));
       if (!resolved.exists) {

@@ -12,25 +12,34 @@ import {
   installHeadSupport,
   readBody,
   root,
+  toID,
   writeFileAtomic,
 } from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
 import * as ratings from './ratings';
+import * as simOps from './sim-ops';
 
 export const PUBLIC_DIR = root('public');
 // If the Mac Mini Arena worker stops heartbeating for 15 minutes (network drop, power loss,
 // or wedged supervisor), mark public/api/live.json stale so spectators aren't shown a frozen
 // turn clock and alert staff on Discord.
 export const WATCHDOG_TIMEOUT_MILLIS = 15 * 60 * 1000;
-export const STARTING_BANK_SECONDS = 150;
+export const STARTING_BANK_SECONDS = simOps.STARTING_BANK_SECONDS;
+export const STARTING_GRACE_SECONDS = simOps.STARTING_GRACE_SECONDS;
 export const READY_GRACE_SECONDS = 60;
-export const MAX_TURN_SECONDS = 150;
-export const MID_TURN_INCREMENT_SECONDS = 5;
-export const SINGLES_INCREMENT_SECONDS = 10;
-export const DOUBLES_INCREMENT_SECONDS = 25;
+export const MAX_TURN_SECONDS = simOps.MAX_TURN_SECONDS;
+export const MID_TURN_INCREMENT_SECONDS = simOps.MID_TURN_INCREMENT_SECONDS;
+export const SINGLES_INCREMENT_SECONDS = simOps.SINGLES_INCREMENT_SECONDS;
+export const DOUBLES_INCREMENT_SECONDS = simOps.DOUBLES_INCREMENT_SECONDS;
+export const VGC_STARTING_BANK_SECONDS = simOps.VGC_STARTING_BANK_SECONDS;
+export const VGC_GRACE_SECONDS = simOps.VGC_GRACE_SECONDS;
+export const VGC_MAX_TURN_SECONDS = simOps.VGC_MAX_TURN_SECONDS;
+export const VGC_MAX_FIRST_TURN_SECONDS = simOps.VGC_MAX_FIRST_TURN_SECONDS;
 export const MAX_BATTLE_TURNS = 1000;
+
+export type TimerSettings = simOps.TimerSettings;
 
 function decodeRouteParam(param: string | string[] | undefined): string {
   if (typeof param !== 'string' || !param) return '';
@@ -41,10 +50,37 @@ function decodeRouteParam(param: string | string[] | undefined): string {
   }
 }
 
-export function turnIncrementSeconds(format: string): number {
-  return format.includes('doubles') || format.includes('vgc')
+export function timerSettingsForFormat(format: string): TimerSettings {
+  const id = toID(format);
+  if (id.includes('vgc') || id.includes('bss') || id.includes('vgctimer')) {
+    return {
+      startingSeconds: VGC_STARTING_BANK_SECONDS,
+      graceSeconds: VGC_GRACE_SECONDS,
+      addPerTurnSeconds: 0,
+      midTurnIncrementSeconds: 0,
+      maxPerTurnSeconds: VGC_MAX_TURN_SECONDS,
+      maxFirstTurnSeconds: VGC_MAX_FIRST_TURN_SECONDS,
+      timeoutAutoChoose: true,
+      accelerate: false,
+    };
+  }
+  const addPerTurnSeconds = id.includes('doubles')
     ? DOUBLES_INCREMENT_SECONDS
     : SINGLES_INCREMENT_SECONDS;
+  return {
+    startingSeconds: STARTING_BANK_SECONDS,
+    graceSeconds: STARTING_GRACE_SECONDS,
+    addPerTurnSeconds,
+    midTurnIncrementSeconds: MID_TURN_INCREMENT_SECONDS,
+    maxPerTurnSeconds: MAX_TURN_SECONDS,
+    maxFirstTurnSeconds: MAX_TURN_SECONDS,
+    timeoutAutoChoose: false,
+    accelerate: true,
+  };
+}
+
+export function turnIncrementSeconds(format: string): number {
+  return timerSettingsForFormat(format).addPerTurnSeconds;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;

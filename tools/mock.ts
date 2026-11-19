@@ -2363,7 +2363,12 @@ export class Runner {
 
     if (opts.emitHeartbeats && this.serverUrl) {
       const client = this.getArenaClient();
-      const inc = arena.turnIncrementSeconds(ladder.format);
+      const timer = arena.timerSettingsForFormat(ladder.format);
+      const inc = timer.addPerTurnSeconds;
+      const g1P1Bank = Math.max(0, timer.startingSeconds - 5);
+      const g1P2Bank = Math.max(0, timer.startingSeconds - 8);
+      const g2P1Bank = Math.max(0, timer.startingSeconds - 12);
+      const g2P2Bank = Math.max(0, timer.startingSeconds - 14);
       const emitLiveLines = ladder.team === 'random';
       const hbT1 = sampledT1Packed ??
         samplePackedTournamentTeam(ladder.format, this.state.matchSeq);
@@ -2388,7 +2393,7 @@ export class Runner {
         turn: Math.min(12, g1Turns),
         activeSlot: 'p1',
         turnStartedAt: opts.completedAt,
-        turnBudgetSeconds: 145,
+        turnBudgetSeconds: Math.min(timer.maxPerTurnSeconds, g1P1Bank),
         incrementSeconds: inc,
         viewer: {
           ...(emitLiveLines && game1Log ? {lines: game1Log.trim().split('\n')} : {}),
@@ -2399,7 +2404,7 @@ export class Runner {
           slug: p1.slug,
           name: p1.name,
           version: p1.version,
-          bankSeconds: 145,
+          bankSeconds: g1P1Bank,
           lastTurnMillis: p1TurnMillis,
           meanTurnMillis: p1TurnMillis,
           ram: p1Ram,
@@ -2409,7 +2414,7 @@ export class Runner {
           slug: p2.slug,
           name: p2.name,
           version: p2.version,
-          bankSeconds: 142,
+          bankSeconds: g1P2Bank,
           lastTurnMillis: p2TurnMillis,
           meanTurnMillis: p2TurnMillis,
           ram: p2Ram,
@@ -2427,7 +2432,7 @@ export class Runner {
         turn: Math.min(15, g2Turns),
         activeSlot: 'p2',
         turnStartedAt: opts.completedAt,
-        turnBudgetSeconds: 136,
+        turnBudgetSeconds: Math.min(timer.maxPerTurnSeconds, g2P2Bank),
         incrementSeconds: inc,
         viewer: {
           ...(emitLiveLines && game2Log ? {lines: game2Log.trim().split('\n')} : {}),
@@ -2443,7 +2448,7 @@ export class Runner {
           turns: g1Turns,
           endReason: g1Reason,
           p1: {
-            bankSeconds: 145,
+            bankSeconds: g1P1Bank,
             initMillis: 380 + Math.round(p1TurnMillis * 1.3),
             ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
               ? {teamPreviewMillis: Math.max(25, Math.round(p1TurnMillis * 1.5))}
@@ -2453,7 +2458,7 @@ export class Runner {
             ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
           },
           p2: {
-            bankSeconds: 142,
+            bankSeconds: g1P2Bank,
             initMillis: 360 + Math.round(p2TurnMillis * 1.3),
             ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
               ? {teamPreviewMillis: Math.max(25, Math.round(p2TurnMillis * 1.5))}
@@ -2471,7 +2476,7 @@ export class Runner {
           slug: p1.slug,
           name: p1.name,
           version: p1.version,
-          bankSeconds: 138,
+          bankSeconds: g2P1Bank,
           lastTurnMillis: p1TurnMillis,
           meanTurnMillis: p1TurnMillis,
           ram: p1Ram,
@@ -2481,7 +2486,7 @@ export class Runner {
           slug: p2.slug,
           name: p2.name,
           version: p2.version,
-          bankSeconds: 136,
+          bankSeconds: g2P2Bank,
           lastTurnMillis: p2TurnMillis,
           meanTurnMillis: p2TurnMillis,
           ram: p2Ram,
@@ -3033,7 +3038,8 @@ export class Runner {
 
       this.state.heartbeatSeq++;
       const matchId = getFlag(cmd, 'id') ?? `${ladder.slot}-live-${this.state.heartbeatSeq}`;
-      const inc = arena.turnIncrementSeconds(ladder.format);
+      const timer = arena.timerSettingsForFormat(ladder.format);
+      const inc = timer.addPerTurnSeconds;
       let liveLines: string[] | undefined;
       let p1Pokemon: unknown[] | undefined;
       let p2Pokemon: unknown[] | undefined;
@@ -3066,6 +3072,9 @@ export class Runner {
       const perspective = liveLines ? arena.extractPerspectiveLogs(liveLines) : undefined;
       const p1Ram = p1.smokePeakRam ?? 890;
       const p2Ram = p2.smokePeakRam ?? 1420;
+      const p1Bank = Number(getFlag(cmd, 'p1-bank') ?? Math.max(0, timer.startingSeconds - 8));
+      const p2Bank = Number(getFlag(cmd, 'p2-bank') ?? Math.max(0, timer.startingSeconds - 22));
+      const activeBank = activeSlot === 'p1' ? p1Bank : p2Bank;
       const liveMatch: arena.LiveMatch = {
         heartbeatSeq: this.state.heartbeatSeq,
         matchId,
@@ -3076,7 +3085,7 @@ export class Runner {
         turn,
         activeSlot,
         turnStartedAt: this.state.now - 4,
-        turnBudgetSeconds: 138,
+        turnBudgetSeconds: Math.min(timer.maxPerTurnSeconds, activeBank),
         incrementSeconds: inc,
         ...(game === 2
           ? {
@@ -3085,7 +3094,7 @@ export class Runner {
               turns: g1Turns,
               endReason: g1Reason,
               p1: {
-                bankSeconds: 144,
+                bankSeconds: Math.max(0, timer.startingSeconds - 6),
                 initMillis: 740,
                 ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
                   ? {teamPreviewMillis: 410}
@@ -3098,7 +3107,7 @@ export class Runner {
                 ),
               },
               p2: {
-                bankSeconds: 131,
+                bankSeconds: Math.max(0, timer.startingSeconds - 19),
                 initMillis: 790,
                 ...(ladder.slot === 'sv' || ladder.slot === 'vgc'
                   ? {teamPreviewMillis: 460}
@@ -3132,7 +3141,7 @@ export class Runner {
           slug: p1.agentSlug,
           name: p1.agentName,
           version: p1.version,
-          bankSeconds: Number(getFlag(cmd, 'p1-bank') ?? 142),
+          bankSeconds: p1Bank,
           lastTurnMillis: 290,
           meanTurnMillis: 280,
           ram: p1Ram,
@@ -3143,7 +3152,7 @@ export class Runner {
           slug: p2.agentSlug,
           name: p2.agentName,
           version: p2.version,
-          bankSeconds: Number(getFlag(cmd, 'p2-bank') ?? 128),
+          bankSeconds: p2Bank,
           lastTurnMillis: 340,
           meanTurnMillis: 315,
           ram: p2Ram,
@@ -3690,7 +3699,8 @@ export class Runner {
         : isRandom
           ? `[Gen ${gen}] Random Battle`
           : `[Gen ${gen}] OU`;
-      const inc = arena.turnIncrementSeconds(tour.format);
+      const timer = arena.timerSettingsForFormat(tour.format);
+      const inc = timer.addPerTurnSeconds;
 
       const tables: arena.BroadcastTable[] = pairs.map((pr, idx) => {
         const tableNum = idx + 1;
@@ -3731,7 +3741,7 @@ export class Runner {
             name: pr[0].name,
             version: pr[0].version,
             team: p1Team,
-            bankSeconds: 118 - idx * 8,
+            bankSeconds: Math.max(0, timer.startingSeconds - 32 - idx * 8),
             thinking: idx % 2 === 0,
             incrementSeconds: inc,
             pokemon: buildSampleSidePokemon('p1', p1Mons, isRandom, gen),
@@ -3741,7 +3751,7 @@ export class Runner {
             name: pr[1].name,
             version: pr[1].version,
             team: p2Team,
-            bankSeconds: 104 - idx * 6,
+            bankSeconds: Math.max(0, timer.startingSeconds - 46 - idx * 6),
             thinking: true,
             incrementSeconds: inc,
             pokemon: buildSampleSidePokemon('p2', p2Mons, isRandom, gen),

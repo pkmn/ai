@@ -42,6 +42,49 @@ export interface TurnHeartbeatInfo {
   p2: TurnSlotInfo;
 }
 
+export interface TimerOverrides {
+  startingBankSeconds?: number;
+  graceSeconds?: number;
+  maxTurnSeconds?: number;
+  maxFirstTurnSeconds?: number;
+}
+
+export interface ResolvedClockTimers {
+  startingBankMillis: number;
+  graceMillis: number;
+  maxTurnMillis: number;
+  maxFirstTurnMillis: number;
+  fullTurnIncrementMillis: number;
+  midTurnIncrementMillis: number;
+  timeoutAutoChoose: boolean;
+  accelerate: boolean;
+}
+
+export function resolveClockTimers(
+  settings: arena.TimerSettings,
+  overrides?: TimerOverrides
+): ResolvedClockTimers {
+  const startingSeconds = overrides?.startingBankSeconds ?? settings.startingSeconds;
+  const graceSeconds = overrides?.graceSeconds ??
+    (overrides?.startingBankSeconds !== undefined ? 0 : settings.graceSeconds);
+  const maxTurnSeconds = overrides?.maxTurnSeconds ?? settings.maxPerTurnSeconds;
+  const maxFirstTurnSeconds = overrides?.maxFirstTurnSeconds ?? (
+    overrides?.maxTurnSeconds !== undefined
+      ? Math.min(overrides.maxTurnSeconds, settings.maxFirstTurnSeconds)
+      : settings.maxFirstTurnSeconds
+  );
+  return {
+    startingBankMillis: startingSeconds * 1000,
+    graceMillis: graceSeconds * 1000,
+    maxTurnMillis: maxTurnSeconds * 1000,
+    maxFirstTurnMillis: maxFirstTurnSeconds * 1000,
+    fullTurnIncrementMillis: settings.addPerTurnSeconds * 1000,
+    midTurnIncrementMillis: settings.midTurnIncrementSeconds * 1000,
+    timeoutAutoChoose: settings.timeoutAutoChoose,
+    accelerate: settings.accelerate,
+  };
+}
+
 export interface ArenaGameOptions {
   format: string;
   version?: string;
@@ -54,8 +97,10 @@ export interface ArenaGameOptions {
   maxTurns?: number;
   smokeStopAfterTurn?: number;
   startingBankSeconds?: number;
+  graceSeconds?: number;
   readyGraceSeconds?: number;
   maxTurnSeconds?: number;
+  maxFirstTurnSeconds?: number;
   devMode?: boolean;
   onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 }
@@ -89,6 +134,7 @@ interface SandboxedPlayer {
   lineQueue: string[];
   lineResolver: ((line: string | undefined) => void) | undefined;
   bankMillis: number;
+  turnRemainingMillis: number | undefined;
   hasTakenFirstDecision: boolean;
   retryingInvalidChoice: boolean;
   invalidStrikes: number;
@@ -212,6 +258,7 @@ export interface PlayerClockState {
   bankMillis: number;
   hasTakenFirstDecision: boolean;
   retryingInvalidChoice: boolean;
+  turnRemainingMillis?: number;
 }
 
 export function beginTurnClockStep(
@@ -221,6 +268,7 @@ export function beginTurnClockStep(
   timers: {
     startingBankMillis?: number;
     maxTurnMillis: number;
+    maxFirstTurnMillis?: number;
     fullTurnIncrementMillis: number;
     midTurnIncrementMillis: number;
     accelerate?: boolean;
@@ -236,14 +284,18 @@ export function beginTurnClockStep(
   const isRetry = player.retryingInvalidChoice;
   player.retryingInvalidChoice = false;
   let incrementMillis = 0;
+  const startingCapMillis = timers.startingBankMillis ?? timers.maxTurnMillis;
+  let isFirstDecision = false;
 
   // Credit full-turn or mid-turn increment before starting the turn clock,
   // except when retrying after an invalid/unavailable choice on the same decision.
+  // Matches Showdown `RoomBattleTimer`: `bankMillis` begins at `starting + grace`, and
+  // clamping to `startingCapMillis` on subsequent requests drops unused first-request grace.
   if (player.hasTakenFirstDecision && !isRetry) {
     const isNewTurn = currentTurn > lastRewardedTurn[player.slot];
     if (isNewTurn) {
       incrementMillis = timers.fullTurnIncrementMillis;
-      if (timers.accelerate) {
+      if (timers.accelerate && incrementMillis > 0) {
         if (currentTurn > 100 && incrementMillis > 5_000) {
           incrementMillis -= 5_000;
         }
@@ -254,22 +306,30 @@ export function beginTurnClockStep(
     } else {
       incrementMillis = (timers.activeSidesCount ?? 1) <= 1 ? timers.midTurnIncrementMillis : 0;
     }
-    const maxBankCap = Math.max(timers.startingBankMillis ?? 0, timers.maxTurnMillis);
-    player.bankMillis = Math.min(maxBankCap, player.bankMillis + incrementMillis);
+    player.bankMillis = Math.min(startingCapMillis, player.bankMillis + incrementMillis);
     lastRewardedTurn[player.slot] = currentTurn;
-  }
-
-  if (!player.hasTakenFirstDecision) {
+  } else if (!player.hasTakenFirstDecision) {
+    isFirstDecision = true;
     player.hasTakenFirstDecision = true;
     lastRewardedTurn[player.slot] = currentTurn;
   }
-  const turnAllowanceMillis = Math.min(player.bankMillis, timers.maxTurnMillis);
+
+  const maxTurnMillis = isFirstDecision
+    ? (timers.maxFirstTurnMillis ?? timers.maxTurnMillis)
+    : timers.maxTurnMillis;
+  const turnAllowanceMillis = isRetry && player.turnRemainingMillis !== undefined
+    ? Math.max(0, Math.min(player.bankMillis, player.turnRemainingMillis))
+    : Math.min(player.bankMillis, maxTurnMillis);
+  player.turnRemainingMillis = turnAllowanceMillis;
   const totalBudgetMillis = turnAllowanceMillis;
+  const graceMillis = Math.max(0, player.bankMillis - startingCapMillis);
+  const totalBankMillis = player.bankMillis - graceMillis;
   const turnSeconds = (turnAllowanceMillis / 1000).toFixed(1);
-  const totalSeconds = (player.bankMillis / 1000).toFixed(1);
+  const totalSeconds = (totalBankMillis / 1000).toFixed(1);
+  const graceSeconds = (graceMillis / 1000).toFixed(1);
   const inactiveLine =
     `|inactive|Time left: ${turnSeconds} sec this turn | ` +
-    `${totalSeconds} sec total | 0.0 sec grace\n`;
+    `${totalSeconds} sec total | ${graceSeconds} sec grace\n`;
 
   return {turnAllowanceMillis, totalBudgetMillis, incrementMillis, inactiveLine};
 }
@@ -345,12 +405,9 @@ export class TimeSlicedArenaGame {
   private sendUtm?: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
-  private readonly startingBankMillis: number;
+  private readonly timerOverrides: TimerOverrides;
+  private timers: ResolvedClockTimers;
   private readonly readyGraceMillis: number;
-  private readonly maxTurnMillis: number;
-  private readonly fullTurnIncrementMillis: number;
-  private readonly midTurnIncrementMillis: number;
-  private readonly accelerate: boolean;
   private readonly devMode: boolean;
   private readonly onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 
@@ -378,14 +435,18 @@ export class TimeSlicedArenaGame {
     this.sendUtm = options.sendUtm;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
-    this.startingBankMillis =
-      (options.startingBankSeconds ?? arena.STARTING_BANK_SECONDS) * 1000;
+    this.timerOverrides = {
+      startingBankSeconds: options.startingBankSeconds,
+      graceSeconds: options.graceSeconds,
+      maxTurnSeconds: options.maxTurnSeconds,
+      maxFirstTurnSeconds: options.maxFirstTurnSeconds,
+    };
+    this.timers = resolveClockTimers(
+      arena.timerSettingsForFormat(options.format),
+      this.timerOverrides
+    );
     this.readyGraceMillis =
       (options.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
-    this.maxTurnMillis = (options.maxTurnSeconds ?? arena.MAX_TURN_SECONDS) * 1000;
-    this.fullTurnIncrementMillis = arena.turnIncrementSeconds(options.format) * 1000;
-    this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
-    this.accelerate = !this.format.includes('vgc') && !this.format.includes('champions');
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.onTurn = options.onTurn;
 
@@ -419,7 +480,8 @@ export class TimeSlicedArenaGame {
       proc,
       lineQueue: [],
       lineResolver: undefined,
-      bankMillis: this.startingBankMillis,
+      bankMillis: this.timers.startingBankMillis + this.timers.graceMillis,
+      turnRemainingMillis: undefined,
       hasTakenFirstDecision: false,
       retryingInvalidChoice: false,
       invalidStrikes: 0,
@@ -712,7 +774,7 @@ export class TimeSlicedArenaGame {
         activeSlot: player.slot,
         turnStartedAt: Math.floor(Date.now() / 1000),
         turnBudgetSeconds: Math.round(this.readyGraceMillis / 1000),
-        incrementSeconds: Math.round(this.fullTurnIncrementMillis / 1000),
+        incrementSeconds: Math.round(this.timers.fullTurnIncrementMillis / 1000),
         omniscientLog: '',
         p1: this.buildTurnSlotInfo(p1, 0),
         p2: this.buildTurnSlotInfo(p2, 1),
@@ -788,11 +850,7 @@ export class TimeSlicedArenaGame {
       this.currentTurn,
       this.lastRewardedTurn,
       {
-        startingBankMillis: this.startingBankMillis,
-        maxTurnMillis: this.maxTurnMillis,
-        fullTurnIncrementMillis: this.fullTurnIncrementMillis,
-        midTurnIncrementMillis: this.midTurnIncrementMillis,
-        accelerate: this.accelerate,
+        ...this.timers,
         requestCount: this.requestCount,
         activeSidesCount: this.waveActiveSidesCount,
       }
@@ -826,14 +884,32 @@ export class TimeSlicedArenaGame {
 
     try {
       while (!this.ended) {
-        const {line, timedOut} = await this.readLineWithTimeout(
-          player,
-          remainingBudgetMillis
-        );
+        const {line, timedOut} = remainingBudgetMillis <= 0
+          ? {line: undefined, timedOut: true}
+          : await this.readLineWithTimeout(player, remainingBudgetMillis);
         totalElapsedThisDecisionMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
         remainingBudgetMillis = totalBudgetMillis - totalElapsedThisDecisionMillis;
 
         if (timedOut || remainingBudgetMillis <= 0) {
+          const chargedMillis = Math.max(0, totalBudgetMillis);
+          player.bankMillis = Math.max(0, player.bankMillis - chargedMillis);
+          player.turnRemainingMillis = 0;
+          if (this.timers.timeoutAutoChoose && player.bankMillis > 0) {
+            const elapsedMillis = Math.max(1, Math.round(chargedMillis));
+            player.lastDecisionMillis = elapsedMillis;
+            if (req.teamPreview) {
+              player.teamPreviewCount++;
+              player.totalTeamPreviewMillis += elapsedMillis;
+            } else {
+              player.turnDecisionCount++;
+              player.totalTurnDecisionMillis += elapsedMillis;
+            }
+            this.pauseSlot(player);
+            slotPaused = true;
+            if (this.ended) return false;
+            await this.battle.write(`>${player.slot} default`);
+            return true;
+          }
           player.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
           return false;
@@ -855,6 +931,12 @@ export class TimeSlicedArenaGame {
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedThisDecisionMillis));
         player.bankMillis = Math.max(0, player.bankMillis - decisionElapsedMillis);
+        if (player.turnRemainingMillis !== undefined) {
+          player.turnRemainingMillis = Math.max(
+            0,
+            player.turnRemainingMillis - decisionElapsedMillis
+          );
+        }
         player.lastDecisionMillis = decisionElapsedMillis;
         if (req.teamPreview) {
           player.teamPreviewCount++;
@@ -883,6 +965,10 @@ export class TimeSlicedArenaGame {
 
   async run(): Promise<ArenaGameResult> {
     this.format = await sim.resolveArenaFormatId(this.format, this.version);
+    this.timers = resolveClockTimers(
+      await sim.getTimerSettings(this.format, this.version),
+      this.timerOverrides
+    );
     this.sendUtm = this.sendUtm ?? !(await sim.isGeneratedTeamFormat(
       this.format,
       this.version
@@ -1056,7 +1142,10 @@ export class TimeSlicedArenaGame {
       ? Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount)
       : undefined;
     return {
-      bankSeconds: Math.max(0, Math.round(player.bankMillis / 1000)),
+      bankSeconds: Math.max(
+        0,
+        Math.round(Math.min(player.bankMillis, this.timers.startingBankMillis) / 1000)
+      ),
       ram: this.readPeakRam(player),
       initMillis: Math.round(player.initMillis),
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
@@ -1075,7 +1164,10 @@ export class TimeSlicedArenaGame {
       ? Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount)
       : undefined;
     return {
-      bankSeconds: Math.max(0, Math.round(player.bankMillis / 1000)),
+      bankSeconds: Math.max(
+        0,
+        Math.round(Math.min(player.bankMillis, this.timers.startingBankMillis) / 1000)
+      ),
       peakRam: this.readPeakRam(player),
       initMillis: Math.round(player.initMillis),
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),

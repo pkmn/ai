@@ -179,9 +179,10 @@ niche mechanics is considered fair play.
 :::
 
 Ladders and tournaments hosted on *pkmn.ai* will all follow the exact same timer rules as Pokémon
-Showdown; however, *canceling or undoing* moves is disabled, as is *forfeiting or offering ties*.
-Furthermore, [*pondering*](/glossary#pondering) will be disabled in ladder matches, though it will
-be enabled by default in tournaments unless otherwise specified.
+Showdown (without Pokémon Showdown's 60-second disconnect grace; however, *canceling or undoing*
+moves is disabled, as is *forfeiting or offering ties*. Furthermore,
+[*pondering*](/glossary#pondering) will be disabled in ladder matches, though it will be enabled by
+default in tournaments unless otherwise specified.
 
 Logs or team information from the ladders using harvested human team data will never be made public.
 *RAND* ladder games and data will be available live, and the *VGC* ladder logs and teams will be

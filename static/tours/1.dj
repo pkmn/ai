@@ -9,5 +9,5 @@ These tournament-specific rules supplement the general [Arena Rules](/rules) for
 ### Environment & Clock
 
 - *Hardware*: Dedicated Google Cloud `g2-custom-24-49152` Spot GPU VM per agent (`1× NVIDIA L4 24 GB`, `24 vCPUs`, `48 GB RAM`) with network access disabled.
-- *Pondering & Clocks*: Pondering across opponent think time is permitted (`ARENA_PONDER=1`), under a `150s` base clock plus `+25s` per turn.
+- *Pondering & Clocks*: Pondering across opponent think time is permitted (`ARENA_PONDER=1`), under a `150s` base clock (`60s` initial grace) plus `+10s` per turn.
 - *Publication*: Live tables, teams, and `.log` battle replays are broadcast publicly during play, with the full `.7z` replay archive downloadable upon completion.

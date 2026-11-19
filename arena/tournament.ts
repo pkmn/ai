@@ -109,8 +109,10 @@ export interface GameOptions {
   maxTurns?: number;
   smokeStopAfterTurn?: number;
   startingBankSeconds?: number;
+  graceSeconds?: number;
   readyGraceSeconds?: number;
   maxTurnSeconds?: number;
+  maxFirstTurnSeconds?: number;
   onGameStart?: (info: {
     game: number;
     bestOf: number;
@@ -147,6 +149,7 @@ interface RemoteTournamentPlayer {
   sshDisconnected: boolean;
   launchError: string | undefined;
   bankMillis: number;
+  turnRemainingMillis: number | undefined;
   initMillis: number;
   totalTeamPreviewMillis: number;
   teamPreviewCount: number;
@@ -291,12 +294,9 @@ export class ConcurrentGame {
   private sendUtm?: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
-  private readonly startingBankMillis: number;
+  private readonly timerOverrides: arbiter.TimerOverrides;
+  private timers: arbiter.ResolvedClockTimers;
   private readonly readyGraceMillis: number;
-  private readonly maxTurnMillis: number;
-  private readonly fullTurnIncrementMillis: number;
-  private readonly midTurnIncrementMillis: number;
-  private readonly accelerate: boolean;
   private readonly onGameStart?: GameOptions['onGameStart'];
   private readonly onSpectatorChunk?: (
     chunk: string,
@@ -332,14 +332,18 @@ export class ConcurrentGame {
     this.sendUtm = options.sendUtm;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
-    this.startingBankMillis =
-      (options.startingBankSeconds ?? arena.STARTING_BANK_SECONDS) * 1000;
+    this.timerOverrides = {
+      startingBankSeconds: options.startingBankSeconds,
+      graceSeconds: options.graceSeconds,
+      maxTurnSeconds: options.maxTurnSeconds,
+      maxFirstTurnSeconds: options.maxFirstTurnSeconds,
+    };
+    this.timers = arbiter.resolveClockTimers(
+      arena.timerSettingsForFormat(options.format),
+      this.timerOverrides
+    );
     this.readyGraceMillis =
       (options.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
-    this.maxTurnMillis = (options.maxTurnSeconds ?? arena.MAX_TURN_SECONDS) * 1000;
-    this.fullTurnIncrementMillis = arena.turnIncrementSeconds(options.format) * 1000;
-    this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
-    this.accelerate = !this.format.includes('vgc') && !this.format.includes('champions');
     this.onGameStart = options.onGameStart;
     this.onSpectatorChunk = options.onSpectatorChunk;
     this.onClockChange = options.onClockChange;
@@ -376,11 +380,11 @@ export class ConcurrentGame {
     player: RemoteTournamentPlayer | undefined,
     pokemon: unknown[] | undefined
   ): TurnSlotBroadcast {
+    const bankMillis = player
+      ? Math.min(player.bankMillis, this.timers.startingBankMillis)
+      : this.timers.startingBankMillis;
     return {
-      bankSeconds: Math.max(
-        0,
-        Math.round((player?.bankMillis ?? this.startingBankMillis) / 1000)
-      ),
+      bankSeconds: Math.max(0, Math.round(bankMillis / 1000)),
       thinking: Boolean(player?.thinking),
       ...(pokemon !== undefined ? {pokemon} : {}),
     };
@@ -422,7 +426,8 @@ export class ConcurrentGame {
       spotPreempted: false,
       sshDisconnected: false,
       launchError: undefined,
-      bankMillis: this.startingBankMillis,
+      bankMillis: this.timers.startingBankMillis + this.timers.graceMillis,
+      turnRemainingMillis: undefined,
       initMillis: 0,
       totalTeamPreviewMillis: 0,
       teamPreviewCount: 0,
@@ -759,11 +764,7 @@ export class ConcurrentGame {
       this.currentTurn,
       this.lastRewardedTurn,
       {
-        startingBankMillis: this.startingBankMillis,
-        maxTurnMillis: this.maxTurnMillis,
-        fullTurnIncrementMillis: this.fullTurnIncrementMillis,
-        midTurnIncrementMillis: this.midTurnIncrementMillis,
-        accelerate: this.accelerate,
+        ...this.timers,
         requestCount: this.requestCount,
         activeSidesCount: this.waveActiveSidesCount,
       }
@@ -783,10 +784,9 @@ export class ConcurrentGame {
 
     try {
       while (!this.ended) {
-        const {line, elapsedMillis, timedOut} = await this.readLineWithTimeout(
-          player,
-          remainingBudgetMillis
-        );
+        const {line, elapsedMillis, timedOut} = remainingBudgetMillis <= 0
+          ? {line: undefined, elapsedMillis: 0, timedOut: true}
+          : await this.readLineWithTimeout(player, remainingBudgetMillis);
         totalElapsedMillis += elapsedMillis;
         remainingBudgetMillis = totalBudgetMillis - totalElapsedMillis;
 
@@ -795,7 +795,23 @@ export class ConcurrentGame {
           return;
         }
         if (this.ended) return;
-        if (timedOut || remainingBudgetMillis < 0) {
+        if (timedOut || remainingBudgetMillis <= 0) {
+          const chargedMillis = Math.max(0, totalBudgetMillis);
+          player.bankMillis = Math.max(0, player.bankMillis - chargedMillis);
+          player.turnRemainingMillis = 0;
+          if (this.timers.timeoutAutoChoose && player.bankMillis > 0) {
+            const decisionElapsedMillis = Math.max(1, Math.round(chargedMillis));
+            if (req.teamPreview) {
+              player.totalTeamPreviewMillis += decisionElapsedMillis;
+              player.teamPreviewCount++;
+            } else {
+              player.totalTurnMillis += decisionElapsedMillis;
+              player.decisionsCount++;
+            }
+            player.thinking = false;
+            await this.battle.write(`>${player.slot} default`);
+            return;
+          }
           player.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
           return;
@@ -816,6 +832,12 @@ export class ConcurrentGame {
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedMillis));
         player.bankMillis = Math.max(0, player.bankMillis - decisionElapsedMillis);
+        if (player.turnRemainingMillis !== undefined) {
+          player.turnRemainingMillis = Math.max(
+            0,
+            player.turnRemainingMillis - decisionElapsedMillis
+          );
+        }
         if (req.teamPreview) {
           player.totalTeamPreviewMillis += decisionElapsedMillis;
           player.teamPreviewCount++;
@@ -894,7 +916,8 @@ export class ConcurrentGame {
     for (const p of [this.p1, this.p2]) {
       p.lineQueue.length = 0;
       p.localTurnMillisQueue.length = 0;
-      p.bankMillis = this.startingBankMillis;
+      p.bankMillis = this.timers.startingBankMillis + this.timers.graceMillis;
+      p.turnRemainingMillis = undefined;
       p.totalTeamPreviewMillis = 0;
       p.teamPreviewCount = 0;
       p.totalTurnMillis = 0;
@@ -994,7 +1017,10 @@ export class ConcurrentGame {
       ? Math.max(1, Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount))
       : undefined;
     return {
-      bankSeconds: Math.max(0, Math.round(player.bankMillis / 1000)),
+      bankSeconds: Math.max(
+        0,
+        Math.round(Math.min(player.bankMillis, this.timers.startingBankMillis) / 1000)
+      ),
       initMillis: player.initMillis,
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
       totalTurnMillis: player.totalTurnMillis,
@@ -1049,6 +1075,10 @@ export class ConcurrentGame {
 
   async run(): Promise<GameResult> {
     this.format = await sim.resolveArenaFormatId(this.format, this.version);
+    this.timers = arbiter.resolveClockTimers(
+      await sim.getTimerSettings(this.format, this.version),
+      this.timerOverrides
+    );
     this.sendUtm = this.sendUtm ?? !(await sim.isGeneratedTeamFormat(
       this.format,
       this.version
@@ -1082,7 +1112,7 @@ export class ConcurrentGame {
       this.p1TeamPacked = p1Team;
       this.p2TeamPacked = p2Team;
 
-      const startBankSec = Math.round(this.startingBankMillis / 1000);
+      const startBankSec = Math.round(this.timers.startingBankMillis / 1000);
 
       if (
         (!p1Res.ok && p1Res.reason === 'spot-preemption') ||
@@ -1917,7 +1947,8 @@ export class Coordinator {
 
     const entrantByVersion = new Map(state.entrants.map(e => [e.versionId, e]));
     const versionIds = state.entrants.map(e => e.versionId);
-    const incSeconds = arena.turnIncrementSeconds(tourney.format);
+    const timerSettings = await sim.getTimerSettings(tourney.format, tourney.version);
+    const incSeconds = timerSettings.addPerTurnSeconds;
     const rrPairs = Math.ceil(tourney.gamesPerMatchup / 2);
     const sfPairs = Math.ceil(Math.max(0, this.superfinalGames) / 2);
     const totalPairs = Math.max(1, rrPairs + sfPairs);
@@ -2054,7 +2085,7 @@ export class Coordinator {
             slug: p1Ent.agentSlug,
             name: p1Ent.agentName,
             version: p1Ent.version,
-            bankSeconds: arena.STARTING_BANK_SECONDS,
+            bankSeconds: timerSettings.startingSeconds,
             thinking: true,
             incrementSeconds: incSeconds,
           },
@@ -2062,7 +2093,7 @@ export class Coordinator {
             slug: p2Ent.agentSlug,
             name: p2Ent.agentName,
             version: p2Ent.version,
-            bankSeconds: arena.STARTING_BANK_SECONDS,
+            bankSeconds: timerSettings.startingSeconds,
             thinking: true,
             incrementSeconds: incSeconds,
           },
