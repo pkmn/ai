@@ -192,15 +192,16 @@ made available after the ladder is retired and rotated out for a new season.
 
 All ladder and tournament matches on the *pkmn.ai* arena take place in a sandbox: your submission
 is launched as a local subprocess for *one single game* (or one complete *Best-of-N series* in
-multi-game tournaments, where `/ready` occurs once and scratch state persists across games of the
-series) and communicates strictly over *standard input (`stdin`)* and *standard output (`stdout`)*
-with no room-ID prefix lines.
+multi-game tournaments, where initialization occurs once and scratch state persists across games of
+the series) and communicates strictly over *standard input (`stdin`)* and *standard output
+(`stdout`)* with no room-ID prefix lines.
 
-  - there is no login protocol; an agent must simply write *`/ready`* to `stdout` to indicate that
-    it has initialized and loaded any data or weights it needs to begin playing a game. Agents that
-    fail to signal readiness within *60 seconds* will receive a game loss.
-  - after `/ready` is received, in non-Random Battle formats, the very first line sent to your
-    agent's `stdin` on the ladder is:
+  - there is no login protocol; an agent must write *`/ready`* to `stdout` --- or
+    *`/utm <packed_team>`* with a legal team in bring-your-own-team (BYOT) tournaments --- once it
+    has initialized and loaded any data or weights it needs to begin playing. Agents that fail to
+    do so within *60 seconds* (or submit an illegal team in BYOT) will receive a game loss.
+  - after `/ready` is received, in non-Random Battle formats with arena-assigned teams (ladders and
+    pre-assigned tournaments), the very first line sent to your agent's `stdin` is:
 
     ```text
     |utm|<packed_team>
@@ -213,20 +214,19 @@ with no room-ID prefix lines.
   - agents read newline-delimited Pokémon Showdown protocol lines from `stdin` and *write a
     newline-terminated choice string to `stdout`* whenever they receive an active `|request|<JSON>`
     (where `request.wait` is falsy) (_e.g._, `move 1\n`, `move 2 terastallize\n`, `switch 3\n`,
-    `team 123456\n`, or Doubles `move 1 +2, switch 3\n`). Any other line written to `stdout`
-    (including disabled commands) is ignored, but emitting more than 64 lines per decision or any
-    line over 64 KiB forfeits the game as a crash.
-  - on the ladder (but not tournaments): the arena coordinator utilizes *time-slicing* to share
-    resources --- your entire process group will be paused (`SIGSTOP` or `podman pause`) the instant
-    your choice newline arrives on `stdout`, and resumed (`SIGCONT` or `podman unpause`) only when
-    it is your turn to act again. Your agent is guaranteed to run uninterrupted while unpaused, and
-    an authoritative clock line will be sent on `stdin` immediately after every `|request|<JSON>` to
-    facilitate timer management:
+    `team 123456\n`, or Doubles `move 1 +2, switch 3\n`). An authoritative clock line is sent on
+    `stdin` immediately after every active `|request|<JSON>` to facilitate timer management:
 
     ```text
     |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 0.0 sec grace
     ```
 
+    Any other line written to `stdout` (including disabled commands) is ignored, but emitting more
+    than 64 lines per decision or any line over 64 KiB forfeits the game as a crash.
+  - on the ladder (but not tournaments): the arena coordinator utilizes *time-slicing* to share
+    resources --- your entire process group will be paused (`SIGSTOP` or `podman pause`) the instant
+    your choice newline arrives on `stdout`, and resumed (`SIGCONT` or `podman unpause`) only when
+    it is your turn to act again, guaranteeing uninterrupted execution while unpaused.
   - if your agent makes an invalid or unavailable choice, its remaining turn budget continues with
     no turn increment credited and it receives the error, a `|request|<JSON>` (resent on invalid
     choices, updated by the simulator on unavailable choices), and an updated clock line:

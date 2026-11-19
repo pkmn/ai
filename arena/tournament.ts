@@ -166,7 +166,6 @@ interface RemoteTournamentPlayer {
 
 const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION, rewriteBlindPlayerNames} =
   arbiter;
-const UTM_TIMEOUT_MILLIS = 15_000;
 const TOURNEY_AGENT_BIN = '/usr/local/bin/tourney-agent';
 export {rewriteBlindPlayerNames};
 
@@ -672,6 +671,44 @@ export class ConcurrentGame {
     }
   }
 
+  private async waitForPlayerUtm(
+    player: RemoteTournamentPlayer
+  ): Promise<
+    {ok: true; team: string} |
+    {ok: false; reason: 'spot-preemption' | 'timeout' | 'crash' | 'invalid-choice'}
+  > {
+    let remaining = this.readyGraceMillis;
+    const startNs = process.hrtime.bigint();
+    let linesRead = 0;
+    while (true) {
+      const {line, timedOut} = await this.readLineWithTimeout(player, remaining);
+      const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
+      remaining = this.readyGraceMillis - elapsedMillis;
+      if (player.spotPreempted || player.sshDisconnected) {
+        return {ok: false, reason: 'spot-preemption'};
+      }
+      if (timedOut || remaining <= 0) {
+        return {ok: false, reason: 'timeout'};
+      }
+      if (line === undefined) {
+        return {ok: false, reason: 'crash'};
+      }
+      linesRead++;
+      if (linesRead > arbiter.MAX_LINES_PER_DECISION) {
+        return {ok: false, reason: 'crash'};
+      }
+      const trimmed = line.trim();
+      if (trimmed === '/utm' || trimmed.startsWith('/utm ')) {
+        const valid = await this.validatePackedTeam(trimmed.slice(5));
+        if (!valid) {
+          return {ok: false, reason: 'invalid-choice'};
+        }
+        player.initMillis = Math.max(1, Math.ceil(elapsedMillis));
+        return {ok: true, team: valid};
+      }
+    }
+  }
+
   private async resolvePlayerTeam(
     player: RemoteTournamentPlayer,
     assignedTeam: string | undefined
@@ -679,40 +716,22 @@ export class ConcurrentGame {
     {ok: true; team: string} |
     {ok: false; reason: 'spot-preemption' | 'timeout' | 'crash' | 'invalid-choice'}
   > {
+    if (assignedTeam === undefined) {
+      // In BYOT tournaments, `/utm <packed_team>` directly signals readiness within the
+      // `readyGraceMillis` startup period (no separate `/ready` line).
+      return this.waitForPlayerUtm(player);
+    }
+
     const readyRes = await this.waitForPlayerReady(player);
     if (!readyRes.ok) return readyRes;
 
-    if (assignedTeam !== undefined) {
-      // Pre-assigned teams come from `pkmn.ai` after server-side validation (`server/teams.ts` /
-      // `server/sim.ts`); only untrusted `/utm` agent stdout below runs `validatePackedTeam`.
-      const team = assignedTeam.trim();
-      if (this.sendUtm && !player.exited && player.proc.stdin.writable) {
-        player.proc.stdin.write(`|utm|${team}\n`);
-      }
-      return {ok: true, team};
+    // Pre-assigned teams come from `pkmn.ai` after server-side validation (`server/teams.ts` /
+    // `server/sim.ts`); only untrusted `/utm` agent stdout above runs `validatePackedTeam`.
+    const team = assignedTeam.trim();
+    if (this.sendUtm && !player.exited && player.proc.stdin.writable) {
+      player.proc.stdin.write(`|utm|${team}\n`);
     }
-
-    // When no team is pre-assigned by the tournament, send zero lines on stdin and require the
-    // agent's very first stdout line to be `/utm <packed_team>` with a legal team for the format.
-    const {line, timedOut} = await this.readLineWithTimeout(player, UTM_TIMEOUT_MILLIS);
-    if (player.spotPreempted || player.sshDisconnected) {
-      return {ok: false, reason: 'spot-preemption'};
-    }
-    if (timedOut) {
-      return {ok: false, reason: 'timeout'};
-    }
-    if (line === undefined) {
-      return {ok: false, reason: 'crash'};
-    }
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('/utm ')) {
-      return {ok: false, reason: 'invalid-choice'};
-    }
-    const valid = await this.validatePackedTeam(trimmed.slice(5));
-    if (!valid) {
-      return {ok: false, reason: 'invalid-choice'};
-    }
-    return {ok: true, team: valid};
+    return {ok: true, team};
   }
 
   private wakePendingLineResolvers() {
@@ -1317,12 +1336,20 @@ export class ConcurrentGame {
         p1: {
           teamPacked: p1Team,
           bankSeconds: lastGame.p1.bankSeconds,
+          initMillis: this.p1.initMillis,
+          ...(lastGame.p1.teamPreviewMillis !== undefined
+            ? {teamPreviewMillis: lastGame.p1.teamPreviewMillis}
+            : {}),
           meanTurnMillis: p1MeanTurnMillis,
           peakRam: p1PeakRam,
         },
         p2: {
           teamPacked: p2Team,
           bankSeconds: lastGame.p2.bankSeconds,
+          initMillis: this.p2.initMillis,
+          ...(lastGame.p2.teamPreviewMillis !== undefined
+            ? {teamPreviewMillis: lastGame.p2.teamPreviewMillis}
+            : {}),
           meanTurnMillis: p2MeanTurnMillis,
           peakRam: p2PeakRam,
         },

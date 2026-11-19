@@ -264,9 +264,7 @@ describe('arena infrastructure', () => {
       [
         '#!/usr/bin/env node',
         'const readline = require("readline");',
-        'process.stdout.write("/ready\\n");',
         `process.stdout.write("/utm ${OU_TEAM_ONE}\\n");`,
-        'process.stdout.write("/ready\\n");',
         'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
         'rl.on("line", line => {',
         '  if (!line.startsWith("|request|")) return;',
@@ -2141,6 +2139,8 @@ describe('arena infrastructure', () => {
       }).run();
       expect(utmRes.p1.teamPacked).toBeTruthy();
       expect(utmRes.p2.teamPacked).toBeTruthy();
+      expect(utmRes.p1.initMillis).toBeGreaterThanOrEqual(1);
+      expect(utmRes.p2.initMillis).toBeGreaterThanOrEqual(1);
       expect(utmRes.turns).toBeGreaterThanOrEqual(1);
     });
 
@@ -2206,7 +2206,6 @@ describe('arena infrastructure', () => {
       fs.writeFileSync(
         badTeamScript,
         '#!/usr/bin/env node\n' +
-        'process.stdout.write("/ready\\n");\n' +
         'process.stdout.write("/utm Mewtwo||leftovers|pressure|recover|||\\n");\n',
         {mode: 0o755}
       );
@@ -2235,6 +2234,43 @@ describe('arena infrastructure', () => {
       expect(badRes.winner).toBe('p2');
       expect(badRes.outcome).toBe('L');
       expect(badRes.endReason).toBe('invalid-choice');
+    });
+
+    test('times out BYOT entrant that never sends /utm within ready grace', async () => {
+      const readyOnlyScript = path.join(tmpDir, 'byot-ready-only-agent.js');
+      fs.writeFileSync(
+        readyOnlyScript,
+        '#!/usr/bin/env node\n' +
+        'process.stdout.write("/ready\\n");\n' +
+        'setInterval(() => {}, 1000);\n',
+        {mode: 0o755}
+      );
+
+      const timeoutRes = await new tournament.ConcurrentGame({
+        format: 'gen9ou',
+        seed: '1,2,3,4',
+        p1Spec: {
+          agentId: 'no-utm-agent',
+          displayName: 'No Utm Agent',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, readyOnlyScript],
+        },
+        p2Spec: {
+          agentId: 'pokechamp',
+          displayName: 'PokeChamp',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, tourneyUtmAgentScript],
+        },
+        readyGraceSeconds: 0.05,
+        maxTurns: 1,
+      }).run();
+      expect(timeoutRes.winner).toBe('p2');
+      expect(timeoutRes.outcome).toBe('L');
+      expect(timeoutRes.endReason).toBe('timeout');
     });
 
     test('aborts without penalty on trusted ARENA_SPOT_PREEMPTED signal', async () => {
@@ -3617,7 +3653,10 @@ describe('arena infrastructure', () => {
             vmHost: '127.0.0.1',
             controlSocket: '',
             localCommand: relayBin,
-            localArgs: [process.execPath, tourneyUtmAgentScript],
+            localArgs: [
+              process.execPath,
+              entrant.version.endsWith('-t9') ? tourneyUtmAgentScript : defaultAgentScript,
+            ],
           }),
         });
 
@@ -3729,7 +3768,7 @@ describe('arena infrastructure', () => {
             vmHost: '127.0.0.1',
             controlSocket: '',
             localCommand: relayBin,
-            localArgs: [process.execPath, tourneyUtmAgentScript],
+            localArgs: [process.execPath, defaultAgentScript],
           }),
         });
         const noSfRes = await noSfCoord.runTournament('11');
