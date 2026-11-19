@@ -278,6 +278,36 @@ function resolveWikiHref(rawHref: string | undefined): string {
   return `/wiki/${encodeSlug(clean)}${hash ? `#${hash}` : ''}`;
 }
 
+const ALLOWED_IMAGE_HOSTS = new Map<string, RegExp | true>([
+  ['avatars.githubusercontent.com', true],
+  ['camo.githubusercontent.com', true],
+  ['gist.githubusercontent.com', true],
+  ['media.githubusercontent.com', true],
+  ['private-user-images.githubusercontent.com', true],
+  ['raw.githubusercontent.com', true],
+  ['user-images.githubusercontent.com', true],
+  ['github.com', /^\/(?:user-attachments|[^/]+\/[^/]+)\/assets\//],
+]);
+
+function resolveImageSrc(rawSrc: string | undefined): string | undefined {
+  if (!rawSrc) return undefined;
+  const trimmed = rawSrc.trim();
+  if (!trimmed) return undefined;
+  // eslint-disable-next-line no-control-regex
+  const decoded = decodeHtmlEntities(trimmed).replace(/[\x00-\x20]+/g, '');
+  if (!decoded || decoded.includes('\ufffd')) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return undefined;
+  const rule = ALLOWED_IMAGE_HOSTS.get(parsed.hostname.toLowerCase());
+  if (rule === true || rule?.test(parsed.pathname)) return parsed.href;
+  return undefined;
+}
+
 const MAX_AST_DEPTH = 64;
 
 function extractPlainText(node: djot.AstNode): string {
@@ -352,7 +382,8 @@ function renderSafeCode(source: string, lang?: string): string {
 }
 
 // Locked-down rich-text Djot AST renderer for user-authored wiki pages:
-//   - Drops all raw HTML (`raw_block`, `raw_inline`) and external `<img>` beacons at the AST level
+//   - Drops all raw HTML (`raw_block`, `raw_inline`) and non-allowlisted `<img>` tags at the AST
+//   - Allows `<img>` only for `https://` GitHub user-attachment and `*.githubusercontent.com` URLs
 //   - Supports `::: aside` and `{title="..."}` captions, ignoring all other `{...}` attributes
 //   - Allows only `https://`, `http://`, `/...`, `#...`, and relative wiki links on `<a>`
 //   - Escapes all text and syntax-highlighted code blocks with no post-hoc regex sanitizer
@@ -383,13 +414,13 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
     return candidate;
   };
 
-  const resolveLinkNodeHref = (node: djot.Link): string => {
-    if (node.destination !== undefined) return resolveWikiHref(node.destination);
+  const resolveNodeTarget = (node: djot.Link | djot.Image): string | undefined => {
+    if (node.destination !== undefined) return node.destination;
     if (node.reference !== undefined) {
       const ref = doc.references[node.reference] ?? doc.autoReferences[node.reference];
-      return resolveWikiHref(ref?.destination);
+      return ref?.destination;
     }
-    return '#';
+    return undefined;
   };
 
   const renderInlines = (nodes: djot.Inline[], depth = 0): string =>
@@ -441,10 +472,16 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         return String(<strong>{raw(renderInlines(node.children, nextDepth))}</strong>);
       case 'link':
         return String(
-          <a href={resolveLinkNodeHref(node)}>{raw(renderInlines(node.children, nextDepth))}</a>
+          <a href={resolveWikiHref(resolveNodeTarget(node))}>
+            {raw(renderInlines(node.children, nextDepth))}
+          </a>
         );
-      case 'image':
-        return renderInlines(node.children, nextDepth);
+      case 'image': {
+        const src = resolveImageSrc(resolveNodeTarget(node));
+        if (!src) return renderInlines(node.children, nextDepth);
+        const alt = extractPlainText(node);
+        return String(<img src={src} alt={alt} loading='lazy' referrerpolicy='no-referrer' />);
+      }
       case 'span':
         return renderInlines(node.children, nextDepth);
       case 'mark':

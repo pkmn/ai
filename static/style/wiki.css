@@ -2,6 +2,11 @@ main {
   width: 100%;
 }
 
+main img {
+  max-width: 100%;
+  height: auto;
+}
+
 #wiki-nav {
   margin-top: auto;
   padding-top: 2rem;

@@ -182,11 +182,32 @@ describe('wiki helpers', () => {
     expect(html).toContain('<a href="/wiki/gen9ou">Slash tag</a>');
   });
 
-  test('renderDjot strips external image beacons to alt text', () => {
-    const html = wiki.renderDjot('![Tracking beacon](https://evil.example/pixel.png)');
+  test('renderDjot strips non-allowlisted image beacons to alt text', () => {
+    const html = wiki.renderDjot([
+      '![Tracking beacon](https://evil.example/pixel.png)',
+      '![Insecure GitHub](http://raw.githubusercontent.com/u/r/main/a.png)',
+      '![Non-asset GitHub](https://github.com/pkmn/ai/blob/main/a.png)',
+    ].join('\n\n'));
     expect(html).not.toContain('<img');
     expect(html).not.toContain('evil.example');
     expect(html).toContain('Tracking beacon');
+    expect(html).toContain('Insecure GitHub');
+    expect(html).toContain('Non-asset GitHub');
+  });
+
+  test('renderDjot allows HTTPS GitHub image and user-attachment URIs', () => {
+    const html = wiki.renderDjot([
+      '![Diagram](https://github.com/user-attachments/assets/abc-123)',
+      '![Raw chart][chart]',
+      '',
+      '[chart]: https://raw.githubusercontent.com/pkmn/ai/main/chart.png',
+    ].join('\n'));
+    expect(html).toContain(
+      '<img src="https://github.com/user-attachments/assets/abc-123" alt="Diagram" loading="lazy" referrerpolicy="no-referrer">'
+    );
+    expect(html).toContain(
+      '<img src="https://raw.githubusercontent.com/pkmn/ai/main/chart.png" alt="Raw chart" loading="lazy" referrerpolicy="no-referrer">'
+    );
   });
 
   test('renderDjot renders safe math expressions while blocking TeX hrefs', () => {
