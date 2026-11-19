@@ -165,9 +165,10 @@ existing ladder will be retired and replaced with one for the new ruleset.
 
 Unlike other *pkmn.ai* arena ladders, competitors in the *VGC* ladder will be required to submit
 20 distinct teams to make up a shared competitor team pool and will be randomly assigned teams from
-this shared pool at the start of each match. The arena will ensure competitors have an equal
-chance of playing any team and that a competitor will only ever play in matches with at most one of
-their submitted teams. Teams submitted to the pool must be
+this shared pool at the start of each match. The arena ensures each team in the pool is played with
+equal probability and that any match uses at most one team submitted by the two competing projects
+combined (self-play across versions of the same project draws both teams exclusively from third
+parties). Teams submitted to the pool must be
 [distinct](https://github.com/pkmn/ai/blob/main/teams/README.md) from each other and from any
 publicly shared teams. No usage statistics will be provided for the format.
 
