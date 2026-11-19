@@ -165,7 +165,8 @@ function applySparseCheckout(rootDir: string, spec: SubmoduleSpec) {
 export function setUpSubmodule(
   rootDir: string,
   spec: SubmoduleSpec,
-  log: (msg: string) => void = console.log
+  log: (msg: string) => void = console.log,
+  update = false
 ) {
   const gitDir = execGit(['rev-parse', '--absolute-git-dir'], {cwd: rootDir});
   const commonDir = execGit(
@@ -179,10 +180,23 @@ export function setUpSubmodule(
     const pinnedRes = runGit(['rev-parse', `:${spec.path}`], {cwd: rootDir});
     const headRes = runGit(['rev-parse', 'HEAD'], {cwd: subDir});
     if (pinnedRes.ok && headRes.ok && pinnedRes.stdout !== headRes.stdout) {
-      log(
-        `▸ ${spec.path} is on ${headRes.stdout.slice(0, 12)}, ` +
-        `not pinned ${pinnedRes.stdout.slice(0, 12)} (leaving as-is)`
-      );
+      if (update) {
+        log(
+          `▸ Updating ${spec.path} from ${headRes.stdout.slice(0, 12)} ` +
+          `to ${pinnedRes.stdout.slice(0, 12)}`
+        );
+        if (!runGit(['-C', subDir, 'cat-file', '-e', `${pinnedRes.stdout}^{commit}`]).ok) {
+          execGit(['submodule', 'update', '--depth', '1', spec.path], {cwd: rootDir});
+        } else {
+          execGit(['-C', subDir, 'checkout', '-f', pinnedRes.stdout]);
+        }
+        applySparseCheckout(rootDir, spec);
+      } else {
+        log(
+          `▸ ${spec.path} is on ${headRes.stdout.slice(0, 12)}, ` +
+          `not pinned ${pinnedRes.stdout.slice(0, 12)} (leaving as-is)`
+        );
+      }
     }
     return;
   }
@@ -354,13 +368,13 @@ export function verifyCheckout(rootDir: string, requirePublic = true) {
 
 export function runSetup(
   rootDir = ROOT,
-  options: {submodulesOnly?: boolean; log?: (msg: string) => void} = {}
+  options: {submodulesOnly?: boolean; update?: boolean; log?: (msg: string) => void} = {}
 ) {
   const log = options.log ?? console.log;
   const startedAt = performance.now();
 
   for (const spec of SUBMODULES) {
-    setUpSubmodule(rootDir, spec, log);
+    setUpSubmodule(rootDir, spec, log, options.update);
   }
 
   if (options.submodulesOnly) {
@@ -382,7 +396,8 @@ export function runSetup(
 if (require.main === module) {
   try {
     const submodulesOnly = process.argv.includes('--submodules-only');
-    runSetup(ROOT, {submodulesOnly});
+    const update = process.argv.includes('--update');
+    runSetup(ROOT, {submodulesOnly, update});
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`✗ ${msg}`);

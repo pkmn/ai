@@ -215,6 +215,41 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
     return;
   }
 
+  if (cmd === 'install-sim') {
+    const [version] = positional.slice(1);
+    if (!version) {
+      throw new Error(
+        'Usage: pkmn install-sim <version> [--sim <spec>] [--dex <spec>] ' +
+        '[--mods <spec>] [--randoms <spec>]'
+      );
+    }
+    const simDir = root('sim', version);
+    fs.mkdirSync(simDir, {recursive: true});
+    const pkgPath = path.join(simDir, 'package.json');
+    if (!fs.existsSync(pkgPath)) {
+      writeFileAtomic(
+        pkgPath,
+        `${JSON.stringify({name: `pkmn-sim-${version}`, private: true}, null, 2)}\n`
+      );
+    }
+    const simSpec = flags.get('sim') ?? `@pkmn/sim@${version}`;
+    const pkgs = [simSpec];
+    const dexSpec = flags.get('dex');
+    const modsSpec = flags.get('mods');
+    const randomsSpec = flags.get('randoms');
+    if (dexSpec) pkgs.push(dexSpec);
+    if (modsSpec) pkgs.push(modsSpec);
+    if (randomsSpec) pkgs.push(randomsSpec);
+    execFileSync('npm', ['install', '--prefix', simDir, '--no-save', ...pkgs], {
+      stdio: 'inherit',
+      env: {...process.env, npm_config_allow_git: 'all'},
+    });
+    const resolvedVersion = await sim.getWorkerSimVersion(version);
+    await sim.closeAllWorkers();
+    log(`Installed @pkmn/sim ${resolvedVersion} in ${simDir} (key="${version}")`);
+    return;
+  }
+
   const ownsDb = !options.db;
   const database = options.db ?? new db.Database(db.DB_PATH);
   const now = options.now ?? Math.floor(Date.now() / 1000);
@@ -402,39 +437,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           });
         }
         log(`Synced Arena projects from ${projectsPath}`);
-        return;
-      }
-      case 'install-sim': {
-        const [version] = positional.slice(1);
-        if (!version || !/^[A-Za-z0-9._-]+$/.test(version)) {
-          throw new Error(
-            'Usage: pkmn install-sim <version> [--sim <spec>] [--dex <spec>] ' +
-            '[--mods <spec>] [--randoms <spec>]'
-          );
-        }
-        const simDir = root('sim', version);
-        fs.mkdirSync(simDir, {recursive: true});
-        const pkgPath = path.join(simDir, 'package.json');
-        if (!fs.existsSync(pkgPath)) {
-          writeFileAtomic(
-            pkgPath,
-            `${JSON.stringify({name: `pkmn-sim-${version}`, private: true}, null, 2)}\n`
-          );
-        }
-        const simSpec = flags.get('sim') ?? `@pkmn/sim@${version}`;
-        const pkgs = [simSpec];
-        const dexSpec = flags.get('dex');
-        const modsSpec = flags.get('mods');
-        const randomsSpec = flags.get('randoms');
-        if (dexSpec) pkgs.push(dexSpec);
-        if (modsSpec) pkgs.push(modsSpec);
-        if (randomsSpec) pkgs.push(randomsSpec);
-        execFileSync('npm', ['install', '--prefix', simDir, '--no-save', ...pkgs], {
-          stdio: 'inherit',
-        });
-        const resolvedVersion = await sim.getWorkerSimVersion(version);
-        await sim.closeAllWorkers();
-        log(`Installed @pkmn/sim ${resolvedVersion} in ${simDir} (key="${version}")`);
         return;
       }
       case 'create-tournament': {

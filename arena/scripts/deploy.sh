@@ -26,6 +26,14 @@ git diff --quiet "$HEAD" package.json teams/package.json >/dev/null ||
 # Compile TypeScript
 npm run compile
 
+# Ensure default pinned @pkmn/sim 0.11.0 worker directory is installed
+if [ ! -f sim/0.11.0/node_modules/@pkmn/sim/package.json ]; then
+    node build/tools/pkmn install-sim 0.11.0 \
+        --dex @pkmn/dex@0.11.0 \
+        --mods @pkmn/mods@0.11.0 \
+        --randoms @pkmn/randoms@0.11.0
+fi
+
 # Post-compile smoke verification with automatic rollback on failure
 verify_arena() {
     test -s build/arena/index.js || return 1

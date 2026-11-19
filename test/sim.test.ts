@@ -7,6 +7,7 @@ import {Database} from '../db';
 import {LADDERS_FILE, SIM_VERSION, parseLaddersYaml} from '../db/ladders';
 import * as sim from '../server/sim';
 import {root} from '../static/util';
+import {runPkmnCli} from '../tools/pkmn';
 
 const tempDirs: string[] = [];
 
@@ -166,5 +167,9 @@ describe('multi-version @pkmn/sim support', () => {
     expect(vgcFormat).toContain('@@@');
     const vgcRes = await sim.validateTeam(vgcFormat, ouTeam, SIM_VERSION);
     expect(vgcRes.problems).toBeDefined();
+  });
+
+  test('pkmn install-sim runs before opening the central SQLite database', async () => {
+    await expect(runPkmnCli(['install-sim'])).rejects.toThrow(/Usage: pkmn install-sim/);
   });
 });
