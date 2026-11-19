@@ -8,8 +8,9 @@ required to provide:
     subject to staff discretion, prefer regex `^[A-Za-z ]+$`, distinct from other projects, must not
     include the tokens `poke` / `mon` / `pkmn` / `AI` / `bot` / `agent` / `showdown` / `smogon`,
     bare English Pokémon species names, or known players' names).
-  - *GitHub and Smogon usernames* for each team member associated with your project. All
-    authorized team members must be Smogon account holders in good standing.
+  - *GitHub and Smogon usernames* for each team member associated with your project (each person may
+    belong to at most one project, and all team members must remain Smogon account holders in good
+    standing to stay eligible).
   - *qualifying criteria* to justify participation in the hosted environment (_e.g._, [Pokémon
     Showdown](https://pokemonshowdown.com/ladder) / [vgc.bot](https://vgc.bot/leaderboard) /
     [pkmn.bot](https://pkmn.bot/leaderboard) rankings).
@@ -47,7 +48,8 @@ submissions and for roles within the [chat](/chat) room) and view your account's
 account is approved and eligible for submissions, you can fill out a submission form with the
 following information:
 
-  - *`version`*: version string (max 12 characters, _e.g._, `1.0.0` or `v2`, regex
+  - *`version`*: unique version string within your project (cannot be reused even after a failed
+    smoke test; max 12 characters, _e.g._, `1.0.0` or `v2`, regex
     `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`).
   - *`artifact_url`*: direct HTTPS URL to a `.tar.gz`/`.tar.xz`/`.tar.zst` bundle _or_ an OCI
     container image reference (_e.g._, `ghcr.io/...`, `docker.io/...`).
@@ -63,7 +65,7 @@ The *network will be disabled* for all competitors. Competitors will be blind to
 opponents. Ladder submissions may take the form of either an OCI `linux/arm64` container that can
 access the *GPU* virtually via Vulkan passthrough, or a native bundle that has full native access
 to the GPU/ANE via Metal/CoreML. Tournament hardware will be outlined in the tournament-specific
-rules and will only support OCI containers.
+rules and will only support `linux/amd64` OCI containers.
 
 {summary="*OCI Container*"}
 ::: details
@@ -106,9 +108,10 @@ bundles must contain at most 25,000 files/directories/symlinks and an executable
 archive root. OCI containers must contain at most 32 OCI layers and the container `ENTRYPOINT` /
 `CMD` must run the agent.
 
-Tournaments will accept only the first successful entry for a project. Ladder competitors may have
-*up to 2 versions* of their project competing concurrently, but may only submit a new version of
-their agent after both of the following conditions are true:
+Tournaments close at `00:00:00 UTC` strictly before start time and accept only the first successful
+entry for a project (resubmissions are allowed after a failed smoke test until the cutoff). Ladder
+competitors may have *up to 2 versions* of their project competing concurrently, but may only submit
+a new version of their agent after both of the following conditions are true:
 
   - *14 days* have elapsed since their last successful ladder submission.
   - all of their *previous submissions have settled* to $`\text{SE}(R) \le 30\text{ Elo}`
@@ -180,14 +183,15 @@ niche mechanics is considered fair play.
 :::
 
 Ladders and tournaments hosted on *pkmn.ai* will all follow the exact same timer rules as Pokémon
-Showdown (without Pokémon Showdown's 60-second disconnect grace; however, *canceling or undoing*
+Showdown (without Pokémon Showdown's 60-second disconnect grace); however, *canceling or undoing*
 moves is disabled, as is *forfeiting or offering ties*. Furthermore,
 [*pondering*](/glossary#pondering) will be disabled in ladder matches, though it will be enabled by
 default in tournaments unless otherwise specified.
 
 Logs or team information from the ladders using harvested human team data will never be made public.
-*RAND* ladder games and data will be available live, and the *VGC* ladder logs and teams will be
-made available after the ladder is retired and rotated out for a new season.
+*RAND* ladder games and tournament matches (logs and teams) are broadcast live --- with full
+tournament replay archives (`.7z`) published upon completion --- and *VGC* ladder logs and teams
+will be made available after the ladder is retired and rotated out for a new season.
 
 ### Protocol
 
@@ -262,7 +266,9 @@ outcomes as a unit. The ratings are mapped to the [Elo
 scale](https://en.wikipedia.org/wiki/Elo_rating_system), and one specific agent chosen to represent
 *the top of the Pokémon Showdown human ladder is defined to be 1500 on the scale* (the "anchor").
 This anchor will always be eligible for matchmaking and prevents the rating scale from drifting
-over time.
+over time. Leaderboards order entries by 95% conservative rating
+($`\text{Elo} - 1.96 \times \text{SE}`), assigning an official rank to at most one active version
+per project once past the provisional gate ($`\ge 10` matches and $`\text{SE} \le 60`).
 
 The arena matchmaking algorithm aims to maximize [Shannon information
 gain](https://en.wikipedia.org/wiki/Information_gain_(decision_tree)) over competitor ratings across
@@ -311,12 +317,18 @@ square off in an extended series to determine the winner.
     do not handle it before making your choice. Conversely, always explicitly flush `stdout`
     immediately after making your choice in case your language runtime buffers `stdout` when
     connected to a pipe.
-  - the scratch `$TMPDIR` exists to allow for CoreML/Metal shader caches and runtime temp files
-    and is wiped between games.
+  - the bundle/container root filesystem is mounted read-only; `$TMPDIR`, `$HOME`, and (on ladders)
+    `$XDG_CACHE_HOME` all point to the per-game scratch directory (wiped between games; native
+    bundles cannot write to `/tmp`), which also holds CoreML/Metal shader caches and runtime temp
+    files.
+  - ladder processes and threads are capped at 256 (`RLIMIT_NPROC` / `--pids-limit=256`), and
+    `stderr` is drained (with the last 4 KiB surfaced on [account](/account) if a ladder smoke test
+    fails).
   - the arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`, and
     `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads. Similarly,
     `ARENA_MEMORY_LIMIT_MB=14336` is set --- be sure to size runtime tables to account for potential
-    runtime overhead and avoid triggering a forfeit due to running out of memory (OOM).
+    runtime overhead and avoid triggering a forfeit due to running out of memory (OOM). In
+    tournaments with pondering enabled, `ARENA_PONDER=1` is set.
   - on macOS, natively bundled submissions can take advantage of the fact that clean, read-only
     memory-mapped file pages (`mmap` with `PROT_READ` and `MAP_PRIVATE` or `MAP_SHARED`, such as
     `safetensors` or `gguf` memory mapping) are backed by the read-only bundle file on disk and
