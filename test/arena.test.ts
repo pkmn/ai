@@ -2151,6 +2151,34 @@ describe('arena infrastructure', () => {
       expect(utmRes.turns).toBeGreaterThanOrEqual(1);
     });
 
+    test('validates /utm teams on formats with custom @@@ rules', async () => {
+      const utmRes = await new tournament.ConcurrentGame({
+        format: 'gen9ou@@@Open Team Sheets',
+        seed: '1,2,3,4',
+        p1Spec: {
+          agentId: 'foul-play',
+          displayName: 'Foul Play',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, tourneyUtmAgentScript],
+        },
+        p2Spec: {
+          agentId: 'pokechamp',
+          displayName: 'PokeChamp',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, tourneyUtmAgentScript],
+        },
+        maxTurns: 1,
+      }).run();
+      expect(utmRes.p1.teamPacked).toBeTruthy();
+      expect(utmRes.p2.teamPacked).toBeTruthy();
+      expect(utmRes.turns).toBeGreaterThanOrEqual(1);
+      expect(utmRes.omniscientLog).toContain('|showteam|p1|');
+    });
+
     test('omits |utm| on stdin for Random Battle tournament games', async () => {
       const tourneyRandUtmLog = path.join(tmpDir, 'tourney-rand-utm.log');
       const probeScript = path.join(tmpDir, 'tourney-rand-probe.js');

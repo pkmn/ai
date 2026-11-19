@@ -151,4 +151,20 @@ describe('multi-version @pkmn/sim support', () => {
     const resolved = await sim.resolveArenaFormatId('gen9ou', SIM_VERSION);
     expect(resolved).toBe('gen9ou');
   });
+
+  test('validateTeam resolves formats containing custom rules after @@@', async () => {
+    const ouTeam =
+      'Pikachu||lightball|static|thunderbolt,surf,voltswitch,protect|Timid|,,4,252,,252|||||';
+    const ouRes = await sim.validateTeam('gen9ou@@@Force Open Team Sheets', ouTeam, SIM_VERSION);
+    expect(ouRes.problems).toBeUndefined();
+    expect(ouRes.packed).toBeTruthy();
+
+    const vgcFormat = await sim.resolveArenaFormatId(
+      'gen9championsvgc2026regmc@@@Open Team Sheets,Best of = 3',
+      SIM_VERSION
+    );
+    expect(vgcFormat).toContain('@@@');
+    const vgcRes = await sim.validateTeam(vgcFormat, ouTeam, SIM_VERSION);
+    expect(vgcRes.problems).toBeDefined();
+  });
 });

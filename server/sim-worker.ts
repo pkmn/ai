@@ -5,7 +5,7 @@ import {parentPort, workerData} from 'worker_threads';
 
 import type * as simTypes from '@pkmn/sim';
 
-import {root, toID} from '../static/util';
+import {root} from '../static/util';
 
 import * as simOps from './sim-ops';
 
@@ -226,7 +226,7 @@ function handleRpc(req: RpcRequest): unknown {
     case 'sampleRandomPair':
       return simOps.sampleRandomPairWithSim(simMod, req.format, req.seed1, req.seed2);
     case 'validateTeam': {
-      const resolved = simMod.Dex.formats.get(toID(req.format));
+      const resolved = simMod.Dex.formats.get(req.format);
       if (!resolved.exists) {
         throw new Error(`Unknown format '${req.format}'.`);
       }
