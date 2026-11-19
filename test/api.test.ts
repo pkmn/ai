@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import polka from 'polka';
+import serveStatic from 'serve-static';
 
 import {Database} from '../db';
 import {createServerApp} from '../server';
@@ -2310,6 +2311,37 @@ describe('createServerApp production HTTP hardening', () => {
         `${srv.baseUrl}/arena/ladders/gen9championsvgc2026regmc/vgc-001a.log`
       );
       expect(archivedRes.status).toBe(200);
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('replaces pre-mounted static middleware on an existing Polka app', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'arena'), {recursive: true});
+    fs.writeFileSync(path.join(tmpDir, 'arena', 'index.html'), '', 'utf8');
+
+    const logged: string[] = [];
+    const preApp = polka();
+    preApp.use((req, _res, next) => {
+      logged.push(req.url ?? '');
+      next();
+    });
+    preApp.use(serveStatic(tmpDir) as unknown as polka.Middleware);
+
+    const handle = createServerApp({
+      app: preApp,
+      db,
+      publicDir: tmpDir,
+      enableDiscord: false,
+    });
+    const srv = await startTestServer(handle.app);
+    try {
+      const res = await fetch(`${srv.baseUrl}/arena/`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('Arena');
+      expect(logged).toEqual(['/arena/']);
     } finally {
       handle.close();
       await srv.close();

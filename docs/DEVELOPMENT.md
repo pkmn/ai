@@ -122,9 +122,11 @@ fallbacks). Every secret is optional in local `DEV_AUTH=1` development:
 
 **Local safety guarantees:**
 1. **SQLite isolation:** Local SQLite files (`arena.sqlite`, `-wal`, `-shm`) live in gitignored
-   `db/data/` (never inside `private/`), while production opens `/var/lib/pkmn/arena.sqlite`
-   automatically whenever `/var/lib/pkmn` exists or `NODE_ENV=production`. The HTTP server always
-   binds `127.0.0.1:1234`.
+   `db/data/` — never inside `private/`, which is watched by `site.serve()` and would trigger
+   infinite rebuild loops. Production opens `/var/lib/pkmn/arena.sqlite` automatically whenever
+   `/var/lib/pkmn` exists or `NODE_ENV=production`. The HTTP server listens on port `1234`, binding
+   `127.0.0.1:1234` when `NODE_ENV=production` and booting via `site.serve()` otherwise (live static
+   rebuilds + LAN IP output).
 2. **Discord & wiki isolation:** Even if `.env` contains production `DISCORD_BOT_TOKEN` synced via
    `./private/sync`, `server/discord.ts` disables live role/pin/DM/log sync and `server/wiki.tsx`
    skips `git push` whenever `NODE_ENV !== 'production'`.
