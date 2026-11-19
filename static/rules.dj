@@ -101,10 +101,10 @@ tar -czf agent-bundle.tar.gz -C dist .
 ```
 :::
 
-Every project submission must occupy at most *500 MB of uncompressed resident space* on disk once
-unpacked. Native bundles must contain less than 25,000 files/directories/symlinks and contain an
-executable `./run` at the archive root. OCI containers must contain less than 32 OCI layers and the
-container `ENTRYPOINT` / `CMD` must run the agent.
+Every project submission must be at most *500 MiB* both compressed and unpacked on disk. Native
+bundles must contain at most 25,000 files/directories/symlinks and an executable `./run` at the
+archive root. OCI containers must contain at most 32 OCI layers and the container `ENTRYPOINT` /
+`CMD` must run the agent.
 
 Tournaments will accept only the first successful entry for a project. Ladder competitors may have
 *up to 2 versions* of their project competing concurrently, but may only submit a new version of
