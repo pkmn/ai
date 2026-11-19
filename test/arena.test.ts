@@ -583,6 +583,44 @@ describe('arena infrastructure', () => {
       expect(res.p1.meanTurnMillis).toBeGreaterThanOrEqual(20);
       expect(res.p1.peakRam).toBeGreaterThan(1);
     });
+
+    test('bake-image smoke_test_agent keeps stdin open past tourney-relay 100ms EOF kill', () => {
+      const slowAgent = path.join(tmpDir, 'slow-bake-agent.js');
+      fs.writeFileSync(
+        slowAgent,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'const rl = readline.createInterface({input: process.stdin});',
+          'rl.on("line", line => {',
+          '  if (line.startsWith("|request|")) process.stdout.write("/choose move 1\\n");',
+          '});',
+          'setTimeout(() => process.stdout.write("/ready\\n"), 250);',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const wrapperBin = path.join(tmpDir, 'mock-tourney-agent.sh');
+      fs.writeFileSync(
+        wrapperBin,
+        `#!/usr/bin/env bash\nexec ${JSON.stringify(relayBin)} ` +
+          `${JSON.stringify(process.execPath)} ${JSON.stringify(slowAgent)}\n`,
+        {mode: 0o755}
+      );
+      const bakeScript = fs.readFileSync(root('arena', 'scripts', 'bake-image.sh'), 'utf8');
+      const fnMatch = /smoke_test_agent\(\) \{[\s\S]*?\n\}/.exec(bakeScript);
+      expect(fnMatch).not.toBeNull();
+      const adaptedFn = fnMatch![0].replace('/usr/local/bin/tourney-agent', wrapperBin);
+      const driver = [
+        'set -euo pipefail',
+        'if ! command -v timeout >/dev/null 2>&1; then timeout() { shift; "$@"; }; fi',
+        adaptedFn,
+        'SMOKE_OUT=""',
+        'smoke_test_agent slow-agent \'|request|{"rqid":1}\'',
+        'printf "%s" "$SMOKE_OUT"',
+      ].join('\n');
+      const output = execFileSync('bash', ['-c', driver], {encoding: 'utf8', timeout: 10_000});
+      expect(output).toBe('/ready -> /choose move 1');
+    });
   });
 
   describe('arena/unpack', () => {

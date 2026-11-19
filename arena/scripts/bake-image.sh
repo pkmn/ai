@@ -119,6 +119,72 @@ ensure_safe_rootfs_dir() {
   done
 }
 
+smoke_test_agent() {
+  local agent_id="$1"
+  local smoke_req="$2"
+  local fifo_dir in_fifo out_fifo agent_pid
+  fifo_dir="$(mktemp -d /tmp/tourney-smoke.XXXXXX)"
+  chmod 0700 "$fifo_dir"
+  in_fifo="${fifo_dir}/in"
+  out_fifo="${fifo_dir}/out"
+  mkfifo "$in_fifo" "$out_fifo"
+
+  # Keep stdin open via FIFO FD 3 so `tourney-relay` does not trigger its 100 ms stdin-EOF
+  # SIGKILL while the agent is still booting (up to 60s `/ready` or `/utm` grace + 60s Turn 1).
+  timeout 120s /usr/local/bin/tourney-agent "$agent_id" <"$in_fifo" >"$out_fifo" 2>/dev/null &
+  agent_pid=$!
+
+  exec 3>"$in_fifo"
+  exec 4<"$out_fifo"
+
+  local first_line="" reply_line="" line="" trimmed="" lines=0 rem=0 deadline=0
+  deadline=$(( SECONDS + 60 ))
+  while (( lines < 64 )); do
+    rem=$(( deadline - SECONDS ))
+    (( rem > 0 )) || break
+    IFS= read -r -t "$rem" line <&4 || break
+    line="${line%$'\r'}"
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    lines=$(( lines + 1 ))
+    if [[ "$trimmed" == "/ready" || "$trimmed" == "/utm "* ]]; then
+      first_line="$trimmed"
+      break
+    fi
+  done
+
+  if [[ -n "$first_line" ]]; then
+    printf '%s\n' "$smoke_req" >&3 || true
+    lines=0
+    deadline=$(( SECONDS + 60 ))
+    while (( lines < 64 )); do
+      rem=$(( deadline - SECONDS ))
+      (( rem > 0 )) || break
+      IFS= read -r -t "$rem" line <&4 || break
+      line="${line%$'\r'}"
+      trimmed="${line#"${line%%[![:space:]]*}"}"
+      trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+      lines=$(( lines + 1 ))
+      if [[ -n "$trimmed" && "$trimmed" != "/ready" && "$trimmed" != "|c|"* && "$trimmed" != "/c "* ]]; then
+        reply_line="$trimmed"
+        break
+      fi
+    done
+  fi
+
+  exec 3>&- || true
+  exec 4<&- || true
+  kill "$agent_pid" 2>/dev/null || true
+  wait "$agent_pid" 2>/dev/null || true
+  rm -rf "$fifo_dir"
+
+  if [[ -n "$reply_line" ]]; then
+    SMOKE_OUT="${first_line} -> ${reply_line}"
+    return 0
+  fi
+  return 1
+}
+
 while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   [[ -z "$AGENT_ID" || "$AGENT_ID" =~ ^# ]] && continue
   if [[ ! "$AGENT_ID" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ || "$AGENT_ID" == *..* ]]; then
@@ -260,11 +326,11 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   sudo chown -R root:root "$DEST_DIR"
   sudo chmod -R a+rX,u+w,go-w "$DEST_DIR"
 
-  # 4. Smoke test inside rootless bubblewrap with a dummy Turn-1 Showdown request
+  # 4. Smoke test inside rootless bubblewrap (`/ready` or `/utm` -> dummy Turn-1 Showdown request)
   SMOKE_REQ='|request|{"active":[{"moves":[{"move":"Tackle","id":"tackle","pp":35,"maxpp":35,"target":"normal","disabled":false}]}],"side":{"name":"Agent A","id":"p1","pokemon":[{"ident":"p1: Pikachu","details":"Pikachu, L50","condition":"100/100","active":true,"stats":{"atk":55,"def":40,"spa":50,"spd":50,"spe":90},"moves":["tackle"],"baseAbility":"static","item":"","pokeball":"pokeball"}]},"rqid":1}'
-  SMOKE_OUT="$(printf '%s\n' "$SMOKE_REQ" | timeout 60s /usr/local/bin/tourney-agent "$AGENT_ID" | head -n 1 || true)"
-  if [[ -z "$SMOKE_OUT" ]]; then
-    echo "ERROR: ${AGENT_ID} failed bwrap smoke test (empty stdout)" >&2
+  SMOKE_OUT=""
+  if ! smoke_test_agent "$AGENT_ID" "$SMOKE_REQ"; then
+    echo "ERROR: ${AGENT_ID} failed bwrap smoke test (missing /ready or /utm -> Turn-1 choice)" >&2
     sudo rm -rf "$DEST_DIR"
     exit 1
   fi
