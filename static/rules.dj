@@ -129,7 +129,9 @@ A *pkmn.ai* ladder is fixed to a specific time period and will not be updated if
 later decides to [change](https://pkmn.cc/changes) the rules --- it is necessary to hold the format
 constant to be able to compare to past versions. However, in order to support more dynamic
 metagames, certain formats will operate on a seasonal model and will be retired and replaced with
-more modern rules.
+more modern rules. All current ladders use Pokémon Showdown's rules and mechanics as of Nov 9th
+2026 ([a78551b0](https://github.com/smogon/pokemon-showdown/commit/a78551b0)/
+[v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)).
 
 The competitive Pokémon formats currently eligible for *fixed* ladder submissions are:
 
@@ -137,34 +139,27 @@ The competitive Pokémon formats currently eligible for *fixed* ladder submissio
 - *ADV*: `gen3ou`
 - *SV*: `gen9ou`
 
-These formats are defined to have the rules and mechanics from Pokémon Showdown as of Nov 9th 2026
-([a78551b0](https://github.com/smogon/pokemon-showdown/commit/a78551b0)/
-[v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)). Strong human-made teams harvested from
-Pokémon Showdown server logs will be provided to the competitors ([see below](#Protocol)), and
-[data.pkmn.cc](https://data.pkmn.cc) formatted usage stats data computed from the period the teams
-have been drawn from will be provided at `$PKMN_STATS_DIR/<format>.json`.
+Strong human-made teams harvested from Pokémon Showdown server logs will be provided to the
+competitors ([see below](#Protocol)), and [data.pkmn.cc](https://data.pkmn.cc) formatted usage
+stats data computed from the period the teams have been drawn from will be provided at
+`$PKMN_STATS_DIR/<format>.json`.
 
 The competitive Pokémon formats currently eligible for *seasonal* ladder submissions are:
 
 {summary="*RAND* (`gen9randombattle`)"}
 ::: details
-This format is defined to have the rules and mechanics from Pokémon Showdown as of Nov 9th 2026
-([a78551b0](https://github.com/smogon/pokemon-showdown/commit/a78551b0)/
-[v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)), though in Generation X this ladder
-will be retired and replaced with one supporting `gen10randombattle` if Pokémon Showdown creates
-one. Teams will be provided by the random team generator bundled with Pokémon Showdown, and
-[data.pkmn.cc](https://data.pkmn.cc) formatted usage stats data computed from the period the teams
-have been drawn from will be provided at `$PKMN_STATS_DIR` in the same hierarchy as exists on the
-site.
+In Generation X this ladder will be retired and replaced with one supporting `gen10randombattle` if
+Pokémon Showdown creates one. Teams will be provided by the random team generator bundled with
+Pokémon Showdown, and [data.pkmn.cc](https://data.pkmn.cc) formatted usage stats data computed from
+the period the teams have been drawn from will be provided at `$PKMN_STATS_DIR` in the same
+hierarchy as exists on the site.
 :::
 
 {summary="*VGC* (`gen9championsvgc2026regmc`)"}
 ::: details
-This format is defined to have the rules and mechanics from Pokémon Showdown as of Nov 9th 2026
-([a78551b0](https://github.com/smogon/pokemon-showdown/commit/a78551b0)/
-[v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)), played with *Closed Team Sheets*,
-though it will be updated to follow TPCi's VGC ruleset --- once a new ruleset is announced, the
-existing ladder will be retired and replaced with one for the new ruleset.
+Played with *Closed Team Sheets*, this ladder will be updated to follow TPCi's VGC ruleset --- once
+a new ruleset is announced, the existing ladder will be retired and replaced with one for the new
+ruleset.
 
 Unlike other *pkmn.ai* arena ladders, competitors in the *VGC* ladder will be required to submit
 20 distinct teams to make up a shared competitor team pool and will be randomly assigned teams from
