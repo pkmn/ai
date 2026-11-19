@@ -159,9 +159,9 @@ site.
 ::: details
 This format is defined to have the rules and mechanics from Pokémon Showdown as of Nov 9th 2026
 ([a78551b0](https://github.com/smogon/pokemon-showdown/commit/a78551b0)/
-[v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)), though it will be updated to follow
-TPCi's VGC ruleset --- once a new ruleset is announced, the existing ladder will be retired and
-replaced with one for the new ruleset.
+[v0.11.0](https://www.npmjs.com/package/@pkmn/sim/v/0.11.0)), played with *Closed Team Sheets*,
+though it will be updated to follow TPCi's VGC ruleset --- once a new ruleset is announced, the
+existing ladder will be retired and replaced with one for the new ruleset.
 
 Unlike other *pkmn.ai* arena ladders, competitors in the *VGC* ladder will be required to submit
 20 distinct teams to make up a shared competitor team pool and will be randomly assigned teams from
@@ -191,8 +191,10 @@ made available after the ladder is retired and rotated out for a new season.
 ### Protocol
 
 All ladder and tournament matches on the *pkmn.ai* arena take place in a sandbox: your submission
-is launched as a local subprocess for *one single game* and communicates strictly over *standard
-input (`stdin`)* and *standard output (`stdout`)* with no room-ID prefix lines.
+is launched as a local subprocess for *one single game* (or one complete *Best-of-N series* in
+multi-game tournaments, where `/ready` occurs once and scratch state persists across games of the
+series) and communicates strictly over *standard input (`stdin`)* and *standard output (`stdout`)*
+with no room-ID prefix lines.
 
   - there is no login protocol; an agent must simply write *`/ready`* to `stdout` to indicate that
     it has initialized and loaded any data or weights it needs to begin playing a game. Agents that
@@ -211,8 +213,9 @@ input (`stdin`)* and *standard output (`stdout`)* with no room-ID prefix lines.
   - agents read newline-delimited Pokémon Showdown protocol lines from `stdin` and *write a
     newline-terminated choice string to `stdout`* whenever they receive an active `|request|<JSON>`
     (where `request.wait` is falsy) (_e.g._, `move 1\n`, `move 2 terastallize\n`, `switch 3\n`,
-    `team 123456\n`, or Doubles `move 1 +2, switch 3\n`). Anything else written to `stdout` at any
-    time will be considered an invalid choice.
+    `team 123456\n`, or Doubles `move 1 +2, switch 3\n`). Any other line written to `stdout`
+    (including disabled commands) is ignored, but emitting more than 64 lines per decision or any
+    line over 64 KiB forfeits the game as a crash.
   - on the ladder (but not tournaments): the arena coordinator utilizes *time-slicing* to share
     resources --- your entire process group will be paused (`SIGSTOP` or `podman pause`) the instant
     your choice newline arrives on `stdout`, and resumed (`SIGCONT` or `podman unpause`) only when
@@ -224,15 +227,19 @@ input (`stdin`)* and *standard output (`stdout`)* with no room-ID prefix lines.
     |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 0.0 sec grace
     ```
 
-  - if your agent makes an invalid or unavailable choice, it remains unpaused with its turn clock
-    still ticking and receives:
+  - if your agent makes an invalid or unavailable choice, its remaining turn budget continues with
+    no turn increment credited and it receives the error, a `|request|<JSON>` (resent on invalid
+    choices, updated by the simulator on unavailable choices), and an updated clock line:
 
     ```text
     |error|[Invalid choice] Can't move: ...
+    |request|<JSON>
     |inactive|Time left: ...
     ```
 
-    Emitting *3 consecutive invalid choices* on the same request will result in a game loss.
+    Emitting *3 consecutive `[Invalid choice]` errors* on the same request will result in a game
+    loss; `[Unavailable choice]` errors (_e.g._, Encore, Disable, or trapping abilities) do not
+    count toward this limit.
   - submissions that lose due to invalid choices / crashes / timeouts more than 20% of the time
     (or in 5 consecutive matches) will be *quarantined* and removed from the matchmaking pool.
 
