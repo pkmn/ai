@@ -98,14 +98,12 @@ export function syncStaticLiveBanner(
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        // TODO: Remove `rel === 'rules'` once `static/rules.dj` is finished.
         if (
           rel === 'arena' ||
           rel === 'api' ||
           rel === 'chat' ||
           rel === 'account' ||
-          rel === 'projects' ||
-          rel === 'rules'
+          rel === 'projects'
         ) {
           continue;
         }
@@ -271,12 +269,9 @@ const build = async (rebuild?: boolean) => {
     // dynamic SSR routes (`/account`, `/arena`, `/projects`, and any active live tournament banner
     // target) therefore get 0-byte `index.html` stubs on disk so `npm run lint` does not report
     // broken links, while Nginx and Polka's `serve-static` wrapper bypass them at runtime.
-    // TODO: Remove `'rules'` from the 0-byte stub cleanup/list once `static/rules.dj` is finished.
-    for (const dirName of ['projects', 'rules']) {
-      const dir = path.join(PUBLIC, dirName);
-      if (fs.exists(dir)) fs.remove(dir);
-    }
-    for (const placeholder of ['chat', 'account', 'arena', 'projects', 'rules']) {
+    const projectsDir = path.join(PUBLIC, 'projects');
+    if (fs.exists(projectsDir)) fs.remove(projectsDir);
+    for (const placeholder of ['chat', 'account', 'arena', 'projects']) {
       const file = path.join(PUBLIC, placeholder, 'index.html');
       fs.mkdir(path.dirname(file));
       fs.write(file, '');
@@ -332,9 +327,9 @@ const build = async (rebuild?: boolean) => {
     };
     pruneArena(path.join(PUBLIC, 'arena'), '');
 
-    // TODO: Re-enable `rules: 'Rules'` once `static/rules.dj` is finished.
     const pages: {[page: string]: string} = {
       background: 'Background',
+      rules: 'Rules',
       release: 'Responsible Release',
     };
     for (const [page, title] of Object.entries(pages)) {

@@ -163,16 +163,15 @@ function seedStaticPublicAssets(tmpPublic: string) {
       fs.copyFileSync(path.join(realPublic, name), path.join(tmpPublic, name));
     }
   }
-  // TODO: Move `'rules'` back to the copied static dirs once `static/rules.dj` is finished.
   for (const dir of [
-    'glossary', 'research', 'concepts', 'release', 'background', 'chat', 'account',
+    'glossary', 'research', 'concepts', 'rules', 'release', 'background', 'chat', 'account',
   ]) {
     const srcDir = path.join(realPublic, dir);
     if (fs.existsSync(srcDir)) {
       fs.cpSync(srcDir, path.join(tmpPublic, dir), {recursive: true});
     }
   }
-  for (const stub of ['arena', 'projects', 'chat', 'account', 'rules']) {
+  for (const stub of ['arena', 'projects', 'chat', 'account']) {
     const stubDir = path.join(tmpPublic, stub);
     fs.mkdirSync(stubDir, {recursive: true});
     const stubIdx = path.join(stubDir, 'index.html');
@@ -1804,11 +1803,8 @@ describe('SSR cache invalidation', () => {
       try {
         expect(fs.readFileSync(path.join(tmpPublic, 'index.html'), 'utf8'))
           .toContain('<span>\u25cf LIVE</span> Tournament #2: VGC 2026 Reg M-C OTS BO3');
-        // TODO: Restore `public/rules/index.html` check once `static/rules.dj` is finished.
-        expect(fs.readFileSync(path.join(tmpPublic, 'release', 'index.html'), 'utf8'))
+        expect(fs.readFileSync(path.join(tmpPublic, 'rules', 'index.html'), 'utf8'))
           .toContain('<span>\u25cf LIVE</span> Tournament #2: VGC 2026 Reg M-C OTS BO3');
-        expect((await h.getRaw('/rules')).status).toBe(404);
-        expect((await h.getRaw('/rules/')).status).toBe(404);
         expect(fs.readFileSync(path.join(tmpPublic, 'background', 'index.html'), 'utf8'))
           .not.toContain('\u25cf LIVE');
 
