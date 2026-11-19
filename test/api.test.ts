@@ -12,6 +12,7 @@ import {createServerApp} from '../server';
 import {encryptSecret} from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
+import {root} from '../static/util';
 import {generateValidHarvestedTeams} from '../tools/mock';
 import {parseArgs, runPkmnCli} from '../tools/pkmn';
 
@@ -2804,5 +2805,20 @@ describe('createServerApp production HTTP hardening', () => {
       ctrl.close();
       await srv.close();
     }
+  });
+
+  test('nginx nests 512m ladder archive location inside ^~ /api/arena/', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    const apiArenaIdx = conf.indexOf('location ^~ /api/arena/ {');
+    const archiveIdx = conf.indexOf('location ~ ^/api/arena/ladders/[^/]+/archive$ {');
+    expect(apiArenaIdx).toBeGreaterThan(0);
+    expect(archiveIdx).toBeGreaterThan(apiArenaIdx);
+    const between = conf.slice(apiArenaIdx, archiveIdx);
+    const openBraces = (between.match(/\{/g) ?? []).length;
+    const closeBraces = (between.match(/\}/g) ?? []).length;
+    expect(openBraces - closeBraces).toBe(1);
+    const archiveBlock = conf.slice(archiveIdx, conf.indexOf('}', archiveIdx) + 1);
+    expect(archiveBlock).toContain('client_max_body_size 512m;');
+    expect(archiveBlock).toContain('proxy_request_buffering off;');
   });
 });
