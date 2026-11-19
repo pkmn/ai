@@ -41,6 +41,39 @@ if ! verify_arena; then
     exit 1
 fi
 
+# Refuse to restart the daemon if Mac mini privileged helpers or system configs changed or
+# drifted from their installed copies (`setup-arena.sh` requires interactive `sudo`).
+NEEDS_SETUP=0
+if ! git diff --quiet "$HEAD" -- \
+    arena/bin/limit.c arena/bin/arena arena/bin/baseline \
+    arena/config/ arena/scripts/setup-arena.sh; then
+    NEEDS_SETUP=1
+fi
+for pair in \
+    "arena/bin/arena:/opt/arena/bin/arena" \
+    "arena/bin/baseline:/opt/arena/agents/_baseline/run" \
+    "arena/config/sandbox.sb:/opt/arena/etc/sandbox.sb" \
+    "arena/config/ai.pkmn.pf.plist:/Library/LaunchDaemons/ai.pkmn.pf.plist" \
+    "arena/config/ai.pkmn.podman.plist:/Library/LaunchDaemons/ai.pkmn.podman.plist" \
+    "arena/config/ai.pkmn.arena.plist:/Library/LaunchDaemons/ai.pkmn.arena.plist" \
+    "arena/config/ai.pkmn.archive.plist:/Library/LaunchDaemons/ai.pkmn.archive.plist"; do
+    src="${pair%%:*}"
+    dst="${pair#*:}"
+    if [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then
+        NEEDS_SETUP=1
+    fi
+done
+if [ -x /opt/arena/bin/limit ] && [ arena/bin/limit.c -nt /opt/arena/bin/limit ]; then
+    NEEDS_SETUP=1
+fi
+if [ "$NEEDS_SETUP" -ne 0 ]; then
+    echo "ERROR: Privileged Arena helpers/configs changed or differ from installed copies." >&2
+    echo "Refusing to restart ai.pkmn.arena against stale host binaries." >&2
+    echo "Re-run ./arena/scripts/setup-arena.sh, then restart ai.pkmn.arena:" >&2
+    echo "  ./arena/scripts/setup-arena.sh && sudo launchctl kickstart -k system/ai.pkmn.arena" >&2
+    exit 1
+fi
+
 # Signal the running coordinator to drain after the current match (if Arena files changed)
 if [ "${command}" = "restart" ] || ! git diff --quiet "$HEAD" arena/ server/ db/ teams/ static/util.tsx package.json teams/package.json; then
     sudo -n /bin/launchctl kill SIGUSR1 system/ai.pkmn.arena 2>/dev/null ||

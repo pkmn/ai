@@ -418,6 +418,10 @@ describe('arena infrastructure', () => {
         .toContain('<key>ExitTimeOut</key>\n  <integer>900</integer>');
       expect(fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8'))
         .toContain('launchctl kill SIGUSR1 system/ai.pkmn.arena');
+      const deployScript = fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8');
+      expect(deployScript).toContain('/opt/arena/agents/_baseline/run');
+      expect(deployScript).toContain('arena/bin/limit.c');
+      expect(deployScript).toContain('arena/scripts/setup-arena.sh');
       expect(sudoers).toContain('/bin/launchctl kill SIGUSR1 system/ai.pkmn.arena');
     });
 
@@ -2629,7 +2633,7 @@ describe('arena infrastructure', () => {
       bundleSha = crypto.createHash('sha256').update(fs.readFileSync(bundleTar)).digest('hex');
     });
 
-    function createMockCoordHarness(prefix: string) {
+    function createMockCoordHarness(prefix: string, baselineSpec?: arbiter.AgentLaunchSpec) {
       const reportedStatuses: serverArena.SubmissionStatusPayload[] = [];
       const completedMatches: serverArena.MatchCompletePayload[] = [];
       const heartbeats: serverArena.HeartbeatPayload[] = [];
@@ -2685,7 +2689,11 @@ describe('arena infrastructure', () => {
       const coord = new coordinator.Coordinator({
         client: mockClient,
         stateDb,
-        baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        baselineSpec: baselineSpec ?? {
+          mode: 'native',
+          target: process.execPath,
+          args: [defaultAgentScript],
+        },
         rootDir,
         devMode: true,
         maxTurns: 1,
@@ -2761,6 +2769,24 @@ describe('arena infrastructure', () => {
         expect(
           fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
         ).toBe(true);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+    test('aborts smoke test without passing when baseline faults', async () => {
+      const brokenBaseline = path.join(tmpDir, 'broken-baseline.js');
+      fs.writeFileSync(brokenBaseline, 'process.exit(1);\n');
+      const h = createMockCoordHarness('broken-baseline', {
+        mode: 'native',
+        target: process.execPath,
+        args: [brokenBaseline],
+      });
+      try {
+        await expect(
+          h.coord.processPendingSubmissions(new Map([['gen9customgame', h.ladderSnap]]))
+        ).rejects.toThrow(/baseline\/infrastructure fault/);
+        expect(h.reportedStatuses).toHaveLength(0);
       } finally {
         h.stateDb.close();
       }

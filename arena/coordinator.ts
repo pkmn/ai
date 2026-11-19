@@ -461,7 +461,19 @@ export class Coordinator {
           devMode: this.devMode,
         });
         const res = await game.run();
-        if (isPlayerFault(res, 'p1') || INFRA_VOID_REASONS.has(res.endReason)) {
+        if (isPlayerFault(res, 'p2') || INFRA_VOID_REASONS.has(res.endReason)) {
+          const stderrSnippet = res.p2.stderr
+            ? ` (${res.p2.stderr.trim().replace(/\s+/g, ' ').slice(0, 240)})`
+            : '';
+          throw new Error(
+            `Smoke test baseline/infrastructure fault in ${item.format}: ` +
+            `${res.endReason}${stderrSnippet}`
+          );
+        }
+        if (
+          isPlayerFault(res, 'p1') ||
+          (FAULT_REASONS.has(res.endReason) && res.winner === 'tie')
+        ) {
           const stderrSnippet = res.p1.stderr
             ? ` (${res.p1.stderr.trim().replace(/\s+/g, ' ').slice(0, 240)})`
             : '';

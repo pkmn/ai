@@ -952,17 +952,19 @@ sends `SIGUSR1` to `ai.pkmn.arena` so the coordinator finishes its in-flight mat
 `outbox`, and exits cleanly for `launchd` (`KeepAlive = true`, `ExitTimeOut = 900`) to respawn on
 the new code.
 
-If a commit modifies native helpers or system configs (`arena/bin/limit.c`, `arena/bin/arena`,
-`arena/config/sandbox.sb`, `arena/config/sudoers`, `arena/config/pf.anchor`, or
-`arena/config/*.plist`), re-run `setup-arena.sh` (which is idempotent) and drain/restart the daemon:
+If a commit modifies native helpers, system configs, or host setup (`arena/bin/limit.c`,
+`arena/bin/arena`, `arena/bin/baseline`, `arena/config/sandbox.sb`, `arena/config/sudoers`,
+`arena/config/pf.anchor`, `arena/config/*.plist`, or `arena/scripts/setup-arena.sh`),
+`deploy.sh` pulls and compiles the repo but refuses to restart `ai.pkmn.arena` until you re-run
+`setup-arena.sh` (which is idempotent) and restart the daemon:
 
 ```sh
 ssh -t arena '
 export PATH="/opt/homebrew/bin:$PATH"
 cd /opt/arena/repo
-./arena/scripts/deploy.sh
+git pull --ff-only origin main
 ./arena/scripts/setup-arena.sh
-sudo launchctl kickstart -k system/ai.pkmn.arena
+./arena/scripts/deploy.sh restart
 '
 ```
 
