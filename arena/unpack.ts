@@ -99,20 +99,8 @@ function decompressArchive(archivePath: string): Buffer {
     });
   }
   if (lower.endsWith('.tar.zst') || lower.endsWith('.tzst')) {
-    const zstdDecompress = (
-      zlib as unknown as {
-        zstdDecompressSync?: (buf: Buffer, opts?: {maxOutputLength?: number}) => Buffer;
-      }
-    ).zstdDecompressSync;
-    if (typeof zstdDecompress === 'function') {
-      return zstdDecompress(fs.readFileSync(archivePath), {
-        maxOutputLength: MAX_TAR_STREAM_BYTES,
-      });
-    }
-    return execFileSync('zstd', ['-dc', archivePath], {
-      maxBuffer: MAX_TAR_STREAM_BYTES,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 60_000,
+    return zlib.zstdDecompressSync(fs.readFileSync(archivePath), {
+      maxOutputLength: MAX_TAR_STREAM_BYTES,
     });
   }
   if (lower.endsWith('.tar.xz') || lower.endsWith('.txz')) {
@@ -312,12 +300,6 @@ function walkFiles(dir: string): string[] {
 }
 
 function cloneOrCopyFile(src: string, dst: string) {
-  if (process.platform === 'darwin') {
-    try {
-      execFileSync('/bin/cp', ['-c', src, dst], {stdio: 'pipe'});
-      return;
-    } catch {}
-  }
   try {
     fs.copyFileSync(src, dst, fs.constants.COPYFILE_FICLONE);
   } catch {

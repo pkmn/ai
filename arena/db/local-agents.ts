@@ -154,36 +154,3 @@ export function resetAgentFaults(db: DatabaseSync, versionId: number) {
     WHERE version_id = ?
   `).run(versionId);
 }
-
-export function totalHotUnpackedBytes(db: DatabaseSync, mode?: ExecutionMode): number {
-  const row = mode
-    ? (db.prepare(`
-      SELECT COALESCE(SUM(unpacked_bytes), 0) AS total
-      FROM local_agents
-      WHERE residency = 'hot' AND mode = ?
-    `).get(mode) as {total: number})
-    : (db.prepare(`
-      SELECT COALESCE(SUM(unpacked_bytes), 0) AS total
-      FROM local_agents
-      WHERE residency = 'hot'
-    `).get() as {total: number});
-  return row.total;
-}
-
-export function listColdEvictionCandidates(
-  db: DatabaseSync,
-  mode?: ExecutionMode
-): LocalAgentRow[] {
-  const rows = mode
-    ? (db.prepare(`
-      SELECT * FROM local_agents
-      WHERE residency = 'hot' AND mode = ?
-      ORDER BY last_played_at ASC, version_id ASC
-    `).all(mode) as unknown as RawLocalAgentRow[])
-    : (db.prepare(`
-      SELECT * FROM local_agents
-      WHERE residency = 'hot'
-      ORDER BY last_played_at ASC, version_id ASC
-    `).all() as unknown as RawLocalAgentRow[]);
-  return rows.map(mapLocalAgentRow);
-}

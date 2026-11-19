@@ -2,7 +2,7 @@ import {DatabaseSync} from 'node:sqlite';
 
 import {toID} from '../static/util';
 
-import {TEAM_MODES, TeamMode} from './ladders';
+import {TeamMode} from './ladders';
 import {recomputeTournamentStandings} from './tournament-entrants';
 
 import {TransactionRunner} from './index';
@@ -53,6 +53,7 @@ export interface TournamentRow {
   format: string;
   version: string;
   team?: TeamMode;
+  rules: string[];
   rulesJson: string;
   bestOf: number;
   gamesPerMatchup: number;
@@ -97,14 +98,16 @@ interface RawTournamentRow {
 }
 
 function mapTournamentRow(raw: RawTournamentRow): TournamentRow {
+  const rules = JSON.parse(raw.rules_json || '[]') as string[];
   return {
     id: raw.id,
     name: raw.name,
     format: raw.format,
     version: raw.version,
     team: raw.team ?? undefined,
+    rules,
     rulesJson: raw.rules_json,
-    bestOf: getTournamentBestOf(raw.format, raw.rules_json),
+    bestOf: getTournamentBestOf(raw.format, rules),
     gamesPerMatchup: raw.games_per_matchup,
     batchSize: raw.batch_size,
     parallelTables: raw.parallel_tables,
@@ -119,9 +122,6 @@ export function upsertTournament(db: DatabaseSync, input: UpsertTournamentInput)
   const version = input.version.trim();
   if (!version) {
     throw new Error(`Tournament "${input.id}" must specify a @pkmn/sim version`);
-  }
-  if (input.team !== undefined && !TEAM_MODES.has(input.team)) {
-    throw new Error(`Invalid tournament team mode "${String(input.team)}" for "${input.id}"`);
   }
   db.prepare(`
     INSERT INTO tournaments (
@@ -213,9 +213,6 @@ export function setTournamentStatus(
     const existing = getTournament(db, id);
     if (!existing) {
       throw new Error(`Unknown tournament "${id}"`);
-    }
-    if (status !== 'scheduled' && status !== 'running' && status !== 'completed') {
-      throw new Error(`Invalid tournament status "${String(status)}"`);
     }
     const completedAt = status === 'completed' ? (existing.completedAt ?? now) : null;
     db.prepare('UPDATE tournaments SET status = ?, completed_at = ? WHERE id = ?')

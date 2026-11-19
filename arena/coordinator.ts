@@ -9,7 +9,7 @@ import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as sim from '../server/sim';
 import * as teams from '../server/teams';
-import {root, toID} from '../static/util';
+import {root, toID, writeFileAtomic} from '../static/util';
 
 import * as arbiter from './arbiter';
 import * as db from './db';
@@ -74,27 +74,13 @@ interface MirrorGameStats {
   pokemon?: unknown[];
 }
 
-function summarizeMatchSide(side: {g1: MirrorGameStats; g2: MirrorGameStats}) {
-  const g1 = {
-    bankSeconds: side.g1.bankSeconds,
-    peakRam: side.g1.peakRam,
-    initMillis: Math.round(side.g1.initMillis ?? 0),
-    teamPreviewMillis: side.g1.teamPreviewMillis,
-    meanTurnMillis: Math.round(side.g1.meanTurnMillis),
-  };
-  const g2 = {
-    bankSeconds: side.g2.bankSeconds,
-    peakRam: side.g2.peakRam,
-    initMillis: Math.round(side.g2.initMillis ?? 0),
-    teamPreviewMillis: side.g2.teamPreviewMillis,
-    meanTurnMillis: Math.round(side.g2.meanTurnMillis),
-  };
+function summarizeGameStats(g: MirrorGameStats) {
   return {
-    g1,
-    g2,
-    peakRam: Math.max(g1.peakRam, g2.peakRam),
-    initMillis: Math.round((g1.initMillis + g2.initMillis) / 2),
-    meanTurnMillis: Math.round((g1.meanTurnMillis + g2.meanTurnMillis) / 2),
+    bankSeconds: g.bankSeconds,
+    peakRam: g.peakRam,
+    initMillis: Math.round(g.initMillis ?? 0),
+    teamPreviewMillis: g.teamPreviewMillis,
+    meanTurnMillis: Math.round(g.meanTurnMillis),
   };
 }
 
@@ -151,18 +137,9 @@ export interface Options {
   client: arena.Client;
   stateDb: db.Database;
   baselineSpec?: arbiter.AgentLaunchSpec;
-  agentsDir?: string;
-  stagingDir?: string;
-  coldDir?: string;
-  teamsDir?: string;
-  archiveLogsDir?: string;
-  casDir?: string;
+  rootDir?: string;
   devMode?: boolean;
   maxTurns?: number;
-  exploitProbability?: number;
-  formatByLadderId?: ReadonlyMap<string, string>;
-  versionByLadderId?: ReadonlyMap<string, string>;
-  randomInt?: (max: number) => number;
 }
 
 interface LadderFaultCounter {
@@ -174,6 +151,8 @@ interface LadderFaultCounter {
 const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
 const INFRA_VOID_REASONS = new Set(['arbiter-stall', 'sim-error', 'arena-error']);
 const BROKEN_AGENT_COOLDOWN_SECONDS = 300;
+const EXPLOIT_PROBABILITY = 0.45;
+const randomInt = (max: number) => crypto.randomInt(0, max);
 
 function isPlayerFault(result: arbiter.ArenaGameResult, slot: 'p1' | 'p2'): boolean {
   if (!FAULT_REASONS.has(result.endReason)) return false;
@@ -182,13 +161,8 @@ function isPlayerFault(result: arbiter.ArenaGameResult, slot: 'p1' | 'p2'): bool
 }
 
 function getHttpErrorStatus(err: unknown): number | undefined {
-  const explicitStatus = (err as {status?: unknown} | undefined)?.status;
-  if (typeof explicitStatus === 'number') return explicitStatus;
-  if (err instanceof Error) {
-    const m = /\((\d{3})\):/.exec(err.message);
-    if (m) return Number(m[1]);
-  }
-  return undefined;
+  const status = (err as {status?: unknown} | undefined)?.status;
+  return typeof status === 'number' ? status : undefined;
 }
 
 // Only drop outbox payloads on definitive schema/duplicate rejections (`400`, `409`, `422`).
@@ -224,24 +198,12 @@ export class Coordinator {
   readonly client: arena.Client;
   readonly stateDb: db.Database;
   private readonly baselineSpec: arbiter.AgentLaunchSpec;
-  private readonly agentsDir: string;
-  private readonly stagingDir: string;
-  private readonly coldDir: string;
-  private readonly teamsDir: string;
-  private readonly archiveLogsDir: string;
-  private readonly casDir?: string;
+  private readonly dirs: packages.Dirs;
   private readonly devMode: boolean;
   private readonly maxTurns?: number;
-  private readonly exploitProbability: number;
-  private readonly formatByLadderId: Map<string, string>;
-  private readonly versionByLadderId: Map<string, string>;
-  private readonly randomInt: (max: number) => number;
-  private readonly customRandomInt: boolean;
-  private readonly harvestedCache = new Map<
-    string,
-    {sha256: string; entries: teams.HarvestedPoolEntry[]}
-  >();
-  private readonly lastRandomArchiveDayByLadder = new Map<string, string>();
+  private readonly versionByLadderId = new Map<string, string>();
+  private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
+  private readonly lastArchivedDayByLadder = new Map<string, string>();
   private readonly archivePublishCooldownByLadder = new Map<string, number>();
   private readonly ladderFaults = new Map<string, LadderFaultCounter>();
   private readonly quarantinedOnLadder = new Set<string>();
@@ -254,28 +216,11 @@ export class Coordinator {
     this.stateDb = options.stateDb;
     this.baselineSpec = options.baselineSpec ?? {
       mode: 'native',
-      target: fs.existsSync('/opt/arena/bin/baseline')
-        ? '/opt/arena/bin/baseline'
-        : root('arena', 'bin', 'baseline'),
+      target: root('arena', 'bin', 'baseline'),
     };
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
-    this.agentsDir = options.agentsDir ?? packages.AGENTS_DIR;
-    this.stagingDir = options.stagingDir ?? packages.STAGING_DIR;
-    this.coldDir = options.coldDir ?? (
-      options.agentsDir !== undefined || (this.devMode && !fs.existsSync('/Volumes/Archive'))
-        ? path.join(path.dirname(this.agentsDir), `${path.basename(this.agentsDir)}-cold`)
-        : packages.COLD_AGENTS_DIR
-    );
-    this.teamsDir = options.teamsDir ?? '/opt/arena/teams';
-    this.archiveLogsDir =
-      options.archiveLogsDir ?? process.env.ARENA_ARCHIVE_LOGS_DIR ?? '/Volumes/Archive/logs';
-    this.casDir = options.casDir;
+    this.dirs = options.rootDir ? packages.dirsForRoot(options.rootDir) : packages.PROD_DIRS;
     this.maxTurns = options.maxTurns;
-    this.exploitProbability = options.exploitProbability ?? 0.45;
-    this.formatByLadderId = new Map(options.formatByLadderId ?? []);
-    this.versionByLadderId = new Map(options.versionByLadderId ?? []);
-    this.customRandomInt = options.randomInt !== undefined;
-    this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
   }
 
   requestDrain() {
@@ -287,13 +232,6 @@ export class Coordinator {
   }
 
   private randomPrngSeed(): PRNGSeed {
-    if (this.customRandomInt) {
-      const s0 = this.randomInt(0x10000);
-      const s1 = this.randomInt(0x10000);
-      const s2 = this.randomInt(0x10000);
-      const s3 = this.randomInt(0x10000);
-      return `${s0},${s1},${s2},${s3}`;
-    }
     return `sodium,${crypto.randomBytes(32).toString('hex')}`;
   }
 
@@ -301,7 +239,7 @@ export class Coordinator {
     if (mode === 'native' && this.devMode && !path.isAbsolute(target)) {
       return {
         mode: 'native',
-        target: path.join(this.agentsDir, target, 'run'),
+        target: path.join(this.dirs.agents, target, 'run'),
       };
     }
     return {mode, target};
@@ -403,17 +341,14 @@ export class Coordinator {
     >();
     for (const l of ladders) {
       pendingMetaById.set(l.id, {format: l.format, version: l.version, team: l.team});
-      this.formatByLadderId.set(l.id, l.format);
       if (l.version) this.versionByLadderId.set(l.id, l.version);
     }
     let processed = 0;
 
     for (const sub of submissions) {
       if (this.draining) break;
-      // Tournament-only submissions target GCP linux/amd64 Spot GPU workers, not Mac mini arm64.
-      if (sub.ladders.length === 0 && sub.tournaments.length > 0) continue;
       // Refresh the 15m server watchdog between submissions so large launch queues stay non-stale.
-      await this.client.sendHeartbeat?.({idle: true})?.catch(() => undefined);
+      await this.client.sendHeartbeat({idle: true}).catch(() => undefined);
       processed++;
       const mode = packages.toExecutionMode(sub.package);
       const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
@@ -427,7 +362,7 @@ export class Coordinator {
             agentTargetId: targetId,
             expectedSha256: sub.sha256,
             creds: sub.authToken,
-            stagingDir: this.stagingDir,
+            dirs: this.dirs,
           });
         } else {
           unpackedBytes = await packages.downloadAndUnpackBundle({
@@ -435,9 +370,7 @@ export class Coordinator {
             expectedSha256: sub.sha256,
             agentTargetId: targetId,
             authToken: sub.authToken,
-            stagingDir: this.stagingDir,
-            agentsDir: this.agentsDir,
-            casDir: this.casDir,
+            dirs: this.dirs,
             allowPrivateUrls: this.devMode,
           });
         }
@@ -460,28 +393,15 @@ export class Coordinator {
       }> = [];
       const seenFormats = new Set<string>();
       for (const lid of sub.ladders) {
-        const pendingMeta = pendingMetaById.get(lid);
-        const snapMeta = laddersById?.get(lid);
-        const format = pendingMeta?.format ??
-          snapMeta?.format ??
-          this.formatByLadderId.get(lid) ??
-          lid;
-        const version = pendingMeta?.version ??
-          snapMeta?.version ??
-          this.versionByLadderId.get(lid);
-        const team = pendingMeta?.team ?? snapMeta?.team ?? 'random';
+        const meta = pendingMetaById.get(lid) ?? laddersById?.get(lid);
+        const format = meta?.format ?? lid;
+        const version = meta?.version;
+        const team = meta?.team ?? 'random';
         const formatKey = `${format}::${version ?? ''}`;
         if (!seenFormats.has(formatKey)) {
           seenFormats.add(formatKey);
           targetsToTest.push({ladderId: lid, format, version, team});
         }
-      }
-      if (targetsToTest.length === 0) {
-        targetsToTest.push({
-          ladderId: 'gen9randombattle',
-          format: 'gen9randombattle',
-          team: 'random',
-        });
       }
 
       const smokeStartMillis = Date.now();
@@ -539,7 +459,6 @@ export class Coordinator {
           readyGraceSeconds: 30,
           maxTurnSeconds: 30,
           devMode: this.devMode,
-          includeSpectatorState: false,
         });
         const res = await game.run();
         if (isPlayerFault(res, 'p1') || INFRA_VOID_REASONS.has(res.endReason)) {
@@ -564,7 +483,7 @@ export class Coordinator {
 
       if (smokeError) {
         if (mode === 'native') {
-          fs.rmSync(path.join(this.agentsDir, targetId), {recursive: true, force: true});
+          fs.rmSync(path.join(this.dirs.agents, targetId), {recursive: true, force: true});
         } else {
           try {
             execFileSync('podman', ['rmi', '-f', targetId], {timeout: 30_000});
@@ -591,16 +510,11 @@ export class Coordinator {
       this.brokenUntilByVersion.delete(sub.versionId);
 
       if (mode === 'native' || !this.devMode) {
-        packages.archiveColdAgent(
-          {mode, target},
-          {agentsDir: this.agentsDir, coldDir: this.coldDir}
-        );
+        packages.archiveColdAgent({mode, target}, {dirs: this.dirs});
       }
 
       packages.evictColdAgentsIfNeeded(this.stateDb, {
-        agentsDir: this.agentsDir,
-        coldDir: this.coldDir,
-        casDir: this.casDir,
+        dirs: this.dirs,
         pinnedVersionIds: new Set([sub.versionId]),
       });
 
@@ -679,46 +593,32 @@ export class Coordinator {
     format: string
   ): Promise<teams.HarvestedPoolEntry[]> {
     const cached = this.harvestedCache.get(ladderId);
-    if (cached && cached.entries.length >= 2) return cached.entries;
+    if (cached && cached.length >= 2) return cached;
 
-    const localFile = path.join(this.teamsDir, `${ladderId}.txt`);
-    const shaFile = `${localFile}.sha256`;
+    const localFile = path.join(this.dirs.teams, `${ladderId}.txt`);
     if (fs.existsSync(localFile)) {
-      const rawText = fs.readFileSync(localFile, 'utf8');
-      const lines = rawText
+      const lines = fs.readFileSync(localFile, 'utf8')
         .split(/\r?\n/)
         .map(l => l.trim())
         .filter(Boolean);
-      const computedSha = crypto.createHash('sha256').update(lines.join('\n')).digest('hex');
-      const storedSha = fs.existsSync(shaFile)
-        ? fs.readFileSync(shaFile, 'utf8').trim()
-        : undefined;
-      if (lines.length >= 2 && (!storedSha || storedSha === computedSha)) {
+      if (lines.length >= 2) {
         const entries = this.toHarvestedEntries(lines, format);
-        this.harvestedCache.set(ladderId, {sha256: computedSha, entries});
+        this.harvestedCache.set(ladderId, entries);
         return entries;
       }
       fs.rmSync(localFile, {force: true});
-      fs.rmSync(shaFile, {force: true});
     }
 
     const remote = await this.client.getLadderTeams(ladderId);
-    if (remote.teams.length < 2) {
-      throw new Error(`Ladder '${ladderId}' returned fewer than 2 harvested teams`);
-    }
     const cleanTeams = remote.teams.map(t => t.trim()).filter(Boolean);
     if (cleanTeams.length < 2) {
-      throw new Error(`Ladder '${ladderId}' returned fewer than 2 non-empty harvested teams`);
+      throw new Error(`Ladder '${ladderId}' returned fewer than 2 harvested teams`);
     }
-    fs.mkdirSync(this.teamsDir, {recursive: true, mode: 0o700});
-    const tmpFile = `${localFile}.tmp.${process.pid}`;
-    fs.writeFileSync(tmpFile, `${cleanTeams.join('\n')}\n`, {encoding: 'utf8', mode: 0o600});
-    fs.renameSync(tmpFile, localFile);
-    const sha256 = remote.sha256 ||
-      crypto.createHash('sha256').update(cleanTeams.join('\n')).digest('hex');
-    fs.writeFileSync(shaFile, `${sha256}\n`, {encoding: 'utf8', mode: 0o600});
+    fs.mkdirSync(this.dirs.teams, {recursive: true, mode: 0o700});
+    writeFileAtomic(localFile, `${cleanTeams.join('\n')}\n`);
+    fs.chmodSync(localFile, 0o600);
     const entries = this.toHarvestedEntries(cleanTeams, format);
-    this.harvestedCache.set(ladderId, {sha256, entries});
+    this.harvestedCache.set(ladderId, entries);
     return entries;
   }
 
@@ -738,7 +638,7 @@ export class Coordinator {
         pool,
         p1AgentId,
         p2AgentId,
-        this.randomInt,
+        randomInt,
         ladder.min
       );
       return {
@@ -750,7 +650,7 @@ export class Coordinator {
     }
     if (ladder.team === 'harvested') {
       const pool = await this.loadHarvestedTeamsForLadder(ladder.id, ladder.format);
-      const {t1Packed, t2Packed} = teams.sampleHarvestedPair(pool, this.randomInt);
+      const {t1Packed, t2Packed} = teams.sampleHarvestedPair(pool, randomInt);
       return {t1: t1Packed, t2: t2Packed};
     }
     const seed1 = this.randomPrngSeed();
@@ -773,7 +673,7 @@ export class Coordinator {
   ) {
     try {
       const day = new Date(daySeconds * 1000).toISOString().slice(0, 10);
-      const dir = path.join(this.archiveLogsDir, ladderId, day);
+      const dir = path.join(this.dirs.logs, ladderId, day);
       fs.mkdirSync(dir, {recursive: true, mode: 0o700});
       fs.writeFileSync(path.join(dir, `${matchId}${suffix}.log`), log, {
         encoding: 'utf8',
@@ -790,16 +690,20 @@ export class Coordinator {
   ): string | undefined {
     try {
       const day = new Date(daySeconds * 1000).toISOString().slice(0, 10);
-      const file = path.join(this.archiveLogsDir, ladderId, day, `${matchId}${suffix}.log`);
+      const file = path.join(this.dirs.logs, ladderId, day, `${matchId}${suffix}.log`);
       if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
     } catch {}
     return undefined;
   }
 
-  async publishLadderArchive(ladderId: string, excludeDay?: string): Promise<boolean> {
-    const ladderDir = path.join(this.archiveLogsDir, ladderId);
+  // The coordinator owns daily `.7z` log compression for all ladders on UTC day rollover (plus
+  // `<ladderId>-logs.tar` assembly/upload for `random` and retired `pools`). `archive.sh` owns
+  // only `/Volumes/Archive` mount checks, SQLite `.backup`/zstd, monthly `.tar` rollups, and GCS.
+  compressCompletedDays(ladderId: string, excludeDay?: string): boolean {
+    const ladderDir = path.join(this.dirs.logs, ladderId);
     if (!fs.existsSync(ladderDir)) return false;
 
+    let compressedAny = false;
     for (const entry of fs.readdirSync(ladderDir, {withFileTypes: true})) {
       if (!entry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
       if (excludeDay && entry.name === excludeDay) continue;
@@ -807,7 +711,10 @@ export class Coordinator {
       const yearMonth = day.slice(0, 7);
       const dayDir = path.join(ladderDir, day);
       const hasLogs = fs.readdirSync(dayDir).some(f => f.endsWith('.log'));
-      if (!hasLogs) continue;
+      if (!hasLogs) {
+        fs.rmSync(dayDir, {recursive: true, force: true});
+        continue;
+      }
 
       const monthDir = path.join(ladderDir, yearMonth);
       fs.mkdirSync(monthDir, {recursive: true, mode: 0o700});
@@ -817,17 +724,29 @@ export class Coordinator {
       try {
         execFileSync(
           '7z',
-          ['a', '-t7z', '-m0=lzma2', '-mx=9', '-ms=on', tmpDayArchive, '*.log'],
+          [
+            'a', '-t7z', '-m0=lzma2', '-mx=9', '-mfb=64', '-md=64m', '-ms=on',
+            tmpDayArchive, '*.log',
+          ],
           {cwd: dayDir, stdio: 'ignore', timeout: 60_000}
         );
         execFileSync('7z', ['t', tmpDayArchive], {stdio: 'ignore', timeout: 30_000});
         fs.renameSync(tmpDayArchive, dayArchive);
         fs.rmSync(dayDir, {recursive: true, force: true});
+        compressedAny = true;
       } catch (err) {
         fs.rmSync(tmpDayArchive, {force: true});
         console.error(`Failed to compress daily archive ${dayArchive}:`, err);
       }
     }
+    return compressedAny;
+  }
+
+  async publishLadderArchive(ladderId: string, excludeDay?: string): Promise<boolean> {
+    const ladderDir = path.join(this.dirs.logs, ladderId);
+    if (!fs.existsSync(ladderDir)) return false;
+
+    this.compressCompletedDays(ladderId, excludeDay);
 
     const archiveMembers: string[] = [];
     for (const entry of fs.readdirSync(ladderDir, {withFileTypes: true})) {
@@ -886,21 +805,19 @@ export class Coordinator {
     return published;
   }
 
-  async publishRandomLadderArchive(ladderId: string, excludeDay?: string): Promise<boolean> {
-    return this.publishLadderArchive(ladderId, excludeDay);
-  }
-
-  private async maybePublishDailyRandomArchive(
+  private async maybeArchiveOnDayRollover(
     ladderId: string,
+    teamMode: db.TeamMode,
     nowSeconds: number
-  ): Promise<boolean> {
+  ): Promise<void> {
     const today = new Date(nowSeconds * 1000).toISOString().slice(0, 10);
-    const prev = this.lastRandomArchiveDayByLadder.get(ladderId);
-    this.lastRandomArchiveDayByLadder.set(ladderId, today);
-    if (prev !== undefined && prev !== today) {
-      return this.publishLadderArchive(ladderId, today);
+    const prev = this.lastArchivedDayByLadder.get(ladderId);
+    if (prev === today) return;
+    this.lastArchivedDayByLadder.set(ladderId, today);
+    const compressed = this.compressCompletedDays(ladderId, today);
+    if (teamMode === 'random' && (compressed || prev !== undefined)) {
+      await this.publishLadderArchive(ladderId, today);
     }
-    return false;
   }
 
   private recordLadderGameFault(
@@ -1084,7 +1001,6 @@ export class Coordinator {
       sendUtm: match.teamMode !== 'random',
       maxTurns: this.maxTurns,
       devMode: this.devMode,
-      includeSpectatorState: true,
       onTurn: async info => {
         const lines = match.teamMode === 'random' && info.omniscientLog
           ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, match.p2.name, match.p1.name)
@@ -1184,8 +1100,8 @@ export class Coordinator {
       ? (game1.log ?? this.readArchivedGameLog(match.ladderId, match.id, 'a', match.startedAt))
       : undefined;
 
-    const p1 = summarizeMatchSide({g1: game1.p1, g2: g2Res.p2});
-    const p2 = summarizeMatchSide({g1: game1.p2, g2: g2Res.p1});
+    const p1 = {g1: summarizeGameStats(game1.p1), g2: summarizeGameStats(g2Res.p2)};
+    const p2 = {g1: summarizeGameStats(game1.p2), g2: summarizeGameStats(g2Res.p1)};
 
     const payload: arena.MatchCompletePayload = {
       match: {
@@ -1203,8 +1119,6 @@ export class Coordinator {
         game2Turns: g2Res.turns,
         game1EndReason: game1.endReason,
         game2EndReason: g2Res.endReason,
-        p1PeakRam: p1.peakRam,
-        p2PeakRam: p2.peakRam,
         p1Game1PeakRam: p1.g1.peakRam,
         p1Game2PeakRam: p1.g2.peakRam,
         p2Game1PeakRam: p2.g1.peakRam,
@@ -1213,8 +1127,6 @@ export class Coordinator {
         p1Game2BankSeconds: p1.g2.bankSeconds,
         p2Game1BankSeconds: p2.g1.bankSeconds,
         p2Game2BankSeconds: p2.g2.bankSeconds,
-        p1InitMillis: p1.initMillis,
-        p2InitMillis: p2.initMillis,
         p1Game1InitMillis: p1.g1.initMillis,
         p1Game2InitMillis: p1.g2.initMillis,
         p2Game1InitMillis: p2.g1.initMillis,
@@ -1231,8 +1143,6 @@ export class Coordinator {
         ...(p2.g2.teamPreviewMillis !== undefined
           ? {p2Game2TeamPreviewMillis: p2.g2.teamPreviewMillis}
           : {}),
-        p1MeanTurnMillis: p1.meanTurnMillis,
-        p2MeanTurnMillis: p2.meanTurnMillis,
         p1Game1MeanTurnMillis: p1.g1.meanTurnMillis,
         p1Game2MeanTurnMillis: p1.g2.meanTurnMillis,
         p2Game1MeanTurnMillis: p2.g1.meanTurnMillis,
@@ -1254,8 +1164,8 @@ export class Coordinator {
 
     if (archivedLadder && sendLogs) {
       await this.publishLadderArchive(match.ladderId);
-    } else if (match.teamMode === 'random') {
-      await this.maybePublishDailyRandomArchive(match.ladderId, completedAt);
+    } else {
+      await this.maybeArchiveOnDayRollover(match.ladderId, match.teamMode, completedAt);
     }
 
     const g1Fault = FAULT_REASONS.has(game1.endReason);
@@ -1290,20 +1200,10 @@ export class Coordinator {
   private async resumeAndCompleteGame2(
     cp: db.LocalMatchCheckpoint
   ): Promise<'resumed' | 'aborted'> {
-    packages.ensureAgentResident(this.stateDb, cp.p1.versionId, {
-      agentsDir: this.agentsDir,
-      coldDir: this.coldDir,
-      casDir: this.casDir,
-    });
-    packages.ensureAgentResident(this.stateDb, cp.p2.versionId, {
-      agentsDir: this.agentsDir,
-      coldDir: this.coldDir,
-      casDir: this.casDir,
-    });
+    packages.ensureAgentResident(this.stateDb, cp.p1.versionId, {dirs: this.dirs});
+    packages.ensureAgentResident(this.stateDb, cp.p2.versionId, {dirs: this.dirs});
     packages.evictColdAgentsIfNeeded(this.stateDb, {
-      agentsDir: this.agentsDir,
-      coldDir: this.coldDir,
-      casDir: this.casDir,
+      dirs: this.dirs,
       pinnedVersionIds: new Set([cp.p1.versionId, cp.p2.versionId]),
     });
 
@@ -1372,6 +1272,7 @@ export class Coordinator {
     if (ladders.some(l => l.status === 'active' || l.status === 'settling')) {
       const activeVersionIds = new Set<number>();
       for (const ladder of ladders) {
+        if (ladder.version) this.versionByLadderId.set(ladder.id, ladder.version);
         if (ladder.status !== 'active' && ladder.status !== 'settling') continue;
         for (const e of ladder.entries) {
           if (e.role === 'champion' || e.role === 'challenger') {
@@ -1380,9 +1281,7 @@ export class Coordinator {
         }
       }
       packages.evictColdAgentsIfNeeded(this.stateDb, {
-        agentsDir: this.agentsDir,
-        coldDir: this.coldDir,
-        casDir: this.casDir,
+        dirs: this.dirs,
         activeVersionIds,
       });
     }
@@ -1429,7 +1328,7 @@ export class Coordinator {
     const choice = ratings.selectNextArenaMatch(
       candidates.map(c => c.state),
       globalSeq,
-      this.exploitProbability
+      EXPLOIT_PROBABILITY
     );
 
     const chosen = candidates.find(c => c.ladder.id === choice.ladderId)!;
@@ -1447,22 +1346,14 @@ export class Coordinator {
     const now = Math.floor(Date.now() / 1000);
     let a1: db.LocalAgentRow | undefined;
     try {
-      a1 = packages.ensureAgentResident(this.stateDb, e1.versionId, {
-        agentsDir: this.agentsDir,
-        coldDir: this.coldDir,
-        casDir: this.casDir,
-      });
+      a1 = packages.ensureAgentResident(this.stateDb, e1.versionId, {dirs: this.dirs});
     } catch (err) {
       this.brokenUntilByVersion.set(e1.versionId, now + BROKEN_AGENT_COOLDOWN_SECONDS);
       throw err;
     }
     let a2: db.LocalAgentRow | undefined;
     try {
-      a2 = packages.ensureAgentResident(this.stateDb, e2.versionId, {
-        agentsDir: this.agentsDir,
-        coldDir: this.coldDir,
-        casDir: this.casDir,
-      });
+      a2 = packages.ensureAgentResident(this.stateDb, e2.versionId, {dirs: this.dirs});
     } catch (err) {
       this.brokenUntilByVersion.set(e2.versionId, now + BROKEN_AGENT_COOLDOWN_SECONDS);
       throw err;
@@ -1475,9 +1366,7 @@ export class Coordinator {
       );
     }
     packages.evictColdAgentsIfNeeded(this.stateDb, {
-      agentsDir: this.agentsDir,
-      coldDir: this.coldDir,
-      casDir: this.casDir,
+      dirs: this.dirs,
       pinnedVersionIds: new Set([e1.versionId, e2.versionId]),
     });
 
@@ -1564,7 +1453,6 @@ export class Coordinator {
         sendUtm: ladder.team !== 'random',
         maxTurns: this.maxTurns,
         devMode: this.devMode,
-        includeSpectatorState: true,
         onTurn: async info => {
           const lines = ladder.team === 'random' && info.omniscientLog
             ? arbiter.rewriteBlindPlayerNames(info.omniscientLog, e1.agentName, e2.agentName)

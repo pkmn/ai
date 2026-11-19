@@ -25,30 +25,22 @@ export interface CompletedMatchPayload {
   game2Turns: number;
   game1EndReason: string;
   game2EndReason: string;
-  p1PeakRam?: number;
-  p2PeakRam?: number;
-  p1Game1PeakRam?: number;
-  p1Game2PeakRam?: number;
-  p2Game1PeakRam?: number;
-  p2Game2PeakRam?: number;
+  p1Game1PeakRam: number;
+  p1Game2PeakRam: number;
+  p2Game1PeakRam: number;
+  p2Game2PeakRam: number;
   p1Game1BankSeconds: number;
   p1Game2BankSeconds: number;
   p2Game1BankSeconds: number;
   p2Game2BankSeconds: number;
-  p1MeanTurnMillis?: number;
-  p2MeanTurnMillis?: number;
-  p1Game1MeanTurnMillis?: number;
-  p1Game2MeanTurnMillis?: number;
-  p2Game1MeanTurnMillis?: number;
-  p2Game2MeanTurnMillis?: number;
-  p1InitMillis?: number;
-  p2InitMillis?: number;
+  p1Game1MeanTurnMillis: number;
+  p1Game2MeanTurnMillis: number;
+  p2Game1MeanTurnMillis: number;
+  p2Game2MeanTurnMillis: number;
   p1Game1InitMillis?: number;
   p1Game2InitMillis?: number;
   p2Game1InitMillis?: number;
   p2Game2InitMillis?: number;
-  p1TeamPreviewMillis?: number;
-  p2TeamPreviewMillis?: number;
   p1Game1TeamPreviewMillis?: number;
   p1Game2TeamPreviewMillis?: number;
   p2Game1TeamPreviewMillis?: number;
@@ -58,7 +50,6 @@ export interface CompletedMatchPayload {
 
 export interface RecordMatchInput {
   match: CompletedMatchPayload;
-  ladderStatus?: ladders.LadderStatus;
 }
 
 export interface RecentMatchPlayer {
@@ -161,31 +152,22 @@ function meanOptional(a: number | undefined, b: number | undefined): number | un
 }
 
 function resolvePayloadSideTelemetry(m: CompletedMatchPayload, side: 'p1' | 'p2') {
-  const g1Ram = (side === 'p1' ? m.p1Game1PeakRam : m.p2Game1PeakRam) ??
-    (side === 'p1' ? m.p1PeakRam : m.p2PeakRam) ?? 0;
-  const g2Ram = (side === 'p1' ? m.p1Game2PeakRam : m.p2Game2PeakRam) ??
-    (side === 'p1' ? m.p1PeakRam : m.p2PeakRam) ?? 0;
-  const g1Init = (side === 'p1' ? m.p1Game1InitMillis : m.p2Game1InitMillis) ??
-    (side === 'p1' ? m.p1InitMillis : m.p2InitMillis) ?? 0;
-  const g2Init = (side === 'p1' ? m.p1Game2InitMillis : m.p2Game2InitMillis) ??
-    (side === 'p1' ? m.p1InitMillis : m.p2InitMillis) ?? 0;
-  const tpMatch = side === 'p1' ? m.p1TeamPreviewMillis : m.p2TeamPreviewMillis;
-  const g1Tp = (side === 'p1' ? m.p1Game1TeamPreviewMillis : m.p2Game1TeamPreviewMillis) ?? tpMatch;
-  const g2Tp = (side === 'p1' ? m.p1Game2TeamPreviewMillis : m.p2Game2TeamPreviewMillis) ?? tpMatch;
-  const g1Turn = (side === 'p1' ? m.p1Game1MeanTurnMillis : m.p2Game1MeanTurnMillis) ??
-    (side === 'p1' ? m.p1MeanTurnMillis : m.p2MeanTurnMillis) ?? 0;
-  const g2Turn = (side === 'p1' ? m.p1Game2MeanTurnMillis : m.p2Game2MeanTurnMillis) ??
-    (side === 'p1' ? m.p1MeanTurnMillis : m.p2MeanTurnMillis) ?? 0;
+  const g1Ram = side === 'p1' ? m.p1Game1PeakRam : m.p2Game1PeakRam;
+  const g2Ram = side === 'p1' ? m.p1Game2PeakRam : m.p2Game2PeakRam;
+  const g1Init = (side === 'p1' ? m.p1Game1InitMillis : m.p2Game1InitMillis) ?? 0;
+  const g2Init = (side === 'p1' ? m.p1Game2InitMillis : m.p2Game2InitMillis) ?? 0;
+  const g1Tp = side === 'p1' ? m.p1Game1TeamPreviewMillis : m.p2Game1TeamPreviewMillis;
+  const g2Tp = side === 'p1' ? m.p1Game2TeamPreviewMillis : m.p2Game2TeamPreviewMillis;
+  const g1Turn = side === 'p1' ? m.p1Game1MeanTurnMillis : m.p2Game1MeanTurnMillis;
+  const g2Turn = side === 'p1' ? m.p1Game2MeanTurnMillis : m.p2Game2MeanTurnMillis;
   return {
     g1: {ram: g1Ram, initMillis: g1Init, teamPreviewMillis: g1Tp, meanTurnMillis: g1Turn},
     g2: {ram: g2Ram, initMillis: g2Init, teamPreviewMillis: g2Tp, meanTurnMillis: g2Turn},
-    peakRam: (side === 'p1' ? m.p1PeakRam : m.p2PeakRam) ?? Math.max(g1Ram, g2Ram),
+    peakRam: Math.max(g1Ram, g2Ram),
     meanRam: (g1Ram + g2Ram) / 2,
-    initMillis: (side === 'p1' ? m.p1InitMillis : m.p2InitMillis) ??
-      Math.round((g1Init + g2Init) / 2),
-    teamPreviewMillis: tpMatch ?? meanOptional(g1Tp, g2Tp),
-    meanTurnMillis: (side === 'p1' ? m.p1MeanTurnMillis : m.p2MeanTurnMillis) ??
-      Math.round((g1Turn + g2Turn) / 2),
+    initMillis: Math.round((g1Init + g2Init) / 2),
+    teamPreviewMillis: meanOptional(g1Tp, g2Tp),
+    meanTurnMillis: Math.round((g1Turn + g2Turn) / 2),
   };
 }
 
@@ -469,11 +451,9 @@ export function recordCompletedMatch(
     recomputeLadderRatings(db, m.ladderId, m.completedAt, prevMatchSec, dayUtc);
 
     let archivedLadder = false;
-    if (ladder.status === 'settling' || input.ladderStatus === 'archived') {
-      if (input.ladderStatus === 'archived' || !ladders.canSettleLadder(db, ladder)) {
-        ladders.archiveLadderInPlace(db, m.ladderId, m.completedAt);
-        archivedLadder = true;
-      }
+    if (ladder.status === 'settling' && !ladders.canSettleLadder(db, ladder)) {
+      ladders.archiveLadderInPlace(db, m.ladderId, m.completedAt);
+      archivedLadder = true;
     }
 
     return {duplicate: false, archivedLadder};

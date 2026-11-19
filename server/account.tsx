@@ -5,7 +5,7 @@ import * as querystring from 'querystring';
 
 import polka from 'polka';
 
-import {LADDERS_FILE, SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
+import {SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
 import type * as db from '../db';
 import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import {
@@ -18,6 +18,7 @@ import {
   formatUtcDate,
   formatUtcDateTime,
   installHeadSupport,
+  readBody,
   root,
 } from '../static/util';
 
@@ -395,41 +396,9 @@ const ACCOUNT_SCRIPT = `
 export interface Options {
   db: db.Database;
   auth: Auth;
-  laddersFile?: string;
   poolsByLadder?: Map<string, string[]>;
   rateLimitMaxAttempts?: number;
-  rateLimitWindowSeconds?: number;
-  allowPrivateUrls?: boolean;
   now?: () => number;
-}
-
-function readBody(req: http.IncomingMessage, maxBytes = MAX_SUBMISSION_BYTES): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-    req.on('data', (chunk: Buffer) => {
-      if (settled) return;
-      total += chunk.length;
-      if (total > maxBytes) {
-        settled = true;
-        req.resume();
-        reject(Object.assign(new Error('Submission payload exceeds 512 KB limit.'), {status: 413}));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (settled) return;
-      settled = true;
-      resolve(Buffer.concat(chunks).toString('utf8'));
-    });
-    req.on('error', err => {
-      if (settled) return;
-      settled = true;
-      reject(err);
-    });
-  });
 }
 
 function sendHtml(res: http.ServerResponse, status: number, html: string) {
@@ -574,12 +543,7 @@ function renderHistorySection(
           </thead>
           <tbody>
             {versions.map((v, idx) => {
-              let ladderIds: string[] = [];
-              try {
-                const parsed = JSON.parse(v.laddersJson) as unknown;
-                if (Array.isArray(parsed)) ladderIds = parsed.map(String);
-              } catch {}
-              const ladderLabels: Child[] = ladderIds.map(id => ladderNameById.get(id) ?? id);
+              const ladderLabels: Child[] = v.ladders.map(id => ladderNameById.get(id) ?? id);
               const tourneyLabels: Child[] = (v.tournamentNames ?? []).map(name => {
                 const m = /^Tournament #(\d+)/.exec(name);
                 return m ? <span title={name}>T#{m[1]}</span> : name;
@@ -1245,24 +1209,9 @@ export function register(app: polka.Polka, options: Options) {
   installHeadSupport(app);
   const {db, auth} = options;
   const getNow = options.now ?? (() => Math.floor(Date.now() / 1000));
-  const laddersPath = options.laddersFile ?? LADDERS_FILE;
-  let cachedPoolsMtime = -1;
-  let cachedPoolsMap: Map<string, string[]> | undefined;
-  const getPools = () => {
-    if (options.poolsByLadder) return options.poolsByLadder;
-    let mtime = -1;
-    try {
-      mtime = fs.statSync(laddersPath).mtimeMs;
-    } catch {}
-    if (cachedPoolsMap && mtime === cachedPoolsMtime && mtime !== -1) {
-      return cachedPoolsMap;
-    }
-    cachedPoolsMap = loadLadderPools(laddersPath);
-    cachedPoolsMtime = mtime;
-    return cachedPoolsMap;
-  };
+  const getPools = () => options.poolsByLadder ?? loadLadderPools();
   const maxAttempts = options.rateLimitMaxAttempts ?? RATE_LIMIT_MAX_ATTEMPTS;
-  const windowSeconds = options.rateLimitWindowSeconds ?? RATE_LIMIT_WINDOW_SECONDS;
+  const windowSeconds = RATE_LIMIT_WINDOW_SECONDS;
   const attemptsByAgent = new Map<number, number[]>();
 
   // Enforced before body parsing and 1-NN team-uniqueness checks so a logged-in developer cannot
@@ -1378,40 +1327,28 @@ export function register(app: polka.Polka, options: Options) {
           remainingTeams: savedTeamsJson[l.id]?.remainingCount ?? 0,
         })),
         activeEntries,
-        versions: versions.map(v => {
-          let ladders: string[] = [];
-          let tournaments: string[] = [];
-          try {
-            const parsedLadders = JSON.parse(v.laddersJson || '[]') as unknown;
-            if (Array.isArray(parsedLadders)) ladders = parsedLadders.map(String);
-          } catch {}
-          try {
-            const parsedTournaments = JSON.parse(v.tournamentsJson || '[]') as unknown;
-            if (Array.isArray(parsedTournaments)) tournaments = parsedTournaments.map(String);
-          } catch {}
-          return {
-            id: v.id,
-            version: v.version,
-            package: v.package,
-            sha256: v.sha256,
-            ladders,
-            tournaments,
-            unpackedBytes: v.unpackedBytes,
-            smoke: {
-              status: v.smokeStatus,
-              durationMillis: v.smokeDurationMillis,
-              initMillis: v.smokeInitMillis,
-              teamPreviewMillis: v.smokeTeamPreviewMillis,
-              turnMillis: v.smokeTurnMillis,
-              peakRam: v.smokePeakRam,
-              error: v.smokeError,
-            },
-            submittedAt: v.submittedAt,
-            activatedAt: v.activatedAt,
-            activeLadderNames: v.activeLadderNames,
-            tournamentNames: v.tournamentNames,
-          };
-        }),
+        versions: versions.map(v => ({
+          id: v.id,
+          version: v.version,
+          package: v.package,
+          sha256: v.sha256,
+          ladders: v.ladders,
+          tournaments: v.tournaments,
+          unpackedBytes: v.unpackedBytes,
+          smoke: {
+            status: v.smokeStatus,
+            durationMillis: v.smokeDurationMillis,
+            initMillis: v.smokeInitMillis,
+            teamPreviewMillis: v.smokeTeamPreviewMillis,
+            turnMillis: v.smokeTurnMillis,
+            peakRam: v.smokePeakRam,
+            error: v.smokeError,
+          },
+          submittedAt: v.submittedAt,
+          activatedAt: v.activatedAt,
+          activeLadderNames: v.activeLadderNames,
+          tournamentNames: v.tournamentNames,
+        })),
       });
       return;
     }
@@ -1436,61 +1373,6 @@ export function register(app: polka.Polka, options: Options) {
   app.get('/account', (req, res) => handleGetAccount(req, res, false));
   app.get('/account.json', (req, res) => handleGetAccount(req, res, true));
   app.get('/account/index.json', (req, res) => handleGetAccount(req, res, true));
-
-  app.post('/api/account/teams/clear', async (req, res) => {
-    if (isCrossSiteRequest(req)) {
-      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
-      return;
-    }
-    const login = auth.getGitHubUser(req);
-    if (!login) {
-      sendJson(res, 401, {error: 'GitHub authentication required.'});
-      return;
-    }
-    const developer = db.getDeveloperByGitHub(login);
-    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
-    if (!developer || !agent || agent.status === 'disabled') {
-      sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
-      return;
-    }
-    let ladderKey: string;
-    try {
-      const rawBody = await readBody(req, 16 * 1024);
-      if (req.headers['content-type']?.includes('application/json')) {
-        const parsed = JSON.parse(rawBody || '{}') as {ladderId?: unknown};
-        ladderKey = typeof parsed.ladderId === 'string' ? parsed.ladderId.trim() : '';
-      } else {
-        const parsed = querystring.parse(rawBody);
-        const val = Array.isArray(parsed.ladderId) ? parsed.ladderId[0] : parsed.ladderId;
-        ladderKey = (val ?? '').trim();
-      }
-    } catch {
-      sendJson(res, 400, {error: 'Malformed request body.'});
-      return;
-    }
-    const currentLadders = db.getCurrentLadders();
-    const lower = ladderKey.toLowerCase();
-    const ladder = currentLadders.find(
-      l => l.id.toLowerCase() === lower ||
-        l.slot.toLowerCase() === lower ||
-        l.name.toLowerCase() === lower
-    );
-    if (ladder?.team !== 'pools') {
-      sendJson(res, 400, {error: `Unknown pools ladder "${ladderKey}".`});
-      return;
-    }
-    if (db.hasActiveLadderTeams(ladder.id, agent.id)) {
-      sendJson(res, 409, {error: `Teams for ${ladder.name} are already locked for this season.`});
-      return;
-    }
-    db.replaceSavedTeams(ladder.id, agent.id, [], getNow());
-    sendJson(res, 200, {
-      ok: true,
-      ladderId: ladder.id,
-      savedCount: 0,
-      requiredCount: ladder.teams ?? 0,
-    });
-  });
 
   app.post('/api/submissions', async (req, res) => {
     if (isCrossSiteRequest(req)) {
@@ -1534,7 +1416,11 @@ export function register(app: polka.Polka, options: Options) {
 
     let payload: ReturnType<typeof parseSubmissionPayload>;
     try {
-      const rawBody = await readBody(req);
+      const rawBody = await readBody(
+        req,
+        MAX_SUBMISSION_BYTES,
+        'Submission payload exceeds 512 KB limit.'
+      );
       payload = parseSubmissionPayload(rawBody, req.headers['content-type']);
     } catch (err: any) {
       sendJson(res, err?.status ?? 400, {error: err?.message || 'Malformed request body.'});
@@ -1562,7 +1448,7 @@ export function register(app: polka.Polka, options: Options) {
       return;
     }
 
-    const urlErr = validateArtifactUrl(payload.url, packageFormat, options.allowPrivateUrls);
+    const urlErr = validateArtifactUrl(payload.url, packageFormat);
     if (urlErr) {
       sendJson(res, 400, {error: urlErr});
       return;

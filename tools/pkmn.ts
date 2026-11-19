@@ -16,17 +16,12 @@ import * as sim from '../server/sim';
 import * as smogon from '../server/smogon';
 import {validateHarvestedTeams} from '../server/teams';
 import {syncStaticLiveBanner} from '../static/build';
-import {root, writeFileAtomic} from '../static/util';
+import {copyFileAtomic, root, writeFileAtomic} from '../static/util';
 
 export interface Options {
   db?: db.Database;
-  dbPath?: string;
-  projectsFile?: string;
-  avatarsDir?: string;
   publicDir?: string;
   now?: number;
-  smogonToken?: string;
-  sessionSecret?: string;
   lookupSmogon?: (raw: string | number, token?: string) => Promise<smogon.User>;
   log?: (line: string) => void;
 }
@@ -43,7 +38,7 @@ const USAGE = [
   '  upload-ladder-teams <ladder_id> <teams-file>',
   '  rotate-ladder <old_ladder_id> --name "..." [--new <new_ladder_id>] ' +
     '[--new-name "..."] [--format <format>] [--version <sim_version>] [--team <mode>] ' +
-    '[--min <n>] [--teams <n>] [--discord <role_id>]',
+    '[--teams <n>] [--discord <role_id>]',
   '  install-sim <version> [--sim <spec>] [--dex <spec>] [--mods <spec>] [--randoms <spec>]',
   '  reassign-developer <github-login> <target-agent-slug|--none> ' +
     '[--smogon <username.id|id|username>] [--projects <path>] [--offline]',
@@ -57,8 +52,7 @@ const USAGE = [
   '  publish-tournament-archive <id> <archive.7z>',
   '  publish-ladder-archive <ladder_id> <archive.tar>',
   '  lookup-smogon <username|slug.id|id|url>',
-  '  session [--github <login>] [--github-id <id>] [--discord <id>:<username>] ' +
-    '[--ttl <seconds>] [--secret <secret>]',
+  '  session [--github <login>] [--github-id <id>] [--discord <id>:<username>] [--ttl <seconds>]',
 ].join('\n');
 
 const BOOLEAN_FLAGS = new Set(['help', 'offline', 'none']);
@@ -76,7 +70,6 @@ const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
     'format',
     'version',
     'team',
-    'min',
     'teams',
     'discord',
   ]),
@@ -101,7 +94,7 @@ const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
   'publish-tournament-archive': new Set(),
   'publish-ladder-archive': new Set(),
   'lookup-smogon': new Set(),
-  session: new Set(['github', 'github-id', 'discord', 'ttl', 'secret']),
+  session: new Set(['github', 'github-id', 'discord', 'ttl']),
 };
 
 function assertAllowedFlags(cmd: string, flags: ReadonlyMap<string, string>) {
@@ -158,8 +151,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
       throw new Error('Usage: pkmn lookup-smogon <username|slug.id|id|url>');
     }
     const lookup = options.lookupSmogon ?? smogon.lookupUser;
-    const token = options.smogonToken ?? process.env.SMOGON_TOKEN;
-    const user = await lookup(target, token);
+    const user = await lookup(target, process.env.SMOGON_TOKEN);
     log(
       `${user.username}.${user.id} ` +
       `(id=${user.id}, username="${user.username}", banned=${user.banned})`
@@ -168,7 +160,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
   }
 
   if (cmd === 'session') {
-    const secret = flags.get('secret') ?? options.sessionSecret ?? process.env.SESSION_SECRET ?? '';
+    const secret = process.env.SESSION_SECRET ?? '';
     if (!secret) {
       throw new Error('SESSION_SECRET is required to mint a session cookie');
     }
@@ -202,15 +194,12 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         }
       } else if (options.db) {
         resolvedId = options.db.getDeveloperByGitHub(githubLogin)?.githubId ?? 0;
-      } else {
-        const candidatePath = options.dbPath ?? db.DB_PATH;
-        if (candidatePath !== ':memory:' && fs.existsSync(candidatePath)) {
-          const tempDb = new db.Database(candidatePath);
-          try {
-            resolvedId = tempDb.getDeveloperByGitHub(githubLogin)?.githubId ?? 0;
-          } finally {
-            tempDb.close();
-          }
+      } else if (fs.existsSync(db.DB_PATH)) {
+        const tempDb = new db.Database(db.DB_PATH);
+        try {
+          resolvedId = tempDb.getDeveloperByGitHub(githubLogin)?.githubId ?? 0;
+        } finally {
+          tempDb.close();
         }
       }
       githubClaim = {id: resolvedId, login: githubLogin};
@@ -227,10 +216,10 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
   }
 
   const ownsDb = !options.db;
-  const database = options.db ?? new db.Database(options.dbPath ?? db.DB_PATH);
+  const database = options.db ?? new db.Database(db.DB_PATH);
   const now = options.now ?? Math.floor(Date.now() / 1000);
   const maybeSyncStaticBanner = () => {
-    const pub = options.publicDir ?? (ownsDb && !options.dbPath ? render.PUBLIC_DIR : undefined);
+    const pub = options.publicDir ?? (ownsDb ? render.PUBLIC_DIR : undefined);
     if (pub && fs.existsSync(pub)) {
       syncStaticLiveBanner(pub, database.getRunningTournament());
     }
@@ -324,13 +313,8 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             'Usage: pkmn rotate-ladder <old_ladder_id> --name "..." [--new <id>]'
           );
         }
-        const minStr = flags.get('min');
         const teamsStr = flags.get('teams');
-        const min = minStr !== undefined ? Number(minStr) : undefined;
         const teams = teamsStr !== undefined ? Number(teamsStr) : undefined;
-        if (min !== undefined && (!Number.isInteger(min) || min < 2)) {
-          throw new Error('--min must be an integer >= 2');
-        }
         if (teams !== undefined && (!Number.isInteger(teams) || teams < 1)) {
           throw new Error('--teams must be a positive integer');
         }
@@ -347,7 +331,6 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
                 format: flags.get('format'),
                 version: flags.get('version'),
                 team: flags.get('team') as db.TeamMode | undefined,
-                min,
                 teams,
                 discord: flags.get('discord'),
               },
@@ -380,8 +363,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             '[--smogon <username.id|id|username>] [--projects <path>] [--offline]'
           );
         }
-        const projectsPath = flags.get('projects') ?? options.projectsFile ?? db.PROJECTS_FILE;
-        const avatarsDir = options.avatarsDir ?? db.AVATARS_DIR;
+        const projectsPath = flags.get('projects') ?? db.PROJECTS_FILE;
         const rawYaml = fs.readFileSync(projectsPath, 'utf8');
         const smogonSpec = flags.get('smogon');
         const updated = db.reassignDeveloperInProjectsYaml(
@@ -393,11 +375,11 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         writeFileAtomic(projectsPath, updated.yaml);
 
         if (flags.has('offline')) {
-          database.syncProjects(projectsPath, avatarsDir, now);
+          database.syncProjects(projectsPath, db.AVATARS_DIR, now);
         } else {
           await database.syncProjectsWithSmogon(projectsPath, {
-            avatarsDir,
-            smogonToken: options.smogonToken ?? process.env.SMOGON_TOKEN,
+            avatarsDir: db.AVATARS_DIR,
+            smogonToken: process.env.SMOGON_TOKEN,
             lookupSmogon: options.lookupSmogon,
             now,
           });
@@ -408,14 +390,13 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         return;
       }
       case 'sync-projects': {
-        const projectsPath = flags.get('projects') ?? options.projectsFile ?? db.PROJECTS_FILE;
-        const avatarsDir = options.avatarsDir ?? db.AVATARS_DIR;
+        const projectsPath = flags.get('projects') ?? db.PROJECTS_FILE;
         if (flags.has('offline')) {
-          database.syncProjects(projectsPath, avatarsDir, now);
+          database.syncProjects(projectsPath, db.AVATARS_DIR, now);
         } else {
           await database.syncProjectsWithSmogon(projectsPath, {
-            avatarsDir,
-            smogonToken: options.smogonToken ?? process.env.SMOGON_TOKEN,
+            avatarsDir: db.AVATARS_DIR,
+            smogonToken: process.env.SMOGON_TOKEN,
             lookupSmogon: options.lookupSmogon,
             now,
           });
@@ -583,7 +564,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         const pub = options.publicDir ?? render.PUBLIC_DIR;
         const fileName = `${tournament.id}-replays.7z`;
         const dest = path.join(pub, 'arena', 'tournaments', tournament.id, fileName);
-        render.copyFileAtomic(srcFile, dest);
+        copyFileAtomic(srcFile, dest);
         log(`Published tournament archive -> /arena/tournaments/${tournament.id}/${fileName}`);
         return;
       }
@@ -617,7 +598,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (ladder.team === 'pools') {
           arena.promoteArchivedPoolsLogs(pub, ladder.id);
         }
-        render.copyFileAtomic(srcFile, dest);
+        copyFileAtomic(srcFile, dest);
         log(`Published ladder archive -> /arena/ladders/${ladder.id}/${fileName}`);
         return;
       }

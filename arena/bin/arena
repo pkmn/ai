@@ -82,10 +82,6 @@ case "$ACTION" in
     rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
 
     if [[ "$MODE" == "container" ]]; then
-      GPU_ARGS=()
-      if [[ "${ARENA_PODMAN_GPU:-1}" != "0" ]]; then
-        GPU_ARGS+=(--device /dev/dri)
-      fi
       exec podman run --rm -i \
         --name "$CONTAINER_NAME" \
         --network=none \
@@ -96,7 +92,7 @@ case "$ACTION" in
         --memory=14g \
         --memory-swap=14g \
         --pids-limit=256 \
-        ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
+        --device /dev/dri \
         --tmpfs /tmp:rw,noexec,nosuid,size=500m \
         --mount "type=bind,src=/opt/arena/stats,dst=/opt/arena/stats,ro" \
         --mount "type=bind,src=${SCRATCH_DIR},dst=/scratch,rw" \

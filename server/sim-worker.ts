@@ -17,6 +17,28 @@ export interface WorkerInitData {
   version: string;
 }
 
+export type RpcRequest = {
+  method: 'getVersion';
+} | {
+  method: 'resolveArenaFormatId';
+  format: string;
+} | {
+  method: 'isGeneratedTeamFormat';
+  format: string;
+} | {
+  method: 'hasFormat';
+  format: string;
+} | {
+  method: 'sampleRandomPair';
+  format: string;
+  seed1: simTypes.PRNGSeed;
+  seed2: simTypes.PRNGSeed;
+} | {
+  method: 'validateTeam';
+  format: string;
+  packed: string;
+};
+
 export type ParentMessage = {
   type: 'battle:start';
   battleId: string;
@@ -27,12 +49,10 @@ export type ParentMessage = {
 } | {
   type: 'battle:destroy';
   battleId: string;
-} | {
+} | ({
   type: 'rpc';
   id: number;
-  method: string;
-  params: Record<string, unknown>;
-};
+} & RpcRequest);
 
 export type WorkerMessage = {
   type: 'battle:chunk';
@@ -192,36 +212,25 @@ function destroyBattle(battleId: string) {
   battles.delete(battleId);
 }
 
-function handleRpc(method: string, params: Record<string, unknown>): unknown {
-  switch (method) {
+function handleRpc(req: RpcRequest): unknown {
+  switch (req.method) {
     case 'getVersion':
       return pkgVersion;
     case 'resolveArenaFormatId':
-      return resolveArenaFormatIdWithSim(simMod, params.format as string);
-    case 'isGeneratedTeamFormat': {
-      const format = params.format as string;
-      return Boolean(simMod.Dex.formats.get(format).team);
-    }
-    case 'hasFormat': {
-      const format = params.format as string;
-      return Boolean(simMod.Dex.formats.get(format).exists);
-    }
+      return resolveArenaFormatIdWithSim(simMod, req.format);
+    case 'isGeneratedTeamFormat':
+      return Boolean(simMod.Dex.formats.get(req.format).team);
+    case 'hasFormat':
+      return Boolean(simMod.Dex.formats.get(req.format).exists);
     case 'sampleRandomPair':
-      return sampleRandomPairWithSim(
-        simMod,
-        params.format as string,
-        params.seed1 as simTypes.PRNGSeed,
-        params.seed2 as simTypes.PRNGSeed
-      );
+      return sampleRandomPairWithSim(simMod, req.format, req.seed1, req.seed2);
     case 'validateTeam': {
-      const format = params.format as string;
-      const packed = params.packed as string;
-      const resolved = simMod.Dex.formats.get(toID(format));
+      const resolved = simMod.Dex.formats.get(toID(req.format));
       if (!resolved.exists) {
-        throw new Error(`Unknown format '${format}'.`);
+        throw new Error(`Unknown format '${req.format}'.`);
       }
       const validator = new simMod.TeamValidator(resolved);
-      const team = simMod.Teams.unpack(packed) ?? simMod.Teams.import(packed);
+      const team = simMod.Teams.unpack(req.packed) ?? simMod.Teams.import(req.packed);
       if (!team || team.length === 0) {
         return {problems: ['Empty or unparseable team.']};
       }
@@ -236,8 +245,6 @@ function handleRpc(method: string, params: Record<string, unknown>): unknown {
         packed: simMod.Teams.pack(team),
       };
     }
-    default:
-      throw new Error(`Unknown sim-worker RPC method: ${method}`);
   }
 }
 
@@ -254,7 +261,7 @@ port.on('message', (msg: ParentMessage) => {
       break;
     case 'rpc':
       try {
-        const result = handleRpc(msg.method, msg.params);
+        const result = handleRpc(msg);
         post({type: 'rpc:result', id: msg.id, result});
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);

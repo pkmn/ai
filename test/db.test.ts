@@ -9,7 +9,6 @@ import {
   LADDERS_FILE,
   SCHEMA_DIR,
   classifyMigrationSql,
-  compareDatabaseSchemas,
   getTournamentBestOf,
   getTournamentClosesAt,
   parseArenaProjects,
@@ -20,6 +19,8 @@ import * as smogon from '../server/smogon';
 import {validateHarvestedTeams} from '../server/teams';
 import {validateAgentName, validateVersion} from '../static/util';
 import {generateValidHarvestedTeams, generateValidVgcTeams} from '../tools/mock';
+
+import {compareDatabaseSchemas} from './schema-helpers';
 
 describe('schema migrations', () => {
   let tmpDir: string;
@@ -461,17 +462,33 @@ describe('ladders configuration', () => {
 `)).toThrow(/must specify a positive teams count/);
   });
 
-  test('rejects pools ladders with min below 4', () => {
-    expect(() => parseLaddersYaml(`
+  test('derives minimum active agents strictly from team mode (4 for pools, 2 otherwise)', () => {
+    const db = new Database(':memory:');
+    try {
+      db.syncLaddersFromYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
-  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   status: active
-  min: 3
   teams: 20
-`)).toThrow(/Invalid min "3"/);
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  team: harvested
+  status: active
+- name: RAND
+  format: gen9randombattle
+  id: gen9randombattle20261109
+  team: random
+  status: active
+`, 1_760_000_000);
+      expect(db.getLadder('gen9championsvgc2026regmc')?.min).toBe(4);
+      expect(db.getLadder('gen1ou20261109')?.min).toBe(2);
+      expect(db.getLadder('gen9randombattle20261109')?.min).toBe(2);
+    } finally {
+      db.close();
+    }
   });
 
   test('rejects multiple current ladders sharing the same slot', () => {
@@ -556,25 +573,26 @@ describe('ladders configuration', () => {
     }
   });
 
-  test('rejects rotateLadder when newMin is below 4 on a pools ladder', () => {
+  test('derives min agents automatically from team mode when rotating ladders', () => {
     const db = new Database(':memory:');
     try {
       db.syncLaddersFromYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
-  version: '0.11.0'
   id: gen9championsvgc2026regmc
   team: pools
   teams: 20
   status: active
-  min: 4
 `, 1_760_000_000);
-      expect(() => db.rotateLadder({
+      expect(db.getLadder('gen9championsvgc2026regmc')!.version).toBe('0.11.0');
+      expect(db.getLadder('gen9championsvgc2026regmc')!.min).toBe(4);
+      const rotated = db.rotateLadder({
         oldLadderId: 'gen9championsvgc2026regmc',
         archivedName: 'VGC 2026 Reg M-C',
-        next: {id: 'gen9championsvgc2026regmd', min: 2},
+        next: {id: 'gen9championsvgc2026regmd'},
         now: 1_765_000_000,
-      })).toThrow(/Invalid min/);
+      });
+      expect(rotated.newLadder!.min).toBe(4);
     } finally {
       db.close();
     }
@@ -1702,14 +1720,18 @@ describe('ladder activation invariants', () => {
             game2Turns: 20,
             game1EndReason: 'normal',
             game2EndReason: 'normal',
-            p1PeakRam: 128,
-            p2PeakRam: 128,
+            p1Game1PeakRam: 128,
+            p1Game2PeakRam: 128,
+            p2Game1PeakRam: 128,
+            p2Game2PeakRam: 128,
             p1Game1BankSeconds: 120,
             p1Game2BankSeconds: 120,
             p2Game1BankSeconds: 120,
             p2Game2BankSeconds: 120,
-            p1MeanTurnMillis: 100,
-            p2MeanTurnMillis: 100,
+            p1Game1MeanTurnMillis: 100,
+            p1Game2MeanTurnMillis: 100,
+            p2Game1MeanTurnMillis: 100,
+            p2Game2MeanTurnMillis: 100,
             completedAt: baseTs + i,
           },
         });
@@ -1889,14 +1911,18 @@ describe('quarantine invariants', () => {
             game2Turns: 10,
             game1EndReason: 'normal',
             game2EndReason: 'normal',
-            p1PeakRam: 64,
-            p2PeakRam: 64,
+            p1Game1PeakRam: 64,
+            p1Game2PeakRam: 64,
+            p2Game1PeakRam: 64,
+            p2Game2PeakRam: 64,
             p1Game1BankSeconds: 100,
             p1Game2BankSeconds: 100,
             p2Game1BankSeconds: 100,
             p2Game2BankSeconds: 100,
-            p1MeanTurnMillis: 50,
-            p2MeanTurnMillis: 50,
+            p1Game1MeanTurnMillis: 50,
+            p1Game2MeanTurnMillis: 50,
+            p2Game1MeanTurnMillis: 50,
+            p2Game2MeanTurnMillis: 50,
             completedAt: 1_760_001_000 + mSeq,
           },
         });
@@ -2059,14 +2085,18 @@ describe('quarantine invariants', () => {
           game2Turns: 5,
           game1EndReason: 'normal',
           game2EndReason: 'normal',
-          p1PeakRam: 64,
-          p2PeakRam: 64,
+          p1Game1PeakRam: 64,
+          p1Game2PeakRam: 64,
+          p2Game1PeakRam: 64,
+          p2Game2PeakRam: 64,
           p1Game1BankSeconds: 100,
           p1Game2BankSeconds: 100,
           p2Game1BankSeconds: 100,
           p2Game2BankSeconds: 100,
-          p1MeanTurnMillis: 50,
-          p2MeanTurnMillis: 50,
+          p1Game1MeanTurnMillis: 50,
+          p1Game2MeanTurnMillis: 50,
+          p2Game1MeanTurnMillis: 50,
+          p2Game2MeanTurnMillis: 50,
           completedAt: 1_760_004_300,
         },
       })).toThrow(/archived/);

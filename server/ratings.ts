@@ -276,9 +276,7 @@ function solvePairwiseLaplace<T extends PairDerivativeTerm>(
 
 export interface DavidsonOptions {
   anchorIndex?: number;
-  anchorElo?: number;
   warmStartTheta?: Float64Array;
-  priorEloStd?: number;
 }
 
 export function computeDavidsonRatings(
@@ -288,10 +286,10 @@ export function computeDavidsonRatings(
 ): RatingResult {
   const {
     anchorIndex = -1,
-    anchorElo = 1500,
     warmStartTheta,
-    priorEloStd = 350,
   } = options;
+  const anchorElo = 1500;
+  const priorEloStd = 350;
   const M = numAgents;
   if (M === 0) {
     return {
@@ -438,9 +436,9 @@ export interface RankBoundsPosterior {
 
 export function computeGuaranteedRankBounds(
   repIndices: readonly number[],
-  posterior: RankBoundsPosterior,
-  losThreshold = 0.95
+  posterior: RankBoundsPosterior
 ): {rankMin: Int32Array; rankMax: Int32Array} {
+  const losThreshold = 0.95;
   const {theta, covariance: cov, eloLcb, eloUcb} = posterior;
   const M = theta.length;
   const B = repIndices.length;
@@ -694,11 +692,11 @@ export function selectNextArenaMatch(
 // games (`P(W) = e^{d/2}/Z`, `P(T) = nu/Z`, `P(L) = e^{-d/2}/Z`, `Z = e^{d/2} + nu + e^{-d/2}`).
 export function computeTournamentRatings(
   numEntrants: number,
-  games: TournamentGameInput[],
-  anchorIndex = -1,
-  centerElo = 1500,
-  priorEloStd = 350
+  games: TournamentGameInput[]
 ): TournamentRatingResult {
+  const anchorIndex = -1;
+  const centerElo = 1500;
+  const priorEloStd = 350;
   const M = numEntrants;
   if (M === 0) {
     return {

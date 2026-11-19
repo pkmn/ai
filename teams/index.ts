@@ -430,5 +430,3 @@ if (require.main === module) {
   );
   process.exit(pass ? 0 : 1);
 }
-
-export {toID};

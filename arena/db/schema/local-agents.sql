@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS local_agents (
   -- Uncompressed resident byte count on disk, used to enforce high/low watermarks on the 256 GB SSD.
   unpacked_bytes INTEGER NOT NULL DEFAULT 0,
   -- Consecutive games ending in a process fault ('crash', 'timeout', 'oom', 'invalid-choice').
-  -- Reset to 0 after any clean game; triggers quarantine at `CONSECUTIVE_FAULTS_QUARANTINE` (3).
+  -- Reset to 0 after any clean game; quarantine triggers at 10 consecutive faults (5 matches) or
+  -- >20% fault rate over >=10 games.
   consecutive_faults INTEGER NOT NULL DEFAULT 0,
   -- Cumulative games played locally by this version.
   total_games INTEGER NOT NULL DEFAULT 0,

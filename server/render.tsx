@@ -26,9 +26,6 @@ export const STATIC_DIR =
 
 export const ARENA_STYLE = fs.readFileSync(util.root('static', 'style', 'arena.css'), 'utf8');
 
-export const copyFileAtomic = util.copyFileAtomic;
-export const writeFileAtomic = util.writeFileAtomic;
-
 const SERIES_COLORS = [
   'var(--hl-symbol)',
   'var(--hl-string)',
@@ -1410,11 +1407,9 @@ export interface LadderTeamsDocument {
 export interface Options {
   db: db.Database;
   arena: arena.Handle;
-  renderer?: build.Renderer;
   publicDir?: string;
   staticDir?: string;
   avatarsDir?: string;
-  recentMatchesLimit?: number;
   now?: () => number;
 }
 
@@ -1492,11 +1487,8 @@ export function resolveAgentHref(
   slug: string,
   name: string
 ): string | undefined {
-  const {publicDir, projectMeta, profileSlugs} = links;
-  if (
-    profileSlugs?.has(slug) ||
-    fs.existsSync(path.join(publicDir, 'projects', slug, 'index.html'))
-  ) {
+  const {projectMeta, profileSlugs} = links;
+  if (profileSlugs?.has(slug)) {
     return `/projects/${encodeURIComponent(slug)}/`;
   }
   const meta = projectMeta.get(name);
@@ -2544,7 +2536,6 @@ function renderSingleLadderArtifact(opts: {
 export interface CachedArchivedLadder {
   key: string;
   rendered: ReturnType<typeof renderSingleLadderArtifact>;
-  teamsDoc?: LadderTeamsDocument;
 }
 
 export function renderArenaAndLadderArtifacts(opts: {
@@ -2562,7 +2553,6 @@ export function renderArenaAndLadderArtifacts(opts: {
   ladderJsonBySlot: Record<string, LadderDocument>;
   archivedLadderHtmlById: Record<string, string>;
   archivedLadderJsonById: Record<string, LadderDocument>;
-  archivedTeamsJsonById: Record<string, LadderTeamsDocument>;
   standingsJson: StandingsDocument;
 } {
   const {
@@ -2592,7 +2582,6 @@ export function renderArenaAndLadderArtifacts(opts: {
   const ladderJsonBySlot: Record<string, LadderDocument> = {};
   const archivedLadderHtmlById: Record<string, string> = {};
   const archivedLadderJsonById: Record<string, LadderDocument> = {};
-  const archivedTeamsJsonById: Record<string, LadderTeamsDocument> = {};
   const jsonLadders: Record<string, StandingsLadder> = {};
   const archivedLadderSummaries: ArchivedLadderSummary[] = [];
   const pastBySlot = new Map<string, Array<{
@@ -2602,7 +2591,6 @@ export function renderArenaAndLadderArtifacts(opts: {
 
   for (const l of pastLadders) {
     let rendered: ReturnType<typeof renderSingleLadderArtifact>;
-    let teamsDoc: LadderTeamsDocument | undefined;
     if (l.status === 'archived' && archivedCache && metaToken !== undefined) {
       const archiveInfo = arena.resolveLadderArchive(publicDir, l);
       const cacheKey = [
@@ -2617,11 +2605,7 @@ export function renderArenaAndLadderArtifacts(opts: {
       const hit = archivedCache.get(l.id);
       if (hit?.key === cacheKey) {
         rendered = hit.rendered;
-        teamsDoc = hit.teamsDoc;
       } else {
-        if (l.team === 'pools') {
-          teamsDoc = buildLadderTeamsDocument(db, l);
-        }
         rendered = renderSingleLadderArtifact({
           ladder: l,
           currentLadders: ladders,
@@ -2632,12 +2616,9 @@ export function renderArenaAndLadderArtifacts(opts: {
           links,
           nowSec,
         });
-        archivedCache.set(l.id, {key: cacheKey, rendered, teamsDoc});
+        archivedCache.set(l.id, {key: cacheKey, rendered});
       }
     } else {
-      if (l.team === 'pools' && l.status === 'archived') {
-        teamsDoc = buildLadderTeamsDocument(db, l);
-      }
       rendered = renderSingleLadderArtifact({
         ladder: l,
         currentLadders: ladders,
@@ -2648,9 +2629,6 @@ export function renderArenaAndLadderArtifacts(opts: {
         links,
         nowSec,
       });
-    }
-    if (teamsDoc) {
-      archivedTeamsJsonById[l.id] = teamsDoc;
     }
     archivedLadderHtmlById[l.id] = rendered.html;
     archivedLadderJsonById[l.id] = rendered.ladderDoc;
@@ -2942,7 +2920,6 @@ export function renderArenaAndLadderArtifacts(opts: {
     ladderJsonBySlot,
     archivedLadderHtmlById,
     archivedLadderJsonById,
-    archivedTeamsJsonById,
     standingsJson: {
       updatedAt: nowSec,
       ladders: jsonLadders,
@@ -3748,21 +3725,19 @@ export function register(app: polka.Polka, options: Options) {
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const staticDir = options.staticDir ?? STATIC_DIR;
   const avatarsDir = options.avatarsDir ?? AVATARS_DIR;
-  const recentMatchesLimit = options.recentMatchesLimit ?? util.TABLE_PAGE_SIZE;
+  const recentMatchesLimit = util.TABLE_PAGE_SIZE;
   const getNowSec = options.now ?? (() => Math.floor(Date.now() / 1000));
 
-  const renderer = options.renderer ?? (
-    publicDir === PUBLIC_DIR
-      ? build.renderer
-      : new build.Renderer({
-        public: publicDir,
-        analytics: 'G-LQ8TW28Z7Q',
-        description: 'The home of competitive Pokémon artificial intelligence',
-        url: 'https://pkmn.ai',
-        stylesheet: path.join(staticDir, 'style', 'index.css'),
-        highlight: true,
-      })
-  );
+  const renderer = publicDir === PUBLIC_DIR
+    ? build.renderer
+    : new build.Renderer({
+      public: publicDir,
+      analytics: 'G-LQ8TW28Z7Q',
+      description: 'The home of competitive Pokémon artificial intelligence',
+      url: 'https://pkmn.ai',
+      stylesheet: path.join(staticDir, 'style', 'index.css'),
+      highlight: true,
+    });
 
   interface CacheEntry {
     token: string;
@@ -3920,20 +3895,15 @@ export function register(app: polka.Polka, options: Options) {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
-    const static404 = path.join(publicDir, '404.html');
-    if (fs.existsSync(static404)) {
-      res.end(fs.readFileSync(static404));
-      return;
-    }
-    res.end(build.renderErrorPage(404, db.getRunningTournament(), renderer));
+    res.end(build.renderErrorPage(404, db.getRunningTournament()));
   };
 
   const paramStr = (val: string | string[] | undefined): string => {
-    const raw = Array.isArray(val) ? val[0] : val;
+    const rawVal = typeof val === 'string' ? val : '';
     try {
-      return decodeURIComponent(raw ?? '').trim();
+      return decodeURIComponent(rawVal).trim();
     } catch {
-      return (raw ?? '').trim();
+      return rawVal.trim();
     }
   };
 
@@ -4027,17 +3997,12 @@ export function register(app: polka.Polka, options: Options) {
       sendJsonNotFound(res, `Published teams.json is not available for "${id}".`);
       return;
     }
-    const nowSec = getNowSec();
     const dbToken = getDbToken();
     sendCached(req, res, {
       key: `ladder-teams:${ladder.id}`,
       token: dbToken,
       contentType: 'application/json; charset=utf-8',
-      compute: () => {
-        const doc = getArenaBundle(dbToken, nowSec).archivedTeamsJsonById[ladder.id] ??
-          buildLadderTeamsDocument(db, ladder);
-        return `${JSON.stringify(doc, undefined, 2)}\n`;
-      },
+      compute: () => `${JSON.stringify(buildLadderTeamsDocument(db, ladder), undefined, 2)}\n`,
     });
   });
 
@@ -4294,8 +4259,8 @@ export function register(app: polka.Polka, options: Options) {
     rawParam: string,
     forceJson: boolean
   ) => {
-    if (!rawParam || rawParam === 'index.json') {
-      if (forceJson || rawParam === 'index.json') sendJsonNotFound(res);
+    if (!rawParam) {
+      if (forceJson) sendJsonNotFound(res);
       else sendHtmlNotFound(res);
       return;
     }

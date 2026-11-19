@@ -1032,14 +1032,18 @@ describe('Arena Discord roles', () => {
           game2Turns: 28,
           game1EndReason: 'win',
           game2EndReason: 'win',
-          p1PeakRam: 512,
-          p2PeakRam: 512,
+          p1Game1PeakRam: 512,
+          p1Game2PeakRam: 512,
+          p2Game1PeakRam: 512,
+          p2Game2PeakRam: 512,
           p1Game1BankSeconds: 140,
           p1Game2BankSeconds: 140,
           p2Game1BankSeconds: 120,
           p2Game2BankSeconds: 120,
-          p1MeanTurnMillis: 200,
-          p2MeanTurnMillis: 200,
+          p1Game1MeanTurnMillis: 200,
+          p1Game2MeanTurnMillis: 200,
+          p2Game1MeanTurnMillis: 200,
+          p2Game2MeanTurnMillis: 200,
           completedAt: 1_760_001_000 + idx * 60,
         },
       });
@@ -1401,9 +1405,8 @@ describe('Arena Discord notifications', () => {
     expect(sent[1].body).toContain('gen1ou-0000000972');
   });
 
-  test('skips background Discord sync outside production by default', async () => {
+  test('skips background Discord sync outside production', async () => {
     const prevNodeEnv = process.env.NODE_ENV;
-    const prevSync = process.env.DISCORD_SYNC;
     const prevBotToken = process.env.DISCORD_BOT_TOKEN;
     const calls: string[] = [];
     globalThis.fetch = ((url: string) => {
@@ -1419,7 +1422,6 @@ describe('Arena Discord notifications', () => {
     const db = new Database(':memory:');
     try {
       process.env.NODE_ENV = 'development';
-      delete process.env.DISCORD_SYNC;
       process.env.DISCORD_BOT_TOKEN = 'env-prod-bot-token';
 
       const handle = discord.register(polka(), {db, verifyKey: '00'.repeat(32)});
@@ -1429,44 +1431,6 @@ describe('Arena Discord notifications', () => {
     } finally {
       if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = prevNodeEnv;
-      if (prevSync === undefined) delete process.env.DISCORD_SYNC;
-      else process.env.DISCORD_SYNC = prevSync;
-      if (prevBotToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
-      else process.env.DISCORD_BOT_TOKEN = prevBotToken;
-      db.close();
-    }
-  });
-
-  test('enables background Discord sync outside production when DISCORD_SYNC=1', async () => {
-    const prevNodeEnv = process.env.NODE_ENV;
-    const prevSync = process.env.DISCORD_SYNC;
-    const prevBotToken = process.env.DISCORD_BOT_TOKEN;
-    const calls: string[] = [];
-    globalThis.fetch = ((url: string) => {
-      calls.push(String(url));
-      return Promise.resolve({
-        status: 200,
-        ok: true,
-        json: () => Promise.resolve([]),
-        text: () => Promise.resolve(''),
-      });
-    }) as unknown as typeof fetch;
-
-    const db = new Database(':memory:');
-    try {
-      process.env.NODE_ENV = 'development';
-      process.env.DISCORD_SYNC = '1';
-      process.env.DISCORD_BOT_TOKEN = 'env-prod-bot-token';
-
-      const handle = discord.register(polka(), {db, verifyKey: '00'.repeat(32)});
-      await new Promise(resolve => setTimeout(resolve, 25));
-      handle.stop();
-      expect(calls.some(u => u.startsWith('https://discord.com/api/v10'))).toBe(true);
-    } finally {
-      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = prevNodeEnv;
-      if (prevSync === undefined) delete process.env.DISCORD_SYNC;
-      else process.env.DISCORD_SYNC = prevSync;
       if (prevBotToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
       else process.env.DISCORD_BOT_TOKEN = prevBotToken;
       db.close();
@@ -1485,7 +1449,7 @@ describe('Arena Discord notifications', () => {
     const db = createSeededArenaDb();
     try {
       await discord.syncOnce(db, 'discord-token', 'vgc-token', {
-        configOrFile: ARENA_CONFIG,
+        config: ARENA_CONFIG,
       });
       expect(calls).toHaveLength(1);
     } finally {

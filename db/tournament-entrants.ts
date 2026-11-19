@@ -236,10 +236,10 @@ export function recomputeTournamentStandings(
 
   // Compute Stage 1 tiebreak Elo strictly from Round-Robin games so a #2 finisher losing the
   // 100-game Superfinal against #1 can never drop below a tied #3 in Stage 1 ordering.
-  const rrRatingRes = ratings.computeTournamentRatings(M, rrGames, -1, 1500);
+  const rrRatingRes = ratings.computeTournamentRatings(M, rrGames);
   const allRatingRes = allGames.length === rrGames.length
     ? rrRatingRes
-    : ratings.computeTournamentRatings(M, allGames, -1, 1500);
+    : ratings.computeTournamentRatings(M, allGames);
   const order = entrants.map((_, idx) => idx).sort((a, b) => (
     points[b] - points[a] ||
     sb[b] - sb[a] ||

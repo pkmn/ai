@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -159,18 +160,59 @@ export const EXT_ICON =
   '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>' +
   '</svg>';
 
-export function writeFileAtomic(filePath: string, contents: string) {
+export function readBody(
+  req: http.IncomingMessage,
+  maxBytes: number,
+  limitMessage = 'Payload too large.'
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    req.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        settled = true;
+        req.resume();
+        reject(Object.assign(new Error(limitMessage), {status: 413}));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', err => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+  });
+}
+
+export function writeFileAtomic(filePath: string, contents: string | Buffer) {
   fs.mkdirSync(path.dirname(filePath), {recursive: true});
-  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-  fs.writeFileSync(tmpPath, contents, 'utf8');
-  fs.renameSync(tmpPath, filePath);
+  const tmpPath = `${filePath}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmpPath, contents, {flag: 'wx'});
+    fs.renameSync(tmpPath, filePath);
+  } finally {
+    fs.rmSync(tmpPath, {force: true});
+  }
 }
 
 export function copyFileAtomic(srcPath: string, destPath: string) {
   fs.mkdirSync(path.dirname(destPath), {recursive: true});
-  const tmpPath = `${destPath}.tmp.${process.pid}.${Date.now()}`;
-  fs.copyFileSync(srcPath, tmpPath);
-  fs.renameSync(tmpPath, destPath);
+  const tmpPath = `${destPath}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
+  try {
+    fs.copyFileSync(srcPath, tmpPath, fs.constants.COPYFILE_EXCL);
+    fs.renameSync(tmpPath, destPath);
+  } finally {
+    fs.rmSync(tmpPath, {force: true});
+  }
 }
 
 export function parseUtcDayMillis(dayUtc: string): number {

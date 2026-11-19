@@ -762,7 +762,7 @@ function applyRatingsToEntriesAndFamilies(opts: {
   const repIndices = [...repByAgent.values()].sort(
     (a, b) => entries[b].lcb - entries[a].lcb
   );
-  const {rankMin, rankMax} = ratings.computeGuaranteedRankBounds(repIndices, res, 0.95);
+  const {rankMin, rankMax} = ratings.computeGuaranteedRankBounds(repIndices, res);
 
   for (let r = 0; r < repIndices.length; r++) {
     const idx = repIndices[r];

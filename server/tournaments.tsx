@@ -14,6 +14,7 @@ import {
   formatUtcDateTime,
   raw,
   root,
+  writeFileAtomic,
 } from '../static/util';
 
 import * as arena from './arena';
@@ -1568,7 +1569,7 @@ export function renderBattleViewerPage(publicDir: string) {
       </body>
     </html>
   );
-  render.writeFileAtomic(
+  writeFileAtomic(
     path.join(publicDir, 'arena', 'viewer', 'index.html'),
     `<!doctype html>\n${String(viewerDoc)}`
   );

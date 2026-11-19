@@ -1634,7 +1634,7 @@ export function renderAgentProfile(opts: {
   ) : undefined;
   const profileHeader = injectLiveBanner(
     header(<>{agent.name}{siteLink}</>),
-    liveTournament ?? db.getRunningTournament()
+    liveTournament
   );
 
   if (ladders.length === 0) {

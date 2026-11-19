@@ -2,7 +2,7 @@ import {DatabaseSync} from 'node:sqlite';
 
 import * as serverArena from '../../server/arena';
 
-export type OutboxEndpoint = 'match-complete' | 'submission-status' | 'quarantine';
+export type OutboxEndpoint = 'match-complete' | 'submission-status';
 export type OutboxPayload =
   serverArena.MatchCompletePayload |
   serverArena.SubmissionStatusPayload;

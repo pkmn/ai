@@ -3,7 +3,6 @@
 
 require('source-map-support').install();
 
-import * as crypto from 'crypto';
 import * as nodeFs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -16,7 +15,7 @@ import {renderBattleViewerPage} from '../server/tournaments';
 
 import * as glossary from './glossary';
 import * as research from './research';
-import {Html, raw, root} from './util';
+import {Html, copyFileAtomic, raw, root, writeFileAtomic} from './util';
 
 const fs = site.fs;
 
@@ -25,24 +24,13 @@ const fs = site.fs;
 // on separate Linux VFS bind mounts (`EXDEV` on `rename`). Staging adjacent to the target file
 // keeps every atomic rename on the destination mount.
 (fs as {write: typeof fs.write; copy: typeof fs.copy}).write = (file, data) => {
-  nodeFs.mkdirSync(path.dirname(file), {recursive: true});
-  const tmp = `${file}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
-  try {
-    nodeFs.writeFileSync(tmp, data, {flag: 'wx'});
-    nodeFs.renameSync(tmp, file);
-  } finally {
-    nodeFs.rmSync(tmp, {force: true});
-  }
+  const content = typeof data === 'string' || Buffer.isBuffer(data)
+    ? data
+    : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  writeFileAtomic(file, content);
 };
 (fs as {write: typeof fs.write; copy: typeof fs.copy}).copy = (src, dst) => {
-  nodeFs.mkdirSync(path.dirname(dst), {recursive: true});
-  const tmp = `${dst}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
-  try {
-    nodeFs.copyFileSync(src, tmp, nodeFs.constants.COPYFILE_EXCL);
-    nodeFs.renameSync(tmp, dst);
-  } finally {
-    nodeFs.rmSync(tmp, {force: true});
-  }
+  copyFileAtomic(src, dst);
 };
 
 const PUBLIC = root('public');
@@ -134,9 +122,7 @@ export function syncStaticLiveBanner(
         ? stripped.replace('<header>', `<header>${banner}\n  `)
         : stripped;
       if (updated !== rawHtml) {
-        const tmp = `${full}.tmp.${process.pid}.${Date.now()}`;
-        nodeFs.writeFileSync(tmp, updated, 'utf8');
-        nodeFs.renameSync(tmp, full);
+        writeFileAtomic(full, updated);
       }
     }
   };
@@ -220,10 +206,9 @@ export const style = ' [id] { scroll-margin-top: 2rem; }';
 
 export function renderErrorPage(
   code: number,
-  liveTournament?: {id: string; name: string},
-  customRenderer: Renderer = renderer
+  liveTournament?: {id: string; name: string}
 ): string {
-  return customRenderer.render({
+  return renderer.render({
     title: `${code} | pkmn.ai`,
     header: injectLiveBanner(header(`${code}`), liveTournament),
     path: '',

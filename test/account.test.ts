@@ -18,7 +18,6 @@ import {runPkmnCli} from '../tools/pkmn';
 
 const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-account-session-secret',
-  arenaSecret: 'test-arena-secret',
   github: {
     clientId: 'gh-client-id',
     clientSecret: 'gh-client-secret',
@@ -258,7 +257,7 @@ describe('account routes', () => {
       poolsByLadder: new Map([['gen9championsvgc2026regmc', [poolDir]]]),
       now: () => currentNow,
     });
-    wiki.register(app, {wiki: wikiInstance, db: nextDb});
+    wiki.register(app, wikiInstance);
 
     const nextServer = http.createServer((req, res) => app.handler(req as polka.Request, res));
     server = nextServer;
@@ -967,42 +966,6 @@ describe('account routes', () => {
       const agent = db.getAgentBySlug('0-error')!;
       expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending'))
         .toHaveLength(20);
-    });
-
-    test('clears unlocked saved draft teams on POST /api/account/teams/clear', async () => {
-      await postVgc('1.0.0', VALID_TWENTY_VGC.slice(0, 5));
-      const agent = db.getAgentBySlug('0-error')!;
-      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved'))
-        .toHaveLength(5);
-
-      const clearRes = await realFetch(`${baseUrl}/api/account/teams/clear`, {
-        method: 'POST',
-        headers: {
-          Cookie: cookieFor('pre'),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ladderId: 'gen9championsvgc2026regmc'}),
-      });
-      expect(clearRes.status).toBe(200);
-      expect(await clearRes.json()).toMatchObject({savedCount: 0, requiredCount: 20});
-      expect(db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved'))
-        .toHaveLength(0);
-    });
-
-    test('rejects clearing locked seasonal teams on POST /api/account/teams/clear', async () => {
-      const okRes = await postVgc('1.0.0', VALID_TWENTY_VGC);
-      const {versionId} = await okRes.json() as {versionId: number};
-      db.applySubmissionStatus({versionId, smokeStatus: 'passed', now: currentNow + 5});
-
-      const clearRes = await realFetch(`${baseUrl}/api/account/teams/clear`, {
-        method: 'POST',
-        headers: {
-          Cookie: cookieFor('pre'),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ladderId: 'gen9championsvgc2026regmc'}),
-      });
-      expect(clearRes.status).toBe(409);
     });
 
     test('promotes saved 20/20 draft teams to pending when submitting without teams', async () => {

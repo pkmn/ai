@@ -7,7 +7,7 @@ import type {PRNGSeed} from '@pkmn/sim';
 import {SIM_VERSION} from '../db/ladders';
 import {root} from '../static/util';
 
-import type {ParentMessage, WorkerInitData, WorkerMessage} from './sim-worker';
+import type {ParentMessage, RpcRequest, WorkerInitData, WorkerMessage} from './sim-worker';
 
 class PushStream implements AsyncIterable<string> {
   private readonly queue: string[] = [];
@@ -220,11 +220,7 @@ function getWorker(version: string): WorkerEntry {
   return entry;
 }
 
-function callRpc<T>(
-  version: string,
-  method: string,
-  params: Record<string, unknown>
-): Promise<T> {
+function callRpc<T>(version: string, request: RpcRequest): Promise<T> {
   const entry = getWorker(version);
   const id = nextRpcId++;
   return new Promise<T>((resolve, reject) => {
@@ -233,7 +229,7 @@ function callRpc<T>(
       reject,
     });
     updateWorkerRef(entry);
-    const msg: ParentMessage = {type: 'rpc', id, method, params};
+    const msg: ParentMessage = {type: 'rpc', id, ...request};
     entry.worker.postMessage(msg);
   });
 }
@@ -287,21 +283,21 @@ export function resolveArenaFormatId(
   format: string,
   version = SIM_VERSION
 ): Promise<string> {
-  return callRpc<string>(version, 'resolveArenaFormatId', {format});
+  return callRpc<string>(version, {method: 'resolveArenaFormatId', format});
 }
 
 export function isGeneratedTeamFormat(
   format: string,
   version = SIM_VERSION
 ): Promise<boolean> {
-  return callRpc<boolean>(version, 'isGeneratedTeamFormat', {format});
+  return callRpc<boolean>(version, {method: 'isGeneratedTeamFormat', format});
 }
 
 export function hasFormat(
   format: string,
   version = SIM_VERSION
 ): Promise<boolean> {
-  return callRpc<boolean>(version, 'hasFormat', {format});
+  return callRpc<boolean>(version, {method: 'hasFormat', format});
 }
 
 export function sampleRandomPair(
@@ -312,8 +308,7 @@ export function sampleRandomPair(
 ): Promise<{t1Packed: string; t2Packed: string}> {
   return callRpc<{t1Packed: string; t2Packed: string}>(
     version,
-    'sampleRandomPair',
-    {format, seed1, seed2}
+    {method: 'sampleRandomPair', format, seed1, seed2}
   );
 }
 
@@ -324,13 +319,12 @@ export function validateTeam(
 ): Promise<{problems?: string[]; packed?: string}> {
   return callRpc<{problems?: string[]; packed?: string}>(
     version,
-    'validateTeam',
-    {format, packed}
+    {method: 'validateTeam', format, packed}
   );
 }
 
 export function getWorkerSimVersion(version = SIM_VERSION): Promise<string> {
-  return callRpc<string>(version, 'getVersion', {});
+  return callRpc<string>(version, {method: 'getVersion'});
 }
 
 export async function closeAllWorkers(): Promise<void> {

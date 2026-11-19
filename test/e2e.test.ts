@@ -19,9 +19,9 @@ import {root} from '../static/util';
 import * as teamMetric from '../teams';
 import * as mock from '../tools/mock';
 
+const E2E_ARENA_SECRET = 'e2e-arena-hmac-secret-32-bytes-min';
 const E2E_AUTH: auth.Config = {
   sessionSecret: 'e2e-session-secret-32-bytes-minimum',
-  arenaSecret: 'e2e-arena-hmac-secret-32-bytes-min',
   github: {
     clientId: 'e2e-github-client-id',
     clientSecret: 'e2e-github-client-secret',
@@ -550,6 +550,7 @@ describe('mock scenarios & E2E lifecycle', () => {
       const arenaHandle = arena.register(app, {
         db,
         auth: authInstance,
+        arenaSecret: E2E_ARENA_SECRET,
         publicDir,
         now: () => nowSeconds,
         onSubmissionStatus: result => {
@@ -620,7 +621,7 @@ describe('mock scenarios & E2E lifecycle', () => {
           'teams-uploaded': async () => {
             const client = new arena.Client({
               serverUrl: baseUrl,
-              arenaSecret: E2E_AUTH.arenaSecret!,
+              arenaSecret: E2E_ARENA_SECRET,
             });
             const fetched = await client.getLadderTeams('gen1ou20261109');
             expect(fetched.ladderId).toBe('gen1ou20261109');
@@ -629,7 +630,7 @@ describe('mock scenarios & E2E lifecycle', () => {
 
             const etagRes = await realFetch(`${baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
               headers: {
-                authorization: `Bearer ${E2E_AUTH.arenaSecret}`,
+                authorization: `Bearer ${E2E_ARENA_SECRET}`,
                 'if-none-match': `"${fetched.sha256}"`,
               },
             });
@@ -655,7 +656,7 @@ describe('mock scenarios & E2E lifecycle', () => {
           },
           'pending-auth-token': async () => {
             const pendingCheck = await realFetch(`${baseUrl}/api/arena/pending-submissions`, {
-              headers: {authorization: `Bearer ${E2E_AUTH.arenaSecret}`},
+              headers: {authorization: `Bearer ${E2E_ARENA_SECRET}`},
             });
             const pendingData = await pendingCheck.json() as {
               submissions: Array<{agentSlug: string; authToken?: string}>;
@@ -785,7 +786,7 @@ describe('mock scenarios & E2E lifecycle', () => {
           publicDir,
           now: nowSeconds,
           serverUrl: baseUrl,
-          arenaSecret: E2E_AUTH.arenaSecret,
+          arenaSecret: E2E_ARENA_SECRET,
           sessionSecret: E2E_AUTH.sessionSecret,
           onTimeChange: nextNow => {
             nowSeconds = nextNow;
@@ -876,7 +877,7 @@ describe('mock scenarios & E2E lifecycle', () => {
           const viewApp = polka();
           const viewArena = arena.register(viewApp, {
             db: seedDb,
-            arenaSecret: E2E_AUTH.arenaSecret,
+            arenaSecret: E2E_ARENA_SECRET,
             sessionSecret: E2E_AUTH.sessionSecret,
             publicDir: viewPublicDir,
             now: () => nowSeconds,
@@ -1044,7 +1045,7 @@ describe('mock scenarios & E2E lifecycle', () => {
               // Real live EventSource SSE interaction test (no SSE stubbing — direct 127.0.0.1!)
               const liveClient = new arena.Client({
                 serverUrl: viewBaseUrl,
-                arenaSecret: E2E_AUTH.arenaSecret!,
+                arenaSecret: E2E_ARENA_SECRET,
               });
               const liveCtx = await browser.newContext({
                 viewport: {width: 375, height: 667},
@@ -1175,14 +1176,18 @@ describe('mock scenarios & E2E lifecycle', () => {
                   game2Turns: 13,
                   game1EndReason: 'normal',
                   game2EndReason: 'normal',
-                  p1PeakRam: 1050,
-                  p2PeakRam: 1300,
+                  p1Game1PeakRam: 1050,
+                  p1Game2PeakRam: 1050,
+                  p2Game1PeakRam: 1300,
+                  p2Game2PeakRam: 1300,
                   p1Game1BankSeconds: 142,
                   p1Game2BankSeconds: 136,
                   p2Game1BankSeconds: 130,
                   p2Game2BankSeconds: 120,
-                  p1MeanTurnMillis: 305,
-                  p2MeanTurnMillis: 405,
+                  p1Game1MeanTurnMillis: 305,
+                  p1Game2MeanTurnMillis: 305,
+                  p2Game1MeanTurnMillis: 405,
+                  p2Game2MeanTurnMillis: 405,
                   completedAt: nowSeconds,
                 },
               });
@@ -1385,13 +1390,13 @@ describe('mock scenarios & E2E lifecycle', () => {
               const prevWins = eC.gameWins;
               await liveClient.completeTournamentGame('2', {
                 table: 2,
-                log: [
+                logs: [[
                   '|gametype|singles',
                   `|player|p1|${eC.agentName}|1`,
                   `|player|p2|${eD.agentName}|2`,
                   '|turn|12',
                   `|win|${eC.agentName}`,
-                ].join('\n'),
+                ].join('\n')],
                 game: {
                   id: 't2-e2e-live-2',
                   stage: 'Round Robin',

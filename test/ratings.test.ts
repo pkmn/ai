@@ -366,8 +366,7 @@ describe('normalCdf, LOS, expectedMatchScore, and rank bounds', () => {
 
     const bounds = ratings.computeGuaranteedRankBounds(
       [0, 1, 2, 3],
-      {theta, covariance: cov, eloLcb, eloUcb},
-      0.95
+      {theta, covariance: cov, eloLcb, eloUcb}
     );
     expect([bounds.rankMin[0], bounds.rankMax[0]]).toEqual([1, 1]);
     expect([bounds.rankMin[1], bounds.rankMax[1]]).toEqual([2, 3]);
@@ -394,8 +393,7 @@ describe('normalCdf, LOS, expectedMatchScore, and rank bounds', () => {
 
       const bounds = ratings.computeGuaranteedRankBounds(
         [0, 1],
-        {theta, covariance: cov, eloLcb, eloUcb},
-        0.95
+        {theta, covariance: cov, eloLcb, eloUcb}
       );
       expect([bounds.rankMin[0], bounds.rankMax[0]]).toEqual([1, 2]);
       expect([bounds.rankMin[1], bounds.rankMax[1]]).toEqual([1, 2]);
@@ -660,7 +658,7 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
       {i: 2, j: 0, outcome: 'T'},
       {i: 1, j: 2, outcome: 'W'},
     ];
-    const res = ratings.computeTournamentRatings(4, games, -1, 1500, 350);
+    const res = ratings.computeTournamentRatings(4, games);
     expect(res.elo[0]).toBeGreaterThan(res.elo[1]);
     expect(res.elo[1]).toBeGreaterThan(res.elo[2]);
     expect(res.elo[3]).toBeCloseTo(1500, 6);
@@ -676,13 +674,13 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
       {i: 2, j: 0, outcome: 'T'},
       {i: 1, j: 2, outcome: 'W'},
     ];
-    const res = ratings.computeTournamentRatings(4, games, -1, 1500, 350);
+    const res = ratings.computeTournamentRatings(4, games);
     const reversed: ratings.TournamentGameInput[] = games.slice().reverse().map(g => ({
       i: g.j,
       j: g.i,
       outcome: g.outcome === 'W' ? 'L' : g.outcome === 'L' ? 'W' : 'T',
     }));
-    const revRes = ratings.computeTournamentRatings(4, reversed, -1, 1500, 350);
+    const revRes = ratings.computeTournamentRatings(4, reversed);
     for (let k = 0; k < 4; k++) {
       expect(revRes.elo[k]).toBeCloseTo(res.elo[k], 8);
       expect(revRes.eloStd[k]).toBeCloseTo(res.eloStd[k], 8);

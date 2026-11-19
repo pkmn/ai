@@ -56,7 +56,6 @@ export interface AgentSpec {
   localCommand?: string;
   localArgs?: string[];
 }
-export type TournamentAgentSpec = AgentSpec;
 
 export interface TurnSlotBroadcast {
   bankSeconds: number;
@@ -69,7 +68,6 @@ export interface TurnBroadcastInfo {
   p1: TurnSlotBroadcast;
   p2: TurnSlotBroadcast;
 }
-export type TournamentTurnBroadcastInfo = TurnBroadcastInfo;
 
 export interface SeriesGameSummary {
   winnerSlot?: PlayerSlot;
@@ -103,7 +101,6 @@ export interface GameOptions {
   version?: string;
   bestOf?: number;
   seed: PRNGSeed;
-  seeds?: readonly PRNGSeed[];
   p1Spec: AgentSpec;
   p2Spec: AgentSpec;
   p1TeamPacked?: string;
@@ -114,7 +111,6 @@ export interface GameOptions {
   startingBankSeconds?: number;
   readyGraceSeconds?: number;
   maxTurnSeconds?: number;
-  utmTimeoutMillis?: number;
   onGameStart?: (info: {
     game: number;
     bestOf: number;
@@ -123,7 +119,6 @@ export interface GameOptions {
   onSpectatorChunk?: (chunk: string, state: TurnBroadcastInfo) => void;
   onClockChange?: (state: TurnBroadcastInfo) => void;
 }
-export type TournamentGameOptions = GameOptions;
 
 export interface GameResult {
   winner: PlayerSlot | 'tie' | 'preempted';
@@ -137,7 +132,6 @@ export interface GameResult {
   p2: PlayerResult;
   games: SeriesGameResult[];
 }
-export type TournamentGameResult = GameResult;
 
 interface RemoteTournamentPlayer {
   slot: PlayerSlot;
@@ -169,6 +163,8 @@ interface RemoteTournamentPlayer {
 
 const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION, rewriteBlindPlayerNames} =
   arbiter;
+const UTM_TIMEOUT_MILLIS = 15_000;
+const TOURNEY_AGENT_BIN = '/usr/local/bin/tourney-agent';
 export {rewriteBlindPlayerNames};
 
 export interface TournamentTeamPair {
@@ -288,7 +284,6 @@ export class ConcurrentGame {
   private format: string;
   private readonly bestOf: number;
   private readonly seed: PRNGSeed;
-  private readonly seeds?: readonly PRNGSeed[];
   private readonly p1Spec: AgentSpec;
   private readonly p2Spec: AgentSpec;
   private p1TeamPacked?: string;
@@ -302,7 +297,6 @@ export class ConcurrentGame {
   private readonly fullTurnIncrementMillis: number;
   private readonly midTurnIncrementMillis: number;
   private readonly accelerate: boolean;
-  private readonly utmTimeoutMillis: number;
   private readonly onGameStart?: GameOptions['onGameStart'];
   private readonly onSpectatorChunk?: (
     chunk: string,
@@ -311,7 +305,6 @@ export class ConcurrentGame {
   private readonly onClockChange?: (state: TurnBroadcastInfo) => void;
 
   private battle: sim.BattleHandle;
-  private readonly omniscientLog: string[] = [];
 
   private p1!: RemoteTournamentPlayer;
   private p2!: RemoteTournamentPlayer;
@@ -332,7 +325,6 @@ export class ConcurrentGame {
       ? 1
       : (options.bestOf ?? getTournamentBestOf(options.format));
     this.seed = options.seed;
-    this.seeds = options.seeds;
     this.p1Spec = options.p1Spec;
     this.p2Spec = options.p2Spec;
     this.p1TeamPacked = options.p1TeamPacked;
@@ -348,7 +340,6 @@ export class ConcurrentGame {
     this.fullTurnIncrementMillis = arena.turnIncrementSeconds(options.format) * 1000;
     this.midTurnIncrementMillis = arena.MID_TURN_INCREMENT_SECONDS * 1000;
     this.accelerate = !this.format.includes('vgc') && !this.format.includes('champions');
-    this.utmTimeoutMillis = options.utmTimeoutMillis ?? 15_000;
     this.onGameStart = options.onGameStart;
     this.onSpectatorChunk = options.onSpectatorChunk;
     this.onClockChange = options.onClockChange;
@@ -378,7 +369,6 @@ export class ConcurrentGame {
       this.p1Spec.displayName,
       this.p2Spec.displayName
     );
-    this.omniscientLog.push(publicChunk);
     this.onSpectatorChunk?.(publicChunk, this.buildBroadcastState());
   }
 
@@ -688,19 +678,18 @@ export class ConcurrentGame {
     if (!readyRes.ok) return readyRes;
 
     if (assignedTeam !== undefined) {
-      const valid = await this.validatePackedTeam(assignedTeam);
-      if (!valid) {
-        return {ok: false, reason: 'invalid-choice'};
-      }
+      // Pre-assigned teams come from `pkmn.ai` after server-side validation (`server/teams.ts` /
+      // `server/sim.ts`); only untrusted `/utm` agent stdout below runs `validatePackedTeam`.
+      const team = assignedTeam.trim();
       if (this.sendUtm && !player.exited && player.proc.stdin.writable) {
-        player.proc.stdin.write(`|utm|${valid}\n`);
+        player.proc.stdin.write(`|utm|${team}\n`);
       }
-      return {ok: true, team: valid};
+      return {ok: true, team};
     }
 
     // When no team is pre-assigned by the tournament, send zero lines on stdin and require the
     // agent's very first stdout line to be `/utm <packed_team>` with a legal team for the format.
-    const {line, timedOut} = await this.readLineWithTimeout(player, this.utmTimeoutMillis);
+    const {line, timedOut} = await this.readLineWithTimeout(player, UTM_TIMEOUT_MILLIS);
     if (player.spotPreempted || player.sshDisconnected) {
       return {ok: false, reason: 'spot-preemption'};
     }
@@ -738,7 +727,7 @@ export class ConcurrentGame {
     this.preemptedSlot = slot;
     this.endReason = 'spot-preemption';
     this.wakePendingLineResolvers();
-    Promise.resolve(this.battle.write('>forcetie')).catch(() => undefined);
+    void this.battle.write('>forcetie').catch(() => undefined);
   }
 
   private forceLose(losingSlot: PlayerSlot, reason: string) {
@@ -747,7 +736,7 @@ export class ConcurrentGame {
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
     this.endReason = reason;
     this.wakePendingLineResolvers();
-    Promise.resolve(this.battle.write(`>forcewin ${this.winner}`)).catch(() => undefined);
+    void this.battle.write(`>forcewin ${this.winner}`).catch(() => undefined);
   }
 
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
@@ -765,7 +754,7 @@ export class ConcurrentGame {
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
     const wasRetry = player.retryingInvalidChoice;
 
-    const {graceMillis, totalBudgetMillis, inactiveLine} = arbiter.beginTurnClockStep(
+    const {totalBudgetMillis, inactiveLine} = arbiter.beginTurnClockStep(
       player,
       this.currentTurn,
       this.lastRewardedTurn,
@@ -826,8 +815,7 @@ export class ConcurrentGame {
         if (!parsed || parsed.kind === 'chat' || parsed.kind === 'ready') continue;
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedMillis));
-        const overGraceMillis = Math.max(0, decisionElapsedMillis - graceMillis);
-        player.bankMillis = Math.max(0, player.bankMillis - overGraceMillis);
+        player.bankMillis = Math.max(0, player.bankMillis - decisionElapsedMillis);
         if (req.teamPreview) {
           player.totalTeamPreviewMillis += decisionElapsedMillis;
           player.teamPreviewCount++;
@@ -893,7 +881,6 @@ export class ConcurrentGame {
 
   private resetForNextSeriesGame() {
     this.battle = sim.createBattle(this.version);
-    this.omniscientLog.length = 0;
     this.currentTurn = 0;
     this.requestCount = 0;
     this.waveActiveSidesCount = 1;
@@ -1142,7 +1129,7 @@ export class ConcurrentGame {
         await this.closePlayers();
         const gamesNeeded = Math.floor(this.bestOf / 2) + 1;
         const games: SeriesGameResult[] = Array.from({length: gamesNeeded}, (_, idx) => ({
-          seed: this.seeds?.[idx] ?? deriveGameSeed(this.seed, idx + 1),
+          seed: deriveGameSeed(this.seed, idx + 1),
           outcome,
           turns: 0,
           endReason,
@@ -1186,7 +1173,7 @@ export class ConcurrentGame {
       let p2PeakRam = this.p2.peakRam;
 
       for (let gameNum = 1; gameNum <= this.bestOf; gameNum++) {
-        const gameSeed = this.seeds?.[gameNum - 1] ?? deriveGameSeed(this.seed, gameNum);
+        const gameSeed = deriveGameSeed(this.seed, gameNum);
         await this.onGameStart?.({
           game: gameNum,
           bestOf: this.bestOf,
@@ -1321,7 +1308,6 @@ export class ConcurrentGame {
     }
   }
 }
-export {ConcurrentGame as ConcurrentTournamentGame};
 
 export interface MatchupState {
   agentA: number;
@@ -1330,7 +1316,6 @@ export interface MatchupState {
   gamesTarget: number;
   inFlight: boolean;
 }
-export type TournamentMatchupState = MatchupState;
 
 export interface TableResidentPair {
   vmAAgent: number | undefined;
@@ -1415,63 +1400,6 @@ export function selectNextBatch(
     gamesToPlay: Math.min(batchSize, remaining),
     startingGameIndex: best.gamesPlayed,
   };
-}
-export {selectNextBatch as selectNextTournamentBatch};
-
-// Forward-looking GCP L4 Spot worker VM provisioning helpers — do not delete.
-export const L4_CANDIDATE_ZONES = [
-  'us-central1-a',
-  'us-central1-b',
-  'us-central1-c',
-  'us-east4-a',
-  'us-east4-c',
-  'us-west1-b',
-] as const;
-
-export interface ProvisionedWorkerVM {
-  vmName: string;
-  zone: string;
-  ip: string;
-  provisioningModel: 'SPOT' | 'STANDARD';
-}
-
-export function provisionSpotWorkerVM(
-  vmName: string,
-  imageName: string,
-  consecutiveSpotFailures = 0
-): ProvisionedWorkerVM {
-  const provisioningModel: 'SPOT' | 'STANDARD' =
-    consecutiveSpotFailures >= 3 ? 'STANDARD' : 'SPOT';
-
-  for (const zone of L4_CANDIDATE_ZONES) {
-    try {
-      const args = [
-        'compute', 'instances', 'create', vmName,
-        `--zone=${zone}`,
-        '--machine-type=g2-custom-24-49152',
-        '--accelerator=type=nvidia-l4,count=1',
-        `--provisioning-model=${provisioningModel}`,
-        ...(provisioningModel === 'SPOT' ? ['--instance-termination-action=DELETE'] : []),
-        '--maintenance-policy=TERMINATE',
-        `--image=${imageName}`,
-        '--boot-disk-size=300GB',
-        '--boot-disk-type=pd-ssd',
-        '--format=value(networkInterfaces[0].networkIP)',
-      ];
-      const ip = execFileSync('gcloud', args, {
-        encoding: 'utf8',
-        timeout: 120_000,
-      }).trim();
-      if (ip) {
-        return {vmName, zone, ip, provisioningModel};
-      }
-    } catch {
-      // Zone exhausted or capacity unavailable; try next candidate zone
-    }
-  }
-  throw new Error(
-    `All L4 zones exhausted while provisioning ${vmName} (${provisioningModel})`
-  );
 }
 
 function shellQuote(arg: string): string {
@@ -1625,14 +1553,13 @@ export function unpackOciRootfs(opts: {
   targetId: string;
   expectedSha256: string;
   authToken?: string;
-  agentsDir?: string;
-  stagingDir?: string;
+  rootDir?: string;
 }): number {
   if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(opts.targetId) || opts.targetId.includes('..')) {
     throw new Error(`Invalid tournament agent targetId: ${opts.targetId}`);
   }
-  const agentsDir = opts.agentsDir ?? '/opt/arena/agents';
-  const stagingDir = opts.stagingDir ?? '/tmp';
+  const agentsDir = opts.rootDir ? path.join(opts.rootDir, 'agents') : '/opt/arena/agents';
+  const stagingDir = opts.rootDir ? path.join(opts.rootDir, 'staging') : '/tmp';
   fs.mkdirSync(stagingDir, {recursive: true});
   fs.mkdirSync(agentsDir, {recursive: true});
 
@@ -1688,7 +1615,6 @@ export function unpackOciRootfs(opts: {
     fs.rmSync(workDir, {recursive: true, force: true});
   }
 }
-export {unpackOciRootfs as unpackTournamentOciRootfs};
 
 export interface WorkerVmBinding {
   host: string;
@@ -1699,7 +1625,6 @@ export interface TableBinding {
   vmA: WorkerVmBinding;
   vmB: WorkerVmBinding;
 }
-export type TournamentTableBinding = TableBinding;
 
 const LOCAL_TABLE_BINDING: TableBinding = {
   vmA: {host: '127.0.0.1', controlSocket: ''},
@@ -1723,14 +1648,10 @@ export interface MountedEntrant {
 export interface Options {
   client: arena.Client;
   baselineSpec: AgentSpec;
-  agentsDir?: string;
-  stagingDir?: string;
-  tourneyAgentBin?: string;
+  rootDir?: string;
   tables?: readonly TableBinding[];
   superfinalGames?: number;
   maxTurns?: number;
-  seedSecret?: string;
-  randomInt?: (max: number) => number;
   prepareSubmissionRootfs?: (
     sub: arena.PendingSubmission,
     targetId: string
@@ -1741,7 +1662,6 @@ export interface Options {
     controlSocket: string
   ) => AgentSpec;
 }
-export type TournamentCoordinatorOptions = Options;
 
 const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'timeout', 'invalid-choice']);
 
@@ -1753,15 +1673,12 @@ const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'timeout', 'invalid-choice'])
 export class Coordinator {
   readonly client: arena.Client;
   private readonly baselineSpec: AgentSpec;
+  private readonly rootDir?: string;
   private readonly agentsDir: string;
-  private readonly stagingDir: string;
-  private readonly tourneyAgentBin: string;
   private readonly tables: readonly TableBinding[];
   private readonly superfinalGames: number;
   private readonly maxTurns?: number;
   private readonly seedSecret: string;
-  private readonly randomInt: (max: number) => number;
-  private readonly customRandomInt: boolean;
   private readonly prepareSubmissionRootfs?: (
     sub: arena.PendingSubmission,
     targetId: string
@@ -1771,28 +1688,14 @@ export class Coordinator {
   constructor(options: Options) {
     this.client = options.client;
     this.baselineSpec = options.baselineSpec;
-    this.agentsDir = options.agentsDir ?? '/opt/arena/agents';
-    this.stagingDir = options.stagingDir ?? '/tmp';
-    this.tourneyAgentBin = options.tourneyAgentBin ?? '/usr/local/bin/tourney-agent';
+    this.rootDir = options.rootDir;
+    this.agentsDir = options.rootDir ? path.join(options.rootDir, 'agents') : '/opt/arena/agents';
     this.tables = options.tables ?? [];
     this.superfinalGames = options.superfinalGames ?? 100;
     this.maxTurns = options.maxTurns;
-    this.seedSecret = options.seedSecret ?? process.env.ARENA_SECRET ?? 'tournament-seed';
-    this.customRandomInt = options.randomInt !== undefined;
-    this.randomInt = options.randomInt ?? (max => crypto.randomInt(0, max));
+    this.seedSecret = process.env.ARENA_SECRET ?? 'tournament-seed';
     this.prepareSubmissionRootfs = options.prepareSubmissionRootfs;
     this.customResolveEntrantSpec = options.resolveEntrantSpec;
-  }
-
-  private randomPrngSeed(): PRNGSeed {
-    if (this.customRandomInt) {
-      const s0 = this.randomInt(0x10000);
-      const s1 = this.randomInt(0x10000);
-      const s2 = this.randomInt(0x10000);
-      const s3 = this.randomInt(0x10000);
-      return `${s0},${s1},${s2},${s3}`;
-    }
-    return `sodium,${crypto.randomBytes(32).toString('hex')}` as PRNGSeed;
   }
 
   private resolveEntrantSpec(mounted: MountedEntrant): AgentSpec {
@@ -1811,7 +1714,7 @@ export class Coordinator {
         displayName: entrant.agentName,
         vmHost: '127.0.0.1',
         controlSocket: '',
-        localCommand: this.tourneyAgentBin,
+        localCommand: TOURNEY_AGENT_BIN,
         localArgs: [targetId],
       };
     }
@@ -1832,7 +1735,6 @@ export class Coordinator {
     let processed = 0;
 
     for (const sub of submissions) {
-      if (sub.tournaments.length === 0) continue;
       processed++;
       const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
 
@@ -1845,8 +1747,7 @@ export class Coordinator {
             targetId,
             expectedSha256: sub.sha256,
             authToken: sub.authToken,
-            agentsDir: this.agentsDir,
-            stagingDir: this.stagingDir,
+            rootDir: this.rootDir,
           });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1879,15 +1780,7 @@ export class Coordinator {
       for (const tid of sub.tournaments) {
         const meta = tourneyById.get(tid);
         const format = meta?.format ?? 'gen9ou';
-        let customRules: string[] = [];
-        if (meta?.rulesJson) {
-          try {
-            const parsed = JSON.parse(meta.rulesJson) as unknown;
-            if (Array.isArray(parsed)) {
-              customRules = parsed.filter((r): r is string => typeof r === 'string');
-            }
-          } catch {}
-        }
+        const customRules = meta?.customRules ?? [];
 
         let p1TeamPacked: string | undefined;
         let p2TeamPacked: string | undefined;
@@ -1980,9 +1873,6 @@ export class Coordinator {
   }
 
   private derivePairSeed(tournamentId: string, pairIdx: number): PRNGSeed {
-    if (this.customRandomInt) {
-      return this.randomPrngSeed();
-    }
     const hex = crypto
       .createHmac('sha256', this.seedSecret)
       .update(`${tournamentId}:pair:${pairIdx}`)
@@ -2096,8 +1986,7 @@ export class Coordinator {
       1,
       Math.min(tourney.parallelTables, Math.floor(versionIds.length / 2))
     );
-    const tourneyBestOf = tourney.bestOf ??
-      getTournamentBestOf(tourney.format, tourney.customRules);
+    const tourneyBestOf = tourney.bestOf;
     let markedRunning = tourney.status === 'running';
     let rrCompleted = 0;
 
@@ -2434,4 +2323,3 @@ export class Coordinator {
     return {roundRobinGames: rrCompleted, superfinalGames: sfCompleted};
   }
 }
-export {Coordinator as TournamentCoordinator};

@@ -26,6 +26,12 @@ export const LADDER_STATUSES = new Set<LadderStatus>([
 export const SIM_VERSION = '0.11.0';
 const SIM_VERSION_RE = /^[A-Za-z0-9._-]+$/;
 
+// `pools` ladders require >= 4 distinct active agents so every agent's submitted pool can be
+// sampled with exact uniform probability `2 / N` while keeping `X_A + X_B <= 1` (`4 / N <= 1`).
+export function minAgentsForTeamMode(team: TeamMode): number {
+  return team === 'pools' ? 4 : 2;
+}
+
 export const SLOT_ORDER_SQL = `
   CASE slot
     WHEN 'rby' THEN 0
@@ -41,12 +47,11 @@ export const SLOT_ORDER_SQL = `
 export interface LadderConfig {
   name: string;
   format: string;
-  version: string;
+  version?: string;
   id: string;
   discord?: string;
   team: TeamMode;
   status?: LadderStatus;
-  min?: number;
   teams?: number;
   pools?: string[];
 }
@@ -72,7 +77,6 @@ export interface StagedLadderInput {
   format?: string;
   version?: string;
   team?: TeamMode;
-  min?: number;
   teams?: number;
   discord?: string;
 }
@@ -142,7 +146,6 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     const format = entry?.format?.trim();
     const team = entry?.team;
     const status = entry?.status ?? 'active';
-    const min = entry?.min ?? (team === 'pools' ? 4 : 2);
 
     if (!id || !name || !format) {
       throw new Error(`Invalid ladder entry in ladders.yml: ${JSON.stringify(entry)}`);
@@ -153,11 +156,6 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     }
     if (!LADDER_STATUSES.has(status)) {
       throw new Error(`Invalid ladder status "${String(status)}" for "${id}"`);
-    }
-    // `pools` ladders require >= 4 distinct active agents so every agent's submitted pool can be
-    // sampled with exact uniform probability `2 / N` while keeping `X_A + X_B <= 1` (`4 / N <= 1`).
-    if (!Number.isInteger(min) || min < 2 || (team === 'pools' && min < 4)) {
-      throw new Error(`Invalid min "${String(min)}" for "${id}"`);
     }
     if (team === 'pools') {
       if (!Number.isInteger(entry.teams) || entry.teams! < 1) {
@@ -172,12 +170,11 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
     ) {
       throw new Error(`Invalid discord role "${String(entry.discord)}" for "${id}"`);
     }
-    if (
-      typeof entry.version !== 'string' ||
-      !SIM_VERSION_RE.test(entry.version.trim())
-    ) {
-      throw new Error(`Missing or invalid version "${String(entry.version)}" for "${id}"`);
+    const version = entry.version === undefined ? SIM_VERSION : entry.version;
+    if (typeof version !== 'string' || !SIM_VERSION_RE.test(version.trim())) {
+      throw new Error(`Invalid version "${String(entry.version)}" for "${id}"`);
     }
+    entry.version = version.trim();
     if (seenIds.has(id)) {
       throw new Error(`Duplicate ladder id "${id}" in ladders.yml`);
     }
@@ -197,15 +194,25 @@ export function parseLaddersYaml(laddersYaml: string): LadderConfig[] {
   return entries;
 }
 
+const ladderPoolsCache = new Map<string, {mtimeMs: number; pools: Map<string, string[]>}>();
+
 export function loadLadderPools(file = LADDERS_FILE): Map<string, string[]> {
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    return new Map();
+  }
+  const hit = ladderPoolsCache.get(file);
+  if (hit?.mtimeMs === mtimeMs) return hit.pools;
   const out = new Map<string, string[]>();
-  if (!fs.existsSync(file)) return out;
   const entries = parseLaddersYaml(fs.readFileSync(file, 'utf8'));
   for (const entry of entries) {
     if (Array.isArray(entry.pools) && entry.pools.length) {
       out.set(entry.id, entry.pools.map(p => root(p)));
     }
   }
+  ladderPoolsCache.set(file, {mtimeMs, pools: out});
   return out;
 }
 
@@ -265,13 +272,13 @@ export function syncLaddersFromYaml(
         cfgName.toLowerCase() === slot &&
         existing.name.trim().toLowerCase() !== slot;
       const name = preserveRotatedTitle ? existing.name : cfgName;
-      const min = cfg.min ?? (cfg.team === 'pools' ? 4 : 2);
+      const min = minAgentsForTeamMode(cfg.team);
       const teams = cfg.teams ?? null;
       const discord = cfg.discord?.trim() || null;
       const archivedAt = status === 'archived'
         ? (existing?.archived_at ?? now)
         : null;
-      const version = cfg.version.trim();
+      const version = (cfg.version ?? SIM_VERSION).trim();
       upsert.run(
         cfg.id,
         slot,
@@ -353,7 +360,7 @@ export function validateLadderActivation(db: DatabaseSync, ladder: LadderRow): v
     );
   }
 
-  const requiredMin = Math.max(ladder.team === 'pools' ? 4 : 2, ladder.min);
+  const requiredMin = minAgentsForTeamMode(ladder.team);
   const activeCount = countDistinctActiveLadderAgents(db, ladder.id);
   if (activeCount < requiredMin) {
     throw new Error(
@@ -540,9 +547,6 @@ export function setLadderStatus(
   status: LadderStatus,
   now = Math.floor(Date.now() / 1000)
 ): LadderRow {
-  if (!LADDER_STATUSES.has(status)) {
-    throw new Error(`Invalid ladder status "${status}"`);
-  }
   return inTransaction(() => {
     const ladder = getLadder(db, ladderId);
     if (!ladder) throw new Error(`Ladder "${ladderId}" not found`);
@@ -688,10 +692,7 @@ export function rotateLadder(
         }
       } else {
         const team = next.team ?? oldLadder.team;
-        const min = next.min ?? (team === 'pools' ? Math.max(4, oldLadder.min) : oldLadder.min);
-        if (!Number.isInteger(min) || min < 2 || (team === 'pools' && min < 4)) {
-          throw new Error(`Invalid min "${String(min)}" for "${newId}"`);
-        }
+        const min = minAgentsForTeamMode(team);
         const teams = next.teams !== undefined
           ? next.teams
           : (team === 'pools' ? (oldLadder.teams ?? 20) : undefined);

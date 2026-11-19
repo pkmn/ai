@@ -48,8 +48,8 @@ npm run pkmn -- <command> [args...]
 ```
 
 - **Database resolution:** `pkmn` automatically opens `/var/lib/pkmn/arena.sqlite` whenever
-  `/var/lib/pkmn` exists or `NODE_ENV=production`, and `db/data/arena.sqlite` locally (override with
-  `ARENA_DB_PATH=/path/to/arena.sqlite`, or pass `MOCK=1` locally to read `.mock/` overlays).
+  `/var/lib/pkmn` exists or `NODE_ENV=production`, and `db/data/arena.sqlite` locally (pass `MOCK=1`
+  locally to read `.mock/` overlays).
 - **Live concurrency & SSR cache invalidation:** SQLite runs in WAL mode with `busy_timeout = 5000`
   ms, so `pkmn` commands can run safely alongside the live `pkmn.ai-server` process; `pkmn.ai-server`
   renders Arena and project profile HTML/JSON dynamically and invalidates its ETag cache
@@ -202,20 +202,13 @@ Upload either a Pokémon Showdown Teambuilder paste (`=== [format] Team Name ===
 - At least 2 non-mirror teams with distinct 6-species sets are required (in practice, hundreds of
   high-ladder teams so 2-game blind-pair matches sample diverse matchups).
 
-### Uploading Harvested Teams (`pkmn` CLI or HTTP API)
+### Uploading Harvested Teams (`pkmn` CLI)
 
-Upload or replace a `harvested` ladder's pool locally via CLI or remotely over HTTPS using
-`ARENA_SECRET`:
+Upload or replace a `harvested` ladder's pool locally on `pkmn.ai`:
 
 ```sh
-# Option A: Local CLI on pkmn.ai (writes validated canonical packed teams into ladder_teams)
+# Writes validated canonical packed teams into ladder_teams
 npm run pkmn -- upload-ladder-teams gen1ou20261109 /path/to/gen1ou-teams.txt
-
-# Option B: Remote upload via Bearer $ARENA_SECRET (accepts text/plain or JSON {"teams": ...})
-curl -fsS -X PUT https://pkmn.ai/api/arena/ladders/gen1ou20261109/teams \
-  -H "Authorization: Bearer $ARENA_SECRET" \
-  -H 'Content-Type: text/plain; charset=utf-8' \
-  --data-binary @gen1ou-teams.txt
 ```
 
 Uploading replaces the entire `ladder_teams` pool for `<ladder_id>` atomically in SQLite.
@@ -266,10 +259,10 @@ New seasons start with `status: upcoming` in `config/ladders.yml`. While a ladde
 activation until all three pass:
 
 1. **Harvested teams uploaded (for `team: harvested`):** At least 2 non-mirror legal teams exist in
-   `ladder_teams` (`upload-ladder-teams` or `PUT /api/arena/ladders/<ladder_id>/teams`).
-2. **Minimum active entries:** At least `min` distinct non-disabled projects have active (`champion`
-   or `challenger`), smoke-`passed` entries on `<ladder_id>` (at least **2** on `harvested`/`random`
-   ladders; at least **4** with active team pools on `pools` ladders).
+   `ladder_teams` (`upload-ladder-teams`).
+2. **Minimum active entries:** At least **2** distinct non-disabled projects have active (`champion`
+   or `challenger`), smoke-`passed` entries on `harvested`/`random` ladders, or at least **4** with
+   active team pools on `pools` ladders.
 3. **1500-Elo anchor designated:** One active, smoke-`passed`, non-disabled entry on `<ladder_id>`
    is pinned as the gauge anchor (`is_anchor = 1`).
 
@@ -307,8 +300,9 @@ npm run pkmn -- set-anchor gen9randombattle20261109 foul-play 1.0.0
 
 ### Adding a New `@pkmn/sim` Version
 
-Every ladder in `config/ladders.yml` and every tournament in SQLite explicitly specifies a
-`version` string (e.g. `0.11.0`, or a pinned tag/commit key such as `0.12.0` or `reg-md-202612`).
+Every ladder in `config/ladders.yml` (defaulting to `'0.11.0'` when omitted) and every tournament
+in SQLite specifies a `version` string (e.g. `0.11.0`, or a pinned tag/commit key such as `0.12.0`
+or `reg-md-202612`).
 Each version runs inside its own isolated `worker_threads` worker (`server/sim-worker.ts`) so fixed
 ladders (`RBY`, `ADV`, `SV`, `RAND`) remain frozen while seasonal `VGC` ladders or tournaments
 advance to newer Pokémon Showdown commits.
@@ -350,15 +344,15 @@ npm run pkmn -- rotate-ladder gen9championsvgc2026regmc \
   --format gen9championsvgc2026regmd \
   --version 0.12.0 \
   --team pools \
-  --min 4 \
   --teams 20
 ```
 
 What `rotate-ladder` does atomically:
-- Renames the outgoing ladder to `"VGC 2026 Reg M-C"`. If at least `min` distinct active projects
-  still have unsettled versions (`matches < 25` or `SE > 30`), it enters `settling` (closing new
-  submissions while finishing remaining settlement matches before automatically transitioning to
-  `archived`); otherwise it transitions immediately to `archived` and marks its entries `retired`.
+- Renames the outgoing ladder to `"VGC 2026 Reg M-C"`. If enough distinct active projects (4 for
+  `pools`, 2 otherwise) still have unsettled versions (`matches < 25` or `SE > 30`), it enters
+  `settling` (closing new submissions while finishing remaining settlement matches before
+  automatically transitioning to `archived`); otherwise it transitions immediately to `archived`
+  and marks its entries `retired`.
 - Stages `gen9championsvgc2026regmd` in `status = 'upcoming'` under the `vgc` URL slot
   (`/arena/ladders/vgc/`) so competitors can upload initial team pools/entries (and staff can upload
   harvested teams + pin an anchor) before running `set-ladder-status gen9championsvgc2026regmd active`.
@@ -542,7 +536,7 @@ npm run pkmn -- set-tournament-status 3 running
 
 Registration closes on `/account/`, the site-wide `● LIVE Tournament #3: ...` `#topbar` banner is
 injected across `pkmn.ai`, and live Showdown frames stream to `/arena/tournaments/3/`
-(`public/api/tournament-live.json`). Spot preemptions reset only the single interrupted
+(`/api/tournaments/3/stream`). Spot preemptions reset only the single interrupted
 `in_progress` game back to `pending` (preserving its PRNG `seed`) and replace the VM in the next L4
 zone with zero forfeit penalty.
 
@@ -558,11 +552,6 @@ npm run pkmn -- set-tournament-status 3 completed
 
 ```sh
 npm run pkmn -- publish-tournament-archive 3 /tmp/3-replays.7z
-# or upload remotely from the tournament coordinator:
-curl -fsS -X POST "https://pkmn.ai/api/arena/tournament-archive?tournamentId=3" \
-  -H "Authorization: Bearer $ARENA_SECRET" \
-  -H "X-Content-SHA256: $(shasum -a 256 /tmp/3-replays.7z | awk '{print $1}')" \
-  --data-binary @/tmp/3-replays.7z
 ```
 
 3. **Delete all worker VMs and staging images:**

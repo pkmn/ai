@@ -15,47 +15,39 @@ import {getTournament} from './tournaments';
 
 import {TransactionRunner} from './index';
 
-export type TournamentMatchStage = 'Round Robin' | 'Superfinal';
-export type TournamentMatchStatus = 'pending' | 'running' | 'completed';
+export type TournamentGameStage = 'Round Robin' | 'Superfinal';
+export type TournamentGameStatus = 'pending' | 'running' | 'completed';
 
-export type TournamentGameStage = TournamentMatchStage;
-export type TournamentGameStatus = TournamentMatchStatus;
-
-export interface TournamentMatchPlayer {
+export interface TournamentGamePlayer {
   versionId: number;
   team?: string;
 }
 
-export interface TournamentMatchPlayerView extends TournamentMatchPlayer {
+export interface TournamentGamePlayerView extends TournamentGamePlayer {
   slug: string;
   name: string;
   version: string;
 }
 
-export type TournamentGamePlayer = TournamentMatchPlayer;
-export type TournamentGamePlayerView = TournamentMatchPlayerView;
-
 export interface TournamentMatchRow {
   id: string;
   tournamentId: string;
-  stage: TournamentMatchStage;
+  stage: TournamentGameStage;
   cycle: number;
   matchupGame: number;
-  status: TournamentMatchStatus;
+  status: TournamentGameStatus;
   preemptions: number;
   outcome?: ratings.GameOutcome;
-  p1: TournamentMatchPlayer;
-  p2: TournamentMatchPlayer;
+  p1: TournamentGamePlayer;
+  p2: TournamentGamePlayer;
   games: TournamentGameRow[];
   completedAt?: number;
 }
 
-export interface TournamentMatchView extends TournamentMatchRow {
-  p1: TournamentMatchPlayerView;
-  p2: TournamentMatchPlayerView;
+export interface TournamentGameView extends TournamentMatchRow {
+  p1: TournamentGamePlayerView;
+  p2: TournamentGamePlayerView;
 }
-
-export type TournamentGameView = TournamentMatchView;
 
 export interface TournamentPairRecord {
   lowVersionId: number;
@@ -65,40 +57,36 @@ export interface TournamentPairRecord {
   ties: number;
 }
 
-export interface UpsertTournamentMatchInput {
+export interface UpsertTournamentGameInput {
   id: string;
   tournamentId: string;
-  stage?: TournamentMatchStage;
+  stage?: TournamentGameStage;
   cycle: number;
   matchupGame: number;
-  status?: TournamentMatchStatus;
+  status?: TournamentGameStatus;
   preemptions?: number;
   outcome?: ratings.GameOutcome;
-  p1: TournamentMatchPlayer;
-  p2: TournamentMatchPlayer;
+  p1: TournamentGamePlayer;
+  p2: TournamentGamePlayer;
   games?: readonly TournamentGameInput[];
   completedAt?: number;
 }
 
-export type UpsertTournamentGameInput = UpsertTournamentMatchInput;
-
-export interface CompletedTournamentMatchPayload {
+export interface CompletedTournamentGamePayload {
   id: string;
   tournamentId: string;
-  stage?: TournamentMatchStage;
+  stage?: TournamentGameStage;
   cycle: number;
   matchupGame: number;
   preemptions?: number;
   outcome: ratings.GameOutcome;
-  p1: TournamentMatchPlayer;
-  p2: TournamentMatchPlayer;
+  p1: TournamentGamePlayer;
+  p2: TournamentGamePlayer;
   games: readonly TournamentGameInput[];
   completedAt: number;
 }
 
-export type CompletedTournamentGamePayload = CompletedTournamentMatchPayload;
-
-export function upsertTournamentMatch(db: DatabaseSync, input: UpsertTournamentMatchInput) {
+export function upsertTournamentGame(db: DatabaseSync, input: UpsertTournamentGameInput) {
   db.prepare(
     `
     INSERT INTO tournament_matches (
@@ -141,19 +129,17 @@ export function upsertTournamentMatch(db: DatabaseSync, input: UpsertTournamentM
   }
 }
 
-export const upsertTournamentGame = upsertTournamentMatch;
-
-function mapTournamentMatchView(
+function mapTournamentGameView(
   r: Record<string, unknown>,
   games: TournamentGameRow[]
-): TournamentMatchView {
+): TournamentGameView {
   return {
     id: r.id as string,
     tournamentId: r.tournament_id as string,
-    stage: r.stage as TournamentMatchStage,
+    stage: r.stage as TournamentGameStage,
     cycle: r.cycle as number,
     matchupGame: r.matchup_game as number,
-    status: r.status as TournamentMatchStatus,
+    status: r.status as TournamentGameStatus,
     preemptions: r.preemptions as number,
     outcome: (r.outcome as ratings.GameOutcome | null) ?? undefined,
     p1: {
@@ -175,10 +161,10 @@ function mapTournamentMatchView(
   };
 }
 
-export function getTournamentMatch(
+export function getTournamentGame(
   db: DatabaseSync,
   matchId: string
-): TournamentMatchView | undefined {
+): TournamentGameView | undefined {
   const row = db
     .prepare(
       `
@@ -201,22 +187,20 @@ export function getTournamentMatch(
     .get(matchId) as Record<string, unknown> | undefined;
   if (!row) return undefined;
   const games = getTournamentMatchGames(db, matchId);
-  return mapTournamentMatchView(row, games);
+  return mapTournamentGameView(row, games);
 }
 
-export const getTournamentGame = getTournamentMatch;
-
-export function recordCompletedTournamentMatch(
+export function recordCompletedTournamentGame(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
-  match: CompletedTournamentMatchPayload
-): {duplicate: boolean; game: TournamentMatchView} {
+  match: CompletedTournamentGamePayload
+): {duplicate: boolean; game: TournamentGameView} {
   return inTransaction(() => {
     const tournament = getTournament(db, match.tournamentId);
     if (!tournament) {
       throw Object.assign(new Error(`Unknown tournament "${match.tournamentId}".`), {status: 404});
     }
-    const existing = getTournamentMatch(db, match.id);
+    const existing = getTournamentGame(db, match.id);
     if (existing?.status === 'completed') {
       return {duplicate: true, game: existing};
     }
@@ -241,7 +225,7 @@ export function recordCompletedTournamentMatch(
       );
     }
 
-    upsertTournamentMatch(db, {
+    upsertTournamentGame(db, {
       id: match.id,
       tournamentId: match.tournamentId,
       stage: match.stage ?? existing?.stage ?? 'Round Robin',
@@ -263,17 +247,15 @@ export function recordCompletedTournamentMatch(
     });
 
     recomputeTournamentStandings(db, match.tournamentId, tournament.status === 'completed');
-    return {duplicate: false, game: getTournamentMatch(db, match.id)!};
+    return {duplicate: false, game: getTournamentGame(db, match.id)!};
   });
 }
 
-export const recordCompletedTournamentGame = recordCompletedTournamentMatch;
-
-export function getTournamentMatches(
+export function getTournamentGames(
   db: DatabaseSync,
   tournamentId: string,
   limit = 50
-): TournamentMatchView[] {
+): TournamentGameView[] {
   const rows = db
     .prepare(
       `
@@ -301,15 +283,13 @@ export function getTournamentMatches(
   const gamesByMatch = rows.length <= 500
     ? getTournamentMatchGamesForMatches(db, rows.map(row => row.id as string))
     : getTournamentMatchGamesByTournament(db, tournamentId);
-  return rows.map(row => mapTournamentMatchView(row, gamesByMatch.get(row.id as string) ?? []));
+  return rows.map(row => mapTournamentGameView(row, gamesByMatch.get(row.id as string) ?? []));
 }
-
-export const getTournamentGames = getTournamentMatches;
 
 export function getTournamentCrosstable(
   db: DatabaseSync,
   tournamentId: string,
-  stage: TournamentMatchStage = 'Round Robin'
+  stage: TournamentGameStage = 'Round Robin'
 ): TournamentPairRecord[] {
   const rows = db
     .prepare(

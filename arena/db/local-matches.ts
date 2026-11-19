@@ -142,17 +142,17 @@ function mapLocalMatchRow(raw: RawLocalMatchRow): LocalMatchCheckpoint {
       ? {
         g1: {
           outcome: raw.g1_outcome!,
-          turns: raw.g1_turns ?? 1,
-          endReason: raw.g1_end_reason ?? 'win',
+          turns: raw.g1_turns!,
+          endReason: raw.g1_end_reason!,
           p1: {
-            bankSeconds: raw.g1_p1_bank_seconds ?? 0,
-            ram: raw.g1_p1_ram ?? 64,
-            turnMillis: raw.g1_p1_turn_millis ?? 0,
+            bankSeconds: raw.g1_p1_bank_seconds!,
+            ram: raw.g1_p1_ram!,
+            turnMillis: raw.g1_p1_turn_millis!,
           },
           p2: {
-            bankSeconds: raw.g1_p2_bank_seconds ?? 0,
-            ram: raw.g1_p2_ram ?? 64,
-            turnMillis: raw.g1_p2_turn_millis ?? 0,
+            bankSeconds: raw.g1_p2_bank_seconds!,
+            ram: raw.g1_p2_ram!,
+            turnMillis: raw.g1_p2_turn_millis!,
           },
           completedAt: raw.g1_completed_at ?? undefined,
         },

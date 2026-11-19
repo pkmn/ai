@@ -109,13 +109,9 @@ fallbacks). Every secret is optional in local `DEV_AUTH=1` development:
 
 | Variable | Local Default | Purpose |
 | :--- | :--- | :--- |
-| `PORT` | `1234` | HTTP port bound by `server/index.ts`. |
-| `PUBLIC_URL` | `http://localhost:1234` (`dev`) | Canonical origin used when constructing OAuth redirect URIs. |
 | `DEV_AUTH` | `1` in `npm run dev` | Enables loopback-only `GET /auth/dev` persona switcher and ephemeral fallback `SESSION_SECRET`. |
 | `MOCK` | unset (`1` when seeded) | Reads `.mock/ladders.yml`, `.mock/static/projects.yml`, `.mock/static/avatars/`, and `.mock/wiki/`. |
-| `ARENA_DB_PATH` | `db/data/arena.sqlite` | Overrides SQLite path (defaults to `/var/lib/pkmn/arena.sqlite` when `/var/lib/pkmn` exists or `NODE_ENV=production`). |
-| `NODE_ENV` | unset (`development`) | Enables `Secure` cookies and automatic 60-second Discord sync when `'production'`. |
-| `DISCORD_SYNC` | unset | Set to `1` only to opt in to live Discord role/pin/DM mutations outside production. |
+| `NODE_ENV` | unset (`development`) | Enables `https://pkmn.ai` OAuth origin, `Secure` cookies, `git push` on wiki edits, and automatic 60-second Discord sync when `'production'`. |
 | `SESSION_SECRET` | ephemeral random hex (`DEV_AUTH=1`) | HMAC-SHA256 signing secret for `pkmn_session` cookies and HKDF key for encrypted submission pull tokens. |
 | `ARENA_SECRET` | unset | Bearer token authenticating `/api/arena/*` worker control-plane requests. |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | unset | GitHub OAuth2 credentials for `/auth/github`. |
@@ -126,11 +122,12 @@ fallbacks). Every secret is optional in local `DEV_AUTH=1` development:
 
 **Local safety guarantees:**
 1. **SQLite isolation:** Local SQLite files (`arena.sqlite`, `-wal`, `-shm`) live in gitignored
-   `db/data/` — never inside `private/`, which is watched by `site.serve()` and would trigger
-   infinite rebuild loops.
-2. **Discord isolation:** Even if `.env` contains production `DISCORD_BOT_TOKEN` synced via
-   `./private/sync`, `server/discord.ts` disables live role/pin/DM/log sync whenever
-   `NODE_ENV !== 'production'` unless `DISCORD_SYNC=1` is explicitly passed.
+   `db/data/` (never inside `private/`), while production opens `/var/lib/pkmn/arena.sqlite`
+   automatically whenever `/var/lib/pkmn` exists or `NODE_ENV=production`. The HTTP server always
+   binds `127.0.0.1:1234`.
+2. **Discord & wiki isolation:** Even if `.env` contains production `DISCORD_BOT_TOKEN` synced via
+   `./private/sync`, `server/discord.ts` disables live role/pin/DM/log sync and `server/wiki.tsx`
+   skips `git push` whenever `NODE_ENV !== 'production'`.
 
 ---
 
@@ -181,7 +178,7 @@ worker control plane.
   - Expose `.json` (`/<path>.json` === `/<path>/index.json`) **only** for SQLite database-backed
     pages (`/arena`, `/arena/ladders/*`, `/arena/tournaments/*`, `/arena/battles`,
     `/projects/:slug`, `/account`) — never for static YAML/BibTeX/Djot/Git pages.
-- **Agent protocol (`PROTOCOL.md`):**
-  - Stdio lifecycle, chat/covert-channel elision, and timer rules live in
-    [`PROTOCOL.md`](../PROTOCOL.md), implemented in `server/protocol.ts` and tested by
+- **Agent protocol ([`static/rules.dj`](../static/rules.dj)):**
+  - Stdio lifecycle, chat/covert-channel elision, and timer rules are documented on `/rules/`
+    ([`static/rules.dj`](../static/rules.dj)), implemented in `server/protocol.ts` and tested by
     `test/protocol.test.ts`.

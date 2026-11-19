@@ -28,7 +28,7 @@ import * as teams from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import * as wiki from '../server/wiki';
 import {syncStaticLiveBanner} from '../static/build';
-import {ROOT, isConnectivityError, raw as rawHtml, root} from '../static/util';
+import {ROOT, isConnectivityError, raw as rawHtml, root, writeFileAtomic} from '../static/util';
 
 import * as mock from './mock';
 
@@ -159,8 +159,9 @@ function setupRotatedSeasons(
     raw => {
       raw.prepare(
         `INSERT INTO ladders (
-          id, slot, name, format, team, status, min, teams, created_at
-        ) VALUES (?, 'vgc', 'VGC', 'gen9championsvgc2026regmd', 'pools', 'active', 4, 20, ?)`
+          id, slot, name, format, version, team, status, min, teams, created_at
+        ) VALUES (?, 'vgc', 'VGC', 'gen9championsvgc2026regmd', '0.11.0', 'pools', 'active',
+          4, 20, ?)`
       ).run('gen9championsvgc2026regmd', NOW_SECONDS - 600);
       raw.prepare(
         `INSERT INTO ladder_entries (
@@ -191,9 +192,9 @@ function setupRotatedSeasons(
       if (mode === 'both') {
         raw.prepare(
           `INSERT INTO ladders (
-            id, slot, name, format, team, status, min, teams, created_at, archived_at
-          ) VALUES (?, 'vgc', 'VGC (Reg M-B)', 'gen9championsvgc2026regmb', 'pools', 'archived',
-            4, 20, ?, ?)`
+            id, slot, name, format, version, team, status, min, teams, created_at, archived_at
+          ) VALUES (?, 'vgc', 'VGC (Reg M-B)', 'gen9championsvgc2026regmb', '0.11.0', 'pools',
+            'archived', 4, 20, ?, ?)`
         ).run('gen9championsvgc2026regmb', NOW_SECONDS - 86400 * 14, NOW_SECONDS - 86400 * 7);
         raw.prepare(
           `INSERT INTO ladder_entries (
@@ -1690,10 +1691,7 @@ async function startFixture(): Promise<Fixture> {
     avatarsDir,
     now: () => NOW_SECONDS,
   });
-  wiki.register(app, {
-    wiki: wikiInstance,
-    auth: wikiInstance.auth,
-  });
+  wiki.register(app, wikiInstance);
 
   const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -2137,10 +2135,7 @@ export function fetchExternalAsset(
       }
       const contentType = rawContentType ?? contentTypeForPath(targetPathname);
       if (safeDisk) {
-        await fsp.mkdir(path.dirname(diskPath), {recursive: true});
-        const tmpPath = `${diskPath}.tmp.${process.pid}.${Date.now()}`;
-        await fsp.writeFile(tmpPath, body);
-        await fsp.rename(tmpPath, diskPath);
+        writeFileAtomic(diskPath, body);
       }
       return {contentType, body};
     } catch (err) {
@@ -2167,8 +2162,6 @@ export type RegionsMap = Record<string, Rect[]>;
 
 export interface DiffOptions {
   viewerRects?: readonly Rect[];
-  viewerChannelDelta?: number;
-  viewerMaxRatio?: number;
 }
 
 function findRectIndex(rects: readonly Rect[], x: number, y: number): number {
@@ -2243,8 +2236,8 @@ export function diffPngImages(
   const height = Math.max(a.height, b.height);
   const data = Buffer.alloc(width * height * 4, 255);
   const rects = options.viewerRects ?? [];
-  const channelDelta = options.viewerChannelDelta ?? VIEWER_CHANNEL_DELTA;
-  const maxRatio = options.viewerMaxRatio ?? VIEWER_MAX_DIFF_RATIO;
+  const channelDelta = VIEWER_CHANNEL_DELTA;
+  const maxRatio = VIEWER_MAX_DIFF_RATIO;
   const rectDiffOffsets: number[][] = rects.map(() => []);
   let count = 0;
 

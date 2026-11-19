@@ -33,6 +33,8 @@ export interface AgentVersionRow {
   url: string;
   sha256: string;
   authTokenEncoding?: string;
+  ladders: string[];
+  tournaments: string[];
   laddersJson: string;
   tournamentsJson: string;
   unpackedBytes?: number;
@@ -111,7 +113,6 @@ export interface ApplySubmissionStatusInput {
   smokeTurnMillis?: number;
   smokePeakRam?: number;
   smokeError?: string;
-  retiredVersionIdsByLadder?: Record<string, number>;
   now?: number;
 }
 
@@ -129,6 +130,7 @@ export interface PendingVersionDmRow {
   version: string;
   smokeStatus: 'failed' | 'quarantined';
   smokeError?: string;
+  ladders: string[];
   laddersJson: string;
   submittedAt: number;
   ownerDiscordIds: string[];
@@ -168,6 +170,8 @@ function mapVersionRow(raw: RawAgentVersionRow): AgentVersionRow {
     url: raw.url,
     sha256: raw.sha256,
     authTokenEncoding: raw.auth_token_encoding ?? undefined,
+    ladders: JSON.parse(raw.ladders_json) as string[],
+    tournaments: JSON.parse(raw.tournaments_json ?? '[]') as string[],
     laddersJson: raw.ladders_json,
     tournamentsJson: raw.tournaments_json ?? '[]',
     unpackedBytes: raw.unpacked_bytes ?? undefined,
@@ -707,35 +711,10 @@ export function applySubmissionStatus(
         input.smokeError !== undefined ? input.smokeError : (prev.smokeError ?? null),
         input.versionId
       );
-      const retiredOnRepeat: Record<string, number> = {};
-      if (input.smokeStatus === 'passed' && input.retiredVersionIdsByLadder) {
-        const retireRepeat = db.prepare(`
-          UPDATE ladder_entries
-          SET role = 'retired',
-              retired_at = ?,
-              rank_current = NULL,
-              rank_min = NULL,
-              rank_max = NULL
-          WHERE ladder_id = ?
-            AND version_id = ?
-            AND role IN ('champion', 'challenger')
-            AND is_anchor = 0
-        `);
-        for (const [ladderId, retiredId] of Object.entries(input.retiredVersionIdsByLadder)) {
-          if (!Number.isInteger(retiredId) || retiredId === prev.id) continue;
-          const target = getVersionById(db, retiredId);
-          if (target?.agentId !== prev.agentId) continue;
-          const info = retireRepeat.run(now, ladderId, retiredId);
-          if (info.changes > 0) {
-            retiredOnRepeat[ladderId] = retiredId;
-            entries.promoteRemainingActiveToChampion(db, ladderId, prev.agentId);
-          }
-        }
-      }
       return {
         version: getVersionById(db, input.versionId)!,
         agent,
-        retiredByLadder: retiredOnRepeat,
+        retiredByLadder: {},
       };
     }
     if (
@@ -835,16 +814,6 @@ export function applySubmissionStatus(
           END,
           peak_ram = MAX(ladder_entries.peak_ram, excluded.peak_ram)
       `);
-
-      if (input.retiredVersionIdsByLadder) {
-        for (const [ladderId, retiredId] of Object.entries(input.retiredVersionIdsByLadder)) {
-          if (!Number.isInteger(retiredId) || retiredId === prev.id) continue;
-          const target = getVersionById(db, retiredId);
-          if (target?.agentId !== prev.agentId) continue;
-          const info = retireEntry.run(now, ladderId, retiredId);
-          if (info.changes > 0) retiredByLadder[ladderId] = retiredId;
-        }
-      }
 
       for (const ladderId of ladderIds) {
         const ladder = getLadder(db, ladderId);
@@ -1120,6 +1089,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     version: row.version,
     smokeStatus: row.smoke_status as 'failed' | 'quarantined',
     smokeError: row.smoke_error ?? undefined,
+    ladders: JSON.parse(row.ladders_json) as string[],
     laddersJson: row.ladders_json,
     submittedAt: row.submitted_at,
     ownerDiscordIds: getVersionOwnerDiscordIds(

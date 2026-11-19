@@ -8,7 +8,6 @@ import * as auth from '../server/auth';
 
 const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-unified-session-secret',
-  arenaSecret: 'test-arena-secret',
   github: {
     clientId: 'gh-client-id',
     clientSecret: 'gh-client-secret',
@@ -82,21 +81,18 @@ describe('auth config helpers', () => {
       GITHUB_CLIENT_ID: 'gh-id',
     })).toEqual({
       sessionSecret: 'sec-1',
-      arenaSecret: undefined,
       github: undefined,
       discord: undefined,
     });
 
     expect(auth.loadConfig({
       SESSION_SECRET: 'sec-2',
-      ARENA_SECRET: 'arena-2',
       GITHUB_CLIENT_ID: 'gh-id',
       GITHUB_CLIENT_SECRET: 'gh-sec',
       DISCORD_CLIENT_ID: '689315793569447954',
       DISCORD_CLIENT_SECRET: 'disc-sec',
     })).toEqual({
       sessionSecret: 'sec-2',
-      arenaSecret: 'arena-2',
       github: {clientId: 'gh-id', clientSecret: 'gh-sec'},
       discord: {clientId: '689315793569447954', clientSecret: 'disc-sec'},
     });
@@ -113,7 +109,6 @@ describe('auth config helpers', () => {
     });
     expect(devCfg).toEqual({
       sessionSecret: 'sec-dev',
-      arenaSecret: undefined,
       github: undefined,
       discord: undefined,
     });
@@ -135,7 +130,7 @@ describe('server/auth.ts routes', () => {
     ]);
 
     const app = polka();
-    auth.register(app, {config: AUTH_CFG, db, devAuth: true});
+    new auth.Auth({config: AUTH_CFG, db, devAuth: true}).register(app);
 
     server = http.createServer((req, res) => app.handler(req as polka.Request, res));
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -586,5 +581,15 @@ describe('server/auth.ts routes', () => {
     db.syncProjectsFromYaml(PROJECTS_YAML.replace('pre: pre.10544', 'pre-new: pre.10544'));
     expect(db.getDeveloperByGitHub('pre-new')!.githubId).toBeUndefined();
     expect(db.linkDeveloperGitHubId('pre-new', 909090)).toBe(true);
+  });
+
+  test('honors false return from custom isAuthorizedGitHub even when developer is in db', () => {
+    const customAuth = new auth.Auth({
+      config: AUTH_CFG,
+      db,
+      isAuthorizedGitHub: login => login === 'coauthor',
+    });
+    expect(customAuth.isAuthorizedGitHub('coauthor')).toBe(true);
+    expect(customAuth.isAuthorizedGitHub('pre')).toBe(false);
   });
 });

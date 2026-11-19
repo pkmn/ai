@@ -23,6 +23,8 @@ import {sampleRandomPair, validateCompetitorTeamsIncremental} from '../server/te
 import {root} from '../static/util';
 import * as mock from '../tools/mock';
 
+import {compareDatabaseSchemas} from './schema-helpers';
+
 const TEAM_ONE =
   'Pikachu||lightball|static|thunderbolt,quickattack,irontail,volttackle|' +
   'Jolly|,252,,,4,252|||||' +
@@ -579,26 +581,22 @@ describe('arena infrastructure', () => {
 
   describe('arena/unpack', () => {
     test('extracts valid native bundles with APFS CoW CAS deduplication', async () => {
-      const casDir = path.join(tmpDir, 'cas-dedup');
-      const agentsDir = path.join(tmpDir, 'agents-dedup');
-      const stagingDir = path.join(tmpDir, 'staging-dedup');
+      const dirs = packages.dirsForRoot(path.join(tmpDir, 'dedup'));
 
       const bytes1 = await packages.downloadAndUnpackBundle({
         url: `file://${validArchivePath}`,
         expectedSha256: validArchiveSha,
         agentTargetId: 'agent-v1',
-        stagingDir,
-        agentsDir,
-        casDir,
+        dirs,
         allowPrivateUrls: true,
       });
       expect(bytes1).toBeGreaterThan(70_000);
-      expect(fs.existsSync(path.join(agentsDir, 'agent-v1', 'run'))).toBe(true);
+      expect(fs.existsSync(path.join(dirs.agents, 'agent-v1', 'run'))).toBe(true);
 
       const bytes2 = unpack.unpackBundle(
         validArchivePath,
-        path.join(agentsDir, 'agent-v2'),
-        casDir
+        path.join(dirs.agents, 'agent-v2'),
+        dirs.cas
       );
       expect(bytes2).toBe(bytes1);
     });
@@ -909,8 +907,7 @@ describe('arena infrastructure', () => {
           url: `file://${validArchivePath}`,
           expectedSha256: '0'.repeat(64),
           agentTargetId: 'agent-bad-sha',
-          stagingDir: path.join(tmpDir, 'staging-sha'),
-          agentsDir: path.join(tmpDir, 'agents-sha'),
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'bad-sha')),
           allowPrivateUrls: true,
         })
       ).rejects.toThrow(/SHA-256 mismatch/);
@@ -922,8 +919,7 @@ describe('arena infrastructure', () => {
           url: `file://${validArchivePath}`,
           expectedSha256: validArchiveSha,
           agentTargetId: 'agent-file-blocked',
-          stagingDir: path.join(tmpDir, 'staging-file-blocked'),
-          agentsDir: path.join(tmpDir, 'agents-file-blocked'),
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'file-blocked')),
         })
       ).rejects.toThrow(/file:\/\/ URLs are disallowed/);
     });
@@ -996,13 +992,13 @@ describe('arena infrastructure', () => {
     });
 
     test('downloadAndUnpackBundle blocks unlisted hosts or off-allowlist redirects', async () => {
+      const ssrfDirs = packages.dirsForRoot(path.join(tmpDir, 'ssrf'));
       await expect(
         packages.downloadAndUnpackBundle({
           url: 'https://releases.example.com/agent.tar.zst?X-Amz-Signature=123',
           expectedSha256: validArchiveSha,
           agentTargetId: 'agent-unlisted',
-          stagingDir: path.join(tmpDir, 'staging-ssrf'),
-          agentsDir: path.join(tmpDir, 'agents-ssrf'),
+          dirs: ssrfDirs,
         })
       ).rejects.toThrow(/supported artifact host/);
 
@@ -1018,8 +1014,7 @@ describe('arena infrastructure', () => {
           url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.gz',
           expectedSha256: validArchiveSha,
           agentTargetId: 'agent-redirect-ssrf',
-          stagingDir: path.join(tmpDir, 'staging-ssrf'),
-          agentsDir: path.join(tmpDir, 'agents-ssrf'),
+          dirs: ssrfDirs,
         })
       ).rejects.toThrow(/supported artifact host/);
     });
@@ -1052,9 +1047,7 @@ describe('arena infrastructure', () => {
         expectedSha256: validArchiveSha,
         agentTargetId: 'agent-presigned',
         authToken: 'ghp_secret_redirect_token',
-        stagingDir: path.join(tmpDir, 'staging-redir'),
-        agentsDir: path.join(tmpDir, 'agents-redir'),
-        casDir: path.join(tmpDir, 'cas-redir'),
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'redir')),
       });
       expect(dlBytes).toBeGreaterThan(70_000);
       expect(seenHeaders).toEqual([
@@ -1119,7 +1112,7 @@ describe('arena infrastructure', () => {
       const migratedDb = new arenaDb.Database(migratedFile, {schemaDir, migrationDir, now: 2000});
       const freshDb = new arenaDb.Database(':memory:', {schemaDir, migrationDir, now: 2000});
       try {
-        expect(arenaDb.compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
+        expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
       } finally {
         migratedDb.close();
         freshDb.close();
@@ -1238,7 +1231,7 @@ describe('arena infrastructure', () => {
         const evicted = packages.evictColdAgentsIfNeeded(stateDb, {
           containerHighWaterBytes: 10_000,
           containerLowWaterBytes: 7_000,
-          coldDir: path.join(tmpDir, 'cold-containers'),
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'evict-containers')),
           evictContainerFn: target => evictedTargets.push(target),
         });
         expect(evicted).toEqual([30]);
@@ -1260,26 +1253,30 @@ describe('arena infrastructure', () => {
     test('evictColdAgentsIfNeeded prunes orphaned CAS blobs on native eviction', () => {
       const stateDb = new arenaDb.Database(':memory:');
       try {
-        const agentsDir = path.join(tmpDir, 'evict-native-agents');
-        const casRoot = path.join(tmpDir, 'evict-native-cas');
-        fs.mkdirSync(path.join(agentsDir, 'old-v1'), {recursive: true});
-        fs.mkdirSync(path.join(agentsDir, 'new-v2'), {recursive: true});
+        const dirs = packages.dirsForRoot(path.join(tmpDir, 'evict-native'));
+        fs.mkdirSync(path.join(dirs.agents, 'old-v1'), {recursive: true});
+        fs.mkdirSync(path.join(dirs.agents, 'new-v2'), {recursive: true});
 
         const orphanBuf = Buffer.alloc(70_000, 0x11);
         const orphanDigest = crypto.createHash('sha256').update(orphanBuf).digest('hex');
-        const orphanShard = path.join(casRoot, orphanDigest.slice(0, 2));
+        const orphanShard = path.join(dirs.cas, orphanDigest.slice(0, 2));
         fs.mkdirSync(orphanShard, {recursive: true});
         const orphanBlob = path.join(orphanShard, orphanDigest);
         fs.writeFileSync(orphanBlob, orphanBuf);
-        fs.writeFileSync(path.join(agentsDir, 'old-v1', 'weights.bin'), orphanBuf);
+        fs.writeFileSync(path.join(dirs.agents, 'old-v1', 'weights.bin'), orphanBuf);
+        const oldRefFile = unpack.casRefFileForBundle(dirs.cas, path.join(dirs.agents, 'old-v1'));
+        fs.mkdirSync(path.dirname(oldRefFile), {recursive: true});
+        fs.writeFileSync(oldRefFile, `${orphanDigest}\n`);
 
         const sharedBuf = Buffer.alloc(70_000, 0x22);
         const sharedDigest = crypto.createHash('sha256').update(sharedBuf).digest('hex');
-        const sharedShard = path.join(casRoot, sharedDigest.slice(0, 2));
+        const sharedShard = path.join(dirs.cas, sharedDigest.slice(0, 2));
         fs.mkdirSync(sharedShard, {recursive: true});
         const sharedBlob = path.join(sharedShard, sharedDigest);
         fs.writeFileSync(sharedBlob, sharedBuf);
-        fs.writeFileSync(path.join(agentsDir, 'new-v2', 'weights.bin'), sharedBuf);
+        fs.writeFileSync(path.join(dirs.agents, 'new-v2', 'weights.bin'), sharedBuf);
+        const newRefFile = unpack.casRefFileForBundle(dirs.cas, path.join(dirs.agents, 'new-v2'));
+        fs.writeFileSync(newRefFile, `${sharedDigest}\n`);
 
         stateDb.upsertLocalAgent({
           versionId: 1,
@@ -1307,9 +1304,7 @@ describe('arena infrastructure', () => {
         const evicted = packages.evictColdAgentsIfNeeded(stateDb, {
           highWaterBytes: 100_000,
           lowWaterBytes: 80_000,
-          agentsDir,
-          coldDir: path.join(tmpDir, 'evict-native-cold'),
-          casDir: casRoot,
+          dirs,
         });
         expect(evicted).toEqual([1]);
         expect(fs.existsSync(orphanBlob)).toBe(false);
@@ -1322,10 +1317,9 @@ describe('arena infrastructure', () => {
     test('evictColdAgentsIfNeeded eagerly evicts retired versions below watermark', () => {
       const stateDb = new arenaDb.Database(':memory:');
       try {
-        const agentsDir = path.join(tmpDir, 'evict-retired-agents');
-        const coldDir = path.join(tmpDir, 'evict-retired-cold');
-        const retiredDir = path.join(agentsDir, 'retired-v1');
-        const activeDir = path.join(agentsDir, 'active-v2');
+        const dirs = packages.dirsForRoot(path.join(tmpDir, 'evict-retired'));
+        const retiredDir = path.join(dirs.agents, 'retired-v1');
+        const activeDir = path.join(dirs.agents, 'active-v2');
         fs.mkdirSync(retiredDir, {recursive: true});
         fs.mkdirSync(activeDir, {recursive: true});
         fs.writeFileSync(path.join(retiredDir, 'run'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
@@ -1353,20 +1347,17 @@ describe('arena infrastructure', () => {
         });
 
         const evicted = packages.evictColdAgentsIfNeeded(stateDb, {
-          agentsDir,
-          coldDir,
+          dirs,
           activeVersionIds: new Set([2]),
         });
         expect(evicted).toEqual([1]);
         expect(stateDb.getLocalAgent(1)?.residency).toBe('cold');
         expect(stateDb.getLocalAgent(2)?.residency).toBe('hot');
         expect(fs.existsSync(retiredDir)).toBe(false);
-        expect(fs.existsSync(path.join(coldDir, 'retired-v1.tar.zst'))).toBe(true);
+        expect(fs.existsSync(path.join(dirs.cold, 'retired-v1.tar.zst'))).toBe(true);
 
         const restored = packages.ensureAgentResident(stateDb, 1, {
-          agentsDir,
-          coldDir,
-          casDir: path.join(tmpDir, 'evict-retired-cas'),
+          dirs,
           now: 9000,
         });
         expect(restored?.residency).toBe('hot');
@@ -1379,8 +1370,7 @@ describe('arena infrastructure', () => {
     test('ensureAgentResident throws when cold archive is missing', () => {
       const stateDb = new arenaDb.Database(':memory:');
       try {
-        const agentsDir = path.join(tmpDir, 'missing-cold-agents');
-        const coldDir = path.join(tmpDir, 'missing-cold-dir');
+        const dirs = packages.dirsForRoot(path.join(tmpDir, 'missing-cold'));
         stateDb.upsertLocalAgent({
           versionId: 77,
           agentId: 7,
@@ -1391,10 +1381,10 @@ describe('arena infrastructure', () => {
           residency: 'cold',
           unpackedBytes: 1024,
         });
-        expect(() => packages.ensureAgentResident(stateDb, 77, {agentsDir, coldDir}))
+        expect(() => packages.ensureAgentResident(stateDb, 77, {dirs}))
           .toThrow(/Cold archive missing/);
         expect(stateDb.getLocalAgent(77)?.residency).toBe('cold');
-        expect(fs.existsSync(path.join(agentsDir, 'ghost-1.0.0-v77'))).toBe(false);
+        expect(fs.existsSync(path.join(dirs.agents, 'ghost-1.0.0-v77'))).toBe(false);
       } finally {
         stateDb.close();
       }
@@ -1774,19 +1764,12 @@ describe('arena infrastructure', () => {
       expect(player.bankMillis).toBe(55_000);
     });
 
-    test('alternates first CPU slice across waves while reporting live RAM', async () => {
-      const p1PeakFile = path.join(tmpDir, 'live-ram-p1.txt');
-      fs.writeFileSync(p1PeakFile, '128\n');
+    test('alternates first CPU slice across waves', async () => {
       const heartbeats: arbiter.TurnHeartbeatInfo[] = [];
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {
-          mode: 'native',
-          target: process.execPath,
-          args: [defaultAgentScript],
-          env: {ARENA_PEAK_RAM_FILE: p1PeakFile},
-        },
+        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
         p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
         p1TeamPacked: TEAM_ONE,
         p2TeamPacked: TEAM_TWO,
@@ -1800,8 +1783,8 @@ describe('arena infrastructure', () => {
       expect(heartbeats.slice(0, 2).map(h => h.phase)).toEqual(['init', 'init']);
       expect(heartbeats.filter(h => h.phase !== 'init').slice(0, 4).map(h => h.activeSlot))
         .toEqual(['p1', 'p2', 'p2', 'p1']);
-      expect(heartbeats[0].p1.ram).toBe(128);
-      expect(res.p1.peakRam).toBe(128);
+      expect(heartbeats[0].p1.ram).toBe(64);
+      expect(res.p1.peakRam).toBe(64);
     });
 
     test('forfeits agent that fails to send /ready within grace period', async () => {
@@ -2478,7 +2461,7 @@ describe('arena infrastructure', () => {
             ok: true as const,
             versionId: payload.versionId,
             smokeStatus: payload.smokeStatus,
-            retiredByLadder: payload.retiredVersionIdsByLadder ?? {},
+            retiredByLadder: {},
           });
         },
         completeMatch: (payload: serverArena.MatchCompletePayload) => {
@@ -2499,17 +2482,13 @@ describe('arena infrastructure', () => {
       } as unknown as serverArena.Client;
 
       const stateDb = new arenaDb.Database(':memory:');
-      const agentsDir = path.join(tmpDir, `${prefix}-agents`);
-      const archiveLogsDir = path.join(tmpDir, `${prefix}-logs`);
+      const rootDir = path.join(tmpDir, prefix);
+      const dirs = packages.dirsForRoot(rootDir);
       const coord = new coordinator.Coordinator({
         client: mockClient,
         stateDb,
         baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        agentsDir,
-        stagingDir: path.join(tmpDir, `${prefix}-staging`),
-        teamsDir: path.join(tmpDir, `${prefix}-teams`),
-        casDir: path.join(tmpDir, `${prefix}-cas`),
-        archiveLogsDir,
+        rootDir,
         devMode: true,
         maxTurns: 1,
       });
@@ -2554,8 +2533,9 @@ describe('arena infrastructure', () => {
       return {
         coord,
         stateDb,
-        agentsDir,
-        archiveLogsDir,
+        dirs,
+        agentsDir: dirs.agents,
+        archiveLogsDir: dirs.logs,
         ladderSnap,
         reportedStatuses,
         completedMatches,
@@ -2581,7 +2561,7 @@ describe('arena infrastructure', () => {
         expect(h.reportedStatuses).toHaveLength(1);
         expect(h.reportedStatuses[0].smokeStatus).toBe('passed');
         expect(
-          fs.existsSync(path.join(`${h.agentsDir}-cold`, 'foul-play-3.0.0-v30.tar.zst'))
+          fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
         ).toBe(true);
       } finally {
         h.stateDb.close();
@@ -2761,7 +2741,7 @@ describe('arena infrastructure', () => {
         expect(h.heartbeats.length).toBeGreaterThan(0);
         expect(
           fs.existsSync(path.join(
-            h.archiveLogsDir, 'gen9customgame', '1970-01-01', 'gen9customgame-0000099b.log'
+            h.archiveLogsDir, 'gen9customgame', '1970-01', '1970-01-01.7z'
           ))
         ).toBe(true);
         expect(h.stateDb.getMatchCheckpoint('gen9customgame-0000098')?.status).toBe('aborted');
@@ -2785,12 +2765,12 @@ describe('arena infrastructure', () => {
       const app = polka();
       const secret = 'real-http-arena-secret-32-bytes-ok';
       const authInst = new auth.Auth({
-        config: {sessionSecret: 'session-secret-32-bytes-minimum-ok', arenaSecret: secret},
+        config: {sessionSecret: 'session-secret-32-bytes-minimum-ok'},
         db,
       });
       const publicDir = path.join(tmpDir, `${prefix}-public`);
       fs.mkdirSync(publicDir, {recursive: true});
-      const ctrl = serverArena.register(app, {db, auth: authInst, publicDir});
+      const ctrl = serverArena.register(app, {db, auth: authInst, arenaSecret: secret, publicDir});
       const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
       const serverUrl = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
@@ -2848,7 +2828,8 @@ describe('arena infrastructure', () => {
           db.applySubmissionStatus({versionId: sub1.id, smokeStatus: 'passed'});
           db.applySubmissionStatus({versionId: sub2.id, smokeStatus: 'passed'});
 
-          const loseAsP1Dir = path.join(tmpDir, 'lose-as-p1-agents', 'lose-p1');
+          const loseRoot = path.join(tmpDir, 'lose-as-p1');
+          const loseAsP1Dir = path.join(packages.dirsForRoot(loseRoot).agents, 'lose-p1');
           fs.mkdirSync(loseAsP1Dir, {recursive: true});
           fs.writeFileSync(
             path.join(loseAsP1Dir, 'run'),
@@ -2889,9 +2870,7 @@ describe('arena infrastructure', () => {
             client,
             stateDb,
             baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-            agentsDir: path.join(tmpDir, 'lose-as-p1-agents'),
-            stagingDir: path.join(tmpDir, 'lose-as-p1-staging'),
-            archiveLogsDir: path.join(tmpDir, 'lose-as-p1-logs'),
+            rootDir: loseRoot,
             devMode: true,
           });
 
@@ -2930,7 +2909,7 @@ describe('arena infrastructure', () => {
           expect(g2Published).toContain('|player|p1|');
           expect(g2Published).not.toContain('Agent A');
 
-          expect(await coord.publishRandomLadderArchive('gen9randombattle202611')).toBe(true);
+          expect(await coord.publishLadderArchive('gen9randombattle202611')).toBe(true);
           expect(
             fs.existsSync(path.join(randLogDir, 'gen9randombattle202611-logs.tar'))
           ).toBe(true);
@@ -2938,6 +2917,27 @@ describe('arena infrastructure', () => {
           stateDb.close();
         }
       });
+    });
+
+    test('compressCompletedDays compresses past days into YYYY-MM/YYYY-MM-DD.7z', () => {
+      const h = createMockCoordHarness('compress-days');
+      try {
+        const pastDayDir = path.join(h.archiveLogsDir, 'gen1ou', '2026-11-18');
+        const todayDir = path.join(h.archiveLogsDir, 'gen1ou', '2026-11-19');
+        fs.mkdirSync(pastDayDir, {recursive: true});
+        fs.mkdirSync(todayDir, {recursive: true});
+        fs.writeFileSync(path.join(pastDayDir, 'gen1ou-0000001a.log'), '|start\n|win|A\n');
+        fs.writeFileSync(path.join(todayDir, 'gen1ou-0000002a.log'), '|start\n|win|B\n');
+
+        expect(h.coord.compressCompletedDays('gen1ou', '2026-11-19')).toBe(true);
+        expect(
+          fs.existsSync(path.join(h.archiveLogsDir, 'gen1ou', '2026-11', '2026-11-18.7z'))
+        ).toBe(true);
+        expect(fs.existsSync(pastDayDir)).toBe(false);
+        expect(fs.existsSync(path.join(todayDir, 'gen1ou-0000002a.log'))).toBe(true);
+      } finally {
+        h.stateDb.close();
+      }
     });
 
     test('executes pools ladder VGC matches via runDaemon({once: true})', async () => {
@@ -2949,7 +2949,6 @@ describe('arena infrastructure', () => {
           '  version: 0.11.0',
           '  team: pools',
           '  status: active',
-          '  min: 4',
           '  teams: 20',
         ].join('\n'));
         db.syncProjectsFromYaml([
@@ -2968,8 +2967,8 @@ describe('arena infrastructure', () => {
         ].join('\n'));
 
         const daemonStatePath = path.join(tmpDir, 'daemon-pools.sqlite');
-        const daemonAgentsDir = path.join(tmpDir, 'daemon-pools-agents');
-        const defaultRunDir = path.join(daemonAgentsDir, 'default-vgc');
+        const daemonRoot = path.join(tmpDir, 'daemon-pools');
+        const defaultRunDir = path.join(packages.dirsForRoot(daemonRoot).agents, 'default-vgc');
         fs.mkdirSync(defaultRunDir, {recursive: true});
         fs.copyFileSync(defaultAgentScript, path.join(defaultRunDir, 'run'));
         fs.chmodSync(path.join(defaultRunDir, 'run'), 0o755);
@@ -3012,9 +3011,7 @@ describe('arena infrastructure', () => {
             serverUrl,
             arenaSecret: secret,
             stateDbPath: daemonStatePath,
-            agentsDir: daemonAgentsDir,
-            stagingDir: path.join(tmpDir, 'daemon-pools-staging'),
-            archiveLogsDir: path.join(tmpDir, 'daemon-pools-logs'),
+            rootDir: daemonRoot,
             maxTurns: 1,
             once: true,
           });
@@ -3040,7 +3037,6 @@ describe('arena infrastructure', () => {
           "  version: '0.11.0'",
           '  team: pools',
           '  status: active',
-          '  min: 4',
           '  teams: 20',
         ].join('\n'));
         db.syncProjectsFromYaml([
@@ -3059,9 +3055,8 @@ describe('arena infrastructure', () => {
         ].join('\n'));
 
         const daemonStatePath = path.join(tmpDir, 'daemon-pools-arch.sqlite');
-        const daemonAgentsDir = path.join(tmpDir, 'daemon-pools-arch-agents');
-        const daemonLogsDir = path.join(tmpDir, 'daemon-pools-arch-logs');
-        const defaultRunDir = path.join(daemonAgentsDir, 'default-vgc');
+        const daemonRoot = path.join(tmpDir, 'daemon-pools-arch');
+        const defaultRunDir = path.join(packages.dirsForRoot(daemonRoot).agents, 'default-vgc');
         fs.mkdirSync(defaultRunDir, {recursive: true});
         fs.copyFileSync(defaultAgentScript, path.join(defaultRunDir, 'run'));
         fs.chmodSync(path.join(defaultRunDir, 'run'), 0o755);
@@ -3104,9 +3099,7 @@ describe('arena infrastructure', () => {
             serverUrl,
             arenaSecret: secret,
             stateDbPath: daemonStatePath,
-            agentsDir: daemonAgentsDir,
-            stagingDir: path.join(tmpDir, 'daemon-pools-arch-staging'),
-            archiveLogsDir: daemonLogsDir,
+            rootDir: daemonRoot,
             maxTurns: 1,
             once: true,
           });
@@ -3136,9 +3129,7 @@ describe('arena infrastructure', () => {
             serverUrl,
             arenaSecret: secret,
             stateDbPath: daemonStatePath,
-            agentsDir: daemonAgentsDir,
-            stagingDir: path.join(tmpDir, 'daemon-pools-arch-staging'),
-            archiveLogsDir: daemonLogsDir,
+            rootDir: daemonRoot,
             maxTurns: 1,
             once: true,
           });
@@ -3222,8 +3213,7 @@ describe('arena infrastructure', () => {
             client,
             stateDb,
             baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-            agentsDir: path.join(tmpDir, 'locked-active-agents'),
-            stagingDir: path.join(tmpDir, 'locked-active-staging'),
+            rootDir: path.join(tmpDir, 'locked-active'),
             devMode: true,
           });
           await coord.processPendingSubmissions();
@@ -3397,10 +3387,7 @@ describe('arena infrastructure', () => {
             client,
             stateDb,
             baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-            agentsDir: path.join(tmpDir, 'upcoming-agents'),
-            stagingDir: path.join(tmpDir, 'upcoming-staging'),
-            teamsDir: path.join(tmpDir, 'upcoming-teams'),
-            archiveLogsDir: path.join(tmpDir, 'upcoming-logs'),
+            rootDir: path.join(tmpDir, 'upcoming'),
             devMode: true,
           });
           expect(await coord.processPendingSubmissions()).toBe(1);
@@ -3461,7 +3448,7 @@ describe('arena infrastructure', () => {
             localCommand: relayBin,
             localArgs: [root('arena', 'bin', 'baseline')],
           },
-          agentsDir: path.join(tmpDir, 'gcp-tourney-agents'),
+          rootDir: path.join(tmpDir, 'gcp-tourney'),
           superfinalGames: 2,
           maxTurns: 1,
           prepareSubmissionRootfs: () => 2048,
@@ -3649,23 +3636,6 @@ describe('arena infrastructure', () => {
   });
 
   describe('Darwin sandbox enforcement', () => {
-    test('limit binary records child XNU physical memory footprint', () => {
-      if (process.platform !== 'darwin') return;
-      const peakFile = path.join(tmpDir, 'darwin-limit-peak.txt');
-      const out = execFileSync(
-        limitBin,
-        [
-          process.execPath,
-          '-e',
-          'const b = Buffer.alloc(36 * 1024 * 1024, 7); ' +
-            'setTimeout(() => console.log([b[0], process.env.PKMN_STATS_DIR].join(":")), 80);',
-        ],
-        {encoding: 'utf8', env: {...process.env, ARENA_PEAK_RAM_FILE: peakFile}}
-      ).trim();
-      expect(out).toBe('7:/opt/arena/stats');
-      expect(Number(fs.readFileSync(peakFile, 'utf8').trim())).toBeGreaterThanOrEqual(36);
-    });
-
     test('validates LaunchDaemon plists plus PF anchor ruleset syntax', () => {
       if (process.platform !== 'darwin') return;
       expect(() => {
@@ -3781,24 +3751,6 @@ describe('arena infrastructure', () => {
         status = (err as {status?: number}).status;
       }
       expect(status).toBe(126);
-    });
-
-    test('limit binary sums physical memory footprint across forked child workers', () => {
-      if (process.platform !== 'darwin') return;
-      const peakFile = path.join(tmpDir, 'darwin-limit-fork-peak.txt');
-      execFileSync(
-        limitBin,
-        [
-          process.execPath,
-          '-e',
-          'const {spawn} = require("child_process");' +
-            'const c = spawn(process.execPath, ["-e", ' +
-            '"const b = Buffer.alloc(48 * 1024 * 1024, 9); setTimeout(() => b[0], 120);"]);' +
-            'c.on("exit", () => process.exit(0));',
-        ],
-        {encoding: 'utf8', env: {...process.env, ARENA_PEAK_RAM_FILE: peakFile}}
-      );
-      expect(Number(fs.readFileSync(peakFile, 'utf8').trim())).toBeGreaterThanOrEqual(48);
     });
   });
 });

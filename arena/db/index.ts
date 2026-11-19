@@ -9,11 +9,9 @@ import * as localMatches from './local-matches';
 import * as outbox from './outbox';
 
 function defaultDbPath(): string {
-  return process.env.ARENA_STATE_DB_PATH ?? (
-    process.env.NODE_ENV === 'production' || fs.existsSync('/opt/arena/state')
-      ? '/opt/arena/state/arena.sqlite'
-      : root('db', 'data', 'arena-state.sqlite')
-  );
+  return process.env.NODE_ENV === 'production' || fs.existsSync('/opt/arena/state')
+    ? '/opt/arena/state/arena.sqlite'
+    : root('db', 'data', 'arena-state.sqlite');
 }
 
 export const DB_PATH = defaultDbPath();
@@ -52,14 +50,6 @@ export class Database extends baseDb.SqliteDatabase {
 
   resetAgentFaults(versionId: number) {
     localAgents.resetAgentFaults(this.db, versionId);
-  }
-
-  totalHotUnpackedBytes(mode?: localAgents.ExecutionMode): number {
-    return localAgents.totalHotUnpackedBytes(this.db, mode);
-  }
-
-  listColdEvictionCandidates(mode?: localAgents.ExecutionMode): localAgents.LocalAgentRow[] {
-    return localAgents.listColdEvictionCandidates(this.db, mode);
   }
 
   createMatchCheckpoint(input: localMatches.CreateMatchCheckpointInput) {
@@ -119,7 +109,7 @@ export class Database extends baseDb.SqliteDatabase {
   }
 }
 
-export {classifyMigrationSql, compareDatabaseSchemas} from '../../db';
+export {classifyMigrationSql} from '../../db';
 export type {AppliedMigration, MigrationKind, Options, TransactionRunner} from '../../db';
 export * from './ladder-counters';
 export * from './local-agents';

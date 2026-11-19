@@ -23,6 +23,7 @@ import {
   escapeHtml,
   installHeadSupport,
   raw,
+  readBody,
   root,
   slugify,
   toID,
@@ -33,16 +34,15 @@ import * as auth from './auth';
 const execFileAsync = promisify(execFile);
 
 const WIKI_DIR = process.env.MOCK === '1' ? root('.mock', 'wiki') : root('wiki');
-const PROJECTS = process.env.MOCK === '1'
-  ? root('.mock', 'static', 'projects.yml')
-  : root('static', 'projects.yml');
 const MAX_BODY_BYTES = 256 * 1024;
 
 // Hardcoded site-wide wiki administrators and GitHub -> display-name overrides (replaces the
 // two-line `config/wiki.yml`). Admins can edit any project wiki page regardless of project
 // ownership; `AUTHORS` maps GitHub commit authors to their Smogon handle in revision history.
-export const ADMINS = ['scheibo'];
-export const AUTHORS: Record<string, string> = {scheibo: 'pre'};
+const ADMINS = ['scheibo'];
+const AUTHORS: Record<string, string> = {scheibo: 'pre'};
+const ADMIN_USERS = new Set(ADMINS.map(a => a.toLowerCase()));
+const AUTHOR_MAP = new Map(Object.entries(AUTHORS).map(([gh, name]) => [gh.toLowerCase(), name]));
 
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 const RESERVED_SLUGS = new Set(['pages', 'edit', 'history']);
@@ -64,13 +64,8 @@ export interface ProjectPage {
 export interface Options {
   wikiDir?: string;
   projectsFile?: string;
-  admins?: string[];
-  authors?: Record<string, string>;
   auth?: auth.Auth;
-  authConfig?: auth.Config;
   db?: db.Database;
-  wiki?: Wiki;
-  isDiscordMember?: (discordId: string) => boolean;
   push?: boolean;
   now?: () => number;
 }
@@ -693,37 +688,6 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
   return html;
 }
 
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-    req.on('data', (chunk: Buffer) => {
-      if (settled) return;
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        settled = true;
-        req.resume();
-        reject(Object.assign(new Error('Payload Too Large'), {status: 413}));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (!settled) {
-        settled = true;
-        resolve(Buffer.concat(chunks).toString('utf8'));
-      }
-    });
-    req.on('error', err => {
-      if (!settled) {
-        settled = true;
-        reject(err);
-      }
-    });
-  });
-}
-
 function sendHtml(res: http.ServerResponse, status: number, html: string) {
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
@@ -746,15 +710,11 @@ export class Wiki {
   readonly wikiDir: string;
   readonly projectsFile: string;
   readonly auth: auth.Auth;
-  private readonly db?: db.Database;
-  private readonly configuredAdmins: string[];
-  private readonly configuredAuthors: Record<string, string>;
+  readonly db?: db.Database;
   private readonly shouldPush: boolean;
   private readonly now?: () => number;
   private projectsMtime = -1;
-  private adminUsers = new Set<string>();
   private authorizedUsers = new Set<string>();
-  private authorMap = new Map<string, string>();
   private projectPages = new Map<string, ProjectPage>();
   private projectAliases = new Map<string, string>();
   // Serializes git `add`/`commit` operations in-process so concurrent edits cannot collide on
@@ -763,19 +723,13 @@ export class Wiki {
 
   constructor(options: Options = {}) {
     this.wikiDir = options.wikiDir ?? WIKI_DIR;
-    this.projectsFile = options.projectsFile ?? PROJECTS;
+    this.projectsFile = options.projectsFile ?? db.PROJECTS_FILE;
     this.db = options.db;
-    this.configuredAdmins = options.admins ?? ADMINS;
-    this.configuredAuthors = options.authors ?? AUTHORS;
     this.auth = options.auth ?? new auth.Auth({
-      config: options.authConfig,
       db: options.db,
-      isDiscordMember: options.isDiscordMember,
       isAuthorizedGitHub: login => this.isDeveloper(login),
     });
-    this.shouldPush = options.push ?? (
-      process.env.WIKI_PUSH === '1' || process.env.NODE_ENV === 'production'
-    );
+    this.shouldPush = options.push ?? (process.env.NODE_ENV === 'production');
     this.now = options.now;
   }
 
@@ -803,34 +757,23 @@ export class Wiki {
     let authorizedUsers: Set<string>;
     let extracted: {projects: Map<string, ProjectPage>; aliases: Map<string, string>};
     try {
-      authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, this.configuredAdmins);
+      authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, ADMINS);
       extracted = extractProjectPages(projectsRaw);
     } catch (err) {
       console.error('Failed parsing projects.yml for wiki metadata:', err);
       if (this.projectsMtime !== -1) return;
-      authorizedUsers = new Set(
-        this.configuredAdmins.map(a => a.trim().toLowerCase()).filter(Boolean)
-      );
+      authorizedUsers = new Set(ADMIN_USERS);
       extracted = {projects: new Map(), aliases: new Map()};
     }
 
-    this.adminUsers = new Set(
-      this.configuredAdmins.map(a => a.trim().toLowerCase()).filter(Boolean)
-    );
     this.authorizedUsers = authorizedUsers;
-    this.authorMap = new Map(
-      Object.entries(this.configuredAuthors)
-        .filter(([gh, name]) => gh.trim() && typeof name === 'string' && name.trim())
-        .map(([gh, name]) => [gh.trim().toLowerCase(), name.trim()])
-    );
     this.projectPages = extracted.projects;
     this.projectAliases = extracted.aliases;
     this.projectsMtime = pMtime;
   }
 
   formatAuthor(githubLogin: string): string {
-    this.refreshMetadata();
-    return this.authorMap.get(githubLogin.toLowerCase()) ?? githubLogin;
+    return AUTHOR_MAP.get(githubLogin.toLowerCase()) ?? githubLogin;
   }
 
   resolveSlug(slug: string, alreadyDecoded = false): string {
@@ -876,7 +819,7 @@ export class Wiki {
     if (!login) return false;
     this.refreshMetadata();
     const lower = login.toLowerCase();
-    if (this.adminUsers.has(lower)) return true;
+    if (ADMIN_USERS.has(lower)) return true;
     if (!this.authorizedUsers.has(lower)) return false;
     return !this.isBlockedInDb(lower);
   }
@@ -899,7 +842,7 @@ export class Wiki {
     if (!login) return false;
     this.refreshMetadata();
     const lower = login.toLowerCase();
-    if (this.adminUsers.has(lower)) return true;
+    if (ADMIN_USERS.has(lower)) return true;
     if (this.isBlockedInDb(lower)) return false;
     if (!slug) return this.authorizedUsers.has(lower);
     const project = this.getProjectPage(slug);
@@ -1100,10 +1043,6 @@ export class Wiki {
     if (!isValidSlug(canonical) || !SHA_RE.test(sha)) return undefined;
     const commitRef = parent ? `${sha}^{commit}^` : `${sha}^{commit}`;
     try {
-      await execFileAsync('git', ['rev-parse', '--verify', '--quiet', commitRef], {
-        cwd: this.wikiDir,
-        timeout: 5_000,
-      });
       const {stdout} = await execFileAsync(
         'git',
         ['show', `${commitRef}:${canonical}.dj`],
@@ -1115,19 +1054,10 @@ export class Wiki {
     }
   }
 
-  async getRevisionContent(slug: string, sha: string): Promise<string | undefined> {
-    const rec = await this.getRevisionRecord(slug, sha);
-    return rec?.content;
-  }
-
   async getRevisionDiff(slug: string, sha: string): Promise<string | undefined> {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical) || !SHA_RE.test(sha)) return undefined;
     try {
-      await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], {
-        cwd: this.wikiDir,
-        timeout: 5_000,
-      });
       const {stdout} = await execFileAsync(
         'git',
         ['show', '--format=', `${sha}^{commit}`, '--', `:(literal)${canonical}.dj`],
@@ -1140,18 +1070,16 @@ export class Wiki {
   }
 }
 
-export function register(app: polka.Polka, options: Options = {}): Wiki {
+export function register(app: polka.Polka, wiki: Wiki): Wiki {
   installHeadSupport(app);
-  const wiki = options.wiki ?? new Wiki(options);
-  wiki.auth.register(app);
-  const getLiveTournament = () => options.db?.getRunningTournament();
+  const getLiveTournament = () => wiki.db?.getRunningTournament();
   const renderPage = (opts: Omit<Parameters<typeof renderPageHtml>[0], 'liveTournament'>) =>
     renderPageHtml({...opts, liveTournament: getLiveTournament()});
   const sendError = (res: http.ServerResponse, status: number) =>
     sendHtml(res, status, renderErrorPage(status, getLiveTournament()));
 
-  const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
-  const slugParam = (v: string | string[] | undefined) => normalizeSlug(param(v));
+  const slugParam = (v: string | string[] | undefined) =>
+    normalizeSlug(typeof v === 'string' ? v : '');
 
   const getEffectiveUser = (req: http.IncomingMessage): string | undefined =>
     wiki.auth.getGitHubUser(req);
@@ -1190,7 +1118,6 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
 
     const authCfg = wiki.auth.getConfig();
     const devAuth = wiki.auth.isDevAuthEnabled();
-    if (!authCfg?.github && !devAuth && process.env.NODE_ENV === 'development') return true;
 
     const login = wiki.getSessionUser(req);
     if (wiki.isDeveloper(login)) return true;
@@ -1227,21 +1154,15 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   ): string | undefined => {
     const authCfg = wiki.auth.getConfig();
     const devAuth = wiki.auth.isDevAuthEnabled();
-    let login: string | undefined;
     if (!authCfg?.github && !devAuth) {
-      if (process.env.NODE_ENV === 'development') {
-        login = 'scheibo';
-      } else {
-        sendError(res, 503);
-        return undefined;
-      }
-    } else {
-      login = wiki.getSessionUser(req);
-      if (!login) {
-        const returnTo = encodeURIComponent(req.originalUrl || req.url || '/wiki');
-        redirect(res, `/auth/github?return_to=${returnTo}`);
-        return undefined;
-      }
+      sendError(res, 503);
+      return undefined;
+    }
+    const login = wiki.getSessionUser(req);
+    if (!login) {
+      const returnTo = encodeURIComponent(req.originalUrl || req.url || '/wiki');
+      redirect(res, `/auth/github?return_to=${returnTo}`);
+      return undefined;
     }
 
     if (!wiki.isDeveloper(login)) {
@@ -1426,7 +1347,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
     const login = requireEditAuth(req, res, slug);
     if (!login) return;
     try {
-      const body = await readBody(req);
+      const body = await readBody(req, MAX_BODY_BYTES, 'Payload Too Large');
       const parsed = querystring.parse(body);
       if (typeof parsed.content !== 'string') {
         sendError(res, 400);
@@ -1561,7 +1482,7 @@ export function register(app: polka.Polka, options: Options = {}): Wiki {
   app.get('/wiki/:page/:sha', async (req, res) => {
     try {
       const rawSlug = slugParam(req.params.page);
-      const sha = param(req.params.sha);
+      const sha = typeof req.params.sha === 'string' ? req.params.sha : '';
       if (!isValidSlug(rawSlug) || !SHA_RE.test(sha)) {
         sendError(res, 404);
         return;

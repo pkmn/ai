@@ -329,12 +329,7 @@ export function typecheckPrivate(
 ): number {
   const configs = findPrivateTsconfigs(path.join(rootDir, 'private'));
   if (configs.length === 0) return 0;
-  const tscBin = path.join(
-    rootDir,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'tsc.cmd' : 'tsc'
-  );
+  const tscBin = path.join(rootDir, 'node_modules', '.bin', 'tsc');
   for (const cfg of configs) {
     const rel = path.relative(rootDir, cfg);
     log(`▸ Typechecking ${rel}`);
@@ -377,8 +372,7 @@ export function runSetup(
   typecheckPrivate(rootDir, log);
 
   log('▸ Building static site');
-  const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  execFileSync(npmCmd, ['run', 'build'], {cwd: rootDir, stdio: 'inherit'});
+  execFileSync('npm', ['run', 'build'], {cwd: rootDir, stdio: 'inherit'});
 
   verifyCheckout(rootDir, true);
   const elapsed = ((performance.now() - startedAt) / 1000).toFixed(1);

@@ -26,7 +26,7 @@ import * as tournaments from '../server/tournaments';
 import * as wiki from '../server/wiki';
 import {syncStaticLiveBanner} from '../static/build';
 import {Project} from '../static/projects';
-import {escapeHtml, root, slugify, toID} from '../static/util';
+import {escapeHtml, root, slugify, toID, writeFileAtomic} from '../static/util';
 
 const CHAMPIONS_SIM_DEX = sim.Dex.mod('champions', champions as unknown as sim.ModData);
 
@@ -363,6 +363,7 @@ const BOOLEAN_FLAGS = new Set([
   'disabled',
   'no-guild',
   'banned',
+  'none',
   'pass',
   'fail',
   'all',
@@ -371,7 +372,6 @@ const BOOLEAN_FLAGS = new Set([
   'archive',
   'off',
   'notified',
-  'fast-time',
   'balanced',
   'help',
 ]);
@@ -769,15 +769,12 @@ export interface State {
 
 export interface Options {
   db: db.Database;
-  stateFile?: string;
   mockDir?: string;
   staticDir?: string;
   avatarsDir?: string;
   publicDir?: string;
   wikiDir?: string;
   laddersFile?: string;
-  baseStaticDir?: string;
-  baseLaddersFile?: string;
   now?: number;
   seed?: number;
   serverUrl?: string;
@@ -853,8 +850,8 @@ export class Runner {
   constructor(options: Options) {
     this.db = options.db;
     this.mockDir = options.mockDir;
-    this.baseStaticDir = options.baseStaticDir ?? root('static');
-    this.baseLaddersFile = options.baseLaddersFile ?? root('config', 'ladders.yml');
+    this.baseStaticDir = root('static');
+    this.baseLaddersFile = root('config', 'ladders.yml');
     this.staticDir = options.staticDir ?? (
       options.mockDir
         ? path.join(options.mockDir, 'static')
@@ -867,8 +864,7 @@ export class Runner {
     this.publicDir = options.publicDir;
     this.wikiDir = options.wikiDir ??
       (options.mockDir ? path.join(options.mockDir, 'wiki') : undefined);
-    this.stateFile = options.stateFile ??
-      (options.mockDir ? path.join(options.mockDir, 'state.json') : undefined);
+    this.stateFile = options.mockDir ? path.join(options.mockDir, 'state.json') : undefined;
     this.serverUrl = options.serverUrl?.replace(/\/+$/, '');
     this.arenaSecret = options.arenaSecret;
     const resolvedSecret = options.arenaSecret ?? process.env.ARENA_SECRET;
@@ -943,13 +939,13 @@ export class Runner {
 
   buildLiveDocument(): arena.LiveDocument {
     const countsBySlot = this.db.getMatchCountsBySlot();
-    const recentRaw = this.db.getRecentMatches(50);
+    const recentRaw = this.db.getRecentMatches(25);
     const targetPublic = this.publicDir ?? render.PUBLIC_DIR;
     return {
       updatedAt: this.state.now,
       stale: Boolean(this.state.liveStale),
       live: this.state.liveStale ? undefined : this.state.liveMatch,
-      pageSize: 50,
+      pageSize: 25,
       totalMatches: countsBySlot.all ?? recentRaw.length,
       countsBySlot,
       historyEndpoint: '/api/battles.json',
@@ -1551,7 +1547,6 @@ export class Runner {
         ...(r.discord ? {discord: r.discord} : {}),
         team: r.team,
         status: r.status,
-        min: r.min,
         ...(r.teams !== undefined ? {teams: r.teams} : {}),
         ...(prev?.pools ? {pools: prev.pools} : {}),
       };
@@ -1597,7 +1592,6 @@ export class Runner {
         throw new Error('Usage: ladder add <id> --name <title> --format <fmt> [--team <mode>]');
       }
       const team = (getFlag(cmd, 'team') ?? 'harvested') as db.TeamMode;
-      const min = Number(getFlag(cmd, 'min') ?? (team === 'pools' ? 4 : 2));
       const teamCount = team === 'pools' ? Number(getFlag(cmd, 'teams') ?? 20) : undefined;
       const status = (getFlag(cmd, 'status') ?? 'active') as db.LadderStatus;
       const discord = getFlag(cmd, 'discord');
@@ -1616,7 +1610,6 @@ export class Runner {
         ...(discord ? {discord} : {}),
         team,
         status,
-        min,
         ...(teamCount !== undefined ? {teams: teamCount} : {}),
       });
       if (path.resolve(this.laddersFile) !== path.resolve(root('config', 'ladders.yml'))) {
@@ -1635,7 +1628,6 @@ export class Runner {
       }
       const oldLadder = this.resolveLadders(oldSpec)[0];
       const newId = getFlag(cmd, 'new');
-      const newMinFlag = getFlag(cmd, 'min');
       const newTeamsFlag = getFlag(cmd, 'teams');
       const rotated = this.db.rotateLadder({
         oldLadderId: oldLadder.id,
@@ -1647,7 +1639,6 @@ export class Runner {
               name: getFlag(cmd, 'new-name'),
               format: getFlag(cmd, 'format'),
               team: getFlag(cmd, 'team') as db.TeamMode | undefined,
-              min: newMinFlag !== undefined ? Number(newMinFlag) : undefined,
               teams: newTeamsFlag !== undefined ? Number(newTeamsFlag) : undefined,
               discord: getFlag(cmd, 'discord'),
             },
@@ -1691,12 +1682,8 @@ export class Runner {
       }
       for (const ladder of targets) {
         const rawTeams = generateValidHarvestedTeams(ladder.format, count);
-        if (this.serverUrl && this.arenaSecret) {
-          await this.getArenaClient().uploadLadderTeams(ladder.id, rawTeams);
-        } else {
-          const packed = teams.validateHarvestedTeams(rawTeams, ladder.format);
-          this.db.replaceLadderTeams(ladder.id, packed, this.state.now);
-        }
+        const packed = teams.validateHarvestedTeams(rawTeams, ladder.format);
+        this.db.replaceLadderTeams(ladder.id, packed, this.state.now);
       }
       return;
     }
@@ -2518,8 +2505,6 @@ export class Runner {
       game2Turns: g2Turns,
       game1EndReason: g1Reason,
       game2EndReason: g2Reason,
-      p1PeakRam: p1Ram,
-      p2PeakRam: p2Ram,
       p1Game1PeakRam: Math.max(64, p1Ram - 12 - (this.state.matchSeq % 16)),
       p1Game2PeakRam: p1Ram,
       p2Game1PeakRam: p2Ram,
@@ -2540,8 +2525,6 @@ export class Runner {
           p2Game2TeamPreviewMillis: Math.max(25, Math.round(p2TurnMillis * 1.5) - 4),
         }
         : {}),
-      p1MeanTurnMillis: p1TurnMillis,
-      p2MeanTurnMillis: p2TurnMillis,
       p1Game1MeanTurnMillis: Math.max(10, p1TurnMillis - 8 + (this.state.matchSeq % 9)),
       p1Game2MeanTurnMillis: Math.max(10, p1TurnMillis + 8 - (this.state.matchSeq % 9)),
       p2Game1MeanTurnMillis: Math.max(10, p2TurnMillis + 6 - (this.state.matchSeq % 7)),
@@ -3537,7 +3520,6 @@ export class Runner {
         if (this.serverUrl) {
           await this.getArenaClient().completeTournamentGame(id, {
             game: payload,
-            log: logs[0],
             ...(logs.length > 0 ? {logs} : {}),
             table: opts.table,
           });
@@ -3801,7 +3783,27 @@ export class Runner {
       );
       this.state.tournamentBroadcast = normalized;
       if (this.serverUrl) {
-        await this.getArenaClient().sendTournamentBroadcast(id, normalized);
+        const client = this.getArenaClient();
+        for (const t of tables) {
+          await client.sendTournamentBroadcast(id, {
+            table: t.table,
+            mode: 'load',
+            label: t.label,
+            gameId: t.gameId,
+            stage: t.stage,
+            cycle: t.cycle,
+            matchupGame: t.matchupGame,
+            game: t.game,
+            bestOf: t.bestOf,
+            summaries: t.summaries,
+            seriesLeftHtml: t.seriesLeftHtml,
+            seriesRightHtml: t.seriesRightHtml,
+            p1: t.p1,
+            p2: t.p2,
+            lines: t.lines,
+            live: t.live,
+          });
+        }
       }
       return;
     }
@@ -3819,15 +3821,12 @@ export class Runner {
       if (this.publicDir) {
         syncStaticLiveBanner(this.publicDir, this.db.getRunningTournament());
       }
-      if (hasFlag(cmd, 'archive')) {
+      if (hasFlag(cmd, 'archive') && this.publicDir) {
         const archiveBytes = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]);
-        if (this.serverUrl) {
-          await this.getArenaClient().uploadTournamentArchive(id, archiveBytes);
-        } else if (this.publicDir) {
-          const tourDir = path.join(this.publicDir, 'arena', 'tournaments', id);
-          fs.mkdirSync(tourDir, {recursive: true});
-          fs.writeFileSync(path.join(tourDir, `${id}-replays.7z`), archiveBytes);
-        }
+        writeFileAtomic(
+          path.join(this.publicDir, 'arena', 'tournaments', id, `${id}-replays.7z`),
+          archiveBytes
+        );
       }
       return;
     }
@@ -4148,7 +4147,6 @@ export interface SeedOptions {
   wikiDir?: string;
   mockDir?: string;
   laddersFile?: string;
-  scenarioFile?: string;
   now?: number;
   render?: boolean;
 }
@@ -4161,7 +4159,6 @@ export interface SeedResult {
 
 export async function seed(options: SeedOptions): Promise<SeedResult> {
   const now = options.now ?? Math.floor(Date.now() / 1000);
-  const scenarioFile = options.scenarioFile ?? SEED_SCENARIO;
 
   const runner = new Runner({
     db: options.db,
@@ -4174,7 +4171,7 @@ export async function seed(options: SeedOptions): Promise<SeedResult> {
     now,
   });
 
-  await runner.runFile(scenarioFile);
+  await runner.runFile(SEED_SCENARIO);
   const liveDoc = options.render !== false && options.publicDir
     ? runner.cmdRender()
     : runner.buildLiveDocument();

@@ -217,7 +217,7 @@ const projectsDirCache = new Map<string, CachedProjectsDir>();
 
 function loadProjectsDir(dir: string): CachedProjectsDir {
   const file = (ext: string) => path.join(dir, `projects.${ext}`);
-  const extensions = ['bib', 'dj', 'ts', 'tsx', 'yml'];
+  const extensions = ['bib', 'dj', 'tsx', 'yml'];
   const mtimeParts: string[] = [];
   let latest = new Date(0);
   for (const ext of extensions) {

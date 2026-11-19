@@ -292,7 +292,7 @@ curl -fsS -H "Authorization: Bearer $ARENA_SECRET" \
   `http://localhost:1234/auth/discord/callback`) and start without `DEV_AUTH=1`:
 
 ```sh
-GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... PUBLIC_URL=http://localhost:1234 npm start
+GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... npm start
 ```
 
 ---
@@ -480,13 +480,13 @@ ladder status <ladders|all> <upcoming|active|settling|archived>
 
 # Add a new ladder to ladders.yml + SQLite
 ladder add <id> --name <title> --format <ps-format> \
-  [--team <harvested|pools|random>] [--min <n>] [--teams <n>] \
+  [--team <harvested|pools|random>] [--teams <n>] \
   [--status <upcoming|active|settling|archived>] [--discord <role-id>]
 
 # Rotate an active seasonal ladder into settling/archived and optionally open its successor
 ladder rotate <old-ladder> --archive-name <archived-title> \
   [--new <new-id>] [--new-name <title>] [--format <ps-format>] \
-  [--team <harvested|pools|random>] [--min <n>] [--teams <n>] [--discord <role-id>]
+  [--team <harvested|pools|random>] [--teams <n>] [--discord <role-id>]
 
 # Pin <agent>[@<ver>] as the 1500-Elo gauge anchor and recompute ratings
 ladder anchor <ladders|all> <agent>[@<ver>]

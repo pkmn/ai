@@ -13,6 +13,7 @@ import type * as db from '../db';
 import {
   isConnectivityError,
   parseJsonResponse,
+  readBody,
   root,
   slugify,
   toID,
@@ -169,14 +170,20 @@ interface RawPartnerLeader {
   owner?: {name: string; discordId?: string | null} | null;
 }
 
-function loadConfig(file = root('config', 'discord.yml')): Config {
-  return yaml.parse(fs.readFileSync(file, 'utf8')) as Config;
+const DISCORD_CONFIG_FILE = root('config', 'discord.yml');
+const GLOSSARY_FILE = root('static', 'glossary.yml');
+let cachedConfig: {mtimeMs: number; config: Config} | undefined;
+
+function loadConfig(): Config {
+  const mtimeMs = fs.statSync(DISCORD_CONFIG_FILE).mtimeMs;
+  if (cachedConfig?.mtimeMs === mtimeMs) return cachedConfig.config;
+  const config = yaml.parse(fs.readFileSync(DISCORD_CONFIG_FILE, 'utf8')) as Config;
+  cachedConfig = {mtimeMs, config};
+  return config;
 }
 
-export function loadGlossary(
-  file = root('static', 'glossary.yml')
-): Record<string, string> {
-  return yaml.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
+export function loadGlossary(): Record<string, string> {
+  return yaml.parse(fs.readFileSync(GLOSSARY_FILE, 'utf8')) as Record<string, string>;
 }
 
 const AGENT_ROLE_PREFIX = '🤖';
@@ -597,17 +604,8 @@ export async function sendDirectMessage(
   }
 }
 
-function resolveLadderLabels(db: db.Database, laddersJson: string): string[] {
-  try {
-    const ids = JSON.parse(laddersJson) as unknown;
-    if (!Array.isArray(ids)) return [];
-    return ids.map(raw => {
-      const id = String(raw);
-      return db.getLadder(id)?.name ?? id;
-    });
-  } catch {
-    return [];
-  }
+function resolveLadderLabels(db: db.Database, ladderIds: readonly string[]): string[] {
+  return ladderIds.map(id => db.getLadder(id)?.name ?? id);
 }
 
 interface DmContext {
@@ -629,7 +627,7 @@ async function dispatchVersionDm(
 
   inFlightVersionDms.add(item.versionId);
   try {
-    const ladderLabels = resolveLadderLabels(db, item.laddersJson);
+    const ladderLabels = resolveLadderLabels(db, item.ladders);
     const notifiedOwners = new Set<string>();
     let blockedCount = 0;
     let errorCount = 0;
@@ -735,6 +733,7 @@ export async function notifySubmissionStatus(
       version: result.version.version,
       smokeStatus: status,
       smokeError: result.version.smokeError,
+      ladders: result.version.ladders,
       laddersJson: result.version.laddersJson,
       submittedAt: result.version.submittedAt,
       ownerDiscordIds,
@@ -1402,10 +1401,9 @@ export function handleInteraction(
 export async function syncCommands(
   token: string,
   guild: string,
-  state?: Map<string, string | undefined>,
-  commands: Command[] = COMMANDS
+  state?: Map<string, string | undefined>
 ): Promise<Application> {
-  const key = JSON.stringify(commands);
+  const key = JSON.stringify(COMMANDS);
   const cachedApp = state?.get('app');
   const app = cachedApp
     ? JSON.parse(cachedApp) as Application
@@ -1435,14 +1433,14 @@ export async function syncCommands(
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-  if (JSON.stringify(normalize(current)) !== JSON.stringify(normalize(commands))) {
+  if (JSON.stringify(normalize(current)) !== JSON.stringify(normalize(COMMANDS))) {
     await discordRequest(
       token,
       `/applications/${app.id}/guilds/${guild}/commands`,
       {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(commands),
+        body: JSON.stringify(COMMANDS),
       }
     );
   }
@@ -1467,9 +1465,6 @@ export interface Options {
   token?: string;
   vgcToken?: string;
   verifyKey?: string;
-  cycleMillis?: number;
-  config?: Config;
-  configFile?: string;
 }
 
 export interface Handle {
@@ -1481,7 +1476,7 @@ export interface Handle {
 export interface SyncOnceOptions {
   state?: Map<string, string | undefined>;
   onVerifyKey?: (key: string) => void;
-  configOrFile?: Config | string;
+  config?: Config;
 }
 
 export async function syncOnce(
@@ -1490,10 +1485,8 @@ export async function syncOnce(
   vgcToken = '',
   opts: SyncOnceOptions = {}
 ) {
-  const {state = new Map<string, string | undefined>(), onVerifyKey, configOrFile} = opts;
-  const config = typeof configOrFile === 'object'
-    ? configOrFile
-    : loadConfig(configOrFile);
+  const {state = new Map<string, string | undefined>(), onVerifyKey} = opts;
+  const config = opts.config ?? loadConfig();
 
   try {
     const app = await syncCommands(token, config.guild, state);
@@ -1580,16 +1573,11 @@ export async function syncOnce(
 }
 
 export function register(app: polka.Polka, options: Options): Handle {
-  // Only synchronize live Discord roles, pins, chat logs, and DMs on the production server (or
-  // when explicitly opted in via `DISCORD_SYNC=1` locally, or `options.token` in tests) so running
-  // `npm run dev` or `npm start` on a developer machine never mutates the production guild.
-  const syncEnabled = options.token !== undefined ||
-    process.env.NODE_ENV === 'production' ||
-    process.env.DISCORD_SYNC === '1';
+  // Only synchronize live Discord roles, pins, chat logs, and DMs in production (or when tests pass
+  // `options.token`) so local `npm run dev` / `npm start` never mutates the production guild.
+  const syncEnabled = options.token !== undefined || process.env.NODE_ENV === 'production';
   const token = syncEnabled ? (options.token ?? process.env.DISCORD_BOT_TOKEN) : '';
   const vgcToken = options.vgcToken ?? process.env.VGC_BOT_TOKEN ?? '';
-  const cycleMillis = options.cycleMillis ?? CYCLE_MILLIS;
-  const resolveConfig = (): Config => options.config ?? loadConfig(options.configFile);
   const state = new Map<string, string | undefined>();
   let verifyKey = options.verifyKey;
   let glossary: Record<string, string> = {};
@@ -1616,13 +1604,12 @@ export function register(app: polka.Polka, options: Options): Handle {
         onVerifyKey: k => {
           verifyKey = k;
         },
-        configOrFile: options.config ?? options.configFile,
       })
         .catch(err => {
           console.error('Error in Discord sync cycle:', err);
         })
         .finally(scheduleNext);
-    }, cycleMillis);
+    }, CYCLE_MILLIS);
     timer.unref();
   };
 
@@ -1637,7 +1624,6 @@ export function register(app: polka.Polka, options: Options): Handle {
         verifyKey = k;
         resolveVerifyKey();
       },
-      configOrFile: options.config ?? options.configFile,
     })
       .catch(err => {
         console.error('Error in initial Discord sync:', err);
@@ -1648,46 +1634,27 @@ export function register(app: polka.Polka, options: Options): Handle {
       });
   }
 
-  app.post('/discord/interactions', (req, res) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-    req.on('data', (chunk: Buffer) => {
-      if (settled) return;
-      total += chunk.length;
-      if (total > MAX_INTERACTION_BYTES) {
-        settled = true;
-        req.resume();
-        res.writeHead(413);
-        res.end();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (settled) return;
-      settled = true;
-      const waitKey = verifyKey ? Promise.resolve() : verifyKeyReady;
-      waitKey
-        .then(() => {
-          const rawBody = Buffer.concat(chunks).toString('utf8');
-          const result = handleInteraction(rawBody, req.headers, verifyKey, glossary);
-          res.writeHead(result.status, result.headers);
-          res.end(result.body);
-        })
-        .catch(err => {
-          console.error('Error handling interaction:', err);
-          res.writeHead(500);
-          res.end();
-        });
-    });
-    req.on('error', err => {
-      if (settled) return;
-      settled = true;
-      console.error('Error reading interaction request:', err);
+  app.post('/discord/interactions', async (req, res) => {
+    let rawBody: string;
+    try {
+      rawBody = await readBody(req, MAX_INTERACTION_BYTES);
+    } catch (err: unknown) {
+      const status = (err as {status?: number})?.status === 413 ? 413 : 500;
+      if (status === 500) console.error('Error reading interaction request:', err);
+      res.writeHead(status);
+      res.end();
+      return;
+    }
+    try {
+      if (!verifyKey) await verifyKeyReady;
+      const result = handleInteraction(rawBody, req.headers, verifyKey, glossary);
+      res.writeHead(result.status, result.headers);
+      res.end(result.body);
+    } catch (err) {
+      console.error('Error handling interaction:', err);
       res.writeHead(500);
       res.end();
-    });
+    }
   });
 
   return {
@@ -1697,11 +1664,11 @@ export function register(app: polka.Polka, options: Options): Handle {
     },
     notifySubmissionStatus: async result => {
       if (stopped || !token) return false;
-      return notifySubmissionStatus(options.db, token, resolveConfig(), result, state);
+      return notifySubmissionStatus(options.db, token, loadConfig(), result, state);
     },
     notifyWatchdogTimeout: async alert => {
       if (stopped || !token) return 0;
-      return notifyWatchdogAlert(token, resolveConfig(), alert, state);
+      return notifyWatchdogAlert(token, loadConfig(), alert, state);
     },
   };
 }

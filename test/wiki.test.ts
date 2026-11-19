@@ -319,13 +319,18 @@ describe('wiki server routes', () => {
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
 
     const app = polka();
-    wiki.register(app, {
+    const wikiInstance: wiki.Wiki = new wiki.Wiki({
       wikiDir,
       projectsFile,
-      authConfig: AUTH_CFG,
-      isDiscordMember: id => discordMembers.has(id),
       push: false,
+      auth: new auth.Auth({
+        config: AUTH_CFG,
+        isAuthorizedGitHub: login => wikiInstance.isDeveloper(login),
+        isDiscordMember: id => discordMembers.has(id),
+      }),
     });
+    wikiInstance.auth.register(app);
+    wiki.register(app, wikiInstance);
 
     const nextServer = http.createServer((req, res) => app.handler(req as polka.Request, res));
     server = nextServer;
@@ -872,7 +877,19 @@ describe('wiki database standing checks', () => {
     devId = db.getDeveloperByGitHub('pmariglia')!.id;
 
     const app = polka();
-    wiki.register(app, {wikiDir, projectsFile, db, authConfig: AUTH_CFG, push: false});
+    const wikiInstance: wiki.Wiki = new wiki.Wiki({
+      wikiDir,
+      projectsFile,
+      db,
+      push: false,
+      auth: new auth.Auth({
+        config: AUTH_CFG,
+        db,
+        isAuthorizedGitHub: login => wikiInstance.isDeveloper(login),
+      }),
+    });
+    wikiInstance.auth.register(app);
+    wiki.register(app, wikiInstance);
     dbServer = http.createServer((req, res) => app.handler(req as polka.Request, res));
     await new Promise<void>(resolve => dbServer.listen(0, '127.0.0.1', resolve));
     dbUrl = `http://127.0.0.1:${(dbServer.address() as {port: number}).port}`;

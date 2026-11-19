@@ -5,7 +5,6 @@ import * as os from 'os';
 import * as path from 'path';
 
 import polka from 'polka';
-import serveStatic from 'serve-static';
 
 import {Database} from '../db';
 import {createServerApp} from '../server';
@@ -15,9 +14,9 @@ import * as auth from '../server/auth';
 import {generateValidHarvestedTeams} from '../tools/mock';
 import {parseArgs, runPkmnCli} from '../tools/pkmn';
 
+const ARENA_SECRET = 'test-arena-bearer-secret';
 const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-arena-session-secret',
-  arenaSecret: 'test-arena-bearer-secret',
 };
 
 const PROJECTS_YAML = `
@@ -181,6 +180,7 @@ describe('Arena Control API submissions', () => {
     ctrl = arena.register(app, {
       db,
       auth: new auth.Auth({db, config: AUTH_CFG}),
+      arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
       onUpdate: reason => {
         events.push(reason);
@@ -231,7 +231,7 @@ describe('Arena Control API submissions', () => {
         srv.baseUrl,
         'GET',
         '/api/arena/pending-submissions',
-        AUTH_CFG.arenaSecret
+        ARENA_SECRET
       );
       expect(pendingRes.status).toBe(200);
       const submissions = pendingRes.data.submissions as Array<Record<string, unknown>>;
@@ -268,7 +268,7 @@ describe('Arena Control API submissions', () => {
       srv.baseUrl,
       'POST',
       '/api/arena/submission-status',
-      AUTH_CFG.arenaSecret,
+      ARENA_SECRET,
       {
         versionId: fpSubFail.id,
         smokeStatus: 'failed',
@@ -300,7 +300,7 @@ describe('Arena Control API submissions', () => {
       srv.baseUrl,
       'POST',
       '/api/arena/submission-status',
-      AUTH_CFG.arenaSecret,
+      ARENA_SECRET,
       {
         versionId: sub1.id,
         smokeStatus: 'passed',
@@ -331,7 +331,7 @@ describe('Arena Control API submissions', () => {
       ladderIds: ['gen1ou20261109'],
       now: 1_700_000_100,
     });
-    await apiJson(srv.baseUrl, 'POST', '/api/arena/submission-status', AUTH_CFG.arenaSecret, {
+    await apiJson(srv.baseUrl, 'POST', '/api/arena/submission-status', ARENA_SECRET, {
       versionId: sub1.id,
       smokeStatus: 'passed',
     });
@@ -350,7 +350,7 @@ describe('Arena Control API submissions', () => {
       ladderIds: ['gen1ou20261109'],
       now: 1_702_000_000,
     });
-    await apiJson(srv.baseUrl, 'POST', '/api/arena/submission-status', AUTH_CFG.arenaSecret, {
+    await apiJson(srv.baseUrl, 'POST', '/api/arena/submission-status', ARENA_SECRET, {
       versionId: sub2.id,
       smokeStatus: 'passed',
     });
@@ -373,7 +373,7 @@ describe('Arena Control API submissions', () => {
       srv.baseUrl,
       'POST',
       '/api/arena/submission-status',
-      AUTH_CFG.arenaSecret,
+      ARENA_SECRET,
       {versionId: sub3.id, smokeStatus: 'passed'}
     );
     expect(pass3.status).toBe(200);
@@ -465,7 +465,7 @@ describe('Arena live heartbeats & match completion', () => {
     const app = polka();
     ctrl = arena.register(app, {
       db,
-      arenaSecret: AUTH_CFG.arenaSecret,
+      arenaSecret: ARENA_SECRET,
       sessionSecret: AUTH_CFG.sessionSecret,
       publicDir: tmpDir,
       watchdogTimeoutMillis: 120,
@@ -495,7 +495,7 @@ describe('Arena live heartbeats & match completion', () => {
       srv.baseUrl,
       'POST',
       '/api/arena/heartbeat',
-      AUTH_CFG.arenaSecret,
+      ARENA_SECRET,
       baseHeartbeat
     );
     expect(hb1.status).toBe(200);
@@ -511,16 +511,16 @@ describe('Arena live heartbeats & match completion', () => {
   });
 
   test('preserves turnStartedAt within the same turn while advancing on turn change', async () => {
-    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', AUTH_CFG.arenaSecret, baseHeartbeat);
+    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', ARENA_SECRET, baseHeartbeat);
     fakeNow = 1_760_001_004;
-    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', AUTH_CFG.arenaSecret, {
+    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', ARENA_SECRET, {
       ...baseHeartbeat,
       heartbeatSeq: 2,
     });
     expect((await fetchLive()).doc.live?.turnStartedAt).toBe(1_760_001_000);
 
     fakeNow = 1_760_001_009;
-    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', AUTH_CFG.arenaSecret, {
+    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', ARENA_SECRET, {
       ...baseHeartbeat,
       heartbeatSeq: 3,
       turn: 6,
@@ -529,12 +529,12 @@ describe('Arena live heartbeats & match completion', () => {
     expect((await fetchLive()).doc.live?.turnStartedAt).toBe(1_760_001_009);
   });
 
-  test('validates optional pool team short hashes on live heartbeat slots', async () => {
+  test('preserves optional pool team short hashes on live heartbeat slots', async () => {
     const hbOk = await apiJson(
       srv.baseUrl,
       'POST',
       '/api/arena/heartbeat',
-      AUTH_CFG.arenaSecret,
+      ARENA_SECRET,
       {
         ...baseHeartbeat,
         p1: {...baseHeartbeat.p1, team: 'b7b8bb1cbc73'},
@@ -545,19 +545,6 @@ describe('Arena live heartbeats & match completion', () => {
     const {doc} = await fetchLive();
     expect(doc.live?.p1.team).toBe('b7b8bb1cbc73');
     expect(doc.live?.p2.team).toBe('P1:16d479804e3d');
-
-    const hbBad = await apiJson(
-      srv.baseUrl,
-      'POST',
-      '/api/arena/heartbeat',
-      AUTH_CFG.arenaSecret,
-      {
-        ...baseHeartbeat,
-        heartbeatSeq: 2,
-        p1: {...baseHeartbeat.p1, team: 'x'.repeat(65)},
-      }
-    );
-    expect(hbBad.status).toBe(400);
   });
 
   test('extracts p1Lines or p2Lines via extractChannelMessages on random ladder heartbeats',
@@ -571,7 +558,7 @@ describe('Arena live heartbeats & match completion', () => {
         srv.baseUrl,
         'POST',
         '/api/arena/heartbeat',
-        AUTH_CFG.arenaSecret,
+        ARENA_SECRET,
         {
           ...baseHeartbeat,
           matchId: 'gen9randombattle-0000001',
@@ -608,7 +595,7 @@ describe('Arena live heartbeats & match completion', () => {
     });
 
   test('fires disconnect watchdog alert once heartbeat exceeds timeout', async () => {
-    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', AUTH_CFG.arenaSecret, baseHeartbeat);
+    await apiJson(srv.baseUrl, 'POST', '/api/arena/heartbeat', ARENA_SECRET, baseHeartbeat);
     await new Promise(resolve => setTimeout(resolve, 180));
     expect(watchdogAlerts).toHaveLength(1);
     expect(watchdogAlerts[0].lastMatchId).toBe('gen1ou-0000000001');
@@ -624,7 +611,7 @@ describe('Arena live heartbeats & match completion', () => {
         srv.baseUrl,
         'POST',
         '/api/arena/match-complete',
-        AUTH_CFG.arenaSecret,
+        ARENA_SECRET,
         {
           match: {
             id: `gen1ou-${String(mIdx).padStart(10, '0')}`,
@@ -639,14 +626,18 @@ describe('Arena live heartbeats & match completion', () => {
             game2Turns: 31,
             game1EndReason: 'normal',
             game2EndReason: mIdx === 5 ? 'timeout' : 'normal',
-            p1PeakRam: 950,
-            p2PeakRam: 1120,
+            p1Game1PeakRam: 950,
+            p1Game2PeakRam: 950,
+            p2Game1PeakRam: 1120,
+            p2Game2PeakRam: 1120,
             p1Game1BankSeconds: 145,
             p1Game2BankSeconds: 140,
             p2Game1BankSeconds: 138,
             p2Game2BankSeconds: 120,
-            p1MeanTurnMillis: 310,
-            p2MeanTurnMillis: 420,
+            p1Game1MeanTurnMillis: 310,
+            p1Game2MeanTurnMillis: 310,
+            p2Game1MeanTurnMillis: 420,
+            p2Game2MeanTurnMillis: 420,
             completedAt: fakeNow,
           },
         }
@@ -707,14 +698,18 @@ describe('Arena live heartbeats & match completion', () => {
         game2Turns: 31,
         game1EndReason: 'normal',
         game2EndReason: 'normal',
-        p1PeakRam: 950,
-        p2PeakRam: 1120,
+        p1Game1PeakRam: 950,
+        p1Game2PeakRam: 950,
+        p2Game1PeakRam: 1120,
+        p2Game2PeakRam: 1120,
         p1Game1BankSeconds: 145,
         p1Game2BankSeconds: 140,
         p2Game1BankSeconds: 138,
         p2Game2BankSeconds: 120,
-        p1MeanTurnMillis: 310,
-        p2MeanTurnMillis: 420,
+        p1Game1MeanTurnMillis: 310,
+        p1Game2MeanTurnMillis: 310,
+        p2Game1MeanTurnMillis: 420,
+        p2Game2MeanTurnMillis: 420,
         completedAt: fakeNow,
       },
     };
@@ -722,7 +717,7 @@ describe('Arena live heartbeats & match completion', () => {
       srv.baseUrl,
       'POST',
       '/api/arena/match-complete',
-      AUTH_CFG.arenaSecret,
+      ARENA_SECRET,
       payload
     );
     expect(first.data.duplicate).toBe(false);
@@ -731,7 +726,7 @@ describe('Arena live heartbeats & match completion', () => {
       srv.baseUrl,
       'POST',
       '/api/arena/match-complete',
-      AUTH_CFG.arenaSecret,
+      ARENA_SECRET,
       payload
     );
     expect(second.status).toBe(200);
@@ -823,13 +818,13 @@ describe('Arena SSE streams', () => {
     const app = polka();
     ctrl = arena.register(app, {
       db,
-      arenaSecret: AUTH_CFG.arenaSecret,
+      arenaSecret: ARENA_SECRET,
       sessionSecret: AUTH_CFG.sessionSecret,
       publicDir: tmpDir,
       now: () => 1_760_000_500,
     });
     srv = await startTestServer(app);
-    client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+    client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
   });
 
   afterEach(async () => {
@@ -900,14 +895,18 @@ describe('Arena SSE streams', () => {
           game2Turns: 24,
           game1EndReason: 'normal',
           game2EndReason: 'normal',
-          p1PeakRam: 820,
-          p2PeakRam: 960,
+          p1Game1PeakRam: 820,
+          p1Game2PeakRam: 820,
+          p2Game1PeakRam: 960,
+          p2Game2PeakRam: 960,
           p1Game1BankSeconds: 145,
           p1Game2BankSeconds: 142,
           p2Game1BankSeconds: 138,
           p2Game2BankSeconds: 130,
-          p1MeanTurnMillis: 260,
-          p2MeanTurnMillis: 310,
+          p1Game1MeanTurnMillis: 260,
+          p1Game2MeanTurnMillis: 260,
+          p2Game1MeanTurnMillis: 310,
+          p2Game2MeanTurnMillis: 310,
           completedAt: 1_760_000_500,
         },
       });
@@ -920,7 +919,6 @@ describe('Arena SSE streams', () => {
   });
 
   test('streams multi-table tournament broadcasts over /api/tournaments/:id/stream', async () => {
-    expect((await fetch(`${srv.baseUrl}/api/tournament-live.json`)).status).toBe(404);
     expect((await fetch(`${srv.baseUrl}/api/tournaments/999/stream?once=1`)).status).toBe(404);
 
     const tourStream = await openPersistentSse(srv.baseUrl, '/api/tournaments/2/stream');
@@ -954,13 +952,6 @@ describe('Arena SSE streams', () => {
       const loadEvt = await tourStream.waitForEvent('table-load');
       expect((loadEvt.data.table as {gameId: string}).gameId).toBe('t2-rr-g1');
 
-      const liveBroadcastRes = await fetch(`${srv.baseUrl}/api/tournament-live.json`);
-      expect(liveBroadcastRes.status).toBe(200);
-      const bcEtag = liveBroadcastRes.headers.get('etag')!;
-      expect((await fetch(`${srv.baseUrl}/api/tournament-live.json`, {
-        headers: {'If-None-Match': bcEtag},
-      })).status).toBe(304);
-
       await client.sendTournamentBroadcast('2', {
         table: 1,
         mode: 'append',
@@ -990,7 +981,6 @@ describe('Arena SSE streams', () => {
 
       await client.sendTournamentBroadcast('2', {off: true});
       await tourStream.waitForEvent('broadcast-end');
-      expect((await fetch(`${srv.baseUrl}/api/tournament-live.json`)).status).toBe(404);
     } finally {
       await tourStream.close();
     }
@@ -1002,7 +992,7 @@ describe('Arena SSE streams', () => {
       await tourStream.waitForEvent('snapshot');
       const gc1 = await client.completeTournamentGame('2', {
         table: 1,
-        log: '|gametype|singles\n|player|p1|0 ERROR|1\n|player|p2|Foul Play|2\n|win|0 ERROR\n',
+        logs: ['|gametype|singles\n|player|p1|0 ERROR|1\n|player|p2|Foul Play|2\n|win|0 ERROR\n'],
         game: {
           id: 't2-rr-g1',
           stage: 'Round Robin',
@@ -1299,14 +1289,18 @@ describe('pkmn CLI commands', () => {
         game2Turns: 27,
         game1EndReason: 'normal',
         game2EndReason: 'normal',
-        p1PeakRam: 800,
-        p2PeakRam: 900,
+        p1Game1PeakRam: 800,
+        p1Game2PeakRam: 800,
+        p2Game1PeakRam: 900,
+        p2Game2PeakRam: 900,
         p1Game1BankSeconds: 140,
         p1Game2BankSeconds: 140,
         p2Game1BankSeconds: 140,
         p2Game2BankSeconds: 140,
-        p1MeanTurnMillis: 200,
-        p2MeanTurnMillis: 200,
+        p1Game1MeanTurnMillis: 200,
+        p1Game2MeanTurnMillis: 200,
+        p2Game1MeanTurnMillis: 200,
+        p2Game2MeanTurnMillis: 200,
         completedAt: 1_760_000_400,
       },
     });
@@ -1355,6 +1349,7 @@ describe('pkmn CLI commands', () => {
       now: 1_760_000_510,
     });
     db.applySubmissionStatus({versionId: vMeta.id, smokeStatus: 'passed', now: 1_760_000_520});
+    db.setLadderAnchor('gen1ou20261109', 'foul-play', '1.0.0', 1_760_000_525);
 
     await runPkmnCli(
       [
@@ -1370,42 +1365,63 @@ describe('pkmn CLI commands', () => {
     expect(db.getLadder('gen1ou20261109')!.status).toBe('settling');
     expect(db.getLadder('gen1ou20270101')!.status).toBe('upcoming');
 
-    const finalRes = db.recordCompletedMatch({
-      match: {
-        id: 'gen1ou-0000000002',
-        ladderId: 'gen1ou20261109',
-        p1VersionId: vMeta.id,
-        p2VersionId: vFpId,
-        seed: 'sodium,2',
-        game1Outcome: 'W',
-        game2Outcome: 'L',
-        category: 'WL',
-        game1Turns: 30,
-        game2Turns: 30,
-        game1EndReason: 'normal',
-        game2EndReason: 'normal',
-        p1PeakRam: 700,
-        p2PeakRam: 900,
-        p1Game1BankSeconds: 140,
-        p1Game2BankSeconds: 140,
-        p2Game1BankSeconds: 140,
-        p2Game2BankSeconds: 140,
-        p1MeanTurnMillis: 200,
-        p2MeanTurnMillis: 200,
-        completedAt: 1_760_000_600,
-      },
-      ladderStatus: 'archived',
-    });
-    expect(finalRes.archivedLadder).toBe(true);
+    let archived = false;
+    for (let i = 1; i <= 90 && !archived; i++) {
+      const pairs: Array<[number, number]> = [
+        [vMeta.id, vFpId],
+        [vZeroId, vFpId],
+        [vMeta.id, vZeroId],
+      ];
+      const [p1VersionId, p2VersionId] = pairs[(i - 1) % pairs.length];
+      const win = i % 2 === 0;
+      const res = db.recordCompletedMatch({
+        match: {
+          id: `gen1ou-settle-${String(i).padStart(4, '0')}`,
+          ladderId: 'gen1ou20261109',
+          p1VersionId,
+          p2VersionId,
+          seed: `sodium,${i}`,
+          game1Outcome: win ? 'W' : 'L',
+          game2Outcome: win ? 'W' : 'L',
+          category: win ? 'WW' : 'LL',
+          game1Turns: 30,
+          game2Turns: 30,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 700,
+          p1Game2PeakRam: 700,
+          p2Game1PeakRam: 900,
+          p2Game2PeakRam: 900,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1Game1MeanTurnMillis: 200,
+          p1Game2MeanTurnMillis: 200,
+          p2Game1MeanTurnMillis: 200,
+          p2Game2MeanTurnMillis: 200,
+          completedAt: 1_760_000_600 + i,
+        },
+      });
+      archived = res.archivedLadder;
+    }
+    expect(archived).toBe(true);
     expect(db.getLadder('gen1ou20261109')!.status).toBe('archived');
   });
 
   test('session mints valid cookie bound to developer numeric GitHub ID', async () => {
     db.linkDeveloperGitHubId('pre', 987654, 1_760_000_605);
-    await runPkmnCli(
-      ['session', '--github', 'pre', '--secret', AUTH_CFG.sessionSecret],
-      {db, now: 1_760_000_610, log}
-    );
+    const prevSecret = process.env.SESSION_SECRET;
+    process.env.SESSION_SECRET = AUTH_CFG.sessionSecret;
+    try {
+      await runPkmnCli(
+        ['session', '--github', 'pre'],
+        {db, now: 1_760_000_610, log}
+      );
+    } finally {
+      if (prevSecret === undefined) delete process.env.SESSION_SECRET;
+      else process.env.SESSION_SECRET = prevSecret;
+    }
     const sessionLine = logs[logs.length - 1];
     expect(sessionLine).toContain('pkmn_session=');
     const rawTok = decodeURIComponent(sessionLine.slice('pkmn_session='.length));
@@ -1546,6 +1562,7 @@ describe('Arena binary archive uploads', () => {
     ctrl = arena.register(app, {
       db,
       auth: new auth.Auth({db, config: AUTH_CFG}),
+      arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
       onUpdate: reason => {
         events.push(reason);
@@ -1563,28 +1580,13 @@ describe('Arena binary archive uploads', () => {
 
   const putBinary = async (route: string, shaHeader?: string) => {
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
+      Authorization: `Bearer ${ARENA_SECRET}`,
       'Content-Type': 'application/x-7z-compressed',
     };
     if (shaHeader) headers['X-Content-SHA256'] = shaHeader;
     const res = await fetch(`${srv.baseUrl}${route}`, {method: 'PUT', headers, body: archiveBytes});
     return {status: res.status, data: await res.json() as Record<string, unknown>};
   };
-
-  test('gates PUT /api/arena/tournaments/:id/archive on completed status plus SHA-256',
-    async () => {
-      expect((await putBinary('/api/arena/tournaments/3/archive')).status).toBe(409);
-
-      db.setTournamentStatus('3', 'completed', 1_700_000_500);
-      expect((await putBinary('/api/arena/tournaments/3/archive', '0'.repeat(64))).status)
-        .toBe(400);
-
-      const okTour = await putBinary('/api/arena/tournaments/3/archive', expectedSha);
-      expect(okTour.status).toBe(200);
-      expect(okTour.data.archiveHref).toBe('/arena/tournaments/3/3-replays.7z');
-      expect(fs.readFileSync(path.join(tmpDir, 'arena', 'tournaments', '3', '3-replays.7z')))
-        .toEqual(archiveBytes);
-    });
 
   test('rejects PUT /api/arena/ladders/:id/archive on non-pools ladders', async () => {
     db.setLadderStatus('gen1ou20261109', 'archived', 1_700_000_600);
@@ -1636,7 +1638,7 @@ describe('Arena binary archive uploads', () => {
     db.applySubmissionStatus({versionId: vFp.id, smokeStatus: 'passed', now: 1_700_000_020});
     db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: 1_700_000_020});
 
-    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
     await client.completeMatch({
       match: {
         id: 'vgc-0000077',
@@ -1653,14 +1655,18 @@ describe('Arena binary archive uploads', () => {
         game2Turns: 10,
         game1EndReason: 'win',
         game2EndReason: 'win',
-        p1PeakRam: 900,
-        p2PeakRam: 920,
+        p1Game1PeakRam: 900,
+        p1Game2PeakRam: 900,
+        p2Game1PeakRam: 920,
+        p2Game2PeakRam: 920,
         p1Game1BankSeconds: 140,
         p1Game2BankSeconds: 138,
         p2Game1BankSeconds: 135,
         p2Game2BankSeconds: 130,
-        p1MeanTurnMillis: 210,
-        p2MeanTurnMillis: 220,
+        p1Game1MeanTurnMillis: 210,
+        p1Game2MeanTurnMillis: 210,
+        p2Game1MeanTurnMillis: 220,
+        p2Game2MeanTurnMillis: 220,
         completedAt: 1_700_000_750,
       },
       game1Log: '|player|p1|Foul Play|1\n|player|p2|0 ERROR|2\n|win|Foul Play\n',
@@ -1687,7 +1693,7 @@ describe('Arena binary archive uploads', () => {
   });
 
   test('reports unpublished archived pools ladders on GET /api/arena/ladders', async () => {
-    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
     expect((await client.getPlayableLadders()).unpublishedArchivedPoolsLadders).toEqual([]);
 
     db.setLadderStatus('gen9championsvgc2026regmc', 'archived', 1_700_000_800);
@@ -1724,7 +1730,7 @@ describe('Arena binary archive uploads', () => {
 
   test('streams live lines on random ladder heartbeats while omitting harvested lines',
     async () => {
-      const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+      const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
       await client.sendHeartbeat({
         heartbeatSeq: 1,
         matchId: 'gen9randombattle-0000001',
@@ -1820,7 +1826,7 @@ describe('Arena binary archive uploads', () => {
     db.applySubmissionStatus({versionId: vFp.id, smokeStatus: 'passed', now: 1_700_000_020});
     db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: 1_700_000_020});
 
-    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
     await client.completeMatch({
       match: {
         id: 'gen9randombattle-0000042',
@@ -1835,14 +1841,18 @@ describe('Arena binary archive uploads', () => {
         game2Turns: 21,
         game1EndReason: 'win',
         game2EndReason: 'win',
-        p1PeakRam: 800,
-        p2PeakRam: 820,
+        p1Game1PeakRam: 800,
+        p1Game2PeakRam: 800,
+        p2Game1PeakRam: 820,
+        p2Game2PeakRam: 820,
         p1Game1BankSeconds: 130,
         p1Game2BankSeconds: 128,
         p2Game1BankSeconds: 125,
         p2Game2BankSeconds: 120,
-        p1MeanTurnMillis: 240,
-        p2MeanTurnMillis: 250,
+        p1Game1MeanTurnMillis: 240,
+        p1Game2MeanTurnMillis: 240,
+        p2Game1MeanTurnMillis: 250,
+        p2Game2MeanTurnMillis: 250,
         completedAt: 1_700_000_950,
       },
       game1Log: '|player|p1|Foul Play|1\n|player|p2|0 ERROR|2\n|win|Foul Play\n',
@@ -1909,14 +1919,18 @@ describe('GET /api/battles.json pagination', () => {
           game2Turns: 22 + i,
           game1EndReason: 'normal',
           game2EndReason: 'normal',
-          p1PeakRam: 900,
-          p2PeakRam: 950,
+          p1Game1PeakRam: 900,
+          p1Game2PeakRam: 900,
+          p2Game1PeakRam: 950,
+          p2Game2PeakRam: 950,
           p1Game1BankSeconds: 140,
           p1Game2BankSeconds: 138,
           p2Game1BankSeconds: 136,
           p2Game2BankSeconds: 132,
-          p1MeanTurnMillis: 300,
-          p2MeanTurnMillis: 320,
+          p1Game1MeanTurnMillis: 300,
+          p1Game2MeanTurnMillis: 300,
+          p2Game1MeanTurnMillis: 320,
+          p2Game2MeanTurnMillis: 320,
           completedAt: 1_700_000_100 + i * 10,
         },
       });
@@ -1925,7 +1939,7 @@ describe('GET /api/battles.json pagination', () => {
     const app = polka();
     handle = arena.register(app, {
       db,
-      arenaSecret: AUTH_CFG.arenaSecret,
+      arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
       now: () => 1_700_000_999,
     });
@@ -2027,14 +2041,18 @@ describe('GET /api/battles.json pagination', () => {
           game2Turns: 22,
           game1EndReason: 'normal',
           game2EndReason: 'normal',
-          p1PeakRam: 900,
-          p2PeakRam: 900,
+          p1Game1PeakRam: 900,
+          p1Game2PeakRam: 900,
+          p2Game1PeakRam: 900,
+          p2Game2PeakRam: 900,
           p1Game1BankSeconds: 140,
           p1Game2BankSeconds: 140,
           p2Game1BankSeconds: 140,
           p2Game2BankSeconds: 140,
-          p1MeanTurnMillis: 250,
-          p2MeanTurnMillis: 250,
+          p1Game1MeanTurnMillis: 250,
+          p1Game2MeanTurnMillis: 250,
+          p2Game1MeanTurnMillis: 250,
+          p2Game2MeanTurnMillis: 250,
           completedAt: ts,
         },
       });
@@ -2047,7 +2065,7 @@ describe('GET /api/battles.json pagination', () => {
     const vsApp = polka();
     const vsHandle = arena.register(vsApp, {
       db: vsDb,
-      arenaSecret: AUTH_CFG.arenaSecret,
+      arenaSecret: ARENA_SECRET,
       publicDir: vsDir,
       now: () => 1_700_000_999,
     });
@@ -2096,6 +2114,7 @@ describe('harvested ladder teams API', () => {
     ctrl = arena.register(app, {
       db,
       auth: new auth.Auth({db, config: AUTH_CFG}),
+      arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
       onUpdate: reason => {
         events.push(reason);
@@ -2111,71 +2130,69 @@ describe('harvested ladder teams API', () => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  test('requires Bearer authentication on GET or PUT /api/arena/ladders/:id/teams', async () => {
-    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: AUTH_CFG.arenaSecret!});
+  test('requires Bearer authentication on GET /api/arena/ladders/:id/teams', async () => {
+    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
     const pending = await client.getPendingSubmissions();
     expect(pending.ladders.map(l => `${l.id}:${l.status}`)).toContain('gen1ou20261109:upcoming');
 
     expect((await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`)).status).toBe(401);
-    expect((await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
-      method: 'PUT',
-      headers: {'content-type': 'text/plain'},
-      body: rbyPaste,
-    })).status).toBe(401);
   });
 
-  test('rejects non-harvested ladders or mirror-duplicate harvested teams with 400', async () => {
+  test('returns 404 before teams upload and rejects invalid CLI uploads', async () => {
     expect((await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
-      headers: {authorization: `Bearer ${AUTH_CFG.arenaSecret}`},
+      headers: {authorization: `Bearer ${ARENA_SECRET}`},
     })).status).toBe(404);
 
-    expect((await fetch(`${srv.baseUrl}/api/arena/ladders/gen9championsvgc2026regmc/teams`, {
-      method: 'PUT',
-      headers: {
-        authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
-        'content-type': 'text/plain',
-      },
-      body: rbyPaste,
-    })).status).toBe(400);
+    const rbyFile = path.join(tmpDir, 'rby.txt');
+    fs.writeFileSync(rbyFile, rbyPaste, 'utf8');
+    await expect(
+      runPkmnCli(['upload-ladder-teams', 'gen9championsvgc2026regmc', rbyFile], {
+        db,
+        now: 1_700_000_005,
+        log: () => undefined,
+      })
+    ).rejects.toThrow(/harvested/);
 
-    const badTeamPut = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
-      method: 'PUT',
-      headers: {
-        authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({teams: [RBY_HARVESTED_TEAMS[0], RBY_HARVESTED_TEAMS[0]]}),
-    });
-    expect(badTeamPut.status).toBe(400);
-    expect(((await badTeamPut.json()) as {error: string}).error).toContain('non-mirror');
+    const dupFile = path.join(tmpDir, 'dup.txt');
+    fs.writeFileSync(
+      dupFile,
+      [RBY_HARVESTED_TEAMS[0], RBY_HARVESTED_TEAMS[0]]
+        .map((t, i) => `=== [gen1ou] Dup ${i + 1} ===\n${t}`)
+        .join('\n\n'),
+      'utf8'
+    );
+    await expect(
+      runPkmnCli(['upload-ladder-teams', 'gen1ou20261109', dupFile], {
+        db,
+        now: 1_700_000_006,
+        log: () => undefined,
+      })
+    ).rejects.toThrow(/non-mirror/);
   });
 
-  test('uploads harvested pastes over HTTP with SHA-256 ETag 304 caching', async () => {
-    const putRes = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
-      method: 'PUT',
-      headers: {
-        authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
-        'content-type': 'text/plain; charset=utf-8',
-      },
-      body: rbyPaste,
+  test('serves uploaded harvested teams with SHA-256 ETag 304 caching', async () => {
+    const rbyFile = path.join(tmpDir, 'rby-upload.txt');
+    fs.writeFileSync(rbyFile, rbyPaste, 'utf8');
+    await runPkmnCli(['upload-ladder-teams', 'gen1ou20261109', rbyFile], {
+      db,
+      now: 1_700_000_010,
+      log: () => undefined,
     });
-    expect(putRes.status).toBe(200);
-    const putJson = await putRes.json() as arena.LadderTeamsUploadResponse;
-    expect(putJson.ok).toBe(true);
-    expect(putJson.count).toBe(4);
-    expect(events).toEqual(['ladder-teams']);
+    expect(db.countLadderTeams('gen1ou20261109')).toBe(4);
+    expect(events).toEqual([]);
 
     const getRes = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
-      headers: {authorization: `Bearer ${AUTH_CFG.arenaSecret}`},
+      headers: {authorization: `Bearer ${ARENA_SECRET}`},
     });
     expect(getRes.status).toBe(200);
     const etag = getRes.headers.get('etag')!;
-    expect(etag).toBe(`"${putJson.sha256}"`);
-    expect(((await getRes.json()) as arena.LadderTeamsResponse).teams).toHaveLength(4);
+    const body = await getRes.json() as arena.LadderTeamsResponse;
+    expect(etag).toBe(`"${body.sha256}"`);
+    expect(body.teams).toHaveLength(4);
 
     const cachedRes = await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
       headers: {
-        authorization: `Bearer ${AUTH_CFG.arenaSecret}`,
+        authorization: `Bearer ${ARENA_SECRET}`,
         'if-none-match': etag,
       },
     });
@@ -2299,37 +2316,6 @@ describe('createServerApp production HTTP hardening', () => {
     }
   });
 
-  test('replaces pre-mounted static middleware on an existing Polka app', async () => {
-    fs.mkdirSync(path.join(tmpDir, 'arena'), {recursive: true});
-    fs.writeFileSync(path.join(tmpDir, 'arena', 'index.html'), '', 'utf8');
-
-    const logged: string[] = [];
-    const preApp = polka();
-    preApp.use((req, _res, next) => {
-      logged.push(req.url ?? '');
-      next();
-    });
-    preApp.use(serveStatic(tmpDir) as unknown as polka.Middleware);
-
-    const handle = createServerApp({
-      app: preApp,
-      db,
-      publicDir: tmpDir,
-      enableDiscord: false,
-    });
-    const srv = await startTestServer(handle.app);
-    try {
-      const res = await fetch(`${srv.baseUrl}/arena/`);
-      expect(res.status).toBe(200);
-      const html = await res.text();
-      expect(html).toContain('Arena');
-      expect(logged).toEqual(['/arena/']);
-    } finally {
-      handle.close();
-      await srv.close();
-    }
-  });
-
   test('rejects astronomical page query parameters on /api/battles.json', async () => {
     const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
     const srv = await startTestServer(handle.app);
@@ -2391,7 +2377,7 @@ describe('createServerApp production HTTP hardening', () => {
     const app = polka();
     const ctrl = arena.register(app, {
       db,
-      arenaSecret: AUTH_CFG.arenaSecret,
+      arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
     });
     const srv = await startTestServer(app);
@@ -2400,7 +2386,7 @@ describe('createServerApp production HTTP hardening', () => {
         srv.baseUrl,
         'POST',
         '/api/arena/match-complete',
-        AUTH_CFG.arenaSecret,
+        ARENA_SECRET,
         {
           match: {
             id: 'gen3ou-000001',
@@ -2415,14 +2401,18 @@ describe('createServerApp production HTTP hardening', () => {
             game2Turns: 10,
             game1EndReason: 'win',
             game2EndReason: 'win',
-            p1PeakRam: 256,
-            p2PeakRam: 256,
+            p1Game1PeakRam: 256,
+            p1Game2PeakRam: 256,
+            p2Game1PeakRam: 256,
+            p2Game2PeakRam: 256,
             p1Game1BankSeconds: 120,
             p1Game2BankSeconds: 120,
             p2Game1BankSeconds: 120,
             p2Game2BankSeconds: 120,
-            p1MeanTurnMillis: 100,
-            p2MeanTurnMillis: 100,
+            p1Game1MeanTurnMillis: 100,
+            p1Game2MeanTurnMillis: 100,
+            p2Game1MeanTurnMillis: 100,
+            p2Game2MeanTurnMillis: 100,
             completedAt: 1_760_000_100,
           },
         }
@@ -2449,7 +2439,7 @@ describe('createServerApp production HTTP hardening', () => {
     const app = polka();
     const ctrl = arena.register(app, {
       db,
-      arenaSecret: AUTH_CFG.arenaSecret,
+      arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
     });
     const srv = await startTestServer(app);
@@ -2458,7 +2448,7 @@ describe('createServerApp production HTTP hardening', () => {
         srv.baseUrl,
         'POST',
         '/api/arena/tournaments/1/broadcast',
-        AUTH_CFG.arenaSecret,
+        ARENA_SECRET,
         {
           table: 1,
           mode: 'load',
@@ -2669,14 +2659,14 @@ describe('createServerApp production HTTP hardening', () => {
     const app = polka();
     const ctrl = arena.register(app, {
       db,
-      arenaSecret: AUTH_CFG.arenaSecret,
+      arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
     });
     const srv = await startTestServer(app);
     try {
       const client = new arena.Client({
         serverUrl: srv.baseUrl,
-        arenaSecret: AUTH_CFG.arenaSecret!,
+        arenaSecret: ARENA_SECRET,
       });
       await client.sendHeartbeat({
         heartbeatSeq: 10,

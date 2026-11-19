@@ -24,12 +24,12 @@ afterAll(async () => {
 });
 
 describe('multi-version @pkmn/sim support', () => {
-  test('config/ladders.yml specifies version 0.11.0 and db/ladders syncs + rotates it', () => {
+  test('config/ladders.yml defaults version to 0.11.0 and db/ladders syncs + rotates it', () => {
     const raw = fs.readFileSync(LADDERS_FILE, 'utf8');
     const parsed = parseLaddersYaml(raw);
     expect(parsed.length).toBeGreaterThan(0);
     for (const entry of parsed) {
-      expect(entry.version).toBe('0.11.0');
+      expect(entry.version).toBe(SIM_VERSION);
     }
 
     expect(() => parseLaddersYaml(`
@@ -38,7 +38,7 @@ describe('multi-version @pkmn/sim support', () => {
   version: ../bad
   id: gen1ou20261109
   team: harvested
-`)).toThrow(/Missing or invalid version/);
+`)).toThrow(/Invalid version/);
 
     const db = new Database(':memory:');
     try {

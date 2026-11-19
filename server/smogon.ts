@@ -87,12 +87,17 @@ function decodeHtmlEntities(str: string): string {
     .replace(/&amp;/g, '&');
 }
 
+function isSmogonUrl(u: URL): boolean {
+  return u.protocol === 'https:' &&
+    (u.hostname === 'smogon.com' || u.hostname === 'www.smogon.com');
+}
+
 // Smogon's Cloudflare/WAF layer blocks automated XenForo requests unless the authorized
 // `__scraper-token` query parameter is attached on every hop (including 301/303 redirects
 // when canonicalizing `/forums/members/<id>/` -> `/forums/members/<slug>.<id>/`).
 function withToken(rawUrl: string, token: string): URL {
   const u = new URL(rawUrl, SMOGON_BASE);
-  if (u.protocol !== 'https:' || (u.hostname !== 'smogon.com' && u.hostname !== 'www.smogon.com')) {
+  if (!isSmogonUrl(u)) {
     throw new Error(`Refusing to send Smogon token to non-Smogon URL: ${u.origin}`);
   }
   u.hash = '';
@@ -142,10 +147,7 @@ export async function lookupUser(
       throw new Error(`Smogon account "${raw}" not found`);
     }
     const locUrl = new URL(location, SMOGON_BASE);
-    if (
-      locUrl.protocol !== 'https:' ||
-      (locUrl.hostname !== 'smogon.com' && locUrl.hostname !== 'www.smogon.com')
-    ) {
+    if (!isSmogonUrl(locUrl)) {
       throw new Error(`Unexpected redirect "${location}" looking up Smogon user "${raw}"`);
     }
     const m = MEMBER_URL_RE.exec(locUrl.pathname);

@@ -22,10 +22,7 @@ declare global {
     attributes?: Record<string, unknown>,
     ...children: Child[]
   ): Html;
-  function Fragment(props?: {
-    children?: Child;
-    dangerouslySetInnerHTML?: {__html: string};
-  }): Html;
+  function Fragment(props?: {children?: Child}): Html;
 
   namespace JSX {
     type Element = Html;
@@ -43,9 +40,6 @@ export const escapeHtml = (str: string) =>
     .replace(/'/g, '&#39;');
 
 export const raw = (html: string) => new Html(html);
-
-// https://github.com/preactjs/preact/blob/1bbd687c/src/constants.js#L3
-const IS_NON_DIMENSIONAL = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
 
 // https://github.com/facebook/react/blob/3f899089/packages/react-dom/src/shared/DOMProperty.js#L288-L322
 const FALSIFIABLE_ATTRIBUTES = new Set(['contenteditable', 'draggable', 'spellcheck', 'value']);
@@ -98,10 +92,7 @@ const formatStyle = (
     const prop = name.startsWith('-')
       ? name
       : name.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`);
-    const val = typeof value === 'number' && !IS_NON_DIMENSIONAL.test(name)
-      ? `${value}px`
-      : String(value);
-    parts.push(`${prop}:${val}`);
+    parts.push(`${prop}:${String(value)}`);
   }
   return parts.join(';');
 };
@@ -131,19 +122,12 @@ export function h(
     return type(props);
   }
 
-  let inner = renderChildren(children, RAW_TEXT_ELEMENTS.has(type));
+  const inner = renderChildren(children, RAW_TEXT_ELEMENTS.has(type));
   let attrStr = '';
 
   if (attributes) {
     for (const [rawName, value] of Object.entries(attributes)) {
       if (rawName === 'key' || value === undefined) continue;
-      if (rawName === 'dangerouslySetInnerHTML') {
-        const htmlObj = value as {__html?: string} | undefined;
-        if (htmlObj?.__html !== undefined) {
-          inner = String(htmlObj.__html);
-        }
-        continue;
-      }
 
       const name = ATTR_NAMES[rawName] ?? rawName;
       if (name === 'class') {
@@ -184,13 +168,7 @@ export function h(
   return new Html(`<${type}${attrStr}>${inner}</${type}>`);
 }
 
-export function Fragment(props?: {
-  children?: Child;
-  dangerouslySetInnerHTML?: {__html: string};
-}): Html {
-  if (props?.dangerouslySetInnerHTML?.__html !== undefined) {
-    return new Html(String(props.dangerouslySetInnerHTML.__html));
-  }
+export function Fragment(props?: {children?: Child}): Html {
   return new Html(props?.children !== undefined ? renderChildren([props.children]) : '');
 }
 

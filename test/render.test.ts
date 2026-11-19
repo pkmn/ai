@@ -134,14 +134,18 @@ function playMatch(
       game2Turns: 32,
       game1EndReason: 'normal',
       game2EndReason: 'normal',
-      p1PeakRam: 1180,
-      p2PeakRam: 1420,
+      p1Game1PeakRam: 1180,
+      p1Game2PeakRam: 1180,
+      p2Game1PeakRam: 1420,
+      p2Game2PeakRam: 1420,
       p1Game1BankSeconds: 150,
       p1Game2BankSeconds: 142,
       p2Game1BankSeconds: 148,
       p2Game2BankSeconds: 136,
-      p1MeanTurnMillis: 390,
-      p2MeanTurnMillis: 480,
+      p1Game1MeanTurnMillis: 390,
+      p1Game2MeanTurnMillis: 390,
+      p2Game1MeanTurnMillis: 480,
+      p2Game2MeanTurnMillis: 480,
       completedAt,
     },
   });
@@ -183,7 +187,6 @@ interface RenderHarnessOptions {
   avatarsDir?: string;
   liveDoc?: arena.LiveDocument;
   tournamentBroadcast?: tournaments.LiveBroadcast;
-  recentMatchesLimit?: number;
   now?: number | (() => number);
 }
 
@@ -204,7 +207,6 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     arenaSecret: ARENA_SECRET,
     sessionSecret: 'test-session-secret',
     publicDir: opts.publicDir,
-    recentMatchesLimit: opts.recentMatchesLimit,
     now: getNow,
     onUpdate: reason => {
       if (reason === 'tournament-status') {
@@ -229,7 +231,6 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     publicDir: opts.publicDir,
     staticDir: opts.staticDir,
     avatarsDir: opts.avatarsDir,
-    recentMatchesLimit: opts.recentMatchesLimit,
     now: getNow,
   });
 
@@ -288,10 +289,10 @@ describe('dom TSX renderer', () => {
     );
   });
 
-  test('serializes inline style objects with dimensional px suffixes', () => {
+  test('serializes inline style objects with kebab-case and CSS custom properties', () => {
     const out = String(
       jsx('div', {
-        style: {width: 320, opacity: 0.5, backgroundColor: 'red', '--accent': '#fff'},
+        style: {width: '320px', opacity: 0.5, backgroundColor: 'red', '--accent': '#fff'},
       })
     );
     expect(out).toBe(
@@ -498,12 +499,10 @@ describe('populated Arena leaderboard views', () => {
     );
     db.refundCooldown('jaxcalibur', DAY_2);
     const jaxV2 = createVersionAndPassSmoke(db, 'jaxcalibur', '1.1.0', ['gen1ou20261109'], DAY_2);
-    db.applySubmissionStatus({
-      versionId: jaxV2,
-      smokeStatus: 'passed',
-      retiredVersionIdsByLadder: {gen1ou20261109: jaxV1},
-      now: DAY_2 + 20,
-    });
+    db.db.prepare(
+      "UPDATE ladder_entries SET role = 'retired', retired_at = ? " +
+      'WHERE ladder_id = ? AND version_id = ?'
+    ).run(DAY_2 + 20, 'gen1ou20261109', jaxV1);
 
     for (let i = 0; i < 28; i++) {
       const g2: ratings.GameOutcome = i % 6 === 0 ? 'L' : 'W';
@@ -572,7 +571,6 @@ describe('populated Arena leaderboard views', () => {
       publicDir: tmpPublic,
       avatarsDir,
       liveDoc,
-      recentMatchesLimit: 25,
       now: NOW,
     });
   });
@@ -1348,14 +1346,18 @@ describe('SSR cache invalidation', () => {
               game2Turns: 30,
               game1EndReason: 'normal',
               game2EndReason: 'normal',
-              p1PeakRam: 900,
-              p2PeakRam: 1100,
+              p1Game1PeakRam: 900,
+              p1Game2PeakRam: 900,
+              p2Game1PeakRam: 1100,
+              p2Game2PeakRam: 1100,
               p1Game1BankSeconds: 150,
               p1Game2BankSeconds: 150,
               p2Game1BankSeconds: 140,
               p2Game2BankSeconds: 135,
-              p1MeanTurnMillis: 300,
-              p2MeanTurnMillis: 420,
+              p1Game1MeanTurnMillis: 300,
+              p1Game2MeanTurnMillis: 300,
+              p2Game1MeanTurnMillis: 420,
+              p2Game2MeanTurnMillis: 420,
               completedAt: NOW,
             },
           }),
@@ -1680,20 +1682,16 @@ describe('SSR cache invalidation', () => {
         game2Turns: 14,
         game1EndReason: 'normal',
         game2EndReason: 'timeout',
-        p1PeakRam: 1240,
         p1Game1PeakRam: 1180,
         p1Game2PeakRam: 1240,
-        p2PeakRam: 2150,
         p2Game1PeakRam: 2050,
         p2Game2PeakRam: 2150,
         p1Game1BankSeconds: 132,
         p1Game2BankSeconds: 118,
         p2Game1BankSeconds: 104,
         p2Game2BankSeconds: 0,
-        p1MeanTurnMillis: 310,
         p1Game1MeanTurnMillis: 295,
         p1Game2MeanTurnMillis: 325,
-        p2MeanTurnMillis: 640,
         p2Game1MeanTurnMillis: 590,
         p2Game2MeanTurnMillis: 690,
         completedAt: NOW - 60,
@@ -1883,14 +1881,18 @@ describe('JSON route parity & retired pool archives', () => {
         game2Turns: 14,
         game1EndReason: 'normal',
         game2EndReason: 'normal',
-        p1PeakRam: 900,
-        p2PeakRam: 950,
+        p1Game1PeakRam: 900,
+        p1Game2PeakRam: 900,
+        p2Game1PeakRam: 950,
+        p2Game2PeakRam: 950,
         p1Game1BankSeconds: 150,
         p1Game2BankSeconds: 148,
         p2Game1BankSeconds: 144,
         p2Game2BankSeconds: 140,
-        p1MeanTurnMillis: 300,
-        p2MeanTurnMillis: 340,
+        p1Game1MeanTurnMillis: 300,
+        p1Game2MeanTurnMillis: 300,
+        p2Game1MeanTurnMillis: 340,
+        p2Game2MeanTurnMillis: 340,
         p1TeamLabel: formatPoolTeamLabel(packAll(VGC_PASTES_FP)[0], 'P1'),
         p2TeamLabel: formatPoolTeamLabel(packAll(VGC_PASTES_JAX)[0], undefined),
         completedAt: DAY_2,
@@ -2779,7 +2781,7 @@ describe('JSON route parity & retired pool archives', () => {
       gameTies: 0,
       finalRank: 2,
     });
-    db.recordCompletedTournamentMatch({
+    db.recordCompletedTournamentGame({
       id: 't1-rr-01',
       tournamentId: '1',
       stage: 'Round Robin',

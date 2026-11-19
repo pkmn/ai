@@ -1,5 +1,3 @@
-import * as fs from 'fs';
-
 import * as arena from '../server/arena';
 import {root} from '../static/util';
 
@@ -12,37 +10,60 @@ import * as unpack from './unpack';
 
 export {arbiter, coordinator, db, packages, tournament, unpack};
 
-const BASELINE_BIN = fs.existsSync('/opt/arena/bin/baseline')
-  ? '/opt/arena/bin/baseline'
-  : root('arena', 'bin', 'baseline');
+const BASELINE_BIN = root('arena', 'bin', 'baseline');
 
-export async function fetchPlayableLadderSnapshots(
-  client: arena.Client
-): Promise<coordinator.LadderSnapshot[]> {
-  const {ladders} = await client.getPlayableLadders();
-  return ladders;
+function createArenaClient(opts: {serverUrl?: string; arenaSecret?: string}): arena.Client {
+  const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
+  const arenaSecret = opts.arenaSecret ?? process.env.ARENA_SECRET ?? '';
+  if (!arenaSecret) {
+    throw new Error('ARENA_SECRET is required to run the Arena daemon');
+  }
+  return new arena.Client({serverUrl, arenaSecret});
+}
+
+function createWakeableSleep() {
+  let wake: (() => void) | undefined;
+  return {
+    sleep(millis: number) {
+      return new Promise<void>(resolve => {
+        const timer = setTimeout(() => {
+          wake = undefined;
+          resolve();
+        }, millis);
+        wake = () => {
+          clearTimeout(timer);
+          wake = undefined;
+          resolve();
+        };
+      });
+    },
+    wake() {
+      wake?.();
+    },
+  };
+}
+
+function createTournamentBaselineSpec(): tournament.AgentSpec {
+  return {
+    agentId: '_baseline',
+    displayName: 'Baseline',
+    vmHost: '127.0.0.1',
+    controlSocket: '',
+    localCommand: BASELINE_BIN,
+    localArgs: [],
+  };
 }
 
 export async function runDaemon(opts: {
   serverUrl?: string;
   arenaSecret?: string;
   stateDbPath?: string;
-  agentsDir?: string;
-  stagingDir?: string;
-  coldDir?: string;
-  teamsDir?: string;
-  archiveLogsDir?: string;
+  rootDir?: string;
   maxTurns?: number;
   pollIntervalMillis?: number;
   once?: boolean;
 } = {}) {
-  const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
-  const arenaSecret = opts.arenaSecret ?? process.env.ARENA_SECRET ?? '';
-  if (!arenaSecret) {
-    throw new Error('ARENA_SECRET is required to run the Arena coordinator daemon');
-  }
-
-  const client = new arena.Client({serverUrl, arenaSecret});
+  const client = createArenaClient(opts);
   const stateDb = new db.Database(opts.stateDbPath);
   const isDev = process.env.ARENA_DEV === '1';
   if (isDev && process.env.NODE_ENV === 'production') {
@@ -53,7 +74,7 @@ export async function runDaemon(opts: {
     ? {mode: 'native', target: BASELINE_BIN}
     : {mode: 'native', target: '_baseline'};
 
-  if (!isDev && !opts.once && opts.coldDir === undefined && opts.archiveLogsDir === undefined) {
+  if (!isDev && !opts.once && opts.rootDir === undefined) {
     packages.tryMountArchiveVolume();
   }
 
@@ -61,34 +82,16 @@ export async function runDaemon(opts: {
     client,
     stateDb,
     baselineSpec,
-    agentsDir: opts.agentsDir,
-    stagingDir: opts.stagingDir,
-    coldDir: opts.coldDir,
-    teamsDir: opts.teamsDir,
-    archiveLogsDir: opts.archiveLogsDir,
+    rootDir: opts.rootDir,
     maxTurns: opts.maxTurns,
     devMode: isDev,
   });
 
   const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
-  const status = {running: true};
-  let wakeSleep: (() => void) | undefined;
-  const sleep = (millis: number) =>
-    new Promise<void>(resolve => {
-      const timer = setTimeout(() => {
-        wakeSleep = undefined;
-        resolve();
-      }, millis);
-      wakeSleep = () => {
-        clearTimeout(timer);
-        wakeSleep = undefined;
-        resolve();
-      };
-    });
+  const sleeper = createWakeableSleep();
   const stop = () => {
-    status.running = false;
     coord.requestDrain();
-    wakeSleep?.();
+    sleeper.wake();
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
@@ -97,7 +100,7 @@ export async function runDaemon(opts: {
   try {
     await coord.recoverIncompleteMatches();
 
-    while (status.running && !coord.isDraining()) {
+    while (!coord.isDraining()) {
       try {
         await coord.flushOutbox();
         const initialSnap = await client.getPlayableLadders();
@@ -107,19 +110,19 @@ export async function runDaemon(opts: {
         }
         const byId = new Map(ladders.map(l => [l.id, l]));
         const ingested = await coord.processPendingSubmissions(byId);
-        if (ingested > 0 && status.running && !coord.isDraining()) {
-          ladders = await fetchPlayableLadderSnapshots(client);
+        if (ingested > 0 && !coord.isDraining()) {
+          ladders = (await client.getPlayableLadders()).ladders;
         }
         const played = await coord.playNextScheduledMatch(ladders);
-        if (!played && !opts.once && status.running && !coord.isDraining()) {
+        if (!played && !opts.once && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);
-          await sleep(pollIntervalMillis);
+          await sleeper.sleep(pollIntervalMillis);
         }
       } catch (err) {
         console.error('Arena daemon cycle error:', err);
         if (opts.once) throw err;
-        if (status.running && !coord.isDraining()) {
-          await sleep(pollIntervalMillis);
+        if (!coord.isDraining()) {
+          await sleeper.sleep(pollIntervalMillis);
         }
       }
       if (opts.once) break;
@@ -137,69 +140,40 @@ export async function runTournamentValidationDaemon(opts: {
   serverUrl?: string;
   arenaSecret?: string;
   tournamentId?: string;
-  agentsDir?: string;
-  stagingDir?: string;
-  tourneyAgentBin?: string;
+  rootDir?: string;
   pollIntervalMillis?: number;
   once?: boolean;
 } = {}) {
-  const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
-  const arenaSecret = opts.arenaSecret ?? process.env.ARENA_SECRET ?? '';
-  if (!arenaSecret) {
-    throw new Error('ARENA_SECRET is required to run the GCP tournament validation daemon');
-  }
-
-  const client = new arena.Client({serverUrl, arenaSecret});
-  const baselineSpec: tournament.AgentSpec = {
-    agentId: '_baseline',
-    displayName: 'Baseline',
-    vmHost: '127.0.0.1',
-    controlSocket: '',
-    localCommand: BASELINE_BIN,
-    localArgs: [],
-  };
+  const client = createArenaClient(opts);
   const coord = new tournament.Coordinator({
     client,
-    baselineSpec,
-    agentsDir: opts.agentsDir,
-    stagingDir: opts.stagingDir,
-    tourneyAgentBin: opts.tourneyAgentBin,
+    baselineSpec: createTournamentBaselineSpec(),
+    rootDir: opts.rootDir,
   });
 
   const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
-  const status = {running: true};
-  let wakeSleep: (() => void) | undefined;
-  const sleep = (millis: number) =>
-    new Promise<void>(resolve => {
-      const timer = setTimeout(() => {
-        wakeSleep = undefined;
-        resolve();
-      }, millis);
-      wakeSleep = () => {
-        clearTimeout(timer);
-        wakeSleep = undefined;
-        resolve();
-      };
-    });
+  let running = true;
+  const isRunning = () => running;
+  const sleeper = createWakeableSleep();
   const stop = () => {
-    status.running = false;
-    wakeSleep?.();
+    running = false;
+    sleeper.wake();
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 
   try {
-    while (status.running) {
+    while (isRunning()) {
       try {
         const count = await coord.processPendingSubmissions(opts.tournamentId);
-        if (count === 0 && !opts.once && status.running) {
-          await sleep(pollIntervalMillis);
+        if (count === 0 && !opts.once && isRunning()) {
+          await sleeper.sleep(pollIntervalMillis);
         }
       } catch (err) {
         console.error('GCP tournament validation cycle error:', err);
         if (opts.once) throw err;
-        if (status.running) {
-          await sleep(pollIntervalMillis);
+        if (isRunning()) {
+          await sleeper.sleep(pollIntervalMillis);
         }
       }
       if (opts.once) break;
@@ -215,39 +189,20 @@ export async function runTournamentDaemon(
   opts: {
     serverUrl?: string;
     arenaSecret?: string;
-    agentsDir?: string;
-    stagingDir?: string;
-    tourneyAgentBin?: string;
+    rootDir?: string;
     tables?: readonly tournament.TableBinding[];
     superfinalGames?: number;
     maxTurns?: number;
   } = {}
 ): Promise<{roundRobinGames: number; superfinalGames: number}> {
-  const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
-  const arenaSecret = opts.arenaSecret ?? process.env.ARENA_SECRET ?? '';
-  if (!arenaSecret) {
-    throw new Error('ARENA_SECRET is required to run the GCP tournament coordinator');
-  }
-
-  const client = new arena.Client({serverUrl, arenaSecret});
-  const baselineSpec: tournament.AgentSpec = {
-    agentId: '_baseline',
-    displayName: 'Baseline',
-    vmHost: '127.0.0.1',
-    controlSocket: '',
-    localCommand: BASELINE_BIN,
-    localArgs: [],
-  };
+  const client = createArenaClient(opts);
   const coord = new tournament.Coordinator({
     client,
-    baselineSpec,
-    agentsDir: opts.agentsDir,
-    stagingDir: opts.stagingDir,
-    tourneyAgentBin: opts.tourneyAgentBin,
+    baselineSpec: createTournamentBaselineSpec(),
+    rootDir: opts.rootDir,
     tables: opts.tables,
     superfinalGames: opts.superfinalGames,
     maxTurns: opts.maxTurns,
-    seedSecret: arenaSecret,
   });
   return coord.runTournament(tournamentId);
 }

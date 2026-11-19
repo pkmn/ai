@@ -6,11 +6,10 @@ import * as path from 'path';
 
 import polka from 'polka';
 import serveStatic from 'serve-static';
-import {serve} from 'site';
 
 import {Database} from '../db';
 import {renderErrorPage, syncStaticLiveBanner} from '../static/build';
-import {ROOT, installHeadSupport, isConnectivityError, root} from '../static/util';
+import {installHeadSupport, isConnectivityError, root} from '../static/util';
 
 import * as account from './account';
 import * as arena from './arena';
@@ -19,16 +18,15 @@ import * as discord from './discord';
 import * as render from './render';
 import * as wiki from './wiki';
 
+// Hardcoded loopback bind behind `config/nginx.conf` (no `PORT`/`HOST`/`PUBLIC_URL` env overrides).
+const PORT = 1234;
+const HOST = '127.0.0.1';
+
 export interface ServerAppOptions {
   db: Database;
-  app?: polka.Polka;
   publicDir?: string;
-  avatarsDir?: string;
-  isMock?: boolean;
-  mockStateFile?: string;
   enableDiscord?: boolean;
   armWatchdogOnStart?: boolean;
-  watchdogTimeoutMillis?: number;
 }
 
 export interface ServerAppHandle {
@@ -130,7 +128,7 @@ export function installSafeErrorHandlers(app: polka.Polka, db?: Database): void 
       (pattern: string, ...fns: RouteFn[]) => unknown
     >;
     if (typeof rec[verb] === 'function') {
-      const upper = verb === 'all' ? '' : verb.toUpperCase();
+      const upper = verb === 'all' ? '*' : verb.toUpperCase();
       rec[verb] = (pattern: string, ...fns: RouteFn[]) => router.add(upper, pattern, ...fns);
     }
   }
@@ -151,20 +149,20 @@ export function installSafeErrorHandlers(app: polka.Polka, db?: Database): void 
   };
 }
 
+function syncBannerFor(db: Database, publicDir: string) {
+  try {
+    syncStaticLiveBanner(publicDir, db.getRunningTournament());
+  } catch (err) {
+    console.error('Failed syncing static live tournament banner:', err);
+  }
+}
+
 export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   const {db} = options;
   const publicDir = options.publicDir ?? render.PUBLIC_DIR;
-  const isMock = options.isMock ?? (process.env.MOCK === '1');
-  const app = options.app ?? polka();
+  const isMock = process.env.MOCK === '1';
+  const app = polka();
   installSafeErrorHandlers(app, db);
-
-  const syncBanner = () => {
-    try {
-      syncStaticLiveBanner(publicDir, db.getRunningTournament());
-    } catch (err) {
-      console.error('Failed syncing static live tournament banner:', err);
-    }
-  };
 
   // `static/build.tsx` writes 0-byte `index.html` stubs for `/account`, `/arena`, and `/projects`
   // so `@untitaker/hyperlink` (`hyperlink public --check-anchors`) validates internal `.dj` links.
@@ -217,12 +215,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     }
     staticWare(req, res, next);
   };
-  const wares = (app as unknown as {wares?: Middleware[]}).wares;
-  if (options.app && wares?.[1]) {
-    wares[1] = gatedStaticWare;
-  } else {
-    app.use(gatedStaticWare);
-  }
+  app.use(gatedStaticWare);
 
   installHeadSupport(app);
   const wikiInstance = new wiki.Wiki({
@@ -241,7 +234,6 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     db,
     auth: wikiInstance.auth,
     publicDir,
-    watchdogTimeoutMillis: options.watchdogTimeoutMillis,
     armWatchdogOnStart: options.armWatchdogOnStart,
     onSubmissionStatus: discordHandle
       ? async result => {
@@ -254,12 +246,12 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       }
       : undefined,
     onUpdate: reason => {
-      if (reason === 'tournament-status') syncBanner();
+      if (reason === 'tournament-status') syncBannerFor(db, publicDir);
     },
   });
 
   if (isMock) {
-    const mockStateFile = options.mockStateFile ?? root('.mock', 'state.json');
+    const mockStateFile = root('.mock', 'state.json');
     if (fs.existsSync(mockStateFile)) {
       try {
         const raw = JSON.parse(fs.readFileSync(mockStateFile, 'utf8')) as {
@@ -286,9 +278,8 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     db,
     arena: arenaHandle,
     publicDir,
-    avatarsDir: options.avatarsDir ?? (isMock ? root('.mock', 'static', 'avatars') : undefined),
   });
-  wiki.register(app, {wiki: wikiInstance, db});
+  wiki.register(app, wikiInstance);
 
   return {
     app,
@@ -313,13 +304,6 @@ if (require.main === module) {
   // Smogon XenForo standings asynchronously in the background when `SMOGON_TOKEN` is configured.
   const db = new Database();
   db.syncLadders();
-  const syncBanner = () => {
-    try {
-      syncStaticLiveBanner(render.PUBLIC_DIR, db.getRunningTournament());
-    } catch (err) {
-      console.error('Failed syncing static live tournament banner:', err);
-    }
-  };
   try {
     db.syncProjects();
   } catch (err) {
@@ -327,12 +311,12 @@ if (require.main === module) {
       console.error('Offline project sync failed:', err);
     }
   }
-  syncBanner();
+  syncBannerFor(db, render.PUBLIC_DIR);
 
   if (!isMock && process.env.SMOGON_TOKEN) {
     db.syncProjectsWithSmogon()
       .then(() => {
-        syncBanner();
+        syncBannerFor(db, render.PUBLIC_DIR);
       })
       .catch(err => {
         if (isConnectivityError(err)) {
@@ -344,41 +328,19 @@ if (require.main === module) {
   }
 
   const hasPriorMatches = !isMock && db.getRecentMatches(1).length > 0;
-  const port = Number(process.env.PORT) || 1234;
-  if (process.env.NODE_ENV === 'development') {
-    const dirs = {
-      root: ROOT,
-      out: root('build', 'static'),
-      static: root('static'),
-      extra: root('private'),
-    };
-    serve(port, dirs, app => {
-      syncBanner();
-      createServerApp({
-        app,
-        db,
-        isMock,
-        armWatchdogOnStart: hasPriorMatches,
-      });
-    });
-  } else {
-    if (!fs.existsSync(path.join(render.PUBLIC_DIR, 'index.html'))) {
-      console.warn(
-        'Warning: public/index.html not found — run "npm run build" to generate static pages.'
-      );
-    }
-    const {app} = createServerApp({
-      db,
-      isMock,
-      armWatchdogOnStart: hasPriorMatches,
-    });
-    const host = process.env.HOST ?? '127.0.0.1';
-    const server = http.createServer((req, res) => {
-      (app.handler as http.RequestListener)(req, res);
-    });
-    server.listen(port, host, () => {
-      const displayHost = host === '127.0.0.1' ? 'localhost' : host;
-      console.log(`Listening on http://${displayHost}:${port}`);
-    });
+  if (!fs.existsSync(path.join(render.PUBLIC_DIR, 'index.html'))) {
+    console.warn(
+      'Warning: public/index.html not found — run "npm run build" to generate static pages.'
+    );
   }
+  const {app} = createServerApp({
+    db,
+    armWatchdogOnStart: hasPriorMatches,
+  });
+  const server = http.createServer((req, res) => {
+    (app.handler as http.RequestListener)(req, res);
+  });
+  server.listen(PORT, HOST, () => {
+    console.log(`Listening on http://localhost:${PORT}`);
+  });
 }

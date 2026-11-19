@@ -1,11 +1,12 @@
 // /opt/arena/bin/limit.c
 // Compile on macOS: clang -O2 -Wall -Wextra -o /opt/arena/bin/limit arena/bin/limit.c
 //
-// Runs as `root` via sudoers on the Mac mini so `proc_pid_rusage(RUSAGE_INFO_V4)` can measure and
-// enforce the 14 GiB XNU `ri_phys_footprint` cap across every process owned by `p1`/`p2`, while
-// the forked child clears `PRIO_DARWIN_BG`, drops privileges directly to `p1`/`p2` via
-// `initgroups` + `setgid` + `setuid`, scrubs `environ`, and `execvp`s `sandbox-exec` without an
-// intermediate `sudo` or `env` wrapper.
+// Runs strictly as `root` via sudoers on the Mac mini (intentionally fail-closed exit 126 with no
+// unprivileged dev/test mode) so `proc_pid_rusage(RUSAGE_INFO_V4)` can measure and enforce the
+// 14 GiB XNU `ri_phys_footprint` cap across every process owned by `p1`/`p2`, while the forked
+// child clears `PRIO_DARWIN_BG`, drops privileges directly to `p1`/`p2` via `initgroups` +
+// `setgid` + `setuid`, scrubs `environ`, and `execvp`s `sandbox-exec` without an intermediate
+// `sudo` or `env` wrapper.
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -39,8 +40,8 @@ static void forward_signal(int sig) {
   }
 }
 
-static uint64_t sum_kinfo_footprint(int mib_kind, int mib_arg) {
-  int mib[4] = {CTL_KERN, KERN_PROC, mib_kind, mib_arg};
+static uint64_t sum_uid_footprint(uid_t target_uid) {
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)target_uid};
   size_t buf_size = 0;
   if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) < 0 || buf_size == 0) {
     return 0;
@@ -82,27 +83,10 @@ static uint64_t sum_kinfo_footprint(int mib_kind, int mib_arg) {
   return total_bytes;
 }
 
-// Sum XNU physical footprint across every process belonging to target_uid (or child_pg process
-// group when running unprivileged in local tests).
-static uint64_t total_target_footprint(uid_t target_uid, pid_t child_pg, int isolated_uid) {
-  if (!isolated_uid) {
-    if (child_pg <= 0) return 0;
-    uint64_t pgrp_bytes = sum_kinfo_footprint(KERN_PROC_PGRP, (int)child_pg);
-    if (pgrp_bytes > 0) return pgrp_bytes;
-    struct rusage_info_v4 ru;
-    if (proc_pid_rusage(child_pg, RUSAGE_INFO_V4, (rusage_info_t *)&ru) == 0) {
-      return ru.ri_phys_footprint;
-    }
-    return 0;
-  }
-  return sum_kinfo_footprint(KERN_PROC_UID, (int)target_uid);
-}
-
-static void kill_all_target_procs(uid_t target_uid, pid_t child_pg, int isolated_uid) {
+static void kill_all_target_procs(uid_t target_uid, pid_t child_pg) {
   if (child_pg > 0) {
     kill(-child_pg, SIGKILL);
   }
-  if (!isolated_uid) return;
 
   pid_t self_pid = getpid();
   for (int pass = 0; pass < 6; pass++) {
@@ -143,7 +127,16 @@ static void kill_all_target_procs(uid_t target_uid, pid_t child_pg, int isolated
   }
 }
 
-static void write_peak_fd(int fd, uint64_t peak_bytes) {
+static void write_peak_ram(const char *slot, uint64_t peak_bytes) {
+  // Write authoritative telemetry exclusively to `/opt/arena/state/peak_ram_%s` via `O_DIRECTORY |
+  // O_NOFOLLOW` + `openat(..., O_NOFOLLOW)` so symlink swaps on `/opt/arena/state` fail closed.
+  int dir_fd = open("/opt/arena/state", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  if (dir_fd < 0) return;
+  char file_name[32];
+  snprintf(file_name, sizeof(file_name), "peak_ram_%s", slot);
+  (void)unlinkat(dir_fd, file_name, 0);
+  int fd = openat(dir_fd, file_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+  close(dir_fd);
   if (fd < 0) return;
   char buf[32];
   unsigned long long mib = (unsigned long long)((peak_bytes + (1024ULL * 1024ULL - 1ULL)) /
@@ -155,84 +148,35 @@ static void write_peak_fd(int fd, uint64_t peak_bytes) {
   close(fd);
 }
 
-static void write_peak_file_unprivileged(const char *path, uint64_t peak_bytes) {
-  unlink(path);
-  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
-  write_peak_fd(fd, peak_bytes);
-}
-
-static void write_peak_ram_safe(
-  const char *slot,
-  const char *override_path,
-  uint64_t peak_bytes
-) {
-  if (override_path && override_path[0] != '\0') {
-    write_peak_file_unprivileged(override_path, peak_bytes);
-    return;
-  }
-  if (!slot || (strcmp(slot, "p1") != 0 && strcmp(slot, "p2") != 0)) return;
-  // Write authoritative telemetry exclusively to `/opt/arena/state/peak_ram_%s` via `O_DIRECTORY |
-  // O_NOFOLLOW` + `openat(..., O_NOFOLLOW)` so symlink swaps on `/opt/arena/state` fail closed.
-  int dir_fd = open("/opt/arena/state", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-  if (dir_fd < 0) return;
-  char file_name[32];
-  snprintf(file_name, sizeof(file_name), "peak_ram_%s", slot);
-  (void)unlinkat(dir_fd, file_name, 0);
-  int fd = openat(dir_fd, file_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
-  close(dir_fd);
-  write_peak_fd(fd, peak_bytes);
-}
-
 int main(int argc, char **argv) {
-  int is_privileged = (geteuid() == 0 || geteuid() != getuid());
-  const char *override_peak_raw = is_privileged ? NULL : getenv("ARENA_PEAK_RAM_FILE");
-  char *override_peak_path = override_peak_raw ? strdup(override_peak_raw) : NULL;
-
-  const char *slot = is_privileged ? NULL : getenv("ARENA_SLOT");
-  int cmd_idx = 1;
-  if (argc >= 3 && (strcmp(argv[1], "p1") == 0 || strcmp(argv[1], "p2") == 0)) {
-    slot = argv[1];
-    cmd_idx = 2;
-  }
-  if (argc <= cmd_idx) {
-    fprintf(stderr, "Usage: %s [p1|p2] <program> [args...]\n", argv[0]);
-    free(override_peak_path);
-    return 2;
-  }
-
-  int valid_slot = slot && (strcmp(slot, "p1") == 0 || strcmp(slot, "p2") == 0);
-  if (slot && !valid_slot) {
-    fprintf(stderr, "Invalid slot: %s\n", slot);
-    free(override_peak_path);
-    return 2;
-  }
-  struct passwd *target_pw = valid_slot ? getpwnam(slot) : NULL;
-
-  // Fail closed before `fork()` whenever a slot is requested or `limit` runs as root: never exec
-  // an agent without resolving an unprivileged role UID (`>= 500`) and enforcing `sandbox.sb`.
-  if (valid_slot && target_pw == NULL) {
-    fprintf(stderr, "Failed to resolve slot user: %s\n", slot);
-    free(override_peak_path);
+  // Fail closed before `fork()`: require root, dedicated slot `p1`/`p2` (UID >= 500), and
+  // `/usr/bin/sandbox-exec -f /opt/arena/etc/sandbox.sb`.
+  if (geteuid() != 0) {
+    fprintf(stderr, "limit must run as root via sudoers\n");
     return 126;
   }
-  if (is_privileged) {
-    if (!valid_slot || target_pw == NULL || target_pw->pw_uid < 500) {
-      fprintf(stderr, "Privileged limit invocation requires unprivileged slot p1 or p2\n");
-      free(override_peak_path);
-      return 126;
-    }
-    if (argc < cmd_idx + 4 ||
-        strcmp(argv[cmd_idx], "/usr/bin/sandbox-exec") != 0 ||
-        strcmp(argv[cmd_idx + 1], "-f") != 0 ||
-        strcmp(argv[cmd_idx + 2], "/opt/arena/etc/sandbox.sb") != 0) {
-      fprintf(stderr, "Privileged limit invocation must execute /opt/arena/etc/sandbox.sb\n");
-      free(override_peak_path);
-      return 126;
-    }
+  if (argc < 6 || (strcmp(argv[1], "p1") != 0 && strcmp(argv[1], "p2") != 0)) {
+    fprintf(
+      stderr,
+      "Usage: %s <p1|p2> /usr/bin/sandbox-exec -f /opt/arena/etc/sandbox.sb <args...>\n",
+      argv[0]
+    );
+    return 126;
+  }
+  const char *slot = argv[1];
+  struct passwd *target_pw = getpwnam(slot);
+  if (target_pw == NULL || target_pw->pw_uid < 500) {
+    fprintf(stderr, "Failed to resolve unprivileged slot user: %s\n", slot);
+    return 126;
+  }
+  if (strcmp(argv[2], "/usr/bin/sandbox-exec") != 0 ||
+      strcmp(argv[3], "-f") != 0 ||
+      strcmp(argv[4], "/opt/arena/etc/sandbox.sb") != 0) {
+    fprintf(stderr, "limit must execute /usr/bin/sandbox-exec -f /opt/arena/etc/sandbox.sb\n");
+    return 126;
   }
 
-  uid_t target_uid = target_pw ? target_pw->pw_uid : getuid();
-  int isolated_uid = valid_slot && target_pw != NULL && target_uid != getuid();
+  uid_t target_uid = target_pw->pw_uid;
 
   // Clear LaunchDaemon background QoS (`PRIO_DARWIN_BG` / `IOPOL_THROTTLE`) so agents get full
   // M-series P-core scheduling rather than E-core background throttling.
@@ -246,7 +190,6 @@ int main(int argc, char **argv) {
   pid_t pid = fork();
   if (pid < 0) {
     perror("fork");
-    free(override_peak_path);
     return 1;
   }
 
@@ -255,67 +198,46 @@ int main(int argc, char **argv) {
     (void)setpriority(PRIO_DARWIN_PROCESS, 0, 0);
     (void)setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_DEFAULT);
 
-    if (valid_slot) {
-      char scratch[64];
-      snprintf(scratch, sizeof(scratch), "/Volumes/%c%c/scratch", slot[0] - 32, slot[1]);
+    char scratch[64];
+    snprintf(scratch, sizeof(scratch), "/Volumes/%c%c/scratch", slot[0] - 32, slot[1]);
 
-      if (target_uid != getuid()) {
-        if (geteuid() != 0) {
-          fprintf(stderr, "limit must run as root to drop privileges to %s\n", slot);
-          _exit(126);
-        }
-        if (initgroups(target_pw->pw_name, target_pw->pw_gid) != 0 ||
-            setgid(target_pw->pw_gid) != 0 ||
-            setuid(target_pw->pw_uid) != 0 ||
-            getuid() != target_pw->pw_uid ||
-            geteuid() != target_pw->pw_uid ||
-            setuid(0) == 0) {
-          perror("privilege drop failed");
-          _exit(126);
-        }
-      }
-
-      // Apply RLIMIT_NPROC only after dropping to dedicated UID p1/p2 (never on root or a shared
-      // developer UID in local dev/test mode).
-      struct rlimit rl_nproc = {MAX_PROCS, MAX_PROCS};
-      struct rlimit rl_nofile = {MAX_NOFILE, MAX_NOFILE};
-      struct rlimit rl_core = {0, 0};
-      if ((isolated_uid && setrlimit(RLIMIT_NPROC, &rl_nproc) != 0) ||
-          setrlimit(RLIMIT_NOFILE, &rl_nofile) != 0 ||
-          setrlimit(RLIMIT_CORE, &rl_core) != 0 ||
-          chdir(scratch) != 0) {
-        perror("sandbox resource/workdir setup failed");
-        _exit(126);
-      }
-
-      static char *empty_env[] = {NULL};
-      environ = empty_env;
-      setenv("HOME", scratch, 1);
-      setenv("TMPDIR", scratch, 1);
-      setenv("XDG_CACHE_HOME", scratch, 1);
-      setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1);
-      setenv("PATH", "/opt/homebrew/bin:/usr/bin:/bin", 1);
-      setenv("LANG", "C.UTF-8", 1);
-      setenv("PYTHONHASHSEED", "0", 1);
-      setenv("OMP_NUM_THREADS", "10", 1);
-      setenv("MKL_NUM_THREADS", "10", 1);
-      setenv("TORCH_NUM_THREADS", "10", 1);
-      setenv("RAYON_NUM_THREADS", "10", 1);
-      setenv("ARENA_MEMORY_LIMIT_MB", "14336", 1);
-    } else {
-      struct rlimit rl_nofile = {MAX_NOFILE, MAX_NOFILE};
-      struct rlimit rl_core = {0, 0};
-      (void)setrlimit(RLIMIT_NOFILE, &rl_nofile);
-      (void)setrlimit(RLIMIT_CORE, &rl_core);
-      setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1);
-      setenv("OMP_NUM_THREADS", "10", 1);
-      setenv("MKL_NUM_THREADS", "10", 1);
-      setenv("TORCH_NUM_THREADS", "10", 1);
-      setenv("RAYON_NUM_THREADS", "10", 1);
-      setenv("ARENA_MEMORY_LIMIT_MB", "14336", 1);
+    if (initgroups(target_pw->pw_name, target_pw->pw_gid) != 0 ||
+        setgid(target_pw->pw_gid) != 0 ||
+        setuid(target_pw->pw_uid) != 0 ||
+        getuid() != target_pw->pw_uid ||
+        geteuid() != target_pw->pw_uid ||
+        setuid(0) == 0) {
+      perror("privilege drop failed");
+      _exit(126);
     }
 
-    execvp(argv[cmd_idx], &argv[cmd_idx]);
+    struct rlimit rl_nproc = {MAX_PROCS, MAX_PROCS};
+    struct rlimit rl_nofile = {MAX_NOFILE, MAX_NOFILE};
+    struct rlimit rl_core = {0, 0};
+    if (setrlimit(RLIMIT_NPROC, &rl_nproc) != 0 ||
+        setrlimit(RLIMIT_NOFILE, &rl_nofile) != 0 ||
+        setrlimit(RLIMIT_CORE, &rl_core) != 0 ||
+        chdir(scratch) != 0) {
+      perror("sandbox resource/workdir setup failed");
+      _exit(126);
+    }
+
+    static char *empty_env[] = {NULL};
+    environ = empty_env;
+    setenv("HOME", scratch, 1);
+    setenv("TMPDIR", scratch, 1);
+    setenv("XDG_CACHE_HOME", scratch, 1);
+    setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1);
+    setenv("PATH", "/opt/homebrew/bin:/usr/bin:/bin", 1);
+    setenv("LANG", "C.UTF-8", 1);
+    setenv("PYTHONHASHSEED", "0", 1);
+    setenv("OMP_NUM_THREADS", "10", 1);
+    setenv("MKL_NUM_THREADS", "10", 1);
+    setenv("TORCH_NUM_THREADS", "10", 1);
+    setenv("RAYON_NUM_THREADS", "10", 1);
+    setenv("ARENA_MEMORY_LIMIT_MB", "14336", 1);
+
+    execvp(argv[2], &argv[2]);
     perror("execvp");
     _exit(127);
   }
@@ -327,7 +249,7 @@ int main(int argc, char **argv) {
 
   while (1) {
     if (terminate_requested) {
-      kill_all_target_procs(target_uid, child_pgid, isolated_uid);
+      kill_all_target_procs(target_uid, child_pgid);
     }
 
     int status = 0;
@@ -338,28 +260,27 @@ int main(int argc, char **argv) {
       if (child_ru.ru_maxrss > 0 && (uint64_t)child_ru.ru_maxrss > peak_bytes) {
         peak_bytes = (uint64_t)child_ru.ru_maxrss;
       }
-      kill_all_target_procs(target_uid, child_pgid, isolated_uid);
-      write_peak_ram_safe(slot, override_peak_path, peak_bytes);
-      free(override_peak_path);
+      kill_all_target_procs(target_uid, child_pgid);
+      write_peak_ram(slot, peak_bytes);
       if (WIFEXITED(status)) return WEXITSTATUS(status);
       if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
       return 1;
     }
 
-    uint64_t used = total_target_footprint(target_uid, child_pgid, isolated_uid);
+    uint64_t used = sum_uid_footprint(target_uid);
     if (used > peak_bytes) {
       peak_bytes = used;
       uint64_t current_mib = (peak_bytes + (1024ULL * 1024ULL - 1ULL)) / (1024ULL * 1024ULL);
       if (current_mib > last_written_mib) {
         last_written_mib = current_mib;
-        write_peak_ram_safe(slot, override_peak_path, peak_bytes);
+        write_peak_ram(slot, peak_bytes);
       }
     }
     if (used > MAX_FOOTPRINT_BYTES) {
       fprintf(stderr,
               "ARENA_OOM: UID %u exceeded 14 GiB physical footprint (%llu bytes)\n",
               (unsigned)target_uid, (unsigned long long)used);
-      kill_all_target_procs(target_uid, child_pgid, isolated_uid);
+      kill_all_target_procs(target_uid, child_pgid);
       struct rusage oom_ru;
       memset(&oom_ru, 0, sizeof(oom_ru));
       if (wait4(pid, NULL, 0, &oom_ru) == pid &&
@@ -367,8 +288,7 @@ int main(int argc, char **argv) {
           (uint64_t)oom_ru.ru_maxrss > peak_bytes) {
         peak_bytes = (uint64_t)oom_ru.ru_maxrss;
       }
-      write_peak_ram_safe(slot, override_peak_path, peak_bytes);
-      free(override_peak_path);
+      write_peak_ram(slot, peak_bytes);
       return 137; // Standard SIGKILL / OOM exit code (128 + 9)
     }
 

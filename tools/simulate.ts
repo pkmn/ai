@@ -20,8 +20,6 @@ export interface SimulationOptions {
   agingRate?: number;
   maxWaitCycles?: number;
   seed?: number;
-  nu0?: number;
-  nu1?: number;
   initialLadders?: Array<{
     id: string;
     trueElo: Float64Array;
@@ -156,8 +154,8 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
   const agingRate = options.agingRate ?? 0.50;
   const maxWaitCycles = options.maxWaitCycles ?? 4;
   const seed = options.seed ?? 1;
-  const nu0 = options.nu0 ?? 2.2;
-  const nu1 = options.nu1 ?? 0.04;
+  const nu0 = 2.2;
+  const nu1 = 0.04;
 
   const rng = createPrng(seed);
   const specs = options.initialLadders ?? buildDefaultTrueElos(numLadders, agentsPerLadder);

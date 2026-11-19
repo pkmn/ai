@@ -26,7 +26,6 @@ import * as teams from '../teams';
 import {validateTeam} from './sim';
 import {
   configureSimMod,
-  resolveArenaFormatIdWithSim,
   sampleRandomPairWithSim,
 } from './sim-ops';
 
@@ -47,11 +46,6 @@ export function ensureSimConfigured() {
 }
 
 ensureSimConfigured();
-
-export function resolveArenaFormatId(format: string): string {
-  ensureSimConfigured();
-  return resolveArenaFormatIdWithSim(sim, format);
-}
 
 function getValidator(format: string): sim.TeamValidator {
   ensureSimConfigured();
@@ -624,7 +618,6 @@ export interface Options {
   format: string;
   pools: string[];
   teams: number;
-  threshold?: number;
 }
 
 export interface RejectedTeam {
@@ -649,7 +642,7 @@ export function validateCompetitorTeamsIncremental(
   existingSavedPacked: string[] = []
 ): IncrementalValidationResult {
   const requiredCount = options.teams;
-  const threshold = options.threshold ?? teams.THRESHOLD;
+  const threshold = teams.THRESHOLD;
   const format = toID(options.format);
   const dex = teams.getDex(format);
   const validator = getValidator(format);

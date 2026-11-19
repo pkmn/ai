@@ -25,7 +25,6 @@ export interface OAuthProvider {
 
 export interface Config {
   sessionSecret: string;
-  arenaSecret?: string;
   github?: OAuthProvider;
   discord?: OAuthProvider;
 }
@@ -167,9 +166,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config | undef
     ? {clientId: discordClientId, clientSecret: discordClientSecret}
     : undefined;
 
-  const arenaSecret = env.ARENA_SECRET?.trim() || undefined;
-
-  return {sessionSecret, arenaSecret, github, discord};
+  return {sessionSecret, github, discord};
 }
 
 function sendHtml(
@@ -203,18 +200,12 @@ function redirect(
 }
 
 function inferOrigin(req: http.IncomingMessage): string {
-  if (process.env.NODE_ENV === 'production' && process.env.PUBLIC_URL?.trim()) {
-    try {
-      return new URL(process.env.PUBLIC_URL.trim()).origin;
-    } catch {}
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://pkmn.ai';
   }
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const proto = typeof forwardedProto === 'string' && forwardedProto.startsWith('https')
-    ? 'https'
-    : process.env.NODE_ENV === 'production' ? 'https' : 'http';
   const rawHost = typeof req.headers.host === 'string' ? req.headers.host.trim() : '';
   const host = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(rawHost) ? rawHost : '127.0.0.1:1234';
-  return `${proto}://${host}`;
+  return `http://${host}`;
 }
 
 export function isCrossSiteRequest(req: http.IncomingMessage): boolean {
@@ -233,7 +224,6 @@ export class Auth {
   private readonly explicitDevAuth?: boolean;
   private readonly customAuthorizedGitHub?: (login: string) => boolean;
   private readonly customDiscordMember?: (discordId: string) => boolean;
-  private registeredApps = new Set<polka.Polka>();
 
   constructor(options: Options = {}) {
     this.explicitConfig = options.config;
@@ -278,10 +268,6 @@ export class Auth {
       }
       return session.github.login;
     }
-    const cfg = this.getConfig();
-    if (!cfg?.github && !this.isDevAuthEnabled() && process.env.NODE_ENV === 'development') {
-      return 'scheibo';
-    }
     return undefined;
   }
 
@@ -289,7 +275,7 @@ export class Auth {
     if (!login) return false;
     const lower = login.trim().toLowerCase();
     if (!lower) return false;
-    if (this.customAuthorizedGitHub?.(lower)) return true;
+    if (this.customAuthorizedGitHub) return this.customAuthorizedGitHub(lower);
     return Boolean(this.db?.getDeveloperByGitHub(lower));
   }
 
@@ -300,25 +286,20 @@ export class Auth {
   }
 
   verifyDiscordAuth(req: http.IncomingMessage): 'authorized' | 'unauthenticated' | 'forbidden' {
-    const cfg = this.getConfig();
-    if (!cfg && !this.isDevAuthEnabled() && process.env.NODE_ENV === 'development') {
-      return 'authorized';
-    }
     const session = this.getSession(req);
     if (!session?.discord?.id) return 'unauthenticated';
     return this.isDiscordGuildMember(session.discord.id) ? 'authorized' : 'forbidden';
   }
 
-  issueSessionCookie(session: Omit<Session, 'exp'>, now = Math.floor(Date.now() / 1000)): string {
+  issueSessionCookie(session: Omit<Session, 'exp'>): string {
     const cfg = this.getConfig();
     if (!cfg) throw new Error('SESSION_SECRET is not configured');
+    const now = Math.floor(Date.now() / 1000);
     const token = signToken({...session, exp: now + SESSION_TTL_SECONDS}, cfg.sessionSecret);
     return serializeCookie(SESSION_COOKIE, token, SESSION_TTL_SECONDS);
   }
 
   register(app: polka.Polka): this {
-    if (this.registeredApps.has(app)) return this;
-    this.registeredApps.add(app);
     const sendError = (res: http.ServerResponse, status: number, cookies?: string[]) =>
       sendHtml(res, status, renderErrorPage(status, this.db?.getRunningTournament()), cookies);
 
@@ -725,8 +706,8 @@ export class Auth {
       }
       // Mint a Discord-scoped token if the session also carries a GitHub developer claim so
       // CLI tokens for `/chat/logs/` cannot be used to authenticate GitHub-gated mutations.
-      const cfg = this.getConfig();
-      const cliToken = session.github && cfg
+      const cfg = this.getConfig()!;
+      const cliToken = session.github
         ? signToken({discord: session.discord, exp: session.exp}, cfg.sessionSecret)
         : token;
       res.writeHead(200, {
@@ -738,9 +719,4 @@ export class Auth {
 
     return this;
   }
-}
-
-export function register(app: polka.Polka, options: Options = {}): Auth {
-  const auth = new Auth(options);
-  return auth.register(app);
 }

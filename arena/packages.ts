@@ -28,11 +28,36 @@ export const HOT_AGENTS_LOW_WATER_BYTES = 85 * 1000 * 1000 * 1000; // 85 GB inte
 export const HOT_CONTAINERS_HIGH_WATER_BYTES = 32 * 1000 * 1000 * 1000; // 32 GB VM disk
 export const HOT_CONTAINERS_LOW_WATER_BYTES = 24 * 1000 * 1000 * 1000; // 24 GB VM disk
 
-export const AGENTS_DIR = process.env.ARENA_AGENTS_DIR ?? '/opt/arena/agents';
-export const CAS_DIR = process.env.ARENA_CAS_DIR ?? '/opt/arena/cas/sha256';
-export const STAGING_DIR = process.env.ARENA_STAGING_DIR ?? '/Volumes/Staging';
-export const COLD_AGENTS_DIR =
-  process.env.ARENA_COLD_AGENTS_DIR ?? '/Volumes/Archive/cold-agents';
+export interface Dirs {
+  agents: string;
+  staging: string;
+  cold: string;
+  cas: string;
+  teams: string;
+  logs: string;
+}
+
+// Production Mac mini directory layout is intentionally hardcoded (no `ARENA_*_DIR` env vars);
+// tests pass an isolated single root via `dirsForRoot(rootDir)`.
+export const PROD_DIRS: Dirs = {
+  agents: '/opt/arena/agents',
+  staging: '/Volumes/Staging',
+  cold: '/Volumes/Archive/cold-agents',
+  cas: '/opt/arena/cas/sha256',
+  teams: '/opt/arena/teams',
+  logs: '/Volumes/Archive/logs',
+};
+
+export function dirsForRoot(rootDir: string): Dirs {
+  return {
+    agents: path.join(rootDir, 'agents'),
+    staging: path.join(rootDir, 'staging'),
+    cold: path.join(rootDir, 'cold-agents'),
+    cas: path.join(rootDir, 'cas'),
+    teams: path.join(rootDir, 'teams'),
+    logs: path.join(rootDir, 'logs'),
+  };
+}
 
 export interface OciManifestInspection {
   compressedBytes: number;
@@ -79,7 +104,7 @@ export function assertArchiveVolumeMounted(targetPath: string): void {
   }
 }
 
-export function validateOciRegistryRef(cleanRef: string, allowPrivateUrls = false): void {
+export function validateOciRegistryRef(cleanRef: string): void {
   if (!cleanRef || cleanRef.startsWith('http://') || cleanRef.startsWith('https://')) {
     throw new Error(`Invalid OCI image reference: ${cleanRef}`);
   }
@@ -90,7 +115,7 @@ export function validateOciRegistryRef(cleanRef: string, allowPrivateUrls = fals
     authority.includes('.') ||
     authority.includes(':') ||
     authority.toLowerCase() === 'localhost';
-  if (!isExplicitRegistry || allowPrivateUrls) return;
+  if (!isExplicitRegistry) return;
 
   let parsedAuthority: URL;
   try {
@@ -273,7 +298,6 @@ export interface InspectOciOptions {
   expectedSha256?: string;
   platform?: {os: string; arch: string};
   stagingDir?: string;
-  allowPrivateUrls?: boolean;
 }
 
 export function inspectRemoteOciSize(opts: InspectOciOptions): OciManifestInspection {
@@ -282,11 +306,10 @@ export function inspectRemoteOciSize(opts: InspectOciOptions): OciManifestInspec
     creds,
     expectedSha256,
     platform = {os: 'linux', arch: 'arm64'},
-    stagingDir = STAGING_DIR,
-    allowPrivateUrls = false,
+    stagingDir = PROD_DIRS.staging,
   } = opts;
   const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
-  validateOciRegistryRef(cleanRef, allowPrivateUrls);
+  validateOciRegistryRef(cleanRef);
   const repoRef = stripOciTagOrDigest(cleanRef);
   let authWorkDir: string | undefined;
   try {
@@ -303,16 +326,15 @@ export function inspectRemoteOciSize(opts: InspectOciOptions): OciManifestInspec
       ['inspect', '--raw', ...authArgs, `docker://${cleanRef}`],
       {encoding: 'utf8', timeout: 30_000}
     );
-    const outerSha = crypto.createHash('sha256').update(outerRaw).digest('hex');
-    const cleanExpected = expectedSha256?.trim().toLowerCase().replace(/^sha256:/, '');
-    if (cleanExpected && cleanExpected !== outerSha) {
-      throw new Error(`OCI digest mismatch: expected ${cleanExpected}, got manifest=${outerSha}`);
-    }
-
     const parsedOuter = JSON.parse(outerRaw) as {
       manifests?: Array<{digest?: string; platform?: {os?: string; architecture?: string}}>;
     };
     if (Array.isArray(parsedOuter.manifests)) {
+      const outerSha = crypto.createHash('sha256').update(outerRaw).digest('hex');
+      const cleanExpected = expectedSha256?.trim().toLowerCase().replace(/^sha256:/, '');
+      if (cleanExpected && cleanExpected !== outerSha) {
+        throw new Error(`OCI digest mismatch: expected ${cleanExpected}, got manifest=${outerSha}`);
+      }
       const target = parsedOuter.manifests.find(
         m => m.platform?.os === platform.os && m.platform?.architecture === platform.arch
       );
@@ -336,7 +358,7 @@ export function inspectRemoteOciSize(opts: InspectOciOptions): OciManifestInspec
       };
     }
 
-    return verifyOciManifestDigest(outerRaw, cleanExpected);
+    return verifyOciManifestDigest(outerRaw, expectedSha256);
   } catch (err) {
     throw scrubError(err, creds);
   } finally {
@@ -349,8 +371,7 @@ export interface PullOciOptions {
   agentTargetId: string;
   expectedSha256: string;
   creds?: string;
-  stagingDir?: string;
-  allowPrivateUrls?: boolean;
+  dirs?: Dirs;
 }
 
 export function pullAndVerifyOciImage(opts: PullOciOptions): number {
@@ -359,8 +380,7 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
     agentTargetId,
     expectedSha256,
     creds,
-    stagingDir = STAGING_DIR,
-    allowPrivateUrls = false,
+    dirs = PROD_DIRS,
   } = opts;
   if (!TARGET_ID_RE.test(agentTargetId) || agentTargetId.includes('..')) {
     throw new Error(`Invalid OCI agent target ID: ${agentTargetId}`);
@@ -369,19 +389,17 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
     throw new Error('Expected 64-hex SHA-256 manifest digest for OCI pull');
   }
   const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
-  validateOciRegistryRef(cleanRef, allowPrivateUrls);
   const repoRef = stripOciTagOrDigest(cleanRef);
   const inspected = inspectRemoteOciSize({
     imageRef: cleanRef,
     creds,
     expectedSha256,
     platform: {os: 'linux', arch: 'arm64'},
-    stagingDir,
-    allowPrivateUrls,
+    stagingDir: dirs.staging,
   });
 
-  fs.mkdirSync(stagingDir, {recursive: true});
-  const stagingTar = path.join(stagingDir, `oci-${agentTargetId}.tar`);
+  fs.mkdirSync(dirs.staging, {recursive: true});
+  const stagingTar = path.join(dirs.staging, `oci-${agentTargetId}.tar`);
   fs.rmSync(stagingTar, {force: true});
   let authWorkDir: string | undefined;
   let imageLoaded = false;
@@ -389,7 +407,7 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
   try {
     const authArgs: string[] = [];
     if (creds) {
-      authWorkDir = fs.mkdtempSync(path.join(stagingDir, 'oci-auth-'));
+      authWorkDir = fs.mkdtempSync(path.join(dirs.staging, 'oci-auth-'));
       fs.chmodSync(authWorkDir, 0o700);
       authArgs.push('--authfile', writePrivateSkopeoAuthfile(authWorkDir, cleanRef, creds));
     }
@@ -404,7 +422,7 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
         `docker://${repoRef}@sha256:${inspected.manifestSha256}`,
         `docker-archive:${stagingTar}:${agentTargetId}:latest`,
       ],
-      {env: {...process.env, TMPDIR: stagingDir}, timeout: 180_000}
+      {env: {...process.env, TMPDIR: dirs.staging}, timeout: 180_000}
     );
 
     execFileSync('podman', ['load', '-i', stagingTar], {timeout: 120_000});
@@ -443,21 +461,17 @@ export async function downloadAndUnpackBundle(opts: {
   expectedSha256: string;
   agentTargetId: string;
   authToken?: string;
-  stagingDir?: string;
-  agentsDir?: string;
-  casDir?: string;
+  dirs?: Dirs;
   allowPrivateUrls?: boolean;
-  timeoutMillis?: number;
 }): Promise<number> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(opts.agentTargetId) ||
       opts.agentTargetId.includes('..')) {
     throw new Error(`Invalid bundle agent target ID: ${opts.agentTargetId}`);
   }
-  const stagingDir = opts.stagingDir ?? STAGING_DIR;
-  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
+  const dirs = opts.dirs ?? PROD_DIRS;
 
-  fs.mkdirSync(stagingDir, {recursive: true});
-  fs.mkdirSync(agentsDir, {recursive: true});
+  fs.mkdirSync(dirs.staging, {recursive: true});
+  fs.mkdirSync(dirs.agents, {recursive: true});
 
   const cleanUrlPath = opts.url.split(/[?#]/)[0].toLowerCase();
   const ext = cleanUrlPath.endsWith('.tar.zst') || cleanUrlPath.endsWith('.tzst')
@@ -465,8 +479,8 @@ export async function downloadAndUnpackBundle(opts: {
     : cleanUrlPath.endsWith('.tar.xz') || cleanUrlPath.endsWith('.txz')
       ? '.tar.xz'
       : '.tar.gz';
-  const archivePath = path.join(stagingDir, `bundle-${opts.agentTargetId}${ext}`);
-  const destDir = path.join(agentsDir, opts.agentTargetId);
+  const archivePath = path.join(dirs.staging, `bundle-${opts.agentTargetId}${ext}`);
+  const destDir = path.join(dirs.agents, opts.agentTargetId);
 
   fs.rmSync(archivePath, {force: true});
 
@@ -500,7 +514,7 @@ export async function downloadAndUnpackBundle(opts: {
         fs.closeSync(dstFd);
       }
     } else {
-      const signal = AbortSignal.timeout(opts.timeoutMillis ?? DOWNLOAD_TIMEOUT_MILLIS);
+      const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MILLIS);
       const initialUrl = new URL(opts.url);
       const initialOrigin = initialUrl.origin;
       const authHeader = opts.authToken
@@ -599,7 +613,7 @@ export async function downloadAndUnpackBundle(opts: {
       );
     }
 
-    return unpack.unpackBundle(archivePath, destDir, opts.casDir ?? CAS_DIR);
+    return unpack.unpackBundle(archivePath, destDir, dirs.cas);
   } catch (err) {
     throw scrubError(err, opts.authToken);
   } finally {
@@ -610,16 +624,14 @@ export async function downloadAndUnpackBundle(opts: {
 export function archiveColdAgent(
   agent: Pick<db.LocalAgentRow, 'mode' | 'target'>,
   opts: {
-    agentsDir?: string;
-    coldDir?: string;
+    dirs?: Dirs;
     archiveContainerFn?: (target: string, coldArchive: string) => void;
   } = {}
 ): string {
-  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-  const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
-  assertArchiveVolumeMounted(coldDir);
-  fs.mkdirSync(coldDir, {recursive: true});
-  const coldArchive = path.join(coldDir, `${agent.target}.tar.zst`);
+  const dirs = opts.dirs ?? PROD_DIRS;
+  assertArchiveVolumeMounted(dirs.cold);
+  fs.mkdirSync(dirs.cold, {recursive: true});
+  const coldArchive = path.join(dirs.cold, `${agent.target}.tar.zst`);
   try {
     if (fs.existsSync(coldArchive) && fs.statSync(coldArchive).size > 0) {
       return coldArchive;
@@ -635,7 +647,7 @@ export function archiveColdAgent(
   fs.rmSync(tmpArchive, {force: true});
   try {
     if (agent.mode === 'native') {
-      const hotDir = path.join(agentsDir, agent.target);
+      const hotDir = path.join(dirs.agents, agent.target);
       if (!fs.existsSync(hotDir)) {
         throw new Error(`Hot native bundle directory missing for ${agent.target}`);
       }
@@ -672,9 +684,7 @@ export function evictColdAgentsIfNeeded(
     lowWaterBytes?: number;
     containerHighWaterBytes?: number;
     containerLowWaterBytes?: number;
-    agentsDir?: string;
-    coldDir?: string;
-    casDir?: string;
+    dirs?: Dirs;
     pinnedVersionIds?: ReadonlySet<number>;
     activeVersionIds?: ReadonlySet<number>;
     evictContainerFn?: (target: string, coldArchive: string) => void;
@@ -684,9 +694,7 @@ export function evictColdAgentsIfNeeded(
   const lowWater = opts.lowWaterBytes ?? HOT_AGENTS_LOW_WATER_BYTES;
   const containerHighWater = opts.containerHighWaterBytes ?? HOT_CONTAINERS_HIGH_WATER_BYTES;
   const containerLowWater = opts.containerLowWaterBytes ?? HOT_CONTAINERS_LOW_WATER_BYTES;
-  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-  const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
-  const casDir = opts.casDir ?? CAS_DIR;
+  const dirs = opts.dirs ?? PROD_DIRS;
   const pinned = opts.pinnedVersionIds ?? new Set<number>();
 
   const hotAgents = stateDb.listLocalAgents('hot');
@@ -709,24 +717,23 @@ export function evictColdAgentsIfNeeded(
     return [];
   }
 
-  assertArchiveVolumeMounted(coldDir);
-  fs.mkdirSync(coldDir, {recursive: true});
+  assertArchiveVolumeMounted(dirs.cold);
+  fs.mkdirSync(dirs.cold, {recursive: true});
 
   let evictedNative = false;
   const evictOne = (v: db.LocalAgentRow) => {
     archiveColdAgent(v, {
-      agentsDir,
-      coldDir,
+      dirs,
       archiveContainerFn: opts.evictContainerFn,
     });
     if (v.mode === 'native') {
       evictedNative = true;
-      const hotDir = path.join(agentsDir, v.target);
+      const hotDir = path.join(dirs.agents, v.target);
       if (fs.existsSync(hotDir)) {
         fs.rmSync(hotDir, {recursive: true, force: true});
       }
-      if (fs.existsSync(casDir)) {
-        fs.rmSync(unpack.casRefFileForBundle(casDir, hotDir), {force: true});
+      if (fs.existsSync(dirs.cas)) {
+        fs.rmSync(unpack.casRefFileForBundle(dirs.cas, hotDir), {force: true});
       }
     } else if (!opts.evictContainerFn) {
       execFileSync('podman', ['rmi', v.target], {timeout: 30_000});
@@ -775,56 +782,22 @@ export function evictColdAgentsIfNeeded(
   }
 
   // 3. Reclaim CAS blobs in `<casDir>/<shard>/<sha256>` no longer referenced by any hot agent.
-  if (evictedNative && fs.existsSync(casDir)) {
-    pruneUnreferencedCasBlobs(casDir, agentsDir);
+  if (evictedNative && fs.existsSync(dirs.cas)) {
+    pruneUnreferencedCasBlobs(dirs.cas, dirs.agents);
   }
 
   return evicted;
 }
 
-function sha256FileSync(filePath: string): string {
-  const hash = crypto.createHash('sha256');
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const buf = Buffer.allocUnsafe(65_536);
-    for (;;) {
-      const n = fs.readSync(fd, buf, 0, buf.length, null);
-      if (n <= 0) break;
-      hash.update(n === buf.length ? buf : buf.subarray(0, n));
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  return hash.digest('hex');
-}
-
 export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
-  const casBlobs: Array<{blobPath: string; shardPath?: string; digest: string; size: number}> = [];
+  const casBlobs: Array<{blobPath: string; shardPath: string; digest: string}> = [];
   try {
     for (const entry of fs.readdirSync(casDir, {withFileTypes: true})) {
-      if (entry.name === 'refs') continue;
-      const entryPath = path.join(casDir, entry.name);
-      if (entry.isDirectory()) {
-        for (const sub of fs.readdirSync(entryPath, {withFileTypes: true})) {
-          if (!sub.isFile()) continue;
-          const blobPath = path.join(entryPath, sub.name);
-          try {
-            casBlobs.push({
-              blobPath,
-              shardPath: entryPath,
-              digest: sub.name,
-              size: fs.statSync(blobPath).size,
-            });
-          } catch {}
-        }
-      } else if (entry.isFile()) {
-        try {
-          casBlobs.push({
-            blobPath: entryPath,
-            digest: entry.name,
-            size: fs.statSync(entryPath).size,
-          });
-        } catch {}
+      if (entry.name === 'refs' || !entry.isDirectory()) continue;
+      const shardPath = path.join(casDir, entry.name);
+      for (const sub of fs.readdirSync(shardPath, {withFileTypes: true})) {
+        if (!sub.isFile()) continue;
+        casBlobs.push({blobPath: path.join(shardPath, sub.name), shardPath, digest: sub.name});
       }
     }
   } catch {
@@ -832,7 +805,6 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
   }
   if (casBlobs.length === 0) return;
 
-  const casSizes = new Set(casBlobs.map(b => b.size));
   const activeDigests = new Set<string>();
   const liveAgentNames = new Set<string>();
 
@@ -840,51 +812,14 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
     for (const top of fs.readdirSync(agentsDir, {withFileTypes: true})) {
       if (top.isSymbolicLink() || !top.isDirectory()) continue;
       liveAgentNames.add(top.name);
-      const bundleDir = path.join(agentsDir, top.name);
-      const refFile = unpack.casRefFileForBundle(casDir, bundleDir);
-      if (fs.existsSync(refFile)) {
-        try {
-          for (const line of fs.readFileSync(refFile, 'utf8').split(/\r?\n/)) {
-            const d = line.trim();
-            if (d) activeDigests.add(d);
-          }
-          continue;
-        } catch {}
-      }
-
-      // Fallback for legacy/test agent directories unpacked without a `.txt` CAS manifest: scan
-      // size-matching files once and persist the manifest for O(1) future evictions.
-      const bundleDigests = new Set<string>();
-      const walkBundle = (dir: string) => {
-        let entries: fs.Dirent[];
-        try {
-          entries = fs.readdirSync(dir, {withFileTypes: true});
-        } catch {
-          return;
+      const refFile = unpack.casRefFileForBundle(casDir, path.join(agentsDir, top.name));
+      if (!fs.existsSync(refFile)) continue;
+      try {
+        for (const line of fs.readFileSync(refFile, 'utf8').split(/\r?\n/)) {
+          const d = line.trim();
+          if (d) activeDigests.add(d);
         }
-        for (const e of entries) {
-          if (e.isSymbolicLink()) continue;
-          const full = path.join(dir, e.name);
-          if (e.isDirectory()) {
-            walkBundle(full);
-          } else if (e.isFile()) {
-            try {
-              if (casSizes.has(fs.statSync(full).size)) {
-                const digest = sha256FileSync(full);
-                bundleDigests.add(digest);
-                activeDigests.add(digest);
-              }
-            } catch {}
-          }
-        }
-      };
-      walkBundle(bundleDir);
-      if (bundleDigests.size > 0) {
-        try {
-          fs.mkdirSync(path.dirname(refFile), {recursive: true, mode: 0o700});
-          fs.writeFileSync(refFile, `${[...bundleDigests].sort().join('\n')}\n`, {mode: 0o600});
-        } catch {}
-      }
+      } catch {}
     }
   }
 
@@ -893,8 +828,7 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
     try {
       for (const ref of fs.readdirSync(refsDir)) {
         if (!ref.endsWith('.txt')) continue;
-        const name = ref.slice(0, -4);
-        if (!liveAgentNames.has(name)) {
+        if (!liveAgentNames.has(ref.slice(0, -4))) {
           fs.rmSync(path.join(refsDir, ref), {force: true});
         }
       }
@@ -906,7 +840,7 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
     if (!activeDigests.has(blob.digest)) {
       try {
         fs.rmSync(blob.blobPath, {force: true});
-        if (blob.shardPath) touchedShards.add(blob.shardPath);
+        touchedShards.add(blob.shardPath);
       } catch {}
     }
   }
@@ -920,21 +854,16 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
 export function ensureAgentResident(
   stateDb: db.Database,
   versionId: number,
-  opts: {
-    agentsDir?: string;
-    coldDir?: string;
-    casDir?: string;
-    now?: number;
-  } = {}
+  opts: {dirs?: Dirs; now?: number} = {}
 ): db.LocalAgentRow | undefined {
   const row = stateDb.getLocalAgent(versionId);
   if (!row) return undefined;
 
   const now = opts.now ?? Math.floor(Date.now() / 1000);
-  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
+  const dirs = opts.dirs ?? PROD_DIRS;
   if (row.residency === 'hot') {
     if (row.mode === 'native') {
-      const hotRun = path.join(agentsDir, row.target, 'run');
+      const hotRun = path.join(dirs.agents, row.target, 'run');
       if (!fs.existsSync(hotRun)) {
         throw new Error(`Hot native bundle missing executable ./run for ${row.target}`);
       }
@@ -943,17 +872,16 @@ export function ensureAgentResident(
     return stateDb.getLocalAgent(versionId);
   }
 
-  const coldDir = opts.coldDir ?? COLD_AGENTS_DIR;
-  assertArchiveVolumeMounted(coldDir);
-  const coldArchive = path.join(coldDir, `${row.target}.tar.zst`);
+  assertArchiveVolumeMounted(dirs.cold);
+  const coldArchive = path.join(dirs.cold, `${row.target}.tar.zst`);
   if (!fs.existsSync(coldArchive) || fs.statSync(coldArchive).size === 0) {
     throw new Error(`Cold archive missing or empty for ${row.target}: ${coldArchive}`);
   }
 
   if (row.mode === 'native') {
-    const destDir = path.join(agentsDir, row.target);
-    fs.mkdirSync(agentsDir, {recursive: true});
-    unpack.unpackBundle(coldArchive, destDir, opts.casDir ?? CAS_DIR);
+    const destDir = path.join(dirs.agents, row.target);
+    fs.mkdirSync(dirs.agents, {recursive: true});
+    unpack.unpackBundle(coldArchive, destDir, dirs.cas);
   } else {
     execFileSync(
       'bash',

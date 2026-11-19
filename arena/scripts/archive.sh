@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # arena/scripts/archive.sh
-# Nightly battle log compression (.7z solid LZMA2), monthly .tar GCS rollup,
-# and daily SQLite WAL-safe .backup + zstd compression on the Mac mini.
+# Daily SQLite WAL-safe .backup + zstd, 1st-of-month .tar rollup, and GCS rsync on the Mac mini.
+# (Daily `.7z` log compression and `<ladderId>-logs.tar` upload are owned by `arena/coordinator.ts`.)
 set -euo pipefail
 shopt -s nullglob
 
@@ -12,15 +12,15 @@ if [[ -f /opt/arena/repo/.env ]]; then
   set +a
 fi
 
-ARCHIVE_ROOT="${ARENA_ARCHIVE_DIR:-/Volumes/Archive}"
+ARCHIVE_ROOT="/Volumes/Archive"
 LOG_ROOT="${ARCHIVE_ROOT}/logs"
 COLD_DIR="${ARCHIVE_ROOT}/cold-agents"
 BACKUP_DIR="${ARCHIVE_ROOT}/db-backups"
-STATE_DB="${ARENA_STATE_DB:-/opt/arena/state/arena.sqlite}"
-GCS_BUCKET="${ARENA_GCS_BUCKET:-gs://pkmn-arena}"
+STATE_DB="/opt/arena/state/arena.sqlite"
+GCS_BUCKET="gs://pkmn-arena"
 
 # Guard against silently writing into the internal rootfs if the external APFS drive is unmounted
-if [[ "$ARCHIVE_ROOT" == "/Volumes/Archive" && "$(uname -s)" == "Darwin" ]]; then
+if [[ "$(uname -s)" == "Darwin" ]]; then
   if ! mount | grep -q " on /Volumes/Archive "; then
     sudo -n /usr/sbin/diskutil mount Archive >/dev/null 2>&1 ||
       /usr/sbin/diskutil mount Archive >/dev/null 2>&1 || true
@@ -44,65 +44,7 @@ if [[ -f "$STATE_DB" ]]; then
   find "$BACKUP_DIR" -name "arena-state-*.sqlite.zst" -mtime +30 -delete
 fi
 
-# 2. Nightly solid .7z compression of yesterday's raw .log directories per ladder
-YESTERDAY="$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d 'yesterday' +%Y-%m-%d)"
-YEAR_MONTH="${YESTERDAY:0:7}"
-
-if [[ -d "$LOG_ROOT" ]]; then
-  for LADDER_DIR in "$LOG_ROOT"/*; do
-    [[ -d "$LADDER_DIR" ]] || continue
-    DAY_DIR="${LADDER_DIR}/${YESTERDAY}"
-    ARCHIVE_7Z="${LADDER_DIR}/${YEAR_MONTH}/${YESTERDAY}.7z"
-    if [[ -d "$DAY_DIR" ]]; then
-      LOG_FILES=("${DAY_DIR}"/*.log)
-      if (( ${#LOG_FILES[@]} > 0 )); then
-        mkdir -p "${LADDER_DIR}/${YEAR_MONTH}"
-        TMP_7Z="${ARCHIVE_7Z}.tmp"
-        rm -f "$TMP_7Z"
-        7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=64m -ms=on "$TMP_7Z" "${LOG_FILES[@]}"
-        7z t "$TMP_7Z" >/dev/null
-        mv -f "$TMP_7Z" "$ARCHIVE_7Z"
-
-        # For random-battle ladders, append the daily .7z archive to the cumulative
-        # <ladderId>-logs.tar archive and publish it to the web server so spectators
-        # can download the full history (excluding the current day's in-progress battles).
-        LADDER_ID="$(basename "$LADDER_DIR")"
-        if [[ "$LADDER_ID" == *random* ]]; then
-          FULL_TAR="${LADDER_DIR}/${LADDER_ID}-logs.tar"
-          TMP_FULL_TAR="${FULL_TAR}.tmp.$$"
-          rm -f "$TMP_FULL_TAR"
-          MEMBERS=()
-          for M_TAR in "${LADDER_DIR}"/[0-9][0-9][0-9][0-9]-[0-9][0-9].tar; do
-            [[ -f "$M_TAR" ]] && MEMBERS+=("$(basename "$M_TAR")")
-          done
-          for M_DIR in "${LADDER_DIR}"/[0-9][0-9][0-9][0-9]-[0-9][0-9]; do
-            [[ -d "$M_DIR" ]] || continue
-            M_NAME="$(basename "$M_DIR")"
-            for D_7Z in "${M_DIR}"/*.7z; do
-              [[ -f "$D_7Z" ]] && MEMBERS+=("${M_NAME}/$(basename "$D_7Z")")
-            done
-          done
-          if (( ${#MEMBERS[@]} > 0 )); then
-            tar -cf "$TMP_FULL_TAR" -C "$LADDER_DIR" "${MEMBERS[@]}"
-            mv -f "$TMP_FULL_TAR" "$FULL_TAR"
-            if [[ -n "${ARENA_SERVER_URL:-}" && -n "${ARENA_SECRET:-}" ]]; then
-              SHA256="$(shasum -a 256 "$FULL_TAR" | awk '{print $1}')"
-              curl -fsS -X PUT \
-                -H "Authorization: Bearer ${ARENA_SECRET}" \
-                -H "Content-Type: application/x-tar" \
-                -H "X-Content-SHA256: ${SHA256}" \
-                --data-binary @"${FULL_TAR}" \
-                "${ARENA_SERVER_URL%/}/api/arena/ladders/${LADDER_ID}/archive" >/dev/null || true
-            fi
-          fi
-        fi
-      fi
-      rm -rf "$DAY_DIR"
-    fi
-  done
-fi
-
-# 3. On the 1st of each month, bundle the previous month's .7z files into a single .tar
+# 2. On the 1st of each month, bundle the previous month's .7z files into a single .tar
 if [[ "$(date -u +%d)" == "01" ]]; then
   PREV_MONTH="$(date -u -v-1m +%Y-%m 2>/dev/null || date -u -d 'last month' +%Y-%m)"
   for LADDER_DIR in "$LOG_ROOT"/*; do
@@ -115,7 +57,7 @@ if [[ "$(date -u +%d)" == "01" ]]; then
   done
 fi
 
-# 4. Sync archives, cold agent bundles, and database backups to Google Cloud Storage
+# 3. Sync archives, cold agent bundles, and database backups to Google Cloud Storage
 if command -v gcloud >/dev/null 2>&1 && [[ -n "${ARENA_GCS_SYNC:-}" ]]; then
   gcloud storage rsync -r "$LOG_ROOT" "${GCS_BUCKET}/archives"
   gcloud storage rsync -r "$COLD_DIR" "${GCS_BUCKET}/agents"

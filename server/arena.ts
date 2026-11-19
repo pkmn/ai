@@ -8,18 +8,16 @@ import polka from 'polka';
 
 import type * as db from '../db';
 import {
-  VERSION_RE,
   escapeHtml,
   installHeadSupport,
+  readBody,
   root,
-  validateAgentName,
   writeFileAtomic,
 } from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
 import * as ratings from './ratings';
-import {validateHarvestedTeams} from './teams';
 
 export const PUBLIC_DIR = root('public');
 // If the Mac Mini Arena worker stops heartbeating for 15 minutes (network drop, power loss,
@@ -35,12 +33,11 @@ export const DOUBLES_INCREMENT_SECONDS = 25;
 export const MAX_BATTLE_TURNS = 1000;
 
 function decodeRouteParam(param: string | string[] | undefined): string {
-  const raw = Array.isArray(param) ? param[0] : param;
-  if (!raw) return '';
+  if (typeof param !== 'string' || !param) return '';
   try {
-    return decodeURIComponent(raw).trim();
+    return decodeURIComponent(param).trim();
   } catch {
-    return raw.trim();
+    return param.trim();
   }
 }
 
@@ -54,18 +51,6 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const RECENT_MATCHES_LIMIT = 25;
 
-const VALID_SMOKE_UPDATES = new Set<Exclude<db.SmokeStatus, 'pending'>>([
-  'passed',
-  'failed',
-  'quarantined',
-]);
-const VALID_GAME_OUTCOMES = new Set<ratings.GameOutcome>(['W', 'L', 'T']);
-const VALID_MATCH_CATEGORIES = new Set<ratings.MatchCategory>([
-  'WW', 'WT', 'TW', 'WL', 'LW', 'TT', 'TL', 'LT', 'LL',
-]);
-const VALID_LADDER_STATUSES = new Set<db.LadderStatus>([
-  'upcoming', 'active', 'settling', 'archived',
-]);
 const VALID_SLOTS = new Set<string>(['rby', 'adv', 'sv', 'rand', 'vgc']);
 const VALID_POKEMON_COLORS = new Set<PokemonColor>(['green', 'yellow', 'red', 'fainted']);
 
@@ -323,54 +308,26 @@ export function resolveLadderArchive(
     ladder.team === 'random' ||
     (ladder.team === 'pools' && ladder.status === 'archived');
   if (!canExpose) return undefined;
-  const idEnc = encodeURIComponent(ladder.id);
-  const defaultName = `${ladder.id}-logs.tar`;
-  const fallbackName = 'logs.tar';
-  const candidates = [
-    {
-      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, defaultName),
-      name: defaultName,
-      href: `/arena/ladders/${idEnc}/${encodeURIComponent(defaultName)}`,
-    },
-    {
-      diskPath: path.join(publicDir, 'arena', 'ladders', ladder.id, fallbackName),
-      name: fallbackName,
-      href: `/arena/ladders/${idEnc}/${fallbackName}`,
-    },
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c.diskPath)) return {name: c.name, href: c.href};
-  }
-  return undefined;
+  const name = `${ladder.id}-logs.tar`;
+  const diskPath = path.join(publicDir, 'arena', 'ladders', ladder.id, name);
+  if (!fs.existsSync(diskPath)) return undefined;
+  return {
+    name,
+    href: `/arena/ladders/${encodeURIComponent(ladder.id)}/${encodeURIComponent(name)}`,
+  };
 }
 
 export function resolveTournamentArchive(
   publicDir: string,
   tournamentId: string
 ): {name: string; href: string} | undefined {
-  const idEnc = encodeURIComponent(tournamentId);
-  const defaultName = `${tournamentId}-replays.7z`;
-  const candidates = [
-    {
-      diskPath: path.join(publicDir, 'arena', 'tournaments', tournamentId, defaultName),
-      name: defaultName,
-      href: `/arena/tournaments/${idEnc}/${encodeURIComponent(defaultName)}`,
-    },
-    {
-      diskPath: path.join(publicDir, 'arena', 'tournaments', tournamentId, 'replays.7z'),
-      name: 'replays.7z',
-      href: `/arena/tournaments/${idEnc}/replays.7z`,
-    },
-    {
-      diskPath: path.join(publicDir, 'arena', 'tournaments', defaultName),
-      name: defaultName,
-      href: `/arena/tournaments/${encodeURIComponent(defaultName)}`,
-    },
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c.diskPath)) return {name: c.name, href: c.href};
-  }
-  return undefined;
+  const name = `${tournamentId}-replays.7z`;
+  const diskPath = path.join(publicDir, 'arena', 'tournaments', tournamentId, name);
+  if (!fs.existsSync(diskPath)) return undefined;
+  return {
+    name,
+    href: `/arena/tournaments/${encodeURIComponent(tournamentId)}/${encodeURIComponent(name)}`,
+  };
 }
 
 export function resolveTournamentTeamPool(
@@ -401,7 +358,7 @@ export function resolveTournamentTeamPool(
       }
     }
   }
-  return pool.length > 0 ? pool : db.getLadderTeams(archivedPoolsLadder.id);
+  return pool;
 }
 
 export function listTournamentLogFiles(publicDir: string, tournamentId: string): Set<string> {
@@ -479,11 +436,7 @@ export function buildTournamentDocument(
 
   const archive = resolveTournamentArchive(publicDir, tournament.id);
   const entrantByVer = new Map(entrants.map(e => [e.versionId, e]));
-  let rules: string[] = [];
-  try {
-    const rawRules = JSON.parse(tournament.rulesJson || '[]') as unknown;
-    if (Array.isArray(rawRules)) rules = rawRules.map(String);
-  } catch {}
+  const rules = tournament.rules;
 
   const mapPair = (
     stage: db.TournamentGameStage,
@@ -889,21 +842,14 @@ export interface Options {
   publicDir?: string;
   watchdogTimeoutMillis?: number;
   armWatchdogOnStart?: boolean;
-  recentMatchesLimit?: number;
   now?: () => number;
   onSubmissionStatus?: (result: db.ApplySubmissionStatusResult) => void | Promise<void>;
-  onMatchComplete?: (event: {
-    match: db.CompletedMatchPayload;
-    duplicate: boolean;
-    archivedLadder: boolean;
-  }) => void | Promise<void>;
   onWatchdogTimeout?: (alert: WatchdogAlert) => void | Promise<void>;
   onUpdate?: (
     reason:
       'submission-status' |
       'match-complete' |
       'archive-published' |
-      'ladder-teams' |
       'tournament-game-complete' |
       'tournament-status'
   ) => void | Promise<void>;
@@ -915,7 +861,6 @@ export interface Handle {
   setLiveState: (state: {live?: LiveMatchInput; stale?: boolean; updatedAt?: number}) => void;
   getTournamentBroadcast: (tournamentId?: string) => LiveBroadcast | undefined;
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
-  notifyTournamentStatus: (tournamentId: string) => void;
   getState: () => {
     lastSeenAt?: number;
     watchdogTriggered: boolean;
@@ -959,7 +904,7 @@ export interface PendingTournament {
   version?: string;
   team?: db.TeamMode;
   teamPool?: string[];
-  rulesJson: string;
+  customRules: string[];
   status: db.TournamentStatus;
   startsAt: number;
 }
@@ -980,7 +925,6 @@ export interface SubmissionStatusPayload {
   smokeTurnMillis?: number;
   smokePeakRam?: number;
   smokeError?: string;
-  retiredVersionIdsByLadder?: Record<string, number>;
 }
 
 export interface SubmissionStatusResponse {
@@ -1001,7 +945,6 @@ export interface MatchCompletePayload {
   match: db.CompletedMatchPayload;
   game1Log?: string;
   game2Log?: string;
-  ladderStatus?: db.LadderStatus;
 }
 
 export interface MatchCompleteResponse {
@@ -1019,28 +962,12 @@ export interface LadderArchiveResponse {
   sha256: string;
 }
 
-export interface LadderTeamsUploadResponse {
-  ok: true;
-  ladderId: string;
-  format: string;
-  count: number;
-  sha256: string;
-}
-
 export interface LadderTeamsResponse {
   ladderId: string;
   format: string;
   count: number;
   sha256: string;
   teams: string[];
-}
-
-export interface TournamentArchiveResponse {
-  ok: true;
-  tournamentId: string;
-  archiveHref: string;
-  bytes: number;
-  sha256: string;
 }
 
 export type TournamentBroadcastPayload =
@@ -1063,13 +990,11 @@ export type TournamentBroadcastPayload =
     p2?: BroadcastPlayer;
     lines?: string[];
     live?: boolean;
-  } |
-  LiveBroadcast;
+  };
 
 export interface TournamentGameCompletePayload {
   game: Omit<db.CompletedTournamentGamePayload, 'tournamentId'>;
   table?: number;
-  log?: string;
   logs?: string[];
   tournamentStatus?: db.TournamentStatus;
 }
@@ -1128,9 +1053,6 @@ export interface TournamentStateResponse {
 export interface ClientOptions {
   serverUrl: string;
   arenaSecret: string;
-  fetch?: typeof globalThis.fetch;
-  timeoutMillis?: number;
-  allowInsecureHttp?: boolean;
 }
 
 export interface LadderMatchStateInput {
@@ -1225,7 +1147,7 @@ export function buildLadderMatchState(
   };
 }
 
-function validateControlPlaneServerUrl(rawUrl: string, allowInsecureHttp = false): string {
+function validateControlPlaneServerUrl(rawUrl: string): string {
   const trimmed = rawUrl.replace(/\/+$/, '');
   const parsed = new URL(trimmed);
   if (parsed.protocol === 'https:') return trimmed;
@@ -1238,7 +1160,7 @@ function validateControlPlaneServerUrl(rawUrl: string, allowInsecureHttp = false
     host === '127.0.0.1' ||
     host === '::1' ||
     host === '[::1]';
-  if (!isLoopback && !allowInsecureHttp && process.env.ARENA_DEV !== '1') {
+  if (!isLoopback && process.env.ARENA_DEV !== '1') {
     throw new Error(
       `Refusing cleartext HTTP control-plane URL "${trimmed}" (use https:// or loopback tunnel)`
     );
@@ -1246,19 +1168,18 @@ function validateControlPlaneServerUrl(rawUrl: string, allowInsecureHttp = false
   return trimmed;
 }
 
+const CLIENT_TIMEOUT_MILLIS = 30_000;
+const UPLOAD_TIMEOUT_MILLIS = 300_000;
+
 // Outbound worker control-plane HTTP client used by the Mac Mini Arena coordinator (and `--server`
 // mock scenarios) to communicate with `/api/arena/*` using `Bearer $ARENA_SECRET`.
 export class Client {
   readonly serverUrl: string;
   private readonly arenaSecret: string;
-  private readonly fetchImpl: typeof globalThis.fetch;
-  private readonly timeoutMillis: number;
 
   constructor(options: ClientOptions) {
-    this.serverUrl = validateControlPlaneServerUrl(options.serverUrl, options.allowInsecureHttp);
+    this.serverUrl = validateControlPlaneServerUrl(options.serverUrl);
     this.arenaSecret = options.arenaSecret;
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.timeoutMillis = options.timeoutMillis ?? 30_000;
   }
 
   private async requestJson<T>(
@@ -1274,11 +1195,11 @@ export class Client {
       headers['content-type'] = 'application/json';
       serialized = JSON.stringify(body);
     }
-    const res = await this.fetchImpl(`${this.serverUrl}${endpoint}`, {
+    const res = await fetch(`${this.serverUrl}${endpoint}`, {
       method,
       headers,
       body: serialized,
-      signal: AbortSignal.timeout(this.timeoutMillis),
+      signal: AbortSignal.timeout(CLIENT_TIMEOUT_MILLIS),
     });
     const text = await res.text();
     let parsed: unknown;
@@ -1309,8 +1230,7 @@ export class Client {
     const bodyView = Buffer.isBuffer(archive)
       ? archive
       : Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
-    const uploadTimeout = Math.max(this.timeoutMillis, 300_000);
-    const res = await this.fetchImpl(`${this.serverUrl}${endpoint}`, {
+    const res = await fetch(`${this.serverUrl}${endpoint}`, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${this.arenaSecret}`,
@@ -1318,7 +1238,7 @@ export class Client {
         'x-content-sha256': digest,
       },
       body: bodyView as unknown as BodyInit,
-      signal: AbortSignal.timeout(uploadTimeout),
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MILLIS),
     });
     const text = await res.text();
     let parsed: unknown;
@@ -1423,17 +1343,6 @@ export class Client {
     );
   }
 
-  uploadLadderTeams(
-    ladderId: string,
-    teams: string | string[]
-  ): Promise<LadderTeamsUploadResponse> {
-    return this.requestJson<LadderTeamsUploadResponse>(
-      'PUT',
-      `/api/arena/ladders/${encodeURIComponent(ladderId)}/teams`,
-      {teams}
-    );
-  }
-
   getLadderTeams(ladderId: string): Promise<LadderTeamsResponse> {
     return this.requestJson<LadderTeamsResponse>(
       'GET',
@@ -1445,19 +1354,6 @@ export class Client {
     return this.requestJson<TournamentStateResponse>(
       'GET',
       `/api/arena/tournaments/${encodeURIComponent(tournamentId)}/state`
-    );
-  }
-
-  uploadTournamentArchive(
-    tournamentId: string,
-    archive: Uint8Array,
-    sha256?: string
-  ): Promise<TournamentArchiveResponse> {
-    return this.uploadArchive<TournamentArchiveResponse>(
-      `/api/arena/tournaments/${encodeURIComponent(tournamentId)}/archive`,
-      archive,
-      sha256,
-      'application/x-7z-compressed'
     );
   }
 
@@ -1489,21 +1385,6 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   res.end(JSON.stringify(data));
-}
-
-function sendCachedJson(req: http.IncomingMessage, res: http.ServerResponse, data: unknown) {
-  const payload = JSON.stringify(data);
-  const etag = `"${crypto.createHash('sha1').update(payload).digest('hex')}"`;
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('ETag', etag);
-  if (req.headers['if-none-match'] === etag) {
-    res.statusCode = 304;
-    res.end();
-    return;
-  }
-  res.statusCode = 200;
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.end(payload);
 }
 
 function openSse(res: http.ServerResponse) {
@@ -1543,107 +1424,13 @@ function broadcastSseFrame(
   }
 }
 
-const MAX_TEAMS_BODY_BYTES = 8 * 1024 * 1024;
-
-function readTeamsBody(
-  req: http.IncomingMessage,
-  maxBytes = MAX_TEAMS_BODY_BYTES
-): Promise<string | string[]> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    let settled = false;
-    req.on('data', (chunk: Buffer) => {
-      if (settled) return;
-      size += chunk.length;
-      if (size > maxBytes) {
-        settled = true;
-        reject(Object.assign(new Error('Teams body exceeds 8 MiB limit.'), {status: 413}));
-        req.resume();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (settled) return;
-      settled = true;
-      const raw = Buffer.concat(chunks).toString('utf8');
-      const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
-      if (contentType.includes('application/json')) {
-        try {
-          const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            reject(Object.assign(new Error('Request body must be a JSON object.'), {status: 400}));
-            return;
-          }
-          const rawTeams = (parsed as Record<string, unknown>).teams;
-          if (typeof rawTeams === 'string') {
-            resolve(rawTeams);
-            return;
-          }
-          if (Array.isArray(rawTeams)) {
-            resolve(rawTeams.map(String));
-            return;
-          }
-          reject(Object.assign(
-            new Error('JSON body must include a string or array "teams" field.'),
-            {status: 400}
-          ));
-          return;
-        } catch {
-          reject(Object.assign(new Error('Invalid JSON request body.'), {status: 400}));
-          return;
-        }
-      }
-      resolve(raw);
-    });
-    req.on('error', err => {
-      if (!settled) {
-        settled = true;
-        reject(err);
-      }
-    });
-  });
-}
-
-function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    let settled = false;
-    req.on('data', (chunk: Buffer) => {
-      if (settled) return;
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        settled = true;
-        reject(Object.assign(new Error('Request body exceeds 1 MB limit.'), {status: 413}));
-        req.resume();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (settled) return;
-      settled = true;
-      try {
-        const raw = Buffer.concat(chunks).toString('utf8');
-        const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          reject(Object.assign(new Error('Request body must be a JSON object.'), {status: 400}));
-          return;
-        }
-        resolve(parsed as Record<string, unknown>);
-      } catch {
-        reject(Object.assign(new Error('Invalid JSON request body.'), {status: 400}));
-      }
-    });
-    req.on('error', err => {
-      if (!settled) {
-        settled = true;
-        reject(err);
-      }
-    });
-  });
+async function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
+  const raw = await readBody(req, MAX_BODY_BYTES, 'Request body exceeds 1 MB limit.');
+  try {
+    return (raw ? JSON.parse(raw) : {}) as T;
+  } catch {
+    throw Object.assign(new Error('Invalid JSON request body.'), {status: 400});
+  }
 }
 
 function streamBinaryArchive(
@@ -1728,413 +1515,8 @@ function safeSecretEquals(provided: string, expected: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-function isFiniteNonNeg(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0;
-}
-
-function isNonNegInt(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
-}
-
-function isPosInt(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v > 0;
-}
-
-function parsePokemonHealthArray(raw: unknown, label: string): PokemonHealth[] {
-  if (!Array.isArray(raw) || raw.length > 6) {
-    throw Object.assign(
-      new Error(`${label} must be an array of at most 6 Pokémon health entries.`),
-      {status: 400}
-    );
-  }
-  return raw.map((entry, idx) => {
-    if (!isSanitizedPokemonHealth(entry)) {
-      throw Object.assign(new Error(`Invalid ${label}[${idx}].`), {status: 400});
-    }
-    return {percent: entry.percent, color: entry.color};
-  });
-}
-
-function parseTeamHashLabel(raw: unknown, label: string): string | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== 'string' || !/^(?:P[12]:)?[0-9a-f]{12}$/i.test(raw.trim())) {
-    throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
-  }
-  return raw.trim();
-}
-
-function parseLiveSlot(raw: unknown, label: string): LiveSlot {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw Object.assign(new Error(`Invalid ${label} telemetry object.`), {status: 400});
-  }
-  const obj = raw as Record<string, unknown>;
-  if (typeof obj.slug !== 'string' || !obj.slug.trim()) {
-    throw Object.assign(new Error(`Invalid ${label}.slug.`), {status: 400});
-  }
-  if (typeof obj.name !== 'string' || !obj.name.trim()) {
-    throw Object.assign(new Error(`Invalid ${label}.name.`), {status: 400});
-  }
-  try {
-    validateAgentName(obj.name);
-  } catch {
-    throw Object.assign(new Error(`Invalid ${label}.name.`), {status: 400});
-  }
-  if (typeof obj.version !== 'string' || !VERSION_RE.test(obj.version.trim())) {
-    throw Object.assign(new Error(`Invalid ${label}.version.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.bankSeconds)) {
-    throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
-  }
-  if (obj.initMillis !== undefined && !isFiniteNonNeg(obj.initMillis)) {
-    throw Object.assign(new Error(`Invalid ${label}.initMillis.`), {status: 400});
-  }
-  if (obj.teamPreviewMillis !== undefined && !isFiniteNonNeg(obj.teamPreviewMillis)) {
-    throw Object.assign(new Error(`Invalid ${label}.teamPreviewMillis.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.lastTurnMillis)) {
-    throw Object.assign(new Error(`Invalid ${label}.lastTurnMillis.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.meanTurnMillis)) {
-    throw Object.assign(new Error(`Invalid ${label}.meanTurnMillis.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.ram)) {
-    throw Object.assign(new Error(`Invalid ${label}.ram.`), {status: 400});
-  }
-  const team = parseTeamHashLabel(obj.team, `${label}.team`);
-  const pokemon = obj.pokemon !== undefined
-    ? parsePokemonHealthArray(obj.pokemon, `${label}.pokemon`)
-    : undefined;
-  return {
-    slug: obj.slug.trim(),
-    name: obj.name.trim(),
-    version: obj.version.trim(),
-    bankSeconds: obj.bankSeconds,
-    ...(obj.initMillis !== undefined ? {initMillis: obj.initMillis} : {}),
-    ...(obj.teamPreviewMillis !== undefined ? {teamPreviewMillis: obj.teamPreviewMillis} : {}),
-    lastTurnMillis: obj.lastTurnMillis,
-    meanTurnMillis: obj.meanTurnMillis,
-    ram: obj.ram,
-    team,
-    ...(pokemon && pokemon.length > 0 ? {pokemon} : {}),
-  };
-}
-
-function parseLiveGameSummarySide(raw: unknown, label: string): LiveGameSummarySide {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
-  }
-  const obj = raw as Record<string, unknown>;
-  if (!isFiniteNonNeg(obj.bankSeconds)) {
-    throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
-  }
-  if (obj.initMillis !== undefined && !isFiniteNonNeg(obj.initMillis)) {
-    throw Object.assign(new Error(`Invalid ${label}.initMillis.`), {status: 400});
-  }
-  if (obj.teamPreviewMillis !== undefined && !isFiniteNonNeg(obj.teamPreviewMillis)) {
-    throw Object.assign(new Error(`Invalid ${label}.teamPreviewMillis.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.meanTurnMillis)) {
-    throw Object.assign(new Error(`Invalid ${label}.meanTurnMillis.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.ram)) {
-    throw Object.assign(new Error(`Invalid ${label}.ram.`), {status: 400});
-  }
-  const team = parseTeamHashLabel(obj.team, `${label}.team`);
-  const pokemon = obj.pokemon !== undefined
-    ? parsePokemonHealthArray(obj.pokemon, `${label}.pokemon`)
-    : undefined;
-  return {
-    bankSeconds: obj.bankSeconds,
-    ...(obj.initMillis !== undefined ? {initMillis: obj.initMillis} : {}),
-    ...(obj.teamPreviewMillis !== undefined ? {teamPreviewMillis: obj.teamPreviewMillis} : {}),
-    meanTurnMillis: obj.meanTurnMillis,
-    ram: obj.ram,
-    ...(team !== undefined ? {team} : {}),
-    ...(pokemon && pokemon.length > 0 ? {pokemon} : {}),
-  };
-}
-
-function parseLiveGameSummary(raw: unknown, format: string): LiveGameSummary {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw Object.assign(new Error('Invalid game1Summary.'), {status: 400});
-  }
-  const g1 = raw as Record<string, unknown>;
-  if (g1.winnerSlot !== 'p1' && g1.winnerSlot !== 'p2' && g1.winnerSlot !== undefined) {
-    throw Object.assign(
-      new Error('game1Summary.winnerSlot must be "p1", "p2", or omitted.'),
-      {status: 400}
-    );
-  }
-  if (!isNonNegInt(g1.turns)) {
-    throw Object.assign(
-      new Error('game1Summary.turns must be a non-negative integer.'),
-      {status: 400}
-    );
-  }
-  let endReason: string | undefined;
-  if (g1.endReason !== undefined) {
-    if (typeof g1.endReason !== 'string' || !g1.endReason.trim()) {
-      throw Object.assign(new Error('Invalid game1Summary.endReason.'), {status: 400});
-    }
-    endReason = g1.endReason.trim().slice(0, 64);
-  }
-  let p1 = g1.p1 !== undefined ? parseLiveGameSummarySide(g1.p1, 'game1Summary.p1') : undefined;
-  let p2 = g1.p2 !== undefined ? parseLiveGameSummarySide(g1.p2, 'game1Summary.p2') : undefined;
-
-  if (g1.viewer !== undefined) {
-    if (!g1.viewer || typeof g1.viewer !== 'object' || Array.isArray(g1.viewer)) {
-      throw Object.assign(new Error('Invalid game1Summary.viewer.'), {status: 400});
-    }
-    const rv = g1.viewer as Record<string, unknown>;
-    if (rv.lines !== undefined && !Array.isArray(rv.lines)) {
-      throw Object.assign(
-        new Error('game1Summary.viewer.lines must be an array of strings.'),
-        {status: 400}
-      );
-    }
-    const lines = Array.isArray(rv.lines)
-      ? rv.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
-      : [];
-    const rawP1 = rv.p1 && typeof rv.p1 === 'object'
-      ? (rv.p1 as Record<string, unknown>)
-      : undefined;
-    const rawP2 = rv.p2 && typeof rv.p2 === 'object'
-      ? (rv.p2 as Record<string, unknown>)
-      : undefined;
-    const g1Health = extractBattlePokemonHealth({
-      lines,
-      format,
-      p1Pokemon: Array.isArray(rawP1?.pokemon) ? rawP1.pokemon : undefined,
-      p2Pokemon: Array.isArray(rawP2?.pokemon) ? rawP2.pokemon : undefined,
-      finished: true,
-    });
-    if (p1 && !p1.pokemon && g1Health.p1.length > 0) p1 = {...p1, pokemon: g1Health.p1};
-    if (p2 && !p2.pokemon && g1Health.p2.length > 0) p2 = {...p2, pokemon: g1Health.p2};
-  }
-  if (p1?.pokemon || p2?.pokemon) {
-    const projected = extractBattlePokemonHealth({
-      format,
-      p1Pokemon: p1?.pokemon,
-      p2Pokemon: p2?.pokemon,
-      finished: true,
-    });
-    if (p1?.pokemon) p1 = {...p1, pokemon: projected.p1};
-    if (p2?.pokemon) p2 = {...p2, pokemon: projected.p2};
-  }
-
-  return {
-    ...(g1.winnerSlot !== undefined ? {winnerSlot: g1.winnerSlot} : {}),
-    turns: g1.turns,
-    ...(endReason !== undefined ? {endReason} : {}),
-    ...(p1 !== undefined ? {p1} : {}),
-    ...(p2 !== undefined ? {p2} : {}),
-  };
-}
-
-function parseCompletedMatch(raw: unknown): db.CompletedMatchPayload {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw Object.assign(new Error('Missing or invalid "match" object.'), {status: 400});
-  }
-  const m = raw as Record<string, unknown>;
-  if (typeof m.id !== 'string' || !m.id.trim()) {
-    throw Object.assign(new Error('Invalid match.id.'), {status: 400});
-  }
-  if (typeof m.ladderId !== 'string' || !m.ladderId.trim()) {
-    throw Object.assign(new Error('Invalid match.ladderId.'), {status: 400});
-  }
-  if (!isPosInt(m.p1VersionId) || !isPosInt(m.p2VersionId) || m.p1VersionId === m.p2VersionId) {
-    throw Object.assign(
-      new Error('match.p1VersionId and match.p2VersionId must be distinct positive integers.'),
-      {status: 400}
-    );
-  }
-  if (typeof m.seed !== 'string' || !m.seed.trim()) {
-    throw Object.assign(new Error('Invalid match.seed.'), {status: 400});
-  }
-  if (
-    typeof m.game1Outcome !== 'string' ||
-    !VALID_GAME_OUTCOMES.has(m.game1Outcome as ratings.GameOutcome)
-  ) {
-    throw Object.assign(new Error('Invalid match.game1Outcome.'), {status: 400});
-  }
-  if (
-    typeof m.game2Outcome !== 'string' ||
-    !VALID_GAME_OUTCOMES.has(m.game2Outcome as ratings.GameOutcome)
-  ) {
-    throw Object.assign(new Error('Invalid match.game2Outcome.'), {status: 400});
-  }
-  const expectedCat = `${m.game1Outcome}${m.game2Outcome}` as ratings.MatchCategory;
-  if (
-    typeof m.category !== 'string' ||
-    !VALID_MATCH_CATEGORIES.has(m.category as ratings.MatchCategory) ||
-    m.category !== expectedCat
-  ) {
-    throw Object.assign(
-      new Error(`match.category must equal "${expectedCat}".`),
-      {status: 400}
-    );
-  }
-  if (!isNonNegInt(m.game1Turns) || !isNonNegInt(m.game2Turns)) {
-    throw Object.assign(new Error('Invalid match turn counts.'), {status: 400});
-  }
-  if (typeof m.game1EndReason !== 'string' || !m.game1EndReason.trim()) {
-    throw Object.assign(new Error('Invalid match.game1EndReason.'), {status: 400});
-  }
-  if (typeof m.game2EndReason !== 'string' || !m.game2EndReason.trim()) {
-    throw Object.assign(new Error('Invalid match.game2EndReason.'), {status: 400});
-  }
-  const hasMatchRam = isNonNegInt(m.p1PeakRam) && isNonNegInt(m.p2PeakRam);
-  const hasGameRam =
-    isNonNegInt(m.p1Game1PeakRam) &&
-    isNonNegInt(m.p1Game2PeakRam) &&
-    isNonNegInt(m.p2Game1PeakRam) &&
-    isNonNegInt(m.p2Game2PeakRam);
-  if (!hasMatchRam && !hasGameRam) {
-    throw Object.assign(new Error('Invalid peak RAM telemetry.'), {status: 400});
-  }
-  if (
-    (m.p1PeakRam !== undefined && !isNonNegInt(m.p1PeakRam)) ||
-    (m.p2PeakRam !== undefined && !isNonNegInt(m.p2PeakRam)) ||
-    (m.p1Game1PeakRam !== undefined && !isNonNegInt(m.p1Game1PeakRam)) ||
-    (m.p1Game2PeakRam !== undefined && !isNonNegInt(m.p1Game2PeakRam)) ||
-    (m.p2Game1PeakRam !== undefined && !isNonNegInt(m.p2Game1PeakRam)) ||
-    (m.p2Game2PeakRam !== undefined && !isNonNegInt(m.p2Game2PeakRam))
-  ) {
-    throw Object.assign(new Error('Invalid peak RAM telemetry.'), {status: 400});
-  }
-  if (
-    !isFiniteNonNeg(m.p1Game1BankSeconds) ||
-    !isFiniteNonNeg(m.p1Game2BankSeconds) ||
-    !isFiniteNonNeg(m.p2Game1BankSeconds) ||
-    !isFiniteNonNeg(m.p2Game2BankSeconds)
-  ) {
-    throw Object.assign(new Error('Invalid bank telemetry.'), {status: 400});
-  }
-  const hasMatchTurnMs = isNonNegInt(m.p1MeanTurnMillis) && isNonNegInt(m.p2MeanTurnMillis);
-  const hasGameTurnMs =
-    isNonNegInt(m.p1Game1MeanTurnMillis) &&
-    isNonNegInt(m.p1Game2MeanTurnMillis) &&
-    isNonNegInt(m.p2Game1MeanTurnMillis) &&
-    isNonNegInt(m.p2Game2MeanTurnMillis);
-  if (!hasMatchTurnMs && !hasGameTurnMs) {
-    throw Object.assign(new Error('Invalid meanTurnMillis telemetry.'), {status: 400});
-  }
-  if (
-    (m.p1MeanTurnMillis !== undefined && !isNonNegInt(m.p1MeanTurnMillis)) ||
-    (m.p2MeanTurnMillis !== undefined && !isNonNegInt(m.p2MeanTurnMillis)) ||
-    (m.p1Game1MeanTurnMillis !== undefined && !isNonNegInt(m.p1Game1MeanTurnMillis)) ||
-    (m.p1Game2MeanTurnMillis !== undefined && !isNonNegInt(m.p1Game2MeanTurnMillis)) ||
-    (m.p2Game1MeanTurnMillis !== undefined && !isNonNegInt(m.p2Game1MeanTurnMillis)) ||
-    (m.p2Game2MeanTurnMillis !== undefined && !isNonNegInt(m.p2Game2MeanTurnMillis))
-  ) {
-    throw Object.assign(new Error('Invalid meanTurnMillis telemetry.'), {status: 400});
-  }
-  const optInitFields = [
-    m.p1InitMillis,
-    m.p2InitMillis,
-    m.p1Game1InitMillis,
-    m.p1Game2InitMillis,
-    m.p2Game1InitMillis,
-    m.p2Game2InitMillis,
-  ];
-  if (optInitFields.some(v => v !== undefined && !isFiniteNonNeg(v))) {
-    throw Object.assign(new Error('Invalid initMillis telemetry.'), {status: 400});
-  }
-  const optTpFields = [
-    m.p1TeamPreviewMillis,
-    m.p2TeamPreviewMillis,
-    m.p1Game1TeamPreviewMillis,
-    m.p1Game2TeamPreviewMillis,
-    m.p2Game1TeamPreviewMillis,
-    m.p2Game2TeamPreviewMillis,
-  ];
-  if (optTpFields.some(v => v !== undefined && !isFiniteNonNeg(v))) {
-    throw Object.assign(new Error('Invalid teamPreviewMillis telemetry.'), {status: 400});
-  }
-  if (!isPosInt(m.completedAt)) {
-    throw Object.assign(new Error('Invalid match.completedAt.'), {status: 400});
-  }
-
-  const p1G1Ram = m.p1Game1PeakRam ?? m.p1PeakRam ?? 0;
-  const p1G2Ram = m.p1Game2PeakRam ?? m.p1PeakRam ?? 0;
-  const p2G1Ram = m.p2Game1PeakRam ?? m.p2PeakRam ?? 0;
-  const p2G2Ram = m.p2Game2PeakRam ?? m.p2PeakRam ?? 0;
-  const p1G1InitMs = (m.p1Game1InitMillis as number | undefined) ??
-    (m.p1InitMillis as number | undefined) ?? 0;
-  const p1G2InitMs = (m.p1Game2InitMillis as number | undefined) ??
-    (m.p1InitMillis as number | undefined) ?? 0;
-  const p2G1InitMs = (m.p2Game1InitMillis as number | undefined) ??
-    (m.p2InitMillis as number | undefined) ?? 0;
-  const p2G2InitMs = (m.p2Game2InitMillis as number | undefined) ??
-    (m.p2InitMillis as number | undefined) ?? 0;
-  const p1G1TpMs = (m.p1Game1TeamPreviewMillis as number | undefined) ??
-    (m.p1TeamPreviewMillis as number | undefined);
-  const p1G2TpMs = (m.p1Game2TeamPreviewMillis as number | undefined) ??
-    (m.p1TeamPreviewMillis as number | undefined);
-  const p2G1TpMs = (m.p2Game1TeamPreviewMillis as number | undefined) ??
-    (m.p2TeamPreviewMillis as number | undefined);
-  const p2G2TpMs = (m.p2Game2TeamPreviewMillis as number | undefined) ??
-    (m.p2TeamPreviewMillis as number | undefined);
-  const p1G1TurnMs = m.p1Game1MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
-  const p1G2TurnMs = m.p1Game2MeanTurnMillis ?? m.p1MeanTurnMillis ?? 0;
-  const p2G1TurnMs = m.p2Game1MeanTurnMillis ?? m.p2MeanTurnMillis ?? 0;
-  const p2G2TurnMs = m.p2Game2MeanTurnMillis ?? m.p2MeanTurnMillis ?? 0;
-
-  return {
-    id: m.id.trim(),
-    ladderId: m.ladderId.trim(),
-    p1VersionId: m.p1VersionId,
-    p2VersionId: m.p2VersionId,
-    seed: m.seed.trim(),
-    p1TeamLabel: typeof m.p1TeamLabel === 'string' ? m.p1TeamLabel : undefined,
-    p2TeamLabel: typeof m.p2TeamLabel === 'string' ? m.p2TeamLabel : undefined,
-    game1Outcome: m.game1Outcome as ratings.GameOutcome,
-    game2Outcome: m.game2Outcome as ratings.GameOutcome,
-    category: m.category,
-    game1Turns: m.game1Turns,
-    game2Turns: m.game2Turns,
-    game1EndReason: m.game1EndReason.trim(),
-    game2EndReason: m.game2EndReason.trim(),
-    p1PeakRam: m.p1PeakRam ?? Math.max(p1G1Ram, p1G2Ram),
-    p2PeakRam: m.p2PeakRam ?? Math.max(p2G1Ram, p2G2Ram),
-    p1Game1PeakRam: p1G1Ram,
-    p1Game2PeakRam: p1G2Ram,
-    p2Game1PeakRam: p2G1Ram,
-    p2Game2PeakRam: p2G2Ram,
-    p1Game1BankSeconds: m.p1Game1BankSeconds,
-    p1Game2BankSeconds: m.p1Game2BankSeconds,
-    p2Game1BankSeconds: m.p2Game1BankSeconds,
-    p2Game2BankSeconds: m.p2Game2BankSeconds,
-    p1InitMillis: (m.p1InitMillis as number | undefined) ??
-      Math.round((p1G1InitMs + p1G2InitMs) / 2),
-    p2InitMillis: (m.p2InitMillis as number | undefined) ??
-      Math.round((p2G1InitMs + p2G2InitMs) / 2),
-    p1Game1InitMillis: p1G1InitMs,
-    p1Game2InitMillis: p1G2InitMs,
-    p2Game1InitMillis: p2G1InitMs,
-    p2Game2InitMillis: p2G2InitMs,
-    ...(p1G1TpMs !== undefined ? {p1Game1TeamPreviewMillis: p1G1TpMs} : {}),
-    ...(p1G2TpMs !== undefined ? {p1Game2TeamPreviewMillis: p1G2TpMs} : {}),
-    ...(p2G1TpMs !== undefined ? {p2Game1TeamPreviewMillis: p2G1TpMs} : {}),
-    ...(p2G2TpMs !== undefined ? {p2Game2TeamPreviewMillis: p2G2TpMs} : {}),
-    p1MeanTurnMillis: m.p1MeanTurnMillis ?? Math.round((p1G1TurnMs + p1G2TurnMs) / 2),
-    p2MeanTurnMillis: m.p2MeanTurnMillis ?? Math.round((p2G1TurnMs + p2G2TurnMs) / 2),
-    p1Game1MeanTurnMillis: p1G1TurnMs,
-    p1Game2MeanTurnMillis: p1G2TurnMs,
-    p2Game1MeanTurnMillis: p2G1TurnMs,
-    p2Game2MeanTurnMillis: p2G2TurnMs,
-    completedAt: m.completedAt,
-  };
-}
-
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SAFE_LOG_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.log$/;
-const VALID_TOURNAMENT_STAGES = new Set<db.TournamentGameStage>(['Round Robin', 'Superfinal']);
-const VALID_TOURNAMENT_STATUSES = new Set<db.TournamentStatus>([
-  'scheduled',
-  'running',
-  'completed',
-]);
 const SSE_KEEPALIVE_MILLIS = 25_000;
 const MAX_TABLE_LINES = 10_000;
 const MAX_TOURNAMENT_LOG_BYTES = 512 * 1024;
@@ -2178,35 +1560,6 @@ export function promoteArchivedPoolsLogs(publicDir: string, ladderId: string): b
   return moved;
 }
 
-function parseBroadcastPlayer(raw: unknown, label: string): BroadcastPlayer {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw Object.assign(new Error(`Invalid ${label} clock object.`), {status: 400});
-  }
-  const obj = raw as Record<string, unknown>;
-  if (typeof obj.name !== 'string' || !obj.name.trim()) {
-    throw Object.assign(new Error(`Invalid ${label}.name.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.bankSeconds)) {
-    throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
-  }
-  if (typeof obj.thinking !== 'boolean') {
-    throw Object.assign(new Error(`Invalid ${label}.thinking.`), {status: 400});
-  }
-  if (!isFiniteNonNeg(obj.incrementSeconds)) {
-    throw Object.assign(new Error(`Invalid ${label}.incrementSeconds.`), {status: 400});
-  }
-  return {
-    name: obj.name.trim(),
-    bankSeconds: obj.bankSeconds,
-    thinking: obj.thinking,
-    incrementSeconds: obj.incrementSeconds,
-    slug: typeof obj.slug === 'string' && obj.slug.trim() ? obj.slug.trim() : undefined,
-    version: typeof obj.version === 'string' && obj.version.trim() ? obj.version.trim() : undefined,
-    team: typeof obj.team === 'string' && obj.team.trim() ? obj.team.trim() : undefined,
-    pokemon: Array.isArray(obj.pokemon) ? obj.pokemon.slice(0, 6) : undefined,
-  };
-}
-
 function formatSeriesSummaryPill(
   label: string,
   summary: SeriesGameSummary,
@@ -2219,26 +1572,6 @@ function formatSeriesSummaryPill(
       ? escapeHtml(p2Name ?? 'P2')
       : 'Tie';
   return `<span class="muted"><tt>${label}</tt>: ${winner} (${summary.turns}t)</span>`;
-}
-
-function parseSeriesGameSummary(raw: unknown, label: string): SeriesGameSummary {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
-  }
-  const s = raw as Record<string, unknown>;
-  if (s.winnerSlot !== 'p1' && s.winnerSlot !== 'p2' && s.winnerSlot !== undefined) {
-    throw Object.assign(
-      new Error(`${label}.winnerSlot must be "p1", "p2", or omitted.`),
-      {status: 400}
-    );
-  }
-  if (!isNonNegInt(s.turns)) {
-    throw Object.assign(
-      new Error(`${label}.turns must be a non-negative integer.`),
-      {status: 400}
-    );
-  }
-  return {winnerSlot: s.winnerSlot, turns: s.turns};
 }
 
 function buildDefaultTableHeaders(tb: BroadcastTable): {left: string; right: string} {
@@ -2265,154 +1598,89 @@ function buildDefaultTableHeaders(tb: BroadcastTable): {left: string; right: str
   return {left, right: parts.join(' · ')};
 }
 
-function parseCompletedTournamentGame(
-  raw: unknown,
-  tournamentId: string
-): db.CompletedTournamentGamePayload {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw Object.assign(new Error('Missing or invalid "game" object.'), {status: 400});
-  }
-  const g = raw as Record<string, unknown>;
-  if (typeof g.id !== 'string' || !SAFE_ID_RE.test(g.id.trim())) {
-    throw Object.assign(new Error('Invalid game.id.'), {status: 400});
-  }
-  if (
-    typeof g.stage !== 'string' ||
-    !VALID_TOURNAMENT_STAGES.has(g.stage as db.TournamentGameStage)
-  ) {
-    throw Object.assign(new Error('Invalid game.stage.'), {status: 400});
-  }
-  if (!isPosInt(g.cycle) || !isPosInt(g.matchupGame)) {
-    throw Object.assign(
-      new Error('game.cycle and game.matchupGame must be positive integers.'),
-      {status: 400}
-    );
-  }
-  const parsePlayer = (val: unknown, label: string): db.TournamentGamePlayer => {
-    if (!val || typeof val !== 'object' || Array.isArray(val)) {
-      throw Object.assign(new Error(`Invalid game.${label}.`), {status: 400});
-    }
-    const obj = val as Record<string, unknown>;
-    if (!isPosInt(obj.versionId)) {
-      throw Object.assign(new Error(`Invalid game.${label}.versionId.`), {status: 400});
-    }
-    let team: string | undefined;
-    if (obj.team !== undefined) {
-      if (typeof obj.team !== 'string') {
-        throw Object.assign(new Error(`Invalid game.${label}.team.`), {status: 400});
-      }
-      if (obj.team.trim()) team = obj.team.trim();
-    }
-    return {versionId: obj.versionId, team};
-  };
-  const p1 = parsePlayer(g.p1, 'p1');
-  const p2 = parsePlayer(g.p2, 'p2');
-  if (p1.versionId === p2.versionId) {
-    throw Object.assign(
-      new Error('game.p1.versionId and game.p2.versionId must be distinct positive integers.'),
-      {status: 400}
-    );
-  }
-  if (
-    typeof g.outcome !== 'string' ||
-    !VALID_GAME_OUTCOMES.has(g.outcome as ratings.GameOutcome)
-  ) {
-    throw Object.assign(new Error('Invalid game.outcome.'), {status: 400});
-  }
-  if (g.preemptions !== undefined && !isNonNegInt(g.preemptions)) {
-    throw Object.assign(new Error('Invalid game.preemptions.'), {status: 400});
-  }
-  if (!isPosInt(g.completedAt)) {
-    throw Object.assign(new Error('Invalid game.completedAt.'), {status: 400});
-  }
-  if (!Array.isArray(g.games) || g.games.length === 0) {
-    throw Object.assign(
-      new Error('game.games must be a non-empty array.'),
-      {status: 400}
-    );
+// Projects raw `@pkmn/sim` party telemetry into anti-scouting `{percent, color}` health pips and
+// strips spectator log lines on non-`random` ladders so private/harvested sets are never exposed.
+function sanitizeLiveMatch(
+  input: LiveMatchInput,
+  allowViewer: boolean,
+  slot?: db.LadderSlot
+): LiveMatch {
+  const {viewer: rawViewer, game1Summary: rawG1, ...rest} = input;
+  let p1 = rest.p1;
+  let p2 = rest.p2;
+  if (p1.pokemon || p2.pokemon) {
+    const projected = extractBattlePokemonHealth({
+      format: rest.format,
+      p1Pokemon: p1.pokemon,
+      p2Pokemon: p2.pokemon,
+    });
+    if (p1.pokemon) p1 = {...p1, pokemon: projected.p1};
+    if (p2.pokemon) p2 = {...p2, pokemon: projected.p2};
   }
 
-  const parseGamePlayerStats = (
-    val: unknown,
-    label: string
-  ): db.TournamentGamePlayerStats | undefined => {
-    if (val === undefined) return undefined;
-    if (!val || typeof val !== 'object' || Array.isArray(val)) {
-      throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
+  let game1Summary: LiveGameSummary | undefined;
+  if (rawG1) {
+    const {viewer: g1Viewer, ...g1Rest} = rawG1;
+    let g1P1 = g1Rest.p1;
+    let g1P2 = g1Rest.p2;
+    if (g1Viewer) {
+      const g1Health = extractBattlePokemonHealth({
+        lines: g1Viewer.lines ?? [],
+        format: rest.format,
+        p1Pokemon: g1Viewer.p1?.pokemon,
+        p2Pokemon: g1Viewer.p2?.pokemon,
+        finished: true,
+      });
+      if (g1P1 && !g1P1.pokemon && g1Health.p1.length > 0) g1P1 = {...g1P1, pokemon: g1Health.p1};
+      if (g1P2 && !g1P2.pokemon && g1Health.p2.length > 0) g1P2 = {...g1P2, pokemon: g1Health.p2};
     }
-    const s = val as Record<string, unknown>;
-    if (s.bankSeconds !== undefined && !isFiniteNonNeg(s.bankSeconds)) {
-      throw Object.assign(new Error(`Invalid ${label}.bankSeconds.`), {status: 400});
+    if (g1P1?.pokemon || g1P2?.pokemon) {
+      const projected = extractBattlePokemonHealth({
+        format: rest.format,
+        p1Pokemon: g1P1?.pokemon,
+        p2Pokemon: g1P2?.pokemon,
+        finished: true,
+      });
+      if (g1P1?.pokemon) g1P1 = {...g1P1, pokemon: projected.p1};
+      if (g1P2?.pokemon) g1P2 = {...g1P2, pokemon: projected.p2};
     }
-    if (s.initMillis !== undefined && !isFiniteNonNeg(s.initMillis)) {
-      throw Object.assign(new Error(`Invalid ${label}.initMillis.`), {status: 400});
-    }
-    if (s.teamPreviewMillis !== undefined && !isFiniteNonNeg(s.teamPreviewMillis)) {
-      throw Object.assign(new Error(`Invalid ${label}.teamPreviewMillis.`), {status: 400});
-    }
-    if (s.meanTurnMillis !== undefined && !isFiniteNonNeg(s.meanTurnMillis)) {
-      throw Object.assign(new Error(`Invalid ${label}.meanTurnMillis.`), {status: 400});
-    }
-    if (s.peakRam !== undefined && !isPosInt(s.peakRam)) {
-      throw Object.assign(new Error(`Invalid ${label}.peakRam.`), {status: 400});
-    }
-    return {
-      bankSeconds: s.bankSeconds,
-      initMillis: s.initMillis,
-      teamPreviewMillis: s.teamPreviewMillis,
-      meanTurnMillis: s.meanTurnMillis,
-      peakRam: s.peakRam,
+    game1Summary = {
+      ...g1Rest,
+      ...(g1P1 !== undefined ? {p1: g1P1} : {}),
+      ...(g1P2 !== undefined ? {p2: g1P2} : {}),
     };
-  };
+  }
 
-  const games: db.TournamentGameInput[] = g.games.map((rawGm, idx) => {
-    const label = `game.games[${idx}]`;
-    if (!rawGm || typeof rawGm !== 'object' || Array.isArray(rawGm)) {
-      throw Object.assign(new Error(`Invalid ${label}.`), {status: 400});
+  let viewer: LiveViewerState | undefined;
+  if (rawViewer) {
+    const lines = rawViewer.lines?.slice(-MAX_TABLE_LINES) ?? [];
+    const health = extractBattlePokemonHealth({
+      lines,
+      format: rest.format,
+      p1Pokemon: rawViewer.p1?.pokemon,
+      p2Pokemon: rawViewer.p2?.pokemon,
+    });
+    const swapped = isViewerSeatSwapped(lines, rest.game, p1.name, p2.name);
+    const matchP1Health = swapped ? health.p2 : health.p1;
+    const matchP2Health = swapped ? health.p1 : health.p2;
+    if (!p1.pokemon && matchP1Health.length > 0) p1 = {...p1, pokemon: matchP1Health};
+    if (!p2.pokemon && matchP2Health.length > 0) p2 = {...p2, pokemon: matchP2Health};
+    if (allowViewer && lines.length > 0) {
+      viewer = normalizeLiveViewer({
+        lines,
+        p1: rawViewer.p1?.pokemon ? {pokemon: rawViewer.p1.pokemon} : undefined,
+        p2: rawViewer.p2?.pokemon ? {pokemon: rawViewer.p2.pokemon} : undefined,
+      });
     }
-    const gm = rawGm as Record<string, unknown>;
-    if (gm.gameNumber !== undefined && !isPosInt(gm.gameNumber)) {
-      throw Object.assign(new Error(`Invalid ${label}.gameNumber.`), {status: 400});
-    }
-    if (typeof gm.seed !== 'string' || !gm.seed.trim()) {
-      throw Object.assign(new Error(`Invalid ${label}.seed.`), {status: 400});
-    }
-    if (
-      gm.outcome !== undefined &&
-      (typeof gm.outcome !== 'string' ||
-        !VALID_GAME_OUTCOMES.has(gm.outcome as ratings.GameOutcome))
-    ) {
-      throw Object.assign(new Error(`Invalid ${label}.outcome.`), {status: 400});
-    }
-    if (gm.turns !== undefined && !isNonNegInt(gm.turns)) {
-      throw Object.assign(new Error(`Invalid ${label}.turns.`), {status: 400});
-    }
-    if (gm.endReason !== undefined && (typeof gm.endReason !== 'string' || !gm.endReason.trim())) {
-      throw Object.assign(new Error(`Invalid ${label}.endReason.`), {status: 400});
-    }
-    return {
-      gameNumber: gm.gameNumber ?? idx + 1,
-      seed: gm.seed.trim(),
-      outcome: gm.outcome as ratings.GameOutcome | undefined,
-      turns: gm.turns,
-      endReason: typeof gm.endReason === 'string' ? gm.endReason.trim() : undefined,
-      p1: parseGamePlayerStats(gm.p1, `${label}.p1`),
-      p2: parseGamePlayerStats(gm.p2, `${label}.p2`),
-    };
-  });
+  }
 
   return {
-    id: g.id.trim(),
-    tournamentId,
-    stage: g.stage as db.TournamentGameStage,
-    cycle: g.cycle,
-    matchupGame: g.matchupGame,
-    preemptions: g.preemptions,
-    outcome: g.outcome as ratings.GameOutcome,
+    ...rest,
+    slot: slot ?? rest.slot,
+    ...(game1Summary !== undefined ? {game1Summary} : {}),
     p1,
     p2,
-    games,
-    completedAt: g.completedAt,
+    ...(viewer !== undefined ? {viewer} : {}),
   };
 }
 
@@ -2425,7 +1693,6 @@ export function register(app: polka.Polka, options: Options): Handle {
   const {db} = options;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const watchdogMillis = options.watchdogTimeoutMillis ?? WATCHDOG_TIMEOUT_MILLIS;
-  const recentLimit = options.recentMatchesLimit ?? RECENT_MATCHES_LIMIT;
   const getNowSec = options.now ?? (() => Math.floor(Date.now() / 1000));
 
   let currentLive: LiveMatch | undefined;
@@ -2476,20 +1743,21 @@ export function register(app: polka.Polka, options: Options): Handle {
   };
 
   const getArenaSecret = (): string | undefined =>
-    options.arenaSecret ?? options.auth?.getConfig()?.arenaSecret ?? process.env.ARENA_SECRET;
+    options.arenaSecret ?? process.env.ARENA_SECRET;
 
   const getSessionSecret = (): string | undefined =>
     options.sessionSecret ?? options.auth?.getConfig()?.sessionSecret ?? process.env.SESSION_SECRET;
 
   const getLiveDocument = (nowSec = getNowSec()): LiveDocument => {
     const countsBySlot = db.getMatchCountsBySlot();
-    const recentMatches = db.getRecentMatches(recentLimit).map(m => enrichMatchView(publicDir, m));
+    const recentMatches = db.getRecentMatches(RECENT_MATCHES_LIMIT)
+      .map(m => enrichMatchView(publicDir, m));
     return {
       updatedAt: liveUpdatedAt ?? nowSec,
       stale: liveStale,
       live: liveStale ? undefined : currentLive,
       runningTournament: getRunningTournamentInfo(),
-      pageSize: recentLimit,
+      pageSize: RECENT_MATCHES_LIMIT,
       totalMatches: countsBySlot.all ?? recentMatches.length,
       countsBySlot,
       historyEndpoint: '/api/battles.json',
@@ -2552,6 +1820,11 @@ export function register(app: polka.Polka, options: Options): Handle {
     armWatchdog(getNowSec());
   }
 
+  // `/api/arena/*` is a trusted internal control plane authenticated by `ARENA_SECRET` where both
+  // the server and the Mac mini / GCP Arena coordinators live in this repo and share TypeScript
+  // wire types. Routes intentionally omit defensive field-by-field schema parsers on authenticated
+  // payloads, enforcing only Bearer auth, body caps, lifecycle gates, `SAFE_ID_RE` path guards,
+  // SHA-256 archive checks, and `pools` log/viewer privacy sanitization.
   const authenticateArena = (req: http.IncomingMessage, res: http.ServerResponse): boolean => {
     const expected = getArenaSecret();
     if (!expected) {
@@ -2597,7 +1870,7 @@ export function register(app: polka.Polka, options: Options): Handle {
             version: t.version,
             ...(t.team ? {team: t.team} : {}),
             ...(teamPool.length > 0 ? {teamPool} : {}),
-            rulesJson: t.rulesJson,
+            customRules: t.rules,
             status: t.status,
             startsAt: t.startsAt,
           };
@@ -2652,102 +1925,12 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.post('/api/arena/submission-status', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    let body: Record<string, unknown>;
     try {
-      body = await readJsonBody(req);
-    } catch (err) {
-      const status = (err as {status?: number}).status ?? 400;
-      const message = err instanceof Error ? err.message : 'Invalid request body.';
-      sendJson(res, status, {error: message});
-      return;
-    }
-
-    const versionId = body.versionId;
-    const smokeStatus = body.smokeStatus;
-    if (!isPosInt(versionId)) {
-      sendJson(res, 400, {error: 'versionId must be a positive integer.'});
-      return;
-    }
-    if (
-      typeof smokeStatus !== 'string' ||
-      !VALID_SMOKE_UPDATES.has(smokeStatus as Exclude<db.SmokeStatus, 'pending'>)
-    ) {
-      sendJson(
-        res,
-        400,
-        {error: 'smokeStatus must be "passed", "failed", or "quarantined".'}
-      );
-      return;
-    }
-
-    const optInt = (val: unknown, field: string): number | undefined => {
-      if (val === undefined) return undefined;
-      if (!isNonNegInt(val)) {
-        throw Object.assign(
-          new Error(`${field} must be a non-negative integer.`),
-          {status: 400}
-        );
-      }
-      return val;
-    };
-
-    try {
-      const unpackedBytes = optInt(body.unpackedBytes, 'unpackedBytes');
-      const smokeDurationMillis = optInt(body.smokeDurationMillis, 'smokeDurationMillis');
-      const smokeInitMillis = optInt(body.smokeInitMillis, 'smokeInitMillis');
-      const smokeTeamPreviewMillis = optInt(
-        body.smokeTeamPreviewMillis,
-        'smokeTeamPreviewMillis'
-      );
-      const smokeTurnMillis = optInt(body.smokeTurnMillis, 'smokeTurnMillis');
-      const smokePeakRam = optInt(body.smokePeakRam, 'smokePeakRam');
-      let smokeError: string | undefined;
-      if (body.smokeError !== undefined) {
-        if (typeof body.smokeError !== 'string') {
-          throw Object.assign(new Error('smokeError must be a string.'), {status: 400});
-        }
-        smokeError = body.smokeError.slice(0, 16_384);
-      }
-
-      let retiredMap: Record<string, number> | undefined;
-      if (body.retiredVersionIdsByLadder !== undefined) {
-        if (
-          !body.retiredVersionIdsByLadder ||
-          typeof body.retiredVersionIdsByLadder !== 'object' ||
-          Array.isArray(body.retiredVersionIdsByLadder)
-        ) {
-          sendJson(res, 400, {error: 'retiredVersionIdsByLadder must be an object.'});
-          return;
-        }
-        retiredMap = {};
-        for (const [k, v] of Object.entries(
-          body.retiredVersionIdsByLadder as Record<string, unknown>
-        )) {
-          if (!isPosInt(v)) {
-            sendJson(
-              res,
-              400,
-              {error: `retiredVersionIdsByLadder["${k}"] must be a positive integer.`}
-            );
-            return;
-          }
-          retiredMap[k] = v;
-        }
-      }
-
-      const nowSec = getNowSec();
+      const body = await readJsonBody<SubmissionStatusPayload>(req);
       const result = db.applySubmissionStatus({
-        versionId,
-        smokeStatus: smokeStatus as Exclude<db.SmokeStatus, 'pending'>,
-        unpackedBytes,
-        smokeDurationMillis,
-        smokeInitMillis,
-        smokeTeamPreviewMillis,
-        smokeTurnMillis,
-        smokePeakRam,
-        smokeError,
-        retiredVersionIdsByLadder: retiredMap,
-        now: nowSec,
+        ...body,
+        smokeError: body.smokeError?.slice(0, 16_384),
+        now: getNowSec(),
       });
 
       Promise.resolve(options.onSubmissionStatus?.(result)).catch(err => {
@@ -2773,19 +1956,10 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.post('/api/arena/heartbeat', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonBody(req);
-    } catch (err) {
-      const status = (err as {status?: number}).status ?? 400;
-      const message = err instanceof Error ? err.message : 'Invalid request body.';
-      sendJson(res, status, {error: message});
-      return;
-    }
-
     const nowSec = getNowSec();
     try {
-      if (body.idle === true) {
+      const body = await readJsonBody<HeartbeatPayload>(req);
+      if ('idle' in body && body.idle === true) {
         currentLive = undefined;
         liveStale = false;
         liveUpdatedAt = nowSec;
@@ -2800,217 +1974,33 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      if (!isNonNegInt(body.heartbeatSeq)) {
-        sendJson(res, 400, {error: 'heartbeatSeq must be a non-negative integer.'});
-        return;
-      }
-      if (typeof body.matchId !== 'string' || !body.matchId.trim()) {
-        sendJson(res, 400, {error: 'matchId is required.'});
-        return;
-      }
-      if (typeof body.ladderId !== 'string' || !body.ladderId.trim()) {
-        sendJson(res, 400, {error: 'ladderId is required.'});
-        return;
-      }
-      if (typeof body.format !== 'string' || !body.format.trim()) {
-        sendJson(res, 400, {error: 'format is required.'});
-        return;
-      }
-      if (body.game !== 1 && body.game !== 2) {
-        sendJson(res, 400, {error: 'game must be 1 or 2.'});
-        return;
-      }
-      if (!isNonNegInt(body.turn)) {
-        sendJson(res, 400, {error: 'turn must be a non-negative integer.'});
-        return;
-      }
-      if (
-        body.activeSlot !== 'p1' &&
-        body.activeSlot !== 'p2' &&
-        body.activeSlot !== undefined
-      ) {
-        sendJson(res, 400, {error: 'activeSlot must be "p1", "p2", or omitted.'});
-        return;
-      }
-      if (!isFiniteNonNeg(body.turnBudgetSeconds) || !isFiniteNonNeg(body.incrementSeconds)) {
-        sendJson(
-          res,
-          400,
-          {error: 'turnBudgetSeconds and incrementSeconds must be non-negative numbers.'}
-        );
-        return;
-      }
-
-      const format = body.format.trim();
-      let game1Summary = body.game1Summary !== undefined
-        ? parseLiveGameSummary(body.game1Summary, format)
-        : undefined;
-
-      let p1 = parseLiveSlot(body.p1, 'p1');
-      let p2 = parseLiveSlot(body.p2, 'p2');
-      if (p1.pokemon || p2.pokemon) {
-        const projected = extractBattlePokemonHealth({
-          format,
-          p1Pokemon: p1.pokemon,
-          p2Pokemon: p2.pokemon,
-        });
-        if (p1.pokemon) p1 = {...p1, pokemon: projected.p1};
-        if (p2.pokemon) p2 = {...p2, pokemon: projected.p2};
-      }
-      const matchId = body.matchId.trim();
-      const ladderId = body.ladderId.trim();
-      const ladder = db.getLadder(ladderId);
-
-      if (currentLive?.matchId === matchId && body.heartbeatSeq < currentLive.heartbeatSeq) {
+      const frame = body as LiveMatchInput;
+      if (currentLive?.matchId === frame.matchId && frame.heartbeatSeq < currentLive.heartbeatSeq) {
         armWatchdog(nowSec);
         sendJson(res, 200, {ok: true, updatedAt: liveUpdatedAt ?? nowSec});
         return;
       }
 
-      if (game1Summary && currentLive?.matchId === matchId) {
-        if (currentLive.game === 1) {
-          const prevG1Pokemon = extractBattlePokemonHealth({
-            format,
-            p1Pokemon: currentLive.p1.pokemon,
-            p2Pokemon: currentLive.p2.pokemon,
-            finished: true,
-          });
-          game1Summary = {
-            ...game1Summary,
-            p1: game1Summary.p1 ?? {
-              bankSeconds: currentLive.p1.bankSeconds,
-              ...(currentLive.p1.initMillis !== undefined
-                ? {initMillis: currentLive.p1.initMillis}
-                : {}),
-              ...(currentLive.p1.teamPreviewMillis !== undefined
-                ? {teamPreviewMillis: currentLive.p1.teamPreviewMillis}
-                : {}),
-              meanTurnMillis: currentLive.p1.meanTurnMillis,
-              ram: currentLive.p1.ram,
-              ...(currentLive.p1.team ? {team: currentLive.p1.team} : {}),
-              ...(prevG1Pokemon.p1.length > 0 ? {pokemon: prevG1Pokemon.p1} : {}),
-            },
-            p2: game1Summary.p2 ?? {
-              bankSeconds: currentLive.p2.bankSeconds,
-              ...(currentLive.p2.initMillis !== undefined
-                ? {initMillis: currentLive.p2.initMillis}
-                : {}),
-              ...(currentLive.p2.teamPreviewMillis !== undefined
-                ? {teamPreviewMillis: currentLive.p2.teamPreviewMillis}
-                : {}),
-              meanTurnMillis: currentLive.p2.meanTurnMillis,
-              ram: currentLive.p2.ram,
-              ...(currentLive.p2.team ? {team: currentLive.p2.team} : {}),
-              ...(prevG1Pokemon.p2.length > 0 ? {pokemon: prevG1Pokemon.p2} : {}),
-            },
-          };
-        } else if (currentLive.game1Summary) {
-          game1Summary = {
-            ...currentLive.game1Summary,
-            ...game1Summary,
-            p1: game1Summary.p1 ?? currentLive.game1Summary.p1,
-            p2: game1Summary.p2 ?? currentLive.game1Summary.p2,
-          };
-        }
-      }
-
-      let viewer: LiveViewerState | undefined;
-      if (body.viewer !== undefined) {
-        if (
-          !body.viewer ||
-          typeof body.viewer !== 'object' ||
-          Array.isArray(body.viewer)
-        ) {
-          sendJson(res, 400, {error: 'Invalid viewer object.'});
-          return;
-        }
-        const rawViewer = body.viewer as Record<string, unknown>;
-        if (rawViewer.lines !== undefined && !Array.isArray(rawViewer.lines)) {
-          sendJson(res, 400, {error: 'viewer.lines must be an array of strings.'});
-          return;
-        }
-        const lines = Array.isArray(rawViewer.lines)
-          ? rawViewer.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
-          : [];
-        const rawP1 = rawViewer.p1 && typeof rawViewer.p1 === 'object'
-          ? (rawViewer.p1 as Record<string, unknown>)
-          : undefined;
-        const rawP2 = rawViewer.p2 && typeof rawViewer.p2 === 'object'
-          ? (rawViewer.p2 as Record<string, unknown>)
-          : undefined;
-        const rawP1Pokemon = Array.isArray(rawP1?.pokemon) ? rawP1.pokemon : undefined;
-        const rawP2Pokemon = Array.isArray(rawP2?.pokemon) ? rawP2.pokemon : undefined;
-
-        const health = extractBattlePokemonHealth({
-          lines,
-          format,
-          p1Pokemon: rawP1Pokemon,
-          p2Pokemon: rawP2Pokemon,
-        });
-        const swapped = isViewerSeatSwapped(lines, body.game, p1.name, p2.name);
-        const matchP1Health = swapped ? health.p2 : health.p1;
-        const matchP2Health = swapped ? health.p1 : health.p2;
-        if (!p1.pokemon && matchP1Health.length > 0) {
-          p1 = {...p1, pokemon: matchP1Health};
-        }
-        if (!p2.pokemon && matchP2Health.length > 0) {
-          p2 = {...p2, pokemon: matchP2Health};
-        }
-
-        if (ladder?.team === 'random' && lines.length > 0) {
-          viewer = normalizeLiveViewer({
-            lines,
-            p1: rawP1Pokemon ? {pokemon: rawP1Pokemon} : undefined,
-            p2: rawP2Pokemon ? {pokemon: rawP2Pokemon} : undefined,
-          });
-        }
-      }
-
-      const phase = body.phase as LivePhase | undefined;
-      if (
-        phase !== undefined &&
-        phase !== 'init' &&
-        phase !== 'preview' &&
-        phase !== 'battle'
-      ) {
-        sendJson(res, 400, {error: 'Invalid phase.'});
-        return;
-      }
-
-      // Preserve the turn start timestamp across mid-turn telemetry heartbeats so spectator
-      // countdown clocks don't jump backward if the runner omits turnStartedAt on repeats.
+      const ladder = db.getLadder(frame.ladderId);
       const sameActiveTurn = (
-        currentLive?.matchId === matchId &&
-        currentLive.game === body.game &&
-        currentLive.phase === phase &&
-        currentLive.turn === body.turn &&
-        currentLive.activeSlot === body.activeSlot
+        currentLive?.matchId === frame.matchId &&
+        currentLive.game === frame.game &&
+        currentLive.phase === frame.phase &&
+        currentLive.turn === frame.turn &&
+        currentLive.activeSlot === frame.activeSlot
       );
-      const turnStartedAt = isPosInt(body.turnStartedAt)
-        ? body.turnStartedAt
+      const turnStartedAt = frame.turnStartedAt && frame.turnStartedAt > 0
+        ? frame.turnStartedAt
         : sameActiveTurn
           ? currentLive!.turnStartedAt
           : nowSec;
 
-      currentLive = {
-        heartbeatSeq: body.heartbeatSeq,
-        matchId,
-        ladderId,
-        slot: ladder?.slot,
-        format,
-        game: body.game,
-        ...(phase !== undefined ? {phase} : {}),
-        turn: body.turn,
-        activeSlot: body.activeSlot,
-        turnStartedAt,
-        turnBudgetSeconds: body.turnBudgetSeconds,
-        incrementSeconds: body.incrementSeconds,
-        game1Summary,
-        p1,
-        p2,
-        ...(viewer !== undefined ? {viewer} : {}),
-      };
-      lastMatchId = matchId;
+      currentLive = sanitizeLiveMatch(
+        {...frame, turnStartedAt},
+        ladder?.team === 'random',
+        ladder?.slot
+      );
+      lastMatchId = frame.matchId;
       liveStale = false;
       liveUpdatedAt = nowSec;
       liveSeq++;
@@ -3033,18 +2023,13 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.post('/api/arena/match-complete', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
-    let body: Record<string, unknown>;
     try {
-      body = await readJsonBody(req);
-    } catch (err) {
-      const status = (err as {status?: number}).status ?? 400;
-      const message = err instanceof Error ? err.message : 'Invalid request body.';
-      sendJson(res, status, {error: message});
-      return;
-    }
-
-    try {
-      const match = parseCompletedMatch(body.match);
+      const body = await readJsonBody<MatchCompletePayload>(req);
+      const match = body.match;
+      if (!match?.id || !match.ladderId) {
+        sendJson(res, 400, {error: 'Invalid match payload.'});
+        return;
+      }
       const targetLadder = db.getLadder(match.ladderId);
       if (targetLadder?.status === 'upcoming') {
         sendJson(res, 409, {
@@ -3053,44 +2038,20 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      let rawG1Log: string | undefined;
-      let rawG2Log: string | undefined;
-      for (const [key, val] of [
-        ['game1Log', body.game1Log],
-        ['game2Log', body.game2Log],
-      ] as const) {
-        if (val !== undefined) {
-          if (typeof val !== 'string') {
-            sendJson(res, 400, {error: `${key} must be a string.`});
-            return;
-          }
-          if (Buffer.byteLength(val, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
-            console.warn(
-              `Skipping oversized ${key} on match "${match.id}" (> 512 KiB) while preserving rating`
-            );
-            continue;
-          }
-          if (key === 'game1Log') rawG1Log = val;
-          else rawG2Log = val;
+      const checkLog = (key: string, val?: string) => {
+        if (val === undefined) return undefined;
+        if (Buffer.byteLength(val, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
+          console.warn(
+            `Skipping oversized ${key} on match "${match.id}" (> 512 KiB) while preserving rating`
+          );
+          return undefined;
         }
-      }
+        return val;
+      };
+      const rawG1Log = checkLog('game1Log', body.game1Log);
+      const rawG2Log = checkLog('game2Log', body.game2Log);
 
-      let ladderStatus: db.LadderStatus | undefined;
-      if (body.ladderStatus !== undefined) {
-        if (
-          typeof body.ladderStatus !== 'string' ||
-          !VALID_LADDER_STATUSES.has(body.ladderStatus as db.LadderStatus)
-        ) {
-          sendJson(res, 400, {error: 'Invalid ladderStatus.'});
-          return;
-        }
-        ladderStatus = body.ladderStatus as db.LadderStatus;
-      }
-
-      const {duplicate, archivedLadder} = db.recordCompletedMatch({
-        match,
-        ladderStatus,
-      });
+      const {duplicate, archivedLadder} = db.recordCompletedMatch({match});
 
       const ladderRow = db.getLadder(match.ladderId);
       if (
@@ -3141,11 +2102,6 @@ export function register(app: polka.Polka, options: Options): Handle {
           totalMatches: countsBySlot.all ?? 0,
           countsBySlot,
         });
-        Promise.resolve(options.onMatchComplete?.({match, duplicate, archivedLadder})).catch(
-          err => {
-            console.error('Error in onMatchComplete callback:', err);
-          }
-        );
         Promise.resolve(options.onUpdate?.('match-complete')).catch(err => {
           console.error('Error in onUpdate callback:', err);
         });
@@ -3176,19 +2132,10 @@ export function register(app: polka.Polka, options: Options): Handle {
       return;
     }
 
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonBody(req);
-    } catch (err) {
-      const status = (err as {status?: number}).status ?? 400;
-      const message = err instanceof Error ? err.message : 'Invalid request body.';
-      sendJson(res, status, {error: message});
-      return;
-    }
-
     const nowSec = getNowSec();
     try {
-      if (body.off === true) {
+      const body = await readJsonBody<TournamentBroadcastPayload>(req);
+      if ('off' in body && body.off === true) {
         if (body.tournamentStatus === 'completed' && tournament.status !== 'completed') {
           db.setTournamentStatus(tournament.id, 'completed', nowSec);
         }
@@ -3209,89 +2156,8 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      if (Array.isArray(body.tables)) {
-        if (body.tables.length > 64) {
-          sendJson(res, 400, {error: 'tables cannot exceed 64 entries.'});
-          return;
-        }
-        const parsedTables: BroadcastTable[] = body.tables.map((rawTb, tIdx) => {
-          if (!rawTb || typeof rawTb !== 'object' || Array.isArray(rawTb)) {
-            throw Object.assign(new Error(`Invalid tables[${tIdx}].`), {status: 400});
-          }
-          const tb = rawTb as Record<string, unknown>;
-          const tbNum = isPosInt(tb.table) ? tb.table : tIdx + 1;
-          if (tbNum > 64) {
-            throw Object.assign(new Error('table cannot exceed 64.'), {status: 400});
-          }
-          const tbLabel = typeof tb.label === 'string' && tb.label.trim()
-            ? tb.label.trim().slice(0, 128)
-            : `Table ${tbNum}`;
-          const idle = tb.idle === true;
-          const tbP1 = tb.p1 !== undefined
-            ? parseBroadcastPlayer(tb.p1, `tables[${tIdx}].p1`)
-            : undefined;
-          const tbP2 = tb.p2 !== undefined
-            ? parseBroadcastPlayer(tb.p2, `tables[${tIdx}].p2`)
-            : undefined;
-          const tbLines = Array.isArray(tb.lines)
-            ? tb.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
-            : [];
-          const built: BroadcastTable = {
-            table: tbNum,
-            label: tbLabel,
-            idle,
-            gameId: typeof tb.gameId === 'string' && tb.gameId.trim()
-              ? tb.gameId.trim()
-              : undefined,
-            stage: typeof tb.stage === 'string' &&
-              VALID_TOURNAMENT_STAGES.has(tb.stage as db.TournamentGameStage)
-              ? (tb.stage as db.TournamentGameStage)
-              : undefined,
-            cycle: isPosInt(tb.cycle) ? tb.cycle : undefined,
-            matchupGame: isPosInt(tb.matchupGame) ? tb.matchupGame : undefined,
-            ...(isPosInt(tb.game) ? {game: tb.game} : {}),
-            ...(isPosInt(tb.bestOf) ? {bestOf: tb.bestOf} : {}),
-            p1: tbP1,
-            p2: tbP2,
-            lines: tbLines,
-            live: idle ? false : (typeof tb.live === 'boolean' ? tb.live : true),
-            updatedAt: nowSec,
-          };
-          const hdr = buildDefaultTableHeaders(built);
-          built.seriesLeftHtml = hdr.left;
-          built.seriesRightHtml = hdr.right;
-          return built;
-        });
-        const rawBroadcast: LiveBroadcast = {
-          tournamentId: tournament.id,
-          updatedAt: nowSec,
-          tables: parsedTables,
-          seriesLeftHtml: '',
-          seriesRightHtml: '',
-          p1: body.p1
-            ? parseBroadcastPlayer(body.p1, 'p1')
-            : {name: '—', bankSeconds: 0, thinking: false, incrementSeconds: 10},
-          p2: body.p2
-            ? parseBroadcastPlayer(body.p2, 'p2')
-            : {name: '—', bankSeconds: 0, thinking: false, incrementSeconds: 10},
-          lines: Array.isArray(body.lines)
-            ? body.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
-            : [],
-          live: typeof body.live === 'boolean' ? body.live : true,
-        };
-        const normalized = normalizeLiveBroadcast(rawBroadcast, nowSec);
-        broadcastsByTournament.set(tournament.id, normalized);
-        liveSeq++;
-        pushTournamentEvent(tournament.id, 'broadcast', normalized);
-        sendJson(res, 200, {ok: true, updatedAt: nowSec});
-        return;
-      }
-
-      if (!isPosInt(body.table) || body.table > 64) {
-        sendJson(res, 400, {error: 'table must be an integer between 1 and 64.'});
-        return;
-      }
-      const tableNum = body.table;
+      const tableUpdate = body as Exclude<TournamentBroadcastPayload, {off: true}>;
+      const tableNum = tableUpdate.table;
       const maxTables = Math.min(64, Math.max(tournament.parallelTables, tableNum));
       let existing = broadcastsByTournament.get(tournament.id);
       if (!existing) {
@@ -3326,11 +2192,9 @@ export function register(app: polka.Polka, options: Options): Handle {
       const prev = idx >= 0
         ? tables[idx]
         : {table: tableNum, label: `Table ${tableNum}`, idle: true, live: false};
-      const label = typeof body.label === 'string' && body.label.trim()
-        ? body.label.trim()
-        : prev.label;
+      const label = tableUpdate.label?.trim() || prev.label;
 
-      if (body.idle === true) {
+      if ('idle' in tableUpdate && tableUpdate.idle === true) {
         const idleTable: BroadcastTable = {
           table: tableNum,
           label,
@@ -3353,62 +2217,22 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      const mode = body.mode === 'append' ? 'append' : 'load';
-      if (mode !== 'append' && (!body.p1 || !body.p2)) {
-        sendJson(res, 400, {error: 'p1 and p2 clock objects are required for mode="load".'});
-        return;
-      }
-      if (mode === 'append' && (!prev.p1 || !prev.p2) && (!body.p1 || !body.p2)) {
-        sendJson(res, 400, {error: 'Cannot append to an uninitialized table without p1 and p2.'});
-        return;
-      }
-
-      const p1 = body.p1 !== undefined ? parseBroadcastPlayer(body.p1, 'p1') : prev.p1!;
-      const p2 = body.p2 !== undefined ? parseBroadcastPlayer(body.p2, 'p2') : prev.p2!;
+      const active = tableUpdate as Extract<TournamentBroadcastPayload, {mode?: 'load' | 'append'}>;
+      const mode = active.mode === 'append' ? 'append' : 'load';
+      const p1 = active.p1 ? {...active.p1} : prev.p1!;
+      const p2 = active.p2 ? {...active.p2} : prev.p2!;
       if (mode === 'append') {
         if (!p1.pokemon && prev.p1?.pokemon) p1.pokemon = prev.p1.pokemon;
         if (!p2.pokemon && prev.p2?.pokemon) p2.pokemon = prev.p2.pokemon;
       }
-      const incomingLines = Array.isArray(body.lines)
-        ? body.lines.slice(-MAX_TABLE_LINES).map(l => String(l).slice(0, 4096))
-        : [];
-
-      let stage = prev.stage;
-      if (body.stage !== undefined) {
-        if (
-          typeof body.stage !== 'string' ||
-          !VALID_TOURNAMENT_STAGES.has(body.stage as db.TournamentGameStage)
-        ) {
-          sendJson(res, 400, {error: 'Invalid stage.'});
-          return;
-        }
-        stage = body.stage as db.TournamentGameStage;
-      }
-      const cycle = body.cycle !== undefined
-        ? (isPosInt(body.cycle) ? body.cycle : undefined)
-        : (mode === 'append' ? prev.cycle : undefined);
-      const matchupGame = body.matchupGame !== undefined
-        ? (isPosInt(body.matchupGame) ? body.matchupGame : undefined)
-        : (mode === 'append' ? prev.matchupGame : undefined);
-      const gameId = typeof body.gameId === 'string' && body.gameId.trim()
-        ? body.gameId.trim()
-        : (mode === 'append' ? prev.gameId : undefined);
-      const game = isPosInt(body.game)
-        ? body.game
-        : (mode === 'append' ? prev.game : undefined);
-      const bestOf = isPosInt(body.bestOf)
-        ? body.bestOf
-        : (mode === 'append' ? prev.bestOf : tournament.bestOf);
-      let summaries: SeriesGameSummary[] | undefined;
-      if (body.summaries !== undefined) {
-        if (!Array.isArray(body.summaries)) {
-          sendJson(res, 400, {error: 'Invalid summaries.'});
-          return;
-        }
-        summaries = body.summaries.map((s, i) => parseSeriesGameSummary(s, `summaries[${i}]`));
-      } else if (mode === 'append') {
-        summaries = prev.summaries;
-      }
+      const incomingLines = active.lines?.slice(-MAX_TABLE_LINES) ?? [];
+      const stage = active.stage ?? prev.stage;
+      const cycle = active.cycle ?? (mode === 'append' ? prev.cycle : undefined);
+      const matchupGame = active.matchupGame ?? (mode === 'append' ? prev.matchupGame : undefined);
+      const gameId = active.gameId ?? (mode === 'append' ? prev.gameId : undefined);
+      const game = active.game ?? (mode === 'append' ? prev.game : undefined);
+      const bestOf = active.bestOf ?? (mode === 'append' ? prev.bestOf : tournament.bestOf);
+      const summaries = active.summaries ?? (mode === 'append' ? prev.summaries : undefined);
 
       const prevLines = prev.lines ?? [];
       const mergedLines = mode === 'append'
@@ -3445,7 +2269,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         lines: mergedLines,
         p1Lines: mergedPersp.p1Lines,
         p2Lines: mergedPersp.p2Lines,
-        live: typeof body.live === 'boolean' ? body.live : true,
+        live: active.live ?? true,
         updatedAt: nowSec,
       };
       const defaults = buildDefaultTableHeaders(nextTable);
@@ -3498,86 +2322,53 @@ export function register(app: polka.Polka, options: Options): Handle {
       return;
     }
 
-    let body: Record<string, unknown>;
     try {
-      body = await readJsonBody(req);
-    } catch (err) {
-      const status = (err as {status?: number}).status ?? 400;
-      const message = err instanceof Error ? err.message : 'Invalid request body.';
-      sendJson(res, status, {error: message});
-      return;
-    }
+      const body = await readJsonBody<TournamentGameCompletePayload>(req);
+      const game: db.CompletedTournamentGamePayload = {
+        ...body.game,
+        tournamentId: tournament.id,
+      };
 
-    try {
-      const game = parseCompletedTournamentGame(body.game, tournament.id);
-
-      let nextStatus: db.TournamentStatus | undefined;
-      if (body.tournamentStatus !== undefined) {
-        if (
-          typeof body.tournamentStatus !== 'string' ||
-          !VALID_TOURNAMENT_STATUSES.has(body.tournamentStatus as db.TournamentStatus)
-        ) {
-          sendJson(res, 400, {error: 'Invalid tournamentStatus.'});
-          return;
-        }
-        nextStatus = body.tournamentStatus as db.TournamentStatus;
-        if (
-          (tournament.status === 'completed' && nextStatus !== 'completed') ||
-          (tournament.status === 'running' && nextStatus === 'scheduled')
-        ) {
-          sendJson(res, 409, {
-            error: `Cannot regress tournament status from "${tournament.status}" ` +
-              `to "${nextStatus}".`,
-          });
-          return;
-        }
+      const nextStatus = body.tournamentStatus;
+      if (
+        nextStatus !== undefined &&
+        ((tournament.status === 'completed' && nextStatus !== 'completed') ||
+          (tournament.status === 'running' && nextStatus === 'scheduled'))
+      ) {
+        sendJson(res, 409, {
+          error: `Cannot regress tournament status from "${tournament.status}" ` +
+            `to "${nextStatus}".`,
+        });
+        return;
       }
 
-      const parseLogField = (raw: unknown, field: string): string | undefined => {
-        if (raw === undefined) return undefined;
-        if (typeof raw !== 'string') {
-          throw Object.assign(new Error(`${field} must be a string.`), {status: 400});
+      if (body.logs) {
+        for (const entry of body.logs) {
+          if (Buffer.byteLength(entry, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
+            sendJson(res, 413, {error: 'Tournament game log exceeds 512 KiB limit.'});
+            return;
+          }
         }
-        if (Buffer.byteLength(raw, 'utf8') > MAX_TOURNAMENT_LOG_BYTES) {
-          throw Object.assign(
-            new Error(`Tournament game ${field} exceeds 512 KiB limit.`),
-            {status: 413}
-          );
-        }
-        return raw;
-      };
-      const rawLog = parseLogField(body.log, 'log');
-      let rawLogs: string[] | undefined;
-      if (body.logs !== undefined) {
-        if (!Array.isArray(body.logs) || body.logs.length > 9) {
-          throw Object.assign(
-            new Error('logs must be an array of at most 9 strings.'),
-            {status: 400}
-          );
-        }
-        rawLogs = body.logs.map((entry, idx) => parseLogField(entry, `logs[${idx}]`) ?? '');
       }
 
       const {duplicate} = db.recordCompletedTournamentGame(game);
 
       const tourDir = path.join(publicDir, 'arena', 'tournaments', tournament.id);
-      const writeLogIfNeeded = (fileName: string, content: string | undefined) => {
-        if (content === undefined) return;
+      const writeLogIfNeeded = (fileName: string, content: string) => {
         const p = path.join(tourDir, fileName);
         if (!duplicate || !fs.existsSync(p)) {
           writeFileAtomic(p, content.endsWith('\n') ? content : `${content}\n`);
         }
       };
-      if (rawLogs) {
-        if (rawLogs.length === 1 && game.games.length <= 1) {
-          writeLogIfNeeded(`${game.id}.log`, rawLogs[0]);
+      if (body.logs) {
+        if (body.logs.length === 1 && game.games.length <= 1) {
+          writeLogIfNeeded(`${game.id}.log`, body.logs[0]);
         } else {
-          rawLogs.forEach((content, idx) => {
+          body.logs.forEach((content, idx) => {
             writeLogIfNeeded(`${game.id}-g${idx + 1}.log`, content);
           });
         }
       }
-      writeLogIfNeeded(`${game.id}.log`, rawLog);
 
       const statusChanged = nextStatus !== undefined && nextStatus !== tournament.status;
       if (statusChanged && nextStatus) {
@@ -3589,7 +2380,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       } else {
         const existing = broadcastsByTournament.get(tournament.id);
         if (existing) {
-          const tableNum = isPosInt(body.table) ? body.table : undefined;
+          const tableNum = body.table;
           const lastGame = game.games[game.games.length - 1];
           const tables = existing.tables.map(tb => {
             if ((tableNum && tb.table === tableNum) || (tb.gameId && tb.gameId === game.id)) {
@@ -3676,61 +2467,6 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
   });
 
-  app.put('/api/arena/tournaments/:id/archive', async (req, res) => {
-    if (!authenticateArena(req, res)) return;
-
-    const rawId = decodeRouteParam(req.params.id);
-    const tournament = db.getTournament(rawId);
-    if (!tournament) {
-      req.resume();
-      sendJson(res, 404, {error: `Unknown tournament "${rawId}".`});
-      return;
-    }
-    if (tournament.status !== 'completed') {
-      req.resume();
-      sendJson(res, 409, {
-        error: 'Tournament replay archives can only be published after status is "completed".',
-      });
-      return;
-    }
-
-    const expectedSha = typeof req.headers['x-content-sha256'] === 'string'
-      ? req.headers['x-content-sha256'].trim()
-      : undefined;
-    if (expectedSha && !/^[0-9a-fA-F]{64}$/.test(expectedSha)) {
-      req.resume();
-      sendJson(res, 400, {error: 'x-content-sha256 must be a 64-character hex string.'});
-      return;
-    }
-
-    const fileName = `${tournament.id}-replays.7z`;
-    const destPath = path.join(publicDir, 'arena', 'tournaments', tournament.id, fileName);
-    try {
-      const {bytes, sha256} = await streamBinaryArchive(req, destPath, expectedSha);
-      archiveSeq++;
-      const idEnc = encodeURIComponent(tournament.id);
-      const archiveHref = `/arena/tournaments/${idEnc}/${encodeURIComponent(fileName)}`;
-      pushTournamentEvent(tournament.id, 'status', {
-        tournamentId: tournament.id,
-        status: tournament.status,
-        completedAt: tournament.completedAt,
-        archiveHref,
-      });
-      await Promise.resolve(options.onUpdate?.('archive-published'));
-      sendJson(res, 200, {
-        ok: true,
-        tournamentId: tournament.id,
-        archiveHref,
-        bytes,
-        sha256,
-      });
-    } catch (err) {
-      const status = (err as {status?: number}).status ?? 500;
-      const message = err instanceof Error ? err.message : 'Tournament archive upload failed.';
-      sendJson(res, status, {error: message});
-    }
-  });
-
   app.put('/api/arena/ladders/:id/archive', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
@@ -3789,56 +2525,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       const message = err instanceof Error ? err.message : 'Ladder archive upload failed.';
       sendJson(res, status, {error: message});
     }
-  });
-
-  app.put('/api/arena/ladders/:id/teams', async (req, res) => {
-    if (!authenticateArena(req, res)) return;
-
-    const rawId = decodeRouteParam(req.params.id);
-    const ladder = db.getLadder(rawId);
-    if (!ladder) {
-      req.resume();
-      sendJson(res, 404, {error: `Unknown ladder "${rawId}".`});
-      return;
-    }
-    if (ladder.team !== 'harvested') {
-      req.resume();
-      sendJson(res, 400, {
-        error: `Harvested teams can only be uploaded to "harvested" ladders ("${ladder.id}" ` +
-          `has team="${ladder.team}").`,
-      });
-      return;
-    }
-
-    let rawTeams: string | string[];
-    try {
-      rawTeams = await readTeamsBody(req);
-    } catch (err) {
-      const status = (err as {status?: number}).status ?? 400;
-      const message = err instanceof Error ? err.message : 'Invalid request body.';
-      sendJson(res, status, {error: message});
-      return;
-    }
-
-    let packed: string[];
-    try {
-      packed = validateHarvestedTeams(rawTeams, ladder.format);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Harvested team validation failed.';
-      sendJson(res, 400, {error: message});
-      return;
-    }
-
-    const count = db.replaceLadderTeams(ladder.id, packed, getNowSec());
-    const sha256 = crypto.createHash('sha256').update(packed.join('\n')).digest('hex');
-    await Promise.resolve(options.onUpdate?.('ladder-teams'));
-    sendJson(res, 200, {
-      ok: true,
-      ladderId: ladder.id,
-      format: ladder.format,
-      count,
-      sha256,
-    });
   });
 
   app.get('/api/arena/ladders', (req, res) => {
@@ -3916,13 +2602,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       return;
     }
 
-    let customRules: string[] = [];
-    try {
-      const parsed = JSON.parse(tournament.rulesJson) as unknown;
-      if (Array.isArray(parsed)) {
-        customRules = parsed.filter((r): r is string => typeof r === 'string');
-      }
-    } catch {}
+    const customRules = tournament.rules;
 
     const entrants = db.getTournamentEntrants(tournament.id).map(e => {
       const ver = db.getVersionById(e.versionId);
@@ -4078,18 +2758,6 @@ export function register(app: polka.Polka, options: Options): Handle {
     });
   });
 
-  app.get('/api/tournament-live.json', (req, res) => {
-    const parsedUrl = new URL(req.url ?? '/api/tournament-live.json', 'http://localhost');
-    const requestedId = parsedUrl.searchParams.get('tournament')?.trim() ||
-      db.getRunningTournament()?.id;
-    const broadcast = requestedId ? broadcastsByTournament.get(requestedId) : undefined;
-    if (!broadcast) {
-      sendJson(res, 404, {error: 'No active tournament broadcast.'});
-      return;
-    }
-    sendCachedJson(req, res, broadcast);
-  });
-
   app.get('/api/tournaments/:id/stream', (req, res) => {
     const rawId = decodeRouteParam(req.params.id);
     const tournament = db.getTournament(rawId);
@@ -4160,7 +2828,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
 
     const rawLimit = parsedUrl.searchParams.get('limit');
-    const parsedLimit = rawLimit ? Number(rawLimit) : recentLimit;
+    const parsedLimit = rawLimit ? Number(rawLimit) : RECENT_MATCHES_LIMIT;
     if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
       sendJson(res, 400, {error: 'limit must be an integer between 1 and 100.'});
       return;
@@ -4202,82 +2870,12 @@ export function register(app: polka.Polka, options: Options): Handle {
   };
 
   app.get('/api/battles.json', handleBattlesHistory);
-  app.get('/api/battles', handleBattlesHistory);
 
   return {
     close: closeAll,
     getLiveDocument,
     setLiveState: state => {
-      if (state.live) {
-        const {viewer: rawViewer, ...rest} = state.live;
-        const normalizedViewer = normalizeLiveViewer(rawViewer);
-        let p1 = rest.p1;
-        let p2 = rest.p2;
-        if (p1.pokemon || p2.pokemon) {
-          const projected = extractBattlePokemonHealth({
-            format: rest.format,
-            p1Pokemon: p1.pokemon,
-            p2Pokemon: p2.pokemon,
-          });
-          if (p1.pokemon) p1 = {...p1, pokemon: projected.p1};
-          if (p2.pokemon) p2 = {...p2, pokemon: projected.p2};
-        }
-        let game1Summary = rest.game1Summary;
-        if (game1Summary && (game1Summary.p1?.pokemon || game1Summary.p2?.pokemon)) {
-          const g1Proj = extractBattlePokemonHealth({
-            format: rest.format,
-            p1Pokemon: game1Summary.p1?.pokemon,
-            p2Pokemon: game1Summary.p2?.pokemon,
-            finished: true,
-          });
-          game1Summary = {
-            ...game1Summary,
-            ...(game1Summary.p1
-              ? {
-                p1: {
-                  ...game1Summary.p1,
-                  ...(game1Summary.p1.pokemon ? {pokemon: g1Proj.p1} : {}),
-                },
-              }
-              : {}),
-            ...(game1Summary.p2
-              ? {
-                p2: {
-                  ...game1Summary.p2,
-                  ...(game1Summary.p2.pokemon ? {pokemon: g1Proj.p2} : {}),
-                },
-              }
-              : {}),
-          };
-        }
-        if (rawViewer && (!p1.pokemon || !p2.pokemon)) {
-          const health = extractBattlePokemonHealth({
-            lines: rawViewer.lines,
-            format: rest.format,
-            p1Pokemon: rawViewer.p1?.pokemon,
-            p2Pokemon: rawViewer.p2?.pokemon,
-          });
-          const swapped = isViewerSeatSwapped(
-            rawViewer.lines ?? [],
-            rest.game,
-            p1.name,
-            p2.name
-          );
-          const matchP1Health = swapped ? health.p2 : health.p1;
-          const matchP2Health = swapped ? health.p1 : health.p2;
-          if (!p1.pokemon && matchP1Health.length > 0) p1 = {...p1, pokemon: matchP1Health};
-          if (!p2.pokemon && matchP2Health.length > 0) p2 = {...p2, pokemon: matchP2Health};
-        }
-        currentLive = {
-          ...rest,
-          ...(game1Summary !== undefined ? {game1Summary} : {}),
-          p1,
-          p2,
-          ...(normalizedViewer !== undefined ? {viewer: normalizedViewer} : {}),
-        };
-      } else {
-        currentLive = undefined;
-      }
+      currentLive = state.live ? sanitizeLiveMatch(state.live, true) : undefined;
       liveStale = state.stale ?? false;
       liveUpdatedAt = state.updatedAt ?? getNowSec();
       liveSeq++;
@@ -4305,34 +2903,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       broadcastsByTournament.set(id, normalized);
       liveSeq++;
       pushTournamentEvent(id, 'broadcast', normalized);
-    },
-    notifyTournamentStatus: (tournamentId: string) => {
-      const t = db.getTournament(tournamentId);
-      if (t?.status === 'completed') {
-        broadcastsByTournament.delete(tournamentId);
-      }
-      liveSeq++;
-      if (t) {
-        const doc = buildTournamentDocument(db, publicDir, t, 50);
-        pushTournamentEvent(tournamentId, 'status', {
-          tournamentId,
-          status: doc.status,
-          completedAt: doc.completedAt,
-          archiveHref: doc.archiveHref,
-          standings: doc.standings,
-          crosstable: doc.crosstable,
-          broadcast: broadcastsByTournament.get(tournamentId),
-        });
-      }
-      pushBattleEvent('live', {
-        updatedAt: getNowSec(),
-        stale: liveStale,
-        live: liveStale ? undefined : currentLive,
-        runningTournament: getRunningTournamentInfo(),
-      });
-      Promise.resolve(options.onUpdate?.('tournament-status')).catch(err => {
-        console.error('Error in onUpdate callback:', err);
-      });
     },
     getState: () => ({
       lastSeenAt,

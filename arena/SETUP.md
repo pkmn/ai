@@ -837,15 +837,19 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.arena.plist
 
 ## Phase 7: Google Cloud Storage (`gs://pkmn-arena`), Nightly Archival & SQLite Backup (`arena/scripts/archive.sh`)
 
-`arena/scripts/archive.sh` (and the coordinator's post-smoke-test cold archival) manage local
-`/Volumes/Archive` storage and off-site mirroring to Google Cloud Storage (`gs://pkmn-arena`):
+`arena/coordinator.ts` and `arena/scripts/archive.sh` manage local `/Volumes/Archive` storage and
+off-site mirroring to Google Cloud Storage (`gs://pkmn-arena`):
 1. Online SQLite `.backup` of `/opt/arena/state/arena.sqlite` ->
-   `/Volumes/Archive/db-backups/arena-state-YYYY-MM-DD.sqlite.zst` (retaining 30 days locally).
-2. Nightly solid LZMA2 `.7z` compression of yesterday's raw `.log` files per ladder under
-   `/Volumes/Archive/logs/<ladder_id>/<YYYY-MM>/<YYYY-MM-DD>.7z`.
-3. Monthly `.tar` rollup of the previous month's `.7z` archives on the 1st of each month.
-4. `gcloud storage cp` (on smoke-test pass when `ARENA_GCS_BUCKET` is set) and nightly
-   `gcloud storage rsync` (when `ARENA_GCS_SYNC=1` is set) to `gs://pkmn-arena/{archives,agents,db-backups}`.
+   `/Volumes/Archive/db-backups/arena-state-YYYY-MM-DD.sqlite.zst` (retaining 30 days locally, run by
+   `archive.sh`).
+2. Daily solid LZMA2 `.7z` compression of completed past-day raw `.log` directories per ladder under
+   `/Volumes/Archive/logs/<ladder_id>/<YYYY-MM>/<YYYY-MM-DD>.7z` (owned by `arena/coordinator.ts` on
+   UTC day rollover, plus `<ladder_id>-logs.tar` rebuild/upload for `random` and retired `pools`
+   ladders).
+3. Monthly `.tar` rollup of the previous month's `.7z` archives on the 1st of each month (run by
+   `archive.sh`).
+4. Nightly `gcloud storage rsync` (when `ARENA_GCS_SYNC=1` is set in `/opt/arena/repo/.env`) to
+   `gs://pkmn-arena/{archives,agents,db-backups}`.
 
 ### Step 7.1: Configure Least-Privilege GCS Service Account & Authenticate `gcloud` on the Mac mini
 
@@ -882,8 +886,7 @@ activate it under the `pkmn` coordinator user:
    ```
 
 2. **On the Mac mini (`ssh arena`)**, lock down `/opt/arena/state/gcs-key.json`, activate the
-   service account for `gcloud`, and enable `ARENA_GCS_BUCKET` + `ARENA_GCS_SYNC` in
-   `/opt/arena/repo/.env`:
+   service account for `gcloud`, and enable `ARENA_GCS_SYNC=1` in `/opt/arena/repo/.env`:
    ```sh
    ssh arena "
    export PATH=\"/opt/homebrew/bin:\$PATH\"
@@ -892,7 +895,6 @@ activate it under the `pkmn` coordinator user:
    gcloud auth activate-service-account --key-file=/opt/arena/state/gcs-key.json
    gcloud config set project ${GCP_PROJECT}
    gcloud config set billing/quota_project ${GCP_PROJECT}
-   grep -q '^ARENA_GCS_BUCKET=' /opt/arena/repo/.env || printf 'ARENA_GCS_BUCKET=gs://pkmn-arena\n' >> /opt/arena/repo/.env
    grep -q '^ARENA_GCS_SYNC=' /opt/arena/repo/.env || printf 'ARENA_GCS_SYNC=1\n' >> /opt/arena/repo/.env
    grep -q '^CLOUDSDK_CONFIG=' /opt/arena/repo/.env || printf 'CLOUDSDK_CONFIG=/Users/pkmn/.config/gcloud\n' >> /opt/arena/repo/.env
    grep -q '^CLOUDSDK_CORE_PROJECT=' /opt/arena/repo/.env || printf 'CLOUDSDK_CORE_PROJECT=${GCP_PROJECT}\n' >> /opt/arena/repo/.env

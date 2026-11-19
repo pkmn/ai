@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   -- Target `pkmn.ai` API endpoint category.
   endpoint TEXT NOT NULL
-    CHECK (endpoint IN ('match-complete', 'submission-status', 'quarantine')),
+    CHECK (endpoint IN ('match-complete', 'submission-status')),
   -- Serialized JSON request body for the target endpoint.
   payload_json TEXT NOT NULL,
   -- Number of failed delivery attempts so far.
