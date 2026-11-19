@@ -240,8 +240,9 @@ the series) and communicates strictly over *standard input (`stdin`)* and *stand
     Emitting *3 consecutive `[Invalid choice]` errors* on the same request will result in a game
     loss; `[Unavailable choice]` errors (_e.g._, Encore, Disable, or trapping abilities) do not
     count toward this limit.
-  - submissions that lose due to invalid choices / crashes / timeouts more than 20% of the time
-    (or in 5 consecutive matches) will be *quarantined* and removed from the matchmaking pool.
+  - submissions that lose due to invalid choices / crashes / OOM / timeouts in 10 consecutive games
+    (or over 20% of games after 10 games) will be *quarantined* across all ladders without
+    resetting the 14-day cooldown.
 
 ### Matchmaking
 
