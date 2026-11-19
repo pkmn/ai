@@ -407,10 +407,13 @@ describe('arena infrastructure', () => {
       expect(limitC).toContain('/opt/arena/state/peak_ram_%s');
       expect(limitC).not.toContain('.peak_ram');
       expect(limitC).toContain('PRIO_DARWIN_PROCESS');
+      expect(sandbox).toContain('(subpath "/opt/arena/stats")');
       expect(limitC).toContain('setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1)');
       expect(arenaScript).toContain('--env PKMN_STATS_DIR=/opt/arena/stats');
       expect(fs.readFileSync(root('arena', 'bin', 'tourney-agent'), 'utf8'))
         .toContain('--setenv PKMN_STATS_DIR /opt/arena/stats');
+      expect(fs.readFileSync(root('arena', 'scripts', 'bake-image.sh'), 'utf8'))
+        .toContain('/opt/arena/stats');
       expect(fs.readFileSync(root('arena', 'config', 'ai.pkmn.arena.plist'), 'utf8'))
         .toContain('<key>ExitTimeOut</key>\n  <integer>900</integer>');
       expect(fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8'))

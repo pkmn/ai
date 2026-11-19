@@ -49,7 +49,7 @@ smoke tests.
 | **Repository Checkout** | `/opt/arena/repo` | Git checkout of `github.com/pkmn/ai` (`build/arena` entrypoint + `.env`). |
 | **Binaries & Helpers** | `/opt/arena/bin/{arena,limit}` | Lifecycle script and C `ri_phys_footprint` 14 GiB supervisor. |
 | **Seatbelt Profile** | `/opt/arena/etc/sandbox.sb` | Mandatory Access Control profile for native `darwin/arm64` agent bundles. |
-| **Era-Matched Usage Stats** | `/opt/arena/stats/<ladder_id>/` | Read-only stats mount (`PKMN_STATS_DIR=/opt/arena/stats`) shared by bundles & containers. |
+| **Era-Matched Usage Stats** | `/opt/arena/stats/` | Read-only `data.pkmn.cc` stats mount (`PKMN_STATS_DIR=/opt/arena/stats`) shared by bundles & containers. |
 | **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MB`, deduplicated via `/opt/arena/cas/sha256`). |
 | **Coordinator State DB** | `/opt/arena/state/arena.sqlite` | Local WAL SQLite DB (`local_agents`, `local_matches`, `outbox`, `ladder_counters`). |
 | **Daemon Logs** | `/opt/arena/logs/{arena,tunnel}.{log,err}` | Stdout/stderr logs for `ai.pkmn.arena` and `ai.pkmn.tunnel`. |
@@ -972,12 +972,24 @@ and packed teams, and flushes any queued `outbox` payloads before starting a new
 
 ### 8.2 Syncing Read-Only Format Stats (`/opt/arena/stats/`)
 
-If providing read-only era-matched `@pkmn/stats` (`stats.json`) or random battle (`data.json`,
-`full.json`, `sets.json`) files to agents:
+`/opt/arena/stats/` is mounted read-only as `PKMN_STATS_DIR=/opt/arena/stats` in every agent
+sandbox (native bundles and containers). Populate it using the `data.pkmn.cc` layout specified in
+`/rules`:
+
+- **Fixed ladders (`gen1ou`, `gen3ou`, `gen9ou`):**
+  - `/opt/arena/stats/<format>.json` (`gen1ou.json`, `gen3ou.json`, `gen9ou.json`)
+- **Seasonal `RAND` (`gen9randombattle`, or future `gen10randombattle`):** `data.pkmn.cc`'s
+  hierarchy scoped to the active format:
+  - `/opt/arena/stats/<format>.json`
+  - `/opt/arena/stats/exact/<format>.json`
+  - `/opt/arena/stats/full/<format>/*`
+  - `/opt/arena/stats/stats/<format>.json`
+  - `/opt/arena/stats/js/<format>.json`
+- **`VGC`:** no usage statistics provided.
 
 ```sh
 ssh arena 'sudo mkdir -p /opt/arena/stats && sudo chown -R pkmn:agents /opt/arena/stats'
-rsync -avz stats/ arena:/opt/arena/stats/
+rsync -avz --delete stats/ arena:/opt/arena/stats/
 ssh arena 'sudo chmod -R a+rX,go-w /opt/arena/stats'
 ```
 

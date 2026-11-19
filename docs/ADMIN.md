@@ -224,14 +224,16 @@ curl -fsS https://pkmn.ai/api/arena/ladders/gen1ou20261109/teams \
 ```
 
 Store cached copies with `chmod 750` on the coordinator user only (sandboxed `p1`/`p2` agent users
-must never have read access to harvested pools). Optionally, `rsync` era-matched read-only
-`@pkmn/stats` / `randbats` JSON files into agent sandboxes at `/opt/arena/stats/` if agents mount
-public stats data:
+must never have read access to harvested pools). Sync read-only era-matched `data.pkmn.cc` usage
+stats into `/opt/arena/stats/` (exposed as `PKMN_STATS_DIR=/opt/arena/stats`): `<format>.json` for
+fixed ladders (`gen1ou.json`, `gen3ou.json`, `gen9ou.json`), and `data.pkmn.cc`'s format-scoped
+hierarchy for `RAND` (`<format>.json`, `exact/<format>.json`, `full/<format>/*`,
+`stats/<format>.json`, `js/<format>.json`; none for `VGC`):
 
 ```sh
 ssh arena 'mkdir -p /opt/arena/stats'
-rsync -avz stats/ arena:/opt/arena/stats/
-ssh arena 'chmod -R a+rX /opt/arena/stats'
+rsync -avz --delete stats/ arena:/opt/arena/stats/
+ssh arena 'chmod -R a+rX,go-w /opt/arena/stats'
 ```
 
 > [!NOTE]

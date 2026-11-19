@@ -45,8 +45,9 @@ sudo install -o root -g root -m 0755 "${RELAY_BUILD_DIR}/tourney-relay" /usr/loc
 rm -rf "$RELAY_BUILD_DIR"
 sudo install -o root -g root -m 0755 "${ARENA_DIR}/bin/tourney-agent" /usr/local/bin/tourney-agent
 
-sudo mkdir -p /opt/arena/agents
+sudo mkdir -p /opt/arena/agents /opt/arena/stats
 sudo chown -R "$(id -u):$(id -g)" /opt/arena/agents
+sudo chmod 0755 /opt/arena/stats
 
 write_skopeo_authfile() {
   local image_ref="$1"
