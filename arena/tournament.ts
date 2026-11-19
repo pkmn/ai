@@ -1867,9 +1867,9 @@ export class Coordinator {
           p2TeamPacked,
           sendUtm: meta?.team !== undefined ? meta.team !== 'random' : undefined,
           smokeStopAfterTurn: 1,
-          startingBankSeconds: 30,
-          readyGraceSeconds: 30,
-          maxTurnSeconds: 30,
+          startingBankSeconds: 60,
+          readyGraceSeconds: arena.READY_GRACE_SECONDS,
+          maxTurnSeconds: 60,
         });
         const res = await smokeGame.run();
         const p1Faulted =

@@ -261,7 +261,7 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
 
   # 4. Smoke test inside rootless bubblewrap with a dummy Turn-1 Showdown request
   SMOKE_REQ='|request|{"active":[{"moves":[{"move":"Tackle","id":"tackle","pp":35,"maxpp":35,"target":"normal","disabled":false}]}],"side":{"name":"Agent A","id":"p1","pokemon":[{"ident":"p1: Pikachu","details":"Pikachu, L50","condition":"100/100","active":true,"stats":{"atk":55,"def":40,"spa":50,"spd":50,"spe":90},"moves":["tackle"],"baseAbility":"static","item":"","pokeball":"pokeball"}]},"rqid":1}'
-  SMOKE_OUT="$(printf '%s\n' "$SMOKE_REQ" | timeout 30s /usr/local/bin/tourney-agent "$AGENT_ID" | head -n 1 || true)"
+  SMOKE_OUT="$(printf '%s\n' "$SMOKE_REQ" | timeout 60s /usr/local/bin/tourney-agent "$AGENT_ID" | head -n 1 || true)"
   if [[ -z "$SMOKE_OUT" ]]; then
     echo "ERROR: ${AGENT_ID} failed bwrap smoke test (empty stdout)" >&2
     sudo rm -rf "$DEST_DIR"

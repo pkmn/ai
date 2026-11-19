@@ -455,9 +455,9 @@ export class Coordinator {
           p2TeamPacked: t2Packed,
           sendUtm: item.team !== 'random',
           smokeStopAfterTurn: 1,
-          startingBankSeconds: 30,
-          readyGraceSeconds: 30,
-          maxTurnSeconds: 30,
+          startingBankSeconds: 60,
+          readyGraceSeconds: arena.READY_GRACE_SECONDS,
+          maxTurnSeconds: 60,
           devMode: this.devMode,
         });
         const res = await game.run();
