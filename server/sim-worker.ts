@@ -36,6 +36,7 @@ export type RpcRequest = {
   method: 'validateTeam';
   format: string;
   packed: string;
+  options?: simOps.ValidateTeamOptions;
 };
 
 export type ParentMessage = {
@@ -269,27 +270,8 @@ function handleRpc(req: RpcRequest): unknown {
       return Boolean(simMod.Dex.formats.get(req.format).exists);
     case 'sampleRandomPair':
       return simOps.sampleRandomPairWithSim(simMod, req.format, req.seed1, req.seed2);
-    case 'validateTeam': {
-      const resolved = simMod.Dex.formats.get(req.format);
-      if (!resolved.exists) {
-        throw new Error(`Unknown format '${req.format}'.`);
-      }
-      const validator = new simMod.TeamValidator(resolved);
-      const team = simMod.Teams.unpack(req.packed) ?? simMod.Teams.import(req.packed);
-      if (!team || team.length === 0) {
-        return {problems: ['Empty or unparseable team.']};
-      }
-      for (const s of team) s.name = '';
-      if (!validator.format.team) {
-        const problems = validator.validateTeam(team);
-        if (problems && problems.length > 0) {
-          return {problems};
-        }
-      }
-      return {
-        packed: simMod.Teams.pack(team),
-      };
-    }
+    case 'validateTeam':
+      return simOps.validateTeamWithSim(simMod, req.format, req.packed, req.options);
   }
 }
 

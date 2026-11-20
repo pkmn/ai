@@ -24,10 +24,7 @@ import {toID} from '../static/util';
 import * as teams from '../teams';
 
 import {validateTeam} from './sim';
-import {
-  configureSimMod,
-  sampleRandomPairWithSim,
-} from './sim-ops';
+import * as simOps from './sim-ops';
 
 // `@pkmn/mods` requires parent mods (`champions`) to be registered on `@pkmn/sim`'s `Dex`
 // before child mods (`championsregmb`). We also extend the base `sim.Dex.formats` table so
@@ -38,7 +35,7 @@ let simConfigured = false;
 export function ensureSimConfigured() {
   if (simConfigured) return;
   simConfigured = true;
-  configureSimMod(sim, {
+  simOps.configureSimMod(sim, {
     champions,
     championsregmb,
     teamGenerators: TeamGenerators,
@@ -394,7 +391,7 @@ export function sampleRandomPair(
   seed1: sim.PRNGSeed,
   seed2: sim.PRNGSeed
 ): {t1Packed: string; t2Packed: string} {
-  return sampleRandomPairWithSim(sim, format, seed1, seed2);
+  return simOps.sampleRandomPairWithSim(sim, format, seed1, seed2);
 }
 
 export function loadReferencePool(format: string, pools: string[]): PoolEntry[] {
@@ -467,43 +464,6 @@ export function splitSubmittedTeams(raw: string | string[]): string[] {
   return [trimmed];
 }
 
-function maxLegalMovesForSpecies(validator: sim.TeamValidator, set: Partial<PokemonSet>): number {
-  const simDex = validator.dex;
-  const sp = simDex.species.get(set.species || set.name);
-  if (!sp.exists) return 4;
-  let cur: sim.Species | undefined = sp;
-  const seen = new Set<string>();
-  const candidates = new Set<string>();
-  while (cur && cur.exists && !seen.has(cur.id)) {
-    seen.add(cur.id);
-    const data = simDex.species.getLearnsetData(cur.id);
-    if (data?.learnset) {
-      for (const m of Object.keys(data.learnset)) candidates.add(m);
-    }
-    const nextId: string | undefined = cur.prevo || cur.changesFrom;
-    cur = nextId ? simDex.species.get(nextId) : undefined;
-  }
-  const simSet = set as sim.PokemonSet;
-  const sketch = simDex.moves.get('sketch');
-  if (
-    candidates.has('sketch') &&
-    !validator.checkMove(simSet, sketch, {}) &&
-    !validator.checkCanLearn(sketch, sp)
-  ) {
-    return 4;
-  }
-  let count = 0;
-  for (const m of candidates) {
-    const move = simDex.moves.get(m);
-    if (!move.exists || validator.checkMove(simSet, move, {})) continue;
-    if (!validator.checkCanLearn(move, sp)) {
-      count++;
-      if (count >= 4) return 4;
-    }
-  }
-  return count;
-}
-
 function validateAndCanonicalizeSingleTeam(
   dex: ModdedDex,
   validator: sim.TeamValidator,
@@ -538,7 +498,7 @@ function validateAndCanonicalizeSingleTeam(
     for (const s of validatedSets) {
       const distinctMoves = new Set((s.moves ?? []).map(m => toID(m)).filter(Boolean));
       if (distinctMoves.size < 4) {
-        const required = maxLegalMovesForSpecies(validator, s);
+        const required = simOps.maxLegalMovesForSpecies(validator, s);
         if (distinctMoves.size < required) {
           const spName = dex.species.get(s.species || s.name || '').name || 'Pokémon';
           throw new Error(
@@ -782,6 +742,53 @@ export function validateHarvestedTeams(rawInput: string | string[], formatId: st
   return packedOut;
 }
 
+export async function validateHarvestedTeamsForVersion(
+  rawInput: string | string[],
+  formatId: string,
+  version = SIM_VERSION
+): Promise<string[]> {
+  if (version === SIM_VERSION) {
+    return validateHarvestedTeams(rawInput, formatId);
+  }
+  const format = toID(formatId);
+  const dex = teams.getDex(format);
+  const defaultLevel = defaultLevelForFormat(format);
+  const chunks = splitSubmittedTeams(rawInput);
+
+  if (chunks.length < 2) {
+    throw new Error(
+      `Harvested ladder ${formatId} requires at least 2 valid teams (received ${chunks.length}).`
+    );
+  }
+
+  const packedOut: string[] = [];
+  const distinctSpeciesSets = new Set<string>();
+  for (let i = 0; i < chunks.length; i++) {
+    const label = `Team #${i + 1}`;
+    const check = await validateTeam(formatId, chunks[i], version, {
+      requireSixPokemon: true,
+      canonicalize: true,
+    });
+    if (check.problems?.length || !check.packed) {
+      const formatName = check.formatName || formatId;
+      const details = check.problems?.join('; ') || 'Empty or unparseable team.';
+      throw new Error(`${label} is illegal in ${formatName}: ${details}`);
+    }
+    const sets = teams.parseTeam(dex, check.packed);
+    const entry = toUniquenessEntry(dex, sets, label, defaultLevel);
+    packedOut.push(check.packed);
+    distinctSpeciesSets.add([...entry.speciesSet].sort().join('|'));
+  }
+
+  if (distinctSpeciesSets.size < 2) {
+    throw new Error(
+      `Harvested ladder ${formatId} requires at least 2 non-mirror teams with distinct species.`
+    );
+  }
+
+  return packedOut;
+}
+
 export async function validateCompetitorTeamsIncrementalForVersion(
   rawInput: string | string[],
   options: Options,
@@ -791,33 +798,113 @@ export async function validateCompetitorTeamsIncrementalForVersion(
   if (version === SIM_VERSION) {
     return validateCompetitorTeamsIncremental(rawInput, options, existingSavedPacked);
   }
-  const result = validateCompetitorTeamsIncremental(rawInput, options, existingSavedPacked);
-  const existingSet = new Set(existingSavedPacked);
-  const accepted: string[] = [...existingSavedPacked];
-  const rejections = [...result.rejections];
+  const requiredCount = options.teams;
+  const threshold = teams.THRESHOLD;
+  const format = toID(options.format);
+  const dex = teams.getDex(format);
+  const defaultLevel = defaultLevelForFormat(format);
+
+  const refPool = loadReferencePool(format, options.pools);
+  const workingPool: PoolEntry[] = [...refPool];
+  const allSaved = [...existingSavedPacked];
+  const preExistingSet = new Set(existingSavedPacked);
+  const seenExistingInPaste = new Set<string>();
+
+  for (let i = 0; i < existingSavedPacked.length; i++) {
+    const sets = teams.parseTeam(dex, existingSavedPacked[i]);
+    workingPool.push(toUniquenessEntry(dex, sets, `saved-team-${i + 1}`, defaultLevel));
+  }
+
+  const chunks = splitSubmittedTeams(rawInput);
+  const maxChunks = Math.max(50, requiredCount * 2);
+  const boundedChunks = chunks.length > maxChunks ? chunks.slice(0, maxChunks) : chunks;
+  const rejections: RejectedTeam[] = [];
   let newlySavedCount = 0;
 
-  for (const packed of result.allSaved) {
-    if (existingSet.has(packed)) continue;
-    const check = await validateTeam(options.format, packed, version);
-    if (check.problems && check.problems.length > 0) {
-      rejections.push({
-        index: accepted.length + 1,
-        reason: `Rejected by @pkmn/sim@${version}: ${check.problems[0]}`,
+  for (let i = 0; i < boundedChunks.length; i++) {
+    const label = `Team #${i + 1}`;
+    try {
+      const check = await validateTeam(options.format, boundedChunks[i], version, {
+        requireSixPokemon: true,
+        requireFullMoveset: true,
+        canonicalize: true,
       });
-    } else {
-      accepted.push(check.packed ?? packed);
+      if (check.problems?.length || !check.packed) {
+        const formatName = check.formatName || options.format;
+        const details = check.problems?.join('; ') || 'Empty or unparseable team.';
+        throw new Error(`${label} is illegal in ${formatName}: ${details}`);
+      }
+      const canonicalPacked = check.packed;
+      const canonicalSets = teams.parseTeam(dex, canonicalPacked);
+      const entry = toUniquenessEntry(dex, canonicalSets, label, defaultLevel);
+
+      if (preExistingSet.has(canonicalPacked) && !seenExistingInPaste.has(canonicalPacked)) {
+        seenExistingInPaste.add(canonicalPacked);
+        continue;
+      }
+
+      if (allSaved.length >= requiredCount) {
+        rejections.push({
+          index: i + 1,
+          reason:
+            `Team #${i + 1} skipped: ${requiredCount}/${requiredCount} distinct teams ` +
+            'already saved.',
+        });
+        continue;
+      }
+
+      if (workingPool.length > 0) {
+        const {minD, closestId} = minDistanceAgainstPool(
+          dex,
+          {sets: entry.sets, speciesSet: entry.speciesSet},
+          workingPool,
+          defaultLevel
+        );
+        if (minD < threshold) {
+          rejections.push({
+            index: i + 1,
+            reason:
+              `Team #${i + 1} failed uniqueness check: distance=${minD.toFixed(3)} < ` +
+              `${threshold.toFixed(2)} (closest=${closestId}).`,
+            closestId,
+            distance: minD,
+          });
+          continue;
+        }
+      }
+
+      const nextSlot = allSaved.length + 1;
+      workingPool.push({
+        id: `submitted-team-${nextSlot}`,
+        sets: entry.sets,
+        speciesSet: entry.speciesSet,
+      });
+      allSaved.push(canonicalPacked);
       newlySavedCount++;
+    } catch (err: any) {
+      rejections.push({
+        index: i + 1,
+        reason: err?.message || `Team #${i + 1} is invalid.`,
+      });
     }
   }
 
-  const remainingCount = Math.max(0, result.requiredCount - accepted.length);
+  if (chunks.length > maxChunks) {
+    rejections.push({
+      index: maxChunks + 1,
+      reason:
+        `Teams #${maxChunks + 1}–#${chunks.length} skipped: ` +
+        `paste at most ${maxChunks} teams per validation request.`,
+    });
+  }
+
+  const remainingCount = Math.max(0, requiredCount - allSaved.length);
   return {
-    allSaved: accepted,
+    allSaved,
     newlySavedCount,
-    requiredCount: result.requiredCount,
+    requiredCount,
     remainingCount,
     rejections,
-    complete: remainingCount === 0 && accepted.length === result.requiredCount,
+    complete: remainingCount === 0 && allSaved.length === requiredCount,
   };
 }

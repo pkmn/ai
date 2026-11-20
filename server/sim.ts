@@ -7,7 +7,7 @@ import type {PRNGSeed} from '@pkmn/sim';
 import {SIM_VERSION} from '../db/ladders';
 import {root} from '../static/util';
 
-import {TimerSettings} from './sim-ops';
+import * as simOps from './sim-ops';
 import type {ParentMessage, RpcRequest, WorkerInitData, WorkerMessage} from './sim-worker';
 
 class PushStream implements AsyncIterable<string> {
@@ -332,8 +332,8 @@ export function resolveArenaFormatId(
 export function getTimerSettings(
   format: string,
   version = SIM_VERSION
-): Promise<TimerSettings> {
-  return callRpc<TimerSettings>(version, {method: 'getTimerSettings', format});
+): Promise<simOps.TimerSettings> {
+  return callRpc<simOps.TimerSettings>(version, {method: 'getTimerSettings', format});
 }
 
 export function isGeneratedTeamFormat(
@@ -365,11 +365,12 @@ export function sampleRandomPair(
 export function validateTeam(
   format: string,
   packed: string,
-  version = SIM_VERSION
-): Promise<{problems?: string[]; packed?: string}> {
-  return callRpc<{problems?: string[]; packed?: string}>(
+  version = SIM_VERSION,
+  options?: simOps.ValidateTeamOptions
+): Promise<simOps.ValidateTeamResult> {
+  return callRpc<simOps.ValidateTeamResult>(
     version,
-    {method: 'validateTeam', format, packed}
+    {method: 'validateTeam', format, packed, options}
   );
 }
 

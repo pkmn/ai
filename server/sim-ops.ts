@@ -1,3 +1,4 @@
+import {Data, PokemonSet, Team} from '@pkmn/sets';
 import type * as sim from '@pkmn/sim';
 
 import {toID} from '../static/util';
@@ -137,5 +138,143 @@ export function resolveTimerSettingsWithSim(
     maxFirstTurnSeconds,
     timeoutAutoChoose: raw?.timeoutAutoChoose ?? false,
     accelerate: raw?.accelerate ?? !raw,
+  };
+}
+
+export interface ValidateTeamOptions {
+  requireSixPokemon?: boolean;
+  requireFullMoveset?: boolean;
+  canonicalize?: boolean;
+}
+
+export interface ValidateTeamResult {
+  problems?: string[];
+  packed?: string;
+  formatName?: string;
+}
+
+export function maxLegalMovesForSpecies(
+  validator: sim.TeamValidator,
+  set: Partial<PokemonSet>
+): number {
+  const simDex = validator.dex;
+  const sp = simDex.species.get(set.species || set.name);
+  if (!sp.exists) return 4;
+  let cur: sim.Species | undefined = sp;
+  const seen = new Set<string>();
+  const candidates = new Set<string>();
+  while (cur && cur.exists && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const data = simDex.species.getLearnsetData(cur.id);
+    if (data?.learnset) {
+      for (const m of Object.keys(data.learnset)) candidates.add(m);
+    }
+    const nextId: string | undefined = cur.prevo || cur.changesFrom;
+    cur = nextId ? simDex.species.get(nextId) : undefined;
+  }
+  const simSet = set as sim.PokemonSet;
+  const sketch = simDex.moves.get('sketch');
+  if (
+    candidates.has('sketch') &&
+    !validator.checkMove(simSet, sketch, {}) &&
+    !validator.checkCanLearn(sketch, sp)
+  ) {
+    return 4;
+  }
+  let count = 0;
+  for (const m of candidates) {
+    const move = simDex.moves.get(m);
+    if (!move.exists || validator.checkMove(simSet, move, {})) continue;
+    if (!validator.checkCanLearn(move, sp)) {
+      count++;
+      if (count >= 4) return 4;
+    }
+  }
+  return count;
+}
+
+export function validateTeamWithSim(
+  simMod: typeof sim,
+  format: string,
+  rawTeam: string,
+  options?: ValidateTeamOptions
+): ValidateTeamResult {
+  const resolved = simMod.Dex.formats.get(format);
+  if (!resolved.exists) {
+    throw new Error(`Unknown format '${format}'.`);
+  }
+  const validator = new simMod.TeamValidator(resolved);
+  const simDex = validator.dex;
+  const dexAdapter = {
+    modid: simDex.currentMod,
+    gen: simDex.gen,
+    species: simDex.species,
+    items: simDex.items,
+    abilities: simDex.abilities,
+    moves: simDex.moves,
+    natures: simDex.natures,
+  } as unknown as Data;
+
+  const trimmed = rawTeam.trim();
+  let team: sim.PokemonSet[] | undefined = undefined;
+  if (options?.canonicalize) {
+    const imported = Team.import(trimmed, dexAdapter);
+    const filtered = (imported?.team ?? []).filter(s => s && (s.species || s.name));
+    if (filtered.length > 0) {
+      team = structuredClone(filtered) as sim.PokemonSet[];
+    }
+  }
+  if (!team) {
+    team = (simMod.Teams.unpack(trimmed) ?? simMod.Teams.import(trimmed)) ?? undefined;
+  }
+  if (!team || team.length === 0) {
+    return {problems: ['Empty or unparseable team.'], formatName: validator.format.name};
+  }
+  for (const s of team) {
+    if (!s.species && s.name) s.species = s.name;
+    s.name = '';
+  }
+
+  if (options?.requireSixPokemon && team.length !== 6) {
+    return {
+      problems: [`Team must contain 6 Pokémon (found ${team.length}).`],
+      formatName: validator.format.name,
+    };
+  }
+
+  if (!validator.format.team) {
+    const problems = validator.validateTeam(team);
+    if (problems && problems.length > 0) {
+      return {problems, formatName: validator.format.name};
+    }
+  }
+
+  if (options?.requireFullMoveset) {
+    for (const s of team) {
+      const distinctMoves = new Set((s.moves ?? []).map(m => toID(m)).filter(Boolean));
+      if (distinctMoves.size < 4) {
+        const required = maxLegalMovesForSpecies(validator, s);
+        if (distinctMoves.size < required) {
+          const spName = simDex.species.get(s.species || s.name || '').name || 'Pokémon';
+          return {
+            problems: [`${spName} must have ${required} moves (found ${distinctMoves.size}).`],
+            formatName: validator.format.name,
+          };
+        }
+      }
+    }
+  }
+
+  if (options?.canonicalize) {
+    const canonicalSets = Team.canonicalize(team, dexAdapter);
+    return {
+      packed: new Team(canonicalSets).pack(),
+      formatName: validator.format.name,
+    };
+  }
+
+  return {
+    packed: simMod.Teams.pack(team),
+    formatName: validator.format.name,
   };
 }

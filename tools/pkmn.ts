@@ -14,7 +14,7 @@ import * as auth from '../server/auth';
 import * as render from '../server/render';
 import * as sim from '../server/sim';
 import * as smogon from '../server/smogon';
-import {validateHarvestedTeams} from '../server/teams';
+import {validateHarvestedTeamsForVersion} from '../server/teams';
 import {syncStaticLiveBanner} from '../static/build';
 import {copyFileAtomic, root, writeFileAtomic} from '../static/util';
 
@@ -335,7 +335,11 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
             `("${ladder.id}" has team="${ladder.team}")`
           );
         }
-        const packed = validateHarvestedTeams(fs.readFileSync(teamsFile, 'utf8'), ladder.format);
+        const packed = await validateHarvestedTeamsForVersion(
+          fs.readFileSync(teamsFile, 'utf8'),
+          ladder.format,
+          ladder.version
+        );
         const count = database.replaceLadderTeams(ladder.id, packed, now);
         log(`Uploaded ${count} validated teams for ${ladder.id} (${ladder.format})`);
         return;
