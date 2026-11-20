@@ -1718,15 +1718,43 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     if (window.__sweepMinisprites) window.__sweepMinisprites(document);
     const eventSelect = document.getElementById('event-select');
     const liveSec = document.getElementById('live');
-    const tableNavWrap = document.getElementById('table-nav-wrap');
+    let tableNavWrap = document.getElementById('table-nav-wrap');
     const seriesLeftEl = document.getElementById('series-left');
     const seriesRightEl = document.getElementById('series-right');
-    const clockBarEl = document.getElementById('clock-bar');
+    let clockBarEl = document.getElementById('clock-bar');
     const standingsSec = document.getElementById('standings');
     const crosstableSec = document.getElementById('crosstable');
+    const gamesSec = document.getElementById('games');
     const gamesTbody = document.getElementById('games-tbody');
     const gamesArchiveMeta = document.getElementById('games-archive-meta');
     const frame = document.getElementById('ps-viewer-frame');
+
+    // Recreate empty broadcast containers if stripped by html-minifier's removeEmptyElements.
+    const ensureTableNavWrap = () => {
+      if (tableNavWrap) return tableNavWrap;
+      if (!liveSec) return null;
+      const el = document.createElement('div');
+      el.id = 'table-nav-wrap';
+      const bcastEl = liveSec.querySelector('.broadcast');
+      if (bcastEl) liveSec.insertBefore(el, bcastEl);
+      else liveSec.prepend(el);
+      tableNavWrap = el;
+      return el;
+    };
+    const ensureClockBarEl = () => {
+      if (clockBarEl) return clockBarEl;
+      if (!liveSec) return null;
+      const bcastEl = liveSec.querySelector('.broadcast');
+      if (!bcastEl) return null;
+      const el = document.createElement('div');
+      el.id = 'clock-bar';
+      el.className = 'clock-bar hide';
+      const viewerWrap = bcastEl.querySelector('.viewer-wrap');
+      if (viewerWrap) bcastEl.insertBefore(el, viewerWrap);
+      else bcastEl.appendChild(el);
+      clockBarEl = el;
+      return el;
+    };
 
     const initialViewer = ${render.safeInlineJson(viewerInit)};
     const pageInit = ${render.safeInlineJson(pageInit)} || {};
@@ -2004,10 +2032,11 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     };
 
     const renderClocks = (tb, nowMillis = Date.now()) => {
-      if (!clockBarEl) return;
+      const bar = ensureClockBarEl();
+      if (!bar) return;
       if (!tb || tb.idle || !tb.p1 || !tb.p2) {
-        clockBarEl.classList.add('hide');
-        clockBarEl.innerHTML = '';
+        bar.classList.add('hide');
+        bar.innerHTML = '';
         return;
       }
       const isLive = tb.live !== false;
@@ -2016,17 +2045,18 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const p2Bank = displayedBankSeconds(state, 'p2', tb.p2, nowMillis);
       const p1Committed = isLive && !tb.p1.thinking && Boolean(tb.p2.thinking);
       const p2Committed = isLive && !tb.p2.thinking && Boolean(tb.p1.thinking);
-      clockBarEl.classList.remove('hide');
-      clockBarEl.innerHTML =
+      bar.classList.remove('hide');
+      bar.innerHTML =
         renderClockSideHtml('p1', tb.p1, p1Committed, p1Bank) +
         renderClockSideHtml('p2', tb.p2, p2Committed, p2Bank);
     };
 
     const renderTableNav = () => {
-      if (!tableNavWrap) return;
+      const wrap = ensureTableNavWrap();
+      if (!wrap) return;
       const tables = getTables();
       if (tables.length === 0) {
-        tableNavWrap.innerHTML = '';
+        wrap.innerHTML = '';
         return;
       }
       const items = tables.map((tb, idx) => {
@@ -2040,7 +2070,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           '" id="' + tbId + '" value="' + tb.table + '" data-table-num="' +
           tb.table + '"' + checked + '><label for="' + tbId + '">' + labelHtml + '</label></li>';
       }).join('');
-      tableNavWrap.innerHTML = '<nav class="subnav" aria-label="Broadcast table"><ul>' +
+      wrap.innerHTML = '<nav class="subnav" aria-label="Broadcast table"><ul>' +
         items + '</ul></nav>';
     };
 
@@ -2090,7 +2120,27 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     let standingsPage = 1;
     let gamesPage = 1;
 
+    const formatUtcDateStr = ts => {
+      if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '—';
+      return new Date(ts * 1000).toISOString().slice(0, 10);
+    };
+    const entrantSubmittedByVer = new Map();
+    if (Array.isArray(pageInit.entrants)) {
+      for (const e of pageInit.entrants) {
+        if (e && e.versionId && e.submittedAt) {
+          entrantSubmittedByVer.set(e.versionId, e.submittedAt);
+        }
+      }
+    }
+
     const renderStandings = () => {
+      if (standingsSec) {
+        const h3Link = standingsSec.querySelector('h3 a');
+        if (h3Link) h3Link.textContent = status === 'scheduled' ? 'Entrants' : 'Standings';
+      }
+      if (gamesSec) {
+        gamesSec.classList.toggle('hide', status === 'scheduled');
+      }
       const bodyEl = document.getElementById('standings-body');
       if (!bodyEl || !Array.isArray(standings) || standings.length === 0) return;
       const total = standings.length;
@@ -2098,6 +2148,44 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       if (standingsPage > totalPages) standingsPage = totalPages;
       if (standingsPage < 1) standingsPage = 1;
       const start = (standingsPage - 1) * pageSize;
+      const hideCls = totalPages <= 1 ? ' hide' : '';
+      const prevDis = standingsPage <= 1 ? ' disabled' : '';
+      const nextDis = standingsPage >= totalPages ? ' disabled' : '';
+      const word = total === 1 ? 'entrant' : 'entrants';
+      const info = 'Page ' + standingsPage + ' of ' + totalPages +
+        ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+
+      if (status === 'scheduled') {
+        const ordered = [...standings].sort((a, b) => {
+          const sa = a.submittedAt || entrantSubmittedByVer.get(a.versionId) || 0;
+          const sb = b.submittedAt || entrantSubmittedByVer.get(b.versionId) || 0;
+          return sa - sb || (a.rank || 0) - (b.rank || 0);
+        });
+        const rows = ordered.map((e, idx) => {
+          const hideAttr = (idx < start || idx >= start + pageSize) ? ' class="hide"' : '';
+          const subTs = e.submittedAt || entrantSubmittedByVer.get(e.versionId);
+          return '<tr' + hideAttr + '>' +
+            '<td><strong>' + (idx + 1) + '</strong></td>' +
+            '<td>' + formatAgentLink(e.name, e.slug, true) +
+            ' <code>' + esc(e.version) + '</code></td>' +
+            '<td class="num muted">' + esc(formatUtcDateStr(subTs)) + '</td>' +
+            '</tr>';
+        }).join('');
+        bodyEl.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
+          '<th>#</th><th>Agent</th><th class="num">Submitted</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+          '<div class="pager' + hideCls +
+          '" id="standings-pager" aria-label="Entrants pagination" ' +
+          'data-table-pager data-page-size="25" data-singular="entrant" data-plural="entrants">' +
+          '<button type="button" class="pager-btn" id="standings-pager-prev" ' +
+          'data-pager-prev' + prevDis + '>&larr; Prev</button>' +
+          '<span class="pager-info muted" id="standings-pager-info" data-pager-info>' +
+          esc(info) + '</span>' +
+          '<button type="button" class="pager-btn" id="standings-pager-next" ' +
+          'data-pager-next' + nextDis + '>Next &rarr;</button></div>';
+        return;
+      }
+
       const liveTbs = getLiveTables();
       const maxRrGames = Math.max(1, (standings.length - 1) * gamesPerMatchup);
       const rows = standings.map((e, idx) => {
@@ -2132,13 +2220,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         ' ' + unitPlural + ' (+1.0 per win, +0.5 per tie)';
       const wltTitle = isMultiGame
         ? ('Best-of-' + bestOf + ' match Wins – Losses – Ties')
-        : 'Standalone individual BYOT game Wins – Losses – Ties';
-      const hideCls = totalPages <= 1 ? ' hide' : '';
-      const prevDis = standingsPage <= 1 ? ' disabled' : '';
-      const nextDis = standingsPage >= totalPages ? ' disabled' : '';
-      const word = total === 1 ? 'entrant' : 'entrants';
-      const info = 'Page ' + standingsPage + ' of ' + totalPages +
-        ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+        : 'Standalone individual game Wins – Losses – Ties';
       bodyEl.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
         '<th>#</th><th>Agent</th>' +
         '<th class="num" title="Tournament MAP Elo ± 95% CI">Elo</th>' +
@@ -2519,8 +2601,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
     };
 
-    if (tableNavWrap) {
-      tableNavWrap.addEventListener('change', ev => {
+    if (liveSec) {
+      liveSec.addEventListener('change', ev => {
         const target = ev.target instanceof Element ? ev.target : undefined;
         const radio = target ? target.closest('input[data-table-num]') : undefined;
         if (!radio) return;
@@ -2824,14 +2906,22 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         } catch {}
       });
 
-      es.addEventListener('broadcast-end', () => {
+      es.addEventListener('broadcast-end', ev => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (data && data.status) status = data.status;
+        } catch {}
         broadcast = undefined;
         clockStateByTable.clear();
         renderClocks(undefined);
         syncLiveGameRows();
+        renderArchiveMeta();
         renderStandings();
         renderCrosstable();
         renderTableNav();
+        if (status === 'completed') {
+          es.close();
+        }
       });
 
       es.addEventListener('game-complete', ev => {
@@ -2880,6 +2970,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           if (data.status) status = data.status;
           if (data.archiveHref !== undefined) archiveHref = data.archiveHref;
           renderArchiveMeta();
+          renderStandings();
           if (status === 'completed' && !broadcast) {
             es.close();
           }
@@ -3003,6 +3094,7 @@ export function renderTournamentPage(opts: {
       slug: e.agentSlug,
       name: e.agentName,
       version: e.version,
+      submittedAt: e.submittedAt,
     })),
     standings: json.standings,
     crosstable: json.crosstable,

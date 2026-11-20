@@ -3009,4 +3009,35 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('omits stale BYOT copy from tournament client standings tooltip', async () => {
+    const fp = db.getAgentBySlug('foul-play')!;
+    const jax = db.getAgentBySlug('jaxcalibur')!;
+    const v1 = db.getVersionsForAgent(fp.id)[0].id;
+    const v2 = db.getVersionsForAgent(jax.id)[0].id;
+    db.upsertTournament({
+      id: '31',
+      name: 'Scheduled Tour',
+      format: 'gen9ou',
+      version: '0.11.0',
+      gamesPerMatchup: 2,
+      parallelTables: 1,
+      hardware: 'GCP L4 Spot',
+      status: 'scheduled',
+      startsAt: NOW + 86_400,
+    });
+    db.upsertTournamentEntrant({tournamentId: '31', agentId: fp.id, versionId: v1, seed: 1});
+    db.upsertTournamentEntrant({tournamentId: '31', agentId: jax.id, versionId: v2, seed: 2});
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/arena/tournaments/31/');
+      expect(html).not.toContain('BYOT');
+      expect(html).toContain('Entrants pagination');
+      expect(html).toContain('table-nav-wrap');
+      expect(html).toContain('clock-bar');
+      expect(html).toContain('scheduled');
+    } finally {
+      await h.close();
+    }
+  });
 });

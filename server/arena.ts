@@ -276,6 +276,7 @@ export interface TournamentStandingEntry {
   ties: number;
   points: number;
   sonnebornBerger: number;
+  submittedAt?: number;
 }
 
 export interface TournamentCrosstableSide {
@@ -532,6 +533,7 @@ export function buildTournamentDocument(
       ties: e.gameTies,
       points: e.points,
       sonnebornBerger: e.sonnebornBerger,
+      submittedAt: e.submittedAt,
     })),
     crosstable: [
       ...rrPairs.map(p => mapPair('Round Robin', p)),
