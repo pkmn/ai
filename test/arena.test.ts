@@ -4717,6 +4717,20 @@ describe('arena infrastructure', () => {
       expect(rmIdx).toBeGreaterThan(mvIdx);
     });
 
+    test('archive.sh stages SQLite backup and zstd compression outside /Volumes/Archive', () => {
+      const script = fs.readFileSync(root('arena', 'scripts', 'archive.sh'), 'utf8');
+      const stageIdx = script.indexOf('STAGE_DIR="/Volumes/Staging"');
+      const backupIdx = script.search(/\.backup '.*ESCAPED_TMP_DB.*'/);
+      const zstdIdx = script.indexOf('zstd -19 --rm -f "$TMP_DB"');
+      const cpIdx = script.search(/cp ".*TMP_DB.*\.zst" "\$TMP_ZST"/);
+      const mvIdx = script.indexOf('mv -f "$TMP_ZST" "$OUT_ZST"');
+      expect(stageIdx).toBeGreaterThan(0);
+      expect(backupIdx).toBeGreaterThan(stageIdx);
+      expect(zstdIdx).toBeGreaterThan(backupIdx);
+      expect(cpIdx).toBeGreaterThan(zstdIdx);
+      expect(mvIdx).toBeGreaterThan(cpIdx);
+    });
+
     test('TournamentCoordinator aborts GCP smoke test when baseline faults', async () => {
       const reported: serverArena.SubmissionStatusPayload[] = [];
       const fakeClient = {

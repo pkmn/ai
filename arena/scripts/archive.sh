@@ -34,13 +34,24 @@ fi
 umask 077
 mkdir -p "$LOG_ROOT" "$COLD_DIR" "$BACKUP_DIR"
 
-# 1. Daily SQLite backup of local Mac mini state DB (/opt/arena/state/arena.sqlite)
+# 1. Daily SQLite backup of local Mac mini state DB (/opt/arena/state/arena.sqlite).
+# Stage `.backup` + `zstd` on internal `/Volumes/Staging` so non-Apple Homebrew `zstd` never
+# touches external USB `/Volumes/Archive` under macOS TCC, then install atomically via `/bin/cp`.
 if [[ -f "$STATE_DB" ]]; then
   TODAY="$(date -u +%Y-%m-%d)"
-  OUT_DB="${BACKUP_DIR}/arena-state-${TODAY}.sqlite"
-  ESCAPED_OUT_DB="${OUT_DB//\'/\'\'}"
-  sqlite3 -cmd ".timeout 10000" "$STATE_DB" ".backup '${ESCAPED_OUT_DB}'"
-  zstd -19 --rm -f "$OUT_DB"
+  OUT_ZST="${BACKUP_DIR}/arena-state-${TODAY}.sqlite.zst"
+  STAGE_DIR="/Volumes/Staging"
+  [[ -d "$STAGE_DIR" ]] || STAGE_DIR="${TMPDIR:-/tmp}"
+  TMP_DB="${STAGE_DIR}/arena-state-${TODAY}.$$.sqlite"
+  TMP_ZST="${OUT_ZST}.tmp.$$"
+  trap 'rm -f "$TMP_DB" "${TMP_DB}.zst" "$TMP_ZST"' EXIT
+  ESCAPED_TMP_DB="${TMP_DB//\'/\'\'}"
+  sqlite3 -cmd ".timeout 10000" "$STATE_DB" ".backup '${ESCAPED_TMP_DB}'"
+  zstd -19 --rm -f "$TMP_DB"
+  cp "${TMP_DB}.zst" "$TMP_ZST"
+  mv -f "$TMP_ZST" "$OUT_ZST"
+  rm -f "${TMP_DB}.zst"
+  trap - EXIT
   find "$BACKUP_DIR" -name "arena-state-*.sqlite.zst" -mtime +30 -delete
 fi
 

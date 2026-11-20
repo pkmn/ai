@@ -9,7 +9,7 @@ import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as sim from '../server/sim';
 import * as teams from '../server/teams';
-import {formatUtcDate, root, toID, writeFileAtomic} from '../static/util';
+import {copyFileAtomic, formatUtcDate, root, toID, writeFileAtomic} from '../static/util';
 
 import * as arbiter from './arbiter';
 import * as db from './db';
@@ -686,8 +686,8 @@ export class Coordinator {
       const day = entry.name;
       const yearMonth = day.slice(0, 7);
       const dayDir = path.join(ladderDir, day);
-      const hasLogs = fs.readdirSync(dayDir).some(f => f.endsWith('.log'));
-      if (!hasLogs) {
+      const logFiles = fs.readdirSync(dayDir).filter(f => f.endsWith('.log'));
+      if (!logFiles.length) {
         fs.rmSync(dayDir, {recursive: true, force: true});
         continue;
       }
@@ -695,24 +695,32 @@ export class Coordinator {
       const monthDir = path.join(ladderDir, yearMonth);
       fs.mkdirSync(monthDir, {recursive: true, mode: 0o700});
       const dayArchive = path.join(monthDir, `${day}.7z`);
-      const tmpDayArchive = `${dayArchive}.tmp.${process.pid}`;
-      fs.rmSync(tmpDayArchive, {force: true});
+      // Stage `.log` files in internal `this.dirs.staging` so non-Apple Homebrew `7z` never
+      // opens external USB `/Volumes/Archive` directly under macOS TCC.
+      const stageDir = path.join(this.dirs.staging, `7z-${process.pid}-${Date.now()}`);
+      const stageArchive = path.join(stageDir, `${day}.7z`);
+      fs.rmSync(stageDir, {recursive: true, force: true});
       try {
+        fs.mkdirSync(stageDir, {recursive: true, mode: 0o700});
+        for (const f of logFiles) {
+          fs.copyFileSync(path.join(dayDir, f), path.join(stageDir, f));
+        }
         execFileSync(
           '7z',
           [
             'a', '-t7z', '-m0=lzma2', '-mx=9', '-mfb=64', '-md=64m', '-ms=on',
-            tmpDayArchive, '*.log',
+            stageArchive, '*.log',
           ],
-          {cwd: dayDir, stdio: 'ignore', timeout: 60_000}
+          {cwd: stageDir, stdio: 'ignore', timeout: 60_000}
         );
-        execFileSync('7z', ['t', tmpDayArchive], {stdio: 'ignore', timeout: 30_000});
-        fs.renameSync(tmpDayArchive, dayArchive);
+        execFileSync('7z', ['t', stageArchive], {stdio: 'ignore', timeout: 30_000});
+        copyFileAtomic(stageArchive, dayArchive);
         fs.rmSync(dayDir, {recursive: true, force: true});
         compressedAny = true;
       } catch (err) {
-        fs.rmSync(tmpDayArchive, {force: true});
         console.error(`Failed to compress daily archive ${dayArchive}:`, err);
+      } finally {
+        fs.rmSync(stageDir, {recursive: true, force: true});
       }
     }
     return compressedAny;

@@ -662,7 +662,7 @@ export function archiveColdAgent(
           '-euo',
           'pipefail',
           '-c',
-          'podman save "$1" | zstd -3 -o "$2"',
+          'podman save "$1" | zstd -3 > "$2"',
           '_',
           agent.target,
           tmpArchive,
@@ -888,7 +888,7 @@ export function ensureAgentResident(
   } else {
     execFileSync(
       'bash',
-      ['-euo', 'pipefail', '-c', 'zstd -dc "$1" | podman load', '_', coldArchive],
+      ['-euo', 'pipefail', '-c', 'zstd -dc < "$1" | podman load', '_', coldArchive],
       {timeout: 180_000}
     );
   }
