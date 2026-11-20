@@ -1760,6 +1760,10 @@ export class Coordinator {
     this.customResolveEntrantSpec = options.resolveEntrantSpec;
   }
 
+  private notifyAlert(alert: arena.StaffAlertPayload) {
+    Promise.resolve(this.client.sendAlert?.(alert)).catch(() => undefined);
+  }
+
   private resolveEntrantSpec(mounted: MountedEntrant): AgentSpec {
     const {entrant, vmHost, controlSocket} = mounted;
     if (this.customResolveEntrantSpec) {
@@ -1876,7 +1880,15 @@ export class Coordinator {
         });
         const res = await smokeGame.run();
         const verdict = engine.classifySmokeGame(res, {label: 'GCP smoke test', format});
-        if (verdict.kind === 'infra') throw new Error(verdict.message);
+        if (verdict.kind === 'infra') {
+          this.notifyAlert({
+            key: 'tourney-smoke-infra',
+            message:
+              `Tournament smoke test infrastructure error for ${sub.agentSlug} ${sub.version}`,
+            detail: verdict.message,
+          });
+          throw new Error(verdict.message);
+        }
         if (verdict.kind === 'fail') {
           smokeError = verdict.message;
           break;
@@ -2193,12 +2205,24 @@ export class Coordinator {
 
         const res = await game.run();
         if (res.launchError) {
-          throw new Error(`Worker launch failed on ${params.gameId}: ${res.launchError}`);
+          const errMsg = `Worker launch failed on ${params.gameId}: ${res.launchError}`;
+          this.notifyAlert({
+            key: `tourney-worker:${tournamentId}`,
+            message: `Tournament ${tournamentId} worker launch failed on ${params.gameId}`,
+            detail: res.launchError,
+          });
+          throw new Error(errMsg);
         }
         if (res.winner === 'preempted' || !res.outcome) {
           preemptions++;
           if (preemptions >= 5) {
-            throw new Error(`Exceeded 5 consecutive Spot preemptions on ${params.gameId}`);
+            const errMsg = `Exceeded 5 consecutive Spot preemptions on ${params.gameId}`;
+            this.notifyAlert({
+              key: `tourney-worker:${tournamentId}`,
+              message: `Tournament ${tournamentId} hit 5 consecutive Spot preemptions`,
+              detail: errMsg,
+            });
+            throw new Error(errMsg);
           }
           if (!p1Spec.localCommand && !p2Spec.localCommand) {
             await new Promise(r => setTimeout(r, Math.min(5000, 250 * 2 ** (preemptions - 1))));

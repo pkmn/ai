@@ -1,5 +1,7 @@
+import * as fs from 'fs';
+
 import * as arena from '../server/arena';
-import {root} from '../static/util';
+import {isConnectivityError, root} from '../static/util';
 
 import * as arbiter from './arbiter';
 import * as coordinator from './coordinator';
@@ -11,6 +13,66 @@ import * as unpack from './unpack';
 export {arbiter, coordinator, db, packages, tournament, unpack};
 
 const BASELINE_BIN = root('arena', 'bin', 'baseline');
+const GIB = 1024 * 1024 * 1024;
+const HOST_CHECK_INTERVAL_MILLIS = 10 * 60 * 1000;
+const ARENA_DISK_LOW_PCT = 10;
+const ARENA_DISK_RECOVER_PCT = 15;
+const ARENA_DISK_LOW_BYTES = 10 * GIB;
+const ARENA_DISK_RECOVER_BYTES = 15 * GIB;
+const DAEMON_ERROR_ALERT_THRESHOLD = 5;
+
+function checkArenaHostHealth(client: arena.Client, devMode: boolean) {
+  if (devMode) return;
+  const checkPaths = ['/'];
+  if (process.platform === 'darwin') {
+    let archiveMounted = true;
+    try {
+      packages.assertArchiveVolumeMounted(packages.PROD_DIRS.logs);
+    } catch {
+      archiveMounted = false;
+    }
+    if (!archiveMounted) {
+      void client.sendAlert({
+        key: 'arena-archive-mount',
+        message: '/Volumes/Archive is not mounted on the Arena host.',
+      }).catch(() => undefined);
+    } else {
+      checkPaths.push('/Volumes/Archive');
+      void client.sendAlert({
+        key: 'arena-archive-mount',
+        message: '/Volumes/Archive is mounted again.',
+        resolved: true,
+      }).catch(() => undefined);
+    }
+  }
+  for (const dir of checkPaths) {
+    try {
+      const st = fs.statfsSync(dir);
+      const totalBytes = st.blocks * st.bsize;
+      const freeBytes = st.bavail * st.bsize;
+      if (totalBytes <= 0) continue;
+      const freePct = Math.round((freeBytes / totalBytes) * 100);
+      const freeGiB = (freeBytes / GIB).toFixed(1);
+      const totalGiB = (totalBytes / GIB).toFixed(1);
+      if (freePct < ARENA_DISK_LOW_PCT || freeBytes < ARENA_DISK_LOW_BYTES) {
+        void client.sendAlert({
+          key: `arena-disk:${dir}`,
+          message:
+            `Low disk space on Arena \`${dir}\`: ${freePct}% free ` +
+            `(${freeGiB} / ${totalGiB} GiB).`,
+        }).catch(() => undefined);
+      } else if (freePct >= ARENA_DISK_RECOVER_PCT && freeBytes >= ARENA_DISK_RECOVER_BYTES) {
+        void client.sendAlert({
+          key: `arena-disk:${dir}`,
+          message:
+            `Disk space recovered on Arena \`${dir}\`: ${freePct}% free ` +
+            `(${freeGiB} / ${totalGiB} GiB).`,
+          resolved: true,
+        }).catch(() => undefined);
+      }
+    } catch {}
+  }
+}
 
 function createArenaClient(opts: {serverUrl?: string; arenaSecret?: string}): arena.Client {
   const serverUrl = opts.serverUrl ?? process.env.ARENA_SERVER_URL ?? 'http://127.0.0.1:1234';
@@ -99,9 +161,18 @@ export async function runDaemon(opts: {
 
   try {
     await coord.recoverIncompleteMatches();
+    let consecutiveCycleErrors = 0;
+    let lastHostCheckAt = 0;
 
     while (!coord.isDraining()) {
       try {
+        if (!opts.once && opts.rootDir === undefined) {
+          const nowMillis = Date.now();
+          if (nowMillis - lastHostCheckAt >= HOST_CHECK_INTERVAL_MILLIS) {
+            lastHostCheckAt = nowMillis;
+            checkArenaHostHealth(client, isDev);
+          }
+        }
         await coord.flushOutbox();
         const initialSnap = await client.getPlayableLadders();
         let ladders = initialSnap.ladders;
@@ -117,6 +188,7 @@ export async function runDaemon(opts: {
           quarantinedVersionIds = refreshed.quarantinedVersionIds ?? [];
         }
         const played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
+        consecutiveCycleErrors = 0;
         if (!played && !opts.once && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);
           await sleeper.sleep(pollIntervalMillis);
@@ -124,6 +196,17 @@ export async function runDaemon(opts: {
       } catch (err) {
         console.error('Arena daemon cycle error:', err);
         if (opts.once) throw err;
+        if (!isConnectivityError(err)) {
+          consecutiveCycleErrors++;
+          if (consecutiveCycleErrors >= DAEMON_ERROR_ALERT_THRESHOLD) {
+            const detail = err instanceof Error ? err.message : String(err);
+            void client.sendAlert({
+              key: 'arena-daemon-cycle',
+              message: `Arena daemon failed ${consecutiveCycleErrors} cycles in a row.`,
+              detail,
+            }).catch(() => undefined);
+          }
+        }
         if (!coord.isDraining()) {
           await sleeper.sleep(pollIntervalMillis);
         }

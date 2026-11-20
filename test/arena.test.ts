@@ -4741,6 +4741,81 @@ describe('arena infrastructure', () => {
       expect(lsIdx).toBeGreaterThan(rsyncIdx);
     });
 
+    test('archive.sh posts failure alert to /api/arena/alert on non-zero exit', () => {
+      const script = fs.readFileSync(root('arena', 'scripts', 'archive.sh'), 'utf8');
+      expect(script).toContain('trap on_exit EXIT');
+      expect(script).toContain('/api/arena/alert');
+      expect(script).toContain('key: "arena-archive"');
+    });
+
+    test('TournamentCoordinator sends staff alert on GCP smoke baseline fault', async () => {
+      const alerts: serverArena.StaffAlertPayload[] = [];
+      const fakeClient = {
+        getPendingSubmissions: () => Promise.resolve({
+          ladders: [],
+          tournaments: [{
+            id: '91',
+            format: 'gen9randombattle',
+            version: '0.11.0',
+            team: 'random' as const,
+            customRules: [],
+            teamPool: [],
+          }],
+          submissions: [{
+            versionId: 91,
+            agentId: 1,
+            agentSlug: 'foul-play',
+            agentName: 'Foul Play',
+            version: '9.1.0',
+            package: 'oci' as const,
+            url: 'ghcr.io/pkmn/foul-play:9.1.0',
+            sha256: '1'.repeat(64),
+            ladders: [],
+            tournaments: ['91'],
+            submittedAt: 1_760_000_000,
+          }],
+        }),
+        reportSubmissionStatus: () => Promise.resolve({
+          ok: true,
+          versionId: 91,
+          smokeStatus: 'failed',
+        }),
+        sendAlert: (payload: serverArena.StaffAlertPayload) => {
+          alerts.push(payload);
+          return Promise.resolve({ok: true as const});
+        },
+      } as unknown as serverArena.Client;
+
+      const coord = new tournament.Coordinator({
+        client: fakeClient,
+        baselineSpec: {
+          agentId: '_baseline',
+          displayName: 'Baseline',
+          vmHost: '127.0.0.1',
+          controlSocket: '',
+          localCommand: process.execPath,
+          localArgs: ['-e', 'process.exit(1)'],
+        },
+        rootDir: path.join(tmpDir, 'tourney-smoke-alert'),
+        prepareSubmissionRootfs: () => 1024,
+        resolveEntrantSpec: entrant => ({
+          agentId: `${entrant.agentSlug}-${entrant.versionId}`,
+          displayName: entrant.agentName,
+          vmHost: '127.0.0.1',
+          controlSocket: '',
+          localCommand: relayBin,
+          localArgs: [process.execPath, defaultAgentScript],
+        }),
+      });
+
+      await expect(coord.processPendingSubmissions('91')).rejects.toThrow(
+        /infrastructure fault/i
+      );
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].key).toBe('tourney-smoke-infra');
+      expect(alerts[0].message).toContain('foul-play 9.1.0');
+    });
+
     test('TournamentCoordinator aborts GCP smoke test when baseline faults', async () => {
       const reported: serverArena.SubmissionStatusPayload[] = [];
       const fakeClient = {

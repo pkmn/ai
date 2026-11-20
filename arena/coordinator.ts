@@ -200,6 +200,10 @@ export class Coordinator {
     return `sodium,${crypto.randomBytes(32).toString('hex')}`;
   }
 
+  private notifyAlert(alert: arena.StaffAlertPayload) {
+    Promise.resolve(this.client.sendAlert?.(alert)).catch(() => undefined);
+  }
+
   private resolveLaunchSpec(mode: db.ExecutionMode, target: string): arbiter.AgentLaunchSpec {
     if (mode === 'native' && this.devMode && !path.isAbsolute(target)) {
       return {
@@ -443,7 +447,14 @@ export class Coordinator {
           p1Stderr: res.p1.stderr,
           p2Stderr: res.p2.stderr,
         });
-        if (verdict.kind === 'infra') throw new Error(verdict.message);
+        if (verdict.kind === 'infra') {
+          this.notifyAlert({
+            key: 'smoke-infra',
+            message: `Smoke test infrastructure error for ${sub.agentSlug} ${sub.version}`,
+            detail: verdict.message,
+          });
+          throw new Error(verdict.message);
+        }
         if (verdict.kind === 'fail') {
           smokeError = verdict.message;
           break;
@@ -718,7 +729,13 @@ export class Coordinator {
         fs.rmSync(dayDir, {recursive: true, force: true});
         compressedAny = true;
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`Failed to compress daily archive ${dayArchive}:`, err);
+        this.notifyAlert({
+          key: `archive-7z:${ladderId}`,
+          message: `Daily log compression failed for ${ladderId} (${day})`,
+          detail: errMsg,
+        });
       } finally {
         fs.rmSync(stageDir, {recursive: true, force: true});
       }
@@ -768,7 +785,13 @@ export class Coordinator {
       return true;
     } catch (err) {
       fs.rmSync(tmpTar, {force: true});
+      const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`Failed to build/upload ${ladderId}-logs.tar:`, err);
+      this.notifyAlert({
+        key: `archive-upload:${ladderId}`,
+        message: `Ladder archive upload failed for ${ladderId}`,
+        detail: errMsg,
+      });
       return false;
     }
   }

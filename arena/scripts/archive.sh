@@ -18,6 +18,49 @@ COLD_DIR="${ARCHIVE_ROOT}/cold-agents"
 BACKUP_DIR="${ARCHIVE_ROOT}/db-backups"
 STATE_DB="/opt/arena/state/arena.sqlite"
 GCS_BUCKET="gs://pkmn-arena"
+STAGE_DIR="/Volumes/Staging"
+[[ -d "$STAGE_DIR" ]] || STAGE_DIR="${TMPDIR:-/tmp}"
+
+umask 077
+ERR_LOG="${STAGE_DIR}/archive-err.$$.log"
+TMP_DB=""
+TMP_ZST=""
+TMP_TAR=""
+on_exit() {
+  local rc=$?
+  exec 2>&3
+  if [[ -f "$ERR_LOG" ]]; then
+    cat "$ERR_LOG" >&2
+  fi
+  if [[ "$rc" -ne 0 && -n "${ARENA_SECRET:-}" ]] && command -v node >/dev/null 2>&1; then
+    ARENA_ALERT_RC="$rc" ARENA_ALERT_LOG="$ERR_LOG" node -e '
+      const fs = require("fs");
+      const url = (process.env.ARENA_SERVER_URL || "http://127.0.0.1:1234").replace(/\/+$/, "");
+      const detail = fs.existsSync(process.env.ARENA_ALERT_LOG)
+        ? fs.readFileSync(process.env.ARENA_ALERT_LOG, "utf8").trim().slice(-3072)
+        : "";
+      fetch(`${url}/api/arena/alert`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${process.env.ARENA_SECRET}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          key: "arena-archive",
+          message: `Nightly arena archive failed (exit ${process.env.ARENA_ALERT_RC})`,
+          ...(detail ? {detail} : {}),
+        }),
+        signal: AbortSignal.timeout(10000),
+      }).catch(() => {});
+    ' >/dev/null 2>&1 || true
+  fi
+  [[ -n "$TMP_DB" ]] && rm -f "$TMP_DB" "${TMP_DB}.zst"
+  [[ -n "$TMP_ZST" ]] && rm -f "$TMP_ZST"
+  [[ -n "$TMP_TAR" ]] && rm -f "$TMP_TAR"
+  rm -f "$ERR_LOG"
+}
+exec 3>&2 2>"$ERR_LOG"
+trap on_exit EXIT
 
 # Guard against silently writing into the internal rootfs if the external APFS drive is unmounted
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -31,7 +74,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   fi
 fi
 
-umask 077
 mkdir -p "$LOG_ROOT" "$COLD_DIR" "$BACKUP_DIR"
 
 # 1. Daily SQLite backup of local Mac mini state DB (/opt/arena/state/arena.sqlite).
@@ -40,18 +82,16 @@ mkdir -p "$LOG_ROOT" "$COLD_DIR" "$BACKUP_DIR"
 if [[ -f "$STATE_DB" ]]; then
   TODAY="$(date -u +%Y-%m-%d)"
   OUT_ZST="${BACKUP_DIR}/arena-state-${TODAY}.sqlite.zst"
-  STAGE_DIR="/Volumes/Staging"
-  [[ -d "$STAGE_DIR" ]] || STAGE_DIR="${TMPDIR:-/tmp}"
   TMP_DB="${STAGE_DIR}/arena-state-${TODAY}.$$.sqlite"
   TMP_ZST="${OUT_ZST}.tmp.$$"
-  trap 'rm -f "$TMP_DB" "${TMP_DB}.zst" "$TMP_ZST"' EXIT
   ESCAPED_TMP_DB="${TMP_DB//\'/\'\'}"
   sqlite3 -cmd ".timeout 10000" "$STATE_DB" ".backup '${ESCAPED_TMP_DB}'"
   zstd -19 --rm -f "$TMP_DB"
   cp "${TMP_DB}.zst" "$TMP_ZST"
   mv -f "$TMP_ZST" "$OUT_ZST"
   rm -f "${TMP_DB}.zst"
-  trap - EXIT
+  TMP_DB=""
+  TMP_ZST=""
   find "$BACKUP_DIR" -name "arena-state-*.sqlite.zst" -mtime +30 -delete
 fi
 

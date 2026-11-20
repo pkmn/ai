@@ -402,9 +402,14 @@ staged `.log` replays are promoted into `public/arena/ladders/<ladder_id>/`), wh
   leaderboard roles (`ladders:` in `config/discord.yml` using `VGC_BOT_TOKEN`, resolving owners via
   linked `discordId`s, `🤖 <Agent>` guild roles, or owner usernames).
 - Enforces channel pinned messages (`pins:` in `config/discord.yml`), archives `#general` chat logs
-  into `chat/logs/YYYY-MM-DD.txt`, and DMs developers on smoke-test failure or quarantine (and staff
-  in `staff:` of `config/discord.yml` on quarantine or if Mac mini heartbeats go stale `> 15`
-  minutes).
+  into `chat/logs/YYYY-MM-DD.txt`, and DMs developers on smoke-test failure or quarantine.
+- DMs staff (`staff:` in `config/discord.yml`, deduplicated with a 6-hour per-key cooldown) on
+  quarantines, stale Arena heartbeats/check-ins (`> 15` minutes, plus recovery when Arena comes back
+  online), low VPS or Arena disk space, stale/failed nightly backups, `/Volumes/Archive` unmounts,
+  daily `.7z`/ladder archive failures, smoke-test infrastructure errors, repeated sync/daemon
+  failures, and unexpected `pkmn.ai-server` exits (`ExecStopPost` via `pkmn notify-staff`). The Mac
+  mini holds no Discord token and relays alerts through `POST /api/arena/alert` over the existing
+  SSH tunnel (`Bearer $ARENA_SECRET`).
 
 To trigger an immediate one-shot Discord sync outside the 60-second loop:
 
