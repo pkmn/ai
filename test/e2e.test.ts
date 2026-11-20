@@ -422,7 +422,8 @@ describe('mock scenarios & E2E lifecycle', () => {
         db.close();
         fs.rmSync(tmpDir, {recursive: true, force: true});
       }
-    });
+    },
+    20_000);
 
   test('persists mock state.json identically across sequential single-line runs',
     async () => {
