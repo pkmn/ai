@@ -4522,6 +4522,49 @@ describe('arena infrastructure', () => {
       }
     });
 
+    test('surfaces full 4 KiB stderr tail on failed ladder smoke tests', async () => {
+      const srcDir = path.join(tmpDir, 'stderr-tail-src');
+      fs.mkdirSync(srcDir, {recursive: true});
+      const prefix = 'x'.repeat(400);
+      const sentinel = 'RuntimeError: final traceback line preserved';
+      fs.writeFileSync(
+        path.join(srcDir, 'run'),
+        `#!/bin/sh\nprintf '%s\\n%s\\n' '${prefix}' '${sentinel}' >&2\nexit 1\n`,
+        {mode: 0o755}
+      );
+      const badTar = path.join(tmpDir, 'stderr-tail.tar.gz');
+      execFileSync('tar', ['-czf', badTar, '-C', srcDir, '.']);
+      const badSha = crypto.createHash('sha256').update(fs.readFileSync(badTar)).digest('hex');
+
+      const h = createMockCoordHarness('stderr-tail-smoke');
+      try {
+        (h.coord.client as unknown as {
+          getPendingSubmissions: () => Promise<serverArena.PendingSubmissionsResponse>;
+        }).getPendingSubmissions = () => Promise.resolve({
+          ladders: [],
+          submissions: [{
+            versionId: 32,
+            agentId: 1,
+            agentSlug: 'foul-play',
+            agentName: 'Foul Play',
+            version: '3.2.0',
+            package: 'bundle' as const,
+            url: `file://${badTar}`,
+            sha256: badSha,
+            ladders: ['gen9customgame'],
+            tournaments: [],
+            teamsByLadder: {},
+          }],
+        });
+        await h.coord.processPendingSubmissions(new Map([['gen9customgame', h.ladderSnap]]));
+        expect(h.reportedStatuses).toHaveLength(1);
+        expect(h.reportedStatuses[0].smokeStatus).toBe('failed');
+        expect(h.reportedStatuses[0].smokeError).toContain(sentinel);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
     test('flushOutbox publishes ladder archive when match-complete archives ladder', async () => {
       const h = createMockCoordHarness('outbox-archive');
       const uploaded: string[] = [];

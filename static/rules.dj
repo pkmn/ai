@@ -56,7 +56,7 @@ submit an agent with:
     agent in.
 
 Ladder submissions will run on an *Apple M6 Mac mini* with access to *10 cores* (8 Performance & 2
-Efficiency), *14 GiB* of dedicated RAM, and 4 GiB of scratch `$TMPDIR` storage wiped between games.
+Efficiency), *14 GiB* of dedicated RAM, and 4 GB of scratch `$TMPDIR` storage wiped between games.
 The *network is disabled* and opponents are anonymous. Ladder submissions may be an OCI
 `linux/arm64` container (virtual *GPU* via Vulkan passthrough) or a native bundle (direct GPU/ANE
 via Metal/CoreML). Tournaments specify their own hardware and accept only `linux/amd64` OCI
@@ -186,7 +186,8 @@ the series) and communicates strictly over *standard input (`stdin`)* and *stand
   - there is no login protocol; an agent must write *`/ready`* to `stdout` --- or
     *`/utm <packed_team>`* with a legal team in bring-your-own-team (BYOT) tournaments --- once it
     has initialized and loaded any data or weights it needs to begin playing. Agents that fail to
-    do so within *60 seconds* (or submit an illegal team in BYOT) will receive a game loss.
+    do so within *60 seconds* (or submit an illegal team in BYOT) will forfeit the game (or match,
+    in Best-of-N tournaments).
   - after `/ready` is received, in non-Random Battle formats with arena-assigned teams (ladders and
     pre-assigned tournaments), the very first line sent to your agent's `stdin` is:
 
@@ -228,7 +229,7 @@ the series) and communicates strictly over *standard input (`stdin`)* and *stand
     loss; `[Unavailable choice]` errors (_e.g._, Encore, Disable, or trapping abilities) do not
     count toward this limit.
   - submissions that lose due to invalid choices / crashes / OOM / timeouts in 10 consecutive games
-    (or over 20% of games after 10 games) will be *quarantined* across all ladders without
+    (or over 20% across 10 or more games) will be *quarantined* across all ladders without
     resetting the 14-day cooldown.
 
 ### Matchmaking
@@ -298,14 +299,14 @@ Superfinal between the top two entrants.
     `$XDG_CACHE_HOME` all point to the per-game scratch directory (wiped between games; native
     bundles cannot write to `/tmp`), which also holds CoreML/Metal shader caches and runtime temp
     files.
-  - ladder processes and threads are capped at 256 (`RLIMIT_NPROC` / `--pids-limit=256`), and
-    `stderr` is drained (with the last 4 KiB surfaced on [account](/account) if a ladder smoke test
-    fails).
-  - the arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`, and
-    `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads. Similarly,
-    `ARENA_MEMORY_LIMIT_MB=14336` is set --- be sure to size runtime tables to account for potential
-    runtime overhead and avoid triggering a forfeit due to running out of memory (OOM). In
-    tournaments with pondering enabled, `ARENA_PONDER=1` is set.
+  - ladder processes are capped at 256 (`RLIMIT_NPROC=256` on native bundles; `--pids-limit=256`
+    including threads in containers), and `stderr` is drained (with the last 4 KiB surfaced on
+    [account](/account) if a ladder smoke test fails).
+  - on ladders, the arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
+    and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads. Similarly,
+    `ARENA_MEMORY_LIMIT_MB=14336` is set on ladders --- be sure to size runtime tables to account
+    for potential runtime overhead and avoid triggering a forfeit due to running out of memory
+    (OOM). In tournaments with pondering enabled, `ARENA_PONDER=1` is set.
   - on macOS, clean read-only memory-mapped pages in native bundles (`mmap` with `PROT_READ` and
     `MAP_PRIVATE`/`MAP_SHARED`, _e.g._, `safetensors`/`gguf`) are file-backed and count as 0 bytes
     toward the 14 GiB RAM limit.
