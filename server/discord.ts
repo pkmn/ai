@@ -1574,7 +1574,7 @@ export async function syncOnce(
 
 export function register(app: polka.Polka, options: Options): Handle {
   // Only synchronize live Discord roles, pins, chat logs, and DMs in production (or when tests pass
-  // `options.token`) so local `npm run dev` / `npm start` never mutates the production guild.
+  // `options.token`) so local `npm start` never mutates the production guild.
   const syncEnabled = options.token !== undefined || process.env.NODE_ENV === 'production';
   const token = syncEnabled ? (options.token ?? process.env.DISCORD_BOT_TOKEN) : '';
   const vgcToken = options.vgcToken ?? process.env.VGC_BOT_TOKEN ?? '';

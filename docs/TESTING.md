@@ -194,12 +194,12 @@ npm run clean && npm run test
 
 ## 3. Interactive Manual Testing & Persona Walkthrough
 
-### Step 1: Seed the Local Dataset & Start `dev`
+### Step 1: Seed the Local Dataset & Start the Server
 
 ```sh
 npm run build
 npm run mock -- seed
-MOCK=1 npm run dev
+DEV_AUTH=1 MOCK=1 npm start
 ```
 
 - `npm run mock -- seed` runs [`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock), resetting
@@ -207,7 +207,7 @@ MOCK=1 npm run dev
   + generated 32×32 avatars, `.mock/wiki/` with public and `{% visibility: developers %}` pages,
   `.mock/vgc-teams.txt` with 20 legal Regulation M-C teams, and Tournaments `#1`
   completed, `#2` running, and `#3` scheduled), and rendering `public/`.
-- `MOCK=1 npm run dev` starts the server on `http://localhost:1234` with `DEV_AUTH=1`.
+- `DEV_AUTH=1 MOCK=1 npm start` starts the server on `http://localhost:1234` with `DEV_AUTH=1`.
 - Visit `http://localhost:1234/` or `http://localhost:1234/arena/` to verify the site-wide `#topbar`
   `● LIVE Tournament #2: VGC 2026 Reg M-C OTS BO3` banner (while `http://localhost:1234/background/`
   retains its permanent `Under Construction` `#topbar`).
@@ -244,7 +244,7 @@ normal window and an Incognito window side-by-side at any onboarding stage:
   *(Account page accessible with "Link Discord" CTA and disabled submission form; can view
   `/wiki/0_ERROR` and edit `/wiki/AsterAI`.)*
 - **Stage 2 — `Qualified` (qualified project before ladders open):**
-  Start plain `npm run dev` (without `MOCK=1`, or set ladders to `upcoming` via
+  Start plain `DEV_AUTH=1 npm start` (without `MOCK=1`, or set ladders to `upcoming` via
   `MOCK=1 npm run pkmn -- set-ladder-status <id> upcoming`) to inspect the pre-launch `Qualified`
   state while ladders are `upcoming`.
 - **Stage 3 — `Eligible` (brand-new `qualified: true` project, 0 submissions yet) — `CynthiAI`:**

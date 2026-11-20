@@ -44,21 +44,21 @@ account onboarding stages, and a Git-backed wiki on `http://localhost:1234`:
 ```sh
 npm run build
 npm run mock -- seed
-MOCK=1 npm run dev
+DEV_AUTH=1 MOCK=1 npm start
 ```
 
 - `npm run mock -- seed` writes `db/data/arena.sqlite` and `.mock/` overlays (`.mock/ladders.yml`,
   `.mock/static/projects.yml`, `.mock/static/avatars/`, `.mock/wiki/`, `.mock/vgc-teams.txt`) and
   pre-renders all static Arena HTML and `.json` views into `public/` without touching tracked
   `config/ladders.yml` or `static/projects.yml`.
-- `MOCK=1 npm run dev` starts the unified Polka + static file-watcher server on
+- `DEV_AUTH=1 MOCK=1 npm start` starts the unified Polka + static file-watcher server on
   `http://localhost:1234` with `DEV_AUTH=1` enabled (visit `http://localhost:1234/auth/dev` to
   switch developer personas; see [TESTING.md](TESTING.md)).
 - To simulate live background Arena activity (automatic smoke-testing of `/account/` submissions and
   multi-turn ticking clocks on `/arena/battles/`), run in a second terminal:
 
 ```sh
-ARENA_SECRET=dev-secret MOCK=1 npm run dev
+ARENA_SECRET=dev-secret DEV_AUTH=1 MOCK=1 npm start
 # Second terminal:
 MOCK=1 npm run mock -- simulate --server http://localhost:1234 --secret dev-secret
 ```
@@ -76,7 +76,7 @@ To run directly against the base `config/ladders.yml`, `static/projects.yml`, an
 
 ```sh
 npm run build
-npm run dev
+DEV_AUTH=1 npm start
 ```
 
 ---
@@ -88,8 +88,7 @@ npm run dev
 | `npm run setup` | Install dependencies if needed, initialize/repair sparse submodules & worktree `private/`, and build `public/`. |
 | `npm run compile` | Compile TypeScript (`tsc -p .`) into `build/`. |
 | `npm run build` | Compile TypeScript and build all static Djot, BibTeX/YAML, and Arena pages into `public/`. |
-| `npm run dev` | Start the local server on `http://localhost:1234` with `DEV_AUTH=1` and static file watching. |
-| `npm start` | Start `build/server` without `DEV_AUTH=1` (production entrypoint). |
+| `npm start` | Start `build/server` on `http://localhost:1234` (with static file watching outside `NODE_ENV=production`; set `DEV_AUTH=1` for local persona login). |
 | `npm run lint` | Run `eslint --cache`, `stylelint static/style/*.css tools/*.css`, and `hyperlink public --check-anchors`. |
 | `npm run fix` | Auto-fix lint and CSS ordering issues (`eslint --fix && stylelint --fix static/style/*.css tools/*.css`). |
 | `npm run clean` | Remove `public/`, `build/`, `.tsbuildinfo`, `.eslintcache`, `.mock/`, and `db/data/`. |
@@ -109,7 +108,7 @@ fallbacks). Every secret is optional in local `DEV_AUTH=1` development:
 
 | Variable | Local Default | Purpose |
 | :--- | :--- | :--- |
-| `DEV_AUTH` | `1` in `npm run dev` | Enables loopback-only `GET /auth/dev` persona switcher and ephemeral fallback `SESSION_SECRET`. |
+| `DEV_AUTH` | unset | Set to `1` (`DEV_AUTH=1 npm start`) to enable loopback-only `GET /auth/dev` persona switcher and ephemeral fallback `SESSION_SECRET`. |
 | `MOCK` | unset (`1` when seeded) | Reads `.mock/ladders.yml`, `.mock/static/projects.yml`, `.mock/static/avatars/`, and `.mock/wiki/`. |
 | `NODE_ENV` | unset (`development`) | Enables `https://pkmn.ai` OAuth origin, `Secure` cookies, `git push` on wiki edits, and automatic 60-second Discord sync when `'production'`. |
 | `SESSION_SECRET` | ephemeral random hex (`DEV_AUTH=1`) | HMAC-SHA256 signing secret for `pkmn_session` cookies and HKDF key for encrypted submission pull tokens. |

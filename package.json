@@ -40,7 +40,6 @@
     "simulate": "node build/tools/simulate",
     "arena": "node --env-file-if-exists=.env build/arena",
     "mock": "node --env-file-if-exists=.env build/tools/mock",
-    "dev": "DEV_AUTH=1 node --env-file-if-exists=.env build/server",
     "start": "node --env-file-if-exists=.env build/server",
     "test": "npm run build && npm run lint",
     "test:integration": "npm run test && vitest test",

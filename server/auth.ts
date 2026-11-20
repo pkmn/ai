@@ -14,8 +14,8 @@ export const STATE_TTL_SECONDS = 10 * 60;
 
 const DISCORD_API = 'https://discord.com/api/v10';
 
-// Ephemeral fallback secret used only when `DEV_AUTH=1` in non-production so `npm run dev` can
-// mint and verify `pkmn_session` cookies out of the box with an unpopulated `.env`.
+// Ephemeral fallback secret used only when `DEV_AUTH=1` in non-production so `DEV_AUTH=1 npm start`
+// can mint and verify `pkmn_session` cookies out of the box with an unpopulated `.env`.
 const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex');
 
 export interface OAuthProvider {
@@ -151,9 +151,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config | undef
   const sessionSecret = env.SESSION_SECRET?.trim() || (devAuth ? EPHEMERAL_DEV_SECRET : undefined);
   if (!sessionSecret) return undefined;
 
-  // When `DEV_AUTH=1` (`npm run dev`), ignore `.env` OAuth credentials so `/auth/github` and
-  // `/auth/discord` on loopback route to `/auth/dev` instead of redirecting out to github.com or
-  // discord.com (which breaks offline and against production redirect URIs).
+  // When `DEV_AUTH=1` (`DEV_AUTH=1 npm start`), ignore `.env` OAuth credentials so `/auth/github`
+  // and `/auth/discord` on loopback route to `/auth/dev` instead of redirecting out to github.com
+  // or discord.com (which breaks offline and against production redirect URIs).
   const ghClientId = env.GITHUB_CLIENT_ID?.trim();
   const ghClientSecret = env.GITHUB_CLIENT_SECRET?.trim();
   const github = !devAuth && ghClientId && ghClientSecret
