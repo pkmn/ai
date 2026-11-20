@@ -2821,4 +2821,88 @@ describe('createServerApp production HTTP hardening', () => {
     expect(archiveBlock).toContain('client_max_body_size 512m;');
     expect(archiveBlock).toContain('proxy_request_buffering off;');
   });
+
+  test('retains locked seasonal rosters on settling pools ladders', async () => {
+    const vgcId = 'gen9championsvgc2026regmc';
+    const slugs = ['0-error', 'foul-play', 'pokechamp', 'metamon'];
+    db.syncProjectsFromYaml(
+      `${PROJECTS_YAML}
+- name: PokeChamp
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      champ: champ.1003
+`,
+      undefined,
+      1_760_000_000
+    );
+
+    const versionIds: number[] = [];
+    for (let i = 0; i < slugs.length; i++) {
+      const agent = db.getAgentBySlug(slugs[i])!;
+      const packed = Array.from({length: 20}, (_, j) => `Team${i}_${j}||leftovers||tackle|||||||`);
+      const v = db.createSubmission({
+        agentId: agent.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: `https://github.com/pkmn/${slugs[i]}.tar.zst`,
+        sha256: String(i + 1).repeat(64),
+        ladderIds: [vgcId],
+        teamsByLadder: {[vgcId]: packed},
+        now: 1_760_000_010 + i,
+      });
+      db.applySubmissionStatus({versionId: v.id, smokeStatus: 'passed', now: 1_760_000_020 + i});
+      versionIds.push(v.id);
+    }
+
+    db.setLadderAnchor(vgcId, '0-error', '1.0.0', 1_760_000_030);
+    db.rotateLadder({
+      oldLadderId: vgcId,
+      archivedName: 'VGC Reg M-C',
+      next: {id: 'gen9championsvgc2026regmd', format: 'gen9championsvgc2026regmd'},
+      now: 1_760_000_050,
+    });
+    expect(db.getLadder(vgcId)?.status).toBe('settling');
+
+    // Quarantine 2 of the 4 agents, leaving 2 active agents with 4 locked seasonal rosters.
+    db.quarantineVersion('pokechamp', '1.0.0', 'crash', 1_760_000_060);
+    db.quarantineVersion('metamon', '1.0.0', 'crash', 1_760_000_061);
+    expect(db.getLadder(vgcId)?.status).toBe('settling');
+
+    const app = polka();
+    const ctrl = arena.register(app, {db, arenaSecret: ARENA_SECRET, publicDir: tmpDir});
+    const srv = await startTestServer(app);
+    try {
+      const res = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
+      expect(res.status).toBe(200);
+      const body = res.data as {
+        ladders: Array<{
+          id: string;
+          status: string;
+          min: number;
+          entries: arena.LadderMatchStateInput['entries'];
+          pairAggregates: arena.LadderMatchStateInput['pairs'];
+          roster?: Array<{agentId: number; agentName: string; teams: string[]}>;
+        }>;
+      };
+      const vgc = body.ladders.find(l => l.id === vgcId)!;
+      expect(vgc).toBeDefined();
+      expect(vgc.status).toBe('settling');
+      expect(vgc.roster).toHaveLength(4);
+
+      const state = arena.buildLadderMatchState({
+        ladder: {id: vgc.id, status: 'settling', min: vgc.min},
+        entries: vgc.entries,
+        pairs: vgc.pairAggregates,
+        rosterAgentIds: new Set(vgc.roster!.map(r => r.agentId)),
+      });
+      expect(state).toBeDefined();
+      expect(state!.activeAgentIndices).toHaveLength(2);
+      expect(versionIds).toHaveLength(4);
+    } finally {
+      ctrl.close();
+      await srv.close();
+    }
+  });
 });

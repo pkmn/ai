@@ -2585,9 +2585,12 @@ export function register(app: polka.Polka, options: Options): Handle {
           .filter(e => e.role !== 'retired')
           .map(e => e.agentId)
       );
+      // On a `settling` `pools` ladder, retain all locked seasonal rosters in `agent_ladder_teams`
+      // (matching `canSettleLadder`) so 2-3 remaining active agents can finish settling without
+      // deadlocking when another competitor is quarantined or disabled.
       const roster = l.team === 'pools'
         ? db.getActiveRosterForLadder(l.id)
-          .filter(r => playableAgents.has(r.agentId))
+          .filter(r => l.status === 'settling' || playableAgents.has(r.agentId))
           .map(r => ({
             agentId: r.agentId,
             agentName: r.agentName,
