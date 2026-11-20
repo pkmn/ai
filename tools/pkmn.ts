@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as db from '../db';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
+import * as discordApi from '../server/discord';
 import * as render from '../server/render';
 import * as sim from '../server/sim';
 import * as smogon from '../server/smogon';
@@ -52,6 +53,8 @@ const USAGE = [
   '  publish-tournament-archive <id> <archive.7z>',
   '  publish-ladder-archive <ladder_id> <archive.tar>',
   '  lookup-smogon <username|slug.id|id|url>',
+  '  notify-staff <message> [--key <key>] [--cooldown <seconds>] [--detail <text>] ' +
+    '[--detail-file <path>] [--state <path>]',
   '  session [--github <login>] [--github-id <id>] [--discord <id>:<username>] [--ttl <seconds>]',
 ].join('\n');
 
@@ -94,6 +97,7 @@ const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
   'publish-tournament-archive': new Set(),
   'publish-ladder-archive': new Set(),
   'lookup-smogon': new Set(),
+  'notify-staff': new Set(['key', 'cooldown', 'detail', 'detail-file', 'state']),
   session: new Set(['github', 'github-id', 'discord', 'ttl']),
 };
 
@@ -212,6 +216,82 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
     };
     const token = auth.signToken(payload, secret);
     log(`${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`);
+    return;
+  }
+
+  if (cmd === 'notify-staff') {
+    const message = positional.slice(1).join(' ').trim();
+    if (!message) {
+      throw new Error(
+        'Usage: pkmn notify-staff <message> [--key <key>] [--cooldown <seconds>] ' +
+        '[--detail <text>] [--detail-file <path>] [--state <path>]'
+      );
+    }
+    const token = process.env.DISCORD_BOT_TOKEN;
+    if (!token) {
+      log('Skipping staff alert: DISCORD_BOT_TOKEN is not set.');
+      return;
+    }
+    const now = options.now ?? Math.floor(Date.now() / 1000);
+    const key = flags.get('key')?.trim() || `cli-${now}`;
+    const rawCooldown = flags.get('cooldown');
+    const cooldownSeconds = rawCooldown !== undefined
+      ? Number(rawCooldown)
+      : (flags.has('key') ? discordApi.STAFF_ALERT_COOLDOWN_SECONDS : 0);
+    if (!Number.isFinite(cooldownSeconds) || cooldownSeconds < 0) {
+      throw new Error(`Invalid --cooldown "${rawCooldown}"`);
+    }
+    let detail = flags.get('detail');
+    const detailFile = flags.get('detail-file');
+    if (detailFile && fs.existsSync(detailFile)) {
+      const raw = fs.readFileSync(detailFile, 'utf8').trim();
+      if (raw) {
+        detail = raw.length > 4096 ? raw.slice(-4096) : raw;
+      }
+    }
+
+    const stateFile = flags.get('state') ?? (
+      flags.has('key') && fs.existsSync('/var/lib/pkmn')
+        ? '/var/lib/pkmn/alert-state.json'
+        : undefined
+    );
+    const state = new Map<string, string | undefined>();
+    if (stateFile && fs.existsSync(stateFile)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as Record<string, string>;
+        for (const [k, v] of Object.entries(parsed)) {
+          if (k.startsWith('staff-alert:') && typeof v === 'string') {
+            state.set(k, v);
+          }
+        }
+      } catch {}
+    }
+
+    const sent = await discordApi.notifyStaffAlert(
+      token,
+      discordApi.loadConfig(),
+      {key, message, ...(detail ? {detail} : {}), cooldownSeconds},
+      state,
+      now
+    );
+    if (stateFile && sent > 0) {
+      const persisted: Record<string, string> = {};
+      for (const [k, v] of state.entries()) {
+        if (k.startsWith('staff-alert:') && v !== undefined) {
+          persisted[k] = v;
+        }
+      }
+      try {
+        writeFileAtomic(stateFile, `${JSON.stringify(persisted, null, 2)}\n`);
+      } catch (err) {
+        console.warn(`Failed persisting alert state to ${stateFile}:`, err);
+      }
+    }
+    log(
+      sent > 0
+        ? `Sent staff alert (${sent} DM(s))`
+        : 'Staff alert suppressed (cooldown/no staff)'
+    );
     return;
   }
 

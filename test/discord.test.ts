@@ -8,6 +8,7 @@ import polka from 'polka';
 
 import {Database} from '../db';
 import * as discord from '../server/discord';
+import {runPkmnCli} from '../tools/pkmn';
 
 const CONFIG: discord.Config = {
   guild: 'guild',
@@ -1190,6 +1191,7 @@ describe('Arena Discord notifications', () => {
     });
     expect(failDm.length).toBeLessThanOrEqual(2000);
     expect(failDm).toContain('failed its smoke test on `RBY, SV`');
+    expect(failDm).not.toContain('[pkmn.ai');
     expect(failDm).toContain('… (truncated)\n```');
     expect(failDm.match(/```/g)).toHaveLength(2);
   });
@@ -1206,15 +1208,28 @@ describe('Arena Discord notifications', () => {
     });
     expect(staffDm.length).toBeLessThanOrEqual(2000);
     expect(staffDm).toContain("owners DM'd: 2/2");
+    expect(staffDm).not.toContain('[pkmn.ai');
   });
 
-  test('formats watchdog alert DM with last match metadata', () => {
-    const watchdogDm = discord.formatWatchdogDm({
+  test('formats heartbeat timeout DM with last match metadata', () => {
+    const timeoutDm = discord.formatWatchdogDm({
       lastSeenAt: 1_762_807_500,
       lastMatchId: 'gen1ou-0000000972',
     });
-    expect(watchdogDm).toContain('gen1ou-0000000972');
-    expect(watchdogDm.length).toBeLessThanOrEqual(2000);
+    expect(timeoutDm).toContain('gen1ou-0000000972');
+    expect(timeoutDm).not.toContain('[pkmn.ai');
+    expect(timeoutDm).not.toMatch(/watchdog/i);
+    expect(timeoutDm.length).toBeLessThanOrEqual(2000);
+  });
+
+  test('formats staff alert DM without namespace prefix tags', () => {
+    const dm = discord.formatStaffAlertDm({
+      message: 'Nightly arena archive failed (exit 1)',
+      detail: 'Operation not permitted',
+    });
+    expect(dm).toBe(
+      'Nightly arena archive failed (exit 1)\n```text\nOperation not permitted\n```'
+    );
   });
 
   test('sends smoke-failure DMs to all project owners starting with submitter', async () => {
@@ -1403,6 +1418,124 @@ describe('Arena Discord notifications', () => {
     expect(sent).toHaveLength(2);
     expect(sent[0].body).toContain('513513270670262284');
     expect(sent[1].body).toContain('gen1ou-0000000972');
+  });
+
+  test('notifyStaffAlert enforces per-key cooldown until elapsed', async () => {
+    const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+    stubDmFetch(sentMessages);
+    const state = new Map<string, string | undefined>();
+
+    const first = await discord.notifyStaffAlert(
+      'discord-token',
+      ARENA_CONFIG,
+      {key: 'vps-disk', message: 'Low disk space on /', cooldownSeconds: 3600},
+      state,
+      10_000
+    );
+    const suppressed = await discord.notifyStaffAlert(
+      'discord-token',
+      ARENA_CONFIG,
+      {key: 'vps-disk', message: 'Low disk space on /', cooldownSeconds: 3600},
+      state,
+      11_000
+    );
+    const resent = await discord.notifyStaffAlert(
+      'discord-token',
+      ARENA_CONFIG,
+      {key: 'vps-disk', message: 'Low disk space on /', cooldownSeconds: 3600},
+      state,
+      14_000
+    );
+    expect(first).toBe(1);
+    expect(suppressed).toBe(0);
+    expect(resent).toBe(1);
+    expect(sentMessages.map(m => m.content)).toEqual([
+      'Low disk space on /',
+      'Low disk space on /',
+    ]);
+  });
+
+  test('resolveStaffAlert sends recovery DM only when alert was active', async () => {
+    const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+    stubDmFetch(sentMessages);
+    const state = new Map<string, string | undefined>();
+
+    expect(
+      await discord.resolveStaffAlert(
+        'discord-token',
+        ARENA_CONFIG,
+        {key: 'arena-offline', message: 'Arena back online.'},
+        state
+      )
+    ).toBe(0);
+
+    await discord.notifyStaffAlert(
+      'discord-token',
+      ARENA_CONFIG,
+      {key: 'arena-offline', message: 'Arena offline.'},
+      state,
+      10_000
+    );
+    expect(
+      await discord.resolveStaffAlert(
+        'discord-token',
+        ARENA_CONFIG,
+        {key: 'arena-offline', message: 'Arena back online.'},
+        state
+      )
+    ).toBe(1);
+    expect(sentMessages.map(m => m.content)).toEqual(['Arena offline.', 'Arena back online.']);
+  });
+
+  test('pkmn notify-staff sends DM with detail file and persists cooldown state', async () => {
+    const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+    stubDmFetch(sentMessages);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-notify-staff-'));
+    const detailFile = path.join(tmpDir, 'err.log');
+    const stateFile = path.join(tmpDir, 'state.json');
+    fs.writeFileSync(detailFile, 'sqlite3: disk full\n', 'utf8');
+    const prevToken = process.env.DISCORD_BOT_TOKEN;
+    process.env.DISCORD_BOT_TOKEN = 'discord-token';
+    try {
+      const logs: string[] = [];
+      await runPkmnCli(
+        [
+          'notify-staff',
+          'Nightly server backup failed',
+          '--key',
+          'vps-backup',
+          '--cooldown',
+          '3600',
+          '--detail-file',
+          detailFile,
+          '--state',
+          stateFile,
+        ],
+        {now: 10_000, log: line => logs.push(line)}
+      );
+      await runPkmnCli(
+        [
+          'notify-staff',
+          'Nightly server backup failed',
+          '--key',
+          'vps-backup',
+          '--cooldown',
+          '3600',
+          '--state',
+          stateFile,
+        ],
+        {now: 10_500, log: line => logs.push(line)}
+      );
+      expect(sentMessages).toHaveLength(1);
+      expect(sentMessages[0].content).toBe(
+        'Nightly server backup failed\n```text\nsqlite3: disk full\n```'
+      );
+      expect(logs[1]).toContain('suppressed');
+    } finally {
+      if (prevToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevToken;
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
   });
 
   test('skips background Discord sync outside production', async () => {

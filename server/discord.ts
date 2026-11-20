@@ -166,7 +166,7 @@ const DISCORD_CONFIG_FILE = util.root('config', 'discord.yml');
 const GLOSSARY_FILE = util.root('static', 'glossary.yml');
 let cachedConfig: {mtimeMs: number; config: Config} | undefined;
 
-function loadConfig(): Config {
+export function loadConfig(): Config {
   const mtimeMs = fs.statSync(DISCORD_CONFIG_FILE).mtimeMs;
   if (cachedConfig?.mtimeMs === mtimeMs) return cachedConfig.config;
   const config = yaml.parse(fs.readFileSync(DISCORD_CONFIG_FILE, 'utf8')) as Config;
@@ -511,10 +511,10 @@ export function formatSubmissionDm(input: {
     ? ` on \`${input.ladderLabels.join(', ')}\``
     : '';
   const header = input.smokeStatus === 'quarantined'
-    ? `**[pkmn.ai]** **${input.agentName}** (\`${input.version}\`) has been ` +
+    ? `**${input.agentName}** (\`${input.version}\`) has been ` +
       `**quarantined**${laddersPart} and paused from matchmaking. ` +
       'See <https://pkmn.ai/account/> for details.'
-    : `**[pkmn.ai]** **${input.agentName}** (\`${input.version}\`) failed its smoke test` +
+    : `**${input.agentName}** (\`${input.version}\`) failed its smoke test` +
       `${laddersPart}. Failed smoke tests do not trigger the 14-day cooldown — ` +
       'see <https://pkmn.ai/account/> for full logs.';
   return appendCodeBlockWithinLimit(header, input.smokeError);
@@ -533,7 +533,7 @@ export function formatStaffQuarantineDm(input: {
     ? ` on \`${input.ladderLabels.join(', ')}\``
     : '';
   const header =
-    `**[pkmn.ai Staff]** **${input.agentName}** (\`${input.agentSlug}\` \`${input.version}\`) ` +
+    `**${input.agentName}** (\`${input.agentSlug}\` \`${input.version}\`) ` +
     `was **quarantined**${laddersPart} ` +
     `(owners DM'd: ${input.ownersNotified}/${input.ownersTotal}).`;
   return appendCodeBlockWithinLimit(header, input.smokeError);
@@ -546,9 +546,22 @@ export function formatWatchdogDm(alert: WatchdogAlert): string {
     .replace('T', ' ');
   const matchNote = alert.lastMatchId ? `, last match \`${alert.lastMatchId}\`` : '';
   return (
-    '**[pkmn.ai Watchdog]** Arena worker heartbeat timed out ' +
+    'Arena heartbeat timed out ' +
     `(last seen \`${seenIso} UTC\`${matchNote}). \`/api/live.json\` has been marked stale.`
   );
+}
+
+export const STAFF_ALERT_COOLDOWN_SECONDS = 6 * 60 * 60;
+
+export interface StaffAlert {
+  key: string;
+  message: string;
+  detail?: string;
+  cooldownSeconds?: number;
+}
+
+export function formatStaffAlertDm(alert: Pick<StaffAlert, 'message' | 'detail'>): string {
+  return appendCodeBlockWithinLimit(alert.message.trim(), alert.detail);
 }
 
 export async function sendDirectMessage(
@@ -757,24 +770,73 @@ export async function syncSubmissionDms(
   return deliveredVersions;
 }
 
-export async function notifyWatchdogAlert(
+async function sendStaffDm(
   token: string,
   config: Config,
-  alert: WatchdogAlert,
-  state = new Map<string, string | undefined>()
+  content: string,
+  state: Map<string, string | undefined>,
+  label: string
 ): Promise<number> {
   if (!config.staff?.length) return 0;
-  const content = formatWatchdogDm(alert);
   let sent = 0;
   for (const staffId of new Set(config.staff)) {
     try {
       const outcome = await sendDirectMessage(token, staffId, content, state);
       if (outcome === 'sent') sent++;
     } catch (err) {
-      console.error(`Error sending watchdog alert DM to ${staffId}:`, err);
+      console.error(`Error sending ${label} DM to ${staffId}:`, err);
     }
   }
   return sent;
+}
+
+export async function notifyStaffAlert(
+  token: string,
+  config: Config,
+  alert: StaffAlert,
+  state = new Map<string, string | undefined>(),
+  nowSeconds = Math.floor(Date.now() / 1000)
+): Promise<number> {
+  if (!config.staff?.length) return 0;
+  const cooldown = alert.cooldownSeconds ?? STAFF_ALERT_COOLDOWN_SECONDS;
+  const stateKey = `staff-alert:${alert.key}`;
+  const prev = Number(state.get(stateKey));
+  if (cooldown > 0 && Number.isFinite(prev) && nowSeconds - prev < cooldown) {
+    return 0;
+  }
+  const sent = await sendStaffDm(token, config, formatStaffAlertDm(alert), state, 'staff alert');
+  if (sent > 0) {
+    state.set(stateKey, String(nowSeconds));
+  }
+  return sent;
+}
+
+export async function resolveStaffAlert(
+  token: string,
+  config: Config,
+  alert: {key: string; message?: string},
+  state = new Map<string, string | undefined>()
+): Promise<number> {
+  const stateKey = `staff-alert:${alert.key}`;
+  if (!state.has(stateKey)) return 0;
+  state.delete(stateKey);
+  if (!alert.message || !config.staff?.length) return 0;
+  return sendStaffDm(
+    token,
+    config,
+    formatStaffAlertDm({message: alert.message}),
+    state,
+    'recovery'
+  );
+}
+
+export async function notifyWatchdogAlert(
+  token: string,
+  config: Config,
+  alert: WatchdogAlert,
+  state = new Map<string, string | undefined>()
+): Promise<number> {
+  return sendStaffDm(token, config, formatWatchdogDm(alert), state, 'heartbeat alert');
 }
 
 function displayName(user: User, members?: GuildMember[]): string {
@@ -1463,6 +1525,8 @@ export interface Handle {
   stop: () => void;
   notifySubmissionStatus: (result: db.ApplySubmissionStatusResult) => Promise<boolean>;
   notifyWatchdogTimeout: (alert: WatchdogAlert) => Promise<number>;
+  notifyStaffAlert: (alert: StaffAlert) => Promise<number>;
+  resolveStaffAlert: (alert: {key: string; message?: string}) => Promise<number>;
 }
 
 export interface SyncOnceOptions {
@@ -1661,6 +1725,14 @@ export function register(app: polka.Polka, options: Options): Handle {
     notifyWatchdogTimeout: async alert => {
       if (stopped || !token) return 0;
       return notifyWatchdogAlert(token, loadConfig(), alert, state);
+    },
+    notifyStaffAlert: async alert => {
+      if (stopped || !token) return 0;
+      return notifyStaffAlert(token, loadConfig(), alert, state);
+    },
+    resolveStaffAlert: async alert => {
+      if (stopped || !token) return 0;
+      return resolveStaffAlert(token, loadConfig(), alert, state);
     },
   };
 }
