@@ -22,6 +22,7 @@ StandardError=journal
 SyslogIdentifier=pkmn.ai.server
 User=pkmn
 Group=pkmn
+UMask=0077
 # Isolate the running web daemon in a read-only mount namespace with `PR_SET_NO_NEW_PRIVS` so a
 # server compromise cannot invoke `sudo` or modify `config/*`, `deploy`, `build/*`, or `~/.ssh/*`,
 # while keeping `npm run deploy` (`ssh pkmn@pkmn.ai`) seamless outside this unit's namespace.

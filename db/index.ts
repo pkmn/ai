@@ -90,7 +90,7 @@ const DESTRUCTIVE_STATEMENT_RE = new RegExp(
   'i'
 );
 const RENAME_STAGING_RE =
-  /^ALTER\s+TABLE\s+"?([A-Za-z0-9_]+)"?\s+RENAME\s+TO\s+"?[A-Za-z0-9_]+"?$/i;
+  /^ALTER\s+TABLE\s+"?([A-Za-z0-9_]+)"?\s+RENAME\s+TO\s+"?([A-Za-z0-9_]+)"?$/i;
 
 export function classifyMigrationSql(sql: string): MigrationKind {
   const statements = stripSqlCommentsAndStrings(sql)
@@ -102,12 +102,17 @@ export function classifyMigrationSql(sql: string): MigrationKind {
   }
 
   // Recognize SQLite's standard 4-step table rebuild (`CREATE TABLE x_new`, `INSERT INTO x_new`,
-  // `DROP TABLE x`, `ALTER TABLE x_new RENAME TO x`) so staging-table creation/copy is treated as
-  // part of the destructive table rebuild rather than a mixed additive+destructive migration.
+  // `DROP TABLE x`, `ALTER TABLE x_new RENAME TO x`, plus recreated indexes on `x`) so
+  // staging-table creation/copy and index recreation are treated as part of the destructive
+  // rebuild rather than a mixed additive+destructive migration.
   const stagingTables = new Set<string>();
+  const rebuiltTargets = new Set<string>();
   for (const stmt of statements) {
     const m = RENAME_STAGING_RE.exec(stmt);
-    if (m) stagingTables.add(m[1].toLowerCase());
+    if (m) {
+      stagingTables.add(m[1].toLowerCase());
+      rebuiltTargets.add(m[2].toLowerCase());
+    }
   }
 
   let hasAdditive = false;
@@ -117,9 +122,15 @@ export function classifyMigrationSql(sql: string): MigrationKind {
       stmt
     );
     const insertMatch = /^INSERT\s+(?:OR\s+\S+\s+)?INTO\s+"?([A-Za-z0-9_]+)"?\b/i.exec(stmt);
+    const createIndexMatch = new RegExp(
+      '^CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?' +
+      '"?[A-Za-z0-9_]+"?\\s+ON\\s+"?([A-Za-z0-9_]+)"?\\b',
+      'i'
+    ).exec(stmt);
     if (
       (createMatch && stagingTables.has(createMatch[1].toLowerCase())) ||
-      (insertMatch && stagingTables.has(insertMatch[1].toLowerCase()))
+      (insertMatch && stagingTables.has(insertMatch[1].toLowerCase())) ||
+      (createIndexMatch && rebuiltTargets.has(createIndexMatch[1].toLowerCase()))
     ) {
       hasDestructive = true;
       continue;

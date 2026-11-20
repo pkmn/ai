@@ -1225,6 +1225,14 @@ describe('arena infrastructure', () => {
         expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
         const cp = migrated.getMatchCheckpoint('gen9ou-0000001');
         expect(cp?.version).toBe('0.11.0');
+        const verCol = (
+          migrated.db.prepare('PRAGMA table_info(local_matches)').all() as Array<{
+            name: string;
+            notnull: number;
+            dflt_value: string | null;
+          }>
+        ).find(c => c.name === 'version');
+        expect(verCol).toMatchObject({name: 'version', notnull: 1, dflt_value: null});
       } finally {
         migrated.close();
         fresh.close();

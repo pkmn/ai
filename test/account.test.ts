@@ -724,6 +724,28 @@ describe('account routes', () => {
       );
     });
 
+    test('rejects authToken containing NUL or ASCII control characters with 400', async () => {
+      const nulRes = await postSubmission('pmariglia', {
+        version: '1.0.0',
+        package: 'oci',
+        url: 'ghcr.io/pmariglia/foul-play:1.0.0',
+        sha256: SHA_A,
+        authToken: 'Bearer ghcr_pat\x00evil',
+        ladders: ['RBY'],
+      });
+      expect(nulRes.status).toBe(400);
+
+      const tabRes = await postSubmission('pmariglia', {
+        version: '1.0.0',
+        package: 'oci',
+        url: 'ghcr.io/pmariglia/foul-play:1.0.0',
+        sha256: SHA_A,
+        authToken: 'Bearer ghcr_pat\x1f',
+        ladders: ['RBY'],
+      });
+      expect(tabRes.status).toBe(400);
+    });
+
     test('blocks concurrent submissions with 429 while a smoke test is pending', async () => {
       const sub1 = await postSubmission('pmariglia', {
         version: '1.0.0',

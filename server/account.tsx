@@ -1472,7 +1472,8 @@ export function register(app: polka.Polka, options: Options) {
     }
     if (
       payload.authToken &&
-      (payload.authToken.length > 4096 || /[\r\n]/.test(payload.authToken))
+      // eslint-disable-next-line no-control-regex
+      (payload.authToken.length > 4096 || /[\x00-\x1f\x7f]/.test(payload.authToken))
     ) {
       sendJson(res, 400, {error: 'Invalid authToken header.'});
       return;

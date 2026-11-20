@@ -17,7 +17,7 @@ import {
 import * as arena from '../server/arena';
 import * as smogon from '../server/smogon';
 import {validateHarvestedTeams} from '../server/teams';
-import {validateAgentName, validateVersion} from '../static/util';
+import {root, validateAgentName, validateVersion} from '../static/util';
 import {generateValidHarvestedTeams, generateValidVgcTeams} from '../tools/mock';
 
 import {compareDatabaseSchemas} from './schema-helpers';
@@ -230,6 +230,7 @@ describe('schema migrations', () => {
       INSERT INTO items_new (id, name) SELECT id, name FROM items;
       DROP TABLE items;
       ALTER TABLE items_new RENAME TO items;
+      CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
     `)).toBe('destructive');
   });
 
@@ -276,6 +277,78 @@ describe('schema migrations', () => {
       migratedDb.close();
       freshDb.close();
     }
+  });
+
+  test('0001-sim-version.sql rebuilds ladders/tournaments with no default version', () => {
+    const schemaDir = path.join(tmpDir, 'schema-0001');
+    const migrationDir = path.join(tmpDir, 'migration-0001');
+    fs.mkdirSync(schemaDir, {recursive: true});
+    fs.mkdirSync(migrationDir, {recursive: true});
+    const laddersSql = fs.readFileSync(root('db', 'schema', 'ladders.sql'), 'utf8');
+    const tourneysSql = fs.readFileSync(root('db', 'schema', 'tournaments.sql'), 'utf8');
+    const ladderTeamsSql = fs.readFileSync(root('db', 'schema', 'ladder-teams.sql'), 'utf8');
+
+    fs.writeFileSync(
+      path.join(schemaDir, 'ladders.sql'),
+      laddersSql.replace(/\s*version TEXT NOT NULL,/, '')
+    );
+    fs.writeFileSync(
+      path.join(schemaDir, 'tournaments.sql'),
+      tourneysSql.replace(/\s*version TEXT NOT NULL,/, '')
+    );
+    fs.writeFileSync(path.join(schemaDir, 'ladder-teams.sql'), ladderTeamsSql);
+    const migratedFile = path.join(tmpDir, 'migrated-0001.sqlite');
+    const legacyDb = new Database(migratedFile, {schemaDir, migrationDir, now: 1000});
+    legacyDb.db.exec(`
+      INSERT INTO ladders (id, slot, name, format, team, min, status, created_at)
+      VALUES ('gen1ou20261109', 'rby', 'RBY', 'gen1ou', 'harvested', 2, 'active', 1000);
+      INSERT INTO ladder_teams (ladder_id, team_index, packed_team, uploaded_at)
+      VALUES ('gen1ou20261109', 1, 'Tauros|||', 1000);
+      INSERT INTO tournaments (
+        id, name, format, games_per_matchup, parallel_tables, hardware, starts_at
+      ) VALUES ('1', 'T1', 'gen9ou', 2, 1, 'L4', 2000);
+    `);
+    legacyDb.close();
+
+    fs.writeFileSync(path.join(schemaDir, 'ladders.sql'), laddersSql);
+    fs.writeFileSync(path.join(schemaDir, 'tournaments.sql'), tourneysSql);
+    fs.copyFileSync(
+      root('db', 'migration', '0001-sim-version.sql'),
+      path.join(migrationDir, '0001-sim-version.sql')
+    );
+    const migratedDb = new Database(migratedFile, {
+      schemaDir,
+      migrationDir,
+      backupBeforeMigrate: false,
+      now: 2000,
+    });
+    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 2000});
+    try {
+      expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
+      expect(migratedDb.getLadder('gen1ou20261109')?.version).toBe('0.11.0');
+      expect(migratedDb.getTournament('1')?.version).toBe('0.11.0');
+      expect(migratedDb.getLadderTeams('gen1ou20261109')).toEqual(['Tauros|||']);
+      const ladderVerCol = (
+        migratedDb.db.prepare('PRAGMA table_info(ladders)').all() as Array<{
+          name: string;
+          notnull: number;
+          dflt_value: string | null;
+        }>
+      ).find(c => c.name === 'version');
+      expect(ladderVerCol).toMatchObject({name: 'version', notnull: 1, dflt_value: null});
+      expect(() => migratedDb.db.exec(`
+        INSERT INTO ladders (id, slot, name, format, team, min, status, created_at)
+        VALUES ('gen2ou20261109', 'gsc', 'GSC', 'gen2ou', 'harvested', 2, 'upcoming', 2000);
+      `)).toThrow(/NOT NULL constraint failed: ladders\.version/);
+    } finally {
+      migratedDb.close();
+      freshDb.close();
+    }
+  });
+
+  test('pkmn.ai-server.service sets UMask=0077 for database backup privacy', () => {
+    const unit = fs.readFileSync(root('config', 'pkmn.ai-server.service'), 'utf8');
+    expect(unit).toContain('UMask=0077');
   });
 
   test('compareDatabaseSchemas detects missing indexes across databases', () => {
@@ -956,6 +1029,36 @@ describe('Smogon lookup', () => {
     await expect(smogon.lookupUser(10544, 'super-secret-smogon-tok'))
       .rejects.toThrow(/non-Smogon URL/);
     expect(requestedUrls.some(u => u.includes('evilsmogon.com'))).toBe(false);
+  });
+
+  test('lookupUser rejects Smogon redirects specifying a non-default port', async () => {
+    const requestedUrls: string[] = [];
+    globalThis.fetch = (input: string | URL | Request) => {
+      const u = typeof input === 'string'
+        ? input
+        : input instanceof URL ? input.toString() : input.url;
+      requestedUrls.push(u);
+      return Promise.resolve(
+        new Response('', {
+          status: 302,
+          headers: {location: 'https://www.smogon.com:8443/forums/members/pre.10544/'},
+        })
+      );
+    };
+    await expect(smogon.lookupUser(10544, 'super-secret-smogon-tok'))
+      .rejects.toThrow(/non-Smogon URL/);
+    expect(requestedUrls.some(u => u.includes(':8443'))).toBe(false);
+  });
+
+  test('lookupUser rejects Smogon redirects containing userinfo credentials', async () => {
+    globalThis.fetch = () => Promise.resolve(
+      new Response('', {
+        status: 302,
+        headers: {location: 'https://user:pass@www.smogon.com/forums/members/pre.10544/'},
+      })
+    );
+    await expect(smogon.lookupUser(10544, 'super-secret-smogon-tok'))
+      .rejects.toThrow(/non-Smogon URL/);
   });
 
   test('lookupUser flags captive-portal HTML responses as connectivity errors', async () => {

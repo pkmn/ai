@@ -1,24 +1,70 @@
 import {DatabaseSync} from 'node:sqlite';
 
-import {stripSqlCommentsAndStrings} from '../db';
+function stripSqlCommentsKeepLiterals(sql: string): {uncommented: string; scan: string} {
+  let uncommented = '';
+  let scan = '';
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+    if (ch === '-' && next === '-') {
+      i = sql.indexOf('\n', i + 2);
+      if (i === -1) break;
+      uncommented += '\n';
+      scan += '\n';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      if (end === -1) break;
+      i = end + 1;
+      uncommented += ' ';
+      scan += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      uncommented += ch;
+      scan += ch;
+      for (i++; i < sql.length; i++) {
+        const c = sql[i];
+        uncommented += c;
+        if (c === quote) {
+          if (sql[i + 1] === quote) {
+            i++;
+            uncommented += sql[i];
+            scan += quote === "'" ? '  ' : `${c}${sql[i]}`;
+            continue;
+          }
+          scan += c;
+          break;
+        }
+        scan += quote === "'" ? ' ' : c;
+      }
+      continue;
+    }
+    uncommented += ch;
+    scan += ch;
+  }
+  return {uncommented, scan};
+}
 
 function extractNormalizedCheckConstraints(createTableSql: string | undefined): string[] {
   if (!createTableSql) return [];
-  const stripped = stripSqlCommentsAndStrings(createTableSql);
+  const {uncommented, scan} = stripSqlCommentsKeepLiterals(createTableSql);
   const checks: string[] = [];
   const checkRe = /\bCHECK\s*\(/gi;
   let match: RegExpExecArray | null;
-  while ((match = checkRe.exec(stripped)) !== null) {
+  while ((match = checkRe.exec(scan)) !== null) {
     let depth = 1;
     let i = match.index + match[0].length;
     const start = i;
-    while (i < stripped.length && depth > 0) {
-      if (stripped[i] === '(') depth++;
-      else if (stripped[i] === ')') depth--;
+    while (i < scan.length && depth > 0) {
+      if (scan[i] === '(') depth++;
+      else if (scan[i] === ')') depth--;
       i++;
     }
     if (depth === 0) {
-      checks.push(createTableSql.slice(start, i - 1).trim().replace(/\s+/g, ' '));
+      checks.push(uncommented.slice(start, i - 1).trim().replace(/\s+/g, ' '));
     }
   }
   return checks.sort();

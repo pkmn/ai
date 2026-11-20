@@ -89,6 +89,9 @@ function decodeHtmlEntities(str: string): string {
 
 function isSmogonUrl(u: URL): boolean {
   return u.protocol === 'https:' &&
+    u.port === '' &&
+    !u.username &&
+    !u.password &&
     (u.hostname === 'smogon.com' || u.hostname === 'www.smogon.com');
 }
 
@@ -143,6 +146,7 @@ export async function lookupUser(
       signal: AbortSignal.timeout(TIMEOUT_MILLIS),
     });
     const location = res.headers.get('location');
+    await res.body?.cancel().catch(() => {});
     if (!location || res.status < 300 || res.status >= 400) {
       throw new Error(`Smogon account "${raw}" not found`);
     }
@@ -165,6 +169,7 @@ export async function lookupUser(
     `${SMOGON_BASE}/forums/members/${id}/?tooltip=true&_xfResponseType=json`;
   const res = await fetchFollowingRedirects(tooltipUrl, token);
   if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
     throw new Error(`Smogon member ID ${id} not found (HTTP ${res.status})`);
   }
 

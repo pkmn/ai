@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS local_matches (
   g1_completed_at INTEGER,
   completed_at INTEGER,
   -- `@pkmn/sim` version pinned to this match's ladder (e.g. '0.11.0').
-  version TEXT NOT NULL DEFAULT '0.11.0',
+  version TEXT NOT NULL,
   -- Game 1 initialization (`/ready` handshake) and Team Preview durations in milliseconds.
   g1_p1_init_millis INTEGER,
   g1_p2_init_millis INTEGER,
