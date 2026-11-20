@@ -190,3 +190,31 @@ export function filterPlayerProtocolChunk(chunk: string): string {
   }
   return kept.join('\n');
 }
+
+const SPLIT_LINE_RE = /^\|split\|p([1234])\n(.*)\n(.*)|.+/gm;
+
+// Splits an omniscient Showdown battle log containing `|split|pN` directives into per-player
+// perspective logs (matching `@pkmn/sim`'s stateless `extractChannelMessages(..., [1, 2])`).
+export function extractPerspectiveLogs(
+  lines: readonly string[]
+): {p1Lines: string[]; p2Lines: string[]} {
+  if (lines.length === 0) return {p1Lines: [], p2Lines: []};
+  const p1Lines: string[] = [];
+  const p2Lines: string[] = [];
+  const joined = lines.join('\n');
+  for (const [lineMatch, playerMatch, secretMessage, sharedMessage] of joined.matchAll(
+    SPLIT_LINE_RE
+  )) {
+    const player = playerMatch ? parseInt(playerMatch, 10) : 0;
+    if (player) {
+      const p1Line = player === 1 ? secretMessage : sharedMessage;
+      const p2Line = player === 2 ? secretMessage : sharedMessage;
+      if (p1Line) p1Lines.push(p1Line);
+      if (p2Line) p2Lines.push(p2Line);
+    } else {
+      p1Lines.push(lineMatch);
+      p2Lines.push(lineMatch);
+    }
+  }
+  return {p1Lines, p2Lines};
+}

@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
-import {extractChannelMessages} from '@pkmn/sim';
 import polka from 'polka';
 
 import type * as db from '../db';
@@ -11,8 +10,11 @@ import * as util from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
+import {extractPerspectiveLogs} from './protocol';
 import * as ratings from './ratings';
 import * as simOps from './sim-ops';
+
+export {extractPerspectiveLogs};
 
 export const PUBLIC_DIR = util.root('public');
 // If the Mac Mini Arena worker stops heartbeating for 15 minutes (network drop, power loss,
@@ -749,14 +751,6 @@ function isViewerSeatSwapped(
     if (logP1 === matchP1Name && logP2 === matchP2Name) return false;
   }
   return game === 2;
-}
-
-export function extractPerspectiveLogs(
-  lines: readonly string[]
-): {p1Lines: string[]; p2Lines: string[]} {
-  if (lines.length === 0) return {p1Lines: [], p2Lines: []};
-  const ch = extractChannelMessages(lines.join('\n'), [1, 2]);
-  return {p1Lines: ch[1], p2Lines: ch[2]};
 }
 
 export function normalizeLiveBroadcast(

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 
-import {BattleStreams} from '@pkmn/sim';
+import {BattleStreams, extractChannelMessages} from '@pkmn/sim';
 
 import * as protocol from '../server/protocol';
 import {root} from '../static/util';
@@ -242,6 +242,27 @@ describe('player protocol stream filtering', () => {
     expect(p1ReceivedChat).toEqual([]);
     expect(p2ReceivedChat).toEqual([]);
     expect(omniscientLog.some(l => l.includes('attempted opponent crosstalk'))).toBe(true);
+  });
+
+  test('extractPerspectiveLogs matches @pkmn/sim extractChannelMessages for p1/p2 splits', () => {
+    const lines = [
+      '|turn|1',
+      '|split|p1',
+      '|-damage|p1a: Pikachu|180/211',
+      '|-damage|p1a: Pikachu|85/100',
+      '|split|p2',
+      '|switch|p2a: Snorlax|Snorlax, L100|523/523',
+      '|switch|p2a: Snorlax|Snorlax, L100|100/100',
+      '|split|p1',
+      '|-heal|p1a: Pikachu|200/211',
+      '',
+      '|move|p1a: Pikachu|Thunderbolt|p2a: Snorlax',
+    ];
+    const expected = extractChannelMessages(lines.join('\n'), [1, 2]);
+    expect(protocol.extractPerspectiveLogs(lines)).toEqual({
+      p1Lines: expected[1],
+      p2Lines: expected[2],
+    });
   });
 
   test('static/rules.dj documents required Arena stdio protocol directives', () => {

@@ -3,14 +3,14 @@ import pkmn from "@pkmn/eslint-config";
 export default [...pkmn, {
   ignores: ["eslint.config.mjs", ".shots/", "build/", "private/", "teams/*/", "wiki/"]
 }, {
-  files: ["server/*.{ts,tsx}", "static/build.{ts,tsx}", "tools/*.{ts,tsx}"],
+  files: ["server/**/*.{ts,tsx}", "static/build.{ts,tsx}", "tools/**/*.{ts,tsx}"],
   rules: {
     "@typescript-eslint/no-require-imports": "off",
     "@typescript-eslint/no-var-requires": "off",
   }
 }, {
-  files: ["arena/*.{ts,tsx}", "db/*.{ts,tsx}", "server/*.{ts,tsx}", "static/*.{ts,tsx}"],
-  ignores: ["server/teams.ts", "server/arena.ts"],
+  files: ["arena/**/*.{ts,tsx}", "db/**/*.{ts,tsx}", "server/**/*.{ts,tsx}", "static/**/*.{ts,tsx}"],
+  ignores: ["server/teams.ts"],
   rules: {
     "no-restricted-imports": "off",
     "@typescript-eslint/no-restricted-imports": ["error", {
