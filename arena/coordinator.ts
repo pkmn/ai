@@ -205,8 +205,8 @@ export class Coordinator {
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
   private readonly lastArchivedDayByLadder = new Map<string, string>();
   private readonly archivePublishCooldownByLadder = new Map<string, number>();
-  private readonly ladderFaults = new Map<string, LadderFaultCounter>();
-  private readonly quarantinedOnLadder = new Set<string>();
+  private readonly faultCounters = new Map<number, LadderFaultCounter>();
+  private readonly quarantinedVersions = new Set<number>();
   private readonly brokenUntilByVersion = new Map<number, number>();
   private heartbeatSeq = 0;
   private draining = false;
@@ -832,18 +832,31 @@ export class Coordinator {
     }
   }
 
-  private recordLadderGameFault(
-    ladderId: string,
+  private static isFaultThresholdExceeded(counter: LadderFaultCounter): boolean {
+    const faultRate = counter.totalGames > 0 ? counter.totalFaults / counter.totalGames : 0;
+    // 5 consecutive matches = 10 consecutive games (`recordAgentGameFault` is per-game).
+    return counter.consecutiveFaults >= 10 || (counter.totalGames >= 10 && faultRate > 0.20);
+  }
+
+  private recordAgentGameFault(
     versionId: number,
     faulted: boolean,
     nowSeconds: number
   ): LadderFaultCounter {
-    this.stateDb.recordAgentGameResult(versionId, faulted, nowSeconds);
-    const key = `${ladderId}:${versionId}`;
-    let counter = this.ladderFaults.get(key);
+    const persisted = this.stateDb.recordAgentGameResult(versionId, faulted, nowSeconds);
+    if (persisted) {
+      const counter: LadderFaultCounter = {
+        totalGames: persisted.totalGames,
+        totalFaults: persisted.totalFaults,
+        consecutiveFaults: persisted.consecutiveFaults,
+      };
+      this.faultCounters.set(versionId, counter);
+      return counter;
+    }
+    let counter = this.faultCounters.get(versionId);
     if (!counter) {
       counter = {totalGames: 0, totalFaults: 0, consecutiveFaults: 0};
-      this.ladderFaults.set(key, counter);
+      this.faultCounters.set(versionId, counter);
     }
     counter.totalGames++;
     if (faulted) {
@@ -860,40 +873,78 @@ export class Coordinator {
     versionId: number,
     lastReason: string
   ) {
-    const key = `${ladderId}:${versionId}`;
-    const counter = this.ladderFaults.get(key);
     const row = this.stateDb.getLocalAgent(versionId);
-    const totalGames = counter ? counter.totalGames : (row?.totalGames ?? 0);
-    const totalFaults = counter ? counter.totalFaults : (row?.totalFaults ?? 0);
-    const consecutiveFaults = counter
-      ? counter.consecutiveFaults
-      : (row?.consecutiveFaults ?? 0);
+    const counter = row
+      ? {
+        totalGames: row.totalGames,
+        totalFaults: row.totalFaults,
+        consecutiveFaults: row.consecutiveFaults,
+      }
+      : (this.faultCounters.get(versionId) ?? {
+        totalGames: 0,
+        totalFaults: 0,
+        consecutiveFaults: 0,
+      });
 
-    const faultRate = totalGames > 0 ? totalFaults / totalGames : 0;
-    // 5 consecutive matches = 10 consecutive games (`recordLadderGameFault` is per-game).
-    if (consecutiveFaults >= 10 || (totalGames >= 10 && faultRate > 0.20)) {
-      this.quarantinedOnLadder.add(key);
+    if (Coordinator.isFaultThresholdExceeded(counter)) {
+      this.quarantinedVersions.add(versionId);
       await this.reportSubmissionOrOutbox({
         versionId,
         smokeStatus: 'quarantined',
         smokeError:
-          `Auto-quarantined on ${ladderId} (${totalFaults}/${totalGames} faults, ` +
-          `${consecutiveFaults} consecutive; last=${lastReason})`,
+          `Auto-quarantined on ${ladderId} (${counter.totalFaults}/${counter.totalGames} faults, ` +
+          `${counter.consecutiveFaults} consecutive; last=${lastReason})`,
       });
     }
   }
 
-  private syncQuarantineResets(ladders: readonly LadderSnapshot[]) {
+  private pendingQuarantineVersionIds(): Set<number> {
+    const pending = new Set<number>();
+    for (const item of this.stateDb.listOutbox()) {
+      if (item.endpoint !== 'submission-status') continue;
+      try {
+        const parsed = JSON.parse(item.payloadJson) as arena.SubmissionStatusPayload;
+        if (parsed.smokeStatus === 'quarantined') pending.add(parsed.versionId);
+      } catch {}
+    }
+    return pending;
+  }
+
+  private syncQuarantineResets(
+    ladders: readonly LadderSnapshot[],
+    quarantinedVersionIds: readonly number[] = []
+  ) {
+    const serverQuarantined = new Set<number>(quarantinedVersionIds);
     for (const ladder of ladders) {
       for (const e of ladder.entries) {
-        const key = `${ladder.id}:${e.versionId}`;
-        if (e.role === 'quarantined') {
-          this.quarantinedOnLadder.add(key);
-        } else if (this.quarantinedOnLadder.has(key)) {
+        if (e.role === 'quarantined') serverQuarantined.add(e.versionId);
+      }
+    }
+    for (const vid of serverQuarantined) {
+      this.quarantinedVersions.add(vid);
+    }
+
+    const pendingOutboxQuarantine = this.pendingQuarantineVersionIds();
+    const seenActive = new Set<number>();
+    for (const ladder of ladders) {
+      for (const e of ladder.entries) {
+        if (e.role !== 'champion' && e.role !== 'challenger') continue;
+        if (seenActive.has(e.versionId)) continue;
+        seenActive.add(e.versionId);
+        if (serverQuarantined.has(e.versionId) || pendingOutboxQuarantine.has(e.versionId)) {
+          continue;
+        }
+        const row = this.stateDb.getLocalAgent(e.versionId);
+        const exceededBeforeRestart = row !== undefined && Coordinator.isFaultThresholdExceeded({
+          totalGames: row.totalGames,
+          totalFaults: row.totalFaults,
+          consecutiveFaults: row.consecutiveFaults,
+        });
+        if (this.quarantinedVersions.has(e.versionId) || exceededBeforeRestart) {
           // Admin ran `unquarantine`: clear local fault history so a single subsequent hiccup
           // does not immediately re-trigger the 20% historical fault-rate threshold.
-          this.quarantinedOnLadder.delete(key);
-          this.ladderFaults.delete(key);
+          this.quarantinedVersions.delete(e.versionId);
+          this.faultCounters.delete(e.versionId);
           this.stateDb.resetAgentFaults(e.versionId);
         }
       }
@@ -1187,10 +1238,10 @@ export class Coordinator {
     const p1FaultG2 = isPlayerFault(g2Res, 'p2');
     const p2FaultG2 = isPlayerFault(g2Res, 'p1');
 
-    this.recordLadderGameFault(match.ladderId, match.p1.versionId, p1FaultG1, completedAt);
-    this.recordLadderGameFault(match.ladderId, match.p1.versionId, p1FaultG2, completedAt);
-    this.recordLadderGameFault(match.ladderId, match.p2.versionId, p2FaultG1, completedAt);
-    this.recordLadderGameFault(match.ladderId, match.p2.versionId, p2FaultG2, completedAt);
+    this.recordAgentGameFault(match.p1.versionId, p1FaultG1, completedAt);
+    this.recordAgentGameFault(match.p1.versionId, p1FaultG2, completedAt);
+    this.recordAgentGameFault(match.p2.versionId, p2FaultG1, completedAt);
+    this.recordAgentGameFault(match.p2.versionId, p2FaultG2, completedAt);
 
     if (p1FaultG1 || p1FaultG2) {
       await this.checkAndQuarantineIfFaulty(
@@ -1274,12 +1325,13 @@ export class Coordinator {
   }
 
   async playNextScheduledMatch(
-    ladders: readonly LadderSnapshot[]
+    ladders: readonly LadderSnapshot[],
+    quarantinedVersionIds: readonly number[] = []
   ): Promise<{matchId: string; ladderId: string; archivedLadder: boolean} | undefined> {
     await this.flushOutbox();
     if (this.draining) return undefined;
 
-    this.syncQuarantineResets(ladders);
+    this.syncQuarantineResets(ladders, quarantinedVersionIds);
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     if (ladders.some(l => l.status === 'active' || l.status === 'settling')) {

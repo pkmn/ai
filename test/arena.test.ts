@@ -4074,6 +4074,110 @@ describe('arena infrastructure', () => {
         expect(Date.now() - start).toBeLessThan(2000);
       });
     });
+
+    test('persists auto-quarantine fault counters across coordinator restarts', async () => {
+      const h = createMockCoordHarness('fault-restart');
+      try {
+        const v30Dir = path.join(h.agentsDir, 'foul-play-3.0.0-v30');
+        const v25Dir = path.join(h.agentsDir, 'pokechamp-1.0.0-v25');
+        fs.mkdirSync(v30Dir, {recursive: true});
+        fs.mkdirSync(v25Dir, {recursive: true});
+        fs.writeFileSync(path.join(v30Dir, 'run'), '#!/usr/bin/env node\nprocess.exit(1);\n', {
+          mode: 0o755,
+        });
+        fs.writeFileSync(path.join(v25Dir, 'run'), fs.readFileSync(defaultAgentScript), {
+          mode: 0o755,
+        });
+        h.stateDb.upsertLocalAgent({
+          versionId: 30,
+          agentId: 1,
+          slug: 'foul-play',
+          version: '3.0.0',
+          mode: 'native',
+          target: 'foul-play-3.0.0-v30',
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+        h.stateDb.upsertLocalAgent({
+          versionId: 25,
+          agentId: 2,
+          slug: 'pokechamp',
+          version: '1.0.0',
+          mode: 'native',
+          target: 'pokechamp-1.0.0-v25',
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+        // Seed 8 prior consecutive faults persisted before a daemon restart.
+        for (let i = 0; i < 8; i++) {
+          h.stateDb.recordAgentGameResult(30, true, 1_760_000_000 + i);
+        }
+
+        // Instantiate a brand-new Coordinator sharing stateDb (simulating restart/deploy).
+        const restartedCoord = new coordinator.Coordinator({
+          client: h.coord.client,
+          stateDb: h.stateDb,
+          rootDir: path.dirname(h.dirs.agents),
+          devMode: true,
+          maxTurns: 2,
+        });
+        const played = await restartedCoord.playNextScheduledMatch([h.ladderSnap]);
+        expect(played).toBeDefined();
+
+        // Games 9 and 10 both crash -> hits 10 consecutive faults -> auto-quarantined!
+        const quarantineReport = h.reportedStatuses.find(
+          s => s.versionId === 30 && s.smokeStatus === 'quarantined'
+        );
+        expect(quarantineReport).toBeDefined();
+        expect(quarantineReport?.smokeError).toContain('10/10 faults');
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+    test('resets persisted fault counters after admin unquarantine', async () => {
+      const h = createMockCoordHarness('unquarantine-reset');
+      try {
+        const v30Dir = path.join(h.agentsDir, 'foul-play-3.0.0-v30');
+        fs.mkdirSync(v30Dir, {recursive: true});
+        fs.writeFileSync(path.join(v30Dir, 'run'), fs.readFileSync(defaultAgentScript), {
+          mode: 0o755,
+        });
+        h.stateDb.upsertLocalAgent({
+          versionId: 30,
+          agentId: 1,
+          slug: 'foul-play',
+          version: '3.0.0',
+          mode: 'native',
+          target: 'foul-play-3.0.0-v30',
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+        for (let i = 0; i < 10; i++) {
+          h.stateDb.recordAgentGameResult(30, true, 1_760_000_000 + i);
+        }
+        expect(h.stateDb.getLocalAgent(30)?.consecutiveFaults).toBe(10);
+
+        // First poll observes version 30 in server's quarantinedVersionIds (while absent from
+        // leaderboard entries, matching GET /api/arena/ladders).
+        const snapWithoutV30: coordinator.LadderSnapshot = {
+          ...h.ladderSnap,
+          entries: h.ladderSnap.entries.filter(e => e.versionId !== 30),
+        };
+        await h.coord.playNextScheduledMatch([snapWithoutV30], [30]);
+        expect(h.stateDb.getLocalAgent(30)?.consecutiveFaults).toBe(10);
+
+        // Admin runs `pkmn unquarantine`: version 30 leaves quarantinedVersionIds and reappears
+        // as active (with only 1 local agent installed, no match runs, but faults reset).
+        await h.coord.playNextScheduledMatch([h.ladderSnap], []);
+        const after = h.stateDb.getLocalAgent(30)!;
+        expect(after.totalGames).toBe(0);
+        expect(after.totalFaults).toBe(0);
+        expect(after.consecutiveFaults).toBe(0);
+      } finally {
+        h.stateDb.close();
+      }
+    });
   });
 
   describe('Darwin sandbox enforcement', () => {

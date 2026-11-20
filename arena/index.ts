@@ -105,15 +105,18 @@ export async function runDaemon(opts: {
         await coord.flushOutbox();
         const initialSnap = await client.getPlayableLadders();
         let ladders = initialSnap.ladders;
+        let quarantinedVersionIds = initialSnap.quarantinedVersionIds ?? [];
         if (initialSnap.unpublishedArchivedPoolsLadders?.length) {
           await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
         }
         const byId = new Map(ladders.map(l => [l.id, l]));
         const ingested = await coord.processPendingSubmissions(byId);
         if (ingested > 0 && !coord.isDraining()) {
-          ladders = (await client.getPlayableLadders()).ladders;
+          const refreshed = await client.getPlayableLadders();
+          ladders = refreshed.ladders;
+          quarantinedVersionIds = refreshed.quarantinedVersionIds ?? [];
         }
-        const played = await coord.playNextScheduledMatch(ladders);
+        const played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
         if (!played && !opts.once && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);
           await sleeper.sleep(pollIntervalMillis);

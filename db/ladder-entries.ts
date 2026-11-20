@@ -482,6 +482,16 @@ export function getLeaderboardEntries(
   }));
 }
 
+export function getQuarantinedVersionIds(db: DatabaseSync): number[] {
+  const rows = db.prepare(`
+    SELECT DISTINCT version_id
+    FROM ladder_entries
+    WHERE role = 'quarantined'
+    ORDER BY version_id ASC
+  `).all() as Array<{version_id: number}>;
+  return rows.map(r => r.version_id);
+}
+
 export interface LadderVersionIdentity {
   versionId: number;
   version: string;

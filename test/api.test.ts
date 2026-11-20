@@ -2905,4 +2905,36 @@ describe('createServerApp production HTTP hardening', () => {
       await srv.close();
     }
   });
+
+  test('exposes quarantinedVersionIds on GET /api/arena/ladders', async () => {
+    const a1 = db.getAgentBySlug('0-error')!;
+    const v1 = db.createSubmission({
+      agentId: a1.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/z.tar.zst',
+      sha256: SHA,
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_010,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_760_000_020});
+    db.quarantineVersion('0-error', '1.0.0', 'crash loop', 1_760_000_030);
+
+    const app = polka();
+    const ctrl = arena.register(app, {db, arenaSecret: ARENA_SECRET, publicDir: tmpDir});
+    const srv = await startTestServer(app);
+    try {
+      const before = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
+      expect(before.status).toBe(200);
+      expect(before.data.quarantinedVersionIds).toContain(v1.id);
+
+      db.unquarantineVersion('0-error', '1.0.0', 1_760_000_040);
+      const after = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
+      expect(after.status).toBe(200);
+      expect(after.data.quarantinedVersionIds).not.toContain(v1.id);
+    } finally {
+      ctrl.close();
+      await srv.close();
+    }
+  });
 });

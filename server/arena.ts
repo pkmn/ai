@@ -1347,6 +1347,7 @@ export class Client {
       }>;
     }>;
     unpublishedArchivedPoolsLadders?: string[];
+    quarantinedVersionIds?: number[];
   }> {
     return this.requestJson('GET', '/api/arena/ladders');
   }
@@ -2628,7 +2629,8 @@ export function register(app: polka.Polka, options: Options): Handle {
       })
       .map(l => l.id);
 
-    sendJson(res, 200, {ladders, unpublishedArchivedPoolsLadders});
+    const quarantinedVersionIds = db.getQuarantinedVersionIds();
+    sendJson(res, 200, {ladders, unpublishedArchivedPoolsLadders, quarantinedVersionIds});
   });
 
   app.get('/api/arena/tournaments/:id/state', (req, res) => {

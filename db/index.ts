@@ -639,6 +639,10 @@ export class Database extends SqliteDatabase {
     return entries.getLeaderboardEntries(this.db, ladderId);
   }
 
+  getQuarantinedVersionIds(): number[] {
+    return entries.getQuarantinedVersionIds(this.db);
+  }
+
   getLadderVersionIdentities(ladderId: string): entries.LadderVersionIdentity[] {
     return entries.getLadderVersionIdentities(this.db, ladderId);
   }
