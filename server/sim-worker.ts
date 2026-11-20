@@ -235,12 +235,23 @@ function writeBattle(battleId: string, chunk: string, writeId?: number) {
   }
   active.writeChain = active.writeChain
     .then(async () => {
+      if (active.ended) return;
       await active.stream.write(chunk);
       // Yield one macrotask so `pump` posts all resulting `battle:chunk` messages onto the FIFO
       // `MessagePort` before `battle:wrote` resolves the parent's `battle.write()` call.
       await new Promise<void>(resolve => setImmediate(resolve));
     })
-    .catch(() => undefined)
+    .catch(err => {
+      if (!active.ended) {
+        active.ended = true;
+        post({
+          type: 'battle:error',
+          battleId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        battles.delete(battleId);
+      }
+    })
     .finally(() => {
       if (writeId !== undefined) {
         post({type: 'battle:wrote', battleId, writeId});

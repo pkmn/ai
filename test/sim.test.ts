@@ -367,4 +367,81 @@ describe('multi-version @pkmn/sim support', () => {
       db.close();
     }
   });
+
+  test('sim-worker surfaces BattleStream write rejections on battle streams', async () => {
+    const ver = '0.99.3-write-err';
+    const testSimDir = root('sim', ver);
+    tempDirs.push(testSimDir);
+    const simPkgDir = path.join(testSimDir, 'node_modules', '@pkmn', 'sim');
+    fs.mkdirSync(simPkgDir, {recursive: true});
+    fs.writeFileSync(path.join(testSimDir, 'package.json'), JSON.stringify({name: 'sim-write'}));
+    fs.writeFileSync(
+      path.join(simPkgDir, 'package.json'),
+      JSON.stringify({name: '@pkmn/sim', version: ver, main: 'index.js'})
+    );
+    fs.writeFileSync(
+      path.join(simPkgDir, 'index.js'),
+      [
+        'const wait = () => ({',
+        '  async *[Symbol.asyncIterator]() { await new Promise(() => {}); },',
+        '});',
+        'exports.Dex = {',
+        '  mod() {},',
+        '  formats: { extend() {}, get(id) { return {exists: true, id}; } },',
+        '};',
+        'exports.Teams = {',
+        '  setGeneratorFactory() {},',
+        '  generate() { return []; },',
+        '  pack() { return ""; },',
+        '};',
+        'exports.BattleStreams = {',
+        '  BattleStream: class {',
+        '    write() { return Promise.reject(new Error("write explosion")); }',
+        '    destroy() {}',
+        '  },',
+        '  getPlayerStreams() { return { p1: wait(), p2: wait(), omniscient: wait() }; },',
+        '};',
+      ].join('\n')
+    );
+
+    const battle = sim.createBattle(ver);
+    const readOmni = (async () => {
+      for await (const chunk of battle.streams.omniscient) {
+        void chunk;
+      }
+    })();
+    await battle.write('>start');
+    await expect(readOmni).rejects.toThrow(/write explosion/);
+  });
+
+  test('sim callRpc rejects when a worker exceeds its RPC timeout', async () => {
+    const ver = '0.99.4-rpc-hang';
+    const testSimDir = root('sim', ver);
+    tempDirs.push(testSimDir);
+    const simPkgDir = path.join(testSimDir, 'node_modules', '@pkmn', 'sim');
+    fs.mkdirSync(simPkgDir, {recursive: true});
+    fs.writeFileSync(path.join(testSimDir, 'package.json'), JSON.stringify({name: 'sim-hang'}));
+    fs.writeFileSync(
+      path.join(simPkgDir, 'package.json'),
+      JSON.stringify({name: '@pkmn/sim', version: ver, main: 'index.js'})
+    );
+    fs.writeFileSync(
+      path.join(simPkgDir, 'index.js'),
+      [
+        'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600);',
+        'exports.Dex = {',
+        '  mod() {},',
+        '  formats: { extend() {}, get(id) { return {exists: true, id}; } },',
+        '};',
+        'exports.Teams = {',
+        '  setGeneratorFactory() {},',
+        '  generate() { return []; },',
+        '  pack() { return ""; },',
+        '};',
+        'exports.BattleStreams = { BattleStream: class {}, getPlayerStreams() { return {}; } };',
+      ].join('\n')
+    );
+
+    await expect(sim.getWorkerSimVersion(ver, 80)).rejects.toThrow(/timed out after 80ms/);
+  });
 });

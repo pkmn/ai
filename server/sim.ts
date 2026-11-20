@@ -90,7 +90,10 @@ export interface BattleHandle {
 interface PendingRpc {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
 }
+
+const RPC_TIMEOUT_MILLIS = 30_000;
 
 interface ActiveBattleState {
   p1: PushStream;
@@ -130,7 +133,7 @@ function resolveWorkerScript(): string {
   if (fs.existsSync(sameDirJs)) return sameDirJs;
   const builtJs = root('build', 'server', 'sim-worker.js');
   if (fs.existsSync(builtJs)) return builtJs;
-  return path.join(__dirname, 'sim-worker.ts');
+  throw new Error('Missing compiled server/sim-worker.js; run `npm run compile` first');
 }
 
 function updateWorkerRef(entry: WorkerEntry) {
@@ -144,6 +147,7 @@ function updateWorkerRef(entry: WorkerEntry) {
 function failEntry(entry: WorkerEntry, err: Error) {
   workers.delete(entry.key);
   for (const rpc of entry.rpcs.values()) {
+    clearTimeout(rpc.timer);
     rpc.reject(err);
   }
   entry.rpcs.clear();
@@ -226,6 +230,7 @@ function getWorker(version: string): WorkerEntry {
       case 'rpc:result': {
         const rpc = entry.rpcs.get(msg.id);
         if (!rpc) return;
+        clearTimeout(rpc.timer);
         entry.rpcs.delete(msg.id);
         updateWorkerRef(entry);
         if (msg.error !== undefined) {
@@ -251,13 +256,30 @@ function getWorker(version: string): WorkerEntry {
   return entry;
 }
 
-function callRpc<T>(version: string, request: RpcRequest): Promise<T> {
+function callRpc<T>(
+  version: string,
+  request: RpcRequest,
+  timeoutMillis = RPC_TIMEOUT_MILLIS
+): Promise<T> {
   const entry = getWorker(version);
   const id = nextRpcId++;
   return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const pending = entry.rpcs.get(id);
+      if (!pending) return;
+      entry.rpcs.delete(id);
+      updateWorkerRef(entry);
+      pending.reject(
+        new Error(
+          `sim-worker (${version}) RPC '${request.method}' timed out after ${timeoutMillis}ms`
+        )
+      );
+    }, timeoutMillis);
+    timer.unref();
     entry.rpcs.set(id, {
       resolve: value => resolve(value as T),
       reject,
+      timer,
     });
     updateWorkerRef(entry);
     const msg: ParentMessage = {type: 'rpc', id, ...request};
@@ -374,8 +396,11 @@ export function validateTeam(
   );
 }
 
-export function getWorkerSimVersion(version = SIM_VERSION): Promise<string> {
-  return callRpc<string>(version, {method: 'getVersion'});
+export function getWorkerSimVersion(
+  version = SIM_VERSION,
+  timeoutMillis?: number
+): Promise<string> {
+  return callRpc<string>(version, {method: 'getVersion'}, timeoutMillis);
 }
 
 export function getActiveBattleCount(version?: string): number {
@@ -391,6 +416,7 @@ export async function closeAllWorkers(): Promise<void> {
   await Promise.all(
     entries.map(async entry => {
       for (const rpc of entry.rpcs.values()) {
+        clearTimeout(rpc.timer);
         rpc.reject(new Error('sim workers closed'));
       }
       entry.rpcs.clear();
