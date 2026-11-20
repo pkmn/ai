@@ -411,7 +411,7 @@ export class TimeSlicedArenaGame {
   private readonly devMode: boolean;
   private readonly onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 
-  private readonly battle: sim.BattleHandle;
+  private battle: sim.BattleHandle | undefined = undefined;
 
   private p1: SandboxedPlayer | undefined = undefined;
   private p2: SandboxedPlayer | undefined = undefined;
@@ -450,8 +450,6 @@ export class TimeSlicedArenaGame {
       (options.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.onTurn = options.onTurn;
-
-    this.battle = sim.createBattle(this.version);
   }
 
   private spawnPlayer(slot: PlayerSlot, spec: AgentLaunchSpec): SandboxedPlayer {
@@ -770,7 +768,9 @@ export class TimeSlicedArenaGame {
     this.endReason = reason;
     this.wakePendingLineResolvers();
     // `@pkmn/sim` Battle#win resolves SideID ('p1' / 'p2'), not player display names
-    void this.battle.write(`>forcewin ${this.winner}`).catch(() => undefined);
+    if (this.battle) {
+      void this.battle.write(`>forcewin ${this.winner}`).catch(() => undefined);
+    }
   }
 
   private async waitForPlayerReady(
@@ -880,7 +880,7 @@ export class TimeSlicedArenaGame {
         turnStartedAt: Math.floor(Date.now() / 1000),
         turnBudgetSeconds: Math.round(totalBudgetMillis / 1000),
         incrementSeconds: Math.round(incrementMillis / 1000),
-        omniscientLog: this.battle.getLog().join('\n'),
+        omniscientLog: this.battle?.getLog().join('\n') ?? '',
         p1: this.buildTurnSlotInfo(p1, 0),
         p2: this.buildTurnSlotInfo(p2, 1),
       });
@@ -920,7 +920,7 @@ export class TimeSlicedArenaGame {
             this.pauseSlot(player);
             slotPaused = true;
             if (this.ended) return false;
-            await this.battle.write(`>${player.slot} default`);
+            await this.battle!.write(`>${player.slot} default`);
             return true;
           }
           player.bankMillis = 0;
@@ -965,7 +965,7 @@ export class TimeSlicedArenaGame {
         slotPaused = true;
         if (this.ended) return false;
         const choiceCmd = formatChoiceCommand(parsed.choice, req.teamPreview);
-        await this.battle.write(`>${player.slot} ${choiceCmd}`);
+        await this.battle!.write(`>${player.slot} ${choiceCmd}`);
         return true;
       }
       return false;
@@ -996,7 +996,6 @@ export class TimeSlicedArenaGame {
       const p1Ready = await this.waitForPlayerReady(p1, p1, p2);
       const p2Ready = p1Ready ? await this.waitForPlayerReady(p2, p1, p2) : false;
       if (!p1Ready || !p2Ready) {
-        void this.battle.destroy().catch(() => undefined);
         await Promise.all([
           this.stopPlayerForRamRead(p1),
           this.stopPlayerForRamRead(p2),
@@ -1014,6 +1013,9 @@ export class TimeSlicedArenaGame {
         };
       }
 
+      const battle = sim.createBattle(this.version);
+      this.battle = battle;
+
       if (this.sendUtm && this.p1TeamPacked && p1.proc.stdin.writable) {
         p1.proc.stdin.write(`|utm|${this.p1TeamPacked}\n`);
       }
@@ -1021,11 +1023,11 @@ export class TimeSlicedArenaGame {
         p2.proc.stdin.write(`|utm|${this.p2TeamPacked}\n`);
       }
 
-      this.forwardStream(p1, this.battle.streams.p1);
-      this.forwardStream(p2, this.battle.streams.p2);
+      this.forwardStream(p1, battle.streams.p1);
+      this.forwardStream(p2, battle.streams.p2);
 
       const omniTask = (async () => {
-        for await (const chunk of this.battle.streams.omniscient) {
+        for await (const chunk of battle.streams.omniscient) {
           for (const line of chunk.split('\n')) {
             const step = inspectOmniscientLine(line, {
               currentTurn: this.currentTurn,
@@ -1041,7 +1043,7 @@ export class TimeSlicedArenaGame {
               this.endReason = step.terminal.endReason;
               this.wakePendingLineResolvers();
               if (step.terminal.forceTie) {
-                await this.battle.write('>forcetie');
+                await battle.write('>forcetie');
               }
             }
           }
@@ -1059,9 +1061,9 @@ export class TimeSlicedArenaGame {
       const p2PlayerSpec = JSON.stringify({name: 'Agent B', team: this.p2TeamPacked});
 
       this.battleStarted = true;
-      await this.battle.write(`>start ${startSpec}`);
-      await this.battle.write(`>player p1 ${p1PlayerSpec}`);
-      await this.battle.write(`>player p2 ${p2PlayerSpec}`);
+      await battle.write(`>start ${startSpec}`);
+      await battle.write(`>player p1 ${p1PlayerSpec}`);
+      await battle.write(`>player p2 ${p2PlayerSpec}`);
 
       let idleSpins = 0;
       while (!this.ended) {
@@ -1075,14 +1077,14 @@ export class TimeSlicedArenaGame {
             this.ended = true;
             this.winner = 'tie';
             this.endReason = 'crash';
-            await this.battle.write('>forcetie').catch(() => undefined);
+            await battle.write('>forcetie').catch(() => undefined);
             break;
           }
           const isRetryWave =
             (p1HasReq && p1.retryingInvalidChoice) ||
             (p2HasReq && p2.retryingInvalidChoice);
           if (!isRetryWave) {
-            const wave = this.battle.getWaveInfo();
+            const wave = battle.getWaveInfo();
             if (wave.waveId === 0 || wave.waveId !== this.lastWaveId) {
               this.requestCount++;
               this.lastWaveId = wave.waveId;
@@ -1112,7 +1114,7 @@ export class TimeSlicedArenaGame {
               this.ended = true;
               this.winner = 'tie';
               this.endReason = 'crash';
-              await this.battle.write('>forcetie').catch(() => undefined);
+              await battle.write('>forcetie').catch(() => undefined);
             } else {
               const exitedPlayer = p1.exited ? p1 : p2;
               this.forceLose(exitedPlayer.slot, exitedPlayer.exitCode === 137 ? 'oom' : 'crash');
@@ -1123,8 +1125,8 @@ export class TimeSlicedArenaGame {
             this.ended = true;
             this.winner = 'tie';
             this.endReason = 'arbiter-stall';
-            await this.battle.write('>forcetie').catch(() => undefined);
-            void this.battle.destroy().catch(() => undefined);
+            await battle.write('>forcetie').catch(() => undefined);
+            void battle.destroy().catch(() => undefined);
             break;
           }
           await new Promise(r => setTimeout(r, 2));
@@ -1144,11 +1146,14 @@ export class TimeSlicedArenaGame {
         outcome,
         turns: this.currentTurn,
         endReason: this.endReason,
-        omniscientLog: this.battle.getLog().join('\n'),
+        omniscientLog: battle.getLog().join('\n'),
         p1: this.buildPlayerGameResult(p1, 0),
         p2: this.buildPlayerGameResult(p2, 1),
       };
     } finally {
+      if (this.battle) {
+        void this.battle.destroy().catch(() => undefined);
+      }
       this.cleanupSlot(this.p1);
       this.cleanupSlot(this.p2);
     }
@@ -1156,7 +1161,7 @@ export class TimeSlicedArenaGame {
 
   private buildTurnSlotInfo(player: SandboxedPlayer, sideIdx: 0 | 1): TurnSlotInfo {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
-    const pokemon = this.battle.getPokemon(slot);
+    const pokemon = this.battle?.getPokemon(slot);
     const teamPreviewMillis = player.teamPreviewCount > 0
       ? Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount)
       : undefined;
@@ -1178,7 +1183,7 @@ export class TimeSlicedArenaGame {
 
   private buildPlayerGameResult(player: SandboxedPlayer, sideIdx: 0 | 1): PlayerGameResult {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
-    const pokemon = this.battle.getPokemon(slot);
+    const pokemon = this.battle?.getPokemon(slot);
     const teamPreviewMillis = player.teamPreviewCount > 0
       ? Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount)
       : undefined;

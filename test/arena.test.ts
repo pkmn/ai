@@ -2072,6 +2072,7 @@ describe('arena infrastructure', () => {
       expect(res.turns).toBe(0);
       expect(heartbeats[0].phase).toBe('init');
       expect(heartbeats[0].activeSlot).toBe('p1');
+      expect(sim.getActiveBattleCount()).toBe(0);
     });
 
     test('separates initMillis, teamPreviewMillis, and regular meanTurnMillis', async () => {
@@ -2364,6 +2365,7 @@ describe('arena infrastructure', () => {
       expect(badRes.winner).toBe('p2');
       expect(badRes.outcome).toBe('L');
       expect(badRes.endReason).toBe('invalid-choice');
+      expect(sim.getActiveBattleCount()).toBe(0);
     });
 
     test('times out BYOT entrant that never sends /utm within ready grace', async () => {

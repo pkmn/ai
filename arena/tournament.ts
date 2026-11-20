@@ -303,7 +303,7 @@ export class ConcurrentGame {
   ) => void;
   private readonly onClockChange?: (state: TurnBroadcastInfo) => void;
 
-  private battle: sim.BattleHandle;
+  private battle: sim.BattleHandle | undefined = undefined;
 
   private p1!: RemoteTournamentPlayer;
   private p2!: RemoteTournamentPlayer;
@@ -346,18 +346,16 @@ export class ConcurrentGame {
     this.onGameStart = options.onGameStart;
     this.onSpectatorChunk = options.onSpectatorChunk;
     this.onClockChange = options.onClockChange;
-
-    this.battle = sim.createBattle(this.version);
   }
 
   private getFullLog(): string {
-    const rawLog = this.battle.getLog().join('\n');
+    const rawLog = this.battle?.getLog().join('\n') ?? '';
     return rewriteBlindPlayerNames(rawLog, this.p1Spec.displayName, this.p2Spec.displayName);
   }
 
   private buildBroadcastState(): TurnBroadcastInfo {
-    const p1Pokemon = this.battle.getPokemon('p1');
-    const p2Pokemon = this.battle.getPokemon('p2');
+    const p1Pokemon = this.battle?.getPokemon('p1');
+    const p2Pokemon = this.battle?.getPokemon('p2');
     return {
       turn: this.currentTurn,
       p1: this.buildSlotBroadcast(this.p1, p1Pokemon),
@@ -751,7 +749,9 @@ export class ConcurrentGame {
     this.preemptedSlot = slot;
     this.endReason = 'spot-preemption';
     this.wakePendingLineResolvers();
-    void this.battle.write('>forcetie').catch(() => undefined);
+    if (this.battle) {
+      void this.battle.write('>forcetie').catch(() => undefined);
+    }
   }
 
   private forceLose(losingSlot: PlayerSlot, reason: string) {
@@ -760,7 +760,9 @@ export class ConcurrentGame {
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
     this.endReason = reason;
     this.wakePendingLineResolvers();
-    void this.battle.write(`>forcewin ${this.winner}`).catch(() => undefined);
+    if (this.battle) {
+      void this.battle.write(`>forcewin ${this.winner}`).catch(() => undefined);
+    }
   }
 
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
@@ -768,7 +770,7 @@ export class ConcurrentGame {
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
     const wasRetry = player.retryingInvalidChoice;
     if (!wasRetry) {
-      const wave = this.battle.getWaveInfo();
+      const wave = this.battle?.getWaveInfo() ?? {waveId: 0, activeSides: 1};
       if (wave.waveId === 0 || wave.waveId !== this.lastWaveId) {
         this.requestCount++;
         this.lastWaveId = wave.waveId;
@@ -826,7 +828,7 @@ export class ConcurrentGame {
               player.decisionsCount++;
             }
             player.thinking = false;
-            await this.battle.write(`>${player.slot} default`);
+            await this.battle!.write(`>${player.slot} default`);
             return;
           }
           player.bankMillis = 0;
@@ -865,7 +867,7 @@ export class ConcurrentGame {
         player.thinking = false;
 
         const choiceCmd = arbiter.formatChoiceCommand(parsed.choice, req.teamPreview);
-        await this.battle.write(`>${player.slot} ${choiceCmd}`);
+        await this.battle!.write(`>${player.slot} ${choiceCmd}`);
         return;
       }
     } finally {
@@ -919,7 +921,6 @@ export class ConcurrentGame {
   }
 
   private resetForNextSeriesGame() {
-    this.battle = sim.createBattle(this.version);
     this.currentTurn = 0;
     this.requestCount = 0;
     this.lastWaveId = 0;
@@ -956,9 +957,14 @@ export class ConcurrentGame {
     if (resetStream) {
       this.resetForNextSeriesGame();
     }
+    if (this.battle) {
+      void this.battle.destroy().catch(() => undefined);
+    }
+    const battle = sim.createBattle(this.version);
+    this.battle = battle;
 
     const omniTask = (async () => {
-      for await (const rawChunk of this.battle.streams.omniscient) {
+      for await (const rawChunk of battle.streams.omniscient) {
         for (const line of rawChunk.split('\n')) {
           const step = arbiter.inspectOmniscientLine(line, {
             currentTurn: this.currentTurn,
@@ -974,7 +980,7 @@ export class ConcurrentGame {
             this.endReason = step.terminal.endReason;
             this.wakePendingLineResolvers();
             if (step.terminal.forceTie) {
-              await this.battle.write('>forcetie');
+              await battle.write('>forcetie');
             }
           }
         }
@@ -994,16 +1000,16 @@ export class ConcurrentGame {
       }
     });
 
-    const p1Task = this.driveConcurrentPlayer(this.p1, this.battle.streams.p1);
-    const p2Task = this.driveConcurrentPlayer(this.p2, this.battle.streams.p2);
+    const p1Task = this.driveConcurrentPlayer(this.p1, battle.streams.p1);
+    const p2Task = this.driveConcurrentPlayer(this.p2, battle.streams.p2);
 
-    await this.battle.write(
+    await battle.write(
       `>start ${JSON.stringify({formatid: this.format, seed: gameSeed})}`
     );
-    await this.battle.write(
+    await battle.write(
       `>player p1 ${JSON.stringify({name: 'Agent A', team: p1Team})}`
     );
-    await this.battle.write(
+    await battle.write(
       `>player p2 ${JSON.stringify({name: 'Agent B', team: p2Team})}`
     );
 
@@ -1355,6 +1361,9 @@ export class ConcurrentGame {
         games,
       };
     } finally {
+      if (this.battle) {
+        void this.battle.destroy().catch(() => undefined);
+      }
       try {
         this.p1.proc.kill('SIGTERM');
       } catch {}

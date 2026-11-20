@@ -377,6 +377,13 @@ export function getWorkerSimVersion(version = SIM_VERSION): Promise<string> {
   return callRpc<string>(version, {method: 'getVersion'});
 }
 
+export function getActiveBattleCount(version?: string): number {
+  if (version !== undefined) return workers.get(version)?.battles.size ?? 0;
+  let total = 0;
+  for (const entry of workers.values()) total += entry.battles.size;
+  return total;
+}
+
 export async function closeAllWorkers(): Promise<void> {
   const entries = [...workers.values()];
   workers.clear();
