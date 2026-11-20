@@ -2273,10 +2273,10 @@ function renderSingleLadderArtifact(opts: {
 
       const eloRounded = Math.round(e.elo);
       const ci95 = e.isAnchor ? 0 : Math.round(1.96 * e.se);
-      const eloNode = isRankedPrimary ? <strong>{eloRounded}</strong> : eloRounded;
       const eloCell = (
         <td className='num'>
-          {e.isAnchor ? eloNode : <>{eloNode} <span className='muted'>±{ci95}</span></>}
+          {isRankedPrimary ? <strong>{eloRounded}</strong> : eloRounded}{' '}
+          <span className='muted'>±{ci95}</span>
         </td>
       );
 

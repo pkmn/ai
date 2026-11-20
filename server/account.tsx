@@ -447,7 +447,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
               const l = e.ll + e.tl;
               const t = e.split;
               const elo = Math.round(e.elo);
-              const ci = Math.round(1.96 * e.se);
+              const ci = e.isAnchor ? 0 : Math.round(1.96 * e.se);
               const settled = e.settledAt !== undefined || (
                 e.se <= SETTLED_MAX_SE && e.matches >= SETTLED_MIN_MATCHES
               );
@@ -463,8 +463,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                         : <span className='muted'>—</span>}
                     </td>
                     <td className='num'>
-                      <strong>{elo}</strong>
-                      {!e.isAnchor && <> <span className='muted'>±{ci}</span></>}
+                      <strong>{elo}</strong> <span className='muted'>±{ci}</span>
                     </td>
                     <td className='num'>{w}–{l}–{t}</td>
                     <td>
@@ -481,10 +480,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                   <td><tt>{e.ladderName}</tt></td>
                   <td><code>{e.version}</code></td>
                   <td className='num muted'>—</td>
-                  <td className='num'>
-                    {elo}
-                    {!e.isAnchor && <> <span className='muted'>±{ci}</span></>}
-                  </td>
+                  <td className='num'>{elo} <span className='muted'>±{ci}</span></td>
                   <td className='num'>{w}–{l}–{t}</td>
                   <td>{settled ? 'Settled' : 'Provisional'}</td>
                 </tr>

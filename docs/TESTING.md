@@ -147,7 +147,7 @@ The 7 sections cover:
    project (`/projects/asterai/`).
 3. **Ladders (`ladders`):** Active season hub, hub with expandable past season rows, pre-launch
    upcoming hub, RBY harvested ladder across `Active` / `Best` / `All` version tabs (plus secondary
-   `1500` anchor alongside 2 stronger active versions), VGC competitor
+   `1500 ±0` anchor alongside 2 stronger active versions), VGC competitor
    `pools` ladder, RAND `random` ladder (with `Data: <id>-logs.tar` link above the footer), rotated
    season in `settling` grace window via the `#season-select` dropdown, retired season in `archived`
    state (with `Data: <id>-logs.tar` link above the footer), and `upcoming` ladder with registered

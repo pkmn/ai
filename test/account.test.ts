@@ -552,6 +552,35 @@ describe('account routes', () => {
         expect(coHtml).toContain('1.1.0-rc1');
       });
 
+    test('renders anchor active entries as 1500 ±0 on /account', async () => {
+      openLadders(['gen1ou20261109']);
+      const agent = db.getAgentBySlug('0-error')!;
+      const v1 = db.createSubmission({
+        agentId: agent.id,
+        developerId: db.getDeveloperByGitHub('pre')!.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now: currentNow - 16 * 86400,
+      });
+      db.db.prepare(
+        'UPDATE agent_versions SET smoke_status = ? WHERE id = ?'
+      ).run('passed', v1.id);
+      db.db.prepare(
+        `INSERT INTO ladder_entries (
+           ladder_id, version_id, role, is_anchor, elo, se, rank_current,
+           matches, ww, wt, split, tl, ll, settled_at
+         ) VALUES (?, ?, 'champion', 1, 1500, 18.5, 2, 100, 50, 0, 0, 0, 50, ?)`
+      ).run('gen1ou20261109', v1.id, currentNow - 10 * 86400);
+
+      const html = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(html).toContain('<strong>1500</strong> <span class="muted">±0</span>');
+    });
+
     test('updates project ownership across /account or wiki on developer reassignment',
       async () => {
         openLadders(['gen1ou20261109']);

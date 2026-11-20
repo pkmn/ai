@@ -611,8 +611,7 @@ describe('populated Arena leaderboard views', () => {
     expect(anchorRow.elo).toBe(1500);
     expect(anchorRow.ci95).toBe(0);
     expect(anchorRow.rank).toBeUndefined();
-    expect(lbHtml).not.toContain('±0');
-    expect(lbHtml).toContain('<td class="num">1500</td>');
+    expect(lbHtml).toContain('<td class="num">1500 <span class="muted">±0</span></td>');
   });
 
   test('marks unsettled entries provisional while hiding retired entries by default', async () => {
@@ -703,8 +702,8 @@ describe('populated Arena leaderboard views', () => {
     expect(metaProfileHtml).toContain('id="ver-select"');
     expect(metaProfileHtml).toContain('1.2.0 (active)');
     expect(metaProfileHtml).toContain('1.0.0 (active)');
-    expect(metaProfileHtml).not.toContain('±0');
-    expect(metaProfileHtml).toContain('1.0.0 (1500)');
+    expect(metaProfileHtml).toContain('1.0.0 (1500 ±0)');
+    expect(metaProfileHtml).toContain('<td class="num">1500 <span class="muted">±0</span></td>');
     expect(metaProfileHtml).toContain('class="h2h-table"');
     expect(metaProfileHtml).toContain('Top 10');
 
@@ -1452,13 +1451,14 @@ describe('SSR cache invalidation', () => {
     return {metaAgent, v15, v20Res};
   };
 
-  test('renders solo anchor version as bold primary 1500 without SE', async () => {
+  test('renders solo anchor version as bold primary 1500 ±0', async () => {
     setupAnchorBase();
     const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
     try {
       const initialHtml = await h.getText('/arena/ladders/rby/');
-      expect(initialHtml).toContain('<td class="num"><strong>1500</strong></td>');
-      expect(initialHtml).not.toContain('±0');
+      expect(initialHtml).toContain(
+        '<td class="num"><strong>1500</strong> <span class="muted">±0</span></td>'
+      );
     } finally {
       await h.close();
     }
@@ -1500,8 +1500,7 @@ describe('SSR cache invalidation', () => {
       expect(tr10).toContain('data-active="true"');
       expect(tr10).not.toContain('data-best="true"');
       expect(tr10).not.toContain('data-retired="true"');
-      expect(tr10).toContain('<td class="num">1500</td>');
-      expect(tr10).not.toContain('±0');
+      expect(tr10).toContain('<td class="num">1500 <span class="muted">±0</span></td>');
     } finally {
       await h.close();
     }

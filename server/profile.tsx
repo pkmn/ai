@@ -172,9 +172,7 @@ function buildVersionDynamicStats(
 
   const eloRounded = Math.round(entry.elo);
   const ci = entry.isAnchor ? 0 : Math.round(1.96 * entry.se);
-  const elo = entry.isAnchor
-    ? String(<strong>{eloRounded}</strong>)
-    : String(<><strong>{eloRounded}</strong> <span className='muted'>±{ci}</span></>);
+  const elo = String(<><strong>{eloRounded}</strong> <span className='muted'>±{ci}</span></>);
   const gxe = `${entry.gxe.toFixed(1)}%`;
 
   let peak: string;
@@ -183,11 +181,10 @@ function buildVersionDynamicStats(
       ? 0
       : Math.round(1.96 * (entry.maxEloSe ?? entry.se));
     const pGxe = (entry.maxGxe ?? entry.gxe).toFixed(1);
-    const peakSuffix = entry.isAnchor ? `(${pGxe}% GXE)` : `±${pCi} (${pGxe}% GXE)`;
     peak = String(
       <>
         {entry.bestRank !== undefined && <><strong>#{entry.bestRank}</strong> · </>}
-        {Math.round(entry.maxElo)} <span className='muted'>{peakSuffix}</span>
+        {Math.round(entry.maxElo)} <span className='muted'>±{pCi} ({pGxe}% GXE)</span>
       </>
     );
   } else {
@@ -255,13 +252,12 @@ function buildAllVersionsDynamicStats(
       familyStats.maxEloVersionId !== undefined &&
       entries.find(e => e.versionId === familyStats.maxEloVersionId)?.isAnchor
     );
-    const pCi = Math.round(1.96 * (familyStats.maxEloSe ?? rep.se));
+    const pCi = isPeakAnchor ? 0 : Math.round(1.96 * (familyStats.maxEloSe ?? rep.se));
     const pGxe = (familyStats.maxGxe ?? rep.gxe).toFixed(1);
-    const peakSuffix = isPeakAnchor ? `(${pGxe}% GXE)` : `±${pCi} (${pGxe}% GXE)`;
     peak = String(
       <>
         {familyStats.bestRank !== undefined && <><strong>#{familyStats.bestRank}</strong> · </>}
-        {Math.round(familyStats.maxElo)} <span className='muted'>{peakSuffix}</span>
+        {Math.round(familyStats.maxElo)} <span className='muted'>±{pCi} ({pGxe}% GXE)</span>
       </>
     );
   }
@@ -431,9 +427,7 @@ function renderVersionsLineageSvg(
     const polyPts = [...upper, ...lower].join(' ');
     const linePts = coords.map(c => `${c.x},${c.y}`).join(' ');
     const last = coords[coords.length - 1];
-    const labelText = e.isAnchor
-      ? `${e.version} (${Math.round(e.elo)})`
-      : `${e.version} (${Math.round(e.elo)} ±${ci})`;
+    const labelText = `${e.version} (${Math.round(e.elo)} ±${ci})`;
     const labelX = Math.min(xRight - 115, Math.max(xLeft + 10, last.x - 110));
     const labelY = Math.max(22, last.y - 10);
 
@@ -626,8 +620,8 @@ function renderVersionsPane(opts: {
                     {isRetired && <> <span className='muted'>(retired)</span></>}
                   </td>
                   <td className='num'>
-                    {isPrimary ? <strong>{eloRounded}</strong> : eloRounded}
-                    {!e.isAnchor && <> <span className='muted'>±{ci}</span></>}
+                    {isPrimary ? <strong>{eloRounded}</strong> : eloRounded}{' '}
+                    <span className='muted'>±{ci}</span>
                   </td>
                   {deltaCell}
                   <td className='num'>{e.gxe.toFixed(1)}%</td>
@@ -780,8 +774,7 @@ function renderHeadToHeadPane(opts: {
           {util.raw(oppLink)} <code>{opp.version}</code>
         </td>
         <td className='num' data-val={oppElo}>
-          {oppElo}
-          {!opp.isAnchor && <> <span className='muted'>±{oppCi}</span></>}
+          {oppElo} <span className='muted'>±{oppCi}</span>
         </td>
         <td className='num' data-val={wins} title={wltTip}>
           {wins}–{losses}–{ties}

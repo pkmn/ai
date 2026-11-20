@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   role TEXT NOT NULL DEFAULT 'champion'
     CHECK (role IN ('champion', 'challenger', 'retired', 'quarantined')),
   -- 1 if this version pins the ladder's 1500.0 Elo translation gauge (theta_anchor = 0 shift; UI
-  -- omits ±CI on the anchor while `se` retains inverse-Hessian curvature), else 0.
+  -- displays ±0 CI relative to the anchor while `se` retains inverse-Hessian curvature), else 0.
   -- Orthogonal to `role`: an anchor is never retired by the 2-version per-agent cap and stays in
   -- the Davidson solve at exact 1500 Elo forever (even after season archival).
   is_anchor INTEGER NOT NULL DEFAULT 0 CHECK (is_anchor IN (0, 1)),
