@@ -1107,6 +1107,18 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     return rank[b] > rank[a] ? b : a;
   };
 
+  // Redirect logout to public `/wiki` whenever the current page/revision requires auth,
+  // avoiding an immediate `requireReadAuth` -> `/auth/github` silent OAuth re-login loop.
+  const logoutReturnTo = (
+    slug: string,
+    candidate: string,
+    extraVisibility?: PageVisibility
+  ): string => (
+    stricterVisibility(wiki.getPageVisibility(slug), extraVisibility) === 'public'
+      ? candidate
+      : '/wiki'
+  );
+
   const requireReadAuth = (
     req: http.IncomingMessage & {originalUrl?: string},
     res: http.ServerResponse,
@@ -1206,7 +1218,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       title: heading,
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
-      nav: wikiNav(slug, 'view', loggedIn, viewPath),
+      nav: wikiNav(slug, 'view', loggedIn, logoutReturnTo(slug, viewPath)),
       content: raw(html),
     }));
   };
@@ -1311,11 +1323,15 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
         </form>
       </>
     );
+    const viewPath = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
+    const returnTo = wiki.readPage(slug) !== undefined
+      ? logoutReturnTo(slug, viewPath, visibility)
+      : '/wiki';
     sendHtml(res, statusCode, renderPage({
       title: heading,
       heading,
       path: `/wiki/${encoded}/edit/`,
-      nav: wikiNav(slug, 'edit', true, `/wiki/${encoded}`),
+      nav: wikiNav(slug, 'edit', true, returnTo),
       content: form,
     }));
   };
@@ -1470,7 +1486,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
         title: heading,
         heading,
         path: `/wiki/${encoded}/history/`,
-        nav: wikiNav(slug, 'history', loggedIn, `/wiki/${encoded}/history`),
+        nav: wikiNav(slug, 'history', loggedIn, logoutReturnTo(slug, `/wiki/${encoded}/history`)),
         content: table,
       }));
     } catch (err) {
@@ -1533,7 +1549,12 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           title: heading,
           heading,
           path: `/wiki/${encoded}/${sha}/`,
-          nav: wikiNav(slug, 'history', loggedIn, `/wiki/${encoded}/${sha}?diff=1`),
+          nav: wikiNav(
+            slug,
+            'history',
+            loggedIn,
+            logoutReturnTo(slug, `/wiki/${encoded}/${sha}?diff=1`, diffVis)
+          ),
           content: (
             <>
               <p className='wiki-meta'>
@@ -1560,7 +1581,12 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
         title: heading,
         heading,
         path: `/wiki/${encoded}/${sha}/`,
-        nav: wikiNav(slug, 'history', loggedIn, `/wiki/${encoded}/${sha}`),
+        nav: wikiNav(
+          slug,
+          'history',
+          loggedIn,
+          logoutReturnTo(slug, `/wiki/${encoded}/${sha}`, revVis)
+        ),
         content: (
           <>
             <p className='wiki-meta'>

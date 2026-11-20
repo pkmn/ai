@@ -837,6 +837,49 @@ describe('wiki server routes', () => {
     expect(pagesHtml).toContain('Real Heading');
     expect(pagesHtml).not.toContain('not a heading');
   });
+
+  test('redirects wiki logout to /wiki from non-public project pages', async () => {
+    await postWiki('0_ERROR', 'scheibo', {
+      content: '# 0 ERROR\n\nPrivate notes.',
+      visibility: 'developers',
+      message: 'Private project page',
+      action: 'save',
+    });
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: wikiDir,
+      encoding: 'utf8',
+    }).trim();
+    const headers = {Cookie: sessionCookie('scheibo')};
+    for (const route of [
+      '/wiki/0_ERROR',
+      '/wiki/0_ERROR/edit',
+      '/wiki/0_ERROR/history',
+      `/wiki/0_ERROR/${sha}`,
+      `/wiki/0_ERROR/${sha}?diff=1`,
+    ]) {
+      const html = await (await realFetch(`${baseUrl}${route}`, {headers})).text();
+      expect(html).toContain('action="/auth/logout?return_to=%2Fwiki"');
+    }
+  });
+
+  test('redirects wiki logout to /wiki when editing index or uncreated pages', async () => {
+    const headers = {Cookie: sessionCookie('scheibo')};
+    for (const route of ['/wiki/index/edit', '/wiki/Brand_New_Page/edit']) {
+      const html = await (await realFetch(`${baseUrl}${route}`, {headers})).text();
+      expect(html).toContain('action="/auth/logout?return_to=%2Fwiki"');
+    }
+  });
+
+  test('preserves current public page return_to on wiki logout', async () => {
+    await postWiki('Public_Notes', 'scheibo', {
+      content: '# Public Notes\n\nVisible to everyone.',
+      message: 'Add public notes',
+      action: 'save',
+    });
+    const headers = {Cookie: sessionCookie('scheibo')};
+    const html = await (await realFetch(`${baseUrl}/wiki/Public_Notes`, {headers})).text();
+    expect(html).toContain('action="/auth/logout?return_to=%2Fwiki%2FPublic_Notes"');
+  });
 });
 
 describe('wiki database standing checks', () => {
