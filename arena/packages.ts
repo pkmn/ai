@@ -517,8 +517,9 @@ export async function downloadAndUnpackBundle(opts: {
       const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MILLIS);
       const initialUrl = new URL(opts.url);
       const initialOrigin = initialUrl.origin;
-      const authHeader = opts.authToken
-        ? (opts.authToken.includes(' ') ? opts.authToken : `Bearer ${opts.authToken}`)
+      const rawAuth = opts.authToken?.trim().replace(/^authorization:\s*/i, '').trim();
+      const authHeader = rawAuth
+        ? (rawAuth.includes(' ') ? rawAuth : `Bearer ${rawAuth}`)
         : undefined;
 
       let currentUrl = initialUrl;

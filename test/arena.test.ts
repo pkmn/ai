@@ -1105,6 +1105,24 @@ describe('arena infrastructure', () => {
         },
       ]);
     });
+
+    test('downloadAndUnpackBundle strips leading Authorization prefix from authToken', async () => {
+      const seenAuth: Array<string | null> = [];
+      const archiveBytes = fs.readFileSync(validArchivePath);
+      globalThis.fetch = (_input: string | URL | Request, init?: RequestInit) => {
+        seenAuth.push(new Headers(init?.headers).get('authorization'));
+        return Promise.resolve(new Response(archiveBytes, {status: 200}));
+      };
+
+      await packages.downloadAndUnpackBundle({
+        url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.gz',
+        expectedSha256: validArchiveSha,
+        agentTargetId: 'agent-auth-prefix',
+        authToken: 'Authorization: Bearer ghp_prefixed_token',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'auth-prefix')),
+      });
+      expect(seenAuth).toEqual(['Bearer ghp_prefixed_token']);
+    });
   });
 
   describe('arena/db Database', () => {
