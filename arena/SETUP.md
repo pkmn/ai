@@ -89,7 +89,7 @@ Walk through the initial macOS Setup Assistant with these exact choices:
 2. Open **System Settings -> Privacy & Security -> Full Disk Access**, click **`+`**, press
    **`Cmd+Shift+G`**, and grant Full Disk Access to `/usr/sbin/taskpolicy`, `/bin/bash`, and
    `/usr/bin/tar` *(keep a display connected until Step 3.3 so you can also add
-   `/opt/homebrew/bin/node` after installing Homebrew)*.
+   `/opt/homebrew/bin/node` and `gcloud`'s Homebrew Python binary after installing Homebrew)*.
    - *Why:* On macOS Sequoia+, headless `LaunchDaemons` (`ai.pkmn.arena` and `ai.pkmn.archive`) are
      blocked by TCC (`kTCCServiceSystemPolicyRemovableVolumes`) from writing to external USB/TB
      APFS drives (`/Volumes/Archive`) unless Full Disk Access is granted in System Settings (`ssh`
@@ -444,11 +444,16 @@ brew install --cask gcloud-cli
 ```
 
 > [!IMPORTANT]
-> After `brew install node` completes (and after any future `brew upgrade node`, which changes the
-> ad-hoc Mach-O CDHash), open **System Settings -> Privacy & Security -> Full Disk Access** on the
-> Mac mini and ensure `/opt/homebrew/bin/node` (alongside `/usr/sbin/taskpolicy`, `/bin/bash`, and
-> `/usr/bin/tar`) is enabled so `ai.pkmn.arena` can write cold archives and battle logs to
-> `/Volumes/Archive`.
+> After `brew install node` and `brew install --cask gcloud-cli` complete (and after any future
+> `brew upgrade node` or `brew upgrade python@*`, which changes the ad-hoc Mach-O CDHash), open
+> **System Settings -> Privacy & Security -> Full Disk Access** on the Mac mini and ensure both:
+> - `/opt/homebrew/bin/node` (so `ai.pkmn.arena` can write cold archives and battle logs to
+>   `/Volumes/Archive`), and
+> - `gcloud`'s resolved Homebrew Python executable (`python3 -c 'import os,sys; print(os.path.realpath(sys.executable))'` on the binary printed by `gcloud info --format='value(basic.python_location)'`, so `ai.pkmn.archive` can run `gcloud storage rsync` against `/Volumes/Archive` — otherwise Python's `os.walk` silently ignores TCC `EPERM`, which `archive.sh`'s post-sync `gcloud storage ls` check will catch)
+>
+> are enabled alongside `/usr/sbin/taskpolicy`, `/bin/bash`, and `/usr/bin/tar`. (`zstd` and `7z`
+> do **not** need Full Disk Access because `archive.sh`, `packages.ts`, and `coordinator.ts` stage
+> or pipe them through internal `/Volumes/Staging` and `/bin/bash`.)
 
 #### Verify Phase 3
 
@@ -917,13 +922,16 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist
 
 #### Verify Phase 7
 
-Trigger `/opt/arena/repo/arena/scripts/archive.sh` once manually and verify both the local SQLite
-backup and the `gs://pkmn-arena` bucket sync succeed:
+Trigger `ai.pkmn.archive` via `launchd` (not directly over SSH, which masks missing macOS Full Disk
+Access grants) and verify both the local SQLite backup and the `gs://pkmn-arena` bucket sync
+succeed:
 
 ```sh
-ssh arena '
+ssh -t arena '
 export PATH="/opt/homebrew/bin:$PATH"
-/opt/arena/repo/arena/scripts/archive.sh
+sudo launchctl kickstart -k system/ai.pkmn.archive
+sleep 5
+sudo launchctl print system/ai.pkmn.archive | grep -E "state =|last exit code ="
 ls -lh /Volumes/Archive/db-backups/
 zstd -t /Volumes/Archive/db-backups/arena-state-*.sqlite.zst && echo "PASS: SQLite backup archive verified"
 gcloud storage ls gs://pkmn-arena/db-backups/ && echo "PASS: GCS bucket sync verified"

@@ -80,4 +80,13 @@ if command -v gcloud >/dev/null 2>&1 && [[ -n "${ARENA_GCS_SYNC:-}" ]]; then
   gcloud storage rsync -r "$LOG_ROOT" "${GCS_BUCKET}/archives"
   gcloud storage rsync -r "$COLD_DIR" "${GCS_BUCKET}/agents"
   gcloud storage rsync -r "$BACKUP_DIR" "${GCS_BUCKET}/db-backups"
+  # Verify today's backup actually reached GCS: Python's `os.walk` inside `gcloud storage rsync`
+  # silently ignores macOS TCC `EPERM` on `/Volumes/Archive` and exits 0 after uploading nothing.
+  if [[ -n "${OUT_ZST:-}" && -f "$OUT_ZST" ]]; then
+    BACKUP_NAME="$(basename "$OUT_ZST")"
+    if ! gcloud storage ls "${GCS_BUCKET}/db-backups/${BACKUP_NAME}" >/dev/null 2>&1; then
+      echo "ERROR: GCS sync did not upload ${BACKUP_NAME} (check macOS Full Disk Access for gcloud's Python binary)" >&2
+      exit 1
+    fi
+  fi
 fi

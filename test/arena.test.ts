@@ -4731,6 +4731,16 @@ describe('arena infrastructure', () => {
       expect(mvIdx).toBeGreaterThan(cpIdx);
     });
 
+    test('archive.sh verifies today backup reached GCS after gcloud storage rsync', () => {
+      const script = fs.readFileSync(root('arena', 'scripts', 'archive.sh'), 'utf8');
+      const rsyncIdx = script.search(/gcloud storage rsync -r "\$BACKUP_DIR"/);
+      const lsIdx = script.search(
+        /gcloud storage ls ".*GCS_BUCKET.*\/db-backups\/.*BACKUP_NAME.*"/
+      );
+      expect(rsyncIdx).toBeGreaterThan(0);
+      expect(lsIdx).toBeGreaterThan(rsyncIdx);
+    });
+
     test('TournamentCoordinator aborts GCP smoke test when baseline faults', async () => {
       const reported: serverArena.SubmissionStatusPayload[] = [];
       const fakeClient = {
