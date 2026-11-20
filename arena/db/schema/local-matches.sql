@@ -65,7 +65,14 @@ CREATE TABLE IF NOT EXISTS local_matches (
   -- Unix timestamps (seconds) for match start, Game 1 checkpoint, and match completion.
   started_at INTEGER NOT NULL,
   g1_completed_at INTEGER,
-  completed_at INTEGER
+  completed_at INTEGER,
+  -- `@pkmn/sim` version pinned to this match's ladder (e.g. '0.11.0').
+  version TEXT NOT NULL DEFAULT '0.11.0',
+  -- Game 1 initialization (`/ready` handshake) and Team Preview durations in milliseconds.
+  g1_p1_init_millis INTEGER,
+  g1_p2_init_millis INTEGER,
+  g1_p1_team_preview_millis INTEGER,
+  g1_p2_team_preview_millis INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_local_matches_status

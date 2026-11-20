@@ -1163,6 +1163,55 @@ describe('arena infrastructure', () => {
       }
     });
 
+    test('0001-local-matches-version-telemetry.sql upgrades legacy local_matches', () => {
+      const legacyDir = path.join(tmpDir, 'arena-legacy-schema');
+      fs.mkdirSync(legacyDir, {recursive: true});
+      for (const file of arenaDb.SCHEMA_FILES) {
+        let sql = fs.readFileSync(path.join(arenaDb.SCHEMA_DIR, file), 'utf8');
+        if (file === 'local-matches.sql') {
+          sql = sql.replace(
+            /,\n\s*-- `@pkmn\/sim` version[\s\S]*?g1_p2_team_preview_millis INTEGER\n\);/,
+            '\n);'
+          );
+        }
+        fs.writeFileSync(path.join(legacyDir, file), sql);
+      }
+      const emptyMigDir = path.join(tmpDir, 'arena-empty-mig');
+      fs.mkdirSync(emptyMigDir, {recursive: true});
+
+      const dbFile = path.join(tmpDir, 'arena-legacy.sqlite');
+      const legacyDb = new arenaDb.Database(dbFile, {
+        schemaDir: legacyDir,
+        migrationDir: emptyMigDir,
+        now: 1000,
+      });
+      legacyDb.db.prepare(`
+        INSERT INTO local_matches (
+          id, ladder_id, format, team_mode,
+          p1_version_id, p1_agent_id, p1_slug, p1_name, p1_version, p1_mode, p1_target,
+          p2_version_id, p2_agent_id, p2_slug, p2_name, p2_version, p2_mode, p2_target,
+          seed, p1_team_packed, p2_team_packed, status, started_at
+        ) VALUES (
+          'gen9ou-0000001', 'gen9ou20261109', 'gen9ou', 'harvested',
+          1, 1, 'a', 'A', '1.0.0', 'native', 'a-1',
+          2, 2, 'b', 'B', '1.0.0', 'native', 'b-1',
+          '1,2,3,4', 't1', 't2', 'in-progress', 1000
+        )
+      `).run();
+      legacyDb.close();
+
+      const migrated = new arenaDb.Database(dbFile, {backupBeforeMigrate: false, now: 2000});
+      const fresh = new arenaDb.Database(':memory:', {now: 2000});
+      try {
+        expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
+        const cp = migrated.getMatchCheckpoint('gen9ou-0000001');
+        expect(cp?.version).toBe('0.11.0');
+      } finally {
+        migrated.close();
+        fresh.close();
+      }
+    });
+
     test('computeResidencyMultipliers boosts warm pairs over cold pairs', () => {
       const stateDb = new arenaDb.Database(':memory:');
       try {
@@ -4176,6 +4225,176 @@ describe('arena infrastructure', () => {
         expect(after.consecutiveFaults).toBe(0);
       } finally {
         h.stateDb.close();
+      }
+    });
+
+    test('recoverIncompleteMatches preserves Game 1 init telemetry across restarts', async () => {
+      const h = createMockCoordHarness('recover-telemetry');
+      try {
+        await h.coord.processPendingSubmissions(new Map([['gen9customgame', h.ladderSnap]]));
+        const v30Local = h.stateDb.getLocalAgent(30)!;
+        h.stateDb.upsertLocalAgent({
+          versionId: 25,
+          agentId: 2,
+          slug: 'pokechamp',
+          version: '1.0.0',
+          mode: 'native',
+          target: v30Local.target,
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+
+        h.stateDb.createMatchCheckpoint({
+          id: 'gen9customgame-0000777',
+          ladderId: 'gen9customgame',
+          format: 'gen9customgame',
+          version: '0.11.0',
+          teamMode: 'harvested',
+          seed: '1,2,3,4',
+          p1: {
+            versionId: 30,
+            agentId: 1,
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '3.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_ONE,
+          },
+          p2: {
+            versionId: 25,
+            agentId: 2,
+            slug: 'pokechamp',
+            name: 'PokeChamp',
+            version: '1.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_TWO,
+          },
+          startedAt: 1000,
+        });
+        h.stateDb.checkpointGame1Complete({
+          id: 'gen9customgame-0000777',
+          outcome: 'W',
+          turns: 12,
+          endReason: 'win',
+          p1: {
+            bankSeconds: 140,
+            ram: 210,
+            initMillis: 345,
+            teamPreviewMillis: 812,
+            turnMillis: 95,
+          },
+          p2: {
+            bankSeconds: 138,
+            ram: 190,
+            initMillis: 456,
+            teamPreviewMillis: 923,
+            turnMillis: 110,
+          },
+        });
+
+        const rec = await h.coord.recoverIncompleteMatches();
+        expect(rec).toEqual({aborted: [], resumed: ['gen9customgame-0000777']});
+        expect(h.completedMatches).toHaveLength(1);
+        expect(h.completedMatches[0].match.p1Game1InitMillis).toBe(345);
+        expect(h.completedMatches[0].match.p1Game1TeamPreviewMillis).toBe(812);
+        expect(h.completedMatches[0].match.p2Game1InitMillis).toBe(456);
+        expect(h.completedMatches[0].match.p2Game1TeamPreviewMillis).toBe(923);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+    test('recoverIncompleteMatches resumes Game 2 on persisted custom sim version', async () => {
+      const customVer = '0.99.3-resume';
+      const customSimDir = root('sim', customVer);
+      const simPkgDir = path.join(customSimDir, 'node_modules', '@pkmn', 'sim');
+      fs.mkdirSync(simPkgDir, {recursive: true});
+      fs.writeFileSync(path.join(customSimDir, 'package.json'), JSON.stringify({name: 'sim-res'}));
+      fs.writeFileSync(
+        path.join(simPkgDir, 'package.json'),
+        JSON.stringify({name: '@pkmn/sim', version: customVer, main: 'index.js'})
+      );
+      const rootSimEntry = JSON.stringify(root('node_modules', '@pkmn', 'sim'));
+      fs.writeFileSync(
+        path.join(simPkgDir, 'index.js'),
+        [
+          `const realSim = require(${rootSimEntry});`,
+          "realSim.Dex.formats.extend([{name: '[Gen 9] Resume Custom', mod: 'gen9', " +
+            "ruleset: ['Cancel Mod']}]);",
+          'module.exports = realSim;',
+        ].join('\n')
+      );
+
+      const h = createMockCoordHarness('recover-version');
+      try {
+        await h.coord.processPendingSubmissions(new Map([['gen9customgame', h.ladderSnap]]));
+        const v30Local = h.stateDb.getLocalAgent(30)!;
+        h.stateDb.upsertLocalAgent({
+          versionId: 25,
+          agentId: 2,
+          slug: 'pokechamp',
+          version: '1.0.0',
+          mode: 'native',
+          target: v30Local.target,
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+
+        h.stateDb.createMatchCheckpoint({
+          id: 'gen9resumecustom-0000001',
+          ladderId: 'gen9resumecustom20261109',
+          format: 'gen9resumecustom',
+          version: customVer,
+          teamMode: 'harvested',
+          seed: '1,2,3,4',
+          p1: {
+            versionId: 30,
+            agentId: 1,
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '3.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_ONE,
+          },
+          p2: {
+            versionId: 25,
+            agentId: 2,
+            slug: 'pokechamp',
+            name: 'PokeChamp',
+            version: '1.0.0',
+            mode: 'native',
+            target: v30Local.target,
+            teamPacked: TEAM_TWO,
+          },
+          startedAt: 1000,
+        });
+        h.stateDb.checkpointGame1Complete({
+          id: 'gen9resumecustom-0000001',
+          outcome: 'W',
+          turns: 2,
+          endReason: 'win',
+          p1: {bankSeconds: 140, ram: 200, turnMillis: 50},
+          p2: {bankSeconds: 140, ram: 200, turnMillis: 50},
+        });
+
+        // Fresh Coordinator with empty versionByLadderId must resume Game 2 using cp.version.
+        const freshCoord = new coordinator.Coordinator({
+          client: h.coord.client,
+          stateDb: h.stateDb,
+          rootDir: path.dirname(h.dirs.agents),
+          devMode: true,
+          maxTurns: 2,
+        });
+        const rec = await freshCoord.recoverIncompleteMatches();
+        expect(rec).toEqual({aborted: [], resumed: ['gen9resumecustom-0000001']});
+        expect(h.completedMatches).toHaveLength(1);
+      } finally {
+        h.stateDb.close();
+        await sim.closeAllWorkers();
+        fs.rmSync(customSimDir, {recursive: true, force: true});
       }
     });
   });

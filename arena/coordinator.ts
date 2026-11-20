@@ -1281,6 +1281,7 @@ export class Coordinator {
       id: cp.id,
       ladderId: cp.ladderId,
       format: cp.format,
+      version: cp.version,
       teamMode: cp.teamMode,
       seed: parsePrngSeed(cp.seed),
       startedAt: cp.startedAt || Math.floor(Date.now() / 1000),
@@ -1313,11 +1314,15 @@ export class Coordinator {
       p1: {
         bankSeconds: g1.p1.bankSeconds,
         peakRam: g1.p1.ram,
+        initMillis: g1.p1.initMillis,
+        teamPreviewMillis: g1.p1.teamPreviewMillis,
         meanTurnMillis: g1.p1.turnMillis,
       },
       p2: {
         bankSeconds: g1.p2.bankSeconds,
         peakRam: g1.p2.ram,
+        initMillis: g1.p2.initMillis,
+        teamPreviewMillis: g1.p2.teamPreviewMillis,
         meanTurnMillis: g1.p2.turnMillis,
       },
     });
@@ -1476,6 +1481,7 @@ export class Coordinator {
       id: matchId,
       ladderId: ladder.id,
       format: ladder.format,
+      version: ladder.version,
       teamMode: ladder.team,
       seed: seedStr,
       p1: {
@@ -1614,11 +1620,15 @@ export class Coordinator {
         p1: {
           bankSeconds: g1Res.p1.bankSeconds,
           ram: g1Res.p1.peakRam,
+          initMillis: g1Res.p1.initMillis,
+          teamPreviewMillis: g1Res.p1.teamPreviewMillis,
           turnMillis: g1Res.p1.meanTurnMillis,
         },
         p2: {
           bankSeconds: g1Res.p2.bankSeconds,
           ram: g1Res.p2.peakRam,
+          initMillis: g1Res.p2.initMillis,
+          teamPreviewMillis: g1Res.p2.teamPreviewMillis,
           turnMillis: g1Res.p2.meanTurnMillis,
         },
       });

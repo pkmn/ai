@@ -1,5 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {SIM_VERSION} from '../../db/ladders';
+
 import {ExecutionMode} from './local-agents';
 
 export type CheckpointStatus = 'in-progress' | 'g1-complete' | 'complete' | 'aborted';
@@ -21,6 +23,8 @@ export interface CheckpointPlayer {
 export interface CheckpointGameStats {
   bankSeconds: number;
   ram: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   turnMillis: number;
 }
 
@@ -37,6 +41,7 @@ export interface LocalMatchCheckpoint {
   id: string;
   ladderId: string;
   format: string;
+  version: string;
   teamMode: TeamMode;
   seed: string;
   p1: CheckpointPlayer;
@@ -51,6 +56,7 @@ export interface CreateMatchCheckpointInput {
   id: string;
   ladderId: string;
   format: string;
+  version?: string;
   teamMode: TeamMode;
   seed: string;
   p1: CheckpointPlayer;
@@ -105,6 +111,11 @@ interface RawLocalMatchRow {
   started_at: number;
   g1_completed_at: number | null;
   completed_at: number | null;
+  version: string;
+  g1_p1_init_millis: number | null;
+  g1_p2_init_millis: number | null;
+  g1_p1_team_preview_millis: number | null;
+  g1_p2_team_preview_millis: number | null;
 }
 
 function mapLocalMatchRow(raw: RawLocalMatchRow): LocalMatchCheckpoint {
@@ -113,6 +124,7 @@ function mapLocalMatchRow(raw: RawLocalMatchRow): LocalMatchCheckpoint {
     id: raw.id,
     ladderId: raw.ladder_id,
     format: raw.format,
+    version: raw.version,
     teamMode: raw.team_mode,
     seed: raw.seed,
     p1: {
@@ -147,11 +159,15 @@ function mapLocalMatchRow(raw: RawLocalMatchRow): LocalMatchCheckpoint {
           p1: {
             bankSeconds: raw.g1_p1_bank_seconds!,
             ram: raw.g1_p1_ram!,
+            initMillis: raw.g1_p1_init_millis ?? undefined,
+            teamPreviewMillis: raw.g1_p1_team_preview_millis ?? undefined,
             turnMillis: raw.g1_p1_turn_millis!,
           },
           p2: {
             bankSeconds: raw.g1_p2_bank_seconds!,
             ram: raw.g1_p2_ram!,
+            initMillis: raw.g1_p2_init_millis ?? undefined,
+            teamPreviewMillis: raw.g1_p2_team_preview_millis ?? undefined,
             turnMillis: raw.g1_p2_turn_millis!,
           },
           completedAt: raw.g1_completed_at ?? undefined,
@@ -167,16 +183,19 @@ export function createMatchCheckpoint(db: DatabaseSync, input: CreateMatchCheckp
   const startedAt = input.startedAt ?? Math.floor(Date.now() / 1000);
   db.prepare(`
     INSERT INTO local_matches (
-      id, ladder_id, format, team_mode,
+      id, ladder_id, format, version, team_mode,
       p1_version_id, p1_agent_id, p1_slug, p1_name, p1_version, p1_mode, p1_target,
       p2_version_id, p2_agent_id, p2_slug, p2_name, p2_version, p2_mode, p2_target,
       seed, p1_team_packed, p2_team_packed, p1_team_label, p2_team_label,
       status, started_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in-progress', ?)
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in-progress', ?
+    )
   `).run(
     input.id,
     input.ladderId,
     input.format,
+    input.version ?? SIM_VERSION,
     input.teamMode,
     input.p1.versionId,
     input.p1.agentId,
@@ -213,6 +232,10 @@ export function checkpointGame1Complete(db: DatabaseSync, input: CompleteGame1In
         g1_p2_bank_seconds = ?,
         g1_p1_ram = ?,
         g1_p2_ram = ?,
+        g1_p1_init_millis = ?,
+        g1_p2_init_millis = ?,
+        g1_p1_team_preview_millis = ?,
+        g1_p2_team_preview_millis = ?,
         g1_p1_turn_millis = ?,
         g1_p2_turn_millis = ?,
         g1_completed_at = ?
@@ -225,6 +248,10 @@ export function checkpointGame1Complete(db: DatabaseSync, input: CompleteGame1In
     input.p2.bankSeconds,
     input.p1.ram,
     input.p2.ram,
+    input.p1.initMillis !== undefined ? Math.round(input.p1.initMillis) : null,
+    input.p2.initMillis !== undefined ? Math.round(input.p2.initMillis) : null,
+    input.p1.teamPreviewMillis !== undefined ? Math.round(input.p1.teamPreviewMillis) : null,
+    input.p2.teamPreviewMillis !== undefined ? Math.round(input.p2.teamPreviewMillis) : null,
     input.p1.turnMillis,
     input.p2.turnMillis,
     completedAt,
