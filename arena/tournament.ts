@@ -93,23 +93,12 @@ export interface SeriesGameResult {
   p2: GamePlayerStats;
 }
 
-export interface GameOptions {
-  format: string;
-  version?: string;
-  bestOf?: number;
-  seed: PRNGSeed;
-  p1Spec: AgentSpec;
-  p2Spec: AgentSpec;
-  p1TeamPacked?: string;
-  p2TeamPacked?: string;
-  sendUtm?: boolean;
-  maxTurns?: number;
-  smokeStopAfterTurn?: number;
-  startingBankSeconds?: number;
-  graceSeconds?: number;
-  readyGraceSeconds?: number;
-  maxTurnSeconds?: number;
-  maxFirstTurnSeconds?: number;
+export interface GamePlayerOptions {
+  spec: AgentSpec;
+  teamPacked?: string;
+}
+
+export interface GameCallbacks {
   onGameStart?: (info: {
     game: number;
     bestOf: number;
@@ -117,6 +106,20 @@ export interface GameOptions {
   }) => void | Promise<void>;
   onSpectatorChunk?: (chunk: string, state: TurnBroadcastInfo) => void;
   onClockChange?: (state: TurnBroadcastInfo) => void;
+}
+
+export interface GameOptions {
+  format: string;
+  version?: string;
+  bestOf?: number;
+  seed: PRNGSeed;
+  p1: GamePlayerOptions;
+  p2: GamePlayerOptions;
+  sendUtm?: boolean;
+  maxTurns?: number;
+  smokeStopAfterTurn?: number;
+  timers?: arbiter.GameTimerOptions;
+  callbacks?: GameCallbacks;
 }
 
 export interface GameResult {
@@ -136,29 +139,32 @@ interface RemoteTournamentPlayer {
   slot: PlayerSlot;
   spec: AgentSpec;
   proc: ChildProcessWithoutNullStreams;
-  usesRelay: boolean;
-  reqSeq: number;
-  lineQueue: string[];
-  lineResolver: ((line: string | undefined) => void) | undefined;
-  localTurnMillisQueue: number[];
-  turnMillisWaiter: (() => void) | undefined;
-  spotPreempted: boolean;
-  sshDisconnected: boolean;
-  launchError: string | undefined;
-  bankMillis: number;
-  turnRemainingMillis: number | undefined;
-  initMillis: number;
-  totalTeamPreviewMillis: number;
-  teamPreviewCount: number;
-  totalTurnMillis: number;
-  decisionsCount: number;
-  peakRam: number;
-  hasTakenFirstDecision: boolean;
-  retryingInvalidChoice: boolean;
-  invalidStrikes: number;
-  lastRequestJson: string | undefined;
-  thinking: boolean;
-  exited: boolean;
+  io: {
+    lineQueue: string[];
+    lineResolver: ((line: string | undefined) => void) | undefined;
+  };
+  relay: {
+    usesRelay: boolean;
+    reqSeq: number;
+    localTurnMillisQueue: number[];
+    turnMillisWaiter: (() => void) | undefined;
+  };
+  turn: arbiter.PlayerTurnState;
+  telemetry: {
+    initMillis: number;
+    totalTeamPreviewMillis: number;
+    teamPreviewCount: number;
+    totalTurnMillis: number;
+    decisionsCount: number;
+    peakRam: number;
+  };
+  state: {
+    spotPreempted: boolean;
+    sshDisconnected: boolean;
+    launchError: string | undefined;
+    thinking: boolean;
+    exited: boolean;
+  };
 }
 
 const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION, rewriteBlindPlayerNames} =
@@ -288,12 +294,7 @@ export class ConcurrentGame {
   private readonly timerOverrides: arbiter.TimerOverrides;
   private timers: arbiter.ResolvedClockTimers;
   private readonly readyGraceMillis: number;
-  private readonly onGameStart?: GameOptions['onGameStart'];
-  private readonly onSpectatorChunk?: (
-    chunk: string,
-    state: TurnBroadcastInfo
-  ) => void;
-  private readonly onClockChange?: (state: TurnBroadcastInfo) => void;
+  private readonly callbacks?: GameCallbacks;
 
   private battle: sim.BattleHandle | undefined = undefined;
 
@@ -316,28 +317,26 @@ export class ConcurrentGame {
       ? 1
       : (options.bestOf ?? getTournamentBestOf(options.format));
     this.seed = options.seed;
-    this.p1Spec = options.p1Spec;
-    this.p2Spec = options.p2Spec;
-    this.p1TeamPacked = options.p1TeamPacked;
-    this.p2TeamPacked = options.p2TeamPacked;
+    this.p1Spec = options.p1.spec;
+    this.p2Spec = options.p2.spec;
+    this.p1TeamPacked = options.p1.teamPacked;
+    this.p2TeamPacked = options.p2.teamPacked;
     this.sendUtm = options.sendUtm;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.timerOverrides = {
-      startingBankSeconds: options.startingBankSeconds,
-      graceSeconds: options.graceSeconds,
-      maxTurnSeconds: options.maxTurnSeconds,
-      maxFirstTurnSeconds: options.maxFirstTurnSeconds,
+      startingBankSeconds: options.timers?.startingBankSeconds,
+      graceSeconds: options.timers?.graceSeconds,
+      maxTurnSeconds: options.timers?.maxTurnSeconds,
+      maxFirstTurnSeconds: options.timers?.maxFirstTurnSeconds,
     };
     this.timers = arbiter.resolveClockTimers(
       arena.timerSettingsForFormat(options.format),
       this.timerOverrides
     );
     this.readyGraceMillis =
-      (options.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
-    this.onGameStart = options.onGameStart;
-    this.onSpectatorChunk = options.onSpectatorChunk;
-    this.onClockChange = options.onClockChange;
+      (options.timers?.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
+    this.callbacks = options.callbacks;
   }
 
   private getFullLog(): string {
@@ -362,7 +361,7 @@ export class ConcurrentGame {
       this.p1Spec.displayName,
       this.p2Spec.displayName
     );
-    this.onSpectatorChunk?.(publicChunk, this.buildBroadcastState());
+    this.callbacks?.onSpectatorChunk?.(publicChunk, this.buildBroadcastState());
   }
 
   private buildSlotBroadcast(
@@ -370,11 +369,11 @@ export class ConcurrentGame {
     pokemon: unknown[] | undefined
   ): TurnSlotBroadcast {
     const bankMillis = player
-      ? Math.min(player.bankMillis, this.timers.startingBankMillis)
+      ? Math.min(player.turn.bankMillis, this.timers.startingBankMillis)
       : this.timers.startingBankMillis;
     return {
       bankSeconds: Math.max(0, Math.round(bankMillis / 1000)),
-      thinking: Boolean(player?.thinking),
+      thinking: Boolean(player?.state.thinking),
       ...(pokemon !== undefined ? {pokemon} : {}),
     };
   }
@@ -406,44 +405,55 @@ export class ConcurrentGame {
       slot,
       spec,
       proc,
-      usesRelay,
-      reqSeq: 0,
-      lineQueue: [],
-      lineResolver: undefined,
-      localTurnMillisQueue: [],
-      turnMillisWaiter: undefined,
-      spotPreempted: false,
-      sshDisconnected: false,
-      launchError: undefined,
-      bankMillis: this.timers.startingBankMillis + this.timers.graceMillis,
-      turnRemainingMillis: undefined,
-      initMillis: 0,
-      totalTeamPreviewMillis: 0,
-      teamPreviewCount: 0,
-      totalTurnMillis: 0,
-      decisionsCount: 0,
-      peakRam: 1,
-      hasTakenFirstDecision: false,
-      retryingInvalidChoice: false,
-      invalidStrikes: 0,
-      lastRequestJson: undefined,
-      thinking: false,
-      exited: false,
+      io: {
+        lineQueue: [],
+        lineResolver: undefined,
+      },
+      relay: {
+        usesRelay,
+        reqSeq: 0,
+        localTurnMillisQueue: [],
+        turnMillisWaiter: undefined,
+      },
+      turn: {
+        slot,
+        bankMillis: this.timers.startingBankMillis + this.timers.graceMillis,
+        turnRemainingMillis: undefined,
+        hasTakenFirstDecision: false,
+        retryingInvalidChoice: false,
+        invalidStrikes: 0,
+        lastRequestJson: undefined,
+      },
+      telemetry: {
+        initMillis: 0,
+        totalTeamPreviewMillis: 0,
+        teamPreviewCount: 0,
+        totalTurnMillis: 0,
+        decisionsCount: 0,
+        peakRam: 1,
+      },
+      state: {
+        spotPreempted: false,
+        sshDisconnected: false,
+        launchError: undefined,
+        thinking: false,
+        exited: false,
+      },
     };
 
     const onDisconnect = (code?: number | null) => {
-      player.exited = true;
+      player.state.exited = true;
       if (code === 255) {
-        player.sshDisconnected = true;
+        player.state.sshDisconnected = true;
       }
-      if (player.turnMillisWaiter) {
-        const w = player.turnMillisWaiter;
-        player.turnMillisWaiter = undefined;
+      if (player.relay.turnMillisWaiter) {
+        const w = player.relay.turnMillisWaiter;
+        player.relay.turnMillisWaiter = undefined;
         w();
       }
-      if (player.lineResolver) {
-        const resolve = player.lineResolver;
-        player.lineResolver = undefined;
+      if (player.io.lineResolver) {
+        const resolve = player.io.lineResolver;
+        player.io.lineResolver = undefined;
         resolve(undefined);
       }
     };
@@ -464,12 +474,12 @@ export class ConcurrentGame {
           onDisconnect(1);
           return;
         }
-        if (player.lineResolver) {
-          const resolve = player.lineResolver;
-          player.lineResolver = undefined;
+        if (player.io.lineResolver) {
+          const resolve = player.io.lineResolver;
+          player.io.lineResolver = undefined;
           resolve(line);
-        } else if (player.lineQueue.length < MAX_LINE_QUEUE) {
-          player.lineQueue.push(line);
+        } else if (player.io.lineQueue.length < MAX_LINE_QUEUE) {
+          player.io.lineQueue.push(line);
         }
         nl = stdoutBuf.indexOf('\n');
       }
@@ -487,29 +497,29 @@ export class ConcurrentGame {
         const rawVal = errLine.slice('ARENA_TURN_MS='.length).trim();
         const [millisStr, seqStr] = rawVal.split('\t');
         const millis = Number(millisStr);
-        const seq = seqStr !== undefined ? Number(seqStr) : player.reqSeq;
+        const seq = seqStr !== undefined ? Number(seqStr) : player.relay.reqSeq;
         if (
           Number.isFinite(millis) &&
           millis >= 0 &&
-          seq === player.reqSeq &&
-          player.localTurnMillisQueue.length < MAX_LINE_QUEUE
+          seq === player.relay.reqSeq &&
+          player.relay.localTurnMillisQueue.length < MAX_LINE_QUEUE
         ) {
-          player.localTurnMillisQueue.push(millis);
-          if (player.turnMillisWaiter) {
-            const w = player.turnMillisWaiter;
-            player.turnMillisWaiter = undefined;
+          player.relay.localTurnMillisQueue.push(millis);
+          if (player.relay.turnMillisWaiter) {
+            const w = player.relay.turnMillisWaiter;
+            player.relay.turnMillisWaiter = undefined;
             w();
           }
         }
       } else if (errLine.startsWith('ARENA_PEAK_RAM=')) {
         const mib = Number(errLine.slice('ARENA_PEAK_RAM='.length).trim());
         if (Number.isFinite(mib) && mib >= 1) {
-          player.peakRam = Math.max(player.peakRam, Math.round(mib));
+          player.telemetry.peakRam = Math.max(player.telemetry.peakRam, Math.round(mib));
         }
       } else if (errLine.includes('ARENA_SPOT_PREEMPTED')) {
-        player.spotPreempted = true;
+        player.state.spotPreempted = true;
       } else if (errLine.startsWith('TOURNEY_ERROR:')) {
-        player.launchError = errLine.trim();
+        player.state.launchError = errLine.trim();
       }
     };
 
@@ -557,24 +567,24 @@ export class ConcurrentGame {
     line: string | undefined,
     wallMillis: number
   ): Promise<number> {
-    if (line === undefined || player.reqSeq === 0) return wallMillis;
-    if (player.localTurnMillisQueue.length > 0) {
-      return player.localTurnMillisQueue.shift()!;
+    if (line === undefined || player.relay.reqSeq === 0) return wallMillis;
+    if (player.relay.localTurnMillisQueue.length > 0) {
+      return player.relay.localTurnMillisQueue.shift()!;
     }
-    if (player.usesRelay && !player.exited) {
+    if (player.relay.usesRelay && !player.state.exited) {
       await new Promise<void>(resolve => {
         const t = setTimeout(() => {
-          if (player.turnMillisWaiter === wake) player.turnMillisWaiter = undefined;
+          if (player.relay.turnMillisWaiter === wake) player.relay.turnMillisWaiter = undefined;
           resolve();
         }, 25);
         const wake = () => {
           clearTimeout(t);
           resolve();
         };
-        player.turnMillisWaiter = wake;
+        player.relay.turnMillisWaiter = wake;
       });
-      if (player.localTurnMillisQueue.length > 0) {
-        return player.localTurnMillisQueue.shift()!;
+      if (player.relay.localTurnMillisQueue.length > 0) {
+        return player.relay.localTurnMillisQueue.shift()!;
       }
     }
     return wallMillis;
@@ -586,13 +596,13 @@ export class ConcurrentGame {
   ): Promise<{line: string | undefined; elapsedMillis: number; timedOut: boolean}> {
     const startNs = process.hrtime.bigint();
 
-    if (player.lineQueue.length > 0) {
-      const line = player.lineQueue.shift()!;
+    if (player.io.lineQueue.length > 0) {
+      const line = player.io.lineQueue.shift()!;
       const wallMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
       const elapsedMillis = await this.takeLocalTurnMillis(player, line, wallMillis);
       return {line, elapsedMillis, timedOut: false};
     }
-    if (player.exited) {
+    if (player.state.exited) {
       return {line: undefined, elapsedMillis: 0, timedOut: false};
     }
 
@@ -603,11 +613,11 @@ export class ConcurrentGame {
     }>(resolve => {
       // Allow +1500 ms network slack on the arbiter timer so local VM clock is authoritative
       const timer = setTimeout(() => {
-        player.lineResolver = undefined;
+        player.io.lineResolver = undefined;
         resolve({line: undefined, wallMillis: budgetMillis, timedOut: true});
       }, Math.max(1, Math.ceil(budgetMillis + 1500)));
 
-      player.lineResolver = line => {
+      player.io.lineResolver = line => {
         clearTimeout(timer);
         const wallMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
         resolve({line, wallMillis, timedOut: false});
@@ -641,7 +651,7 @@ export class ConcurrentGame {
       const {line, timedOut} = await this.readLineWithTimeout(player, remaining);
       const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
       remaining = this.readyGraceMillis - elapsedMillis;
-      if (player.spotPreempted || player.sshDisconnected) {
+      if (player.state.spotPreempted || player.state.sshDisconnected) {
         return {ok: false, reason: 'spot-preemption'};
       }
       if (timedOut || remaining <= 0) {
@@ -655,7 +665,7 @@ export class ConcurrentGame {
         return {ok: false, reason: 'crash'};
       }
       if (parseAgentStdoutLine(line)?.kind === 'ready') {
-        player.initMillis = Math.max(1, Math.ceil(elapsedMillis));
+        player.telemetry.initMillis = Math.max(1, Math.ceil(elapsedMillis));
         return {ok: true};
       }
     }
@@ -674,7 +684,7 @@ export class ConcurrentGame {
       const {line, timedOut} = await this.readLineWithTimeout(player, remaining);
       const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
       remaining = this.readyGraceMillis - elapsedMillis;
-      if (player.spotPreempted || player.sshDisconnected) {
+      if (player.state.spotPreempted || player.state.sshDisconnected) {
         return {ok: false, reason: 'spot-preemption'};
       }
       if (timedOut || remaining <= 0) {
@@ -693,7 +703,7 @@ export class ConcurrentGame {
         if (!valid) {
           return {ok: false, reason: 'invalid-choice'};
         }
-        player.initMillis = Math.max(1, Math.ceil(elapsedMillis));
+        player.telemetry.initMillis = Math.max(1, Math.ceil(elapsedMillis));
         return {ok: true, team: valid};
       }
     }
@@ -718,7 +728,7 @@ export class ConcurrentGame {
     // Pre-assigned teams come from `pkmn.ai` after server-side validation (`server/teams.ts` /
     // `server/sim.ts`); only untrusted `/utm` agent stdout above runs `validatePackedTeam`.
     const team = assignedTeam.trim();
-    if (this.sendUtm && !player.exited && player.proc.stdin.writable) {
+    if (this.sendUtm && !player.state.exited && player.proc.stdin.writable) {
       player.proc.stdin.write(`|utm|${team}\n`);
     }
     return {ok: true, team};
@@ -726,9 +736,9 @@ export class ConcurrentGame {
 
   private wakePendingLineResolvers() {
     for (const p of [this.p1, this.p2]) {
-      if (p?.lineResolver) {
-        const resolve = p.lineResolver;
-        p.lineResolver = undefined;
+      if (p?.io.lineResolver) {
+        const resolve = p.io.lineResolver;
+        p.io.lineResolver = undefined;
         resolve(undefined);
       }
     }
@@ -760,7 +770,7 @@ export class ConcurrentGame {
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
     if (this.ended) return;
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
-    const wasRetry = player.retryingInvalidChoice;
+    const wasRetry = player.turn.retryingInvalidChoice;
     if (!wasRetry) {
       const wave = this.battle?.getWaveInfo() ?? {waveId: 0, activeSides: 1};
       if (wave.waveId === 0 || wave.waveId !== this.lastWaveId) {
@@ -771,7 +781,7 @@ export class ConcurrentGame {
     }
 
     const {totalBudgetMillis, inactiveLine} = arbiter.beginTurnClockStep(
-      player,
+      player.turn,
       this.currentTurn,
       this.lastRewardedTurn,
       {
@@ -781,16 +791,16 @@ export class ConcurrentGame {
       }
     );
 
-    if (!player.exited && player.proc.stdin.writable) {
+    if (!player.state.exited && player.proc.stdin.writable) {
       player.proc.stdin.write(inactiveLine);
     }
 
     let remainingBudgetMillis = totalBudgetMillis;
     let totalElapsedMillis = 0;
     let linesReadThisDecision = 0;
-    player.thinking = true;
+    player.state.thinking = true;
     if (wasRetry && !this.ended) {
-      this.onClockChange?.(this.buildBroadcastState());
+      this.callbacks?.onClockChange?.(this.buildBroadcastState());
     }
 
     try {
@@ -801,29 +811,29 @@ export class ConcurrentGame {
         totalElapsedMillis += elapsedMillis;
         remainingBudgetMillis = totalBudgetMillis - totalElapsedMillis;
 
-        if (player.spotPreempted || player.sshDisconnected) {
+        if (player.state.spotPreempted || player.state.sshDisconnected) {
           this.abortForSpotPreemption(player.slot);
           return;
         }
         if (this.ended) return;
         if (timedOut || remainingBudgetMillis <= 0) {
           const chargedMillis = Math.max(0, totalBudgetMillis);
-          player.bankMillis = Math.max(0, player.bankMillis - chargedMillis);
-          player.turnRemainingMillis = 0;
-          if (this.timers.timeoutAutoChoose && player.bankMillis > 0) {
+          player.turn.bankMillis = Math.max(0, player.turn.bankMillis - chargedMillis);
+          player.turn.turnRemainingMillis = 0;
+          if (this.timers.timeoutAutoChoose && player.turn.bankMillis > 0) {
             const decisionElapsedMillis = Math.max(1, Math.round(chargedMillis));
             if (req.teamPreview) {
-              player.totalTeamPreviewMillis += decisionElapsedMillis;
-              player.teamPreviewCount++;
+              player.telemetry.totalTeamPreviewMillis += decisionElapsedMillis;
+              player.telemetry.teamPreviewCount++;
             } else {
-              player.totalTurnMillis += decisionElapsedMillis;
-              player.decisionsCount++;
+              player.telemetry.totalTurnMillis += decisionElapsedMillis;
+              player.telemetry.decisionsCount++;
             }
-            player.thinking = false;
+            player.state.thinking = false;
             await this.battle!.write(`>${player.slot} default`);
             return;
           }
-          player.bankMillis = 0;
+          player.turn.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
           return;
         }
@@ -842,28 +852,28 @@ export class ConcurrentGame {
         if (!parsed || parsed.kind === 'chat' || parsed.kind === 'ready') continue;
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedMillis));
-        player.bankMillis = Math.max(0, player.bankMillis - decisionElapsedMillis);
-        if (player.turnRemainingMillis !== undefined) {
-          player.turnRemainingMillis = Math.max(
+        player.turn.bankMillis = Math.max(0, player.turn.bankMillis - decisionElapsedMillis);
+        if (player.turn.turnRemainingMillis !== undefined) {
+          player.turn.turnRemainingMillis = Math.max(
             0,
-            player.turnRemainingMillis - decisionElapsedMillis
+            player.turn.turnRemainingMillis - decisionElapsedMillis
           );
         }
         if (req.teamPreview) {
-          player.totalTeamPreviewMillis += decisionElapsedMillis;
-          player.teamPreviewCount++;
+          player.telemetry.totalTeamPreviewMillis += decisionElapsedMillis;
+          player.telemetry.teamPreviewCount++;
         } else {
-          player.totalTurnMillis += decisionElapsedMillis;
-          player.decisionsCount++;
+          player.telemetry.totalTurnMillis += decisionElapsedMillis;
+          player.telemetry.decisionsCount++;
         }
-        player.thinking = false;
+        player.state.thinking = false;
 
         const choiceCmd = arbiter.formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battle!.write(`>${player.slot} ${choiceCmd}`);
         return;
       }
     } finally {
-      player.thinking = false;
+      player.state.thinking = false;
     }
   }
 
@@ -876,34 +886,34 @@ export class ConcurrentGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        const inspected = arbiter.inspectPlayerProtocolChunk(chunk, player, this.ended);
+        const inspected = arbiter.inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
         if (inspected.forfeitedInvalidChoice) {
           this.forceLose(player.slot, 'invalid-choice');
         }
         if (inspected.actionableReqJson) {
-          player.reqSeq++;
-          player.lineQueue.length = 0;
-          player.localTurnMillisQueue.length = 0;
+          player.relay.reqSeq++;
+          player.io.lineQueue.length = 0;
+          player.relay.localTurnMillisQueue.length = 0;
         }
-        if (!player.exited && player.proc.stdin.writable) {
+        if (!player.state.exited && player.proc.stdin.writable) {
           player.proc.stdin.write(`${chunk}\n`);
-          if (inspected.resendLastRequest && player.lastRequestJson) {
-            player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
+          if (inspected.resendLastRequest && player.turn.lastRequestJson) {
+            player.proc.stdin.write(`|request|${player.turn.lastRequestJson}\n`);
           }
         }
 
         if (inspected.actionableReqJson && !this.ended) {
           await this.handleDecision(player, inspected.actionableReqJson);
           const other = player.slot === 'p1' ? this.p2 : this.p1;
-          if (!this.ended && other?.thinking) {
+          if (!this.ended && other?.state.thinking) {
             setImmediate(() => {
               if (
                 !this.ended &&
-                !player.thinking &&
-                !player.retryingInvalidChoice &&
-                other.thinking
+                !player.state.thinking &&
+                !player.turn.retryingInvalidChoice &&
+                other.state.thinking
               ) {
-                this.onClockChange?.(this.buildBroadcastState());
+                this.callbacks?.onClockChange?.(this.buildBroadcastState());
               }
             });
           }
@@ -924,19 +934,19 @@ export class ConcurrentGame {
     this.endReason = 'normal';
 
     for (const p of [this.p1, this.p2]) {
-      p.lineQueue.length = 0;
-      p.localTurnMillisQueue.length = 0;
-      p.bankMillis = this.timers.startingBankMillis + this.timers.graceMillis;
-      p.turnRemainingMillis = undefined;
-      p.totalTeamPreviewMillis = 0;
-      p.teamPreviewCount = 0;
-      p.totalTurnMillis = 0;
-      p.decisionsCount = 0;
-      p.hasTakenFirstDecision = false;
-      p.retryingInvalidChoice = false;
-      p.invalidStrikes = 0;
-      p.lastRequestJson = undefined;
-      p.thinking = false;
+      p.io.lineQueue.length = 0;
+      p.relay.localTurnMillisQueue.length = 0;
+      p.turn.bankMillis = this.timers.startingBankMillis + this.timers.graceMillis;
+      p.turn.turnRemainingMillis = undefined;
+      p.telemetry.totalTeamPreviewMillis = 0;
+      p.telemetry.teamPreviewCount = 0;
+      p.telemetry.totalTurnMillis = 0;
+      p.telemetry.decisionsCount = 0;
+      p.turn.hasTakenFirstDecision = false;
+      p.turn.retryingInvalidChoice = false;
+      p.turn.invalidStrikes = 0;
+      p.turn.lastRequestJson = undefined;
+      p.state.thinking = false;
     }
   }
 
@@ -1029,22 +1039,28 @@ export class ConcurrentGame {
   }
 
   private buildSingleBattleStats(player: RemoteTournamentPlayer) {
-    const teamPreviewMillis = player.teamPreviewCount > 0
-      ? Math.max(1, Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount))
+    const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
+      ? Math.max(
+        1,
+        Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
+      )
       : undefined;
     return {
       bankSeconds: Math.max(
         0,
-        Math.round(Math.min(player.bankMillis, this.timers.startingBankMillis) / 1000)
+        Math.round(Math.min(player.turn.bankMillis, this.timers.startingBankMillis) / 1000)
       ),
-      initMillis: player.initMillis,
+      initMillis: player.telemetry.initMillis,
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
-      totalTurnMillis: player.totalTurnMillis,
-      decisionsCount: player.decisionsCount,
-      meanTurnMillis: player.decisionsCount > 0
-        ? Math.max(1, Math.round(player.totalTurnMillis / player.decisionsCount))
+      totalTurnMillis: player.telemetry.totalTurnMillis,
+      decisionsCount: player.telemetry.decisionsCount,
+      meanTurnMillis: player.telemetry.decisionsCount > 0
+        ? Math.max(
+          1,
+          Math.round(player.telemetry.totalTurnMillis / player.telemetry.decisionsCount)
+        )
         : 1,
-      peakRam: player.peakRam,
+      peakRam: player.telemetry.peakRam,
     };
   }
 
@@ -1057,10 +1073,10 @@ export class ConcurrentGame {
     // Let `tourney-relay` observe stdin EOF (100ms deadline), reap its child, and flush
     // `ARENA_PEAK_RAM=<mib>` on stderr before sending SIGTERM to the local transport/process.
     await Promise.all([this.p1, this.p2].map(p => (
-      p.exited
+      p.state.exited
         ? Promise.resolve()
         : new Promise<void>(resolve => {
-          const t = setTimeout(resolve, p.usesRelay ? 250 : 50);
+          const t = setTimeout(resolve, p.relay.usesRelay ? 250 : 50);
           p.proc.once('close', () => {
             clearTimeout(t);
             resolve();
@@ -1068,15 +1084,15 @@ export class ConcurrentGame {
         })
     )));
     for (const p of [this.p1, this.p2]) {
-      if (!p.exited) {
+      if (!p.state.exited) {
         try {
           p.proc.kill('SIGTERM');
         } catch {}
       }
     }
-    if (!this.p1.exited || !this.p2.exited) {
+    if (!this.p1.state.exited || !this.p2.state.exited) {
       await Promise.all([this.p1, this.p2].map(p => (
-        p.exited
+        p.state.exited
           ? Promise.resolve()
           : new Promise<void>(resolve => {
             const t = setTimeout(resolve, 100);
@@ -1133,13 +1149,13 @@ export class ConcurrentGame {
       if (
         (!p1Res.ok && p1Res.reason === 'spot-preemption') ||
         (!p2Res.ok && p2Res.reason === 'spot-preemption') ||
-        this.p1.spotPreempted || this.p1.sshDisconnected ||
-        this.p2.spotPreempted || this.p2.sshDisconnected
+        this.p1.state.spotPreempted || this.p1.state.sshDisconnected ||
+        this.p2.state.spotPreempted || this.p2.state.sshDisconnected
       ) {
         const slot: PlayerSlot =
           (!p1Res.ok && p1Res.reason === 'spot-preemption') ||
-          this.p1.spotPreempted ||
-          this.p1.sshDisconnected
+          this.p1.state.spotPreempted ||
+          this.p1.state.sshDisconnected
             ? 'p1'
             : 'p2';
         return {
@@ -1180,27 +1196,35 @@ export class ConcurrentGame {
           turns: 0,
           endReason,
           omniscientLog: '',
-          p1: {bankSeconds: startingBankSeconds, meanTurnMillis: 1, peakRam: this.p1.peakRam},
-          p2: {bankSeconds: startingBankSeconds, meanTurnMillis: 1, peakRam: this.p2.peakRam},
+          p1: {
+            bankSeconds: startingBankSeconds,
+            meanTurnMillis: 1,
+            peakRam: this.p1.telemetry.peakRam,
+          },
+          p2: {
+            bankSeconds: startingBankSeconds,
+            meanTurnMillis: 1,
+            peakRam: this.p2.telemetry.peakRam,
+          },
         }));
         return {
           winner,
           outcome,
           turns: 0,
           endReason,
-          launchError: this.p1.launchError ?? this.p2.launchError,
+          launchError: this.p1.state.launchError ?? this.p2.state.launchError,
           omniscientLog: '',
           p1: {
             teamPacked: p1Team,
             bankSeconds: startingBankSeconds,
             meanTurnMillis: 1,
-            peakRam: this.p1.peakRam,
+            peakRam: this.p1.telemetry.peakRam,
           },
           p2: {
             teamPacked: p2Team,
             bankSeconds: startingBankSeconds,
             meanTurnMillis: 1,
-            peakRam: this.p2.peakRam,
+            peakRam: this.p2.telemetry.peakRam,
           },
           games,
         };
@@ -1215,31 +1239,31 @@ export class ConcurrentGame {
       let totalP1Millis = 0;
       let totalP2Decisions = 0;
       let totalP2Millis = 0;
-      let p1PeakRam = this.p1.peakRam;
-      let p2PeakRam = this.p2.peakRam;
+      let p1PeakRam = this.p1.telemetry.peakRam;
+      let p2PeakRam = this.p2.telemetry.peakRam;
 
       for (let gameNum = 1; gameNum <= this.bestOf; gameNum++) {
         const gameSeed = deriveGameSeed(this.seed, gameNum);
-        await this.onGameStart?.({
+        await this.callbacks?.onGameStart?.({
           game: gameNum,
           bestOf: this.bestOf,
           summaries: [...summaries],
         });
         const g = await this.playSingleBattle(gameSeed, p1Team, p2Team, gameNum > 1);
         totalTurns += g.turns;
-        p1PeakRam = Math.max(p1PeakRam, g.p1.peakRam, this.p1.peakRam);
-        p2PeakRam = Math.max(p2PeakRam, g.p2.peakRam, this.p2.peakRam);
+        p1PeakRam = Math.max(p1PeakRam, g.p1.peakRam, this.p1.telemetry.peakRam);
+        p2PeakRam = Math.max(p2PeakRam, g.p2.peakRam, this.p2.telemetry.peakRam);
 
         if (g.winner === 'preempted' || !g.outcome) {
           await this.closePlayers();
-          p1PeakRam = Math.max(p1PeakRam, this.p1.peakRam);
-          p2PeakRam = Math.max(p2PeakRam, this.p2.peakRam);
+          p1PeakRam = Math.max(p1PeakRam, this.p1.telemetry.peakRam);
+          p2PeakRam = Math.max(p2PeakRam, this.p2.telemetry.peakRam);
           return {
             winner: 'preempted',
             preemptedSlot: g.preemptedSlot,
             turns: totalTurns,
             endReason: 'spot-preemption',
-            launchError: this.p1.launchError ?? this.p2.launchError,
+            launchError: this.p1.state.launchError ?? this.p2.state.launchError,
             omniscientLog: g.omniscientLog,
             p1: {
               teamPacked: p1Team,
@@ -1297,8 +1321,8 @@ export class ConcurrentGame {
       }
 
       await this.closePlayers();
-      p1PeakRam = Math.max(p1PeakRam, this.p1.peakRam);
-      p2PeakRam = Math.max(p2PeakRam, this.p2.peakRam);
+      p1PeakRam = Math.max(p1PeakRam, this.p1.telemetry.peakRam);
+      p2PeakRam = Math.max(p2PeakRam, this.p2.telemetry.peakRam);
       for (const gameEntry of games) {
         if (gameEntry.p1.peakRam <= 1 && p1PeakRam > 1) gameEntry.p1.peakRam = p1PeakRam;
         if (gameEntry.p2.peakRam <= 1 && p2PeakRam > 1) gameEntry.p2.peakRam = p2PeakRam;
@@ -1328,12 +1352,12 @@ export class ConcurrentGame {
         outcome: matchOutcome,
         turns: totalTurns,
         endReason: matchEndReason,
-        launchError: this.p1.launchError ?? this.p2.launchError,
+        launchError: this.p1.state.launchError ?? this.p2.state.launchError,
         omniscientLog: games[0].omniscientLog,
         p1: {
           teamPacked: p1Team,
           bankSeconds: lastGame.p1.bankSeconds,
-          initMillis: this.p1.initMillis,
+          initMillis: this.p1.telemetry.initMillis,
           ...(lastGame.p1.teamPreviewMillis !== undefined
             ? {teamPreviewMillis: lastGame.p1.teamPreviewMillis}
             : {}),
@@ -1343,7 +1367,7 @@ export class ConcurrentGame {
         p2: {
           teamPacked: p2Team,
           bankSeconds: lastGame.p2.bankSeconds,
-          initMillis: this.p2.initMillis,
+          initMillis: this.p2.telemetry.initMillis,
           ...(lastGame.p2.teamPreviewMillis !== undefined
             ? {teamPreviewMillis: lastGame.p2.teamPreviewMillis}
             : {}),
@@ -1919,15 +1943,15 @@ export class Coordinator {
           format: smokeFormat,
           version: meta?.version,
           seed: '1,2,3,4',
-          p1Spec: candidateSpec,
-          p2Spec: this.baselineSpec,
-          p1TeamPacked,
-          p2TeamPacked,
+          p1: {spec: candidateSpec, teamPacked: p1TeamPacked},
+          p2: {spec: this.baselineSpec, teamPacked: p2TeamPacked},
           sendUtm: meta?.team !== undefined ? meta.team !== 'random' : undefined,
           smokeStopAfterTurn: 1,
-          startingBankSeconds: 60,
-          readyGraceSeconds: arena.READY_GRACE_SECONDS,
-          maxTurnSeconds: 60,
+          timers: {
+            startingBankSeconds: 60,
+            readyGraceSeconds: arena.READY_GRACE_SECONDS,
+            maxTurnSeconds: 60,
+          },
         });
         const res = await smokeGame.run();
         if (
@@ -2242,25 +2266,25 @@ export class Coordinator {
           version: tourney.version,
           bestOf: tourneyBestOf,
           seed: pairSeed,
-          p1Spec,
-          p2Spec,
-          p1TeamPacked: sampled.p1Team,
-          p2TeamPacked: sampled.p2Team,
+          p1: {spec: p1Spec, teamPacked: sampled.p1Team},
+          p2: {spec: p2Spec, teamPacked: sampled.p2Team},
           sendUtm: tourney.team !== undefined ? tourney.team !== 'random' : undefined,
           maxTurns: this.maxTurns,
-          onGameStart: async info => {
-            if (info.game > 1) {
-              await sendTableLoad(info);
-            }
-          },
-          onSpectatorChunk: (chunk, snap) => {
-            if (!chunk) return;
-            const newLines = chunk.split('\n');
-            if (newLines.length === 0) return;
-            sendTableAppend(newLines, snap);
-          },
-          onClockChange: snap => {
-            sendTableAppend([], snap);
+          callbacks: {
+            onGameStart: async info => {
+              if (info.game > 1) {
+                await sendTableLoad(info);
+              }
+            },
+            onSpectatorChunk: (chunk, snap) => {
+              if (!chunk) return;
+              const newLines = chunk.split('\n');
+              if (newLines.length === 0) return;
+              sendTableAppend(newLines, snap);
+            },
+            onClockChange: snap => {
+              sendTableAppend([], snap);
+            },
           },
         });
 

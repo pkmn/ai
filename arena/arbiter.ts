@@ -85,22 +85,25 @@ export function resolveClockTimers(
   };
 }
 
+export interface GamePlayerOptions {
+  spec: AgentLaunchSpec;
+  teamPacked?: string;
+}
+
+export interface GameTimerOptions extends TimerOverrides {
+  readyGraceSeconds?: number;
+}
+
 export interface ArenaGameOptions {
   format: string;
   version?: string;
   seed: PRNGSeed;
-  p1Spec: AgentLaunchSpec;
-  p2Spec: AgentLaunchSpec;
-  p1TeamPacked?: string;
-  p2TeamPacked?: string;
+  p1: GamePlayerOptions;
+  p2: GamePlayerOptions;
   sendUtm?: boolean;
   maxTurns?: number;
   smokeStopAfterTurn?: number;
-  startingBankSeconds?: number;
-  graceSeconds?: number;
-  readyGraceSeconds?: number;
-  maxTurnSeconds?: number;
-  maxFirstTurnSeconds?: number;
+  timers?: GameTimerOptions;
   devMode?: boolean;
   onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 }
@@ -127,29 +130,32 @@ export interface ArenaGameResult {
   p2: PlayerGameResult;
 }
 
+export interface PlayerTurnState extends PlayerClockState, ProtocolStrikeState {}
+
 interface SandboxedPlayer {
   slot: PlayerSlot;
   spec: AgentLaunchSpec;
   proc: ChildProcessWithoutNullStreams;
-  lineQueue: string[];
-  lineResolver: ((line: string | undefined) => void) | undefined;
-  bankMillis: number;
-  turnRemainingMillis: number | undefined;
-  hasTakenFirstDecision: boolean;
-  retryingInvalidChoice: boolean;
-  invalidStrikes: number;
-  pendingRequestJson: string | undefined;
-  lastRequestJson: string | undefined;
-  initMillis: number;
-  teamPreviewCount: number;
-  totalTeamPreviewMillis: number;
-  turnDecisionCount: number;
-  totalTurnDecisionMillis: number;
-  lastDecisionMillis: number;
-  stderrTail: string;
-  exited: boolean;
-  exitCode: number | undefined;
-  cleanedUp: boolean;
+  io: {
+    lineQueue: string[];
+    lineResolver: ((line: string | undefined) => void) | undefined;
+    pendingRequestJson: string | undefined;
+    stderrTail: string;
+  };
+  turn: PlayerTurnState;
+  telemetry: {
+    initMillis: number;
+    teamPreviewCount: number;
+    totalTeamPreviewMillis: number;
+    turnDecisionCount: number;
+    totalTurnDecisionMillis: number;
+    lastDecisionMillis: number;
+  };
+  lifecycle: {
+    exited: boolean;
+    exitCode: number | undefined;
+    cleanedUp: boolean;
+  };
 }
 
 export const MAX_INVALID_STRIKES = 3;
@@ -398,10 +404,8 @@ export class TimeSlicedArenaGame {
   private readonly version: string;
   private format: string;
   private readonly seed: PRNGSeed;
-  private readonly p1Spec: AgentLaunchSpec;
-  private readonly p2Spec: AgentLaunchSpec;
-  private readonly p1TeamPacked?: string;
-  private readonly p2TeamPacked?: string;
+  private readonly p1Opts: GamePlayerOptions;
+  private readonly p2Opts: GamePlayerOptions;
   private sendUtm?: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
@@ -429,25 +433,23 @@ export class TimeSlicedArenaGame {
     this.version = options.version ?? SIM_VERSION;
     this.format = options.format;
     this.seed = options.seed;
-    this.p1Spec = options.p1Spec;
-    this.p2Spec = options.p2Spec;
-    this.p1TeamPacked = options.p1TeamPacked;
-    this.p2TeamPacked = options.p2TeamPacked;
+    this.p1Opts = options.p1;
+    this.p2Opts = options.p2;
     this.sendUtm = options.sendUtm;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.timerOverrides = {
-      startingBankSeconds: options.startingBankSeconds,
-      graceSeconds: options.graceSeconds,
-      maxTurnSeconds: options.maxTurnSeconds,
-      maxFirstTurnSeconds: options.maxFirstTurnSeconds,
+      startingBankSeconds: options.timers?.startingBankSeconds,
+      graceSeconds: options.timers?.graceSeconds,
+      maxTurnSeconds: options.timers?.maxTurnSeconds,
+      maxFirstTurnSeconds: options.timers?.maxFirstTurnSeconds,
     };
     this.timers = resolveClockTimers(
       arena.timerSettingsForFormat(options.format),
       this.timerOverrides
     );
     this.readyGraceMillis =
-      (options.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
+      (options.timers?.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.onTurn = options.onTurn;
   }
@@ -477,35 +479,44 @@ export class TimeSlicedArenaGame {
       slot,
       spec,
       proc,
-      lineQueue: [],
-      lineResolver: undefined,
-      bankMillis: this.timers.startingBankMillis + this.timers.graceMillis,
-      turnRemainingMillis: undefined,
-      hasTakenFirstDecision: false,
-      retryingInvalidChoice: false,
-      invalidStrikes: 0,
-      pendingRequestJson: undefined,
-      lastRequestJson: undefined,
-      initMillis: 0,
-      teamPreviewCount: 0,
-      totalTeamPreviewMillis: 0,
-      turnDecisionCount: 0,
-      totalTurnDecisionMillis: 0,
-      lastDecisionMillis: 0,
-      stderrTail: '',
-      exited: false,
-      exitCode: undefined,
-      cleanedUp: false,
+      io: {
+        lineQueue: [],
+        lineResolver: undefined,
+        pendingRequestJson: undefined,
+        stderrTail: '',
+      },
+      turn: {
+        slot,
+        bankMillis: this.timers.startingBankMillis + this.timers.graceMillis,
+        turnRemainingMillis: undefined,
+        hasTakenFirstDecision: false,
+        retryingInvalidChoice: false,
+        invalidStrikes: 0,
+        lastRequestJson: undefined,
+      },
+      telemetry: {
+        initMillis: 0,
+        teamPreviewCount: 0,
+        totalTeamPreviewMillis: 0,
+        turnDecisionCount: 0,
+        totalTurnDecisionMillis: 0,
+        lastDecisionMillis: 0,
+      },
+      lifecycle: {
+        exited: false,
+        exitCode: undefined,
+        cleanedUp: false,
+      },
     };
 
     const closeWaiter = (code?: number | null) => {
-      player.exited = true;
+      player.lifecycle.exited = true;
       if (code !== undefined && code !== null) {
-        player.exitCode = code;
+        player.lifecycle.exitCode = code;
       }
-      if (player.lineResolver) {
-        const resolve = player.lineResolver;
-        player.lineResolver = undefined;
+      if (player.io.lineResolver) {
+        const resolve = player.io.lineResolver;
+        player.io.lineResolver = undefined;
         resolve(undefined);
       }
     };
@@ -526,12 +537,12 @@ export class TimeSlicedArenaGame {
           closeWaiter(1);
           return;
         }
-        if (player.lineResolver) {
-          const resolve = player.lineResolver;
-          player.lineResolver = undefined;
+        if (player.io.lineResolver) {
+          const resolve = player.io.lineResolver;
+          player.io.lineResolver = undefined;
           resolve(line);
-        } else if (player.lineQueue.length < MAX_LINE_QUEUE) {
-          player.lineQueue.push(line);
+        } else if (player.io.lineQueue.length < MAX_LINE_QUEUE) {
+          player.io.lineQueue.push(line);
         }
         nl = stdoutBuf.indexOf('\n');
       }
@@ -551,8 +562,8 @@ export class TimeSlicedArenaGame {
     // Drain stderr while retaining a bounded diagnostic tail for smoke-test and crash reporting
     proc.stderr.setEncoding('utf8');
     proc.stderr.on('data', (chunk: string) => {
-      const combined = player.stderrTail + chunk;
-      player.stderrTail = combined.length > MAX_STDERR_TAIL_CHARS
+      const combined = player.io.stderrTail + chunk;
+      player.io.stderrTail = combined.length > MAX_STDERR_TAIL_CHARS
         ? combined.slice(-MAX_STDERR_TAIL_CHARS)
         : combined;
     });
@@ -564,7 +575,7 @@ export class TimeSlicedArenaGame {
   }
 
   private pauseSlot(player: SandboxedPlayer) {
-    if (player.exited) return;
+    if (player.lifecycle.exited) return;
     if (this.devMode) {
       if (player.spec.mode === 'container') {
         try {
@@ -586,7 +597,7 @@ export class TimeSlicedArenaGame {
         timeout: 10_000,
       });
     } catch {
-      if (!player.exited) {
+      if (!player.lifecycle.exited) {
         this.cleanupSlot(player);
         if (this.battleStarted) {
           this.forceLose(player.slot, 'crash');
@@ -596,7 +607,7 @@ export class TimeSlicedArenaGame {
   }
 
   private resumeSlot(player: SandboxedPlayer) {
-    if (player.exited) return;
+    if (player.lifecycle.exited) return;
     if (this.devMode) {
       if (player.spec.mode === 'container') {
         try {
@@ -621,9 +632,9 @@ export class TimeSlicedArenaGame {
   }
 
   private cleanupSlot(player: SandboxedPlayer | undefined) {
-    if (!player || player.cleanedUp) return;
+    if (!player || player.lifecycle.cleanedUp) return;
     if (this.devMode) {
-      player.cleanedUp = true;
+      player.lifecycle.cleanedUp = true;
       if (player.spec.mode === 'container') {
         const containerName = `arena-dev-${player.slot}-${process.pid}`;
         try {
@@ -649,12 +660,12 @@ export class TimeSlicedArenaGame {
         stdio: 'ignore',
         timeout: 10_000,
       });
-      player.cleanedUp = true;
+      player.lifecycle.cleanedUp = true;
     } catch {}
   }
 
   private async stopPlayerForRamRead(player: SandboxedPlayer | undefined) {
-    if (!player || player.exited || !player.proc.pid) return;
+    if (!player || player.lifecycle.exited || !player.proc.pid) return;
     try {
       player.proc.stdin.end();
     } catch {}
@@ -700,24 +711,24 @@ export class TimeSlicedArenaGame {
   ): Promise<{line: string | undefined; elapsedMillis: number; timedOut: boolean}> {
     const startNs = process.hrtime.bigint();
 
-    if (player.lineQueue.length > 0) {
-      const line = player.lineQueue.shift()!;
+    if (player.io.lineQueue.length > 0) {
+      const line = player.io.lineQueue.shift()!;
       const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
       return Promise.resolve({line, elapsedMillis, timedOut: false});
     }
-    if (player.exited) {
+    if (player.lifecycle.exited) {
       const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
       return Promise.resolve({line: undefined, elapsedMillis, timedOut: false});
     }
 
     return new Promise(resolve => {
       const timer = setTimeout(() => {
-        player.lineResolver = undefined;
+        player.io.lineResolver = undefined;
         const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
         resolve({line: undefined, elapsedMillis, timedOut: true});
       }, Math.max(1, Math.ceil(budgetMillis)));
 
-      player.lineResolver = line => {
+      player.io.lineResolver = line => {
         clearTimeout(timer);
         const elapsedMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
         resolve({line, elapsedMillis, timedOut: false});
@@ -731,20 +742,20 @@ export class TimeSlicedArenaGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        const inspected = inspectPlayerProtocolChunk(chunk, player, this.ended);
+        const inspected = inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
         if (inspected.actionableReqJson) {
-          player.pendingRequestJson = inspected.actionableReqJson;
+          player.io.pendingRequestJson = inspected.actionableReqJson;
         }
         if (inspected.forfeitedInvalidChoice) {
           this.forceLose(player.slot, 'invalid-choice');
         }
         if (inspected.clearQueue) {
-          player.lineQueue.length = 0;
+          player.io.lineQueue.length = 0;
         }
-        if (!player.exited && player.proc.stdin.writable) {
+        if (!player.lifecycle.exited && player.proc.stdin.writable) {
           player.proc.stdin.write(`${chunk}\n`);
-          if (inspected.resendLastRequest && player.lastRequestJson) {
-            player.proc.stdin.write(`|request|${player.lastRequestJson}\n`);
+          if (inspected.resendLastRequest && player.turn.lastRequestJson) {
+            player.proc.stdin.write(`|request|${player.turn.lastRequestJson}\n`);
           }
         }
       }
@@ -753,9 +764,9 @@ export class TimeSlicedArenaGame {
 
   private wakePendingLineResolvers() {
     for (const p of [this.p1, this.p2]) {
-      if (p?.lineResolver) {
-        const resolve = p.lineResolver;
-        p.lineResolver = undefined;
+      if (p?.io.lineResolver) {
+        const resolve = p.io.lineResolver;
+        p.io.lineResolver = undefined;
         resolve(undefined);
       }
     }
@@ -814,7 +825,7 @@ export class TimeSlicedArenaGame {
         if (line === undefined) {
           this.ended = true;
           this.winner = player.slot === 'p1' ? 'p2' : 'p1';
-          this.endReason = player.exitCode === 137 ? 'oom' : 'crash';
+          this.endReason = player.lifecycle.exitCode === 137 ? 'oom' : 'crash';
           return false;
         }
 
@@ -828,8 +839,8 @@ export class TimeSlicedArenaGame {
 
         const parsed = parseAgentStdoutLine(line);
         if (parsed?.kind === 'ready') {
-          player.initMillis = Math.max(1, Math.ceil(elapsedMillis));
-          player.lastDecisionMillis = player.initMillis;
+          player.telemetry.initMillis = Math.max(1, Math.ceil(elapsedMillis));
+          player.telemetry.lastDecisionMillis = player.telemetry.initMillis;
           this.pauseSlot(player);
           slotPaused = true;
           return true;
@@ -848,17 +859,17 @@ export class TimeSlicedArenaGame {
     p1: SandboxedPlayer,
     p2: SandboxedPlayer
   ): Promise<boolean> {
-    if (!player.pendingRequestJson || this.ended) return false;
+    if (!player.io.pendingRequestJson || this.ended) return false;
 
-    const req = JSON.parse(player.pendingRequestJson) as {
+    const req = JSON.parse(player.io.pendingRequestJson) as {
       teamPreview?: boolean;
       active?: unknown;
       forceSwitch?: unknown;
     };
-    player.pendingRequestJson = undefined;
+    player.io.pendingRequestJson = undefined;
 
     const {totalBudgetMillis, incrementMillis, inactiveLine} = beginTurnClockStep(
-      player,
+      player.turn,
       this.currentTurn,
       this.lastRewardedTurn,
       {
@@ -868,7 +879,7 @@ export class TimeSlicedArenaGame {
       }
     );
 
-    if (!player.exited && player.proc.stdin.writable) {
+    if (!player.lifecycle.exited && player.proc.stdin.writable) {
       player.proc.stdin.write(inactiveLine);
     }
 
@@ -889,7 +900,7 @@ export class TimeSlicedArenaGame {
     let remainingBudgetMillis = totalBudgetMillis;
     let totalElapsedThisDecisionMillis: number;
     let linesReadThisDecision = 0;
-    player.lineQueue.length = 0;
+    player.io.lineQueue.length = 0;
     this.resumeSlot(player);
     let slotPaused = false;
     const decisionStartNs = process.hrtime.bigint();
@@ -905,17 +916,17 @@ export class TimeSlicedArenaGame {
 
         if (timedOut || remainingBudgetMillis <= 0) {
           const chargedMillis = Math.max(0, totalBudgetMillis);
-          player.bankMillis = Math.max(0, player.bankMillis - chargedMillis);
-          player.turnRemainingMillis = 0;
-          if (this.timers.timeoutAutoChoose && player.bankMillis > 0) {
+          player.turn.bankMillis = Math.max(0, player.turn.bankMillis - chargedMillis);
+          player.turn.turnRemainingMillis = 0;
+          if (this.timers.timeoutAutoChoose && player.turn.bankMillis > 0) {
             const elapsedMillis = Math.max(1, Math.round(chargedMillis));
-            player.lastDecisionMillis = elapsedMillis;
+            player.telemetry.lastDecisionMillis = elapsedMillis;
             if (req.teamPreview) {
-              player.teamPreviewCount++;
-              player.totalTeamPreviewMillis += elapsedMillis;
+              player.telemetry.teamPreviewCount++;
+              player.telemetry.totalTeamPreviewMillis += elapsedMillis;
             } else {
-              player.turnDecisionCount++;
-              player.totalTurnDecisionMillis += elapsedMillis;
+              player.telemetry.turnDecisionCount++;
+              player.telemetry.totalTurnDecisionMillis += elapsedMillis;
             }
             this.pauseSlot(player);
             slotPaused = true;
@@ -923,12 +934,12 @@ export class TimeSlicedArenaGame {
             await this.battle!.write(`>${player.slot} default`);
             return true;
           }
-          player.bankMillis = 0;
+          player.turn.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
           return false;
         }
         if (line === undefined) {
-          const reason = player.exitCode === 137 ? 'oom' : 'crash';
+          const reason = player.lifecycle.exitCode === 137 ? 'oom' : 'crash';
           this.forceLose(player.slot, reason);
           return false;
         }
@@ -943,20 +954,20 @@ export class TimeSlicedArenaGame {
         if (!parsed || parsed.kind === 'chat' || parsed.kind === 'ready') continue;
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedThisDecisionMillis));
-        player.bankMillis = Math.max(0, player.bankMillis - decisionElapsedMillis);
-        if (player.turnRemainingMillis !== undefined) {
-          player.turnRemainingMillis = Math.max(
+        player.turn.bankMillis = Math.max(0, player.turn.bankMillis - decisionElapsedMillis);
+        if (player.turn.turnRemainingMillis !== undefined) {
+          player.turn.turnRemainingMillis = Math.max(
             0,
-            player.turnRemainingMillis - decisionElapsedMillis
+            player.turn.turnRemainingMillis - decisionElapsedMillis
           );
         }
-        player.lastDecisionMillis = decisionElapsedMillis;
+        player.telemetry.lastDecisionMillis = decisionElapsedMillis;
         if (req.teamPreview) {
-          player.teamPreviewCount++;
-          player.totalTeamPreviewMillis += decisionElapsedMillis;
+          player.telemetry.teamPreviewCount++;
+          player.telemetry.totalTeamPreviewMillis += decisionElapsedMillis;
         } else {
-          player.turnDecisionCount++;
-          player.totalTurnDecisionMillis += decisionElapsedMillis;
+          player.telemetry.turnDecisionCount++;
+          player.telemetry.totalTurnDecisionMillis += decisionElapsedMillis;
         }
 
         // Freeze the acting slot before writing into `@pkmn/sim` so it cannot compute while the
@@ -987,8 +998,8 @@ export class TimeSlicedArenaGame {
       this.version
     ));
 
-    const p1 = this.spawnPlayer('p1', this.p1Spec);
-    const p2 = this.spawnPlayer('p2', this.p2Spec);
+    const p1 = this.spawnPlayer('p1', this.p1Opts.spec);
+    const p2 = this.spawnPlayer('p2', this.p2Opts.spec);
     this.p1 = p1;
     this.p2 = p2;
 
@@ -1016,11 +1027,11 @@ export class TimeSlicedArenaGame {
       const battle = sim.createBattle(this.version);
       this.battle = battle;
 
-      if (this.sendUtm && this.p1TeamPacked && p1.proc.stdin.writable) {
-        p1.proc.stdin.write(`|utm|${this.p1TeamPacked}\n`);
+      if (this.sendUtm && this.p1Opts.teamPacked && p1.proc.stdin.writable) {
+        p1.proc.stdin.write(`|utm|${this.p1Opts.teamPacked}\n`);
       }
-      if (this.sendUtm && this.p2TeamPacked && p2.proc.stdin.writable) {
-        p2.proc.stdin.write(`|utm|${this.p2TeamPacked}\n`);
+      if (this.sendUtm && this.p2Opts.teamPacked && p2.proc.stdin.writable) {
+        p2.proc.stdin.write(`|utm|${this.p2Opts.teamPacked}\n`);
       }
 
       this.forwardStream(p1, battle.streams.p1);
@@ -1057,8 +1068,8 @@ export class TimeSlicedArenaGame {
       });
 
       const startSpec = JSON.stringify({formatid: this.format, seed: this.seed});
-      const p1PlayerSpec = JSON.stringify({name: 'Agent A', team: this.p1TeamPacked});
-      const p2PlayerSpec = JSON.stringify({name: 'Agent B', team: this.p2TeamPacked});
+      const p1PlayerSpec = JSON.stringify({name: 'Agent A', team: this.p1Opts.teamPacked});
+      const p2PlayerSpec = JSON.stringify({name: 'Agent B', team: this.p2Opts.teamPacked});
 
       this.battleStarted = true;
       await battle.write(`>start ${startSpec}`);
@@ -1067,13 +1078,13 @@ export class TimeSlicedArenaGame {
 
       let idleSpins = 0;
       while (!this.ended) {
-        if (p1.pendingRequestJson || p2.pendingRequestJson) {
+        if (p1.io.pendingRequestJson || p2.io.pendingRequestJson) {
           await Promise.resolve();
-          const p1HasReq = Boolean(p1.pendingRequestJson);
-          const p2HasReq = Boolean(p2.pendingRequestJson);
+          const p1HasReq = Boolean(p1.io.pendingRequestJson);
+          const p2HasReq = Boolean(p2.io.pendingRequestJson);
           if (!p1HasReq && !p2HasReq) continue;
           idleSpins = 0;
-          if (p1HasReq && p2HasReq && p1.exited && p2.exited) {
+          if (p1HasReq && p2HasReq && p1.lifecycle.exited && p2.lifecycle.exited) {
             this.ended = true;
             this.winner = 'tie';
             this.endReason = 'crash';
@@ -1081,8 +1092,8 @@ export class TimeSlicedArenaGame {
             break;
           }
           const isRetryWave =
-            (p1HasReq && p1.retryingInvalidChoice) ||
-            (p2HasReq && p2.retryingInvalidChoice);
+            (p1HasReq && p1.turn.retryingInvalidChoice) ||
+            (p2HasReq && p2.turn.retryingInvalidChoice);
           if (!isRetryWave) {
             const wave = battle.getWaveInfo();
             if (wave.waveId === 0 || wave.waveId !== this.lastWaveId) {
@@ -1098,10 +1109,14 @@ export class TimeSlicedArenaGame {
             : [p2, p1];
           for (const player of ordered) {
             if (this.ended) break;
-            if (player.pendingRequestJson) {
+            if (player.io.pendingRequestJson) {
               await this.stepPlayerDecision(player, p1, p2);
               await Promise.resolve();
-              while (!this.ended && player.pendingRequestJson && player.retryingInvalidChoice) {
+              while (
+                !this.ended &&
+                player.io.pendingRequestJson &&
+                player.turn.retryingInvalidChoice
+              ) {
                 await this.stepPlayerDecision(player, p1, p2);
                 await Promise.resolve();
               }
@@ -1109,15 +1124,18 @@ export class TimeSlicedArenaGame {
           }
         } else {
           idleSpins++;
-          if (idleSpins >= 10 && (p1.exited || p2.exited)) {
-            if (p1.exited && p2.exited) {
+          if (idleSpins >= 10 && (p1.lifecycle.exited || p2.lifecycle.exited)) {
+            if (p1.lifecycle.exited && p2.lifecycle.exited) {
               this.ended = true;
               this.winner = 'tie';
               this.endReason = 'crash';
               await battle.write('>forcetie').catch(() => undefined);
             } else {
-              const exitedPlayer = p1.exited ? p1 : p2;
-              this.forceLose(exitedPlayer.slot, exitedPlayer.exitCode === 137 ? 'oom' : 'crash');
+              const exitedPlayer = p1.lifecycle.exited ? p1 : p2;
+              this.forceLose(
+                exitedPlayer.slot,
+                exitedPlayer.lifecycle.exitCode === 137 ? 'oom' : 'crash'
+              );
             }
             break;
           }
@@ -1162,20 +1180,20 @@ export class TimeSlicedArenaGame {
   private buildTurnSlotInfo(player: SandboxedPlayer, sideIdx: 0 | 1): TurnSlotInfo {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
     const pokemon = this.battle?.getPokemon(slot);
-    const teamPreviewMillis = player.teamPreviewCount > 0
-      ? Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount)
+    const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
+      ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
     return {
       bankSeconds: Math.max(
         0,
-        Math.round(Math.min(player.bankMillis, this.timers.startingBankMillis) / 1000)
+        Math.round(Math.min(player.turn.bankMillis, this.timers.startingBankMillis) / 1000)
       ),
       ram: this.readPeakRam(player),
-      initMillis: Math.round(player.initMillis),
+      initMillis: Math.round(player.telemetry.initMillis),
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
-      lastTurnMillis: Math.round(player.lastDecisionMillis),
-      meanTurnMillis: player.turnDecisionCount > 0
-        ? Math.round(player.totalTurnDecisionMillis / player.turnDecisionCount)
+      lastTurnMillis: Math.round(player.telemetry.lastDecisionMillis),
+      meanTurnMillis: player.telemetry.turnDecisionCount > 0
+        ? Math.round(player.telemetry.totalTurnDecisionMillis / player.telemetry.turnDecisionCount)
         : 0,
       ...(pokemon !== undefined ? {pokemon} : {}),
     };
@@ -1184,24 +1202,24 @@ export class TimeSlicedArenaGame {
   private buildPlayerGameResult(player: SandboxedPlayer, sideIdx: 0 | 1): PlayerGameResult {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
     const pokemon = this.battle?.getPokemon(slot);
-    const teamPreviewMillis = player.teamPreviewCount > 0
-      ? Math.round(player.totalTeamPreviewMillis / player.teamPreviewCount)
+    const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
+      ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
     return {
       bankSeconds: Math.max(
         0,
-        Math.round(Math.min(player.bankMillis, this.timers.startingBankMillis) / 1000)
+        Math.round(Math.min(player.turn.bankMillis, this.timers.startingBankMillis) / 1000)
       ),
       peakRam: this.readPeakRam(player),
-      initMillis: Math.round(player.initMillis),
+      initMillis: Math.round(player.telemetry.initMillis),
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
-      meanTurnMillis: player.turnDecisionCount > 0
-        ? Math.round(player.totalTurnDecisionMillis / player.turnDecisionCount)
+      meanTurnMillis: player.telemetry.turnDecisionCount > 0
+        ? Math.round(player.telemetry.totalTurnDecisionMillis / player.telemetry.turnDecisionCount)
         : 0,
-      lastTurnMillis: Math.round(player.lastDecisionMillis),
+      lastTurnMillis: Math.round(player.telemetry.lastDecisionMillis),
       ...(pokemon !== undefined ? {pokemon} : {}),
-      ...(player.exitCode !== undefined ? {exitCode: player.exitCode} : {}),
-      ...(player.stderrTail ? {stderr: player.stderrTail} : {}),
+      ...(player.lifecycle.exitCode !== undefined ? {exitCode: player.lifecycle.exitCode} : {}),
+      ...(player.io.stderrTail ? {stderr: player.io.stderrTail} : {}),
     };
   }
 }

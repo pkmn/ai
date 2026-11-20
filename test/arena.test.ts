@@ -562,24 +562,28 @@ describe('arena infrastructure', () => {
         format: 'gen9customgame',
         seed: '1,2,3,4',
         smokeStopAfterTurn: 1,
-        p1Spec: {
-          agentId: 'empty-p1',
-          displayName: 'Empty P1',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, emptyLineScript],
+        p1: {
+          spec: {
+            agentId: 'empty-p1',
+            displayName: 'Empty P1',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, emptyLineScript],
+          },
+          teamPacked: TEAM_ONE,
         },
-        p2Spec: {
-          agentId: 'default-p2',
-          displayName: 'Default P2',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, defaultAgentScript],
+        p2: {
+          spec: {
+            agentId: 'default-p2',
+            displayName: 'Default P2',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, defaultAgentScript],
+          },
+          teamPacked: TEAM_TWO,
         },
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
       }).run();
       expect(res.p1.meanTurnMillis).toBeGreaterThanOrEqual(20);
       expect(res.p1.peakRam).toBeGreaterThan(1);
@@ -1517,10 +1521,14 @@ describe('arena infrastructure', () => {
       const game = new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         smokeStopAfterTurn: 1,
         devMode: true,
         onTurn: info => {
@@ -1569,10 +1577,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9randombattle',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [probeScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [probeScript]},
-        p1TeamPacked: pair.t1Packed,
-        p2TeamPacked: pair.t2Packed,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [probeScript]},
+          teamPacked: pair.t1Packed,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [probeScript]},
+          teamPacked: pair.t2Packed,
+        },
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -1607,10 +1619,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [crInjectScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [crInjectScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -1641,10 +1657,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [threeStrikesScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [threeStrikesScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         devMode: true,
       }).run();
       expect(res.winner).toBe('p2');
@@ -1697,12 +1717,15 @@ describe('arena infrastructure', () => {
         seed: '1,2,3,4',
         // Turn 1 is wave 2 (`requestCount = 2`), so p2 acts first and triggers strike #3
         // before p1's hanging turn would otherwise stall for 15s.
-        p1Spec: {mode: 'native', target: process.execPath, args: [hangingOpponentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [threeStrikesScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
-        startingBankSeconds: 15,
-        maxTurnSeconds: 15,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [hangingOpponentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [threeStrikesScript]},
+          teamPacked: TEAM_TWO,
+        },
+        timers: {startingBankSeconds: 15, maxTurnSeconds: 15},
         devMode: true,
       }).run();
       expect(Date.now() - started).toBeLessThan(5_000);
@@ -1714,10 +1737,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [crashingAgentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [crashingAgentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         devMode: true,
       }).run();
       expect(res.winner).toBe('p2');
@@ -1748,10 +1775,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [undoAgentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [undoAgentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -1769,10 +1800,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9championsvgc2026regmc',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -1786,10 +1821,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9championsvgc2026regmc@@@Open Team Sheets',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -1830,12 +1869,15 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [invalidRetryScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
-        startingBankSeconds: 100,
-        maxTurnSeconds: 150,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [invalidRetryScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
+        timers: {startingBankSeconds: 100, maxTurnSeconds: 150},
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -1853,10 +1895,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [floodScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [floodScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         devMode: true,
       }).run();
       expect(res.winner).toBe('p2');
@@ -2058,12 +2104,15 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9championsvgc2026regmc',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [stallPreviewScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
-        startingBankSeconds: 2,
-        maxTurnSeconds: 0.15,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [stallPreviewScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
+        timers: {startingBankSeconds: 2, maxTurnSeconds: 0.15},
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -2086,12 +2135,15 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9championsvgc2026regmc',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [stallAllScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
-        startingBankSeconds: 0.15,
-        maxTurnSeconds: 0.15,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [stallAllScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
+        timers: {startingBankSeconds: 0.15, maxTurnSeconds: 0.15},
         devMode: true,
       }).run();
       expect(res.winner).toBe('p2');
@@ -2104,10 +2156,14 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
         smokeStopAfterTurn: 1,
         devMode: true,
         onTurn: info => {
@@ -2133,11 +2189,15 @@ describe('arena infrastructure', () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [slowReadyScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
-        readyGraceSeconds: 0.1,
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [slowReadyScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
+        timers: {readyGraceSeconds: 0.1},
         devMode: true,
         onTurn: info => {
           heartbeats.push(info);
@@ -2189,10 +2249,14 @@ describe('arena infrastructure', () => {
         const ouRes = await new arbiter.TimeSlicedArenaGame({
           format: 'gen9ou',
           seed: '1,2,3,4',
-          p1Spec: {mode: 'native', target: process.execPath, args: [timedScript]},
-          p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-          p1TeamPacked: OU_TEAM_ONE,
-          p2TeamPacked: OU_TEAM_ONE,
+          p1: {
+            spec: {mode: 'native', target: process.execPath, args: [timedScript]},
+            teamPacked: OU_TEAM_ONE,
+          },
+          p2: {
+            spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+            teamPacked: OU_TEAM_ONE,
+          },
           smokeStopAfterTurn: 1,
           devMode: true,
         }).run();
@@ -2207,8 +2271,8 @@ describe('arena infrastructure', () => {
       const noTpRes = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9randombattle',
         seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        p1: {spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]}},
+        p2: {spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]}},
         smokeStopAfterTurn: 1,
         devMode: true,
       }).run();
@@ -2266,26 +2330,30 @@ describe('arena infrastructure', () => {
       const blindRes = await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'foul-play',
-          displayName: 'Foul Play',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, defaultAgentScript],
+        p1: {
+          spec: {
+            agentId: 'foul-play',
+            displayName: 'Foul Play',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, defaultAgentScript],
+          },
+          teamPacked: TEAM_ONE,
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, defaultAgentScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, defaultAgentScript],
+          },
+          teamPacked: TEAM_TWO,
         },
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
         maxTurns: 2,
-        onSpectatorChunk: chunk => spectatorChunks.push(chunk),
+        callbacks: {onSpectatorChunk: chunk => spectatorChunks.push(chunk)},
       }).run();
 
       expect(blindRes.turns).toBeGreaterThanOrEqual(2);
@@ -2301,21 +2369,25 @@ describe('arena infrastructure', () => {
       const utmRes = await new tournament.ConcurrentGame({
         format: 'gen9ou',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'foul-play',
-          displayName: 'Foul Play',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, tourneyUtmAgentScript],
+        p1: {
+          spec: {
+            agentId: 'foul-play',
+            displayName: 'Foul Play',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, tourneyUtmAgentScript],
+          },
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, tourneyUtmAgentScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, tourneyUtmAgentScript],
+          },
         },
         maxTurns: 1,
       }).run();
@@ -2330,21 +2402,25 @@ describe('arena infrastructure', () => {
       const utmRes = await new tournament.ConcurrentGame({
         format: 'gen9ou@@@Open Team Sheets',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'foul-play',
-          displayName: 'Foul Play',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, tourneyUtmAgentScript],
+        p1: {
+          spec: {
+            agentId: 'foul-play',
+            displayName: 'Foul Play',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, tourneyUtmAgentScript],
+          },
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, tourneyUtmAgentScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, tourneyUtmAgentScript],
+          },
         },
         maxTurns: 1,
       }).run();
@@ -2386,24 +2462,28 @@ describe('arena infrastructure', () => {
       const randRes = await new tournament.ConcurrentGame({
         format: 'gen9randombattle',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'foul-play',
-          displayName: 'Foul Play',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, probeScript],
+        p1: {
+          spec: {
+            agentId: 'foul-play',
+            displayName: 'Foul Play',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, probeScript],
+          },
+          teamPacked: pair.t1Packed,
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, probeScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, probeScript],
+          },
+          teamPacked: pair.t2Packed,
         },
-        p1TeamPacked: pair.t1Packed,
-        p2TeamPacked: pair.t2Packed,
         maxTurns: 1,
       }).run();
 
@@ -2423,21 +2503,25 @@ describe('arena infrastructure', () => {
       const badRes = await new tournament.ConcurrentGame({
         format: 'gen9ou',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'bad-agent',
-          displayName: 'Bad Agent',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, badTeamScript],
+        p1: {
+          spec: {
+            agentId: 'bad-agent',
+            displayName: 'Bad Agent',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, badTeamScript],
+          },
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, tourneyUtmAgentScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, tourneyUtmAgentScript],
+          },
         },
         maxTurns: 1,
       }).run();
@@ -2460,23 +2544,27 @@ describe('arena infrastructure', () => {
       const timeoutRes = await new tournament.ConcurrentGame({
         format: 'gen9ou',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'no-utm-agent',
-          displayName: 'No Utm Agent',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, readyOnlyScript],
+        p1: {
+          spec: {
+            agentId: 'no-utm-agent',
+            displayName: 'No Utm Agent',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, readyOnlyScript],
+          },
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, tourneyUtmAgentScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, tourneyUtmAgentScript],
+          },
         },
-        readyGraceSeconds: 0.05,
+        timers: {readyGraceSeconds: 0.05},
         maxTurns: 1,
       }).run();
       expect(timeoutRes.winner).toBe('p2');
@@ -2496,24 +2584,28 @@ describe('arena infrastructure', () => {
       const preemptRes = await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'foul-play',
-          displayName: 'Foul Play',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: process.execPath,
-          localArgs: [defaultAgentScript],
+        p1: {
+          spec: {
+            agentId: 'foul-play',
+            displayName: 'Foul Play',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: process.execPath,
+            localArgs: [defaultAgentScript],
+          },
+          teamPacked: TEAM_ONE,
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: process.execPath,
-          localArgs: [preemptScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: process.execPath,
+            localArgs: [preemptScript],
+          },
+          teamPacked: TEAM_TWO,
         },
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
       }).run();
       expect(preemptRes.winner).toBe('preempted');
       expect(preemptRes.preemptedSlot).toBe('p2');
@@ -2532,24 +2624,28 @@ describe('arena infrastructure', () => {
       const spoofedRes = await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'foul-play',
-          displayName: 'Foul Play',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, defaultAgentScript],
+        p1: {
+          spec: {
+            agentId: 'foul-play',
+            displayName: 'Foul Play',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, defaultAgentScript],
+          },
+          teamPacked: TEAM_ONE,
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, preemptScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, preemptScript],
+          },
+          teamPacked: TEAM_TWO,
         },
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
       }).run();
       expect(spoofedRes.winner).toBe('p1');
       expect(spoofedRes.endReason).toBe('crash');
@@ -2702,24 +2798,28 @@ describe('arena infrastructure', () => {
         format: 'gen9customgame',
         seed: '1,2,3,4',
         bestOf: 3,
-        p1Spec: {
-          agentId: 'foul-play',
-          displayName: 'Foul Play',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, bo3AgentScript],
+        p1: {
+          spec: {
+            agentId: 'foul-play',
+            displayName: 'Foul Play',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, bo3AgentScript],
+          },
+          teamPacked: TEAM_ONE,
         },
-        p2Spec: {
-          agentId: 'pokechamp',
-          displayName: 'PokeChamp',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, bo3AgentScript],
+        p2: {
+          spec: {
+            agentId: 'pokechamp',
+            displayName: 'PokeChamp',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, bo3AgentScript],
+          },
+          teamPacked: TEAM_TWO,
         },
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
         maxTurns: 1,
       }).run();
 
@@ -2766,30 +2866,36 @@ describe('arena infrastructure', () => {
       await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        p1Spec: {
-          agentId: 'fast-agent',
-          displayName: 'Fast Agent',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, defaultAgentScript],
+        p1: {
+          spec: {
+            agentId: 'fast-agent',
+            displayName: 'Fast Agent',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, defaultAgentScript],
+          },
+          teamPacked: TEAM_ONE,
         },
-        p2Spec: {
-          agentId: 'slow-agent',
-          displayName: 'Slow Agent',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, slowAgentScript],
+        p2: {
+          spec: {
+            agentId: 'slow-agent',
+            displayName: 'Slow Agent',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, slowAgentScript],
+          },
+          teamPacked: TEAM_TWO,
         },
-        p1TeamPacked: TEAM_ONE,
-        p2TeamPacked: TEAM_TWO,
         maxTurns: 2,
-        onSpectatorChunk: (_chunk, state) => {
-          chunkSnaps.push(structuredClone(state));
-        },
-        onClockChange: state => {
-          clockChanges.push(structuredClone(state));
+        callbacks: {
+          onSpectatorChunk: (_chunk, state) => {
+            chunkSnaps.push(structuredClone(state));
+          },
+          onClockChange: state => {
+            clockChanges.push(structuredClone(state));
+          },
         },
       }).run();
 
@@ -2846,27 +2952,30 @@ describe('arena infrastructure', () => {
       await new tournament.ConcurrentGame({
         format: 'gen9customgame',
         seed: '1,2,3,4',
-        startingBankSeconds: 30,
-        graceSeconds: 0,
+        timers: {startingBankSeconds: 30, graceSeconds: 0},
         maxTurns: 2,
-        p1Spec: {
-          agentId: 'boom-p1',
-          displayName: 'Boom P1',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, p1Agent],
+        p1: {
+          spec: {
+            agentId: 'boom-p1',
+            displayName: 'Boom P1',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, p1Agent],
+          },
+          teamPacked: boomTeam,
         },
-        p2Spec: {
-          agentId: 'boom-p2',
-          displayName: 'Boom P2',
-          vmHost: 'localhost',
-          controlSocket: '/tmp/unused',
-          localCommand: relayBin,
-          localArgs: [process.execPath, p2Agent],
+        p2: {
+          spec: {
+            agentId: 'boom-p2',
+            displayName: 'Boom P2',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, p2Agent],
+          },
+          teamPacked: targetTeam,
         },
-        p1TeamPacked: boomTeam,
-        p2TeamPacked: targetTeam,
       }).run();
 
       const parseBanks = (file: string) => fs.readFileSync(file, 'utf8')
