@@ -128,7 +128,6 @@ export class TimeSlicedArenaGame {
 
   private p1: SandboxedPlayer | undefined = undefined;
   private p2: SandboxedPlayer | undefined = undefined;
-  private battleStarted = false;
   private currentTurn = 0;
   private requestCount = 0;
   private lastWaveId = 0;
@@ -272,9 +271,7 @@ export class TimeSlicedArenaGame {
     } catch {
       if (!player.lifecycle.exited) {
         this.cleanupSlot(player);
-        if (this.battleStarted) {
-          this.forceLose(player.slot, 'crash');
-        }
+        this.forceLose(player.slot, 'crash');
       }
     }
   }
@@ -511,7 +508,7 @@ export class TimeSlicedArenaGame {
           player.telemetry.lastDecisionMillis = player.telemetry.initMillis;
           this.pauseSlot(player);
           slotPaused = true;
-          return true;
+          return !this.ended;
         }
       }
       return false;
@@ -655,7 +652,7 @@ export class TimeSlicedArenaGame {
     try {
       const p1Ready = await this.waitForPlayerReady(p1, p1, p2);
       const p2Ready = p1Ready ? await this.waitForPlayerReady(p2, p1, p2) : false;
-      if (!p1Ready || !p2Ready) {
+      if (!p1Ready || !p2Ready || this.ended) {
         await Promise.all([
           this.stopPlayerForRamRead(p1),
           this.stopPlayerForRamRead(p2),
@@ -710,7 +707,6 @@ export class TimeSlicedArenaGame {
         },
       });
 
-      this.battleStarted = true;
       await engine.startBattleProtocol(battle, {
         format: this.format,
         seed: this.seed,

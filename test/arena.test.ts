@@ -443,6 +443,69 @@ describe('arena infrastructure', () => {
       expect(bakeScript).toContain('install sctp /bin/false');
       expect(bakeScript).toContain('blacklist sctp');
     });
+
+    test('reads rootless Podman user.slice cgroup v2 memory.peak in arena script', () => {
+      const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
+      expect(arenaScript).toContain(
+        '/sys/fs/cgroup/user.slice/user-*.slice/user@*.service/user.slice/libpod-'
+      );
+      expect(arenaScript).toContain('.scope/memory.peak');
+    });
+
+    test('excludes launchd PPID 1 Apple XPC helpers in native_agent_procs', () => {
+      const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
+      const match = /awk '([\s\S]*?)' \| sort/.exec(arenaScript);
+      expect(match).toBeTruthy();
+      const mtlHelper =
+        '/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/' +
+        'MTLCompilerService.xpc/Contents/MacOS/MTLCompilerService';
+      const samplePs = [
+        '87719 87718 T    /opt/arena/agents/minikazam/python/bin/python3.12',
+        '87720 87719 S    /opt/arena/agents/my bot/worker',
+        `87770     1 Ts   ${mtlHelper}`,
+        '87771     1 T    /usr/sbin/cfprefsd',
+        '87802     1 S    /usr/sbin/distnoted',
+        '87803 87719 S    /usr/sbin/distnoted',
+      ].join('\n');
+      const filtered = execFileSync('awk', [match![1]], {
+        input: `${samplePs}\n`,
+        encoding: 'utf8',
+      }).trim().split('\n').sort();
+      expect(filtered).toEqual(['87719:T', '87720:S', '87803:S']);
+    });
+
+    test('forfeits slot as crash if pauseSlot fails during pre-battle /ready phase', async () => {
+      const game = new arbiter.TimeSlicedArenaGame({
+        format: 'gen1ou',
+        seed: '1,2,3,4',
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          teamPacked: TEAM_TWO,
+        },
+        devMode: true,
+      });
+      const internal = game as unknown as {
+        pauseSlot: (player: {slot: 'p1' | 'p2'}) => void;
+        forceLose: (slot: 'p1' | 'p2', reason: string) => void;
+      };
+      const origPause = internal.pauseSlot.bind(game);
+      let p2Pauses = 0;
+      internal.pauseSlot = player => {
+        if (player.slot === 'p2' && ++p2Pauses === 2) {
+          internal.forceLose('p2', 'crash');
+          return;
+        }
+        origPause(player);
+      };
+      const res = await game.run();
+      expect(res.endReason).toBe('crash');
+      expect(res.winner).toBe('p1');
+      expect(res.turns).toBe(0);
+    });
   });
 
   describe('tourney-relay binary', () => {

@@ -31,18 +31,33 @@ record_container_peak_ram() {
     return 0
   fi
   peak_bytes="$(podman machine ssh podman-machine-default \
-    "cat /sys/fs/cgroup/machine.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/libpod_parent/libpod-${cid}/memory.peak 2>/dev/null | head -n 1" \
+    "cat /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/user.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/machine.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/libpod_parent/libpod-${cid}/memory.peak 2>/dev/null | head -n 1" \
     2>/dev/null || true)"
   if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
     echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
   fi
 }
 
+native_agent_procs() {
+  # Exclude macOS `launchd` (PPID 1) per-UID XPC helpers (`/usr/sbin/distnoted`,
+  # `/usr/sbin/cfprefsd`, `/System/Library/*`) that ignore `SIGSTOP` or auto-respawn after
+  # `SIGKILL`. `sandbox.sb` denies `process-exec` on `/usr/sbin` and `/System`.
+  /bin/ps -U "$SLOT" -o pid=,ppid=,state=,comm= 2>/dev/null | awk '
+    {
+      pid = $1; ppid = $2; st = substr($3, 1, 1)
+      $1 = $2 = $3 = ""
+      sub(/^[ \t]+/, "")
+      if (ppid == 1 && ($0 == "/usr/sbin/distnoted" || $0 == "/usr/sbin/cfprefsd" || index($0, "/System/Library/") == 1)) next
+      print pid ":" st
+    }
+  ' | sort
+}
+
 kill_native_slot_procs() {
   local pass
   for pass in {1..10}; do
     sudo -n /usr/bin/killall -9 -u "$SLOT" 2>/dev/null || true
-    if ! /usr/bin/pgrep -u "$SLOT" >/dev/null 2>&1; then
+    if [[ -z "$(native_agent_procs)" ]]; then
       return 0
     fi
     sleep 0.02
@@ -158,7 +173,7 @@ case "$ACTION" in
       converged=0
       prev_snap=""
       for _ in {1..80}; do
-        if ! /usr/bin/pgrep -u "$SLOT" >/dev/null 2>&1; then
+        if [[ -z "$(native_agent_procs)" ]]; then
           if (( saw_procs == 1 )); then
             converged=1
             break
@@ -168,7 +183,7 @@ case "$ACTION" in
         fi
         saw_procs=1
         sudo -n -u "$SLOT" /usr/bin/killall -STOP -u "$SLOT" 2>/dev/null || true
-        snap="$(/bin/ps -U "$SLOT" -o pid=,state= 2>/dev/null | awk '{print $1":"substr($2,1,1)}' | sort)"
+        snap="$(native_agent_procs)"
         if [[ -z "$snap" ]]; then
           converged=1
           break
