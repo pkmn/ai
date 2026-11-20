@@ -592,4 +592,59 @@ describe('server/auth.ts routes', () => {
     expect(customAuth.isAuthorizedGitHub('coauthor')).toBe(true);
     expect(customAuth.isAuthorizedGitHub('pre')).toBe(false);
   });
+
+  test('ignores invalid duplicate pkmn_session cookies when a valid one exists', async () => {
+    const validToken = signSession({discord: {id: '513513270670262284', username: 'pre'}});
+    const res = await realFetch(`${baseUrl}/auth/discord/validate`, {
+      headers: {
+        Cookie:
+          `${auth.SESSION_COOKIE}=${encodeURIComponent(validToken)}; ` +
+          `${auth.SESSION_COOKIE}=invalid.token`,
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-auth-user')).toBe('513513270670262284');
+  });
+
+  test('prefers newer session exp when duplicate valid pkmn_session cookies coexist', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const older = auth.signToken(
+      {github: {id: 10, login: 'pre'}, exp: now + 3600},
+      AUTH_CFG.sessionSecret
+    );
+    const newer = auth.signToken(
+      {discord: {id: '513513270670262284', username: 'pre'}, exp: now + 7200},
+      AUTH_CFG.sessionSecret
+    );
+    const res = await realFetch(`${baseUrl}/auth/discord/validate`, {
+      headers: {
+        Cookie:
+          `${auth.SESSION_COOKIE}=${encodeURIComponent(newer)}; ` +
+          `${auth.SESSION_COOKIE}=${encodeURIComponent(older)}`,
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-auth-user')).toBe('513513270670262284');
+  });
+
+  test('returns matching resolved token from /chat/logs/token with duplicate cookies', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const older = auth.signToken(
+      {github: {id: 10, login: 'pre'}, exp: now + 3600},
+      AUTH_CFG.sessionSecret
+    );
+    const newer = auth.signToken(
+      {discord: {id: '513513270670262284', username: 'pre'}, exp: now + 7200},
+      AUTH_CFG.sessionSecret
+    );
+    const res = await realFetch(`${baseUrl}/chat/logs/token`, {
+      headers: {
+        Cookie:
+          `${auth.SESSION_COOKIE}=${encodeURIComponent(newer)}; ` +
+          `${auth.SESSION_COOKIE}=${encodeURIComponent(older)}`,
+      },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.text()).trim()).toBe(newer);
+  });
 });

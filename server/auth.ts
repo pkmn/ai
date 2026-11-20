@@ -105,6 +105,23 @@ export function parseCookies(cookieHeader: string | undefined): Record<string, s
   return out;
 }
 
+export function parseCookieValues(cookieHeader: string | undefined, name: string): string[] {
+  const values: string[] = [];
+  if (!cookieHeader) return values;
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq <= 0) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
+    const val = part.slice(eq + 1).trim();
+    try {
+      values.push(decodeURIComponent(val));
+    } catch {
+      values.push(val);
+    }
+  }
+  return values;
+}
+
 export function serializeCookie(name: string, value: string, maxAgeSeconds: number): string {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   const encoded = value ? encodeURIComponent(value) : '';
@@ -127,14 +144,20 @@ export function sanitizeReturnTo(raw: unknown, fallback = '/'): string {
 }
 
 // Accepts either `Authorization: Bearer <token>` (for headless CLI / script access to
-// `/chat/logs/` via `/chat/logs/token`) or the browser's `pkmn_session` cookie.
-export function extractSessionToken(headers: http.IncomingHttpHeaders): string | undefined {
+// `/chat/logs/` via `/chat/logs/token`) or all browser `pkmn_session` cookies (browsers can send
+// duplicate cookies when host-only and `Domain=.pkmn.ai` cookies coexist).
+export function extractSessionTokens(headers: http.IncomingHttpHeaders): string[] {
   const auth = headers.authorization;
   if (typeof auth === 'string') {
     const m = /^Bearer\s+(\S+)$/i.exec(auth.trim());
-    if (m) return m[1];
+    if (m) return [m[1]];
   }
-  return parseCookies(headers.cookie)[SESSION_COOKIE];
+  return parseCookieValues(headers.cookie, SESSION_COOKIE);
+}
+
+export function extractSessionToken(headers: http.IncomingHttpHeaders): string | undefined {
+  const tokens = extractSessionTokens(headers);
+  return tokens[tokens.length - 1];
 }
 
 export function isLoopbackAddress(remoteAddress: string | undefined): boolean {
@@ -246,11 +269,24 @@ export class Auth {
     return loadConfig(env);
   }
 
-  getSession(req: http.IncomingMessage): Session | undefined {
+  private resolveSession(
+    req: http.IncomingMessage
+  ): {session: Session; token: string} | undefined {
     const cfg = this.getConfig();
     if (!cfg) return undefined;
-    const token = extractSessionToken(req.headers);
-    return verifyToken<Session>(token, cfg.sessionSecret);
+    let best: {session: Session; token: string} | undefined;
+    for (const token of extractSessionTokens(req.headers)) {
+      const session = verifyToken<Session>(token, cfg.sessionSecret);
+      if (!session) continue;
+      if (!best || session.exp >= best.session.exp) {
+        best = {session, token};
+      }
+    }
+    return best;
+  }
+
+  getSession(req: http.IncomingMessage): Session | undefined {
+    return this.resolveSession(req)?.session;
   }
 
   getGitHubUser(req: http.IncomingMessage): string | undefined {
@@ -409,11 +445,12 @@ export class Auth {
       }
       const code = typeof req.query.code === 'string' ? req.query.code : '';
       const state = typeof req.query.state === 'string' ? req.query.state : '';
-      const cookies = parseCookies(req.headers.cookie);
-      const saved = verifyToken<OAuthStatePayload>(cookies[STATE_COOKIE], cfg.sessionSecret);
+      const saved = parseCookieValues(req.headers.cookie, STATE_COOKIE)
+        .map(v => verifyToken<OAuthStatePayload>(v, cfg.sessionSecret))
+        .find(s => s?.provider === 'github' && s.nonce === state);
       const clearState = serializeCookie(STATE_COOKIE, '', 0);
 
-      if (!code || !state || saved?.provider !== 'github' || saved.nonce !== state) {
+      if (!code || !state || !saved) {
         sendError(res, 400, [clearState]);
         return;
       }
@@ -549,11 +586,12 @@ export class Auth {
       }
       const code = typeof req.query.code === 'string' ? req.query.code : '';
       const state = typeof req.query.state === 'string' ? req.query.state : '';
-      const cookies = parseCookies(req.headers.cookie);
-      const saved = verifyToken<OAuthStatePayload>(cookies[STATE_COOKIE], cfg.sessionSecret);
+      const saved = parseCookieValues(req.headers.cookie, STATE_COOKIE)
+        .map(v => verifyToken<OAuthStatePayload>(v, cfg.sessionSecret))
+        .find(s => s?.provider === 'discord' && s.nonce === state);
       const clearState = serializeCookie(STATE_COOKIE, '', 0);
 
-      if (!code || !state || saved?.provider !== 'discord' || saved.nonce !== state) {
+      if (!code || !state || !saved) {
         sendError(res, 400, [clearState]);
         return;
       }
@@ -689,8 +727,9 @@ export class Auth {
         res.end();
         return;
       }
-      const token = extractSessionToken(req.headers);
-      const session = this.getSession(req);
+      const resolved = this.resolveSession(req);
+      const session = resolved?.session;
+      const token = resolved?.token;
       if (!session?.discord?.id || !token) {
         if (req.headers.authorization) {
           res.writeHead(401, {'Cache-Control': 'private, no-store'});
