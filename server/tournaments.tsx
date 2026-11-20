@@ -1870,62 +1870,27 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         return p1B && p2A;
       });
 
-    const sendToViewer = msg => {
-      if (frame && frame.contentWindow) {
-        frame.contentWindow.postMessage(msg, '*');
-      }
-    };
-
-    const syncTheme = () => {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      sendToViewer({type: 'theme', dark});
-    };
-
-    const syncSpeed = () => {
-      try {
-        const saved = localStorage.getItem(SPEED_KEY);
-        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
-          sendToViewer({type: 'speed', speed: saved});
-        }
-      } catch {}
-    };
-
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-      sendToViewer({type: 'theme', dark: e.matches});
-    });
-
     window.addEventListener('message', ev => {
       if (!frame || ev.source !== frame.contentWindow) return;
       const data = ev.data;
-      if (!data || typeof data !== 'object') return;
-      if (data.type === 'ready') {
-        viewerReady = true;
-        syncTheme();
-        syncSpeed();
-        if (
-          pendingPayload &&
-          Array.isArray(pendingPayload.lines) &&
-          pendingPayload.lines.length > 0
-        ) {
-          sendToViewer({
-            type: 'load',
-            lines: pendingPayload.lines,
-            p1Lines: pendingPayload.p1Lines,
-            p2Lines: pendingPayload.p2Lines,
-            p1Pokemon: pendingPayload.p1Pokemon,
-            p2Pokemon: pendingPayload.p2Pokemon,
-            live: Boolean(pendingPayload.live),
-            side: pendingPayload.side || 'p1',
-          });
-        }
-      } else if (
-        data.type === 'speed' &&
-        typeof data.speed === 'string' &&
-        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
+      if (!data || typeof data !== 'object' || data.type !== 'ready') return;
+      viewerReady = true;
+      syncFramePrefs(frame);
+      if (
+        pendingPayload &&
+        Array.isArray(pendingPayload.lines) &&
+        pendingPayload.lines.length > 0
       ) {
-        try {
-          localStorage.setItem(SPEED_KEY, data.speed);
-        } catch {}
+        postToFrame(frame, {
+          type: 'load',
+          lines: pendingPayload.lines,
+          p1Lines: pendingPayload.p1Lines,
+          p2Lines: pendingPayload.p2Lines,
+          p1Pokemon: pendingPayload.p1Pokemon,
+          p2Pokemon: pendingPayload.p2Pokemon,
+          live: Boolean(pendingPayload.live),
+          side: pendingPayload.side || 'p1',
+        });
       }
     });
 
@@ -2097,7 +2062,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const isLive = !tb.idle && tb.live !== false;
       pendingPayload = {lines, p1Lines, p2Lines, p1Pokemon, p2Pokemon, live: isLive, side: 'p1'};
       if (viewerReady) {
-        sendToViewer({type: 'load', ...pendingPayload});
+        postToFrame(frame, {type: 'load', ...pendingPayload});
       }
       if (scroll) {
         liveSec.scrollIntoView({behavior: 'smooth'});
@@ -2861,7 +2826,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
               pendingPayload.live = tb.live !== false;
             }
             if (viewerReady && newLines.length > 0) {
-              sendToViewer({
+              postToFrame(frame, {
                 type: 'append',
                 lines: newLines,
                 p1Lines: newP1Lines,

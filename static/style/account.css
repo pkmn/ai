@@ -85,25 +85,6 @@ tr.secondary td {
   font-size: 0.95em;
 }
 
-.inline-form {
-  display: inline;
-  margin: 0;
-}
-
-.link-btn {
-  padding: 0;
-  color: var(--link-color);
-  font: inherit;
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.link-btn:hover,
-.link-btn:focus-visible {
-  text-decoration: underline;
-}
-
 .form-box {
   margin: 0.75rem 0 1.5rem;
   padding: 1.5ch 2ch;

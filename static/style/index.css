@@ -106,3 +106,22 @@ dfn {
 .pager-info {
   font-variant-numeric: tabular-nums;
 }
+
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
+.link-btn {
+  padding: 0;
+  color: var(--link-color);
+  font: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.link-btn:hover,
+.link-btn:focus-visible {
+  text-decoration: underline;
+}

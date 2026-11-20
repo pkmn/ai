@@ -372,7 +372,7 @@ export function buildBattleDetailClientJs(): string {
     };
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-      document.querySelectorAll('iframe.replay-viewer-frame').forEach(f => {
+      document.querySelectorAll('iframe.viewer-frame').forEach(f => {
         postToFrame(f, {type: 'theme', dark: e.matches});
       });
     });
@@ -562,10 +562,6 @@ function buildBattlesScript(
     let sentEnd = false;
 
     ${buildBattleDetailClientJs()}
-
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-      postToFrame(liveViewerFrame, {type: 'theme', dark: e.matches});
-    });
 
     const loadShownIntoViewer = () => {
       if (!shownLive || !shownLive.viewer) return;

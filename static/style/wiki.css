@@ -13,25 +13,6 @@ main img {
   text-align: center;
 }
 
-#wiki-nav .inline-form {
-  display: inline;
-  margin: 0;
-}
-
-#wiki-nav .link-btn {
-  padding: 0;
-  color: var(--link-color);
-  font: inherit;
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-#wiki-nav .link-btn:hover,
-#wiki-nav .link-btn:focus-visible {
-  text-decoration: underline;
-}
-
 #wiki-nav + footer {
   margin-top: 0;
 }

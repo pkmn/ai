@@ -2693,9 +2693,10 @@ describe('JSON route parity & retired pool archives', () => {
     const renderSrc = fs.readFileSync(root('server', 'render.tsx'), 'utf8');
     const tourSrc = fs.readFileSync(root('server', 'tournaments.tsx'), 'utf8');
     expect(renderSrc).toContain('pkmn-viewer-speed');
+    expect(renderSrc).toContain("postToFrame(frameEl, {type: 'speed', speed: saved})");
+    expect(renderSrc).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
     expect(tourSrc).toContain('render.buildBattleDetailClientJs()');
-    expect(tourSrc).toContain("sendToViewer({type: 'speed', speed: saved})");
-    expect(tourSrc).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
+    expect(tourSrc).toContain('syncFramePrefs(frame)');
   });
 
   const seedPaginatedHistory = () => {
