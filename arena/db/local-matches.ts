@@ -1,12 +1,12 @@
 import {DatabaseSync} from 'node:sqlite';
 
-import {SIM_VERSION} from '../../db/ladders';
+import {SIM_VERSION, TeamMode} from '../../db/ladders';
+import {GameOutcome} from '../../server/ratings';
 
 import {ExecutionMode} from './local-agents';
 
 export type CheckpointStatus = 'in-progress' | 'g1-complete' | 'complete' | 'aborted';
-export type TeamMode = 'random' | 'harvested' | 'pools';
-export type GameOutcome = 'W' | 'L' | 'T';
+export type {GameOutcome, TeamMode};
 
 export interface CheckpointPlayer {
   versionId: number;

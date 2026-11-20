@@ -9,50 +9,14 @@ import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as sim from '../server/sim';
 import * as teams from '../server/teams';
-import {root, toID, writeFileAtomic} from '../static/util';
+import {formatUtcDate, root, toID, writeFileAtomic} from '../static/util';
 
 import * as arbiter from './arbiter';
 import * as db from './db';
 import * as packages from './packages';
 
-export interface ActiveRosterEntry {
-  agentId: number;
-  agentName: string;
-  teams: string[];
-}
-
-export interface LadderSnapshot {
-  id: string;
-  slot: string;
-  format: string;
-  version?: string;
-  team: 'random' | 'harvested' | 'pools';
-  status: 'upcoming' | 'active' | 'settling' | 'archived';
-  min: number;
-  entries: Array<{
-    versionId: number;
-    agentId: number;
-    agentSlug: string;
-    agentName: string;
-    version: string;
-    elo: number;
-    se: number;
-    lcb: number;
-    matches: number;
-    settledAt?: number;
-    role: 'champion' | 'challenger' | 'retired' | 'quarantined';
-  }>;
-  pairAggregates: Array<{
-    lowVersionId: number;
-    highVersionId: number;
-    ww: number;
-    wt: number;
-    split: number;
-    tl: number;
-    ll: number;
-  }>;
-  roster?: ActiveRosterEntry[];
-}
+export type ActiveRosterEntry = arena.ActiveRosterEntry;
+export type LadderSnapshot = arena.PlayableLadderSnapshot;
 
 interface MirrorPlayer {
   versionId: number;
@@ -703,7 +667,7 @@ export class Coordinator {
   ) {
     try {
       packages.assertArchiveVolumeMounted(this.dirs.logs);
-      const day = new Date(daySeconds * 1000).toISOString().slice(0, 10);
+      const day = formatUtcDate(daySeconds);
       const dir = path.join(this.dirs.logs, ladderId, day);
       fs.mkdirSync(dir, {recursive: true, mode: 0o700});
       fs.writeFileSync(path.join(dir, `${matchId}${suffix}.log`), log, {
@@ -720,7 +684,7 @@ export class Coordinator {
     daySeconds: number
   ): string | undefined {
     try {
-      const day = new Date(daySeconds * 1000).toISOString().slice(0, 10);
+      const day = formatUtcDate(daySeconds);
       const file = path.join(this.dirs.logs, ladderId, day, `${matchId}${suffix}.log`);
       if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
     } catch {}
@@ -846,7 +810,7 @@ export class Coordinator {
     teamMode: db.TeamMode,
     nowSeconds: number
   ): Promise<void> {
-    const today = new Date(nowSeconds * 1000).toISOString().slice(0, 10);
+    const today = formatUtcDate(nowSeconds);
     const prev = this.lastArchivedDayByLadder.get(ladderId);
     if (prev === today) return;
     this.lastArchivedDayByLadder.set(ladderId, today);
@@ -1149,7 +1113,7 @@ export class Coordinator {
     );
     this.writeArchivedGameLog(match.ladderId, match.id, 'b', g2Log, match.startedAt);
 
-    const matchTimers = arena.timerSettingsForFormat(match.format);
+    const matchTimers = await sim.getTimerSettings(match.format, match.version);
     await this.sendMatchHeartbeat(match, {
       game: 2,
       turn: g2Res.turns,
@@ -1607,7 +1571,7 @@ export class Coordinator {
         e2.agentName
       );
       this.writeArchivedGameLog(ladder.id, matchId, 'a', g1Log, now);
-      const ladderTimers = arena.timerSettingsForFormat(ladder.format);
+      const ladderTimers = await sim.getTimerSettings(ladder.format, ladder.version);
       await this.sendMatchHeartbeat(match, {
         game: 1,
         turn: g1Res.turns,

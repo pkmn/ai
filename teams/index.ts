@@ -61,6 +61,11 @@ const GEN_LEAD_BONUS: Record<number, number> = {
   4: 0.2,
 };
 
+export function defaultLevelForFormat(format: string): number {
+  const clean = toID(format);
+  return clean.includes('vgc') || clean.includes('bss') || clean.includes('champions') ? 50 : 100;
+}
+
 export function sameSpeciesCap(dex: ModdedDex): number {
   const isChamp = Boolean((dex as {modid?: string}).modid?.startsWith('champions'));
   return isChamp ? SAME_SPECIES_CAP : (GEN_SPECIES_CAPS[dex.gen] ?? SAME_SPECIES_CAP);
@@ -400,8 +405,7 @@ if (require.main === module) {
   }
 
   const dex = getDex(format);
-  const defaultLevel =
-    format.includes('vgc') || format.includes('bss') || format.includes('champions') ? 50 : 100;
+  const defaultLevel = defaultLevelForFormat(format);
 
   const candidate = parseTeam(dex, fs.readFileSync(teamFile, 'utf8'));
 

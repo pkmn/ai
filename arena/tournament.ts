@@ -69,10 +69,7 @@ export interface TurnBroadcastInfo {
   p2: TurnSlotBroadcast;
 }
 
-export interface SeriesGameSummary {
-  winnerSlot?: PlayerSlot;
-  turns: number;
-}
+export type SeriesGameSummary = arena.SeriesGameSummary;
 
 export interface GamePlayerStats {
   bankSeconds: number;
@@ -185,12 +182,7 @@ export function buildLockedTournamentTeamBook(
 
   const cleanFormat = toID(format);
   const dex = teams.getDex(cleanFormat);
-  const defaultLevel =
-    cleanFormat.includes('vgc') ||
-    cleanFormat.includes('bss') ||
-    cleanFormat.includes('champions')
-      ? 50
-      : 100;
+  const defaultLevel = teams.defaultLevelForFormat(cleanFormat);
 
   // Deterministically order teams by SHA-256(tournamentId:packed) so every Coordinator restart
   // reconstructs the identical locked 2M-team book from the tournament's teamPool.

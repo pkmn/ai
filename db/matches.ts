@@ -1,6 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
 import * as ratings from '../server/ratings';
+import {formatUtcDate} from '../static/util';
 
 import {ensureAgentLadderStats, updateFamilyStreaksForMatch} from './agent-ladder-stats';
 import {getVersionById} from './agent-versions';
@@ -447,7 +448,7 @@ export function recordCompletedMatch(
       lowOutcome
     );
 
-    const dayUtc = new Date(m.completedAt * 1000).toISOString().slice(0, 10);
+    const dayUtc = formatUtcDate(m.completedAt);
     recomputeLadderRatings(db, m.ladderId, m.completedAt, prevMatchSec, dayUtc);
 
     let archivedLadder = false;

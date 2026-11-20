@@ -6,6 +6,7 @@ import * as path from 'path';
 import polka from 'polka';
 
 import type * as db from '../db';
+import {SLOTS} from '../db/ladders';
 import * as util from '../static/util';
 
 import {decryptSecret} from './account';
@@ -97,7 +98,6 @@ const MAX_GAME_COMPLETE_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const RECENT_MATCHES_LIMIT = 25;
 
-const VALID_SLOTS = new Set<string>(['rby', 'adv', 'sv', 'rand', 'vgc']);
 const VALID_POKEMON_COLORS = new Set<PokemonColor>(['green', 'yellow', 'red', 'fainted']);
 
 export type PokemonColor = 'green' | 'yellow' | 'red' | 'fainted';
@@ -1213,6 +1213,51 @@ const UPLOAD_TIMEOUT_MILLIS = 300_000;
 
 // Outbound worker control-plane HTTP client used by the Mac Mini Arena coordinator (and `--server`
 // mock scenarios) to communicate with `/api/arena/*` using `Bearer $ARENA_SECRET`.
+export interface ActiveRosterEntry {
+  agentId: number;
+  agentName: string;
+  teams: string[];
+}
+
+export interface PlayableLadderSnapshot {
+  id: string;
+  slot: string;
+  format: string;
+  version?: string;
+  team: db.TeamMode;
+  status: db.LadderStatus;
+  min: number;
+  entries: Array<{
+    versionId: number;
+    agentId: number;
+    agentSlug: string;
+    agentName: string;
+    version: string;
+    elo: number;
+    se: number;
+    lcb: number;
+    matches: number;
+    settledAt?: number;
+    role: db.EntryRole;
+  }>;
+  pairAggregates: Array<{
+    lowVersionId: number;
+    highVersionId: number;
+    ww: number;
+    wt: number;
+    split: number;
+    tl: number;
+    ll: number;
+  }>;
+  roster?: ActiveRosterEntry[];
+}
+
+export interface PlayableLaddersResponse {
+  ladders: PlayableLadderSnapshot[];
+  unpublishedArchivedPoolsLadders?: string[];
+  quarantinedVersionIds?: number[];
+}
+
 export class Client {
   readonly serverUrl: string;
   private readonly arenaSecret: string;
@@ -1313,46 +1358,7 @@ export class Client {
     );
   }
 
-  getPlayableLadders(): Promise<{
-    ladders: Array<{
-      id: string;
-      slot: string;
-      format: string;
-      version?: string;
-      team: 'random' | 'harvested' | 'pools';
-      status: 'upcoming' | 'active' | 'settling' | 'archived';
-      min: number;
-      entries: Array<{
-        versionId: number;
-        agentId: number;
-        agentSlug: string;
-        agentName: string;
-        version: string;
-        elo: number;
-        se: number;
-        lcb: number;
-        matches: number;
-        settledAt?: number;
-        role: 'champion' | 'challenger' | 'retired' | 'quarantined';
-      }>;
-      pairAggregates: Array<{
-        lowVersionId: number;
-        highVersionId: number;
-        ww: number;
-        wt: number;
-        split: number;
-        tl: number;
-        ll: number;
-      }>;
-      roster?: Array<{
-        agentId: number;
-        agentName: string;
-        teams: string[];
-      }>;
-    }>;
-    unpublishedArchivedPoolsLadders?: string[];
-    quarantinedVersionIds?: number[];
-  }> {
+  getPlayableLadders(): Promise<PlayableLaddersResponse> {
     return this.requestJson('GET', '/api/arena/ladders');
   }
 
@@ -2881,7 +2887,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
 
     const rawSlot = (parsedUrl.searchParams.get('slot') ?? 'all').trim().toLowerCase();
-    if (rawSlot !== 'all' && !VALID_SLOTS.has(rawSlot)) {
+    if (rawSlot !== 'all' && !SLOTS.has(rawSlot as db.LadderSlot)) {
       sendJson(res, 400, {error: `Unknown slot filter "${rawSlot}".`});
       return;
     }

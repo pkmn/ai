@@ -1441,7 +1441,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
               </thead>
               <tbody>
                 {revisions.map((rev, idx) => {
-                  const date = new Date(rev.timestamp * 1000).toISOString().slice(0, 10);
+                  const date = util.formatUtcDate(rev.timestamp);
                   const revUrl = `/wiki/${encoded}/${rev.sha}`;
                   const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
                   const displayAuthor = wiki.formatAuthor(rev.author);

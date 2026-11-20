@@ -1,6 +1,6 @@
 import {DatabaseSync} from 'node:sqlite';
 
-import {formatUtcDateTime, validateVersion} from '../static/util';
+import {formatUtcDate, formatUtcDateTime, validateVersion} from '../static/util';
 
 import {ensureAgentLadderStats} from './agent-ladder-stats';
 import * as teams from './agent-ladder-teams';
@@ -876,7 +876,7 @@ export function applySubmissionStatus(
         SET role = 'quarantined', rank_current = NULL, rank_min = NULL, rank_max = NULL
         WHERE version_id = ? AND role IN ('champion', 'challenger')
       `).run(prev.id);
-      const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
+      const dayUtc = formatUtcDate(now);
       for (const row of affected) {
         entries.promoteRemainingActiveToChampion(db, row.ladder_id, prev.agentId);
         const l = getLadder(db, row.ladder_id);
@@ -955,7 +955,7 @@ export function unquarantineVersion(
       ? quarantinedRows.map(r => r.ladder_id)
       : ver.ladders;
 
-    const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
+    const dayUtc = formatUtcDate(now);
     for (const ladderId of ladderIds) {
       const ladder = getLadder(db, ladderId);
       if (!ladder) continue;

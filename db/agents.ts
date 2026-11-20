@@ -6,7 +6,7 @@ import * as yaml from 'yaml';
 
 import * as smogon from '../server/smogon';
 import {Project} from '../static/projects';
-import {isConnectivityError, root, slugify, toID, validateAgentName} from '../static/util';
+import * as util from '../static/util';
 
 import * as developers from './developers';
 import {recomputeLadderRatings} from './ladder-entries';
@@ -17,11 +17,11 @@ import {TransactionRunner} from './index';
 export type AgentStatus = 'pending' | 'qualified' | 'disabled';
 
 export const PROJECTS_FILE = process.env.MOCK === '1'
-  ? root('.mock', 'static', 'projects.yml')
-  : root('static', 'projects.yml');
+  ? util.root('.mock', 'static', 'projects.yml')
+  : util.root('static', 'projects.yml');
 export const AVATARS_DIR = process.env.MOCK === '1'
-  ? root('.mock', 'static', 'avatars')
-  : root('static', 'avatars');
+  ? util.root('.mock', 'static', 'avatars')
+  : util.root('static', 'avatars');
 
 export interface AgentRow {
   id: number;
@@ -129,8 +129,8 @@ export function parseArenaProjects(
     if (!rawName) {
       throw new Error('Arena project entry is missing required "name"');
     }
-    const name = validateAgentName(rawName);
-    const id = toID(name);
+    const name = util.validateAgentName(rawName);
+    const id = util.toID(name);
     const prevById = seenIds.get(id);
     if (prevById) {
       throw new Error(
@@ -139,7 +139,7 @@ export function parseArenaProjects(
     }
     seenIds.set(id, name);
 
-    const slug = slugify(name).toLowerCase();
+    const slug = util.slugify(name).toLowerCase();
     if (!slug) {
       throw new Error(`Invalid arena project slug derived from "${name}"`);
     }
@@ -316,7 +316,7 @@ function applyResolvedProjects(
         retireAgentEntries.run(now, agentId);
       }
 
-      const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
+      const dayUtc = util.formatUtcDate(now);
       for (const ladderId of affectedLadders) {
         const l = ladders.getLadder(db, ladderId);
         if (l && l.status !== 'archived') {
@@ -408,7 +408,7 @@ export async function syncProjectsFromYamlWithSmogon(
   let unreachable = false;
 
   const recordLookupError = (err: unknown) => {
-    if (isConnectivityError(err)) unreachable = true;
+    if (util.isConnectivityError(err)) unreachable = true;
     lookupErrors.push(err instanceof Error ? err.message : String(err));
   };
 
@@ -605,7 +605,7 @@ export function reassignDeveloperInProjectsYaml(
   let preservedKey = cleanLogin;
   let targetMap: yaml.YAMLMap | undefined;
   let targetProject: string | undefined;
-  const cleanTargetSlug = targetSlug ? slugify(targetSlug.trim()).toLowerCase() : undefined;
+  const cleanTargetSlug = targetSlug ? util.slugify(targetSlug.trim()).toLowerCase() : undefined;
 
   for (const item of doc.contents.items) {
     if (!yaml.isMap(item)) continue;
@@ -615,7 +615,7 @@ export function reassignDeveloperInProjectsYaml(
     const nameNode = item.get('name', true);
     const nameVal = yaml.isScalar(nameNode) ? (nameNode.value as unknown) : undefined;
     const name = typeof nameVal === 'string' ? nameVal.trim() : '';
-    const slug = slugify(name).toLowerCase();
+    const slug = util.slugify(name).toLowerCase();
 
     if (cleanTargetSlug && slug === cleanTargetSlug) {
       targetMap = arenaNode;

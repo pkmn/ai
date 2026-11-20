@@ -1685,7 +1685,7 @@ function renderHistorySection(
   }
 
   const endRefSec = isArchived ? (ladder.archivedAt ?? nowSec) : nowSec;
-  const todayUtc = new Date(endRefSec * 1000).toISOString().slice(0, 10);
+  const todayUtc = util.formatUtcDate(endRefSec);
   const snapsByAgent = new Map<number, db.LadderSnapshotHistoryRow[]>();
   for (const s of snapshots) {
     if (s.matches <= 0) continue;

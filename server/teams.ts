@@ -153,16 +153,11 @@ function normalizeCanonicalPacked(rawTeam: string, format: string): string {
   return trimmed;
 }
 
-function defaultLevelForFormat(format: string): number {
-  const clean = toID(format);
-  return clean.includes('vgc') || clean.includes('bss') || clean.includes('champions') ? 50 : 100;
-}
-
 function canonicalDedupeKey(canonicalPacked: string, format: string): string {
   try {
     const cleanFormat = toID(format);
     const dex = teams.getDex(cleanFormat);
-    const defaultLevel = defaultLevelForFormat(cleanFormat);
+    const defaultLevel = teams.defaultLevelForFormat(cleanFormat);
     const imported = Team.import(canonicalPacked, dex);
     const raw = (imported?.team || []).filter(s => s?.moves?.length);
     if (raw.length > 0) {
@@ -606,7 +601,7 @@ export function validateCompetitorTeamsIncremental(
   const format = toID(options.format);
   const dex = teams.getDex(format);
   const validator = getValidator(format);
-  const defaultLevel = defaultLevelForFormat(format);
+  const defaultLevel = teams.defaultLevelForFormat(format);
 
   const refPool = loadReferencePool(format, options.pools);
   const workingPool: PoolEntry[] = [...refPool];
@@ -752,7 +747,7 @@ export async function validateHarvestedTeamsForVersion(
   }
   const format = toID(formatId);
   const dex = teams.getDex(format);
-  const defaultLevel = defaultLevelForFormat(format);
+  const defaultLevel = teams.defaultLevelForFormat(format);
   const chunks = splitSubmittedTeams(rawInput);
 
   if (chunks.length < 2) {
@@ -802,7 +797,7 @@ export async function validateCompetitorTeamsIncrementalForVersion(
   const threshold = teams.THRESHOLD;
   const format = toID(options.format);
   const dex = teams.getDex(format);
-  const defaultLevel = defaultLevelForFormat(format);
+  const defaultLevel = teams.defaultLevelForFormat(format);
 
   const refPool = loadReferencePool(format, options.pools);
   const workingPool: PoolEntry[] = [...refPool];

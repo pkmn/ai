@@ -8,7 +8,7 @@ import {isAllowedBundleHost, isAllowedOciRegistryHost} from '../server/account';
 import * as db from './db';
 import * as unpack from './unpack';
 
-export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MiB hard cap
+export const MAX_IMAGE_BYTES = unpack.MAX_BYTES; // 500 MiB hard cap
 export const MAX_OCI_LAYERS = 32;
 const MAX_REDIRECT_HOPS = 5;
 const DOWNLOAD_TIMEOUT_MILLIS = 180_000;

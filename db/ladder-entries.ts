@@ -1,6 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
 import * as ratings from '../server/ratings';
+import {formatUtcDate} from '../static/util';
 
 import * as stats from './agent-ladder-stats';
 import {LadderRow, LadderSlot, LadderStatus, getLadder} from './ladders';
@@ -1225,7 +1226,7 @@ export function setLadderAnchor(
       }
     }
 
-    const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
+    const dayUtc = formatUtcDate(now);
     recomputeLadderRatings(db, ladderId, now, undefined, dayUtc);
   });
 }
