@@ -444,4 +444,47 @@ describe('multi-version @pkmn/sim support', () => {
 
     await expect(sim.getWorkerSimVersion(ver, 80)).rejects.toThrow(/timed out after 80ms/);
   });
+
+  test('createBattle executes a complete battle inside a custom-version worker', async () => {
+    const ver = '0.99.5-battle';
+    installCustomFormatSim(ver, '[Gen 9] Custom Worker Battle');
+    const battle = sim.createBattle(ver);
+    const drive = async (side: 'p1' | 'p2', stream: AsyncIterable<string>) => {
+      for await (const chunk of stream) {
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('|request|')) continue;
+          const json = line.slice('|request|'.length).trim();
+          if (!json) continue;
+          const req = JSON.parse(json) as {wait?: boolean};
+          if (!req.wait) await battle.write(`>${side} default`);
+        }
+      }
+    };
+    const omni = (async () => {
+      for await (const chunk of battle.streams.omniscient) void chunk;
+    })();
+    const t1 = 'Pikachu||lightball|static|thunderbolt|Timid|,,4,252,,252|||||';
+    const t2 = 'Charmander|||blaze|ember|Timid|,,4,252,,252|||||';
+    const start = JSON.stringify({formatid: 'gen9customgame', seed: [1, 2, 3, 4]});
+    await battle.write(`>start ${start}`);
+    await battle.write(`>player p1 ${JSON.stringify({name: 'A', team: t1})}`);
+    await battle.write(`>player p2 ${JSON.stringify({name: 'B', team: t2})}`);
+    await Promise.all([omni, drive('p1', battle.streams.p1), drive('p2', battle.streams.p2)]);
+    expect(battle.getLog().some(l => l.startsWith('|win|'))).toBe(true);
+    await battle.destroy();
+  });
+
+  test('getTimerSettings resolves VGC Timer inside a custom-version worker', async () => {
+    const ver = '0.99.6-timer';
+    installCustomFormatSim(ver, '[Gen 9] Custom Timer');
+    const timer = await sim.getTimerSettings('gen9championsvgc2026regmc', ver);
+    expect(timer).toMatchObject({
+      startingSeconds: 420,
+      graceSeconds: 90,
+      addPerTurnSeconds: 0,
+      maxPerTurnSeconds: 55,
+      maxFirstTurnSeconds: 90,
+      timeoutAutoChoose: true,
+    });
+  });
 });

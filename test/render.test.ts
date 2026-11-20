@@ -3112,4 +3112,14 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('renders Account navigation link on /arena/ hub', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/arena/');
+      expect(html).toContain('<a href="/account/">Account</a>');
+    } finally {
+      await h.close();
+    }
+  });
 });

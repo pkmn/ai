@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+
 import {BattleStreams} from '@pkmn/sim';
 
 import {
@@ -5,6 +7,7 @@ import {
   parseAgentStdoutLine,
   shouldElideFromPlayerStream,
 } from '../server/protocol';
+import {root} from '../static/util';
 
 const TEAM_ONE =
   'Pikachu||lightball|static|thunderbolt,quickattack,irontail,volttackle|' +
@@ -241,5 +244,23 @@ describe('player protocol stream filtering', () => {
     expect(p1ReceivedChat).toEqual([]);
     expect(p2ReceivedChat).toEqual([]);
     expect(omniscientLog.some(l => l.includes('attempted opponent crosstalk'))).toBe(true);
+  });
+
+  test('static/rules.dj documents required Arena stdio protocol directives', () => {
+    const rules = fs.readFileSync(root('static', 'rules.dj'), 'utf8');
+    for (const token of [
+      '/ready',
+      '/utm <packed_team>',
+      '|utm|<packed_team>',
+      '|request|<JSON>',
+      '|inactive|Time left:',
+      '[Invalid choice]',
+      '[Unavailable choice]',
+      '3 consecutive',
+      '64 lines',
+      '64 KiB',
+    ]) {
+      expect(rules).toContain(token);
+    }
   });
 });

@@ -346,6 +346,92 @@ describe('schema migrations', () => {
     }
   });
 
+  test('0001 plus 0002 migrations upgrade legacy schema to match fresh columns', () => {
+    const schemaDir = path.join(tmpDir, 'schema-0001-0002');
+    const migrationDir = path.join(tmpDir, 'migration-0001-0002');
+    fs.mkdirSync(schemaDir, {recursive: true});
+    fs.mkdirSync(migrationDir, {recursive: true});
+
+    const schemaFiles = fs.readdirSync(SCHEMA_DIR).filter(f => f.endsWith('.sql'));
+    const fullSchemas = new Map<string, string>();
+    for (const file of schemaFiles) {
+      const content = fs.readFileSync(path.join(SCHEMA_DIR, file), 'utf8');
+      fullSchemas.set(file, content);
+      let legacy = content;
+      if (file === 'ladders.sql' || file === 'tournaments.sql') {
+        legacy = legacy.replace(/\s*version TEXT NOT NULL,/, '');
+      } else if (file === 'matches.sql') {
+        legacy = legacy
+          .replace(/\s*p[12]_game[12]_init_millis REAL NOT NULL DEFAULT 0\.0,/g, '')
+          .replace(/\s*p[12]_game[12]_team_preview_millis REAL,/g, '');
+      } else if (file === 'ladder-entries.sql') {
+        legacy = legacy
+          .replace(/\s*mean_init_millis REAL NOT NULL DEFAULT 0\.0,/, '')
+          .replace(/\s*mean_team_preview_millis REAL,/, '')
+          .replace(/\s*team_preview_matches INTEGER NOT NULL DEFAULT 0,/, '')
+          .replace(/\s*mean_ram REAL NOT NULL DEFAULT 0\.0,/, '');
+      } else if (file === 'agent-versions.sql') {
+        legacy = legacy
+          .replace(/\s*smoke_init_millis INTEGER,/, '')
+          .replace(/\s*smoke_team_preview_millis INTEGER,/, '');
+      } else if (file === 'tournament-games.sql') {
+        legacy = legacy
+          .replace(/\s*p[12]_init_millis REAL,/g, '')
+          .replace(/\s*p[12]_team_preview_millis REAL,/g, '');
+      }
+      fs.writeFileSync(path.join(schemaDir, file), legacy);
+    }
+
+    const migratedFile = path.join(tmpDir, 'legacy-0001-0002.sqlite');
+    new Database(migratedFile, {schemaDir, migrationDir, now: 1000}).close();
+
+    for (const [file, content] of fullSchemas) {
+      fs.writeFileSync(path.join(schemaDir, file), content);
+    }
+    for (const mig of ['0001-sim-version.sql', '0002-ready-protocol-telemetry.sql']) {
+      fs.copyFileSync(root('db', 'migration', mig), path.join(migrationDir, mig));
+    }
+
+    const migratedDb = new Database(migratedFile, {
+      schemaDir,
+      migrationDir,
+      backupBeforeMigrate: false,
+      now: 2000,
+    });
+    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 2000});
+    const colsByName = (target: Database, table: string) => {
+      const rows = target.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: string | null;
+        pk: number;
+      }>;
+      return Object.fromEntries(
+        rows.map(r => [r.name, {type: r.type, notnull: r.notnull, dflt: r.dflt_value, pk: r.pk}])
+      );
+    };
+    try {
+      for (const table of [
+        'ladders',
+        'tournaments',
+        'matches',
+        'ladder_entries',
+        'agent_versions',
+        'tournament_games',
+      ]) {
+        expect(colsByName(migratedDb, table)).toEqual(colsByName(freshDb, table));
+      }
+      expect(migratedDb.getAppliedMigrations().map(m => m.version)).toEqual([
+        '0001-sim-version.sql',
+        '0002-ready-protocol-telemetry.sql',
+      ]);
+    } finally {
+      migratedDb.close();
+      freshDb.close();
+    }
+  });
+
   test('pkmn.ai-server.service sets UMask=0077 for database backup privacy', () => {
     const unit = fs.readFileSync(root('config', 'pkmn.ai-server.service'), 'utf8');
     expect(unit).toContain('UMask=0077');

@@ -1347,5 +1347,15 @@ describe('account routes', () => {
       expect(html).toContain('id="history-pager"');
       expect(html).toContain('Page 1 of 2 (27 versions)');
     });
+
+    test('renders POST logout button returning to /arena on /account/', async () => {
+      const res = await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('action="/auth/logout?return_to=%2Farena%2F"');
+      expect(html).toContain('>Logout<');
+    });
   });
 });
