@@ -498,7 +498,7 @@ gcloud compute instances create pkmn-tourney-bake \
 
 On `pkmn-tourney-bake`, run `arena/scripts/bake-image.sh <entrants-manifest.tsv>` to pull each
 entrant's pinned `sha256` OCI image via `skopeo`, unpack layers via `umoci unpack --rootless` (or
-`unpackOciRootfs` + `finalizeUnpackedOciRootfs` from `arena/tournament.ts`), verify the 500 MB
+`unpackOciRootfs` + `finalizeUnpackedOciRootfs` from `arena/tournament.ts`), verify the 500 MiB
 resident size cap, initial `/utm <packed_team>` response (when `team` is unset), and a Turn-1
 isolated `bwrap --unshare-all` smoke game, then snapshot the VM into a custom GCP image:
 

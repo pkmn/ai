@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS agent_versions (
   -- JSON array of tournament IDs selected at submission time (e.g. '["3"]'). Gated independently of
   -- the 14-day ladder cooldown and unsettled-challenger checks (max 1 entry per project per event).
   tournaments_json TEXT NOT NULL DEFAULT '[]',
-  -- Uncompressed resident size in bytes measured on unpack (enforced <= 500 MB), or NULL pre-pull.
+  -- Uncompressed resident size in bytes measured on unpack (enforced <= 500 MiB), or NULL pre-pull.
   unpacked_bytes INTEGER,
   -- Smoke-test and runtime health state:
   --   'pending': queued for pull and offline 1-turn smoke test on the Mac mini

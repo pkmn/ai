@@ -552,7 +552,7 @@ function renderHistorySection(
               const laddersContent = allLabels.map((item, i) => (i === 0 ? item : [', ', item]));
 
               const shortSha = `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`;
-              const sizeMb = v.unpackedBytes !== undefined
+              const sizeMib = v.unpackedBytes !== undefined
                 ? Math.max(1, Math.round(v.unpackedBytes / (1024 * 1024)))
                 : undefined;
 
@@ -649,8 +649,8 @@ function renderHistorySection(
                   <td><tt>{laddersContent}</tt></td>
                   <td>
                     <tt>{shortSha}</tt>
-                    {sizeMb !== undefined && (
-                      <> <span className='muted'>({sizeMb} MB)</span></>
+                    {sizeMib !== undefined && (
+                      <> <span className='muted'>({sizeMib} MiB)</span></>
                     )}
                   </td>
                   <td>{smokeCell}</td>

@@ -450,7 +450,7 @@ export function unpackBundle(archivePath: string, destDir: string, casDir?: stri
       }
 
       if (totalBytes > MAX_BYTES) {
-        throw new Error(`Unpacked size exceeds 500 MB cap (${totalBytes} bytes)`);
+        throw new Error(`Unpacked size exceeds 500 MiB cap (${totalBytes} bytes)`);
       }
     }
 

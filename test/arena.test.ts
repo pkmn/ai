@@ -679,7 +679,7 @@ describe('arena infrastructure', () => {
       expect(fs.existsSync(path.join(slipAgentsDir, 'pwned.txt'))).toBe(false);
     });
 
-    test('rejects hardlink size-amplification archives above 500 MB', () => {
+    test('rejects hardlink size-amplification archives above 500 MiB', () => {
       const hlBombTar = path.join(tmpDir, 'hardlink-bomb.tar.gz');
       const entries: Parameters<typeof buildTestTarGz>[0] = [
         {name: 'base.bin', type: '0', data: Buffer.alloc(4 * 1024 * 1024, 0)},
@@ -690,7 +690,7 @@ describe('arena infrastructure', () => {
       fs.writeFileSync(hlBombTar, buildTestTarGz(entries));
       const hlDest = path.join(tmpDir, 'agent-hl-bomb');
       expect(() => unpack.unpackBundle(hlBombTar, hlDest, path.join(tmpDir, 'cas-hl')))
-        .toThrow(/exceeds 500 MB cap/i);
+        .toThrow(/exceeds 500 MiB cap/i);
       expect(fs.existsSync(hlDest)).toBe(false);
     });
 

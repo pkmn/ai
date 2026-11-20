@@ -1069,7 +1069,7 @@ function buildProjectMetaRows(
             <>
               {' '}
               <span className='muted'>
-                ({Math.round(latestEntry.unpackedBytes / (1024 * 1024))} MB)
+                ({Math.round(latestEntry.unpackedBytes / (1024 * 1024))} MiB)
               </span>
             </>
           )}

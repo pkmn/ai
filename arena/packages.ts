@@ -8,7 +8,7 @@ import {isAllowedBundleHost, isAllowedOciRegistryHost} from '../server/account';
 import * as db from './db';
 import * as unpack from './unpack';
 
-export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
+export const MAX_IMAGE_BYTES = 500 * 1024 * 1024; // 500 MiB hard cap
 export const MAX_OCI_LAYERS = 32;
 const MAX_REDIRECT_HOPS = 5;
 const DOWNLOAD_TIMEOUT_MILLIS = 180_000;
@@ -265,7 +265,7 @@ export function verifyOciManifestDigest(
   }
   if (compressedBytes > MAX_IMAGE_BYTES) {
     throw new Error(
-      `Compressed OCI layers (${compressedBytes} B) exceed 500 MB limit (${MAX_IMAGE_BYTES} B)`
+      `Compressed OCI layers (${compressedBytes} B) exceed 500 MiB limit (${MAX_IMAGE_BYTES} B)`
     );
   }
 
@@ -438,7 +438,7 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
     if (!Number.isFinite(uncompressedBytes) || uncompressedBytes > MAX_IMAGE_BYTES) {
       throw new Error(
         `Uncompressed OCI image size (${uncompressedBytes} B) ` +
-        `exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+        `exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
       );
     }
 
@@ -502,7 +502,7 @@ export async function downloadAndUnpackBundle(opts: {
           total += bytesRead;
           if (total > MAX_IMAGE_BYTES) {
             throw new Error(
-              `Compressed bundle (${total} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+              `Compressed bundle (${total} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
             );
           }
           const slice = chunk.subarray(0, bytesRead);
@@ -569,7 +569,7 @@ export async function downloadAndUnpackBundle(opts: {
       if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
         await res.body?.cancel().catch(() => {});
         throw new Error(
-          `Compressed bundle (${contentLength} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+          `Compressed bundle (${contentLength} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
         );
       }
       if (res.body && typeof res.body.getReader === 'function') {
@@ -585,7 +585,7 @@ export async function downloadAndUnpackBundle(opts: {
             if (total > MAX_IMAGE_BYTES) {
               await reader.cancel().catch(() => {});
               throw new Error(
-                `Compressed bundle (${total} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+                `Compressed bundle (${total} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
               );
             }
             hash.update(value);
@@ -598,7 +598,7 @@ export async function downloadAndUnpackBundle(opts: {
         const buf = Buffer.from(await res.arrayBuffer());
         if (buf.byteLength > MAX_IMAGE_BYTES) {
           throw new Error(
-            `Compressed bundle (${buf.byteLength} B) exceeds 500 MB cap (${MAX_IMAGE_BYTES} B)`
+            `Compressed bundle (${buf.byteLength} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
           );
         }
         hash.update(buf);

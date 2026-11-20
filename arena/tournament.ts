@@ -1649,7 +1649,7 @@ export function finalizeUnpackedOciRootfs(bundleDir: string): number {
   const unpackedBytes = Number.isFinite(duKb) ? duKb * 1024 : 0;
   if (unpackedBytes <= 0 || unpackedBytes > packages.MAX_IMAGE_BYTES) {
     throw new Error(
-      `Unpacked tournament rootfs size (${unpackedBytes} B) exceeds 500 MB cap`
+      `Unpacked tournament rootfs size (${unpackedBytes} B) exceeds 500 MiB cap`
     );
   }
 

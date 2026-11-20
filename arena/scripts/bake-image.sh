@@ -245,7 +245,7 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
     exit 1
   fi
   if (( COMPRESSED_BYTES > 524288000 )); then
-    echo "ERROR: ${AGENT_ID} compressed layers exceed 500 MB (${COMPRESSED_BYTES} bytes)" >&2
+    echo "ERROR: ${AGENT_ID} compressed layers exceed 500 MiB (${COMPRESSED_BYTES} bytes)" >&2
     rm -rf "$WORK_DIR"
     exit 1
   fi
@@ -316,10 +316,10 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   sudo mv "$ROOTFS_STAGE" "$DEST_DIR"
   rm -rf "$WORK_DIR"
 
-  # 3. Verify unpacked size <= 500 MB and lock down read-only permissions
+  # 3. Verify unpacked size <= 500 MiB and lock down read-only permissions
   UNPACKED_KB="$(sudo du -sk "$DEST_DIR" | awk '{print $1}')"
   if (( UNPACKED_KB > 512000 )); then
-    echo "ERROR: ${AGENT_ID} unpacked rootfs exceeds 500 MB (${UNPACKED_KB} KiB)" >&2
+    echo "ERROR: ${AGENT_ID} unpacked rootfs exceeds 500 MiB (${UNPACKED_KB} KiB)" >&2
     sudo rm -rf "$DEST_DIR"
     exit 1
   fi

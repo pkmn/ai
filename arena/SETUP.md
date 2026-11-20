@@ -50,7 +50,7 @@ smoke tests.
 | **Binaries & Helpers** | `/opt/arena/bin/{arena,limit}` | Lifecycle script and C `ri_phys_footprint` 14 GiB supervisor. |
 | **Seatbelt Profile** | `/opt/arena/etc/sandbox.sb` | Mandatory Access Control profile for native `darwin/arm64` agent bundles. |
 | **Era-Matched Usage Stats** | `/opt/arena/stats/` | Read-only `data.pkmn.cc` stats mount (`PKMN_STATS_DIR=/opt/arena/stats`) shared by bundles & containers. |
-| **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MB`, deduplicated via `/opt/arena/cas/sha256`). |
+| **Hot Agent Storage** | `/opt/arena/agents/<target>/` | Unpacked native bundles (`<= 500 MiB`, deduplicated via `/opt/arena/cas/sha256`). |
 | **Coordinator State DB** | `/opt/arena/state/arena.sqlite` | Local WAL SQLite DB (`local_agents`, `local_matches`, `outbox`, `ladder_counters`). |
 | **Daemon Logs** | `/opt/arena/logs/{arena,tunnel}.{log,err}` | Stdout/stderr logs for `ai.pkmn.arena` and `ai.pkmn.tunnel`. |
 | **APFS Scratch Volumes** | `/Volumes/P1`, `/Volumes/P2` (`4G` quota) | Quota-capped APFS volumes (`0711` `root:wheel`) with `/Volumes/P{1,2}/scratch` (`0700` + `p1`/`p2` & `pkmn` ACLs) wiped around every game. |
