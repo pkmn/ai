@@ -4079,7 +4079,12 @@ export function register(app: polka.Polka, options: Options) {
     rawId: string,
     rawFile: string
   ) => {
-    if (!/^[A-Za-z0-9._-]+$/.test(rawId) || !/^[A-Za-z0-9._-]+\.log$/.test(rawFile)) {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(rawId) ||
+      rawId.includes('..') ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.log$/.test(rawFile) ||
+      rawFile.includes('..')
+    ) {
       sendHtmlNotFound(res);
       return;
     }
@@ -4098,6 +4103,9 @@ export function register(app: polka.Polka, options: Options) {
       if (ladder?.team === 'pools') {
         arena.promoteArchivedPoolsLogs(publicDir, ladder.id);
       }
+    } else if (!db.getTournament(rawId)) {
+      sendHtmlNotFound(res);
+      return;
     }
     const logPath = path.join(publicDir, 'arena', subdir, rawId, rawFile);
     if (!fs.existsSync(logPath)) {

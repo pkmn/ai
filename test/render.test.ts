@@ -2983,4 +2983,30 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('rejects encoded parent-traversal tournament log paths with 404', async () => {
+    const escapedPath = path.join(tmpPublic, 'arena', 'escaped.log');
+    fs.mkdirSync(path.dirname(escapedPath), {recursive: true});
+    fs.writeFileSync(escapedPath, '|turn|1\n');
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const res = await fetch(`${h.baseUrl}/arena/tournaments/%2e%2e/escaped.log`);
+      expect(res.status).toBe(404);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('rejects tournament log requests for nonexistent tournament ids with 404', async () => {
+    const roguePath = path.join(tmpPublic, 'arena', 'tournaments', '999', 'game1.log');
+    fs.mkdirSync(path.dirname(roguePath), {recursive: true});
+    fs.writeFileSync(roguePath, '|turn|1\n');
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const res = await fetch(`${h.baseUrl}/arena/tournaments/999/game1.log`);
+      expect(res.status).toBe(404);
+    } finally {
+      await h.close();
+    }
+  });
 });
