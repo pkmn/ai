@@ -3,14 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import * as ratings from '../server/ratings';
 
 import {recomputeTournamentStandings} from './tournament-entrants';
-import {
-  TournamentGameInput,
-  TournamentGameRow,
-  getTournamentMatchGames,
-  getTournamentMatchGamesByTournament,
-  getTournamentMatchGamesForMatches,
-  replaceTournamentMatchGames,
-} from './tournament-games';
+import * as tournamentGames from './tournament-games';
 import {getTournament} from './tournaments';
 
 import {TransactionRunner} from './index';
@@ -40,7 +33,7 @@ export interface TournamentMatchRow {
   outcome?: ratings.GameOutcome;
   p1: TournamentGamePlayer;
   p2: TournamentGamePlayer;
-  games: TournamentGameRow[];
+  games: tournamentGames.TournamentGameRow[];
   completedAt?: number;
 }
 
@@ -68,7 +61,7 @@ export interface UpsertTournamentGameInput {
   outcome?: ratings.GameOutcome;
   p1: TournamentGamePlayer;
   p2: TournamentGamePlayer;
-  games?: readonly TournamentGameInput[];
+  games?: readonly tournamentGames.TournamentGameInput[];
   completedAt?: number;
 }
 
@@ -82,7 +75,7 @@ export interface CompletedTournamentGamePayload {
   outcome: ratings.GameOutcome;
   p1: TournamentGamePlayer;
   p2: TournamentGamePlayer;
-  games: readonly TournamentGameInput[];
+  games: readonly tournamentGames.TournamentGameInput[];
   completedAt: number;
 }
 
@@ -125,13 +118,13 @@ export function upsertTournamentGame(db: DatabaseSync, input: UpsertTournamentGa
   );
 
   if (input.games !== undefined) {
-    replaceTournamentMatchGames(db, input.id, input.games);
+    tournamentGames.replaceTournamentMatchGames(db, input.id, input.games);
   }
 }
 
 function mapTournamentGameView(
   r: Record<string, unknown>,
-  games: TournamentGameRow[]
+  games: tournamentGames.TournamentGameRow[]
 ): TournamentGameView {
   return {
     id: r.id as string,
@@ -186,7 +179,7 @@ export function getTournamentGame(
     )
     .get(matchId) as Record<string, unknown> | undefined;
   if (!row) return undefined;
-  const games = getTournamentMatchGames(db, matchId);
+  const games = tournamentGames.getTournamentMatchGames(db, matchId);
   return mapTournamentGameView(row, games);
 }
 
@@ -281,8 +274,8 @@ export function getTournamentGames(
     .all(tournamentId, limit) as Array<Record<string, unknown>>;
 
   const gamesByMatch = rows.length <= 500
-    ? getTournamentMatchGamesForMatches(db, rows.map(row => row.id as string))
-    : getTournamentMatchGamesByTournament(db, tournamentId);
+    ? tournamentGames.getTournamentMatchGamesForMatches(db, rows.map(row => row.id as string))
+    : tournamentGames.getTournamentMatchGamesByTournament(db, tournamentId);
   return rows.map(row => mapTournamentGameView(row, gamesByMatch.get(row.id as string) ?? []));
 }
 

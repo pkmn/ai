@@ -8,26 +8,10 @@ import polka from 'polka';
 import {SETTLED_MAX_SE, SETTLED_MIN_MATCHES, loadLadderPools} from '../db';
 import type * as db from '../db';
 import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
-import {
-  Child,
-  Html,
-  TABLE_PAGER_SCRIPT,
-  TABLE_PAGE_SIZE,
-  TablePager,
-  VERSION_RE,
-  formatUtcDate,
-  formatUtcDateTime,
-  installHeadSupport,
-  readBody,
-  root,
-} from '../static/util';
+import * as util from '../static/util';
 
 import {Auth, isCrossSiteRequest} from './auth';
-import {
-  RejectedTeam,
-  splitSubmittedTeams,
-  validateCompetitorTeamsIncrementalForVersion,
-} from './teams';
+import * as serverTeams from './teams';
 
 export function deducePackageFormat(url: string): db.PackageFormat {
   const cleanPath = url.split(/[?#]/)[0].toLowerCase();
@@ -91,7 +75,7 @@ const MAX_SUBMISSION_BYTES = 512 * 1024;
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 
-const STYLE = fs.readFileSync(root('static', 'style', 'account.css'), 'utf8');
+const STYLE = fs.readFileSync(util.root('static', 'style', 'account.css'), 'utf8');
 
 const ACCOUNT_SCRIPT = `
   document.addEventListener('DOMContentLoaded', () => {
@@ -389,7 +373,7 @@ const ACCOUNT_SCRIPT = `
       });
     }
 
-    ${TABLE_PAGER_SCRIPT}
+    ${util.TABLE_PAGER_SCRIPT}
   });
 `;
 
@@ -431,7 +415,7 @@ function redirect(res: http.ServerResponse, location: string, status = 302) {
   res.end();
 }
 
-function renderActiveSection(entries: db.ActiveEntryView[]): Html {
+function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
   if (!entries.length) {
     return (
       <section id='active'>
@@ -516,7 +500,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): Html {
 function renderHistorySection(
   versions: db.VersionHistoryView[],
   ladderNameById: Map<string, string>
-): Html {
+): util.Html {
   if (!versions.length) {
     return (
       <section id='history'>
@@ -543,8 +527,8 @@ function renderHistorySection(
           </thead>
           <tbody>
             {versions.map((v, idx) => {
-              const ladderLabels: Child[] = v.ladders.map(id => ladderNameById.get(id) ?? id);
-              const tourneyLabels: Child[] = (v.tournamentNames ?? []).map(name => {
+              const ladderLabels: util.Child[] = v.ladders.map(id => ladderNameById.get(id) ?? id);
+              const tourneyLabels: util.Child[] = (v.tournamentNames ?? []).map(name => {
                 const m = /^Tournament #(\d+)/.exec(name);
                 return m ? <span title={name}>T#{m[1]}</span> : name;
               });
@@ -572,7 +556,7 @@ function renderHistorySection(
                 v.smokeStatus === 'passed' &&
                 v.activeLadderNames.length === 0;
 
-              let smokeCell: Child;
+              let smokeCell: util.Child;
               if (v.smokeStatus === 'pending') {
                 smokeCell = <span className='muted'>PENDING</span>;
               } else if (v.smokeStatus === 'passed') {
@@ -616,7 +600,7 @@ function renderHistorySection(
                 );
               }
 
-              let stateCell: Child;
+              let stateCell: util.Child;
               if (v.smokeStatus === 'pending') {
                 stateCell = <span className='muted'>Pending</span>;
               } else if (v.smokeStatus === 'failed') {
@@ -637,7 +621,7 @@ function renderHistorySection(
 
               const classes: string[] = [];
               if (isRetired) classes.push('secondary');
-              if (idx >= TABLE_PAGE_SIZE) classes.push('hide');
+              if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
 
               return (
                 <tr className={classes.length > 0 ? classes.join(' ') : undefined}>
@@ -655,14 +639,14 @@ function renderHistorySection(
                   </td>
                   <td className='wrap'>{smokeCell}</td>
                   <td>{stateCell}</td>
-                  <td className='num muted'>{formatUtcDate(v.submittedAt)}</td>
+                  <td className='num muted'>{util.formatUtcDate(v.submittedAt)}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <TablePager
+      <util.TablePager
         id='history-pager'
         label='Version history pagination'
         total={versions.length}
@@ -735,7 +719,7 @@ export function renderAccountPage(opts: {
   const activeLadderIdsWithAgent = new Set(activeEntries.map(e => e.ladderId));
 
   const firstPoolLadder = needsTeamsLadders[0];
-  let poolTeamsRow: Child = undefined;
+  let poolTeamsRow: util.Child = undefined;
   if (firstPoolLadder?.teams && status.canSubmit) {
     const count = firstPoolLadder.teams;
     const saved = savedTeamsByLadder.get(firstPoolLadder.id) ?? 0;
@@ -783,7 +767,7 @@ export function renderAccountPage(opts: {
     );
   }
 
-  let statusNotice: Html = <div id='sub-status' className='hide' />;
+  let statusNotice: util.Html = <div id='sub-status' className='hide' />;
   if (!canSubmitAny && status.reason) {
     statusNotice = <div id='sub-status' className='muted'>{status.reason}</div>;
   } else if (!status.canSubmit && canSubmitTourney && status.reason) {
@@ -899,8 +883,8 @@ export function renderAccountPage(opts: {
                   <div className='check-group'>
                     {tournamentStatuses.map(t => {
                       const scheduleHint =
-                        `starts ${formatUtcDate(t.startsAt)} · ` +
-                        `entries close ${formatUtcDateTime(t.closesAt)}`;
+                        `starts ${util.formatUtcDate(t.startsAt)} · ` +
+                        `entries close ${util.formatUtcDateTime(t.closesAt)}`;
                       if (t.canSubmit) {
                         const checked = !status.canSubmit && tournamentStatuses.length === 1;
                         return (
@@ -913,7 +897,7 @@ export function renderAccountPage(opts: {
                             />{' '}
                             {t.name}{' '}
                             <span className='muted'>
-                              (OCI · closes {formatUtcDateTime(t.closesAt)})
+                              (OCI · closes {util.formatUtcDateTime(t.closesAt)})
                             </span>
                           </label>
                         );
@@ -1206,7 +1190,7 @@ export function validateArtifactUrl(
 }
 
 export function register(app: polka.Polka, options: Options) {
-  installHeadSupport(app);
+  util.installHeadSupport(app);
   const {db, auth} = options;
   const getNow = options.now ?? (() => Math.floor(Date.now() / 1000));
   const getPools = () => options.poolsByLadder ?? loadLadderPools();
@@ -1416,7 +1400,7 @@ export function register(app: polka.Polka, options: Options) {
 
     let payload: ReturnType<typeof parseSubmissionPayload>;
     try {
-      const rawBody = await readBody(
+      const rawBody = await util.readBody(
         req,
         MAX_SUBMISSION_BYTES,
         'Submission payload exceeds 512 KB limit.'
@@ -1427,7 +1411,7 @@ export function register(app: polka.Polka, options: Options) {
       return;
     }
 
-    if (!VERSION_RE.test(payload.version)) {
+    if (!util.VERSION_RE.test(payload.version)) {
       sendJson(res, 400, {
         error:
           'Invalid version string (must be 1–12 chars matching ^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$).',
@@ -1588,13 +1572,13 @@ export function register(app: polka.Polka, options: Options) {
           savedCount: existingSaved.length,
           requiredCount: requiredTeams,
           remainingCount: requiredTeams - existingSaved.length,
-          rejections: [] as RejectedTeam[],
+          rejections: [] as serverTeams.RejectedTeam[],
         });
         return;
       }
 
       const pools = poolsMap.get(ladder.id) ?? [];
-      const result = await validateCompetitorTeamsIncrementalForVersion(
+      const result = await serverTeams.validateCompetitorTeamsIncrementalForVersion(
         payload.teams,
         {
           format: ladder.format,
@@ -1610,7 +1594,7 @@ export function register(app: polka.Polka, options: Options) {
       }
 
       if (!result.complete || result.rejections.length > 0) {
-        const chunkCount = splitSubmittedTeams(payload.teams).length;
+        const chunkCount = serverTeams.splitSubmittedTeams(payload.teams).length;
         const baseError = result.rejections.length > 0
           ? result.rejections[0].reason
           : `Expected ${requiredTeams} teams for ${ladder.format}, received ${chunkCount}.`;

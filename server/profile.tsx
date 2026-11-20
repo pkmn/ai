@@ -4,23 +4,13 @@ import * as path from 'path';
 import {AVATARS_DIR} from '../db';
 import type * as db from '../db';
 import {Renderer, header, injectLiveBanner} from '../static/build';
-import {
-  Child,
-  EXT_ICON,
-  Html,
-  TABLE_PAGE_SIZE,
-  TablePager,
-  formatUtcDate,
-  parseUtcDayMillis,
-  raw,
-  root,
-} from '../static/util';
+import * as util from '../static/util';
 
 import * as arena from './arena';
 import * as ratings from './ratings';
 import * as render from './render';
 
-const PROFILE_STYLE = fs.readFileSync(root('static', 'style', 'profile.css'), 'utf8');
+const PROFILE_STYLE = fs.readFileSync(util.root('static', 'style', 'profile.css'), 'utf8');
 
 interface VersionDynamicStats {
   rank: string;
@@ -46,7 +36,7 @@ function formatIsoDateTimeUtc(sec: number): string {
   return `${new Date(sec * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`;
 }
 
-function formatDurationCell(seconds: number, boldDays = false): Html {
+function formatDurationCell(seconds: number, boldDays = false): util.Html {
   if (seconds <= 0) {
     return <span className='muted'>—</span>;
   }
@@ -134,7 +124,7 @@ function buildReignRowsHtml(
   );
 }
 
-function formatCurStreakNode(winStreak: number, lossStreak: number, played: number): Child {
+function formatCurStreakNode(winStreak: number, lossStreak: number, played: number): util.Child {
   if (winStreak >= 3) return <span className='yes'>W{winStreak}</span>;
   if (winStreak >= 1) return `W${winStreak}`;
   if (lossStreak >= 3) return <span className='no'>L{lossStreak}</span>;
@@ -151,7 +141,7 @@ function buildVersionDynamicStats(
     entry.role !== 'retired' && (entry.matches < 10 || entry.se > 60);
   let rank: string;
   if (entry.role === 'retired') {
-    const retDate = entry.retiredAt ? ` ${formatUtcDate(entry.retiredAt)}` : '';
+    const retDate = entry.retiredAt ? ` ${util.formatUtcDate(entry.retiredAt)}` : '';
     rank = String(<span className='muted'>— (retired{retDate})</span>);
   } else if (entry.rankCurrent !== undefined && !isProvisional) {
     const nextRank = entry.rankCurrent + 1;
@@ -309,9 +299,9 @@ function renderVersionsLineageSvg(
   entriesDesc: db.AgentLadderProfileEntry[],
   snapshots: db.LadderSnapshotHistoryRow[],
   nowSec: number
-): Html {
+): util.Html {
   const entriesChron = [...entriesDesc].reverse();
-  const todayUtc = formatUtcDate(nowSec);
+  const todayUtc = util.formatUtcDate(nowSec);
   const snapsByVer = new Map<number, db.LadderSnapshotHistoryRow[]>();
   for (const s of snapshots) {
     const list = snapsByVer.get(s.versionId) ?? [];
@@ -325,7 +315,7 @@ function renderVersionsLineageSvg(
   for (const e of entriesChron) {
     const rawSnaps = (snapsByVer.get(e.versionId) ?? []).filter(r => r.matches > 0);
     const pts = rawSnaps.map(r => ({day: r.dayUtc, elo: r.elo, se: r.se}));
-    const startDay = formatUtcDate(e.submittedAt);
+    const startDay = util.formatUtcDate(e.submittedAt);
     if (pts.length === 0) {
       pts.push({day: startDay, elo: e.elo, se: e.se});
       if (e.role !== 'retired' && todayUtc > startDay) {
@@ -339,8 +329,8 @@ function renderVersionsLineageSvg(
   }
 
   const allDays = [...allDaysSet].sort((a, b) => a.localeCompare(b));
-  const minDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[0]) : 0;
-  const maxDayMillis = allDays.length > 0 ? parseUtcDayMillis(allDays[allDays.length - 1]) : 0;
+  const minDayMillis = allDays.length > 0 ? util.parseUtcDayMillis(allDays[0]) : 0;
+  const maxDayMillis = allDays.length > 0 ? util.parseUtcDayMillis(allDays[allDays.length - 1]) : 0;
 
   let minElo = 1500;
   let maxElo = 1750;
@@ -361,7 +351,7 @@ function renderVersionsLineageSvg(
   // release cadence (e.g. rapid patch followed by weeks of steady play) is true to calendar time.
   const mapX = (day: string): number => {
     if (maxDayMillis <= minDayMillis) return xRight;
-    const frac = (parseUtcDayMillis(day) - minDayMillis) / (maxDayMillis - minDayMillis);
+    const frac = (util.parseUtcDayMillis(day) - minDayMillis) / (maxDayMillis - minDayMillis);
     return Math.round((xLeft + frac * (xRight - xLeft)) * 10) / 10;
   };
   const mapY = (elo: number): number => {
@@ -370,8 +360,8 @@ function renderVersionsLineageSvg(
     return Math.round((yTop + frac * (yBottom - yTop)) * 10) / 10;
   };
 
-  const gridLines: Html[] = [];
-  const yLabels: Html[] = [];
+  const gridLines: util.Html[] = [];
+  const yLabels: util.Html[] = [];
   const step = axisMax - axisMin > 500 ? 150 : 100;
   for (let tick = axisMax; tick >= axisMin; tick -= step) {
     const y = mapY(tick);
@@ -393,8 +383,8 @@ function renderVersionsLineageSvg(
     .sort((a, b) => b.lcb - a.lcb);
   const primaryVerId = (activeEntries[0] ?? entriesChron[entriesChron.length - 1])?.versionId;
 
-  const releaseDividers: Html[] = [];
-  const xLabels: Html[] = [];
+  const releaseDividers: util.Html[] = [];
+  const xLabels: util.Html[] = [];
   const seenLabelX = new Set<number>();
 
   for (let i = 0; i < entriesChron.length; i++) {
@@ -414,7 +404,7 @@ function renderVersionsLineageSvg(
   }
   xLabels.push(<text x={xRight} y='212'>Today</text>);
 
-  const seriesEls: Html[] = [];
+  const seriesEls: util.Html[] = [];
   const pendingLabels: Array<{
     x: number;
     y: number;
@@ -552,7 +542,7 @@ function renderVersionsPane(opts: {
   entriesDesc: db.AgentLadderProfileEntry[];
   snapshots: db.LadderSnapshotHistoryRow[];
   nowSec: number;
-}): Html {
+}): util.Html {
   const {agentName, ladderKey, isDefault, entriesDesc, snapshots, nowSec} = opts;
   const entriesChron = [...entriesDesc].reverse();
   const prevEloByVer = new Map<number, number>();
@@ -596,7 +586,7 @@ function renderVersionsPane(opts: {
               const ci = e.isAnchor ? 0 : Math.round(1.96 * e.se);
               const prevElo = prevEloByVer.get(e.versionId);
 
-              let deltaCell: Html;
+              let deltaCell: util.Html;
               if (prevElo === undefined) {
                 deltaCell = <td className='num muted'>—</td>;
               } else {
@@ -622,7 +612,7 @@ function renderVersionsPane(opts: {
               const peakRamTip = `Peak: ${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
               const classes: string[] = [];
               if (isRetired) classes.push('secondary');
-              if (idx >= TABLE_PAGE_SIZE) classes.push('hide');
+              if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
 
               return (
                 <tr
@@ -646,14 +636,14 @@ function renderVersionsPane(opts: {
                   {hasTeamPreview && <td className='num'>{tpText}</td>}
                   <td className='num'>{turnText}</td>
                   <td className='num' title={peakRamTip}>{meanRamText}</td>
-                  <td className='num muted'>{formatUtcDate(e.submittedAt)}</td>
+                  <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <TablePager
+      <util.TablePager
         label='Versions pagination'
         total={entriesDesc.length}
         singular='version'
@@ -671,7 +661,7 @@ function renderHeadToHeadPane(opts: {
   allEntries: db.LeaderboardEntryView[];
   pairs: db.PairAggregateRow[];
   links: render.AgentLinkContext;
-}): {pane: Html; empty: boolean} {
+}): {pane: util.Html; empty: boolean} {
   const {
     agentId,
     ladderKey,
@@ -705,7 +695,7 @@ function renderHeadToHeadPane(opts: {
   // Pick each opponent agent's primary active (or top) version that has played against `rep`.
   const oppCandidates = allEntries.filter(e => e.agentId !== agentId);
   const seenOppAgents = new Set<number>();
-  const h2hRows: Html[] = [];
+  const h2hRows: util.Html[] = [];
 
   let fallbackSolve: ReturnType<typeof ratings.solveIndexedDavidson> | undefined;
 
@@ -736,7 +726,7 @@ function renderHeadToHeadPane(opts: {
     const resid = scorePct - expPct;
     const residSign = resid > 0 ? '+' : '';
     const residText = `${residSign}${resid.toFixed(1)}%`;
-    let residNode: Child = residText;
+    let residNode: util.Child = residText;
     let residTip: string | undefined;
     // Gate stylistic Best Matchup / Nemesis highlighting on >= 10 paired matches so tiny early
     // samples (e.g. 1-0 = +50% over expectation) don't masquerade as non-transitive counterpicks.
@@ -751,7 +741,7 @@ function renderHeadToHeadPane(opts: {
     const signedCur = isLow ? pair.currentStreak : -pair.currentStreak;
     const maxW = isLow ? pair.lowMaxWinStreak : pair.highMaxWinStreak;
     const maxL = isLow ? pair.highMaxWinStreak : pair.lowMaxWinStreak;
-    let curStrNode: Child;
+    let curStrNode: util.Child;
     if (signedCur >= 3) curStrNode = <span className='yes'>W{signedCur}</span>;
     else if (signedCur >= 1) curStrNode = `W${signedCur}`;
     else if (signedCur <= -3) curStrNode = <span className='no'>L{-signedCur}</span>;
@@ -778,7 +768,7 @@ function renderHeadToHeadPane(opts: {
     const losPct = losVal !== undefined ? losVal * 100 : 50;
 
     const wltTip = `${wins} W, ${ties} (WL/LW/TT), ${losses} L`;
-    const rowCls = h2hRows.length >= TABLE_PAGE_SIZE ? 'opp-row hide' : 'opp-row';
+    const rowCls = h2hRows.length >= util.TABLE_PAGE_SIZE ? 'opp-row hide' : 'opp-row';
 
     h2hRows.push(
       <tr
@@ -787,7 +777,7 @@ function renderHeadToHeadPane(opts: {
         title={`Click to filter Matches vs. ${opp.agentName}`}
       >
         <td data-val={opp.agentName}>
-          {raw(oppLink)} <code>{opp.version}</code>
+          {util.raw(oppLink)} <code>{opp.version}</code>
         </td>
         <td className='num' data-val={oppElo}>
           {oppElo}
@@ -858,7 +848,7 @@ function renderHeadToHeadPane(opts: {
             <tbody>{h2hRows}</tbody>
           </table>
         </div>
-        <TablePager
+        <util.TablePager
           label='Head-to-head pagination'
           total={h2hRows.length}
           singular='opponent'
@@ -883,7 +873,7 @@ function renderRecentMatchesPane(opts: {
   agentLinks: Readonly<Record<string, string>>;
   publicDir: string;
   nowSec: number;
-}): Html {
+}): util.Html {
   const {
     agentSlug,
     ladderKey,
@@ -920,7 +910,7 @@ function renderRecentMatchesPane(opts: {
                 const ourOutcome = weAreP1 ? ternary.p1 : ternary.p2;
                 const ourCat = weAreP1 ? m.category : invertCategory(m.category);
 
-                let resNode: Html;
+                let resNode: util.Html;
                 if (ourOutcome === 'W') {
                   resNode = (
                     <><span className='yes'>W</span> <span className='muted'>({ourCat})</span></>
@@ -941,7 +931,7 @@ function renderRecentMatchesPane(opts: {
                   agentLinks,
                   agentSlug
                 );
-                const rowCls = idx >= TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
+                const rowCls = idx >= util.TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
 
                 return (
                   <>
@@ -958,7 +948,7 @@ function renderRecentMatchesPane(opts: {
                       </td>
                       <td><code>{ourSide.version}</code></td>
                       <td>
-                        {raw(render.formatAgentLink(oppSide.name, oppHref, false))}{' '}
+                        {util.raw(render.formatAgentLink(oppSide.name, oppHref, false))}{' '}
                         <code>{oppSide.version}</code>
                       </td>
                       <td className='center'>{resNode}</td>
@@ -967,7 +957,7 @@ function renderRecentMatchesPane(opts: {
                       </td>
                     </tr>
                     <tr className='battle-detail-row hide' data-detail-for={m.id}>
-                      <td colSpan={5}>{raw(detailHtml)}</td>
+                      <td colSpan={5}>{util.raw(detailHtml)}</td>
                     </tr>
                   </>
                 );
@@ -976,7 +966,7 @@ function renderRecentMatchesPane(opts: {
           </tbody>
         </table>
       </div>
-      <TablePager
+      <util.TablePager
         label='Matches pagination'
         total={totalMatches}
         singular='match'
@@ -993,8 +983,8 @@ function buildProjectMetaRows(
   agent: db.AgentRow,
   meta: render.ProjectMeta | undefined,
   latestEntry: db.AgentLadderProfileEntry | undefined
-): Html[] {
-  const rows: Html[] = [];
+): util.Html[] {
+  const rows: util.Html[] = [];
   const devs = db.getDevelopersForAgent(agent.id);
   if (devs.length > 0) {
     rows.push(
@@ -1647,7 +1637,7 @@ export function renderAgentProfile(opts: {
   const meta = projectMeta.get(agent.name);
   const siteLink = meta?.site ? (
     <a href={meta.site} className='subtle' title='Project Homepage'>
-      {raw(EXT_ICON)}
+      {util.raw(util.EXT_ICON)}
     </a>
   ) : undefined;
   const profileHeader = injectLiveBanner(
@@ -1735,7 +1725,7 @@ export function renderAgentProfile(opts: {
                 </tr>
               </thead>
               <tbody id='reign-tbody'>
-                {raw(emptyReign)}
+                {util.raw(emptyReign)}
               </tbody>
             </table>
           </div>
@@ -1793,10 +1783,10 @@ export function renderAgentProfile(opts: {
 
   const profileDataMap: Record<string, LadderProfileClientData> = {};
   const ladderJsonList: unknown[] = [];
-  const formatNavParts: Child[] = [];
-  const versionsPanes: Html[] = [];
-  const matchupsPanes: Html[] = [];
-  const matchesPanes: Html[] = [];
+  const formatNavParts: util.Child[] = [];
+  const versionsPanes: util.Html[] = [];
+  const matchupsPanes: util.Html[] = [];
+  const matchesPanes: util.Html[] = [];
   const agentLinks: Record<string, string> = {};
   const registerAgentLink = (slug: string, name: string) => {
     if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return;
@@ -2118,7 +2108,7 @@ export function renderAgentProfile(opts: {
         >
           <label htmlFor='ver-select' className='muted'>Version</label>
           <select id='ver-select' className='min-select' aria-label='Version'>
-            {raw(initialData.optionsHtml)}
+            {util.raw(initialData.optionsHtml)}
           </select>
         </div>
       </div>
@@ -2130,21 +2120,27 @@ export function renderAgentProfile(opts: {
           </table>
 
           <table className='kv'>
-            <tr><td><strong>Rank</strong></td><td id='stat-rank'>{raw(initStats.rank)}</td></tr>
-            <tr><td><strong>Elo</strong></td><td id='stat-elo'>{raw(initStats.elo)}</td></tr>
-            <tr><td><strong>GXE</strong></td><td id='stat-gxe'>{raw(initStats.gxe)}</td></tr>
-            <tr><td><strong>Peak</strong></td><td id='stat-peak'>{raw(initStats.peak)}</td></tr>
+            <tr>
+              <td><strong>Rank</strong></td>
+              <td id='stat-rank'>{util.raw(initStats.rank)}</td>
+            </tr>
+            <tr><td><strong>Elo</strong></td><td id='stat-elo'>{util.raw(initStats.elo)}</td></tr>
+            <tr><td><strong>GXE</strong></td><td id='stat-gxe'>{util.raw(initStats.gxe)}</td></tr>
+            <tr>
+              <td><strong>Peak</strong></td>
+              <td id='stat-peak'>{util.raw(initStats.peak)}</td>
+            </tr>
             <tr>
               <td><strong>Matches</strong></td>
-              <td id='stat-record'>{raw(initStats.record)}</td>
+              <td id='stat-record'>{util.raw(initStats.record)}</td>
             </tr>
             <tr>
               <td><strong>Streak</strong></td>
-              <td id='stat-streak'>{raw(initStats.streak)}</td>
+              <td id='stat-streak'>{util.raw(initStats.streak)}</td>
             </tr>
             <tr>
               <td><strong>Telemetry</strong></td>
-              <td id='stat-telemetry'>{raw(initStats.telemetry)}</td>
+              <td id='stat-telemetry'>{util.raw(initStats.telemetry)}</td>
             </tr>
           </table>
         </div>
@@ -2160,7 +2156,7 @@ export function renderAgentProfile(opts: {
               </tr>
             </thead>
             <tbody id='reign-tbody'>
-              {raw(initialData.reign.all)}
+              {util.raw(initialData.reign.all)}
             </tbody>
           </table>
         </div>
@@ -2182,7 +2178,7 @@ export function renderAgentProfile(opts: {
           <div className='ver-picker'>
             <label htmlFor='opp-select' className='muted'>Opponent</label>
             <select id='opp-select' className='min-select' aria-label='Opponent'>
-              {raw(initialData.oppOptionsHtml)}
+              {util.raw(initialData.oppOptionsHtml)}
             </select>
           </div>
         </div>

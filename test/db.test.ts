@@ -4,16 +4,7 @@ import * as path from 'path';
 
 import {Teams} from '@pkmn/sim';
 
-import {
-  Database,
-  LADDERS_FILE,
-  SCHEMA_DIR,
-  classifyMigrationSql,
-  getTournamentBestOf,
-  getTournamentClosesAt,
-  parseArenaProjects,
-  parseLaddersYaml,
-} from '../db';
+import * as database from '../db';
 import * as arena from '../server/arena';
 import * as smogon from '../server/smogon';
 import {validateHarvestedTeams} from '../server/teams';
@@ -53,7 +44,7 @@ describe('schema migrations', () => {
     `);
 
     const dbFile = path.join(tmpDir, 'test.sqlite');
-    const db1 = new Database(dbFile, {schemaDir, migrationDir, now: 1000});
+    const db1 = new database.Database(dbFile, {schemaDir, migrationDir, now: 1000});
     db1.db.exec(
       "INSERT INTO items (id, name) VALUES (1, 'alpha'); INSERT INTO refs VALUES (10, 1);"
     );
@@ -88,7 +79,7 @@ describe('schema migrations', () => {
   }
 
   test('loads individual .sql table definitions from db/schema/', () => {
-    const schemaFiles = fs.readdirSync(SCHEMA_DIR)
+    const schemaFiles = fs.readdirSync(database.SCHEMA_DIR)
       .filter(f => f.endsWith('.sql'))
       .sort();
     expect(schemaFiles).toEqual([
@@ -111,7 +102,7 @@ describe('schema migrations', () => {
       'tournaments.sql',
     ]);
 
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       const tables = db.db.prepare(
         `SELECT name FROM sqlite_master
@@ -129,7 +120,7 @@ describe('schema migrations', () => {
 
   test('applies sequential migrations with pre-migration backup files', () => {
     const {dbFile, schemaDir, migrationDir} = createMigrationFixture();
-    const db = new Database(dbFile, {schemaDir, migrationDir, now: 2000});
+    const db = new database.Database(dbFile, {schemaDir, migrationDir, now: 2000});
     try {
       expect(fs.existsSync(`${dbFile}.pre-0001-add-tag.bak`)).toBe(true);
       expect(db.getAppliedMigrations()).toEqual([
@@ -148,7 +139,7 @@ describe('schema migrations', () => {
 
   test('marks existing migrations applied on fresh databases without running ALTER', () => {
     const {schemaDir, migrationDir} = createMigrationFixture();
-    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 3000});
+    const freshDb = new database.Database(':memory:', {schemaDir, migrationDir, now: 3000});
     try {
       expect(freshDb.getAppliedMigrations()).toEqual([
         {version: '0001-add-tag.sql', appliedAt: 3000},
@@ -161,18 +152,18 @@ describe('schema migrations', () => {
 
   test('rolls back migrations that violate foreign-key integrity', () => {
     const {dbFile, schemaDir, migrationDir} = createMigrationFixture();
-    const db2 = new Database(dbFile, {schemaDir, migrationDir, now: 2000});
+    const db2 = new database.Database(dbFile, {schemaDir, migrationDir, now: 2000});
     db2.close();
 
     fs.writeFileSync(
       path.join(migrationDir, '0003-break-fk.sql'),
       'DELETE FROM items WHERE id = 1;'
     );
-    expect(() => new Database(dbFile, {schemaDir, migrationDir, now: 4000}))
+    expect(() => new database.Database(dbFile, {schemaDir, migrationDir, now: 4000}))
       .toThrow(/Foreign key check failed in migration "0003-break-fk.sql"/);
 
     fs.rmSync(path.join(migrationDir, '0003-break-fk.sql'));
-    const db3 = new Database(dbFile, {schemaDir, migrationDir, now: 5000});
+    const db3 = new database.Database(dbFile, {schemaDir, migrationDir, now: 5000});
     try {
       expect(db3.db.prepare('SELECT name FROM items WHERE id = 1').get()).toEqual({name: 'alpha'});
       expect(db3.getAppliedMigrations().map(m => m.version)).toEqual([
@@ -185,7 +176,7 @@ describe('schema migrations', () => {
   });
 
   test('rolls back inner SAVEPOINT failures while preserving outer transaction writes', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncProjectsFromYaml(`
 - name: Good Proj
@@ -209,20 +200,20 @@ describe('schema migrations', () => {
   });
 
   test('classifyMigrationSql distinguishes additive from destructive statements', () => {
-    expect(classifyMigrationSql(`
+    expect(database.classifyMigrationSql(`
       -- Add column and index
       ALTER TABLE items ADD COLUMN tag TEXT NOT NULL DEFAULT 'v1';
       CREATE INDEX idx_items_tag ON items(tag);
     `)).toBe('additive');
 
-    expect(classifyMigrationSql(`
+    expect(database.classifyMigrationSql(`
       DROP INDEX IF EXISTS idx_items_tag;
       ALTER TABLE items DROP COLUMN tag;
     `)).toBe('destructive');
   });
 
   test('classifyMigrationSql recognizes SQLite four-step table rebuild as destructive', () => {
-    expect(classifyMigrationSql(`
+    expect(database.classifyMigrationSql(`
       CREATE TABLE items_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE
@@ -235,7 +226,7 @@ describe('schema migrations', () => {
   });
 
   test('classifyMigrationSql flags combined additive with destructive changes as mixed', () => {
-    expect(classifyMigrationSql(`
+    expect(database.classifyMigrationSql(`
       ALTER TABLE items ADD COLUMN extra TEXT;
       DROP TABLE old_items;
     `)).toBe('mixed');
@@ -254,7 +245,7 @@ describe('schema migrations', () => {
       );
     `);
     const migratedFile = path.join(tmpDir, 'migrated.sqlite');
-    const dbInit = new Database(migratedFile, {schemaDir, migrationDir, now: 1000});
+    const dbInit = new database.Database(migratedFile, {schemaDir, migrationDir, now: 1000});
     dbInit.close();
 
     fs.writeFileSync(
@@ -269,8 +260,8 @@ describe('schema migrations', () => {
       );
     `);
 
-    const migratedDb = new Database(migratedFile, {schemaDir, migrationDir, now: 2000});
-    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 2000});
+    const migratedDb = new database.Database(migratedFile, {schemaDir, migrationDir, now: 2000});
+    const freshDb = new database.Database(':memory:', {schemaDir, migrationDir, now: 2000});
     try {
       expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
     } finally {
@@ -298,7 +289,7 @@ describe('schema migrations', () => {
     );
     fs.writeFileSync(path.join(schemaDir, 'ladder-teams.sql'), ladderTeamsSql);
     const migratedFile = path.join(tmpDir, 'migrated-0001.sqlite');
-    const legacyDb = new Database(migratedFile, {schemaDir, migrationDir, now: 1000});
+    const legacyDb = new database.Database(migratedFile, {schemaDir, migrationDir, now: 1000});
     legacyDb.db.exec(`
       INSERT INTO ladders (id, slot, name, format, team, min, status, created_at)
       VALUES ('gen1ou20261109', 'rby', 'RBY', 'gen1ou', 'harvested', 2, 'active', 1000);
@@ -316,13 +307,13 @@ describe('schema migrations', () => {
       root('db', 'migration', '0001-sim-version.sql'),
       path.join(migrationDir, '0001-sim-version.sql')
     );
-    const migratedDb = new Database(migratedFile, {
+    const migratedDb = new database.Database(migratedFile, {
       schemaDir,
       migrationDir,
       backupBeforeMigrate: false,
       now: 2000,
     });
-    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 2000});
+    const freshDb = new database.Database(':memory:', {schemaDir, migrationDir, now: 2000});
     try {
       expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
       expect(migratedDb.getLadder('gen1ou20261109')?.version).toBe('0.11.0');
@@ -352,10 +343,10 @@ describe('schema migrations', () => {
     fs.mkdirSync(schemaDir, {recursive: true});
     fs.mkdirSync(migrationDir, {recursive: true});
 
-    const schemaFiles = fs.readdirSync(SCHEMA_DIR).filter(f => f.endsWith('.sql'));
+    const schemaFiles = fs.readdirSync(database.SCHEMA_DIR).filter(f => f.endsWith('.sql'));
     const fullSchemas = new Map<string, string>();
     for (const file of schemaFiles) {
-      const content = fs.readFileSync(path.join(SCHEMA_DIR, file), 'utf8');
+      const content = fs.readFileSync(path.join(database.SCHEMA_DIR, file), 'utf8');
       fullSchemas.set(file, content);
       let legacy = content;
       if (file === 'ladders.sql' || file === 'tournaments.sql') {
@@ -383,7 +374,7 @@ describe('schema migrations', () => {
     }
 
     const migratedFile = path.join(tmpDir, 'legacy-0001-0002.sqlite');
-    new Database(migratedFile, {schemaDir, migrationDir, now: 1000}).close();
+    new database.Database(migratedFile, {schemaDir, migrationDir, now: 1000}).close();
 
     for (const [file, content] of fullSchemas) {
       fs.writeFileSync(path.join(schemaDir, file), content);
@@ -392,14 +383,14 @@ describe('schema migrations', () => {
       fs.copyFileSync(root('db', 'migration', mig), path.join(migrationDir, mig));
     }
 
-    const migratedDb = new Database(migratedFile, {
+    const migratedDb = new database.Database(migratedFile, {
       schemaDir,
       migrationDir,
       backupBeforeMigrate: false,
       now: 2000,
     });
-    const freshDb = new Database(':memory:', {schemaDir, migrationDir, now: 2000});
-    const colsByName = (target: Database, table: string) => {
+    const freshDb = new database.Database(':memory:', {schemaDir, migrationDir, now: 2000});
+    const colsByName = (target: database.Database, table: string) => {
       const rows = target.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
         name: string;
         type: string;
@@ -459,8 +450,8 @@ describe('schema migrations', () => {
       );
     `);
 
-    const dbA = new Database(':memory:', {schemaDir: schemaDirA, migrationDir});
-    const dbB = new Database(':memory:', {schemaDir: schemaDirB, migrationDir});
+    const dbA = new database.Database(':memory:', {schemaDir: schemaDirA, migrationDir});
+    const dbB = new database.Database(':memory:', {schemaDir: schemaDirB, migrationDir});
     try {
       expect(compareDatabaseSchemas(dbA.db, dbB.db).length).toBeGreaterThan(0);
     } finally {
@@ -471,11 +462,11 @@ describe('schema migrations', () => {
 });
 
 describe('competitor saved teams lifecycle', () => {
-  let db: Database;
+  let db: database.Database;
 
   beforeEach(() => {
-    db = new Database(':memory:');
-    db.syncLadders(LADDERS_FILE, 1_760_000_000);
+    db = new database.Database(':memory:');
+    db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
     db.syncProjectsFromYaml(`
       - name: 0 ERROR
         active: 2026
@@ -540,9 +531,9 @@ describe('competitor saved teams lifecycle', () => {
 
 describe('ladders configuration', () => {
   test('syncs canonical config/ladders.yml with inferred slots', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
-      db.syncLadders(LADDERS_FILE, 1_760_000_000);
+      db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
       expect(db.getActiveLadders()).toEqual([]);
       expect(db.getCurrentLadders().map(l => ({
         id: l.id,
@@ -611,7 +602,7 @@ describe('ladders configuration', () => {
   });
 
   test('rejects pools ladders missing a positive teams count', () => {
-    expect(() => parseLaddersYaml(`
+    expect(() => database.parseLaddersYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
   version: '0.11.0'
@@ -622,7 +613,7 @@ describe('ladders configuration', () => {
   });
 
   test('derives minimum active agents strictly from team mode (4 for pools, 2 otherwise)', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncLaddersFromYaml(`
 - name: VGC
@@ -651,7 +642,7 @@ describe('ladders configuration', () => {
   });
 
   test('rejects multiple current ladders sharing the same slot', () => {
-    expect(() => parseLaddersYaml(`
+    expect(() => database.parseLaddersYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
   version: '0.11.0'
@@ -670,7 +661,7 @@ describe('ladders configuration', () => {
   });
 
   test('syncs archived seasons alongside active slot replacements', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncLaddersFromYaml(`
 - name: VGC 2026 Reg M-C
@@ -703,7 +694,7 @@ describe('ladders configuration', () => {
   });
 
   test('preserves rotated archived ladder titles across subsequent YAML syncs', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       const laddersYaml = `
 - name: VGC
@@ -733,7 +724,7 @@ describe('ladders configuration', () => {
   });
 
   test('derives min agents automatically from team mode when rotating ladders', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncLaddersFromYaml(`
 - name: VGC
@@ -757,7 +748,7 @@ describe('ladders configuration', () => {
     }
   });
 
-  function seedTwoProjectsWithFourActiveVersions(db: Database) {
+  function seedTwoProjectsWithFourActiveVersions(db: database.Database) {
     db.syncLaddersFromYaml(`
 - name: VGC
   format: gen9championsvgc2026regmc
@@ -832,7 +823,7 @@ describe('ladders configuration', () => {
   }
 
   test('counts distinct active projects rather than version rows for min gating', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       const ladderId = seedTwoProjectsWithFourActiveVersions(db);
       const entries = db.getLeaderboardEntries(ladderId);
@@ -850,7 +841,7 @@ describe('ladders configuration', () => {
   });
 
   test('retains 14-day cooldown after self-quarantine until refunded', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncLaddersFromYaml(`
 - name: RAND
@@ -891,7 +882,7 @@ describe('ladders configuration', () => {
   });
 
   test('archives outgoing ladder immediately on rotation when distinct projects < min', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       const ladderId = seedTwoProjectsWithFourActiveVersions(db);
       const rotated = db.rotateLadder({
@@ -908,7 +899,7 @@ describe('ladders configuration', () => {
   });
 
   test('keeps settling pools ladder active when one of four projects is quarantined', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncLaddersFromYaml(`
 - name: VGC
@@ -1171,7 +1162,7 @@ describe('project ownership sync', () => {
   });
 
   test('rejects duplicate GitHub owner logins across projects', () => {
-    expect(() => parseArenaProjects(`
+    expect(() => database.parseArenaProjects(`
 - name: Alpha
   active: 2026
   arena:
@@ -1186,7 +1177,7 @@ describe('project ownership sync', () => {
   });
 
   test('rejects duplicate numeric Smogon IDs across projects offline', () => {
-    expect(() => parseArenaProjects(`
+    expect(() => database.parseArenaProjects(`
 - name: Alpha
   active: 2026
   arena:
@@ -1201,7 +1192,7 @@ describe('project ownership sync', () => {
   });
 
   test('rejects duplicate resolved Smogon IDs across projects during live lookup', async () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       await expect(db.syncProjectsFromYamlWithSmogon(`
 - name: Alpha
@@ -1230,7 +1221,7 @@ describe('project ownership sync', () => {
   });
 
   test('resolves initial Smogon usernames during live sync', async () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       const lookupCalls: Array<string | number> = [];
       await db.syncProjectsFromYamlWithSmogon(`
@@ -1264,7 +1255,7 @@ describe('project ownership sync', () => {
   });
 
   test('refreshes renamed Smogon usernames by immutable numeric ID', async () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       let currentName = 'pre';
       const lookupCalls: Array<string | number> = [];
@@ -1308,7 +1299,7 @@ describe('project ownership sync', () => {
   });
 
   test('marks banned Smogon owners with bad standing to block submissions', async () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       const yamlText = `
 - name: Foul Play
@@ -1340,7 +1331,7 @@ describe('project ownership sync', () => {
   });
 
   test('persists newly discovered banned owners while syncing remaining projects', async () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       await expect(db.syncProjectsFromYamlWithSmogon(`
 - name: Bad Proj
@@ -1377,7 +1368,7 @@ describe('project ownership sync', () => {
   });
 
   test('short-circuits remaining Smogon lookups after a connectivity failure', async () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       const attempted: Array<string | number> = [];
       await expect(db.syncProjectsFromYamlWithSmogon(`
@@ -1411,7 +1402,7 @@ describe('project ownership sync', () => {
   });
 
   test('syncs valid projects when an initial username lookup fails offline', async () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       await expect(db.syncProjectsFromYamlWithSmogon(`
 - name: Unresolved
@@ -1442,7 +1433,7 @@ describe('project ownership sync', () => {
     fs.mkdirSync(avatarsDir, {recursive: true});
     fs.writeFileSync(path.join(avatarsDir, 'foul-play.png'), 'PNG');
 
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncProjectsFromYaml(`
 - name: Foul Play
@@ -1471,7 +1462,7 @@ describe('project ownership sync', () => {
   });
 
   test('preserves linked GitHub or Discord OAuth IDs across YAML re-syncs', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncProjectsFromYaml(`
 - name: Foul Play
@@ -1505,7 +1496,7 @@ describe('project ownership sync', () => {
   });
 
   test('disables removed projects while deleting dropped owner rows', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncProjectsFromYaml(`
 - name: Foul Play
@@ -1540,9 +1531,9 @@ describe('project ownership sync', () => {
   });
 
   test('retains qualified unowned projects with empty owners map', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
-      db.syncLadders(LADDERS_FILE, 1_760_000_000);
+      db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
       db.db.prepare("UPDATE ladders SET status = 'active' WHERE id = 'gen1ou20261109'").run();
       db.syncProjectsFromYaml(`
 - name: 0 ERROR
@@ -1581,9 +1572,9 @@ describe('project ownership sync', () => {
   });
 
   test('preserves developer primary key across project reassignments', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
-      db.syncLadders(LADDERS_FILE, 1_760_000_000);
+      db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
       db.db.prepare("UPDATE ladders SET status = 'active' WHERE id = 'gen1ou20261109'").run();
       db.syncProjectsFromYaml(`
 - name: 0 ERROR
@@ -1664,7 +1655,7 @@ describe('project ownership sync', () => {
   });
 
   test('syncs Discord guild membership snapshots', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
       db.syncDiscordMembers([
         {id: '513513270670262284', username: 'scheibo'},
@@ -1715,7 +1706,7 @@ describe('identifier validation', () => {
   });
 
   test('rejects distinct project names that collide under Showdown toID', () => {
-    expect(() => parseArenaProjects(`
+    expect(() => database.parseArenaProjects(`
 - name: Foo Bar
   active: 2026
   arena:
@@ -1730,9 +1721,9 @@ describe('identifier validation', () => {
   });
 
   test('createSubmission enforces the 12-character version limit', () => {
-    const db = new Database(':memory:');
+    const db = new database.Database(':memory:');
     try {
-      db.syncLadders(LADDERS_FILE, 1_760_000_000);
+      db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
       db.syncProjectsFromYaml(`
 - name: 0 ERROR
   active: 2026
@@ -1759,17 +1750,17 @@ describe('identifier validation', () => {
     const midDayStart = Math.floor(Date.parse('2026-11-15T18:00:00Z') / 1000);
     const sameDayMidnight = Math.floor(Date.parse('2026-11-15T00:00:00Z') / 1000);
     const prevDayMidnight = Math.floor(Date.parse('2026-11-14T00:00:00Z') / 1000);
-    expect(getTournamentClosesAt(midDayStart)).toBe(sameDayMidnight);
-    expect(getTournamentClosesAt(sameDayMidnight)).toBe(prevDayMidnight);
+    expect(database.getTournamentClosesAt(midDayStart)).toBe(sameDayMidnight);
+    expect(database.getTournamentClosesAt(sameDayMidnight)).toBe(prevDayMidnight);
   });
 });
 
 describe('ladder activation invariants', () => {
-  let db: Database;
+  let db: database.Database;
 
   beforeEach(() => {
-    db = new Database(':memory:');
-    db.syncLadders(LADDERS_FILE, 1_760_000_000);
+    db = new database.Database(':memory:');
+    db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
     db.syncProjectsFromYaml(`
 - name: Alpha
   active: 2026
@@ -2038,11 +2029,11 @@ describe('ladder activation invariants', () => {
 });
 
 describe('quarantine invariants', () => {
-  let db: Database;
+  let db: database.Database;
   let versionIds: number[];
 
   beforeEach(() => {
-    db = new Database(':memory:');
+    db = new database.Database(':memory:');
     db.syncLaddersFromYaml(`
 - name: RAND
   format: gen9randombattle
@@ -2304,10 +2295,10 @@ describe('quarantine invariants', () => {
 });
 
 describe('tournament standings', () => {
-  let db: Database;
+  let db: database.Database;
 
   beforeEach(() => {
-    db = new Database(':memory:');
+    db = new database.Database(':memory:');
     db.syncProjectsFromYaml(`
 - name: Entrant A
   active: 2026
@@ -2433,13 +2424,14 @@ describe('tournament standings', () => {
   });
 
   test('getTournamentBestOf infers N for Best-of-N rules or formats', () => {
-    expect(getTournamentBestOf('gen9ou', undefined)).toBe(1);
-    expect(getTournamentBestOf('gen1ou', ['Sleep Clause Mod'])).toBe(1);
-    expect(getTournamentBestOf('gen9championsvgc2026regmc', ['Open Team Sheets', 'Best of = 3']))
-      .toBe(3);
-    expect(getTournamentBestOf('gen9championsvgc2026regmc', '["Best-of-3"]')).toBe(3);
-    expect(getTournamentBestOf('gen9vgc2026regibo3', undefined)).toBe(3);
-    expect(getTournamentBestOf('gen9vgc2026regibo5', ['Best of = 5'])).toBe(5);
+    expect(database.getTournamentBestOf('gen9ou', undefined)).toBe(1);
+    expect(database.getTournamentBestOf('gen1ou', ['Sleep Clause Mod'])).toBe(1);
+    expect(
+      database.getTournamentBestOf('gen9championsvgc2026regmc', ['Open Team Sheets', 'Best of = 3'])
+    ).toBe(3);
+    expect(database.getTournamentBestOf('gen9championsvgc2026regmc', '["Best-of-3"]')).toBe(3);
+    expect(database.getTournamentBestOf('gen9vgc2026regibo3', undefined)).toBe(3);
+    expect(database.getTournamentBestOf('gen9vgc2026regibo5', ['Best of = 5'])).toBe(5);
   });
 
   test('persists Best-of-N per-game telemetry in tournament_games linked to matches', () => {
@@ -2536,8 +2528,8 @@ describe('tournament standings', () => {
   });
 
   const createTelemetryDb = () => {
-    const telDb = new Database(':memory:', {now: 1_760_000_000});
-    telDb.syncLadders(LADDERS_FILE, 1_760_000_000);
+    const telDb = new database.Database(':memory:', {now: 1_760_000_000});
+    telDb.syncLadders(database.LADDERS_FILE, 1_760_000_000);
     telDb.syncProjectsFromYaml(`
 - slug: alpha
   name: Alpha

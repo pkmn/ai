@@ -7,21 +7,14 @@ import {extractChannelMessages} from '@pkmn/sim';
 import polka from 'polka';
 
 import type * as db from '../db';
-import {
-  escapeHtml,
-  installHeadSupport,
-  readBody,
-  root,
-  toID,
-  writeFileAtomic,
-} from '../static/util';
+import * as util from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
 import * as ratings from './ratings';
 import * as simOps from './sim-ops';
 
-export const PUBLIC_DIR = root('public');
+export const PUBLIC_DIR = util.root('public');
 // If the Mac Mini Arena worker stops heartbeating for 15 minutes (network drop, power loss,
 // or wedged supervisor), mark public/api/live.json stale so spectators aren't shown a frozen
 // turn clock and alert staff on Discord.
@@ -61,9 +54,9 @@ export function timerSettingsForFormat(format: string, rules?: readonly string[]
     const trimmed = rawRule.trim();
     if (!trimmed) continue;
     const negated = trimmed.startsWith('!');
-    if (toID(trimmed) === 'vgctimer') explicitVgcTimer = !negated;
+    if (util.toID(trimmed) === 'vgctimer') explicitVgcTimer = !negated;
   }
-  const baseId = toID(baseFormat);
+  const baseId = util.toID(baseFormat);
   const isVgc = explicitVgcTimer ?? (baseId.includes('vgc') || baseId.includes('bss'));
   if (isVgc) {
     return {
@@ -1483,7 +1476,7 @@ async function readJsonBody<T>(
   maxBytes = MAX_BODY_BYTES
 ): Promise<T> {
   const limitMiB = Math.max(1, Math.round(maxBytes / (1024 * 1024)));
-  const raw = await readBody(req, maxBytes, `Request body exceeds ${limitMiB} MiB limit.`);
+  const raw = await util.readBody(req, maxBytes, `Request body exceeds ${limitMiB} MiB limit.`);
   try {
     return (raw ? JSON.parse(raw) : {}) as T;
   } catch {
@@ -1625,21 +1618,21 @@ function formatSeriesSummaryPill(
   p2Name?: string
 ): string {
   const winner = summary.winnerSlot === 'p1'
-    ? escapeHtml(p1Name ?? 'P1')
+    ? util.escapeHtml(p1Name ?? 'P1')
     : summary.winnerSlot === 'p2'
-      ? escapeHtml(p2Name ?? 'P2')
+      ? util.escapeHtml(p2Name ?? 'P2')
       : 'Tie';
   return `<span class="muted"><tt>${label}</tt>: ${winner} (${summary.turns}t)</span>`;
 }
 
 function buildDefaultTableHeaders(tb: BroadcastTable): {left: string; right: string} {
   const left = tb.p1 && tb.p2
-    ? `<span class="font-semibold">${escapeHtml(tb.p1.name)}</span>` +
-      (tb.p1.version ? ` <span class="ver">v${escapeHtml(tb.p1.version)}</span>` : '') +
-      ` vs <span class="font-semibold">${escapeHtml(tb.p2.name)}</span>` +
-      (tb.p2.version ? ` <span class="ver">v${escapeHtml(tb.p2.version)}</span>` : '')
-    : escapeHtml(tb.label);
-  const parts: string[] = [escapeHtml(tb.stage ?? 'Round Robin')];
+    ? `<span class="font-semibold">${util.escapeHtml(tb.p1.name)}</span>` +
+      (tb.p1.version ? ` <span class="ver">v${util.escapeHtml(tb.p1.version)}</span>` : '') +
+      ` vs <span class="font-semibold">${util.escapeHtml(tb.p2.name)}</span>` +
+      (tb.p2.version ? ` <span class="ver">v${util.escapeHtml(tb.p2.version)}</span>` : '')
+    : util.escapeHtml(tb.label);
+  const parts: string[] = [util.escapeHtml(tb.stage ?? 'Round Robin')];
   if (tb.cycle !== undefined) parts.push(`Cycle ${tb.cycle}`);
   if (tb.bestOf && tb.bestOf > 1) {
     if (tb.matchupGame !== undefined) parts.push(`Match ${tb.matchupGame}`);
@@ -1652,7 +1645,7 @@ function buildDefaultTableHeaders(tb: BroadcastTable): {left: string; right: str
   } else if (tb.matchupGame !== undefined) {
     parts.push(`Game ${tb.matchupGame}`);
   }
-  parts.push(escapeHtml(tb.label));
+  parts.push(util.escapeHtml(tb.label));
   return {left, right: parts.join(' · ')};
 }
 
@@ -1747,7 +1740,7 @@ function sanitizeLiveMatch(
 // The Mac Mini Arena host initiates all connections to the Linode web server authenticated by
 // Bearer $ARENA_SECRET, so the public VPS holds zero inbound credentials to the execution host.
 export function register(app: polka.Polka, options: Options): Handle {
-  installHeadSupport(app);
+  util.installHeadSupport(app);
   const {db} = options;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
   const watchdogMillis = options.watchdogTimeoutMillis ?? WATCHDOG_TIMEOUT_MILLIS;
@@ -2127,11 +2120,11 @@ export function register(app: polka.Polka, options: Options): Handle {
         const g2Path = path.join(ladderDir, `${match.id}b.log`);
         let wroteLog = false;
         if (rawG1Log !== undefined && (!duplicate || !fs.existsSync(g1Path))) {
-          writeFileAtomic(g1Path, rawG1Log.endsWith('\n') ? rawG1Log : `${rawG1Log}\n`);
+          util.writeFileAtomic(g1Path, rawG1Log.endsWith('\n') ? rawG1Log : `${rawG1Log}\n`);
           wroteLog = true;
         }
         if (rawG2Log !== undefined && (!duplicate || !fs.existsSync(g2Path))) {
-          writeFileAtomic(g2Path, rawG2Log.endsWith('\n') ? rawG2Log : `${rawG2Log}\n`);
+          util.writeFileAtomic(g2Path, rawG2Log.endsWith('\n') ? rawG2Log : `${rawG2Log}\n`);
           wroteLog = true;
         }
         if (wroteLog && isPublic) archiveSeq++;
@@ -2432,7 +2425,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       const writeLogIfNeeded = (fileName: string, content: string) => {
         const p = path.join(tourDir, fileName);
         if (!duplicate || !fs.existsSync(p)) {
-          writeFileAtomic(p, content.endsWith('\n') ? content : `${content}\n`);
+          util.writeFileAtomic(p, content.endsWith('\n') ? content : `${content}\n`);
         }
       };
       if (body.logs) {

@@ -5,31 +5,15 @@ import * as site from 'site';
 
 import type * as db from '../db';
 import {Renderer, header, injectLiveBanner} from '../static/build';
-import {
-  Child,
-  Html,
-  TABLE_PAGE_SIZE,
-  TablePager,
-  formatUtcDate,
-  formatUtcDateTime,
-  raw,
-  root,
-  writeFileAtomic,
-} from '../static/util';
+import * as util from '../static/util';
 
 import * as arena from './arena';
-import {
-  BroadcastClock,
-  BroadcastTable,
-  LiveBroadcast,
-  resolveTournamentArchive,
-} from './arena';
 import * as render from './render';
 
-export type {LiveBroadcast};
+export type LiveBroadcast = arena.LiveBroadcast;
 
-const TOURNAMENTS_STYLE = fs.readFileSync(root('static', 'style', 'tournaments.css'), 'utf8');
-const VIEWER_STYLE = fs.readFileSync(root('static', 'style', 'viewer.css'), 'utf8');
+const TOURNAMENTS_STYLE = fs.readFileSync(util.root('static', 'style', 'tournaments.css'), 'utf8');
+const VIEWER_STYLE = fs.readFileSync(util.root('static', 'style', 'viewer.css'), 'utf8');
 
 const VIEWER_SCRIPT = `
   (() => {
@@ -672,7 +656,7 @@ function speciesToMinispriteAbbr(species: string): string {
   return species.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || '?';
 }
 
-function renderPartyMinisprites(packed?: string): Child {
+function renderPartyMinisprites(packed?: string): util.Child {
   const speciesList = parsePackedTeamSpecies(packed);
   if (speciesList.length === 0) return undefined;
   return (
@@ -694,10 +678,10 @@ function renderPartyMinisprites(packed?: string): Child {
 
 function renderClockSide(
   slot: 'p1' | 'p2',
-  clock: BroadcastClock,
+  clock: arena.BroadcastClock,
   timer: arena.TimerSettings,
   committed = false
-): Html {
+): util.Html {
   const pillCls = clock.thinking
     ? 'clock-pill thinking'
     : committed
@@ -732,8 +716,8 @@ function renderClockSide(
 
 function extractLiveTables(
   tournamentId: string,
-  broadcast?: LiveBroadcast
-): BroadcastTable[] {
+  broadcast?: arena.LiveBroadcast
+): arena.BroadcastTable[] {
   if (broadcast?.tournamentId !== tournamentId) return [];
   const norm = arena.normalizeLiveBroadcast(broadcast);
   return norm.tables.filter(tb => !tb.idle && tb.live !== false && Boolean(tb.p1 && tb.p2));
@@ -741,11 +725,11 @@ function extractLiveTables(
 
 function renderBroadcastSectionHtml(
   tournament: db.TournamentRow,
-  broadcast?: LiveBroadcast
+  broadcast?: arena.LiveBroadcast
 ): {
-  node: Html;
+  node: util.Html;
   isActive: boolean;
-  normalized?: LiveBroadcast;
+  normalized?: arena.LiveBroadcast;
   selectedTable?: number;
   viewerInit?: {
     lines: string[];
@@ -808,8 +792,8 @@ function renderBroadcastSectionHtml(
       </div>
       <div className='broadcast'>
         <div className='series-bar'>
-          <span id='series-left'>{raw(seriesLeft)}</span>
-          <span id='series-right'>{raw(seriesRight)}</span>
+          <span id='series-left'>{util.raw(seriesLeft)}</span>
+          <span id='series-right'>{util.raw(seriesRight)}</span>
         </div>
         {norm && p1Clock && p2Clock ? (
           <div className='clock-bar' id='clock-bar'>
@@ -860,10 +844,10 @@ function renderBroadcastSectionHtml(
 }
 
 function findLiveTableForEntrant(
-  liveTables: BroadcastTable[],
+  liveTables: arena.BroadcastTable[],
   slug: string,
   name: string
-): BroadcastTable | undefined {
+): arena.BroadcastTable | undefined {
   return liveTables.find(tb => (
     tb.p1?.slug === slug ||
     tb.p2?.slug === slug ||
@@ -873,10 +857,10 @@ function findLiveTableForEntrant(
 }
 
 function findLiveTableForPair(
-  liveTables: BroadcastTable[],
+  liveTables: arena.BroadcastTable[],
   a: {slug: string; name: string},
   b: {slug: string; name: string}
-): BroadcastTable | undefined {
+): arena.BroadcastTable | undefined {
   return liveTables.find(tb => {
     if (!tb.p1 || !tb.p2) return false;
     const p1MatchesA = tb.p1.slug === a.slug || tb.p1.name === a.name;
@@ -892,9 +876,9 @@ function renderTournamentStandingsNode(opts: {
   tournament: db.TournamentRow;
   entrants: db.TournamentEntrantView[];
   hasSuperfinal: boolean;
-  liveTables: BroadcastTable[];
+  liveTables: arena.BroadcastTable[];
   links: render.AgentLinkContext;
-}): Html {
+}): util.Html {
   const {
     tournament,
     entrants,
@@ -929,20 +913,20 @@ function renderTournamentStandingsNode(opts: {
               {ordered.map((e, idx) => {
                 const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
                 return (
-                  <tr className={idx >= TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                  <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
                     <td><strong>{idx + 1}</strong></td>
                     <td>
-                      {raw(render.formatAgentLink(e.agentName, href, true))}{' '}
+                      {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
                       <code>{e.version}</code>
                     </td>
-                    <td className='num muted'>{formatUtcDate(e.submittedAt)}</td>
+                    <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
-        <TablePager
+        <util.TablePager
           id='standings-pager'
           label='Entrants pagination'
           total={ordered.length}
@@ -989,13 +973,13 @@ function renderTournamentStandingsNode(opts: {
               const sbStr = Math.round(e.sonnebornBerger).toLocaleString('en-US');
 
               return (
-                <tr className={idx >= TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
                   <td>
                     <strong>{rankNum}</strong>
                     {hasSuperfinal && rankNum <= 2 && <> <span className='muted'>SF</span></>}
                   </td>
                   <td>
-                    {raw(render.formatAgentLink(e.agentName, href, true))}{' '}
+                    {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
                     <code>{e.version}</code>
                     {liveTb && (
                       <>
@@ -1025,7 +1009,7 @@ function renderTournamentStandingsNode(opts: {
           </tbody>
         </table>
       </div>
-      <TablePager
+      <util.TablePager
         id='standings-pager'
         label='Standings pagination'
         total={entrants.length}
@@ -1040,9 +1024,9 @@ function renderTournamentCrosstableNode(opts: {
   bestOf?: number;
   entrants: db.TournamentEntrantView[];
   pairs: db.TournamentPairRecord[];
-  liveTables: BroadcastTable[];
+  liveTables: arena.BroadcastTable[];
   links: render.AgentLinkContext;
-}): {node: Html; isEmpty: boolean} {
+}): {node: util.Html; isEmpty: boolean} {
   const {bestOf, entrants, pairs, liveTables, links} = opts;
   const unitPlural = (bestOf ?? 1) > 1 ? 'matches' : 'games';
   const rrLiveTables = liveTables.filter(tb => tb.stage !== 'Superfinal');
@@ -1080,7 +1064,7 @@ function renderTournamentCrosstableNode(opts: {
                 return (
                   <tr>
                     <td>
-                      {raw(render.formatAgentLink(rowEnt.agentName, rowHref, true))}{' '}
+                      {util.raw(render.formatAgentLink(rowEnt.agentName, rowHref, true))}{' '}
                       <code>{rowEnt.version}</code>
                     </td>
                     {entrants.map(colEnt => {
@@ -1152,7 +1136,7 @@ function renderTournamentResultNode(
 ): {
   p1Won: boolean;
   p2Won: boolean;
-  node: Child;
+  node: util.Child;
 } {
   const p1Won = g.outcome === 'W';
   const p2Won = g.outcome === 'L';
@@ -1187,7 +1171,7 @@ function renderTournamentResultNode(
   return {p1Won, p2Won, node};
 }
 
-function renderSeriesGameCardNode(gm: db.TournamentGameRow, showGameNum: boolean): Html {
+function renderSeriesGameCardNode(gm: db.TournamentGameRow, showGameNum: boolean): util.Html {
   const end = render.formatEndReasonNode(gm.endReason ?? 'normal');
   return (
     <div className='battle-detail-card'>
@@ -1215,7 +1199,7 @@ function renderTournamentGameDetailNode(
   g: db.TournamentGameView,
   bestOf: number,
   gameLogUrls: ReadonlyArray<string | undefined>
-): Html {
+): util.Html {
   const completedAt = g.completedAt ?? 0;
   const completedIso = new Date(completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
   const completedUtc = `${completedIso} UTC`;
@@ -1270,12 +1254,12 @@ function renderTournamentGameDetailNode(
 function renderTournamentGamesNode(opts: {
   tournament: db.TournamentRow;
   games: db.TournamentGameView[];
-  liveTables: BroadcastTable[];
+  liveTables: arena.BroadcastTable[];
   totalCompletedCount: number;
   links: render.AgentLinkContext;
   logFiles?: ReadonlySet<string>;
   nowSec: number;
-}): Html {
+}): util.Html {
   const {
     tournament,
     games,
@@ -1304,7 +1288,7 @@ function renderTournamentGamesNode(opts: {
     const tip = turn !== undefined
       ? `Spectate live on ${tb.label} (Turn ${turn})`
       : `Spectate live on ${tb.label}`;
-    const rowCls = idx >= TABLE_PAGE_SIZE ? 'live-game-row hide' : 'live-game-row';
+    const rowCls = idx >= util.TABLE_PAGE_SIZE ? 'live-game-row hide' : 'live-game-row';
 
     return (
       <tr className={rowCls} data-live-game-table={tb.table}>
@@ -1313,9 +1297,9 @@ function renderTournamentGamesNode(opts: {
             <code>{gameCode}</code>
           </a>
         </td>
-        <td>{raw(render.formatAgentLink(p1.name, p1Href, false))}</td>
+        <td>{util.raw(render.formatAgentLink(p1.name, p1Href, false))}</td>
         <td>{renderPartyMinisprites(p1.team) ?? '\u00a0'}</td>
-        <td>{raw(render.formatAgentLink(p2.name, p2Href, false))}</td>
+        <td>{util.raw(render.formatAgentLink(p2.name, p2Href, false))}</td>
         <td>{renderPartyMinisprites(p2.team) ?? '\u00a0'}</td>
         <td className='center'>
           <a href='#live' className='live-pill' data-live-table={tb.table} title={tip}>
@@ -1352,7 +1336,9 @@ function renderTournamentGamesNode(opts: {
       .slice(0, 19);
     const completedUtc = `${completedIso} UTC`;
     const rel = render.formatRelativeTime(nowSec, completedAt);
-    const rowCls = liveTables.length + idx >= TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
+    const rowCls = liveTables.length + idx >= util.TABLE_PAGE_SIZE
+      ? 'battle-row hide'
+      : 'battle-row';
 
     return (
       <>
@@ -1366,9 +1352,9 @@ function renderTournamentGamesNode(opts: {
             <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
             <code title={g.id}>{gameCode}</code>
           </td>
-          <td>{raw(render.formatAgentLink(g.p1.name, p1Href, p1Won))}</td>
+          <td>{util.raw(render.formatAgentLink(g.p1.name, p1Href, p1Won))}</td>
           <td>{renderPartyMinisprites(g.p1.team) ?? '\u00a0'}</td>
-          <td>{raw(render.formatAgentLink(g.p2.name, p2Href, p2Won))}</td>
+          <td>{util.raw(render.formatAgentLink(g.p2.name, p2Href, p2Won))}</td>
           <td>{renderPartyMinisprites(g.p2.team) ?? '\u00a0'}</td>
           <td className='center'>{resNode}</td>
           <td className='num muted' title={completedUtc} data-ts={g.completedAt}>{rel}</td>
@@ -1382,7 +1368,7 @@ function renderTournamentGamesNode(opts: {
     );
   });
 
-  const archive = resolveTournamentArchive(publicDir, tournament.id);
+  const archive = arena.resolveTournamentArchive(publicDir, tournament.id);
   const jsonHref = `/arena/tournaments/${encodeURIComponent(tournament.id)}/index.json`;
   const countStr = totalCompletedCount.toLocaleString('en-US');
   const totalGameRows = liveTables.length + games.length;
@@ -1415,7 +1401,7 @@ function renderTournamentGamesNode(opts: {
           </tbody>
         </table>
       </div>
-      <TablePager
+      <util.TablePager
         id='games-pager'
         label={isMultiGame ? 'Matches pagination' : 'Games pagination'}
         total={totalGameRows}
@@ -1575,7 +1561,7 @@ export function renderBattleViewerPage(publicDir: string) {
       </body>
     </html>
   );
-  writeFileAtomic(
+  util.writeFileAtomic(
     path.join(publicDir, 'arena', 'viewer', 'index.html'),
     `<!doctype html>\n${String(viewerDoc)}`
   );
@@ -1620,24 +1606,24 @@ export function renderArenaTournamentsSummaryHtml(opts: {
               const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
               const entrants =
                 entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
-              const hideCls = idx >= TABLE_PAGE_SIZE ? 'hide' : undefined;
+              const hideCls = idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined;
               const dateCell = t.status === 'running' ? (
                 <td>
                   <a href={tourHref} className='live-pill'>{'\u25cf'} LIVE</a>
                 </td>
               ) : (
-                <td>{formatUtcDate(t.startsAt)}</td>
+                <td>{util.formatUtcDate(t.startsAt)}</td>
               );
               const displayName = formatTournamentName(t.name);
 
-              let winnerCell: Child = <td className='muted'>-</td>;
+              let winnerCell: util.Child = <td className='muted'>-</td>;
               if (t.status === 'completed') {
                 const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
                 if (winner) {
                   const wHref = render.resolveAgentHref(links, winner.agentSlug, winner.agentName);
                   winnerCell = (
                     <td>
-                      {raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
+                      {util.raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
                       <code>{winner.version}</code>
                     </td>
                   );
@@ -1658,7 +1644,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
           </tbody>
         </table>
       </div>
-      <TablePager
+      <util.TablePager
         id='tournaments-pager'
         label='Tournaments pagination'
         total={sorted.length}
@@ -1669,13 +1655,13 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   );
 }
 
-function renderTournamentRulesNode(staticDir: string, tournamentId: string): Child {
+function renderTournamentRulesNode(staticDir: string, tournamentId: string): util.Child {
   if (!/^[A-Za-z0-9_-]+$/.test(tournamentId)) return undefined;
   const rulesPath = path.join(staticDir, 'tours', `${tournamentId}.dj`);
   if (!fs.existsSync(rulesPath)) return undefined;
   const body = site.html.render(fs.readFileSync(rulesPath, 'utf8')).trim();
   if (!body) return undefined;
-  return <section className='tour-rules'>{raw(body)}</section>;
+  return <section className='tour-rules'>{util.raw(body)}</section>;
 }
 
 function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
@@ -2989,7 +2975,7 @@ export function renderTournamentPage(opts: {
   tournament: db.TournamentRow;
   links: render.AgentLinkContext;
   staticDir?: string;
-  tournamentBroadcast?: LiveBroadcast;
+  tournamentBroadcast?: arena.LiveBroadcast;
   liveTournament?: {id: string; name: string};
   nowSec?: number;
 }): {html: string; json: arena.TournamentDocument} {
@@ -2998,7 +2984,7 @@ export function renderTournamentPage(opts: {
     renderer,
     tournament: t,
     links,
-    staticDir = root('static'),
+    staticDir = util.root('static'),
     tournamentBroadcast,
     liveTournament,
     nowSec = Math.floor(Date.now() / 1000),
@@ -3029,10 +3015,11 @@ export function renderTournamentPage(opts: {
 
   const closesAt = db.getTournamentClosesAt(t.startsAt);
   const scheduleLine = t.status === 'scheduled'
-    ? `Starts ${formatUtcDateTime(t.startsAt)} · Entries close ${formatUtcDateTime(closesAt)}`
+    ? `Starts ${util.formatUtcDateTime(t.startsAt)} · ` +
+      `Entries close ${util.formatUtcDateTime(closesAt)}`
     : t.completedAt
-      ? `Started ${formatUtcDate(t.startsAt)} · Completed ${formatUtcDate(t.completedAt)}`
-      : `Started ${formatUtcDateTime(t.startsAt)}`;
+      ? `Started ${util.formatUtcDate(t.startsAt)} · Completed ${util.formatUtcDate(t.completedAt)}`
+      : `Started ${util.formatUtcDateTime(t.startsAt)}`;
 
   const standingsNode = renderTournamentStandingsNode({
     tournament: t,

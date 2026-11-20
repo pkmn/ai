@@ -3,14 +3,7 @@ require('source-map-support').install();
 import {parseArgs} from 'util';
 
 import {Database} from '../db';
-import {
-  ELO_SCALE,
-  LadderMatchState,
-  PairMatchCounts,
-  computeDavidsonRatings,
-  computeGuaranteedRankBounds,
-  selectNextArenaMatch,
-} from '../server/ratings';
+import * as ratings from '../server/ratings';
 
 export interface SimulationOptions {
   numLadders?: number;
@@ -159,7 +152,7 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
 
   const rng = createPrng(seed);
   const specs = options.initialLadders ?? buildDefaultTrueElos(numLadders, agentsPerLadder);
-  const priorSigma = 350 / ELO_SCALE;
+  const priorSigma = 350 / ratings.ELO_SCALE;
 
   const ladderStates = specs.map(spec => {
     const M = spec.trueElo.length;
@@ -176,14 +169,14 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
     for (let i = 0; i < M; i++) covariance[i * M + i] = priorSigma * priorSigma;
     const agentMatches = new Int32Array(M);
     const pairMatches = new Int32Array(M * M);
-    const pairMap = new Map<number, PairMatchCounts>();
+    const pairMap = new Map<number, ratings.PairMatchCounts>();
 
     const trueOrder = Array.from({length: M}, (_, i) => i)
       .sort((a, b) => spec.trueElo[b] - spec.trueElo[a]);
     const trueTop5 = new Set(trueOrder.slice(0, Math.min(5, M)));
     const trueTop3 = new Set(trueOrder.slice(0, Math.min(3, M)));
 
-    const matchState: LadderMatchState = {
+    const matchState: ratings.LadderMatchState = {
       id: spec.id,
       activeAgentIndices,
       agentIds,
@@ -219,7 +212,7 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
   let matchesToSettleTop1: number | undefined;
 
   for (let step = 0; step < totalMatches; step++) {
-    const choice = selectNextArenaMatch(
+    const choice = ratings.selectNextArenaMatch(
       ladderStates.map(ls => ls.matchState),
       step,
       exploit,
@@ -241,7 +234,7 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
       topContenderMatches++;
     }
 
-    const trueDelta = (ls.spec.trueElo[i] - ls.spec.trueElo[j]) / ELO_SCALE;
+    const trueDelta = (ls.spec.trueElo[i] - ls.spec.trueElo[j]) / ratings.ELO_SCALE;
     const cat = sampleDavidsonCategory(trueDelta, nu0, nu1, rng);
     const key = i * ls.M + j;
     let pair = ls.pairMap.get(key);
@@ -258,14 +251,14 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
     ls.matchState.lastMatchNumber = step + 1;
     ls.matchesPlayed++;
 
-    const solved = computeDavidsonRatings(
+    const solved = ratings.computeDavidsonRatings(
       ls.M,
       Array.from(ls.pairMap.values()),
       {anchorIndex: 0, warmStartTheta: ls.matchState.theta}
     );
     ls.matchState.theta.set(solved.theta);
     for (let a = 0; a < ls.M; a++) {
-      ls.matchState.sigma[a] = solved.eloStd[a] / ELO_SCALE;
+      ls.matchState.sigma[a] = solved.eloStd[a] / ratings.ELO_SCALE;
     }
     ls.elo.set(solved.elo);
     ls.ci95.set(solved.ci95);
@@ -287,7 +280,7 @@ export function runMatchmakingSimulation(options: SimulationOptions = {}): Simul
       const top1Settled = ladderStates.every(l => {
         const rep = Array.from({length: l.M}, (_, a) => a)
           .sort((a, b) => l.eloLcb[b] - l.eloLcb[a]);
-        const bounds = computeGuaranteedRankBounds(rep, {
+        const bounds = ratings.computeGuaranteedRankBounds(rep, {
           theta: l.matchState.theta,
           covariance: l.covariance,
           eloLcb: l.eloLcb,

@@ -10,15 +10,7 @@ import * as yaml from 'yaml';
 
 import {Database} from '../db';
 import type * as db from '../db';
-import {
-  isConnectivityError,
-  parseJsonResponse,
-  readBody,
-  root,
-  slugify,
-  toID,
-  writeFileAtomic,
-} from '../static/util';
+import * as util from '../static/util';
 
 import {WatchdogAlert} from './arena';
 
@@ -170,8 +162,8 @@ interface RawPartnerLeader {
   owner?: {name: string; discordId?: string | null} | null;
 }
 
-const DISCORD_CONFIG_FILE = root('config', 'discord.yml');
-const GLOSSARY_FILE = root('static', 'glossary.yml');
+const DISCORD_CONFIG_FILE = util.root('config', 'discord.yml');
+const GLOSSARY_FILE = util.root('static', 'glossary.yml');
 let cachedConfig: {mtimeMs: number; config: Config} | undefined;
 
 function loadConfig(): Config {
@@ -193,13 +185,13 @@ function agentRole(
   roles?: GuildRole[]
 ): string | undefined {
   if (!roles) return undefined;
-  const id = toID(agent.name);
+  const id = util.toID(agent.name);
   if (!id) return undefined;
-  const strippedId = toID(agent.name.replace(/[\s_-]+v?\d[\w.-]*$/i, ''));
+  const strippedId = util.toID(agent.name.replace(/[\s_-]+v?\d[\w.-]*$/i, ''));
   let match: {id: string; len: number} | undefined;
   for (const role of roles) {
     if (!role.name.startsWith(AGENT_ROLE_PREFIX)) continue;
-    const roleAgentId = toID(role.name.slice(AGENT_ROLE_PREFIX.length));
+    const roleAgentId = util.toID(role.name.slice(AGENT_ROLE_PREFIX.length));
     if (!roleAgentId) continue;
     const isMatch = roleAgentId === id || (Boolean(strippedId) && roleAgentId === strippedId);
     if (isMatch && (!match || roleAgentId.length > match.len)) {
@@ -263,7 +255,7 @@ async function discordRequest(
     );
   }
   if (res.status === 204) return undefined;
-  return parseJsonResponse(res, 'Discord API');
+  return util.parseJsonResponse(res, 'Discord API');
 }
 
 export async function fetchGuildMembers(token: string, guild: string): Promise<GuildMember[]> {
@@ -299,7 +291,7 @@ export async function fetchLeaders(site: string, vgcToken: string): Promise<Lead
   if (!res.ok) {
     throw new Error(`${site} API failed (${res.status})`);
   }
-  const data = await parseJsonResponse<{leaders: RawPartnerLeader[]}>(res, `${site} API`);
+  const data = await util.parseJsonResponse<{leaders: RawPartnerLeader[]}>(res, `${site} API`);
   return data.leaders.map(raw => {
     const agent = raw.agent ?? raw.bot ?? undefined;
     const owner = raw.owner
@@ -912,7 +904,7 @@ export function formatMessage(
 export async function syncMessages(
   token: string,
   channel: string,
-  dir = root('chat', 'logs'),
+  dir = util.root('chat', 'logs'),
   cache: GuildCache = {}
 ) {
   const {members, channels, roles} = cache;
@@ -967,7 +959,7 @@ export async function syncMessages(
 
   function saveCursor() {
     const offsetLines = Array.from(tailOffsets.entries()).map(([f, s]) => `${f} ${s}`);
-    writeFileAtomic(cursorFile, `${[after, ...offsetLines].join('\n')}\n`);
+    util.writeFileAtomic(cursorFile, `${[after, ...offsetLines].join('\n')}\n`);
   }
 
   let page = await discordRequest(
@@ -1145,7 +1137,7 @@ export function formatGlossary(raw: string): string {
 }
 
 export function formatGlossaryReply(term: string, raw: string): string {
-  const url = `https://pkmn.ai/glossary/#${slugify(term)}`;
+  const url = `https://pkmn.ai/glossary/#${util.slugify(term)}`;
   const full = `**[${term}](${url})**: ${formatGlossary(raw)}`;
   if (full.length <= DISCORD_MAX_MESSAGE_LEN) return full;
   const suffix = `… ([more](${url}))`;
@@ -1165,8 +1157,8 @@ function extractGlossaryAliases(
   glossary: Record<string, string>
 ): Array<{alias: string; term: string}> {
   const terms = Object.keys(glossary);
-  const topIds = new Set(terms.map(toID));
-  const bySlug = new Map(terms.map(t => [slugify(t).toLowerCase(), t]));
+  const topIds = new Set(terms.map(util.toID));
+  const bySlug = new Map(terms.map(t => [util.slugify(t).toLowerCase(), t]));
   const aliases: Array<{alias: string; term: string}> = [];
 
   for (const [term, raw] of Object.entries(glossary)) {
@@ -1174,14 +1166,15 @@ function extractGlossaryAliases(
     for (const m of flat.matchAll(/\[\[([^\][]+)\]\(#([^)]+)\)\]\{\.dfn\}/g)) {
       const alias = m[1].trim();
       const target = bySlug.get(m[2].toLowerCase()) ?? term;
-      if (!topIds.has(toID(alias))) {
+      if (!topIds.has(util.toID(alias))) {
         aliases.push({alias, term: target});
       }
     }
     const stripped = flat.replace(/\[([^\][]+)\]\([^)]+\)(?:\{\.subtle\})?/g, '$1');
     for (const m of stripped.matchAll(/\[([^\][]+)\]\{\.dfn\}/g)) {
       const alias = m[1].trim();
-      if (!topIds.has(toID(alias)) && !aliases.some(a => toID(a.alias) === toID(alias))) {
+      const aliasId = util.toID(alias);
+      if (!topIds.has(aliasId) && !aliases.some(a => util.toID(a.alias) === aliasId)) {
         aliases.push({alias, term});
       }
     }
@@ -1219,30 +1212,30 @@ export function lookupGlossary(
   }
   const terms = Object.keys(glossary);
   const lower = q.toLowerCase();
-  const slug = slugify(q).toLowerCase();
-  const id = toID(q);
+  const slug = util.slugify(q).toLowerCase();
+  const id = util.toID(q);
 
   const match =
     terms.find(t => t.toLowerCase() === lower) ??
-    (slug ? terms.find(t => slugify(t).toLowerCase() === slug) : undefined) ??
-    (id ? terms.find(t => toID(t) === id) : undefined);
+    (slug ? terms.find(t => util.slugify(t).toLowerCase() === slug) : undefined) ??
+    (id ? terms.find(t => util.toID(t) === id) : undefined);
   if (match) return {term: match, definition: glossary[match]};
 
   const {aliases} = getGlossaryIndex(glossary);
   const aliasMatch =
     aliases.find(a => a.alias.toLowerCase() === lower) ??
-    (id ? aliases.find(a => toID(a.alias) === id) : undefined);
+    (id ? aliases.find(a => util.toID(a.alias) === id) : undefined);
   if (aliasMatch) {
     return {term: aliasMatch.term, definition: glossary[aliasMatch.term]};
   }
 
   const prefixTerm = terms.find(
-    t => t.toLowerCase().startsWith(lower) || Boolean(id && toID(t).startsWith(id))
+    t => t.toLowerCase().startsWith(lower) || Boolean(id && util.toID(t).startsWith(id))
   );
   if (prefixTerm) return {term: prefixTerm, definition: glossary[prefixTerm]};
 
   const prefixAlias = aliases.find(
-    a => a.alias.toLowerCase().startsWith(lower) || Boolean(id && toID(a.alias).startsWith(id))
+    a => a.alias.toLowerCase().startsWith(lower) || Boolean(id && util.toID(a.alias).startsWith(id))
   );
   if (prefixAlias) {
     return {term: prefixAlias.term, definition: glossary[prefixAlias.term]};
@@ -1261,7 +1254,7 @@ export function autocompleteGlossary(
   }
 
   const lower = q.toLowerCase();
-  const id = toID(q);
+  const id = util.toID(q);
   const choices: Array<{name: string; value: string}> = [];
   const seen = new Set<string>();
 
@@ -1272,22 +1265,22 @@ export function autocompleteGlossary(
   };
 
   for (const t of terms) {
-    if (t.toLowerCase().startsWith(lower) || (id && toID(t).startsWith(id))) {
+    if (t.toLowerCase().startsWith(lower) || (id && util.toID(t).startsWith(id))) {
       add(t, t);
     }
   }
   for (const a of aliases) {
-    if (a.alias.toLowerCase().startsWith(lower) || (id && toID(a.alias).startsWith(id))) {
+    if (a.alias.toLowerCase().startsWith(lower) || (id && util.toID(a.alias).startsWith(id))) {
       add(`${a.alias} (${a.term})`, a.term);
     }
   }
   for (const t of terms) {
-    if (t.toLowerCase().includes(lower) || (id && toID(t).includes(id))) {
+    if (t.toLowerCase().includes(lower) || (id && util.toID(t).includes(id))) {
       add(t, t);
     }
   }
   for (const a of aliases) {
-    if (a.alias.toLowerCase().includes(lower) || (id && toID(a.alias).includes(id))) {
+    if (a.alias.toLowerCase().includes(lower) || (id && util.toID(a.alias).includes(id))) {
       add(`${a.alias} (${a.term})`, a.term);
     }
   }
@@ -1492,7 +1485,7 @@ export async function syncOnce(
     const app = await syncCommands(token, config.guild, state);
     onVerifyKey?.(app.verify_key);
   } catch (err) {
-    if (isConnectivityError(err)) {
+    if (util.isConnectivityError(err)) {
       console.warn('Discord API unreachable; skipping sync cycle.');
       return;
     }
@@ -1506,7 +1499,7 @@ export async function syncOnce(
     syncGuildMembers(db, members);
   } catch (err) {
     membersFetchFailed = true;
-    if (isConnectivityError(err)) {
+    if (util.isConnectivityError(err)) {
       console.warn('Discord API unreachable; skipping sync cycle.');
       return;
     }
@@ -1518,7 +1511,7 @@ export async function syncOnce(
     try {
       roles = await fetchGuildRoles(token, config.guild);
     } catch (err) {
-      if (isConnectivityError(err)) {
+      if (util.isConnectivityError(err)) {
         console.warn('Discord API unreachable; skipping remainder of sync cycle.');
         return;
       }
@@ -1637,7 +1630,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.post('/discord/interactions', async (req, res) => {
     let rawBody: string;
     try {
-      rawBody = await readBody(req, MAX_INTERACTION_BYTES);
+      rawBody = await util.readBody(req, MAX_INTERACTION_BYTES);
     } catch (err: unknown) {
       const status = (err as {status?: number})?.status === 413 ? 413 : 500;
       if (status === 500) console.error('Error reading interaction request:', err);

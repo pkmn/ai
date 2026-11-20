@@ -1,9 +1,5 @@
 import * as ratings from '../server/ratings';
-import {
-  computeKendallTau,
-  runMatchmakingSimulation,
-  sweepMatchmakingParameters,
-} from '../tools/simulate';
+import * as simulate from '../tools/simulate';
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -688,20 +684,20 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
   });
 
   test('computes Kendall tau rank correlation across concordant or discordant rankings', () => {
-    expect(computeKendallTau([1, 2, 3, 4], [10, 20, 30, 40])).toBeCloseTo(1, 8);
-    expect(computeKendallTau([1, 2, 3, 4], [40, 30, 20, 10])).toBeCloseTo(-1, 8);
-    expect(computeKendallTau([1], [1])).toBe(1);
+    expect(simulate.computeKendallTau([1, 2, 3, 4], [10, 20, 30, 40])).toBeCloseTo(1, 8);
+    expect(simulate.computeKendallTau([1, 2, 3, 4], [40, 30, 20, 10])).toBeCloseTo(-1, 8);
+    expect(simulate.computeKendallTau([1], [1])).toBe(1);
   });
 
   test('reproduces identical matchmaking simulation trajectories for a fixed seed', () => {
-    const a = runMatchmakingSimulation({
+    const a = simulate.runMatchmakingSimulation({
       numLadders: 2,
       agentsPerLadder: 5,
       totalMatches: 40,
       exploit: 0.45,
       seed: 42,
     });
-    const b = runMatchmakingSimulation({
+    const b = simulate.runMatchmakingSimulation({
       numLadders: 2,
       agentsPerLadder: 5,
       totalMatches: 40,
@@ -714,7 +710,7 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
   });
 
   test('sweeps matchmaking parameter grids across multiple seeds', () => {
-    const summaries = sweepMatchmakingParameters({
+    const summaries = simulate.sweepMatchmakingParameters({
       numLadders: 2,
       agentsPerLadder: 5,
       totalMatches: 30,

@@ -15,25 +15,13 @@ import * as yaml from 'yaml';
 import * as db from '../db';
 import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import {Project} from '../static/projects';
-import {
-  Html,
-  TABLE_PAGER_SCRIPT,
-  TABLE_PAGE_SIZE,
-  TablePager,
-  escapeHtml,
-  installHeadSupport,
-  raw,
-  readBody,
-  root,
-  slugify,
-  toID,
-} from '../static/util';
+import * as util from '../static/util';
 
 import * as auth from './auth';
 
 const execFileAsync = promisify(execFile);
 
-const WIKI_DIR = process.env.MOCK === '1' ? root('.mock', 'wiki') : root('wiki');
+const WIKI_DIR = process.env.MOCK === '1' ? util.root('.mock', 'wiki') : util.root('wiki');
 const MAX_BODY_BYTES = 256 * 1024;
 
 // Hardcoded site-wide wiki administrators and GitHub -> display-name overrides (replaces the
@@ -169,13 +157,13 @@ export function extractProjectPages(projectsYaml: string): {
     }
     projects.set(slug, {slug, name, owners});
     aliases.set(slug.toLowerCase(), slug);
-    const arenaSlug = slugify(name).toLowerCase();
+    const arenaSlug = util.slugify(name).toLowerCase();
     if (arenaSlug) {
       if (!aliases.has(arenaSlug)) aliases.set(arenaSlug, slug);
       const normArena = normalizeDecodedSlug(arenaSlug).toLowerCase();
       if (!aliases.has(normArena)) aliases.set(normArena, slug);
     }
-    const idAlias = toID(name);
+    const idAlias = util.toID(name);
     if (idAlias && !RESERVED_SLUGS.has(idAlias) && !aliases.has(idAlias)) {
       aliases.set(idAlias, slug);
     }
@@ -183,15 +171,15 @@ export function extractProjectPages(projectsYaml: string): {
   return {projects, aliases};
 }
 
-const STYLE = fs.readFileSync(root('static', 'style', 'wiki.css'), 'utf8');
+const STYLE = fs.readFileSync(util.root('static', 'style', 'wiki.css'), 'utf8');
 
 function renderPageHtml(opts: {
   id?: string;
   title: string;
   heading: string;
   path: string;
-  nav?: Html | string;
-  content: Html | string;
+  nav?: util.Html | string;
+  content: util.Html | string;
   liveTournament?: {id: string; name: string};
 }) {
   return renderer.render({
@@ -212,7 +200,7 @@ function wikiNav(
   active: 'view' | 'edit' | 'history' | 'pages',
   loggedIn = false,
   returnTo = '/wiki'
-): Html {
+): util.Html {
   const item = (key: typeof active, href: string, label: string) =>
     key === active ? <strong>{label}</strong> : <a href={href}>{label}</a>;
   const encoded = encodeSlug(slug);
@@ -375,28 +363,28 @@ const MAX_HIGHLIGHT_CHARS = 64 * 1024;
 
 function renderSafeCode(source: string, lang?: string): string {
   const trimmed = source.trimEnd();
-  if (!lang || trimmed.length > MAX_HIGHLIGHT_CHARS) return escapeHtml(trimmed);
+  if (!lang || trimmed.length > MAX_HIGHLIGHT_CHARS) return util.escapeHtml(trimmed);
   if (lang === 'console') {
     let cont = false;
     return trimmed.split('\n').map(line => {
       if (cont) {
         cont = line.endsWith('\\');
-        return escapeHtml(line);
+        return util.escapeHtml(line);
       }
       if (line.startsWith('$ ')) {
         cont = line.endsWith('\\');
         const prompt = String(<span className='hl-title function_'>$</span>);
-        return `${prompt} ${escapeHtml(line.slice(2))}`;
+        return `${prompt} ${util.escapeHtml(line.slice(2))}`;
       }
       if (line.startsWith('#')) return String(<span className='hl-comment'>{line}</span>);
       return String(<span className='hl-output'>{line}</span>);
     }).join('\n');
   }
-  if (!hljs.getLanguage(lang)) return escapeHtml(trimmed);
+  if (!hljs.getLanguage(lang)) return util.escapeHtml(trimmed);
   try {
     return hljs.highlight(trimmed, {language: lang, ignoreIllegals: true}).value;
   } catch {
-    return escapeHtml(trimmed);
+    return util.escapeHtml(trimmed);
   }
 }
 
@@ -415,7 +403,7 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
   const footnoteIndex = new Map<string, number>();
 
   const uniqueHeadingId = (text: string): string | undefined => {
-    const base = slugify(text).toLowerCase();
+    const base = util.slugify(text).toLowerCase();
     if (!base) return undefined;
     if (!usedIds.has(base)) {
       usedIds.add(base);
@@ -450,7 +438,7 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
     const nextDepth = depth + 1;
     switch (node.tag) {
       case 'str':
-        return escapeHtml(node.text);
+        return util.escapeHtml(node.text);
       case 'soft_break':
         return '\n';
       case 'hard_break':
@@ -458,9 +446,9 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       case 'non_breaking_space':
         return '&nbsp;';
       case 'smart_punctuation':
-        return escapeHtml(SMART_PUNCTUATION[node.type] ?? node.text);
+        return util.escapeHtml(SMART_PUNCTUATION[node.type] ?? node.text);
       case 'symb':
-        return escapeHtml(`:${node.alias}:`);
+        return util.escapeHtml(`:${node.alias}:`);
       case 'verbatim':
         return String(<code>{node.text}</code>);
       case 'raw_inline':
@@ -474,9 +462,9 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         return String(<a href={href}>{node.text}</a>);
       }
       case 'email':
-        return escapeHtml(node.text);
+        return util.escapeHtml(node.text);
       case 'footnote_reference': {
-        if (!doc.footnotes[node.text]) return escapeHtml(`[^${node.text}]`);
+        if (!doc.footnotes[node.text]) return util.escapeHtml(`[^${node.text}]`);
         let idx = footnoteIndex.get(node.text);
         if (idx === undefined) {
           footnoteOrder.push(node.text);
@@ -486,13 +474,13 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         return String(<sup id={`fnref-${idx}`}><a href={`#fn-${idx}`}>{`[${idx}]`}</a></sup>);
       }
       case 'emph':
-        return String(<em>{raw(renderInlines(node.children, nextDepth))}</em>);
+        return String(<em>{util.raw(renderInlines(node.children, nextDepth))}</em>);
       case 'strong':
-        return String(<strong>{raw(renderInlines(node.children, nextDepth))}</strong>);
+        return String(<strong>{util.raw(renderInlines(node.children, nextDepth))}</strong>);
       case 'link':
         return String(
           <a href={resolveWikiHref(resolveNodeTarget(node))}>
-            {raw(renderInlines(node.children, nextDepth))}
+            {util.raw(renderInlines(node.children, nextDepth))}
           </a>
         );
       case 'image': {
@@ -504,15 +492,15 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       case 'span':
         return renderInlines(node.children, nextDepth);
       case 'mark':
-        return String(<mark>{raw(renderInlines(node.children, nextDepth))}</mark>);
+        return String(<mark>{util.raw(renderInlines(node.children, nextDepth))}</mark>);
       case 'superscript':
-        return String(<sup>{raw(renderInlines(node.children, nextDepth))}</sup>);
+        return String(<sup>{util.raw(renderInlines(node.children, nextDepth))}</sup>);
       case 'subscript':
-        return String(<sub>{raw(renderInlines(node.children, nextDepth))}</sub>);
+        return String(<sub>{util.raw(renderInlines(node.children, nextDepth))}</sub>);
       case 'insert':
-        return String(<ins>{raw(renderInlines(node.children, nextDepth))}</ins>);
+        return String(<ins>{util.raw(renderInlines(node.children, nextDepth))}</ins>);
       case 'delete':
-        return String(<del>{raw(renderInlines(node.children, nextDepth))}</del>);
+        return String(<del>{util.raw(renderInlines(node.children, nextDepth))}</del>);
       case 'double_quoted':
         return `\u201c${renderInlines(node.children, nextDepth)}\u201d`;
       case 'single_quoted':
@@ -525,7 +513,7 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
     if (!trimmed || depth > MAX_AST_DEPTH) return '';
     const parsed = djot.parse(trimmed);
     const paras = parsed.children.filter((b): b is djot.Para => b.tag === 'para');
-    if (paras.length !== parsed.children.length) return escapeHtml(trimmed);
+    if (paras.length !== parsed.children.length) return util.escapeHtml(trimmed);
     return paras.map(p => renderInlines(p.children, depth + 1)).join(' ').trim();
   };
 
@@ -545,14 +533,14 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
     switch (node.tag) {
       case 'para':
         if (save && !save.summary) save.summary = extractPlainText(node).trim();
-        return `${String(<p>{raw(renderInlines(node.children, nextDepth))}</p>)}\n`;
+        return `${String(<p>{util.raw(renderInlines(node.children, nextDepth))}</p>)}\n`;
       case 'heading': {
         if (node.level === 1 && save && save.title === undefined) {
           save.title = extractPlainText(node).trim();
           return '';
         }
         const level = Math.min(6, Math.max(2, node.level));
-        const inner = raw(renderInlines(node.children, nextDepth));
+        const inner = util.raw(renderInlines(node.children, nextDepth));
         const anchorId = sectionId ?? uniqueHeadingId(extractPlainText(node));
         const headingChild = anchorId
           ? <a href={`#${anchorId}`} className='subtle'>{inner}</a>
@@ -570,7 +558,7 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         }
         const secId = firstHeading ? uniqueHeadingId(extractPlainText(firstHeading)) : undefined;
         const inner = renderBlocks(node.children, secId, nextDepth);
-        return `${String(<section id={secId}>{raw(`\n${inner}`)}</section>)}\n`;
+        return `${String(<section id={secId}>{util.raw(`\n${inner}`)}</section>)}\n`;
       }
       case 'div': {
         const classes = node.attributes?.class?.split(/\s+/) ?? [];
@@ -579,8 +567,8 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
           const body = renderBlocks(node.children, undefined, nextDepth);
           return `${String(
             <aside>
-              {title ? <div className='title'>{raw(title)}</div> : ''}
-              {raw(`\n${body}`)}
+              {title ? <div className='title'>{util.raw(title)}</div> : ''}
+              {util.raw(`\n${body}`)}
             </aside>
           )}\n`;
         }
@@ -590,8 +578,8 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         const title = renderSafeTitle(node.attributes?.title, nextDepth);
         return `${String(
           <figure className='code'>
-            {title ? <figcaption className='title'>{raw(title)}</figcaption> : ''}
-            <pre><code>{raw(renderSafeCode(node.text, node.lang))}</code></pre>
+            {title ? <figcaption className='title'>{util.raw(title)}</figcaption> : ''}
+            <pre><code>{util.raw(renderSafeCode(node.text, node.lang))}</code></pre>
           </figure>
         )}\n`;
       }
@@ -600,15 +588,17 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       case 'block_quote':
         return `${String(
           <figure className='blockquote'>
-            <blockquote>{raw(`\n${renderBlocks(node.children, undefined, nextDepth)}`)}</blockquote>
+            <blockquote>
+              {util.raw(`\n${renderBlocks(node.children, undefined, nextDepth)}`)}
+            </blockquote>
           </figure>
         )}\n`;
       case 'bullet_list':
         return `${String(
           <ul>
-            {raw(`\n${node.children.map(
+            {util.raw(`\n${node.children.map(
               li => `${String(
-                <li>{raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
+                <li>{util.raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
               )}\n`
             ).join('')}`)}
           </ul>
@@ -619,9 +609,9 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
           : undefined;
         return `${String(
           <ol start={start}>
-            {raw(`\n${node.children.map(
+            {util.raw(`\n${node.children.map(
               li => `${String(
-                <li>{raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
+                <li>{util.raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
               )}\n`
             ).join('')}`)}
           </ol>
@@ -630,10 +620,10 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       case 'task_list':
         return `${String(
           <ul className='task-list'>
-            {raw(`\n${node.children.map(li => {
+            {util.raw(`\n${node.children.map(li => {
               const box = li.checkbox === 'checked' ? '\u2611 ' : '\u2610 ';
               return `${String(
-                <li>{box}{raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
+                <li>{box}{util.raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
               )}\n`;
             }).join('')}`)}
           </ul>
@@ -641,27 +631,27 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       case 'definition_list':
         return `${String(
           <dl>
-            {raw(`\n${node.children.map(item => (
-              `${String(<dt>{raw(renderInlines(item.children[0].children, nextDepth))}</dt>)}\n` +
-              `${String(
-                <dd>{raw(`\n${renderBlocks(item.children[1].children, undefined, nextDepth)}`)}</dd>
-              )}\n`
-            )).join('')}`)}
+            {util.raw(`\n${node.children.map(item => {
+              const dt = renderInlines(item.children[0].children, nextDepth);
+              const dd = renderBlocks(item.children[1].children, undefined, nextDepth);
+              return `${String(<dt>{util.raw(dt)}</dt>)}\n` +
+                `${String(<dd>{util.raw(`\n${dd}`)}</dd>)}\n`;
+            }).join('')}`)}
           </dl>
         )}\n`;
       case 'table': {
         const [caption, ...rows] = node.children;
         const captionHtml = caption.children.length
-          ? `${String(<caption>{raw(renderInlines(caption.children, nextDepth))}</caption>)}\n`
+          ? `${String(<caption>{util.raw(renderInlines(caption.children, nextDepth))}</caption>)}\n`
           : '';
         const rowsHtml = rows.map(row => {
           const cells = row.children.map(cell => {
             const tag = cell.head ? 'th' : 'td';
-            return String(h(tag, undefined, raw(renderInlines(cell.children, nextDepth))));
+            return String(h(tag, undefined, util.raw(renderInlines(cell.children, nextDepth))));
           }).join('');
-          return `${String(<tr>{raw(cells)}</tr>)}\n`;
+          return `${String(<tr>{util.raw(cells)}</tr>)}\n`;
         }).join('');
-        return `${String(<table>{raw(`\n${captionHtml}${rowsHtml}`)}</table>)}\n`;
+        return `${String(<table>{util.raw(`\n${captionHtml}${rowsHtml}`)}</table>)}\n`;
       }
     }
   };
@@ -677,7 +667,7 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       items.push(
         `${String(
           <li id={`fn-${num}`}>
-            {raw(`\n${renderBlocks(fn.children)}`)}
+            {util.raw(`\n${renderBlocks(fn.children)}`)}
             <p><a href={`#fnref-${num}`}>{'\u21a9'}</a></p>
           </li>
         )}\n`
@@ -687,7 +677,7 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
       html += `${String(
         <section className='footnotes'>
           <hr />
-          {raw(`\n<ol>\n${items.join('')}</ol>`)}
+          {util.raw(`\n<ol>\n${items.join('')}</ol>`)}
         </section>
       )}\n`;
     }
@@ -1078,7 +1068,7 @@ export class Wiki {
 }
 
 export function register(app: polka.Polka, wiki: Wiki): Wiki {
-  installHeadSupport(app);
+  util.installHeadSupport(app);
   const getLiveTournament = () => wiki.db?.getRunningTournament();
   const renderPage = (opts: Omit<Parameters<typeof renderPageHtml>[0], 'liveTournament'>) =>
     renderPageHtml({...opts, liveTournament: getLiveTournament()});
@@ -1226,7 +1216,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
       nav: wikiNav(slug, 'view', loggedIn, logoutReturnTo(slug, viewPath)),
-      content: raw(html),
+      content: util.raw(html),
     }));
   };
 
@@ -1303,7 +1293,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     );
     const form = (
       <>
-        {previewHtml !== undefined && <section id='wiki-preview'>{raw(previewHtml)}</section>}
+        {previewHtml !== undefined && <section id='wiki-preview'>{util.raw(previewHtml)}</section>}
         <form id='wiki-editor' method='post' action={actionUrl}>
           <input type='hidden' name='baseSha' value={baseSha} />
           <textarea name='content' spellcheck={true} autofocus={true}>{content}</textarea>
@@ -1370,7 +1360,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     const login = requireEditAuth(req, res, slug);
     if (!login) return;
     try {
-      const body = await readBody(req, MAX_BODY_BYTES, 'Payload Too Large');
+      const body = await util.readBody(req, MAX_BODY_BYTES, 'Payload Too Large');
       const parsed = querystring.parse(body);
       if (typeof parsed.content !== 'string') {
         sendError(res, 400);
@@ -1456,7 +1446,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
                   const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
                   const displayAuthor = wiki.formatAuthor(rev.author);
                   return (
-                    <tr className={idx >= TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                    <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
                       <td className='wiki-meta'>{date}</td>
                       <td>
                         <code><a href={revUrl}>{rev.shortSha}</a></code> (
@@ -1472,7 +1462,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
               </tbody>
             </table>
           </div>
-          <TablePager
+          <util.TablePager
             id='wiki-history-pager'
             label='Revision history pagination'
             total={revisions.length}
@@ -1480,7 +1470,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
             plural='revisions'
           />
           <script>
-            {`document.addEventListener('DOMContentLoaded', () => {${TABLE_PAGER_SCRIPT}});`}
+            {`document.addEventListener('DOMContentLoaded', () => {${util.TABLE_PAGER_SCRIPT}});`}
           </script>
         </>
       ) : (
@@ -1567,7 +1557,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
               <p className='wiki-meta'>
                 <a href={`/wiki/${encoded}/${sha}`}>View snapshot</a>
               </p>
-              {raw(renderedDiff)}
+              {util.raw(renderedDiff)}
             </>
           ),
         }));
@@ -1599,7 +1589,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
             <p className='wiki-meta'>
               <a href={`/wiki/${encoded}/${sha}?diff=1`}>View diff</a>
             </p>
-            {raw(html)}
+            {util.raw(html)}
           </>
         ),
       }));

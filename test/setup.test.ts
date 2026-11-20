@@ -3,15 +3,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import {
-  SubmoduleSpec,
-  checkSubmoduleState,
-  clearBrokenCheckout,
-  findPrivateTsconfigs,
-  setUpSubmodule,
-} from '../tools/setup';
+import * as setup from '../tools/setup';
 
-const TEST_SPEC: SubmoduleSpec = {
+const TEST_SPEC: setup.SubmoduleSpec = {
   path: 'teams/teams',
   sparseDir: 'gen9championsvgc2026regmc',
   sparseArgs: ['set', 'gen9championsvgc2026regmc'],
@@ -39,7 +33,7 @@ describe('setup', () => {
     tempDirs.push(rootDir);
     fs.mkdirSync(path.join(rootDir, TEST_SPEC.path), {recursive: true});
 
-    const state = checkSubmoduleState(rootDir, gitDir, TEST_SPEC);
+    const state = setup.checkSubmoduleState(rootDir, gitDir, TEST_SPEC);
     expect(state).toEqual({ready: false});
   });
 
@@ -51,7 +45,7 @@ describe('setup', () => {
     fs.mkdirSync(path.join(rootDir, 'teams'), {recursive: true});
     fs.symlinkSync(targetDir, path.join(rootDir, TEST_SPEC.path));
 
-    const state = checkSubmoduleState(rootDir, gitDir, TEST_SPEC);
+    const state = setup.checkSubmoduleState(rootDir, gitDir, TEST_SPEC);
     expect(state).toEqual({ready: false, problem: 'it is a symlink'});
   });
 
@@ -62,7 +56,7 @@ describe('setup', () => {
     fs.mkdirSync(subDir, {recursive: true});
     fs.writeFileSync(path.join(subDir, 'README.md'), 'placeholder\n', 'utf8');
 
-    const state = checkSubmoduleState(rootDir, gitDir, TEST_SPEC);
+    const state = setup.checkSubmoduleState(rootDir, gitDir, TEST_SPEC);
     expect(state).toEqual({ready: false, problem: 'it has no .git of its own'});
   });
 
@@ -76,7 +70,7 @@ describe('setup', () => {
     fs.mkdirSync(path.join(rootDir, 'teams'), {recursive: true});
     fs.symlinkSync(targetDir, path.join(rootDir, TEST_SPEC.path));
 
-    const aside = clearBrokenCheckout(rootDir, TEST_SPEC.path);
+    const aside = setup.clearBrokenCheckout(rootDir, TEST_SPEC.path);
     expect(aside).toBeUndefined();
     expect(fs.existsSync(path.join(rootDir, TEST_SPEC.path))).toBe(false);
     expect(fs.readFileSync(sentinel, 'utf8')).toBe('preserve');
@@ -89,7 +83,7 @@ describe('setup', () => {
     fs.mkdirSync(subDir, {recursive: true});
     fs.writeFileSync(path.join(subDir, 'local.txt'), 'dirty', 'utf8');
 
-    const aside = clearBrokenCheckout(rootDir, TEST_SPEC.path);
+    const aside = setup.clearBrokenCheckout(rootDir, TEST_SPEC.path);
     expect(aside).toMatch(/^teams\/teams\.bak-\d{8}T\d{6}$/);
     expect(fs.existsSync(subDir)).toBe(false);
     expect(fs.readFileSync(path.join(rootDir, aside!, 'local.txt'), 'utf8')).toBe('dirty');
@@ -105,7 +99,7 @@ describe('setup', () => {
     fs.writeFileSync(pkgCfg, '{}', 'utf8');
     fs.writeFileSync(ignoredCfg, '{}', 'utf8');
 
-    expect(findPrivateTsconfigs(privateDir)).toEqual([pkgCfg]);
+    expect(setup.findPrivateTsconfigs(privateDir)).toEqual([pkgCfg]);
   });
 
   test('setUpSubmodule advances ready submodule to pinned commit when update is true', () => {
@@ -148,10 +142,10 @@ describe('setup', () => {
     git(subDir, ['checkout', v1]);
 
     const logs: string[] = [];
-    setUpSubmodule(rootDir, TEST_SPEC, msg => logs.push(msg), false);
+    setup.setUpSubmodule(rootDir, TEST_SPEC, msg => logs.push(msg), false);
     expect(git(subDir, ['rev-parse', 'HEAD'])).toBe(v1);
 
-    setUpSubmodule(rootDir, TEST_SPEC, msg => logs.push(msg), true);
+    setup.setUpSubmodule(rootDir, TEST_SPEC, msg => logs.push(msg), true);
     expect(git(subDir, ['rev-parse', 'HEAD'])).toBe(v2);
     expect(fs.existsSync(path.join(subDir, TEST_SPEC.sparseDir, 'b.txt'))).toBe(true);
   });

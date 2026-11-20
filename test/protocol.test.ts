@@ -2,11 +2,7 @@ import * as fs from 'fs';
 
 import {BattleStreams} from '@pkmn/sim';
 
-import {
-  filterPlayerProtocolChunk,
-  parseAgentStdoutLine,
-  shouldElideFromPlayerStream,
-} from '../server/protocol';
+import * as protocol from '../server/protocol';
 import {root} from '../static/util';
 
 const TEAM_ONE =
@@ -29,75 +25,75 @@ const TEAM_TWO =
 
 describe('parseAgentStdoutLine', () => {
   test('ignores blank stdout lines', () => {
-    expect(parseAgentStdoutLine('')).toBeUndefined();
-    expect(parseAgentStdoutLine('   \r')).toBeUndefined();
+    expect(protocol.parseAgentStdoutLine('')).toBeUndefined();
+    expect(protocol.parseAgentStdoutLine('   \r')).toBeUndefined();
   });
 
   test('parses /ready handshake command', () => {
-    expect(parseAgentStdoutLine('/ready')).toEqual({kind: 'ready'});
-    expect(parseAgentStdoutLine('  /READY\r')).toEqual({kind: 'ready'});
+    expect(protocol.parseAgentStdoutLine('/ready')).toEqual({kind: 'ready'});
+    expect(protocol.parseAgentStdoutLine('  /READY\r')).toEqual({kind: 'ready'});
   });
 
   test('classifies plain text lines as chat', () => {
-    expect(parseAgentStdoutLine('hello opponent')).toEqual({
+    expect(protocol.parseAgentStdoutLine('hello opponent')).toEqual({
       kind: 'chat',
       message: 'hello opponent',
     });
-    expect(parseAgentStdoutLine('/say secret')).toEqual({
+    expect(protocol.parseAgentStdoutLine('/say secret')).toEqual({
       kind: 'chat',
       message: '/say secret',
     });
   });
 
   test('parses Showdown battle choice commands', () => {
-    expect(parseAgentStdoutLine('|battle-gen9ou-42|/choose move 1')).toEqual({
+    expect(protocol.parseAgentStdoutLine('|battle-gen9ou-42|/choose move 1')).toEqual({
       kind: 'choice',
       choice: 'move 1',
     });
-    expect(parseAgentStdoutLine('/choose move 1 terastallize')).toEqual({
+    expect(protocol.parseAgentStdoutLine('/choose move 1 terastallize')).toEqual({
       kind: 'choice',
       choice: 'move 1 terastallize',
     });
-    expect(parseAgentStdoutLine('/team 1234')).toEqual({
+    expect(protocol.parseAgentStdoutLine('/team 1234')).toEqual({
       kind: 'choice',
       choice: 'team 1234',
     });
-    expect(parseAgentStdoutLine('team 1, 2, 3, 4')).toEqual({
+    expect(protocol.parseAgentStdoutLine('team 1, 2, 3, 4')).toEqual({
       kind: 'choice',
       choice: 'team 1, 2, 3, 4',
     });
-    expect(parseAgentStdoutLine('team 1, 2, 3, 4, 5, 6')).toEqual({
+    expect(protocol.parseAgentStdoutLine('team 1, 2, 3, 4, 5, 6')).toEqual({
       kind: 'choice',
       choice: 'team 1, 2, 3, 4, 5, 6',
     });
-    expect(parseAgentStdoutLine('1234')).toEqual({
+    expect(protocol.parseAgentStdoutLine('1234')).toEqual({
       kind: 'choice',
       choice: '1234',
     });
-    expect(parseAgentStdoutLine('move 1 +2, switch 3')).toEqual({
+    expect(protocol.parseAgentStdoutLine('move 1 +2, switch 3')).toEqual({
       kind: 'choice',
       choice: 'move 1 +2, switch 3',
     });
-    expect(parseAgentStdoutLine('pass, switch 4')).toEqual({
+    expect(protocol.parseAgentStdoutLine('pass, switch 4')).toEqual({
       kind: 'choice',
       choice: 'pass, switch 4',
     });
   });
 
   test('normalizes uppercase slash or team choice keywords', () => {
-    expect(parseAgentStdoutLine('/CHOOSE move 1')).toEqual({
+    expect(protocol.parseAgentStdoutLine('/CHOOSE move 1')).toEqual({
       kind: 'choice',
       choice: 'move 1',
     });
-    expect(parseAgentStdoutLine('/TEAM 1234')).toEqual({
+    expect(protocol.parseAgentStdoutLine('/TEAM 1234')).toEqual({
       kind: 'choice',
       choice: 'team 1234',
     });
-    expect(parseAgentStdoutLine('TEAM 1234')).toEqual({
+    expect(protocol.parseAgentStdoutLine('TEAM 1234')).toEqual({
       kind: 'choice',
       choice: 'team 1234',
     });
-    expect(parseAgentStdoutLine('/DEFAULT')).toEqual({
+    expect(protocol.parseAgentStdoutLine('/DEFAULT')).toEqual({
       kind: 'choice',
       choice: 'default',
     });
@@ -113,7 +109,7 @@ describe('parseAgentStdoutLine', () => {
       '/switch 2, undo',
       '/team 1, undo',
     ]) {
-      expect(parseAgentStdoutLine(undoLine)).toEqual({
+      expect(protocol.parseAgentStdoutLine(undoLine)).toEqual({
         kind: 'chat',
         message: undoLine,
       });
@@ -133,7 +129,7 @@ describe('parseAgentStdoutLine', () => {
       '/tie',
       '/timer on',
     ]) {
-      expect(parseAgentStdoutLine(forbidden)).toEqual({
+      expect(protocol.parseAgentStdoutLine(forbidden)).toEqual({
         kind: 'chat',
         message: forbidden,
       });
@@ -141,15 +137,15 @@ describe('parseAgentStdoutLine', () => {
   });
 
   test('strips embedded carriage returns or pipes from protocol injection attempts', () => {
-    expect(parseAgentStdoutLine('hello\r|win|Agent A')).toEqual({
+    expect(protocol.parseAgentStdoutLine('hello\r|win|Agent A')).toEqual({
       kind: 'chat',
       message: 'hello|win|Agent A',
     });
-    expect(parseAgentStdoutLine('move 1\r|win|Agent A')).toEqual({
+    expect(protocol.parseAgentStdoutLine('move 1\r|win|Agent A')).toEqual({
       kind: 'chat',
       message: 'move 1|win|Agent A',
     });
-    expect(parseAgentStdoutLine('move 1|win|Agent A')).toEqual({
+    expect(protocol.parseAgentStdoutLine('move 1|win|Agent A')).toEqual({
       kind: 'chat',
       message: 'move 1|win|Agent A',
     });
@@ -158,9 +154,11 @@ describe('parseAgentStdoutLine', () => {
 
 describe('player protocol stream filtering', () => {
   test('shouldElideFromPlayerStream flags chat lines while preserving battle moves', () => {
-    expect(shouldElideFromPlayerStream('|c|☆0 ERROR|hello')).toBe(true);
-    expect(shouldElideFromPlayerStream('|c:|1760000123|☆0 ERROR|hello')).toBe(true);
-    expect(shouldElideFromPlayerStream('|move|p1a: Tauros|Body Slam|p2a: Snorlax')).toBe(false);
+    expect(protocol.shouldElideFromPlayerStream('|c|☆0 ERROR|hello')).toBe(true);
+    expect(protocol.shouldElideFromPlayerStream('|c:|1760000123|☆0 ERROR|hello')).toBe(true);
+    expect(
+      protocol.shouldElideFromPlayerStream('|move|p1a: Tauros|Body Slam|p2a: Snorlax')
+    ).toBe(false);
   });
 
   test('filterPlayerProtocolChunk strips chat, HTML, debug, or presence covert channels', () => {
@@ -182,7 +180,7 @@ describe('player protocol stream filtering', () => {
       '|-damage|p2a: Snorlax|64/100',
     ].join('\n');
 
-    expect(filterPlayerProtocolChunk(raw)).toBe([
+    expect(protocol.filterPlayerProtocolChunk(raw)).toBe([
       '|turn|3',
       '|t:|1760000123',
       '|move|p1a: Tauros|Body Slam|p2a: Snorlax',
@@ -212,7 +210,7 @@ describe('player protocol stream filtering', () => {
       receivedChatSink: string[]
     ) => {
       for await (const rawChunk of playerStream) {
-        const filtered = filterPlayerProtocolChunk(rawChunk);
+        const filtered = protocol.filterPlayerProtocolChunk(rawChunk);
         for (const line of filtered.split('\n')) {
           if (line.startsWith('|c|') || line.startsWith('|c:|') || line.startsWith('|chat|')) {
             receivedChatSink.push(line);

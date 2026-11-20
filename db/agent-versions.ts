@@ -8,11 +8,7 @@ import {AgentRow, getAgentById} from './agents';
 import * as entries from './ladder-entries';
 import {archiveLadderInPlace, canSettleLadder, getCurrentLadders, getLadder} from './ladders';
 import {upsertTournamentEntrant} from './tournament-entrants';
-import {
-  getScheduledTournaments,
-  getTournament,
-  getTournamentClosesAt,
-} from './tournaments';
+import {getScheduledTournaments, getTournament, getTournamentClosesAt} from './tournaments';
 
 import {TransactionRunner} from './index';
 
