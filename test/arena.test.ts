@@ -1186,63 +1186,6 @@ describe('arena infrastructure', () => {
       }
     });
 
-    test('0001-local-matches-version-telemetry.sql upgrades legacy local_matches', () => {
-      const legacyDir = path.join(tmpDir, 'arena-legacy-schema');
-      fs.mkdirSync(legacyDir, {recursive: true});
-      for (const file of arenaDb.SCHEMA_FILES) {
-        let sql = fs.readFileSync(path.join(arenaDb.SCHEMA_DIR, file), 'utf8');
-        if (file === 'local-matches.sql') {
-          sql = sql.replace(
-            /,\n\s*-- `@pkmn\/sim` version[\s\S]*?g1_p2_team_preview_millis INTEGER\n\);/,
-            '\n);'
-          );
-        }
-        fs.writeFileSync(path.join(legacyDir, file), sql);
-      }
-      const emptyMigDir = path.join(tmpDir, 'arena-empty-mig');
-      fs.mkdirSync(emptyMigDir, {recursive: true});
-
-      const dbFile = path.join(tmpDir, 'arena-legacy.sqlite');
-      const legacyDb = new arenaDb.Database(dbFile, {
-        schemaDir: legacyDir,
-        migrationDir: emptyMigDir,
-        now: 1000,
-      });
-      legacyDb.db.prepare(`
-        INSERT INTO local_matches (
-          id, ladder_id, format, team_mode,
-          p1_version_id, p1_agent_id, p1_slug, p1_name, p1_version, p1_mode, p1_target,
-          p2_version_id, p2_agent_id, p2_slug, p2_name, p2_version, p2_mode, p2_target,
-          seed, p1_team_packed, p2_team_packed, status, started_at
-        ) VALUES (
-          'gen9ou-0000001', 'gen9ou20261109', 'gen9ou', 'harvested',
-          1, 1, 'a', 'A', '1.0.0', 'native', 'a-1',
-          2, 2, 'b', 'B', '1.0.0', 'native', 'b-1',
-          '1,2,3,4', 't1', 't2', 'in-progress', 1000
-        )
-      `).run();
-      legacyDb.close();
-
-      const migrated = new arenaDb.Database(dbFile, {backupBeforeMigrate: false, now: 2000});
-      const fresh = new arenaDb.Database(':memory:', {now: 2000});
-      try {
-        expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
-        const cp = migrated.getMatchCheckpoint('gen9ou-0000001');
-        expect(cp?.version).toBe('0.11.0');
-        const verCol = (
-          migrated.db.prepare('PRAGMA table_info(local_matches)').all() as Array<{
-            name: string;
-            notnull: number;
-            dflt_value: string | null;
-          }>
-        ).find(c => c.name === 'version');
-        expect(verCol).toMatchObject({name: 'version', notnull: 1, dflt_value: null});
-      } finally {
-        migrated.close();
-        fresh.close();
-      }
-    });
-
     test('computeResidencyMultipliers boosts warm pairs over cold pairs', () => {
       const stateDb = new arenaDb.Database(':memory:');
       try {

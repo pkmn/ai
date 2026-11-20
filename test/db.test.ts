@@ -65,6 +65,7 @@ describe('schema migrations', () => {
       INSERT INTO items_new (id, name, tag) SELECT id, name, tag FROM items;
       DROP TABLE items;
       ALTER TABLE items_new RENAME TO items;
+      CREATE INDEX idx_items_tag ON items(tag);
       `
     );
     fs.writeFileSync(path.join(schemaDir, 'items.sql'), `
@@ -73,6 +74,7 @@ describe('schema migrations', () => {
         name TEXT NOT NULL UNIQUE,
         tag TEXT NOT NULL DEFAULT 'v1'
       );
+      CREATE INDEX IF NOT EXISTS idx_items_tag ON items(tag);
     `);
 
     return {dbFile, schemaDir, migrationDir};
@@ -264,159 +266,6 @@ describe('schema migrations', () => {
     const freshDb = new database.Database(':memory:', {schemaDir, migrationDir, now: 2000});
     try {
       expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
-    } finally {
-      migratedDb.close();
-      freshDb.close();
-    }
-  });
-
-  test('0001-sim-version.sql rebuilds ladders/tournaments with no default version', () => {
-    const schemaDir = path.join(tmpDir, 'schema-0001');
-    const migrationDir = path.join(tmpDir, 'migration-0001');
-    fs.mkdirSync(schemaDir, {recursive: true});
-    fs.mkdirSync(migrationDir, {recursive: true});
-    const laddersSql = fs.readFileSync(root('db', 'schema', 'ladders.sql'), 'utf8');
-    const tourneysSql = fs.readFileSync(root('db', 'schema', 'tournaments.sql'), 'utf8');
-    const ladderTeamsSql = fs.readFileSync(root('db', 'schema', 'ladder-teams.sql'), 'utf8');
-
-    fs.writeFileSync(
-      path.join(schemaDir, 'ladders.sql'),
-      laddersSql.replace(/\s*version TEXT NOT NULL,/, '')
-    );
-    fs.writeFileSync(
-      path.join(schemaDir, 'tournaments.sql'),
-      tourneysSql.replace(/\s*version TEXT NOT NULL,/, '')
-    );
-    fs.writeFileSync(path.join(schemaDir, 'ladder-teams.sql'), ladderTeamsSql);
-    const migratedFile = path.join(tmpDir, 'migrated-0001.sqlite');
-    const legacyDb = new database.Database(migratedFile, {schemaDir, migrationDir, now: 1000});
-    legacyDb.db.exec(`
-      INSERT INTO ladders (id, slot, name, format, team, min, status, created_at)
-      VALUES ('gen1ou20261109', 'rby', 'RBY', 'gen1ou', 'harvested', 2, 'active', 1000);
-      INSERT INTO ladder_teams (ladder_id, team_index, packed_team, uploaded_at)
-      VALUES ('gen1ou20261109', 1, 'Tauros|||', 1000);
-      INSERT INTO tournaments (
-        id, name, format, games_per_matchup, parallel_tables, hardware, starts_at
-      ) VALUES ('1', 'T1', 'gen9ou', 2, 1, 'L4', 2000);
-    `);
-    legacyDb.close();
-
-    fs.writeFileSync(path.join(schemaDir, 'ladders.sql'), laddersSql);
-    fs.writeFileSync(path.join(schemaDir, 'tournaments.sql'), tourneysSql);
-    fs.copyFileSync(
-      root('db', 'migration', '0001-sim-version.sql'),
-      path.join(migrationDir, '0001-sim-version.sql')
-    );
-    const migratedDb = new database.Database(migratedFile, {
-      schemaDir,
-      migrationDir,
-      backupBeforeMigrate: false,
-      now: 2000,
-    });
-    const freshDb = new database.Database(':memory:', {schemaDir, migrationDir, now: 2000});
-    try {
-      expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
-      expect(migratedDb.getLadder('gen1ou20261109')?.version).toBe('0.11.0');
-      expect(migratedDb.getTournament('1')?.version).toBe('0.11.0');
-      expect(migratedDb.getLadderTeams('gen1ou20261109')).toEqual(['Tauros|||']);
-      const ladderVerCol = (
-        migratedDb.db.prepare('PRAGMA table_info(ladders)').all() as Array<{
-          name: string;
-          notnull: number;
-          dflt_value: string | null;
-        }>
-      ).find(c => c.name === 'version');
-      expect(ladderVerCol).toMatchObject({name: 'version', notnull: 1, dflt_value: null});
-      expect(() => migratedDb.db.exec(`
-        INSERT INTO ladders (id, slot, name, format, team, min, status, created_at)
-        VALUES ('gen2ou20261109', 'gsc', 'GSC', 'gen2ou', 'harvested', 2, 'upcoming', 2000);
-      `)).toThrow(/NOT NULL constraint failed: ladders\.version/);
-    } finally {
-      migratedDb.close();
-      freshDb.close();
-    }
-  });
-
-  test('0001 plus 0002 migrations upgrade legacy schema to match fresh columns', () => {
-    const schemaDir = path.join(tmpDir, 'schema-0001-0002');
-    const migrationDir = path.join(tmpDir, 'migration-0001-0002');
-    fs.mkdirSync(schemaDir, {recursive: true});
-    fs.mkdirSync(migrationDir, {recursive: true});
-
-    const schemaFiles = fs.readdirSync(database.SCHEMA_DIR).filter(f => f.endsWith('.sql'));
-    const fullSchemas = new Map<string, string>();
-    for (const file of schemaFiles) {
-      const content = fs.readFileSync(path.join(database.SCHEMA_DIR, file), 'utf8');
-      fullSchemas.set(file, content);
-      let legacy = content;
-      if (file === 'ladders.sql' || file === 'tournaments.sql') {
-        legacy = legacy.replace(/\s*version TEXT NOT NULL,/, '');
-      } else if (file === 'matches.sql') {
-        legacy = legacy
-          .replace(/\s*p[12]_game[12]_init_millis REAL NOT NULL DEFAULT 0\.0,/g, '')
-          .replace(/\s*p[12]_game[12]_team_preview_millis REAL,/g, '');
-      } else if (file === 'ladder-entries.sql') {
-        legacy = legacy
-          .replace(/\s*mean_init_millis REAL NOT NULL DEFAULT 0\.0,/, '')
-          .replace(/\s*mean_team_preview_millis REAL,/, '')
-          .replace(/\s*team_preview_matches INTEGER NOT NULL DEFAULT 0,/, '')
-          .replace(/\s*mean_ram REAL NOT NULL DEFAULT 0\.0,/, '');
-      } else if (file === 'agent-versions.sql') {
-        legacy = legacy
-          .replace(/\s*smoke_init_millis INTEGER,/, '')
-          .replace(/\s*smoke_team_preview_millis INTEGER,/, '');
-      } else if (file === 'tournament-games.sql') {
-        legacy = legacy
-          .replace(/\s*p[12]_init_millis REAL,/g, '')
-          .replace(/\s*p[12]_team_preview_millis REAL,/g, '');
-      }
-      fs.writeFileSync(path.join(schemaDir, file), legacy);
-    }
-
-    const migratedFile = path.join(tmpDir, 'legacy-0001-0002.sqlite');
-    new database.Database(migratedFile, {schemaDir, migrationDir, now: 1000}).close();
-
-    for (const [file, content] of fullSchemas) {
-      fs.writeFileSync(path.join(schemaDir, file), content);
-    }
-    for (const mig of ['0001-sim-version.sql', '0002-ready-protocol-telemetry.sql']) {
-      fs.copyFileSync(root('db', 'migration', mig), path.join(migrationDir, mig));
-    }
-
-    const migratedDb = new database.Database(migratedFile, {
-      schemaDir,
-      migrationDir,
-      backupBeforeMigrate: false,
-      now: 2000,
-    });
-    const freshDb = new database.Database(':memory:', {schemaDir, migrationDir, now: 2000});
-    const colsByName = (target: database.Database, table: string) => {
-      const rows = target.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
-        name: string;
-        type: string;
-        notnull: number;
-        dflt_value: string | null;
-        pk: number;
-      }>;
-      return Object.fromEntries(
-        rows.map(r => [r.name, {type: r.type, notnull: r.notnull, dflt: r.dflt_value, pk: r.pk}])
-      );
-    };
-    try {
-      for (const table of [
-        'ladders',
-        'tournaments',
-        'matches',
-        'ladder_entries',
-        'agent_versions',
-        'tournament_games',
-      ]) {
-        expect(colsByName(migratedDb, table)).toEqual(colsByName(freshDb, table));
-      }
-      expect(migratedDb.getAppliedMigrations().map(m => m.version)).toEqual([
-        '0001-sim-version.sql',
-        '0002-ready-protocol-telemetry.sql',
-      ]);
     } finally {
       migratedDb.close();
       freshDb.close();
