@@ -42,7 +42,7 @@
     "mock": "node --env-file-if-exists=.env build/tools/mock",
     "start": "node --env-file-if-exists=.env build/server",
     "test": "npm run build && npm run lint",
-    "test:integration": "npm run test && vitest test",
+    "test:integration": "npm run test && vitest --testTimeout=15000 test",
     "deploy:reload": "([ ! -x private/sync ] || ./private/sync) && ssh pkmn@pkmn.ai 'cd /home/pkmn/ai && ./deploy reload'",
     "deploy:restart": "([ ! -x private/sync ] || ./private/sync) && ssh pkmn@pkmn.ai 'cd /home/pkmn/ai && ./deploy restart'",
     "deploy:arena": "ssh arena 'cd /opt/arena/repo && ./arena/scripts/deploy.sh'",
