@@ -45,7 +45,10 @@ npm run test:integration
   - `test/auth.test.ts`, `test/account.test.ts`, `test/wiki.test.ts`, `test/discord.test.ts`,
     `test/api.test.ts`, `test/render.test.ts`, `test/projects.test.ts` — OAuth cookies, submission
     gating & 1-NN team uniqueness, Git-backed wiki revisions & visibility tiers, Discord role/DM
-    sync, `/api/arena/*` control-plane endpoints, and static HTML/`.json` rendering.
+    sync, `/api/arena/*` control-plane endpoints, and dynamic SSR HTML/`.json` rendering.
+  - `test/arena.test.ts`, `test/sim.test.ts`, `test/setup.test.ts` — Mac mini & GCP Arena runner
+    unpacking/sandbox/time-slicing/tournament orchestration, multi-version `@pkmn/sim` worker
+    isolation, and repository setup/submodule helpers.
   - `test/e2e.test.ts` — Executes [`tools/scenarios/e2e.mock`](../tools/scenarios/e2e.mock) in Live
     HTTP Server Mode against a real in-process server and verifies interactive browser flows in
     headless Chromium (`playwright-core`).
@@ -77,7 +80,7 @@ Whenever modifying TSX views (`static/*.tsx`, `server/*.tsx`), stylesheets (`sta
 layouts, or client scripts, run [`tools/shots.tsx`](../tools/shots.tsx):
 
 ```sh
-# Render all ~85 states across 4 viewports x 2 color schemes and generate .shots/index.html
+# Render all 96 states across 4 viewports x 2 color schemes and generate .shots/index.html
 npm run build
 npm run shots
 
@@ -121,7 +124,7 @@ views, `c` to toggle the `Changed Only` filter, and `d` to cycle `After` / `3-Up
 
 When a `.shots/baseline/` snapshot exists:
 - `.shots/index.html` highlights every state, section, viewport, and theme that changed vs
-  baseline (`Δ N of 89 states changed`), provides one-click slot chips for every changed
+  baseline (`Δ N of 96 states changed`), provides one-click slot chips for every changed
   `(viewport, theme)` combination on a state, and lets you switch inline between `After`,
   `Before`, `Diff`, and `3-Up Diff` (`Before | After | Pixel Diff`).
 - `regions.json` (in `.shots/` and `.shots/baseline/`) records the exact bounding boxes of any
@@ -612,7 +615,7 @@ three competing goals:
 3. **Cross-ladder & per-agent fairness (anti-starvation):** Ensuring quieter ladders with fewer
    recent submissions still receive regular matches via `agingRate` and the hard `maxWaitCycles`
    ceiling (`maxWaitCycles * numPlayableLadders`), and avoiding repeat pairings via the pairwise
-   saturation penalty $1 / \sqrt{1 + n_{ij}}$.
+   saturation penalty $1 / (1 + 0.25\,m_{ij})$.
 
 Changing `exploit`, `agingRate`, or `maxWaitCycles` in [`server/ratings.ts`](../server/ratings.ts)
 shifts the Pareto frontier between these objectives. [`tools/simulate.ts`](../tools/simulate.ts)

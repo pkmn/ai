@@ -690,12 +690,12 @@ BASE_OUT="$(printf "|request|{\"teamPreview\":true,\"maxChosenTeamSize\":4}\n|re
 sudo -n /opt/arena/bin/arena cleanup p2 native
 
 echo "Agent stdout: ${OUT} | Baseline: ${BASE_OUT}| Peak RAM MiB: ${PEAK_MIB} | Remaining files in /Volumes/P1/scratch: ${REMAINING}"
-[[ "$OUT" == "default" && "$BASE_OUT" == "/team 1234 default " && "$REMAINING" == "0" ]] && echo "PASS: Native Seatbelt + limit + _baseline + cleanup verified"
+[[ "$OUT" == "default" && "$BASE_OUT" == "/ready /team 1234 default " && "$REMAINING" == "0" ]] && echo "PASS: Native Seatbelt + limit + _baseline + cleanup verified"
 '
 ```
 
 *Expected:*
-- `Agent stdout: default | Baseline: /team 1234 default | Peak RAM MiB: <N> | Remaining files in /Volumes/P1/scratch: 0`
+- `Agent stdout: default | Baseline: /ready /team 1234 default | Peak RAM MiB: <N> | Remaining files in /Volumes/P1/scratch: 0`
 - `PASS: Native Seatbelt + limit + _baseline + cleanup verified`
 
 ##### Test 5D: Verify `arena/unpack.ts` & APFS Copy-on-Write CAS Deduplication
@@ -1004,7 +1004,7 @@ ssh arena 'sudo chmod -R a+rX,go-w /opt/arena/stats'
 | **Restart coordinator** | `ssh arena 'sudo launchctl kickstart -k system/ai.pkmn.arena'` |
 | **Restart SSH tunnel** | `ssh arena 'sudo launchctl kickstart -k system/ai.pkmn.tunnel'` |
 | **Inspect local agent cache** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT version_id, slug, version, mode, residency, total_games, total_faults, consecutive_faults FROM local_agents;"'` |
-| **Inspect incomplete / recent matches** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, ladder_id, p1_slug, p2_slug, status, g1_outcome, updated_at FROM local_matches ORDER BY started_at DESC LIMIT 10;"'` |
+| **Inspect incomplete / recent matches** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, ladder_id, p1_slug, p2_slug, status, g1_outcome, started_at, completed_at FROM local_matches ORDER BY started_at DESC LIMIT 10;"'` |
 | **Inspect pending RPC outbox** | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, endpoint, created_at FROM outbox;"'` |
 | **Emergency slot cleanup** | `ssh arena 'sudo -n /opt/arena/bin/arena cleanup p1 native && sudo -n /opt/arena/bin/arena cleanup p2 native && sudo -n /opt/arena/bin/arena cleanup p1 container && sudo -n /opt/arena/bin/arena cleanup p2 container'` |
 | **Check Podman VM health** | `ssh arena '/opt/homebrew/bin/podman machine list && /opt/homebrew/bin/podman ps -a'` |

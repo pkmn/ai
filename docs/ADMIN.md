@@ -154,8 +154,8 @@ Commit and push the resulting `static/projects.yml` diff so subsequent deploys k
 Remove the `arena:` block from the project's entry in `static/projects.yml` and deploy (or run
 `npm run pkmn -- sync-projects`). Existing historical match rows are preserved, while the project's
 SQLite status transitions to `disabled`. Additionally, whenever `syncProjectsWithSmogon` detects
-that an owner's Smogon account is banned (`banned = 1`), submission eligibility is automatically
-blocked until resolved.
+that an owner's Smogon account is banned (`smogon_standing = 'bad'`), submission eligibility is
+automatically blocked until resolved.
 
 ---
 
@@ -223,8 +223,9 @@ curl -fsS https://pkmn.ai/api/arena/ladders/gen1ou20261109/teams \
   -H "Authorization: Bearer $ARENA_SECRET"
 ```
 
-Store cached copies with `chmod 750` on the coordinator user only (sandboxed `p1`/`p2` agent users
-must never have read access to harvested pools). Sync read-only era-matched `data.pkmn.cc` usage
+Store cached copies under `0700` `/opt/arena/teams` (`0600` per file) owned by the coordinator user
+only (sandboxed `p1`/`p2` agent users must never have read access to harvested pools). Sync
+read-only era-matched `data.pkmn.cc` usage
 stats into `/opt/arena/stats/` (exposed as `PKMN_STATS_DIR=/opt/arena/stats`): `<format>.json` for
 fixed ladders (`gen1ou.json`, `gen3ou.json`, `gen9ou.json`), and `data.pkmn.cc`'s format-scoped
 hierarchy for `RAND` (`<format>.json`, `exact/<format>.json`, `full/<format>/*`,
@@ -401,8 +402,9 @@ staged `.log` replays are promoted into `public/arena/ladders/<ladder_id>/`), wh
   leaderboard roles (`ladders:` in `config/discord.yml` using `VGC_BOT_TOKEN`, resolving owners via
   linked `discordId`s, `🤖 <Agent>` guild roles, or owner usernames).
 - Enforces channel pinned messages (`pins:` in `config/discord.yml`), archives `#general` chat logs
-  into `chat/logs/YYYY-MM-DD.txt`, and DMs developers on smoke-test pass/fail/quarantine and staff
-  (`staff:` in `config/discord.yml`) if the Mac mini heartbeats go stale (`> 15` minutes).
+  into `chat/logs/YYYY-MM-DD.txt`, and DMs developers on smoke-test failure or quarantine (and staff
+  in `staff:` of `config/discord.yml` on quarantine or if Mac mini heartbeats go stale `> 15`
+  minutes).
 
 To trigger an immediate one-shot Discord sync outside the 60-second loop:
 
@@ -479,8 +481,8 @@ sqlite3 /var/lib/pkmn/arena.sqlite \
   "SELECT seed, agent_id, version_id FROM tournament_entrants WHERE tournament_id = '3' ORDER BY seed"
 ```
 
-Provision one staging `g2-custom-24-49152` VM (`200 GB` `pd-ssd`, NVIDIA L4 drivers, `bwrap`,
-`skopeo`, `p7zip-full`, and `/opt/arena/bin/` tournament runner binaries):
+Provision one staging `g2-custom-24-49152` VM (`300 GB` `pd-ssd`, NVIDIA L4 drivers, `bwrap`,
+`skopeo`, `umoci`, and `/usr/local/bin/tourney-{relay,agent}` runner binaries):
 
 ```sh
 gcloud compute instances create pkmn-tourney-bake \
@@ -491,17 +493,17 @@ gcloud compute instances create pkmn-tourney-bake \
   --image-family=ubuntu-2404-lts-amd64 \
   --image-project=ubuntu-os-cloud \
   --boot-disk-type=pd-ssd \
-  --boot-disk-size=200GB
+  --boot-disk-size=300GB
 ```
 
-On `pkmn-tourney-bake`, run `arena/scripts/bake-image.sh <tournament_id>` to pull each entrant's
-pinned `sha256` OCI image via `skopeo`, unpack layers via the hardened OCI rootfs extractor
-(`unpackOciLayoutToRootfs`), verify the 500 MB resident size cap, initial `/utm <packed_team>`
-response (when `team` is unset), and a Turn-1 isolated `bwrap --unshare-all` smoke game, then
-snapshot the VM into a custom GCP image:
+On `pkmn-tourney-bake`, run `arena/scripts/bake-image.sh <entrants-manifest.tsv>` to pull each
+entrant's pinned `sha256` OCI image via `skopeo`, unpack layers via `umoci unpack --rootless` (or
+`unpackOciRootfs` + `finalizeUnpackedOciRootfs` from `arena/tournament.ts`), verify the 500 MB
+resident size cap, initial `/utm <packed_team>` response (when `team` is unset), and a Turn-1
+isolated `bwrap --unshare-all` smoke game, then snapshot the VM into a custom GCP image:
 
 ```sh
-./arena/scripts/bake-image.sh 3
+./arena/scripts/bake-image.sh /tmp/tournament-3-entrants.tsv
 
 # Snapshot staging disk into custom image pkmn-tourney-3
 gcloud compute instances stop pkmn-tourney-bake --zone=us-central1-a
@@ -529,7 +531,7 @@ gcloud compute instances create pkmn-t3-table-1-a \
   --boot-disk-type=pd-ssd
 ```
 
-Once SSH `ControlMaster` sockets and the Berger `tournament_games` schedule are ready, flip the
+Once SSH `ControlMaster` sockets and the Berger `tournament_matches` schedule are ready, flip the
 tournament live:
 
 ```sh
@@ -538,9 +540,9 @@ npm run pkmn -- set-tournament-status 3 running
 
 Registration closes on `/account/`, the site-wide `● LIVE Tournament #3: ...` `#topbar` banner is
 injected across `pkmn.ai`, and live Showdown frames stream to `/arena/tournaments/3/`
-(`/api/tournaments/3/stream`). Spot preemptions reset only the single interrupted
-`in_progress` game back to `pending` (preserving its PRNG `seed`) and replace the VM in the next L4
-zone with zero forfeit penalty.
+(`/api/tournaments/3/stream`). Spot preemptions retry only the single interrupted match (preserving
+its PRNG `seed`, never recording a `tournament_matches` forfeit) and replace the VM in the next L4
+zone with zero penalty.
 
 ### Step 7.4: Complete the Event, Publish Replays & Tear Down Cloud VMs (`completed`)
 

@@ -48,9 +48,9 @@ DEV_AUTH=1 MOCK=1 npm start
 ```
 
 - `npm run mock -- seed` writes `db/data/arena.sqlite` and `.mock/` overlays (`.mock/ladders.yml`,
-  `.mock/static/projects.yml`, `.mock/static/avatars/`, `.mock/wiki/`, `.mock/vgc-teams.txt`) and
-  pre-renders all static Arena HTML and `.json` views into `public/` without touching tracked
-  `config/ladders.yml` or `static/projects.yml`.
+  `.mock/static/projects.yml`, `.mock/static/avatars/`, `.mock/wiki/`, `.mock/vgc-teams.txt`),
+  rebuilds `public/arena/viewer/index.html`, and syncs the static `#topbar` live banner without
+  touching tracked `config/ladders.yml` or `static/projects.yml`.
 - `DEV_AUTH=1 MOCK=1 npm start` starts the unified Polka + static file-watcher server on
   `http://localhost:1234` with `DEV_AUTH=1` enabled (visit `http://localhost:1234/auth/dev` to
   switch developer personas; see [TESTING.md](TESTING.md)).
@@ -87,7 +87,7 @@ DEV_AUTH=1 npm start
 | :--- | :--- |
 | `npm run setup` | Install dependencies if needed, initialize/repair sparse submodules & worktree `private/`, and build `public/`. |
 | `npm run compile` | Compile TypeScript (`tsc -p .`) into `build/`. |
-| `npm run build` | Compile TypeScript and build all static Djot, BibTeX/YAML, and Arena pages into `public/`. |
+| `npm run build` | Compile TypeScript and build all static Djot, BibTeX/YAML pages, and the `/arena/viewer/` shell into `public/`. |
 | `npm start` | Start `build/server` on `http://localhost:1234` (with static file watching outside `NODE_ENV=production`; set `DEV_AUTH=1` for local persona login). |
 | `npm run lint` | Run `eslint --cache`, `stylelint static/style/*.css tools/*.css`, and `hyperlink public --check-anchors`. |
 | `npm run fix` | Auto-fix lint and CSS ordering issues (`eslint --fix && stylelint --fix static/style/*.css tools/*.css`). |
@@ -134,11 +134,12 @@ fallbacks). Every secret is optional in local `DEV_AUTH=1` development:
 
 ## 5. Architecture & Codebase Map
 
-**pkmn.ai** uses a static-first architecture ([DESIGN.md](DESIGN.md)): public pages and database-backed
-`.json` mirrors are atomically pre-rendered into `public/` so Nginx + Cloudflare serve spectator
-traffic directly from disk, while Node.js (`server/`) handles OAuth, authenticated SSR (`/account`,
-`/wiki`), paginated battle queries (`/api/battles.json`), Discord webhooks, and the `/api/arena/*`
-worker control plane.
+**pkmn.ai** uses a hybrid static + dynamic SSR/SSE architecture ([DESIGN.md](DESIGN.md)): Nginx
+serves static Djot/YAML/BibTeX essays, `/arena/viewer/`, and `.7z`/`.tar`/`.log` archives directly
+from `public/`, while Node.js (`server/`) dynamically renders database-backed Arena and Project
+views (`/arena*`, `/projects*`) and `.json` mirrors from an ETag `304` + WAL-token in-memory cache,
+streams live SSE updates (`/api/battles/stream`, `/api/tournaments/:id/stream`), and handles OAuth,
+`/account`, `/wiki`, `/api/battles.json`, Discord webhooks, and the `/api/arena/*` control plane.
 
 ```text
 ├── config/          # ladders.yml, discord.yml, nginx.conf, and systemd service/timer units
