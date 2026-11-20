@@ -15,7 +15,9 @@ rollback() {
     echo "Deploy failed; rolling back to $HEAD" >&2
     trap - ERR
     if [ "$(git rev-parse HEAD)" != "$HEAD" ]; then
+        sudo service pkmn.ai-server stop || true
         git reset --hard "$HEAD"
+        sudo systemctl daemon-reload || true
         npm run compile
         npm run build
         sudo service pkmn.ai-server restart
@@ -56,7 +58,7 @@ npm run build
 # Post-deploy HTTP smoke verification with automatic rollback on failure
 verify_server() {
     test -s public/index.html || return 1
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
+    for _ in $(seq 1 60); do
         if curl -fsS "http://127.0.0.1:1234/arena.json" >/dev/null 2>&1 &&
            curl -fsS "http://127.0.0.1:1234/arena/" >/dev/null 2>&1; then
             return 0
