@@ -272,9 +272,34 @@ describe('schema migrations', () => {
     }
   });
 
-  test('pkmn.ai-server.service sets UMask=0077 for database backup privacy', () => {
+  test('pkmn.ai-server.service sets UMask=0027 so nginx group pkmn can serve written files', () => {
     const unit = fs.readFileSync(root('config', 'pkmn.ai-server.service'), 'utf8');
-    expect(unit).toContain('UMask=0077');
+    expect(unit).toContain('UMask=0027');
+  });
+
+  test('migration VACUUM INTO backup restricts permissions to 0600', () => {
+    const schemaDir = path.join(tmpDir, 'schema-mode');
+    const migrationDir = path.join(tmpDir, 'migration-mode');
+    fs.mkdirSync(schemaDir, {recursive: true});
+    fs.mkdirSync(migrationDir, {recursive: true});
+    fs.writeFileSync(
+      path.join(schemaDir, 'items.sql'),
+      'CREATE TABLE items (id INTEGER PRIMARY KEY);'
+    );
+
+    const dbFile = path.join(tmpDir, 'mode.sqlite');
+    const initial = new database.Database(dbFile, {schemaDir, migrationDir, now: 1000});
+    initial.close();
+    expect(fs.statSync(dbFile).mode & 0o777).toBe(0o600);
+
+    fs.writeFileSync(
+      path.join(migrationDir, '0001-add-note.sql'),
+      'ALTER TABLE items ADD COLUMN note TEXT;'
+    );
+    const migrated = new database.Database(dbFile, {schemaDir, migrationDir, now: 2000});
+    migrated.close();
+    const bakFile = `${dbFile}.pre-0001-add-note.bak`;
+    expect(fs.statSync(bakFile).mode & 0o777).toBe(0o600);
   });
 
   test('compareDatabaseSchemas detects missing indexes across databases', () => {

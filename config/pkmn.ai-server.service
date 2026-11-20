@@ -23,7 +23,10 @@ StandardError=journal
 SyslogIdentifier=pkmn.ai.server
 User=pkmn
 Group=pkmn
-UMask=0077
+# Keep group read/execute (`0640`/`0750`) so `nginx` (`www-data` in group `pkmn`) can serve
+# dynamically written `.log`/`.tar`/HTML files in `public/` and `chat/logs/`, while `/var/lib/pkmn`
+# is `0700` and SQLite DBs/backups are explicitly `0600`.
+UMask=0027
 # Isolate the running web daemon in a read-only mount namespace with `PR_SET_NO_NEW_PRIVS` so a
 # server compromise cannot invoke `sudo` or modify `config/*`, `deploy`, `build/*`, or `~/.ssh/*`,
 # while keeping `npm run deploy` (`ssh pkmn@pkmn.ai`) seamless outside this unit's namespace.

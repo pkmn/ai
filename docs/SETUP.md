@@ -225,6 +225,7 @@ https://discord.com/oauth2/authorize?client_id=689315793569447954&scope=bot+appl
 ```sh
 mkdir -p /var/lib/pkmn
 chown pkmn:pkmn /var/lib/pkmn
+chmod 0700 /var/lib/pkmn
 ```
 
 4. As `pkmn`, clone the private `pkmn/wiki` repository into `/home/pkmn/ai/wiki` using a deploy key
@@ -310,7 +311,7 @@ ls -lh /var/lib/pkmn/backups/
 service pkmn.ai-server stop
 zstd -d -f /var/lib/pkmn/backups/arena-YYYYMMDDTHHMMSSZ.sqlite.zst -o /var/lib/pkmn/arena.sqlite.restore
 chown pkmn:pkmn /var/lib/pkmn/arena.sqlite.restore
-chmod 0640 /var/lib/pkmn/arena.sqlite.restore
+chmod 0600 /var/lib/pkmn/arena.sqlite.restore
 mv -f /var/lib/pkmn/arena.sqlite.restore /var/lib/pkmn/arena.sqlite
 rm -f /var/lib/pkmn/arena.sqlite-wal /var/lib/pkmn/arena.sqlite-shm
 service pkmn.ai-server start

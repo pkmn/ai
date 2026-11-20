@@ -189,6 +189,11 @@ export class SqliteDatabase {
       fs.mkdirSync(path.dirname(dbPath), {recursive: true});
     }
     this.db = new DatabaseSync(dbPath);
+    if (dbPath !== ':memory:') {
+      try {
+        fs.chmodSync(dbPath, 0o600);
+      } catch {}
+    }
     // WAL + synchronous=NORMAL gives safe single-writer concurrency on local SSD while allowing
     // external CLI tools (`pkmn quarantine`, `pkmn rotate-ladder`, `.backup`) to read/write
     // alongside the live Node process within `busy_timeout = 5000` ms.
@@ -286,6 +291,7 @@ export class SqliteDatabase {
       if (!fs.existsSync(backupPath)) {
         const escaped = backupPath.replace(/'/g, "''");
         this.db.exec(`VACUUM INTO '${escaped}';`);
+        fs.chmodSync(backupPath, 0o600);
       }
     }
 
