@@ -166,7 +166,7 @@ const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION, rewriteBli
 const TOURNEY_AGENT_BIN = '/usr/local/bin/tourney-agent';
 export {rewriteBlindPlayerNames};
 
-export interface TournamentTeamPair {
+export interface TeamPair {
   p1Team: string;
   p2Team: string;
 }
@@ -176,7 +176,7 @@ export function buildLockedTournamentTeamBook(
   pairCount: number,
   format: string,
   tournamentId = '1'
-): TournamentTeamPair[] {
+): TeamPair[] {
   const uniqueTeams = [...new Set(teamPool.filter(Boolean))];
   if (uniqueTeams.length < 2 || pairCount <= 0) return [];
 
@@ -260,7 +260,7 @@ export function buildLockedTournamentTeamBook(
     }
   }
 
-  const book: TournamentTeamPair[] = pairs.map(p => ({
+  const book: TeamPair[] = pairs.map(p => ({
     p1Team: p.a.packed,
     p2Team: p.b.packed,
   }));
@@ -1128,7 +1128,7 @@ export class ConcurrentGame {
       this.p1TeamPacked = p1Team;
       this.p2TeamPacked = p2Team;
 
-      const startBankSec = Math.round(this.timers.startingBankMillis / 1000);
+      const startingBankSeconds = Math.round(this.timers.startingBankMillis / 1000);
 
       if (
         (!p1Res.ok && p1Res.reason === 'spot-preemption') ||
@@ -1150,13 +1150,13 @@ export class ConcurrentGame {
           omniscientLog: '',
           p1: {
             teamPacked: p1Team,
-            bankSeconds: startBankSec,
+            bankSeconds: startingBankSeconds,
             meanTurnMillis: 0,
             peakRam: 1,
           },
           p2: {
             teamPacked: p2Team,
-            bankSeconds: startBankSec,
+            bankSeconds: startingBankSeconds,
             meanTurnMillis: 0,
             peakRam: 1,
           },
@@ -1180,8 +1180,8 @@ export class ConcurrentGame {
           turns: 0,
           endReason,
           omniscientLog: '',
-          p1: {bankSeconds: startBankSec, meanTurnMillis: 1, peakRam: this.p1.peakRam},
-          p2: {bankSeconds: startBankSec, meanTurnMillis: 1, peakRam: this.p2.peakRam},
+          p1: {bankSeconds: startingBankSeconds, meanTurnMillis: 1, peakRam: this.p1.peakRam},
+          p2: {bankSeconds: startingBankSeconds, meanTurnMillis: 1, peakRam: this.p2.peakRam},
         }));
         return {
           winner,
@@ -1192,13 +1192,13 @@ export class ConcurrentGame {
           omniscientLog: '',
           p1: {
             teamPacked: p1Team,
-            bankSeconds: startBankSec,
+            bankSeconds: startingBankSeconds,
             meanTurnMillis: 1,
             peakRam: this.p1.peakRam,
           },
           p2: {
             teamPacked: p2Team,
-            bankSeconds: startBankSec,
+            bankSeconds: startingBankSeconds,
             meanTurnMillis: 1,
             peakRam: this.p2.peakRam,
           },
@@ -1986,7 +1986,7 @@ export class Coordinator {
   }
 
   private samplePairForGame(
-    lockedBook: readonly TournamentTeamPair[],
+    lockedBook: readonly TeamPair[],
     gameIndexZeroBased: number
   ): {p1Team: string | undefined; p2Team: string | undefined; swappedSeats: boolean} {
     const pairIdx = Math.floor(gameIndexZeroBased / 2);
@@ -2059,7 +2059,7 @@ export class Coordinator {
     const rrPairs = Math.ceil(tourney.gamesPerMatchup / 2);
     const sfPairs = Math.ceil(Math.max(0, this.superfinalGames) / 2);
     const totalPairs = Math.max(1, rrPairs + sfPairs);
-    let lockedBook: TournamentTeamPair[] = [];
+    let lockedBook: TeamPair[] = [];
     if (
       tourney.team === 'harvested' ||
       tourney.team === 'pools' ||

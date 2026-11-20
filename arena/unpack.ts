@@ -338,7 +338,7 @@ export function casRefFileForBundle(casDir: string, destDir: string): string {
   return path.join(path.resolve(casDir), 'refs', `${safeName}.txt`);
 }
 
-export function unpackBundle(archivePath: string, destDir: string, casDir?: string): number {
+export function bundle(archivePath: string, destDir: string, casDir?: string): number {
   const resolvedDest = path.resolve(destDir);
   const resolvedCas = casDir ? path.resolve(casDir) : undefined;
 

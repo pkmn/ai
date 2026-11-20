@@ -926,7 +926,7 @@ function renderRecentMatchesPane(opts: {
                 const oppHref = agentLinks[oppSide.slug];
                 const tsTitle = formatIsoDateTimeUtc(m.completedAt);
                 const rel = render.formatRelativeTime(nowSec, m.completedAt);
-                const detailHtml = render.renderBattleInlineDetailHtml(
+                const detailHtml = render.battleInlineDetailHtml(
                   arena.enrichMatchView(publicDir, m),
                   agentSlug
                 );

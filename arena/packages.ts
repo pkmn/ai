@@ -614,7 +614,7 @@ export async function downloadAndUnpackBundle(opts: {
       );
     }
 
-    return unpack.unpackBundle(archivePath, destDir, dirs.cas);
+    return unpack.bundle(archivePath, destDir, dirs.cas);
   } catch (err) {
     throw scrubError(err, opts.authToken);
   } finally {
@@ -884,7 +884,7 @@ export function ensureAgentResident(
   if (row.mode === 'native') {
     const destDir = path.join(dirs.agents, row.target);
     fs.mkdirSync(dirs.agents, {recursive: true});
-    unpack.unpackBundle(coldArchive, destDir, dirs.cas);
+    unpack.bundle(coldArchive, destDir, dirs.cas);
   } else {
     execFileSync(
       'bash',

@@ -211,7 +211,7 @@ export function recordCompletedMatch(
     const prevRow = db.prepare(
       'SELECT MAX(completed_at) AS prev FROM matches WHERE ladder_id = ?'
     ).get(m.ladderId) as {prev: number | null} | undefined;
-    const prevMatchSec = prevRow?.prev ?? undefined;
+    const prevMatchSeconds = prevRow?.prev ?? undefined;
 
     const p1 = resolvePayloadSideTelemetry(m, 'p1');
     const p2 = resolvePayloadSideTelemetry(m, 'p2');
@@ -449,7 +449,7 @@ export function recordCompletedMatch(
     );
 
     const dayUtc = formatUtcDate(m.completedAt);
-    recomputeLadderRatings(db, m.ladderId, m.completedAt, prevMatchSec, dayUtc);
+    recomputeLadderRatings(db, m.ladderId, m.completedAt, prevMatchSeconds, dayUtc);
 
     let archivedLadder = false;
     if (ladder.status === 'settling' && !ladders.canSettleLadder(db, ladder)) {
@@ -462,24 +462,23 @@ export function recordCompletedMatch(
 }
 
 function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
-  const p1G1InitMs = r.p1_game1_init_millis as number;
-  const p1G2InitMs = r.p1_game2_init_millis as number;
-  const p2G1InitMs = r.p2_game1_init_millis as number;
-  const p2G2InitMs = r.p2_game2_init_millis as number;
-  const p1G1TpMs = (r.p1_game1_team_preview_millis as number | null) ?? undefined;
-  const p1G2TpMs = (r.p1_game2_team_preview_millis as number | null) ?? undefined;
-  const p2G1TpMs = (r.p2_game1_team_preview_millis as number | null) ?? undefined;
-  const p2G2TpMs = (r.p2_game2_team_preview_millis as number | null) ?? undefined;
-  const p1TpMs = meanOptional(p1G1TpMs, p1G2TpMs);
-  const p2TpMs = meanOptional(p2G1TpMs, p2G2TpMs);
-  const p1G1TurnMs = r.p1_game1_mean_turn_millis as number;
-  const p1G2TurnMs = r.p1_game2_mean_turn_millis as number;
-  const p2G1TurnMs = r.p2_game1_mean_turn_millis as number;
-  const p2G2TurnMs = r.p2_game2_mean_turn_millis as number;
-  const p1G1Ram = r.p1_game1_peak_ram as number;
-  const p1G2Ram = r.p1_game2_peak_ram as number;
-  const p2G1Ram = r.p2_game1_peak_ram as number;
-  const p2G2Ram = r.p2_game2_peak_ram as number;
+  const readGameSide = (side: 'p1' | 'p2', game: 1 | 2) => {
+    const prefix = `${side}_game${game}`;
+    const teamPreviewMillis = (r[`${prefix}_team_preview_millis`] as number | null) ?? undefined;
+    return {
+      initMillis: r[`${prefix}_init_millis`] as number,
+      ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
+      meanTurnMillis: r[`${prefix}_mean_turn_millis`] as number,
+      bankSeconds: r[`${prefix}_bank_seconds`] as number,
+      peakRam: r[`${prefix}_peak_ram`] as number,
+    };
+  };
+  const g1P1 = readGameSide('p1', 1);
+  const g2P1 = readGameSide('p1', 2);
+  const g1P2 = readGameSide('p2', 1);
+  const g2P2 = readGameSide('p2', 2);
+  const p1TeamPreviewMillis = meanOptional(g1P1.teamPreviewMillis, g2P1.teamPreviewMillis);
+  const p2TeamPreviewMillis = meanOptional(g1P2.teamPreviewMillis, g2P2.teamPreviewMillis);
   const p1TeamLabel = (r.p1_team_label as string | null) ?? undefined;
   const p2TeamLabel = (r.p2_team_label as string | null) ?? undefined;
   return {
@@ -497,20 +496,24 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
       name: r.p1_name as string,
       version: r.p1_version as string,
       ...(p1TeamLabel !== undefined ? {teamLabel: p1TeamLabel} : {}),
-      initMillis: Math.round((p1G1InitMs + p1G2InitMs) / 2),
-      ...(p1TpMs !== undefined ? {teamPreviewMillis: Math.round(p1TpMs)} : {}),
-      meanTurnMillis: Math.round((p1G1TurnMs + p1G2TurnMs) / 2),
-      peakRam: Math.max(p1G1Ram, p1G2Ram),
+      initMillis: Math.round((g1P1.initMillis + g2P1.initMillis) / 2),
+      ...(p1TeamPreviewMillis !== undefined
+        ? {teamPreviewMillis: Math.round(p1TeamPreviewMillis)}
+        : {}),
+      meanTurnMillis: Math.round((g1P1.meanTurnMillis + g2P1.meanTurnMillis) / 2),
+      peakRam: Math.max(g1P1.peakRam, g2P1.peakRam),
     },
     p2: {
       slug: r.p2_slug as string,
       name: r.p2_name as string,
       version: r.p2_version as string,
       ...(p2TeamLabel !== undefined ? {teamLabel: p2TeamLabel} : {}),
-      initMillis: Math.round((p2G1InitMs + p2G2InitMs) / 2),
-      ...(p2TpMs !== undefined ? {teamPreviewMillis: Math.round(p2TpMs)} : {}),
-      meanTurnMillis: Math.round((p2G1TurnMs + p2G2TurnMs) / 2),
-      peakRam: Math.max(p2G1Ram, p2G2Ram),
+      initMillis: Math.round((g1P2.initMillis + g2P2.initMillis) / 2),
+      ...(p2TeamPreviewMillis !== undefined
+        ? {teamPreviewMillis: Math.round(p2TeamPreviewMillis)}
+        : {}),
+      meanTurnMillis: Math.round((g1P2.meanTurnMillis + g2P2.meanTurnMillis) / 2),
+      peakRam: Math.max(g1P2.peakRam, g2P2.peakRam),
     },
     games: [
       {
@@ -518,40 +521,16 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
         outcome: r.game1_outcome as ratings.GameOutcome,
         turns: r.game1_turns as number,
         endReason: r.game1_end_reason as string,
-        p1: {
-          initMillis: p1G1InitMs,
-          ...(p1G1TpMs !== undefined ? {teamPreviewMillis: p1G1TpMs} : {}),
-          meanTurnMillis: p1G1TurnMs,
-          bankSeconds: r.p1_game1_bank_seconds as number,
-          peakRam: p1G1Ram,
-        },
-        p2: {
-          initMillis: p2G1InitMs,
-          ...(p2G1TpMs !== undefined ? {teamPreviewMillis: p2G1TpMs} : {}),
-          meanTurnMillis: p2G1TurnMs,
-          bankSeconds: r.p2_game1_bank_seconds as number,
-          peakRam: p2G1Ram,
-        },
+        p1: g1P1,
+        p2: g1P2,
       },
       {
         gameNumber: 2,
         outcome: r.game2_outcome as ratings.GameOutcome,
         turns: r.game2_turns as number,
         endReason: r.game2_end_reason as string,
-        p1: {
-          initMillis: p1G2InitMs,
-          ...(p1G2TpMs !== undefined ? {teamPreviewMillis: p1G2TpMs} : {}),
-          meanTurnMillis: p1G2TurnMs,
-          bankSeconds: r.p1_game2_bank_seconds as number,
-          peakRam: p1G2Ram,
-        },
-        p2: {
-          initMillis: p2G2InitMs,
-          ...(p2G2TpMs !== undefined ? {teamPreviewMillis: p2G2TpMs} : {}),
-          meanTurnMillis: p2G2TurnMs,
-          bankSeconds: r.p2_game2_bank_seconds as number,
-          peakRam: p2G2Ram,
-        },
+        p1: g2P1,
+        p2: g2P2,
       },
     ],
     completedAt: r.completed_at as number,

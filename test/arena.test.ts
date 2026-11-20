@@ -638,7 +638,7 @@ describe('arena infrastructure', () => {
       expect(bytes1).toBeGreaterThan(70_000);
       expect(fs.existsSync(path.join(dirs.agents, 'agent-v1', 'run'))).toBe(true);
 
-      const bytes2 = unpack.unpackBundle(
+      const bytes2 = unpack.bundle(
         validArchivePath,
         path.join(dirs.agents, 'agent-v2'),
         dirs.cas
@@ -655,7 +655,7 @@ describe('arena infrastructure', () => {
       const noRunTar = path.join(tmpDir, 'no-run.tar.gz');
       execFileSync('tar', ['-czf', noRunTar, '-C', noRunSrc, '.']);
 
-      expect(() => unpack.unpackBundle(noRunTar, path.join(tmpDir, 'agent-no-run'), noRunCasDir))
+      expect(() => unpack.bundle(noRunTar, path.join(tmpDir, 'agent-no-run'), noRunCasDir))
         .toThrow(/missing required executable/i);
       expect(fs.existsSync(noRunCasDir)).toBe(false);
     });
@@ -671,7 +671,7 @@ describe('arena infrastructure', () => {
         ])
       );
       const slipAgentsDir = path.join(tmpDir, 'agents-slip');
-      expect(() => unpack.unpackBundle(
+      expect(() => unpack.bundle(
         slipTar,
         path.join(slipAgentsDir, 'agent-slip'),
         path.join(tmpDir, 'cas-slip')
@@ -689,7 +689,7 @@ describe('arena infrastructure', () => {
       }
       fs.writeFileSync(hlBombTar, buildTestTarGz(entries));
       const hlDest = path.join(tmpDir, 'agent-hl-bomb');
-      expect(() => unpack.unpackBundle(hlBombTar, hlDest, path.join(tmpDir, 'cas-hl')))
+      expect(() => unpack.bundle(hlBombTar, hlDest, path.join(tmpDir, 'cas-hl')))
         .toThrow(/exceeds 500 MiB cap/i);
       expect(fs.existsSync(hlDest)).toBe(false);
     });
@@ -698,7 +698,7 @@ describe('arena infrastructure', () => {
       const corruptTar = path.join(tmpDir, 'corrupt.tar.gz');
       fs.writeFileSync(corruptTar, fs.readFileSync(validArchivePath).subarray(0, 48));
       const corruptDest = path.join(tmpDir, 'agent-corrupt');
-      expect(() => unpack.unpackBundle(corruptTar, corruptDest, path.join(tmpDir, 'cas-corrupt')))
+      expect(() => unpack.bundle(corruptTar, corruptDest, path.join(tmpDir, 'cas-corrupt')))
         .toThrow(/UNPACK_ERROR/i);
       expect(fs.existsSync(corruptDest)).toBe(false);
     });
@@ -721,7 +721,7 @@ describe('arena infrastructure', () => {
       const soTar = path.join(tmpDir, 'macho-so.tar.gz');
       execFileSync('tar', ['-czf', soTar, '-C', soSrcDir, '.']);
       const soDest = path.join(tmpDir, 'agent-macho-so');
-      unpack.unpackBundle(soTar, soDest, path.join(tmpDir, 'cas-macho'));
+      unpack.bundle(soTar, soDest, path.join(tmpDir, 'cas-macho'));
 
       const unpackedSo = path.join(soDest, 'ext.cpython-312-darwin.so');
       expect(fs.statSync(unpackedSo).mode & 0o777).toBe(0o644);
@@ -758,7 +758,7 @@ describe('arena infrastructure', () => {
         ])
       );
       const dest = path.join(tmpDir, 'agent-formats');
-      unpack.unpackBundle(tarPath, dest);
+      unpack.bundle(tarPath, dest);
       expect(fs.readFileSync(path.join(dest, 'pax-dir/deep-weights.bin'), 'utf8'))
         .toBe('pax-payload');
       expect(fs.readFileSync(path.join(dest, 'gnu-long/nested/model.bin'), 'utf8'))
@@ -776,7 +776,7 @@ describe('arena infrastructure', () => {
           {name: 'pipe.fifo', type: '6'},
         ])
       );
-      expect(() => unpack.unpackBundle(fifoTar, path.join(tmpDir, 'agent-fifo')))
+      expect(() => unpack.bundle(fifoTar, path.join(tmpDir, 'agent-fifo')))
         .toThrow(/Disallowed special file/);
 
       const absTar = path.join(tmpDir, 'abs.tar.gz');
@@ -786,7 +786,7 @@ describe('arena infrastructure', () => {
           {name: '/etc/passwd', type: '0', data: Buffer.from('x')},
         ])
       );
-      expect(() => unpack.unpackBundle(absTar, path.join(tmpDir, 'agent-abs')))
+      expect(() => unpack.bundle(absTar, path.join(tmpDir, 'agent-abs')))
         .toThrow(/Illegal path in archive/);
 
       const loopTar = path.join(tmpDir, 'loop.tar.gz');
@@ -798,7 +798,7 @@ describe('arena infrastructure', () => {
           {name: 'a/file.txt', type: '0', data: Buffer.from('x')},
         ])
       );
-      expect(() => unpack.unpackBundle(loopTar, path.join(tmpDir, 'agent-loop')))
+      expect(() => unpack.bundle(loopTar, path.join(tmpDir, 'agent-loop')))
         .toThrow(/Symlink loop detected/);
     });
 
@@ -812,7 +812,7 @@ describe('arena infrastructure', () => {
           {name: 'later.bin', type: '0', data: Buffer.from('later')},
         ])
       );
-      expect(() => unpack.unpackBundle(fwdLinkTar, path.join(tmpDir, 'agent-fwd-hl')))
+      expect(() => unpack.bundle(fwdLinkTar, path.join(tmpDir, 'agent-fwd-hl')))
         .toThrow(/does not reference an earlier regular file/);
 
       const symRunTar = path.join(tmpDir, 'sym-run.tar.gz');
@@ -823,7 +823,7 @@ describe('arena infrastructure', () => {
           {name: 'run', type: '2', linkname: 'real-run'},
         ])
       );
-      expect(() => unpack.unpackBundle(symRunTar, path.join(tmpDir, 'agent-sym-run')))
+      expect(() => unpack.bundle(symRunTar, path.join(tmpDir, 'agent-sym-run')))
         .toThrow(/missing required executable \.\/run/);
 
       const nonExecRunTar = path.join(tmpDir, 'nonexec-run.tar.gz');
@@ -833,7 +833,7 @@ describe('arena infrastructure', () => {
           {name: 'run', type: '0', mode: 0o644, data: Buffer.from('#!/bin/sh\n')},
         ])
       );
-      expect(() => unpack.unpackBundle(nonExecRunTar, path.join(tmpDir, 'agent-nonexec-run')))
+      expect(() => unpack.bundle(nonExecRunTar, path.join(tmpDir, 'agent-nonexec-run')))
         .toThrow(/missing required executable \.\/run/);
     });
 
@@ -853,7 +853,7 @@ describe('arena infrastructure', () => {
       );
       const dest = path.join(tmpDir, 'agent-links-cas');
       const casDir = path.join(tmpDir, 'cas-links-only');
-      unpack.unpackBundle(linksTar, dest, casDir);
+      unpack.bundle(linksTar, dest, casDir);
 
       const stShared = fs.lstatSync(path.join(dest, 'shared.bin'));
       const stHard = fs.lstatSync(path.join(dest, 'shared-hl.bin'));
@@ -881,7 +881,7 @@ describe('arena infrastructure', () => {
         ])
       );
       const agentsSub = path.join(tmpDir, 'agents-lex');
-      expect(() => unpack.unpackBundle(escapeTar, path.join(agentsSub, 'bundle')))
+      expect(() => unpack.bundle(escapeTar, path.join(agentsSub, 'bundle')))
         .toThrow(/illegal link target|escapes/i);
       expect(fs.existsSync(victimPath)).toBe(false);
     });
@@ -896,7 +896,7 @@ describe('arena infrastructure', () => {
           {name: 't', type: '2', linkname: 'sub'},
         ])
       );
-      expect(() => unpack.unpackBundle(fwdSymTar, path.join(tmpDir, 'agent-fwd-sym')))
+      expect(() => unpack.bundle(fwdSymTar, path.join(tmpDir, 'agent-fwd-sym')))
         .toThrow(/illegal link target|escapes/i);
     });
 
@@ -910,7 +910,7 @@ describe('arena infrastructure', () => {
           {name: 'link/pwned.txt', type: '0', data: Buffer.from('x')},
         ])
       );
-      expect(() => unpack.unpackBundle(caseTar, path.join(tmpDir, 'agent-case-sym')))
+      expect(() => unpack.bundle(caseTar, path.join(tmpDir, 'agent-case-sym')))
         .toThrow(/traverses symlinked|colliding/i);
     });
 
@@ -934,7 +934,7 @@ describe('arena infrastructure', () => {
         ])
       );
       const dest = path.join(tmpDir, 'agent-pax-utf8');
-      unpack.unpackBundle(paxTar, dest);
+      unpack.bundle(paxTar, dest);
       expect(fs.readFileSync(path.join(dest, utf8Rel), 'utf8')).toBe('utf8-ok');
     });
   });

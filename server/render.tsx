@@ -2554,7 +2554,7 @@ export interface CachedArchivedLadder {
   rendered: ReturnType<typeof renderSingleLadderArtifact>;
 }
 
-export function renderArenaAndLadderArtifacts(opts: {
+function renderArenaAndLadderArtifacts(opts: {
   db: db.Database;
   renderer: build.Renderer;
   links: AgentLinkContext;
@@ -3350,7 +3350,7 @@ export function formatGamePlayerTelemetryNode(p: GamePlayerTelemetry): util.Chil
 // agents swap seats (`p1` = Match P2 with Team 1, `p2` = Match P1 with Team 2) under the identical
 // `@pkmn/sim` PRNG seed so simultaneous residual/switch ordering and speed-tie PRNG consumption
 // stay coupled to the teams while canceling team matchup bias to first order.
-export function renderBattleInlineDetailHtml(
+export function battleInlineDetailHtml(
   m: arena.BattleHistoryEntry,
   perspectiveSlug?: string
 ): string {
@@ -3444,7 +3444,7 @@ export function renderBattleInlineDetailHtml(
   );
 }
 
-export function renderBattlesPage(opts: {
+function renderBattlesPage(opts: {
   db: db.Database;
   renderer: build.Renderer;
   links: AgentLinkContext;
@@ -3536,7 +3536,7 @@ export function renderBattlesPage(opts: {
         `${Math.round(m.p2.peakRam).toLocaleString('en-US')}M${reasonSuffix}`;
 
       const rel = formatRelativeTime(nowSec, m.completedAt);
-      const detailHtml = renderBattleInlineDetailHtml(m);
+      const detailHtml = battleInlineDetailHtml(m);
       return (
         <>
           <tr

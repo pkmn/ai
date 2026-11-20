@@ -719,9 +719,9 @@ dd if=/dev/urandom of="${SRC_DIR}/weights.bin" bs=1024 count=128 status=none
 tar --zstd -cf "$ARCHIVE" -C "$SRC_DIR" .
 
 /opt/homebrew/bin/node -e "
-  const {unpackBundle} = require(\"/opt/arena/repo/build/arena/unpack\");
-  console.log(\"UNPACK_OK:\", unpackBundle(\"$ARCHIVE\", \"$DEST_1\", \"$CAS_DIR\"), \"bytes\");
-  console.log(\"UNPACK_OK:\", unpackBundle(\"$ARCHIVE\", \"$DEST_2\", \"$CAS_DIR\"), \"bytes\");
+  const unpack = require(\"/opt/arena/repo/build/arena/unpack\");
+  console.log(\"UNPACK_OK:\", unpack.bundle(\"$ARCHIVE\", \"$DEST_1\", \"$CAS_DIR\"), \"bytes\");
+  console.log(\"UNPACK_OK:\", unpack.bundle(\"$ARCHIVE\", \"$DEST_2\", \"$CAS_DIR\"), \"bytes\");
 "
 
 rm -rf "$SRC_DIR" "$ARCHIVE" "$DEST_1" "$DEST_2" "$CAS_DIR"
