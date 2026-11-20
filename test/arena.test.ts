@@ -2151,56 +2151,59 @@ describe('arena infrastructure', () => {
       expect(sim.getActiveBattleCount()).toBe(0);
     });
 
-    test('separates initMillis, teamPreviewMillis, and regular meanTurnMillis', async () => {
-      const timedScript = path.join(tmpDir, 'timed-telemetry-agent.js');
-      const utmOrderLog = path.join(tmpDir, 'utm-order.log');
-      fs.writeFileSync(utmOrderLog, '');
-      fs.writeFileSync(
-        timedScript,
-        [
-          '#!/usr/bin/env node',
-          'const fs = require("fs");',
-          'const readline = require("readline");',
-          'let readySent = false;',
-          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
-          'rl.on("line", line => {',
-          '  if (line.startsWith("|utm|")) {',
-          '    const tag = readySent ? "after\\n" : "before\\n";',
-          `    fs.appendFileSync(${JSON.stringify(utmOrderLog)}, tag);`,
-          '    return;',
-          '  }',
-          '  if (!line.startsWith("|request|")) return;',
-          '  const raw = line.slice(9).trim();',
-          '  if (!raw || raw === "null") return;',
-          '  const req = JSON.parse(raw);',
-          '  if (req.wait) return;',
-          '  if (req.teamPreview) {',
-          '    setTimeout(() => process.stdout.write("/team 123456\\n"), 40);',
-          '  } else {',
-          '    process.stdout.write("default\\n");',
-          '  }',
-          '});',
-          'setTimeout(() => { readySent = true; process.stdout.write("/ready\\n"); }, 35);',
-        ].join('\n'),
-        {mode: 0o755}
-      );
+    test('records teamPreviewMillis separately from initMillis on team-preview formats',
+      async () => {
+        const timedScript = path.join(tmpDir, 'timed-telemetry-agent.js');
+        const utmOrderLog = path.join(tmpDir, 'utm-order.log');
+        fs.writeFileSync(utmOrderLog, '');
+        fs.writeFileSync(
+          timedScript,
+          [
+            '#!/usr/bin/env node',
+            'const fs = require("fs");',
+            'const readline = require("readline");',
+            'let readySent = false;',
+            'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+            'rl.on("line", line => {',
+            '  if (line.startsWith("|utm|")) {',
+            '    const tag = readySent ? "after\\n" : "before\\n";',
+            `    fs.appendFileSync(${JSON.stringify(utmOrderLog)}, tag);`,
+            '    return;',
+            '  }',
+            '  if (!line.startsWith("|request|")) return;',
+            '  const raw = line.slice(9).trim();',
+            '  if (!raw || raw === "null") return;',
+            '  const req = JSON.parse(raw);',
+            '  if (req.wait) return;',
+            '  if (req.teamPreview) {',
+            '    setTimeout(() => process.stdout.write("/team 123456\\n"), 40);',
+            '  } else {',
+            '    process.stdout.write("default\\n");',
+            '  }',
+            '});',
+            'setTimeout(() => { readySent = true; process.stdout.write("/ready\\n"); }, 35);',
+          ].join('\n'),
+          {mode: 0o755}
+        );
 
-      const ouRes = await new arbiter.TimeSlicedArenaGame({
-        format: 'gen9ou',
-        seed: '1,2,3,4',
-        p1Spec: {mode: 'native', target: process.execPath, args: [timedScript]},
-        p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
-        p1TeamPacked: OU_TEAM_ONE,
-        p2TeamPacked: OU_TEAM_ONE,
-        smokeStopAfterTurn: 1,
-        devMode: true,
-      }).run();
-      expect(ouRes.endReason).toBe('smoke-complete');
-      expect(fs.readFileSync(utmOrderLog, 'utf8').trim()).toBe('after');
-      expect(ouRes.p1.initMillis).toBeGreaterThanOrEqual(25);
-      expect(ouRes.p1.teamPreviewMillis).toBeGreaterThanOrEqual(30);
-      expect(ouRes.p1.meanTurnMillis).toBeLessThan(30);
+        const ouRes = await new arbiter.TimeSlicedArenaGame({
+          format: 'gen9ou',
+          seed: '1,2,3,4',
+          p1Spec: {mode: 'native', target: process.execPath, args: [timedScript]},
+          p2Spec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+          p1TeamPacked: OU_TEAM_ONE,
+          p2TeamPacked: OU_TEAM_ONE,
+          smokeStopAfterTurn: 1,
+          devMode: true,
+        }).run();
+        expect(ouRes.endReason).toBe('smoke-complete');
+        expect(fs.readFileSync(utmOrderLog, 'utf8').trim()).toBe('after');
+        expect(ouRes.p1.initMillis).toBeGreaterThanOrEqual(25);
+        expect(ouRes.p1.teamPreviewMillis).toBeGreaterThanOrEqual(30);
+        expect(ouRes.p1.meanTurnMillis).toBeLessThan(30);
+      });
 
+    test('omits teamPreviewMillis on formats without team preview', async () => {
       const noTpRes = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9randombattle',
         seed: '1,2,3,4',

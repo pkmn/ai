@@ -2140,11 +2140,13 @@ describe('harvested ladder teams API', () => {
     expect((await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`)).status).toBe(401);
   });
 
-  test('returns 404 before teams upload and rejects invalid CLI uploads', async () => {
+  test('returns 404 before harvested teams are uploaded', async () => {
     expect((await fetch(`${srv.baseUrl}/api/arena/ladders/gen1ou20261109/teams`, {
       headers: {authorization: `Bearer ${ARENA_SECRET}`},
     })).status).toBe(404);
+  });
 
+  test('rejects CLI upload-ladder-teams targeting a non-harvested ladder', async () => {
     const rbyFile = path.join(tmpDir, 'rby.txt');
     fs.writeFileSync(rbyFile, rbyPaste, 'utf8');
     await expect(
@@ -2154,7 +2156,9 @@ describe('harvested ladder teams API', () => {
         log: () => undefined,
       })
     ).rejects.toThrow(/harvested/);
+  });
 
+  test('rejects CLI upload-ladder-teams containing fewer than 2 distinct teams', async () => {
     const dupFile = path.join(tmpDir, 'dup.txt');
     fs.writeFileSync(
       dupFile,

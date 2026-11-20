@@ -288,15 +288,16 @@ describe('dom TSX renderer', () => {
     );
   });
 
-  test('serializes inline style objects with kebab-case and CSS custom properties', () => {
+  test('serializes camelCase inline style properties to kebab-case', () => {
     const out = String(
-      jsx('div', {
-        style: {width: '320px', opacity: 0.5, backgroundColor: 'red', '--accent': '#fff'},
-      })
+      jsx('div', {style: {width: '320px', opacity: 0.5, backgroundColor: 'red'}})
     );
-    expect(out).toBe(
-      '<div style="width:320px;opacity:0.5;background-color:red;--accent:#fff"></div>'
-    );
+    expect(out).toBe('<div style="width:320px;opacity:0.5;background-color:red"></div>');
+  });
+
+  test('preserves CSS custom properties in inline style objects', () => {
+    const out = String(jsx('div', {style: {'--accent': '#fff'}}));
+    expect(out).toBe('<div style="--accent:#fff"></div>');
   });
 
   test('renders Fragment nodes alongside function components', () => {
@@ -1404,121 +1405,137 @@ describe('SSR cache invalidation', () => {
     }
   });
 
-  test('keeps anchor active alongside 2 stronger versions and dims it outside Best filter',
-    async () => {
-      forceLadderActive(db, 'gen1ou20261109');
-      const vFoul = createVersionAndPassSmoke(db, 'foul-play', '1.4.0', ['gen1ou20261109'], DAY_1);
-      const vAnchor = createVersionAndPassSmoke(db, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
-      db.setLadderAnchor('gen1ou20261109', 'metamon', '1.0.0', DAY_1 + 10);
+  const setupAnchorBase = () => {
+    forceLadderActive(db, 'gen1ou20261109');
+    const vFoul = createVersionAndPassSmoke(db, 'foul-play', '1.4.0', ['gen1ou20261109'], DAY_1);
+    const vAnchor = createVersionAndPassSmoke(db, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
+    db.setLadderAnchor('gen1ou20261109', 'metamon', '1.0.0', DAY_1 + 10);
 
-      for (let i = 0; i < 65; i++) {
-        const g2: ratings.GameOutcome = i % 3 === 0 ? 'L' : 'W';
-        playMatch(db, 'gen1ou20261109', vAnchor, vFoul, 'W', g2, DAY_1 + 50 + i);
-      }
+    for (let i = 0; i < 65; i++) {
+      const g2: ratings.GameOutcome = i % 3 === 0 ? 'L' : 'W';
+      playMatch(db, 'gen1ou20261109', vAnchor, vFoul, 'W', g2, DAY_1 + 50 + i);
+    }
+    return {vFoul, vAnchor};
+  };
 
-      const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
-      try {
-        // When v1.0.0 is Metamon's only/strongest version, it is ranked primary with bold 1500
-        // and included in Best/Active/All.
-        const initialHtml = await h.getText('/arena/ladders/rby/');
-        expect(initialHtml).toContain('<td class="num"><strong>1500</strong></td>');
-        expect(initialHtml).not.toContain('±0');
+  const addTwoStrongerVersions = (vFoul: number, vAnchor: number) => {
+    db.refundCooldown('metamon', DAY_2);
+    const v15 = createVersionAndPassSmoke(db, 'metamon', '1.5.0', ['gen1ou20261109'], DAY_2);
+    for (let i = 0; i < 42; i++) {
+      const g2: ratings.GameOutcome = i % 4 === 0 ? 'L' : 'W';
+      playMatch(db, 'gen1ou20261109', v15, vAnchor, 'W', g2, DAY_2 + 50 + i);
+      playMatch(db, 'gen1ou20261109', v15, vFoul, 'W', g2, DAY_2 + 200 + i);
+    }
 
-        // Submit stronger v1.5.0 and v2.0.0 — anchor v1.0.0 stays active alongside both.
-        db.refundCooldown('metamon', DAY_2);
-        const v15 = createVersionAndPassSmoke(db, 'metamon', '1.5.0', ['gen1ou20261109'], DAY_2);
-        for (let i = 0; i < 42; i++) {
-          const g2: ratings.GameOutcome = i % 4 === 0 ? 'L' : 'W';
-          playMatch(db, 'gen1ou20261109', v15, vAnchor, 'W', g2, DAY_2 + 50 + i);
-          playMatch(db, 'gen1ou20261109', v15, vFoul, 'W', g2, DAY_2 + 200 + i);
-        }
-
-        db.refundCooldown('metamon', DAY_3);
-        const metaAgent = db.getAgentBySlug('metamon')!;
-        const v20Sub = db.createSubmission({
-          agentId: metaAgent.id,
-          version: '2.0.0',
-          package: 'bundle',
-          url: 'https://example.com/metamon-2.0.0.tar.zst',
-          sha256: 'a'.repeat(64),
-          ladderIds: ['gen1ou20261109'],
-          now: DAY_3,
-        });
-        const v20Res = db.applySubmissionStatus({
-          versionId: v20Sub.id,
-          smokeStatus: 'passed',
-          now: DAY_3 + 5,
-        });
-        expect(v20Res.retiredByLadder).toEqual({});
-
-        for (let i = 0; i < 55; i++) {
-          const g2: ratings.GameOutcome = i % 4 === 0 ? 'L' : 'W';
-          playMatch(db, 'gen1ou20261109', v20Sub.id, v15, 'W', g2, DAY_3 + 50 + i);
-          playMatch(db, 'gen1ou20261109', v20Sub.id, vAnchor, 'W', g2, DAY_3 + 200 + i);
-        }
-
-        const lbHtml = await h.getText('/arena/ladders/rby/');
-        const doc = await h.getJson<render.StandingsDocument>('/arena/index.json');
-        const metaRows = doc.ladders.rby.standings.filter(r => r.slug === 'metamon');
-        expect(metaRows.map(r => `${r.version}:${r.role}:${r.rank ?? 'unranked'}`)).toEqual([
-          '2.0.0:champion:1',
-          '1.5.0:challenger:unranked',
-          '1.0.0:challenger:unranked',
-        ]);
-
-        // Extract <tr> tags from standings tbody to verify classes & Best/Active/All data attrs
-        const tbodyRe = /<table class="standings-table">[\s\S]*?<tbody>([\s\S]*?)<\/tbody>/;
-        const tbodyMatch = tbodyRe.exec(lbHtml);
-        expect(tbodyMatch).not.toBeNull();
-        const trs = Array.from(tbodyMatch![1].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g), m => m[0]);
-        const tr20 = trs.find(r => r.includes('<code>2.0.0</code>'))!;
-        const tr15 = trs.find(r => r.includes('<code>1.5.0</code>'))!;
-        const tr10 = trs.find(r => r.includes('<code>1.0.0</code>'))!;
-
-        expect(tr20).not.toContain('class="secondary"');
-        expect(tr20).toContain('data-active="true"');
-        expect(tr20).toContain('data-best="true"');
-
-        expect(tr15).toContain('class="secondary"');
-        expect(tr15).toContain('data-active="true"');
-        expect(tr15).not.toContain('data-best="true"');
-
-        expect(tr10).toContain('class="secondary"');
-        expect(tr10).toContain('data-active="true"');
-        expect(tr10).not.toContain('data-best="true"');
-        expect(tr10).not.toContain('data-retired="true"');
-        expect(tr10).toContain('<td class="num">1500</td>');
-        expect(tr10).not.toContain('±0');
-
-        // Submitting a 4th version v2.5.0 retires v1.5.0 (weakest non-anchor), NOT anchor v1.0.0
-        db.refundCooldown('metamon', DAY_3 + 500);
-        const v25Sub = db.createSubmission({
-          agentId: metaAgent.id,
-          version: '2.5.0',
-          package: 'bundle',
-          url: 'https://example.com/metamon-2.5.0.tar.zst',
-          sha256: 'b'.repeat(64),
-          ladderIds: ['gen1ou20261109'],
-          now: DAY_3 + 510,
-        });
-        const v25Res = db.applySubmissionStatus({
-          versionId: v25Sub.id,
-          smokeStatus: 'passed',
-          now: DAY_3 + 520,
-        });
-        expect(v25Res.retiredByLadder).toEqual({gen1ou20261109: v15});
-
-        const after4th = db.getLeaderboardEntries('gen1ou20261109')
-          .filter(e => e.agentSlug === 'metamon');
-        const byVer = new Map(after4th.map(e => [e.version, e.role]));
-        expect(byVer.get('2.0.0')).toBe('champion');
-        expect(byVer.get('2.5.0')).toBe('challenger');
-        expect(byVer.get('1.0.0')).toBe('challenger');
-        expect(byVer.get('1.5.0')).toBe('retired');
-      } finally {
-        await h.close();
-      }
+    db.refundCooldown('metamon', DAY_3);
+    const metaAgent = db.getAgentBySlug('metamon')!;
+    const v20Sub = db.createSubmission({
+      agentId: metaAgent.id,
+      version: '2.0.0',
+      package: 'bundle',
+      url: 'https://example.com/metamon-2.0.0.tar.zst',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: DAY_3,
     });
+    const v20Res = db.applySubmissionStatus({
+      versionId: v20Sub.id,
+      smokeStatus: 'passed',
+      now: DAY_3 + 5,
+    });
+
+    for (let i = 0; i < 55; i++) {
+      const g2: ratings.GameOutcome = i % 4 === 0 ? 'L' : 'W';
+      playMatch(db, 'gen1ou20261109', v20Sub.id, v15, 'W', g2, DAY_3 + 50 + i);
+      playMatch(db, 'gen1ou20261109', v20Sub.id, vAnchor, 'W', g2, DAY_3 + 200 + i);
+    }
+    return {metaAgent, v15, v20Res};
+  };
+
+  test('renders solo anchor version as bold primary 1500 without SE', async () => {
+    setupAnchorBase();
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const initialHtml = await h.getText('/arena/ladders/rby/');
+      expect(initialHtml).toContain('<td class="num"><strong>1500</strong></td>');
+      expect(initialHtml).not.toContain('±0');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('dims anchor outside Best filter alongside two stronger active versions', async () => {
+    const {vFoul, vAnchor} = setupAnchorBase();
+    const {v20Res} = addTwoStrongerVersions(vFoul, vAnchor);
+    expect(v20Res.retiredByLadder).toEqual({});
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const lbHtml = await h.getText('/arena/ladders/rby/');
+      const doc = await h.getJson<render.StandingsDocument>('/arena/index.json');
+      const metaRows = doc.ladders.rby.standings.filter(r => r.slug === 'metamon');
+      expect(metaRows.map(r => `${r.version}:${r.role}:${r.rank ?? 'unranked'}`)).toEqual([
+        '2.0.0:champion:1',
+        '1.5.0:challenger:unranked',
+        '1.0.0:challenger:unranked',
+      ]);
+
+      const tbodyRe = /<table class="standings-table">[\s\S]*?<tbody>([\s\S]*?)<\/tbody>/;
+      const tbodyMatch = tbodyRe.exec(lbHtml);
+      expect(tbodyMatch).not.toBeNull();
+      const trs = Array.from(tbodyMatch![1].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g), m => m[0]);
+      const tr20 = trs.find(r => r.includes('<code>2.0.0</code>'))!;
+      const tr15 = trs.find(r => r.includes('<code>1.5.0</code>'))!;
+      const tr10 = trs.find(r => r.includes('<code>1.0.0</code>'))!;
+
+      expect(tr20).not.toContain('class="secondary"');
+      expect(tr20).toContain('data-active="true"');
+      expect(tr20).toContain('data-best="true"');
+
+      expect(tr15).toContain('class="secondary"');
+      expect(tr15).toContain('data-active="true"');
+      expect(tr15).not.toContain('data-best="true"');
+
+      expect(tr10).toContain('class="secondary"');
+      expect(tr10).toContain('data-active="true"');
+      expect(tr10).not.toContain('data-best="true"');
+      expect(tr10).not.toContain('data-retired="true"');
+      expect(tr10).toContain('<td class="num">1500</td>');
+      expect(tr10).not.toContain('±0');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('retires weakest non-anchor version when submitting a fourth version', () => {
+    const {vFoul, vAnchor} = setupAnchorBase();
+    const {metaAgent, v15} = addTwoStrongerVersions(vFoul, vAnchor);
+
+    db.refundCooldown('metamon', DAY_3 + 500);
+    const v25Sub = db.createSubmission({
+      agentId: metaAgent.id,
+      version: '2.5.0',
+      package: 'bundle',
+      url: 'https://example.com/metamon-2.5.0.tar.zst',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: DAY_3 + 510,
+    });
+    const v25Res = db.applySubmissionStatus({
+      versionId: v25Sub.id,
+      smokeStatus: 'passed',
+      now: DAY_3 + 520,
+    });
+    expect(v25Res.retiredByLadder).toEqual({gen1ou20261109: v15});
+
+    const after4th = db.getLeaderboardEntries('gen1ou20261109')
+      .filter(e => e.agentSlug === 'metamon');
+    const byVer = new Map(after4th.map(e => [e.version, e.role]));
+    expect(byVer.get('2.0.0')).toBe('champion');
+    expect(byVer.get('2.5.0')).toBe('challenger');
+    expect(byVer.get('1.0.0')).toBe('challenger');
+    expect(byVer.get('1.5.0')).toBe('retired');
+  });
 
   test('refreshes /arena/ relative timestamps across 15-second idle buckets', async () => {
     forceLadderActive(db, 'gen1ou20261109');
@@ -2456,34 +2473,42 @@ describe('JSON route parity & retired pool archives', () => {
     expect([image.data[0], image.data[1], image.data[2], image.data[3]]).toEqual([255, 0, 0, 255]);
   });
 
-  test('compareShots writes diff images and returns structured pixel-diff metadata',
-    async () => {
-      const beforeDir = path.join(tmpDir, 'shots-before');
-      const afterDir = path.join(tmpDir, 'shots-after');
-      const diffDir = path.join(tmpDir, 'shots-diff');
-      fs.mkdirSync(path.join(beforeDir, 'small', 'light'), {recursive: true});
-      fs.mkdirSync(path.join(afterDir, 'small', 'light'), {recursive: true});
+  const createModifiedShotPair = (prefix: string) => {
+    const beforeDir = path.join(tmpDir, `${prefix}-before`);
+    const afterDir = path.join(tmpDir, `${prefix}-after`);
+    const diffDir = path.join(tmpDir, `${prefix}-diff`);
+    fs.mkdirSync(path.join(beforeDir, 'small', 'light'), {recursive: true});
+    fs.mkdirSync(path.join(afterDir, 'small', 'light'), {recursive: true});
 
-      const imgA = shots.encodePng({width: 2, height: 2, data: Buffer.alloc(16, 120)});
-      const dataB = Buffer.alloc(16, 120);
-      dataB[0] = 250;
-      const imgB = shots.encodePng({width: 2, height: 2, data: dataB});
+    const imgA = shots.encodePng({width: 2, height: 2, data: Buffer.alloc(16, 120)});
+    const dataB = Buffer.alloc(16, 120);
+    dataB[0] = 250;
+    const imgB = shots.encodePng({width: 2, height: 2, data: dataB});
 
-      fs.writeFileSync(path.join(beforeDir, 'small', 'light', 'home.png'), imgA);
-      fs.writeFileSync(path.join(afterDir, 'small', 'light', 'home.png'), imgB);
+    fs.writeFileSync(path.join(beforeDir, 'small', 'light', 'home.png'), imgA);
+    fs.writeFileSync(path.join(afterDir, 'small', 'light', 'home.png'), imgB);
+    return {beforeDir, afterDir, diffDir};
+  };
 
-      const res = await shots.compareShots(beforeDir, afterDir, diffDir, 0);
-      expect(res.same).toBe(false);
-      expect(res.changes).toHaveLength(1);
-      expect(res.changes[0]).toMatchObject({
-        name: 'small/light/home.png',
-        status: 'modified',
-        pixels: 1,
-        percent: 25,
-      });
-      expect(fs.existsSync(path.join(diffDir, 'small', 'light', 'home.png'))).toBe(true);
-      expect(fs.existsSync(path.join(diffDir, 'index.html'))).toBe(false);
+  test('compareShots returns structured pixel-diff metadata for modified images', async () => {
+    const {beforeDir, afterDir, diffDir} = createModifiedShotPair('shots-meta');
+    const res = await shots.compareShots(beforeDir, afterDir, diffDir, 0);
+    expect(res.same).toBe(false);
+    expect(res.changes).toHaveLength(1);
+    expect(res.changes[0]).toMatchObject({
+      name: 'small/light/home.png',
+      status: 'modified',
+      pixels: 1,
+      percent: 25,
     });
+  });
+
+  test('compareShots writes diff PNGs without emitting index.html inside diffDir', async () => {
+    const {beforeDir, afterDir, diffDir} = createModifiedShotPair('shots-files');
+    await shots.compareShots(beforeDir, afterDir, diffDir, 0);
+    expect(fs.existsSync(path.join(diffDir, 'small', 'light', 'home.png'))).toBe(true);
+    expect(fs.existsSync(path.join(diffDir, 'index.html'))).toBe(false);
+  });
 
   test('compareShots scopes sprite-animation tolerance strictly to viewer regions', async () => {
     const beforeDir = path.join(tmpDir, 'viewer-before');
@@ -2673,45 +2698,73 @@ describe('JSON route parity & retired pool archives', () => {
     expect(tourSrc).toContain('localStorage.setItem(SPEED_KEY, data.speed)');
   });
 
-  test('paginates dynamic tables at 25 rows per page across ladder, battles, and profile',
-    async () => {
-      const jaxId = db.getAgentBySlug('jaxcalibur')!.id;
-      const jaxVer = db.getAgentLadderProfileEntries(jaxId, 'gen1ou20261109')[0].versionId;
-      for (let i = 1; i <= 28; i++) {
-        db.db.prepare("UPDATE ladder_entries SET role = 'retired'").run();
-        db.refundCooldown('foul-play', DAY_1 + i);
-        const vId = createVersionAndPassSmoke(
-          db,
-          'foul-play',
-          `2.0.${i}`,
-          ['gen1ou20261109'],
-          DAY_1 + i
-        );
-        playMatch(db, 'gen1ou20261109', vId, jaxVer, 'W', 'L', NOW + i);
-      }
-      db.db.prepare(
-        "UPDATE ladder_entries SET role = 'challenger' WHERE ladder_id = 'gen1ou20261109'"
-      ).run();
+  const seedPaginatedHistory = () => {
+    const jaxId = db.getAgentBySlug('jaxcalibur')!.id;
+    const jaxVer = db.getAgentLadderProfileEntries(jaxId, 'gen1ou20261109')[0].versionId;
+    for (let i = 1; i <= 28; i++) {
+      db.db.prepare("UPDATE ladder_entries SET role = 'retired'").run();
+      db.refundCooldown('foul-play', DAY_1 + i);
+      const vId = createVersionAndPassSmoke(
+        db,
+        'foul-play',
+        `2.0.${i}`,
+        ['gen1ou20261109'],
+        DAY_1 + i
+      );
+      playMatch(db, 'gen1ou20261109', vId, jaxVer, 'W', 'L', NOW + i);
+    }
+    db.db.prepare(
+      "UPDATE ladder_entries SET role = 'challenger' WHERE ladder_id = 'gen1ou20261109'"
+    ).run();
+  };
 
-      const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
-      try {
-        const ladderHtml = await h.getText('/arena/ladders/rby/');
-        expect(ladderHtml).toContain('id="standings-pager"');
-        expect(ladderHtml).toContain('Page 1 of 2 (');
+  test('paginates ladder standings table at 25 rows per page', async () => {
+    seedPaginatedHistory();
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
+    try {
+      const ladderHtml = await h.getText('/arena/ladders/rby/');
+      expect(ladderHtml).toContain('id="standings-pager"');
+      expect(ladderHtml).toContain('Page 1 of 2 (');
+    } finally {
+      await h.close();
+    }
+  });
 
-        const battlesHtml = await h.getText('/arena/battles/');
-        expect(battlesHtml).toContain('id="battles-pager"');
-        expect(battlesHtml).toContain('Page 1 of 2 (');
+  test('paginates battles table at 25 rows per page', async () => {
+    seedPaginatedHistory();
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
+    try {
+      const battlesHtml = await h.getText('/arena/battles/');
+      expect(battlesHtml).toContain('id="battles-pager"');
+      expect(battlesHtml).toContain('Page 1 of 2 (');
+    } finally {
+      await h.close();
+    }
+  });
 
-        const profileHtml = await h.getText('/projects/foul-play/');
-        expect(profileHtml).toContain('aria-label="Versions pagination"');
-        expect(profileHtml).toContain('aria-label="Matches pagination"');
-        expect(profileHtml).toContain('Page 1 of 2 (29 versions)');
-        expect(profileHtml).toContain('Page 1 of 2 (28 matches)');
-      } finally {
-        await h.close();
-      }
-    });
+  test('paginates profile version history at 25 rows per page', async () => {
+    seedPaginatedHistory();
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
+    try {
+      const profileHtml = await h.getText('/projects/foul-play/');
+      expect(profileHtml).toContain('aria-label="Versions pagination"');
+      expect(profileHtml).toContain('Page 1 of 2 (29 versions)');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('paginates profile match history at 25 rows per page', async () => {
+    seedPaginatedHistory();
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
+    try {
+      const profileHtml = await h.getText('/projects/foul-play/');
+      expect(profileHtml).toContain('aria-label="Matches pagination"');
+      expect(profileHtml).toContain('Page 1 of 2 (28 matches)');
+    } finally {
+      await h.close();
+    }
+  });
 
   test('omits tournament winner in /arena.json while status is running', async () => {
     const fpVer = db.getVersionBySlugAndLabel('foul-play', '1.0.0')!;

@@ -1872,7 +1872,7 @@ describe('ladder activation invariants', () => {
     expect(db.setLadderStatus('gen1ou20261109', 'active', 1_760_000_080).status).toBe('active');
   });
 
-  test('setLadderAnchor reactivates retired anchor and trims excess when reassigned', () => {
+  const setupThreeEscalatingAlphaVersions = () => {
     const packedRby = validateHarvestedTeams(generateValidHarvestedTeams('gen1ou', 4), 'gen1ou');
     db.replaceLadderTeams('gen1ou20261109', packedRby, 1_760_000_020);
 
@@ -1952,12 +1952,15 @@ describe('ladder activation invariants', () => {
       const opp = idx === 0 ? subB1.id : alphaIds[idx - 1];
       recordSeries(`a${idx}`, sub.id, opp, 1_760_000_120 + idx * 500);
     }
+  };
+
+  test('setLadderAnchor reactivates a retired version as an active anchor', () => {
+    setupThreeEscalatingAlphaVersions();
 
     const beforeAnchor = db.getLeaderboardEntries('gen1ou20261109')
       .filter(e => e.agentSlug === 'alpha');
     expect(beforeAnchor.find(e => e.version === '1.0.0')?.role).toBe('retired');
 
-    // Designating retired 1.0.0 as anchor reactivates it alongside stronger 1.5.0 + 2.0.0
     db.setLadderAnchor('gen1ou20261109', 'alpha', '1.0.0', 1_760_002_000);
     const withAnchor = db.getLeaderboardEntries('gen1ou20261109')
       .filter(e => e.agentSlug === 'alpha');
@@ -1966,15 +1969,23 @@ describe('ladder activation invariants', () => {
     expect(withAnchor.find(e => e.version === '1.5.0')?.role).toBe('challenger');
     expect(withAnchor.find(e => e.version === '1.0.0')?.isAnchor).toBe(true);
     expect(withAnchor.find(e => e.version === '1.0.0')?.role).toBe('challenger');
+  });
 
-    // Unquarantining 2.0.0 while 1.0.0 (anchor) + 1.5.0 are active restores 2.0.0 as active
+  test('unquarantineVersion restores champion alongside an active anchor', () => {
+    setupThreeEscalatingAlphaVersions();
+    db.setLadderAnchor('gen1ou20261109', 'alpha', '1.0.0', 1_760_002_000);
+
     db.quarantineVersion('alpha', '2.0.0', 'Transient fault', 1_760_002_050);
     db.unquarantineVersion('alpha', '2.0.0', 1_760_002_060);
     const afterUnq = db.getLeaderboardEntries('gen1ou20261109')
       .filter(e => e.agentSlug === 'alpha' && e.role !== 'retired');
     expect(afterUnq).toHaveLength(3);
+  });
 
-    // Moving the anchor back to beta 1.0.0 trims alpha's 3 non-anchor active versions back to 2
+  test('setLadderAnchor trims former anchor owner back to two active versions', () => {
+    setupThreeEscalatingAlphaVersions();
+    db.setLadderAnchor('gen1ou20261109', 'alpha', '1.0.0', 1_760_002_000);
+
     db.setLadderAnchor('gen1ou20261109', 'beta', '1.0.0', 1_760_002_100);
     const afterMove = db.getLeaderboardEntries('gen1ou20261109')
       .filter(e => e.agentSlug === 'alpha');
@@ -2524,7 +2535,7 @@ describe('tournament standings', () => {
     expect(recorded.game.games[2].p2.peakRam).toBe(1480);
   });
 
-  test('tracks per-ladder init, team preview, turn, and mean RAM telemetry', () => {
+  const createTelemetryDb = () => {
     const telDb = new Database(':memory:', {now: 1_760_000_000});
     telDb.syncLadders(LADDERS_FILE, 1_760_000_000);
     telDb.syncProjectsFromYaml(`
@@ -2572,131 +2583,155 @@ describe('tournament standings', () => {
       now: 1_760_000_020,
     });
     telDb.applySubmissionStatus({versionId: vB.id, smokeStatus: 'passed', now: 1_760_000_020});
-    const vAPassed = telDb.getVersionById(vA.id)!;
-    expect(vAPassed.smokeInitMillis).toBe(700);
-    expect(vAPassed.smokeTeamPreviewMillis).toBe(250);
-    expect(vAPassed.smokeTurnMillis).toBe(90);
+    return {telDb, alpha, vA, vB};
+  };
 
-    telDb.recordCompletedMatch({
-      match: {
-        id: 'sv-m1',
-        ladderId: 'gen9ou20261109',
-        p1VersionId: vA.id,
-        p2VersionId: vB.id,
-        seed: '1,2,3,4',
-        game1Outcome: 'W',
-        game2Outcome: 'W',
-        category: 'WW',
-        game1Turns: 10,
-        game2Turns: 12,
-        game1EndReason: 'normal',
-        game2EndReason: 'normal',
-        p1Game1PeakRam: 200,
-        p1Game2PeakRam: 400,
-        p2Game1PeakRam: 100,
-        p2Game2PeakRam: 100,
-        p1Game1BankSeconds: 140,
-        p1Game2BankSeconds: 140,
-        p2Game1BankSeconds: 140,
-        p2Game2BankSeconds: 140,
-        p1Game1InitMillis: 1000,
-        p1Game2InitMillis: 2000,
-        p2Game1InitMillis: 500,
-        p2Game2InitMillis: 500,
-        p1Game1TeamPreviewMillis: 300,
-        p1Game2TeamPreviewMillis: 500,
-        p2Game1TeamPreviewMillis: 100,
-        p2Game2TeamPreviewMillis: 100,
-        p1Game1MeanTurnMillis: 100,
-        p1Game2MeanTurnMillis: 200,
-        p2Game1MeanTurnMillis: 50,
-        p2Game2MeanTurnMillis: 50,
-        completedAt: 1_760_000_100,
-      },
-    });
-    telDb.recordCompletedMatch({
-      match: {
-        id: 'sv-m2',
-        ladderId: 'gen9ou20261109',
-        p1VersionId: vA.id,
-        p2VersionId: vB.id,
-        seed: '5,6,7,8',
-        game1Outcome: 'W',
-        game2Outcome: 'L',
-        category: 'WL',
-        game1Turns: 10,
-        game2Turns: 12,
-        game1EndReason: 'normal',
-        game2EndReason: 'normal',
-        p1Game1PeakRam: 600,
-        p1Game2PeakRam: 600,
-        p2Game1PeakRam: 100,
-        p2Game2PeakRam: 100,
-        p1Game1BankSeconds: 140,
-        p1Game2BankSeconds: 140,
-        p2Game1BankSeconds: 140,
-        p2Game2BankSeconds: 140,
-        p1Game1InitMillis: 2500,
-        p1Game2InitMillis: 2500,
-        p2Game1InitMillis: 500,
-        p2Game2InitMillis: 500,
-        p1Game1TeamPreviewMillis: 600,
-        p1Game2TeamPreviewMillis: 600,
-        p2Game1TeamPreviewMillis: 100,
-        p2Game2TeamPreviewMillis: 100,
-        p1Game1MeanTurnMillis: 250,
-        p1Game2MeanTurnMillis: 250,
-        p2Game1MeanTurnMillis: 50,
-        p2Game2MeanTurnMillis: 50,
-        completedAt: 1_760_000_200,
-      },
-    });
-    telDb.recordCompletedMatch({
-      match: {
-        id: 'rby-m1',
-        ladderId: 'gen1ou20261109',
-        p1VersionId: vA.id,
-        p2VersionId: vB.id,
-        seed: '9,10,11,12',
-        game1Outcome: 'W',
-        game2Outcome: 'W',
-        category: 'WW',
-        game1Turns: 15,
-        game2Turns: 15,
-        game1EndReason: 'normal',
-        game2EndReason: 'normal',
-        p1Game1PeakRam: 120,
-        p1Game2PeakRam: 140,
-        p2Game1PeakRam: 100,
-        p2Game2PeakRam: 100,
-        p1Game1BankSeconds: 140,
-        p1Game2BankSeconds: 140,
-        p2Game1BankSeconds: 140,
-        p2Game2BankSeconds: 140,
-        p1Game1InitMillis: 800,
-        p1Game2InitMillis: 800,
-        p2Game1InitMillis: 400,
-        p2Game2InitMillis: 400,
-        p1Game1MeanTurnMillis: 80,
-        p1Game2MeanTurnMillis: 100,
-        p2Game1MeanTurnMillis: 40,
-        p2Game2MeanTurnMillis: 40,
-        completedAt: 1_760_000_300,
-      },
-    });
+  test('persists smoke timing telemetry on passed agent versions', () => {
+    const {telDb, vA} = createTelemetryDb();
+    try {
+      const vAPassed = telDb.getVersionById(vA.id)!;
+      expect(vAPassed.smokeInitMillis).toBe(700);
+      expect(vAPassed.smokeTeamPreviewMillis).toBe(250);
+      expect(vAPassed.smokeTurnMillis).toBe(90);
+    } finally {
+      telDb.close();
+    }
+  });
 
-    const svEntry = telDb.getAgentLadderProfileEntries(alpha.id, 'gen9ou20261109')[0];
-    expect(svEntry.meanInitMillis).toBe(2000);
-    expect(svEntry.meanTeamPreviewMillis).toBe(500);
-    expect(svEntry.meanTurnMillis).toBe(200);
-    expect(svEntry.meanRam).toBe(450);
-    expect(svEntry.peakRam).toBe(600);
+  test('averages per-ladder init, team preview, turn, mean RAM telemetry across matches', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      telDb.recordCompletedMatch({
+        match: {
+          id: 'sv-m1',
+          ladderId: 'gen9ou20261109',
+          p1VersionId: vA.id,
+          p2VersionId: vB.id,
+          seed: '1,2,3,4',
+          game1Outcome: 'W',
+          game2Outcome: 'W',
+          category: 'WW',
+          game1Turns: 10,
+          game2Turns: 12,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 200,
+          p1Game2PeakRam: 400,
+          p2Game1PeakRam: 100,
+          p2Game2PeakRam: 100,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1Game1InitMillis: 1000,
+          p1Game2InitMillis: 2000,
+          p2Game1InitMillis: 500,
+          p2Game2InitMillis: 500,
+          p1Game1TeamPreviewMillis: 300,
+          p1Game2TeamPreviewMillis: 500,
+          p2Game1TeamPreviewMillis: 100,
+          p2Game2TeamPreviewMillis: 100,
+          p1Game1MeanTurnMillis: 100,
+          p1Game2MeanTurnMillis: 200,
+          p2Game1MeanTurnMillis: 50,
+          p2Game2MeanTurnMillis: 50,
+          completedAt: 1_760_000_100,
+        },
+      });
+      telDb.recordCompletedMatch({
+        match: {
+          id: 'sv-m2',
+          ladderId: 'gen9ou20261109',
+          p1VersionId: vA.id,
+          p2VersionId: vB.id,
+          seed: '5,6,7,8',
+          game1Outcome: 'W',
+          game2Outcome: 'L',
+          category: 'WL',
+          game1Turns: 10,
+          game2Turns: 12,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 600,
+          p1Game2PeakRam: 600,
+          p2Game1PeakRam: 100,
+          p2Game2PeakRam: 100,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1Game1InitMillis: 2500,
+          p1Game2InitMillis: 2500,
+          p2Game1InitMillis: 500,
+          p2Game2InitMillis: 500,
+          p1Game1TeamPreviewMillis: 600,
+          p1Game2TeamPreviewMillis: 600,
+          p2Game1TeamPreviewMillis: 100,
+          p2Game2TeamPreviewMillis: 100,
+          p1Game1MeanTurnMillis: 250,
+          p1Game2MeanTurnMillis: 250,
+          p2Game1MeanTurnMillis: 50,
+          p2Game2MeanTurnMillis: 50,
+          completedAt: 1_760_000_200,
+        },
+      });
 
-    const rbyEntry = telDb.getAgentLadderProfileEntries(alpha.id, 'gen1ou20261109')[0];
-    expect(rbyEntry.meanInitMillis).toBe(800);
-    expect(rbyEntry.meanTeamPreviewMillis).toBeUndefined();
-    expect(rbyEntry.meanTurnMillis).toBe(90);
-    expect(rbyEntry.meanRam).toBe(130);
-    expect(rbyEntry.peakRam).toBe(140);
+      const svEntry = telDb.getAgentLadderProfileEntries(alpha.id, 'gen9ou20261109')[0];
+      expect(svEntry.meanInitMillis).toBe(2000);
+      expect(svEntry.meanTeamPreviewMillis).toBe(500);
+      expect(svEntry.meanTurnMillis).toBe(200);
+      expect(svEntry.meanRam).toBe(450);
+      expect(svEntry.peakRam).toBe(600);
+    } finally {
+      telDb.close();
+    }
+  });
+
+  test('leaves meanTeamPreviewMillis undefined on ladders without team preview', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      telDb.recordCompletedMatch({
+        match: {
+          id: 'rby-m1',
+          ladderId: 'gen1ou20261109',
+          p1VersionId: vA.id,
+          p2VersionId: vB.id,
+          seed: '9,10,11,12',
+          game1Outcome: 'W',
+          game2Outcome: 'W',
+          category: 'WW',
+          game1Turns: 15,
+          game2Turns: 15,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 120,
+          p1Game2PeakRam: 140,
+          p2Game1PeakRam: 100,
+          p2Game2PeakRam: 100,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1Game1InitMillis: 800,
+          p1Game2InitMillis: 800,
+          p2Game1InitMillis: 400,
+          p2Game2InitMillis: 400,
+          p1Game1MeanTurnMillis: 80,
+          p1Game2MeanTurnMillis: 100,
+          p2Game1MeanTurnMillis: 40,
+          p2Game2MeanTurnMillis: 40,
+          completedAt: 1_760_000_300,
+        },
+      });
+
+      const rbyEntry = telDb.getAgentLadderProfileEntries(alpha.id, 'gen1ou20261109')[0];
+      expect(rbyEntry.meanInitMillis).toBe(800);
+      expect(rbyEntry.meanTeamPreviewMillis).toBeUndefined();
+      expect(rbyEntry.meanTurnMillis).toBe(90);
+      expect(rbyEntry.meanRam).toBe(130);
+      expect(rbyEntry.peakRam).toBe(140);
+    } finally {
+      telDb.close();
+    }
   });
 });

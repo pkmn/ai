@@ -24,14 +24,16 @@ afterAll(async () => {
 });
 
 describe('multi-version @pkmn/sim support', () => {
-  test('config/ladders.yml defaults version to 0.11.0 and db/ladders syncs + rotates it', () => {
+  test('parseLaddersYaml defaults omitted version to SIM_VERSION', () => {
     const raw = fs.readFileSync(LADDERS_FILE, 'utf8');
     const parsed = parseLaddersYaml(raw);
     expect(parsed.length).toBeGreaterThan(0);
     for (const entry of parsed) {
       expect(entry.version).toBe(SIM_VERSION);
     }
+  });
 
+  test('parseLaddersYaml rejects malformed version strings', () => {
     expect(() => parseLaddersYaml(`
 - name: RBY
   format: gen1ou
@@ -39,7 +41,9 @@ describe('multi-version @pkmn/sim support', () => {
   id: gen1ou20261109
   team: harvested
 `)).toThrow(/Invalid version/);
+  });
 
+  test('db.rotateLadder assigns new version while preserving archived version', () => {
     const db = new Database(':memory:');
     try {
       db.syncLadders(LADDERS_FILE, 1_760_000_000);
@@ -63,7 +67,7 @@ describe('multi-version @pkmn/sim support', () => {
     }
   });
 
-  test('0001-sim-version.sql migrates existing ladders and tournaments tables', () => {
+  test('0001-sim-version.sql backfills version on legacy ladders', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-sim-mig-'));
     tempDirs.push(tmpDir);
     const dbPath = path.join(tmpDir, 'legacy.sqlite');
@@ -112,6 +116,61 @@ describe('multi-version @pkmn/sim support', () => {
     const db = new Database(dbPath, {backupBeforeMigrate: false, migrationDir: migDir});
     try {
       expect(db.getLadder('gen1ou20261109')?.version).toBe(SIM_VERSION);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('0001-sim-version.sql backfills version on legacy tournaments', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-sim-mig-t-'));
+    tempDirs.push(tmpDir);
+    const dbPath = path.join(tmpDir, 'legacy-tourney.sqlite');
+
+    const rawDb = new DatabaseSync(dbPath);
+    rawDb.exec(`
+      CREATE TABLE ladders (
+        id TEXT PRIMARY KEY,
+        slot TEXT NOT NULL,
+        name TEXT NOT NULL,
+        format TEXT NOT NULL,
+        team TEXT NOT NULL,
+        min INTEGER NOT NULL,
+        teams INTEGER,
+        discord TEXT,
+        status TEXT NOT NULL DEFAULT 'upcoming',
+        created_at INTEGER NOT NULL,
+        archived_at INTEGER
+      );
+      CREATE TABLE tournaments (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        format TEXT NOT NULL,
+        team TEXT,
+        rules_json TEXT NOT NULL DEFAULT '[]',
+        games_per_matchup INTEGER NOT NULL,
+        batch_size INTEGER NOT NULL DEFAULT 10,
+        parallel_tables INTEGER NOT NULL,
+        hardware TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'scheduled',
+        starts_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+      INSERT INTO tournaments (
+        id, name, format, games_per_matchup, parallel_tables, hardware, starts_at
+      ) VALUES ('1', 'Legacy Tourney', 'gen9ou', 2, 1, 'L4', 1760000000);
+    `);
+    rawDb.close();
+
+    const migDir = path.join(tmpDir, 'migration');
+    fs.mkdirSync(migDir, {recursive: true});
+    fs.copyFileSync(
+      root('db', 'migration', '0001-sim-version.sql'),
+      path.join(migDir, '0001-sim-version.sql')
+    );
+
+    const db = new Database(dbPath, {backupBeforeMigrate: false, migrationDir: migDir});
+    try {
+      expect(db.getTournament('1')?.version).toBe(SIM_VERSION);
     } finally {
       db.close();
     }

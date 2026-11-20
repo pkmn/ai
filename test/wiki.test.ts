@@ -195,16 +195,19 @@ describe('wiki helpers', () => {
     expect(html).toContain('Non-asset GitHub');
   });
 
-  test('renderDjot allows HTTPS GitHub image and user-attachment URIs', () => {
+  test('renderDjot allows HTTPS GitHub user-attachment image URIs', () => {
+    const html = wiki.renderDjot('![Diagram](https://github.com/user-attachments/assets/abc-123)');
+    expect(html).toContain(
+      '<img src="https://github.com/user-attachments/assets/abc-123" alt="Diagram" loading="lazy" referrerpolicy="no-referrer">'
+    );
+  });
+
+  test('renderDjot allows HTTPS raw.githubusercontent.com image URIs', () => {
     const html = wiki.renderDjot([
-      '![Diagram](https://github.com/user-attachments/assets/abc-123)',
       '![Raw chart][chart]',
       '',
       '[chart]: https://raw.githubusercontent.com/pkmn/ai/main/chart.png',
     ].join('\n'));
-    expect(html).toContain(
-      '<img src="https://github.com/user-attachments/assets/abc-123" alt="Diagram" loading="lazy" referrerpolicy="no-referrer">'
-    );
     expect(html).toContain(
       '<img src="https://raw.githubusercontent.com/pkmn/ai/main/chart.png" alt="Raw chart" loading="lazy" referrerpolicy="no-referrer">'
     );
