@@ -290,7 +290,6 @@ function resolveWikiHref(rawHref: string | undefined): string {
 
 const ALLOWED_IMAGE_HOSTS = new Map<string, RegExp | true>([
   ['avatars.githubusercontent.com', true],
-  ['camo.githubusercontent.com', true],
   ['gist.githubusercontent.com', true],
   ['media.githubusercontent.com', true],
   ['private-user-images.githubusercontent.com', true],
@@ -312,7 +311,9 @@ function resolveImageSrc(rawSrc: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return undefined;
+  if (parsed.protocol !== 'https:' || parsed.port !== '' || parsed.username || parsed.password) {
+    return undefined;
+  }
   const rule = ALLOWED_IMAGE_HOSTS.get(parsed.hostname.toLowerCase());
   if (rule === true || rule?.test(parsed.pathname)) return parsed.href;
   return undefined;
@@ -368,9 +369,13 @@ function renderSafeMath(tex: string, displayMode: boolean): string {
   }
 }
 
+hljs.configure({classPrefix: 'hl-'});
+// Avoid blocking the event loop synchronously on huge code blocks or `?diff=1` git diffs.
+const MAX_HIGHLIGHT_CHARS = 64 * 1024;
+
 function renderSafeCode(source: string, lang?: string): string {
   const trimmed = source.trimEnd();
-  if (!lang) return escapeHtml(trimmed);
+  if (!lang || trimmed.length > MAX_HIGHLIGHT_CHARS) return escapeHtml(trimmed);
   if (lang === 'console') {
     let cont = false;
     return trimmed.split('\n').map(line => {
@@ -388,7 +393,11 @@ function renderSafeCode(source: string, lang?: string): string {
     }).join('\n');
   }
   if (!hljs.getLanguage(lang)) return escapeHtml(trimmed);
-  return hljs.highlight(trimmed, {language: lang, ignoreIllegals: true}).value;
+  try {
+    return hljs.highlight(trimmed, {language: lang, ignoreIllegals: true}).value;
+  } catch {
+    return escapeHtml(trimmed);
+  }
 }
 
 // Locked-down rich-text Djot AST renderer for user-authored wiki pages:
@@ -515,11 +524,9 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
     const trimmed = rawTitle?.trim();
     if (!trimmed || depth > MAX_AST_DEPTH) return '';
     const parsed = djot.parse(trimmed);
-    return parsed.children
-      .filter((b): b is djot.Para => b.tag === 'para')
-      .map(p => renderInlines(p.children, depth + 1))
-      .join(' ')
-      .trim();
+    const paras = parsed.children.filter((b): b is djot.Para => b.tag === 'para');
+    if (paras.length !== parsed.children.length) return escapeHtml(trimmed);
+    return paras.map(p => renderInlines(p.children, depth + 1)).join(' ').trim();
   };
 
   const renderListItemBlocks = (blocks: djot.Block[], tight: boolean, depth: number): string => {

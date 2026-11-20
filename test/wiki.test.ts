@@ -260,6 +260,43 @@ describe('wiki helpers', () => {
     expect(html).toContain('<span class="hl-keyword">export</span>');
     expect(html).not.toContain('onerror');
   });
+
+  test('renderDjot strips GitHub image URIs specifying a non-default port', () => {
+    const html = wiki.renderDjot('![Custom port](https://raw.githubusercontent.com:8443/u/r/a.png)');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('Custom port');
+  });
+
+  test('renderDjot strips camo.githubusercontent.com image proxy URIs', () => {
+    const html = wiki.renderDjot('![Camo proxy](https://camo.githubusercontent.com/deadbeef/cafe)');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('Camo proxy');
+  });
+
+  test('renderDjot escapes oversized code blocks without invoking syntax highlighting', () => {
+    const bigLine = 'const x = 1; // <script>\n';
+    const bigCode = bigLine.repeat(Math.ceil((65 * 1024) / bigLine.length));
+    const html = wiki.renderDjot(`\`\`\`ts\n${bigCode}\`\`\``);
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('hl-keyword');
+  });
+
+  test('renderDjot preserves block-prefixed titles on callouts', () => {
+    const html = wiki.renderDjot([
+      '{title="1. Step One"}',
+      '::: aside',
+      'Body.',
+      ':::',
+      '',
+      '{title="> Quoted <tag>"}',
+      '```ts',
+      'const y = 2;',
+      '```',
+    ].join('\n'));
+    expect(html).toContain('<aside><div class="title">1. Step One</div>');
+    expect(html).toContain('<figcaption class="title">&gt; Quoted &lt;tag&gt;</figcaption>');
+  });
 });
 
 function copyDirSync(src: string, dst: string) {
