@@ -13,6 +13,7 @@ import * as arenaIndex from '../arena';
 import * as arbiter from '../arena/arbiter';
 import * as coordinator from '../arena/coordinator';
 import * as arenaDb from '../arena/db';
+import * as engine from '../arena/engine';
 import * as packages from '../arena/packages';
 import * as tournament from '../arena/tournament';
 import * as unpack from '../arena/unpack';
@@ -3180,6 +3181,20 @@ describe('arena infrastructure', () => {
       } finally {
         h.stateDb.close();
       }
+    });
+
+    test('does not floor ladder smoke-test maxPeakRam at 64 MiB', () => {
+      const src = fs.readFileSync(root('arena', 'coordinator.ts'), 'utf8');
+      expect(src).toContain('maxPeakRam: 0,');
+      expect(src).not.toContain('maxPeakRam: 64,');
+      const acc: engine.SmokeTelemetry = {maxInitMillis: 0, maxTurnMillis: 0, maxPeakRam: 0};
+      engine.recordSmokeTelemetry(acc, {
+        initMillis: 25,
+        teamPreviewMillis: undefined,
+        meanTurnMillis: 3,
+        peakRam: 5,
+      });
+      expect(acc.maxPeakRam).toBe(5);
     });
 
     test('aborts smoke test without passing when baseline faults', async () => {

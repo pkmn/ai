@@ -391,7 +391,7 @@ export class Coordinator {
       const smokeTelemetry: engine.SmokeTelemetry = {
         maxInitMillis: 0,
         maxTurnMillis: 0,
-        maxPeakRam: 64,
+        maxPeakRam: 0,
       };
       let smokeError: string | undefined;
 
@@ -514,7 +514,7 @@ export class Coordinator {
           ? {smokeTeamPreviewMillis: Math.max(1, smokeTelemetry.maxTeamPreviewMillis)}
           : {}),
         smokeTurnMillis: Math.max(1, smokeTelemetry.maxTurnMillis),
-        smokePeakRam: smokeTelemetry.maxPeakRam,
+        ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
       });
     }
 
