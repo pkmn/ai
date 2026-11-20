@@ -983,10 +983,10 @@ sandbox (native bundles and containers). Populate it using the `data.pkmn.cc` la
 - **Seasonal `RAND` (`gen9randombattle`, or future `gen10randombattle`):** `data.pkmn.cc`'s
   hierarchy scoped to the active format:
   - `/opt/arena/stats/<format>.json`
-  - `/opt/arena/stats/exact/<format>.json`
-  - `/opt/arena/stats/full/<format>/*`
+  - `/opt/arena/stats/exact/<format>/*`
+  - `/opt/arena/stats/full/<format>.json`
   - `/opt/arena/stats/stats/<format>.json`
-  - `/opt/arena/stats/js/<format>.json`
+  - `/opt/arena/stats/js/<format>.js`
 - **`VGC`:** no usage statistics provided.
 
 ```sh

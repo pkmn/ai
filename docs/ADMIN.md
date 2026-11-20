@@ -228,8 +228,8 @@ only (sandboxed `p1`/`p2` agent users must never have read access to harvested p
 read-only era-matched `data.pkmn.cc` usage
 stats into `/opt/arena/stats/` (exposed as `PKMN_STATS_DIR=/opt/arena/stats`): `<format>.json` for
 fixed ladders (`gen1ou.json`, `gen3ou.json`, `gen9ou.json`), and `data.pkmn.cc`'s format-scoped
-hierarchy for `RAND` (`<format>.json`, `exact/<format>.json`, `full/<format>/*`,
-`stats/<format>.json`, `js/<format>.json`; none for `VGC`):
+hierarchy for `RAND` (`<format>.json`, `exact/<format>/*`, `full/<format>.json`,
+`stats/<format>.json`, `js/<format>.js`; none for `VGC`):
 
 ```sh
 ssh arena 'mkdir -p /opt/arena/stats'
