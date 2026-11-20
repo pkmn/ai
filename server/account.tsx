@@ -646,14 +646,14 @@ function renderHistorySection(
                       ? <code><strong>{v.version}</strong></code>
                       : <code>{v.version}</code>}
                   </td>
-                  <td><tt>{laddersContent}</tt></td>
-                  <td>
+                  <td className='wrap'><tt>{laddersContent}</tt></td>
+                  <td className='wrap'>
                     <tt>{shortSha}</tt>
                     {sizeMib !== undefined && (
                       <> <span className='muted'>({sizeMib} MiB)</span></>
                     )}
                   </td>
-                  <td>{smokeCell}</td>
+                  <td className='wrap'>{smokeCell}</td>
                   <td>{stateCell}</td>
                   <td className='num muted'>{formatUtcDate(v.submittedAt)}</td>
                 </tr>

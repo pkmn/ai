@@ -743,6 +743,8 @@ export interface PendingSmokeConfig {
   error?: string;
   bytes?: number;
   durationMillis?: number;
+  initMillis?: number;
+  teamPreviewMillis?: number;
   turnMillis?: number;
   ram?: number;
 }
@@ -1623,7 +1625,8 @@ export class Runner {
       const archiveName = getFlag(cmd, 'archive-name') ?? getFlag(cmd, 'name');
       if (!oldSpec || !archiveName) {
         throw new Error(
-          'Usage: ladder rotate <old> --archive-name <title> [--new <id>] [--new-name <title>]'
+          'Usage: ladder rotate <old> --archive-name <title> [--new <id>] ' +
+          '[--new-name <title>] [--version <ver>]'
         );
       }
       const oldLadder = this.resolveLadders(oldSpec)[0];
@@ -1638,6 +1641,7 @@ export class Runner {
               id: newId,
               name: getFlag(cmd, 'new-name'),
               format: getFlag(cmd, 'format'),
+              version: getFlag(cmd, 'version'),
               team: getFlag(cmd, 'team') as db.TeamMode | undefined,
               teams: newTeamsFlag !== undefined ? Number(newTeamsFlag) : undefined,
               discord: getFlag(cmd, 'discord'),
@@ -1903,6 +1907,8 @@ export class Runner {
     const smokeError = getFlag(cmd, 'error');
     const bytesFlag = getFlag(cmd, 'bytes');
     const durFlag = getFlag(cmd, 'duration-millis');
+    const initFlag = getFlag(cmd, 'init-millis');
+    const previewFlag = getFlag(cmd, 'team-preview-millis');
     const turnFlag = getFlag(cmd, 'turn-millis');
     const ramFlag = getFlag(cmd, 'ram');
     const pendingMeta: PendingSmokeConfig = {
@@ -1910,6 +1916,8 @@ export class Runner {
       ...(smokeError !== undefined ? {error: smokeError} : {}),
       ...(bytesFlag !== undefined ? {bytes: parseBytesSpec(bytesFlag)} : {}),
       ...(durFlag !== undefined ? {durationMillis: Number(durFlag)} : {}),
+      ...(initFlag !== undefined ? {initMillis: Number(initFlag)} : {}),
+      ...(previewFlag !== undefined ? {teamPreviewMillis: Number(previewFlag)} : {}),
       ...(turnFlag !== undefined ? {turnMillis: Number(turnFlag)} : {}),
       ...(ramFlag !== undefined ? {ram: Number(ramFlag)} : {}),
     };
@@ -2008,13 +2016,38 @@ export class Runner {
     }
   }
 
-  private computeTelemetryForVersion(versionId: number, agentId: number) {
+  private computeTelemetryForVersion(
+    versionId: number,
+    agentId: number,
+    hasTeamPreview = false
+  ) {
     return {
       bytes: (120 + ((agentId * 37 + versionId * 19) % 280)) * 1024 * 1024,
       durationMillis: 1600 + ((agentId * 173 + versionId * 89) % 2400),
+      initMillis: 380 + ((agentId * 67 + versionId * 43) % 420),
+      teamPreviewMillis: hasTeamPreview
+        ? 180 + ((agentId * 29 + versionId * 17) % 240)
+        : undefined,
       turnMillis: 210 + ((agentId * 41 + versionId * 23) % 240),
       ram: 540 + ((agentId * 131 + versionId * 67) % 1400),
     };
+  }
+
+  private hasTeamPreviewForTargets(ladderIds: readonly string[], tourIds: readonly string[]) {
+    for (const lid of ladderIds) {
+      const l = this.db.getLadder(lid);
+      if (l && (l.slot === 'sv' || l.slot === 'vgc')) return true;
+    }
+    for (const tid of tourIds) {
+      const t = this.db.getTournament(tid);
+      if (
+        t &&
+        (t.format.includes('vgc') || (!t.format.includes('random') && /^gen[5-9]/.test(t.format)))
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async smokeSpecificVersion(
@@ -2025,7 +2058,10 @@ export class Runner {
     const ver = this.db.getVersionById(versionId);
     if (!ver) throw new Error(`Unknown versionId ${versionId}`);
     const smokeStatus = meta.status === 'fail' ? 'failed' : 'passed';
-    const telemetry = this.computeTelemetryForVersion(versionId, ver.agentId);
+    const hasTeamPreview = this.hasTeamPreviewForTargets(ver.ladders, ver.tournaments);
+    const telemetry = this.computeTelemetryForVersion(versionId, ver.agentId, hasTeamPreview);
+    const initMillis = meta.initMillis ?? telemetry.initMillis;
+    const teamPreviewMillis = meta.teamPreviewMillis ?? telemetry.teamPreviewMillis;
 
     if (this.serverUrl) {
       const client = this.getArenaClient();
@@ -2034,6 +2070,8 @@ export class Runner {
         smokeStatus,
         unpackedBytes: meta.bytes ?? telemetry.bytes,
         smokeDurationMillis: meta.durationMillis ?? telemetry.durationMillis,
+        smokeInitMillis: initMillis,
+        ...(teamPreviewMillis !== undefined ? {smokeTeamPreviewMillis: teamPreviewMillis} : {}),
         smokeTurnMillis: meta.turnMillis ?? telemetry.turnMillis,
         smokePeakRam: meta.ram ?? telemetry.ram,
         ...(smokeStatus === 'failed'
@@ -2048,6 +2086,8 @@ export class Runner {
         smokeDurationMillis: smokeStatus === 'passed'
           ? (meta.durationMillis ?? telemetry.durationMillis)
           : undefined,
+        smokeInitMillis: smokeStatus === 'passed' ? initMillis : undefined,
+        smokeTeamPreviewMillis: smokeStatus === 'passed' ? teamPreviewMillis : undefined,
         smokeTurnMillis: smokeStatus === 'passed'
           ? (meta.turnMillis ?? telemetry.turnMillis)
           : undefined,
@@ -2071,6 +2111,8 @@ export class Runner {
     const errorFlag = getFlag(cmd, 'error');
     const bytesFlag = getFlag(cmd, 'bytes');
     const durFlag = getFlag(cmd, 'duration-millis');
+    const initFlag = getFlag(cmd, 'init-millis');
+    const previewFlag = getFlag(cmd, 'team-preview-millis');
     const turnFlag = getFlag(cmd, 'turn-millis');
     const ramFlag = getFlag(cmd, 'ram');
 
@@ -2103,18 +2145,31 @@ export class Runner {
         error: errorFlag ?? stored.error,
         bytes: bytesFlag !== undefined ? parseBytesSpec(bytesFlag) : stored.bytes,
         durationMillis: durFlag !== undefined ? Number(durFlag) : stored.durationMillis,
+        initMillis: initFlag !== undefined ? Number(initFlag) : stored.initMillis,
+        teamPreviewMillis: previewFlag !== undefined
+          ? Number(previewFlag)
+          : stored.teamPreviewMillis,
         turnMillis: turnFlag !== undefined ? Number(turnFlag) : stored.turnMillis,
         ram: ramFlag !== undefined ? Number(ramFlag) : stored.ram,
       };
 
       if (this.serverUrl) {
         const ver = this.db.getVersionById(sub.versionId)!;
-        const telemetry = this.computeTelemetryForVersion(sub.versionId, sub.agentId);
+        const hasTeamPreview = this.hasTeamPreviewForTargets(ver.ladders, ver.tournaments);
+        const telemetry = this.computeTelemetryForVersion(
+          sub.versionId,
+          sub.agentId,
+          hasTeamPreview
+        );
+        const initMillis = meta.initMillis ?? telemetry.initMillis;
+        const teamPreviewMillis = meta.teamPreviewMillis ?? telemetry.teamPreviewMillis;
         await this.getArenaClient().reportSubmissionStatus({
           versionId: sub.versionId,
           smokeStatus: status === 'fail' ? 'failed' : 'passed',
           unpackedBytes: meta.bytes ?? telemetry.bytes,
           smokeDurationMillis: meta.durationMillis ?? telemetry.durationMillis,
+          smokeInitMillis: initMillis,
+          ...(teamPreviewMillis !== undefined ? {smokeTeamPreviewMillis: teamPreviewMillis} : {}),
           smokeTurnMillis: meta.turnMillis ?? telemetry.turnMillis,
           smokePeakRam: meta.ram ?? telemetry.ram,
           ...(status === 'fail'
@@ -2514,10 +2569,14 @@ export class Runner {
       p1Game2PeakRam: p1Ram,
       p2Game1PeakRam: p2Ram,
       p2Game2PeakRam: Math.max(64, p2Ram - 16 - (this.state.matchSeq % 20)),
-      p1Game1BankSeconds: 95 + this.nextInt(55),
-      p1Game2BankSeconds: 90 + this.nextInt(55),
-      p2Game1BankSeconds: 92 + this.nextInt(55),
-      p2Game2BankSeconds: 88 + this.nextInt(55),
+      p1Game1BankSeconds:
+        arena.timerSettingsForFormat(ladder.format).startingSeconds - 55 + this.nextInt(55),
+      p1Game2BankSeconds:
+        arena.timerSettingsForFormat(ladder.format).startingSeconds - 60 + this.nextInt(55),
+      p2Game1BankSeconds:
+        arena.timerSettingsForFormat(ladder.format).startingSeconds - 58 + this.nextInt(55),
+      p2Game2BankSeconds:
+        arena.timerSettingsForFormat(ladder.format).startingSeconds - 62 + this.nextInt(55),
       p1Game1InitMillis: 380 + Math.round(p1TurnMillis * 1.3) + (this.state.matchSeq % 29),
       p1Game2InitMillis: 390 + Math.round(p1TurnMillis * 1.3) + (this.state.matchSeq % 31),
       p2Game1InitMillis: 360 + Math.round(p2TurnMillis * 1.3) + (this.state.matchSeq % 23),
@@ -3362,6 +3421,10 @@ export class Runner {
 
       const isMultiGame = tour.bestOf > 1;
       const isVgc = tour.format.includes('vgc');
+      const tourTimer = arena.timerSettingsForFormat(tour.format, tour.rules);
+      const tourBankBase = Math.max(70, tourTimer.startingSeconds - 80);
+      const tourHasPreview =
+        isVgc || (!tour.format.includes('random') && /^gen[5-9]/.test(tour.format));
       const buildAndSaveMockGame = async (opts: {
         gameId: string;
         stage: db.TournamentGameStage;
@@ -3395,8 +3458,8 @@ export class Runner {
             this.sampleDavidsonSingleGame(e1, e2, 0, opts.gameTieRate),
           ];
           const turnsList: number[] = [sampleTurns(outcomes[0])];
-          const p1Banks: number[] = [70 + this.nextInt(50)];
-          const p2Banks: number[] = [60 + this.nextInt(50)];
+          const p1Banks: number[] = [tourBankBase + this.nextInt(50)];
+          const p2Banks: number[] = [Math.max(10, tourBankBase - 10) + this.nextInt(50)];
 
           const savedRngState = this.state.rngState;
           this.state.rngState =
@@ -3416,8 +3479,8 @@ export class Runner {
           }
           for (let idx = 1; idx < outcomes.length; idx++) {
             const drop = idx === 1 ? 2 : 5 + (idx - 2) * 3;
-            p1Banks.push(Math.max(10, 70 - drop) + this.nextInt(50));
-            p2Banks.push(Math.max(10, 60 - drop) + this.nextInt(50));
+            p1Banks.push(Math.max(10, tourBankBase - drop) + this.nextInt(50));
+            p2Banks.push(Math.max(10, tourBankBase - 10 - drop) + this.nextInt(50));
           }
           this.state.rngState = savedRngState;
 
@@ -3439,6 +3502,8 @@ export class Runner {
           const baseP2Mean = 240 + ((p2Ent.versionId * 41 + opts.seq * 17) % 380);
           const baseP1Ram = 1850 + ((p1Ent.versionId * 431 + opts.seq * 97) % 8600);
           const baseP2Ram = 2100 + ((p2Ent.versionId * 479 + opts.seq * 113) % 8600);
+          const p1Init = 420 + ((p1Ent.versionId * 59 + opts.seq * 19) % 360);
+          const p2Init = 440 + ((p2Ent.versionId * 61 + opts.seq * 23) % 360);
 
           games = outcomes.map((out, idx) => ({
             gameNumber: idx + 1,
@@ -3448,11 +3513,19 @@ export class Runner {
             endReason: out === 'T' ? 'tie-100-turns' : 'win',
             p1: {
               bankSeconds: p1Banks[idx],
+              initMillis: idx === 0 ? p1Init : 0,
+              ...(tourHasPreview
+                ? {teamPreviewMillis: Math.max(40, Math.round(baseP1Mean * 1.4) + idx * 7)}
+                : {}),
               meanTurnMillis: Math.max(10, baseP1Mean + (idx === 0 ? -12 : idx === 1 ? 10 : 4)),
               peakRam: Math.max(128, baseP1Ram - (idx === 0 ? 64 : idx === 1 ? 24 : 0)),
             },
             p2: {
               bankSeconds: p2Banks[idx],
+              initMillis: idx === 0 ? p2Init : 0,
+              ...(tourHasPreview
+                ? {teamPreviewMillis: Math.max(40, Math.round(baseP2Mean * 1.4) - idx * 5)}
+                : {}),
               meanTurnMillis: Math.max(10, baseP2Mean + (idx === 0 ? 8 : idx === 1 ? -10 : 3)),
               peakRam: Math.max(128, baseP2Ram - (idx === 0 ? 52 : idx === 1 ? 18 : 0)),
             },
@@ -3472,6 +3545,12 @@ export class Runner {
           outcome = this.sampleDavidsonSingleGame(e1, e2, 0, opts.gameTieRate);
           const isSf = opts.stage === 'Superfinal';
           const g = opts.matchupGame;
+          const p1Mean = isSf
+            ? 250 + ((p1Ent.versionId * 37 + g * 19) % 340)
+            : 220 + ((p1Ent.versionId * 37 + opts.seq * 13) % 380);
+          const p2Mean = isSf
+            ? 270 + ((p2Ent.versionId * 41 + g * 23) % 340)
+            : 240 + ((p2Ent.versionId * 41 + opts.seq * 17) % 380);
           games = [
             {
               gameNumber: 1,
@@ -3480,19 +3559,25 @@ export class Runner {
               endReason: outcome === 'T' ? 'tie-100-turns' : 'win',
               turns: isSf ? (isVgc ? 10 : 34) : sampleTurns(outcome),
               p1: {
-                bankSeconds: isSf ? 88 : 70 + this.nextInt(50),
-                meanTurnMillis: isSf
-                  ? 250 + ((p1Ent.versionId * 37 + g * 19) % 340)
-                  : 220 + ((p1Ent.versionId * 37 + opts.seq * 13) % 380),
+                bankSeconds: isSf ? tourBankBase + 18 : tourBankBase + this.nextInt(50),
+                initMillis: 410 + ((p1Ent.versionId * 53 + (isSf ? g : opts.seq) * 17) % 340),
+                ...(tourHasPreview
+                  ? {teamPreviewMillis: Math.max(40, Math.round(p1Mean * 1.4))}
+                  : {}),
+                meanTurnMillis: p1Mean,
                 peakRam: isSf
                   ? 2400 + ((p1Ent.versionId * 431 + g * 107) % 8200)
                   : 1850 + ((p1Ent.versionId * 431 + opts.seq * 97) % 8600),
               },
               p2: {
-                bankSeconds: isSf ? 64 : 60 + this.nextInt(50),
-                meanTurnMillis: isSf
-                  ? 270 + ((p2Ent.versionId * 41 + g * 23) % 340)
-                  : 240 + ((p2Ent.versionId * 41 + opts.seq * 17) % 380),
+                bankSeconds: isSf
+                  ? Math.max(10, tourBankBase - 6)
+                  : Math.max(10, tourBankBase - 10) + this.nextInt(50),
+                initMillis: 430 + ((p2Ent.versionId * 59 + (isSf ? g : opts.seq) * 19) % 340),
+                ...(tourHasPreview
+                  ? {teamPreviewMillis: Math.max(40, Math.round(p2Mean * 1.4))}
+                  : {}),
+                meanTurnMillis: p2Mean,
                 peakRam: isSf
                   ? 2600 + ((p2Ent.versionId * 479 + g * 127) % 8200)
                   : 2100 + ((p2Ent.versionId * 479 + opts.seq * 113) % 8600),

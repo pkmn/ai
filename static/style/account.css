@@ -63,6 +63,10 @@ td {
   border-top: 1px solid rgb(var(--fg-base) / 15%);
 }
 
+td.wrap {
+  white-space: normal;
+}
+
 tr.secondary td {
   color: rgb(var(--fg-base) / 55%);
 }

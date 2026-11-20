@@ -258,12 +258,50 @@ function setupRotatedSeasons(
   );
 }
 
+const WIKI_MOCK_IMAGE_URL = 'https://raw.githubusercontent.com/pkmn/ai/main/docs/reg-mc-cores.png';
+
+function buildWikiMockChartPng(): Buffer {
+  const width = 320;
+  const height = 140;
+  const pixels = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      const border = x === 0 || y === 0 || x === width - 1 || y === height - 1;
+      pixels[idx] = border ? 180 : 245;
+      pixels[idx + 1] = border ? 188 : 248;
+      pixels[idx + 2] = border ? 198 : 252;
+      pixels[idx + 3] = 255;
+    }
+  }
+  const bars = [
+    {x0: 28, h: 92, rgb: [45, 125, 210]},
+    {x0: 94, h: 74, rgb: [56, 161, 105]},
+    {x0: 160, h: 58, rgb: [214, 158, 46]},
+    {x0: 226, h: 42, rgb: [229, 62, 62]},
+  ];
+  for (const bar of bars) {
+    for (let y = height - 18 - bar.h; y < height - 18; y++) {
+      for (let x = bar.x0; x < bar.x0 + 44; x++) {
+        const idx = (y * width + x) * 4;
+        pixels[idx] = bar.rgb[0];
+        pixels[idx + 1] = bar.rgb[1];
+        pixels[idx + 2] = bar.rgb[2];
+        pixels[idx + 3] = 255;
+      }
+    }
+  }
+  return encodePng({width, height, data: pixels});
+}
+
+let cachedWikiMockChartPng: Buffer | undefined;
+
 async function setupDiscordWikiPage(fixture: Fixture): Promise<() => void> {
   await fixture.wikiInstance.savePage(
     'Foul_Play',
     '# Foul Play\n\nShared metagame notes visible to verified `pkmn.ai` Discord server ' +
       'members.\n\n## Seasonal Pool Observations\n\n- Incineroar + Rillaboom cores remain ' +
-      'dominant across Reg M-C pools.',
+      `dominant across Reg M-C pools.\n\n![Reg M-C core usage chart](${WIKI_MOCK_IMAGE_URL})`,
     'pmariglia',
     'Add Discord-restricted Foul Play wiki page',
     'discord'
@@ -921,7 +959,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             activeSlot: 'p1',
             turnStartedAt: NOW_SECONDS - 3,
             turnBudgetSeconds: 145,
-            incrementSeconds: 5,
+            incrementSeconds: 10,
             viewer: {
               lines: [
                 '|player|p1|MissingNo.Zero|1',
@@ -1406,7 +1444,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             smoke_status, submitted_at, notified
           ) VALUES (?, '1.0.0-rc1', 'bundle',
             'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0-rc1/agent.tar.zst',
-            ?, ?, '["3"]', 'pending', ?, 0)`
+            ?, ?, '[]', 'pending', ?, 0)`
         ).run(
           fixture.cynthiaiId,
           'a'.repeat(64),
@@ -1448,9 +1486,9 @@ export function buildScenarios(wikiSha: string): Scenario[] {
                smoke_error = ?
            WHERE version = '0.9.0-rc1'`
         ).run(
-          'Quarantined after 3 consecutive runtime faults on SV (gen9ou):\n' +
+          'Auto-quarantined on gen9ou20261109 (10/10 faults, 10 consecutive; last=timeout):\n' +
           '  Match sv-0001042 (G2, turn 14): process exited with SIGSEGV (code 139)\n' +
-          '  Match sv-0001049 (G1, turn 8): choice timeout (> 15000ms)'
+          '  Match sv-0001049 (G1, turn 8): choice timeout (> 150s)'
         );
       }),
     },
@@ -3230,6 +3268,15 @@ async function serve(
 ): Promise<void> {
   const url = new URL(route.request().url());
   if (url.origin !== ORIGIN) {
+    if (url.href === WIKI_MOCK_IMAGE_URL) {
+      cachedWikiMockChartPng ??= buildWikiMockChartPng();
+      await route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        body: cachedWikiMockChartPng,
+      });
+      return;
+    }
     if (!forceOffline && EXTERNAL_HOSTS.has(url.hostname)) {
       const asset = await fetchExternalAsset(url);
       if (asset) {
