@@ -744,9 +744,15 @@
       url: https://github.com/smogon/pokemon-showdown
 - name: Mocca
   active: 2026 # October 11
+  engine: Custom
+  language: [Rust, Python]
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    qualified: true
+    owners:
+      lucaspellegrinelli: lucaspll.765230
 - name: MysteriousWind
   active: 2026 # October 11
   engine: Custom
