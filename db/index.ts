@@ -18,7 +18,6 @@ import * as matches from './matches';
 import * as pairs from './pair-aggregates';
 import * as snapshots from './rating-snapshots';
 import * as entrants from './tournament-entrants';
-import * as tournamentGames from './tournament-games';
 import * as tournamentMatches from './tournament-matches';
 import * as tournaments from './tournaments';
 
@@ -777,10 +776,6 @@ export class Database extends SqliteDatabase {
     stage?: tournamentMatches.TournamentGameStage
   ): tournamentMatches.TournamentPairRecord[] {
     return tournamentMatches.getTournamentCrosstable(this.db, tournamentId, stage);
-  }
-
-  getTournamentMatchGames(matchId: string): tournamentGames.TournamentGameRow[] {
-    return tournamentGames.getTournamentMatchGames(this.db, matchId);
   }
 }
 

@@ -3356,7 +3356,6 @@ export function formatGamePlayerTelemetryNode(p: GamePlayerTelemetry): util.Chil
 // stay coupled to the teams while canceling team matchup bias to first order.
 export function renderBattleInlineDetailHtml(
   m: arena.BattleHistoryEntry,
-  _agentLinks: Readonly<Record<string, string>>,
   perspectiveSlug?: string
 ): string {
   const omitOutcome = Boolean(perspectiveSlug);
@@ -3541,7 +3540,7 @@ export function renderBattlesPage(opts: {
         `${Math.round(m.p2.peakRam).toLocaleString('en-US')}M${reasonSuffix}`;
 
       const rel = formatRelativeTime(nowSec, m.completedAt);
-      const detailHtml = renderBattleInlineDetailHtml(m, agentLinks);
+      const detailHtml = renderBattleInlineDetailHtml(m);
       return (
         <>
           <tr

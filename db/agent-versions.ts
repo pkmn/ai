@@ -31,8 +31,6 @@ export interface AgentVersionRow {
   authTokenEncoding?: string;
   ladders: string[];
   tournaments: string[];
-  laddersJson: string;
-  tournamentsJson: string;
   unpackedBytes?: number;
   smokeStatus: SmokeStatus;
   smokeDurationMillis?: number;
@@ -127,7 +125,6 @@ export interface PendingVersionDmRow {
   smokeStatus: 'failed' | 'quarantined';
   smokeError?: string;
   ladders: string[];
-  laddersJson: string;
   submittedAt: number;
   ownerDiscordIds: string[];
 }
@@ -168,8 +165,6 @@ function mapVersionRow(raw: RawAgentVersionRow): AgentVersionRow {
     authTokenEncoding: raw.auth_token_encoding ?? undefined,
     ladders: JSON.parse(raw.ladders_json) as string[],
     tournaments: JSON.parse(raw.tournaments_json ?? '[]') as string[],
-    laddersJson: raw.ladders_json,
-    tournamentsJson: raw.tournaments_json ?? '[]',
     unpackedBytes: raw.unpacked_bytes ?? undefined,
     smokeStatus: raw.smoke_status,
     smokeDurationMillis: raw.smoke_duration_millis ?? undefined,
@@ -265,8 +260,9 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
     const enrolled = tourneysByVersion.get(v.id) ?? [];
     let tournamentNames = enrolled;
     if (!tournamentNames.length) {
-      const requested = JSON.parse(mapped.tournamentsJson) as string[];
-      tournamentNames = requested.map(tid => getTournament(db, tid)?.name ?? `Tournament #${tid}`);
+      tournamentNames = mapped.tournaments.map(
+        tid => getTournament(db, tid)?.name ?? `Tournament #${tid}`
+      );
     }
     return {
       ...mapped,
@@ -761,8 +757,8 @@ export function applySubmissionStatus(
       input.versionId
     );
 
-    const ladderIds = JSON.parse(prev.laddersJson) as string[];
-    const tournamentIds = JSON.parse(prev.tournamentsJson) as string[];
+    const ladderIds = prev.ladders;
+    const tournamentIds = prev.tournaments;
     const retiredByLadder: Record<string, number> = {};
 
     if (input.smokeStatus === 'passed') {
@@ -957,7 +953,7 @@ export function unquarantineVersion(
 
     const ladderIds = quarantinedRows.length > 0
       ? quarantinedRows.map(r => r.ladder_id)
-      : (JSON.parse(ver.laddersJson) as string[]);
+      : ver.ladders;
 
     const dayUtc = new Date(now * 1000).toISOString().slice(0, 10);
     for (const ladderId of ladderIds) {
@@ -1017,8 +1013,7 @@ export function unquarantineVersion(
       }
     }
 
-    const tournamentIds = JSON.parse(ver.tournamentsJson) as string[];
-    for (const tournamentId of tournamentIds) {
+    for (const tournamentId of ver.tournaments) {
       const tournament = getTournament(db, tournamentId);
       if (tournament?.status !== 'scheduled') continue;
       if (now >= getTournamentClosesAt(tournament.startsAt)) continue;
@@ -1086,7 +1081,6 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     smokeStatus: row.smoke_status as 'failed' | 'quarantined',
     smokeError: row.smoke_error ?? undefined,
     ladders: JSON.parse(row.ladders_json) as string[],
-    laddersJson: row.ladders_json,
     submittedAt: row.submitted_at,
     ownerDiscordIds: getVersionOwnerDiscordIds(
       db,

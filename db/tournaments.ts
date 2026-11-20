@@ -54,7 +54,6 @@ export interface TournamentRow {
   version: string;
   team?: TeamMode;
   rules: string[];
-  rulesJson: string;
   bestOf: number;
   gamesPerMatchup: number;
   batchSize: number;
@@ -106,7 +105,6 @@ function mapTournamentRow(raw: RawTournamentRow): TournamentRow {
     version: raw.version,
     team: raw.team ?? undefined,
     rules,
-    rulesJson: raw.rules_json,
     bestOf: getTournamentBestOf(raw.format, rules),
     gamesPerMatchup: raw.games_per_matchup,
     batchSize: raw.batch_size,

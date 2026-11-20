@@ -928,7 +928,6 @@ function renderRecentMatchesPane(opts: {
                 const rel = render.formatRelativeTime(nowSec, m.completedAt);
                 const detailHtml = render.renderBattleInlineDetailHtml(
                   arena.enrichMatchView(publicDir, m),
-                  agentLinks,
                   agentSlug
                 );
                 const rowCls = idx >= util.TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';

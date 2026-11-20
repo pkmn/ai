@@ -718,7 +718,7 @@ describe('account routes', () => {
 
       const stored = db.getVersionsForAgent(db.getAgentBySlug('foul-play')!.id)[0];
       expect(stored.sha256).toBe(SHA_A);
-      expect(JSON.parse(stored.laddersJson)).toEqual(['gen1ou20261109', 'gen9ou20261109']);
+      expect(stored.ladders).toEqual(['gen1ou20261109', 'gen9ou20261109']);
       expect(account.decryptSecret(stored.authTokenEncoding!, AUTH_CFG.sessionSecret)).toBe(
         'Bearer ghcr_pat_123'
       );

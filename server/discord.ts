@@ -726,7 +726,6 @@ export async function notifySubmissionStatus(
       smokeStatus: status,
       smokeError: result.version.smokeError,
       ladders: result.version.ladders,
-      laddersJson: result.version.laddersJson,
       submittedAt: result.version.submittedAt,
       ownerDiscordIds,
     },
