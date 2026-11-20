@@ -13,6 +13,7 @@ import {formatUtcDate, root, toID, writeFileAtomic} from '../static/util';
 
 import * as arbiter from './arbiter';
 import * as db from './db';
+import * as engine from './engine';
 import * as packages from './packages';
 
 export type ActiveRosterEntry = arena.ActiveRosterEntry;
@@ -112,8 +113,7 @@ interface LadderFaultCounter {
   consecutiveFaults: number;
 }
 
-const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
-const INFRA_VOID_REASONS = new Set(['arbiter-stall', 'sim-error', 'arena-error']);
+const {FAULT_REASONS, INFRA_VOID_REASONS} = engine;
 const BROKEN_AGENT_COOLDOWN_SECONDS = 300;
 const EXPLOIT_PROBABILITY = 0.45;
 const randomInt = (max: number) => crypto.randomInt(0, max);
@@ -384,10 +384,11 @@ export class Coordinator {
       }
 
       const smokeStartMillis = Date.now();
-      let maxInitMillis = 0;
-      let maxTeamPreviewMillis: number | undefined;
-      let maxTurnMillis = 0;
-      let maxPeakRam = 64;
+      const smokeTelemetry: engine.SmokeTelemetry = {
+        maxInitMillis: 0,
+        maxTurnMillis: 0,
+        maxPeakRam: 64,
+      };
       let smokeError: string | undefined;
 
       for (const item of targetsToTest) {
@@ -432,42 +433,22 @@ export class Coordinator {
           p2: {spec: this.baselineSpec, teamPacked: t2Packed},
           sendUtm: item.team !== 'random',
           smokeStopAfterTurn: 1,
-          timers: {
-            startingBankSeconds: 60,
-            readyGraceSeconds: arena.READY_GRACE_SECONDS,
-            maxTurnSeconds: 60,
-          },
+          timers: engine.SMOKE_TIMERS,
           devMode: this.devMode,
         });
         const res = await game.run();
-        if (isPlayerFault(res, 'p2') || INFRA_VOID_REASONS.has(res.endReason)) {
-          const stderrSnippet = res.p2.stderr
-            ? ` (${res.p2.stderr.trim().replace(/\s+/g, ' ').slice(-240)})`
-            : '';
-          throw new Error(
-            `Smoke test baseline/infrastructure fault in ${item.format}: ` +
-            `${res.endReason}${stderrSnippet}`
-          );
-        }
-        if (
-          isPlayerFault(res, 'p1') ||
-          (FAULT_REASONS.has(res.endReason) && res.winner === 'tie')
-        ) {
-          const stderrTail = res.p1.stderr?.trim();
-          smokeError = stderrTail
-            ? `Smoke test failed in ${item.format}: ${res.endReason}\n${stderrTail}`
-            : `Smoke test failed in ${item.format}: ${res.endReason}`;
+        const verdict = engine.classifySmokeGame(res, {
+          label: 'Smoke test',
+          format: item.format,
+          p1Stderr: res.p1.stderr,
+          p2Stderr: res.p2.stderr,
+        });
+        if (verdict.kind === 'infra') throw new Error(verdict.message);
+        if (verdict.kind === 'fail') {
+          smokeError = verdict.message;
           break;
         }
-        if (res.p1.initMillis > maxInitMillis) maxInitMillis = res.p1.initMillis;
-        if (
-          res.p1.teamPreviewMillis !== undefined &&
-          (maxTeamPreviewMillis === undefined || res.p1.teamPreviewMillis > maxTeamPreviewMillis)
-        ) {
-          maxTeamPreviewMillis = res.p1.teamPreviewMillis;
-        }
-        if (res.p1.meanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1.meanTurnMillis;
-        if (res.p1.peakRam > maxPeakRam) maxPeakRam = res.p1.peakRam;
+        engine.recordSmokeTelemetry(smokeTelemetry, res.p1);
       }
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
@@ -517,12 +498,12 @@ export class Coordinator {
         smokeStatus: 'passed',
         unpackedBytes,
         smokeDurationMillis,
-        smokeInitMillis: Math.max(1, maxInitMillis),
-        ...(maxTeamPreviewMillis !== undefined
-          ? {smokeTeamPreviewMillis: Math.max(1, maxTeamPreviewMillis)}
+        smokeInitMillis: Math.max(1, smokeTelemetry.maxInitMillis),
+        ...(smokeTelemetry.maxTeamPreviewMillis !== undefined
+          ? {smokeTeamPreviewMillis: Math.max(1, smokeTelemetry.maxTeamPreviewMillis)}
           : {}),
-        smokeTurnMillis: Math.max(1, maxTurnMillis),
-        smokePeakRam: maxPeakRam,
+        smokeTurnMillis: Math.max(1, smokeTelemetry.maxTurnMillis),
+        smokePeakRam: smokeTelemetry.maxPeakRam,
       });
     }
 

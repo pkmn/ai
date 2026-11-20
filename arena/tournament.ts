@@ -14,10 +14,10 @@ import * as sim from '../server/sim';
 import {toID} from '../static/util';
 import * as teams from '../teams';
 
-import * as arbiter from './arbiter';
+import * as engine from './engine';
 import * as packages from './packages';
 
-type PlayerSlot = 'p1' | 'p2';
+type PlayerSlot = engine.PlayerSlot;
 
 export function deriveGameSeed(baseSeed: PRNGSeed, gameNumber: number): PRNGSeed {
   if (gameNumber <= 1) return baseSeed;
@@ -118,7 +118,7 @@ export interface GameOptions {
   sendUtm?: boolean;
   maxTurns?: number;
   smokeStopAfterTurn?: number;
-  timers?: arbiter.GameTimerOptions;
+  timers?: engine.GameTimerOptions;
   callbacks?: GameCallbacks;
 }
 
@@ -139,23 +139,16 @@ interface RemoteTournamentPlayer {
   slot: PlayerSlot;
   spec: AgentSpec;
   proc: ChildProcessWithoutNullStreams;
-  io: {
-    lineQueue: string[];
-    lineResolver: ((line: string | undefined) => void) | undefined;
-  };
+  io: engine.LineIoState;
   relay: {
     usesRelay: boolean;
     reqSeq: number;
     localTurnMillisQueue: number[];
     turnMillisWaiter: (() => void) | undefined;
   };
-  turn: arbiter.PlayerTurnState;
-  telemetry: {
+  turn: engine.PlayerTurnState;
+  telemetry: engine.DecisionTelemetry & {
     initMillis: number;
-    totalTeamPreviewMillis: number;
-    teamPreviewCount: number;
-    totalTurnMillis: number;
-    decisionsCount: number;
     peakRam: number;
   };
   state: {
@@ -168,7 +161,7 @@ interface RemoteTournamentPlayer {
 }
 
 const {MAX_STDOUT_LINE_CHARS, MAX_LINE_QUEUE, MAX_LINES_PER_DECISION, rewriteBlindPlayerNames} =
-  arbiter;
+  engine;
 const TOURNEY_AGENT_BIN = '/usr/local/bin/tourney-agent';
 export {rewriteBlindPlayerNames};
 
@@ -291,8 +284,8 @@ export class ConcurrentGame {
   private sendUtm?: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
-  private readonly timerOverrides: arbiter.TimerOverrides;
-  private timers: arbiter.ResolvedClockTimers;
+  private readonly timerOverrides: engine.TimerOverrides;
+  private timers: engine.ResolvedClockTimers;
   private readonly readyGraceMillis: number;
   private readonly callbacks?: GameCallbacks;
 
@@ -330,7 +323,7 @@ export class ConcurrentGame {
       maxTurnSeconds: options.timers?.maxTurnSeconds,
       maxFirstTurnSeconds: options.timers?.maxFirstTurnSeconds,
     };
-    this.timers = arbiter.resolveClockTimers(
+    this.timers = engine.resolveClockTimers(
       arena.timerSettingsForFormat(options.format),
       this.timerOverrides
     );
@@ -428,8 +421,8 @@ export class ConcurrentGame {
         initMillis: 0,
         totalTeamPreviewMillis: 0,
         teamPreviewCount: 0,
-        totalTurnMillis: 0,
-        decisionsCount: 0,
+        totalTurnDecisionMillis: 0,
+        turnDecisionCount: 0,
         peakRam: 1,
       },
       state: {
@@ -451,46 +444,10 @@ export class ConcurrentGame {
         player.relay.turnMillisWaiter = undefined;
         w();
       }
-      if (player.io.lineResolver) {
-        const resolve = player.io.lineResolver;
-        player.io.lineResolver = undefined;
-        resolve(undefined);
-      }
+      engine.wakeLineResolver(player.io);
     };
 
-    let stdoutBuf = '';
-    proc.stdout.setEncoding('utf8');
-    proc.stdout.on('data', (chunk: string) => {
-      stdoutBuf += chunk;
-      let nl = stdoutBuf.indexOf('\n');
-      while (nl >= 0) {
-        const line = stdoutBuf.slice(0, nl).replace(/\r$/, '');
-        stdoutBuf = stdoutBuf.slice(nl + 1);
-        if (line.length > MAX_STDOUT_LINE_CHARS) {
-          stdoutBuf = '';
-          try {
-            proc.kill('SIGKILL');
-          } catch {}
-          onDisconnect(1);
-          return;
-        }
-        if (player.io.lineResolver) {
-          const resolve = player.io.lineResolver;
-          player.io.lineResolver = undefined;
-          resolve(line);
-        } else if (player.io.lineQueue.length < MAX_LINE_QUEUE) {
-          player.io.lineQueue.push(line);
-        }
-        nl = stdoutBuf.indexOf('\n');
-      }
-      if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
-        stdoutBuf = '';
-        try {
-          proc.kill('SIGKILL');
-        } catch {}
-        onDisconnect(1);
-      }
-    });
+    engine.attachStdoutLineFramer(proc, player.io, () => onDisconnect(1));
 
     const handleStderrLine = (errLine: string) => {
       if (errLine.startsWith('ARENA_TURN_MS=')) {
@@ -661,7 +618,7 @@ export class ConcurrentGame {
         return {ok: false, reason: 'crash'};
       }
       linesRead++;
-      if (linesRead > arbiter.MAX_LINES_PER_DECISION) {
+      if (linesRead > MAX_LINES_PER_DECISION) {
         return {ok: false, reason: 'crash'};
       }
       if (parseAgentStdoutLine(line)?.kind === 'ready') {
@@ -694,7 +651,7 @@ export class ConcurrentGame {
         return {ok: false, reason: 'crash'};
       }
       linesRead++;
-      if (linesRead > arbiter.MAX_LINES_PER_DECISION) {
+      if (linesRead > MAX_LINES_PER_DECISION) {
         return {ok: false, reason: 'crash'};
       }
       const trimmed = line.trim();
@@ -735,13 +692,8 @@ export class ConcurrentGame {
   }
 
   private wakePendingLineResolvers() {
-    for (const p of [this.p1, this.p2]) {
-      if (p?.io.lineResolver) {
-        const resolve = p.io.lineResolver;
-        p.io.lineResolver = undefined;
-        resolve(undefined);
-      }
-    }
+    engine.wakeLineResolver(this.p1?.io);
+    engine.wakeLineResolver(this.p2?.io);
   }
 
   private abortForSpotPreemption(slot: PlayerSlot) {
@@ -780,7 +732,7 @@ export class ConcurrentGame {
       this.waveActiveSidesCount = wave.activeSides || 1;
     }
 
-    const {totalBudgetMillis, inactiveLine} = arbiter.beginTurnClockStep(
+    const {totalBudgetMillis, inactiveLine} = engine.beginTurnClockStep(
       player.turn,
       this.currentTurn,
       this.lastRewardedTurn,
@@ -817,23 +769,18 @@ export class ConcurrentGame {
         }
         if (this.ended) return;
         if (timedOut || remainingBudgetMillis <= 0) {
-          const chargedMillis = Math.max(0, totalBudgetMillis);
-          player.turn.bankMillis = Math.max(0, player.turn.bankMillis - chargedMillis);
-          player.turn.turnRemainingMillis = 0;
-          if (this.timers.timeoutAutoChoose && player.turn.bankMillis > 0) {
-            const decisionElapsedMillis = Math.max(1, Math.round(chargedMillis));
-            if (req.teamPreview) {
-              player.telemetry.totalTeamPreviewMillis += decisionElapsedMillis;
-              player.telemetry.teamPreviewCount++;
-            } else {
-              player.telemetry.totalTurnMillis += decisionElapsedMillis;
-              player.telemetry.decisionsCount++;
-            }
+          const outcome = engine.applyDecisionTimeout(
+            player.turn,
+            player.telemetry,
+            totalBudgetMillis,
+            this.timers.timeoutAutoChoose,
+            req.teamPreview
+          );
+          if (outcome === 'auto-choose') {
             player.state.thinking = false;
             await this.battle!.write(`>${player.slot} default`);
             return;
           }
-          player.turn.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
           return;
         }
@@ -852,23 +799,11 @@ export class ConcurrentGame {
         if (!parsed || parsed.kind === 'chat' || parsed.kind === 'ready') continue;
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedMillis));
-        player.turn.bankMillis = Math.max(0, player.turn.bankMillis - decisionElapsedMillis);
-        if (player.turn.turnRemainingMillis !== undefined) {
-          player.turn.turnRemainingMillis = Math.max(
-            0,
-            player.turn.turnRemainingMillis - decisionElapsedMillis
-          );
-        }
-        if (req.teamPreview) {
-          player.telemetry.totalTeamPreviewMillis += decisionElapsedMillis;
-          player.telemetry.teamPreviewCount++;
-        } else {
-          player.telemetry.totalTurnMillis += decisionElapsedMillis;
-          player.telemetry.decisionsCount++;
-        }
+        engine.chargeDecisionClock(player.turn, decisionElapsedMillis);
+        engine.recordDecisionTelemetry(player.telemetry, decisionElapsedMillis, req.teamPreview);
         player.state.thinking = false;
 
-        const choiceCmd = arbiter.formatChoiceCommand(parsed.choice, req.teamPreview);
+        const choiceCmd = engine.formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battle!.write(`>${player.slot} ${choiceCmd}`);
         return;
       }
@@ -886,7 +821,7 @@ export class ConcurrentGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        const inspected = arbiter.inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
+        const inspected = engine.inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
         if (inspected.forfeitedInvalidChoice) {
           this.forceLose(player.slot, 'invalid-choice');
         }
@@ -940,8 +875,8 @@ export class ConcurrentGame {
       p.turn.turnRemainingMillis = undefined;
       p.telemetry.totalTeamPreviewMillis = 0;
       p.telemetry.teamPreviewCount = 0;
-      p.telemetry.totalTurnMillis = 0;
-      p.telemetry.decisionsCount = 0;
+      p.telemetry.totalTurnDecisionMillis = 0;
+      p.telemetry.turnDecisionCount = 0;
       p.turn.hasTakenFirstDecision = false;
       p.turn.retryingInvalidChoice = false;
       p.turn.invalidStrikes = 0;
@@ -965,55 +900,47 @@ export class ConcurrentGame {
     const battle = sim.createBattle(this.version);
     this.battle = battle;
 
-    const omniTask = (async () => {
-      for await (const rawChunk of battle.streams.omniscient) {
-        for (const line of rawChunk.split('\n')) {
-          const step = arbiter.inspectOmniscientLine(line, {
-            currentTurn: this.currentTurn,
-            maxTurns: this.maxTurns,
-            smokeStopAfterTurn: this.smokeStopAfterTurn,
-            ended: this.ended,
-            expectedP1Name: 'Agent A',
-          });
-          this.currentTurn = step.currentTurn;
-          if (step.terminal) {
-            this.ended = true;
-            this.winner = step.terminal.winner;
-            this.endReason = step.terminal.endReason;
-            this.wakePendingLineResolvers();
-            if (step.terminal.forceTie) {
-              await battle.write('>forcetie');
-            }
-          }
+    const omniTask = engine.pumpOmniscientStream({
+      battle,
+      maxTurns: this.maxTurns,
+      smokeStopAfterTurn: this.smokeStopAfterTurn,
+      getState: () => ({currentTurn: this.currentTurn, ended: this.ended}),
+      onTurnUpdate: turn => {
+        this.currentTurn = turn;
+      },
+      onTerminal: (winner, endReason) => {
+        this.ended = true;
+        this.winner = winner;
+        this.endReason = endReason;
+        this.wakePendingLineResolvers();
+      },
+      onSimError: () => {
+        if (!this.ended) {
+          this.ended = true;
+          this.winner = 'tie';
+          this.endReason = 'sim-error';
+          this.wakePendingLineResolvers();
         }
+      },
+      onChunk: async rawChunk => {
         if (!this.ended) {
           // Drain all microtasks so concurrent player tasks enter `handleDecision`
           // (`beginTurnClockStep` + `thinking = true`) before snapshotting spectator clocks.
           await new Promise<void>(resolve => setImmediate(resolve));
         }
         this.emitSpectatorChunk(rawChunk);
-      }
-    })().catch(() => {
-      if (!this.ended) {
-        this.ended = true;
-        this.winner = 'tie';
-        this.endReason = 'sim-error';
-        this.wakePendingLineResolvers();
-      }
+      },
     });
 
     const p1Task = this.driveConcurrentPlayer(this.p1, battle.streams.p1);
     const p2Task = this.driveConcurrentPlayer(this.p2, battle.streams.p2);
 
-    await battle.write(
-      `>start ${JSON.stringify({formatid: this.format, seed: gameSeed})}`
-    );
-    await battle.write(
-      `>player p1 ${JSON.stringify({name: 'Agent A', team: p1Team})}`
-    );
-    await battle.write(
-      `>player p2 ${JSON.stringify({name: 'Agent B', team: p2Team})}`
-    );
+    await engine.startBattleProtocol(battle, {
+      format: this.format,
+      seed: gameSeed,
+      p1Team,
+      p2Team,
+    });
 
     await Promise.all([omniTask, p1Task, p2Task]);
 
@@ -1052,12 +979,12 @@ export class ConcurrentGame {
       ),
       initMillis: player.telemetry.initMillis,
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
-      totalTurnMillis: player.telemetry.totalTurnMillis,
-      decisionsCount: player.telemetry.decisionsCount,
-      meanTurnMillis: player.telemetry.decisionsCount > 0
+      totalTurnMillis: player.telemetry.totalTurnDecisionMillis,
+      decisionsCount: player.telemetry.turnDecisionCount,
+      meanTurnMillis: player.telemetry.turnDecisionCount > 0
         ? Math.max(
           1,
-          Math.round(player.telemetry.totalTurnMillis / player.telemetry.decisionsCount)
+          Math.round(player.telemetry.totalTurnDecisionMillis / player.telemetry.turnDecisionCount)
         )
         : 1,
       peakRam: player.telemetry.peakRam,
@@ -1106,15 +1033,15 @@ export class ConcurrentGame {
   }
 
   async run(): Promise<GameResult> {
-    this.format = await sim.resolveArenaFormatId(this.format, this.version);
-    this.timers = arbiter.resolveClockTimers(
-      await sim.getTimerSettings(this.format, this.version),
-      this.timerOverrides
-    );
-    this.sendUtm = this.sendUtm ?? !(await sim.isGeneratedTeamFormat(
-      this.format,
-      this.version
-    ));
+    const resolved = await engine.resolveBattleConfig({
+      format: this.format,
+      version: this.version,
+      sendUtm: this.sendUtm,
+      timerOverrides: this.timerOverrides,
+    });
+    this.format = resolved.format;
+    this.timers = resolved.timers;
+    this.sendUtm = resolved.sendUtm;
 
     this.p1 = this.spawnRemotePlayer('p1', this.p1Spec);
     this.p2 = this.spawnRemotePlayer('p2', this.p2Spec);
@@ -1800,9 +1727,6 @@ export interface Options {
   ) => AgentSpec;
 }
 
-const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
-const TOURNAMENT_INFRA_VOID_REASONS = new Set(['arbiter-stall', 'sim-error', 'arena-error']);
-
 // GCP-side Tournament Coordinator:
 //   1. `processPendingSubmissions` pulls & smoke-tests `linux/amd64` tournament OCI submissions on
 //      GCP inside `bwrap` (`tourney-agent`) so Mac minis never touch `amd64` tournament artifacts.
@@ -1910,10 +1834,11 @@ export class Coordinator {
       });
 
       const smokeStart = Date.now();
-      let maxInitMillis = 1;
-      let maxTeamPreviewMillis: number | undefined;
-      let maxTurnMillis = 1;
-      let maxPeakRam = 0;
+      const smokeTelemetry: engine.SmokeTelemetry = {
+        maxInitMillis: 1,
+        maxTurnMillis: 1,
+        maxPeakRam: 0,
+      };
       let smokeError: string | undefined;
 
       for (const tid of sub.tournaments) {
@@ -1947,38 +1872,16 @@ export class Coordinator {
           p2: {spec: this.baselineSpec, teamPacked: p2TeamPacked},
           sendUtm: meta?.team !== undefined ? meta.team !== 'random' : undefined,
           smokeStopAfterTurn: 1,
-          timers: {
-            startingBankSeconds: 60,
-            readyGraceSeconds: arena.READY_GRACE_SECONDS,
-            maxTurnSeconds: 60,
-          },
+          timers: engine.SMOKE_TIMERS,
         });
         const res = await smokeGame.run();
-        if (
-          res.winner === 'preempted' ||
-          TOURNAMENT_INFRA_VOID_REASONS.has(res.endReason) ||
-          (TOURNAMENT_FAULT_REASONS.has(res.endReason) && res.winner === 'p1')
-        ) {
-          throw new Error(
-            `GCP smoke test baseline/infrastructure fault in ${format}: ${res.endReason}`
-          );
-        }
-        if (
-          TOURNAMENT_FAULT_REASONS.has(res.endReason) &&
-          (res.winner === 'p2' || res.winner === 'tie')
-        ) {
-          smokeError = `GCP smoke test failed in ${format}: ${res.endReason}`;
+        const verdict = engine.classifySmokeGame(res, {label: 'GCP smoke test', format});
+        if (verdict.kind === 'infra') throw new Error(verdict.message);
+        if (verdict.kind === 'fail') {
+          smokeError = verdict.message;
           break;
         }
-        if ((res.p1.initMillis ?? 0) > maxInitMillis) maxInitMillis = res.p1.initMillis ?? 0;
-        if (
-          res.p1.teamPreviewMillis !== undefined &&
-          (maxTeamPreviewMillis === undefined || res.p1.teamPreviewMillis > maxTeamPreviewMillis)
-        ) {
-          maxTeamPreviewMillis = res.p1.teamPreviewMillis;
-        }
-        if (res.p1.meanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1.meanTurnMillis;
-        if (res.p1.peakRam > maxPeakRam) maxPeakRam = res.p1.peakRam;
+        engine.recordSmokeTelemetry(smokeTelemetry, res.p1);
       }
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStart);
@@ -1997,12 +1900,12 @@ export class Coordinator {
         smokeStatus: 'passed',
         unpackedBytes,
         smokeDurationMillis,
-        ...(maxPeakRam > 0 ? {smokePeakRam: maxPeakRam} : {}),
-        smokeInitMillis: maxInitMillis,
-        ...(maxTeamPreviewMillis !== undefined
-          ? {smokeTeamPreviewMillis: maxTeamPreviewMillis}
+        ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
+        smokeInitMillis: smokeTelemetry.maxInitMillis,
+        ...(smokeTelemetry.maxTeamPreviewMillis !== undefined
+          ? {smokeTeamPreviewMillis: smokeTelemetry.maxTeamPreviewMillis}
           : {}),
-        smokeTurnMillis: maxTurnMillis,
+        smokeTurnMillis: smokeTelemetry.maxTurnMillis,
       });
     }
 

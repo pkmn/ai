@@ -10,8 +10,11 @@ import {GameOutcome} from '../server/ratings';
 import * as sim from '../server/sim';
 
 import * as db from './db';
+import * as engine from './engine';
 
-type PlayerSlot = 'p1' | 'p2';
+export * from './engine';
+
+type PlayerSlot = engine.PlayerSlot;
 
 export interface AgentLaunchSpec {
   mode: db.ExecutionMode;
@@ -42,56 +45,9 @@ export interface TurnHeartbeatInfo {
   p2: TurnSlotInfo;
 }
 
-export interface TimerOverrides {
-  startingBankSeconds?: number;
-  graceSeconds?: number;
-  maxTurnSeconds?: number;
-  maxFirstTurnSeconds?: number;
-}
-
-export interface ResolvedClockTimers {
-  startingBankMillis: number;
-  graceMillis: number;
-  maxTurnMillis: number;
-  maxFirstTurnMillis: number;
-  fullTurnIncrementMillis: number;
-  midTurnIncrementMillis: number;
-  timeoutAutoChoose: boolean;
-  accelerate: boolean;
-}
-
-export function resolveClockTimers(
-  settings: arena.TimerSettings,
-  overrides?: TimerOverrides
-): ResolvedClockTimers {
-  const startingSeconds = overrides?.startingBankSeconds ?? settings.startingSeconds;
-  const graceSeconds = overrides?.graceSeconds ??
-    (overrides?.startingBankSeconds !== undefined ? 0 : settings.graceSeconds);
-  const maxTurnSeconds = overrides?.maxTurnSeconds ?? settings.maxPerTurnSeconds;
-  const maxFirstTurnSeconds = overrides?.maxFirstTurnSeconds ?? (
-    overrides?.maxTurnSeconds !== undefined
-      ? Math.min(overrides.maxTurnSeconds, settings.maxFirstTurnSeconds)
-      : settings.maxFirstTurnSeconds
-  );
-  return {
-    startingBankMillis: startingSeconds * 1000,
-    graceMillis: graceSeconds * 1000,
-    maxTurnMillis: maxTurnSeconds * 1000,
-    maxFirstTurnMillis: maxFirstTurnSeconds * 1000,
-    fullTurnIncrementMillis: settings.addPerTurnSeconds * 1000,
-    midTurnIncrementMillis: settings.midTurnIncrementSeconds * 1000,
-    timeoutAutoChoose: settings.timeoutAutoChoose,
-    accelerate: settings.accelerate,
-  };
-}
-
 export interface GamePlayerOptions {
   spec: AgentLaunchSpec;
   teamPacked?: string;
-}
-
-export interface GameTimerOptions extends TimerOverrides {
-  readyGraceSeconds?: number;
 }
 
 export interface ArenaGameOptions {
@@ -103,7 +59,7 @@ export interface ArenaGameOptions {
   sendUtm?: boolean;
   maxTurns?: number;
   smokeStopAfterTurn?: number;
-  timers?: GameTimerOptions;
+  timers?: engine.GameTimerOptions;
   devMode?: boolean;
   onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
 }
@@ -130,25 +86,17 @@ export interface ArenaGameResult {
   p2: PlayerGameResult;
 }
 
-export interface PlayerTurnState extends PlayerClockState, ProtocolStrikeState {}
-
 interface SandboxedPlayer {
   slot: PlayerSlot;
   spec: AgentLaunchSpec;
   proc: ChildProcessWithoutNullStreams;
-  io: {
-    lineQueue: string[];
-    lineResolver: ((line: string | undefined) => void) | undefined;
+  io: engine.LineIoState & {
     pendingRequestJson: string | undefined;
     stderrTail: string;
   };
-  turn: PlayerTurnState;
-  telemetry: {
+  turn: engine.PlayerTurnState;
+  telemetry: engine.DecisionTelemetry & {
     initMillis: number;
-    teamPreviewCount: number;
-    totalTeamPreviewMillis: number;
-    turnDecisionCount: number;
-    totalTurnDecisionMillis: number;
     lastDecisionMillis: number;
   };
   lifecycle: {
@@ -158,247 +106,8 @@ interface SandboxedPlayer {
   };
 }
 
-export const MAX_INVALID_STRIKES = 3;
-export const MAX_STDOUT_LINE_CHARS = 65_536;
-export const MAX_LINE_QUEUE = 256;
-export const MAX_LINES_PER_DECISION = 64;
 const MAX_STDERR_TAIL_CHARS = 4_096;
 const ARENA_BIN = '/opt/arena/bin/arena';
-
-const BLIND_NAME_RE = new RegExp(
-  '(\\|player\\|p1\\|Agent A\\||\\|player\\|p2\\|Agent B\\||' +
-    '\\|win\\|Agent A\\b|\\|win\\|Agent B\\b|☆Agent A\\||☆Agent B\\|)',
-  'g'
-);
-
-export function rewriteBlindPlayerNames(
-  chunk: string,
-  p1DisplayName: string,
-  p2DisplayName: string
-): string {
-  return chunk.replace(BLIND_NAME_RE, token => {
-    switch (token) {
-      case '|player|p1|Agent A|':
-        return `|player|p1|${p1DisplayName}|`;
-      case '|player|p2|Agent B|':
-        return `|player|p2|${p2DisplayName}|`;
-      case '|win|Agent A':
-        return `|win|${p1DisplayName}`;
-      case '|win|Agent B':
-        return `|win|${p2DisplayName}`;
-      case '☆Agent A|':
-        return `☆${p1DisplayName}|`;
-      case '☆Agent B|':
-        return `☆${p2DisplayName}|`;
-      default:
-        return token;
-    }
-  });
-}
-
-export interface ProtocolStrikeState {
-  retryingInvalidChoice: boolean;
-  invalidStrikes: number;
-  lastRequestJson: string | undefined;
-}
-
-export interface ChunkInspectionResult {
-  actionableReqJson?: string;
-  clearQueue: boolean;
-  resendLastRequest: boolean;
-  forfeitedInvalidChoice: boolean;
-}
-
-export function inspectPlayerProtocolChunk(
-  chunk: string,
-  state: ProtocolStrikeState,
-  ended: boolean
-): ChunkInspectionResult {
-  const lines = chunk.split('\n');
-  const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
-  let actionableReqJson: string | undefined;
-  let clearQueue = false;
-  let resendLastRequest = false;
-  let forfeitedInvalidChoice = false;
-
-  for (const line of lines) {
-    if (line.startsWith('|request|')) {
-      const reqJson = line.slice('|request|'.length).trim();
-      if (reqJson && reqJson !== 'null') {
-        try {
-          const parsed = JSON.parse(reqJson) as {wait?: boolean};
-          if (!parsed.wait) {
-            clearQueue = true;
-            if (!state.retryingInvalidChoice) {
-              state.invalidStrikes = 0;
-            }
-            actionableReqJson = reqJson;
-            state.lastRequestJson = reqJson;
-          }
-        } catch {}
-      }
-    } else if (line.startsWith('|error|[Unavailable choice]') && !ended) {
-      // `[Unavailable choice]` reveals hidden battle state (e.g. Encore/Disable/Arena Trap) and
-      // `@pkmn/sim` always follows immediately with an updated `|request|` — withhold extra bank
-      // increments on the retry, but never count a protocol strike or resend the stale request.
-      state.retryingInvalidChoice = true;
-      clearQueue = true;
-    } else if (line.startsWith('|error|[Invalid choice]') && !ended) {
-      state.invalidStrikes++;
-      state.retryingInvalidChoice = true;
-      if (state.invalidStrikes >= MAX_INVALID_STRIKES) {
-        forfeitedInvalidChoice = true;
-      } else if (!chunkHasRequest && state.lastRequestJson) {
-        clearQueue = true;
-        resendLastRequest = true;
-        actionableReqJson = state.lastRequestJson;
-      }
-    }
-  }
-
-  return {actionableReqJson, clearQueue, resendLastRequest, forfeitedInvalidChoice};
-}
-
-export interface PlayerClockState {
-  slot: PlayerSlot;
-  bankMillis: number;
-  hasTakenFirstDecision: boolean;
-  retryingInvalidChoice: boolean;
-  turnRemainingMillis?: number;
-}
-
-export function beginTurnClockStep(
-  player: PlayerClockState,
-  currentTurn: number,
-  lastRewardedTurn: Record<PlayerSlot, number>,
-  timers: {
-    startingBankMillis?: number;
-    maxTurnMillis: number;
-    maxFirstTurnMillis?: number;
-    fullTurnIncrementMillis: number;
-    midTurnIncrementMillis: number;
-    accelerate?: boolean;
-    requestCount?: number;
-    activeSidesCount?: number;
-  }
-): {
-  turnAllowanceMillis: number;
-  totalBudgetMillis: number;
-  incrementMillis: number;
-  inactiveLine: string;
-} {
-  const isRetry = player.retryingInvalidChoice;
-  player.retryingInvalidChoice = false;
-  let incrementMillis = 0;
-  const startingCapMillis = timers.startingBankMillis ?? timers.maxTurnMillis;
-  let isFirstDecision = false;
-
-  // Credit full-turn or mid-turn increment before starting the turn clock,
-  // except when retrying after an invalid/unavailable choice on the same decision.
-  // Matches Showdown `RoomBattleTimer`: `bankMillis` begins at `starting + grace`, and
-  // clamping to `startingCapMillis` on subsequent requests drops unused first-request grace.
-  if (player.hasTakenFirstDecision && !isRetry) {
-    const isNewTurn = currentTurn > lastRewardedTurn[player.slot];
-    if (isNewTurn) {
-      incrementMillis = timers.fullTurnIncrementMillis;
-      if (timers.accelerate && incrementMillis > 0) {
-        if (currentTurn > 100 && incrementMillis > 5_000) {
-          incrementMillis -= 5_000;
-        }
-        if (currentTurn > 200 && Math.floor((timers.requestCount ?? 0) / 2) % 2 === 1) {
-          incrementMillis = 0;
-        }
-      }
-    } else {
-      incrementMillis = (timers.activeSidesCount ?? 1) <= 1 ? timers.midTurnIncrementMillis : 0;
-    }
-    player.bankMillis = Math.min(startingCapMillis, player.bankMillis + incrementMillis);
-    lastRewardedTurn[player.slot] = currentTurn;
-  } else if (!player.hasTakenFirstDecision) {
-    isFirstDecision = true;
-    player.hasTakenFirstDecision = true;
-    lastRewardedTurn[player.slot] = currentTurn;
-  }
-
-  const maxTurnMillis = isFirstDecision
-    ? (timers.maxFirstTurnMillis ?? timers.maxTurnMillis)
-    : timers.maxTurnMillis;
-  const turnAllowanceMillis = isRetry && player.turnRemainingMillis !== undefined
-    ? Math.max(0, Math.min(player.bankMillis, player.turnRemainingMillis))
-    : Math.min(player.bankMillis, maxTurnMillis);
-  player.turnRemainingMillis = turnAllowanceMillis;
-  const totalBudgetMillis = turnAllowanceMillis;
-  const graceMillis = Math.max(0, player.bankMillis - startingCapMillis);
-  const totalBankMillis = player.bankMillis - graceMillis;
-  const turnSeconds = (turnAllowanceMillis / 1000).toFixed(1);
-  const totalSeconds = (totalBankMillis / 1000).toFixed(1);
-  const graceSeconds = (graceMillis / 1000).toFixed(1);
-  const inactiveLine =
-    `|inactive|Time left: ${turnSeconds} sec this turn | ` +
-    `${totalSeconds} sec total | ${graceSeconds} sec grace\n`;
-
-  return {turnAllowanceMillis, totalBudgetMillis, incrementMillis, inactiveLine};
-}
-
-export function formatChoiceCommand(choice: string, teamPreview?: boolean): string {
-  return teamPreview && /^[1-9][0-9,\s]*$/.test(choice) ? `team ${choice}` : choice;
-}
-
-export function inspectOmniscientLine(
-  line: string,
-  opts: {
-    currentTurn: number;
-    maxTurns: number;
-    smokeStopAfterTurn?: number;
-    ended: boolean;
-    expectedP1Name: string;
-  }
-): {
-  currentTurn: number;
-  terminal?: {
-    winner: PlayerSlot | 'tie';
-    endReason: string;
-    forceTie?: boolean;
-  };
-} {
-  if (line.startsWith('|turn|')) {
-    const nextTurn = parseInt(line.slice('|turn|'.length), 10);
-    if (
-      opts.smokeStopAfterTurn !== undefined &&
-      nextTurn > opts.smokeStopAfterTurn &&
-      !opts.ended
-    ) {
-      return {
-        currentTurn: nextTurn,
-        terminal: {winner: 'tie', endReason: 'smoke-complete', forceTie: true},
-      };
-    }
-    if (nextTurn > opts.maxTurns && !opts.ended) {
-      return {
-        currentTurn: nextTurn,
-        terminal: {winner: 'tie', endReason: `tie-${opts.maxTurns}-turns`, forceTie: true},
-      };
-    }
-    return {currentTurn: nextTurn};
-  }
-  if (line.startsWith('|win|') && !opts.ended) {
-    const wName = line.slice('|win|'.length).trim();
-    return {
-      currentTurn: opts.currentTurn,
-      terminal: {
-        winner: wName === opts.expectedP1Name ? 'p1' : 'p2',
-        endReason: 'win',
-      },
-    };
-  }
-  if ((line === '|tie' || line.startsWith('|tie|')) && !opts.ended) {
-    return {
-      currentTurn: opts.currentTurn,
-      terminal: {winner: 'tie', endReason: 'tie'},
-    };
-  }
-  return {currentTurn: opts.currentTurn};
-}
 
 export class TimeSlicedArenaGame {
   private readonly version: string;
@@ -409,8 +118,8 @@ export class TimeSlicedArenaGame {
   private sendUtm?: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
-  private readonly timerOverrides: TimerOverrides;
-  private timers: ResolvedClockTimers;
+  private readonly timerOverrides: engine.TimerOverrides;
+  private timers: engine.ResolvedClockTimers;
   private readonly readyGraceMillis: number;
   private readonly devMode: boolean;
   private readonly onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
@@ -444,7 +153,7 @@ export class TimeSlicedArenaGame {
       maxTurnSeconds: options.timers?.maxTurnSeconds,
       maxFirstTurnSeconds: options.timers?.maxFirstTurnSeconds,
     };
-    this.timers = resolveClockTimers(
+    this.timers = engine.resolveClockTimers(
       arena.timerSettingsForFormat(options.format),
       this.timerOverrides
     );
@@ -514,46 +223,10 @@ export class TimeSlicedArenaGame {
       if (code !== undefined && code !== null) {
         player.lifecycle.exitCode = code;
       }
-      if (player.io.lineResolver) {
-        const resolve = player.io.lineResolver;
-        player.io.lineResolver = undefined;
-        resolve(undefined);
-      }
+      engine.wakeLineResolver(player.io);
     };
 
-    let stdoutBuf = '';
-    proc.stdout.setEncoding('utf8');
-    proc.stdout.on('data', (chunk: string) => {
-      stdoutBuf += chunk;
-      let nl = stdoutBuf.indexOf('\n');
-      while (nl >= 0) {
-        const line = stdoutBuf.slice(0, nl).replace(/\r$/, '');
-        stdoutBuf = stdoutBuf.slice(nl + 1);
-        if (line.length > MAX_STDOUT_LINE_CHARS) {
-          stdoutBuf = '';
-          try {
-            proc.kill('SIGKILL');
-          } catch {}
-          closeWaiter(1);
-          return;
-        }
-        if (player.io.lineResolver) {
-          const resolve = player.io.lineResolver;
-          player.io.lineResolver = undefined;
-          resolve(line);
-        } else if (player.io.lineQueue.length < MAX_LINE_QUEUE) {
-          player.io.lineQueue.push(line);
-        }
-        nl = stdoutBuf.indexOf('\n');
-      }
-      if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
-        stdoutBuf = '';
-        try {
-          proc.kill('SIGKILL');
-        } catch {}
-        closeWaiter(1);
-      }
-    });
+    engine.attachStdoutLineFramer(proc, player.io, () => closeWaiter(1));
 
     proc.on('exit', code => closeWaiter(code));
     proc.on('close', code => closeWaiter(code));
@@ -742,7 +415,7 @@ export class TimeSlicedArenaGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        const inspected = inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
+        const inspected = engine.inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
         if (inspected.actionableReqJson) {
           player.io.pendingRequestJson = inspected.actionableReqJson;
         }
@@ -763,13 +436,8 @@ export class TimeSlicedArenaGame {
   }
 
   private wakePendingLineResolvers() {
-    for (const p of [this.p1, this.p2]) {
-      if (p?.io.lineResolver) {
-        const resolve = p.io.lineResolver;
-        p.io.lineResolver = undefined;
-        resolve(undefined);
-      }
-    }
+    engine.wakeLineResolver(this.p1?.io);
+    engine.wakeLineResolver(this.p2?.io);
   }
 
   private forceLose(losingSlot: PlayerSlot, reason: string) {
@@ -830,7 +498,7 @@ export class TimeSlicedArenaGame {
         }
 
         linesRead++;
-        if (linesRead > MAX_LINES_PER_DECISION) {
+        if (linesRead > engine.MAX_LINES_PER_DECISION) {
           this.ended = true;
           this.winner = player.slot === 'p1' ? 'p2' : 'p1';
           this.endReason = 'crash';
@@ -868,7 +536,7 @@ export class TimeSlicedArenaGame {
     };
     player.io.pendingRequestJson = undefined;
 
-    const {totalBudgetMillis, incrementMillis, inactiveLine} = beginTurnClockStep(
+    const {totalBudgetMillis, incrementMillis, inactiveLine} = engine.beginTurnClockStep(
       player.turn,
       this.currentTurn,
       this.lastRewardedTurn,
@@ -915,26 +583,20 @@ export class TimeSlicedArenaGame {
         remainingBudgetMillis = totalBudgetMillis - totalElapsedThisDecisionMillis;
 
         if (timedOut || remainingBudgetMillis <= 0) {
-          const chargedMillis = Math.max(0, totalBudgetMillis);
-          player.turn.bankMillis = Math.max(0, player.turn.bankMillis - chargedMillis);
-          player.turn.turnRemainingMillis = 0;
-          if (this.timers.timeoutAutoChoose && player.turn.bankMillis > 0) {
-            const elapsedMillis = Math.max(1, Math.round(chargedMillis));
-            player.telemetry.lastDecisionMillis = elapsedMillis;
-            if (req.teamPreview) {
-              player.telemetry.teamPreviewCount++;
-              player.telemetry.totalTeamPreviewMillis += elapsedMillis;
-            } else {
-              player.telemetry.turnDecisionCount++;
-              player.telemetry.totalTurnDecisionMillis += elapsedMillis;
-            }
+          const outcome = engine.applyDecisionTimeout(
+            player.turn,
+            player.telemetry,
+            totalBudgetMillis,
+            this.timers.timeoutAutoChoose,
+            req.teamPreview
+          );
+          if (outcome === 'auto-choose') {
             this.pauseSlot(player);
             slotPaused = true;
             if (this.ended) return false;
             await this.battle!.write(`>${player.slot} default`);
             return true;
           }
-          player.turn.bankMillis = 0;
           this.forceLose(player.slot, 'timeout');
           return false;
         }
@@ -945,7 +607,7 @@ export class TimeSlicedArenaGame {
         }
 
         linesReadThisDecision++;
-        if (linesReadThisDecision > MAX_LINES_PER_DECISION) {
+        if (linesReadThisDecision > engine.MAX_LINES_PER_DECISION) {
           this.forceLose(player.slot, 'crash');
           return false;
         }
@@ -954,28 +616,15 @@ export class TimeSlicedArenaGame {
         if (!parsed || parsed.kind === 'chat' || parsed.kind === 'ready') continue;
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedThisDecisionMillis));
-        player.turn.bankMillis = Math.max(0, player.turn.bankMillis - decisionElapsedMillis);
-        if (player.turn.turnRemainingMillis !== undefined) {
-          player.turn.turnRemainingMillis = Math.max(
-            0,
-            player.turn.turnRemainingMillis - decisionElapsedMillis
-          );
-        }
-        player.telemetry.lastDecisionMillis = decisionElapsedMillis;
-        if (req.teamPreview) {
-          player.telemetry.teamPreviewCount++;
-          player.telemetry.totalTeamPreviewMillis += decisionElapsedMillis;
-        } else {
-          player.telemetry.turnDecisionCount++;
-          player.telemetry.totalTurnDecisionMillis += decisionElapsedMillis;
-        }
+        engine.chargeDecisionClock(player.turn, decisionElapsedMillis);
+        engine.recordDecisionTelemetry(player.telemetry, decisionElapsedMillis, req.teamPreview);
 
         // Freeze the acting slot before writing into `@pkmn/sim` so it cannot compute while the
         // simulator resolves the wave or delivers the next turn's protocol lines.
         this.pauseSlot(player);
         slotPaused = true;
         if (this.ended) return false;
-        const choiceCmd = formatChoiceCommand(parsed.choice, req.teamPreview);
+        const choiceCmd = engine.formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battle!.write(`>${player.slot} ${choiceCmd}`);
         return true;
       }
@@ -988,15 +637,15 @@ export class TimeSlicedArenaGame {
   }
 
   async run(): Promise<ArenaGameResult> {
-    this.format = await sim.resolveArenaFormatId(this.format, this.version);
-    this.timers = resolveClockTimers(
-      await sim.getTimerSettings(this.format, this.version),
-      this.timerOverrides
-    );
-    this.sendUtm = this.sendUtm ?? !(await sim.isGeneratedTeamFormat(
-      this.format,
-      this.version
-    ));
+    const resolved = await engine.resolveBattleConfig({
+      format: this.format,
+      version: this.version,
+      sendUtm: this.sendUtm,
+      timerOverrides: this.timerOverrides,
+    });
+    this.format = resolved.format;
+    this.timers = resolved.timers;
+    this.sendUtm = resolved.sendUtm;
 
     const p1 = this.spawnPlayer('p1', this.p1Opts.spec);
     const p2 = this.spawnPlayer('p2', this.p2Opts.spec);
@@ -1037,44 +686,37 @@ export class TimeSlicedArenaGame {
       this.forwardStream(p1, battle.streams.p1);
       this.forwardStream(p2, battle.streams.p2);
 
-      const omniTask = (async () => {
-        for await (const chunk of battle.streams.omniscient) {
-          for (const line of chunk.split('\n')) {
-            const step = inspectOmniscientLine(line, {
-              currentTurn: this.currentTurn,
-              maxTurns: this.maxTurns,
-              smokeStopAfterTurn: this.smokeStopAfterTurn,
-              ended: this.ended,
-              expectedP1Name: 'Agent A',
-            });
-            this.currentTurn = step.currentTurn;
-            if (step.terminal) {
-              this.ended = true;
-              this.winner = step.terminal.winner;
-              this.endReason = step.terminal.endReason;
-              this.wakePendingLineResolvers();
-              if (step.terminal.forceTie) {
-                await battle.write('>forcetie');
-              }
-            }
-          }
-        }
-      })().catch(() => {
-        if (!this.ended) {
+      const omniTask = engine.pumpOmniscientStream({
+        battle,
+        maxTurns: this.maxTurns,
+        smokeStopAfterTurn: this.smokeStopAfterTurn,
+        getState: () => ({currentTurn: this.currentTurn, ended: this.ended}),
+        onTurnUpdate: turn => {
+          this.currentTurn = turn;
+        },
+        onTerminal: (winner, endReason) => {
           this.ended = true;
-          this.winner = 'tie';
-          this.endReason = 'sim-error';
-        }
+          this.winner = winner;
+          this.endReason = endReason;
+          this.wakePendingLineResolvers();
+        },
+        onSimError: () => {
+          if (!this.ended) {
+            this.ended = true;
+            this.winner = 'tie';
+            this.endReason = 'sim-error';
+            this.wakePendingLineResolvers();
+          }
+        },
       });
 
-      const startSpec = JSON.stringify({formatid: this.format, seed: this.seed});
-      const p1PlayerSpec = JSON.stringify({name: 'Agent A', team: this.p1Opts.teamPacked});
-      const p2PlayerSpec = JSON.stringify({name: 'Agent B', team: this.p2Opts.teamPacked});
-
       this.battleStarted = true;
-      await battle.write(`>start ${startSpec}`);
-      await battle.write(`>player p1 ${p1PlayerSpec}`);
-      await battle.write(`>player p2 ${p2PlayerSpec}`);
+      await engine.startBattleProtocol(battle, {
+        format: this.format,
+        seed: this.seed,
+        p1Team: this.p1Opts.teamPacked,
+        p2Team: this.p2Opts.teamPacked,
+      });
 
       let idleSpins = 0;
       while (!this.ended) {
