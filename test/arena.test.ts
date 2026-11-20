@@ -406,6 +406,7 @@ describe('arena infrastructure', () => {
 
       expect(limitC).toContain('/opt/arena/state/peak_ram_%s');
       expect(limitC).not.toContain('.peak_ram');
+      expect(limitC).toContain('renameat(');
       expect(limitC).toContain('PRIO_DARWIN_PROCESS');
       expect(sandbox).toContain('(subpath "/opt/arena/stats")');
       expect(limitC).toContain('setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1)');

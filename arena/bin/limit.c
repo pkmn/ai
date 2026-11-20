@@ -128,24 +128,35 @@ static void kill_all_target_procs(uid_t target_uid, pid_t child_pg) {
 }
 
 static void write_peak_ram(const char *slot, uint64_t peak_bytes) {
-  // Write authoritative telemetry exclusively to `/opt/arena/state/peak_ram_%s` via `O_DIRECTORY |
-  // O_NOFOLLOW` + `openat(..., O_NOFOLLOW)` so symlink swaps on `/opt/arena/state` fail closed.
+  // Write authoritative telemetry atomically to `/opt/arena/state/peak_ram_%s` via `O_DIRECTORY |
+  // O_NOFOLLOW`, a temp file, and `renameat` so symlink swaps fail closed and `arbiter.ts` never
+  // observes an ENOENT or truncated gap mid-game.
   int dir_fd = open("/opt/arena/state", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
   if (dir_fd < 0) return;
   char file_name[32];
+  char tmp_name[64];
   snprintf(file_name, sizeof(file_name), "peak_ram_%s", slot);
-  (void)unlinkat(dir_fd, file_name, 0);
-  int fd = openat(dir_fd, file_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
-  close(dir_fd);
-  if (fd < 0) return;
+  snprintf(tmp_name, sizeof(tmp_name), "peak_ram_%s.tmp.%ld", slot, (long)getpid());
+  (void)unlinkat(dir_fd, tmp_name, 0);
+  int fd = openat(dir_fd, tmp_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+  if (fd < 0) {
+    close(dir_fd);
+    return;
+  }
   char buf[32];
   unsigned long long mib = (unsigned long long)((peak_bytes + (1024ULL * 1024ULL - 1ULL)) /
                                                 (1024ULL * 1024ULL));
   int len = snprintf(buf, sizeof(buf), "%llu\n", mib);
+  int ok = 0;
   if (len > 0) {
-    (void)write(fd, buf, (size_t)len);
+    ssize_t written = write(fd, buf, (size_t)len);
+    ok = (written == (ssize_t)len);
   }
   close(fd);
+  if (!ok || renameat(dir_fd, tmp_name, dir_fd, file_name) != 0) {
+    (void)unlinkat(dir_fd, tmp_name, 0);
+  }
+  close(dir_fd);
 }
 
 int main(int argc, char **argv) {
@@ -256,6 +267,12 @@ int main(int argc, char **argv) {
     struct rusage child_ru;
     memset(&child_ru, 0, sizeof(child_ru));
     pid_t w = wait4(pid, &status, terminate_requested ? 0 : WNOHANG, &child_ru);
+    if (w < 0) {
+      if (errno == EINTR) continue;
+      kill_all_target_procs(target_uid, child_pgid);
+      write_peak_ram(slot, peak_bytes);
+      return 1;
+    }
     if (w == pid) {
       if (child_ru.ru_maxrss > 0 && (uint64_t)child_ru.ru_maxrss > peak_bytes) {
         peak_bytes = (uint64_t)child_ru.ru_maxrss;
