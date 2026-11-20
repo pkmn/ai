@@ -2564,7 +2564,7 @@ describe('arena infrastructure', () => {
             localArgs: [process.execPath, tourneyUtmAgentScript],
           },
         },
-        timers: {readyGraceSeconds: 0.05},
+        timers: {readyGraceSeconds: 0.5},
         maxTurns: 1,
       }).run();
       expect(timeoutRes.winner).toBe('p2');
