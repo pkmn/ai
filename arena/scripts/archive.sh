@@ -51,8 +51,15 @@ if [[ "$(date -u +%d)" == "01" ]]; then
     [[ -d "${LADDER_DIR}/${PREV_MONTH}" ]] || continue
     TAR_PATH="${LADDER_DIR}/${PREV_MONTH}.tar"
     if [[ ! -f "$TAR_PATH" ]]; then
-      tar -cf "$TAR_PATH" -C "$LADDER_DIR" "$PREV_MONTH"
-      rm -rf "${LADDER_DIR:?}/${PREV_MONTH}"
+      TMP_TAR="${TAR_PATH}.tmp.$$"
+      rm -f "$TMP_TAR"
+      if tar -cf "$TMP_TAR" -C "$LADDER_DIR" "$PREV_MONTH"; then
+        mv -f "$TMP_TAR" "$TAR_PATH"
+        rm -rf "${LADDER_DIR:?}/${PREV_MONTH}"
+      else
+        rm -f "$TMP_TAR"
+        exit 1
+      fi
     fi
   done
 fi

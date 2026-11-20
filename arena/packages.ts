@@ -791,6 +791,7 @@ export function evictColdAgentsIfNeeded(
 }
 
 export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
+  const refsDir = path.join(path.resolve(casDir), 'refs');
   const casBlobs: Array<{blobPath: string; shardPath: string; digest: string}> = [];
   try {
     for (const entry of fs.readdirSync(casDir, {withFileTypes: true})) {
@@ -804,7 +805,7 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
   } catch {
     return;
   }
-  if (casBlobs.length === 0) return;
+  if (casBlobs.length === 0 && !fs.existsSync(refsDir)) return;
 
   const activeDigests = new Set<string>();
   const liveAgentNames = new Set<string>();
@@ -824,7 +825,6 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
     }
   }
 
-  const refsDir = path.join(path.resolve(casDir), 'refs');
   if (fs.existsSync(refsDir)) {
     try {
       for (const ref of fs.readdirSync(refsDir)) {
@@ -835,6 +835,8 @@ export function pruneUnreferencedCasBlobs(casDir: string, agentsDir: string) {
       }
     } catch {}
   }
+
+  if (casBlobs.length === 0) return;
 
   const touchedShards = new Set<string>();
   for (const blob of casBlobs) {

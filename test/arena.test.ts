@@ -4468,6 +4468,147 @@ describe('arena infrastructure', () => {
       expect(received[0].logs).toEqual(['|turn|1\n']);
       expect(received[1].logs).toBeUndefined();
     });
+
+    test('prunes orphaned CAS blobs when a native bundle fails smoke testing', async () => {
+      const srcDir = path.join(tmpDir, 'bad-cas-src');
+      fs.mkdirSync(srcDir, {recursive: true});
+      fs.writeFileSync(path.join(srcDir, 'run'), '#!/bin/sh\nexit 1\n', {mode: 0o755});
+      fs.writeFileSync(path.join(srcDir, 'weights.bin'), Buffer.alloc(96 * 1024, 0x5a));
+      const badTar = path.join(tmpDir, 'bad-cas.tar.gz');
+      execFileSync('tar', ['-czf', badTar, '-C', srcDir, '.']);
+      const badSha = crypto.createHash('sha256').update(fs.readFileSync(badTar)).digest('hex');
+
+      const h = createMockCoordHarness('cas-prune-smoke');
+      try {
+        (h.coord.client as unknown as {
+          getPendingSubmissions: () => Promise<serverArena.PendingSubmissionsResponse>;
+        }).getPendingSubmissions = () => Promise.resolve({
+          ladders: [],
+          submissions: [{
+            versionId: 31,
+            agentId: 1,
+            agentSlug: 'foul-play',
+            agentName: 'Foul Play',
+            version: '3.1.0',
+            package: 'bundle' as const,
+            url: `file://${badTar}`,
+            sha256: badSha,
+            ladders: ['gen9customgame'],
+            tournaments: [],
+            teamsByLadder: {},
+          }],
+        });
+        await h.coord.processPendingSubmissions(new Map([['gen9customgame', h.ladderSnap]]));
+        expect(h.reportedStatuses).toHaveLength(1);
+        expect(h.reportedStatuses[0].smokeStatus).toBe('failed');
+        expect(fs.readdirSync(h.dirs.agents)).toEqual([]);
+        const refsDir = path.join(h.dirs.cas, 'refs');
+        expect(fs.existsSync(refsDir) ? fs.readdirSync(refsDir) : []).toEqual([]);
+        const shardDirs = fs.existsSync(h.dirs.cas)
+          ? fs.readdirSync(h.dirs.cas).filter(name => name !== 'refs')
+          : [];
+        expect(shardDirs).toEqual([]);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+    test('flushOutbox publishes ladder archive when match-complete archives ladder', async () => {
+      const h = createMockCoordHarness('outbox-archive');
+      const uploaded: string[] = [];
+      try {
+        const dayDir = path.join(h.archiveLogsDir, 'gen9rand', '2026-11-18');
+        fs.mkdirSync(dayDir, {recursive: true});
+        fs.writeFileSync(path.join(dayDir, 'gen9rand-0000001a.log'), '|start\n|win|A\n');
+
+        (h.coord.client as unknown as {
+          completeMatch: () => Promise<{ok: true; duplicate: false; archivedLadder: boolean}>;
+          uploadLadderArchive: (id: string, bytes: Buffer) => Promise<{ok: true}>;
+        }).completeMatch = () => Promise.resolve({
+          ok: true,
+          duplicate: false,
+          archivedLadder: true,
+        });
+        (h.coord.client as unknown as {
+          uploadLadderArchive: (id: string, bytes: Buffer) => Promise<{ok: true}>;
+        }).uploadLadderArchive = (id: string) => {
+          uploaded.push(id);
+          return Promise.resolve({ok: true});
+        };
+
+        h.stateDb.enqueueOutbox('match-complete', {
+          match: {
+            id: 'gen9rand-0000001',
+            ladderId: 'gen9rand',
+            p1VersionId: 30,
+            p2VersionId: 25,
+            seed: '1,2,3,4',
+            game1Outcome: 'W',
+            game2Outcome: 'W',
+            category: 'WW',
+            game1Turns: 5,
+            game2Turns: 5,
+            game1EndReason: 'win',
+            game2EndReason: 'win',
+            p1Game1PeakRam: 64,
+            p1Game2PeakRam: 64,
+            p2Game1PeakRam: 64,
+            p2Game2PeakRam: 64,
+            p1Game1BankSeconds: 140,
+            p1Game2BankSeconds: 140,
+            p2Game1BankSeconds: 140,
+            p2Game2BankSeconds: 140,
+            p1Game1InitMillis: 10,
+            p1Game2InitMillis: 10,
+            p2Game1InitMillis: 10,
+            p2Game2InitMillis: 10,
+            p1Game1MeanTurnMillis: 10,
+            p1Game2MeanTurnMillis: 10,
+            p2Game1MeanTurnMillis: 10,
+            p2Game2MeanTurnMillis: 10,
+            completedAt: 1_760_000_000,
+          },
+          game1Log: '|start\n|win|A\n',
+          game2Log: '|start\n|win|A\n',
+        });
+
+        expect(await h.coord.flushOutbox()).toBe(1);
+        expect(uploaded).toEqual(['gen9rand']);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+    test('playNextScheduledMatch compresses completed days on idle active ladders', async () => {
+      const h = createMockCoordHarness('idle-day-rollover');
+      try {
+        const pastDayDir = path.join(h.archiveLogsDir, 'gen9customgame', '2020-01-01');
+        fs.mkdirSync(pastDayDir, {recursive: true});
+        fs.writeFileSync(path.join(pastDayDir, 'gen9customgame-0000001a.log'), '|start\n|win|A\n');
+
+        // Zero local agents registered -> ladder is idle and schedules no match.
+        const played = await h.coord.playNextScheduledMatch([h.ladderSnap]);
+        expect(played).toBeUndefined();
+        expect(
+          fs.existsSync(path.join(h.archiveLogsDir, 'gen9customgame', '2020-01', '2020-01-01.7z'))
+        ).toBe(true);
+        expect(fs.existsSync(pastDayDir)).toBe(false);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+    test('archive.sh writes monthly tarballs atomically via temporary file', () => {
+      const script = fs.readFileSync(root('arena', 'scripts', 'archive.sh'), 'utf8');
+      const tmpIdx = script.search(/TMP_TAR=".*TAR_PATH.*\.tmp\.\$\$"/);
+      const tarIdx = script.indexOf('tar -cf "$TMP_TAR" -C "$LADDER_DIR" "$PREV_MONTH"');
+      const mvIdx = script.indexOf('mv -f "$TMP_TAR" "$TAR_PATH"');
+      const rmIdx = script.search(/rm -rf ".*LADDER_DIR.*PREV_MONTH.*"/);
+      expect(tmpIdx).toBeGreaterThan(0);
+      expect(tarIdx).toBeGreaterThan(tmpIdx);
+      expect(mvIdx).toBeGreaterThan(tarIdx);
+      expect(rmIdx).toBeGreaterThan(mvIdx);
+    });
   });
 
   describe('Darwin sandbox enforcement', () => {

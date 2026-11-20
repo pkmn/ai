@@ -202,6 +202,7 @@ export class Coordinator {
   private readonly devMode: boolean;
   private readonly maxTurns?: number;
   private readonly versionByLadderId = new Map<string, string>();
+  private readonly teamModeByLadderId = new Map<string, db.TeamMode>();
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
   private readonly lastArchivedDayByLadder = new Map<string, string>();
   private readonly archivePublishCooldownByLadder = new Map<string, number>();
@@ -268,15 +269,29 @@ export class Coordinator {
     let flushed = 0;
     for (const entry of entries) {
       try {
+        let publishArchivedLadderId: string | undefined;
         if (entry.endpoint === 'match-complete') {
           const payload = JSON.parse(entry.payloadJson) as arena.MatchCompletePayload;
-          await this.sendMatchComplete(payload);
+          const res = await this.sendMatchComplete(payload);
+          if (res.archivedLadder) {
+            const mode = this.teamModeByLadderId.get(payload.match.ladderId);
+            if (
+              mode === 'random' ||
+              mode === 'pools' ||
+              (mode === undefined && payload.game2Log !== undefined)
+            ) {
+              publishArchivedLadderId = payload.match.ladderId;
+            }
+          }
         } else {
           const payload = JSON.parse(entry.payloadJson) as arena.SubmissionStatusPayload;
           await this.client.reportSubmissionStatus(payload);
         }
         this.stateDb.deleteOutbox(entry.id);
         flushed++;
+        if (publishArchivedLadderId) {
+          await this.publishLadderArchive(publishArchivedLadderId);
+        }
       } catch (err) {
         if (isPermanentClientError(err)) {
           console.error(`Dropping permanently rejected outbox entry #${entry.id}:`, err);
@@ -496,6 +511,9 @@ export class Coordinator {
       if (smokeError) {
         if (mode === 'native') {
           fs.rmSync(path.join(this.dirs.agents, targetId), {recursive: true, force: true});
+          if (fs.existsSync(this.dirs.cas)) {
+            packages.pruneUnreferencedCasBlobs(this.dirs.cas, this.dirs.agents);
+          }
         } else {
           try {
             execFileSync('podman', ['rmi', '-f', targetId], {timeout: 30_000});
@@ -684,6 +702,7 @@ export class Coordinator {
     daySeconds: number
   ) {
     try {
+      packages.assertArchiveVolumeMounted(this.dirs.logs);
       const day = new Date(daySeconds * 1000).toISOString().slice(0, 10);
       const dir = path.join(this.dirs.logs, ladderId, day);
       fs.mkdirSync(dir, {recursive: true, mode: 0o700});
@@ -760,13 +779,18 @@ export class Coordinator {
 
     this.compressCompletedDays(ladderId, excludeDay);
 
+    const entries = fs.readdirSync(ladderDir, {withFileTypes: true});
+    const archivedMonths = new Set<string>();
     const archiveMembers: string[] = [];
-    for (const entry of fs.readdirSync(ladderDir, {withFileTypes: true})) {
+    for (const entry of entries) {
       if (entry.isFile() && /^\d{4}-\d{2}\.tar$/.test(entry.name)) {
+        archivedMonths.add(entry.name.slice(0, 7));
         archiveMembers.push(entry.name);
-        continue;
       }
+    }
+    for (const entry of entries) {
       if (!entry.isDirectory() || !/^\d{4}-\d{2}$/.test(entry.name)) continue;
+      if (archivedMonths.has(entry.name)) continue;
       const monthDir = path.join(ladderDir, entry.name);
       for (const f of fs.readdirSync(monthDir).sort()) {
         if (f.endsWith('.7z')) archiveMembers.push(path.join(entry.name, f));
@@ -1333,6 +1357,10 @@ export class Coordinator {
     ladders: readonly LadderSnapshot[],
     quarantinedVersionIds: readonly number[] = []
   ): Promise<{matchId: string; ladderId: string; archivedLadder: boolean} | undefined> {
+    for (const ladder of ladders) {
+      if (ladder.version) this.versionByLadderId.set(ladder.id, ladder.version);
+      this.teamModeByLadderId.set(ladder.id, ladder.team);
+    }
     await this.flushOutbox();
     if (this.draining) return undefined;
 
@@ -1342,8 +1370,8 @@ export class Coordinator {
     if (ladders.some(l => l.status === 'active' || l.status === 'settling')) {
       const activeVersionIds = new Set<number>();
       for (const ladder of ladders) {
-        if (ladder.version) this.versionByLadderId.set(ladder.id, ladder.version);
         if (ladder.status !== 'active' && ladder.status !== 'settling') continue;
+        await this.maybeArchiveOnDayRollover(ladder.id, ladder.team, nowSeconds);
         for (const e of ladder.entries) {
           if (e.role === 'champion' || e.role === 'challenger') {
             activeVersionIds.add(e.versionId);
