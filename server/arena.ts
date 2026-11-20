@@ -874,6 +874,14 @@ export interface WatchdogAlert {
   lastMatchId?: string;
 }
 
+export interface StaffAlertPayload {
+  key: string;
+  message: string;
+  detail?: string;
+  cooldownSeconds?: number;
+  resolved?: boolean;
+}
+
 export interface Options {
   db: db.Database;
   auth?: Auth;
@@ -885,6 +893,7 @@ export interface Options {
   now?: () => number;
   onSubmissionStatus?: (result: db.ApplySubmissionStatusResult) => void | Promise<void>;
   onWatchdogTimeout?: (alert: WatchdogAlert) => void | Promise<void>;
+  onStaffAlert?: (alert: StaffAlertPayload) => void | Promise<void>;
   onUpdate?: (
     reason:
       'submission-status' |
@@ -903,6 +912,7 @@ export interface Handle {
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
   getState: () => {
     lastSeenAt?: number;
+    lastContactAt?: number;
     watchdogTriggered: boolean;
     live?: LiveMatch;
     liveSeq: number;
@@ -1374,6 +1384,10 @@ export class Client {
     return this.requestJson<HeartbeatResponse>('POST', '/api/arena/heartbeat', payload);
   }
 
+  sendAlert(payload: StaffAlertPayload): Promise<{ok: true}> {
+    return this.requestJson<{ok: true}>('POST', '/api/arena/alert', payload);
+  }
+
   completeMatch(payload: MatchCompletePayload): Promise<MatchCompleteResponse> {
     return this.requestJson<MatchCompleteResponse>('POST', '/api/arena/match-complete', payload);
   }
@@ -1750,6 +1764,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   let liveUpdatedAt: number | undefined;
   let liveStale = false;
   let lastSeenAt: number | undefined;
+  let lastContactAt: number | undefined;
   let lastMatchId: string | undefined;
   let watchdogTriggered = false;
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1888,8 +1903,28 @@ export function register(app: polka.Polka, options: Options): Handle {
       sendJson(res, 401, {error: 'Unauthorized.'});
       return false;
     }
+    lastContactAt = getNowSec();
     return true;
   };
+
+  app.post('/api/arena/alert', async (req, res) => {
+    if (!authenticateArena(req, res)) return;
+    try {
+      const body = await readJsonBody<StaffAlertPayload>(req, 64 * 1024);
+      if (!body?.key || (!body.resolved && !body.message)) {
+        sendJson(res, 400, {error: 'Invalid alert payload.'});
+        return;
+      }
+      await Promise.resolve(options.onStaffAlert?.(body)).catch(err => {
+        console.error('Error in onStaffAlert callback:', err);
+      });
+      sendJson(res, 200, {ok: true});
+    } catch (err) {
+      const status = (err as {status?: number}).status ?? 500;
+      const message = err instanceof Error ? err.message : 'Alert dispatch failed.';
+      sendJson(res, status, {error: message});
+    }
+  });
 
   app.get('/api/arena/pending-submissions', (req, res) => {
     if (!authenticateArena(req, res)) return;
@@ -2978,6 +3013,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     },
     getState: () => ({
       lastSeenAt,
+      lastContactAt,
       watchdogTriggered,
       live: currentLive,
       liveSeq,

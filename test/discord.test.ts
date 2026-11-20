@@ -1590,4 +1590,148 @@ describe('Arena Discord notifications', () => {
       db.close();
     }
   });
+
+  test('checkSystemHealth alerts on low disk space then sends recovery DM', async () => {
+    const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+    stubDmFetch(sentMessages);
+    const state = new Map<string, string | undefined>();
+    const gib = 1024 ** 3;
+
+    await discord.checkSystemHealth('discord-token', ARENA_CONFIG, {
+      state,
+      nowSeconds: 10_000,
+      diskPaths: ['/var/lib/pkmn'],
+      statDisk: () => ({freeBytes: 1.5 * gib, totalBytes: 24 * gib}),
+      backupDir: '/nonexistent-backup-dir',
+    });
+    await discord.checkSystemHealth('discord-token', ARENA_CONFIG, {
+      state,
+      nowSeconds: 10_060,
+      diskPaths: ['/var/lib/pkmn'],
+      statDisk: () => ({freeBytes: 8 * gib, totalBytes: 24 * gib}),
+      backupDir: '/nonexistent-backup-dir',
+    });
+
+    expect(sentMessages.map(m => m.content)).toEqual([
+      'Low disk space on `/var/lib/pkmn`: 6% free (1.5 / 24.0 GiB).',
+      'Disk space recovered on `/var/lib/pkmn`: 33% free (8.0 / 24.0 GiB).',
+    ]);
+  });
+
+  test('checkSystemHealth alerts when nightly server backup is stale', async () => {
+    const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+    stubDmFetch(sentMessages);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-backup-health-'));
+    try {
+      const bak = path.join(tmpDir, 'arena-20261118T041500Z.sqlite.zst');
+      fs.writeFileSync(bak, 'zst');
+      const oldSec = 1_760_000_000;
+      fs.utimesSync(bak, oldSec, oldSec);
+
+      await discord.checkSystemHealth('discord-token', ARENA_CONFIG, {
+        nowSeconds: oldSec + 32 * 3600,
+        diskPaths: [],
+        backupDir: tmpDir,
+      });
+
+      expect(sentMessages).toHaveLength(1);
+      expect(sentMessages[0].content).toBe('Nightly server backup is stale (last backup 32h ago).');
+    } finally {
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
+
+  test('checkSystemHealth alerts when Arena goes silent then notifies recovery', async () => {
+    const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+    stubDmFetch(sentMessages);
+    const state = new Map<string, string | undefined>();
+    let lastContact = 1_762_807_500;
+
+    await discord.checkSystemHealth('discord-token', ARENA_CONFIG, {
+      state,
+      nowSeconds: lastContact + 20 * 60,
+      diskPaths: [],
+      backupDir: '/nonexistent-backup-dir',
+      getArenaLastContactAt: () => lastContact,
+    });
+    lastContact += 21 * 60;
+    await discord.checkSystemHealth('discord-token', ARENA_CONFIG, {
+      state,
+      nowSeconds: lastContact + 5,
+      diskPaths: [],
+      backupDir: '/nonexistent-backup-dir',
+      getArenaLastContactAt: () => lastContact,
+    });
+
+    expect(sentMessages).toHaveLength(2);
+    expect(sentMessages[0].content).toContain('Arena has not checked in since');
+    expect(sentMessages[0].content).toContain('(20m ago)');
+    expect(sentMessages[1].content).toBe('Arena is back online.');
+  });
+
+  test('syncOnce alerts staff after 5 consecutive sync task failures', async () => {
+    const errSpy = console.error;
+    console.error = () => {};
+    const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+    const baseFetch = (url: string, init?: RequestInit) => {
+      const target = String(url);
+      if (target.includes('/applications/@me')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'app-1', verify_key: '00'.repeat(32)}),
+        });
+      }
+      if (target.includes('/commands')) {
+        return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve([])});
+      }
+      if (target.includes('/members')) {
+        return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve([])});
+      }
+      if (target.includes('/roles')) {
+        return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve([])});
+      }
+      if (target.includes('/channels/ch-1/messages')) {
+        return Promise.resolve({
+          status: 403,
+          ok: false,
+          text: () => Promise.resolve('Missing Access'),
+        });
+      }
+      if (target.endsWith('/users/@me/channels')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'dm-staff'}),
+        });
+      }
+      if (target.includes('/channels/dm-staff/messages')) {
+        const rawBody = typeof init?.body === 'string' ? init.body : '{}';
+        const body = JSON.parse(rawBody) as {content: string};
+        sentMessages.push({recipientOrChannel: 'dm-staff', content: body.content});
+        return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve({id: 'm1'})});
+      }
+      return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve([])});
+    };
+    globalThis.fetch = baseFetch as unknown as typeof fetch;
+
+    const db = createSeededArenaDb();
+    const state = new Map<string, string | undefined>();
+    const cfg = {...ARENA_CONFIG, channel: 'ch-1'};
+    try {
+      for (let i = 0; i < 5; i++) {
+        await discord.syncOnce(db, 'discord-token', '', {
+          config: cfg,
+          state,
+        });
+      }
+      expect(sentMessages).toHaveLength(1);
+      expect(sentMessages[0].content).toContain(
+        'Discord chat archive sync failed 5 cycles in a row.'
+      );
+    } finally {
+      console.error = errSpy;
+      db.close();
+    }
+  });
 });

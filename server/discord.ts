@@ -839,6 +839,221 @@ export async function notifyWatchdogAlert(
   return sendStaffDm(token, config, formatWatchdogDm(alert), state, 'heartbeat alert');
 }
 
+export interface DiskStat {
+  freeBytes: number;
+  totalBytes: number;
+}
+
+export interface HealthCheckOptions {
+  state?: Map<string, string | undefined>;
+  nowSeconds?: number;
+  startedAtSeconds?: number;
+  getArenaLastContactAt?: () => number | undefined;
+  hasActiveLadder?: () => boolean;
+  diskPaths?: readonly string[];
+  statDisk?: (dir: string) => DiskStat | undefined;
+  backupDir?: string;
+  maxBackupAgeSeconds?: number;
+  maxArenaSilenceSeconds?: number;
+}
+
+const GIB = 1024 * 1024 * 1024;
+const DISK_LOW_PCT = 10;
+const DISK_RECOVER_PCT = 15;
+const DISK_LOW_BYTES = 2 * GIB;
+const DISK_RECOVER_BYTES = 3 * GIB;
+const BACKUP_MAX_AGE_SECONDS = 30 * 60 * 60;
+const ARENA_SILENCE_SECONDS = 15 * 60;
+const SYNC_ERROR_THRESHOLD = 5;
+
+function statDiskDefault(dir: string): DiskStat | undefined {
+  try {
+    const st = fs.statfsSync(dir);
+    return {freeBytes: st.bavail * st.bsize, totalBytes: st.blocks * st.bsize};
+  } catch {
+    return undefined;
+  }
+}
+
+function formatUtcTimestamp(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function formatGiB(bytes: number): string {
+  return (bytes / GIB).toFixed(1);
+}
+
+export async function checkSystemHealth(
+  token: string,
+  config: Config,
+  opts: HealthCheckOptions = {}
+): Promise<void> {
+  if (!config.staff?.length) return;
+  const state = opts.state ?? new Map<string, string | undefined>();
+  const now = opts.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const statDisk = opts.statDisk ?? statDiskDefault;
+
+  const diskPaths = opts.diskPaths ?? (fs.existsSync('/var/lib/pkmn') ? ['/var/lib/pkmn'] : []);
+  for (const dir of diskPaths) {
+    const stat = statDisk(dir);
+    if (!stat || stat.totalBytes <= 0) continue;
+    const freePct = Math.round((stat.freeBytes / stat.totalBytes) * 100);
+    const key = `disk:${dir}`;
+    if (freePct < DISK_LOW_PCT || stat.freeBytes < DISK_LOW_BYTES) {
+      await notifyStaffAlert(
+        token,
+        config,
+        {
+          key,
+          message:
+            `Low disk space on \`${dir}\`: ${freePct}% free ` +
+            `(${formatGiB(stat.freeBytes)} / ${formatGiB(stat.totalBytes)} GiB).`,
+        },
+        state,
+        now
+      );
+    } else if (freePct >= DISK_RECOVER_PCT && stat.freeBytes >= DISK_RECOVER_BYTES) {
+      await resolveStaffAlert(
+        token,
+        config,
+        {
+          key,
+          message:
+            `Disk space recovered on \`${dir}\`: ${freePct}% free ` +
+            `(${formatGiB(stat.freeBytes)} / ${formatGiB(stat.totalBytes)} GiB).`,
+        },
+        state
+      );
+    }
+  }
+
+  const backupDir = opts.backupDir ??
+    (fs.existsSync('/var/lib/pkmn/backups') ? '/var/lib/pkmn/backups' : undefined);
+  const maxBackupAge = opts.maxBackupAgeSeconds ?? BACKUP_MAX_AGE_SECONDS;
+  if (backupDir && fs.existsSync(backupDir)) {
+    let newestMtimeSec: number | undefined;
+    try {
+      for (const name of fs.readdirSync(backupDir)) {
+        if (!/^arena-.*\.sqlite\.zst$/.test(name)) continue;
+        const mtimeSec = Math.floor(fs.statSync(path.join(backupDir, name)).mtimeMs / 1000);
+        if (newestMtimeSec === undefined || mtimeSec > newestMtimeSec) {
+          newestMtimeSec = mtimeSec;
+        }
+      }
+    } catch {}
+
+    if (newestMtimeSec !== undefined) {
+      const ageSec = Math.max(0, now - newestMtimeSec);
+      if (ageSec > maxBackupAge) {
+        const ageHours = Math.floor(ageSec / 3600);
+        await notifyStaffAlert(
+          token,
+          config,
+          {
+            key: 'vps-backup-stale',
+            message: `Nightly server backup is stale (last backup ${ageHours}h ago).`,
+          },
+          state,
+          now
+        );
+      } else {
+        await resolveStaffAlert(
+          token,
+          config,
+          {key: 'vps-backup-stale', message: 'Nightly server backup resumed.'},
+          state
+        );
+      }
+    } else if (
+      opts.startedAtSeconds !== undefined &&
+      now - opts.startedAtSeconds > maxBackupAge
+    ) {
+      await notifyStaffAlert(
+        token,
+        config,
+        {
+          key: 'vps-backup-stale',
+          message: `No nightly server backups found in \`${backupDir}\`.`,
+        },
+        state,
+        now
+      );
+    }
+  }
+
+  if (opts.getArenaLastContactAt) {
+    const maxSilence = opts.maxArenaSilenceSeconds ?? ARENA_SILENCE_SECONDS;
+    const lastContact = opts.getArenaLastContactAt();
+    if (lastContact !== undefined) {
+      const silentSec = now - lastContact;
+      if (silentSec >= maxSilence) {
+        const mins = Math.floor(silentSec / 60);
+        await notifyStaffAlert(
+          token,
+          config,
+          {
+            key: 'arena-offline',
+            message:
+              `Arena has not checked in since \`${formatUtcTimestamp(lastContact)} UTC\` ` +
+              `(${mins}m ago).`,
+          },
+          state,
+          now
+        );
+      } else {
+        await resolveStaffAlert(
+          token,
+          config,
+          {key: 'arena-offline', message: 'Arena is back online.'},
+          state
+        );
+      }
+    } else if (
+      opts.hasActiveLadder?.() &&
+      opts.startedAtSeconds !== undefined &&
+      now - opts.startedAtSeconds >= maxSilence
+    ) {
+      const mins = Math.floor((now - opts.startedAtSeconds) / 60);
+      await notifyStaffAlert(
+        token,
+        config,
+        {
+          key: 'arena-offline',
+          message: `Arena has not checked in since server start (${mins}m ago).`,
+        },
+        state,
+        now
+      );
+    }
+  }
+}
+
+async function trackSyncTaskFailure(
+  token: string,
+  config: Config,
+  state: Map<string, string | undefined>,
+  task: string,
+  err: unknown
+): Promise<void> {
+  if (util.isConnectivityError(err)) return;
+  const errKey = `sync-err:${task}`;
+  const count = (Number(state.get(errKey)) || 0) + 1;
+  state.set(errKey, String(count));
+  if (count >= SYNC_ERROR_THRESHOLD) {
+    const detail = err instanceof Error ? err.message : String(err);
+    await notifyStaffAlert(
+      token,
+      config,
+      {key: `sync:${task}`, message: `${task} failed ${count} cycles in a row.`, detail},
+      state
+    );
+  }
+}
+
+function clearSyncTaskFailure(state: Map<string, string | undefined>, task: string) {
+  state.delete(`sync-err:${task}`);
+}
+
 function displayName(user: User, members?: GuildMember[]): string {
   const member = members?.find(m => m.user.id === user.id);
   const rawName = member?.nick ?? member?.user.global_name ?? user.global_name ?? user.username;
@@ -1519,6 +1734,7 @@ export interface Options {
   token?: string;
   vgcToken?: string;
   verifyKey?: string;
+  getArenaLastContactAt?: () => number | undefined;
 }
 
 export interface Handle {
@@ -1585,23 +1801,29 @@ export async function syncOnce(
   if (vgcToken) {
     try {
       await syncRoles(token, vgcToken, config, state, {members, roles});
+      clearSyncTaskFailure(state, 'Partner role sync');
     } catch (err) {
       console.error('Error syncing partner roles:', err);
+      await trackSyncTaskFailure(token, config, state, 'Partner role sync', err);
     }
   }
 
   if (!membersFetchFailed) {
     try {
       members = await syncArenaRoles(db, token, config, state, members);
+      clearSyncTaskFailure(state, 'Arena role sync');
     } catch (err) {
       console.error('Error syncing Arena roles:', err);
+      await trackSyncTaskFailure(token, config, state, 'Arena role sync', err);
     }
   }
 
   try {
     await syncSubmissionDms(db, token, config, state);
+    clearSyncTaskFailure(state, 'Submission DM sync');
   } catch (err) {
     console.error('Error syncing submission DMs:', err);
+    await trackSyncTaskFailure(token, config, state, 'Submission DM sync', err);
   }
 
   if (config.channel) {
@@ -1622,8 +1844,10 @@ export async function syncOnce(
 
     try {
       await syncMessages(token, config.channel, undefined, {members, channels, roles});
+      clearSyncTaskFailure(state, 'Discord chat archive sync');
     } catch (err) {
       console.error('Error syncing messages:', err);
+      await trackSyncTaskFailure(token, config, state, 'Discord chat archive sync', err);
     }
   }
 }
@@ -1642,6 +1866,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   } catch (err) {
     console.error('Error loading glossary:', err);
   }
+  const startedAtSeconds = Math.floor(Date.now() / 1000);
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
   let verifyKeyReady = Promise.resolve();
@@ -1663,6 +1888,18 @@ export function register(app: polka.Polka, options: Options): Handle {
       })
         .catch(err => {
           console.error('Error in Discord sync cycle:', err);
+        })
+        .then(async () => {
+          if (stopped || process.env.NODE_ENV !== 'production') return;
+          await checkSystemHealth(token, loadConfig(), {
+            state,
+            startedAtSeconds,
+            getArenaLastContactAt: options.getArenaLastContactAt,
+            hasActiveLadder: () => options.db.getPlayableLadders().length > 0,
+          });
+        })
+        .catch(err => {
+          console.error('Error in system health check:', err);
         })
         .finally(scheduleNext);
     }, CYCLE_MILLIS);

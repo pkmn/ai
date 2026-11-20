@@ -12,6 +12,7 @@ RestartSec=5s
 Environment=NODE_ENV=production
 EnvironmentFile=/home/pkmn/ai/.env
 ExecStart=/usr/bin/node /home/pkmn/ai/build/server
+ExecStopPost=-/bin/bash -c '[ "${SERVICE_RESULT:-success}" = "success" ] || /usr/bin/node /home/pkmn/ai/build/tools/pkmn notify-staff "pkmn.ai-server exited (${SERVICE_RESULT}, ${EXIT_CODE}=${EXIT_STATUS})" --key server-crash --cooldown 3600'
 # `site`'s `fs` helper creates `${process.cwd()}/build/.tmp-*` on import and atomically `rename`s
 # rendered stylesheet assets into `/home/pkmn/ai/public`; running with `cwd = /var/lib/pkmn` keeps
 # `/home/pkmn/ai/build` read-only under `ProtectHome=read-only` on the same filesystem as `public/`.

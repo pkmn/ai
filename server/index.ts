@@ -233,9 +233,13 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     }),
   });
   wikiInstance.auth.register(app);
+  let getArenaLastContactAt = (): number | undefined => undefined;
   const discordHandle = options.enableDiscord === false
     ? undefined
-    : discord.register(app, {db});
+    : discord.register(app, {
+      db,
+      getArenaLastContactAt: () => getArenaLastContactAt(),
+    });
   account.register(app, {db, auth: wikiInstance.auth});
   const arenaHandle = arena.register(app, {
     db,
@@ -252,10 +256,20 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
         await discordHandle.notifyWatchdogTimeout(alert);
       }
       : undefined,
+    onStaffAlert: discordHandle
+      ? async alert => {
+        if (alert.resolved) {
+          await discordHandle.resolveStaffAlert({key: alert.key, message: alert.message});
+        } else {
+          await discordHandle.notifyStaffAlert(alert);
+        }
+      }
+      : undefined,
     onUpdate: reason => {
       if (reason === 'tournament-status') syncBannerFor(db, publicDir);
     },
   });
+  getArenaLastContactAt = () => arenaHandle.getState().lastContactAt;
 
   if (isMock) {
     const mockStateFile = root('.mock', 'state.json');

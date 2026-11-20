@@ -3104,4 +3104,45 @@ describe('createServerApp production HTTP hardening', () => {
       await srv.close();
     }
   });
+
+  test('POST /api/arena/alert dispatches Bearer-authenticated alerts via Client.sendAlert',
+    async () => {
+      const received: arena.StaffAlertPayload[] = [];
+      const app = polka();
+      const ctrl = arena.register(app, {
+        db,
+        arenaSecret: ARENA_SECRET,
+        publicDir: tmpDir,
+        now: () => 1_760_005_000,
+        onStaffAlert: alert => {
+          received.push(alert);
+        },
+      });
+      const srv = await startTestServer(app);
+      try {
+        const unauth = await fetch(`${srv.baseUrl}/api/arena/alert`, {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({key: 'test', message: 'nope'}),
+        });
+        expect(unauth.status).toBe(401);
+
+        const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
+        const res = await client.sendAlert({
+          key: 'arena-archive',
+          message: 'Nightly arena archive failed (exit 1)',
+          detail: 'Operation not permitted',
+        });
+        expect(res).toEqual({ok: true});
+        expect(received).toEqual([{
+          key: 'arena-archive',
+          message: 'Nightly arena archive failed (exit 1)',
+          detail: 'Operation not permitted',
+        }]);
+        expect(ctrl.getState().lastContactAt).toBe(1_760_005_000);
+      } finally {
+        ctrl.close();
+        await srv.close();
+      }
+    });
 });

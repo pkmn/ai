@@ -14,7 +14,8 @@ ProtectSystem=strict
 ProtectHome=read-only
 InaccessiblePaths=-/home/pkmn/.ssh
 ReadWritePaths=/var/lib/pkmn
-ExecStart=/bin/bash -euo pipefail -c 'mkdir -p /var/lib/pkmn/backups && ts=$(date -u +%%Y%%m%%dT%%H%%M%%SZ) && tmp="/var/lib/pkmn/backups/arena-$ts.sqlite" && trap "rm -f \"$tmp\"" EXIT && sqlite3 -cmd ".timeout 10000" /var/lib/pkmn/arena.sqlite ".backup $tmp" && zstd -q --rm "$tmp" && find /var/lib/pkmn/backups -name "arena-*.sqlite.zst" -mtime +30 -delete'
+EnvironmentFile=/home/pkmn/ai/.env
+ExecStart=/bin/bash -euo pipefail -c 'errlog="/tmp/backup.err"; tmp=""; on_exit() { rc=$?; exec 2>&3; [ -f "$errlog" ] && cat "$errlog" >&2; if [ "$rc" -ne 0 ]; then /usr/bin/node /home/pkmn/ai/build/tools/pkmn notify-staff "Nightly server backup failed (exit $rc)" --key vps-backup --cooldown 3600 --detail-file "$errlog" || true; fi; [ -n "$tmp" ] && rm -f "$tmp"; rm -f "$errlog"; }; exec 3>&2 2>"$errlog"; trap on_exit EXIT; mkdir -p /var/lib/pkmn/backups && ts=$(date -u +%%Y%%m%%dT%%H%%M%%SZ) && tmp="/var/lib/pkmn/backups/arena-$ts.sqlite" && sqlite3 -cmd ".timeout 10000" /var/lib/pkmn/arena.sqlite ".backup $tmp" && zstd -q --rm "$tmp" && find /var/lib/pkmn/backups -name "arena-*.sqlite.zst" -mtime +30 -delete'
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pkmn.ai.backup
