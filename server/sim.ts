@@ -83,6 +83,7 @@ export interface BattleHandle {
   write(chunk: string): Promise<void>;
   destroy(): Promise<void>;
   getPokemon(slot: 'p1' | 'p2'): unknown[] | undefined;
+  getWaveInfo(): {waveId: number; activeSides: number};
   getLog(): string[];
 }
 
@@ -97,6 +98,9 @@ interface ActiveBattleState {
   omniscient: PushStream;
   p1Pokemon?: unknown[];
   p2Pokemon?: unknown[];
+  waveId: number;
+  activeSides: number;
+  pendingWrites: Map<number, () => void>;
   logLines: string[];
   finalLog?: string[];
   destroyed: boolean;
@@ -112,6 +116,14 @@ interface WorkerEntry {
 const workers = new Map<string, WorkerEntry>();
 let nextBattleId = 1;
 let nextRpcId = 1;
+let nextWriteId = 1;
+
+function resolvePendingWrites(battle: ActiveBattleState) {
+  for (const resolve of battle.pendingWrites.values()) {
+    resolve();
+  }
+  battle.pendingWrites.clear();
+}
 
 function resolveWorkerScript(): string {
   const sameDirJs = path.join(__dirname, 'sim-worker.js');
@@ -136,6 +148,7 @@ function failEntry(entry: WorkerEntry, err: Error) {
   }
   entry.rpcs.clear();
   for (const battle of entry.battles.values()) {
+    resolvePendingWrites(battle);
     battle.p1.fail(err);
     battle.p2.fail(err);
     battle.omniscient.fail(err);
@@ -167,14 +180,30 @@ function getWorker(version: string): WorkerEntry {
           if (msg.p1Pokemon !== undefined) b.p1Pokemon = msg.p1Pokemon;
           if (msg.p2Pokemon !== undefined) b.p2Pokemon = msg.p2Pokemon;
           b.logLines.push(msg.chunk);
+        } else {
+          if (msg.waveId !== undefined) b.waveId = msg.waveId;
+          if (msg.activeSides !== undefined && msg.activeSides > 0) {
+            b.activeSides = msg.activeSides;
+          }
         }
         b[msg.channel].push(msg.chunk);
+        break;
+      }
+      case 'battle:wrote': {
+        const b = entry.battles.get(msg.battleId);
+        if (!b) return;
+        const resolveWrite = b.pendingWrites.get(msg.writeId);
+        if (resolveWrite) {
+          b.pendingWrites.delete(msg.writeId);
+          resolveWrite();
+        }
         break;
       }
       case 'battle:end': {
         const b = entry.battles.get(msg.battleId);
         if (!b) return;
         if (msg.log.length > 0) b.finalLog = msg.log;
+        resolvePendingWrites(b);
         b.p1.end();
         b.p2.end();
         b.omniscient.end();
@@ -186,6 +215,7 @@ function getWorker(version: string): WorkerEntry {
         const b = entry.battles.get(msg.battleId);
         if (!b) return;
         const err = new Error(msg.error);
+        resolvePendingWrites(b);
         b.p1.fail(err);
         b.p2.fail(err);
         b.omniscient.fail(err);
@@ -242,6 +272,9 @@ export function createBattle(version = SIM_VERSION): BattleHandle {
     p1: new PushStream(),
     p2: new PushStream(),
     omniscient: new PushStream(),
+    waveId: 0,
+    activeSides: 1,
+    pendingWrites: new Map(),
     logLines: [],
     destroyed: false,
   };
@@ -256,13 +289,19 @@ export function createBattle(version = SIM_VERSION): BattleHandle {
       omniscient: state.omniscient,
     },
     write(chunk: string): Promise<void> {
-      if (state.destroyed) return Promise.resolve();
-      entry.worker.postMessage({type: 'battle:write', battleId, chunk} satisfies ParentMessage);
-      return Promise.resolve();
+      if (state.destroyed || !entry.battles.has(battleId)) return Promise.resolve();
+      const writeId = nextWriteId++;
+      return new Promise<void>(resolve => {
+        state.pendingWrites.set(writeId, resolve);
+        entry.worker.postMessage(
+          {type: 'battle:write', battleId, chunk, writeId} satisfies ParentMessage
+        );
+      });
     },
     destroy(): Promise<void> {
       if (state.destroyed) return Promise.resolve();
       state.destroyed = true;
+      resolvePendingWrites(state);
       state.p1.end();
       state.p2.end();
       state.omniscient.end();
@@ -273,6 +312,9 @@ export function createBattle(version = SIM_VERSION): BattleHandle {
     },
     getPokemon(slot: 'p1' | 'p2'): unknown[] | undefined {
       return slot === 'p1' ? state.p1Pokemon : state.p2Pokemon;
+    },
+    getWaveInfo(): {waveId: number; activeSides: number} {
+      return {waveId: state.waveId, activeSides: state.activeSides};
     },
     getLog(): string[] {
       return state.finalLog ?? state.logLines;
@@ -345,6 +387,7 @@ export async function closeAllWorkers(): Promise<void> {
       }
       entry.rpcs.clear();
       for (const battle of entry.battles.values()) {
+        resolvePendingWrites(battle);
         battle.p1.end();
         battle.p2.end();
         battle.omniscient.end();

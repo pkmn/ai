@@ -418,6 +418,7 @@ export class TimeSlicedArenaGame {
   private battleStarted = false;
   private currentTurn = 0;
   private requestCount = 0;
+  private lastWaveId = 0;
   private waveActiveSidesCount = 1;
   private lastRewardedTurn: Record<PlayerSlot, number> = {p1: -1, p2: -1};
   private ended = false;
@@ -752,11 +753,22 @@ export class TimeSlicedArenaGame {
     })().catch(() => undefined);
   }
 
+  private wakePendingLineResolvers() {
+    for (const p of [this.p1, this.p2]) {
+      if (p?.lineResolver) {
+        const resolve = p.lineResolver;
+        p.lineResolver = undefined;
+        resolve(undefined);
+      }
+    }
+  }
+
   private forceLose(losingSlot: PlayerSlot, reason: string) {
     if (this.ended) return;
     this.ended = true;
     this.winner = losingSlot === 'p1' ? 'p2' : 'p1';
     this.endReason = reason;
+    this.wakePendingLineResolvers();
     // `@pkmn/sim` Battle#win resolves SideID ('p1' / 'p2'), not player display names
     void this.battle.write(`>forcewin ${this.winner}`).catch(() => undefined);
   }
@@ -887,6 +899,7 @@ export class TimeSlicedArenaGame {
         const {line, timedOut} = remainingBudgetMillis <= 0
           ? {line: undefined, timedOut: true}
           : await this.readLineWithTimeout(player, remainingBudgetMillis);
+        if (this.ended) return false;
         totalElapsedThisDecisionMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
         remainingBudgetMillis = totalBudgetMillis - totalElapsedThisDecisionMillis;
 
@@ -1026,6 +1039,7 @@ export class TimeSlicedArenaGame {
               this.ended = true;
               this.winner = step.terminal.winner;
               this.endReason = step.terminal.endReason;
+              this.wakePendingLineResolvers();
               if (step.terminal.forceTie) {
                 await this.battle.write('>forcetie');
               }
@@ -1068,8 +1082,13 @@ export class TimeSlicedArenaGame {
             (p1HasReq && p1.retryingInvalidChoice) ||
             (p2HasReq && p2.retryingInvalidChoice);
           if (!isRetryWave) {
-            this.requestCount++;
-            this.waveActiveSidesCount = (p1HasReq ? 1 : 0) + (p2HasReq ? 1 : 0);
+            const wave = this.battle.getWaveInfo();
+            if (wave.waveId === 0 || wave.waveId !== this.lastWaveId) {
+              this.requestCount++;
+              this.lastWaveId = wave.waveId;
+            }
+            this.waveActiveSidesCount =
+              wave.activeSides || ((p1HasReq ? 1 : 0) + (p2HasReq ? 1 : 0));
           }
           // Alternate which slot receives the first CPU slice across decision waves
           const ordered = this.requestCount % 2 === 1

@@ -309,8 +309,8 @@ export class ConcurrentGame {
   private p2!: RemoteTournamentPlayer;
   private currentTurn = 0;
   private requestCount = 0;
+  private lastWaveId = 0;
   private waveActiveSidesCount = 1;
-  private readonly pendingWaveSlots = new Set<PlayerSlot>();
   private lastRewardedTurn: Record<PlayerSlot, number> = {p1: -1, p2: -1};
   private ended = false;
   private winner: PlayerSlot | 'tie' | 'preempted' = 'tie';
@@ -765,18 +765,16 @@ export class ConcurrentGame {
 
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
     if (this.ended) return;
-    if (!player.retryingInvalidChoice) {
-      this.pendingWaveSlots.add(player.slot);
-    }
-    await Promise.resolve();
-    if (this.ended) return;
-    if (this.pendingWaveSlots.size > 0) {
-      this.requestCount++;
-      this.waveActiveSidesCount = this.pendingWaveSlots.size;
-      this.pendingWaveSlots.clear();
-    }
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
     const wasRetry = player.retryingInvalidChoice;
+    if (!wasRetry) {
+      const wave = this.battle.getWaveInfo();
+      if (wave.waveId === 0 || wave.waveId !== this.lastWaveId) {
+        this.requestCount++;
+        this.lastWaveId = wave.waveId;
+      }
+      this.waveActiveSidesCount = wave.activeSides || 1;
+    }
 
     const {totalBudgetMillis, inactiveLine} = arbiter.beginTurnClockStep(
       player,
@@ -924,8 +922,8 @@ export class ConcurrentGame {
     this.battle = sim.createBattle(this.version);
     this.currentTurn = 0;
     this.requestCount = 0;
+    this.lastWaveId = 0;
     this.waveActiveSidesCount = 1;
-    this.pendingWaveSlots.clear();
     this.lastRewardedTurn = {p1: -1, p2: -1};
     this.ended = false;
     this.winner = 'tie';
@@ -974,6 +972,7 @@ export class ConcurrentGame {
             this.ended = true;
             this.winner = step.terminal.winner;
             this.endReason = step.terminal.endReason;
+            this.wakePendingLineResolvers();
             if (step.terminal.forceTie) {
               await this.battle.write('>forcetie');
             }

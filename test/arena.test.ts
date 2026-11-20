@@ -1577,6 +1577,63 @@ describe('arena infrastructure', () => {
       expect(res.omniscientLog).not.toMatch(/\n\|tie(?:\n|$)/);
     });
 
+    test('forfeits strike-3 invalid choice promptly without stalling opponent clock', async () => {
+      const threeStrikesScript = path.join(tmpDir, 'three-strikes-fast.js');
+      const hangingOpponentScript = path.join(tmpDir, 'hanging-opponent.js');
+      fs.writeFileSync(
+        threeStrikesScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.wait) return;',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "move 9\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      fs.writeFileSync(
+        hangingOpponentScript,
+        [
+          '#!/usr/bin/env node',
+          'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
+          'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const raw = line.slice(9).trim();',
+          '  if (!raw || raw === "null") return;',
+          '  const req = JSON.parse(raw);',
+          '  if (req.teamPreview) process.stdout.write("/team 123456\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const started = Date.now();
+      const res = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        // Turn 1 is wave 2 (`requestCount = 2`), so p2 acts first and triggers strike #3
+        // before p1's hanging turn would otherwise stall for 15s.
+        p1Spec: {mode: 'native', target: process.execPath, args: [hangingOpponentScript]},
+        p2Spec: {mode: 'native', target: process.execPath, args: [threeStrikesScript]},
+        p1TeamPacked: TEAM_ONE,
+        p2TeamPacked: TEAM_TWO,
+        startingBankSeconds: 15,
+        maxTurnSeconds: 15,
+        devMode: true,
+      }).run();
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(res.winner).toBe('p1');
+      expect(res.endReason).toBe('invalid-choice');
+    });
+
     test('forfeits crashing agents immediately with crash', async () => {
       const res = await new arbiter.TimeSlicedArenaGame({
         format: 'gen9customgame',
@@ -2659,6 +2716,95 @@ describe('arena infrastructure', () => {
       expect(chunkSnaps.some(s => s.p1.thinking && s.p2.thinking)).toBe(true);
       // When Fast Agent (p1) commits first, onClockChange reports p1 committed while p2 thinks
       expect(clockChanges.some(s => !s.p1.thinking && s.p2.thinking)).toBe(true);
+    });
+
+    test('withholds mid-turn increment when both sides force-switch on double KO', async () => {
+      const p1Log = path.join(tmpDir, 'double-ko-p1.log');
+      const p2Log = path.join(tmpDir, 'double-ko-p2.log');
+      fs.writeFileSync(p1Log, '');
+      fs.writeFileSync(p2Log, '');
+      const makeAgent = (logFile: string, delayMs: number) => {
+        const script = path.join(tmpDir, `${path.basename(logFile)}.js`);
+        fs.writeFileSync(
+          script,
+          [
+            '#!/usr/bin/env node',
+            'const fs = require("fs");',
+            'const readline = require("readline");',
+            'process.stdout.write("/ready\\n");',
+            'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
+            'let lastReq = null;',
+            'rl.on("line", line => {',
+            '  if (line.startsWith("|request|")) {',
+            '    const raw = line.slice(9).trim();',
+            '    if (raw && raw !== "null") lastReq = JSON.parse(raw);',
+            '    return;',
+            '  }',
+            '  if (!line.startsWith("|inactive|Time left:")) return;',
+            '  if (!lastReq || lastReq.wait) return;',
+            '  const tag = lastReq.teamPreview ? "tp" : lastReq.forceSwitch ? "fs" : "turn";',
+            `  fs.appendFileSync(${JSON.stringify(logFile)}, tag + "|" + line + "\\n");`,
+            '  const req = lastReq;',
+            '  setTimeout(() => {',
+            '    process.stdout.write(req.teamPreview ? "/team 12\\n" : "default\\n");',
+            `  }, ${delayMs});`,
+            '});',
+          ].join('\n'),
+          {mode: 0o755}
+        );
+        return script;
+      };
+      const boomTeam =
+        'Electrode||choiceband|static|explosion|Adamant|,,252,,,252||||100|' +
+        ']Pikachu|||static|tackle||||||50|';
+      const targetTeam =
+        'Caterpie|||shielddust|tackle||||||1|' +
+        ']Pikachu|||static|tackle||||||50|';
+      const p1Agent = makeAgent(p1Log, 400);
+      const p2Agent = makeAgent(p2Log, 400);
+      await new tournament.ConcurrentGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        startingBankSeconds: 30,
+        graceSeconds: 0,
+        maxTurns: 2,
+        p1Spec: {
+          agentId: 'boom-p1',
+          displayName: 'Boom P1',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, p1Agent],
+        },
+        p2Spec: {
+          agentId: 'boom-p2',
+          displayName: 'Boom P2',
+          vmHost: 'localhost',
+          controlSocket: '/tmp/unused',
+          localCommand: relayBin,
+          localArgs: [process.execPath, p2Agent],
+        },
+        p1TeamPacked: boomTeam,
+        p2TeamPacked: targetTeam,
+      }).run();
+
+      const parseBanks = (file: string) => fs.readFileSync(file, 'utf8')
+        .trim()
+        .split('\n')
+        .map(l => {
+          const [tag, rest] = l.split('|', 2);
+          const m = /\|\s*([0-9.]+)\s*sec total/.exec(l.slice(tag.length + 1));
+          return {tag, total: m ? Number(m[1]) : NaN, raw: rest};
+        });
+      for (const file of [p1Log, p2Log]) {
+        const entries = parseBanks(file);
+        const turnEntry = entries.find(e => e.tag === 'turn');
+        const fsEntry = entries.find(e => e.tag === 'fs');
+        expect(turnEntry).toBeDefined();
+        expect(fsEntry).toBeDefined();
+        // Turn 1 spent ~0.4s from 30.0s bank; double-KO forceSwitch must not add +5s back to 30.0s
+        expect(fsEntry!.total).toBeLessThan(turnEntry!.total);
+      }
     });
   });
 

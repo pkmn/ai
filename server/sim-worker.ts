@@ -45,6 +45,7 @@ export type ParentMessage = {
   type: 'battle:write';
   battleId: string;
   chunk: string;
+  writeId?: number;
 } | {
   type: 'battle:destroy';
   battleId: string;
@@ -60,6 +61,12 @@ export type WorkerMessage = {
   chunk: string;
   p1Pokemon?: unknown[];
   p2Pokemon?: unknown[];
+  waveId?: number;
+  activeSides?: number;
+} | {
+  type: 'battle:wrote';
+  battleId: string;
+  writeId: number;
 } | {
   type: 'battle:end';
   battleId: string;
@@ -127,6 +134,8 @@ interface ActiveBattle {
   stream: simTypes.BattleStreams.BattleStream;
   writeChain: Promise<void>;
   ended: boolean;
+  waveId: number;
+  lastRequests: [unknown, unknown];
 }
 
 const battles = new Map<string, ActiveBattle>();
@@ -146,6 +155,8 @@ function startBattle(battleId: string) {
     stream,
     writeChain: Promise.resolve(),
     ended: false,
+    waveId: 0,
+    lastRequests: [undefined, undefined],
   };
   battles.set(battleId, active);
 
@@ -167,7 +178,27 @@ function startBattle(battleId: string) {
             p2Pokemon,
           });
         } else {
-          post({type: 'battle:chunk', battleId, channel, chunk});
+          let waveId: number | undefined;
+          let activeSides: number | undefined;
+          if (chunk.includes('|request|') && stream.battle) {
+            const s0Req = stream.battle.sides[0]?.activeRequest;
+            const s1Req = stream.battle.sides[1]?.activeRequest;
+            if (s0Req !== active.lastRequests[0] || s1Req !== active.lastRequests[1]) {
+              active.lastRequests = [s0Req, s1Req];
+              active.waveId++;
+            }
+            waveId = active.waveId;
+            activeSides = stream.battle.sides.filter(
+              s => s.activeRequest && !('wait' in s.activeRequest && s.activeRequest.wait)
+            ).length;
+          }
+          post({
+            type: 'battle:chunk',
+            battleId,
+            channel,
+            chunk,
+            ...(waveId !== undefined ? {waveId, activeSides} : {}),
+          });
         }
       }
     } catch (err) {
@@ -195,12 +226,25 @@ function startBattle(battleId: string) {
   });
 }
 
-function writeBattle(battleId: string, chunk: string) {
+function writeBattle(battleId: string, chunk: string, writeId?: number) {
   const active = battles.get(battleId);
-  if (!active) return;
+  if (!active) {
+    if (writeId !== undefined) post({type: 'battle:wrote', battleId, writeId});
+    return;
+  }
   active.writeChain = active.writeChain
-    .then(() => active.stream.write(chunk))
-    .catch(() => undefined);
+    .then(async () => {
+      await active.stream.write(chunk);
+      // Yield one macrotask so `pump` posts all resulting `battle:chunk` messages onto the FIFO
+      // `MessagePort` before `battle:wrote` resolves the parent's `battle.write()` call.
+      await new Promise<void>(resolve => setImmediate(resolve));
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (writeId !== undefined) {
+        post({type: 'battle:wrote', battleId, writeId});
+      }
+    });
 }
 
 function destroyBattle(battleId: string) {
@@ -255,7 +299,7 @@ port.on('message', (msg: ParentMessage) => {
       startBattle(msg.battleId);
       break;
     case 'battle:write':
-      writeBattle(msg.battleId, msg.chunk);
+      writeBattle(msg.battleId, msg.chunk, msg.writeId);
       break;
     case 'battle:destroy':
       destroyBattle(msg.battleId);
