@@ -2822,6 +2822,45 @@ describe('createServerApp production HTTP hardening', () => {
     expect(archiveBlock).toContain('proxy_request_buffering off;');
   });
 
+  test('nginx repeats HSTS in every location block declaring add_header', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    const locRe = /\blocation\b[^{]*\{/g;
+    let match: RegExpExecArray | null;
+    let checked = 0;
+    const missingHsts: string[] = [];
+    while ((match = locRe.exec(conf)) !== null) {
+      let depth = 1;
+      let i = match.index + match[0].length;
+      while (i < conf.length && depth > 0) {
+        if (conf[i] === '{') depth++;
+        else if (conf[i] === '}') depth--;
+        i++;
+      }
+      const block = conf.slice(match.index, i);
+      if (/\badd_header\b/.test(block)) {
+        checked++;
+        if (!block.includes('add_header Strict-Transport-Security "max-age=63072000" always;')) {
+          missingHsts.push(match[0].trim());
+        }
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(5);
+    expect(missingHsts).toEqual([]);
+  });
+
+  test('nginx disables 30d caching on daily-overwritten .tar archives', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    const tarIdx = conf.indexOf('location ~* \\.tar$ {');
+    const sevenZIdx = conf.indexOf('location ~* \\.7z$ {');
+    expect(tarIdx).toBeGreaterThan(0);
+    expect(sevenZIdx).toBeGreaterThan(0);
+    const tarBlock = conf.slice(tarIdx, conf.indexOf('}', tarIdx) + 1);
+    const sevenZBlock = conf.slice(sevenZIdx, conf.indexOf('}', sevenZIdx) + 1);
+    expect(tarBlock).toContain('expires -1;');
+    expect(tarBlock).not.toContain('add_header');
+    expect(sevenZBlock).toContain('expires 30d;');
+  });
+
   test('retains locked seasonal rosters on settling pools ladders', async () => {
     const vgcId = 'gen9championsvgc2026regmc';
     const slugs = ['0-error', 'foul-play', 'pokechamp', 'metamon'];
