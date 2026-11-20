@@ -2937,4 +2937,51 @@ describe('createServerApp production HTTP hardening', () => {
       await srv.close();
     }
   });
+
+  test('broadcast off completion triggers onUpdate plus live battle stream', async () => {
+    db.upsertTournament({
+      id: '2',
+      name: 'Tour 2',
+      format: 'gen9ou',
+      version: '0.11.0',
+      startsAt: 1_760_000_000,
+      status: 'running',
+      gamesPerMatchup: 2,
+      parallelTables: 1,
+      hardware: 'L4',
+    });
+    const updates: string[] = [];
+    const app = polka();
+    const ctrl = arena.register(app, {
+      db,
+      arenaSecret: ARENA_SECRET,
+      publicDir: tmpDir,
+      onUpdate: kind => {
+        updates.push(kind);
+      },
+    });
+    const srv = await startTestServer(app);
+    const sse = await openPersistentSse(srv.baseUrl, '/api/battles/stream');
+    try {
+      const snap = await sse.waitForEvent('snapshot');
+      expect(snap.data.runningTournament).toBeDefined();
+
+      const res = await apiJson(
+        srv.baseUrl,
+        'POST',
+        '/api/arena/tournaments/2/broadcast',
+        ARENA_SECRET,
+        {off: true, tournamentStatus: 'completed'}
+      );
+      expect(res.status).toBe(200);
+      expect(updates).toContain('tournament-status');
+
+      const liveEvt = await sse.waitForEvent('live');
+      expect(liveEvt.data.runningTournament).toBeUndefined();
+    } finally {
+      await sse.close();
+      ctrl.close();
+      await srv.close();
+    }
+  });
 });

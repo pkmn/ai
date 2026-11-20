@@ -2173,7 +2173,9 @@ export function register(app: polka.Polka, options: Options): Handle {
     try {
       const body = await readJsonBody<TournamentBroadcastPayload>(req);
       if ('off' in body && body.off === true) {
-        if (body.tournamentStatus === 'completed' && tournament.status !== 'completed') {
+        const statusChanged =
+          body.tournamentStatus === 'completed' && tournament.status !== 'completed';
+        if (statusChanged) {
           db.setTournamentStatus(tournament.id, 'completed', nowSec);
         }
         broadcastsByTournament.delete(tournament.id);
@@ -2181,7 +2183,19 @@ export function register(app: polka.Polka, options: Options): Handle {
         pushTournamentEvent(tournament.id, 'broadcast-end', {
           tournamentId: tournament.id,
           updatedAt: nowSec,
+          ...(statusChanged ? {status: 'completed'} : {}),
         });
+        if (statusChanged) {
+          pushBattleEvent('live', {
+            updatedAt: nowSec,
+            stale: liveStale,
+            live: liveStale ? undefined : currentLive,
+            runningTournament: getRunningTournamentInfo(),
+          });
+          Promise.resolve(options.onUpdate?.('tournament-status')).catch(err => {
+            console.error('Error in onUpdate callback:', err);
+          });
+        }
         sendJson(res, 200, {ok: true, updatedAt: nowSec});
         return;
       }
