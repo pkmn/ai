@@ -50,9 +50,22 @@ function decodeRouteParam(param: string | string[] | undefined): string {
   }
 }
 
-export function timerSettingsForFormat(format: string): TimerSettings {
-  const id = toID(format);
-  if (id.includes('vgc') || id.includes('bss') || id.includes('vgctimer')) {
+export function timerSettingsForFormat(format: string, rules?: readonly string[]): TimerSettings {
+  const [baseFormat, inlineRules] = format.split('@@@');
+  const allRules = [
+    ...(inlineRules ? inlineRules.split(',') : []),
+    ...(rules ?? []),
+  ];
+  let explicitVgcTimer: boolean | undefined;
+  for (const rawRule of allRules) {
+    const trimmed = rawRule.trim();
+    if (!trimmed) continue;
+    const negated = trimmed.startsWith('!');
+    if (toID(trimmed) === 'vgctimer') explicitVgcTimer = !negated;
+  }
+  const baseId = toID(baseFormat);
+  const isVgc = explicitVgcTimer ?? (baseId.includes('vgc') || baseId.includes('bss'));
+  if (isVgc) {
     return {
       startingSeconds: VGC_STARTING_BANK_SECONDS,
       graceSeconds: VGC_GRACE_SECONDS,
@@ -64,7 +77,7 @@ export function timerSettingsForFormat(format: string): TimerSettings {
       accelerate: false,
     };
   }
-  const addPerTurnSeconds = id.includes('doubles')
+  const addPerTurnSeconds = baseId.includes('doubles') || baseId.includes('vgc')
     ? DOUBLES_INCREMENT_SECONDS
     : SINGLES_INCREMENT_SECONDS;
   return {
@@ -79,8 +92,8 @@ export function timerSettingsForFormat(format: string): TimerSettings {
   };
 }
 
-export function turnIncrementSeconds(format: string): number {
-  return timerSettingsForFormat(format).addPerTurnSeconds;
+export function turnIncrementSeconds(format: string, rules?: readonly string[]): number {
+  return timerSettingsForFormat(format, rules).addPerTurnSeconds;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -2220,7 +2233,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       const maxTables = Math.min(64, Math.max(tournament.parallelTables, tableNum));
       let existing = broadcastsByTournament.get(tournament.id);
       if (!existing) {
-        const defaultInc = turnIncrementSeconds(tournament.format);
+        const defaultInc = turnIncrementSeconds(tournament.format, tournament.rules);
         existing = normalizeLiveBroadcast(
           {
             tournamentId: tournament.id,

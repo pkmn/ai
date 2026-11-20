@@ -3086,4 +3086,30 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('tournament page pauses VGC bank countdown during Team Preview', async () => {
+    db.upsertTournament({
+      id: '32',
+      name: 'VGC Preview Clock Test',
+      format: 'gen9doublesou',
+      version: '0.11.0',
+      rulesJson: JSON.stringify(['VGC Timer']),
+      team: 'pools',
+      gamesPerMatchup: 2,
+      parallelTables: 1,
+      hardware: 'Isolated GCP L4 VMs',
+      status: 'running',
+      startsAt: NOW - 60,
+    });
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/arena/tournaments/32/');
+      expect(html).toContain('<tt>420s</tt> Your Time (<tt>90s</tt> preview, <tt>55s/turn</tt>)');
+      expect(html).toMatch(/isVgcTimer:(?:true|!0)\b/);
+      expect(html).toMatch(/\.isVgcTimer\b/);
+      expect(html).toMatch(/void 0===\w+\|\|0===\w+/);
+    } finally {
+      await h.close();
+    }
+  });
 });

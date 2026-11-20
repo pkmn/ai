@@ -765,7 +765,7 @@ function renderBroadcastSectionHtml(
 
   const p1Clock = selected?.p1 ?? norm?.p1;
   const p2Clock = selected?.p2 ?? norm?.p2;
-  const timer = arena.timerSettingsForFormat(tournament.format);
+  const timer = arena.timerSettingsForFormat(tournament.format, tournament.rules);
   const isLive = selected
     ? (!selected.idle && selected.live !== false)
     : Boolean(norm && norm.live !== false);
@@ -1767,6 +1767,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     const gamesPerMatchup = Number(pageInit.gamesPerMatchup) || 1;
     const startingBankSeconds = Number(pageInit.startingBankSeconds) || 150;
     const maxTurnSeconds = Number(pageInit.maxTurnSeconds) || 150;
+    const isVgcTimer = Boolean(pageInit.isVgcTimer);
     const agentLinks = pageInit.agentLinks || {};
     let status = pageInit.status || 'scheduled';
     let hasSuperfinal = Boolean(pageInit.hasSuperfinal);
@@ -1959,6 +1960,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         return;
       }
       const turn = parseLatestTurn(tb.lines);
+      const pauseBank = isVgcTimer && (turn === undefined || turn === 0);
       const lineCount = Array.isArray(tb.lines) ? tb.lines.length : 0;
       const prev = clockStateByTable.get(tb.table);
       const sameDecision = Boolean(
@@ -1974,8 +1976,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         game: tb.game || 1,
         turn,
         lineCount,
-        p1: syncSideClock(prev && prev.p1, tb.p1, sameDecision, nowMillis),
-        p2: syncSideClock(prev && prev.p2, tb.p2, sameDecision, nowMillis),
+        p1: pauseBank ? undefined : syncSideClock(prev && prev.p1, tb.p1, sameDecision, nowMillis),
+        p2: pauseBank ? undefined : syncSideClock(prev && prev.p2, tb.p2, sameDecision, nowMillis),
       });
     };
 
@@ -3019,7 +3021,7 @@ export function renderTournamentPage(opts: {
   const n = entrants.length;
   const rrTotal = n >= 2 ? ((n * (n - 1)) / 2) * t.gamesPerMatchup : 0;
   const fmtTitle = render.FORMAT_TITLES[t.format] ?? t.format;
-  const timer = arena.timerSettingsForFormat(t.format);
+  const timer = arena.timerSettingsForFormat(t.format, t.rules);
   const rrUnit = isMultiGame ? `Bo${t.bestOf} matches` : 'games';
   const sfSuffix = hasSf
     ? (isMultiGame ? ' + 100-match Superfinal' : ' + 100-game Superfinal')
@@ -3084,6 +3086,7 @@ export function renderTournamentPage(opts: {
     gamesPerMatchup: t.gamesPerMatchup,
     startingBankSeconds: timer.startingSeconds,
     maxTurnSeconds: timer.maxPerTurnSeconds,
+    isVgcTimer: timer.timeoutAutoChoose,
     status: t.status,
     hasSuperfinal: hasSf,
     selectedTable: broadcastRes.selectedTable ?? 1,

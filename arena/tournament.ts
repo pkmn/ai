@@ -1784,7 +1784,8 @@ export interface Options {
   ) => AgentSpec;
 }
 
-const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'timeout', 'invalid-choice']);
+const TOURNAMENT_FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
+const TOURNAMENT_INFRA_VOID_REASONS = new Set(['arbiter-stall', 'sim-error', 'arena-error']);
 
 // GCP-side Tournament Coordinator:
 //   1. `processPendingSubmissions` pulls & smoke-tests `linux/amd64` tournament OCI submissions on
@@ -1896,6 +1897,7 @@ export class Coordinator {
       let maxInitMillis = 1;
       let maxTeamPreviewMillis: number | undefined;
       let maxTurnMillis = 1;
+      let maxPeakRam = 0;
       let smokeError: string | undefined;
 
       for (const tid of sub.tournaments) {
@@ -1936,10 +1938,19 @@ export class Coordinator {
           maxTurnSeconds: 60,
         });
         const res = await smokeGame.run();
-        const p1Faulted =
+        if (
           res.winner === 'preempted' ||
-          (TOURNAMENT_FAULT_REASONS.has(res.endReason) && res.winner === 'p2');
-        if (p1Faulted) {
+          TOURNAMENT_INFRA_VOID_REASONS.has(res.endReason) ||
+          (TOURNAMENT_FAULT_REASONS.has(res.endReason) && res.winner === 'p1')
+        ) {
+          throw new Error(
+            `GCP smoke test baseline/infrastructure fault in ${format}: ${res.endReason}`
+          );
+        }
+        if (
+          TOURNAMENT_FAULT_REASONS.has(res.endReason) &&
+          (res.winner === 'p2' || res.winner === 'tie')
+        ) {
           smokeError = `GCP smoke test failed in ${format}: ${res.endReason}`;
           break;
         }
@@ -1951,6 +1962,7 @@ export class Coordinator {
           maxTeamPreviewMillis = res.p1.teamPreviewMillis;
         }
         if (res.p1.meanTurnMillis > maxTurnMillis) maxTurnMillis = res.p1.meanTurnMillis;
+        if (res.p1.peakRam > maxPeakRam) maxPeakRam = res.p1.peakRam;
       }
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStart);
@@ -1969,6 +1981,7 @@ export class Coordinator {
         smokeStatus: 'passed',
         unpackedBytes,
         smokeDurationMillis,
+        ...(maxPeakRam > 0 ? {smokePeakRam: maxPeakRam} : {}),
         smokeInitMillis: maxInitMillis,
         ...(maxTeamPreviewMillis !== undefined
           ? {smokeTeamPreviewMillis: maxTeamPreviewMillis}
@@ -2045,7 +2058,11 @@ export class Coordinator {
 
     const entrantByVersion = new Map(state.entrants.map(e => [e.versionId, e]));
     const versionIds = state.entrants.map(e => e.versionId);
-    const timerSettings = await sim.getTimerSettings(tourney.format, tourney.version);
+    const matchFormat = tourney.customRules.length > 0
+      ? `${tourney.format}${tourney.format.includes('@@@') ? ',' : '@@@'}` +
+        `${tourney.customRules.join(',')}`
+      : tourney.format;
+    const timerSettings = await sim.getTimerSettings(matchFormat, tourney.version);
     const incSeconds = timerSettings.addPerTurnSeconds;
     const rrPairs = Math.ceil(tourney.gamesPerMatchup / 2);
     const sfPairs = Math.ceil(Math.max(0, this.superfinalGames) / 2);
@@ -2228,10 +2245,6 @@ export class Coordinator {
           }).catch(() => undefined);
         };
 
-        const matchFormat = tourney.customRules.length > 0
-          ? `${tourney.format}${tourney.format.includes('@@@') ? ',' : '@@@'}` +
-            `${tourney.customRules.join(',')}`
-          : tourney.format;
         const game = new ConcurrentGame({
           format: matchFormat,
           version: tourney.version,
