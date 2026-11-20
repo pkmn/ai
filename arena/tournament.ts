@@ -2001,18 +2001,25 @@ export class Coordinator {
     return `sodium,${hex}`;
   }
 
-  private async completeGameWithRetry(
+  async completeGameWithRetry(
     tournamentId: string,
     payload: arena.TournamentGameCompletePayload
   ): Promise<arena.TournamentGameCompleteResponse> {
     let lastErr: unknown;
+    let currentPayload = payload;
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        return await this.client.completeTournamentGame(tournamentId, payload);
+        return await this.client.completeTournamentGame(tournamentId, currentPayload);
       } catch (err) {
         lastErr = err;
         const status = (err as {status?: unknown} | undefined)?.status;
-        if (status === 400 || status === 404 || status === 422) {
+        if (status === 413 && currentPayload.logs !== undefined) {
+          // Retry once with oversized replay logs stripped so authoritative match standings are
+          // never lost when a long Best-of-N series exceeds a server or proxy payload cap.
+          currentPayload = {...currentPayload, logs: undefined};
+          continue;
+        }
+        if (status === 400 || status === 404 || status === 413 || status === 422) {
           throw err;
         }
         await new Promise(r => setTimeout(r, 250 * 2 ** attempt));

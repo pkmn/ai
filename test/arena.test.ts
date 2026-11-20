@@ -4397,6 +4397,59 @@ describe('arena infrastructure', () => {
         fs.rmSync(customSimDir, {recursive: true, force: true});
       }
     });
+
+    test('completeGameWithRetry strips logs on 413 Payload Too Large', async () => {
+      const received: serverArena.TournamentGameCompletePayload[] = [];
+      const fakeClient = {
+        completeTournamentGame: (
+          _id: string,
+          payload: serverArena.TournamentGameCompletePayload
+        ) => {
+          received.push(payload);
+          if (payload.logs !== undefined) {
+            return Promise.reject(Object.assign(new Error('Payload Too Large'), {status: 413}));
+          }
+          return Promise.resolve({ok: true, duplicate: false, completedGames: 1});
+        },
+      } as unknown as serverArena.Client;
+      const tourCoord = new tournament.Coordinator({
+        client: fakeClient,
+        baselineSpec: {
+          agentId: '_baseline',
+          displayName: 'Baseline',
+          vmHost: '127.0.0.1',
+          controlSocket: '',
+          localCommand: process.execPath,
+          localArgs: [defaultAgentScript],
+        },
+      });
+      const res = await tourCoord.completeGameWithRetry('1', {
+        game: {
+          id: 'tour1-g0001',
+          stage: 'Round Robin',
+          cycle: 1,
+          matchupGame: 1,
+          outcome: 'W',
+          p1: {versionId: 1},
+          p2: {versionId: 2},
+          games: [{
+            gameNumber: 1,
+            seed: '1,2,3,4',
+            outcome: 'W',
+            turns: 5,
+            endReason: 'win',
+            p1: {bankSeconds: 140, meanTurnMillis: 100, peakRam: 128},
+            p2: {bankSeconds: 140, meanTurnMillis: 100, peakRam: 128},
+          }],
+          completedAt: 1_760_000_000,
+        },
+        logs: ['|turn|1\n'],
+      });
+      expect(res.ok).toBe(true);
+      expect(received).toHaveLength(2);
+      expect(received[0].logs).toEqual(['|turn|1\n']);
+      expect(received[1].logs).toBeUndefined();
+    });
   });
 
   describe('Darwin sandbox enforcement', () => {

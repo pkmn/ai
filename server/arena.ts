@@ -84,6 +84,8 @@ export function turnIncrementSeconds(format: string): number {
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_MATCH_COMPLETE_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_GAME_COMPLETE_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const RECENT_MATCHES_LIMIT = 25;
 
@@ -1461,8 +1463,12 @@ function broadcastSseFrame(
   }
 }
 
-async function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
-  const raw = await readBody(req, MAX_BODY_BYTES, 'Request body exceeds 1 MB limit.');
+async function readJsonBody<T>(
+  req: http.IncomingMessage,
+  maxBytes = MAX_BODY_BYTES
+): Promise<T> {
+  const limitMiB = Math.max(1, Math.round(maxBytes / (1024 * 1024)));
+  const raw = await readBody(req, maxBytes, `Request body exceeds ${limitMiB} MiB limit.`);
   try {
     return (raw ? JSON.parse(raw) : {}) as T;
   } catch {
@@ -2061,7 +2067,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     if (!authenticateArena(req, res)) return;
 
     try {
-      const body = await readJsonBody<MatchCompletePayload>(req);
+      const body = await readJsonBody<MatchCompletePayload>(req, MAX_MATCH_COMPLETE_BODY_BYTES);
       const match = body.match;
       if (!match?.id || !match.ladderId) {
         sendJson(res, 400, {error: 'Invalid match payload.'});
@@ -2374,7 +2380,10 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
 
     try {
-      const body = await readJsonBody<TournamentGameCompletePayload>(req);
+      const body = await readJsonBody<TournamentGameCompletePayload>(
+        req,
+        MAX_GAME_COMPLETE_BODY_BYTES
+      );
       const game: db.CompletedTournamentGamePayload = {
         ...body.game,
         tournamentId: tournament.id,

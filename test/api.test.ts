@@ -2984,4 +2984,81 @@ describe('createServerApp production HTTP hardening', () => {
       await srv.close();
     }
   });
+
+  test('accepts multi-game tournament game-complete payloads exceeding 1 MiB', async () => {
+    const a1 = db.getAgentBySlug('0-error')!;
+    const a2 = db.getAgentBySlug('foul-play')!;
+    const v1 = db.createSubmission({
+      agentId: a1.id,
+      version: '1.0.0',
+      package: 'oci',
+      url: 'ghcr.io/pkmn/a:1',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_000,
+    });
+    const v2 = db.createSubmission({
+      agentId: a2.id,
+      version: '1.0.0',
+      package: 'oci',
+      url: 'ghcr.io/pkmn/b:1',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_000,
+    });
+    db.upsertTournament({
+      id: '3',
+      name: 'Bo3 Tour',
+      format: 'gen9ou@@@Best of = 3',
+      version: '0.11.0',
+      startsAt: 1_760_000_000,
+      status: 'running',
+      gamesPerMatchup: 2,
+      parallelTables: 1,
+      hardware: 'L4',
+    });
+    db.upsertTournamentEntrant({tournamentId: '3', agentId: a1.id, versionId: v1.id, seed: 1});
+    db.upsertTournamentEntrant({tournamentId: '3', agentId: a2.id, versionId: v2.id, seed: 2});
+    const app = polka();
+    const ctrl = arena.register(app, {db, arenaSecret: ARENA_SECRET, publicDir: tmpDir});
+    const srv = await startTestServer(app);
+    try {
+      const logChunk = `${'|turn|1\n'.repeat(50_000)}`; // ~400 KiB each -> ~1.2 MiB total
+      const res = await apiJson(
+        srv.baseUrl,
+        'POST',
+        '/api/arena/tournaments/3/game-complete',
+        ARENA_SECRET,
+        {
+          game: {
+            id: 'tour3-g0001',
+            stage: 'Round Robin',
+            cycle: 1,
+            matchupGame: 1,
+            outcome: 'W',
+            p1: {versionId: v1.id},
+            p2: {versionId: v2.id},
+            games: [1, 2, 3].map(gameNumber => ({
+              gameNumber,
+              seed: `1,2,3,${gameNumber}`,
+              outcome: gameNumber === 2 ? 'L' : 'W',
+              turns: 20,
+              endReason: 'win',
+              p1: {bankSeconds: 120, meanTurnMillis: 100, peakRam: 128},
+              p2: {bankSeconds: 120, meanTurnMillis: 100, peakRam: 128},
+            })),
+            completedAt: 1_760_000_100,
+          },
+          logs: [logChunk, logChunk, logChunk],
+        }
+      );
+      expect(res.status).toBe(200);
+      expect(
+        fs.existsSync(path.join(tmpDir, 'arena', 'tournaments', '3', 'tour3-g0001-g3.log'))
+      ).toBe(true);
+    } finally {
+      ctrl.close();
+      await srv.close();
+    }
+  });
 });
