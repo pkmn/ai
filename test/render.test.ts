@@ -3040,4 +3040,50 @@ describe('JSON route parity & retired pool archives', () => {
       await h.close();
     }
   });
+
+  test('marks upcoming ladder entrant rows with data-active for pagination', async () => {
+    const meta = db.getAgentBySlug('metamon')!;
+    const sub = db.createSubmission({
+      agentId: meta.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/meta-1.tar.zst',
+      sha256: 'c'.repeat(64),
+      ladderIds: ['gen3ou20261109'],
+      now: DAY_1,
+    });
+    db.applySubmissionStatus({
+      versionId: sub.id,
+      smokeStatus: 'passed',
+      now: DAY_1 + 60,
+    });
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/arena/ladders/adv/');
+      expect(html).toContain('data-active="true"');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('recreates stripped reign tbody inside .table-wrap.reign on profile pages', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/projects/foul-play/');
+      expect(html).toContain('.table-wrap.reign');
+      expect(html).toContain('createElement("tbody")');
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('guards profile hash lookups with hasOwnProperty', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/projects/foul-play/');
+      expect(html).toContain('hasOwnProperty');
+    } finally {
+      await h.close();
+    }
+  });
 });

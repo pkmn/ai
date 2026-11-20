@@ -1098,8 +1098,19 @@ function buildProfileScript(
     const verPicker = document.getElementById('ver-picker');
     const verSep = document.getElementById('ver-sep');
     const oppSelect = document.getElementById('opp-select');
-    const reignTbody = document.getElementById('reign-tbody');
-    const reignWrap = reignTbody ? reignTbody.closest('.reign') : null;
+    const reignWrap = document.querySelector('.table-wrap.reign');
+    let reignTbody = document.getElementById('reign-tbody');
+    const ensureReignTbody = () => {
+      if (reignTbody) return reignTbody;
+      const tbl = reignWrap ? reignWrap.querySelector('table') : null;
+      if (!tbl) return null;
+      const tb = document.createElement('tbody');
+      tb.id = 'reign-tbody';
+      tbl.appendChild(tb);
+      reignTbody = tb;
+      return tb;
+    };
+    const hasOwn = Object.prototype.hasOwnProperty;
     const matchupsSec = document.getElementById('matchups');
     const matchesSec = document.getElementById('matches');
     const panes = document.querySelectorAll('.profile-pane');
@@ -1380,8 +1391,9 @@ function buildProfileScript(
       const reignHtml = ladData.reign
         ? (ladData.reign[curVer] !== undefined ? ladData.reign[curVer] : (ladData.reign.all || ''))
         : '';
-      if (reignTbody) {
-        reignTbody.innerHTML = reignHtml;
+      const tbody = reignHtml ? ensureReignTbody() : reignTbody;
+      if (tbody) {
+        tbody.innerHTML = reignHtml;
       }
       if (reignWrap) {
         reignWrap.classList.toggle('hide', !reignHtml);
@@ -1395,6 +1407,7 @@ function buildProfileScript(
     };
 
     const applyLadder = ladKey => {
+      if (!hasOwn.call(profileData, ladKey)) return;
       const ladData = profileData[ladKey];
       if (!ladData) return;
       curLad = ladKey;
@@ -1447,8 +1460,13 @@ function buildProfileScript(
 
     const applyHash = () => {
       if (!location.hash) return;
-      const hashKey = decodeURIComponent(location.hash.slice(1)).toLowerCase();
-      if (profileData[hashKey]) {
+      let hashKey = '';
+      try {
+        hashKey = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+      } catch {
+        return;
+      }
+      if (hasOwn.call(profileData, hashKey)) {
         applyLadder(hashKey);
       }
     };

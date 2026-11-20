@@ -78,7 +78,9 @@ const LADDER_SCRIPT = `
         pager.classList.toggle('hide', totalPages <= 1);
         prevBtn.disabled = page <= 1;
         nextBtn.disabled = page >= totalPages;
-        const word = total === 1 ? 'entry' : 'entries';
+        const word = total === 1
+          ? (pager.dataset.singular || 'entry')
+          : (pager.dataset.plural || 'entries');
         infoEl.textContent =
           'Page ' + page + ' of ' + totalPages +
           ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
@@ -2177,7 +2179,10 @@ function renderSingleLadderArtifact(opts: {
               {activeEntrants.map((e, idx) => {
                 const href = resolveAgentHref(links, e.agentSlug, e.agentName);
                 return (
-                  <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                  <tr
+                    data-active='true'
+                    className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}
+                  >
                     <td><strong>{idx + 1}</strong></td>
                     <td>
                       {renderAgentLink(e.agentName, href, true)} <code>{e.version}</code>
