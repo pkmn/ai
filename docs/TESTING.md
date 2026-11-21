@@ -80,7 +80,7 @@ Whenever modifying TSX views (`static/*.tsx`, `server/*.tsx`), stylesheets (`sta
 layouts, or client scripts, run [`tools/shots.tsx`](../tools/shots.tsx):
 
 ```sh
-# Render all 96 states across 4 viewports x 2 color schemes and generate .shots/index.html
+# Render all 95 states across 4 viewports x 2 color schemes and generate .shots/index.html
 npm run build
 npm run shots
 
@@ -124,7 +124,7 @@ views, `c` to toggle the `Changed Only` filter, and `d` to cycle `After` / `3-Up
 
 When a `.shots/baseline/` snapshot exists:
 - `.shots/index.html` highlights every state, section, viewport, and theme that changed vs
-  baseline (`Δ N of 96 states changed`), provides one-click slot chips for every changed
+  baseline (`Δ N of 95 states changed`), provides one-click slot chips for every changed
   `(viewport, theme)` combination on a state, and lets you switch inline between `After`,
   `Before`, `Diff`, and `3-Up Diff` (`Before | After | Pixel Diff`).
 - `regions.json` (in `.shots/` and `.shots/baseline/`) records the exact bounding boxes of any
@@ -170,7 +170,7 @@ The 7 sections cover:
    broadcasting, and offline graceful degradation with the battle-log fallback viewer and species
    code badges), scheduled Tournament `#3` with registered entrants, and scheduled tournament with
    0 entrants.
-6. **Account (`account`):** Unregistered GitHub user (`403`), disabled project (`403`), `Pending`
+6. **Account (`account`):** Disabled project (`403`), `Pending`
    qualification (both locked and with Tournament `#3` OCI open), `Qualified` pre-launch, `Eligible`
    new competitor (`0` submissions), VGC incremental team validation (`0 / 20` panel, partial save +
    red rejections for `< 1.30` 1-NN duplicate and `< 4` moves, `10 / 20` partial save, and `20 / 20`
@@ -239,8 +239,8 @@ normal window and an Incognito window side-by-side at any onboarding stage:
 - **Unauthenticated visitor** (public spectator views; `/account` and developer wiki pages redirect
   to login):
   `http://localhost:1234/auth/dev?clear=1&return_to=/arena`
-- **Unregistered GitHub user** (generic `403` page on `/account`; blocked from developer wiki pages
-  and editing):
+- **Unregistered GitHub user** (redirects `/account` to the GitHub registration issue; `403` on
+  developer wiki pages and editing):
   `http://localhost:1234/auth/dev?github=stranger&return_to=/account`
 - **Stage 1 — `Pending` (`qualified: false`, Discord unlinked) — `AsterAI`:**
   `http://localhost:1234/auth/dev?github=asterdev&return_to=/account`

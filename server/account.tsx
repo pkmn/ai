@@ -10,7 +10,7 @@ import type * as db from '../db';
 import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import * as util from '../static/util';
 
-import {Auth, isCrossSiteRequest} from './auth';
+import {Auth, REGISTER_ISSUE_URL, isCrossSiteRequest} from './auth';
 import * as serverTeams from './teams';
 
 export function deducePackageFormat(url: string): db.PackageFormat {
@@ -1233,6 +1233,8 @@ export function register(app: polka.Polka, options: Options) {
         sendJson(res, 403, {
           error: `GitHub account "${login}" is not registered to an approved Arena project.`,
         });
+      } else if (!developer || !agent) {
+        redirect(res, REGISTER_ISSUE_URL);
       } else {
         sendHtml(res, 403, renderErrorPage(403, liveTournament));
       }

@@ -11,6 +11,7 @@ export const SESSION_COOKIE = 'pkmn_session';
 export const STATE_COOKIE = 'pkmn_oauth_state';
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const STATE_TTL_SECONDS = 10 * 60;
+export const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 
@@ -126,6 +127,11 @@ export function serializeCookie(name: string, value: string, maxAgeSeconds: numb
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   const encoded = value ? encodeURIComponent(value) : '';
   return `${name}=${encoded}; HttpOnly; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secure}`;
+}
+
+function isAccountReturnTo(returnTo: string): boolean {
+  const pathname = sanitizeReturnTo(returnTo, '/').split(/[?#]/, 1)[0];
+  return pathname === '/account' || pathname === '/account/';
 }
 
 export function sanitizeReturnTo(raw: unknown, fallback = '/'): string {
@@ -497,10 +503,15 @@ export class Auth {
         const byId = this.db?.getDeveloperByGitHubId(githubId);
         const login = byId?.githubLogin ?? userData.login;
         const byLogin = this.db?.getDeveloperByGitHub(login);
-        if (
-          !this.isAuthorizedGitHub(login) ||
-          (byLogin?.githubId !== undefined && byLogin.githubId !== githubId)
-        ) {
+        const isSquatter = byLogin?.githubId !== undefined && byLogin.githubId !== githubId;
+        if (!this.isAuthorizedGitHub(login) || isSquatter) {
+          // Send unregistered visitors who clicked `/account/` straight to the GitHub project
+          // registration issue, while keeping generic 403s for blocked/disabled registered
+          // developers, handle squatters, and non-account routes (`/wiki/*`).
+          if (!byId && !byLogin && !isSquatter && isAccountReturnTo(saved.returnTo)) {
+            redirect(res, REGISTER_ISSUE_URL, 302, [clearState]);
+            return;
+          }
           sendError(res, 403, [clearState]);
           return;
         }

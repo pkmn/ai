@@ -1244,14 +1244,6 @@ export function buildScenarios(wikiSha: string): Scenario[] {
     // 6. Account
     // =========================================================================
     {
-      name: 'account-unregistered',
-      section: 'account',
-      title: '403 Unregistered',
-      path: '/account/',
-      githubUser: 'stranger',
-      expectHttpError: 403,
-    },
-    {
       name: 'account-disabled',
       section: 'account',
       title: '403 Disabled',

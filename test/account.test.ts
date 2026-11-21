@@ -313,12 +313,59 @@ describe('account routes', () => {
       expect(unauth.headers.get('location')).toBe('/auth/github?return_to=%2Faccount%2F');
     });
 
-    test('rejects unregistered GitHub users on /account with 403', async () => {
+    test('redirects unregistered GitHub users on /account to the registration issue', async () => {
       const stranger = await realFetch(`${baseUrl}/account`, {
         headers: {Cookie: cookieFor('stranger')},
+        redirect: 'manual',
       });
-      expect(stranger.status).toBe(403);
-      const html = await stranger.text();
+      expect(stranger.status).toBe(302);
+      expect(stranger.headers.get('location')).toBe(auth.REGISTER_ISSUE_URL);
+    });
+
+    test('rejects disabled projects on /account with 403', async () => {
+      db.db.prepare("UPDATE agents SET status = 'disabled' WHERE slug = '0-error'").run();
+      const disabled = await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+        redirect: 'manual',
+      });
+      expect(disabled.status).toBe(403);
+      const html = await disabled.text();
+      expect(html).toContain('<h2>403</h2>');
+      expect(html).toContain('<p>Forbidden</p>');
+    });
+
+    test('rejects disabled projects on /auth/github/callback with 403', async () => {
+      db.db.prepare("UPDATE agents SET status = 'disabled' WHERE slug = '0-error'").run();
+      const startRes = await realFetch(`${baseUrl}/auth/github?return_to=%2Faccount%2F`, {
+        redirect: 'manual',
+      });
+      expect(startRes.status).toBe(302);
+      const state = new URL(startRes.headers.get('location')!).searchParams.get('state')!;
+      const rawCookie = startRes.headers.get('set-cookie')!;
+      const stateCookie = rawCookie.split(';')[0];
+
+      globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        if (url === 'https://github.com/login/oauth/access_token') {
+          return new Response(JSON.stringify({access_token: 'gho_123'}), {status: 200});
+        }
+        if (url === 'https://api.github.com/user') {
+          return new Response(JSON.stringify({id: 105440, login: 'pre'}), {status: 200});
+        }
+        return realFetch(input, init);
+      };
+
+      const cb = await realFetch(
+        `${baseUrl}/auth/github/callback?code=c1&state=${encodeURIComponent(state)}`,
+        {
+          headers: {Cookie: stateCookie},
+          redirect: 'manual',
+        }
+      );
+      expect(cb.status).toBe(403);
+      const html = await cb.text();
       expect(html).toContain('<h2>403</h2>');
       expect(html).toContain('<p>Forbidden</p>');
     });

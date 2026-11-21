@@ -224,8 +224,27 @@ describe('server/auth.ts routes', () => {
     expect(badState.status).toBe(400);
   });
 
-  test('rejects unregistered GitHub users with 403', async () => {
-    const {state, stateCookie} = await beginGitHubOAuth();
+  test('redirects unregistered GitHub OAuth callbacks for /account/ to the registration issue',
+    async () => {
+      const {state, stateCookie} = await beginGitHubOAuth('/account/');
+      mockGitHubUser({id: 99999, login: 'unregistered_user'});
+
+      const strangerCb = await realFetch(
+        `${baseUrl}/auth/github/callback?code=c1&state=${encodeURIComponent(state)}`,
+        {
+          headers: {Cookie: `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`},
+          redirect: 'manual',
+        }
+      );
+      expect(strangerCb.status).toBe(302);
+      expect(strangerCb.headers.get('location')).toBe(auth.REGISTER_ISSUE_URL);
+      const cookies = extractCookieMap(strangerCb);
+      expect(cookies[auth.STATE_COOKIE]).toBe('');
+      expect(cookies[auth.SESSION_COOKIE]).toBeUndefined();
+    });
+
+  test('rejects unregistered GitHub OAuth callbacks for /wiki/ with 403', async () => {
+    const {state, stateCookie} = await beginGitHubOAuth('/wiki/0_ERROR');
     mockGitHubUser({id: 99999, login: 'unregistered_user'});
 
     const strangerCb = await realFetch(
