@@ -920,6 +920,51 @@ describe('wiki server routes', () => {
     const html = await (await realFetch(`${baseUrl}/wiki/Public_Notes`, {headers})).text();
     expect(html).toContain('action="/auth/logout?return_to=%2Fwiki%2FPublic_Notes"');
   });
+
+  test('returns ETag with no-cache on public logged-out wiki page', async () => {
+    const res = await realFetch(`${baseUrl}/wiki`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-cache');
+    expect(res.headers.get('etag')).toMatch(/^"[0-9a-f]{40}"$/);
+  });
+
+  test('returns 304 Not Modified on public wiki page when If-None-Match matches', async () => {
+    const first = await realFetch(`${baseUrl}/wiki`);
+    const etag = first.headers.get('etag')!;
+    const second = await realFetch(`${baseUrl}/wiki`, {headers: {'If-None-Match': etag}});
+    expect(second.status).toBe(304);
+  });
+
+  test('returns private no-store without ETag on authenticated wiki page', async () => {
+    const res = await realFetch(`${baseUrl}/wiki`, {headers: {Cookie: sessionCookie('scheibo')}});
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(res.headers.get('etag')).toBeNull();
+  });
+
+  test('updates public wiki ETag immediately after saving an edit', async () => {
+    const first = await realFetch(`${baseUrl}/wiki`);
+    const etag1 = first.headers.get('etag')!;
+    await postWiki('index', 'scheibo', {
+      content: '# Updated Wiki Home\n\nFreshly saved body.',
+      message: 'Update wiki home',
+      action: 'save',
+    });
+    const second = await realFetch(`${baseUrl}/wiki`, {headers: {'If-None-Match': etag1}});
+    expect(second.status).toBe(200);
+    expect(second.headers.get('etag')).not.toBe(etag1);
+    expect(await second.text()).toContain('Freshly saved body.');
+  });
+
+  test('extracts plain title from heading containing inline markup on /wiki/pages', async () => {
+    await postWiki('markup_heading', 'scheibo', {
+      content: '# *Bold* `Code` Guide\n\nBody text.',
+      message: 'Add formatted heading',
+      action: 'save',
+    });
+    const pagesHtml = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
+    expect(pagesHtml).toContain('Bold Code Guide');
+  });
 });
 
 describe('wiki database standing checks', () => {

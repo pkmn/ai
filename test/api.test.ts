@@ -2093,6 +2093,64 @@ describe('GET /api/battles.json pagination', () => {
       fs.rmSync(vsDir, {recursive: true, force: true});
     }
   });
+
+  test('returns 304 Not Modified on /api/battles.json when If-None-Match matches', async () => {
+    const first = await fetch(`${srv.baseUrl}/api/battles.json?slot=rby&page=1`);
+    expect(first.status).toBe(200);
+    expect(first.headers.get('cache-control')).toBe('no-cache');
+    const etag = first.headers.get('etag')!;
+    expect(etag).toMatch(/^"[0-9a-f]{40}"$/);
+    const second = await fetch(`${srv.baseUrl}/api/battles.json?slot=rby&page=1`, {
+      headers: {'If-None-Match': etag},
+    });
+    expect(second.status).toBe(304);
+  });
+
+  test('invalidates /api/battles.json ETag after a new match completes', async () => {
+    const first = await fetch(`${srv.baseUrl}/api/battles.json?page=1&limit=2`);
+    const etag = first.headers.get('etag')!;
+    const fp = db.getAgentBySlug('foul-play')!;
+    const zero = db.getAgentBySlug('0-error')!;
+    const vFp = db.getVersionsForAgent(fp.id)[0];
+    const vZero = db.getVersionsForAgent(zero.id)[0];
+    db.recordCompletedMatch({
+      match: {
+        id: 'm-006-fresh',
+        ladderId: 'gen1ou20261109',
+        p1VersionId: vFp.id,
+        p2VersionId: vZero.id,
+        seed: '9,9,9,9',
+        game1Outcome: 'W',
+        game2Outcome: 'W',
+        category: 'WW',
+        game1Turns: 18,
+        game2Turns: 19,
+        game1EndReason: 'normal',
+        game2EndReason: 'normal',
+        p1Game1PeakRam: 900,
+        p1Game2PeakRam: 900,
+        p2Game1PeakRam: 950,
+        p2Game2PeakRam: 950,
+        p1Game1BankSeconds: 140,
+        p1Game2BankSeconds: 140,
+        p2Game1BankSeconds: 140,
+        p2Game2BankSeconds: 140,
+        p1Game1MeanTurnMillis: 250,
+        p1Game2MeanTurnMillis: 250,
+        p2Game1MeanTurnMillis: 250,
+        p2Game2MeanTurnMillis: 250,
+        completedAt: 1_700_000_200,
+      },
+    });
+    const second = await fetch(`${srv.baseUrl}/api/battles.json?page=1&limit=2`, {
+      headers: {'If-None-Match': etag},
+    });
+    expect(second.status).toBe(200);
+    expect(second.headers.get('etag')).not.toBe(etag);
+    const body = await second.json() as {total: number; matches: Array<{id: string}>};
+    expect(body.total).toBe(6);
+    expect(body.matches[0]?.id).toBe('m-006-fresh');
+  });
 });
 
 describe('harvested ladder teams API', () => {

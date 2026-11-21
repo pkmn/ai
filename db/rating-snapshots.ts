@@ -32,10 +32,59 @@ export interface LadderSnapshotHistoryRow {
 export function getRatingSnapshotsForLadder(
   db: DatabaseSync,
   ladderId: string,
-  agentId?: number
+  agentFilter?: number | number[]
 ): LadderSnapshotHistoryRow[] {
-  const agentFilter = agentId !== undefined ? 'AND av.agent_id = ?' : '';
-  const params: Array<string | number> = agentId !== undefined ? [ladderId, agentId] : [ladderId];
+  if (agentFilter !== undefined) {
+    const ids = Array.isArray(agentFilter) ? agentFilter : [agentFilter];
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const versions = db.prepare(`
+      SELECT av.id, av.agent_id, av.version, a.slug AS agent_slug, a.name AS agent_name
+      FROM agent_versions av
+      JOIN agents a ON a.id = av.agent_id
+      WHERE av.agent_id IN (${placeholders}) AND av.smoke_status = 'passed'
+      ORDER BY av.id ASC
+    `).all(...ids) as Array<{
+      id: number;
+      agent_id: number;
+      version: string;
+      agent_slug: string;
+      agent_name: string;
+    }>;
+    if (versions.length === 0) return [];
+    // Seek PK (ladder_id, version_id, day_utc) per version instead of scanning all ladder rows.
+    const stmt = db.prepare(`
+      SELECT day_utc, matches, elo, se, lcb, gxe, rank_current
+      FROM rating_snapshots
+      WHERE ladder_id = ? AND version_id = ?
+      ORDER BY day_utc ASC
+    `);
+    const out: LadderSnapshotHistoryRow[] = [];
+    for (const v of versions) {
+      const rows = stmt.all(ladderId, v.id) as Array<Record<string, unknown>>;
+      for (const r of rows) {
+        out.push({
+          ladderId,
+          versionId: v.id,
+          agentId: v.agent_id,
+          agentSlug: v.agent_slug,
+          agentName: v.agent_name,
+          version: v.version,
+          dayUtc: r.day_utc as string,
+          matches: r.matches as number,
+          elo: r.elo as number,
+          se: r.se as number,
+          lcb: r.lcb as number,
+          gxe: r.gxe as number,
+          rankCurrent: (r.rank_current as number | null) ?? undefined,
+        });
+      }
+    }
+    return out;
+  }
+
+  // Order by (version_id, day_utc) to follow PK (ladder_id, version_id, day_utc) without a temp
+  // B-tree sort; callers group by agent/version before plotting chronological series.
   const rows = db.prepare(`
     SELECT
       rs.ladder_id,
@@ -56,9 +105,8 @@ export function getRatingSnapshotsForLadder(
     JOIN agents a ON a.id = av.agent_id
     WHERE rs.ladder_id = ?
       AND av.smoke_status = 'passed'
-      ${agentFilter}
-    ORDER BY rs.day_utc ASC, rs.version_id ASC
-  `).all(...params) as Array<Record<string, unknown>>;
+    ORDER BY rs.version_id ASC, rs.day_utc ASC
+  `).all(ladderId) as Array<Record<string, unknown>>;
 
   return rows.map(r => ({
     ladderId: r.ladder_id as string,

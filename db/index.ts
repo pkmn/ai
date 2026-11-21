@@ -183,6 +183,7 @@ export class SqliteDatabase {
     if (options.readOnly) {
       this.db = new DatabaseSync(dbPath, {readOnly: true});
       this.db.exec('PRAGMA busy_timeout = 5000;');
+      this.db.exec('PRAGMA temp_store = MEMORY;');
       return;
     }
     if (dbPath !== ':memory:') {
@@ -199,8 +200,10 @@ export class SqliteDatabase {
     // alongside the live Node process within `busy_timeout = 5000` ms.
     if (dbPath !== ':memory:') {
       this.db.exec('PRAGMA journal_mode = WAL;');
+      this.db.exec('PRAGMA cache_size = -16000;');
     }
     this.db.exec('PRAGMA synchronous = NORMAL;');
+    this.db.exec('PRAGMA temp_store = MEMORY;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec('PRAGMA busy_timeout = 5000;');
     this.initializeSchema(defaultSchemaDir, defaultMigrationDir, options);
@@ -663,8 +666,12 @@ export class Database extends SqliteDatabase {
     return entries.getLadderVersionIdentities(this.db, ladderId);
   }
 
-  getLadderStateSignature(ladderId: string): string {
-    return entries.getLadderStateSignature(this.db, ladderId);
+  getVersionIdentitiesByIds(versionIds: number[]): entries.LadderVersionIdentity[] {
+    return entries.getVersionIdentitiesByIds(this.db, versionIds);
+  }
+
+  getLadderHubSummaries(): Map<string, entries.LadderHubSummary> {
+    return entries.getLadderHubSummaries(this.db);
   }
 
   getProjectArenaSummaries(): entries.ProjectArenaSummary[] {
@@ -679,11 +686,15 @@ export class Database extends SqliteDatabase {
     return pairs.getPairAggregatesForLadder(this.db, ladderId);
   }
 
+  getPairAggregatesForAgentOnLadder(ladderId: string, agentId: number): pairs.PairAggregateRow[] {
+    return pairs.getPairAggregatesForAgentOnLadder(this.db, ladderId, agentId);
+  }
+
   getRatingSnapshotsForLadder(
     ladderId: string,
-    agentId?: number
+    agentFilter?: number | number[]
   ): snapshots.LadderSnapshotHistoryRow[] {
-    return snapshots.getRatingSnapshotsForLadder(this.db, ladderId, agentId);
+    return snapshots.getRatingSnapshotsForLadder(this.db, ladderId, agentFilter);
   }
 
   getAllActiveAgents(): agents.AgentRow[] {

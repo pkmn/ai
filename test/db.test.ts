@@ -2600,4 +2600,200 @@ describe('tournament standings', () => {
       telDb.close();
     }
   });
+
+  test('getRecentMatchesForAgentOnLadder deduplicates self-play across versions', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      const vA2 = telDb.createSubmission({
+        agentId: alpha.id,
+        version: '2.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/alpha-v2.tar.zst',
+        sha256: 'c'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_000 + 15 * 86_400,
+      });
+      telDb.applySubmissionStatus({
+        versionId: vA2.id,
+        smokeStatus: 'passed',
+        now: 1_760_000_010 + 15 * 86_400,
+      });
+      const base = {
+        ladderId: 'gen1ou20261109',
+        seed: '1,2,3,4',
+        game1Outcome: 'W' as const,
+        game2Outcome: 'L' as const,
+        category: 'WL' as const,
+        game1Turns: 12,
+        game2Turns: 14,
+        game1EndReason: 'normal',
+        game2EndReason: 'normal',
+        p1Game1PeakRam: 100,
+        p1Game2PeakRam: 100,
+        p2Game1PeakRam: 100,
+        p2Game2PeakRam: 100,
+        p1Game1BankSeconds: 140,
+        p1Game2BankSeconds: 140,
+        p2Game1BankSeconds: 140,
+        p2Game2BankSeconds: 140,
+        p1Game1InitMillis: 500,
+        p1Game2InitMillis: 500,
+        p2Game1InitMillis: 500,
+        p2Game2InitMillis: 500,
+        p1Game1MeanTurnMillis: 50,
+        p1Game2MeanTurnMillis: 50,
+        p2Game1MeanTurnMillis: 50,
+        p2Game2MeanTurnMillis: 50,
+      };
+      telDb.recordCompletedMatch({
+        match: {...base, id: 'm-1', p1VersionId: vA.id, p2VersionId: vB.id, completedAt: 100},
+      });
+      telDb.recordCompletedMatch({
+        match: {...base, id: 'm-2', p1VersionId: vA.id, p2VersionId: vA2.id, completedAt: 200},
+      });
+      telDb.recordCompletedMatch({
+        match: {...base, id: 'm-3', p1VersionId: vB.id, p2VersionId: vA2.id, completedAt: 300},
+      });
+
+      const recent = telDb.getRecentMatchesForAgentOnLadder(alpha.id, 'gen1ou20261109', 10);
+      expect(recent.map(m => m.id)).toEqual(['m-3', 'm-2', 'm-1']);
+    } finally {
+      telDb.close();
+    }
+  });
+
+  test('getRatingSnapshotsForLadder filters by agentId in chronological order per version', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      const ins = telDb.db.prepare(`
+        INSERT INTO rating_snapshots (ladder_id, version_id, day_utc, matches, elo, se, lcb, gxe)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      ins.run('gen1ou20261109', vA.id, '2026-11-12', 12, 1620, 40, 1540, 62);
+      ins.run('gen1ou20261109', vA.id, '2026-11-10', 4, 1550, 60, 1430, 55);
+      ins.run('gen1ou20261109', vB.id, '2026-11-11', 8, 1480, 50, 1380, 48);
+
+      const alphaSnaps = telDb.getRatingSnapshotsForLadder('gen1ou20261109', alpha.id);
+      expect(alphaSnaps.map(s => `${s.versionId}:${s.dayUtc}`)).toEqual([
+        `${vA.id}:2026-11-10`,
+        `${vA.id}:2026-11-12`,
+      ]);
+    } finally {
+      telDb.close();
+    }
+  });
+
+  test('getRatingSnapshotsForLadder filters by multiple agent IDs', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      const beta = telDb.getAgentBySlug('beta')!;
+      const ins = telDb.db.prepare(`
+        INSERT INTO rating_snapshots (ladder_id, version_id, day_utc, matches, elo, se, lcb, gxe)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      ins.run('gen1ou20261109', vA.id, '2026-11-10', 4, 1550, 60, 1430, 55);
+      ins.run('gen1ou20261109', vB.id, '2026-11-11', 8, 1480, 50, 1380, 48);
+
+      const filtered = telDb.getRatingSnapshotsForLadder('gen1ou20261109', [alpha.id, beta.id]);
+      expect(filtered.map(s => `${s.agentId}:${s.dayUtc}`)).toEqual([
+        `${alpha.id}:2026-11-10`,
+        `${beta.id}:2026-11-11`,
+      ]);
+    } finally {
+      telDb.close();
+    }
+  });
+
+  test('getPairAggregatesForAgentOnLadder returns only pairs involving that agent', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      telDb.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      alpha: alpha.1
+- name: Beta
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      beta: beta.2
+- name: Gamma
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      gamma: gamma.3
+`, undefined, 1_760_000_000);
+      const gamma = telDb.getAgentBySlug('gamma')!;
+      const vG = telDb.createSubmission({
+        agentId: gamma.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/gamma.tar.zst',
+        sha256: 'd'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_010,
+      });
+      telDb.applySubmissionStatus({versionId: vG.id, smokeStatus: 'passed', now: 1_760_000_020});
+      const insPair = telDb.db.prepare(`
+        INSERT INTO pair_aggregates (
+          ladder_id, low_version_id, high_version_id, ww, wt, split, tl, ll
+        )
+        VALUES ('gen1ou20261109', ?, ?, 2, 0, 1, 0, 0)
+      `);
+      insPair.run(Math.min(vA.id, vB.id), Math.max(vA.id, vB.id));
+      insPair.run(Math.min(vB.id, vG.id), Math.max(vB.id, vG.id));
+
+      const alphaPairs = telDb.getPairAggregatesForAgentOnLadder('gen1ou20261109', alpha.id);
+      expect(alphaPairs).toHaveLength(1);
+      expect([alphaPairs[0].lowVersionId, alphaPairs[0].highVersionId]).toEqual([
+        Math.min(vA.id, vB.id),
+        Math.max(vA.id, vB.id),
+      ]);
+    } finally {
+      telDb.close();
+    }
+  });
+
+  test('getLadderHubSummaries computes entrant count, match count, plus #1 winner', () => {
+    const {telDb, vA, vB} = createTelemetryDb();
+    try {
+      telDb.db.prepare("UPDATE ladders SET status = 'active' WHERE id = 'gen1ou20261109'").run();
+      telDb.db.prepare(`
+        UPDATE ladder_entries
+        SET matches = 12, ww = 8, ll = 4, elo = 1640, se = 35,
+            lcb = 1571, gxe = 68.4, rank_current = 1
+        WHERE ladder_id = 'gen1ou20261109' AND version_id = ?
+      `).run(vA.id);
+      telDb.db.prepare(`
+        UPDATE ladder_entries
+        SET matches = 12, ww = 4, ll = 8, elo = 1360, se = 35,
+            lcb = 1291, gxe = 31.6, rank_current = 2
+        WHERE ladder_id = 'gen1ou20261109' AND version_id = ?
+      `).run(vB.id);
+
+      const summary = telDb.getLadderHubSummaries().get('gen1ou20261109');
+      expect(summary).toEqual({
+        entrantCount: 2,
+        matchCount: 12,
+        hasActiveEntries: true,
+        top1: {
+          slug: 'alpha',
+          name: 'Alpha',
+          version: '1.0.0',
+          elo: 1640,
+          ci95: 69,
+          gxe: 68.4,
+          wins: 8,
+          losses: 4,
+          ties: 0,
+        },
+      });
+    } finally {
+      telDb.close();
+    }
+  });
 });

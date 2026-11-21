@@ -132,30 +132,23 @@ export function updatePairAggregateLos(
   }
 }
 
-export function getPairAggregatesForLadder(
-  db: DatabaseSync,
-  ladderId: string
-): PairAggregateRow[] {
-  const rows = db.prepare(`
-    SELECT
-      ladder_id,
-      low_version_id,
-      high_version_id,
-      ww,
-      wt,
-      split,
-      tl,
-      ll,
-      current_streak,
-      low_max_win_streak,
-      high_max_win_streak,
-      low_los
-    FROM pair_aggregates
-    WHERE ladder_id = ?
-    ORDER BY low_version_id ASC, high_version_id ASC
-  `).all(ladderId) as Array<Record<string, unknown>>;
+const PAIR_AGGREGATE_COLS = `
+  ladder_id,
+  low_version_id,
+  high_version_id,
+  ww,
+  wt,
+  split,
+  tl,
+  ll,
+  current_streak,
+  low_max_win_streak,
+  high_max_win_streak,
+  low_los
+`;
 
-  return rows.map(r => ({
+function mapPairAggregateRow(r: Record<string, unknown>): PairAggregateRow {
+  return {
     ladderId: r.ladder_id as string,
     lowVersionId: r.low_version_id as number,
     highVersionId: r.high_version_id as number,
@@ -168,5 +161,58 @@ export function getPairAggregatesForLadder(
     lowMaxWinStreak: r.low_max_win_streak as number,
     highMaxWinStreak: r.high_max_win_streak as number,
     lowLos: (r.low_los as number | null) ?? undefined,
-  }));
+  };
+}
+
+export function getPairAggregatesForLadder(
+  db: DatabaseSync,
+  ladderId: string
+): PairAggregateRow[] {
+  const rows = db.prepare(`
+    SELECT ${PAIR_AGGREGATE_COLS}
+    FROM pair_aggregates
+    WHERE ladder_id = ?
+    ORDER BY low_version_id ASC, high_version_id ASC
+  `).all(ladderId) as Array<Record<string, unknown>>;
+
+  return rows.map(mapPairAggregateRow);
+}
+
+// Seeks PK (ladder_id, low_version_id, high_version_id) and idx_pair_aggregates_high_version per
+// version so profile pages stay O(N_opponents) instead of scanning all O(N^2) pairs on a ladder.
+export function getPairAggregatesForAgentOnLadder(
+  db: DatabaseSync,
+  ladderId: string,
+  agentId: number
+): PairAggregateRow[] {
+  const versions = db.prepare(
+    'SELECT id FROM agent_versions WHERE agent_id = ? ORDER BY id ASC'
+  ).all(agentId) as Array<{id: number}>;
+  if (versions.length === 0) return [];
+
+  const lowStmt = db.prepare(`
+    SELECT ${PAIR_AGGREGATE_COLS}
+    FROM pair_aggregates
+    WHERE ladder_id = ? AND low_version_id = ?
+  `);
+  const highStmt = db.prepare(`
+    SELECT ${PAIR_AGGREGATE_COLS}
+    FROM pair_aggregates
+    WHERE ladder_id = ? AND high_version_id = ?
+  `);
+
+  const byKey = new Map<string, PairAggregateRow>();
+  for (const v of versions) {
+    for (const r of lowStmt.all(ladderId, v.id) as Array<Record<string, unknown>>) {
+      const row = mapPairAggregateRow(r);
+      byKey.set(`${row.lowVersionId}:${row.highVersionId}`, row);
+    }
+    for (const r of highStmt.all(ladderId, v.id) as Array<Record<string, unknown>>) {
+      const row = mapPairAggregateRow(r);
+      byKey.set(`${row.lowVersionId}:${row.highVersionId}`, row);
+    }
+  }
+  return [...byKey.values()].sort(
+    (a, b) => a.lowVersionId - b.lowVersionId || a.highVersionId - b.highVersionId
+  );
 }

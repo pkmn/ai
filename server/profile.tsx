@@ -861,10 +861,9 @@ function renderRecentMatchesPane(opts: {
   agentSlug: string;
   ladderKey: string;
   isDefault: boolean;
-  matches: db.RecentMatchView[];
+  matches: arena.BattleHistoryEntry[];
   totalMatches: number;
   agentLinks: Readonly<Record<string, string>>;
-  publicDir: string;
   nowSec: number;
 }): util.Html {
   const {
@@ -874,7 +873,6 @@ function renderRecentMatchesPane(opts: {
     matches,
     totalMatches,
     agentLinks,
-    publicDir,
     nowSec,
   } = opts;
 
@@ -919,10 +917,7 @@ function renderRecentMatchesPane(opts: {
                 const oppHref = agentLinks[oppSide.slug];
                 const tsTitle = formatIsoDateTimeUtc(m.completedAt);
                 const rel = render.formatRelativeTime(nowSec, m.completedAt);
-                const detailHtml = render.battleInlineDetailHtml(
-                  arena.enrichMatchView(publicDir, m),
-                  agentSlug
-                );
+                const detailHtml = render.battleInlineDetailHtml(m, agentSlug);
                 const rowCls = idx >= util.TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
 
                 return (
@@ -1594,7 +1589,130 @@ export function resolveAgentLogo(
   };
 }
 
-export function renderAgentProfile(opts: {
+function computeLadderKeys(ladders: db.LadderRow[]): string[] {
+  const usedKeys = new Set<string>();
+  return ladders.map(l => {
+    const base = l.status !== 'archived' ? l.slot : l.id.toLowerCase();
+    const key = usedKeys.has(base) ? l.id.toLowerCase() : base;
+    usedKeys.add(key);
+    return key;
+  });
+}
+
+export function buildAgentProfileDocument(opts: {
+  db: db.Database;
+  agent: db.AgentRow;
+  links: render.AgentLinkContext;
+  avatarsDir?: string;
+}): AgentProfileDocument {
+  const {db, agent, links, avatarsDir = AVATARS_DIR} = opts;
+  const {publicDir, projectMeta} = links;
+  const ladders = db.getAgentParticipatedLadders(agent.id);
+  const logoHref = resolveAgentLogo(agent, avatarsDir)?.href;
+  const owners = db.getDevelopersForAgent(agent.id).map(d => ({
+    github: d.githubLogin,
+    smogon: d.smogonUsername,
+    smogonId: d.smogonId,
+  }));
+  const meta = projectMeta.get(agent.name);
+  const ladderKeys = computeLadderKeys(ladders);
+
+  const ladderJsonList = ladders.map((l, i) => {
+    const agentEntries = db.getAgentLadderProfileEntries(agent.id, l.id);
+    const familyStats = db.getAgentLadderStats(l.id, agent.id);
+    const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id)
+      .map(m => arena.enrichMatchView(publicDir, m));
+    const statsJson = familyStats
+      ? {
+        bestRank: familyStats.bestRank,
+        bestRankAt: familyStats.bestRankAt,
+        maxLcb: familyStats.maxLcb !== undefined ? Math.round(familyStats.maxLcb) : undefined,
+        maxElo: familyStats.maxElo !== undefined ? Math.round(familyStats.maxElo) : undefined,
+        maxEloSe: familyStats.maxEloSe !== undefined
+          ? Math.round(familyStats.maxEloSe * 10) / 10
+          : undefined,
+        maxEloAt: familyStats.maxEloAt,
+        maxGxe: familyStats.maxGxe !== undefined
+          ? Math.round(familyStats.maxGxe * 10) / 10
+          : undefined,
+        maxGxeAt: familyStats.maxGxeAt,
+        currentWinStreak: familyStats.currentWinStreak,
+        currentLossStreak: familyStats.currentLossStreak,
+        maxWinStreak: familyStats.maxWinStreak,
+        maxLossStreak: familyStats.maxLossStreak,
+        reign: {
+          top1: {
+            enteredAt: familyStats.top1EnteredAt,
+            maxStreakSeconds: familyStats.top1MaxStreakSeconds,
+            totalSeconds: familyStats.top1TotalSeconds,
+          },
+          top10: {
+            enteredAt: familyStats.top10EnteredAt,
+            maxStreakSeconds: familyStats.top10MaxStreakSeconds,
+            totalSeconds: familyStats.top10TotalSeconds,
+          },
+          top100: {
+            enteredAt: familyStats.top100EnteredAt,
+            maxStreakSeconds: familyStats.top100MaxStreakSeconds,
+            totalSeconds: familyStats.top100TotalSeconds,
+          },
+        },
+      }
+      : undefined;
+    return {
+      key: ladderKeys[i],
+      id: l.id,
+      slot: l.slot,
+      name: l.name,
+      format: l.format,
+      team: l.team,
+      status: l.status,
+      ...(statsJson ? {stats: statsJson} : {}),
+      versions: agentEntries.map(e => ({
+        version: e.version,
+        package: e.package,
+        role: e.role,
+        isAnchor: e.isAnchor,
+        elo: Math.round(e.elo),
+        se: Math.round(e.se * 10) / 10,
+        lcb: Math.round(e.lcb),
+        gxe: Math.round(e.gxe * 10) / 10,
+        rankCurrent: e.rankCurrent,
+        bestRank: e.bestRank,
+        maxElo: e.maxElo !== undefined ? Math.round(e.maxElo) : undefined,
+        matches: e.matches,
+        wins: e.ww + e.wt,
+        losses: e.ll + e.tl,
+        ties: e.split,
+        meanInitMillis: Math.round(e.meanInitMillis),
+        ...(e.meanTeamPreviewMillis !== undefined
+          ? {meanTeamPreviewMillis: Math.round(e.meanTeamPreviewMillis)}
+          : {}),
+        meanTurnMillis: Math.round(e.meanTurnMillis),
+        meanRam: Math.round(e.meanRam),
+        peakRam: Math.round(e.peakRam),
+        maxWinStreak: e.maxWinStreak,
+        maxLossStreak: e.maxLossStreak,
+        submittedAt: e.submittedAt,
+        settledAt: e.settledAt,
+        retiredAt: e.retiredAt,
+      })),
+      recentMatches,
+    };
+  });
+
+  return {
+    slug: agent.slug,
+    name: agent.name,
+    status: agent.status,
+    logoHref,
+    owners,
+    metadata: meta,
+    ladders: ladderJsonList,
+  };
+}
+
+export function renderAgentProfileHtml(opts: {
   db: db.Database;
   renderer: Renderer;
   agent: db.AgentRow;
@@ -1602,7 +1720,7 @@ export function renderAgentProfile(opts: {
   avatarsDir?: string;
   liveTournament?: {id: string; name: string};
   nowSec: number;
-}): {html: string; json: AgentProfileDocument} {
+}): string {
   const {
     db,
     renderer,
@@ -1621,11 +1739,6 @@ export function renderAgentProfile(opts: {
     ? <img className='project-logo' src={logoHref} alt={agent.name} />
     : undefined;
 
-  const owners = db.getDevelopersForAgent(agent.id).map(d => ({
-    github: d.githubLogin,
-    smogon: d.smogonUsername,
-    smogonId: d.smogonId,
-  }));
   const meta = projectMeta.get(agent.name);
   const siteLink = meta?.site ? (
     <a href={meta.site} className='subtle' title='Project Homepage'>
@@ -1747,11 +1860,9 @@ export function renderAgentProfile(opts: {
           </div>
           <p className='empty-state muted'>No completed matches yet.</p>
         </section>
-
-        <script>{buildProfileScript({}, '', agent.slug, {})}</script>
       </>
     );
-    const html = renderer.render({
+    return renderer.render({
       id: 'agent-profile',
       title: `${agent.name} | pkmn.ai`,
       header: profileHeader,
@@ -1759,22 +1870,9 @@ export function renderAgentProfile(opts: {
       style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
       content,
     });
-    return {
-      html,
-      json: {
-        slug: agent.slug,
-        name: agent.name,
-        status: agent.status,
-        logoHref,
-        owners,
-        metadata: meta,
-        ladders: [],
-      },
-    };
   }
 
   const profileDataMap: Record<string, LadderProfileClientData> = {};
-  const ladderJsonList: unknown[] = [];
   const formatNavParts: util.Child[] = [];
   const versionsPanes: util.Html[] = [];
   const matchupsPanes: util.Html[] = [];
@@ -1786,13 +1884,7 @@ export function renderAgentProfile(opts: {
   };
   registerAgentLink(agent.slug, agent.name);
 
-  const usedKeys = new Set<string>();
-  const ladderKeys = ladders.map(l => {
-    const base = l.status !== 'archived' ? l.slot : l.id.toLowerCase();
-    const key = usedKeys.has(base) ? l.id.toLowerCase() : base;
-    usedKeys.add(key);
-    return key;
-  });
+  const ladderKeys = computeLadderKeys(ladders);
 
   const defaultLadderKey = ladderKeys[0];
   let latestOverallEntry: db.AgentLadderProfileEntry | undefined;
@@ -1811,7 +1903,7 @@ export function renderAgentProfile(opts: {
     }
 
     const allEntries = db.getLeaderboardEntries(l.id);
-    const pairs = db.getPairAggregatesForLadder(l.id);
+    const pairs = db.getPairAggregatesForAgentOnLadder(l.id, agent.id);
     const snapshots = db.getRatingSnapshotsForLadder(l.id, agent.id);
     const familyStats = db.getAgentLadderStats(l.id, agent.id);
     const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id);
@@ -1825,84 +1917,7 @@ export function renderAgentProfile(opts: {
       registerAgentLink(m.p2.slug, m.p2.name);
     }
 
-    const statsJson = familyStats
-      ? {
-        bestRank: familyStats.bestRank,
-        bestRankAt: familyStats.bestRankAt,
-        maxLcb: familyStats.maxLcb !== undefined ? Math.round(familyStats.maxLcb) : undefined,
-        maxElo: familyStats.maxElo !== undefined ? Math.round(familyStats.maxElo) : undefined,
-        maxEloSe: familyStats.maxEloSe !== undefined
-          ? Math.round(familyStats.maxEloSe * 10) / 10
-          : undefined,
-        maxEloAt: familyStats.maxEloAt,
-        maxGxe: familyStats.maxGxe !== undefined
-          ? Math.round(familyStats.maxGxe * 10) / 10
-          : undefined,
-        maxGxeAt: familyStats.maxGxeAt,
-        currentWinStreak: familyStats.currentWinStreak,
-        currentLossStreak: familyStats.currentLossStreak,
-        maxWinStreak: familyStats.maxWinStreak,
-        maxLossStreak: familyStats.maxLossStreak,
-        reign: {
-          top1: {
-            enteredAt: familyStats.top1EnteredAt,
-            maxStreakSeconds: familyStats.top1MaxStreakSeconds,
-            totalSeconds: familyStats.top1TotalSeconds,
-          },
-          top10: {
-            enteredAt: familyStats.top10EnteredAt,
-            maxStreakSeconds: familyStats.top10MaxStreakSeconds,
-            totalSeconds: familyStats.top10TotalSeconds,
-          },
-          top100: {
-            enteredAt: familyStats.top100EnteredAt,
-            maxStreakSeconds: familyStats.top100MaxStreakSeconds,
-            totalSeconds: familyStats.top100TotalSeconds,
-          },
-        },
-      }
-      : undefined;
-
-    ladderJsonList.push({
-      key: lKey,
-      id: l.id,
-      slot: l.slot,
-      name: l.name,
-      format: l.format,
-      team: l.team,
-      status: l.status,
-      ...(statsJson ? {stats: statsJson} : {}),
-      versions: agentEntries.map(e => ({
-        version: e.version,
-        package: e.package,
-        role: e.role,
-        isAnchor: e.isAnchor,
-        elo: Math.round(e.elo),
-        se: Math.round(e.se * 10) / 10,
-        lcb: Math.round(e.lcb),
-        gxe: Math.round(e.gxe * 10) / 10,
-        rankCurrent: e.rankCurrent,
-        bestRank: e.bestRank,
-        maxElo: e.maxElo !== undefined ? Math.round(e.maxElo) : undefined,
-        matches: e.matches,
-        wins: e.ww + e.wt,
-        losses: e.ll + e.tl,
-        ties: e.split,
-        meanInitMillis: Math.round(e.meanInitMillis),
-        ...(e.meanTeamPreviewMillis !== undefined
-          ? {meanTeamPreviewMillis: Math.round(e.meanTeamPreviewMillis)}
-          : {}),
-        meanTurnMillis: Math.round(e.meanTurnMillis),
-        meanRam: Math.round(e.meanRam),
-        peakRam: Math.round(e.peakRam),
-        maxWinStreak: e.maxWinStreak,
-        maxLossStreak: e.maxLossStreak,
-        submittedAt: e.submittedAt,
-        settledAt: e.settledAt,
-        retiredAt: e.retiredAt,
-      })),
-      recentMatches: recentMatches.map(m => arena.enrichMatchView(publicDir, m)),
-    });
+    const enrichedMatches = recentMatches.map(m => arena.enrichMatchView(publicDir, m));
 
     if (i > 0) formatNavParts.push(' — ');
     formatNavParts.push(
@@ -1931,12 +1946,26 @@ export function renderAgentProfile(opts: {
     const verById = new Map<number, db.LadderVersionIdentity>();
     const oppMap = new Map<string, {slug: string; name: string; count: number}>();
     for (const e of allEntries) {
+      verById.set(e.versionId, {
+        versionId: e.versionId,
+        version: e.version,
+        agentId: e.agentId,
+        agentSlug: e.agentSlug,
+        agentName: e.agentName,
+      });
       if (e.agentId !== agent.id && !oppMap.has(e.agentSlug)) {
         oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
       }
     }
-    for (const v of db.getLadderVersionIdentities(l.id)) {
-      verById.set(v.versionId, v);
+    const missingVerIds = new Set<number>();
+    for (const p of pairs) {
+      if (!verById.has(p.lowVersionId)) missingVerIds.add(p.lowVersionId);
+      if (!verById.has(p.highVersionId)) missingVerIds.add(p.highVersionId);
+    }
+    if (missingVerIds.size > 0) {
+      for (const v of db.getVersionIdentitiesByIds([...missingVerIds])) {
+        verById.set(v.versionId, v);
+      }
     }
 
     const oppCounts: Record<string, Record<string, number>> = {
@@ -2075,10 +2104,9 @@ export function renderAgentProfile(opts: {
         agentSlug: agent.slug,
         ladderKey: lKey,
         isDefault,
-        matches: recentMatches,
+        matches: enrichedMatches,
         totalMatches: oppCounts.all.all,
         agentLinks,
-        publicDir,
         nowSec,
       })
     );
@@ -2183,7 +2211,7 @@ export function renderAgentProfile(opts: {
     </>
   );
 
-  const html = renderer.render({
+  return renderer.render({
     id: 'agent-profile',
     title: `${agent.name} | pkmn.ai`,
     header: profileHeader,
@@ -2191,17 +2219,4 @@ export function renderAgentProfile(opts: {
     style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
     content,
   });
-
-  return {
-    html,
-    json: {
-      slug: agent.slug,
-      name: agent.name,
-      status: agent.status,
-      logoHref,
-      owners,
-      metadata: meta,
-      ladders: ladderJsonList,
-    },
-  };
 }

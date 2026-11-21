@@ -16,7 +16,7 @@ import * as util from '../static/util';
 import {getDex, hashTeam} from '../teams';
 
 import * as arena from './arena';
-import {renderAgentProfile, resolveAgentLogo} from './profile';
+import {buildAgentProfileDocument, renderAgentProfileHtml, resolveAgentLogo} from './profile';
 import * as ratings from './ratings';
 import * as tournaments from './tournaments';
 
@@ -1476,26 +1476,55 @@ function buildLadderTeamsDocument(
   };
 }
 
+const projectMetaCache = new Map<string, {mtimeMs: number; map: Map<string, ProjectMeta>}>();
+
 function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
   const file = path.join(staticDir, 'projects.yml');
-  const map = new Map<string, ProjectMeta>();
-  if (!fs.existsSync(file)) return map;
-  const parsed = yaml.parse(fs.readFileSync(file, 'utf8')) as projects.Project[] | undefined;
-  if (!Array.isArray(parsed)) return map;
-  for (const p of parsed) {
-    if (!p.name) continue;
-    const id = p.name.replaceAll(' ', '');
-    map.set(p.name, {
-      id,
-      site: p.site,
-      active: p.active,
-      license: p.license,
-      source: p.source,
-      engine: p.engine as ProjectMeta['engine'],
-      language: p.language,
-    });
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    return new Map();
   }
+  const hit = projectMetaCache.get(file);
+  if (hit?.mtimeMs === mtimeMs) return hit.map;
+
+  const map = new Map<string, ProjectMeta>();
+  const parsed = yaml.parse(fs.readFileSync(file, 'utf8')) as projects.Project[] | undefined;
+  if (Array.isArray(parsed)) {
+    for (const p of parsed) {
+      if (!p.name) continue;
+      const id = p.name.replaceAll(' ', '');
+      map.set(p.name, {
+        id,
+        site: p.site,
+        active: p.active,
+        license: p.license,
+        source: p.source,
+        engine: p.engine as ProjectMeta['engine'],
+        language: p.language,
+      });
+    }
+  }
+  projectMetaCache.set(file, {mtimeMs, map});
   return map;
+}
+
+const arenaBlurbCache = new Map<string, {mtimeMs: number; html: string}>();
+
+function loadArenaBlurbHtml(staticDir: string): string {
+  const file = path.join(staticDir, 'arena.dj');
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    return '';
+  }
+  const hit = arenaBlurbCache.get(file);
+  if (hit?.mtimeMs === mtimeMs) return hit.html;
+  const html = site.html.render(fs.readFileSync(file, 'utf8'));
+  arenaBlurbCache.set(file, {mtimeMs, html});
+  return html;
 }
 
 export interface AgentLinkContext {
@@ -1650,12 +1679,10 @@ export function heatmapClass(scorePct: number): string {
   return '';
 }
 
-function renderHistorySection(
+function selectTopHistoryAgents(
   ladder: db.LadderRow,
-  entries: db.LeaderboardEntryView[],
-  snapshots: db.LadderSnapshotHistoryRow[],
-  nowSec: number
-): {node: util.Child; isEmpty: boolean} {
+  entries: db.LeaderboardEntryView[]
+): db.LeaderboardEntryView[] {
   const isArchived = ladder.status === 'archived';
   const hasFrozenRanked = isArchived && entries.some(e => e.rankCurrent !== undefined);
   const bestActiveByAgent = new Map<number, db.LeaderboardEntryView>();
@@ -1671,7 +1698,7 @@ function renderHistorySection(
     }
   }
 
-  const topAgents = [...bestActiveByAgent.values()]
+  return [...bestActiveByAgent.values()]
     .sort((a, b) => {
       if (a.rankCurrent !== undefined && b.rankCurrent !== undefined) {
         return a.rankCurrent - b.rankCurrent;
@@ -1681,7 +1708,15 @@ function renderHistorySection(
       return b.lcb - a.lcb || b.elo - a.elo;
     })
     .slice(0, SERIES_COLORS.length);
+}
 
+function renderHistorySection(
+  ladder: db.LadderRow,
+  topAgents: db.LeaderboardEntryView[],
+  snapshots: db.LadderSnapshotHistoryRow[],
+  nowSec: number
+): {node: util.Child; isEmpty: boolean} {
+  const isArchived = ladder.status === 'archived';
   if (topAgents.length === 0) {
     return {
       node: <p className='empty-state muted'>No rating history yet.</p>,
@@ -2060,27 +2095,169 @@ function renderMatchupsSection(
   };
 }
 
-function renderSingleLadderArtifact(opts: {
+function buildStandingsLadder(
+  l: db.LadderRow,
+  entries: db.LeaderboardEntryView[],
+  pairs: db.PairAggregateRow[],
+  urlKey: string,
+  publicDir: string
+): StandingsLadder {
+  const adjacentLos = computeAdjacentLosMap(entries, pairs, l.status);
+  const isArchived = l.status === 'archived';
+  const hasFrozenRanked = isArchived && entries.some(e => e.rankCurrent !== undefined);
+  const jsonRows: StandingsEntry[] = [];
+
+  if (l.status === 'upcoming') {
+    const activeEntrants = entries
+      .filter(e => e.role === 'champion' || e.role === 'challenger')
+      .sort((a, b) => a.submittedAt - b.submittedAt || a.versionId - b.versionId);
+    for (const e of activeEntrants) {
+      jsonRows.push({
+        slug: e.agentSlug,
+        name: e.agentName,
+        version: e.version,
+        role: e.role,
+        isAnchor: e.isAnchor,
+        provisional: true,
+        settled: false,
+        elo: Math.round(e.elo),
+        se: Math.round(e.se * 10) / 10,
+        ci95: e.isAnchor ? 0 : Math.round(1.96 * e.se),
+        lcb: Math.round(e.lcb),
+        gxe: Math.round(e.gxe * 10) / 10,
+        wins: e.ww + e.wt,
+        losses: e.ll + e.tl,
+        ties: e.split,
+        matches: e.matches,
+        streak: '—',
+      });
+    }
+  } else {
+    const seenPrimaryAgent = new Set<number>();
+    const seenAnyAgent = new Set<number>();
+    for (const e of entries) {
+      const isFirstForAgent = !seenAnyAgent.has(e.agentId);
+      if (isFirstForAgent) seenAnyAgent.add(e.agentId);
+      const isEffectiveActive = isArchived
+        ? (hasFrozenRanked ? e.rankCurrent !== undefined : isFirstForAgent)
+        : (e.role === 'champion' || e.role === 'challenger');
+      const isProvisional = isEffectiveActive && (e.matches < 10 || e.se > 60);
+      const isBestActive = isEffectiveActive && !seenPrimaryAgent.has(e.agentId);
+      if (isBestActive) seenPrimaryAgent.add(e.agentId);
+      const isRankedPrimary =
+        isEffectiveActive && !isProvisional && isBestActive && e.rankCurrent !== undefined;
+      const streak = computeStreakLabel(e);
+      const adjLos = isRankedPrimary ? adjacentLos.get(e.versionId) : undefined;
+      jsonRows.push({
+        rank: isRankedPrimary ? e.rankCurrent : undefined,
+        rankMin: isRankedPrimary ? e.rankMin : undefined,
+        rankMax: isRankedPrimary ? e.rankMax : undefined,
+        slug: e.agentSlug,
+        name: e.agentName,
+        version: e.version,
+        role: e.role,
+        isAnchor: e.isAnchor,
+        provisional: isProvisional,
+        settled: e.settledAt !== undefined,
+        elo: Math.round(e.elo),
+        se: Math.round(e.se * 10) / 10,
+        ci95: e.isAnchor ? 0 : Math.round(1.96 * e.se),
+        lcb: Math.round(e.lcb),
+        gxe: Math.round(e.gxe * 10) / 10,
+        wins: e.ww + e.wt,
+        losses: e.ll + e.tl,
+        ties: e.split,
+        matches: e.matches,
+        streak: streak.text,
+        losNext: adjLos !== undefined ? Math.round(adjLos * 1000) / 10 : undefined,
+      });
+    }
+  }
+
+  const archive = arena.resolveLadderArchive(publicDir, l);
+  const urlEnc = encodeURIComponent(urlKey);
+  const teamsHref = l.team === 'pools' && l.status === 'archived'
+    ? `/arena/ladders/${urlEnc}/teams.json`
+    : undefined;
+
+  return {
+    id: l.id,
+    slot: l.slot,
+    name: l.name,
+    format: l.format,
+    team: l.team,
+    status: l.status,
+    archivedAt: l.archivedAt,
+    archiveHref: archive?.href,
+    teamsHref,
+    standings: jsonRows,
+  };
+}
+
+function buildLadderDocument(opts: {
+  ladder: db.LadderRow;
+  urlKey: string;
+  db: db.Database;
+  publicDir: string;
+}): LadderDocument {
+  const {ladder: l, urlKey, db, publicDir} = opts;
+  const entries = db.getLeaderboardEntries(l.id);
+  const pairs = db.getPairAggregatesForLadder(l.id);
+  const snapshots = db.getRatingSnapshotsForLadder(l.id);
+  const standingsLadder = buildStandingsLadder(l, entries, pairs, urlKey, publicDir);
+  const entryByVer = new Map(entries.map(e => [e.versionId, e]));
+  return {
+    ...standingsLadder,
+    pairings: pairs.map(p => {
+      const low = entryByVer.get(p.lowVersionId);
+      const high = entryByVer.get(p.highVersionId);
+      return {
+        low: {
+          slug: low?.agentSlug,
+          name: low?.agentName,
+          version: low?.version,
+        },
+        high: {
+          slug: high?.agentSlug,
+          name: high?.agentName,
+          version: high?.version,
+        },
+        ww: p.ww,
+        wt: p.wt,
+        split: p.split,
+        tl: p.tl,
+        ll: p.ll,
+        matches: p.ww + p.wt + p.split + p.tl + p.ll,
+        lowLos: p.lowLos !== undefined ? Math.round(p.lowLos * 1000) / 10 : undefined,
+      };
+    }),
+    snapshots: snapshots.map(s => ({
+      dayUtc: s.dayUtc,
+      slug: s.agentSlug,
+      name: s.agentName,
+      version: s.version,
+      elo: Math.round(s.elo),
+      se: Math.round(s.se * 10) / 10,
+      lcb: Math.round(s.lcb),
+      matches: s.matches,
+    })),
+  };
+}
+
+function renderLadderHtml(opts: {
   ladder: db.LadderRow;
   currentLadders: db.LadderRow[];
-  allLadders?: db.LadderRow[];
+  allLadders: db.LadderRow[];
   urlKey: string;
   db: db.Database;
   renderer: build.Renderer;
   links: AgentLinkContext;
   nowSec: number;
-}): {
-  html: string;
-  standingsLadder: StandingsLadder;
-  ladderDoc: LadderDocument;
-  top1Entry?: StandingsEntry;
-  entrantCount: number;
-  matchCount: number;
-  hasActiveEntries: boolean;
-} {
+}): string {
   const {
     ladder: l,
     currentLadders,
+    allLadders,
     urlKey,
     db,
     renderer,
@@ -2090,7 +2267,10 @@ function renderSingleLadderArtifact(opts: {
   const {publicDir, projectMeta} = links;
   const entries = db.getLeaderboardEntries(l.id);
   const pairs = db.getPairAggregatesForLadder(l.id);
-  const snapshots = db.getRatingSnapshotsForLadder(l.id);
+  const topHistoryAgents = selectTopHistoryAgents(l, entries);
+  const snapshots = topHistoryAgents.length > 0
+    ? db.getRatingSnapshotsForLadder(l.id, topHistoryAgents.map(a => a.agentId))
+    : [];
   const adjacentLos = computeAdjacentLosMap(entries, pairs, l.status);
   const isArchived = l.status === 'archived';
   const hasFrozenRanked = isArchived && entries.some(e => e.rankCurrent !== undefined);
@@ -2101,7 +2281,7 @@ function renderSingleLadderArtifact(opts: {
     settling: 1,
     archived: 2,
   };
-  const slotSeasons = (opts.allLadders ?? db.getLadders())
+  const slotSeasons = allLadders
     .filter(s => s.slot === l.slot)
     .sort(
       (a, b) =>
@@ -2127,8 +2307,6 @@ function renderSingleLadderArtifact(opts: {
 
   const seenPrimaryAgent = new Set<number>();
   const seenAnyAgent = new Set<number>();
-  const jsonRows: StandingsEntry[] = [];
-  let top1Entry: StandingsEntry | undefined;
   let standingsPane: util.Child;
 
   const upcomingEmptyMsg =
@@ -2144,29 +2322,6 @@ function renderSingleLadderArtifact(opts: {
     const activeEntrants = entries
       .filter(e => e.role === 'champion' || e.role === 'challenger')
       .sort((a, b) => a.submittedAt - b.submittedAt || a.versionId - b.versionId);
-    for (const e of activeEntrants) {
-      seenPrimaryAgent.add(e.agentId);
-      seenAnyAgent.add(e.agentId);
-      jsonRows.push({
-        slug: e.agentSlug,
-        name: e.agentName,
-        version: e.version,
-        role: e.role,
-        isAnchor: e.isAnchor,
-        provisional: true,
-        settled: false,
-        elo: Math.round(e.elo),
-        se: Math.round(e.se * 10) / 10,
-        ci95: e.isAnchor ? 0 : Math.round(1.96 * e.se),
-        lcb: Math.round(e.lcb),
-        gxe: Math.round(e.gxe * 10) / 10,
-        wins: e.ww + e.wt,
-        losses: e.ll + e.tl,
-        ties: e.split,
-        matches: e.matches,
-        streak: '—',
-      });
-    }
     standingsPane = activeEntrants.length === 0 ? (
       <p className='empty-state muted'>{upcomingEmptyMsg}</p>
     ) : (
@@ -2299,39 +2454,9 @@ function renderSingleLadderArtifact(opts: {
       const streakCell = <td className='center'>{streak.node}</td>;
 
       const adjLos = isRankedPrimary ? adjacentLos.get(e.versionId) : undefined;
-      const losPct = adjLos !== undefined ? Math.round(adjLos * 1000) / 10 : undefined;
       const losCell = adjLos !== undefined
         ? <td className='num'>{(adjLos * 100).toFixed(1)}%</td>
         : <td className='num muted'>—</td>;
-
-      const entryObj: StandingsEntry = {
-        rank: isRankedPrimary ? e.rankCurrent : undefined,
-        rankMin: isRankedPrimary ? e.rankMin : undefined,
-        rankMax: isRankedPrimary ? e.rankMax : undefined,
-        slug: e.agentSlug,
-        name: e.agentName,
-        version: e.version,
-        role: e.role,
-        isAnchor: e.isAnchor,
-        provisional: isProvisional,
-        settled: e.settledAt !== undefined,
-        elo: eloRounded,
-        se: Math.round(e.se * 10) / 10,
-        ci95,
-        lcb: Math.round(e.lcb),
-        gxe: Math.round(e.gxe * 10) / 10,
-        wins,
-        losses,
-        ties,
-        matches: e.matches,
-        streak: streak.text,
-        losNext: losPct,
-      };
-      jsonRows.push(entryObj);
-
-      if (isRankedPrimary && e.rankCurrent === 1 && top1Entry === undefined) {
-        top1Entry = entryObj;
-      }
 
       return (
         <tr
@@ -2386,10 +2511,6 @@ function renderSingleLadderArtifact(opts: {
   }
 
   const archive = arena.resolveLadderArchive(publicDir, l);
-  const urlEnc = encodeURIComponent(urlKey);
-  const teamsHref = l.team === 'pools' && l.status === 'archived'
-    ? `/arena/ladders/${urlEnc}/teams.json`
-    : undefined;
 
   let ladderBottomNote: util.Child;
   if (((l.team === 'pools' && l.status === 'archived') || l.team === 'random') && archive) {
@@ -2403,7 +2524,7 @@ function renderSingleLadderArtifact(opts: {
     );
   }
 
-  const historyRes = renderHistorySection(l, entries, snapshots, nowSec);
+  const historyRes = renderHistorySection(l, topHistoryAgents, snapshots, nowSec);
   const matchupsRes = renderMatchupsSection(entries, pairs, links, l.status);
 
   const isUpcoming = l.status === 'upcoming';
@@ -2472,7 +2593,7 @@ function renderSingleLadderArtifact(opts: {
     build.header(<a href='/arena/' className='subtle'>Ladders</a>),
     liveTournament
   );
-  const html = renderer.render({
+  return renderer.render({
     id: 'leaderboard',
     title: `Arena — ${l.name} | pkmn.ai`,
     header: ladderHeader,
@@ -2480,190 +2601,51 @@ function renderSingleLadderArtifact(opts: {
     style: ARENA_STYLE,
     content: ladderContent,
   });
-
-  const entryByVer = new Map(entries.map(e => [e.versionId, e]));
-  const standingsLadder: StandingsLadder = {
-    id: l.id,
-    slot: l.slot,
-    name: l.name,
-    format: l.format,
-    team: l.team,
-    status: l.status,
-    archivedAt: l.archivedAt,
-    archiveHref: archive?.href,
-    teamsHref,
-    standings: jsonRows,
-  };
-
-  const ladderDoc: LadderDocument = {
-    ...standingsLadder,
-    pairings: pairs.map(p => {
-      const low = entryByVer.get(p.lowVersionId);
-      const high = entryByVer.get(p.highVersionId);
-      return {
-        low: {
-          slug: low?.agentSlug,
-          name: low?.agentName,
-          version: low?.version,
-        },
-        high: {
-          slug: high?.agentSlug,
-          name: high?.agentName,
-          version: high?.version,
-        },
-        ww: p.ww,
-        wt: p.wt,
-        split: p.split,
-        tl: p.tl,
-        ll: p.ll,
-        matches: p.ww + p.wt + p.split + p.tl + p.ll,
-        lowLos: p.lowLos !== undefined ? Math.round(p.lowLos * 1000) / 10 : undefined,
-      };
-    }),
-    snapshots: snapshots.map(s => ({
-      dayUtc: s.dayUtc,
-      slug: s.agentSlug,
-      name: s.agentName,
-      version: s.version,
-      elo: Math.round(s.elo),
-      se: Math.round(s.se * 10) / 10,
-      lcb: Math.round(s.lcb),
-      matches: s.matches,
-    })),
-  };
-
-  let pairMatchTotal = 0;
-  for (const p of pairs) {
-    pairMatchTotal += p.ww + p.wt + p.split + p.tl + p.ll;
-  }
-  let entryMatchSum = 0;
-  for (const e of entries) {
-    entryMatchSum += e.matches;
-  }
-  const matchCount = l.status === 'upcoming'
-    ? 0
-    : pairMatchTotal > 0
-      ? pairMatchTotal
-      : Math.round(entryMatchSum / 2);
-  const entrantCount = seenPrimaryAgent.size || seenAnyAgent.size;
-
-  return {
-    html,
-    standingsLadder,
-    ladderDoc,
-    top1Entry,
-    entrantCount,
-    matchCount,
-    hasActiveEntries: entries.some(e => e.role === 'champion' || e.role === 'challenger'),
-  };
 }
 
-export interface CachedArchivedLadder {
-  key: string;
-  rendered: ReturnType<typeof renderSingleLadderArtifact>;
-}
-
-function renderArenaAndLadderArtifacts(opts: {
-  db: db.Database;
-  renderer: build.Renderer;
-  links: AgentLinkContext;
-  staticDir: string;
-  liveMatch?: arena.LiveMatch;
-  metaToken?: string;
-  archivedCache?: Map<string, CachedArchivedLadder>;
-  nowSec: number;
-}): {
-  arenaHtml: string;
-  ladderHtmlBySlot: Record<string, string>;
-  ladderJsonBySlot: Record<string, LadderDocument>;
-  archivedLadderHtmlById: Record<string, string>;
-  archivedLadderJsonById: Record<string, LadderDocument>;
-  standingsJson: StandingsDocument;
-} {
-  const {
-    db,
-    renderer,
-    links,
-    staticDir,
-    liveMatch,
-    metaToken,
-    archivedCache,
-    nowSec,
-  } = opts;
-  const {publicDir} = links;
-  const ladders = db.getCurrentLadders();
-  const allLadders = db.getLadders();
-  const runningTour = db.getRunningTournament();
-  const laddersNavKey = allLadders.map(x => `${x.id}:${x.name}:${x.status}`).join(',');
-  const pastLadders = allLadders
+function getSortedPastLadders(allLadders: db.LadderRow[]): db.LadderRow[] {
+  return allLadders
     .filter(l => l.status === 'settling' || l.status === 'archived')
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === 'settling' ? -1 : 1;
       return b.createdAt - a.createdAt || b.id.localeCompare(a.id);
     });
+}
+
+function buildStandingsDocument(opts: {
+  db: db.Database;
+  publicDir: string;
+  nowSec: number;
+}): StandingsDocument {
+  const {db, publicDir, nowSec} = opts;
+  const ladders = db.getCurrentLadders();
+  const allLadders = db.getLadders();
+  const pastLadders = getSortedPastLadders(allLadders);
+  const hubSummaries = db.getLadderHubSummaries();
   const lastCompletedByLadder = db.getLastCompletedAtByLadder();
 
-  const ladderHtmlBySlot: Record<string, string> = {};
-  const ladderJsonBySlot: Record<string, LadderDocument> = {};
-  const archivedLadderHtmlById: Record<string, string> = {};
-  const archivedLadderJsonById: Record<string, LadderDocument> = {};
+  let latestDataAt: number | undefined;
+  const bumpLatest = (ts?: number) => {
+    if (ts !== undefined && (latestDataAt === undefined || ts > latestDataAt)) latestDataAt = ts;
+  };
+  for (const ts of lastCompletedByLadder.values()) bumpLatest(ts);
+
   const jsonLadders: Record<string, StandingsLadder> = {};
-  const archivedLadderSummaries: ArchivedLadderSummary[] = [];
-  const pastBySlot = new Map<string, Array<{
-    ladder: db.LadderRow;
-    rendered: ReturnType<typeof renderSingleLadderArtifact>;
-  }>>();
+  for (const l of ladders) {
+    const entries = db.getLeaderboardEntries(l.id);
+    const pairs = db.getPairAggregatesForLadder(l.id);
+    for (const e of entries) bumpLatest(e.submittedAt);
+    jsonLadders[l.slot] = buildStandingsLadder(l, entries, pairs, l.slot, publicDir);
+  }
 
-  for (const l of pastLadders) {
-    let rendered: ReturnType<typeof renderSingleLadderArtifact>;
-    if (l.status === 'archived' && archivedCache && metaToken !== undefined) {
-      const archiveInfo = arena.resolveLadderArchive(publicDir, l);
-      const cacheKey = [
-        l.id,
-        l.archivedAt ?? 0,
-        metaToken,
-        runningTour ? `${runningTour.id}:${runningTour.name}` : '',
-        laddersNavKey,
-        archiveInfo?.href ?? '',
-        db.getLadderStateSignature(l.id),
-      ].join('|');
-      const hit = archivedCache.get(l.id);
-      if (hit?.key === cacheKey) {
-        rendered = hit.rendered;
-      } else {
-        rendered = renderSingleLadderArtifact({
-          ladder: l,
-          currentLadders: ladders,
-          allLadders,
-          urlKey: l.id,
-          db,
-          renderer,
-          links,
-          nowSec,
-        });
-        archivedCache.set(l.id, {key: cacheKey, rendered});
-      }
-    } else {
-      rendered = renderSingleLadderArtifact({
-        ladder: l,
-        currentLadders: ladders,
-        allLadders,
-        urlKey: l.id,
-        db,
-        renderer,
-        links,
-        nowSec,
-      });
-    }
-    archivedLadderHtmlById[l.id] = rendered.html;
-    archivedLadderJsonById[l.id] = rendered.ladderDoc;
-
-    const href = `/arena/ladders/${encodeURIComponent(l.id)}/`;
-    const archiveHref = rendered.standingsLadder.archiveHref;
-    const teamsHref = rendered.standingsLadder.teamsHref;
-    const w = rendered.top1Entry;
-
-    archivedLadderSummaries.push({
+  const archivedLadderSummaries: ArchivedLadderSummary[] = pastLadders.map(l => {
+    bumpLatest(l.archivedAt);
+    const urlEnc = encodeURIComponent(l.id);
+    const archive = arena.resolveLadderArchive(publicDir, l);
+    const teamsHref = l.team === 'pools' && l.status === 'archived'
+      ? `/arena/ladders/${urlEnc}/teams.json`
+      : undefined;
+    return {
       id: l.id,
       slot: l.slot,
       name: l.name,
@@ -2671,46 +2653,78 @@ function renderArenaAndLadderArtifacts(opts: {
       team: l.team,
       status: l.status as 'settling' | 'archived',
       archivedAt: l.archivedAt,
-      href,
-      archiveHref,
+      href: `/arena/ladders/${urlEnc}/`,
+      archiveHref: archive?.href,
       teamsHref,
-      winner: w
+      winner: hubSummaries.get(l.id)?.top1,
+    };
+  });
+
+  const allTournaments = db.getTournaments();
+  const tournamentSummaries: ArenaTournamentSummary[] = allTournaments.map(t => {
+    bumpLatest(t.completedAt);
+    const entrants = db.getTournamentEntrants(t.id);
+    const top = entrants.find(e => e.finalRank === 1) ?? entrants[0];
+    const archive = arena.resolveTournamentArchive(publicDir, t.id);
+    return {
+      id: t.id,
+      name: t.name,
+      format: t.format,
+      status: t.status,
+      startsAt: t.startsAt,
+      closesAt: db.getTournamentClosesAt(t.startsAt),
+      completedAt: t.completedAt,
+      href: `/arena/tournaments/${encodeURIComponent(t.id)}/`,
+      archiveHref: archive?.href,
+      winner: top && t.status === 'completed'
         ? {
-          slug: w.slug,
-          name: w.name,
-          version: w.version,
-          elo: w.elo,
-          ci95: w.ci95,
-          gxe: w.gxe,
-          wins: w.wins,
-          losses: w.losses,
-          ties: w.ties,
+          slug: top.agentSlug,
+          name: top.agentName,
+          version: top.version,
+          elo: Math.round(top.elo),
+          ci95: Math.round(1.96 * top.se),
+          points: top.points,
+          wins: top.gameWins,
+          losses: top.gameLosses,
+          ties: top.gameTies,
         }
         : undefined,
-    });
+    };
+  });
 
+  return {
+    updatedAt: latestDataAt ?? nowSec,
+    ladders: jsonLadders,
+    archivedLadders: archivedLadderSummaries,
+    tournaments: tournamentSummaries,
+  };
+}
+
+function renderArenaHubHtml(opts: {
+  db: db.Database;
+  renderer: build.Renderer;
+  links: AgentLinkContext;
+  staticDir: string;
+  liveMatch?: arena.LiveMatch;
+  nowSec: number;
+}): string {
+  const {db, renderer, links, staticDir, liveMatch, nowSec} = opts;
+  const ladders = db.getCurrentLadders();
+  const allLadders = db.getLadders();
+  const pastLadders = getSortedPastLadders(allLadders);
+  const hubSummaries = db.getLadderHubSummaries();
+  const lastCompletedByLadder = db.getLastCompletedAtByLadder();
+
+  const pastBySlot = new Map<string, db.LadderRow[]>();
+  for (const l of pastLadders) {
     const list = pastBySlot.get(l.slot) ?? [];
-    list.push({ladder: l, rendered});
+    list.push(l);
     pastBySlot.set(l.slot, list);
   }
 
   const ladderSummaryRows: util.Child[] = [];
-
   for (const l of ladders) {
-    const rendered = renderSingleLadderArtifact({
-      ladder: l,
-      currentLadders: ladders,
-      allLadders,
-      urlKey: l.slot,
-      db,
-      renderer,
-      links,
-      nowSec,
-    });
-    ladderHtmlBySlot[l.slot] = rendered.html;
-    ladderJsonBySlot[l.slot] = rendered.ladderDoc;
-    jsonLadders[l.slot] = rendered.standingsLadder;
-
+    const summary = hubSummaries.get(l.id);
     const slotPast = pastBySlot.get(l.slot) ?? [];
     const hasPast = slotPast.length > 0;
     const fmtTitle = FORMAT_TITLES[l.format] ?? l.format;
@@ -2725,8 +2739,8 @@ function renderArenaAndLadderArtifacts(opts: {
     );
 
     let leaderCell: util.Child;
-    if (rendered.top1Entry !== undefined) {
-      const w = rendered.top1Entry;
+    if (summary?.top1 !== undefined) {
+      const w = summary.top1;
       const wHref = `/projects/${encodeURIComponent(w.slug)}/`;
       leaderCell = (
         <td>
@@ -2736,7 +2750,7 @@ function renderArenaAndLadderArtifacts(opts: {
     } else {
       const stateLabel = l.status === 'upcoming'
         ? 'Upcoming'
-        : rendered.hasActiveEntries
+        : summary?.hasActiveEntries
           ? 'Provisional'
           : 'No entries yet';
       leaderCell = <td className='muted'>{stateLabel}</td>;
@@ -2772,13 +2786,14 @@ function renderArenaAndLadderArtifacts(opts: {
       >
         {ladderCell}
         {leaderCell}
-        <td className='num'>{rendered.entrantCount.toLocaleString('en-US')}</td>
-        <td className='num'>{rendered.matchCount.toLocaleString('en-US')}</td>
+        <td className='num'>{(summary?.entrantCount ?? 0).toLocaleString('en-US')}</td>
+        <td className='num'>{(summary?.matchCount ?? 0).toLocaleString('en-US')}</td>
         {lastCell}
       </tr>
     );
 
-    for (const {ladder: past, rendered: pastRendered} of slotPast) {
+    for (const past of slotPast) {
+      const pastSummary = hubSummaries.get(past.id);
       const pastHref = `/arena/ladders/${encodeURIComponent(past.id)}/`;
       const pastFmtTitle = FORMAT_TITLES[past.format] ?? past.format;
       const startDate = util.formatUtcDate(past.createdAt);
@@ -2786,7 +2801,7 @@ function renderArenaAndLadderArtifacts(opts: {
         ? util.formatUtcDate(past.archivedAt)
         : util.formatUtcDate(nowSec);
       const dateRange = `${startDate} – ${endDate}`;
-      const pastW = pastRendered.top1Entry;
+      const pastW = pastSummary?.top1;
       const pastLeaderCell = pastW ? (
         <td>
           {renderAgentLink(pastW.name, `/projects/${encodeURIComponent(pastW.slug)}/`, true)}{' '}
@@ -2813,8 +2828,8 @@ function renderArenaAndLadderArtifacts(opts: {
             <span className='muted'>({dateRange})</span>
           </td>
           {pastLeaderCell}
-          <td className='num'>{pastRendered.entrantCount.toLocaleString('en-US')}</td>
-          <td className='num'>{pastRendered.matchCount.toLocaleString('en-US')}</td>
+          <td className='num'>{(pastSummary?.entrantCount ?? 0).toLocaleString('en-US')}</td>
+          <td className='num'>{(pastSummary?.matchCount ?? 0).toLocaleString('en-US')}</td>
           {pastLastCell}
         </tr>
       );
@@ -2825,39 +2840,7 @@ function renderArenaAndLadderArtifacts(opts: {
   const entrantsByTournament = new Map(
     allTournaments.map(t => [t.id, db.getTournamentEntrants(t.id)])
   );
-  const tournamentSummaries: ArenaTournamentSummary[] = allTournaments.map(t => {
-    const entrants = entrantsByTournament.get(t.id) ?? [];
-    const top = entrants.find(e => e.finalRank === 1) ?? entrants[0];
-    const archive = arena.resolveTournamentArchive(publicDir, t.id);
-    return {
-      id: t.id,
-      name: t.name,
-      format: t.format,
-      status: t.status,
-      startsAt: t.startsAt,
-      closesAt: db.getTournamentClosesAt(t.startsAt),
-      completedAt: t.completedAt,
-      href: `/arena/tournaments/${encodeURIComponent(t.id)}/`,
-      archiveHref: archive?.href,
-      winner: top && t.status === 'completed'
-        ? {
-          slug: top.agentSlug,
-          name: top.agentName,
-          version: top.version,
-          elo: Math.round(top.elo),
-          ci95: Math.round(1.96 * top.se),
-          points: top.points,
-          wins: top.gameWins,
-          losses: top.gameLosses,
-          ties: top.gameTies,
-        }
-        : undefined,
-    };
-  });
-
-  const arenaDjPath = path.join(staticDir, 'arena.dj');
-  const blurbDj = fs.existsSync(arenaDjPath) ? fs.readFileSync(arenaDjPath, 'utf8') : '';
-  const blurbHtml = site.html.render(blurbDj);
+  const blurbHtml = loadArenaBlurbHtml(staticDir);
   const tournamentsSummaryHtml = tournaments.renderArenaTournamentsSummaryHtml({
     db,
     links,
@@ -2930,7 +2913,7 @@ function renderArenaAndLadderArtifacts(opts: {
     </>
   );
 
-  const arenaHtml = renderer.render({
+  return renderer.render({
     id: 'arena',
     title: 'Arena | pkmn.ai',
     header: build.injectLiveBanner(build.header('Arena'), db.getRunningTournament()),
@@ -2938,20 +2921,6 @@ function renderArenaAndLadderArtifacts(opts: {
     style: ARENA_STYLE,
     content: arenaContent,
   });
-
-  return {
-    arenaHtml,
-    ladderHtmlBySlot,
-    ladderJsonBySlot,
-    archivedLadderHtmlById,
-    archivedLadderJsonById,
-    standingsJson: {
-      updatedAt: nowSec,
-      ladders: jsonLadders,
-      archivedLadders: archivedLadderSummaries,
-      tournaments: tournamentSummaries,
-    },
-  };
 }
 
 function renderTeamSpanNode(team: string | undefined): util.Child {
@@ -3695,14 +3664,6 @@ function renderBattlesPage(opts: {
   });
 }
 
-function getFileMtimeToken(filePath: string): string {
-  try {
-    return fs.statSync(filePath, {bigint: true}).mtimeNs.toString(36);
-  } catch {
-    return '0';
-  }
-}
-
 const HUB_REDIRECT_ALIASES = [
   '/ladder',
   '/ladders',
@@ -3748,9 +3709,7 @@ const ASSET_EXT_RE = /\.[a-z0-9]{1,8}$/i;
 
 // Dynamically serves all SQLite-backed Arena & Project HTML and `.json` surfaces (`/arena`,
 // `/arena/ladders/*`, `/arena/battles`, `/arena/tournaments/*`, `/projects`, `/projects/:slug`)
-// with `Cache-Control: no-cache` + `ETag` (`304 Not Modified`), backed by an in-memory cache that
-// invalidates automatically on SQLite writes (`PRAGMA data_version` + `total_changes()`) and live
-// Arena worker sequence updates.
+// with `Cache-Control: no-cache` + stateless `ETag` (`304 Not Modified`).
 export function register(app: polka.Polka, options: Options) {
   util.installHeadSupport(app);
   const {db, arena: arenaHandle} = options;
@@ -3771,174 +3730,36 @@ export function register(app: polka.Polka, options: Options) {
       highlight: true,
     });
 
-  interface CacheEntry {
-    token: string;
-    body: Buffer;
-    etag: string;
-    contentType: string;
-  }
+  const getLinks = (): AgentLinkContext => ({
+    publicDir,
+    projectMeta: loadProjectMetaMap(staticDir),
+    profileSlugs: new Set(db.getAllActiveAgents().map(a => a.slug)),
+  });
 
-  const responseCache = new Map<string, CacheEntry>();
-
-  const getArchiveDiskToken = (): string => {
-    const parts: string[] = [];
-    for (const sub of ['ladders', 'tournaments']) {
-      const base = path.join(publicDir, 'arena', sub);
-      if (!fs.existsSync(base)) continue;
-      for (const entry of fs.readdirSync(base)) {
-        if (entry.startsWith('.')) continue;
-        parts.push(`${sub}/${entry}:${getFileMtimeToken(path.join(base, entry))}`);
-      }
-    }
-    return parts.join(',');
-  };
-
-  const getDbToken = (): string => {
-    const state = arenaHandle.getState();
-    const projMtime = getFileMtimeToken(path.join(staticDir, 'projects.yml'));
-    const djMtime = getFileMtimeToken(path.join(staticDir, 'arena.dj'));
-    const avatarsMtime = getFileMtimeToken(avatarsDir);
-    return `${db.getChangeToken()}:${state.archiveSeq}:${projMtime}:${djMtime}:` +
-      `${avatarsMtime}:${getArchiveDiskToken()}`;
-  };
-
-  const relativeTimeBucket = (nowSec: number, newestTs?: number): string => {
-    if (newestTs === undefined) return '0';
-    const age = Math.max(0, nowSec - newestTs);
-    if (age < 60) return `s:${Math.floor(nowSec / 5)}`;
-    if (age < 3600) return `m:${Math.floor(nowSec / 60)}`;
-    return `h:${Math.floor(nowSec / 3600)}`;
-  };
-
-  let cachedContext: {
-    token: string;
-    links: AgentLinkContext;
-    projectMeta: Map<string, ProjectMeta>;
-    profileAgents: db.AgentRow[];
-    profileBySlug: Map<string, db.AgentRow>;
-    profileSlugs: Set<string>;
-    logoByFileName: Map<string, NonNullable<ReturnType<typeof resolveAgentLogo>>>;
-    currentLadderSlots: Set<string>;
-    pastLaddersById: Map<string, db.LadderRow>;
-    latestTournamentGameAt: Map<string, number | undefined>;
-    latestMatchAt?: number;
-    liveTournament?: db.TournamentRow;
-  } | undefined;
-
-  const getContext = (dbToken: string) => {
-    if (cachedContext?.token === dbToken) return cachedContext;
-    const projectMeta = loadProjectMetaMap(staticDir);
-    const profileAgents = db.getAllActiveAgents();
-    const profileBySlug = new Map(profileAgents.map(a => [a.slug, a]));
-    const profileSlugs = new Set(profileAgents.map(a => a.slug));
-    const logoByFileName = new Map<string, NonNullable<ReturnType<typeof resolveAgentLogo>>>();
-    for (const a of profileAgents) {
-      const logo = resolveAgentLogo(a, avatarsDir);
-      if (logo) logoByFileName.set(logo.fileName, logo);
-    }
-    const currentLadderSlots = new Set<string>(db.getCurrentLadders().map(l => l.slot));
-    const pastLaddersById = new Map<string, db.LadderRow>();
-    for (const l of db.getLadders()) {
-      if (l.status === 'settling' || l.status === 'archived') {
-        pastLaddersById.set(l.id, l);
-      }
-    }
-    const latestMatchAt = db.getRecentMatches(1)[0]?.completedAt;
-    const liveTournament = db.getRunningTournament();
-    cachedContext = {
-      token: dbToken,
-      links: {publicDir, projectMeta, profileSlugs},
-      projectMeta,
-      profileAgents,
-      profileBySlug,
-      profileSlugs,
-      logoByFileName,
-      currentLadderSlots,
-      pastLaddersById,
-      latestTournamentGameAt: new Map(),
-      latestMatchAt,
-      liveTournament,
-    };
-    return cachedContext;
-  };
-
-  const archivedLadderCache = new Map<string, CachedArchivedLadder>();
-  let cachedArenaBundle: {
-    token: string;
-    bundle: ReturnType<typeof renderArenaAndLadderArtifacts>;
-  } | undefined;
-
-  const getArenaBundle = (dbToken: string, nowSec: number) => {
-    const state = arenaHandle.getState();
-    const activeLive = !state.stale ? state.live : undefined;
-    const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
-    const ctx = getContext(dbToken);
-    const bundleToken =
-      `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}:${liveKey}`;
-    if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
-    const bundle = renderArenaAndLadderArtifacts({
-      db,
-      renderer,
-      links: ctx.links,
-      staticDir,
-      liveMatch: activeLive,
-      metaToken: ctx.token,
-      archivedCache: archivedLadderCache,
-      nowSec,
-    });
-    cachedArenaBundle = {token: bundleToken, bundle};
-    return bundle;
-  };
-
-  interface CachedResponseOptions {
-    key: string;
-    token: string;
-    contentType: string;
-    cacheControl?: string;
-    compute: () => string | Buffer;
-  }
-
-  const sendCached = (
+  const sendWithEtag = (
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    opts: CachedResponseOptions
+    opts: {body: string | Buffer; contentType: string; cacheControl?: string}
   ) => {
-    const {
-      key: cacheKey,
-      token,
-      contentType,
-      cacheControl = 'no-cache',
-      compute,
-    } = opts;
-    let entry = responseCache.get(cacheKey);
-    if (entry?.token !== token) {
-      const raw = compute();
-      const body = Buffer.isBuffer(raw) ? raw : Buffer.from(raw, 'utf8');
-      const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
-      entry = {token, body, etag, contentType};
-      if (responseCache.size >= 256) {
-        const oldest = responseCache.keys().next().value;
-        if (oldest !== undefined) responseCache.delete(oldest);
-      }
-      responseCache.set(cacheKey, entry);
-    }
-    res.setHeader('Cache-Control', cacheControl);
-    res.setHeader('ETag', entry.etag);
-    if (entry.contentType === 'image/svg+xml') {
+    const body = Buffer.isBuffer(opts.body) ? opts.body : Buffer.from(opts.body, 'utf8');
+    const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
+    res.setHeader('Cache-Control', opts.cacheControl ?? 'no-cache');
+    res.setHeader('ETag', etag);
+    if (opts.contentType === 'image/svg+xml') {
       res.setHeader(
         'Content-Security-Policy',
         "default-src 'none'; style-src 'unsafe-inline'; sandbox"
       );
       res.setHeader('X-Content-Type-Options', 'nosniff');
     }
-    if (req.headers['if-none-match'] === entry.etag) {
+    if (req.headers['if-none-match'] === etag) {
       res.statusCode = 304;
       res.end();
       return;
     }
     res.statusCode = 200;
-    res.setHeader('Content-Type', entry.contentType);
-    res.end(entry.body);
+    res.setHeader('Content-Type', opts.contentType);
+    res.end(body);
   };
 
   const sendJsonNotFound = (res: http.ServerResponse, message = 'Not found.') => {
@@ -3984,27 +3805,25 @@ export function register(app: polka.Polka, options: Options) {
 
   const handleArenaHub = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
     const nowSec = getNowSec();
-    const dbToken = getDbToken();
-    const state = arenaHandle.getState();
-    const activeLive = !state.stale ? state.live : undefined;
-    const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
-    const ctx = getContext(dbToken);
-    const token = `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}:${liveKey}`;
     if (asJson) {
-      sendCached(req, res, {
-        key: 'arena:json',
-        token,
+      const doc = buildStandingsDocument({db, publicDir, nowSec});
+      sendWithEtag(req, res, {
+        body: `${JSON.stringify(doc, undefined, 2)}\n`,
         contentType: 'application/json; charset=utf-8',
-        compute: () =>
-          `${JSON.stringify(getArenaBundle(dbToken, nowSec).standingsJson, undefined, 2)}\n`,
       });
       return;
     }
-    sendCached(req, res, {
-      key: 'arena:html',
-      token,
+    const state = arenaHandle.getState();
+    sendWithEtag(req, res, {
+      body: renderArenaHubHtml({
+        db,
+        renderer,
+        links: getLinks(),
+        staticDir,
+        liveMatch: !state.stale ? state.live : undefined,
+        nowSec,
+      }),
       contentType: 'text/html; charset=utf-8',
-      compute: () => getArenaBundle(dbToken, nowSec).arenaHtml,
     });
   };
 
@@ -4014,35 +3833,24 @@ export function register(app: polka.Polka, options: Options) {
 
   const handleBattles = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
     const nowSec = getNowSec();
-    const state = arenaHandle.getState();
-    const dbToken = getDbToken();
-    const ctx = getContext(dbToken);
-    const activeLive = !state.stale ? state.live : undefined;
-    const timeBucket = activeLive
-      ? `live:${Math.floor(nowSec / 5)}`
-      : relativeTimeBucket(nowSec, ctx.latestMatchAt);
-    const token = `${dbToken}:${state.liveSeq}:${state.stale ? 1 : 0}:${timeBucket}`;
+    const liveDoc = arenaHandle.getLiveDocument(nowSec);
     if (asJson) {
-      sendCached(req, res, {
-        key: 'battles:json',
-        token,
+      sendWithEtag(req, res, {
+        body: `${JSON.stringify(liveDoc, undefined, 2)}\n`,
         contentType: 'application/json; charset=utf-8',
-        compute: () => `${JSON.stringify(arenaHandle.getLiveDocument(nowSec), undefined, 2)}\n`,
       });
       return;
     }
-    sendCached(req, res, {
-      key: 'battles:html',
-      token,
-      contentType: 'text/html; charset=utf-8',
-      compute: () => renderBattlesPage({
+    sendWithEtag(req, res, {
+      body: renderBattlesPage({
         db,
         renderer,
-        links: ctx.links,
-        liveDoc: arenaHandle.getLiveDocument(nowSec),
+        links: getLinks(),
+        liveDoc,
         recentMatchesLimit,
         nowSec,
       }),
+      contentType: 'text/html; charset=utf-8',
     });
   };
 
@@ -4057,12 +3865,9 @@ export function register(app: polka.Polka, options: Options) {
       sendJsonNotFound(res, `Published teams.json is not available for "${id}".`);
       return;
     }
-    const dbToken = getDbToken();
-    sendCached(req, res, {
-      key: `ladder-teams:${ladder.id}`,
-      token: dbToken,
+    sendWithEtag(req, res, {
+      body: `${JSON.stringify(buildLadderTeamsDocument(db, ladder), undefined, 2)}\n`,
       contentType: 'application/json; charset=utf-8',
-      compute: () => `${JSON.stringify(buildLadderTeamsDocument(db, ladder), undefined, 2)}\n`,
     });
   });
 
@@ -4079,39 +3884,38 @@ export function register(app: polka.Polka, options: Options) {
       else sendHtmlNotFound(res);
       return;
     }
-    const nowSec = getNowSec();
-    const dbToken = getDbToken();
-    const ctx = getContext(dbToken);
-    const isCurrentSlot = ctx.currentLadderSlots.has(key);
-    const pastLadder = !isCurrentSlot ? ctx.pastLaddersById.get(key) : undefined;
-    if (!isCurrentSlot && !pastLadder) {
+    const allLadders = db.getLadders();
+    const currentLadders = db.getCurrentLadders();
+    const currentLadder = currentLadders.find(l => l.slot === key);
+    const pastLadder = !currentLadder
+      ? allLadders.find(l => l.id === key && (l.status === 'settling' || l.status === 'archived'))
+      : undefined;
+    const ladder = currentLadder ?? pastLadder;
+    if (!ladder) {
       if (isJson) sendJsonNotFound(res, `Unknown ladder "${key}".`);
       else sendHtmlNotFound(res);
       return;
     }
-    const isArchivedOnly = pastLadder?.status === 'archived';
-    const token = isArchivedOnly ? dbToken : `${dbToken}:${util.formatUtcDate(nowSec)}`;
     if (isJson) {
-      sendCached(req, res, {
-        key: `ladder:json:${key}`,
-        token,
+      const doc = buildLadderDocument({ladder, urlKey: key, db, publicDir});
+      sendWithEtag(req, res, {
+        body: `${JSON.stringify(doc, undefined, 2)}\n`,
         contentType: 'application/json; charset=utf-8',
-        compute: () => {
-          const bundle = getArenaBundle(dbToken, nowSec);
-          const jsonDoc = bundle.ladderJsonBySlot[key] ?? bundle.archivedLadderJsonById[key];
-          return `${JSON.stringify(jsonDoc, undefined, 2)}\n`;
-        },
       });
       return;
     }
-    sendCached(req, res, {
-      key: `ladder:html:${key}`,
-      token,
+    sendWithEtag(req, res, {
+      body: renderLadderHtml({
+        ladder,
+        currentLadders,
+        allLadders,
+        urlKey: key,
+        db,
+        renderer,
+        links: getLinks(),
+        nowSec: getNowSec(),
+      }),
       contentType: 'text/html; charset=utf-8',
-      compute: () => {
-        const bundle = getArenaBundle(dbToken, nowSec);
-        return bundle.ladderHtmlBySlot[key] ?? bundle.archivedLadderHtmlById[key];
-      },
     });
   };
 
@@ -4206,53 +4010,26 @@ export function register(app: polka.Polka, options: Options) {
       else sendHtmlNotFound(res);
       return;
     }
-    const nowSec = getNowSec();
-    const state = arenaHandle.getState();
-    const dbToken = getDbToken();
-    const rulesMtime = getFileMtimeToken(path.join(staticDir, 'tours', `${tournament.id}.dj`));
-    let timeBucket = '';
-    if (tournament.status === 'running') {
-      timeBucket = `:${state.liveSeq}:${Math.floor(nowSec / 15)}`;
-    } else if (tournament.status === 'completed') {
-      const ctx = getContext(dbToken);
-      let latestGameAt = ctx.latestTournamentGameAt.get(tournament.id);
-      if (!ctx.latestTournamentGameAt.has(tournament.id)) {
-        latestGameAt = db.getTournamentGames(tournament.id, 1)[0]?.completedAt ??
-          tournament.completedAt;
-        ctx.latestTournamentGameAt.set(tournament.id, latestGameAt);
-      }
-      timeBucket = `:${relativeTimeBucket(nowSec, latestGameAt)}`;
-    }
-    const token = `${dbToken}:${rulesMtime}${timeBucket}`;
     if (isJson) {
-      sendCached(req, res, {
-        key: `tournament:json:${tournament.id}`,
-        token: dbToken,
+      const doc = arena.buildTournamentDocument(db, publicDir, tournament, 10_000);
+      sendWithEtag(req, res, {
+        body: `${JSON.stringify(doc, undefined, 2)}\n`,
         contentType: 'application/json; charset=utf-8',
-        compute: () => {
-          const doc = arena.buildTournamentDocument(db, publicDir, tournament, 10_000);
-          return `${JSON.stringify(doc, undefined, 2)}\n`;
-        },
       });
       return;
     }
-    sendCached(req, res, {
-      key: `tournament:html:${tournament.id}`,
-      token,
+    sendWithEtag(req, res, {
+      body: tournaments.renderTournamentPage({
+        db,
+        renderer,
+        tournament,
+        links: getLinks(),
+        staticDir,
+        tournamentBroadcast: arenaHandle.getTournamentBroadcast(tournament.id),
+        liveTournament: db.getRunningTournament(),
+        nowSec: getNowSec(),
+      }).html,
       contentType: 'text/html; charset=utf-8',
-      compute: () => {
-        const ctx = getContext(dbToken);
-        return tournaments.renderTournamentPage({
-          db,
-          renderer,
-          tournament,
-          links: ctx.links,
-          staticDir,
-          tournamentBroadcast: arenaHandle.getTournamentBroadcast(tournament.id),
-          liveTournament: ctx.liveTournament,
-          nowSec,
-        }).html;
-      },
     });
   };
 
@@ -4273,71 +4050,32 @@ export function register(app: polka.Polka, options: Options) {
   app.get('/projects/index.json', (_req, res) => sendJsonNotFound(res));
 
   app.get('/projects', (req, res) => {
-    const dbToken = getDbToken();
-    const bibMtime = getFileMtimeToken(path.join(staticDir, 'projects.bib'));
-    const projDjMtime = getFileMtimeToken(path.join(staticDir, 'projects.dj'));
-    const token = `${dbToken}:${bibMtime}:${projDjMtime}`;
-    sendCached(req, res, {
-      key: 'projects:html',
-      token,
+    const summaries = db.getProjectArenaSummaries();
+    const arenaByName = new Map<string, projects.ArenaInfo>();
+    for (const s of summaries) {
+      arenaByName.set(s.name, {
+        slug: s.slug,
+        profileHref: `/projects/${encodeURIComponent(s.slug)}/`,
+        bestRank: s.bestRank,
+        bestLcb: s.bestLcb,
+        ladders: s.ladders.map(b => ({
+          slot: b.slot,
+          name: b.ladderName,
+          rank: b.rank,
+          provisional: b.provisional,
+        })),
+      });
+    }
+    const projectsPage = projects.page(staticDir, arenaByName);
+    sendWithEtag(req, res, {
+      body: renderer.render({
+        id: 'projects',
+        ...projectsPage,
+        header: build.injectLiveBanner(projectsPage.header, db.getRunningTournament()),
+      }),
       contentType: 'text/html; charset=utf-8',
-      compute: () => {
-        const ctx = getContext(dbToken);
-        const summaries = db.getProjectArenaSummaries();
-        const arenaByName = new Map<string, projects.ArenaInfo>();
-        for (const s of summaries) {
-          arenaByName.set(s.name, {
-            slug: s.slug,
-            profileHref: `/projects/${encodeURIComponent(s.slug)}/`,
-            bestRank: s.bestRank,
-            bestLcb: s.bestLcb,
-            ladders: s.ladders.map(b => ({
-              slot: b.slot,
-              name: b.ladderName,
-              rank: b.rank,
-              provisional: b.provisional,
-            })),
-          });
-        }
-        const projectsPage = projects.page(staticDir, arenaByName);
-        return renderer.render({
-          id: 'projects',
-          ...projectsPage,
-          header: build.injectLiveBanner(projectsPage.header, ctx.liveTournament),
-        });
-      },
     });
   });
-
-  const cachedProfiles = new Map<string, {
-    token: string;
-    rendered: ReturnType<typeof renderAgentProfile>;
-  }>();
-
-  const getAgentProfile = (
-    agent: db.AgentRow,
-    ctx: ReturnType<typeof getContext>,
-    token: string,
-    nowSec: number
-  ) => {
-    const existing = cachedProfiles.get(agent.slug);
-    if (existing?.token === token) return existing.rendered;
-    const rendered = renderAgentProfile({
-      db,
-      renderer,
-      agent,
-      links: ctx.links,
-      avatarsDir,
-      liveTournament: ctx.liveTournament,
-      nowSec,
-    });
-    if (cachedProfiles.size >= 64) {
-      const oldest = cachedProfiles.keys().next().value;
-      if (oldest !== undefined) cachedProfiles.delete(oldest);
-    }
-    cachedProfiles.set(agent.slug, {token, rendered});
-    return rendered;
-  };
 
   const handleProjectProfile = (
     req: http.IncomingMessage,
@@ -4351,52 +4089,52 @@ export function register(app: polka.Polka, options: Options) {
       return;
     }
 
-    const dbToken = getDbToken();
-    const ctx = getContext(dbToken);
-
     const isJson = forceJson || rawParam.endsWith('.json');
     if (isJson) {
       const slug = rawParam.endsWith('.json') ? rawParam.slice(0, -5) : rawParam;
-      const agent = ctx.profileBySlug.get(slug);
-      if (!agent) {
+      const agent = db.getAgentBySlug(slug);
+      if (!agent || agent.status === 'disabled') {
         sendJsonNotFound(res, `Unknown Arena agent "${slug}".`);
         return;
       }
-      const nowSec = getNowSec();
-      const token = `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}`;
-      sendCached(req, res, {
-        key: `profile:json:${agent.slug}`,
-        token,
+      const doc = buildAgentProfileDocument({db, agent, links: getLinks(), avatarsDir});
+      sendWithEtag(req, res, {
+        body: `${JSON.stringify(doc, undefined, 2)}\n`,
         contentType: 'application/json; charset=utf-8',
-        compute: () =>
-          `${JSON.stringify(getAgentProfile(agent, ctx, token, nowSec).json, undefined, 2)}\n`,
       });
       return;
     }
 
     // Serve agent logo assets (`/projects/<slug>.<ext>`) directly from `avatarsDir`.
-    const logo = ctx.logoByFileName.get(rawParam);
-    if (logo) {
-      const mtime = getFileMtimeToken(logo.filePath);
-      sendCached(req, res, {
-        key: `logo:${logo.fileName}`,
-        token: mtime,
-        contentType: logo.contentType,
-        cacheControl: 'public, max-age=86400',
-        compute: () => fs.readFileSync(logo.filePath),
-      });
-      return;
+    const dot = rawParam.lastIndexOf('.');
+    if (dot > 0) {
+      const logoAgent = db.getAgentBySlug(rawParam.slice(0, dot));
+      if (logoAgent && logoAgent.status !== 'disabled') {
+        const logo = resolveAgentLogo(logoAgent, avatarsDir);
+        if (logo?.fileName === rawParam) {
+          sendWithEtag(req, res, {
+            body: fs.readFileSync(logo.filePath),
+            contentType: logo.contentType,
+            cacheControl: 'public, max-age=86400',
+          });
+          return;
+        }
+      }
     }
 
-    const agent = ctx.profileBySlug.get(rawParam);
-    if (agent) {
-      const nowSec = getNowSec();
-      const token = `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}`;
-      sendCached(req, res, {
-        key: `profile:html:${agent.slug}`,
-        token,
+    const agent = db.getAgentBySlug(rawParam);
+    if (agent && agent.status !== 'disabled') {
+      sendWithEtag(req, res, {
+        body: renderAgentProfileHtml({
+          db,
+          renderer,
+          agent,
+          links: getLinks(),
+          avatarsDir,
+          liveTournament: db.getRunningTournament(),
+          nowSec: getNowSec(),
+        }),
         contentType: 'text/html; charset=utf-8',
-        compute: () => getAgentProfile(agent, ctx, token, nowSec).html,
       });
       return;
     }

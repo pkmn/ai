@@ -105,6 +105,7 @@ export interface MatchesPageQuery {
   opponentSlug?: string;
   limit?: number;
   offset?: number;
+  knownTotal?: number;
 }
 
 export interface MatchesPageResult {
@@ -670,15 +671,17 @@ export function getMatchesPage(
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-  const countFromSql = query.slot && query.slot !== 'all'
-    ? 'FROM matches m JOIN ladders l ON l.id = m.ladder_id'
-    : 'FROM matches m';
-
-  const countRow = db.prepare(`
-    SELECT COUNT(*) AS count
-    ${countFromSql}
-    ${whereSql}
-  `).get(...params) as {count: number};
+  const total = query.knownTotal ?? (() => {
+    const countFromSql = query.slot && query.slot !== 'all'
+      ? 'FROM matches m JOIN ladders l ON l.id = m.ladder_id'
+      : 'FROM matches m';
+    const countRow = db.prepare(`
+      SELECT COUNT(*) AS count
+      ${countFromSql}
+      ${whereSql}
+    `).get(...params) as {count: number};
+    return countRow.count;
+  })();
 
   const limit = Math.max(1, Math.min(200, Math.trunc(query.limit ?? 25)));
   const offset = Math.max(0, Math.trunc(query.offset ?? 0));
@@ -692,7 +695,7 @@ export function getMatchesPage(
 
   return {
     matches: rows.map(mapRecentMatchRow),
-    total: countRow.count,
+    total,
   };
 }
 
@@ -744,12 +747,54 @@ export function getRecentMatchesForAgentOnLadder(
   ladderId: string,
   limit = 25
 ): RecentMatchView[] {
+  const versionRows = db.prepare(
+    'SELECT id FROM agent_versions WHERE agent_id = ? ORDER BY id ASC'
+  ).all(agentId) as Array<{id: number}>;
+  if (versionRows.length === 0) return [];
+
+  // Seek covering indexes `idx_matches_p1_completed` / `idx_matches_p2_completed` per version so
+  // rare or inactive agents avoid scanning all ladder matches in `idx_matches_ladder_completed`.
+  const p1Stmt = db.prepare(`
+    SELECT id, completed_at
+    FROM matches
+    WHERE ladder_id = ? AND p1_version_id = ?
+    ORDER BY completed_at DESC, id DESC
+    LIMIT ?
+  `);
+  const p2Stmt = db.prepare(`
+    SELECT id, completed_at
+    FROM matches
+    WHERE ladder_id = ? AND p2_version_id = ?
+    ORDER BY completed_at DESC, id DESC
+    LIMIT ?
+  `);
+
+  const seen = new Map<string, number>();
+  for (const {id: versionId} of versionRows) {
+    for (const r of p1Stmt.all(ladderId, versionId, limit) as Array<{
+      id: string;
+      completed_at: number;
+    }>) {
+      seen.set(r.id, r.completed_at);
+    }
+    for (const r of p2Stmt.all(ladderId, versionId, limit) as Array<{
+      id: string;
+      completed_at: number;
+    }>) {
+      seen.set(r.id, r.completed_at);
+    }
+  }
+  if (seen.size === 0) return [];
+
+  const topIds = [...seen.entries()]
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
+    .slice(0, limit)
+    .map(([id]) => id);
+  const placeholders = topIds.map(() => '?').join(', ');
   const rows = db.prepare(`
     ${RECENT_MATCH_SELECT_SQL}
-    WHERE m.ladder_id = ?
-      AND (v1.agent_id = ? OR v2.agent_id = ?)
+    WHERE m.id IN (${placeholders})
     ORDER BY m.completed_at DESC, m.id DESC
-    LIMIT ?
-  `).all(ladderId, agentId, agentId, limit) as Array<Record<string, unknown>>;
+  `).all(...topIds) as Array<Record<string, unknown>>;
   return rows.map(mapRecentMatchRow);
 }

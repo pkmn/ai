@@ -32,12 +32,18 @@ declare global {
   }
 }
 
+const HTML_ESCAPE_RE = /[&<>"']/;
+const HTML_ESCAPE_GLOBAL_RE = /[&<>"']/g;
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
 export const escapeHtml = (str: string) =>
-  str.replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  HTML_ESCAPE_RE.test(str) ? str.replace(HTML_ESCAPE_GLOBAL_RE, ch => HTML_ESCAPES[ch]) : str;
 
 export const raw = (html: string) => new Html(html);
 
@@ -126,7 +132,9 @@ export function h(
   let attrStr = '';
 
   if (attributes) {
-    for (const [rawName, value] of Object.entries(attributes)) {
+    for (const rawName in attributes) {
+      if (!Object.prototype.hasOwnProperty.call(attributes, rawName)) continue;
+      const value = attributes[rawName];
       if (rawName === 'key' || value === undefined) continue;
 
       const name = ATTR_NAMES[rawName] ?? rawName;

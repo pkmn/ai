@@ -325,21 +325,56 @@ function extractPlainText(node: djot.AstNode): string {
   return parts.join('');
 }
 
+const INLINE_MARKUP_RE = /[*_`[{$<~^"'-]|\\/;
+
+// Scans lines outside fenced code blocks for the first level-1 ATX heading without parsing the
+// entire document AST (only invoking `djot.parse` on that single heading line when it contains
+// inline Djot markup).
 function extractTopHeadingTitle(body: string): string | undefined {
-  try {
-    const doc = djot.parse(body);
-    for (const child of doc.children) {
-      if (child.tag === 'heading' && child.level === 1) {
-        return extractPlainText(child).trim() || undefined;
+  let fenceChar = '';
+  let fenceLen = 0;
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.trimEnd();
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fenceMatch) {
+      const ch = fenceMatch[1][0];
+      const len = fenceMatch[1].length;
+      if (!fenceChar) {
+        if (ch === '~' || !fenceMatch[2].includes('`')) {
+          fenceChar = ch;
+          fenceLen = len;
+        }
+        continue;
       }
-      if (child.tag === 'section') {
-        const first = child.children.find(
-          (c): c is djot.Heading => c.tag === 'heading' && c.level === 1
-        );
-        if (first) return extractPlainText(first).trim() || undefined;
+      if (ch === fenceChar && len >= fenceLen && fenceMatch[2].trim() === '') {
+        fenceChar = '';
+        fenceLen = 0;
       }
+      continue;
     }
-  } catch {}
+    if (fenceChar) continue;
+    const h1 = /^ {0,3}# +(.+?)\s*$/.exec(line);
+    if (!h1) continue;
+    const headingText = h1[1];
+    if (!INLINE_MARKUP_RE.test(headingText)) {
+      return headingText.trim() || undefined;
+    }
+    try {
+      const doc = djot.parse(`# ${headingText}`);
+      for (const child of doc.children) {
+        if (child.tag === 'heading' && child.level === 1) {
+          return extractPlainText(child).trim() || undefined;
+        }
+        if (child.tag === 'section') {
+          const first = child.children.find(
+            (c): c is djot.Heading => c.tag === 'heading' && c.level === 1
+          );
+          if (first) return extractPlainText(first).trim() || undefined;
+        }
+      }
+    } catch {}
+    return headingText.trim() || undefined;
+  }
   return undefined;
 }
 
@@ -693,6 +728,30 @@ function sendHtml(res: http.ServerResponse, status: number, html: string) {
   res.end(html);
 }
 
+function sendWikiHtml(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  html: string,
+  isPublicCacheable: boolean
+) {
+  if (!isPublicCacheable) {
+    sendHtml(res, 200, html);
+    return;
+  }
+  const body = Buffer.from(html, 'utf8');
+  const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('ETag', etag);
+  if (req.headers['if-none-match'] === etag) {
+    res.statusCode = 304;
+    res.end();
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(body);
+}
+
 function redirect(res: http.ServerResponse, location: string, status = 302, cookies?: string[]) {
   const headers: http.OutgoingHttpHeaders = {
     Location: location,
@@ -701,6 +760,12 @@ function redirect(res: http.ServerResponse, location: string, status = 302, cook
   if (cookies?.length) headers['Set-Cookie'] = cookies;
   res.writeHead(status, headers);
   res.end();
+}
+
+export interface PageRecord {
+  rawText: string;
+  visibility?: PageVisibility;
+  content: string;
 }
 
 export class Wiki {
@@ -717,6 +782,7 @@ export class Wiki {
   // Serializes git `add`/`commit` operations in-process so concurrent edits cannot collide on
   // `.git/index.lock` inside the backing wiki repository.
   private gitQueue: Promise<any> = Promise.resolve();
+  private pushQueue: Promise<any> = Promise.resolve();
 
   constructor(options: Options = {}) {
     this.wikiDir = options.wikiDir ?? WIKI_DIR;
@@ -821,18 +887,29 @@ export class Wiki {
     return !this.isBlockedInDb(lower);
   }
 
+  private readCanonicalRecord(canonical: string): PageRecord | undefined {
+    const file = path.join(this.wikiDir, `${canonical}.dj`);
+    let rawText: string;
+    try {
+      rawText = fs.readFileSync(file, 'utf8');
+    } catch {
+      return undefined;
+    }
+    const parsed = parsePageContent(rawText);
+    return {rawText, visibility: parsed.visibility, content: parsed.content};
+  }
+
+  resolveVisibility(slug: string, rawVis?: PageVisibility): PageVisibility {
+    const isProject = this.isProjectPage(slug);
+    if (isProject) return rawVis ?? 'developers';
+    if (rawVis === 'developers' || rawVis === 'discord') return rawVis;
+    return 'public';
+  }
+
   getPageVisibility(slug: string): PageVisibility {
     const canonical = this.resolveSlug(slug);
-    const isProject = this.isProjectPage(canonical);
-    let rawText: string | undefined;
-    try {
-      rawText = this.readRawPage(canonical);
-    } catch {}
-    if (rawText === undefined) return isProject ? 'developers' : 'public';
-    const explicit = parsePageContent(rawText).visibility;
-    if (isProject) return explicit ?? 'developers';
-    if (explicit === 'developers' || explicit === 'discord') return explicit;
-    return 'public';
+    const record = isValidSlug(canonical) ? this.readCanonicalRecord(canonical) : undefined;
+    return this.resolveVisibility(canonical, record?.visibility);
   }
 
   canEdit(login: string | undefined, slug?: string): boolean {
@@ -861,15 +938,18 @@ export class Wiki {
     return path.join(this.wikiDir, `${canonical}.dj`);
   }
 
+  readPageRecord(slug: string): PageRecord | undefined {
+    const canonical = this.resolveSlug(slug);
+    if (!isValidSlug(canonical)) throw new Error(`Invalid slug: ${slug}`);
+    return this.readCanonicalRecord(canonical);
+  }
+
   readRawPage(slug: string): string | undefined {
-    const file = this.pagePath(slug);
-    if (!fs.existsSync(file)) return undefined;
-    return fs.readFileSync(file, 'utf8');
+    return this.readPageRecord(slug)?.rawText;
   }
 
   readPage(slug: string): string | undefined {
-    const rawText = this.readRawPage(slug);
-    return rawText !== undefined ? parsePageContent(rawText).content : undefined;
+    return this.readPageRecord(slug)?.content;
   }
 
   getContentFingerprint(slug: string): string {
@@ -893,18 +973,14 @@ export class Wiki {
     return slugs.map(slug => {
       const canonical = this.projectAliases.get(slug.toLowerCase()) ?? slug;
       const project = this.projectPages.get(canonical);
-      let rawText: string | undefined;
-      try {
-        rawText = fs.readFileSync(path.join(this.wikiDir, `${slug}.dj`), 'utf8');
-      } catch {}
-      const parsed = rawText !== undefined ? parsePageContent(rawText) : undefined;
+      const record = this.readCanonicalRecord(slug);
       const visibility: PageVisibility = project
-        ? (parsed?.visibility ?? 'developers')
-        : (parsed?.visibility === 'developers' || parsed?.visibility === 'discord'
-          ? parsed.visibility
+        ? (record?.visibility ?? 'developers')
+        : (record?.visibility === 'developers' || record?.visibility === 'discord'
+          ? record.visibility
           : 'public');
-      const h1Title = parsed?.content ? extractTopHeadingTitle(parsed.content) : undefined;
-      const title = h1Title || project?.name || formatTitle(canonical);
+      const heading = record?.content ? extractTopHeadingTitle(record.content) : undefined;
+      const title = heading || project?.name || formatTitle(canonical);
       return {slug, title, visibility};
     });
   }
@@ -985,12 +1061,16 @@ export class Wiki {
       }
 
       if (this.shouldPush) {
-        await execFileAsync('git', ['push', 'origin', 'HEAD'], {
-          cwd: this.wikiDir,
-          timeout: 30_000,
-        }).catch(err => {
-          console.error('Error pushing wiki commit:', err);
-        });
+        // Push asynchronously via a serialized queue so wiki saves redirect immediately once
+        // the local commit succeeds instead of blocking the HTTP response on GitHub network RTT.
+        this.pushQueue = this.pushQueue.then(
+          () => execFileAsync('git', ['push', 'origin', 'HEAD'], {
+            cwd: this.wikiDir,
+            timeout: 30_000,
+          }).catch(err => {
+            console.error('Error pushing wiki commit:', err);
+          })
+        );
       }
       return true;
     });
@@ -1194,11 +1274,13 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
   ) => {
     const slug = resolveOrRedirect(res, rawSlug);
     if (!slug) return;
-    if (!requireReadAuth(req, res, slug)) return;
+    // Read the backing `.dj` file once and reuse its parsed visibility and body throughout.
+    const record = wiki.readPageRecord(slug);
+    const vis = wiki.resolveVisibility(slug, record?.visibility);
+    if (!requireReadAuth(req, res, slug, vis)) return;
 
-    const rawText = wiki.readPage(slug);
     const encoded = encodeSlug(slug);
-    if (rawText === undefined) {
+    if (!record) {
       if (wiki.isProjectPage(slug) && !wiki.canEdit(getEffectiveUser(req), slug)) {
         sendError(res, 404);
         return;
@@ -1207,17 +1289,18 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       return;
     }
     const meta: {title?: string; summary?: string} = {};
-    const html = renderDjot(rawText, meta);
+    const renderedHtml = renderDjot(record.content, meta);
     const heading = meta.title ?? wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
     const viewPath = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
     const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
-    sendHtml(res, 200, renderPage({
+    const isPublic = vis === 'public' && !loggedIn;
+    sendWikiHtml(req, res, renderPage({
       title: heading,
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
-      nav: wikiNav(slug, 'view', loggedIn, logoutReturnTo(slug, viewPath)),
-      content: util.raw(html),
-    }));
+      nav: wikiNav(slug, 'view', loggedIn, logoutReturnTo(slug, viewPath, vis)),
+      content: util.raw(renderedHtml),
+    }), isPublic);
   };
 
   app.get('/wiki', (req, res) => renderPageSlug(req, res, 'index'));
@@ -1235,7 +1318,8 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     ));
 
     const loggedIn = Boolean(login || wiki.auth.getSession(req));
-    sendHtml(res, 200, renderPage({
+    const isPublic = !loggedIn && !isDev && !isDiscord;
+    sendWikiHtml(req, res, renderPage({
       title: 'Pages — Wiki',
       heading: 'Pages',
       path: '/wiki/pages/',
@@ -1250,7 +1334,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       ) : (
         <p>No pages yet.</p>
       ),
-    }));
+    }), isPublic);
   });
 
   app.get('/wiki/:page', (req, res) => renderPageSlug(req, res, slugParam(req.params.page)));
@@ -1424,7 +1508,8 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     try {
       const slug = resolveOrRedirect(res, slugParam(req.params.page), '/history');
       if (!slug) return;
-      if (!requireReadAuth(req, res, slug)) return;
+      const currentVis = wiki.getPageVisibility(slug);
+      if (!requireReadAuth(req, res, slug, currentVis)) return;
       const encoded = encodeSlug(slug);
       const revisions = await wiki.getHistory(slug);
       const table = revisions.length ? (
@@ -1479,13 +1564,19 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
       const heading = `History — ${displayTitle}`;
       const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
-      sendHtml(res, 200, renderPage({
+      const isPublic = currentVis === 'public' && !loggedIn;
+      sendWikiHtml(req, res, renderPage({
         title: heading,
         heading,
         path: `/wiki/${encoded}/history/`,
-        nav: wikiNav(slug, 'history', loggedIn, logoutReturnTo(slug, `/wiki/${encoded}/history`)),
+        nav: wikiNav(
+          slug,
+          'history',
+          loggedIn,
+          logoutReturnTo(slug, `/wiki/${encoded}/history`, currentVis)
+        ),
         content: table,
-      }));
+      }), isPublic);
     } catch (err) {
       console.error('Error rendering wiki history:', err);
       if (!res.headersSent) sendError(res, 500);
@@ -1503,22 +1594,25 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       const showDiff = req.query.diff === '1';
       const slug = resolveOrRedirect(res, rawSlug, `/${sha}${showDiff ? '?diff=1' : ''}`);
       if (!slug) return;
-      if (!requireReadAuth(req, res, slug)) return;
+      const currentVis = wiki.getPageVisibility(slug);
+      if (!requireReadAuth(req, res, slug, currentVis)) return;
 
       const isProject = wiki.isProjectPage(slug);
-      const revRecord = await wiki.getRevisionRecord(slug, sha);
-      const revVis: PageVisibility | undefined = revRecord
-        ? (isProject
-          ? (revRecord.visibility ?? 'developers')
-          : (revRecord.visibility === 'developers' || revRecord.visibility === 'discord'
-            ? revRecord.visibility
-            : undefined))
-        : undefined;
-
       const encoded = encodeSlug(slug);
       const displayTitle = wiki.getProjectPage(slug)?.name ?? formatTitle(slug);
       if (showDiff) {
-        const parentRecord = await wiki.getRevisionRecord(slug, sha, true);
+        const [revRecord, parentRecord, diff] = await Promise.all([
+          wiki.getRevisionRecord(slug, sha),
+          wiki.getRevisionRecord(slug, sha, true),
+          wiki.getRevisionDiff(slug, sha),
+        ]);
+        const revVis: PageVisibility | undefined = revRecord
+          ? (isProject
+            ? (revRecord.visibility ?? 'developers')
+            : (revRecord.visibility === 'developers' || revRecord.visibility === 'discord'
+              ? revRecord.visibility
+              : undefined))
+          : undefined;
         const parentVis: PageVisibility | undefined = parentRecord
           ? (isProject
             ? (parentRecord.visibility ?? 'developers')
@@ -1529,20 +1623,14 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
         const diffVis = stricterVisibility(revVis ?? 'public', parentVis);
         if (!requireReadAuth(req, res, slug, diffVis)) return;
 
-        const diff = await wiki.getRevisionDiff(slug, sha);
         if (diff === undefined) {
           sendError(res, 404);
           return;
         }
-        let maxTicks = 3;
-        for (const m of diff.matchAll(/`+/g)) {
-          if (m[0].length + 1 > maxTicks) maxTicks = m[0].length + 1;
-        }
-        const fence = '`'.repeat(maxTicks);
-        const renderedDiff = renderDjot(`${fence}diff\n${diff}\n${fence}`);
         const heading = `${displayTitle} @ ${sha.slice(0, 7)}`;
         const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
-        sendHtml(res, 200, renderPage({
+        const isPublic = stricterVisibility(currentVis, diffVis) === 'public' && !loggedIn;
+        sendWikiHtml(req, res, renderPage({
           title: heading,
           heading,
           path: `/wiki/${encoded}/${sha}/`,
@@ -1557,13 +1645,23 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
               <p className='wiki-meta'>
                 <a href={`/wiki/${encoded}/${sha}`}>View snapshot</a>
               </p>
-              {util.raw(renderedDiff)}
+              <figure className='code'>
+                <pre><code>{util.raw(renderSafeCode(diff, 'diff'))}</code></pre>
+              </figure>
             </>
           ),
-        }));
+        }), isPublic);
         return;
       }
 
+      const revRecord = await wiki.getRevisionRecord(slug, sha);
+      const revVis: PageVisibility | undefined = revRecord
+        ? (isProject
+          ? (revRecord.visibility ?? 'developers')
+          : (revRecord.visibility === 'developers' || revRecord.visibility === 'discord'
+            ? revRecord.visibility
+            : undefined))
+        : undefined;
       if (!revRecord) {
         sendError(res, 404);
         return;
@@ -1574,7 +1672,9 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       const html = renderDjot(rawText, meta);
       const heading = `${meta.title ?? displayTitle} @ ${sha.slice(0, 7)}`;
       const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
-      sendHtml(res, 200, renderPage({
+      const isPublic =
+        stricterVisibility(currentVis, revVis) === 'public' && !loggedIn;
+      sendWikiHtml(req, res, renderPage({
         title: heading,
         heading,
         path: `/wiki/${encoded}/${sha}/`,
@@ -1592,7 +1692,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
             {util.raw(html)}
           </>
         ),
-      }));
+      }), isPublic);
     } catch (err) {
       console.error('Error rendering wiki revision:', err);
       if (!res.headersSent) sendError(res, 500);

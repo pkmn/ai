@@ -3033,6 +3033,7 @@ export function renderTournamentPage(opts: {
     rrPairs,
     sfPairs,
     logFiles,
+    includeGames: false,
   });
 
   const pageInit = {

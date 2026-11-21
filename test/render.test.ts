@@ -3254,4 +3254,166 @@ describe('JSON route parity & retired pool archives', () => {
       emptyDb.close();
     }
   });
+
+  test('reuses unaffected ladder ETag when another ladder records a match', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const rby1 = await h.getRaw('/arena/ladders/rby/');
+      const vgc1 = await h.getRaw('/arena/ladders/vgc/');
+      expect(rby1.status).toBe(200);
+      expect(vgc1.status).toBe(200);
+      const rbyEtag = rby1.headers.get('etag')!;
+      const vgcEtag = vgc1.headers.get('etag')!;
+
+      const fp = db.getAgentBySlug('foul-play')!;
+      const jax = db.getAgentBySlug('jaxcalibur')!;
+      const fpVer = db.getVersionsForAgent(fp.id)[0];
+      const jaxVer = db.getVersionsForAgent(jax.id)[0];
+      db.recordCompletedMatch({
+        match: {
+          id: 'vgc-cache-02',
+          ladderId: 'gen9championsvgc2026regmc',
+          p1VersionId: fpVer.id,
+          p2VersionId: jaxVer.id,
+          seed: '5,6,7,8',
+          game1Outcome: 'L',
+          game2Outcome: 'L',
+          category: 'LL',
+          game1Turns: 10,
+          game2Turns: 11,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 900,
+          p1Game2PeakRam: 900,
+          p2Game1PeakRam: 950,
+          p2Game2PeakRam: 950,
+          p1Game1BankSeconds: 150,
+          p1Game2BankSeconds: 150,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1Game1MeanTurnMillis: 120,
+          p1Game2MeanTurnMillis: 120,
+          p2Game1MeanTurnMillis: 130,
+          p2Game2MeanTurnMillis: 130,
+          completedAt: NOW - 10,
+        },
+      });
+
+      const rby2 = await h.getRaw('/arena/ladders/rby/', {headers: {'If-None-Match': rbyEtag}});
+      const vgc2 = await h.getRaw('/arena/ladders/vgc/', {headers: {'If-None-Match': vgcEtag}});
+      expect(rby2.status).toBe(304);
+      expect(vgc2.status).toBe(200);
+      expect(vgc2.headers.get('etag')).not.toBe(vgcEtag);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('reuses agent profile ETag when an unrelated ladder records a match', async () => {
+    forceLadderActive(db, 'gen9ou20261109');
+    const soloDb = new Database(':memory:', {now: DAY_1});
+    soloDb.syncLadders(undefined, DAY_1);
+    soloDb.syncProjectsFromYaml(
+      `${TEST_PROJECTS_YAML}
+- name: Solo Agent
+  active: 2026
+  arena:
+    qualified: true
+    owners:
+      solo: solo.777
+`,
+      path.join(tmpDir, 'avatars'),
+      DAY_1
+    );
+    forceLadderActive(soloDb, 'gen1ou20261109');
+    forceLadderActive(soloDb, 'gen9ou20261109');
+    const fp = soloDb.getAgentBySlug('foul-play')!;
+    const jax = soloDb.getAgentBySlug('jaxcalibur')!;
+    const solo = soloDb.getAgentBySlug('solo-agent')!;
+    const fpSub = soloDb.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/fp.tar.zst',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen1ou20261109', 'gen9ou20261109'],
+      now: DAY_1,
+    });
+    const jaxSub = soloDb.createSubmission({
+      agentId: jax.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/jax.tar.zst',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen9ou20261109'],
+      now: DAY_1,
+    });
+    const soloSub = soloDb.createSubmission({
+      agentId: solo.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/solo.tar.zst',
+      sha256: 'c'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: DAY_1,
+    });
+    soloDb.applySubmissionStatus({versionId: fpSub.id, smokeStatus: 'passed', now: DAY_1 + 5});
+    soloDb.applySubmissionStatus({versionId: jaxSub.id, smokeStatus: 'passed', now: DAY_1 + 5});
+    soloDb.applySubmissionStatus({versionId: soloSub.id, smokeStatus: 'passed', now: DAY_1 + 5});
+    const h = await startRenderHarness({db: soloDb, publicDir: tmpPublic, now: NOW});
+    try {
+      const first = await h.getRaw('/projects/solo-agent/');
+      expect(first.status).toBe(200);
+      const etag = first.headers.get('etag')!;
+      soloDb.recordCompletedMatch({
+        match: {
+          id: 'sv-unrelated-01',
+          ladderId: 'gen9ou20261109',
+          p1VersionId: fpSub.id,
+          p2VersionId: jaxSub.id,
+          seed: '1,2,3,4',
+          game1Outcome: 'W',
+          game2Outcome: 'W',
+          category: 'WW',
+          game1Turns: 15,
+          game2Turns: 15,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 400,
+          p1Game2PeakRam: 400,
+          p2Game1PeakRam: 400,
+          p2Game2PeakRam: 400,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1Game1MeanTurnMillis: 90,
+          p1Game2MeanTurnMillis: 90,
+          p2Game1MeanTurnMillis: 90,
+          p2Game2MeanTurnMillis: 90,
+          completedAt: DAY_1 + 60,
+        },
+      });
+      const second = await h.getRaw('/projects/solo-agent/', {headers: {'If-None-Match': etag}});
+      expect(second.status).toBe(304);
+    } finally {
+      await h.close();
+      soloDb.close();
+    }
+  });
+
+  test('omits profile interactive script when an agent has no participated ladders', async () => {
+    const emptyDb = new Database(':memory:', {now: NOW});
+    emptyDb.syncLadders(undefined, NOW);
+    emptyDb.syncProjectsFromYaml(TEST_PROJECTS_YAML, path.join(tmpDir, 'avatars'), NOW);
+    const h = await startRenderHarness({db: emptyDb, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/projects/foul-play/');
+      expect(html).not.toContain('profileDataMap');
+      expect(html).not.toContain('applyStats');
+    } finally {
+      await h.close();
+      emptyDb.close();
+    }
+  });
 });

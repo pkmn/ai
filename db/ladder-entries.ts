@@ -533,22 +533,176 @@ export function getLadderVersionIdentities(
   }));
 }
 
-export function getLadderStateSignature(db: DatabaseSync, ladderId: string): string {
-  const row = db.prepare(`
+export function getVersionIdentitiesByIds(
+  db: DatabaseSync,
+  versionIds: number[]
+): LadderVersionIdentity[] {
+  if (versionIds.length === 0) return [];
+  const placeholders = versionIds.map(() => '?').join(', ');
+  const rows = db.prepare(`
     SELECT
-      COUNT(*) AS total,
-      SUM(CASE WHEN role = 'quarantined' THEN 1 ELSE 0 END) AS quarantined,
-      COALESCE(SUM(matches), 0) AS matches,
-      COALESCE(SUM(ROUND(elo, 2)), 0) AS elo_sum
-    FROM ladder_entries
-    WHERE ladder_id = ?
-  `).get(ladderId) as {
-    total: number;
-    quarantined: number | null;
-    matches: number;
-    elo_sum: number;
-  };
-  return `${row.total}:${row.quarantined ?? 0}:${row.matches}:${row.elo_sum}`;
+      av.id AS version_id,
+      av.version,
+      av.agent_id,
+      a.slug AS agent_slug,
+      a.name AS agent_name
+    FROM agent_versions av
+    JOIN agents a ON a.id = av.agent_id
+    WHERE av.id IN (${placeholders})
+  `).all(...versionIds) as Array<{
+    version_id: number;
+    version: string;
+    agent_id: number;
+    agent_slug: string;
+    agent_name: string;
+  }>;
+  return rows.map(r => ({
+    versionId: r.version_id,
+    version: r.version,
+    agentId: r.agent_id,
+    agentSlug: r.agent_slug,
+    agentName: r.agent_name,
+  }));
+}
+
+export interface LadderHubWinner {
+  slug: string;
+  name: string;
+  version: string;
+  elo: number;
+  ci95: number;
+  gxe: number;
+  wins: number;
+  losses: number;
+  ties: number;
+}
+
+export interface LadderHubSummary {
+  entrantCount: number;
+  matchCount: number;
+  hasActiveEntries: boolean;
+  top1?: LadderHubWinner;
+}
+
+export function getLadderHubSummaries(db: DatabaseSync): Map<string, LadderHubSummary> {
+  const entryRows = db.prepare(`
+    SELECT
+      le.ladder_id,
+      l.status,
+      COUNT(DISTINCT av.agent_id) AS any_agents,
+      COUNT(DISTINCT CASE
+        WHEN le.role IN ('champion', 'challenger') THEN av.agent_id
+      END) AS active_agents,
+      COUNT(DISTINCT CASE
+        WHEN le.rank_current IS NOT NULL THEN av.agent_id
+      END) AS ranked_agents,
+      SUM(CASE WHEN le.role IN ('champion', 'challenger') THEN 1 ELSE 0 END) AS active_entries,
+      COALESCE(SUM(le.matches), 0) AS entry_matches
+    FROM ladder_entries le
+    JOIN ladders l ON l.id = le.ladder_id
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE av.smoke_status = 'passed'
+      AND le.role IN ('champion', 'challenger', 'retired')
+    GROUP BY le.ladder_id
+  `).all() as Array<{
+    ladder_id: string;
+    status: LadderStatus;
+    any_agents: number;
+    active_agents: number;
+    ranked_agents: number;
+    active_entries: number;
+    entry_matches: number;
+  }>;
+
+  const pairRows = db.prepare(`
+    SELECT ladder_id, COALESCE(SUM(ww + wt + split + tl + ll), 0) AS pair_matches
+    FROM pair_aggregates
+    GROUP BY ladder_id
+  `).all() as Array<{ladder_id: string; pair_matches: number}>;
+  const pairMatchesByLadder = new Map(pairRows.map(r => [r.ladder_id, r.pair_matches]));
+
+  const winnerRows = db.prepare(`
+    SELECT
+      le.ladder_id,
+      a.slug,
+      a.name,
+      av.version,
+      le.is_anchor,
+      le.elo,
+      le.se,
+      le.gxe,
+      le.ww,
+      le.wt,
+      le.ll,
+      le.tl,
+      le.split
+    FROM ladder_entries le
+    JOIN ladders l ON l.id = le.ladder_id
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
+    WHERE av.smoke_status = 'passed'
+      AND l.status != 'upcoming'
+      AND le.rank_current = 1
+      AND le.matches >= 10
+      AND le.se <= 60
+      AND (
+        (l.status = 'archived' AND le.role IN ('champion', 'challenger', 'retired'))
+        OR le.role IN ('champion', 'challenger')
+      )
+    ORDER BY le.lcb DESC, le.elo DESC, le.version_id ASC
+  `).all() as Array<{
+    ladder_id: string;
+    slug: string;
+    name: string;
+    version: string;
+    is_anchor: number;
+    elo: number;
+    se: number;
+    gxe: number;
+    ww: number;
+    wt: number;
+    ll: number;
+    tl: number;
+    split: number;
+  }>;
+
+  const top1ByLadder = new Map<string, LadderHubWinner>();
+  for (const r of winnerRows) {
+    if (top1ByLadder.has(r.ladder_id)) continue;
+    top1ByLadder.set(r.ladder_id, {
+      slug: r.slug,
+      name: r.name,
+      version: r.version,
+      elo: Math.round(r.elo),
+      ci95: r.is_anchor === 1 ? 0 : Math.round(1.96 * r.se),
+      gxe: Math.round(r.gxe * 10) / 10,
+      wins: r.ww + r.wt,
+      losses: r.ll + r.tl,
+      ties: r.split,
+    });
+  }
+
+  const out = new Map<string, LadderHubSummary>();
+  for (const r of entryRows) {
+    const entrantCount = r.status === 'upcoming'
+      ? r.active_agents
+      : r.status === 'archived'
+        ? (r.ranked_agents || r.any_agents)
+        : (r.active_agents || r.any_agents);
+    const pairTotal = pairMatchesByLadder.get(r.ladder_id) ?? 0;
+    const matchCount = r.status === 'upcoming'
+      ? 0
+      : pairTotal > 0
+        ? pairTotal
+        : Math.round(r.entry_matches / 2);
+    out.set(r.ladder_id, {
+      entrantCount,
+      matchCount,
+      hasActiveEntries: r.active_entries > 0,
+      top1: top1ByLadder.get(r.ladder_id),
+    });
+  }
+  return out;
 }
 
 export function getProjectArenaSummaries(db: DatabaseSync): ProjectArenaSummary[] {

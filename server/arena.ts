@@ -462,6 +462,7 @@ export interface PreloadedTournamentData {
   rrPairs?: db.TournamentPairRecord[];
   sfPairs?: db.TournamentPairRecord[];
   logFiles?: ReadonlySet<string>;
+  includeGames?: boolean;
 }
 
 export function buildTournamentDocument(
@@ -471,11 +472,16 @@ export function buildTournamentDocument(
   gamesLimit = 10_000,
   preloaded?: PreloadedTournamentData
 ): TournamentDocument {
+  const includeGames = preloaded?.includeGames !== false;
   const entrants = preloaded?.entrants ?? db.getTournamentEntrants(tournament.id);
-  const games = preloaded?.games ?? db.getTournamentGames(tournament.id, gamesLimit);
+  const games = includeGames
+    ? (preloaded?.games ?? db.getTournamentGames(tournament.id, gamesLimit))
+    : [];
   const rrPairs = preloaded?.rrPairs ?? db.getTournamentCrosstable(tournament.id, 'Round Robin');
   const sfPairs = preloaded?.sfPairs ?? db.getTournamentCrosstable(tournament.id, 'Superfinal');
-  const logFiles = preloaded?.logFiles ?? listTournamentLogFiles(publicDir, tournament.id);
+  const logFiles = includeGames
+    ? (preloaded?.logFiles ?? listTournamentLogFiles(publicDir, tournament.id))
+    : undefined;
 
   let completedGames = 0;
   for (const p of rrPairs) completedGames += p.lowWins + p.highWins + p.ties;
@@ -1815,45 +1821,33 @@ export function register(app: polka.Polka, options: Options): Handle {
   const getSessionSecret = (): string | undefined =>
     options.sessionSecret ?? options.auth?.getConfig()?.sessionSecret ?? process.env.SESSION_SECRET;
 
-  const getLadderArchiveToken = (): string => {
-    const base = path.join(publicDir, 'arena', 'ladders');
-    if (!fs.existsSync(base)) return '';
-    const parts: string[] = [];
-    for (const entry of fs.readdirSync(base)) {
-      if (entry.startsWith('.')) continue;
-      try {
-        parts.push(`${entry}:${fs.statSync(path.join(base, entry), {bigint: true}).mtimeNs}`);
-      } catch {}
+  const sendJsonWithEtag = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    payload: string
+  ) => {
+    const etag = `"${crypto.createHash('sha1').update(payload).digest('hex')}"`;
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('ETag', etag);
+    if (req.headers['if-none-match'] === etag) {
+      res.statusCode = 304;
+      res.end();
+      return;
     }
-    return parts.join(',');
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(payload);
   };
 
-  let cachedLiveSnapshot: {
-    key: string;
-    countsBySlot: Record<string, number>;
-    recentMatches: BattleHistoryEntry[];
-    runningTournament?: {id: string; name: string; href: string};
-  } | undefined;
-
-  const getLiveDocument = (nowSec = getNowSec()): LiveDocument => {
-    const snapKey = `${db.getChangeToken()}:${archiveSeq}:${getLadderArchiveToken()}`;
-    if (cachedLiveSnapshot?.key !== snapKey) {
-      const countsBySlot = db.getMatchCountsBySlot();
-      const recentMatches = db.getRecentMatches(RECENT_MATCHES_LIMIT)
-        .map(m => enrichMatchView(publicDir, m));
-      cachedLiveSnapshot = {
-        key: snapKey,
-        countsBySlot,
-        recentMatches,
-        runningTournament: getRunningTournamentInfo(),
-      };
-    }
-    const {countsBySlot, recentMatches, runningTournament} = cachedLiveSnapshot;
+  const getLiveDocument = (): LiveDocument => {
+    const countsBySlot = db.getMatchCountsBySlot();
+    const recentMatches = db.getRecentMatches(RECENT_MATCHES_LIMIT)
+      .map(m => enrichMatchView(publicDir, m));
     return {
-      updatedAt: liveUpdatedAt ?? nowSec,
+      updatedAt: liveUpdatedAt ?? recentMatches[0]?.completedAt ?? 0,
       stale: liveStale,
       live: liveStale ? undefined : currentLive,
-      runningTournament,
+      runningTournament: getRunningTournamentInfo(),
       pageSize: RECENT_MATCHES_LIMIT,
       totalMatches: countsBySlot.all ?? recentMatches.length,
       countsBySlot,
@@ -2838,30 +2832,8 @@ export function register(app: polka.Polka, options: Options): Handle {
     }));
   });
 
-  let cachedLiveJson: {key: string; payload: string; etag: string} | undefined;
-
   app.get('/api/live.json', (req, res) => {
-    const nowSec = getNowSec();
-    const liveTimeKey = liveUpdatedAt !== undefined
-      ? String(liveUpdatedAt)
-      : String(Math.floor(nowSec / 5));
-    const liveKey = `${db.getChangeToken()}:${liveSeq}:${archiveSeq}:${liveStale ? 1 : 0}:` +
-      `${liveTimeKey}:${getLadderArchiveToken()}`;
-    if (cachedLiveJson?.key !== liveKey) {
-      const payload = JSON.stringify(getLiveDocument(nowSec));
-      const etag = `"${crypto.createHash('sha1').update(payload).digest('hex')}"`;
-      cachedLiveJson = {key: liveKey, payload, etag};
-    }
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('ETag', cachedLiveJson.etag);
-    if (req.headers['if-none-match'] === cachedLiveJson.etag) {
-      res.statusCode = 304;
-      res.end();
-      return;
-    }
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.end(cachedLiveJson.payload);
+    sendJsonWithEtag(req, res, JSON.stringify(getLiveDocument()));
   });
 
   app.get('/api/battles/stream', (req, res) => {
@@ -2963,8 +2935,13 @@ export function register(app: polka.Polka, options: Options): Handle {
     const agentSlug = parsedUrl.searchParams.get('agent')?.trim() || undefined;
     const agentVersion = parsedUrl.searchParams.get('version')?.trim() || undefined;
     const opponentSlug = parsedUrl.searchParams.get('vs')?.trim() || undefined;
-    const offset = (parsedPage - 1) * parsedLimit;
     const countsBySlot = db.getMatchCountsBySlot();
+    const isSlotOnly = !ladderId && !agentSlug && !agentVersion && !opponentSlug;
+    const knownTotal = isSlotOnly
+      ? (rawSlot === 'all' ? (countsBySlot.all ?? 0) : (countsBySlot[rawSlot] ?? 0))
+      : undefined;
+
+    const offset = (parsedPage - 1) * parsedLimit;
     const {matches, total} = db.getMatchesPage({
       slot: rawSlot,
       ladderId,
@@ -2973,11 +2950,11 @@ export function register(app: polka.Polka, options: Options): Handle {
       opponentSlug,
       limit: parsedLimit,
       offset,
+      knownTotal,
     });
     const totalPages = Math.max(1, Math.ceil(total / parsedLimit));
-
-    sendJson(res, 200, {
-      updatedAt: nowSec,
+    const payload = JSON.stringify({
+      updatedAt: matches[0]?.completedAt ?? 0,
       page: parsedPage,
       pageSize: parsedLimit,
       total,
@@ -2992,6 +2969,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       countsBySlot,
       matches: matches.map(m => enrichMatchView(publicDir, m)),
     });
+    sendJsonWithEtag(req, res, payload);
   };
 
   app.get('/api/battles.json', handleBattlesHistory);
