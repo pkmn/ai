@@ -1,45 +1,26 @@
 # Development
 
-This guide covers everything needed to set up, understand, modify, and run the **pkmn.ai** stack
-locally.
+Local setup, scripts, environment variables, and architecture for **pkmn.ai**. See also
+[TESTING.md](TESTING.md) (`.mock` scenarios, personas, `shots`), [`AGENTS.md`](../AGENTS.md) (code
+style), and [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md) (prose/BibTeX).
 
-For interactive persona testing, `.mock` scenarios, and screenshot verification, see
-[TESTING.md](TESTING.md). For code style and naming rules, see [`AGENTS.md`](../AGENTS.md); for
-prose/BibTeX content guidelines, see [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md).
+## 1. Prerequisites & Setup
 
----
-
-## 1. Prerequisites & First-Time Setup
-
-- **Node.js 24+** (uses Node's built-in `node:sqlite` `DatabaseSync` and `--env-file-if-exists=.env`)
-- **Git** (used at runtime by the Djot wiki in `server/wiki.tsx` and sparse-checkout team submodules)
-- **Playwright Chromium** *(optional, required for `npm run shots` and `test/e2e.test.ts`)*
-
-Clone the repository, install dependencies, and initialize the sparse-checked-out reference team
-submodules (used for `pools` ladder $1\text{-NN}$ uniqueness validation) and static build:
+- **Node.js 24+** (`node:sqlite` `DatabaseSync`, `--env-file-if-exists=.env`)
+- **Git** (runtime Djot wiki in `server/wiki.tsx`, sparse team submodules)
+- **Playwright Chromium** *(optional, for `npm run shots` and `test/e2e.test.ts`)*
 
 ```sh
-git clone https://github.com/pkmn/ai.git
-cd ai
-
-# Install Node dependencies, initialize sparse team submodules, and build static pages
-# (In git worktrees, `npm run setup` reuses the main checkout's submodule cache and `private/`.)
-npm run setup
-
-# Optional: install headless Chromium for E2E and visual regression tests
-npx playwright-core install chromium
+git clone https://github.com/pkmn/ai.git && cd ai
+npm run setup                           # installs deps, sparse team submodules (reused in worktrees), builds public/
+npx playwright-core install chromium    # optional: for E2E & visual tests
 ```
 
----
+## 2. Running Locally
 
-## 2. Running the Stack Locally
-
-Zero `.env` secrets are required to run the stack locally.
+No `.env` secrets are required locally.
 
 ### Seeded Arena Mode (Recommended)
-
-To explore populated leaderboards, Elo charts, battle history, Tournaments, developer
-account onboarding stages, and a Git-backed wiki on `http://localhost:1234`:
 
 ```sh
 npm run build
@@ -47,140 +28,102 @@ npm run mock -- seed
 DEV_AUTH=1 MOCK=1 npm start
 ```
 
-- `npm run mock -- seed` writes `db/data/arena.sqlite` and `.mock/` overlays (`.mock/ladders.yml`,
-  `.mock/static/projects.yml`, `.mock/static/avatars/`, `.mock/wiki/`, `.mock/vgc-teams.txt`),
-  rebuilds `public/arena/viewer/index.html`, and syncs the static `#topbar` live banner without
-  touching tracked `config/ladders.yml` or `static/projects.yml`.
-- `DEV_AUTH=1 MOCK=1 npm start` starts the unified Polka + static file-watcher server on
-  `http://localhost:1234` with `DEV_AUTH=1` enabled (visit `http://localhost:1234/auth/dev` to
-  switch developer personas; see [TESTING.md](TESTING.md)).
-- To simulate live background Arena activity (automatic smoke-testing of `/account/` submissions and
-  multi-turn ticking clocks on `/arena/battles/`), run in a second terminal:
+- `mock -- seed` writes `db/data/arena.sqlite` and `.mock/` overlays (`ladders.yml`,
+  `static/projects.yml`, `static/avatars/`, `wiki/`, `vgc-teams.txt`), rebuilds
+  `public/arena/viewer/index.html`, and syncs `#topbar` without touching tracked configs.
+- `DEV_AUTH=1 MOCK=1 npm start` serves `http://localhost:1234` with persona switching at
+  `http://localhost:1234/auth/dev` (see [TESTING.md](TESTING.md)).
+- For background smoke-testing and live ticking matches, run in a second terminal:
 
 ```sh
 ARENA_SECRET=dev-secret DEV_AUTH=1 MOCK=1 npm start
-# Second terminal:
 MOCK=1 npm run mock -- simulate --server http://localhost:1234 --secret dev-secret
 ```
 
-To wipe all mock overlays and return to clean unseeded configs:
-
-```sh
-npm run clean && npm run build
-```
+Reset mock state with `npm run clean && npm run build`.
 
 ### Unseeded Mode
 
-To run directly against the base `config/ladders.yml`, `static/projects.yml`, and optional local
-`wiki/` checkout:
+Run directly against `config/ladders.yml`, `static/projects.yml`, and an optional local `wiki/`:
 
 ```sh
-npm run build
-DEV_AUTH=1 npm start
+npm run build && DEV_AUTH=1 npm start
 ```
-
----
 
 ## 3. NPM Scripts
 
-| Script | Command / Behavior |
+| Script | Behavior |
 | :--- | :--- |
-| `npm run setup` | Install dependencies if needed, initialize/repair sparse submodules & worktree `private/`, and build `public/`. |
+| `npm run setup` | Install deps if needed, init/repair sparse submodules & worktree `private/`, build `public/`. |
 | `npm run compile` | Compile TypeScript (`tsc -p .`) into `build/`. |
-| `npm run build` | Compile TypeScript and build all static Djot, BibTeX/YAML pages, and the `/arena/viewer/` shell into `public/`. |
-| `npm start` | Start `build/server` on `http://localhost:1234` (with static file watching outside `NODE_ENV=production`; set `DEV_AUTH=1` for local persona login). |
-| `npm run lint` | Run `eslint --cache`, `stylelint static/style/*.css tools/*.css`, and `hyperlink public --check-anchors`. |
-| `npm run fix` | Auto-fix lint and CSS ordering issues (`eslint --fix && stylelint --fix static/style/*.css tools/*.css`). |
+| `npm run build` | Compile TS and build static Djot, BibTeX/YAML pages, and `/arena/viewer/` into `public/`. |
+| `npm start` | Start `build/server` on `:1234` (live static watcher outside `NODE_ENV=production`). |
+| `npm run lint` | Run `eslint --cache`, `stylelint static/style/*.css tools/*.css`, `hyperlink public --check-anchors`. |
+| `npm run fix` | Auto-fix lint and CSS ordering (`eslint --fix && stylelint --fix ...`). |
 | `npm run clean` | Remove `public/`, `build/`, `.tsbuildinfo`, `.eslintcache`, `.mock/`, and `db/data/`. |
-| `npm run test` | Run `npm run build && npm run lint`. |
-| `npm run test:integration` | Run `npm run test` followed by the full Vitest suite (`vitest test`). |
-| `npm run shots` | Capture & verify responsive light/dark screenshots across 4 viewports into `.shots/`. |
-| `npm run mock -- ...` | Run the `.mock` scenario engine and match simulator (see [TESTING.md](TESTING.md)). |
-| `npm run simulate -- ...` | Run the matchmaking & rating parameter-sweep simulator (see [TESTING.md](TESTING.md)). |
-| `npm run pkmn -- ...` | Run the operator CLI against SQLite (see [ADMIN.md](ADMIN.md)). |
+| `npm run test` | `npm run build && npm run lint`. |
+| `npm run test:integration` | `npm run test` + full Vitest suite (`vitest test`). |
+| `npm run shots` | Capture/verify light & dark screenshots across 4 viewports into `.shots/`. |
+| `npm run mock -- ...` | Run `.mock` scenario engine and match simulator ([TESTING.md](TESTING.md)). |
+| `npm run simulate -- ...` | Run matchmaking & rating parameter-sweep simulator ([TESTING.md](TESTING.md)). |
+| `npm run pkmn -- ...` | Run operator CLI against SQLite ([ADMIN.md](ADMIN.md)). |
 
----
+## 4. Environment Variables & Safety Guarantees
 
-## 4. Environment Variables & Side-Effect Isolation
-
-All scripts load `.env` automatically via `--env-file-if-exists=.env` (no multi-file config
-fallbacks). Every secret is optional in local `DEV_AUTH=1` development:
+Scripts load root `.env` via `--env-file-if-exists=.env`. All secrets are optional with `DEV_AUTH=1`:
 
 | Variable | Local Default | Purpose |
 | :--- | :--- | :--- |
-| `DEV_AUTH` | unset | Set to `1` (`DEV_AUTH=1 npm start`) to enable loopback-only `GET /auth/dev` persona switcher and ephemeral fallback `SESSION_SECRET`. |
-| `MOCK` | unset (`1` when seeded) | Reads `.mock/ladders.yml`, `.mock/static/projects.yml`, `.mock/static/avatars/`, and `.mock/wiki/`. |
-| `NODE_ENV` | unset (`development`) | Enables `https://pkmn.ai` OAuth origin, `Secure` cookies, `git push` on wiki edits, and automatic 60-second Discord sync when `'production'`. |
-| `SESSION_SECRET` | ephemeral random hex (`DEV_AUTH=1`) | HMAC-SHA256 signing secret for `pkmn_session` cookies and HKDF key for encrypted submission pull tokens. |
-| `ARENA_SECRET` | unset | Bearer token authenticating `/api/arena/*` worker control-plane requests. |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | unset | GitHub OAuth2 credentials for `/auth/github`. |
-| `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | unset | Discord OAuth2 credentials for `/auth/discord`. |
-| `DISCORD_BOT_TOKEN` | unset | Discord API token for role sync, `/define` interactions, chat log archival, and DMs. |
-| `VGC_BOT_TOKEN` | unset | Partner API bearer token for syncing `vgc.bot` / `pkmn.bot` `#1` Discord roles. |
-| `SMOGON_TOKEN` | unset | Optional XenForo API/session token for `server/smogon.ts` member lookups. |
+| `DEV_AUTH` | unset | `1` enables loopback-only `GET /auth/dev` persona picker and ephemeral `SESSION_SECRET`. |
+| `MOCK` | unset (`1` seeded) | Reads `.mock/{ladders.yml,static/projects.yml,static/avatars/,wiki/}`. |
+| `NODE_ENV` | unset | `'production'` enables `https://pkmn.ai` OAuth origin, `Secure` cookies, wiki `git push`, and 60s Discord sync. |
+| `SESSION_SECRET` | random hex (`DEV_AUTH=1`) | HMAC-SHA256 key for `pkmn_session` cookies and HKDF key for encrypted pull tokens. |
+| `ARENA_SECRET` | unset | Bearer token for `/api/arena/*` control-plane RPCs. |
+| `GITHUB_CLIENT_ID` / `_SECRET` | unset | GitHub OAuth2 (`/auth/github`). |
+| `DISCORD_CLIENT_ID` / `_SECRET` | unset | Discord OAuth2 (`/auth/discord`). |
+| `DISCORD_BOT_TOKEN` | unset | Role sync, `/define` interactions, chat log archival, and DMs. |
+| `VGC_BOT_TOKEN` | unset | Partner API bearer token for `vgc.bot` / `pkmn.bot` `#1` Discord roles. |
+| `SMOGON_TOKEN` | unset | Optional XenForo API/session token for `server/smogon.ts`. |
 
-**Local safety guarantees:**
-1. **SQLite isolation:** Local SQLite files (`arena.sqlite`, `-wal`, `-shm`) live in gitignored
-   `db/data/` — never inside `private/`, which is watched by `site.serve()` and would trigger
-   infinite rebuild loops. Production opens `/var/lib/pkmn/arena.sqlite` automatically whenever
-   `/var/lib/pkmn` exists or `NODE_ENV=production`. The HTTP server listens on port `1234`, binding
-   `127.0.0.1:1234` when `NODE_ENV=production` and booting via `site.serve()` otherwise (live static
-   rebuilds + LAN IP output).
-2. **Discord & wiki isolation:** Even if `.env` contains production `DISCORD_BOT_TOKEN` synced via
-   `./private/sync`, `server/discord.ts` disables live role/pin/DM/log sync and `server/wiki.tsx`
-   skips `git push` whenever `NODE_ENV !== 'production'`.
+- **SQLite & server binding:** Local SQLite (`arena.sqlite`, `-wal`, `-shm`) lives in gitignored
+  `db/data/` (never `private/`, which `site.serve()` watches). Production opens
+  `/var/lib/pkmn/arena.sqlite` automatically when `/var/lib/pkmn` exists or `NODE_ENV=production`.
+  The server always listens on `:1234` (`127.0.0.1:1234` in prod; `site.serve()` otherwise).
+- **Side-effect isolation:** Outside `NODE_ENV=production`, `server/discord.ts` disables live sync/DMs
+  and `server/wiki.tsx` skips `git push` even if `.env` holds production tokens.
 
----
+## 5. Architecture & Workflows
 
-## 5. Architecture & Codebase Map
-
-**pkmn.ai** uses a hybrid static + dynamic SSR/SSE architecture ([DESIGN.md](DESIGN.md)): Nginx
-serves static Djot/YAML/BibTeX essays, `/arena/viewer/`, and `.7z`/`.tar`/`.log` archives directly
-from `public/`, while Node.js (`server/`) dynamically renders database-backed Arena and Project
-views (`/arena*`, `/projects*`) and `.json` mirrors from an ETag `304` + WAL-token in-memory cache,
-streams live SSE updates (`/api/battles/stream`, `/api/tournaments/:id/stream`), and handles OAuth,
-`/account`, `/wiki`, `/api/battles.json`, Discord webhooks, and the `/api/arena/*` control plane.
+Hybrid static + dynamic SSR/SSE ([DESIGN.md](DESIGN.md)): Nginx serves static Djot/YAML/BibTeX
+pages, `/arena/viewer/`, and `.7z`/`.tar`/`.log` archives from `public/`; Node (`server/`) renders
+DB-backed Arena/Project HTML & `.json` via an ETag `304` + WAL-token cache, streams SSE
+(`/api/battles/stream`, `/api/tournaments/:id/stream`), and serves OAuth, `/account`, `/wiki`,
+`/api/battles.json`, Discord webhooks, and `/api/arena/*`.
 
 ```text
-├── config/          # ladders.yml, discord.yml, nginx.conf, and systemd service/timer units
-├── db/              # Database connection/migrations (db/index.ts) + 1-to-1 per-table modules
-│   ├── schema/      # Declarative SQLite table DDL (*.sql) + ER diagram (db/schema/README.md)
-│   └── migration/   # Sequential versioned SQL migrations (NNNN-description.sql)
-├── docs/            # Project design, setup, development, testing, and admin documentation
+├── config/          # ladders.yml, discord.yml, nginx.conf, systemd service/timer units
+├── db/              # db/index.ts (connection + migrations) + 1-to-1 per-table modules
+│   ├── schema/      # SQLite DDL (*.sql) + ER diagram (db/schema/README.md)
+│   └── migration/   # Sequential SQL migrations (NNNN-description.sql)
+├── docs/            # Design, setup, development, testing, historical, and admin docs
 ├── server/          # Polka server, OAuth, account, wiki, Discord, Arena RPC, rating & team math
-├── static/          # Djot essays (*.dj), projects/research/glossary catalogs, TSX runtime/views, CSS
-├── teams/           # 1-NN team distance workspace (teams/index.ts) & reference blocklist pools
-├── test/            # Vitest unit, integration, rating solver, protocol, and Playwright E2E suites
-└── tools/           # Operator CLI (pkmn.ts), scenario simulator (mock.ts), matchmaking simulator (simulate.ts), visual verifier (shots.tsx)
+├── static/          # Djot essays (*.dj), YAML/BibTeX catalogs, TSX runtime/views, CSS
+├── teams/           # 1-NN team distance (teams/index.ts) & reference blocklists
+├── test/            # Vitest unit, integration, rating, protocol, and Playwright E2E tests
+└── tools/           # pkmn.ts (CLI), mock.ts (scenarios), simulate.ts (sweeps), shots.tsx (visual)
 ```
 
-### Key Workflows When Making Changes
-
-- **Static content, TSX views & CSS (`static/`, `server/`):**
-  - Essays and concept pages are authored in [Djot](https://djot.net/) (`static/*.dj`,
-    `static/concepts/*.dj`), with catalogs in `static/projects.yml`, `static/projects.bib`,
-    `static/research.bib`, and `static/glossary.yml`.
-  - Render HTML views using the custom React-free TSX renderer in `static/dom.ts` (`h`, `Fragment`,
-    `raw`) across `.tsx` modules (`static/*.tsx`, `server/*.tsx`, `tools/shots.tsx`), and keep
-    stylesheets in `static/style/*.css` / `tools/*.css`.
-  - After changing TSX views, CSS, or client scripts, run `npm run shots` to verify zero console
-    errors and zero horizontal overflow across viewports and themes (see [TESTING.md](TESTING.md)).
-- **Database tables & migrations (`db/`):**
-  - Each SQLite table owns a 1-to-1 module `db/<table>.ts` (both TypeScript types and SQL queries)
-    paired with `db/schema/<table>.sql` (see [`db/schema/README.md`](../db/schema/README.md)).
-  - Fresh databases execute `db/schema/*.sql` directly and mark existing migrations applied;
-    existing databases create an automatic `VACUUM INTO` backup before applying new sequential
-    `db/migration/NNNN-description.sql` files tracked in `schema_migrations`.
-  - Always translate SQL `NULL` and `snake_case` columns to `undefined` and `camelCase` immediately
-    at the `db/` row boundary.
-- **Routes & `.json` endpoints:**
-  - `/arena/` is the central hub, `/arena/ladders/:name/` hosts ladders, `/arena/tournaments/:id/`
-    hosts tournaments, `/arena/battles/` hosts the live tracker + paginated history
-    (`GET /api/battles.json`), and `/projects/:slug/` hosts per-agent statistical profiles.
-  - Expose `.json` (`/<path>.json` === `/<path>/index.json`) **only** for SQLite database-backed
-    pages (`/arena`, `/arena/ladders/*`, `/arena/tournaments/*`, `/arena/battles`,
-    `/projects/:slug`, `/account`) — never for static YAML/BibTeX/Djot/Git pages.
-- **Agent protocol ([`static/rules.dj`](../static/rules.dj)):**
-  - Stdio lifecycle, chat/covert-channel elision, and timer rules are documented on `/rules/`
-    ([`static/rules.dj`](../static/rules.dj)), implemented in `server/protocol.ts` and tested by
-    `test/protocol.test.ts`.
+- **Views & CSS:** Author essays in [Djot](https://djot.net/) (`static/*.dj`, `static/concepts/*.dj`)
+  and catalogs in `static/{projects.yml,projects.bib,research.bib,glossary.yml}`. Render HTML with
+  the React-free TSX runtime in `static/dom.ts` (`h`, `Fragment`, `raw`) and put CSS in
+  `static/style/*.css` / `tools/*.css`. Run `npm run shots` after UI changes ([TESTING.md](TESTING.md)).
+- **Database (`db/`):** 1-to-1 `db/<table>.ts` + `db/schema/<table>.sql` ([`db/schema/README.md`](../db/schema/README.md)).
+  Fresh DBs load `schema/*.sql`; existing DBs run `VACUUM INTO` backup before applying
+  `db/migration/NNNN-*.sql`. Translate SQL `NULL`/`snake_case` to `undefined`/`camelCase` at the `db/`
+  boundary.
+- **Routes & `.json`:** `/arena/`, `/arena/ladders/:name/`, `/arena/tournaments/:id/`,
+  `/arena/battles/` (`GET /api/battles.json`), `/projects/:slug/`. Emit `.json` (`/<path>.json` ===
+  `/<path>/index.json`) **only** for SQLite-backed pages (`/arena`, `/arena/ladders/*`,
+  `/arena/tournaments/*`, `/arena/battles`, `/projects/:slug`, `/account`).
+- **Agent protocol:** Documented in [`static/rules.dj`](../static/rules.dj), implemented in
+  `server/protocol.ts`, tested in `test/protocol.test.ts`.

@@ -1,68 +1,30 @@
 # Testing
 
-This guide covers automated unit/integration tests, responsive visual-regression checks, interactive
-multi-persona walkthroughs, and the declarative `.mock` scenario engine used to test **pkmn.ai**
-end-to-end without real agent containers or cloud VMs.
-
-For initial local setup and environment variables, see [DEVELOPMENT.md](DEVELOPMENT.md); for
-production operator commands, see [ADMIN.md](ADMIN.md).
-
----
+Automated test suites, visual-regression verification (`npm run shots`), manual persona testing,
+the `.mock` scenario engine, and the matchmaking simulator. See [DEVELOPMENT.md](DEVELOPMENT.md) for
+setup and [ADMIN.md](ADMIN.md) for operator commands.
 
 ## 1. Automated Build, Lint & Test Suite
 
-Run both the static build/lint pipeline and the Vitest suite before considering any change complete:
-
 ```sh
-# 1. Type-check (tsc -p .), build static HTML/JSON, run ESLint, Stylelint, and Hyperlink anchor checks
-npm run test
-
-# 2. Run all unit, database, HTTP API, rating math, and Playwright E2E tests
-npx vitest run
-
-# Or run both in one command (used by GitHub Actions CI):
-npm run test:integration
+npm run test              # tsc -p ., static build, eslint, stylelint, hyperlink --check-anchors
+npx vitest run            # all unit, DB, HTTP API, rating, arena, and Playwright E2E tests
+npm run test:integration  # both (CI entrypoint)
 ```
 
-### What the Automated Suite Covers
+Install headless Chromium once if missing: `npx playwright-core install chromium`.
 
-- **`npm run test`:**
-  - `tsc -p .` compiles `static/`, `server/`, `db/`, `teams/`, and `tools/` into `build/`.
-  - `node build/static/build` renders all Djot essays, BibTeX/YAML catalogs, and static Arena pages
-    into `public/`.
-  - `eslint --cache` enforces `@pkmn/eslint-config` across TypeScript sources and tests.
-  - `stylelint static/style/*.css tools/*.css` checks CSS property ordering and selector specificity.
-  - `hyperlink public --check-anchors` verifies zero broken internal links or `#anchor` fragments
-    across every generated HTML file in `public/`.
-- **`npx vitest run` (`test/*.test.ts`):**
-  - `test/ratings.test.ts` — Finite-difference gradients/Hessians, KKT optimality, index-permutation
-    invariance, bipartite/disconnected graphs, Monte Carlo convergence, and active-learning
-    matchmaking (`server/ratings.ts`).
-  - `test/protocol.test.ts` — Verifies stdio command parsing and opponent chat / covert-channel
-    elision across `@pkmn/sim` battles (`server/protocol.ts`).
-  - `test/db.test.ts` — SQLite schema bootstrap, sequential `db/migration/NNNN-*.sql` upgrades,
-    project/Smogon sync, ladder lifecycle & rotation, and match aggregation (`db/`).
-  - `test/auth.test.ts`, `test/account.test.ts`, `test/wiki.test.ts`, `test/discord.test.ts`,
-    `test/api.test.ts`, `test/render.test.ts`, `test/projects.test.ts` — OAuth cookies, submission
-    gating & 1-NN team uniqueness, Git-backed wiki revisions & visibility tiers, Discord role/DM
-    sync, `/api/arena/*` control-plane endpoints, and dynamic SSR HTML/`.json` rendering.
-  - `test/arena.test.ts`, `test/sim.test.ts`, `test/setup.test.ts` — Mac mini & GCP Arena runner
-    unpacking/sandbox/time-slicing/tournament orchestration, multi-version `@pkmn/sim` worker
-    isolation, and repository setup/submodule helpers.
-  - `test/e2e.test.ts` — Executes [`tools/scenarios/e2e.mock`](../tools/scenarios/e2e.mock) in Live
-    HTTP Server Mode against a real in-process server and verifies interactive browser flows in
-    headless Chromium (`playwright-core`).
+| Suite | Coverage |
+| :--- | :--- |
+| `npm run test` | `tsc -p .` -> `build/`; `build/static/build` -> `public/`; `eslint --cache`; `stylelint static/style/*.css tools/*.css`; `hyperlink public --check-anchors`. |
+| `test/ratings.test.ts` | Finite-difference gradients/Hessians, KKT optimality, permutation invariance, disconnected graphs, Monte Carlo convergence, active matchmaking (`server/ratings.ts`). |
+| `test/protocol.test.ts` | Stdio parsing & chat/covert-channel elision across `@pkmn/sim` (`server/protocol.ts`). |
+| `test/db.test.ts` | Schema bootstrap, `db/migration/NNNN-*.sql`, project/Smogon sync, ladder lifecycle/rotation, match aggregation (`db/`). |
+| `test/{auth,account,wiki,discord,api,render,projects}.test.ts` | OAuth cookies, submission gating & 1-NN uniqueness, Git wiki revisions/visibility, Discord sync, `/api/arena/*`, dynamic SSR HTML/`.json`. |
+| `test/{arena,sim,setup}.test.ts` | Mac mini & GCP unpacking/sandbox/time-slicing/tournaments, multi-version `@pkmn/sim` worker isolation, repo setup/submodules. |
+| `test/e2e.test.ts` | Runs [`tools/scenarios/e2e.mock`](../tools/scenarios/e2e.mock) in Live HTTP Server Mode + Playwright Chromium flows. |
 
-> [!NOTE]
-> If Playwright has not downloaded its headless Chromium shell yet, install it once with:
-> ```sh
-> npx playwright-core install chromium
-> ```
-
-### Testing Candidate Team Uniqueness (`teams/`)
-
-To test a candidate team paste against reference blocklist directories using the exact $1\text{-NN}$
-distance threshold ($d_{\text{1-NN}} \ge 1.30$) enforced by `POST /api/submissions`:
+**Test a candidate team against 1-NN blocklists ($d_{\text{1-NN}} \ge 1.30$):**
 
 ```sh
 node build/teams/index.js <candidate-team.txt> \
@@ -72,615 +34,231 @@ node build/teams/index.js <candidate-team.txt> \
   --format=gen9championsvgc2026regmc
 ```
 
----
+## 2. Visual Regression & Visual Atlas (`npm run shots`)
 
-## 2. Visual Regression, Edge-Case Atlas & Layout Verification (`npm run shots`)
-
-Whenever modifying TSX views (`static/*.tsx`, `server/*.tsx`), stylesheets (`static/style/*.css`), Djot
-layouts, or client scripts, run [`tools/shots.tsx`](../tools/shots.tsx):
+Run [`tools/shots.tsx`](../tools/shots.tsx) whenever editing TSX views, CSS, Djot layouts, or client
+scripts:
 
 ```sh
-# Render all 95 states across 4 viewports x 2 color schemes and generate .shots/index.html
-npm run build
-npm run shots
-
-# Open the interactive one-stop Visual Atlas in your browser (defaults to desktop + light mode)
-open .shots/index.html
-
-# Filter to a specific scenario or logical section (e.g. account, battles, ladders, projects, static, tournaments, wiki)
-npm run shots -- --only account
-npm run shots -- --only ladders
-
-# Record a baseline in .shots/baseline/ before modifying templates or CSS
-npm run shots -- --baseline
-
-# Re-run after changes to compare against .shots/baseline/ and inspect diffs in .shots/index.html
-npm run shots
-npm run shots -- --tolerance 20
+npm run shots -- --baseline    # snapshot .shots/baseline/ before edits
+npm run build && npm run shots # capture all 95 states (4 viewports x 2 themes) & diff vs baseline
+npm run shots -- --only account # filter by scenario or section; pass --tolerance 20 to relax diff
+open .shots/index.html         # inspect Visual Atlas
+npm run clean && npm run test  # remove mock artifacts from public/ afterward
 ```
 
-`npm run shots` boots an isolated in-memory fixture seeded with
-[`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock), applies reversible SQLite savepoints and
-Playwright interactions to trigger every route, lifecycle stage, and error/edge case on the site, and
-captures full-page screenshots across:
-- **4 viewports:** `small` (`375×667`), `phone` (`390×844`), `tablet` (`744×1133`), `desktop`
-  (`1280×900`)
-- **2 color schemes:** `light` and `dark`
+`shots` seeds an in-memory fixture from [`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock),
+uses SQLite savepoints + Playwright interactions across **4 viewports** (`small` `375×667`, `phone`
+`390×844`, `tablet` `744×1133`, `desktop` `1280×900`) × **2 themes** (`light`, `dark`), and asserts
+**zero console/page errors** and **zero horizontal overflow** (`scrollWidth <= innerWidth`).
 
-Every `(scenario, viewport, theme)` combination asserts **zero console/page errors** and **zero
-horizontal overflow** (`document.documentElement.scrollWidth <= window.innerWidth`), writing PNGs to
-`.shots/<viewport>/<theme>/<scenario>.png` and generating a self-contained **Visual Atlas** at
-`.shots/index.html` (rendered from [`tools/shots.tsx`](../tools/shots.tsx) and
-[`tools/shots.css`](../tools/shots.css)).
+- **Atlas controls (`.shots/index.html`):** Hotkeys `←`/`→` (states), `↑`/`↓` (sections), `1`–`4`
+  (viewports), `t` (theme), `g` (Carousel/Grid), `c` (`Changed Only`), `d` (`After`/`3-Up Diff`/
+  `Diff`/`Before`).
+- **Viewer diff tolerance:** `regions.json` records `iframe.viewer-frame` bounding boxes. Pixel diff
+  is strict `0`-pixel outside viewers (unless `--tolerance` is passed) and tolerates up to `25%`
+  sprite/animation variance inside unchanged viewer frames.
 
-### `.shots/index.html` Visual Atlas & Diff Viewer
+**7 Atlas Sections (95 states):**
+1. **`static`:** Home (normal + `● LIVE` `#topbar`), Background (`Under Construction`), Concepts + 5
+   subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release,
+   Research, Arena Rules, `404`.
+2. **`projects`:** Filters (`Active`/`All`/`Inactive`), champion profile (`/projects/0-error/`,
+   version & H2H filters, expanded telemetry, empty filter), provisional (`/projects/pokerus/`),
+   qualified w/ 0 entries (`/projects/cynthiai/`), pending (`/projects/asterai/`).
+3. **`ladders`:** Active hub, expandable past seasons, pre-launch hub, RBY (`Active`/`Best`/`All`,
+   secondary `1500 ±0` anchor), VGC `pools`, RAND (`<id>-logs.tar`), `settling` season
+   (`#season-select`), `archived` season (`<id>-logs.tar`), `upcoming` ladder.
+4. **`battles`:** Live VGC (`Initializing (/ready)`, `Team Preview` 6 HP circles, mid-battle 4
+   brought, `Game 2 / 2` w/ Game 1 summary + swapped hashes), live Singles `Game 2 / 2` w/ Game 1
+   `[Timeout]`, live `RAND` + Showdown viewer, expanded `RAND` & archived `VGC` replay rows
+   (`Game 1`/`2`), expanded `[Timeout]`/`[Crash]`/clean rows, format filter, Page 2, `Idle`, `Stale`,
+   empty history.
+5. **`tournaments`:** Completed `#1` (`SF` badges, `1-replays.7z`, expanded game replay), live Bo3
+   `#2` multi-table (`Table 1` dual-thinking, `Table 2` P1 committed / P2 thinking, idle `● Watch T1`,
+   expanded Bo3 `Game 1`/`2`/`3` switcher, offline log fallback), scheduled `#3` (with & without
+   entrants).
+6. **`account`:** Disabled (`403`), `Pending` (locked & Tournament `#3` open), `Qualified`
+   pre-launch, `Eligible` new (`0` entries), VGC incremental validation (`0/20`, `<1.30`/`<4` moves
+   rejections, `10/20`, `20/20`), form error, `Eligible` settled w/ locked VGC pool, `Ineligible`
+   (`PENDING` smoke test, 14d cooldown w/ Tournament `#3` open, expanded stderr log, unsettled
+   provisional, `QUARANTINED (DM sent)`, Smogon-banned `smogon_standing = 'bad'`).
+7. **`wiki`:** Index, `/wiki/pages`, `developers`/`discord` project pages, public & project editors
+   (visibility bar, live Djot preview), revision history/snapshot/diff, owner redirect & non-owner
+   `404` on uncreated page, `403`s (unregistered, non-owner edit, non-guild Discord), `/auth/dev`.
 
-Opening `.shots/index.html` provides a one-stop interactive gallery organized into the **7 logical
-sections** of the site, with an interactive carousel per section (`‹ Prev` / `Next ›`, clickable
-state pills, keyboard `←` / `→` to step through states, `↑` / `↓` to jump between sections, `1`–`4`
-to switch viewport, `t` to toggle `light` / `dark` theme, `g` to toggle between Carousel and Grid
-views, `c` to toggle the `Changed Only` filter, and `d` to cycle `After` / `3-Up Diff` / `Diff` /
-`Before` comparison views).
+## 3. Manual Testing & Auth Personas (`GET /auth/dev`)
 
-When a `.shots/baseline/` snapshot exists:
-- `.shots/index.html` highlights every state, section, viewport, and theme that changed vs
-  baseline (`Δ N of 95 states changed`), provides one-click slot chips for every changed
-  `(viewport, theme)` combination on a state, and lets you switch inline between `After`,
-  `Before`, `Diff`, and `3-Up Diff` (`Before | After | Pixel Diff`).
-- `regions.json` (in `.shots/` and `.shots/baseline/`) records the exact bounding boxes of any
-  visible `iframe.viewer-frame` Pokémon Showdown battle/replay viewers. Outside viewer frames,
-  pixel comparison enforces strict `0`-pixel tolerance (unless `--tolerance` is passed); inside
-  unchanged viewer frames, minor corner/icon anti-aliasing and animated sprite frame variations
-  (up to `25%` of the viewer area) are tolerated so moving battle sprites do not cause false
-  positives while broken viewers, backdrop changes, or layout shifts still fail.
-
-The 7 sections cover:
-
-1. **Static (`static`):** Home (both normal state and the `● LIVE` tournament `#topbar` banner edge
-   case), Background (with `Under Construction` `#topbar`), Concepts overview + 5 subpages
-   (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release announcement,
-   Research bibliography, Arena Rules, and `404` Not Found.
-2. **Projects (`projects`):** Directory filters (`Active`, `All`, `Inactive`), multi-version
-   champion profile (`/projects/0-error/`), version dropdown filter, H2H opponent click filter,
-   expanded inline match telemetry, empty filtered matches state, provisional entrant
-   (`/projects/pokerus/`), qualified project with 0 entries (`/projects/cynthiai/`), and pending
-   project (`/projects/asterai/`).
-3. **Ladders (`ladders`):** Active season hub, hub with expandable past season rows, pre-launch
-   upcoming hub, RBY harvested ladder across `Active` / `Best` / `All` version tabs (plus secondary
-   `1500 ±0` anchor alongside 2 stronger active versions), VGC competitor
-   `pools` ladder, RAND `random` ladder (with `Data: <id>-logs.tar` link above the footer), rotated
-   season in `settling` grace window via the `#season-select` dropdown, retired season in `archived`
-   state (with `Data: <id>-logs.tar` link above the footer), and `upcoming` ladder with registered
-   entrants.
-4. **Battles (`battles`):** Live VGC match in progress across stages (`Game 1 / 2 · Initializing
-   (/ready)` 60s startup grace step, `Game 1 / 2 · Team Preview` with 6 HP circle indicators per
-   side, `Game 1 / 2` mid-battle shrunk to the 4 brought Pokémon, and `Game 2 / 2` with Game 1's
-   summary card persisted on top above Game 2's live row and swapped pool team hashes), live 6v6 Singles `Game 2 / 2` with Game 1 `[Timeout]` summary on top and 6
-   HP circle indicators per side, live `RAND` match with HP circle indicators and embedded Pokémon
-   Showdown battle viewer, inline expanded `RAND` row with replay viewer (`Game 1` / `Game 2`),
-   inline expanded retired `pools` (`VGC`) row with replay viewer (`Game 1` / `Game 2`), inline
-   expanded rows for `[Timeout]`, `[Crash]`, and clean 2-game match, format filter (`VGC`), Page 2
-   pagination, `Idle` live state, `Stale / Offline` heartbeat state, and empty battle history.
-5. **Tournaments (`tournaments`):** Completed Tournament `#1` (with 100-game Superfinal `SF` badges
-   and `1-replays.7z`), inline expanded game row with telemetry and Showdown replay viewer, live
-   Best-of-3 Tournament `#2` multi-table broadcast (`Table 1` with simultaneous dual-thinking
-   clocks, switched to `Table 2` with P1 `committed` while P2 continues `thinking…`,
-   `Table 2 (idle)` with `● Watch T1` pill, inline expanded completed Bo3 match row with
-   multi-game telemetry and `Game 1` / `Game 2` / `Game 3` replay switcher while `#live` continues
-   broadcasting, and offline graceful degradation with the battle-log fallback viewer and species
-   code badges), scheduled Tournament `#3` with registered entrants, and scheduled tournament with
-   0 entrants.
-6. **Account (`account`):** Disabled project (`403`), `Pending`
-   qualification (both locked and with Tournament `#3` OCI open), `Qualified` pre-launch, `Eligible`
-   new competitor (`0` submissions), VGC incremental team validation (`0 / 20` panel, partial save +
-   red rejections for `< 1.30` 1-NN duplicate and `< 4` moves, `10 / 20` partial save, and `20 / 20`
-   complete), inline submission form error, `Eligible` settled competitor with locked VGC pool,
-   `Ineligible` awaiting smoke test (`PENDING`), `Ineligible` 14-day ladder cooldown with Tournament
-   `#3` open, expanded `Sandbox stderr log`, `Ineligible` unsettled provisional,
-   `QUARANTINED (DM sent)` runtime fault in History, and `Ineligible` Smogon-banned owner
-   (`smogon_standing = 'bad'`).
-7. **Wiki (`wiki`):** Wiki index, all visible pages (`/wiki/pages`), `developers`-restricted project
-   page, `discord`-restricted project page, general public editor, project editor with
-   `Developers — Discord — Public` visibility bar, live Djot preview, git revision history, commit
-   snapshot, unified diff, owner redirect on uncreated project page, generic `404` non-owner on
-   uncreated project page, generic `403` unregistered user, generic `403` non-owner edit attempt,
-   generic `403` non-guild Discord user, and `/auth/dev` persona switcher.
-
-After inspecting `.shots/` (or running local `mock` commands), clean build/public artifacts and
-re-run `npm run test` so `public/` contains no mock state:
+Seed and run locally (`npm run clean && npm run build` to wipe; see [DEVELOPMENT.md](DEVELOPMENT.md)):
 
 ```sh
-npm run clean && npm run test
-```
-
----
-
-## 3. Interactive Manual Testing & Persona Walkthrough
-
-### Step 1: Seed the Local Dataset & Start the Server
-
-```sh
-npm run build
-npm run mock -- seed
+npm run build && npm run mock -- seed
 DEV_AUTH=1 MOCK=1 npm start
-```
-
-- `npm run mock -- seed` runs [`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock), resetting
-  `db/data/arena.sqlite`, populating `.mock/` overlays (`.mock/ladders.yml`, `.mock/static/projects.yml`
-  + generated 32×32 avatars, `.mock/wiki/` with public and `{% visibility: developers %}` pages,
-  `.mock/vgc-teams.txt` with 20 legal Regulation M-C teams, and Tournaments `#1`
-  completed, `#2` running, and `#3` scheduled), and rendering `public/`.
-- `DEV_AUTH=1 MOCK=1 npm start` starts the server on `http://localhost:1234` with `DEV_AUTH=1`.
-- Visit `http://localhost:1234/` or `http://localhost:1234/arena/` to verify the site-wide `#topbar`
-  `● LIVE Tournament #2: VGC 2026 Reg M-C OTS BO3` banner (while `http://localhost:1234/background/`
-  retains its permanent `Under Construction` `#topbar`).
-- Optionally run organic background activity in a second terminal so submitted versions automatically
-  smoke-test and live matches tick across turns:
-
-```sh
+# Optional background activity in a 2nd terminal:
 MOCK=1 npm run mock -- simulate --server http://localhost:1234 --secret "${ARENA_SECRET:-dev-secret}"
 ```
 
-To wipe all seeded state and return to clean unseeded configs (`config/ladders.yml` +
-`static/projects.yml`):
+Verify `#topbar` shows `● LIVE Tournament #2` on `/` and `/arena/` (while `/background/` keeps
+`Under Construction`). With `DEV_AUTH=1` on loopback, `http://localhost:1234/auth/dev` opens a
+persona picker minting real HMAC-signed `pkmn_session` cookies:
+
+| Persona / Stage | URL (`http://localhost:1234/auth/dev?...`) | Key Checks |
+| :--- | :--- | :--- |
+| Unauthenticated | `?clear=1&return_to=/arena` | Public views; `/account` & dev wiki redirect to login. |
+| Unregistered | `?github=stranger&return_to=/account` | Redirects `/account` to registration issue; `403` on dev wiki. |
+| 1. `Pending` (`AsterAI`) | `?github=asterdev&return_to=/account` | "Link Discord" CTA, ladders disabled, can view `/wiki/0_ERROR` & edit `/wiki/AsterAI`. |
+| 2. `Qualified` pre-launch | Plain `DEV_AUTH=1 npm start` (or `set-ladder-status ... upcoming`) | Pre-launch `Qualified` state before ladders open. |
+| 3. `Eligible` new (`CynthiAI`) | `?github=sisyphus25&return_to=/account` | Empty tables; check `VGC` & paste `pbcopy < .mock/vgc-teams.txt` to submit `1.0.0`. |
+| 4. `Eligible` settled (`Foul Play`) | `?github=pmariglia&return_to=/account` | Submit `1.5.0` -> `PENDING`, then `MOCK=1 npm run mock -- smoke all && ... play 1 && ... render`. |
+| 5. `Ineligible` cooldown + Wiki Admin (`0 ERROR`) | `?github=scheibo&discord=513513270670262284&return_to=/account` | `1.2.0`/`1.1.0` active, `0.9.0-rc1` failed stderr, 14d cooldown (waive via `refund-cooldown 0-error`), Tournament `#3` open. |
+| 6. `Ineligible` provisional (`pokerus`) | `?github=pokerusdev&return_to=/account` | Past 14d cooldown, blocked until `1.0.2` settles (`>= 25` matches). |
+
+**CLI cookies, control-plane `curl`, and real OAuth:**
 
 ```sh
-npm run clean && npm run build
-```
-
-### Step 2: Switch Auth Personas via `GET /auth/dev`
-
-When `DEV_AUTH=1` is set on loopback (`localhost` / `127.0.0.1`), `GET /auth/dev` mints real
-HMAC-signed `pkmn_session` cookies so every route (`/account`, `/api/submissions`, `/wiki/*`,
-`/auth/discord/validate`) exercises the production session and authorization codepath. Visiting
-`http://localhost:1234/auth/dev` directly opens an interactive persona picker, or you can open a
-normal window and an Incognito window side-by-side at any onboarding stage:
-
-- **Unauthenticated visitor** (public spectator views; `/account` and developer wiki pages redirect
-  to login):
-  `http://localhost:1234/auth/dev?clear=1&return_to=/arena`
-- **Unregistered GitHub user** (redirects `/account` to the GitHub registration issue; `403` on
-  developer wiki pages and editing):
-  `http://localhost:1234/auth/dev?github=stranger&return_to=/account`
-- **Stage 1 — `Pending` (`qualified: false`, Discord unlinked) — `AsterAI`:**
-  `http://localhost:1234/auth/dev?github=asterdev&return_to=/account`
-  *(Account page accessible with "Link Discord" CTA and disabled submission form; can view
-  `/wiki/0_ERROR` and edit `/wiki/AsterAI`.)*
-- **Stage 2 — `Qualified` (qualified project before ladders open):**
-  Start plain `DEV_AUTH=1 npm start` (without `MOCK=1`, or set ladders to `upcoming` via
-  `MOCK=1 npm run pkmn -- set-ladder-status <id> upcoming`) to inspect the pre-launch `Qualified`
-  state while ladders are `upcoming`.
-- **Stage 3 — `Eligible` (brand-new `qualified: true` project, 0 submissions yet) — `CynthiAI`:**
-  `http://localhost:1234/auth/dev?github=sisyphus25&return_to=/account`
-  *(Empty Active/History tables; checking `VGC` reveals the 20-team paste box — run
-  `pbcopy < .mock/vgc-teams.txt` on macOS to paste 20 legal Regulation M-C teams and submit
-  `1.0.0`.)*
-- **Stage 4 — `Eligible` (settled multi-ladder competitor, VGC teams already locked) — `Foul Play`:**
-  `http://localhost:1234/auth/dev?github=pmariglia&return_to=/account`
-  *(Submit `1.5.0` to watch `/account` transition immediately to **Ineligible — awaiting Arena smoke
-  testing**, then run `MOCK=1 npm run mock -- smoke all && MOCK=1 npm run mock -- play 1 && MOCK=1 npm run mock -- render`
-  — or let `mock -- simulate` pick it up — to smoke-test it, promote it to Challenger, and play a
-  match.)*
-- **Stage 5 — `Ineligible` (14-day ladder cooldown + Tournament open + Wiki Admin) — `0 ERROR`:**
-  `http://localhost:1234/auth/dev?github=scheibo&discord=513513270670262284&return_to=/account`
-  *(Shows `1.2.0` + `1.1.0` active side-by-side, `1.0.0` retired, `0.9.0-rc1` failed smoke-test
-  trace, full wiki admin access, active 14d ladder cooldown while `Tournament #3` remains open for
-  OCI submission — waive the ladder cooldown live with `MOCK=1 npm run pkmn -- refund-cooldown 0-error`
-  and refresh `/account`.)*
-- **Stage 6 — `Ineligible` (unsettled provisional active version: `< 25` matches) — `pokerus`:**
-  `http://localhost:1234/auth/dev?github=pokerusdev&return_to=/account`
-  *(Past the 14-day window, but blocked until `1.0.2` finishes settling on RBY & SV.)*
-
-### Step 3: CLI Cookie Minting & Live OAuth Redirect Testing
-
-- **Minting session cookies for `curl`:** When testing authenticated routes from the terminal against
-  an explicit `SESSION_SECRET`, mint a `pkmn_session` cookie with `pkmn session`:
-
-```sh
-COOKIE=$(SESSION_SECRET=test-secret npm run --silent pkmn -- session \
-  --github pmariglia --discord 283674461268344832:pmariglia)
+COOKIE=$(SESSION_SECRET=test-secret npm run --silent pkmn -- session --github pmariglia --discord 283674461268344832:pmariglia)
 curl -fsS -H "Cookie: $COOKIE" http://localhost:1234/account.json
-```
+curl -fsS -H "Authorization: Bearer $ARENA_SECRET" http://localhost:1234/api/arena/pending-submissions
 
-- **Testing `/api/arena/*` control-plane endpoints with `curl`:**
-
-```sh
-curl -fsS -H "Authorization: Bearer $ARENA_SECRET" \
-  http://localhost:1234/api/arena/pending-submissions
-```
-
-- **Testing live GitHub/Discord OAuth redirects locally:** Create a separate `pkmn.ai (dev)` OAuth
-  App with callback `http://localhost:1234/auth/github/callback` (and/or Discord redirect
-  `http://localhost:1234/auth/discord/callback`) and start without `DEV_AUTH=1`:
-
-```sh
+# Live OAuth (set dev app callback to http://localhost:1234/auth/{github,discord}/callback):
 GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... npm start
 ```
 
----
-
-## 4. Developer & Operator Tools (`tools/`)
+## 4. Tools (`tools/`) & `.mock` Engine
 
 | Tool | Script | Purpose |
 | :--- | :--- | :--- |
-| [`pkmn.ts`](../tools/pkmn.ts) | `npm run pkmn -- <cmd>` | Operator CLI: quarantine/unquarantine versions, refund cooldowns, reassign developers, set 1500-Elo anchors, rotate ladders, manage tournaments, lookup Smogon IDs, and mint cookies (see [ADMIN.md](ADMIN.md)). |
-| [`mock.ts`](../tools/mock.ts) | `npm run mock -- ...` | Declarative `.mock` scenario engine, probabilistic Davidson match simulator, and organic site-activity generator (`simulate`). |
-| [`simulate.ts`](../tools/simulate.ts) | `npm run simulate -- ...` | Multi-seed Monte Carlo parameter-sweep simulator for active-learning matchmaking (`selectNextArenaMatch`) and Generalized Davidson ratings (`computeDavidsonRatings`). |
-| [`shots.tsx`](../tools/shots.tsx) | `npm run shots` | Headless Chromium visual-regression & layout verifier across 4 viewports × 2 color schemes. |
-| [`scenarios/`](../tools/scenarios/) | — | Checked-in `.mock` scenario scripts ([`seed.mock`](../tools/scenarios/seed.mock) for local dev & `shots`, [`e2e.mock`](../tools/scenarios/e2e.mock) for HTTP + Playwright integration tests). |
+| [`pkmn.ts`](../tools/pkmn.ts) | `npm run pkmn -- <cmd>` | Operator CLI ([ADMIN.md](ADMIN.md)). |
+| [`mock.ts`](../tools/mock.ts) | `npm run mock -- ...` | `.mock` scenario runner, Davidson simulator, background activity daemon. |
+| [`simulate.ts`](../tools/simulate.ts) | `npm run simulate -- ...` | Monte Carlo sweep for `selectNextArenaMatch` / `computeDavidsonRatings`. |
+| [`shots.tsx`](../tools/shots.tsx) | `npm run shots` | Headless Chromium visual-regression & layout verifier. |
+| [`scenarios/`](../tools/scenarios/) | — | [`seed.mock`](../tools/scenarios/seed.mock) (dev/`shots`) & [`e2e.mock`](../tools/scenarios/e2e.mock) (HTTP + Playwright). |
 
 ### Invoking `mock`
 
-Compile TypeScript first (`npm run compile` or `npm run build`), then invoke `npm run mock`:
-
 ```sh
-# 1. Run the default local seed scenario (tools/scenarios/seed.mock)
-npm run mock -- seed
-
-# 2. Execute any checked-in or custom .mock script file
-MOCK=1 npm run mock -- -f tools/scenarios/seed.mock
-
-# 3. Pipe declarative commands line-by-line over stdin
-MOCK=1 npm run mock < tools/scenarios/seed.mock
-printf 'play 5 --ladder rby\nrender\n' | MOCK=1 npm run mock
-
-# 4. Run individual commands sequentially (persisting state in .mock/state.json)
-MOCK=1 npm run mock -- register "BoltBeam" --logo auto
-MOCK=1 npm run mock -- submit boltbeam 1.0.0 rby=1620 sv=1580
-MOCK=1 npm run mock -- play 20 --ladder rby,sv
-MOCK=1 npm run mock -- render
-
-# 5. Keep a local dev server feeling live with organic background activity
+npm run mock -- seed                                     # run tools/scenarios/seed.mock
+MOCK=1 npm run mock -- -f tools/scenarios/seed.mock      # run a .mock file
+printf 'play 5 --ladder rby\nrender\n' | MOCK=1 npm run mock   # stdin
+MOCK=1 npm run mock -- register "BoltBeam" --logo auto   # single command (persists .mock/state.json)
 MOCK=1 npm run mock -- simulate --server http://localhost:1234 --secret "$ARENA_SECRET"
 ```
 
-### Global `mock` CLI Flags
-
 | Flag | Description |
 | :--- | :--- |
-| `-f <path>`, `--file <path>` | Execute a `.mock` script file from top to bottom. |
-| `--db <path>` | Override the SQLite database path (defaults to `db/data/arena.sqlite`, or `:memory:`). When omitted, `mock` manages overlay files inside `.mock/`. |
-| `--public-dir <dir>` | Override output directory for static HTML/JSON renders (defaults to `public/`). |
-| `--server <url>` | Run in **Live HTTP Server Mode** against a running `pkmn.ai` server instead of mutating submission/runner tables directly. |
-| `--secret <token>` | Bearer `$ARENA_SECRET` for `/api/arena/*` requests when `--server` is set (falls back to `process.env.ARENA_SECRET`). |
-| `--now <spec>` | Pin the initial simulated clock (`anchorNow`) across `mock seed`, `-f <scenario>`, stdin, or commands (Unix seconds, ISO-8601, or relative spec). |
-| `-h`, `--help` | Print CLI usage summary. |
+| `-f, --file <path>` | Execute a `.mock` script file. |
+| `--db <path>` | Override SQLite path (default `db/data/arena.sqlite`; `:memory:` skips `.mock/`). |
+| `--public-dir <dir>` | Override static render directory (default `public/`). |
+| `--server <url>` | **Live HTTP Server Mode** (exercises `/auth/dev`, `POST /api/submissions`, `/api/arena/*`, `POST /wiki/:slug/edit`) instead of direct SQLite/FS mutations. |
+| `--secret <token>` | Bearer `$ARENA_SECRET` for `--server` (falls back to `ARENA_SECRET`). |
+| `--now <spec>` | Pin initial `anchorNow` (Unix seconds, ISO-8601, or relative spec). |
+| `-h, --help` | Print CLI usage. |
 
-### Dual Transport Modes
+Without `--db`, `mock` writes overlays under `.mock/` (`state.json`, `ladders.yml`,
+`static/projects.yml`, `static/avatars/`, `wiki/`, `vgc-teams.txt`), read when `MOCK=1`.
 
-Every `.mock` scenario runs unchanged in two modes:
+## 5. `.mock` Language & Command Reference
 
-1. **Direct DB/FS Mode** *(default when `--server` is omitted)*:
-   Writes directly to SQLite (`db/data/arena.sqlite`), `.mock/static/projects.yml`, `.mock/ladders.yml`,
-   and `.mock/wiki/`, and renders static views via `render`. Optimized for fast seeding
-   (`npm run mock -- seed`) and screenshot fixtures (`npm run shots`).
-2. **Live HTTP Server Mode** *(`--server http://localhost:1234`)*:
-   Exercises the real HTTP endpoints on a running server:
-   - Developer sessions are minted via `SESSION_SECRET` (if configured) or
-     `GET /auth/dev?github=<login>` (`DEV_AUTH=1`).
-   - `submit` posts JSON payloads (including encrypted `authToken` headers and 20-team VGC pools) to
-     `POST /api/submissions`.
-   - `smoke` and `quarantine` pull `GET /api/arena/pending-submissions` and report telemetry to
-     `POST /api/arena/submission-status` (triggering real server re-renders and Discord DMs).
-   - `play`, `settle`, `match`, and `live` emit `POST /api/arena/heartbeat` and
-     `POST /api/arena/match-complete`.
-   - `wiki --via http` submits form edits to `POST /wiki/:slug/edit`.
+- **Syntax:** `#` comments (full-line or whitespace-prefixed inline), `\` line continuations,
+  `'literal'` / `"escaped"` quotes, flags (`--flag val`, `--flag=val`, `-f val`, repeatable
+  `--owner`/`--discord`/`--vs`, bare booleans default `true`).
+- **Targets & units:** `<agent>` (slug, display name, or Showdown ID); `<agent>[@<ver>]` (omitted
+  `@<ver>` picks active entry, else latest passed/submitted); `<ladders>` (slot, exact `ladder_id`,
+  comma list, or `all`); `<dur>` (`s`/`m`/`h`/`d`/`w`); `<ts>` (`now[±dur]`, `±dur` from `state.now`,
+  Unix epoch, ISO-8601); `<bytes>` (`b`/`kb`/`mb`/`gb`).
+- **Expected ratings:** `rby=1660` sets *latent* Elo $E_i$ (not hardcoded). Each game samples
+  `W`/`T`/`L` from single-game Davidson with $\Delta = (E_i - E_j + B_{ij}) / (400 / \ln 10)$ and
+  $\nu = 2\tau / (1 - \tau)$:
+  $$P(\text{W}) = \frac{e^{\Delta/2}}{e^{\Delta/2} + e^{-\Delta/2} + \nu}, \qquad P(\text{T}) = \frac{\nu}{e^{\Delta/2} + e^{-\Delta/2} + \nu}, \qquad P(\text{L}) = \frac{e^{-\Delta/2}}{e^{\Delta/2} + e^{-\Delta/2} + \nu}$$
+  Two independent games feed into `server/ratings.ts`.
 
-### Overlay Files & Persistent State (`.mock/`)
-
-To avoid dirtying tracked `config/ladders.yml` or `static/projects.yml`, running `mock` without
-`--db` stores all mutable filesystem state under `.mock/` (read automatically when the server starts
-with `MOCK=1`):
-
-- `.mock/state.json` — Persists PRNG state (`rngState`), simulated clock (`now` and `anchorNow`),
-  match & heartbeat sequence counters, per-version/per-agent expected ratings, H2H matchup biases,
-  pending smoke-test metadata, active live telemetry, and tournament broadcast state across CLI calls.
-- `.mock/ladders.yml` — Active/upcoming/settling/archived ladder configuration overlay.
-- `.mock/static/projects.yml` & `.mock/static/avatars/` — Registered project catalog and
-  generated/copied 32×32 PNG avatars.
-- `.mock/wiki/` — Git-backed Djot wiki repository with commit history and author timestamps.
-- `.mock/vgc-teams.txt` — Ready-to-paste sheet of 20 legal Regulation M-C teams
-  ($d_{\text{1-NN}} \ge 1.30$) for interactive `/account/` testing.
-
----
-
-## 5. `.mock` Language, Rating Simulation & Command Reference
-
-### Lexical Rules & Argument Formats
-
-- **Comments & Blank Lines:** Empty lines and lines whose first non-whitespace character is `#` are
-  ignored. Inline `# comments` preceded by whitespace outside quotes are stripped to end-of-line.
-- **Line Continuations:** A trailing backslash (`\`) joins the next line into the same command.
-- **Quoting & Escapes:** Single quotes (`'...'`) are literal; double quotes (`"..."`) interpret
-  `\n`, `\r`, `\t`, `\"`, and `\\`.
-- **Flags:** Long (`--flag value`, `--flag=value`) and short (`-f value`) flags may appear in any
-  order alongside positional arguments. Boolean flags without a value default to `true`. Repeatable
-  flags (`--owner`, `--discord`, `--vs`) accumulate all occurrences.
-- **`<agent>`:** Matches by URL slug (`0-error`), case-insensitive display name (`"0 ERROR"`), or
-  Showdown ID (`0error`).
-- **`<agent>[@<ver>]`:** Targets an explicit version (`0-error@1.2.0`) or, when `@<ver>` is omitted,
-  resolves the agent's active entry on the target ladder (falling back to its most recent `passed`
-  or submitted version).
-- **`<ladders>`:** Accepts a ladder slot (`rby`, `adv`, `sv`, `rand`, `vgc`), an exact `ladder_id`
-  (`gen9championsvgc2026regmc`), a comma-separated list (`rby,sv`), or `all` (every non-archived
-  ladder).
-- **Durations (`<dur>`):** Compact human units — `s` (seconds), `m` (minutes), `h` (hours), `d`
-  (days), `w` (weeks), e.g. `45m`, `12d`, `2w`.
-- **Timestamps (`<ts>`):**
-  - `now`, `now-<dur>`, `now+<dur>` — relative to the scenario's initial anchor timestamp
-    (`anchorNow`).
-  - `+<dur>` / `-<dur>` — relative step from the current simulated clock (`state.now`).
-  - Unix epoch seconds (`1762776000`) or ISO-8601 (`2026-10-20T12:00:00Z`).
-- **Byte Sizes (`<bytes>`):** Accepts plain integers or `b`, `kb`, `mb`, `gb` suffixes (e.g.
-  `184mb`, `512kb`).
-
-### Probabilistic Expected Ratings
-
-When an agent version is submitted (`submit 0-error 1.0.0 rby=1660 adv=1630`) or entered into a
-tournament (`tournament enter 1 mews-truck@1.0.0=1820`), those numbers define the version's **latent
-expected Elo** on each format — *not* a hardcoded leaderboard rating.
-
-Whenever two versions $i$ and $j$ play a simulated game with expected ratings $E_i$, $E_j$, optional
-H2H bias $B_{ij}$, and per-game tie rate $\tau$, `mock` samples `'W'`, `'T'`, or `'L'` from the exact
-single-game Generalized Davidson likelihood with log-skill difference
-$\Delta = (E_i - E_j + B_{ij}) / (400 / \ln 10)$ and tie parameter $\nu = 2\tau / (1 - \tau)$:
-
-$$P(\text{W}) = \frac{e^{\Delta/2}}{e^{\Delta/2} + e^{-\Delta/2} + \nu}, \qquad P(\text{T}) = \frac{\nu}{e^{\Delta/2} + e^{-\Delta/2} + \nu}, \qquad P(\text{L}) = \frac{e^{-\Delta/2}}{e^{\Delta/2} + e^{-\Delta/2} + \nu}$$
-
-Each ladder match samples Game 1 and Game 2 independently (`WW`, `WT`, `TW`, `WL`, `LW`, `TT`, `TL`,
-`LT`, `LL`) and feeds the resulting counts into the production whole-history Generalized Davidson
-MAP solver (`server/ratings.ts`).
-
-### 5.1 Environment, Clock, PRNG & Checkpoints
+### Commands
 
 ```sh
-# Wipe SQLite Arena tables & .mock/ overlays, reset state.json, and write .mock/vgc-teams.txt
+# Environment, Clock, PRNG & Checkpoints
 reset [--seed <uint32>] [--now <ts>] [--open-ladders]
-
-# Set or advance the simulated clock (state.now)
 time <+dur|-dur|now|now-dur|now+dur|iso|unix>
-
-# Re-seed the deterministic Mulberry32 PRNG mid-scenario without resetting DB state
 rng <uint32>
+checkpoint <name>                                          # programmatic callback in test/e2e.test.ts
 
-# Invoke programmatic onCheckpoint(name, runner) callback (used in test/e2e.test.ts)
-checkpoint <name>
-```
-
-### 5.2 Projects, Developers & Discord
-
-```sh
-# Register or update an Arena project in projects.yml + SQLite
-register <name> \
-  [--owner <github[:smogon[.id]]> ...] \
-  [--discord <id:username|username|none> ...] \
-  [--logo <filename|auto>] \
-  [--pending] [--disabled] [--banned] [--no-guild]
-
-# Promote a pending project to qualified: true, or remove its arena: block
-qualify <agent>
-disable <agent>
-
-# Move a developer's GitHub identity to another project (or remove with --none)
+# Projects, Developers & Discord
+register <name> [--owner <github[:smogon[.id]]> ...] [--discord <id:user|user|none> ...] \
+  [--logo <file|auto>] [--pending] [--disabled] [--banned] [--no-guild]
+qualify <agent> | disable <agent> | refund-cooldown <agent>
 reassign <github> <target-agent|--none> [--smogon <username.id>]
+discord link <github> [<id>:<user>] [--no-guild] | discord unlink <github> | discord sync
 
-# Clear the 14-day submission cooldown on <agent>
-refund-cooldown <agent>
-
-# Link/unlink Discord or trigger the onDiscordSync role-sync hook
-discord link <github> [<id>:<username>] [--no-guild]
-discord unlink <github>
-discord sync
-```
-
-### 5.3 Ladders
-
-```sh
-# Open upcoming ladders to active, or set an explicit lifecycle status
+# Ladders
 ladder open [<ladders|all>]
 ladder status <ladders|all> <upcoming|active|settling|archived>
-
-# Add a new ladder to ladders.yml + SQLite
-ladder add <id> --name <title> --format <ps-format> \
-  [--team <harvested|pools|random>] [--teams <n>] \
-  [--status <upcoming|active|settling|archived>] [--discord <role-id>]
-
-# Rotate an active seasonal ladder into settling/archived and optionally open its successor
-ladder rotate <old-ladder> --archive-name <archived-title> \
-  [--new <new-id>] [--new-name <title>] [--format <ps-format>] \
-  [--team <harvested|pools|random>] [--teams <n>] [--discord <role-id>]
-
-# Pin <agent>[@<ver>] as the 1500-Elo gauge anchor and recompute ratings
+ladder add <id> --name <title> --format <ps-fmt> [--team <harvested|pools|random>] [--teams <n>] [--status <s>] [--discord <role>]
+ladder rotate <old> --archive-name <title> [--new <id>] [--new-name <title>] [--format <fmt>] [--team <mode>] [--teams <n>] [--discord <role>]
 ladder anchor <ladders|all> <agent>[@<ver>]
-
-# Publish <ladder_id>-logs.tar to public/arena/ladders/<ladder_id>/
 ladder archive <ladder> [--file <path>]
-```
 
-### 5.4 Submissions, Smoke Testing & Quarantine
-
-```sh
-# Submit a new agent version (defaults to --smoke pass; use --smoke pending or --smoke fail to test queues)
-submit <agent> [<version>] [<target>[=<rating>] ...] \
-  [--rating <elo>] \
-  [--tournament <id[,id...]>] \
-  [--vs <opp[@ver]:delta[,...]>] \
-  [--pkg <bundle|oci>] [--url <artifact-url>] [--sha256 <hex>] [--auth-token <header>] \
-  [--by <github>] \
-  [--teams <auto|new|none|path>] \
-  [--smoke <pass|pending|fail>] [--error <msg>] [--notified] \
+# Submissions, Smoke Testing & Quarantine
+submit <agent> [<ver>] [<target>[=<elo>] ...] [--rating <elo>] [--tournament <id[,...]>] \
+  [--vs <opp[@ver]:delta[,...]>] [--pkg <bundle|oci>] [--url <url>] [--sha256 <hex>] [--auth-token <hdr>] \
+  [--by <github>] [--teams <auto|new|none|path>] [--smoke <pass|pending|fail>] [--error <msg>] [--notified] \
   [--bytes <size>] [--duration-millis <n>] [--turn-millis <n>] [--ram <mib>]
+smoke [<agent>[@<ver>]|all] [--pass|--fail] [--error <msg>] [--notified] [--bytes <sz>] [--duration-millis <n>] [--turn-millis <n>] [--ram <mib>]
+quarantine <agent>[@<ver>] [--reason <msg>] [--via <runner|admin>] | unquarantine <agent>[@<ver>]
 
-# Process pending submissions in the Arena pull queue
-smoke [<agent>[@<ver>]|all] [--pass|--fail] [--error <msg>] [--notified] \
-  [--bytes <size>] [--duration-millis <n>] [--turn-millis <n>] [--ram <mib>]
-
-# Quarantine or restore a version
-quarantine <agent>[@<ver>] [--reason <msg>] [--via <runner|admin>]
-unquarantine <agent>[@<ver>]
-```
-
-### 5.5 Matchmaking, Settlement & Direct Matches
-
-```sh
-# Schedule and simulate <count> 2-game Arena matches via selectNextArenaMatch (or --balanced)
-play [<count>] [--ladder <ladders>] [--over <dur>] \
-  [--exploit <0..1>] [--balanced] \
-  [--tie-rate <0..0.8>] [--fault-rate <0..1>] [--heartbeats]
-
-# Schedule targeted matches until every active version settles (matches >= 25 and SE <= 30.0)
+# Matchmaking, Settlement, Direct Matches & Live Telemetry
+play [<count>] [--ladder <ladders>] [--over <dur>] [--exploit <0..1>] [--balanced] [--tie-rate <0..0.8>] [--fault-rate <0..1>] [--heartbeats]
 settle [<ladders|all>] [--over <dur>] [--max <steps>] [--tie-rate <p>] [--heartbeats]
+match <ladder> <p1>[@<ver>] <p2>[@<ver>] [--count <n>] [--over <dur>] [--outcome <WW|WT|TW|WL|LW|TT|TL|LT|LL|auto>] \
+  [--reason <s>] [--g1-reason <s>] [--g2-reason <s>] [--p1-team <spec>] [--p2-team <spec>] [--tie-rate <p>] [--heartbeats]
+live match <ladder> <p1>[@<ver>] <p2>[@<ver>] [--id <id>] [--game <1|2>] [--turn <n>] [--active <p1|p2>] \
+  [--g1-winner <p1|p2|tie>] [--g1-turns <n>] [--p1-bank <s>] [--p2-bank <s>] [--budget <s>] [--p1-team <spec>] [--p2-team <spec>]
+live idle | live stale
 
-# Play explicit 2-game matches between <p1> and <p2>
-match <ladder> <p1>[@<ver>] <p2>[@<ver>] [--count <n>] [--over <dur>] \
-  [--outcome <WW|WT|TW|WL|LW|TT|TL|LT|LL|auto>] \
-  [--reason <str>] [--g1-reason <str>] [--g2-reason <str>] \
-  [--p1-team <hash:agent|P1:agent|P2:agent|raw>] \
-  [--p2-team <hash:agent|P1:agent|P2:agent|raw>] \
-  [--tie-rate <p>] [--heartbeats]
-```
+# Tournaments
+tournament create <id> --name <title> --format <fmt> [--games <even>] [--batch <n>] [--tables <n>] [--hardware <desc>] [--rules <json>] [--starts <ts>] [--status <s>]
+tournament enter <id> <agent>[@<ver>][=<elo>] ... [--pkg <oci|bundle>] [--by <github>]
+tournament seed <id> | tournament start <id> | tournament complete <id> [--archive]
+tournament play <id> [--cycles <n> | --games <n> | --all] [--superfinal [<games>]] [--over <dur>] [--id-prefix <slug>] [--tie-rate <p>]
+tournament broadcast <id> [<mainP1> <mainP2> [<sideP1> <sideP2>]] [--cycle <n>] [--game <n>] | tournament broadcast off
 
-### 5.6 Live Battle Telemetry
-
-```sh
-live match <ladder> <p1>[@<ver>] <p2>[@<ver>] \
-  [--id <match-id>] [--game <1|2>] [--turn <n>] [--active <p1|p2>] \
-  [--g1-winner <p1|p2|tie>] [--g1-turns <n>] \
-  [--p1-bank <sec>] [--p2-bank <sec>] [--budget <sec>] \
-  [--p1-team <spec>] [--p2-team <spec>]
-
-live idle
-live stale
-```
-
-### 5.7 Tournaments
-
-```sh
-tournament create <id> --name <title> --format <ps-format> \
-  [--games <even-int>] [--batch <n>] [--tables <n>] \
-  [--hardware <desc>] [--rules <json-array>] \
-  [--starts <ts>] [--status <scheduled|running|completed>]
-
-tournament enter <id> <agent>[@<ver>][=<rating>] ... [--pkg <oci|bundle>] [--by <github>]
-tournament seed <id>
-tournament start <id>
-
-tournament play <id> [--cycles <n> | --games <n> | --all] \
-  [--superfinal [<games>]] [--over <dur>] [--id-prefix <slug>] [--tie-rate <p>]
-
-tournament broadcast <id> [<mainP1> <mainP2> [<sideP1> <sideP2>]] [--cycle <n>] [--game <n>]
-tournament broadcast off
-
-tournament complete <id> [--archive]
-```
-
-### 5.8 Wiki, Static Rendering & Organic Simulation (`simulate`)
-
-```sh
-# Commit a Djot page revision into .mock/wiki/ (or POST /wiki/:slug/edit with --via http)
-wiki <slug> (--content <djot> | --file <path>) \
-  [--by <github>] [--message <commit-msg>] \
-  [--visibility <public|discord|developers|admin>] \
-  [--via <git|http>]
-
-# Re-render all static Arena HTML & JSON views into public/ at state.now
+# Wiki, Rendering & Organic Simulation
+wiki <slug> (--content <djot> | --file <path>) [--by <github>] [--message <msg>] [--visibility <public|discord|developers|admin>] [--via <git|http>]
 render
-
-# Bounded deterministic activity burst (for scripts/tests)
-simulate <steps> [--over <dur>]
-
-# Unbounded real-time daemon loop with random +/-40% interval jitter (Ctrl-C to stop)
-simulate [--interval <millis>]
+simulate <steps> [--over <dur>]    # bounded burst
+simulate [--interval <millis>]     # real-time daemon (+/-40% jitter)
 ```
 
----
+## 6. Matchmaking Parameter-Sweep Simulator (`npm run simulate`)
 
-## 6. Matchmaking & Rating Parameter-Sweep Simulator (`npm run simulate`)
-
-### Why It Is Used
-
-Unlike traditional human ladders where players self-queue in parallel, the M6 Mac mini Arena runner
-time-slices a single active 2-game match at a time across all playable ladders (`RBY`, `ADV`, `SV`,
-`RAND`, `VGC`). Every match scheduled by [`selectNextArenaMatch`](../server/ratings.ts) must balance
-three competing goals:
-
-1. **Global uncertainty reduction (exploration):** Quickly shrinking 95% confidence intervals
-   ($\text{CI}_{95} < 150\text{ Elo}$) and settling newly submitted Challenger versions across the
-   entire roster using expected Shannon/Fisher information gain
-   $\frac{1}{2}\ln(1 + 4 \hat{p}(1 - \hat{p})(\sigma_i^2 + \sigma_j^2))$.
-2. **Top-of-leaderboard separation (exploitation):** Focusing matches among podium contenders with
-   high conservative lower bounds ($\text{LCB} = \text{Elo} - 1.96\,\text{SE}$) so `#1` and top-3
-   guaranteed rank bounds ($[\text{rankMin}, \text{rankMax}] = [1, 1]$) resolve cleanly without
-   wasting compute on already-separated bottom pairs.
-3. **Cross-ladder & per-agent fairness (anti-starvation):** Ensuring quieter ladders with fewer
-   recent submissions still receive regular matches via `agingRate` and the hard `maxWaitCycles`
-   ceiling (`maxWaitCycles * numPlayableLadders`), and avoiding repeat pairings via the pairwise
-   saturation penalty $1 / (1 + 0.25\,m_{ij})$.
-
-Changing `exploit`, `agingRate`, or `maxWaitCycles` in [`server/ratings.ts`](../server/ratings.ts)
-shifts the Pareto frontier between these objectives. [`tools/simulate.ts`](../tools/simulate.ts)
-runs fast, deterministic multi-seed Monte Carlo trials against the exact production
-`selectNextArenaMatch`, `computeDavidsonRatings`, and `computeGuaranteedRankBounds` implementations
-so hyperparameter changes can be evaluated quantitatively in milliseconds before deploying.
-
-### How to Run `simulate`
-
-Compile TypeScript (`npm run compile` or `npm run build`), then invoke `npm run simulate`:
+[`tools/simulate.ts`](../tools/simulate.ts) runs multi-seed Monte Carlo trials against production
+`selectNextArenaMatch`, `computeDavidsonRatings`, and `computeGuaranteedRankBounds`
+([`server/ratings.ts`](../server/ratings.ts)) to tune the tradeoff between **exploration**
+(Fisher IG $\frac{1}{2}\ln(1 + 4\hat{p}(1-\hat{p})(\sigma_i^2 + \sigma_j^2))$), **exploitation**
+(top-LCB podium separation via `exploit`), and **anti-starvation** (`agingRate`, `maxWaitCycles`,
+and pairwise repeat penalty $1/(1 + 0.25\,m_{ij})$):
 
 ```sh
-# 1. Run the default parameter sweep (exploit = 0.0, 0.45, 0.80 across 3 ladders x 10 agents, 150 matches, 3 seeds)
 npm run simulate
-
-# 2. Sweep a custom grid of exploit weights, aging rates, and max-wait cycles over 10 PRNG seeds
-npm run simulate -- \
-  --ladders 5 \
-  --agents 12 \
-  --matches 300 \
-  --exploit 0.0,0.30,0.45,0.65 \
-  --aging 0.25,0.50,1.0 \
-  --max-wait 3,4,6 \
-  --seeds 10
-
-# 3. Evaluate matchmaking behavior starting from the actual ladders and ratings in a seeded or production SQLite snapshot
-npm run simulate -- \
-  --db db/data/arena.sqlite \
-  --matches 200 \
-  --exploit 0.0,0.45 \
-  --seeds 5
+npm run simulate -- --ladders 5 --agents 12 --matches 300 --exploit 0.0,0.30,0.45,0.65 --aging 0.25,0.50,1.0 --max-wait 3,4,6 --seeds 10
+npm run simulate -- --db db/data/arena.sqlite --matches 200 --exploit 0.0,0.45 --seeds 5
 ```
-
-### CLI Flags
 
 | Flag | Default | Description |
 | :--- | :--- | :--- |
-| `--ladders <n>` | `3` | Number of synthetic playable ladders to simulate (ignored when `--db` provides playable ladders). |
-| `--agents <n>` | `10` | Active agents per synthetic ladder (index `0` anchored at `1500` Elo; remaining true ratings span `1200..1850` Elo). |
-| `--matches <n>` | `150` | Total 2-game Arena matches scheduled across all ladders per trial. |
-| `--exploit <list>` | `0.0,0.45,0.80` | Comma-separated `exploit` values ($\ge 0$); `0` is pure active-learning uncertainty reduction, higher values weight top-LCB contenders more heavily. |
-| `--aging <list>` | `0.50` | Comma-separated `agingRate` values controlling how quickly a waiting ladder's priority multiplier grows per skipped match. |
-| `--max-wait <list>` | `4` | Comma-separated `maxWaitCycles` values (a ladder waiting $\ge \text{maxWaitCycles} \times L$ matches is forced next). |
-| `--seeds <n\|list>` | `3` | Number of deterministic Mulberry32 seeds (`1..N`) or an explicit comma-separated seed list (`1,7,42`) to average across. |
-| `--db <path>` | unset | Load initial playable ladders and agent true Elo vectors from an existing SQLite database (`champion` and `challenger` entries). |
+| `--ladders <n>` | `3` | Synthetic playable ladders (ignored if `--db` is set). |
+| `--agents <n>` | `10` | Active agents/ladder (index `0` anchored at `1500`; others `1200..1850`). |
+| `--matches <n>` | `150` | Total 2-game matches per trial. |
+| `--exploit <list>` | `0.0,0.45,0.80` | Comma-separated exploitation weights (`0` = pure uncertainty reduction). |
+| `--aging <list>` | `0.50` | Per-skipped-match priority growth for waiting ladders. |
+| `--max-wait <list>` | `4` | Force a ladder after `maxWaitCycles * L` skipped matches. |
+| `--seeds <n\|list>` | `3` | Count (`1..N`) or explicit Mulberry32 seed list. |
+| `--db <path>` | unset | Initialize ladders and true Elo vectors from an existing SQLite DB. |
 
-### Interpreting the Output Metrics
-
-For each `(exploit, agingRate, maxWaitCycles)` point in the sweep grid, `npm run simulate` prints:
-
-- **`info gain` (`nats/match`):** Mean prior-to-posterior information gain per scheduled match. Higher
-  values indicate matches are consistently pairing uncertain, closely rated opponents.
-- **`top-5 pair share` (`%`):** Percentage of all scheduled matches where both agents belong to the
-  ladder's true top 5. Increases with `exploit`, measuring how much compute is concentrated on the
-  title/podium race.
-- **`rating accuracy` (`mean error`, `Kendall tau`, `Top-3`):**
-  - `mean error`: Mean absolute error $|\hat{R}_i - R_i^{\text{true}}|$ in Elo across all agents at
-    the end of the run.
-  - `Kendall tau`: Rank-order correlation $\tau \in [-1, 1]$ between estimated and true Elo rankings.
-  - `Top-3`: Fraction of true top-3 agents recovered by the conservative $\text{LCB}$ leaderboard top 3.
-- **`balance` (`agent matches`, `ladder share`):** Min-to-max range of matches played per agent and
-  fraction of total matches allocated to each ladder, verifying that no agent or ladder is starved.
-- **`convergence` (`all <150 CI95`, `#1 [1,1]`):**
-  - `all <150 CI95`: Median total matches (and percentage of seeds) required until every agent on
-    every ladder has played at least 1 match and achieved $\text{CI}_{95} < 150\text{ Elo}$.
-  - `#1 [1,1]`: Median total matches (and percentage of seeds) required until every ladder's top
-    agent has guaranteed conservative rank bounds $[\text{rankMin}, \text{rankMax}] = [1, 1]$ via
-    `computeGuaranteedRankBounds`.
+**Output metrics:**
+- `info gain` (`nats/match`): Mean prior-to-posterior information gain per match.
+- `top-5 pair share` (`%`): Share of matches pairing two true top-5 agents.
+- `rating accuracy`: Mean absolute Elo error $|\hat{R}_i - R_i^{\text{true}}|$, Kendall $\tau$, and
+  LCB top-3 recovery rate.
+- `balance`: Min–max matches/agent and per-ladder match share.
+- `convergence`: Median matches (and `%` of seeds) until all agents have $\ge 1$ match with
+  $\text{CI}_{95} < 150$ Elo (`all <150 CI95`), and until every ladder's `#1` has guaranteed bounds
+  `[1, 1]` (`#1 [1,1]`).
