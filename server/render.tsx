@@ -2131,12 +2131,14 @@ function renderSingleLadderArtifact(opts: {
   let top1Entry: StandingsEntry | undefined;
   let standingsPane: util.Child;
 
+  const upcomingEmptyMsg =
+    `The ${l.name} ladder is upcoming — accepting initial entries before matchmaking begins.`;
   if (entries.length === 0) {
     const msg = l.status === 'upcoming'
-      ? `${l.name} ladder is upcoming — accepting initial entries before matchmaking begins.`
+      ? upcomingEmptyMsg
       : isArchived
-        ? `${l.name} archived with no completed entries.`
-        : `No active entries on ${l.name} yet.`;
+        ? `The ${l.name} ladder was archived with no completed entries.`
+        : `No active entries on the ${l.name} ladder yet.`;
     standingsPane = <p className='empty-state muted'>{msg}</p>;
   } else if (l.status === 'upcoming') {
     const activeEntrants = entries
@@ -2166,9 +2168,7 @@ function renderSingleLadderArtifact(opts: {
       });
     }
     standingsPane = activeEntrants.length === 0 ? (
-      <p className='empty-state muted'>
-        {`${l.name} ladder is upcoming — accepting initial entries before matchmaking begins.`}
-      </p>
+      <p className='empty-state muted'>{upcomingEmptyMsg}</p>
     ) : (
       <>
         <div className='table-wrap'>

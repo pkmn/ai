@@ -436,10 +436,32 @@ describe('empty Arena SSR views', () => {
   test('renders upcoming status notice on /arena/ladders/rby/', async () => {
     const rbyLadderHtml = await h.getText('/arena/ladders/rby/');
     expect(rbyLadderHtml).toContain(
-      'RBY ladder is upcoming — accepting initial entries before matchmaking begins.'
+      'The RBY ladder is upcoming — accepting initial entries before matchmaking begins.'
     );
     expect(rbyLadderHtml).toMatch(/<section[^>]*id="history"[^>]*class="hide"/);
     expect(rbyLadderHtml).toMatch(/<section[^>]*id="matchups"[^>]*class="hide"/);
+  });
+
+  test('renders empty archived status notice on /arena/ladders/:id/', async () => {
+    db.setLadderStatus('gen9ou20261109', 'archived', NOW);
+    try {
+      const svLadderHtml = await h.getText('/arena/ladders/gen9ou20261109/');
+      expect(svLadderHtml).toContain('The SV ladder was archived with no completed entries.');
+    } finally {
+      db.db.prepare(
+        "UPDATE ladders SET status = 'upcoming', archived_at = NULL WHERE id = ?"
+      ).run('gen9ou20261109');
+    }
+  });
+
+  test('renders empty active status notice on /arena/ladders/sv/', async () => {
+    db.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?").run('gen9ou20261109');
+    try {
+      const svLadderHtml = await h.getText('/arena/ladders/sv/');
+      expect(svLadderHtml).toContain('No active entries on the SV ladder yet.');
+    } finally {
+      db.db.prepare("UPDATE ladders SET status = 'upcoming' WHERE id = ?").run('gen9ou20261109');
+    }
   });
 
   test('renders empty standings array on /arena/index.json', async () => {
