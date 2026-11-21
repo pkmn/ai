@@ -1,13 +1,35 @@
 # pkmn.ai
 
 > Competitive Pokémon AI evaluation arena. This document is a self-contained reference for coding
-> agents building, optimizing, packaging, and verifying submissions for https://pkmn.ai.
+> agents building, optimizing, packaging, and verifying submissions for https://pkmn.ai. In the
+> event of a conflict, https://pkmn.ai/rules/ always takes precedence.
 
 - Rules & overview: https://pkmn.ai/rules/
 - Account & submission portal: https://pkmn.ai/account/
 - Arena hub (ladders & tournaments): https://pkmn.ai/arena/
 - Responsible release policy: https://pkmn.ai/release/
 - VGC team pool uniqueness rules: https://github.com/pkmn/ai/blob/main/teams/README.md
+
+---
+
+## Ladders vs. Tournaments at a Glance
+
+**pkmn.ai runs two distinct competition modes — continuous Ladders and discrete Tournaments — with
+different artifact formats, CPU architectures, hardware, execution models, and submission rules.**
+Do not build one artifact assuming it works for both (and submit ladder versions and tournament
+entries separately). **Use Sections 4–6 for Ladders; use Section 7 for Tournaments.**
+
+| Dimension | Ladders (Continuous) | Tournaments (Scheduled Events) |
+|---|---|---|
+| **Structure** | Continuous blind-pair matches (2 swapped games) across fixed & seasonal formats; MAP Davidson Elo ratings | Discrete scheduled events (default: Round Robin + extended Superfinal); ruleset/format per event |
+| **Eligibility & Cadence** | Qualified projects; up to **2 active versions** per ladder; **14-day cooldown** + settled gate (`SE ≤ 30`, `≥ 25` matches); auto-quarantine | Registered projects (including `Pending`); **1 successful entry** per event before `00:00:00 UTC` cutoff (no ladder cooldown/settlement gate) |
+| **Artifact & Arch** | **Native `darwin/arm64` bundle** (`.tar.{gz,xz,zst}`, `./run`, `≤ 25,000` entries) **OR** `linux/arm64` OCI (`≤ 32` layers); both `≤ 500 MiB` | **`linux/amd64` OCI container ONLY** (`≤ 32` layers, `≤ 500 MiB`); native bundles & `arm64` images are rejected |
+| **Hardware** | Fixed Apple M6 Mac mini: 10 cores (`8P+2E`), `14 GiB` RAM, `4 GB` `$TMPDIR`, direct Metal/ANE (native) or Vulkan (OCI) | Event-specific dedicated worker hardware (often `linux/amd64` + NVIDIA CUDA GPU); check `/arena/tournaments/<id>/` |
+| **Execution & Pondering** | **Time-sliced** (`SIGSTOP` / `podman pause` while opponent thinks); **pondering disabled**; wall clock jumps between turns | **Concurrent** (never paused); **pondering enabled by default** (`ARENA_PONDER=1` when enabled) |
+| **Subprocess Lifetime** | **1 subprocess = 1 single game** (scratch wiped before every game, including between Game 1 & Game 2 of a pair) | **1 subprocess = 1 full match** (in Best-of-N series, same subprocess & scratch persist across Games 1..N) |
+| **Teams & Startup** | Always arena-assigned or random → emit `/ready` (receives `|utm|<packed_team>` on non-Random formats) | Event-specific: pre-assigned (`/ready` → `|utm|`), random (`/ready`), or BYOT (`/utm <packed_team>` once at startup; no `/ready`, no `|utm|` back) |
+| **Env Vars & Limits** | `OMP/MKL/TORCH/RAYON_NUM_THREADS=10`, `ARENA_MEMORY_LIMIT_MB=14336`, `XDG_CACHE_HOME`, 256-process cap (`RLIMIT_NPROC` / `--pids-limit`) | `HOME`, `TMPDIR`, `PKMN_STATS_DIR`, `ARENA_PONDER=1` (when enabled); does **not** set ladder thread/RAM env vars or `XDG_CACHE_HOME` |
+| **Publication** | Fixed harvested-team ladders: never public; RAND: live; VGC: published after ladder retirement | Always broadcast live (logs & teams), with full `.7z` replay archives published upon completion |
 
 ---
 
@@ -28,19 +50,22 @@ providing:
 Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
 - `version`: unique string within your project, max 12 chars, regex
   `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`. **Cannot be reused even after a failed smoke test.**
-- `artifact_url`: direct HTTPS URL to a `.tar.gz` / `.tar.xz` / `.tar.zst` bundle, OR an OCI
-  container image reference (`ghcr.io/...`, `docker.io/...`).
+- `artifact_url`: direct HTTPS URL to a `.tar.gz` / `.tar.xz` / `.tar.zst` bundle (hosted on
+  GitHub, Hugging Face, Cloudflare R2, AWS S3, GCS, or Backblaze B2), OR an OCI container image
+  reference (`ghcr.io/...`, `docker.io/...`, Quay, GCR / Google Artifact Registry, or AWS ECR).
 - `sha256`: 64-character hex SHA-256 checksum of the archive or OCI manifest digest.
 - `auth_header` (optional): read-only bearer token / header used once by the arena to pull private
-  artifacts (Cloudflare R2 / S3 / B2 / GCS presigned URL, private GitHub release with single-repo
-  `Contents: Read-only` PAT, private Hugging Face repo `hf_...` token, or private registry
-  `read:packages` token).
-- `ladders` / `tournaments`: non-empty list of competitions to enter.
+  artifacts (e.g., private GitHub release with single-repo `Contents: Read-only` PAT, private
+  Hugging Face repo `hf_...` token, or private registry `read:packages` token; R2 / S3 / B2 / GCS
+  buckets can also use a 24-hour presigned `GET` URL).
+- `ladders` / `tournaments`: non-empty subset of ladders *or* tournaments to enter (submitted
+  separately, not combined).
 
 ### Hard Artifact Limits (Enforced by Arena Unpacker)
-- **Size cap:** **≤ 500 MiB compressed AND ≤ 500 MiB unpacked on disk** (sum of regular file sizes).
+- **Size cap:** **≤ 500 MiB compressed AND ≤ 500 MiB unpacked on disk** (sum of regular files and
+  hardlinks; relative symlinks count as 0 bytes).
 - **Native `darwin/arm64` bundles (ladders):** **≤ 25,000 total entries** (files + directories +
-  symlinks) and an executable `./run` at the archive root.
+  symlinks) and a regular executable `./run` (not a symlink) at the archive root.
 - **OCI containers (`linux/arm64` on ladders; `linux/amd64` on tournaments):** **≤ 32 OCI layers**
   and `ENTRYPOINT` / `CMD` runs the agent.
 
@@ -48,13 +73,15 @@ Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
 - **Smoke test:** A submission succeeds if the arena unpacks it and plays through Turn 1 of a
   battle in every entered format. If a ladder smoke test fails, the last 4 KiB of `stderr` are
   surfaced on `/account`.
-- **Ladder concurrency & cooldown:** Up to **2 active versions** concurrently (if 2 are already
-  active, the weaker retires, leaving the strongest + latest). You may submit a new ladder version
-  once **14 days** have elapsed since your last successful ladder submission AND all previous
-  versions have settled (`SE(R) ≤ 30 Elo`, i.e., `σ̂ ≤ 0.173` nats, and ≥ 25 blind-pair matches /
-  50 games).
-- **Tournaments:** Close at `00:00:00 UTC` strictly before start time and accept only the first
-  successful entry per project (resubmissions are allowed after a failed smoke test until cutoff).
+- **Ladders (concurrency, cooldown & qualification):** Requires a qualified project. Up to **2
+  active versions** concurrently per ladder (if 2 are already active, the weaker retires, leaving
+  the strongest + latest). You may submit a new ladder version once **14 days** have elapsed since
+  your last successful ladder submission AND all previous versions have settled (`SE(R) ≤ 30 Elo`,
+  i.e., `σ̂ ≤ 0.173` nats, and ≥ 25 blind-pair matches / 50 games).
+- **Tournaments (entry cutoff & independence):** Open to registered projects (including `Pending`),
+  independent of ladder cooldowns, ladder settlement, and ladder quarantine. Tournaments close at
+  `00:00:00 UTC` strictly before start time and accept only the first successful entry per project
+  (resubmissions are allowed after a failed smoke test until cutoff).
 
 ---
 
@@ -72,13 +99,15 @@ All current ladders run Pokémon Showdown rules as of Nov 9th 2026 (`a78551b0` /
     under `$PKMN_STATS_DIR` in the same hierarchy as the site.
   - VGC (`gen9championsvgc2026regmc`): Closed Team Sheets. Competitors must submit **20 distinct
     teams** to a shared pool (distinct from each other and from public teams). No usage stats are
-    provided. Each match uses at most one team submitted by the two competing projects combined.
+    provided. Each team in the pool is played with equal probability, and each match uses at most
+    one team submitted by the two competing projects combined (self-play across versions of the same
+    project draws both teams exclusively from third parties).
 - **Timers & flags:** Pokémon Showdown timer rules without the 60-second disconnect grace.
   Undoing, forfeiting, and offering ties are disabled. Pondering is **disabled on ladders** and
-  **enabled by default in tournaments** (`ARENA_PONDER=1`).
+  **enabled by default in tournaments** (`ARENA_PONDER=1` when enabled).
 - **Privacy:** Logs/teams from harvested-human-team ladders are never published. RAND ladder games
-  and tournament matches are broadcast live; VGC logs/teams are published only after ladder
-  retirement.
+  and tournament matches (logs and teams) are broadcast live — with full tournament replay archives
+  (`.7z`) published upon completion — and VGC logs/teams are published only after ladder retirement.
 
 ### Hardware
 - **Ladders:** Apple M6 Mac mini — **10 cores (8 Performance + 2 Efficiency)**, **14 GiB dedicated
@@ -89,12 +118,16 @@ All current ladders run Pokémon Showdown rules as of Nov 9th 2026 (`a78551b0` /
 - **Tournaments:** Hardware is event-specific; accepts **`linux/amd64` OCI containers only**.
 
 ### Matchmaking & Ratings
-- Ladder battles are **blind-pair matches**: two sandboxed games with swapped teams (neither agent
-  sees Game 1 during Game 2).
-- Ratings use batch MAP estimation over a 5-category Davidson model (ties modeled explicitly),
-  mapped to Elo with an anchor representing the top of the Showdown human ladder pinned at **1500**.
-- Leaderboards rank by 95% conservative rating (`Elo - 1.96 * SE`) once past the provisional gate
-  (`≥ 10` matches and `SE ≤ 60`).
+- **Ladders:** Battles are **blind-pair matches** (two sandboxed games with swapped teams; neither
+  agent sees Game 1 during Game 2). Ratings use batch MAP estimation over a 5-category Davidson
+  model (ties modeled explicitly), mapped to Elo with an anchor representing the top of the
+  Showdown human ladder pinned at **1500**. Leaderboards rank by 95% conservative rating
+  (`Elo - 1.96 * SE`), assigning an official rank to at most one active version per project once
+  past the provisional gate (`≥ 10` matches and `SE ≤ 60`).
+- **Tournaments:** Event formats and rules (e.g., Open vs. Closed Team Sheets, Best-of-N sets,
+  pre-assigned vs. BYOT teams, timer rules) depend on the specific tournament page
+  (`/arena/tournaments/<id>/`), defaulting to a Round Robin followed by an extended Superfinal
+  between the top two entrants.
 
 ---
 
@@ -116,11 +149,13 @@ games of the series). Communication is strictly newline-delimited Pokémon Showd
    in Best-of-N tournaments).
 
 ### 3.2 Arena-Assigned Team Line (`|utm|`)
-Immediately after `/ready` is received, in every non-Random Battle format with arena-assigned teams,
-the very first line sent on `stdin` is:
+Immediately after `/ready` is received, in every non-Random Battle format with arena-assigned teams
+(fixed/VGC ladders and pre-assigned tournaments), the very first line sent on `stdin` is:
 ```text
 |utm|<packed_team>
 ```
+*(Not sent in Random Battle formats, nor in BYOT tournaments where your agent submitted its own
+team via `/utm <packed_team>`.)*
 This provides complete team details (unlike `|request|<JSON>`, which only includes computed stats).
 **CRITICAL PARSING BUG TO AVOID:** Pokémon Showdown's packed team format
 (`https://github.com/smogon/pokemon-showdown/blob/master/sim/TEAMS.md#packed-format`) uses `|` as
@@ -157,45 +192,61 @@ increment and `stdin` receives:
 - **`[Unavailable choice]`** (e.g. Encore, Disable, Arena Trap, Shadow Tag): The simulator sends an
   *updated* `|request|<JSON>` reflecting the newly revealed constraint. Does **not** count toward
   the 3-strike limit — re-parse the updated `|request|` and emit a newly legal choice.
-- **Quarantine:** Losing due to invalid choices, crashes, OOM, or timeouts in **10 consecutive
-  games** (or **> 20% across ≥ 10 games**) quarantines your version across all ladders without
-  resetting the 14-day cooldown.
+- **Quarantine (ladders only):** Losing due to invalid choices, crashes, OOM, or timeouts in **10
+  consecutive games** (or **> 20% across ≥ 10 games**) quarantines your version across all ladders
+  without resetting the 14-day cooldown.
 
-### 3.5 `SIGSTOP` / `podman pause` Time-Slicing (Ladders)
-On ladders, the coordinator pauses your entire process group (`SIGSTOP` / `podman pause`) within
-microseconds of reading your choice `\n`, and resumes it (`SIGCONT` / `podman unpause`) only when it
-is your turn to act again:
+### 3.5 `SIGSTOP` / `podman pause` Time-Slicing (Ladders Only)
+On **ladders** (not tournaments), the coordinator pauses your entire process group (`SIGSTOP` /
+`podman pause`) within microseconds of reading your choice `\n`, and resumes it (`SIGCONT` /
+`podman unpause`) only when it is your turn to act again:
 1. **Finish all work before writing `\n`:** Complete tree pruning, state updates, and GPU waits
    (`waitUntilCompleted` / `mx.eval` / `torch.mps.synchronize`) *before* emitting the newline.
 2. **Always flush `stdout` immediately:** Pipes are block-buffered by default in C/C++/Python/Rust.
    Use `python -u` + `sys.stdout.flush()`, `fflush(stdout)`, or `stdout.flush()` after every choice
-   and `/ready`.
+   and `/ready` (applies to tournaments too).
 3. **Never measure turn time across turns with wall-clock deltas:** Wall-clock time jumps while your
    process is frozen during your opponent's turn. Start your per-turn timer when you read
    `|inactive|Time left: ...` on `stdin`.
 
+*(In **tournaments**, your process is never paused and both agents run concurrently — see Section 7
+for pondering and Best-of-N lifecycle rules.)*
+
 ### 3.6 Filesystem, Process Limits, Environment Variables & Sandbox Rules
+**Shared (Ladders & Tournaments):**
 - **Read-only rootfs:** Your bundle/container root is mounted read-only. Never write into your
-  bundle directory or hardcode `/tmp` (native bundles cannot write to `/tmp`).
-- **Writable scratch:** `$TMPDIR`, `$HOME`, and (on ladders) `$XDG_CACHE_HOME` all point to the
-  per-game scratch directory (4 GB on ladders, wiped between games). Leave them intact so Metal and
-  CoreML caches work.
+  bundle/image directory.
+- **Writable scratch:** `$TMPDIR` and `$HOME` always point to a writable scratch directory (wiped
+  between games on ladders; persisted across games of a Best-of-N series in tournaments). Never
+  hardcode `/tmp` if targeting native bundles (native bundles cannot write to `/tmp`).
+- **Usage stats:** `$PKMN_STATS_DIR` points to read-only era-matched `data.pkmn.cc` stats when
+  available for the format (not provided for VGC).
+
+**Ladders Only (Mac mini — Native & `linux/arm64` OCI):**
+- **Cache dir & scratch size:** `$XDG_CACHE_HOME` also points to the 4 GB per-game scratch
+  directory; leave `$HOME`, `$TMPDIR`, and `$XDG_CACHE_HOME` intact so Metal and CoreML caches work.
 - **Process/thread limit:** `RLIMIT_NPROC=256` on native bundles; `--pids-limit=256` (including
   threads) in containers.
-- **Ladder env vars:** `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
-  `RAYON_NUM_THREADS=10`, `ARENA_MEMORY_LIMIT_MB=14336`, `PKMN_STATS_DIR`. Never hardcode > 10
-  compute threads (and see Section 6 on why 4–8 P-core threads often beat 10!).
-- **Zero-RSS `mmap` on macOS:** Clean read-only memory-mapped files (`mmap` with `PROT_READ` and
-  `MAP_PRIVATE` / `MAP_SHARED`, e.g. `.safetensors`, `.gguf`, raw weight packs) in native bundles
-  are file-backed and count as **0 bytes** toward the 14 GiB RAM limit.
-- **Seatbelt CoreML rule:** Runtime CoreML model compilation (`[MLModel compileModelAtURL:]`,
-  including ONNX Runtime `CoreMLExecutionProvider` and ExecuTorch `CoreMLBackend`) **FAILS** inside
-  the ladder Seatbelt sandbox with `CoreML Code=3`. Always pre-compile `.mlpackage` → `.mlmodelc`
-  offline during build!
+- **Env vars:** `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
+  `RAYON_NUM_THREADS=10`, `ARENA_MEMORY_LIMIT_MB=14336`. Never hardcode > 10 compute threads (and
+  see Section 6 on why capping compute pools at ≤ 8 P-core threads and leaving the 2 E-cores for
+  background maintenance often beats 10!).
+- **Zero-RSS `mmap` (native macOS bundles):** Clean read-only memory-mapped files (`mmap` with
+  `PROT_READ` and `MAP_PRIVATE` / `MAP_SHARED`, e.g. `.safetensors`, `.gguf`, raw weight packs) are
+  file-backed and count as **0 bytes** toward the 14 GiB RAM limit.
+- **Seatbelt CoreML rule (native macOS bundles):** Runtime CoreML model compilation
+  (`[MLModel compileModelAtURL:]`, including ONNX Runtime `CoreMLExecutionProvider` and ExecuTorch
+  `CoreMLBackend`) **FAILS** inside the ladder Seatbelt sandbox with `CoreML Code=3`. Always
+  pre-compile `.mlpackage` → `.mlmodelc` offline during build!
+
+**Tournaments Only (`linux/amd64` OCI):**
+- **Env vars:** `ARENA_PONDER=1` is set when pondering is enabled (enabled by default). Ladder
+  thread/RAM env vars (`OMP_NUM_THREADS`, `ARENA_MEMORY_LIMIT_MB`, `XDG_CACHE_HOME`) are **not**
+  set — detect or configure resources for the specific tournament's announced hardware.
 
 ---
 
-## 4. Building Native `darwin/arm64` Bundles Without a Mac (GitHub Actions `macos-26`)
+## 4. Building Native `darwin/arm64` Bundles Without a Mac (Ladders Only)
 
 For neural-network ladder agents, strongly prefer a **native `darwin/arm64` bundle** over a
 `linux/arm64` container for direct Metal/ANE access and zero-copy `mmap` weights.
@@ -304,7 +355,7 @@ jobs:
         run: |
           python3 - << 'PY'
           import os, sys
-          total, entries = 0, 0
+          total, entries = 0, 1  # include archive root '.' entry
           for dp, dn, fn in os.walk('dist', followlinks=False):
               entries += len(dn)
               for f in fn:
@@ -338,7 +389,7 @@ files don't pollute your archive and waste entry count.)*
 
 ---
 
-## 5. Bit-Golfing Neural Network Bundles Under 500 MiB (Ladder Guide)
+## 5. Bit-Golfing Neural Network Bundles Under 500 MiB (Ladders Only)
 
 ### 5.1 Why Stock PyTorch Bundles Blow Past 500 MiB Immediately
 A fresh `python-build-standalone 3.12` + `pip install torch==2.11.0 numpy` on `darwin/arm64`
@@ -455,7 +506,7 @@ verified under `arena/unpack.ts` and `sandbox.sb`:
    python3 -c '
    import os, sys
    root = sys.argv[1]
-   files, dirs = [], 0
+   files, dirs = [], 1  # include archive root '.' entry
    for dp, dn, fn in os.walk(root, followlinks=False):
        dirs += len(dn)
        for f in fn:
@@ -502,11 +553,13 @@ verified under `arena/unpack.ts` and `sandbox.sb`:
    `networkx`, `jinja2`, `markupsafe`, `fsspec`, `filelock`. Set `TORCH_COMPILE_DISABLE=1`.
 8. **Shrink static data:** Minify JSON (`separators=(',', ':')`), drop unused generations/formats
    and unqueried lookup tables (e.g. `learnset.json` if unused at battle time), and replace
-   duplicate files across packages with **relative symlinks** (allowed by the arena unpacker).
+   duplicate files across packages with **relative file symlinks** staying within the bundle root
+   (allowed by the arena unpacker; `./run` itself must remain a regular executable file and archive
+   entries may not traverse symlinked directories).
 
 ---
 
-## 6. Optimizing Inference for Apple Silicon & Metal
+## 6. Optimizing Inference for Apple Silicon & Metal (Ladders Only)
 
 1. **Know when CPU/AMX beats Metal GPU (never assume GPU is faster):**
    - Apple `Accelerate` (`cblas_sgemm` / `cblas_sgemv`) runs on the **AMX matrix coprocessor** with
@@ -537,7 +590,8 @@ verified under `arena/unpack.ts` and `sandbox.sb`:
    run 1–2 dummy forward passes with real shapes during the 60-second `/ready` startup window so
    Turn 1 never pays compilation latency.
 4. **Tune thread counts for P-cores vs E-cores (8P + 2E on M6):**
-   - The arena sets `OMP_NUM_THREADS=10` / `TORCH_NUM_THREADS=10` / `RAYON_NUM_THREADS=10`.
+   - The arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`, and
+     `RAYON_NUM_THREADS=10`.
    - For small `batch=1/16` matmuls, spilling onto the 2 Efficiency cores causes **2×–4× slowdowns**
      from barrier stalls (ONNX Runtime was 4× slower at 10T vs 4T on M3). Always benchmark
      `1, 2, 4, 6, 8` threads (`ort.SessionOptions().intra_op_num_threads`, `torch.set_num_threads`,
@@ -554,10 +608,13 @@ verified under `arena/unpack.ts` and `sandbox.sb`:
 
 ---
 
-## 7. Tournament Packaging (`linux/amd64` OCI + CUDA)
+## 7. Tournaments: Packaging (`linux/amd64` OCI + CUDA) & Runtime Differences
 
-Tournaments accept **`linux/amd64` OCI containers only** and enforce the same **≤ 500 MiB compressed
-& unpacked** and **≤ 32 layers** caps:
+Tournaments are **separate from continuous ladders**: they run on event-specific dedicated hardware
+(check `/arena/tournaments/<id>/` for exact CPU/RAM/GPU specs, ruleset, Best-of-N, OTS vs. CTS,
+and timer rules), accept **`linux/amd64` OCI containers only** (native macOS bundles and `arm64`
+images are rejected), and enforce the same **≤ 500 MiB compressed & unpacked** and **≤ 32 layers**
+caps:
 - **Multi-stage slim builds:** Compile in a builder stage (`FROM --platform=linux/amd64 ... AS
   builder`) and copy only runtime binaries, shared libraries, and weights into a minimal base
   (`debian:bookworm-slim` or `gcr.io/distroless/cc-debian12`). Strip Linux binaries with
@@ -570,26 +627,43 @@ Tournaments accept **`linux/amd64` OCI containers only** and enforce the same **
     `onnxruntime-gpu` shipping only the exact `libcudart`/`libcublasLt` shared libraries your ops
     link against — never the full CUDA toolkit or `nvcc`), OR
   - Use CPU `onnxruntime` / native C++/Rust if CPU latency already fits the tournament clock.
-- **Tournament runtime differences:** Pondering is enabled by default (`ARENA_PONDER=1`), multi-game
-  Best-of-N series reuse one subprocess & scratch directory across games (reset per-game battle
-  state cleanly between games!), and BYOT tournaments require `/utm <packed_team>` instead of
-  `/ready`.
+- **Concurrent execution & pondering:** Tournament processes are **never paused** (`SIGSTOP` is
+  ladder-only). Pondering is enabled by default (`ARENA_PONDER=1` when enabled), so your agent may
+  keep searching during opponent think time.
+- **Multi-game Best-of-N lifecycle:** In Best-of-N tournaments, **one subprocess and its scratch
+  directory (`$HOME` / `$TMPDIR`) persist across all games of the series**:
+  - Emit `/ready` (or BYOT `/utm <packed_team>`) **once** at subprocess startup — do **not** emit it
+    again between games.
+  - Reset per-game battle state cleanly when a new battle starts (after `|win|` / `|tie`, a fresh
+    game stream begins on `stdin`), while optionally retaining cross-game notes/adaptation in memory
+    or scratch.
+- **Open Team Sheets (OTS) & BYOT:** In OTS tournaments, the simulator automatically sends
+  `|showteam|p1|` and `|showteam|p2|` at Team Preview. In BYOT tournaments, send `/utm <packed_team>`
+  as your first `stdout` line instead of `/ready` (an illegal team forfeits the match immediately).
 
 ---
 
 ## 8. Pre-Submission Verification Checklist
 
-Before submitting on `https://pkmn.ai/account/`, verify all five gates:
-1. **Artifact caps:** Unpacked regular bytes **≤ 500 MiB**, compressed archive/image **≤ 500 MiB**,
-   entries **≤ 25,000** (native) or layers **≤ 32** (OCI).
-2. **Offline + read-only root execution:** `chmod -R a-w dist/` and run with `HOME`, `TMPDIR`, and
-   `XDG_CACHE_HOME` pointed at an empty temp directory and no network access.
+Before submitting on `https://pkmn.ai/account/`, verify all five gates for your target competition:
+1. **Target & artifact caps:** Correct architecture/package for your target (Ladders: `darwin/arm64`
+   native bundle or `linux/arm64` OCI; Tournaments: `linux/amd64` OCI only), unpacked size
+   **≤ 500 MiB**, compressed archive/image **≤ 500 MiB**, entries **≤ 25,000** (native) or layers
+   **≤ 32** (OCI).
+2. **Offline + read-only root execution:**
+   - **Native ladder bundle:** `chmod -R a-w dist/` and run with `HOME`, `TMPDIR`, and
+     `XDG_CACHE_HOME` pointed at an empty temp directory and no network access.
+   - **OCI container (ladder `linux/arm64` or tournament `linux/amd64`):** Run with `--read-only
+     --network=none`, writable `/scratch` bound to `HOME`/`TMPDIR`, and verify startup with zero
+     root filesystem writes.
 3. **Protocol & recovery:** Emits `/ready` (or `/utm <packed_team>` in BYOT) well within 60s, parses
    `|utm|` without splitting on `|`, ignores `request.wait`, flushes `stdout` after every choice,
    recovers from `[Invalid choice]` and `[Unavailable choice]` without hitting 3 consecutive invalid
-   errors, and emits zero extraneous `stdout` lines.
+   errors, emits zero extraneous `stdout` lines, and (for Best-of-N tournaments) resets per-game
+   battle state cleanly across consecutive games on the same `stdin` stream.
 4. **Numerical fidelity:** Compare logits/probabilities against your original `fp32` checkpoint over
    ≥ 20–30 multi-turn battle states (non-quantized `fp32`: max diff `< 1e-4`, `100%` argmax match;
    quantized: `mean KL < 0.005`, `≥ 95%` argmax match).
-5. **Latency & warmup:** Confirm shader/ANE warmup completes before `/ready` and Turn 1–30 median
-   latency fits comfortably within the Showdown turn clock at your chosen thread count.
+5. **Latency & warmup:** Confirm shader/ANE warmup (ladders) or CUDA/CPU warmup (tournaments)
+   completes before `/ready` (or `/utm`), and Turn 1–30 median latency fits comfortably within the
+   event's Showdown turn clock at your chosen thread count.
