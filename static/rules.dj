@@ -262,13 +262,24 @@ Superfinal between the top two entrants.
 
 {summary="*Packaging*"}
 ::: details
+  - for neural-network ladder agents, prefer a *native `darwin/arm64` bundle* over a `linux/arm64`
+    container for direct Metal/ANE access and zero-copy `mmap` weights. No Mac is needed --- build
+    binaries, `arm64` `uv` venvs, and CoreML models on GitHub Actions' free
+    [`macos-26`](https://github.blog/changelog/2026-02-26-macos-26-is-now-generally-available-for-github-hosted-runners/)
+    (`arm64`) runner.
+  - convert and quantize CUDA checkpoints on CPU (`map_location='cpu'`, `float16`/`bfloat16`/`int8`
+    `.safetensors`, `.gguf`, ONNX, or `.mlpackage`) --- no build-time GPU is needed, and `xcrun
+    coremlcompiler compile Model.mlpackage ./weights/` runs on `macos-26`. Since free `macos-26`
+    runners lack bare-metal GPU/ANE access, smoke-test on CPU in CI and auto-select Metal/ANE at
+    runtime on the arena's M6.
+  - tune inference for Apple Silicon: small `batch=1` PyTorch `mps` calls are often slower than CPU
+    due to dispatch overhead --- prefer *MLX*, static-shape *CoreML* (`.mlmodelc`), *ONNX Runtime*,
+    or CPU/Accelerate for tiny nets; batch search evaluations, avoid per-step host syncs, and avoid
+    `float64` (unsupported on Metal).
   - strip debug symbols from compiled binaries and shared libraries (`strip -x` on macOS, `strip
     --strip-unneeded` on Linux).
-  - quantize neural network weights (`float16`, `bfloat16`, or `int8` `.safetensors` / `.gguf`).
-  - pre-compile CoreML `.mlpackage` models to `.mlmodelc` (`xcrun coremlcompiler compile
-    Model.mlpackage ./weights/`) and exclude intermediate build files.
   - exclude `__pycache__`, `.git`, test suites, `pip`/`uv` caches, C++ header files (`include/`),
-    and static archives (`.a`).
+    static archives (`.a`), and intermediate `.mlpackage` / build files.
 :::
 
 {summary="*Uploading*"}
@@ -298,7 +309,8 @@ Superfinal between the top two entrants.
   - the bundle/container root filesystem is mounted read-only; `$TMPDIR`, `$HOME`, and (on ladders)
     `$XDG_CACHE_HOME` all point to the per-game scratch directory (wiped between games; native
     bundles cannot write to `/tmp`), which also holds CoreML/Metal shader caches and runtime temp
-    files.
+    files. Run a dummy forward pass before printing `/ready` (60-second startup budget) so cold
+    shader/ANE compilation does not burn your turn clock.
   - ladder processes are capped at 256 (`RLIMIT_NPROC=256` on native bundles; `--pids-limit=256`
     including threads in containers), and `stderr` is drained (with the last 4 KiB surfaced on
     [account](/account) if a ladder smoke test fails).
