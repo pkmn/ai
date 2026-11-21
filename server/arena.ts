@@ -2850,7 +2850,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       res.end();
       return;
     }
-    const doc = buildTournamentDocument(db, publicDir, tournament, 50);
+    const doc = buildTournamentDocument(db, publicDir, tournament, util.TABLE_PAGE_SIZE);
     sendSse(res, 'snapshot', {
       ...doc,
       broadcast: broadcastsByTournament.get(tournament.id),
@@ -2872,6 +2872,60 @@ export function register(app: polka.Polka, options: Options): Handle {
         if (cur.size === 0) tournamentStreamClients.delete(tournament.id);
       }
     });
+  });
+
+  app.get('/api/tournaments/:id/games.json', (req, res) => {
+    const rawId = decodeRouteParam(req.params.id);
+    const tournament = db.getTournament(rawId);
+    if (!tournament) {
+      sendJson(res, 404, {error: `Unknown tournament "${rawId}".`});
+      return;
+    }
+    const parsedUrl = new URL(req.url ?? '/', 'http://localhost');
+
+    const rawPage = parsedUrl.searchParams.get('page');
+    const parsedPage = rawPage ? Number(rawPage) : 1;
+    if (!Number.isSafeInteger(parsedPage) || parsedPage < 1 || parsedPage > 100_000) {
+      sendJson(res, 400, {error: 'page must be an integer between 1 and 100000.'});
+      return;
+    }
+
+    const rawLimit = parsedUrl.searchParams.get('limit');
+    const parsedLimit = rawLimit ? Number(rawLimit) : util.TABLE_PAGE_SIZE;
+    if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      sendJson(res, 400, {error: 'limit must be an integer between 1 and 100.'});
+      return;
+    }
+
+    const rawOffset = parsedUrl.searchParams.get('offset');
+    let resolvedOffset = (parsedPage - 1) * parsedLimit;
+    if (rawOffset !== null && rawOffset !== '') {
+      const parsedOffset = Number(rawOffset);
+      if (!Number.isSafeInteger(parsedOffset) || parsedOffset < 0 || parsedOffset > 1_000_000) {
+        sendJson(res, 400, {error: 'offset must be an integer between 0 and 1000000.'});
+        return;
+      }
+      resolvedOffset = parsedOffset;
+    }
+
+    const total = db.countTournamentGames(tournament.id);
+    const rows = db.getTournamentGames(tournament.id, parsedLimit, resolvedOffset);
+    const logFiles = listTournamentLogFiles(publicDir, tournament.id);
+    const totalPages = Math.max(1, Math.ceil(total / parsedLimit));
+    const payload = JSON.stringify({
+      updatedAt: rows[0]?.completedAt ?? 0,
+      tournamentId: tournament.id,
+      bestOf: tournament.bestOf,
+      page: parsedPage,
+      pageSize: parsedLimit,
+      offset: resolvedOffset,
+      total,
+      totalPages,
+      hasPrev: resolvedOffset > 0,
+      hasNext: resolvedOffset + rows.length < total,
+      games: rows.map(g => enrichTournamentGame(publicDir, tournament.id, g, logFiles)),
+    });
+    sendJsonWithEtag(req, res, payload);
   });
 
   const handleBattlesHistory = (req: http.IncomingMessage, res: http.ServerResponse) => {

@@ -2796,4 +2796,95 @@ describe('tournament standings', () => {
       telDb.close();
     }
   });
+
+  test('getLatestAgentLadderArtifact returns the newest passed ladder submission artifact', () => {
+    const {telDb, alpha} = createTelemetryDb();
+    try {
+      telDb.refundCooldown('alpha', 1_760_000_050);
+      const v2 = telDb.createSubmission({
+        agentId: alpha.id,
+        version: '2.0.0',
+        package: 'oci',
+        url: 'https://github.com/pkmn/alpha-2.0.0.tar',
+        sha256: 'c'.repeat(64),
+        ladderIds: ['gen3ou20261109'],
+        now: 1_760_000_100,
+      });
+      telDb.applySubmissionStatus({
+        versionId: v2.id,
+        smokeStatus: 'passed',
+        unpackedBytes: 128 * 1024 * 1024,
+        now: 1_760_000_110,
+      });
+      expect(telDb.getLatestAgentLadderArtifact(alpha.id)).toEqual({
+        package: 'oci',
+        unpackedBytes: 128 * 1024 * 1024,
+      });
+    } finally {
+      telDb.close();
+    }
+  });
+
+  test('getTournamentGames paginates completed games with offset', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      const beta = telDb.getAgentBySlug('beta')!;
+      telDb.upsertTournament({
+        id: '9',
+        name: 'Tournament #9',
+        format: 'gen1ou',
+        version: '0.11.0',
+        gamesPerMatchup: 6,
+        parallelTables: 1,
+        hardware: 'Mac mini M4',
+        status: 'running',
+        startsAt: 1_760_000_000,
+      });
+      telDb.upsertTournamentEntrant({
+        tournamentId: '9',
+        agentId: alpha.id,
+        versionId: vA.id,
+        seed: 1,
+      });
+      telDb.upsertTournamentEntrant({
+        tournamentId: '9',
+        agentId: beta.id,
+        versionId: vB.id,
+        seed: 2,
+      });
+      for (let i = 1; i <= 5; i++) {
+        telDb.upsertTournamentGame({
+          id: `t9-g${i}`,
+          tournamentId: '9',
+          stage: 'Round Robin',
+          cycle: i,
+          matchupGame: i,
+          status: 'completed',
+          outcome: 'W',
+          p1: {versionId: vA.id},
+          p2: {versionId: vB.id},
+          games: [{gameNumber: 1, seed: `1,2,3,${i}`, outcome: 'W', turns: 12}],
+          completedAt: 1_760_000_000 + i * 10,
+        });
+      }
+      telDb.upsertTournamentGame({
+        id: 't9-pending',
+        tournamentId: '9',
+        stage: 'Round Robin',
+        cycle: 6,
+        matchupGame: 6,
+        status: 'pending',
+        p1: {versionId: vA.id},
+        p2: {versionId: vB.id},
+      });
+
+      expect(telDb.countTournamentGames('9')).toBe(5);
+      expect(telDb.getTournamentGames('9', 2, 0).map(g => g.id)).toEqual(['t9-g5', 't9-g4']);
+      expect(telDb.getTournamentGames('9', 2, 2).map(g => g.id)).toEqual(['t9-g3', 't9-g2']);
+      expect(telDb.getTournamentGames('9', 2, 4).map(g => g.id)).toEqual(['t9-g1']);
+      expect(telDb.getTournamentGames('9', 0, 0)).toEqual([]);
+    } finally {
+      telDb.close();
+    }
+  });
 });

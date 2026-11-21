@@ -409,6 +409,32 @@ export function getAgentLadderProfileEntries(
   }));
 }
 
+export interface AgentLadderArtifact {
+  package: 'bundle' | 'oci';
+  unpackedBytes?: number;
+}
+
+export function getLatestAgentLadderArtifact(
+  db: DatabaseSync,
+  agentId: number
+): AgentLadderArtifact | undefined {
+  const row = db.prepare(`
+    SELECT av.package, av.unpacked_bytes
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE av.agent_id = ?
+      AND av.smoke_status = 'passed'
+      AND le.role IN ('champion', 'challenger', 'retired')
+    ORDER BY av.submitted_at DESC, av.id DESC
+    LIMIT 1
+  `).get(agentId) as {package: 'bundle' | 'oci'; unpacked_bytes: number | null} | undefined;
+  if (!row) return undefined;
+  return {
+    package: row.package,
+    unpackedBytes: row.unpacked_bytes ?? undefined,
+  };
+}
+
 export function getLeaderboardEntries(
   db: DatabaseSync,
   ladderId: string

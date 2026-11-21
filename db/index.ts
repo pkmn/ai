@@ -699,6 +699,10 @@ export class Database extends SqliteDatabase {
     return entries.getAgentLadderProfileEntries(this.db, agentId, ladderId);
   }
 
+  getLatestAgentLadderArtifact(agentId: number): entries.AgentLadderArtifact | undefined {
+    return entries.getLatestAgentLadderArtifact(this.db, agentId);
+  }
+
   getAgentLadderStats(ladderId: string, agentId: number): stats.AgentLadderStatsRow | undefined {
     return stats.getAgentLadderStats(this.db, ladderId, agentId);
   }
@@ -771,8 +775,16 @@ export class Database extends SqliteDatabase {
     return tournamentMatches.recordCompletedTournamentGame(this.db, this.txRunner, game);
   }
 
-  getTournamentGames(tournamentId: string, limit?: number): tournamentMatches.TournamentGameView[] {
-    return tournamentMatches.getTournamentGames(this.db, tournamentId, limit);
+  countTournamentGames(tournamentId: string): number {
+    return tournamentMatches.countTournamentGames(this.db, tournamentId);
+  }
+
+  getTournamentGames(
+    tournamentId: string,
+    limit?: number,
+    offset?: number
+  ): tournamentMatches.TournamentGameView[] {
+    return tournamentMatches.getTournamentGames(this.db, tournamentId, limit, offset);
   }
 
   getTournamentCrosstable(

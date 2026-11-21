@@ -738,8 +738,16 @@ describe('populated Arena leaderboard views', () => {
     const foulProfileHtml = await h.getText('/projects/foul-play/');
     expect(foulProfileHtml).not.toMatch(/Athena[\s\S]{0,80}Nemesis/);
     expect(foulProfileHtml).toContain('Page 1 of 6 (135 matches)');
-    expect(foulProfileHtml).toContain('Page 1 of 2 (28 matches)');
-    expect((foulProfileHtml.match(/class="battle-row"/g) ?? [])).toHaveLength(50);
+    expect(foulProfileHtml).not.toContain('Page 1 of 2 (28 matches)');
+    expect((foulProfileHtml.match(/class="battle-row"/g) ?? [])).toHaveLength(25);
+
+    const advPane = await h.getJson<{
+      ladderKey: string;
+      matchesPaneHtml: string;
+    }>('/projects/foul-play/ladders/adv.json');
+    expect(advPane.ladderKey).toBe('adv');
+    expect(advPane.matchesPaneHtml).toContain('Page 1 of 2 (28 matches)');
+    expect((advPane.matchesPaneHtml.match(/class="battle-row"/g) ?? [])).toHaveLength(25);
 
     const page6 = await h.getJson<{
       total: number;
@@ -763,6 +771,35 @@ describe('populated Arena leaderboard views', () => {
         (m.p2.slug === 'metamon' && m.p2.version === '1.2.0')
       ).toBe(true);
     }
+  });
+
+  test('serves lazy profile ladder payload with ETag revalidation', async () => {
+    const first = await h.getRaw('/projects/foul-play/ladders/adv.json');
+    expect(first.status).toBe(200);
+    expect(first.headers.get('cache-control')).toBe('no-cache');
+    const etag = first.headers.get('etag');
+    expect(etag).toBeTruthy();
+    const payload = await first.json() as {
+      ladderKey: string;
+      clientData: {ladderId: string};
+      versionsPaneHtml: string;
+      matchupsPaneHtml: string;
+      matchesPaneHtml: string;
+    };
+    expect(payload.ladderKey).toBe('adv');
+    expect(payload.clientData.ladderId).toBe('gen3ou20261109');
+    expect(payload.versionsPaneHtml).toContain('data-ladder="adv"');
+    expect(payload.matchupsPaneHtml).toContain('data-ladder="adv"');
+    expect(payload.matchesPaneHtml).toContain('data-ladder="adv"');
+
+    const second = await h.getRaw('/projects/foul-play/ladders/adv.json', {
+      headers: {'if-none-match': etag!},
+    });
+    expect(second.status).toBe(304);
+
+    expect((await h.getRaw('/projects/foul-play/ladders/nonexistent.json')).status).toBe(404);
+    expect((await h.getRaw('/projects/no-such-agent/ladders/rby.json')).status).toBe(404);
+    expect((await h.getRaw('/projects/foul-play/ladders/adv')).status).toBe(404);
   });
 
   test('renders profile pages for Pending projects without ladder entries', async () => {
@@ -2351,8 +2388,10 @@ describe('JSON route parity & retired pool archives', () => {
 
       const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 60});
       try {
-        const profileHtml = await h.getText(`/projects/${vgcMatch.p1.slug}/`);
-        expect(profileHtml).toContain(
+        const vgcPane = await h.getJson<{matchesPaneHtml: string}>(
+          `/projects/${vgcMatch.p1.slug}/ladders/gen9championsvgc2026regmc.json`
+        );
+        expect(vgcPane.matchesPaneHtml).toContain(
           `data-g1-log="/arena/ladders/gen9championsvgc2026regmc/${vgcMatch.id}a.log"`
         );
       } finally {
@@ -2700,9 +2739,14 @@ describe('JSON route parity & retired pool archives', () => {
     try {
       const html = await h.getText('/projects/foul-play/');
       expect(html).toContain('id="opp-select"');
-      expect(html).toContain('Jaxcalibur (1)\\u003c/option>');
-      expect(html).toContain('class="opp-row" data-opp="jaxcalibur"');
-      expect(html).toContain(
+      const vgcPane = await h.getJson<{
+        clientData: {oppOptionsHtml: string};
+        matchupsPaneHtml: string;
+        matchesPaneHtml: string;
+      }>('/projects/foul-play/ladders/vgc.json');
+      expect(vgcPane.clientData.oppOptionsHtml).toContain('Jaxcalibur (1)</option>');
+      expect(vgcPane.matchupsPaneHtml).toContain('class="opp-row" data-opp="jaxcalibur"');
+      expect(vgcPane.matchesPaneHtml).toContain(
         'class="battle-row" data-ver="1.0.0" data-opp="jaxcalibur" ' +
           'tabindex="0" aria-expanded="false"'
       );
@@ -2835,8 +2879,54 @@ describe('JSON route parity & retired pool archives', () => {
 
     const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 10});
     try {
-      const html = await h.getText('/projects/foul-play/#vgc');
-      expect(html).toContain('Jaxcalibur (1)');
+      const vgcPane = await h.getJson<{
+        clientData: {oppOptionsHtml: string; oppCounts: Record<string, Record<string, number>>};
+      }>('/projects/foul-play/ladders/vgc.json');
+      expect(vgcPane.clientData.oppOptionsHtml).toContain('Jaxcalibur (1)');
+      expect(vgcPane.clientData.oppCounts.all.jaxcalibur).toBe(1);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('caps initial tournament SSR games table at 25 rows with full pager total', async () => {
+    const fpVer = db.getVersionsForAgent(db.getAgentBySlug('foul-play')!.id)[0];
+    const jaxVer = db.getVersionsForAgent(db.getAgentBySlug('jaxcalibur')!.id)[0];
+    db.upsertTournamentEntrant({
+      tournamentId: '1',
+      agentId: jaxVer.agentId,
+      versionId: jaxVer.id,
+      seed: 2,
+      elo: 1480,
+      se: 30,
+      points: 10,
+      gameWins: 10,
+      gameLosses: 20,
+      gameTies: 0,
+      finalRank: 2,
+    });
+    for (let i = 1; i <= 30; i++) {
+      db.recordCompletedTournamentGame({
+        id: `t1-page-${String(i).padStart(2, '0')}`,
+        tournamentId: '1',
+        stage: 'Round Robin',
+        cycle: i,
+        matchupGame: i,
+        outcome: i % 2 === 0 ? 'W' : 'L',
+        p1: {versionId: fpVer.id},
+        p2: {versionId: jaxVer.id},
+        games: [{gameNumber: 1, seed: `1,2,3,${i}`, outcome: i % 2 === 0 ? 'W' : 'L', turns: 10}],
+        completedAt: DAY_2 + i * 60,
+      });
+    }
+
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/arena/tournaments/1/');
+      expect((html.match(/data-game-id="/g) ?? [])).toHaveLength(25);
+      expect(html).toContain('data-game-id="t1-page-30"');
+      expect(html).not.toContain('data-game-id="t1-page-01"');
+      expect(html).toContain('Page 1 of 2 (30 games)');
     } finally {
       await h.close();
     }

@@ -16,7 +16,7 @@ import * as util from '../static/util';
 import {getDex, hashTeam} from '../teams';
 
 import * as arena from './arena';
-import {buildAgentProfileDocument, renderAgentProfileHtml, resolveAgentLogo} from './profile';
+import * as profile from './profile';
 import * as ratings from './ratings';
 import * as tournaments from './tournaments';
 
@@ -4097,7 +4097,7 @@ export function register(app: polka.Polka, options: Options) {
         sendJsonNotFound(res, `Unknown Arena agent "${slug}".`);
         return;
       }
-      const doc = buildAgentProfileDocument({db, agent, links: getLinks(), avatarsDir});
+      const doc = profile.buildAgentProfileDocument({db, agent, links: getLinks(), avatarsDir});
       sendWithEtag(req, res, {
         body: `${JSON.stringify(doc, undefined, 2)}\n`,
         contentType: 'application/json; charset=utf-8',
@@ -4110,7 +4110,7 @@ export function register(app: polka.Polka, options: Options) {
     if (dot > 0) {
       const logoAgent = db.getAgentBySlug(rawParam.slice(0, dot));
       if (logoAgent && logoAgent.status !== 'disabled') {
-        const logo = resolveAgentLogo(logoAgent, avatarsDir);
+        const logo = profile.resolveAgentLogo(logoAgent, avatarsDir);
         if (logo?.fileName === rawParam) {
           sendWithEtag(req, res, {
             body: fs.readFileSync(logo.filePath),
@@ -4125,7 +4125,7 @@ export function register(app: polka.Polka, options: Options) {
     const agent = db.getAgentBySlug(rawParam);
     if (agent && agent.status !== 'disabled') {
       sendWithEtag(req, res, {
-        body: renderAgentProfileHtml({
+        body: profile.renderAgentProfileHtml({
           db,
           renderer,
           agent,
@@ -4147,6 +4147,36 @@ export function register(app: polka.Polka, options: Options) {
     res.writeHead(302, {Location: `/projects/#${encodeURIComponent(rawParam)}`});
     res.end();
   };
+
+  app.get('/projects/:slug/ladders/:key', (req, res) => {
+    const slug = paramStr(req.params.slug);
+    const rawKey = paramStr(req.params.key);
+    if (!rawKey.endsWith('.json')) {
+      sendHtmlNotFound(res);
+      return;
+    }
+    const ladderKey = rawKey.slice(0, -5);
+    const agent = db.getAgentBySlug(slug);
+    if (!agent || agent.status === 'disabled') {
+      sendJsonNotFound(res, `Unknown Arena agent "${slug}".`);
+      return;
+    }
+    const payload = profile.buildAgentProfileLadderPayload({
+      db,
+      agent,
+      ladderKey,
+      links: getLinks(),
+      nowSec: getNowSec(),
+    });
+    if (!payload) {
+      sendJsonNotFound(res, `Unknown ladder "${ladderKey}" for agent "${slug}".`);
+      return;
+    }
+    sendWithEtag(req, res, {
+      body: JSON.stringify(payload),
+      contentType: 'application/json; charset=utf-8',
+    });
+  });
 
   app.get('/projects/:slug/index.json', (req, res) => {
     handleProjectProfile(req, res, paramStr(req.params.slug), true);

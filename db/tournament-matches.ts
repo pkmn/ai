@@ -244,11 +244,30 @@ export function recordCompletedTournamentGame(
   });
 }
 
+export function countTournamentGames(
+  db: DatabaseSync,
+  tournamentId: string
+): number {
+  const row = db
+    .prepare(
+      `
+      SELECT COUNT(*) AS count
+      FROM tournament_matches
+      WHERE tournament_id = ?
+        AND status = 'completed'
+      `
+    )
+    .get(tournamentId) as {count: number};
+  return row.count;
+}
+
 export function getTournamentGames(
   db: DatabaseSync,
   tournamentId: string,
-  limit = 50
+  limit = 50,
+  offset = 0
 ): TournamentGameView[] {
+  if (limit <= 0) return [];
   const rows = db
     .prepare(
       `
@@ -268,10 +287,10 @@ export function getTournamentGames(
       WHERE tm.tournament_id = ?
         AND tm.status = 'completed'
       ORDER BY tm.completed_at DESC, tm.id DESC
-      LIMIT ?
+      LIMIT ? OFFSET ?
       `
     )
-    .all(tournamentId, limit) as Array<Record<string, unknown>>;
+    .all(tournamentId, limit, Math.max(0, offset)) as Array<Record<string, unknown>>;
 
   const gamesByMatch = rows.length <= 500
     ? tournamentGames.getTournamentMatchGamesForMatches(db, rows.map(row => row.id as string))

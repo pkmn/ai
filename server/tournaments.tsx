@@ -1372,7 +1372,7 @@ function renderTournamentGamesNode(opts: {
   const archive = arena.resolveTournamentArchive(publicDir, tournament.id);
   const jsonHref = `/arena/tournaments/${encodeURIComponent(tournament.id)}/index.json`;
   const countStr = totalCompletedCount.toLocaleString('en-US');
-  const totalGameRows = liveTables.length + games.length;
+  const totalGameRows = liveTables.length + Math.max(totalCompletedCount, games.length);
 
   return (
     <>
@@ -2076,6 +2076,27 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     const pageSize = 25;
     let standingsPage = 1;
     let gamesPage = 1;
+    let gamesFetchSeq = 0;
+    let page1Dirty = false;
+    let savedPage1CompletedHtml = '';
+    if (gamesTbody) {
+      const initCompleted = gamesTbody.querySelectorAll('tr[data-game-id]');
+      if (initCompleted.length > completedGames) completedGames = initCompleted.length;
+      const initParts = [];
+      initCompleted.forEach(row => {
+        const cloneRow = row.cloneNode(true);
+        cloneRow.classList.remove('expanded', 'hide');
+        cloneRow.setAttribute('aria-expanded', 'false');
+        initParts.push(cloneRow.outerHTML);
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('battle-detail-row')) {
+          const cloneDetail = detail.cloneNode(true);
+          cloneDetail.classList.add('hide');
+          initParts.push(cloneDetail.outerHTML);
+        }
+      });
+      savedPage1CompletedHtml = initParts.join('');
+    }
 
     const formatUtcDateStr = ts => {
       if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '—';
@@ -2438,27 +2459,17 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       return [tr, detailTr];
     };
 
-    const applyGamesPager = () => {
-      if (!gamesTbody) return;
-      if (window.__sweepMinisprites) window.__sweepMinisprites(gamesTbody);
-      const rows = Array.from(
-        gamesTbody.querySelectorAll('tr:not(.empty-row):not(.battle-detail-row)')
-      );
-      const total = rows.length;
+    const getGamesPaginationCounts = () => {
+      const liveCount = getLiveTables().length;
+      const total = liveCount + completedGames;
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      return {liveCount, total, totalPages};
+    };
+
+    const updateGamesPagerControls = () => {
+      const {total, totalPages} = getGamesPaginationCounts();
       if (gamesPage > totalPages) gamesPage = totalPages;
       if (gamesPage < 1) gamesPage = 1;
-      const start = (gamesPage - 1) * pageSize;
-      rows.forEach((row, idx) => {
-        const hidden = idx < start || idx >= start + pageSize;
-        row.classList.toggle('hide', hidden);
-        const detail = row.nextElementSibling;
-        if (detail && detail.classList.contains('battle-detail-row') && hidden) {
-          detail.classList.add('hide');
-          row.classList.remove('expanded');
-          row.setAttribute('aria-expanded', 'false');
-        }
-      });
       const pager = document.getElementById('games-pager');
       const prevBtn = document.getElementById('games-pager-prev');
       const nextBtn = document.getElementById('games-pager-next');
@@ -2474,8 +2485,138 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
     };
 
+    const applyPage1Visibility = () => {
+      if (!gamesTbody) return;
+      if (window.__sweepMinisprites) window.__sweepMinisprites(gamesTbody);
+      const rows = Array.from(
+        gamesTbody.querySelectorAll('tr:not(.empty-row):not(.battle-detail-row)')
+      );
+      rows.forEach((row, idx) => {
+        const hidden = idx >= pageSize;
+        row.classList.toggle('hide', hidden);
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('battle-detail-row') && hidden) {
+          detail.classList.add('hide');
+          row.classList.remove('expanded');
+          row.setAttribute('aria-expanded', 'false');
+        }
+      });
+      updateGamesPagerControls();
+    };
+
+    const trimPage1CompletedRows = () => {
+      if (!gamesTbody) return;
+      const completedRows = Array.from(gamesTbody.querySelectorAll('tr[data-game-id]'));
+      for (let i = pageSize; i < completedRows.length; i++) {
+        const row = completedRows[i];
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('battle-detail-row')) detail.remove();
+        row.remove();
+      }
+    };
+
+    const loadGamesPage = async (targetPage, scrollGames) => {
+      if (!gamesTbody) return;
+      const {totalPages} = getGamesPaginationCounts();
+      gamesPage = Math.max(1, Math.min(totalPages, targetPage));
+      const seq = ++gamesFetchSeq;
+      updateGamesPagerControls();
+
+      const liveTbs = getLiveTables();
+      const liveCount = liveTbs.length;
+      const start = (gamesPage - 1) * pageSize;
+      const end = start + pageSize;
+      const pageLive = liveTbs.slice(start, end);
+
+      if (gamesPage === 1 && !page1Dirty) {
+        const frag = document.createDocumentFragment();
+        for (const tb of pageLive) frag.appendChild(buildLiveGameRowEl(tb));
+        gamesTbody.innerHTML = '';
+        gamesTbody.appendChild(frag);
+        if (savedPage1CompletedHtml) {
+          gamesTbody.insertAdjacentHTML('beforeend', savedPage1CompletedHtml);
+        } else if (gamesTbody.children.length === 0) {
+          gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="center muted">' +
+            'No completed ' + unitPlural + ' yet.</td></tr>';
+        }
+        applyPage1Visibility();
+        if (scrollGames && gamesSec) gamesSec.scrollIntoView();
+        return;
+      }
+
+      const compOffset = gamesPage === 1 ? 0 : Math.max(0, start - liveCount);
+      const compLimit = gamesPage === 1
+        ? pageSize
+        : Math.max(0, end - liveCount) - compOffset;
+
+      if (compLimit <= 0) {
+        const frag = document.createDocumentFragment();
+        for (const tb of pageLive) frag.appendChild(buildLiveGameRowEl(tb));
+        gamesTbody.innerHTML = '';
+        gamesTbody.appendChild(frag);
+        if (gamesTbody.children.length === 0) {
+          gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="center muted">' +
+            'No completed ' + unitPlural + ' yet.</td></tr>';
+        }
+        if (window.__sweepMinisprites) window.__sweepMinisprites(gamesTbody);
+        updateGamesPagerControls();
+        if (scrollGames && gamesSec) gamesSec.scrollIntoView();
+        return;
+      }
+
+      try {
+        const qs = liveCount === 0
+          ? '?page=' + gamesPage + '&limit=' + pageSize
+          : '?offset=' + compOffset + '&limit=' + compLimit;
+        const res = await fetch(
+          '/api/tournaments/' + encodeURIComponent(tournamentId) + '/games.json' + qs,
+          {cache: 'no-cache', headers: {Accept: 'application/json'}}
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (seq !== gamesFetchSeq) return;
+        if (typeof data.total === 'number') {
+          completedGames = data.total;
+          renderArchiveMeta();
+        }
+        const nowSec = Math.floor(Date.now() / 1000);
+        const frag = document.createDocumentFragment();
+        for (const tb of pageLive) frag.appendChild(buildLiveGameRowEl(tb));
+        const fetched = Array.isArray(data.games) ? data.games : [];
+        const fetchedParts = [];
+        for (const g of fetched) {
+          const pair = buildCompletedGameRowEl(g, nowSec);
+          if (gamesPage === 1) {
+            fetchedParts.push(pair[0].outerHTML, pair[1].outerHTML);
+          }
+          frag.appendChild(pair[0]);
+          frag.appendChild(pair[1]);
+        }
+        gamesTbody.innerHTML = '';
+        if (frag.childNodes.length === 0) {
+          gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="center muted">' +
+            'No completed ' + unitPlural + ' yet.</td></tr>';
+        } else {
+          gamesTbody.appendChild(frag);
+        }
+        if (gamesPage === 1) {
+          page1Dirty = false;
+          savedPage1CompletedHtml = fetchedParts.join('');
+          applyPage1Visibility();
+        } else {
+          if (window.__sweepMinisprites) window.__sweepMinisprites(gamesTbody);
+          updateGamesPagerControls();
+        }
+        if (scrollGames && gamesSec) gamesSec.scrollIntoView();
+      } catch {}
+    };
+
     const syncLiveGameRows = () => {
       if (!gamesTbody) return;
+      if (gamesPage !== 1) {
+        updateGamesPagerControls();
+        return;
+      }
       gamesTbody.querySelectorAll('tr.live-game-row').forEach(el => el.remove());
       const liveTbs = getLiveTables();
       if (liveTbs.length > 0) {
@@ -2490,11 +2631,16 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         gamesTbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="center muted">' +
           'No completed ' + unitPlural + ' yet.</td></tr>';
       }
-      applyGamesPager();
+      applyPage1Visibility();
     };
 
     const prependCompletedGameRow = g => {
       if (!gamesTbody || !g || !g.id) return;
+      if (gamesPage !== 1) {
+        page1Dirty = true;
+        updateGamesPagerControls();
+        return;
+      }
       let existing = null;
       gamesTbody.querySelectorAll('tr[data-game-id]').forEach(row => {
         if (row.getAttribute('data-game-id') === g.id) existing = row;
@@ -2519,6 +2665,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
               } else {
                 slot.setAttribute('data-single-game', '1');
               }
+              page1Dirty = true;
             }
           }
         }
@@ -2534,7 +2681,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
       gamesTbody.insertBefore(pair[1], anchor);
       gamesTbody.insertBefore(pair[0], pair[1]);
-      applyGamesPager();
+      trimPage1CompletedRows();
+      page1Dirty = true;
+      applyPage1Visibility();
     };
 
     const renderArchiveMeta = () => {
@@ -2612,14 +2761,12 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       }
       if (target.closest('#games-pager-prev')) {
         if (gamesPage > 1) {
-          gamesPage--;
-          applyGamesPager();
+          void loadGamesPage(gamesPage - 1, true);
         }
         return;
       }
       if (target.closest('#games-pager-next')) {
-        gamesPage++;
-        applyGamesPager();
+        void loadGamesPage(gamesPage + 1, true);
         return;
       }
       const liveBtn = target.closest('[data-live-table]');
@@ -2703,7 +2850,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
             hasSuperfinal = true;
           }
           if (Array.isArray(doc.games)) {
-            for (let i = doc.games.length - 1; i >= 0; i--) {
+            for (let i = Math.min(doc.games.length, pageSize) - 1; i >= 0; i--) {
               prependCompletedGameRow(doc.games[i]);
             }
           }
@@ -2962,7 +3109,7 @@ export function renderTournamentPage(opts: {
 
   const allTournaments = db.getTournaments();
   const entrants = db.getTournamentEntrants(t.id);
-  const games = db.getTournamentGames(t.id, 10_000);
+  const games = db.getTournamentGames(t.id, util.TABLE_PAGE_SIZE);
   const rrPairs = db.getTournamentCrosstable(t.id, 'Round Robin');
   const sfPairs = db.getTournamentCrosstable(t.id, 'Superfinal');
   const broadcastRes = renderBroadcastSectionHtml(t, tournamentBroadcast);

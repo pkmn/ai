@@ -969,7 +969,7 @@ function buildProjectMetaRows(
   db: db.Database,
   agent: db.AgentRow,
   meta: render.ProjectMeta | undefined,
-  latestEntry: db.AgentLadderProfileEntry | undefined
+  latestEntry: db.AgentLadderArtifact | undefined
 ): util.Html[] {
   const rows: util.Html[] = [];
   const devs = db.getDevelopersForAgent(agent.id);
@@ -1088,25 +1088,20 @@ function buildProfileScript(
       return tb;
     };
     const hasOwn = Object.prototype.hasOwnProperty;
+    const versionsSec = document.getElementById('versions');
     const matchupsSec = document.getElementById('matchups');
     const matchesSec = document.getElementById('matches');
-    const panes = document.querySelectorAll('.profile-pane');
+    const knownLadders = new Set(Array.from(ladderRadios).map(r => r.value));
+    const pendingLadderFetches = Object.create(null);
     let curLad = ${render.safeInlineJson(defaultLadderKey)};
     let curVer = 'all';
     let curOpp = 'all';
     let matchPage = 1;
     let matchFetchSeq = 0;
+    let ladderSwitchSeq = 0;
     const pageSize = 25;
     const panePagers = new WeakMap();
     const initialMatchHtml = Object.create(null);
-
-    document.querySelectorAll('#matches .profile-pane').forEach(pane => {
-      const lad = pane.dataset.ladder;
-      const tbody = pane.querySelector('tbody');
-      if (lad && tbody) {
-        initialMatchHtml[lad] = tbody.innerHTML;
-      }
-    });
 
     ${render.buildBattleDetailClientJs()}
 
@@ -1210,7 +1205,7 @@ function buildProfileScript(
       }
     };
 
-    document.querySelectorAll('#versions .profile-pane, #matchups .profile-pane').forEach(pane => {
+    const wireVersionsOrMatchupsPane = pane => {
       const tbody = pane.querySelector('tbody');
       const pager = pane.querySelector('.pager[data-table-pager]');
       if (!tbody || !pager) return;
@@ -1249,7 +1244,35 @@ function buildProfileScript(
           apply();
         },
       });
-    });
+    };
+
+    const wireH2hTable = table => {
+      const headers = table.querySelectorAll('th.sortable');
+      let sortCol = -1;
+      let sortAsc = false;
+      headers.forEach(th => th.addEventListener('click', () => {
+        const col = Number(th.dataset.col);
+        const isNum = th.dataset.type === 'num';
+        sortAsc = sortCol === col ? !sortAsc : !isNum;
+        sortCol = col;
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort((a, b) => {
+          const av = a.children[col].dataset.val || '';
+          const bv = b.children[col].dataset.val || '';
+          const cmp = isNum ? Number(av) - Number(bv) : av.localeCompare(bv);
+          return sortAsc ? cmp : -cmp;
+        });
+        rows.forEach(row => tbody.appendChild(row));
+        const pane = table.closest('.profile-pane');
+        const ctrl = pane ? panePagers.get(pane) : undefined;
+        if (ctrl) ctrl.reset();
+      }));
+    };
+
+    document.querySelectorAll('#versions .profile-pane, #matchups .profile-pane')
+      .forEach(wireVersionsOrMatchupsPane);
+    document.querySelectorAll('.h2h-table').forEach(wireH2hTable);
 
     const applyMatchesPager = async scrollMatches => {
       const ladData = profileData[curLad];
@@ -1317,7 +1340,12 @@ function buildProfileScript(
       } catch {}
     };
 
-    document.querySelectorAll('#matches .profile-pane').forEach(pane => {
+    const wireMatchesPane = pane => {
+      const lad = pane.dataset.ladder;
+      const tbody = pane.querySelector('tbody');
+      if (lad && tbody) {
+        initialMatchHtml[lad] = tbody.innerHTML;
+      }
       const pager = pane.querySelector('.pager[data-table-pager]');
       if (!pager) return;
       const prevBtn = pager.querySelector('[data-pager-prev]');
@@ -1336,7 +1364,9 @@ function buildProfileScript(
           void applyMatchesPager(true);
         });
       }
-    });
+    };
+
+    document.querySelectorAll('#matches .profile-pane').forEach(wireMatchesPane);
 
     const syncUrl = hashOverride => {
       if (!history.replaceState) return;
@@ -1383,17 +1413,45 @@ function buildProfileScript(
       }
     };
 
-    const applyLadder = ladKey => {
-      if (!hasOwn.call(profileData, ladKey)) return;
+    const appendPaneHtml = (sec, html) => {
+      if (!sec || !html) return null;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      const pane = tmp.firstElementChild;
+      if (!pane) return null;
+      sec.appendChild(pane);
+      return pane;
+    };
+
+    const mountLadderPayload = (ladKey, payload) => {
+      if (hasOwn.call(profileData, ladKey)) return;
+      if (payload.agentLinks) {
+        for (const k of Object.keys(payload.agentLinks)) {
+          if (!hasOwn.call(agentLinks, k)) agentLinks[k] = payload.agentLinks[k];
+        }
+      }
+      profileData[ladKey] = payload.clientData;
+      const vPane = appendPaneHtml(versionsSec, payload.versionsPaneHtml);
+      if (vPane) wireVersionsOrMatchupsPane(vPane);
+      const hPane = appendPaneHtml(matchupsSec, payload.matchupsPaneHtml);
+      if (hPane) {
+        wireVersionsOrMatchupsPane(hPane);
+        hPane.querySelectorAll('.h2h-table').forEach(wireH2hTable);
+      }
+      const mPane = appendPaneHtml(matchesSec, payload.matchesPaneHtml);
+      if (mPane) wireMatchesPane(mPane);
+    };
+
+    const showLadder = ladKey => {
       const ladData = profileData[ladKey];
       if (!ladData) return;
       curLad = ladKey;
       curVer = 'all';
       curOpp = 'all';
       ladderRadios.forEach(r => {
-        if (r.value === ladKey) r.checked = true;
+        r.checked = r.value === ladKey;
       });
-      panes.forEach(p => {
+      document.querySelectorAll('.profile-pane').forEach(p => {
         const isCurrent = p.dataset.ladder === ladKey;
         p.classList.toggle('hide', !isCurrent);
         if (isCurrent) {
@@ -1418,6 +1476,43 @@ function buildProfileScript(
       applyStats('all');
     };
 
+    const applyLadder = async ladKey => {
+      if (!knownLadders.has(ladKey)) return false;
+      const seq = ++ladderSwitchSeq;
+      if (hasOwn.call(profileData, ladKey)) {
+        showLadder(ladKey);
+        return true;
+      }
+      ladderRadios.forEach(r => {
+        if (r.value === ladKey) r.checked = true;
+      });
+      try {
+        if (!pendingLadderFetches[ladKey]) {
+          const url = '/projects/' + encodeURIComponent(agentSlug) +
+            '/ladders/' + encodeURIComponent(ladKey) + '.json';
+          pendingLadderFetches[ladKey] = fetch(url, {
+            cache: 'no-cache',
+            headers: {Accept: 'application/json'},
+          }).then(res => (res.ok ? res.json() : null)).finally(() => {
+            delete pendingLadderFetches[ladKey];
+          });
+        }
+        const payload = await pendingLadderFetches[ladKey];
+        if (payload && payload.clientData) {
+          mountLadderPayload(ladKey, payload);
+        }
+      } catch {}
+      if (seq !== ladderSwitchSeq) return false;
+      if (!hasOwn.call(profileData, ladKey)) {
+        ladderRadios.forEach(r => {
+          r.checked = r.value === curLad;
+        });
+        return false;
+      }
+      showLadder(ladKey);
+      return true;
+    };
+
     if (verSelect) {
       verSelect.addEventListener('change', () => applyStats(verSelect.value));
     }
@@ -1431,11 +1526,12 @@ function buildProfileScript(
     }
 
     ladderRadios.forEach(r => r.addEventListener('change', () => {
-      applyLadder(r.value);
-      syncUrl('#' + r.value);
+      void applyLadder(r.value).then(ok => {
+        if (ok && curLad === r.value) syncUrl('#' + r.value);
+      });
     }));
 
-    const applyHash = () => {
+    const applyHash = async () => {
       if (!location.hash) return;
       let hashKey = '';
       try {
@@ -1443,21 +1539,27 @@ function buildProfileScript(
       } catch {
         return;
       }
-      if (hasOwn.call(profileData, hashKey)) {
-        applyLadder(hashKey);
+      if (knownLadders.has(hashKey)) {
+        await applyLadder(hashKey);
       }
     };
-    window.addEventListener('hashchange', applyHash);
-    applyHash();
+    window.addEventListener('hashchange', () => { void applyHash(); });
 
-    const initVs = new URLSearchParams(location.search).get('vs');
-    if (initVs && oppSelect) {
-      const matchOpt = Array.from(oppSelect.options).find(o => o.value === initVs);
-      if (matchOpt) {
-        curOpp = initVs;
-        oppSelect.value = initVs;
-        applyStats(curVer);
+    const applyInitVs = () => {
+      const initVs = new URLSearchParams(location.search).get('vs');
+      if (initVs && oppSelect) {
+        const matchOpt = Array.from(oppSelect.options).find(o => o.value === initVs);
+        if (matchOpt) {
+          curOpp = initVs;
+          oppSelect.value = initVs;
+          applyStats(curVer);
+        }
       }
+    };
+    if (location.hash) {
+      void applyHash().then(applyInitVs);
+    } else {
+      applyInitVs();
     }
 
     if (matchupsSec) {
@@ -1475,30 +1577,6 @@ function buildProfileScript(
         }
       });
     }
-
-    document.querySelectorAll('.h2h-table').forEach(table => {
-      const headers = table.querySelectorAll('th.sortable');
-      let sortCol = -1;
-      let sortAsc = false;
-      headers.forEach(th => th.addEventListener('click', () => {
-        const col = Number(th.dataset.col);
-        const isNum = th.dataset.type === 'num';
-        sortAsc = sortCol === col ? !sortAsc : !isNum;
-        sortCol = col;
-        const tbody = table.querySelector('tbody');
-        const rows = Array.from(tbody.querySelectorAll('tr'));
-        rows.sort((a, b) => {
-          const av = a.children[col].dataset.val || '';
-          const bv = b.children[col].dataset.val || '';
-          const cmp = isNum ? Number(av) - Number(bv) : av.localeCompare(bv);
-          return sortAsc ? cmp : -cmp;
-        });
-        rows.forEach(row => tbody.appendChild(row));
-        const pane = table.closest('.profile-pane');
-        const ctrl = pane ? panePagers.get(pane) : undefined;
-        if (ctrl) ctrl.reset();
-      }));
-    });
 
     if (matchesSec) {
       const toggleMatchRow = row => {
@@ -1712,6 +1790,278 @@ export function buildAgentProfileDocument(opts: {
   };
 }
 
+export interface AgentProfileLadderPayload {
+  ladderKey: string;
+  clientData: LadderProfileClientData;
+  versionsPaneHtml: string;
+  matchupsPaneHtml: string;
+  matchesPaneHtml: string;
+  matchupsEmpty: boolean;
+  agentLinks: Record<string, string>;
+}
+
+interface LadderProfileBundle {
+  ladderKey: string;
+  clientData: LadderProfileClientData;
+  versionsPane: util.Html;
+  matchupsPane: util.Html;
+  matchesPane: util.Html;
+  matchupsEmpty: boolean;
+  agentLinks: Record<string, string>;
+  latestEntry?: db.AgentLadderProfileEntry;
+}
+
+function buildLadderProfileBundle(opts: {
+  db: db.Database;
+  agent: db.AgentRow;
+  ladder: db.LadderRow;
+  ladderKey: string;
+  isDefault: boolean;
+  links: render.AgentLinkContext;
+  nowSec: number;
+}): LadderProfileBundle {
+  const {db, agent, ladder: l, ladderKey: lKey, isDefault, links, nowSec} = opts;
+  const {publicDir} = links;
+  const agentLinks: Record<string, string> = {};
+  const registerAgentLink = (slug: string, name: string) => {
+    if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return;
+    agentLinks[slug] = render.resolveAgentHref(links, slug, name) ?? '';
+  };
+  registerAgentLink(agent.slug, agent.name);
+
+  const agentEntries = db.getAgentLadderProfileEntries(agent.id, l.id);
+  const allEntries = db.getLeaderboardEntries(l.id);
+  const pairs = db.getPairAggregatesForAgentOnLadder(l.id, agent.id);
+  const snapshots = db.getRatingSnapshotsForLadder(l.id, agent.id);
+  const familyStats = db.getAgentLadderStats(l.id, agent.id);
+  const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id);
+  const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
+
+  for (const e of allEntries) {
+    registerAgentLink(e.agentSlug, e.agentName);
+  }
+  for (const m of recentMatches) {
+    registerAgentLink(m.p1.slug, m.p1.name);
+    registerAgentLink(m.p2.slug, m.p2.name);
+  }
+
+  const enrichedMatches = recentMatches.map(m => arena.enrichMatchView(publicDir, m));
+
+  const optNodes = (
+    <>
+      <option value='all' selected={true}>All ({agentEntries.length})</option>
+      {agentEntries.map(e => {
+        const stateTag = e.role === 'retired' ? 'retired' : 'active';
+        return <option value={e.version}>{e.version} ({stateTag})</option>;
+      })}
+    </>
+  );
+
+  const verById = new Map<number, db.LadderVersionIdentity>();
+  const oppMap = new Map<string, {slug: string; name: string; count: number}>();
+  for (const e of allEntries) {
+    verById.set(e.versionId, {
+      versionId: e.versionId,
+      version: e.version,
+      agentId: e.agentId,
+      agentSlug: e.agentSlug,
+      agentName: e.agentName,
+    });
+    if (e.agentId !== agent.id && !oppMap.has(e.agentSlug)) {
+      oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
+    }
+  }
+  const missingVerIds = new Set<number>();
+  for (const p of pairs) {
+    if (!verById.has(p.lowVersionId)) missingVerIds.add(p.lowVersionId);
+    if (!verById.has(p.highVersionId)) missingVerIds.add(p.highVersionId);
+  }
+  if (missingVerIds.size > 0) {
+    for (const v of db.getVersionIdentitiesByIds([...missingVerIds])) {
+      verById.set(v.versionId, v);
+    }
+  }
+
+  const oppCounts: Record<string, Record<string, number>> = {
+    all: {all: 0},
+  };
+  for (const e of agentEntries) {
+    oppCounts[e.version] = {all: 0};
+  }
+
+  for (const p of pairs) {
+    const count = p.ww + p.wt + p.split + p.tl + p.ll;
+    if (count <= 0) continue;
+    const low = verById.get(p.lowVersionId);
+    const high = verById.get(p.highVersionId);
+    if (!low || !high) continue;
+    if (low.agentId === agent.id && high.agentId === agent.id) {
+      oppCounts.all.all += count;
+      const lowBucket = oppCounts[low.version] ?? (oppCounts[low.version] = {all: 0});
+      lowBucket.all += count;
+      if (high.version !== low.version) {
+        const highBucket = oppCounts[high.version] ?? (oppCounts[high.version] = {all: 0});
+        highBucket.all += count;
+      }
+      continue;
+    }
+    const ourEntry = low.agentId === agent.id
+      ? low
+      : (high.agentId === agent.id ? high : undefined);
+    const oppEntry = low.agentId === agent.id
+      ? high
+      : (high.agentId === agent.id ? low : undefined);
+    if (!ourEntry || !oppEntry) continue;
+
+    oppCounts.all.all += count;
+    oppCounts.all[oppEntry.agentSlug] = (oppCounts.all[oppEntry.agentSlug] ?? 0) + count;
+
+    const verBucket = oppCounts[ourEntry.version] ?? (oppCounts[ourEntry.version] = {all: 0});
+    verBucket.all += count;
+    verBucket[oppEntry.agentSlug] = (verBucket[oppEntry.agentSlug] ?? 0) + count;
+
+    const oppRec = oppMap.get(oppEntry.agentSlug);
+    if (oppRec) {
+      oppRec.count += count;
+    } else {
+      oppMap.set(oppEntry.agentSlug, {
+        slug: oppEntry.agentSlug,
+        name: oppEntry.agentName,
+        count,
+      });
+    }
+  }
+
+  const sortedOpps = [...oppMap.values()].sort(
+    (a, b) => b.count - a.count || a.name.localeCompare(b.name)
+  );
+  const oppOptNodes = (
+    <>
+      <option value='all' selected={true}>All ({oppCounts.all.all})</option>
+      {sortedOpps.map(o => (
+        <option value={o.slug}>{o.name} ({o.count})</option>
+      ))}
+    </>
+  );
+
+  const vstats: Record<string, VersionDynamicStats> = {
+    all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos),
+  };
+  const reign: Record<string, string> = {
+    all: buildReignRowsHtml(
+      familyStats ?? {
+        top1MaxStreakSeconds: 0,
+        top1TotalSeconds: 0,
+        top10MaxStreakSeconds: 0,
+        top10TotalSeconds: 0,
+        top100MaxStreakSeconds: 0,
+        top100TotalSeconds: 0,
+      },
+      nowSec
+    ),
+  };
+
+  for (const e of agentEntries) {
+    vstats[e.version] = buildVersionDynamicStats(e, adjacentLos);
+    reign[e.version] = buildReignRowsHtml(
+      {
+        top1EnteredAt: e.top1EnteredAt,
+        top1MaxStreakSeconds: e.top1MaxStreakSeconds,
+        top1TotalSeconds: e.top1TotalSeconds,
+        top10EnteredAt: e.top10EnteredAt,
+        top10MaxStreakSeconds: e.top10MaxStreakSeconds,
+        top10TotalSeconds: e.top10TotalSeconds,
+        top100EnteredAt: e.top100EnteredAt,
+        top100MaxStreakSeconds: e.top100MaxStreakSeconds,
+        top100TotalSeconds: e.top100TotalSeconds,
+      },
+      nowSec
+    );
+  }
+
+  const clientData: LadderProfileClientData = {
+    ladderId: l.id,
+    multiVersion: agentEntries.length > 1,
+    optionsHtml: String(optNodes),
+    oppOptionsHtml: String(oppOptNodes),
+    oppCounts,
+    vstats,
+    reign,
+  };
+
+  const versionsPane = renderVersionsPane({
+    agentName: agent.name,
+    ladderKey: lKey,
+    isDefault,
+    entriesDesc: agentEntries,
+    snapshots,
+    nowSec,
+  });
+  const h2hRes = renderHeadToHeadPane({
+    agentId: agent.id,
+    ladderKey: lKey,
+    isDefault,
+    agentEntries,
+    allEntries,
+    pairs,
+    links,
+  });
+  const matchesPane = renderRecentMatchesPane({
+    agentSlug: agent.slug,
+    ladderKey: lKey,
+    isDefault,
+    matches: enrichedMatches,
+    totalMatches: oppCounts.all.all,
+    agentLinks,
+    nowSec,
+  });
+
+  return {
+    ladderKey: lKey,
+    clientData,
+    versionsPane,
+    matchupsPane: h2hRes.pane,
+    matchesPane,
+    matchupsEmpty: h2hRes.empty,
+    agentLinks,
+    latestEntry: agentEntries[0],
+  };
+}
+
+export function buildAgentProfileLadderPayload(opts: {
+  db: db.Database;
+  agent: db.AgentRow;
+  ladderKey: string;
+  links: render.AgentLinkContext;
+  nowSec: number;
+}): AgentProfileLadderPayload | undefined {
+  const {db, agent, ladderKey, links, nowSec} = opts;
+  const ladders = db.getAgentParticipatedLadders(agent.id);
+  if (ladders.length === 0) return undefined;
+  const ladderKeys = computeLadderKeys(ladders);
+  const needle = ladderKey.toLowerCase();
+  const idx = ladderKeys.findIndex(k => k === needle);
+  if (idx < 0) return undefined;
+  const bundle = buildLadderProfileBundle({
+    db,
+    agent,
+    ladder: ladders[idx],
+    ladderKey: ladderKeys[idx],
+    isDefault: false,
+    links,
+    nowSec,
+  });
+  return {
+    ladderKey: bundle.ladderKey,
+    clientData: bundle.clientData,
+    versionsPaneHtml: String(bundle.versionsPane),
+    matchupsPaneHtml: String(bundle.matchupsPane),
+    matchesPaneHtml: String(bundle.matchesPane),
+    matchupsEmpty: bundle.matchupsEmpty,
+    agentLinks: bundle.agentLinks,
+  };
+}
+
 export function renderAgentProfileHtml(opts: {
   db: db.Database;
   renderer: Renderer;
@@ -1730,7 +2080,7 @@ export function renderAgentProfileHtml(opts: {
     liveTournament,
     nowSec,
   } = opts;
-  const {publicDir, projectMeta} = links;
+  const {projectMeta} = links;
 
   const ladders = db.getAgentParticipatedLadders(agent.id);
   const resolvedLogo = resolveAgentLogo(agent, avatarsDir);
@@ -1872,53 +2222,12 @@ export function renderAgentProfileHtml(opts: {
     });
   }
 
-  const profileDataMap: Record<string, LadderProfileClientData> = {};
-  const formatNavParts: util.Child[] = [];
-  const versionsPanes: util.Html[] = [];
-  const matchupsPanes: util.Html[] = [];
-  const matchesPanes: util.Html[] = [];
-  const agentLinks: Record<string, string> = {};
-  const registerAgentLink = (slug: string, name: string) => {
-    if (Object.prototype.hasOwnProperty.call(agentLinks, slug)) return;
-    agentLinks[slug] = render.resolveAgentHref(links, slug, name) ?? '';
-  };
-  registerAgentLink(agent.slug, agent.name);
-
   const ladderKeys = computeLadderKeys(ladders);
-
   const defaultLadderKey = ladderKeys[0];
-  let latestOverallEntry: db.AgentLadderProfileEntry | undefined;
-  let defaultMatchupsEmpty = true;
-
+  const formatNavParts: util.Child[] = [];
   for (let i = 0; i < ladders.length; i++) {
     const l = ladders[i];
     const lKey = ladderKeys[i];
-    const isDefault = i === 0;
-
-    const agentEntries = db.getAgentLadderProfileEntries(agent.id, l.id);
-    if (!latestOverallEntry || (
-      agentEntries[0] && agentEntries[0].submittedAt > latestOverallEntry.submittedAt
-    )) {
-      latestOverallEntry = agentEntries[0];
-    }
-
-    const allEntries = db.getLeaderboardEntries(l.id);
-    const pairs = db.getPairAggregatesForAgentOnLadder(l.id, agent.id);
-    const snapshots = db.getRatingSnapshotsForLadder(l.id, agent.id);
-    const familyStats = db.getAgentLadderStats(l.id, agent.id);
-    const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id);
-    const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
-
-    for (const e of allEntries) {
-      registerAgentLink(e.agentSlug, e.agentName);
-    }
-    for (const m of recentMatches) {
-      registerAgentLink(m.p1.slug, m.p1.name);
-      registerAgentLink(m.p2.slug, m.p2.name);
-    }
-
-    const enrichedMatches = recentMatches.map(m => arena.enrichMatchView(publicDir, m));
-
     if (i > 0) formatNavParts.push(' — ');
     formatNavParts.push(
       <li id={lKey}>
@@ -1927,192 +2236,31 @@ export function renderAgentProfileHtml(opts: {
           name='ladder'
           id={`lad-${lKey}`}
           value={lKey}
-          checked={isDefault}
+          checked={i === 0}
         />
         <label htmlFor={`lad-${lKey}`}>{l.name}</label>
       </li>
     );
-
-    const optNodes = (
-      <>
-        <option value='all' selected={true}>All ({agentEntries.length})</option>
-        {agentEntries.map(e => {
-          const stateTag = e.role === 'retired' ? 'retired' : 'active';
-          return <option value={e.version}>{e.version} ({stateTag})</option>;
-        })}
-      </>
-    );
-
-    const verById = new Map<number, db.LadderVersionIdentity>();
-    const oppMap = new Map<string, {slug: string; name: string; count: number}>();
-    for (const e of allEntries) {
-      verById.set(e.versionId, {
-        versionId: e.versionId,
-        version: e.version,
-        agentId: e.agentId,
-        agentSlug: e.agentSlug,
-        agentName: e.agentName,
-      });
-      if (e.agentId !== agent.id && !oppMap.has(e.agentSlug)) {
-        oppMap.set(e.agentSlug, {slug: e.agentSlug, name: e.agentName, count: 0});
-      }
-    }
-    const missingVerIds = new Set<number>();
-    for (const p of pairs) {
-      if (!verById.has(p.lowVersionId)) missingVerIds.add(p.lowVersionId);
-      if (!verById.has(p.highVersionId)) missingVerIds.add(p.highVersionId);
-    }
-    if (missingVerIds.size > 0) {
-      for (const v of db.getVersionIdentitiesByIds([...missingVerIds])) {
-        verById.set(v.versionId, v);
-      }
-    }
-
-    const oppCounts: Record<string, Record<string, number>> = {
-      all: {all: 0},
-    };
-    for (const e of agentEntries) {
-      oppCounts[e.version] = {all: 0};
-    }
-
-    for (const p of pairs) {
-      const count = p.ww + p.wt + p.split + p.tl + p.ll;
-      if (count <= 0) continue;
-      const low = verById.get(p.lowVersionId);
-      const high = verById.get(p.highVersionId);
-      if (!low || !high) continue;
-      if (low.agentId === agent.id && high.agentId === agent.id) {
-        oppCounts.all.all += count;
-        const lowBucket = oppCounts[low.version] ?? (oppCounts[low.version] = {all: 0});
-        lowBucket.all += count;
-        if (high.version !== low.version) {
-          const highBucket = oppCounts[high.version] ?? (oppCounts[high.version] = {all: 0});
-          highBucket.all += count;
-        }
-        continue;
-      }
-      const ourEntry = low.agentId === agent.id
-        ? low
-        : (high.agentId === agent.id ? high : undefined);
-      const oppEntry = low.agentId === agent.id
-        ? high
-        : (high.agentId === agent.id ? low : undefined);
-      if (!ourEntry || !oppEntry) continue;
-
-      oppCounts.all.all += count;
-      oppCounts.all[oppEntry.agentSlug] = (oppCounts.all[oppEntry.agentSlug] ?? 0) + count;
-
-      const verBucket = oppCounts[ourEntry.version] ?? (oppCounts[ourEntry.version] = {all: 0});
-      verBucket.all += count;
-      verBucket[oppEntry.agentSlug] = (verBucket[oppEntry.agentSlug] ?? 0) + count;
-
-      const oppRec = oppMap.get(oppEntry.agentSlug);
-      if (oppRec) {
-        oppRec.count += count;
-      } else {
-        oppMap.set(oppEntry.agentSlug, {
-          slug: oppEntry.agentSlug,
-          name: oppEntry.agentName,
-          count,
-        });
-      }
-    }
-
-    const sortedOpps = [...oppMap.values()].sort(
-      (a, b) => b.count - a.count || a.name.localeCompare(b.name)
-    );
-    const oppOptNodes = (
-      <>
-        <option value='all' selected={true}>All ({oppCounts.all.all})</option>
-        {sortedOpps.map(o => (
-          <option value={o.slug}>{o.name} ({o.count})</option>
-        ))}
-      </>
-    );
-
-    const vstats: Record<string, VersionDynamicStats> = {
-      all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos),
-    };
-    const reign: Record<string, string> = {
-      all: buildReignRowsHtml(
-        familyStats ?? {
-          top1MaxStreakSeconds: 0,
-          top1TotalSeconds: 0,
-          top10MaxStreakSeconds: 0,
-          top10TotalSeconds: 0,
-          top100MaxStreakSeconds: 0,
-          top100TotalSeconds: 0,
-        },
-        nowSec
-      ),
-    };
-
-    for (const e of agentEntries) {
-      vstats[e.version] = buildVersionDynamicStats(e, adjacentLos);
-      reign[e.version] = buildReignRowsHtml(
-        {
-          top1EnteredAt: e.top1EnteredAt,
-          top1MaxStreakSeconds: e.top1MaxStreakSeconds,
-          top1TotalSeconds: e.top1TotalSeconds,
-          top10EnteredAt: e.top10EnteredAt,
-          top10MaxStreakSeconds: e.top10MaxStreakSeconds,
-          top10TotalSeconds: e.top10TotalSeconds,
-          top100EnteredAt: e.top100EnteredAt,
-          top100MaxStreakSeconds: e.top100MaxStreakSeconds,
-          top100TotalSeconds: e.top100TotalSeconds,
-        },
-        nowSec
-      );
-    }
-
-    profileDataMap[lKey] = {
-      ladderId: l.id,
-      multiVersion: agentEntries.length > 1,
-      optionsHtml: String(optNodes),
-      oppOptionsHtml: String(oppOptNodes),
-      oppCounts,
-      vstats,
-      reign,
-    };
-
-    versionsPanes.push(
-      renderVersionsPane({
-        agentName: agent.name,
-        ladderKey: lKey,
-        isDefault,
-        entriesDesc: agentEntries,
-        snapshots,
-        nowSec,
-      })
-    );
-    const h2hRes = renderHeadToHeadPane({
-      agentId: agent.id,
-      ladderKey: lKey,
-      isDefault,
-      agentEntries,
-      allEntries,
-      pairs,
-      links,
-    });
-    matchupsPanes.push(h2hRes.pane);
-    if (isDefault) {
-      defaultMatchupsEmpty = h2hRes.empty;
-    }
-
-    matchesPanes.push(
-      renderRecentMatchesPane({
-        agentSlug: agent.slug,
-        ladderKey: lKey,
-        isDefault,
-        matches: enrichedMatches,
-        totalMatches: oppCounts.all.all,
-        agentLinks,
-        nowSec,
-      })
-    );
   }
 
-  const initialData = profileDataMap[defaultLadderKey];
+  // Hybrid SSR: render only the default ladder into the initial HTML payload; non-default ladders
+  // load lazily via `GET /projects/:slug/ladders/:key.json` when selected or opened via `#<key>`.
+  const defaultBundle = buildLadderProfileBundle({
+    db,
+    agent,
+    ladder: ladders[0],
+    ladderKey: defaultLadderKey,
+    isDefault: true,
+    links,
+    nowSec,
+  });
+  const latestArtifact = ladders.length > 1
+    ? db.getLatestAgentLadderArtifact(agent.id)
+    : defaultBundle.latestEntry;
+  const profileDataMap: Record<string, LadderProfileClientData> = {
+    [defaultLadderKey]: defaultBundle.clientData,
+  };
+  const initialData = defaultBundle.clientData;
   const initStats = initialData.vstats.all;
   const content = (
     <>
@@ -2136,7 +2284,7 @@ export function renderAgentProfileHtml(opts: {
       <section id='overview'>
         <div className='grid-2'>
           <table className='kv'>
-            {buildProjectMetaRows(db, agent, meta, latestOverallEntry)}
+            {buildProjectMetaRows(db, agent, meta, latestArtifact)}
           </table>
 
           <table className='kv'>
@@ -2184,12 +2332,12 @@ export function renderAgentProfileHtml(opts: {
 
       <section id='versions'>
         <h3><a href='#versions' className='subtle'>Versions</a></h3>
-        {versionsPanes}
+        {defaultBundle.versionsPane}
       </section>
 
-      <section id='matchups' className={defaultMatchupsEmpty ? 'hide' : undefined}>
+      <section id='matchups' className={defaultBundle.matchupsEmpty ? 'hide' : undefined}>
         <h3><a href='#matchups' className='subtle'>Head-to-Head</a></h3>
-        {matchupsPanes}
+        {defaultBundle.matchupsPane}
       </section>
 
       <section id='matches'>
@@ -2202,11 +2350,11 @@ export function renderAgentProfileHtml(opts: {
             </select>
           </div>
         </div>
-        {matchesPanes}
+        {defaultBundle.matchesPane}
       </section>
 
       <script>
-        {buildProfileScript(profileDataMap, defaultLadderKey, agent.slug, agentLinks)}
+        {buildProfileScript(profileDataMap, defaultLadderKey, agent.slug, defaultBundle.agentLinks)}
       </script>
     </>
   );

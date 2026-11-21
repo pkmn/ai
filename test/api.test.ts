@@ -1207,6 +1207,78 @@ describe('Arena SSE streams', () => {
       await tourStream.close();
     }
   });
+
+  test('paginates tournament games over /api/tournaments/:id/games.json', async () => {
+    for (let i = 1; i <= 30; i++) {
+      db.upsertTournamentGame({
+        id: `t2-pg-${String(i).padStart(2, '0')}`,
+        tournamentId: '2',
+        stage: 'Round Robin',
+        cycle: i,
+        matchupGame: i,
+        status: 'completed',
+        outcome: 'W',
+        p1: {versionId: vZeroId},
+        p2: {versionId: vFpId},
+        games: [{gameNumber: 1, seed: `1,2,3,${i}`, outcome: 'W', turns: 15}],
+        completedAt: 1_760_000_000 + i * 10,
+      });
+    }
+
+    const p1Res = await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?page=1&limit=25`);
+    expect(p1Res.status).toBe(200);
+    expect(p1Res.headers.get('cache-control')).toBe('no-cache');
+    const etag = p1Res.headers.get('etag');
+    expect(etag).toBeTruthy();
+    const p1 = await p1Res.json() as {
+      total: number;
+      totalPages: number;
+      page: number;
+      hasPrev: boolean;
+      hasNext: boolean;
+      games: Array<{id: string}>;
+    };
+    expect(p1.total).toBe(30);
+    expect(p1.totalPages).toBe(2);
+    expect(p1.page).toBe(1);
+    expect(p1.hasPrev).toBe(false);
+    expect(p1.hasNext).toBe(true);
+    expect(p1.games).toHaveLength(25);
+    expect(p1.games[0].id).toBe('t2-pg-30');
+
+    const cached = await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?page=1&limit=25`, {
+      headers: {'if-none-match': etag!},
+    });
+    expect(cached.status).toBe(304);
+
+    const p2Res = await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?page=2&limit=25`);
+    const p2 = await p2Res.json() as {
+      hasPrev: boolean;
+      hasNext: boolean;
+      games: Array<{id: string}>;
+    };
+    expect(p2.hasPrev).toBe(true);
+    expect(p2.hasNext).toBe(false);
+    expect(p2.games).toHaveLength(5);
+    expect(p2.games[0].id).toBe('t2-pg-05');
+
+    const offRes = await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?offset=23&limit=4`);
+    const off = await offRes.json() as {
+      offset: number;
+      hasPrev: boolean;
+      hasNext: boolean;
+      games: Array<{id: string}>;
+    };
+    expect(off.offset).toBe(23);
+    expect(off.hasPrev).toBe(true);
+    expect(off.hasNext).toBe(true);
+    expect(off.games.map(g => g.id)).toEqual(['t2-pg-07', 't2-pg-06', 't2-pg-05', 't2-pg-04']);
+
+    expect((await fetch(`${srv.baseUrl}/api/tournaments/999/games.json`)).status).toBe(404);
+    expect((await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?page=0`)).status).toBe(400);
+    expect((await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?limit=999`)).status).toBe(400);
+    expect((await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?offset=-1`)).status).toBe(400);
+  });
 });
 
 describe('pkmn CLI commands', () => {
@@ -2882,6 +2954,25 @@ describe('createServerApp production HTTP hardening', () => {
     const archiveBlock = conf.slice(archiveIdx, conf.indexOf('}', archiveIdx) + 1);
     expect(archiveBlock).toContain('client_max_body_size 512m;');
     expect(archiveBlock).toContain('proxy_request_buffering off;');
+  });
+
+  test('nginx nests SSE tournament stream inside buffered ^~ /api/tournaments/', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    const apiToursIdx = conf.indexOf('location ^~ /api/tournaments/ {');
+    const streamIdx = conf.indexOf('location ~ ^/api/tournaments/[^/]+/stream$ {');
+    expect(apiToursIdx).toBeGreaterThan(0);
+    expect(streamIdx).toBeGreaterThan(apiToursIdx);
+    const parentPrefix = conf.slice(apiToursIdx, streamIdx);
+    expect(parentPrefix).not.toContain('gzip off;');
+    expect(parentPrefix).not.toContain('proxy_buffering off;');
+    expect(parentPrefix).not.toContain('limit_conn sse_conn');
+    const openBraces = (parentPrefix.match(/\{/g) ?? []).length;
+    const closeBraces = (parentPrefix.match(/\}/g) ?? []).length;
+    expect(openBraces - closeBraces).toBe(1);
+    const streamBlock = conf.slice(streamIdx, conf.indexOf('}', streamIdx) + 1);
+    expect(streamBlock).toContain('gzip off;');
+    expect(streamBlock).toContain('proxy_buffering off;');
+    expect(streamBlock).toContain('limit_conn sse_conn 8;');
   });
 
   test('nginx repeats HSTS in every location block declaring add_header', () => {
