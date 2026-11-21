@@ -7,7 +7,7 @@ import * as path from 'path';
 import {Team} from '@pkmn/sets';
 import polka from 'polka';
 
-import {COOLDOWN_SECONDS, Database} from '../db';
+import {ALL_SLOTS, COOLDOWN_SECONDS, Database} from '../db';
 import type * as db from '../db';
 import * as account from '../server/account';
 import * as auth from '../server/auth';
@@ -32,14 +32,12 @@ const PROJECTS_YAML = `
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       pre: pre.10544
       coauthor: coauthor.20001
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
 - name: Newcomer
@@ -236,6 +234,8 @@ describe('account routes', () => {
     db = nextDb;
     nextDb.syncLadders();
     nextDb.syncProjectsFromYaml(PROJECTS_YAML, path.join(tmpDir, 'avatars'), currentNow);
+    nextDb.setAgentLadders('0-error', ALL_SLOTS, currentNow);
+    nextDb.setAgentLadders('foul-play', ALL_SLOTS, currentNow);
     nextDb.linkDeveloperDiscord('pre', '513513270670262284', 'scheibo', currentNow);
 
     const wikiInstance = new wiki.Wiki({
@@ -635,13 +635,11 @@ describe('account routes', () => {
 - name: 0 ERROR # flagship search agent
   active: 2026
   arena:
-    qualified: true
     owners:
       pre: pre.10544
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
 `;
@@ -1432,6 +1430,84 @@ describe('account routes', () => {
       const html = await res.text();
       expect(html).toContain('action="/auth/logout?return_to=%2Farena%2F"');
       expect(html).toContain('>Logout<');
+    });
+
+    test('disables unqualified ladder checkboxes on /account and rejects 403 on submit',
+      async () => {
+        openLadders([
+          'gen1ou20261109',
+          'gen3ou20261109',
+          'gen9ou20261109',
+          'gen9randombattle20261109',
+          'gen9championsvgc2026regmc',
+        ]);
+        db.setAgentLadders('0-error', ['rby', 'adv'], currentNow);
+
+        const html = await (await realFetch(`${baseUrl}/account`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).text();
+        expect(html).toContain('>Eligible<');
+        expect(html).toMatch(
+          /<input type="checkbox" name="ladders" value="gen1ou20261109">/
+        );
+        expect(html).toMatch(
+          /<input type="checkbox" name="ladders" value="gen3ou20261109">/
+        );
+        expect(html).toMatch(
+          /<input type="checkbox" name="ladders" value="gen9ou20261109" disabled>/
+        );
+        expect(html).toMatch(
+          /<input type="checkbox" name="ladders" value="gen9randombattle20261109" disabled>/
+        );
+        expect(html).toMatch(
+          /<input type="checkbox" name="ladders" value="gen9championsvgc2026regmc" disabled>/
+        );
+        expect(html).not.toContain('id="pool-teams-panel"');
+
+        const accountJson = await (await realFetch(`${baseUrl}/account.json`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).json() as {
+          agent: {qualifiedLadders: string[]};
+          currentLadders: Array<{slot: string; qualified: boolean}>;
+        };
+        expect(accountJson.agent.qualifiedLadders).toEqual(['rby', 'adv']);
+        const bySlot = new Map(accountJson.currentLadders.map(l => [l.slot, l.qualified]));
+        expect(bySlot.get('rby')).toBe(true);
+        expect(bySlot.get('adv')).toBe(true);
+        expect(bySlot.get('sv')).toBe(false);
+        expect(bySlot.get('rand')).toBe(false);
+        expect(bySlot.get('vgc')).toBe(false);
+
+        const blocked = await postSubmission('pre', {
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error.tar.zst',
+          sha256: SHA_A,
+          ladders: ['RBY', 'SV'],
+        });
+        expect(blocked.status).toBe(403);
+        expect((await blocked.json() as {error: string}).error).toContain('SV');
+
+        const allowed = await postSubmission('pre', {
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error.tar.zst',
+          sha256: SHA_A,
+          ladders: ['RBY', 'ADV'],
+        });
+        expect(allowed.status).toBe(201);
+      });
+
+    test('renders Qualified status when only unqualified ladders are open', async () => {
+      db.db.prepare("UPDATE ladders SET status = 'settling'").run();
+      openLadders(['gen9ou20261109']);
+      db.setAgentLadders('0-error', ['rby', 'adv'], currentNow);
+
+      const html = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(html).toContain('>Qualified<');
+      expect(html).toContain('<fieldset class="form-fieldset" disabled>');
     });
   });
 });

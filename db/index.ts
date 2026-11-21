@@ -7,6 +7,7 @@ import {root} from '../static/util';
 
 import * as stats from './agent-ladder-stats';
 import * as teams from './agent-ladder-teams';
+import * as agentLadders from './agent-ladders';
 import * as versions from './agent-versions';
 import * as agents from './agents';
 import * as developers from './developers';
@@ -451,6 +452,42 @@ export class Database extends SqliteDatabase {
     return agents.refundCooldown(this.db, agentSlug, now);
   }
 
+  getAgentLadders(agentId: number): ladders.LadderSlot[] {
+    return agentLadders.getAgentLadders(this.db, agentId);
+  }
+
+  getAgentLaddersByAgent(): Map<number, ladders.LadderSlot[]> {
+    return agentLadders.getAgentLaddersByAgent(this.db);
+  }
+
+  isAgentQualifiedForSlot(agentId: number, slot: ladders.LadderSlot): boolean {
+    return agentLadders.isAgentQualifiedForSlot(this.db, agentId, slot);
+  }
+
+  setAgentLadders(
+    agentSlugOrId: string | number,
+    slots: Iterable<ladders.LadderSlot>,
+    now?: number
+  ): agentLadders.SetAgentLaddersResult {
+    return agentLadders.setAgentLadders(this.db, this.txRunner, agentSlugOrId, slots, now);
+  }
+
+  setAgentLadder(
+    agentSlugOrId: string | number,
+    slot: ladders.LadderSlot,
+    qualified: boolean,
+    now?: number
+  ): agentLadders.SetAgentLaddersResult {
+    return agentLadders.setAgentLadder(
+      this.db,
+      this.txRunner,
+      agentSlugOrId,
+      slot,
+      qualified,
+      now
+    );
+  }
+
   getDeveloperByGitHub(githubLogin: string): developers.DeveloperRow | undefined {
     return developers.getDeveloperByGitHub(this.db, githubLogin);
   }
@@ -797,6 +834,7 @@ export class Database extends SqliteDatabase {
 
 export * from './agent-ladder-stats';
 export * from './agent-ladder-teams';
+export * from './agent-ladders';
 export * from './agent-versions';
 export * from './agents';
 export * from './developers';

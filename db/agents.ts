@@ -44,7 +44,6 @@ export interface ParsedArenaProject<Owner = RawProjectOwner> {
   slug: string;
   name: string;
   logo?: string;
-  qualified: boolean;
   owners: Owner[];
 }
 
@@ -193,7 +192,6 @@ export function parseArenaProjects(
       slug,
       name,
       logo,
-      qualified: Boolean(entry.arena.qualified),
       owners,
     });
   }
@@ -229,11 +227,14 @@ function applyResolvedProjects(
 
   const upsertAgent = db.prepare(`
     INSERT INTO agents (slug, name, logo, status, updated_at)
-    VALUES (?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, 'pending', ?)
     ON CONFLICT(slug) DO UPDATE SET
       name = excluded.name,
       logo = excluded.logo,
-      status = excluded.status,
+      status = CASE
+        WHEN EXISTS (SELECT 1 FROM agent_ladders WHERE agent_id = agents.id) THEN 'qualified'
+        ELSE 'pending'
+      END,
       updated_at = excluded.updated_at
   `);
   const selectAgentId = db.prepare('SELECT id FROM agents WHERE slug = ?');
@@ -258,8 +259,7 @@ function applyResolvedProjects(
     developers.pruneInactiveDevelopers(db, activeGitHubs, activeSmogonIds);
 
     for (const proj of projects) {
-      const status: AgentStatus = proj.qualified ? 'qualified' : 'pending';
-      upsertAgent.run(proj.slug, proj.name, proj.logo ?? null, status, now);
+      upsertAgent.run(proj.slug, proj.name, proj.logo ?? null, now);
       const agent = selectAgentId.get(proj.slug) as {id: number};
       developers.upsertProjectDevelopers(db, agent.id, proj.owners, now);
     }
@@ -343,7 +343,6 @@ export function syncProjectsFromYaml(
       slug: proj.slug,
       name: proj.name,
       logo: proj.logo,
-      qualified: proj.qualified,
       owners: proj.owners.map(owner => {
         const existing = developers.getDeveloperByGitHub(db, owner.github) ??
           (owner.smogonId !== undefined
@@ -508,7 +507,6 @@ export async function syncProjectsFromYamlWithSmogon(
       slug: proj.slug,
       name: proj.name,
       logo: proj.logo,
-      qualified: proj.qualified,
       owners,
     });
   }

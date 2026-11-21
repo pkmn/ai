@@ -79,7 +79,8 @@ uses SQLite savepoints + Playwright interactions across **4 viewports** (`small`
    expanded Bo3 `Game 1`/`2`/`3` switcher, offline log fallback), scheduled `#3` (with & without
    entrants).
 6. **`account`:** Disabled (`403`), `Pending` (locked & Tournament `#3` open), `Qualified`
-   pre-launch, `Eligible` new (`0` entries), VGC incremental validation (`0/20`, `<1.30`/`<4` moves
+   pre-launch, `Eligible` new (`0` entries), `Eligible` partial (`RBY`/`ADV` enabled,
+   `SV`/`RAND`/`VGC` disabled), VGC incremental validation (`0/20`, `<1.30`/`<4` moves
    rejections, `10/20`, `20/20`), form error, `Eligible` settled w/ locked VGC pool, `Ineligible`
    (`PENDING` smoke test, 14d cooldown w/ Tournament `#3` open, expanded stderr log, unsettled
    provisional, `QUARANTINED (DM sent)`, Smogon-banned `smogon_standing = 'bad'`).
@@ -183,8 +184,8 @@ checkpoint <name>                                          # programmatic callba
 
 # Projects, Developers & Discord
 register <name> [--owner <github[:smogon[.id]]> ...] [--discord <id:user|user|none> ...] \
-  [--logo <file|auto>] [--pending] [--disabled] [--banned] [--no-guild]
-qualify <agent> | disable <agent> | refund-cooldown <agent>
+  [--logo <file|auto>] [--ladders <slots>] [--pending] [--disabled] [--banned] [--no-guild]
+qualify <agent> [<slots|all|none>...] | disable <agent> | refund-cooldown <agent>
 reassign <github> <target-agent|--none> [--smogon <username.id>]
 discord link <github> [<id>:<user>] [--no-guild] | discord unlink <github> | discord sync
 

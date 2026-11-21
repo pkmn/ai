@@ -2,8 +2,8 @@
 --
 -- Features: Competitor registration & qualification gating (/account), 14-day submission cooldown
 --   tracking, profile pages (/projects/<slug>), and parent identity across versions/ladders/tournaments.
--- Relationships: Parent of developers, agent_versions, agent_ladder_stats, agent_ladder_teams, and
---   tournament_entrants.
+-- Relationships: Parent of developers, agent_ladders, agent_versions, agent_ladder_stats,
+--   agent_ladder_teams, and tournament_entrants.
 -- Why standalone: A competitor project persists across many submitted executable `agent_versions` and
 --   multiple `developers`. Keeping project-level qualification status, logo metadata, and the shared
 --   14-day submission cooldown on `agents` prevents team members or version uploads from bypassing
@@ -17,11 +17,11 @@ CREATE TABLE IF NOT EXISTS agents (
   name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 18),
   -- Optional filename in static/avatars/ (or build/public) for the project profile logo, or NULL.
   logo TEXT,
-  -- Registration & Smogon standing state:
-  --   'pending': awaiting staff qualification (`arena.qualified: false`) or Smogon standing check;
-  --     intentionally allowed to edit the wiki and enter scheduled tournaments, but gated from
-  --     continuous ladders until promoted to 'qualified'
-  --   'qualified': `arena.qualified: true` and every registered owner has 'good' Smogon standing
+  -- Registration & qualification state:
+  --   'pending': no ladder slots granted in `agent_ladders` yet; intentionally allowed to edit the
+  --     wiki and enter scheduled tournaments, but gated from continuous ladders until staff grant
+  --     at least one ladder slot via `pkmn set-ladders` or `/admin`
+  --   'qualified': at least one ladder slot granted in `agent_ladders`
   --   'disabled': removed from `arena:` in projects.yml or revoked due to bad Smogon standing
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'qualified', 'disabled')),
   -- Unix timestamp (seconds) up to which staff manually waived the 14-day submission cooldown via

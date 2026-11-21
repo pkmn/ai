@@ -7,7 +7,7 @@ import * as path from 'path';
 import {Teams} from '@pkmn/sim';
 import polka from 'polka';
 
-import {Database} from '../db';
+import {ALL_SLOTS, Database} from '../db';
 import type * as db from '../db';
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
@@ -41,7 +41,6 @@ const TEST_PROJECTS_YAML = `
   license: GPL-3.0
   source: https://github.com/pmariglia/showdown
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
 - name: Metamon
@@ -49,19 +48,16 @@ const TEST_PROJECTS_YAML = `
   license: MIT
   source: https://github.com/UT-Austin-RPL/metamon
   arena:
-    qualified: true
     owners:
       jake: jake.20001
 - name: Jaxcalibur
   active: 2026
   arena:
-    qualified: true
     owners:
       jaxdev: jaxdev.30001
 - name: Athena
   active: [2020, 2023]
   arena:
-    qualified: true
     owners:
       athenadev: athenadev.40001
 - name: Technical Machine
@@ -72,6 +68,13 @@ const TEST_PROJECTS_YAML = `
     owners:
       davidstone: davidstone.50001
 `;
+
+function syncTestProjects(database: Database, avatarsDir?: string, now?: number) {
+  database.syncProjectsFromYaml(TEST_PROJECTS_YAML, avatarsDir, now);
+  for (const slug of ['foul-play', 'metamon', 'jaxcalibur', 'athena']) {
+    database.setAgentLadders(slug, ALL_SLOTS, now);
+  }
+}
 
 function createVersionAndPassSmoke(
   database: db.Database,
@@ -332,11 +335,11 @@ describe('SSR response headers', () => {
 - name: Foul Play
   active: 2019
   arena:
-    qualified: true
     logo: foul-play.svg
     owners:
       pmariglia: pmariglia.535629
 `, avatarsDir, NOW);
+    db.setAgentLadders('foul-play', ALL_SLOTS, NOW);
     createVersionAndPassSmoke(db, 'foul-play', '1.0.0', ['gen1ou20261109'], DAY_1);
     h = await startRenderHarness({db, publicDir: tmpPublic, avatarsDir});
   });
@@ -406,7 +409,7 @@ describe('empty Arena SSR views', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
-    db.syncProjectsFromYaml(TEST_PROJECTS_YAML, path.join(tmpDir, 'avatars'), DAY_1);
+    syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
     h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
   });
 
@@ -496,7 +499,7 @@ describe('populated Arena leaderboard views', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
-    db.syncProjectsFromYaml(TEST_PROJECTS_YAML, path.join(tmpDir, 'avatars'), DAY_1);
+    syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
 
     forceLadderActive(db, 'gen1ou20261109');
     forceLadderActive(db, 'gen3ou20261109');
@@ -548,7 +551,7 @@ describe('populated Arena leaderboard views', () => {
     const avatarsDir = path.join(tmpDir, 'avatars');
     fs.mkdirSync(avatarsDir, {recursive: true});
     fs.writeFileSync(path.join(avatarsDir, 'metamon.png'), png1x1);
-    db.syncProjectsFromYaml(TEST_PROJECTS_YAML, avatarsDir, DAY_3 + 800);
+    syncTestProjects(db, avatarsDir, DAY_3 + 800);
 
     const liveDoc: arena.LiveDocument = {
       updatedAt: NOW - 2,
@@ -828,7 +831,7 @@ describe('project de-registration', () => {
     seedStaticPublicAssets(tmpPublic);
     const db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
-    db.syncProjectsFromYaml(TEST_PROJECTS_YAML, path.join(tmpDir, 'avatars'), DAY_1);
+    syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
     const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
     try {
       const withoutAthena = TEST_PROJECTS_YAML.replace(/- name: Athena[\s\S]*?40001\n/, '');
@@ -857,7 +860,7 @@ describe('tournament SSR views', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
-    db.syncProjectsFromYaml(TEST_PROJECTS_YAML, path.join(tmpDir, 'avatars'), DAY_1);
+    syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
     forceLadderActive(db, 'gen9ou20261109');
 
     const vMeta = createVersionAndPassSmoke(db, 'metamon', '1.3.0', ['gen9ou20261109'], DAY_1);
@@ -1367,7 +1370,7 @@ describe('SSR cache invalidation', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
-    db.syncProjectsFromYaml(TEST_PROJECTS_YAML, path.join(tmpDir, 'avatars'), DAY_1);
+    syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
   });
 
   afterEach(() => {
@@ -1914,7 +1917,7 @@ describe('JSON route parity & retired pool archives', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
-    db.syncProjectsFromYaml(TEST_PROJECTS_YAML, path.join(tmpDir, 'avatars'), DAY_1);
+    syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
     forceLadderActive(db, 'gen1ou20261109');
     forceLadderActive(db, 'gen9championsvgc2026regmc');
 
@@ -3408,13 +3411,15 @@ describe('JSON route parity & retired pool archives', () => {
 - name: Solo Agent
   active: 2026
   arena:
-    qualified: true
     owners:
       solo: solo.777
 `,
       path.join(tmpDir, 'avatars'),
       DAY_1
     );
+    for (const slug of ['foul-play', 'jaxcalibur', 'solo-agent']) {
+      soloDb.setAgentLadders(slug, ALL_SLOTS, DAY_1);
+    }
     forceLadderActive(soloDb, 'gen1ou20261109');
     forceLadderActive(soloDb, 'gen9ou20261109');
     const fp = soloDb.getAgentBySlug('foul-play')!;

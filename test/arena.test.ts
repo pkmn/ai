@@ -3449,11 +3449,13 @@ describe('arena infrastructure', () => {
           db.syncProjectsFromYaml([
             '- name: 0 ERROR',
             '  active: 2026',
-            '  arena: {qualified: true, owners: {scheibo: pre.10544}}',
+            '  arena: {owners: {scheibo: pre.10544}}',
             '- name: Foul Play',
             '  active: 2026',
-            '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+            '  arena: {owners: {pmariglia: pmariglia.535629}}',
           ].join('\n'));
+          db.setAgentLadders('0-error', ['rand']);
+          db.setAgentLadders('foul-play', ['rand']);
           const a1 = db.getAgentBySlug('0-error')!;
           const a2 = db.getAgentBySlug('foul-play')!;
           const sub1 = db.createSubmission({
@@ -3601,17 +3603,20 @@ describe('arena infrastructure', () => {
         db.syncProjectsFromYaml([
           '- name: 0 ERROR',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {scheibo: pre.10544}}',
+          '  arena: {owners: {scheibo: pre.10544}}',
           '- name: Foul Play',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+          '  arena: {owners: {pmariglia: pmariglia.535629}}',
           '- name: Metamon',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {jake: jake.10001}}',
+          '  arena: {owners: {jake: jake.10001}}',
           '- name: PokeChamp',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {seth: seth.10002}}',
+          '  arena: {owners: {seth: seth.10002}}',
         ].join('\n'));
+        for (const s of ['0-error', 'foul-play', 'metamon', 'pokechamp']) {
+          db.setAgentLadders(s, ['vgc']);
+        }
 
         const daemonStatePath = path.join(tmpDir, 'daemon-pools.sqlite');
         const daemonRoot = path.join(tmpDir, 'daemon-pools');
@@ -3689,17 +3694,20 @@ describe('arena infrastructure', () => {
         db.syncProjectsFromYaml([
           '- name: 0 ERROR',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {scheibo: pre.10544}}',
+          '  arena: {owners: {scheibo: pre.10544}}',
           '- name: Foul Play',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+          '  arena: {owners: {pmariglia: pmariglia.535629}}',
           '- name: Metamon',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {jake: jake.10001}}',
+          '  arena: {owners: {jake: jake.10001}}',
           '- name: PokeChamp',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {seth: seth.10002}}',
+          '  arena: {owners: {seth: seth.10002}}',
         ].join('\n'));
+        for (const s of ['0-error', 'foul-play', 'metamon', 'pokechamp']) {
+          db.setAgentLadders(s, ['vgc']);
+        }
 
         const daemonStatePath = path.join(tmpDir, 'daemon-pools-arch.sqlite');
         const daemonRoot = path.join(tmpDir, 'daemon-pools-arch');
@@ -3815,8 +3823,9 @@ describe('arena infrastructure', () => {
           db.syncProjectsFromYaml([
             '- name: Foul Play',
             '  active: 2026',
-            '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+            '  arena: {owners: {pmariglia: pmariglia.535629}}',
           ].join('\n'));
+          db.setAgentLadders('foul-play', ['vgc']);
           const ag = db.getAgentBySlug('foul-play')!;
           const validated = validateCompetitorTeamsIncremental(
             mock.generateValidVgcTeams(20, 0),
@@ -3959,8 +3968,9 @@ describe('arena infrastructure', () => {
           db.syncProjectsFromYaml([
             '- name: Mew\'s Truck',
             '  active: 2026',
-            '  arena: {qualified: true, owners: {truckdev: truckdev.10003}}',
+            '  arena: {owners: {truckdev: truckdev.10003}}',
           ].join('\n'));
+          db.setAgentLadders('mews-truck', ['rby']);
           const mewAgent = db.getAgentBySlug('mews-truck')!;
           db.upsertTournament({
             id: '9',
@@ -4051,13 +4061,13 @@ describe('arena infrastructure', () => {
         db.syncProjectsFromYaml([
           '- name: 0 ERROR',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {scheibo: pre.10544}}',
+          '  arena: {owners: {scheibo: pre.10544}}',
           '- name: Foul Play',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {pmariglia: pmariglia.535629}}',
+          '  arena: {owners: {pmariglia: pmariglia.535629}}',
           '- name: Mew\'s Truck',
           '  active: 2026',
-          '  arena: {qualified: true, owners: {truckdev: truckdev.10003}}',
+          '  arena: {owners: {truckdev: truckdev.10003}}',
         ].join('\n'));
         db.upsertTournament({
           id: '9',

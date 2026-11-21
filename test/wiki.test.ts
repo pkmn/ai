@@ -996,7 +996,6 @@ describe('wiki database standing checks', () => {
       '- name: Foul Play',
       '  active: 2026',
       '  arena:',
-      '    qualified: true',
       '    owners:',
       '      pmariglia: pmariglia.535629',
     ].join('\n'));

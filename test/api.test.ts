@@ -7,7 +7,7 @@ import * as path from 'path';
 import polka from 'polka';
 import serveStatic from 'serve-static';
 
-import {Database} from '../db';
+import {ALL_SLOTS, Database} from '../db';
 import {createServerApp} from '../server';
 import {encryptSecret} from '../server/account';
 import * as arena from '../server/arena';
@@ -25,22 +25,35 @@ const PROJECTS_YAML = `
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       pre: pre.10544
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
 - name: Metamon
   active: 2026
   arena:
-    qualified: true
     owners:
       jake: jake.77777
 `;
+
+function syncQualifiedProjects(
+  database: Database,
+  avatarsDir?: string,
+  now?: number,
+  extraYaml = ''
+) {
+  database.syncProjectsFromYaml(
+    extraYaml ? `${PROJECTS_YAML}\n${extraYaml}` : PROJECTS_YAML,
+    avatarsDir,
+    now
+  );
+  for (const agent of database.getAllActiveAgents()) {
+    database.setAgentLadders(agent.slug, ALL_SLOTS, now);
+  }
+}
 
 const LADDERS_YAML = `
 - name: RBY
@@ -176,7 +189,7 @@ describe('Arena Control API submissions', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-sub-'));
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
-    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
+    syncQualifiedProjects(db, tmpDir, 1_700_000_000);
     events = [];
     const app = polka();
     ctrl = arena.register(app, {
@@ -434,7 +447,7 @@ describe('Arena live heartbeats & match completion', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-live-'));
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
-    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_760_000_000);
+    syncQualifiedProjects(db, tmpDir, 1_760_000_000);
 
     const zeroAgent = db.getAgentBySlug('0-error')!;
     const fpAgent = db.getAgentBySlug('foul-play')!;
@@ -750,7 +763,7 @@ describe('Arena SSE streams', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-sse-'));
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
-    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_760_000_000);
+    syncQualifiedProjects(db, tmpDir, 1_760_000_000);
 
     const zeroAgent = db.getAgentBySlug('0-error')!;
     const fpAgent = db.getAgentBySlug('foul-play')!;
@@ -1292,7 +1305,7 @@ describe('pkmn CLI commands', () => {
     logs = [];
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
-    db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
+    syncQualifiedProjects(db, undefined, 1_760_000_000);
 
     const zeroAgent = db.getAgentBySlug('0-error')!;
     const fpAgent = db.getAgentBySlug('foul-play')!;
@@ -1619,7 +1632,7 @@ describe('Arena binary archive uploads', () => {
         '  id: gen9randombattle20261109\n  team: random\n  status: active\n',
       1_700_000_000
     );
-    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
+    syncQualifiedProjects(db, tmpDir, 1_700_000_000);
     db.upsertTournament({
       id: '3',
       name: 'Tournament #3: VGC 2026 Reg M-C OTS BO3',
@@ -1953,7 +1966,7 @@ describe('GET /api/battles.json pagination', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-battles-page-'));
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
-    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
+    syncQualifiedProjects(db, tmpDir, 1_700_000_000);
 
     const fp = db.getAgentBySlug('foul-play')!;
     const zero = db.getAgentBySlug('0-error')!;
@@ -2077,7 +2090,7 @@ describe('GET /api/battles.json pagination', () => {
     const vsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-battles-vs-'));
     const vsDb = new Database(':memory:');
     vsDb.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
-    vsDb.syncProjectsFromYaml(PROJECTS_YAML, vsDir, 1_700_000_000);
+    syncQualifiedProjects(vsDb, vsDir, 1_700_000_000);
     vsDb.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?").run('gen1ou20261109');
 
     const fp = vsDb.getAgentBySlug('foul-play')!;
@@ -2240,7 +2253,7 @@ describe('harvested ladder teams API', () => {
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML.replace(/status: active/g, 'status: upcoming'),
       1_700_000_000);
-    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_700_000_000);
+    syncQualifiedProjects(db, tmpDir, 1_700_000_000);
     events = [];
     const app = polka();
     ctrl = arena.register(app, {
@@ -2402,7 +2415,7 @@ describe('createServerApp production HTTP hardening', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-server-app-test-'));
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
-    db.syncProjectsFromYaml(PROJECTS_YAML, tmpDir, 1_760_000_000);
+    syncQualifiedProjects(db, tmpDir, 1_760_000_000);
   });
 
   afterEach(() => {
@@ -3017,17 +3030,16 @@ describe('createServerApp production HTTP hardening', () => {
   test('retains locked seasonal rosters on settling pools ladders', async () => {
     const vgcId = 'gen9championsvgc2026regmc';
     const slugs = ['0-error', 'foul-play', 'pokechamp', 'metamon'];
-    db.syncProjectsFromYaml(
-      `${PROJECTS_YAML}
-- name: PokeChamp
+    syncQualifiedProjects(
+      db,
+      undefined,
+      1_760_000_000,
+      `- name: PokeChamp
   active: 2026
   arena:
-    qualified: true
     owners:
       champ: champ.1003
-`,
-      undefined,
-      1_760_000_000
+`
     );
 
     const versionIds: number[] = [];

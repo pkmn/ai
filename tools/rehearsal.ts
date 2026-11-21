@@ -1232,11 +1232,14 @@ function runStage(ctx: RehearsalContext): void {
     '    - name: Pokémon Showdown!',
     '      url: https://github.com/smogon/pokemon-showdown',
     '  arena:',
-    '    qualified: true',
     `    logo: ${p.slug}.png`,
     '    owners:',
     `      ${p.githubLogin}: ${p.smogonSpec}`,
   ].join('\n')).join('\n');
+
+  const qualifyCommands = PARTICIPANTS.map(
+    p => `node --env-file-if-exists=/home/pkmn/ai/.env build/tools/pkmn set-ladders '${p.slug}' all`
+  );
 
   sshCmd(
     ctx.hosts.pkmnHost,
@@ -1250,6 +1253,7 @@ function runStage(ctx: RehearsalContext): void {
       'YAML_EOF',
       'npm run build',
       'node --env-file-if-exists=/home/pkmn/ai/.env build/tools/pkmn sync-projects --offline',
+      ...qualifyCommands,
     ].join('\n')
   );
   console.log('Stage complete: RBY/ADV/SV pools uploaded & 12 participants synced on pkmn.ai.');

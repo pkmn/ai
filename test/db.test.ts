@@ -10,6 +10,7 @@ import * as smogon from '../server/smogon';
 import {validateHarvestedTeams} from '../server/teams';
 import {root, validateAgentName, validateVersion} from '../static/util';
 import {generateValidHarvestedTeams, generateValidVgcTeams} from '../tools/mock';
+import {runPkmnCli} from '../tools/pkmn';
 
 import {compareDatabaseSchemas} from './schema-helpers';
 
@@ -87,6 +88,7 @@ describe('schema migrations', () => {
     expect(schemaFiles).toEqual([
       'agent-ladder-stats.sql',
       'agent-ladder-teams.sql',
+      'agent-ladders.sql',
       'agent-versions.sql',
       'agents.sql',
       'developers.sql',
@@ -184,7 +186,6 @@ describe('schema migrations', () => {
 - name: Good Proj
   active: 2026
   arena:
-    qualified: true
     owners:
       goodgh: good.777
 `, undefined, 1_760_000_000);
@@ -345,10 +346,10 @@ describe('competitor saved teams lifecycle', () => {
       - name: 0 ERROR
         active: 2026
         arena:
-          qualified: true
           owners:
             pre: pre.10544
     `, undefined, 1_760_000_000);
+    db.setAgentLadders('0-error', database.ALL_SLOTS, 1_760_000_000);
   });
 
   afterEach(() => {
@@ -637,16 +638,16 @@ describe('ladders configuration', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       pre: pre.10544
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.100001
 `, undefined, 1_760_000_000);
+    db.setAgentLadders('0-error', database.ALL_SLOTS, 1_760_000_000);
+    db.setAgentLadders('foul-play', database.ALL_SLOTS, 1_760_000_000);
 
     const zero = db.getAgentBySlug('0-error')!;
     const fp = db.getAgentBySlug('foul-play')!;
@@ -729,10 +730,10 @@ describe('ladders configuration', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       pre: pre.10544
 `, undefined, 1_760_000_000);
+      db.setAgentLadders('0-error', database.ALL_SLOTS, 1_760_000_000);
       const zero = db.getAgentBySlug('0-error')!;
       const sub = db.createSubmission({
         agentId: zero.id,
@@ -789,28 +790,27 @@ describe('ladders configuration', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       pre: pre.10544
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.100001
 - name: PokeChamp
   active: 2026
   arena:
-    qualified: true
     owners:
       seth: seth.100002
 - name: Metamon
   active: 2026
   arena:
-    qualified: true
     owners:
       jake: jake.100003
 `, undefined, 1_760_000_000);
+      for (const s of ['0-error', 'foul-play', 'pokechamp', 'metamon']) {
+        db.setAgentLadders(s, database.ALL_SLOTS, 1_760_000_000);
+      }
 
       const ladderId = 'gen9championsvgc2026regmc';
       const dummyTeams = Array.from({length: 20}, (_, i) => `Pikachu|||static|||||||]${i}`);
@@ -1179,11 +1179,11 @@ describe('project ownership sync', () => {
 - name: Foul Play
   active: 2021
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
 `;
       db.syncProjectsFromYaml(yamlText, tmpDir, 1000);
+      db.setAgentLadders('foul-play', database.ALL_SLOTS, 1000);
       await expect(db.syncProjectsFromYamlWithSmogon(yamlText, {
         avatarsDir: tmpDir,
         lookupSmogon: () => Promise.resolve({
@@ -1211,13 +1211,11 @@ describe('project ownership sync', () => {
 - name: Bad Proj
   active: 2026
   arena:
-    qualified: true
     owners:
       badgh: 666
 - name: Good Proj
   active: 2026
   arena:
-    qualified: true
     owners:
       goodgh: 777
 `, {
@@ -1233,6 +1231,8 @@ describe('project ownership sync', () => {
       })).rejects.toThrow(/is banned/);
       expect(db.getDeveloperByGitHub('badgh')?.smogonStanding).toBe('bad');
       expect(db.getAgentBySlug('good-proj')).toBeDefined();
+      db.setAgentLadders('bad-proj', ['rby'], 1_760_000_105);
+      db.setAgentLadders('good-proj', ['rby'], 1_760_000_105);
       db.linkDeveloperDiscord('badgh', '111111', 'baduser', 1_760_000_110);
       db.linkDeveloperDiscord('goodgh', '222222', 'gooduser', 1_760_000_110);
       expect(db.getCompetitorDiscordIds()).toEqual(['222222']);
@@ -1249,13 +1249,11 @@ describe('project ownership sync', () => {
 - name: Alpha
   active: 2026
   arena:
-    qualified: true
     owners:
       dev_one: pre.10544
 - name: Beta
   active: 2026
   arena:
-    qualified: true
     owners:
       dev_two: pmariglia.535629
 `, {
@@ -1287,7 +1285,6 @@ describe('project ownership sync', () => {
 - name: Resolved
   active: 2026
   arena:
-    qualified: true
     owners:
       pre_gh: pre.10544
 `, {
@@ -1313,7 +1310,6 @@ describe('project ownership sync', () => {
 - name: Foul Play
   active: 2021
   arena:
-    qualified: true
     owners:
       PMariglia: pmariglia.535629
 - name: Metamon
@@ -1325,9 +1321,12 @@ describe('project ownership sync', () => {
   active: [2019, 2020]
 `, avatarsDir, 1_760_000_000);
 
+      expect(db.getAgentBySlug('foul-play')?.status).toBe('pending');
+      db.setAgentLadders('foul-play', ['rby', 'adv'], 1_760_000_000);
       const fp = db.getAgentBySlug('foul-play')!;
       expect(fp.logo).toBe('foul-play.png');
       expect(fp.status).toBe('qualified');
+      expect(db.getAgentLadders(fp.id)).toEqual(['rby', 'adv']);
       expect(db.getAgentBySlug('metamon')?.status).toBe('pending');
       expect(db.getAgentBySlug('historical-only')).toBeUndefined();
     } finally {
@@ -1342,7 +1341,6 @@ describe('project ownership sync', () => {
 - name: Foul Play
   active: 2021
   arena:
-    qualified: true
     owners:
       PMariglia: pmariglia.535629
 `, tmpDir, 1_760_000_000);
@@ -1376,7 +1374,6 @@ describe('project ownership sync', () => {
 - name: Foul Play
   active: 2021
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
       coauthor: coauthor.1002
@@ -1413,10 +1410,10 @@ describe('project ownership sync', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       scheibo: pre.10544
 `, undefined, 1_760_000_100);
+      db.setAgentLadders('0-error', ['rby'], 1_760_000_100);
       const zeroAgent = db.getAgentBySlug('0-error')!;
       const vZero = db.createSubmission({
         agentId: zeroAgent.id,
@@ -1433,7 +1430,6 @@ describe('project ownership sync', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners: {}
 `, undefined, 1_760_000_300);
 
@@ -1454,16 +1450,16 @@ describe('project ownership sync', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       scheibo: pre.10544
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
 `, undefined, 1_760_000_100);
+      db.setAgentLadders('0-error', ['rby'], 1_760_000_100);
+      db.setAgentLadders('foul-play', ['rby'], 1_760_000_100);
 
       db.linkDeveloperGitHubId('scheibo', 1001, 1_760_000_110);
       db.linkDeveloperDiscord('scheibo', '513513270670262284', 'scheibo', 1_760_000_110);
@@ -1487,12 +1483,10 @@ describe('project ownership sync', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners: {}
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
       scheibo: pre.10544
@@ -1509,13 +1503,11 @@ describe('project ownership sync', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       scheibo: pre.10544
 - name: Foul Play
   active: 2026
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.535629
 `, undefined, 1_760_000_400);
@@ -1602,10 +1594,10 @@ describe('identifier validation', () => {
 - name: 0 ERROR
   active: 2026
   arena:
-    qualified: true
     owners:
       pre: pre.10544
 `, undefined, 1_760_000_000);
+      db.setAgentLadders('0-error', database.ALL_SLOTS, 1_760_000_000);
       const agent = db.getAgentBySlug('0-error')!;
       expect(() => db.createSubmission({
         agentId: agent.id,
@@ -1639,28 +1631,27 @@ describe('ladder activation invariants', () => {
 - name: Alpha
   active: 2026
   arena:
-    qualified: true
     owners:
       alpha: alpha.1
 - name: Beta
   active: 2026
   arena:
-    qualified: true
     owners:
       beta: beta.2
 - name: Gamma
   active: 2026
   arena:
-    qualified: true
     owners:
       gamma: gamma.3
 - name: Delta
   active: 2026
   arena:
-    qualified: true
     owners:
       delta: delta.4
 `, undefined, 1_760_000_000);
+    for (const s of ['alpha', 'beta', 'gamma', 'delta']) {
+      db.setAgentLadders(s, database.ALL_SLOTS, 1_760_000_000);
+    }
   });
 
   afterEach(() => {
@@ -1921,22 +1912,22 @@ describe('quarantine invariants', () => {
 - name: Alpha
   active: 2026
   arena:
-    qualified: true
     owners:
       a: a.1
 - name: Beta
   active: 2026
   arena:
-    qualified: true
     owners:
       b: b.2
 - name: Gamma
   active: 2026
   arena:
-    qualified: true
     owners:
       c: c.3
 `, undefined, 1_760_000_000);
+    for (const s of ['alpha', 'beta', 'gamma']) {
+      db.setAgentLadders(s, database.ALL_SLOTS, 1_760_000_000);
+    }
 
     versionIds = ['alpha', 'beta', 'gamma'].map((slug, idx) => {
       const ag = db.getAgentBySlug(slug)!;
@@ -2056,13 +2047,11 @@ describe('quarantine invariants', () => {
 - name: Beta
   active: 2026
   arena:
-    qualified: true
     owners:
       b: b.2
 - name: Gamma
   active: 2026
   arena:
-    qualified: true
     owners:
       c: c.3
 `, undefined, 1_760_002_100);
@@ -2177,19 +2166,16 @@ describe('tournament standings', () => {
 - name: Entrant A
   active: 2026
   arena:
-    qualified: true
     owners:
       ea: ea.101
 - name: Entrant B
   active: 2026
   arena:
-    qualified: true
     owners:
       eb: eb.102
 - name: Entrant C
   active: 2026
   arena:
-    qualified: true
     owners:
       ec: ec.103
 `, undefined, 1_760_000_300);
@@ -2408,16 +2394,16 @@ describe('tournament standings', () => {
 - slug: alpha
   name: Alpha
   arena:
-    qualified: true
     developers:
       - github: alpha-dev
 - slug: beta
   name: Beta
   arena:
-    qualified: true
     developers:
       - github: beta-dev
 `, undefined, 1_760_000_000);
+    telDb.setAgentLadders('alpha', database.ALL_SLOTS, 1_760_000_000);
+    telDb.setAgentLadders('beta', database.ALL_SLOTS, 1_760_000_000);
     const alpha = telDb.getAgentBySlug('alpha')!;
     const beta = telDb.getAgentBySlug('beta')!;
     const vA = telDb.createSubmission({
@@ -2711,22 +2697,20 @@ describe('tournament standings', () => {
 - name: Alpha
   active: 2026
   arena:
-    qualified: true
     owners:
       alpha: alpha.1
 - name: Beta
   active: 2026
   arena:
-    qualified: true
     owners:
       beta: beta.2
 - name: Gamma
   active: 2026
   arena:
-    qualified: true
     owners:
       gamma: gamma.3
 `, undefined, 1_760_000_000);
+      telDb.setAgentLadders('gamma', database.ALL_SLOTS, 1_760_000_000);
       const gamma = telDb.getAgentBySlug('gamma')!;
       const vG = telDb.createSubmission({
         agentId: gamma.id,
@@ -2887,4 +2871,194 @@ describe('tournament standings', () => {
       telDb.close();
     }
   });
+});
+
+describe('per-ladder qualification & migrations', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-agent-ladders-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
+
+  test('migrates existing database with agent_ladders backfill and matches fresh schema', () => {
+    const preSchemaDir = path.join(tmpDir, 'pre-schema');
+    const emptyMigDir = path.join(tmpDir, 'empty-mig');
+    fs.mkdirSync(preSchemaDir, {recursive: true});
+    fs.mkdirSync(emptyMigDir, {recursive: true});
+    for (const file of fs.readdirSync(database.SCHEMA_DIR)) {
+      if (file === 'agent-ladders.sql' || !file.endsWith('.sql')) continue;
+      fs.copyFileSync(path.join(database.SCHEMA_DIR, file), path.join(preSchemaDir, file));
+    }
+
+    const dbFile = path.join(tmpDir, 'prod.sqlite');
+    const legacyDb = new database.Database(dbFile, {
+      schemaDir: preSchemaDir,
+      migrationDir: emptyMigDir,
+      now: 1_760_000_000,
+    });
+    legacyDb.db.exec(`
+      INSERT INTO agents (slug, name, status, updated_at) VALUES
+        ('magpie', 'Magpie', 'qualified', 1760000000),
+        ('mocca', 'Mocca', 'qualified', 1760000000),
+        ('missingnozero', 'MissingNo.Zero', 'qualified', 1760000000),
+        ('other', 'Other', 'qualified', 1760000000),
+        ('retired-proj', 'Retired Proj', 'disabled', 1760000000);
+    `);
+    legacyDb.close();
+
+    const migratedDb = new database.Database(dbFile, {now: 1_760_000_100});
+    const freshDb = new database.Database(':memory:', {now: 1_760_000_100});
+    try {
+      expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
+      expect(migratedDb.getAppliedMigrations().map(m => m.version)).toEqual([
+        '0001-agent-ladders.sql',
+        '0002-sync-agent-status.sql',
+      ]);
+
+      const magpie = migratedDb.getAgentBySlug('magpie')!;
+      const mocca = migratedDb.getAgentBySlug('mocca')!;
+      const missingno = migratedDb.getAgentBySlug('missingnozero')!;
+      const other = migratedDb.getAgentBySlug('other')!;
+      const retired = migratedDb.getAgentBySlug('retired-proj')!;
+
+      expect(magpie.status).toBe('qualified');
+      expect(migratedDb.getAgentLadders(magpie.id)).toEqual(['rby', 'adv']);
+      expect(mocca.status).toBe('qualified');
+      expect(migratedDb.getAgentLadders(mocca.id)).toEqual(['vgc']);
+      expect(missingno.status).toBe('qualified');
+      expect(migratedDb.getAgentLadders(missingno.id)).toEqual(['rand']);
+      expect(other.status).toBe('pending');
+      expect(migratedDb.getAgentLadders(other.id)).toEqual([]);
+      expect(retired.status).toBe('disabled');
+      expect(migratedDb.getAgentLadders(retired.id)).toEqual([]);
+    } finally {
+      migratedDb.close();
+      freshDb.close();
+    }
+  });
+
+  test(
+    'preserves SQLite grants across syncProjects, rotation, and revoke without retiring',
+    async () => {
+      const db = new database.Database(':memory:');
+      try {
+        db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
+        const yamlText = `
+- name: Magpie
+  active: 2025
+  arena:
+    owners:
+      open-cover: opencover.723102
+- name: Mocca
+  active: 2026
+  arena:
+    owners:
+      lucaspellegrinelli: lucaspll.765230
+`;
+        db.syncProjectsFromYaml(yamlText, undefined, 1_760_000_000);
+        expect(db.getAgentBySlug('magpie')?.status).toBe('pending');
+        expect(db.getAgentBySlug('mocca')?.status).toBe('pending');
+
+        const logs: string[] = [];
+        await runPkmnCli(['set-ladders', 'magpie', 'rby', 'adv'], {
+          db,
+          now: 1_760_000_010,
+          log: line => logs.push(line),
+        });
+        await runPkmnCli(['set-ladders', 'mocca', 'vgc'], {
+          db,
+          now: 1_760_000_010,
+          log: line => logs.push(line),
+        });
+        expect(logs[0]).toContain('rby, adv (status=qualified)');
+        expect(logs[1]).toContain('vgc (status=qualified)');
+
+        // Re-syncing projects.yml must not clobber SQLite grants.
+        db.syncProjectsFromYaml(yamlText, undefined, 1_760_000_020);
+        const magpie = db.getAgentBySlug('magpie')!;
+        const mocca = db.getAgentBySlug('mocca')!;
+        expect(magpie.status).toBe('qualified');
+        expect(db.getAgentLadders(magpie.id)).toEqual(['rby', 'adv']);
+        expect(mocca.status).toBe('qualified');
+        expect(db.getAgentLadders(mocca.id)).toEqual(['vgc']);
+
+        // Magpie can submit to RBY, not SV.
+        expect(() => db.createSubmission({
+          agentId: magpie.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/magpie.tar.zst',
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen9ou20261109'],
+          now: 1_760_000_030,
+        })).toThrow(/not qualified for the SV ladder/);
+
+        const v1 = db.createSubmission({
+          agentId: magpie.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/magpie.tar.zst',
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_030,
+        });
+        db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_760_000_040});
+        db.refundCooldown('magpie', 1_760_000_050);
+
+        // Revoking RBY leaves the active RBY entry running, while blocking future RBY submissions.
+        db.setAgentLadder('magpie', 'rby', false, 1_760_000_060);
+        expect(db.getAgentLadders(magpie.id)).toEqual(['adv']);
+        expect(db.getActiveEntriesForAgent(magpie.id)).toHaveLength(1);
+        expect(db.getActiveEntriesForAgent(magpie.id)[0].role).toBe('champion');
+        expect(() => db.createSubmission({
+          agentId: magpie.id,
+          version: '1.1.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/magpie-1.1.tar.zst',
+          sha256: 'b'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_070,
+        })).toThrow(/not qualified for the RBY ladder/);
+
+        // Rotating VGC preserves Mocca's slot-based qualification on the next season.
+        db.rotateLadder({
+          oldLadderId: 'gen9championsvgc2026regmc',
+          archivedName: 'VGC Reg M-C',
+          next: {
+            id: 'gen9championsvgc2026regmd',
+            name: 'VGC',
+            format: 'gen9championsvgc2026regmd',
+            team: 'pools',
+            teams: 20,
+          },
+          now: 1_760_000_080,
+        });
+        const vgcSub = db.createSubmission({
+          agentId: mocca.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/mocca.tar.zst',
+          sha256: 'c'.repeat(64),
+          ladderIds: ['gen9championsvgc2026regmd'],
+          now: 1_760_000_090,
+        });
+        expect(vgcSub.ladders).toEqual(['gen9championsvgc2026regmd']);
+
+        // Clearing all ladders returns agent to 'pending'.
+        await runPkmnCli(['set-ladders', 'magpie', 'none'], {
+          db,
+          now: 1_760_000_100,
+          log: () => undefined,
+        });
+        expect(db.getAgentBySlug('magpie')?.status).toBe('pending');
+        expect(db.getAgentLadders(magpie.id)).toEqual([]);
+      } finally {
+        db.close();
+      }
+    }
+  );
 });

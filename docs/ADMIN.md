@@ -67,17 +67,19 @@ Every Arena developer needs a Smogon account in good standing and belongs to at 
        - name: Pokémon Showdown!
          url: https://github.com/smogon/pokemon-showdown
      arena:
-       qualified: true
        owners:
          pmariglia: pmariglia.249812
    ```
-   - `qualified: false` (or omitted) -> `Pending`: unlocks `/account/` (Discord linking + 1 OCI
-     entry per `scheduled` tournament) and `/wiki` editing; continuous ladders stay disabled.
-   - `qualified: true` -> `Qualified` / `Eligible`: unlocks continuous ladder submissions.
-3. **Deploy or sync manually:**
+   - Newly registered projects start `Pending`: unlocks `/account/` (Discord linking + 1 OCI
+     entry per `scheduled` tournament) and `/wiki` editing; continuous ladders stay disabled until
+     staff grant slots in SQLite.
+   - `pkmn set-ladders` grants per-slot eligibility (`rby`, `adv`, `sv`, `rand`, `vgc`, `all`, or
+     `none`), preserved across seasonal rotations; revoking a slot only blocks future submissions.
+3. **Deploy or sync manually, then grant ladder slots:**
    ```sh
    npm run pkmn -- sync-projects            # verifies Smogon IDs/ban status
    npm run pkmn -- sync-projects --offline  # YAML-only sync
+   npm run pkmn -- set-ladders magpie rby adv
    ```
 
 - **Reassign / remove developer** (preserves `projects.yml` formatting; commit & push the diff):

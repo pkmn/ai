@@ -4,6 +4,7 @@ import {formatUtcDate, formatUtcDateTime, validateVersion} from '../static/util'
 
 import {ensureAgentLadderStats} from './agent-ladder-stats';
 import * as teams from './agent-ladder-teams';
+import {getAgentLadders} from './agent-ladders';
 import {AgentRow, getAgentById} from './agents';
 import * as entries from './ladder-entries';
 import {archiveLadderInPlace, canSettleLadder, getCurrentLadders, getLadder} from './ladders';
@@ -385,7 +386,7 @@ export function computeAgentTournamentStatuses(
 }
 
 // Evaluates project-wide ladder submission eligibility:
-//   1. Project must be `'qualified'` and at least one ladder must be `'active'`.
+//   1. Project must be qualified for at least one open (`'upcoming'` or `'active'`) ladder slot.
 //   2. No ladder version (`ladders_json != '[]'`) may currently be queued in `'pending'`.
 //   3. At least 14 days (`COOLDOWN_SECONDS`) must have elapsed since the latest `'passed'` ladder
 //      submission (unless staff waived it via `cooldown_refunded_at`). Tournament-only submissions
@@ -417,7 +418,8 @@ export function computeAgentSubmissionStatus(
     };
   }
 
-  if (agent.status === 'pending') {
+  const qualifiedSlots = new Set(getAgentLadders(db, agentId));
+  if (agent.status === 'pending' || qualifiedSlots.size === 0) {
     return {
       label: 'Pending',
       canSubmit: false,
@@ -431,6 +433,13 @@ export function computeAgentSubmissionStatus(
       label: 'Qualified',
       canSubmit: false,
       reason: 'Ladders are not open for submissions yet.',
+    };
+  }
+  if (!openLadders.some(l => qualifiedSlots.has(l.slot))) {
+    return {
+      label: 'Qualified',
+      canSubmit: false,
+      reason: 'None of your qualified ladders are open for submissions yet.',
     };
   }
 
@@ -563,6 +572,19 @@ export function createSubmission(
           new Error(status.reason ?? 'Project is not currently eligible to submit to ladders.'),
           {status: code}
         );
+      }
+      const qualifiedSlots = new Set(getAgentLadders(db, input.agentId));
+      for (const ladderId of input.ladderIds) {
+        const ladder = getLadder(db, ladderId);
+        if (!ladder) {
+          throw Object.assign(new Error(`Unknown ladder "${ladderId}".`), {status: 400});
+        }
+        if (!qualifiedSlots.has(ladder.slot)) {
+          throw Object.assign(
+            new Error(`${agent.name} is not qualified for the ${ladder.name} ladder.`),
+            {status: 403}
+          );
+        }
       }
     }
 

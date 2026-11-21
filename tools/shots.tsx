@@ -1290,6 +1290,18 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       githubUser: 'sisyphus25',
     },
     {
+      name: 'account-eligible-partial',
+      section: 'account',
+      title: 'Eligible (Partial)',
+      path: '/account/',
+      githubUser: 'sisyphus25',
+      setup: fixture => withSavepoint(fixture, raw => {
+        raw.prepare(
+          "DELETE FROM agent_ladders WHERE agent_id = ? AND slot NOT IN ('rby', 'adv')"
+        ).run(fixture.cynthiaiId);
+      }),
+    },
+    {
       name: 'account-teams-empty',
       section: 'account',
       title: 'Teams (0/20)',

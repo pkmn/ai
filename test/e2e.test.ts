@@ -276,9 +276,9 @@ describe('pools team sampling', () => {
       memDb.syncProjectsFromYaml([
         '- name: Secret VGC',
         '  arena:',
-        '    qualified: true',
         '    owners: [alice]',
       ].join('\n'), undefined, 1000);
+      memDb.setAgentLadders('secret-vgc', ['vgc'], 1000);
       const ag = memDb.getAgentBySlug('secret-vgc')!;
       const sub = memDb.createSubmission({
         agentId: ag.id,

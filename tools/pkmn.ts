@@ -34,6 +34,7 @@ const USAGE = [
   '  quarantine <agent-slug> <version> [--reason "..."]',
   '  unquarantine <agent-slug> <version>',
   '  refund-cooldown <agent-slug>',
+  '  set-ladders <agent-slug> <slot...|all|none>',
   '  set-anchor <ladder_id> <agent-slug> <version>',
   '  set-ladder-status <ladder_id> <upcoming|active|settling|archived>',
   '  upload-ladder-teams <ladder_id> <teams-file>',
@@ -63,6 +64,7 @@ const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
   quarantine: new Set(['reason']),
   unquarantine: new Set(),
   'refund-cooldown': new Set(),
+  'set-ladders': new Set(),
   'set-anchor': new Set(),
   'set-ladder-status': new Set(),
   'upload-ladder-teams': new Set(),
@@ -372,6 +374,35 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         }
         const agent = database.refundCooldown(slug, now);
         log(`Refunded 14-day submission cooldown for ${agent.name} (${agent.slug})`);
+        return;
+      }
+      case 'set-ladders': {
+        const slug = positional[1];
+        const rawTokens = positional
+          .slice(2)
+          .flatMap(t => t.split(','))
+          .map(t => t.trim().toLowerCase())
+          .filter(Boolean);
+        if (!slug || rawTokens.length === 0) {
+          throw new Error('Usage: pkmn set-ladders <agent-slug> <slot...|all|none>');
+        }
+        let slots: db.LadderSlot[];
+        if (rawTokens.includes('none')) {
+          if (rawTokens.length > 1) {
+            throw new Error('Cannot combine "none" with other ladder slots');
+          }
+          slots = [];
+        } else if (rawTokens.includes('all')) {
+          slots = [...db.ALL_SLOTS];
+        } else {
+          slots = rawTokens.map(t => db.normalizeLadderSlot(t));
+        }
+        const res = database.setAgentLadders(slug, slots, now);
+        const list = res.slots.length > 0 ? res.slots.join(', ') : 'none';
+        log(
+          `Set qualified ladders for ${res.agent.name} (${res.agent.slug}): ` +
+          `${list} (status=${res.agent.status})`
+        );
         return;
       }
       case 'set-anchor': {

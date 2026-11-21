@@ -599,7 +599,6 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    qualified: true
     logo: magpie.svg
     owners:
       open-cover: opencover.723102
@@ -766,7 +765,6 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    qualified: true
     owners:
       lucaspellegrinelli: lucaspll.765230
 - name: MysteriousWind
@@ -829,6 +827,5 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    qualified: true
     owners:
       nickgreenquist: AlphaStaryu.764554

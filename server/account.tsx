@@ -657,6 +657,7 @@ export function renderAccountPage(opts: {
   developer: db.DeveloperRow;
   agent: db.AgentRow;
   status: db.SubmissionStatus;
+  qualifiedSlots?: ReadonlySet<db.LadderSlot>;
   tournamentStatuses?: db.TournamentSubmissionStatus[];
   currentLadders: db.LadderRow[];
   needsTeamsLadders: db.LadderRow[];
@@ -671,6 +672,7 @@ export function renderAccountPage(opts: {
     developer,
     agent,
     status,
+    qualifiedSlots = new Set<db.LadderSlot>(),
     tournamentStatuses = [],
     currentLadders,
     needsTeamsLadders,
@@ -924,7 +926,8 @@ export function renderAccountPage(opts: {
                   <div className='check-group'>
                     {currentLadders.length === 0 ? ' ' : currentLadders.map(l => {
                       const isOpen = l.status === 'upcoming' || l.status === 'active';
-                      const canCheck = isOpen && status.canSubmit;
+                      const isQualified = qualifiedSlots.has(l.slot);
+                      const canCheck = isOpen && isQualified && status.canSubmit;
                       const checked = canCheck && activeLadderIdsWithAgent.has(l.id);
                       const needsTeams = needsTeamsIds.has(l.id);
                       const savedCount = savedTeamsByLadder.get(l.id) ?? 0;
@@ -934,6 +937,9 @@ export function renderAccountPage(opts: {
                       if (!isOpen) {
                         labelClass = 'upcoming';
                         labelTitle = 'Not open for submissions';
+                      } else if (!isQualified) {
+                        labelClass = 'upcoming';
+                        labelTitle = 'Not qualified for this ladder';
                       } else if (!status.canSubmit) {
                         labelClass = 'upcoming';
                         labelTitle = status.reason ?? 'Not currently eligible for ladders';
@@ -1243,10 +1249,13 @@ export function register(app: polka.Polka, options: Options) {
 
     const now = getNow();
     const status = db.computeAgentSubmissionStatus(agent.id, now);
+    const qualifiedLadders = db.getAgentLadders(agent.id);
+    const qualifiedSlots = new Set(qualifiedLadders);
     const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id, now);
     const currentLadders = db.getCurrentLadders();
     const needsTeamsLadders = currentLadders.filter(
       l => (l.status === 'upcoming' || l.status === 'active') &&
+        qualifiedSlots.has(l.slot) &&
         l.team === 'pools' &&
         !db.hasActiveLadderTeams(l.id, agent.id)
     );
@@ -1291,6 +1300,7 @@ export function register(app: polka.Polka, options: Options) {
           slug: agent.slug,
           name: agent.name,
           status: agent.status,
+          qualifiedLadders,
           profileHref: `/projects/${encodeURIComponent(agent.slug)}/`,
         },
         submissionStatus: status,
@@ -1304,6 +1314,7 @@ export function register(app: polka.Polka, options: Options) {
           team: l.team,
           teams: l.teams,
           status: l.status,
+          qualified: qualifiedSlots.has(l.slot),
           needsTeams: needsTeamsIds.has(l.id),
           savedCount: savedTeamsJson[l.id]?.savedCount ?? 0,
           remainingTeams: savedTeamsJson[l.id]?.remainingCount ?? 0,
@@ -1339,6 +1350,7 @@ export function register(app: polka.Polka, options: Options) {
       developer,
       agent,
       status,
+      qualifiedSlots,
       tournamentStatuses,
       currentLadders,
       needsTeamsLadders,
@@ -1521,6 +1533,18 @@ export function register(app: polka.Polka, options: Options) {
       if (!seenLadderIds.has(ladder.id)) {
         seenLadderIds.add(ladder.id);
         selectedLadders.push(ladder);
+      }
+    }
+
+    if (selectedLadders.length > 0) {
+      const qualifiedSlots = new Set(db.getAgentLadders(agent.id));
+      const unqualified = selectedLadders.filter(l => !qualifiedSlots.has(l.slot));
+      if (unqualified.length > 0) {
+        const names = unqualified.map(l => l.name).join(', ');
+        sendJson(res, 403, {
+          error: `${agent.name} is not qualified for ${names}.`,
+        });
+        return;
       }
     }
 

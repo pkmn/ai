@@ -1295,7 +1295,6 @@ export class Runner {
       p => p.name === name || (p.name && slugify(p.name).toLowerCase() === slug)
     );
     const arenaBlock: NonNullable<Project['arena']> = {
-      qualified: !isPending,
       ...(logo ? {logo} : {}),
       owners: ownersMap,
     };
@@ -1353,6 +1352,14 @@ export class Runner {
       this.saveProjectsArray(projects);
       this.db.syncProjects(this.projectsFile, this.avatarsDir, this.state.now);
       return;
+    }
+
+    if (!isPending) {
+      const laddersFlag = getFlag(cmd, 'ladders');
+      const slots: db.LadderSlot[] = laddersFlag
+        ? laddersFlag.split(',').map(s => db.normalizeLadderSlot(s))
+        : [...db.ALL_SLOTS];
+      this.db.setAgentLadders(slug, slots, this.state.now);
     }
 
     if (discordSpecs[0] === 'none') return;
@@ -1422,16 +1429,26 @@ export class Runner {
     const spec = cmd.positional[1];
     if (!spec) throw new Error(`Usage: ${cmd.positional[0]} <agent>`);
     const agent = this.resolveAgent(spec);
+    if (target === 'qualified') {
+      const rawSlots = cmd.positional
+        .slice(2)
+        .flatMap(t => t.split(','))
+        .map(t => t.trim().toLowerCase())
+        .filter(Boolean);
+      const slots: db.LadderSlot[] = rawSlots.length === 0 || rawSlots.includes('all')
+        ? [...db.ALL_SLOTS]
+        : rawSlots.includes('none')
+          ? []
+          : rawSlots.map(s => db.normalizeLadderSlot(s));
+      this.db.setAgentLadders(agent.slug, slots, this.state.now);
+      return;
+    }
     const projects = this.loadProjectsArray();
     const proj = projects.find(
       p => p.name && slugify(p.name).toLowerCase() === agent.slug
     );
     if (!proj) throw new Error(`Project "${agent.name}" not found in ${this.projectsFile}`);
-    if (target === 'disabled') {
-      delete proj.arena;
-    } else if (proj.arena) {
-      proj.arena.qualified = true;
-    }
+    delete proj.arena;
     this.saveProjectsArray(projects);
     this.db.syncProjects(this.projectsFile, this.avatarsDir, this.state.now);
   }

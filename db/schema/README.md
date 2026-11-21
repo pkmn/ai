@@ -30,6 +30,7 @@ synchronously via Node's `node:sqlite` (`DatabaseSync`) in WAL mode.
 ```mermaid
 erDiagram
     agents ||--o{ developers : "has owners"
+    agents ||--o{ agent_ladders : "qualified for slots"
     agents ||--o{ agent_versions : "submits"
     agents ||--o{ agent_ladder_teams : "stages/activates pool"
     agents ||--o{ agent_ladder_stats : "accumulates career"
@@ -63,7 +64,8 @@ erDiagram
 |---|---|---|
 | `schema_migrations` | [`schema-migrations.sql`](schema-migrations.sql) | Applied `db/migration/NNNN-*.sql` scripts. |
 | `ladders` | [`ladders.sql`](ladders.sql) | Permanent/seasonal epochs (`id` decoupled from URL `slot` for rotation). |
-| `agents` | [`agents.sql`](agents.sql) | Registered `projects.yml` Arena projects, qualification status, 14-day cooldown. |
+| `agents` | [`agents.sql`](agents.sql) | Registered `projects.yml` Arena projects, derived qualification status, 14-day cooldown. |
+| `agent_ladders` | [`agent-ladders.sql`](agent-ladders.sql) | Per-slot ladder qualification grants (`rby`/`adv`/`sv`/`rand`/`vgc`) in SQLite. |
 | `developers` | [`developers.sql`](developers.sql) | Co-owners with globally `UNIQUE` GitHub, Smogon, and Discord IDs (1 project/human). |
 | `discord_members` | [`discord-members.sql`](discord-members.sql) | Guild cache backing sub-ms `/auth/discord/validate` for `/chat/logs/`. |
 | `agent_versions` | [`agent-versions.sql`](agent-versions.sql) | Bundles/OCI images, one-time encrypted pull tokens, smoke tests, DM state. |

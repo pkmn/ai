@@ -950,7 +950,6 @@ const PROJECTS_YAML = `
     - pmariglia
     - coauthor
   arena:
-    qualified: true
     owners:
       pmariglia: pmariglia.10001
       coauthor: coauthor.10002
@@ -959,7 +958,6 @@ const PROJECTS_YAML = `
   authors:
     - jakegrigsby
   arena:
-    qualified: true
     owners:
       jakegrigsby: jakegrigsby.10003
 
@@ -967,7 +965,6 @@ const PROJECTS_YAML = `
   authors:
     - newcomer
   arena:
-    qualified: false
     owners:
       newcomer: newcomer.10004
 `;
@@ -978,6 +975,8 @@ function createSeededArenaDb() {
   const db = new Database(':memory:');
   db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
   db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
+  db.setAgentLadders('foul-play', ['rby', 'adv', 'sv', 'rand', 'vgc'], 1_760_000_000);
+  db.setAgentLadders('metamon', ['rby', 'adv', 'sv', 'rand', 'vgc'], 1_760_000_000);
   db.linkDeveloperDiscord('pmariglia', '1001', 'pmariglia', 1_760_000_010);
   db.linkDeveloperDiscord('coauthor', '1002', 'coauthor', 1_760_000_010);
   return db;
