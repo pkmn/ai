@@ -167,10 +167,10 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   const app = options.app ?? polka();
   installSafeErrorHandlers(app, db);
 
-  // `static/build.tsx` writes 0-byte `index.html` stubs for `/account`, `/arena`, and `/projects`
-  // so `@untitaker/hyperlink` (`hyperlink public --check-anchors`) validates internal `.dj` links.
-  // Bypass `serve-static` for dynamic SSR/API routes and gate static ladder archives/logs on the
-  // ladder's publication status (`random`, or `pools` strictly after `status === 'archived'`).
+  // `static/build.tsx` writes 0-byte `index.html` stubs for `/account`, `/arena`, `/projects`, and
+  // `/wiki` so `@untitaker/hyperlink` (`hyperlink public --check-anchors`) validates internal `.dj`
+  // links. Bypass `serve-static` for dynamic SSR/API routes and gate static ladder archives/logs on
+  // the ladder's publication status (`random`, or `pools` strictly after `status === 'archived'`).
   type Middleware = (
     req: http.IncomingMessage,
     res: http.ServerResponse,

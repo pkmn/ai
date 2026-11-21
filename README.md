@@ -24,8 +24,9 @@ authoritative [rankings](https://pkmn.ai/arena) of existing agents which are con
 tested within a controlled environment.
 
 Researchers, developers, and interested onlookers are encouraged to join the **pkmn.ai** community
-on [Discord](https://pkmn.ai/chat), and all are welcome to [request](https://pkmn.ai/rules) the
-inclusion of new agents on the leaderboard.
+on [Discord](https://pkmn.ai/chat) or browse its collaborative [knowledge
+base](https://pkmn.ai/wiki), and all are welcome to [request](https://pkmn.ai/rules) the inclusion
+of new agents on the leaderboard.
 
 All of the code in this repository is distributed under the terms of the [MIT License](LICENSE) and
 all of the content is made available under [CC BY-SA

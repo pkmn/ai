@@ -861,7 +861,7 @@ describe('mock scenarios & E2E lifecycle', () => {
           );
           expect(sf1Log).toContain('|win|');
 
-          for (const stub of ['arena', 'projects', 'account', 'chat']) {
+          for (const stub of ['arena', 'projects', 'account', 'chat', 'wiki']) {
             const stubDir = path.join(viewPublicDir, stub);
             fs.mkdirSync(stubDir, {recursive: true});
             const stubFile = path.join(stubDir, 'index.html');

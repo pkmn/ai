@@ -103,7 +103,8 @@ export function syncStaticLiveBanner(
           rel === 'api' ||
           rel === 'chat' ||
           rel === 'account' ||
-          rel === 'projects'
+          rel === 'projects' ||
+          rel === 'wiki'
         ) {
           continue;
         }
@@ -232,7 +233,7 @@ const build = async (rebuild?: boolean) => {
   let actual = fs.list(PUBLIC);
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'release', 'chat', 'arena',
-    'account', 'background', 'index.html', 'favicon.svg',
+    'account', 'wiki', 'background', 'index.html', 'favicon.svg',
     'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib',
   ]);
   if (!rebuild) {
@@ -266,12 +267,13 @@ const build = async (rebuild?: boolean) => {
     // `@untitaker/hyperlink` (`hyperlink public --check-anchors`) has no CLI flag or config option
     // to ignore non-static routes (`--help` only exposes `--check-anchors`, `--sources`, `-j`, and
     // `--github-actions`). Routes linked from `.dj` content that are Nginx redirects (`/chat`) or
-    // dynamic SSR routes (`/account`, `/arena`, `/projects`, and any active live tournament banner
-    // target) therefore get 0-byte `index.html` stubs on disk so `npm run lint` does not report
-    // broken links, while Nginx and Polka's `serve-static` wrapper bypass them at runtime.
+    // dynamic SSR routes (`/account`, `/arena`, `/projects`, `/wiki`, and any active live
+    // tournament banner target) therefore get 0-byte `index.html` stubs on disk so `npm run lint`
+    // does not report broken links, while Nginx and Polka's `serve-static` wrapper bypass them at
+    // runtime.
     const projectsDir = path.join(PUBLIC, 'projects');
     if (fs.exists(projectsDir)) fs.remove(projectsDir);
-    for (const placeholder of ['chat', 'account', 'arena', 'projects']) {
+    for (const placeholder of ['chat', 'account', 'arena', 'projects', 'wiki']) {
       const file = path.join(PUBLIC, placeholder, 'index.html');
       fs.mkdir(path.dirname(file));
       fs.write(file, '');

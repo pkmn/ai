@@ -164,14 +164,14 @@ function seedStaticPublicAssets(tmpPublic: string) {
     }
   }
   for (const dir of [
-    'glossary', 'research', 'concepts', 'rules', 'release', 'background', 'chat', 'account',
+    'glossary', 'research', 'concepts', 'rules', 'release', 'background', 'chat', 'account', 'wiki',
   ]) {
     const srcDir = path.join(realPublic, dir);
     if (fs.existsSync(srcDir)) {
       fs.cpSync(srcDir, path.join(tmpPublic, dir), {recursive: true});
     }
   }
-  for (const stub of ['arena', 'projects', 'chat', 'account']) {
+  for (const stub of ['arena', 'projects', 'chat', 'account', 'wiki']) {
     const stubDir = path.join(tmpPublic, stub);
     fs.mkdirSync(stubDir, {recursive: true});
     const stubIdx = path.join(stubDir, 'index.html');
