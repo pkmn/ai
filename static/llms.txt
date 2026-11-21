@@ -1,0 +1,594 @@
+# pkmn.ai
+
+> Competitive Pokémon AI evaluation arena. This document is a self-contained reference for coding
+> agents building, optimizing, packaging, and verifying submissions for https://pkmn.ai.
+
+- Rules & overview: https://pkmn.ai/rules/
+- Account & submission portal: https://pkmn.ai/account/
+- Arena hub (ladders & tournaments): https://pkmn.ai/arena/
+- Responsible release policy: https://pkmn.ai/release/
+- VGC team pool uniqueness rules: https://github.com/pkmn/ai/blob/main/teams/README.md
+
+---
+
+## 1. Registration, Submission & Hard Limits
+
+### Registration
+Projects register via GitHub issue (`https://github.com/pkmn/ai/issues/new?template=register.yml`)
+providing:
+- **Project name:** max 18 chars, Showdown username conventions, prefer `^[A-Za-z ]+$`, distinct
+  from other projects, must not include `poke`, `mon`, `pkmn`, `AI`, `bot`, `agent`, `showdown`,
+  `smogon`, bare English Pokémon species names, or known players' names.
+- **Team members:** GitHub + Smogon usernames (at most one project per person; all members must
+  remain Smogon account holders in good standing).
+- **Qualifying criteria** (e.g. Pokémon Showdown / vgc.bot / pkmn.bot rankings), project details,
+  optional PNG logo, and agreement to Responsible Releases and arena / anti-cheating evaluation.
+
+### Submitting via `/account`
+Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
+- `version`: unique string within your project, max 12 chars, regex
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`. **Cannot be reused even after a failed smoke test.**
+- `artifact_url`: direct HTTPS URL to a `.tar.gz` / `.tar.xz` / `.tar.zst` bundle, OR an OCI
+  container image reference (`ghcr.io/...`, `docker.io/...`).
+- `sha256`: 64-character hex SHA-256 checksum of the archive or OCI manifest digest.
+- `auth_header` (optional): read-only bearer token / header used once by the arena to pull private
+  artifacts (Cloudflare R2 / S3 / B2 / GCS presigned URL, private GitHub release with single-repo
+  `Contents: Read-only` PAT, private Hugging Face repo `hf_...` token, or private registry
+  `read:packages` token).
+- `ladders` / `tournaments`: non-empty list of competitions to enter.
+
+### Hard Artifact Limits (Enforced by Arena Unpacker)
+- **Size cap:** **≤ 500 MiB compressed AND ≤ 500 MiB unpacked on disk** (sum of regular file sizes).
+- **Native `darwin/arm64` bundles (ladders):** **≤ 25,000 total entries** (files + directories +
+  symlinks) and an executable `./run` at the archive root.
+- **OCI containers (`linux/arm64` on ladders; `linux/amd64` on tournaments):** **≤ 32 OCI layers**
+  and `ENTRYPOINT` / `CMD` runs the agent.
+
+### Cooldowns, Smoke Tests & Concurrency
+- **Smoke test:** A submission succeeds if the arena unpacks it and plays through Turn 1 of a
+  battle in every entered format. If a ladder smoke test fails, the last 4 KiB of `stderr` are
+  surfaced on `/account`.
+- **Ladder concurrency & cooldown:** Up to **2 active versions** concurrently (if 2 are already
+  active, the weaker retires, leaving the strongest + latest). You may submit a new ladder version
+  once **14 days** have elapsed since your last successful ladder submission AND all previous
+  versions have settled (`SE(R) ≤ 30 Elo`, i.e., `σ̂ ≤ 0.173` nats, and ≥ 25 blind-pair matches /
+  50 games).
+- **Tournaments:** Close at `00:00:00 UTC` strictly before start time and accept only the first
+  successful entry per project (resubmissions are allowed after a failed smoke test until cutoff).
+
+---
+
+## 2. Formats, Ladders, Hardware & Matchmaking
+
+### Mechanics & Formats
+All current ladders run Pokémon Showdown rules as of Nov 9th 2026 (`a78551b0` / `@pkmn/sim v0.11.0`):
+- **Fixed ladders** (harvested human teams assigned per match; era-matched `data.pkmn.cc` usage
+  stats at `$PKMN_STATS_DIR/<format>.json`):
+  - RBY: `gen1ou`
+  - ADV: `gen3ou`
+  - SV: `gen9ou`
+- **Seasonal ladders:**
+  - RAND (`gen9randombattle`): Showdown random generator teams; era-matched `data.pkmn.cc` stats
+    under `$PKMN_STATS_DIR` in the same hierarchy as the site.
+  - VGC (`gen9championsvgc2026regmc`): Closed Team Sheets. Competitors must submit **20 distinct
+    teams** to a shared pool (distinct from each other and from public teams). No usage stats are
+    provided. Each match uses at most one team submitted by the two competing projects combined.
+- **Timers & flags:** Pokémon Showdown timer rules without the 60-second disconnect grace.
+  Undoing, forfeiting, and offering ties are disabled. Pondering is **disabled on ladders** and
+  **enabled by default in tournaments** (`ARENA_PONDER=1`).
+- **Privacy:** Logs/teams from harvested-human-team ladders are never published. RAND ladder games
+  and tournament matches are broadcast live; VGC logs/teams are published only after ladder
+  retirement.
+
+### Hardware
+- **Ladders:** Apple M6 Mac mini — **10 cores (8 Performance + 2 Efficiency)**, **14 GiB dedicated
+  RAM** (`ARENA_MEMORY_LIMIT_MB=14336`), **4 GB per-game `$TMPDIR` scratch** wiped between games,
+  **no network**, anonymous opponents. Accepts native `darwin/arm64` bundles (direct Metal/ANE —
+  strongly recommended for neural-network agents) or `linux/arm64` OCI containers (virtual GPU via
+  Vulkan passthrough).
+- **Tournaments:** Hardware is event-specific; accepts **`linux/amd64` OCI containers only**.
+
+### Matchmaking & Ratings
+- Ladder battles are **blind-pair matches**: two sandboxed games with swapped teams (neither agent
+  sees Game 1 during Game 2).
+- Ratings use batch MAP estimation over a 5-category Davidson model (ties modeled explicitly),
+  mapped to Elo with an anchor representing the top of the Showdown human ladder pinned at **1500**.
+- Leaderboards rank by 95% conservative rating (`Elo - 1.96 * SE`) once past the provisional gate
+  (`≥ 10` matches and `SE ≤ 60`).
+
+---
+
+## 3. Subprocess Protocol & Sandbox Invariants
+
+Your submission runs as a local subprocess for **one single game** (or one complete **Best-of-N
+series** in multi-game tournaments, where initialization runs once and scratch state persists across
+games of the series). Communication is strictly newline-delimited Pokémon Showdown protocol over
+`stdin` and `stdout` with **no room-ID prefix lines** (`>battle-...` is never sent).
+
+### 3.1 Startup Handshake (60-Second Budget)
+1. There is **no login protocol**.
+2. Initialize your model, compile Metal/compute shaders, and run 1–2 dummy forward passes covering
+   your real input shapes **before** signaling readiness so cold compilation never burns turn clock.
+3. Write exactly one line to `stdout` and **flush immediately**:
+   - Standard ladders & pre-assigned tournaments: `/ready\n`
+   - Bring-your-own-team (BYOT) tournaments: `/utm <packed_team>\n` with a legal team.
+4. Failing to emit `/ready` (or a legal `/utm`) within **60 seconds** forfeits the game (or match
+   in Best-of-N tournaments).
+
+### 3.2 Arena-Assigned Team Line (`|utm|`)
+Immediately after `/ready` is received, in every non-Random Battle format with arena-assigned teams,
+the very first line sent on `stdin` is:
+```text
+|utm|<packed_team>
+```
+This provides complete team details (unlike `|request|<JSON>`, which only includes computed stats).
+**CRITICAL PARSING BUG TO AVOID:** Pokémon Showdown's packed team format
+(`https://github.com/smogon/pokemon-showdown/blob/master/sim/TEAMS.md#packed-format`) uses `|` as
+its internal field delimiter. **Never** parse `|utm|` with naive `line.split('|')[2]` — strip the
+5-character prefix (`line[5:]`) instead!
+
+### 3.3 Turn Loop, Active Requests & Clock
+- Read newline-delimited protocol lines from `stdin`.
+- Respond with a single newline-terminated choice string on `stdout` **only** when you receive an
+  **active** `|request|<JSON>` where `request.wait` is falsy (do NOT send a choice when
+  `"wait": true`!).
+- Valid choice examples:
+  - Singles: `move 1\n`, `move 2 terastallize\n`, `switch 3\n`, `team 123456\n`
+  - Doubles / VGC: `move 1 +2, switch 3\n`, `team 1234\n`
+- Immediately after every active `|request|<JSON>`, `stdin` receives an authoritative clock line:
+  ```text
+  |inactive|Time left: 150.0 sec this turn | 150.0 sec total | 0.0 sec grace
+  ```
+- **Output flood cap:** Unrecognized lines on `stdout` are ignored, **but writing > 64 lines per
+  decision or any line > 64 KiB forfeits the game as a crash**. Send all logs/diagnostics to
+  `stderr` (not `stdout`).
+
+### 3.4 Invalid vs. Unavailable Choices & Quarantine
+If you send an invalid or unavailable choice, your remaining turn budget continues with no turn
+increment and `stdin` receives:
+```text
+|error|[Invalid choice] Can't move: ...
+|request|<JSON>
+|inactive|Time left: ...
+```
+- **`[Invalid choice]`:** The same `|request|<JSON>` is resent. **3 consecutive `[Invalid choice]`
+  errors on the same request forfeits the game.** Always build a legal fallback choice generator
+  from `request` if your primary action is rejected.
+- **`[Unavailable choice]`** (e.g. Encore, Disable, Arena Trap, Shadow Tag): The simulator sends an
+  *updated* `|request|<JSON>` reflecting the newly revealed constraint. Does **not** count toward
+  the 3-strike limit — re-parse the updated `|request|` and emit a newly legal choice.
+- **Quarantine:** Losing due to invalid choices, crashes, OOM, or timeouts in **10 consecutive
+  games** (or **> 20% across ≥ 10 games**) quarantines your version across all ladders without
+  resetting the 14-day cooldown.
+
+### 3.5 `SIGSTOP` / `podman pause` Time-Slicing (Ladders)
+On ladders, the coordinator pauses your entire process group (`SIGSTOP` / `podman pause`) within
+microseconds of reading your choice `\n`, and resumes it (`SIGCONT` / `podman unpause`) only when it
+is your turn to act again:
+1. **Finish all work before writing `\n`:** Complete tree pruning, state updates, and GPU waits
+   (`waitUntilCompleted` / `mx.eval` / `torch.mps.synchronize`) *before* emitting the newline.
+2. **Always flush `stdout` immediately:** Pipes are block-buffered by default in C/C++/Python/Rust.
+   Use `python -u` + `sys.stdout.flush()`, `fflush(stdout)`, or `stdout.flush()` after every choice
+   and `/ready`.
+3. **Never measure turn time across turns with wall-clock deltas:** Wall-clock time jumps while your
+   process is frozen during your opponent's turn. Start your per-turn timer when you read
+   `|inactive|Time left: ...` on `stdin`.
+
+### 3.6 Filesystem, Process Limits, Environment Variables & Sandbox Rules
+- **Read-only rootfs:** Your bundle/container root is mounted read-only. Never write into your
+  bundle directory or hardcode `/tmp` (native bundles cannot write to `/tmp`).
+- **Writable scratch:** `$TMPDIR`, `$HOME`, and (on ladders) `$XDG_CACHE_HOME` all point to the
+  per-game scratch directory (4 GB on ladders, wiped between games). Leave them intact so Metal and
+  CoreML caches work.
+- **Process/thread limit:** `RLIMIT_NPROC=256` on native bundles; `--pids-limit=256` (including
+  threads) in containers.
+- **Ladder env vars:** `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
+  `RAYON_NUM_THREADS=10`, `ARENA_MEMORY_LIMIT_MB=14336`, `PKMN_STATS_DIR`. Never hardcode > 10
+  compute threads (and see Section 6 on why 4–8 P-core threads often beat 10!).
+- **Zero-RSS `mmap` on macOS:** Clean read-only memory-mapped files (`mmap` with `PROT_READ` and
+  `MAP_PRIVATE` / `MAP_SHARED`, e.g. `.safetensors`, `.gguf`, raw weight packs) in native bundles
+  are file-backed and count as **0 bytes** toward the 14 GiB RAM limit.
+- **Seatbelt CoreML rule:** Runtime CoreML model compilation (`[MLModel compileModelAtURL:]`,
+  including ONNX Runtime `CoreMLExecutionProvider` and ExecuTorch `CoreMLBackend`) **FAILS** inside
+  the ladder Seatbelt sandbox with `CoreML Code=3`. Always pre-compile `.mlpackage` → `.mlmodelc`
+  offline during build!
+
+---
+
+## 4. Building Native `darwin/arm64` Bundles Without a Mac (GitHub Actions `macos-26`)
+
+For neural-network ladder agents, strongly prefer a **native `darwin/arm64` bundle** over a
+`linux/arm64` container for direct Metal/ANE access and zero-copy `mmap` weights.
+
+You do **not** need a local Mac. GitHub Actions provides free Apple Silicon runners (`macos-26`,
+`arm64`) for public repos (and standard minutes for private repos):
+- **Convert & quantize CUDA checkpoints on CPU** (`torch.load(..., map_location='cpu')`) into
+  `float16`/`bfloat16`/`int8` `.safetensors`, `.gguf`, `.onnx`, or `.mlpackage`. No build-time GPU
+  is needed.
+- **Pre-compile CoreML models on `macos-26`** using `xcrun coremlcompiler compile Model.mlpackage
+  ./weights/` (or `coremltools.models.utils.compile_model`). Delete the `.mlpackage` source from
+  `dist/` afterward.
+- **Virtualized CI caveat:** Free `macos-26` runners do **not** expose bare-metal GPU or ANE.
+  Smoke-test on CPU in CI, and auto-select Metal/ANE at runtime on the arena's M6 (falling back to
+  CPU if no Metal device is returned).
+- **Mandatory arm64 code signing:** After running `strip -x` on any `.dylib`, `.so`, or Mach-O
+  executable on macOS `arm64`, you **MUST** re-sign it with `codesign --force --sign -`. macOS
+  `arm64` kills unsigned or invalidated Mach-O binaries immediately with `SIGKILL (Code Signature
+  Invalid)`.
+
+### Reference GitHub Actions Workflow (`.github/workflows/build-arena-bundle.yml`)
+```yaml
+name: Build pkmn.ai darwin/arm64 Bundle
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          brew install zstd
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Stage relocatable runtime & weights
+        run: |
+          rm -rf dist && mkdir -p dist/src dist/weights
+          # Install standalone Python 3.12 (omit for Rust/C++ native agents)
+          uv python install 3.12
+          PY_BASE="$(dirname "$(dirname "$(uv python find 3.12)")")"
+          cp -R "$PY_BASE" dist/python
+          # Install directly into dist/python site-packages (100% relocatable, no pyvenv.cfg paths)
+          uv pip install --no-cache --python dist/python/bin/python3.12 \
+            --target dist/python/lib/python3.12/site-packages onnxruntime numpy
+
+          # Export / convert weights on CPU (example: CoreML pre-compilation if used)
+          # xcrun coremlcompiler compile build/model.mlpackage dist/weights/
+          cp src/*.py dist/src/
+          cp weights/*.onnx dist/weights/
+
+          cat << 'EOF' > dist/run
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          export PYTHONNOUSERSITE=1
+          export PYTHONDONTWRITEBYTECODE=1
+          exec "${DIR}/python/bin/python3.12" -u "${DIR}/src/main.py" --weights "${DIR}/weights"
+          EOF
+          chmod +x dist/run
+
+      - name: Prune, zip stdlib, strip & ad-hoc codesign
+        run: |
+          # Remove standalone Python bloat (bin/python3.12 is static; libpython*.dylib is unused)
+          rm -rf dist/python/include dist/python/share dist/python/lib/pkgconfig \
+                 dist/python/lib/libpython3.* dist/python/lib/libtcl* dist/python/lib/libtk* \
+                 dist/python/lib/tcl* dist/python/lib/tk* \
+                 dist/python/lib/python3.12/{test,tkinter,idlelib,ensurepip,pydoc_data,config-*}
+          # Prune onnxruntime duplicate unlinked dylib + export tools (83 MiB -> 26.3 MiB)
+          SITE=dist/python/lib/python3.12/site-packages
+          rm -rf "$SITE"/onnxruntime/capi/libonnxruntime.*.dylib \
+                 "$SITE"/onnxruntime/{transformers,quantization,tools}
+          find dist -type d -name '__pycache__' -exec rm -rf {} +
+          find dist -type f \( -name '*.pyc' -o -name '*.pyi' -o -name '*.a' \) -delete
+
+          # Zip pure-Python stdlib into python312.zip (~27 MiB / ~1,500 files -> ~2.2 MiB / 1 file)
+          python3 - << 'PY'
+          import os, zipfile
+          stdlib = 'dist/python/lib/python3.12'
+          zpath = 'dist/python/lib/python312.zip'
+          keep_dirs = {'lib-dynload', 'site-packages'}
+          with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+              for root, dirs, files in os.walk(stdlib):
+                  rel_root = os.path.relpath(root, stdlib)
+                  if rel_root == '.':
+                      dirs[:] = [d for d in dirs if d not in keep_dirs]
+                  for f in files:
+                      if f.endswith('.py'):
+                          full = os.path.join(root, f)
+                          zf.write(full, os.path.relpath(full, stdlib))
+                          os.remove(full)
+          for root, dirs, files in os.walk(stdlib, topdown=False):
+              if os.path.relpath(root, stdlib) not in ('.', 'lib-dynload', 'site-packages'):
+                  if not os.listdir(root):
+                      os.rmdir(root)
+          PY
+
+          # Strip Mach-O symbols AND re-sign (codesign is mandatory on macOS arm64!)
+          find dist -type f \( -name '*.dylib' -o -name '*.so' -o -path 'dist/python/bin/python3.12' \) \
+            -exec sh -c 'strip -x "$1" 2>/dev/null || true; codesign --force --sign - "$1" 2>/dev/null || true' _ {} \;
+
+      - name: Verify hard limits & offline read-only smoke test
+        run: |
+          python3 - << 'PY'
+          import os, sys
+          total, entries = 0, 0
+          for dp, dn, fn in os.walk('dist', followlinks=False):
+              entries += len(dn)
+              for f in fn:
+                  entries += 1
+                  p = os.path.join(dp, f)
+                  if not os.path.islink(p):
+                      total += os.path.getsize(p)
+          mib = total / 1048576
+          print(f'Unpacked: {mib:.2f} MiB, entries: {entries:,}')
+          assert total <= 500 * 1048576, f'Exceeds 500 MiB unpacked: {mib:.2f} MiB'
+          assert entries <= 25000, f'Exceeds 25,000 entries: {entries}'
+          PY
+
+          # Test read-only root + isolated scratch dir (mirrors arena sandbox)
+          chmod -R a-w dist
+          SCRATCH="$(mktemp -d)"
+          HOME="$SCRATCH" TMPDIR="$SCRATCH" XDG_CACHE_HOME="$SCRATCH" \
+            ./dist/run < tests/smoke_turn1.txt | tee "$SCRATCH/out.txt"
+          head -n 1 "$SCRATCH/out.txt" | grep -qx '/ready'
+          chmod -R u+w dist
+
+      - name: Pack .tar.zst and print SHA-256
+        run: |
+          COPYFILE_DISABLE=1 tar --no-xattrs -C dist -cf - . | zstd -19 -T0 -o agent-bundle.tar.zst
+          SIZE=$(stat -f%z agent-bundle.tar.zst)
+          test "$SIZE" -le $((500 * 1048576))
+          shasum -a 256 agent-bundle.tar.zst
+```
+*(Always pass `COPYFILE_DISABLE=1 tar --no-xattrs` on macOS so AppleDouble `._*` resource fork
+files don't pollute your archive and waste entry count.)*
+
+---
+
+## 5. Bit-Golfing Neural Network Bundles Under 500 MiB (Ladder Guide)
+
+### 5.1 Why Stock PyTorch Bundles Blow Past 500 MiB Immediately
+A fresh `python-build-standalone 3.12` + `pip install torch==2.11.0 numpy` on `darwin/arm64`
+unpacks to **574.45 MiB and 25,647 entries** *before adding any agent code or weights* — violating
+both the 500 MiB and 25,000-entry caps out of the box:
+- **Unstripped PyTorch 2.11+ macOS wheels (~74 MiB dead symbols):** `libtorch_cpu.dylib` ships at
+  `206.5 MiB` (`68.8 MiB` `__LINKEDIT` symbols) and `libtorch_python.dylib` at `28.5 MiB`. Running
+  `strip -x` + `codesign --force --sign -` reclaims **74.0 MiB** immediately.
+- **Duplicate `libpython` in `python-build-standalone` (17.2 MiB):** `bin/python3.12` is statically
+  linked; `lib/libpython3.12.dylib` has zero consumers (`otool -L` confirms it). Tcl/Tk adds `3.7 MiB`.
+- **Unused PyTorch compiler/training baggage (~60 MiB):** `sympy` (`15.8 MiB`), `networkx`
+  (`4.0 MiB`), `mpmath` (`1.8 MiB`), `torchgen` (`2.0 MiB`), two copies of `torch/bin/protoc*`
+  (`7.9 MiB`), `torch/_inductor` (`8.9 MiB`), `torch/_dynamo` (`4.2 MiB`), `torch/testing/_internal`
+  (`5.0 MiB`), `torch/onnx`, `torch/distributed/tensor`, `*.pyi`, `*.dist-info`.
+- **`mlx` unpacked size surprise (233 MiB):** `mlx-metal==0.32.4` downloads as a `42.9 MiB` wheel
+  but unpacks to **`233.0 MiB`** on disk because `mlx/lib/mlx.metallib` alone is **`204.2 MiB`**
+  uncompressed — larger than a stripped PyTorch install (`184.5 MiB`).
+- **Training-only checkpoint tensors:** Optimizer state, EMA/target copies, RL critic/value heads
+  unused during action selection, and unfolded `BatchNorm` / `weight_norm` / `SigmaReparam` layers.
+
+### 5.2 Inference Runtime Footprint & Seatbelt Compatibility (`darwin/arm64`)
+All sizes are exact regular-file unpacked bytes verified inside `arena/config/sandbox.sb`:
+
+| Runtime | Runtime Only | + Stripped Python 3.12 (`python312.zip`) + NumPy | Seatbelt Status |
+|---|---:|---:|---|
+| PyTorch 2.11 (unstripped fresh) | 368.8 MiB | 574.5 MiB (25,647 entries) | Over cap before weights |
+| PyTorch 2.11 (`strip -x` + pruned) | 184.5 MiB | 254.2 MiB (3,194 entries) | **PASS** (CPU & MPS) |
+| MLX 0.32.4 (`mlx` + `mlx-metal`) | 222.5 MiB | 301.0 MiB (2,542 entries) | **PASS** (Metal GPU; `mlx.metallib` = `204.2 MiB`) |
+| **ONNX Runtime 1.32.0 (pruned)** | **26.3 MiB** | **~65–102 MiB** | **CPU EP PASS**; CoreML EP **FAILS** |
+| **ExecuTorch 1.6.0 (torch-free `_C`)** | **16.0 MiB** | **~55–90 MiB** | **XNNPACK PASS**; CoreML **FAILS**; MLX partial |
+| **Pre-compiled CoreML (`.mlmodelc` + ObjC++/Swift)** | **0.05 MiB** | N/A (0 MiB if native) | **PASS** (GPU/ANE/CPU) |
+| **C++/Rust + Apple `Accelerate.framework`** | **0.08 MiB** | **18.0 MiB** *(no NumPy)* / **34.9 MiB** *(w/ NumPy)* | **PASS** (AMX + NEON + 0-RSS `mmap`) |
+| **Custom Zero-Copy `Metal.framework` (ObjC++ + MSL)** | **0.11 MiB** | **18.0 MiB** *(no NumPy)* / **34.9 MiB** *(w/ NumPy)* | **PASS** (Metal GPU + 0-RSS `mmap`, no `mlx.metallib`) |
+
+### 5.3 Non-Quantized (`fp32` Full Weights) Benchmarks on Apple Silicon
+Leaving PyTorch carries **zero speed penalty** even with **100% full `float32` weights** (measured
+on Apple M3 4P+4E; relative speedups transfer directly to the ladder's M6 8P+2E):
+
+**Workload A — Search-Agent MLP/ResNet (9.0M params, `34.3 MiB` `fp32`):**
+- PyTorch 2.8 CPU-4T: `0.666 ms` (`batch=1`), `1.363 ms` (`batch=16`)
+- PyTorch 2.8 MPS: `1.099 ms` (**1.65× slower** at `batch=1`), `1.144 ms` (`batch=16`)
+- **ONNX Runtime CPU-4T:** **`0.513 ms`** (`1.3×` faster), **`0.938 ms`** (`1.45×` faster)
+- **ExecuTorch 1.6 XNNPACK (torch-free):** **`0.524 ms`** (`0.2 ms` model load)
+- MLX 0.32 GPU (`fp32`): `0.790 ms` (`batch=1`), `0.919 ms` (`batch=16`)
+
+**Workload B — Large RL Transformer (Metamon `Alakazam`, 61.5M active params, `234.66 MiB` `fp32`, 30-turn KV-cached trajectory):**
+- PyTorch 2.8 MPS (folded): `22.42 ms/turn` (`30/30` argmax)
+- ExecuTorch 1.6 XNNPACK (torch-free): `21.47 ms/turn` (`30/30`)
+- PyTorch 2.8 CPU-4T (unfolded `SigmaReparam`): `19.30 ms/turn` (`30/30`)
+- PyTorch 2.8 CPU-4T (folded `SigmaReparam`): `8.20 ms/turn` (`30/30`)
+- **ONNX Runtime 1.32 CPU-4T (`fp32`):** **`7.52 ms/turn`** (`26.3 MiB` runtime, `30/30`)
+- MLX 0.32 GPU (`fp32`): `5.38 ms/turn` (`222.5 MiB` runtime, `30/30`)
+- **C++ Accelerate/NEON (`fp32`, `mmap`):** **`5.25 ms/turn`** (`0.08 MiB` runtime, `30/30`)
+- **Custom Zero-Copy `Metal.framework` (`fp32`, `mmap`):** **`4.65 ms/turn`** (`0.11 MiB` runtime, `30/30`)
+
+### 5.4 Quantized (`fp16` / `int8` / `int4`) Speed & Fidelity Benchmarks
+Quantization cuts disk footprint and memory-bandwidth traffic by 2×–4×. Always verify **KL
+divergence and argmax agreement** across 20–30 realistic multi-turn states — RL policies with sharp
+action logits are much more sensitive to 4-bit PTQ than LLMs:
+
+- **9M MLP (`batch=1` / `batch=16`):**
+  - **ONNX Runtime CPU-4T (`int8` per-channel, `~9 MiB`):** **`0.098 ms`** (`6.8×` faster vs PyTorch) / **`0.482 ms`**
+  - **Pre-compiled CoreML `.mlmodelc` (`fp16`, `17.2 MiB`):** **`0.362 ms`** (`1.8×` faster) / **`0.743 ms`**
+- **61.5M RL Transformer (Metamon `Alakazam`, 30 turns):**
+  - ONNX Runtime CPU-4T (`fp16` weights + Cast, `117.8 MiB`): `7.49 ms/turn`, `KL = 0.000003`, **`30/30` argmax**
+  - ONNX Runtime CPU-4T (`int8` dynamic, `59.8 MiB`): `4.10 ms/turn`, `KL = 0.050`, `22/30` argmax
+  - **MLX GPU (`fp16`, `117.3 MiB`):** **`3.58 ms/turn`**, `KL = 0.000024`, **`30/30` argmax**
+  - **MLX GPU (`int8` g64, `66.0 MiB`):** **`2.88 ms/turn`**, `KL = 0.000388`, **`30/30` argmax**
+  - **C++ Accelerate/NEON (`fp16`, `117.4 MiB`, `67 KiB` dylib):** **`3.73 ms/turn`**, `KL = 0.000003`, **`30/30` argmax**
+  - **C++ Accelerate/NEON (`int8` per-row, `61.5 MiB`, `67 KiB` dylib):** **`2.74 ms/turn`**, `KL = 0.001108`, **`29/30` argmax**
+  - Naive `int4` g64 PTQ (`38.6 MiB`): `KL = 0.096–0.151`, `22–23/30` argmax (noticeable policy drift).
+
+**Quantization takeaway:** `fp16` is virtually lossless (`KL ≤ 2.4e-5`) and halves weight size;
+**per-row / group-64 `int8`** is the sweet spot (4× smaller than `fp32`, fastest at `2.74–2.88 ms`,
+`KL ≤ 0.0011`).
+
+### 5.5 Reference Bit-Golf Results (Metamon `Alakazam`, 61.5M Active Params)
+End-to-end runnable bundles (including full Python battle parser + weights + inference engine),
+verified under `arena/unpack.ts` and `sandbox.sb`:
+- **Zero-quantization full `fp32` (`234.66 MiB` folded inference-only weights, down from `290.06 MiB`
+  upstream):**
+  - Stock PyTorch 2.8 + `fp32`: ~600+ MiB (exceeds cap)
+  - Pruned PyTorch 2.8 + folded `fp32`: ~452 MiB (`8.20 ms/turn`)
+  - ONNX Runtime 1.32 + `fp32`: ~301 MiB (`7.52 ms/turn`)
+  - **Custom Zero-Copy `Metal.framework` (`114 KiB` dylib, `python312.zip`, `3 KiB` NumPy shim):**
+    **`254.60 MiB` unpacked** (`19.94 MiB` total non-weight overhead, `147.19 MiB` `.tar.zst`,
+    **`156` entries**, **`4.65 ms/turn`**, `30/30` argmax).
+  - **C++ `Accelerate`/NEON (`83 KiB` dylib):** **`254.57 MiB` unpacked** (`5.25 ms/turn`, `156` entries).
+- **Quantized:**
+  - Pruned PyTorch `fp16`: `334.37 MiB` (`8.20 ms/turn`)
+  - ONNX Runtime lossless `fp16` weights: **`185.83 MiB`** (`7.49 ms/turn`, `30/30`)
+  - C++ `Accelerate`/NEON `fp16`: **`157.16 MiB`** (`3.73 ms/turn`, `30/30`; ~`137 MiB` without NumPy)
+  - C++ `Accelerate`/NEON per-row `int8`: **`101.35 MiB`** (`2.74 ms/turn`, `29/30`; ~`81 MiB` without NumPy)
+
+### 5.6 Runtime Decision Tree
+1. **Lowest effort & cross-platform (ladders + Linux tournaments):** Export to **ONNX Runtime**
+   (`CPUExecutionProvider`, `26.3 MiB` stripped). Use full `fp32`, lossless `fp16` initializers +
+   Cast, or verified per-channel `int8`.
+2. **Maximum full-`fp32` speed + minimum size on Apple Silicon (e.g. 50M–110M params under 500 MiB
+   with zero quantization):** Write a tiny **custom zero-copy `Metal.framework` engine** (`~100 KiB`
+   ObjC++ `.dylib` + embedded MSL, `newBufferWithBytesNoCopy:` over `mmap`'d weights) or **C++
+   `Accelerate`/NEON** (`~80 KiB`). Avoids the `204 MiB` `mlx.metallib` tax at 0-byte RSS.
+3. **Rust or C++ agent (search + NN):** Drop Python completely. Use **pre-compiled CoreML
+   `.mlmodelc`** via `CoreML.framework` (`0 MiB` runtime), **`ort` / `libonnxruntime.dylib`**
+   (`21.5 MiB`, cross-platform), or direct **`Accelerate` / `Metal.framework`** (`< 0.1 MiB`).
+4. **Large model needing fast GPU inference with `< 200 MiB` weights and minimal custom kernel
+   code:** **MLX** (`222.5 MiB` unpacked) with `fp16` or `mx.quantize(..., bits=8, group_size=64)`.
+5. **Must keep PyTorch:** Apply the full strip + prune recipe below (`574 MiB → ~254 MiB` for
+   Python 3.12 + PyTorch 2.11 + NumPy).
+
+### 5.7 Step-by-Step Bit-Golfing Playbook
+1. **Audit unpacked bytes & entry count first:**
+   ```bash
+   python3 -c '
+   import os, sys
+   root = sys.argv[1]
+   files, dirs = [], 0
+   for dp, dn, fn in os.walk(root, followlinks=False):
+       dirs += len(dn)
+       for f in fn:
+           p = os.path.join(dp, f)
+           if not os.path.islink(p): files.append((os.path.getsize(p), os.path.relpath(p, root)))
+   print(f"Total: {sum(b for b,_ in files)/1048576:.2f} MiB, entries: {len(files)+dirs:,}")
+   for b, p in sorted(files, reverse=True)[:25]:
+       print(f"  {b/1048576:7.2f} MiB  {p}")
+   ' ./dist
+   ```
+2. **Audit shared-library linkage (`otool -L` on macOS, `ldd` on Linux):** Delete unreferenced
+   duplicate dylibs (especially `lib/libpython3.*.dylib` and
+   `onnxruntime/capi/libonnxruntime.*.dylib`).
+3. **Audit every checkpoint tensor:** Drop optimizer state, EMA/target nets, RL critic/value heads,
+   and unused output heads. Fold `BatchNorm`, `weight_norm`, and `SigmaReparam` into plain weights
+   once at export time (folding `SigmaReparam` alone gave a 2.4× speedup on Metamon).
+4. **Strip & re-sign Mach-O binaries on macOS arm64:**
+   ```bash
+   find dist -type f \( -name '*.dylib' -o -name '*.so' \) -exec sh -c '
+     strip -x "$1" 2>/dev/null || true
+     codesign --force --sign - "$1" 2>/dev/null || true
+   ' _ {} \;
+   ```
+5. **Shrink standalone Python (`~65 MiB → ~18 MiB`):**
+   - Delete `include/`, `share/`, `lib/pkgconfig/`, `lib/libpython3.*` (when `bin/python3.*` is
+     static), `lib/libtcl*`, `lib/libtk*`, `tcl*`, `tk*`, `test/`, `tkinter/`, `idlelib/`,
+     `ensurepip/`, `pydoc_data/`, `config-*`, `__pycache__/`, `*.pyc`, `*.pyi`, `*.a`, and unneeded
+     `*.dist-info` (keep `METADATA` only for packages calling `importlib.metadata.version()`).
+   - Zip pure-Python stdlib `.py` files into `python/lib/python3XX.zip` (~1,500 fewer entries, ~25
+     MiB saved, natively searched on CPython `sys.path` with zero startup extraction).
+   - If `numpy` (`16.9 MiB` stripped, mostly `13.2 MiB` OpenBLAS) is only used for basic array
+     indexing/creation in preprocessing, consider a tiny pure-Python shim to save `16.9 MiB`.
+6. **Shrink `onnxruntime` (`83 MiB → 26.3 MiB`):** In Python-only bundles, `onnxruntime_pybind11_state.so`
+   is statically linked and does not use `libonnxruntime.*.dylib` (`21.5 MiB`). Delete
+   `onnxruntime/capi/libonnxruntime.*.dylib`, `onnxruntime/transformers/`,
+   `onnxruntime/quantization/`, and `onnxruntime/tools/`. (Conversely, C++/Rust `ort` ships *only*
+   `libonnxruntime.dylib` at `21.5 MiB`.)
+7. **Shrink `torch` (`369 MiB → 184 MiB` on PyTorch 2.11):** Strip + re-sign `torch/lib/*.dylib`;
+   delete `torch/bin/protoc*` (**KEEP `torch/bin/torch_shm_manager`!**), `torch/include`,
+   `torch/share`, `torch/test`, `torch/_inductor`, `torch/_dynamo`, `torch/onnx`,
+   `torch/distributed/tensor`, `torch/profiler`, `torch/testing/_internal/*` (**KEEP
+   `logging_tensor.py`**, `torch/_functorch`, `torch/_torch_docs.py`, `torch/package`, and
+   `unittest.mock` so `import torch` succeeds); delete unused transitive deps `sympy`, `mpmath`,
+   `networkx`, `jinja2`, `markupsafe`, `fsspec`, `filelock`. Set `TORCH_COMPILE_DISABLE=1`.
+8. **Shrink static data:** Minify JSON (`separators=(',', ':')`), drop unused generations/formats
+   and unqueried lookup tables (e.g. `learnset.json` if unused at battle time), and replace
+   duplicate files across packages with **relative symlinks** (allowed by the arena unpacker).
+
+---
+
+## 6. Optimizing Inference for Apple Silicon & Metal
+
+1. **Know when CPU/AMX beats Metal GPU (never assume GPU is faster):**
+   - Apple `Accelerate` (`cblas_sgemm` / `cblas_sgemv`) runs on the **AMX matrix coprocessor** with
+     sub-microsecond launch latency.
+   - For **`batch=1` inference on small-to-medium models (< 50M params)**, eager **PyTorch `mps` is
+     typically 1.6×–3× SLOWER than CPU** due to Metal command-buffer dispatch/sync overhead (plus
+     cold shader JIT). Avoid `float64` (unsupported on Metal).
+   - **Use Metal / GPU when:** you batch search leaf evaluations (`batch ≥ 16–64`), OR you run a
+     memory-bandwidth-bound large model (`≥ 50M` params, especially full `fp32`) through a
+     **single-command-buffer custom `Metal.framework` shader**, **MLX**, or **pre-compiled CoreML
+     `.mlmodelc`**.
+   - **Prefer CPU/AMX/NEON when:** you evaluate `batch=1` sequentially (standard MCTS without
+     virtual-loss batching, minimax, or small policy MLPs) — ONNX Runtime CPU, pre-compiled CoreML,
+     or C++/Accelerate beats PyTorch MPS by 2×–8×.
+2. **Writing fast zero-copy `Metal.framework` compute kernels:**
+   - **Zero-copy weights:** Page-align your `mmap(PROT_READ, MAP_PRIVATE)` weight file and wrap it
+     directly with `[device newBufferWithBytesNoCopy:mem length:aligned
+     options:MTLResourceStorageModeShared deallocator:nil]` — zero copy, 0-byte RSS.
+   - **One command buffer per turn:** Encode every layer (LayerNorm, GEMV, attention, activations,
+     residual adds) into a single `MTLCommandBuffer` + `MTLComputeCommandEncoder` and call
+     `[cb waitUntilCompleted]` **once** at the end. Never synchronize per layer.
+   - **Fuse elementwise ops:** Fuse bias, activations (`ReLU`/`LeakyReLU`/`SiLU`), and residual adds
+     directly into GEMV/LayerNorm kernels to cut intermediate buffer traffic.
+   - **Coalesced `float4` + `simd_sum`:** Have each 32-thread simdgroup compute 2–4 output rows
+     simultaneously using `float4` vector loads and hardware `simd_sum()`, caching `X` in
+     `threadgroup` memory when reused across rows.
+3. **Warm up shaders/ANE before `/ready`:** Compile your MSL library (`newLibraryWithSource:`) and
+   run 1–2 dummy forward passes with real shapes during the 60-second `/ready` startup window so
+   Turn 1 never pays compilation latency.
+4. **Tune thread counts for P-cores vs E-cores (8P + 2E on M6):**
+   - The arena sets `OMP_NUM_THREADS=10` / `TORCH_NUM_THREADS=10` / `RAYON_NUM_THREADS=10`.
+   - For small `batch=1/16` matmuls, spilling onto the 2 Efficiency cores causes **2×–4× slowdowns**
+     from barrier stalls (ONNX Runtime was 4× slower at 10T vs 4T on M3). Always benchmark
+     `1, 2, 4, 6, 8` threads (`ort.SessionOptions().intra_op_num_threads`, `torch.set_num_threads`,
+     or GCD `dispatch_apply`).
+   - If your search runs `N` parallel search threads, pin neural-net intra-op threads to `1` (or
+     batch evaluations across threads into one GPU/AMX call) so threads do not thrash barriers.
+5. **Prefer `mmap` over `torch.load`:** `torch.load` decompresses zip entries into anonymous heap
+   RAM and double-allocates; `mmap` (`PROT_READ`, `MAP_PRIVATE`) of `.safetensors`/`.gguf`/raw
+   weights counts as **0 bytes** toward the 14 GiB macOS RAM cap and loads in milliseconds.
+6. **Never invoke runtime CoreML compilation in the sandbox:** Pre-compile `.mlpackage` →
+   `.mlmodelc` offline; never enable ONNX Runtime `CoreMLExecutionProvider` or ExecuTorch
+   `CoreMLBackend` inside the ladder sandbox.
+
+---
+
+## 7. Tournament Packaging (`linux/amd64` OCI + CUDA)
+
+Tournaments accept **`linux/amd64` OCI containers only** and enforce the same **≤ 500 MiB compressed
+& unpacked** and **≤ 32 layers** caps:
+- **Multi-stage slim builds:** Compile in a builder stage (`FROM --platform=linux/amd64 ... AS
+  builder`) and copy only runtime binaries, shared libraries, and weights into a minimal base
+  (`debian:bookworm-slim` or `gcr.io/distroless/cc-debian12`). Strip Linux binaries with
+  `strip --strip-unneeded`, pass `--no-cache-dir` to `pip`/`uv`, and remove `/var/lib/apt/lists/*`,
+  headers, static `.a` libs, and test suites.
+- **CUDA images under 500 MiB:** On GPU tournaments, host driver libraries (`libcuda.so.1`,
+  `libnvidia-ml.so.1`, `libnvidia-ptxjitcompiler.so.1`) are bind-mounted from the host. Stock
+  `torch+cu12` wheels unpack to 2–4+ GiB and will exceed the 500 MiB cap! Instead:
+  - Use a lightweight runtime (native CUDA/cuBLAS/TensorRT engine, `llama.cpp`/GGML, or pruned
+    `onnxruntime-gpu` shipping only the exact `libcudart`/`libcublasLt` shared libraries your ops
+    link against — never the full CUDA toolkit or `nvcc`), OR
+  - Use CPU `onnxruntime` / native C++/Rust if CPU latency already fits the tournament clock.
+- **Tournament runtime differences:** Pondering is enabled by default (`ARENA_PONDER=1`), multi-game
+  Best-of-N series reuse one subprocess & scratch directory across games (reset per-game battle
+  state cleanly between games!), and BYOT tournaments require `/utm <packed_team>` instead of
+  `/ready`.
+
+---
+
+## 8. Pre-Submission Verification Checklist
+
+Before submitting on `https://pkmn.ai/account/`, verify all five gates:
+1. **Artifact caps:** Unpacked regular bytes **≤ 500 MiB**, compressed archive/image **≤ 500 MiB**,
+   entries **≤ 25,000** (native) or layers **≤ 32** (OCI).
+2. **Offline + read-only root execution:** `chmod -R a-w dist/` and run with `HOME`, `TMPDIR`, and
+   `XDG_CACHE_HOME` pointed at an empty temp directory and no network access.
+3. **Protocol & recovery:** Emits `/ready` (or `/utm <packed_team>` in BYOT) well within 60s, parses
+   `|utm|` without splitting on `|`, ignores `request.wait`, flushes `stdout` after every choice,
+   recovers from `[Invalid choice]` and `[Unavailable choice]` without hitting 3 consecutive invalid
+   errors, and emits zero extraneous `stdout` lines.
+4. **Numerical fidelity:** Compare logits/probabilities against your original `fp32` checkpoint over
+   ≥ 20–30 multi-turn battle states (non-quantized `fp32`: max diff `< 1e-4`, `100%` argmax match;
+   quantized: `mean KL < 0.005`, `≥ 95%` argmax match).
+5. **Latency & warmup:** Confirm shader/ANE warmup completes before `/ready` and Turn 1–30 median
+   latency fits comfortably within the Showdown turn clock at your chosen thread count.

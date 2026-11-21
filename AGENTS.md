@@ -130,3 +130,5 @@ Repo-specific style, naming, and architecture rules alongside `@pkmn/eslint-conf
   screenshots and include the full disk path to `.shots/index.html` (important in worktrees).
 - **Keep `tools/shots.tsx` in sync:** Update `buildScenarios` in `tools/shots.tsx` and
   `docs/TESTING.md` whenever changing routes, views, controls, lifecycle states, or edge cases.
+- **Keep `static/llms.txt` in sync:** Update `static/llms.txt` whenever changing `static/rules.dj`
+  (or arena protocol, limits, formats, hardware, or packaging rules).

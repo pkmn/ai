@@ -298,7 +298,7 @@ const build = async (rebuild?: boolean) => {
   let expected = new Set([
     'projects', 'research', 'concepts', 'glossary', 'rules', 'release', 'chat', 'arena',
     'account', 'wiki', 'background', 'index.html', 'favicon.svg',
-    'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib',
+    'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib', 'llms.txt',
   ]);
   if (!rebuild) {
     const icons = await favicons(path.join(STATIC, 'favicon.svg'), {path: PUBLIC});
@@ -356,7 +356,9 @@ const build = async (rebuild?: boolean) => {
       fs.write(tourStub, '');
     }
 
-    const files = ['favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib'];
+    const files = [
+      'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'projects.bib', 'research.bib', 'llms.txt',
+    ];
     for (const file of files) {
       fs.copy(path.join(STATIC, file), path.join(PUBLIC, file));
     }
@@ -402,6 +404,10 @@ const build = async (rebuild?: boolean) => {
     for (const [page, title] of Object.entries(pages)) {
       const file = path.join(STATIC, `${page}.dj`);
       const citation = page === 'background' ? cite(title, fs.stat(file).mtime) : '';
+      const rendered = site.html.render(fs.read(file));
+      const body = page === 'rules'
+        ? rendered.replaceAll('href="/llms.txt/"', 'href="/llms.txt"')
+        : rendered;
       renderer.create(page, {
         path: `/${page}/`,
         style: page === 'release' ? `
@@ -410,7 +416,7 @@ const build = async (rebuild?: boolean) => {
       ` : page === 'background' ? style : '',
         title: `${title} | pkmn.ai`,
         header: header(title, page === 'background'),
-        content: <>{raw(site.html.render(fs.read(file)))}{raw(citation)}</>,
+        content: <>{raw(body)}{raw(citation)}</>,
       });
     }
 

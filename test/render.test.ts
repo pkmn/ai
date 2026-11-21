@@ -157,7 +157,7 @@ function playMatch(
 function seedStaticPublicAssets(tmpPublic: string) {
   fs.mkdirSync(tmpPublic, {recursive: true});
   const realPublic = root('public');
-  for (const name of ['index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg']) {
+  for (const name of ['index.html', 'favicon.svg', 'cc.svg', 'by.svg', 'sa.svg', 'llms.txt']) {
     const src = path.join(realPublic, name);
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmpPublic, name));
   }
@@ -821,6 +821,15 @@ describe('populated Arena leaderboard views', () => {
     const hlOut = execFileSync(HYPERLINK_BIN, [tmpPublic, '--check-anchors'], {encoding: 'utf8'});
     expect(hlOut).toContain('Found 0 bad links');
     expect(hlOut).toContain('Found 0 bad anchors');
+  });
+
+  test('emits /llms.txt and links to it without a trailing slash on /rules/', () => {
+    const llmsTxt = fs.readFileSync(path.join(tmpPublic, 'llms.txt'), 'utf8');
+    expect(llmsTxt).toContain('# pkmn.ai');
+
+    const rulesHtml = fs.readFileSync(path.join(tmpPublic, 'rules', 'index.html'), 'utf8');
+    expect(rulesHtml).toContain('href="/llms.txt"');
+    expect(rulesHtml).not.toContain('href="/llms.txt/"');
   });
 });
 

@@ -1,3 +1,7 @@
+_[`/llms.txt`](/llms.txt) exists as a coding-agent-friendly reference to this page and contains
+additional details for optimizing your project for the *pkmn.ai* arena environment. In the event of
+conflicting information, the human-written content below takes precedence._
+
 ### Registration
 
 Competitors interested in participating in *pkmn.ai*'s ladders or tournaments can request
@@ -264,22 +268,29 @@ Superfinal between the top two entrants.
 ::: details
   - for neural-network ladder agents, prefer a *native `darwin/arm64` bundle* over a `linux/arm64`
     container for direct Metal/ANE access and zero-copy `mmap` weights. No Mac is needed --- build
-    binaries, `arm64` `uv` venvs, and CoreML models on GitHub Actions' free
+    binaries, standalone `arm64` Python runtimes, and CoreML models on GitHub Actions' free
     [`macos-26`](https://github.blog/changelog/2026-02-26-macos-26-is-now-generally-available-for-github-hosted-runners/)
     (`arm64`) runner.
-  - convert and quantize CUDA checkpoints on CPU (`map_location='cpu'`, `float16`/`bfloat16`/`int8`
-    `.safetensors`, `.gguf`, ONNX, or `.mlpackage`) --- no build-time GPU is needed, and `xcrun
-    coremlcompiler compile Model.mlpackage ./weights/` runs on `macos-26`. Since free `macos-26`
-    runners lack bare-metal GPU/ANE access, smoke-test on CPU in CI and auto-select Metal/ANE at
-    runtime on the arena's M6.
-  - tune inference for Apple Silicon: small `batch=1` PyTorch `mps` calls are often slower than CPU
-    due to dispatch overhead --- prefer *MLX*, static-shape *CoreML* (`.mlmodelc`), *ONNX Runtime*,
-    or CPU/Accelerate for tiny nets; batch search evaluations, avoid per-step host syncs, and avoid
-    `float64` (unsupported on Metal).
-  - strip debug symbols from compiled binaries and shared libraries (`strip -x` on macOS, `strip
-    --strip-unneeded` on Linux).
+  - drop optimizer state and training-only heads, and convert/quantize CUDA checkpoints on CPU
+    (`map_location='cpu'`, `float16`/`bfloat16`/`int8` `.safetensors`, `.gguf`, ONNX, or
+    `.mlpackage`) --- no build-time GPU is needed. Pre-compile CoreML models on `macos-26` (`xcrun
+    coremlcompiler compile Model.mlpackage ./weights/`); runtime CoreML compilation is not
+    supported in the sandbox. Since free `macos-26` runners lack bare-metal GPU/ANE access,
+    smoke-test on CPU in CI and auto-select Metal/ANE at runtime on the arena's M6.
+  - tune inference for Apple Silicon and stay under 500 MiB: small `batch=1` PyTorch `mps` calls
+    are often slower than CPU due to dispatch overhead --- prefer lightweight inference runtimes
+    (*ONNX Runtime* CPU provider, static-shape pre-compiled *CoreML* `.mlmodelc`, or native
+    C++/Rust with *Accelerate*/*Metal*) over bundling full PyTorch (or *MLX*, whose unpacked
+    `mlx.metallib` exceeds 200 MiB). Batch search evaluations, benchmark Performance-core thread
+    counts (oversubscribing onto Efficiency cores can stall small matmuls), avoid per-step host
+    syncs, and avoid `float64` (unsupported on Metal).
+  - strip debug symbols from compiled binaries and shared libraries (`strip -x` followed by
+    `codesign --force --sign -` on macOS, `strip --strip-unneeded` on Linux).
   - exclude `__pycache__`, `.git`, test suites, `pip`/`uv` caches, C++ header files (`include/`),
-    static archives (`.a`), and intermediate `.mlpackage` / build files.
+    static archives (`.a`), intermediate `.mlpackage` / build files, and runtime bloat (unused
+    `lib/libpython*.dylib`, Tcl/Tk, `onnxruntime`'s duplicate `libonnxruntime.*.dylib`, or
+    PyTorch's `_inductor`/`_dynamo`/`protoc*`/`sympy`/`networkx`; zipping the pure-Python standard
+    library into `python3XX.zip` also cuts ~1,500 entries).
 :::
 
 {summary="*Uploading*"}

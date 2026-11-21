@@ -2496,6 +2496,21 @@ describe('createServerApp production HTTP hardening', () => {
     }
   });
 
+  test('serves /llms.txt as plain text from publicDir', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'llms.txt'), '# pkmn.ai\n', 'utf8');
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    try {
+      const res = await fetch(`${srv.baseUrl}/llms.txt`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toMatch(/^text\/plain\b/);
+      expect(await res.text()).toBe('# pkmn.ai\n');
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
   test('rejects astronomical page query parameters on /api/battles.json', async () => {
     const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
     const srv = await startTestServer(handle.app);
