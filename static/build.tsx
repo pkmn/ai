@@ -413,6 +413,8 @@ const build = async (rebuild?: boolean) => {
         style: page === 'release' ? `
           span.email b { display: none; }
           span.email { font-family: monospace; }
+      ` : page === 'rules' ? `
+          p.note { color: rgb(var(--fg-base) / 50%); font-size: smaller; }
       ` : page === 'background' ? style : '',
         title: `${title} | pkmn.ai`,
         header: header(title, page === 'background'),

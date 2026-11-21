@@ -541,7 +541,8 @@ verified under `arena/unpack.ts` and `sandbox.sb`:
    - For small `batch=1/16` matmuls, spilling onto the 2 Efficiency cores causes **2×–4× slowdowns**
      from barrier stalls (ONNX Runtime was 4× slower at 10T vs 4T on M3). Always benchmark
      `1, 2, 4, 6, 8` threads (`ort.SessionOptions().intra_op_num_threads`, `torch.set_num_threads`,
-     or GCD `dispatch_apply`).
+     or GCD `dispatch_apply`), capping tight compute pools at ≤ 8 P-core threads and leaving the 2
+     E-cores for background maintenance (I/O, bookkeeping).
    - If your search runs `N` parallel search threads, pin neural-net intra-op threads to `1` (or
      batch evaluations across threads into one GPU/AMX call) so threads do not thrash barriers.
 5. **Prefer `mmap` over `torch.load`:** `torch.load` decompresses zip entries into anonymous heap

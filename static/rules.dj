@@ -1,6 +1,7 @@
-_[`/llms.txt`](/llms.txt) exists as a coding-agent-friendly reference to this page and contains
-additional details for optimizing your project for the *pkmn.ai* arena environment. In the event of
-conflicting information, the human-written content below takes precedence._
+{.note}
+_[`/llms.txt`](/llms.txt) is a coding-agent-friendly companion to this page which contains
+additional details for optimizing your project for the *pkmn.ai* arena. In the event of a conflict,
+the human-written content below always takes precedence._
 
 ### Registration
 
@@ -266,7 +267,7 @@ Superfinal between the top two entrants.
 
 {summary="*Packaging*"}
 ::: details
-  - for neural-network ladder agents, prefer a *native `darwin/arm64` bundle* over a `linux/arm64`
+  - for neural-network ladder agents, prefer a native `darwin/arm64` bundle over a `linux/arm64`
     container for direct Metal/ANE access and zero-copy `mmap` weights. No Mac is needed --- build
     binaries, standalone `arm64` Python runtimes, and CoreML models on GitHub Actions' free
     [`macos-26`](https://github.blog/changelog/2026-02-26-macos-26-is-now-generally-available-for-github-hosted-runners/)
@@ -279,11 +280,10 @@ Superfinal between the top two entrants.
     smoke-test on CPU in CI and auto-select Metal/ANE at runtime on the arena's M6.
   - tune inference for Apple Silicon and stay under 500 MiB: small `batch=1` PyTorch `mps` calls
     are often slower than CPU due to dispatch overhead --- prefer lightweight inference runtimes
-    (*ONNX Runtime* CPU provider, static-shape pre-compiled *CoreML* `.mlmodelc`, or native
-    C++/Rust with *Accelerate*/*Metal*) over bundling full PyTorch (or *MLX*, whose unpacked
-    `mlx.metallib` exceeds 200 MiB). Batch search evaluations, benchmark Performance-core thread
-    counts (oversubscribing onto Efficiency cores can stall small matmuls), avoid per-step host
-    syncs, and avoid `float64` (unsupported on Metal).
+    (ONNX Runtime CPU provider, static-shape pre-compiled CoreML `.mlmodelc`, or native C++/Rust
+    with Accelerate/Metal) over bundling full PyTorch (or MLX, whose unpacked `mlx.metallib`
+    exceeds 200 MiB). Batch search evaluations, avoid per-step host syncs, and avoid `float64`
+    (unsupported on Metal).
   - strip debug symbols from compiled binaries and shared libraries (`strip -x` followed by
     `codesign --force --sign -` on macOS, `strip --strip-unneeded` on Linux).
   - exclude `__pycache__`, `.git`, test suites, `pip`/`uv` caches, C++ header files (`include/`),
@@ -326,10 +326,15 @@ Superfinal between the top two entrants.
     including threads in containers), and `stderr` is drained (with the last 4 KiB surfaced on
     [account](/account) if a ladder smoke test fails).
   - on ladders, the arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
-    and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads. Similarly,
-    `ARENA_MEMORY_LIMIT_MB=14336` is set on ladders --- be sure to size runtime tables to account
-    for potential runtime overhead and avoid triggering a forfeit due to running out of memory
-    (OOM). In tournaments with pondering enabled, `ARENA_PONDER=1` is set.
+    and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads, and be mindful
+    of the heterogeneous 8 Performance + 2 Efficiency core layout: spilling barrier-synchronized
+    work (_e.g._, small matrix multiplications) onto the slower Efficiency cores can stall the
+    Performance cores and slow down the entire step, so consider capping compute pools to at most 8
+    threads (benchmarking smaller counts) and reserving the Efficiency cores for background
+    maintenance (_e.g._, I/O or bookkeeping). Similarly, `ARENA_MEMORY_LIMIT_MB=14336` is set on
+    ladders --- be sure to size runtime tables to account for potential runtime overhead and avoid
+    triggering a forfeit due to running out of memory (OOM). In tournaments with pondering enabled,
+    `ARENA_PONDER=1` is set.
   - on macOS, clean read-only memory-mapped pages in native bundles (`mmap` with `PROT_READ` and
     `MAP_PRIVATE`/`MAP_SHARED`, _e.g._, `safetensors`/`gguf`) are file-backed and count as 0 bytes
     toward the 14 GiB RAM limit.
