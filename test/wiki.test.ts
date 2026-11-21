@@ -424,7 +424,7 @@ describe('wiki server routes', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('Welcome to <a href="/wiki/gen9ou">Gen 9</a>');
-    expect(html).toContain('<meta content="noindex" name="robots">');
+    expect(html).toContain('<meta name="robots" content="noindex">');
   });
 
   test('redirects unauthenticated edit requests to GitHub OAuth', async () => {

@@ -563,9 +563,16 @@ function buildBattlesScript(
 
     ${buildBattleDetailClientJs()}
 
+    const ensureLiveViewer = () => {
+      if (liveViewerFrame && !liveViewerFrame.getAttribute('src')) {
+        liveViewerFrame.setAttribute('src', '/arena/viewer/');
+      }
+    };
+
     const loadShownIntoViewer = () => {
       if (!shownLive || !shownLive.viewer) return;
       if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
+      ensureLiveViewer();
       const v = shownLive.viewer;
       const lines = Array.isArray(v.lines) ? v.lines : [];
       const p1Lines = v.p1 && Array.isArray(v.p1.lines) ? v.p1.lines : undefined;
@@ -595,6 +602,7 @@ function buildBattlesScript(
     const appendShownToViewer = () => {
       if (!shownLive || !shownLive.viewer) return;
       if (battleViewerWrap) battleViewerWrap.classList.remove('hide');
+      ensureLiveViewer();
       const v = shownLive.viewer;
       const lines = Array.isArray(v.lines) ? v.lines : [];
       const p1Lines = v.p1 && Array.isArray(v.p1.lines) ? v.p1.lines : undefined;
@@ -1163,6 +1171,7 @@ function buildBattlesScript(
     };
     window.addEventListener('hashchange', checkHash);
     checkHash();
+    refreshTimestamps(Math.floor(Date.now() / 1000));
 
     let tickCount = 0;
     setInterval(() => {
@@ -3461,7 +3470,7 @@ function renderBattlesPage(opts: {
     nowSec,
   } = opts;
   const {publicDir} = links;
-  const countsBySlot = db.getMatchCountsBySlot();
+  const countsBySlot = liveDoc?.countsBySlot ?? db.getMatchCountsBySlot();
   const currentBySlot = new Map(db.getCurrentLadders().map(l => [l.slot, l]));
   const filterSlots: Array<{slot: db.LadderSlot; name: string}> = [];
   const seenSlots = new Set<db.LadderSlot>();
@@ -3475,8 +3484,9 @@ function renderBattlesPage(opts: {
       name: current ? current.name : l.slot.toUpperCase(),
     });
   }
-  const recentMatches = db.getRecentMatches(recentMatchesLimit)
-    .map(m => arena.enrichMatchView(publicDir, m));
+  const recentMatches = liveDoc && (liveDoc.pageSize ?? recentMatchesLimit) === recentMatchesLimit
+    ? liveDoc.recentMatches
+    : db.getRecentMatches(recentMatchesLimit).map(m => arena.enrichMatchView(publicDir, m));
   const totalMatches = countsBySlot.all ?? recentMatches.length;
   const totalPages = Math.max(1, Math.ceil(totalMatches / recentMatchesLimit));
 
@@ -3570,7 +3580,7 @@ function renderBattlesPage(opts: {
       totalMatches: liveDoc.totalMatches ?? totalMatches,
       countsBySlot: liveDoc.countsBySlot ?? countsBySlot,
       historyEndpoint: liveDoc.historyEndpoint ?? '/api/battles.json',
-      recentMatches: liveDoc.recentMatches.map(m => arena.enrichMatchView(publicDir, m)),
+      recentMatches: liveDoc.recentMatches,
     }
     : {
       updatedAt: nowSec,
@@ -3616,7 +3626,7 @@ function renderBattlesPage(opts: {
               <iframe
                 id='ps-viewer-frame'
                 className='viewer-frame'
-                src='/arena/viewer/'
+                src={liveMatchWithLines ? '/arena/viewer/' : undefined}
                 title='Pokémon Showdown battle viewer'
                 sandbox='allow-scripts'
               />
@@ -3792,6 +3802,14 @@ export function register(app: polka.Polka, options: Options) {
       `${avatarsMtime}:${getArchiveDiskToken()}`;
   };
 
+  const relativeTimeBucket = (nowSec: number, newestTs?: number): string => {
+    if (newestTs === undefined) return '0';
+    const age = Math.max(0, nowSec - newestTs);
+    if (age < 60) return `s:${Math.floor(nowSec / 5)}`;
+    if (age < 3600) return `m:${Math.floor(nowSec / 60)}`;
+    return `h:${Math.floor(nowSec / 3600)}`;
+  };
+
   let cachedContext: {
     token: string;
     links: AgentLinkContext;
@@ -3800,6 +3818,10 @@ export function register(app: polka.Polka, options: Options) {
     profileBySlug: Map<string, db.AgentRow>;
     profileSlugs: Set<string>;
     logoByFileName: Map<string, NonNullable<ReturnType<typeof resolveAgentLogo>>>;
+    currentLadderSlots: Set<string>;
+    pastLaddersById: Map<string, db.LadderRow>;
+    latestTournamentGameAt: Map<string, number | undefined>;
+    latestMatchAt?: number;
     liveTournament?: db.TournamentRow;
   } | undefined;
 
@@ -3814,6 +3836,14 @@ export function register(app: polka.Polka, options: Options) {
       const logo = resolveAgentLogo(a, avatarsDir);
       if (logo) logoByFileName.set(logo.fileName, logo);
     }
+    const currentLadderSlots = new Set<string>(db.getCurrentLadders().map(l => l.slot));
+    const pastLaddersById = new Map<string, db.LadderRow>();
+    for (const l of db.getLadders()) {
+      if (l.status === 'settling' || l.status === 'archived') {
+        pastLaddersById.set(l.id, l);
+      }
+    }
+    const latestMatchAt = db.getRecentMatches(1)[0]?.completedAt;
     const liveTournament = db.getRunningTournament();
     cachedContext = {
       token: dbToken,
@@ -3823,6 +3853,10 @@ export function register(app: polka.Polka, options: Options) {
       profileBySlug,
       profileSlugs,
       logoByFileName,
+      currentLadderSlots,
+      pastLaddersById,
+      latestTournamentGameAt: new Map(),
+      latestMatchAt,
       liveTournament,
     };
     return cachedContext;
@@ -3835,12 +3869,13 @@ export function register(app: polka.Polka, options: Options) {
   } | undefined;
 
   const getArenaBundle = (dbToken: string, nowSec: number) => {
-    const liveDoc = arenaHandle.getLiveDocument(nowSec);
-    const activeLive = !liveDoc.stale ? liveDoc.live : undefined;
+    const state = arenaHandle.getState();
+    const activeLive = !state.stale ? state.live : undefined;
     const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
-    const bundleToken = `${dbToken}:${Math.floor(nowSec / 15)}:${liveKey}`;
-    if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
     const ctx = getContext(dbToken);
+    const bundleToken =
+      `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}:${liveKey}`;
+    if (cachedArenaBundle?.token === bundleToken) return cachedArenaBundle.bundle;
     const bundle = renderArenaAndLadderArtifacts({
       db,
       renderer,
@@ -3950,10 +3985,11 @@ export function register(app: polka.Polka, options: Options) {
   const handleArenaHub = (req: http.IncomingMessage, res: http.ServerResponse, asJson: boolean) => {
     const nowSec = getNowSec();
     const dbToken = getDbToken();
-    const liveDoc = arenaHandle.getLiveDocument(nowSec);
-    const activeLive = !liveDoc.stale ? liveDoc.live : undefined;
+    const state = arenaHandle.getState();
+    const activeLive = !state.stale ? state.live : undefined;
     const liveKey = activeLive ? `${activeLive.ladderId}:${activeLive.slot ?? ''}` : '';
-    const token = `${dbToken}:${Math.floor(nowSec / 15)}:${liveKey}`;
+    const ctx = getContext(dbToken);
+    const token = `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}:${liveKey}`;
     if (asJson) {
       sendCached(req, res, {
         key: 'arena:json',
@@ -3980,7 +4016,12 @@ export function register(app: polka.Polka, options: Options) {
     const nowSec = getNowSec();
     const state = arenaHandle.getState();
     const dbToken = getDbToken();
-    const token = `${dbToken}:${state.liveSeq}:${Math.floor(nowSec / 5)}`;
+    const ctx = getContext(dbToken);
+    const activeLive = !state.stale ? state.live : undefined;
+    const timeBucket = activeLive
+      ? `live:${Math.floor(nowSec / 5)}`
+      : relativeTimeBucket(nowSec, ctx.latestMatchAt);
+    const token = `${dbToken}:${state.liveSeq}:${state.stale ? 1 : 0}:${timeBucket}`;
     if (asJson) {
       sendCached(req, res, {
         key: 'battles:json',
@@ -3994,17 +4035,14 @@ export function register(app: polka.Polka, options: Options) {
       key: 'battles:html',
       token,
       contentType: 'text/html; charset=utf-8',
-      compute: () => {
-        const ctx = getContext(dbToken);
-        return renderBattlesPage({
-          db,
-          renderer,
-          links: ctx.links,
-          liveDoc: arenaHandle.getLiveDocument(nowSec),
-          recentMatchesLimit,
-          nowSec,
-        });
-      },
+      compute: () => renderBattlesPage({
+        db,
+        renderer,
+        links: ctx.links,
+        liveDoc: arenaHandle.getLiveDocument(nowSec),
+        recentMatchesLimit,
+        nowSec,
+      }),
     });
   };
 
@@ -4043,24 +4081,26 @@ export function register(app: polka.Polka, options: Options) {
     }
     const nowSec = getNowSec();
     const dbToken = getDbToken();
-    const bundle = getArenaBundle(dbToken, nowSec);
-    const isArchivedOnly = !(key in bundle.ladderJsonBySlot) &&
-      key in bundle.archivedLadderJsonById &&
-      bundle.archivedLadderJsonById[key].status === 'archived';
-    const token = isArchivedOnly ? dbToken : `${dbToken}:${util.formatUtcDate(nowSec)}`;
-    const jsonDoc = bundle.ladderJsonBySlot[key] ?? bundle.archivedLadderJsonById[key];
-    const htmlDoc = bundle.ladderHtmlBySlot[key] ?? bundle.archivedLadderHtmlById[key];
-    if (!jsonDoc || !htmlDoc) {
+    const ctx = getContext(dbToken);
+    const isCurrentSlot = ctx.currentLadderSlots.has(key);
+    const pastLadder = !isCurrentSlot ? ctx.pastLaddersById.get(key) : undefined;
+    if (!isCurrentSlot && !pastLadder) {
       if (isJson) sendJsonNotFound(res, `Unknown ladder "${key}".`);
       else sendHtmlNotFound(res);
       return;
     }
+    const isArchivedOnly = pastLadder?.status === 'archived';
+    const token = isArchivedOnly ? dbToken : `${dbToken}:${util.formatUtcDate(nowSec)}`;
     if (isJson) {
       sendCached(req, res, {
         key: `ladder:json:${key}`,
         token,
         contentType: 'application/json; charset=utf-8',
-        compute: () => `${JSON.stringify(jsonDoc, undefined, 2)}\n`,
+        compute: () => {
+          const bundle = getArenaBundle(dbToken, nowSec);
+          const jsonDoc = bundle.ladderJsonBySlot[key] ?? bundle.archivedLadderJsonById[key];
+          return `${JSON.stringify(jsonDoc, undefined, 2)}\n`;
+        },
       });
       return;
     }
@@ -4068,7 +4108,10 @@ export function register(app: polka.Polka, options: Options) {
       key: `ladder:html:${key}`,
       token,
       contentType: 'text/html; charset=utf-8',
-      compute: () => htmlDoc,
+      compute: () => {
+        const bundle = getArenaBundle(dbToken, nowSec);
+        return bundle.ladderHtmlBySlot[key] ?? bundle.archivedLadderHtmlById[key];
+      },
     });
   };
 
@@ -4167,7 +4210,20 @@ export function register(app: polka.Polka, options: Options) {
     const state = arenaHandle.getState();
     const dbToken = getDbToken();
     const rulesMtime = getFileMtimeToken(path.join(staticDir, 'tours', `${tournament.id}.dj`));
-    const token = `${dbToken}:${state.liveSeq}:${rulesMtime}:${Math.floor(nowSec / 15)}`;
+    let timeBucket = '';
+    if (tournament.status === 'running') {
+      timeBucket = `:${state.liveSeq}:${Math.floor(nowSec / 15)}`;
+    } else if (tournament.status === 'completed') {
+      const ctx = getContext(dbToken);
+      let latestGameAt = ctx.latestTournamentGameAt.get(tournament.id);
+      if (!ctx.latestTournamentGameAt.has(tournament.id)) {
+        latestGameAt = db.getTournamentGames(tournament.id, 1)[0]?.completedAt ??
+          tournament.completedAt;
+        ctx.latestTournamentGameAt.set(tournament.id, latestGameAt);
+      }
+      timeBucket = `:${relativeTimeBucket(nowSec, latestGameAt)}`;
+    }
+    const token = `${dbToken}:${rulesMtime}${timeBucket}`;
     if (isJson) {
       sendCached(req, res, {
         key: `tournament:json:${tournament.id}`,
@@ -4307,7 +4363,7 @@ export function register(app: polka.Polka, options: Options) {
         return;
       }
       const nowSec = getNowSec();
-      const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
+      const token = `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}`;
       sendCached(req, res, {
         key: `profile:json:${agent.slug}`,
         token,
@@ -4335,7 +4391,7 @@ export function register(app: polka.Polka, options: Options) {
     const agent = ctx.profileBySlug.get(rawParam);
     if (agent) {
       const nowSec = getNowSec();
-      const token = `${dbToken}:${Math.floor(nowSec / 15)}`;
+      const token = `${dbToken}:${relativeTimeBucket(nowSec, ctx.latestMatchAt)}`;
       sendCached(req, res, {
         key: `profile:html:${agent.slug}`,
         token,

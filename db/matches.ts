@@ -698,9 +698,13 @@ export function getMatchesPage(
 
 export function getMatchCountsBySlot(db: DatabaseSync): Record<string, number> {
   const rows = db.prepare(`
-    SELECT l.slot AS slot, COUNT(*) AS count
-    FROM matches m
-    JOIN ladders l ON l.id = m.ladder_id
+    SELECT l.slot AS slot, SUM(mc.count) AS count
+    FROM (
+      SELECT ladder_id, COUNT(*) AS count
+      FROM matches
+      GROUP BY ladder_id
+    ) mc
+    JOIN ladders l ON l.id = mc.ladder_id
     GROUP BY l.slot
   `).all() as Array<{slot: string; count: number}>;
 

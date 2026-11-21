@@ -15,7 +15,7 @@ import {renderBattleViewerPage} from '../server/tournaments';
 
 import * as glossary from './glossary';
 import * as research from './research';
-import {Html, copyFileAtomic, raw, root, writeFileAtomic} from './util';
+import {Html, copyFileAtomic, escapeHtml, raw, root, writeFileAtomic} from './util';
 
 const fs = site.fs;
 
@@ -135,13 +135,37 @@ export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
 }
 
 export class Renderer extends site.page.Renderer {
+  private readonly siteConfig: site.page.Site;
+  private stylesheetHref: string | undefined;
   liveBannerProvider?: () => string;
+  minify: boolean;
+
+  constructor(options: site.page.Site) {
+    super(options);
+    this.siteConfig = options;
+    this.stylesheetHref = undefined;
+    this.liveBannerProvider = undefined;
+    this.minify = false;
+  }
+
+  private ensureStylesheetHref(): string {
+    if (!this.stylesheetHref) {
+      const shell = super.render({title: '', path: '', content: ''});
+      const match = /href="(\/index\.[^"]+\.css)"/.exec(shell);
+      if (!match) throw new Error('Failed to initialize site base stylesheet');
+      this.stylesheetHref = match[1];
+    }
+    return this.stylesheetHref;
+  }
 
   override create(name: string, page: Page, replace?: (s: string) => string) {
     const headerStr = page.header !== undefined ? String(page.header) : undefined;
     super.create(name, {...page, header: headerStr, content: String(page.content)}, replace);
   }
 
+  // `site.page.Renderer.render` runs `html-minifier` (`minifyJS` / UglifyJS + `minifyCSS` /
+  // CleanCSS) synchronously on every call, which is fine for build-time static output
+  // (`minify = true`) but blocks the event loop for >1s per cache miss on large dynamic SSR pages.
   override render(page: Page, replace?: (s: string) => string) {
     const script = page.script ? `${SET_THEME}\n${page.script}` : SET_THEME;
     const banner = this.liveBannerProvider?.() ?? '';
@@ -149,18 +173,58 @@ export class Renderer extends site.page.Renderer {
     const headerHtml = banner && !rawHeader?.includes('id="topbar"')
       ? (rawHeader ? `${banner}\n  ${rawHeader}` : banner)
       : rawHeader;
-    const transform = IS_PRODUCTION
-      ? replace
-      : (s: string) => {
-        const clean = s.replace(GTAG_RE, '');
-        return replace ? replace(clean) : clean;
-      };
-    return super.render({
-      ...page,
-      header: headerHtml,
-      content: String(page.content),
-      script,
-    }, transform);
+
+    if (this.minify) {
+      const transform = IS_PRODUCTION
+        ? replace
+        : (s: string) => {
+          const clean = s.replace(GTAG_RE, '');
+          return replace ? replace(clean) : clean;
+        };
+      return super.render({
+        ...page,
+        header: headerHtml,
+        content: String(page.content),
+        script,
+      }, transform);
+    }
+
+    const stylesheetHref = this.ensureStylesheetHref();
+    const id = this.siteConfig.analytics;
+    const analytics = IS_PRODUCTION && id
+      ? `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>` +
+        '<script>window.dataLayer=window.dataLayer||[];' +
+        'function gtag(){dataLayer.push(arguments)}' +
+        `gtag('js',new Date());gtag('config','${id}');</script>`
+      : '';
+    const styleTag = page.style ? `<style>${page.style}</style>` : '';
+    const bodyTag = page.id ? `<body id="${escapeHtml(page.id)}">` : '<body>';
+    const headerTag = headerHtml ? `<header>${headerHtml}</header>` : '';
+    const rendered = [
+      '<!doctype html><html lang="en"><head>',
+      '<meta charset="utf-8">',
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+      `<title>${escapeHtml(page.title)}</title>`,
+      `<meta name="description" content="${this.siteConfig.description}">`,
+      '<link rel="icon" type="image/svg+xml" href="/favicon.svg">',
+      '<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">',
+      '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">',
+      `<link rel="canonical" href="${this.siteConfig.url}${page.path}">`,
+      analytics,
+      `<link rel="stylesheet" href="${stylesheetHref}">`,
+      styleTag,
+      `</head>${bodyTag}`,
+      `${headerTag}<main>${String(page.content)}</main>`,
+      '<footer><a href="https://creativecommons.org/licenses/by-sa/4.0/">',
+      '<img src="/cc.svg" alt="CC"><img src="/by.svg" alt="BY">',
+      '<img src="/sa.svg" alt="SA"></a></footer>',
+      '</body><script>',
+      "const pref=window.matchMedia('(prefers-color-scheme: dark)');",
+      "pref.addEventListener('change',e=>setTheme(e.matches?'dark':'light'));",
+      "document.documentElement.setAttribute('data-theme',pref.matches?'dark':'light');",
+      `\n${script}\n</script></html>`,
+    ].join('');
+    return replace ? replace(rendered) : rendered;
   }
 }
 
@@ -224,7 +288,7 @@ export function renderErrorPage(
         position: relative;
         top: -6vh;
       }`,
-  }).replace('<link href="https://pkmn.ai" rel="canonical">', '');
+  }).replace(/<link\b[^>]*rel="canonical"[^>]*>/, '');
 }
 
 const build = async (rebuild?: boolean) => {
@@ -256,6 +320,7 @@ const build = async (rebuild?: boolean) => {
     }
   };
   try {
+    renderer.minify = true;
     renderer.liveBannerProvider = () => formatLiveTournamentBanner(getRunning());
 
     for (const code of [400, 401, 403, 404, 500, 502, 503, 504]) {
@@ -403,6 +468,7 @@ const build = async (rebuild?: boolean) => {
       if (!expected.has(file)) fs.remove(path.join(PUBLIC, 'concepts', file));
     }
   } finally {
+    renderer.minify = false;
     renderer.liveBannerProvider = undefined;
     db?.close();
   }

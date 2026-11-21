@@ -395,7 +395,7 @@ describe('account routes', () => {
       expect(preHtml).toContain('<label for="sub-sha">SHA-256<span class="req">*</span></label>');
       expect(preHtml).toContain('<label for="sub-auth">Auth Header</label>');
       expect(preHtml).toContain(
-        '<label for="sub-teams" class="hide pool-teams-field">' +
+        '<label for="sub-teams" class="pool-teams-field hide">' +
           'Teams<span class="req">*</span></label>'
       );
       expect(preHtml).toContain('<label>Target<span class="req">*</span></label>');
@@ -1076,7 +1076,7 @@ describe('account routes', () => {
         headers: {Cookie: cookieFor('pre')},
       })).text();
       expect(acctHtml).toContain(expectedBanner);
-      expect(acctHtml).toContain('name="tournaments" type="checkbox" value="3"');
+      expect(acctHtml).toContain('type="checkbox" name="tournaments" value="3"');
       expect(acctHtml).toContain('OCI image required (linux/amd64)');
       expect(acctHtml).toContain('<label>Target<span class="req">*</span></label>');
 
@@ -1089,7 +1089,7 @@ describe('account routes', () => {
         headers: {Cookie: cookieFor('rookie')},
       })).text();
       expect(pendingAcctHtml).not.toContain('<fieldset class="form-fieldset" disabled>');
-      expect(pendingAcctHtml).toContain('name="tournaments" type="checkbox" value="3"');
+      expect(pendingAcctHtml).toContain('type="checkbox" name="tournaments" value="3"');
 
       const res = await postSubmission('rookie', {
         version: '0.1.0-t3',

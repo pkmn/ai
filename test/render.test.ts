@@ -698,7 +698,7 @@ describe('populated Arena leaderboard views', () => {
     expect(metaProfileHtml).toContain('id="agent-profile"');
     expect(metaProfileHtml).toContain('src="/projects/metamon.png"');
     expect(metaProfileHtml).toContain('UT-Austin-RPL/metamon');
-    expect(metaProfileHtml).toContain('class="ver-picker" id="ver-picker"');
+    expect(metaProfileHtml).toContain('id="ver-picker" class="ver-picker"');
     expect(metaProfileHtml).toContain('id="ver-select"');
     expect(metaProfileHtml).toContain('1.2.0 (active)');
     expect(metaProfileHtml).toContain('1.0.0 (active)');
@@ -708,8 +708,8 @@ describe('populated Arena leaderboard views', () => {
     expect(metaProfileHtml).toContain('Top 10');
 
     const athenaProfileHtml = await h.getText('/projects/athena/');
-    expect(athenaProfileHtml).toContain('class="hide reign table-wrap"');
-    expect(athenaProfileHtml).toContain('class="hide ver-picker" id="ver-picker"');
+    expect(athenaProfileHtml).toContain('class="table-wrap reign hide"');
+    expect(athenaProfileHtml).toContain('id="ver-picker" class="ver-picker hide"');
   });
 
   test('gates profile Best Matchup or Nemesis callouts on at least 10 matches', async () => {
@@ -2666,7 +2666,7 @@ describe('JSON route parity & retired pool archives', () => {
         expect(res.headers.get('etag')).toBeTruthy();
         const html = await res.text();
         expect(html).toContain(`<title>${route.title}</title>`);
-        expect(html).toContain(`<link href="${route.canonical}" rel="canonical">`);
+        expect(html).toContain(`<link rel="canonical" href="${route.canonical}">`);
       }
     } finally {
       await h.close();
@@ -2678,10 +2678,11 @@ describe('JSON route parity & retired pool archives', () => {
     try {
       const html = await h.getText('/projects/foul-play/');
       expect(html).toContain('id="opp-select"');
-      expect(html).toContain('<option value="jaxcalibur">Jaxcalibur (1)</option>');
+      expect(html).toContain('Jaxcalibur (1)\\u003c/option>');
       expect(html).toContain('class="opp-row" data-opp="jaxcalibur"');
       expect(html).toContain(
-        'class="battle-row" data-opp="jaxcalibur" aria-expanded="false" data-ver="1.0.0"'
+        'class="battle-row" data-ver="1.0.0" data-opp="jaxcalibur" ' +
+          'tabindex="0" aria-expanded="false"'
       );
     } finally {
       await h.close();
@@ -3124,7 +3125,7 @@ describe('JSON route parity & retired pool archives', () => {
     try {
       const html = await h.getText('/projects/foul-play/');
       expect(html).toContain('.table-wrap.reign');
-      expect(html).toContain('createElement("tbody")');
+      expect(html).toContain("createElement('tbody')");
     } finally {
       await h.close();
     }
@@ -3158,9 +3159,9 @@ describe('JSON route parity & retired pool archives', () => {
     try {
       const html = await h.getText('/arena/tournaments/32/');
       expect(html).toContain('<tt>420s</tt> Your Time (<tt>90s</tt> preview, <tt>55s/turn</tt>)');
-      expect(html).toMatch(/isVgcTimer:(?:true|!0)\b/);
-      expect(html).toMatch(/\.isVgcTimer\b/);
-      expect(html).toMatch(/void 0===\w+\|\|0===\w+/);
+      expect(html).toContain('"isVgcTimer":true');
+      expect(html).toContain('pageInit.isVgcTimer');
+      expect(html).toContain('isVgcTimer && (turn === undefined || turn === 0)');
     } finally {
       await h.close();
     }
@@ -3173,6 +3174,62 @@ describe('JSON route parity & retired pool archives', () => {
       expect(html).toContain('<a href="/account/">Account</a>');
     } finally {
       await h.close();
+    }
+  });
+
+  test('omits viewer iframe src on idle /arena/battles/', async () => {
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/arena/battles/');
+      expect(html).toContain('id="ps-viewer-frame"');
+      expect(html).not.toMatch(/<iframe[^>]*id="ps-viewer-frame"[^>]*\bsrc=/);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('omits viewer iframe src on scheduled /arena/tournaments/:id/', async () => {
+    db.upsertTournament({
+      id: '33',
+      name: 'Idle Viewer Tour',
+      format: 'gen9ou',
+      version: '0.11.0',
+      gamesPerMatchup: 2,
+      parallelTables: 1,
+      hardware: 'GCP L4 Spot',
+      status: 'scheduled',
+      startsAt: NOW + 86_400,
+    });
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/arena/tournaments/33/');
+      expect(html).toContain('id="ps-viewer-frame"');
+      expect(html).not.toMatch(/<iframe[^>]*id="ps-viewer-frame"[^>]*\bsrc=/);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test('preserves /arena/battles/ ETag across idle ticks with zero matches', async () => {
+    const emptyDb = new Database(':memory:', {now: NOW});
+    emptyDb.syncLadders();
+    emptyDb.syncProjects();
+    let currentNow = NOW;
+    const h = await startRenderHarness({
+      db: emptyDb,
+      publicDir: tmpPublic,
+      now: () => currentNow,
+    });
+    try {
+      const first = await h.getRaw('/arena/battles/');
+      expect(first.status).toBe(200);
+      const etag = first.headers.get('etag')!;
+      currentNow = NOW + 30;
+      const second = await h.getRaw('/arena/battles/', {headers: {'If-None-Match': etag}});
+      expect(second.status).toBe(304);
+    } finally {
+      await h.close();
+      emptyDb.close();
     }
   });
 });

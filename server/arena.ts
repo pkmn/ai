@@ -914,6 +914,7 @@ export interface Handle {
     lastSeenAt?: number;
     lastContactAt?: number;
     watchdogTriggered: boolean;
+    stale: boolean;
     live?: LiveMatch;
     liveSeq: number;
     archiveSeq: number;
@@ -1814,15 +1815,45 @@ export function register(app: polka.Polka, options: Options): Handle {
   const getSessionSecret = (): string | undefined =>
     options.sessionSecret ?? options.auth?.getConfig()?.sessionSecret ?? process.env.SESSION_SECRET;
 
+  const getLadderArchiveToken = (): string => {
+    const base = path.join(publicDir, 'arena', 'ladders');
+    if (!fs.existsSync(base)) return '';
+    const parts: string[] = [];
+    for (const entry of fs.readdirSync(base)) {
+      if (entry.startsWith('.')) continue;
+      try {
+        parts.push(`${entry}:${fs.statSync(path.join(base, entry), {bigint: true}).mtimeNs}`);
+      } catch {}
+    }
+    return parts.join(',');
+  };
+
+  let cachedLiveSnapshot: {
+    key: string;
+    countsBySlot: Record<string, number>;
+    recentMatches: BattleHistoryEntry[];
+    runningTournament?: {id: string; name: string; href: string};
+  } | undefined;
+
   const getLiveDocument = (nowSec = getNowSec()): LiveDocument => {
-    const countsBySlot = db.getMatchCountsBySlot();
-    const recentMatches = db.getRecentMatches(RECENT_MATCHES_LIMIT)
-      .map(m => enrichMatchView(publicDir, m));
+    const snapKey = `${db.getChangeToken()}:${archiveSeq}:${getLadderArchiveToken()}`;
+    if (cachedLiveSnapshot?.key !== snapKey) {
+      const countsBySlot = db.getMatchCountsBySlot();
+      const recentMatches = db.getRecentMatches(RECENT_MATCHES_LIMIT)
+        .map(m => enrichMatchView(publicDir, m));
+      cachedLiveSnapshot = {
+        key: snapKey,
+        countsBySlot,
+        recentMatches,
+        runningTournament: getRunningTournamentInfo(),
+      };
+    }
+    const {countsBySlot, recentMatches, runningTournament} = cachedLiveSnapshot;
     return {
       updatedAt: liveUpdatedAt ?? nowSec,
       stale: liveStale,
       live: liveStale ? undefined : currentLive,
-      runningTournament: getRunningTournamentInfo(),
+      runningTournament,
       pageSize: RECENT_MATCHES_LIMIT,
       totalMatches: countsBySlot.all ?? recentMatches.length,
       countsBySlot,
@@ -2809,19 +2840,6 @@ export function register(app: polka.Polka, options: Options): Handle {
 
   let cachedLiveJson: {key: string; payload: string; etag: string} | undefined;
 
-  const getLadderArchiveToken = (): string => {
-    const base = path.join(publicDir, 'arena', 'ladders');
-    if (!fs.existsSync(base)) return '';
-    const parts: string[] = [];
-    for (const entry of fs.readdirSync(base)) {
-      if (entry.startsWith('.')) continue;
-      try {
-        parts.push(`${entry}:${fs.statSync(path.join(base, entry), {bigint: true}).mtimeNs}`);
-      } catch {}
-    }
-    return parts.join(',');
-  };
-
   app.get('/api/live.json', (req, res) => {
     const nowSec = getNowSec();
     const liveTimeKey = liveUpdatedAt !== undefined
@@ -3015,6 +3033,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       lastSeenAt,
       lastContactAt,
       watchdogTriggered,
+      stale: liveStale,
       live: currentLive,
       liveSeq,
       archiveSeq,

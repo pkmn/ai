@@ -749,6 +749,7 @@ function renderBroadcastSectionHtml(
 
   const p1Clock = selected?.p1 ?? norm?.p1;
   const p2Clock = selected?.p2 ?? norm?.p2;
+  const hasActiveBroadcast = Boolean(norm && p1Clock && p2Clock);
   const timer = arena.timerSettingsForFormat(tournament.format, tournament.rules);
   const isLive = selected
     ? (!selected.idle && selected.live !== false)
@@ -807,7 +808,7 @@ function renderBroadcastSectionHtml(
           <iframe
             id='ps-viewer-frame'
             className='viewer-frame'
-            src='/arena/viewer/'
+            src={hasActiveBroadcast ? '/arena/viewer/' : undefined}
             title='Pokémon Showdown battle viewer'
             sandbox='allow-scripts'
           />
@@ -2061,6 +2062,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const p2Pokemon = tb.p2 && Array.isArray(tb.p2.pokemon) ? tb.p2.pokemon : undefined;
       const isLive = !tb.idle && tb.live !== false;
       pendingPayload = {lines, p1Lines, p2Lines, p1Pokemon, p2Pokemon, live: isLive, side: 'p1'};
+      if (frame && !frame.getAttribute('src')) {
+        frame.setAttribute('src', '/arena/viewer/');
+      }
       if (viewerReady) {
         postToFrame(frame, {type: 'load', ...pendingPayload});
       }
