@@ -587,6 +587,22 @@
   site: https://pokeagentchallenge.com/
   paper: Karten:2025b
   active: 2025 # April
+- name: Magpie
+  active: 2025 # July 5
+  engine:
+    - name: pkmn
+      url: https://github.com/pkmn/engine
+    - name: Hoenn
+      url: https://github.com/pokemon-labs/hoenn
+  language: [C++, Python]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    qualified: true
+    logo: magpie.svg
+    owners:
+      open-cover: opencover.723102
 - name: Algorithmic Pokémon Teambuilding
   paper: Sahovic:2025
   active: [2025, 2025] # August 19
