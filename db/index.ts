@@ -333,15 +333,6 @@ export class SqliteDatabase {
     this.db.close();
   }
 
-  // Combines SQLite's cross-process WAL `data_version` (bumped whenever an external CLI process
-  // commits to `arena.sqlite`) with `total_changes()` (bumped on every statement in this process,
-  // including `:memory:`) into an O(1) cache-invalidation token for SSR routes.
-  getChangeToken(): string {
-    const dv = this.db.prepare('PRAGMA data_version').get() as {data_version?: number} | undefined;
-    const tc = this.db.prepare('SELECT total_changes() AS c').get() as {c?: number} | undefined;
-    return `${dv?.data_version ?? 0}:${tc?.c ?? 0}`;
-  }
-
   inTransaction<T>(fn: () => T): T {
     const depth = this.txDepth;
     const sp = `sp_${depth}`;
@@ -660,10 +651,6 @@ export class Database extends SqliteDatabase {
 
   getQuarantinedVersionIds(): number[] {
     return entries.getQuarantinedVersionIds(this.db);
-  }
-
-  getLadderVersionIdentities(ladderId: string): entries.LadderVersionIdentity[] {
-    return entries.getLadderVersionIdentities(this.db, ladderId);
   }
 
   getVersionIdentitiesByIds(versionIds: number[]): entries.LadderVersionIdentity[] {

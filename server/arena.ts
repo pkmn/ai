@@ -922,8 +922,6 @@ export interface Handle {
     watchdogTriggered: boolean;
     stale: boolean;
     live?: LiveMatch;
-    liveSeq: number;
-    archiveSeq: number;
   };
 }
 
@@ -1775,8 +1773,6 @@ export function register(app: polka.Polka, options: Options): Handle {
   let lastMatchId: string | undefined;
   let watchdogTriggered = false;
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
-  let liveSeq = 0;
-  let archiveSeq = 0;
 
   const broadcastsByTournament = new Map<string, LiveBroadcast>();
   const battleStreamClients = new Set<http.ServerResponse>();
@@ -1892,7 +1888,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       currentLive = undefined;
       liveStale = true;
       liveUpdatedAt = getNowSec();
-      liveSeq++;
       pushBattleEvent('live', {
         updatedAt: liveUpdatedAt,
         stale: true,
@@ -2074,7 +2069,6 @@ export function register(app: polka.Polka, options: Options): Handle {
         currentLive = undefined;
         liveStale = false;
         liveUpdatedAt = nowSec;
-        liveSeq++;
         armWatchdog(nowSec);
         pushBattleEvent('live', {
           updatedAt: nowSec,
@@ -2114,7 +2108,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       lastMatchId = frame.matchId;
       liveStale = false;
       liveUpdatedAt = nowSec;
-      liveSeq++;
 
       armWatchdog(nowSec);
       pushBattleEvent('live', {
@@ -2171,23 +2164,19 @@ export function register(app: polka.Polka, options: Options): Handle {
       ) {
         const isPublic = ladderRow.team === 'random' || ladderRow.status === 'archived';
         if (ladderRow.team === 'pools' && isPublic) {
-          if (promoteArchivedPoolsLogs(publicDir, ladderRow.id)) archiveSeq++;
+          promoteArchivedPoolsLogs(publicDir, ladderRow.id);
         }
         const ladderDir = isPublic
           ? path.join(publicDir, 'arena', 'ladders', ladderRow.id)
           : path.join(publicDir, 'arena', 'ladders', '.private', ladderRow.id);
         const g1Path = path.join(ladderDir, `${match.id}a.log`);
         const g2Path = path.join(ladderDir, `${match.id}b.log`);
-        let wroteLog = false;
         if (rawG1Log !== undefined && (!duplicate || !fs.existsSync(g1Path))) {
           util.writeFileAtomic(g1Path, rawG1Log.endsWith('\n') ? rawG1Log : `${rawG1Log}\n`);
-          wroteLog = true;
         }
         if (rawG2Log !== undefined && (!duplicate || !fs.existsSync(g2Path))) {
           util.writeFileAtomic(g2Path, rawG2Log.endsWith('\n') ? rawG2Log : `${rawG2Log}\n`);
-          wroteLog = true;
         }
-        if (wroteLog && isPublic) archiveSeq++;
       }
 
       const nowSec = getNowSec();
@@ -2198,7 +2187,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       }
       liveStale = false;
       liveUpdatedAt = nowSec;
-      liveSeq++;
       armWatchdog(nowSec);
 
       if (!duplicate) {
@@ -2253,7 +2241,6 @@ export function register(app: polka.Polka, options: Options): Handle {
           db.setTournamentStatus(tournament.id, 'completed', nowSec);
         }
         broadcastsByTournament.delete(tournament.id);
-        liveSeq++;
         pushTournamentEvent(tournament.id, 'broadcast-end', {
           tournamentId: tournament.id,
           updatedAt: nowSec,
@@ -2331,7 +2318,6 @@ export function register(app: polka.Polka, options: Options): Handle {
         else tables.push(idleTable);
         const normalized = normalizeLiveBroadcast({...existing, updatedAt: nowSec, tables}, nowSec);
         broadcastsByTournament.set(tournament.id, normalized);
-        liveSeq++;
         pushTournamentEvent(tournament.id, 'table-idle', {
           table: tableNum,
           label,
@@ -2409,7 +2395,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       else tables.push(nextTable);
       const normalized = normalizeLiveBroadcast({...existing, updatedAt: nowSec, tables}, nowSec);
       broadcastsByTournament.set(tournament.id, normalized);
-      liveSeq++;
 
       if (mode === 'append' && chunkPersp) {
         pushTournamentEvent(tournament.id, 'table-append', {
@@ -2541,9 +2526,6 @@ export function register(app: polka.Polka, options: Options): Handle {
         }
       }
 
-      liveSeq++;
-      archiveSeq++;
-
       const updatedRow = db.getTournament(tournament.id)!;
       const doc = buildTournamentDocument(db, publicDir, updatedRow, 50);
       const savedGame = db.getTournamentGame(game.id);
@@ -2637,7 +2619,6 @@ export function register(app: polka.Polka, options: Options): Handle {
         promoteArchivedPoolsLogs(publicDir, ladder.id);
       }
       const {bytes, sha256} = await streamBinaryArchive(req, destPath, expectedSha);
-      archiveSeq++;
       await Promise.resolve(options.onUpdate?.('archive-published'));
       const idEnc = encodeURIComponent(ladder.id);
       sendJson(res, 200, {
@@ -2981,7 +2962,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       currentLive = state.live ? sanitizeLiveMatch(state.live, true) : undefined;
       liveStale = state.stale ?? false;
       liveUpdatedAt = state.updatedAt ?? getNowSec();
-      liveSeq++;
       pushBattleEvent('live', {
         updatedAt: liveUpdatedAt,
         stale: liveStale,
@@ -2998,13 +2978,11 @@ export function register(app: polka.Polka, options: Options): Handle {
       if (!id) return;
       if (!broadcast) {
         broadcastsByTournament.delete(id);
-        liveSeq++;
         pushTournamentEvent(id, 'broadcast-end', {tournamentId: id, updatedAt: getNowSec()});
         return;
       }
       const normalized = normalizeLiveBroadcast(broadcast, getNowSec());
       broadcastsByTournament.set(id, normalized);
-      liveSeq++;
       pushTournamentEvent(id, 'broadcast', normalized);
     },
     getState: () => ({
@@ -3013,8 +2991,6 @@ export function register(app: polka.Polka, options: Options): Handle {
       watchdogTriggered,
       stale: liveStale,
       live: currentLive,
-      liveSeq,
-      archiveSeq,
     }),
   };
 }

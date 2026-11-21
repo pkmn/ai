@@ -501,38 +501,6 @@ export interface LadderVersionIdentity {
   agentName: string;
 }
 
-export function getLadderVersionIdentities(
-  db: DatabaseSync,
-  ladderId: string
-): LadderVersionIdentity[] {
-  const rows = db.prepare(`
-    SELECT
-      le.version_id,
-      av.version,
-      av.agent_id,
-      a.slug AS agent_slug,
-      a.name AS agent_name
-    FROM ladder_entries le
-    JOIN agent_versions av ON av.id = le.version_id
-    JOIN agents a ON a.id = av.agent_id
-    WHERE le.ladder_id = ?
-    ORDER BY le.version_id ASC
-  `).all(ladderId) as Array<{
-    version_id: number;
-    version: string;
-    agent_id: number;
-    agent_slug: string;
-    agent_name: string;
-  }>;
-  return rows.map(r => ({
-    versionId: r.version_id,
-    version: r.version,
-    agentId: r.agent_id,
-    agentSlug: r.agent_slug,
-    agentName: r.agent_name,
-  }));
-}
-
 export function getVersionIdentitiesByIds(
   db: DatabaseSync,
   versionIds: number[]
