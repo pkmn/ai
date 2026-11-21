@@ -40,17 +40,20 @@ Run [`tools/shots.tsx`](../tools/shots.tsx) whenever editing TSX views, CSS, Djo
 scripts:
 
 ```sh
-npm run shots -- --baseline    # snapshot .shots/baseline/ before edits
-npm run build && npm run shots # capture all 95 states (4 viewports x 2 themes) & diff vs baseline
-npm run shots -- --only account # filter by scenario or section; pass --tolerance 20 to relax diff
-open .shots/index.html         # inspect Visual Atlas
-npm run clean && npm run test  # remove mock artifacts from public/ afterward
+npm run shots -- --list                          # list all 7 sections and 96 scenario names
+npm run shots -- --baseline --only ladders,battles  # snapshot only affected states before edits
+npm run build && npm run shots -- --only ladders,battles # capture & diff targeted states (4 viewports x 2 themes)
+npm run shots -- --baseline && npm run shots     # full 96-state capture (for shared layout/global CSS)
+open .shots/index.html                           # inspect Visual Atlas
+npm run clean && npm run test                    # remove mock artifacts from public/ afterward
 ```
 
 `shots` seeds an in-memory fixture from [`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock),
-uses SQLite savepoints + Playwright interactions across **4 viewports** (`small` `375×667`, `phone`
-`390×844`, `tablet` `744×1133`, `desktop` `1280×900`) × **2 themes** (`light`, `dark`), and asserts
-**zero console/page errors** and **zero horizontal overflow** (`scrollWidth <= innerWidth`).
+uses SQLite savepoints + parallel Playwright Chromium workers across **4 viewports** (`small`
+`375×667`, `phone` `390×844`, `tablet` `744×1133`, `desktop` `1280×900`) × **2 themes** (`light`,
+`dark`), and asserts **zero console/page errors** and **zero horizontal overflow**
+(`scrollWidth <= innerWidth`). Pass `--only <q[,q...]>` (repeatable or comma-separated section/name
+substrings) to capture only affected states, and `--tolerance <px>` to relax pixel diffs.
 
 - **Atlas controls (`.shots/index.html`):** Hotkeys `←`/`→` (states), `↑`/`↓` (sections), `1`–`4`
   (viewports), `t` (theme), `g` (Carousel/Grid), `c` (`Changed Only`), `d` (`After`/`3-Up Diff`/
@@ -59,7 +62,7 @@ uses SQLite savepoints + Playwright interactions across **4 viewports** (`small`
   is strict `0`-pixel outside viewers (unless `--tolerance` is passed) and tolerates up to `25%`
   sprite/animation variance inside unchanged viewer frames.
 
-**7 Atlas Sections (95 states):**
+**7 Atlas Sections (96 states):**
 1. **`static`:** Home (normal + `● LIVE` `#topbar`), Background (`Under Construction`), Concepts + 5
    subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release,
    Research, Arena Rules, `404`.

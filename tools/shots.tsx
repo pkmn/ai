@@ -1,4 +1,5 @@
-// Visual regression, edge-case coverage & interactive gallery (`npm run shots [-- --only <q>]`).
+// Visual regression, edge-case coverage & interactive gallery
+// (`npm run shots [-- --only <q[,q...]>] [-- --list]`).
 //
 // Renders every static page, dynamic route, interactive state, and error/edge case across 4
 // viewports (`small`, `phone`, `tablet`, `desktop`) and both color schemes (`light`, `dark`) into
@@ -13,10 +14,10 @@ import * as http from 'http';
 import {DatabaseSync} from 'node:sqlite';
 import * as os from 'os';
 import * as path from 'path';
-import {parseArgs} from 'util';
+import {parseArgs, promisify} from 'util';
 import * as zlib from 'zlib';
 
-import {Browser, BrowserContext, Page, Route, chromium} from 'playwright-core';
+import {Browser, BrowserContext, Page, Request, Route, chromium} from 'playwright-core';
 import polka from 'polka';
 
 import {Database} from '../db';
@@ -44,7 +45,6 @@ export const VIEWER_CHANNEL_DELTA = 16;
 export const VIEWER_MAX_DIFF_RATIO = 0.25;
 const SHOTS_CSS = fs.readFileSync(root('tools', 'shots.css'), 'utf8');
 
-const ORIGIN = 'http://pkmn.test';
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const NOW_SECONDS = Math.floor(NOW / 1000);
 const VGC_LADDER_ID = 'gen9championsvgc2026regmc';
@@ -55,8 +55,13 @@ const VIEWPORTS = {
   tablet: {width: 744, height: 1133}, // iPad mini (6th generation, portrait)
   desktop: {width: 1280, height: 900},
 };
+type ViewportId = keyof typeof VIEWPORTS;
+const VIEWPORT_ORDER: readonly ViewportId[] = ['desktop', 'tablet', 'phone', 'small'];
 const THEMES = ['light', 'dark'] as const;
-const SETTLE_MILLIS = 150;
+const NETWORK_QUIET_MILLIS = 25;
+const VIEWER_SETTLE_MILLIS = 50;
+const deflateAsync = promisify(zlib.deflate);
+const inflateAsync = promisify(zlib.inflate);
 
 export type SectionId =
   'static' | 'projects' | 'ladders' | 'battles' | 'tournaments' | 'account' | 'wiki';
@@ -1387,17 +1392,16 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Teams (20/20)',
       path: '/account/',
       githubUser: 'sisyphus25',
-      serial: true,
-      beforePage: fixture => {
+      setup: fixture => {
         fixture.db.replaceSavedTeams(
           VGC_LADDER_ID,
           fixture.cynthiaiId,
           fixture.canonicalVgcTeams,
           NOW_SECONDS
         );
-      },
-      setup: fixture => () => {
-        fixture.db.clearSavedTeams(VGC_LADDER_ID, fixture.cynthiaiId);
+        return () => {
+          fixture.db.clearSavedTeams(VGC_LADDER_ID, fixture.cynthiaiId);
+        };
       },
       act: async page => {
         await page.click(`input[name="ladders"][value="${VGC_LADDER_ID}"]`);
@@ -1623,6 +1627,22 @@ export function buildScenarios(wikiSha: string): Scenario[] {
   ];
 }
 
+export function filterScenarios(
+  scenarios: readonly Scenario[],
+  only?: readonly string[]
+): Scenario[] {
+  const tokens = (only ?? [])
+    .flatMap(entry => entry.split(','))
+    .map(tok => tok.trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return [...scenarios];
+  return scenarios.filter(scenario => {
+    const name = scenario.name.toLowerCase();
+    const section = scenario.section.toLowerCase();
+    return tokens.some(tok => name.includes(tok) || section.includes(tok));
+  });
+}
+
 function copyStaticPublicHtml(srcPublic: string, dstPublic: string) {
   const indexHtml = path.join(srcPublic, 'index.html');
   if (fs.existsSync(indexHtml)) {
@@ -1686,7 +1706,32 @@ async function startFixture(): Promise<Fixture> {
   }).allSaved;
   const cynthiaiId = db.getAgentBySlug('cynthiai')!.id;
 
-  const app = polka();
+  const serveStaticResponse = (res: http.ServerResponse, pathname: string): void => {
+    const file = (
+      resolveFileInDir(publicDir, pathname) ??
+      resolveFileInDir(PUBLIC, pathname)
+    );
+    if (file) {
+      res.writeHead(200, {'Content-Type': contentTypeForPath(file)});
+      res.end(fs.readFileSync(file));
+      return;
+    }
+    const notFound = path.join(PUBLIC, '404.html');
+    if (fs.existsSync(notFound)) {
+      res.writeHead(404, {'Content-Type': 'text/html; charset=utf-8'});
+      res.end(fs.readFileSync(notFound));
+      return;
+    }
+    res.writeHead(404, {'Content-Type': 'text/plain; charset=utf-8'});
+    res.end('Not Found');
+  };
+
+  const app = polka({
+    onNoMatch: (req, res) => {
+      const pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+      serveStaticResponse(res, pathname);
+    },
+  });
   const wikiInstance = new wiki.Wiki({
     wikiDir,
     projectsFile,
@@ -1733,26 +1778,46 @@ async function startFixture(): Promise<Fixture> {
   });
   wiki.register(app, wikiInstance);
 
-  const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+  const server = http.createServer((req, res) => {
+    const parsed = new URL(req.url || '/', 'http://127.0.0.1');
+    if (
+      parsed.pathname === '/api/battles/stream' ||
+      /^\/api\/tournaments\/[^/]+\/stream$/.test(parsed.pathname)
+    ) {
+      res.writeHead(204, {'Content-Type': 'text/event-stream'});
+      res.end();
+      return;
+    }
+    const isStaticArenaAsset = (
+      parsed.pathname === '/arena/viewer' ||
+      parsed.pathname.startsWith('/arena/viewer/') ||
+      /\.(?:7z|tar)$/i.test(parsed.pathname) ||
+      (/\.log$/i.test(parsed.pathname) && !parsed.search)
+    );
+    if (isStaticArenaAsset) {
+      serveStaticResponse(res, parsed.pathname);
+      return;
+    }
+    void app.handler(req as polka.Request, res);
+  });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address() as {port: number};
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const mintCookie = (
+  const mintToken = (
     id: number,
     login: string,
     discordId?: string,
     discordUser?: string
-  ) => {
-    const token = auth.signToken(
+  ) => encodeURIComponent(
+    auth.signToken(
       {
         ...(login ? {github: {id, login}} : {}),
         ...(discordId && discordUser ? {discord: {id: discordId, username: discordUser}} : {}),
         exp,
       },
       SHOTS_AUTH.sessionSecret
-    );
-    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
-  };
+    )
+  );
 
   return {
     origin: `http://127.0.0.1:${addr.port}`,
@@ -1762,13 +1827,13 @@ async function startFixture(): Promise<Fixture> {
     defaultLiveState,
     defaultBroadcast: seeded.tournamentBroadcast,
     cookies: {
-      scheibo: mintCookie(1, 'scheibo', '513513270670262284', 'scheibo'),
-      pmariglia: mintCookie(2, 'pmariglia', '283674461268344832', 'pmariglia'),
-      sisyphus25: mintCookie(3, 'sisyphus25', '300000000000000012', 'sisyphus25'),
-      asterdev: mintCookie(4, 'asterdev'),
-      pokerusdev: mintCookie(5, 'pokerusdev', '300000000000000010', 'pokerusdev'),
-      stranger: mintCookie(99, 'stranger'),
-      outsider: mintCookie(0, '', '999999999999999999', 'outsider'),
+      scheibo: mintToken(1, 'scheibo', '513513270670262284', 'scheibo'),
+      pmariglia: mintToken(2, 'pmariglia', '283674461268344832', 'pmariglia'),
+      sisyphus25: mintToken(3, 'sisyphus25', '300000000000000012', 'sisyphus25'),
+      asterdev: mintToken(4, 'asterdev'),
+      pokerusdev: mintToken(5, 'pokerusdev', '300000000000000010', 'pokerusdev'),
+      stranger: mintToken(99, 'stranger'),
+      outsider: mintToken(0, '', '999999999999999999', 'outsider'),
     },
     sha,
     publicDir,
@@ -1840,36 +1905,16 @@ export interface PngImage {
 
 const PNG_SIG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) {
-      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-    }
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(buf: Buffer): number {
-  let c = 0xffffffff;
-  for (const byte of buf) {
-    c = CRC32_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
-  }
-  return (c ^ 0xffffffff) >>> 0;
-}
-
 function pngChunk(type: string, data: Buffer): Buffer {
   const len = Buffer.alloc(4);
   len.writeUInt32BE(data.length, 0);
   const tag = Buffer.from(type, 'ascii');
   const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([tag, data])), 0);
+  crc.writeUInt32BE(zlib.crc32(data, zlib.crc32(tag)) >>> 0, 0);
   return Buffer.concat([len, tag, data, crc]);
 }
 
-export function encodePng(image: PngImage): Buffer {
+function buildRawScanlines(image: PngImage): {ihdr: Buffer; raw: Buffer} {
   const {width, height, data} = image;
   const rowBytes = width * 4;
   const raw = Buffer.alloc(height * (1 + rowBytes));
@@ -1883,10 +1928,26 @@ export function encodePng(image: PngImage): Buffer {
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8;
   ihdr[9] = 6;
+  return {ihdr, raw};
+}
+
+export function encodePng(image: PngImage): Buffer {
+  const {ihdr, raw} = buildRawScanlines(image);
   return Buffer.concat([
     PNG_SIG,
     pngChunk('IHDR', ihdr),
-    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IDAT', zlib.deflateSync(raw, {level: 1})),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+async function encodePngAsync(image: PngImage): Promise<Buffer> {
+  const {ihdr, raw} = buildRawScanlines(image);
+  const compressed = await deflateAsync(raw, {level: 1});
+  return Buffer.concat([
+    PNG_SIG,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', compressed),
     pngChunk('IEND', Buffer.alloc(0)),
   ]);
 }
@@ -1901,7 +1962,16 @@ function paethPredictor(a: number, b: number, c: number): number {
   return c;
 }
 
-export function decodePng(buf: Buffer): PngImage {
+interface ParsedPngChunks {
+  width: number;
+  height: number;
+  colorType: number;
+  palette?: Buffer;
+  trns?: Buffer;
+  idat: Buffer;
+}
+
+function parsePngChunks(buf: Buffer): ParsedPngChunks {
   if (buf.length < 8 || !buf.subarray(0, 8).equals(PNG_SIG)) {
     throw new Error('Invalid PNG signature');
   }
@@ -1933,10 +2003,21 @@ export function decodePng(buf: Buffer): PngImage {
     }
   }
 
+  return {
+    width,
+    height,
+    colorType,
+    palette,
+    trns,
+    idat: idatParts.length === 1 ? idatParts[0] : Buffer.concat(idatParts),
+  };
+}
+
+function unfilterPng(parsed: ParsedPngChunks, inflated: Buffer): PngImage {
+  const {width, height, colorType, palette, trns} = parsed;
   const bpp = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : 1;
   const rowBytes = width * bpp;
   const stride = 1 + rowBytes;
-  const inflated = zlib.inflateSync(Buffer.concat(idatParts));
   const unfiltered = Buffer.alloc(height * rowBytes);
 
   for (let y = 0; y < height; y++) {
@@ -1944,24 +2025,38 @@ export function decodePng(buf: Buffer): PngImage {
     const srcOff = y * stride + 1;
     const dstOff = y * rowBytes;
     const prevOff = (y - 1) * rowBytes;
-    for (let i = 0; i < rowBytes; i++) {
-      const raw = inflated[srcOff + i];
-      const left = i >= bpp ? unfiltered[dstOff + i - bpp] : 0;
-      const up = y > 0 ? unfiltered[prevOff + i] : 0;
-      const upLeft = y > 0 && i >= bpp ? unfiltered[prevOff + i - bpp] : 0;
-      if (filter === 0) {
-        unfiltered[dstOff + i] = raw;
-      } else if (filter === 1) {
-        unfiltered[dstOff + i] = (raw + left) & 0xff;
-      } else if (filter === 2) {
-        unfiltered[dstOff + i] = (raw + up) & 0xff;
-      } else if (filter === 3) {
-        unfiltered[dstOff + i] = (raw + ((left + up) >>> 1)) & 0xff;
-      } else if (filter === 4) {
-        unfiltered[dstOff + i] = (raw + paethPredictor(left, up, upLeft)) & 0xff;
-      } else {
-        throw new Error(`Unsupported PNG filter type: ${filter}`);
+    if (filter === 0) {
+      inflated.copy(unfiltered, dstOff, srcOff, srcOff + rowBytes);
+    } else if (filter === 1) {
+      for (let i = 0; i < bpp; i++) {
+        unfiltered[dstOff + i] = inflated[srcOff + i];
       }
+      for (let i = bpp; i < rowBytes; i++) {
+        unfiltered[dstOff + i] = (inflated[srcOff + i] + unfiltered[dstOff + i - bpp]) & 0xff;
+      }
+    } else if (filter === 2) {
+      if (y === 0) {
+        inflated.copy(unfiltered, dstOff, srcOff, srcOff + rowBytes);
+      } else {
+        for (let i = 0; i < rowBytes; i++) {
+          unfiltered[dstOff + i] = (inflated[srcOff + i] + unfiltered[prevOff + i]) & 0xff;
+        }
+      }
+    } else if (filter === 3) {
+      for (let i = 0; i < rowBytes; i++) {
+        const left = i >= bpp ? unfiltered[dstOff + i - bpp] : 0;
+        const up = y > 0 ? unfiltered[prevOff + i] : 0;
+        unfiltered[dstOff + i] = (inflated[srcOff + i] + ((left + up) >>> 1)) & 0xff;
+      }
+    } else if (filter === 4) {
+      for (let i = 0; i < rowBytes; i++) {
+        const left = i >= bpp ? unfiltered[dstOff + i - bpp] : 0;
+        const up = y > 0 ? unfiltered[prevOff + i] : 0;
+        const upLeft = y > 0 && i >= bpp ? unfiltered[prevOff + i - bpp] : 0;
+        unfiltered[dstOff + i] = (inflated[srcOff + i] + paethPredictor(left, up, upLeft)) & 0xff;
+      }
+    } else {
+      throw new Error(`Unsupported PNG filter type: ${filter}`);
     }
   }
 
@@ -1999,6 +2094,16 @@ export function decodePng(buf: Buffer): PngImage {
     }
   }
   return {width, height, data: rgba};
+}
+
+export function decodePng(buf: Buffer): PngImage {
+  const parsed = parsePngChunks(buf);
+  return unfilterPng(parsed, zlib.inflateSync(parsed.idat));
+}
+
+async function decodePngAsync(buf: Buffer): Promise<PngImage> {
+  const parsed = parsePngChunks(buf);
+  return unfilterPng(parsed, await inflateAsync(parsed.idat));
 }
 
 const EXTERNAL_HOSTS = new Set(['www.smogon.com', 'play.pokemonshowdown.com']);
@@ -2064,6 +2169,20 @@ export function isValidExternalAsset(
 
 function contentTypeForPath(pathname: string): string {
   switch (path.extname(pathname).toLowerCase()) {
+    case '.html':
+    case '.htm':
+      return 'text/html; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    case '.log':
+    case '.txt':
+      return 'text/plain; charset=utf-8';
+    case '.ico':
+      return 'image/x-icon';
+    case '.webmanifest':
+      return 'application/manifest+json; charset=utf-8';
+    case '.xml':
+      return 'application/xml; charset=utf-8';
     case '.png':
       return 'image/png';
     case '.gif':
@@ -2262,6 +2381,57 @@ async function writeRegionsFile(
   await fsp.writeFile(file, `${JSON.stringify(sorted, undefined, 2)}\n`, 'utf8');
 }
 
+// Fast zero-allocation pixel-change check used by `compareShots` to skip allocating/rendering a
+// faded diff image when images are identical or differ only by tolerated viewer sprite animation.
+function exceedsDiffTolerance(
+  a: PngImage,
+  b: PngImage,
+  viewerRects: readonly Rect[] | undefined,
+  tolerance: number
+): boolean {
+  const {width, height} = a;
+  const rects = viewerRects ?? [];
+  const a32 = new Uint32Array(a.data.buffer, a.data.byteOffset, width * height);
+  const b32 = new Uint32Array(b.data.buffer, b.data.byteOffset, width * height);
+  const rectDiffCounts = rects.length > 0 ? new Int32Array(rects.length) : undefined;
+  let count = 0;
+
+  for (let p = 0; p < a32.length; p++) {
+    if (a32[p] === b32[p]) continue;
+    if (rectDiffCounts) {
+      const x = p % width;
+      const y = (p - x) / width;
+      const rIdx = findRectIndex(rects, x, y);
+      if (rIdx >= 0) {
+        const off = p * 4;
+        const maxCh = Math.max(
+          Math.abs(a.data[off] - b.data[off]),
+          Math.abs(a.data[off + 1] - b.data[off + 1]),
+          Math.abs(a.data[off + 2] - b.data[off + 2]),
+          Math.abs(a.data[off + 3] - b.data[off + 3])
+        );
+        if (maxCh > VIEWER_CHANNEL_DELTA) {
+          rectDiffCounts[rIdx]++;
+        }
+        continue;
+      }
+    }
+    if (++count > tolerance) return true;
+  }
+
+  if (rectDiffCounts) {
+    for (let rIdx = 0; rIdx < rects.length; rIdx++) {
+      const rect = rects[rIdx];
+      const area = Math.max(1, rect.width * rect.height);
+      if (rectDiffCounts[rIdx] / area > VIEWER_MAX_DIFF_RATIO) {
+        count += rectDiffCounts[rIdx];
+        if (count > tolerance) return true;
+      }
+    }
+  }
+  return count > tolerance;
+}
+
 // Outside `viewerRects`, every 1px RGBA difference counts strictly. Inside each Showdown viewer
 // iframe rect, multi-frame animated Pokémon GIFs (`sprites/ani/*.gif`) tick on Blink's C++ clock
 // independently of Playwright's `animations: 'disabled'`, so minor corner/icon AA
@@ -2399,34 +2569,36 @@ export async function compareShots(
   const afterRegions = readRegionsFile(afterDir);
   const beforeSet = new Set(beforeNames);
   const afterSet = new Set(afterNames);
-  const changes: ShotChange[] = [];
+  const results = new Array<ShotChange | undefined>(names.length);
+  const concurrency = Math.min(names.length, Math.max(1, os.availableParallelism()));
+  let nextIdx = 0;
 
-  for (const name of names) {
+  const compareOne = async (idx: number): Promise<void> => {
+    const name = names[idx];
     if (!afterSet.has(name)) {
-      changes.push({
+      results[idx] = {
         name,
         note: `only in ${path.relative(ROOT, beforeDir) || beforeDir}`,
         status: 'removed',
-      });
-      continue;
+      };
+      return;
     }
     if (!beforeSet.has(name)) {
-      changes.push({
+      results[idx] = {
         name,
         note: `only in ${path.relative(ROOT, afterDir) || afterDir}`,
         status: 'added',
-      });
-      continue;
+      };
+      return;
     }
     const [rawA, rawB] = await Promise.all([
       fsp.readFile(path.join(beforeDir, name)),
       fsp.readFile(path.join(afterDir, name)),
     ]);
-    if (rawA.equals(rawB)) continue;
-    const a = decodePng(rawA);
-    const b = decodePng(rawB);
+    if (rawA.equals(rawB)) return;
+    const [a, b] = await Promise.all([decodePngAsync(rawA), decodePngAsync(rawB)]);
     const resized = a.width !== b.width || a.height !== b.height;
-    if (!resized && a.data.equals(b.data)) continue;
+    if (!resized && a.data.equals(b.data)) return;
 
     let viewerRects: readonly Rect[] | undefined;
     if (!resized) {
@@ -2442,25 +2614,37 @@ export async function compareShots(
       }
     }
 
+    if (!resized && !exceedsDiffTolerance(a, b, viewerRects, tolerance)) return;
+
     const {image, count} = diffPngImages(a, b, {viewerRects});
-    if (count === 0 || (count <= tolerance && !resized)) continue;
+    if (count === 0 || (count <= tolerance && !resized)) return;
 
     const pctNum = Number(((100 * count) / (image.width * image.height)).toFixed(2));
     const pct = pctNum.toFixed(2);
     const sizeNote = resized ? `, ${a.width}×${a.height} → ${b.width}×${b.height}` : '';
     const diffPath = path.join(diffDir, name);
     await fsp.mkdir(path.dirname(diffPath), {recursive: true});
-    await fsp.writeFile(diffPath, encodePng(image));
-    changes.push({
+    await fsp.writeFile(diffPath, await encodePngAsync(image));
+    results[idx] = {
       name,
       note: `${count} px (${pct}%)${sizeNote}`,
       diffPath,
       status: 'modified',
       pixels: count,
       percent: pctNum,
-    });
-  }
+    };
+  };
 
+  await Promise.all(
+    Array.from({length: concurrency}, async () => {
+      while (nextIdx < names.length) {
+        const idx = nextIdx++;
+        await compareOne(idx);
+      }
+    })
+  );
+
+  const changes = results.filter((c): c is ShotChange => c !== undefined);
   return {same: changes.length === 0, changes};
 }
 
@@ -3264,151 +3448,169 @@ export function renderGalleryHtml(
   return `<!doctype html>\n${String(doc)}`;
 }
 
-async function serve(
-  route: Route,
-  fixture: Fixture,
-  cookie: string,
-  forceOffline: boolean
-): Promise<void> {
+async function serveExternal(route: Route, forceOffline: boolean): Promise<void> {
   const url = new URL(route.request().url());
-  if (url.origin !== ORIGIN) {
-    if (url.href === WIKI_MOCK_IMAGE_URL) {
-      cachedWikiMockChartPng ??= buildWikiMockChartPng();
+  if (url.href === WIKI_MOCK_IMAGE_URL) {
+    cachedWikiMockChartPng ??= buildWikiMockChartPng();
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: cachedWikiMockChartPng,
+    });
+    return;
+  }
+  if (!forceOffline && EXTERNAL_HOSTS.has(url.hostname)) {
+    const asset = await fetchExternalAsset(url);
+    if (asset) {
       await route.fulfill({
         status: 200,
-        contentType: 'image/png',
-        body: cachedWikiMockChartPng,
+        contentType: asset.contentType,
+        headers: {'access-control-allow-origin': '*'},
+        body: asset.body,
       });
       return;
     }
-    if (!forceOffline && EXTERNAL_HOSTS.has(url.hostname)) {
-      const asset = await fetchExternalAsset(url);
-      if (asset) {
-        await route.fulfill({
-          status: 200,
-          contentType: asset.contentType,
-          headers: {'access-control-allow-origin': '*'},
-          body: asset.body,
-        });
-        return;
-      }
-    }
-    await route.fulfill({status: 204, body: ''});
-    return;
   }
-  if (
-    url.pathname === '/api/battles/stream' ||
-    /^\/api\/tournaments\/[^/]+\/stream$/.test(url.pathname)
-  ) {
-    await route.fulfill({status: 204, contentType: 'text/event-stream', body: ''});
-    return;
-  }
-  const isStaticArenaAsset = (
-    url.pathname === '/arena/viewer' ||
-    url.pathname.startsWith('/arena/viewer/') ||
-    /\.(?:7z|tar)$/i.test(url.pathname) ||
-    (/\.log$/i.test(url.pathname) && !url.search)
-  );
-  const isDynamic = !isStaticArenaAsset && (
-    url.pathname === '/wiki' ||
-    url.pathname.startsWith('/wiki/') ||
-    url.pathname === '/account' ||
-    url.pathname.startsWith('/account/') ||
-    url.pathname === '/auth' ||
-    url.pathname.startsWith('/auth/') ||
-    url.pathname === '/projects' ||
-    url.pathname.startsWith('/projects/') ||
-    url.pathname === '/arena' ||
-    url.pathname.startsWith('/arena/') ||
-    url.pathname === '/arena.json' ||
-    url.pathname.startsWith('/api/')
-  );
-  if (isDynamic) {
-    const req = route.request();
-    const body = req.postDataBuffer();
-    const reqHeaders = req.headers();
-    const res = await fetch(`${fixture.origin}${url.pathname}${url.search}`, {
-      method: req.method(),
-      headers: {
-        ...reqHeaders,
-        ...(reqHeaders.origin === ORIGIN ? {origin: fixture.origin} : {}),
-        cookie,
-      },
-      body: body ? new Uint8Array(body) : undefined,
-    });
-    const buffer = Buffer.from(await res.arrayBuffer());
-    const headers: Record<string, string> = {};
-    res.headers.forEach((v, k) => {
-      headers[k] = v;
-    });
-    await route.fulfill({status: res.status, headers, body: buffer});
-    return;
-  }
-  const file = (
-    resolveFileInDir(fixture.publicDir, url.pathname) ??
-    resolveFileInDir(PUBLIC, url.pathname)
-  );
-  if (file) {
-    await route.fulfill({path: file});
-    return;
-  }
-  const notFound = path.join(PUBLIC, '404.html');
-  if (fs.existsSync(notFound)) {
-    await route.fulfill({status: 404, path: notFound});
-    return;
-  }
-  await route.fulfill({status: 404, contentType: 'text/plain', body: 'Not Found'});
+  await route.fulfill({status: 204, body: ''});
 }
 
+type Theme = (typeof THEMES)[number];
+
 interface SlotWorker {
-  device: string;
-  theme: (typeof THEMES)[number];
+  assignedDevice: ViewportId;
+  assignedTheme: Theme;
   context: BrowserContext;
   page: Page;
   problems: string[];
-  setCookie: (cookie: string) => void;
-  setOffline: (offline: boolean) => void;
+  configure: (
+    device: ViewportId,
+    theme: Theme,
+    cookieToken: string,
+    offline: boolean
+  ) => Promise<void>;
+  resetPendingRequests: () => void;
+  waitForNetworkQuiet: () => Promise<void>;
 }
 
-async function createSlotWorkers(browser: Browser, fixture: Fixture): Promise<SlotWorker[]> {
-  const workers: SlotWorker[] = [];
-  for (const [device, viewport] of Object.entries(VIEWPORTS)) {
-    for (const theme of THEMES) {
-      let currentCookie = fixture.cookies.scheibo;
+interface SlotSpec {
+  device: ViewportId;
+  viewport: {width: number; height: number};
+  theme: Theme;
+}
+
+const SLOT_SPECS: readonly SlotSpec[] = VIEWPORT_ORDER.flatMap(
+  device => THEMES.map(theme => ({device, viewport: VIEWPORTS[device], theme}))
+);
+
+async function createSlotWorkers(
+  browsers: readonly Browser[],
+  fixture: Fixture
+): Promise<SlotWorker[]> {
+  return Promise.all(
+    SLOT_SPECS.map(async ({device, viewport, theme}, idx) => {
+      const browser = browsers[idx % browsers.length];
+      let currentDevice: ViewportId = device;
+      let currentTheme: Theme = theme;
+      let currentToken = '';
       let currentOffline = false;
+      const pendingRequests = new Set<Request>();
+      let quietTimer: ReturnType<typeof setTimeout> | undefined;
+      const quietResolvers: Array<() => void> = [];
+
+      const flushQuiet = () => {
+        quietTimer = undefined;
+        if (pendingRequests.size !== 0) return;
+        const pending = quietResolvers.splice(0);
+        for (const resolve of pending) resolve();
+      };
+      const scheduleQuiet = () => {
+        if (quietTimer !== undefined) clearTimeout(quietTimer);
+        quietTimer = setTimeout(flushQuiet, NETWORK_QUIET_MILLIS);
+      };
+      const waitForNetworkQuiet = (): Promise<void> => new Promise(resolve => {
+        quietResolvers.push(resolve);
+        if (pendingRequests.size === 0) scheduleQuiet();
+      });
+
       const context = await browser.newContext({
         viewport,
         colorScheme: theme,
         deviceScaleFactor: 1,
-        baseURL: ORIGIN,
+        baseURL: fixture.origin,
         timezoneId: 'UTC',
         locale: 'en-US',
       });
-      await context.route('**/*', route => serve(route, fixture, currentCookie, currentOffline));
+      await context.route(
+        url => (url.protocol === 'http:' || url.protocol === 'https:') &&
+          url.origin !== fixture.origin,
+        route => serveExternal(route, currentOffline)
+      );
       const page = await context.newPage();
       const problems: string[] = [];
       page.on('pageerror', error => problems.push(error.message));
       page.on('console', message => {
         if (message.type() === 'error') problems.push(message.text());
       });
+      page.on('request', req => {
+        pendingRequests.add(req);
+        if (quietTimer !== undefined) {
+          clearTimeout(quietTimer);
+          quietTimer = undefined;
+        }
+      });
+      const finishRequest = (req: Request) => {
+        pendingRequests.delete(req);
+        if (pendingRequests.size === 0 && quietResolvers.length > 0) {
+          scheduleQuiet();
+        }
+      };
+      page.on('requestfinished', finishRequest);
+      page.on('requestfailed', finishRequest);
       await page.clock.setFixedTime(NOW);
-      workers.push({
-        device,
-        theme,
+
+      return {
+        assignedDevice: device,
+        assignedTheme: theme,
         context,
         page,
         problems,
-        setCookie: (cookie: string) => {
-          currentCookie = cookie;
-        },
-        setOffline: (offline: boolean) => {
+        configure: async (
+          nextDevice: ViewportId,
+          nextTheme: Theme,
+          nextToken: string,
+          offline: boolean
+        ) => {
           currentOffline = offline;
+          if (nextDevice !== currentDevice) {
+            await page.setViewportSize(VIEWPORTS[nextDevice]);
+            currentDevice = nextDevice;
+          }
+          if (nextTheme !== currentTheme) {
+            await page.emulateMedia({colorScheme: nextTheme});
+            currentTheme = nextTheme;
+          }
+          if (nextToken !== currentToken) {
+            await context.addCookies([
+              {name: auth.SESSION_COOKIE, value: nextToken, url: fixture.origin},
+            ]);
+            currentToken = nextToken;
+          }
         },
-      });
-    }
-  }
-  return workers;
+        resetPendingRequests: () => {
+          pendingRequests.clear();
+          if (quietTimer !== undefined) {
+            clearTimeout(quietTimer);
+            quietTimer = undefined;
+          }
+        },
+        waitForNetworkQuiet,
+      };
+    })
+  );
 }
+
+const WAIT_PAINT_EXPR =
+  'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))';
 
 const WAIT_IMAGES_EXPR = `(async () => {
   for (const image of document.querySelectorAll("img")) image.loading = "eager";
@@ -3453,9 +3655,10 @@ const SETTLE_VIEWER_EXPR = `(() => {
 // integer offset before capture, and compositing onto the full-page PNG keeps production
 // `sandbox="allow-scripts"` intact without 1px scroll-rounding shifts or blank replay shots.
 async function waitForViewerFrames(page: Page): Promise<FrameOverlay[]> {
+  const handles = await page.locator('iframe.viewer-frame').elementHandles();
+  if (handles.length === 0) return [];
   const overlays: FrameOverlay[] = [];
   await page.evaluate('window.scrollTo(0, 0)');
-  const handles = await page.locator('iframe.viewer-frame').elementHandles();
   const measured = await Promise.all(
     handles.map(async handle => {
       const info = await handle.evaluate((el: Element) => {
@@ -3504,22 +3707,26 @@ async function waitForViewerFrames(page: Page): Promise<FrameOverlay[]> {
     );
     await frame.evaluate(WAIT_IMAGES_EXPR);
     await frame.evaluate(SETTLE_VIEWER_EXPR);
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(VIEWER_SETTLE_MILLIS);
     const png = await handle.screenshot({animations: 'disabled', caret: 'hide'});
     overlays.push({x: info.x, y: info.y, png});
   }
   return overlays;
 }
 
-function compositeFrameOverlays(
+async function compositeFrameOverlays(
   basePng: Buffer,
   overlays: FrameOverlay[]
-): {png: Buffer; rects: Rect[]} {
+): Promise<{png: Buffer; rects: Rect[]}> {
   if (overlays.length === 0) return {png: basePng, rects: []};
-  const base = decodePng(basePng);
+  const [base, ...patches] = await Promise.all([
+    decodePngAsync(basePng),
+    ...overlays.map(ov => decodePngAsync(ov.png)),
+  ]);
   const rects: Rect[] = [];
-  for (const ov of overlays) {
-    const patch = decodePng(ov.png);
+  for (let i = 0; i < overlays.length; i++) {
+    const ov = overlays[i];
+    const patch = patches[i];
     const dstX = Math.max(0, ov.x);
     const dstY = Math.max(0, ov.y);
     const maxRows = Math.min(patch.height, base.height - dstY);
@@ -3534,18 +3741,19 @@ function compositeFrameOverlays(
     }
     rects.push({x: dstX, y: dstY, width: maxCols, height: maxRows});
   }
-  return {png: encodePng(base), rects};
+  return {png: await encodePngAsync(base), rects};
 }
 
 async function shootWithWorker(
   worker: SlotWorker,
   scenario: Scenario,
+  device: ViewportId,
+  theme: Theme,
   file: string,
   fixture: Fixture
 ): Promise<{problems: string[]; viewerRects: Rect[]}> {
-  const cookie = fixture.cookies[scenario.githubUser ?? 'scheibo'] ?? fixture.cookies.scheibo;
-  worker.setCookie(cookie);
-  worker.setOffline(Boolean(scenario.offline));
+  const token = fixture.cookies[scenario.githubUser ?? 'scheibo'] ?? fixture.cookies.scheibo;
+  await worker.configure(device, theme, token, Boolean(scenario.offline));
   worker.problems.length = 0;
 
   if (scenario.beforePage) {
@@ -3553,24 +3761,28 @@ async function shootWithWorker(
   }
 
   const {page} = worker;
+  worker.resetPendingRequests();
   const navRes = await page.goto(scenario.path);
+  await worker.waitForNetworkQuiet();
   await page.evaluate(WAIT_IMAGES_EXPR);
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(SETTLE_MILLIS);
   if (scenario.click) {
     await page.click(scenario.click);
     await page.waitForLoadState('load');
-    await page.waitForTimeout(SETTLE_MILLIS);
+    await worker.waitForNetworkQuiet();
+    await page.evaluate(WAIT_IMAGES_EXPR);
   }
   if (scenario.act) {
     await scenario.act(page, fixture);
     await page.waitForLoadState('load');
-    await page.waitForTimeout(SETTLE_MILLIS);
+    await worker.waitForNetworkQuiet();
+    await page.evaluate(WAIT_IMAGES_EXPR);
   }
   const overlays = await waitForViewerFrames(page);
-  await page.evaluate(WAIT_IMAGES_EXPR);
+  if (overlays.length > 0) {
+    await page.evaluate(WAIT_IMAGES_EXPR);
+  }
   await page.evaluate('window.scrollTo(0, 0)');
-  await page.waitForTimeout(SETTLE_MILLIS / 2);
+  await page.evaluate(WAIT_PAINT_EXPR);
   const overflow = await page.evaluate<number>(
     'document.documentElement.scrollWidth - window.innerWidth'
   );
@@ -3587,7 +3799,7 @@ async function shootWithWorker(
     }
   })()`);
   const rawShot = await page.screenshot({fullPage: true, animations: 'disabled', caret: 'hide'});
-  const composited = compositeFrameOverlays(rawShot, overlays);
+  const composited = await compositeFrameOverlays(rawShot, overlays);
   await fsp.writeFile(file, composited.png);
   const expectedHttpPrefix = scenario.expectHttpError
     ? `Failed to load resource: the server responded with a status of ${scenario.expectHttpError} `
@@ -3607,79 +3819,138 @@ async function shootWithWorker(
   };
 }
 
+function printScenarioList(scenarios: readonly Scenario[]): void {
+  for (const section of SECTIONS) {
+    const names = scenarios.filter(s => s.section === section.id).map(s => s.name);
+    if (names.length === 0) continue;
+    console.log(`${section.id} (${names.length}): ${names.join(', ')}`);
+  }
+}
+
 async function run(): Promise<void> {
   const {values} = parseArgs({
     options: {
-      only: {type: 'string'},
+      only: {type: 'string', multiple: true},
       baseline: {type: 'boolean', default: false},
       tolerance: {type: 'string', default: '0'},
+      list: {type: 'boolean', default: false},
     },
   });
+
+  const onlyFilters = values.only ?? [];
+  const previewScenarios = filterScenarios(buildScenarios(''), onlyFilters);
+  if (values.list) {
+    printScenarioList(previewScenarios);
+    return;
+  }
+  if (previewScenarios.length === 0) {
+    console.error(
+      `No scenarios matched --only ${onlyFilters.join(',')}. ` +
+      `Valid sections: ${SECTIONS.map(s => s.id).join(', ')} (use --list to inspect all names).`
+    );
+    process.exit(1);
+  }
 
   if (!fs.existsSync(path.join(PUBLIC, 'index.html'))) {
     console.error('There is no build to screenshot: run `npm run build` first.');
     process.exit(1);
   }
 
-  const fixture = await startFixture();
   const newDir = `${SHOTS_DIR}.new`;
+  const browserCount = previewScenarios.every(s => s.serial)
+    ? 1
+    : Math.min(SLOT_SPECS.length, Math.max(1, os.availableParallelism()));
+
+  const prepareStagingDirs = async (): Promise<void> => {
+    await fsp.rm(newDir, {recursive: true, force: true});
+    await Promise.all(
+      SLOT_SPECS.map(({device, theme}) => fsp.mkdir(
+        path.join(newDir, device, theme),
+        {recursive: true}
+      ))
+    );
+  };
+
+  const [fixture, browsers] = await Promise.all([
+    startFixture(),
+    Promise.all(Array.from({length: browserCount}, () => launch())),
+    prepareStagingDirs(),
+  ]);
+
   const allScenarios = buildScenarios(fixture.sha);
-  const scenarios = allScenarios.filter(
-    scenario => scenario.name.includes(values.only ?? '') ||
-      scenario.section.includes(values.only ?? '')
-  );
-  const browser = await launch();
-  await fsp.rm(newDir, {recursive: true, force: true});
-  for (const device of Object.keys(VIEWPORTS)) {
-    for (const theme of THEMES) {
-      await fsp.mkdir(path.join(newDir, device, theme), {recursive: true});
-    }
-  }
+  const scenarios = filterScenarios(allScenarios, onlyFilters);
+  const parallelScenarios = scenarios.filter(s => !s.setup && !s.beforePage && !s.serial);
+  const exclusiveScenarios = scenarios.filter(s => Boolean(s.setup || s.beforePage || s.serial));
 
   const shotPaths: string[] = [];
   const shotRegions: RegionsMap = {};
   const errors: string[] = [];
+  const recordShot = async (
+    worker: SlotWorker,
+    scenario: Scenario,
+    device: ViewportId,
+    theme: Theme
+  ): Promise<void> => {
+    const relPath = path.join(device, theme, `${scenario.name}.png`);
+    const {problems, viewerRects} = await shootWithWorker(
+      worker,
+      scenario,
+      device,
+      theme,
+      path.join(newDir, relPath),
+      fixture
+    );
+    shotPaths.push(relPath);
+    shotRegions[relPath.split(path.sep).join('/')] = viewerRects;
+    errors.push(
+      ...problems.map(
+        problem => `${scenario.name} (${device}/${theme}): ${problem}`
+      )
+    );
+  };
+
   try {
-    const workers = await createSlotWorkers(browser, fixture);
+    const workers = await createSlotWorkers(browsers, fixture);
     try {
-      for (const scenario of scenarios) {
+      // Read-only scenarios share the pristine default fixture; dispatch (scenario, viewport,
+      // theme) jobs from a single heaviest-first queue so all browser processes stay busy until
+      // the last shot rather than idling behind slower desktop/viewer slots.
+      if (parallelScenarios.length > 0) {
+        const isHeavy = (s: Scenario) =>
+          s.section === 'tournaments' || s.name.includes('replay') || s.name.includes('rand-live');
+        const ordered = [...parallelScenarios].sort(
+          (a, b) => Number(isHeavy(b)) - Number(isHeavy(a))
+        );
+        const jobs = ordered.flatMap(
+          scenario => SLOT_SPECS.map(({device, theme}) => ({scenario, device, theme}))
+        );
+        const remaining = new Map(parallelScenarios.map(s => [s.name, SLOT_SPECS.length]));
+        let nextJob = 0;
+        await Promise.all(
+          workers.map(async worker => {
+            while (nextJob < jobs.length) {
+              const job = jobs[nextJob++];
+              await recordShot(worker, job.scenario, job.device, job.theme);
+              const left = (remaining.get(job.scenario.name) ?? 1) - 1;
+              remaining.set(job.scenario.name, left);
+              if (left === 0) console.log(`  ${job.scenario.name}`);
+            }
+          })
+        );
+      }
+
+      for (const scenario of exclusiveScenarios) {
         const cleanup = scenario.setup ? await scenario.setup(fixture) : undefined;
         try {
           if (scenario.serial) {
             for (const worker of workers) {
-              const relPath = path.join(worker.device, worker.theme, `${scenario.name}.png`);
-              const {problems, viewerRects} = await shootWithWorker(
-                worker,
-                scenario,
-                path.join(newDir, relPath),
-                fixture
-              );
-              shotPaths.push(relPath);
-              shotRegions[relPath.split(path.sep).join('/')] = viewerRects;
-              errors.push(
-                ...problems.map(
-                  problem => `${scenario.name} (${worker.device}/${worker.theme}): ${problem}`
-                )
-              );
+              await recordShot(worker, scenario, worker.assignedDevice, worker.assignedTheme);
             }
           } else {
             await Promise.all(
-              workers.map(async worker => {
-                const relPath = path.join(worker.device, worker.theme, `${scenario.name}.png`);
-                const {problems, viewerRects} = await shootWithWorker(
-                  worker,
-                  scenario,
-                  path.join(newDir, relPath),
-                  fixture
-                );
-                shotPaths.push(relPath);
-                shotRegions[relPath.split(path.sep).join('/')] = viewerRects;
-                errors.push(
-                  ...problems.map(
-                    problem => `${scenario.name} (${worker.device}/${worker.theme}): ${problem}`
-                  )
-                );
-              })
+              workers.map(
+                w => recordShot(w, scenario, w.assignedDevice, w.assignedTheme)
+              )
             );
           }
           console.log(`  ${scenario.name}`);
@@ -3691,30 +3962,41 @@ async function run(): Promise<void> {
       await Promise.all(workers.map(w => w.context.close()));
     }
   } finally {
-    await browser.close();
-    await fixture.close();
+    await Promise.all([
+      ...browsers.map(browser => browser.close()),
+      fixture.close(),
+    ]);
   }
 
-  const isFiltered = values.only !== undefined;
+  const isFiltered = onlyFilters.length > 0;
   if (!isFiltered) {
-    for (const device of Object.keys(VIEWPORTS)) {
-      await fsp.rm(path.join(SHOTS_DIR, device), {recursive: true, force: true});
+    await Promise.all(
+      Object.keys(VIEWPORTS).flatMap(device => [
+        fsp.rm(path.join(SHOTS_DIR, device), {recursive: true, force: true}),
+        ...(values.baseline
+          ? [fsp.rm(path.join(BASELINE_DIR, device), {recursive: true, force: true})]
+          : []),
+      ])
+    );
+  }
+  await Promise.all(
+    SLOT_SPECS.flatMap(({device, theme}) => [
+      fsp.mkdir(path.join(SHOTS_DIR, device, theme), {recursive: true}),
+      ...(values.baseline
+        ? [fsp.mkdir(path.join(BASELINE_DIR, device, theme), {recursive: true})]
+        : []),
+    ])
+  );
+  await Promise.all(
+    shotPaths.map(async relPath => {
+      const src = path.join(newDir, relPath);
+      const dest = path.join(SHOTS_DIR, relPath);
       if (values.baseline) {
-        await fsp.rm(path.join(BASELINE_DIR, device), {recursive: true, force: true});
+        await fsp.copyFile(src, path.join(BASELINE_DIR, relPath));
       }
-    }
-  }
-  for (const relPath of shotPaths) {
-    const src = path.join(newDir, relPath);
-    const dest = path.join(SHOTS_DIR, relPath);
-    await fsp.mkdir(path.dirname(dest), {recursive: true});
-    if (values.baseline) {
-      const baseDest = path.join(BASELINE_DIR, relPath);
-      await fsp.mkdir(path.dirname(baseDest), {recursive: true});
-      await fsp.copyFile(src, baseDest);
-    }
-    await fsp.rename(src, dest);
-  }
+      await fsp.rename(src, dest);
+    })
+  );
   await fsp.rm(newDir, {recursive: true, force: true});
   await writeRegionsFile(REGIONS_FILE, shotRegions, isFiltered);
   if (values.baseline) {
@@ -3733,7 +4015,7 @@ async function run(): Promise<void> {
     await fsp.rm(DIFF_DIR, {recursive: true, force: true});
   } else if (hasBaseline) {
     const tolerance = Number(values.tolerance) || 0;
-    const only = values.only === undefined ? undefined : shotPaths;
+    const only = isFiltered ? shotPaths : undefined;
     const cmp = await compareShots(BASELINE_DIR, SHOTS_DIR, DIFF_DIR, tolerance, only);
     changes = cmp.changes;
     same = cmp.same;

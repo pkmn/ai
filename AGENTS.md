@@ -123,8 +123,13 @@ Repo-specific style, naming, and architecture rules alongside `@pkmn/eslint-conf
 
 - Run `npm run test` (`tsc -p .`, static build, `eslint --cache`, `stylelint static/style/*.css tools/*.css`,
   `hyperlink public --check-anchors`) and `npx vitest run`.
-- For TSX/CSS/client changes: run `npm run shots -- --baseline` before and `npm run shots` after to
-  verify zero console/page errors and zero overflow (`scrollWidth <= innerWidth`) across `375px`
+- For TSX/CSS/client changes: **scope `npm run shots` with `--only <section|scenario,...>`** to
+  capture only the states affected by your changes (`npm run shots -- --list` lists all sections and
+  names; `--only` accepts comma-separated or repeatable filters, e.g. `--only ladders,battles`):
+  run `npm run shots -- --baseline --only <targets>` before edits and `npm run shots -- --only <targets>`
+  after edits. Reserve unfiltered full `npm run shots` for changes to shared chrome, layout, or
+  global CSS (`static/style/index.css`, `static/build.tsx`, shared tables/nav). Verify zero
+  console/page errors and zero overflow (`scrollWidth <= innerWidth`) across `375px`
   `small`–`desktop` (`light` & `dark`), inspect `.shots/index.html` and changed PNGs, then run
   `npm run clean && npm run test` so `public/` has no mock artifacts. Link changed light-mode desktop
   screenshots and include the full disk path to `.shots/index.html` (important in worktrees).

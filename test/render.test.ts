@@ -2711,6 +2711,31 @@ describe('JSON route parity & retired pool archives', () => {
     expect(gallery).toContain('account-ineligible-smogon-banned');
   });
 
+  test('filterScenarios returns all scenarios when given no filters', () => {
+    const scenarios = shots.buildScenarios('deadbeef1234');
+    expect(shots.filterScenarios(scenarios)).toHaveLength(scenarios.length);
+    expect(shots.filterScenarios(scenarios, ['  ,  '])).toHaveLength(scenarios.length);
+  });
+
+  test('filterScenarios matches comma-separated section names', () => {
+    const scenarios = shots.buildScenarios('deadbeef1234');
+    const filtered = shots.filterScenarios(scenarios, ['ladders,tournaments']);
+    expect(filtered.length).toBeGreaterThan(0);
+    expect(filtered.every(s => s.section === 'ladders' || s.section === 'tournaments')).toBe(true);
+    expect(filtered.some(s => s.section === 'ladders')).toBe(true);
+    expect(filtered.some(s => s.section === 'tournaments')).toBe(true);
+  });
+
+  test('filterScenarios matches repeatable filter entries case-insensitively', () => {
+    const scenarios = shots.buildScenarios('deadbeef1234');
+    const filtered = shots.filterScenarios(scenarios, ['HOME', 'account-teams-complete']);
+    expect(filtered.map(s => s.name)).toEqual([
+      'home',
+      'home-live-banner',
+      'account-teams-complete',
+    ]);
+  });
+
   test('emits canonical URLs with ETag caching headers across dynamic SSR routes', async () => {
     const h = await startRenderHarness({db, publicDir: tmpPublic});
     try {
