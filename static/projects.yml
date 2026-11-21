@@ -796,17 +796,23 @@
 - name: MissingNo.Zero
   paper: Greenquist:2026
   site: https://www.smogon.com/forums/threads/3790707/
-  active: 2026 # November 1
+  active: 2026 # July 25
   engine:
     - name: pkmn
       url: https://github.com/pkmn/engine
     - name: poke-engine
       url: https://github.com/pmariglia/poke-engine
+    - name: pikapro-engine
+      url: https://github.com/spedr/pikapro-engine
     - name: pokemon-showdown
       url: https://github.com/smogon/pokemon-showdown
     - name: poke-env
       url: https://github.com/hsahovic/poke-env
-  language: Python
+  language: [Python, Rust]
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    qualified: true
+    owners:
+      nickgreenquist: AlphaStaryu.764554
