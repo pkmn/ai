@@ -75,18 +75,18 @@ export function checkSubmoduleState(
   if (!stats.isDirectory()) return {ready: false, problem: 'it is not a directory'};
   if (fs.readdirSync(dir).length === 0) return {ready: false};
 
-  const top = runGit(['rev-parse', '--show-toplevel'], {cwd: dir});
-  if (!top.ok) {
-    return {ready: false, problem: `its .git leads nowhere (${top.stderr})`};
+  const info = runGit(['rev-parse', '--show-toplevel', '--absolute-git-dir'], {cwd: dir});
+  if (!info.ok) {
+    return {ready: false, problem: `its .git leads nowhere (${info.stderr})`};
   }
-  const realToplevel = fs.realpathSync(top.stdout);
+  const [topLine, absGitLine] = info.stdout.split('\n');
+  const realToplevel = fs.realpathSync(topLine);
   const realRoot = fs.realpathSync(rootDir);
   if (realToplevel === realRoot) {
     return {ready: false, problem: 'it has no .git of its own'};
   }
   const realDir = fs.realpathSync(dir);
-  const absGit = runGit(['rev-parse', '--absolute-git-dir'], {cwd: dir});
-  const foreignGitDir = absGit.ok ? absGit.stdout : undefined;
+  const foreignGitDir = absGitLine || undefined;
   if (realToplevel !== realDir) {
     return {
       ready: false,
@@ -95,10 +95,10 @@ export function checkSubmoduleState(
     };
   }
 
-  if (!absGit.ok) {
+  if (!absGitLine) {
     return {ready: false, problem: 'unable to resolve its git directory'};
   }
-  const realSubGit = fs.realpathSync(absGit.stdout);
+  const realSubGit = fs.realpathSync(absGitLine);
   const realGitDir = fs.realpathSync(gitDir);
   if (realSubGit !== realGitDir && !realSubGit.startsWith(`${realGitDir}${path.sep}`)) {
     return {
@@ -168,11 +168,10 @@ export function setUpSubmodule(
   log: (msg: string) => void = console.log,
   update = false
 ) {
-  const gitDir = execGit(['rev-parse', '--absolute-git-dir'], {cwd: rootDir});
-  const commonDir = execGit(
-    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+  const [gitDir, commonDir] = execGit(
+    ['rev-parse', '--path-format=absolute', '--absolute-git-dir', '--git-common-dir'],
     {cwd: rootDir}
-  );
+  ).split('\n');
   const state = checkSubmoduleState(rootDir, gitDir, spec);
   const subDir = path.join(rootDir, spec.path);
 
@@ -266,11 +265,10 @@ export function setUpPrivate(
   rootDir: string,
   log: (msg: string) => void = console.log
 ) {
-  const gitDir = execGit(['rev-parse', '--absolute-git-dir'], {cwd: rootDir});
-  const commonDir = execGit(
-    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+  const [gitDir, commonDir] = execGit(
+    ['rev-parse', '--path-format=absolute', '--absolute-git-dir', '--git-common-dir'],
     {cwd: rootDir}
-  );
+  ).split('\n');
   const realGitDir = fs.realpathSync(gitDir);
   const realCommonDir = fs.realpathSync(commonDir);
   if (realGitDir === realCommonDir) return;

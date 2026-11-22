@@ -10,6 +10,8 @@ import {root} from '../static/util';
 import {runPkmnCli} from '../tools/pkmn';
 
 const tempDirs: string[] = [];
+const sharedTempDirs: string[] = [];
+const CUSTOM_SIM_VERSION = '0.99.1-custom';
 
 afterEach(() => {
   while (tempDirs.length > 0) {
@@ -20,6 +22,10 @@ afterEach(() => {
 
 afterAll(async () => {
   await sim.closeAllWorkers();
+  while (sharedTempDirs.length > 0) {
+    const dir = sharedTempDirs.pop()!;
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
 });
 
 describe('multi-version @pkmn/sim support', () => {
@@ -123,9 +129,9 @@ describe('multi-version @pkmn/sim support', () => {
     await expect(runPkmnCli(['install-sim'])).rejects.toThrow(/Usage: pkmn install-sim/);
   });
 
-  function installCustomFormatSim(version: string, formatName: string) {
+  function installCustomFormatSim(version: string, formatNames: string[], dirs = tempDirs) {
     const testSimDir = root('sim', version);
-    tempDirs.push(testSimDir);
+    dirs.push(testSimDir);
     const simPkgDir = path.join(testSimDir, 'node_modules', '@pkmn', 'sim');
     fs.mkdirSync(simPkgDir, {recursive: true});
     fs.writeFileSync(path.join(testSimDir, 'package.json'), JSON.stringify({name: 'sim-custom'}));
@@ -134,16 +140,26 @@ describe('multi-version @pkmn/sim support', () => {
       JSON.stringify({name: '@pkmn/sim', version, main: 'index.js'})
     );
     const rootSimEntry = JSON.stringify(root('node_modules', '@pkmn', 'sim'));
+    const formatsJson = JSON.stringify(
+      formatNames.map(name => ({name, mod: 'gen9', ruleset: ['Standard']}))
+    );
     fs.writeFileSync(
       path.join(simPkgDir, 'index.js'),
       [
         `const realSim = require(${rootSimEntry});`,
-        `realSim.Dex.formats.extend([{name: ${JSON.stringify(formatName)}, mod: 'gen9', ` +
-          "ruleset: ['Standard']}]);",
+        `realSim.Dex.formats.extend(${formatsJson});`,
         'module.exports = realSim;',
       ].join('\n')
     );
   }
+
+  beforeAll(() => {
+    installCustomFormatSim(
+      CUSTOM_SIM_VERSION,
+      ['[Gen 9] Future OU', '[Gen 9] Harvest Future'],
+      sharedTempDirs
+    );
+  });
 
   const SAMPLE_TEAM_A = [
     'Zapdos @ Heavy-Duty Boots',
@@ -258,12 +274,11 @@ describe('multi-version @pkmn/sim support', () => {
   ].join('\n');
 
   test('validateCompetitorTeamsIncrementalForVersion validates custom worker formats', async () => {
-    installCustomFormatSim('0.99.1-custom', '[Gen 9] Future OU');
     const first = await teams.validateCompetitorTeamsIncrementalForVersion(
       SAMPLE_TEAM_A,
       {format: 'gen9futureou', pools: [], teams: 2},
       [],
-      '0.99.1-custom'
+      CUSTOM_SIM_VERSION
     );
     expect(first.rejections).toEqual([]);
     expect(first.newlySavedCount).toBe(1);
@@ -276,7 +291,7 @@ describe('multi-version @pkmn/sim support', () => {
       `${SAMPLE_TEAM_A}\n\n===\n\n${SAMPLE_TEAM_B}`,
       {format: 'gen9futureou', pools: [], teams: 2},
       first.allSaved,
-      '0.99.1-custom'
+      CUSTOM_SIM_VERSION
     );
     expect(second.rejections).toEqual([]);
     expect(second.newlySavedCount).toBe(1);
@@ -284,7 +299,6 @@ describe('multi-version @pkmn/sim support', () => {
   });
 
   test('pkmn upload-ladder-teams validates harvested teams against ladder version', async () => {
-    installCustomFormatSim('0.99.2-custom', '[Gen 9] Harvest Future');
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-harvest-ver-'));
     tempDirs.push(tmpDir);
     const teamsFile = path.join(tmpDir, 'teams.txt');
@@ -300,7 +314,7 @@ describe('multi-version @pkmn/sim support', () => {
         next: {
           id: 'gen9harvestfuture20261109',
           format: 'gen9harvestfuture',
-          version: '0.99.2-custom',
+          version: CUSTOM_SIM_VERSION,
           team: 'harvested',
         },
         now: 1_760_000_100,
@@ -377,7 +391,7 @@ describe('multi-version @pkmn/sim support', () => {
     fs.writeFileSync(
       path.join(simPkgDir, 'index.js'),
       [
-        'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600);',
+        'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);',
         'exports.Dex = {',
         '  mod() {},',
         '  formats: { extend() {}, get(id) { return {exists: true, id}; } },',
@@ -391,13 +405,11 @@ describe('multi-version @pkmn/sim support', () => {
       ].join('\n')
     );
 
-    await expect(sim.getWorkerSimVersion(ver, 80)).rejects.toThrow(/timed out after 80ms/);
+    await expect(sim.getWorkerSimVersion(ver, 30)).rejects.toThrow(/timed out after 30ms/);
   });
 
   test('createBattle executes a complete battle inside a custom-version worker', async () => {
-    const ver = '0.99.5-battle';
-    installCustomFormatSim(ver, '[Gen 9] Custom Worker Battle');
-    const battle = sim.createBattle(ver);
+    const battle = sim.createBattle(CUSTOM_SIM_VERSION);
     const drive = async (side: 'p1' | 'p2', stream: AsyncIterable<string>) => {
       for await (const chunk of stream) {
         for (const line of chunk.split('\n')) {
@@ -424,9 +436,7 @@ describe('multi-version @pkmn/sim support', () => {
   });
 
   test('getTimerSettings resolves VGC Timer inside a custom-version worker', async () => {
-    const ver = '0.99.6-timer';
-    installCustomFormatSim(ver, '[Gen 9] Custom Timer');
-    const timer = await sim.getTimerSettings('gen9championsvgc2026regmc', ver);
+    const timer = await sim.getTimerSettings('gen9championsvgc2026regmc', CUSTOM_SIM_VERSION);
     expect(timer).toMatchObject({
       startingSeconds: 420,
       graceSeconds: 90,
