@@ -242,16 +242,18 @@ function wikiNav(
   slug: string,
   active?: 'view' | 'edit' | 'history' | 'pages',
   loggedIn = false,
-  returnTo = '/wiki'
+  returnTo = '/wiki',
+  showEdit = true
 ): util.Html {
   const item = (key: NonNullable<typeof active>, href: string, label: string) =>
     key === active ? <strong>{label}</strong> : <a href={href}>{label}</a>;
   const encoded = encodeSlug(slug);
   const viewHref = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
   return <nav id='wiki-nav'>
-    {item('view', viewHref, 'View')} — {item('edit', `/wiki/${encoded}/edit`, 'Edit')} —{' '}
-    {item('history', `/wiki/${encoded}/history`, 'History')} —{' '}
-    {item('pages', '/wiki/pages', 'Pages')}
+    {item('view', viewHref, 'View')}
+    {showEdit && <>{' — '}{item('edit', `/wiki/${encoded}/edit`, 'Edit')}</>}
+    {' — '}{item('history', `/wiki/${encoded}/history`, 'History')}
+    {' — '}{item('pages', '/wiki/pages', 'Pages')}
     {loggedIn && <>
       {' — '}
       <form
@@ -1333,6 +1335,12 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
   const getEffectiveUser = (req: http.IncomingMessage): string | undefined =>
     wiki.auth.getGitHubUser(req);
 
+  // Logged-in users only see `Edit` when `canEdit` permits it; logged-out visitors see `Edit` on
+  // general/project pages (to trigger OAuth login) but not on the admin-locked `index` home page.
+  const canShowEdit = (slug: string, req: http.IncomingMessage, loggedIn: boolean): boolean => (
+    loggedIn ? wiki.canEdit(getEffectiveUser(req), slug) : slug !== 'index'
+  );
+
   const resolveOrRedirect = (
     res: http.ServerResponse,
     rawSlug: string,
@@ -1466,7 +1474,13 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       title: heading,
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
-      nav: wikiNav(slug, 'view', loggedIn, logoutReturnTo(viewPath, vis)),
+      nav: wikiNav(
+        slug,
+        'view',
+        loggedIn,
+        logoutReturnTo(viewPath, vis),
+        canShowEdit(slug, req, loggedIn)
+      ),
       content: util.raw(renderedHtml),
     }), isPublic);
   };
@@ -1497,7 +1511,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       title: 'Pages — Wiki',
       heading: 'Pages',
       path: '/wiki/pages/',
-      nav: wikiNav('index', 'pages', loggedIn, '/wiki/pages'),
+      nav: wikiNav('index', 'pages', loggedIn, '/wiki/pages', false),
       content: visible.length ? (
         <>
           {generalPages.length > 0 && (
@@ -1532,7 +1546,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       title: 'Projects — Wiki',
       heading: 'Projects',
       path: '/wiki/projects/',
-      nav: wikiNav('index', undefined, loggedIn, '/wiki/projects'),
+      nav: wikiNav('index', undefined, loggedIn, '/wiki/projects', false),
       content: projectPages.length ? (
         <ul id='wiki-pages'>
           {projectPages.map(p => (
@@ -1823,7 +1837,8 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           slug,
           'history',
           loggedIn,
-          logoutReturnTo(`/wiki/${encoded}/history`, currentVis)
+          logoutReturnTo(`/wiki/${encoded}/history`, currentVis),
+          canShowEdit(slug, req, loggedIn)
         ),
         content: table,
       }), isPublic);
@@ -1893,7 +1908,8 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
             slug,
             'history',
             loggedIn,
-            logoutReturnTo(`/wiki/${encoded}/${sha}?diff=1`, effectiveVis)
+            logoutReturnTo(`/wiki/${encoded}/${sha}?diff=1`, effectiveVis),
+            canShowEdit(slug, req, loggedIn)
           ),
           content: (
             <>
@@ -1937,7 +1953,8 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           slug,
           'history',
           loggedIn,
-          logoutReturnTo(`/wiki/${encoded}/${sha}`, effectiveVis)
+          logoutReturnTo(`/wiki/${encoded}/${sha}`, effectiveVis),
+          canShowEdit(slug, req, loggedIn)
         ),
         content: (
           <>

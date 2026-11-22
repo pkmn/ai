@@ -659,6 +659,51 @@ describe('wiki server routes', () => {
     );
   });
 
+  test('omits Edit link from /wiki/pages or /wiki/projects navigation', async () => {
+    const admin = {Cookie: sessionCookie('scheibo')};
+    for (const route of ['/wiki/pages', '/wiki/projects']) {
+      const anonHtml = await (await realFetch(`${baseUrl}${route}`)).text();
+      expect(anonHtml).not.toContain('/wiki/index/edit');
+      const adminHtml = await (await realFetch(`${baseUrl}${route}`, {headers: admin})).text();
+      expect(adminHtml).not.toContain('/wiki/index/edit');
+    }
+  });
+
+  test('hides Edit link in wiki nav when current viewer cannot edit the page', async () => {
+    await postWiki('projects/0_ERROR', 'pre', {
+      content: '# 0 ERROR\n\nNotes.',
+      visibility: 'developers',
+      action: 'save',
+    });
+
+    const anonIndex = await (await realFetch(`${baseUrl}/wiki`)).text();
+    expect(anonIndex).not.toContain('/wiki/index/edit');
+
+    const devIndex = await (
+      await realFetch(`${baseUrl}/wiki`, {headers: {Cookie: sessionCookie('pmariglia')}})
+    ).text();
+    expect(devIndex).not.toContain('/wiki/index/edit');
+
+    const adminIndex = await (
+      await realFetch(`${baseUrl}/wiki`, {headers: {Cookie: sessionCookie('scheibo')}})
+    ).text();
+    expect(adminIndex).toContain('/wiki/index/edit');
+
+    const nonOwnerProj = await (
+      await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {
+        headers: {Cookie: sessionCookie('pmariglia')},
+      })
+    ).text();
+    expect(nonOwnerProj).not.toContain('/wiki/projects/0_ERROR/edit');
+
+    const ownerProj = await (
+      await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {
+        headers: {Cookie: sessionCookie('pre')},
+      })
+    ).text();
+    expect(ownerProj).toContain('/wiki/projects/0_ERROR/edit');
+  });
+
   test('rejects unregistered slugs under /wiki/projects/ with 404 even for admins', async () => {
     const admin = {Cookie: sessionCookie('scheibo')};
     for (const route of [
