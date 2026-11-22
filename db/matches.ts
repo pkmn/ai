@@ -759,6 +759,7 @@ export function getRecentMatchesForAgentOnLadder(
   ladderId: string,
   limit = 25
 ): RecentMatchView[] {
+  if (limit <= 0) return [];
   const versionRows = db.prepare(
     'SELECT id FROM agent_versions WHERE agent_id = ? ORDER BY id ASC'
   ).all(agentId) as Array<{id: number}>;

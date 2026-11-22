@@ -2648,6 +2648,49 @@ describe('tournament standings', () => {
     }
   });
 
+  test('getRecentMatchesForAgentOnLadder returns empty array for non-positive limits', () => {
+    const {telDb, alpha, vA, vB} = createTelemetryDb();
+    try {
+      telDb.recordCompletedMatch({
+        match: {
+          id: 'm-limit-1',
+          ladderId: 'gen1ou20261109',
+          p1VersionId: vA.id,
+          p2VersionId: vB.id,
+          seed: '1,2,3,4',
+          game1Outcome: 'W',
+          game2Outcome: 'L',
+          category: 'WL',
+          game1Turns: 12,
+          game2Turns: 14,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 100,
+          p1Game2PeakRam: 100,
+          p2Game1PeakRam: 100,
+          p2Game2PeakRam: 100,
+          p1Game1BankSeconds: 140,
+          p1Game2BankSeconds: 140,
+          p2Game1BankSeconds: 140,
+          p2Game2BankSeconds: 140,
+          p1Game1InitMillis: 500,
+          p1Game2InitMillis: 500,
+          p2Game1InitMillis: 500,
+          p2Game2InitMillis: 500,
+          p1Game1MeanTurnMillis: 50,
+          p1Game2MeanTurnMillis: 50,
+          p2Game1MeanTurnMillis: 50,
+          p2Game2MeanTurnMillis: 50,
+          completedAt: 100,
+        },
+      });
+      expect(telDb.getRecentMatchesForAgentOnLadder(alpha.id, 'gen1ou20261109', 0)).toEqual([]);
+      expect(telDb.getRecentMatchesForAgentOnLadder(alpha.id, 'gen1ou20261109', -1)).toEqual([]);
+    } finally {
+      telDb.close();
+    }
+  });
+
   test('getMatchesPage filters ladder matches per agent with MULTI-INDEX OR predicate', () => {
     const {telDb, vA, vB} = createTelemetryDb();
     try {
