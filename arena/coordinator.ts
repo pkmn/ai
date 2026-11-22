@@ -5,6 +5,11 @@ import * as path from 'path';
 
 import type {PRNGSeed} from '@pkmn/sim';
 
+import {
+  SMOKE_TESTS_PER_CYCLE,
+  SMOKE_TEST_CYCLE_INTERVAL,
+  SmokeCadence,
+} from '../db/config';
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as sim from '../server/sim';
@@ -18,6 +23,33 @@ import * as packages from './packages';
 
 export type ActiveRosterEntry = arena.ActiveRosterEntry;
 export type LadderSnapshot = arena.PlayableLadderSnapshot;
+
+export class SmokeCadenceTracker {
+  private cyclesSinceSmoke: number;
+
+  constructor() {
+    // Start ready so the first pending submission after daemon startup runs immediately
+    // without waiting `everyCycles` matches.
+    this.cyclesSinceSmoke = Number.MAX_SAFE_INTEGER;
+  }
+
+  budgetForCycle(cadence?: SmokeCadence): number {
+    const maxPerCycle = cadence?.maxPerCycle ?? SMOKE_TESTS_PER_CYCLE;
+    const everyCycles = cadence?.everyCycles ?? SMOKE_TEST_CYCLE_INTERVAL;
+    if (maxPerCycle <= 0) return 0;
+    return this.cyclesSinceSmoke >= everyCycles ? maxPerCycle : 0;
+  }
+
+  recordCycle(ingested: number, playedMatch: boolean) {
+    if (ingested > 0) {
+      this.cyclesSinceSmoke = playedMatch ? 1 : Number.MAX_SAFE_INTEGER;
+    } else if (playedMatch) {
+      this.cyclesSinceSmoke = Math.min(Number.MAX_SAFE_INTEGER, this.cyclesSinceSmoke + 1);
+    } else {
+      this.cyclesSinceSmoke = Number.MAX_SAFE_INTEGER;
+    }
+  }
+}
 
 interface MirrorPlayer {
   versionId: number;
@@ -314,9 +346,10 @@ export class Coordinator {
   }
 
   async processPendingSubmissions(
-    laddersById?: ReadonlyMap<string, LadderSnapshot>
+    laddersById?: ReadonlyMap<string, LadderSnapshot>,
+    maxSubmissions = SMOKE_TESTS_PER_CYCLE
   ): Promise<number> {
-    if (this.draining) return 0;
+    if (this.draining || maxSubmissions <= 0) return 0;
     const {ladders, submissions} = await this.client.getPendingSubmissions({target: 'ladder'});
     const pendingMetaById = new Map<
       string,
@@ -329,7 +362,7 @@ export class Coordinator {
     let processed = 0;
 
     for (const sub of submissions) {
-      if (this.draining) break;
+      if (this.draining || processed >= maxSubmissions) break;
       // Refresh the 15m server watchdog between submissions so large launch queues stay non-stale.
       await this.client.sendHeartbeat({idle: true}).catch(() => undefined);
       processed++;

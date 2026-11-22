@@ -163,6 +163,7 @@ export async function runDaemon(opts: {
     await coord.recoverIncompleteMatches();
     let consecutiveCycleErrors = 0;
     let lastHostCheckAt = 0;
+    const smokeCadence = new coordinator.SmokeCadenceTracker();
 
     while (!coord.isDraining()) {
       try {
@@ -181,15 +182,19 @@ export async function runDaemon(opts: {
           await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
         }
         const byId = new Map(ladders.map(l => [l.id, l]));
-        const ingested = await coord.processPendingSubmissions(byId);
+        const smokeBudget = smokeCadence.budgetForCycle(initialSnap.smokeCadence);
+        const ingested = smokeBudget > 0
+          ? await coord.processPendingSubmissions(byId, smokeBudget)
+          : 0;
         if (ingested > 0 && !coord.isDraining()) {
           const refreshed = await client.getPlayableLadders();
           ladders = refreshed.ladders;
           quarantinedVersionIds = refreshed.quarantinedVersionIds ?? [];
         }
         const played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
+        smokeCadence.recordCycle(ingested, Boolean(played));
         consecutiveCycleErrors = 0;
-        if (!played && !opts.once && !coord.isDraining()) {
+        if (!played && ingested === 0 && !opts.once && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);
           await sleeper.sleep(pollIntervalMillis);
         }

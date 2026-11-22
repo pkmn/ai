@@ -3183,6 +3183,114 @@ describe('arena infrastructure', () => {
       }
     });
 
+    test('caps processPendingSubmissions to maxSubmissions (default 1) in FIFO order', async () => {
+      const rootDir = path.join(tmpDir, 'smoke-cap');
+      const stateDb = new arenaDb.Database(':memory:');
+      const reported: number[] = [];
+      let pendingCalls = 0;
+      const queued = [31, 32, 33].map((versionId, idx) => ({
+        versionId,
+        agentId: idx + 1,
+        agentSlug: `agent-${idx + 1}`,
+        agentName: `Agent ${idx + 1}`,
+        version: '1.0.0',
+        package: 'bundle' as const,
+        url: `file://${bundleTar}`,
+        sha256: bundleSha,
+        ladders: ['gen9customgame'],
+        tournaments: [],
+        teamsByLadder: {},
+      }));
+      const remaining = [...queued];
+      const fakeClient = {
+        getPendingSubmissions: () => {
+          pendingCalls++;
+          return Promise.resolve({ladders: [], submissions: [...remaining]});
+        },
+        reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
+          reported.push(payload.versionId);
+          const idx = remaining.findIndex(s => s.versionId === payload.versionId);
+          if (idx >= 0) remaining.splice(idx, 1);
+          return Promise.resolve({
+            ok: true as const,
+            versionId: payload.versionId,
+            smokeStatus: payload.smokeStatus,
+            retiredByLadder: {},
+          });
+        },
+        sendHeartbeat: () => Promise.resolve({ok: true as const, updatedAt: 0}),
+      } as unknown as serverArena.Client;
+      const ladderSnap: coordinator.LadderSnapshot = {
+        id: 'gen9customgame',
+        slot: 'rand',
+        format: 'gen9customgame',
+        team: 'random',
+        status: 'active',
+        min: 2,
+        entries: [],
+        pairAggregates: [],
+      };
+      const coord = new coordinator.Coordinator({
+        client: fakeClient,
+        stateDb,
+        baselineSpec: {mode: 'native', target: process.execPath, args: [defaultAgentScript]},
+        rootDir,
+        devMode: true,
+      });
+      try {
+        // Paused budget skips polling completely.
+        expect(await coord.processPendingSubmissions(new Map([['gen9customgame', ladderSnap]]), 0))
+          .toBe(0);
+        expect(pendingCalls).toBe(0);
+
+        // Default limit processes at most 1 pending submission per call in FIFO order.
+        expect(await coord.processPendingSubmissions(new Map([['gen9customgame', ladderSnap]])))
+          .toBe(1);
+        expect(reported).toEqual([31]);
+
+        // Explicit burst limit processes up to N pending submissions.
+        expect(await coord.processPendingSubmissions(new Map([['gen9customgame', ladderSnap]]), 2))
+          .toBe(2);
+        expect(reported).toEqual([31, 32, 33]);
+      } finally {
+        stateDb.close();
+      }
+    });
+
+    test('SmokeCadenceTracker enforces per-cycle limits, N-cycle intervals, and pauses', () => {
+      const tracker = new coordinator.SmokeCadenceTracker();
+
+      // Default 1 per 1 cycle runs every tick.
+      expect(tracker.budgetForCycle()).toBe(1);
+      tracker.recordCycle(1, true);
+      expect(tracker.budgetForCycle()).toBe(1);
+
+      // Throttled 1 every 3 cycles: smoke on cycle 1, skip cycles 2-3, smoke on cycle 4.
+      const throttled = {maxPerCycle: 1, everyCycles: 3};
+      const t2 = new coordinator.SmokeCadenceTracker();
+      expect(t2.budgetForCycle(throttled)).toBe(1);
+      t2.recordCycle(1, true); // cycle 1
+      expect(t2.budgetForCycle(throttled)).toBe(0);
+      t2.recordCycle(0, true); // cycle 2
+      expect(t2.budgetForCycle(throttled)).toBe(0);
+      t2.recordCycle(0, true); // cycle 3
+      expect(t2.budgetForCycle(throttled)).toBe(1); // cycle 4
+
+      // When queue was empty on an eligible cycle, next cycle remains immediately eligible.
+      t2.recordCycle(0, true);
+      expect(t2.budgetForCycle(throttled)).toBe(1);
+
+      // When no ladder match is playable (e.g. pre-launch upcoming), do not delay smoke tests.
+      t2.recordCycle(1, false);
+      expect(t2.budgetForCycle(throttled)).toBe(1);
+
+      // Paused cadence (0 per cycle) returns 0 even when idle.
+      expect(t2.budgetForCycle({maxPerCycle: 0, everyCycles: 1})).toBe(0);
+
+      // Burst cadence returns the dialed-up limit.
+      expect(t2.budgetForCycle({maxPerCycle: 4, everyCycles: 1})).toBe(4);
+    });
+
     test('does not floor ladder smoke-test maxPeakRam at 64 MiB', () => {
       const src = fs.readFileSync(root('arena', 'coordinator.ts'), 'utf8');
       expect(src).toContain('maxPeakRam: 0,');
