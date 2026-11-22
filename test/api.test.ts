@@ -3000,9 +3000,16 @@ describe('createServerApp production HTTP hardening', () => {
   test('nginx nests SSE tournament stream inside buffered ^~ /api/tournaments/', () => {
     const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
     const apiToursIdx = conf.indexOf('location ^~ /api/tournaments/ {');
-    const streamIdx = conf.indexOf('location ~ ^/api/tournaments/[^/]+/stream$ {');
+    const streamMatch = /location ~ (\^\/api\/tournaments\/[^ ]+) \{/.exec(
+      conf.slice(apiToursIdx)
+    );
     expect(apiToursIdx).toBeGreaterThan(0);
-    expect(streamIdx).toBeGreaterThan(apiToursIdx);
+    expect(streamMatch).not.toBeNull();
+    const streamRe = new RegExp(streamMatch![1]);
+    expect(streamRe.test('/api/tournaments/1/stream')).toBe(true);
+    expect(streamRe.test('/api/tournaments/1/stream/')).toBe(true);
+    expect(streamRe.test('/api/tournaments/1/games.json')).toBe(false);
+    const streamIdx = apiToursIdx + streamMatch!.index;
     const parentPrefix = conf.slice(apiToursIdx, streamIdx);
     expect(parentPrefix).not.toContain('gzip off;');
     expect(parentPrefix).not.toContain('proxy_buffering off;');
