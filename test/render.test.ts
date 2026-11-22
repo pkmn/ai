@@ -193,6 +193,8 @@ interface RenderHarnessOptions {
   liveDoc?: arena.LiveDocument;
   tournamentBroadcast?: tournaments.LiveBroadcast;
   now?: number | (() => number);
+  withViewer?: boolean;
+  syncBanner?: boolean;
 }
 
 type RenderHarness = Awaited<ReturnType<typeof startRenderHarness>>;
@@ -203,8 +205,8 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     ? nowOpt
     : () => nowOpt ?? NOW;
 
-  tournaments.renderBattleViewerPage(opts.publicDir);
-  syncStaticLiveBanner(opts.publicDir, opts.db.getRunningTournament());
+  if (opts.withViewer) tournaments.renderBattleViewerPage(opts.publicDir);
+  if (opts.syncBanner) syncStaticLiveBanner(opts.publicDir, opts.db.getRunningTournament());
 
   const app = polka();
   const arenaHandle = arena.register(app, {
@@ -1144,6 +1146,7 @@ describe('tournament SSR views', () => {
       publicDir: tmpPublic,
       tournamentBroadcast: broadcast,
       now: NOW,
+      withViewer: true,
     });
   });
 
@@ -1394,7 +1397,7 @@ describe('SSR cache invalidation', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-render-inv-'));
     tmpPublic = path.join(tmpDir, 'public');
-    seedStaticPublicAssets(tmpPublic);
+    fs.mkdirSync(tmpPublic, {recursive: true});
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
@@ -1732,7 +1735,11 @@ describe('SSR cache invalidation', () => {
 
   test('invalidates /projects/ ETag when projects.dj changes on disk', async () => {
     const tmpStatic = path.join(tmpDir, 'static');
-    fs.cpSync(root('static'), tmpStatic, {recursive: true});
+    fs.mkdirSync(tmpStatic, {recursive: true});
+    for (const file of ['projects.dj', 'projects.yml', 'projects.bib']) {
+      fs.copyFileSync(root('static', file), path.join(tmpStatic, file));
+    }
+    fs.symlinkSync(root('static', 'style'), path.join(tmpStatic, 'style'));
 
     const h = await startRenderHarness({
       db,
@@ -1898,6 +1905,7 @@ describe('SSR cache invalidation', () => {
 
   test('syncs LIVE #topbar banner onto non-placeholder static pages until completed',
     async () => {
+      seedStaticPublicAssets(tmpPublic);
       db.upsertTournament({
         id: '2',
         name: 'Tournament #2: VGC 2026 Reg M-C OTS BO3',
@@ -1909,7 +1917,7 @@ describe('SSR cache invalidation', () => {
         status: 'running',
         startsAt: NOW - 1800,
       });
-      const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+      const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW, syncBanner: true});
       try {
         expect(fs.readFileSync(path.join(tmpPublic, 'index.html'), 'utf8'))
           .toContain('<span>\u25cf LIVE</span> Tournament #2: VGC 2026 Reg M-C OTS BO3');
@@ -1931,17 +1939,20 @@ describe('SSR cache invalidation', () => {
     });
 });
 
+const PACKED_VGC_FP = VGC_PASTES_FP.map(p => Teams.pack(Teams.import(p)));
+const PACKED_VGC_JAX = VGC_PASTES_JAX.map(p => Teams.pack(Teams.import(p)));
+const VGC_FP_LABEL = formatPoolTeamLabel(PACKED_VGC_FP[0], 'P1');
+const VGC_JAX_LABEL = formatPoolTeamLabel(PACKED_VGC_JAX[0], undefined);
+
 describe('JSON route parity & retired pool archives', () => {
   let tmpDir: string;
   let tmpPublic: string;
   let db: db.Database;
 
-  const packAll = (pastes: string[]) => pastes.map(p => Teams.pack(Teams.import(p)));
-
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-render-archive-'));
     tmpPublic = path.join(tmpDir, 'public');
-    seedStaticPublicAssets(tmpPublic);
+    fs.mkdirSync(tmpPublic, {recursive: true});
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
@@ -1957,7 +1968,7 @@ describe('JSON route parity & retired pool archives', () => {
       url: 'https://github.com/pkmn/fp.tar.zst',
       sha256: 'a'.repeat(64),
       ladderIds: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
-      teamsByLadder: {gen9championsvgc2026regmc: packAll(VGC_PASTES_FP)},
+      teamsByLadder: {gen9championsvgc2026regmc: PACKED_VGC_FP},
       now: DAY_1,
     });
     const jaxSub = db.createSubmission({
@@ -1967,7 +1978,7 @@ describe('JSON route parity & retired pool archives', () => {
       url: 'https://github.com/pkmn/jax.tar.zst',
       sha256: 'b'.repeat(64),
       ladderIds: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
-      teamsByLadder: {gen9championsvgc2026regmc: packAll(VGC_PASTES_JAX)},
+      teamsByLadder: {gen9championsvgc2026regmc: PACKED_VGC_JAX},
       now: DAY_1,
     });
     db.applySubmissionStatus({versionId: fpSub.id, smokeStatus: 'passed', now: DAY_1 + 5});
@@ -1999,8 +2010,8 @@ describe('JSON route parity & retired pool archives', () => {
         p1Game2MeanTurnMillis: 300,
         p2Game1MeanTurnMillis: 340,
         p2Game2MeanTurnMillis: 340,
-        p1TeamLabel: formatPoolTeamLabel(packAll(VGC_PASTES_FP)[0], 'P1'),
-        p2TeamLabel: formatPoolTeamLabel(packAll(VGC_PASTES_JAX)[0], undefined),
+        p1TeamLabel: VGC_FP_LABEL,
+        p2TeamLabel: VGC_JAX_LABEL,
         completedAt: DAY_2,
       },
     });
@@ -2144,7 +2155,7 @@ describe('JSON route parity & retired pool archives', () => {
       expect(teamsDoc.ladderId).toBe('gen9championsvgc2026regmc');
       expect(teamsDoc.entrants.map(r => r.slug)).toEqual(['foul-play', 'jaxcalibur']);
       expect(teamsDoc.entrants[0].teams).toHaveLength(20);
-      expect(teamsDoc.entrants[0].teams[0].hash).toBe(hashTeam(packAll(VGC_PASTES_FP)[0]));
+      expect(teamsDoc.entrants[0].teams[0].hash).toBe(hashTeam(PACKED_VGC_FP[0]));
 
       const vgcLadderJson = await h.getJson<{archiveHref?: string; teamsHref?: string}>(
         '/arena/ladders/gen9championsvgc2026regmc/index.json'
@@ -2840,53 +2851,28 @@ describe('JSON route parity & retired pool archives', () => {
     ).run();
   };
 
-  test('paginates ladder standings table at 25 rows per page', async () => {
-    seedPaginatedHistory();
-    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
-    try {
-      const ladderHtml = await h.getText('/arena/ladders/rby/');
-      expect(ladderHtml).toContain('id="standings-pager"');
-      expect(ladderHtml).toContain('Page 1 of 2 (');
-    } finally {
-      await h.close();
-    }
-  });
+  test('paginates ladder standings, battles, and profile version/match tables at 25 rows',
+    async () => {
+      seedPaginatedHistory();
+      const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
+      try {
+        const ladderHtml = await h.getText('/arena/ladders/rby/');
+        expect(ladderHtml).toContain('id="standings-pager"');
+        expect(ladderHtml).toContain('Page 1 of 2 (');
 
-  test('paginates battles table at 25 rows per page', async () => {
-    seedPaginatedHistory();
-    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
-    try {
-      const battlesHtml = await h.getText('/arena/battles/');
-      expect(battlesHtml).toContain('id="battles-pager"');
-      expect(battlesHtml).toContain('Page 1 of 2 (');
-    } finally {
-      await h.close();
-    }
-  });
+        const battlesHtml = await h.getText('/arena/battles/');
+        expect(battlesHtml).toContain('id="battles-pager"');
+        expect(battlesHtml).toContain('Page 1 of 2 (');
 
-  test('paginates profile version history at 25 rows per page', async () => {
-    seedPaginatedHistory();
-    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
-    try {
-      const profileHtml = await h.getText('/projects/foul-play/');
-      expect(profileHtml).toContain('aria-label="Versions pagination"');
-      expect(profileHtml).toContain('Page 1 of 2 (29 versions)');
-    } finally {
-      await h.close();
-    }
-  });
-
-  test('paginates profile match history at 25 rows per page', async () => {
-    seedPaginatedHistory();
-    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW + 100});
-    try {
-      const profileHtml = await h.getText('/projects/foul-play/');
-      expect(profileHtml).toContain('aria-label="Matches pagination"');
-      expect(profileHtml).toContain('Page 1 of 2 (28 matches)');
-    } finally {
-      await h.close();
-    }
-  });
+        const profileHtml = await h.getText('/projects/foul-play/');
+        expect(profileHtml).toContain('aria-label="Versions pagination"');
+        expect(profileHtml).toContain('Page 1 of 2 (29 versions)');
+        expect(profileHtml).toContain('aria-label="Matches pagination"');
+        expect(profileHtml).toContain('Page 1 of 2 (28 matches)');
+      } finally {
+        await h.close();
+      }
+    });
 
   test('omits tournament winner in /arena.json while status is running', async () => {
     const fpVer = db.getVersionBySlugAndLabel('foul-play', '1.0.0')!;
