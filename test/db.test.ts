@@ -91,6 +91,7 @@ describe('schema migrations', () => {
       'agent-ladders.sql',
       'agent-versions.sql',
       'agents.sql',
+      'config.sql',
       'developers.sql',
       'discord-members.sql',
       'ladder-entries.sql',
@@ -3022,7 +3023,9 @@ describe('per-ladder qualification & migrations', () => {
     fs.mkdirSync(preSchemaDir, {recursive: true});
     fs.mkdirSync(emptyMigDir, {recursive: true});
     for (const file of fs.readdirSync(database.SCHEMA_DIR)) {
-      if (file === 'agent-ladders.sql' || !file.endsWith('.sql')) continue;
+      if (file === 'agent-ladders.sql' || file === 'config.sql' || !file.endsWith('.sql')) {
+        continue;
+      }
       fs.copyFileSync(path.join(database.SCHEMA_DIR, file), path.join(preSchemaDir, file));
     }
 
@@ -3049,6 +3052,7 @@ describe('per-ladder qualification & migrations', () => {
       expect(migratedDb.getAppliedMigrations().map(m => m.version)).toEqual([
         '0001-agent-ladders.sql',
         '0002-sync-agent-status.sql',
+        '0003-config.sql',
       ]);
 
       const magpie = migratedDb.getAgentBySlug('magpie')!;
@@ -3457,6 +3461,29 @@ describe('per-ladder qualification & migrations', () => {
 
       // Ladder budget remains unaffected by tournament failures.
       expect(db.computeAgentSubmissionStatus(alpha.id, tTour + 2_000).canSubmit).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('stores and validates tunable smoke cadence in config', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      expect(db.getSmokeCadence()).toEqual({maxPerCycle: 1, everyCycles: 1});
+      expect(db.setSmokeCadence({maxPerCycle: 1, everyCycles: 5}, 1_760_000_050)).toEqual({
+        maxPerCycle: 1,
+        everyCycles: 5,
+      });
+      expect(db.getSmokeCadence()).toEqual({maxPerCycle: 1, everyCycles: 5});
+
+      expect(db.setSmokeCadence({maxPerCycle: 0, everyCycles: 1}, 1_760_000_060)).toEqual({
+        maxPerCycle: 0,
+        everyCycles: 1,
+      });
+      expect(db.getSmokeCadence()).toEqual({maxPerCycle: 0, everyCycles: 1});
+
+      expect(() => db.setSmokeCadence({maxPerCycle: -1, everyCycles: 1})).toThrow(/non-negative/);
+      expect(() => db.setSmokeCadence({maxPerCycle: 1, everyCycles: 0})).toThrow(/positive/);
     } finally {
       db.close();
     }

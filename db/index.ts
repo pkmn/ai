@@ -10,6 +10,7 @@ import * as teams from './agent-ladder-teams';
 import * as agentLadders from './agent-ladders';
 import * as versions from './agent-versions';
 import * as agents from './agents';
+import * as config from './config';
 import * as developers from './developers';
 import * as discordMembers from './discord-members';
 import * as entries from './ladder-entries';
@@ -361,6 +362,14 @@ export class SqliteDatabase {
 export class Database extends SqliteDatabase {
   constructor(dbPath = defaultDbPath(), options: Options = {}) {
     super(dbPath, SCHEMA_DIR, MIGRATION_DIR, options);
+  }
+
+  getSmokeCadence(): config.SmokeCadence {
+    return config.getSmokeCadence(this.db);
+  }
+
+  setSmokeCadence(cadence: config.SmokeCadence, now?: number): config.SmokeCadence {
+    return config.setSmokeCadence(this.db, cadence, now);
   }
 
   syncLaddersFromYaml(laddersYaml: string, now?: number) {
@@ -837,6 +846,7 @@ export * from './agent-ladder-teams';
 export * from './agent-ladders';
 export * from './agent-versions';
 export * from './agents';
+export * from './config';
 export * from './developers';
 export * from './discord-members';
 export * from './ladder-entries';

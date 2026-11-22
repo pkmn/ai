@@ -1271,6 +1271,7 @@ export interface PlayableLaddersResponse {
   ladders: PlayableLadderSnapshot[];
   unpublishedArchivedPoolsLadders?: string[];
   quarantinedVersionIds?: number[];
+  smokeCadence?: db.SmokeCadence;
 }
 
 export class Client {
@@ -2702,7 +2703,13 @@ export function register(app: polka.Polka, options: Options): Handle {
       .map(l => l.id);
 
     const quarantinedVersionIds = db.getQuarantinedVersionIds();
-    sendJson(res, 200, {ladders, unpublishedArchivedPoolsLadders, quarantinedVersionIds});
+    const smokeCadence = db.getSmokeCadence();
+    sendJson(res, 200, {
+      ladders,
+      unpublishedArchivedPoolsLadders,
+      quarantinedVersionIds,
+      smokeCadence,
+    });
   });
 
   app.get('/api/arena/tournaments/:id/state', (req, res) => {

@@ -63,6 +63,7 @@ erDiagram
 | Table | File | Role |
 |---|---|---|
 | `schema_migrations` | [`schema-migrations.sql`](schema-migrations.sql) | Applied `db/migration/NNNN-*.sql` scripts. |
+| `config` | [`config.sql`](config.sql) | Singleton operator-tunable Arena coordinator settings (smoke-test cadence). |
 | `ladders` | [`ladders.sql`](ladders.sql) | Permanent/seasonal epochs (`id` decoupled from URL `slot` for rotation). |
 | `agents` | [`agents.sql`](agents.sql) | Registered `projects.yml` Arena projects, derived qualification status, 14-day cooldown. |
 | `agent_ladders` | [`agent-ladders.sql`](agent-ladders.sql) | Per-slot ladder qualification grants (`rby`/`adv`/`sv`/`rand`/`vgc`) in SQLite. |

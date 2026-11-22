@@ -34,6 +34,7 @@ const USAGE = [
   '  quarantine <agent-slug> <version> [--reason "..."]',
   '  unquarantine <agent-slug> <version>',
   '  refund-cooldown <agent-slug>',
+  '  set-smoke-cadence <per-cycle> [--every <cycles>]',
   '  set-ladders <agent-slug> <slot...|all|none>',
   '  set-anchor <ladder_id> <agent-slug> <version>',
   '  set-ladder-status <ladder_id> <upcoming|active|settling|archived>',
@@ -64,6 +65,7 @@ const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
   quarantine: new Set(['reason']),
   unquarantine: new Set(),
   'refund-cooldown': new Set(),
+  'set-smoke-cadence': new Set(['every']),
   'set-ladders': new Set(),
   'set-anchor': new Set(),
   'set-ladder-status': new Set(),
@@ -374,6 +376,34 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         }
         const agent = database.refundCooldown(slug, now);
         log(`Refunded 14-day submission cooldown for ${agent.name} (${agent.slug})`);
+        return;
+      }
+      case 'set-smoke-cadence': {
+        const [rawMax] = positional.slice(1);
+        if (!rawMax || positional.length > 2) {
+          throw new Error('Usage: pkmn set-smoke-cadence <per-cycle> [--every <cycles>]');
+        }
+        if (!/^\d+$/.test(rawMax)) {
+          throw new Error(`Invalid <per-cycle> value "${rawMax}" (expected integer >= 0)`);
+        }
+        const rawEvery = flags.get('every');
+        if (rawEvery !== undefined && !/^[1-9]\d*$/.test(rawEvery)) {
+          throw new Error(`Invalid --every value "${rawEvery}" (expected integer >= 1)`);
+        }
+        const cadence = database.setSmokeCadence({
+          maxPerCycle: parseInt(rawMax, 10),
+          everyCycles: rawEvery !== undefined ? parseInt(rawEvery, 10) : 1,
+        }, now);
+        if (cadence.maxPerCycle === 0) {
+          log('Paused ladder smoke tests (0 per cycle)');
+        } else if (cadence.everyCycles === 1) {
+          log(`Set ladder smoke test cadence: max ${cadence.maxPerCycle} per cycle`);
+        } else {
+          log(
+            `Set ladder smoke test cadence: max ${cadence.maxPerCycle} ` +
+            `every ${cadence.everyCycles} cycles`
+          );
+        }
         return;
       }
       case 'set-ladders': {

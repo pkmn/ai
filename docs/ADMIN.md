@@ -34,6 +34,7 @@ concurrent use alongside `pkmn.ai-server`, which auto-invalidates its ETag cache
 | `quarantine <slug> <ver> [--reason "..."]` | Quarantine an agent version across ladders and recompute ratings. |
 | `unquarantine <slug> <ver>` | Restore a quarantined version and recompute ratings. |
 | `refund-cooldown <slug>` | Clear the 14-day submission cooldown and 24h failed smoke-test budget on `<slug>`. |
+| `set-smoke-cadence <n> [--every <k>]` | Set max ladder smoke tests per coordinator cycle (`0` pauses) and cycle interval `k` (default `1`). |
 | `set-anchor <ladder_id> <slug> <ver>` | Pin `<slug>@<ver>` to `1500` Elo on `<ladder_id>` and recompute ratings. |
 | `set-ladder-status <ladder_id> <status>` | Set `<ladder_id>` to `upcoming`, `active`, `settling`, or `archived`. |
 | `upload-ladder-teams <ladder_id> <file>` | Validate and atomically replace `harvested` teams in `ladder_teams`. |
@@ -96,6 +97,9 @@ Every Arena developer needs a Smogon account in good standing and belongs to at 
 npm run pkmn -- quarantine foul-play 1.2.0 --reason "Repeated protocol framing timeouts on SV"
 npm run pkmn -- unquarantine foul-play 1.2.0
 npm run pkmn -- refund-cooldown foul-play
+npm run pkmn -- set-smoke-cadence 1 --every 5   # throttle to 1 smoke test every 5 matches
+npm run pkmn -- set-smoke-cadence 3             # burst up to 3 smoke tests per cycle
+npm run pkmn -- set-smoke-cadence 0             # pause smoke-test ingestion temporarily
 ```
 
 ## 4. Provisioning `harvested` Ladder Teams & Usage Stats

@@ -1347,6 +1347,29 @@ describe('pkmn CLI commands', () => {
     expect(db.computeAgentSubmissionStatus(zeroAgent.id, 1_760_000_260).canSubmit).toBe(true);
   });
 
+  test('set-smoke-cadence tunes smoke cadence and rejects invalid arguments', async () => {
+    expect(db.getSmokeCadence()).toEqual({maxPerCycle: 1, everyCycles: 1});
+
+    await runPkmnCli(['set-smoke-cadence', '1', '--every', '5'], {db, now: 1_760_000_250, log});
+    expect(db.getSmokeCadence()).toEqual({maxPerCycle: 1, everyCycles: 5});
+    expect(logs[logs.length - 1]).toContain('max 1 every 5 cycles');
+
+    await runPkmnCli(['set-smoke-cadence', '3'], {db, now: 1_760_000_260, log});
+    expect(db.getSmokeCadence()).toEqual({maxPerCycle: 3, everyCycles: 1});
+    expect(logs[logs.length - 1]).toContain('max 3 per cycle');
+
+    await runPkmnCli(['set-smoke-cadence', '0'], {db, now: 1_760_000_270, log});
+    expect(db.getSmokeCadence()).toEqual({maxPerCycle: 0, everyCycles: 1});
+    expect(logs[logs.length - 1]).toContain('Paused ladder smoke tests');
+
+    await expect(runPkmnCli(['set-smoke-cadence', '-1'], {db, log})).rejects.toThrow(
+      /Invalid <per-cycle>/
+    );
+    await expect(runPkmnCli(['set-smoke-cadence', '1', '--every', '0'], {db, log})).rejects.toThrow(
+      /Invalid --every/
+    );
+  });
+
   test('quarantine or unquarantine toggles version active entries', async () => {
     const zeroAgent = db.getAgentBySlug('0-error')!;
     await runPkmnCli(
@@ -3175,11 +3198,14 @@ describe('createServerApp production HTTP hardening', () => {
       const before = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
       expect(before.status).toBe(200);
       expect(before.data.quarantinedVersionIds).toContain(v1.id);
+      expect(before.data.smokeCadence).toEqual({maxPerCycle: 1, everyCycles: 1});
 
+      db.setSmokeCadence({maxPerCycle: 2, everyCycles: 4}, 1_760_000_035);
       db.unquarantineVersion('0-error', '1.0.0', 1_760_000_040);
       const after = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
       expect(after.status).toBe(200);
       expect(after.data.quarantinedVersionIds).not.toContain(v1.id);
+      expect(after.data.smokeCadence).toEqual({maxPerCycle: 2, everyCycles: 4});
     } finally {
       ctrl.close();
       await srv.close();
