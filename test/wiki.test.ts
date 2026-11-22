@@ -324,6 +324,7 @@ describe('wiki server routes', () => {
   let wikiDir: string;
   let projectsFile: string;
   let server: http.Server | undefined;
+  let wikiInstance: wiki.Wiki;
   let baseUrl: string;
   let discordMembers: Set<string>;
   const realFetch = globalThis.fetch;
@@ -359,7 +360,7 @@ describe('wiki server routes', () => {
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
 
     const app = polka();
-    const wikiInstance: wiki.Wiki = new wiki.Wiki({
+    wikiInstance = new wiki.Wiki({
       wikiDir,
       projectsFile,
       push: false,
@@ -981,6 +982,36 @@ describe('wiki server routes', () => {
     });
     const pagesHtml = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
     expect(pagesHtml).toContain('Bold Code Guide');
+  });
+
+  test('reads backing .dj file once per wiki page request', async () => {
+    await postWiki('Foul_Play', 'pmariglia', {
+      content: '# Foul Play\n\nPublic notes.',
+      message: 'Publish Foul Play',
+      action: 'save',
+      visibility: 'public',
+    });
+    const origRead = wikiInstance.readPageRecord.bind(wikiInstance);
+    const origVis = wikiInstance.getPageVisibility.bind(wikiInstance);
+    let readCalls = 0;
+    let visCalls = 0;
+    wikiInstance.readPageRecord = slug => {
+      readCalls++;
+      return origRead(slug);
+    };
+    wikiInstance.getPageVisibility = slug => {
+      visCalls++;
+      return origVis(slug);
+    };
+    try {
+      const res = await realFetch(`${baseUrl}/wiki/Foul_Play`);
+      expect(res.status).toBe(200);
+      expect(readCalls).toBe(1);
+      expect(visCalls).toBe(0);
+    } finally {
+      wikiInstance.readPageRecord = origRead;
+      wikiInstance.getPageVisibility = origVis;
+    }
   });
 });
 

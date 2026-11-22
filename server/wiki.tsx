@@ -1187,23 +1187,15 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
 
   // Redirect logout to public `/wiki` whenever the current page/revision requires auth,
   // avoiding an immediate `requireReadAuth` -> `/auth/github` silent OAuth re-login loop.
-  const logoutReturnTo = (
-    slug: string,
-    candidate: string,
-    extraVisibility?: PageVisibility
-  ): string => (
-    stricterVisibility(wiki.getPageVisibility(slug), extraVisibility) === 'public'
-      ? candidate
-      : '/wiki'
+  const logoutReturnTo = (candidate: string, visibility: PageVisibility): string => (
+    visibility === 'public' ? candidate : '/wiki'
   );
 
   const requireReadAuth = (
     req: http.IncomingMessage & {originalUrl?: string},
     res: http.ServerResponse,
-    slug = 'index',
-    extraVisibility?: PageVisibility
+    visibility: PageVisibility
   ): boolean => {
-    const visibility = stricterVisibility(wiki.getPageVisibility(slug), extraVisibility);
     if (visibility === 'public') return true;
 
     const authCfg = wiki.auth.getConfig();
@@ -1278,7 +1270,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     // Read the backing `.dj` file once and reuse its parsed visibility and body throughout.
     const record = wiki.readPageRecord(slug);
     const vis = wiki.resolveVisibility(slug, record?.visibility);
-    if (!requireReadAuth(req, res, slug, vis)) return;
+    if (!requireReadAuth(req, res, vis)) return;
 
     const encoded = encodeSlug(slug);
     if (!record) {
@@ -1299,7 +1291,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       title: heading,
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
-      nav: wikiNav(slug, 'view', loggedIn, logoutReturnTo(slug, viewPath, vis)),
+      nav: wikiNav(slug, 'view', loggedIn, logoutReturnTo(viewPath, vis)),
       content: util.raw(renderedHtml),
     }), isPublic);
   };
@@ -1406,8 +1398,12 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       </>
     );
     const viewPath = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
-    const returnTo = wiki.readPage(slug) !== undefined
-      ? logoutReturnTo(slug, viewPath, visibility)
+    const existingRecord = wiki.readPageRecord(slug);
+    const returnTo = existingRecord !== undefined
+      ? logoutReturnTo(
+        viewPath,
+        stricterVisibility(wiki.resolveVisibility(slug, existingRecord.visibility), visibility)
+      )
       : '/wiki';
     sendHtml(res, statusCode, renderPage({
       title: heading,
@@ -1510,7 +1506,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       const slug = resolveOrRedirect(res, slugParam(req.params.page), '/history');
       if (!slug) return;
       const currentVis = wiki.getPageVisibility(slug);
-      if (!requireReadAuth(req, res, slug, currentVis)) return;
+      if (!requireReadAuth(req, res, currentVis)) return;
       const encoded = encodeSlug(slug);
       const revisions = await wiki.getHistory(slug);
       const table = revisions.length ? (
@@ -1574,7 +1570,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           slug,
           'history',
           loggedIn,
-          logoutReturnTo(slug, `/wiki/${encoded}/history`, currentVis)
+          logoutReturnTo(`/wiki/${encoded}/history`, currentVis)
         ),
         content: table,
       }), isPublic);
@@ -1596,7 +1592,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       const slug = resolveOrRedirect(res, rawSlug, `/${sha}${showDiff ? '?diff=1' : ''}`);
       if (!slug) return;
       const currentVis = wiki.getPageVisibility(slug);
-      if (!requireReadAuth(req, res, slug, currentVis)) return;
+      if (!requireReadAuth(req, res, currentVis)) return;
 
       const isProject = wiki.isProjectPage(slug);
       const encoded = encodeSlug(slug);
@@ -1622,7 +1618,8 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
               : undefined))
           : undefined;
         const diffVis = stricterVisibility(revVis ?? 'public', parentVis);
-        if (!requireReadAuth(req, res, slug, diffVis)) return;
+        const effectiveVis = stricterVisibility(currentVis, diffVis);
+        if (!requireReadAuth(req, res, effectiveVis)) return;
 
         if (diff === undefined) {
           sendError(res, 404);
@@ -1630,7 +1627,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
         }
         const heading = `${displayTitle} @ ${sha.slice(0, 7)}`;
         const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
-        const isPublic = stricterVisibility(currentVis, diffVis) === 'public' && !loggedIn;
+        const isPublic = effectiveVis === 'public' && !loggedIn;
         sendWikiHtml(req, res, renderPage({
           title: heading,
           heading,
@@ -1639,7 +1636,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
             slug,
             'history',
             loggedIn,
-            logoutReturnTo(slug, `/wiki/${encoded}/${sha}?diff=1`, diffVis)
+            logoutReturnTo(`/wiki/${encoded}/${sha}?diff=1`, effectiveVis)
           ),
           content: (
             <>
@@ -1667,14 +1664,14 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
         sendError(res, 404);
         return;
       }
-      if (!requireReadAuth(req, res, slug, revVis)) return;
+      const effectiveVis = stricterVisibility(currentVis, revVis);
+      if (!requireReadAuth(req, res, effectiveVis)) return;
       const rawText = revRecord.content;
       const meta: {title?: string; summary?: string} = {};
       const html = renderDjot(rawText, meta);
       const heading = `${meta.title ?? displayTitle} @ ${sha.slice(0, 7)}`;
       const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
-      const isPublic =
-        stricterVisibility(currentVis, revVis) === 'public' && !loggedIn;
+      const isPublic = effectiveVis === 'public' && !loggedIn;
       sendWikiHtml(req, res, renderPage({
         title: heading,
         heading,
@@ -1683,7 +1680,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           slug,
           'history',
           loggedIn,
-          logoutReturnTo(slug, `/wiki/${encoded}/${sha}`, revVis)
+          logoutReturnTo(`/wiki/${encoded}/${sha}`, effectiveVis)
         ),
         content: (
           <>
