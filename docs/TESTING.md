@@ -21,8 +21,8 @@ Install headless Chromium once if missing: `npx playwright-core install chromium
 | `test/protocol.test.ts` | Stdio parsing & chat/covert-channel elision across `@pkmn/sim` (`server/protocol.ts`). |
 | `test/db.test.ts` | Schema bootstrap, `db/migration/NNNN-*.sql`, project/Smogon sync, ladder lifecycle/rotation, match aggregation (`db/`). |
 | `test/{auth,account,wiki,discord,api,render,projects}.test.ts` | OAuth cookies, submission gating & 1-NN uniqueness, Git wiki revisions/visibility, Discord sync, `/api/arena/*`, dynamic SSR HTML/`.json`. |
-| `test/{arena,sim,setup}.test.ts` | Mac mini & GCP unpacking/sandbox/time-slicing/tournaments, multi-version `@pkmn/sim` worker isolation, repo setup/submodules. |
-| `test/e2e.test.ts` | Runs [`tools/scenarios/e2e.mock`](../tools/scenarios/e2e.mock) in Live HTTP Server Mode + Playwright Chromium flows. |
+| `test/{arena-*,sim,setup}.test.ts` | Mac mini & GCP unpacking/sandbox/time-slicing/tournaments/coordinator, multi-version `@pkmn/sim` worker isolation, repo setup/submodules. |
+| `test/e2e.test.ts` | Runs [`tools/scenarios/e2e.mock`](../tools/scenarios/e2e.mock) in Live HTTP Server Mode + Playwright live SSE flows (plus `seed.mock` and 900-match Elo convergence under `CI` / `RUN_SLOW_TESTS=1`). |
 
 **Test a candidate team against 1-NN blocklists ($d_{\text{1-NN}} \ge 1.30$):**
 
