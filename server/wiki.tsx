@@ -33,7 +33,8 @@ const ADMIN_USERS = new Set(ADMINS.map(a => a.toLowerCase()));
 const AUTHOR_MAP = new Map(Object.entries(AUTHORS).map(([gh, name]) => [gh.toLowerCase(), name]));
 
 const SHA_RE = /^[0-9a-f]{7,40}$/;
-const RESERVED_SLUGS = new Set(['pages', 'edit', 'history']);
+const PROJECTS_PREFIX = 'projects/';
+const RESERVED_SLUGS = new Set(['pages', 'edit', 'history', 'projects']);
 
 // Three-tier read visibility for registered project wiki pages (`{% visibility: ... %}` header):
 //   - `developers` (default for project pages): readable only by registered Arena developers
@@ -66,8 +67,22 @@ export interface Revision {
   subject: string;
 }
 
-function normalizeDecodedSlug(text: string): string {
+function isProjectNamespace(slug: string): boolean {
+  return slug.startsWith(PROJECTS_PREFIX);
+}
+
+function normalizeDecodedSegment(text: string): string {
   return text.normalize('NFC').trim().replace(/[\s_]+/g, '_');
+}
+
+function normalizeDecodedSlug(text: string): string {
+  const trimmed = text.normalize('NFC').trim();
+  const match = /^projects\/(.*)$/i.exec(trimmed);
+  if (match) {
+    const rest = normalizeDecodedSegment(match[1]);
+    return rest ? `${PROJECTS_PREFIX}${rest}` : '';
+  }
+  return normalizeDecodedSegment(trimmed);
 }
 
 export function normalizeSlug(rawText: string): string {
@@ -78,21 +93,32 @@ export function normalizeSlug(rawText: string): string {
   }
 }
 
-export function isValidSlug(slug: string): boolean {
-  if (!slug || slug.length > 200) return false;
-  if (slug.startsWith('.') || slug.includes('..')) return false;
+function isValidSegment(seg: string, reserved?: ReadonlySet<string>): boolean {
+  if (!seg || seg.length > 200) return false;
+  if (seg.startsWith('.') || seg.includes('..')) return false;
   // eslint-disable-next-line no-control-regex
-  if (/[/\\<>:"|?*%\x00-\x1f\x7f]/.test(slug)) return false;
-  return !RESERVED_SLUGS.has(slug.toLowerCase());
+  if (/[/\\<>:"|?*%\x00-\x1f\x7f]/.test(seg)) return false;
+  return !reserved?.has(seg.toLowerCase());
+}
+
+export function isValidSlug(slug: string): boolean {
+  if (isProjectNamespace(slug)) {
+    return isValidSegment(slug.slice(PROJECTS_PREFIX.length));
+  }
+  return isValidSegment(slug, RESERVED_SLUGS);
 }
 
 export function formatTitle(slug: string): string {
   if (slug === 'index') return 'Wiki';
-  const spaced = slug.replace(/_/g, ' ');
+  const base = isProjectNamespace(slug) ? slug.slice(PROJECTS_PREFIX.length) : slug;
+  const spaced = base.replace(/_/g, ' ');
   return spaced ? spaced[0].toUpperCase() + spaced.slice(1) : spaced;
 }
 
 export function encodeSlug(slug: string): string {
+  if (isProjectNamespace(slug)) {
+    return `${PROJECTS_PREFIX}${encodeURIComponent(slug.slice(PROJECTS_PREFIX.length))}`;
+  }
   return encodeURIComponent(slug);
 }
 
@@ -135,19 +161,46 @@ export function extractAuthorizedGitHubUsers(
   return users;
 }
 
+function foldDiacritics(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function addProjectAliases(aliases: Map<string, string>, name: string, slug: string) {
+  const addVariant = (variant: string) => {
+    const seg = normalizeDecodedSegment(variant).toLowerCase();
+    if (seg && !aliases.has(seg)) aliases.set(seg, slug);
+    const arenaSlug = util.slugify(variant).toLowerCase();
+    if (arenaSlug) {
+      if (!aliases.has(arenaSlug)) aliases.set(arenaSlug, slug);
+      const normArena = normalizeDecodedSegment(arenaSlug).toLowerCase();
+      if (!aliases.has(normArena)) aliases.set(normArena, slug);
+    }
+    const idAlias = util.toID(variant);
+    if (idAlias && !aliases.has(idAlias)) aliases.set(idAlias, slug);
+  };
+  addVariant(name);
+  const folded = foldDiacritics(name);
+  if (folded !== name) addVariant(folded);
+}
+
 export function extractProjectPages(projectsYaml: string): {
   projects: Map<string, ProjectPage>;
   aliases: Map<string, string>;
+  reservedAliases: Map<string, string>;
 } {
   const projects = new Map<string, ProjectPage>();
   const aliases = new Map<string, string>();
+  const reservedAliases = new Map<string, string>();
   const entries = (yaml.parse(projectsYaml) ?? []) as Project[];
-  if (!Array.isArray(entries)) return {projects, aliases};
+  if (!Array.isArray(entries)) return {projects, aliases, reservedAliases};
   for (const entry of entries) {
     const name = entry?.name?.trim();
-    if (!name || !entry.arena) continue;
-    const slug = normalizeSlug(name);
-    if (!isValidSlug(slug)) continue;
+    if (!name) continue;
+    const segment = normalizeDecodedSegment(name);
+    if (!isValidSegment(segment)) continue;
+    const slug = `${PROJECTS_PREFIX}${segment}`;
+    addProjectAliases(reservedAliases, name, slug);
+    if (!entry.arena) continue;
     const owners = new Set<string>();
     if (entry.arena.owners && typeof entry.arena.owners === 'object') {
       for (const u of Object.keys(entry.arena.owners)) {
@@ -156,19 +209,9 @@ export function extractProjectPages(projectsYaml: string): {
       }
     }
     projects.set(slug, {slug, name, owners});
-    aliases.set(slug.toLowerCase(), slug);
-    const arenaSlug = util.slugify(name).toLowerCase();
-    if (arenaSlug) {
-      if (!aliases.has(arenaSlug)) aliases.set(arenaSlug, slug);
-      const normArena = normalizeDecodedSlug(arenaSlug).toLowerCase();
-      if (!aliases.has(normArena)) aliases.set(normArena, slug);
-    }
-    const idAlias = util.toID(name);
-    if (idAlias && !RESERVED_SLUGS.has(idAlias) && !aliases.has(idAlias)) {
-      aliases.set(idAlias, slug);
-    }
+    addProjectAliases(aliases, name, slug);
   }
-  return {projects, aliases};
+  return {projects, aliases, reservedAliases};
 }
 
 const STYLE = fs.readFileSync(util.root('static', 'style', 'wiki.css'), 'utf8');
@@ -197,11 +240,11 @@ function renderPageHtml(opts: {
 
 function wikiNav(
   slug: string,
-  active: 'view' | 'edit' | 'history' | 'pages',
+  active?: 'view' | 'edit' | 'history' | 'pages',
   loggedIn = false,
   returnTo = '/wiki'
 ): util.Html {
-  const item = (key: typeof active, href: string, label: string) =>
+  const item = (key: NonNullable<typeof active>, href: string, label: string) =>
     key === active ? <strong>{label}</strong> : <a href={href}>{label}</a>;
   const encoded = encodeSlug(slug);
   const viewHref = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
@@ -780,6 +823,7 @@ export class Wiki {
   private authorizedUsers = new Set<string>();
   private projectPages = new Map<string, ProjectPage>();
   private projectAliases = new Map<string, string>();
+  private reservedProjectAliases = new Map<string, string>();
   // Serializes git `add`/`commit` operations in-process so concurrent edits cannot collide on
   // `.git/index.lock` inside the backing wiki repository.
   private gitQueue: Promise<any> = Promise.resolve();
@@ -819,7 +863,11 @@ export class Wiki {
     }
 
     let authorizedUsers: Set<string>;
-    let extracted: {projects: Map<string, ProjectPage>; aliases: Map<string, string>};
+    let extracted: {
+      projects: Map<string, ProjectPage>;
+      aliases: Map<string, string>;
+      reservedAliases: Map<string, string>;
+    };
     try {
       authorizedUsers = extractAuthorizedGitHubUsers(projectsRaw, ADMINS);
       extracted = extractProjectPages(projectsRaw);
@@ -827,12 +875,13 @@ export class Wiki {
       console.error('Failed parsing projects.yml for wiki metadata:', err);
       if (this.projectsMtime !== -1) return;
       authorizedUsers = new Set(ADMIN_USERS);
-      extracted = {projects: new Map(), aliases: new Map()};
+      extracted = {projects: new Map(), aliases: new Map(), reservedAliases: new Map()};
     }
 
     this.authorizedUsers = authorizedUsers;
     this.projectPages = extracted.projects;
     this.projectAliases = extracted.aliases;
+    this.reservedProjectAliases = extracted.reservedAliases;
     this.projectsMtime = pMtime;
   }
 
@@ -843,8 +892,10 @@ export class Wiki {
   resolveSlug(slug: string, alreadyDecoded = false): string {
     this.refreshMetadata();
     const normalized = alreadyDecoded ? normalizeDecodedSlug(slug) : normalizeSlug(slug);
-    const aliased = this.projectAliases.get(normalized.toLowerCase());
-    if (aliased) return aliased;
+    if (isProjectNamespace(normalized)) {
+      const tail = normalized.slice(PROJECTS_PREFIX.length);
+      return this.projectAliases.get(tail.toLowerCase()) ?? normalized;
+    }
     if (normalized && fs.existsSync(this.wikiDir)) {
       if (fs.existsSync(path.join(this.wikiDir, `${normalized}.dj`))) {
         return normalized;
@@ -858,12 +909,18 @@ export class Wiki {
         }
       } catch {}
     }
+    if (normalized) {
+      const lower = normalized.toLowerCase();
+      const reserved = this.projectAliases.get(lower) ?? this.reservedProjectAliases.get(lower);
+      if (reserved) return reserved;
+    }
     return normalized;
   }
 
   getProjectPage(slug: string): ProjectPage | undefined {
     this.refreshMetadata();
-    return this.projectPages.get(this.resolveSlug(slug));
+    const canonical = this.resolveSlug(slug);
+    return isProjectNamespace(canonical) ? this.projectPages.get(canonical) : undefined;
   }
 
   isProjectPage(slug: string): boolean {
@@ -917,11 +974,19 @@ export class Wiki {
     if (!login) return false;
     this.refreshMetadata();
     const lower = login.toLowerCase();
+    if (slug) {
+      const canonical = this.resolveSlug(slug);
+      if (canonical === 'index') return ADMIN_USERS.has(lower);
+      if (isProjectNamespace(canonical)) {
+        const project = this.projectPages.get(canonical);
+        if (!project) return false;
+        if (ADMIN_USERS.has(lower)) return true;
+        if (this.isBlockedInDb(lower)) return false;
+        return project.owners.has(lower);
+      }
+    }
     if (ADMIN_USERS.has(lower)) return true;
     if (this.isBlockedInDb(lower)) return false;
-    if (!slug) return this.authorizedUsers.has(lower);
-    const project = this.getProjectPage(slug);
-    if (project) return project.owners.has(lower);
     return this.authorizedUsers.has(lower);
   }
 
@@ -961,19 +1026,39 @@ export class Wiki {
 
   listPages(): string[] {
     if (!fs.existsSync(this.wikiDir)) return [];
-    return fs.readdirSync(this.wikiDir)
+    const general = fs.readdirSync(this.wikiDir)
       .filter(f => f.endsWith('.dj'))
       .map(f => f.slice(0, -3))
-      .filter(isValidSlug)
+      .filter(s => isValidSegment(s, RESERVED_SLUGS))
       .sort((a, b) => a.localeCompare(b));
+    const projectsDir = path.join(this.wikiDir, 'projects');
+    const projects = fs.existsSync(projectsDir)
+      ? fs.readdirSync(projectsDir)
+        .filter(f => f.endsWith('.dj'))
+        .map(f => `${PROJECTS_PREFIX}${f.slice(0, -3)}`)
+        .filter(isValidSlug)
+        .sort((a, b) => a.localeCompare(b))
+      : [];
+    return [...general, ...projects];
   }
 
-  listPageSummaries(): Array<{slug: string; title: string; visibility: PageVisibility}> {
+  listPageSummaries(): Array<{
+    slug: string;
+    title: string;
+    visibility: PageVisibility;
+    project: boolean;
+  }> {
     this.refreshMetadata();
-    const slugs = this.listPages();
-    return slugs.map(slug => {
-      const canonical = this.projectAliases.get(slug.toLowerCase()) ?? slug;
-      const project = this.projectPages.get(canonical);
+    const summaries: Array<{
+      slug: string;
+      title: string;
+      visibility: PageVisibility;
+      project: boolean;
+    }> = [];
+    for (const slug of this.listPages()) {
+      const inProjects = isProjectNamespace(slug);
+      const project = inProjects ? this.projectPages.get(slug) : undefined;
+      if (inProjects && !project) continue;
       const record = this.readCanonicalRecord(slug);
       const visibility: PageVisibility = project
         ? (record?.visibility ?? 'developers')
@@ -981,9 +1066,10 @@ export class Wiki {
           ? record.visibility
           : 'public');
       const heading = record?.content ? extractTopHeadingTitle(record.content) : undefined;
-      const title = heading || project?.name || formatTitle(canonical);
-      return {slug, title, visibility};
-    });
+      const title = heading || project?.name || formatTitle(slug);
+      summaries.push({slug, title, visibility, project: Boolean(project)});
+    }
+    return summaries;
   }
 
   private enqueueGit<T>(fn: () => Promise<T>): Promise<T> {
@@ -1002,6 +1088,9 @@ export class Wiki {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical)) throw new Error(`Invalid slug: ${slug}`);
     const isProject = this.isProjectPage(canonical);
+    if (isProjectNamespace(canonical) && !isProject) {
+      throw new Error(`Unknown project wiki page: ${canonical}`);
+    }
     const vis = isProject
       ? (visibility && VISIBILITIES.has(visibility)
         ? visibility
@@ -1010,8 +1099,8 @@ export class Wiki {
     const content = serializePageContent(rawContent, vis);
 
     return this.enqueueGit(async () => {
-      fs.mkdirSync(this.wikiDir, {recursive: true});
       const file = path.join(this.wikiDir, `${canonical}.dj`);
+      fs.mkdirSync(path.dirname(file), {recursive: true});
       const prev = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined;
       if (prev === content) return false;
 
@@ -1156,8 +1245,29 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
   const sendError = (res: http.ServerResponse, status: number) =>
     sendHtml(res, status, renderErrorPage(status, getLiveTournament()));
 
-  const slugParam = (v: string | string[] | undefined) =>
-    normalizeSlug(typeof v === 'string' ? v : '');
+  const generalSlugParam = (v: string | string[] | undefined): string => {
+    if (typeof v !== 'string') return '';
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(v);
+    } catch {
+      return '';
+    }
+    const normalized = normalizeDecodedSegment(decoded);
+    return isValidSegment(normalized, RESERVED_SLUGS) ? normalized : '';
+  };
+
+  const projectSlugParam = (v: string | string[] | undefined): string => {
+    if (typeof v !== 'string') return '';
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(v);
+    } catch {
+      return '';
+    }
+    const normalized = normalizeDecodedSegment(decoded);
+    return isValidSegment(normalized) ? `${PROJECTS_PREFIX}${normalized}` : '';
+  };
 
   const getEffectiveUser = (req: http.IncomingMessage): string | undefined =>
     wiki.auth.getGitHubUser(req);
@@ -1172,6 +1282,10 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       return undefined;
     }
     const canonical = wiki.resolveSlug(rawSlug, true);
+    if (isProjectNamespace(canonical) && !wiki.isProjectPage(canonical)) {
+      sendError(res, 404);
+      return undefined;
+    }
     if (canonical !== rawSlug) {
       redirect(res, `/wiki/${encodeSlug(canonical)}${suffix}`);
       return undefined;
@@ -1298,39 +1412,77 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
 
   app.get('/wiki', (req, res) => renderPageSlug(req, res, 'index'));
 
-  app.get('/wiki/pages', (req, res) => {
+  const getVisibleSummaries = (req: http.IncomingMessage) => {
     const summaries = wiki.listPageSummaries();
     const login = getEffectiveUser(req);
     const isDev = wiki.isDeveloper(login);
     const needsDiscordCheck = !isDev && summaries.some(p => p.visibility === 'discord');
     const isDiscord = needsDiscordCheck && wiki.verifyDiscordAuth(req) === 'authorized';
-    const pages = summaries.filter(p => (
+    const visible = summaries.filter(p => (
       p.visibility === 'public' ||
       isDev ||
       (p.visibility === 'discord' && isDiscord)
     ));
-
     const loggedIn = Boolean(login || wiki.auth.getSession(req));
     const isPublic = !loggedIn && !isDev && !isDiscord;
+    return {visible, loggedIn, isPublic};
+  };
+
+  app.get('/wiki/pages', (req, res) => {
+    const {visible, loggedIn, isPublic} = getVisibleSummaries(req);
+    const generalPages = visible.filter(p => !p.project);
+    const projectPages = visible.filter(p => p.project);
     sendWikiHtml(req, res, renderPage({
       title: 'Pages — Wiki',
       heading: 'Pages',
       path: '/wiki/pages/',
       nav: wikiNav('index', 'pages', loggedIn, '/wiki/pages'),
-      content: pages.length ? (
-        <ul id='wiki-pages'>
-          {pages.map(p => {
-            const href = p.slug === 'index' ? '/wiki' : `/wiki/${encodeSlug(p.slug)}`;
-            return <li><a href={href}>{p.title}</a></li>;
-          })}
-        </ul>
+      content: visible.length ? (
+        <>
+          {generalPages.length > 0 && (
+            <ul id='wiki-pages'>
+              {generalPages.map(p => {
+                const href = p.slug === 'index' ? '/wiki' : `/wiki/${encodeSlug(p.slug)}`;
+                return <li><a href={href}>{p.title}</a></li>;
+              })}
+            </ul>
+          )}
+          {projectPages.length > 0 && (
+            <section id='projects'>
+              <h2><a href='/wiki/projects' className='subtle'>Projects</a></h2>
+              <ul id='wiki-project-pages'>
+                {projectPages.map(p => (
+                  <li><a href={`/wiki/${encodeSlug(p.slug)}`}>{p.title}</a></li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
       ) : (
         <p>No pages yet.</p>
       ),
     }), isPublic);
   });
 
-  app.get('/wiki/:page', (req, res) => renderPageSlug(req, res, slugParam(req.params.page)));
+  app.get('/wiki/projects', (req, res) => {
+    const {visible, loggedIn, isPublic} = getVisibleSummaries(req);
+    const projectPages = visible.filter(p => p.project);
+    sendWikiHtml(req, res, renderPage({
+      title: 'Projects — Wiki',
+      heading: 'Projects',
+      path: '/wiki/projects/',
+      nav: wikiNav('index', undefined, loggedIn, '/wiki/projects'),
+      content: projectPages.length ? (
+        <ul id='wiki-pages'>
+          {projectPages.map(p => (
+            <li><a href={`/wiki/${encodeSlug(p.slug)}`}>{p.title}</a></li>
+          ))}
+        </ul>
+      ) : (
+        <p>No project pages yet.</p>
+      ),
+    }), isPublic);
+  });
 
   interface EditorViewOptions {
     slug: string;
@@ -1414,27 +1566,34 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     }));
   };
 
-  app.get('/wiki/:page/edit', (req, res) => {
-    const slug = resolveOrRedirect(res, slugParam(req.params.page), '/edit');
+  const renderEditSlug = (
+    req: http.IncomingMessage & {originalUrl?: string},
+    res: http.ServerResponse,
+    rawSlug: string
+  ) => {
+    const slug = resolveOrRedirect(res, rawSlug, '/edit');
     if (!slug) return;
     if (!requireEditAuth(req, res, slug)) return;
     const existing = wiki.readPage(slug) ?? '';
     const visibility = wiki.isProjectPage(slug) ? wiki.getPageVisibility(slug) : undefined;
     renderEditor(res, {slug, content: existing, visibility});
-  });
+  };
 
-  app.post('/wiki/:page', async (req, res) => {
+  const handlePostSlug = async (
+    req: http.IncomingMessage & {originalUrl?: string},
+    res: http.ServerResponse,
+    rawSlug: string
+  ) => {
     if (auth.isCrossSiteRequest(req)) {
       sendError(res, 403);
       return;
     }
-    const rawSlug = slugParam(req.params.page);
     if (!isValidSlug(rawSlug)) {
       sendError(res, 404);
       return;
     }
     const slug = wiki.resolveSlug(rawSlug, true);
-    if (!isValidSlug(slug)) {
+    if (!isValidSlug(slug) || (isProjectNamespace(slug) && !wiki.isProjectPage(slug))) {
       sendError(res, 404);
       return;
     }
@@ -1499,11 +1658,15 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       console.error('Error saving wiki page:', err);
       sendError(res, status);
     }
-  });
+  };
 
-  app.get('/wiki/:page/history', async (req, res) => {
+  const handleHistorySlug = async (
+    req: http.IncomingMessage & {originalUrl?: string},
+    res: http.ServerResponse,
+    rawSlug: string
+  ) => {
     try {
-      const slug = resolveOrRedirect(res, slugParam(req.params.page), '/history');
+      const slug = resolveOrRedirect(res, rawSlug, '/history');
       if (!slug) return;
       const currentVis = wiki.getPageVisibility(slug);
       if (!requireReadAuth(req, res, currentVis)) return;
@@ -1578,12 +1741,16 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       console.error('Error rendering wiki history:', err);
       if (!res.headersSent) sendError(res, 500);
     }
-  });
+  };
 
-  app.get('/wiki/:page/:sha', async (req, res) => {
+  const handleRevisionSlug = async (
+    req: http.IncomingMessage & {originalUrl?: string; query: Record<string, unknown>},
+    res: http.ServerResponse,
+    rawSlug: string,
+    rawSha: string | string[] | undefined
+  ) => {
     try {
-      const rawSlug = slugParam(req.params.page);
-      const sha = typeof req.params.sha === 'string' ? req.params.sha : '';
+      const sha = typeof rawSha === 'string' ? rawSha : '';
       if (!isValidSlug(rawSlug) || !SHA_RE.test(sha)) {
         sendError(res, 404);
         return;
@@ -1695,7 +1862,29 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       console.error('Error rendering wiki revision:', err);
       if (!res.headersSent) sendError(res, 500);
     }
-  });
+  };
+
+  app.get('/wiki/projects/:page/edit', (req, res) =>
+    renderEditSlug(req, res, projectSlugParam(req.params.page)));
+  app.get('/wiki/projects/:page/history', (req, res) =>
+    handleHistorySlug(req, res, projectSlugParam(req.params.page)));
+  app.get('/wiki/projects/:page/:sha', (req, res) =>
+    handleRevisionSlug(req, res, projectSlugParam(req.params.page), req.params.sha));
+  app.get('/wiki/projects/:page', (req, res) =>
+    renderPageSlug(req, res, projectSlugParam(req.params.page)));
+  app.post('/wiki/projects/:page', (req, res) =>
+    handlePostSlug(req, res, projectSlugParam(req.params.page)));
+
+  app.get('/wiki/:page/edit', (req, res) =>
+    renderEditSlug(req, res, generalSlugParam(req.params.page)));
+  app.get('/wiki/:page/history', (req, res) =>
+    handleHistorySlug(req, res, generalSlugParam(req.params.page)));
+  app.get('/wiki/:page/:sha', (req, res) =>
+    handleRevisionSlug(req, res, generalSlugParam(req.params.page), req.params.sha));
+  app.get('/wiki/:page', (req, res) =>
+    renderPageSlug(req, res, generalSlugParam(req.params.page)));
+  app.post('/wiki/:page', (req, res) =>
+    handlePostSlug(req, res, generalSlugParam(req.params.page)));
 
   return wiki;
 }

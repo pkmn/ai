@@ -847,7 +847,7 @@ describe('mock scenarios & E2E lifecycle', () => {
             db: seedDb,
             push: false,
           });
-          const zeroErrorHistory = await wikiReader.getHistory('0_ERROR');
+          const zeroErrorHistory = await wikiReader.getHistory('projects/0_ERROR');
           expect(zeroErrorHistory.map(r => ({author: r.author, ts: r.timestamp}))).toEqual([
             {author: 'coauthor', ts: nowSeconds},
             {author: 'scheibo', ts: nowSeconds - 2 * 86400},

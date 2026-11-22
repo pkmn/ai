@@ -51,7 +51,9 @@ function extractCookieMap(res: Response): Record<string, string> {
 describe('auth config helpers', () => {
   test('sanitizeReturnTo preserves relative local paths', () => {
     expect(auth.sanitizeReturnTo('/account/', '/')).toBe('/account/');
-    expect(auth.sanitizeReturnTo('/wiki/0_ERROR?diff=1', '/')).toBe('/wiki/0_ERROR?diff=1');
+    expect(auth.sanitizeReturnTo('/wiki/projects/0_ERROR?diff=1', '/')).toBe(
+      '/wiki/projects/0_ERROR?diff=1'
+    );
     expect(auth.sanitizeReturnTo(undefined, '/fallback')).toBe('/fallback');
   });
 
@@ -244,7 +246,7 @@ describe('server/auth.ts routes', () => {
     });
 
   test('rejects unregistered GitHub OAuth callbacks for /wiki/ with 403', async () => {
-    const {state, stateCookie} = await beginGitHubOAuth('/wiki/0_ERROR');
+    const {state, stateCookie} = await beginGitHubOAuth('/wiki/projects/0_ERROR');
     mockGitHubUser({id: 99999, login: 'unregistered_user'});
 
     const strangerCb = await realFetch(

@@ -3977,7 +3977,7 @@ export class Runner {
         message,
         ...(visibility ? {visibility} : {}),
       });
-      const res = await fetch(`${this.serverUrl}/wiki/${encodeURIComponent(slug)}`, {
+      const res = await fetch(`${this.serverUrl}/wiki/${wiki.encodeSlug(slug)}`, {
         method: 'POST',
         headers: {
           'content-type': 'application/x-www-form-urlencoded',
@@ -4018,7 +4018,9 @@ export class Runner {
       : undefined;
     const body = wiki.serializePageContent(rawBody, effectiveVisibility);
     const filename = `${canonical}.dj`;
-    fs.writeFileSync(path.join(this.wikiDir, filename), body, 'utf8');
+    const filePath = path.join(this.wikiDir, filename);
+    fs.mkdirSync(path.dirname(filePath), {recursive: true});
+    fs.writeFileSync(filePath, body, 'utf8');
     const isoDate = new Date(this.state.now * 1000).toISOString();
     const env = {
       ...process.env,

@@ -88,7 +88,7 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    (`PENDING` smoke test, 24h failed smoke-test limit, 14d cooldown w/ Tournament `#3` open,
    expanded stderr log, unsettled provisional, `QUARANTINED (DM sent)`, Smogon-banned
    `smogon_standing = 'bad'`).
-7. **`wiki`:** Index, `/wiki/pages`, `developers`/`discord` project pages, public & project editors
+7. **`wiki`:** Index, `/wiki/pages`, `/wiki/projects`, `developers`/`discord` project pages, public & project editors
    (visibility bar, live Djot preview), revision history/snapshot/diff, owner redirect & non-owner
    `404` on uncreated page, `403`s (unregistered, non-owner edit, non-guild Discord), `/auth/dev`.
 
@@ -111,7 +111,7 @@ persona picker minting real HMAC-signed `pkmn_session` cookies:
 | :--- | :--- | :--- |
 | Unauthenticated | `?clear=1&return_to=/arena` | Public views; `/account` & dev wiki redirect to login. |
 | Unregistered | `?github=stranger&return_to=/account` | Redirects `/account` to registration issue; `403` on dev wiki. |
-| 1. `Pending` (`AsterAI`) | `?github=asterdev&return_to=/account` | "Link Discord" CTA, ladders disabled, can view `/wiki/0_ERROR` & edit `/wiki/AsterAI`. |
+| 1. `Pending` (`AsterAI`) | `?github=asterdev&return_to=/account` | "Link Discord" CTA, ladders disabled, can view `/wiki/projects/0_ERROR` & edit `/wiki/projects/AsterAI`. |
 | 2. `Qualified` pre-launch | Plain `DEV_AUTH=1 npm start` (or `set-ladder-status ... upcoming`) | Pre-launch `Qualified` state before ladders open. |
 | 3. `Eligible` new (`CynthiAI`) | `?github=sisyphus25&return_to=/account` | Empty tables; check `VGC` & paste `pbcopy < .mock/vgc-teams.txt` to submit `1.0.0`. |
 | 4. `Eligible` settled (`Foul Play`) | `?github=pmariglia&return_to=/account` | Submit `1.5.0` -> `PENDING`, then `MOCK=1 npm run mock -- smoke all && ... play 1 && ... render`. |

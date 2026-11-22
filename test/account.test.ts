@@ -674,11 +674,16 @@ describe('account routes', () => {
             redirect: 'manual',
           });
 
-        expect((await postWiki('0_ERROR', 'pre', '{% visibility: project %}\n# 0 ERROR\n')).status)
-          .toBe(303);
         expect(
-          (await postWiki('Foul_Play', 'pmariglia', '{% visibility: project %}\n# Foul Play\n'))
+          (await postWiki('projects/0_ERROR', 'pre', '{% visibility: developers %}\n# 0 ERROR\n'))
             .status
+        ).toBe(303);
+        expect(
+          (await postWiki(
+            'projects/Foul_Play',
+            'pmariglia',
+            '{% visibility: developers %}\n# Foul Play\n'
+          )).status
         ).toBe(303);
 
         await runPkmnCli(
@@ -696,10 +701,13 @@ describe('account routes', () => {
           headers: {Cookie: cookieFor('pre')},
         })).text();
         expect(movedAccount).toContain('href="/projects/foul-play/"');
-        expect((await postWiki('0_ERROR', 'pre', '{% visibility: project %}\n# Nope\n')).status)
-          .toBe(403);
         expect(
-          (await postWiki('Foul_Play', 'pre', '{% visibility: project %}\n# Joined!\n')).status
+          (await postWiki('projects/0_ERROR', 'pre', '{% visibility: developers %}\n# Nope\n'))
+            .status
+        ).toBe(403);
+        expect(
+          (await postWiki('projects/Foul_Play', 'pre', '{% visibility: developers %}\n# Joined!\n'))
+            .status
         ).toBe(303);
 
         await runPkmnCli(
@@ -711,10 +719,14 @@ describe('account routes', () => {
           headers: {Cookie: cookieFor('pre')},
         })).text();
         expect(returnedAccount).toContain('href="/projects/0-error/"');
-        expect((await postWiki('Foul_Play', 'pre', '{% visibility: project %}\n# Nope\n')).status)
-          .toBe(403);
-        expect((await postWiki('0_ERROR', 'pre', '{% visibility: project %}\n# Back!\n')).status)
-          .toBe(303);
+        expect(
+          (await postWiki('projects/Foul_Play', 'pre', '{% visibility: developers %}\n# Nope\n'))
+            .status
+        ).toBe(403);
+        expect(
+          (await postWiki('projects/0_ERROR', 'pre', '{% visibility: developers %}\n# Back!\n'))
+            .status
+        ).toBe(303);
       });
   });
 

@@ -74,16 +74,30 @@ main img {
   border-radius: var(--border-radius);
 }
 
-#wiki-pages {
-  margin-top: 3em;
+#wiki-pages,
+#wiki-project-pages {
   padding: 0;
   text-align: center;
 }
 
-#wiki-pages li {
+#wiki-pages {
+  margin-top: 0;
+}
+
+#wiki-project-pages {
+  margin-top: 1.5rem;
+}
+
+#wiki-pages li,
+#wiki-project-pages li {
   margin-bottom: 0.5rem;
   line-height: 1.15;
   list-style: none;
+}
+
+#projects {
+  margin-top: 2.5rem;
+  text-align: center;
 }
 
 .wiki-meta {

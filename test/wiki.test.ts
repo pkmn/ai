@@ -48,28 +48,38 @@ describe('wiki helpers', () => {
 
   test('extractProjectPages maps active arena projects to owners', () => {
     const {projects} = wiki.extractProjectPages(PROJECTS_YAML);
-    expect([...projects.keys()]).toEqual(['0_ERROR', 'Foul_Play']);
-    expect([...projects.get('0_ERROR')!.owners].sort()).toEqual(['pairdev', 'pre']);
-    expect([...projects.get('Foul_Play')!.owners]).toEqual(['pmariglia']);
+    expect([...projects.keys()]).toEqual(['projects/0_ERROR', 'projects/Foul_Play']);
+    expect([...projects.get('projects/0_ERROR')!.owners].sort()).toEqual(['pairdev', 'pre']);
+    expect([...projects.get('projects/Foul_Play')!.owners]).toEqual(['pmariglia']);
   });
 
   test('extractProjectPages registers slugify aliases for project pages', () => {
-    const {aliases} = wiki.extractProjectPages(PROJECTS_YAML);
-    expect(aliases.get('0-error')).toBe('0_ERROR');
-    expect(aliases.get('0_error')).toBe('0_ERROR');
-    expect(aliases.get('0error')).toBe('0_ERROR');
-    expect(aliases.get('foul-play')).toBe('Foul_Play');
-    expect(aliases.get('foulplay')).toBe('Foul_Play');
+    const {aliases, reservedAliases} = wiki.extractProjectPages(
+      `${PROJECTS_YAML}- name: PokéChamp\n`
+    );
+    expect(aliases.get('0-error')).toBe('projects/0_ERROR');
+    expect(aliases.get('0_error')).toBe('projects/0_ERROR');
+    expect(aliases.get('0error')).toBe('projects/0_ERROR');
+    expect(aliases.get('foul-play')).toBe('projects/Foul_Play');
+    expect(aliases.get('foulplay')).toBe('projects/Foul_Play');
+    expect(aliases.get('inactiveproject')).toBeUndefined();
+    expect(reservedAliases.get('inactive-project')).toBe('projects/Inactive_Project');
+    expect(reservedAliases.get('inactiveproject')).toBe('projects/Inactive_Project');
+    expect(reservedAliases.get('pokéchamp')).toBe('projects/PokéChamp');
+    expect(reservedAliases.get('pokechamp')).toBe('projects/PokéChamp');
     expect(slugify("Mew's Truck").toLowerCase()).toBe('mews-truck');
   });
 
   test('normalizeSlug normalizes percent-encoding into NFC underscores', () => {
     expect(wiki.normalizeSlug('Mew%27s%20Truck')).toBe("Mew's_Truck");
     expect(wiki.normalizeSlug('Poke\u0301Champ')).toBe('PokéChamp');
+    expect(wiki.normalizeSlug('projects/0%20ERROR')).toBe('projects/0_ERROR');
+    expect(wiki.normalizeSlug('Projects/Foul%20Play')).toBe('projects/Foul_Play');
   });
 
   test('formatTitle converts underscored slugs into display titles', () => {
     expect(wiki.formatTitle("Mew's_Truck")).toBe("Mew's Truck");
+    expect(wiki.formatTitle('projects/0_ERROR')).toBe('0 ERROR');
   });
 
   test('serializePageContent prepends visibility directive header', () => {
@@ -110,17 +120,22 @@ describe('wiki helpers', () => {
     expect(auth.verifyToken(token, 'secret', 2500)).toBeUndefined();
   });
 
-  test('isValidSlug accepts Wikipedia-style page names', () => {
+  test('isValidSlug accepts Wikipedia-style page names and project namespace slugs', () => {
     expect(wiki.isValidSlug("Mew's_Truck")).toBe(true);
     expect(wiki.isValidSlug('PokéChamp')).toBe(true);
     expect(wiki.isValidSlug('index')).toBe(true);
     expect(wiki.isValidSlug('gen9-ou_notes')).toBe(true);
+    expect(wiki.isValidSlug('projects/0_ERROR')).toBe(true);
   });
 
   test('isValidSlug rejects reserved routes or path traversal', () => {
     expect(wiki.isValidSlug('pages')).toBe(false);
     expect(wiki.isValidSlug('edit')).toBe(false);
     expect(wiki.isValidSlug('history')).toBe(false);
+    expect(wiki.isValidSlug('projects')).toBe(false);
+    expect(wiki.isValidSlug('projects/')).toBe(false);
+    expect(wiki.isValidSlug('projects/a/b')).toBe(false);
+    expect(wiki.isValidSlug('projects/..')).toBe(false);
     expect(wiki.isValidSlug('../secret')).toBe(false);
     expect(wiki.isValidSlug('a/b')).toBe(false);
     expect(wiki.isValidSlug('.hidden')).toBe(false);
@@ -572,19 +587,197 @@ describe('wiki server routes', () => {
   });
 
   test('redirects project slug aliases to canonical project wiki URL', async () => {
-    const res = await realFetch(`${baseUrl}/wiki/0-error`, {redirect: 'manual'});
+    const res = await realFetch(`${baseUrl}/wiki/projects/0-error`, {redirect: 'manual'});
     expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/wiki/0_ERROR');
+    expect(res.headers.get('location')).toBe('/wiki/projects/0_ERROR');
+  });
+
+  test('renders visible project pages on /wiki/projects and links from /wiki/pages', async () => {
+    const emptyRes = await realFetch(`${baseUrl}/wiki/projects`);
+    expect(emptyRes.status).toBe(200);
+    expect(await emptyRes.text()).toContain('No project pages yet.');
+
+    await postWiki('projects/0_ERROR', 'pre', {
+      content: '# 0 ERROR\n\nDev-only architecture notes.',
+      visibility: 'developers',
+      message: 'Create 0 ERROR page',
+      action: 'save',
+    });
+    await postWiki('projects/Foul_Play', 'pmariglia', {
+      content: '# Foul Play\n\nPublic project overview.',
+      visibility: 'public',
+      message: 'Create Foul Play page',
+      action: 'save',
+    });
+
+    const pubProjHtml = await (await realFetch(`${baseUrl}/wiki/projects`)).text();
+    expect(pubProjHtml).toContain('<a href="/wiki/projects/Foul_Play">Foul Play</a>');
+    expect(pubProjHtml).not.toContain('0 ERROR');
+
+    const devProjHtml = await (await realFetch(`${baseUrl}/wiki/projects`, {
+      headers: {Cookie: sessionCookie('pmariglia')},
+    })).text();
+    expect(devProjHtml).toContain('<a href="/wiki/projects/0_ERROR">0 ERROR</a>');
+    expect(devProjHtml).toContain('<a href="/wiki/projects/Foul_Play">Foul Play</a>');
+
+    const pagesHtml = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
+    expect(pagesHtml).toContain('<h2><a href="/wiki/projects" class="subtle">Projects</a></h2>');
+  });
+
+  test('locks top-level /wiki index editing to site admins', async () => {
+    const devEdit = await realFetch(`${baseUrl}/wiki/index/edit`, {
+      headers: {Cookie: sessionCookie('pmariglia')},
+    });
+    expect(devEdit.status).toBe(403);
+
+    const devPost = await postWiki('index', 'pmariglia', {
+      content: '# Hijacked Home',
+      action: 'save',
+    });
+    expect(devPost.status).toBe(403);
+    expect(fs.readFileSync(path.join(wikiDir, 'index.dj'), 'utf8')).toContain('Welcome to');
+
+    const adminEdit = await realFetch(`${baseUrl}/wiki/index/edit`, {
+      headers: {Cookie: sessionCookie('scheibo')},
+    });
+    expect(adminEdit.status).toBe(200);
+  });
+
+  test('rejects unregistered slugs under /wiki/projects/ with 404 even for admins', async () => {
+    const admin = {Cookie: sessionCookie('scheibo')};
+    for (const route of [
+      '/wiki/projects/Unknown_Agent',
+      '/wiki/projects/Unknown_Agent/edit',
+      '/wiki/projects/Unknown_Agent/history',
+      '/wiki/projects/Inactive_Project',
+      '/wiki/projects%2F0_ERROR',
+    ]) {
+      const res = await realFetch(`${baseUrl}${route}`, {headers: admin, redirect: 'manual'});
+      expect(res.status).toBe(404);
+    }
+    const postRes = await postWiki('projects/Unknown_Agent', 'scheibo', {
+      content: '# Squat',
+      action: 'save',
+    });
+    expect(postRes.status).toBe(404);
+    expect(wikiInstance.canEdit('scheibo', 'projects/Unknown_Agent')).toBe(false);
+    await expect(
+      wikiInstance.savePage('projects/Unknown_Agent', '# Squat', 'scheibo')
+    ).rejects.toThrow(/Unknown project wiki page/);
+  });
+
+  test('forwards top-level links for registered projects to /wiki/projects/', async () => {
+    for (const alias of ['0_ERROR', '0-error', '0error']) {
+      const view = await realFetch(`${baseUrl}/wiki/${alias}`, {redirect: 'manual'});
+      expect(view.status).toBe(302);
+      expect(view.headers.get('location')).toBe('/wiki/projects/0_ERROR');
+
+      const edit = await realFetch(`${baseUrl}/wiki/${alias}/edit`, {redirect: 'manual'});
+      expect(edit.status).toBe(302);
+      expect(edit.headers.get('location')).toBe('/wiki/projects/0_ERROR/edit');
+
+      const hist = await realFetch(`${baseUrl}/wiki/${alias}/history`, {redirect: 'manual'});
+      expect(hist.status).toBe(302);
+      expect(hist.headers.get('location')).toBe('/wiki/projects/0_ERROR/history');
+    }
+
+    const nonOwnerPost = await postWiki('0error', 'pmariglia', {
+      content: '# Hijacked',
+      action: 'save',
+    });
+    expect(nonOwnerPost.status).toBe(403);
+    expect(fs.existsSync(path.join(wikiDir, '0error.dj'))).toBe(false);
+  });
+
+  test('blocks creating general wiki pages matching non-arena projects in projects.yml',
+    async () => {
+      const admin = {Cookie: sessionCookie('scheibo')};
+      for (const alias of ['Inactive_Project', 'inactive-project', 'inactiveproject']) {
+        for (const suffix of ['', '/edit', '/history']) {
+          const res = await realFetch(`${baseUrl}/wiki/${alias}${suffix}`, {
+            headers: admin,
+            redirect: 'manual',
+          });
+          expect(res.status).toBe(404);
+        }
+        const postRes = await postWiki(alias, 'scheibo', {content: '# Squat', action: 'save'});
+        expect(postRes.status).toBe(404);
+        expect(wikiInstance.canEdit('scheibo', alias)).toBe(false);
+      }
+      await expect(
+        wikiInstance.savePage('inactiveproject', '# Squat', 'scheibo')
+      ).rejects.toThrow(/Unknown project wiki page/);
+
+      // Once that project registers in the arena, the same top-level slug forwards cleanly
+      // to `/wiki/projects/Inactive_Project` with no conflicting general page.
+      const updatedYaml = `${PROJECTS_YAML.replace(
+        '- name: Inactive Project\n  active: [2020, 2021]\n',
+        '- name: Inactive Project\n  active: 2026\n  arena:\n    owners:\n      pre: pre\n'
+      )}`;
+      fs.writeFileSync(projectsFile, updatedYaml, 'utf8');
+      const now = new Date(Date.now() + 2000);
+      fs.utimesSync(projectsFile, now, now);
+
+      const forwarded = await realFetch(`${baseUrl}/wiki/inactiveproject`, {redirect: 'manual'});
+      expect(forwarded.status).toBe(302);
+      expect(forwarded.headers.get('location')).toBe('/wiki/projects/Inactive_Project');
+    });
+
+  test('preserves a pre-existing general wiki page when a matching project is added later',
+    async () => {
+      const genSave = await postWiki('alphazero', 'pmariglia', {
+        content: '# AlphaZero\n\nGeneral algorithm overview.',
+        message: 'Add AlphaZero concept page',
+        action: 'save',
+      });
+      expect(genSave.status).toBe(303);
+      expect(genSave.headers.get('location')).toBe('/wiki/alphazero');
+
+      const withAlphaZero = `${PROJECTS_YAML}- name: Alpha Zero\n  active: 2026\n  arena:\n` +
+        '    owners:\n      pre: pre\n';
+      fs.writeFileSync(projectsFile, withAlphaZero, 'utf8');
+      const now = new Date(Date.now() + 2000);
+      fs.utimesSync(projectsFile, now, now);
+
+      const projSave = await postWiki('projects/Alpha_Zero', 'pre', {
+        content: '# Alpha Zero\n\nOfficial arena project notes.',
+        visibility: 'public',
+        message: 'Add project page',
+        action: 'save',
+      });
+      expect(projSave.status).toBe(303);
+      expect(projSave.headers.get('location')).toBe('/wiki/projects/Alpha_Zero');
+
+      const genRes = await realFetch(`${baseUrl}/wiki/alphazero`, {redirect: 'manual'});
+      expect(genRes.status).toBe(200);
+      expect(await genRes.text()).toContain('General algorithm overview.');
+
+      const projRes = await realFetch(`${baseUrl}/wiki/projects/Alpha_Zero`);
+      expect(projRes.status).toBe(200);
+      expect(await projRes.text()).toContain('Official arena project notes.');
+
+      const pagesHtml = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
+      expect(pagesHtml).toContain('<a href="/wiki/alphazero">AlphaZero</a>');
+      expect(pagesHtml).toContain('<section id="projects">');
+      expect(pagesHtml).toContain('<ul id="wiki-project-pages">');
+      expect(pagesHtml).toContain('<a href="/wiki/projects/Alpha_Zero">Alpha Zero</a>');
+    });
+
+  test('resolves relative Djot links to /wiki/projects/ pages', () => {
+    const html = wiki.renderDjot('See [0 ERROR](projects/0_ERROR#arch).');
+    expect(html).toContain('<a href="/wiki/projects/0_ERROR#arch">0 ERROR</a>');
   });
 
   test('redirects unauthenticated project page requests to GitHub OAuth', async () => {
-    const res = await realFetch(`${baseUrl}/wiki/0_ERROR`, {redirect: 'manual'});
+    const res = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {redirect: 'manual'});
     expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/auth/github?return_to=%2Fwiki%2F0_ERROR');
+    expect(res.headers.get('location')).toBe(
+      '/auth/github?return_to=%2Fwiki%2Fprojects%2F0_ERROR'
+    );
   });
 
   test('hides uncreated project pages from non-owner developers with 404', async () => {
-    const res = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
+    const res = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {
       headers: {Cookie: sessionCookie('pmariglia')},
       redirect: 'manual',
     });
@@ -593,31 +786,34 @@ describe('wiki server routes', () => {
   });
 
   test('rejects non-owner developer edits on another project page with 403', async () => {
-    const editRes = await realFetch(`${baseUrl}/wiki/0_ERROR/edit`, {
+    const editRes = await realFetch(`${baseUrl}/wiki/projects/0_ERROR/edit`, {
       headers: {Cookie: sessionCookie('pmariglia')},
     });
     expect(editRes.status).toBe(403);
     expect(await editRes.text()).toContain('<p>Forbidden</p>');
 
-    const postRes = await postWiki('0-error', 'pmariglia', {content: 'hacked', action: 'save'});
+    const postRes = await postWiki('projects/0-error', 'pmariglia', {
+      content: 'hacked',
+      action: 'save',
+    });
     expect(postRes.status).toBe(403);
   });
 
   test('allows project owners to create developers-visible project pages', async () => {
-    const ownerView = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
+    const ownerView = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {
       headers: {Cookie: sessionCookie('pre')},
       redirect: 'manual',
     });
     expect(ownerView.status).toBe(302);
-    expect(ownerView.headers.get('location')).toBe('/wiki/0_ERROR/edit');
+    expect(ownerView.headers.get('location')).toBe('/wiki/projects/0_ERROR/edit');
 
-    const editorHtml = await (await realFetch(`${baseUrl}/wiki/0_ERROR/edit`, {
+    const editorHtml = await (await realFetch(`${baseUrl}/wiki/projects/0_ERROR/edit`, {
       headers: {Cookie: sessionCookie('pre')},
     })).text();
     expect(editorHtml).toContain('id="wiki-visibility"');
     expect(editorHtml).toContain('value="developers"');
 
-    const saveRes = await postWiki('0_ERROR', 'pre', {
+    const saveRes = await postWiki('projects/0_ERROR', 'pre', {
       content: '# 0 ERROR\n\nSecret search architecture.',
       message: 'Create 0 ERROR page',
       action: 'save',
@@ -626,16 +822,17 @@ describe('wiki server routes', () => {
 
     const pubPages = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
     expect(pubPages).not.toContain('0 ERROR');
+    expect(pubPages).not.toContain('id="projects"');
   });
 
   test('allows other registered developers to read developers-visible project pages', async () => {
-    await postWiki('0_ERROR', 'pre', {
+    await postWiki('projects/0_ERROR', 'pre', {
       content: '# 0 ERROR\n\nSecret search architecture.',
       message: 'Create 0 ERROR page',
       action: 'save',
     });
 
-    const viewRes = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
+    const viewRes = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {
       headers: {Cookie: sessionCookie('pmariglia')},
     });
     expect(viewRes.status).toBe(200);
@@ -646,28 +843,31 @@ describe('wiki server routes', () => {
     const devPages = await (await realFetch(`${baseUrl}/wiki/pages`, {
       headers: {Cookie: sessionCookie('pmariglia')},
     })).text();
-    expect(devPages).toContain('0 ERROR');
+    expect(devPages).toContain('id="wiki-project-pages"');
+    expect(devPages).toContain('<a href="/wiki/projects/0_ERROR">0 ERROR</a>');
   });
 
   test('restricts discord-visible project pages to verified Discord guild members', async () => {
-    await postWiki('0_ERROR', 'PairDev', {
+    await postWiki('projects/0_ERROR', 'PairDev', {
       content: '# 0 ERROR\n\nDiscord-shared notes.',
       visibility: 'discord',
       message: 'Share with Discord',
       action: 'save',
     });
 
-    const noDiscord = await realFetch(`${baseUrl}/wiki/0_ERROR`, {redirect: 'manual'});
+    const noDiscord = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {redirect: 'manual'});
     expect(noDiscord.status).toBe(302);
-    expect(noDiscord.headers.get('location')).toBe('/auth/discord?return_to=%2Fwiki%2F0_ERROR');
+    expect(noDiscord.headers.get('location')).toBe(
+      '/auth/discord?return_to=%2Fwiki%2Fprojects%2F0_ERROR'
+    );
 
-    const memberRes = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
+    const memberRes = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {
       headers: {Cookie: discordCookie('513513270670262284')},
     });
     expect(memberRes.status).toBe(200);
     expect(await memberRes.text()).toContain('Discord-shared notes.');
 
-    const outsiderRes = await realFetch(`${baseUrl}/wiki/0_ERROR`, {
+    const outsiderRes = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`, {
       headers: {Cookie: discordCookie('999999999999999999', 'outsider')},
     });
     expect(outsiderRes.status).toBe(403);
@@ -675,41 +875,42 @@ describe('wiki server routes', () => {
   });
 
   test('exposes public project pages to unauthenticated visitors', async () => {
-    await postWiki('0_ERROR', 'scheibo', {
+    await postWiki('projects/0_ERROR', 'scheibo', {
       content: '# 0 ERROR\n\nPublic project profile.',
       visibility: 'public',
       message: 'Make public',
       action: 'save',
     });
 
-    const pubRes = await realFetch(`${baseUrl}/wiki/0_ERROR`);
+    const pubRes = await realFetch(`${baseUrl}/wiki/projects/0_ERROR`);
     expect(pubRes.status).toBe(200);
     expect(await pubRes.text()).toContain('Public project profile.');
 
     const pubPages = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
-    expect(pubPages).toContain('0 ERROR');
+    expect(pubPages).toContain('id="wiki-project-pages"');
+    expect(pubPages).toContain('<a href="/wiki/projects/0_ERROR">0 ERROR</a>');
   });
 
   test('blocks non-owners from editing public project pages across all aliases', async () => {
-    await postWiki('0_ERROR', 'scheibo', {
+    await postWiki('projects/0_ERROR', 'scheibo', {
       content: '# 0 ERROR\n\nPublic project profile.',
       visibility: 'public',
       message: 'Make public',
       action: 'save',
     });
 
-    const editRes = await realFetch(`${baseUrl}/wiki/0_ERROR/edit`, {
+    const editRes = await realFetch(`${baseUrl}/wiki/projects/0_ERROR/edit`, {
       headers: {Cookie: sessionCookie('pmariglia')},
     });
     expect(editRes.status).toBe(403);
 
-    for (const alias of ['0_ERROR', '0-error', '0error']) {
+    for (const alias of ['projects/0_ERROR', 'projects/0-error', 'projects/0error']) {
       for (const action of ['preview', 'save']) {
         const res = await postWiki(alias, 'pmariglia', {content: 'hijacked', action});
         expect(res.status).toBe(403);
       }
     }
-    expect(fs.readFileSync(path.join(wikiDir, '0_ERROR.dj'), 'utf8')).toContain(
+    expect(fs.readFileSync(path.join(wikiDir, 'projects', '0_ERROR.dj'), 'utf8')).toContain(
       'Public project profile.'
     );
   });
@@ -730,15 +931,15 @@ describe('wiki server routes', () => {
         'reset --seed 1 --now 2026-10-20T12:00:00Z',
         'register "0 ERROR" --owner scheibo:pre.10544 --owner coauthor:coauthor.20001',
         'register "Foul Play" --owner pmariglia:pmariglia.535629',
-        'wiki index --by pmariglia --content "# Wiki"',
-        'wiki 0_ERROR --by coauthor --visibility developers --content "# 0 ERROR"',
+        'wiki index --by scheibo --content "# Wiki"',
+        'wiki projects/0_ERROR --by coauthor --visibility developers --content "# 0 ERROR"',
       ].join('\n'));
       await expect(
-        runner.execLine('wiki 0_ERROR --by pmariglia --content "# Hijacked"')
-      ).rejects.toThrow(/not authorized to edit project wiki page "0_ERROR"/);
+        runner.execLine('wiki projects/0_ERROR --by pmariglia --content "# Hijacked"')
+      ).rejects.toThrow(/not authorized to edit project wiki page "projects\/0_ERROR"/);
       await expect(
-        runner.execLine('wiki 0error --by pmariglia --content "# Hijacked"')
-      ).rejects.toThrow(/not authorized to edit project wiki page "0_ERROR"/);
+        runner.execLine('wiki projects/0error --by pmariglia --content "# Hijacked"')
+      ).rejects.toThrow(/not authorized to edit project wiki page "projects\/0_ERROR"/);
     } finally {
       db.close();
     }
@@ -793,7 +994,7 @@ describe('wiki server routes', () => {
 
   test('denies anonymous access to historical private revisions on public project pages',
     async () => {
-      await postWiki('0_ERROR', 'scheibo', {
+      await postWiki('projects/0_ERROR', 'scheibo', {
         content: '# 0 ERROR\n\nTop-secret private algorithm.',
         visibility: 'developers',
         message: 'Private draft',
@@ -804,7 +1005,7 @@ describe('wiki server routes', () => {
         encoding: 'utf8',
       }).trim();
 
-      await postWiki('0_ERROR', 'scheibo', {
+      await postWiki('projects/0_ERROR', 'scheibo', {
         content: '# 0 ERROR\n\nSanitized public summary.',
         visibility: 'public',
         message: 'Publish summary',
@@ -815,13 +1016,13 @@ describe('wiki server routes', () => {
         encoding: 'utf8',
       }).trim();
 
-      expect((await realFetch(`${baseUrl}/wiki/0_ERROR`)).status).toBe(200);
-      const anonSnap = await realFetch(`${baseUrl}/wiki/0_ERROR/${privateSha}`, {
+      expect((await realFetch(`${baseUrl}/wiki/projects/0_ERROR`)).status).toBe(200);
+      const anonSnap = await realFetch(`${baseUrl}/wiki/projects/0_ERROR/${privateSha}`, {
         redirect: 'manual',
       });
       expect(anonSnap.status).toBe(302);
 
-      const anonDiff = await realFetch(`${baseUrl}/wiki/0_ERROR/${publicSha}?diff=1`, {
+      const anonDiff = await realFetch(`${baseUrl}/wiki/projects/0_ERROR/${publicSha}?diff=1`, {
         redirect: 'manual',
       });
       expect(anonDiff.status).toBe(302);
@@ -880,7 +1081,7 @@ describe('wiki server routes', () => {
   });
 
   test('redirects wiki logout to /wiki from non-public project pages', async () => {
-    await postWiki('0_ERROR', 'scheibo', {
+    await postWiki('projects/0_ERROR', 'scheibo', {
       content: '# 0 ERROR\n\nPrivate notes.',
       visibility: 'developers',
       message: 'Private project page',
@@ -892,11 +1093,11 @@ describe('wiki server routes', () => {
     }).trim();
     const headers = {Cookie: sessionCookie('scheibo')};
     for (const route of [
-      '/wiki/0_ERROR',
-      '/wiki/0_ERROR/edit',
-      '/wiki/0_ERROR/history',
-      `/wiki/0_ERROR/${sha}`,
-      `/wiki/0_ERROR/${sha}?diff=1`,
+      '/wiki/projects/0_ERROR',
+      '/wiki/projects/0_ERROR/edit',
+      '/wiki/projects/0_ERROR/history',
+      `/wiki/projects/0_ERROR/${sha}`,
+      `/wiki/projects/0_ERROR/${sha}?diff=1`,
     ]) {
       const html = await (await realFetch(`${baseUrl}${route}`, {headers})).text();
       expect(html).toContain('action="/auth/logout?return_to=%2Fwiki"');
@@ -985,7 +1186,7 @@ describe('wiki server routes', () => {
   });
 
   test('reads backing .dj file once per wiki page request', async () => {
-    await postWiki('Foul_Play', 'pmariglia', {
+    await postWiki('projects/Foul_Play', 'pmariglia', {
       content: '# Foul Play\n\nPublic notes.',
       message: 'Publish Foul Play',
       action: 'save',
@@ -1004,7 +1205,7 @@ describe('wiki server routes', () => {
       return origVis(slug);
     };
     try {
-      const res = await realFetch(`${baseUrl}/wiki/Foul_Play`);
+      const res = await realFetch(`${baseUrl}/wiki/projects/Foul_Play`);
       expect(res.status).toBe(200);
       expect(readCalls).toBe(1);
       expect(visCalls).toBe(0);
@@ -1078,7 +1279,7 @@ describe('wiki database standing checks', () => {
   });
 
   test('redirects sessions whose numeric GitHub ID disagrees with the database', async () => {
-    const res = await fetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+    const res = await fetch(`${dbUrl}/wiki/projects/Foul_Play/edit`, {
       headers: {Cookie: mintCookie(9999, 'pmariglia')},
       redirect: 'manual',
     });
@@ -1086,7 +1287,7 @@ describe('wiki database standing checks', () => {
   });
 
   test('preserves wiki access across GitHub handle renames via numeric ID', async () => {
-    const res = await fetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+    const res = await fetch(`${dbUrl}/wiki/projects/Foul_Play/edit`, {
       headers: {Cookie: mintCookie(4242, 'old-pmariglia-handle')},
     });
     expect(res.status).toBe(200);
@@ -1094,7 +1295,7 @@ describe('wiki database standing checks', () => {
 
   test('blocks wiki edits with 403 when developer Smogon standing is bad', async () => {
     db.db.prepare("UPDATE developers SET smogon_standing = 'bad' WHERE id = ?").run(devId);
-    const res = await fetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+    const res = await fetch(`${dbUrl}/wiki/projects/Foul_Play/edit`, {
       headers: {Cookie: mintCookie(4242, 'pmariglia')},
     });
     expect(res.status).toBe(403);
@@ -1102,7 +1303,7 @@ describe('wiki database standing checks', () => {
 
   test('blocks wiki edits with 403 when the project status is disabled', async () => {
     db.db.prepare("UPDATE agents SET status = 'disabled' WHERE id = ?").run(agentId);
-    const res = await fetch(`${dbUrl}/wiki/Foul_Play/edit`, {
+    const res = await fetch(`${dbUrl}/wiki/projects/Foul_Play/edit`, {
       headers: {Cookie: mintCookie(4242, 'pmariglia')},
     });
     expect(res.status).toBe(403);
