@@ -896,6 +896,7 @@ export class Wiki {
       const tail = normalized.slice(PROJECTS_PREFIX.length);
       return this.projectAliases.get(tail.toLowerCase()) ?? normalized;
     }
+    if (normalized.toLowerCase() === 'index') return 'index';
     if (normalized && fs.existsSync(this.wikiDir)) {
       if (fs.existsSync(path.join(this.wikiDir, `${normalized}.dj`))) {
         return normalized;

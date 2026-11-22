@@ -643,6 +643,22 @@ describe('wiki server routes', () => {
     expect(adminEdit.status).toBe(200);
   });
 
+  test('normalizes Index case variants to admin-locked index before index.dj exists', async () => {
+    fs.rmSync(path.join(wikiDir, 'index.dj'));
+    expect(wikiInstance.resolveSlug('Index')).toBe('index');
+    expect(wikiInstance.canEdit('pmariglia', 'Index')).toBe(false);
+    expect(wikiInstance.canEdit('scheibo', 'INDEX')).toBe(true);
+
+    const devPost = await postWiki('Index', 'pmariglia', {
+      content: '# Hijacked Home',
+      action: 'save',
+    });
+    expect(devPost.status).toBe(403);
+    await expect(wikiInstance.deletePage('INDEX', 'scheibo')).rejects.toThrow(
+      /Cannot delete protected wiki page/
+    );
+  });
+
   test('rejects unregistered slugs under /wiki/projects/ with 404 even for admins', async () => {
     const admin = {Cookie: sessionCookie('scheibo')};
     for (const route of [
