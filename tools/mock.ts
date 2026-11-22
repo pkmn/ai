@@ -1356,8 +1356,8 @@ export class Runner {
 
     if (!isPending) {
       const laddersFlag = getFlag(cmd, 'ladders');
-      const slots: db.LadderSlot[] = laddersFlag
-        ? laddersFlag.split(',').map(s => db.normalizeLadderSlot(s))
+      const slots = laddersFlag
+        ? db.parseLadderSlotTokens([laddersFlag])
         : [...db.ALL_SLOTS];
       this.db.setAgentLadders(slug, slots, this.state.now);
     }
@@ -1435,11 +1435,9 @@ export class Runner {
         .flatMap(t => t.split(','))
         .map(t => t.trim().toLowerCase())
         .filter(Boolean);
-      const slots: db.LadderSlot[] = rawSlots.length === 0 || rawSlots.includes('all')
+      const slots = rawSlots.length === 0
         ? [...db.ALL_SLOTS]
-        : rawSlots.includes('none')
-          ? []
-          : rawSlots.map(s => db.normalizeLadderSlot(s));
+        : db.parseLadderSlotTokens(rawSlots);
       this.db.setAgentLadders(agent.slug, slots, this.state.now);
       return;
     }

@@ -386,17 +386,7 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!slug || rawTokens.length === 0) {
           throw new Error('Usage: pkmn set-ladders <agent-slug> <slot...|all|none>');
         }
-        let slots: db.LadderSlot[];
-        if (rawTokens.includes('none')) {
-          if (rawTokens.length > 1) {
-            throw new Error('Cannot combine "none" with other ladder slots');
-          }
-          slots = [];
-        } else if (rawTokens.includes('all')) {
-          slots = [...db.ALL_SLOTS];
-        } else {
-          slots = rawTokens.map(t => db.normalizeLadderSlot(t));
-        }
+        const slots = db.parseLadderSlotTokens(rawTokens);
         const res = database.setAgentLadders(slug, slots, now);
         const list = res.slots.length > 0 ? res.slots.join(', ') : 'none';
         log(

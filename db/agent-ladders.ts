@@ -28,6 +28,29 @@ export function normalizeLadderSlot(raw: string): LadderSlot {
   return slot;
 }
 
+export function parseLadderSlotTokens(rawTokens: Iterable<string>): LadderSlot[] {
+  const tokens: string[] = [];
+  for (const raw of rawTokens) {
+    for (const part of raw.split(',')) {
+      const clean = part.trim().toLowerCase();
+      if (clean) tokens.push(clean);
+    }
+  }
+  if (tokens.includes('none')) {
+    if (tokens.length > 1) {
+      throw new Error('Cannot combine "none" with other ladder slots');
+    }
+    return [];
+  }
+  if (tokens.includes('all')) {
+    if (tokens.length > 1) {
+      throw new Error('Cannot combine "all" with other ladder slots');
+    }
+    return [...ALL_SLOTS];
+  }
+  return tokens.map(t => normalizeLadderSlot(t));
+}
+
 export function getAgentLadders(db: DatabaseSync, agentId: number): LadderSlot[] {
   const rows = db.prepare(`
     SELECT al.slot

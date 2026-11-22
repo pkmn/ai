@@ -3279,4 +3279,15 @@ describe('per-ladder qualification & migrations', () => {
       db.close();
     }
   });
+
+  test('parseLadderSlotTokens rejects combining all with other tokens', () => {
+    expect(() => database.parseLadderSlotTokens(['all', 'bogus'])).toThrow(/Cannot combine "all"/);
+    expect(() => database.parseLadderSlotTokens(['all,rby'])).toThrow(/Cannot combine "all"/);
+    expect(database.parseLadderSlotTokens(['all'])).toEqual([...database.ALL_SLOTS]);
+  });
+
+  test('parseLadderSlotTokens rejects combining none with other tokens', () => {
+    expect(() => database.parseLadderSlotTokens(['none', 'rby'])).toThrow(/Cannot combine "none"/);
+    expect(database.parseLadderSlotTokens(['none'])).toEqual([]);
+  });
 });
