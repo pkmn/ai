@@ -15,6 +15,7 @@ build/
 *package-lock.json
 *npm-debug.log
 .eslintcache
+.stylelintcache
 .tsbuildinfo
 
 # Project
