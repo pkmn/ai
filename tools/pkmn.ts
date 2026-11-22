@@ -375,7 +375,9 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('Usage: pkmn refund-cooldown <agent-slug>');
         }
         const agent = database.refundCooldown(slug, now);
-        log(`Refunded 14-day submission cooldown for ${agent.name} (${agent.slug})`);
+        log(
+          `Refunded 14-day cooldown and 24h failed smoke budget for ${agent.name} (${agent.slug})`
+        );
         return;
       }
       case 'set-smoke-cadence': {

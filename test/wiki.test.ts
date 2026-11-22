@@ -120,7 +120,7 @@ describe('wiki helpers', () => {
     expect(auth.verifyToken(token, 'secret', 2500)).toBeUndefined();
   });
 
-  test('isValidSlug accepts Wikipedia-style page names and project namespace slugs', () => {
+  test('isValidSlug accepts Wikipedia-style page names or project namespace slugs', () => {
     expect(wiki.isValidSlug("Mew's_Truck")).toBe(true);
     expect(wiki.isValidSlug('PokéChamp')).toBe(true);
     expect(wiki.isValidSlug('index')).toBe(true);
@@ -592,7 +592,7 @@ describe('wiki server routes', () => {
     expect(res.headers.get('location')).toBe('/wiki/projects/0_ERROR');
   });
 
-  test('renders visible project pages on /wiki/projects and links from /wiki/pages', async () => {
+  test('renders visible project pages on /wiki/projects linked from /wiki/pages', async () => {
     const emptyRes = await realFetch(`${baseUrl}/wiki/projects`);
     expect(emptyRes.status).toBe(200);
     expect(await emptyRes.text()).toContain('No project pages yet.');
@@ -1344,7 +1344,7 @@ describe('wiki server routes', () => {
       expect(await wikiInstance.getHistory('Still_Never_Existed')).toEqual([]);
     });
 
-  test('protects index and /wiki/pages from deletion', async () => {
+  test('protects index or /wiki/pages from deletion', async () => {
     const previewRes = await postWiki('index', 'scheibo', {
       content: '   ',
       action: 'preview',
@@ -1371,7 +1371,7 @@ describe('wiki server routes', () => {
     expect(delPages.status).toBe(404);
   });
 
-  test('restricts project page deletion to owners and keeps deleted history private', async () => {
+  test('restricts project deletion to owners while keeping history private', async () => {
     await postWiki('projects/0_ERROR', 'pre', {
       content: '# 0 ERROR\n\nConfidential roadmap.',
       visibility: 'developers',
@@ -1417,49 +1417,50 @@ describe('wiki server routes', () => {
     expect(await devDiff.text()).toContain('-Confidential roadmap.');
   });
 
-  test('handles empty saves on uncreated pages as a no-op and honors baseSha conflicts',
-    async () => {
-      const headBefore = execFileSync('git', ['rev-parse', 'HEAD'], {
-        cwd: wikiDir,
-        encoding: 'utf8',
-      }).trim();
-      const noopRes = await postWiki('never_created', 'scheibo', {
-        content: '  ',
-        action: 'save',
-      });
-      expect(noopRes.status).toBe(303);
-      expect(noopRes.headers.get('location')).toBe('/wiki/pages');
-      expect(fs.existsSync(path.join(wikiDir, 'never_created.dj'))).toBe(false);
-      const headAfter = execFileSync('git', ['rev-parse', 'HEAD'], {
-        cwd: wikiDir,
-        encoding: 'utf8',
-      }).trim();
-      expect(headAfter).toBe(headBefore);
-
-      await postWiki('conflict_delete', 'scheibo', {
-        content: '# Keep Me\n\nv1',
-        message: 'v1',
-        action: 'save',
-      });
-      const editHtml = await (await realFetch(`${baseUrl}/wiki/conflict_delete/edit`, {
-        headers: {Cookie: sessionCookie('scheibo')},
-      })).text();
-      const baseSha = /name="baseSha"[^>]*value="([^"]+)"/.exec(editHtml)![1];
-
-      await postWiki('conflict_delete', 'pmariglia', {
-        content: '# Keep Me\n\nv2',
-        message: 'v2',
-        action: 'save',
-      });
-
-      const staleDel = await postWiki('conflict_delete', 'scheibo', {
-        content: '',
-        baseSha,
-        action: 'save',
-      });
-      expect(staleDel.status).toBe(409);
-      expect(fs.existsSync(path.join(wikiDir, 'conflict_delete.dj'))).toBe(true);
+  test('treats empty saves on uncreated pages as a no-op', async () => {
+    const headBefore = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: wikiDir,
+      encoding: 'utf8',
+    }).trim();
+    const noopRes = await postWiki('never_created', 'scheibo', {
+      content: '  ',
+      action: 'save',
     });
+    expect(noopRes.status).toBe(303);
+    expect(noopRes.headers.get('location')).toBe('/wiki/pages');
+    expect(fs.existsSync(path.join(wikiDir, 'never_created.dj'))).toBe(false);
+    const headAfter = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: wikiDir,
+      encoding: 'utf8',
+    }).trim();
+    expect(headAfter).toBe(headBefore);
+  });
+
+  test('honors baseSha edit conflicts on empty-save deletion', async () => {
+    await postWiki('conflict_delete', 'scheibo', {
+      content: '# Keep Me\n\nv1',
+      message: 'v1',
+      action: 'save',
+    });
+    const editHtml = await (await realFetch(`${baseUrl}/wiki/conflict_delete/edit`, {
+      headers: {Cookie: sessionCookie('scheibo')},
+    })).text();
+    const baseSha = /name="baseSha"[^>]*value="([^"]+)"/.exec(editHtml)![1];
+
+    await postWiki('conflict_delete', 'pmariglia', {
+      content: '# Keep Me\n\nv2',
+      message: 'v2',
+      action: 'save',
+    });
+
+    const staleDel = await postWiki('conflict_delete', 'scheibo', {
+      content: '',
+      baseSha,
+      action: 'save',
+    });
+    expect(staleDel.status).toBe(409);
+    expect(fs.existsSync(path.join(wikiDir, 'conflict_delete.dj'))).toBe(true);
+  });
 });
 
 describe('wiki database standing checks', () => {

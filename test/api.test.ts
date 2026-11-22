@@ -1347,7 +1347,7 @@ describe('pkmn CLI commands', () => {
     expect(db.computeAgentSubmissionStatus(zeroAgent.id, 1_760_000_260).canSubmit).toBe(true);
   });
 
-  test('set-smoke-cadence tunes smoke cadence and rejects invalid arguments', async () => {
+  test('set-smoke-cadence persists custom per-cycle, interval, or pause settings', async () => {
     expect(db.getSmokeCadence()).toEqual({maxPerCycle: 1, everyCycles: 1});
 
     await runPkmnCli(['set-smoke-cadence', '1', '--every', '5'], {db, now: 1_760_000_250, log});
@@ -1361,7 +1361,9 @@ describe('pkmn CLI commands', () => {
     await runPkmnCli(['set-smoke-cadence', '0'], {db, now: 1_760_000_270, log});
     expect(db.getSmokeCadence()).toEqual({maxPerCycle: 0, everyCycles: 1});
     expect(logs[logs.length - 1]).toContain('Paused ladder smoke tests');
+  });
 
+  test('set-smoke-cadence rejects negative counts or non-positive intervals', async () => {
     await expect(runPkmnCli(['set-smoke-cadence', '-1'], {db, log})).rejects.toThrow(
       /Invalid <per-cycle>/
     );

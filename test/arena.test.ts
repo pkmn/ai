@@ -3257,7 +3257,7 @@ describe('arena infrastructure', () => {
       }
     });
 
-    test('SmokeCadenceTracker enforces per-cycle limits, N-cycle intervals, and pauses', () => {
+    test('SmokeCadenceTracker enforces per-cycle limits, N-cycle intervals, or pauses', () => {
       const tracker = new coordinator.SmokeCadenceTracker();
 
       // Default 1 per 1 cycle runs every tick.

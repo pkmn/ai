@@ -3350,7 +3350,7 @@ describe('per-ladder qualification & migrations', () => {
     expect(database.parseLadderSlotTokens(['none'])).toEqual([]);
   });
 
-  test('enforces rolling 24h failed smoke budget independently for ladders and tournaments', () => {
+  test('enforces rolling 24h failed smoke budget independently per scope', () => {
     const db = new database.Database(':memory:', {now: 1_760_000_000});
     try {
       db.syncLaddersFromYaml(`
@@ -3478,7 +3478,7 @@ describe('per-ladder qualification & migrations', () => {
     }
   });
 
-  test('stores and validates tunable smoke cadence in config', () => {
+  test('persists tunable smoke cadence in config', () => {
     const db = new database.Database(':memory:', {now: 1_760_000_000});
     try {
       expect(db.getSmokeCadence()).toEqual({maxPerCycle: 1, everyCycles: 1});
@@ -3493,7 +3493,14 @@ describe('per-ladder qualification & migrations', () => {
         everyCycles: 1,
       });
       expect(db.getSmokeCadence()).toEqual({maxPerCycle: 0, everyCycles: 1});
+    } finally {
+      db.close();
+    }
+  });
 
+  test('rejects invalid smoke cadence parameters in config', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
       expect(() => db.setSmokeCadence({maxPerCycle: -1, everyCycles: 1})).toThrow(/non-negative/);
       expect(() => db.setSmokeCadence({maxPerCycle: 1, everyCycles: 0})).toThrow(/positive/);
     } finally {
@@ -3501,7 +3508,7 @@ describe('per-ladder qualification & migrations', () => {
     }
   });
 
-  test('computes anonymized FIFO smoke-test queue position separately for ladders and tournaments',
+  test('computes anonymized FIFO smoke-test queue position separately per scope',
     () => {
       const db = new database.Database(':memory:', {now: 1_760_000_000});
       try {

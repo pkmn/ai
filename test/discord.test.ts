@@ -1195,7 +1195,7 @@ describe('Arena Discord notifications', () => {
     expect(failDm.match(/```/g)).toHaveLength(2);
   });
 
-  test('formats smoke-pass DMs with target labels and telemetry summary', () => {
+  test('formats smoke-pass DMs with target labels plus telemetry summary', () => {
     const passDm = discord.formatSubmissionDm({
       agentName: 'Foul Play',
       version: '1.3.0',
@@ -1292,7 +1292,7 @@ describe('Arena Discord notifications', () => {
     }
   });
 
-  test('sends smoke-pass DMs with telemetry and reconciles undelivered passes once', async () => {
+  test('delivers smoke-pass DMs once without duplicate unquarantine alerts', async () => {
     const db = createSeededArenaDb();
     try {
       const fpAgent = db.getAgentBySlug('foul-play')!;

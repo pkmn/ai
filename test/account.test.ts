@@ -1522,7 +1522,7 @@ describe('account routes', () => {
       expect(html).toContain('<fieldset class="form-fieldset" disabled>');
     });
 
-    test('rate-limits projects after 3 failed smoke tests in 24h on ladders and tournaments',
+    test('rate-limits projects after 3 failed smoke tests in 24h across scopes',
       async () => {
         openLadders(['gen1ou20261109']);
         db.setAgentLadders('0-error', ['rby'], currentNow);
@@ -1613,7 +1613,7 @@ describe('account routes', () => {
         expect(htmlAfterTour).toContain('retry after ');
       });
 
-    test('exposes anonymized smoke-test queue position on /account and /account.json', async () => {
+    test('exposes anonymized smoke-test queue position on /account routes', async () => {
       openLadders(['gen1ou20261109']);
       db.setAgentLadders('foul-play', ['rby'], currentNow);
       db.setAgentLadders('0-error', ['rby'], currentNow);
