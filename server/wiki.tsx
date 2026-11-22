@@ -741,6 +741,7 @@ function sendWikiHtml(
   const body = Buffer.from(html, 'utf8');
   const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
   res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Vary', 'Cookie, Authorization');
   res.setHeader('ETag', etag);
   if (util.matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
     res.statusCode = 304;

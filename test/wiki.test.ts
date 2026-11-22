@@ -928,6 +928,16 @@ describe('wiki server routes', () => {
     expect(res.headers.get('etag')).toMatch(/^"[0-9a-f]{40}"$/);
   });
 
+  test('emits Vary Cookie, Authorization on public cacheable wiki responses', async () => {
+    const first = await realFetch(`${baseUrl}/wiki`);
+    expect(first.status).toBe(200);
+    expect(first.headers.get('vary')).toBe('Cookie, Authorization');
+    const etag = first.headers.get('etag')!;
+    const second = await realFetch(`${baseUrl}/wiki`, {headers: {'If-None-Match': etag}});
+    expect(second.status).toBe(304);
+    expect(second.headers.get('vary')).toBe('Cookie, Authorization');
+  });
+
   test('returns 304 Not Modified on public wiki page when If-None-Match matches', async () => {
     const first = await realFetch(`${baseUrl}/wiki`);
     const etag = first.headers.get('etag')!;
