@@ -8,6 +8,7 @@ import * as smogon from '../server/smogon';
 import {Project} from '../static/projects';
 import * as util from '../static/util';
 
+import * as agentLadders from './agent-ladders';
 import * as developers from './developers';
 import {recomputeLadderRatings} from './ladder-entries';
 import * as ladders from './ladders';
@@ -274,6 +275,7 @@ function applyResolvedProjects(
       if (!activeSlugs.has(agent.slug)) {
         disableAgent.run(now, agent.id);
         developers.deleteDevelopersForAgent(db, agent.id);
+        agentLadders.deleteAgentLadders(db, agent.id);
         suspendedAgentIds.add(agent.id);
       }
     }

@@ -3133,4 +3133,61 @@ describe('per-ladder qualification & migrations', () => {
       db.close();
     }
   });
+
+  test('syncProjects deletes agent_ladders rows when removing a project arena block', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      const withArena = `
+- name: Magpie
+  active: 2025
+  arena:
+    owners:
+      open-cover: opencover.723102
+`;
+      const withoutArena = `
+- name: Magpie
+  active: 2025
+`;
+      db.syncProjectsFromYaml(withArena, undefined, 1_760_000_000);
+      db.setAgentLadders('magpie', ['rby', 'adv'], 1_760_000_010);
+      const magpie = db.getAgentBySlug('magpie')!;
+      expect(db.getAgentLadders(magpie.id)).toEqual(['rby', 'adv']);
+
+      db.syncProjectsFromYaml(withoutArena, undefined, 1_760_000_020);
+      expect(db.getAgentBySlug('magpie')?.status).toBe('disabled');
+      const rawCount = (db.db.prepare(
+        'SELECT COUNT(*) AS n FROM agent_ladders WHERE agent_id = ?'
+      ).get(magpie.id) as {n: number}).n;
+      expect(rawCount).toBe(0);
+      expect(db.getAgentLadders(magpie.id)).toEqual([]);
+
+      // Re-adding the arena block starts the agent fresh as 'pending'.
+      db.syncProjectsFromYaml(withArena, undefined, 1_760_000_030);
+      expect(db.getAgentBySlug('magpie')?.status).toBe('pending');
+      expect(db.getAgentLadders(magpie.id)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('agent_ladders read helpers exclude disabled agents', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncProjectsFromYaml(`
+- name: Magpie
+  active: 2025
+  arena:
+    owners:
+      open-cover: opencover.723102
+`, undefined, 1_760_000_000);
+      db.setAgentLadders('magpie', ['rby'], 1_760_000_010);
+      const magpie = db.getAgentBySlug('magpie')!;
+      db.db.prepare("UPDATE agents SET status = 'disabled' WHERE id = ?").run(magpie.id);
+      expect(db.getAgentLadders(magpie.id)).toEqual([]);
+      expect(db.getAgentLaddersByAgent().has(magpie.id)).toBe(false);
+      expect(db.isAgentQualifiedForSlot(magpie.id, 'rby')).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -30,9 +30,10 @@ export function normalizeLadderSlot(raw: string): LadderSlot {
 
 export function getAgentLadders(db: DatabaseSync, agentId: number): LadderSlot[] {
   const rows = db.prepare(`
-    SELECT slot
-    FROM agent_ladders
-    WHERE agent_id = ?
+    SELECT al.slot
+    FROM agent_ladders al
+    JOIN agents a ON a.id = al.agent_id
+    WHERE al.agent_id = ? AND a.status != 'disabled'
     ORDER BY ${SLOT_ORDER_SQL} ASC
   `).all(agentId) as Array<{slot: LadderSlot}>;
   return rows.map(r => r.slot);
@@ -40,9 +41,11 @@ export function getAgentLadders(db: DatabaseSync, agentId: number): LadderSlot[]
 
 export function getAgentLaddersByAgent(db: DatabaseSync): Map<number, LadderSlot[]> {
   const rows = db.prepare(`
-    SELECT agent_id, slot
-    FROM agent_ladders
-    ORDER BY agent_id ASC, ${SLOT_ORDER_SQL} ASC
+    SELECT al.agent_id, al.slot
+    FROM agent_ladders al
+    JOIN agents a ON a.id = al.agent_id
+    WHERE a.status != 'disabled'
+    ORDER BY al.agent_id ASC, ${SLOT_ORDER_SQL} ASC
   `).all() as Array<{agent_id: number; slot: LadderSlot}>;
   const out = new Map<number, LadderSlot[]>();
   for (const row of rows) {
@@ -61,10 +64,18 @@ export function isAgentQualifiedForSlot(
   agentId: number,
   slot: LadderSlot
 ): boolean {
-  const row = db.prepare(
-    'SELECT 1 FROM agent_ladders WHERE agent_id = ? AND slot = ? LIMIT 1'
-  ).get(agentId, slot);
+  const row = db.prepare(`
+    SELECT 1
+    FROM agent_ladders al
+    JOIN agents a ON a.id = al.agent_id
+    WHERE al.agent_id = ? AND al.slot = ? AND a.status != 'disabled'
+    LIMIT 1
+  `).get(agentId, slot);
   return Boolean(row);
+}
+
+export function deleteAgentLadders(db: DatabaseSync, agentId: number): void {
+  db.prepare('DELETE FROM agent_ladders WHERE agent_id = ?').run(agentId);
 }
 
 function resolveAgent(db: DatabaseSync, agentSlugOrId: string | number): AgentRow {
