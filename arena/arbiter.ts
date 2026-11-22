@@ -348,6 +348,10 @@ export class TimeSlicedArenaGame {
       } catch {}
     } else if (!this.devMode && player.spec.mode === 'container') {
       this.cleanupSlot(player);
+    } else if (this.devMode) {
+      // Queue SIGKILL before SIGCONT so a SIGSTOP-paused dev process terminates immediately
+      // instead of ignoring SIGTERM until the 150 ms fallback timeout expires.
+      this.cleanupSlot(player);
     } else {
       try {
         process.kill(player.proc.pid, 'SIGTERM');

@@ -749,14 +749,13 @@ export class Coordinator {
         for (const f of logFiles) {
           fs.copyFileSync(path.join(dayDir, f), path.join(stageDir, f));
         }
-        execFileSync(
-          '7z',
-          [
+        const sevenZipArgs = this.devMode
+          ? ['a', '-t7z', '-m0=lzma2', '-mx=1', '-md=64k', stageArchive, '*.log']
+          : [
             'a', '-t7z', '-m0=lzma2', '-mx=9', '-mfb=64', '-md=64m', '-ms=on',
             stageArchive, '*.log',
-          ],
-          {cwd: stageDir, stdio: 'ignore', timeout: 60_000}
-        );
+          ];
+        execFileSync('7z', sevenZipArgs, {cwd: stageDir, stdio: 'ignore', timeout: 60_000});
         execFileSync('7z', ['t', stageArchive], {stdio: 'ignore', timeout: 30_000});
         copyFileAtomic(stageArchive, dayArchive);
         fs.rmSync(dayDir, {recursive: true, force: true});

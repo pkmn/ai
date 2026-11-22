@@ -410,24 +410,31 @@ export function getActiveBattleCount(version?: string): number {
   return total;
 }
 
+async function terminateWorkerEntry(entry: WorkerEntry): Promise<void> {
+  for (const rpc of entry.rpcs.values()) {
+    clearTimeout(rpc.timer);
+    rpc.reject(new Error('sim workers closed'));
+  }
+  entry.rpcs.clear();
+  for (const battle of entry.battles.values()) {
+    resolvePendingWrites(battle);
+    battle.p1.end();
+    battle.p2.end();
+    battle.omniscient.end();
+  }
+  entry.battles.clear();
+  await entry.worker.terminate();
+}
+
+export async function closeWorker(version: string): Promise<void> {
+  const entry = workers.get(version);
+  if (!entry) return;
+  workers.delete(version);
+  await terminateWorkerEntry(entry);
+}
+
 export async function closeAllWorkers(): Promise<void> {
   const entries = [...workers.values()];
   workers.clear();
-  await Promise.all(
-    entries.map(async entry => {
-      for (const rpc of entry.rpcs.values()) {
-        clearTimeout(rpc.timer);
-        rpc.reject(new Error('sim workers closed'));
-      }
-      entry.rpcs.clear();
-      for (const battle of entry.battles.values()) {
-        resolvePendingWrites(battle);
-        battle.p1.end();
-        battle.p2.end();
-        battle.omniscient.end();
-      }
-      entry.battles.clear();
-      await entry.worker.terminate();
-    })
-  );
+  await Promise.all(entries.map(terminateWorkerEntry));
 }

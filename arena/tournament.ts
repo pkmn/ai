@@ -568,11 +568,12 @@ export class ConcurrentGame {
       wallMillis: number;
       timedOut: boolean;
     }>(resolve => {
-      // Allow +1500 ms network slack on the arbiter timer so local VM clock is authoritative
+      // Allow +1500 ms network slack over SSH (100 ms locally) so local VM clock is authoritative
+      const slackMillis = player.spec.localCommand ? 100 : 1500;
       const timer = setTimeout(() => {
         player.io.lineResolver = undefined;
         resolve({line: undefined, wallMillis: budgetMillis, timedOut: true});
-      }, Math.max(1, Math.ceil(budgetMillis + 1500)));
+      }, Math.max(1, Math.ceil(budgetMillis + slackMillis)));
 
       player.io.lineResolver = line => {
         clearTimeout(timer);
