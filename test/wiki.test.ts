@@ -935,6 +935,13 @@ describe('wiki server routes', () => {
     expect(second.status).toBe(304);
   });
 
+  test('returns 304 Not Modified on public wiki page for weak gzip If-None-Match', async () => {
+    const first = await realFetch(`${baseUrl}/wiki`);
+    const etag = first.headers.get('etag')!;
+    const second = await realFetch(`${baseUrl}/wiki`, {headers: {'If-None-Match': `W/${etag}`}});
+    expect(second.status).toBe(304);
+  });
+
   test('returns private no-store without ETag on authenticated wiki page', async () => {
     const res = await realFetch(`${baseUrl}/wiki`, {headers: {Cookie: sessionCookie('scheibo')}});
     expect(res.status).toBe(200);

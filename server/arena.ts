@@ -1825,7 +1825,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     const etag = `"${crypto.createHash('sha1').update(payload).digest('hex')}"`;
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('ETag', etag);
-    if (req.headers['if-none-match'] === etag) {
+    if (util.matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
       res.statusCode = 304;
       res.end();
       return;
@@ -2796,7 +2796,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     const etag = `"${sha256}"`;
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('ETag', etag);
-    if (req.headers['if-none-match'] === etag) {
+    if (util.matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
       res.statusCode = 304;
       res.end();
       return;

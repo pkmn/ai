@@ -3762,7 +3762,7 @@ export function register(app: polka.Polka, options: Options) {
       );
       res.setHeader('X-Content-Type-Options', 'nosniff');
     }
-    if (req.headers['if-none-match'] === etag) {
+    if (util.matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
       res.statusCode = 304;
       res.end();
       return;

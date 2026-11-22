@@ -742,7 +742,7 @@ function sendWikiHtml(
   const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('ETag', etag);
-  if (req.headers['if-none-match'] === etag) {
+  if (util.matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
     res.statusCode = 304;
     res.end();
     return;

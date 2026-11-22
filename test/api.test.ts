@@ -2191,6 +2191,15 @@ describe('GET /api/battles.json pagination', () => {
     expect(second.status).toBe(304);
   });
 
+  test('returns 304 Not Modified on /api/battles.json for weak gzip If-None-Match', async () => {
+    const first = await fetch(`${srv.baseUrl}/api/battles.json?slot=rby&page=1`);
+    const etag = first.headers.get('etag')!;
+    const weak = await fetch(`${srv.baseUrl}/api/battles.json?slot=rby&page=1`, {
+      headers: {'If-None-Match': `W/${etag}`},
+    });
+    expect(weak.status).toBe(304);
+  });
+
   test('invalidates /api/battles.json ETag after a new match completes', async () => {
     const first = await fetch(`${srv.baseUrl}/api/battles.json?page=1&limit=2`);
     const etag = first.headers.get('etag')!;

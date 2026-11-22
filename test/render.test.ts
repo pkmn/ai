@@ -362,6 +362,20 @@ describe('SSR response headers', () => {
     }
   });
 
+  test('returns 304 Not Modified on SSR routes for weak gzip If-None-Match tags', async () => {
+    const res = await h.getRaw('/arena/');
+    const etag = res.headers.get('etag')!;
+    expect(
+      (await h.getRaw('/arena/', {headers: {'If-None-Match': `W/${etag}`}})).status
+    ).toBe(304);
+    expect(
+      (await h.getRaw('/arena/', {headers: {'If-None-Match': `"stale", W/${etag}`}})).status
+    ).toBe(304);
+    expect(
+      (await h.getRaw('/arena/', {headers: {'If-None-Match': `w/${etag}`}})).status
+    ).toBe(200);
+  });
+
   test('serves SVG project logos with strict CSP sandbox headers', async () => {
     const svgRes = await h.getRaw('/projects/foul-play.svg');
     expect(svgRes.status).toBe(200);

@@ -193,6 +193,25 @@ export function readBody(
   });
 }
 
+// RFC 9110 §13.1.2 weak ETag comparison for `If-None-Match`. Nginx weakens strong ETags to
+// `W/"..."` whenever `gzip on` compresses a proxied response, so exact `===` misses `304`.
+export function matchesIfNoneMatch(
+  header: string | string[] | undefined,
+  etag: string
+): boolean {
+  if (!header) return false;
+  const headerStr = Array.isArray(header) ? header.join(',') : header;
+  if (headerStr.trim() === '*') return true;
+  const target = etag.startsWith('W/') ? etag.slice(2) : etag;
+  for (const part of headerStr.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const candidate = trimmed.startsWith('W/') ? trimmed.slice(2) : trimmed;
+    if (candidate === target) return true;
+  }
+  return false;
+}
+
 export function writeFileAtomic(filePath: string, contents: string | Buffer) {
   fs.mkdirSync(path.dirname(filePath), {recursive: true});
   const tmpPath = `${filePath}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
