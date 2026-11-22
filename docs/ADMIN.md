@@ -215,7 +215,7 @@ In production (`NODE_ENV=production`), `server/discord.ts` runs every 60s to:
   partner `vgc.bot`/`pkmn.bot` roles (`VGC_BOT_TOKEN`, resolved by `discordId`, `🤖 <Agent>` role,
   or username).
 - Enforce `pins:`, archive `#general` to `chat/logs/YYYY-MM-DD.txt`, and DM developers on smoke-test
-  failure or quarantine.
+  pass/failure or quarantine.
 - DM `staff:` (6h per-key dedup) on quarantines, stale Arena heartbeats (`> 15m` + recovery), low
   VPS/Arena disk, backup failures, `/Volumes/Archive` unmounts, `.7z`/archive failures, smoke infra
   errors, repeated sync failures, and unexpected `pkmn.ai-server` exits (`ExecStopPost` ->

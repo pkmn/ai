@@ -3042,6 +3042,15 @@ describe('per-ladder qualification & migrations', () => {
         ('missingnozero', 'MissingNo.Zero', 'qualified', 1760000000),
         ('other', 'Other', 'qualified', 1760000000),
         ('retired-proj', 'Retired Proj', 'disabled', 1760000000);
+      INSERT INTO agent_versions (
+        agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+        smoke_status, submitted_at, activated_at, notified
+      ) VALUES (
+        (SELECT id FROM agents WHERE slug = 'magpie'),
+        '1.0.0', 'bundle', 'https://example.com/magpie.tar.gz',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        '["gen1ou20261109"]', '[]', 'passed', 1760000000, 1760000010, 0
+      );
     `);
     legacyDb.close();
 
@@ -3053,7 +3062,10 @@ describe('per-ladder qualification & migrations', () => {
         '0001-agent-ladders.sql',
         '0002-sync-agent-status.sql',
         '0003-config.sql',
+        '0004-backfill-passed-notified.sql',
       ]);
+      expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
+      expect(migratedDb.getPendingVersionDms()).toEqual([]);
 
       const magpie = migratedDb.getAgentBySlug('magpie')!;
       const mocca = migratedDb.getAgentBySlug('mocca')!;

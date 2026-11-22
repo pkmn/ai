@@ -126,9 +126,15 @@ export interface PendingVersionDmRow {
   agentSlug: string;
   agentName: string;
   version: string;
-  smokeStatus: 'failed' | 'quarantined';
+  smokeStatus: Exclude<SmokeStatus, 'pending'>;
   smokeError?: string;
+  smokeDurationMillis?: number;
+  smokeInitMillis?: number;
+  smokeTeamPreviewMillis?: number;
+  smokeTurnMillis?: number;
+  smokePeakRam?: number;
   ladders: string[];
+  tournaments: string[];
   submittedAt: number;
   ownerDiscordIds: string[];
 }
@@ -750,10 +756,11 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
 
 // Applies smoke-test or quarantine outcomes from the Arena runner:
 //   - Always scrubs `auth_token_encoding = NULL` so private pull tokens never persist at rest.
-//   - On `'passed'`: promotes any staged `'pending'` team rosters to `'active'` and enforces the
-//     2-version Champion + Challenger cap per ladder across non-anchor versions by retiring
-//     `argmin(lcb)` when a 3rd non-anchor active version enters (anchors always stay active, and
-//     retired entries keep their historical edges in the Davidson graph).
+//   - On `'passed'`: promotes any staged `'pending'` team rosters to `'active'`, resets
+//     `notified = 0` so `server/discord.ts` delivers pass DMs, and enforces the 2-version
+//     Champion + Challenger cap per ladder across non-anchor versions by retiring `argmin(lcb)`
+//     when a 3rd non-anchor active version enters (anchors always stay active, and retired entries
+//     keep their historical edges in the Davidson graph).
 //   - On `'failed'` / `'quarantined'`: discards staged `'pending'` teams and resets `notified = 0`
 //     so `server/discord.ts` delivers diagnostic DMs to linked owners.
 export function applySubmissionStatus(
@@ -810,8 +817,6 @@ export function applySubmissionStatus(
         {status: 409}
       );
     }
-    const shouldResetNotify =
-      input.smokeStatus === 'failed' || input.smokeStatus === 'quarantined';
     const activatedAt = input.smokeStatus === 'passed'
       ? (prev.activatedAt ?? now)
       : (prev.activatedAt ?? null);
@@ -828,7 +833,7 @@ export function applySubmissionStatus(
           smoke_peak_ram = COALESCE(?, smoke_peak_ram),
           smoke_error = ?,
           activated_at = ?,
-          notified = CASE WHEN ? = 1 THEN 0 ELSE notified END
+          notified = 0
       WHERE id = ?
     `).run(
       input.smokeStatus,
@@ -840,7 +845,6 @@ export function applySubmissionStatus(
       input.smokePeakRam ?? null,
       input.smokeError !== undefined ? input.smokeError : (prev.smokeError ?? null),
       activatedAt,
-      shouldResetNotify ? 1 : 0,
       input.versionId
     );
 
@@ -1029,7 +1033,8 @@ export function unquarantineVersion(
       `UPDATE agent_versions
        SET smoke_status = 'passed',
            smoke_error = NULL,
-           activated_at = COALESCE(activated_at, ?)
+           activated_at = COALESCE(activated_at, ?),
+           notified = 1
        WHERE id = ?`
     ).run(now, ver.id);
 
@@ -1154,7 +1159,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     SELECT av.*, a.slug AS agent_slug, a.name AS agent_name
     FROM agent_versions av
     JOIN agents a ON a.id = av.agent_id
-    WHERE av.smoke_status IN ('failed', 'quarantined')
+    WHERE av.smoke_status IN ('passed', 'failed', 'quarantined')
       AND av.notified = 0
     ORDER BY av.submitted_at ASC, av.id ASC
   `).all() as unknown as Array<RawAgentVersionRow & {agent_slug: string; agent_name: string}>;
@@ -1165,9 +1170,15 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     agentSlug: row.agent_slug,
     agentName: row.agent_name,
     version: row.version,
-    smokeStatus: row.smoke_status as 'failed' | 'quarantined',
+    smokeStatus: row.smoke_status as Exclude<SmokeStatus, 'pending'>,
     smokeError: row.smoke_error ?? undefined,
+    smokeDurationMillis: row.smoke_duration_millis ?? undefined,
+    smokeInitMillis: row.smoke_init_millis ?? undefined,
+    smokeTeamPreviewMillis: row.smoke_team_preview_millis ?? undefined,
+    smokeTurnMillis: row.smoke_turn_millis ?? undefined,
+    smokePeakRam: row.smoke_peak_ram ?? undefined,
     ladders: JSON.parse(row.ladders_json) as string[],
+    tournaments: JSON.parse(row.tournaments_json) as string[],
     submittedAt: row.submitted_at,
     ownerDiscordIds: getVersionOwnerDiscordIds(
       db,

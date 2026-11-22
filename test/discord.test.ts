@@ -1195,6 +1195,25 @@ describe('Arena Discord notifications', () => {
     expect(failDm.match(/```/g)).toHaveLength(2);
   });
 
+  test('formats smoke-pass DMs with target labels and telemetry summary', () => {
+    const passDm = discord.formatSubmissionDm({
+      agentName: 'Foul Play',
+      version: '1.3.0',
+      smokeStatus: 'passed',
+      ladderLabels: ['RBY', 'SV'],
+      smokeDurationMillis: 2450,
+      smokeInitMillis: 120,
+      smokeTeamPreviewMillis: 35,
+      smokeTurnMillis: 18,
+      smokePeakRam: 256,
+    });
+    expect(passDm).toBe(
+      '**Foul Play** (`1.3.0`) passed its smoke test on `RBY, SV` ' +
+      '(`2.5s · 120ms init · 35ms team · 18ms/turn · 256 MiB`). ' +
+      'See <https://pkmn.ai/account/> for details.'
+    );
+  });
+
   test('formats staff quarantine DM summary with owner notification counts', () => {
     const staffDm = discord.formatStaffQuarantineDm({
       agentName: 'Foul Play',
@@ -1268,6 +1287,91 @@ describe('Arena Discord notifications', () => {
       sentMessages.length = 0;
       expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(0);
       expect(sentMessages).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('sends smoke-pass DMs with telemetry and reconciles undelivered passes once', async () => {
+    const db = createSeededArenaDb();
+    try {
+      const fpAgent = db.getAgentBySlug('foul-play')!;
+      const coauthorDev = db.getDeveloperByGitHub('coauthor')!;
+      const sentMessages: Array<{recipientOrChannel: string; content: string}> = [];
+      stubDmFetch(sentMessages);
+      const state = new Map<string, string | undefined>();
+
+      const vPass = db.createSubmission({
+        agentId: fpAgent.id,
+        developerId: coauthorDev.id,
+        version: '1.0.0-ok',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/ok.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_100,
+      });
+      const passRes = db.applySubmissionStatus({
+        versionId: vPass.id,
+        smokeStatus: 'passed',
+        smokeDurationMillis: 1800,
+        smokeInitMillis: 90,
+        smokeTurnMillis: 15,
+        smokePeakRam: 192,
+        now: 1_760_000_105,
+      });
+      expect(passRes.version.notified).toBe(false);
+
+      const sent = await discord.notifySubmissionStatus(
+        db, 'discord-token', ARENA_CONFIG, passRes, state
+      );
+      expect(sent).toBe(true);
+      expect(db.getVersionById(vPass.id)?.notified).toBe(true);
+      expect(sentMessages.map(m => m.recipientOrChannel)).toEqual(['dm-1002', 'dm-1001']);
+      expect(sentMessages[0].content).toContain('passed its smoke test on `RBY`');
+      expect(sentMessages[0].content).toContain('1.8s · 90ms init · 15ms/turn · 192 MiB');
+
+      // Re-running syncSubmissionDms and unquarantining do not send duplicate pass DMs.
+      sentMessages.length = 0;
+      expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(0);
+      db.quarantineVersion('foul-play', '1.0.0-ok', 'manual check');
+      db.unquarantineVersion('foul-play', '1.0.0-ok');
+      expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(0);
+      expect(sentMessages).toEqual([]);
+
+      // Tournament pass DM falls back to syncSubmissionDms if immediate delivery did not run.
+      db.upsertTournament({
+        id: '7',
+        name: 'Tournament #7: VGC',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 10,
+        parallelTables: 2,
+        hardware: 'L4',
+        startsAt: 1_765_000_000,
+        status: 'scheduled',
+      });
+      const vTour = db.createSubmission({
+        agentId: fpAgent.id,
+        developerId: coauthorDev.id,
+        version: 't7',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/foul-play:t7',
+        sha256: SHA,
+        ladderIds: [],
+        tournamentIds: ['7'],
+        now: 1_760_000_200,
+      });
+      db.applySubmissionStatus({
+        versionId: vTour.id,
+        smokeStatus: 'passed',
+        smokeDurationMillis: 3100,
+        smokePeakRam: 512,
+        now: 1_760_000_210,
+      });
+      expect(await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG, state)).toBe(1);
+      expect(sentMessages[0].content).toContain('passed its smoke test on `Tournament #7: VGC`');
+      expect(sentMessages[0].content).toContain('3.1s · 512 MiB');
     } finally {
       db.close();
     }

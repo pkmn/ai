@@ -500,16 +500,55 @@ function appendCodeBlockWithinLimit(header: string, rawLog?: string): string {
   return `${header}${prefix}${safeLog.slice(0, sliceBudget)}${truncNote}${suffix}`;
 }
 
+function formatSmokeStatsSummary(input: {
+  smokeDurationMillis?: number;
+  smokeInitMillis?: number;
+  smokeTeamPreviewMillis?: number;
+  smokeTurnMillis?: number;
+  smokePeakRam?: number;
+}): string | undefined {
+  const parts: string[] = [];
+  if (input.smokeDurationMillis !== undefined) {
+    parts.push(`${(input.smokeDurationMillis / 1000).toFixed(1)}s`);
+  }
+  if (input.smokeInitMillis !== undefined) {
+    parts.push(`${input.smokeInitMillis}ms init`);
+  }
+  if (input.smokeTeamPreviewMillis !== undefined) {
+    parts.push(`${input.smokeTeamPreviewMillis}ms team`);
+  }
+  if (input.smokeTurnMillis !== undefined) {
+    parts.push(`${input.smokeTurnMillis}ms/turn`);
+  }
+  if (input.smokePeakRam !== undefined) {
+    parts.push(`${input.smokePeakRam.toLocaleString('en-US')} MiB`);
+  }
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
 export function formatSubmissionDm(input: {
   agentName: string;
   version: string;
-  smokeStatus: 'failed' | 'quarantined';
+  smokeStatus: Exclude<db.SmokeStatus, 'pending'>;
   ladderLabels: string[];
   smokeError?: string;
+  smokeDurationMillis?: number;
+  smokeInitMillis?: number;
+  smokeTeamPreviewMillis?: number;
+  smokeTurnMillis?: number;
+  smokePeakRam?: number;
 }): string {
   const laddersPart = input.ladderLabels.length
     ? ` on \`${input.ladderLabels.join(', ')}\``
     : '';
+  if (input.smokeStatus === 'passed') {
+    const stats = formatSmokeStatsSummary(input);
+    const statsPart = stats ? ` (\`${stats}\`)` : '';
+    return (
+      `**${input.agentName}** (\`${input.version}\`) passed its smoke test` +
+      `${laddersPart}${statsPart}. See <https://pkmn.ai/account/> for details.`
+    );
+  }
   const header = input.smokeStatus === 'quarantined'
     ? `**${input.agentName}** (\`${input.version}\`) has been ` +
       `**quarantined**${laddersPart} and paused from matchmaking. ` +
@@ -609,8 +648,15 @@ export async function sendDirectMessage(
   }
 }
 
-function resolveLadderLabels(db: db.Database, ladderIds: readonly string[]): string[] {
-  return ladderIds.map(id => db.getLadder(id)?.name ?? id);
+function resolveTargetLabels(
+  db: db.Database,
+  ladderIds: readonly string[],
+  tournamentIds: readonly string[] = []
+): string[] {
+  return [
+    ...ladderIds.map(id => db.getLadder(id)?.name ?? id),
+    ...tournamentIds.map(id => db.getTournament(id)?.name ?? `Tournament #${id}`),
+  ];
 }
 
 interface DmContext {
@@ -632,7 +678,7 @@ async function dispatchVersionDm(
 
   inFlightVersionDms.add(item.versionId);
   try {
-    const ladderLabels = resolveLadderLabels(db, item.ladders);
+    const ladderLabels = resolveTargetLabels(db, item.ladders, item.tournaments);
     const notifiedOwners = new Set<string>();
     let blockedCount = 0;
     let errorCount = 0;
@@ -645,6 +691,11 @@ async function dispatchVersionDm(
         smokeStatus: item.smokeStatus,
         ladderLabels,
         smokeError: item.smokeError,
+        smokeDurationMillis: item.smokeDurationMillis,
+        smokeInitMillis: item.smokeInitMillis,
+        smokeTeamPreviewMillis: item.smokeTeamPreviewMillis,
+        smokeTurnMillis: item.smokeTurnMillis,
+        smokePeakRam: item.smokePeakRam,
       });
 
       for (const ownerId of item.ownerDiscordIds) {
@@ -721,7 +772,7 @@ export async function notifySubmissionStatus(
   state = new Map<string, string | undefined>()
 ): Promise<boolean> {
   const status = result.version.smokeStatus;
-  if (status !== 'failed' && status !== 'quarantined') return false;
+  if (status === 'pending') return false;
   if (result.version.notified) return false;
 
   const ownerDiscordIds = db.getVersionOwnerDiscordIds(
@@ -738,7 +789,13 @@ export async function notifySubmissionStatus(
       version: result.version.version,
       smokeStatus: status,
       smokeError: result.version.smokeError,
+      smokeDurationMillis: result.version.smokeDurationMillis,
+      smokeInitMillis: result.version.smokeInitMillis,
+      smokeTeamPreviewMillis: result.version.smokeTeamPreviewMillis,
+      smokeTurnMillis: result.version.smokeTurnMillis,
+      smokePeakRam: result.version.smokePeakRam,
       ladders: result.version.ladders,
+      tournaments: result.version.tournaments,
       submittedAt: result.version.submittedAt,
       ownerDiscordIds,
     },
@@ -746,10 +803,10 @@ export async function notifySubmissionStatus(
   );
 }
 
-// Reconciles undelivered smoke-failure and quarantine DMs on the 60-second background cycle.
-// Quarantined versions with zero linked Discord owners (e.g. CLI `pkmn quarantine` on a project
-// whose developer hasn't linked Discord yet) still alert `config.staff` once per process while
-// leaving `notified = 0` in SQLite so the owner receives their DM if they link Discord later.
+// Reconciles undelivered smoke-test (pass/failure) and quarantine DMs on the 60-second background
+// cycle. Quarantined versions with zero linked Discord owners (e.g. CLI `pkmn quarantine` on a
+// project whose developer hasn't linked Discord yet) still alert `config.staff` once per process
+// while leaving `notified = 0` in SQLite so the owner receives their DM if they link Discord later.
 export async function syncSubmissionDms(
   db: db.Database,
   token: string,
