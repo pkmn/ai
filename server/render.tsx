@@ -1611,14 +1611,20 @@ function computeStreakLabel(entry: db.LeaderboardEntryView): {
   return {text: '—', node: <span className='muted'>—</span>};
 }
 
+export interface AdjacentLosOptions {
+  targetVersionIds?: ReadonlySet<number>;
+  loadAllPairs?: () => db.PairAggregateRow[];
+}
+
 // Computes pairwise Likelihood of Superiority (LOS) for each ranked entrant against the entrant
 // ranked immediately below them (`#r` vs `#(r+1)`). Uses precomputed `pair_aggregates.low_los`
 // when the two versions have already faced each other, falling back to a single warm-started
-// Davidson covariance solve when an adjacent pair has 0 direct head-to-head games.
+// Davidson covariance solve over the full ladder graph when an adjacent pair has 0 direct games.
 export function computeAdjacentLosMap(
   entries: db.LeaderboardEntryView[],
   pairs: db.PairAggregateRow[],
-  ladderStatus?: db.LadderStatus
+  ladderStatus?: db.LadderStatus,
+  opts?: AdjacentLosOptions
 ): Map<number, number> {
   const ranked = entries
     .filter(e => (
@@ -1640,6 +1646,7 @@ export function computeAdjacentLosMap(
 
   for (let r = 0; r < ranked.length - 1; r++) {
     const cur = ranked[r];
+    if (opts?.targetVersionIds && !opts.targetVersionIds.has(cur.versionId)) continue;
     const next = ranked[r + 1];
     const lowId = Math.min(cur.versionId, next.versionId);
     const highId = Math.max(cur.versionId, next.versionId);
@@ -1648,7 +1655,10 @@ export function computeAdjacentLosMap(
       const los = cur.versionId === lowId ? pair.lowLos : 1 - pair.lowLos;
       result.set(cur.versionId, los);
     } else {
-      fallbackSolve ??= ratings.solveIndexedDavidson(entries, pairs);
+      fallbackSolve ??= ratings.solveIndexedDavidson(
+        entries,
+        opts?.loadAllPairs ? opts.loadAllPairs() : pairs
+      );
       const idxCur = fallbackSolve.indexByVer.get(cur.versionId);
       const idxNext = fallbackSolve.indexByVer.get(next.versionId);
       if (idxCur !== undefined && idxNext !== undefined) {

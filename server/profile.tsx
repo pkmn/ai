@@ -654,6 +654,7 @@ function renderHeadToHeadPane(opts: {
   agentEntries: db.AgentLadderProfileEntry[];
   allEntries: db.LeaderboardEntryView[];
   pairs: db.PairAggregateRow[];
+  loadAllPairs: () => db.PairAggregateRow[];
   links: render.AgentLinkContext;
 }): {pane: util.Html; empty: boolean} {
   const {
@@ -663,6 +664,7 @@ function renderHeadToHeadPane(opts: {
     agentEntries,
     allEntries,
     pairs,
+    loadAllPairs,
     links,
   } = opts;
   const emptyPane = (
@@ -746,7 +748,7 @@ function renderHeadToHeadPane(opts: {
       ? (isLow ? pair.lowLos : 1 - pair.lowLos)
       : undefined;
     if (losVal === undefined) {
-      fallbackSolve ??= ratings.solveIndexedDavidson(allEntries, pairs);
+      fallbackSolve ??= ratings.solveIndexedDavidson(allEntries, loadAllPairs());
       const idxUs = fallbackSolve.indexByVer.get(rep.versionId);
       const idxOpp = fallbackSolve.indexByVer.get(opp.versionId);
       if (idxUs !== undefined && idxOpp !== undefined) {
@@ -1835,7 +1837,12 @@ function buildLadderProfileBundle(opts: {
   const snapshots = db.getRatingSnapshotsForLadder(l.id, agent.id);
   const familyStats = db.getAgentLadderStats(l.id, agent.id);
   const recentMatches = db.getRecentMatchesForAgentOnLadder(agent.id, l.id);
-  const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status);
+  let allPairs: db.PairAggregateRow[] | undefined;
+  const loadAllPairs = () => (allPairs ??= db.getPairAggregatesForLadder(l.id));
+  const adjacentLos = render.computeAdjacentLosMap(allEntries, pairs, l.status, {
+    targetVersionIds: new Set(agentEntries.map(e => e.versionId)),
+    loadAllPairs,
+  });
 
   for (const e of allEntries) {
     registerAgentLink(e.agentSlug, e.agentName);
@@ -2004,6 +2011,7 @@ function buildLadderProfileBundle(opts: {
     agentEntries,
     allEntries,
     pairs,
+    loadAllPairs,
     links,
   });
   const matchesPane = renderRecentMatchesPane({

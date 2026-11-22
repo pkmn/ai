@@ -3545,4 +3545,100 @@ describe('JSON route parity & retired pool archives', () => {
       emptyDb.close();
     }
   });
+
+  test('matches ladder adjacent LOS on profile when top two agents have zero direct games',
+    async () => {
+      const losDb = new Database(':memory:', {now: NOW});
+      losDb.syncLadders(undefined, NOW);
+      syncTestProjects(losDb, path.join(tmpDir, 'avatars'), NOW);
+      forceLadderActive(losDb, 'gen1ou20261109');
+      const vFp = createVersionAndPassSmoke(losDb, 'foul-play', '1.0.0', ['gen1ou20261109'], DAY_1);
+      const vMeta = createVersionAndPassSmoke(losDb, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
+      const vJax = createVersionAndPassSmoke(
+        losDb, 'jaxcalibur', '1.0.0', ['gen1ou20261109'], DAY_1
+      );
+      const vAth = createVersionAndPassSmoke(losDb, 'athena', '1.0.0', ['gen1ou20261109'], DAY_1);
+      losDb.setLadderAnchor('gen1ou20261109', 'athena', '1.0.0', DAY_1 + 10);
+
+      let ts = DAY_1 + 100;
+      for (let i = 0; i < 20; i++) {
+        playMatch(losDb, 'gen1ou20261109', vFp, vJax, 'W', i < 4 ? 'L' : 'W', ts++);
+        playMatch(losDb, 'gen1ou20261109', vFp, vAth, 'W', i < 2 ? 'L' : 'W', ts++);
+        playMatch(losDb, 'gen1ou20261109', vMeta, vJax, 'W', i < 6 ? 'L' : 'W', ts++);
+        playMatch(losDb, 'gen1ou20261109', vMeta, vAth, 'W', i < 4 ? 'L' : 'W', ts++);
+        playMatch(
+          losDb,
+          'gen1ou20261109',
+          vJax,
+          vAth,
+          i < 4 ? 'L' : 'W',
+          i < 8 ? 'L' : 'W',
+          ts++
+        );
+      }
+
+      const allEntries = losDb.getLeaderboardEntries('gen1ou20261109');
+      const allPairs = losDb.getPairAggregatesForLadder('gen1ou20261109');
+      const fpAgent = losDb.getAgentBySlug('foul-play')!;
+      const partialPairs = losDb.getPairAggregatesForAgentOnLadder('gen1ou20261109', fpAgent.id);
+      const trueLos = render.computeAdjacentLosMap(allEntries, allPairs, 'active').get(vFp)!;
+      const partialLos = render.computeAdjacentLosMap(allEntries, partialPairs, 'active').get(vFp)!;
+      expect(Math.abs(trueLos - partialLos)).toBeGreaterThan(0.01);
+
+      const h = await startRenderHarness({db: losDb, publicDir: tmpPublic, now: ts + 60});
+      try {
+        const profileHtml = await h.getText('/projects/foul-play/');
+        expect(profileHtml).toContain(`LOS ${(trueLos * 100).toFixed(1)}% vs. #2`);
+      } finally {
+        await h.close();
+        losDb.close();
+      }
+    });
+
+  test('skips loadAllPairs in computeAdjacentLosMap when target agent has direct lowLos', () => {
+    const losDb = new Database(':memory:', {now: NOW});
+    try {
+      losDb.syncLadders(undefined, NOW);
+      syncTestProjects(losDb, path.join(tmpDir, 'avatars'), NOW);
+      forceLadderActive(losDb, 'gen1ou20261109');
+      const vFp = createVersionAndPassSmoke(losDb, 'foul-play', '1.0.0', ['gen1ou20261109'], DAY_1);
+      const vMeta = createVersionAndPassSmoke(losDb, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
+      const vJax = createVersionAndPassSmoke(
+        losDb, 'jaxcalibur', '1.0.0', ['gen1ou20261109'], DAY_1
+      );
+      const vAth = createVersionAndPassSmoke(losDb, 'athena', '1.0.0', ['gen1ou20261109'], DAY_1);
+      losDb.setLadderAnchor('gen1ou20261109', 'athena', '1.0.0', DAY_1 + 10);
+
+      let ts = DAY_1 + 100;
+      for (let i = 0; i < 20; i++) {
+        playMatch(losDb, 'gen1ou20261109', vFp, vMeta, 'W', i < 8 ? 'L' : 'W', ts++);
+        playMatch(losDb, 'gen1ou20261109', vFp, vJax, 'W', i < 5 ? 'L' : 'W', ts++);
+        playMatch(losDb, 'gen1ou20261109', vMeta, vJax, 'W', i < 8 ? 'L' : 'W', ts++);
+        playMatch(losDb, 'gen1ou20261109', vMeta, vAth, 'W', i < 4 ? 'L' : 'W', ts++);
+        playMatch(losDb, 'gen1ou20261109', vJax, vAth, 'W', i < 6 ? 'L' : 'W', ts++);
+      }
+
+      const allEntries = losDb.getLeaderboardEntries('gen1ou20261109');
+      const fpAgent = losDb.getAgentBySlug('foul-play')!;
+      const fpPairs = losDb.getPairAggregatesForAgentOnLadder('gen1ou20261109', fpAgent.id);
+      const fullLos = render.computeAdjacentLosMap(
+        allEntries,
+        losDb.getPairAggregatesForLadder('gen1ou20261109'),
+        'active'
+      ).get(vFp)!;
+
+      let loadCalls = 0;
+      const result = render.computeAdjacentLosMap(allEntries, fpPairs, 'active', {
+        targetVersionIds: new Set([vFp]),
+        loadAllPairs: () => {
+          loadCalls++;
+          return losDb.getPairAggregatesForLadder('gen1ou20261109');
+        },
+      });
+      expect(loadCalls).toBe(0);
+      expect(result.get(vFp)).toBeCloseTo(fullLos, 6);
+    } finally {
+      losDb.close();
+    }
+  });
 });
