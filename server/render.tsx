@@ -2213,7 +2213,9 @@ function buildLadderDocument(opts: {
   const {ladder: l, urlKey, db, publicDir} = opts;
   const entries = db.getLeaderboardEntries(l.id);
   const pairs = db.getPairAggregatesForLadder(l.id);
-  const snapshots = db.getRatingSnapshotsForLadder(l.id);
+  const snapshots = db.getRatingSnapshotsForLadder(l.id).sort((a, b) => (
+    a.dayUtc < b.dayUtc ? -1 : a.dayUtc > b.dayUtc ? 1 : a.versionId - b.versionId
+  ));
   const standingsLadder = buildStandingsLadder(l, entries, pairs, urlKey, publicDir);
   const entryByVer = new Map(entries.map(e => [e.versionId, e]));
   return {

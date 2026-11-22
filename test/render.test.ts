@@ -3655,4 +3655,37 @@ describe('JSON route parity & retired pool archives', () => {
       losDb.close();
     }
   });
+
+  test('orders /arena/ladders/:key.json snapshots chronologically across versions', async () => {
+    const snapDb = new Database(':memory:', {now: NOW});
+    snapDb.syncLadders(undefined, NOW);
+    syncTestProjects(snapDb, path.join(tmpDir, 'avatars'), NOW);
+    forceLadderActive(snapDb, 'gen1ou20261109');
+    const vFp = createVersionAndPassSmoke(snapDb, 'foul-play', '1.0.0', ['gen1ou20261109'], DAY_1);
+    const vMeta = createVersionAndPassSmoke(snapDb, 'metamon', '1.0.0', ['gen1ou20261109'], DAY_1);
+    const ins = snapDb.db.prepare(`
+      INSERT INTO rating_snapshots (ladder_id, version_id, day_utc, matches, elo, se, lcb, gxe)
+      VALUES ('gen1ou20261109', ?, ?, 20, 1500, 30, 1441, 50)
+    `);
+    ins.run(vFp, '2026-11-10');
+    ins.run(vFp, '2026-11-12');
+    ins.run(vMeta, '2026-11-10');
+    ins.run(vMeta, '2026-11-11');
+
+    const h = await startRenderHarness({db: snapDb, publicDir: tmpPublic, now: NOW});
+    try {
+      const doc = JSON.parse(await h.getText('/arena/ladders/rby.json')) as {
+        snapshots: Array<{dayUtc: string; slug: string}>;
+      };
+      expect(doc.snapshots.map(s => `${s.dayUtc}:${s.slug}`)).toEqual([
+        '2026-11-10:foul-play',
+        '2026-11-10:metamon',
+        '2026-11-11:metamon',
+        '2026-11-12:foul-play',
+      ]);
+    } finally {
+      await h.close();
+      snapDb.close();
+    }
+  });
 });
