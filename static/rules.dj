@@ -28,7 +28,7 @@ required to provide:
     3. grant *pkmn.ai* permission to run your model to aid in evaluating suspected cheating cases in
        Smogon & Pokémon Showdown competitions.
 
-  - a PNG image (_optional_) with your *project's logo* to be displayed on your project's
+  - an SVG or PNG image (_optional_) with your *project's logo* to be displayed on your project's
     statistics page.
 
 Staff will review the resulting [pkmn/ai](https://github.com/pkmn/ai) issue, add your project to

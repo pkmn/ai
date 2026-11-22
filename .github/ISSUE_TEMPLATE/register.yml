@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Submit this issue to request inclusion in _Olympus Mons_, the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions.
+        Submit this issue to request inclusion in _Olympus Mons_, the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions. If you need to make edits (_.e.g_, to provide qualification evidence for additional ladders or to change your project logo) simply reopen this issue.
 
         ## Arena Details
   - type: input
@@ -32,7 +32,7 @@ body:
     id: qualifying
     attributes:
       label: Qualifying Criteria
-      description: Evidence justifying participation in the hosted environment (e.g., Pokémon Showdown, vgc.bot, or pkmn.bot rankings, published papers, or prior results).
+      description: Evidence justifying participation in the hosted environment (e.g., Pokémon Showdown, vgc.bot, or pkmn.bot rankings, published papers, or prior results). Note that if you are simply registering for a tournament no qualifying criteria is necessary, just fill in "Tournament" below. If you are looking to qualify for a ladder the criteria must be specific to the ladder in question. You can always reopen this issue later if your project wishes to expand to additional ladders.
     validations:
       required: true
   - type: checkboxes
@@ -93,4 +93,4 @@ body:
     id: logo
     attributes:
       label: Project Logo (Optional)
-      description: Optional PNG logo to display on your project's statistics page (`/projects/<slug>/`). Drag and drop here if providing one.
+      description: Optional SVG or PNG logo to display on your project's statistics page (`/projects/<slug>/`). Should work in both light and dark color themes. Will be rendered no larger than 168px in height (though can be a wider banner). Drag and drop here if providing one.
