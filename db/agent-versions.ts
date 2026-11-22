@@ -18,6 +18,8 @@ export type SmokeStatus = 'pending' | 'passed' | 'failed' | 'quarantined';
 export type AccountStatusLabel = 'Pending' | 'Qualified' | 'Eligible' | 'Ineligible';
 
 export const COOLDOWN_SECONDS = 14 * 24 * 60 * 60;
+export const FAILED_SMOKE_WINDOW_SECONDS = 24 * 60 * 60;
+export const MAX_FAILED_SMOKE_TESTS = 3;
 export const SETTLED_MAX_SE = 30;
 export const SETTLED_MIN_MATCHES = 25;
 
@@ -67,6 +69,7 @@ export interface TournamentSubmissionStatus {
   enteredVersion?: string;
   pendingVersion?: string;
   reason?: string;
+  nextEligibleAt?: number;
 }
 
 export interface CreateSubmissionInput {
@@ -273,11 +276,40 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
   });
 }
 
+function checkFailedSmokeBudget(
+  db: DatabaseSync,
+  agentId: number,
+  scope: 'ladder' | 'tournament',
+  refundedAt: number,
+  now: number
+): {nextEligibleAt: number; reason: string} | undefined {
+  const cutoff = Math.max(now - FAILED_SMOKE_WINDOW_SECONDS, refundedAt);
+  const scopeClause = scope === 'ladder' ? "ladders_json != '[]'" : "tournaments_json != '[]'";
+  const rows = db.prepare(
+    `SELECT submitted_at FROM agent_versions
+     WHERE agent_id = ?
+       AND smoke_status = 'failed'
+       AND ${scopeClause}
+       AND submitted_at > ?
+     ORDER BY submitted_at ASC, id ASC`
+  ).all(agentId, cutoff) as Array<{submitted_at: number}>;
+  if (rows.length < MAX_FAILED_SMOKE_TESTS) return undefined;
+  const oldestBlocking = rows[rows.length - MAX_FAILED_SMOKE_TESTS].submitted_at;
+  const nextEligibleAt = oldestBlocking + FAILED_SMOKE_WINDOW_SECONDS;
+  return {
+    nextEligibleAt,
+    reason:
+      `Failed smoke test limit reached (${MAX_FAILED_SMOKE_TESTS} in 24h); ` +
+      `retry after ${formatUtcDateTime(nextEligibleAt)}.`,
+  };
+}
+
 // Evaluates per-tournament submission eligibility for `'scheduled'` events.
 // Unlike continuous ladders, tournaments intentionally accept entries from both `'pending'` and
 // `'qualified'` projects (only `'disabled'` projects are blocked), accept at most 1 successful
 // (or currently pending) OCI entry per project, and are never blocked by 14-day ladder cooldowns
-// or unsettled ladder Challengers.
+// or unsettled ladder Challengers. Failed tournament smoke tests are still bounded by the rolling
+// 24-hour per-project budget (`MAX_FAILED_SMOKE_TESTS`, clearable via `refundCooldown`).
 export function computeAgentTournamentStatuses(
   db: DatabaseSync,
   agentId: number,
@@ -333,6 +365,9 @@ export function computeAgentTournamentStatuses(
     }
   }
 
+  const refundedAt = agent.cooldownRefundedAt ?? 0;
+  const failedSmokeBlock = checkFailedSmokeBudget(db, agentId, 'tournament', refundedAt, now);
+
   return scheduled.map(t => {
     const closesAt = getTournamentClosesAt(t.startsAt);
     const enteredVersion = enteredByTourney.get(t.id);
@@ -374,6 +409,18 @@ export function computeAgentTournamentStatuses(
         reason: `Version ${pendingVersion} is awaiting smoke testing for this tournament.`,
       };
     }
+    if (failedSmokeBlock) {
+      return {
+        tournamentId: t.id,
+        name: t.name,
+        format: t.format,
+        startsAt: t.startsAt,
+        closesAt,
+        canSubmit: false,
+        reason: failedSmokeBlock.reason,
+        nextEligibleAt: failedSmokeBlock.nextEligibleAt,
+      };
+    }
     return {
       tournamentId: t.id,
       name: t.name,
@@ -390,9 +437,11 @@ export function computeAgentTournamentStatuses(
 //   2. No ladder version (`ladders_json != '[]'`) may currently be queued in `'pending'`.
 //   3. At least 14 days (`COOLDOWN_SECONDS`) must have elapsed since the latest `'passed'` ladder
 //      submission (unless staff waived it via `cooldown_refunded_at`). Tournament-only submissions
-//      and failed smoke tests never trigger the ladder cooldown.
+//      and failed smoke tests never trigger the 14-day ladder cooldown.
 //   4. Every active ladder entry must have settled (`matches >= 25` and `se <= 30`) so projects
 //      cannot churn unsettled Challengers before the rating graph absorbs them.
+//   5. Fewer than `MAX_FAILED_SMOKE_TESTS` (3) ladder smoke tests may have failed in the rolling
+//      24-hour window (`FAILED_SMOKE_WINDOW_SECONDS`), unless cleared via `cooldown_refunded_at`.
 export function computeAgentSubmissionStatus(
   db: DatabaseSync,
   agentId: number,
@@ -500,6 +549,16 @@ export function computeAgentSubmissionStatus(
           `matches=${entry.matches}/${SETTLED_MIN_MATCHES}).`,
       };
     }
+  }
+
+  const failedSmokeBlock = checkFailedSmokeBudget(db, agentId, 'ladder', refundedAt, now);
+  if (failedSmokeBlock) {
+    return {
+      label: 'Ineligible',
+      canSubmit: false,
+      reason: failedSmokeBlock.reason,
+      nextEligibleAt: failedSmokeBlock.nextEligibleAt,
+    };
   }
 
   return {
@@ -613,7 +672,7 @@ export function createSubmission(
           );
         }
         if (!ts.canSubmit) {
-          const code = now >= ts.closesAt ? 400 : 409;
+          const code = now >= ts.closesAt ? 400 : ts.nextEligibleAt !== undefined ? 429 : 409;
           throw Object.assign(
             new Error(ts.reason ?? `Already entered in ${ts.name}.`),
             {status: code}

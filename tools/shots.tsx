@@ -1462,6 +1462,43 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       }),
     },
     {
+      name: 'account-ineligible-smoke-limit',
+      section: 'account',
+      title: 'Smoke Limit',
+      path: '/account/',
+      githubUser: 'sisyphus25',
+      setup: fixture => withSavepoint(fixture, raw => {
+        const insert = raw.prepare(
+          `INSERT INTO agent_versions (
+            agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+            smoke_status, smoke_error, submitted_at, notified
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'failed', 'segfault in init', ?, 1)`
+        );
+        for (let i = 1; i <= 3; i++) {
+          insert.run(
+            fixture.cynthiaiId,
+            `0.9.${i}`,
+            'bundle',
+            `https://github.com/sisyphus25/cynthiai/releases/download/v0.9.${i}/agent.tar.zst`,
+            'a'.repeat(64),
+            JSON.stringify([RBY_LADDER_ID]),
+            '[]',
+            NOW_SECONDS - (4 - i) * 3600
+          );
+          insert.run(
+            fixture.cynthiaiId,
+            `t0.${i}`,
+            'oci',
+            `ghcr.io/sisyphus25/cynthiai:t0.${i}`,
+            'b'.repeat(64),
+            '[]',
+            JSON.stringify(['3']),
+            NOW_SECONDS - (4 - i) * 1800
+          );
+        }
+      }),
+    },
+    {
       name: 'account',
       section: 'account',
       title: 'Cooldown',

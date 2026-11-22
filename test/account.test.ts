@@ -1404,12 +1404,12 @@ describe('account routes', () => {
           url: `https://github.com/pkmn/0-error-${i}.tar.zst`,
           sha256: SHA_A,
           ladderIds: ['gen1ou20261109'],
-          now: 1_762_800_000 + i,
+          now: 1_760_000_000 + i * 86400,
         });
         db.applySubmissionStatus({
           versionId: sub.id,
           smokeStatus: 'failed',
-          now: 1_762_800_000 + i + 1,
+          now: 1_760_000_000 + i * 86400 + 1,
         });
       }
 
@@ -1509,5 +1509,96 @@ describe('account routes', () => {
       expect(html).toContain('>Qualified<');
       expect(html).toContain('<fieldset class="form-fieldset" disabled>');
     });
+
+    test('rate-limits projects after 3 failed smoke tests in 24h on ladders and tournaments',
+      async () => {
+        openLadders(['gen1ou20261109']);
+        db.setAgentLadders('0-error', ['rby'], currentNow);
+        db.upsertTournament({
+          id: 't-budget',
+          name: 'Budget Tour',
+          format: 'gen9ou',
+          version: '0.11.0',
+          gamesPerMatchup: 10,
+          parallelTables: 2,
+          hardware: 'L4',
+          startsAt: currentNow + 7 * 86400,
+          status: 'scheduled',
+        });
+
+        for (let i = 1; i <= 3; i++) {
+          const res = await postSubmission('pre', {
+            version: `0.1.${i}`,
+            package: 'bundle',
+            url: `https://github.com/pkmn/0-error-${i}.tar.zst`,
+            sha256: SHA_A,
+            ladders: ['RBY'],
+          });
+          expect(res.status).toBe(201);
+          const {versionId} = await res.json() as {versionId: number};
+          db.applySubmissionStatus({
+            versionId,
+            smokeStatus: 'failed',
+            smokeError: 'segfault',
+            now: currentNow + i,
+          });
+        }
+
+        const blockedLadder = await postSubmission('pre', {
+          version: '0.1.4',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error-4.tar.zst',
+          sha256: SHA_A,
+          ladders: ['RBY'],
+        });
+        expect(blockedLadder.status).toBe(429);
+        expect((await blockedLadder.json() as {error: string}).error).toContain(
+          'Failed smoke test limit reached'
+        );
+
+        const htmlAfterLadder = await (await realFetch(`${baseUrl}/account`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).text();
+        expect(htmlAfterLadder).toContain('Failed smoke test limit reached');
+
+        // Advance past the 60s HTTP burst window and verify tournament budget independently.
+        currentNow += 120;
+        for (let i = 1; i <= 3; i++) {
+          const res = await postSubmission('pre', {
+            version: `t0.${i}`,
+            package: 'oci',
+            url: `ghcr.io/pkmn/0-error:t0.${i}`,
+            sha256: SHA_B,
+            ladders: [],
+            tournaments: ['t-budget'],
+          });
+          expect(res.status).toBe(201);
+          const {versionId} = await res.json() as {versionId: number};
+          db.applySubmissionStatus({
+            versionId,
+            smokeStatus: 'failed',
+            smokeError: 'oom',
+            now: currentNow + i,
+          });
+        }
+
+        const blockedTour = await postSubmission('pre', {
+          version: 't0.4',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/0-error:t0.4',
+          sha256: SHA_B,
+          ladders: [],
+          tournaments: ['t-budget'],
+        });
+        expect(blockedTour.status).toBe(429);
+        expect((await blockedTour.json() as {error: string}).error).toContain(
+          'Failed smoke test limit reached'
+        );
+
+        const htmlAfterTour = await (await realFetch(`${baseUrl}/account`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).text();
+        expect(htmlAfterTour).toContain('retry after ');
+      });
   });
 });

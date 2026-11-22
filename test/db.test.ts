@@ -3333,4 +3333,132 @@ describe('per-ladder qualification & migrations', () => {
     expect(() => database.parseLadderSlotTokens(['none', 'rby'])).toThrow(/Cannot combine "none"/);
     expect(database.parseLadderSlotTokens(['none'])).toEqual([]);
   });
+
+  test('enforces rolling 24h failed smoke budget independently for ladders and tournaments', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncLaddersFromYaml(`
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  team: harvested
+  status: upcoming
+`, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    owners:
+      alice: alice.10001
+`, undefined, 1_760_000_000);
+      db.setAgentLadders('alpha', ['rby'], 1_760_000_000);
+      db.upsertTournament({
+        id: 't1',
+        name: 'Tournament #1',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 10,
+        parallelTables: 2,
+        hardware: 'L4',
+        startsAt: 1_765_000_000,
+        status: 'scheduled',
+      });
+
+      const alpha = db.getAgentBySlug('alpha')!;
+      const sha = 'a'.repeat(64);
+      const t0 = 1_760_000_100;
+
+      // Three failed ladder smoke tests exhaust the 24h ladder budget.
+      for (let i = 0; i < database.MAX_FAILED_SMOKE_TESTS; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `0.0.${i + 1}`,
+          package: 'bundle',
+          url: `https://example.com/v${i + 1}.tar.gz`,
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: t0 + i * 600,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'boom',
+          now: t0 + i * 600 + 10,
+        });
+      }
+
+      const blocked = db.computeAgentSubmissionStatus(alpha.id, t0 + 2_000);
+      expect(blocked.canSubmit).toBe(false);
+      expect(blocked.label).toBe('Ineligible');
+      expect(blocked.reason).toContain('Failed smoke test limit reached');
+      expect(blocked.nextEligibleAt).toBe(t0 + database.FAILED_SMOKE_WINDOW_SECONDS);
+
+      // Tournament budget is tracked separately and remains open.
+      const tourneysWhileLadderBlocked = db.computeAgentTournamentStatuses(alpha.id, t0 + 2_000);
+      expect(tourneysWhileLadderBlocked[0].canSubmit).toBe(true);
+
+      // Rolling 24h expiry of the first failure unblocks ladder submissions.
+      const justBefore = db.computeAgentSubmissionStatus(
+        alpha.id,
+        t0 + database.FAILED_SMOKE_WINDOW_SECONDS - 1
+      );
+      expect(justBefore.canSubmit).toBe(false);
+      const atExpiry = db.computeAgentSubmissionStatus(
+        alpha.id,
+        t0 + database.FAILED_SMOKE_WINDOW_SECONDS
+      );
+      expect(atExpiry.canSubmit).toBe(true);
+
+      // refundCooldown also resets the 24h failed smoke budget immediately.
+      db.refundCooldown('alpha', t0 + 2_100);
+      expect(db.computeAgentSubmissionStatus(alpha.id, t0 + 2_105).canSubmit).toBe(true);
+
+      // Three failed tournament smoke tests exhaust the 24h tournament budget.
+      const tTour = t0 + 3_000;
+      for (let i = 0; i < database.MAX_FAILED_SMOKE_TESTS; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `t${i + 1}`,
+          package: 'oci',
+          url: `ghcr.io/pkmn/alpha:t${i + 1}`,
+          sha256: sha,
+          ladderIds: [],
+          tournamentIds: ['t1'],
+          now: tTour + i * 600,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'boom',
+          now: tTour + i * 600 + 10,
+        });
+      }
+      const blockedTour = db.computeAgentTournamentStatuses(alpha.id, tTour + 2_000)[0];
+      expect(blockedTour.canSubmit).toBe(false);
+      expect(blockedTour.reason).toContain('Failed smoke test limit reached');
+      expect(blockedTour.nextEligibleAt).toBe(tTour + database.FAILED_SMOKE_WINDOW_SECONDS);
+
+      let caught: unknown;
+      try {
+        db.createSubmission({
+          agentId: alpha.id,
+          version: 't4',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/alpha:t4',
+          sha256: sha,
+          ladderIds: [],
+          tournamentIds: ['t1'],
+          now: tTour + 2_000,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect((caught as {status?: number}).status).toBe(429);
+
+      // Ladder budget remains unaffected by tournament failures.
+      expect(db.computeAgentSubmissionStatus(alpha.id, tTour + 2_000).canSubmit).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
 });

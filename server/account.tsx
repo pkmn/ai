@@ -904,9 +904,11 @@ export function renderAccountPage(opts: {
                         ? `entered: ${t.enteredVersion}`
                         : t.pendingVersion
                           ? `pending: ${t.pendingVersion}`
-                          : now >= t.closesAt
-                            ? 'entries closed'
-                            : 'closed';
+                          : t.nextEligibleAt !== undefined
+                            ? `retry after ${util.formatUtcDateTime(t.nextEligibleAt)}`
+                            : now >= t.closesAt
+                              ? 'entries closed'
+                              : 'closed';
                       return (
                         <label className='upcoming' title={t.reason}>
                           <input
@@ -1500,7 +1502,9 @@ export function register(app: polka.Polka, options: Options) {
         return;
       }
       if (!tStatus.canSubmit) {
-        const code = now >= tStatus.closesAt ? 400 : 409;
+        const code = now >= tStatus.closesAt
+          ? 400
+          : tStatus.nextEligibleAt !== undefined ? 429 : 409;
         sendJson(res, code, {error: tStatus.reason ?? `Cannot submit to "${tStatus.name}".`});
         return;
       }

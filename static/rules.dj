@@ -118,8 +118,10 @@ competitors may run *up to 2 versions* concurrently and may submit a new version
     [blind-pair matches](#Matchmaking) (50 games).
 
 A submission succeeds if the arena can unpack it and play through the first turn of a battle in the
-format(s) it is entered in ("smoke test"). If 2 versions are already active on a ladder, the weaker
-is automatically retired, leaving the *strongest version and the latest submission*.
+format(s) it is entered in ("smoke test"). Failed smoke tests do not trigger the 14-day cooldown,
+but each project is limited to at most *3 failed smoke tests per 24 hours* (tracked separately for
+ladders and tournaments). If 2 versions are already active on a ladder, the weaker is automatically
+retired, leaving the *strongest version and the latest submission*.
 
 ### Format
 

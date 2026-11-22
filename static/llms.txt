@@ -72,7 +72,9 @@ Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
 ### Cooldowns, Smoke Tests & Concurrency
 - **Smoke test:** A submission succeeds if the arena unpacks it and plays through Turn 1 of a
   battle in every entered format. If a ladder smoke test fails, the last 4 KiB of `stderr` are
-  surfaced on `/account`.
+  surfaced on `/account`. Failed smoke tests do not trigger the 14-day cooldown, but each project is
+  limited to at most **3 failed smoke tests per 24 hours** (tracked separately for ladders and
+  tournaments).
 - **Ladders (concurrency, cooldown & qualification):** Requires a qualified project. Up to **2
   active versions** concurrently per ladder (if 2 are already active, the weaker retires, leaving
   the strongest + latest). You may submit a new ladder version once **14 days** have elapsed since
