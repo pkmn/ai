@@ -3622,4 +3622,75 @@ describe('per-ladder qualification & migrations', () => {
         db.close();
       }
     });
+
+  test('scopes tournament queueAhead per tournament across overlapping scheduled events', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    owners:
+      alice: alice.10001
+- name: Beta
+  active: 2026
+  arena:
+    owners:
+      bob: bob.10002
+`, undefined, 1_760_000_000);
+      db.upsertTournament({
+        id: 't1',
+        name: 'Tournament #1',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 10,
+        parallelTables: 2,
+        hardware: 'L4',
+        startsAt: 1_765_000_000,
+        status: 'scheduled',
+      });
+      db.upsertTournament({
+        id: 't2',
+        name: 'Tournament #2',
+        format: 'gen1ou',
+        version: '0.11.0',
+        gamesPerMatchup: 10,
+        parallelTables: 2,
+        hardware: 'L4',
+        startsAt: 1_766_000_000,
+        status: 'scheduled',
+      });
+
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      const sha = 'a'.repeat(64);
+
+      db.createSubmission({
+        agentId: alpha.id,
+        version: 't1-v1',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/alpha:t1',
+        sha256: sha,
+        ladderIds: [],
+        tournamentIds: ['t1'],
+        now: 1_760_000_100,
+      });
+      db.createSubmission({
+        agentId: beta.id,
+        version: 't2-v1',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/beta:t2',
+        sha256: sha,
+        ladderIds: [],
+        tournamentIds: ['t2'],
+        now: 1_760_000_200,
+      });
+
+      const betaStatuses = db.computeAgentTournamentStatuses(beta.id, 1_760_000_300);
+      expect(betaStatuses.find(s => s.tournamentId === 't2')?.queueAhead).toBe(0);
+      expect(db.getVersionsForAgent(beta.id)[0].queueAhead).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
 });

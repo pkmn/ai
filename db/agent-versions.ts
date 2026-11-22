@@ -282,7 +282,8 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
         db,
         mapped.ladders.length > 0 ? 'ladder' : 'tournament',
         mapped.submittedAt,
-        mapped.id
+        mapped.id,
+        mapped.ladders.length > 0 ? undefined : mapped.tournaments
       )
       : undefined;
     return {
@@ -298,16 +299,32 @@ function countPendingAhead(
   db: DatabaseSync,
   scope: 'ladder' | 'tournament',
   submittedAt: number,
-  versionId: number
+  versionId: number,
+  tournamentIds?: readonly string[]
 ): number {
-  const scopeClause = scope === 'ladder' ? "ladders_json != '[]'" : "tournaments_json != '[]'";
-  const row = db.prepare(
-    `SELECT COUNT(*) AS count FROM agent_versions
+  if (scope === 'ladder') {
+    const row = db.prepare(
+      `SELECT COUNT(*) AS count FROM agent_versions
+       WHERE smoke_status = 'pending'
+         AND ladders_json != '[]'
+         AND (submitted_at < ? OR (submitted_at = ? AND id < ?))`
+    ).get(submittedAt, submittedAt, versionId) as {count: number};
+    return row.count;
+  }
+  const rows = db.prepare(
+    `SELECT tournaments_json FROM agent_versions
      WHERE smoke_status = 'pending'
-       AND ${scopeClause}
+       AND tournaments_json != '[]'
        AND (submitted_at < ? OR (submitted_at = ? AND id < ?))`
-  ).get(submittedAt, submittedAt, versionId) as {count: number};
-  return row.count;
+  ).all(submittedAt, submittedAt, versionId) as Array<{tournaments_json: string}>;
+  if (!tournamentIds?.length) return rows.length;
+  const targets = new Set(tournamentIds);
+  let count = 0;
+  for (const row of rows) {
+    const tids = JSON.parse(row.tournaments_json) as string[];
+    if (tids.some(tid => targets.has(tid))) count++;
+  }
+  return count;
 }
 
 function formatQueueAhead(ahead: number): string {
@@ -447,7 +464,9 @@ export function computeAgentTournamentStatuses(
       };
     }
     if (pending) {
-      const queueAhead = countPendingAhead(db, 'tournament', pending.submittedAt, pending.id);
+      const queueAhead = countPendingAhead(
+        db, 'tournament', pending.submittedAt, pending.id, [t.id]
+      );
       return {
         tournamentId: t.id,
         name: t.name,
