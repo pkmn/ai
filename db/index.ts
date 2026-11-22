@@ -774,6 +774,10 @@ export class Database extends SqliteDatabase {
     return matches.getRecentMatchesForAgentOnLadder(this.db, agentId, ladderId, limit);
   }
 
+  getRecentFaultSummary(now?: number, windowSeconds?: number): matches.RecentFaultSummary {
+    return matches.getRecentFaultSummary(this.db, now, windowSeconds);
+  }
+
   upsertTournament(input: tournaments.UpsertTournamentInput) {
     tournaments.upsertTournament(this.db, input);
   }

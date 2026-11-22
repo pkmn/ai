@@ -811,3 +811,31 @@ export function getRecentMatchesForAgentOnLadder(
   `).all(...topIds) as Array<Record<string, unknown>>;
   return rows.map(mapRecentMatchRow);
 }
+
+export interface RecentFaultSummary {
+  matches: number;
+  faults: number;
+}
+
+export function getRecentFaultSummary(
+  db: DatabaseSync,
+  now = Math.floor(Date.now() / 1000),
+  windowSeconds = 24 * 60 * 60
+): RecentFaultSummary {
+  const cutoff = now - windowSeconds;
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS matches,
+      COALESCE(SUM(CASE
+        WHEN game1_end_reason IN ('timeout', 'crash', 'oom', 'invalid-choice')
+          OR game2_end_reason IN ('timeout', 'crash', 'oom', 'invalid-choice')
+        THEN 1 ELSE 0
+      END), 0) AS faults
+    FROM matches
+    WHERE completed_at >= ?
+  `).get(cutoff) as {matches: number; faults: number} | undefined;
+  return {
+    matches: Number(row?.matches ?? 0),
+    faults: Number(row?.faults ?? 0),
+  };
+}
