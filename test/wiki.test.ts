@@ -1214,6 +1214,167 @@ describe('wiki server routes', () => {
       wikiInstance.getPageVisibility = origVis;
     }
   });
+
+  test('deletes a general wiki page when saved with empty content while preserving git history',
+    async () => {
+      await postWiki('ephemeral', 'scheibo', {
+        content: '# Ephemeral\n\nTemporary notes.',
+        message: 'Create ephemeral',
+        action: 'save',
+      });
+      const file = path.join(wikiDir, 'ephemeral.dj');
+      expect(fs.existsSync(file)).toBe(true);
+
+      const previewRes = await postWiki('ephemeral', 'pmariglia', {
+        content: '   \n\t  ',
+        action: 'preview',
+      });
+      expect(previewRes.status).toBe(200);
+      expect(await previewRes.text()).toContain('Saving empty content will delete this page.');
+      expect(fs.existsSync(file)).toBe(true);
+
+      const delRes = await postWiki('ephemeral', 'pmariglia', {
+        content: '  \n',
+        message: 'Remove outdated notes',
+        action: 'save',
+      });
+      expect(delRes.status).toBe(303);
+      expect(delRes.headers.get('location')).toBe('/wiki/pages');
+      expect(fs.existsSync(file)).toBe(false);
+
+      const pagesHtml = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
+      expect(pagesHtml).not.toContain('ephemeral');
+
+      const histRes = await realFetch(`${baseUrl}/wiki/ephemeral/history`);
+      expect(histRes.status).toBe(200);
+      const histHtml = await histRes.text();
+      expect(histHtml).toContain('Remove outdated notes');
+      expect(histHtml).toContain('Create ephemeral');
+
+      const delSha = /href="\/wiki\/ephemeral\/([0-9a-f]{40})"/.exec(histHtml)![1];
+      const snapRes = await realFetch(`${baseUrl}/wiki/ephemeral/${delSha}`);
+      expect(snapRes.status).toBe(404);
+      const diffRes = await realFetch(`${baseUrl}/wiki/ephemeral/${delSha}?diff=1`);
+      expect(diffRes.status).toBe(200);
+      expect(await diffRes.text()).toContain('-Temporary notes.');
+    });
+
+  test('protects index and /wiki/pages from deletion', async () => {
+    const previewRes = await postWiki('index', 'scheibo', {
+      content: '   ',
+      action: 'preview',
+    });
+    expect(previewRes.status).toBe(200);
+    expect(await previewRes.text()).toContain('The wiki home page cannot be deleted.');
+
+    const delIndex = await postWiki('index', 'scheibo', {
+      content: '',
+      action: 'save',
+    });
+    expect(delIndex.status).toBe(400);
+    expect(await delIndex.text()).toContain('The wiki home page cannot be deleted.');
+    expect(fs.existsSync(path.join(wikiDir, 'index.dj'))).toBe(true);
+    await expect(wikiInstance.deletePage('index', 'scheibo')).rejects.toThrow(
+      /Cannot delete protected wiki page/
+    );
+
+    const editPages = await realFetch(`${baseUrl}/wiki/pages/edit`, {
+      headers: {Cookie: sessionCookie('scheibo')},
+    });
+    expect(editPages.status).toBe(404);
+    const delPages = await postWiki('pages', 'scheibo', {content: '', action: 'save'});
+    expect(delPages.status).toBe(404);
+  });
+
+  test('restricts project page deletion to owners and keeps deleted history private', async () => {
+    await postWiki('projects/0_ERROR', 'pre', {
+      content: '# 0 ERROR\n\nConfidential roadmap.',
+      visibility: 'developers',
+      message: 'Create private notes',
+      action: 'save',
+    });
+    const file = path.join(wikiDir, 'projects', '0_ERROR.dj');
+    expect(fs.existsSync(file)).toBe(true);
+
+    const nonOwnerDel = await postWiki('projects/0_ERROR', 'pmariglia', {
+      content: '',
+      action: 'save',
+    });
+    expect(nonOwnerDel.status).toBe(403);
+    expect(fs.existsSync(file)).toBe(true);
+
+    const ownerDel = await postWiki('projects/0_ERROR', 'pre', {
+      content: '',
+      action: 'save',
+    });
+    expect(ownerDel.status).toBe(303);
+    expect(ownerDel.headers.get('location')).toBe('/wiki/pages');
+    expect(fs.existsSync(file)).toBe(false);
+
+    const anonHist = await realFetch(`${baseUrl}/wiki/projects/0_ERROR/history`, {
+      redirect: 'manual',
+    });
+    expect(anonHist.status).toBe(302);
+
+    const delSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: wikiDir,
+      encoding: 'utf8',
+    }).trim();
+    const anonDiff = await realFetch(`${baseUrl}/wiki/projects/0_ERROR/${delSha}?diff=1`, {
+      redirect: 'manual',
+    });
+    expect(anonDiff.status).toBe(302);
+
+    const devDiff = await realFetch(`${baseUrl}/wiki/projects/0_ERROR/${delSha}?diff=1`, {
+      headers: {Cookie: sessionCookie('pmariglia')},
+    });
+    expect(devDiff.status).toBe(200);
+    expect(await devDiff.text()).toContain('-Confidential roadmap.');
+  });
+
+  test('handles empty saves on uncreated pages as a no-op and honors baseSha conflicts',
+    async () => {
+      const headBefore = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: wikiDir,
+        encoding: 'utf8',
+      }).trim();
+      const noopRes = await postWiki('never_created', 'scheibo', {
+        content: '  ',
+        action: 'save',
+      });
+      expect(noopRes.status).toBe(303);
+      expect(noopRes.headers.get('location')).toBe('/wiki/pages');
+      expect(fs.existsSync(path.join(wikiDir, 'never_created.dj'))).toBe(false);
+      const headAfter = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: wikiDir,
+        encoding: 'utf8',
+      }).trim();
+      expect(headAfter).toBe(headBefore);
+
+      await postWiki('conflict_delete', 'scheibo', {
+        content: '# Keep Me\n\nv1',
+        message: 'v1',
+        action: 'save',
+      });
+      const editHtml = await (await realFetch(`${baseUrl}/wiki/conflict_delete/edit`, {
+        headers: {Cookie: sessionCookie('scheibo')},
+      })).text();
+      const baseSha = /name="baseSha"[^>]*value="([^"]+)"/.exec(editHtml)![1];
+
+      await postWiki('conflict_delete', 'pmariglia', {
+        content: '# Keep Me\n\nv2',
+        message: 'v2',
+        action: 'save',
+      });
+
+      const staleDel = await postWiki('conflict_delete', 'scheibo', {
+        content: '',
+        baseSha,
+        action: 'save',
+      });
+      expect(staleDel.status).toBe(409);
+      expect(fs.existsSync(path.join(wikiDir, 'conflict_delete.dj'))).toBe(true);
+    });
 });
 
 describe('wiki database standing checks', () => {

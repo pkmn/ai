@@ -1078,6 +1078,34 @@ export class Wiki {
     return next;
   }
 
+  private schedulePush() {
+    if (!this.shouldPush) return;
+    // Push asynchronously via a serialized queue so wiki saves redirect immediately once
+    // the local commit succeeds instead of blocking the HTTP response on GitHub network RTT.
+    this.pushQueue = this.pushQueue.then(
+      () => execFileAsync('git', ['push', 'origin', 'HEAD'], {
+        cwd: this.wikiDir,
+        timeout: 30_000,
+      }).catch(err => {
+        console.error('Error pushing wiki commit:', err);
+      })
+    );
+  }
+
+  private gitCommitMeta(author: string, message: string | undefined, defaultMsg: string) {
+    // eslint-disable-next-line no-control-regex
+    const cleanMessage = message?.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+    const summary = cleanMessage || defaultMsg;
+    // eslint-disable-next-line no-control-regex
+    const safeAuthor = author.replace(/[\x00-\x1f\x7f<>"]/g, '').trim() || 'wiki';
+    const gitAuthor = `${safeAuthor} <${safeAuthor}@users.noreply.github.com>`;
+    const isoDate = this.now ? new Date(this.now() * 1000).toISOString() : undefined;
+    const env = isoDate
+      ? {...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate}
+      : undefined;
+    return {summary, gitAuthor, env};
+  }
+
   async savePage(
     slug: string,
     rawContent: string,
@@ -1107,18 +1135,9 @@ export class Wiki {
       const rel = `${canonical}.dj`;
       const literalRel = `:(literal)${rel}`;
       const defaultMsg = prev === undefined ? `Create ${canonical}` : `Update ${canonical}`;
-      // eslint-disable-next-line no-control-regex
-      const cleanMessage = message?.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
-      const summary = cleanMessage || defaultMsg;
-      // eslint-disable-next-line no-control-regex
-      const safeAuthor = author.replace(/[\x00-\x1f\x7f<>"]/g, '').trim() || 'wiki';
-      const gitAuthor = `${safeAuthor} <${safeAuthor}@users.noreply.github.com>`;
+      const {summary, gitAuthor, env} = this.gitCommitMeta(author, message, defaultMsg);
 
       fs.writeFileSync(file, content, 'utf8');
-      const isoDate = this.now ? new Date(this.now() * 1000).toISOString() : undefined;
-      const env = isoDate
-        ? {...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate}
-        : undefined;
       try {
         await execFileAsync('git', ['add', '--', literalRel], {
           cwd: this.wikiDir,
@@ -1150,18 +1169,60 @@ export class Wiki {
         throw err;
       }
 
-      if (this.shouldPush) {
-        // Push asynchronously via a serialized queue so wiki saves redirect immediately once
-        // the local commit succeeds instead of blocking the HTTP response on GitHub network RTT.
-        this.pushQueue = this.pushQueue.then(
-          () => execFileAsync('git', ['push', 'origin', 'HEAD'], {
-            cwd: this.wikiDir,
-            timeout: 30_000,
-          }).catch(err => {
-            console.error('Error pushing wiki commit:', err);
-          })
+      this.schedulePush();
+      return true;
+    });
+  }
+
+  async deletePage(slug: string, author: string, message?: string): Promise<boolean> {
+    const canonical = this.resolveSlug(slug);
+    if (!isValidSlug(canonical)) throw new Error(`Invalid slug: ${slug}`);
+    if (canonical === 'index') throw new Error('Cannot delete protected wiki page: index');
+    if (isProjectNamespace(canonical) && !this.isProjectPage(canonical)) {
+      throw new Error(`Unknown project wiki page: ${canonical}`);
+    }
+
+    return this.enqueueGit(async () => {
+      const file = path.join(this.wikiDir, `${canonical}.dj`);
+      if (!fs.existsSync(file)) return false;
+      const prev = fs.readFileSync(file, 'utf8');
+
+      const rel = `${canonical}.dj`;
+      const literalRel = `:(literal)${rel}`;
+      const {summary, gitAuthor, env} = this.gitCommitMeta(author, message, `Delete ${canonical}`);
+
+      try {
+        await execFileAsync('git', ['rm', '-f', '--', literalRel], {
+          cwd: this.wikiDir,
+          env,
+          timeout: 15_000,
+        });
+        await execFileAsync(
+          'git',
+          [
+            '-c', 'user.name=pkmn.ai',
+            '-c', 'user.email=wiki@pkmn.ai',
+            '-c', 'commit.gpgsign=false',
+            'commit',
+            `--author=${gitAuthor}`,
+            '-m', summary,
+            '--', literalRel,
+          ],
+          {cwd: this.wikiDir, env, timeout: 15_000}
         );
+      } catch (err) {
+        try {
+          fs.mkdirSync(path.dirname(file), {recursive: true});
+          fs.writeFileSync(file, prev, 'utf8');
+          await execFileAsync('git', ['reset', '--mixed', '-q', '--', literalRel], {
+            cwd: this.wikiDir,
+            timeout: 5_000,
+          });
+        } catch {}
+        throw err;
       }
+
+      this.schedulePush();
       return true;
     });
   }
@@ -1169,8 +1230,7 @@ export class Wiki {
   async getHistory(slug: string): Promise<Revision[]> {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical)) return [];
-    const file = path.join(this.wikiDir, `${canonical}.dj`);
-    if (!fs.existsSync(file)) return [];
+    if (!fs.existsSync(this.wikiDir)) return [];
     try {
       const {stdout} = await execFileAsync(
         'git',
@@ -1617,8 +1677,19 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           : wiki.getPageVisibility(slug))
         : undefined;
 
+      const isEmpty = parsePageContent(content).content.trim() === '';
+
       if (action === 'preview') {
-        const previewHtml = renderDjot(content, {});
+        let previewHtml: string;
+        if (isEmpty && slug === 'index') {
+          previewHtml = String(<p className='no'>The wiki home page cannot be deleted.</p>);
+        } else if (isEmpty && wiki.readPageRecord(slug) !== undefined) {
+          previewHtml = String(
+            <p className='wiki-meta'>Saving empty content will delete this page.</p>
+          );
+        } else {
+          previewHtml = renderDjot(content, {});
+        }
         renderEditor(res, {
           slug,
           content,
@@ -1648,6 +1719,24 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           baseSha: currentFingerprint,
           statusCode: 409,
         });
+        return;
+      }
+
+      if (isEmpty) {
+        if (slug === 'index') {
+          renderEditor(res, {
+            slug,
+            content,
+            message,
+            visibility,
+            previewHtml: String(<p className='no'>The wiki home page cannot be deleted.</p>),
+            baseSha: currentFingerprint,
+            statusCode: 400,
+          });
+          return;
+        }
+        await wiki.deletePage(slug, login, message);
+        redirect(res, '/wiki/pages', 303);
         return;
       }
 
