@@ -1,8 +1,13 @@
 import * as fs from 'fs';
+import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 
+import polka from 'polka';
+
 import {Database} from '../db';
+import * as arena from '../server/arena';
+import * as auth from '../server/auth';
 import * as system from '../server/system';
 
 describe('system telemetry parsers & TrafficTracker', () => {
@@ -273,6 +278,87 @@ describe('system telemetry parsers & TrafficTracker', () => {
       db.db.prepare("UPDATE ladders SET status = 'active'").run();
       expect(db.getRecentFaultSummary(now)).toEqual({matches: 0, faults: 0});
     } finally {
+      db.close();
+    }
+  });
+
+  test('arena heartbeat ingests system telemetry without leaking to /api/live.json', async () => {
+    const now = 1_760_000_000;
+    const db = new Database(':memory:');
+    db.syncLadders(undefined, now);
+    const authHandler = new auth.Auth({
+      config: {sessionSecret: 'test-system-secret'},
+      db,
+    });
+    const app = polka();
+    let hbSeen = 0;
+    const arenaHandle = arena.register(app, {
+      db,
+      auth: authHandler,
+      arenaSecret: 'test-arena-secret',
+      now: () => now,
+      onHeartbeat: () => {
+        hbSeen++;
+      },
+    });
+    const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as {port: number};
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    try {
+      const GIB = 1024 ** 3;
+      const arenaSys: system.ArenaSystemInfo = {
+        collectedAt: now,
+        hostname: 'arena-mini',
+        platform: 'Darwin 24.6.0 (arm64)',
+        nodeVersion: 'v22.21.0',
+        load: {
+          load1: 1.5,
+          load5: 1.4,
+          load15: 1.2,
+          cpus: 14,
+          uptimeSeconds: 86400,
+          processUptimeSeconds: 3600,
+        },
+        memory: {
+          totalBytes: 64 * GIB,
+          usedBytes: 16 * GIB,
+          availableBytes: 48 * GIB,
+          swapTotalBytes: 0,
+          swapUsedBytes: 0,
+          processRssBytes: 96 * 1024 * 1024,
+          pressure: 'normal',
+        },
+        disks: [{mount: '/Volumes/Archive', label: 'Archive', mounted: true}],
+        network: {
+          internal: {target: 'VPS tunnel', ok: true, rttMillis: 15, checkedAt: now},
+        },
+        backups: {lastBackupAt: now - 3600, checkedAt: now},
+        outboxPending: 0,
+        daemonErrors: 0,
+      };
+
+      const res = await fetch(`${baseUrl}/api/arena/heartbeat`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-arena-secret',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({idle: true, system: arenaSys}),
+      });
+      expect(res.status).toBe(200);
+      expect(hbSeen).toBe(1);
+      expect(arenaHandle.getState().lastHeartbeatAt).toBe(now);
+      expect(arenaHandle.getState().arenaSystem?.hostname).toBe('arena-mini');
+
+      const liveText = await (await fetch(`${baseUrl}/api/live.json`)).text();
+      expect(liveText).not.toContain('arena-mini');
+      expect(liveText).not.toContain('/Volumes/Archive');
+    } finally {
+      arenaHandle.close();
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
       db.close();
     }
   });

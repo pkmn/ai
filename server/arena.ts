@@ -14,6 +14,7 @@ import {Auth} from './auth';
 import {PublicAgentInfo, extractPerspectiveLogs} from './protocol';
 import * as ratings from './ratings';
 import * as simOps from './sim-ops';
+import type * as system from './system';
 import {SAMPLES_DIR, sampleSmokePair} from './teams';
 
 export {extractPerspectiveLogs};
@@ -914,6 +915,11 @@ export interface Options {
   onSubmissionStatus?: (result: db.ApplySubmissionStatusResult) => void | Promise<void>;
   onWatchdogTimeout?: (alert: WatchdogAlert) => void | Promise<void>;
   onStaffAlert?: (alert: StaffAlertPayload) => void | Promise<void>;
+  onHeartbeat?: (info: {
+    at: number;
+    system?: system.ArenaSystemInfo;
+    live?: LiveMatch;
+  }) => void;
   onUpdate?: (
     reason:
       'submission-status' |
@@ -928,11 +934,15 @@ export interface Handle {
   close: () => void;
   getLiveDocument: (nowSeconds?: number) => LiveDocument;
   setLiveState: (state: {live?: LiveMatchInput; stale?: boolean; updatedAt?: number}) => void;
+  setArenaSystem: (info?: system.ArenaSystemInfo, at?: number) => void;
   getTournamentBroadcast: (tournamentId?: string) => LiveBroadcast | undefined;
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
   getState: () => {
     lastSeenAt?: number;
     lastContactAt?: number;
+    lastHeartbeatAt?: number;
+    arenaSystem?: system.ArenaSystemInfo;
+    sseViewers: {battles: number; tournaments: number};
     watchdogTriggered: boolean;
     stale: boolean;
     live?: LiveMatch;
@@ -1005,7 +1015,10 @@ export interface SubmissionStatusResponse {
   retiredByLadder: Record<string, number>;
 }
 
-export type HeartbeatPayload = LiveMatchInput | {idle: true};
+export type HeartbeatPayload = (
+  (LiveMatchInput & {system?: system.ArenaSystemInfo}) |
+  {idle: true; system?: system.ArenaSystemInfo}
+);
 
 export interface HeartbeatResponse {
   ok: true;
@@ -1294,10 +1307,16 @@ export interface PlayableLaddersResponse {
 export class Client {
   readonly serverUrl: string;
   private readonly arenaSecret: string;
+  private heartbeatObserver: ((rttMillis: number, ok: boolean, error?: string) => void) | undefined;
 
   constructor(options: ClientOptions) {
     this.serverUrl = validateControlPlaneServerUrl(options.serverUrl);
     this.arenaSecret = options.arenaSecret;
+    this.heartbeatObserver = undefined;
+  }
+
+  setHeartbeatObserver(cb?: (rttMillis: number, ok: boolean, error?: string) => void): void {
+    this.heartbeatObserver = cb;
   }
 
   private async requestJson<T>(
@@ -1403,8 +1422,21 @@ export class Client {
     );
   }
 
-  sendHeartbeat(payload: HeartbeatPayload): Promise<HeartbeatResponse> {
-    return this.requestJson<HeartbeatResponse>('POST', '/api/arena/heartbeat', payload);
+  async sendHeartbeat(payload: HeartbeatPayload): Promise<HeartbeatResponse> {
+    const start = Date.now();
+    try {
+      const res = await this.requestJson<HeartbeatResponse>(
+        'POST',
+        '/api/arena/heartbeat',
+        payload
+      );
+      this.heartbeatObserver?.(Date.now() - start, true);
+      return res;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.heartbeatObserver?.(Date.now() - start, false, msg);
+      throw err;
+    }
   }
 
   sendAlert(payload: StaffAlertPayload): Promise<{ok: true}> {
@@ -1798,6 +1830,8 @@ export function register(app: polka.Polka, options: Options): Handle {
   let liveStale = false;
   let lastSeenAt: number | undefined;
   let lastContactAt: number | undefined;
+  let lastHeartbeatAt: number | undefined;
+  let lastArenaSystem: system.ArenaSystemInfo | undefined;
   let lastMatchId: string | undefined;
   let watchdogTriggered = false;
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2136,6 +2170,10 @@ export function register(app: polka.Polka, options: Options): Handle {
     const nowSec = getNowSec();
     try {
       const body = await readJsonBody<HeartbeatPayload>(req);
+      lastHeartbeatAt = nowSec;
+      if (body.system) {
+        lastArenaSystem = body.system;
+      }
       if ('idle' in body && body.idle === true) {
         currentLive = undefined;
         liveStale = false;
@@ -2146,6 +2184,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           stale: false,
           runningTournament: getRunningTournamentInfo(),
         });
+        options.onHeartbeat?.({at: nowSec, system: lastArenaSystem});
         sendJson(res, 200, {ok: true, updatedAt: nowSec});
         return;
       }
@@ -2153,6 +2192,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       const frame = body as LiveMatchInput;
       if (currentLive?.matchId === frame.matchId && frame.heartbeatSeq < currentLive.heartbeatSeq) {
         armWatchdog(nowSec);
+        options.onHeartbeat?.({at: nowSec, system: lastArenaSystem, live: currentLive});
         sendJson(res, 200, {ok: true, updatedAt: liveUpdatedAt ?? nowSec});
         return;
       }
@@ -2187,6 +2227,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         live: currentLive,
         runningTournament: getRunningTournamentInfo(),
       });
+      options.onHeartbeat?.({at: nowSec, system: lastArenaSystem, live: currentLive});
       sendJson(res, 200, {ok: true, updatedAt: nowSec});
     } catch (err) {
       const status = (err as {status?: number}).status ?? 500;
@@ -3105,6 +3146,13 @@ export function register(app: polka.Polka, options: Options): Handle {
         runningTournament: getRunningTournamentInfo(),
       });
     },
+    setArenaSystem: (info, at) => {
+      lastArenaSystem = info;
+      if (at !== undefined) {
+        lastHeartbeatAt = at;
+        lastContactAt = at;
+      }
+    },
     getTournamentBroadcast: (tournamentId?: string) => {
       const id = tournamentId ?? db.getRunningTournament()?.id;
       return id ? broadcastsByTournament.get(id) : undefined;
@@ -3121,12 +3169,24 @@ export function register(app: polka.Polka, options: Options): Handle {
       broadcastsByTournament.set(id, normalized);
       pushTournamentEvent(id, 'broadcast', normalized);
     },
-    getState: () => ({
-      lastSeenAt,
-      lastContactAt,
-      watchdogTriggered,
-      stale: liveStale,
-      live: currentLive,
-    }),
+    getState: () => {
+      let tournamentViewers = 0;
+      for (const clients of tournamentStreamClients.values()) {
+        tournamentViewers += clients.size;
+      }
+      return {
+        lastSeenAt,
+        lastContactAt,
+        lastHeartbeatAt,
+        arenaSystem: lastArenaSystem,
+        sseViewers: {
+          battles: battleStreamClients.size,
+          tournaments: tournamentViewers,
+        },
+        watchdogTriggered,
+        stale: liveStale,
+        live: currentLive,
+      };
+    },
   };
 }

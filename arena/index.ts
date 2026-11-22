@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import * as arena from '../server/arena';
+import * as system from '../server/system';
 import {isConnectivityError, root} from '../static/util';
 
 import * as arbiter from './arbiter';
@@ -183,6 +184,28 @@ export async function runDaemon(opts: {
     packages.tryMountArchiveVolume();
   }
 
+  const hostMonitor = !opts.once && opts.rootDir === undefined
+    ? new system.ArenaHostMonitor({
+      stateDbPath: stateDb.dbPath,
+      getOutboxCount: () => stateDb.listOutbox(1000).length,
+      isArchiveMounted: () => {
+        if (process.platform !== 'darwin') return fs.existsSync('/Volumes/Archive');
+        try {
+          packages.assertArchiveVolumeMounted(packages.PROD_DIRS.logs);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      devMode: isDev,
+    })
+    : undefined;
+  if (hostMonitor) {
+    client.setHeartbeatObserver((rttMillis, ok, err) => {
+      hostMonitor.recordHeartbeatRtt(rttMillis, ok, err);
+    });
+  }
+
   const coord = new coordinator.Coordinator({
     client,
     stateDb,
@@ -190,6 +213,7 @@ export async function runDaemon(opts: {
     rootDir: opts.rootDir,
     maxTurns: opts.maxTurns,
     devMode: isDev,
+    getSystemInfo: hostMonitor ? () => hostMonitor.takePendingSnapshot() : undefined,
   });
 
   const stateDir = stateDb.dbPath !== ':memory:' ? path.dirname(stateDb.dbPath) : undefined;
@@ -217,12 +241,18 @@ export async function runDaemon(opts: {
             lastHostCheckAt = nowMillis;
             checkArenaHostHealth(client, isDev);
           }
+          await hostMonitor?.maybeRefresh();
         }
         await coord.flushOutbox();
         if (stateDir && isMaintenanceLockActive(stateDir)) {
           consecutiveCycleErrors = 0;
+          hostMonitor?.recordDaemonErrors(0);
           if (!opts.once && !coord.isDraining()) {
-            await client.sendHeartbeat({idle: true}).catch(() => undefined);
+            const sysInfo = hostMonitor?.takePendingSnapshot();
+            await client.sendHeartbeat({
+              idle: true,
+              ...(sysInfo ? {system: sysInfo} : {}),
+            }).catch(() => undefined);
             await sleeper.sleep(pollIntervalMillis);
           }
           if (opts.once) break;
@@ -254,8 +284,13 @@ export async function runDaemon(opts: {
           if (stateDir) releaseMatchLock(stateDir);
         }
         consecutiveCycleErrors = 0;
+        hostMonitor?.recordDaemonErrors(0);
         if (!played && ingested === 0 && !opts.once && !coord.isDraining()) {
-          await client.sendHeartbeat({idle: true}).catch(() => undefined);
+          const sysInfo = hostMonitor?.takePendingSnapshot();
+          await client.sendHeartbeat({
+            idle: true,
+            ...(sysInfo ? {system: sysInfo} : {}),
+          }).catch(() => undefined);
           await sleeper.sleep(pollIntervalMillis);
         }
       } catch (err) {
@@ -263,6 +298,7 @@ export async function runDaemon(opts: {
         if (opts.once) throw err;
         if (!isConnectivityError(err)) {
           consecutiveCycleErrors++;
+          hostMonitor?.recordDaemonErrors(consecutiveCycleErrors);
           if (consecutiveCycleErrors >= DAEMON_ERROR_ALERT_THRESHOLD) {
             const detail = err instanceof Error ? err.message : String(err);
             void client.sendAlert({
@@ -283,6 +319,7 @@ export async function runDaemon(opts: {
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
     process.removeListener('SIGUSR1', stop);
+    client.setHeartbeatObserver(undefined);
     stateDb.close();
   }
 }

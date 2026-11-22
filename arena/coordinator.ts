@@ -13,6 +13,7 @@ import {
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as sim from '../server/sim';
+import type * as system from '../server/system';
 import * as teams from '../server/teams';
 import {copyFileAtomic, formatUtcDate, root, toID, writeFileAtomic} from '../static/util';
 
@@ -150,6 +151,7 @@ export interface Options {
   rootDir?: string;
   devMode?: boolean;
   maxTurns?: number;
+  getSystemInfo?: () => system.ArenaSystemInfo | undefined;
 }
 
 interface LadderFaultCounter {
@@ -210,6 +212,7 @@ export class Coordinator {
   private readonly dirs: packages.Dirs;
   private readonly devMode: boolean;
   private readonly maxTurns?: number;
+  private readonly getSystemInfo?: () => system.ArenaSystemInfo | undefined;
   private readonly versionByLadderId = new Map<string, string>();
   private readonly teamModeByLadderId = new Map<string, db.TeamMode>();
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
@@ -231,6 +234,7 @@ export class Coordinator {
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.dirs = options.rootDir ? packages.dirsForRoot(options.rootDir) : packages.PROD_DIRS;
     this.maxTurns = options.maxTurns;
+    this.getSystemInfo = options.getSystemInfo;
   }
 
   requestDrain() {
@@ -382,7 +386,11 @@ export class Coordinator {
     for (const sub of submissions) {
       if (this.draining || processed >= maxSubmissions) break;
       // Refresh the 15m server watchdog between submissions so large launch queues stay non-stale.
-      await this.client.sendHeartbeat({idle: true}).catch(() => undefined);
+      const sysInfo = this.getSystemInfo?.();
+      await this.client.sendHeartbeat({
+        idle: true,
+        ...(sysInfo ? {system: sysInfo} : {}),
+      }).catch(() => undefined);
       processed++;
       const mode = packages.toExecutionMode(sub.package);
       const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
@@ -1024,6 +1032,7 @@ export class Coordinator {
     frame: MirrorHeartbeatFrame
   ): Promise<void> {
     this.heartbeatSeq++;
+    const sysInfo = this.getSystemInfo?.();
     await this.client.sendHeartbeat({
       heartbeatSeq: this.heartbeatSeq,
       matchId: match.id,
@@ -1077,6 +1086,7 @@ export class Coordinator {
         }
         : {}),
       ...(frame.winHistory && frame.winHistory.length > 0 ? {winHistory: frame.winHistory} : {}),
+      ...(sysInfo ? {system: sysInfo} : {}),
     }).catch(() => undefined);
   }
 
