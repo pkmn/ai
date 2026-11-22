@@ -505,9 +505,10 @@ export class Auth {
         const byLogin = this.db?.getDeveloperByGitHub(login);
         const isSquatter = byLogin?.githubId !== undefined && byLogin.githubId !== githubId;
         if (!this.isAuthorizedGitHub(login) || isSquatter) {
-          // Send unregistered visitors who clicked `/account/` straight to the GitHub project
-          // registration issue, while keeping generic 403s for blocked/disabled registered
-          // developers, handle squatters, and non-account routes (`/wiki/*`).
+          // Send unregistered visitors (including former owners whose `arena:` block was removed
+          // from `projects.yml` and whose developer rows were pruned) straight to the GitHub
+          // registration issue when returning to `/account/`, while keeping generic 403s for
+          // registered developers on blocked/disabled records, handle squatters, and `/wiki/*`.
           if (!byId && !byLogin && !isSquatter && isAccountReturnTo(saved.returnTo)) {
             redirect(res, REGISTER_ISSUE_URL, 302, [clearState]);
             return;
