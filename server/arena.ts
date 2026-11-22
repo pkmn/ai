@@ -2527,7 +2527,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       }
 
       const updatedRow = db.getTournament(tournament.id)!;
-      const doc = buildTournamentDocument(db, publicDir, updatedRow, 50);
+      const doc = buildTournamentDocument(db, publicDir, updatedRow, 0, {includeGames: false});
       const savedGame = db.getTournamentGame(game.id);
       const enrichedGame = savedGame
         ? enrichTournamentGame(publicDir, tournament.id, savedGame)
