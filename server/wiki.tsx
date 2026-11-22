@@ -65,6 +65,7 @@ export interface Revision {
   author: string;
   timestamp: number;
   subject: string;
+  deleted?: boolean;
 }
 
 function isProjectNamespace(slug: string): boolean {
@@ -1300,26 +1301,30 @@ export class Wiki {
         'git',
         [
           'log',
-          '--format=%H%x09%h%x09%an%x09%at%x09%s',
+          '--no-renames',
+          '--name-status',
+          '--format=%x1e%H%x09%h%x09%an%x09%at%x09%s',
           '--',
           `:(literal)${canonical}.dj`,
         ],
         {cwd: this.wikiDir, timeout: 15_000}
       );
-      return stdout
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .map(line => {
-          const [sha, shortSha, author, ts, ...rest] = line.split('\t');
-          return {
-            sha,
-            shortSha,
-            author,
-            timestamp: Number(ts),
-            subject: rest.join('\t'),
-          };
+      const revisions: Revision[] = [];
+      for (const block of stdout.split('\x1e')) {
+        const lines = block.split('\n').filter(Boolean);
+        if (!lines.length) continue;
+        const [sha, shortSha, author, ts, ...rest] = lines[0].split('\t');
+        const deleted = lines.slice(1).some(l => l.startsWith('D\t'));
+        revisions.push({
+          sha,
+          shortSha,
+          author,
+          timestamp: Number(ts),
+          subject: rest.join('\t'),
+          ...(deleted ? {deleted: true} : {}),
         });
+      }
+      return revisions;
     } catch {
       return [];
     }
@@ -1859,8 +1864,10 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
                     <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
                       <td className='wiki-meta'>{date}</td>
                       <td>
-                        <code><a href={revUrl}>{rev.shortSha}</a></code> (
-                        <a href={`${revUrl}?diff=1`}>diff</a>)
+                        {rev.deleted
+                          ? <code>{rev.shortSha}</code>
+                          : <code><a href={revUrl}>{rev.shortSha}</a></code>}{' '}
+                        (<a href={`${revUrl}?diff=1`}>diff</a>)
                       </td>
                       <td>
                         <a href={ghUrl} className='subtle'>{displayAuthor}</a>
@@ -1974,9 +1981,11 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
           ),
           content: (
             <>
-              <p className='wiki-meta'>
-                <a href={`/wiki/${encoded}/${sha}`}>View snapshot</a>
-              </p>
+              {revRecord && (
+                <p className='wiki-meta'>
+                  <a href={`/wiki/${encoded}/${sha}`}>View snapshot</a>
+                </p>
+              )}
               <figure className='code'>
                 <pre><code>{util.raw(renderSafeCode(diff, 'diff'))}</code></pre>
               </figure>

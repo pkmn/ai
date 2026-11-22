@@ -1312,12 +1312,15 @@ describe('wiki server routes', () => {
       expect(histHtml).toContain('Remove outdated notes');
       expect(histHtml).toContain('Create ephemeral');
 
-      const delSha = /href="\/wiki\/ephemeral\/([0-9a-f]{40})"/.exec(histHtml)![1];
+      const delSha = /href="\/wiki\/ephemeral\/([0-9a-f]{40})\?diff=1"/.exec(histHtml)![1];
+      expect(histHtml).not.toContain(`href="/wiki/ephemeral/${delSha}"`);
       const snapRes = await realFetch(`${baseUrl}/wiki/ephemeral/${delSha}`);
       expect(snapRes.status).toBe(404);
       const diffRes = await realFetch(`${baseUrl}/wiki/ephemeral/${delSha}?diff=1`);
       expect(diffRes.status).toBe(200);
-      expect(await diffRes.text()).toContain('-Temporary notes.');
+      const diffHtml = await diffRes.text();
+      expect(diffHtml).toContain('-Temporary notes.');
+      expect(diffHtml).not.toContain('View snapshot');
     });
 
   test('short-circuits getHistory on never-created slugs while tracking deleted UTF-8 pages',
