@@ -50,6 +50,7 @@ export interface AgentVersionRow {
 export interface VersionHistoryView extends AgentVersionRow {
   activeLadderNames: string[];
   tournamentNames: string[];
+  queueAhead?: number;
 }
 
 export interface SubmissionStatus {
@@ -57,6 +58,7 @@ export interface SubmissionStatus {
   canSubmit: boolean;
   reason?: string;
   nextEligibleAt?: number;
+  queueAhead?: number;
 }
 
 export interface TournamentSubmissionStatus {
@@ -70,6 +72,7 @@ export interface TournamentSubmissionStatus {
   pendingVersion?: string;
   reason?: string;
   nextEligibleAt?: number;
+  queueAhead?: number;
 }
 
 export interface CreateSubmissionInput {
@@ -274,12 +277,41 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
         tid => getTournament(db, tid)?.name ?? `Tournament #${tid}`
       );
     }
+    const queueAhead = mapped.smokeStatus === 'pending'
+      ? countPendingAhead(
+        db,
+        mapped.ladders.length > 0 ? 'ladder' : 'tournament',
+        mapped.submittedAt,
+        mapped.id
+      )
+      : undefined;
     return {
       ...mapped,
       activeLadderNames: activeByVersion.get(v.id) ?? [],
       tournamentNames,
+      ...(queueAhead !== undefined ? {queueAhead} : {}),
     };
   });
+}
+
+function countPendingAhead(
+  db: DatabaseSync,
+  scope: 'ladder' | 'tournament',
+  submittedAt: number,
+  versionId: number
+): number {
+  const scopeClause = scope === 'ladder' ? "ladders_json != '[]'" : "tournaments_json != '[]'";
+  const row = db.prepare(
+    `SELECT COUNT(*) AS count FROM agent_versions
+     WHERE smoke_status = 'pending'
+       AND ${scopeClause}
+       AND (submitted_at < ? OR (submitted_at = ? AND id < ?))`
+  ).get(submittedAt, submittedAt, versionId) as {count: number};
+  return row.count;
+}
+
+function formatQueueAhead(ahead: number): string {
+  return ahead === 0 ? 'next in queue' : `${ahead} ahead in queue`;
 }
 
 function checkFailedSmokeBudget(
@@ -351,22 +383,32 @@ export function computeAgentTournamentStatuses(
   const enteredByTourney = new Map(entrantRows.map(r => [r.tournament_id, r.version]));
 
   const versionRows = db.prepare(`
-    SELECT version, smoke_status, tournaments_json
+    SELECT id, version, smoke_status, tournaments_json, submitted_at
     FROM agent_versions
     WHERE agent_id = ?
       AND smoke_status IN ('pending', 'passed')
       AND tournaments_json != '[]'
     ORDER BY submitted_at DESC, id DESC
-  `).all(agentId) as Array<{version: string; smoke_status: SmokeStatus; tournaments_json: string}>;
+  `).all(agentId) as Array<{
+    id: number;
+    version: string;
+    smoke_status: SmokeStatus;
+    tournaments_json: string;
+    submitted_at: number;
+  }>;
 
-  const pendingByTourney = new Map<string, string>();
+  const pendingByTourney = new Map<string, {id: number; version: string; submittedAt: number}>();
   for (const row of versionRows) {
     const tids = JSON.parse(row.tournaments_json) as string[];
     for (const tid of tids) {
       if (row.smoke_status === 'passed' && !enteredByTourney.has(tid)) {
         enteredByTourney.set(tid, row.version);
       } else if (row.smoke_status === 'pending' && !pendingByTourney.has(tid)) {
-        pendingByTourney.set(tid, row.version);
+        pendingByTourney.set(tid, {
+          id: row.id,
+          version: row.version,
+          submittedAt: row.submitted_at,
+        });
       }
     }
   }
@@ -377,7 +419,8 @@ export function computeAgentTournamentStatuses(
   return scheduled.map(t => {
     const closesAt = getTournamentClosesAt(t.startsAt);
     const enteredVersion = enteredByTourney.get(t.id);
-    const pendingVersion = pendingByTourney.get(t.id);
+    const pending = pendingByTourney.get(t.id);
+    const pendingVersion = pending?.version;
     if (now >= closesAt) {
       return {
         tournamentId: t.id,
@@ -403,7 +446,8 @@ export function computeAgentTournamentStatuses(
         reason: `Already entered with version ${enteredVersion}.`,
       };
     }
-    if (pendingVersion) {
+    if (pending) {
+      const queueAhead = countPendingAhead(db, 'tournament', pending.submittedAt, pending.id);
       return {
         tournamentId: t.id,
         name: t.name,
@@ -411,8 +455,11 @@ export function computeAgentTournamentStatuses(
         startsAt: t.startsAt,
         closesAt,
         canSubmit: false,
-        pendingVersion,
-        reason: `Version ${pendingVersion} is awaiting smoke testing for this tournament.`,
+        pendingVersion: pending.version,
+        queueAhead,
+        reason:
+          `Version ${pending.version} is awaiting smoke testing for this tournament ` +
+          `(${formatQueueAhead(queueAhead)}).`,
       };
     }
     if (failedSmokeBlock) {
@@ -499,15 +546,20 @@ export function computeAgentSubmissionStatus(
   }
 
   const pendingRow = db.prepare(
-    `SELECT version FROM agent_versions
+    `SELECT id, version, submitted_at FROM agent_versions
      WHERE agent_id = ? AND smoke_status = 'pending' AND ladders_json != '[]'
+     ORDER BY submitted_at ASC, id ASC
      LIMIT 1`
-  ).get(agentId) as {version: string} | undefined;
+  ).get(agentId) as {id: number; version: string; submitted_at: number} | undefined;
   if (pendingRow) {
+    const queueAhead = countPendingAhead(db, 'ladder', pendingRow.submitted_at, pendingRow.id);
     return {
       label: 'Ineligible',
       canSubmit: false,
-      reason: `Version ${pendingRow.version} is currently awaiting Arena smoke testing.`,
+      reason:
+        `Version ${pendingRow.version} is currently awaiting Arena smoke testing ` +
+        `(${formatQueueAhead(queueAhead)}).`,
+      queueAhead,
     };
   }
 

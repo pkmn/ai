@@ -554,7 +554,17 @@ function renderHistorySection(
 
               let smokeCell: util.Child;
               if (v.smokeStatus === 'pending') {
-                smokeCell = <span className='muted'>PENDING</span>;
+                const queueText = v.queueAhead === undefined
+                  ? undefined
+                  : v.queueAhead === 0
+                    ? 'next in queue'
+                    : `${v.queueAhead} ahead`;
+                smokeCell = (
+                  <>
+                    <span className='muted'>PENDING</span>
+                    {queueText && <> <span className='muted'>({queueText})</span></>}
+                  </>
+                );
               } else if (v.smokeStatus === 'passed') {
                 const statsParts: string[] = [];
                 if (v.smokeDurationMillis !== undefined) {
@@ -900,15 +910,21 @@ export function renderAccountPage(opts: {
                           </label>
                         );
                       }
+                      const pendingBadge = t.pendingVersion
+                        ? t.queueAhead !== undefined
+                          ? `pending: ${t.pendingVersion} · ` +
+                            (t.queueAhead === 0 ? 'next in queue' : `${t.queueAhead} ahead`)
+                          : `pending: ${t.pendingVersion}`
+                        : undefined;
                       const badge = t.enteredVersion
                         ? `entered: ${t.enteredVersion}`
-                        : t.pendingVersion
-                          ? `pending: ${t.pendingVersion}`
-                          : t.nextEligibleAt !== undefined
+                        : pendingBadge ?? (
+                          t.nextEligibleAt !== undefined
                             ? `retry after ${util.formatUtcDateTime(t.nextEligibleAt)}`
                             : now >= t.closesAt
                               ? 'entries closed'
-                              : 'closed';
+                              : 'closed'
+                        );
                       return (
                         <label className='upcoming' title={t.reason}>
                           <input
@@ -1332,6 +1348,7 @@ export function register(app: polka.Polka, options: Options) {
           unpackedBytes: v.unpackedBytes,
           smoke: {
             status: v.smokeStatus,
+            ...(v.queueAhead !== undefined ? {queueAhead: v.queueAhead} : {}),
             durationMillis: v.smokeDurationMillis,
             initMillis: v.smokeInitMillis,
             teamPreviewMillis: v.smokeTeamPreviewMillis,

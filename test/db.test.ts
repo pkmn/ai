@@ -3500,4 +3500,126 @@ describe('per-ladder qualification & migrations', () => {
       db.close();
     }
   });
+
+  test('computes anonymized FIFO smoke-test queue position separately for ladders and tournaments',
+    () => {
+      const db = new database.Database(':memory:', {now: 1_760_000_000});
+      try {
+        db.syncLaddersFromYaml(`
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  team: harvested
+  status: upcoming
+`, 1_760_000_000);
+        db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    owners:
+      alice: alice.10001
+- name: Beta
+  active: 2026
+  arena:
+    owners:
+      bob: bob.10002
+- name: Gamma
+  active: 2026
+  arena:
+    owners:
+      cara: cara.10003
+`, undefined, 1_760_000_000);
+        for (const slug of ['alpha', 'beta', 'gamma']) {
+          db.setAgentLadders(slug, ['rby'], 1_760_000_000);
+        }
+        db.upsertTournament({
+          id: 't1',
+          name: 'Tournament #1',
+          format: 'gen9ou',
+          version: '0.11.0',
+          gamesPerMatchup: 10,
+          parallelTables: 2,
+          hardware: 'L4',
+          startsAt: 1_765_000_000,
+          status: 'scheduled',
+        });
+
+        const alpha = db.getAgentBySlug('alpha')!;
+        const beta = db.getAgentBySlug('beta')!;
+        const gamma = db.getAgentBySlug('gamma')!;
+        const sha = 'a'.repeat(64);
+
+        const vAlpha = db.createSubmission({
+          agentId: alpha.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/a.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_100,
+        });
+        // Same timestamp as Alpha: FIFO tie-breaks by ascending id.
+        db.createSubmission({
+          agentId: beta.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/b.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_100,
+        });
+        db.createSubmission({
+          agentId: gamma.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/g.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_200,
+        });
+
+        // Tournament queue is tracked independently from ladder pending submissions.
+        db.createSubmission({
+          agentId: alpha.id,
+          version: 't1',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/alpha:t1',
+          sha256: sha,
+          ladderIds: [],
+          tournamentIds: ['t1'],
+          now: 1_760_000_150,
+        });
+        db.createSubmission({
+          agentId: beta.id,
+          version: 't1',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/beta:t1',
+          sha256: sha,
+          ladderIds: [],
+          tournamentIds: ['t1'],
+          now: 1_760_000_250,
+        });
+
+        expect(db.computeAgentSubmissionStatus(alpha.id, 1_760_000_300).queueAhead).toBe(0);
+        expect(db.computeAgentSubmissionStatus(beta.id, 1_760_000_300).queueAhead).toBe(1);
+        expect(db.computeAgentSubmissionStatus(gamma.id, 1_760_000_300).queueAhead).toBe(2);
+        expect(db.computeAgentSubmissionStatus(gamma.id, 1_760_000_300).reason).toContain(
+          '2 ahead in queue'
+        );
+        expect(db.getVersionsForAgent(gamma.id)[0].queueAhead).toBe(2);
+
+        expect(db.computeAgentTournamentStatuses(alpha.id, 1_760_000_300)[0].queueAhead).toBe(0);
+        expect(db.computeAgentTournamentStatuses(beta.id, 1_760_000_300)[0].queueAhead).toBe(1);
+        expect(db.computeAgentTournamentStatuses(beta.id, 1_760_000_300)[0].reason).toContain(
+          '1 ahead in queue'
+        );
+
+        // Once Alpha finishes, Beta becomes next in queue (0) and Gamma moves to 1 ahead.
+        db.applySubmissionStatus({versionId: vAlpha.id, smokeStatus: 'passed', now: 1_760_000_400});
+        expect(db.computeAgentSubmissionStatus(beta.id, 1_760_000_405).queueAhead).toBe(0);
+        expect(db.computeAgentSubmissionStatus(gamma.id, 1_760_000_405).queueAhead).toBe(1);
+      } finally {
+        db.close();
+      }
+    });
 });

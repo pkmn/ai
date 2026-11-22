@@ -1376,7 +1376,7 @@ describe('account routes', () => {
         expect(afterSubJson.versions).toHaveLength(1);
         expect(afterSubJson.versions[0].version).toBe('1.0.0');
         expect(afterSubJson.versions[0].ladders).toEqual(['gen1ou20261109']);
-        expect(afterSubJson.versions[0].smoke).toEqual({status: 'pending'});
+        expect(afterSubJson.versions[0].smoke).toEqual({status: 'pending', queueAhead: 0});
         expect(afterSubJson.versions[0].authTokenEncoding).toBeUndefined();
         expect(afterSubJson.versions[0].url).toBeUndefined();
         expect(afterSubJson.versions[0].developerId).toBeUndefined();
@@ -1600,5 +1600,46 @@ describe('account routes', () => {
         })).text();
         expect(htmlAfterTour).toContain('retry after ');
       });
+
+    test('exposes anonymized smoke-test queue position on /account and /account.json', async () => {
+      openLadders(['gen1ou20261109']);
+      db.setAgentLadders('foul-play', ['rby'], currentNow);
+      db.setAgentLadders('0-error', ['rby'], currentNow);
+
+      const first = await postSubmission('pmariglia', {
+        version: '2.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pmariglia/fp-2.tar.zst',
+        sha256: SHA_A,
+        ladders: ['RBY'],
+      });
+      expect(first.status).toBe(201);
+
+      currentNow += 5;
+      const second = await postSubmission('pre', {
+        version: '2.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/0-error-2.tar.zst',
+        sha256: SHA_B,
+        ladders: ['RBY'],
+      });
+      expect(second.status).toBe(201);
+
+      const html = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(html).toContain('1 ahead in queue');
+      expect(html).toContain('(1 ahead)');
+      expect(html).not.toContain('Foul Play');
+
+      const json = await (await realFetch(`${baseUrl}/account.json`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).json() as {
+        submissionStatus: {queueAhead?: number};
+        versions: Array<{smoke: {status: string; queueAhead?: number}}>;
+      };
+      expect(json.submissionStatus.queueAhead).toBe(1);
+      expect(json.versions[0].smoke.queueAhead).toBe(1);
+    });
   });
 });
