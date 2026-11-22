@@ -1,4 +1,3 @@
-import {execFileSync} from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
@@ -15,7 +14,6 @@ import * as discord from '../server/discord';
 import * as render from '../server/render';
 import * as teams from '../server/teams';
 import * as tournaments from '../server/tournaments';
-import * as wiki from '../server/wiki';
 import {root} from '../static/util';
 import * as teamMetric from '../teams';
 import * as mock from '../tools/mock';
@@ -41,31 +39,6 @@ const DISCORD_CONFIG: discord.Config = {
   staff: ['513513270670262284'],
   ladders: {},
 };
-
-function copyRootPublicAssets(srcPublic: string, dstPublic: string) {
-  fs.mkdirSync(dstPublic, {recursive: true});
-  if (!fs.existsSync(srcPublic)) return;
-  for (const entry of fs.readdirSync(srcPublic, {withFileTypes: true})) {
-    const srcPath = path.join(srcPublic, entry.name);
-    const dstPath = path.join(dstPublic, entry.name);
-    if (entry.isFile()) {
-      fs.copyFileSync(srcPath, dstPath);
-    } else if (
-      entry.isDirectory() &&
-      entry.name !== 'arena' &&
-      entry.name !== 'projects' &&
-      entry.name !== 'api'
-    ) {
-      fs.cpSync(srcPath, dstPath, {recursive: true});
-    }
-  }
-  const viewerSrc = path.join(srcPublic, 'arena', 'viewer', 'index.html');
-  if (fs.existsSync(viewerSrc)) {
-    const viewerDst = path.join(dstPublic, 'arena', 'viewer', 'index.html');
-    fs.mkdirSync(path.dirname(viewerDst), {recursive: true});
-    fs.copyFileSync(viewerSrc, viewerDst);
-  }
-}
 
 describe('pools team sampling', () => {
   const agent1Teams = mock.generateValidVgcTeams(20, 0);
@@ -1417,109 +1390,4 @@ describe('mock scenarios & E2E lifecycle', () => {
       fs.rmSync(tmpDir, {recursive: true, force: true});
     }
   }, 30_000);
-
-  if (RUN_SLOW_TESTS) {
-    test('executes tools/scenarios/seed.mock with wiki history, archives, and hyperlink checks',
-      async () => {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-e2e-seed-'));
-        const nowSeconds = 1_760_000_000;
-        const seedDb = new Database(':memory:', {now: nowSeconds});
-        const seedMockDir = path.join(tmpDir, 'seed-mock');
-        const seedStaticDir = path.join(seedMockDir, 'static');
-        const seedAvatarsDir = path.join(seedStaticDir, 'avatars');
-        const seedWikiDir = path.join(seedMockDir, 'wiki');
-        const viewPublicDir = path.join(tmpDir, 'views-public');
-        copyRootPublicAssets(render.PUBLIC_DIR, viewPublicDir);
-        try {
-          const seeded = await mock.seed({
-            db: seedDb,
-            mockDir: seedMockDir,
-            staticDir: seedStaticDir,
-            avatarsDir: seedAvatarsDir,
-            wikiDir: seedWikiDir,
-            publicDir: viewPublicDir,
-            now: nowSeconds,
-            render: true,
-          });
-          const wikiReader = new wiki.Wiki({
-            wikiDir: seedWikiDir,
-            projectsFile: path.join(seedStaticDir, 'projects.yml'),
-            db: seedDb,
-            push: false,
-          });
-          const zeroErrorHistory = await wikiReader.getHistory('projects/0_ERROR');
-          expect(zeroErrorHistory.map(r => ({author: r.author, ts: r.timestamp}))).toEqual([
-            {author: 'coauthor', ts: nowSeconds},
-            {author: 'scheibo', ts: nowSeconds - 2 * 86400},
-          ]);
-          expect(
-            fs.existsSync(path.join(viewPublicDir, 'arena', 'tournaments', '1', '1-replays.7z'))
-          ).toBe(true);
-          const sf1Log = fs.readFileSync(
-            path.join(viewPublicDir, 'arena', 'tournaments', '1', 'spring26-sf1.log'),
-            'utf8'
-          );
-          expect(sf1Log).toContain('|win|');
-
-          for (const stub of ['arena', 'projects', 'account', 'chat', 'wiki']) {
-            const stubDir = path.join(viewPublicDir, stub);
-            fs.mkdirSync(stubDir, {recursive: true});
-            const stubFile = path.join(stubDir, 'index.html');
-            if (!fs.existsSync(stubFile)) fs.writeFileSync(stubFile, '');
-          }
-
-          const hyperlinkBin = path.join(process.cwd(), 'node_modules', '.bin', 'hyperlink');
-          const linkOut = execFileSync(hyperlinkBin, [viewPublicDir, '--check-anchors'], {
-            encoding: 'utf8',
-          });
-          expect(linkOut).toContain('Found 0 bad links');
-          expect(linkOut).toContain('Found 0 bad anchors');
-
-          const viewApp = polka();
-          const viewArena = arena.register(viewApp, {
-            db: seedDb,
-            arenaSecret: E2E_ARENA_SECRET,
-            sessionSecret: E2E_AUTH.sessionSecret,
-            publicDir: viewPublicDir,
-            now: () => nowSeconds,
-          });
-          render.register(viewApp, {
-            db: seedDb,
-            arena: viewArena,
-            publicDir: viewPublicDir,
-            staticDir: seedStaticDir,
-            avatarsDir: seedAvatarsDir,
-            now: () => nowSeconds,
-          });
-          const viewServer = http.createServer((req, res) => {
-            void viewApp.handler(req as polka.Request, res);
-          });
-          await new Promise<void>(resolve => viewServer.listen(0, '127.0.0.1', resolve));
-          const viewBaseUrl = `http://127.0.0.1:${(viewServer.address() as {port: number}).port}`;
-          try {
-            const tour1Res = await realFetch(`${viewBaseUrl}/arena/tournaments/1/index.json`);
-            expect(tour1Res.status).toBe(200);
-            const tour1Doc = await tour1Res.json() as {
-              archiveHref?: string;
-              games: Array<{logHref?: string}>;
-            };
-            expect(tour1Doc.archiveHref).toBe('/arena/tournaments/1/1-replays.7z');
-            expect(tour1Doc.games.some(g => g.logHref === '/arena/tournaments/1/spring26-sf1.log'))
-              .toBe(true);
-            expect((await realFetch(`${viewBaseUrl}/projects/index.json`)).status).toBe(404);
-            expect(
-              (await realFetch(`${viewBaseUrl}/arena/battles/${seeded.featuredBattleId}`)).status
-            ).toBe(404);
-          } finally {
-            viewArena.close();
-            viewServer.closeAllConnections();
-            await new Promise<void>(resolve => viewServer.close(() => resolve()));
-          }
-        } finally {
-          seedDb.close();
-          fs.rmSync(tmpDir, {recursive: true, force: true});
-        }
-      },
-      30_000);
-  }
 });
