@@ -3061,4 +3061,76 @@ describe('per-ladder qualification & migrations', () => {
       }
     }
   );
+
+  test('createSubmission rejects settling ladders with 400', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncLadders(undefined, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    owners:
+      pre: pre.10544
+`, undefined, 1_760_000_000);
+      db.setAgentLadders('0-error', ['rby', 'adv'], 1_760_000_000);
+      db.db.prepare("UPDATE ladders SET status = 'settling' WHERE id = 'gen1ou20261109'").run();
+      const agent = db.getAgentBySlug('0-error')!;
+      let caught: unknown;
+      try {
+        db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error.tar.zst',
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_010,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as {status?: number}).status).toBe(400);
+      expect((caught as Error).message).toMatch(/settling.*closed/);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('createSubmission rejects archived ladders with 400', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncLadders(undefined, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+- name: 0 ERROR
+  active: 2026
+  arena:
+    owners:
+      pre: pre.10544
+`, undefined, 1_760_000_000);
+      db.setAgentLadders('0-error', ['rby', 'adv'], 1_760_000_000);
+      db.db.prepare("UPDATE ladders SET status = 'archived' WHERE id = 'gen1ou20261109'").run();
+      const agent = db.getAgentBySlug('0-error')!;
+      let caught: unknown;
+      try {
+        db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error.tar.zst',
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_010,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as {status?: number}).status).toBe(400);
+      expect((caught as Error).message).toMatch(/archived.*closed/);
+    } finally {
+      db.close();
+    }
+  });
 });

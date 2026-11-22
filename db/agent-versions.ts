@@ -579,6 +579,12 @@ export function createSubmission(
         if (!ladder) {
           throw Object.assign(new Error(`Unknown ladder "${ladderId}".`), {status: 400});
         }
+        if (ladder.status !== 'upcoming' && ladder.status !== 'active') {
+          throw Object.assign(
+            new Error(`Ladder "${ladderId}" is ${ladder.status} and closed to submissions.`),
+            {status: 400}
+          );
+        }
         if (!qualifiedSlots.has(ladder.slot)) {
           throw Object.assign(
             new Error(`${agent.name} is not qualified for the ${ladder.name} ladder.`),
