@@ -51,6 +51,10 @@ Repo-specific style, naming, and architecture rules alongside `@pkmn/eslint-conf
 
 ## Architecture & Conventions
 
+- **Don't cache — fix the design:** Caching is cope for a slow or leaky design. Never pursue ad-hoc
+  caching (`Map`s, memoization layers) to mask repeated work — redesign the underlying lifecycle or
+  data flow to be fast instead (reuse existing singletons/build artifacts, load static repo assets
+  once at module init, eliminate redundant per-request or per-test work).
 - **`db/` boundaries:** Contains only `db/index.ts` (connection + migrations) and 1-to-1 `db/<table>.ts`
   owning both TS interfaces and SQL queries for `db/schema/<table>.sql` (migrations in
   `db/migration/NNNN-*.sql`, tracked in `schema_migrations`). Pure math (`server/ratings.ts`), API
