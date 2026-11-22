@@ -2648,6 +2648,95 @@ describe('tournament standings', () => {
     }
   });
 
+  test('getMatchesPage filters ladder matches per agent with MULTI-INDEX OR predicate', () => {
+    const {telDb, vA, vB} = createTelemetryDb();
+    try {
+      telDb.db.prepare("UPDATE ladders SET status = 'active' WHERE id = 'gen3ou20261109'").run();
+      const base = {
+        seed: '1,2,3,4',
+        game1Outcome: 'W' as const,
+        game2Outcome: 'L' as const,
+        category: 'WL' as const,
+        game1Turns: 12,
+        game2Turns: 14,
+        game1EndReason: 'normal',
+        game2EndReason: 'normal',
+        p1Game1PeakRam: 100,
+        p1Game2PeakRam: 100,
+        p2Game1PeakRam: 100,
+        p2Game2PeakRam: 100,
+        p1Game1BankSeconds: 140,
+        p1Game2BankSeconds: 140,
+        p2Game1BankSeconds: 140,
+        p2Game2BankSeconds: 140,
+        p1Game1InitMillis: 500,
+        p1Game2InitMillis: 500,
+        p2Game1InitMillis: 500,
+        p2Game2InitMillis: 500,
+        p1Game1MeanTurnMillis: 50,
+        p1Game2MeanTurnMillis: 50,
+        p2Game1MeanTurnMillis: 50,
+        p2Game2MeanTurnMillis: 50,
+      };
+      telDb.recordCompletedMatch({
+        match: {
+          ...base,
+          id: 'rby-1',
+          ladderId: 'gen1ou20261109',
+          p1VersionId: vA.id,
+          p2VersionId: vB.id,
+          completedAt: 100,
+        },
+      });
+      telDb.recordCompletedMatch({
+        match: {
+          ...base,
+          id: 'rby-2',
+          ladderId: 'gen1ou20261109',
+          p1VersionId: vB.id,
+          p2VersionId: vA.id,
+          completedAt: 200,
+        },
+      });
+      telDb.recordCompletedMatch({
+        match: {
+          ...base,
+          id: 'adv-1',
+          ladderId: 'gen3ou20261109',
+          p1VersionId: vA.id,
+          p2VersionId: vB.id,
+          completedAt: 300,
+        },
+      });
+
+      const byAgent = telDb.getMatchesPage({
+        ladderId: 'gen1ou20261109',
+        agentSlug: 'alpha',
+      });
+      expect(byAgent.total).toBe(2);
+      expect(byAgent.matches.map(m => m.id)).toEqual(['rby-2', 'rby-1']);
+
+      const byPair = telDb.getMatchesPage({
+        ladderId: 'gen1ou20261109',
+        agentSlug: 'alpha',
+        opponentSlug: 'beta',
+      });
+      expect(byPair.total).toBe(2);
+      expect(byPair.matches.map(m => m.id)).toEqual(['rby-2', 'rby-1']);
+
+      const plan = telDb.db.prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT COUNT(*) AS count
+        FROM matches m
+        WHERE ((m.ladder_id = ? AND m.p1_version_id IN (?))
+          OR (m.ladder_id = ? AND m.p2_version_id IN (?)))
+      `).all('gen1ou20261109', vA.id, 'gen1ou20261109', vA.id) as Array<{detail: string}>;
+      expect(plan.map(p => p.detail).join('\n')).toContain('MULTI-INDEX OR');
+    } finally {
+      telDb.close();
+    }
+  });
+
   test('getRatingSnapshotsForLadder filters by agentId in chronological order per version', () => {
     const {telDb, alpha, vA, vB} = createTelemetryDb();
     try {

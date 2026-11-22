@@ -632,13 +632,11 @@ export function getMatchesPage(
     where.push('l.slot = ?');
     params.push(query.slot);
   }
-  if (query.ladderId) {
-    where.push('m.ladder_id = ?');
-    params.push(query.ladderId);
-  }
 
-  // Pre-resolve `agent_versions.id` lists so SQLite can apply its `MULTI-INDEX OR` planner over
-  // `idx_matches_p1_*` + `idx_matches_p2_*` instead of scanning `matches` across joined aliases.
+  // Pre-resolve `agent_versions.id` lists and push `m.ladder_id = ?` inside each `OR` branch so
+  // SQLite uses `MULTI-INDEX OR` over `idx_matches_p1_completed` + `idx_matches_p2_completed`
+  // (or `idx_matches_p1_version` + `idx_matches_p2_version` without a ladder filter) instead of
+  // scanning `idx_matches_ladder_completed` across the whole ladder.
   const primaryIds = query.agentSlug
     ? resolveVersionIdsForSlug(db, query.agentSlug, query.agentVersion)
     : undefined;
@@ -651,23 +649,37 @@ export function getMatchesPage(
   }
 
   const inPlaceholders = (ids: number[]) => ids.map(() => '?').join(', ');
+  const ladderPrefix = query.ladderId ? 'm.ladder_id = ? AND ' : '';
+  const ladderParams = query.ladderId ? [query.ladderId] : [];
 
   if (primaryIds && oppIds) {
     const pIn = inPlaceholders(primaryIds);
     const oIn = inPlaceholders(oppIds);
     where.push(
-      `((m.p1_version_id IN (${pIn}) AND m.p2_version_id IN (${oIn})) OR ` +
-      `(m.p2_version_id IN (${pIn}) AND m.p1_version_id IN (${oIn})))`
+      `((${ladderPrefix}m.p1_version_id IN (${pIn}) AND m.p2_version_id IN (${oIn})) OR ` +
+      `(${ladderPrefix}m.p2_version_id IN (${pIn}) AND m.p1_version_id IN (${oIn})))`
     );
-    params.push(...primaryIds, ...oppIds, ...primaryIds, ...oppIds);
+    params.push(
+      ...ladderParams, ...primaryIds, ...oppIds,
+      ...ladderParams, ...primaryIds, ...oppIds
+    );
   } else if (primaryIds) {
     const pIn = inPlaceholders(primaryIds);
-    where.push(`(m.p1_version_id IN (${pIn}) OR m.p2_version_id IN (${pIn}))`);
-    params.push(...primaryIds, ...primaryIds);
+    where.push(
+      `((${ladderPrefix}m.p1_version_id IN (${pIn})) OR ` +
+      `(${ladderPrefix}m.p2_version_id IN (${pIn})))`
+    );
+    params.push(...ladderParams, ...primaryIds, ...ladderParams, ...primaryIds);
   } else if (oppIds) {
     const oIn = inPlaceholders(oppIds);
-    where.push(`(m.p1_version_id IN (${oIn}) OR m.p2_version_id IN (${oIn}))`);
-    params.push(...oppIds, ...oppIds);
+    where.push(
+      `((${ladderPrefix}m.p1_version_id IN (${oIn})) OR ` +
+      `(${ladderPrefix}m.p2_version_id IN (${oIn})))`
+    );
+    params.push(...ladderParams, ...oppIds, ...ladderParams, ...oppIds);
+  } else if (query.ladderId) {
+    where.push('m.ladder_id = ?');
+    params.push(query.ladderId);
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
