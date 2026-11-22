@@ -729,14 +729,17 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- name: eevenator
+- name: Eevenator
   site: https://www.smogon.com/forums/threads/3789524/
-  active: 2026 # October 9
+  active: 2026 # April 10
   engine: Custom
   language: Rust
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      Fubs: Fubwubs.592374
 - name: Mew's Truck
   site: https://www.smogon.com/forums/threads/3789554/
   active: 2026 # October 10

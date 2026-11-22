@@ -716,7 +716,7 @@ describe('populated Arena leaderboard views', () => {
     expect(projHtml).not.toContain('(provisional)');
     const posMetamon = projHtml.indexOf('id="Metamon"');
     const posFoulPlay = projHtml.indexOf('id="FoulPlay"');
-    const posEevenator = projHtml.indexOf('id="eevenator"');
+    const posEevenator = projHtml.indexOf('id="Eevenator"');
     const posAthena = projHtml.indexOf('id="Athena"');
     const posAbra = projHtml.indexOf('id="IHTFPAbra"');
     expect(posMetamon).toBeGreaterThan(0);

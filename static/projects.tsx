@@ -47,7 +47,7 @@ export interface Project {
 // sort ahead of unranked catalog projects by `bestRank`, then `bestLcb`.
 const RANKING = [
   'Jaxcalibur', // top gen9randbats (94.6% GXE) & beat MDB Bo9
-  'eevenator', // top gen9randbats (2594 Elo/94.0% GXE/2019 Glicko)
+  'Eevenator', // top gen9randbats (2594 Elo/94.0% GXE/2019 Glicko)
   'AWRorus', // top gen9ag & #2 gen9randbats (2432 Elo/93.9% GXE/2015 Glicko)
   'MissingNo.Zero', // #1 in 5 randbats gens & #5 gen9randbats (2453 Elo/93.4% GXE/1999 Glicko)
   'Xatu Zero', // top gen9ou (2002 Elo/88.0% GXE/1876 Glicko), gen9uu & gen9monotype
