@@ -342,35 +342,38 @@ describe('wiki server routes', () => {
   let wikiInstance: wiki.Wiki;
   let baseUrl: string;
   let discordMembers: Set<string>;
+  let wikiDirty = false;
   const realFetch = globalThis.fetch;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     suiteTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-wiki-suite-'));
     templateWikiDir = path.join(suiteTmpDir, 'wiki-template');
     fs.mkdirSync(templateWikiDir, {recursive: true});
-    execFileSync('git', ['init', '-b', 'main'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'user.name', 'test'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'commit.gpgsign', 'false'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'gc.auto', '0'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'maintenance.auto', 'false'], {cwd: templateWikiDir});
+    const gitEnv = {...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'};
+    execFileSync('git', ['init', '--template=', '-b', 'main'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'user.name', 'test'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {
+      cwd: templateWikiDir,
+      env: gitEnv,
+    });
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'gc.auto', '0'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'maintenance.auto', 'false'], {
+      cwd: templateWikiDir,
+      env: gitEnv,
+    });
     fs.writeFileSync(
       path.join(templateWikiDir, 'index.dj'),
       '# Home\n\nWelcome to [Gen 9](gen9ou).\n'
     );
-    execFileSync('git', ['add', 'index.dj'], {cwd: templateWikiDir});
-    execFileSync('git', ['commit', '-m', 'Initial commit'], {cwd: templateWikiDir});
-  });
+    execFileSync('git', ['add', 'index.dj'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['commit', '-m', 'Initial commit'], {cwd: templateWikiDir, env: gitEnv});
 
-  afterAll(() => {
-    if (suiteTmpDir) fs.rmSync(suiteTmpDir, {recursive: true, force: true});
-  });
-
-  beforeEach(async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-wiki-test-'));
+    tmpDir = path.join(suiteTmpDir, 'run');
     wikiDir = path.join(tmpDir, 'wiki');
     projectsFile = path.join(tmpDir, 'projects.yml');
     discordMembers = new Set(['513513270670262284']);
+    fs.mkdirSync(tmpDir, {recursive: true});
     copyDirSync(templateWikiDir, wikiDir);
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
 
@@ -395,7 +398,7 @@ describe('wiki server routes', () => {
     baseUrl = `http://127.0.0.1:${addr.port}`;
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     globalThis.fetch = realFetch;
     if (server) {
       server.closeAllConnections();
@@ -404,7 +407,20 @@ describe('wiki server routes', () => {
       }
       server = undefined;
     }
-    if (tmpDir) fs.rmSync(tmpDir, {recursive: true, force: true});
+    if (suiteTmpDir) fs.rmSync(suiteTmpDir, {recursive: true, force: true});
+  });
+
+  beforeEach(() => {
+    discordMembers = new Set(['513513270670262284']);
+    if (wikiDirty) {
+      fs.rmSync(wikiDir, {recursive: true, force: true});
+      copyDirSync(templateWikiDir, wikiDir);
+      wikiDirty = false;
+    }
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
   });
 
   const sessionCookie = (login: string) => {
@@ -424,8 +440,9 @@ describe('wiki server routes', () => {
     return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
   };
 
-  const postWiki = (slug: string, login: string, fields: Record<string, string>) =>
-    realFetch(`${baseUrl}/wiki/${slug}`, {
+  const postWiki = (slug: string, login: string, fields: Record<string, string>) => {
+    if (fields.action === 'save') wikiDirty = true;
+    return realFetch(`${baseUrl}/wiki/${slug}`, {
       method: 'POST',
       headers: {
         Cookie: sessionCookie(login),
@@ -434,6 +451,7 @@ describe('wiki server routes', () => {
       body: new URLSearchParams(fields).toString(),
       redirect: 'manual',
     });
+  };
 
   test('serves general wiki pages publicly with noindex metadata', async () => {
     const res = await realFetch(`${baseUrl}/wiki`);
@@ -512,7 +530,7 @@ describe('wiki server routes', () => {
     expect(fs.existsSync(path.join(wikiDir, 'gen9ou.dj'))).toBe(false);
   });
 
-  test('commits saved edits to git with mapped display author history', async () => {
+  test('commits saved edits to git with history, snapshots, and unified diffs', async () => {
     const saveRes = await postWiki('gen9ou', 'scheibo', {
       content: '# Gen 9 OU\n\nFirst version.',
       message: 'Add Gen 9 OU page',
@@ -537,39 +555,15 @@ describe('wiki server routes', () => {
       '<a href="https://github.com/pmariglia" class="subtle">pmariglia</a>'
     );
     expect(histHtml).toContain('id="wiki-history-pager"');
-  });
 
-  test('serves historical revision snapshots by commit SHA', async () => {
-    await postWiki('gen9ou', 'scheibo', {
-      content: '# Gen 9 OU\n\nSnapshot version.',
-      message: 'Create snapshot',
-      action: 'save',
-    });
-    const histHtml = await (await realFetch(`${baseUrl}/wiki/gen9ou/history`)).text();
     const sha = /href="\/wiki\/gen9ou\/([0-9a-f]{40})"/.exec(histHtml)![1];
-
     const snapRes = await realFetch(`${baseUrl}/wiki/gen9ou/${sha}`);
     expect(snapRes.status).toBe(200);
-    expect(await snapRes.text()).toContain('Snapshot version.');
-  });
-
-  test('serves historical unified diffs by commit SHA', async () => {
-    await postWiki('gen9ou', 'scheibo', {
-      content: '# Gen 9 OU\n\nFirst line.',
-      message: 'v1',
-      action: 'save',
-    });
-    await postWiki('gen9ou', 'pmariglia', {
-      content: '# Gen 9 OU\n\nUpdated line.',
-      message: 'v2',
-      action: 'save',
-    });
-    const histHtml = await (await realFetch(`${baseUrl}/wiki/gen9ou/history`)).text();
-    const sha = /href="\/wiki\/gen9ou\/([0-9a-f]{40})"/.exec(histHtml)![1];
+    expect(await snapRes.text()).toContain('Second version');
 
     const diffRes = await realFetch(`${baseUrl}/wiki/gen9ou/${sha}?diff=1`);
     expect(diffRes.status).toBe(200);
-    expect(await diffRes.text()).toContain('+Updated line.');
+    expect(await diffRes.text()).toContain('+Second version with math');
   });
 
   test('lists visible wiki pages on /wiki/pages', async () => {
@@ -1191,22 +1185,16 @@ describe('wiki server routes', () => {
     expect(res.headers.get('etag')).toMatch(/^"[0-9a-f]{40}"$/);
   });
 
-  test('emits Vary Cookie, Authorization on public cacheable wiki responses', async () => {
-    const first = await realFetch(`${baseUrl}/wiki`);
-    expect(first.status).toBe(200);
-    expect(first.headers.get('vary')).toBe('Cookie, Authorization');
-    const etag = first.headers.get('etag')!;
-    const second = await realFetch(`${baseUrl}/wiki`, {headers: {'If-None-Match': etag}});
-    expect(second.status).toBe(304);
-    expect(second.headers.get('vary')).toBe('Cookie, Authorization');
-  });
-
-  test('returns 304 Not Modified on public wiki page when If-None-Match matches', async () => {
-    const first = await realFetch(`${baseUrl}/wiki`);
-    const etag = first.headers.get('etag')!;
-    const second = await realFetch(`${baseUrl}/wiki`, {headers: {'If-None-Match': etag}});
-    expect(second.status).toBe(304);
-  });
+  test('emits Vary Cookie, Authorization and 304 Not Modified on public cacheable wiki responses',
+    async () => {
+      const first = await realFetch(`${baseUrl}/wiki`);
+      expect(first.status).toBe(200);
+      expect(first.headers.get('vary')).toBe('Cookie, Authorization');
+      const etag = first.headers.get('etag')!;
+      const second = await realFetch(`${baseUrl}/wiki`, {headers: {'If-None-Match': etag}});
+      expect(second.status).toBe(304);
+      expect(second.headers.get('vary')).toBe('Cookie, Authorization');
+    });
 
   test('returns 304 Not Modified on public wiki page for weak gzip If-None-Match', async () => {
     const first = await realFetch(`${baseUrl}/wiki`);
@@ -1477,15 +1465,12 @@ describe('wiki database standing checks', () => {
     return `${auth.SESSION_COOKIE}=${encodeURIComponent(tok)}`;
   };
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-wiki-db-test-'));
     const wikiDir = path.join(tmpDir, 'wiki');
     const projectsFile = path.join(tmpDir, 'projects.yml');
     fs.mkdirSync(wikiDir, {recursive: true});
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
-    execFileSync('git', ['init', '-b', 'main'], {cwd: wikiDir});
-    execFileSync('git', ['config', 'user.name', 'test'], {cwd: wikiDir});
-    execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {cwd: wikiDir});
 
     db = new Database(':memory:');
     db.syncProjectsFromYaml([
@@ -1518,7 +1503,12 @@ describe('wiki database standing checks', () => {
     dbUrl = `http://127.0.0.1:${(dbServer.address() as {port: number}).port}`;
   });
 
-  afterEach(async () => {
+  afterEach(() => {
+    db.db.prepare("UPDATE developers SET smogon_standing = 'good' WHERE id = ?").run(devId);
+    db.db.prepare("UPDATE agents SET status = 'qualified' WHERE id = ?").run(agentId);
+  });
+
+  afterAll(async () => {
     dbServer.closeAllConnections();
     await new Promise<void>(resolve => dbServer.close(() => resolve()));
     db.close();

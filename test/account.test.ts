@@ -284,24 +284,43 @@ describe('account routes', () => {
   let server: http.Server | undefined;
   let baseUrl: string;
   let currentNow: number;
+  let wikiDirty = false;
   const realFetch = globalThis.fetch;
 
   beforeAll(() => {
     suiteTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-account-suite-'));
     templateWikiDir = path.join(suiteTmpDir, 'wiki-template');
     fs.mkdirSync(templateWikiDir, {recursive: true});
-    execFileSync('git', ['init', '-b', 'main'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'user.name', 'test'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'commit.gpgsign', 'false'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'gc.auto', '0'], {cwd: templateWikiDir});
-    execFileSync('git', ['config', 'maintenance.auto', 'false'], {cwd: templateWikiDir});
+    const gitEnv = {...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'};
+    execFileSync('git', ['init', '--template=', '-b', 'main'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'user.name', 'test'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'user.email', 'test@pkmn.ai'], {
+      cwd: templateWikiDir,
+      env: gitEnv,
+    });
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'gc.auto', '0'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['config', 'maintenance.auto', 'false'], {
+      cwd: templateWikiDir,
+      env: gitEnv,
+    });
     fs.writeFileSync(path.join(templateWikiDir, 'index.dj'), '# Home\n');
-    execFileSync('git', ['add', 'index.dj'], {cwd: templateWikiDir});
-    execFileSync('git', ['commit', '-m', 'Init'], {cwd: templateWikiDir});
+    execFileSync('git', ['add', 'index.dj'], {cwd: templateWikiDir, env: gitEnv});
+    execFileSync('git', ['commit', '-m', 'Init'], {cwd: templateWikiDir, env: gitEnv});
+
+    tmpDir = path.join(suiteTmpDir, 'shared');
+    poolDir = path.join(tmpDir, 'vgc-pool');
+    wikiDir = path.join(tmpDir, 'wiki');
+    projectsFile = path.join(tmpDir, 'projects.yml');
+    fs.mkdirSync(poolDir, {recursive: true});
+    copyDirSync(templateWikiDir, wikiDir);
+    fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
+    fs.writeFileSync(path.join(poolDir, 'public000001'), PUBLIC_CLONE_VGC, 'utf8');
+    clearReferencePoolCache();
   });
 
   afterAll(() => {
+    clearReferencePoolCache();
     if (suiteTmpDir) fs.rmSync(suiteTmpDir, {recursive: true, force: true});
   });
 
@@ -311,15 +330,12 @@ describe('account routes', () => {
   };
 
   beforeEach(async () => {
-    clearReferencePoolCache();
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-account-test-'));
-    poolDir = path.join(tmpDir, 'vgc-pool');
-    wikiDir = path.join(tmpDir, 'wiki');
-    projectsFile = path.join(tmpDir, 'projects.yml');
-    fs.mkdirSync(poolDir, {recursive: true});
-    copyDirSync(templateWikiDir, wikiDir);
-    fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
-    fs.writeFileSync(path.join(poolDir, 'public000001'), PUBLIC_CLONE_VGC, 'utf8');
+    if (wikiDirty) {
+      fs.rmSync(wikiDir, {recursive: true, force: true});
+      copyDirSync(templateWikiDir, wikiDir);
+      fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
+      wikiDirty = false;
+    }
 
     currentNow = 1_760_000_000;
     const nextDb = new Database(':memory:');
@@ -368,7 +384,6 @@ describe('account routes', () => {
       server = undefined;
     }
     (db as db.Database | undefined)?.close();
-    if (tmpDir) fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
   const githubIdFor = (login: string): number => {
@@ -504,6 +519,7 @@ describe('account routes', () => {
     });
 
     test('allows Pending project owners to edit wiki pages before qualification', async () => {
+      wikiDirty = true;
       const wikiSave = await realFetch(`${baseUrl}/wiki/Newcomer`, {
         method: 'POST',
         headers: {
@@ -722,6 +738,7 @@ describe('account routes', () => {
 
     test('updates project ownership across /account or wiki on developer reassignment',
       async () => {
+        wikiDirty = true;
         openLadders(['gen1ou20261109']);
         const commentedYaml = `# Arena projects registry
 - name: 0 ERROR # flagship search agent
