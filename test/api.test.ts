@@ -8,7 +8,7 @@ import polka from 'polka';
 import serveStatic from 'serve-static';
 
 import {ALL_SLOTS, Database} from '../db';
-import {createServerApp} from '../server';
+import {HEADERS_TIMEOUT_MILLIS, KEEP_ALIVE_TIMEOUT_MILLIS, createServerApp} from '../server';
 import {encryptSecret} from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
@@ -2967,6 +2967,19 @@ describe('createServerApp production HTTP hardening', () => {
       ctrl.close();
       await srv.close();
     }
+  });
+
+  test('nginx upstream keepalive_timeout stays below Node keepAliveTimeout', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    const upstreamIdx = conf.indexOf('upstream pkmn_node {');
+    expect(upstreamIdx).toBeGreaterThanOrEqual(0);
+    const upstreamBlock = conf.slice(upstreamIdx, conf.indexOf('}', upstreamIdx) + 1);
+    const match = /\bkeepalive_timeout\s+(\d+)s;/.exec(upstreamBlock);
+    expect(match).not.toBeNull();
+    const nginxTimeoutMillis = Number(match![1]) * 1000;
+    expect(nginxTimeoutMillis).toBeGreaterThan(0);
+    expect(nginxTimeoutMillis).toBeLessThan(KEEP_ALIVE_TIMEOUT_MILLIS);
+    expect(HEADERS_TIMEOUT_MILLIS).toBeGreaterThan(KEEP_ALIVE_TIMEOUT_MILLIS);
   });
 
   test('nginx nests 512m ladder archive location inside ^~ /api/arena/', () => {

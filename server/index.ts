@@ -23,6 +23,10 @@ import * as wiki from './wiki';
 // behind `config/nginx.conf`; non-production boots via `site.serve` for live rebuilds.
 const PORT = 1234;
 const HOST = '127.0.0.1';
+// Exceed nginx `upstream pkmn_node` `keepalive_timeout` (30s) so nginx closes idle pooled sockets
+// before Node does, avoiding intermittent 502s from FIN/RST races on reused upstream connections.
+export const KEEP_ALIVE_TIMEOUT_MILLIS = 65_000;
+export const HEADERS_TIMEOUT_MILLIS = 66_000;
 
 export interface ServerAppOptions {
   db: Database;
@@ -377,6 +381,8 @@ if (require.main === module) {
     const server = http.createServer((req, res) => {
       (app.handler as http.RequestListener)(req, res);
     });
+    server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MILLIS;
+    server.headersTimeout = HEADERS_TIMEOUT_MILLIS;
     server.listen(PORT, HOST, () => {
       console.log(`Listening on http://localhost:${PORT}`);
     });
