@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 
 import * as arena from '../server/arena';
 import {isConnectivityError, root} from '../static/util';
@@ -20,6 +21,48 @@ const ARENA_DISK_RECOVER_PCT = 15;
 const ARENA_DISK_LOW_BYTES = 10 * GIB;
 const ARENA_DISK_RECOVER_BYTES = 15 * GIB;
 const DAEMON_ERROR_ALERT_THRESHOLD = 5;
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === 'EPERM';
+  }
+}
+
+export function isMaintenanceLockActive(stateDir: string): boolean {
+  const lockPath = path.join(stateDir, 'maintenance.lock');
+  if (!fs.existsSync(lockPath)) return false;
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf8').trim();
+    const pid = Number(raw);
+    if (isPidAlive(pid)) return true;
+    fs.rmSync(lockPath, {force: true});
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function acquireMatchLock(stateDir: string, pid = process.pid): void {
+  const lockPath = path.join(stateDir, 'match.lock');
+  const tmpPath = `${lockPath}.tmp.${pid}`;
+  fs.mkdirSync(stateDir, {recursive: true});
+  fs.writeFileSync(tmpPath, `${pid}\n`, {mode: 0o600});
+  fs.renameSync(tmpPath, lockPath);
+}
+
+export function releaseMatchLock(stateDir: string, pid = process.pid): void {
+  const lockPath = path.join(stateDir, 'match.lock');
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf8').trim();
+    if (raw === String(pid)) {
+      fs.rmSync(lockPath, {force: true});
+    }
+  } catch {}
+}
 
 function checkArenaHostHealth(client: arena.Client, devMode: boolean) {
   if (devMode) return;
@@ -149,6 +192,7 @@ export async function runDaemon(opts: {
     devMode: isDev,
   });
 
+  const stateDir = stateDb.dbPath !== ':memory:' ? path.dirname(stateDb.dbPath) : undefined;
   const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
   const sleeper = createWakeableSleep();
   const stop = () => {
@@ -175,24 +219,40 @@ export async function runDaemon(opts: {
           }
         }
         await coord.flushOutbox();
+        if (stateDir && isMaintenanceLockActive(stateDir)) {
+          consecutiveCycleErrors = 0;
+          if (!opts.once && !coord.isDraining()) {
+            await client.sendHeartbeat({idle: true}).catch(() => undefined);
+            await sleeper.sleep(pollIntervalMillis);
+          }
+          if (opts.once) break;
+          continue;
+        }
         const initialSnap = await client.getPlayableLadders();
         let ladders = initialSnap.ladders;
         let quarantinedVersionIds = initialSnap.quarantinedVersionIds ?? [];
         if (initialSnap.unpublishedArchivedPoolsLadders?.length) {
           await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
         }
-        const byId = new Map(ladders.map(l => [l.id, l]));
-        const smokeBudget = smokeCadence.budgetForCycle(initialSnap.smokeCadence);
-        const ingested = smokeBudget > 0
-          ? await coord.processPendingSubmissions(byId, smokeBudget)
-          : 0;
-        if (ingested > 0 && !coord.isDraining()) {
-          const refreshed = await client.getPlayableLadders();
-          ladders = refreshed.ladders;
-          quarantinedVersionIds = refreshed.quarantinedVersionIds ?? [];
+        let ingested = 0;
+        let played: unknown;
+        if (stateDir) acquireMatchLock(stateDir);
+        try {
+          const byId = new Map(ladders.map(l => [l.id, l]));
+          const smokeBudget = smokeCadence.budgetForCycle(initialSnap.smokeCadence);
+          ingested = smokeBudget > 0
+            ? await coord.processPendingSubmissions(byId, smokeBudget)
+            : 0;
+          if (ingested > 0 && !coord.isDraining()) {
+            const refreshed = await client.getPlayableLadders();
+            ladders = refreshed.ladders;
+            quarantinedVersionIds = refreshed.quarantinedVersionIds ?? [];
+          }
+          played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
+          smokeCadence.recordCycle(ingested, Boolean(played));
+        } finally {
+          if (stateDir) releaseMatchLock(stateDir);
         }
-        const played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
-        smokeCadence.recordCycle(ingested, Boolean(played));
         consecutiveCycleErrors = 0;
         if (!played && ingested === 0 && !opts.once && !coord.isDraining()) {
           await client.sendHeartbeat({idle: true}).catch(() => undefined);

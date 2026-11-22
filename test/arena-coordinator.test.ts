@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import * as arenaIndex from '../arena';
 import * as arbiter from '../arena/arbiter';
 import * as coordinator from '../arena/coordinator';
 import * as arenaDb from '../arena/db';
@@ -1171,6 +1172,44 @@ describe('Coordinator', () => {
     expect(script).toContain('trap on_exit EXIT');
     expect(script).toContain('/api/arena/alert');
     expect(script).toContain('key: "arena-archive"');
+  });
+
+  test('maintenance.sh coordinates maintenance.lock / match.lock and separates updates', () => {
+    const script = fs.readFileSync(root('arena', 'scripts', 'maintenance.sh'), 'utf8');
+    const maintIdx = script.search(/mv -f ".*MAINT_LOCK.*\.tmp\.\$\$" "\$MAINT_LOCK"/);
+    const waitIdx = script.indexOf('while [[ -f "$MATCH_LOCK" ]]; do');
+    const archiveIdx = script.search(/".*SCRIPT_DIR.*\/archive\.sh"/);
+    const swIdx = script.indexOf('/usr/sbin/softwareupdate --list');
+    expect(maintIdx).toBeGreaterThan(0);
+    expect(waitIdx).toBeGreaterThan(maintIdx);
+    expect(archiveIdx).toBeGreaterThan(waitIdx);
+    expect(swIdx).toBeGreaterThan(archiveIdx);
+
+    const archiveScript = fs.readFileSync(root('arena', 'scripts', 'archive.sh'), 'utf8');
+    expect(archiveScript).not.toContain('softwareupdate');
+
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-maint-lock-'));
+    try {
+      expect(arenaIndex.isMaintenanceLockActive(stateDir)).toBe(false);
+      fs.writeFileSync(path.join(stateDir, 'maintenance.lock'), `${process.pid}\n`);
+      expect(arenaIndex.isMaintenanceLockActive(stateDir)).toBe(true);
+
+      // Stale lock from a dead PID is cleared automatically.
+      fs.writeFileSync(path.join(stateDir, 'maintenance.lock'), '99999999\n');
+      expect(arenaIndex.isMaintenanceLockActive(stateDir)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, 'maintenance.lock'))).toBe(false);
+
+      // Match lock writes current PID and releases only for its own PID.
+      arenaIndex.acquireMatchLock(stateDir, process.pid);
+      expect(fs.readFileSync(path.join(stateDir, 'match.lock'), 'utf8').trim())
+        .toBe(String(process.pid));
+      arenaIndex.releaseMatchLock(stateDir, process.pid + 1);
+      expect(fs.existsSync(path.join(stateDir, 'match.lock'))).toBe(true);
+      arenaIndex.releaseMatchLock(stateDir, process.pid);
+      expect(fs.existsSync(path.join(stateDir, 'match.lock'))).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, {recursive: true, force: true});
+    }
   });
 
   test('timerSettingsForFormat respects custom VGC Timer rules', () => {

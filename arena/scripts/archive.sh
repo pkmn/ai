@@ -17,6 +17,7 @@ LOG_ROOT="${ARCHIVE_ROOT}/logs"
 COLD_DIR="${ARCHIVE_ROOT}/cold-agents"
 BACKUP_DIR="${ARCHIVE_ROOT}/db-backups"
 STATE_DB="/opt/arena/state/arena.sqlite"
+STATUS_FILE="/opt/arena/state/archive-status.json"
 GCS_BUCKET="gs://pkmn-arena"
 STAGE_DIR="/Volumes/Staging"
 [[ -d "$STAGE_DIR" ]] || STAGE_DIR="${TMPDIR:-/tmp}"
@@ -26,11 +27,51 @@ ERR_LOG="${STAGE_DIR}/archive-err.$$.log"
 TMP_DB=""
 TMP_ZST=""
 TMP_TAR=""
+BACKUP_AT=""
+BACKUP_BYTES=""
+GCS_SYNCED_AT=""
+write_status() {
+  local err_msg="${1:-}"
+  [[ -d "$(dirname "$STATUS_FILE")" ]] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  STATUS_FILE="$STATUS_FILE" BACKUP_AT="$BACKUP_AT" BACKUP_BYTES="$BACKUP_BYTES" \
+    GCS_SYNCED_AT="$GCS_SYNCED_AT" ERR_MSG="$err_msg" node -e '
+      const fs = require("fs");
+      const file = process.env.STATUS_FILE;
+      let prev = {};
+      try { prev = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+      const now = Math.floor(Date.now() / 1000);
+      const next = {
+        ...prev,
+        completedAt: now,
+        ...(process.env.BACKUP_AT ? {backupAt: Number(process.env.BACKUP_AT)} : {}),
+        ...(process.env.BACKUP_BYTES ? {backupBytes: Number(process.env.BACKUP_BYTES)} : {}),
+        ...(process.env.GCS_SYNCED_AT ? {gcsSyncedAt: Number(process.env.GCS_SYNCED_AT)} : {}),
+      };
+      if (process.env.ERR_MSG) {
+        next.error = process.env.ERR_MSG;
+        next.errorAt = now;
+      } else {
+        delete next.error;
+        delete next.errorAt;
+      }
+      const tmp = `${file}.tmp.${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify(next) + "\n", {mode: 0o600});
+      fs.renameSync(tmp, file);
+    ' >/dev/null 2>&1 || true
+}
 on_exit() {
   local rc=$?
   exec 2>&3
   if [[ -f "$ERR_LOG" ]]; then
     cat "$ERR_LOG" >&2
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    local detail=""
+    if [[ -f "$ERR_LOG" ]]; then
+      detail="$(tail -n 5 "$ERR_LOG" 2>/dev/null | tr '\n' ' ' | cut -c1-240 || true)"
+    fi
+    write_status "${detail:-archive.sh exited ${rc}}"
   fi
   if [[ "$rc" -ne 0 && -n "${ARENA_SECRET:-}" ]] && command -v node >/dev/null 2>&1; then
     ARENA_ALERT_RC="$rc" ARENA_ALERT_LOG="$ERR_LOG" node -e '
@@ -92,6 +133,8 @@ if [[ -f "$STATE_DB" ]]; then
   rm -f "${TMP_DB}.zst"
   TMP_DB=""
   TMP_ZST=""
+  BACKUP_AT="$(date -u +%s)"
+  BACKUP_BYTES="$(stat -f%z "$OUT_ZST" 2>/dev/null || stat -c%s "$OUT_ZST" 2>/dev/null || echo "")"
   find "$BACKUP_DIR" -name "arena-state-*.sqlite.zst" -mtime +30 -delete
 fi
 
@@ -129,4 +172,7 @@ if command -v gcloud >/dev/null 2>&1 && [[ -n "${ARENA_GCS_SYNC:-}" ]]; then
       exit 1
     fi
   fi
+  GCS_SYNCED_AT="$(date -u +%s)"
 fi
+
+write_status ""

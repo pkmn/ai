@@ -208,7 +208,7 @@ brew install --cask gcloud-cli
 > `brew upgrade node` or `python@*`, which changes ad-hoc Mach-O CDHashes), add:
 > - `/opt/homebrew/bin/node` (for `ai.pkmn.arena` writing to `/Volumes/Archive`)
 > - `gcloud`'s resolved Homebrew Python (`python3 -c 'import os,sys; print(os.path.realpath(sys.executable))'`
->   on `gcloud info --format='value(basic.python_location)'`, so `ai.pkmn.archive` `gcloud storage rsync`
+>   on `gcloud info --format='value(basic.python_location)'`, so `ai.pkmn.maintenance` `gcloud storage rsync`
 >   doesn't silently skip `/Volumes/Archive` on TCC `EPERM`)
 >
 > alongside `/usr/sbin/taskpolicy`, `/bin/bash`, and `/usr/bin/tar`. (`zstd`/`7z` stage through
@@ -397,10 +397,13 @@ curl -fsS https://pkmn.ai/api/live.json | jq '{updatedAt, stale, live}'   # expe
 - `arena/coordinator.ts`: compresses completed past-day `.log` dirs into
   `/Volumes/Archive/logs/<ladder_id>/<YYYY-MM>/<YYYY-MM-DD>.7z` on UTC rollover and builds/uploads
   `<ladder_id>-logs.tar` for `random` and retired `pools` ladders.
-- `arena/scripts/archive.sh` (`ai.pkmn.archive.plist`, daily `04:30`): verifies `/Volumes/Archive`
+- `arena/scripts/maintenance.sh` (`ai.pkmn.maintenance.plist`, daily `04:30`): acquires
+  `/opt/arena/state/maintenance.lock` so `ai.pkmn.arena` pauses new matches (waiting for any
+  in-flight `match.lock` to clear), invokes `arena/scripts/archive.sh` (verifies `/Volumes/Archive`
   mount, runs online SQLite `.backup` -> `/Volumes/Archive/db-backups/arena-state-YYYY-MM-DD.sqlite.zst`
-  (30d retention), runs 1st-of-month `.tar` rollups, and mirrors `{archives,agents,db-backups}` to
-  `gs://pkmn-arena` when `ARENA_GCS_SYNC=1`.
+  with 30d retention, 1st-of-month `.tar` rollups, and `gs://pkmn-arena` rsync when
+  `ARENA_GCS_SYNC=1`), then runs a non-fatal `softwareupdate --list` check into
+  `/opt/arena/state/updates-status.json`.
 
 ### 7.1 Least-Privilege GCS Service Account & Bootstrap
 
@@ -415,7 +418,7 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT" --member="serviceAccount:$
 umask 077 && gcloud iam service-accounts keys create /tmp/arena-gcs-key.json --iam-account="$SA_EMAIL"
 scp /tmp/arena-gcs-key.json arena:/opt/arena/state/gcs-key.json && rm -f /tmp/arena-gcs-key.json
 
-# On arena: activate SA, enable ARENA_GCS_SYNC, bootstrap ai.pkmn.archive
+# On arena: activate SA, enable ARENA_GCS_SYNC, bootstrap ai.pkmn.maintenance
 ssh arena "
 export PATH=\"/opt/homebrew/bin:\$PATH\"
 chmod 0600 /opt/arena/state/gcs-key.json && chown pkmn:agents /opt/arena/state/gcs-key.json
@@ -425,8 +428,8 @@ for kv in ARENA_GCS_SYNC=1 CLOUDSDK_CONFIG=/Users/pkmn/.config/gcloud CLOUDSDK_C
   grep -q \"^\${kv%%=*}=\" /opt/arena/repo/.env || printf '%s\n' \"\$kv\" >> /opt/arena/repo/.env
 done
 sudo -n /bin/launchctl kickstart -k system/ai.pkmn.arena
-sudo launchctl bootout system/ai.pkmn.archive 2>/dev/null || true
-sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist
+sudo launchctl bootout system/ai.pkmn.maintenance 2>/dev/null || true
+sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.maintenance.plist
 "
 ```
 
@@ -435,8 +438,8 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist
 ```sh
 ssh -t arena '
 export PATH="/opt/homebrew/bin:$PATH"
-sudo launchctl kickstart -k system/ai.pkmn.archive && sleep 5
-sudo launchctl print system/ai.pkmn.archive | grep -E "state =|last exit code ="
+sudo launchctl kickstart -k system/ai.pkmn.maintenance && sleep 5
+sudo launchctl print system/ai.pkmn.maintenance | grep -E "state =|last exit code ="
 ls -lh /Volumes/Archive/db-backups/
 zstd -t /Volumes/Archive/db-backups/arena-state-*.sqlite.zst && echo "PASS: SQLite backup"
 gcloud storage ls gs://pkmn-arena/db-backups/ && echo "PASS: GCS sync"

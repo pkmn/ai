@@ -223,7 +223,7 @@ describe('arena sandbox & tourney-relay', () => {
         execFileSync('plutil', [
           '-lint',
           root('arena/config/ai.pkmn.arena.plist'),
-          root('arena/config/ai.pkmn.archive.plist'),
+          root('arena/config/ai.pkmn.maintenance.plist'),
           root('arena/config/ai.pkmn.pf.plist'),
           root('arena/config/ai.pkmn.podman.plist'),
           root('arena/config/ai.pkmn.tunnel.plist'),

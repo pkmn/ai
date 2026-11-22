@@ -64,7 +64,7 @@ for pair in \
     "arena/config/ai.pkmn.pf.plist:/Library/LaunchDaemons/ai.pkmn.pf.plist" \
     "arena/config/ai.pkmn.podman.plist:/Library/LaunchDaemons/ai.pkmn.podman.plist" \
     "arena/config/ai.pkmn.arena.plist:/Library/LaunchDaemons/ai.pkmn.arena.plist" \
-    "arena/config/ai.pkmn.archive.plist:/Library/LaunchDaemons/ai.pkmn.archive.plist"; do
+    "arena/config/ai.pkmn.maintenance.plist:/Library/LaunchDaemons/ai.pkmn.maintenance.plist"; do
     src="${pair%%:*}"
     dst="${pair#*:}"
     if [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then

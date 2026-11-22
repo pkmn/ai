@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- sudo cp /opt/arena/repo/arena/config/ai.pkmn.archive.plist /Library/LaunchDaemons/ai.pkmn.archive.plist -->
-<!-- sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.archive.plist -->
+<!-- sudo cp /opt/arena/repo/arena/config/ai.pkmn.maintenance.plist /Library/LaunchDaemons/ai.pkmn.maintenance.plist -->
+<!-- sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.maintenance.plist -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.pkmn.archive</string>
+  <string>ai.pkmn.maintenance</string>
   <key>UserName</key>
   <string>pkmn</string>
   <key>GroupName</key>
@@ -21,7 +21,7 @@
   <array>
     <string>/usr/sbin/taskpolicy</string>
     <string>-b</string>
-    <string>/opt/arena/repo/arena/scripts/archive.sh</string>
+    <string>/opt/arena/repo/arena/scripts/maintenance.sh</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
@@ -31,8 +31,8 @@
     <integer>30</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>/opt/arena/logs/archive.log</string>
+  <string>/opt/arena/logs/maintenance.log</string>
   <key>StandardErrorPath</key>
-  <string>/opt/arena/logs/archive.err</string>
+  <string>/opt/arena/logs/maintenance.err</string>
 </dict>
 </plist>

@@ -47,7 +47,7 @@ describe('arena packages & static assets', () => {
       const expectedFiles = [
         'arena/SETUP.md',
         'arena/config/ai.pkmn.arena.plist',
-        'arena/config/ai.pkmn.archive.plist',
+        'arena/config/ai.pkmn.maintenance.plist',
         'arena/config/ai.pkmn.pf.plist',
         'arena/config/ai.pkmn.podman.plist',
         'arena/config/ai.pkmn.tunnel.plist',
@@ -64,6 +64,7 @@ describe('arena packages & static assets', () => {
         'arena/scripts/setup-arena.sh',
         'arena/scripts/bake-image.sh',
         'arena/scripts/archive.sh',
+        'arena/scripts/maintenance.sh',
         'arena/scripts/deploy.sh',
       ];
       for (const rel of expectedFiles) {
@@ -82,6 +83,7 @@ describe('arena packages & static assets', () => {
           root('arena/scripts/setup-arena.sh'),
           root('arena/scripts/bake-image.sh'),
           root('arena/scripts/archive.sh'),
+          root('arena/scripts/maintenance.sh'),
           root('arena/scripts/deploy.sh'),
         ]);
         execFileSync('sh', ['-n', root('arena/bin/baseline')]);
