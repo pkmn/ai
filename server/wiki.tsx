@@ -826,6 +826,8 @@ export class Wiki {
   private projectPages = new Map<string, ProjectPage>();
   private projectAliases = new Map<string, string>();
   private reservedProjectAliases = new Map<string, string>();
+  private deletedFilesToken?: string;
+  private deletedFiles = new Set<string>();
   // Serializes git `add`/`commit` operations in-process so concurrent edits cannot collide on
   // `.git/index.lock` inside the backing wiki repository.
   private gitQueue: Promise<any> = Promise.resolve();
@@ -1230,10 +1232,69 @@ export class Wiki {
     });
   }
 
+  private readGitHeadToken(): string | undefined {
+    try {
+      const gitDir = path.join(this.wikiDir, '.git');
+      const reftableList = path.join(gitDir, 'reftable', 'tables.list');
+      if (fs.existsSync(reftableList)) {
+        return fs.readFileSync(reftableList, 'utf8').trim() || undefined;
+      }
+      const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+      if (!head.startsWith('ref:')) return head || undefined;
+      const ref = head.slice(4).trim();
+      const loosePath = path.join(gitDir, ref);
+      if (fs.existsSync(loosePath)) {
+        return fs.readFileSync(loosePath, 'utf8').trim() || undefined;
+      }
+      const packed = fs.readFileSync(path.join(gitDir, 'packed-refs'), 'utf8');
+      for (const line of packed.split('\n')) {
+        if (line.startsWith('#') || line.startsWith('^')) continue;
+        const space = line.indexOf(' ');
+        if (space > 0 && line.slice(space + 1).trim() === ref) {
+          return line.slice(0, space);
+        }
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Keyed on the current git ref state (`reftable/tables.list` or `HEAD`/ref SHA) so requests to
+  // `/wiki/<random>/history` for never-created pages avoid spawning `git log` per request while
+  // still serving history for deleted pages.
+  private async hasDeletedHistory(relPath: string): Promise<boolean> {
+    if (!fs.existsSync(path.join(this.wikiDir, '.git'))) return false;
+    const token = this.readGitHeadToken();
+    if (!token) return true;
+    if (token !== this.deletedFilesToken) {
+      try {
+        const {stdout} = await execFileAsync(
+          'git',
+          ['log', '--no-renames', '--diff-filter=D', '--name-only', '--pretty=format:', '-z'],
+          {cwd: this.wikiDir, timeout: 15_000}
+        );
+        const files = new Set<string>();
+        for (const entry of stdout.split('\0')) {
+          if (entry.endsWith('.dj')) files.add(entry);
+        }
+        this.deletedFiles = files;
+        this.deletedFilesToken = token;
+      } catch {
+        return false;
+      }
+    }
+    return this.deletedFiles.has(relPath);
+  }
+
   async getHistory(slug: string): Promise<Revision[]> {
     const canonical = this.resolveSlug(slug);
     if (!isValidSlug(canonical)) return [];
-    if (!fs.existsSync(this.wikiDir)) return [];
+    const relPath = `${canonical}.dj`;
+    const file = path.join(this.wikiDir, relPath);
+    if (!fs.existsSync(file) && !(await this.hasDeletedHistory(relPath))) {
+      return [];
+    }
     try {
       const {stdout} = await execFileAsync(
         'git',

@@ -1320,6 +1320,27 @@ describe('wiki server routes', () => {
       expect(await diffRes.text()).toContain('-Temporary notes.');
     });
 
+  test('short-circuits getHistory on never-created slugs while tracking deleted UTF-8 pages',
+    async () => {
+      expect(await wikiInstance.getHistory('Never_Existed_One')).toEqual([]);
+      expect(await wikiInstance.getHistory('Never_Existed_Two')).toEqual([]);
+
+      await postWiki('Poké_Notes', 'pmariglia', {
+        content: '# Poké Notes\n\nDiacritic test.',
+        message: 'Create Poké Notes',
+        action: 'save',
+      });
+      await postWiki('Poké_Notes', 'pmariglia', {
+        content: '',
+        message: 'Delete Poké Notes',
+        action: 'save',
+      });
+
+      const revisions = await wikiInstance.getHistory('Poké_Notes');
+      expect(revisions.map(r => r.subject)).toEqual(['Delete Poké Notes', 'Create Poké Notes']);
+      expect(await wikiInstance.getHistory('Still_Never_Existed')).toEqual([]);
+    });
+
   test('protects index and /wiki/pages from deletion', async () => {
     const previewRes = await postWiki('index', 'scheibo', {
       content: '   ',
