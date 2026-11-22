@@ -3731,16 +3731,7 @@ export function register(app: polka.Polka, options: Options) {
   const recentMatchesLimit = util.TABLE_PAGE_SIZE;
   const getNowSec = options.now ?? (() => Math.floor(Date.now() / 1000));
 
-  const renderer = publicDir === PUBLIC_DIR
-    ? build.renderer
-    : new build.Renderer({
-      public: publicDir,
-      analytics: 'G-LQ8TW28Z7Q',
-      description: 'The home of competitive Pokémon artificial intelligence',
-      url: 'https://pkmn.ai',
-      stylesheet: path.join(staticDir, 'style', 'index.css'),
-      highlight: true,
-    });
+  const renderer = build.renderer;
 
   const getLinks = (): AgentLinkContext => ({
     publicDir,

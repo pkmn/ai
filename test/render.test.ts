@@ -162,7 +162,10 @@ function seedStaticPublicAssets(tmpPublic: string) {
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmpPublic, name));
   }
   for (const name of fs.readdirSync(realPublic)) {
-    if (name.endsWith('.png') && name.startsWith('favicon')) {
+    if (
+      (name.endsWith('.png') && name.startsWith('favicon')) ||
+      (name.startsWith('index.') && name.endsWith('.css'))
+    ) {
       fs.copyFileSync(path.join(realPublic, name), path.join(tmpPublic, name));
     }
   }
@@ -259,8 +262,9 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     },
     close: async () => {
       arenaHandle.close();
+      const closed = new Promise<void>(resolve => server.close(() => resolve()));
       server.closeAllConnections();
-      await new Promise<void>(resolve => server.close(() => resolve()));
+      await closed;
     },
   };
 }

@@ -155,12 +155,11 @@ function defaultDbPath(): string {
     : root('db', 'data', 'arena.sqlite');
 }
 
-export const DB_PATH = defaultDbPath();
-export const SCHEMA_DIR = root('db', 'schema');
-export const MIGRATION_DIR = root('db', 'migration');
-export const SCHEMA_FILES = listSqlFiles(SCHEMA_DIR);
-
-const MIGRATION_FILE_RE = /^\d{4}-[a-z0-9-]+\.sql$/;
+export interface Schema {
+  sql: string;
+  migrationDir: string;
+  migrationFiles: readonly string[];
+}
 
 export function listSqlFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -168,6 +167,30 @@ export function listSqlFiles(dir: string): string[] {
     .filter(f => f.endsWith('.sql') && !f.startsWith('.'))
     .sort((a, b) => a.localeCompare(b));
 }
+
+export function loadSchemaSql(schemaDir: string): string {
+  const files = listSqlFiles(schemaDir);
+  if (!files.length) {
+    throw new Error(`No .sql schema files found in ${schemaDir}`);
+  }
+  return files.map(file => fs.readFileSync(path.join(schemaDir, file), 'utf8')).join('\n');
+}
+
+export function loadSchema(schemaDir: string, migrationDir: string): Schema {
+  return {
+    sql: loadSchemaSql(schemaDir),
+    migrationDir,
+    migrationFiles: listSqlFiles(migrationDir),
+  };
+}
+
+export const DB_PATH = defaultDbPath();
+export const SCHEMA_DIR = root('db', 'schema');
+export const MIGRATION_DIR = root('db', 'migration');
+export const SCHEMA_FILES = listSqlFiles(SCHEMA_DIR);
+const SCHEMA = loadSchema(SCHEMA_DIR, MIGRATION_DIR);
+
+const MIGRATION_FILE_RE = /^\d{4}-[a-z0-9-]+\.sql$/;
 
 export class SqliteDatabase {
   readonly db: DatabaseSync;
@@ -177,8 +200,7 @@ export class SqliteDatabase {
 
   constructor(
     dbPath: string,
-    defaultSchemaDir: string,
-    defaultMigrationDir: string,
+    defaultSchema: Schema,
     options: Options = {}
   ) {
     this.dbPath = dbPath;
@@ -208,7 +230,7 @@ export class SqliteDatabase {
     this.db.exec('PRAGMA temp_store = MEMORY;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec('PRAGMA busy_timeout = 5000;');
-    this.initializeSchema(defaultSchemaDir, defaultMigrationDir, options);
+    this.initializeSchema(defaultSchema, options);
   }
 
   // Dual schema bootstrap:
@@ -218,13 +240,11 @@ export class SqliteDatabase {
   //     `NNNN-description.sql` migrations in sequence. `PRAGMA foreign_keys = OFF` is toggled
   //     outside `inTransaction` because SQLite ignores `PRAGMA foreign_keys` inside an open
   //     transaction; `PRAGMA foreign_key_check` validates referential integrity before `COMMIT`.
-  private initializeSchema(
-    defaultSchemaDir: string,
-    defaultMigrationDir: string,
-    options: Options
-  ) {
-    const schemaDir = options.schemaDir ?? defaultSchemaDir;
-    const migrationDir = options.migrationDir ?? defaultMigrationDir;
+  private initializeSchema(defaultSchema: Schema, options: Options) {
+    const migrationDir = options.migrationDir ?? defaultSchema.migrationDir;
+    const migrationFiles = options.migrationDir
+      ? listSqlFiles(options.migrationDir)
+      : defaultSchema.migrationFiles;
     const now = options.now ?? Math.floor(Date.now() / 1000);
 
     const existingTables = this.db.prepare(
@@ -232,8 +252,6 @@ export class SqliteDatabase {
        WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`
     ).get() as {count: number};
     const isFresh = existingTables.count === 0;
-
-    const migrationFiles = listSqlFiles(migrationDir);
 
     const createMigrationsTableSql = `
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -243,15 +261,10 @@ export class SqliteDatabase {
     `;
 
     if (isFresh) {
-      const schemaFiles = listSqlFiles(schemaDir);
-      if (!schemaFiles.length) {
-        throw new Error(`No .sql schema files found in ${schemaDir}`);
-      }
+      const schemaSql = options.schemaDir ? loadSchemaSql(options.schemaDir) : defaultSchema.sql;
       this.inTransaction(() => {
         this.db.exec(createMigrationsTableSql);
-        for (const file of schemaFiles) {
-          this.db.exec(fs.readFileSync(path.join(schemaDir, file), 'utf8'));
-        }
+        this.db.exec(schemaSql);
         const recordMigration = this.db.prepare(
           'INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)'
         );
@@ -361,7 +374,7 @@ export class SqliteDatabase {
 
 export class Database extends SqliteDatabase {
   constructor(dbPath = defaultDbPath(), options: Options = {}) {
-    super(dbPath, SCHEMA_DIR, MIGRATION_DIR, options);
+    super(dbPath, SCHEMA, options);
   }
 
   getSmokeCadence(): config.SmokeCadence {

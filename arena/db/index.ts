@@ -18,10 +18,11 @@ export const DB_PATH = defaultDbPath();
 export const SCHEMA_DIR = root('arena', 'db', 'schema');
 export const MIGRATION_DIR = root('arena', 'db', 'migration');
 export const SCHEMA_FILES = baseDb.listSqlFiles(SCHEMA_DIR);
+const SCHEMA = baseDb.loadSchema(SCHEMA_DIR, MIGRATION_DIR);
 
 export class Database extends baseDb.SqliteDatabase {
   constructor(dbPath = defaultDbPath(), options: baseDb.Options = {}) {
-    super(dbPath, SCHEMA_DIR, MIGRATION_DIR, options);
+    super(dbPath, SCHEMA, options);
   }
 
   upsertLocalAgent(input: localAgents.UpsertLocalAgentInput) {

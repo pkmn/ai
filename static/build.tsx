@@ -134,6 +134,24 @@ export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
   content: Html | string;
 }
 
+const BUILT_STYLESHEET_RE = /^index\.[0-9a-f]{8}\.css$/;
+
+function findBuiltStylesheet(publicDir: string, stylesheetPath: string): string | undefined {
+  if (!nodeFs.existsSync(publicDir)) return undefined;
+  const styleMtime = nodeFs.statSync(stylesheetPath).mtimeMs;
+  let newestFile: string | undefined;
+  let newestMtime = -1;
+  for (const entry of nodeFs.readdirSync(publicDir)) {
+    if (!BUILT_STYLESHEET_RE.test(entry)) continue;
+    const mtime = nodeFs.statSync(path.join(publicDir, entry)).mtimeMs;
+    if (mtime >= styleMtime && mtime > newestMtime) {
+      newestMtime = mtime;
+      newestFile = entry;
+    }
+  }
+  return newestFile ? `/${newestFile}` : undefined;
+}
+
 export class Renderer extends site.page.Renderer {
   private readonly siteConfig: site.page.Site;
   private stylesheetHref: string | undefined;
@@ -150,10 +168,16 @@ export class Renderer extends site.page.Renderer {
 
   private ensureStylesheetHref(): string {
     if (!this.stylesheetHref) {
-      const shell = super.render({title: '', path: '', content: ''});
-      const match = /href="(\/index\.[^"]+\.css)"/.exec(shell);
-      if (!match) throw new Error('Failed to initialize site base stylesheet');
-      this.stylesheetHref = match[1];
+      this.stylesheetHref = findBuiltStylesheet(
+        this.siteConfig.public,
+        this.siteConfig.stylesheet
+      );
+      if (!this.stylesheetHref) {
+        const shell = super.render({title: '', path: '', content: ''});
+        const match = /href="(\/index\.[^"]+\.css)"/.exec(shell);
+        if (!match) throw new Error('Failed to initialize site base stylesheet');
+        this.stylesheetHref = match[1];
+      }
     }
     return this.stylesheetHref;
   }
