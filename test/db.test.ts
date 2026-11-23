@@ -101,6 +101,7 @@ describe('schema migrations', () => {
       'pair-aggregates.sql',
       'rating-snapshots.sql',
       'schema-migrations.sql',
+      'smoke-diagnostics.sql',
       'tournament-entrants.sql',
       'tournament-games.sql',
       'tournament-matches.sql',
@@ -3028,7 +3029,12 @@ describe('per-ladder qualification & migrations', () => {
     fs.mkdirSync(preSchemaDir, {recursive: true});
     fs.mkdirSync(emptyMigDir, {recursive: true});
     for (const file of fs.readdirSync(database.SCHEMA_DIR)) {
-      if (file === 'agent-ladders.sql' || file === 'config.sql' || !file.endsWith('.sql')) {
+      if (
+        file === 'agent-ladders.sql' ||
+        file === 'config.sql' ||
+        file === 'smoke-diagnostics.sql' ||
+        !file.endsWith('.sql')
+      ) {
         continue;
       }
       let sql = fs.readFileSync(path.join(database.SCHEMA_DIR, file), 'utf8');
@@ -3038,6 +3044,13 @@ describe('per-ladder qualification & migrations', () => {
           'invalid_cant_switch|invalid_target|invalid_other|unavailable_choices)\\b'
         );
         sql = sql.split('\n').filter(line => !addedCols.test(line)).join('\n');
+      }
+      if (file === 'agent-versions.sql') {
+        sql = sql.replace(
+          "CHECK (smoke_status IN ('pending', 'staged', 'passed', " +
+            "'failed', 'discarded', 'quarantined'))",
+          "CHECK (smoke_status IN ('pending', 'passed', 'failed', 'quarantined'))"
+        );
       }
       fs.writeFileSync(path.join(preSchemaDir, file), sql);
     }
@@ -3077,6 +3090,8 @@ describe('per-ladder qualification & migrations', () => {
         '0003-config.sql',
         '0004-backfill-passed-notified.sql',
         '0005-telemetry-aggregates.sql',
+        '0006-smoke-diagnostics.sql',
+        '0007-staged-smoke-status.sql',
       ]);
       expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
       expect(migratedDb.getPendingVersionDms()).toEqual([]);
@@ -3818,4 +3833,189 @@ describe('per-ladder qualification & migrations', () => {
         db.close();
       }
     });
+
+  test(
+    'staged lifecycle stores diagnostics, gates activation/discard, counts discards in 24h budget',
+    () => {
+      const db = new database.Database(':memory:', {now: 1_760_000_000});
+      try {
+        db.syncLadders(undefined, 1_760_000_000);
+        db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    owners:
+      alice: alice.10001
+`, undefined, 1_760_000_000);
+        const agent = db.getAgentBySlug('alpha')!;
+        db.setAgentLadders('alpha', ['rby', 'vgc'], 1_760_000_000);
+        const sha = 'b'.repeat(64);
+        const now = 1_760_000_100;
+
+        // 1. Submit to RBY + VGC pools with staged pending teams
+        const v1 = db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/a-1.0.0.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
+          teamsByLadder: {gen9championsvgc2026regmc: ['Team1', 'Team2', 'Team3']},
+          now,
+        });
+        // Transition to staged with diagnostic artifact
+        const stagedRes = db.applySubmissionStatus({
+          versionId: v1.id,
+          smokeStatus: 'staged',
+          smokeDurationMillis: 4200,
+          smokeInitMillis: 150,
+          smokeTurnMillis: 30,
+          smokePeakRam: 256,
+          diagnostics: [{
+            ladderId: 'gen1ou20261109',
+            format: 'gen1ou',
+            turns: 18,
+            endReason: 'win',
+            durationMillis: 4200,
+            battleLog: '|turn|1\n|ai|p1|{"score":0.5}\n|win|Alpha',
+            p1Stderr: 'p1 debug line',
+            p2Stderr: 'p2 debug line',
+            p1CpuCores: 2.1,
+            p2CpuCores: 2.0,
+            p1PeakRam: 256,
+            p2PeakRam: 240,
+          }],
+          now: now + 60,
+        });
+        expect(stagedRes.version.smokeStatus).toBe('staged');
+        expect(stagedRes.version.activatedAt).toBeUndefined();
+        expect(stagedRes.version.notified).toBe(false);
+        expect(db.getActiveEntriesForAgent(agent.id)).toEqual([]);
+        expect(db.getPendingVersionDms().map(d => d.smokeStatus)).toEqual(['staged']);
+
+        // Staged version blocks another ladder submission
+        const blockedByStaged = db.computeAgentSubmissionStatus(agent.id, now + 70);
+        expect(blockedByStaged.canSubmit).toBe(false);
+        expect(blockedByStaged.reason).toContain('activate or discard');
+
+        // Diagnostics persisted & summarized on version history
+        const diags = db.getSmokeDiagnosticsForVersion(v1.id);
+        expect(diags).toHaveLength(1);
+        expect(diags[0].p1Stderr).toBe('p1 debug line');
+        const history = db.getVersionsForAgent(agent.id);
+        expect(history[0].diagnostics?.[0].hasStderr).toBe(true);
+
+        // Discard reverts pending VGC teams back to saved (not deleted)
+        const discarded = db.discardStagedVersion({versionId: v1.id, agentId: agent.id});
+        expect(discarded.smokeStatus).toBe('discarded');
+        expect(db.getDiscardedVersionIds()).toEqual([v1.id]);
+        expect(
+          db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved')
+        ).toEqual(['Team1', 'Team2', 'Team3']);
+        expect(
+          db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending')
+        ).toEqual([]);
+
+        // Two more discarded/failed runs exhaust the 3/24h retry budget
+        const v2 = db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.1',
+          package: 'bundle',
+          url: 'https://example.com/a-1.0.1.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: now + 100,
+        });
+        db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'staged', now: now + 110});
+        db.discardStagedVersion({versionId: v2.id, agentId: agent.id});
+
+        const v3 = db.createSubmission({
+          agentId: agent.id,
+          version: '1.0.2',
+          package: 'bundle',
+          url: 'https://example.com/a-1.0.2.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: now + 200,
+        });
+        db.applySubmissionStatus({versionId: v3.id, smokeStatus: 'failed', now: now + 210});
+
+        const budgetBlocked = db.computeAgentSubmissionStatus(agent.id, now + 220);
+        expect(budgetBlocked.canSubmit).toBe(false);
+        expect(budgetBlocked.reason).toContain('Failed smoke test limit reached');
+
+        // After 24h window passes, submit + stage + activate starts 14-day cooldown at activated_at
+        const dayLater = now + database.FAILED_SMOKE_WINDOW_SECONDS + 300;
+        const v4 = db.createSubmission({
+          agentId: agent.id,
+          version: '1.1.0',
+          package: 'bundle',
+          url: 'https://example.com/a-1.1.0.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: dayLater,
+        });
+        db.applySubmissionStatus({
+          versionId: v4.id,
+          smokeStatus: 'staged',
+          smokeInitMillis: 120,
+          smokeTurnMillis: 25,
+          smokePeakRam: 300,
+          now: dayLater + 60,
+        });
+        const activateAt = dayLater + 3 * 86400;
+        const activated = db.activateStagedVersion({
+          versionId: v4.id,
+          agentId: agent.id,
+          now: activateAt,
+        });
+        expect(activated.version.smokeStatus).toBe('passed');
+        expect(activated.version.activatedAt).toBe(activateAt);
+        expect(db.getActiveEntriesForAgent(agent.id)).toHaveLength(1);
+
+        // Cooldown is 14d from activateAt (not submittedAt!)
+        const checkCooldown = db.computeAgentSubmissionStatus(
+          agent.id,
+          dayLater + database.COOLDOWN_SECONDS + 10
+        );
+        expect(checkCooldown.canSubmit).toBe(false);
+        expect(checkCooldown.nextEligibleAt).toBe(activateAt + database.COOLDOWN_SECONDS);
+
+        // Tournament activation is rejected once now >= closesAt
+        const tourStart = activateAt + 3 * 86400;
+        db.upsertTournament({
+          id: 'tour-stage',
+          name: 'Stage Cup',
+          format: 'gen9ou',
+          version: '0.11.0',
+          startsAt: tourStart,
+          status: 'scheduled',
+          gamesPerMatchup: 1,
+          parallelTables: 1,
+          hardware: 'test',
+        });
+        const vt = db.createSubmission({
+          agentId: agent.id,
+          version: 't1',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/alpha:t1',
+          sha256: sha,
+          ladderIds: [],
+          tournamentIds: ['tour-stage'],
+          now: activateAt + 100,
+        });
+        db.applySubmissionStatus({versionId: vt.id, smokeStatus: 'staged', now: activateAt + 200});
+        expect(
+          db.computeAgentTournamentStatuses(agent.id, activateAt + 250)[0].stagedVersion
+        ).toBe('t1');
+        expect(() => db.activateStagedVersion({
+          versionId: vt.id,
+          agentId: agent.id,
+          now: database.getTournamentClosesAt(tourStart),
+        })).toThrow(/closed/i);
+      } finally {
+        db.close();
+      }
+    }
+  );
 });

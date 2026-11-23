@@ -1006,6 +1006,7 @@ export interface SubmissionStatusPayload {
   smokeTurnMillis?: number;
   smokePeakRam?: number;
   smokeError?: string;
+  diagnostics?: db.SmokeDiagnosticInput[];
 }
 
 export interface SubmissionStatusResponse {
@@ -1301,6 +1302,7 @@ export interface PlayableLaddersResponse {
   ladders: PlayableLadderSnapshot[];
   unpublishedArchivedPoolsLadders?: string[];
   quarantinedVersionIds?: number[];
+  discardedVersionIds?: number[];
   smokeCadence?: db.SmokeCadence;
 }
 
@@ -2137,7 +2139,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     if (!authenticateArena(req, res)) return;
 
     try {
-      const body = await readJsonBody<SubmissionStatusPayload>(req);
+      const body = await readJsonBody<SubmissionStatusPayload>(req, MAX_MATCH_COMPLETE_BODY_BYTES);
       const result = db.applySubmissionStatus({
         ...body,
         smokeError: body.smokeError?.slice(0, 16_384),
@@ -2819,11 +2821,13 @@ export function register(app: polka.Polka, options: Options): Handle {
       .map(l => l.id);
 
     const quarantinedVersionIds = db.getQuarantinedVersionIds();
+    const discardedVersionIds = db.getDiscardedVersionIds();
     const smokeCadence = db.getSmokeCadence();
     sendJson(res, 200, {
       ladders,
       unpublishedArchivedPoolsLadders,
       quarantinedVersionIds,
+      discardedVersionIds,
       smokeCadence,
     });
   });

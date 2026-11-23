@@ -19,6 +19,7 @@ import * as ladders from './ladders';
 import * as matches from './matches';
 import * as pairs from './pair-aggregates';
 import * as snapshots from './rating-snapshots';
+import * as smokeDiagnostics from './smoke-diagnostics';
 import * as entrants from './tournament-entrants';
 import * as tournamentMatches from './tournament-matches';
 import * as tournaments from './tournaments';
@@ -656,6 +657,36 @@ export class Database extends SqliteDatabase {
     return versions.applySubmissionStatus(this.db, this.txRunner, input);
   }
 
+  activateStagedVersion(
+    input: versions.ActivateStagedVersionInput
+  ): versions.ApplySubmissionStatusResult {
+    return versions.activateStagedVersion(this.db, this.txRunner, input);
+  }
+
+  discardStagedVersion(
+    input: versions.DiscardStagedVersionInput
+  ): versions.AgentVersionRow {
+    return versions.discardStagedVersion(this.db, this.txRunner, input);
+  }
+
+  getDiscardedVersionIds(): number[] {
+    return versions.getDiscardedVersionIds(this.db);
+  }
+
+  getSmokeDiagnosticsForVersion(versionId: number): smokeDiagnostics.Row[] {
+    return smokeDiagnostics.getForVersion(this.db, versionId);
+  }
+
+  getSmokeDiagnosticSummariesForAgent(
+    agentId: number
+  ): Map<number, smokeDiagnostics.Summary[]> {
+    return smokeDiagnostics.getSummariesForAgent(this.db, agentId);
+  }
+
+  getSmokeDiagnosticById(id: number): smokeDiagnostics.Row | undefined {
+    return smokeDiagnostics.getById(this.db, id);
+  }
+
   quarantineVersion(
     agentSlug: string,
     version: string,
@@ -911,6 +942,9 @@ export * from './ladders';
 export * from './matches';
 export * from './pair-aggregates';
 export * from './rating-snapshots';
+export type SmokeDiagnosticInput = smokeDiagnostics.Input;
+export type SmokeDiagnosticRow = smokeDiagnostics.Row;
+export type SmokeDiagnosticSummary = smokeDiagnostics.Summary;
 export * from './tournament-entrants';
 export * from './tournament-games';
 export * from './tournament-matches';

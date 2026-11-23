@@ -8,13 +8,15 @@ import {getAgentLadders} from './agent-ladders';
 import {AgentRow, getAgentById} from './agents';
 import * as entries from './ladder-entries';
 import {archiveLadderInPlace, canSettleLadder, getCurrentLadders, getLadder} from './ladders';
+import * as smokeDiagnostics from './smoke-diagnostics';
 import {upsertTournamentEntrant} from './tournament-entrants';
 import {getScheduledTournaments, getTournament, getTournamentClosesAt} from './tournaments';
 
 import {TransactionRunner} from './index';
 
 export type PackageFormat = 'bundle' | 'oci';
-export type SmokeStatus = 'pending' | 'passed' | 'failed' | 'quarantined';
+export type SmokeStatus =
+  'pending' | 'staged' | 'passed' | 'failed' | 'discarded' | 'quarantined';
 export type AccountStatusLabel = 'Pending' | 'Qualified' | 'Eligible' | 'Ineligible';
 
 export const COOLDOWN_SECONDS = 14 * 24 * 60 * 60;
@@ -51,6 +53,7 @@ export interface VersionHistoryView extends AgentVersionRow {
   activeLadderNames: string[];
   tournamentNames: string[];
   queueAhead?: number;
+  diagnostics?: smokeDiagnostics.Summary[];
 }
 
 export interface SubmissionStatus {
@@ -70,6 +73,7 @@ export interface TournamentSubmissionStatus {
   canSubmit: boolean;
   enteredVersion?: string;
   pendingVersion?: string;
+  stagedVersion?: string;
   reason?: string;
   nextEligibleAt?: number;
   queueAhead?: number;
@@ -114,6 +118,19 @@ export interface ApplySubmissionStatusInput {
   smokeTurnMillis?: number;
   smokePeakRam?: number;
   smokeError?: string;
+  diagnostics?: smokeDiagnostics.Input[];
+  now?: number;
+}
+
+export interface ActivateStagedVersionInput {
+  versionId: number;
+  agentId: number;
+  now?: number;
+}
+
+export interface DiscardStagedVersionInput {
+  versionId: number;
+  agentId: number;
   now?: number;
 }
 
@@ -123,13 +140,15 @@ export interface ApplySubmissionStatusResult {
   retiredByLadder: Record<string, number>;
 }
 
+export type NotifiableSmokeStatus = 'staged' | 'passed' | 'failed' | 'quarantined';
+
 export interface PendingVersionDmRow {
   versionId: number;
   agentId: number;
   agentSlug: string;
   agentName: string;
   version: string;
-  smokeStatus: Exclude<SmokeStatus, 'pending'>;
+  smokeStatus: NotifiableSmokeStatus;
   smokeError?: string;
   smokeDurationMillis?: number;
   smokeInitMillis?: number;
@@ -268,6 +287,8 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
     tourneysByVersion.set(r.version_id, list);
   }
 
+  const diagnosticsByVersion = smokeDiagnostics.getSummariesForAgent(db, agentId);
+
   return rawVersions.map(v => {
     const mapped = mapVersionRow(v);
     const enrolled = tourneysByVersion.get(v.id) ?? [];
@@ -286,11 +307,13 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
         mapped.ladders.length > 0 ? undefined : mapped.tournaments
       )
       : undefined;
+    const diagnostics = diagnosticsByVersion.get(v.id);
     return {
       ...mapped,
       activeLadderNames: activeByVersion.get(v.id) ?? [],
       tournamentNames,
       ...(queueAhead !== undefined ? {queueAhead} : {}),
+      ...(diagnostics?.length ? {diagnostics} : {}),
     };
   });
 }
@@ -331,6 +354,8 @@ function formatQueueAhead(ahead: number): string {
   return ahead === 0 ? 'next in queue' : `${ahead} ahead in queue`;
 }
 
+// Counts both failed and developer-discarded diagnostic runs against the rolling 24h retry budget
+// so a project cannot farm unbounded self-play compute by repeatedly passing and discarding builds.
 function checkFailedSmokeBudget(
   db: DatabaseSync,
   agentId: number,
@@ -343,7 +368,7 @@ function checkFailedSmokeBudget(
   const rows = db.prepare(
     `SELECT submitted_at FROM agent_versions
      WHERE agent_id = ?
-       AND smoke_status = 'failed'
+       AND smoke_status IN ('failed', 'discarded')
        AND ${scopeClause}
        AND submitted_at > ?
      ORDER BY submitted_at ASC, id ASC`
@@ -354,7 +379,7 @@ function checkFailedSmokeBudget(
   return {
     nextEligibleAt,
     reason:
-      `Failed smoke test limit reached (${MAX_FAILED_SMOKE_TESTS} in 24h); ` +
+      `Failed smoke test limit reached (${MAX_FAILED_SMOKE_TESTS} failed or discarded in 24h); ` +
       `retry after ${formatUtcDateTime(nextEligibleAt)}.`,
   };
 }
@@ -403,7 +428,7 @@ export function computeAgentTournamentStatuses(
     SELECT id, version, smoke_status, tournaments_json, submitted_at
     FROM agent_versions
     WHERE agent_id = ?
-      AND smoke_status IN ('pending', 'passed')
+      AND smoke_status IN ('pending', 'staged', 'passed')
       AND tournaments_json != '[]'
     ORDER BY submitted_at DESC, id DESC
   `).all(agentId) as Array<{
@@ -415,6 +440,7 @@ export function computeAgentTournamentStatuses(
   }>;
 
   const pendingByTourney = new Map<string, {id: number; version: string; submittedAt: number}>();
+  const stagedByTourney = new Map<string, string>();
   for (const row of versionRows) {
     const tids = JSON.parse(row.tournaments_json) as string[];
     for (const tid of tids) {
@@ -426,6 +452,8 @@ export function computeAgentTournamentStatuses(
           version: row.version,
           submittedAt: row.submitted_at,
         });
+      } else if (row.smoke_status === 'staged' && !stagedByTourney.has(tid)) {
+        stagedByTourney.set(tid, row.version);
       }
     }
   }
@@ -438,6 +466,7 @@ export function computeAgentTournamentStatuses(
     const enteredVersion = enteredByTourney.get(t.id);
     const pending = pendingByTourney.get(t.id);
     const pendingVersion = pending?.version;
+    const stagedVersion = stagedByTourney.get(t.id);
     if (now >= closesAt) {
       return {
         tournamentId: t.id,
@@ -448,6 +477,7 @@ export function computeAgentTournamentStatuses(
         canSubmit: false,
         enteredVersion,
         pendingVersion: enteredVersion ? undefined : pendingVersion,
+        stagedVersion: enteredVersion ? undefined : stagedVersion,
         reason: `Entries for "${t.name}" closed at ${formatUtcDateTime(closesAt)}.`,
       };
     }
@@ -479,6 +509,20 @@ export function computeAgentTournamentStatuses(
         reason:
           `Version ${pending.version} is awaiting smoke testing for this tournament ` +
           `(${formatQueueAhead(queueAhead)}).`,
+      };
+    }
+    if (stagedVersion) {
+      return {
+        tournamentId: t.id,
+        name: t.name,
+        format: t.format,
+        startsAt: t.startsAt,
+        closesAt,
+        canSubmit: false,
+        stagedVersion,
+        reason:
+          `Version ${stagedVersion} passed diagnostic testing for this tournament; ` +
+          'activate or discard it before submitting another.',
       };
     }
     if (failedSmokeBlock) {
@@ -582,22 +626,39 @@ export function computeAgentSubmissionStatus(
     };
   }
 
+  const stagedRow = db.prepare(
+    `SELECT version FROM agent_versions
+     WHERE agent_id = ? AND smoke_status = 'staged' AND ladders_json != '[]'
+     ORDER BY submitted_at DESC, id DESC
+     LIMIT 1`
+  ).get(agentId) as {version: string} | undefined;
+  if (stagedRow) {
+    return {
+      label: 'Ineligible',
+      canSubmit: false,
+      reason:
+        `Version ${stagedRow.version} passed diagnostic testing; ` +
+        'activate or discard it before submitting another.',
+    };
+  }
+
   const refundedAt = agent.cooldownRefundedAt ?? 0;
   // Include `'quarantined'` versions that previously activated (`activated_at IS NOT NULL`) so a
   // competitor cannot intentionally crash/auto-quarantine an unsettled version to evade the 14-day
   // submission cooldown (staff can still explicitly waive infra glitches via `refundCooldown`).
+  // The cooldown starts when the version is activated (`COALESCE(activated_at, submitted_at)`).
   const latestPassed = db.prepare(
-    `SELECT submitted_at, version FROM agent_versions
+    `SELECT COALESCE(activated_at, submitted_at) AS cooldown_start, version FROM agent_versions
      WHERE agent_id = ?
        AND (smoke_status = 'passed' OR (smoke_status = 'quarantined' AND activated_at IS NOT NULL))
        AND ladders_json != '[]'
-       AND submitted_at > ?
-     ORDER BY submitted_at DESC, id DESC
+       AND COALESCE(activated_at, submitted_at) > ?
+     ORDER BY COALESCE(activated_at, submitted_at) DESC, id DESC
      LIMIT 1`
-  ).get(agentId, refundedAt) as {submitted_at: number; version: string} | undefined;
+  ).get(agentId, refundedAt) as {cooldown_start: number; version: string} | undefined;
 
   if (latestPassed) {
-    const nextEligibleAt = latestPassed.submitted_at + COOLDOWN_SECONDS;
+    const nextEligibleAt = latestPassed.cooldown_start + COOLDOWN_SECONDS;
     if (now < nextEligibleAt) {
       const daysLeft = Math.ceil((nextEligibleAt - now) / 86400);
       return {
@@ -825,8 +886,127 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
   });
 }
 
+function enrollActivatedVersion(
+  db: DatabaseSync,
+  version: AgentVersionRow,
+  ladderIds: readonly string[],
+  tournamentIds: readonly string[],
+  telemetry: {initMillis: number; turnMillis: number; peakRam: number},
+  now: number
+): Record<string, number> {
+  const retiredByLadder: Record<string, number> = {};
+  const retireEntry = db.prepare(`
+    UPDATE ladder_entries
+    SET role = 'retired',
+        retired_at = ?,
+        rank_current = NULL,
+        rank_min = NULL,
+        rank_max = NULL
+    WHERE ladder_id = ? AND version_id = ? AND is_anchor = 0
+  `);
+  const selectOtherNonAnchorActive = db.prepare(`
+    SELECT le.version_id, le.lcb, le.elo
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE le.ladder_id = ?
+      AND av.agent_id = ?
+      AND le.version_id != ?
+      AND le.role IN ('champion', 'challenger')
+      AND le.is_anchor = 0
+    ORDER BY le.lcb ASC, le.elo ASC, le.version_id ASC
+  `);
+  const upsertEntry = db.prepare(`
+    INSERT INTO ladder_entries (
+      ladder_id, version_id, role,
+      mean_init_millis, mean_turn_millis, mean_ram, peak_ram,
+      started_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(ladder_id, version_id) DO UPDATE SET
+      role = excluded.role,
+      retired_at = NULL,
+      mean_init_millis = CASE
+        WHEN ladder_entries.matches = 0 THEN excluded.mean_init_millis
+        ELSE ladder_entries.mean_init_millis
+      END,
+      mean_turn_millis = CASE
+        WHEN ladder_entries.matches = 0 THEN excluded.mean_turn_millis
+        ELSE ladder_entries.mean_turn_millis
+      END,
+      mean_ram = CASE
+        WHEN ladder_entries.matches = 0 THEN excluded.mean_ram
+        ELSE ladder_entries.mean_ram
+      END,
+      peak_ram = MAX(ladder_entries.peak_ram, excluded.peak_ram)
+  `);
+
+  for (const ladderId of ladderIds) {
+    const ladder = getLadder(db, ladderId);
+    if (!ladder) continue;
+    teams.promotePendingTeams(db, ladderId, version.agentId);
+
+    const otherNonAnchorActive = selectOtherNonAnchorActive.all(
+      ladderId,
+      version.agentId,
+      version.id
+    ) as Array<{version_id: number; lcb: number; elo: number}>;
+
+    while (otherNonAnchorActive.length >= 2) {
+      const weakest = otherNonAnchorActive.shift()!;
+      retireEntry.run(now, ladderId, weakest.version_id);
+      retiredByLadder[ladderId] = weakest.version_id;
+    }
+
+    upsertEntry.run(
+      ladderId,
+      version.id,
+      'challenger',
+      telemetry.initMillis,
+      telemetry.turnMillis,
+      telemetry.peakRam,
+      telemetry.peakRam,
+      now
+    );
+    entries.promoteRemainingActiveToChampion(db, ladderId, version.agentId);
+    ensureAgentLadderStats(db, ladderId, version.agentId);
+  }
+
+  for (const tournamentId of tournamentIds) {
+    const tournament = getTournament(db, tournamentId);
+    if (tournament?.status !== 'scheduled') continue;
+    const alreadyEntered = db.prepare(
+      'SELECT 1 FROM tournament_entrants WHERE tournament_id = ? AND agent_id = ?'
+    ).get(tournamentId, version.agentId);
+    if (alreadyEntered) continue;
+    const maxRow = db.prepare(
+      `SELECT COALESCE(MAX(seed), 0) AS max_seed
+       FROM tournament_entrants WHERE tournament_id = ?`
+    ).get(tournamentId) as {max_seed: number};
+    upsertTournamentEntrant(db, {
+      tournamentId,
+      agentId: version.agentId,
+      versionId: version.id,
+      seed: maxRow.max_seed + 1,
+    });
+  }
+
+  return retiredByLadder;
+}
+
+const VALID_TRANSITIONS: Record<SmokeStatus, ReadonlySet<Exclude<SmokeStatus, 'pending'>>> = {
+  pending: new Set(['staged', 'passed', 'failed', 'discarded', 'quarantined']),
+  staged: new Set(['passed', 'discarded', 'quarantined']),
+  passed: new Set(['quarantined']),
+  failed: new Set(['quarantined']),
+  discarded: new Set(),
+  quarantined: new Set(),
+};
+
 // Applies smoke-test or quarantine outcomes from the Arena runner:
 //   - Always scrubs `auth_token_encoding = NULL` so private pull tokens never persist at rest.
+//   - Persists any attached private diagnostic replays/stderr into `smoke_diagnostics`.
+//   - On `'staged'`: records diagnostic results and resets `notified = 0` so `server/discord.ts`
+//     notifies the developer to review and explicitly activate or discard the build on `/account/`.
 //   - On `'passed'`: promotes any staged `'pending'` team rosters to `'active'`, resets
 //     `notified = 0` so `server/discord.ts` delivers pass DMs, and enforces the 2-version
 //     Champion + Challenger cap per ladder across non-anchor versions by retiring `argmin(lcb)`
@@ -834,6 +1014,8 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
 //     keep their historical edges in the Davidson graph).
 //   - On `'failed'` / `'quarantined'`: discards staged `'pending'` teams and resets `notified = 0`
 //     so `server/discord.ts` delivers diagnostic DMs to linked owners.
+//   - On `'discarded'`: reverts staged `'pending'` teams back to `'saved'` so VGC rosters are
+//     preserved for the developer's next attempt.
 export function applySubmissionStatus(
   db: DatabaseSync,
   inTransaction: TransactionRunner,
@@ -868,18 +1050,16 @@ export function applySubmissionStatus(
         input.smokeError !== undefined ? input.smokeError : (prev.smokeError ?? null),
         input.versionId
       );
+      if (input.diagnostics !== undefined) {
+        smokeDiagnostics.replaceForVersion(db, input.versionId, input.diagnostics, now);
+      }
       return {
         version: getVersionById(db, input.versionId)!,
         agent,
         retiredByLadder: {},
       };
     }
-    if (
-      ((prev.smokeStatus === 'passed' || prev.smokeStatus === 'quarantined') &&
-        input.smokeStatus === 'failed') ||
-      ((prev.smokeStatus === 'failed' || prev.smokeStatus === 'quarantined') &&
-        input.smokeStatus === 'passed')
-    ) {
+    if (!VALID_TRANSITIONS[prev.smokeStatus].has(input.smokeStatus)) {
       throw Object.assign(
         new Error(
           `Invalid submission status transition from "${prev.smokeStatus}" ` +
@@ -891,6 +1071,7 @@ export function applySubmissionStatus(
     const activatedAt = input.smokeStatus === 'passed'
       ? (prev.activatedAt ?? now)
       : (prev.activatedAt ?? null);
+    const notified = input.smokeStatus === 'discarded' ? 1 : 0;
 
     db.prepare(`
       UPDATE agent_versions
@@ -904,7 +1085,7 @@ export function applySubmissionStatus(
           smoke_peak_ram = COALESCE(?, smoke_peak_ram),
           smoke_error = ?,
           activated_at = ?,
-          notified = 0
+          notified = ?
       WHERE id = ?
     `).run(
       input.smokeStatus,
@@ -916,110 +1097,35 @@ export function applySubmissionStatus(
       input.smokePeakRam ?? null,
       input.smokeError !== undefined ? input.smokeError : (prev.smokeError ?? null),
       activatedAt,
+      notified,
       input.versionId
     );
 
+    if (input.diagnostics !== undefined) {
+      smokeDiagnostics.replaceForVersion(db, input.versionId, input.diagnostics, now);
+    }
+
     const ladderIds = prev.ladders;
     const tournamentIds = prev.tournaments;
-    const retiredByLadder: Record<string, number> = {};
+    let retiredByLadder: Record<string, number> = {};
 
     if (input.smokeStatus === 'passed') {
-      const retireEntry = db.prepare(`
-        UPDATE ladder_entries
-        SET role = 'retired',
-            retired_at = ?,
-            rank_current = NULL,
-            rank_min = NULL,
-            rank_max = NULL
-        WHERE ladder_id = ? AND version_id = ? AND is_anchor = 0
-      `);
-      const selectOtherNonAnchorActive = db.prepare(`
-        SELECT le.version_id, le.lcb, le.elo
-        FROM ladder_entries le
-        JOIN agent_versions av ON av.id = le.version_id
-        WHERE le.ladder_id = ?
-          AND av.agent_id = ?
-          AND le.version_id != ?
-          AND le.role IN ('champion', 'challenger')
-          AND le.is_anchor = 0
-        ORDER BY le.lcb ASC, le.elo ASC, le.version_id ASC
-      `);
-      const upsertEntry = db.prepare(`
-        INSERT INTO ladder_entries (
-          ladder_id, version_id, role,
-          mean_init_millis, mean_turn_millis, mean_ram, peak_ram,
-          started_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(ladder_id, version_id) DO UPDATE SET
-          role = excluded.role,
-          retired_at = NULL,
-          mean_init_millis = CASE
-            WHEN ladder_entries.matches = 0 THEN excluded.mean_init_millis
-            ELSE ladder_entries.mean_init_millis
-          END,
-          mean_turn_millis = CASE
-            WHEN ladder_entries.matches = 0 THEN excluded.mean_turn_millis
-            ELSE ladder_entries.mean_turn_millis
-          END,
-          mean_ram = CASE
-            WHEN ladder_entries.matches = 0 THEN excluded.mean_ram
-            ELSE ladder_entries.mean_ram
-          END,
-          peak_ram = MAX(ladder_entries.peak_ram, excluded.peak_ram)
-      `);
-
-      for (const ladderId of ladderIds) {
-        const ladder = getLadder(db, ladderId);
-        if (!ladder) continue;
-        teams.promotePendingTeams(db, ladderId, prev.agentId);
-
-        const otherNonAnchorActive = selectOtherNonAnchorActive.all(
-          ladderId,
-          prev.agentId,
-          prev.id
-        ) as Array<{version_id: number; lcb: number; elo: number}>;
-
-        while (otherNonAnchorActive.length >= 2) {
-          const weakest = otherNonAnchorActive.shift()!;
-          retireEntry.run(now, ladderId, weakest.version_id);
-          retiredByLadder[ladderId] = weakest.version_id;
-        }
-
-        upsertEntry.run(
-          ladderId,
-          prev.id,
-          'challenger',
-          input.smokeInitMillis ?? 0,
-          input.smokeTurnMillis ?? 0,
-          input.smokePeakRam ?? 0,
-          input.smokePeakRam ?? 0,
-          now
-        );
-        entries.promoteRemainingActiveToChampion(db, ladderId, prev.agentId);
-        ensureAgentLadderStats(db, ladderId, prev.agentId);
-      }
-
-      for (const tournamentId of tournamentIds) {
-        const tournament = getTournament(db, tournamentId);
-        if (tournament?.status !== 'scheduled') continue;
-        const alreadyEntered = db.prepare(
-          'SELECT 1 FROM tournament_entrants WHERE tournament_id = ? AND agent_id = ?'
-        ).get(tournamentId, prev.agentId);
-        if (alreadyEntered) continue;
-        const maxRow = db.prepare(
-          `SELECT COALESCE(MAX(seed), 0) AS max_seed
-           FROM tournament_entrants WHERE tournament_id = ?`
-        ).get(tournamentId) as {max_seed: number};
-        upsertTournamentEntrant(db, {
-          tournamentId,
-          agentId: prev.agentId,
-          versionId: prev.id,
-          seed: maxRow.max_seed + 1,
-        });
-      }
+      retiredByLadder = enrollActivatedVersion(
+        db,
+        prev,
+        ladderIds,
+        tournamentIds,
+        {
+          initMillis: input.smokeInitMillis ?? prev.smokeInitMillis ?? 0,
+          turnMillis: input.smokeTurnMillis ?? prev.smokeTurnMillis ?? 0,
+          peakRam: input.smokePeakRam ?? prev.smokePeakRam ?? 0,
+        },
+        now
+      );
     } else if (input.smokeStatus === 'failed') {
       teams.deletePendingTeams(db, ladderIds, prev.agentId);
+    } else if (input.smokeStatus === 'discarded') {
+      teams.revertPendingTeamsToSaved(db, ladderIds, prev.agentId);
     } else if (input.smokeStatus === 'quarantined') {
       teams.deletePendingTeams(db, ladderIds, prev.agentId);
       if (tournamentIds.length > 0) {
@@ -1053,6 +1159,156 @@ export function applySubmissionStatus(
 
     return {version: getVersionById(db, input.versionId)!, agent, retiredByLadder};
   });
+}
+
+// Explicit developer activation (`'staged' -> 'passed'`) from `/account/`.
+// Verifies ownership, standing, open ladder/tournament windows (tournaments strictly require
+// `now < closesAt`), sets `activated_at = now` (starting the 14-day ladder cooldown), promotes
+// staged VGC rosters, and enrolls the version into active ladders or scheduled tournaments.
+export function activateStagedVersion(
+  db: DatabaseSync,
+  inTransaction: TransactionRunner,
+  input: ActivateStagedVersionInput
+): ApplySubmissionStatusResult {
+  const now = input.now ?? Math.floor(Date.now() / 1000);
+  return inTransaction(() => {
+    const prev = getVersionById(db, input.versionId);
+    if (!prev) {
+      throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 404});
+    }
+    if (prev.agentId !== input.agentId) {
+      throw Object.assign(new Error('Forbidden.'), {status: 403});
+    }
+    if (prev.smokeStatus !== 'staged') {
+      throw Object.assign(
+        new Error(
+          `Version "${prev.version}" is "${prev.smokeStatus}" and cannot be activated.`
+        ),
+        {status: 409}
+      );
+    }
+    const agent = getAgentById(db, prev.agentId);
+    if (!agent || agent.status === 'disabled') {
+      throw Object.assign(new Error('Project is disabled.'), {status: 403});
+    }
+    const badSmogon = db.prepare(
+      "SELECT 1 FROM developers WHERE agent_id = ? AND smogon_standing = 'bad' LIMIT 1"
+    ).get(prev.agentId);
+    if (badSmogon) {
+      throw Object.assign(
+        new Error('Smogon account for this project is not in good standing.'),
+        {status: 403}
+      );
+    }
+
+    const openLadderIds: string[] = [];
+    if (prev.ladders.length > 0) {
+      for (const ladderId of prev.ladders) {
+        const ladder = getLadder(db, ladderId);
+        if (ladder && (ladder.status === 'upcoming' || ladder.status === 'active')) {
+          openLadderIds.push(ladderId);
+        }
+      }
+      if (!openLadderIds.length) {
+        throw Object.assign(
+          new Error('All target ladders for this version have closed to new entries.'),
+          {status: 400}
+        );
+      }
+    }
+
+    const openTournamentIds: string[] = [];
+    if (prev.tournaments.length > 0) {
+      for (const tournamentId of prev.tournaments) {
+        const tournament = getTournament(db, tournamentId);
+        if (tournament?.status !== 'scheduled') {
+          throw Object.assign(
+            new Error(`Tournament "${tournamentId}" is no longer open for entries.`),
+            {status: 400}
+          );
+        }
+        const closesAt = getTournamentClosesAt(tournament.startsAt);
+        if (now >= closesAt) {
+          throw Object.assign(
+            new Error(
+              `Entries for "${tournament.name}" closed at ${formatUtcDateTime(closesAt)}.`
+            ),
+            {status: 400}
+          );
+        }
+        openTournamentIds.push(tournamentId);
+      }
+    }
+
+    db.prepare(`
+      UPDATE agent_versions
+      SET smoke_status = 'passed',
+          activated_at = ?,
+          notified = 1
+      WHERE id = ?
+    `).run(now, prev.id);
+
+    const retiredByLadder = enrollActivatedVersion(
+      db,
+      prev,
+      openLadderIds,
+      openTournamentIds,
+      {
+        initMillis: prev.smokeInitMillis ?? 0,
+        turnMillis: prev.smokeTurnMillis ?? 0,
+        peakRam: prev.smokePeakRam ?? 0,
+      },
+      now
+    );
+
+    return {version: getVersionById(db, prev.id)!, agent, retiredByLadder};
+  });
+}
+
+// Explicit developer rejection (`'staged' -> 'discarded'`) from `/account/`.
+// Leaves live ladders untouched, restores any staged `'pending'` VGC team pastes back to `'saved'`,
+// and counts toward the rolling 24h retry budget (`MAX_FAILED_SMOKE_TESTS`).
+export function discardStagedVersion(
+  db: DatabaseSync,
+  inTransaction: TransactionRunner,
+  input: DiscardStagedVersionInput
+): AgentVersionRow {
+  return inTransaction(() => {
+    const prev = getVersionById(db, input.versionId);
+    if (!prev) {
+      throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 404});
+    }
+    if (prev.agentId !== input.agentId) {
+      throw Object.assign(new Error('Forbidden.'), {status: 403});
+    }
+    if (prev.smokeStatus !== 'staged') {
+      throw Object.assign(
+        new Error(
+          `Version "${prev.version}" is "${prev.smokeStatus}" and cannot be discarded.`
+        ),
+        {status: 409}
+      );
+    }
+
+    db.prepare(`
+      UPDATE agent_versions
+      SET smoke_status = 'discarded',
+          notified = 1
+      WHERE id = ?
+    `).run(prev.id);
+
+    teams.revertPendingTeamsToSaved(db, prev.ladders, prev.agentId);
+    return getVersionById(db, prev.id)!;
+  });
+}
+
+export function getDiscardedVersionIds(db: DatabaseSync): number[] {
+  const rows = db.prepare(`
+    SELECT id FROM agent_versions
+    WHERE smoke_status = 'discarded'
+    ORDER BY id ASC
+  `).all() as Array<{id: number}>;
+  return rows.map(r => r.id);
 }
 
 export function quarantineVersion(
@@ -1230,7 +1486,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     SELECT av.*, a.slug AS agent_slug, a.name AS agent_name
     FROM agent_versions av
     JOIN agents a ON a.id = av.agent_id
-    WHERE av.smoke_status IN ('passed', 'failed', 'quarantined')
+    WHERE av.smoke_status IN ('staged', 'passed', 'failed', 'quarantined')
       AND av.notified = 0
     ORDER BY av.submitted_at ASC, av.id ASC
   `).all() as unknown as Array<RawAgentVersionRow & {agent_slug: string; agent_name: string}>;
@@ -1241,7 +1497,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     agentSlug: row.agent_slug,
     agentName: row.agent_name,
     version: row.version,
-    smokeStatus: row.smoke_status as Exclude<SmokeStatus, 'pending'>,
+    smokeStatus: row.smoke_status as NotifiableSmokeStatus,
     smokeError: row.smoke_error ?? undefined,
     smokeDurationMillis: row.smoke_duration_millis ?? undefined,
     smokeInitMillis: row.smoke_init_millis ?? undefined,

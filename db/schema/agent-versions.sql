@@ -39,12 +39,14 @@ CREATE TABLE IF NOT EXISTS agent_versions (
   -- Uncompressed resident size in bytes measured on unpack (enforced <= 500 MiB), or NULL pre-pull.
   unpacked_bytes INTEGER,
   -- Smoke-test and runtime health state:
-  --   'pending': queued for pull and offline 1-turn smoke test on the Mac mini
-  --   'passed': unpacked and completed smoke tests across all selected ladders; live in Arena
-  --   'failed': unpack/checksum/smoke test failed (14-day submission cooldown is automatically refunded)
+  --   'pending': queued for pull and offline diagnostic self-play smoke test on the Arena host
+  --   'staged': passed diagnostic smoke test; awaiting explicit developer activation or discard
+  --   'passed': activated by developer (or seeded via CLI); live in Arena ladders/tournaments
+  --   'failed': unpack/checksum/diagnostic test failed (14-day submission cooldown not triggered)
+  --   'discarded': developer rejected staged build after reviewing diagnostics (counts toward 24h retry budget)
   --   'quarantined': disabled after excessive runtime crashes/timeouts/OOMs or staff intervention
   smoke_status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (smoke_status IN ('pending', 'passed', 'failed', 'quarantined')),
+    CHECK (smoke_status IN ('pending', 'staged', 'passed', 'failed', 'discarded', 'quarantined')),
   -- Total wall-clock duration of the offline smoke test in milliseconds, or NULL.
   smoke_duration_millis INTEGER,
   -- Max `/ready` initialization latency observed during the smoke test in milliseconds, or NULL.

@@ -428,6 +428,7 @@ describe('Arena Control API submissions', () => {
       versionId: sub1.id,
       smokeStatus: 'passed',
     });
+    db.db.prepare('UPDATE agent_versions SET activated_at = 1700000100 WHERE id = ?').run(sub1.id);
     db.db.prepare(
       `UPDATE ladder_entries
        SET elo = 1520, se = 20, lcb = 1480.8, matches = 30, settled_at = 1700500000
@@ -447,6 +448,7 @@ describe('Arena Control API submissions', () => {
       versionId: sub2.id,
       smokeStatus: 'passed',
     });
+    db.db.prepare('UPDATE agent_versions SET activated_at = 1702000000 WHERE id = ?').run(sub2.id);
     db.db.prepare(
       `UPDATE ladder_entries
        SET elo = 1650, se = 18, lcb = 1614.7, matches = 32, settled_at = 1702500000

@@ -532,7 +532,7 @@ function formatSmokeStatsSummary(input: {
 export function formatSubmissionDm(input: {
   agentName: string;
   version: string;
-  smokeStatus: Exclude<db.SmokeStatus, 'pending'>;
+  smokeStatus: db.NotifiableSmokeStatus;
   ladderLabels: string[];
   smokeError?: string;
   smokeDurationMillis?: number;
@@ -544,6 +544,15 @@ export function formatSubmissionDm(input: {
   const laddersPart = input.ladderLabels.length
     ? ` on \`${input.ladderLabels.join(', ')}\``
     : '';
+  if (input.smokeStatus === 'staged') {
+    const stats = formatSmokeStatsSummary(input);
+    const statsPart = stats ? ` (\`${stats}\`)` : '';
+    return (
+      `**${input.agentName}** (\`${input.version}\`) passed its diagnostic test` +
+      `${laddersPart}${statsPart}. Review the replay and stderr log, then activate or discard ` +
+      'it at <https://pkmn.ai/account/>.'
+    );
+  }
   if (input.smokeStatus === 'passed') {
     const stats = formatSmokeStatsSummary(input);
     const statsPart = stats ? ` (\`${stats}\`)` : '';
@@ -779,7 +788,7 @@ export async function notifySubmissionStatus(
   state = new Map<string, string | undefined>()
 ): Promise<boolean> {
   const status = result.version.smokeStatus;
-  if (status === 'pending') return false;
+  if (status === 'pending' || status === 'discarded') return false;
   if (result.version.notified) return false;
 
   const ownerDiscordIds = db.getVersionOwnerDiscordIds(

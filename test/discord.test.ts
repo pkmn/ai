@@ -1228,6 +1228,20 @@ describe('Arena Discord notifications', () => {
       '(`2.5s · 120ms init · 35ms team · 18ms/turn · 256 MiB`). ' +
       'See <https://pkmn.ai/account/> for details.'
     );
+
+    const stagedDm = discord.formatSubmissionDm({
+      agentName: 'Foul Play',
+      version: '1.4.0',
+      smokeStatus: 'staged',
+      ladderLabels: ['RBY'],
+      smokeDurationMillis: 12_000,
+      smokePeakRam: 312,
+    });
+    expect(stagedDm).toBe(
+      '**Foul Play** (`1.4.0`) passed its diagnostic test on `RBY` ' +
+      '(`12.0s · 312 MiB`). Review the replay and stderr log, then activate or discard ' +
+      'it at <https://pkmn.ai/account/>.'
+    );
   });
 
   test('formats staff quarantine DM summary with owner notification counts', () => {

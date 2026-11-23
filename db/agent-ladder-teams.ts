@@ -214,3 +214,31 @@ export function getTeamPoolCountsByAgent(
   }
   return out;
 }
+
+// Restores staged `'pending'` team pastes back to `'saved'` when a developer discards a staged
+// version before activation so they do not have to re-paste their VGC roster on retry.
+export function revertPendingTeamsToSaved(
+  db: DatabaseSync,
+  ladderIds: string[],
+  agentId: number
+) {
+  const hasPending = db.prepare(`
+    SELECT 1 FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'
+    LIMIT 1
+  `);
+  const clearSaved = db.prepare(`
+    DELETE FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'saved'
+  `);
+  const revert = db.prepare(`
+    UPDATE agent_ladder_teams
+    SET status = 'saved'
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'
+  `);
+  for (const ladderId of ladderIds) {
+    if (!hasPending.get(ladderId, agentId)) continue;
+    clearSaved.run(ladderId, agentId);
+    revert.run(ladderId, agentId);
+  }
+}
