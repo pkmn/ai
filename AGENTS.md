@@ -125,8 +125,8 @@ Repo-specific style, naming, and architecture rules alongside `@pkmn/eslint-conf
 
 ## Verification
 
-- Run `npm run test` (`tsc -p .`, static build, `eslint --cache`, `stylelint static/style/*.css tools/*.css`,
-  `hyperlink public --check-anchors`) and `npx vitest run`.
+- Run `npm test` (`tsc -p .`, static build, `eslint --cache`, `stylelint --cache static/style/*.css tools/*.css`,
+  `hyperlink public --check-anchors`, and `vitest run --testTimeout=15000 test`).
 - For TSX/CSS/client changes: **scope `npm run shots` with `--only <section|scenario,...>`** to
   capture only the states affected by your changes (`npm run shots -- --list` lists all sections and
   names; `--only` accepts comma-separated or repeatable filters, e.g. `--only ladders,battles`):
@@ -135,7 +135,7 @@ Repo-specific style, naming, and architecture rules alongside `@pkmn/eslint-conf
   global CSS (`static/style/index.css`, `static/build.tsx`, shared tables/nav). Verify zero
   console/page errors and zero overflow (`scrollWidth <= innerWidth`) across `375px`
   `small`–`desktop` (`light` & `dark`), inspect `.shots/index.html` and changed PNGs, then run
-  `npm run clean && npm run test` so `public/` has no mock artifacts. Link changed light-mode desktop
+  `npm run clean && npm test` so `public/` has no mock artifacts. Link changed light-mode desktop
   screenshots and include the full disk path to `.shots/index.html` (important in worktrees).
 - **Keep `tools/shots.tsx` in sync:** Update `buildScenarios` in `tools/shots.tsx` and
   `docs/TESTING.md` whenever changing routes, views, controls, lifecycle states, or edge cases.

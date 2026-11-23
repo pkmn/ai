@@ -61,8 +61,7 @@ npm run build && DEV_AUTH=1 npm start
 | `npm run lint` | Run `eslint --cache`, `stylelint static/style/*.css tools/*.css`, `hyperlink public --check-anchors`. |
 | `npm run fix` | Auto-fix lint and CSS ordering (`eslint --fix && stylelint --fix ...`). |
 | `npm run clean` | Remove `public/`, `build/`, `.tsbuildinfo`, `.eslintcache`, `.mock/`, and `db/data/`. |
-| `npm run test` | `npm run build && npm run lint`. |
-| `npm run test:integration` | `npm run test` + full Vitest suite (`vitest test`). |
+| `npm test` | `npm run build && npm run lint` + full Vitest suite (`vitest run --testTimeout=15000 test`). |
 | `npm run shots` | Capture/verify light & dark screenshots across 4 viewports into `.shots/`. |
 | `npm run mock -- ...` | Run `.mock` scenario engine and match simulator ([TESTING.md](TESTING.md)). |
 | `npm run simulate -- ...` | Run matchmaking & rating parameter-sweep simulator ([TESTING.md](TESTING.md)). |

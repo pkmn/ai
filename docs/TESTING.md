@@ -7,16 +7,16 @@ setup and [ADMIN.md](ADMIN.md) for operator commands.
 ## 1. Automated Build, Lint & Test Suite
 
 ```sh
-npm run test              # tsc -p ., static build, eslint, stylelint, hyperlink --check-anchors
-npx vitest run            # all unit, DB, HTTP API, rating, arena, and Playwright E2E tests
-npm run test:integration  # both (CI entrypoint)
+npm test            # tsc -p ., static build, eslint, stylelint, hyperlink --check-anchors, vitest
+npm run lint        # eslint, stylelint, hyperlink --check-anchors (requires built public/)
+npx vitest run      # run Vitest suites directly (pass a file path to scope)
 ```
 
 Install headless Chromium once if missing: `npx playwright-core install chromium`.
 
 | Suite | Coverage |
 | :--- | :--- |
-| `npm run test` | `tsc -p .` -> `build/`; `build/static/build` -> `public/`; `eslint --cache`; `stylelint static/style/*.css tools/*.css`; `hyperlink public --check-anchors`. |
+| `npm run build && npm run lint` | `tsc -p .` -> `build/`; `build/static/build` -> `public/`; `eslint --cache`; `stylelint --cache static/style/*.css tools/*.css`; `hyperlink public --check-anchors`. |
 | `test/ratings.test.ts` | Finite-difference gradients/Hessians, KKT optimality, permutation invariance, disconnected graphs, Monte Carlo convergence, active matchmaking (`server/ratings.ts`). |
 | `test/protocol.test.ts` | Stdio parsing & chat/covert-channel elision across `@pkmn/sim` (`server/protocol.ts`). |
 | `test/db.test.ts` | Schema bootstrap, `db/migration/NNNN-*.sql`, project/Smogon sync, ladder lifecycle/rotation, match aggregation (`db/`). |
@@ -45,7 +45,7 @@ npm run shots -- --baseline --only ladders,battles  # snapshot only affected sta
 npm run build && npm run shots -- --only ladders,battles # capture & diff targeted states (4 viewports x 2 themes)
 npm run shots -- --baseline && npm run shots     # full 96-state capture (for shared layout/global CSS)
 open .shots/index.html                           # inspect Visual Atlas
-npm run clean && npm run test                    # remove mock artifacts from public/ afterward
+npm run clean && npm test                        # remove mock artifacts from public/ afterward
 ```
 
 `shots` seeds an in-memory fixture from [`tools/scenarios/seed.mock`](../tools/scenarios/seed.mock),
