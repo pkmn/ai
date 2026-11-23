@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import {isAllowedBundleHost, isAllowedOciRegistryHost} from '../server/account';
+import * as account from '../server/account';
 
 import * as db from './db';
 import * as unpack from './unpack';
@@ -123,7 +123,7 @@ export function validateOciRegistryRef(cleanRef: string): void {
   } catch {
     throw new Error(`Invalid OCI registry authority: ${authority}`);
   }
-  if (parsedAuthority.port !== '' || !isAllowedOciRegistryHost(parsedAuthority.hostname)) {
+  if (parsedAuthority.port !== '' || !account.isAllowedOciRegistryHost(parsedAuthority.hostname)) {
     throw new Error(`Disallowed OCI registry host: ${parsedAuthority.hostname}`);
   }
 }
@@ -138,21 +138,52 @@ export function stripOciTagOrDigest(imageRef: string): string {
   return slashIdx >= 0 ? `${withoutDigest.slice(0, slashIdx)}/${repoTail}` : repoTail;
 }
 
+const OCI_USERNAMES = [
+  'oauth2',
+  'oauth2accesstoken',
+  'AWS',
+  '$oauthtoken',
+  'x-access-token',
+] as const;
+
+function defaultOciUsername(host: string): string {
+  if (host === 'gcr.io' || host.endsWith('.gcr.io') || host.endsWith('-docker.pkg.dev')) {
+    return 'oauth2accesstoken';
+  }
+  if (host.endsWith('.amazonaws.com')) {
+    return 'AWS';
+  }
+  if (host === 'quay.io') {
+    return '$oauthtoken';
+  }
+  return 'oauth2';
+}
+
 export function scrubAuthSecret(message: string, rawToken?: string): string {
   if (!rawToken) return message;
   let out = message;
   const candidates = new Set<string>();
   const trimmed = rawToken.trim();
   if (trimmed.length >= 4) candidates.add(trimmed);
-  const bare = trimmed
-    .replace(/^authorization:\s*/i, '')
-    .replace(/^(?:bearer|basic)\s+/i, '')
-    .trim();
+  const noHeader = trimmed.replace(/^authorization:\s*/i, '').trim();
+  const isBasic = /^basic\s+/i.test(noHeader);
+  const bare = noHeader.replace(/^(?:bearer|basic|token)\s+/i, '').trim();
   if (bare.length >= 4) {
     candidates.add(bare);
     candidates.add(Buffer.from(bare, 'utf8').toString('base64'));
     if (!bare.includes(':')) {
-      candidates.add(Buffer.from(`oauth2:${bare}`, 'utf8').toString('base64'));
+      for (const user of OCI_USERNAMES) {
+        candidates.add(Buffer.from(`${user}:${bare}`, 'utf8').toString('base64'));
+      }
+      if (isBasic && /^[A-Za-z0-9+/]+=*$/.test(bare)) {
+        const decoded = Buffer.from(bare, 'base64').toString('utf8');
+        const colon = decoded.indexOf(':');
+        if (colon >= 0) {
+          if (decoded.length >= 4) candidates.add(decoded);
+          const decodedPass = decoded.slice(colon + 1);
+          if (decodedPass.length >= 4) candidates.add(decodedPass);
+        }
+      }
     }
   }
   if (bare.includes(':')) {
@@ -191,22 +222,22 @@ export function writePrivateSkopeoAuthfile(
   imageRef: string,
   rawToken: string
 ): string {
+  const firstSeg = imageRef.split('/')[0];
+  const host =
+    firstSeg.includes('.') || firstSeg.includes(':') || firstSeg === 'localhost'
+      ? firstSeg.toLowerCase()
+      : 'docker.io';
   const noHeader = rawToken.replace(/^authorization:\s*/i, '').trim();
   let authBase64: string;
   if (/^basic\s+/i.test(noHeader)) {
     const rest = noHeader.replace(/^basic\s+/i, '').trim();
     authBase64 = rest.includes(':') ? Buffer.from(rest, 'utf8').toString('base64') : rest;
   } else {
-    const clean = noHeader.replace(/^bearer\s+/i, '').trim();
-    const creds = clean.includes(':') ? clean : `oauth2:${clean}`;
+    const clean = noHeader.replace(/^(?:bearer|token)\s+/i, '').trim();
+    const creds = clean.includes(':') ? clean : `${defaultOciUsername(host)}:${clean}`;
     authBase64 = Buffer.from(creds, 'utf8').toString('base64');
   }
 
-  const firstSeg = imageRef.split('/')[0];
-  const host =
-    firstSeg.includes('.') || firstSeg.includes(':') || firstSeg === 'localhost'
-      ? firstSeg
-      : 'docker.io';
   const auths: Record<string, {auth: string}> = {[host]: {auth: authBase64}};
   if (host === 'docker.io') {
     auths['https://index.docker.io/v1/'] = {auth: authBase64};
@@ -456,6 +487,338 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
   }
 }
 
+const GITHUB_CONTENTS_API_RE = /^\/repos\/([^/]+)\/([^/]+)\/contents\/.+$/;
+const GITHUB_SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const GIT_LFS_POINTER_MAX_BYTES = 1024;
+
+interface GitHubRepoRef {
+  owner: string;
+  repo: string;
+}
+
+interface GitHubReleaseDownloadRef extends GitHubRepoRef {
+  tag?: string;
+  assetName: string;
+}
+
+interface GitHubRepoFileRef extends GitHubRepoRef {
+  ref: string;
+  filePathSegments: string[];
+}
+
+interface GitHubReleaseAssetPayload {
+  name?: unknown;
+  url?: unknown;
+  browser_download_url?: unknown;
+}
+
+interface GitHubReleasePayload {
+  tag_name?: unknown;
+  assets?: GitHubReleaseAssetPayload[];
+}
+
+interface GitLfsPointer {
+  oid: string;
+  size: number;
+}
+
+function formatBundleAuthHeader(rawToken?: string): string | undefined {
+  const rawAuth = rawToken?.trim().replace(/^authorization:\s*/i, '').trim();
+  if (!rawAuth) return undefined;
+  if (/^basic\s+/i.test(rawAuth)) {
+    const rest = rawAuth.replace(/^basic\s+/i, '').trim();
+    const encoded = rest.includes(':') ? Buffer.from(rest, 'utf8').toString('base64') : rest;
+    return `Basic ${encoded}`;
+  }
+  return rawAuth.includes(' ') ? rawAuth : `Bearer ${rawAuth}`;
+}
+
+function formatGitHubLfsBasicAuth(authHeader: string): string {
+  if (/^basic\s+/i.test(authHeader)) return authHeader;
+  const bare = authHeader.replace(/^(?:bearer|token)\s+/i, '').trim();
+  const creds = bare.includes(':') ? bare : `x-access-token:${bare}`;
+  return `Basic ${Buffer.from(creds, 'utf8').toString('base64')}`;
+}
+
+function isSafeGitHubSlug(segment: string): boolean {
+  return GITHUB_SLUG_RE.test(segment) && segment !== '.' && segment !== '..';
+}
+
+function isGitHubContentsApiUrl(url: URL): boolean {
+  return (
+    url.protocol === 'https:' &&
+    url.port === '' &&
+    url.hostname.toLowerCase() === 'api.github.com' &&
+    GITHUB_CONTENTS_API_RE.test(url.pathname)
+  );
+}
+
+function splitGitHubRefAndPath(
+  segments: string[]
+): {ref: string; filePathSegments: string[]} | undefined {
+  let ref: string;
+  let filePathSegments: string[];
+  if (
+    segments.length >= 4 &&
+    segments[0] === 'refs' &&
+    (segments[1] === 'heads' || segments[1] === 'tags')
+  ) {
+    ref = `refs/${segments[1]}/${segments[2]}`;
+    filePathSegments = segments.slice(3);
+  } else if (segments.length >= 2) {
+    ref = segments[0];
+    filePathSegments = segments.slice(1);
+  } else {
+    return undefined;
+  }
+  if (
+    filePathSegments.length === 0 ||
+    filePathSegments.some(seg => !seg || seg === '.' || seg === '..' || seg.includes('/'))
+  ) {
+    return undefined;
+  }
+  return {ref, filePathSegments};
+}
+
+function normalizeGitHubBlobUrl(url: URL): URL {
+  if (url.hostname.toLowerCase() !== 'github.com') return url;
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length >= 5 && parts[2] === 'blob') {
+    const rawParts = [...parts];
+    rawParts[2] = 'raw';
+    return new URL(`${url.origin}/${rawParts.join('/')}`);
+  }
+  return url;
+}
+
+function parseGitHubRepoFileUrl(url: URL): GitHubRepoFileRef | undefined {
+  const host = url.hostname.toLowerCase();
+  const parts = url.pathname.split('/').filter(Boolean);
+  try {
+    const decoded = parts.map(decodeURIComponent);
+    if (host === 'github.com' && decoded.length >= 5 &&
+        (decoded[2] === 'raw' || decoded[2] === 'blob')) {
+      if (!isSafeGitHubSlug(decoded[0]) || !isSafeGitHubSlug(decoded[1])) return undefined;
+      const split = splitGitHubRefAndPath(decoded.slice(3));
+      if (split) return {owner: decoded[0], repo: decoded[1], ...split};
+    }
+    if (host === 'raw.githubusercontent.com' && decoded.length >= 4) {
+      if (!isSafeGitHubSlug(decoded[0]) || !isSafeGitHubSlug(decoded[1])) return undefined;
+      const split = splitGitHubRefAndPath(decoded.slice(2));
+      if (split) return {owner: decoded[0], repo: decoded[1], ...split};
+    }
+    if (host === 'media.githubusercontent.com' && decoded.length >= 5 && decoded[0] === 'media') {
+      if (!isSafeGitHubSlug(decoded[1]) || !isSafeGitHubSlug(decoded[2])) return undefined;
+      const split = splitGitHubRefAndPath(decoded.slice(3));
+      if (split) return {owner: decoded[1], repo: decoded[2], ...split};
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function extractGitHubRepo(url: URL): GitHubRepoRef | undefined {
+  const fileRef = parseGitHubRepoFileUrl(url);
+  if (fileRef) return {owner: fileRef.owner, repo: fileRef.repo};
+  if (isGitHubContentsApiUrl(url)) {
+    const m = GITHUB_CONTENTS_API_RE.exec(url.pathname);
+    if (m) {
+      try {
+        const owner = decodeURIComponent(m[1]);
+        const repo = decodeURIComponent(m[2]);
+        if (isSafeGitHubSlug(owner) && isSafeGitHubSlug(repo)) {
+          return {owner, repo};
+        }
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+function buildGitHubContentsApiUrl(ref: GitHubRepoFileRef): URL {
+  const owner = encodeURIComponent(ref.owner);
+  const repo = encodeURIComponent(ref.repo);
+  const encodedPath = ref.filePathSegments.map(encodeURIComponent).join('/');
+  const built = new URL(
+    `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}` +
+    `?ref=${encodeURIComponent(ref.ref)}`
+  );
+  if (!isGitHubContentsApiUrl(built)) {
+    throw new Error('Invalid GitHub Contents API path');
+  }
+  return built;
+}
+
+function parseGitLfsPointer(text: string): GitLfsPointer | undefined {
+  if (!text.startsWith('version https://git-lfs.github.com/spec/v1')) return undefined;
+  const oidMatch = /^oid sha256:([0-9a-f]{64})$/m.exec(text);
+  const sizeMatch = /^size (\d+)$/m.exec(text);
+  if (!oidMatch || !sizeMatch) return undefined;
+  const size = Number(sizeMatch[1]);
+  if (!Number.isSafeInteger(size) || size <= 0) return undefined;
+  return {oid: oidMatch[1], size};
+}
+
+async function resolveGitHubLfsDownloadUrl(
+  repo: GitHubRepoRef,
+  pointer: GitLfsPointer,
+  authHeader: string | undefined,
+  signal: AbortSignal
+): Promise<URL> {
+  const owner = encodeURIComponent(repo.owner);
+  const repoName = encodeURIComponent(repo.repo);
+  const headers: Record<string, string> = {
+    accept: 'application/vnd.git-lfs+json',
+    'content-type': 'application/vnd.git-lfs+json',
+    'user-agent': 'pkmn-arena',
+  };
+  if (authHeader) {
+    headers.authorization = formatGitHubLfsBasicAuth(authHeader);
+  }
+  const res = await fetch(`https://github.com/${owner}/${repoName}.git/info/lfs/objects/batch`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      operation: 'download',
+      transfers: ['basic'],
+      objects: [{oid: pointer.oid, size: pointer.size}],
+    }),
+    redirect: 'manual',
+    signal,
+  });
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    throw new Error(`GitHub LFS batch lookup failed (${res.status} ${res.statusText})`);
+  }
+  const payload = await res.json() as {
+    objects?: Array<{
+      actions?: {download?: {href?: unknown}};
+      error?: {code?: unknown; message?: unknown};
+    }>;
+  };
+  const obj = payload.objects?.[0];
+  if (obj?.error) {
+    const detail = typeof obj.error.message === 'string'
+      ? obj.error.message
+      : typeof obj.error.code === 'number' || typeof obj.error.code === 'string'
+        ? String(obj.error.code)
+        : 'unknown error';
+    throw new Error(`GitHub LFS object error: ${detail}`);
+  }
+  const href = obj?.actions?.download?.href;
+  if (typeof href !== 'string' || !href) {
+    throw new Error('GitHub LFS batch response missing download href');
+  }
+  return new URL(href);
+}
+
+function parseGitHubReleaseDownloadUrl(url: URL): GitHubReleaseDownloadRef | undefined {
+  if (url.hostname.toLowerCase() !== 'github.com') return undefined;
+  const parts = url.pathname.split('/').filter(Boolean);
+  try {
+    if (
+      parts.length === 6 &&
+      parts[2] === 'releases' &&
+      parts[3] === 'latest' &&
+      parts[4] === 'download'
+    ) {
+      const owner = decodeURIComponent(parts[0]);
+      const repo = decodeURIComponent(parts[1]);
+      if (!isSafeGitHubSlug(owner) || !isSafeGitHubSlug(repo)) return undefined;
+      return {
+        owner,
+        repo,
+        assetName: decodeURIComponent(parts[5]),
+      };
+    }
+    if (parts.length >= 6 && parts[2] === 'releases' && parts[3] === 'download') {
+      const owner = decodeURIComponent(parts[0]);
+      const repo = decodeURIComponent(parts[1]);
+      if (!isSafeGitHubSlug(owner) || !isSafeGitHubSlug(repo)) return undefined;
+      return {
+        owner,
+        repo,
+        tag: parts.slice(4, -1).map(decodeURIComponent).join('/'),
+        assetName: decodeURIComponent(parts[parts.length - 1]),
+      };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function findMatchingGitHubAsset(
+  assets: GitHubReleaseAssetPayload[] | undefined,
+  cleanUrl: string,
+  assetName: string
+): GitHubReleaseAssetPayload | undefined {
+  return assets?.find(
+    a =>
+      (typeof a.browser_download_url === 'string' && a.browser_download_url === cleanUrl) ||
+      (typeof a.name === 'string' && a.name === assetName)
+  );
+}
+
+async function resolveGitHubReleaseAssetUrl(
+  ref: GitHubReleaseDownloadRef,
+  cleanUrl: string,
+  authHeader: string,
+  signal: AbortSignal
+): Promise<URL> {
+  const owner = encodeURIComponent(ref.owner);
+  const repo = encodeURIComponent(ref.repo);
+  const apiHeaders = {
+    accept: 'application/vnd.github+json',
+    authorization: authHeader,
+    'user-agent': 'pkmn-arena',
+  };
+  const releasePath = ref.tag !== undefined ? `tags/${encodeURIComponent(ref.tag)}` : 'latest';
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/releases/${releasePath}`;
+  const res = await fetch(apiUrl, {headers: apiHeaders, redirect: 'manual', signal});
+
+  let asset: GitHubReleaseAssetPayload | undefined;
+  if (res.status === 404 && ref.tag !== undefined) {
+    // Draft releases are omitted from `/releases/tags/:tag` (404) but returned by `/releases`.
+    await res.body?.cancel().catch(() => {});
+    const listUrl = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=100`;
+    const listRes = await fetch(listUrl, {headers: apiHeaders, redirect: 'manual', signal});
+    if (!listRes.ok) {
+      await listRes.body?.cancel().catch(() => {});
+      throw new Error(`GitHub release lookup failed (${listRes.status} ${listRes.statusText})`);
+    }
+    const releases = await listRes.json() as GitHubReleasePayload[];
+    for (const rel of releases) {
+      const byDownloadUrl = rel.assets?.find(
+        a => typeof a.browser_download_url === 'string' && a.browser_download_url === cleanUrl
+      );
+      if (byDownloadUrl) {
+        asset = byDownloadUrl;
+        break;
+      }
+      if (rel.tag_name === ref.tag) {
+        asset = findMatchingGitHubAsset(rel.assets, cleanUrl, ref.assetName);
+        if (asset) break;
+      }
+    }
+  } else {
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      throw new Error(`GitHub release lookup failed (${res.status} ${res.statusText})`);
+    }
+    const release = await res.json() as GitHubReleasePayload;
+    asset = findMatchingGitHubAsset(release.assets, cleanUrl, ref.assetName);
+  }
+
+  if (!asset || typeof asset.url !== 'string' || !account.isGitHubReleaseAssetApiUrl(asset.url)) {
+    throw new Error(`GitHub release asset "${ref.assetName}" not found`);
+  }
+  return new URL(asset.url);
+}
+
 export async function downloadAndUnpackBundle(opts: {
   url: string;
   expectedSha256: string;
@@ -478,18 +841,21 @@ export async function downloadAndUnpackBundle(opts: {
     ? '.tar.zst'
     : cleanUrlPath.endsWith('.tar.xz') || cleanUrlPath.endsWith('.txz')
       ? '.tar.xz'
-      : '.tar.gz';
+      : cleanUrlPath.endsWith('.tar.gz') || cleanUrlPath.endsWith('.tgz')
+        ? '.tar.gz'
+        : '.tar';
   const archivePath = path.join(dirs.staging, `bundle-${opts.agentTargetId}${ext}`);
   const destDir = path.join(dirs.agents, opts.agentTargetId);
 
   fs.rmSync(archivePath, {force: true});
 
   try {
-    const hash = crypto.createHash('sha256');
+    let actualSha256: string;
     if (opts.url.startsWith('file://')) {
       if (!opts.allowPrivateUrls) {
         throw new Error('Bundle download target must use HTTPS (file:// URLs are disallowed)');
       }
+      const hash = crypto.createHash('sha256');
       const localPath = opts.url.slice('file://'.length);
       const srcFd = fs.openSync(localPath, 'r');
       const dstFd = fs.openSync(archivePath, 'w', 0o600);
@@ -513,101 +879,171 @@ export async function downloadAndUnpackBundle(opts: {
         fs.closeSync(srcFd);
         fs.closeSync(dstFd);
       }
+      actualSha256 = hash.digest('hex').toLowerCase();
     } else {
       const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MILLIS);
-      const initialUrl = new URL(opts.url);
-      const initialOrigin = initialUrl.origin;
-      const rawAuth = opts.authToken?.trim().replace(/^authorization:\s*/i, '').trim();
-      const authHeader = rawAuth
-        ? (rawAuth.includes(' ') ? rawAuth : `Bearer ${rawAuth}`)
-        : undefined;
+      const rawInitialUrl = new URL(opts.url);
+      const startUrl = normalizeGitHubBlobUrl(rawInitialUrl);
+      const githubRepo = extractGitHubRepo(rawInitialUrl);
+      const authHeader = formatBundleAuthHeader(opts.authToken);
 
-      let currentUrl = initialUrl;
-      let res: Response | undefined;
-      for (let hop = 0; ; hop++) {
-        if (!opts.allowPrivateUrls) {
-          if (currentUrl.protocol !== 'https:') {
-            throw new Error(
-              `Bundle redirect/download target must use HTTPS (got ${currentUrl.protocol})`
-            );
-          }
-          if (currentUrl.port !== '' || !isAllowedBundleHost(currentUrl.hostname)) {
-            throw new Error('Bundle download target must use a supported artifact host');
-          }
-        }
-
-        const headers: Record<string, string> = {};
-        if (authHeader && currentUrl.origin === initialOrigin) {
-          headers.authorization = authHeader;
-        }
-        res = await fetch(currentUrl.toString(), {headers, redirect: 'manual', signal});
-        if (
-          res.status === 301 ||
-          res.status === 302 ||
-          res.status === 303 ||
-          res.status === 307 ||
-          res.status === 308
-        ) {
-          await res.body?.cancel().catch(() => {});
-          if (hop >= MAX_REDIRECT_HOPS) {
-            throw new Error(`Bundle download exceeded ${MAX_REDIRECT_HOPS} redirects`);
-          }
-          const loc = res.headers.get('location');
-          if (!loc) {
-            throw new Error(`Bundle redirect (${res.status}) missing Location header`);
-          }
-          currentUrl = new URL(loc, currentUrl);
-          continue;
-        }
-        break;
-      }
-
-      if (!res.ok) {
-        throw new Error(`Bundle download failed (${res.status} ${res.statusText})`);
-      }
-      const contentLength = Number(res.headers?.get?.('content-length') ?? 0);
-      if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
-        await res.body?.cancel().catch(() => {});
-        throw new Error(
-          `Compressed bundle (${contentLength} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
-        );
-      }
-      if (res.body && typeof res.body.getReader === 'function') {
-        const reader = res.body.getReader();
-        const fd = fs.openSync(archivePath, 'w', 0o600);
-        let total = 0;
-        try {
-          while (true) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            if (!value) continue;
-            total += value.byteLength;
-            if (total > MAX_IMAGE_BYTES) {
-              await reader.cancel().catch(() => {});
+      const streamHttp = async (
+        firstUrl: URL,
+        startAuthOrigin: string | undefined,
+        allowGitHubFallback: boolean
+      ): Promise<{total: number; sha256: string}> => {
+        let authOrigin = startAuthOrigin;
+        let currentUrl = firstUrl;
+        let usedGitHubApiFallback = false;
+        let res: Response | undefined;
+        for (let hop = 0; ; hop++) {
+          if (!opts.allowPrivateUrls) {
+            if (currentUrl.protocol !== 'https:') {
               throw new Error(
-                `Compressed bundle (${total} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
+                `Bundle redirect/download target must use HTTPS (got ${currentUrl.protocol})`
               );
             }
-            hash.update(value);
-            fs.writeSync(fd, value);
+            if (currentUrl.port !== '' || !account.isAllowedBundleHost(currentUrl.hostname)) {
+              throw new Error('Bundle download target must use a supported artifact host');
+            }
           }
-        } finally {
-          fs.closeSync(fd);
+
+          const headers: Record<string, string> = {};
+          if (authHeader && authOrigin && currentUrl.origin === authOrigin) {
+            headers.authorization = authHeader;
+          }
+          if (account.isGitHubReleaseAssetApiUrl(currentUrl.toString())) {
+            headers.accept = 'application/octet-stream';
+            headers['user-agent'] = 'pkmn-arena';
+          } else if (isGitHubContentsApiUrl(currentUrl)) {
+            headers.accept = 'application/vnd.github.raw+json';
+            headers['user-agent'] = 'pkmn-arena';
+          }
+          res = await fetch(currentUrl.toString(), {headers, redirect: 'manual', signal});
+          if (
+            res.status === 301 ||
+            res.status === 302 ||
+            res.status === 303 ||
+            res.status === 307 ||
+            res.status === 308
+          ) {
+            await res.body?.cancel().catch(() => {});
+            if (hop >= MAX_REDIRECT_HOPS) {
+              throw new Error(`Bundle download exceeded ${MAX_REDIRECT_HOPS} redirects`);
+            }
+            const loc = res.headers.get('location');
+            if (!loc) {
+              throw new Error(`Bundle redirect (${res.status}) missing Location header`);
+            }
+            currentUrl = new URL(loc, currentUrl);
+            continue;
+          }
+          // GitHub web/CDN routes ignore PAT Authorization headers on private repos and return 404;
+          // fall back to the REST API (Releases API or Contents API) with the same PAT.
+          if (
+            res.status === 404 &&
+            allowGitHubFallback &&
+            !usedGitHubApiFallback &&
+            authHeader &&
+            authOrigin &&
+            currentUrl.origin === authOrigin
+          ) {
+            const ghReleaseRef = parseGitHubReleaseDownloadUrl(currentUrl);
+            if (ghReleaseRef) {
+              await res.body?.cancel().catch(() => {});
+              const cleanCurrentUrl = `${currentUrl.origin}${currentUrl.pathname}`;
+              currentUrl = await resolveGitHubReleaseAssetUrl(
+                ghReleaseRef,
+                cleanCurrentUrl,
+                authHeader,
+                signal
+              );
+              authOrigin = currentUrl.origin;
+              usedGitHubApiFallback = true;
+              continue;
+            }
+            const ghFileRef = parseGitHubRepoFileUrl(currentUrl);
+            if (ghFileRef) {
+              await res.body?.cancel().catch(() => {});
+              currentUrl = buildGitHubContentsApiUrl(ghFileRef);
+              authOrigin = currentUrl.origin;
+              usedGitHubApiFallback = true;
+              continue;
+            }
+          }
+          break;
         }
-      } else {
-        const buf = Buffer.from(await res.arrayBuffer());
-        if (buf.byteLength > MAX_IMAGE_BYTES) {
+
+        if (!res.ok) {
+          await res.body?.cancel().catch(() => {});
+          throw new Error(`Bundle download failed (${res.status} ${res.statusText})`);
+        }
+        const contentLength = Number(res.headers?.get?.('content-length') ?? 0);
+        if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
+          await res.body?.cancel().catch(() => {});
           throw new Error(
-            `Compressed bundle (${buf.byteLength} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
+            `Compressed bundle (${contentLength} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
           );
         }
-        hash.update(buf);
-        fs.writeFileSync(archivePath, buf, {mode: 0o600});
+        const hash = crypto.createHash('sha256');
+        let total = 0;
+        if (res.body && typeof res.body.getReader === 'function') {
+          const reader = res.body.getReader();
+          const fd = fs.openSync(archivePath, 'w', 0o600);
+          try {
+            while (true) {
+              const {done, value} = await reader.read();
+              if (done) break;
+              if (!value) continue;
+              total += value.byteLength;
+              if (total > MAX_IMAGE_BYTES) {
+                await reader.cancel().catch(() => {});
+                throw new Error(
+                  `Compressed bundle (${total} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
+                );
+              }
+              hash.update(value);
+              fs.writeSync(fd, value);
+            }
+          } finally {
+            fs.closeSync(fd);
+          }
+        } else {
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.byteLength > MAX_IMAGE_BYTES) {
+            throw new Error(
+              `Compressed bundle (${buf.byteLength} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
+            );
+          }
+          total = buf.byteLength;
+          hash.update(buf);
+          fs.writeFileSync(archivePath, buf, {mode: 0o600});
+        }
+        return {total, sha256: hash.digest('hex').toLowerCase()};
+      };
+
+      let downloaded = await streamHttp(startUrl, startUrl.origin, true);
+      if (githubRepo && downloaded.total <= GIT_LFS_POINTER_MAX_BYTES) {
+        const pointer = parseGitLfsPointer(fs.readFileSync(archivePath, 'utf8'));
+        if (pointer) {
+          if (pointer.size > MAX_IMAGE_BYTES) {
+            throw new Error(
+              `Compressed bundle (${pointer.size} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
+            );
+          }
+          if (pointer.oid !== opts.expectedSha256.toLowerCase()) {
+            throw new Error(
+              `SHA-256 mismatch: expected ${opts.expectedSha256}, got ${pointer.oid}`
+            );
+          }
+          const lfsUrl = await resolveGitHubLfsDownloadUrl(githubRepo, pointer, authHeader, signal);
+          downloaded = await streamHttp(lfsUrl, undefined, false);
+        }
       }
+      actualSha256 = downloaded.sha256;
     }
 
     // Verify streamed SHA-256 digest before invoking the unpacker
-    const actualSha256 = hash.digest('hex').toLowerCase();
     if (actualSha256 !== opts.expectedSha256.toLowerCase()) {
       throw new Error(
         `SHA-256 mismatch: expected ${opts.expectedSha256}, got ${actualSha256}`

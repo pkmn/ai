@@ -1192,6 +1192,791 @@ describe('arena infrastructure', () => {
       });
       expect(seenAuth).toEqual(['Bearer ghp_prefixed_token']);
     });
+
+    test('unpack.bundle detects zstd compression by magic bytes without a .tar.zst suffix', () => {
+      const zstBytes = zlib.zstdCompressSync(zlib.gunzipSync(fs.readFileSync(validArchivePath)));
+      const extensionlessPath = path.join(tmpDir, 'magic-zstd-bundle.tar');
+      fs.writeFileSync(extensionlessPath, zstBytes);
+      const dest = path.join(tmpDir, 'agent-magic-zstd');
+      const unpacked = unpack.bundle(extensionlessPath, dest);
+      expect(unpacked).toBeGreaterThan(70_000);
+      expect(fs.existsSync(path.join(dest, 'run'))).toBe(true);
+    });
+
+    test('downloadAndUnpackBundle follows multi-label Hugging Face Xet redirects', async () => {
+      const seenHeaders: Array<{url: string; auth: string | null}> = [];
+      const zstBytes = zlib.zstdCompressSync(zlib.gunzipSync(fs.readFileSync(validArchivePath)));
+      const zstSha = crypto.createHash('sha256').update(zstBytes).digest('hex');
+      globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        const hdrs = new Headers(init?.headers);
+        seenHeaders.push({url: u, auth: hdrs.get('authorization')});
+        if (u.startsWith('https://huggingface.co/')) {
+          return Promise.resolve(
+            new Response('', {
+              status: 302,
+              headers: {
+                location: 'https://us.aws.cdn.hf.co/xet-bridge-us/abc/def?Signature=signed',
+              },
+            })
+          );
+        }
+        return Promise.resolve(new Response(zstBytes, {status: 200}));
+      };
+
+      const dlBytes = await packages.downloadAndUnpackBundle({
+        url: 'https://huggingface.co/pkmn/0-error/resolve/main/agent.tar.zst',
+        expectedSha256: zstSha,
+        agentTargetId: 'agent-hf-xet',
+        authToken: 'hf_private_read_token',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'hf-xet')),
+      });
+      expect(dlBytes).toBeGreaterThan(70_000);
+      expect(seenHeaders).toEqual([
+        {
+          url: 'https://huggingface.co/pkmn/0-error/resolve/main/agent.tar.zst',
+          auth: 'Bearer hf_private_read_token',
+        },
+        {
+          url: 'https://us.aws.cdn.hf.co/xet-bridge-us/abc/def?Signature=signed',
+          auth: null,
+        },
+      ]);
+    });
+
+    test('downloadAndUnpackBundle resolves private GitHub releases via API on 404', async () => {
+      const calls: Array<{url: string; auth: string | null; accept: string | null}> = [];
+      const zstBytes = zlib.zstdCompressSync(zlib.gunzipSync(fs.readFileSync(validArchivePath)));
+      const zstSha = crypto.createHash('sha256').update(zstBytes).digest('hex');
+      globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        const hdrs = new Headers(init?.headers);
+        calls.push({url: u, auth: hdrs.get('authorization'), accept: hdrs.get('accept')});
+        if (u === 'https://github.com/pkmn/0-error/releases/download/v1.0.0/agent.tar.zst') {
+          return Promise.resolve(new Response('Not Found', {status: 404}));
+        }
+        if (u === 'https://api.github.com/repos/pkmn/0-error/releases/tags/v1.0.0') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                assets: [
+                  {
+                    name: 'agent.tar.zst',
+                    url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/4242',
+                    browser_download_url:
+                      'https://github.com/pkmn/0-error/releases/download/v1.0.0/agent.tar.zst',
+                  },
+                ],
+              }),
+              {status: 200, headers: {'content-type': 'application/json'}}
+            )
+          );
+        }
+        if (u === 'https://api.github.com/repos/pkmn/0-error/releases/assets/4242') {
+          return Promise.resolve(
+            new Response('', {
+              status: 302,
+              headers: {
+                location: 'https://release-assets.githubusercontent.com/asset/4242?sig=ok',
+              },
+            })
+          );
+        }
+        return Promise.resolve(new Response(zstBytes, {status: 200}));
+      };
+
+      const dlBytes = await packages.downloadAndUnpackBundle({
+        url: 'https://github.com/pkmn/0-error/releases/download/v1.0.0/agent.tar.zst',
+        expectedSha256: zstSha,
+        agentTargetId: 'agent-gh-private',
+        authToken: 'github_pat_private_release_secret',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-private')),
+      });
+      expect(dlBytes).toBeGreaterThan(70_000);
+      expect(calls).toEqual([
+        {
+          url: 'https://github.com/pkmn/0-error/releases/download/v1.0.0/agent.tar.zst',
+          auth: 'Bearer github_pat_private_release_secret',
+          accept: null,
+        },
+        {
+          url: 'https://api.github.com/repos/pkmn/0-error/releases/tags/v1.0.0',
+          auth: 'Bearer github_pat_private_release_secret',
+          accept: 'application/vnd.github+json',
+        },
+        {
+          url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/4242',
+          auth: 'Bearer github_pat_private_release_secret',
+          accept: 'application/octet-stream',
+        },
+        {
+          url: 'https://release-assets.githubusercontent.com/asset/4242?sig=ok',
+          auth: null,
+          accept: null,
+        },
+      ]);
+    });
+
+    test('downloadAndUnpackBundle encodes slashed tags in GitHub API fallback', async () => {
+      const seenUrls: string[] = [];
+      const archiveBytes = fs.readFileSync(validArchivePath);
+      globalThis.fetch = (input: string | URL | Request) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        seenUrls.push(u);
+        if (u.startsWith('https://github.com/')) {
+          return Promise.resolve(new Response('Not Found', {status: 404}));
+        }
+        if (u === 'https://api.github.com/repos/pkmn/0-error/releases/tags/pkg%2Fv1') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                assets: [
+                  {
+                    name: 'agent.tar.gz',
+                    url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/77',
+                  },
+                ],
+              }),
+              {status: 200}
+            )
+          );
+        }
+        if (u === 'https://api.github.com/repos/pkmn/0-error/releases/assets/77') {
+          return Promise.resolve(
+            new Response('', {
+              status: 302,
+              headers: {location: 'https://release-assets.githubusercontent.com/asset/77'},
+            })
+          );
+        }
+        return Promise.resolve(new Response(archiveBytes, {status: 200}));
+      };
+
+      await packages.downloadAndUnpackBundle({
+        url: 'https://github.com/pkmn/0-error/releases/download/pkg/v1/agent.tar.gz',
+        expectedSha256: validArchiveSha,
+        agentTargetId: 'agent-gh-slash-tag',
+        authToken: 'github_pat_slash_tag',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-slash')),
+      });
+      expect(seenUrls).toContain('https://api.github.com/repos/pkmn/0-error/releases/tags/pkg%2Fv1');
+    });
+
+    test('downloadAndUnpackBundle resolves private GitHub latest release downloads', async () => {
+      const seenUrls: string[] = [];
+      const archiveBytes = fs.readFileSync(validArchivePath);
+      globalThis.fetch = (input: string | URL | Request) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        seenUrls.push(u);
+        if (u.startsWith('https://github.com/')) {
+          return Promise.resolve(new Response('Not Found', {status: 404}));
+        }
+        if (u === 'https://api.github.com/repos/pkmn/0-error/releases/latest') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                assets: [
+                  {
+                    name: 'agent.tar.gz',
+                    url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/88',
+                  },
+                ],
+              }),
+              {status: 200}
+            )
+          );
+        }
+        if (u === 'https://api.github.com/repos/pkmn/0-error/releases/assets/88') {
+          return Promise.resolve(
+            new Response('', {
+              status: 302,
+              headers: {location: 'https://release-assets.githubusercontent.com/asset/88'},
+            })
+          );
+        }
+        return Promise.resolve(new Response(archiveBytes, {status: 200}));
+      };
+
+      await packages.downloadAndUnpackBundle({
+        url: 'https://github.com/pkmn/0-error/releases/latest/download/agent.tar.gz',
+        expectedSha256: validArchiveSha,
+        agentTargetId: 'agent-gh-latest',
+        authToken: 'github_pat_latest',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-latest')),
+      });
+      expect(seenUrls).toContain('https://api.github.com/repos/pkmn/0-error/releases/latest');
+    });
+
+    test('downloadAndUnpackBundle scrubs token if GitHub release API fallback fails', async () => {
+      globalThis.fetch = (input: string | URL | Request) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        if (u.startsWith('https://github.com/')) {
+          return Promise.resolve(new Response('Not Found', {status: 404}));
+        }
+        return Promise.reject(new Error('network error carrying github_pat_leak_check'));
+      };
+
+      await expect(
+        packages.downloadAndUnpackBundle({
+          url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.zst',
+          expectedSha256: validArchiveSha,
+          agentTargetId: 'agent-gh-fail',
+          authToken: 'github_pat_leak_check',
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-fail')),
+        })
+      ).rejects.toThrow('network error carrying [REDACTED]');
+    });
+
+    test('downloadAndUnpackBundle resolves private GitHub draft releases via releases list',
+      async () => {
+        const seenUrls: string[] = [];
+        const archiveBytes = fs.readFileSync(validArchivePath);
+        globalThis.fetch = (input: string | URL | Request) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL ? input.toString() : input.url;
+          seenUrls.push(u);
+          if (u === 'https://github.com/pkmn/0-error/releases/download/untagged-abc/agent.tar.gz') {
+            return Promise.resolve(new Response('Not Found', {status: 404}));
+          }
+          if (u === 'https://api.github.com/repos/pkmn/0-error/releases/tags/untagged-abc') {
+            return Promise.resolve(new Response('Not Found', {status: 404}));
+          }
+          if (u === 'https://api.github.com/repos/pkmn/0-error/releases?per_page=100') {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify([
+                  {
+                    tag_name: 'v1.0.0',
+                    assets: [
+                      {
+                        name: 'agent.tar.gz',
+                        url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/555',
+                        browser_download_url:
+                          'https://github.com/pkmn/0-error/releases/download/untagged-abc/agent.tar.gz',
+                      },
+                    ],
+                  },
+                ]),
+                {status: 200}
+              )
+            );
+          }
+          if (u === 'https://api.github.com/repos/pkmn/0-error/releases/assets/555') {
+            return Promise.resolve(
+              new Response('', {
+                status: 302,
+                headers: {location: 'https://release-assets.githubusercontent.com/asset/555'},
+              })
+            );
+          }
+          return Promise.resolve(new Response(archiveBytes, {status: 200}));
+        };
+
+        await packages.downloadAndUnpackBundle({
+          url: 'https://github.com/pkmn/0-error/releases/download/untagged-abc/agent.tar.gz',
+          expectedSha256: validArchiveSha,
+          agentTargetId: 'agent-gh-draft',
+          authToken: 'github_pat_draft',
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-draft')),
+        });
+        expect(seenUrls).toContain(
+          'https://api.github.com/repos/pkmn/0-error/releases?per_page=100'
+        );
+      });
+
+    test('downloadAndUnpackBundle rewrites GitHub blob URLs to raw downloads', async () => {
+      const seenUrls: string[] = [];
+      const archiveBytes = fs.readFileSync(validArchivePath);
+      globalThis.fetch = (input: string | URL | Request) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        seenUrls.push(u);
+        if (u === 'https://github.com/pkmn/0-error/raw/main/dist/agent.tar.gz') {
+          return Promise.resolve(
+            new Response('', {
+              status: 302,
+              headers: {
+                location: 'https://raw.githubusercontent.com/pkmn/0-error/main/dist/agent.tar.gz',
+              },
+            })
+          );
+        }
+        return Promise.resolve(new Response(archiveBytes, {status: 200}));
+      };
+
+      await packages.downloadAndUnpackBundle({
+        url: 'https://github.com/pkmn/0-error/blob/main/dist/agent.tar.gz?raw=true',
+        expectedSha256: validArchiveSha,
+        agentTargetId: 'agent-gh-blob',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-blob')),
+      });
+      expect(seenUrls).toEqual([
+        'https://github.com/pkmn/0-error/raw/main/dist/agent.tar.gz',
+        'https://raw.githubusercontent.com/pkmn/0-error/main/dist/agent.tar.gz',
+      ]);
+    });
+
+    test('downloadAndUnpackBundle resolves private GitHub raw file URLs via Contents API',
+      async () => {
+        const calls: Array<{url: string; auth: string | null; accept: string | null}> = [];
+        const archiveBytes = fs.readFileSync(validArchivePath);
+        globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL ? input.toString() : input.url;
+          const hdrs = new Headers(init?.headers);
+          calls.push({url: u, auth: hdrs.get('authorization'), accept: hdrs.get('accept')});
+          if (u.startsWith('https://raw.githubusercontent.com/')) {
+            return Promise.resolve(new Response('Not Found', {status: 404}));
+          }
+          return Promise.resolve(new Response(archiveBytes, {status: 200}));
+        };
+
+        await packages.downloadAndUnpackBundle({
+          url: 'https://raw.githubusercontent.com/pkmn/0-error/refs/heads/main/dist/agent.tar.gz',
+          expectedSha256: validArchiveSha,
+          agentTargetId: 'agent-gh-raw-private',
+          authToken: 'github_pat_raw_private',
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-raw-private')),
+        });
+        expect(calls).toEqual([
+          {
+            url: 'https://raw.githubusercontent.com/pkmn/0-error/refs/heads/main/dist/agent.tar.gz',
+            auth: 'Bearer github_pat_raw_private',
+            accept: null,
+          },
+          {
+            url: 'https://api.github.com/repos/pkmn/0-error/contents/dist/agent.tar.gz' +
+              '?ref=refs%2Fheads%2Fmain',
+            auth: 'Bearer github_pat_raw_private',
+            accept: 'application/vnd.github.raw+json',
+          },
+        ]);
+      });
+
+    test('downloadAndUnpackBundle sends raw media Accept header for GitHub Contents API URLs',
+      async () => {
+        let seenAccept: string | null = null;
+        const archiveBytes = fs.readFileSync(validArchivePath);
+        globalThis.fetch = (_input: string | URL | Request, init?: RequestInit) => {
+          seenAccept = new Headers(init?.headers).get('accept');
+          return Promise.resolve(new Response(archiveBytes, {status: 200}));
+        };
+
+        await packages.downloadAndUnpackBundle({
+          url: 'https://api.github.com/repos/pkmn/0-error/contents/dist/agent.tar.gz?ref=main',
+          expectedSha256: validArchiveSha,
+          agentTargetId: 'agent-gh-contents',
+          authToken: 'github_pat_contents',
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-contents')),
+        });
+        expect(seenAccept).toBe('application/vnd.github.raw+json');
+      });
+
+    test('downloadAndUnpackBundle resolves GitHub Git LFS pointers via LFS Batch API', async () => {
+      const calls: Array<{url: string; method: string; auth: string | null}> = [];
+      const zstBytes = zlib.zstdCompressSync(zlib.gunzipSync(fs.readFileSync(validArchivePath)));
+      const zstSha = crypto.createHash('sha256').update(zstBytes).digest('hex');
+      const lfsPointer =
+        'version https://git-lfs.github.com/spec/v1\n' +
+        `oid sha256:${zstSha}\n` +
+        `size ${zstBytes.byteLength}\n`;
+
+      globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        const hdrs = new Headers(init?.headers);
+        calls.push({url: u, method: init?.method ?? 'GET', auth: hdrs.get('authorization')});
+        if (u === 'https://github.com/pkmn/0-error/raw/main/agent.tar.zst') {
+          return Promise.resolve(new Response('Not Found', {status: 404}));
+        }
+        if (u === 'https://api.github.com/repos/pkmn/0-error/contents/agent.tar.zst?ref=main') {
+          return Promise.resolve(new Response(lfsPointer, {status: 200}));
+        }
+        if (u === 'https://github.com/pkmn/0-error.git/info/lfs/objects/batch') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                objects: [
+                  {
+                    oid: zstSha,
+                    size: zstBytes.byteLength,
+                    actions: {
+                      download: {
+                        href: 'https://github-cloud.s3.amazonaws.com/alambic/media/lfs-obj?sig=1',
+                      },
+                    },
+                  },
+                ],
+              }),
+              {status: 200}
+            )
+          );
+        }
+        return Promise.resolve(new Response(zstBytes, {status: 200}));
+      };
+
+      const dlBytes = await packages.downloadAndUnpackBundle({
+        url: 'https://github.com/pkmn/0-error/blob/main/agent.tar.zst',
+        expectedSha256: zstSha,
+        agentTargetId: 'agent-gh-lfs',
+        authToken: 'github_pat_lfs_secret',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-lfs')),
+      });
+      expect(dlBytes).toBeGreaterThan(70_000);
+      expect(calls).toEqual([
+        {
+          url: 'https://github.com/pkmn/0-error/raw/main/agent.tar.zst',
+          method: 'GET',
+          auth: 'Bearer github_pat_lfs_secret',
+        },
+        {
+          url: 'https://api.github.com/repos/pkmn/0-error/contents/agent.tar.zst?ref=main',
+          method: 'GET',
+          auth: 'Bearer github_pat_lfs_secret',
+        },
+        {
+          url: 'https://github.com/pkmn/0-error.git/info/lfs/objects/batch',
+          method: 'POST',
+          auth: `Basic ${Buffer.from('x-access-token:github_pat_lfs_secret').toString('base64')}`,
+        },
+        {
+          url: 'https://github-cloud.s3.amazonaws.com/alambic/media/lfs-obj?sig=1',
+          method: 'GET',
+          auth: null,
+        },
+      ]);
+    });
+
+    test('downloadAndUnpackBundle base64-encodes Basic user:pass authToken values', async () => {
+      let seenAuth: string | null = null;
+      const archiveBytes = fs.readFileSync(validArchivePath);
+      globalThis.fetch = (_input: string | URL | Request, init?: RequestInit) => {
+        seenAuth = new Headers(init?.headers).get('authorization');
+        return Promise.resolve(new Response(archiveBytes, {status: 200}));
+      };
+
+      await packages.downloadAndUnpackBundle({
+        url: 'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.gz',
+        expectedSha256: validArchiveSha,
+        agentTargetId: 'agent-basic-auth',
+        authToken: 'Basic token:github_pat_basic',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'basic-auth')),
+      });
+      expect(seenAuth).toBe(
+        `Basic ${Buffer.from('token:github_pat_basic', 'utf8').toString('base64')}`
+      );
+    });
+
+    test('downloadAndUnpackBundle downloads direct GitHub API release asset URLs', async () => {
+      const calls: Array<{url: string; auth: string | null; accept: string | null}> = [];
+      const zstBytes = zlib.zstdCompressSync(zlib.gunzipSync(fs.readFileSync(validArchivePath)));
+      const zstSha = crypto.createHash('sha256').update(zstBytes).digest('hex');
+      globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        const hdrs = new Headers(init?.headers);
+        calls.push({url: u, auth: hdrs.get('authorization'), accept: hdrs.get('accept')});
+        if (u === 'https://api.github.com/repos/pkmn/0-error/releases/assets/99') {
+          return Promise.resolve(
+            new Response('', {
+              status: 302,
+              headers: {location: 'https://release-assets.githubusercontent.com/asset/99?sig=1'},
+            })
+          );
+        }
+        return Promise.resolve(new Response(zstBytes, {status: 200}));
+      };
+
+      const dlBytes = await packages.downloadAndUnpackBundle({
+        url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/99',
+        expectedSha256: zstSha,
+        agentTargetId: 'agent-gh-api-direct',
+        authToken: 'github_pat_direct_asset',
+        dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-direct')),
+      });
+      expect(dlBytes).toBeGreaterThan(70_000);
+      expect(calls).toEqual([
+        {
+          url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/99',
+          auth: 'Bearer github_pat_direct_asset',
+          accept: 'application/octet-stream',
+        },
+        {
+          url: 'https://release-assets.githubusercontent.com/asset/99?sig=1',
+          auth: null,
+          accept: null,
+        },
+      ]);
+    });
+
+    test('writePrivateSkopeoAuthfile selects registry-specific default usernames', () => {
+      const authDir = path.join(tmpDir, 'skopeo-registry-defaults');
+      fs.mkdirSync(authDir, {recursive: true});
+      const readCreds = (imageRef: string, token: string, hostKey: string) => {
+        const p = packages.writePrivateSkopeoAuthfile(authDir, imageRef, token);
+        const parsed = JSON.parse(fs.readFileSync(p, 'utf8')) as {
+          auths: Record<string, {auth: string}>;
+        };
+        return Buffer.from(parsed.auths[hostKey].auth, 'base64').toString('utf8');
+      };
+
+      expect(
+        readCreds('us-central1-docker.pkg.dev/p/r/a:1', 'ya29.tok', 'us-central1-docker.pkg.dev')
+      ).toBe('oauth2accesstoken:ya29.tok');
+      expect(
+        readCreds(
+          '123456789012.dkr.ecr.us-east-1.amazonaws.com/a:1',
+          'ecr_pass',
+          '123456789012.dkr.ecr.us-east-1.amazonaws.com'
+        )
+      ).toBe('AWS:ecr_pass');
+      expect(readCreds('quay.io/pkmn/a:1', 'quay_tok', 'quay.io')).toBe('$oauthtoken:quay_tok');
+      expect(readCreds('ghcr.io/pkmn/a:1', 'token ghp_abc', 'ghcr.io')).toBe('oauth2:ghp_abc');
+    });
+
+    test('downloadAndUnpackBundle blocks Contents API traversal via encoded slashes', async () => {
+      const seenUrls: string[] = [];
+      globalThis.fetch = (input: string | URL | Request) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        seenUrls.push(u);
+        return Promise.resolve(new Response('Not Found', {status: 404}));
+      };
+
+      await expect(
+        packages.downloadAndUnpackBundle({
+          url: 'https://github.com/pkmn/0-error/raw/main/x%2F..%2F..%2F..%2F..%2F..%2Fuser.tar.zst',
+          expectedSha256: validArchiveSha,
+          agentTargetId: 'agent-gh-traversal',
+          authToken: 'github_pat_traversal_guard',
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'gh-traversal')),
+        })
+      ).rejects.toThrow(/404/);
+      expect(seenUrls).toEqual([
+        'https://github.com/pkmn/0-error/raw/main/x%2F..%2F..%2F..%2F..%2F..%2Fuser.tar.zst',
+      ]);
+    });
+
+    test('downloadAndUnpackBundle skips GitHub API fallback after cross-origin redirect',
+      async () => {
+        const calls: Array<{url: string; auth: string | null}> = [];
+        globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL ? input.toString() : input.url;
+          calls.push({url: u, auth: new Headers(init?.headers).get('authorization')});
+          if (u.startsWith('https://pub-abc.r2.dev/')) {
+            return Promise.resolve(
+              new Response('', {
+                status: 302,
+                headers: {
+                  location: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.zst',
+                },
+              })
+            );
+          }
+          return Promise.resolve(new Response('Not Found', {status: 404}));
+        };
+
+        await expect(
+          packages.downloadAndUnpackBundle({
+            url: 'https://pub-abc.r2.dev/agent.tar.zst',
+            expectedSha256: validArchiveSha,
+            agentTargetId: 'agent-xorigin-404',
+            authToken: 'r2_private_secret',
+            dirs: packages.dirsForRoot(path.join(tmpDir, 'xorigin-404')),
+          })
+        ).rejects.toThrow(/404/);
+        expect(calls).toEqual([
+          {url: 'https://pub-abc.r2.dev/agent.tar.zst', auth: 'Bearer r2_private_secret'},
+          {
+            url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.zst',
+            auth: null,
+          },
+        ]);
+      });
+
+    test('downloadAndUnpackBundle rejects non-allowlisted GitHub LFS download hrefs', async () => {
+      const zstBytes = zlib.zstdCompressSync(zlib.gunzipSync(fs.readFileSync(validArchivePath)));
+      const zstSha = crypto.createHash('sha256').update(zstBytes).digest('hex');
+      const lfsPointer =
+        'version https://git-lfs.github.com/spec/v1\n' +
+        `oid sha256:${zstSha}\n` +
+        `size ${zstBytes.byteLength}\n`;
+
+      globalThis.fetch = (input: string | URL | Request) => {
+        const u = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.toString() : input.url;
+        if (u === 'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.zst') {
+          return Promise.resolve(new Response(lfsPointer, {status: 200}));
+        }
+        if (u === 'https://github.com/pkmn/0-error.git/info/lfs/objects/batch') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                objects: [
+                  {
+                    oid: zstSha,
+                    size: zstBytes.byteLength,
+                    actions: {download: {href: 'https://evil.example/agent.tar.zst'}},
+                  },
+                ],
+              }),
+              {status: 200}
+            )
+          );
+        }
+        throw new Error(`Unexpected fetch to ${u}`);
+      };
+
+      await expect(
+        packages.downloadAndUnpackBundle({
+          url: 'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.zst',
+          expectedSha256: zstSha,
+          agentTargetId: 'agent-lfs-bad-host',
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'lfs-bad-host')),
+        })
+      ).rejects.toThrow(/supported artifact host/);
+    });
+
+    test('downloadAndUnpackBundle rejects oversized GitHub LFS pointers before batch POST',
+      async () => {
+        const seenUrls: string[] = [];
+        const lfsPointer =
+          'version https://git-lfs.github.com/spec/v1\n' +
+          `oid sha256:${validArchiveSha}\n` +
+          `size ${packages.MAX_IMAGE_BYTES + 1}\n`;
+
+        globalThis.fetch = (input: string | URL | Request) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL ? input.toString() : input.url;
+          seenUrls.push(u);
+          return Promise.resolve(new Response(lfsPointer, {status: 200}));
+        };
+
+        await expect(
+          packages.downloadAndUnpackBundle({
+            url: 'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.gz',
+            expectedSha256: validArchiveSha,
+            agentTargetId: 'agent-lfs-oversized',
+            dirs: packages.dirsForRoot(path.join(tmpDir, 'lfs-oversized')),
+          })
+        ).rejects.toThrow(/exceeds 500 MiB cap/);
+        expect(seenUrls).toEqual([
+          'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.gz',
+        ]);
+      });
+
+    test('downloadAndUnpackBundle rejects mismatched GitHub LFS pointer oid before batch POST',
+      async () => {
+        const seenUrls: string[] = [];
+        const otherSha = 'a'.repeat(64);
+        const lfsPointer =
+          'version https://git-lfs.github.com/spec/v1\n' +
+          `oid sha256:${otherSha}\n` +
+          'size 1024\n';
+
+        globalThis.fetch = (input: string | URL | Request) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL ? input.toString() : input.url;
+          seenUrls.push(u);
+          return Promise.resolve(new Response(lfsPointer, {status: 200}));
+        };
+
+        await expect(
+          packages.downloadAndUnpackBundle({
+            url: 'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.gz',
+            expectedSha256: validArchiveSha,
+            agentTargetId: 'agent-lfs-sha-mismatch',
+            dirs: packages.dirsForRoot(path.join(tmpDir, 'lfs-sha-mismatch')),
+          })
+        ).rejects.toThrow(/SHA-256 mismatch/);
+        expect(seenUrls).toEqual([
+          'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.gz',
+        ]);
+      });
+
+    test('downloadAndUnpackBundle forwards explicit user:pass to GitHub LFS without double prefix',
+      async () => {
+        let lfsAuth: string | null = null;
+        const archiveBytes = fs.readFileSync(validArchivePath);
+        const lfsPointer =
+          'version https://git-lfs.github.com/spec/v1\n' +
+          `oid sha256:${validArchiveSha}\n` +
+          `size ${archiveBytes.byteLength}\n`;
+
+        globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+          const u = typeof input === 'string'
+            ? input
+            : input instanceof URL ? input.toString() : input.url;
+          if (u === 'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.gz') {
+            return Promise.resolve(new Response(lfsPointer, {status: 200}));
+          }
+          if (u === 'https://github.com/pkmn/0-error.git/info/lfs/objects/batch') {
+            lfsAuth = new Headers(init?.headers).get('authorization');
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  objects: [
+                    {
+                      oid: validArchiveSha,
+                      size: archiveBytes.byteLength,
+                      actions: {
+                        download: {
+                          href: 'https://github-cloud.githubusercontent.com/alambic/media/obj?s=1',
+                        },
+                      },
+                    },
+                  ],
+                }),
+                {status: 200}
+              )
+            );
+          }
+          return Promise.resolve(new Response(archiveBytes, {status: 200}));
+        };
+
+        await packages.downloadAndUnpackBundle({
+          url: 'https://raw.githubusercontent.com/pkmn/0-error/main/agent.tar.gz',
+          expectedSha256: validArchiveSha,
+          agentTargetId: 'agent-lfs-userpass',
+          authToken: 'myuser:github_pat_lfs_pair',
+          dirs: packages.dirsForRoot(path.join(tmpDir, 'lfs-userpass')),
+        });
+        expect(lfsAuth).toBe(
+          `Basic ${Buffer.from('myuser:github_pat_lfs_pair', 'utf8').toString('base64')}`
+        );
+      });
+
+    test('scrubAuthSecret redacts decoded credentials from base64 Basic tokens', () => {
+      const encoded = Buffer.from('myuser:super_secret_pw', 'utf8').toString('base64');
+      const token = `Basic ${encoded}`;
+      expect(
+        packages.scrubAuthSecret('auth failed for myuser:super_secret_pw', token)
+      ).toBe('auth failed for [REDACTED]');
+      expect(
+        packages.scrubAuthSecret('password super_secret_pw rejected', token)
+      ).toBe('password [REDACTED] rejected');
+    });
   });
 
   describe('arena/db Database', () => {

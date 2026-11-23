@@ -91,20 +91,49 @@ function parsePaxRecords(data: Buffer): Record<string, string> {
   return out;
 }
 
+// Inspects magic bytes rather than the staging filename suffix so extensionless endpoints
+// (such as GitHub REST API release asset URLs) decompress accurately.
+function detectCompression(archivePath: string): 'gzip' | 'zstd' | 'xz' | 'none' {
+  const hdr = Buffer.alloc(6);
+  const fd = fs.openSync(archivePath, 'r');
+  let n: number;
+  try {
+    n = fs.readSync(fd, hdr, 0, hdr.length, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (n >= 2 && hdr[0] === 0x1f && hdr[1] === 0x8b) return 'gzip';
+  if (n >= 4 && hdr[0] === 0x28 && hdr[1] === 0xb5 && hdr[2] === 0x2f && hdr[3] === 0xfd) {
+    return 'zstd';
+  }
+  if (
+    n >= 6 &&
+    hdr[0] === 0xfd &&
+    hdr[1] === 0x37 &&
+    hdr[2] === 0x7a &&
+    hdr[3] === 0x58 &&
+    hdr[4] === 0x5a &&
+    hdr[5] === 0x00
+  ) {
+    return 'xz';
+  }
+  return 'none';
+}
+
 function decompressArchive(archivePath: string): Buffer {
-  const lower = archivePath.toLowerCase();
-  if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+  const compression = detectCompression(archivePath);
+  if (compression === 'gzip') {
     return zlib.gunzipSync(fs.readFileSync(archivePath), {
       maxOutputLength: MAX_TAR_STREAM_BYTES,
     });
   }
-  if (lower.endsWith('.tar.zst') || lower.endsWith('.tzst')) {
+  if (compression === 'zstd') {
     return zlib.zstdDecompressSync(fs.readFileSync(archivePath), {
       maxOutputLength: MAX_TAR_STREAM_BYTES,
     });
   }
-  if (lower.endsWith('.tar.xz') || lower.endsWith('.txz')) {
-    return execFileSync('xz', ['-dc', archivePath], {
+  if (compression === 'xz') {
+    return execFileSync('xz', ['-dc', '--', archivePath], {
       maxBuffer: MAX_TAR_STREAM_BYTES,
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 60_000,

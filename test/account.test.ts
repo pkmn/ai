@@ -66,6 +66,12 @@ describe('submission helpers', () => {
     expect(account.deducePackageFormat('docker.io/library/agent@sha256:' + SHA_A)).toBe('oci');
   });
 
+  test('deducePackageFormat classifies GitHub release asset API URLs as bundles', () => {
+    expect(
+      account.deducePackageFormat('https://api.github.com/repos/pkmn/0-error/releases/assets/12345')
+    ).toBe('bundle');
+  });
+
   test('validateArtifactUrl accepts allowlisted HTTPS bundle hosts', () => {
     const allowedBundles = [
       'https://github.com/pkmn/0-error.tar.zst',
@@ -81,6 +87,92 @@ describe('submission helpers', () => {
     for (const url of allowedBundles) {
       expect(account.validateArtifactUrl(url, 'bundle')).toBeUndefined();
     }
+  });
+
+  test('validateArtifactUrl accepts multi-label Hugging Face Xet subdomains', () => {
+    expect(
+      account.validateArtifactUrl('https://us.aws.cdn.hf.co/xet-bridge-us/agent.tar.zst', 'bundle')
+    ).toBeUndefined();
+    expect(
+      account.validateArtifactUrl('https://cas-bridge.xethub.hf.co/obj/agent.tar.zst', 'bundle')
+    ).toBeUndefined();
+  });
+
+  test('validateArtifactUrl accepts S3 dualstack or hyphenated regional endpoints', () => {
+    expect(
+      account.validateArtifactUrl(
+        'https://my-bucket.s3.dualstack.us-east-1.amazonaws.com/agent.tar.zst',
+        'bundle'
+      )
+    ).toBeUndefined();
+    expect(
+      account.validateArtifactUrl(
+        'https://my-bucket.s3-us-west-2.amazonaws.com/agent.tar.zst',
+        'bundle'
+      )
+    ).toBeUndefined();
+  });
+
+  test('validateArtifactUrl accepts GitHub REST API release asset URLs', () => {
+    expect(
+      account.validateArtifactUrl(
+        'https://api.github.com/repos/pkmn/0-error/releases/assets/987654321',
+        'bundle'
+      )
+    ).toBeUndefined();
+  });
+
+  test('validateArtifactUrl rejects non-asset api.github.com bundle URLs', () => {
+    expect(
+      account.validateArtifactUrl(
+        'https://api.github.com/repos/pkmn/0-error/releases/tags/v1.0.0',
+        'bundle'
+      )
+    ).toBeTruthy();
+  });
+
+  test('validateArtifactUrl accepts raw.githubusercontent.com or media.githubusercontent.com URLs',
+    () => {
+      expect(
+        account.validateArtifactUrl(
+          'https://raw.githubusercontent.com/pkmn/0-error/main/dist/agent.tar.zst',
+          'bundle'
+        )
+      ).toBeUndefined();
+      expect(
+        account.validateArtifactUrl(
+          'https://media.githubusercontent.com/media/pkmn/0-error/main/agent.tar.zst',
+          'bundle'
+        )
+      ).toBeUndefined();
+    });
+
+  test('validateArtifactUrl accepts GitHub Contents API bundle URLs', () => {
+    expect(
+      account.validateArtifactUrl(
+        'https://api.github.com/repos/pkmn/0-error/contents/dist/agent.tar.zst?ref=main',
+        'bundle'
+      )
+    ).toBeUndefined();
+  });
+
+  test('isAllowedBundleHost rejects empty-label hf.co hostnames', () => {
+    expect(account.isAllowedBundleHost('..hf.co')).toBe(false);
+    expect(account.isAllowedBundleHost('.hf.co')).toBe(false);
+    expect(account.isAllowedBundleHost('evilhf.co')).toBe(false);
+  });
+
+  test('isAllowedBundleHost accepts GitHub LFS storage hosts', () => {
+    expect(account.isAllowedBundleHost('github-cloud.githubusercontent.com')).toBe(true);
+    expect(account.isAllowedBundleHost('objects-origin.githubusercontent.com')).toBe(true);
+  });
+
+  test('isGitHubReleaseAssetApiUrl rejects URLs with embedded credentials', () => {
+    expect(
+      account.isGitHubReleaseAssetApiUrl(
+        'https://user:pass@api.github.com/repos/pkmn/0-error/releases/assets/12345'
+      )
+    ).toBe(false);
   });
 
   test('validateArtifactUrl accepts allowlisted OCI registries', () => {

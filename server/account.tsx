@@ -13,6 +13,24 @@ import * as util from '../static/util';
 import {Auth, REGISTER_ISSUE_URL, isCrossSiteRequest} from './auth';
 import * as serverTeams from './teams';
 
+const GITHUB_RELEASE_ASSET_API_RE = /^\/repos\/[^/]+\/[^/]+\/releases\/assets\/\d+$/;
+
+export function isGitHubReleaseAssetApiUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === 'https:' &&
+      parsed.port === '' &&
+      !parsed.username &&
+      !parsed.password &&
+      parsed.hostname.toLowerCase() === 'api.github.com' &&
+      GITHUB_RELEASE_ASSET_API_RE.test(parsed.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function deducePackageFormat(url: string): db.PackageFormat {
   const cleanPath = url.split(/[?#]/)[0].toLowerCase();
   if (
@@ -21,7 +39,8 @@ export function deducePackageFormat(url: string): db.PackageFormat {
     cleanPath.endsWith('.tar.xz') ||
     cleanPath.endsWith('.txz') ||
     cleanPath.endsWith('.tar.zst') ||
-    cleanPath.endsWith('.tzst')
+    cleanPath.endsWith('.tzst') ||
+    isGitHubReleaseAssetApiUrl(url)
   ) {
     return 'bundle';
   }
@@ -164,9 +183,12 @@ const ACCOUNT_SCRIPT = `
 
     if (urlInput && typeSelect) {
       urlInput.addEventListener('input', () => {
-        const v = urlInput.value.trim().split('?')[0].toLowerCase();
+        const v = urlInput.value.trim().split(/[?#]/)[0].toLowerCase();
         if (v) {
-          const isArchive = /\\.(tar\\.gz|tgz|tar\\.xz|txz|tar\\.zst|tzst)$/.test(v);
+          const ghAssetRe =
+            /^https:\\/\\/api\\.github\\.com\\/repos\\/[^/]+\\/[^/]+\\/releases\\/assets\\/\\d+$/;
+          const isArchive =
+            /\\.(tar\\.gz|tgz|tar\\.xz|txz|tar\\.zst|tzst)$/.test(v) || ghAssetRe.test(v);
           if (isArchive && (!bundleOpt || !bundleOpt.disabled)) {
             typeSelect.value = 'bundle';
           } else if (!v.startsWith('http://') && !v.startsWith('https://') && v.includes('/')) {
@@ -1093,7 +1115,11 @@ const ALLOWED_BUNDLE_HOSTS = new Set([
   'github.com',
   'api.github.com',
   'codeload.github.com',
+  'raw.githubusercontent.com',
+  'media.githubusercontent.com',
   'objects.githubusercontent.com',
+  'objects-origin.githubusercontent.com',
+  'github-cloud.githubusercontent.com',
   'release-assets.githubusercontent.com',
   'huggingface.co',
   's3.amazonaws.com',
@@ -1101,10 +1127,10 @@ const ALLOWED_BUNDLE_HOSTS = new Set([
 ]);
 
 const ALLOWED_BUNDLE_HOST_RES = [
-  /^[a-z0-9-]+\.hf\.co$/,
+  /^(?:[a-z0-9-]+\.)+hf\.co$/,
   /^[a-z0-9.-]+\.r2\.cloudflarestorage\.com$/,
   /^[a-z0-9-]+\.r2\.dev$/,
-  /^(?:[a-z0-9.-]+\.)?s3(?:\.[a-z0-9-]+)?\.amazonaws\.com$/,
+  /^(?:[a-z0-9-]+\.)*s3(?:(?:\.dualstack)?\.[a-z0-9-]+|-[a-z0-9-]+)?\.amazonaws\.com$/,
   /^[a-z0-9.-]+\.storage\.googleapis\.com$/,
   /^[a-z0-9.-]+\.backblazeb2\.com$/,
 ];
@@ -1148,7 +1174,8 @@ export function validateArtifactUrl(
   const deduced = deducePackageFormat(url);
   if (deduced !== packageFormat) {
     return packageFormat === 'bundle'
-      ? 'Bundle Artifact URL must end in .tar.gz, .tgz, .tar.xz, .txz, .tar.zst, or .tzst.'
+      ? 'Bundle Artifact URL must end in .tar.gz, .tgz, .tar.xz, .txz, .tar.zst, or .tzst ' +
+        '(or be a GitHub release asset API URL).'
       : 'OCI image reference must not point to a .tar.{gz,xz,zst} archive.';
   }
   if (packageFormat === 'bundle') {
