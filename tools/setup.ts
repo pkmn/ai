@@ -13,11 +13,18 @@ export interface SubmoduleSpec {
   stdinFile?: string;
 }
 
+const TEAMS_SPARSE_DIRS = [
+  'gen9championsvgc2026regmc',
+  'gen1ou',
+  'gen3ou',
+  'gen9ou',
+] as const;
+
 export const SUBMODULES: readonly SubmoduleSpec[] = [
   {
     path: 'teams/teams',
-    sparseDirs: ['gen9championsvgc2026regmc', 'gen1ou', 'gen3ou', 'gen9ou'],
-    sparseArgs: ['set', 'gen9championsvgc2026regmc', 'gen1ou', 'gen3ou', 'gen9ou'],
+    sparseDirs: TEAMS_SPARSE_DIRS,
+    sparseArgs: ['set', ...TEAMS_SPARSE_DIRS],
   },
   {
     path: 'teams/pkmn_stuff',
@@ -180,12 +187,9 @@ export function setUpSubmodule(
   const subDir = path.join(rootDir, spec.path);
 
   if (state.ready || state.sparseOnly) {
-    if (state.sparseOnly) {
-      log(`▸ Updating sparse checkout for ${spec.path}`);
-      applySparseCheckout(rootDir, spec);
-    }
     const pinnedRes = runGit(['rev-parse', `:${spec.path}`], {cwd: rootDir});
     const headRes = runGit(['rev-parse', 'HEAD'], {cwd: subDir});
+    let updatedCommit = false;
     if (pinnedRes.ok && headRes.ok && pinnedRes.stdout !== headRes.stdout) {
       if (update) {
         log(
@@ -198,12 +202,17 @@ export function setUpSubmodule(
           execGit(['-C', subDir, 'checkout', '-f', pinnedRes.stdout]);
         }
         applySparseCheckout(rootDir, spec);
+        updatedCommit = true;
       } else {
         log(
           `▸ ${spec.path} is on ${headRes.stdout.slice(0, 12)}, ` +
           `not pinned ${pinnedRes.stdout.slice(0, 12)} (leaving as-is)`
         );
       }
+    }
+    if (state.sparseOnly && !updatedCommit) {
+      log(`▸ Updating sparse checkout for ${spec.path}`);
+      applySparseCheckout(rootDir, spec);
     }
     return;
   }

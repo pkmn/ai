@@ -191,6 +191,49 @@ describe('setup', () => {
     expect(setup.checkSubmoduleState(rootDir, gitDir, expandedSpec)).toEqual({ready: true});
   });
 
+  test('setUpSubmodule checks out newly added sparse dir from updated pinned commit in one pass',
+    () => {
+      const {rootDir, gitDir} = createTempGitRoot();
+      tempDirs.push(rootDir);
+      const git = (cwd: string, args: string[]) =>
+        execFileSync('git', args, {cwd, env: GIT_ENV, encoding: 'utf8'}).trim();
+
+      const subDir = path.join(rootDir, TEST_SPEC.path);
+      const moduleDir = path.join(gitDir, 'modules', TEST_SPEC.path);
+      fs.mkdirSync(path.dirname(moduleDir), {recursive: true});
+      git(rootDir, [
+        'init', '-b', 'main', '--template=', `--separate-git-dir=${moduleDir}`, subDir,
+      ]);
+
+      fs.mkdirSync(path.join(subDir, 'gen9championsvgc2026regmc'), {recursive: true});
+      fs.writeFileSync(path.join(subDir, 'gen9championsvgc2026regmc', 'a.txt'), 'v1\n', 'utf8');
+      git(subDir, ['add', '.']);
+      git(subDir, ['commit', '-m', 'v1']);
+      const v1 = git(subDir, ['rev-parse', 'HEAD']);
+
+      fs.mkdirSync(path.join(subDir, 'gen1ou'), {recursive: true});
+      fs.writeFileSync(path.join(subDir, 'gen1ou', 'b.txt'), 'v2\n', 'utf8');
+      git(subDir, ['add', '.']);
+      git(subDir, ['commit', '-m', 'v2']);
+      const v2 = git(subDir, ['rev-parse', 'HEAD']);
+
+      git(subDir, ['checkout', '-q', v1]);
+      git(subDir, ['sparse-checkout', 'set', 'gen9championsvgc2026regmc']);
+      git(rootDir, ['update-index', '--add', '--cacheinfo', `160000,${v2},${TEST_SPEC.path}`]);
+
+      const expandedSpec: setup.SubmoduleSpec = {
+        path: 'teams/teams',
+        sparseDirs: ['gen9championsvgc2026regmc', 'gen1ou'],
+        sparseArgs: ['set', 'gen9championsvgc2026regmc', 'gen1ou'],
+      };
+      const logs: string[] = [];
+      setup.setUpSubmodule(rootDir, expandedSpec, msg => logs.push(msg), true);
+      expect(git(subDir, ['rev-parse', 'HEAD'])).toBe(v2);
+      expect(fs.existsSync(path.join(subDir, 'gen1ou', 'b.txt'))).toBe(true);
+      expect(logs.some(l => l.includes('Updating sparse checkout'))).toBe(false);
+      expect(setup.checkSubmoduleState(rootDir, gitDir, expandedSpec)).toEqual({ready: true});
+    });
+
   test('deploy scripts pass --update to setup --submodules-only', () => {
     const vpsDeploy = fs.readFileSync(path.join(__dirname, '..', 'deploy'), 'utf8');
     const arenaDeploy = fs.readFileSync(
