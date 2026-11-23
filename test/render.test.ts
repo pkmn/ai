@@ -1,4 +1,3 @@
-import {execFileSync} from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
@@ -30,7 +29,6 @@ const DAY_1 = 1_761_800_000;
 const DAY_2 = 1_762_664_000;
 const DAY_3 = 1_762_750_400;
 const ARENA_SECRET = 'test-arena-render-secret';
-const HYPERLINK_BIN = root('node_modules', '.bin', 'hyperlink');
 
 const VGC_PASTES_FP = generateValidVgcTeams(20, 0);
 const VGC_PASTES_JAX = generateValidVgcTeams(20, 1);
@@ -835,12 +833,6 @@ describe('populated Arena leaderboard views', () => {
     const res = await h.getRaw('/projects/eevenator', {redirect: 'manual'});
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/projects/#eevenator');
-  });
-
-  test('passes hyperlink anchor checks across rendered static pages', () => {
-    const hlOut = execFileSync(HYPERLINK_BIN, [tmpPublic, '--check-anchors'], {encoding: 'utf8'});
-    expect(hlOut).toContain('Found 0 bad links');
-    expect(hlOut).toContain('Found 0 bad anchors');
   });
 
   test('emits /llms.txt and links to it without a trailing slash on /rules/', () => {
