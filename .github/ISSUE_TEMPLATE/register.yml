@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Submit this issue to request inclusion in _Olympus Mons_, the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions. If you need to make edits (_e.g.,_ to provide qualification evidence for additional ladders or to change your project logo) simply reopen this issue.
+        Submit this issue to request inclusion in _Olympus Mons_, the **pkmn.ai** Arena. Staff will review your entry, update `static/projects.yml`, and approve your project for submissions. If you need to make edits (_e.g.,_ to provide qualification evidence for additional ladders or to change your project logo) simply reopen this issue by commenting.
 
         ## Arena Details
   - type: input

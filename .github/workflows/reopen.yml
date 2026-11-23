@@ -1,0 +1,26 @@
+name: Reopen
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  issues: write
+jobs:
+  reopen:
+    if: >-
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'closed' &&
+      github.event.comment.user.id == github.event.issue.user.id &&
+      contains(github.event.issue.labels.*.name, 'registration')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh api --method PATCH "repos/$REPO/issues/$ISSUE" \
+            -H 'Content-Type: application/json' \
+            --silent --input - <<'EOF'
+          {"state":"open","state_reason":"reopened","assignees":["scheibo"]}
+          EOF
