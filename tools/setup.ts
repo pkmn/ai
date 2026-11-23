@@ -8,7 +8,7 @@ import {ROOT} from '../static/util';
 
 export interface SubmoduleSpec {
   path: string;
-  sparseDir: string;
+  sparseDirs: readonly string[];
   sparseArgs: string[];
   stdinFile?: string;
 }
@@ -16,12 +16,12 @@ export interface SubmoduleSpec {
 export const SUBMODULES: readonly SubmoduleSpec[] = [
   {
     path: 'teams/teams',
-    sparseDir: 'gen9championsvgc2026regmc',
-    sparseArgs: ['set', 'gen9championsvgc2026regmc'],
+    sparseDirs: ['gen9championsvgc2026regmc', 'gen1ou', 'gen3ou', 'gen9ou'],
+    sparseArgs: ['set', 'gen9championsvgc2026regmc', 'gen1ou', 'gen3ou', 'gen9ou'],
   },
   {
     path: 'teams/pkmn_stuff',
-    sparseDir: 'teams',
+    sparseDirs: ['teams'],
     sparseArgs: ['set', '--no-cone', '--stdin'],
     stdinFile: 'teams/pkmn_stuff.txt',
   },
@@ -29,6 +29,7 @@ export const SUBMODULES: readonly SubmoduleSpec[] = [
 
 export interface SubmoduleState {
   ready: boolean;
+  sparseOnly?: boolean;
   problem?: string;
   foreignGitDir?: string;
 }
@@ -108,14 +109,17 @@ export function checkSubmoduleState(
     };
   }
 
-  const sparseTarget = path.join(dir, spec.sparseDir);
-  const sparseStats = fs.lstatSync(sparseTarget, {throwIfNoEntry: false});
-  if (!sparseStats?.isDirectory() || fs.readdirSync(sparseTarget).length === 0) {
-    return {
-      ready: false,
-      problem: `missing sparse checkout directory ${spec.sparseDir}`,
-      foreignGitDir: realSubGit,
-    };
+  for (const sparseDir of spec.sparseDirs) {
+    const sparseTarget = path.join(dir, sparseDir);
+    const sparseStats = fs.lstatSync(sparseTarget, {throwIfNoEntry: false});
+    if (!sparseStats?.isDirectory() || fs.readdirSync(sparseTarget).length === 0) {
+      return {
+        ready: false,
+        sparseOnly: true,
+        problem: `missing sparse checkout directory ${sparseDir}`,
+        foreignGitDir: realSubGit,
+      };
+    }
   }
 
   return {ready: true};
@@ -175,7 +179,11 @@ export function setUpSubmodule(
   const state = checkSubmoduleState(rootDir, gitDir, spec);
   const subDir = path.join(rootDir, spec.path);
 
-  if (state.ready) {
+  if (state.ready || state.sparseOnly) {
+    if (state.sparseOnly) {
+      log(`▸ Updating sparse checkout for ${spec.path}`);
+      applySparseCheckout(rootDir, spec);
+    }
     const pinnedRes = runGit(['rev-parse', `:${spec.path}`], {cwd: rootDir});
     const headRes = runGit(['rev-parse', 'HEAD'], {cwd: subDir});
     if (pinnedRes.ok && headRes.ok && pinnedRes.stdout !== headRes.stdout) {
@@ -352,10 +360,12 @@ export function typecheckPrivate(
 
 export function verifyCheckout(rootDir: string, requirePublic = true) {
   for (const spec of SUBMODULES) {
-    const sparsePath = path.join(rootDir, spec.path, spec.sparseDir);
-    const stats = fs.lstatSync(sparsePath, {throwIfNoEntry: false});
-    if (!stats?.isDirectory() || fs.readdirSync(sparsePath).length === 0) {
-      throw new Error(`Submodule ${spec.path} is missing ${spec.sparseDir}`);
+    for (const sparseDir of spec.sparseDirs) {
+      const sparsePath = path.join(rootDir, spec.path, sparseDir);
+      const stats = fs.lstatSync(sparsePath, {throwIfNoEntry: false});
+      if (!stats?.isDirectory() || fs.readdirSync(sparsePath).length === 0) {
+        throw new Error(`Submodule ${spec.path} is missing ${sparseDir}`);
+      }
     }
   }
   execGit(['status', '--porcelain'], {cwd: rootDir});

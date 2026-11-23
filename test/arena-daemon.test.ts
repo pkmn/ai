@@ -414,10 +414,6 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
           '  status: upcoming',
           '  min: 2',
         ].join('\n'));
-        db.replaceLadderTeams('gen1ou20261109', [
-          'Tauros|||NoAbility|BodySlam,HyperBeam,Blizzard,Earthquake|||||||',
-          'Snorlax|||NoAbility|BodySlam,Reflect,Rest,Amnesia|||||||',
-        ]);
         db.syncProjectsFromYaml([
           '- name: Mew\'s Truck',
           '  active: 2026',
@@ -816,4 +812,133 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
     expect(reported).toHaveLength(1);
     expect(reported[0].smokeStatus).toBe('failed');
   });
+
+  test('TournamentCoordinator smoke tests harvested OU tournaments using sample teams',
+    async () => {
+      const reported: serverArena.SubmissionStatusPayload[] = [];
+      const fakeClient = {
+        getPendingSubmissions: () => Promise.resolve({
+          ladders: [],
+          tournaments: [{
+            id: '93',
+            format: 'gen9ou',
+            version: '0.11.0',
+            team: 'harvested' as const,
+            customRules: [],
+            teamPool: [],
+          }],
+          submissions: [{
+            versionId: 93,
+            agentId: 1,
+            agentSlug: 'foul-play',
+            agentName: 'Foul Play',
+            version: '9.3.0',
+            package: 'oci' as const,
+            url: 'ghcr.io/pkmn/foul-play:9.3.0',
+            sha256: '3'.repeat(64),
+            ladders: [],
+            tournaments: ['93'],
+            teamsByLadder: {},
+          }],
+        }),
+        reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
+          reported.push(payload);
+          return Promise.resolve({
+            ok: true as const,
+            versionId: payload.versionId,
+            smokeStatus: payload.smokeStatus,
+            retiredByLadder: {},
+          });
+        },
+      } as unknown as serverArena.Client;
+      const tourCoord = new tournament.Coordinator({
+        client: fakeClient,
+        baselineSpec: {
+          agentId: '_baseline',
+          displayName: 'Baseline',
+          vmHost: '127.0.0.1',
+          controlSocket: '',
+          localCommand: relayBin,
+          localArgs: [root('arena', 'bin', 'baseline')],
+        },
+        rootDir: path.join(tmpDir, 'gcp-smoke-samples'),
+        prepareSubmissionRootfs: () => 1024,
+        resolveEntrantSpec: entrant => ({
+          agentId: `${entrant.agentSlug}-${entrant.versionId}`,
+          displayName: entrant.agentName,
+          vmHost: '127.0.0.1',
+          controlSocket: '',
+          localCommand: relayBin,
+          localArgs: [defaultAgentScript],
+        }),
+      });
+      expect(await tourCoord.processPendingSubmissions('93')).toBe(1);
+      expect(reported).toHaveLength(1);
+      expect(reported[0].smokeStatus).toBe('passed');
+    });
+
+  test('TournamentCoordinator fails harvested smoke test without falling back to harvested pool',
+    async () => {
+      const reported: serverArena.SubmissionStatusPayload[] = [];
+      const fakeClient = {
+        getPendingSubmissions: () => Promise.resolve({
+          ladders: [],
+          tournaments: [{
+            id: '94',
+            format: 'gen9customgame',
+            version: '0.11.0',
+            team: 'harvested' as const,
+            customRules: [],
+            teamPool: [TEAM_ONE, TEAM_TWO],
+          }],
+          submissions: [{
+            versionId: 94,
+            agentId: 1,
+            agentSlug: 'foul-play',
+            agentName: 'Foul Play',
+            version: '9.4.0',
+            package: 'oci' as const,
+            url: 'ghcr.io/pkmn/foul-play:9.4.0',
+            sha256: '4'.repeat(64),
+            ladders: [],
+            tournaments: ['94'],
+            teamsByLadder: {},
+          }],
+        }),
+        reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
+          reported.push(payload);
+          return Promise.resolve({
+            ok: true as const,
+            versionId: payload.versionId,
+            smokeStatus: payload.smokeStatus,
+            retiredByLadder: {},
+          });
+        },
+      } as unknown as serverArena.Client;
+      const tourCoord = new tournament.Coordinator({
+        client: fakeClient,
+        baselineSpec: {
+          agentId: '_baseline',
+          displayName: 'Baseline',
+          vmHost: '127.0.0.1',
+          controlSocket: '',
+          localCommand: relayBin,
+          localArgs: [root('arena', 'bin', 'baseline')],
+        },
+        rootDir: path.join(tmpDir, 'gcp-smoke-no-fallback'),
+        prepareSubmissionRootfs: () => 1024,
+        resolveEntrantSpec: entrant => ({
+          agentId: `${entrant.agentSlug}-${entrant.versionId}`,
+          displayName: entrant.agentName,
+          vmHost: '127.0.0.1',
+          controlSocket: '',
+          localCommand: relayBin,
+          localArgs: [defaultAgentScript],
+        }),
+      });
+      expect(await tourCoord.processPendingSubmissions('94')).toBe(1);
+      expect(reported).toHaveLength(1);
+      expect(reported[0].smokeStatus).toBe('failed');
+      expect(reported[0].smokeError).toContain('missing sample team pool');
+    });
 });

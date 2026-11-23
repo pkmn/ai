@@ -20,10 +20,10 @@ import {PokemonSet, Team} from '@pkmn/sets';
 import * as sim from '@pkmn/sim';
 
 import {SIM_VERSION} from '../db/ladders';
-import {toID} from '../static/util';
+import {root, toID} from '../static/util';
 import * as teams from '../teams';
 
-import {validateTeam} from './sim';
+import {validateSampleTeamDir, validateTeam} from './sim';
 import * as simOps from './sim-ops';
 
 // `@pkmn/mods` requires parent mods (`champions`) to be registered on `@pkmn/sim`'s `Dex`
@@ -63,6 +63,7 @@ interface PoolEntry {
 const MAX_SPECIES_CACHE_SIZE = 10_000;
 const poolCache = new Map<string, PoolEntry[]>();
 const speciesCache = new Map<string, string[]>();
+const sampleIdsByPool = new Map<string, Promise<string[]>>();
 
 function cacheSpeciesIds(cacheKey: string, ids: string[]) {
   if (speciesCache.size >= MAX_SPECIES_CACHE_SIZE) {
@@ -79,6 +80,7 @@ export function clearReferencePoolCache() {
 
 export const TEAM_HASH_LEN = teams.TEAM_HASH_LEN;
 export const hashTeam = teams.hashTeam;
+export const SAMPLES_DIR = root('teams', 'teams');
 
 export interface CanonicalPoolOwner {
   agentName: string;
@@ -352,6 +354,123 @@ export function samplePoolsPair(
     t1Label: formatProvenanceLabel(t1),
     t2Label: formatProvenanceLabel(t2),
   };
+}
+
+// Validates every team file in `teams/teams/<format>/` once against the exact `@pkmn/sim`
+// `version` used by `format` and retains only the array of valid team IDs for on-demand sampling.
+export function getValidatedSampleTeamIds(
+  format: string,
+  version = SIM_VERSION,
+  samplesDir = SAMPLES_DIR
+): Promise<string[]> {
+  const cleanBase = toID(format.split('@@@')[0]);
+  const dir = path.join(samplesDir, cleanBase);
+  if (!fs.existsSync(dir)) return Promise.resolve([]);
+
+  const key = `${path.resolve(samplesDir)}::${version}::${format}`;
+  const existing = sampleIdsByPool.get(key);
+  if (existing) return existing;
+
+  const pending = validateSampleTeamDir(format, dir, version).catch(err => {
+    sampleIdsByPool.delete(key);
+    throw err;
+  });
+  sampleIdsByPool.set(key, pending);
+  return pending;
+}
+
+export async function preloadSampleTeamPools(
+  targets: Iterable<{format: string; version?: string}>,
+  samplesDir = SAMPLES_DIR
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const target of targets) {
+    const version = target.version ?? SIM_VERSION;
+    const key = `${version}::${target.format}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await getValidatedSampleTeamIds(target.format, version, samplesDir);
+  }
+}
+
+async function loadValidatedSampleTeam(
+  dir: string,
+  id: string,
+  format: string,
+  version: string
+): Promise<HarvestedPoolEntry | undefined> {
+  const full = path.join(dir, id);
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return undefined;
+  const raw = fs.readFileSync(full, 'utf8').trim();
+  if (!raw) return undefined;
+  const check = await validateTeam(format, raw, version, {
+    requireSixPokemon: true,
+    canonicalize: true,
+  });
+  if (check.problems?.length || !check.packed) return undefined;
+  return {
+    id,
+    canonicalPacked: check.packed,
+    speciesIds: extractSpeciesIdsFromPacked(check.packed, format.split('@@@')[0]),
+  };
+}
+
+// Uniformly samples a distinct non-mirror pair from the validated `pkmn/teams` ID list for smoke
+// tests, reading and canonicalizing only the sampled files at runtime.
+export async function sampleSmokePair(
+  format: string,
+  rngNextInt: (max: number) => number,
+  version = SIM_VERSION,
+  samplesDir = SAMPLES_DIR
+): Promise<{t1Packed: string; t2Packed: string}> {
+  const cleanBase = toID(format.split('@@@')[0]);
+  const dir = path.join(samplesDir, cleanBase);
+  const ids = await getValidatedSampleTeamIds(format, version, samplesDir);
+  if (ids.length < 2) {
+    throw new Error(`missing sample team pool for ${format} (requires >= 2 teams)`);
+  }
+
+  let t1: HarvestedPoolEntry | undefined;
+  for (let attempt = 0; attempt < 16 && !t1; attempt++) {
+    t1 = await loadValidatedSampleTeam(dir, ids[rngNextInt(ids.length)], format, version);
+  }
+  if (!t1) {
+    for (const id of ids) {
+      t1 = await loadValidatedSampleTeam(dir, id, format, version);
+      if (t1) break;
+    }
+  }
+  if (!t1) {
+    throw new Error(`missing sample team pool for ${format} (requires >= 2 teams)`);
+  }
+
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const id = ids[rngNextInt(ids.length)];
+    if (id === t1.id) continue;
+    const t2 = await loadValidatedSampleTeam(dir, id, format, version);
+    if (
+      t2 &&
+      t2.canonicalPacked !== t1.canonicalPacked &&
+      !isSameSpeciesSix(t1.speciesIds, t2.speciesIds)
+    ) {
+      return {t1Packed: t1.canonicalPacked, t2Packed: t2.canonicalPacked};
+    }
+  }
+
+  let fallback: HarvestedPoolEntry | undefined;
+  for (const id of ids) {
+    if (id === t1.id) continue;
+    const t2 = await loadValidatedSampleTeam(dir, id, format, version);
+    if (!t2 || t2.canonicalPacked === t1.canonicalPacked) continue;
+    if (!isSameSpeciesSix(t1.speciesIds, t2.speciesIds)) {
+      return {t1Packed: t1.canonicalPacked, t2Packed: t2.canonicalPacked};
+    }
+    fallback ??= t2;
+  }
+  if (!fallback) {
+    throw new Error(`missing sample team pool for ${format} (requires >= 2 teams)`);
+  }
+  return {t1Packed: t1.canonicalPacked, t2Packed: fallback.canonicalPacked};
 }
 
 export function sampleHarvestedPair(

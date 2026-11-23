@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
 import {Data, PokemonSet, Team} from '@pkmn/sets';
 import type * as sim from '@pkmn/sim';
 
@@ -193,6 +196,44 @@ export function maxLegalMovesForSpecies(
   return count;
 }
 
+function createDexAdapter(simDex: sim.ModdedDex): Data {
+  return {
+    modid: simDex.currentMod,
+    gen: simDex.gen,
+    species: simDex.species,
+    items: simDex.items,
+    abilities: simDex.abilities,
+    moves: simDex.moves,
+    natures: simDex.natures,
+  } as unknown as Data;
+}
+
+function importRawTeam(
+  simMod: typeof sim,
+  dexAdapter: Data,
+  rawTeam: string,
+  preferSetsImport: boolean
+): sim.PokemonSet[] | undefined {
+  const trimmed = rawTeam.trim();
+  let team: sim.PokemonSet[] | undefined = undefined;
+  if (preferSetsImport) {
+    const imported = Team.import(trimmed, dexAdapter);
+    const filtered = (imported?.team ?? []).filter(s => s && (s.species || s.name));
+    if (filtered.length > 0) {
+      team = structuredClone(filtered) as sim.PokemonSet[];
+    }
+  }
+  if (!team) {
+    team = (simMod.Teams.unpack(trimmed) ?? simMod.Teams.import(trimmed)) ?? undefined;
+  }
+  if (!team || team.length === 0) return undefined;
+  for (const s of team) {
+    if (!s.species && s.name) s.species = s.name;
+    s.name = '';
+  }
+  return team;
+}
+
 export function validateTeamWithSim(
   simMod: typeof sim,
   format: string,
@@ -205,34 +246,10 @@ export function validateTeamWithSim(
   }
   const validator = new simMod.TeamValidator(resolved);
   const simDex = validator.dex;
-  const dexAdapter = {
-    modid: simDex.currentMod,
-    gen: simDex.gen,
-    species: simDex.species,
-    items: simDex.items,
-    abilities: simDex.abilities,
-    moves: simDex.moves,
-    natures: simDex.natures,
-  } as unknown as Data;
-
-  const trimmed = rawTeam.trim();
-  let team: sim.PokemonSet[] | undefined = undefined;
-  if (options?.canonicalize) {
-    const imported = Team.import(trimmed, dexAdapter);
-    const filtered = (imported?.team ?? []).filter(s => s && (s.species || s.name));
-    if (filtered.length > 0) {
-      team = structuredClone(filtered) as sim.PokemonSet[];
-    }
-  }
+  const dexAdapter = createDexAdapter(simDex);
+  const team = importRawTeam(simMod, dexAdapter, rawTeam, Boolean(options?.canonicalize));
   if (!team) {
-    team = (simMod.Teams.unpack(trimmed) ?? simMod.Teams.import(trimmed)) ?? undefined;
-  }
-  if (!team || team.length === 0) {
     return {problems: ['Empty or unparseable team.'], formatName: validator.format.name};
-  }
-  for (const s of team) {
-    if (!s.species && s.name) s.species = s.name;
-    s.name = '';
   }
 
   if (options?.requireSixPokemon && team.length !== 6) {
@@ -277,4 +294,38 @@ export function validateTeamWithSim(
     packed: simMod.Teams.pack(team),
     formatName: validator.format.name,
   };
+}
+
+// Validates every static team file in `dir` against `format` using this worker's `TeamValidator`,
+// returning the sorted list of filenames that form legal 6-Pokémon teams.
+export function validateSampleTeamDirWithSim(
+  simMod: typeof sim,
+  format: string,
+  dir: string
+): string[] {
+  if (!fs.existsSync(dir)) return [];
+  const resolved = simMod.Dex.formats.get(format);
+  if (!resolved.exists) {
+    throw new Error(`Unknown format '${format}'.`);
+  }
+  const validator = new simMod.TeamValidator(resolved);
+  const dexAdapter = createDexAdapter(validator.dex);
+  const files = fs.readdirSync(dir)
+    .filter(f => !f.startsWith('.') && f !== 'README.md')
+    .sort((a, b) => a.localeCompare(b));
+  const validIds: string[] = [];
+  for (const file of files) {
+    const full = path.join(dir, file);
+    if (!fs.statSync(full).isFile()) continue;
+    const raw = fs.readFileSync(full, 'utf8').trim();
+    if (!raw) continue;
+    const team = importRawTeam(simMod, dexAdapter, raw, true);
+    if (team?.length !== 6) continue;
+    if (!validator.format.team) {
+      const problems = validator.validateTeam(team);
+      if (problems?.length) continue;
+    }
+    validIds.push(file);
+  }
+  return validIds;
 }

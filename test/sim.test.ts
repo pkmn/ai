@@ -435,6 +435,52 @@ describe('multi-version @pkmn/sim support', () => {
     await battle.destroy();
   });
 
+  test('getValidatedSampleTeamIds validates against format sim version without trusting README',
+    async () => {
+      const samplesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-sample-ver-'));
+      tempDirs.push(samplesRoot);
+      const formatDir = path.join(samplesRoot, 'gen9futureou');
+      fs.mkdirSync(formatDir, {recursive: true});
+      fs.writeFileSync(path.join(formatDir, 'valid-a'), SAMPLE_TEAM_A, 'utf8');
+      fs.writeFileSync(path.join(formatDir, 'valid-b'), SAMPLE_TEAM_B, 'utf8');
+      // Illegal 6-Pokémon team (unobtainable move on Zapdos) marked ✓ in README.md to prove
+      // README.md is never trusted over the real versioned TeamValidator.
+      fs.writeFileSync(
+        path.join(formatDir, 'illegal-move'),
+        SAMPLE_TEAM_A.replace('- Hurricane', '- Roar of Time'),
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(formatDir, 'README.md'),
+        [
+          '| Date | Team | Source | Valid | Rating |',
+          '| :---: | :---: | :--- | :---: | :---: |',
+          '| 2026-10-30 | [A](valid-a) | Sample | ✓ | |',
+          '| 2026-10-30 | [B](valid-b) | Sample | ✓ | |',
+          '| 2026-10-30 | [Bad](illegal-move) | Sample | ✓ | |',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const ids = await teams.getValidatedSampleTeamIds(
+        'gen9futureou',
+        CUSTOM_SIM_VERSION,
+        samplesRoot
+      );
+      expect(ids).toEqual(['valid-a', 'valid-b']);
+
+      let cursor = 0;
+      const pair = await teams.sampleSmokePair(
+        'gen9futureou',
+        max => cursor++ % max,
+        CUSTOM_SIM_VERSION,
+        samplesRoot
+      );
+      expect(pair.t1Packed).not.toBe(pair.t2Packed);
+      expect(pair.t1Packed.startsWith('alomomola|') || pair.t2Packed.startsWith('alomomola|'))
+        .toBe(true);
+    });
+
   test('getTimerSettings resolves VGC Timer inside a custom-version worker', async () => {
     const timer = await sim.getTimerSettings('gen9championsvgc2026regmc', CUSTOM_SIM_VERSION);
     expect(timer).toMatchObject({

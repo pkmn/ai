@@ -11,6 +11,7 @@ import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
 import * as sim from '../server/sim';
+import * as serverTeams from '../server/teams';
 import {toID} from '../static/util';
 import * as teams from '../teams';
 
@@ -1850,11 +1851,29 @@ export class Coordinator {
         const meta = tourneyById.get(tid);
         const format = meta?.format ?? 'gen9ou';
         const customRules = meta?.customRules ?? [];
+        const smokeFormat = customRules.length > 0
+          ? `${format}${format.includes('@@@') ? ',' : '@@@'}${customRules.join(',')}`
+          : format;
 
         let p1TeamPacked: string | undefined;
         let p2TeamPacked: string | undefined;
         const pool = meta?.teamPool ?? [];
-        if ((meta?.team === 'harvested' || meta?.team === 'pools') && pool.length >= 2) {
+        if (meta?.team === 'harvested') {
+          // Never fall back to harvested tournament pools in smoke tests so private harvested
+          // teams cannot leak into exposed smoke-test logs.
+          try {
+            ({t1Packed: p1TeamPacked, t2Packed: p2TeamPacked} =
+              await serverTeams.sampleSmokePair(
+                smokeFormat,
+                max => crypto.randomInt(0, max),
+                meta?.version
+              ));
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            smokeError = `GCP smoke test setup failed in ${format}: ${msg}`;
+            break;
+          }
+        } else if (meta?.team === 'pools' && pool.length >= 2) {
           p1TeamPacked = pool[0];
           p2TeamPacked = pool.find(t => t !== p1TeamPacked) ?? pool[1];
         } else if (
@@ -1866,9 +1885,6 @@ export class Coordinator {
           p2TeamPacked = pair.t2Packed;
         }
 
-        const smokeFormat = customRules.length > 0
-          ? `${format}${format.includes('@@@') ? ',' : '@@@'}${customRules.join(',')}`
-          : format;
         const smokeGame = new ConcurrentGame({
           format: smokeFormat,
           version: meta?.version,

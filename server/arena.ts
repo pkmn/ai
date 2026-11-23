@@ -1969,7 +1969,9 @@ export function register(app: polka.Polka, options: Options): Handle {
       const tournaments = db.getTournaments()
         .filter(t => t.status !== 'completed')
         .map(t => {
-          const teamPool = resolveTournamentTeamPool(db, t);
+          // Harvested tournaments smoke-test strictly against public `teams/teams` pools so
+          // private harvested ladder pools are never exposed in smoke-test payloads or logs.
+          const teamPool = t.team === 'pools' ? resolveTournamentTeamPool(db, t) : [];
           return {
             id: t.id,
             name: t.name,

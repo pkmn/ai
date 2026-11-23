@@ -443,9 +443,13 @@ export class Coordinator {
             t1Packed = subTeams[0];
             t2Packed = subTeams[1];
           } else if (item.team === 'harvested') {
-            const pool = await this.loadHarvestedTeamsForLadder(item.ladderId, item.format);
-            t1Packed = pool[0].canonicalPacked;
-            t2Packed = pool[1 % pool.length].canonicalPacked;
+            // Never fall back to harvested ladder pools in smoke tests so private harvested teams
+            // cannot leak into exposed smoke-test logs.
+            ({t1Packed, t2Packed} = await teams.sampleSmokePair(
+              item.format,
+              randomInt,
+              item.version
+            ));
           } else {
             const pair = await sim.sampleRandomPair(
               item.format,
