@@ -337,7 +337,7 @@ Both hosts collect unprivileged system telemetry (no `sudo`, compatible with `pk
 when queried (zero idle overhead). On the Arena Mac mini, there are **zero `setInterval` timers**:
 sub-millisecond in-process metrics piggyback on paused-turn heartbeats, subprocess probes run
 strictly between matches/idle, and heavy daily maintenance (`archive.sh` + `softwareupdate`) runs
-under `ai.pkmn.maintenance.plist` (`04:30`) while matchmaking is paused via `maintenance.lock` /
+under `ai.pkmn.maintenance.plist` (`10:00 UTC`) while matchmaking is paused via `maintenance.lock` /
 `match.lock`. Arena heartbeats only attach `system` when telemetry changes (or after a drop), and
 `server/arena.ts` never exposes host telemetry on public `/api/live.json` or `/api/battles/stream`.
 
@@ -353,7 +353,7 @@ under `ai.pkmn.maintenance.plist` (`04:30`) while matchmaking is paused via `mai
 | **TLS Certificate** | `~1 ms` | On boot + every **6h** | `X509Certificate` expiry on `/etc/letsencrypt/live/pkmn.ai/fullchain.pem`. | `< 14d` remaining (`snap.certbot.renew.timer` failing; renewals normally run at 30d). |
 | **Traffic & Concurrent Users** | `< 0.01 ms`/req | Continuous O(1) middleware (excl. `/api/arena/*` & `/admin*`) | Unique visitors (5m), active SSE viewers (battles/tournaments/admin), req/1m & req/1h, mean & p95 non-SSE latency. | Sudden p95 spike (`> 200–500 ms`) or anomalous req/m flood. |
 | **Error Rates & 24h Faults** | `~0.3 ms` | On demand (indexed `matches` scan) | 1h HTTP `5xx`, `4xx`, `429` counts + last `5xx` path; 24h Arena match fault rate (`timeout`/`crash`/`oom`/`invalid-choice`). | Any `5xx > 0`, surge in `429`, or 24h fault rate `> 5%`. |
-| **Nightly SQLite Backup** | `~0.2 ms` | On boot, then stops once today's `04:15 UTC` backup succeeds; retries every **5m** after `04:15 UTC` | Newest `/var/lib/pkmn/backups/arena-*.sqlite.zst` timestamp, size, and retained count (30d). | Age `> 26h` or `none found` (`pkmn.ai-backup.service` failed). |
+| **Daily SQLite Backup** | `~0.2 ms` | On boot, then stops once today's `10:00 UTC` backup succeeds; retries every **5m** after `10:00 UTC` | Newest `/var/lib/pkmn/backups/arena-*.sqlite.zst` timestamp, size, and retained count (30d). | Age `> 26h` or `none found` (`pkmn.ai-backup.service` failed). |
 | **Pending OS Updates** | `~0.1 ms` | On demand | `/var/lib/update-notifier/updates-available` counts + `/var/run/reboot-required`. | Any pending security updates or `Reboot required`. |
 
 ### Arena Host — Mac mini (`ArenaHostMonitor` & `maintenance.sh`)
@@ -364,5 +364,5 @@ under `ai.pkmn.maintenance.plist` (`04:30`) while matchmaking is paused via `mai
 | **Memory, Pressure, Disk I/O & NIC** | `~55 ms` warm (`Promise.all`, 4 procs) | Between matches / idle only (≥ **60s**); `diskutil`/`route` cached once (`~525 ms`/`~154 ms` cold) | `vm_stat` real macOS RAM, combined `sysctl -n vm.swapusage kern.memorystatus_vm_pressure_level`, `iostat -Id` per-disk MB/s & IOPS (`/` & Archive), `netstat -ibn` RX/TX & errors. | RAM ≥ 80% / ≥ 90%, swap growing, VM pressure `warning`/`critical`, NIC errors `> 0`, or stalled Archive I/O. |
 | **Internal Tunnel RTT** | `0 ms` overhead | Inline on every `POST /api/arena/heartbeat` | Round-trip latency and reachability over `127.0.0.1:1234` SSH tunnel to `pkmn.ai`. | Tunnel `down`, RTT `> 250 ms`, or last heartbeat `> 15m` (watchdog stale). |
 | **External Net & Podman VM** | `~50–150 ms` | Between matches / idle only (≥ **15m**) | `HEAD https://ghcr.io/v2/` RTT + reachability; `podman machine inspect` state for `podman-machine-default`. | `ghcr.io` unreachable (OCI pulls fail) or Podman state `!= running`. |
-| **Nightly Backup & GCS Archive** | `~1–10 ms` | On boot, then stops once today's `04:30` run succeeds; retries every **5m** between matches after `04:30` | `/opt/arena/state/archive-status.json` (written by `archive.sh`) + `/Volumes/Archive/db-backups/` scan for local DB backup & `gcloud storage rsync` status. | Any `archiveError`, DB backup `> 26h`, or GCS sync `> 36h`. |
-| **Pending macOS Updates** | `5–30s` at `04:30` (`< 0.1 ms` read) | Once daily in `04:30` `maintenance.sh` while matches are paused | Non-fatal `softwareupdate --list` stashed in `/opt/arena/state/updates-status.json` (pending count, labels, restart flag). | Updates pending or `Reboot required` (schedule a drain window to apply). |
+| **Daily Backup & GCS Archive** | `~1–10 ms` | On boot, then stops once today's `10:00 UTC` run succeeds; retries every **5m** between matches after `10:00 UTC` | `/opt/arena/state/archive-status.json` (written by `archive.sh`) + `/Volumes/Archive/db-backups/` scan for local DB backup & `gcloud storage rsync` status. | Any `archiveError`, DB backup `> 26h`, or GCS sync `> 36h`. |
+| **Pending macOS Updates** | `5–30s` at `10:00 UTC` (`< 0.1 ms` read) | Once daily in `10:00 UTC` `maintenance.sh` while matches are paused | Non-fatal `softwareupdate --list` stashed in `/opt/arena/state/updates-status.json` (pending count, labels, restart flag). | Updates pending or `Reboot required` (schedule a drain window to apply). |

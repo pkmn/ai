@@ -190,7 +190,7 @@ systemctl daemon-reload && systemctl reset-failed
 journalctl -fu pkmn.ai-server             # or: journalctl -xeu 'pkmn.ai*' / --vacuum-time=7d
 ```
 
-`pkmn.ai-backup.timer` runs nightly at `04:15 UTC` (randomized delay), backing up
+`pkmn.ai-backup.timer` runs daily at `10:00 UTC` (randomized delay), backing up
 `/var/lib/pkmn/arena.sqlite` via SQLite `.backup` to `/var/lib/pkmn/backups/arena-<ts>.sqlite.zst`
 (30-day retention). On-demand backup and restore:
 

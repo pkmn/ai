@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # arena/scripts/maintenance.sh
-# Nightly 04:30 maintenance wrapper invoked by `ai.pkmn.maintenance.plist`:
+# Nightly 10:00 UTC maintenance wrapper invoked by `ai.pkmn.maintenance.plist`:
 #   1. Acquires `/opt/arena/state/maintenance.lock` (PID-checked) so `ai.pkmn.arena` holds off
 #      starting new matches while sending idle heartbeats.
 #   2. Waits for any in-flight match (`/opt/arena/state/match.lock`) to finish cleanly.

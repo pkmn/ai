@@ -397,7 +397,7 @@ curl -fsS https://pkmn.ai/api/live.json | jq '{updatedAt, stale, live}'   # expe
 - `arena/coordinator.ts`: compresses completed past-day `.log` dirs into
   `/Volumes/Archive/logs/<ladder_id>/<YYYY-MM>/<YYYY-MM-DD>.7z` on UTC rollover and builds/uploads
   `<ladder_id>-logs.tar` for `random` and retired `pools` ladders.
-- `arena/scripts/maintenance.sh` (`ai.pkmn.maintenance.plist`, daily `04:30`): acquires
+- `arena/scripts/maintenance.sh` (`ai.pkmn.maintenance.plist`, daily `10:00 UTC`): acquires
   `/opt/arena/state/maintenance.lock` so `ai.pkmn.arena` pauses new matches (waiting for any
   in-flight `match.lock` to clear), invokes `arena/scripts/archive.sh` (verifies `/Volumes/Archive`
   mount, runs online SQLite `.backup` -> `/Volumes/Archive/db-backups/arena-state-YYYY-MM-DD.sqlite.zst`

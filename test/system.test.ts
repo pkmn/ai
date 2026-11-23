@@ -167,18 +167,18 @@ describe('system telemetry parsers & TrafficTracker', () => {
   });
 
   test('schedule-aware backup scanning stops once good and resumes at next window', async () => {
-    const before = Math.floor(Date.UTC(2026, 10, 22, 4, 10, 0) / 1000);
-    const windowPrev = Math.floor(Date.UTC(2026, 10, 21, 4, 15, 0) / 1000);
-    const windowToday = Math.floor(Date.UTC(2026, 10, 22, 4, 15, 0) / 1000);
-    const after = Math.floor(Date.UTC(2026, 10, 22, 4, 16, 0) / 1000);
-    expect(system.latestScheduledWindowStart(before, 4, 15, true)).toBe(windowPrev);
-    expect(system.latestScheduledWindowStart(after, 4, 15, true)).toBe(windowToday);
+    const before = Math.floor(Date.UTC(2026, 10, 22, 9, 55, 0) / 1000);
+    const windowPrev = Math.floor(Date.UTC(2026, 10, 21, 10, 0, 0) / 1000);
+    const windowToday = Math.floor(Date.UTC(2026, 10, 22, 10, 0, 0) / 1000);
+    const after = Math.floor(Date.UTC(2026, 10, 22, 10, 1, 0) / 1000);
+    expect(system.latestScheduledWindowStart(before, 10, 0, true)).toBe(windowPrev);
+    expect(system.latestScheduledWindowStart(after, 10, 0, true)).toBe(windowToday);
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-sys-test-'));
     try {
       const backupDir = path.join(tmpDir, 'backups');
       fs.mkdirSync(backupDir, {recursive: true});
-      const b1 = path.join(backupDir, 'arena-20261122T041600Z.sqlite.zst');
+      const b1 = path.join(backupDir, 'arena-20261122T100100Z.sqlite.zst');
       fs.writeFileSync(b1, 'backup-1');
       fs.utimesSync(b1, after, after);
 
@@ -195,7 +195,7 @@ describe('system telemetry parsers & TrafficTracker', () => {
       expect(s1.backups.lastBackupAt).toBe(after);
       expect(s1.backups.checkedAt).toBe(nowSec);
 
-      // Even hours later (still before next day's 04:15 UTC), known-good backup skips rescanning.
+      // Even hours later (still before next day's 10:00 UTC), known-good backup skips rescanning.
       nowSec += 6 * 3600;
       const s2 = vps.sampleNow({
         sse: {battles: 0, tournaments: 0, admin: 0},
@@ -203,7 +203,7 @@ describe('system telemetry parsers & TrafficTracker', () => {
       });
       expect(s2.backups.checkedAt).toBe(s1.backups.checkedAt);
 
-      // Cross tomorrow's 04:15 UTC window -> rescans because today's backup hasn't landed yet.
+      // Cross tomorrow's 10:00 UTC window -> rescans because today's backup hasn't landed yet.
       nowSec = windowToday + 86400 + 60;
       const s3 = vps.sampleNow({
         sse: {battles: 0, tournaments: 0, admin: 0},

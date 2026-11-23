@@ -186,10 +186,10 @@ const SLOW_PROBE_SECONDS = 15 * 60;
 const SLOW_PROBE_MILLIS = SLOW_PROBE_SECONDS * 1000;
 const BACKUP_RETRY_SECONDS = 5 * 60;
 const TLS_REFRESH_MILLIS = 6 * 60 * 60_000;
-const VPS_BACKUP_HOUR_UTC = 4;
-const VPS_BACKUP_MINUTE_UTC = 15;
-const ARENA_ARCHIVE_HOUR_LOCAL = 4;
-const ARENA_ARCHIVE_MINUTE_LOCAL = 30;
+const VPS_BACKUP_HOUR_UTC = 10;
+const VPS_BACKUP_MINUTE_UTC = 0;
+const ARENA_MAINTENANCE_HOUR_UTC = 10;
+const ARENA_MAINTENANCE_MINUTE_UTC = 0;
 const VISITOR_WINDOW_SECONDS = 5 * 60;
 const MAX_TRACKED_VISITORS = 5000;
 const MAX_LATENCY_SAMPLES = 200;
@@ -1311,9 +1311,9 @@ export class ArenaHostMonitor {
   private shouldScanBackups(nowSec: number): boolean {
     const windowStart = latestScheduledWindowStart(
       nowSec,
-      ARENA_ARCHIVE_HOUR_LOCAL,
-      ARENA_ARCHIVE_MINUTE_LOCAL,
-      false
+      ARENA_MAINTENANCE_HOUR_UTC,
+      ARENA_MAINTENANCE_MINUTE_UTC,
+      true
     );
     const cur = this.cachedBackups;
     const backupGood = cur?.lastBackupAt !== undefined && cur.lastBackupAt >= windowStart;
