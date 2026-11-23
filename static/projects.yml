@@ -225,7 +225,7 @@
   site: https://pmariglia.github.io/posts/foul-play/
   active: 2019 # March 24
   license: GPL-3.0
-  source: https://github.com/pmariglia/showdown
+  source: https://github.com/pmariglia/foul-play
   engine:
     - name: poke-engine
       url: https://github.com/pmariglia/poke-engine
@@ -233,6 +233,10 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    logo: foul-play.gif
+    owners:
+      pmariglia: pmariglia.475056
 - name: 0 ERROR # April 20
   site: https://pkmn.cc/0-ERROR
   active: 2019
