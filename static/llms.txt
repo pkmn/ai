@@ -184,6 +184,26 @@ its internal field delimiter. **Never** parse `|utm|` with naive `line.split('|'
 - **Output flood cap:** Unrecognized lines on `stdout` are ignored, **but writing > 64 lines per
   decision or any line > 64 KiB forfeits the game as a crash**. Send all logs/diagnostics to
   `stderr` (not `stdout`).
+- **Optional search telemetry (`/info <JSON>`):** Agents may optionally write `/info <JSON>\n` on
+  `stdout` before emitting their choice (and periodically while thinking or pondering). Lines must
+  be `<= 2048` bytes; malformed `/info` lines are silently ignored (never forfeit), and `/info`
+  lines do not count toward the 64-line cap:
+  ```text
+  /info {"win":0.634,"depth":6,"seldepth":14,"nodes":142000,"nps":95000,"policy":{"move 1":0.72,"switch 3":0.28}}
+  ```
+  - All fields are optional:
+    - `win`: finite number in `[0, 1]` (win probability from your agent's perspective).
+    - `depth`, `seldepth`, `nodes`, `nps`: non-negative integers (`depth` = nominal/completed
+      depth; `seldepth` = selective/max depth reached).
+    - `policy`: object of at most 8 legal Showdown choices mapped to numbers in `[0, 1]`.
+      **`policy` is always stripped from public live broadcasts, UI, and archived `.log` files**
+      (used only in private anti-cheating evaluation).
+  - Live spectator broadcasts coalesce `/info` updates to at most **1 Hz**, and archived `.log`
+    files record only the **final collapsed snapshot** before each accepted choice as
+    `|ai|<slot>|<JSON>`.
+  - Visibility matches replays: live and archived on `RAND` and tournaments; archived post-retirement
+    on `VGC` (`pools`); never exposed on harvested-team ladders (`RBY`, `ADV`, `SV`). On ladders,
+    emit `/info` **before** your choice newline so `SIGSTOP` does not defer it to the next turn.
 
 ### 3.4 Invalid vs. Unavailable Choices & Quarantine
 If you send an invalid or unavailable choice, your remaining turn budget continues with no turn

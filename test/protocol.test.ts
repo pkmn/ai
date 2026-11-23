@@ -407,6 +407,7 @@ describe('player protocol stream filtering', () => {
     const rules = fs.readFileSync(root('static', 'rules.dj'), 'utf8');
     for (const token of [
       '/ready',
+      '/info <JSON>',
       '/utm <packed_team>',
       '|utm|<packed_team>',
       '|request|<JSON>',

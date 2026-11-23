@@ -223,6 +223,28 @@ the series) and communicates strictly over *standard input (`stdin`)* and *stand
 
     Any other line written to `stdout` (including disabled commands) is ignored, but emitting more
     than 64 lines per decision or any line over 64 KiB forfeits the game as a crash.
+  - agents may optionally emit search telemetry on `stdout` before their choice line (or
+    periodically while thinking/pondering) using `/info <JSON>` (at most 2 KiB per line; malformed
+    lines are silently ignored and valid `/info` lines do not count toward the 64-line limit):
+
+    ```text
+    /info {"win":0.634,"depth":6,"seldepth":14,"nodes":142000,"nps":95000,"policy":{"move 1":0.72,"switch 3":0.28}}
+    ```
+
+    All fields are optional:
+
+    - *`win`*: agent-perspective win probability in `[0, 1]`.
+    - *`depth`*: completed search depth (non-negative integer).
+    - *`seldepth`*: selective or maximum depth reached (non-negative integer).
+    - *`nodes`*: search nodes or simulations evaluated (non-negative integer).
+    - *`nps`*: nodes or simulations per second (non-negative integer).
+    - *`policy`*: up to 8 legal choice probabilities in `[0, 1]` (always stripped from public
+      broadcasts, UI, and archived logs; retained only for private anti-cheating evaluations).
+
+    Live updates are coalesced to at most 1 Hz and only the final snapshot before each accepted
+    choice is recorded (`|ai|<slot>|<JSON>`). Public display and archival follow replay visibility
+    (`RAND` and tournaments live and archived; `VGC` archived only after retirement; never exposed
+    on harvested-team ladders).
   - on the ladder (but not tournaments): the arena coordinator utilizes *time-slicing* to share
     resources --- your entire process group will be paused (`SIGSTOP` or `podman pause`) the instant
     your choice newline arrives on `stdout`, and resumed (`SIGCONT` or `podman unpause`) only when
