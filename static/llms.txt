@@ -24,7 +24,7 @@ entries separately). **Use Sections 4–6 for Ladders; use Section 7 for Tournam
 | **Structure** | Continuous blind-pair matches (2 swapped games) across fixed & seasonal formats; MAP Davidson Elo ratings | Discrete scheduled events (default: Round Robin + extended Superfinal); ruleset/format per event |
 | **Eligibility & Cadence** | Qualified projects; up to **2 active versions** per ladder; **14-day cooldown** + settled gate (`SE ≤ 30`, `≥ 25` matches); auto-quarantine | Registered projects (including `Pending`); **1 successful entry** per event before `00:00:00 UTC` cutoff (no ladder cooldown/settlement gate) |
 | **Artifact & Arch** | **Native `darwin/arm64` bundle** (`.tar.{gz,xz,zst}`, `./run`, `≤ 25,000` entries) **OR** `linux/arm64` OCI (`≤ 32` layers); both `≤ 500 MiB` | **`linux/amd64` OCI container ONLY** (`≤ 32` layers, `≤ 500 MiB`); native bundles & `arm64` images are rejected |
-| **Hardware** | Fixed Apple M6 Mac mini: 10 cores (`8P+2E`), `14 GiB` RAM, `4 GB` `$TMPDIR`, direct Metal/ANE (native) or Vulkan (OCI) | Event-specific dedicated worker hardware (often `linux/amd64` + NVIDIA CUDA GPU); check `/arena/tournaments/<id>/` |
+| **Hardware** | Fixed Apple M6 Mac mini: 10 cores (`2S+4P+4E`), `14 GiB` RAM, `4 GB` `$TMPDIR`, direct Metal/ANE (native) or Vulkan (OCI) | Event-specific dedicated worker hardware (often `linux/amd64` + NVIDIA CUDA GPU); check `/arena/tournaments/<id>/` |
 | **Execution & Pondering** | **Time-sliced** (`SIGSTOP` / `podman pause` while opponent thinks); **pondering disabled**; wall clock jumps between turns | **Concurrent** (never paused); **pondering enabled by default** (`ARENA_PONDER=1` when enabled) |
 | **Subprocess Lifetime** | **1 subprocess = 1 single game** (scratch wiped before every game, including between Game 1 & Game 2 of a pair) | **1 subprocess = 1 full match** (in Best-of-N series, same subprocess & scratch persist across Games 1..N) |
 | **Teams & Startup** | Always arena-assigned or random → emit `/ready` (receives `|utm|<packed_team>` on non-Random formats) | Event-specific: pre-assigned (`/ready` → `|utm|`), random (`/ready`), or BYOT (`/utm <packed_team>` once at startup; no `/ready`, no `|utm|` back) |
@@ -112,11 +112,11 @@ All current ladders run Pokémon Showdown rules as of Nov 9th 2026 (`a78551b0` /
   (`.7z`) published upon completion — and VGC logs/teams are published only after ladder retirement.
 
 ### Hardware
-- **Ladders:** Apple M6 Mac mini — **10 cores (8 Performance + 2 Efficiency)**, **14 GiB dedicated
-  RAM** (`ARENA_MEMORY_LIMIT_MB=14336`), **4 GB per-game `$TMPDIR` scratch** wiped between games,
-  **no network**, anonymous opponents. Accepts native `darwin/arm64` bundles (direct Metal/ANE —
-  strongly recommended for neural-network agents) or `linux/arm64` OCI containers (virtual GPU via
-  Vulkan passthrough).
+- **Ladders:** Apple M6 Mac mini — **10 cores (2 Super + 4 Performance + 4 Efficiency)**, **14 GiB
+  dedicated RAM** (`ARENA_MEMORY_LIMIT_MB=14336`), **4 GB per-game `$TMPDIR` scratch** wiped between
+  games, **no network**, anonymous opponents. Accepts native `darwin/arm64` bundles (direct
+  Metal/ANE — strongly recommended for neural-network agents) or `linux/arm64` OCI containers
+  (virtual GPU via Vulkan passthrough).
 - **Tournaments:** Hardware is event-specific; accepts **`linux/amd64` OCI containers only**.
 
 ### Matchmaking & Ratings
@@ -230,9 +230,9 @@ for pondering and Best-of-N lifecycle rules.)*
 - **Process/thread limit:** `RLIMIT_NPROC=256` on native bundles; `--pids-limit=256` (including
   threads) in containers.
 - **Env vars:** `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
-  `RAYON_NUM_THREADS=10`, `ARENA_MEMORY_LIMIT_MB=14336`. Never hardcode > 10 compute threads (and
-  see Section 6 on why capping compute pools at ≤ 8 P-core threads and leaving the 2 E-cores for
-  background maintenance often beats 10!).
+  `RAYON_NUM_THREADS=10`, `ARENA_MEMORY_LIMIT_MB=14336`. Never hardcode > 10 compute threads (see
+  Section 6 on capping barrier-synchronized CPU NN intra-op pools at ≤ 6 threads vs. using all 10
+  cores for independent parallel search like MCTS).
 - **Zero-RSS `mmap` (native macOS bundles):** Clean read-only memory-mapped files (`mmap` with
   `PROT_READ` and `MAP_PRIVATE` / `MAP_SHARED`, e.g. `.safetensors`, `.gguf`, raw weight packs) are
   file-backed and count as **0 bytes** toward the 14 GiB RAM limit.
@@ -428,7 +428,7 @@ All sizes are exact regular-file unpacked bytes verified inside `arena/config/sa
 
 ### 5.3 Non-Quantized (`fp32` Full Weights) Benchmarks on Apple Silicon
 Leaving PyTorch carries **zero speed penalty** even with **100% full `float32` weights** (measured
-on Apple M3 4P+4E; relative speedups transfer directly to the ladder's M6 8P+2E):
+on Apple M3 4P+4E; relative speedups transfer directly to the ladder's M6 2S+4P+4E):
 
 **Workload A — Search-Agent MLP/ResNet (9.0M params, `34.3 MiB` `fp32`):**
 - PyTorch 2.8 CPU-4T: `0.666 ms` (`batch=1`), `1.363 ms` (`batch=16`)
@@ -591,16 +591,22 @@ verified under `arena/unpack.ts` and `sandbox.sb`:
 3. **Warm up shaders/ANE before `/ready`:** Compile your MSL library (`newLibraryWithSource:`) and
    run 1–2 dummy forward passes with real shapes during the 60-second `/ready` startup window so
    Turn 1 never pays compilation latency.
-4. **Tune thread counts for P-cores vs E-cores (8P + 2E on M6):**
+4. **Tune thread counts for Super/P-cores vs E-cores (2S + 4P + 4E on M6):**
    - The arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`, and
      `RAYON_NUM_THREADS=10`.
-   - For small `batch=1/16` matmuls, spilling onto the 2 Efficiency cores causes **2×–4× slowdowns**
-     from barrier stalls (ONNX Runtime was 4× slower at 10T vs 4T on M3). Always benchmark
-     `1, 2, 4, 6, 8` threads (`ort.SessionOptions().intra_op_num_threads`, `torch.set_num_threads`,
-     or GCD `dispatch_apply`), capping tight compute pools at ≤ 8 P-core threads and leaving the 2
-     E-cores for background maintenance (I/O, bookkeeping).
-   - If your search runs `N` parallel search threads, pin neural-net intra-op threads to `1` (or
-     batch evaluations across threads into one GPU/AMX call) so threads do not thrash barriers.
+   - **Barrier-synchronized CPU NN inference:** For small `batch=1/16` matmuls, spilling onto the 4
+     Efficiency cores can cause **2×–4× slowdowns** from barrier stalls (ONNX Runtime was 4× slower
+     at 10T vs 4T on M3). Always benchmark `1, 2, 4, 6` intra-op threads
+     (`ort.SessionOptions().intra_op_num_threads`, `torch.set_num_threads`, or GCD
+     `dispatch_apply`), capping tight barrier-synchronized compute pools at ≤ 6 Super/Performance
+     threads (2 Super + 4 Performance).
+   - **Independent / asynchronous parallel search (e.g. MCTS, parallel determinizations, CFR):**
+     Because workers run independent simulations without per-op barriers, the M6's Efficiency cores
+     scale well — using all **10 threads** (`2S+4P+4E`) delivered **~28–35% more total search
+     iterations** in the same wall-clock time than capping at 6 threads (`2S+4P`) in M6 benchmarks.
+   - **Hybrid search + NN:** When running up to 10 parallel search threads, pin per-worker CPU
+     neural-net intra-op threads to `1` (or batch evaluations across search workers into a single
+     GPU/AMX or ≤ 6-thread call) so threads do not thrash barriers.
 5. **Prefer `mmap` over `torch.load`:** `torch.load` decompresses zip entries into anonymous heap
    RAM and double-allocates; `mmap` (`PROT_READ`, `MAP_PRIVATE`) of `.safetensors`/`.gguf`/raw
    weights counts as **0 bytes** toward the 14 GiB macOS RAM cap and loads in milliseconds.

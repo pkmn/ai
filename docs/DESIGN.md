@@ -112,12 +112,12 @@ systems are the norm and large neural networks that require GPU access for
 inference are an important component of game playing agents.
 
 pkmn.ai has chosen an **Apple M6 Mac mini** with 32 GB of unified memory,
-12-core CPU (8 Performance + 4 Efficiency), 12-core Apple Silicon GPU, Dual
-16-core Neural Engine as the hardware for the ladder sandbox (roughly 3x better
-single-threaded and 5x better multi-threaded performance than the baseline used
-by CCRL, plus access to a GPU). A system running Linux and with an NVIDIA GPU
-would be preferable, but the M6 Mac mini has excellent single-threaded speed, a
-functional GPU, and excellent energy efficiency which makes it a good value
+12-core CPU (2 Super + 4 Performance + 6 Efficiency), 12-core Apple Silicon GPU,
+Dual 16-core Neural Engine as the hardware for the ladder sandbox (roughly 3x
+better single-threaded and 5x better multi-threaded performance than the
+baseline used by CCRL, plus access to a GPU). A system running Linux and with an
+NVIDIA GPU would be preferable, but the M6 Mac mini has excellent single-threaded
+speed, a functional GPU, and excellent energy efficiency which makes it a good value
 choice. By serializing play and implementing time slicing (at the cost of
 eliminating pondering), agents will get to use almost the entirety of the
 hardware, allowing for ample hardware resources compared to what most projects

@@ -167,8 +167,8 @@ $\frac{2}{N(N-1)(N-2)}$, incentivizing pool poisoning):
 | Dimension | Continuous Arena (CCRL) | Live Tournament (TCEC / CCC) |
 | :--- | :--- | :--- |
 | **Coordinator & Sim** | M6 Mac mini 2 E-cores (`pkmn@arena`). | Tournament coordinator (`<0.2 ms`/turn, `<50 MB` RAM for $K \le 16$ tables). |
-| **Worker Hardware** | Owned **M6 Mac mini** (`darwin/arm64` + `libkrun`), 12c CPU/GPU, 32 GB Unified. | Ephemeral **1-Agent GCP `g2-custom-24-49152` Spot VMs** (`Ubuntu 24.04 x86_64`): 1× NVIDIA L4 (`24 GB`), 24 vCPUs (12 Xeon cores), 48 GB DDR5 (`$0.50/hr` Spot/agent = **`$1.00/hr`/table**). |
-| **Per-Agent Compute** | Time-sliced: 10c CPU + M6 GPU (~5 TFLOPS) + 14 GiB RAM while active. | Dedicated (`1 VM = 1 Agent`): L4 (242 TFLOPS FP16 / 485 TOPS INT8, 24 GB VRAM) + 24 vCPUs + 48 GB RAM (72 GB total). |
+| **Worker Hardware** | Owned **M6 Mac mini** (`darwin/arm64` + `libkrun`), 12c CPU (`2S+4P+6E`) / 12c GPU, 32 GB Unified. | Ephemeral **1-Agent GCP `g2-custom-24-49152` Spot VMs** (`Ubuntu 24.04 x86_64`): 1× NVIDIA L4 (`24 GB`), 24 vCPUs (12 Xeon cores), 48 GB DDR5 (`$0.50/hr` Spot/agent = **`$1.00/hr`/table**). |
+| **Per-Agent Compute** | Time-sliced: 10c CPU (`2S+4P+4E`) + M6 GPU (~5 TFLOPS) + 14 GiB RAM while active. | Dedicated (`1 VM = 1 Agent`): L4 (242 TFLOPS FP16 / 485 TOPS INT8, 24 GB VRAM) + 24 vCPUs + 48 GB RAM (72 GB total). |
 | **Execution** | Sequential (`ponder = false`; `SIGSTOP` / `podman pause`). | Concurrent (`ponder = true`; overlapping simultaneous turns + pondering). |
 | **Sandbox** | macOS Seatbelt + `limit.c` + `pf` (or `krunkit`). | Rootless `bwrap --unshare-all` (RO rootfs + `/tmp` tmpfs) + KVM hypervisor isolation. |
 | **Clock** | Local `performance.now()`. | Measured on-VM in `/opt/arena/bin/tourney-agent` (`ARENA_TURN_MS`), excluding SSH RTT. |

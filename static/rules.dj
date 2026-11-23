@@ -60,11 +60,11 @@ submit an agent with:
   - *`ladders`* / *`tournaments`*: non-empty subsets of the ladders or tournaments to enter your
     agent in.
 
-Ladder submissions will run on an *Apple M6 Mac mini* with access to *10 cores* (8 Performance & 2
-Efficiency), *14 GiB* of dedicated RAM, and 4 GB of scratch `$TMPDIR` storage wiped between games.
-The *network is disabled* and opponents are anonymous. Ladder submissions may be an OCI
-`linux/arm64` container (virtual *GPU* via Vulkan passthrough) or a native bundle (direct GPU/ANE
-via Metal/CoreML). Tournaments specify their own hardware and accept only `linux/amd64` OCI
+Ladder submissions will run on an *Apple M6 Mac mini* with access to *10 cores* (2 Super, 4
+Performance, and 4 Efficiency), *14 GiB* of dedicated RAM, and 4 GB of scratch `$TMPDIR` storage
+wiped between games. The *network is disabled* and opponents are anonymous. Ladder submissions may
+be an OCI `linux/arm64` container (virtual *GPU* via Vulkan passthrough) or a native bundle (direct
+GPU/ANE via Metal/CoreML). Tournaments specify their own hardware and accept only `linux/amd64` OCI
 containers.
 
 {summary="*OCI Container*"}
@@ -328,15 +328,16 @@ Superfinal between the top two entrants.
     including threads in containers), and `stderr` is drained (with the last 4 KiB surfaced on
     [account](/account) if a ladder smoke test fails).
   - on ladders, the arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
-    and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads, and be mindful
-    of the heterogeneous 8 Performance + 2 Efficiency core layout: spilling barrier-synchronized
-    work (_e.g._, small matrix multiplications) onto the slower Efficiency cores can stall the
-    Performance cores and slow down the entire step, so consider capping compute pools to at most 8
-    threads (benchmarking smaller counts) and reserving the Efficiency cores for background
-    maintenance (_e.g._, I/O or bookkeeping). Similarly, `ARENA_MEMORY_LIMIT_MB=14336` is set on
-    ladders --- be sure to size runtime tables to account for potential runtime overhead and avoid
-    triggering a forfeit due to running out of memory (OOM). In tournaments with pondering enabled,
-    `ARENA_PONDER=1` is set.
+    and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads, and tune
+    thread counts for your workload on the heterogeneous 2 Super + 4 Performance + 4 Efficiency core
+    layout: for barrier-synchronized work (_e.g._, small CPU neural-network matrix multiplications),
+    spilling onto the slower Efficiency cores can stall the Super and Performance cores and slow
+    down the entire step, so benchmark smaller counts (at most 6 threads) for intra-op pools; by
+    contrast, independent or asynchronous parallel search (_e.g._, multi-threaded MCTS, parallel
+    determinizations, or rollouts) scales well across all 10 cores. Similarly,
+    `ARENA_MEMORY_LIMIT_MB=14336` is set on ladders --- be sure to size runtime tables to account
+    for potential runtime overhead and avoid triggering a forfeit due to running out of memory
+    (OOM). In tournaments with pondering enabled, `ARENA_PONDER=1` is set.
   - on macOS, clean read-only memory-mapped pages in native bundles (`mmap` with `PROT_READ` and
     `MAP_PRIVATE`/`MAP_SHARED`, _e.g._, `safetensors`/`gguf`) are file-backed and count as 0 bytes
     toward the 14 GiB RAM limit.
