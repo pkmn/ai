@@ -24,6 +24,7 @@ export interface Options {
   publicDir?: string;
   now?: number;
   lookupSmogon?: (raw: string | number, token?: string) => Promise<smogon.User>;
+  stdin?: string;
   log?: (line: string) => void;
 }
 
@@ -55,12 +56,13 @@ const USAGE = [
   '  publish-tournament-archive <id> <archive.7z>',
   '  publish-ladder-archive <ladder_id> <archive.tar>',
   '  lookup-smogon <username|slug.id|id|url>',
+  '  announce [--dry-run] [--channel <id>]',
   '  notify-staff <message> [--key <key>] [--cooldown <seconds>] [--detail <text>] ' +
     '[--detail-file <path>] [--state <path>]',
   '  session [--github <login>] [--github-id <id>] [--discord <id>:<username>] [--ttl <seconds>]',
 ].join('\n');
 
-const BOOLEAN_FLAGS = new Set(['help', 'offline', 'none']);
+const BOOLEAN_FLAGS = new Set(['help', 'offline', 'none', 'dry-run']);
 const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
   quarantine: new Set(['reason']),
   unquarantine: new Set(),
@@ -101,6 +103,7 @@ const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
   'publish-tournament-archive': new Set(),
   'publish-ladder-archive': new Set(),
   'lookup-smogon': new Set(),
+  announce: new Set(['dry-run', 'channel']),
   'notify-staff': new Set(['key', 'cooldown', 'detail', 'detail-file', 'state']),
   session: new Set(['github', 'github-id', 'discord', 'ttl']),
 };
@@ -140,6 +143,14 @@ export function parseArgs(argv: string[]): {positional: string[]; flags: Map<str
     }
   }
   return {positional, flags};
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 export async function runPkmnCli(argv: string[], options: Options = {}): Promise<void> {
@@ -296,6 +307,54 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         ? `Sent staff alert (${sent} DM(s))`
         : 'Staff alert suppressed (cooldown/no staff)'
     );
+    return;
+  }
+
+  if (cmd === 'announce') {
+    if (positional.length > 1) {
+      throw new Error('Usage: pkmn announce [--dry-run] [--channel <id>] < message.txt');
+    }
+    const dryRun = flags.has('dry-run');
+    const channel = flags.get('channel');
+    if (flags.has('channel') && (!channel || channel === 'true')) {
+      throw new Error('--channel requires a Discord channel ID');
+    }
+    if (dryRun && channel) {
+      throw new Error('Cannot combine --dry-run with --channel');
+    }
+    const token = process.env.DISCORD_BOT_TOKEN;
+    if (!token) {
+      throw new Error('DISCORD_BOT_TOKEN is required to send announcements');
+    }
+    const rawMessage = options.stdin !== undefined ? options.stdin : await readStdin();
+    const res = await discordApi.announce(token, discordApi.loadConfig(), rawMessage, {
+      dryRun,
+      ...(channel ? {channel} : {}),
+    });
+    if (res.mentions.length > 0) {
+      log('Resolved mentions:');
+      for (const m of res.mentions) {
+        const suffix = m.kind === 'special' ? '' : ` (${m.output})`;
+        log(`  ${m.input} -> ${m.kind} "${m.label}"${suffix}`);
+      }
+    }
+    if (res.dryRun) {
+      if (res.mentions.some(m => m.kind === 'role')) {
+        log(
+          'Note: Discord DMs may display role mentions (<@&...>) as @unknown-role; ' +
+          'they render normally in the channel.'
+        );
+      }
+      log(
+        `Dry run: sent announcement preview to ${res.staffSent}/${res.staffTotal} ` +
+        `staff member(s) (${res.content.length}/2000 chars)`
+      );
+    } else {
+      log(
+        `Sent announcement to channel ${res.channel} ` +
+        `(message ${res.messageId}, ${res.content.length}/2000 chars)`
+      );
+    }
     return;
   }
 

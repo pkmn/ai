@@ -1854,3 +1854,334 @@ describe('Arena Discord notifications', () => {
     }
   });
 });
+
+describe('announce and mention resolution', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const GUILD: discord.AnnounceGuild = {
+    id: '689316505560809576',
+    members: [
+      {user: {id: '100', username: 'pkmn', bot: true}, roles: []},
+      {user: {id: '200', username: 'pre', global_name: 'Pre'}, roles: ['1568629775122309210']},
+      {user: {id: '300', username: 'alice.dev'}, nick: 'Alice', roles: []},
+      {user: {id: '400', username: 'bob_1'}, nick: 'Twin', roles: []},
+      {user: {id: '401', username: 'carol'}, nick: 'Twin', roles: []},
+    ],
+    roles: [
+      {id: '689316505560809576', name: '@everyone'},
+      {id: '1568629775122309210', name: '⚔️ Competitor'},
+      {id: '1563716887131459685', name: '🏛️ RBY'},
+      {id: '1564121022213398710', name: '⚡ RBY'},
+      {id: '1563713523069091903', name: 'pkmn', managed: true, tags: {bot_id: '100'}},
+      {id: '9001', name: '🤖 Foul Play'},
+      {id: '9002', name: 'Gen 9 OU'},
+      {id: '9003', name: '🤖 pre'},
+      {id: '9004', name: '🤖 Awsome Battler'},
+      {id: '9005', name: "🤖 Aurora's Edge"},
+      {id: '9006', name: '🤖 Pokérus'},
+    ],
+    channels: [
+      {id: '689316506265321535', name: 'general'},
+    ],
+  };
+
+  test('resolves real announcement mentions while ignoring @-ing, code, and URLs', () => {
+    const draft = [
+      '**🏛️ OLYMPUS MONS**',
+      '',
+      'First off, please link your Discord account in <https://pkmn.ai/account> so you can ' +
+        "get the @Competitor role - I'm not going to be @-ing individual people in the future. " +
+        'The Discord account is kept private and it required for getting the ladder leader ' +
+        'roles assigned, but more importantly will get the @pkmn bot to ping you if there ' +
+        'are errors with your bot or when queued uploads finish etc (I promise it wont be spammy!)',
+      '',
+      'There have been some protocol changes (`/info`) and some big changes to how ' +
+        'smoke-testing works (visible self-play with accessible `stderr` logs - ' +
+        '**limited to 3 smoke tests per day**).',
+    ].join('\n');
+
+    const res = discord.resolveMentions(draft, GUILD);
+    expect(res.errors).toEqual([]);
+    expect(res.content).toContain('get the <@&1568629775122309210> role');
+    expect(res.content).toContain('not going to be @-ing individual people');
+    expect(res.content).toContain('will get the <@100> bot to ping you');
+    expect(res.content).toContain('<https://pkmn.ai/account>');
+    expect(res.content).toContain('(`/info`)');
+    expect(res.mentions).toEqual([
+      {
+        input: '@Competitor',
+        output: '<@&1568629775122309210>',
+        kind: 'role',
+        id: '1568629775122309210',
+        label: '⚔️ Competitor',
+      },
+      {
+        input: '@pkmn',
+        output: '<@100>',
+        kind: 'member',
+        id: '100',
+        label: 'pkmn',
+      },
+    ]);
+  });
+
+  test('resolves emoji-prefixed roles and config role aliases cleanly', () => {
+    const aliases = discord.loadRoleAliases(discord.loadConfig());
+    expect(aliases.Competitor).toBe('1568629775122309210');
+    expect(aliases.RBY).toBe('1563716887131459685');
+
+    const res = discord.resolveMentions(
+      'Congrats @RBY, @Competitor, @Foul Play, @foul-play, @awsomebattler, ' +
+        '@aurorasedge, @pokerus, and @pre!',
+      {...GUILD, roleAliases: aliases}
+    );
+    expect(res.errors).toEqual([]);
+    expect(res.content).toBe(
+      'Congrats <@&1563716887131459685>, <@&1568629775122309210>, <@&9001>, <@&9001>, ' +
+        '<@&9004>, <@&9005>, <@&9006>, and <@200>!'
+    );
+
+    // Without config aliases, two emoji-prefixed RBY roles remain ambiguous.
+    const ambig = discord.resolveMentions('Congrats @RBY!', GUILD);
+    expect(ambig.errors).toEqual([
+      'Ambiguous mention "@RBY": matches role "🏛️ RBY" (<@&1563716887131459685>), ' +
+        'role "⚡ RBY" (<@&1564121022213398710>) — use an explicit <@id> or <@&id> tag',
+    ]);
+  });
+
+  test('skips code blocks, inline code, URLs, emails, versions, and escaped mentions', () => {
+    const raw = [
+      'Use `@pkmn/sim` and `metamon@1.0.0`, email admin@pkmn.ai, or see https://medium.com/@ghost.',
+      'Literal \\@ghost, **@Competitor**, _@pkmn_, __@pre__, (@alice.dev), and @pkmn\'s.',
+      '```ts',
+      "import {Dex} from '@pkmn/sim'; // @nobody",
+      '```',
+      'Multi-word: @Gen 9 OU and @🤖 Foul Play and @everyone and @here!',
+    ].join('\n');
+
+    const res = discord.resolveMentions(raw, GUILD);
+    expect(res.errors).toEqual([]);
+    expect(res.content).toContain('Use `@pkmn/sim`');
+    expect(res.content).toContain('admin@pkmn.ai');
+    expect(res.content).toContain('https://medium.com/@ghost.');
+    expect(res.content).toContain('Literal \\@ghost');
+    expect(res.content).toContain('**<@&1568629775122309210>**');
+    expect(res.content).toContain('_<@100>_');
+    expect(res.content).toContain('__<@200>__');
+    expect(res.content).toContain('(<@300>)');
+    expect(res.content).toContain("<@100>'s");
+    expect(res.content).toContain("import {Dex} from '@pkmn/sim'; // @nobody");
+    expect(res.content).toContain('<@&9002> and <@&9001> and @everyone and @here!');
+  });
+
+  test('validates explicit Discord user, role, and channel tags', () => {
+    const valid = discord.resolveMentions(
+      'Hi <@200>, <@!300>, <@&1568629775122309210> in <#689316506265321535>',
+      GUILD
+    );
+    expect(valid.errors).toEqual([]);
+    expect(valid.mentions.map(m => `${m.kind}:${m.id}`)).toEqual([
+      'member:200',
+      'member:300',
+      'role:1568629775122309210',
+      'channel:689316506265321535',
+    ]);
+
+    const invalid = discord.resolveMentions(
+      'Bad <@999>, <@&689316505560809576>, <@&888>, <#777>',
+      GUILD
+    );
+    expect(invalid.errors).toEqual([
+      'Unknown user mention "<@999>" (not a member of guild 689316505560809576)',
+      'Unknown role mention "<@&689316505560809576>" (not a role in guild 689316505560809576)',
+      'Unknown role mention "<@&888>" (not a role in guild 689316505560809576)',
+      'Unknown channel mention "<#777>" (not a channel in guild 689316505560809576)',
+    ]);
+  });
+
+  test('reports unknown, non-boundary, and ambiguous mentions without false matches', () => {
+    const res = discord.resolveMentions(
+      'Ping @Competitr, @pkmn-bot, @pkmn/sim, _@ghost_, and @Twin.',
+      GUILD
+    );
+    expect(res.errors).toEqual([
+      'Unknown mention "@Competitr" (no matching guild member or role)',
+      'Unknown mention "@pkmn-bot" (no matching guild member or role)',
+      'Unknown mention "@pkmn/sim" (no matching guild member or role)',
+      'Unknown mention "@ghost" (no matching guild member or role)',
+      'Ambiguous mention "@Twin": matches member "Twin (@bob_1)" (<@400>), ' +
+        'member "Twin (@carol)" (<@401>) — use an explicit <@id> or <@&id> tag',
+    ]);
+  });
+
+  function stubAnnounceFetch(
+    posted: Array<{url: string; body: {content: string; flags?: number}}>,
+    opts: {blockDm?: boolean} = {}
+  ) {
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const target = String(url);
+      if (target.includes('/guilds/') && target.includes('/members')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve(GUILD.members),
+        });
+      }
+      if (target.includes('/guilds/') && target.endsWith('/roles')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve(GUILD.roles),
+        });
+      }
+      if (target.includes('/guilds/') && target.endsWith('/channels')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve(GUILD.channels),
+        });
+      }
+      if (target.endsWith('/users/@me/channels')) {
+        const raw = typeof init?.body === 'string' ? init.body : '{}';
+        const {recipient_id: rid} = JSON.parse(raw) as {recipient_id: string};
+        if (opts.blockDm) {
+          return Promise.resolve({
+            status: 403,
+            ok: false,
+            text: () => Promise.resolve('Cannot send messages to this user'),
+          });
+        }
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: `dm-${rid}`}),
+        });
+      }
+      if (target.includes('/channels/') && target.endsWith('/messages')) {
+        const raw = typeof init?.body === 'string' ? init.body : '{}';
+        const body = JSON.parse(raw) as {content: string; flags?: number};
+        posted.push({url: target, body});
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'msg-12345'}),
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${target}`);
+    }) as unknown as typeof fetch;
+  }
+
+  test('pkmn announce --dry-run validates mentions and DMs staff instead of channel', async () => {
+    const posted: Array<{url: string; body: {content: string; flags?: number}}> = [];
+    stubAnnounceFetch(posted);
+    const prevToken = process.env.DISCORD_BOT_TOKEN;
+    process.env.DISCORD_BOT_TOKEN = 'discord-token';
+    try {
+      const logs: string[] = [];
+      await runPkmnCli(['announce', '--dry-run'], {
+        stdin: 'Hello @Competitor and @RBY from @pkmn!\n',
+        log: line => logs.push(line),
+      });
+      expect(posted).toHaveLength(1);
+      expect(posted[0].url).toContain('/channels/dm-513513270670262284/messages');
+      expect(posted[0].body).toEqual({
+        content: 'Hello <@&1568629775122309210> and <@&1563716887131459685> from <@100>!',
+      });
+      expect(logs.join('\n')).toContain('@Competitor -> role "⚔️ Competitor"');
+      expect(logs.join('\n')).toContain('@RBY -> role "🏛️ RBY"');
+      expect(logs.join('\n')).toContain('@pkmn -> member "pkmn"');
+      expect(logs.join('\n')).toContain('@unknown-role');
+      expect(logs.join('\n')).toContain('Dry run: sent announcement preview to 1/1 staff');
+    } finally {
+      if (prevToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevToken;
+    }
+  });
+
+  test('pkmn announce posts resolved announcement to configured guild channel', async () => {
+    const posted: Array<{url: string; body: {content: string; flags?: number}}> = [];
+    stubAnnounceFetch(posted);
+    const prevToken = process.env.DISCORD_BOT_TOKEN;
+    process.env.DISCORD_BOT_TOKEN = 'discord-token';
+    try {
+      const logs: string[] = [];
+      await runPkmnCli(['announce'], {
+        stdin: 'Welcome @Competitor in <#689316506265321535>!\n',
+        log: line => logs.push(line),
+      });
+      expect(posted).toHaveLength(1);
+      expect(posted[0].url).toContain('/channels/689316506265321535/messages');
+      expect(posted[0].body).toEqual({
+        content: 'Welcome <@&1568629775122309210> in <#689316506265321535>!',
+      });
+      expect(logs.join('\n')).toContain('Sent announcement to channel 689316506265321535');
+      expect(logs.join('\n')).toContain('message msg-12345');
+    } finally {
+      if (prevToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevToken;
+    }
+  });
+
+  test('announce fails before sending on bad mentions, >2000 chars, or empty text', async () => {
+    const posted: Array<{url: string; body: {content: string; flags?: number}}> = [];
+    stubAnnounceFetch(posted);
+    const cfg: discord.Config = {
+      guild: GUILD.id,
+      channel: '689316506265321535',
+      staff: ['513513270670262284'],
+      ladders: {},
+    };
+
+    await expect(discord.announce('tok', cfg, '   \n  ')).rejects.toThrow(/empty/);
+    await expect(discord.announce('tok', cfg, 'Hi @nobody')).rejects.toThrow(
+      /Unknown mention "@nobody"/
+    );
+    await expect(
+      discord.announce('tok', cfg, `${'a'.repeat(1995)} @Competitor`)
+    ).rejects.toThrow(/2000-character limit/);
+    expect(posted).toEqual([]);
+  });
+
+  test('announce dry-run throws when all staff DMs are blocked', async () => {
+    const warnSpy = console.warn;
+    console.warn = () => {};
+    const posted: Array<{url: string; body: {content: string; flags?: number}}> = [];
+    stubAnnounceFetch(posted, {blockDm: true});
+    const cfg: discord.Config = {
+      guild: GUILD.id,
+      channel: '689316506265321535',
+      staff: ['513513270670262284'],
+      ladders: {},
+    };
+    try {
+      await expect(
+        discord.announce('tok', cfg, 'Hello @Competitor', {dryRun: true})
+      ).rejects.toThrow(/Failed to DM any staff member/);
+    } finally {
+      console.warn = warnSpy;
+    }
+  });
+
+  test('pkmn announce validates CLI flags and required token', async () => {
+    const prevToken = process.env.DISCORD_BOT_TOKEN;
+    delete process.env.DISCORD_BOT_TOKEN;
+    try {
+      await expect(runPkmnCli(['announce', 'extra'], {stdin: 'hi'})).rejects.toThrow(
+        /Usage: pkmn announce/
+      );
+      await expect(
+        runPkmnCli(['announce', '--dry-run', '--channel', '123'], {stdin: 'hi'})
+      ).rejects.toThrow(/Cannot combine --dry-run with --channel/);
+      await expect(runPkmnCli(['announce'], {stdin: 'hi'})).rejects.toThrow(
+        /DISCORD_BOT_TOKEN is required/
+      );
+    } finally {
+      if (prevToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevToken;
+    }
+  });
+});

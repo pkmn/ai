@@ -8,7 +8,7 @@ import * as path from 'path';
 import polka from 'polka';
 import * as yaml from 'yaml';
 
-import {Database} from '../db';
+import {Database, parseLaddersYaml} from '../db';
 import type * as db from '../db';
 import * as util from '../static/util';
 
@@ -80,6 +80,8 @@ export interface GuildChannel {
 export interface GuildRole {
   id: string;
   name: string;
+  managed?: boolean;
+  tags?: {bot_id?: string};
 }
 
 export interface Embed {
@@ -163,6 +165,7 @@ interface RawPartnerLeader {
 }
 
 const DISCORD_CONFIG_FILE = util.root('config', 'discord.yml');
+const LADDERS_CONFIG_FILE = util.root('config', 'ladders.yml');
 const GLOSSARY_FILE = util.root('static', 'glossary.yml');
 let cachedConfig: {mtimeMs: number; config: Config} | undefined;
 
@@ -607,7 +610,8 @@ export async function sendDirectMessage(
   token: string,
   recipientId: string,
   content: string,
-  state?: Map<string, string | undefined>
+  state?: Map<string, string | undefined>,
+  options?: {suppressEmbeds?: boolean}
 ): Promise<'sent' | 'blocked'> {
   const cacheKey = `dm-channel:${recipientId}`;
   let channelId = state?.get(cacheKey);
@@ -631,10 +635,13 @@ export async function sendDirectMessage(
   }
 
   try {
+    const payload: {content: string; flags?: number} = options?.suppressEmbeds === false
+      ? {content}
+      : {content, flags: 4};
     await discordRequest(token, `/channels/${channelId}/messages`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({content, flags: 4}),
+      body: JSON.stringify(payload),
     });
     return 'sent';
   } catch (err) {
@@ -894,6 +901,491 @@ export async function notifyWatchdogAlert(
   state = new Map<string, string | undefined>()
 ): Promise<number> {
   return sendStaffDm(token, config, formatWatchdogDm(alert), state, 'heartbeat alert');
+}
+
+export interface ResolvedMention {
+  input: string;
+  output: string;
+  kind: 'member' | 'role' | 'channel' | 'special';
+  id?: string;
+  label: string;
+}
+
+export interface ResolveMentionsResult {
+  content: string;
+  mentions: ResolvedMention[];
+  errors: string[];
+}
+
+export interface AnnounceGuild {
+  id: string;
+  members: GuildMember[];
+  roles: GuildRole[];
+  channels?: GuildChannel[];
+  roleAliases?: Record<string, string>;
+}
+
+const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
+const EMOJI_TOKEN =
+  '(?:[0-9#*]\\uFE0F?\\u20E3|[\\p{Extended_Pictographic}\\p{Regional_Indicator}\\p{So}]' +
+  '|\\uFE0E|\\uFE0F|\\u200D)';
+const LEADING_EMOJI_RE = new RegExp(`^(?:${EMOJI_TOKEN}+\\s*)+`, 'u');
+const TRAILING_EMOJI_RE = new RegExp(`(?:\\s*${EMOJI_TOKEN}+)+$`, 'u');
+
+function stripEdgeEmoji(name: string): string | undefined {
+  const stripped = name.replace(LEADING_EMOJI_RE, '').replace(TRAILING_EMOJI_RE, '').trim();
+  if (!stripped || stripped === name) return undefined;
+  return stripped;
+}
+
+export function loadRoleAliases(config: Config): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  if (fs.existsSync(LADDERS_CONFIG_FILE)) {
+    const ladders = parseLaddersYaml(fs.readFileSync(LADDERS_CONFIG_FILE, 'utf8'));
+    for (const ladder of ladders) {
+      if (!ladder.discord) continue;
+      if (ladder.status === 'archived' && aliases[ladder.name]) continue;
+      aliases[ladder.name] = ladder.discord;
+    }
+  }
+  if (config.competitor) {
+    aliases.Competitor = config.competitor;
+  }
+  return aliases;
+}
+
+function isMentionBoundary(text: string, pos: number): boolean {
+  const ch = text[pos];
+  if (ch === undefined) return true;
+  if (WORD_CHAR_RE.test(ch)) return false;
+  if (ch === '_' || ch === '-' || ch === '.' || ch === '/') {
+    const after = text[pos + 1];
+    return after === undefined || !WORD_CHAR_RE.test(after);
+  }
+  return true;
+}
+
+function formatMemberLabel(member: GuildMember): string {
+  const name = member.nick ?? member.user.global_name;
+  if (name && name.toLowerCase() !== member.user.username.toLowerCase()) {
+    return `${name} (@${member.user.username})`;
+  }
+  return member.user.username;
+}
+
+function findClosingInlineTicks(text: string, start: number, tickLen: number): number {
+  let pos = start;
+  while (pos < text.length) {
+    const idx = text.indexOf('`', pos);
+    if (idx === -1) return -1;
+    let end = idx;
+    while (end < text.length && text[end] === '`') end++;
+    if (end - idx === tickLen) return end;
+    pos = end;
+  }
+  return -1;
+}
+
+export function resolveMentions(raw: string, guild: AnnounceGuild): ResolveMentionsResult {
+  const memberById = new Map(guild.members.map(m => [m.user.id, m]));
+  const assignableRoles = guild.roles.filter(r => r.id !== guild.id && r.name !== '@everyone');
+  const roleById = new Map(assignableRoles.map(r => [r.id, r]));
+  const channelById = new Map((guild.channels ?? []).map(c => [c.id, c]));
+
+  interface Candidate {
+    name: string;
+    lower: string;
+    kind: 'member' | 'role';
+    id: string;
+    output: string;
+    label: string;
+    // 0 = exact member/role/config alias, 1 = emoji-stripped role, 2 = normalized role slug/toID.
+    tier: 0 | 1 | 2;
+  }
+  const candidates: Candidate[] = [];
+  for (const role of assignableRoles) {
+    // Discord auto-creates a managed integration role (`tags.bot_id`) with the same name as each
+    // bot in the guild; skip it for plaintext @name matching so @bot resolves to the bot member.
+    if (!role.name.trim() || role.tags?.bot_id) continue;
+    const seen = new Set<string>();
+    const addRoleCandidate = (name: string, tier: 0 | 1 | 2) => {
+      const lower = name.toLowerCase();
+      if (!lower || seen.has(lower)) return;
+      seen.add(lower);
+      candidates.push({
+        name,
+        lower,
+        kind: 'role',
+        id: role.id,
+        output: `<@&${role.id}>`,
+        label: role.name,
+        tier,
+      });
+    };
+    addRoleCandidate(role.name, 0);
+    const stripped = stripEdgeEmoji(role.name);
+    if (stripped) addRoleCandidate(stripped, 1);
+    const base = stripped ?? role.name;
+    const slug = util.slugify(base);
+    if (slug) {
+      addRoleCandidate(slug, 2);
+      const compactId = util.toID(slug);
+      if (compactId) addRoleCandidate(compactId, 2);
+    }
+  }
+  for (const [alias, roleId] of Object.entries(guild.roleAliases ?? {})) {
+    const role = roleById.get(roleId);
+    if (!alias.trim() || !role) continue;
+    candidates.push({
+      name: alias,
+      lower: alias.toLowerCase(),
+      kind: 'role',
+      id: role.id,
+      output: `<@&${role.id}>`,
+      label: role.name,
+      tier: 0,
+    });
+  }
+  for (const member of guild.members) {
+    const label = formatMemberLabel(member);
+    const seen = new Set<string>();
+    for (const alias of [member.user.username, member.user.global_name, member.nick]) {
+      if (!alias?.trim()) continue;
+      const lower = alias.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      candidates.push({
+        name: alias,
+        lower,
+        kind: 'member',
+        id: member.user.id,
+        output: `<@${member.user.id}>`,
+        label,
+        tier: 0,
+      });
+    }
+  }
+
+  let out = '';
+  const mentions: ResolvedMention[] = [];
+  const errors: string[] = [];
+  let i = 0;
+
+  while (i < raw.length) {
+    const ch = raw[i];
+
+    // Skip fenced code blocks and inline code spans (Discord does not parse mentions inside them).
+    if (ch === '`') {
+      let end = i;
+      while (end < raw.length && raw[end] === '`') end++;
+      const tickLen = end - i;
+      if (tickLen >= 3) {
+        const fence = raw.slice(i, end);
+        const close = raw.indexOf(fence, end);
+        const next = close === -1 ? raw.length : close + tickLen;
+        out += raw.slice(i, next);
+        i = next;
+        continue;
+      }
+      const closeEnd = findClosingInlineTicks(raw, end, tickLen);
+      if (closeEnd !== -1) {
+        out += raw.slice(i, closeEnd);
+        i = closeEnd;
+        continue;
+      }
+      out += raw.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    // Respect Discord markdown escapes (\@foo, \<@123>).
+    if (ch === '\\' && (raw[i + 1] === '@' || raw[i + 1] === '<')) {
+      out += raw.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+
+    // Angle-bracketed URLs, explicit Discord mention tags, custom emojis, and timestamps.
+    if (ch === '<') {
+      const rest = raw.slice(i);
+      const urlMatch = /^<https?:\/\/[^>\s]+>/i.exec(rest);
+      if (urlMatch) {
+        out += urlMatch[0];
+        i += urlMatch[0].length;
+        continue;
+      }
+      const userMatch = /^<@!?(\d+)>/.exec(rest);
+      if (userMatch) {
+        const [tag, id] = userMatch;
+        const member = memberById.get(id);
+        if (member) {
+          mentions.push({
+            input: tag,
+            output: tag,
+            kind: 'member',
+            id,
+            label: formatMemberLabel(member),
+          });
+        } else {
+          errors.push(`Unknown user mention "${tag}" (not a member of guild ${guild.id})`);
+        }
+        out += tag;
+        i += tag.length;
+        continue;
+      }
+      const roleMatch = /^<@&(\d+)>/.exec(rest);
+      if (roleMatch) {
+        const [tag, id] = roleMatch;
+        const role = roleById.get(id);
+        if (role) {
+          mentions.push({input: tag, output: tag, kind: 'role', id, label: role.name});
+        } else {
+          errors.push(`Unknown role mention "${tag}" (not a role in guild ${guild.id})`);
+        }
+        out += tag;
+        i += tag.length;
+        continue;
+      }
+      const chanMatch = /^<#(\d+)>/.exec(rest);
+      if (chanMatch) {
+        const [tag, id] = chanMatch;
+        const channel = channelById.get(id);
+        if (channel) {
+          mentions.push({
+            input: tag,
+            output: tag,
+            kind: 'channel',
+            id,
+            label: `#${channel.name}`,
+          });
+        } else {
+          errors.push(`Unknown channel mention "${tag}" (not a channel in guild ${guild.id})`);
+        }
+        out += tag;
+        i += tag.length;
+        continue;
+      }
+      const otherMatch = /^<(?:a?:\w+:\d+|t:\d+(?::[tTdDfFR])?)>/.exec(rest);
+      if (otherMatch) {
+        out += otherMatch[0];
+        i += otherMatch[0].length;
+        continue;
+      }
+    }
+
+    // Bare URLs (avoid flagging @ inside paths like https://medium.com/@author).
+    if (ch === 'h' || ch === 'H') {
+      const urlMatch = /^https?:\/\/[^\s<>]+/i.exec(raw.slice(i));
+      if (urlMatch) {
+        out += urlMatch[0];
+        i += urlMatch[0].length;
+        continue;
+      }
+    }
+
+    // Plaintext @mentions: resolve against guild roles and members, validating every candidate.
+    if (ch === '@') {
+      const prev = i > 0 ? raw[i - 1] : '';
+      const prev2 = i > 1 ? raw[i - 2] : '';
+      if (/[A-Za-z0-9]/.test(prev) || (prev === '_' && /[A-Za-z0-9]/.test(prev2))) {
+        out += '@';
+        i++;
+        continue;
+      }
+
+      const rest = raw.slice(i + 1);
+      const specialMatch = /^(everyone|here)/.exec(rest);
+      if (specialMatch && isMentionBoundary(raw, i + 1 + specialMatch[1].length)) {
+        const tag = `@${specialMatch[1]}`;
+        mentions.push({input: tag, output: tag, kind: 'special', label: specialMatch[1]});
+        out += tag;
+        i += tag.length;
+        continue;
+      }
+
+      let maxLen = 0;
+      const bestByEntity = new Map<string, Candidate & {exactCase: boolean}>();
+      for (const candidate of candidates) {
+        const len = candidate.name.length;
+        if (len < maxLen || i + 1 + len > raw.length) continue;
+        if (!isMentionBoundary(raw, i + 1 + len)) continue;
+        const slice = raw.slice(i + 1, i + 1 + len);
+        if (slice.toLowerCase() !== candidate.lower) continue;
+        if (len > maxLen) {
+          maxLen = len;
+          bestByEntity.clear();
+        }
+        const key = `${candidate.kind}:${candidate.id}`;
+        const exactCase = slice === candidate.name;
+        const existing = bestByEntity.get(key);
+        const better =
+          !existing ||
+          candidate.tier < existing.tier ||
+          (candidate.tier === existing.tier && exactCase && !existing.exactCase);
+        if (better) {
+          bestByEntity.set(key, {...candidate, exactCase});
+        }
+      }
+
+      if (maxLen > 0) {
+        const rawTag = raw.slice(i, i + 1 + maxLen);
+        let matches = [...bestByEntity.values()];
+        if (matches.length > 1) {
+          const minTier = Math.min(...matches.map(m => m.tier));
+          const bestTier = matches.filter(m => m.tier === minTier);
+          if (bestTier.length > 0 && bestTier.length < matches.length) {
+            matches = bestTier;
+          }
+        }
+        let winner = matches.length === 1 ? matches[0] : undefined;
+        if (!winner) {
+          const exact = matches.filter(m => m.exactCase);
+          if (exact.length === 1) winner = exact[0];
+        }
+        if (winner) {
+          mentions.push({
+            input: rawTag,
+            output: winner.output,
+            kind: winner.kind,
+            id: winner.id,
+            label: winner.label,
+          });
+          out += winner.output;
+        } else {
+          const desc = matches.map(m => `${m.kind} "${m.label}" (${m.output})`).join(', ');
+          errors.push(
+            `Ambiguous mention "${rawTag}": matches ${desc} — use an explicit <@id> or <@&id> tag`
+          );
+          out += rawTag;
+        }
+        i += 1 + maxLen;
+        continue;
+      }
+
+      const unknownMatch = /^[\p{L}\p{N}_][\p{L}\p{N}_.-]*(?:\/[\p{L}\p{N}_.-]+)*/u.exec(rest);
+      if (unknownMatch) {
+        const token = unknownMatch[0].replace(/[._-]+$/, '');
+        if (token) {
+          errors.push(`Unknown mention "@${token}" (no matching guild member or role)`);
+          out += `@${token}`;
+          i += 1 + token.length;
+          continue;
+        }
+      }
+    }
+
+    out += ch;
+    i++;
+  }
+
+  return {content: out, mentions, errors};
+}
+
+export interface AnnounceOptions {
+  dryRun?: boolean;
+  channel?: string;
+  roleAliases?: Record<string, string>;
+  state?: Map<string, string | undefined>;
+}
+
+export interface AnnounceResult {
+  content: string;
+  mentions: ResolvedMention[];
+  dryRun: boolean;
+  channel?: string;
+  messageId?: string;
+  staffSent?: number;
+  staffTotal?: number;
+}
+
+export async function announce(
+  token: string,
+  config: Config,
+  rawMessage: string,
+  opts: AnnounceOptions = {}
+): Promise<AnnounceResult> {
+  const trimmed = rawMessage.replace(/\r\n/g, '\n').trim();
+  if (!trimmed) {
+    throw new Error('Announcement message is empty');
+  }
+
+  const dryRun = Boolean(opts.dryRun);
+  const channel = opts.channel ?? config.channel;
+  const staffIds = [...new Set(config.staff ?? [])];
+  if (dryRun && staffIds.length === 0) {
+    throw new Error('Cannot dry-run announcement: config/discord.yml has no staff recipients');
+  }
+  if (!dryRun && !channel) {
+    throw new Error('Cannot send announcement: no target channel configured in config/discord.yml');
+  }
+
+  const needsChannels = /<#\d+>/.test(trimmed);
+  const [members, roles, channels] = await Promise.all([
+    fetchGuildMembers(token, config.guild),
+    fetchGuildRoles(token, config.guild),
+    needsChannels ? fetchGuildChannels(token, config.guild) : Promise.resolve(undefined),
+  ]);
+
+  const roleAliases = opts.roleAliases ?? loadRoleAliases(config);
+  const resolved = resolveMentions(trimmed, {
+    id: config.guild,
+    members,
+    roles,
+    channels,
+    roleAliases,
+  });
+  if (resolved.errors.length > 0) {
+    const details = resolved.errors.map(e => `  - ${e}`).join('\n');
+    throw new Error(`Invalid mention(s) in announcement:\n${details}`);
+  }
+  if (resolved.content.length > DISCORD_MAX_MESSAGE_LEN) {
+    throw new Error(
+      `Announcement exceeds Discord's ${DISCORD_MAX_MESSAGE_LEN}-character limit ` +
+      `(${resolved.content.length} chars after resolving mentions)`
+    );
+  }
+
+  if (dryRun) {
+    const state = opts.state ?? new Map<string, string | undefined>();
+    let staffSent = 0;
+    for (const staffId of staffIds) {
+      const outcome = await sendDirectMessage(
+        token,
+        staffId,
+        resolved.content,
+        state,
+        {suppressEmbeds: false}
+      );
+      if (outcome === 'sent') staffSent++;
+    }
+    if (staffSent === 0) {
+      throw new Error(`Failed to DM any staff member (0/${staffIds.length} delivered)`);
+    }
+    return {
+      content: resolved.content,
+      mentions: resolved.mentions,
+      dryRun: true,
+      staffSent,
+      staffTotal: staffIds.length,
+    };
+  }
+
+  const created = await discordRequest(
+    token,
+    `/channels/${channel}/messages`,
+    {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content: resolved.content}),
+    }
+  ) as Message;
+  return {
+    content: resolved.content,
+    mentions: resolved.mentions,
+    dryRun: false,
+    channel,
+    messageId: created.id,
+  };
 }
 
 export interface DiskStat {

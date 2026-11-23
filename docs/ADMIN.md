@@ -45,6 +45,7 @@ concurrent use alongside `pkmn.ai-server`, which auto-invalidates its ETag cache
 | `seed-tournament <id>` | Lock entrants and assign 1-based Berger seeds by conservative rating. |
 | `set-tournament-status <id> <status>` | Set tournament to `scheduled`, `running` (`#topbar` `● LIVE`), or `completed`. |
 | `publish-tournament-archive <id> <archive.7z>` | Publish `<id>-replays.7z` for a `completed` tournament. |
+| `announce [--dry-run] [--channel <id>]` | Validate/resolve `@` mentions and post a stdin announcement to Discord (`--dry-run` DMs `staff:`). |
 | `session [--github <login>] [--discord <id>:<name>]` | Mint a signed `pkmn_session` cookie using `SESSION_SECRET`. |
 
 ## 2. Project Onboarding & Ownership (`static/projects.yml`)
@@ -222,6 +223,19 @@ In production (`NODE_ENV=production`), `server/discord.ts` runs every 60s to:
   `pkmn notify-staff`). Mac mini relays alerts via `POST /api/arena/alert` (`Bearer $ARENA_SECRET`).
 
 Manual one-shot sync: `node --env-file-if-exists=.env build/server/discord`.
+
+**Announcements (`pkmn announce`):** Reads Markdown from stdin to EOF, validates and resolves
+`@member` / `@role` mentions (plus `<@id>`, `<@&id>`, `<#id>`) against the live guild, enforces
+Discord's 2000-character limit, and posts to `config.channel` (or DMs `staff:` with `--dry-run`):
+
+```sh
+# Preview via staff DM first, then post to the guild channel:
+npm run pkmn -- announce --dry-run <<'EOF'
+**🏛️ Announcement Title**
+
+Body with @Competitor and @pkmn mentions.
+EOF
+```
 
 **Wiki (`server/wiki.tsx`):** `ADMINS` (can edit any project page) and `AUTHORS` (GitHub->Smogon
 display overrides) live at the top of `server/wiki.tsx`. Project pages support optional first-line
