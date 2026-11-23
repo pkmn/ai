@@ -31,10 +31,10 @@ record_container_peak_ram() {
     return 0
   fi
   stats="$(podman machine ssh podman-machine-default \
-    "for d in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/user.slice/libpod-${cid}.scope /sys/fs/cgroup/machine.slice/libpod-${cid}.scope /sys/fs/cgroup/libpod_parent/libpod-${cid}; do if [ -r \"\$d/memory.peak\" ]; then echo \"RAM \$(cat \"\$d/memory.peak\")\"; awk '/^usage_usec / {print \"CPU \" \$2}' \"\$d/cpu.stat\" 2>/dev/null; break; fi; done" \
+    "for f in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/user.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/machine.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/libpod_parent/libpod-${cid}/memory.peak; do if [ -r \"\$f\" ]; then d=\"\${f%/memory.peak}\"; echo \"RAM \$(cat \"\$f\")\"; grep \"^usage_usec \" \"\$d/cpu.stat\" 2>/dev/null; break; fi; done" \
     2>/dev/null || true)"
-  peak_bytes="$(echo "$stats" | awk '/^RAM / {print $2; exit}')"
-  cpu_usec="$(echo "$stats" | awk '/^CPU / {print $2; exit}')"
+  peak_bytes="$(printf '%s\n' "$stats" | sed -n 's/^RAM //p' | head -n 1)"
+  cpu_usec="$(printf '%s\n' "$stats" | sed -n 's/^usage_usec //p' | head -n 1)"
   if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
     echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
   fi

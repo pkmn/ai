@@ -154,9 +154,9 @@ static void kill_all_target_procs(uid_t target_uid, pid_t child_pg) {
 }
 
 static void write_state_u64(const char *prefix, const char *slot, unsigned long long value) {
-  // Write authoritative telemetry atomically to `/opt/arena/state/<prefix>_%s` via `O_DIRECTORY |
-  // O_NOFOLLOW`, a temp file, and `renameat` so symlink swaps fail closed and `arbiter.ts` never
-  // observes an ENOENT or truncated gap mid-game.
+  // Write authoritative telemetry atomically to `/opt/arena/state/peak_ram_%s` and
+  // `/opt/arena/state/cpu_millis_%s` via `O_DIRECTORY | O_NOFOLLOW`, a temp file, and `renameat`
+  // so symlink swaps fail closed and `arbiter.ts` never observes an ENOENT or truncated gap.
   int dir_fd = open("/opt/arena/state", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
   if (dir_fd < 0) return;
   char file_name[48];
