@@ -5,6 +5,7 @@ import type {PRNGSeed} from '@pkmn/sim';
 import * as arena from '../server/arena';
 import * as protocol from '../server/protocol';
 import * as sim from '../server/sim';
+import {toID} from '../static/util';
 
 export type PlayerSlot = 'p1' | 'p2';
 
@@ -13,6 +14,144 @@ export const MAX_STDOUT_LINE_CHARS = 65_536;
 export const MAX_LINE_QUEUE = 256;
 export const MAX_LINES_PER_DECISION = 64;
 export const INFO_BROADCAST_INTERVAL_MILLIS = 1_000;
+export const STDERR_TAIL_BYTES = 4 * 1024;
+export const DIAGNOSTIC_STDERR_BYTES = 64 * 1024;
+export const DIAGNOSTIC_STDERR_HEAD_BYTES = 16 * 1024;
+export const DIAGNOSTIC_STDERR_TAIL_BYTES =
+  DIAGNOSTIC_STDERR_BYTES - DIAGNOSTIC_STDERR_HEAD_BYTES;
+
+export interface StderrCaptureLimits {
+  headBytes: number;
+  tailBytes: number;
+}
+
+export const DIAGNOSTIC_STDERR_LIMITS: StderrCaptureLimits = {
+  headBytes: DIAGNOSTIC_STDERR_HEAD_BYTES,
+  tailBytes: DIAGNOSTIC_STDERR_TAIL_BYTES,
+};
+
+function sliceUtf8Prefix(buf: Buffer, maxBytes: number): Buffer {
+  if (buf.length <= maxBytes) return buf;
+  let end = maxBytes;
+  // Walk back past UTF-8 continuation bytes (`10xxxxxx`) so we never split a code point.
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end);
+}
+
+function sliceUtf8Suffix(buf: Buffer, maxBytes: number): Buffer {
+  if (buf.length <= maxBytes) return buf;
+  let start = buf.length - maxBytes;
+  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
+  return buf.subarray(start);
+}
+
+// Captures bounded UTF-8 stderr with an optional head+tail split so diagnostic runs retain both
+// pre-`/ready` startup logs and late-game tracebacks while bounding memory to O(head + tail).
+export class BoundedStderrBuffer {
+  private readonly maxHeadBytes: number;
+  private readonly maxTailBytes: number;
+  private headBuf: Buffer;
+  private tailBuf: Buffer;
+  private droppedBytes: number;
+
+  constructor(limits: StderrCaptureLimits = {headBytes: 0, tailBytes: STDERR_TAIL_BYTES}) {
+    this.maxHeadBytes = Math.max(0, limits.headBytes);
+    this.maxTailBytes = Math.max(0, limits.tailBytes);
+    this.headBuf = Buffer.alloc(0);
+    this.tailBuf = Buffer.alloc(0);
+    this.droppedBytes = 0;
+  }
+
+  append(chunk: string): void {
+    if (!chunk) return;
+    let remaining: Buffer = Buffer.from(chunk, 'utf8');
+    if (this.headBuf.length < this.maxHeadBytes) {
+      const space = this.maxHeadBytes - this.headBuf.length;
+      if (remaining.length <= space) {
+        this.headBuf = Buffer.concat([this.headBuf, remaining]);
+        return;
+      }
+      const prefix = sliceUtf8Prefix(remaining, space);
+      this.headBuf = Buffer.concat([this.headBuf, prefix]);
+      remaining = remaining.subarray(prefix.length);
+    }
+    if (this.maxTailBytes === 0) {
+      this.droppedBytes += remaining.length;
+      return;
+    }
+    if (remaining.length >= this.maxTailBytes) {
+      const kept = sliceUtf8Suffix(remaining, this.maxTailBytes);
+      this.droppedBytes += this.tailBuf.length + (remaining.length - kept.length);
+      this.tailBuf = Buffer.from(kept);
+      return;
+    }
+    const combined = this.tailBuf.length > 0 ? Buffer.concat([this.tailBuf, remaining]) : remaining;
+    if (combined.length <= this.maxTailBytes) {
+      this.tailBuf = combined;
+      return;
+    }
+    const kept = sliceUtf8Suffix(combined, this.maxTailBytes);
+    this.droppedBytes += combined.length - kept.length;
+    this.tailBuf = Buffer.from(kept);
+  }
+
+  get truncatedBytes(): number {
+    return this.droppedBytes;
+  }
+
+  format(): string {
+    if (this.headBuf.length === 0 && this.tailBuf.length === 0) return '';
+    const head = this.headBuf.toString('utf8');
+    const tail = this.tailBuf.toString('utf8');
+    if (this.droppedBytes === 0) return head + tail;
+    if (this.maxHeadBytes === 0) return tail;
+    const prefix = head.endsWith('\n') || !head ? head : `${head}\n`;
+    const suffix = tail.startsWith('\n') || !tail ? tail : `\n${tail}`;
+    return (
+      `${prefix}... [${this.droppedBytes.toLocaleString('en-US')} bytes truncated] ...${suffix}`
+    );
+  }
+}
+
+// Per-format outer wall-clock caps for full-game diagnostic self-play (excluding `/ready` grace),
+// derived from empirical Showdown turn distributions in docs/HISTORICAL.md (RBY p50=33t/p95=77t,
+// ADV p50=22t/p95=51t, SV/RAND/VGC p50=8-18t).
+export function diagnosticWallCapMillis(format: string): number {
+  const id = toID(format);
+  if (id.startsWith('gen1')) return 10 * 60 * 1000;
+  if (id.startsWith('gen3')) return 8 * 60 * 1000;
+  return 6 * 60 * 1000;
+}
+
+export interface ProtocolErrorCounts {
+  invalidCantMove: number;
+  invalidCantSwitch: number;
+  invalidTarget: number;
+  invalidOther: number;
+  unavailableChoices: number;
+}
+
+export type InvalidChoiceCategory = 'cantMove' | 'cantSwitch' | 'invalidTarget' | 'other';
+
+export function emptyProtocolErrorCounts(): ProtocolErrorCounts {
+  return {
+    invalidCantMove: 0,
+    invalidCantSwitch: 0,
+    invalidTarget: 0,
+    invalidOther: 0,
+    unavailableChoices: 0,
+  };
+}
+
+// Classifies `@pkmn/sim` `[Invalid choice]` lines into fixed enum buckets without retaining any
+// species, move, or slot names so counts are safe to aggregate publicly.
+export function classifyInvalidChoiceError(line: string): InvalidChoiceCategory {
+  const body = line.slice('|error|[Invalid choice]'.length).trim().toLowerCase();
+  if (body.startsWith("can't move:")) return 'cantMove';
+  if (body.startsWith("can't switch:")) return 'cantSwitch';
+  if (body.includes('target')) return 'invalidTarget';
+  return 'other';
+}
 
 export const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
 export const INFRA_VOID_REASONS = new Set(['arbiter-stall', 'sim-error', 'arena-error']);
@@ -117,7 +256,8 @@ export interface ChunkInspectionResult {
 export function inspectPlayerProtocolChunk(
   chunk: string,
   state: ProtocolStrikeState,
-  ended: boolean
+  ended: boolean,
+  errors?: ProtocolErrorCounts
 ): ChunkInspectionResult {
   const lines = chunk.split('\n');
   const chunkHasRequest = lines.some(l => l.startsWith('|request|'));
@@ -146,9 +286,17 @@ export function inspectPlayerProtocolChunk(
       // `[Unavailable choice]` reveals hidden battle state (e.g. Encore/Disable/Arena Trap) and
       // `@pkmn/sim` always follows immediately with an updated `|request|` — withhold extra bank
       // increments on the retry, but never count a protocol strike or resend the stale request.
+      if (errors) errors.unavailableChoices++;
       state.retryingInvalidChoice = true;
       clearQueue = true;
     } else if (line.startsWith('|error|[Invalid choice]') && !ended) {
+      if (errors) {
+        const cat = classifyInvalidChoiceError(line);
+        if (cat === 'cantMove') errors.invalidCantMove++;
+        else if (cat === 'cantSwitch') errors.invalidCantSwitch++;
+        else if (cat === 'invalidTarget') errors.invalidTarget++;
+        else errors.invalidOther++;
+      }
       state.invalidStrikes++;
       state.retryingInvalidChoice = true;
       if (state.invalidStrikes >= MAX_INVALID_STRIKES) {
@@ -662,6 +810,7 @@ export function classifySmokeGame(
   opts: {
     label: string;
     format: string;
+    selfPlay?: boolean;
     p1Stderr?: string;
     p2Stderr?: string;
   }
@@ -669,7 +818,7 @@ export function classifySmokeGame(
   if (
     res.winner === 'preempted' ||
     INFRA_VOID_REASONS.has(res.endReason) ||
-    (FAULT_REASONS.has(res.endReason) && res.winner === 'p1')
+    (!opts.selfPlay && FAULT_REASONS.has(res.endReason) && res.winner === 'p1')
   ) {
     const stderrSnippet = opts.p2Stderr
       ? ` (${opts.p2Stderr.trim().replace(/\s+/g, ' ').slice(-240)})`
@@ -681,12 +830,17 @@ export function classifySmokeGame(
         `${res.endReason}${stderrSnippet}`,
     };
   }
-  if (FAULT_REASONS.has(res.endReason) && (res.winner === 'p2' || res.winner === 'tie')) {
-    const stderrTail = opts.p1Stderr?.trim();
+  if (FAULT_REASONS.has(res.endReason)) {
+    const faultingStderr = opts.selfPlay && res.winner === 'p1'
+      ? opts.p2Stderr?.trim()
+      : opts.p1Stderr?.trim() || opts.p2Stderr?.trim();
+    const tail = faultingStderr && faultingStderr.length > STDERR_TAIL_BYTES
+      ? faultingStderr.slice(-STDERR_TAIL_BYTES)
+      : faultingStderr;
     return {
       kind: 'fail',
-      message: stderrTail
-        ? `${opts.label} failed in ${opts.format}: ${res.endReason}\n${stderrTail}`
+      message: tail
+        ? `${opts.label} failed in ${opts.format}: ${res.endReason}\n${tail}`
         : `${opts.label} failed in ${opts.format}: ${res.endReason}`,
     };
   }

@@ -85,6 +85,8 @@ export interface GamePlayerStats {
   teamPreviewMillis?: number;
   meanTurnMillis: number;
   peakRam: number;
+  errors?: engine.ProtocolErrorCounts;
+  stderr?: string;
 }
 
 export interface PlayerResult extends GamePlayerStats {
@@ -125,7 +127,9 @@ export interface GameOptions {
   p2: GamePlayerOptions;
   sendUtm?: boolean;
   maxTurns?: number;
+  maxWallMillis?: number;
   smokeStopAfterTurn?: number;
+  stderrCapture?: engine.StderrCaptureLimits;
   timers?: engine.GameTimerOptions;
   callbacks?: GameCallbacks;
 }
@@ -147,7 +151,9 @@ interface RemoteTournamentPlayer {
   slot: PlayerSlot;
   spec: AgentSpec;
   proc: ChildProcessWithoutNullStreams;
-  io: engine.LineIoState;
+  io: engine.LineIoState & {
+    stderrBuf: engine.BoundedStderrBuffer;
+  };
   relay: {
     usesRelay: boolean;
     reqSeq: number;
@@ -155,6 +161,7 @@ interface RemoteTournamentPlayer {
     turnMillisWaiter: (() => void) | undefined;
   };
   turn: engine.PlayerTurnState;
+  errors: engine.ProtocolErrorCounts;
   telemetry: engine.DecisionTelemetry & {
     initMillis: number;
     peakRam: number;
@@ -291,7 +298,9 @@ export class ConcurrentGame {
   private p2TeamPacked?: string;
   private sendUtm?: boolean;
   private readonly maxTurns: number;
+  private readonly maxWallMillis?: number;
   private readonly smokeStopAfterTurn?: number;
+  private readonly stderrCapture: engine.StderrCaptureLimits;
   private readonly timerOverrides: engine.TimerOverrides;
   private timers: engine.ResolvedClockTimers;
   private readonly readyGraceMillis: number;
@@ -299,6 +308,7 @@ export class ConcurrentGame {
   private readonly infoCoalescer: engine.InfoCoalescer;
 
   private battle: sim.BattleHandle | undefined = undefined;
+  private battleStartedAtMillis: number | undefined = undefined;
 
   private p1!: RemoteTournamentPlayer;
   private p2!: RemoteTournamentPlayer;
@@ -325,7 +335,12 @@ export class ConcurrentGame {
     this.p2TeamPacked = options.p2.teamPacked;
     this.sendUtm = options.sendUtm;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
+    this.maxWallMillis = options.maxWallMillis;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
+    this.stderrCapture = options.stderrCapture ?? {
+      headBytes: 0,
+      tailBytes: engine.STDERR_TAIL_BYTES,
+    };
     this.timerOverrides = {
       startingBankSeconds: options.timers?.startingBankSeconds,
       graceSeconds: options.timers?.graceSeconds,
@@ -422,6 +437,7 @@ export class ConcurrentGame {
       io: {
         lineQueue: [],
         lineResolver: undefined,
+        stderrBuf: new engine.BoundedStderrBuffer(this.stderrCapture),
       },
       relay: {
         usesRelay,
@@ -438,6 +454,7 @@ export class ConcurrentGame {
         invalidStrikes: 0,
         lastRequestJson: undefined,
       },
+      errors: engine.emptyProtocolErrorCounts(),
       telemetry: {
         initMillis: 0,
         totalTeamPreviewMillis: 0,
@@ -503,6 +520,8 @@ export class ConcurrentGame {
         player.state.spotPreempted = true;
       } else if (errLine.startsWith('TOURNEY_ERROR:')) {
         player.state.launchError = errLine.trim();
+      } else {
+        player.io.stderrBuf.append(`${errLine}\n`);
       }
     };
 
@@ -746,6 +765,24 @@ export class ConcurrentGame {
     }
   }
 
+  private remainingWallCapMillis(): number | undefined {
+    if (this.maxWallMillis === undefined || this.battleStartedAtMillis === undefined) {
+      return undefined;
+    }
+    return Math.max(0, this.maxWallMillis - (Date.now() - this.battleStartedAtMillis));
+  }
+
+  private stopForDiagnosticCap() {
+    if (this.ended) return;
+    this.ended = true;
+    this.winner = 'tie';
+    this.endReason = 'diagnostic-cap';
+    this.wakePendingLineResolvers();
+    if (this.battle) {
+      void this.battle.write('>forcetie').catch(() => undefined);
+    }
+  }
+
   private async handleDecision(player: RemoteTournamentPlayer, reqJson: string) {
     if (this.ended) return;
     const req = JSON.parse(reqJson) as {teamPreview?: boolean};
@@ -784,17 +821,32 @@ export class ConcurrentGame {
 
     try {
       while (!this.ended) {
-        const {line, elapsedMillis, timedOut} = remainingBudgetMillis <= 0
+        const wallRemaining = this.currentTurn >= 1 ? this.remainingWallCapMillis() : undefined;
+        if (wallRemaining !== undefined && wallRemaining <= 0) {
+          this.stopForDiagnosticCap();
+          return;
+        }
+        const waitMillis = wallRemaining !== undefined
+          ? Math.min(remainingBudgetMillis, wallRemaining)
+          : remainingBudgetMillis;
+        const cappedByWall = wallRemaining !== undefined && wallRemaining < remainingBudgetMillis;
+        const {line, elapsedMillis, timedOut} = waitMillis <= 0
           ? {line: undefined, elapsedMillis: 0, timedOut: true}
-          : await this.readLineWithTimeout(player, remainingBudgetMillis);
-        totalElapsedMillis += elapsedMillis;
-        remainingBudgetMillis = totalBudgetMillis - totalElapsedMillis;
-
+          : await this.readLineWithTimeout(player, waitMillis);
         if (player.state.spotPreempted || player.state.sshDisconnected) {
           this.abortForSpotPreemption(player.slot);
           return;
         }
         if (this.ended) return;
+        if (timedOut && cappedByWall) {
+          const postWall = this.remainingWallCapMillis();
+          if (postWall !== undefined && postWall <= 0) {
+            this.stopForDiagnosticCap();
+            return;
+          }
+        }
+        totalElapsedMillis += elapsedMillis;
+        remainingBudgetMillis = totalBudgetMillis - totalElapsedMillis;
         if (timedOut || remainingBudgetMillis <= 0) {
           const outcome = engine.applyDecisionTimeout(
             player.turn,
@@ -849,7 +901,12 @@ export class ConcurrentGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        const inspected = engine.inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
+        const inspected = engine.inspectPlayerProtocolChunk(
+          chunk,
+          player.turn,
+          this.ended,
+          player.errors
+        );
         if (inspected.forfeitedInvalidChoice) {
           this.forceLose(player.slot, 'invalid-choice');
         }
@@ -964,6 +1021,7 @@ export class ConcurrentGame {
     const p1Task = this.driveConcurrentPlayer(this.p1, battle.streams.p1);
     const p2Task = this.driveConcurrentPlayer(this.p2, battle.streams.p2);
 
+    this.battleStartedAtMillis = Date.now();
     await engine.startBattleProtocol(battle, {
       format: this.format,
       seed: gameSeed,
@@ -1319,6 +1377,8 @@ export class ConcurrentGame {
             : {}),
           meanTurnMillis: p1MeanTurnMillis,
           peakRam: p1PeakRam,
+          errors: {...this.p1.errors},
+          ...(this.p1.io.stderrBuf.format() ? {stderr: this.p1.io.stderrBuf.format()} : {}),
         },
         p2: {
           teamPacked: p2Team,
@@ -1329,6 +1389,8 @@ export class ConcurrentGame {
             : {}),
           meanTurnMillis: p2MeanTurnMillis,
           peakRam: p2PeakRam,
+          errors: {...this.p2.errors},
+          ...(this.p2.io.stderrBuf.format() ? {stderr: this.p2.io.stderrBuf.format()} : {}),
         },
         games,
       };

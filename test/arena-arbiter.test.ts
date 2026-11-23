@@ -928,4 +928,121 @@ describe('TimeSlicedArenaGame', () => {
       fs.rmSync(dir, {recursive: true, force: true});
     }
   });
+
+  test('BoundedStderrBuffer preserves head and tail with truncation marker', () => {
+    const small = new engine.BoundedStderrBuffer({headBytes: 16, tailBytes: 32});
+    small.append('boot ok\nturn 1 ok\n');
+    expect(small.truncatedBytes).toBe(0);
+    expect(small.format()).toBe('boot ok\nturn 1 ok\n');
+
+    const capped = new engine.BoundedStderrBuffer({headBytes: 16, tailBytes: 24});
+    capped.append('HEAD-STARTUP-LOG\n');
+    capped.append('M'.repeat(200));
+    capped.append('\nTAIL-TRACEBACK-END');
+    expect(capped.truncatedBytes).toBeGreaterThan(150);
+    const out = capped.format();
+    expect(out.startsWith('HEAD-STARTUP-LOG\n... [')).toBe(true);
+    expect(out).toContain('bytes truncated] ...');
+    expect(out.endsWith('TAIL-TRACEBACK-END')).toBe(true);
+
+    const tailOnly = new engine.BoundedStderrBuffer({headBytes: 0, tailBytes: 12});
+    tailOnly.append('0123456789ABCDEF');
+    expect(tailOnly.format()).toBe('456789ABCDEF');
+  });
+
+  test('diagnosticWallCapMillis and protocol error classifier handle formats and buckets', () => {
+    expect(engine.diagnosticWallCapMillis('gen1ou')).toBe(10 * 60 * 1000);
+    expect(engine.diagnosticWallCapMillis('gen3ou')).toBe(8 * 60 * 1000);
+    expect(engine.diagnosticWallCapMillis('gen9ou')).toBe(6 * 60 * 1000);
+    expect(engine.diagnosticWallCapMillis('gen9randombattle')).toBe(6 * 60 * 1000);
+    expect(engine.diagnosticWallCapMillis('gen9championsvgc2026regmc')).toBe(6 * 60 * 1000);
+
+    const errors = engine.emptyProtocolErrorCounts();
+    const state: engine.ProtocolStrikeState = {
+      retryingInvalidChoice: false,
+      invalidStrikes: 0,
+      lastRequestJson: '{"active":[{}]}',
+    };
+    engine.inspectPlayerProtocolChunk(
+      [
+        "|error|[Invalid choice] Can't move: Garchomp's Earthquake is disabled",
+        "|error|[Invalid choice] Can't switch: You can't switch to a fainted Pokémon",
+        '|error|[Invalid choice] Need a target for Dragon Claw',
+        '|error|[Invalid choice] Nothing matches "foo"',
+        '|error|[Unavailable choice] Encore forces you to use Protect',
+      ].join('\n'),
+      state,
+      false,
+      errors
+    );
+    expect(errors).toEqual({
+      invalidCantMove: 1,
+      invalidCantSwitch: 1,
+      invalidTarget: 1,
+      invalidOther: 1,
+      unavailableChoices: 1,
+    });
+  });
+
+  test('classifySmokeGame treats self-play faults on either slot as failure and caps as ok', () => {
+    expect(engine.classifySmokeGame(
+      {winner: 'tie', endReason: 'diagnostic-cap'},
+      {label: 'Diagnostic', format: 'gen1ou', selfPlay: true}
+    )).toEqual({kind: 'ok'});
+
+    const p2Fault = engine.classifySmokeGame(
+      {winner: 'p1', endReason: 'crash'},
+      {label: 'Diagnostic', format: 'gen1ou', selfPlay: true, p2Stderr: 'p2 segfault'}
+    );
+    expect(p2Fault).toEqual({
+      kind: 'fail',
+      message: 'Diagnostic failed in gen1ou: crash\np2 segfault',
+    });
+  });
+
+  test('TimeSlicedArenaGame stops cleanly with diagnostic-cap on outer wall cap', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-diag-cap-'));
+    try {
+      const slowScript = path.join(dir, 'slow.js');
+      fs.writeFileSync(
+        slowScript,
+        [
+          'const rl = require("readline").createInterface({input: process.stdin});',
+          'process.stderr.write("PRE_READY_INIT\\n");',
+          'process.stdout.write("/ready\\n");',
+          'let n = 0;',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice(9));',
+          '  if (req.wait) return;',
+          '  n++;',
+          '  process.stderr.write("TURN_" + n + "\\n");',
+          '  setTimeout(() => process.stdout.write("default\\n"), n === 1 ? 5 : 150);',
+          '});',
+        ].join('\n'),
+        'utf8'
+      );
+      const spec: arbiter.AgentLaunchSpec = {
+        mode: 'native',
+        target: process.execPath,
+        args: [slowScript],
+      };
+      const res = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9randombattle',
+        seed: '1,2,3,4',
+        p1: {spec},
+        p2: {spec},
+        maxWallMillis: 80,
+        stderrCapture: engine.DIAGNOSTIC_STDERR_LIMITS,
+        devMode: true,
+      }).run();
+      expect(res.endReason).toBe('diagnostic-cap');
+      expect(res.winner).toBe('tie');
+      expect(res.turns).toBeGreaterThanOrEqual(1);
+      expect(res.p1.stderr).toContain('PRE_READY_INIT');
+      expect(res.p2.stderr).toContain('PRE_READY_INIT');
+    } finally {
+      fs.rmSync(dir, {recursive: true, force: true});
+    }
+  });
 });

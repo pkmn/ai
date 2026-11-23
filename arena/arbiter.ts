@@ -67,7 +67,9 @@ export interface ArenaGameOptions {
   recordAiLogs?: boolean;
   liveInfo?: boolean;
   maxTurns?: number;
+  maxWallMillis?: number;
   smokeStopAfterTurn?: number;
+  stderrCapture?: engine.StderrCaptureLimits;
   timers?: engine.GameTimerOptions;
   devMode?: boolean;
   onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
@@ -82,6 +84,7 @@ export interface PlayerGameResult {
   lastTurnMillis: number;
   pokemon?: unknown[];
   info?: PublicAgentInfo;
+  errors?: engine.ProtocolErrorCounts;
   exitCode?: number;
   stderr?: string;
 }
@@ -103,9 +106,10 @@ interface SandboxedPlayer {
   proc: ChildProcessWithoutNullStreams;
   io: engine.LineIoState & {
     pendingRequestJson: string | undefined;
-    stderrTail: string;
+    stderrBuf: engine.BoundedStderrBuffer;
   };
   turn: engine.PlayerTurnState;
+  errors: engine.ProtocolErrorCounts;
   telemetry: engine.DecisionTelemetry & {
     initMillis: number;
     lastDecisionMillis: number;
@@ -117,7 +121,6 @@ interface SandboxedPlayer {
   };
 }
 
-const MAX_STDERR_TAIL_CHARS = 4_096;
 const ARENA_BIN = '/opt/arena/bin/arena';
 
 export class TimeSlicedArenaGame {
@@ -130,7 +133,9 @@ export class TimeSlicedArenaGame {
   private readonly recordAiLogs: boolean;
   private readonly liveInfo: boolean;
   private readonly maxTurns: number;
+  private readonly maxWallMillis?: number;
   private readonly smokeStopAfterTurn?: number;
+  private readonly stderrCapture: engine.StderrCaptureLimits;
   private readonly timerOverrides: engine.TimerOverrides;
   private timers: engine.ResolvedClockTimers;
   private readonly readyGraceMillis: number;
@@ -139,6 +144,7 @@ export class TimeSlicedArenaGame {
   private readonly infoCoalescer: engine.InfoCoalescer;
 
   private battle: sim.BattleHandle | undefined = undefined;
+  private battleStartedAtMillis: number | undefined = undefined;
 
   private p1: SandboxedPlayer | undefined = undefined;
   private p2: SandboxedPlayer | undefined = undefined;
@@ -168,7 +174,12 @@ export class TimeSlicedArenaGame {
     this.recordAiLogs = options.recordAiLogs ?? true;
     this.liveInfo = options.liveInfo ?? false;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
+    this.maxWallMillis = options.maxWallMillis;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
+    this.stderrCapture = options.stderrCapture ?? {
+      headBytes: 0,
+      tailBytes: engine.STDERR_TAIL_BYTES,
+    };
     this.timerOverrides = {
       startingBankSeconds: options.timers?.startingBankSeconds,
       graceSeconds: options.timers?.graceSeconds,
@@ -240,7 +251,7 @@ export class TimeSlicedArenaGame {
         lineQueue: [],
         lineResolver: undefined,
         pendingRequestJson: undefined,
-        stderrTail: '',
+        stderrBuf: new engine.BoundedStderrBuffer(this.stderrCapture),
       },
       turn: {
         slot,
@@ -251,6 +262,7 @@ export class TimeSlicedArenaGame {
         invalidStrikes: 0,
         lastRequestJson: undefined,
       },
+      errors: engine.emptyProtocolErrorCounts(),
       telemetry: {
         initMillis: 0,
         teamPreviewCount: 0,
@@ -285,13 +297,10 @@ export class TimeSlicedArenaGame {
     proc.on('close', code => closeWaiter(code));
     proc.on('error', () => closeWaiter(1));
 
-    // Drain stderr while retaining a bounded diagnostic tail for smoke-test and crash reporting
+    // Drain stderr while retaining bounded diagnostic output for smoke-test and crash reporting
     proc.stderr.setEncoding('utf8');
     proc.stderr.on('data', (chunk: string) => {
-      const combined = player.io.stderrTail + chunk;
-      player.io.stderrTail = combined.length > MAX_STDERR_TAIL_CHARS
-        ? combined.slice(-MAX_STDERR_TAIL_CHARS)
-        : combined;
+      player.io.stderrBuf.append(chunk);
     });
     // Ignore EPIPE on stdin if child exits mid-write
     proc.stdin.on('error', () => undefined);
@@ -470,7 +479,12 @@ export class TimeSlicedArenaGame {
         const chunk = filterPlayerProtocolChunk(rawChunk);
         if (!chunk) continue;
 
-        const inspected = engine.inspectPlayerProtocolChunk(chunk, player.turn, this.ended);
+        const inspected = engine.inspectPlayerProtocolChunk(
+          chunk,
+          player.turn,
+          this.ended,
+          player.errors
+        );
         if (inspected.actionableReqJson) {
           player.io.pendingRequestJson = inspected.actionableReqJson;
         }
@@ -504,6 +518,24 @@ export class TimeSlicedArenaGame {
     // `@pkmn/sim` Battle#win resolves SideID ('p1' / 'p2'), not player display names
     if (this.battle) {
       void this.battle.write(`>forcewin ${this.winner}`).catch(() => undefined);
+    }
+  }
+
+  private remainingWallCapMillis(): number | undefined {
+    if (this.maxWallMillis === undefined || this.battleStartedAtMillis === undefined) {
+      return undefined;
+    }
+    return Math.max(0, this.maxWallMillis - (Date.now() - this.battleStartedAtMillis));
+  }
+
+  private stopForDiagnosticCap() {
+    if (this.ended) return;
+    this.ended = true;
+    this.winner = 'tie';
+    this.endReason = 'diagnostic-cap';
+    this.wakePendingLineResolvers();
+    if (this.battle) {
+      void this.battle.write('>forcetie').catch(() => undefined);
     }
   }
 
@@ -644,10 +676,26 @@ export class TimeSlicedArenaGame {
 
     try {
       while (!this.ended) {
-        const {line, timedOut} = remainingBudgetMillis <= 0
+        const wallRemaining = this.currentTurn >= 1 ? this.remainingWallCapMillis() : undefined;
+        if (wallRemaining !== undefined && wallRemaining <= 0) {
+          this.stopForDiagnosticCap();
+          return false;
+        }
+        const waitMillis = wallRemaining !== undefined
+          ? Math.min(remainingBudgetMillis, wallRemaining)
+          : remainingBudgetMillis;
+        const cappedByWall = wallRemaining !== undefined && wallRemaining < remainingBudgetMillis;
+        const {line, timedOut} = waitMillis <= 0
           ? {line: undefined, timedOut: true}
-          : await this.readLineWithTimeout(player, remainingBudgetMillis);
+          : await this.readLineWithTimeout(player, waitMillis);
         if (this.ended) return false;
+        if (timedOut && cappedByWall) {
+          const postWall = this.remainingWallCapMillis();
+          if (postWall !== undefined && postWall <= 0) {
+            this.stopForDiagnosticCap();
+            return false;
+          }
+        }
         totalElapsedThisDecisionMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
         remainingBudgetMillis = totalBudgetMillis - totalElapsedThisDecisionMillis;
 
@@ -780,6 +828,7 @@ export class TimeSlicedArenaGame {
         },
       });
 
+      this.battleStartedAtMillis = Date.now();
       await engine.startBattleProtocol(battle, {
         format: this.format,
         seed: this.seed,
@@ -789,6 +838,13 @@ export class TimeSlicedArenaGame {
 
       let idleSpins = 0;
       while (!this.ended) {
+        if (this.currentTurn >= 1) {
+          const wallRemaining = this.remainingWallCapMillis();
+          if (wallRemaining !== undefined && wallRemaining <= 0) {
+            this.stopForDiagnosticCap();
+            break;
+          }
+        }
         if (p1.io.pendingRequestJson || p2.io.pendingRequestJson) {
           await Promise.resolve();
           const p1HasReq = Boolean(p1.io.pendingRequestJson);
@@ -936,8 +992,9 @@ export class TimeSlicedArenaGame {
       lastTurnMillis: Math.round(player.telemetry.lastDecisionMillis),
       ...(pokemon !== undefined ? {pokemon} : {}),
       ...(info !== undefined ? {info} : {}),
+      errors: {...player.errors},
       ...(player.lifecycle.exitCode !== undefined ? {exitCode: player.lifecycle.exitCode} : {}),
-      ...(player.io.stderrTail ? {stderr: player.io.stderrTail} : {}),
+      ...(player.io.stderrBuf.format() ? {stderr: player.io.stderrBuf.format()} : {}),
     };
   }
 }
