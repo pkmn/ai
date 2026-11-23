@@ -3670,4 +3670,51 @@ describe('JSON route parity & retired pool archives', () => {
       snapDb.close();
     }
   });
+
+  test('renders agent /info telemetry panels for both, one-sided, and silent games', () => {
+    expect(
+      render.renderAiBroadcastPanelHtml('Hydra', 'Vertex', undefined, undefined, undefined)
+    ).toBe('');
+
+    const oneSided = render.renderAiBroadcastPanelHtml(
+      'Hydra',
+      'Vertex',
+      {win: 0.64, depth: 7, seldepth: 17, nodes: 205000, nps: 99000},
+      undefined,
+      [{turn: 1, p1: 0.52}, {turn: 2, p1: 0.64}],
+      {activeTurn: 2, interactive: true}
+    );
+    expect(oneSided).toContain('64.0%');
+    expect(oneSided).toContain('7/17');
+    expect(oneSided).toContain('205.0k');
+    expect(oneSided).toContain('99.0k');
+    expect(oneSided).toContain('no /info telemetry');
+    expect(oneSided).toContain('data-seek-turn="1"');
+    expect(oneSided).toContain('data-seek-turn="2"');
+    expect(oneSided).not.toContain('ai-swatch-p2');
+
+    const both = render.renderAiBroadcastPanelHtml(
+      'Hydra',
+      'Vertex',
+      {win: 0.64, depth: 7, nodes: 205000, nps: 99000},
+      {win: 0.41, nodes: 38900, nps: 54000},
+      [{turn: 1, p1: 0.52, p2: 0.49}, {turn: 2, p1: 0.64, p2: 0.41}]
+    );
+    expect(both).toContain('ai-winbar-mark');
+    expect(both).toContain('ai-swatch-p1');
+    expect(both).toContain('ai-swatch-p2');
+    expect(both).not.toContain('no /info telemetry');
+  });
+
+  test('battle viewer strips |ai| lines and supports turn sync plus seek messages', () => {
+    const viewerDir = path.join(tmpDir, 'viewer-check');
+    tournaments.renderBattleViewerPage(viewerDir);
+    const html = fs.readFileSync(
+      path.join(viewerDir, 'arena', 'viewer', 'index.html'),
+      'utf8'
+    );
+    expect(html).toContain("!line.startsWith('|ai|')");
+    expect(html).toContain("msg.type === 'seek'");
+    expect(html).toContain('turn: battle.turn');
+  });
 });

@@ -197,7 +197,7 @@ const VIEWER_SCRIPT = `
       el.log.scrollTop = live ? el.log.scrollHeight : 0;
     };
 
-    const readable = line => !line.startsWith('|request|');
+    const readable = line => !line.startsWith('|request|') && !line.startsWith('|ai|');
 
     const ownPokemon = requested => {
       const pokemon = {...requested};
@@ -331,7 +331,7 @@ const VIEWER_SCRIPT = `
         el.live.hidden = !live;
         el.live.dataset.following = 'true';
         el.start.hidden = true;
-        notifyApp({type: 'playback', state: playbackState()});
+        notifyApp({type: 'playback', state: playbackState(), turn: offlineTurn});
         return;
       }
       if (!battle) return;
@@ -342,7 +342,7 @@ const VIEWER_SCRIPT = `
       el.live.hidden = !live;
       el.live.dataset.following = String(!battle.paused && battle.seeking === null);
       if (battle.started) el.start.hidden = true;
-      notifyApp({type: 'playback', state: playbackState()});
+      notifyApp({type: 'playback', state: playbackState(), turn: battle.turn});
     };
 
     const play = () => {
@@ -553,6 +553,20 @@ const VIEWER_SCRIPT = `
         if (Array.isArray(msg.p2Pokemon)) sidePokemon.p2 = msg.p2Pokemon;
         if (Array.isArray(msg.pokemon)) sidePokemon[currentSide] = msg.pokemon;
         applyTeam();
+      } else if (
+        msg.type === 'seek' &&
+        battle &&
+        typeof msg.turn === 'number' &&
+        Number.isFinite(msg.turn)
+      ) {
+        const target = Math.max(0, Math.floor(msg.turn));
+        if (target === 0) {
+          battle.reset();
+          applyTeam();
+        } else {
+          battle.seekTurn(target);
+        }
+        render();
       }
     };
 
@@ -750,6 +764,15 @@ function renderBroadcastSectionHtml(
   const p1Clock = selected?.p1 ?? norm?.p1;
   const p2Clock = selected?.p2 ?? norm?.p2;
   const hasActiveBroadcast = Boolean(norm && p1Clock && p2Clock);
+  const broadcastAiHtml = norm && p1Clock && p2Clock
+    ? render.renderAiBroadcastPanelHtml(
+      p1Clock.name,
+      p2Clock.name,
+      selected?.p1?.info,
+      selected?.p2?.info,
+      selected?.winHistory
+    )
+    : '';
   const timer = arena.timerSettingsForFormat(tournament.format, tournament.rules);
   const isLive = selected
     ? (!selected.idle && selected.live !== false)
@@ -803,6 +826,11 @@ function renderBroadcastSectionHtml(
           </div>
         ) : (
           <div className='clock-bar hide' id='clock-bar' />
+        )}
+        {broadcastAiHtml ? (
+          <div className='ai-panel' id='broadcast-ai'>{util.raw(broadcastAiHtml)}</div>
+        ) : (
+          <div className='ai-panel hide' id='broadcast-ai' />
         )}
         <div className='viewer-wrap'>
           <iframe
@@ -1709,6 +1737,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     const seriesLeftEl = document.getElementById('series-left');
     const seriesRightEl = document.getElementById('series-right');
     let clockBarEl = document.getElementById('clock-bar');
+    let broadcastAiEl = document.getElementById('broadcast-ai');
     const standingsSec = document.getElementById('standings');
     const crosstableSec = document.getElementById('crosstable');
     const gamesSec = document.getElementById('games');
@@ -1740,6 +1769,20 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       if (viewerWrap) bcastEl.insertBefore(el, viewerWrap);
       else bcastEl.appendChild(el);
       clockBarEl = el;
+      return el;
+    };
+    const ensureBroadcastAiEl = () => {
+      if (broadcastAiEl) return broadcastAiEl;
+      if (!liveSec) return null;
+      const bcastEl = liveSec.querySelector('.broadcast');
+      if (!bcastEl) return null;
+      const el = document.createElement('div');
+      el.id = 'broadcast-ai';
+      el.className = 'ai-panel hide';
+      const viewerWrap = bcastEl.querySelector('.viewer-wrap');
+      if (viewerWrap) bcastEl.insertBefore(el, viewerWrap);
+      else bcastEl.appendChild(el);
+      broadcastAiEl = el;
       return el;
     };
 
@@ -2005,6 +2048,25 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         renderClockSideHtml('p2', tb.p2, p2Committed, p2Bank);
     };
 
+    const renderBroadcastAi = tb => {
+      const el = ensureBroadcastAiEl();
+      if (!el) return;
+      if (!tb || tb.idle || !tb.p1 || !tb.p2) {
+        el.innerHTML = '';
+        el.classList.add('hide');
+        return;
+      }
+      const html = renderAiBroadcastPanelHtml(
+        tb.p1.name,
+        tb.p2.name,
+        tb.p1.info,
+        tb.p2.info,
+        tb.winHistory
+      );
+      el.innerHTML = html;
+      el.classList.toggle('hide', !html);
+    };
+
     const renderTableNav = () => {
       const wrap = ensureTableNavWrap();
       if (!wrap) return;
@@ -2055,6 +2117,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         seriesRightEl.innerHTML = renderSeriesRightForTable(tb);
       }
       renderClocks(tb);
+      renderBroadcastAi(tb);
       const lines = Array.isArray(tb.lines) ? tb.lines : [];
       const p1Lines = Array.isArray(tb.p1Lines) ? tb.p1Lines : undefined;
       const p2Lines = Array.isArray(tb.p2Lines) ? tb.p2Lines : undefined;
@@ -2942,6 +3005,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           }
           if (data.p1) tb.p1 = data.p1;
           if (data.p2) tb.p2 = data.p2;
+          if (Array.isArray(data.winHistory)) tb.winHistory = data.winHistory;
           if (typeof data.live === 'boolean') tb.live = data.live;
           if (data.updatedAt) tb.updatedAt = data.updatedAt;
           const nowMillis = Date.now();
@@ -2965,6 +3029,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           if (tb.table === selectedTable) {
             if (tb.p1 && tb.p2) {
               renderClocks(tb, nowMillis);
+              renderBroadcastAi(tb);
             }
             const p1Pokemon = tb.p1 && Array.isArray(tb.p1.pokemon) ? tb.p1.pokemon : undefined;
             const p2Pokemon = tb.p2 && Array.isArray(tb.p2.pokemon) ? tb.p2.pokemon : undefined;

@@ -119,6 +119,241 @@ const LADDER_SCRIPT = `
   });
 `;
 
+function formatCompactCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(Math.round(n));
+}
+
+function formatWinPct(win: number): string {
+  return `${(win * 100).toFixed(1)}%`;
+}
+
+export function renderAiStatsHtml(
+  slot: 'p1' | 'p2',
+  info: arena.PublicAgentInfo | undefined
+): string {
+  if (!info) return '<span class="ai-silent">no /info telemetry</span>';
+  const parts: string[] = [];
+  if (info.win !== undefined) {
+    parts.push(`<span>Win <span class="ai-win-${slot}">${formatWinPct(info.win)}</span></span>`);
+  }
+  if (info.depth !== undefined) {
+    const depthText = info.seldepth !== undefined
+      ? `${info.depth}/${info.seldepth}`
+      : `${info.depth}`;
+    parts.push(`<span>Depth <span class="ai-stat-val">${depthText}</span></span>`);
+  } else if (info.seldepth !== undefined) {
+    parts.push(`<span>Seldepth <span class="ai-stat-val">${info.seldepth}</span></span>`);
+  }
+  if (info.nodes !== undefined) {
+    const count = formatCompactCount(info.nodes);
+    parts.push(`<span>Nodes <span class="ai-stat-val">${count}</span></span>`);
+  }
+  if (info.nps !== undefined) {
+    parts.push(`<span>NPS <span class="ai-stat-val">${formatCompactCount(info.nps)}</span></span>`);
+  }
+  if (parts.length === 0) return '<span class="ai-silent">no /info telemetry</span>';
+  return parts.join('<span class="muted">·</span>');
+}
+
+export function renderAiWinBarHtml(
+  p1Name: string,
+  p2Name: string,
+  p1Info: arena.PublicAgentInfo | undefined,
+  p2Info: arena.PublicAgentInfo | undefined
+): string {
+  const p1WinRaw = p1Info?.win;
+  const p2WinRaw = p2Info?.win;
+  if (p1WinRaw === undefined && p2WinRaw === undefined) return '';
+  const p1Win = p1WinRaw ?? (1 - p2WinRaw!);
+  const p2ViewOfP1 = p2WinRaw !== undefined ? 1 - p2WinRaw : undefined;
+  const fillPct = Math.max(3, Math.min(97, p1Win * 100));
+  const leftLabel = p1WinRaw !== undefined
+    ? `${util.escapeHtml(p1Name)} (<tt>p1</tt>): ${formatWinPct(p1WinRaw)}`
+    : `${util.escapeHtml(p1Name)} (<tt>p1</tt>): —`;
+  const rightLabel = p2WinRaw !== undefined
+    ? `${util.escapeHtml(p2Name)} (<tt>p2</tt>): ${formatWinPct(p2WinRaw)}`
+    : `${util.escapeHtml(p2Name)} (<tt>p2</tt>): —`;
+  const markHtml = p1WinRaw !== undefined && p2ViewOfP1 !== undefined
+    ? `<div class="ai-winbar-mark" style="left:calc(${(p2ViewOfP1 * 100).toFixed(1)}% - 1.5px)" ` +
+      `title="${util.escapeHtml(p2Name)} estimate of ${util.escapeHtml(p1Name)} win%: ` +
+      `${formatWinPct(p2ViewOfP1)}"></div>`
+    : '';
+  return '<div class="ai-winbar">' +
+    '<div class="ai-winbar-labels">' +
+      `<span class="ai-win-p1">${leftLabel}</span>` +
+      '<span class="muted">Win prob.</span>' +
+      `<span class="ai-win-p2">${rightLabel}</span>` +
+    '</div>' +
+    '<div class="ai-winbar-track">' +
+      `<div class="ai-winbar-fill" style="width:${fillPct.toFixed(1)}%"></div>` +
+      '<div class="ai-winbar-mid" title="50%"></div>' +
+      markHtml +
+    '</div>' +
+  '</div>';
+}
+
+export function renderAiWinChartHtml(
+  points: readonly arena.WinHistoryPoint[] | undefined,
+  opts?: {activeTurn?: number; interactive?: boolean}
+): string {
+  if (!points || points.length === 0) return '';
+  const hasP1 = points.some(pt => pt.p1 !== undefined);
+  const hasP2 = points.some(pt => pt.p2 !== undefined);
+  if (!hasP1 && !hasP2) return '';
+
+  const W = 560;
+  const H = 84;
+  const padL = 28;
+  const padR = 8;
+  const padT = 8;
+  const padB = 18;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const xFor = (i: number) =>
+    padL + (points.length <= 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+  const yFor = (w: number) => padT + (1 - Math.max(0, Math.min(1, w))) * plotH;
+
+  const buildPath = (pick: (pt: arena.WinHistoryPoint) => number | undefined): string => {
+    let d = '';
+    let open = false;
+    for (let i = 0; i < points.length; i++) {
+      const val = pick(points[i]);
+      if (val === undefined) {
+        open = false;
+        continue;
+      }
+      d += `${open ? 'L' : 'M'}${xFor(i).toFixed(1)},${yFor(val).toFixed(1)}`;
+      open = true;
+    }
+    return d;
+  };
+
+  const p1Path = hasP1 ? buildPath(pt => pt.p1) : '';
+  const p2Path = hasP2 ? buildPath(pt => (pt.p2 !== undefined ? 1 - pt.p2 : undefined)) : '';
+
+  let activeIdx = points.length - 1;
+  if (opts?.activeTurn !== undefined) {
+    activeIdx = 0;
+    for (let i = 0; i < points.length; i++) {
+      if (points[i].turn <= opts.activeTurn) activeIdx = i;
+    }
+  }
+  const curPt = points[activeIdx];
+  const curX = xFor(activeIdx);
+
+  const legendParts: string[] = [];
+  if (hasP1) {
+    legendParts.push(
+      '<span class="ai-legend-item"><span class="ai-swatch-p1"></span>p1 win%</span>'
+    );
+  }
+  if (hasP2) {
+    legendParts.push(
+      '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1 − p2 win%</span>'
+    );
+  }
+  const heading = opts?.interactive
+    ? 'Win probability (click turn to seek)'
+    : 'Win probability (p1 perspective)';
+
+  let hits = '';
+  if (opts?.interactive) {
+    const step = points.length <= 1 ? plotW : plotW / (points.length - 1);
+    for (let i = 0; i < points.length; i++) {
+      const pt = points[i];
+      const rx = Math.max(padL, xFor(i) - step / 2);
+      const tipParts = [`Turn ${pt.turn}`];
+      if (pt.p1 !== undefined) tipParts.push(`p1 ${formatWinPct(pt.p1)}`);
+      if (pt.p2 !== undefined) tipParts.push(`p2 ${formatWinPct(pt.p2)}`);
+      hits += `<rect class="ai-chart-hit" x="${rx.toFixed(1)}" y="${padT}" ` +
+        `width="${step.toFixed(1)}" height="${plotH}" fill="transparent" ` +
+        `data-seek-turn="${pt.turn}"><title>${tipParts.join(' · ')}</title></rect>`;
+    }
+  }
+
+  const firstLabel = `T${points[0].turn}`;
+  const lastLabel = `T${points[points.length - 1].turn}`;
+  const curLabel = `T${curPt.turn}`;
+  const showCurLabel = points.length > 2 && activeIdx > 0 && activeIdx < points.length - 1;
+
+  return '<div class="ai-chart">' +
+    '<div class="ai-chart-head">' +
+      `<span>${heading}</span>` +
+      `<span class="ai-chart-legend">${legendParts.join('')}</span>` +
+    '</div>' +
+    `<svg class="ai-chart-svg" viewBox="0 0 ${W} ${H}" role="img" ` +
+      'aria-label="Win probability by turn">' +
+      `<line x1="${padL}" y1="${yFor(1)}" x2="${W - padR}" y2="${yFor(1)}" ` +
+        'stroke="currentColor" stroke-opacity="0.14" stroke-width="1" />' +
+      `<line x1="${padL}" y1="${yFor(0.5)}" x2="${W - padR}" y2="${yFor(0.5)}" ` +
+        'stroke="currentColor" stroke-opacity="0.28" stroke-dasharray="3 3" stroke-width="1" />' +
+      `<line x1="${padL}" y1="${yFor(0)}" x2="${W - padR}" y2="${yFor(0)}" ` +
+        'stroke="currentColor" stroke-opacity="0.14" stroke-width="1" />' +
+      `<text x="${padL - 4}" y="${yFor(1) + 3}" text-anchor="end" fill="currentColor" ` +
+        'fill-opacity="0.55" font-size="9" font-family="monospace">100</text>' +
+      `<text x="${padL - 4}" y="${yFor(0.5) + 3}" text-anchor="end" fill="currentColor" ` +
+        'fill-opacity="0.55" font-size="9" font-family="monospace">50</text>' +
+      `<text x="${padL - 4}" y="${yFor(0) + 3}" text-anchor="end" fill="currentColor" ` +
+        'fill-opacity="0.55" font-size="9" font-family="monospace">0</text>' +
+      (p1Path
+        ? `<path d="${p1Path}" fill="none" stroke="var(--ai-p1)" stroke-width="2" ` +
+          'stroke-linejoin="round" />'
+        : '') +
+      (p2Path
+        ? `<path d="${p2Path}" fill="none" stroke="var(--ai-p2)" stroke-width="1.75" ` +
+          'stroke-dasharray="4 3" stroke-linejoin="round" />'
+        : '') +
+      `<line x1="${curX.toFixed(1)}" y1="${padT}" x2="${curX.toFixed(1)}" y2="${H - padB}" ` +
+        'stroke="currentColor" stroke-opacity="0.35" stroke-width="1" />' +
+      (curPt.p1 !== undefined
+        ? `<circle cx="${curX.toFixed(1)}" cy="${yFor(curPt.p1).toFixed(1)}" r="3.5" ` +
+          'fill="var(--ai-p1)" />'
+        : '') +
+      (curPt.p2 !== undefined
+        ? `<circle cx="${curX.toFixed(1)}" cy="${yFor(1 - curPt.p2).toFixed(1)}" r="3" ` +
+          'fill="var(--ai-p2)" />'
+        : '') +
+      `<text x="${padL}" y="${H - 4}" fill="currentColor" fill-opacity="0.55" ` +
+        `font-size="9" font-family="monospace">${firstLabel}</text>` +
+      (showCurLabel
+        ? `<text x="${curX.toFixed(1)}" y="${H - 4}" text-anchor="middle" fill="currentColor" ` +
+          `font-size="9" font-family="monospace">${curLabel}</text>`
+        : '') +
+      (points.length > 1
+        ? `<text x="${W - padR}" y="${H - 4}" text-anchor="end" fill="currentColor" ` +
+          `fill-opacity="0.55" font-size="9" font-family="monospace">${lastLabel}</text>`
+        : '') +
+      hits +
+    '</svg>' +
+  '</div>';
+}
+
+export function renderAiBroadcastPanelHtml(
+  p1Name: string,
+  p2Name: string,
+  p1Info: arena.PublicAgentInfo | undefined,
+  p2Info: arena.PublicAgentInfo | undefined,
+  winHistory: readonly arena.WinHistoryPoint[] | undefined,
+  opts?: {activeTurn?: number; interactive?: boolean}
+): string {
+  const hasInfo = Boolean(p1Info || p2Info);
+  const hasChart = Boolean(winHistory && winHistory.length > 0);
+  if (!hasInfo && !hasChart) return '';
+  const stripHtml = hasInfo
+    ? '<div class="ai-strip">' +
+        '<div class="ai-strip-side"><span class="ai-slot-tag">p1</span>' +
+          `${renderAiStatsHtml('p1', p1Info)}</div>` +
+        '<div class="ai-strip-side"><span class="ai-slot-tag">p2</span>' +
+          `${renderAiStatsHtml('p2', p2Info)}</div>` +
+      '</div>'
+    : '';
+  const barHtml = renderAiWinBarHtml(p1Name, p2Name, p1Info, p2Info);
+  const chartHtml = renderAiWinChartHtml(winHistory, opts);
+  return stripHtml + barHtml + chartHtml;
+}
+
 export function buildBattleDetailClientJs(): string {
   return `
     const esc = s => String(s)
@@ -351,6 +586,282 @@ export function buildBattleDetailClientJs(): string {
       '</div>';
     };
 
+    const formatCompactCount = n => {
+      if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+      return String(Math.round(n));
+    };
+
+    const formatWinPct = w => (w * 100).toFixed(1) + '%';
+
+    const renderAiStatsHtml = (slot, info) => {
+      if (!info) return '<span class="ai-silent">no /info telemetry</span>';
+      const parts = [];
+      if (typeof info.win === 'number') {
+        parts.push(
+          '<span>Win <span class="ai-win-' + slot + '">' + formatWinPct(info.win) + '</span></span>'
+        );
+      }
+      if (typeof info.depth === 'number') {
+        const dText = typeof info.seldepth === 'number'
+          ? (info.depth + '/' + info.seldepth)
+          : String(info.depth);
+        parts.push('<span>Depth <span class="ai-stat-val">' + dText + '</span></span>');
+      } else if (typeof info.seldepth === 'number') {
+        parts.push('<span>Seldepth <span class="ai-stat-val">' + info.seldepth + '</span></span>');
+      }
+      if (typeof info.nodes === 'number') {
+        parts.push(
+          '<span>Nodes <span class="ai-stat-val">' + formatCompactCount(info.nodes) +
+          '</span></span>'
+        );
+      }
+      if (typeof info.nps === 'number') {
+        parts.push(
+          '<span>NPS <span class="ai-stat-val">' + formatCompactCount(info.nps) + '</span></span>'
+        );
+      }
+      if (parts.length === 0) return '<span class="ai-silent">no /info telemetry</span>';
+      return parts.join('<span class="muted">·</span>');
+    };
+
+    const renderAiWinBarHtml = (p1Name, p2Name, p1Info, p2Info) => {
+      const hasP1 = Boolean(p1Info && typeof p1Info.win === 'number');
+      const hasP2 = Boolean(p2Info && typeof p2Info.win === 'number');
+      if (!hasP1 && !hasP2) return '';
+      const p1Win = hasP1 ? p1Info.win : (1 - p2Info.win);
+      const p2ViewOfP1 = hasP2 ? (1 - p2Info.win) : undefined;
+      const fillPct = Math.max(3, Math.min(97, p1Win * 100));
+      const leftLabel = hasP1
+        ? (esc(p1Name) + ' (<tt>p1</tt>): ' + formatWinPct(p1Info.win))
+        : (esc(p1Name) + ' (<tt>p1</tt>): —');
+      const rightLabel = hasP2
+        ? (esc(p2Name) + ' (<tt>p2</tt>): ' + formatWinPct(p2Info.win))
+        : (esc(p2Name) + ' (<tt>p2</tt>): —');
+      const markHtml = (hasP1 && hasP2 && p2ViewOfP1 !== undefined)
+        ? '<div class="ai-winbar-mark" style="left:calc(' + (p2ViewOfP1 * 100).toFixed(1) +
+          '% - 1.5px)" title="' + esc(p2Name) + ' estimate of ' + esc(p1Name) + ' win%: ' +
+          formatWinPct(p2ViewOfP1) + '"></div>'
+        : '';
+      return '<div class="ai-winbar">' +
+        '<div class="ai-winbar-labels">' +
+          '<span class="ai-win-p1">' + leftLabel + '</span>' +
+          '<span class="muted">Win prob.</span>' +
+          '<span class="ai-win-p2">' + rightLabel + '</span>' +
+        '</div>' +
+        '<div class="ai-winbar-track">' +
+          '<div class="ai-winbar-fill" style="width:' + fillPct.toFixed(1) + '%"></div>' +
+          '<div class="ai-winbar-mid" title="50%"></div>' +
+          markHtml +
+        '</div>' +
+      '</div>';
+    };
+
+    const renderAiWinChartHtml = (points, opts) => {
+      if (!Array.isArray(points) || points.length === 0) return '';
+      const hasP1 = points.some(pt => typeof pt.p1 === 'number');
+      const hasP2 = points.some(pt => typeof pt.p2 === 'number');
+      if (!hasP1 && !hasP2) return '';
+      const W = 560, H = 84, padL = 28, padR = 8, padT = 8, padB = 18;
+      const plotW = W - padL - padR;
+      const plotH = H - padT - padB;
+      const xFor = i => padL + (points.length <= 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+      const yFor = w => padT + (1 - Math.max(0, Math.min(1, w))) * plotH;
+      const buildPath = pick => {
+        let d = '';
+        let open = false;
+        for (let i = 0; i < points.length; i++) {
+          const val = pick(points[i]);
+          if (typeof val !== 'number') {
+            open = false;
+            continue;
+          }
+          d += (open ? 'L' : 'M') + xFor(i).toFixed(1) + ',' + yFor(val).toFixed(1);
+          open = true;
+        }
+        return d;
+      };
+      const p1Path = hasP1 ? buildPath(pt => pt.p1) : '';
+      const p2Path = hasP2
+        ? buildPath(pt => (typeof pt.p2 === 'number' ? 1 - pt.p2 : undefined))
+        : '';
+      let activeIdx = points.length - 1;
+      if (opts && typeof opts.activeTurn === 'number') {
+        activeIdx = 0;
+        for (let i = 0; i < points.length; i++) {
+          if (points[i].turn <= opts.activeTurn) activeIdx = i;
+        }
+      }
+      const curPt = points[activeIdx];
+      const curX = xFor(activeIdx);
+      const legendParts = [];
+      if (hasP1) {
+        legendParts.push(
+          '<span class="ai-legend-item"><span class="ai-swatch-p1"></span>p1 win%</span>'
+        );
+      }
+      if (hasP2) {
+        legendParts.push(
+          '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1 − p2 win%</span>'
+        );
+      }
+      const interactive = Boolean(opts && opts.interactive);
+      const heading = interactive
+        ? 'Win probability (click turn to seek)'
+        : 'Win probability (p1 perspective)';
+      let hits = '';
+      if (interactive) {
+        const step = points.length <= 1 ? plotW : plotW / (points.length - 1);
+        for (let i = 0; i < points.length; i++) {
+          const pt = points[i];
+          const rx = Math.max(padL, xFor(i) - step / 2);
+          const tips = ['Turn ' + pt.turn];
+          if (typeof pt.p1 === 'number') tips.push('p1 ' + formatWinPct(pt.p1));
+          if (typeof pt.p2 === 'number') tips.push('p2 ' + formatWinPct(pt.p2));
+          hits += '<rect class="ai-chart-hit" x="' + rx.toFixed(1) + '" y="' + padT +
+            '" width="' + step.toFixed(1) + '" height="' + plotH +
+            '" fill="transparent" data-seek-turn="' + pt.turn + '"><title>' +
+            esc(tips.join(' · ')) + '</title></rect>';
+        }
+      }
+      const showCurLabel = points.length > 2 && activeIdx > 0 && activeIdx < points.length - 1;
+      return '<div class="ai-chart">' +
+        '<div class="ai-chart-head">' +
+          '<span>' + heading + '</span>' +
+          '<span class="ai-chart-legend">' + legendParts.join('') + '</span>' +
+        '</div>' +
+        '<svg class="ai-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
+          'aria-label="Win probability by turn">' +
+          '<line x1="' + padL + '" y1="' + yFor(1) + '" x2="' + (W - padR) + '" y2="' + yFor(1) +
+            '" stroke="currentColor" stroke-opacity="0.14" stroke-width="1" />' +
+          '<line x1="' + padL + '" y1="' + yFor(0.5) + '" x2="' + (W - padR) + '" y2="' +
+            yFor(0.5) + '" stroke="currentColor" stroke-opacity="0.28" stroke-dasharray="3 3" ' +
+            'stroke-width="1" />' +
+          '<line x1="' + padL + '" y1="' + yFor(0) + '" x2="' + (W - padR) + '" y2="' + yFor(0) +
+            '" stroke="currentColor" stroke-opacity="0.14" stroke-width="1" />' +
+          '<text x="' + (padL - 4) + '" y="' + (yFor(1) + 3) + '" text-anchor="end" ' +
+            'fill="currentColor" fill-opacity="0.55" font-size="9" ' +
+            'font-family="monospace">100</text>' +
+          '<text x="' + (padL - 4) + '" y="' + (yFor(0.5) + 3) + '" text-anchor="end" ' +
+            'fill="currentColor" fill-opacity="0.55" font-size="9" ' +
+            'font-family="monospace">50</text>' +
+          '<text x="' + (padL - 4) + '" y="' + (yFor(0) + 3) + '" text-anchor="end" ' +
+            'fill="currentColor" fill-opacity="0.55" font-size="9" ' +
+            'font-family="monospace">0</text>' +
+          (p1Path
+            ? '<path d="' + p1Path + '" fill="none" stroke="var(--ai-p1)" stroke-width="2" ' +
+              'stroke-linejoin="round" />'
+            : '') +
+          (p2Path
+            ? '<path d="' + p2Path + '" fill="none" stroke="var(--ai-p2)" stroke-width="1.75" ' +
+              'stroke-dasharray="4 3" stroke-linejoin="round" />'
+            : '') +
+          '<line x1="' + curX.toFixed(1) + '" y1="' + padT + '" x2="' + curX.toFixed(1) +
+            '" y2="' + (H - padB) + '" stroke="currentColor" stroke-opacity="0.35" ' +
+            'stroke-width="1" />' +
+          (typeof curPt.p1 === 'number'
+            ? '<circle cx="' + curX.toFixed(1) + '" cy="' + yFor(curPt.p1).toFixed(1) +
+              '" r="3.5" fill="var(--ai-p1)" />'
+            : '') +
+          (typeof curPt.p2 === 'number'
+            ? '<circle cx="' + curX.toFixed(1) + '" cy="' + yFor(1 - curPt.p2).toFixed(1) +
+              '" r="3" fill="var(--ai-p2)" />'
+            : '') +
+          '<text x="' + padL + '" y="' + (H - 4) + '" fill="currentColor" fill-opacity="0.55" ' +
+            'font-size="9" font-family="monospace">T' + points[0].turn + '</text>' +
+          (showCurLabel
+            ? '<text x="' + curX.toFixed(1) + '" y="' + (H - 4) + '" text-anchor="middle" ' +
+              'fill="currentColor" font-size="9" font-family="monospace">T' + curPt.turn + '</text>'
+            : '') +
+          (points.length > 1
+            ? '<text x="' + (W - padR) + '" y="' + (H - 4) + '" text-anchor="end" ' +
+              'fill="currentColor" fill-opacity="0.55" font-size="9" font-family="monospace">T' +
+              points[points.length - 1].turn + '</text>'
+            : '') +
+          hits +
+        '</svg>' +
+      '</div>';
+    };
+
+    const renderAiBroadcastPanelHtml = (p1Name, p2Name, p1Info, p2Info, winHistory, opts) => {
+      const hasInfo = Boolean(p1Info || p2Info);
+      const hasChart = Array.isArray(winHistory) && winHistory.length > 0;
+      if (!hasInfo && !hasChart) return '';
+      const stripHtml = hasInfo
+        ? '<div class="ai-strip">' +
+            '<div class="ai-strip-side"><span class="ai-slot-tag">p1</span>' +
+              renderAiStatsHtml('p1', p1Info) + '</div>' +
+            '<div class="ai-strip-side"><span class="ai-slot-tag">p2</span>' +
+              renderAiStatsHtml('p2', p2Info) + '</div>' +
+          '</div>'
+        : '';
+      return stripHtml +
+        renderAiWinBarHtml(p1Name, p2Name, p1Info, p2Info) +
+        renderAiWinChartHtml(winHistory, opts);
+    };
+
+    const extractAiTelemetryFromLines = lines => {
+      if (!Array.isArray(lines) || lines.length === 0) return [];
+      const byTurn = new Map();
+      let curTurn = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const line = String(lines[i] || '');
+        if (line.indexOf('|turn|') === 0) {
+          const n = parseInt(line.slice(6), 10);
+          if (Number.isInteger(n) && n >= 0) curTurn = n;
+          continue;
+        }
+        if (line.indexOf('|ai|') !== 0) continue;
+        const slot = line.slice(4, 6);
+        if ((slot !== 'p1' && slot !== 'p2') || line[6] !== '|') continue;
+        try {
+          const info = JSON.parse(line.slice(7));
+          if (!info || typeof info !== 'object' || Array.isArray(info)) continue;
+          let entry = byTurn.get(curTurn);
+          if (!entry) {
+            entry = {turn: curTurn};
+            byTurn.set(curTurn, entry);
+          }
+          entry[slot] = info;
+        } catch {}
+      }
+      return Array.from(byTurn.values()).sort((a, b) => a.turn - b.turn);
+    };
+
+    const renderReplayAiPanel = (slot, activeTurn) => {
+      const panel = slot && slot.querySelector('.replay-ai-panel');
+      if (!panel) return;
+      const tele = Array.isArray(slot._aiTelemetry) ? slot._aiTelemetry : [];
+      if (tele.length === 0) {
+        panel.innerHTML = '';
+        panel.classList.add('hide');
+        return;
+      }
+      let snap = tele[0];
+      const target = typeof activeTurn === 'number' ? activeTurn : tele[0].turn;
+      for (let i = 0; i < tele.length; i++) {
+        if (tele[i].turn <= target) snap = tele[i];
+      }
+      const winHistory = [];
+      for (let i = 0; i < tele.length; i++) {
+        const p1w = tele[i].p1 && typeof tele[i].p1.win === 'number' ? tele[i].p1.win : undefined;
+        const p2w = tele[i].p2 && typeof tele[i].p2.win === 'number' ? tele[i].p2.win : undefined;
+        if (p1w !== undefined || p2w !== undefined) {
+          winHistory.push({turn: tele[i].turn, p1: p1w, p2: p2w});
+        }
+      }
+      const html = renderAiBroadcastPanelHtml(
+        slot._aiSeat1 || 'p1',
+        slot._aiSeat2 || 'p2',
+        snap.p1,
+        snap.p2,
+        winHistory,
+        {activeTurn: snap.turn, interactive: true}
+      );
+      panel.innerHTML = html;
+      panel.classList.toggle('hide', !html);
+    };
+
     const SPEED_KEY = 'pkmn-viewer-speed';
     const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
 
@@ -397,6 +908,15 @@ export function buildBattleDetailClientJs(): string {
         try {
           localStorage.setItem(SPEED_KEY, data.speed);
         } catch {}
+        return;
+      }
+      if (data.type === 'playback' && typeof data.turn === 'number') {
+        document.querySelectorAll('.battle-detail[data-match-id]').forEach(slot => {
+          const f = slot.querySelector('iframe.replay-viewer-frame');
+          if (f && ev.source === f.contentWindow) {
+            renderReplayAiPanel(slot, data.turn);
+          }
+        });
         return;
       }
       if (data.type !== 'ready') return;
@@ -447,11 +967,23 @@ export function buildBattleDetailClientJs(): string {
             '<span class="replay-bar-left"></span>' +
             '<span class="replay-bar-right"></span>' +
           '</div>' +
+          '<div class="ai-panel replay-ai-panel hide"></div>' +
           '<div class="viewer-wrap">' +
             '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
               'title="Pokémon Showdown replay viewer" ' +
               'sandbox="allow-scripts"></iframe>' +
           '</div>';
+        wrap.addEventListener('click', ev => {
+          const hit = ev.target && ev.target.closest
+            ? ev.target.closest('[data-seek-turn]')
+            : null;
+          if (!hit) return;
+          const turn = Number(hit.getAttribute('data-seek-turn'));
+          if (!Number.isFinite(turn)) return;
+          const f = slot.querySelector('iframe.replay-viewer-frame');
+          if (f) postToFrame(f, {type: 'seek', turn});
+          renderReplayAiPanel(slot, turn);
+        });
         slot.appendChild(wrap);
       }
       const leftEl = slot.querySelector('.replay-bar-left');
@@ -512,6 +1044,10 @@ export function buildBattleDetailClientJs(): string {
         slot._pendingLines = lines;
         slot._pendingP1Lines = p1Lines;
         slot._pendingP2Lines = p2Lines;
+        slot._aiSeat1 = seat1;
+        slot._aiSeat2 = seat2;
+        slot._aiTelemetry = extractAiTelemetryFromLines(lines);
+        renderReplayAiPanel(slot, slot._aiTelemetry[0] ? slot._aiTelemetry[0].turn : 0);
         const f = slot.querySelector('iframe.replay-viewer-frame');
         if (slot._viewerReady && f) {
           postToFrame(f, {type: 'load', lines, p1Lines, p2Lines, live: false, side: 'p1'});
@@ -780,6 +1316,10 @@ function buildBattlesScript(
       const stepLabel = isInit ? 'Init' : 'Turn';
       const teamHtml = renderTeamSpanHtml(slotData.team);
       const orbsHtml = renderPokemonOrbsHtml(slotData.pokemon);
+      const showAi = Boolean((live.p1 && live.p1.info) || (live.p2 && live.p2.info));
+      const aiHtml = showAi
+        ? '<div class="slot-ai">' + renderAiStatsHtml(key, slotData.info) + '</div>'
+        : '';
       return '<div class="slot-card ' + (isRunning ? 'running' : 'paused') +
         '" id="slot-' + key + '">' +
         '<div class="slot-top"><span><tt>' + key + '</tt> ' +
@@ -798,7 +1338,7 @@ function buildBattlesScript(
         '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
         Math.round(slotData.ram).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
         teamHtml +
-        '</div></div>';
+        '</div>' + aiHtml + '</div>';
     };
 
     const renderLive = nowSec => {
@@ -843,6 +1383,10 @@ function buildBattlesScript(
         : (l.phase === 'preview' || l.turn === 0)
           ? ' · Team Preview'
           : ', Turn ' + l.turn;
+      const liveChartHtml = (Array.isArray(l.winHistory) && l.winHistory.length > 0)
+        ? '<div class="ai-panel">' +
+          renderAiWinChartHtml(l.winHistory, {activeTurn: l.turn}) + '</div>'
+        : '';
       livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
         '</code> · <strong>Game ' + l.game +
         ' / 2</strong>' + stepText + '</span>' +
@@ -852,7 +1396,7 @@ function buildBattlesScript(
         '<div class="slots-grid">' +
         renderSlot('p1', l.p1, l, nowSec) +
         renderSlot('p2', l.p2, l, nowSec) +
-        '</div>';
+        '</div>' + liveChartHtml;
 
       if (l.viewer && Array.isArray(l.viewer.lines) && l.viewer.lines.length > 0) {
         const gameKey = l.matchId + ':' + l.game;
@@ -3123,6 +3667,9 @@ function renderLiveSlotCard(
         </span>
         {renderTeamSpanNode(slotData.team)}
       </div>
+      {(live.p1.info || live.p2.info) && (
+        <div className='slot-ai'>{util.raw(renderAiStatsHtml(key, slotData.info))}</div>
+      )}
     </div>
   );
 }
@@ -3174,6 +3721,11 @@ function renderLivePanelInner(
         {renderLiveSlotCard('p1', l.p1, l, nowSec, links)}
         {renderLiveSlotCard('p2', l.p2, l, nowSec, links)}
       </div>
+      {l.winHistory && l.winHistory.length > 0 && (
+        <div className='ai-panel'>
+          {util.raw(renderAiWinChartHtml(l.winHistory, {activeTurn: l.turn}))}
+        </div>
+      )}
     </>
   );
 }
