@@ -1019,12 +1019,11 @@ function buildProjectMetaRows(
   }
 
   if (meta?.engine) {
+    const renderEngine = (e: string | {name: string; url: string}) =>
+      typeof e === 'string' ? e : <a href={e.url} className='subtle'>{e.name}</a>;
     const engNode = Array.isArray(meta.engine)
-      ? meta.engine.map((e, i) => [
-        i > 0 && ', ',
-        <a href={e.url} className='subtle'>{e.name}</a>,
-      ])
-      : meta.engine;
+      ? meta.engine.map((e, i) => [i > 0 && ', ', renderEngine(e)])
+      : renderEngine(meta.engine);
     rows.push(<tr><td><strong>Engine</strong></td><td>{engNode}</td></tr>);
   }
 

@@ -23,6 +23,8 @@ export interface ArenaInfo {
   ladders: ArenaBadge[];
 }
 
+export type Engine = string | {name: string; url: string};
+
 export interface Project {
   name?: string;
   identifier?: string;
@@ -32,7 +34,7 @@ export interface Project {
   active: number | [number, number];
   license?: string;
   source?: string;
-  engine?: string | {name: string; url: string};
+  engine?: Engine | Engine[];
   language?: string | string[];
   platform?: {name: string; url: string}[];
   release?: {name: string; url: string};
@@ -166,11 +168,13 @@ const ProjectCard = ({project, bibliography, arenaInfo}: {
         <td><strong>Engine</strong></td>
         <td>
           {Array.isArray(project.engine)
-            ? project.engine.map(({name, url}, idx) => <>
+            ? project.engine.map((e, idx) => <>
               {idx > 0 && ', '}
-              <a href={url} className='subtle'>{name}</a>
+              {typeof e === 'string' ? e : <a href={e.url} className='subtle'>{e.name}</a>}
             </>)
-            : project.engine as string}
+            : typeof project.engine === 'string'
+              ? project.engine
+              : <a href={project.engine.url} className='subtle'>{project.engine.name}</a>}
         </td>
       </tr>}
       {project.language && <tr>

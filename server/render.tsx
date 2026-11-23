@@ -1441,7 +1441,7 @@ export interface ProjectMeta {
   active?: number | [number, number];
   license?: string;
   source?: string;
-  engine?: string | Array<{name: string; url: string}>;
+  engine?: projects.Project['engine'];
   language?: string | string[];
 }
 
@@ -1501,7 +1501,7 @@ function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
         active: p.active,
         license: p.license,
         source: p.source,
-        engine: p.engine as ProjectMeta['engine'],
+        engine: p.engine,
         language: p.language,
       });
     }
