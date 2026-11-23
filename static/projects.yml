@@ -747,9 +747,9 @@
   arena:
     owners:
       Fubs: Fubwubs.592374
-- name: Mew's Truck
+- name: mewstruck
   site: https://www.smogon.com/forums/threads/3789554/
-  active: 2026 # October 10
+  active: 2026 # October 4
   license: MIT-0
   source: https://github.com/pkmnbotguy/pkmn_stuff
   engine:
@@ -761,6 +761,9 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      pkmnbotguy: BotMakerGuy.765140
 - name: openvgc
   site: https://www.smogon.com/forums/threads/3789558/
   active: 2026 # October 10

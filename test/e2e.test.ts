@@ -734,7 +734,7 @@ describe('mock scenarios & E2E lifecycle', () => {
           },
           quarantined: async () => {
             await statusQueue;
-            const mtVer = db.getVersionBySlugAndLabel('mews-truck', '1.0.0')!;
+            const mtVer = db.getVersionBySlugAndLabel('mewstruck', '1.0.0')!;
             expect(mtVer.smokeStatus).toBe('quarantined');
             expect(mtVer.notified).toBe(true);
             expect(

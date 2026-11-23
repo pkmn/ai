@@ -12,7 +12,7 @@ register "0 ERROR" --logo 0-error.png \
   --discord 513513270670262284:scheibo
 register "Foul Play" --owner pmariglia:pmariglia.535629 \
   --discord 283674461268344832:pmariglia
-register "Mew's Truck" --owner pkmnbotguy:pkmnbotguy.610002 \
+register "mewstruck" --owner pkmnbotguy:pkmnbotguy.610002 \
   --discord 300000000000000002:batistas_dick
 register "Metamon" --owner jakegrigsby:jakegrigsby.610001 \
   --discord 300000000000000001:jakegrigsby
@@ -50,7 +50,7 @@ ladder open rby
 checkpoint two-vgc-agents
 
 # 5. Submit 3rd VGC agent -> VGC `min = 4` still blocks activation & scheduling until 4th VGC agent arrives
-submit mews-truck 1.0.0 vgc=1610 --by pkmnbotguy
+submit mewstruck 1.0.0 vgc=1610 --by pkmnbotguy
 checkpoint three-vgc-agents
 
 submit metamon 1.0.0 vgc=1560 --by jakegrigsby \
@@ -90,5 +90,5 @@ render
 checkpoint vgc-archived
 
 # 8. Runner auto-quarantine -> DMs owner & staff
-quarantine mews-truck@1.0.0 --via runner --reason "Crashed in 5 consecutive games"
+quarantine mewstruck@1.0.0 --via runner --reason "Crashed in 5 consecutive games"
 checkpoint quarantined

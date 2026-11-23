@@ -57,7 +57,7 @@ const RANKING = [
   'MysteriousWind', // top VGC Bo1 & Bo3 (1889 Elo/91.0% GXE/1937 Glicko) & #1 vgc.bot OTS/CTS
   'mikumiku', // top VGC (1857 Elo/81.2% GXE/ 1775 Glicko)
   'nessie', // top VGC Bo3 (1639 Elo/75.7% GXE/1714 Glicko)
-  'Mew\'s Truck', // top VGC (1942 Elo/81.0% GXE/1774 Glicko)
+  'mewstruck', // top VGC (1942 Elo/81.0% GXE/1774 Glicko)
   'openvgc', // top VGC (1929 Elo/80.8% GXE/1771 Glicko)
   'Porygoned', // top VGC (1986 Elo/72.4% GXE/1682 Glicko) & #1 vgc.bot CTS
   'Mocca', // #1 vgc.bot OTS, CTS & CTS Random
