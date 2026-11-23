@@ -3,6 +3,7 @@ import {ChildProcessWithoutNullStreams} from 'child_process';
 import type {PRNGSeed} from '@pkmn/sim';
 
 import * as arena from '../server/arena';
+import * as protocol from '../server/protocol';
 import * as sim from '../server/sim';
 
 export type PlayerSlot = 'p1' | 'p2';
@@ -11,6 +12,7 @@ export const MAX_INVALID_STRIKES = 3;
 export const MAX_STDOUT_LINE_CHARS = 65_536;
 export const MAX_LINE_QUEUE = 256;
 export const MAX_LINES_PER_DECISION = 64;
+export const INFO_BROADCAST_INTERVAL_MILLIS = 1_000;
 
 export const FAULT_REASONS = new Set(['crash', 'oom', 'timeout', 'invalid-choice']);
 export const INFRA_VOID_REASONS = new Set(['arbiter-stall', 'sim-error', 'arena-error']);
@@ -317,10 +319,154 @@ export function wakeLineResolver(io: LineIoState | undefined): void {
   resolve(undefined);
 }
 
+export interface WinHistoryPoint {
+  turn: number;
+  p1?: number;
+  p2?: number;
+}
+
+export interface InfoCoalescerOptions {
+  intervalMillis?: number;
+  now?: () => number;
+  onBroadcast?: (slot: PlayerSlot, info: protocol.PublicAgentInfo) => void;
+}
+
+export class InfoCoalescer {
+  private readonly intervalMillis: number;
+  private readonly now: () => number;
+  private readonly onBroadcast?: (slot: PlayerSlot, info: protocol.PublicAgentInfo) => void;
+  private readonly live: Record<PlayerSlot, protocol.PublicAgentInfo | undefined>;
+  private readonly pending: Record<PlayerSlot, protocol.PublicAgentInfo | undefined>;
+  private readonly committedByTurn: Map<
+    number,
+    {p1?: protocol.PublicAgentInfo; p2?: protocol.PublicAgentInfo}
+  >;
+  private readonly lastBroadcastAt: Record<PlayerSlot, number>;
+  private readonly timers: Record<PlayerSlot, ReturnType<typeof setTimeout> | undefined>;
+
+  constructor(options: InfoCoalescerOptions = {}) {
+    this.intervalMillis = options.intervalMillis ?? INFO_BROADCAST_INTERVAL_MILLIS;
+    this.now = options.now ?? (() => Date.now());
+    this.onBroadcast = options.onBroadcast;
+    this.live = {p1: undefined, p2: undefined};
+    this.pending = {p1: undefined, p2: undefined};
+    this.committedByTurn = new Map();
+    this.lastBroadcastAt = {p1: -Infinity, p2: -Infinity};
+    this.timers = {p1: undefined, p2: undefined};
+  }
+
+  ingest(slot: PlayerSlot, info: protocol.AgentInfo): void {
+    const pub = protocol.toPublicAgentInfo(info);
+    if (!pub) return;
+    this.live[slot] = pub;
+    this.pending[slot] = pub;
+    if (!this.onBroadcast) return;
+
+    const nowMillis = this.now();
+    const elapsed = nowMillis - this.lastBroadcastAt[slot];
+    if (elapsed >= this.intervalMillis) {
+      this.clearTimer(slot);
+      this.lastBroadcastAt[slot] = nowMillis;
+      this.onBroadcast(slot, pub);
+    } else if (!this.timers[slot]) {
+      const delay = Math.max(1, this.intervalMillis - elapsed);
+      const timer = setTimeout(() => {
+        this.timers[slot] = undefined;
+        const latest = this.live[slot];
+        if (!latest || !this.onBroadcast) return;
+        this.lastBroadcastAt[slot] = this.now();
+        this.onBroadcast(slot, latest);
+      }, delay);
+      timer.unref?.();
+      this.timers[slot] = timer;
+    }
+  }
+
+  commitTurn(slot: PlayerSlot, turn: number): protocol.PublicAgentInfo | undefined {
+    this.clearTimer(slot);
+    const finalInfo = this.pending[slot];
+    this.pending[slot] = undefined;
+    if (!finalInfo) return undefined;
+    this.live[slot] = finalInfo;
+    let entry = this.committedByTurn.get(turn);
+    if (!entry) {
+      entry = {};
+      this.committedByTurn.set(turn, entry);
+    }
+    entry[slot] = finalInfo;
+    return finalInfo;
+  }
+
+  getLive(slot: PlayerSlot): protocol.PublicAgentInfo | undefined {
+    return this.live[slot];
+  }
+
+  getCommittedByTurn(): ReadonlyMap<
+    number,
+    {p1?: protocol.PublicAgentInfo; p2?: protocol.PublicAgentInfo}
+  > {
+    return this.committedByTurn;
+  }
+
+  getWinHistory(): WinHistoryPoint[] {
+    const points: WinHistoryPoint[] = [];
+    for (const [turn, entry] of this.committedByTurn.entries()) {
+      const p1 = entry.p1?.win;
+      const p2 = entry.p2?.win;
+      if (p1 === undefined && p2 === undefined) continue;
+      points.push({
+        turn,
+        ...(p1 !== undefined ? {p1} : {}),
+        ...(p2 !== undefined ? {p2} : {}),
+      });
+    }
+    return points.sort((a, b) => a.turn - b.turn);
+  }
+
+  reset(): void {
+    this.dispose();
+    this.live.p1 = undefined;
+    this.live.p2 = undefined;
+    this.pending.p1 = undefined;
+    this.pending.p2 = undefined;
+    this.committedByTurn.clear();
+    this.lastBroadcastAt.p1 = -Infinity;
+    this.lastBroadcastAt.p2 = -Infinity;
+  }
+
+  dispose(): void {
+    this.clearTimer('p1');
+    this.clearTimer('p2');
+  }
+
+  private clearTimer(slot: PlayerSlot): void {
+    const timer = this.timers[slot];
+    if (timer) {
+      clearTimeout(timer);
+      this.timers[slot] = undefined;
+    }
+  }
+}
+
+export function createInfoLineInterceptor(
+  slot: PlayerSlot,
+  coalescer: InfoCoalescer
+): (line: string) => boolean {
+  return (line: string): boolean => {
+    if (!protocol.isAgentInfoLine(line)) return false;
+    const parsed = protocol.parseAgentStdoutLine(line);
+    if (parsed?.kind === 'info') {
+      coalescer.ingest(slot, parsed.info);
+    }
+    return true;
+  };
+}
+
 export function attachStdoutLineFramer(
   proc: ChildProcessWithoutNullStreams,
   io: LineIoState,
-  onOverflow: () => void
+  onOverflow: () => void,
+  onLine?: (line: string) => boolean
 ): void {
   let stdoutBuf = '';
   proc.stdout.setEncoding('utf8');
@@ -337,6 +483,10 @@ export function attachStdoutLineFramer(
         } catch {}
         onOverflow();
         return;
+      }
+      if (onLine?.(line)) {
+        nl = stdoutBuf.indexOf('\n');
+        continue;
       }
       if (io.lineResolver) {
         const resolve = io.lineResolver;

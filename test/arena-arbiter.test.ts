@@ -6,6 +6,7 @@ import {Teams} from '@pkmn/sim';
 
 import * as arbiter from '../arena/arbiter';
 import * as coordinator from '../arena/coordinator';
+import * as engine from '../arena/engine';
 import * as tournament from '../arena/tournament';
 import * as serverArena from '../server/arena';
 import * as sim from '../server/sim';
@@ -801,5 +802,53 @@ describe('TimeSlicedArenaGame', () => {
     expect(String(derived)).toMatch(/^sodium,[0-9a-f]{64}$/);
     expect(derived).not.toBe(parsed);
     expect(coordinator.parsePrngSeed('1, 2, 3, 4')).toBe('1,2,3,4');
+  });
+
+  test('InfoCoalescer throttles live updates to 1 Hz and collapses turn snapshots', async () => {
+    let nowMillis = 10_000;
+    const broadcasts: Array<{slot: engine.PlayerSlot; win?: number; nodes?: number}> = [];
+    const coalescer = new engine.InfoCoalescer({
+      intervalMillis: 50,
+      now: () => nowMillis,
+      onBroadcast: (slot, info) => broadcasts.push({slot, win: info.win, nodes: info.nodes}),
+    });
+
+    const interceptP1 = engine.createInfoLineInterceptor('p1', coalescer);
+    expect(interceptP1('move 1')).toBe(false);
+    expect(interceptP1('/info {"policy":{"move 1":1}}')).toBe(true);
+    expect(broadcasts).toEqual([]);
+
+    expect(interceptP1('/info {"win":0.52,"nodes":1000}')).toBe(true);
+    expect(broadcasts).toEqual([{slot: 'p1', win: 0.52, nodes: 1000}]);
+
+    nowMillis += 10;
+    expect(interceptP1('/info {"win":0.58,"nodes":2500}')).toBe(true);
+    expect(interceptP1('/info {"win":0.64,"nodes":5000,"policy":{"move 1":0.9}}')).toBe(true);
+    expect(broadcasts).toHaveLength(1);
+
+    nowMillis += 55;
+    await new Promise(r => setTimeout(r, 65));
+    expect(broadcasts).toEqual([
+      {slot: 'p1', win: 0.52, nodes: 1000},
+      {slot: 'p1', win: 0.64, nodes: 5000},
+    ]);
+
+    const committed = coalescer.commitTurn('p1', 1);
+    expect(committed).toEqual({win: 0.64, nodes: 5000});
+    expect(coalescer.getWinHistory()).toEqual([{turn: 1, p1: 0.64}]);
+
+    nowMillis += 100;
+    expect(interceptP1('/info {"win":0.61,"depth":6,"seldepth":14}')).toBe(true);
+    expect(coalescer.commitTurn('p1', 1)).toEqual({win: 0.61, depth: 6, seldepth: 14});
+    expect(coalescer.getCommittedByTurn().get(1)?.p1).toEqual({
+      win: 0.61,
+      depth: 6,
+      seldepth: 14,
+    });
+
+    coalescer.reset();
+    expect(coalescer.getLive('p1')).toBeUndefined();
+    expect(coalescer.getWinHistory()).toEqual([]);
+    coalescer.dispose();
   });
 });
