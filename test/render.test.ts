@@ -867,6 +867,109 @@ describe('project de-registration', () => {
       fs.rmSync(tmpDir, {recursive: true, force: true});
     }
   });
+
+  test('renders CPU utilization and protocol fault aggregates on project profiles', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-render-cpu-'));
+    const tmpPublic = path.join(tmpDir, 'public');
+    seedStaticPublicAssets(tmpPublic);
+    const db = new Database(':memory:', {now: DAY_1});
+    db.syncLadders(undefined, DAY_1);
+    syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
+    const meta = db.getAgentBySlug('metamon')!;
+    const fp = db.getAgentBySlug('foul-play')!;
+    const sha = 'a'.repeat(64);
+    const v1 = db.createSubmission({
+      agentId: meta.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/meta-1.0.0.tar.gz',
+      sha256: sha,
+      ladderIds: ['gen1ou20261109'],
+      now: DAY_1,
+    });
+    const v2 = db.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/fp-1.0.0.tar.gz',
+      sha256: sha,
+      ladderIds: ['gen1ou20261109'],
+      now: DAY_1,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: DAY_1 + 10});
+    db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: DAY_1 + 10});
+    db.recordCompletedMatch({
+      match: {
+        id: 'gen1ou-0000001',
+        ladderId: 'gen1ou20261109',
+        p1VersionId: v1.id,
+        p2VersionId: v2.id,
+        seed: '1,2,3,4',
+        game1Outcome: 'L',
+        game2Outcome: 'W',
+        category: 'LW',
+        game1Turns: 5,
+        game2Turns: 25,
+        game1EndReason: 'invalid-choice',
+        game2EndReason: 'win',
+        p1Game1PeakRam: 512,
+        p1Game2PeakRam: 768,
+        p2Game1PeakRam: 256,
+        p2Game2PeakRam: 300,
+        p1Game1BankSeconds: 100,
+        p1Game2BankSeconds: 110,
+        p2Game1BankSeconds: 120,
+        p2Game2BankSeconds: 130,
+        p1Game1MeanTurnMillis: 50,
+        p1Game2MeanTurnMillis: 60,
+        p2Game1MeanTurnMillis: 40,
+        p2Game2MeanTurnMillis: 45,
+        p1CpuCores: 6.4,
+        p2CpuCores: 1.2,
+        p1Errors: {
+          invalidCantMove: 2,
+          invalidCantSwitch: 1,
+          invalidTarget: 0,
+          invalidOther: 0,
+          unavailableChoices: 4,
+        },
+        completedAt: DAY_1 + 100,
+      },
+    });
+    const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
+    try {
+      const html = await h.getText('/projects/metamon/');
+      expect(html).toContain('>CPU<');
+      expect(html).toContain('>Faults<');
+      expect(html).toContain('6.4c');
+      expect(html).toContain('1 invalid-choice forfeit');
+      expect(html).toContain('3 invalid (2 can&#39;t move, 1 can&#39;t switch)');
+      expect(html).toContain('4 unavailable (info)');
+
+      const json = await h.getJson<{
+        ladders: Array<{
+          versions: Array<{
+            meanCpuCores?: number;
+            faults: {
+              invalidChoices: number;
+              invalidCantMove: number;
+              invalidCantSwitch: number;
+              unavailableChoices: number;
+            };
+          }>;
+        }>;
+      }>('/projects/metamon.json');
+      expect(json.ladders[0].versions[0].meanCpuCores).toBe(6.4);
+      expect(json.ladders[0].versions[0].faults.invalidChoices).toBe(1);
+      expect(json.ladders[0].versions[0].faults.invalidCantMove).toBe(2);
+      expect(json.ladders[0].versions[0].faults.invalidCantSwitch).toBe(1);
+      expect(json.ladders[0].versions[0].faults.unavailableChoices).toBe(4);
+    } finally {
+      await h.close();
+      db.close();
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
 });
 
 describe('tournament SSR views', () => {

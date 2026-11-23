@@ -548,6 +548,12 @@ function renderVersionsPane(opts: {
     .filter(e => e.role === 'champion' || e.role === 'challenger')
     .sort((a, b) => b.lcb - a.lcb)[0];
   const hasTeamPreview = entriesDesc.some(e => e.meanTeamPreviewMillis !== undefined);
+  const hasCpu = entriesDesc.some(e => e.cpuMatches > 0 && e.meanCpuCores > 0);
+  const hasFaults = entriesDesc.some(e => (
+    e.crashes + e.timeouts + e.ooms + e.invalidChoices +
+    e.invalidCantMove + e.invalidCantSwitch + e.invalidTarget + e.invalidOther +
+    e.unavailableChoices
+  ) > 0);
 
   return (
     <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
@@ -569,6 +575,16 @@ function renderVersionsPane(opts: {
               )}
               <th className='num' title='Mean regular turn decision time'>Turn</th>
               <th className='num' title='Mean / Peak XNU physical memory footprint'>RAM</th>
+              {hasCpu && (
+                <th className='num' title='Mean host-measured CPU utilization (effective cores)'>
+                  CPU
+                </th>
+              )}
+              {hasFaults && (
+                <th className='num' title='Cumulative game faults and protocol error breakdown'>
+                  Faults
+                </th>
+              )}
               <th className='num'>Submitted</th>
             </tr>
           </thead>
@@ -604,6 +620,33 @@ function renderVersionsPane(opts: {
               const turnText = `${Math.round(e.meanTurnMillis)} ms`;
               const meanRamText = `${Math.round(e.meanRam).toLocaleString('en-US')} MiB`;
               const peakRamTip = `Peak: ${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
+              const cpuText = e.cpuMatches > 0 && e.meanCpuCores > 0
+                ? `${e.meanCpuCores.toFixed(1)}c`
+                : '—';
+              const totalFaults = e.crashes + e.timeouts + e.ooms + e.invalidChoices;
+              const invalidTotal =
+                e.invalidCantMove + e.invalidCantSwitch + e.invalidTarget + e.invalidOther;
+              const faultTipParts: string[] = [];
+              if (e.crashes > 0) faultTipParts.push(`${e.crashes} crash`);
+              if (e.timeouts > 0) faultTipParts.push(`${e.timeouts} timeout`);
+              if (e.ooms > 0) faultTipParts.push(`${e.ooms} OOM`);
+              if (e.invalidChoices > 0) {
+                faultTipParts.push(`${e.invalidChoices} invalid-choice forfeit`);
+              }
+              if (invalidTotal > 0) {
+                const cats: string[] = [];
+                if (e.invalidCantMove > 0) cats.push(`${e.invalidCantMove} can't move`);
+                if (e.invalidCantSwitch > 0) cats.push(`${e.invalidCantSwitch} can't switch`);
+                if (e.invalidTarget > 0) cats.push(`${e.invalidTarget} target`);
+                if (e.invalidOther > 0) cats.push(`${e.invalidOther} other`);
+                faultTipParts.push(`${invalidTotal} invalid (${cats.join(', ')})`);
+              }
+              if (e.unavailableChoices > 0) {
+                faultTipParts.push(`${e.unavailableChoices} unavailable (info)`);
+              }
+              const faultTip = faultTipParts.length > 0
+                ? faultTipParts.join(' · ')
+                : 'No recorded faults';
               const classes: string[] = [];
               if (isRetired) classes.push('secondary');
               if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
@@ -630,6 +673,16 @@ function renderVersionsPane(opts: {
                   {hasTeamPreview && <td className='num'>{tpText}</td>}
                   <td className='num'>{turnText}</td>
                   <td className='num' title={peakRamTip}>{meanRamText}</td>
+                  {hasCpu && (
+                    <td className={e.cpuMatches > 0 ? 'num' : 'num muted'}>{cpuText}</td>
+                  )}
+                  {hasFaults && (
+                    <td className='num' title={faultTip}>
+                      {totalFaults > 0
+                        ? <span className='no'>{totalFaults}</span>
+                        : <span className='muted'>0</span>}
+                    </td>
+                  )}
                   <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
                 </tr>
               );
@@ -1791,6 +1844,18 @@ export function buildAgentProfileDocument(opts: {
         meanTurnMillis: Math.round(e.meanTurnMillis),
         meanRam: Math.round(e.meanRam),
         peakRam: Math.round(e.peakRam),
+        ...(e.cpuMatches > 0 ? {meanCpuCores: Math.round(e.meanCpuCores * 10) / 10} : {}),
+        faults: {
+          crashes: e.crashes,
+          timeouts: e.timeouts,
+          ooms: e.ooms,
+          invalidChoices: e.invalidChoices,
+          invalidCantMove: e.invalidCantMove,
+          invalidCantSwitch: e.invalidCantSwitch,
+          invalidTarget: e.invalidTarget,
+          invalidOther: e.invalidOther,
+          unavailableChoices: e.unavailableChoices,
+        },
         maxWinStreak: e.maxWinStreak,
         maxLossStreak: e.maxLossStreak,
         submittedAt: e.submittedAt,

@@ -138,6 +138,17 @@ export interface AgentLadderProfileEntry {
   meanTurnMillis: number;
   meanRam: number;
   peakRam: number;
+  meanCpuCores: number;
+  cpuMatches: number;
+  crashes: number;
+  timeouts: number;
+  ooms: number;
+  invalidChoices: number;
+  invalidCantMove: number;
+  invalidCantSwitch: number;
+  invalidTarget: number;
+  invalidOther: number;
+  unavailableChoices: number;
   settledAt?: number;
 }
 
@@ -354,6 +365,17 @@ export function getAgentLadderProfileEntries(
       le.mean_turn_millis,
       le.mean_ram,
       le.peak_ram,
+      le.mean_cpu_cores,
+      le.cpu_matches,
+      le.crashes,
+      le.timeouts,
+      le.ooms,
+      le.invalid_choices,
+      le.invalid_cant_move,
+      le.invalid_cant_switch,
+      le.invalid_target,
+      le.invalid_other,
+      le.unavailable_choices,
       le.settled_at
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
@@ -413,6 +435,17 @@ export function getAgentLadderProfileEntries(
     meanTurnMillis: r.mean_turn_millis as number,
     meanRam: r.mean_ram as number,
     peakRam: r.peak_ram as number,
+    meanCpuCores: r.mean_cpu_cores as number,
+    cpuMatches: r.cpu_matches as number,
+    crashes: r.crashes as number,
+    timeouts: r.timeouts as number,
+    ooms: r.ooms as number,
+    invalidChoices: r.invalid_choices as number,
+    invalidCantMove: r.invalid_cant_move as number,
+    invalidCantSwitch: r.invalid_cant_switch as number,
+    invalidTarget: r.invalid_target as number,
+    invalidOther: r.invalid_other as number,
+    unavailableChoices: r.unavailable_choices as number,
     settledAt: (r.settled_at as number | null) ?? undefined,
   }));
 }

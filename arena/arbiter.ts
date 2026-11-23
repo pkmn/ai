@@ -78,6 +78,8 @@ export interface ArenaGameOptions {
 export interface PlayerGameResult {
   bankSeconds: number;
   peakRam: number;
+  cpuMillis?: number;
+  cpuCores?: number;
   initMillis: number;
   teamPreviewMillis?: number;
   meanTurnMillis: number;
@@ -440,6 +442,19 @@ export class TimeSlicedArenaGame {
       } catch {}
     }
     return 64;
+  }
+
+  private readCpuMillis(player: SandboxedPlayer): number | undefined {
+    if (!this.devMode) {
+      const stateFile = `/opt/arena/state/cpu_millis_${player.slot}`;
+      try {
+        if (fs.existsSync(stateFile)) {
+          const val = Number(fs.readFileSync(stateFile, 'utf8').trim());
+          if (Number.isFinite(val) && val > 0) return Math.round(val);
+        }
+      } catch {}
+    }
+    return undefined;
   }
 
   private readLineWithTimeout(
@@ -978,12 +993,22 @@ export class TimeSlicedArenaGame {
     const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
       ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
+    const cpuMillis = this.readCpuMillis(player);
+    const activeWallMillis =
+      player.telemetry.initMillis +
+      player.telemetry.totalTeamPreviewMillis +
+      player.telemetry.totalTurnDecisionMillis;
+    const cpuCores = cpuMillis !== undefined && activeWallMillis > 0
+      ? Math.min(10, Math.round((cpuMillis / activeWallMillis) * 10) / 10)
+      : undefined;
     return {
       bankSeconds: Math.max(
         0,
         Math.round(Math.min(player.turn.bankMillis, this.timers.startingBankMillis) / 1000)
       ),
       peakRam: this.readPeakRam(player),
+      ...(cpuMillis !== undefined ? {cpuMillis} : {}),
+      ...(cpuCores !== undefined && cpuCores > 0 ? {cpuCores} : {}),
       initMillis: Math.round(player.telemetry.initMillis),
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
       meanTurnMillis: player.telemetry.turnDecisionCount > 0

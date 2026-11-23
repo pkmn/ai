@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <libproc.h>
+#include <mach/mach_time.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdint.h>
@@ -40,11 +41,33 @@ static void forward_signal(int sig) {
   }
 }
 
-static uint64_t sum_uid_footprint(uid_t target_uid) {
+static mach_timebase_info_data_t timebase_info = {0, 0};
+
+static uint64_t mach_ticks_to_millis(uint64_t ticks) {
+  if (timebase_info.denom == 0) {
+    mach_timebase_info(&timebase_info);
+  }
+  if (timebase_info.denom == 0) return 0;
+  __uint128_t nanos = ((__uint128_t)ticks * (__uint128_t)timebase_info.numer) /
+                      (__uint128_t)timebase_info.denom;
+  return (uint64_t)(nanos / 1000000ULL);
+}
+
+static uint64_t rusage_cpu_millis(const struct rusage *ru) {
+  uint64_t user_ms = (uint64_t)ru->ru_utime.tv_sec * 1000ULL +
+                     (uint64_t)ru->ru_utime.tv_usec / 1000ULL;
+  uint64_t sys_ms = (uint64_t)ru->ru_stime.tv_sec * 1000ULL +
+                    (uint64_t)ru->ru_stime.tv_usec / 1000ULL;
+  return user_ms + sys_ms;
+}
+
+static void sum_uid_usage(uid_t target_uid, uint64_t *out_bytes, uint64_t *out_cpu_millis) {
+  *out_bytes = 0;
+  *out_cpu_millis = 0;
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)target_uid};
   size_t buf_size = 0;
   if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) < 0 || buf_size == 0) {
-    return 0;
+    return;
   }
 
   // Allocate with headroom and retry with doubled buffer if child forks between sysctl calls
@@ -52,7 +75,7 @@ static uint64_t sum_uid_footprint(uid_t target_uid) {
   struct kinfo_proc *procs = NULL;
   for (int attempt = 0; attempt < 3; attempt++) {
     procs = malloc(buf_size);
-    if (!procs) return 0;
+    if (!procs) return;
     size_t req_size = buf_size;
     if (sysctl(mib, 4, procs, &req_size, NULL, 0) == 0) {
       buf_size = req_size;
@@ -60,13 +83,14 @@ static uint64_t sum_uid_footprint(uid_t target_uid) {
     }
     free(procs);
     procs = NULL;
-    if (errno != ENOMEM) return 0;
+    if (errno != ENOMEM) return;
     buf_size *= 2;
   }
-  if (!procs) return 0;
+  if (!procs) return;
 
   size_t count = buf_size / sizeof(struct kinfo_proc);
   uint64_t total_bytes = 0;
+  uint64_t total_cpu_ticks = 0;
   pid_t self_pid = getpid();
 
   for (size_t i = 0; i < count; i++) {
@@ -76,11 +100,13 @@ static uint64_t sum_uid_footprint(uid_t target_uid) {
     struct rusage_info_v4 ru;
     if (proc_pid_rusage(p, RUSAGE_INFO_V4, (rusage_info_t *)&ru) == 0) {
       total_bytes += ru.ri_phys_footprint;
+      total_cpu_ticks += ru.ri_user_time + ru.ri_system_time;
     }
   }
 
   free(procs);
-  return total_bytes;
+  *out_bytes = total_bytes;
+  *out_cpu_millis = mach_ticks_to_millis(total_cpu_ticks);
 }
 
 static void kill_all_target_procs(uid_t target_uid, pid_t child_pg) {
@@ -127,16 +153,16 @@ static void kill_all_target_procs(uid_t target_uid, pid_t child_pg) {
   }
 }
 
-static void write_peak_ram(const char *slot, uint64_t peak_bytes) {
-  // Write authoritative telemetry atomically to `/opt/arena/state/peak_ram_%s` via `O_DIRECTORY |
+static void write_state_u64(const char *prefix, const char *slot, unsigned long long value) {
+  // Write authoritative telemetry atomically to `/opt/arena/state/<prefix>_%s` via `O_DIRECTORY |
   // O_NOFOLLOW`, a temp file, and `renameat` so symlink swaps fail closed and `arbiter.ts` never
   // observes an ENOENT or truncated gap mid-game.
   int dir_fd = open("/opt/arena/state", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
   if (dir_fd < 0) return;
-  char file_name[32];
-  char tmp_name[64];
-  snprintf(file_name, sizeof(file_name), "peak_ram_%s", slot);
-  snprintf(tmp_name, sizeof(tmp_name), "peak_ram_%s.tmp.%ld", slot, (long)getpid());
+  char file_name[48];
+  char tmp_name[80];
+  snprintf(file_name, sizeof(file_name), "%s_%s", prefix, slot);
+  snprintf(tmp_name, sizeof(tmp_name), "%s_%s.tmp.%ld", prefix, slot, (long)getpid());
   (void)unlinkat(dir_fd, tmp_name, 0);
   int fd = openat(dir_fd, tmp_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
   if (fd < 0) {
@@ -144,9 +170,7 @@ static void write_peak_ram(const char *slot, uint64_t peak_bytes) {
     return;
   }
   char buf[32];
-  unsigned long long mib = (unsigned long long)((peak_bytes + (1024ULL * 1024ULL - 1ULL)) /
-                                                (1024ULL * 1024ULL));
-  int len = snprintf(buf, sizeof(buf), "%llu\n", mib);
+  int len = snprintf(buf, sizeof(buf), "%llu\n", value);
   int ok = 0;
   if (len > 0) {
     ssize_t written = write(fd, buf, (size_t)len);
@@ -157,6 +181,16 @@ static void write_peak_ram(const char *slot, uint64_t peak_bytes) {
     (void)unlinkat(dir_fd, tmp_name, 0);
   }
   close(dir_fd);
+}
+
+static void write_peak_ram(const char *slot, uint64_t peak_bytes) {
+  unsigned long long mib = (unsigned long long)((peak_bytes + (1024ULL * 1024ULL - 1ULL)) /
+                                                (1024ULL * 1024ULL));
+  write_state_u64("peak_ram", slot, mib);
+}
+
+static void write_cpu_millis(const char *slot, uint64_t cpu_millis) {
+  write_state_u64("cpu_millis", slot, (unsigned long long)cpu_millis);
 }
 
 int main(int argc, char **argv) {
@@ -257,6 +291,8 @@ int main(int argc, char **argv) {
   setpgid(pid, pid);
   uint64_t peak_bytes = 0;
   uint64_t last_written_mib = 0;
+  uint64_t peak_cpu_millis = 0;
+  uint64_t last_written_cpu = 0;
 
   while (1) {
     if (terminate_requested) {
@@ -271,26 +307,39 @@ int main(int argc, char **argv) {
       if (errno == EINTR) continue;
       kill_all_target_procs(target_uid, child_pgid);
       write_peak_ram(slot, peak_bytes);
+      write_cpu_millis(slot, peak_cpu_millis);
       return 1;
     }
     if (w == pid) {
       if (child_ru.ru_maxrss > 0 && (uint64_t)child_ru.ru_maxrss > peak_bytes) {
         peak_bytes = (uint64_t)child_ru.ru_maxrss;
       }
+      uint64_t exit_cpu = rusage_cpu_millis(&child_ru);
+      if (exit_cpu > peak_cpu_millis) peak_cpu_millis = exit_cpu;
       kill_all_target_procs(target_uid, child_pgid);
       write_peak_ram(slot, peak_bytes);
+      write_cpu_millis(slot, peak_cpu_millis);
       if (WIFEXITED(status)) return WEXITSTATUS(status);
       if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
       return 1;
     }
 
-    uint64_t used = sum_uid_footprint(target_uid);
+    uint64_t used = 0;
+    uint64_t cpu_ms = 0;
+    sum_uid_usage(target_uid, &used, &cpu_ms);
     if (used > peak_bytes) {
       peak_bytes = used;
       uint64_t current_mib = (peak_bytes + (1024ULL * 1024ULL - 1ULL)) / (1024ULL * 1024ULL);
       if (current_mib > last_written_mib) {
         last_written_mib = current_mib;
         write_peak_ram(slot, peak_bytes);
+      }
+    }
+    if (cpu_ms > peak_cpu_millis) {
+      peak_cpu_millis = cpu_ms;
+      if (peak_cpu_millis >= last_written_cpu + 50) {
+        last_written_cpu = peak_cpu_millis;
+        write_cpu_millis(slot, peak_cpu_millis);
       }
     }
     if (used > MAX_FOOTPRINT_BYTES) {
@@ -300,12 +349,15 @@ int main(int argc, char **argv) {
       kill_all_target_procs(target_uid, child_pgid);
       struct rusage oom_ru;
       memset(&oom_ru, 0, sizeof(oom_ru));
-      if (wait4(pid, NULL, 0, &oom_ru) == pid &&
-          oom_ru.ru_maxrss > 0 &&
-          (uint64_t)oom_ru.ru_maxrss > peak_bytes) {
-        peak_bytes = (uint64_t)oom_ru.ru_maxrss;
+      if (wait4(pid, NULL, 0, &oom_ru) == pid) {
+        if (oom_ru.ru_maxrss > 0 && (uint64_t)oom_ru.ru_maxrss > peak_bytes) {
+          peak_bytes = (uint64_t)oom_ru.ru_maxrss;
+        }
+        uint64_t oom_cpu = rusage_cpu_millis(&oom_ru);
+        if (oom_cpu > peak_cpu_millis) peak_cpu_millis = oom_cpu;
       }
       write_peak_ram(slot, peak_bytes);
+      write_cpu_millis(slot, peak_cpu_millis);
       return 137; // Standard SIGKILL / OOM exit code (128 + 9)
     }
 

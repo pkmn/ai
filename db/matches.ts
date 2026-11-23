@@ -46,6 +46,22 @@ export interface CompletedMatchPayload {
   p1Game2TeamPreviewMillis?: number;
   p2Game1TeamPreviewMillis?: number;
   p2Game2TeamPreviewMillis?: number;
+  p1CpuCores?: number;
+  p2CpuCores?: number;
+  p1Errors?: {
+    invalidCantMove: number;
+    invalidCantSwitch: number;
+    invalidTarget: number;
+    invalidOther: number;
+    unavailableChoices: number;
+  };
+  p2Errors?: {
+    invalidCantMove: number;
+    invalidCantSwitch: number;
+    invalidTarget: number;
+    invalidOther: number;
+    unavailableChoices: number;
+  };
   completedAt: number;
 }
 
@@ -135,17 +151,20 @@ function countSideFaults(
   let crashes = 0;
   let timeouts = 0;
   let ooms = 0;
+  let invalidChoices = 0;
   if (lostG1) {
     if (g1Reason === 'crash') crashes++;
     else if (g1Reason === 'timeout') timeouts++;
     else if (g1Reason === 'oom') ooms++;
+    else if (g1Reason === 'invalid-choice') invalidChoices++;
   }
   if (lostG2) {
     if (g2Reason === 'crash') crashes++;
     else if (g2Reason === 'timeout') timeouts++;
     else if (g2Reason === 'oom') ooms++;
+    else if (g2Reason === 'invalid-choice') invalidChoices++;
   }
-  return {crashes, timeouts, ooms};
+  return {crashes, timeouts, ooms, invalidChoices};
 }
 
 function meanOptional(a: number | undefined, b: number | undefined): number | undefined {
@@ -288,7 +307,7 @@ export function recordCompletedMatch(
       SELECT matches, current_win_streak, current_loss_streak,
              max_win_streak, max_loss_streak,
              mean_init_millis, mean_team_preview_millis, team_preview_matches,
-             mean_turn_millis, mean_ram, peak_ram
+             mean_turn_millis, mean_ram, peak_ram, mean_cpu_cores, cpu_matches
       FROM ladder_entries
       WHERE ladder_id = ? AND version_id = ?
     `);
@@ -307,12 +326,20 @@ export function recordCompletedMatch(
           crashes = crashes + ?,
           timeouts = timeouts + ?,
           ooms = ooms + ?,
+          invalid_choices = invalid_choices + ?,
+          invalid_cant_move = invalid_cant_move + ?,
+          invalid_cant_switch = invalid_cant_switch + ?,
+          invalid_target = invalid_target + ?,
+          invalid_other = invalid_other + ?,
+          unavailable_choices = unavailable_choices + ?,
           mean_init_millis = ?,
           mean_team_preview_millis = ?,
           team_preview_matches = ?,
           mean_turn_millis = ?,
           mean_ram = ?,
-          peak_ram = ?
+          peak_ram = ?,
+          mean_cpu_cores = ?,
+          cpu_matches = ?
       WHERE ladder_id = ? AND version_id = ?
     `);
 
@@ -325,7 +352,9 @@ export function recordCompletedMatch(
       meanTurnMillis: number;
       meanRam: number;
       peakRam: number;
-      faults: {crashes: number; timeouts: number; ooms: number};
+      cpuCores?: number;
+      faults: {crashes: number; timeouts: number; ooms: number; invalidChoices: number};
+      errors?: CompletedMatchPayload['p1Errors'];
     }) => {
       const {
         versionId,
@@ -336,7 +365,9 @@ export function recordCompletedMatch(
         meanTurnMillis,
         meanRam,
         peakRam,
+        cpuCores,
         faults,
+        errors,
       } = side;
       const cur = selectEntryCounters.get(m.ladderId, versionId) as {
         matches: number;
@@ -350,6 +381,8 @@ export function recordCompletedMatch(
         mean_turn_millis: number;
         mean_ram: number;
         peak_ram: number;
+        mean_cpu_cores: number;
+        cpu_matches: number;
       };
       const streaks: ratings.StreakState = {
         currentWinStreak: cur.current_win_streak,
@@ -371,6 +404,11 @@ export function recordCompletedMatch(
       const nextMeanTurn = (cur.mean_turn_millis * cur.matches + meanTurnMillis) / nextPlayed;
       const nextMeanRam = (cur.mean_ram * cur.matches + meanRam) / nextPlayed;
       const nextPeakRam = Math.max(cur.peak_ram, peakRam);
+      const hasCpu = cpuCores !== undefined && Number.isFinite(cpuCores) && cpuCores > 0;
+      const nextCpuMatches = hasCpu ? cur.cpu_matches + 1 : cur.cpu_matches;
+      const nextMeanCpu = hasCpu
+        ? (cur.mean_cpu_cores * cur.cpu_matches + cpuCores) / nextCpuMatches
+        : cur.mean_cpu_cores;
 
       updateEntryCounters.run(
         nextPlayed,
@@ -386,12 +424,20 @@ export function recordCompletedMatch(
         faults.crashes,
         faults.timeouts,
         faults.ooms,
+        faults.invalidChoices,
+        errors?.invalidCantMove ?? 0,
+        errors?.invalidCantSwitch ?? 0,
+        errors?.invalidTarget ?? 0,
+        errors?.invalidOther ?? 0,
+        errors?.unavailableChoices ?? 0,
         nextMeanInit,
         nextMeanTp,
         nextTpMatches,
         nextMeanTurn,
         nextMeanRam,
         nextPeakRam,
+        nextMeanCpu,
+        nextCpuMatches,
         m.ladderId,
         versionId
       );
@@ -406,12 +452,14 @@ export function recordCompletedMatch(
       meanTurnMillis: p1.meanTurnMillis,
       meanRam: p1.meanRam,
       peakRam: p1.peakRam,
+      cpuCores: m.p1CpuCores,
       faults: countSideFaults(
         m.game1Outcome === 'L',
         m.game2Outcome === 'L',
         m.game1EndReason,
         m.game2EndReason
       ),
+      errors: m.p1Errors,
     });
     applySide({
       versionId: m.p2VersionId,
@@ -422,12 +470,14 @@ export function recordCompletedMatch(
       meanTurnMillis: p2.meanTurnMillis,
       meanRam: p2.meanRam,
       peakRam: p2.peakRam,
+      cpuCores: m.p2CpuCores,
       faults: countSideFaults(
         m.game1Outcome === 'W',
         m.game2Outcome === 'W',
         m.game1EndReason,
         m.game2EndReason
       ),
+      errors: m.p2Errors,
     });
 
     if (v1.agentId !== v2.agentId) {

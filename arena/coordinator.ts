@@ -66,9 +66,11 @@ interface MirrorPlayer {
 interface MirrorGameStats {
   bankSeconds: number;
   peakRam: number;
+  cpuCores?: number;
   initMillis?: number;
   teamPreviewMillis?: number;
   meanTurnMillis: number;
+  errors?: engine.ProtocolErrorCounts;
   pokemon?: unknown[];
 }
 
@@ -76,10 +78,34 @@ function summarizeGameStats(g: MirrorGameStats) {
   return {
     bankSeconds: g.bankSeconds,
     peakRam: g.peakRam,
+    cpuCores: g.cpuCores,
     initMillis: Math.round(g.initMillis ?? 0),
     teamPreviewMillis: g.teamPreviewMillis,
     meanTurnMillis: Math.round(g.meanTurnMillis),
+    errors: g.errors,
   };
+}
+
+function meanOptionalCores(a?: number, b?: number): number | undefined {
+  if (a !== undefined && b !== undefined) return Math.round(((a + b) / 2) * 10) / 10;
+  return a ?? b;
+}
+
+function sumProtocolErrors(
+  a?: engine.ProtocolErrorCounts,
+  b?: engine.ProtocolErrorCounts
+): engine.ProtocolErrorCounts | undefined {
+  if (!a && !b) return undefined;
+  const merged: engine.ProtocolErrorCounts = {
+    invalidCantMove: (a?.invalidCantMove ?? 0) + (b?.invalidCantMove ?? 0),
+    invalidCantSwitch: (a?.invalidCantSwitch ?? 0) + (b?.invalidCantSwitch ?? 0),
+    invalidTarget: (a?.invalidTarget ?? 0) + (b?.invalidTarget ?? 0),
+    invalidOther: (a?.invalidOther ?? 0) + (b?.invalidOther ?? 0),
+    unavailableChoices: (a?.unavailableChoices ?? 0) + (b?.unavailableChoices ?? 0),
+  };
+  const total = merged.invalidCantMove + merged.invalidCantSwitch +
+    merged.invalidTarget + merged.invalidOther + merged.unavailableChoices;
+  return total > 0 ? merged : undefined;
 }
 
 interface MirrorGame1Summary {
@@ -1258,6 +1284,10 @@ export class Coordinator {
 
     const p1 = {g1: summarizeGameStats(game1.p1), g2: summarizeGameStats(g2Res.p2)};
     const p2 = {g1: summarizeGameStats(game1.p2), g2: summarizeGameStats(g2Res.p1)};
+    const p1CpuCores = meanOptionalCores(p1.g1.cpuCores, p1.g2.cpuCores);
+    const p2CpuCores = meanOptionalCores(p2.g1.cpuCores, p2.g2.cpuCores);
+    const p1Errors = sumProtocolErrors(p1.g1.errors, p1.g2.errors);
+    const p2Errors = sumProtocolErrors(p2.g1.errors, p2.g2.errors);
 
     const payload: arena.MatchCompletePayload = {
       match: {
@@ -1303,6 +1333,10 @@ export class Coordinator {
         p1Game2MeanTurnMillis: p1.g2.meanTurnMillis,
         p2Game1MeanTurnMillis: p2.g1.meanTurnMillis,
         p2Game2MeanTurnMillis: p2.g2.meanTurnMillis,
+        ...(p1CpuCores !== undefined ? {p1CpuCores} : {}),
+        ...(p2CpuCores !== undefined ? {p2CpuCores} : {}),
+        ...(p1Errors ? {p1Errors} : {}),
+        ...(p2Errors ? {p2Errors} : {}),
         completedAt,
       },
       ...(sendLogs

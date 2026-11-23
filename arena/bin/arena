@@ -21,20 +21,25 @@ fi
 SCRATCH_DIR="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')/scratch"
 CONTAINER_NAME="arena-${SLOT}"
 
-# Read cgroup peak memory from the Podman VM host WITHOUT executing any binary inside the
-# untrusted container (`podman exec`), so a malicious `/bin/cat` can neither hang the daemon nor
+# Read cgroup peak memory and CPU time from the Podman VM host WITHOUT executing any binary inside
+# the untrusted container (`podman exec`), so a malicious `/bin/cat` can neither hang the daemon nor
 # spoof telemetry.
 record_container_peak_ram() {
-  local cid peak_bytes
+  local cid stats peak_bytes cpu_usec
   cid="$(podman container inspect -f '{{.Id}}' "$CONTAINER_NAME" 2>/dev/null || true)"
   if [[ ! "$cid" =~ ^[0-9a-f]{12,64}$ ]]; then
     return 0
   fi
-  peak_bytes="$(podman machine ssh podman-machine-default \
-    "cat /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/user.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/machine.slice/libpod-${cid}.scope/memory.peak /sys/fs/cgroup/libpod_parent/libpod-${cid}/memory.peak 2>/dev/null | head -n 1" \
+  stats="$(podman machine ssh podman-machine-default \
+    "for d in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/user.slice/libpod-${cid}.scope /sys/fs/cgroup/machine.slice/libpod-${cid}.scope /sys/fs/cgroup/libpod_parent/libpod-${cid}; do if [ -r \"\$d/memory.peak\" ]; then echo \"RAM \$(cat \"\$d/memory.peak\")\"; awk '/^usage_usec / {print \"CPU \" \$2}' \"\$d/cpu.stat\" 2>/dev/null; break; fi; done" \
     2>/dev/null || true)"
+  peak_bytes="$(echo "$stats" | awk '/^RAM / {print $2; exit}')"
+  cpu_usec="$(echo "$stats" | awk '/^CPU / {print $2; exit}')"
   if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
     echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+  fi
+  if [[ "$cpu_usec" =~ ^[0-9]+$ ]] && (( cpu_usec > 0 )); then
+    echo $(( cpu_usec / 1000 )) > "/opt/arena/state/cpu_millis_${SLOT}" 2>/dev/null || true
   fi
 }
 
@@ -94,7 +99,7 @@ case "$ACTION" in
       exit 2
     fi
     wipe_scratch
-    rm -f "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+    rm -f "/opt/arena/state/peak_ram_${SLOT}" "/opt/arena/state/cpu_millis_${SLOT}" 2>/dev/null || true
 
     if [[ "$MODE" == "container" ]]; then
       exec podman run --rm -i \

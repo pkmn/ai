@@ -3031,7 +3031,15 @@ describe('per-ladder qualification & migrations', () => {
       if (file === 'agent-ladders.sql' || file === 'config.sql' || !file.endsWith('.sql')) {
         continue;
       }
-      fs.copyFileSync(path.join(database.SCHEMA_DIR, file), path.join(preSchemaDir, file));
+      let sql = fs.readFileSync(path.join(database.SCHEMA_DIR, file), 'utf8');
+      if (file === 'ladder-entries.sql') {
+        const addedCols = new RegExp(
+          '^\\s*(mean_cpu_cores|cpu_matches|invalid_choices|invalid_cant_move|' +
+          'invalid_cant_switch|invalid_target|invalid_other|unavailable_choices)\\b'
+        );
+        sql = sql.split('\n').filter(line => !addedCols.test(line)).join('\n');
+      }
+      fs.writeFileSync(path.join(preSchemaDir, file), sql);
     }
 
     const dbFile = path.join(tmpDir, 'prod.sqlite');
@@ -3068,6 +3076,7 @@ describe('per-ladder qualification & migrations', () => {
         '0002-sync-agent-status.sql',
         '0003-config.sql',
         '0004-backfill-passed-notified.sql',
+        '0005-telemetry-aggregates.sql',
       ]);
       expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
       expect(migratedDb.getPendingVersionDms()).toEqual([]);
@@ -3705,4 +3714,108 @@ describe('per-ladder qualification & migrations', () => {
       db.close();
     }
   });
+
+  test('aggregates host CPU utilization and fixed-enum protocol error counts on ladder_entries',
+    () => {
+      const db = new database.Database(':memory:', {now: 1_760_000_000});
+      try {
+        db.syncLaddersFromYaml(`
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  team: harvested
+  status: active
+`, 1_760_000_000);
+        db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    owners:
+      alice: alice.10001
+- name: Beta
+  active: 2026
+  arena:
+    owners:
+      bob: bob.10002
+`, undefined, 1_760_000_000);
+        db.setAgentLadders('alpha', ['rby'], 1_760_000_000);
+        db.setAgentLadders('beta', ['rby'], 1_760_000_000);
+        const alpha = db.getAgentBySlug('alpha')!;
+        const beta = db.getAgentBySlug('beta')!;
+        const sha = 'a'.repeat(64);
+        const va = db.createSubmission({
+          agentId: alpha.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/a.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_010,
+        });
+        const vb = db.createSubmission({
+          agentId: beta.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://example.com/b.tar.gz',
+          sha256: sha,
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_010,
+        });
+        db.applySubmissionStatus({versionId: va.id, smokeStatus: 'passed', now: 1_760_000_020});
+        db.applySubmissionStatus({versionId: vb.id, smokeStatus: 'passed', now: 1_760_000_020});
+
+        db.recordCompletedMatch({
+          match: {
+            id: 'gen1ou-0000001',
+            ladderId: 'gen1ou20261109',
+            p1VersionId: va.id,
+            p2VersionId: vb.id,
+            seed: '1,2,3,4',
+            game1Outcome: 'L',
+            game2Outcome: 'W',
+            category: 'LW',
+            game1Turns: 12,
+            game2Turns: 20,
+            game1EndReason: 'invalid-choice',
+            game2EndReason: 'win',
+            p1Game1PeakRam: 200,
+            p1Game2PeakRam: 220,
+            p2Game1PeakRam: 150,
+            p2Game2PeakRam: 160,
+            p1Game1BankSeconds: 100,
+            p1Game2BankSeconds: 110,
+            p2Game1BankSeconds: 120,
+            p2Game2BankSeconds: 130,
+            p1Game1MeanTurnMillis: 50,
+            p1Game2MeanTurnMillis: 60,
+            p2Game1MeanTurnMillis: 40,
+            p2Game2MeanTurnMillis: 45,
+            p1CpuCores: 6.4,
+            p2CpuCores: 1.2,
+            p1Errors: {
+              invalidCantMove: 2,
+              invalidCantSwitch: 1,
+              invalidTarget: 0,
+              invalidOther: 0,
+              unavailableChoices: 4,
+            },
+            completedAt: 1_760_000_100,
+          },
+        });
+
+        const alphaEntries = db.getAgentLadderProfileEntries(alpha.id, 'gen1ou20261109');
+        expect(alphaEntries[0].meanCpuCores).toBeCloseTo(6.4, 5);
+        expect(alphaEntries[0].cpuMatches).toBe(1);
+        expect(alphaEntries[0].invalidChoices).toBe(1);
+        expect(alphaEntries[0].invalidCantMove).toBe(2);
+        expect(alphaEntries[0].invalidCantSwitch).toBe(1);
+        expect(alphaEntries[0].unavailableChoices).toBe(4);
+
+        const betaEntries = db.getAgentLadderProfileEntries(beta.id, 'gen1ou20261109');
+        expect(betaEntries[0].meanCpuCores).toBeCloseTo(1.2, 5);
+        expect(betaEntries[0].invalidChoices).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
 });

@@ -101,8 +101,7 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   mean_ram REAL NOT NULL DEFAULT 0.0,
   -- Maximum XNU physical memory footprint (MiB) observed in any match on this ladder.
   peak_ram REAL NOT NULL DEFAULT 0.0,
-  -- Cumulative fault counters from match end reasons (retained alongside `started_at` for future
-  -- `/account` and `/projects/<slug>` health telemetry; do not delete).
+  -- Cumulative fault counters from match end reasons.
   crashes INTEGER NOT NULL DEFAULT 0,
   timeouts INTEGER NOT NULL DEFAULT 0,
   ooms INTEGER NOT NULL DEFAULT 0,
@@ -110,6 +109,18 @@ CREATE TABLE IF NOT EXISTS ladder_entries (
   started_at INTEGER NOT NULL DEFAULT 0,
   -- Unix timestamp (seconds) when this version transitioned to `role = 'retired'`, or NULL while active.
   retired_at INTEGER,
+  -- Running mean host-measured CPU utilization (effective cores) across matches reporting CPU time.
+  mean_cpu_cores REAL NOT NULL DEFAULT 0.0,
+  -- Number of matches on this ladder that reported CPU utilization for this entry.
+  cpu_matches INTEGER NOT NULL DEFAULT 0,
+  -- Cumulative invalid-choice forfeits and fixed-enum host-classified protocol errors (stripped of
+  -- species/move names; unavailable_choices is informational, not a fault).
+  invalid_choices INTEGER NOT NULL DEFAULT 0,
+  invalid_cant_move INTEGER NOT NULL DEFAULT 0,
+  invalid_cant_switch INTEGER NOT NULL DEFAULT 0,
+  invalid_target INTEGER NOT NULL DEFAULT 0,
+  invalid_other INTEGER NOT NULL DEFAULT 0,
+  unavailable_choices INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (ladder_id, version_id)
 );
 
