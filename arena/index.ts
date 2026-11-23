@@ -261,6 +261,9 @@ export async function runDaemon(opts: {
         const initialSnap = await client.getPlayableLadders();
         let ladders = initialSnap.ladders;
         let quarantinedVersionIds = initialSnap.quarantinedVersionIds ?? [];
+        if (initialSnap.discardedVersionIds?.length) {
+          coord.pruneDiscardedVersions(initialSnap.discardedVersionIds);
+        }
         if (initialSnap.unpublishedArchivedPoolsLadders?.length) {
           await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
         }

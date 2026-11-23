@@ -398,7 +398,8 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
           devMode: true,
         });
         await coord.processPendingSubmissions();
-        expect(db.getVersionById(next.id)?.smokeStatus).toBe('passed');
+        expect(db.getVersionById(next.id)?.smokeStatus).toBe('staged');
+        expect(db.getSmokeDiagnosticsForVersion(next.id)).toHaveLength(1);
       } finally {
         stateDb.close();
       }
@@ -503,7 +504,7 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
           devMode: true,
         });
         expect(await coord.processPendingSubmissions()).toBe(1);
-        expect(db.getVersionById(upcomingSub.id)?.smokeStatus).toBe('passed');
+        expect(db.getVersionById(upcomingSub.id)?.smokeStatus).toBe('staged');
         expect(db.getVersionById(tourneySub.id)?.smokeStatus).toBe('pending');
       } finally {
         stateDb.close();
@@ -537,9 +538,10 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
         startsAt: Math.floor(Date.now() / 1000) + 86400 * 7,
       });
 
+      const tourSubs: Array<{id: number; agentId: number}> = [];
       for (const [idx, slug] of ['0-error', 'foul-play', 'mews-truck'].entries()) {
         const ag = db.getAgentBySlug(slug)!;
-        db.createSubmission({
+        const sub = db.createSubmission({
           agentId: ag.id,
           version: '3.0.0-t9',
           package: 'oci',
@@ -548,6 +550,7 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
           ladderIds: [],
           tournamentIds: ['9'],
         });
+        tourSubs.push({id: sub.id, agentId: ag.id});
       }
 
       const tourCoord = new tournament.Coordinator({
@@ -577,6 +580,12 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
       });
 
       expect(await tourCoord.processPendingSubmissions('9')).toBe(3);
+      expect(db.getTournamentEntrants('9')).toHaveLength(0);
+      for (const sub of tourSubs) {
+        expect(db.getVersionById(sub.id)?.smokeStatus).toBe('staged');
+        expect(db.getSmokeDiagnosticsForVersion(sub.id)).toHaveLength(1);
+        db.activateStagedVersion({versionId: sub.id, agentId: sub.agentId});
+      }
       expect(db.getTournamentEntrants('9')).toHaveLength(3);
 
       db.seedTournamentEntrants('9');
@@ -770,18 +779,17 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
     return {coord, rootDir, reported, alerts};
   }
 
-  test('TournamentCoordinator aborts GCP smoke test on baseline fault', async () => {
+  test('TournamentCoordinator aborts GCP diagnostic on missing sample teams', async () => {
     const h = createTournamentSmokeHarness({
       id: '91',
       versionId: 91,
       version: '9.1.0',
-      format: 'gen9randombattle',
-      team: 'random',
+      format: 'gen9ou',
+      team: 'harvested',
       rootName: 'tourney-smoke-alert',
-      baseline: {command: defaultAgentScript, args: ['--crash']},
     });
     await expect(h.coord.processPendingSubmissions('91')).rejects.toThrow(
-      /baseline\/infrastructure fault/i
+      /missing sample team pool/i
     );
     expect(h.reported).toEqual([]);
     expect(h.alerts).toHaveLength(1);
@@ -818,7 +826,9 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
       });
       expect(await h.coord.processPendingSubmissions('93')).toBe(1);
       expect(h.reported).toHaveLength(1);
-      expect(h.reported[0].smokeStatus).toBe('passed');
+      expect(h.reported[0].smokeStatus).toBe('staged');
+      expect(h.reported[0].diagnostics).toHaveLength(1);
+      expect(h.reported[0].diagnostics?.[0].battleLog).toContain('|turn|1');
     });
 
   test('TournamentCoordinator aborts harvested smoke test without falling back to harvested pool',

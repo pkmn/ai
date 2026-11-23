@@ -930,6 +930,39 @@ export interface Options {
   ) => void | Promise<void>;
 }
 
+export interface LiveDiagnosticSlot {
+  name: string;
+  version: string;
+  bankSeconds: number;
+  thinking: boolean;
+  peakRam?: number;
+  info?: PublicAgentInfo;
+}
+
+export interface LiveDiagnostic {
+  versionId: number;
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
+  version: string;
+  format: string;
+  targetName: string;
+  phase?: LivePhase;
+  turn: number;
+  activeSlot?: 'p1' | 'p2';
+  turnStartedAt: number;
+  turnBudgetSeconds: number;
+  incrementSeconds: number;
+  p1: LiveDiagnosticSlot;
+  p2: LiveDiagnosticSlot;
+  lines: string[];
+  winHistory?: WinHistoryPoint[];
+  updatedAt: number;
+}
+
+export type DiagnosticLivePayload =
+  Omit<LiveDiagnostic, 'updatedAt'> | {done: true; agentId: number; versionId: number};
+
 export interface Handle {
   close: () => void;
   getLiveDocument: (nowSeconds?: number) => LiveDocument;
@@ -937,6 +970,13 @@ export interface Handle {
   setArenaSystem: (info?: system.ArenaSystemInfo, at?: number) => void;
   getTournamentBroadcast: (tournamentId?: string) => LiveBroadcast | undefined;
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
+  getLiveDiagnostic: (agentId: number) => LiveDiagnostic | undefined;
+  setLiveDiagnostic: (payload: DiagnosticLivePayload) => void;
+  subscribeDiagnostic: (
+    agentId: number,
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ) => void;
   getState: () => {
     lastSeenAt?: number;
     lastContactAt?: number;
@@ -1441,6 +1481,10 @@ export class Client {
     }
   }
 
+  sendDiagnosticLive(payload: DiagnosticLivePayload): Promise<{ok: true}> {
+    return this.requestJson<{ok: true}>('POST', '/api/arena/diagnostic-live', payload);
+  }
+
   sendAlert(payload: StaffAlertPayload): Promise<{ok: true}> {
     return this.requestJson<{ok: true}>('POST', '/api/arena/alert', payload);
   }
@@ -1841,6 +1885,8 @@ export function register(app: polka.Polka, options: Options): Handle {
   const broadcastsByTournament = new Map<string, LiveBroadcast>();
   const battleStreamClients = new Set<http.ServerResponse>();
   const tournamentStreamClients = new Map<string, Set<http.ServerResponse>>();
+  const liveDiagnosticsByAgent = new Map<number, LiveDiagnostic>();
+  const diagnosticStreamClients = new Map<number, Set<http.ServerResponse>>();
 
   const keepaliveTimer = setInterval(() => {
     for (const client of battleStreamClients) {
@@ -1851,8 +1897,74 @@ export function register(app: polka.Polka, options: Options): Handle {
         if (!client.writableEnded && !client.destroyed) client.write(': keepalive\n\n');
       }
     }
+    for (const clients of diagnosticStreamClients.values()) {
+      for (const client of clients) {
+        if (!client.writableEnded && !client.destroyed) client.write(': keepalive\n\n');
+      }
+    }
   }, SSE_KEEPALIVE_MILLIS);
   keepaliveTimer.unref();
+
+  const DIAGNOSTIC_STALE_SECONDS = 900;
+
+  const getLiveDiagnostic = (agentId: number): LiveDiagnostic | undefined => {
+    const snap = liveDiagnosticsByAgent.get(agentId);
+    if (!snap) return undefined;
+    if (getNowSec() - snap.updatedAt > DIAGNOSTIC_STALE_SECONDS) {
+      liveDiagnosticsByAgent.delete(agentId);
+      return undefined;
+    }
+    return snap;
+  };
+
+  const pushDiagnosticEvent = (agentId: number, event: string, data: unknown) => {
+    const clients = diagnosticStreamClients.get(agentId);
+    if (!clients) return;
+    broadcastSseFrame(clients, event, data);
+    if (clients.size === 0) diagnosticStreamClients.delete(agentId);
+  };
+
+  const setLiveDiagnostic = (payload: DiagnosticLivePayload) => {
+    if ('done' in payload) {
+      const existing = liveDiagnosticsByAgent.get(payload.agentId);
+      if (!existing || existing.versionId === payload.versionId) {
+        liveDiagnosticsByAgent.delete(payload.agentId);
+      }
+      pushDiagnosticEvent(payload.agentId, 'done', {versionId: payload.versionId});
+      return;
+    }
+    const snap: LiveDiagnostic = {...payload, updatedAt: getNowSec()};
+    liveDiagnosticsByAgent.set(snap.agentId, snap);
+    pushDiagnosticEvent(snap.agentId, 'diagnostic', snap);
+  };
+
+  const subscribeDiagnostic = (
+    agentId: number,
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ) => {
+    openSse(res);
+    let clients = diagnosticStreamClients.get(agentId);
+    if (!clients) {
+      clients = new Set();
+      diagnosticStreamClients.set(agentId, clients);
+    }
+    clients.add(res);
+    const active = getLiveDiagnostic(agentId);
+    if (active) {
+      sendSse(res, 'diagnostic', active);
+    } else {
+      sendSse(res, 'idle', {agentId});
+    }
+    const cleanup = () => {
+      const set = diagnosticStreamClients.get(agentId);
+      if (!set) return;
+      set.delete(res);
+      if (set.size === 0) diagnosticStreamClients.delete(agentId);
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+  };
 
   const pushBattleEvent = (event: string, data: unknown) => {
     broadcastSseFrame(battleStreamClients, event, data);
@@ -1936,6 +2048,13 @@ export function register(app: polka.Polka, options: Options): Handle {
       }
     }
     tournamentStreamClients.clear();
+    for (const clients of diagnosticStreamClients.values()) {
+      for (const client of clients) {
+        if (!client.writableEnded && !client.destroyed) client.end();
+      }
+    }
+    diagnosticStreamClients.clear();
+    liveDiagnosticsByAgent.clear();
   };
 
   const armWatchdog = (seenAtSec: number) => {
@@ -2162,6 +2281,22 @@ export function register(app: polka.Polka, options: Options): Handle {
     } catch (err) {
       const status = (err as {status?: number}).status ?? 500;
       const message = err instanceof Error ? err.message : 'Submission status update failed.';
+      sendJson(res, status, {error: message});
+    }
+  });
+
+  app.post('/api/arena/diagnostic-live', async (req, res) => {
+    if (!authenticateArena(req, res)) return;
+
+    const nowSec = getNowSec();
+    try {
+      const body = await readJsonBody<DiagnosticLivePayload>(req, MAX_MATCH_COMPLETE_BODY_BYTES);
+      armWatchdog(nowSec);
+      setLiveDiagnostic(body);
+      sendJson(res, 200, {ok: true});
+    } catch (err) {
+      const status = (err as {status?: number}).status ?? 500;
+      const message = err instanceof Error ? err.message : 'Diagnostic live update failed.';
       sendJson(res, status, {error: message});
     }
   });
@@ -3173,6 +3308,9 @@ export function register(app: polka.Polka, options: Options): Handle {
       broadcastsByTournament.set(id, normalized);
       pushTournamentEvent(id, 'broadcast', normalized);
     },
+    getLiveDiagnostic,
+    setLiveDiagnostic,
+    subscribeDiagnostic,
     getState: () => {
       let tournamentViewers = 0;
       for (const clients of tournamentStreamClients.values()) {

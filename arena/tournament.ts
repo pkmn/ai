@@ -6,6 +6,7 @@ import * as path from 'path';
 import type {PRNGSeed} from '@pkmn/sim';
 
 import {SIM_VERSION} from '../db/ladders';
+import type {Input as SmokeDiagnosticInput} from '../db/smoke-diagnostics';
 import {getTournamentBestOf} from '../db/tournaments';
 import * as arena from '../server/arena';
 import {
@@ -1808,6 +1809,7 @@ export interface Options {
   tables?: readonly TableBinding[];
   superfinalGames?: number;
   maxTurns?: number;
+  diagnosticWallCapMillis?: number;
   prepareSubmissionRootfs?: (
     sub: arena.PendingSubmission,
     targetId: string
@@ -1832,6 +1834,7 @@ export class Coordinator {
   private readonly tables: readonly TableBinding[];
   private readonly superfinalGames: number;
   private readonly maxTurns?: number;
+  private readonly diagnosticWallCapMillis?: number;
   private readonly seedSecret: string;
   private readonly prepareSubmissionRootfs?: (
     sub: arena.PendingSubmission,
@@ -1847,6 +1850,7 @@ export class Coordinator {
     this.tables = options.tables ?? [];
     this.superfinalGames = options.superfinalGames ?? 100;
     this.maxTurns = options.maxTurns;
+    this.diagnosticWallCapMillis = options.diagnosticWallCapMillis;
     this.seedSecret = process.env.ARENA_SECRET ?? 'tournament-seed';
     this.prepareSubmissionRootfs = options.prepareSubmissionRootfs;
     this.customResolveEntrantSpec = options.resolveEntrantSpec;
@@ -1935,75 +1939,170 @@ export class Coordinator {
         maxTurnMillis: 1,
         maxPeakRam: 0,
       };
+      const diagnostics: SmokeDiagnosticInput[] = [];
       let smokeError: string | undefined;
 
-      for (const tid of sub.tournaments) {
-        const meta = tourneyById.get(tid);
-        const format = meta?.format ?? 'gen9ou';
-        const smokeFormat = simOps.formatWithCustomRules(format, meta?.customRules);
+      try {
+        for (const tid of sub.tournaments) {
+          const meta = tourneyById.get(tid);
+          const format = meta?.format ?? 'gen9ou';
+          const smokeFormat = simOps.formatWithCustomRules(format, meta?.customRules);
 
-        let p1TeamPacked: string | undefined;
-        let p2TeamPacked: string | undefined;
-        const pool = meta?.teamPool ?? [];
-        try {
-          if (meta?.team === 'harvested') {
-            // Never fall back to harvested tournament pools in smoke tests so private harvested
-            // teams cannot leak into exposed smoke-test logs.
-            if (!meta.smokeTeams || meta.smokeTeams.length < 2) {
-              throw new Error(
-                `missing sample team pool for ${smokeFormat} (requires >= 2 teams)`
-              );
+          let p1TeamPacked: string | undefined;
+          let p2TeamPacked: string | undefined;
+          const pool = meta?.teamPool ?? [];
+          try {
+            if (meta?.team === 'harvested') {
+              // Never fall back to harvested tournament pools in diagnostic tests so private
+              // harvested teams cannot leak into exposed diagnostic logs.
+              if (!meta.smokeTeams || meta.smokeTeams.length < 2) {
+                throw new Error(
+                  `missing sample team pool for ${smokeFormat} (requires >= 2 teams)`
+                );
+              }
+              [p1TeamPacked, p2TeamPacked] = meta.smokeTeams;
+            } else if (meta?.team === 'pools' && pool.length >= 2) {
+              p1TeamPacked = pool[0];
+              p2TeamPacked = pool.find(t => t !== p1TeamPacked) ?? pool[1];
+            } else if (
+              meta?.team === 'random' ||
+              (meta?.team === undefined && toID(format).includes('random'))
+            ) {
+              const pair = await sim.sampleRandomPair(format, '1,2,3,4', '5,6,7,8', meta?.version);
+              p1TeamPacked = pair.t1Packed;
+              p2TeamPacked = pair.t2Packed;
             }
-            [p1TeamPacked, p2TeamPacked] = meta.smokeTeams;
-          } else if (meta?.team === 'pools' && pool.length >= 2) {
-            p1TeamPacked = pool[0];
-            p2TeamPacked = pool.find(t => t !== p1TeamPacked) ?? pool[1];
-          } else if (
-            meta?.team === 'random' ||
-            (meta?.team === undefined && toID(format).includes('random'))
-          ) {
-            const pair = await sim.sampleRandomPair(format, '1,2,3,4', '5,6,7,8', meta?.version);
-            p1TeamPacked = pair.t1Packed;
-            p2TeamPacked = pair.t2Packed;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const detail = `GCP diagnostic test setup fault in ${format}: ${msg}`;
+            this.notifyAlert({
+              key: 'tourney-smoke-infra',
+              message:
+                'Tournament diagnostic test infrastructure error for ' +
+                `${sub.agentSlug} ${sub.version}`,
+              detail,
+            });
+            throw err;
           }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const detail = `GCP smoke test setup fault in ${format}: ${msg}`;
-          this.notifyAlert({
-            key: 'tourney-smoke-infra',
-            message:
-              `Tournament smoke test infrastructure error for ${sub.agentSlug} ${sub.version}`,
-            detail,
-          });
-          throw err;
-        }
 
-        const smokeGame = new ConcurrentGame({
-          format: smokeFormat,
-          version: meta?.version,
-          seed: '1,2,3,4',
-          p1: {spec: candidateSpec, teamPacked: p1TeamPacked},
-          p2: {spec: this.baselineSpec, teamPacked: p2TeamPacked},
-          sendUtm: meta?.team !== undefined ? meta.team !== 'random' : undefined,
-          smokeStopAfterTurn: 1,
-          timers: engine.SMOKE_TIMERS,
-        });
-        const res = await smokeGame.run();
-        const verdict = engine.classifySmokeGame(res, {label: 'GCP smoke test', format});
-        if (verdict.kind === 'infra') {
-          this.notifyAlert({
-            key: 'tourney-smoke-infra',
-            message:
-              `Tournament smoke test infrastructure error for ${sub.agentSlug} ${sub.version}`,
-            detail: verdict.message,
+          const gameStartMillis = Date.now();
+          const liveLines: string[] = [];
+          const timerSettings = arena.timerSettingsForFormat(smokeFormat);
+          let lastPushMillis = 0;
+          let lastPushTurn = -1;
+          const pushLive = (state: TurnBroadcastInfo, force = false) => {
+            if (!this.client.sendDiagnosticLive) return;
+            const nowMillis = Date.now();
+            if (!force && state.turn === lastPushTurn && nowMillis - lastPushMillis < 250) return;
+            lastPushMillis = nowMillis;
+            lastPushTurn = state.turn;
+            const activeSlot: 'p1' | 'p2' | undefined = state.p1.thinking
+              ? 'p1'
+              : state.p2.thinking
+                ? 'p2'
+                : undefined;
+            void this.client.sendDiagnosticLive({
+              versionId: sub.versionId,
+              agentId: sub.agentId,
+              agentSlug: sub.agentSlug,
+              agentName: sub.agentName,
+              version: sub.version,
+              format: smokeFormat,
+              targetName: meta?.name ?? `Tournament #${tid}`,
+              phase: state.turn === 0 ? 'preview' : 'battle',
+              turn: state.turn,
+              ...(activeSlot ? {activeSlot} : {}),
+              turnStartedAt: Math.floor(nowMillis / 1000),
+              turnBudgetSeconds: timerSettings.maxPerTurnSeconds,
+              incrementSeconds: timerSettings.addPerTurnSeconds,
+              p1: {
+                name: `${sub.agentName} (P1)`,
+                version: sub.version,
+                bankSeconds: state.p1.bankSeconds,
+                thinking: state.p1.thinking,
+                ...(state.p1.info !== undefined ? {info: state.p1.info} : {}),
+              },
+              p2: {
+                name: `${sub.agentName} (P2)`,
+                version: sub.version,
+                bankSeconds: state.p2.bankSeconds,
+                thinking: state.p2.thinking,
+                ...(state.p2.info !== undefined ? {info: state.p2.info} : {}),
+              },
+              lines: [...liveLines],
+              ...(state.winHistory?.length ? {winHistory: state.winHistory} : {}),
+            }).catch(() => undefined);
+          };
+
+          const smokeGame = new ConcurrentGame({
+            format: smokeFormat,
+            version: meta?.version,
+            bestOf: 1,
+            seed: '1,2,3,4',
+            p1: {spec: candidateSpec, teamPacked: p1TeamPacked},
+            p2: {spec: candidateSpec, teamPacked: p2TeamPacked},
+            sendUtm: meta?.team !== undefined ? meta.team !== 'random' : undefined,
+            maxTurns: this.maxTurns,
+            maxWallMillis:
+              this.diagnosticWallCapMillis ?? engine.diagnosticWallCapMillis(smokeFormat),
+            stderrCapture: engine.DIAGNOSTIC_STDERR_LIMITS,
+            callbacks: {
+              onSpectatorChunk: (chunk, state) => {
+                for (const line of chunk.split('\n')) {
+                  if (line.length > 0) liveLines.push(line);
+                }
+                pushLive(state, true);
+              },
+              onClockChange: state => pushLive(state, false),
+            },
           });
-          throw new Error(verdict.message);
+          const res = await smokeGame.run();
+          const gameDurationMillis = Math.max(1, Date.now() - gameStartMillis);
+          diagnostics.push({
+            tournamentId: tid,
+            format: smokeFormat,
+            turns: res.turns,
+            endReason: res.endReason,
+            durationMillis: gameDurationMillis,
+            battleLog: res.omniscientLog,
+            ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
+            ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
+            ...(res.p1.peakRam > 0 ? {p1PeakRam: Math.round(res.p1.peakRam)} : {}),
+            ...(res.p2.peakRam > 0 ? {p2PeakRam: Math.round(res.p2.peakRam)} : {}),
+          });
+
+          const verdict = engine.classifySmokeGame(res, {
+            label: 'GCP diagnostic test',
+            format,
+            selfPlay: true,
+            p1Stderr: res.p1.stderr,
+            p2Stderr: res.p2.stderr,
+          });
+          if (verdict.kind === 'infra') {
+            this.notifyAlert({
+              key: 'tourney-smoke-infra',
+              message:
+                'Tournament diagnostic test infrastructure error for ' +
+                `${sub.agentSlug} ${sub.version}`,
+              detail: verdict.message,
+            });
+            throw new Error(verdict.message);
+          }
+          if (verdict.kind === 'fail') {
+            smokeError = verdict.message;
+            break;
+          }
+          engine.recordSmokeTelemetry(smokeTelemetry, res.p1);
+          engine.recordSmokeTelemetry(smokeTelemetry, res.p2);
         }
-        if (verdict.kind === 'fail') {
-          smokeError = verdict.message;
-          break;
+      } finally {
+        if (this.client.sendDiagnosticLive) {
+          await this.client.sendDiagnosticLive({
+            done: true,
+            agentId: sub.agentId,
+            versionId: sub.versionId,
+          }).catch(() => undefined);
         }
-        engine.recordSmokeTelemetry(smokeTelemetry, res.p1);
       }
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStart);
@@ -2013,13 +2112,14 @@ export class Coordinator {
           versionId: sub.versionId,
           smokeStatus: 'failed',
           smokeError,
+          ...(diagnostics.length ? {diagnostics} : {}),
         });
         continue;
       }
 
       await this.client.reportSubmissionStatus({
         versionId: sub.versionId,
-        smokeStatus: 'passed',
+        smokeStatus: 'staged',
         unpackedBytes,
         smokeDurationMillis,
         ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
@@ -2028,6 +2128,7 @@ export class Coordinator {
           ? {smokeTeamPreviewMillis: smokeTelemetry.maxTeamPreviewMillis}
           : {}),
         smokeTurnMillis: smokeTelemetry.maxTurnMillis,
+        ...(diagnostics.length ? {diagnostics} : {}),
       });
     }
 

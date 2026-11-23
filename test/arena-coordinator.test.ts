@@ -192,7 +192,7 @@ describe('Coordinator', () => {
     expect(() => coordinator.parsePrngSeed('1,2,3,70000')).toThrow(/Invalid PRNG seed/);
   });
 
-  test('ingests pending bundle submissions through Turn-1 smoke test', async () => {
+  test('ingests pending bundle submissions through self-play diagnostic smoke test', async () => {
     const h = createMockCoordHarness('smoke');
     try {
       fs.writeFileSync(utmLogFile, '');
@@ -203,17 +203,31 @@ describe('Coordinator', () => {
       expect(h.getLadderTeamsCalls()).toBe(0);
       expect(h.heartbeats).toContainEqual({idle: true});
       expect(h.reportedStatuses).toHaveLength(1);
-      expect(h.reportedStatuses[0].smokeStatus).toBe('passed');
+      expect(h.reportedStatuses[0].smokeStatus).toBe('staged');
+      expect(h.reportedStatuses[0].diagnostics).toHaveLength(1);
+      expect(h.reportedStatuses[0].diagnostics?.[0].battleLog).toContain('|turn|1');
       const receivedUtms = fs.readFileSync(utmLogFile, 'utf8')
         .trim()
         .split('\n')
         .filter(Boolean)
         .map(l => l.split('\t')[1]);
-      expect(receivedUtms).toHaveLength(1);
+      expect(receivedUtms).toHaveLength(2);
+      expect(receivedUtms[0]).not.toBe(receivedUtms[1]);
       expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[0], 'gen9ou')).toHaveLength(6);
+      expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[1], 'gen9ou')).toHaveLength(6);
       expect(
         fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
       ).toBe(true);
+
+      // Pruning discarded version IDs removes hot dir, cold archive, and local_agents entry.
+      expect(h.coord.pruneDiscardedVersions([30])).toBe(1);
+      expect(h.stateDb.getLocalAgent(30)).toBeUndefined();
+      expect(
+        fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
+      ).toBe(false);
+      expect(
+        fs.existsSync(path.join(h.dirs.agents, 'foul-play-3.0.0-v30'))
+      ).toBe(false);
     } finally {
       h.stateDb.close();
     }
@@ -359,10 +373,10 @@ describe('Coordinator', () => {
     expect(acc.maxPeakRam).toBe(5);
   });
 
-  test('aborts smoke test without passing when baseline faults', async () => {
+  test('stages self-play diagnostic without requiring baseline agent', async () => {
     const brokenBaseline = path.join(tmpDir, 'broken-baseline.js');
     fs.writeFileSync(brokenBaseline, 'process.exit(1);\n');
-    const h = createMockCoordHarness('broken-baseline', {
+    const h = createMockCoordHarness('selfplay-no-baseline', {
       baselineSpec: {
         mode: 'native',
         target: process.execPath,
@@ -370,12 +384,14 @@ describe('Coordinator', () => {
       },
     });
     try {
-      await expect(
-        h.coord.processPendingSubmissions(
+      expect(
+        await h.coord.processPendingSubmissions(
           new Map([['gen9customgame', {...h.ladderSnap, format: 'gen9ou'}]])
         )
-      ).rejects.toThrow(/baseline\/infrastructure fault/);
-      expect(h.reportedStatuses).toHaveLength(0);
+      ).toBe(1);
+      expect(h.reportedStatuses).toHaveLength(1);
+      expect(h.reportedStatuses[0].smokeStatus).toBe('staged');
+      expect(h.reportedStatuses[0].diagnostics?.[0].turns).toBeGreaterThanOrEqual(1);
     } finally {
       h.stateDb.close();
     }

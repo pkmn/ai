@@ -154,3 +154,7 @@ export function resetAgentFaults(db: DatabaseSync, versionId: number) {
     WHERE version_id = ?
   `).run(versionId);
 }
+
+export function deleteLocalAgent(db: DatabaseSync, versionId: number) {
+  db.prepare('DELETE FROM local_agents WHERE version_id = ?').run(versionId);
+}

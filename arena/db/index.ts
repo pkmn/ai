@@ -53,6 +53,10 @@ export class Database extends baseDb.SqliteDatabase {
     localAgents.resetAgentFaults(this.db, versionId);
   }
 
+  deleteLocalAgent(versionId: number) {
+    localAgents.deleteLocalAgent(this.db, versionId);
+  }
+
   createMatchCheckpoint(input: localMatches.CreateMatchCheckpointInput) {
     localMatches.createMatchCheckpoint(this.db, input);
   }
