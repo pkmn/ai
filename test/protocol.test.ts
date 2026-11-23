@@ -150,6 +150,144 @@ describe('parseAgentStdoutLine', () => {
       message: 'move 1|win|Agent A',
     });
   });
+
+  test('parses valid /info JSON payloads including optional policy', () => {
+    const line =
+      '/info {"win":0.6342,"depth":6,"seldepth":14,"nodes":142000,"nps":95000,' +
+      '"policy":{"move 1":0.72,"switch 3":0.28},"futureField":"ignored"}';
+    expect(protocol.parseAgentStdoutLine(line)).toEqual({
+      kind: 'info',
+      info: {
+        win: 0.6342,
+        depth: 6,
+        seldepth: 14,
+        nodes: 142000,
+        nps: 95000,
+        policy: {'move 1': 0.72, 'switch 3': 0.28},
+      },
+    });
+    expect(protocol.parseAgentStdoutLine('/INFO {"win":0.5}')).toEqual({
+      kind: 'info',
+      info: {win: 0.5},
+    });
+    expect(protocol.parseAgentStdoutLine('/info {"policy":{"TEAM 1234":1}}')).toEqual({
+      kind: 'info',
+      info: {policy: {'team 1234': 1}},
+    });
+    expect(protocol.isAgentInfoLine('|battle-gen9ou-1|/info {"win":0.5}')).toBe(true);
+    expect(protocol.isAgentInfoLine('/info bad')).toBe(true);
+    expect(protocol.isAgentInfoLine('move 1')).toBe(false);
+  });
+
+  test('silently ignores malformed, out-of-bounds, or oversized /info lines', () => {
+    const ninePolicy: Record<string, number> = {};
+    for (let i = 1; i <= 9; i++) ninePolicy[`move ${i}`] = 0.1;
+
+    for (const bad of [
+      '/info',
+      '/info {}',
+      '/info not-json',
+      '/info []',
+      '/info {"unknown":1}',
+      '/info {"win":-0.01}',
+      '/info {"win":1.01}',
+      '/info {"win":"0.5"}',
+      '/info {"depth":-1}',
+      '/info {"depth":3.5}',
+      '/info {"seldepth":-2}',
+      '/info {"nodes":1.2}',
+      '/info {"nps":"fast"}',
+      '/info {"policy":{}}',
+      `/info ${JSON.stringify({policy: ninePolicy})}`,
+      '/info {"policy":{"forfeit":1}}',
+      '/info {"policy":{"undo":0.5}}',
+      '/info {"policy":{"move 1|win|p1":0.5}}',
+      '/info {"policy":{"move 1":1.5}}',
+      `/info {"win":0.5,"pad":"${'x'.repeat(protocol.MAX_INFO_LINE_CHARS)}"}`,
+    ]) {
+      expect(protocol.parseAgentStdoutLine(bad)).toBeUndefined();
+    }
+  });
+});
+
+describe('agent info public formatting and |ai| log helpers', () => {
+  test('toPublicAgentInfo strips policy and rounds win to 4 decimal places', () => {
+    expect(
+      protocol.toPublicAgentInfo({
+        win: 0.63426,
+        depth: 6,
+        seldepth: 14,
+        nodes: 142000,
+        nps: 95000,
+        policy: {'move 1': 0.8, 'switch 2': 0.2},
+      })
+    ).toEqual({
+      win: 0.6343,
+      depth: 6,
+      seldepth: 14,
+      nodes: 142000,
+      nps: 95000,
+    });
+    expect(protocol.toPublicAgentInfo({policy: {'move 1': 1}})).toBeUndefined();
+  });
+
+  test('formatAiLogLine and parseAiLogLine roundtrip without leaking policy', () => {
+    const line = protocol.formatAiLogLine('p1', {
+      win: 0.75,
+      nodes: 50000,
+      nps: 40000,
+    });
+    expect(line).toBe('|ai|p1|{"win":0.75,"nodes":50000,"nps":40000}');
+    expect(protocol.parseAiLogLine(line!)).toEqual({
+      slot: 'p1',
+      info: {win: 0.75, nodes: 50000, nps: 40000},
+    });
+    expect(
+      protocol.parseAiLogLine('|ai|p2|{"win":0.25,"policy":{"move 1":1}}')
+    ).toEqual({
+      slot: 'p2',
+      info: {win: 0.25},
+    });
+    expect(protocol.parseAiLogLine('|ai|p3|{"win":0.5}')).toBeUndefined();
+    expect(protocol.parseAiLogLine('|turn|1')).toBeUndefined();
+  });
+
+  test('injectAiLogLines and extractAiTelemetry align per-turn snapshots', () => {
+    const rawLog = [
+      '|player|p1|Hydra|',
+      '|player|p2|Vertex|',
+      '|teampreview',
+      '|turn|1',
+      '|move|p1a: Pikachu|Thunderbolt|p2a: Gengar',
+      '|turn|2',
+      '|win|Hydra',
+    ].join('\n');
+
+    const byTurn = new Map<number, {p1?: protocol.PublicAgentInfo; p2?: protocol.PublicAgentInfo}>([
+      [0, {p1: {win: 0.51, nodes: 1000}}],
+      [1, {p1: {win: 0.64, depth: 6, seldepth: 14, nodes: 142000, nps: 95000}, p2: {win: 0.41}}],
+      [2, {p1: {win: 0.92, depth: 8, nodes: 200000}}],
+    ]);
+
+    const injected = protocol.injectAiLogLines(rawLog, byTurn);
+    const lines = injected.split('\n');
+    expect(lines.indexOf('|ai|p1|{"win":0.51,"nodes":1000}')).toBeLessThan(
+      lines.indexOf('|turn|1')
+    );
+    expect(lines.indexOf('|ai|p2|{"win":0.41}')).toBeGreaterThan(lines.indexOf('|turn|1'));
+    expect(lines.indexOf('|ai|p2|{"win":0.41}')).toBeLessThan(lines.indexOf('|turn|2'));
+
+    expect(protocol.extractAiTelemetry(lines)).toEqual([
+      {turn: 0, p1: {win: 0.51, nodes: 1000}},
+      {
+        turn: 1,
+        p1: {win: 0.64, depth: 6, seldepth: 14, nodes: 142000, nps: 95000},
+        p2: {win: 0.41},
+      },
+      {turn: 2, p1: {win: 0.92, depth: 8, nodes: 200000}},
+    ]);
+    expect(protocol.injectAiLogLines(rawLog, new Map())).toBe(rawLog);
+  });
 });
 
 describe('player protocol stream filtering', () => {

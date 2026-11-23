@@ -6,8 +6,30 @@
 //   and agent chat lines are never forwarded into `@pkmn/sim`, so competing agents cannot exchange
 //   signals during a game.
 
+export const MAX_INFO_LINE_CHARS = 2048;
+export const MAX_INFO_POLICY_ENTRIES = 8;
+
+export interface PublicAgentInfo {
+  win?: number;
+  depth?: number;
+  seldepth?: number;
+  nodes?: number;
+  nps?: number;
+}
+
+export interface AgentInfo extends PublicAgentInfo {
+  policy?: Record<string, number>;
+}
+
+export interface TurnAiTelemetry {
+  turn: number;
+  p1?: PublicAgentInfo;
+  p2?: PublicAgentInfo;
+}
+
 export type ParsedAgentStdout =
   {kind: 'ready'} |
+  {kind: 'info'; info: AgentInfo} |
   {kind: 'chat'; message: string} |
   {kind: 'choice'; choice: string};
 
@@ -88,6 +110,195 @@ function normalizeSimulatorChoice(choice: string): string {
   return trimmed;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return undefined;
+  if (value > Number.MAX_SAFE_INTEGER) return undefined;
+  return value;
+}
+
+function parseUnitProbability(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    return undefined;
+  }
+  return value;
+}
+
+export function parseAgentInfoPayload(rawJson: string): AgentInfo | undefined {
+  if (!rawJson || rawJson.length > MAX_INFO_LINE_CHARS) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    return undefined;
+  }
+  if (!isPlainObject(parsed)) return undefined;
+
+  const info: AgentInfo = {};
+  let hasField = false;
+
+  if (parsed.win !== undefined) {
+    const win = parseUnitProbability(parsed.win);
+    if (win === undefined) return undefined;
+    info.win = win;
+    hasField = true;
+  }
+  for (const key of ['depth', 'seldepth', 'nodes', 'nps'] as const) {
+    if (parsed[key] !== undefined) {
+      const val = parseNonNegativeInt(parsed[key]);
+      if (val === undefined) return undefined;
+      info[key] = val;
+      hasField = true;
+    }
+  }
+  if (parsed.policy !== undefined) {
+    if (!isPlainObject(parsed.policy)) return undefined;
+    const entries = Object.entries(parsed.policy);
+    if (entries.length === 0 || entries.length > MAX_INFO_POLICY_ENTRIES) return undefined;
+    const policy: Record<string, number> = {};
+    for (const [rawKey, rawProb] of entries) {
+      if (hasEmbeddedControlChars(rawKey)) return undefined;
+      const choice = normalizeSimulatorChoice(rawKey);
+      if (!choice || containsUndoSubchoice(choice) || !isBareSimulatorChoice(choice)) {
+        return undefined;
+      }
+      const prob = parseUnitProbability(rawProb);
+      if (prob === undefined) return undefined;
+      policy[choice] = prob;
+    }
+    info.policy = policy;
+    hasField = true;
+  }
+
+  return hasField ? info : undefined;
+}
+
+export function toPublicAgentInfo(info: AgentInfo): PublicAgentInfo | undefined {
+  const pub: PublicAgentInfo = {};
+  let hasField = false;
+  if (info.win !== undefined) {
+    pub.win = Math.round(info.win * 10_000) / 10_000;
+    hasField = true;
+  }
+  if (info.depth !== undefined) {
+    pub.depth = info.depth;
+    hasField = true;
+  }
+  if (info.seldepth !== undefined) {
+    pub.seldepth = info.seldepth;
+    hasField = true;
+  }
+  if (info.nodes !== undefined) {
+    pub.nodes = info.nodes;
+    hasField = true;
+  }
+  if (info.nps !== undefined) {
+    pub.nps = info.nps;
+    hasField = true;
+  }
+  return hasField ? pub : undefined;
+}
+
+export function formatAiLogLine(slot: 'p1' | 'p2', info: PublicAgentInfo): string | undefined {
+  const pub = toPublicAgentInfo(info);
+  if (!pub) return undefined;
+  return `|ai|${slot}|${JSON.stringify(pub)}`;
+}
+
+export function parseAiLogLine(
+  line: string
+): {slot: 'p1' | 'p2'; info: PublicAgentInfo} | undefined {
+  if (!line.startsWith('|ai|')) return undefined;
+  const slot = line.slice(4, 6);
+  if ((slot !== 'p1' && slot !== 'p2') || line[6] !== '|') return undefined;
+  const info = parseAgentInfoPayload(line.slice(7));
+  if (!info) return undefined;
+  const pub = toPublicAgentInfo(info);
+  return pub ? {slot, info: pub} : undefined;
+}
+
+export function injectAiLogLines(
+  rawLog: string,
+  byTurn: ReadonlyMap<number, {p1?: PublicAgentInfo; p2?: PublicAgentInfo}>
+): string {
+  if (!rawLog || byTurn.size === 0) return rawLog;
+  const emitTurn = (out: string[], turn: number) => {
+    const entry = byTurn.get(turn);
+    if (!entry) return;
+    if (entry.p1) {
+      const line = formatAiLogLine('p1', entry.p1);
+      if (line) out.push(line);
+    }
+    if (entry.p2) {
+      const line = formatAiLogLine('p2', entry.p2);
+      if (line) out.push(line);
+    }
+  };
+
+  const out: string[] = [];
+  let flushedTurn0 = false;
+  for (const line of rawLog.split('\n')) {
+    if (
+      !flushedTurn0 &&
+      (line.startsWith('|turn|') || line.startsWith('|win|') || line === '|tie')
+    ) {
+      emitTurn(out, 0);
+      flushedTurn0 = true;
+    }
+    out.push(line);
+    if (line.startsWith('|turn|')) {
+      const turn = parseInt(line.slice('|turn|'.length), 10);
+      if (Number.isInteger(turn) && turn > 0) {
+        emitTurn(out, turn);
+      }
+    }
+  }
+  if (!flushedTurn0) {
+    emitTurn(out, 0);
+  }
+  return out.join('\n');
+}
+
+export function extractAiTelemetry(lines: readonly string[]): TurnAiTelemetry[] {
+  const byTurn = new Map<number, TurnAiTelemetry>();
+  let currentTurn = 0;
+  for (const line of lines) {
+    if (line.startsWith('|turn|')) {
+      const turn = parseInt(line.slice('|turn|'.length), 10);
+      if (Number.isInteger(turn) && turn >= 0) currentTurn = turn;
+      continue;
+    }
+    if (!line.startsWith('|ai|')) continue;
+    const parsed = parseAiLogLine(line);
+    if (!parsed) continue;
+    let entry = byTurn.get(currentTurn);
+    if (!entry) {
+      entry = {turn: currentTurn};
+      byTurn.set(currentTurn, entry);
+    }
+    entry[parsed.slot] = parsed.info;
+  }
+  return [...byTurn.values()].sort((a, b) => a.turn - b.turn);
+}
+
+function stripOptionalRoomPrefix(trimmed: string): string {
+  if (!trimmed.startsWith('|')) return trimmed;
+  const secondPipe = trimmed.indexOf('|', 1);
+  return secondPipe >= 0 && trimmed.slice(1, secondPipe).startsWith('battle-')
+    ? trimmed.slice(secondPipe + 1).trim()
+    : trimmed.slice(1).trim();
+}
+
+export function isAgentInfoLine(rawLine: string): boolean {
+  const withoutCr = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+  if (hasEmbeddedControlChars(withoutCr)) return false;
+  const body = stripOptionalRoomPrefix(withoutCr.trim()).toLowerCase();
+  return body === '/info' || body.startsWith('/info ');
+}
+
 // Parses a single stdout line from an Arena agent into either a Showdown simulator choice string
 // or a plain chat/text line (which callers discard so agents cannot message each other or inject
 // protocol commands). Lines with embedded `\r` or control characters are always demoted to chat.
@@ -105,18 +316,17 @@ export function parseAgentStdoutLine(rawLine: string): ParsedAgentStdout | undef
   if (!trimmed) return undefined;
 
   // Strip optional leading room prefix `|<room>|` or `|` for agents reusing a PS client adapter.
-  let body = trimmed;
-  if (body.startsWith('|')) {
-    const secondPipe = body.indexOf('|', 1);
-    body = secondPipe >= 0 && body.slice(1, secondPipe).startsWith('battle-')
-      ? body.slice(secondPipe + 1).trim()
-      : body.slice(1).trim();
-  }
+  const body = stripOptionalRoomPrefix(trimmed);
   if (!body) return undefined;
 
   const lowerBody = body.toLowerCase();
   if (lowerBody === '/ready') {
     return {kind: 'ready'};
+  }
+  if (lowerBody === '/info' || lowerBody.startsWith('/info ')) {
+    if (body.length > MAX_INFO_LINE_CHARS) return undefined;
+    const info = parseAgentInfoPayload(body.slice(5).trim());
+    return info ? {kind: 'info', info} : undefined;
   }
   if (lowerBody.startsWith('/choose ')) {
     const choice = normalizeSimulatorChoice(body.slice(8));

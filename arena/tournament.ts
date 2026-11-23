@@ -798,7 +798,7 @@ export class ConcurrentGame {
         }
 
         const parsed = parseAgentStdoutLine(line);
-        if (!parsed || parsed.kind === 'chat' || parsed.kind === 'ready') continue;
+        if (parsed?.kind !== 'choice') continue;
 
         const decisionElapsedMillis = Math.max(1, Math.ceil(totalElapsedMillis));
         engine.chargeDecisionClock(player.turn, decisionElapsedMillis);
