@@ -53,6 +53,49 @@ export const OU_TEAM_ONE =
   ']Iron Valiant||BoosterEnergy|QuarkDrive|Moonblast,CloseCombat,KnockOff,Encore|' +
   'Naive|,4,,252,,252|||||';
 
+export const OU_TEAM_TWO =
+  'Alomomola||HeavyDutyBoots|Regenerator|FlipTurn,Protect,Scald,Wish|' +
+  'Impish|252,,252,,4,|||||' +
+  ']Blissey||HeavyDutyBoots|NaturalCure|CalmMind,SeismicToss,SoftBoiled,StealthRock|' +
+  'Bold|252,,252,,4,|||||' +
+  ']Clefable||Leftovers|MagicGuard|KnockOff,Moonblast,Moonlight,StealthRock|' +
+  'Bold|252,,252,,4,|||||' +
+  ']Dondozo||Leftovers|Unaware|Curse,Rest,SleepTalk,Waterfall|' +
+  'Impish|252,,252,,4,|||||' +
+  ']Garganacl||Leftovers|PurifyingSalt|IronDefense,Protect,Recover,SaltCure|' +
+  'Careful|252,,4,,252,|||||' +
+  ']Zapdos||HeavyDutyBoots|Static|Discharge,Hurricane,Roost,VoltSwitch|' +
+  'Bold|252,,252,,,4|||||';
+
+export const RBY_TEAM_ONE =
+  'Alakazam|||NoAbility|Psychic,Recover,SeismicToss,ThunderWave||252,252,252,252,252,252|||||' +
+  ']Chansey|||NoAbility|IceBeam,SoftBoiled,Thunderbolt,ThunderWave||252,252,252,252,252,252|||||' +
+  ']Exeggutor|||NoAbility|Psychic,SleepPowder,StunSpore,Explosion||252,252,252,252,252,252|||||' +
+  ']Snorlax|||NoAbility|BodySlam,HyperBeam,Earthquake,SelfDestruct||252,252,252,252,252,252|||||' +
+  ']Starmie|||NoAbility|Blizzard,Thunderbolt,Recover,ThunderWave||252,252,252,252,252,252|||||' +
+  ']Tauros|||NoAbility|BodySlam,HyperBeam,Blizzard,Earthquake||252,252,252,252,252,252|||||';
+
+export const RBY_TEAM_TWO =
+  'Cloyster|||NoAbility|Blizzard,Clamp,HyperBeam,Explosion||252,252,252,252,252,252|||||' +
+  ']Gengar|||NoAbility|Hypnosis,NightShade,Thunderbolt,Explosion||252,252,252,252,252,252|||||' +
+  ']Jolteon|||NoAbility|Thunderbolt,ThunderWave,DoubleKick,PinMissile||' +
+  '252,252,252,252,252,252|||||' +
+  ']Lapras|||NoAbility|Blizzard,Thunderbolt,BodySlam,ConfuseRay||252,252,252,252,252,252|||||' +
+  ']Rhydon|||NoAbility|Earthquake,RockSlide,BodySlam,Substitute||252,252,252,252,252,252|||||' +
+  ']Zapdos|||NoAbility|Thunderbolt,DrillPeck,ThunderWave,Agility||252,252,252,252,252,252|||||';
+
+export function seedSampleTeams(
+  rootDir: string,
+  format: string,
+  sampleTeams: readonly string[]
+): void {
+  const dir = path.join(rootDir, 'samples', format);
+  fs.mkdirSync(dir, {recursive: true});
+  for (let i = 0; i < sampleTeams.length; i++) {
+    fs.writeFileSync(path.join(dir, `sample-${i + 1}`), sampleTeams[i], 'utf8');
+  }
+}
+
 export function buildTestTarGz(entries: Array<{
   name: string;
   type: '0' | '1' | '2' | '5' | '6' | 'L' | 'K' | 'x';

@@ -264,6 +264,33 @@ describe('Arena Control API submissions', () => {
       expect(slots).toEqual({minSlot: 1, maxSlot: 20});
     });
 
+  test('omits harvested tournament teamPool on pending-submissions', async () => {
+    db.replaceLadderTeams('gen1ou20261109', ['harvested-team-a', 'harvested-team-b']);
+    db.upsertTournament({
+      id: '98',
+      name: 'Tournament #98: RBY Harvested',
+      format: 'gen1ou',
+      version: '0.11.0',
+      team: 'harvested',
+      gamesPerMatchup: 4,
+      parallelTables: 1,
+      hardware: 'GCP L4',
+      status: 'scheduled',
+      startsAt: 1_900_000_000,
+    });
+    const pendingRes = await apiJson(
+      srv.baseUrl,
+      'GET',
+      '/api/arena/pending-submissions',
+      ARENA_SECRET
+    );
+    expect(pendingRes.status).toBe(200);
+    const tournaments = pendingRes.data.tournaments as Array<{id: string; teamPool?: string[]}>;
+    const harvested = tournaments.find(t => t.id === '98');
+    expect(harvested).toBeDefined();
+    expect(harvested?.teamPool).toBeUndefined();
+  });
+
   test('wipes auth tokens plus pending pool teams when smoke test fails', async () => {
     const fpAgent = db.getAgentBySlug('foul-play')!;
     const vgcTeams = Array.from({length: 20}, (_, idx) => `packed-team-${idx + 1}`);

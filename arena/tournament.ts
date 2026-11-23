@@ -1744,6 +1744,7 @@ export class Coordinator {
   private readonly baselineSpec: AgentSpec;
   private readonly rootDir?: string;
   private readonly agentsDir: string;
+  private readonly samplesDir: string;
   private readonly tables: readonly TableBinding[];
   private readonly superfinalGames: number;
   private readonly maxTurns?: number;
@@ -1759,6 +1760,9 @@ export class Coordinator {
     this.baselineSpec = options.baselineSpec;
     this.rootDir = options.rootDir;
     this.agentsDir = options.rootDir ? path.join(options.rootDir, 'agents') : '/opt/arena/agents';
+    this.samplesDir = options.rootDir
+      ? path.join(options.rootDir, 'samples')
+      : serverTeams.SAMPLES_DIR;
     this.tables = options.tables ?? [];
     this.superfinalGames = options.superfinalGames ?? 100;
     this.maxTurns = options.maxTurns;
@@ -1860,31 +1864,38 @@ export class Coordinator {
         let p1TeamPacked: string | undefined;
         let p2TeamPacked: string | undefined;
         const pool = meta?.teamPool ?? [];
-        if (meta?.team === 'harvested') {
-          // Never fall back to harvested tournament pools in smoke tests so private harvested
-          // teams cannot leak into exposed smoke-test logs.
-          try {
+        try {
+          if (meta?.team === 'harvested') {
+            // Never fall back to harvested tournament pools in smoke tests so private harvested
+            // teams cannot leak into exposed smoke-test logs.
             ({t1Packed: p1TeamPacked, t2Packed: p2TeamPacked} =
               await serverTeams.sampleSmokePair(
                 smokeFormat,
                 max => crypto.randomInt(0, max),
-                meta?.version
+                meta?.version,
+                this.samplesDir
               ));
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            smokeError = `GCP smoke test setup failed in ${format}: ${msg}`;
-            break;
+          } else if (meta?.team === 'pools' && pool.length >= 2) {
+            p1TeamPacked = pool[0];
+            p2TeamPacked = pool.find(t => t !== p1TeamPacked) ?? pool[1];
+          } else if (
+            meta?.team === 'random' ||
+            (meta?.team === undefined && toID(format).includes('random'))
+          ) {
+            const pair = await sim.sampleRandomPair(format, '1,2,3,4', '5,6,7,8', meta?.version);
+            p1TeamPacked = pair.t1Packed;
+            p2TeamPacked = pair.t2Packed;
           }
-        } else if (meta?.team === 'pools' && pool.length >= 2) {
-          p1TeamPacked = pool[0];
-          p2TeamPacked = pool.find(t => t !== p1TeamPacked) ?? pool[1];
-        } else if (
-          meta?.team === 'random' ||
-          (meta?.team === undefined && toID(format).includes('random'))
-        ) {
-          const pair = await sim.sampleRandomPair(format, '1,2,3,4', '5,6,7,8', meta?.version);
-          p1TeamPacked = pair.t1Packed;
-          p2TeamPacked = pair.t2Packed;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const detail = `GCP smoke test setup fault in ${format}: ${msg}`;
+          this.notifyAlert({
+            key: 'tourney-smoke-infra',
+            message:
+              `Tournament smoke test infrastructure error for ${sub.agentSlug} ${sub.version}`,
+            detail,
+          });
+          throw err;
         }
 
         const smokeGame = new ConcurrentGame({

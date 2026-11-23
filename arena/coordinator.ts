@@ -195,6 +195,7 @@ export class Coordinator {
   readonly stateDb: db.Database;
   private readonly baselineSpec: arbiter.AgentLaunchSpec;
   private readonly dirs: packages.Dirs;
+  private readonly samplesDir: string;
   private readonly devMode: boolean;
   private readonly maxTurns?: number;
   private readonly versionByLadderId = new Map<string, string>();
@@ -217,6 +218,7 @@ export class Coordinator {
     };
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.dirs = options.rootDir ? packages.dirsForRoot(options.rootDir) : packages.PROD_DIRS;
+    this.samplesDir = options.rootDir ? path.join(options.rootDir, 'samples') : teams.SAMPLES_DIR;
     this.maxTurns = options.maxTurns;
   }
 
@@ -431,39 +433,45 @@ export class Coordinator {
       for (const item of targetsToTest) {
         let t1Packed: string;
         let t2Packed: string;
-        try {
-          const subTeams = sub.teamsByLadder?.[item.ladderId];
-          if (item.team === 'pools') {
-            if (!subTeams || subTeams.length < 2) {
-              smokeError =
-                `Smoke test failed in ${item.format}: missing validated team roster for ` +
-                `${item.ladderId}`;
-              break;
-            }
-            t1Packed = subTeams[0];
-            t2Packed = subTeams[1];
-          } else if (item.team === 'harvested') {
-            // Never fall back to harvested ladder pools in smoke tests so private harvested teams
-            // cannot leak into exposed smoke-test logs.
-            ({t1Packed, t2Packed} = await teams.sampleSmokePair(
-              item.format,
-              randomInt,
-              item.version
-            ));
-          } else {
-            const pair = await sim.sampleRandomPair(
-              item.format,
-              '1,2,3,4',
-              '5,6,7,8',
-              item.version
-            );
-            t1Packed = pair.t1Packed;
-            t2Packed = pair.t2Packed;
+        const subTeams = sub.teamsByLadder?.[item.ladderId];
+        if (item.team === 'pools') {
+          if (!subTeams || subTeams.length < 2) {
+            smokeError =
+              `Smoke test failed in ${item.format}: missing validated team roster for ` +
+              `${item.ladderId}`;
+            break;
           }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          smokeError = `Smoke test setup failed in ${item.format}: ${msg}`;
-          break;
+          t1Packed = subTeams[0];
+          t2Packed = subTeams[1];
+        } else {
+          try {
+            if (item.team === 'harvested') {
+              // Never fall back to harvested ladder pools in smoke tests so private harvested
+              // teams cannot leak into exposed smoke-test logs.
+              ({t1Packed, t2Packed} = await teams.sampleSmokePair(
+                item.format,
+                randomInt,
+                item.version,
+                this.samplesDir
+              ));
+            } else {
+              ({t1Packed, t2Packed} = await sim.sampleRandomPair(
+                item.format,
+                '1,2,3,4',
+                '5,6,7,8',
+                item.version
+              ));
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const detail = `Smoke test setup fault in ${item.format}: ${msg}`;
+            this.notifyAlert({
+              key: 'smoke-infra',
+              message: `Smoke test infrastructure error for ${sub.agentSlug} ${sub.version}`,
+              detail,
+            });
+            throw err;
+          }
         }
 
         const game = new arbiter.TimeSlicedArenaGame({

@@ -16,11 +16,14 @@ import * as serverTeams from '../server/teams';
 import {root} from '../static/util';
 
 import {
+  OU_TEAM_ONE,
+  OU_TEAM_TWO,
   TEAM_ONE,
   TEAM_TWO,
   createCoordBundleArchive,
   getArenaTestBins,
   linkOrCopyExecutable,
+  seedSampleTeams,
 } from './arena-helpers';
 
 describe('Coordinator', () => {
@@ -46,6 +49,8 @@ describe('Coordinator', () => {
     const reportedStatuses: serverArena.SubmissionStatusPayload[] = [];
     const completedMatches: serverArena.MatchCompletePayload[] = [];
     const heartbeats: serverArena.HeartbeatPayload[] = [];
+    const alerts: serverArena.StaffAlertPayload[] = [];
+    let getLadderTeamsCalls = 0;
 
     const mockClient = {
       getPendingSubmissions: () => Promise.resolve({
@@ -83,17 +88,25 @@ describe('Coordinator', () => {
         heartbeats.push(payload);
         return Promise.resolve({ok: true as const, updatedAt: 1000});
       },
-      getLadderTeams: () => Promise.resolve({
-        ladderId: 'gen9customgame',
-        format: 'gen9customgame',
-        count: 2,
-        sha256: 'abc',
-        teams: [TEAM_ONE, TEAM_TWO],
-      }),
+      sendAlert: (payload: serverArena.StaffAlertPayload) => {
+        alerts.push(payload);
+        return Promise.resolve({ok: true as const});
+      },
+      getLadderTeams: () => {
+        getLadderTeamsCalls++;
+        return Promise.resolve({
+          ladderId: 'gen9customgame',
+          format: 'gen9customgame',
+          count: 2,
+          sha256: 'abc',
+          teams: [TEAM_ONE, TEAM_TWO],
+        });
+      },
     } as unknown as serverArena.Client;
 
     const stateDb = new arenaDb.Database(':memory:');
     const rootDir = path.join(tmpDir, prefix);
+    seedSampleTeams(rootDir, 'gen9ou', [OU_TEAM_ONE, OU_TEAM_TWO]);
     const dirs = packages.dirsForRoot(rootDir);
     const coord = new coordinator.Coordinator({
       client: mockClient,
@@ -154,6 +167,8 @@ describe('Coordinator', () => {
       reportedStatuses,
       completedMatches,
       heartbeats,
+      alerts,
+      getLadderTeamsCalls: () => getLadderTeamsCalls,
     };
   }
 
@@ -167,13 +182,22 @@ describe('Coordinator', () => {
   test('ingests pending bundle submissions through Turn-1 smoke test', async () => {
     const h = createMockCoordHarness('smoke');
     try {
+      fs.writeFileSync(utmLogFile, '');
       const processed = await h.coord.processPendingSubmissions(
         new Map([['gen9customgame', {...h.ladderSnap, format: 'gen9ou'}]])
       );
       expect(processed).toBe(1);
+      expect(h.getLadderTeamsCalls()).toBe(0);
       expect(h.heartbeats).toContainEqual({idle: true});
       expect(h.reportedStatuses).toHaveLength(1);
       expect(h.reportedStatuses[0].smokeStatus).toBe('passed');
+      const receivedUtms = fs.readFileSync(utmLogFile, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(l => l.split('\t')[1]);
+      expect(receivedUtms).toHaveLength(1);
+      expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[0], 'gen9ou')).toHaveLength(6);
       expect(
         fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
       ).toBe(true);
@@ -182,103 +206,23 @@ describe('Coordinator', () => {
     }
   }, 15_000);
 
-  test('fails harvested smoke test without falling back to harvested ladder pools', async () => {
+  test('aborts harvested smoke test without falling back to harvested ladder pools', async () => {
     const h = createMockCoordHarness('smoke-no-fallback');
-    let getLadderTeamsCalls = 0;
-    (h.coord.client as unknown as {
-      getLadderTeams: () => Promise<unknown>;
-    }).getLadderTeams = () => {
-      getLadderTeamsCalls++;
-      return Promise.resolve({
-        ladderId: 'gen9customgame',
-        format: 'gen9customgame',
-        count: 2,
-        sha256: 'abc',
-        teams: [TEAM_ONE, TEAM_TWO],
-      });
-    };
     try {
-      const processed = await h.coord.processPendingSubmissions(
-        new Map([['gen9customgame', h.ladderSnap]])
-      );
-      expect(processed).toBe(1);
-      expect(getLadderTeamsCalls).toBe(0);
-      expect(h.reportedStatuses).toHaveLength(1);
-      expect(h.reportedStatuses[0].smokeStatus).toBe('failed');
-      expect(h.reportedStatuses[0].smokeError).toContain('missing sample team pool');
+      await expect(
+        h.coord.processPendingSubmissions(
+          new Map([['gen9customgame', h.ladderSnap]])
+        )
+      ).rejects.toThrow(/missing sample team pool/);
+      expect(h.getLadderTeamsCalls()).toBe(0);
+      expect(h.reportedStatuses).toHaveLength(0);
+      expect(h.alerts).toHaveLength(1);
+      expect(h.alerts[0].key).toBe('smoke-infra');
+      expect(h.alerts[0].detail).toContain('missing sample team pool');
     } finally {
       h.stateDb.close();
     }
   });
-
-  test('smoke tests RBY, ADV, and SV harvested ladders using sample teams without harvested pools',
-    async () => {
-      const rootDir = path.join(tmpDir, 'smoke-samples');
-      const stateDb = new arenaDb.Database(':memory:');
-      const reported: serverArena.SubmissionStatusPayload[] = [];
-      let getLadderTeamsCalls = 0;
-      const fakeClient = {
-        getPendingSubmissions: () => Promise.resolve({
-          ladders: [
-            {id: 'gen1ou20261109', format: 'gen1ou', version: '0.11.0', team: 'harvested' as const},
-            {id: 'gen3ou20261109', format: 'gen3ou', version: '0.11.0', team: 'harvested' as const},
-            {id: 'gen9ou20261109', format: 'gen9ou', version: '0.11.0', team: 'harvested' as const},
-          ],
-          submissions: [{
-            versionId: 40,
-            agentId: 1,
-            agentSlug: 'foul-play',
-            agentName: 'Foul Play',
-            version: '4.0.0',
-            package: 'bundle' as const,
-            url: `file://${bundleTar}`,
-            sha256: bundleSha,
-            ladders: ['gen1ou20261109', 'gen3ou20261109', 'gen9ou20261109'],
-            tournaments: [],
-            teamsByLadder: {},
-          }],
-        }),
-        reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
-          reported.push(payload);
-          return Promise.resolve({
-            ok: true as const,
-            versionId: payload.versionId,
-            smokeStatus: payload.smokeStatus,
-            retiredByLadder: {},
-          });
-        },
-        sendHeartbeat: () => Promise.resolve({ok: true as const, updatedAt: 0}),
-        getLadderTeams: () => {
-          getLadderTeamsCalls++;
-          return Promise.reject(new Error('No harvested teams uploaded'));
-        },
-      } as unknown as serverArena.Client;
-      const coord = new coordinator.Coordinator({
-        client: fakeClient,
-        stateDb,
-        baselineSpec: {mode: 'native', target: defaultAgentScript},
-        rootDir,
-        devMode: true,
-      });
-      try {
-        fs.writeFileSync(utmLogFile, '');
-        expect(await coord.processPendingSubmissions()).toBe(1);
-        expect(getLadderTeamsCalls).toBe(0);
-        expect(reported).toHaveLength(1);
-        expect(reported[0].smokeStatus).toBe('passed');
-        const receivedUtms = fs.readFileSync(utmLogFile, 'utf8')
-          .trim()
-          .split('\n')
-          .filter(Boolean)
-          .map(l => l.split('\t')[1]);
-        expect(receivedUtms).toHaveLength(3);
-        for (const [idx, fmt] of (['gen1ou', 'gen3ou', 'gen9ou'] as const).entries()) {
-          expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[idx], fmt)).toHaveLength(6);
-        }
-      } finally {
-        stateDb.close();
-      }
-    }, 15_000);
 
   test('caps processPendingSubmissions to maxSubmissions (default 1) in FIFO order', async () => {
     const rootDir = path.join(tmpDir, 'smoke-cap');
@@ -320,7 +264,7 @@ describe('Coordinator', () => {
     const ladderSnap: coordinator.LadderSnapshot = {
       id: 'gen9customgame',
       slot: 'rand',
-      format: 'gen9customgame',
+      format: 'gen9randombattle',
       team: 'random',
       status: 'active',
       min: 2,

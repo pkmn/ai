@@ -17,11 +17,15 @@ import * as mock from '../tools/mock';
 
 import {
   OU_TEAM_ONE,
+  OU_TEAM_TWO,
+  RBY_TEAM_ONE,
+  RBY_TEAM_TWO,
   TEAM_ONE,
   TEAM_TWO,
   createCoordBundleArchive,
   getArenaTestBins,
   linkOrCopyExecutable,
+  seedSampleTeams,
   withRealArenaServer,
 } from './arena-helpers';
 
@@ -489,11 +493,13 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
         });
         expect(tourneyPending.submissions.map(s => s.versionId)).toEqual([tourneySub.id]);
 
+        const upcomingRoot = path.join(tmpDir, 'upcoming');
+        seedSampleTeams(upcomingRoot, 'gen1ou', [RBY_TEAM_ONE, RBY_TEAM_TWO]);
         const coord = new coordinator.Coordinator({
           client,
           stateDb,
           baselineSpec: {mode: 'native', target: defaultAgentScript},
-          rootDir: path.join(tmpDir, 'upcoming'),
+          rootDir: upcomingRoot,
           devMode: true,
         });
         expect(await coord.processPendingSubmissions()).toBe(1);
@@ -675,105 +681,41 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
     });
   });
 
-  test('TournamentCoordinator aborts GCP smoke test and alerts staff on baseline fault',
-    async () => {
-      const alerts: serverArena.StaffAlertPayload[] = [];
-      const reported: serverArena.SubmissionStatusPayload[] = [];
-      const fakeClient = {
-        getPendingSubmissions: () => Promise.resolve({
-          ladders: [],
-          tournaments: [{
-            id: '91',
-            format: 'gen9randombattle',
-            version: '0.11.0',
-            team: 'random' as const,
-            customRules: [],
-            teamPool: [],
-          }],
-          submissions: [{
-            versionId: 91,
-            agentId: 1,
-            agentSlug: 'foul-play',
-            agentName: 'Foul Play',
-            version: '9.1.0',
-            package: 'oci' as const,
-            url: 'ghcr.io/pkmn/foul-play:9.1.0',
-            sha256: '1'.repeat(64),
-            ladders: [],
-            tournaments: ['91'],
-            submittedAt: 1_760_000_000,
-          }],
-        }),
-        reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
-          reported.push(payload);
-          return Promise.resolve({
-            ok: true as const,
-            versionId: payload.versionId,
-            smokeStatus: payload.smokeStatus,
-            retiredByLadder: {},
-          });
-        },
-        sendAlert: (payload: serverArena.StaffAlertPayload) => {
-          alerts.push(payload);
-          return Promise.resolve({ok: true as const});
-        },
-      } as unknown as serverArena.Client;
-
-      const coord = new tournament.Coordinator({
-        client: fakeClient,
-        baselineSpec: {
-          agentId: '_baseline',
-          displayName: 'Baseline',
-          vmHost: '127.0.0.1',
-          controlSocket: '',
-          localCommand: defaultAgentScript,
-          localArgs: ['--crash'],
-        },
-        rootDir: path.join(tmpDir, 'tourney-smoke-alert'),
-        prepareSubmissionRootfs: () => 1024,
-        resolveEntrantSpec: entrant => ({
-          agentId: `${entrant.agentSlug}-${entrant.versionId}`,
-          displayName: entrant.agentName,
-          vmHost: '127.0.0.1',
-          controlSocket: '',
-          localCommand: relayBin,
-          localArgs: [defaultAgentScript],
-        }),
-      });
-
-      await expect(coord.processPendingSubmissions('91')).rejects.toThrow(
-        /baseline\/infrastructure fault/i
-      );
-      expect(reported).toEqual([]);
-      expect(alerts).toHaveLength(1);
-      expect(alerts[0].key).toBe('tourney-smoke-infra');
-      expect(alerts[0].message).toContain('foul-play 9.1.0');
-    });
-
-  test('TournamentCoordinator fails GCP smoke test on double-crash tie', async () => {
+  function createTournamentSmokeHarness(opts: {
+    id: string;
+    versionId: number;
+    version: string;
+    format: string;
+    team: 'random' | 'harvested' | 'pools';
+    teamPool?: string[];
+    rootName: string;
+    baseline?: {command: string; args: string[]};
+    entrant?: {command: string; args: string[]};
+  }) {
+    const alerts: serverArena.StaffAlertPayload[] = [];
     const reported: serverArena.SubmissionStatusPayload[] = [];
     const fakeClient = {
       getPendingSubmissions: () => Promise.resolve({
         ladders: [],
         tournaments: [{
-          id: '92',
-          format: 'gen9randombattle',
+          id: opts.id,
+          format: opts.format,
           version: '0.11.0',
-          team: 'random' as const,
+          team: opts.team,
           customRules: [],
-          teamPool: [],
+          teamPool: opts.teamPool ?? [],
         }],
         submissions: [{
-          versionId: 92,
+          versionId: opts.versionId,
           agentId: 1,
           agentSlug: 'foul-play',
           agentName: 'Foul Play',
-          version: '9.2.0',
+          version: opts.version,
           package: 'oci' as const,
-          url: 'ghcr.io/pkmn/foul-play:9.2.0',
-          sha256: '2'.repeat(64),
+          url: `ghcr.io/pkmn/foul-play:${opts.version}`,
+          sha256: opts.id.slice(-1).repeat(64),
           ladders: [],
-          tournaments: ['92'],
+          tournaments: [opts.id],
           teamsByLadder: {},
         }],
       }),
@@ -786,159 +728,113 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
           retiredByLadder: {},
         });
       },
+      sendAlert: (payload: serverArena.StaffAlertPayload) => {
+        alerts.push(payload);
+        return Promise.resolve({ok: true as const});
+      },
     } as unknown as serverArena.Client;
-    const tourCoord = new tournament.Coordinator({
+
+    const rootDir = path.join(tmpDir, opts.rootName);
+    const baseline = opts.baseline ?? {
+      command: relayBin,
+      args: [root('arena', 'bin', 'baseline')],
+    };
+    const entrantCmd = opts.entrant ?? {
+      command: relayBin,
+      args: [defaultAgentScript],
+    };
+    const coord = new tournament.Coordinator({
       client: fakeClient,
       baselineSpec: {
         agentId: '_baseline',
         displayName: 'Baseline',
         vmHost: '127.0.0.1',
         controlSocket: '',
-        localCommand: process.execPath,
-        localArgs: ['-e', 'process.exit(1)'],
+        localCommand: baseline.command,
+        localArgs: baseline.args,
       },
-      rootDir: path.join(tmpDir, 'gcp-smoke-double-crash'),
+      rootDir,
       prepareSubmissionRootfs: () => 1024,
       resolveEntrantSpec: entrant => ({
         agentId: `${entrant.agentSlug}-${entrant.versionId}`,
         displayName: entrant.agentName,
         vmHost: '127.0.0.1',
         controlSocket: '',
-        localCommand: process.execPath,
-        localArgs: ['-e', 'process.exit(1)'],
+        localCommand: entrantCmd.command,
+        localArgs: entrantCmd.args,
       }),
     });
-    await tourCoord.processPendingSubmissions('92');
-    expect(reported).toHaveLength(1);
-    expect(reported[0].smokeStatus).toBe('failed');
+    return {coord, rootDir, reported, alerts};
+  }
+
+  test('TournamentCoordinator aborts GCP smoke test on baseline fault', async () => {
+    const h = createTournamentSmokeHarness({
+      id: '91',
+      versionId: 91,
+      version: '9.1.0',
+      format: 'gen9randombattle',
+      team: 'random',
+      rootName: 'tourney-smoke-alert',
+      baseline: {command: defaultAgentScript, args: ['--crash']},
+    });
+    await expect(h.coord.processPendingSubmissions('91')).rejects.toThrow(
+      /baseline\/infrastructure fault/i
+    );
+    expect(h.reported).toEqual([]);
+    expect(h.alerts).toHaveLength(1);
+    expect(h.alerts[0].key).toBe('tourney-smoke-infra');
+    expect(h.alerts[0].message).toContain('foul-play 9.1.0');
+  });
+
+  test('TournamentCoordinator fails GCP smoke test on double-crash tie', async () => {
+    const h = createTournamentSmokeHarness({
+      id: '92',
+      versionId: 92,
+      version: '9.2.0',
+      format: 'gen9randombattle',
+      team: 'random',
+      rootName: 'gcp-smoke-double-crash',
+      baseline: {command: process.execPath, args: ['-e', 'process.exit(1)']},
+      entrant: {command: process.execPath, args: ['-e', 'process.exit(1)']},
+    });
+    await h.coord.processPendingSubmissions('92');
+    expect(h.reported).toHaveLength(1);
+    expect(h.reported[0].smokeStatus).toBe('failed');
   });
 
   test('TournamentCoordinator smoke tests harvested OU tournaments using sample teams',
     async () => {
-      const reported: serverArena.SubmissionStatusPayload[] = [];
-      const fakeClient = {
-        getPendingSubmissions: () => Promise.resolve({
-          ladders: [],
-          tournaments: [{
-            id: '93',
-            format: 'gen9ou',
-            version: '0.11.0',
-            team: 'harvested' as const,
-            customRules: [],
-            teamPool: [],
-          }],
-          submissions: [{
-            versionId: 93,
-            agentId: 1,
-            agentSlug: 'foul-play',
-            agentName: 'Foul Play',
-            version: '9.3.0',
-            package: 'oci' as const,
-            url: 'ghcr.io/pkmn/foul-play:9.3.0',
-            sha256: '3'.repeat(64),
-            ladders: [],
-            tournaments: ['93'],
-            teamsByLadder: {},
-          }],
-        }),
-        reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
-          reported.push(payload);
-          return Promise.resolve({
-            ok: true as const,
-            versionId: payload.versionId,
-            smokeStatus: payload.smokeStatus,
-            retiredByLadder: {},
-          });
-        },
-      } as unknown as serverArena.Client;
-      const tourCoord = new tournament.Coordinator({
-        client: fakeClient,
-        baselineSpec: {
-          agentId: '_baseline',
-          displayName: 'Baseline',
-          vmHost: '127.0.0.1',
-          controlSocket: '',
-          localCommand: relayBin,
-          localArgs: [root('arena', 'bin', 'baseline')],
-        },
-        rootDir: path.join(tmpDir, 'gcp-smoke-samples'),
-        prepareSubmissionRootfs: () => 1024,
-        resolveEntrantSpec: entrant => ({
-          agentId: `${entrant.agentSlug}-${entrant.versionId}`,
-          displayName: entrant.agentName,
-          vmHost: '127.0.0.1',
-          controlSocket: '',
-          localCommand: relayBin,
-          localArgs: [defaultAgentScript],
-        }),
+      const h = createTournamentSmokeHarness({
+        id: '93',
+        versionId: 93,
+        version: '9.3.0',
+        format: 'gen9ou',
+        team: 'harvested',
+        rootName: 'gcp-smoke-samples',
       });
-      expect(await tourCoord.processPendingSubmissions('93')).toBe(1);
-      expect(reported).toHaveLength(1);
-      expect(reported[0].smokeStatus).toBe('passed');
+      seedSampleTeams(h.rootDir, 'gen9ou', [OU_TEAM_ONE, OU_TEAM_TWO]);
+      expect(await h.coord.processPendingSubmissions('93')).toBe(1);
+      expect(h.reported).toHaveLength(1);
+      expect(h.reported[0].smokeStatus).toBe('passed');
     });
 
-  test('TournamentCoordinator fails harvested smoke test without falling back to harvested pool',
+  test('TournamentCoordinator aborts harvested smoke test without falling back to harvested pool',
     async () => {
-      const reported: serverArena.SubmissionStatusPayload[] = [];
-      const fakeClient = {
-        getPendingSubmissions: () => Promise.resolve({
-          ladders: [],
-          tournaments: [{
-            id: '94',
-            format: 'gen9customgame',
-            version: '0.11.0',
-            team: 'harvested' as const,
-            customRules: [],
-            teamPool: [TEAM_ONE, TEAM_TWO],
-          }],
-          submissions: [{
-            versionId: 94,
-            agentId: 1,
-            agentSlug: 'foul-play',
-            agentName: 'Foul Play',
-            version: '9.4.0',
-            package: 'oci' as const,
-            url: 'ghcr.io/pkmn/foul-play:9.4.0',
-            sha256: '4'.repeat(64),
-            ladders: [],
-            tournaments: ['94'],
-            teamsByLadder: {},
-          }],
-        }),
-        reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
-          reported.push(payload);
-          return Promise.resolve({
-            ok: true as const,
-            versionId: payload.versionId,
-            smokeStatus: payload.smokeStatus,
-            retiredByLadder: {},
-          });
-        },
-      } as unknown as serverArena.Client;
-      const tourCoord = new tournament.Coordinator({
-        client: fakeClient,
-        baselineSpec: {
-          agentId: '_baseline',
-          displayName: 'Baseline',
-          vmHost: '127.0.0.1',
-          controlSocket: '',
-          localCommand: relayBin,
-          localArgs: [root('arena', 'bin', 'baseline')],
-        },
-        rootDir: path.join(tmpDir, 'gcp-smoke-no-fallback'),
-        prepareSubmissionRootfs: () => 1024,
-        resolveEntrantSpec: entrant => ({
-          agentId: `${entrant.agentSlug}-${entrant.versionId}`,
-          displayName: entrant.agentName,
-          vmHost: '127.0.0.1',
-          controlSocket: '',
-          localCommand: relayBin,
-          localArgs: [defaultAgentScript],
-        }),
+      const h = createTournamentSmokeHarness({
+        id: '94',
+        versionId: 94,
+        version: '9.4.0',
+        format: 'gen9customgame',
+        team: 'harvested',
+        teamPool: [TEAM_ONE, TEAM_TWO],
+        rootName: 'gcp-smoke-no-fallback',
       });
-      expect(await tourCoord.processPendingSubmissions('94')).toBe(1);
-      expect(reported).toHaveLength(1);
-      expect(reported[0].smokeStatus).toBe('failed');
-      expect(reported[0].smokeError).toContain('missing sample team pool');
+      await expect(h.coord.processPendingSubmissions('94')).rejects.toThrow(
+        /missing sample team pool/
+      );
+      expect(h.reported).toEqual([]);
+      expect(h.alerts).toHaveLength(1);
+      expect(h.alerts[0].key).toBe('tourney-smoke-infra');
+      expect(h.alerts[0].detail).toContain('missing sample team pool');
     });
 });
