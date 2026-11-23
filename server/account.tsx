@@ -10,7 +10,9 @@ import type * as db from '../db';
 import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import * as util from '../static/util';
 
+import type * as arena from './arena';
 import {Auth, REGISTER_ISSUE_URL, isCrossSiteRequest} from './auth';
+import {buildAiPanelClientJs, renderAiPanelHtml} from './render';
 import * as serverTeams from './teams';
 
 const GITHUB_RELEASE_ASSET_API_RE = /^\/repos\/[^/]+\/[^/]+\/releases\/assets\/\d+$/;
@@ -395,6 +397,301 @@ const ACCOUNT_SCRIPT = `
       });
     }
 
+    ${buildAiPanelClientJs()}
+
+    const SPEED_KEY = 'pkmn-viewer-speed';
+    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
+
+    const postToFrame = (frameEl, msg) => {
+      if (frameEl && frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage(msg, '*');
+      }
+    };
+
+    const syncFramePrefs = frameEl => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      postToFrame(frameEl, {type: 'theme', dark});
+      try {
+        const saved = localStorage.getItem(SPEED_KEY);
+        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
+          postToFrame(frameEl, {type: 'speed', speed: saved});
+        }
+      } catch {}
+    };
+
+    const renderDiagReplayAi = (slot, activeTurn) => {
+      const panel = slot && slot.querySelector('.replay-ai-panel');
+      if (!panel) return;
+      const tele = Array.isArray(slot._aiTelemetry) ? slot._aiTelemetry : [];
+      if (tele.length === 0) {
+        panel.innerHTML = '';
+        panel.classList.add('hide');
+        return;
+      }
+      let snap = tele[0];
+      const target = typeof activeTurn === 'number' ? activeTurn : tele[0].turn;
+      for (let i = 0; i < tele.length; i++) {
+        if (tele[i].turn <= target) snap = tele[i];
+      }
+      const winHistory = [];
+      for (let i = 0; i < tele.length; i++) {
+        const p1w = tele[i].p1 && typeof tele[i].p1.win === 'number' ? tele[i].p1.win : undefined;
+        const p2w = tele[i].p2 && typeof tele[i].p2.win === 'number' ? tele[i].p2.win : undefined;
+        if (p1w !== undefined || p2w !== undefined) {
+          winHistory.push({turn: tele[i].turn, p1: p1w, p2: p2w});
+        }
+      }
+      const html = renderAiPanelHtml(
+        slot._p1Name || 'P1',
+        slot._p2Name || 'P2',
+        snap.p1,
+        snap.p2,
+        winHistory,
+        {activeTurn: snap.turn, interactive: true}
+      );
+      panel.innerHTML = html;
+      panel.classList.toggle('hide', !html);
+    };
+
+    const liveBox = document.getElementById('live-diagnostic');
+    const liveFrame = document.getElementById('diag-live-frame');
+    let liveReady = false;
+    let liveLinesSent = 0;
+    let livePendingLines = [];
+
+    const flushLiveLines = lines => {
+      if (!liveFrame || !Array.isArray(lines) || lines.length === 0) return;
+      livePendingLines = lines;
+      if (!liveFrame.getAttribute('src')) {
+        liveFrame.setAttribute('src', '/arena/viewer/');
+        return;
+      }
+      if (!liveReady) return;
+      if (liveLinesSent === 0 || lines.length < liveLinesSent) {
+        postToFrame(liveFrame, {type: 'load', lines, live: true, side: 'p1'});
+      } else if (lines.length > liveLinesSent) {
+        postToFrame(liveFrame, {type: 'append', lines: lines.slice(liveLinesSent)});
+      }
+      liveLinesSent = lines.length;
+    };
+
+    window.addEventListener('message', ev => {
+      const data = ev.data;
+      if (!data || typeof data !== 'object') return;
+      const frames = document.querySelectorAll('iframe.viewer-frame');
+      let fromViewer = false;
+      for (let i = 0; i < frames.length; i++) {
+        if (ev.source === frames[i].contentWindow) {
+          fromViewer = true;
+          break;
+        }
+      }
+      if (!fromViewer) return;
+      if (
+        data.type === 'speed' &&
+        typeof data.speed === 'string' &&
+        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
+      ) {
+        try {
+          localStorage.setItem(SPEED_KEY, data.speed);
+        } catch {}
+        return;
+      }
+      if (liveFrame && ev.source === liveFrame.contentWindow && data.type === 'ready') {
+        liveReady = true;
+        liveLinesSent = 0;
+        syncFramePrefs(liveFrame);
+        if (livePendingLines.length > 0) flushLiveLines(livePendingLines);
+        return;
+      }
+      if (data.type === 'playback' && typeof data.turn === 'number') {
+        document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
+          const f = slot.querySelector('iframe.replay-viewer-frame');
+          if (f && ev.source === f.contentWindow) renderDiagReplayAi(slot, data.turn);
+        });
+        return;
+      }
+      if (data.type !== 'ready') return;
+      document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
+        const f = slot.querySelector('iframe.replay-viewer-frame');
+        if (f && ev.source === f.contentWindow) {
+          slot._viewerReady = true;
+          syncFramePrefs(f);
+          if (Array.isArray(slot._pendingLines) && slot._pendingLines.length > 0) {
+            postToFrame(f, {
+              type: 'load',
+              lines: slot._pendingLines,
+              live: false,
+              side: 'p1',
+            });
+          }
+        }
+      });
+    });
+
+    if (liveBox && typeof EventSource === 'function') {
+      const titleEl = document.getElementById('diag-live-title');
+      const metaEl = document.getElementById('diag-live-meta');
+      const aiEl = document.getElementById('diag-live-ai');
+      const es = new EventSource('/api/account/diagnostic/stream');
+      es.addEventListener('diagnostic', ev => {
+        try {
+          const snap = JSON.parse(ev.data);
+          liveBox.classList.remove('hide');
+          if (titleEl) {
+            titleEl.textContent = snap.version + ' — ' + snap.targetName + ' (' + snap.format + ')';
+          }
+          if (metaEl) {
+            const p1Bank = Math.max(0, Math.round(snap.p1.bankSeconds || 0));
+            const p2Bank = Math.max(0, Math.round(snap.p2.bankSeconds || 0));
+            metaEl.textContent = 'Turn ' + snap.turn + ' · P1 ' + p1Bank + 's · P2 ' + p2Bank + 's';
+          }
+          if (aiEl) {
+            const html = renderAiPanelHtml(
+              snap.p1.name || 'P1',
+              snap.p2.name || 'P2',
+              snap.p1.info,
+              snap.p2.info,
+              snap.winHistory,
+              {interactive: false}
+            );
+            aiEl.innerHTML = html;
+            aiEl.classList.toggle('hide', !html);
+          }
+          if (Array.isArray(snap.lines) && snap.lines.length > 0) {
+            flushLiveLines(snap.lines);
+          }
+        } catch {}
+      });
+      es.addEventListener('done', () => {
+        es.close();
+        window.location.reload();
+      });
+    }
+
+    document.querySelectorAll('.staged-action-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const versionId = btn.getAttribute('data-version-id');
+        const action = btn.getAttribute('data-action');
+        if (!versionId || !action) return;
+        if (action === 'discard') {
+          const ok = window.confirm(
+            'Discard this staged version? It will not enter any ladder or tournament, ' +
+            'counts toward the 3-per-24h retry limit, and restores any staged VGC teams to saved.'
+          );
+          if (!ok) return;
+        }
+        const box = btn.closest('.staged-box');
+        const feedback = box ? box.querySelector('.staged-feedback') : null;
+        const buttons = box ? box.querySelectorAll('.staged-action-btn') : [btn];
+        buttons.forEach(b => { b.disabled = true; });
+        if (feedback) {
+          feedback.className = 'staged-feedback muted';
+          feedback.textContent = action === 'activate' ? 'Activating…' : 'Discarding…';
+        }
+        try {
+          const res = await fetch('/api/account/versions/' + versionId + '/' + action, {
+            method: 'POST',
+            headers: {Accept: 'application/json'},
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            if (feedback) {
+              feedback.className = 'staged-feedback no';
+              feedback.textContent = data.error || ('Action failed (' + res.status + ')');
+            }
+            buttons.forEach(b => { b.disabled = false; });
+            return;
+          }
+          window.location.reload();
+        } catch {
+          if (feedback) {
+            feedback.className = 'staged-feedback no';
+            feedback.textContent = 'Network error updating version.';
+          }
+          buttons.forEach(b => { b.disabled = false; });
+        }
+      });
+    });
+
+    document.querySelectorAll('.diag-replay-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const diagId = btn.getAttribute('data-diag-id');
+        if (!diagId) return;
+        const hostRow = btn.closest('tr');
+        if (!hostRow || !hostRow.parentNode) return;
+        const existing = hostRow.nextElementSibling;
+        if (
+          existing &&
+          existing.classList.contains('diag-replay-row') &&
+          existing.getAttribute('data-diag-id') === diagId
+        ) {
+          existing.remove();
+          return;
+        }
+        if (existing && existing.classList.contains('diag-replay-row')) {
+          existing.remove();
+        }
+        const detailRow = document.createElement('tr');
+        detailRow.className = 'diag-replay-row';
+        detailRow.setAttribute('data-diag-id', diagId);
+        const td = document.createElement('td');
+        td.colSpan = 6;
+        const wrap = document.createElement('div');
+        wrap.className = 'diag-replay-wrap';
+        wrap.innerHTML = '<div class="muted">Loading diagnostic replay…</div>';
+        td.appendChild(wrap);
+        detailRow.appendChild(td);
+        hostRow.parentNode.insertBefore(detailRow, hostRow.nextSibling);
+        try {
+          const res = await fetch('/api/account/diagnostics/' + diagId + '/log', {
+            headers: {Accept: 'application/json'},
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const data = await res.json();
+          const lines = Array.isArray(data.lines) ? data.lines : [];
+          wrap._pendingLines = lines;
+          wrap._p1Name = data.p1Name || 'P1';
+          wrap._p2Name = data.p2Name || 'P2';
+          wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
+          const metaParts = [data.format, data.turns + ' turns', data.endReason];
+          if (typeof data.p1CpuCores === 'number') {
+            metaParts.push('P1 ' + data.p1CpuCores.toFixed(1) + 'c');
+          }
+          if (typeof data.p2CpuCores === 'number') {
+            metaParts.push('P2 ' + data.p2CpuCores.toFixed(1) + 'c');
+          }
+          wrap.innerHTML =
+            '<div class="diag-replay-head">' +
+              '<span>' + escAi(metaParts.join(' · ')) + '</span>' +
+              '<button type="button" class="link-btn diag-close-btn">Close</button>' +
+            '</div>' +
+            '<div class="ai-panel replay-ai-panel hide"></div>' +
+            '<div class="viewer-wrap">' +
+              '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
+                'title="Diagnostic replay viewer" sandbox="allow-scripts"></iframe>' +
+            '</div>';
+          wrap.querySelector('.diag-close-btn').addEventListener('click', () => {
+            detailRow.remove();
+          });
+          wrap.addEventListener('click', ev => {
+            const hit = ev.target && ev.target.closest
+              ? ev.target.closest('[data-seek-turn]')
+              : null;
+            if (!hit) return;
+            const turn = Number(hit.getAttribute('data-seek-turn'));
+            if (!Number.isFinite(turn)) return;
+            const f = wrap.querySelector('iframe.replay-viewer-frame');
+            if (f) postToFrame(f, {type: 'seek', turn});
+            renderDiagReplayAi(wrap, turn);
+          });
+          renderDiagReplayAi(wrap, 0);
+        } catch {
+          wrap.innerHTML = '<div class="no">Failed to load diagnostic replay.</div>';
+        }
+      });
+    });
+
     ${util.TABLE_PAGER_SCRIPT}
   });
 `;
@@ -402,6 +699,7 @@ const ACCOUNT_SCRIPT = `
 export interface Options {
   db: db.Database;
   auth: Auth;
+  arena?: arena.Handle;
   poolsByLadder?: Map<string, string[]>;
   rateLimitMaxAttempts?: number;
   now?: () => number;
@@ -515,6 +813,196 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
   );
 }
 
+function renderLiveDiagnosticSection(
+  liveDiagnostic: arena.LiveDiagnostic | undefined,
+  hasPending: boolean
+): util.Child {
+  if (!liveDiagnostic && !hasPending) return undefined;
+  const aiHtml = liveDiagnostic
+    ? renderAiPanelHtml(
+      liveDiagnostic.p1.name,
+      liveDiagnostic.p2.name,
+      liveDiagnostic.p1.info,
+      liveDiagnostic.p2.info,
+      liveDiagnostic.winHistory,
+      {interactive: false}
+    )
+    : '';
+  return (
+    <section
+      id='live-diagnostic'
+      className={liveDiagnostic ? 'live-diag-box' : 'live-diag-box hide'}
+    >
+      <div className='live-diag-head'>
+        <strong id='diag-live-title'>
+          {liveDiagnostic
+            ? `${liveDiagnostic.version} — ${liveDiagnostic.targetName} (${liveDiagnostic.format})`
+            : 'Live Diagnostic'}
+        </strong>
+        <span id='diag-live-meta' className='muted'>
+          {liveDiagnostic
+            ? `Turn ${liveDiagnostic.turn} · ` +
+              `P1 ${Math.max(0, Math.round(liveDiagnostic.p1.bankSeconds))}s · ` +
+              `P2 ${Math.max(0, Math.round(liveDiagnostic.p2.bankSeconds))}s`
+            : 'Waiting for diagnostic run…'}
+        </span>
+      </div>
+      <div id='diag-live-ai' className={aiHtml ? 'ai-panel' : 'ai-panel hide'}>
+        {aiHtml ? util.raw(aiHtml) : undefined}
+      </div>
+      <div className='viewer-wrap'>
+        <iframe
+          id='diag-live-frame'
+          className='viewer-frame'
+          src={liveDiagnostic ? '/arena/viewer/' : undefined}
+          title='Live diagnostic battle viewer'
+          sandbox='allow-scripts'
+        />
+      </div>
+    </section>
+  );
+}
+
+function formatSmokeStatsText(v: db.VersionHistoryView): string | undefined {
+  const statsParts: string[] = [];
+  if (v.smokeDurationMillis !== undefined) {
+    statsParts.push(`${(v.smokeDurationMillis / 1000).toFixed(1)}s`);
+  }
+  if (v.smokeInitMillis !== undefined) {
+    statsParts.push(`${v.smokeInitMillis}ms init`);
+  }
+  if (v.smokeTeamPreviewMillis !== undefined) {
+    statsParts.push(`${v.smokeTeamPreviewMillis}ms team`);
+  }
+  if (v.smokeTurnMillis !== undefined) {
+    statsParts.push(`${v.smokeTurnMillis}ms/turn`);
+  }
+  if (v.smokePeakRam !== undefined) {
+    statsParts.push(`${v.smokePeakRam.toLocaleString('en-US')} MiB`);
+  }
+  return statsParts.length > 0 ? statsParts.join(' · ') : undefined;
+}
+
+function renderStagedSection(opts: {
+  versions: db.VersionHistoryView[];
+  ladderNameById: Map<string, string>;
+  openLadderIds: ReadonlySet<string>;
+  tournamentById: Map<string, db.TournamentSubmissionStatus>;
+  now: number;
+}): util.Child {
+  const staged = opts.versions.filter(v => v.smokeStatus === 'staged');
+  if (!staged.length) return undefined;
+
+  return (
+    <section id='staged-review'>
+      <h3><a href='#staged-review' className='subtle'>Awaiting Activation</a></h3>
+      {staged.map(v => {
+        const targets = [
+          ...v.ladders.map(id => opts.ladderNameById.get(id) ?? id),
+          ...(v.tournamentNames ?? []),
+        ];
+        const statsText = formatSmokeStatsText(v);
+        let activateDisabledReason: string | undefined;
+        if (v.ladders.length > 0 && !v.ladders.some(id => opts.openLadderIds.has(id))) {
+          activateDisabledReason = 'All target ladders for this version have closed.';
+        } else if (v.tournaments.length > 0) {
+          for (const tid of v.tournaments) {
+            const ts = opts.tournamentById.get(tid);
+            if (!ts || opts.now >= ts.closesAt) {
+              activateDisabledReason = ts
+                ? `Entries for ${ts.name} closed at ${util.formatUtcDateTime(ts.closesAt)}.`
+                : 'Target tournament is no longer open for entries.';
+              break;
+            }
+          }
+        }
+        return (
+          <div className='staged-box' data-version-id={v.id}>
+            <div className='staged-head'>
+              <span>
+                <strong><code>{v.version}</code></strong> passed diagnostic testing on{' '}
+                <tt>{targets.join(', ')}</tt>
+                {statsText && <> <span className='muted'>({statsText})</span></>}
+              </span>
+              <div className='staged-actions'>
+                <button
+                  type='button'
+                  className='btn staged-action-btn'
+                  data-version-id={v.id}
+                  data-action='activate'
+                  disabled={Boolean(activateDisabledReason)}
+                  title={activateDisabledReason}
+                >
+                  Activate
+                </button>
+                <button
+                  type='button'
+                  className='btn btn-secondary staged-action-btn'
+                  data-version-id={v.id}
+                  data-action='discard'
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+            <div className='staged-meta muted'>
+              Review the diagnostic replay and <tt>stderr</tt> log in History below before putting
+              this version live. Activating starts the 14-day ladder cooldown; discarding counts
+              toward the 3-per-24h retry limit.
+            </div>
+            {v.diagnostics && v.diagnostics.length > 0 && (
+              <div className='diag-links'>
+                {v.diagnostics.map(d => (
+                  <span>
+                    <tt>{d.format}</tt> ({d.turns}t · {d.endReason})
+                    {d.hasStderr && (
+                      <> · <a href={`/api/account/diagnostics/${d.id}/stderr`}>stderr</a></>
+                    )}
+                    {d.hasLog && (
+                      <> · <a href={`/api/account/diagnostics/${d.id}/log?download=1`}>.log</a></>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className='staged-feedback hide' />
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function renderDiagnosticLinks(diagnostics?: db.SmokeDiagnosticSummary[]): util.Child {
+  if (!diagnostics?.length) return undefined;
+  return (
+    <div className='diag-links'>
+      {diagnostics.map(d => (
+        <span>
+          {d.hasLog && (
+            <button
+              type='button'
+              className='link-btn diag-replay-btn'
+              data-diag-id={d.id}
+            >
+              Replay ({d.format} · {d.turns}t)
+            </button>
+          )}
+          {d.hasStderr && (
+            <>
+              {d.hasLog ? ' · ' : ''}
+              <a href={`/api/account/diagnostics/${d.id}/stderr`}>stderr</a>
+            </>
+          )}
+          {d.hasLog && (
+            <> · <a href={`/api/account/diagnostics/${d.id}/log?download=1`}>.log</a></>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function renderHistorySection(
   versions: db.VersionHistoryView[],
   ladderNameById: Map<string, string>
@@ -587,29 +1075,20 @@ function renderHistorySection(
                     {queueText && <> <span className='muted'>({queueText})</span></>}
                   </>
                 );
-              } else if (v.smokeStatus === 'passed') {
-                const statsParts: string[] = [];
-                if (v.smokeDurationMillis !== undefined) {
-                  statsParts.push(`${(v.smokeDurationMillis / 1000).toFixed(1)}s`);
-                }
-                if (v.smokeInitMillis !== undefined) {
-                  statsParts.push(`${v.smokeInitMillis}ms init`);
-                }
-                if (v.smokeTeamPreviewMillis !== undefined) {
-                  statsParts.push(`${v.smokeTeamPreviewMillis}ms team`);
-                }
-                if (v.smokeTurnMillis !== undefined) {
-                  statsParts.push(`${v.smokeTurnMillis}ms/turn`);
-                }
-                if (v.smokePeakRam !== undefined) {
-                  statsParts.push(`${v.smokePeakRam.toLocaleString('en-US')} MiB`);
-                }
+              } else if (
+                v.smokeStatus === 'passed' ||
+                v.smokeStatus === 'staged' ||
+                v.smokeStatus === 'discarded'
+              ) {
+                const statsText = formatSmokeStatsText(v);
                 smokeCell = (
                   <>
-                    {isRetired ? <span>PASS</span> : <span className='yes'>PASS</span>}
-                    {statsParts.length > 0 && (
-                      <> <span className='muted'>({statsParts.join(' · ')})</span></>
-                    )}
+                    {isRetired || v.smokeStatus === 'discarded'
+                      ? <span>PASS</span>
+                      : <span className='yes'>PASS</span>}
+                    {v.smokeStatus === 'staged' && <> <span className='muted'>(staged)</span></>}
+                    {statsText && <> <span className='muted'>({statsText})</span></>}
+                    {renderDiagnosticLinks(v.diagnostics)}
                   </>
                 );
               } else {
@@ -624,6 +1103,7 @@ function renderHistorySection(
                         <pre><code>{v.smokeError}</code></pre>
                       </details>
                     )}
+                    {renderDiagnosticLinks(v.diagnostics)}
                   </>
                 );
               }
@@ -631,6 +1111,10 @@ function renderHistorySection(
               let stateCell: util.Child;
               if (v.smokeStatus === 'pending') {
                 stateCell = <span className='muted'>Pending</span>;
+              } else if (v.smokeStatus === 'staged') {
+                stateCell = <a href='#staged-review'><strong>Staged</strong></a>;
+              } else if (v.smokeStatus === 'discarded') {
+                stateCell = <span className='muted'>Discarded</span>;
               } else if (v.smokeStatus === 'failed') {
                 stateCell = <span className='muted'>Rejected</span>;
               } else if (v.smokeStatus === 'quarantined') {
@@ -648,7 +1132,7 @@ function renderHistorySection(
               }
 
               const classes: string[] = [];
-              if (isRetired) classes.push('secondary');
+              if (isRetired || v.smokeStatus === 'discarded') classes.push('secondary');
               if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
 
               return (
@@ -698,6 +1182,7 @@ export function renderAccountPage(opts: {
   versions: db.VersionHistoryView[];
   allLadders: db.LadderRow[];
   liveTournament?: {id: string; name: string};
+  liveDiagnostic?: arena.LiveDiagnostic;
   now?: number;
 }): string {
   const {
@@ -713,6 +1198,7 @@ export function renderAccountPage(opts: {
     versions,
     allLadders,
     liveTournament,
+    liveDiagnostic,
     now = Math.floor(Date.now() / 1000),
   } = opts;
 
@@ -810,6 +1296,11 @@ export function renderAccountPage(opts: {
   }
 
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
+  const openLadderIds = new Set(
+    currentLadders.filter(l => l.status === 'upcoming' || l.status === 'active').map(l => l.id)
+  );
+  const tournamentById = new Map(tournamentStatuses.map(t => [t.tournamentId, t]));
+  const hasPending = versions.some(v => v.smokeStatus === 'pending');
   const content = (
     <>
       <div className='account-bar' id='account'>
@@ -839,6 +1330,16 @@ export function renderAccountPage(opts: {
           <button type='submit' className='link-btn'>Logout</button>
         </form>
       </div>
+
+      {renderLiveDiagnosticSection(liveDiagnostic, hasPending)}
+
+      {renderStagedSection({
+        versions,
+        ladderNameById,
+        openLadderIds,
+        tournamentById,
+        now,
+      })}
 
       {renderActiveSection(activeEntries)}
 
@@ -941,11 +1442,13 @@ export function renderAccountPage(opts: {
                       const badge = t.enteredVersion
                         ? `entered: ${t.enteredVersion}`
                         : pendingBadge ?? (
-                          t.nextEligibleAt !== undefined
-                            ? `retry after ${util.formatUtcDateTime(t.nextEligibleAt)}`
-                            : now >= t.closesAt
-                              ? 'entries closed'
-                              : 'closed'
+                          t.stagedVersion
+                            ? `staged: ${t.stagedVersion}`
+                            : t.nextEligibleAt !== undefined
+                              ? `retry after ${util.formatUtcDateTime(t.nextEligibleAt)}`
+                              : now >= t.closesAt
+                                ? 'entries closed'
+                                : 'closed'
                         );
                       return (
                         <label className='upcoming' title={t.reason}>
@@ -1330,6 +1833,7 @@ export function register(app: polka.Polka, options: Options) {
     }
     const activeEntries = db.getActiveEntriesForAgent(agent.id);
     const versions = db.getVersionsForAgent(agent.id);
+    const liveDiagnostic = options.arena?.getLiveDiagnostic(agent.id);
 
     if (wantsJson) {
       const needsTeamsIds = new Set(needsTeamsLadders.map(l => l.id));
@@ -1365,6 +1869,18 @@ export function register(app: polka.Polka, options: Options) {
           remainingTeams: savedTeamsJson[l.id]?.remainingCount ?? 0,
         })),
         activeEntries,
+        ...(liveDiagnostic
+          ? {
+            liveDiagnostic: {
+              versionId: liveDiagnostic.versionId,
+              version: liveDiagnostic.version,
+              format: liveDiagnostic.format,
+              targetName: liveDiagnostic.targetName,
+              turn: liveDiagnostic.turn,
+              updatedAt: liveDiagnostic.updatedAt,
+            },
+          }
+          : {}),
         versions: versions.map(v => ({
           id: v.id,
           version: v.version,
@@ -1383,6 +1899,27 @@ export function register(app: polka.Polka, options: Options) {
             peakRam: v.smokePeakRam,
             error: v.smokeError,
           },
+          ...(v.diagnostics?.length
+            ? {
+              diagnostics: v.diagnostics.map(d => ({
+                id: d.id,
+                format: d.format,
+                ...(d.ladderId !== undefined ? {ladderId: d.ladderId} : {}),
+                ...(d.tournamentId !== undefined ? {tournamentId: d.tournamentId} : {}),
+                turns: d.turns,
+                endReason: d.endReason,
+                durationMillis: d.durationMillis,
+                hasStderr: d.hasStderr,
+                logHref: `/api/account/diagnostics/${d.id}/log`,
+                downloadLogHref: `/api/account/diagnostics/${d.id}/log?download=1`,
+                ...(d.hasStderr ? {stderrHref: `/api/account/diagnostics/${d.id}/stderr`} : {}),
+                ...(d.p1CpuCores !== undefined ? {p1CpuCores: d.p1CpuCores} : {}),
+                ...(d.p2CpuCores !== undefined ? {p2CpuCores: d.p2CpuCores} : {}),
+                ...(d.p1PeakRam !== undefined ? {p1PeakRam: d.p1PeakRam} : {}),
+                ...(d.p2PeakRam !== undefined ? {p2PeakRam: d.p2PeakRam} : {}),
+              })),
+            }
+            : {}),
           submittedAt: v.submittedAt,
           activatedAt: v.activatedAt,
           activeLadderNames: v.activeLadderNames,
@@ -1405,6 +1942,7 @@ export function register(app: polka.Polka, options: Options) {
       versions,
       allLadders: db.getLadders(),
       liveTournament,
+      liveDiagnostic,
       now,
     });
     sendHtml(res, 200, html);
@@ -1413,6 +1951,204 @@ export function register(app: polka.Polka, options: Options) {
   app.get('/account', (req, res) => handleGetAccount(req, res, false));
   app.get('/account.json', (req, res) => handleGetAccount(req, res, true));
   app.get('/account/index.json', (req, res) => handleGetAccount(req, res, true));
+
+  const requireAccountSession = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): {developer: db.DeveloperRow; agent: db.AgentRow} | undefined => {
+    const login = auth.getGitHubUser(req);
+    if (!login) {
+      sendJson(res, 401, {error: 'GitHub authentication required.'});
+      return undefined;
+    }
+    const developer = db.getDeveloperByGitHub(login);
+    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
+    if (!developer || !agent || agent.status === 'disabled') {
+      sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
+      return undefined;
+    }
+    return {developer, agent};
+  };
+
+  const parsePositiveIntParam = (raw: string | string[] | undefined): number | undefined => {
+    const val = Array.isArray(raw) ? raw[0] : raw;
+    if (!val || !/^\d+$/.test(val)) return undefined;
+    const n = Number(val);
+    return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+  };
+
+  const safeAttachmentToken = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, '-');
+
+  app.get('/api/account/diagnostic/stream', (req, res) => {
+    const session = requireAccountSession(req, res);
+    if (!session) return;
+    if (options.arena) {
+      options.arena.subscribeDiagnostic(session.agent.id, req, res);
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'private, no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(`event: idle\ndata: ${JSON.stringify({agentId: session.agent.id})}\n\n`);
+    res.end();
+  });
+
+  app.get('/api/account/diagnostics/:id/log', (req, res) => {
+    const session = requireAccountSession(req, res);
+    if (!session) return;
+    const id = parsePositiveIntParam(req.params.id);
+    if (id === undefined) {
+      sendJson(res, 400, {error: 'Invalid diagnostic ID.'});
+      return;
+    }
+    const diag = db.getSmokeDiagnosticById(id);
+    if (!diag) {
+      sendJson(res, 404, {error: 'Diagnostic log not found.'});
+      return;
+    }
+    if (diag.agentId !== session.agent.id) {
+      sendJson(res, 403, {error: 'Forbidden.'});
+      return;
+    }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    if (url.searchParams.get('download') === '1') {
+      const filename = [
+        safeAttachmentToken(session.agent.slug),
+        safeAttachmentToken(diag.version),
+        safeAttachmentToken(diag.format),
+      ].join('-') + '.log';
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Cache-Control': 'private, no-store',
+      });
+      res.end(diag.battleLog);
+      return;
+    }
+    sendJson(res, 200, {
+      id: diag.id,
+      versionId: diag.versionId,
+      version: diag.version,
+      format: diag.format,
+      turns: diag.turns,
+      endReason: diag.endReason,
+      durationMillis: diag.durationMillis,
+      p1Name: `${session.agent.name} (P1)`,
+      p2Name: `${session.agent.name} (P2)`,
+      lines: diag.battleLog.split('\n').filter(Boolean),
+      ...(diag.p1CpuCores !== undefined ? {p1CpuCores: diag.p1CpuCores} : {}),
+      ...(diag.p2CpuCores !== undefined ? {p2CpuCores: diag.p2CpuCores} : {}),
+      ...(diag.p1PeakRam !== undefined ? {p1PeakRam: diag.p1PeakRam} : {}),
+      ...(diag.p2PeakRam !== undefined ? {p2PeakRam: diag.p2PeakRam} : {}),
+    });
+  });
+
+  app.get('/api/account/diagnostics/:id/stderr', (req, res) => {
+    const session = requireAccountSession(req, res);
+    if (!session) return;
+    const id = parsePositiveIntParam(req.params.id);
+    if (id === undefined) {
+      sendJson(res, 400, {error: 'Invalid diagnostic ID.'});
+      return;
+    }
+    const diag = db.getSmokeDiagnosticById(id);
+    if (!diag) {
+      sendJson(res, 404, {error: 'Diagnostic stderr not found.'});
+      return;
+    }
+    if (diag.agentId !== session.agent.id) {
+      sendJson(res, 403, {error: 'Forbidden.'});
+      return;
+    }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const slot = url.searchParams.get('slot');
+    let body: string;
+    let slotSuffix = '';
+    if (slot === 'p1') {
+      body = diag.p1Stderr ?? '';
+      slotSuffix = '-p1';
+    } else if (slot === 'p2') {
+      body = diag.p2Stderr ?? '';
+      slotSuffix = '-p2';
+    } else {
+      const sections: string[] = [];
+      if (diag.p1Stderr) sections.push(`=== P1 stderr ===\n${diag.p1Stderr}`);
+      if (diag.p2Stderr) sections.push(`=== P2 stderr ===\n${diag.p2Stderr}`);
+      body = sections.join('\n\n');
+    }
+    const filename = [
+      safeAttachmentToken(session.agent.slug),
+      safeAttachmentToken(diag.version),
+      safeAttachmentToken(diag.format),
+    ].join('-') + `${slotSuffix}-stderr.txt`;
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'private, no-store',
+    });
+    res.end(body);
+  });
+
+  app.post('/api/account/versions/:id/activate', (req, res) => {
+    if (isCrossSiteRequest(req)) {
+      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
+      return;
+    }
+    const session = requireAccountSession(req, res);
+    if (!session) return;
+    const versionId = parsePositiveIntParam(req.params.id);
+    if (versionId === undefined) {
+      sendJson(res, 400, {error: 'Invalid version ID.'});
+      return;
+    }
+    try {
+      const result = db.activateStagedVersion({
+        versionId,
+        agentId: session.agent.id,
+        now: getNow(),
+      });
+      sendJson(res, 200, {
+        ok: true,
+        versionId: result.version.id,
+        smokeStatus: result.version.smokeStatus,
+        activatedAt: result.version.activatedAt,
+        retiredByLadder: result.retiredByLadder,
+      });
+    } catch (err: any) {
+      sendJson(res, err?.status ?? 500, {error: err?.message || 'Activation failed.'});
+    }
+  });
+
+  app.post('/api/account/versions/:id/discard', (req, res) => {
+    if (isCrossSiteRequest(req)) {
+      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
+      return;
+    }
+    const session = requireAccountSession(req, res);
+    if (!session) return;
+    const versionId = parsePositiveIntParam(req.params.id);
+    if (versionId === undefined) {
+      sendJson(res, 400, {error: 'Invalid version ID.'});
+      return;
+    }
+    try {
+      const updated = db.discardStagedVersion({
+        versionId,
+        agentId: session.agent.id,
+        now: getNow(),
+      });
+      sendJson(res, 200, {
+        ok: true,
+        versionId: updated.id,
+        smokeStatus: updated.smokeStatus,
+      });
+    } catch (err: any) {
+      sendJson(res, err?.status ?? 500, {error: err?.message || 'Discard failed.'});
+    }
+  });
 
   app.post('/api/submissions', async (req, res) => {
     if (isCrossSiteRequest(req)) {

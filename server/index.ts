@@ -255,7 +255,6 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       db,
       getArenaLastContactAt: () => getArenaLastContactAt(),
     });
-  account.register(app, {db, auth: wikiInstance.auth});
   let notifyAdminHeartbeat = () => {};
   const arenaHandle = arena.register(app, {
     db,
@@ -288,6 +287,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       if (reason === 'tournament-status') syncBannerFor(db, publicDir);
     },
   });
+  account.register(app, {db, auth: wikiInstance.auth, arena: arenaHandle});
   getArenaLastContactAt = () => arenaHandle.getState().lastContactAt;
   const adminHandle = admin.register(app, {
     db,

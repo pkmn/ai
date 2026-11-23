@@ -3050,13 +3050,13 @@ describe('JSON route parity & retired pool archives', () => {
     const jaxVer = db.getAgentLadderProfileEntries(jaxId, 'gen1ou20261109')[0].versionId;
     for (let i = 1; i <= 28; i++) {
       db.db.prepare("UPDATE ladder_entries SET role = 'retired'").run();
-      db.refundCooldown('foul-play', DAY_1 + i);
+      db.refundCooldown('foul-play', DAY_1 + i * 10);
       const vId = createVersionAndPassSmoke(
         db,
         'foul-play',
         `2.0.${i}`,
         ['gen1ou20261109'],
-        DAY_1 + i
+        DAY_1 + i * 10
       );
       playMatch(db, 'gen1ou20261109', vId, jaxVer, 'W', 'L', NOW + i);
     }

@@ -1512,6 +1512,60 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       }),
     },
     {
+      name: 'account-staged-diagnostic',
+      section: 'account',
+      title: 'Staged Diagnostic',
+      path: '/account/',
+      githubUser: 'sisyphus25',
+      click: '.diag-replay-btn',
+      setup: fixture => withSavepoint(fixture, raw => {
+        const res = raw.prepare(
+          `INSERT INTO agent_versions (
+            agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+            unpacked_bytes, smoke_status, smoke_duration_millis, smoke_init_millis,
+            smoke_turn_millis, smoke_peak_ram, submitted_at, notified
+          ) VALUES (?, '1.0.0-rc2', 'bundle',
+            'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0-rc2/agent.tar.zst',
+            ?, ?, '[]', 248000000, 'staged', 18400, 142, 34, 412, ?, 1)`
+        ).run(
+          fixture.cynthiaiId,
+          'b'.repeat(64),
+          JSON.stringify([RBY_LADDER_ID]),
+          NOW_SECONDS - 90
+        );
+        const versionId = Number(res.lastInsertRowid);
+        const log = [
+          '|player|p1|Cynthiai (P1)|1|',
+          '|player|p2|Cynthiai (P2)|1|',
+          '|gametype|singles',
+          '|gen|1',
+          '|tier|[Gen 1] OU',
+          '|start',
+          '|switch|p1a: Tauros|Tauros|353/353',
+          '|switch|p2a: Chansey|Chansey|703/703',
+          '|turn|1',
+          '|ai|p1|{"win":0.54,"depth":10,"nodes":18400,"nps":420000}',
+          '|ai|p2|{"win":0.47,"depth":9,"nodes":16100,"nps":395000}',
+          '|move|p1a: Tauros|Body Slam|p2a: Chansey',
+          '|-damage|p2a: Chansey|421/703',
+          '|move|p2a: Chansey|Thunder Wave|p1a: Tauros',
+          '|-status|p1a: Tauros|par',
+          '|turn|2',
+          '|ai|p1|{"win":0.61,"depth":11,"nodes":24500,"nps":450000}',
+          '|ai|p2|{"win":0.39,"depth":10,"nodes":21200,"nps":410000}',
+          '|win|Cynthiai (P1)',
+        ].join('\n');
+        raw.prepare(
+          `INSERT INTO smoke_diagnostics (
+            version_id, ladder_id, format, turns, end_reason, duration_millis,
+            battle_log, p1_stderr, p2_stderr, p1_cpu_cores, p2_cpu_cores,
+            p1_peak_ram, p2_peak_ram, created_at
+          ) VALUES (?, ?, 'gen1ou', 2, 'win', 18400, ?, 'init ok\nsearch depth=11',
+            'init ok\nsearch depth=10', 4.2, 4.1, 412, 398, ?)`
+        ).run(versionId, RBY_LADDER_ID, log, NOW_SECONDS - 60);
+      }),
+    },
+    {
       name: 'account-ineligible-smoke-limit',
       section: 'account',
       title: 'Smoke Limit',

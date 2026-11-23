@@ -1762,5 +1762,136 @@ describe('account routes', () => {
       expect(json.submissionStatus.queueAhead).toBe(1);
       expect(json.versions[0].smoke.queueAhead).toBe(1);
     });
+
+    test('enforces private diagnostic log/stderr auth and supports staged activate/discard',
+      async () => {
+        openLadders(['gen1ou20261109', 'gen9championsvgc2026regmc']);
+        db.setAgentLadders('0-error', ['rby', 'vgc'], currentNow);
+        db.setAgentLadders('foul-play', ['rby'], currentNow);
+
+        const zero = db.getAgentBySlug('0-error')!;
+        const v1 = db.createSubmission({
+          agentId: zero.id,
+          version: '2.1.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error-2.1.0.tar.zst',
+          sha256: SHA_A,
+          ladderIds: ['gen1ou20261109', 'gen9championsvgc2026regmc'],
+          teamsByLadder: {gen9championsvgc2026regmc: ['TeamOne', 'TeamTwo']},
+          now: currentNow,
+        });
+        db.applySubmissionStatus({
+          versionId: v1.id,
+          smokeStatus: 'staged',
+          smokeDurationMillis: 5200,
+          smokeInitMillis: 120,
+          smokeTurnMillis: 35,
+          smokePeakRam: 312,
+          diagnostics: [{
+            ladderId: 'gen1ou20261109',
+            format: 'gen1ou',
+            turns: 14,
+            endReason: 'win',
+            durationMillis: 5200,
+            battleLog: '|turn|1\n|ai|p1|{"win":0.62,"depth":8}\n|win|0 ERROR',
+            p1Stderr: 'p1 trace line',
+            p2Stderr: 'p2 trace line',
+            p1CpuCores: 3.2,
+            p2CpuCores: 3.1,
+            p1PeakRam: 312,
+            p2PeakRam: 290,
+          }],
+          now: currentNow + 30,
+        });
+        const diagId = db.getSmokeDiagnosticsForVersion(v1.id)[0].id;
+
+        // Unauthenticated and other-project developers are blocked (401 / 403).
+        expect((await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/log`)).status)
+          .toBe(401);
+        expect((await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/stderr`)).status)
+          .toBe(401);
+        expect((await realFetch(`${baseUrl}/api/account/diagnostic/stream`)).status).toBe(401);
+        expect((await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/log`, {
+          headers: {Cookie: cookieFor('pmariglia')},
+        })).status).toBe(403);
+        expect((await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/stderr`, {
+          headers: {Cookie: cookieFor('pmariglia')},
+        })).status).toBe(403);
+        expect((await realFetch(`${baseUrl}/api/account/versions/${v1.id}/activate`, {
+          method: 'POST',
+          headers: {Cookie: cookieFor('pmariglia')},
+        })).status).toBe(403);
+
+        // Owning developer sees staged activation UI, diagnostics JSON, log, and stderr downloads.
+        const html = await (await realFetch(`${baseUrl}/account`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).text();
+        expect(html).toContain('id="staged-review"');
+        expect(html).toContain('Activate');
+        expect(html).toContain('Discard');
+        expect(html).toContain(`/api/account/diagnostics/${diagId}/stderr`);
+
+        const logJson = await (await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/log`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).json() as {format: string; lines: string[]; p1CpuCores?: number};
+        expect(logJson.format).toBe('gen1ou');
+        expect(logJson.lines).toContain('|ai|p1|{"win":0.62,"depth":8}');
+        expect(logJson.p1CpuCores).toBe(3.2);
+
+        const dlRes = await realFetch(
+          `${baseUrl}/api/account/diagnostics/${diagId}/log?download=1`,
+          {headers: {Cookie: cookieFor('pre')}}
+        );
+        expect(dlRes.headers.get('content-disposition')).toContain('attachment;');
+        expect(await dlRes.text()).toContain('|win|0 ERROR');
+
+        const stderrAll = await (await realFetch(
+          `${baseUrl}/api/account/diagnostics/${diagId}/stderr`,
+          {headers: {Cookie: cookieFor('pre')}}
+        )).text();
+        expect(stderrAll).toContain('=== P1 stderr ===\np1 trace line');
+        expect(stderrAll).toContain('=== P2 stderr ===\np2 trace line');
+        expect(await (await realFetch(
+          `${baseUrl}/api/account/diagnostics/${diagId}/stderr?slot=p1`,
+          {headers: {Cookie: cookieFor('pre')}}
+        )).text()).toBe('p1 trace line');
+
+        // Cross-site POST to discard/activate is blocked with 403.
+        const crossSite = await realFetch(`${baseUrl}/api/account/versions/${v1.id}/discard`, {
+          method: 'POST',
+          headers: {Cookie: cookieFor('pre'), 'Sec-Fetch-Site': 'cross-site'},
+        });
+        expect(crossSite.status).toBe(403);
+
+        // Discard transitions to discarded and reverts VGC pending teams back to saved.
+        const discardRes = await realFetch(`${baseUrl}/api/account/versions/${v1.id}/discard`, {
+          method: 'POST',
+          headers: {Cookie: cookieFor('pre'), Accept: 'application/json'},
+        });
+        expect(discardRes.status).toBe(200);
+        expect(db.getVersionById(v1.id)?.smokeStatus).toBe('discarded');
+        expect(
+          db.getTeamsForAgentLadder('gen9championsvgc2026regmc', zero.id, 'saved')
+        ).toEqual(['TeamOne', 'TeamTwo']);
+
+        // Submitting a new version, staging it, and activating enters the ladder.
+        const v2 = db.createSubmission({
+          agentId: zero.id,
+          version: '2.1.1',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error-2.1.1.tar.zst',
+          sha256: SHA_B,
+          ladderIds: ['gen1ou20261109'],
+          now: currentNow + 60,
+        });
+        db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'staged', now: currentNow + 90});
+        const actRes = await realFetch(`${baseUrl}/api/account/versions/${v2.id}/activate`, {
+          method: 'POST',
+          headers: {Cookie: cookieFor('pre'), Accept: 'application/json'},
+        });
+        expect(actRes.status).toBe(200);
+        expect(db.getVersionById(v2.id)?.smokeStatus).toBe('passed');
+        expect(db.getActiveEntriesForAgent(zero.id)).toHaveLength(1);
+      });
   });
 });
