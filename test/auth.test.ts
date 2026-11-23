@@ -585,14 +585,20 @@ describe('server/auth.ts routes', () => {
     const {state, stateCookie} = await beginGitHubOAuth();
     mockGitHubUser({id: 0, login: 'pre'});
 
-    const badCb = await realFetch(
-      `${baseUrl}/auth/github/callback?code=c0&state=${encodeURIComponent(state)}`,
-      {
-        headers: {Cookie: `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`},
-        redirect: 'manual',
-      }
-    );
-    expect(badCb.status).toBe(502);
+    const origError = console.error;
+    console.error = () => undefined;
+    try {
+      const badCb = await realFetch(
+        `${baseUrl}/auth/github/callback?code=c0&state=${encodeURIComponent(state)}`,
+        {
+          headers: {Cookie: `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`},
+          redirect: 'manual',
+        }
+      );
+      expect(badCb.status).toBe(502);
+    } finally {
+      console.error = origError;
+    }
   });
 
   test('clears stale githubId when projects.yml changes an owner handle', () => {

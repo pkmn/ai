@@ -759,9 +759,15 @@ describe('mock scenarios & E2E lifecycle', () => {
           },
           onDiscordSync: async () => {
             discordCalls.length = 0;
-            await discord.syncArenaRoles(
-              db, 'e2e-discord-token', DISCORD_CONFIG, discordState, guildMembers
-            );
+            const origLog = console.log;
+            console.log = () => undefined;
+            try {
+              await discord.syncArenaRoles(
+                db, 'e2e-discord-token', DISCORD_CONFIG, discordState, guildMembers
+              );
+            } finally {
+              console.log = origLog;
+            }
           },
           onCheckpoint: async (name, r) => {
             seenCheckpoints.push(name);

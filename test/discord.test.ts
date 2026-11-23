@@ -78,6 +78,7 @@ interface Call {
 }
 
 const realFetch = globalThis.fetch;
+const realLog = console.log;
 
 function stubFetch(
   leaders: discord.Leader[],
@@ -116,7 +117,12 @@ const LEADERS = [
 const memberFetches = (calls: Call[]) => calls.filter(c => c.url.includes('/members?')).length;
 
 describe('syncRoles', () => {
+  beforeEach(() => {
+    console.log = () => undefined;
+  });
+
   afterEach(() => {
+    console.log = realLog;
     globalThis.fetch = realFetch;
   });
 
@@ -983,7 +989,12 @@ function createSeededArenaDb() {
 }
 
 describe('Arena Discord roles', () => {
+  beforeEach(() => {
+    console.log = () => undefined;
+  });
+
   afterEach(() => {
+    console.log = realLog;
     globalThis.fetch = realFetch;
   });
 
@@ -1140,7 +1151,12 @@ describe('Arena Discord roles', () => {
 });
 
 describe('Arena Discord notifications', () => {
+  beforeEach(() => {
+    console.log = () => undefined;
+  });
+
   afterEach(() => {
+    console.log = realLog;
     globalThis.fetch = realFetch;
   });
 

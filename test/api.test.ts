@@ -2463,6 +2463,8 @@ describe('createServerApp production HTTP hardening', () => {
       throw Object.assign(new Error('SQLITE_SECRET_DETAIL'), {code: 'ERR_SQLITE_ERROR'});
     });
     const srv = await startTestServer(handle.app);
+    const origError = console.error;
+    console.error = () => undefined;
     try {
       const res = await fetch(`${srv.baseUrl}/api/boom`);
       expect(res.status).toBe(500);
@@ -2470,6 +2472,7 @@ describe('createServerApp production HTTP hardening', () => {
       expect(body.error).toBe('Internal Server Error');
       expect(body.error).not.toContain('SQLITE_SECRET_DETAIL');
     } finally {
+      console.error = origError;
       handle.close();
       await srv.close();
     }

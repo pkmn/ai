@@ -151,7 +151,14 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
             headers: {Authorization: `Bearer ${secret}`},
           });
           const {ladders} = await snapRes.json() as {ladders: coordinator.LadderSnapshot[]};
-          const played = await coord.playNextScheduledMatch(ladders);
+          const origError = console.error;
+          console.error = () => undefined;
+          let played: Awaited<ReturnType<typeof coord.playNextScheduledMatch>>;
+          try {
+            played = await coord.playNextScheduledMatch(ladders);
+          } finally {
+            console.error = origError;
+          }
           expect(played?.ladderId).toBe('gen9randombattle202611');
           expect(stateDb.listOutbox()).toHaveLength(0);
 

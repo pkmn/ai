@@ -1001,15 +1001,21 @@ describe('wiki server routes', () => {
   });
 
   test('rejects oversized wiki edit payloads with 413', async () => {
-    const res = await realFetch(`${baseUrl}/wiki/oversize`, {
-      method: 'POST',
-      headers: {
-        Cookie: sessionCookie('scheibo'),
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: `action=save&content=${'x'.repeat(300_000)}`,
-    });
-    expect(res.status).toBe(413);
+    const origError = console.error;
+    console.error = () => undefined;
+    try {
+      const res = await realFetch(`${baseUrl}/wiki/oversize`, {
+        method: 'POST',
+        headers: {
+          Cookie: sessionCookie('scheibo'),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `action=save&content=${'x'.repeat(300_000)}`,
+      });
+      expect(res.status).toBe(413);
+    } finally {
+      console.error = origError;
+    }
   });
 
   test('HTML-escapes H1 headings rendered inside the page header', async () => {

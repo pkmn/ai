@@ -227,8 +227,8 @@ describe('arena sandbox & tourney-relay', () => {
           root('arena/config/ai.pkmn.pf.plist'),
           root('arena/config/ai.pkmn.podman.plist'),
           root('arena/config/ai.pkmn.tunnel.plist'),
-        ]);
-        execFileSync('/sbin/pfctl', ['-nf', root('arena/config/pf.anchor')]);
+        ], {stdio: 'pipe'});
+        execFileSync('/sbin/pfctl', ['-nf', root('arena/config/pf.anchor')], {stdio: 'pipe'});
       }).not.toThrow();
     });
 
