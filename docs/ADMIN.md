@@ -335,11 +335,13 @@ gcloud compute instances list && gcloud compute disks list   # confirm zero orph
 Both hosts collect unprivileged system telemetry (no `sudo`, compatible with `pkmn.ai-server`'s
 `ProtectSystem=strict` / `NoNewPrivileges=yes`). On the VPS, local metrics are sampled on demand
 when queried (zero idle overhead). On the Arena Mac mini, there are **zero `setInterval` timers**:
-sub-millisecond in-process metrics piggyback on paused-turn heartbeats, subprocess probes run
-strictly between matches/idle, and heavy daily maintenance (`archive.sh` + `softwareupdate`) runs
-under `ai.pkmn.maintenance.plist` (`10:00 UTC`) while matchmaking is paused via `maintenance.lock` /
-`match.lock`. Arena heartbeats only attach `system` when telemetry changes (or after a drop), and
-`server/arena.ts` never exposes host telemetry on public `/api/live.json` or `/api/battles/stream`.
+fast host probes (in-process stats + `vm_stat`, `sysctl`, `iostat -Id`, `netstat -ibn`, ~11 ms warm)
+piggyback on paused-turn heartbeats (≥ 60s), slower probes (`podman`, `ghcr.io`, one-time
+`diskutil`/`route` discovery) run strictly between matches/idle, and daily maintenance (`archive.sh`
++ `softwareupdate`) runs under `ai.pkmn.maintenance.plist` (`10:00 UTC`) while matchmaking is paused
+via `maintenance.lock` / `match.lock`. Arena heartbeats only attach `system` when telemetry changes
+(or after a drop), and `server/arena.ts` never exposes host telemetry on public `/api/live.json` or
+`/api/battles/stream`.
 
 ### `pkmn.ai` VPS (`VpsHostMonitor` & `TrafficTracker`)
 
@@ -360,8 +362,7 @@ under `ai.pkmn.maintenance.plist` (`10:00 UTC`) while matchmaking is paused via 
 
 | Metric | Avg Cost | When Fetched | What It Measures | Concerning Value |
 | :--- | :--- | :--- | :--- | :--- |
-| **Instant Host & Disk Space** | `~0.04 ms` (0 subprocesses) | Between paused turns on heartbeat (≥ **60s**) & between matches | `os.loadavg()`, host/proc uptime, Node RSS, `statfsSync` on `/` & `/Volumes/Archive` mount/space, local state DB + `-wal`, outbox count, daemon cycle errors. | `/Volumes/Archive` `UNMOUNTED`, disk ≥ 80% / ≥ 90%, `load1 > cores`, `outbox > 0`, or `daemonErrors > 0`. |
-| **Memory, Pressure, Disk I/O & NIC** | `~55 ms` warm (`Promise.all`, 4 procs) | Between matches / idle only (≥ **60s**); `diskutil`/`route` cached once (`~525 ms`/`~154 ms` cold) | `vm_stat` real macOS RAM, combined `sysctl -n vm.swapusage kern.memorystatus_vm_pressure_level`, `iostat -Id` per-disk MB/s & IOPS (`/` & Archive), `netstat -ibn` RX/TX & errors. | RAM ≥ 80% / ≥ 90%, swap growing, VM pressure `warning`/`critical`, NIC errors `> 0`, or stalled Archive I/O. |
+| **Host, RAM, Disk & NIC** | `~11 ms` warm (`Promise.all`, 4 procs + `~0.04 ms` in-proc) | Between paused turns on heartbeat & between matches (≥ **60s**); `diskutil`/`route` cached once at startup/between matches (`~525 ms`/`~154 ms` cold) | `os.loadavg()`, host/proc uptime, Node RSS, `statfsSync` on `/` & `/Volumes/Archive`, local state DB + `-wal`, outbox count, daemon errors, `vm_stat` real macOS RAM, `sysctl -n vm.swapusage kern.memorystatus_vm_pressure_level`, `iostat -Id` MB/s & IOPS, `netstat -ibn` RX/TX & errors. | `/Volumes/Archive` `UNMOUNTED`, disk/RAM ≥ 80% / ≥ 90%, `load1 > cores`, swap growing, VM pressure `warning`/`critical`, NIC errors `> 0`, `outbox > 0`, or `daemonErrors > 0`. |
 | **Internal Tunnel RTT** | `0 ms` overhead | Inline on every `POST /api/arena/heartbeat` | Round-trip latency and reachability over `127.0.0.1:1234` SSH tunnel to `pkmn.ai`. | Tunnel `down`, RTT `> 250 ms`, or last heartbeat `> 15m` (watchdog stale). |
 | **External Net & Podman VM** | `~50–150 ms` | Between matches / idle only (≥ **15m**) | `HEAD https://ghcr.io/v2/` RTT + reachability; `podman machine inspect` state for `podman-machine-default`. | `ghcr.io` unreachable (OCI pulls fail) or Podman state `!= running`. |
 | **Daily Backup & GCS Archive** | `~1–10 ms` | On boot, then stops once today's `10:00 UTC` run succeeds; retries every **5m** between matches after `10:00 UTC` | `/opt/arena/state/archive-status.json` (written by `archive.sh`) + `/Volumes/Archive/db-backups/` scan for local DB backup & `gcloud storage rsync` status. | Any `archiveError`, DB backup `> 26h`, or GCS sync `> 36h`. |

@@ -248,7 +248,7 @@ export async function runDaemon(opts: {
           consecutiveCycleErrors = 0;
           hostMonitor?.recordDaemonErrors(0);
           if (!opts.once && !coord.isDraining()) {
-            const sysInfo = hostMonitor?.takePendingSnapshot();
+            const sysInfo = await hostMonitor?.takePendingSnapshot();
             await client.sendHeartbeat({
               idle: true,
               ...(sysInfo ? {system: sysInfo} : {}),
@@ -286,7 +286,7 @@ export async function runDaemon(opts: {
         consecutiveCycleErrors = 0;
         hostMonitor?.recordDaemonErrors(0);
         if (!played && ingested === 0 && !opts.once && !coord.isDraining()) {
-          const sysInfo = hostMonitor?.takePendingSnapshot();
+          const sysInfo = await hostMonitor?.takePendingSnapshot();
           await client.sendHeartbeat({
             idle: true,
             ...(sysInfo ? {system: sysInfo} : {}),

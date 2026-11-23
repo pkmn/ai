@@ -238,33 +238,40 @@ describe('system telemetry parsers & TrafficTracker', () => {
         now: () => arenaNow,
       });
       await monitor.refreshFast();
-      const first = monitor.takePendingSnapshot();
+      const first = await monitor.takePendingSnapshot();
       expect(first?.updates?.pending).toBe(1);
       expect(first?.backups.lastArchiveUploadAt).toBe(after + 30);
 
       // Failed heartbeat does not mark revision sent -> retries on next takePendingSnapshot.
       monitor.recordHeartbeatRtt(50, false, 'timeout');
-      expect(monitor.takePendingSnapshot()).toBeDefined();
+      expect(await monitor.takePendingSnapshot()).toBeDefined();
 
       // Recovery (false -> true) triggers one follow-up send with the recovered RTT, then settles.
       monitor.recordHeartbeatRtt(22, true);
-      expect(monitor.takePendingSnapshot()?.network.internal?.rttMillis).toBe(22);
+      expect((await monitor.takePendingSnapshot())?.network.internal?.rttMillis).toBe(22);
 
       // Subsequent steady-state heartbeat (true -> true) omits redundant system blob.
       monitor.recordHeartbeatRtt(20, true);
-      expect(monitor.takePendingSnapshot()).toBeUndefined();
+      expect(await monitor.takePendingSnapshot()).toBeUndefined();
 
-      // After 60s during a long match, takePendingSnapshot runs sub-ms instant refresh in-process.
+      // After 60s during a long match, takePendingSnapshot refreshes all fast probes (~11ms warm
+      // on macOS, skipping one-time diskutil/route discovery) including real RAM, swap & pressure.
       arenaNow += 65;
-      const refreshed = monitor.takePendingSnapshot();
+      const refreshed = await monitor.takePendingSnapshot();
       expect(refreshed?.collectedAt).toBe(arenaNow);
+      expect(refreshed?.memory.usedBytes).toBeGreaterThan(0);
+      expect(refreshed?.memory.swapTotalBytes).toBeGreaterThanOrEqual(0);
+      expect(
+        process.platform !== 'darwin' ||
+        ['normal', 'warning', 'critical'].includes(refreshed?.memory.pressure ?? '')
+      ).toBe(true);
       monitor.recordHeartbeatRtt(21, true);
-      expect(monitor.takePendingSnapshot()).toBeUndefined();
+      expect(await monitor.takePendingSnapshot()).toBeUndefined();
 
       // New error state marks revision dirty again.
       arenaNow += 5;
       monitor.recordDaemonErrors(1);
-      expect(monitor.takePendingSnapshot()?.daemonErrors).toBe(1);
+      expect((await monitor.takePendingSnapshot())?.daemonErrors).toBe(1);
     } finally {
       fs.rmSync(tmpDir, {recursive: true, force: true});
     }

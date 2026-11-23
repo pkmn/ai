@@ -1177,7 +1177,7 @@ export class ArenaHostMonitor {
     }
     if (needFast) {
       this.lastFastAt = nowSec;
-      tasks.push(this.refreshFast().catch(() => {}));
+      tasks.push(this.refreshFast(true).catch(() => {}));
     }
     if (tasks.length > 0) {
       await Promise.all(tasks);
@@ -1229,48 +1229,18 @@ export class ArenaHostMonitor {
     };
   }
 
-  // Sub-millisecond (~0.04ms) zero-subprocess refresh safe to run between paused turns when
-  // preparing a heartbeat during long matches; subprocess probes remain strictly between matches.
-  private sampleInstant(nowSec: number): void {
-    if (!this.latest) return;
-    const [load1, load5, load15] = os.loadavg();
-    const load: LoadMetrics = {
-      load1: Number(load1.toFixed(2)),
-      load5: Number(load5.toFixed(2)),
-      load15: Number(load15.toFixed(2)),
-      cpus: os.cpus().length,
-      uptimeSeconds: Math.floor(os.uptime()),
-      processUptimeSeconds: Math.floor(process.uptime()),
-    };
-    const disks = this.latest.disks.map(prev => {
-      if (!prev.mounted) return prev;
-      const fresh = statMountSpace(prev.mount, prev.label, true);
-      return {
-        ...fresh,
-        ...(prev.ioBytesPerSec !== undefined ? {ioBytesPerSec: prev.ioBytesPerSec} : {}),
-        ...(prev.iops !== undefined ? {iops: prev.iops} : {}),
-      };
-    });
-    this.latest = {
-      ...this.latest,
-      collectedAt: nowSec,
-      load,
-      memory: {
-        ...this.latest.memory,
-        processRssBytes: process.memoryUsage().rss,
-      },
-      disks,
-      database: statDatabaseFiles(this.stateDbPath),
-    };
-    this.revision++;
-  }
-
   // Returns the snapshot only when telemetry changed since the last acknowledged heartbeat so
-  // per-turn heartbeats stay lean while guaranteeing delivery after dropped requests.
-  takePendingSnapshot(): ArenaSystemInfo | undefined {
+  // per-turn heartbeats stay lean while guaranteeing delivery after dropped requests. When called
+  // between paused turns during long matches, refreshes all fast host probes (`~11ms` warm on
+  // macOS, skipping one-time `diskutil`/`route` discovery) at most once per `FAST_SAMPLE_SECONDS`.
+  async takePendingSnapshot(): Promise<ArenaSystemInfo | undefined> {
     const nowSec = this.now();
-    if (this.latest && nowSec - this.latest.collectedAt >= FAST_SAMPLE_SECONDS) {
-      this.sampleInstant(nowSec);
+    if (
+      this.latest &&
+      (this.lastFastAt === undefined || nowSec - this.lastFastAt >= FAST_SAMPLE_SECONDS)
+    ) {
+      this.lastFastAt = nowSec;
+      await this.refreshFast(false).catch(() => {});
     }
     const snap = this.getSnapshot();
     if (!snap) return undefined;
@@ -1365,8 +1335,9 @@ export class ArenaHostMonitor {
     return backups;
   }
 
-  async refreshFast(): Promise<ArenaSystemInfo> {
+  async refreshFast(allowDiscovery = true): Promise<ArenaSystemInfo> {
     const nowSec = this.now();
+    this.lastFastAt = nowSec;
     const nowMs = Date.now();
     const [load1, load5, load15] = os.loadavg();
     const load: LoadMetrics = {
@@ -1397,20 +1368,23 @@ export class ArenaHostMonitor {
     };
 
     if (process.platform === 'darwin') {
-      if (!this.rootDiskName) {
-        const info = await execTextAsync('diskutil', ['info', '/']);
-        if (info) this.rootDiskName = parseDiskutilPhysicalDisk(info);
-      }
-      if (archiveMounted && !this.archiveDiskName) {
-        const info = await execTextAsync('diskutil', ['info', this.archiveMount]);
-        if (info) this.archiveDiskName = parseDiskutilPhysicalDisk(info);
-      } else if (!archiveMounted) {
+      if (!archiveMounted) {
         this.archiveDiskName = undefined;
       }
-      if (!this.defaultIface) {
-        const routeOut = await execTextAsync('route', ['-n', 'get', 'default']);
-        const m = routeOut ? /interface:\s*(\S+)/.exec(routeOut) : null;
-        if (m) this.defaultIface = m[1];
+      if (allowDiscovery) {
+        if (!this.rootDiskName) {
+          const info = await execTextAsync('diskutil', ['info', '/']);
+          if (info) this.rootDiskName = parseDiskutilPhysicalDisk(info);
+        }
+        if (archiveMounted && !this.archiveDiskName) {
+          const info = await execTextAsync('diskutil', ['info', this.archiveMount]);
+          if (info) this.archiveDiskName = parseDiskutilPhysicalDisk(info);
+        }
+        if (!this.defaultIface) {
+          const routeOut = await execTextAsync('route', ['-n', 'get', 'default']);
+          const m = routeOut ? /interface:\s*(\S+)/.exec(routeOut) : null;
+          if (m) this.defaultIface = m[1];
+        }
       }
 
       const [vmOut, sysctlOut, iostatOut, netOut] = await Promise.all([
