@@ -14,6 +14,7 @@ import {Auth} from './auth';
 import {extractPerspectiveLogs} from './protocol';
 import * as ratings from './ratings';
 import * as simOps from './sim-ops';
+import {SAMPLES_DIR, sampleSmokePair} from './teams';
 
 export {extractPerspectiveLogs};
 
@@ -894,6 +895,7 @@ export interface Options {
   arenaSecret?: string;
   sessionSecret?: string;
   publicDir?: string;
+  samplesDir?: string;
   watchdogTimeoutMillis?: number;
   armWatchdogOnStart?: boolean;
   now?: () => number;
@@ -935,6 +937,7 @@ export interface PendingLadder {
   min: number;
   teams?: number;
   status: db.LadderStatus;
+  smokeTeams?: [string, string];
 }
 
 export interface PendingSubmission {
@@ -959,6 +962,7 @@ export interface PendingTournament {
   version?: string;
   team?: db.TeamMode;
   teamPool?: string[];
+  smokeTeams?: [string, string];
   customRules: string[];
   status: db.TournamentStatus;
   startsAt: number;
@@ -1763,6 +1767,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   util.installHeadSupport(app);
   const {db} = options;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
+  const samplesDir = options.samplesDir ?? SAMPLES_DIR;
   const watchdogMillis = options.watchdogTimeoutMillis ?? WATCHDOG_TIMEOUT_MILLIS;
   const getNowSec = options.now ?? (() => Math.floor(Date.now() / 1000));
 
@@ -1947,7 +1952,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
   });
 
-  app.get('/api/arena/pending-submissions', (req, res) => {
+  app.get('/api/arena/pending-submissions', async (req, res) => {
     if (!authenticateArena(req, res)) return;
     try {
       const targetFilter = typeof req.query.target === 'string' ? req.query.target : '';
@@ -1955,23 +1960,68 @@ export function register(app: polka.Polka, options: Options): Handle {
         ? req.query.tournament.trim()
         : '';
 
-      const ladders = db.getLadders().filter(l => l.status !== 'archived').map(l => ({
-        id: l.id,
-        slot: l.slot,
-        name: l.name,
-        format: l.format,
-        version: l.version,
-        team: l.team,
-        min: l.min,
-        teams: l.teams,
-        status: l.status,
-      }));
-      const tournaments = db.getTournaments()
-        .filter(t => t.status !== 'completed')
-        .map(t => {
+      const sessionSecret = getSessionSecret();
+      const rawPending = db.getPendingSubmissions().filter(sub => {
+        if (targetFilter === 'ladder') return sub.ladders.length > 0;
+        if (targetFilter === 'tournament') return sub.tournaments.length > 0;
+        return true;
+      }).filter(sub => !tourneyFilter || sub.tournaments.includes(tourneyFilter));
+
+      const neededLadders = new Set<string>();
+      const neededTournaments = new Set<string>();
+      for (const sub of rawPending) {
+        if (targetFilter !== 'tournament') {
+          for (const lid of sub.ladders) neededLadders.add(lid);
+        }
+        if (targetFilter !== 'ladder') {
+          for (const tid of sub.tournaments) neededTournaments.add(tid);
+        }
+      }
+
+      const sampleSmokeTeams = async (
+        format: string,
+        version?: string
+      ): Promise<[string, string] | undefined> => {
+        try {
+          const pair = await sampleSmokePair(
+            format,
+            max => crypto.randomInt(0, max),
+            version,
+            samplesDir
+          );
+          return [pair.t1Packed, pair.t2Packed];
+        } catch {
+          return undefined;
+        }
+      };
+
+      const ladders = await Promise.all(
+        db.getLadders().filter(l => l.status !== 'archived').map(async l => {
+          const smokeTeams = l.team === 'harvested' && neededLadders.has(l.id)
+            ? await sampleSmokeTeams(l.format, l.version)
+            : undefined;
+          return {
+            id: l.id,
+            slot: l.slot,
+            name: l.name,
+            format: l.format,
+            version: l.version,
+            team: l.team,
+            min: l.min,
+            teams: l.teams,
+            status: l.status,
+            ...(smokeTeams ? {smokeTeams} : {}),
+          };
+        })
+      );
+      const tournaments = await Promise.all(
+        db.getTournaments().filter(t => t.status !== 'completed').map(async t => {
           // Harvested tournaments smoke-test strictly against public `teams/teams` pools so
           // private harvested ladder pools are never exposed in smoke-test payloads or logs.
           const teamPool = t.team === 'pools' ? resolveTournamentTeamPool(db, t) : [];
+          const smokeTeams = t.team === 'harvested' && neededTournaments.has(t.id)
+            ? await sampleSmokeTeams(simOps.formatWithCustomRules(t.format, t.rules), t.version)
+            : undefined;
           return {
             id: t.id,
             name: t.name,
@@ -1979,17 +2029,13 @@ export function register(app: polka.Polka, options: Options): Handle {
             version: t.version,
             ...(t.team ? {team: t.team} : {}),
             ...(teamPool.length > 0 ? {teamPool} : {}),
+            ...(smokeTeams ? {smokeTeams} : {}),
             customRules: t.rules,
             status: t.status,
             startsAt: t.startsAt,
           };
-        });
-      const sessionSecret = getSessionSecret();
-      const rawPending = db.getPendingSubmissions().filter(sub => {
-        if (targetFilter === 'ladder') return sub.ladders.length > 0;
-        if (targetFilter === 'tournament') return sub.tournaments.length > 0;
-        return true;
-      }).filter(sub => !tourneyFilter || sub.tournaments.includes(tourneyFilter));
+        })
+      );
 
       const submissions = rawPending.map(sub => {
         let authToken: string | undefined;

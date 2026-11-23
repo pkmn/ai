@@ -12,9 +12,12 @@ import {HEADERS_TIMEOUT_MILLIS, KEEP_ALIVE_TIMEOUT_MILLIS, createServerApp} from
 import {encryptSecret} from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
+import * as sim from '../server/sim';
 import {root} from '../static/util';
 import {generateValidHarvestedTeams} from '../tools/mock';
 import {parseArgs, runPkmnCli} from '../tools/pkmn';
+
+import {RBY_TEAM_ONE, RBY_TEAM_TWO, seedSampleTeams} from './arena-helpers';
 
 const ARENA_SECRET = 'test-arena-bearer-secret';
 const AUTH_CFG: auth.Config = {
@@ -180,6 +183,7 @@ async function openPersistentSse(baseUrl: string, route: string) {
 
 describe('Arena Control API submissions', () => {
   let tmpDir: string;
+  let samplesDir: string;
   let db: Database;
   let ctrl: ReturnType<typeof arena.register>;
   let srv: {baseUrl: string; close: () => Promise<void>};
@@ -187,6 +191,7 @@ describe('Arena Control API submissions', () => {
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-sub-'));
+    samplesDir = path.join(tmpDir, 'samples');
     db = new Database(':memory:');
     db.syncLaddersFromYaml(LADDERS_YAML, 1_700_000_000);
     syncQualifiedProjects(db, tmpDir, 1_700_000_000);
@@ -197,6 +202,7 @@ describe('Arena Control API submissions', () => {
       auth: new auth.Auth({db, config: AUTH_CFG}),
       arenaSecret: ARENA_SECRET,
       publicDir: tmpDir,
+      samplesDir,
       onUpdate: reason => {
         events.push(reason);
       },
@@ -209,6 +215,10 @@ describe('Arena Control API submissions', () => {
     await srv.close();
     db.close();
     fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
+
+  afterAll(async () => {
+    await sim.closeAllWorkers();
   });
 
   test('rejects missing or invalid Bearer tokens on /api/arena/* with 401', async () => {
@@ -264,32 +274,73 @@ describe('Arena Control API submissions', () => {
       expect(slots).toEqual({minSlot: 1, maxSlot: 20});
     });
 
-  test('omits harvested tournament teamPool on pending-submissions', async () => {
-    db.replaceLadderTeams('gen1ou20261109', ['harvested-team-a', 'harvested-team-b']);
-    db.upsertTournament({
-      id: '98',
-      name: 'Tournament #98: RBY Harvested',
-      format: 'gen1ou',
-      version: '0.11.0',
-      team: 'harvested',
-      gamesPerMatchup: 4,
-      parallelTables: 1,
-      hardware: 'GCP L4',
-      status: 'scheduled',
-      startsAt: 1_900_000_000,
+  test('samples smokeTeams on pending-submissions only for referenced harvested targets',
+    async () => {
+      seedSampleTeams(samplesDir, 'gen1ou', [RBY_TEAM_ONE, RBY_TEAM_TWO]);
+      db.replaceLadderTeams('gen1ou20261109', ['harvested-team-a', 'harvested-team-b']);
+      db.upsertTournament({
+        id: '98',
+        name: 'Tournament #98: RBY Harvested',
+        format: 'gen1ou',
+        version: '0.11.0',
+        team: 'harvested',
+        gamesPerMatchup: 4,
+        parallelTables: 1,
+        hardware: 'GCP L4',
+        status: 'scheduled',
+        startsAt: 1_900_000_000,
+      });
+
+      // Idle poll: no pending submissions -> omit smokeTeams and harvested tournament teamPool.
+      const idleRes = await apiJson(
+        srv.baseUrl,
+        'GET',
+        '/api/arena/pending-submissions',
+        ARENA_SECRET
+      );
+      expect(idleRes.status).toBe(200);
+      const idleLadders = idleRes.data.ladders as Array<{id: string; smokeTeams?: string[]}>;
+      const idleTours = idleRes.data.tournaments as Array<{
+        id: string;
+        teamPool?: string[];
+        smokeTeams?: string[];
+      }>;
+      expect(idleLadders.find(l => l.id === 'gen1ou20261109')?.smokeTeams).toBeUndefined();
+      expect(idleTours.find(t => t.id === '98')?.teamPool).toBeUndefined();
+      expect(idleTours.find(t => t.id === '98')?.smokeTeams).toBeUndefined();
+
+      // Pending harvested tournament submission: supply sample smokeTeams without teamPool.
+      const zeroAgent = db.getAgentBySlug('0-error')!;
+      db.createSubmission({
+        agentId: zeroAgent.id,
+        version: '1.0.0-t98',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/0-error:1.0.0-t98',
+        sha256: SHA,
+        ladderIds: [],
+        tournamentIds: ['98'],
+        now: 1_700_000_200,
+      });
+      const tourRes = await apiJson(
+        srv.baseUrl,
+        'GET',
+        '/api/arena/pending-submissions?target=tournament',
+        ARENA_SECRET
+      );
+      expect(tourRes.status).toBe(200);
+      const tourLadders = tourRes.data.ladders as Array<{id: string; smokeTeams?: string[]}>;
+      const tourTours = tourRes.data.tournaments as Array<{
+        id: string;
+        teamPool?: string[];
+        smokeTeams?: string[];
+      }>;
+      expect(tourLadders.find(l => l.id === 'gen1ou20261109')?.smokeTeams).toBeUndefined();
+      const harvestedTour = tourTours.find(t => t.id === '98');
+      expect(harvestedTour?.teamPool).toBeUndefined();
+      expect(harvestedTour?.smokeTeams).toHaveLength(2);
+      expect(harvestedTour?.smokeTeams?.[0]).not.toBe(harvestedTour?.smokeTeams?.[1]);
+      expect(harvestedTour?.smokeTeams).not.toContain('harvested-team-a');
     });
-    const pendingRes = await apiJson(
-      srv.baseUrl,
-      'GET',
-      '/api/arena/pending-submissions',
-      ARENA_SECRET
-    );
-    expect(pendingRes.status).toBe(200);
-    const tournaments = pendingRes.data.tournaments as Array<{id: string; teamPool?: string[]}>;
-    const harvested = tournaments.find(t => t.id === '98');
-    expect(harvested).toBeDefined();
-    expect(harvested?.teamPool).toBeUndefined();
-  });
 
   test('wipes auth tokens plus pending pool teams when smoke test fails', async () => {
     const fpAgent = db.getAgentBySlug('foul-play')!;

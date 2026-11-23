@@ -195,7 +195,6 @@ export class Coordinator {
   readonly stateDb: db.Database;
   private readonly baselineSpec: arbiter.AgentLaunchSpec;
   private readonly dirs: packages.Dirs;
-  private readonly samplesDir: string;
   private readonly devMode: boolean;
   private readonly maxTurns?: number;
   private readonly versionByLadderId = new Map<string, string>();
@@ -218,7 +217,6 @@ export class Coordinator {
     };
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.dirs = options.rootDir ? packages.dirsForRoot(options.rootDir) : packages.PROD_DIRS;
-    this.samplesDir = options.rootDir ? path.join(options.rootDir, 'samples') : teams.SAMPLES_DIR;
     this.maxTurns = options.maxTurns;
   }
 
@@ -355,10 +353,15 @@ export class Coordinator {
     const {ladders, submissions} = await this.client.getPendingSubmissions({target: 'ladder'});
     const pendingMetaById = new Map<
       string,
-      {format: string; version?: string; team: db.TeamMode}
+      {format: string; version?: string; team: db.TeamMode; smokeTeams?: [string, string]}
     >();
     for (const l of ladders) {
-      pendingMetaById.set(l.id, {format: l.format, version: l.version, team: l.team});
+      pendingMetaById.set(l.id, {
+        format: l.format,
+        version: l.version,
+        team: l.team,
+        smokeTeams: l.smokeTeams,
+      });
       if (l.version) this.versionByLadderId.set(l.id, l.version);
     }
     let processed = 0;
@@ -408,17 +411,25 @@ export class Coordinator {
         format: string;
         version?: string;
         team: db.TeamMode;
+        smokeTeams?: [string, string];
       }> = [];
       const seenFormats = new Set<string>();
       for (const lid of sub.ladders) {
-        const meta = pendingMetaById.get(lid) ?? laddersById?.get(lid);
+        const pendingMeta = pendingMetaById.get(lid);
+        const meta = pendingMeta ?? laddersById?.get(lid);
         const format = meta?.format ?? lid;
         const version = meta?.version;
         const team = meta?.team ?? 'random';
         const formatKey = `${format}::${version ?? ''}`;
         if (!seenFormats.has(formatKey)) {
           seenFormats.add(formatKey);
-          targetsToTest.push({ladderId: lid, format, version, team});
+          targetsToTest.push({
+            ladderId: lid,
+            format,
+            version,
+            team,
+            smokeTeams: pendingMeta?.smokeTeams,
+          });
         }
       }
 
@@ -448,12 +459,12 @@ export class Coordinator {
             if (item.team === 'harvested') {
               // Never fall back to harvested ladder pools in smoke tests so private harvested
               // teams cannot leak into exposed smoke-test logs.
-              ({t1Packed, t2Packed} = await teams.sampleSmokePair(
-                item.format,
-                randomInt,
-                item.version,
-                this.samplesDir
-              ));
+              if (!item.smokeTeams || item.smokeTeams.length < 2) {
+                throw new Error(
+                  `missing sample team pool for ${item.format} (requires >= 2 teams)`
+                );
+              }
+              [t1Packed, t2Packed] = item.smokeTeams;
             } else {
               ({t1Packed, t2Packed} = await sim.sampleRandomPair(
                 item.format,

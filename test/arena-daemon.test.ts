@@ -406,9 +406,10 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
   });
 
   test('resolves upcoming ladder formats while leaving tournament OCI queued', async () => {
-    await withRealArenaServer(tmpDir, 'upcoming-fmt', async ({db, client}) => {
+    await withRealArenaServer(tmpDir, 'upcoming-fmt', async ({db, client, samplesDir}) => {
       const stateDb = new arenaDb.Database(':memory:');
       try {
+        seedSampleTeams(samplesDir, 'gen1ou', [RBY_TEAM_ONE, RBY_TEAM_TWO]);
         db.syncLaddersFromYaml([
           '- name: RBY',
           '  id: gen1ou20261109',
@@ -487,19 +488,18 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
 
         const ladderPending = await client.getPendingSubmissions({target: 'ladder'});
         expect(ladderPending.submissions.map(s => s.versionId)).toEqual([upcomingSub.id]);
+        expect(ladderPending.ladders[0]?.smokeTeams).toHaveLength(2);
         const tourneyPending = await client.getPendingSubmissions({
           target: 'tournament',
           tournamentId: '9',
         });
         expect(tourneyPending.submissions.map(s => s.versionId)).toEqual([tourneySub.id]);
 
-        const upcomingRoot = path.join(tmpDir, 'upcoming');
-        seedSampleTeams(upcomingRoot, 'gen1ou', [RBY_TEAM_ONE, RBY_TEAM_TWO]);
         const coord = new coordinator.Coordinator({
           client,
           stateDb,
           baselineSpec: {mode: 'native', target: defaultAgentScript},
-          rootDir: upcomingRoot,
+          rootDir: path.join(tmpDir, 'upcoming'),
           devMode: true,
         });
         expect(await coord.processPendingSubmissions()).toBe(1);
@@ -688,6 +688,7 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
     format: string;
     team: 'random' | 'harvested' | 'pools';
     teamPool?: string[];
+    smokeTeams?: [string, string];
     rootName: string;
     baseline?: {command: string; args: string[]};
     entrant?: {command: string; args: string[]};
@@ -704,6 +705,7 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
           team: opts.team,
           customRules: [],
           teamPool: opts.teamPool ?? [],
+          ...(opts.smokeTeams ? {smokeTeams: opts.smokeTeams} : {}),
         }],
         submissions: [{
           versionId: opts.versionId,
@@ -810,9 +812,9 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
         version: '9.3.0',
         format: 'gen9ou',
         team: 'harvested',
+        smokeTeams: [OU_TEAM_ONE, OU_TEAM_TWO],
         rootName: 'gcp-smoke-samples',
       });
-      seedSampleTeams(h.rootDir, 'gen9ou', [OU_TEAM_ONE, OU_TEAM_TWO]);
       expect(await h.coord.processPendingSubmissions('93')).toBe(1);
       expect(h.reported).toHaveLength(1);
       expect(h.reported[0].smokeStatus).toBe('passed');

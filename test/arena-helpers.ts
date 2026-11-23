@@ -85,11 +85,11 @@ export const RBY_TEAM_TWO =
   ']Zapdos|||NoAbility|Thunderbolt,DrillPeck,ThunderWave,Agility||252,252,252,252,252,252|||||';
 
 export function seedSampleTeams(
-  rootDir: string,
+  samplesDir: string,
   format: string,
   sampleTeams: readonly string[]
 ): void {
-  const dir = path.join(rootDir, 'samples', format);
+  const dir = path.join(samplesDir, format);
   fs.mkdirSync(dir, {recursive: true});
   for (let i = 0; i < sampleTeams.length; i++) {
     fs.writeFileSync(path.join(dir, `sample-${i + 1}`), sampleTeams[i], 'utf8');
@@ -259,6 +259,7 @@ export async function withRealArenaServer<T>(
     serverUrl: string;
     secret: string;
     publicDir: string;
+    samplesDir: string;
   }) => Promise<T>
 ): Promise<T> {
   const db = new Database(':memory:');
@@ -269,15 +270,22 @@ export async function withRealArenaServer<T>(
     db,
   });
   const publicDir = path.join(tmpDir, `${prefix}-public`);
+  const samplesDir = path.join(tmpDir, `${prefix}-samples`);
   fs.mkdirSync(publicDir, {recursive: true});
-  const ctrl = serverArena.register(app, {db, auth: authInst, arenaSecret: secret, publicDir});
+  const ctrl = serverArena.register(app, {
+    db,
+    auth: authInst,
+    arenaSecret: secret,
+    publicDir,
+    samplesDir,
+  });
   const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const serverUrl = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
   const client = new serverArena.Client({serverUrl, arenaSecret: secret});
 
   try {
-    return await fn({db, client, serverUrl, secret, publicDir});
+    return await fn({db, client, serverUrl, secret, publicDir, samplesDir});
   } finally {
     ctrl.close();
     const closed = new Promise<void>(resolve => server.close(() => resolve()));

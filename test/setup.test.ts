@@ -234,15 +234,16 @@ describe('setup', () => {
       expect(setup.checkSubmoduleState(rootDir, gitDir, expandedSpec)).toEqual({ready: true});
     });
 
-  test('deploy scripts pass --update to setup --submodules-only', () => {
-    const vpsDeploy = fs.readFileSync(path.join(__dirname, '..', 'deploy'), 'utf8');
-    const arenaDeploy = fs.readFileSync(
-      path.join(__dirname, '..', 'arena', 'scripts', 'deploy.sh'),
-      'utf8'
-    );
-    expect(vpsDeploy).toContain('node build/tools/setup --submodules-only --update');
-    expect(arenaDeploy).toContain('node build/tools/setup --submodules-only --update');
-  });
+  test('deploy passes --update to setup --submodules-only while arena deploy omits submodules',
+    () => {
+      const vpsDeploy = fs.readFileSync(path.join(__dirname, '..', 'deploy'), 'utf8');
+      const arenaDeploy = fs.readFileSync(
+        path.join(__dirname, '..', 'arena', 'scripts', 'deploy.sh'),
+        'utf8'
+      );
+      expect(vpsDeploy).toContain('node build/tools/setup --submodules-only --update');
+      expect(arenaDeploy).not.toContain('build/tools/setup');
+    });
 
   test('deploy scripts install pinned sim/0.11.0 worker directory', () => {
     const vpsDeploy = fs.readFileSync(path.join(__dirname, '..', 'deploy'), 'utf8');

@@ -51,6 +51,14 @@ export function configureSimMod(
   }
 }
 
+export function formatWithCustomRules(
+  format: string,
+  customRules?: readonly string[]
+): string {
+  if (!customRules?.length) return format;
+  return `${format}${format.includes('@@@') ? ',' : '@@@'}${customRules.join(',')}`;
+}
+
 // Resolves a format ID and optional custom rules for headless Arena/Tournament play:
 //   - By default (VGC ladder and Closed Team Sheets tournaments), removes upstream's interactive
 //     `Open Team Sheets` rule (`!Open Team Sheets`) so `|showteam|` is not broadcast and

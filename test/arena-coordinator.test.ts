@@ -23,7 +23,6 @@ import {
   createCoordBundleArchive,
   getArenaTestBins,
   linkOrCopyExecutable,
-  seedSampleTeams,
 } from './arena-helpers';
 
 describe('Coordinator', () => {
@@ -45,7 +44,10 @@ describe('Coordinator', () => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  function createMockCoordHarness(prefix: string, baselineSpec?: arbiter.AgentLaunchSpec) {
+  function createMockCoordHarness(
+    prefix: string,
+    opts?: {baselineSpec?: arbiter.AgentLaunchSpec; omitSmokeTeams?: boolean}
+  ) {
     const reportedStatuses: serverArena.SubmissionStatusPayload[] = [];
     const completedMatches: serverArena.MatchCompletePayload[] = [];
     const heartbeats: serverArena.HeartbeatPayload[] = [];
@@ -54,7 +56,18 @@ describe('Coordinator', () => {
 
     const mockClient = {
       getPendingSubmissions: () => Promise.resolve({
-        ladders: [],
+        ladders: opts?.omitSmokeTeams
+          ? []
+          : [{
+            id: 'gen9customgame',
+            slot: 'sv' as const,
+            name: 'SV',
+            format: 'gen9ou',
+            team: 'harvested' as const,
+            min: 2,
+            status: 'active' as const,
+            smokeTeams: [OU_TEAM_ONE, OU_TEAM_TWO] as [string, string],
+          }],
         submissions: [
           {
             versionId: 30,
@@ -106,12 +119,11 @@ describe('Coordinator', () => {
 
     const stateDb = new arenaDb.Database(':memory:');
     const rootDir = path.join(tmpDir, prefix);
-    seedSampleTeams(rootDir, 'gen9ou', [OU_TEAM_ONE, OU_TEAM_TWO]);
     const dirs = packages.dirsForRoot(rootDir);
     const coord = new coordinator.Coordinator({
       client: mockClient,
       stateDb,
-      baselineSpec: baselineSpec ?? {
+      baselineSpec: opts?.baselineSpec ?? {
         mode: 'native',
         target: defaultAgentScript,
       },
@@ -207,7 +219,7 @@ describe('Coordinator', () => {
   }, 15_000);
 
   test('aborts harvested smoke test without falling back to harvested ladder pools', async () => {
-    const h = createMockCoordHarness('smoke-no-fallback');
+    const h = createMockCoordHarness('smoke-no-fallback', {omitSmokeTeams: true});
     try {
       await expect(
         h.coord.processPendingSubmissions(
@@ -350,9 +362,11 @@ describe('Coordinator', () => {
     const brokenBaseline = path.join(tmpDir, 'broken-baseline.js');
     fs.writeFileSync(brokenBaseline, 'process.exit(1);\n');
     const h = createMockCoordHarness('broken-baseline', {
-      mode: 'native',
-      target: process.execPath,
-      args: [brokenBaseline],
+      baselineSpec: {
+        mode: 'native',
+        target: process.execPath,
+        args: [brokenBaseline],
+      },
     });
     try {
       await expect(
@@ -989,7 +1003,16 @@ describe('Coordinator', () => {
         (h.coord.client as unknown as {
           getPendingSubmissions: () => Promise<serverArena.PendingSubmissionsResponse>;
         }).getPendingSubmissions = () => Promise.resolve({
-          ladders: [],
+          ladders: [{
+            id: 'gen9customgame',
+            slot: 'sv' as const,
+            name: 'SV',
+            format: 'gen9ou',
+            team: 'harvested' as const,
+            min: 2,
+            status: 'active' as const,
+            smokeTeams: [OU_TEAM_ONE, OU_TEAM_TWO],
+          }],
           submissions: [{
             versionId: 31,
             agentId: 1,

@@ -11,7 +11,7 @@ import * as arena from '../server/arena';
 import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
 import * as sim from '../server/sim';
-import * as serverTeams from '../server/teams';
+import * as simOps from '../server/sim-ops';
 import {toID} from '../static/util';
 import * as teams from '../teams';
 
@@ -1729,11 +1729,6 @@ export interface Options {
   ) => AgentSpec;
 }
 
-function formatWithCustomRules(format: string, customRules?: readonly string[]): string {
-  if (!customRules?.length) return format;
-  return `${format}${format.includes('@@@') ? ',' : '@@@'}${customRules.join(',')}`;
-}
-
 // GCP-side Tournament Coordinator:
 //   1. `processPendingSubmissions` pulls & smoke-tests `linux/amd64` tournament OCI submissions on
 //      GCP inside `bwrap` (`tourney-agent`) so Mac minis never touch `amd64` tournament artifacts.
@@ -1744,7 +1739,6 @@ export class Coordinator {
   private readonly baselineSpec: AgentSpec;
   private readonly rootDir?: string;
   private readonly agentsDir: string;
-  private readonly samplesDir: string;
   private readonly tables: readonly TableBinding[];
   private readonly superfinalGames: number;
   private readonly maxTurns?: number;
@@ -1760,9 +1754,6 @@ export class Coordinator {
     this.baselineSpec = options.baselineSpec;
     this.rootDir = options.rootDir;
     this.agentsDir = options.rootDir ? path.join(options.rootDir, 'agents') : '/opt/arena/agents';
-    this.samplesDir = options.rootDir
-      ? path.join(options.rootDir, 'samples')
-      : serverTeams.SAMPLES_DIR;
     this.tables = options.tables ?? [];
     this.superfinalGames = options.superfinalGames ?? 100;
     this.maxTurns = options.maxTurns;
@@ -1859,7 +1850,7 @@ export class Coordinator {
       for (const tid of sub.tournaments) {
         const meta = tourneyById.get(tid);
         const format = meta?.format ?? 'gen9ou';
-        const smokeFormat = formatWithCustomRules(format, meta?.customRules);
+        const smokeFormat = simOps.formatWithCustomRules(format, meta?.customRules);
 
         let p1TeamPacked: string | undefined;
         let p2TeamPacked: string | undefined;
@@ -1868,13 +1859,12 @@ export class Coordinator {
           if (meta?.team === 'harvested') {
             // Never fall back to harvested tournament pools in smoke tests so private harvested
             // teams cannot leak into exposed smoke-test logs.
-            ({t1Packed: p1TeamPacked, t2Packed: p2TeamPacked} =
-              await serverTeams.sampleSmokePair(
-                smokeFormat,
-                max => crypto.randomInt(0, max),
-                meta?.version,
-                this.samplesDir
-              ));
+            if (!meta.smokeTeams || meta.smokeTeams.length < 2) {
+              throw new Error(
+                `missing sample team pool for ${smokeFormat} (requires >= 2 teams)`
+              );
+            }
+            [p1TeamPacked, p2TeamPacked] = meta.smokeTeams;
           } else if (meta?.team === 'pools' && pool.length >= 2) {
             p1TeamPacked = pool[0];
             p2TeamPacked = pool.find(t => t !== p1TeamPacked) ?? pool[1];
@@ -2019,7 +2009,7 @@ export class Coordinator {
 
     const entrantByVersion = new Map(state.entrants.map(e => [e.versionId, e]));
     const versionIds = state.entrants.map(e => e.versionId);
-    const matchFormat = formatWithCustomRules(tourney.format, tourney.customRules);
+    const matchFormat = simOps.formatWithCustomRules(tourney.format, tourney.customRules);
     const timerSettings = await sim.getTimerSettings(matchFormat, tourney.version);
     const incSeconds = timerSettings.addPerTurnSeconds;
     const rrPairs = Math.ceil(tourney.gamesPerMatchup / 2);
