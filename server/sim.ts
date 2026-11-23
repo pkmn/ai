@@ -396,20 +396,6 @@ export function validateTeam(
   );
 }
 
-const SAMPLE_DIR_VALIDATION_TIMEOUT_MILLIS = 60_000;
-
-export function validateSampleTeamDir(
-  format: string,
-  dir: string,
-  version = SIM_VERSION
-): Promise<string[]> {
-  return callRpc<string[]>(
-    version,
-    {method: 'validateSampleTeamDir', format, dir},
-    SAMPLE_DIR_VALIDATION_TIMEOUT_MILLIS
-  );
-}
-
 export function getWorkerSimVersion(
   version = SIM_VERSION,
   timeoutMillis?: number

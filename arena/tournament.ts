@@ -1729,6 +1729,11 @@ export interface Options {
   ) => AgentSpec;
 }
 
+function formatWithCustomRules(format: string, customRules?: readonly string[]): string {
+  if (!customRules?.length) return format;
+  return `${format}${format.includes('@@@') ? ',' : '@@@'}${customRules.join(',')}`;
+}
+
 // GCP-side Tournament Coordinator:
 //   1. `processPendingSubmissions` pulls & smoke-tests `linux/amd64` tournament OCI submissions on
 //      GCP inside `bwrap` (`tourney-agent`) so Mac minis never touch `amd64` tournament artifacts.
@@ -1850,10 +1855,7 @@ export class Coordinator {
       for (const tid of sub.tournaments) {
         const meta = tourneyById.get(tid);
         const format = meta?.format ?? 'gen9ou';
-        const customRules = meta?.customRules ?? [];
-        const smokeFormat = customRules.length > 0
-          ? `${format}${format.includes('@@@') ? ',' : '@@@'}${customRules.join(',')}`
-          : format;
+        const smokeFormat = formatWithCustomRules(format, meta?.customRules);
 
         let p1TeamPacked: string | undefined;
         let p2TeamPacked: string | undefined;
@@ -2006,10 +2008,7 @@ export class Coordinator {
 
     const entrantByVersion = new Map(state.entrants.map(e => [e.versionId, e]));
     const versionIds = state.entrants.map(e => e.versionId);
-    const matchFormat = tourney.customRules.length > 0
-      ? `${tourney.format}${tourney.format.includes('@@@') ? ',' : '@@@'}` +
-        `${tourney.customRules.join(',')}`
-      : tourney.format;
+    const matchFormat = formatWithCustomRules(tourney.format, tourney.customRules);
     const timerSettings = await sim.getTimerSettings(matchFormat, tourney.version);
     const incSeconds = timerSettings.addPerTurnSeconds;
     const rrPairs = Math.ceil(tourney.gamesPerMatchup / 2);

@@ -211,23 +211,6 @@ describe('Coordinator', () => {
     }
   });
 
-  test('validates and uniformly samples smoke pairs from pkmn/teams for RBY, ADV, and SV',
-    async () => {
-      for (const format of ['gen1ou', 'gen3ou', 'gen9ou']) {
-        const ids = await serverTeams.getValidatedSampleTeamIds(format);
-        expect(ids.length).toBeGreaterThanOrEqual(100);
-        let cursor = 0;
-        const pair = await serverTeams.sampleSmokePair(format, max => (cursor++ * 7) % max);
-        expect(pair.t1Packed).not.toBe(pair.t2Packed);
-        expect(serverTeams.extractSpeciesIdsFromPacked(pair.t1Packed, format)).toHaveLength(6);
-        expect(serverTeams.extractSpeciesIdsFromPacked(pair.t2Packed, format)).toHaveLength(6);
-      }
-      expect(await serverTeams.getValidatedSampleTeamIds('gen9customgame')).toEqual([]);
-      await expect(serverTeams.sampleSmokePair('gen9customgame', () => 0)).rejects.toThrow(
-        /missing sample team pool/
-      );
-    }, 30_000);
-
   test('smoke tests RBY, ADV, and SV harvested ladders using sample teams without harvested pools',
     async () => {
       const rootDir = path.join(tmpDir, 'smoke-samples');

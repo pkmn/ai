@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 
 import * as arena from '../server/arena';
-import * as teams from '../server/teams';
 import {isConnectivityError, root} from '../static/util';
 
 import * as arbiter from './arbiter';
@@ -162,14 +161,6 @@ export async function runDaemon(opts: {
 
   try {
     await coord.recoverIncompleteMatches();
-    if (!opts.once && !coord.isDraining()) {
-      const pending = await client.getPendingSubmissions({target: 'ladder'}).catch(() => undefined);
-      if (pending?.ladders.length) {
-        await teams.preloadSampleTeamPools(
-          pending.ladders.filter(l => l.team === 'harvested')
-        ).catch(() => undefined);
-      }
-    }
     let consecutiveCycleErrors = 0;
     let lastHostCheckAt = 0;
     const smokeCadence = new coordinator.SmokeCadenceTracker();
@@ -263,24 +254,6 @@ export async function runTournamentValidationDaemon(opts: {
   process.once('SIGTERM', stop);
 
   try {
-    if (!opts.once && isRunning()) {
-      const pending = await client.getPendingSubmissions({
-        target: 'tournament',
-        tournamentId: opts.tournamentId,
-      }).catch(() => undefined);
-      if (pending?.tournaments?.length) {
-        await teams.preloadSampleTeamPools(
-          pending.tournaments
-            .filter(t => t.team === 'harvested')
-            .map(t => ({
-              format: t.customRules?.length
-                ? `${t.format}${t.format.includes('@@@') ? ',' : '@@@'}${t.customRules.join(',')}`
-                : t.format,
-              version: t.version,
-            }))
-        ).catch(() => undefined);
-      }
-    }
     while (isRunning()) {
       try {
         const count = await coord.processPendingSubmissions(opts.tournamentId);

@@ -37,10 +37,6 @@ export type RpcRequest = {
   format: string;
   packed: string;
   options?: simOps.ValidateTeamOptions;
-} | {
-  method: 'validateSampleTeamDir';
-  format: string;
-  dir: string;
 };
 
 export type ParentMessage = {
@@ -287,8 +283,6 @@ function handleRpc(req: RpcRequest): unknown {
       return simOps.sampleRandomPairWithSim(simMod, req.format, req.seed1, req.seed2);
     case 'validateTeam':
       return simOps.validateTeamWithSim(simMod, req.format, req.packed, req.options);
-    case 'validateSampleTeamDir':
-      return simOps.validateSampleTeamDirWithSim(simMod, req.format, req.dir);
   }
 }
 
