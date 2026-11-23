@@ -1041,6 +1041,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 260,
               meanTurnMillis: 255,
               ram: 980,
+              info: {win: 0.634, depth: 6, seldepth: 14, nodes: 142000, nps: 95000},
             },
             p2: {
               slug: '0-error',
@@ -1050,7 +1051,16 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 290,
               meanTurnMillis: 280,
               ram: 820,
+              info: {win: 0.412, nodes: 31500, nps: 52000},
             },
+            winHistory: [
+              {turn: 1, p1: 0.51, p2: 0.49},
+              {turn: 2, p1: 0.58, p2: 0.44},
+              {turn: 3, p1: 0.55, p2: 0.48},
+              {turn: 4, p1: 0.47, p2: 0.56},
+              {turn: 5, p1: 0.59, p2: 0.45},
+              {turn: 6, p1: 0.634, p2: 0.412},
+            ],
           },
         });
         return () => {

@@ -725,8 +725,14 @@ function buildShowdownTournamentLog(opts: {
     `|switch|p2a: ${lead2}|${lead2}|245/245`,
     `|switch|p2a: ${lead2}|${lead2}|100/100`,
     '|turn|1',
+    '|ai|p1|{"win":0.54,"depth":6,"seldepth":14,"nodes":118400,"nps":84000}',
+    '|ai|p2|{"win":0.48,"nodes":24600,"nps":49000}',
     `|move|p1a: ${lead1}|${move1}|p1a: ${lead1}`,
     `|move|p2a: ${lead2}|${move2}|p1a: ${lead1}`,
+    '|turn|2',
+    `|ai|p1|{"win":${opts.outcome === 'L' ? 0.24 : 0.78},"depth":7,` +
+      '"seldepth":17,"nodes":184200,"nps":96000}',
+    `|ai|p2|{"win":${opts.outcome === 'L' ? 0.79 : 0.21},"nodes":36800,"nps":54000}`,
   ];
   if (opts.outcome === 'T') {
     lines.push('|tie');
@@ -3845,6 +3851,9 @@ export class Runner {
             thinking: idx % 2 === 0,
             incrementSeconds: inc,
             pokemon: buildSampleSidePokemon('p1', p1Mons, isRandom, gen),
+            info: idx === 0
+              ? {win: 0.64, depth: 7, seldepth: 17, nodes: 205000, nps: 99000}
+              : {win: 0.58, depth: 6, nodes: 132000, nps: 78000},
           },
           p2: {
             slug: pr[1].slug,
@@ -3855,7 +3864,21 @@ export class Runner {
             thinking: true,
             incrementSeconds: inc,
             pokemon: buildSampleSidePokemon('p2', p2Mons, isRandom, gen),
+            ...(idx === 0 ? {info: {win: 0.41, nodes: 38900, nps: 54000}} : {}),
           },
+          winHistory: idx === 0
+            ? [
+              {turn: 1, p1: 0.52, p2: 0.49},
+              {turn: 2, p1: 0.56, p2: 0.45},
+              {turn: 3, p1: 0.44, p2: 0.61},
+              {turn: 4, p1: 0.58, p2: 0.47},
+              {turn: 5, p1: 0.64, p2: 0.41},
+            ]
+            : [
+              {turn: 1, p1: 0.51},
+              {turn: 2, p1: 0.55},
+              {turn: 3, p1: 0.58},
+            ],
           lines: [
             `|player|p1|${pr[0].name}|1`,
             `|player|p2|${pr[1].name}|2`,
