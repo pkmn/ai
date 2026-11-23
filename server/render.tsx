@@ -169,28 +169,18 @@ export function renderAiWinBarHtml(
   const p1Win = p1WinRaw ?? (1 - p2WinRaw!);
   const p2ViewOfP1 = p2WinRaw !== undefined ? 1 - p2WinRaw : undefined;
   const fillPct = Math.max(3, Math.min(97, p1Win * 100));
-  const leftLabel = p1WinRaw !== undefined
-    ? `${util.escapeHtml(p1Name)} (<tt>p1</tt>): ${formatWinPct(p1WinRaw)}`
-    : `${util.escapeHtml(p1Name)} (<tt>p1</tt>): —`;
-  const rightLabel = p2WinRaw !== undefined
-    ? `${util.escapeHtml(p2Name)} (<tt>p2</tt>): ${formatWinPct(p2WinRaw)}`
-    : `${util.escapeHtml(p2Name)} (<tt>p2</tt>): —`;
+  const tipParts: string[] = [];
+  if (p1WinRaw !== undefined) tipParts.push(`${p1Name} (p1): ${formatWinPct(p1WinRaw)}`);
+  if (p2WinRaw !== undefined) tipParts.push(`${p2Name} (p2): ${formatWinPct(p2WinRaw)}`);
   const markHtml = p1WinRaw !== undefined && p2ViewOfP1 !== undefined
     ? `<div class="ai-winbar-mark" style="left:calc(${(p2ViewOfP1 * 100).toFixed(1)}% - 1.5px)" ` +
       `title="${util.escapeHtml(p2Name)} estimate of ${util.escapeHtml(p1Name)} win%: ` +
       `${formatWinPct(p2ViewOfP1)}"></div>`
     : '';
-  return '<div class="ai-winbar">' +
-    '<div class="ai-winbar-labels">' +
-      `<span class="ai-win-p1">${leftLabel}</span>` +
-      '<span class="muted">Win prob.</span>' +
-      `<span class="ai-win-p2">${rightLabel}</span>` +
-    '</div>' +
-    '<div class="ai-winbar-track">' +
-      `<div class="ai-winbar-fill" style="width:${fillPct.toFixed(1)}%"></div>` +
-      '<div class="ai-winbar-mid" title="50%"></div>' +
-      markHtml +
-    '</div>' +
+  return `<div class="ai-winbar-track" title="${util.escapeHtml(tipParts.join(' · '))}">` +
+    `<div class="ai-winbar-fill" style="width:${fillPct.toFixed(1)}%"></div>` +
+    '<div class="ai-winbar-mid" title="50%"></div>' +
+    markHtml +
   '</div>';
 }
 
@@ -251,12 +241,10 @@ export function renderAiWinChartHtml(
   }
   if (hasP2) {
     legendParts.push(
-      '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1 − p2 win%</span>'
+      '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1−p2 win%</span>'
     );
   }
-  const heading = opts?.interactive
-    ? 'Win probability (click turn to seek)'
-    : 'Win probability (p1 perspective)';
+  const heading = 'Win probability';
 
   let hits = '';
   if (opts?.interactive) {
@@ -330,18 +318,19 @@ export function renderAiWinChartHtml(
   '</div>';
 }
 
-export function renderAiBroadcastPanelHtml(
+export function renderAiPanelHtml(
   p1Name: string,
   p2Name: string,
   p1Info: arena.PublicAgentInfo | undefined,
   p2Info: arena.PublicAgentInfo | undefined,
   winHistory: readonly arena.WinHistoryPoint[] | undefined,
-  opts?: {activeTurn?: number; interactive?: boolean}
+  opts?: {showStrip?: boolean; activeTurn?: number; interactive?: boolean}
 ): string {
+  const showStrip = opts?.showStrip !== false;
   const hasInfo = Boolean(p1Info || p2Info);
   const hasChart = Boolean(winHistory && winHistory.length > 0);
   if (!hasInfo && !hasChart) return '';
-  const stripHtml = hasInfo
+  const stripHtml = showStrip && hasInfo
     ? '<div class="ai-strip">' +
         '<div class="ai-strip-side"><span class="ai-slot-tag">p1</span>' +
           `${renderAiStatsHtml('p1', p1Info)}</div>` +
@@ -632,28 +621,18 @@ export function buildBattleDetailClientJs(): string {
       const p1Win = hasP1 ? p1Info.win : (1 - p2Info.win);
       const p2ViewOfP1 = hasP2 ? (1 - p2Info.win) : undefined;
       const fillPct = Math.max(3, Math.min(97, p1Win * 100));
-      const leftLabel = hasP1
-        ? (esc(p1Name) + ' (<tt>p1</tt>): ' + formatWinPct(p1Info.win))
-        : (esc(p1Name) + ' (<tt>p1</tt>): —');
-      const rightLabel = hasP2
-        ? (esc(p2Name) + ' (<tt>p2</tt>): ' + formatWinPct(p2Info.win))
-        : (esc(p2Name) + ' (<tt>p2</tt>): —');
+      const tipParts = [];
+      if (hasP1) tipParts.push(p1Name + ' (p1): ' + formatWinPct(p1Info.win));
+      if (hasP2) tipParts.push(p2Name + ' (p2): ' + formatWinPct(p2Info.win));
       const markHtml = (hasP1 && hasP2 && p2ViewOfP1 !== undefined)
         ? '<div class="ai-winbar-mark" style="left:calc(' + (p2ViewOfP1 * 100).toFixed(1) +
           '% - 1.5px)" title="' + esc(p2Name) + ' estimate of ' + esc(p1Name) + ' win%: ' +
           formatWinPct(p2ViewOfP1) + '"></div>'
         : '';
-      return '<div class="ai-winbar">' +
-        '<div class="ai-winbar-labels">' +
-          '<span class="ai-win-p1">' + leftLabel + '</span>' +
-          '<span class="muted">Win prob.</span>' +
-          '<span class="ai-win-p2">' + rightLabel + '</span>' +
-        '</div>' +
-        '<div class="ai-winbar-track">' +
-          '<div class="ai-winbar-fill" style="width:' + fillPct.toFixed(1) + '%"></div>' +
-          '<div class="ai-winbar-mid" title="50%"></div>' +
-          markHtml +
-        '</div>' +
+      return '<div class="ai-winbar-track" title="' + esc(tipParts.join(' · ')) + '">' +
+        '<div class="ai-winbar-fill" style="width:' + fillPct.toFixed(1) + '%"></div>' +
+        '<div class="ai-winbar-mid" title="50%"></div>' +
+        markHtml +
       '</div>';
     };
 
@@ -702,13 +681,11 @@ export function buildBattleDetailClientJs(): string {
       }
       if (hasP2) {
         legendParts.push(
-          '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1 − p2 win%</span>'
+          '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1−p2 win%</span>'
         );
       }
       const interactive = Boolean(opts && opts.interactive);
-      const heading = interactive
-        ? 'Win probability (click turn to seek)'
-        : 'Win probability (p1 perspective)';
+      const heading = 'Win probability';
       let hits = '';
       if (interactive) {
         const step = points.length <= 1 ? plotW : plotW / (points.length - 1);
@@ -783,11 +760,12 @@ export function buildBattleDetailClientJs(): string {
       '</div>';
     };
 
-    const renderAiBroadcastPanelHtml = (p1Name, p2Name, p1Info, p2Info, winHistory, opts) => {
+    const renderAiPanelHtml = (p1Name, p2Name, p1Info, p2Info, winHistory, opts) => {
+      const showStrip = !opts || opts.showStrip !== false;
       const hasInfo = Boolean(p1Info || p2Info);
       const hasChart = Array.isArray(winHistory) && winHistory.length > 0;
       if (!hasInfo && !hasChart) return '';
-      const stripHtml = hasInfo
+      const stripHtml = (showStrip && hasInfo)
         ? '<div class="ai-strip">' +
             '<div class="ai-strip-side"><span class="ai-slot-tag">p1</span>' +
               renderAiStatsHtml('p1', p1Info) + '</div>' +
@@ -850,7 +828,7 @@ export function buildBattleDetailClientJs(): string {
           winHistory.push({turn: tele[i].turn, p1: p1w, p2: p2w});
         }
       }
-      const html = renderAiBroadcastPanelHtml(
+      const html = renderAiPanelHtml(
         slot._aiSeat1 || 'p1',
         slot._aiSeat2 || 'p2',
         snap.p1,
@@ -1383,9 +1361,16 @@ function buildBattlesScript(
         : (l.phase === 'preview' || l.turn === 0)
           ? ' · Team Preview'
           : ', Turn ' + l.turn;
-      const liveChartHtml = (Array.isArray(l.winHistory) && l.winHistory.length > 0)
-        ? '<div class="ai-panel">' +
-          renderAiWinChartHtml(l.winHistory, {activeTurn: l.turn}) + '</div>'
+      const liveAiHtml = renderAiPanelHtml(
+        l.p1.name,
+        l.p2.name,
+        l.p1.info,
+        l.p2.info,
+        l.winHistory,
+        {showStrip: false, activeTurn: l.turn}
+      );
+      const livePanelAiHtml = liveAiHtml
+        ? '<div class="ai-panel">' + liveAiHtml + '</div>'
         : '';
       livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
         '</code> · <strong>Game ' + l.game +
@@ -1396,7 +1381,7 @@ function buildBattlesScript(
         '<div class="slots-grid">' +
         renderSlot('p1', l.p1, l, nowSec) +
         renderSlot('p2', l.p2, l, nowSec) +
-        '</div>' + liveChartHtml;
+        '</div>' + livePanelAiHtml;
 
       if (l.viewer && Array.isArray(l.viewer.lines) && l.viewer.lines.length > 0) {
         const gameKey = l.matchId + ':' + l.game;
@@ -3721,11 +3706,17 @@ function renderLivePanelInner(
         {renderLiveSlotCard('p1', l.p1, l, nowSec, links)}
         {renderLiveSlotCard('p2', l.p2, l, nowSec, links)}
       </div>
-      {l.winHistory && l.winHistory.length > 0 && (
-        <div className='ai-panel'>
-          {util.raw(renderAiWinChartHtml(l.winHistory, {activeTurn: l.turn}))}
-        </div>
-      )}
+      {(() => {
+        const liveAiHtml = renderAiPanelHtml(
+          l.p1.name,
+          l.p2.name,
+          l.p1.info,
+          l.p2.info,
+          l.winHistory,
+          {showStrip: false, activeTurn: l.turn}
+        );
+        return liveAiHtml ? <div className='ai-panel'>{util.raw(liveAiHtml)}</div> : undefined;
+      })()}
     </>
   );
 }

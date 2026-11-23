@@ -765,7 +765,7 @@ function renderBroadcastSectionHtml(
   const p2Clock = selected?.p2 ?? norm?.p2;
   const hasActiveBroadcast = Boolean(norm && p1Clock && p2Clock);
   const broadcastAiHtml = norm && p1Clock && p2Clock
-    ? render.renderAiBroadcastPanelHtml(
+    ? render.renderAiPanelHtml(
       p1Clock.name,
       p2Clock.name,
       selected?.p1?.info,
@@ -2056,7 +2056,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         el.classList.add('hide');
         return;
       }
-      const html = renderAiBroadcastPanelHtml(
+      const html = renderAiPanelHtml(
         tb.p1.name,
         tb.p2.name,
         tb.p1.info,

@@ -3673,10 +3673,10 @@ describe('JSON route parity & retired pool archives', () => {
 
   test('renders agent /info telemetry panels for both, one-sided, and silent games', () => {
     expect(
-      render.renderAiBroadcastPanelHtml('Hydra', 'Vertex', undefined, undefined, undefined)
+      render.renderAiPanelHtml('Hydra', 'Vertex', undefined, undefined, undefined)
     ).toBe('');
 
-    const oneSided = render.renderAiBroadcastPanelHtml(
+    const oneSided = render.renderAiPanelHtml(
       'Hydra',
       'Vertex',
       {win: 0.64, depth: 7, seldepth: 17, nodes: 205000, nps: 99000},
@@ -3691,9 +3691,11 @@ describe('JSON route parity & retired pool archives', () => {
     expect(oneSided).toContain('no /info telemetry');
     expect(oneSided).toContain('data-seek-turn="1"');
     expect(oneSided).toContain('data-seek-turn="2"');
+    expect(oneSided).toContain('<span>Win probability</span>');
+    expect(oneSided).not.toContain('ai-winbar-labels');
     expect(oneSided).not.toContain('ai-swatch-p2');
 
-    const both = render.renderAiBroadcastPanelHtml(
+    const both = render.renderAiPanelHtml(
       'Hydra',
       'Vertex',
       {win: 0.64, depth: 7, nodes: 205000, nps: 99000},
@@ -3703,7 +3705,20 @@ describe('JSON route parity & retired pool archives', () => {
     expect(both).toContain('ai-winbar-mark');
     expect(both).toContain('ai-swatch-p1');
     expect(both).toContain('ai-swatch-p2');
+    expect(both).toContain('1−p2 win%');
     expect(both).not.toContain('no /info telemetry');
+
+    const withoutStrip = render.renderAiPanelHtml(
+      'Hydra',
+      'Vertex',
+      {win: 0.64, nodes: 205000},
+      {win: 0.41, nodes: 38900},
+      [{turn: 1, p1: 0.64, p2: 0.41}],
+      {showStrip: false}
+    );
+    expect(withoutStrip).not.toContain('ai-strip');
+    expect(withoutStrip).toContain('ai-winbar-track');
+    expect(withoutStrip).toContain('ai-chart');
   });
 
   test('battle viewer strips |ai| lines and supports turn sync plus seek messages', () => {

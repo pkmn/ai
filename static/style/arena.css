@@ -525,20 +525,6 @@ table.matrix td.diag {
   font-style: italic;
 }
 
-.ai-winbar {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.ai-winbar-labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 1ch;
-  justify-content: space-between;
-  font-family: var(--monospace);
-}
-
 .ai-winbar-track {
   position: relative;
   height: 0.5rem;
