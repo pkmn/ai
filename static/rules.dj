@@ -113,20 +113,32 @@ bundles must contain at most 25,000 files/directories/symlinks and an executable
 archive root. OCI containers must contain at most 32 OCI layers and the container `ENTRYPOINT` /
 `CMD` must run the agent.
 
-Tournaments close at `00:00:00 UTC` strictly before start time and accept only the first successful
-entry for a project (resubmissions are allowed after a failed smoke test until the cutoff). Ladder
-competitors may run *up to 2 versions* concurrently and may submit a new version once both hold:
+Tournaments close at `00:00:00 UTC` strictly before start time and accept only the first activated
+entry for a project (resubmissions are allowed after a failed or discarded diagnostic test until the
+cutoff, and activation must also occur before cutoff). Ladder competitors may run *up to 2 versions*
+concurrently and may submit a new version once both hold:
 
-  - *14 days* have elapsed since their last successful ladder submission.
+  - *14 days* have elapsed since their last activated ladder submission.
   - all of their *previous submissions have settled* to $`\text{SE}(R) \le 30\text{ Elo}`
     ($`\hat{\sigma} \le 0.173` nats, 95% CI $`\approx \pm 59\text{ Elo}`) and at least 25
     [blind-pair matches](#Matchmaking) (50 games).
 
-A submission succeeds if the arena can unpack it and play through the first turn of a battle in the
-format(s) it is entered in ("smoke test"). Failed smoke tests do not trigger the 14-day cooldown,
-but each project is limited to at most *3 failed smoke tests per 24 hours* (tracked separately for
-ladders and tournaments). If 2 versions are already active on a ladder, the weaker is automatically
-retired, leaving the *strongest version and the latest submission*.
+Before going live, every submission undergoes a full-game self-play *diagnostic test* (`vX` vs `vX`
+using two distinct public sample teams, own roster teams on `pools`, or generated random teams on
+`random`) in each unique format it targets, under real format timers plus a wall-clock ceiling (10m
+RBY, 8m ADV, 6m SV/RAND/VGC, excluding `/ready` grace; reaching the ceiling after at least one clean
+turn passes). While running, the submitting project can watch live `/info` stats and the Showdown
+viewer privately on [account](/account); afterward, the full replay (with `/info` telemetry) and up
+to 64 KiB of `stderr` per side (16 KiB head + 48 KiB tail, including pre-`/ready` output; excess is
+truncated without failing) are available privately on [account](/account). Passing transitions the
+build to *staged* rather than entering matchmaking automatically: the developer reviews the replay
+and `stderr` log and explicitly clicks *Activate* (entering the ladder/tournament and starting the
+14-day ladder cooldown) or *Discard* (leaving ladders untouched and restoring any staged VGC team
+paste back to saved). Neither failed nor discarded diagnostic tests trigger the 14-day cooldown, but
+each project is limited to at most *3 failed or discarded diagnostic tests per 24 hours* (tracked
+separately for ladders and tournaments). If 2 versions are already active on a ladder when a new
+version is activated, the weaker is automatically retired, leaving the *strongest version and the
+latest submission*.
 
 ### Format
 
@@ -352,8 +364,10 @@ Superfinal between the top two entrants.
     files. Run a dummy forward pass before printing `/ready` (60-second startup budget) so cold
     shader/ANE compilation does not burn your turn clock.
   - ladder processes are capped at 256 (`RLIMIT_NPROC=256` on native bundles; `--pids-limit=256`
-    including threads in containers), and `stderr` is drained (with the last 4 KiB surfaced on
-    [account](/account) if a ladder smoke test fails).
+    including threads in containers), and `stderr` is drained during regular matches (during
+    diagnostic tests, up to 64 KiB per side --- 16 KiB head + 48 KiB tail --- is captured and
+    downloadable privately on [account](/account); host-measured CPU utilization and fixed-enum
+    protocol error aggregates are published on each project's profile page).
   - on ladders, the arena sets `OMP_NUM_THREADS=10`, `MKL_NUM_THREADS=10`, `TORCH_NUM_THREADS=10`,
     and `RAYON_NUM_THREADS=10`. Do not hardcode thread pools larger than 10 threads, and tune
     thread counts for your workload on the heterogeneous 2 Super + 4 Performance + 4 Efficiency core

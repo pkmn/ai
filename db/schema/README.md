@@ -46,6 +46,7 @@ erDiagram
     ladders ||--o{ rating_snapshots : "tracks daily Elo"
 
     agent_versions ||--o{ ladder_entries : "competes in"
+    agent_versions ||--o{ smoke_diagnostics : "stores diagnostics"
     agent_versions ||--o{ matches : "plays p1 / p2"
     agent_versions ||--o{ pair_aggregates : "low / high pair"
     agent_versions ||--o{ rating_snapshots : "daily snapshot"
@@ -69,9 +70,10 @@ erDiagram
 | `agent_ladders` | [`agent-ladders.sql`](agent-ladders.sql) | Per-slot ladder qualification grants (`rby`/`adv`/`sv`/`rand`/`vgc`) in SQLite. |
 | `developers` | [`developers.sql`](developers.sql) | Co-owners with globally `UNIQUE` GitHub, Smogon, and Discord IDs (1 project/human). |
 | `discord_members` | [`discord-members.sql`](discord-members.sql) | Guild cache backing sub-ms `/auth/discord/validate` for `/chat/logs/`. |
-| `agent_versions` | [`agent-versions.sql`](agent-versions.sql) | Bundles/OCI images, one-time encrypted pull tokens, smoke tests, DM state. |
-| `agent_ladder_teams` | [`agent-ladder-teams.sql`](agent-ladder-teams.sql) | Pending/active 20-team rosters per `(agent_id, ladder_id)` for `pools` ladders. |
-| `ladder_entries` | [`ladder-entries.sql`](ladder-entries.sql) | Per-version MAP Davidson ratings, roles (`champion`/`challenger`/`retired`/`quarantined`), 1500 anchors, streaks, reigns. |
+| `agent_versions` | [`agent-versions.sql`](agent-versions.sql) | Bundles/OCI images, one-time encrypted pull tokens, diagnostic/staged/activation lifecycle, DM state. |
+| `smoke_diagnostics` | [`smoke-diagnostics.sql`](smoke-diagnostics.sql) | Private per-format self-play diagnostic replays (with `|ai|`), bounded 64 KiB `p1`/`p2` `stderr`, and CPU/RAM metrics. |
+| `agent_ladder_teams` | [`agent-ladder-teams.sql`](agent-ladder-teams.sql) | Saved/pending/active 20-team rosters per `(agent_id, ladder_id)` for `pools` ladders. |
+| `ladder_entries` | [`ladder-entries.sql`](ladder-entries.sql) | Per-version MAP Davidson ratings, roles (`champion`/`challenger`/`retired`/`quarantined`), 1500 anchors, CPU/fault aggregates, streaks, reigns. |
 | `agent_ladder_stats` | [`agent-ladder-stats.sql`](agent-ladder-stats.sql) | Cross-version career peaks, streaks, and unbroken Top-$K$ reigns per ladder. |
 | `matches` | [`matches.sql`](matches.sql) | Append-only ledger of 2-game swapped-team blind-pair matches and telemetry. |
 | `pair_aggregates` | [`pair-aggregates.sql`](pair-aggregates.sql) | Canonical `low < high` 5-category Davidson counts (`ww/wt/split/tl/ll`), H2H streaks, LOS. |

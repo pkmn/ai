@@ -74,21 +74,33 @@ Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
 - **OCI containers (`linux/arm64` on ladders; `linux/amd64` on tournaments):** **≤ 32 OCI layers**
   and `ENTRYPOINT` / `CMD` runs the agent.
 
-### Cooldowns, Smoke Tests & Concurrency
-- **Smoke test:** A submission succeeds if the arena unpacks it and plays through Turn 1 of a
-  battle in every entered format. If a ladder smoke test fails, the last 4 KiB of `stderr` are
-  surfaced on `/account`. Failed smoke tests do not trigger the 14-day cooldown, but each project is
-  limited to at most **3 failed smoke tests per 24 hours** (tracked separately for ladders and
-  tournaments).
+### Cooldowns, Diagnostic Smoke Tests & Concurrency
+- **Diagnostic test & opt-in activation:** Every submission plays a full-game self-play diagnostic
+  (`vX` vs `vX` using 2 distinct sample/public teams, own roster teams on `pools`, or generated
+  random teams on `random`) in every unique entered format, using real format Showdown timers plus a
+  per-format wall-clock ceiling (**10m** RBY, **8m** ADV, **6m** SV/RAND/VGC, excluding `/ready`
+  grace; hitting the ceiling after ≥ 1 clean turn passes). While running, the submitting project can
+  watch live `/info` telemetry and the Showdown viewer privately on `/account/`; afterward, the full
+  replay (with `/info` panel) and up to **64 KiB of `stderr` per side** (16 KiB head + 48 KiB tail,
+  including pre-`/ready` output; excess truncated without error) are downloadable privately on
+  `/account/`. Passing moves the build to **`staged`** (not live yet): the developer reviews the
+  replay and `stderr`, then explicitly clicks **Activate** (entering matchmaking and starting the
+  14-day ladder cooldown) or **Discard** (leaving ladders untouched and restoring staged VGC teams
+  to `saved`). Neither failed nor discarded runs trigger the 14-day cooldown, but each project is
+  limited to at most **3 failed or discarded diagnostic tests per 24 hours** (tracked separately for
+  ladders and tournaments). Regular ladder matches discard `stderr` and publish host-measured CPU
+  utilization (effective cores) and fixed-enum protocol error aggregates on `/projects/:slug/`.
 - **Ladders (concurrency, cooldown & qualification):** Requires a qualified project. Up to **2
-  active versions** concurrently per ladder (if 2 are already active, the weaker retires, leaving
-  the strongest + latest). You may submit a new ladder version once **14 days** have elapsed since
-  your last successful ladder submission AND all previous versions have settled (`SE(R) ≤ 30 Elo`,
-  i.e., `σ̂ ≤ 0.173` nats, and ≥ 25 blind-pair matches / 50 games).
+  active versions** concurrently per ladder (if 2 are already active when a staged version is
+  activated, the weaker retires, leaving the strongest + latest). You may submit a new ladder
+  version once **14 days** have elapsed since your last activated ladder submission AND all previous
+  versions have settled (`SE(R) ≤ 30 Elo`, i.e., `σ̂ ≤ 0.173` nats, and ≥ 25 blind-pair matches / 50
+  games).
 - **Tournaments (entry cutoff & independence):** Open to registered projects (including `Pending`),
   independent of ladder cooldowns, ladder settlement, and ladder quarantine. Tournaments close at
-  `00:00:00 UTC` strictly before start time and accept only the first successful entry per project
-  (resubmissions are allowed after a failed smoke test until cutoff).
+  `00:00:00 UTC` strictly before start time and accept only the first activated entry per project
+  (resubmissions are allowed after a failed or discarded diagnostic until cutoff; activation must
+  also occur before cutoff).
 
 ---
 
