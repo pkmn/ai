@@ -235,6 +235,7 @@ export interface BroadcastPlayer extends BroadcastClock {
   version?: string;
   team?: string;
   pokemon?: unknown[];
+  info?: PublicAgentInfo;
 }
 
 export interface SeriesGameSummary {
@@ -260,6 +261,7 @@ export interface BroadcastTable {
   lines?: string[];
   p1Lines?: string[];
   p2Lines?: string[];
+  winHistory?: WinHistoryPoint[];
   live?: boolean;
   updatedAt?: number;
 }
@@ -799,6 +801,7 @@ export function normalizeLiveBroadcast(
       lines,
       p1Lines: persp.p1Lines,
       p2Lines: persp.p2Lines,
+      ...(tb.winHistory && tb.winHistory.length > 0 ? {winHistory: tb.winHistory.slice()} : {}),
       live: tb.idle ? false : (tb.live ?? (isPrimaryFallback ? raw.live !== false : true)),
       updatedAt: tb.updatedAt ?? updatedAt,
     };
@@ -1057,6 +1060,7 @@ export type TournamentBroadcastPayload =
     p1?: BroadcastPlayer;
     p2?: BroadcastPlayer;
     lines?: string[];
+    winHistory?: WinHistoryPoint[];
     live?: boolean;
   };
 
@@ -2402,7 +2406,10 @@ export function register(app: polka.Polka, options: Options): Handle {
       if (mode === 'append') {
         if (!p1.pokemon && prev.p1?.pokemon) p1.pokemon = prev.p1.pokemon;
         if (!p2.pokemon && prev.p2?.pokemon) p2.pokemon = prev.p2.pokemon;
+        if (!p1.info && prev.p1?.info) p1.info = prev.p1.info;
+        if (!p2.info && prev.p2?.info) p2.info = prev.p2.info;
       }
+      const winHistory = active.winHistory ?? (mode === 'append' ? prev.winHistory : undefined);
       const incomingLines = active.lines?.slice(-MAX_TABLE_LINES) ?? [];
       const stage = active.stage ?? prev.stage;
       const cycle = active.cycle ?? (mode === 'append' ? prev.cycle : undefined);
@@ -2447,6 +2454,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         lines: mergedLines,
         p1Lines: mergedPersp.p1Lines,
         p2Lines: mergedPersp.p2Lines,
+        ...(winHistory && winHistory.length > 0 ? {winHistory} : {}),
         live: active.live ?? true,
         updatedAt: nowSec,
       };
@@ -2471,6 +2479,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           p2Lines: chunkPersp.p2Lines,
           p1: nextTable.p1,
           p2: nextTable.p2,
+          ...(nextTable.winHistory ? {winHistory: nextTable.winHistory} : {}),
           live: nextTable.live,
           updatedAt: nowSec,
         });

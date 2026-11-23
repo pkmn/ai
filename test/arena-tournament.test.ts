@@ -702,4 +702,89 @@ describe('ConcurrentTournamentGame', () => {
       expect(fsEntry!.total).toBeLessThan(turnEntry!.total);
     }
   });
+
+  test('ConcurrentGame broadcasts live /info updates and collapses final |ai| logs', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-info-tourney-'));
+    try {
+      const p1Script = path.join(dir, 'p1-tourney.js');
+      const p2Script = path.join(dir, 'p2-tourney.js');
+      fs.writeFileSync(
+        p1Script,
+        [
+          'const rl = require("readline").createInterface({input: process.stdin});',
+          'let step = 0;',
+          'process.stdout.write("/ready\\n");',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice(9));',
+          '  if (req.wait) return;',
+          '  step++;',
+          '  process.stdout.write("/info " + JSON.stringify({win: 0.55, depth: 3}) + "\\n");',
+          '  process.stdout.write("/info " + JSON.stringify({win: 0.67, depth: 7, ' +
+            'seldepth: 15, nodes: 9500, nps: 45000, policy: {default: 1}}) + "\\n");',
+          '  process.stdout.write("default\\n");',
+          '});',
+        ].join('\n'),
+        'utf8'
+      );
+      fs.writeFileSync(
+        p2Script,
+        [
+          'const rl = require("readline").createInterface({input: process.stdin});',
+          'process.stdout.write("/ready\\n");',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice(9));',
+          '  if (req.wait) return;',
+          '  process.stdout.write("default\\n");',
+          '});',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const pair = sampleRandomPair('gen9randombattle', '1,2,3,4', '5,6,7,8');
+      const snaps: tournament.TurnBroadcastInfo[] = [];
+      const res = await new tournament.ConcurrentGame({
+        format: 'gen9randombattle',
+        seed: '1,2,3,4',
+        p1: {
+          spec: {
+            agentId: 'hydra',
+            displayName: 'Hydra',
+            vmHost: 'localhost',
+            controlSocket: path.join(dir, 'p1.sock'),
+            localCommand: process.execPath,
+            localArgs: [p1Script],
+          },
+          teamPacked: pair.t1Packed,
+        },
+        p2: {
+          spec: {
+            agentId: 'vertex',
+            displayName: 'Vertex',
+            vmHost: 'localhost',
+            controlSocket: path.join(dir, 'p2.sock'),
+            localCommand: process.execPath,
+            localArgs: [p2Script],
+          },
+          teamPacked: pair.t2Packed,
+        },
+        smokeStopAfterTurn: 2,
+        callbacks: {
+          onSpectatorChunk: (_chunk, snap) => snaps.push(snap),
+          onClockChange: snap => snaps.push(snap),
+        },
+      }).run();
+
+      expect(snaps.some(s => s.p1.info?.win === 0.67 && s.p1.info?.depth === 7)).toBe(true);
+      expect(snaps.some(s => (s.winHistory?.length ?? 0) > 0)).toBe(true);
+      const aiLines = res.omniscientLog.split('\n').filter(l => l.startsWith('|ai|'));
+      expect(aiLines.length).toBeGreaterThanOrEqual(2);
+      expect(aiLines.every(l => l.startsWith('|ai|p1|'))).toBe(true);
+      expect(aiLines.some(l => l.includes('"depth":3'))).toBe(false);
+      expect(aiLines.some(l => l.includes('policy'))).toBe(false);
+    } finally {
+      fs.rmSync(dir, {recursive: true, force: true});
+    }
+  });
 });

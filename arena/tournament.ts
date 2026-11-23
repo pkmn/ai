@@ -8,7 +8,12 @@ import type {PRNGSeed} from '@pkmn/sim';
 import {SIM_VERSION} from '../db/ladders';
 import {getTournamentBestOf} from '../db/tournaments';
 import * as arena from '../server/arena';
-import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
+import {
+  PublicAgentInfo,
+  filterPlayerProtocolChunk,
+  injectAiLogLines,
+  parseAgentStdoutLine,
+} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
 import * as sim from '../server/sim';
 import * as simOps from '../server/sim-ops';
@@ -62,12 +67,14 @@ export interface TurnSlotBroadcast {
   bankSeconds: number;
   thinking: boolean;
   pokemon?: unknown[];
+  info?: PublicAgentInfo;
 }
 
 export interface TurnBroadcastInfo {
   turn: number;
   p1: TurnSlotBroadcast;
   p2: TurnSlotBroadcast;
+  winHistory?: arena.WinHistoryPoint[];
 }
 
 export type SeriesGameSummary = arena.SeriesGameSummary;
@@ -289,6 +296,7 @@ export class ConcurrentGame {
   private timers: engine.ResolvedClockTimers;
   private readonly readyGraceMillis: number;
   private readonly callbacks?: GameCallbacks;
+  private readonly infoCoalescer: engine.InfoCoalescer;
 
   private battle: sim.BattleHandle | undefined = undefined;
 
@@ -331,20 +339,30 @@ export class ConcurrentGame {
     this.readyGraceMillis =
       (options.timers?.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
     this.callbacks = options.callbacks;
+    this.infoCoalescer = new engine.InfoCoalescer({
+      onBroadcast: () => {
+        if (!this.ended && this.battle) {
+          this.callbacks?.onClockChange?.(this.buildBroadcastState());
+        }
+      },
+    });
   }
 
   private getFullLog(): string {
     const rawLog = this.battle?.getLog().join('\n') ?? '';
-    return rewriteBlindPlayerNames(rawLog, this.p1Spec.displayName, this.p2Spec.displayName);
+    const withAi = injectAiLogLines(rawLog, this.infoCoalescer.getCommittedByTurn());
+    return rewriteBlindPlayerNames(withAi, this.p1Spec.displayName, this.p2Spec.displayName);
   }
 
   private buildBroadcastState(): TurnBroadcastInfo {
     const p1Pokemon = this.battle?.getPokemon('p1');
     const p2Pokemon = this.battle?.getPokemon('p2');
+    const winHistory = this.infoCoalescer.getWinHistory();
     return {
       turn: this.currentTurn,
       p1: this.buildSlotBroadcast(this.p1, p1Pokemon),
       p2: this.buildSlotBroadcast(this.p2, p2Pokemon),
+      ...(winHistory.length > 0 ? {winHistory} : {}),
     };
   }
 
@@ -365,10 +383,12 @@ export class ConcurrentGame {
     const bankMillis = player
       ? Math.min(player.turn.bankMillis, this.timers.startingBankMillis)
       : this.timers.startingBankMillis;
+    const info = player ? this.infoCoalescer.getLive(player.slot) : undefined;
     return {
       bankSeconds: Math.max(0, Math.round(bankMillis / 1000)),
       thinking: Boolean(player?.state.thinking),
       ...(pokemon !== undefined ? {pokemon} : {}),
+      ...(info !== undefined ? {info} : {}),
     };
   }
 
@@ -448,7 +468,12 @@ export class ConcurrentGame {
       engine.wakeLineResolver(player.io);
     };
 
-    engine.attachStdoutLineFramer(proc, player.io, () => onDisconnect(1));
+    engine.attachStdoutLineFramer(
+      proc,
+      player.io,
+      () => onDisconnect(1),
+      engine.createInfoLineInterceptor(slot, this.infoCoalescer)
+    );
 
     const handleStderrLine = (errLine: string) => {
       if (errLine.startsWith('ARENA_TURN_MS=')) {
@@ -804,6 +829,7 @@ export class ConcurrentGame {
         engine.chargeDecisionClock(player.turn, decisionElapsedMillis);
         engine.recordDecisionTelemetry(player.telemetry, decisionElapsedMillis, req.teamPreview);
         player.state.thinking = false;
+        this.infoCoalescer.commitTurn(player.slot, this.currentTurn);
 
         const choiceCmd = engine.formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battle!.write(`>${player.slot} ${choiceCmd}`);
@@ -869,6 +895,7 @@ export class ConcurrentGame {
     this.winner = 'tie';
     this.preemptedSlot = undefined;
     this.endReason = 'normal';
+    this.infoCoalescer.reset();
 
     for (const p of [this.p1, this.p2]) {
       p.io.lineQueue.length = 0;
@@ -1306,6 +1333,7 @@ export class ConcurrentGame {
         games,
       };
     } finally {
+      this.infoCoalescer.dispose();
       if (this.battle) {
         void this.battle.destroy().catch(() => undefined);
       }
@@ -2178,6 +2206,7 @@ export class Coordinator {
               thinking: snap.p1.thinking,
               incrementSeconds: incSeconds,
               ...(snap.p1.pokemon ? {pokemon: snap.p1.pokemon} : {}),
+              ...(snap.p1.info ? {info: snap.p1.info} : {}),
             },
             p2: {
               slug: p2Ent.agentSlug,
@@ -2187,8 +2216,12 @@ export class Coordinator {
               thinking: snap.p2.thinking,
               incrementSeconds: incSeconds,
               ...(snap.p2.pokemon ? {pokemon: snap.p2.pokemon} : {}),
+              ...(snap.p2.info ? {info: snap.p2.info} : {}),
             },
             lines,
+            ...(snap.winHistory && snap.winHistory.length > 0
+              ? {winHistory: snap.winHistory}
+              : {}),
             live: true,
           }).catch(() => undefined);
         };
