@@ -814,6 +814,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: awsome-battler.svg
     owners:
       danqai: danq.ai.767218
 - name: AsterAI
