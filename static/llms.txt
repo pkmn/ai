@@ -44,7 +44,12 @@ providing:
 - **Team members:** GitHub + Smogon usernames (at most one project per person; all members must
   remain Smogon account holders in good standing).
 - **Qualifying criteria** (e.g. Pokémon Showdown / vgc.bot / pkmn.bot rankings), project details,
-  optional SVG/PNG logo, and agreement to Responsible Releases and arena / anti-cheating evaluation.
+  optional SVG/PNG logo, and agreement to Responsible Releases plus irrevocable permission for
+  **pkmn.ai** staff to archive and run submitted artifacts **only** on **pkmn.ai**-controlled
+  infrastructure (including private backups) for arena evaluation and planned unnamed-ensemble
+  Smogon / Pokémon Showdown anti-cheating investigations (results shared only with senior Smogon /
+  Pokémon Showdown staff without notifying authors; never shared with third parties or used for any
+  other purpose).
 
 ### Submitting via `/account`
 Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:

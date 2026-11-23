@@ -39,12 +39,13 @@ body:
     id: agreements
     attributes:
       label: Required Agreements
+      description: "Submitted artifacts stay on **pkmn.ai**-controlled infrastructure (including private backups), are archived indefinitely, are accessible and runnable **only** by **pkmn.ai** staff, and are used **only** for the two purposes below — never shared with third parties or used for any other purpose. Permissions for already-submitted artifacts are irrevocable and survive withdrawal or ladder retirement."
       options:
         - label: We agree to adhere to the latest community guidance on [Responsible Releases](https://pkmn.ai/release).
           required: true
-        - label: We grant **pkmn.ai** permission to run our model in its Arena for the purpose of evaluation against other agents.
+        - label: We grant **pkmn.ai** irrevocable permission to archive and run our submitted artifacts in its Arena for evaluation against other agents.
           required: true
-        - label: We grant **pkmn.ai** permission to run our model to aid evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
+        - label: We grant **pkmn.ai** irrevocable permission to run our submitted artifacts to aid in evaluating suspected cheating cases in Smogon & Pokémon Showdown competitions.
           required: true
   - type: markdown
     attributes:

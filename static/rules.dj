@@ -20,16 +20,21 @@ required to provide:
     Showdown](https://pokemonshowdown.com/ladder) / [vgc.bot](https://vgc.bot/leaderboard) /
     [pkmn.bot](https://pkmn.bot/leaderboard) rankings).
   - descriptive fields on *project details* for the [projects](/projects) page.
+  - an SVG or PNG image (_optional_) with your *project's logo* to be displayed on your project's
+    statistics page.
   - agreement to:
 
     1. adhere to the latest community guidance on [Responsible Releases](/release).
-    2. grant *pkmn.ai* permission to run your model in its arena for the purpose of evaluation
-       against other agents.
-    3. grant *pkmn.ai* permission to run your model to aid in evaluating suspected cheating cases in
-       Smogon & Pokémon Showdown competitions.
+    2. grant *pkmn.ai* irrevocable permission to archive and run submitted artifacts in its arena
+       for evaluation against other agents.
+    3. grant *pkmn.ai* irrevocable permission to run submitted artifacts to aid in evaluating
+       suspected cheating cases in Smogon & Pokémon Showdown competitions.
 
-  - an SVG or PNG image (_optional_) with your *project's logo* to be displayed on your project's
-    statistics page.
+    Submitted artifacts stay on *pkmn.ai*-controlled infrastructure (including private backups), are
+    archived indefinitely, are accessible and runnable only by *pkmn.ai* staff, and are used only
+    for the two purposes above --- never shared with third parties or used for any other purpose.
+    Permissions for already-submitted artifacts are irrevocable and survive withdrawal or ladder
+    retirement.
 
 Staff will review the resulting [pkmn/ai](https://github.com/pkmn/ai) issue, add your project to
 [`projects.yml`](https://github.com/pkmn/ai/blob/main/static/projects.yml), and approve it for
