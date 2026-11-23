@@ -545,19 +545,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- name: Metamon
-  site: https://metamon.tech/
-  paper: Grigsby:2025
-  active: 2024 # September ??
-  license: MIT
-  source: https://github.com/UT-Austin-RPL/metamon
-  engine:
-    - name: poke-env
-      url: https://github.com/hsahovic/poke-env
-  language: Python
-  platform:
-    - name: Pokémon Showdown!
-      url: https://github.com/smogon/pokemon-showdown
 - name: Optimal Pokémon Battler
   active: 2024 # November 18
   source: https://github.com/Siddapa/optimal-pkmn-battler
@@ -583,6 +570,22 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Metamon
+  site: https://metamon.tech/
+  paper: Grigsby:2025
+  active: 2025 # April 5
+  license: MIT
+  source: https://github.com/UT-Austin-RPL/metamon
+  engine:
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: Python
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      jakegrigsby: pokeagentchallenge.728597
 - name: PokéAgent
   site: https://pokeagentchallenge.com/
   paper: Karten:2025b
