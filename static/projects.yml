@@ -594,6 +594,17 @@
   site: https://pokeagentchallenge.com/
   paper: Karten:2025b
   active: 2025 # April
+- name: Pokérus
+  site: https://www.smogon.com/forums/threads/3790884/
+  active: 2025 # May 29
+  engine: Custom
+  language: [Rust, Python]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      heyo392: Nobodynobody.450733
 - name: Magpie
   active: 2025 # July 5
   engine:
@@ -644,12 +655,6 @@
   site: https://www.smogon.com/forums/threads/3789213/
   active: 2026 # ???
   engine: Custom
-  platform:
-    - name: Pokémon Showdown!
-      url: https://github.com/smogon/pokemon-showdown
-- name: pokerus
-  site: https://www.smogon.com/forums/threads/3790884/
-  active: 2026 # ???
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown

@@ -53,7 +53,7 @@ const RANKING = [
   'AWRorus', // top gen9ag & #2 gen9randbats (2432 Elo/93.9% GXE/2015 Glicko)
   'MissingNo.Zero', // #1 in 5 randbats gens & #5 gen9randbats (2453 Elo/93.4% GXE/1999 Glicko)
   'Xatu Zero', // top gen9ou (2002 Elo/88.0% GXE/1876 Glicko), gen9uu & gen9monotype
-  'pokerus', // top gen9ou (1955 Elo/82.4% GXE/1791 Glicko) & #5 gen9ubers
+  'Pokérus', // top gen9ou (1955 Elo/82.4% GXE/1791 Glicko) & #5 gen9ubers
   'MysteriousWind', // top VGC Bo1 & Bo3 (1889 Elo/91.0% GXE/1937 Glicko) & #1 vgc.bot OTS/CTS
   'mikumiku', // top VGC (1857 Elo/81.2% GXE/ 1775 Glicko)
   'nessie', // top VGC Bo3 (1639 Elo/75.7% GXE/1714 Glicko)

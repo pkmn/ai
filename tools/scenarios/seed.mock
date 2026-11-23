@@ -26,7 +26,7 @@ register "Jaxcalibur" --owner jaxdev:jaxdev.610006
 register "Eevenator" --owner eevedev:eevedev.610007
 register "AWRorus" --owner awrdev:awrdev.610008
 register "MysteriousWind" --owner winddev:winddev.610009
-register "pokerus" --owner pokerusdev:pokerusdev.610010
+register "Pokérus" --owner pokerusdev:pokerusdev.610010
 register "mikumiku" --owner mikudev:mikudev.610011
 register "CynthiAI" --owner sisyphus25:sisyphus25.610012
 

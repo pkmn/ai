@@ -922,7 +922,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             },
             p2: {
               slug: 'pokerus',
-              name: 'pokerus',
+              name: 'Pokérus',
               version: '1.0.2',
               bankSeconds: 126,
               lastTurnMillis: 360,

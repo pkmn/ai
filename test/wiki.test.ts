@@ -70,6 +70,12 @@ describe('wiki helpers', () => {
     expect(slugify("Mew's Truck").toLowerCase()).toBe('mews-truck');
   });
 
+  test('slugify folds combining diacritics into ASCII letters', () => {
+    expect(slugify('Pokérus').toLowerCase()).toBe('pokerus');
+    expect(slugify('PokéChamp').toLowerCase()).toBe('pokechamp');
+    expect(slugify('EPOké')).toBe('EPOke');
+  });
+
   test('normalizeSlug normalizes percent-encoding into NFC underscores', () => {
     expect(wiki.normalizeSlug('Mew%27s%20Truck')).toBe("Mew's_Truck");
     expect(wiki.normalizeSlug('Poke\u0301Champ')).toBe('PokéChamp');

@@ -15,7 +15,9 @@ export const ROOT = path.basename(path.dirname(__dirname)) === 'build'
 export const root = (...paths: string[]) => path.join(ROOT, ...paths);
 
 export const slugify = (s: string) =>
-  s.replace(/\s+/g, '-')
+  s.normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, '-')
     .replace(/[^\w-]+/g, '')
     .replace(/--+/g, '-')
     .replace(/^-+/, '')
