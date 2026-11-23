@@ -646,11 +646,18 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- name: Incinference
-  active: 2026 # ???
+- name: incinference
+  active: 2026 # July 29
+  engine:
+    - name: poke-engine-doubles
+      url: https://github.com/pmariglia/poke-engine-doubles
+  language: [Python, Rust]
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      74togo: incin_dev.767200
 - name: PokeCHAD
   active: 2026 # ???
   platform:
