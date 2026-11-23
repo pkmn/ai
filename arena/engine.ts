@@ -319,11 +319,7 @@ export function wakeLineResolver(io: LineIoState | undefined): void {
   resolve(undefined);
 }
 
-export interface WinHistoryPoint {
-  turn: number;
-  p1?: number;
-  p2?: number;
-}
+export type WinHistoryPoint = arena.WinHistoryPoint;
 
 export interface InfoCoalescerOptions {
   intervalMillis?: number;

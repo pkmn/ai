@@ -11,12 +11,19 @@ import * as util from '../static/util';
 
 import {decryptSecret} from './account';
 import {Auth} from './auth';
-import {extractPerspectiveLogs} from './protocol';
+import {PublicAgentInfo, extractPerspectiveLogs} from './protocol';
 import * as ratings from './ratings';
 import * as simOps from './sim-ops';
 import {SAMPLES_DIR, sampleSmokePair} from './teams';
 
 export {extractPerspectiveLogs};
+export type {PublicAgentInfo};
+
+export interface WinHistoryPoint {
+  turn: number;
+  p1?: number;
+  p2?: number;
+}
 
 export const PUBLIC_DIR = util.root('public');
 // If the Mac Mini Arena worker stops heartbeating for 15 minutes (network drop, power loss,
@@ -122,6 +129,7 @@ export interface LiveSlot {
   ram: number;
   team?: string;
   pokemon?: PokemonHealth[];
+  info?: PublicAgentInfo;
 }
 
 export interface LiveGameSummarySide {
@@ -186,6 +194,7 @@ export interface LiveMatch {
   p1: LiveSlot;
   p2: LiveSlot;
   viewer?: LiveViewerState;
+  winHistory?: WinHistoryPoint[];
 }
 
 export type LiveMatchInput = Omit<LiveMatch, 'viewer' | 'game1Summary'> & {
@@ -1680,9 +1689,13 @@ function sanitizeLiveMatch(
   allowViewer: boolean,
   slot?: db.LadderSlot
 ): LiveMatch {
-  const {viewer: rawViewer, game1Summary: rawG1, ...rest} = input;
-  let p1 = rest.p1;
-  let p2 = rest.p2;
+  const {viewer: rawViewer, game1Summary: rawG1, winHistory: rawWinHistory, ...rest} = input;
+  let p1 = allowViewer ? rest.p1 : {...rest.p1, info: undefined};
+  let p2 = allowViewer ? rest.p2 : {...rest.p2, info: undefined};
+  if (!allowViewer) {
+    delete p1.info;
+    delete p2.info;
+  }
   if (p1.pokemon || p2.pokemon) {
     const projected = extractBattlePokemonHealth({
       format: rest.format,
@@ -1749,6 +1762,10 @@ function sanitizeLiveMatch(
     }
   }
 
+  const winHistory = allowViewer && rawWinHistory && rawWinHistory.length > 0
+    ? rawWinHistory
+    : undefined;
+
   return {
     ...rest,
     slot: slot ?? rest.slot,
@@ -1756,6 +1773,7 @@ function sanitizeLiveMatch(
     p1,
     p2,
     ...(viewer !== undefined ? {viewer} : {}),
+    ...(winHistory !== undefined ? {winHistory} : {}),
   };
 }
 

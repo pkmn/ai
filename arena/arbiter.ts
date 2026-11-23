@@ -5,7 +5,12 @@ import type {PRNGSeed} from '@pkmn/sim';
 
 import {SIM_VERSION} from '../db/ladders';
 import * as arena from '../server/arena';
-import {filterPlayerProtocolChunk, parseAgentStdoutLine} from '../server/protocol';
+import {
+  PublicAgentInfo,
+  filterPlayerProtocolChunk,
+  injectAiLogLines,
+  parseAgentStdoutLine,
+} from '../server/protocol';
 import {GameOutcome} from '../server/ratings';
 import * as sim from '../server/sim';
 
@@ -31,6 +36,7 @@ export interface TurnSlotInfo {
   lastTurnMillis: number;
   meanTurnMillis: number;
   pokemon?: unknown[];
+  info?: PublicAgentInfo;
 }
 
 export interface TurnHeartbeatInfo {
@@ -43,6 +49,7 @@ export interface TurnHeartbeatInfo {
   omniscientLog: string;
   p1: TurnSlotInfo;
   p2: TurnSlotInfo;
+  winHistory?: arena.WinHistoryPoint[];
 }
 
 export interface GamePlayerOptions {
@@ -57,6 +64,8 @@ export interface ArenaGameOptions {
   p1: GamePlayerOptions;
   p2: GamePlayerOptions;
   sendUtm?: boolean;
+  recordAiLogs?: boolean;
+  liveInfo?: boolean;
   maxTurns?: number;
   smokeStopAfterTurn?: number;
   timers?: engine.GameTimerOptions;
@@ -72,6 +81,7 @@ export interface PlayerGameResult {
   meanTurnMillis: number;
   lastTurnMillis: number;
   pokemon?: unknown[];
+  info?: PublicAgentInfo;
   exitCode?: number;
   stderr?: string;
 }
@@ -84,6 +94,7 @@ export interface ArenaGameResult {
   omniscientLog: string;
   p1: PlayerGameResult;
   p2: PlayerGameResult;
+  winHistory?: arena.WinHistoryPoint[];
 }
 
 interface SandboxedPlayer {
@@ -116,6 +127,8 @@ export class TimeSlicedArenaGame {
   private readonly p1Opts: GamePlayerOptions;
   private readonly p2Opts: GamePlayerOptions;
   private sendUtm?: boolean;
+  private readonly recordAiLogs: boolean;
+  private readonly liveInfo: boolean;
   private readonly maxTurns: number;
   private readonly smokeStopAfterTurn?: number;
   private readonly timerOverrides: engine.TimerOverrides;
@@ -123,12 +136,20 @@ export class TimeSlicedArenaGame {
   private readonly readyGraceMillis: number;
   private readonly devMode: boolean;
   private readonly onTurn?: (info: TurnHeartbeatInfo) => Promise<void> | void;
+  private readonly infoCoalescer: engine.InfoCoalescer;
 
   private battle: sim.BattleHandle | undefined = undefined;
 
   private p1: SandboxedPlayer | undefined = undefined;
   private p2: SandboxedPlayer | undefined = undefined;
   private currentTurn = 0;
+  private activeTurnState: {
+    phase: arena.LivePhase;
+    activeSlot: PlayerSlot;
+    turnStartedAt: number;
+    turnBudgetSeconds: number;
+    incrementSeconds: number;
+  } | undefined = undefined;
   private requestCount = 0;
   private lastWaveId = 0;
   private waveActiveSidesCount = 1;
@@ -144,6 +165,8 @@ export class TimeSlicedArenaGame {
     this.p1Opts = options.p1;
     this.p2Opts = options.p2;
     this.sendUtm = options.sendUtm;
+    this.recordAiLogs = options.recordAiLogs ?? true;
+    this.liveInfo = options.liveInfo ?? false;
     this.maxTurns = options.maxTurns ?? arena.MAX_BATTLE_TURNS;
     this.smokeStopAfterTurn = options.smokeStopAfterTurn;
     this.timerOverrides = {
@@ -160,6 +183,32 @@ export class TimeSlicedArenaGame {
       (options.timers?.readyGraceSeconds ?? arena.READY_GRACE_SECONDS) * 1000;
     this.devMode = options.devMode ?? process.env.ARENA_DEV === '1';
     this.onTurn = options.onTurn;
+    this.infoCoalescer = new engine.InfoCoalescer({
+      onBroadcast: () => {
+        if (!this.liveInfo || !this.onTurn || this.ended) return;
+        if (!this.p1 || !this.p2 || !this.activeTurnState) return;
+        const winHistory = this.infoCoalescer.getWinHistory();
+        void Promise.resolve(this.onTurn({
+          phase: this.activeTurnState.phase,
+          turn: this.currentTurn,
+          activeSlot: this.activeTurnState.activeSlot,
+          turnStartedAt: this.activeTurnState.turnStartedAt,
+          turnBudgetSeconds: this.activeTurnState.turnBudgetSeconds,
+          incrementSeconds: this.activeTurnState.incrementSeconds,
+          omniscientLog: this.getOmniscientLog(),
+          p1: this.buildTurnSlotInfo(this.p1, 0),
+          p2: this.buildTurnSlotInfo(this.p2, 1),
+          ...(winHistory.length > 0 ? {winHistory} : {}),
+        })).catch(() => undefined);
+      },
+    });
+  }
+
+  private getOmniscientLog(): string {
+    const rawLog = this.battle?.getLog().join('\n') ?? '';
+    return this.recordAiLogs
+      ? injectAiLogLines(rawLog, this.infoCoalescer.getCommittedByTurn())
+      : rawLog;
   }
 
   private spawnPlayer(slot: PlayerSlot, spec: AgentLaunchSpec): SandboxedPlayer {
@@ -225,7 +274,12 @@ export class TimeSlicedArenaGame {
       engine.wakeLineResolver(player.io);
     };
 
-    engine.attachStdoutLineFramer(proc, player.io, () => closeWaiter(1));
+    engine.attachStdoutLineFramer(
+      proc,
+      player.io,
+      () => closeWaiter(1),
+      engine.createInfoLineInterceptor(slot, this.infoCoalescer)
+    );
 
     proc.on('exit', code => closeWaiter(code));
     proc.on('close', code => closeWaiter(code));
@@ -552,17 +606,31 @@ export class TimeSlicedArenaGame {
       player.proc.stdin.write(inactiveLine);
     }
 
+    const turnStartedAt = Math.floor(Date.now() / 1000);
+    const phase: arena.LivePhase = req.teamPreview ? 'preview' : 'battle';
+    const turnBudgetSeconds = Math.round(totalBudgetMillis / 1000);
+    const incrementSeconds = Math.round(incrementMillis / 1000);
+    this.activeTurnState = {
+      phase,
+      activeSlot: player.slot,
+      turnStartedAt,
+      turnBudgetSeconds,
+      incrementSeconds,
+    };
+
     if (this.onTurn) {
+      const winHistory = this.infoCoalescer.getWinHistory();
       await this.onTurn({
-        phase: req.teamPreview ? 'preview' : 'battle',
+        phase,
         turn: this.currentTurn,
         activeSlot: player.slot,
-        turnStartedAt: Math.floor(Date.now() / 1000),
-        turnBudgetSeconds: Math.round(totalBudgetMillis / 1000),
-        incrementSeconds: Math.round(incrementMillis / 1000),
-        omniscientLog: this.battle?.getLog().join('\n') ?? '',
+        turnStartedAt,
+        turnBudgetSeconds,
+        incrementSeconds,
+        omniscientLog: this.getOmniscientLog(),
         p1: this.buildTurnSlotInfo(p1, 0),
         p2: this.buildTurnSlotInfo(p2, 1),
+        ...(winHistory.length > 0 ? {winHistory} : {}),
       });
     }
 
@@ -625,6 +693,7 @@ export class TimeSlicedArenaGame {
         this.pauseSlot(player);
         slotPaused = true;
         if (this.ended) return false;
+        this.infoCoalescer.commitTurn(player.slot, this.currentTurn);
         const choiceCmd = engine.formatChoiceCommand(parsed.choice, req.teamPreview);
         await this.battle!.write(`>${player.slot} ${choiceCmd}`);
         return true;
@@ -801,16 +870,19 @@ export class TimeSlicedArenaGame {
       const outcome: GameOutcome =
         this.winner === 'p1' ? 'W' : this.winner === 'p2' ? 'L' : 'T';
 
+      const winHistory = this.infoCoalescer.getWinHistory();
       return {
         winner: this.winner,
         outcome,
         turns: this.currentTurn,
         endReason: this.endReason,
-        omniscientLog: battle.getLog().join('\n'),
+        omniscientLog: this.getOmniscientLog(),
         p1: this.buildPlayerGameResult(p1, 0),
         p2: this.buildPlayerGameResult(p2, 1),
+        ...(winHistory.length > 0 ? {winHistory} : {}),
       };
     } finally {
+      this.infoCoalescer.dispose();
       if (this.battle) {
         void this.battle.destroy().catch(() => undefined);
       }
@@ -822,6 +894,7 @@ export class TimeSlicedArenaGame {
   private buildTurnSlotInfo(player: SandboxedPlayer, sideIdx: 0 | 1): TurnSlotInfo {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
     const pokemon = this.battle?.getPokemon(slot);
+    const info = this.infoCoalescer.getLive(slot);
     const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
       ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
@@ -838,12 +911,14 @@ export class TimeSlicedArenaGame {
         ? Math.round(player.telemetry.totalTurnDecisionMillis / player.telemetry.turnDecisionCount)
         : 0,
       ...(pokemon !== undefined ? {pokemon} : {}),
+      ...(info !== undefined ? {info} : {}),
     };
   }
 
   private buildPlayerGameResult(player: SandboxedPlayer, sideIdx: 0 | 1): PlayerGameResult {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
     const pokemon = this.battle?.getPokemon(slot);
+    const info = this.infoCoalescer.getLive(slot);
     const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
       ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
@@ -860,6 +935,7 @@ export class TimeSlicedArenaGame {
         : 0,
       lastTurnMillis: Math.round(player.telemetry.lastDecisionMillis),
       ...(pokemon !== undefined ? {pokemon} : {}),
+      ...(info !== undefined ? {info} : {}),
       ...(player.lifecycle.exitCode !== undefined ? {exitCode: player.lifecycle.exitCode} : {}),
       ...(player.io.stderrTail ? {stderr: player.io.stderrTail} : {}),
     };

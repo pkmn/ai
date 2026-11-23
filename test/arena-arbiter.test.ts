@@ -851,4 +851,81 @@ describe('TimeSlicedArenaGame', () => {
     expect(coalescer.getWinHistory()).toEqual([]);
     coalescer.dispose();
   });
+
+  test('TimeSlicedArenaGame collapses /info per turn and honors recordAiLogs', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-info-arbiter-'));
+    try {
+      const p1Script = path.join(dir, 'p1-info.js');
+      const p2Script = path.join(dir, 'p2-silent.js');
+      fs.writeFileSync(
+        p1Script,
+        [
+          'const rl = require("readline").createInterface({input: process.stdin});',
+          'let step = 0;',
+          'process.stdout.write("/ready\\n");',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice(9));',
+          '  if (req.wait) return;',
+          '  step++;',
+          '  const w1 = Math.min(0.9, 0.5 + step * 0.05);',
+          '  const w2 = Math.min(0.95, w1 + 0.02);',
+          '  process.stdout.write("/info " + ' +
+            'JSON.stringify({win: w1, depth: 4, nodes: 500}) + "\\n");',
+          '  process.stdout.write("/info " + JSON.stringify({win: w2, depth: 6, seldepth: 12, ' +
+            'nodes: 2000, nps: 10000, policy: {default: 1}}) + "\\n");',
+          '  process.stdout.write("default\\n");',
+          '});',
+        ].join('\n'),
+        'utf8'
+      );
+      fs.writeFileSync(
+        p2Script,
+        [
+          'const rl = require("readline").createInterface({input: process.stdin});',
+          'process.stdout.write("/ready\\n");',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice(9));',
+          '  if (req.wait) return;',
+          '  process.stdout.write("default\\n");',
+          '});',
+        ].join('\n'),
+        'utf8'
+      );
+
+      const commonOpts = {
+        format: 'gen9randombattle',
+        seed: '1,2,3,4' as const,
+        p1: {spec: {mode: 'native' as const, target: process.execPath, args: [p1Script]}},
+        p2: {spec: {mode: 'native' as const, target: process.execPath, args: [p2Script]}},
+        smokeStopAfterTurn: 2,
+        devMode: true,
+      };
+
+      const recorded = await new arbiter.TimeSlicedArenaGame({
+        ...commonOpts,
+        recordAiLogs: true,
+        liveInfo: true,
+      }).run();
+      const aiLines = recorded.omniscientLog.split('\n').filter(l => l.startsWith('|ai|'));
+      expect(aiLines.length).toBeGreaterThanOrEqual(2);
+      expect(aiLines.every(l => l.startsWith('|ai|p1|'))).toBe(true);
+      expect(aiLines.some(l => l.includes('"depth":4'))).toBe(false);
+      expect(aiLines.some(l => l.includes('policy'))).toBe(false);
+      expect(aiLines[0]).toContain('"depth":6,"seldepth":12,"nodes":2000,"nps":10000');
+      expect(recorded.p1.info?.depth).toBe(6);
+      expect(recorded.p2.info).toBeUndefined();
+      expect(recorded.winHistory?.length).toBeGreaterThanOrEqual(2);
+
+      const stripped = await new arbiter.TimeSlicedArenaGame({
+        ...commonOpts,
+        recordAiLogs: false,
+        liveInfo: false,
+      }).run();
+      expect(stripped.omniscientLog).not.toContain('|ai|');
+    } finally {
+      fs.rmSync(dir, {recursive: true, force: true});
+    }
+  });
 });
