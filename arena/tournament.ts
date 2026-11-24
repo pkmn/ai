@@ -498,7 +498,11 @@ export class ConcurrentGame {
     );
 
     const handleStderrLine = (errLine: string) => {
-      if (errLine.startsWith('ARENA_TURN_MS=')) {
+      if (errLine.startsWith('ARENA_AGENT_STDERR=')) {
+        // Must run before control-line checks so untrusted child stderr cannot spoof
+        // ARENA_TURN_MS, ARENA_PEAK_RAM, ARENA_SPOT_PREEMPTED, or TOURNEY_ERROR.
+        player.io.stderrBuf.append(`${errLine.slice('ARENA_AGENT_STDERR='.length)}\n`);
+      } else if (errLine.startsWith('ARENA_TURN_MS=')) {
         const rawVal = errLine.slice('ARENA_TURN_MS='.length).trim();
         const [millisStr, seqStr, lineSeqStr] = rawVal.split('\t');
         const millis = Number(millisStr);
@@ -1275,6 +1279,8 @@ export class ConcurrentGame {
             peakRam: this.p2.telemetry.peakRam,
           },
         }));
+        const p1Stderr = this.p1.io.stderrBuf.format();
+        const p2Stderr = this.p2.io.stderrBuf.format();
         return {
           winner,
           outcome,
@@ -1285,14 +1291,20 @@ export class ConcurrentGame {
           p1: {
             teamPacked: p1Team,
             bankSeconds: startingBankSeconds,
+            initMillis: this.p1.telemetry.initMillis,
             meanTurnMillis: 1,
             peakRam: this.p1.telemetry.peakRam,
+            errors: {...this.p1.errors},
+            ...(p1Stderr ? {stderr: p1Stderr} : {}),
           },
           p2: {
             teamPacked: p2Team,
             bankSeconds: startingBankSeconds,
+            initMillis: this.p2.telemetry.initMillis,
             meanTurnMillis: 1,
             peakRam: this.p2.telemetry.peakRam,
+            errors: {...this.p2.errors},
+            ...(p2Stderr ? {stderr: p2Stderr} : {}),
           },
           games,
         };

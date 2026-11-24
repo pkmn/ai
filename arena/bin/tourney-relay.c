@@ -11,7 +11,11 @@
 //      and `/info` lines) on stderr as `ARENA_TURN_MS=<cumulative_ms>\t<req_seq>\t<stdout_seq>\n`
 //      measuring cumulative monotonic elapsed time since the active `|request|` arrival so
 //      out-of-band `/info` interception can never desync or reset turn clock accounting.
-//   4. Places the child in a dedicated session (`setsid()`), closes all inherited FDs >= 3, and
+//   4. Captures child stderr over a dedicated pipe and forwards bounded head+tail lines prefixed
+//      with `ARENA_AGENT_STDERR=` so diagnostics preserve agent tracebacks without allowing an
+//      untrusted child to spoof `ARENA_TURN_MS=`, `ARENA_PEAK_RAM=`, `ARENA_SPOT_PREEMPTED`, or
+//      `TOURNEY_ERROR:` control lines or flood SSH.
+//   5. Places the child in a dedicated session (`setsid()`), closes all inherited FDs >= 3, and
 //      terminates `-child_pgid` with `SIGKILL` immediately if stdout breaks (`POLLHUP`/`POLLERR`)
 //      or within 100ms of stdin EOF so SSH disconnects never orphan GPU processes.
 #define _GNU_SOURCE
@@ -31,6 +35,9 @@
 #define IN_BUF_CAP       262144
 #define OUT_BUF_CAP      65536
 #define PIPE_OUT_BUF_CAP 524288
+#define ERR_HEAD_CAP     16384
+#define ERR_TAIL_CAP     49152
+#define ERR_LINE_MAX     2048
 
 struct in_line_buf {
   char data[IN_BUF_CAP];
@@ -46,6 +53,106 @@ struct pipe_out_buf {
   char data[PIPE_OUT_BUF_CAP];
   size_t len;
 };
+
+struct err_capture {
+  size_t head_sent;
+  size_t dropped;
+  char tail[ERR_TAIL_CAP];
+  size_t tail_pos;
+  size_t tail_len;
+  char line[ERR_LINE_MAX];
+  size_t line_len;
+};
+
+static void flush_err_line(struct err_capture *cap) {
+  if (cap->line_len == 0) return;
+  fwrite("ARENA_AGENT_STDERR=", 1, 19, stderr);
+  fwrite(cap->line, 1, cap->line_len, stderr);
+  fputc('\n', stderr);
+  cap->line_len = 0;
+}
+
+static void emit_err_chunk(struct err_capture *cap, const char *buf, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    unsigned char ch = (unsigned char)buf[i];
+    if (ch == '\r' || ch == '\0') continue;
+    if (ch == '\n') {
+      fwrite("ARENA_AGENT_STDERR=", 1, 19, stderr);
+      if (cap->line_len > 0) {
+        fwrite(cap->line, 1, cap->line_len, stderr);
+        cap->line_len = 0;
+      }
+      fputc('\n', stderr);
+      continue;
+    }
+    cap->line[cap->line_len++] = (char)ch;
+    if (cap->line_len >= ERR_LINE_MAX) {
+      flush_err_line(cap);
+    }
+  }
+  fflush(stderr);
+}
+
+static void feed_err_capture(struct err_capture *cap, const char *buf, size_t len) {
+  if (len == 0) return;
+  if (cap->head_sent < ERR_HEAD_CAP) {
+    size_t take = ERR_HEAD_CAP - cap->head_sent;
+    if (take > len) take = len;
+    emit_err_chunk(cap, buf, take);
+    cap->head_sent += take;
+    buf += take;
+    len -= take;
+    if (len > 0 && cap->line_len > 0) {
+      flush_err_line(cap);
+      fflush(stderr);
+    }
+  }
+  if (len == 0) return;
+  if (len >= ERR_TAIL_CAP) {
+    cap->dropped += cap->tail_len + (len - ERR_TAIL_CAP);
+    memcpy(cap->tail, buf + (len - ERR_TAIL_CAP), ERR_TAIL_CAP);
+    cap->tail_pos = 0;
+    cap->tail_len = ERR_TAIL_CAP;
+    return;
+  }
+  if (cap->tail_len + len > ERR_TAIL_CAP) {
+    size_t overflow = cap->tail_len + len - ERR_TAIL_CAP;
+    cap->dropped += overflow;
+    cap->tail_pos = (cap->tail_pos + overflow) % ERR_TAIL_CAP;
+    cap->tail_len -= overflow;
+  }
+  size_t write_pos = (cap->tail_pos + cap->tail_len) % ERR_TAIL_CAP;
+  size_t first = ERR_TAIL_CAP - write_pos;
+  if (first > len) first = len;
+  memcpy(cap->tail + write_pos, buf, first);
+  if (len > first) {
+    memcpy(cap->tail, buf + first, len - first);
+  }
+  cap->tail_len += len;
+}
+
+static void finish_err_capture(struct err_capture *cap) {
+  if (cap->line_len > 0) {
+    flush_err_line(cap);
+  }
+  if (cap->tail_len > 0) {
+    if (cap->dropped > 0) {
+      fprintf(stderr, "ARENA_AGENT_STDERR=... [truncated %zu bytes] ...\n", cap->dropped);
+    }
+    size_t first = ERR_TAIL_CAP - cap->tail_pos;
+    if (first > cap->tail_len) first = cap->tail_len;
+    emit_err_chunk(cap, cap->tail + cap->tail_pos, first);
+    if (cap->tail_len > first) {
+      emit_err_chunk(cap, cap->tail, cap->tail_len - first);
+    }
+    if (cap->line_len > 0) {
+      flush_err_line(cap);
+    }
+    cap->tail_len = 0;
+    cap->dropped = 0;
+  }
+  fflush(stderr);
+}
 
 static uint64_t monotonic_ns(void) {
   struct timespec ts;
@@ -158,8 +265,8 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  int in_pipe[2], out_pipe[2];
-  if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0) {
+  int in_pipe[2], out_pipe[2], err_pipe[2];
+  if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0 || pipe(err_pipe) < 0) {
     perror("pipe");
     return 1;
   }
@@ -179,17 +286,13 @@ int main(int argc, char **argv) {
     (void)setsid();
     dup2(in_pipe[0], STDIN_FILENO);
     dup2(out_pipe[1], STDOUT_FILENO);
-    int devnull = open("/dev/null", O_WRONLY);
-    if (devnull >= 0) {
-      dup2(devnull, STDERR_FILENO);
-      if (devnull > STDERR_FILENO) close(devnull);
-    } else {
-      close(STDERR_FILENO);
-    }
+    dup2(err_pipe[1], STDERR_FILENO);
     close(in_pipe[0]);
     close(in_pipe[1]);
     close(out_pipe[0]);
     close(out_pipe[1]);
+    close(err_pipe[0]);
+    close(err_pipe[1]);
     long max_fd = sysconf(_SC_OPEN_MAX);
     if (max_fd < 0 || max_fd > 65536) max_fd = 4096;
     for (int fd = 3; fd < (int)max_fd; fd++) {
@@ -203,6 +306,7 @@ int main(int argc, char **argv) {
 
   close(in_pipe[0]);
   close(out_pipe[1]);
+  close(err_pipe[1]);
 
   int in_flags = fcntl(in_pipe[1], F_GETFL, 0);
   if (in_flags >= 0) {
@@ -216,7 +320,7 @@ int main(int argc, char **argv) {
   uint64_t turn_start_ns = 0;
   uint64_t eof_deadline_ns = 0;
 
-  struct pollfd fds[4];
+  struct pollfd fds[5];
   fds[0].fd = STDIN_FILENO;
   fds[0].events = POLLIN;
   fds[1].fd = out_pipe[0];
@@ -225,10 +329,13 @@ int main(int argc, char **argv) {
   fds[2].events = 0;
   fds[3].fd = -1;
   fds[3].events = POLLOUT;
+  fds[4].fd = err_pipe[0];
+  fds[4].events = POLLIN;
 
-  struct in_line_buf in_buf = {{0}, 0};
-  struct out_line_buf out_buf = {{0}, 0};
-  struct pipe_out_buf pipe_out = {{0}, 0};
+  static struct in_line_buf in_buf;
+  static struct out_line_buf out_buf;
+  static struct pipe_out_buf pipe_out;
+  static struct err_capture err_cap;
   char chunk[4096];
 
   for (;;) {
@@ -241,8 +348,9 @@ int main(int argc, char **argv) {
     }
 
     fds[3].fd = (in_pipe[1] >= 0 && pipe_out.len > 0) ? in_pipe[1] : -1;
+    fds[4].fd = err_pipe[0];
 
-    int pr = poll(fds, 4, timeout_ms);
+    int pr = poll(fds, 5, timeout_ms);
     if (pr < 0) {
       if (errno == EINTR) continue;
       goto done;
@@ -339,6 +447,18 @@ int main(int argc, char **argv) {
         out_buf.len -= line_len;
       }
     }
+
+    // 3. Agent stderr -> prefixed relay stderr (bounded head+tail)
+    if (fds[4].fd >= 0 && (fds[4].revents & (POLLIN | POLLHUP | POLLERR))) {
+      ssize_t n = read(err_pipe[0], chunk, sizeof(chunk));
+      if (n <= 0) {
+        close(err_pipe[0]);
+        err_pipe[0] = -1;
+        finish_err_capture(&err_cap);
+      } else {
+        feed_err_capture(&err_cap, chunk, (size_t)n);
+      }
+    }
   }
 
   int status = 0;
@@ -351,6 +471,25 @@ done:
     kill(child_pgid, SIGKILL);
   }
   waitpid(pid, &status, 0);
+  if (err_pipe[0] >= 0) {
+    int err_flags = fcntl(err_pipe[0], F_GETFL, 0);
+    if (err_flags >= 0) {
+      (void)fcntl(err_pipe[0], F_SETFL, err_flags | O_NONBLOCK);
+    }
+    for (;;) {
+      ssize_t n = read(err_pipe[0], chunk, sizeof(chunk));
+      if (n > 0) {
+        feed_err_capture(&err_cap, chunk, (size_t)n);
+      } else if (n < 0 && errno == EINTR) {
+        continue;
+      } else {
+        break;
+      }
+    }
+    close(err_pipe[0]);
+    err_pipe[0] = -1;
+    finish_err_capture(&err_cap);
+  }
   struct rusage ru;
   if (getrusage(RUSAGE_CHILDREN, &ru) == 0 && ru.ru_maxrss > 0) {
 #ifdef __APPLE__

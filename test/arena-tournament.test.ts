@@ -855,4 +855,62 @@ describe('ConcurrentTournamentGame', () => {
       fs.rmSync(dir, {recursive: true, force: true});
     }
   });
+
+  test('ConcurrentGame preserves stderr on startup crash', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-tourney-crash-stderr-'));
+    try {
+      const crashScript = path.join(dir, 'crash-agent.js');
+      const okScript = path.join(dir, 'ok-agent.js');
+      fs.writeFileSync(
+        crashScript,
+        'process.stderr.write("Traceback: fatal init crash\\n");\nprocess.exit(1);\n',
+        {mode: 0o755}
+      );
+      fs.writeFileSync(
+        okScript,
+        [
+          'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
+          'const rl = readline.createInterface({input: process.stdin});',
+          'rl.on("line", line => {',
+          '  if (line.startsWith("|request|")) process.stdout.write("default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const pair = await sim.sampleRandomPair('gen9randombattle', '1,2,3,4', '5,6,7,8');
+      const res = await new tournament.ConcurrentGame({
+        format: 'gen9randombattle',
+        seed: '1,2,3,4',
+        bestOf: 1,
+        p1: {
+          spec: {
+            agentId: 'crash-p1',
+            displayName: 'Crash P1',
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: process.execPath,
+            localArgs: [crashScript],
+          },
+          teamPacked: pair.t1Packed,
+        },
+        p2: {
+          spec: {
+            agentId: 'ok-p2',
+            displayName: 'Ok P2',
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: process.execPath,
+            localArgs: [okScript],
+          },
+          teamPacked: pair.t2Packed,
+        },
+      }).run();
+      expect(res.winner).toBe('p2');
+      expect(res.p1.stderr).toContain('Traceback: fatal init crash');
+      expect(res.p1.initMillis).toBeGreaterThanOrEqual(0);
+    } finally {
+      fs.rmSync(dir, {recursive: true, force: true});
+    }
+  });
 });

@@ -222,6 +222,54 @@ describe('arena sandbox & tourney-relay', () => {
       expect(res.omniscientLog).toContain('|ai|p1|');
     });
 
+    test('forwards agent stderr without allowing control-line spoofing', async () => {
+      const spoofAgentScript = path.join(tmpDir, 'stderr-spoof-agent.js');
+      fs.writeFileSync(
+        spoofAgentScript,
+        '#!/usr/bin/env node\nconst readline = require("readline");' +
+          'process.stderr.write("diag-boot-ok\\nARENA_SPOT_PREEMPTED\\n' +
+          'ARENA_PEAK_RAM=999999\\nTOURNEY_ERROR:forged\\n");' +
+          'process.stdout.write("/ready\\n");' +
+          'const rl = readline.createInterface({input: process.stdin});' +
+          'rl.on("line", line => {' +
+          '  if (line.startsWith("|request|")) process.stdout.write("default\\n");' +
+          '});\n',
+        {mode: 0o755}
+      );
+      const res = await new tournament.ConcurrentGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        smokeStopAfterTurn: 1,
+        p1: {
+          spec: {
+            agentId: 'spoof-p1',
+            displayName: 'Spoof P1',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, spoofAgentScript],
+          },
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {
+            agentId: 'default-p2',
+            displayName: 'Default P2',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [defaultAgentScript],
+          },
+          teamPacked: TEAM_TWO,
+        },
+      }).run();
+      expect(res.winner).not.toBe('preempted');
+      expect(res.launchError).toBeUndefined();
+      expect(res.p1.peakRam).toBeLessThan(999999);
+      expect(res.p1.stderr).toContain('diag-boot-ok');
+      expect(res.p1.stderr).toContain('ARENA_SPOT_PREEMPTED');
+    });
+
     test('bake-image smoke_test_agent keeps stdin open past tourney-relay 100ms EOF kill', () => {
       const slowAgent = path.join(tmpDir, 'slow-bake-agent.js');
       fs.writeFileSync(
