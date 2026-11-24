@@ -1833,7 +1833,8 @@ describe('account routes', () => {
         expect(html).toContain(`/api/account/diagnostics/${diagId}/stderr`);
         expect(html).toContain('>STDERR</a>');
         expect(html).toContain('>log</a>');
-        expect(html).toContain('>/info</span>');
+        expect(html).toContain('class="info-dot yes"');
+        expect(html).not.toContain('>/info</span>');
         expect(html).not.toContain('gen1ou (14t');
         expect(html).not.toContain('>Close</button>');
 
@@ -1930,7 +1931,9 @@ describe('account routes', () => {
         const noInfoHtml = await (await realFetch(`${baseUrl}/account`, {
           headers: {Cookie: cookieFor('pre')},
         })).text();
-        expect(noInfoHtml).toContain('>no /info</span>');
+        expect(noInfoHtml).toContain('class="info-dot muted"');
+        expect(noInfoHtml).not.toContain('smoke-log');
+        expect(noInfoHtml).not.toContain('Sandbox');
 
         // Reusing 2.1.0 again after failure succeeds, then activating permanently claims it.
         const retryAfterFail = await postSubmission('pre', {
@@ -1942,14 +1945,28 @@ describe('account routes', () => {
         });
         expect(retryAfterFail.status).toBe(201);
         const v2Id = (await retryAfterFail.json() as {versionId: number}).versionId;
-        db.applySubmissionStatus({versionId: v2Id, smokeStatus: 'staged', now: currentNow + 90});
+        db.applySubmissionStatus({
+          versionId: v2Id,
+          smokeStatus: 'staged',
+          diagnostics: [{
+            ladderId: 'gen1ou20261109',
+            format: 'gen1ou',
+            turns: 10,
+            endReason: 'win',
+            durationMillis: 4000,
+            battleLog: '|turn|1\n|ai|p1|{"win":0.55}\n|win|0 ERROR',
+          }],
+          now: currentNow + 90,
+        });
         const actRes = await realFetch(`${baseUrl}/api/account/versions/${v2Id}/activate`, {
           method: 'POST',
           headers: {Cookie: cookieFor('pre'), Accept: 'application/json'},
         });
         expect(actRes.status).toBe(200);
         expect(db.getVersionById(v2Id)?.smokeStatus).toBe('passed');
-        expect(db.getActiveEntriesForAgent(zero.id)).toHaveLength(1);
+        const activeAfter = db.getActiveEntriesForAgent(zero.id);
+        expect(activeAfter).toHaveLength(1);
+        expect(activeAfter[0].smokeSupportsInfo).toBe(true);
 
         // Once activated, reusing 2.1.0 is permanently rejected even after eligibility is restored.
         db.db.prepare(

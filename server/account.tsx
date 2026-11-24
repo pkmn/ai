@@ -785,7 +785,10 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                 return (
                   <tr>
                     <td><tt>{e.ladderName}</tt></td>
-                    <td><code><strong>{e.version}</strong></code></td>
+                    <td>
+                      <code><strong>{e.version}</strong></code>
+                      {renderInfoSupportDot(e.smokeSupportsInfo)}
+                    </td>
                     <td className='num'>
                       {e.rankCurrent !== undefined
                         ? <strong>#{e.rankCurrent}</strong>
@@ -807,7 +810,10 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
               return (
                 <tr className='secondary'>
                   <td><tt>{e.ladderName}</tt></td>
-                  <td><code>{e.version}</code></td>
+                  <td>
+                    <code>{e.version}</code>
+                    {renderInfoSupportDot(e.smokeSupportsInfo)}
+                  </td>
                   <td className='num muted'>—</td>
                   <td className='num'>{elo} <span className='muted'>±{ci}</span></td>
                   <td className='num'>{w}–{l}–{t}</td>
@@ -895,23 +901,25 @@ function formatSmokeStatsText(v: db.VersionHistoryView): string | undefined {
   return statsParts.length > 0 ? statsParts.join(' · ') : undefined;
 }
 
-function renderInfoSupportBadge(supportsInfo?: boolean): util.Child {
+function renderInfoSupportDot(supportsInfo?: boolean): util.Child {
   if (supportsInfo === undefined) return undefined;
   return supportsInfo
     ? (
       <span
-        className='yes'
-        title='Valid /info search telemetry was emitted during the diagnostic test'
+        className='info-dot yes'
+        title='Emits valid /info search telemetry'
+        aria-label='Supports /info telemetry'
       >
-        /info
+        {'\u25cf'}
       </span>
     )
     : (
       <span
-        className='muted'
-        title='No valid /info search telemetry was emitted during the diagnostic test'
+        className='info-dot muted'
+        title='No valid /info search telemetry emitted'
+        aria-label='Does not emit /info telemetry'
       >
-        no /info
+        {'\u25cb\ufe0e'}
       </span>
     );
 }
@@ -965,7 +973,6 @@ function renderStagedSection(opts: {
           ...(v.tournamentNames ?? []),
         ];
         const statsText = formatSmokeStatsText(v);
-        const infoBadge = renderInfoSupportBadge(v.smokeSupportsInfo);
         let activateDisabledReason: string | undefined;
         if (v.ladders.length > 0 && !v.ladders.some(id => opts.openLadderIds.has(id))) {
           activateDisabledReason = 'All target ladders for this version have closed.';
@@ -984,18 +991,10 @@ function renderStagedSection(opts: {
           <div className='staged-box' data-version-id={v.id}>
             <div className='staged-head'>
               <span>
-                <strong><code>{v.version}</code></strong> passed diagnostic testing on{' '}
+                <strong><code>{v.version}</code></strong>
+                {renderInfoSupportDot(v.smokeSupportsInfo)} passed diagnostic testing on{' '}
                 <tt>{targets.join(', ')}</tt>
-                {(statsText || infoBadge) && (
-                  <>
-                    {' '}
-                    <span className='muted'>(</span>
-                    {statsText && <span className='muted'>{statsText}</span>}
-                    {statsText && infoBadge && <span className='muted'> · </span>}
-                    {infoBadge}
-                    <span className='muted'>)</span>
-                  </>
-                )}
+                {statsText && <> <span className='muted'>({statsText})</span></>}
               </span>
               <div className='staged-actions'>
                 <button
@@ -1111,45 +1110,26 @@ function renderHistorySection(
                 v.smokeStatus === 'discarded'
               ) {
                 const statsText = formatSmokeStatsText(v);
-                const infoBadge = renderInfoSupportBadge(v.smokeSupportsInfo);
                 smokeCell = (
                   <>
                     {isRetired || v.smokeStatus === 'discarded'
                       ? <span>PASS</span>
                       : <span className='yes'>PASS</span>}
                     {v.smokeStatus === 'staged' && <> <span className='muted'>(staged)</span></>}
-                    {(statsText || infoBadge) && (
-                      <>
-                        {' '}
-                        <span className='muted'>(</span>
-                        {statsText && <span className='muted'>{statsText}</span>}
-                        {statsText && infoBadge && <span className='muted'> · </span>}
-                        {infoBadge}
-                        <span className='muted'>)</span>
-                      </>
-                    )}
+                    {statsText && <> <span className='muted'>({statsText})</span></>}
                     {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
                   </>
                 );
               } else {
                 const label = v.smokeStatus === 'quarantined' ? 'QUARANTINED' : 'FAIL';
-                const infoBadge = renderInfoSupportBadge(v.smokeSupportsInfo);
+                const showInlineError = Boolean(v.smokeError) && (
+                  v.smokeStatus === 'quarantined' || !v.diagnostics?.length
+                );
                 smokeCell = (
                   <>
                     <span className='no'>{label}</span>
                     {Boolean(v.notified) && <> <span className='muted'>(DM sent)</span></>}
-                    {infoBadge && (
-                      <>
-                        {' '}<span className='muted'>(</span>{infoBadge}
-                        <span className='muted'>)</span>
-                      </>
-                    )}
-                    {v.smokeError && (
-                      <details className='smoke-log'>
-                        <summary>Sandbox <tt>stderr</tt> log</summary>
-                        <pre><code>{v.smokeError}</code></pre>
-                      </details>
-                    )}
+                    {showInlineError && <div className='smoke-error muted'>{v.smokeError}</div>}
                     {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
                   </>
                 );
@@ -1201,6 +1181,7 @@ function renderHistorySection(
                     {isFullyActive
                       ? <code><strong>{v.version}</strong></code>
                       : <code>{v.version}</code>}
+                    {renderInfoSupportDot(v.smokeSupportsInfo)}
                   </td>
                   <td className='wrap'><tt>{laddersContent}</tt></td>
                   <td className='wrap'>

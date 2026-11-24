@@ -2501,6 +2501,15 @@ export class Runner {
     const p2Ram = 720 + ((p2.versionId * 53) % 980);
     const p1TurnMillis = 230 + ((p1.versionId * 29) % 240);
     const p2TurnMillis = 240 + ((p2.versionId * 31) % 240);
+    const p1Cpu = Math.round((1.6 + ((p1.versionId * 13) % 46) / 10) * 10) / 10;
+    const p2Cpu = Math.round((1.6 + ((p2.versionId * 17) % 46) / 10) * 10) / 10;
+    const p1ErrSeed = (this.state.matchSeq + p1.versionId * 7) % 19;
+    const p2ErrSeed = (this.state.matchSeq + p2.versionId * 11) % 19;
+    const p1CantMove = p1.slug !== '0-error' && p1ErrSeed === 0 ? 1 : 0;
+    const p1Target = p1.slug !== '0-error' && p1ErrSeed === 3 ? 1 : 0;
+    const p1Unavail = p1ErrSeed === 5 ? 1 : 0;
+    const p2CantSwitch = p2.slug !== '0-error' && p2ErrSeed === 1 ? 1 : 0;
+    const p2Unavail = p2ErrSeed === 7 ? 1 : 0;
 
     const shouldEmitLogs =
       (ladder.team === 'random' || ladder.team === 'pools') &&
@@ -2665,7 +2674,7 @@ export class Runner {
       });
     }
 
-    const matchPayload = {
+    const matchPayload: db.CompletedMatchPayload = {
       id: matchId,
       ladderId: ladder.id,
       p1VersionId: p1.versionId,
@@ -2708,6 +2717,30 @@ export class Runner {
       p1Game2MeanTurnMillis: Math.max(10, p1TurnMillis + 8 - (this.state.matchSeq % 9)),
       p2Game1MeanTurnMillis: Math.max(10, p2TurnMillis + 6 - (this.state.matchSeq % 7)),
       p2Game2MeanTurnMillis: Math.max(10, p2TurnMillis - 6 + (this.state.matchSeq % 7)),
+      p1CpuCores: p1Cpu,
+      p2CpuCores: p2Cpu,
+      ...(p1CantMove > 0 || p1Target > 0 || p1Unavail > 0
+        ? {
+          p1Errors: {
+            invalidCantMove: p1CantMove,
+            invalidCantSwitch: 0,
+            invalidTarget: p1Target,
+            invalidOther: 0,
+            unavailableChoices: p1Unavail,
+          },
+        }
+        : {}),
+      ...(p2CantSwitch > 0 || p2Unavail > 0
+        ? {
+          p2Errors: {
+            invalidCantMove: 0,
+            invalidCantSwitch: p2CantSwitch,
+            invalidTarget: 0,
+            invalidOther: 0,
+            unavailableChoices: p2Unavail,
+          },
+        }
+        : {}),
       completedAt: opts.completedAt,
     };
 

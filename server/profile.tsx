@@ -211,6 +211,7 @@ function buildVersionDynamicStats(
   const turnMillis = Math.round(entry.meanTurnMillis);
   const meanRamText = Math.round(entry.meanRam).toLocaleString('en-US');
   const hasTp = entry.meanTeamPreviewMillis !== undefined;
+  const hasCpu = entry.cpuMatches > 0 && entry.meanCpuCores > 0;
   const telemetry = String(
     <>
       {turnMillis} ms/turn{' '}
@@ -218,6 +219,7 @@ function buildVersionDynamicStats(
         ({initMillis} ms init{hasTp && ` · ${Math.round(entry.meanTeamPreviewMillis!)} ms preview`})
       </span>
       {' · '}RAM {meanRamText} MiB
+      {hasCpu && <>{' · '}CPU {entry.meanCpuCores.toFixed(1)}c</>}
     </>
   );
 

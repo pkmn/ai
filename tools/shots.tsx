@@ -51,6 +51,7 @@ const NOW = Date.parse('2026-10-20T12:00:00Z');
 const NOW_SECONDS = Math.floor(NOW / 1000);
 const VGC_LADDER_ID = 'gen9championsvgc2026regmc';
 const RBY_LADDER_ID = 'gen1ou20261109';
+const SV_LADDER_ID = 'gen9ou20261109';
 const VIEWPORTS = {
   small: {width: 375, height: 667}, // iPhone SE (3rd generation)
   phone: {width: 390, height: 844}, // iPhone 14
@@ -1529,7 +1530,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           ).run(
             fixture.cynthiaiId,
             'a'.repeat(64),
-            JSON.stringify([RBY_LADDER_ID]),
+            JSON.stringify([SV_LADDER_ID]),
             NOW_SECONDS - 45
           );
         });
@@ -1539,8 +1540,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           agentSlug: 'cynthiai',
           agentName: 'CynthiAI',
           version: '1.0.0',
-          format: 'gen1ou',
-          targetName: 'RBY',
+          format: 'gen9ou',
+          targetName: 'SV',
           phase: 'battle',
           turn: 2,
           activeSlot: 'p1',
@@ -1564,19 +1565,23 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             info: {win: 0.39, depth: 10, nodes: 21200, nps: 410000},
           },
           lines: [
-            '|player|p1|CynthiAI (P1)|1|',
-            '|player|p2|CynthiAI (P2)|1|',
+            '|player|p1|CynthiAI (P1)|lucas|',
+            '|player|p2|CynthiAI (P2)|dawn|',
             '|gametype|singles',
-            '|gen|1',
-            '|tier|[Gen 1] OU',
+            '|gen|9',
+            '|tier|[Gen 9] OU',
+            '|teamsize|p1|6',
+            '|teamsize|p2|6',
             '|start',
-            '|switch|p1a: Tauros|Tauros|353/353',
-            '|switch|p2a: Chansey|Chansey|703/703',
+            '|switch|p1a: Great Tusk|Great Tusk|371/371',
+            '|switch|p2a: Dragapult|Dragapult|317/317',
             '|turn|1',
-            '|move|p1a: Tauros|Body Slam|p2a: Chansey',
-            '|-damage|p2a: Chansey|421/703',
-            '|move|p2a: Chansey|Thunder Wave|p1a: Tauros',
-            '|-status|p1a: Tauros|par',
+            '|move|p2a: Dragapult|Draco Meteor|p1a: Great Tusk',
+            '|-damage|p1a: Great Tusk|128/371',
+            '|move|p1a: Great Tusk|Knock Off|p2a: Dragapult',
+            '|-damage|p2a: Dragapult|0 fnt',
+            '|faint|p2a: Dragapult',
+            '|switch|p2a: Corviknight|Corviknight|400/400',
             '|turn|2',
           ],
           winHistory: [
@@ -1737,13 +1742,6 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       path: '/account/',
     },
     {
-      name: 'account-smoke-log-expanded',
-      section: 'account',
-      title: 'Smoke Log',
-      path: '/account/',
-      click: 'details.smoke-log summary',
-    },
-    {
       name: 'account-ineligible-provisional',
       section: 'account',
       title: 'Unsettled',
@@ -1755,7 +1753,6 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'account',
       title: 'Quarantined',
       path: '/account/',
-      click: 'details.smoke-log summary',
       setup: fixture => withSavepoint(fixture, raw => {
         raw.prepare(
           `UPDATE agent_versions

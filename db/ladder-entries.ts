@@ -39,6 +39,7 @@ export interface ActiveEntryView {
   tl: number;
   ll: number;
   settledAt?: number;
+  smokeSupportsInfo?: boolean;
 }
 
 export interface LeaderboardEntryView {
@@ -224,7 +225,16 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
       le.split,
       le.tl,
       le.ll,
-      le.settled_at
+      le.settled_at,
+      CASE
+        WHEN EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = le.version_id)
+          THEN (
+            SELECT MAX(sd.supports_info)
+            FROM smoke_diagnostics sd
+            WHERE sd.version_id = le.version_id
+          )
+        ELSE NULL
+      END AS smoke_supports_info
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
     JOIN ladders l ON l.id = le.ladder_id
@@ -264,6 +274,9 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
     tl: r.tl as number,
     ll: r.ll as number,
     settledAt: (r.settled_at as number | null) ?? undefined,
+    ...(r.smoke_supports_info === null || r.smoke_supports_info === undefined
+      ? {}
+      : {smokeSupportsInfo: Number(r.smoke_supports_info) === 1}),
   }));
 }
 

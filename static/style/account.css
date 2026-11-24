@@ -284,22 +284,18 @@ textarea.input-text {
   font-size: 0.88em;
 }
 
-details.smoke-log {
+.info-dot {
+  display: inline-block;
+  margin-left: 0.45ch;
+  font-size: 0.72em;
+  line-height: 1;
+  vertical-align: 0.08em;
+}
+
+.smoke-error {
   max-width: 48ch;
-  margin: 0.35rem 0 0.15rem;
-  white-space: normal;
-}
-
-details.smoke-log summary {
-  color: rgb(var(--fg-base) / 65%);
+  margin: 0.25rem 0 0.1rem;
   font-size: 0.85em;
-  cursor: pointer;
-}
-
-details.smoke-log pre {
-  margin: 0.35rem 0 0;
-  padding: 0.6rem 0.8rem;
-  font-size: 0.8em;
   line-height: 1.38;
   white-space: pre-wrap;
 }
