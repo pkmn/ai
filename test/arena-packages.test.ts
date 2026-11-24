@@ -182,6 +182,17 @@ describe('arena packages & static assets', () => {
       expect(bakeScript).toContain('blacklist sctp');
     });
 
+    test('archives verified tournament OCI layouts to GCS after smoke tests in bake-image.sh',
+      () => {
+        const bakeScript = fs.readFileSync(root('arena', 'scripts', 'bake-image.sh'), 'utf8');
+        const smokeCallPos = bakeScript.indexOf('if ! smoke_test_agent');
+        const archivePos = bakeScript.indexOf('gcloud storage cp "$ARCHIVE_ZST"');
+        expect(smokeCallPos).toBeGreaterThan(0);
+        expect(archivePos).toBeGreaterThan(smokeCallPos);
+        expect(bakeScript).toContain('--archive');
+        expect(bakeScript).toContain('tar -cf - -C "$WORK_DIR" layout | zstd -19');
+      });
+
     test('reads rootless Podman user.slice cgroup v2 memory.peak in arena script', () => {
       const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
       expect(arenaScript).toContain(

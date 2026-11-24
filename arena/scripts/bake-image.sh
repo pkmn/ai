@@ -5,12 +5,55 @@
 # compile `tourney-relay`, install `tourney-agent`, and smoke-test every entrant inside `bwrap`.
 #
 # Usage:
-#   bake-image.sh <entrants-manifest.tsv>
+#   bake-image.sh <entrants-manifest.tsv> [--archive <gs://bucket/prefix>]
 # where each line in <entrants-manifest.tsv> is:
 #   <agent_id>\t<oci_image_url>\t<expected_sha256>[,<optional_auth_token>]
+# When `--archive` is provided, each verified OCI layout is compressed with `zstd -19` and uploaded
+# to `<gs://bucket/prefix>/<agent_id>.oci.tar.zst` after its smoke test passes.
 set -euo pipefail
 
-MANIFEST="${1:?Usage: bake-image.sh <entrants-manifest.tsv>}"
+USAGE="Usage: bake-image.sh <entrants-manifest.tsv> [--archive <gs://bucket/prefix>]"
+MANIFEST=""
+ARCHIVE_GCS=""
+while (( $# > 0 )); do
+  case "$1" in
+    --archive)
+      [[ $# -ge 2 ]] || { echo "$USAGE" >&2; exit 2; }
+      ARCHIVE_GCS="$2"
+      shift 2
+      ;;
+    --archive=*)
+      ARCHIVE_GCS="${1#--archive=}"
+      shift
+      ;;
+    -h|--help)
+      echo "$USAGE"
+      exit 0
+      ;;
+    -*)
+      echo "ERROR: Unknown option '$1'" >&2
+      echo "$USAGE" >&2
+      exit 2
+      ;;
+    *)
+      if [[ -n "$MANIFEST" ]]; then
+        echo "ERROR: Unexpected positional argument '$1'" >&2
+        echo "$USAGE" >&2
+        exit 2
+      fi
+      MANIFEST="$1"
+      shift
+      ;;
+  esac
+done
+if [[ -z "$MANIFEST" ]]; then
+  echo "$USAGE" >&2
+  exit 2
+fi
+if [[ -n "$ARCHIVE_GCS" && "$ARCHIVE_GCS" != gs://* ]]; then
+  echo "ERROR: --archive must be a gs:// URI (got '${ARCHIVE_GCS}')" >&2
+  exit 2
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARENA_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -314,13 +357,14 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   DEST_DIR="/opt/arena/agents/${AGENT_ID}"
   sudo rm -rf "$DEST_DIR"
   sudo mv "$ROOTFS_STAGE" "$DEST_DIR"
-  rm -rf "$WORK_DIR"
+  rm -rf "${WORK_DIR}/bundle"
 
   # 3. Verify unpacked size <= 500 MiB and lock down read-only permissions
   UNPACKED_KB="$(sudo du -sk "$DEST_DIR" | awk '{print $1}')"
   if (( UNPACKED_KB > 512000 )); then
     echo "ERROR: ${AGENT_ID} unpacked rootfs exceeds 500 MiB (${UNPACKED_KB} KiB)" >&2
     sudo rm -rf "$DEST_DIR"
+    rm -rf "$WORK_DIR"
     exit 1
   fi
   sudo chown -R root:root "$DEST_DIR"
@@ -332,8 +376,17 @@ while IFS=$'\t' read -r AGENT_ID IMAGE_URL SHA_AND_CREDS; do
   if ! smoke_test_agent "$AGENT_ID" "$SMOKE_REQ"; then
     echo "ERROR: ${AGENT_ID} failed bwrap smoke test (missing /ready or /utm -> Turn-1 choice)" >&2
     sudo rm -rf "$DEST_DIR"
+    rm -rf "$WORK_DIR"
     exit 1
   fi
+
+  # 5. Archive verified OCI layout to GCS for historical preservation once smoke test passes
+  if [[ -n "$ARCHIVE_GCS" ]]; then
+    ARCHIVE_ZST="${WORK_DIR}/${AGENT_ID}.oci.tar.zst"
+    tar -cf - -C "$WORK_DIR" layout | zstd -19 -f -o "$ARCHIVE_ZST"
+    gcloud storage cp "$ARCHIVE_ZST" "${ARCHIVE_GCS%/}/${AGENT_ID}.oci.tar.zst"
+  fi
+  rm -rf "$WORK_DIR"
   echo "    OK (${AGENT_ID} responded: ${SMOKE_OUT}, verified digest: ${TARGET_SHA})"
 done < "$MANIFEST"
 

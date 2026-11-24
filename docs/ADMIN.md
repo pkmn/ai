@@ -292,7 +292,8 @@ sqlite3 /var/lib/pkmn/arena.sqlite \
 Create a staging VM (`300GB pd-ssd`, L4 drivers, `bwrap`, `skopeo`, `umoci`,
 `/usr/local/bin/tourney-{relay,agent}`), bake entrants via `arena/scripts/bake-image.sh` (pulls
 pinned `sha256` OCI images, unpacks rootless, verifies 500 MiB cap, `/utm`, and Turn-1
-`bwrap --unshare-all` smoke game), then snapshot and delete the staging VM:
+`bwrap --unshare-all` smoke game, and archives each verified OCI layout to GCS via `--archive`),
+then snapshot and delete the staging VM:
 
 ```sh
 gcloud compute instances create pkmn-tourney-bake --zone=us-central1-a \
@@ -300,8 +301,9 @@ gcloud compute instances create pkmn-tourney-bake --zone=us-central1-a \
   --maintenance-policy=TERMINATE --image-family=ubuntu-2404-lts-amd64 \
   --image-project=ubuntu-os-cloud --boot-disk-type=pd-ssd --boot-disk-size=300GB
 
-# On pkmn-tourney-bake:
-./arena/scripts/bake-image.sh /tmp/tournament-3-entrants.tsv
+# On pkmn-tourney-bake (archive verified entrant OCI layouts to GCS for historical preservation):
+./arena/scripts/bake-image.sh /tmp/tournament-3-entrants.tsv \
+  --archive gs://pkmn-arena/tournaments/3/agents
 
 # Snapshot & clean up staging VM:
 gcloud compute instances stop pkmn-tourney-bake --zone=us-central1-a
