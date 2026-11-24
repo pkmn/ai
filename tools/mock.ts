@@ -745,7 +745,7 @@ function buildShowdownTournamentLog(opts: {
 }
 
 export interface PendingSmokeConfig {
-  status?: 'pass' | 'fail';
+  status?: 'pass' | 'staged' | 'fail';
   error?: string;
   bytes?: number;
   durationMillis?: number;
@@ -1931,7 +1931,7 @@ export class Runner {
     }
 
     const smokeMode = (getFlag(cmd, 'smoke') ?? 'pass').toLowerCase() as
-      'pass' | 'pending' | 'fail';
+      'pass' | 'staged' | 'pending' | 'fail';
     const smokeError = getFlag(cmd, 'error');
     const bytesFlag = getFlag(cmd, 'bytes');
     const durFlag = getFlag(cmd, 'duration-millis');
@@ -1940,7 +1940,7 @@ export class Runner {
     const turnFlag = getFlag(cmd, 'turn-millis');
     const ramFlag = getFlag(cmd, 'ram');
     const pendingMeta: PendingSmokeConfig = {
-      status: smokeMode === 'fail' ? 'fail' : 'pass',
+      status: smokeMode === 'fail' ? 'fail' : smokeMode === 'staged' ? 'staged' : 'pass',
       ...(smokeError !== undefined ? {error: smokeError} : {}),
       ...(bytesFlag !== undefined ? {bytes: parseBytesSpec(bytesFlag)} : {}),
       ...(durFlag !== undefined ? {durationMillis: Number(durFlag)} : {}),
@@ -2080,14 +2080,14 @@ export class Runner {
 
   private buildMockDiagnostics(
     ver: db.AgentVersionRow,
-    smokeStatus: 'passed' | 'failed',
+    smokeStatus: 'passed' | 'staged' | 'failed',
     meta: PendingSmokeConfig,
     telemetry: {durationMillis: number; ram: number}
   ): db.SmokeDiagnosticInput[] {
     const agent = this.db.getAgentById(ver.agentId);
     const name = agent?.name ?? `Agent ${ver.agentId}`;
     const slug = agent?.slug ?? '';
-    const supportsInfo = slug !== 'pokerus' && smokeStatus === 'passed';
+    const supportsInfo = slug !== 'pokerus' && smokeStatus !== 'failed';
     const targets: Array<{ladderId?: string; tournamentId?: string; format: string}> = [];
     const seenFormats = new Set<string>();
     for (const lid of ver.ladders) {
@@ -2169,7 +2169,11 @@ export class Runner {
   ) {
     const ver = this.db.getVersionById(versionId);
     if (!ver) throw new Error(`Unknown versionId ${versionId}`);
-    const smokeStatus = meta.status === 'fail' ? 'failed' : 'passed';
+    const smokeStatus = meta.status === 'fail'
+      ? 'failed'
+      : meta.status === 'staged'
+        ? 'staged'
+        : 'passed';
     const hasTeamPreview = this.hasTeamPreviewForTargets(ver.ladders, ver.tournaments);
     const telemetry = this.computeTelemetryForVersion(versionId, ver.agentId, hasTeamPreview);
     const initMillis = meta.initMillis ?? telemetry.initMillis;
@@ -2193,19 +2197,20 @@ export class Runner {
         ...(diagnostics.length ? {diagnostics} : {}),
       });
     } else {
+      const passedOrStaged = smokeStatus !== 'failed';
       this.db.applySubmissionStatus({
         versionId,
         smokeStatus,
-        unpackedBytes: smokeStatus === 'passed' ? (meta.bytes ?? telemetry.bytes) : undefined,
-        smokeDurationMillis: smokeStatus === 'passed'
+        unpackedBytes: passedOrStaged ? (meta.bytes ?? telemetry.bytes) : undefined,
+        smokeDurationMillis: passedOrStaged
           ? (meta.durationMillis ?? telemetry.durationMillis)
           : undefined,
-        smokeInitMillis: smokeStatus === 'passed' ? initMillis : undefined,
-        smokeTeamPreviewMillis: smokeStatus === 'passed' ? teamPreviewMillis : undefined,
-        smokeTurnMillis: smokeStatus === 'passed'
+        smokeInitMillis: passedOrStaged ? initMillis : undefined,
+        smokeTeamPreviewMillis: passedOrStaged ? teamPreviewMillis : undefined,
+        smokeTurnMillis: passedOrStaged
           ? (meta.turnMillis ?? telemetry.turnMillis)
           : undefined,
-        smokePeakRam: smokeStatus === 'passed' ? (meta.ram ?? telemetry.ram) : undefined,
+        smokePeakRam: passedOrStaged ? (meta.ram ?? telemetry.ram) : undefined,
         smokeError: smokeStatus === 'failed'
           ? (meta.error ?? `Smoke test failed in ${ver.version}`)
           : undefined,
@@ -2222,6 +2227,7 @@ export class Runner {
   private async cmdSmoke(cmd: Command) {
     const targetSpec = cmd.positional[1] ?? 'all';
     const forceFail = hasFlag(cmd, 'fail');
+    const forceStaged = hasFlag(cmd, 'staged');
     const forcePass = hasFlag(cmd, 'pass');
     const errorFlag = getFlag(cmd, 'error');
     const bytesFlag = getFlag(cmd, 'bytes');
@@ -2250,11 +2256,13 @@ export class Runner {
 
     for (const sub of pendingList) {
       const stored = this.state.pendingSmoke[String(sub.versionId)] ?? {};
-      const status: 'pass' | 'fail' = forceFail
+      const status: 'pass' | 'staged' | 'fail' = forceFail
         ? 'fail'
-        : forcePass
-          ? 'pass'
-          : (stored.status ?? 'pass');
+        : forceStaged
+          ? 'staged'
+          : forcePass
+            ? 'pass'
+            : (stored.status ?? 'pass');
       const meta: PendingSmokeConfig = {
         status,
         error: errorFlag ?? stored.error,

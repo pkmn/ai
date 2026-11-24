@@ -1531,8 +1531,9 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       path: '/account/',
       githubUser: 'sisyphus25',
       setup: fixture => {
+        let versionId = 0;
         const teardownDb = withSavepoint(fixture, raw => {
-          raw.prepare(
+          const info = raw.prepare(
             `INSERT INTO agent_versions (
               agent_id, version, package, url, sha256, ladders_json, tournaments_json,
               smoke_status, submitted_at, notified
@@ -1545,9 +1546,10 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             JSON.stringify([SV_LADDER_ID]),
             NOW_SECONDS - 45
           );
+          versionId = Number(info.lastInsertRowid);
         });
         fixture.arenaHandle.setLiveDiagnostic({
-          versionId: 999,
+          versionId,
           agentId: fixture.cynthiaiId,
           agentSlug: 'cynthiai',
           agentName: 'CynthiAI',
@@ -1605,7 +1607,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           fixture.arenaHandle.setLiveDiagnostic({
             done: true,
             agentId: fixture.cynthiaiId,
-            versionId: 999,
+            versionId,
           });
           teardownDb();
         };

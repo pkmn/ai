@@ -33,6 +33,7 @@ concurrent use alongside `pkmn.ai-server`, which auto-invalidates its ETag cache
 | `reassign-developer <github> <slug\|--none> [...]` | Move/remove a GitHub developer in `projects.yml` + SQLite. |
 | `quarantine <slug> <ver> [--reason "..."]` | Quarantine an agent version across ladders and recompute ratings. |
 | `unquarantine <slug> <ver>` | Restore a quarantined version and recompute ratings. |
+| `retire <ladder_id> <slug> <ver>` | Retire an active non-anchor version on `<ladder_id>` without revoking qualification. |
 | `refund-cooldown <slug>` | Clear the 14-day submission cooldown and 24h failed smoke-test budget on `<slug>`. |
 | `set-smoke-cadence <n> [--every <k>]` | Set max ladder smoke tests per coordinator cycle (`0` pauses) and cycle interval `k` (default `1`). |
 | `set-anchor <ladder_id> <slug> <ver>` | Pin `<slug>@<ver>` to `1500` Elo on `<ladder_id>` and recompute ratings. |
@@ -248,10 +249,10 @@ Body with @Competitor and @pkmn mentions.
 EOF
 ```
 
-**Wiki (`server/wiki.tsx`):** `ADMINS` (can edit any project page) and `AUTHORS` (GitHub->Smogon
-display overrides) live at the top of `server/wiki.tsx`. Project pages support optional first-line
-`{% visibility: developers %}` (default), `{% visibility: discord %}`, or `{% visibility: public %}`
-(forced for non-project pages).
+**Wiki (`server/wiki.tsx`):** `ADMINS` (in `server/auth.ts`; can edit any project page) and
+`AUTHORS` (in `server/wiki.tsx`; GitHub->Smogon display overrides). Project pages support optional
+first-line `{% visibility: developers %}` (default), `{% visibility: discord %}`, or
+`{% visibility: public %}` (forced for non-project pages).
 
 ## 7. Tournament Operations
 

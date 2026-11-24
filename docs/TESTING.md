@@ -20,7 +20,7 @@ Install headless Chromium once if missing: `npx playwright-core install chromium
 | `test/ratings.test.ts` | Finite-difference gradients/Hessians, KKT optimality, permutation invariance, disconnected graphs, Monte Carlo convergence, active matchmaking (`server/ratings.ts`). |
 | `test/protocol.test.ts` | Stdio parsing & chat/covert-channel elision across `@pkmn/sim` (`server/protocol.ts`). |
 | `test/db.test.ts` | Schema bootstrap, `db/migration/NNNN-*.sql`, project/Smogon sync, ladder lifecycle/rotation, match aggregation (`db/`). |
-| `test/{auth,account,wiki,discord,api,render,projects}.test.ts` | OAuth cookies, submission gating & 1-NN uniqueness, Git wiki revisions/visibility, Discord sync, `/api/arena/*`, dynamic SSR HTML/`.json`. |
+| `test/{auth,account,admin,wiki,discord,api,render,projects,system}.test.ts` | OAuth cookies, submission gating & 1-NN uniqueness, `/admin` dashboard & telemetry, Git wiki revisions/visibility, Discord sync & `/watch`, `/api/arena/*`, dynamic SSR HTML/`.json`, VPS/Arena telemetry parsers. |
 | `test/{arena-*,sim,setup}.test.ts` | Mac mini & GCP unpacking/sandbox/time-slicing/tournaments/coordinator, multi-version `@pkmn/sim` worker isolation, repo setup/submodules. |
 | `test/e2e.test.ts` | Runs [`tools/scenarios/e2e.mock`](../tools/scenarios/e2e.mock) in Live HTTP Server Mode + Playwright live SSE flows (plus 900-match Elo convergence under `CI` / `RUN_SLOW_TESTS=1`). |
 
@@ -193,7 +193,8 @@ checkpoint <name>                                          # programmatic callba
 
 # Projects, Developers & Discord
 register <name> [--owner <github[:smogon[.id]]> ...] [--discord <id:user|user|none> ...] \
-  [--logo <file|auto>] [--ladders <slots>] [--pending] [--disabled] [--banned] [--no-guild]
+  [--company <name>] [--company-url <url>] [--logo <file|auto>] [--ladders <slots>] \
+  [--pending] [--disabled] [--banned] [--no-guild]
 qualify <agent> [<slots|all|none>...] | disable <agent> | refund-cooldown <agent>
 reassign <github> <target-agent|--none> [--smogon <username.id>]
 discord link <github> [<id>:<user>] [--no-guild] | discord unlink <github> | discord sync
@@ -209,9 +210,9 @@ ladder archive <ladder> [--file <path>]
 # Submissions, Smoke Testing & Quarantine
 submit <agent> [<ver>] [<target>[=<elo>] ...] [--rating <elo>] [--tournament <id[,...]>] \
   [--vs <opp[@ver]:delta[,...]>] [--pkg <bundle|oci>] [--url <url>] [--sha256 <hex>] [--auth-token <hdr>] \
-  [--by <github>] [--teams <auto|new|none|path>] [--smoke <pass|pending|fail>] [--error <msg>] [--notified] \
+  [--by <github>] [--teams <auto|new|none|path>] [--smoke <pass|staged|pending|fail>] [--error <msg>] [--notified] \
   [--bytes <size>] [--duration-millis <n>] [--turn-millis <n>] [--ram <mib>]
-smoke [<agent>[@<ver>]|all] [--pass|--fail] [--error <msg>] [--notified] [--bytes <sz>] [--duration-millis <n>] [--turn-millis <n>] [--ram <mib>]
+smoke [<agent>[@<ver>]|all] [--pass|--staged|--fail] [--error <msg>] [--notified] [--bytes <sz>] [--duration-millis <n>] [--turn-millis <n>] [--ram <mib>]
 quarantine <agent>[@<ver>] [--reason <msg>] [--via <runner|admin>] | unquarantine <agent>[@<ver>]
 
 # Matchmaking, Settlement, Direct Matches & Live Telemetry
