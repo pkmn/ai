@@ -1300,4 +1300,38 @@ describe('Coordinator', () => {
       h.stateDb.close();
     }
   });
+
+  test('syncActivatedAgents omits local_agents row when cold archival fails', async () => {
+    const h = createMockCoordHarness('sync-cold-fail');
+    try {
+      // Replace cold dir with a regular file so archiveColdAgent throws.
+      fs.mkdirSync(path.dirname(h.dirs.cold), {recursive: true});
+      fs.rmSync(h.dirs.cold, {recursive: true, force: true});
+      fs.writeFileSync(h.dirs.cold, 'not-a-directory');
+
+      let archivedCalls = 0;
+      h.coord.client.getActivatedArtifact = (versionId: number) => Promise.resolve({
+        versionId,
+        agentId: 10,
+        agentSlug: 'alpha',
+        agentName: 'Alpha',
+        version: '1.0',
+        package: 'bundle',
+        url: `file://${bundleTar}`,
+        sha256: bundleSha,
+      });
+      h.coord.client.markArtifactArchived = () => {
+        archivedCalls++;
+        return Promise.resolve({ok: true as const});
+      };
+
+      const installed = await h.coord.syncActivatedAgents([99]);
+      expect(installed).toBe(0);
+      expect(archivedCalls).toBe(0);
+      expect(h.stateDb.getLocalAgent(99)).toBeUndefined();
+      expect(fs.existsSync(path.join(h.dirs.agents, 'alpha-1.0-v99'))).toBe(false);
+    } finally {
+      h.stateDb.close();
+    }
+  });
 });

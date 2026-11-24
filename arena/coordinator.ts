@@ -336,6 +336,9 @@ export class Coordinator {
             dirs: this.dirs,
             allowPrivateUrls: this.devMode,
           });
+        if (mode === 'native' || !this.devMode) {
+          packages.archiveColdAgent({mode, target: targetId}, {dirs: this.dirs});
+        }
         this.stateDb.upsertLocalAgent({
           versionId: artifact.versionId,
           agentId: artifact.agentId,
@@ -347,16 +350,21 @@ export class Coordinator {
           unpackedBytes,
         });
         this.brokenUntilByVersion.delete(versionId);
-        if (mode === 'native' || !this.devMode) {
-          packages.archiveColdAgent({mode, target: targetId}, {dirs: this.dirs});
+        try {
+          packages.evictColdAgentsIfNeeded(this.stateDb, {
+            dirs: this.dirs,
+            pinnedVersionIds: new Set([artifact.versionId]),
+          });
+        } catch (evictErr) {
+          console.error(
+            `Failed evicting cold agents after archiving version ${versionId}:`,
+            evictErr
+          );
         }
-        packages.evictColdAgentsIfNeeded(this.stateDb, {
-          dirs: this.dirs,
-          pinnedVersionIds: new Set([artifact.versionId]),
-        });
         await this.client.markArtifactArchived?.(artifact.versionId).catch(() => undefined);
         installed++;
       } catch (err) {
+        this.stateDb.deleteLocalAgent(artifact.versionId);
         this.cleanupUnpackedAgent(mode, targetId);
         this.brokenUntilByVersion.set(versionId, nowSeconds + BROKEN_AGENT_COOLDOWN_SECONDS);
         const msg = err instanceof Error ? err.message : String(err);
