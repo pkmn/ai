@@ -869,7 +869,7 @@ describe('Smogon lookup', () => {
   });
 
   function stubSmogonTooltipFetch() {
-    globalThis.fetch = ((input: URL | RequestInfo) => {
+    globalThis.fetch = ((input: URL | RequestInfo, init?: RequestInit) => {
       const url = typeof input === 'string'
         ? input
         : input instanceof URL ? input.toString() : input.url;
@@ -880,7 +880,12 @@ describe('Smogon lookup', () => {
           headers: {location: 'https://www.smogon.com/forums/members/pre.10544/'},
         }));
       }
-      if (url.includes('members/10544/?tooltip=true')) {
+      if (url.includes('?tooltip=1')) {
+        const hdrs = new Headers(init?.headers);
+        expect(hdrs.get('accept')).toBe('application/json');
+        expect(hdrs.get('x-requested-with')).toBe('XMLHttpRequest');
+      }
+      if (url.includes('members/10544/?tooltip=1')) {
         return Promise.resolve(new Response(JSON.stringify({
           status: 'ok',
           html: {
@@ -894,7 +899,7 @@ describe('Smogon lookup', () => {
           },
         }), {status: 200, headers: {'content-type': 'application/json'}}));
       }
-      if (url.includes('members/1/?tooltip=true')) {
+      if (url.includes('members/1/?tooltip=1')) {
         return Promise.resolve(new Response(JSON.stringify({
           status: 'ok',
           html: {
@@ -907,7 +912,7 @@ describe('Smogon lookup', () => {
           },
         }), {status: 200, headers: {'content-type': 'application/json'}}));
       }
-      if (url.includes('members/666/?tooltip=true')) {
+      if (url.includes('members/666/?tooltip=1')) {
         return Promise.resolve(new Response(JSON.stringify({
           status: 'ok',
           html: {

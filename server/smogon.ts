@@ -4,7 +4,7 @@
 // account. Because Smogon usernames can be renamed on XenForo while numeric member IDs are
 // immutable, `pkmn register` resolves usernames/URLs to their numeric `smogon_id` once and
 // stores `smogon_id` in `agents`, periodically refreshing display names and ban flags via the
-// lightweight `?tooltip=true&_xfResponseType=json` XenForo endpoint.
+// lightweight `?tooltip=1` JSON endpoint (`Accept: application/json`).
 
 import {parseJsonResponse} from '../static/util';
 
@@ -108,11 +108,15 @@ function withToken(rawUrl: string, token: string): URL {
   return u;
 }
 
-async function fetchFollowingRedirects(rawUrl: string, token: string): Promise<Response> {
+async function fetchFollowingRedirects(
+  rawUrl: string,
+  token: string,
+  headers?: Record<string, string>
+): Promise<Response> {
   const signal = AbortSignal.timeout(TIMEOUT_MILLIS);
   let current = rawUrl;
   for (let hops = 0; hops < 8; hops++) {
-    const res = await fetch(withToken(current, token), {redirect: 'manual', signal});
+    const res = await fetch(withToken(current, token), {redirect: 'manual', signal, headers});
     const location = res.headers.get('location');
     if (location && res.status >= 300 && res.status < 400) {
       await res.body?.cancel().catch(() => {});
@@ -165,9 +169,11 @@ export async function lookupUser(
     if (m[1]) fallbackSlug = safeDecodeURIComponent(m[1]);
   }
 
-  const tooltipUrl =
-    `${SMOGON_BASE}/forums/members/${id}/?tooltip=true&_xfResponseType=json`;
-  const res = await fetchFollowingRedirects(tooltipUrl, token);
+  const tooltipUrl = `${SMOGON_BASE}/forums/members/${id}/?tooltip=1`;
+  const res = await fetchFollowingRedirects(tooltipUrl, token, {
+    accept: 'application/json',
+    'x-requested-with': 'XMLHttpRequest',
+  });
   if (!res.ok) {
     await res.body?.cancel().catch(() => {});
     throw new Error(`Smogon member ID ${id} not found (HTTP ${res.status})`);
