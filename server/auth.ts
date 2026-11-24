@@ -12,6 +12,13 @@ export const STATE_COOKIE = 'pkmn_oauth_state';
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const STATE_TTL_SECONDS = 10 * 60;
 export const REGISTER_ISSUE_URL = 'https://github.com/pkmn/ai/issues/new?template=register.yml';
+export const ADMINS: readonly string[] = ['scheibo'];
+
+const ADMIN_SET = new Set(ADMINS.map(a => a.toLowerCase()));
+
+export function isAdmin(login: string | undefined): boolean {
+  return Boolean(login && ADMIN_SET.has(login.trim().toLowerCase()));
+}
 
 const DISCORD_API = 'https://discord.com/api/v10';
 

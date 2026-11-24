@@ -24,10 +24,10 @@ const execFileAsync = promisify(execFile);
 const WIKI_DIR = process.env.MOCK === '1' ? util.root('.mock', 'wiki') : util.root('wiki');
 const MAX_BODY_BYTES = 256 * 1024;
 
-// Hardcoded site-wide wiki administrators and GitHub -> display-name overrides (replaces the
-// two-line `config/wiki.yml`). Admins can edit any project wiki page regardless of project
-// ownership; `AUTHORS` maps GitHub commit authors to their Smogon handle in revision history.
-const ADMINS = ['scheibo'];
+// Hardcoded site-wide wiki administrators (`auth.ADMINS`) and GitHub -> display-name overrides.
+// Admins can edit any project wiki page regardless of project ownership; `AUTHORS` maps GitHub
+// commit authors to their Smogon handle in revision history.
+const ADMINS = auth.ADMINS;
 const AUTHORS: Record<string, string> = {scheibo: 'pre'};
 const ADMIN_USERS = new Set(ADMINS.map(a => a.toLowerCase()));
 const AUTHOR_MAP = new Map(Object.entries(AUTHORS).map(([gh, name]) => [gh.toLowerCase(), name]));

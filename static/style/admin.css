@@ -1,0 +1,403 @@
+:root {
+  --monospace: monospace;
+}
+
+[id] {
+  scroll-margin-top: 2rem;
+}
+
+main {
+  width: 100%;
+  max-width: min(124ch, calc(100% - 4vh));
+  margin: 0 auto;
+  padding: 2ch;
+}
+
+h3 {
+  margin: 1.75rem 0 0.6rem;
+  font-size: 1.15em;
+}
+
+h4 {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 0.95em;
+}
+
+h4:first-child {
+  margin-top: 0;
+}
+
+.muted {
+  color: rgb(var(--fg-base) / 50%);
+}
+
+.yes {
+  color: var(--hl-string);
+  font-weight: bold;
+}
+
+.no {
+  color: var(--hl-name);
+  font-weight: bold;
+}
+
+.warn {
+  color: var(--hl-number);
+  font-weight: bold;
+}
+
+.hide {
+  display: none;
+}
+
+.num,
+th.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.center,
+th.center {
+  text-align: center;
+}
+
+table {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+}
+
+th {
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+td {
+  white-space: nowrap;
+  vertical-align: top;
+  border-top: 1px solid rgb(var(--fg-base) / 15%);
+}
+
+td.wrap {
+  white-space: normal;
+}
+
+.detail-row td {
+  padding: 0.9rem 1.25ch 1.05rem;
+  white-space: normal;
+  background-color: var(--aside-bg-color);
+  border-top: 1px dashed rgb(var(--fg-base) / 15%);
+}
+
+.sub-table th,
+.sub-table td {
+  padding: 0.28rem 0.55rem;
+}
+
+tr.secondary td {
+  color: rgb(var(--fg-base) / 55%);
+}
+
+tr.project-row {
+  cursor: pointer;
+}
+
+tr.project-row:hover td {
+  background-color: rgb(var(--fg-base) / 4%);
+}
+
+.row-toggle {
+  display: inline-block;
+  width: 1.15ch;
+  margin-right: 0.45ch;
+  color: rgb(var(--fg-base) / 55%);
+  transition: transform 0.12s ease;
+  user-select: none;
+}
+
+tr.project-row.expanded .row-toggle {
+  color: var(--fg-accent-color);
+  transform: rotate(90deg);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+#system h3 {
+  margin-top: 0.4rem;
+}
+
+.admin-feedback {
+  margin: 0.75rem 0;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.9em;
+  background-color: var(--aside-bg-color);
+  border: 1px solid var(--aside-border-color);
+  border-radius: var(--border-radius);
+}
+
+.sys-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem 1.6ch;
+  margin: 0.6rem 0 1.4rem;
+}
+
+.sys-card {
+  min-width: 0;
+  padding: 0.85rem 1.4ch;
+  background-color: var(--aside-bg-color);
+  border: 1px solid var(--aside-border-color);
+  border-radius: var(--border-radius);
+}
+
+.sys-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1ch;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid rgb(var(--fg-base) / 14%);
+}
+
+.sys-title {
+  font-weight: bold;
+  font-size: 0.98em;
+}
+
+.sys-meta {
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+}
+
+.sys-meta a {
+  font-family: var(--monospace);
+}
+
+.sys-dl {
+  display: grid;
+  grid-template-columns: 8ch minmax(0, 1fr);
+  gap: 0.35rem 1ch;
+  margin: 0;
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.38;
+}
+
+.sys-dl dt {
+  color: rgb(var(--fg-base) / 55%);
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.sys-dl dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sys-line {
+  display: block;
+}
+
+.discord-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  font-size: 0.88em;
+  font-family: var(--monospace);
+}
+
+.ladder-checks {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 0.25rem 0.7ch;
+  font-size: 0.86em;
+  font-family: var(--monospace);
+}
+
+.ladder-checks label {
+  display: inline-flex;
+  gap: 0.3ch;
+  align-items: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ladder-checks label.disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 18ch;
+  max-width: 30ch;
+  font-size: 0.9em;
+}
+
+.status-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.7ch;
+  align-items: center;
+}
+
+.status-reason {
+  font-size: 0.88em;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.45ch;
+  max-width: 28ch;
+  font-size: 0.84em;
+  font-family: var(--monospace);
+}
+
+.chip {
+  padding: 0.08rem 0.45ch;
+  white-space: nowrap;
+  background-color: rgb(var(--fg-base) / 7%);
+  border: 1px solid rgb(var(--fg-base) / 14%);
+  border-radius: var(--border-radius);
+}
+
+.chip-warn {
+  color: var(--hl-number);
+  border-color: var(--hl-number);
+}
+
+.chip-bad {
+  color: var(--hl-name);
+  border-color: var(--hl-name);
+}
+
+.btn-sm {
+  padding: 0.14rem 0.6ch;
+  color: var(--fg-accent-color);
+  font: inherit;
+  font-size: 0.82em;
+  line-height: 1.35;
+  white-space: nowrap;
+  background-color: var(--bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+}
+
+.btn-sm:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.btn-sm:hover:not(:disabled) {
+  border-color: var(--fg-accent-color);
+}
+
+.btn-danger {
+  color: var(--hl-name);
+  border-color: var(--hl-name);
+}
+
+.btn-danger:hover:not(:disabled) {
+  border-color: var(--hl-name);
+}
+
+.action-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.45ch;
+  align-items: center;
+}
+
+.reason-input {
+  width: 20ch;
+  max-width: 100%;
+  padding: 0.14rem 0.45rem;
+  color: var(--fg-accent-color);
+  font: inherit;
+  font-size: 0.82em;
+  font-family: var(--monospace);
+  background-color: var(--bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+}
+
+.detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25ch;
+  font-size: 0.88em;
+}
+
+.sub-table {
+  font-size: 0.88em;
+}
+
+details.smoke-log {
+  max-width: 48ch;
+  margin: 0.35rem 0 0.15rem;
+  white-space: normal;
+}
+
+details.smoke-log summary {
+  color: rgb(var(--fg-base) / 65%);
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+details.smoke-log pre {
+  margin: 0.35rem 0 0;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.8em;
+  line-height: 1.38;
+  white-space: pre-wrap;
+}
+
+@media (width < 900px) {
+  .sys-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ladder-checks {
+    flex-wrap: wrap;
+  }
+}
+
+@media (width < 640px) {
+  main {
+    max-width: 100%;
+    padding: 1.25ch;
+  }
+
+  table th,
+  table td {
+    padding: 0.3rem 0.42rem;
+    font-size: 0.85em;
+  }
+
+  .sub-table th,
+  .sub-table td {
+    padding: 0.24rem 0.4rem;
+    font-size: 0.83em;
+  }
+
+  .detail-row td {
+    padding: 0.65rem 0.75ch 0.8rem;
+  }
+}

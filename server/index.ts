@@ -13,10 +13,12 @@ import {renderErrorPage, syncStaticLiveBanner} from '../static/build';
 import {ROOT, installHeadSupport, isConnectivityError, root} from '../static/util';
 
 import * as account from './account';
+import * as admin from './admin';
 import * as arena from './arena';
 import {Auth} from './auth';
 import * as discord from './discord';
 import * as render from './render';
+import * as system from './system';
 import * as wiki from './wiki';
 
 // Hardcoded port 1234 (no `PORT`/`HOST`/`PUBLIC_URL` env overrides). Production binds loopback
@@ -170,6 +172,15 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   const isMock = process.env.MOCK === '1';
   const app = options.app ?? polka();
   installSafeErrorHandlers(app, db);
+  const traffic = new system.TrafficTracker();
+  app.use(traffic.middleware());
+  const vpsMonitor = new system.VpsHostMonitor({
+    dbPath: db.dbPath,
+    traffic,
+  });
+  if (!isMock && !process.env.VITEST) {
+    vpsMonitor.start();
+  }
 
   // `static/build.tsx` writes 0-byte `index.html` stubs for `/account`, `/arena`, `/projects`, and
   // `/wiki` so `@untitaker/hyperlink` (`hyperlink public --check-anchors`) validates internal `.dj`
@@ -214,7 +225,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       (/^\/arena\/tournaments\/[^/]+\/[^/]+\.log$/i.test(pathname) && !query);
     if (
       !isStaticArenaAsset &&
-      /^(?:\/(?:account|wiki|projects|arena)(?:\.json|\/|$)|\/api(?:\/|$))/.test(pathname)
+      /^(?:\/(?:account|admin|wiki|projects|arena)(?:\.json|\/|$)|\/api(?:\/|$))/.test(pathname)
     ) {
       next();
       return;
@@ -245,11 +256,15 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       getArenaLastContactAt: () => getArenaLastContactAt(),
     });
   account.register(app, {db, auth: wikiInstance.auth});
+  let notifyAdminHeartbeat = () => {};
   const arenaHandle = arena.register(app, {
     db,
     auth: wikiInstance.auth,
     publicDir,
     armWatchdogOnStart: options.armWatchdogOnStart,
+    onHeartbeat: () => {
+      notifyAdminHeartbeat();
+    },
     onSubmissionStatus: discordHandle
       ? async result => {
         await discordHandle.notifySubmissionStatus(result);
@@ -274,6 +289,13 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     },
   });
   getArenaLastContactAt = () => arenaHandle.getState().lastContactAt;
+  const adminHandle = admin.register(app, {
+    db,
+    auth: wikiInstance.auth,
+    arena: arenaHandle,
+    vpsMonitor,
+  });
+  notifyAdminHeartbeat = () => adminHandle.notifyHeartbeat();
 
   if (isMock) {
     const mockStateFile = root('.mock', 'state.json');
@@ -311,6 +333,8 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     arenaHandle,
     discordHandle,
     close: () => {
+      vpsMonitor.stop();
+      adminHandle.close();
       arenaHandle.close();
       discordHandle?.stop();
     },

@@ -92,11 +92,20 @@ Every Arena developer needs a Smogon account in good standing and belongs to at 
 - **Disable project:** Remove its `arena:` block and sync/deploy (`agents.status = 'disabled'`;
   history is preserved). Banned Smogon owners (`smogon_standing = 'bad'`) are auto-blocked.
 
-## 3. Moderation: Quarantine & Cooldowns
+## 3. Moderation: `/admin`, Quarantine, Retire & Cooldowns
+
+Site admins (`ADMINS` in `server/auth.ts`) can inspect and moderate registered projects at `/admin/`
+(or `/admin.json`): live VPS & Arena host system telemetry (updated over `/api/admin/stream` SSE
+whenever the Arena heartbeats — load, RAM/swap, internal & `/Volumes/Archive` disk usage/I/O,
+network health, traffic/SSE viewers, error rates, backups/GCS archive sync, and pending OS updates),
+runner health, smoke queue, ladder readiness, linked Discord/Smogon standing, inline per-ladder
+qualification toggles, cooldowns, and version stderr logs, plus direct actions (refund cooldown,
+retire an active version on a ladder, quarantine/unquarantine a version).
 
 ```sh
 npm run pkmn -- quarantine foul-play 1.2.0 --reason "Repeated protocol framing timeouts on SV"
 npm run pkmn -- unquarantine foul-play 1.2.0
+npm run pkmn -- retire gen1ou20261109 foul-play 1.2.0
 npm run pkmn -- refund-cooldown foul-play
 npm run pkmn -- set-smoke-cadence 1 --every 5   # throttle to 1 smoke test every 5 matches
 npm run pkmn -- set-smoke-cadence 3             # burst up to 3 smoke tests per cycle
