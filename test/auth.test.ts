@@ -782,4 +782,21 @@ describe('server/auth.ts routes', () => {
     );
     expect(session?.github).toEqual({id: 117249, login: 'scheibo'});
   });
+
+  test('returns GitHub username avatar URL for admin sessions in /api/me', async () => {
+    const loginRes = await realFetch(`${baseUrl}/auth/dev?github=scheibo&return_to=%2Faccount%2F`, {
+      redirect: 'manual',
+    });
+    expect(loginRes.status).toBe(302);
+    expect(loginRes.headers.get('location')).toBe('/admin/');
+    const cookie = extractCookieMap(loginRes)[auth.SESSION_COOKIE];
+    const meRes = await realFetch(`${baseUrl}/api/me`, {
+      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(cookie)}`},
+    });
+    expect(await meRes.json()).toEqual({
+      authenticated: true,
+      username: 'scheibo',
+      avatarUrl: 'https://github.com/scheibo.png?size=64',
+    });
+  });
 });

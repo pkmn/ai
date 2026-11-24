@@ -379,10 +379,13 @@ export class Auth {
     }
     const gh = this.resolveGitHubSession(session);
     if (gh) {
+      const avatarUrl = isAdmin(gh.login)
+        ? `https://github.com/${encodeURIComponent(gh.login.toLowerCase())}.png?size=64`
+        : gh.githubId > 0 ? githubAvatarUrl(gh.githubId) : undefined;
       return {
         authenticated: true,
         username: gh.login,
-        ...(gh.githubId > 0 ? {avatarUrl: githubAvatarUrl(gh.githubId)} : {}),
+        ...(avatarUrl ? {avatarUrl} : {}),
       };
     }
     if (session.discord && /^\d+$/.test(session.discord.id)) {
@@ -463,7 +466,7 @@ export class Auth {
         const devRow = github ? this.db?.getDeveloperByGitHub(github) : undefined;
         const cookie = this.issueSessionCookie({
           ...(github
-            ? {github: {id: devRow?.githubId ?? 1, login: github}}
+            ? {github: {id: devRow?.githubId ?? 0, login: github}}
             : existing?.github ? {github: existing.github} : {}),
           ...(discord
             ? {discord: {id: discord, username, ...(avatar ? {avatar} : {})}}
