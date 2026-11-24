@@ -1512,20 +1512,103 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       }),
     },
     {
+      name: 'account-diagnostic-live',
+      section: 'account',
+      title: 'Diagnostic Live',
+      path: '/account/',
+      githubUser: 'sisyphus25',
+      setup: fixture => {
+        const teardownDb = withSavepoint(fixture, raw => {
+          raw.prepare(
+            `INSERT INTO agent_versions (
+              agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+              smoke_status, submitted_at, notified
+            ) VALUES (?, '1.0.0', 'bundle',
+              'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0/agent.tar.zst',
+              ?, ?, '[]', 'pending', ?, 0)`
+          ).run(
+            fixture.cynthiaiId,
+            'a'.repeat(64),
+            JSON.stringify([RBY_LADDER_ID]),
+            NOW_SECONDS - 45
+          );
+        });
+        fixture.arenaHandle.setLiveDiagnostic({
+          versionId: 999,
+          agentId: fixture.cynthiaiId,
+          agentSlug: 'cynthiai',
+          agentName: 'CynthiAI',
+          version: '1.0.0',
+          format: 'gen1ou',
+          targetName: 'RBY',
+          phase: 'battle',
+          turn: 2,
+          activeSlot: 'p1',
+          turnStartedAt: NOW_SECONDS - 4,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 15,
+          p1: {
+            name: 'CynthiAI (P1)',
+            version: '1.0.0',
+            bankSeconds: 142,
+            thinking: true,
+            peakRam: 412,
+            info: {win: 0.61, depth: 11, nodes: 24500, nps: 450000},
+          },
+          p2: {
+            name: 'CynthiAI (P2)',
+            version: '1.0.0',
+            bankSeconds: 145,
+            thinking: false,
+            peakRam: 398,
+            info: {win: 0.39, depth: 10, nodes: 21200, nps: 410000},
+          },
+          lines: [
+            '|player|p1|CynthiAI (P1)|1|',
+            '|player|p2|CynthiAI (P2)|1|',
+            '|gametype|singles',
+            '|gen|1',
+            '|tier|[Gen 1] OU',
+            '|start',
+            '|switch|p1a: Tauros|Tauros|353/353',
+            '|switch|p2a: Chansey|Chansey|703/703',
+            '|turn|1',
+            '|move|p1a: Tauros|Body Slam|p2a: Chansey',
+            '|-damage|p2a: Chansey|421/703',
+            '|move|p2a: Chansey|Thunder Wave|p1a: Tauros',
+            '|-status|p1a: Tauros|par',
+            '|turn|2',
+          ],
+          winHistory: [
+            {turn: 1, p1: 0.54, p2: 0.47},
+            {turn: 2, p1: 0.61, p2: 0.39},
+          ],
+        });
+        return () => {
+          fixture.arenaHandle.setLiveDiagnostic({
+            done: true,
+            agentId: fixture.cynthiaiId,
+            versionId: 999,
+          });
+          teardownDb();
+        };
+      },
+    },
+    {
       name: 'account-staged-diagnostic',
       section: 'account',
       title: 'Staged Diagnostic',
       path: '/account/',
       githubUser: 'sisyphus25',
-      click: '.diag-replay-btn',
+      click: '#history tbody tr.battle-row td:first-child',
       setup: fixture => withSavepoint(fixture, raw => {
         const res = raw.prepare(
           `INSERT INTO agent_versions (
             agent_id, version, package, url, sha256, ladders_json, tournaments_json,
             unpacked_bytes, smoke_status, smoke_duration_millis, smoke_init_millis,
             smoke_turn_millis, smoke_peak_ram, submitted_at, notified
-          ) VALUES (?, '1.0.0-rc2', 'bundle',
-            'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0-rc2/agent.tar.zst',
+          ) VALUES (?, '1.0.0', 'bundle',
+            'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0/agent.tar.zst',
             ?, ?, '[]', 248000000, 'staged', 18400, 142, 34, 412, ?, 1)`
         ).run(
           fixture.cynthiaiId,
@@ -1535,8 +1618,8 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         );
         const versionId = Number(res.lastInsertRowid);
         const log = [
-          '|player|p1|Cynthiai (P1)|1|',
-          '|player|p2|Cynthiai (P2)|1|',
+          '|player|p1|CynthiAI (P1)|1|',
+          '|player|p2|CynthiAI (P2)|1|',
           '|gametype|singles',
           '|gen|1',
           '|tier|[Gen 1] OU',
@@ -1553,15 +1636,15 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           '|turn|2',
           '|ai|p1|{"win":0.61,"depth":11,"nodes":24500,"nps":450000}',
           '|ai|p2|{"win":0.39,"depth":10,"nodes":21200,"nps":410000}',
-          '|win|Cynthiai (P1)',
+          '|win|CynthiAI (P1)',
         ].join('\n');
         raw.prepare(
           `INSERT INTO smoke_diagnostics (
             version_id, ladder_id, format, turns, end_reason, duration_millis,
             battle_log, p1_stderr, p2_stderr, p1_cpu_cores, p2_cpu_cores,
-            p1_peak_ram, p2_peak_ram, created_at
+            p1_peak_ram, p2_peak_ram, supports_info, created_at
           ) VALUES (?, ?, 'gen1ou', 2, 'win', 18400, ?, 'init ok\nsearch depth=11',
-            'init ok\nsearch depth=10', 4.2, 4.1, 412, 398, ?)`
+            'init ok\nsearch depth=10', 4.2, 4.1, 412, 398, 1, ?)`
         ).run(versionId, RBY_LADDER_ID, log, NOW_SECONDS - 60);
       }),
     },
@@ -1572,32 +1655,77 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       path: '/account/',
       githubUser: 'sisyphus25',
       setup: fixture => withSavepoint(fixture, raw => {
-        const insert = raw.prepare(
+        const insertVer = raw.prepare(
           `INSERT INTO agent_versions (
             agent_id, version, package, url, sha256, ladders_json, tournaments_json,
-            smoke_status, smoke_error, submitted_at, notified
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'failed', 'segfault in init', ?, 1)`
+            smoke_status, smoke_duration_millis, smoke_init_millis, smoke_turn_millis,
+            smoke_peak_ram, smoke_error, submitted_at, notified
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
         );
-        for (let i = 1; i <= 3; i++) {
-          insert.run(
+        const insertDiag = raw.prepare(
+          `INSERT INTO smoke_diagnostics (
+            version_id, ladder_id, tournament_id, format, turns, end_reason, duration_millis,
+            battle_log, p1_stderr, p2_stderr, supports_info, created_at
+          ) VALUES (?, ?, ?, ?, 2, ?, 11200, '|turn|1\n|win|CynthiAI (P1)',
+            'diagnostic stderr', 'diagnostic stderr', ?, ?)`
+        );
+        const ladderAttempts: Array<{status: 'failed' | 'discarded'; err: string | null}> = [
+          {status: 'failed', err: 'Diagnostic test failed in gen1ou: segfault in init'},
+          {status: 'discarded', err: null},
+          {status: 'failed', err: 'Diagnostic test failed in gen1ou: timeout on turn 4'},
+        ];
+        for (let i = 0; i < ladderAttempts.length; i++) {
+          const att = ladderAttempts[i];
+          const ts = NOW_SECONDS - (3 - i) * 3600;
+          const r1 = insertVer.run(
             fixture.cynthiaiId,
-            `0.9.${i}`,
+            '1.0.0',
             'bundle',
-            `https://github.com/sisyphus25/cynthiai/releases/download/v0.9.${i}/agent.tar.zst`,
-            'a'.repeat(64),
+            'https://github.com/sisyphus25/cynthiai/releases/download/v1.0.0/agent.tar.zst',
+            String(i + 1).repeat(64),
             JSON.stringify([RBY_LADDER_ID]),
             '[]',
-            NOW_SECONDS - (4 - i) * 3600
+            att.status,
+            att.status === 'discarded' ? 14200 : null,
+            att.status === 'discarded' ? 120 : null,
+            att.status === 'discarded' ? 28 : null,
+            att.status === 'discarded' ? 380 : null,
+            att.err,
+            ts
           );
-          insert.run(
+          insertDiag.run(
+            Number(r1.lastInsertRowid),
+            RBY_LADDER_ID,
+            null,
+            'gen1ou',
+            att.status === 'discarded' ? 'win' : 'crash',
+            att.status === 'discarded' ? 1 : 0,
+            ts + 30
+          );
+          const r2 = insertVer.run(
             fixture.cynthiaiId,
-            `t0.${i}`,
+            't1.0',
             'oci',
-            `ghcr.io/sisyphus25/cynthiai:t0.${i}`,
-            'b'.repeat(64),
+            'ghcr.io/sisyphus25/cynthiai:t1.0',
+            String(i + 4).repeat(64),
             '[]',
             JSON.stringify(['3']),
-            NOW_SECONDS - (4 - i) * 1800
+            'failed',
+            null,
+            null,
+            null,
+            null,
+            'Diagnostic test failed in gen9championsvgc2026regmc: exit code 1',
+            NOW_SECONDS - (3 - i) * 1800
+          );
+          insertDiag.run(
+            Number(r2.lastInsertRowid),
+            null,
+            '3',
+            'gen9championsvgc2026regmc',
+            'crash',
+            0,
+            NOW_SECONDS - (3 - i) * 1800 + 30
           );
         }
       }),
@@ -1916,13 +2044,6 @@ async function startFixture(): Promise<Fixture> {
     }),
   });
   wikiInstance.auth.register(app);
-  account.register(app, {
-    db,
-    auth: wikiInstance.auth,
-    now: () => NOW_SECONDS,
-    poolsByLadder: new Map([[VGC_LADDER_ID, []]]),
-    rateLimitMaxAttempts: 1000,
-  });
   const arenaHandle = arena.register(app, {
     db,
     auth: wikiInstance.auth,
@@ -2090,6 +2211,14 @@ async function startFixture(): Promise<Fixture> {
     getVpsSystem: () => mockVpsSystem,
     now: () => NOW_SECONDS,
   });
+  account.register(app, {
+    db,
+    auth: wikiInstance.auth,
+    arena: arenaHandle,
+    now: () => NOW_SECONDS,
+    poolsByLadder: new Map([[VGC_LADDER_ID, []]]),
+    rateLimitMaxAttempts: 1000,
+  });
   const defaultLiveState = {
     live: seeded.liveDoc.live,
     stale: seeded.liveDoc.stale,
@@ -2115,6 +2244,7 @@ async function startFixture(): Promise<Fixture> {
     if (
       parsed.pathname === '/api/battles/stream' ||
       parsed.pathname === '/api/admin/stream' ||
+      parsed.pathname === '/api/account/diagnostic/stream' ||
       /^\/api\/tournaments\/[^/]+\/stream$/.test(parsed.pathname)
     ) {
       res.writeHead(204, {'Content-Type': 'text/event-stream'});

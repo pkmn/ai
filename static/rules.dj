@@ -54,8 +54,8 @@ Registered competitors sign in to their [account](/account) via GitHub OAuth to 
 Discord ID (for notifications and [chat](/chat) roles), and --- once approved and eligible ---
 submit an agent with:
 
-  - *`version`*: unique version string within your project (cannot be reused even after a failed
-    smoke test; max 12 characters, _e.g._, `1.0.0` or `v2`, regex
+  - *`version`*: unique version string within your project once activated (reusable after a failed
+    or discarded diagnostic test; max 12 characters, _e.g._, `1.0.0` or `v2`, regex
     `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`).
   - *`artifact_url`*: direct HTTPS URL to a `.tar.gz`/`.tar.xz`/`.tar.zst` bundle _or_ an OCI
     container image reference (_e.g._, `ghcr.io/...`, `docker.io/...`).
@@ -128,13 +128,16 @@ using two distinct public sample teams, own roster teams on `pools`, or generate
 `random`) in each unique format it targets, under real format timers plus a wall-clock ceiling (10m
 RBY, 8m ADV, 6m SV/RAND/VGC, excluding `/ready` grace; reaching the ceiling after at least one clean
 turn passes). While running, the submitting project can watch live `/info` stats and the Showdown
-viewer privately on [account](/account); afterward, the full replay (with `/info` telemetry) and up
-to 64 KiB of `stderr` per side (16 KiB head + 48 KiB tail, including pre-`/ready` output; excess is
-truncated without failing) are available privately on [account](/account). Passing transitions the
-build to *staged* rather than entering matchmaking automatically: the developer reviews the replay
-and `stderr` log and explicitly clicks *Activate* (entering the ladder/tournament and starting the
-14-day ladder cooldown) or *Discard* (leaving ladders untouched and restoring any staged VGC team
-paste back to saved). Neither failed nor discarded diagnostic tests trigger the 14-day cooldown, but
+viewer privately on [account](/account); afterward, the full replay (with `/info` telemetry and an
+indicator of whether valid `/info` output was detected) and up to 64 KiB of `stderr` per side
+(16 KiB head + 48 KiB tail, including pre-`/ready` output; excess is truncated without failing) are
+available privately on [account](/account). Diagnostic artifacts are deleted immediately after the
+run and never saved or archived on disk. Passing transitions the build to *staged* rather than
+entering matchmaking automatically: the developer reviews the replay and `stderr` log and explicitly
+clicks *Activate* (pulling and archiving the final artifact, reserving the version string, entering
+the ladder/tournament, and starting the 14-day ladder cooldown) or *Discard* (leaving ladders
+untouched, freeing the version string for reuse, and restoring any staged VGC team paste back to
+saved). Neither failed nor discarded diagnostic tests trigger the 14-day cooldown, but
 each project is limited to at most *3 failed or discarded diagnostic tests per 24 hours* (tracked
 separately for ladders and tournaments). If 2 versions are already active on a ladder when a new
 version is activated, the weaker is automatically retired, leaving the *strongest version and the

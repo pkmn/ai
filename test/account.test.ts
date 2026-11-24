@@ -1829,7 +1829,36 @@ describe('account routes', () => {
         expect(html).toContain('id="staged-review"');
         expect(html).toContain('Activate');
         expect(html).toContain('Discard');
+        expect(html).toContain('class="battle-toggle"');
         expect(html).toContain(`/api/account/diagnostics/${diagId}/stderr`);
+        expect(html).toContain('>STDERR</a>');
+        expect(html).toContain('>log</a>');
+        expect(html).toContain('>/info</span>');
+        expect(html).not.toContain('gen1ou (14t');
+        expect(html).not.toContain('>Close</button>');
+
+        const acctJson = await (await realFetch(`${baseUrl}/account.json`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).json() as {
+          versions: Array<{
+            id: number;
+            smoke: {supportsInfo?: boolean};
+            diagnostics: Array<{supportsInfo: boolean}>;
+          }>;
+        };
+        const stagedJson = acctJson.versions.find(v => v.id === v1.id)!;
+        expect(stagedJson.smoke.supportsInfo).toBe(true);
+        expect(stagedJson.diagnostics[0].supportsInfo).toBe(true);
+
+        // Uploading while a staged submission awaits review is blocked with 429.
+        const dupStaged = await postSubmission('pre', {
+          version: '2.1.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error-2.1.0-retry.tar.zst',
+          sha256: SHA_B,
+          ladders: ['RBY'],
+        });
+        expect(dupStaged.status).toBe(429);
 
         const logJson = await (await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/log`, {
           headers: {Cookie: cookieFor('pre')},
@@ -1874,24 +1903,67 @@ describe('account routes', () => {
           db.getTeamsForAgentLadder('gen9championsvgc2026regmc', zero.id, 'saved')
         ).toEqual(['TeamOne', 'TeamTwo']);
 
-        // Submitting a new version, staging it, and activating enters the ladder.
-        const v2 = db.createSubmission({
-          agentId: zero.id,
-          version: '2.1.1',
+        // After discarding, the same version label can be reused across retries until activated.
+        const retryAfterDiscard = await postSubmission('pre', {
+          version: '2.1.0',
           package: 'bundle',
-          url: 'https://github.com/pkmn/0-error-2.1.1.tar.zst',
+          url: 'https://github.com/pkmn/0-error-2.1.0-r2.tar.zst',
           sha256: SHA_B,
-          ladderIds: ['gen1ou20261109'],
-          now: currentNow + 60,
+          ladders: ['RBY'],
         });
-        db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'staged', now: currentNow + 90});
-        const actRes = await realFetch(`${baseUrl}/api/account/versions/${v2.id}/activate`, {
+        expect(retryAfterDiscard.status).toBe(201);
+        const retryId = (await retryAfterDiscard.json() as {versionId: number}).versionId;
+        db.applySubmissionStatus({
+          versionId: retryId,
+          smokeStatus: 'failed',
+          smokeError: 'Exit 1',
+          diagnostics: [{
+            ladderId: 'gen1ou20261109',
+            format: 'gen1ou',
+            turns: 3,
+            endReason: 'crash',
+            durationMillis: 900,
+            battleLog: '|turn|1\n|turn|3',
+          }],
+          now: currentNow + 45,
+        });
+        const noInfoHtml = await (await realFetch(`${baseUrl}/account`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).text();
+        expect(noInfoHtml).toContain('>no /info</span>');
+
+        // Reusing 2.1.0 again after failure succeeds, then activating permanently claims it.
+        const retryAfterFail = await postSubmission('pre', {
+          version: '2.1.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error-2.1.0-r3.tar.zst',
+          sha256: SHA_B,
+          ladders: ['RBY'],
+        });
+        expect(retryAfterFail.status).toBe(201);
+        const v2Id = (await retryAfterFail.json() as {versionId: number}).versionId;
+        db.applySubmissionStatus({versionId: v2Id, smokeStatus: 'staged', now: currentNow + 90});
+        const actRes = await realFetch(`${baseUrl}/api/account/versions/${v2Id}/activate`, {
           method: 'POST',
           headers: {Cookie: cookieFor('pre'), Accept: 'application/json'},
         });
         expect(actRes.status).toBe(200);
-        expect(db.getVersionById(v2.id)?.smokeStatus).toBe('passed');
+        expect(db.getVersionById(v2Id)?.smokeStatus).toBe('passed');
         expect(db.getActiveEntriesForAgent(zero.id)).toHaveLength(1);
+
+        // Once activated, reusing 2.1.0 is permanently rejected even after eligibility is restored.
+        db.db.prepare(
+          'UPDATE ladder_entries SET se = 20, matches = 30, settled_at = ? WHERE version_id = ?'
+        ).run(currentNow + 95, v2Id);
+        currentNow += 15 * 86_400;
+        const dupActivated = await postSubmission('pre', {
+          version: '2.1.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error-2.1.0-r4.tar.zst',
+          sha256: SHA_A,
+          ladders: ['RBY'],
+        });
+        expect(dupActivated.status).toBe(409);
       });
   });
 });

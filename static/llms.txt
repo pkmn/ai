@@ -53,8 +53,9 @@ providing:
 
 ### Submitting via `/account`
 Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
-- `version`: unique string within your project, max 12 chars, regex
-  `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`. **Cannot be reused even after a failed smoke test.**
+- `version`: unique string within your project once activated, max 12 chars, regex
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`. **Reusable after a failed or discarded diagnostic test;
+  permanently reserved once activated.**
 - `artifact_url`: direct HTTPS URL to a `.tar.gz` / `.tar.xz` / `.tar.zst` bundle (hosted on
   GitHub, Hugging Face, Cloudflare R2, AWS S3, GCS, or Backblaze B2), OR an OCI container image
   reference (`ghcr.io/...`, `docker.io/...`, Quay, GCR / Google Artifact Registry, or AWS ECR).
@@ -81,12 +82,15 @@ Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
   per-format wall-clock ceiling (**10m** RBY, **8m** ADV, **6m** SV/RAND/VGC, excluding `/ready`
   grace; hitting the ceiling after ≥ 1 clean turn passes). While running, the submitting project can
   watch live `/info` telemetry and the Showdown viewer privately on `/account/`; afterward, the full
-  replay (with `/info` panel) and up to **64 KiB of `stderr` per side** (16 KiB head + 48 KiB tail,
-  including pre-`/ready` output; excess truncated without error) are downloadable privately on
-  `/account/`. Passing moves the build to **`staged`** (not live yet): the developer reviews the
-  replay and `stderr`, then explicitly clicks **Activate** (entering matchmaking and starting the
-  14-day ladder cooldown) or **Discard** (leaving ladders untouched and restoring staged VGC teams
-  to `saved`). Neither failed nor discarded runs trigger the 14-day cooldown, but each project is
+  replay (with `/info` panel and a `/info` detection indicator) and up to **64 KiB of `stderr` per
+  side** (16 KiB head + 48 KiB tail, including pre-`/ready` output; excess truncated without error)
+  are downloadable privately on `/account/`. Unactivated diagnostic builds are removed immediately
+  after testing and never saved or archived on disk. Passing moves the build to **`staged`** (not
+  live yet): the developer reviews the replay and `stderr`, then explicitly clicks **Activate**
+  (pulling and archiving the final artifact, reserving the version label, entering matchmaking, and
+  starting the 14-day ladder cooldown) or **Discard** (leaving ladders untouched, freeing the
+  version label for reuse, and restoring staged VGC teams to `saved`). Neither failed nor discarded
+  runs trigger the 14-day cooldown, but each project is
   limited to at most **3 failed or discarded diagnostic tests per 24 hours** (tracked separately for
   ladders and tournaments). Regular ladder matches discard `stderr` and publish host-measured CPU
   utilization (effective cores) and fixed-enum protocol error aggregates on `/projects/:slug/`.

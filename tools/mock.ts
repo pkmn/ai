@@ -2078,6 +2078,90 @@ export class Runner {
     return false;
   }
 
+  private buildMockDiagnostics(
+    ver: db.AgentVersionRow,
+    smokeStatus: 'passed' | 'failed',
+    meta: PendingSmokeConfig,
+    telemetry: {durationMillis: number; ram: number}
+  ): db.SmokeDiagnosticInput[] {
+    const agent = this.db.getAgentById(ver.agentId);
+    const name = agent?.name ?? `Agent ${ver.agentId}`;
+    const slug = agent?.slug ?? '';
+    const supportsInfo = slug !== 'pokerus' && smokeStatus === 'passed';
+    const targets: Array<{ladderId?: string; tournamentId?: string; format: string}> = [];
+    const seenFormats = new Set<string>();
+    for (const lid of ver.ladders) {
+      const l = this.db.getLadder(lid);
+      const format = l?.format ?? lid;
+      if (seenFormats.has(format)) continue;
+      seenFormats.add(format);
+      targets.push({ladderId: lid, format});
+    }
+    for (const tid of ver.tournaments) {
+      const t = this.db.getTournament(tid);
+      const format = t?.format ?? 'gen9ou';
+      if (seenFormats.has(format)) continue;
+      seenFormats.add(format);
+      targets.push({tournamentId: tid, format});
+    }
+    const genForFormat = (fmt: string) => {
+      const m = /^gen(\d+)/.exec(fmt);
+      return m ? m[1] : '9';
+    };
+    const isDoubles = (fmt: string) => fmt.includes('vgc') || fmt.includes('doubles');
+    return targets.map(t => {
+      const gen = genForFormat(t.format);
+      const lines = [
+        `|player|p1|${name} (P1)|1|`,
+        `|player|p2|${name} (P2)|1|`,
+        `|gametype|${isDoubles(t.format) ? 'doubles' : 'singles'}`,
+        `|gen|${gen}`,
+        `|tier|[Gen ${gen}] ${t.format}`,
+        '|start',
+        '|switch|p1a: Tauros|Tauros|353/353',
+        '|switch|p2a: Chansey|Chansey|703/703',
+        '|turn|1',
+        ...(supportsInfo
+          ? [
+            '|ai|p1|{"win":0.54,"depth":10,"nodes":18400,"nps":420000}',
+            '|ai|p2|{"win":0.47,"depth":9,"nodes":16100,"nps":395000}',
+          ]
+          : []),
+        '|move|p1a: Tauros|Body Slam|p2a: Chansey',
+        '|-damage|p2a: Chansey|421/703',
+        '|move|p2a: Chansey|Thunder Wave|p1a: Tauros',
+        '|-status|p1a: Tauros|par',
+        '|turn|2',
+        ...(supportsInfo
+          ? [
+            '|ai|p1|{"win":0.61,"depth":11,"nodes":24500,"nps":450000}',
+            '|ai|p2|{"win":0.39,"depth":10,"nodes":21200,"nps":410000}',
+          ]
+          : []),
+        smokeStatus === 'failed' ? `|win|${name} (P2)` : `|win|${name} (P1)`,
+      ];
+      const errText = smokeStatus === 'failed'
+        ? (meta.error ?? `Diagnostic test failed in ${ver.version}`)
+        : undefined;
+      return {
+        ...(t.ladderId ? {ladderId: t.ladderId} : {}),
+        ...(t.tournamentId ? {tournamentId: t.tournamentId} : {}),
+        format: t.format,
+        turns: 2,
+        endReason: smokeStatus === 'failed' ? 'crash' : 'win',
+        durationMillis: meta.durationMillis ?? telemetry.durationMillis,
+        battleLog: lines.join('\n'),
+        supportsInfo,
+        p1Stderr: errText ?? `loaded weights\nready (${t.format})`,
+        p2Stderr: `loaded weights\nready (${t.format})`,
+        p1CpuCores: 3.4,
+        p2CpuCores: 3.2,
+        p1PeakRam: meta.ram ?? telemetry.ram,
+        p2PeakRam: Math.max(64, (meta.ram ?? telemetry.ram) - 18),
+      };
+    });
+  }
+
   private async smokeSpecificVersion(
     versionId: number,
     meta: PendingSmokeConfig,
@@ -2090,6 +2174,7 @@ export class Runner {
     const telemetry = this.computeTelemetryForVersion(versionId, ver.agentId, hasTeamPreview);
     const initMillis = meta.initMillis ?? telemetry.initMillis;
     const teamPreviewMillis = meta.teamPreviewMillis ?? telemetry.teamPreviewMillis;
+    const diagnostics = this.buildMockDiagnostics(ver, smokeStatus, meta, telemetry);
 
     if (this.serverUrl) {
       const client = this.getArenaClient();
@@ -2105,6 +2190,7 @@ export class Runner {
         ...(smokeStatus === 'failed'
           ? {smokeError: meta.error ?? `Smoke test failed in ${ver.version}`}
           : {}),
+        ...(diagnostics.length ? {diagnostics} : {}),
       });
     } else {
       this.db.applySubmissionStatus({
@@ -2123,6 +2209,7 @@ export class Runner {
         smokeError: smokeStatus === 'failed'
           ? (meta.error ?? `Smoke test failed in ${ver.version}`)
           : undefined,
+        ...(diagnostics.length ? {diagnostics} : {}),
         now: this.state.now + 5,
       });
       if (markNotified) {

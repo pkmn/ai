@@ -352,7 +352,7 @@ details.smoke-log pre {
 .diag-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 0.9ch;
+  gap: 0.25rem 1.4ch;
   align-items: baseline;
   margin-top: 0.3rem;
   font-size: 0.86em;
@@ -365,6 +365,28 @@ tr.diag-replay-row td {
   background-color: rgb(var(--fg-base) / 3%);
 }
 
+tr.battle-row {
+  cursor: pointer;
+}
+
+tr.battle-row:hover td {
+  background-color: rgb(var(--fg-base) / 4%);
+}
+
+.battle-toggle {
+  display: inline-block;
+  width: 1.15ch;
+  margin-right: 0.45ch;
+  color: rgb(var(--fg-base) / 55%);
+  transition: transform 0.12s ease;
+  user-select: none;
+}
+
+tr.battle-row.expanded .battle-toggle {
+  color: var(--fg-accent-color);
+  transform: rotate(90deg);
+}
+
 .diag-replay-wrap {
   position: sticky;
   left: 0;
@@ -373,15 +395,20 @@ tr.diag-replay-row td {
   max-width: min(100%, calc(100vw - 4ch - 4vh - 1.7rem));
 }
 
-.diag-replay-head {
+.diag-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem 1ch;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 0.45rem;
   font-size: 0.86em;
   font-family: var(--monospace);
+}
+
+.diag-tab-btn.active {
+  color: var(--fg-accent-color);
+  font-weight: bold;
+  text-decoration: underline;
 }
 
 .ai-panel {

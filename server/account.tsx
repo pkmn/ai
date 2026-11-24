@@ -458,6 +458,12 @@ const ACCOUNT_SCRIPT = `
     let liveReady = false;
     let liveLinesSent = 0;
     let livePendingLines = [];
+    if (liveBox && liveBox.dataset.initialLines) {
+      try {
+        const parsed = JSON.parse(liveBox.dataset.initialLines);
+        if (Array.isArray(parsed)) livePendingLines = parsed;
+      } catch {}
+    }
 
     const flushLiveLines = lines => {
       if (!liveFrame || !Array.isArray(lines) || lines.length === 0) return;
@@ -539,7 +545,7 @@ const ACCOUNT_SCRIPT = `
           const snap = JSON.parse(ev.data);
           liveBox.classList.remove('hide');
           if (titleEl) {
-            titleEl.textContent = snap.version + ' — ' + snap.targetName + ' (' + snap.format + ')';
+            titleEl.textContent = snap.version + ' — ' + snap.targetName;
           }
           if (metaEl) {
             const p1Bank = Math.max(0, Math.round(snap.p1.bankSeconds || 0));
@@ -614,81 +620,84 @@ const ACCOUNT_SCRIPT = `
       });
     });
 
-    document.querySelectorAll('.diag-replay-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const diagId = btn.getAttribute('data-diag-id');
-        if (!diagId) return;
-        const hostRow = btn.closest('tr');
-        if (!hostRow || !hostRow.parentNode) return;
-        const existing = hostRow.nextElementSibling;
-        if (
-          existing &&
-          existing.classList.contains('diag-replay-row') &&
-          existing.getAttribute('data-diag-id') === diagId
-        ) {
-          existing.remove();
+    const loadDiagReplayInto = async (wrap, diagId, allIds, allLabels) => {
+      wrap.innerHTML = '<div class="muted">Loading diagnostic replay…</div>';
+      try {
+        const res = await fetch('/api/account/diagnostics/' + diagId + '/log', {
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const lines = Array.isArray(data.lines) ? data.lines : [];
+        wrap._pendingLines = lines;
+        wrap._p1Name = data.p1Name || 'P1';
+        wrap._p2Name = data.p2Name || 'P2';
+        wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
+        const tabsHtml = allIds.length > 1
+          ? '<div class="diag-tabs">' + allIds.map((id, i) => (
+            '<button type="button" class="link-btn diag-tab-btn' +
+              (id === diagId ? ' active' : '') + '" data-diag-id="' + escAi(id) + '">' +
+              escAi(allLabels[i] || ('Game ' + (i + 1))) + '</button>'
+          )).join('<span class="muted">·</span>') + '</div>'
+          : '';
+        wrap.innerHTML =
+          tabsHtml +
+          '<div class="ai-panel replay-ai-panel hide"></div>' +
+          '<div class="viewer-wrap">' +
+            '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
+              'title="Diagnostic replay viewer" sandbox="allow-scripts"></iframe>' +
+          '</div>';
+        wrap.querySelectorAll('.diag-tab-btn').forEach(tabBtn => {
+          tabBtn.addEventListener('click', () => {
+            const nextId = tabBtn.getAttribute('data-diag-id');
+            if (nextId && nextId !== diagId) {
+              void loadDiagReplayInto(wrap, nextId, allIds, allLabels);
+            }
+          });
+        });
+        renderDiagReplayAi(wrap, 0);
+      } catch {
+        wrap.innerHTML = '<div class="no">Failed to load diagnostic replay.</div>';
+      }
+    };
+
+    document.querySelectorAll('#history tbody tr.battle-row[data-diag-ids]').forEach(row => {
+      row.addEventListener('click', ev => {
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
           return;
         }
+        const rawIds = row.getAttribute('data-diag-ids') || '';
+        const allIds = rawIds.split(',').filter(Boolean);
+        if (!allIds.length || !row.parentNode) return;
+        const allLabels = (row.getAttribute('data-diag-labels') || '').split('|');
+        const existing = row.nextElementSibling;
         if (existing && existing.classList.contains('diag-replay-row')) {
           existing.remove();
+          row.classList.remove('expanded');
+          return;
         }
+        row.classList.add('expanded');
         const detailRow = document.createElement('tr');
         detailRow.className = 'diag-replay-row';
-        detailRow.setAttribute('data-diag-id', diagId);
         const td = document.createElement('td');
         td.colSpan = 6;
         const wrap = document.createElement('div');
         wrap.className = 'diag-replay-wrap';
-        wrap.innerHTML = '<div class="muted">Loading diagnostic replay…</div>';
+        wrap.addEventListener('click', wev => {
+          const hit = wev.target && wev.target.closest
+            ? wev.target.closest('[data-seek-turn]')
+            : null;
+          if (!hit) return;
+          const turn = Number(hit.getAttribute('data-seek-turn'));
+          if (!Number.isFinite(turn)) return;
+          const f = wrap.querySelector('iframe.replay-viewer-frame');
+          if (f) postToFrame(f, {type: 'seek', turn});
+          renderDiagReplayAi(wrap, turn);
+        });
         td.appendChild(wrap);
         detailRow.appendChild(td);
-        hostRow.parentNode.insertBefore(detailRow, hostRow.nextSibling);
-        try {
-          const res = await fetch('/api/account/diagnostics/' + diagId + '/log', {
-            headers: {Accept: 'application/json'},
-          });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          const data = await res.json();
-          const lines = Array.isArray(data.lines) ? data.lines : [];
-          wrap._pendingLines = lines;
-          wrap._p1Name = data.p1Name || 'P1';
-          wrap._p2Name = data.p2Name || 'P2';
-          wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
-          const metaParts = [data.format, data.turns + ' turns', data.endReason];
-          if (typeof data.p1CpuCores === 'number') {
-            metaParts.push('P1 ' + data.p1CpuCores.toFixed(1) + 'c');
-          }
-          if (typeof data.p2CpuCores === 'number') {
-            metaParts.push('P2 ' + data.p2CpuCores.toFixed(1) + 'c');
-          }
-          wrap.innerHTML =
-            '<div class="diag-replay-head">' +
-              '<span>' + escAi(metaParts.join(' · ')) + '</span>' +
-              '<button type="button" class="link-btn diag-close-btn">Close</button>' +
-            '</div>' +
-            '<div class="ai-panel replay-ai-panel hide"></div>' +
-            '<div class="viewer-wrap">' +
-              '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
-                'title="Diagnostic replay viewer" sandbox="allow-scripts"></iframe>' +
-            '</div>';
-          wrap.querySelector('.diag-close-btn').addEventListener('click', () => {
-            detailRow.remove();
-          });
-          wrap.addEventListener('click', ev => {
-            const hit = ev.target && ev.target.closest
-              ? ev.target.closest('[data-seek-turn]')
-              : null;
-            if (!hit) return;
-            const turn = Number(hit.getAttribute('data-seek-turn'));
-            if (!Number.isFinite(turn)) return;
-            const f = wrap.querySelector('iframe.replay-viewer-frame');
-            if (f) postToFrame(f, {type: 'seek', turn});
-            renderDiagReplayAi(wrap, turn);
-          });
-          renderDiagReplayAi(wrap, 0);
-        } catch {
-          wrap.innerHTML = '<div class="no">Failed to load diagnostic replay.</div>';
-        }
+        row.parentNode.insertBefore(detailRow, row.nextSibling);
+        void loadDiagReplayInto(wrap, allIds[0], allIds, allLabels);
       });
     });
 
@@ -832,11 +841,14 @@ function renderLiveDiagnosticSection(
     <section
       id='live-diagnostic'
       className={liveDiagnostic ? 'live-diag-box' : 'live-diag-box hide'}
+      data-initial-lines={liveDiagnostic?.lines?.length
+        ? JSON.stringify(liveDiagnostic.lines)
+        : undefined}
     >
       <div className='live-diag-head'>
         <strong id='diag-live-title'>
           {liveDiagnostic
-            ? `${liveDiagnostic.version} — ${liveDiagnostic.targetName} (${liveDiagnostic.format})`
+            ? `${liveDiagnostic.version} — ${liveDiagnostic.targetName}`
             : 'Live Diagnostic'}
         </strong>
         <span id='diag-live-meta' className='muted'>
@@ -883,6 +895,57 @@ function formatSmokeStatsText(v: db.VersionHistoryView): string | undefined {
   return statsParts.length > 0 ? statsParts.join(' · ') : undefined;
 }
 
+function renderInfoSupportBadge(supportsInfo?: boolean): util.Child {
+  if (supportsInfo === undefined) return undefined;
+  return supportsInfo
+    ? (
+      <span
+        className='yes'
+        title='Valid /info search telemetry was emitted during the diagnostic test'
+      >
+        /info
+      </span>
+    )
+    : (
+      <span
+        className='muted'
+        title='No valid /info search telemetry was emitted during the diagnostic test'
+      >
+        no /info
+      </span>
+    );
+}
+
+function diagnosticTargetLabel(
+  d: db.SmokeDiagnosticSummary,
+  ladderNameById: Map<string, string>
+): string {
+  if (d.ladderId) return ladderNameById.get(d.ladderId) ?? d.ladderId;
+  if (d.tournamentId) return `T#${d.tournamentId}`;
+  return d.format;
+}
+
+function renderDiagnosticLinks(
+  diagnostics: db.SmokeDiagnosticSummary[] | undefined,
+  ladderNameById: Map<string, string>
+): util.Child {
+  if (!diagnostics?.length) return undefined;
+  const multi = diagnostics.length > 1;
+  return (
+    <div className='diag-links'>
+      {diagnostics.map(d => (
+        <span>
+          {multi && <><tt>{diagnosticTargetLabel(d, ladderNameById)}</tt>: </>}
+          <a href={`/api/account/diagnostics/${d.id}/stderr`}>STDERR</a>
+          {d.hasLog && (
+            <> · <a href={`/api/account/diagnostics/${d.id}/log?download=1`}>log</a></>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function renderStagedSection(opts: {
   versions: db.VersionHistoryView[];
   ladderNameById: Map<string, string>;
@@ -902,6 +965,7 @@ function renderStagedSection(opts: {
           ...(v.tournamentNames ?? []),
         ];
         const statsText = formatSmokeStatsText(v);
+        const infoBadge = renderInfoSupportBadge(v.smokeSupportsInfo);
         let activateDisabledReason: string | undefined;
         if (v.ladders.length > 0 && !v.ladders.some(id => opts.openLadderIds.has(id))) {
           activateDisabledReason = 'All target ladders for this version have closed.';
@@ -922,7 +986,16 @@ function renderStagedSection(opts: {
               <span>
                 <strong><code>{v.version}</code></strong> passed diagnostic testing on{' '}
                 <tt>{targets.join(', ')}</tt>
-                {statsText && <> <span className='muted'>({statsText})</span></>}
+                {(statsText || infoBadge) && (
+                  <>
+                    {' '}
+                    <span className='muted'>(</span>
+                    {statsText && <span className='muted'>{statsText}</span>}
+                    {statsText && infoBadge && <span className='muted'> · </span>}
+                    {infoBadge}
+                    <span className='muted'>)</span>
+                  </>
+                )}
               </span>
               <div className='staged-actions'>
                 <button
@@ -946,60 +1019,17 @@ function renderStagedSection(opts: {
               </div>
             </div>
             <div className='staged-meta muted'>
-              Review the diagnostic replay and <tt>stderr</tt> log in History below before putting
-              this version live. Activating starts the 14-day ladder cooldown; discarding counts
-              toward the 3-per-24h retry limit.
+              Review the diagnostic replay and <tt>STDERR</tt> log in History below before putting
+              this version live. Activating saves and archives the artifact and starts the 14-day
+              ladder cooldown; discarding frees the version label and counts toward the 3-per-24h
+              retry limit.
             </div>
-            {v.diagnostics && v.diagnostics.length > 0 && (
-              <div className='diag-links'>
-                {v.diagnostics.map(d => (
-                  <span>
-                    <tt>{d.format}</tt> ({d.turns}t · {d.endReason})
-                    {d.hasStderr && (
-                      <> · <a href={`/api/account/diagnostics/${d.id}/stderr`}>stderr</a></>
-                    )}
-                    {d.hasLog && (
-                      <> · <a href={`/api/account/diagnostics/${d.id}/log?download=1`}>.log</a></>
-                    )}
-                  </span>
-                ))}
-              </div>
-            )}
+            {renderDiagnosticLinks(v.diagnostics, opts.ladderNameById)}
             <div className='staged-feedback hide' />
           </div>
         );
       })}
     </section>
-  );
-}
-
-function renderDiagnosticLinks(diagnostics?: db.SmokeDiagnosticSummary[]): util.Child {
-  if (!diagnostics?.length) return undefined;
-  return (
-    <div className='diag-links'>
-      {diagnostics.map(d => (
-        <span>
-          {d.hasLog && (
-            <button
-              type='button'
-              className='link-btn diag-replay-btn'
-              data-diag-id={d.id}
-            >
-              Replay ({d.format} · {d.turns}t)
-            </button>
-          )}
-          {d.hasStderr && (
-            <>
-              {d.hasLog ? ' · ' : ''}
-              <a href={`/api/account/diagnostics/${d.id}/stderr`}>stderr</a>
-            </>
-          )}
-          {d.hasLog && (
-            <> · <a href={`/api/account/diagnostics/${d.id}/log?download=1`}>.log</a></>
-          )}
-        </span>
-      ))}
-    </div>
   );
 }
 
@@ -1081,29 +1111,46 @@ function renderHistorySection(
                 v.smokeStatus === 'discarded'
               ) {
                 const statsText = formatSmokeStatsText(v);
+                const infoBadge = renderInfoSupportBadge(v.smokeSupportsInfo);
                 smokeCell = (
                   <>
                     {isRetired || v.smokeStatus === 'discarded'
                       ? <span>PASS</span>
                       : <span className='yes'>PASS</span>}
                     {v.smokeStatus === 'staged' && <> <span className='muted'>(staged)</span></>}
-                    {statsText && <> <span className='muted'>({statsText})</span></>}
-                    {renderDiagnosticLinks(v.diagnostics)}
+                    {(statsText || infoBadge) && (
+                      <>
+                        {' '}
+                        <span className='muted'>(</span>
+                        {statsText && <span className='muted'>{statsText}</span>}
+                        {statsText && infoBadge && <span className='muted'> · </span>}
+                        {infoBadge}
+                        <span className='muted'>)</span>
+                      </>
+                    )}
+                    {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
                   </>
                 );
               } else {
                 const label = v.smokeStatus === 'quarantined' ? 'QUARANTINED' : 'FAIL';
+                const infoBadge = renderInfoSupportBadge(v.smokeSupportsInfo);
                 smokeCell = (
                   <>
                     <span className='no'>{label}</span>
                     {Boolean(v.notified) && <> <span className='muted'>(DM sent)</span></>}
+                    {infoBadge && (
+                      <>
+                        {' '}<span className='muted'>(</span>{infoBadge}
+                        <span className='muted'>)</span>
+                      </>
+                    )}
                     {v.smokeError && (
                       <details className='smoke-log'>
                         <summary>Sandbox <tt>stderr</tt> log</summary>
                         <pre><code>{v.smokeError}</code></pre>
                       </details>
                     )}
-                    {renderDiagnosticLinks(v.diagnostics)}
+                    {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
                   </>
                 );
               }
@@ -1131,13 +1178,26 @@ function renderHistorySection(
                 stateCell = <span className='muted'>Retired</span>;
               }
 
+              const playableDiags = (v.diagnostics ?? []).filter(d => d.hasLog);
               const classes: string[] = [];
+              if (playableDiags.length > 0) classes.push('battle-row');
               if (isRetired || v.smokeStatus === 'discarded') classes.push('secondary');
               if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
 
               return (
-                <tr className={classes.length > 0 ? classes.join(' ') : undefined}>
+                <tr
+                  className={classes.length > 0 ? classes.join(' ') : undefined}
+                  data-diag-ids={playableDiags.length > 0
+                    ? playableDiags.map(d => String(d.id)).join(',')
+                    : undefined}
+                  data-diag-labels={playableDiags.length > 0
+                    ? playableDiags.map(d => diagnosticTargetLabel(d, ladderNameById)).join('|')
+                    : undefined}
+                >
                   <td>
+                    {playableDiags.length > 0 && (
+                      <span className='battle-toggle' aria-hidden='true'>▸</span>
+                    )}
                     {isFullyActive
                       ? <code><strong>{v.version}</strong></code>
                       : <code>{v.version}</code>}
@@ -1892,6 +1952,7 @@ export function register(app: polka.Polka, options: Options) {
           smoke: {
             status: v.smokeStatus,
             ...(v.queueAhead !== undefined ? {queueAhead: v.queueAhead} : {}),
+            ...(v.smokeSupportsInfo !== undefined ? {supportsInfo: v.smokeSupportsInfo} : {}),
             durationMillis: v.smokeDurationMillis,
             initMillis: v.smokeInitMillis,
             teamPreviewMillis: v.smokeTeamPreviewMillis,
@@ -1910,9 +1971,10 @@ export function register(app: polka.Polka, options: Options) {
                 endReason: d.endReason,
                 durationMillis: d.durationMillis,
                 hasStderr: d.hasStderr,
+                supportsInfo: d.supportsInfo,
                 logHref: `/api/account/diagnostics/${d.id}/log`,
                 downloadLogHref: `/api/account/diagnostics/${d.id}/log?download=1`,
-                ...(d.hasStderr ? {stderrHref: `/api/account/diagnostics/${d.id}/stderr`} : {}),
+                stderrHref: `/api/account/diagnostics/${d.id}/stderr`,
                 ...(d.p1CpuCores !== undefined ? {p1CpuCores: d.p1CpuCores} : {}),
                 ...(d.p2CpuCores !== undefined ? {p2CpuCores: d.p2CpuCores} : {}),
                 ...(d.p1PeakRam !== undefined ? {p1PeakRam: d.p1PeakRam} : {}),
@@ -2254,7 +2316,7 @@ export function register(app: polka.Polka, options: Options) {
       sendJson(res, 400, {error: 'Invalid authToken header.'});
       return;
     }
-    if (db.getVersionBySlugAndLabel(agent.slug, payload.version)) {
+    if (db.isVersionClaimed(agent.id, payload.version)) {
       sendJson(res, 409, {
         error: `Version "${payload.version}" already exists for ${agent.name}.`,
       });
