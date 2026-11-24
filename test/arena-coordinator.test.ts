@@ -1218,11 +1218,21 @@ describe('Coordinator', () => {
     const maintIdx = script.search(/mv -f ".*MAINT_LOCK.*\.tmp\.\$\$" "\$MAINT_LOCK"/);
     const waitIdx = script.indexOf('while [[ -f "$MATCH_LOCK" ]]; do');
     const archiveIdx = script.search(/".*SCRIPT_DIR.*\/archive\.sh"/);
-    const swIdx = script.indexOf('/usr/sbin/softwareupdate --list');
+    const swIdx = script.indexOf('"/usr/sbin/softwareupdate"');
     expect(maintIdx).toBeGreaterThan(0);
     expect(waitIdx).toBeGreaterThan(maintIdx);
     expect(archiveIdx).toBeGreaterThan(waitIdx);
     expect(swIdx).toBeGreaterThan(archiveIdx);
+    expect(script).toContain('timeout: 120_000');
+    expect(script).toContain("trap 'exit 143' TERM");
+    expect(script).not.toContain('ARENA_STATE_DIR');
+    expect(script).not.toContain('ARENA_MAINT_WAIT_SECONDS');
+
+    const setupScript = fs.readFileSync(root('arena', 'scripts', 'setup-arena.sh'), 'utf8');
+    expect(setupScript).toContain('launchctl bootout system/ai.pkmn.archive');
+    const deployScript = fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8');
+    expect(deployScript).toContain('[ ! -f "$dst" ] || ! cmp -s "$src" "$dst"');
+    expect(deployScript).toContain('ai.pkmn.archive.plist');
 
     const archiveScript = fs.readFileSync(root('arena', 'scripts', 'archive.sh'), 'utf8');
     expect(archiveScript).not.toContain('softwareupdate');

@@ -100,7 +100,11 @@ static void sum_uid_usage(uid_t target_uid, uint64_t *out_bytes, uint64_t *out_c
     struct rusage_info_v4 ru;
     if (proc_pid_rusage(p, RUSAGE_INFO_V4, (rusage_info_t *)&ru) == 0) {
       total_bytes += ru.ri_phys_footprint;
-      total_cpu_ticks += ru.ri_user_time + ru.ri_system_time;
+      // Include reaped child CPU time (`ri_child_*`) so short-lived worker subprocesses
+      // spawned and waited between 50ms polls are still accounted for without double-counting
+      // live children (XNU only folds child ticks into `ri_child_*` upon `wait`).
+      total_cpu_ticks += ru.ri_user_time + ru.ri_system_time +
+                         ru.ri_child_user_time + ru.ri_child_system_time;
     }
   }
 

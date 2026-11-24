@@ -10,11 +10,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_DIR="${ARENA_STATE_DIR:-/opt/arena/state}"
+STATE_DIR="/opt/arena/state"
 MAINT_LOCK="${STATE_DIR}/maintenance.lock"
 MATCH_LOCK="${STATE_DIR}/match.lock"
 UPDATES_FILE="${STATE_DIR}/updates-status.json"
-MAX_WAIT_SECONDS="${ARENA_MAINT_WAIT_SECONDS:-900}"
+MAX_WAIT_SECONDS=900
+CHILD_PID=""
 
 umask 077
 mkdir -p "$STATE_DIR"
@@ -25,6 +26,9 @@ pid_alive() {
 }
 
 cleanup() {
+  if [[ -n "$CHILD_PID" ]] && pid_alive "$CHILD_PID"; then
+    kill -TERM "$CHILD_PID" 2>/dev/null || true
+  fi
   if [[ -f "$MAINT_LOCK" ]]; then
     local owner=""
     owner="$(cat "$MAINT_LOCK" 2>/dev/null || true)"
@@ -34,6 +38,8 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 # Signal `ai.pkmn.arena` to pause scheduling new matches until this maintenance window finishes.
 printf '%s\n' "$$" > "${MAINT_LOCK}.tmp.$$"
@@ -56,14 +62,23 @@ while [[ -f "$MATCH_LOCK" ]]; do
 done
 
 ARCHIVE_RC=0
-"${SCRIPT_DIR}/archive.sh" || ARCHIVE_RC=$?
+"${SCRIPT_DIR}/archive.sh" &
+CHILD_PID=$!
+wait "$CHILD_PID" || ARCHIVE_RC=$?
+CHILD_PID=""
 
 # Non-fatal macOS Software Update check (separated from archive.sh; never fails the archive job).
+# Bounded to 120s so a hanging Apple CDN never wedges maintenance.lock.
 if [[ "$(uname -s)" == "Darwin" ]] && [[ -x /usr/sbin/softwareupdate ]] && command -v node >/dev/null 2>&1; then
-  SW_OUT="$(/usr/sbin/softwareupdate --list 2>&1 || true)"
-  UPDATES_FILE="$UPDATES_FILE" SW_OUT="$SW_OUT" node -e '
+  UPDATES_FILE="$UPDATES_FILE" node -e '
+    const {spawnSync} = require("child_process");
     const fs = require("fs");
-    const sw = process.env.SW_OUT || "";
+    const res = spawnSync("/usr/sbin/softwareupdate", ["--list"], {
+      encoding: "utf8",
+      timeout: 120_000,
+      killSignal: "SIGKILL",
+    });
+    const sw = `${res.stdout || ""}\n${res.stderr || ""}`;
     if (!/No new software available|\*\s*Label:/i.test(sw)) process.exit(0);
     const labels = [];
     let rebootRequired = false;

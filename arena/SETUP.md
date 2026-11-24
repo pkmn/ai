@@ -278,7 +278,7 @@ mount roots + `0700` `P{1,2}/scratch` with `p1`/`p2` & `pkmn` ACLs; (4) `100-are
 `/opt/arena/bin/limit`, `/opt/arena/bin/arena`, and `_baseline/run`; (6) `pmset` (`womp 1 powernap 0`),
 Spotlight disabled on scratch/staging, auto-updates off; (7) rootless `podman-machine-default`
 (`10` vCPUs, `30 GiB` RAM, `48 GB` disk, 0 swap, `arena-blacklist.conf` for `sctp`/`dccp`/`rds`/`tipc`)
-and `/Library/LaunchDaemons/ai.pkmn.{pf,podman,arena,archive}.plist`.
+and `/Library/LaunchDaemons/ai.pkmn.{pf,podman,arena,maintenance}.plist`.
 
 Bootstrap `ai.pkmn.pf` and `ai.pkmn.podman`:
 
@@ -501,7 +501,7 @@ ssh arena 'sudo reboot'
 # Wait ~60-90s, then verify:
 ssh arena '
 uptime; sudo pfctl -s info | head -n 1
-for s in tunnel arena archive; do sudo launchctl print system/ai.pkmn.$s | grep -E "state =|pid ="; done
+for s in tunnel arena maintenance; do sudo launchctl print system/ai.pkmn.$s | grep -E "state =|pid ="; done
 /opt/homebrew/bin/podman machine list
 '
 curl -fsS https://pkmn.ai/api/live.json | jq '{updatedAt, stale}'   # expect stale: false

@@ -149,6 +149,10 @@ if command -v podman >/dev/null 2>&1; then
 fi
 
 echo "==> Step 8: Installing LaunchDaemons (ai.pkmn.pf, ai.pkmn.podman, ai.pkmn.arena, ai.pkmn.maintenance)"
+if [[ -f /Library/LaunchDaemons/ai.pkmn.archive.plist ]]; then
+  sudo launchctl bootout system/ai.pkmn.archive 2>/dev/null || true
+  sudo rm -f /Library/LaunchDaemons/ai.pkmn.archive.plist
+fi
 for PLIST in ai.pkmn.pf.plist ai.pkmn.podman.plist ai.pkmn.arena.plist ai.pkmn.maintenance.plist; do
   sudo cp "${REPO_DIR}/arena/config/${PLIST}" "/Library/LaunchDaemons/${PLIST}"
   sudo chown root:wheel "/Library/LaunchDaemons/${PLIST}"

@@ -36,10 +36,16 @@ record_container_peak_ram() {
   peak_bytes="$(printf '%s\n' "$stats" | sed -n 's/^RAM //p' | head -n 1)"
   cpu_usec="$(printf '%s\n' "$stats" | sed -n 's/^usage_usec //p' | head -n 1)"
   if [[ "$peak_bytes" =~ ^[0-9]+$ ]] && (( peak_bytes > 0 )); then
-    echo $(( (peak_bytes + 1048575) / 1048576 )) > "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || true
+    local tmp_ram="/opt/arena/state/peak_ram_${SLOT}.tmp.$$"
+    if printf '%s\n' "$(( (peak_bytes + 1048575) / 1048576 ))" > "$tmp_ram" 2>/dev/null; then
+      mv -f "$tmp_ram" "/opt/arena/state/peak_ram_${SLOT}" 2>/dev/null || rm -f "$tmp_ram"
+    fi
   fi
   if [[ "$cpu_usec" =~ ^[0-9]+$ ]] && (( cpu_usec > 0 )); then
-    echo $(( cpu_usec / 1000 )) > "/opt/arena/state/cpu_millis_${SLOT}" 2>/dev/null || true
+    local tmp_cpu="/opt/arena/state/cpu_millis_${SLOT}.tmp.$$"
+    if printf '%s\n' "$(( cpu_usec / 1000 ))" > "$tmp_cpu" 2>/dev/null; then
+      mv -f "$tmp_cpu" "/opt/arena/state/cpu_millis_${SLOT}" 2>/dev/null || rm -f "$tmp_cpu"
+    fi
   fi
 }
 

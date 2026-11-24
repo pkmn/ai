@@ -67,10 +67,13 @@ for pair in \
     "arena/config/ai.pkmn.maintenance.plist:/Library/LaunchDaemons/ai.pkmn.maintenance.plist"; do
     src="${pair%%:*}"
     dst="${pair#*:}"
-    if [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then
+    if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst"; then
         NEEDS_SETUP=1
     fi
 done
+if [ -f /Library/LaunchDaemons/ai.pkmn.archive.plist ]; then
+    NEEDS_SETUP=1
+fi
 if [ -x /opt/arena/bin/limit ] && [ arena/bin/limit.c -nt /opt/arena/bin/limit ]; then
     NEEDS_SETUP=1
 fi
