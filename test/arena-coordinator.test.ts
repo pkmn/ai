@@ -1334,4 +1334,19 @@ describe('Coordinator', () => {
       h.stateDb.close();
     }
   });
+
+  test('tryAcquireMatchLock yields without leaving match.lock when maintenance is active', () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-dekker-lock-'));
+    try {
+      expect(arenaIndex.tryAcquireMatchLock(stateDir, process.pid)).toBe(true);
+      expect(fs.existsSync(path.join(stateDir, 'match.lock'))).toBe(true);
+      arenaIndex.releaseMatchLock(stateDir, process.pid);
+
+      fs.writeFileSync(path.join(stateDir, 'maintenance.lock'), `${process.pid}\n`);
+      expect(arenaIndex.tryAcquireMatchLock(stateDir, process.pid)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, 'match.lock'))).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, {recursive: true, force: true});
+    }
+  });
 });

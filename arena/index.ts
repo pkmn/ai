@@ -65,6 +65,19 @@ export function releaseMatchLock(stateDir: string, pid = process.pid): void {
   } catch {}
 }
 
+// Dekker double-check against `maintenance.sh`: write `match.lock` before re-reading
+// `maintenance.lock`, matching `maintenance.sh` writing `maintenance.lock` before reading
+// `match.lock`, so archival and Arena work can never overlap on a TOCTOU window.
+export function tryAcquireMatchLock(stateDir: string, pid = process.pid): boolean {
+  if (isMaintenanceLockActive(stateDir)) return false;
+  acquireMatchLock(stateDir, pid);
+  if (isMaintenanceLockActive(stateDir)) {
+    releaseMatchLock(stateDir, pid);
+    return false;
+  }
+  return true;
+}
+
 function checkArenaHostHealth(client: arena.Client, devMode: boolean) {
   if (devMode) return;
   const checkPaths = ['/'];
@@ -244,7 +257,7 @@ export async function runDaemon(opts: {
           await hostMonitor?.maybeRefresh();
         }
         await coord.flushOutbox();
-        if (stateDir && isMaintenanceLockActive(stateDir)) {
+        if (stateDir && !tryAcquireMatchLock(stateDir)) {
           consecutiveCycleErrors = 0;
           hostMonitor?.recordDaemonErrors(0);
           if (!opts.once && !coord.isDraining()) {
@@ -258,37 +271,44 @@ export async function runDaemon(opts: {
           if (opts.once) break;
           continue;
         }
-        const initialSnap = await client.getPlayableLadders();
-        let ladders = initialSnap.ladders;
-        let quarantinedVersionIds = initialSnap.quarantinedVersionIds ?? [];
-        const activatedVersionIds = [
-          ...(initialSnap.activatedVersionIds ?? []),
-          ...ladders.flatMap(l => l.entries
-            .filter(e => e.role === 'champion' || e.role === 'challenger')
-            .map(e => e.versionId)),
-        ];
-        if (activatedVersionIds.length) {
-          await coord.syncActivatedAgents(activatedVersionIds);
-        }
-        if (initialSnap.unpublishedArchivedPoolsLadders?.length) {
-          await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
-        }
         let ingested = 0;
         let played: unknown;
-        if (stateDir) acquireMatchLock(stateDir);
+        const shouldYieldForMaintenance = stateDir
+          ? () => isMaintenanceLockActive(stateDir)
+          : undefined;
         try {
+          const initialSnap = await client.getPlayableLadders();
+          let ladders = initialSnap.ladders;
+          let quarantinedVersionIds = initialSnap.quarantinedVersionIds ?? [];
+          const activatedVersionIds = [
+            ...(initialSnap.activatedVersionIds ?? []),
+            ...ladders.flatMap(l => l.entries
+              .filter(e => e.role === 'champion' || e.role === 'challenger')
+              .map(e => e.versionId)),
+          ];
+          if (activatedVersionIds.length && !shouldYieldForMaintenance?.()) {
+            await coord.syncActivatedAgents(activatedVersionIds, shouldYieldForMaintenance);
+          }
+          if (
+            initialSnap.unpublishedArchivedPoolsLadders?.length &&
+            !shouldYieldForMaintenance?.()
+          ) {
+            await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
+          }
           const byId = new Map(ladders.map(l => [l.id, l]));
           const smokeBudget = smokeCadence.budgetForCycle(initialSnap.smokeCadence);
-          ingested = smokeBudget > 0
-            ? await coord.processPendingSubmissions(byId, smokeBudget)
+          ingested = smokeBudget > 0 && !shouldYieldForMaintenance?.()
+            ? await coord.processPendingSubmissions(byId, smokeBudget, shouldYieldForMaintenance)
             : 0;
-          if (ingested > 0 && !coord.isDraining()) {
+          if (ingested > 0 && !coord.isDraining() && !shouldYieldForMaintenance?.()) {
             const refreshed = await client.getPlayableLadders();
             ladders = refreshed.ladders;
             quarantinedVersionIds = refreshed.quarantinedVersionIds ?? [];
           }
-          played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
-          smokeCadence.recordCycle(ingested, Boolean(played));
+          if (!shouldYieldForMaintenance?.()) {
+            played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
+            smokeCadence.recordCycle(ingested, Boolean(played));
+          }
         } finally {
           if (stateDir) releaseMatchLock(stateDir);
         }

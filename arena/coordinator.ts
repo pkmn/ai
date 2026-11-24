@@ -289,12 +289,15 @@ export class Coordinator {
   // Pulls, verifies SHA-256, and cold-archives activated ladder versions that are not yet installed
   // in `local_agents`. Unactivated (`pending`/`staged`/`discarded`) submissions are never saved or
   // archived on disk; only developer-activated versions are persisted here.
-  async syncActivatedAgents(versionIds: readonly number[]): Promise<number> {
-    if (this.draining || !this.client.getActivatedArtifact) return 0;
+  async syncActivatedAgents(
+    versionIds: readonly number[],
+    shouldYield?: () => boolean
+  ): Promise<number> {
+    if (this.draining || !this.client.getActivatedArtifact || shouldYield?.()) return 0;
     const nowSeconds = Math.floor(Date.now() / 1000);
     let installed = 0;
     for (const versionId of new Set(versionIds)) {
-      if (this.draining) break;
+      if (this.draining || shouldYield?.()) break;
       if (this.stateDb.getLocalAgent(versionId) !== undefined) continue;
       const brokenUntil = this.brokenUntilByVersion.get(versionId);
       if (brokenUntil !== undefined && nowSeconds < brokenUntil) continue;
@@ -521,9 +524,10 @@ export class Coordinator {
 
   async processPendingSubmissions(
     laddersById?: ReadonlyMap<string, LadderSnapshot>,
-    maxSubmissions = SMOKE_TESTS_PER_CYCLE
+    maxSubmissions = SMOKE_TESTS_PER_CYCLE,
+    shouldYield?: () => boolean
   ): Promise<number> {
-    if (this.draining || maxSubmissions <= 0) return 0;
+    if (this.draining || maxSubmissions <= 0 || shouldYield?.()) return 0;
     const {ladders, submissions} = await this.client.getPendingSubmissions({target: 'ladder'});
     const pendingMetaById = new Map<
       string,
@@ -548,7 +552,7 @@ export class Coordinator {
     let processed = 0;
 
     for (const sub of submissions) {
-      if (this.draining || processed >= maxSubmissions) break;
+      if (this.draining || processed >= maxSubmissions || shouldYield?.()) break;
       // Refresh the 15m server watchdog between submissions so large launch queues stay non-stale.
       const sysInfo = await this.getSystemInfo?.();
       await this.client.sendHeartbeat({
