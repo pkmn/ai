@@ -97,6 +97,7 @@ export interface AdminSnapshot {
 }
 
 const MAX_ADMIN_BODY_BYTES = 16 * 1024;
+const MAX_SSE_BUFFER_BYTES = 4 * 1024 * 1024;
 const SSE_KEEPALIVE_MILLIS = 25_000;
 const HEARTBEAT_PUSH_THROTTLE_MILLIS = 3000;
 const BACKUP_STALE_SECONDS = 26 * 3600;
@@ -651,7 +652,7 @@ const ADMIN_SCRIPT = `
           }
           if (typeof payload.cardsHtml === 'string') {
             sysCards.innerHTML = payload.cardsHtml;
-            localizeTimestamps(sysCards);
+            pkmnTime.localize(sysCards);
           }
         } catch {}
       });
@@ -2226,6 +2227,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   util.installHeadSupport(app);
   const {db, auth, arena: arenaHandle} = options;
   const getNow = options.now ?? (() => Math.floor(Date.now() / 1000));
+  const ownsVpsMonitor = !options.vpsMonitor;
   const vpsMonitor = options.vpsMonitor ?? new system.VpsHostMonitor({
     dbPath: db.dbPath,
     now: getNow,
@@ -2235,12 +2237,23 @@ export function register(app: polka.Polka, options: Options): Handle {
   let lastBroadcastMs = 0;
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
 
+  const evictIfStalled = (client: http.ServerResponse): boolean => {
+    if (client.writableEnded || client.destroyed) {
+      adminStreamClients.delete(client);
+      return true;
+    }
+    if (client.writableLength > MAX_SSE_BUFFER_BYTES) {
+      adminStreamClients.delete(client);
+      client.destroy();
+      return true;
+    }
+    return false;
+  };
+
   const keepaliveTimer = setInterval(() => {
     for (const client of adminStreamClients) {
-      if (!client.writableEnded && !client.destroyed) {
+      if (!evictIfStalled(client)) {
         client.write(': keepalive\n\n');
-      } else {
-        adminStreamClients.delete(client);
       }
     }
   }, SSE_KEEPALIVE_MILLIS);
@@ -2287,13 +2300,17 @@ export function register(app: polka.Polka, options: Options): Handle {
   const pushSystemEventNow = () => {
     if (adminStreamClients.size === 0) return;
     lastBroadcastMs = Date.now();
-    const frame = `event: system\ndata: ${JSON.stringify(buildSystemEventPayload(getNow()))}\n\n`;
+    let frame: string;
+    try {
+      frame = `event: system\ndata: ${JSON.stringify(buildSystemEventPayload(getNow()))}\n\n`;
+    } catch (err) {
+      console.error('Failed building /api/admin/stream payload:', err);
+      return;
+    }
     for (const client of adminStreamClients) {
-      if (client.writableEnded || client.destroyed) {
-        adminStreamClients.delete(client);
-        continue;
+      if (!evictIfStalled(client)) {
+        client.write(frame);
       }
-      client.write(frame);
     }
   };
 
@@ -2412,18 +2429,24 @@ export function register(app: polka.Polka, options: Options): Handle {
     if (!requireAdmin(req, res, true)) return;
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'private, no-cache, no-transform',
+      'Cache-Control': 'private, no-store, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
     res.flushHeaders?.();
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    const cleanup = () => {
+      adminStreamClients.delete(res);
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
     adminStreamClients.add(res);
     res.write(
       `event: system\ndata: ${JSON.stringify(buildSystemEventPayload(getNow()))}\n\n`
     );
-    req.on('close', () => {
-      adminStreamClients.delete(res);
-    });
   });
 
   app.post('/api/admin/agents/:slug/ladders', async (req, res) => {
@@ -2543,7 +2566,9 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
     try {
       const updated = db.discardStagedVersion({versionId, agentId: ver.agentId});
-      sendJson(res, 200, {ok: true, version: updated});
+      const safe = {...updated};
+      delete safe.authTokenEncoding;
+      sendJson(res, 200, {ok: true, version: safe});
     } catch (err: any) {
       const status = typeof err?.status === 'number' ? err.status : 400;
       sendJson(res, status, {error: err?.message || 'Failed discarding staged version.'});
@@ -2569,7 +2594,9 @@ export function register(app: polka.Polka, options: Options): Handle {
     const now = getNow();
     try {
       const result = db.quarantineVersion(slug, version, reason, now);
-      sendJson(res, 200, {ok: true, version: result.version});
+      const safe = {...result.version};
+      delete safe.authTokenEncoding;
+      sendJson(res, 200, {ok: true, version: safe});
     } catch (err: any) {
       const status = typeof err?.status === 'number'
         ? err.status
@@ -2585,7 +2612,9 @@ export function register(app: polka.Polka, options: Options): Handle {
     const now = getNow();
     try {
       const updated = db.unquarantineVersion(slug, version, now);
-      sendJson(res, 200, {ok: true, version: updated});
+      const safe = {...updated};
+      delete safe.authTokenEncoding;
+      sendJson(res, 200, {ok: true, version: safe});
     } catch (err: any) {
       const status = typeof err?.status === 'number'
         ? err.status
@@ -2615,6 +2644,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     notifyHeartbeat,
     getAdminStreamCount: () => adminStreamClients.size,
     close: () => {
+      if (ownsVpsMonitor) vpsMonitor.stop();
       clearInterval(keepaliveTimer);
       if (pendingBroadcastTimer) {
         clearTimeout(pendingBroadcastTimer);

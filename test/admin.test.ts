@@ -693,4 +693,23 @@ describe('/admin dashboard & API', () => {
       expect(afterHtml).not.toContain('1.1.0 [staged]');
     }
   );
+
+  test('/admin SSE script invokes pkmnTime.localize instead of removed helper', async () => {
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: cookieFor('scheibo')},
+    })).text();
+    expect(html).toContain('pkmnTime.localize(sysCards)');
+    expect(html).not.toContain('localizeTimestamps(');
+  });
+
+  test('HEAD /api/admin/stream closes with private no-store without leaking client', async () => {
+    const res = await fetch(`${baseUrl}/api/admin/stream`, {
+      method: 'HEAD',
+      headers: {Cookie: cookieFor('scheibo')},
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    expect(res.headers.get('cache-control')).toBe('private, no-store, no-transform');
+    expect(adminHandle.getAdminStreamCount()).toBe(0);
+  });
 });
